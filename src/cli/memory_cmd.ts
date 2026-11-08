@@ -8,17 +8,21 @@
  * memory binding (`memory_bind.ts`) and start-up, and the file system.
  */
 
+import { randomBytes } from "node:crypto";
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 
+import type { Env } from "../defaults.ts";
 import { compareCodeUnits, Diagnostic } from "../diagnostics.ts";
-import { memoryErrorKind, type MemorySession } from "../memory/base.ts";
-import { FileMemory } from "../memory/file.ts";
+import { type Author, type ChangeEntry, memoryErrorKind, type MemorySession } from "../memory/base.ts";
+import { FileMemory, type MemberFile, readMembers } from "../memory/file.ts";
 import { homeDir, isSystemError } from "../platform.ts";
 import { isMemoryType } from "../typesys/values.ts";
 import { defaultLocation, defaultMemories, memoryRoot, projectFolder } from "./memory_bind.ts";
+import { diagnosticJson, printStyled } from "./render.ts";
 import { loadFlowFile } from "./startup.ts";
-import { type CliIo, type ParsedArgs, printJson, UsageError } from "./utils.ts";
+import { type CliIo, forTerminal, type ParsedArgs, printJson, UsageError } from "./utils.ts";
 
 /** A memory `yian memory` acts on: its instance and folder, and, for a default, its identity. */
 export interface MemoryTarget {
@@ -156,4 +160,164 @@ export async function memoryList({ options }: ParsedArgs, io: CliIo): Promise<nu
   const lines = table.map((cells) => cells.map((cell, i) => (i < 2 ? cell.padEnd(widths[i]!) : cell)).join("  "));
   await io.stdout.write(`${lines.join("\n")}\n`);
   return 0;
+}
+
+/** What a command does with the memory it opened; returns the exit code. */
+type MemoryBody = (session: MemorySession, target: MemoryTarget) => Promise<number>;
+
+/**
+ * Open the memory `command` names (`FLOW NAME`, or `--at`), run `body` on it, and close it. A flow
+ * that doesn't load exits 1 after its diagnostic (a document under `--json`); the memory failing
+ * prints `memory failed: <message>` on stderr (a `memory.failed` document) and exits 1.
+ *
+ * @throws {UsageError} As `resolveTarget` and `openTarget` throw.
+ */
+async function onMemory(command: ParsedArgs, io: CliIo, body: MemoryBody): Promise<number> {
+  const { args, options } = command;
+  const json = options["json"] === true;
+  let session: MemorySession | null = null;
+  try {
+    const named = { flow: args["flow"] as string | undefined, name: args["name"] as string | undefined };
+    const target = await resolveTarget({ ...named, at: options["at"] as string | undefined }, io);
+    if (target instanceof Diagnostic) {
+      if (json) await printJson({ error: diagnosticJson(target) }, io.stdout);
+      return 1;
+    }
+    session = await openTarget(target, stopOf(io));
+    return await body(session, target);
+  } catch (error) {
+    if (!(error instanceof Error) || error instanceof UsageError) throw error;
+    return failed(io, json, { label: "memory failed", code: "memory.failed", message: error.message });
+  } finally {
+    await session?.close();
+  }
+}
+
+/** Print `<label>: <message>` on stderr (a `{code, message}` error document under `json`); return 1. */
+async function failed(io: CliIo, json: boolean, o: { label: string; code: string; message: string }): Promise<number> {
+  await printStyled(io, `${o.label}: ${o.message}`, "red");
+  if (json) await printJson({ error: { code: o.code, message: o.message } }, io.stdout);
+  return 1;
+}
+
+/** The command's stop: `io.stop`, or one that never aborts. */
+function stopOf(io: CliIo): AbortSignal {
+  return io.stop ?? new AbortController().signal;
+}
+
+/** The user making a change from the command line: `USER`, `LOGNAME`, or the account's name. */
+function userName(env: Env): string {
+  return env("USER") || env("LOGNAME") || userInfo().username;
+}
+
+/** The author of a change the command line makes. */
+function userAuthor(io: CliIo): Author {
+  return { kind: "user", name: userName(io.env) };
+}
+
+/** A fresh id for a change the command line makes. */
+function changeId(): string {
+  return `cli-${randomBytes(8).toString("hex")}`;
+}
+
+/** The memory's files at `location`, read with the caps its session records. */
+function membersOf(session: MemorySession, location: string): MemberFile[] {
+  const { max_depth: maxDepth, max_file_chars: maxFileChars } = session.info.settings;
+  return readMembers(location, { maxDepth: Number(maxDepth), maxFileChars: Number(maxFileChars) }).files;
+}
+
+/** `count` with its noun, plural unless it is one. */
+function counted(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * `yian memory show`: a line naming the memory (identity, type, folder) and counting its files
+ * and characters, then its recall, the part a prompt shows each run, and a note when it was cut.
+ * With `--all`, every file too, each after a `== <path> (<n> characters) ==` line. `--json` prints
+ * one document with the identity, type, location, version, characters, recall and files (each
+ * file's text with `--all`).
+ */
+export async function memoryShow(command: ParsedArgs, io: CliIo): Promise<number> {
+  const all = command.options["all"] === true;
+  return onMemory(command, io, async (session, { location }) => {
+    const { version, recall } = await session.snapshot();
+    const files = membersOf(session, location);
+    const characters = files.reduce((sum, file) => sum + file.chars, 0);
+    const { identity, type } = session.info;
+    if (command.options["json"] === true) {
+      const listed = files.map((file) => ({
+        path: file.path,
+        characters: BigInt(file.chars),
+        hash: file.hash,
+        ...(all ? { text: file.text } : {}),
+      }));
+      const document = { identity, type, location, version, characters: BigInt(characters) };
+      await printJson({ ...document, recall: { text: recall.text, cut: recall.cut }, files: listed }, io.stdout);
+      return 0;
+    }
+    const counts = `${counted(files.length, "file")}, ${counted(characters, "character")}`;
+    const lines = [`${identity} (${type}) at ${location}: ${counts}`, recall.text];
+    if (recall.cut !== null) lines.push(`(${recall.cut})`);
+    if (all) {
+      for (const file of files) lines.push(`== ${file.path} (${counted(file.chars, "character")}) ==`, file.text);
+    }
+    await io.stdout.write(`${forTerminal(lines.join("\n"), io.stdout)}\n`);
+    return 0;
+  });
+}
+
+/** `author` as history shows it: its kind and name, and its run and node when it has them. */
+function authorText(author: Author): string {
+  const shown: string[] = [];
+  if (author.run !== undefined) shown.push(`run ${author.run}`);
+  if (author.node !== undefined) shown.push(`node ${author.node}`);
+  return `${author.kind} ${author.name}${shown.length === 0 ? "" : ` (${shown.join(", ")})`}`;
+}
+
+/** `change` as one line of history: its id, time, op and path, the change it undoes, and its author. */
+function changeLine(change: ChangeEntry): string {
+  const { path, undoes } = change.target;
+  const undoing = typeof undoes === "string" ? ` (undoes ${undoes})` : "";
+  return `${change.id}  ${change.at}  ${change.op} ${String(path)}${undoing} by ${authorText(change.author)}`;
+}
+
+/**
+ * `yian memory history`: the memory's last changes (`--limit`, 20 by default), newest first, one
+ * line each with its id, time, op, path and author (with the run and node that made it). `--json`
+ * prints one document whose `changes` holds each change's `id`, `op`, `target`, `author` and `at`.
+ */
+export async function memoryHistory(command: ParsedArgs, io: CliIo): Promise<number> {
+  const limit = (command.options["limit"] as number | undefined) ?? 20;
+  return onMemory(command, io, async (session) => {
+    const changes = await session.history({ limit });
+    if (command.options["json"] === true) {
+      const listed = changes.map(({ id, op, target, author, at }) => ({ id, op, target, author, at }));
+      await printJson({ changes: listed }, io.stdout);
+      return 0;
+    }
+    if (changes.length > 0) await io.stdout.write(`${forTerminal(changes.map(changeLine).join("\n"), io.stdout)}\n`);
+    return 0;
+  });
+}
+
+/**
+ * `yian memory undo CHANGE`: undo the change `CHANGE` as the user, and print the memory's new
+ * version (`--json`: `{change, version}`, `change` the undo's own id). A change that can't be
+ * undone (its file changed since, or it is no longer kept) prints `undo refused: <reason>` (a
+ * `memory.conflict` document) and exits 1.
+ */
+export async function memoryUndo(command: ParsedArgs, io: CliIo): Promise<number> {
+  const undone = command.args["change"] as string;
+  const json = command.options["json"] === true;
+  return onMemory(command, io, async (session) => {
+    const id = changeId();
+    const applied = await session.undo({ id, changeId: undone, author: userAuthor(io), signal: stopOf(io) });
+    if (!applied.ok) {
+      return failed(io, json, { label: "undo refused", code: "memory.conflict", message: applied.reason });
+    }
+    if (json) await printJson({ change: id, version: applied.version }, io.stdout);
+    else await io.stdout.write(`undid ${forTerminal(undone, io.stdout)}; the memory's version is ${applied.version}\n`);
+    return 0;
+  });
 }

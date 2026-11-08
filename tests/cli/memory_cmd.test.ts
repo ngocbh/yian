@@ -4,7 +4,16 @@
  * answered on a fake terminal, and the editor is injected.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -163,5 +172,95 @@ describe("yian memory list", () => {
     const help = await yian(["memory", "--help"]);
     expect(help.code).toBe(0);
     expect(help.stdout).toContain("list");
+  });
+});
+
+/** `yian memory history`'s document for `flow.yaml`'s `lessons`. */
+async function historyOf(flow: string): Promise<{ changes: Record<string, any>[] }> {
+  const result = await yian(["memory", "history", flow, "lessons", "--json"]);
+  expect(result.code, result.stderr).toBe(0);
+  return JSON.parse(result.stdout);
+}
+
+describe("yian memory show", () => {
+  test("prints the identity, folder, counts and recall; --all every file", async () => {
+    const flow = flowFile();
+    await runOnce(flow, "first");
+    await runOnce(flow, "second");
+    const { identity, location } = lessons();
+    const shown = await yian(["memory", "show", flow, "lessons"]);
+    expect(shown.code, shown.stderr).toBe(0);
+    expect(shown.stdout).toStartWith(`${identity} (FileMemory) at ${location}: 1 file, 12 characters\n`);
+    expect(shown.stdout).toContain("first\nsecond\n");
+    expect(shown.stdout).not.toContain("== MEMORY.md");
+    const all = await yian(["memory", "show", "--at", location, "--all"]);
+    expect(all.stdout).toContain("== MEMORY.md (12 characters) ==\nfirst\nsecond\n");
+    const json = JSON.parse((await yian(["memory", "show", flow, "lessons", "--all", "--json"])).stdout);
+    expect(json).toMatchObject({
+      identity,
+      type: "FileMemory",
+      location,
+      characters: 12,
+      recall: { text: "first\nsecond", cut: null },
+      files: [{ path: "MEMORY.md", characters: 12, text: "first\nsecond" }],
+    });
+    expect(typeof json.version).toBe("string");
+  });
+
+  test("a memory not made yet is a usage error, and nothing is created", async () => {
+    const flow = flowFile();
+    const result = await yian(["memory", "show", flow, "lessons"]);
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain(`no memory at ${lessons().location}`);
+    expect(existsSync(lessons().location)).toBe(false);
+  });
+});
+
+describe("yian memory history", () => {
+  test("lists the changes newest first, each with its author, run and node", async () => {
+    const flow = flowFile();
+    await runOnce(flow, "first");
+    await runOnce(flow, "second");
+    const { changes } = await historyOf(flow);
+    expect(changes.map((change) => [change.op, change.target.path])).toEqual([
+      ["append", "MEMORY.md"],
+      ["append", "MEMORY.md"],
+    ]);
+    const runs = readdirSync(join(home, ".yian", "runs")).filter((name) => name !== "index.sqlite");
+    for (const change of changes) {
+      expect(change.author).toMatchObject({ kind: "tool", name: "add", node: "add" });
+      expect(runs).toContain(change.author.run);
+    }
+    expect(changes[0]!.author.run).not.toBe(changes[1]!.author.run);
+    const text = await yian(["memory", "history", flow, "lessons"]);
+    const lines = text.stdout.split("\n").filter(Boolean);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain(`append MEMORY.md by tool add (run ${changes[0]!.author.run}, node add)`);
+    expect(lines[0]).toStartWith(changes[0]!.id);
+    expect((await yian(["memory", "history", flow, "lessons", "--limit", "1"])).stdout.split("\n").filter(Boolean))
+      .toHaveLength(1);
+  });
+});
+
+describe("yian memory undo", () => {
+  test("undoes one change as the user and prints the new version; a conflict exits 1 with the reason", async () => {
+    const flow = flowFile();
+    await runOnce(flow, "first");
+    await runOnce(flow, "second");
+    const [newest, oldest] = (await historyOf(flow)).changes;
+    const undone = await yian(["memory", "undo", newest!.id, flow, "lessons"]);
+    expect(undone.code, undone.stderr).toBe(0);
+    expect(undone.stdout).toMatch(new RegExp(`^undid ${newest!.id}; the memory's version is [0-9a-f]{64}\\n$`));
+    expect(readFileSync(join(lessons().location, "MEMORY.md"), "utf8")).toBe("first");
+    const [undo] = (await historyOf(flow)).changes;
+    expect(undo).toMatchObject({ op: "undo", author: { kind: "user", name: "ada" } });
+    expect(undo!.target.undoes).toBe(newest!.id);
+    // The first append's file no longer holds only what it wrote.
+    await runOnce(flow, "third");
+    const conflict = await yian(["memory", "undo", oldest!.id, flow, "lessons", "--json"]);
+    expect(conflict.code).toBe(1);
+    expect(JSON.parse(conflict.stdout).error.code).toBe("memory.conflict");
+    expect(conflict.stderr).toContain("undo refused: ");
+    expect(readFileSync(join(lessons().location, "MEMORY.md"), "utf8")).toBe("first\nthird");
   });
 });

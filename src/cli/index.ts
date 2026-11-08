@@ -32,6 +32,7 @@ import {
   type OptionSpec,
   type ParsedArgs,
   parseCommand,
+  type PositionalSpec,
   printJson,
   processIo,
   relay,
@@ -51,6 +52,21 @@ interface Command {
 
 const JSON_HELP = "Print one yian.cli.v1 JSON document on stdout.";
 const JSON_OPTION: OptionSpec = { name: "json", type: "boolean", help: JSON_HELP };
+
+/** `yian memory`'s two ways to name a memory: `FLOW NAME`, an input's default, or `--at PATH`. */
+const MEMORY_FLOW: PositionalSpec = {
+  name: "flow",
+  help: "A flow file; with NAME, that input's default memory.",
+  optional: true,
+  path: { exists: true, dir: false, readable: true },
+};
+const MEMORY_NAME: PositionalSpec = { name: "name", help: "A memory input of FLOW.", optional: true };
+const MEMORY_AT: OptionSpec = {
+  name: "at",
+  type: "string",
+  metavar: "PATH",
+  help: "The memory's folder, instead of FLOW NAME.",
+};
 
 /** The commands by name, in the order the root help lists them. */
 export const COMMANDS: Readonly<Record<string, Command>> = {
@@ -381,6 +397,46 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
     load: async () => {
       const { memoryList } = await import("./memory_cmd.ts");
       return memoryList;
+    },
+  },
+  "memory show": {
+    spec: {
+      name: "memory show",
+      summary: "Show a memory: its folder, counts and the recall a prompt shows each run.",
+      positionals: [MEMORY_FLOW, MEMORY_NAME],
+      options: [MEMORY_AT, { name: "all", type: "boolean", help: "Also print every file." }, JSON_OPTION],
+    },
+    load: async () => {
+      const { memoryShow } = await import("./memory_cmd.ts");
+      return memoryShow;
+    },
+  },
+  "memory history": {
+    spec: {
+      name: "memory history",
+      summary: "List a memory's changes, newest first, with who made each.",
+      positionals: [MEMORY_FLOW, MEMORY_NAME],
+      options: [
+        MEMORY_AT,
+        { name: "limit", type: "int", min: 0, help: "The most changes to list (20)." },
+        JSON_OPTION,
+      ],
+    },
+    load: async () => {
+      const { memoryHistory } = await import("./memory_cmd.ts");
+      return memoryHistory;
+    },
+  },
+  "memory undo": {
+    spec: {
+      name: "memory undo",
+      summary: "Undo one change to a memory.",
+      positionals: [{ name: "change", help: "The change's id, as history lists it." }, MEMORY_FLOW, MEMORY_NAME],
+      options: [MEMORY_AT, JSON_OPTION],
+    },
+    load: async () => {
+      const { memoryUndo } = await import("./memory_cmd.ts");
+      return memoryUndo;
     },
   },
   "skills check": {

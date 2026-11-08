@@ -1161,7 +1161,20 @@ output: \${add.output.id}
     const gone = ["memory", "edit", flow, "cases", "--delete", "1", "--yes", "--if-version", seen, "--json"];
     const conflict = await yian(gone, vectors);
     expect(conflict.code).toBe(1);
-    expect(JSON.parse(conflict.stdout).error.code).toBe("memory.conflict");
+    const changed = `item 1 changed since it was read: its version is ${Number(seen) + 1}, not ${seen}`;
+    expect(JSON.parse(conflict.stdout).error).toEqual({ code: "memory.conflict", message: changed });
+    // A stale version conflicts at once: no run is listed and nothing is asked.
+    const no = new FakeInput({ tty: true });
+    const output = new FakeOutput({ tty: true, columns: 400 });
+    const asked = await yian(["memory", "edit", flow, "cases", "--delete", "1", ...pin], {
+      ...vectors,
+      stdin: no,
+      stderrStream: output,
+    });
+    expect(asked.code).toBe(1);
+    expect(asked.stdout).not.toContain("the runs on this machine");
+    expect(output.text).not.toContain("Delete item 1");
+    expect(asked.stderr).toContain(`edit refused: ${changed}`);
     const added = await yian(["memory", "edit", flow, "cases", "--add", "x", "--if-version", "1"], vectors);
     expect(added.code).toBe(2);
     expect(added.stderr).toContain("Invalid value for --if-version: --if-version goes with --id or --delete");

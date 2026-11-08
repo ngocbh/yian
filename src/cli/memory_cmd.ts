@@ -757,6 +757,12 @@ async function editStore(command: ParsedArgs, io: CliIo, session: MemorySession)
     // Without --if-version, against the version read now: a run that changes the item meanwhile
     // makes it a conflict.
     const version = pinned === undefined ? current["version"]! : BigInt(pinned);
+    // A stale --if-version conflicts at once, before a delete lists runs and asks.
+    const now = String(current["version"]);
+    if (String(version) !== now) {
+      const message = `item ${String(item)} changed since it was read: its version is ${now}, not ${String(version)}`;
+      return failed(io, json, { label: "edit refused", code: "memory.conflict", message });
+    }
     const edited: JsonObject = fields === undefined ? {} : { fields };
     if (text !== undefined) edited["text"] = String(text);
     change =

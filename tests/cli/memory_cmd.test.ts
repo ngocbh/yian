@@ -991,6 +991,31 @@ describe("VectorDB stores", () => {
     expect(wrong.stderr).toContain("--add, --id, --text and --delete are a VectorDBMemory's");
   });
 
+  test("reembed re-embeds a store with --embedding's model; compact rebuilds it; a FileMemory is refused", async () => {
+    const flow = casesFile();
+    await addCase(flow, "Check sums twice.");
+    const missing = await yian(["memory", "reembed", flow, "cases"], vectors);
+    expect(missing.code).toBe(2);
+    expect(missing.stderr).toContain("Invalid value: reembed needs --embedding provider/model");
+    const reembedded = await yian(["memory", "reembed", flow, "cases", "--embedding", "openai/other"], vectors);
+    expect(reembedded.code, reembedded.stderr).toBe(0);
+    expect(reembedded.stdout).toBe(`re-embedded ${cases().identity} with openai/other\n`);
+    const store = new VectorDBMemory({ path: cases().location });
+    const stored = await store.stored({ signal: new AbortController().signal });
+    expect(stored?.embedding).toEqual({ provider: "openai", model: "other" });
+    const compacted = await yian(["memory", "compact", "--at", cases().location, "--json"], vectors);
+    expect(compacted.code, compacted.stderr).toBe(0);
+    expect(JSON.parse(compacted.stdout)).toEqual({ format: "yian.cli.v1", identity: cases().identity });
+    const files = flowFile();
+    await runOnce(files, "first");
+    for (const command of [["reembed", "--embedding", "openai/x"], ["compact"]]) {
+      const refused = await yian(["memory", command[0]!, files, "lessons", ...command.slice(1)]);
+      expect(refused.code, command[0]).toBe(2);
+      const refusal = `Invalid value: ${command[0]} is a VectorDBMemory's; ${lessons().identity} is a FileMemory`;
+      expect(refused.stderr).toContain(refusal);
+    }
+  });
+
   test("reset's question counts the store's items", async () => {
     const flow = casesFile();
     await addCase(flow, "Check sums twice.");

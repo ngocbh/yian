@@ -39,6 +39,7 @@ import {
   type CliMemory,
   defaultIdentity,
   defaultLocation,
+  embeddingFlag,
   memoryRoot,
   projectFolder,
 } from "./memory_bind.ts";
@@ -872,6 +873,53 @@ export async function memoryReset(command: ParsedArgs, io: CliIo): Promise<numbe
     await target.memory.reset({ signal: stopOf(io) });
     if (json) await printJson({ identity, runs: runsJson(io, runs) }, io.stdout);
     else await io.stdout.write(`emptied ${forTerminal(identity, io.stdout)}\n`);
+    return 0;
+  });
+}
+
+/**
+ * Return `memory` as a VectorDB store for the store-only command `command`.
+ *
+ * @throws {UsageError} When it is a FileMemory.
+ */
+function storeOnly(command: string, memory: CliMemory, session: MemorySession): VectorDBMemory {
+  if (memory instanceof VectorDBMemory) return memory;
+  throw new UsageError(`Invalid value: ${command} is a VectorDBMemory's; ${session.info.identity} is a FileMemory`);
+}
+
+/**
+ * `yian memory reembed --embedding PROVIDER/MODEL`: embed every item of a VectorDB store again with
+ * that model, under the store's lock, then record it as the store's model (`--json`: `{identity,
+ * embedding}`). A FileMemory is refused.
+ *
+ * @throws {UsageError} Without `--embedding`, or for a FileMemory.
+ */
+export async function memoryReembed(command: ParsedArgs, io: CliIo): Promise<number> {
+  const embedding = embeddingFlag(command.options["embedding"] as string | undefined);
+  if (embedding === null) throw new UsageError("Invalid value: reembed needs --embedding provider/model");
+  return onMemory(command, io, namedOf(command), async (session, { memory }) => {
+    const store = storeOnly("reembed", memory, session);
+    await store.reembed({ embedding, embed: io.embed ?? defaultEmbed(io.env), signal: stopOf(io) });
+    const { identity } = session.info;
+    const model = `${embedding.provider}/${embedding.model}`;
+    if (command.options["json"] === true) await printJson({ identity, embedding: model }, io.stdout);
+    else await io.stdout.write(`${forTerminal(`re-embedded ${identity} with ${model}`, io.stdout)}\n`);
+    return 0;
+  });
+}
+
+/**
+ * `yian memory compact`: rebuild a VectorDB store's file under its lock, giving back the space
+ * deleted items and history took (`--json`: `{identity}`). A FileMemory is refused.
+ *
+ * @throws {UsageError} For a FileMemory.
+ */
+export async function memoryCompact(command: ParsedArgs, io: CliIo): Promise<number> {
+  return onMemory(command, io, namedOf(command), async (session, { memory }) => {
+    await storeOnly("compact", memory, session).compact({ signal: stopOf(io) });
+    const { identity } = session.info;
+    if (command.options["json"] === true) await printJson({ identity }, io.stdout);
+    else await io.stdout.write(`${forTerminal(`compacted ${identity}`, io.stdout)}\n`);
     return 0;
   });
 }

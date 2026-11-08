@@ -507,6 +507,34 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
       return memoryReset;
     },
   },
+  "memory reembed": {
+    spec: {
+      name: "memory reembed",
+      summary: "Embed every item of a VectorDB store again with another model.",
+      positionals: [MEMORY_FLOW, MEMORY_NAME],
+      options: [
+        MEMORY_AT,
+        { name: "embedding", type: "string", metavar: "PROVIDER/MODEL", help: "The model to embed with." },
+        JSON_OPTION,
+      ],
+    },
+    load: async () => {
+      const { memoryReembed } = await import("./memory_cmd.ts");
+      return memoryReembed;
+    },
+  },
+  "memory compact": {
+    spec: {
+      name: "memory compact",
+      summary: "Rebuild a VectorDB store's file, giving back the space deleted items took.",
+      positionals: [MEMORY_FLOW, MEMORY_NAME],
+      options: [MEMORY_AT, JSON_OPTION],
+    },
+    load: async () => {
+      const { memoryCompact } = await import("./memory_cmd.ts");
+      return memoryCompact;
+    },
+  },
   "skills check": {
     spec: {
       name: "skills check",

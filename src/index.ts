@@ -17,8 +17,10 @@
  *   `pendingCalls`, with their errors `RunBusyError` and `DeliveryRefused` (`run`);
  * - memory: `MemoryBase`, `isMemory`, the session's errors `MemoryBusyError`,
  *   `ChangeIdReusedError` and `MemoryMissingError`, `memoryErrorKind`, and the contract and
- *   session types (`memory/base`); `FileMemory` and `FileMemoryOptions` (`memory/file`); and
- *   `MemoryRef` (`typesys/values`), the value a memory input records when a run starts.
+ *   session types (`memory/base`); `FileMemory` and `FileMemoryOptions` (`memory/file`);
+ *   `VectorDBMemory` and `VectorDBMemoryOptions` (`memory/vectordb`), whose embedder a host builds
+ *   with `defaultEmbed` from `yian/llm_clients`; and `MemoryRef` (`typesys/values`), the value a
+ *   memory input records when a run starts.
  *
  * `RunResult` is on `yian/run` (`run.ts`), with `MemoryDrift`, a memory a crash resume found
  * changed. `Message`, `MessagePart`, `checkMessage`, `checkConversation` and `ConversationError`
@@ -58,6 +60,7 @@ export {
   type RecordedMemoryTool,
 } from "./memory/base.ts";
 export { FileMemory, type FileMemoryOptions } from "./memory/file.ts";
+export { VectorDBMemory, type VectorDBMemoryOptions } from "./memory/vectordb.ts";
 export {
   checkConversation,
   checkMessage,

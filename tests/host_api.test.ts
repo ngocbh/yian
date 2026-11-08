@@ -53,6 +53,7 @@ import { pending } from "../src/tools/context.ts";
 import { FunctionTool } from "../src/tools/function_tools.ts";
 import { inboxType, Type, TypeCheckError, ValueKind } from "../src/typesys/values.ts";
 import { gateTool, handClock } from "./helpers/inbox_fixtures.ts";
+import { wordEmbed } from "./helpers/memory_fakes.ts";
 import { processChatFlow, processEnv } from "./helpers/yian-host-api-child-hold.ts";
 import { callReply, graph, NO_ENV, rejected, serving, textReply } from "./helpers/run_state_fixtures.ts";
 
@@ -838,4 +839,44 @@ output: \${answer.output}
   expect([result.status, result.output]).toEqual(["succeeded", "done"]);
   expect(JSON.stringify(model.requests[0])).toContain("Prefer short answers.");
   expect(readFileSync(join(folder, "a.md"), "utf8")).toBe("Cite sources.");
+});
+
+test("a host binds a VectorDBMemory from the package root; an agent adds an item and a TOOL node finds it", async () => {
+  const cases = new yian.VectorDBMemory({
+    path: join(mkdtempSync(join(ROOT, "vector-")), "cases.db"),
+    id: "host/cases",
+    embedding: { provider: "openai", model: "small" },
+    embed: wordEmbed(),
+  });
+  expect(yian.isMemory(cases)).toBe(true);
+  const flow = await yian.loadFlow(`
+id: f
+name: f
+llm_config: {provider: anthropic, model: claude-test}
+input:
+  cases: !VectorDBMemory
+nodes:
+  keep:
+    kind: agent
+    input:
+      cases: \${input.cases}
+    tools: [{cases: [add]}]
+    prompt: "\${cases} keep it"
+    output: str
+  found:
+    kind: tool
+    depends_on: [keep]
+    tool_id: {cases: search}
+    input:
+      query: bravo
+      k: 1
+output: \${found.output}
+`);
+  const model = new ScriptedModel([callReply(["cases_add", { text: "bravo outage" }, "c1"]), textReply("kept")], {
+    provider: "anthropic",
+    model: "claude-test",
+  });
+  const result = await yian.runFlow(flow, { cases }, { models: serving(model), env, log: freshLog() });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect((result.output as { items: { text: string }[] }).items.map((item) => item.text)).toEqual(["bravo outage"]);
 });

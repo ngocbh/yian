@@ -1,6 +1,7 @@
 /**
  * A run binds each memory input to the instance its host passes, before `RunStarted`: the memory's
- * value is recorded in START's inputs, and its session closes when the run's segment ends.
+ * value is recorded in START's inputs, and its session closes when the run's segment ends. A
+ * VectorDBMemory input opens with its item type's JSON Schema.
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -11,13 +12,14 @@ import { join } from "node:path";
 import { loadFlow } from "../src/compose/loader.ts";
 import { ScriptedModel } from "../src/llm/testing.ts";
 import { FileMemory } from "../src/memory/file.ts";
-import { withWarnings } from "../src/platform.ts";
+import { VectorDBMemory } from "../src/memory/vectordb.ts";
+import { openSqlite, withWarnings } from "../src/platform.ts";
 import * as runModule from "../src/run.ts";
 import { hostInputs, inspectRun, type RunFlowOptions, runFlow } from "../src/run.ts";
 import { FunctionTool } from "../src/tools/function_tools.ts";
 import type { JsonObject } from "../src/typesys/json.ts";
-import { FakeMemory, fileInfo, RecordingSession } from "./helpers/memory_fakes.ts";
-import { NO_ENV, serving, textReply } from "./helpers/run_state_fixtures.ts";
+import { FakeMemory, fileInfo, RecordingSession, wordEmbed } from "./helpers/memory_fakes.ts";
+import { callReply, NO_ENV, serving, textReply } from "./helpers/run_state_fixtures.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "yian-run-memory-inputs-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -215,4 +217,162 @@ test("a memory that fails to close after the call failed is noted on its error, 
 
 test("the run entry point doesn't export how it reads memory bindings", () => {
   expect("memoryBindings" in runModule).toBe(false);
+});
+
+/** A flow whose TOOL node `found` searches `cases`, typed `Case`, for `q`. */
+const SEARCH_FLOW = `
+id: cases
+name: cases
+typedefs:
+  Case:
+    title: str
+    tags: list(str)
+input:
+  q: !str
+  cases: !VectorDBMemory(Case)
+nodes:
+  found:
+    kind: tool
+    tool_id: {cases: search}
+    input:
+      query: \${input.q}
+      k: 3
+output: \${found.output}
+`;
+
+/** The JSON Schema `typeToSchema` gives `Case`, which a `!VectorDBMemory(Case)` store keeps. */
+const CASE_SCHEMA = {
+  properties: {
+    title: { title: "Title", type: "string" },
+    tags: { items: { type: "string" }, title: "Tags", type: "array" },
+  },
+  required: ["title", "tags"],
+  title: "Record",
+  type: "object",
+};
+
+/** A fresh store path in a fresh folder. */
+function storePath(): string {
+  return join(mkdtempSync(join(tmp, "v-")), "cases.db");
+}
+
+/** A VectorDBMemory on `path`, embedded by `embed` as `openai/small`. */
+function cases(path: string, embed = wordEmbed()): VectorDBMemory {
+  return new VectorDBMemory({ path, id: "t/cases", embedding: { provider: "openai", model: "small" }, embed });
+}
+
+/** The store's settings as its `meta` table holds them. */
+function storedSettings(path: string): JsonObject {
+  const db = openSqlite(path, { readonly: true });
+  try {
+    return JSON.parse(String(db.prepare("SELECT value FROM meta WHERE key = 'settings'").get()!.value));
+  } finally {
+    db.close();
+  }
+}
+
+/** Add `texts` to the store at `path` as a host, each with a `Case`'s fields. */
+async function seed(path: string, texts: string[]): Promise<void> {
+  const signal = new AbortController().signal;
+  const session = await cases(path).open({ create: true, itemType: CASE_SCHEMA, signal });
+  for (const [i, text] of texts.entries()) {
+    const change = { op: "add", text, fields: { title: `case ${i + 1}`, tags: ["seed"] } };
+    const applied = await session.apply({ id: `seed-${i}`, change, author: { kind: "host", name: "seed" }, signal });
+    expect(applied.ok).toBe(true);
+  }
+  await session.close();
+}
+
+test("runFlow binds a VectorDBMemory(Case) input with Case's JSON Schema as its item type", async () => {
+  const path = storePath();
+  const { log, result } = await run(SEARCH_FLOW, { q: "alpha", cases: cases(path) });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(storedSettings(path)).toEqual({ embedding: { model: "small", provider: "openai" }, item_schema: CASE_SCHEMA });
+  const value = startInputs(log)["cases"]!["memory"] as JsonObject;
+  expect(value).toMatchObject({ identity: "t/cases", type: "VectorDBMemory", settings: { item_schema: CASE_SCHEMA } });
+  const add = (value["tools"] as JsonObject[]).find((tool) => tool["name"] === "add")!;
+  expect((add["parameters"] as { properties: JsonObject }).properties["fields"]).toMatchObject({
+    properties: CASE_SCHEMA.properties,
+    required: CASE_SCHEMA.required,
+  });
+  expect(readFileSync(log, "utf8")).not.toContain(path);
+});
+
+test("a store whose items have another type fails before RunStarted, with no log", async () => {
+  const path = storePath();
+  const other = { type: "object", properties: { name: { type: "string" } }, required: ["name"] };
+  const signal = new AbortController().signal;
+  await (await cases(path).open({ create: true, itemType: other, signal })).close();
+  const log = runLog();
+  await expect(
+    runFlow(await loadFlow(SEARCH_FLOW), { q: "alpha", cases: cases(path) }, { env: NO_ENV, log }),
+  ).rejects.toThrow("memory `cases`: this memory's items have another type than its input's");
+  expect(existsSync(log)).toBe(false);
+  // A bare VectorDBMemory input gives no item type, which a typed store refuses too.
+  const bare = SEARCH_FLOW.replace("!VectorDBMemory(Case)", "!VectorDBMemory");
+  await expect(runFlow(await loadFlow(bare), { q: "alpha", cases: cases(path) }, { env: NO_ENV, log })).rejects.toThrow(
+    "memory `cases`: this memory's items have typed fields; give its input their type",
+  );
+});
+
+test("a TOOL node tool_id: {cases: search} returns the hits as ${found.output}", async () => {
+  const path = storePath();
+  await seed(path, ["alpha bravo", "charlie", "alpha alpha"]);
+  const embed = wordEmbed();
+  const { result } = await run(SEARCH_FLOW, { q: "alpha", cases: cases(path, embed) });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const items = (result.output as { items: JsonObject[] }).items;
+  expect(items.map((item) => [item["id"], item["text"]])).toEqual([
+    [3n, "alpha alpha"],
+    [1n, "alpha bravo"],
+    [2n, "charlie"],
+  ]);
+  expect(items[0]!["fields"]).toEqual({ title: "case 3", tags: ["seed"] });
+  expect(embed.calls).toEqual([{ texts: ["alpha"], model: "openai/small" }]);
+});
+
+test("an agent granted {cases: [search, add]} adds an item with its fields", async () => {
+  const text = `
+id: keep
+name: keep
+llm_config: {provider: anthropic, model: claude-test}
+typedefs:
+  Case:
+    title: str
+    tags: list(str)
+input:
+  cases: !VectorDBMemory(Case)
+nodes:
+  keep:
+    kind: agent
+    input:
+      cases: \${input.cases}
+    tools: [{cases: [search, add]}]
+    prompt: "<memory>\${cases}</memory> keep this case"
+    output: str
+output: \${keep.output}
+`;
+  const path = storePath();
+  const change = { text: "bravo outage", fields: { title: "Outage", tags: ["ops"] } };
+  const model = new ScriptedModel([callReply(["cases_add", change, "c1"]), textReply("kept")], {
+    provider: "anthropic",
+    model: "claude-test",
+  });
+  const log = runLog();
+  const result = await runFlow(await loadFlow(text), { cases: cases(path) }, {
+    models: serving(model),
+    env: NO_ENV,
+    log,
+  });
+  expect([result.status, result.output]).toEqual(["succeeded", "kept"]);
+  expect(model.requests[0]!.tools.map((tool) => tool.name)).toEqual(["cases_search", "cases_add"]);
+  const signal = new AbortController().signal;
+  const session = await cases(path).open({ create: false, itemType: CASE_SCHEMA, signal });
+  expect(await session.call("read", { id: 1n }, { signal })).toMatchObject({
+    id: 1n,
+    text: "bravo outage",
+    fields: { title: "Outage", tags: ["ops"] },
+    author: { kind: "agent", name: "keep" },
+  });
+  await session.close();
 });

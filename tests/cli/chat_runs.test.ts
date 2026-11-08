@@ -995,8 +995,12 @@ describe("memory", () => {
           .start(await flow(REMEMBER), {}, { project: root })
           .then(() => null, (error: Error) => error.message);
         expect(refused).toContain("EACCES");
-        expect(refused).toContain(`~/.yian/memory/${projectKey(root)}/answer`);
+        // Bun's recursive mkdir names the folder it failed on, Node's the memory's own folder: each
+        // is written from `~` or by its role, and neither names where it is.
+        const scrubbed = [`~/.yian/memory/${projectKey(root)}/answer`, "the memory's folder"];
+        expect(scrubbed.some((path) => refused!.endsWith(`mkdir '${path}'`)), refused!).toBe(true);
         expect(refused).not.toContain(root);
+        expect(refused).not.toContain(tmpdir());
       } finally {
         chmodSync(key, 0o700);
       }

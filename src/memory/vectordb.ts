@@ -931,6 +931,69 @@ function checkDimensions(db: Sqlite, vector: Float32Array): void {
   }
 }
 
+/** A history row as the store holds it. */
+interface HistoryRow {
+  readonly seq: number;
+  readonly change: string;
+  readonly item: number;
+  readonly op: string;
+  readonly before: string | null;
+  readonly after: number | null;
+}
+
+/** Return the latest history row of change `changeId`, or of any change to item `item`; `undefined` when none. */
+function latestChange(db: Sqlite, where: { change: string } | { item: number }): HistoryRow | undefined {
+  const [column, value] = "change" in where ? ["change", where.change] : ["item", where.item];
+  return db
+    .prepare(`SELECT seq, change, item, op, before, after FROM history WHERE ${column} = ? ORDER BY seq DESC LIMIT 1`)
+    .get(value) as HistoryRow | undefined;
+}
+
+/**
+ * Return whether `change` can still be undone: it keeps what it replaced, no later change touched
+ * its item, and the item is what it left (at its version, or gone).
+ */
+function undoable(db: Sqlite, change: HistoryRow, row: ItemRow | undefined): boolean {
+  if (change.before === null) return false;
+  if (latestChange(db, { item: change.item })?.seq !== change.seq) return false;
+  return change.after === null ? row === undefined : row?.version === change.after;
+}
+
+/** An item's state as `history.before` holds it: `null` for no item. */
+type ItemState = { text: string; fields: JsonValue; retired: string | null } | null;
+
+/**
+ * Return the state `history.before` text holds.
+ *
+ * @throws Error when it isn't one this code wrote.
+ */
+function parseState(text: string): ItemState {
+  const state = storedJson(text);
+  if (isObject(state) && state.absent === true) return null;
+  if (
+    !isObject(state) ||
+    typeof state.text !== "string" ||
+    !(state.retired === null || typeof state.retired === "string") ||
+    state.fields === undefined
+  ) {
+    throw new Error("this memory's store has a damaged history row");
+  }
+  return { text: state.text, fields: state.fields, retired: state.retired };
+}
+
+/** What `item` is under `target` for an erase: the item id. */
+function checkEraseTarget(target: JsonObject): number {
+  if (!isObject(target)) throw new TypeError("an erase needs item as an integer of at least 1");
+  const extra = Object.keys(target).filter((key) => key !== "item");
+  if (extra.length > 0) throw new TypeError(`an erase takes item, not ${listed(extra)}`);
+  const value = target.item;
+  const item = typeof value === "bigint" ? Number(value) : value;
+  if (typeof item !== "number" || !Number.isSafeInteger(item) || item < 1) {
+    throw new TypeError("an erase needs item as an integer of at least 1");
+  }
+  return item;
+}
+
 /** What a session needs of its memory: the store, its caps, its lock and its clock. */
 interface Store {
   /** The store's SQLite file, symlinks resolved. */
@@ -1199,9 +1262,32 @@ export class VectorDBMemory extends MemoryBase {
     return new VectorDBSession(this.#store, sessionInfo(meta, this.#store.limits), stored, created);
   }
 
-  /** Empty the memory, keeping its identity and settings. */
-  override reset(_o: { signal: AbortSignal }): Promise<void> {
-    return Promise.reject(new Error("VectorDBMemory reset isn't available yet"));
+  /**
+   * Empty the memory, keeping its identity and settings: delete every item, the history and the
+   * change ids in one transaction, and move the version on. Item ids aren't used again. Only a
+   * host or the CLI calls it, outside runs; a session open on the memory goes on with it empty.
+   *
+   * @throws Error when the store isn't a memory, or holds another identity than the constructor's `id`.
+   * @throws {MemoryBusyError} If another writer holds the lock past the timeout.
+   */
+  override async reset(o: { signal: AbortSignal }): Promise<void> {
+    o.signal.throwIfAborted();
+    const { path } = this.#store;
+    if (lstatOrNull(path) === null) throw new Error(`${shown(path)} isn't a memory yet`);
+    await this.#store.locked(o.signal, (): void => {
+      withDb(path, (db) => {
+        const meta = readMeta(db, path);
+        if (meta === null) throw new Error(`${shown(path)} isn't a memory yet`);
+        if (this.#id !== undefined && meta.identity !== this.#id) {
+          throw new Error(`this memory is ${shown(meta.identity)}, not ${shown(this.#id)}`);
+        }
+        transaction(db, () => {
+          // With secure_delete on, the deleted texts are overwritten, not left in free pages.
+          db.exec("DELETE FROM items; DELETE FROM history; DELETE FROM changes");
+          db.prepare("UPDATE meta SET value = ? WHERE key = 'version'").run(String(meta.version + 1));
+        });
+      });
+    }).result;
   }
 }
 
@@ -1337,19 +1423,87 @@ class VectorDBSession implements MemorySession {
     return this.#track(this.#apply(writing, change, c.signal));
   }
 
-  async undo(_o: { id: string; changeId: string; author: Author; signal: AbortSignal }): Promise<Applied> {
+  /**
+   * Undo change `changeId` as a new change `id`: write back the item it replaced, if no later
+   * change touched the item and the memory still keeps what it replaced. Otherwise it is refused
+   * or conflicts, writing nothing. A restored text is embedded again outside the lock, as an edit's
+   * is. An undo is in history and can itself be undone; a delete or an erase can't be.
+   *
+   * @throws {ChangeIdReusedError} If `id` was applied with a different change.
+   * @throws {MemoryBusyError} If another writer holds the lock past the timeout.
+   * @throws {TypeError} If `id`, `changeId` or `author` has the wrong shape.
+   * @throws Error when the embedder fails, and nothing is written.
+   */
+  async undo(o: { id: string; changeId: string; author: Author; signal: AbortSignal }): Promise<Applied> {
     this.#checkOpen();
-    throw new Error("VectorDBMemory undo isn't available yet");
+    o.signal.throwIfAborted();
+    if (typeof o.id !== "string" || o.id === "") throw new TypeError("a change id must be a non-empty string");
+    if (typeof o.changeId !== "string") throw new TypeError("undo needs the change id to undo as a string");
+    const author = checkAuthor(o.author);
+    const writing: Writing = { id: o.id, digest: sha256(canonicalJson({ op: "undo", change: o.changeId })), author };
+    return this.#track(this.#undo(writing, o.changeId, o.signal));
   }
 
-  async erase(_o: { id: string; target: JsonObject; author: Author; signal: AbortSignal }): Promise<Erased> {
+  /**
+   * Erase as change `id`: remove the item `target.item` and every history row of it, which hold
+   * its old texts, in one transaction. It can't be undone, and it reports the change ids whose
+   * undo it disabled: the item's last change, when it could still be undone. The ids' digests stay,
+   * but they hold no text.
+   *
+   * @throws {ChangeIdReusedError} If `id` was applied with a different change.
+   * @throws {MemoryBusyError} If another writer holds the lock past the timeout.
+   * @throws {TypeError} If `id`, `target` or `author` has the wrong shape.
+   */
+  async erase(o: { id: string; target: JsonObject; author: Author; signal: AbortSignal }): Promise<Erased> {
     this.#checkOpen();
-    throw new Error("VectorDBMemory erase isn't available yet");
+    o.signal.throwIfAborted();
+    if (typeof o.id !== "string" || o.id === "") throw new TypeError("a change id must be a non-empty string");
+    const author = checkAuthor(o.author);
+    const item = checkEraseTarget(o.target);
+    const writing: Writing = { id: o.id, digest: sha256(canonicalJson({ op: "erase", item })), author };
+    const applied = await this.#locked(o.signal, (db) => {
+      const known = knownChange(db, writing.id, writing.digest);
+      if (known !== null) return known;
+      const row = itemRow(db, item);
+      const last = latestChange(db, { item });
+      const disabled = last !== undefined && undoable(db, last, row) ? [last.change] : [];
+      const at = new Date(this.#store.scheduler.now()).toISOString();
+      return transaction(db, () => {
+        const seq = storedVersion(db) + 1;
+        db.prepare("DELETE FROM items WHERE id = ?").run(item);
+        db.prepare("DELETE FROM history WHERE item = ?").run(item);
+        const entry: HistoryEntry = { seq, item, op: "erase", before: null, after: null, undoes: null };
+        const result = { item: BigInt(item), version: BigInt(seq), disabled_undos: disabled };
+        return record(db, this.#store.limits, at, writing, entry, result);
+      });
+    });
+    if (!applied.ok) throw new Error(applied.reason);
+    return { version: applied.version, disabledUndos: applied.result.disabled_undos as string[] };
   }
 
-  async history(_o: { limit: number }): Promise<ChangeEntry[]> {
+  /**
+   * List the last `limit` changes the history holds, newest first.
+   *
+   * @throws {RangeError} If `limit` isn't an integer of at least 0.
+   * @throws {MemoryBusyError} If another writer holds the lock past the timeout.
+   */
+  async history(o: { limit: number }): Promise<ChangeEntry[]> {
     this.#checkOpen();
-    throw new Error("VectorDBMemory history isn't available yet");
+    if (!Number.isSafeInteger(o.limit) || o.limit < 0) {
+      throw new RangeError(`history needs a limit of 0 or more changes, not ${String(o.limit)}`);
+    }
+    return this.#locked(undefined, (db) =>
+      db
+        .prepare("SELECT change, item, op, author, at, undoes FROM history ORDER BY seq DESC LIMIT ?")
+        .all(o.limit)
+        .map((row) => {
+          const target: JsonObject = { item: BigInt(row.item as number) };
+          if (typeof row.undoes === "string") target.undoes = row.undoes;
+          const author = asAuthor(storedJson(row.author));
+          if (author === null) throw new Error("this memory's store has a damaged history row");
+          return { id: row.change as string, op: row.op as string, target, author, at: row.at as string };
+        }),
+    );
   }
 
   /** Close the session once every call and turn it started has settled; later calls reject. */
@@ -1361,17 +1515,16 @@ class VectorDBSession implements MemorySession {
 
   /** Apply `change` as `writing`: check and write at once, or check, embed, then check again and write. */
   async #apply(writing: Writing, change: Change, signal: AbortSignal): Promise<Applied> {
-    const first = await this.#locked(signal, (db): Applied | null => {
+    const first = await this.#locked(signal, (db): Applied | { embed: string } => {
       const known = knownChange(db, writing.id, writing.digest);
       if (known !== null) return known;
       const plan = this.#plan(db, change);
       if ("ok" in plan) return plan;
-      return plan.embed === null ? this.#write(db, writing, change, plan, null) : null;
+      return plan.embed === null ? this.#write(db, writing, change, plan, null) : { embed: plan.embed };
     });
-    if (first !== null) return first;
+    if ("ok" in first) return first;
     // Embedded outside the lock: a slow embedding call mustn't hold up the memory's other writers.
-    const text = change.op === "add" || change.op === "edit" ? change.text! : "";
-    const [vector] = await this.#embed([text], signal);
+    const [vector] = await this.#embed([first.embed], signal);
     return this.#locked(signal, (db) => {
       const known = knownChange(db, writing.id, writing.digest);
       if (known !== null) return known;
@@ -1458,6 +1611,109 @@ class VectorDBSession implements MemorySession {
           break;
       }
       return record(db, limits, at, writing, entry, { id: BigInt(entry.item), version: BigInt(seq) });
+    });
+  }
+
+  /**
+   * Undo `changeId` as `writing`: check and write at once, or check, embed the restored text, then
+   * check again and write.
+   */
+  async #undo(writing: Writing, changeId: string, signal: AbortSignal): Promise<Applied> {
+    const first = await this.#locked(signal, (db): Applied | { embed: string } => {
+      const known = knownChange(db, writing.id, writing.digest);
+      if (known !== null) return known;
+      const plan = this.#undoPlan(db, changeId);
+      if ("ok" in plan) return plan;
+      return plan.embed === null ? this.#undoWrite(db, writing, plan, null) : { embed: plan.embed };
+    });
+    if ("ok" in first) return first;
+    const [vector] = await this.#embed([first.embed], signal);
+    return this.#locked(signal, (db) => {
+      const known = knownChange(db, writing.id, writing.digest);
+      if (known !== null) return known;
+      const again = this.#undoPlan(db, changeId);
+      if ("ok" in again) return again;
+      return this.#undoWrite(db, writing, again, again.embed === null ? null : vector!);
+    });
+  }
+
+  /**
+   * Check that change `changeId` can be undone now. Return the refusal or conflict, or what undoing
+   * it writes: the change, the item as it is, the state to restore (`null` to remove the item), and
+   * the text to embed for it (`null` when the item's vector stays or it goes).
+   */
+  #undoPlan(
+    db: Sqlite,
+    changeId: string,
+  ): Applied | { change: HistoryRow; row: ItemRow | undefined; restore: ItemState; embed: string | null } {
+    const shownId = shown(changeId);
+    const change = latestChange(db, { change: changeId });
+    if (change === undefined) return refused(`change ${shownId} isn't in the memory's history`);
+    if (change.op === "delete" || change.op === "erase") {
+      return refused(`change ${shownId} was ${change.op === "erase" ? "an erase" : "a delete"}, which can't be undone`);
+    }
+    if (change.before === null) {
+      return refused(`change ${shownId} can't be undone: the memory no longer keeps what it replaced`);
+    }
+    const row = itemRow(db, change.item);
+    if (!undoable(db, change, row)) {
+      const reason = `item ${change.item} changed after change ${shownId}; undoing it would lose that`;
+      return row === undefined ? refused(reason) : conflict(reason, row);
+    }
+    const restore = parseState(change.before);
+    if (restore !== null && row === undefined) {
+      const { maxItems } = this.#store.limits;
+      const count = Number(db.prepare("SELECT count(*) AS n FROM items").get()!.n);
+      if (count >= maxItems) return refused(`the memory holds ${count} items; it may hold ${maxItems}`);
+    }
+    const embed = restore !== null && (row === undefined || row.text !== restore.text) ? restore.text : null;
+    return { change, row, restore, embed };
+  }
+
+  /** Write the undo `plan` passed, with `vector` as the restored item's vector, in one transaction. */
+  #undoWrite(
+    db: Sqlite,
+    writing: Writing,
+    plan: { change: HistoryRow; row: ItemRow | undefined; restore: ItemState },
+    vector: Float32Array | null,
+  ): Applied {
+    const { limits, scheduler } = this.#store;
+    if (vector !== null) checkDimensions(db, vector);
+    const at = new Date(scheduler.now()).toISOString();
+    const author = canonicalJson(writing.author);
+    const { change, row, restore } = plan;
+    const item = change.item;
+    return transaction(db, () => {
+      const seq = storedVersion(db) + 1;
+      if (restore === null) {
+        db.prepare("DELETE FROM items WHERE id = ?").run(item);
+      } else {
+        const fields = restore.fields === null ? null : logJson(restore.fields);
+        if (row === undefined) {
+          db.prepare(
+            "INSERT INTO items(id, text, fields, version, author, retired, vector) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          ).run(item, restore.text, fields, seq, author, restore.retired, bytesOf(vector!));
+        } else {
+          db.prepare("UPDATE items SET text = ?, fields = ?, retired = ?, version = ?, author = ? WHERE id = ?").run(
+            restore.text,
+            fields,
+            restore.retired,
+            seq,
+            author,
+            item,
+          );
+          if (vector !== null) db.prepare("UPDATE items SET vector = ? WHERE id = ?").run(bytesOf(vector), item);
+        }
+      }
+      const entry: HistoryEntry = {
+        seq,
+        item,
+        op: "undo",
+        before: row === undefined ? ABSENT_STATE : stateOf(row),
+        after: restore === null ? null : seq,
+        undoes: change.change,
+      };
+      return record(db, limits, at, writing, entry, { id: BigInt(item), version: BigInt(seq) });
     });
   }
 

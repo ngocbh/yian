@@ -1,4 +1,4 @@
-/** VectorDBMemory: its store, identity and settings, recall, read tools and writes. */
+/** VectorDBMemory: its store, identity and settings, recall, read tools, writes, undo, erase and reset. */
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { type ChildProcess, spawn } from "node:child_process";
@@ -1090,3 +1090,231 @@ test("writers in separate processes serialize through the lock: every add lands 
   expect(rows("changes")).toHaveLength(16);
   expect(metaRows().version).toBe("16");
 }, 120_000);
+
+const user: Author = { kind: "user", name: "ada" };
+
+/** Undo change `changeId` on `s` as change `id`, by a person at the CLI. */
+function undo(s: MemorySession, changeId: string, id = `undo-${changeId}`): Promise<Applied> {
+  return s.undo({ id, changeId, author: user, signal });
+}
+
+/** Erase item `item` on `s` as change `id`, by a person at the CLI. */
+function erase(s: MemorySession, item: bigint, id = `erase-${item}`) {
+  return s.erase({ id, target: { item }, author: user, signal });
+}
+
+describe("undo", () => {
+  test("undo restores an item when its version is still the change's, as a change of its own", async () => {
+    const s = await openAt();
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    await apply(s, { op: "edit", id: 1n, if_version: 1n, text: "bravo" }, "e1");
+    embedded = [];
+    expect(await undo(s, "e1")).toEqual({ ok: true, version: "3", result: { id: 1n, version: 3n } });
+    expect(await call(s, "read", { id: 1n })).toEqual({ id: 1n, version: 3n, text: "alpha", author: user });
+    // The restored text is embedded again, outside the lock, and search finds it by it.
+    expect(embedded.map((each) => each.texts)).toEqual([["alpha"]]);
+    expect(((await call(s, "search", { query: "alpha", k: 1n })).items as JsonObject[])[0]).toMatchObject({ score: 1 });
+    // An undo is a change: it can be undone too.
+    expect(await undo(s, "undo-e1")).toMatchObject({ ok: true, version: "4" });
+    expect(await call(s, "read", { id: 1n })).toMatchObject({ text: "bravo" });
+    await s.close();
+  });
+
+  test("undo of a retire brings the item back with the vector it kept", async () => {
+    const s = await openAt();
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    await apply(s, { op: "retire", id: 1n, if_version: 1n, why: "old" }, "r1");
+    embedded = [];
+    expect((await undo(s, "r1")).ok).toBe(true);
+    expect(embedded).toEqual([]);
+    expect(await call(s, "read", { id: 1n })).not.toHaveProperty("retired");
+    expect(((await call(s, "search", { query: "alpha", k: 1n })).items as JsonObject[]).length).toBe(1);
+    await s.close();
+  });
+
+  test("undo of an add removes the item; undoing that adds it back under its id", async () => {
+    const s = await openAt({ path: join(dir, "store", "typed.db") }, CASE);
+    const fields = { title: "t", tags: ["x"] };
+    await apply(s, { op: "add", text: "alpha", fields }, "a1");
+    await apply(s, { op: "add", text: "bravo", fields }, "a2");
+    expect(await undo(s, "a1")).toEqual({ ok: true, version: "3", result: { id: 1n, version: 3n } });
+    expectRefusal(await rejection(call(s, "read", { id: 1n })), "item 1 doesn't exist");
+    expect(await undo(s, "undo-a1")).toMatchObject({ ok: true, version: "4" });
+    expect(await call(s, "read", { id: 1n })).toEqual({ id: 1n, version: 4n, text: "alpha", fields, author: user });
+    // A new item still gets a new id: ids are never used twice.
+    expect(await apply(s, { op: "add", text: "charlie", fields }, "a3")).toMatchObject({ result: { id: 3n } });
+    await s.close();
+  });
+
+  test("undo conflicts when the item changed after that change, writing nothing", async () => {
+    const s = await openAt();
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    await apply(s, { op: "edit", id: 1n, if_version: 1n, text: "bravo" }, "e1");
+    await apply(s, { op: "edit", id: 1n, if_version: 2n, text: "charlie" }, "e2");
+    expect(await undo(s, "e1")).toEqual({
+      ok: false,
+      reason: "item 1 changed after change `e1`; undoing it would lose that",
+      current: { id: 1n, version: 3n, text: "charlie", author },
+    });
+    expect((await s.snapshot()).version).toBe("3");
+    await s.close();
+  });
+
+  test("undo of a change the history doesn't hold, a delete, or one past maxUndo is refused", async () => {
+    const s = await openAt({ maxUndo: 2 });
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    await apply(s, { op: "add", text: "bravo" }, "a2");
+    await apply(s, { op: "add", text: "charlie" }, "a3");
+    await apply(s, { op: "delete", id: 3n, if_version: 3n }, "d1");
+    expect(await undo(s, "nope")).toEqual(refusedWith("change `nope` isn't in the memory's history"));
+    expect(await undo(s, "d1")).toEqual(refusedWith("change `d1` was a delete, which can't be undone"));
+    // Only the last two changes keep what they replaced.
+    expect(await undo(s, "a1")).toEqual(
+      refusedWith("change `a1` can't be undone: the memory no longer keeps what it replaced"),
+    );
+    expect(rows("history").map((row) => [row.change, row.before === null])).toEqual([
+      ["a1", true],
+      ["a2", true],
+      ["d1", true],
+    ]);
+    await s.close();
+  });
+
+  test("with maxUndo 0 no old text is ever written, and nothing can be undone", async () => {
+    const s = await openAt({ maxUndo: 0 });
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    await apply(s, { op: "edit", id: 1n, if_version: 1n, text: "secret old" }, "e1");
+    await apply(s, { op: "edit", id: 1n, if_version: 2n, text: "bravo" }, "e2");
+    expect(rows("history").every((row) => row.before === null)).toBe(true);
+    expect(storeHolds("secret old")).toBe(false);
+    expect((await undo(s, "e2")).ok).toBe(false);
+    await s.close();
+  });
+
+  test("an undo's id answers again with its stored result; another undo under it is refused", async () => {
+    const s = await openAt();
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    await apply(s, { op: "edit", id: 1n, if_version: 1n, text: "bravo" }, "e1");
+    const first = await undo(s, "e1", "u1");
+    embedded = [];
+    expect(await undo(s, "e1", "u1")).toEqual(first);
+    expect(embedded).toEqual([]);
+    await expect(undo(s, "a1", "u1")).rejects.toBeInstanceOf(ChangeIdReusedError);
+    await s.close();
+  });
+
+  test("an undo releases the lock while it embeds, and checks the item again after", async () => {
+    const s = await openAt();
+    const other = await openAt();
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    await apply(s, { op: "edit", id: 1n, if_version: 1n, text: "bravo" }, "e1");
+    const racing = await openAt({
+      embed: async (texts, o) => {
+        await apply(other, { op: "edit", id: 1n, if_version: 2n, text: "charlie" }, "e-other");
+        return embed(texts, o);
+      },
+    });
+    expect(await undo(racing, "e1")).toMatchObject({
+      ok: false,
+      reason: "item 1 changed after change `e1`; undoing it would lose that",
+    });
+    for (const each of [s, other, racing]) await each.close();
+  });
+});
+
+/** Return the refusal `reason`, which wrote nothing. */
+function refusedWith(reason: string): Applied {
+  return { ok: false, reason, current: null };
+}
+
+describe("erase, history and reset", () => {
+  test("erase removes the item and its history rows, leaving no copy of its text; it names the undo lost", async () => {
+    const s = await openAt();
+    await apply(s, { op: "add", text: "secret alpha" }, "a1");
+    await apply(s, { op: "edit", id: 1n, if_version: 1n, text: "secret bravo" }, "e1");
+    await apply(s, { op: "add", text: "kept" }, "a2");
+    expect(await erase(s, 1n)).toEqual({ version: "4", disabledUndos: ["e1"] });
+    expect(rows("items").map((row) => row.text)).toEqual(["kept"]);
+    expect(rows("history").map((row) => [row.change, row.op, row.item])).toEqual([
+      ["a2", "add", 2],
+      ["erase-1", "erase", 1],
+    ]);
+    expect(storeHolds("secret")).toBe(false);
+    expect(fs.existsSync(`${path}-journal`)).toBe(false);
+    await s.close();
+  });
+
+  test("erase scrubs the copy an undo of an add keeps, and disables that undo", async () => {
+    const s = await openAt();
+    await apply(s, { op: "add", text: "secret alpha" }, "a1");
+    await undo(s, "a1");
+    expect(storeHolds("secret alpha")).toBe(true);
+    expect(await erase(s, 1n)).toEqual({ version: "3", disabledUndos: ["undo-a1"] });
+    expect(storeHolds("secret alpha")).toBe(false);
+    expect(await undo(s, "undo-a1")).toEqual(refusedWith("change `undo-a1` isn't in the memory's history"));
+    await s.close();
+  });
+
+  test("an erase is in history, can't be undone, and its id answers again with its stored result", async () => {
+    const s = await openAt();
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    const erased = await erase(s, 1n, "x1");
+    expect(await erase(s, 1n, "x1")).toEqual(erased);
+    await expect(erase(s, 2n, "x1")).rejects.toBeInstanceOf(ChangeIdReusedError);
+    expect(await undo(s, "x1")).toEqual(refusedWith("change `x1` was an erase, which can't be undone"));
+    expect((await s.history({ limit: 1 }))[0]).toMatchObject({ id: "x1", op: "erase", target: { item: 1n } });
+    await s.close();
+  });
+
+  test("an erase target of the wrong shape is a fault", async () => {
+    const s = await openAt();
+    const bad = (target: JsonObject) => s.erase({ id: "x", target, author: user, signal });
+    await expect(bad({})).rejects.toThrow("an erase needs item as an integer of at least 1");
+    await expect(bad({ item: 1n, text: "x" })).rejects.toThrow("an erase takes item, not text");
+    await expect(bad({ item: 0n })).rejects.toThrow(TypeError);
+    await s.close();
+  });
+
+  test("history lists changes newest first, with author, run, node and what each undid", async () => {
+    const s = await openAt({ scheduler: virtualScheduler(Date.UTC(2026, 10, 7)) });
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    await apply(s, { op: "retire", id: 1n, if_version: 1n, why: "x" }, "r1");
+    await undo(s, "r1");
+    const at = "2026-11-07T00:00:00.000Z";
+    expect(await s.history({ limit: 10 })).toEqual([
+      { id: "undo-r1", op: "undo", target: { item: 1n, undoes: "r1" }, author: user, at },
+      { id: "r1", op: "retire", target: { item: 1n }, author, at },
+      { id: "a1", op: "add", target: { item: 1n }, author, at },
+    ]);
+    expect((await s.history({ limit: 1 })).map((entry) => entry.id)).toEqual(["undo-r1"]);
+    expect(await s.history({ limit: 0 })).toEqual([]);
+    await expect(s.history({ limit: -1 })).rejects.toThrow(RangeError);
+    await s.close();
+  });
+
+  test("reset empties the items, history and change ids, keeps meta, and moves the version on", async () => {
+    const s = await openAt();
+    await apply(s, { op: "add", text: "secret alpha" }, "a1");
+    await apply(s, { op: "add", text: "bravo" }, "a2");
+    const before = metaRows();
+    await memory().reset({ signal });
+    expect(rows("items")).toEqual([]);
+    expect(rows("history")).toEqual([]);
+    expect(rows("changes")).toEqual([]);
+    expect(storeHolds("secret alpha")).toBe(false);
+    expect(metaRows()).toEqual({ ...before, version: "3" });
+    // A session open across the reset goes on, and an old id applies again.
+    expect(await s.snapshot()).toEqual({ version: "3", recall: { text: "0 items", cut: null, hint: null } });
+    expect(await apply(s, { op: "add", text: "alpha" }, "a1")).toMatchObject({ ok: true, result: { id: 3n } });
+    await s.close();
+  });
+
+  test("reset refuses a store that isn't a memory, or is another one", async () => {
+    await expect(memory().reset({ signal })).rejects.toThrow(`\`${path}\` isn't a memory yet`);
+    expect(fs.existsSync(path)).toBe(false);
+    await (await openAt()).close();
+    await expect(memory({ id: "t/other" }).reset({ signal })).rejects.toThrow(
+      "this memory is `t/cases`, not `t/other`",
+    );
+  });
+});

@@ -183,23 +183,45 @@ export interface BindOptions {
 
 /**
  * A FileMemory the command line binds: its `open` tells `note` of each memory it creates (or
- * adopts), with the inputs bound to it, its identity and its folder.
+ * adopts), with the inputs bound to it, its identity and its folder. A default one checks its
+ * location again as it opens.
  */
 class CliFileMemory extends FileMemory {
   /** The inputs bound to this instance, in the order they were bound. */
   readonly inputs: string[] = [];
   readonly #note: (created: CreatedMemory) => void;
+  /** For a default memory, the home and its path under `~/.yian/memory`; `null` for another. */
+  readonly #confined: { readonly home: string; readonly path: string } | null;
 
-  constructor(options: FileMemoryOptions, note: (created: CreatedMemory) => void) {
+  constructor(
+    options: FileMemoryOptions,
+    note: (created: CreatedMemory) => void,
+    confined: { home: string; path: string } | null = null,
+  ) {
     super(options);
     this.#note = note;
+    this.#confined = confined;
   }
 
+  /**
+   * Open the memory as `FileMemory` does. A default one is first checked again as
+   * `checkDefaultLocation` checks it, and must still be at the real folder the bind resolved:
+   * prompts may come between the bind and the open.
+   *
+   * @throws {RangeError} When a default location no longer passes the checks, or its real path
+   *   changed after the bind.
+   */
   override async open(o: {
     create: boolean;
     itemType: JsonObject | null;
     signal: AbortSignal;
   }): Promise<MemorySession> {
+    if (this.#confined !== null) {
+      const { home, path } = this.#confined;
+      if (resolveFlowPath(checkDefaultLocation(home, path)) !== this.root) {
+        throw new RangeError(`~/.yian/memory/${path} changed after it was checked; run again`);
+      }
+    }
     const session = await super.open(o);
     if (session.created) {
       this.#note({ inputs: [...this.inputs], identity: session.info.identity, location: this.root });
@@ -279,8 +301,7 @@ export function resumeMemories(
     const identity = recorded.get(input);
     // An Optional memory left out at the start takes none again.
     if (identity === undefined) return null;
-    const root = defaultLocation(options.home, identity, "FileMemory");
-    return new CliFileMemory({ root, id: identity }, options.note);
+    return defaultInstance(identity, options);
   });
 }
 
@@ -351,7 +372,15 @@ function bindEach(
  */
 function defaultMemory(flow: ComposedFlow, input: string, options: BindOptions): CliFileMemory {
   if (flow.source === null) throw new RangeError(`a flow built in code has no default memories; bind \`${input}\``);
-  const identity = defaultIdentity(flow.source.dir, flow.compiled.flowId, input);
+  return defaultInstance(defaultIdentity(flow.source.dir, flow.compiled.flowId, input), options);
+}
+
+/**
+ * Return the instance of the memory `identity` at its default location under `options.home`.
+ *
+ * @throws {RangeError} As `defaultLocation` throws.
+ */
+function defaultInstance(identity: string, options: BindOptions): CliFileMemory {
   const root = defaultLocation(options.home, identity, "FileMemory");
-  return new CliFileMemory({ root, id: identity }, options.note);
+  return new CliFileMemory({ root, id: identity }, options.note, { home: options.home, path: identity });
 }

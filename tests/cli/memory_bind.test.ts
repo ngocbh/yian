@@ -22,8 +22,16 @@ import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 
 import { main } from "../../src/cli/index.ts";
-import { checkDefaultLocation, defaultIdentity, defaultLocation, projectKey } from "../../src/cli/memory_bind.ts";
+import {
+  bindMemories,
+  checkDefaultLocation,
+  defaultIdentity,
+  defaultLocation,
+  projectKey,
+} from "../../src/cli/memory_bind.ts";
 import type { CliIo } from "../../src/cli/utils.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
+import type { FileMemory } from "../../src/memory/file.ts";
 import { parseJson } from "../../src/typesys/json.ts";
 import { loadSchema, type Schema, validate } from "../helpers/schema.ts";
 
@@ -319,6 +327,44 @@ nodes:
       text: \${input.question}
 output: \${reply.output}
 `;
+
+describe("a default location changed between the bind and the open", () => {
+  /** Bind `APPEND`'s `lessons` to its default under the temporary home, the project folder made. */
+  async function bound() {
+    const flow = await loadFlow(APPEND, { searchPaths: [join(tmp, "proj")], sourceLabel: "flow.yaml" });
+    const created: unknown[] = [];
+    const { lessons } = bindMemories(flow, [], { home, note: (each) => void created.push(each) });
+    return { lessons: lessons!, created };
+  }
+  const open = (memory: { open: FileMemory["open"] }) =>
+    memory.open({ create: true, itemType: null, signal: new AbortController().signal });
+
+  test("a folder swapped for a symlink after the bind is refused at the open, and nothing is made", async () => {
+    mkdirSync(join(tmp, "proj"));
+    const key = projectKey(join(tmp, "proj"));
+    mkdirSync(join(home, ".yian", "memory", key));
+    const { lessons, created } = await bound();
+    // yian run prompts for inputs and keys between the bind and the open.
+    const outside = join(tmp, "outside");
+    mkdirSync(outside);
+    rmSync(join(home, ".yian", "memory", key), { recursive: true });
+    symlinkSync(outside, join(home, ".yian", "memory", key));
+    await expect(open(lessons)).rejects.toThrow(`~/.yian/memory/${key} is a symlink`);
+    expect(readdirSync(outside)).toEqual([]);
+    expect(created).toEqual([]);
+  });
+
+  test("~/.yian/memory moved elsewhere after the bind is refused at the open", async () => {
+    mkdirSync(join(tmp, "proj"));
+    const { lessons } = await bound();
+    const elsewhere = join(tmp, "elsewhere");
+    mkdirSync(elsewhere);
+    rmSync(join(home, ".yian", "memory"), { recursive: true });
+    symlinkSync(elsewhere, join(home, ".yian", "memory"));
+    await expect(open(lessons)).rejects.toThrow("changed after it was checked");
+    expect(readdirSync(elsewhere)).toEqual([]);
+  });
+});
 
 describe("a memory that fails to start", () => {
   test("another memory at the default location refuses the run: a setup failure, as text and --json", async () => {

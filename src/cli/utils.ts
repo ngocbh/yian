@@ -566,7 +566,8 @@ export async function printJson(document: Readonly<Record<string, unknown>>, out
 
 /**
  * Print `document` as `printJson` does, with the list under `key` written as `pages` yields it, so
- * a long list is never held whole. A page that fails to come leaves the document unfinished.
+ * a long list is never held whole. A page that fails to come leaves the document unfinished, its
+ * line ended, so an error document printed after it is a line of its own.
  */
 export async function printJsonPaged(
   document: Readonly<Record<string, unknown>>,
@@ -580,10 +581,15 @@ export async function printJsonPaged(
   const field = (name: string) => `${logJson(name)}:${logJson(doc[name])}`;
   await out.write(`{${[...keys.slice(0, at).map(field), `${logJson(key)}:[`].join(",")}`);
   let first = true;
-  for await (const page of pages) {
-    if (page.length === 0) continue;
-    await out.write(`${first ? "" : ","}${page.map((item) => logJson(item)).join(",")}`);
-    first = false;
+  try {
+    for await (const page of pages) {
+      if (page.length === 0) continue;
+      await out.write(`${first ? "" : ","}${page.map((item) => logJson(item)).join(",")}`);
+      first = false;
+    }
+  } catch (error) {
+    await out.write("\n");
+    throw error;
   }
   const rest = keys.slice(at + 1).map(field);
   await out.write(`]${rest.length === 0 ? "" : `,${rest.join(",")}`}}\n`);

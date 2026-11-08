@@ -608,6 +608,8 @@ exception: it prints JSON lines (`code`, `waiting`, then `done` or `error`).
 - Message text can change; codes and keys don't.
 - A float always has a fraction or an exponent (`2.0`); an int never does.
 - During `yian run --json`, anything else a node writes to stdout goes to stderr.
+- `yian memory show --all --json` writes its items as it reads them. If a read fails part way,
+  the unfinished document's line ends, and the error document follows on the last line.
 
 ```json
 {"format":"yian.cli.v1","failure":{"code":"node.execute","frames":[{"label":"fail.yaml","range":[12,7,12,57]}],"message":"Error: no greeting for Ada","node":"greet"},"status":"failed"}

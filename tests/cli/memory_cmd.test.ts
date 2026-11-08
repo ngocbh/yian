@@ -1235,6 +1235,29 @@ output: \${add.output.id}
     expect(readdirSync(folder).sort()).toEqual(["app.db", "app.db-journal"]);
   });
 
+  test("show --all --json failing part way ends its line, so the last line is the error document", async () => {
+    const flow = casesFile();
+    await addCase(flow, "Check sums twice.");
+    let calls = 0;
+    const reads = spyOn(VectorDBMemory.prototype, "items").mockImplementation(async () => {
+      calls += 1;
+      if (calls > 1) throw new Error("the store went away");
+      return Array.from({ length: 500 }, (_, i) => ({ id: BigInt(i + 1), version: 1n, text: "x" }));
+    });
+    try {
+      const result = await yian(["memory", "show", flow, "cases", "--all", "--json"], vectors);
+      expect(result.code).toBe(1);
+      const lines = result.stdout.split("\n").filter(Boolean);
+      expect(lines).toHaveLength(2);
+      expect(JSON.parse(lines[1]!)).toEqual({
+        format: "yian.cli.v1",
+        error: { code: "memory.failed", message: "the store went away" },
+      });
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
   test("reset's question counts the store's items", async () => {
     const flow = casesFile();
     await addCase(flow, "Check sums twice.");

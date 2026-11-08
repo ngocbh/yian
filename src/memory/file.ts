@@ -611,8 +611,14 @@ interface Store {
    *
    * @throws {MemoryBusyError} If the lock is still held by another writer at the deadline.
    */
-  locked<T>(signal: AbortSignal | undefined, body: () => T): Promise<T>;
+  locked<T>(signal: AbortSignal | undefined, body: Held<T>): Promise<T>;
 }
+
+/**
+ * A body that runs holding a memory's lock. It must finish before it returns, so it can't be async:
+ * the lock is released when it returns, and an async body would go on without it.
+ */
+type Held<T> = (() => T) & (T extends PromiseLike<unknown> ? never : unknown);
 
 /**
  * This process's calls that hold a memory's lock, keyed by the memory's real root and chained, so
@@ -712,7 +718,7 @@ export class FileMemory extends MemoryBase {
       index,
       limits,
       scheduler,
-      locked<T>(signal: AbortSignal | undefined, body: () => T): Promise<T> {
+      locked<T>(signal: AbortSignal | undefined, body: Held<T>): Promise<T> {
         const deadline = scheduler.now() + timeoutMs;
         return inTurn(real, signal, async () => {
           // Checked before the lock file is opened, and on every call: the folder may change.
@@ -1598,7 +1604,7 @@ class FileMemorySession implements MemorySession {
   }
 
   /** Run `body` holding the memory's lock, in this process's turn on the memory. */
-  #locked<T>(signal: AbortSignal | undefined, body: () => T): Promise<T> {
+  #locked<T>(signal: AbortSignal | undefined, body: Held<T>): Promise<T> {
     if (this.#closed) return Promise.reject(new Error("this FileMemory session is closed"));
     const run = this.#store.locked(signal, body).catch((error: unknown) => {
       throw withoutLocation(error, this.#store.root);

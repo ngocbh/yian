@@ -601,6 +601,21 @@ export async function chatModelFromConfig(
 }
 
 /**
+ * Check that `provider` has an embeddings API yian supports: OpenAI's, or an OpenAI-compatible
+ * one.
+ *
+ * @throws {RangeError} Naming the providers that have one.
+ */
+export function checkEmbeddingProvider(provider: string): void {
+  if (OPENAI_COMPATIBLE.includes(provider)) return;
+  const others = OPENAI_COMPATIBLE.filter((name) => name !== "openai").join(", ");
+  throw new RangeError(
+    `provider \`${provider}\` has no embeddings API yian supports; use openai or an OpenAI-compatible ` +
+      `provider (${others})`,
+  );
+}
+
+/**
  * Build the embeddings client for `config`, an embedding model on an OpenAI-compatible provider,
  * with the key, endpoint and headers that provider's chat calls would use.
  *
@@ -625,13 +640,7 @@ export async function embedderFromConfig(
   } = {},
 ): Promise<Embedder> {
   const { provider, model } = config;
-  if (!OPENAI_COMPATIBLE.includes(provider)) {
-    const others = OPENAI_COMPATIBLE.filter((name) => name !== "openai").join(", ");
-    throw new RangeError(
-      `provider \`${provider}\` has no embeddings API yian supports; use openai or an OpenAI-compatible ` +
-        `provider (${others})`,
-    );
-  }
+  checkEmbeddingProvider(provider);
   if (typeof model !== "string" || model === "") throw new RangeError("an embedding model needs a model name");
   const { env = processEnv, send, scheduler } = options;
   const resolved = await resolveProviderAccess({ provider, model }, options);

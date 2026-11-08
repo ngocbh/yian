@@ -32,8 +32,9 @@ import { format, isDeepStrictEqual } from "node:util";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import type { Env } from "../defaults.ts";
 import { NodeSucceeded, type RunEvent, RunStarted } from "../events.ts";
-import type { ModelAccess } from "../llm_clients/factory.ts";
-import type { FileMemory } from "../memory/file.ts";
+import type { Embed } from "../llm/embeddings.ts";
+import { defaultEmbed, type ModelAccess } from "../llm_clients/factory.ts";
+import { FileMemory } from "../memory/file.ts";
 import type { Scheduler } from "../platform.ts";
 import {
   advance,
@@ -57,11 +58,13 @@ import { builtinType } from "../typesys/types.ts";
 import { isInboxType, typeEquals, type Value, writeAsText } from "../typesys/values.ts";
 import {
   bindMemories,
+  type CliMemory,
   type CreatedMemory,
   createdLine,
   type DefaultMemory,
   defaultMemories,
   driftNote,
+  memoryLocation,
   withoutLocations,
 } from "./memory_bind.ts";
 import { removeEmptyDir } from "./run.ts";
@@ -133,6 +136,8 @@ export interface ChildRunsOptions {
   home: string;
   /** For tests: the model builder AGENT nodes use. */
   models?: ModelAccess | null;
+  /** For tests: the embeddings call VectorDB memories make; `defaultEmbed` over `env` when absent. */
+  embed?: Embed;
   /** The clock the children's records and waits run on. */
   scheduler: Scheduler;
   /** The chat's own run id: each child's is `<chatRunId>-r<n>`, and its parent is the chat. */
@@ -194,7 +199,7 @@ interface Child {
   /** The tools, skills and memories every pass of the child is given. */
   readonly tools: Record<string, ToolEntry>;
   readonly skills: ReadonlyMap<string, Skill> | null;
-  readonly memory: Readonly<Record<string, FileMemory>>;
+  readonly memory: Readonly<Record<string, CliMemory>>;
   /** The last published status. */
   status: ChildStatus;
   readonly waiters: Set<Waiter>;
@@ -371,9 +376,10 @@ export class ChildRuns {
     // chat's log and its model, which never hold a location.
     const fresh: Said[] = [];
     const note = (created: CreatedMemory) => void fresh.push({ kind: "memory", text: createdLine(created, false) });
-    let memory: Record<string, FileMemory>;
+    let memory: Record<string, CliMemory>;
     try {
-      memory = bindMemories(flow, [], { home: this.#options.home, note, project, memoryFlag: false });
+      const embed = this.#options.embed ?? defaultEmbed(env);
+      memory = bindMemories(flow, [], { home: this.#options.home, note, project, memoryFlag: false, embed });
     } catch (error) {
       throw withoutLocations(error, this.#options.home, []);
     }
@@ -717,7 +723,11 @@ export class ChildRuns {
       }
     } catch (thrown) {
       // A memory's open names its folder, which the chat's log and model never hold.
-      const roots = Object.values(child.memory).map((each) => each.root);
+      // A store's folder too: an OS error on making it names that.
+      const roots = Object.values(child.memory).flatMap((each) => {
+        const location = memoryLocation(each);
+        return each instanceof FileMemory ? [location] : [location, dirname(location)];
+      });
       const error = withoutLocations(thrown, this.#options.home, roots);
       // Before the start, `start` throws it; after, it is the child's failure.
       started.reject(error);

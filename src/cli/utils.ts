@@ -25,6 +25,7 @@ import { parseArgs } from "node:util";
 
 import { current, type Env, processEnv } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
+import type { Embed } from "../llm/embeddings.ts";
 import { apiKeyEnvNames, OPTIONAL_API_KEY_PROVIDERS } from "../llm_clients/api_key_env.ts";
 import { type Scheduler, SLEEP_CHUNK_MS } from "../platform.ts";
 import { logJson } from "../typesys/json.ts";
@@ -61,6 +62,8 @@ export interface CliIo {
    * runs `$EDITOR` when absent. For tests.
    */
   editor?: (path: string) => Promise<void>;
+  /** The embeddings call a VectorDB memory makes; `defaultEmbed` over `env` when absent. For tests. */
+  embed?: Embed;
 }
 
 // An escape sequence, matched whole: the CSI, OSC and DCS (SOS, PM, APC) sequences `sanitize`

@@ -25,7 +25,7 @@ import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
 import { Diagnostic, shellQuote } from "../diagnostics.ts";
 import { NodeSucceeded, type RunEvent, RunStarted, type StreamChunk } from "../events.ts";
-import type { ModelAccess } from "../llm_clients/factory.ts";
+import { defaultEmbed, type ModelAccess } from "../llm_clients/factory.ts";
 import { homeDir, realScheduler, type Scheduler } from "../platform.ts";
 import {
   advance,
@@ -55,6 +55,7 @@ import {
   type CreatedMemory,
   createdLine,
   driftNote,
+  embeddingFlag,
   projectFolder,
   resumeMemories,
 } from "./memory_bind.ts";
@@ -110,6 +111,8 @@ export interface InboxChatOptions {
   engineTrace: boolean;
   /** The `--memory NAME=PATH` flags; absent binds no input by flag. */
   memory?: readonly string[] | undefined;
+  /** The `--embedding provider/model` a new VectorDB memory is made with. */
+  embedding?: string | undefined;
 }
 
 /**
@@ -694,12 +697,14 @@ export async function inboxChat(
       home: homeDir(io.env),
       note: (created: CreatedMemory) =>
         void note(`${forTerminal(createdLine(created, true), io.stderr)}\n`).catch(() => {}),
+      embed: io.embed ?? defaultEmbed(env.read),
     };
     const memory =
       resumed === null
         ? bindMemories(flow, options.memory ?? [], {
             ...binding,
             project: flowPath === undefined ? null : projectFolder(flowPath),
+            embedding: embeddingFlag(options.embedding),
           })
         : resumeMemories(flow, resumed, options.memory ?? [], binding);
     if (host.start) {
@@ -1232,8 +1237,8 @@ export async function runOrChat(
   }
   const flow = await chatFlow(flowPath, options, io);
   if (flow === null) return run(flowPath, options, io);
-  const { inbox, inputValues, inputs, log, numWorkers, provider, model, engineTrace, memory } = options;
-  const chatOptions = { inbox, inputValues, inputs, log, numWorkers, provider, model, engineTrace, memory };
+  const { inbox, inputValues, inputs, log, numWorkers, provider, model, engineTrace, memory, embedding } = options;
+  const chatOptions = { inbox, inputValues, inputs, log, numWorkers, provider, model, engineTrace, memory, embedding };
   return inboxChat(flowPath!, chatOptions, io, deps, { flow });
 }
 
@@ -1244,7 +1249,7 @@ export async function runOrChat(
  */
 async function chatsOnResume(flowPath: string | undefined, options: RunOrChatOptions, io: CliIo): Promise<boolean> {
   if (flowPath !== undefined || options.json || !atTerminal(io)) return false;
-  const fresh = [options.inputs, options.log, options.provider, options.model];
+  const fresh = [options.inputs, options.log, options.provider, options.model, options.embedding];
   if (fresh.some((value) => value !== undefined) || options.inputValues.length > 0) return false;
   let flow: ComposedFlow | null;
   try {

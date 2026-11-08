@@ -32,6 +32,7 @@ import {
 } from "../../src/cli/memory_bind.ts";
 import type { CliIo } from "../../src/cli/utils.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
+import type { Embed } from "../../src/llm/embeddings.ts";
 import type { FileMemory } from "../../src/memory/file.ts";
 import { parseJson } from "../../src/typesys/json.ts";
 import { loadSchema, type Schema, validate } from "../helpers/schema.ts";
@@ -162,8 +163,11 @@ describe("default locations", () => {
   });
 });
 
-/** Run `yian` with `args`, `HOME` the temporary home; return the exit code and both streams. */
-async function yian(args: readonly string[], vars: Record<string, string> = {}) {
+/**
+ * Run `yian` with `args`, `HOME` the temporary home, `vars` added to its environment and `extra`
+ * to its io; return the exit code and both streams.
+ */
+async function yian(args: readonly string[], vars: Record<string, string> = {}, extra: Partial<CliIo> = {}) {
   const out: string[] = [];
   const err: string[] = [];
   const env: Record<string, string> = { HOME: home, ...vars };
@@ -173,6 +177,7 @@ async function yian(args: readonly string[], vars: Record<string, string> = {}) 
     stdin: new PassThrough(),
     stderrStream: new PassThrough(),
     env: (name) => (Object.hasOwn(env, name) ? env[name] : undefined),
+    ...extra,
   };
   const code = await main([...args], io);
   return { code, stdout: out.join(""), stderr: err.join("") };
@@ -331,24 +336,6 @@ describe("--memory", () => {
     const fromFile = await yian(["run", flow, "--quiet", "--inputs", inputs]);
     expect(fromFile.code).toBe(2);
     expect(fromFile.stderr).toContain("`lessons` is a memory; bind it with --memory");
-    expect(runFolders()).toEqual([]);
-  });
-
-  test("a VectorDBMemory input can't be bound from the command line", async () => {
-    const flow = flowFile(`id: cases
-name: cases
-input:
-  cases: !VectorDBMemory
-nodes:
-  found:
-    kind: tool
-    tool_id: {cases: list}
-    input: {}
-output: \${found.output}
-`);
-    const result = await yian(["run", flow, "--quiet", "--memory", "cases=./c.db"]);
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain("`cases` is a VectorDBMemory; the command line binds only FileMemory inputs");
     expect(runFolders()).toEqual([]);
   });
 });
@@ -593,5 +580,91 @@ describe("default memories", () => {
     const unnamed = flowFile(APPEND.replace("id: answer", 'id: "Answer questions"'));
     const bound = await yian(["run", unnamed, "--quiet", "--memory", `lessons=${join(tmp, "n")}`]);
     expect(bound.code, bound.stderr).toBe(0);
+  });
+});
+
+/** An embedder that never calls a provider: a 4-dimension vector from each text's length. */
+const fakeEmbed: Embed = async (texts) => texts.map((text) => Float32Array.of((text.length % 7) + 1, 1, 0, 0));
+
+/** A flow that adds an item to its VectorDB memory. */
+const ADD_CASE = `id: cases
+name: cases
+input:
+  cases: !VectorDBMemory
+nodes:
+  add:
+    kind: tool
+    tool_id: {cases: add}
+    input: {text: Check sums twice.}
+output: \${add.output.id}
+`;
+
+describe("VectorDBMemory inputs", () => {
+  const embedding = ["--embedding", "openai/test-embedding"];
+
+  test("--memory NAME=PATH.db binds a VectorDBMemory there, made with --embedding's model", async () => {
+    const store = join(tmp, "cases.db");
+    const args = ["run", flowFile(ADD_CASE), "--quiet", "--memory", `cases=${store}`, ...embedding];
+    const result = await yian(args, {}, { embed: fakeEmbed });
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout).toBe("1\n");
+    expect(result.stderr).toMatch(new RegExp(`memory cases: at-[0-9a-f]{16} at ${store} \\(new\\)`));
+    // Inputs given one store share it.
+    const again =
+      "  again:\n    kind: tool\n    tool_id: {more: add}\n    depends_on: [add]\n" +
+      "    input: {text: Carry the one.}\noutput: ${again.output.id}";
+    const two = ADD_CASE.replace("  cases: !VectorDBMemory\n", "  cases: !VectorDBMemory\n  more: !VectorDBMemory\n")
+      .replace("output: ${add.output.id}", again);
+    const shared = await yian(
+      ["run", flowFile(two, "two.yaml"), "--quiet", "--memory", `cases=${store}`, "--memory", `more=${store}`],
+      {},
+      { embed: fakeEmbed },
+    );
+    expect(shared.code, shared.stderr).toBe(0);
+    expect(shared.stdout).toBe("3\n");
+  });
+
+  test("a VectorDB input given a folder is a usage error", async () => {
+    const args = ["run", flowFile(ADD_CASE), "--quiet", "--memory", `cases=${join(tmp, "c")}`, ...embedding];
+    const result = await yian(args);
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain(
+      "Invalid value for --memory: `cases` is a VectorDBMemory, a .db file, not a folder",
+    );
+  });
+
+  test("a new store with no --embedding (and no saved default) is refused, saying what to set", async () => {
+    const result = await yian(["run", flowFile(ADD_CASE), "--quiet"], {}, { embed: fakeEmbed });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain(
+      "`cases` needs an embedding model: pass --embedding provider/model or run `yian config embedding provider/model`",
+    );
+    expect(runFolders()).toEqual([]);
+  });
+
+  test("--embedding must be provider/model, of a provider with an embeddings API", async () => {
+    for (const [value, message] of [
+      ["openai", "Invalid value for --embedding: give it as provider/model"],
+      ["anthropic/claude", "Invalid value for --embedding: provider `anthropic` has no embeddings API yian supports"],
+    ]) {
+      const result = await yian(["run", flowFile(ADD_CASE), "--quiet", "--embedding", value!]);
+      expect(result.code, value).toBe(2);
+      expect(result.stderr).toContain(message!);
+    }
+  });
+
+  test("an unbound VectorDB input gets its default <input>.db store; later runs need no model", async () => {
+    const flow = flowFile(ADD_CASE);
+    const first = await yian(["run", flow, "--quiet", ...embedding], {}, { embed: fakeEmbed });
+    expect(first.code, first.stderr).toBe(0);
+    const { key, path } = projectFolder();
+    const store = join(path, "cases", "cases.db");
+    expect(existsSync(store)).toBe(true);
+    expect(first.stderr).toContain(`memory cases: ${key}/cases/cases at ${store} (new)\n`);
+    // The store keeps its model, so a later run binds it with none given.
+    const second = await yian(["run", flow, "--quiet"], {}, { embed: fakeEmbed });
+    expect(second.code, second.stderr).toBe(0);
+    expect(second.stdout).toBe("2\n");
+    expect(second.stderr).not.toMatch(/^memory /m);
   });
 });

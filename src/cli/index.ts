@@ -162,7 +162,13 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
           type: "string",
           multiple: true,
           metavar: "NAME=PATH",
-          help: "Bind memory input NAME to the folder PATH (repeatable); inputs given one path share it.",
+          help: "Bind memory input NAME to the folder or .db store PATH (repeatable); inputs given one path share it.",
+        },
+        {
+          name: "embedding",
+          type: "string",
+          metavar: "PROVIDER/MODEL",
+          help: "The embedding model a new VectorDB memory is made with.",
         },
         {
           name: "json",
@@ -190,6 +196,7 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
             engineTrace: o["engine-trace"] === true,
             mcpConfig: o["mcp-config"] as string[],
             memory: o["memory"] as string[],
+            embedding: o["embedding"] as string | undefined,
             json: o["json"] === true,
           },
           io,

@@ -17,6 +17,9 @@ import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { reprText } from "../diagnostics.ts";
 import { memoryErrorKind, type MemorySession } from "../memory/base.ts";
 import { FileMemory, type FileMemoryOptions } from "../memory/file.ts";
+import { VectorDBMemory, type VectorDBMemoryOptions } from "../memory/vectordb.ts";
+import type { Embed, EmbeddingModel } from "../llm/embeddings.ts";
+import { checkEmbeddingProvider } from "../llm_clients/factory.ts";
 import type { Parameter } from "../nodes/contracts.ts";
 import { isSystemError, leavesRoot } from "../platform.ts";
 import type { MemoryDrift } from "../run.ts";
@@ -189,11 +192,12 @@ export function createdLine(created: CreatedMemory, location: boolean): string {
 }
 
 /**
- * Return `error` with the memory folders `roots` and the home folder `home` taken out of its
- * message, for a host whose messages reach a model or a run log, which never hold a location: a
- * root becomes `the memory's folder`, and `~/.yian/memory`, `~/.yian` and the home are written
- * from `~`, each by its real path too, since `~/.yian/memory` may point out of the home. A home of
- * `/` stays, or every path would. The class, name and a system error's code are kept.
+ * Return `error` with the memory folders and stores `roots` and the home folder `home` taken out of
+ * its message, for a host whose messages reach a model or a run log, which never hold a location: a
+ * root becomes `the memory's folder` (`the memory's store` for a `.db`), and `~/.yian/memory`,
+ * `~/.yian` and the home are written from `~`, each by its real path too, since `~/.yian/memory`
+ * may point out of the home. A home of `/` stays, or every path would. The class, name and a system
+ * error's code are kept.
  */
 export function withoutLocations(error: unknown, home: string, roots: Iterable<string>): unknown {
   if (!(error instanceof Error)) return error;
@@ -202,7 +206,7 @@ export function withoutLocations(error: unknown, home: string, roots: Iterable<s
   const name = (path: string, as: string) => {
     if (path !== "/" && !names.has(path)) names.set(path, as);
   };
-  for (const root of roots) name(root, "the memory's folder");
+  for (const root of roots) name(root, root.endsWith(".db") ? "the memory's store" : "the memory's folder");
   for (const [path, as] of [
     [memoryRoot(home), "~/.yian/memory"],
     [join(home, ".yian"), "~/.yian"],
@@ -249,91 +253,168 @@ function replacePaths(text: string, names: ReadonlyMap<string, string>): string 
   return text.replace(pattern, (path) => names.get(path)!);
 }
 
+/**
+ * Return the `--embedding provider/model` flag's model, or `null` when it isn't given. The model is
+ * everything after the first `/`.
+ *
+ * @throws {UsageError} When it isn't `provider/model`, or the provider has no embeddings API yian
+ *   supports.
+ */
+export function embeddingFlag(value: string | undefined): EmbeddingModel | null {
+  if (value === undefined) return null;
+  const at = value.indexOf("/");
+  const provider = value.slice(0, at).trim();
+  const model = value.slice(at + 1).trim();
+  if (at === -1 || provider === "" || model === "") {
+    throw new UsageError("Invalid value for --embedding: give it as provider/model");
+  }
+  try {
+    checkEmbeddingProvider(provider);
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    throw new UsageError(`Invalid value for --embedding: ${error.message}`);
+  }
+  return { provider, model };
+}
+
 /** What `bindMemories` needs beside the flow and the flags. */
 export interface BindOptions {
   /** The home folder whose `~/.yian/memory` holds the default memories. */
   home: string;
   /** Told of each memory an instance's `open` creates (or adopts). */
   note: (created: CreatedMemory) => void;
-  /** Whether the host takes `--memory`, which its refusals then suggest; true when absent. */
+  /** Whether the host takes `--memory` and `--embedding`, which its refusals then suggest; true when absent. */
   memoryFlag?: boolean;
+  /**
+   * The embedding model a new VectorDB store is made with (`--embedding`, or the saved default), or
+   * `null` for none; an existing store keeps its own.
+   */
+  embedding?: EmbeddingModel | null;
+  /** The embeddings call VectorDB memories make. */
+  embed?: Embed;
+}
+
+/** A memory the command line binds, of either built-in type. */
+export type CliMemory = FileMemory | VectorDBMemory;
+
+/** Return where `memory` is: a FileMemory's folder, a VectorDBMemory's store file. */
+export function memoryLocation(memory: CliMemory): string {
+  return memory instanceof FileMemory ? memory.root : memory.path;
 }
 
 /**
- * A FileMemory the command line binds: its `open` tells `note` of each memory it creates (or
- * adopts), with the inputs bound to it, its identity and its folder. A default one checks its
- * location again as it opens.
+ * For a default memory: the home, its path under `~/.yian/memory` (its identity, with `.db` for a
+ * store), its identity, and whether its host takes `--memory`.
+ */
+interface Confined {
+  readonly home: string;
+  readonly path: string;
+  readonly identity: string;
+  readonly memoryFlag: boolean;
+}
+
+/**
+ * Open a command line's memory through `open`, at `location`, a `noun` (`folder` or `store`). A
+ * default one is first checked again as `checkDefaultLocation` checks it, and must still be at the
+ * real path the bind resolved: prompts may come between the bind and the open. A resume's memory
+ * that isn't there is said in the host's words, and a memory the open creates (or adopts) is told
+ * to `note`.
+ *
+ * @throws {RangeError} When a default location no longer passes the checks, or its real path
+ *   changed after the bind. For a resume's memory that isn't there: a path given with `--memory`,
+ *   or a default of a host without the flag, whose run can't go on.
+ */
+async function openChecked(
+  memory: { readonly inputs: readonly string[]; readonly note: (created: CreatedMemory) => void },
+  confined: Confined | null,
+  where: { location: string; noun: "folder" | "store" },
+  open: () => Promise<MemorySession>,
+): Promise<MemorySession> {
+  const { location, noun } = where;
+  if (confined !== null && resolveFlowPath(checkDefaultLocation(confined.home, confined.path)) !== location) {
+    throw new RangeError(`~/.yian/memory/${confined.path} changed after it was checked; run again`);
+  }
+  let session: MemorySession;
+  try {
+    session = await open();
+  } catch (error) {
+    // A resume's "bind it with --memory" would point back at the flag the user gave, or at one
+    // the host (`yian chat`) doesn't take.
+    if (memoryErrorKind(error) !== "missing" || confined?.memoryFlag === true) throw error;
+    const gone = lstatOrNull(location) === null ? `its ${noun} is gone` : "it isn't a memory any more";
+    const reason =
+      confined === null ? `the ${noun} given with --memory isn't a memory` : `${gone}, so the run can't continue`;
+    throw new RangeError(reason, { cause: error });
+  }
+  if (session.created) memory.note({ inputs: [...memory.inputs], identity: session.info.identity, location });
+  return session;
+}
+
+/**
+ * A FileMemory the command line binds: its `open` is `openChecked`'s, telling `note` of each
+ * memory it creates (or adopts), and checking a default's location again.
  */
 class CliFileMemory extends FileMemory {
   /** The inputs bound to this instance, in the order they were bound. */
   readonly inputs: string[] = [];
-  readonly #note: (created: CreatedMemory) => void;
-  /**
-   * For a default memory, the home, its path under `~/.yian/memory`, and whether its host takes
-   * `--memory`; `null` for another.
-   */
-  readonly #confined: { readonly home: string; readonly path: string; readonly memoryFlag: boolean } | null;
+  readonly note: (created: CreatedMemory) => void;
+  readonly #confined: Confined | null;
 
   /** Whether this is an input's default memory, rather than one a `--memory` flag names. */
   get isDefault(): boolean {
     return this.#confined !== null;
   }
 
-  /** A default memory's identity, its path under `~/.yian/memory`; `null` for another. */
+  /** A default memory's identity; `null` for another. */
   get defaultIdentity(): string | null {
-    return this.#confined?.path ?? null;
+    return this.#confined?.identity ?? null;
   }
 
-  constructor(
-    options: FileMemoryOptions,
-    note: (created: CreatedMemory) => void,
-    confined: { home: string; path: string; memoryFlag: boolean } | null = null,
-  ) {
+  constructor(options: FileMemoryOptions, note: (created: CreatedMemory) => void, confined: Confined | null = null) {
     super(options);
-    this.#note = note;
+    this.note = note;
     this.#confined = confined;
   }
 
-  /**
-   * Open the memory as `FileMemory` does. A default one is first checked again as
-   * `checkDefaultLocation` checks it, and must still be at the real folder the bind resolved:
-   * prompts may come between the bind and the open.
-   *
-   * @throws {RangeError} When a default location no longer passes the checks, or its real path
-   *   changed after the bind. For a resume's memory that isn't there: a folder given with
-   *   `--memory`, or a default of a host without the flag, whose run can't go on.
-   */
-  override async open(o: {
-    create: boolean;
-    itemType: JsonObject | null;
-    signal: AbortSignal;
-  }): Promise<MemorySession> {
-    if (this.#confined !== null) {
-      const { home, path } = this.#confined;
-      if (resolveFlowPath(checkDefaultLocation(home, path)) !== this.root) {
-        throw new RangeError(`~/.yian/memory/${path} changed after it was checked; run again`);
-      }
-    }
-    let session: MemorySession;
-    try {
-      session = await super.open(o);
-    } catch (error) {
-      // A resume's "bind it with --memory" would point back at the flag the user gave, or at one
-      // the host (`yian chat`) doesn't take.
-      if (memoryErrorKind(error) !== "missing" || this.#confined?.memoryFlag === true) throw error;
-      const gone = lstatOrNull(this.root) === null ? "its folder is gone" : "it isn't a memory any more";
-      const reason =
-        this.#confined === null
-          ? "the folder given with --memory isn't a memory"
-          : `${gone}, so the run can't continue`;
-      throw new RangeError(reason, { cause: error });
-    }
-    if (session.created) {
-      this.#note({ inputs: [...this.inputs], identity: session.info.identity, location: this.root });
-    }
-    return session;
+  override open(o: { create: boolean; itemType: JsonObject | null; signal: AbortSignal }): Promise<MemorySession> {
+    return openChecked(this, this.#confined, { location: this.root, noun: "folder" }, () => super.open(o));
   }
 }
+
+/** A VectorDBMemory the command line binds; its `open` is `openChecked`'s, as `CliFileMemory`'s. */
+class CliVectorDBMemory extends VectorDBMemory {
+  /** The inputs bound to this instance, in the order they were bound. */
+  readonly inputs: string[] = [];
+  readonly note: (created: CreatedMemory) => void;
+  readonly #confined: Confined | null;
+
+  /** Whether this is an input's default memory, rather than one a `--memory` flag names. */
+  get isDefault(): boolean {
+    return this.#confined !== null;
+  }
+
+  /** A default memory's identity; `null` for another. */
+  get defaultIdentity(): string | null {
+    return this.#confined?.identity ?? null;
+  }
+
+  constructor(
+    options: VectorDBMemoryOptions,
+    note: (created: CreatedMemory) => void,
+    confined: Confined | null = null,
+  ) {
+    super(options);
+    this.note = note;
+    this.#confined = confined;
+  }
+
+  override open(o: { create: boolean; itemType: JsonObject | null; signal: AbortSignal }): Promise<MemorySession> {
+    return openChecked(this, this.#confined, { location: this.path, noun: "store" }, () => super.open(o));
+  }
+}
+
+/** An instance the command line binds. */
+type Bound = CliFileMemory | CliVectorDBMemory;
 
 /**
  * Return the `--memory NAME=PATH` flags as each named memory input's path, checked against the
@@ -341,7 +422,7 @@ class CliFileMemory extends FileMemory {
  * after it, each trimmed; the binding reads a leading `~/` as the home folder.
  *
  * @throws {UsageError} For a flag without `=` or a path, a name that isn't a memory input or
- *   comes twice, or a `.db` path for a FileMemory input.
+ *   comes twice, a `.db` path for a FileMemory input, or another for a VectorDBMemory input.
  */
 export function memoryFlags(params: readonly Parameter[], flags: readonly string[]): Map<string, string> {
   const paths = new Map<string, string>();
@@ -360,30 +441,35 @@ export function memoryFlags(params: readonly Parameter[], flags: readonly string
     if (typ.memory === "FileMemory" && path.endsWith(".db")) {
       throw refuse(`\`${name}\` is a FileMemory, a folder, not a .db file`);
     }
+    if (typ.memory === "VectorDBMemory" && !path.endsWith(".db")) {
+      throw refuse(`\`${name}\` is a VectorDBMemory, a .db file, not a folder`);
+    }
     paths.set(name, path);
   }
   return paths;
 }
 
 /**
- * Return the instance each memory input of `flow` is bound to, by input name: the folder its
- * `--memory` flag names, else, for an input that isn't Optional, its default (`defaultIdentity` of
- * `options.project` at `defaultLocation`). An Optional input left unbound gets none, so it stays
- * null. Inputs given one folder, however its path is spelled, share one instance. Nothing is
- * created here: an instance's `open` creates its memory, and notes it.
+ * Return the instance each memory input of `flow` is bound to, by input name: the folder or `.db`
+ * store its `--memory` flag names, else, for an input that isn't Optional, its default
+ * (`defaultIdentity` of `options.project` at `defaultLocation`). An Optional input left unbound
+ * gets none, so it stays null. Inputs given one path, however it is spelled, share one instance. A
+ * VectorDB store that doesn't exist yet is made with `options.embedding`; an existing one keeps its
+ * own model. Nothing is created here: an instance's `open` creates its memory, and notes it.
  *
  * @param options.project The flow file's project folder (`projectFolder`), or `null` for a flow
  *   with no file, whose memories have no default.
  * @throws {UsageError} As `memoryFlags` throws, and for a flag naming another input's default.
- * @throws {RangeError} For an input of a memory type the command line can't bind; for a default,
- *   as `defaultIdentity` throws, and when there is no project folder.
+ * @throws {RangeError} For an input of a memory type the command line can't bind, a new VectorDB
+ *   store with no embedding model; for a default, as `defaultIdentity` throws, and when there is no
+ *   project folder.
  * @throws As `defaultLocation` throws, for a default.
  */
 export function bindMemories(
   flow: ComposedFlow,
   flags: readonly string[],
   options: BindOptions & { project: string | null },
-): Record<string, FileMemory> {
+): Record<string, CliMemory> {
   return bindFresh(flow, flags, options);
 }
 
@@ -392,16 +478,17 @@ function bindFresh(
   flow: ComposedFlow,
   flags: readonly string[],
   options: BindOptions & { project: string | null },
-): Record<string, CliFileMemory> {
+): Record<string, Bound> {
   const { memoryFlag = true } = options;
-  return bindEach(flow, flags, options, (input, optional) => {
+  return bindEach(flow, flags, options, true, (input, optional, type) => {
     if (optional) return null;
     if (options.project === null) {
       const refusal = "a flow with no file has no default memories";
       const instead = memoryFlag ? `; bind \`${input}\`` : `, so \`${input}\` can't be bound`;
       throw new RangeError(`${refusal}${instead}`);
     }
-    return defaultInstance(defaultIdentity(options.project, flow.compiled.flowId, input, memoryFlag), options);
+    const identity = defaultIdentity(options.project, flow.compiled.flowId, input, memoryFlag);
+    return defaultInstance(input, identity, type, options, true);
   });
 }
 
@@ -428,16 +515,20 @@ export function defaultMemories(
   return Object.entries(bound).map(([input, instance]) => ({
     input,
     identity: instance.defaultIdentity!,
-    exists: lstatOrNull(join(instance.root, ".yian", "identity")) !== null,
+    exists:
+      instance instanceof FileMemory
+        ? lstatOrNull(join(instance.root, ".yian", "identity")) !== null
+        : lstatOrNull(instance.path) !== null,
   }));
 }
 
 /**
  * Return the instance each memory input of `flow`, the flow its run in `log` recorded, is bound to
- * again for a resume, by input name: the folder its `--memory` flag names, else the default
+ * again for a resume, by input name: the path its `--memory` flag names, else the default
  * location of the identity it recorded at the run's start (`recordedMemories`), checked as a fresh
- * default is, since a log can be edited. An Optional input left out at the start gets none.
- * Nothing is created here, and the resume opens each memory without creating it.
+ * default is, since a log can be edited. An Optional input left out at the start gets none. A
+ * VectorDB store is bound with no embedding model, so the one it recorded is used. Nothing is
+ * created here, and the resume opens each memory without creating it.
  *
  * @throws {UsageError} As `memoryFlags` throws, and for a flag naming another input's default.
  * @throws {RangeError} For an input of a memory type the command line can't bind, or when the log's
@@ -450,13 +541,13 @@ export function resumeMemories(
   log: string,
   flags: readonly string[],
   options: BindOptions,
-): Record<string, FileMemory> {
+): Record<string, CliMemory> {
   const recorded = recordedMemories(flow, log);
-  return bindEach(flow, flags, options, (input) => {
+  return bindEach(flow, flags, options, false, (input, _optional, type) => {
     const identity = recorded.get(input);
     // An Optional memory left out at the start takes none again.
     if (identity === undefined) return null;
-    return defaultInstance(identity, options);
+    return defaultInstance(input, identity, type, options, false);
   });
 }
 
@@ -487,25 +578,28 @@ export function recordedMemories(flow: ComposedFlow, log: string): Map<string, s
 }
 
 /**
- * Bind each memory input of `flow`: to the folder its `--memory` flag names, else to what
- * `fallback` gives the input, given whether it is Optional (`null` for none).
+ * Bind each memory input of `flow`: to the path its `--memory` flag names, else to what `fallback`
+ * gives the input, given whether it is Optional and its memory type (`null` for none). `fresh`
+ * says whether a new VectorDB store may be made.
  */
 function bindEach(
   flow: ComposedFlow,
   flags: readonly string[],
   options: BindOptions,
-  fallback: (input: string, optional: boolean) => CliFileMemory | null,
-): Record<string, CliFileMemory> {
+  fresh: boolean,
+  fallback: (input: string, optional: boolean, type: string) => Bound | null,
+): Record<string, Bound> {
   const paths = memoryFlags(flow.input, flags);
-  const bound: Record<string, CliFileMemory> = {};
-  const byRoot = new Map<string, CliFileMemory>();
+  const bound: Record<string, Bound> = {};
+  const byPath = new Map<string, Bound>();
   for (const param of flow.input) {
     const typ = param.contract?.type;
     if (!isMemoryType(typ)) continue;
     const given = paths.get(param.name);
     // As the auth store reads its path: `--memory=NAME=~/x` reaches us unexpanded.
     const path = given === "~" || given?.startsWith("~/") ? options.home + given.slice(1) : given;
-    if (path !== undefined) {
+    // A store is one file of its own, which a reset empties: only a folder adopts what is in it.
+    if (path !== undefined && typ.memory === "FileMemory") {
       try {
         checkMemoryFolder(path, options.home);
       } catch (error) {
@@ -513,15 +607,22 @@ function bindEach(
         throw new UsageError(`Invalid value for --memory: ${error.message}`);
       }
     }
-    const made =
-      path === undefined ? fallback(param.name, typ.nullable) : new CliFileMemory({ root: path }, options.note);
-    if (made === null) continue;
     // Nothing is opened yet, so refusing here leaves no trace.
-    if (typ.memory !== "FileMemory") {
-      throw new RangeError(`\`${param.name}\` is a ${typ.memory}; the command line binds only FileMemory inputs`);
+    if (typ.memory !== "FileMemory" && typ.memory !== "VectorDBMemory" && (path !== undefined || !typ.nullable)) {
+      throw new RangeError(
+        `\`${param.name}\` is a ${typ.memory}; the command line binds only FileMemory and VectorDBMemory inputs`,
+      );
     }
-    // Keyed by the real folder, so two spellings of one path share one memory.
-    const known = byRoot.get(made.root);
+    const made =
+      path === undefined
+        ? fallback(param.name, typ.nullable, typ.memory)
+        : typ.memory === "FileMemory"
+          ? new CliFileMemory({ root: path }, options.note)
+          : new CliVectorDBMemory(storeOptions(param.name, path, options, fresh), options.note);
+    if (made === null) continue;
+    // Keyed by the real path, so two spellings of one path share one memory.
+    const location = memoryLocation(made);
+    const known = byPath.get(location);
     // Only flagged inputs share: a flag naming another input's default is a slip, not a choice.
     if (known !== undefined && known.isDefault !== made.isDefault) {
       const [flagged, other] = made.isDefault ? [known.inputs[0]!, param.name] : [param.name, known.inputs[0]!];
@@ -530,7 +631,7 @@ function bindEach(
       );
     }
     const instance = known ?? made;
-    byRoot.set(instance.root, instance);
+    byPath.set(location, instance);
     instance.inputs.push(param.name);
     bound[param.name] = instance;
   }
@@ -538,12 +639,42 @@ function bindEach(
 }
 
 /**
- * Return the instance of the memory `identity` at its default location under `options.home`.
+ * Return the options of input `input`'s VectorDB store at `path`: `options.embedding` and
+ * `options.embed`. Only a fresh run may make the store, so a resume gives no model and the one the
+ * store recorded is used.
  *
- * @throws As `defaultLocation` throws.
+ * @throws {RangeError} When a fresh run's store doesn't exist yet and there is no embedding model.
  */
-function defaultInstance(identity: string, options: BindOptions): CliFileMemory {
+function storeOptions(input: string, path: string, options: BindOptions, fresh: boolean): VectorDBMemoryOptions {
+  const embedding = fresh ? (options.embedding ?? undefined) : undefined;
+  if (fresh && embedding === undefined && lstatOrNull(path) === null) {
+    const set =
+      options.memoryFlag === false
+        ? "run `yian config embedding provider/model`"
+        : "pass --embedding provider/model or run `yian config embedding provider/model`";
+    throw new RangeError(`\`${input}\` needs an embedding model: ${set}`);
+  }
+  const store: VectorDBMemoryOptions = { path };
+  if (embedding !== undefined) store.embedding = embedding;
+  if (options.embed !== undefined) store.embed = options.embed;
+  return store;
+}
+
+/**
+ * Return the instance of input `input`'s memory of type `type` and identity `identity`, at its
+ * default location under `options.home`: a folder, or for a VectorDBMemory `<identity>.db`.
+ *
+ * @throws As `defaultLocation` and `storeOptions` throw.
+ */
+function defaultInstance(input: string, identity: string, type: string, options: BindOptions, fresh: boolean): Bound {
+  const memoryFlag = options.memoryFlag ?? true;
+  if (type === "VectorDBMemory") {
+    const path = defaultLocation(options.home, identity, "VectorDBMemory");
+    const confined = { home: options.home, path: `${identity}.db`, identity, memoryFlag };
+    const store = { ...storeOptions(input, path, options, fresh), id: identity };
+    return new CliVectorDBMemory(store, options.note, confined);
+  }
   const root = defaultLocation(options.home, identity, "FileMemory");
-  const confined = { home: options.home, path: identity, memoryFlag: options.memoryFlag ?? true };
+  const confined = { home: options.home, path: identity, identity, memoryFlag };
   return new CliFileMemory({ root, id: identity }, options.note, confined);
 }

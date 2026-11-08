@@ -16,7 +16,9 @@ import type { CliIo } from "../../src/cli/utils.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { NodeStarted, type RunEvent } from "../../src/events.ts";
 import type { MemoryBase } from "../../src/memory/base.ts";
+import type { Embed } from "../../src/llm/embeddings.ts";
 import { FileMemory } from "../../src/memory/file.ts";
+import { VectorDBMemory } from "../../src/memory/vectordb.ts";
 import { runFlow, send } from "../../src/run.ts";
 
 let tmp: string;
@@ -35,8 +37,8 @@ afterEach(() => {
 
 const env = (name: string) => (Object.hasOwn(vars, name) ? vars[name] : undefined);
 
-/** Run `yian` with `args`; return the exit code and both streams. */
-async function yian(args: readonly string[]) {
+/** Run `yian` with `args`, `extra` added to its io; return the exit code and both streams. */
+async function yian(args: readonly string[], extra: Partial<CliIo> = {}) {
   const out: string[] = [];
   const err: string[] = [];
   const io: CliIo = {
@@ -45,6 +47,7 @@ async function yian(args: readonly string[]) {
     stdin: new PassThrough(),
     stderrStream: new PassThrough(),
     env,
+    ...extra,
   };
   const code = await main([...args], io);
   return { code, stdout: out.join(""), stderr: err.join("") };
@@ -205,4 +208,46 @@ test("resuming a waiting run, even after a hand edit, notes no drift", async () 
   expect(result.code, result.stderr).toBe(0);
   expect(result.stderr).not.toContain("changed since this run started");
   expect(readFileSync(join(defaults().location, "MEMORY.md"), "utf8")).toBe("heard");
+});
+
+/** An embedder that never calls a provider: a 4-dimension vector from each text's length. */
+const fakeEmbed: Embed = async (texts) => texts.map((text) => Float32Array.of((text.length % 7) + 1, 1, 0, 0));
+
+/** Two adds to a VectorDB memory, one after the other. */
+const TWO_ADDS = `id: answer
+name: answer
+input:
+  cases: !VectorDBMemory
+nodes:
+  first:
+    kind: tool
+    tool_id: {cases: add}
+    input: {text: first}
+  second:
+    kind: tool
+    tool_id: {cases: add}
+    depends_on: [first]
+    input: {text: second}
+output: \${second.output.id}
+`;
+
+test("a crashed run's default VectorDB store is bound again with the model it recorded", async () => {
+  const flow = flowFile(TWO_ADDS);
+  const identity = defaultIdentity(join(tmp, "proj"), "answer", "cases");
+  const path = defaultLocation(home, identity, "VectorDBMemory");
+  const embedding = { provider: "openai", model: "test-embedding" };
+  const cases = new VectorDBMemory({ path, id: identity, embedding, embed: fakeEmbed });
+  const loaded = await loadFlow(readFileSync(flow, "utf8"), { searchPaths: [dirname(flow)] });
+  const log = join(tmp, "run.jsonl");
+  const onEvent = (event: RunEvent) => {
+    if (event instanceof NodeStarted && event.nodeId === "second") throw new Error("host interruption");
+  };
+  await expect(runFlow(loaded, { cases }, { log, onEvent, env })).rejects.toThrow("host interruption");
+  // A resume uses the store's recorded model: none is given, and --embedding is a fresh run's.
+  const refused = await yian(["run", "--resume", log, "--quiet", "--embedding", "openai/other"]);
+  expect(refused.code).toBe(2);
+  expect(refused.stderr).toContain("--resume cannot be combined with --embedding");
+  const result = await yian(["run", "--resume", log, "--quiet"], { embed: fakeEmbed });
+  expect(result.code, result.stderr).toBe(0);
+  expect(result.stdout).toBe("2\n");
 });

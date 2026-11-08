@@ -50,6 +50,7 @@ import {
 } from "../typesys/values.ts";
 import { apiKeyEnvNames, OPTIONAL_API_KEY_PROVIDERS } from "../llm_clients/api_key_env.ts";
 import { AuthError } from "../llm_clients/auth/index.ts";
+import { defaultEmbed } from "../llm_clients/factory.ts";
 import { StorageError } from "../llm_clients/auth/store.ts";
 import {
   type AgentConfig,
@@ -87,6 +88,7 @@ import {
   type CreatedMemory,
   createdLine,
   driftNote,
+  embeddingFlag,
   projectFolder,
   resumeMemories,
 } from "./memory_bind.ts";
@@ -567,9 +569,9 @@ export const CHAT_FLOW_FILE = "chat.yaml";
  * Run before input files are read, prompts are shown, or provider configuration is resolved.
  *
  * @throws {UsageError} When `resume` is given with `flow` (the resume runs the flow the log
- *   recorded), or with `--input`, `--inputs`, `--provider`, `--model` or `--log` (each one given is
- *   named, in that order); when neither `flow` nor `resume` is given; or when a directory entry,
- *   even a dangling symlink, exists at `log`.
+ *   recorded), or with `--input`, `--inputs`, `--provider`, `--model`, `--embedding` or `--log`
+ *   (each one given is named, in that order); when neither `flow` nor `resume` is given; or when a
+ *   directory entry, even a dangling symlink, exists at `log`.
  */
 export function validateRunLogOptions(options: {
   flow?: string | undefined;
@@ -577,10 +579,11 @@ export function validateRunLogOptions(options: {
   inputs?: string | undefined;
   provider?: string | undefined;
   model?: string | undefined;
+  embedding?: string | undefined;
   log?: string | undefined;
   resume?: string | undefined;
 }): void {
-  const { flow, inputValues, inputs, provider, model, log, resume } = options;
+  const { flow, inputValues, inputs, provider, model, embedding, log, resume } = options;
   if (resume === undefined && flow === undefined) throw new UsageError("Missing argument 'FLOW'.");
   if (resume !== undefined) {
     // An edited flow file means a new run, so a resume never reads one.
@@ -592,6 +595,7 @@ export function validateRunLogOptions(options: {
     if (inputs !== undefined) conflicts.push("--inputs");
     if (provider !== undefined) conflicts.push("--provider");
     if (model !== undefined) conflicts.push("--model");
+    if (embedding !== undefined) conflicts.push("--embedding");
     if (log !== undefined) conflicts.push("--log");
     if (conflicts.length > 0) {
       throw new UsageError(`Invalid value: --resume cannot be combined with ${conflicts.join(", ")}`);
@@ -662,6 +666,8 @@ export interface RunOptions {
   mcpConfig: readonly string[];
   /** The `--memory NAME=PATH` flags. */
   memory: readonly string[];
+  /** The `--embedding provider/model` a new VectorDB memory is made with. */
+  embedding?: string | undefined;
   json: boolean;
 }
 
@@ -1261,7 +1267,11 @@ async function startRun(
       // configuration, and its recorded keys are checked once it is replayed.
       if (options.resume !== undefined) {
         const log = options.resume;
-        const memory = resumeMemories(flow, log, options.memory, { home: homeDir(io.env), note: memoryNote });
+        const memory = resumeMemories(flow, log, options.memory, {
+          home: homeDir(io.env),
+          note: memoryNote,
+          embed: io.embed ?? defaultEmbed(commandEnv.read),
+        });
         const keyContext = {
           env: commandEnv,
           terminal: io.stdin.isTTY === true ? terminal : null,
@@ -1289,6 +1299,8 @@ async function startRun(
         home: homeDir(io.env),
         note: memoryNote,
         project: projectFolder(flowPath!),
+        embedding: embeddingFlag(options.embedding),
+        embed: io.embed ?? defaultEmbed(commandEnv.read),
       });
       // A signal during the load stops the command before it prompts.
       controller.signal.throwIfAborted();

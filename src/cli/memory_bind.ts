@@ -15,7 +15,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { START_ID } from "../compile/model.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { reprText } from "../diagnostics.ts";
-import type { MemorySession } from "../memory/base.ts";
+import { memoryErrorKind, type MemorySession } from "../memory/base.ts";
 import { FileMemory, type FileMemoryOptions } from "../memory/file.ts";
 import type { Parameter } from "../nodes/contracts.ts";
 import { isSystemError, leavesRoot } from "../platform.ts";
@@ -230,7 +230,7 @@ class CliFileMemory extends FileMemory {
    * prompts may come between the bind and the open.
    *
    * @throws {RangeError} When a default location no longer passes the checks, or its real path
-   *   changed after the bind.
+   *   changed after the bind; for a resume's folder given with `--memory`, when it isn't a memory.
    */
   override async open(o: {
     create: boolean;
@@ -243,7 +243,14 @@ class CliFileMemory extends FileMemory {
         throw new RangeError(`~/.yian/memory/${path} changed after it was checked; run again`);
       }
     }
-    const session = await super.open(o);
+    let session: MemorySession;
+    try {
+      session = await super.open(o);
+    } catch (error) {
+      // A resume's "bind it with --memory" would point back at the flag the user gave.
+      if (this.#confined !== null || memoryErrorKind(error) !== "missing") throw error;
+      throw new RangeError("the folder given with --memory isn't a memory", { cause: error });
+    }
     if (session.created) {
       this.#note({ inputs: [...this.inputs], identity: session.info.identity, location: this.root });
     }

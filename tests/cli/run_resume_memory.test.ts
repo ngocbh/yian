@@ -175,6 +175,12 @@ test("--memory on a resume binds that input instead of its default", async () =>
   const unbound = await yian(["run", "--resume", log, "--quiet"]);
   expect(unbound.code).toBe(1);
   expect(unbound.stderr).toContain("isn't at its location; bind it with --memory");
+  // A flag naming a folder that isn't a memory says so, rather than to bind it with --memory.
+  const nowhere = join(tmp, "nowhere");
+  const missing = await yian(["run", "--resume", log, "--quiet", "--memory", `lessons=${nowhere}`]);
+  expect(missing.code).toBe(1);
+  expect(missing.stderr).toContain("resume failed: memory `lessons`: the folder given with --memory isn't a memory");
+  expect(existsSync(nowhere)).toBe(false);
   const bound = await yian(["run", "--resume", log, "--quiet", "--memory", `lessons=${notes}`]);
   expect(bound.code, bound.stderr).toBe(0);
   expect(readFileSync(join(notes, "MEMORY.md"), "utf8")).toBe("first\nsecond");

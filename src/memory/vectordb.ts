@@ -43,7 +43,7 @@ import {
 } from "../platform.ts";
 import { ReportedToolError } from "../tools/errors.ts";
 import { inputTypeFromJsonSchema } from "../tools/types.ts";
-import { canonicalJson, type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
+import { type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
 import { buildValueAs, TypeCheckError } from "../typesys/values.ts";
 import {
   type Applied,
@@ -506,7 +506,8 @@ function initStore(db: Sqlite, identity: string, settings: StoredSettings): Meta
 
 /** Return why an input typed `given` can't bind a store whose items are typed `stored`, or `null` when it can. */
 function itemTypeProblem(stored: JsonObject | null, given: JsonObject | null): string | null {
-  if (canonicalJson(stored) === canonicalJson(given)) return null;
+  // Compared as the store writes them: keys in order, and floats written as floats.
+  if (logJson(stored) === logJson(given)) return null;
   if (stored === null) return "this memory's items are text only; its input can't give them a type";
   if (given === null) return "this memory's items have typed fields; give its input their type";
   return "this memory's items have another type than its input's; bind a memory made with that type";
@@ -721,7 +722,7 @@ function listed(names: readonly string[]): string {
 }
 
 /**
- * Return `fields` when it fits the item schema `schema`.
+ * Return `fields` as the item schema `schema` types them: a copy of the value the check built.
  *
  * @throws {TypeError} If it isn't an object, or doesn't fit, naming where.
  */
@@ -731,12 +732,45 @@ function checkFields(op: string, fields: unknown, schema: JsonObject): JsonObjec
   const type = inputTypeFromJsonSchema(schema);
   if (type === null) return fields;
   try {
-    buildValueAs(type, fields);
+    return buildValueAs(type, fields).value as JsonObject;
   } catch (error) {
     if (!(error instanceof TypeCheckError)) throw error;
     throw new TypeError(`a VectorDBMemory ${op}'s fields don't fit the item type: ${error.message}`);
   }
-  return fields;
+}
+
+/**
+ * Return the digest of the checked `change`, which a repeated change id must match: the sha256 of
+ * its yian JSON, so ints and floats both write, an int given as a number or a bigint digests the
+ * same, and an absent field is left out.
+ */
+function changeDigest(change: Change): string {
+  const record: JsonObject = { op: change.op };
+  for (const [key, value] of Object.entries(change)) {
+    if (key === "op" || value === undefined || value === null) continue;
+    record[key] = typeof value === "number" ? BigInt(value) : (value as JsonValue);
+  }
+  return sha256(logJson(record));
+}
+
+/**
+ * Return whether the JSON values `a` and `b` are equal: numbers by value, whether ints or floats,
+ * lists item by item and objects key by key, in any key order.
+ */
+function sameValue(a: JsonValue, b: JsonValue): boolean {
+  if ((typeof a === "number" || typeof a === "bigint") && (typeof b === "number" || typeof b === "bigint")) {
+    if (typeof a === typeof b) return a === b;
+    const [int, float] = typeof a === "bigint" ? [a, b as number] : [b as bigint, a as number];
+    return Number.isInteger(float) && BigInt(float) === int;
+  }
+  if (Array.isArray(a)) return Array.isArray(b) && a.length === b.length && a.every((x, i) => sameValue(x, b[i]!));
+  if (isObject(a)) {
+    if (!isObject(b)) return false;
+    const keys = Object.keys(a);
+    if (keys.length !== Object.keys(b).length) return false;
+    return keys.every((key) => Object.hasOwn(b, key) && sameValue(a[key]!, b[key]!));
+  }
+  return a === b;
 }
 
 /**
@@ -899,7 +933,7 @@ function record(db: Sqlite, limits: Limits, at: string, writing: Writing, entry:
     // With no undos kept, the old text is never written.
     limits.maxUndo === 0 ? null : entry.before,
     entry.after,
-    canonicalJson(writing.author),
+    logJson(writing.author),
     at,
     entry.undoes,
   );
@@ -1525,7 +1559,7 @@ class VectorDBSession implements MemorySession {
     if (typeof c.id !== "string" || c.id === "") throw new TypeError("a change id must be a non-empty string");
     const author = checkAuthor(c.author);
     const change = checkChange(c.change, this.#stored.item_schema);
-    const writing: Writing = { id: c.id, digest: sha256(canonicalJson(c.change)), author };
+    const writing: Writing = { id: c.id, digest: changeDigest(change), author };
     return this.#track(this.#apply(writing, change, c.signal));
   }
 
@@ -1546,7 +1580,7 @@ class VectorDBSession implements MemorySession {
     if (typeof o.id !== "string" || o.id === "") throw new TypeError("a change id must be a non-empty string");
     if (typeof o.changeId !== "string") throw new TypeError("undo needs the change id to undo as a string");
     const author = checkAuthor(o.author);
-    const writing: Writing = { id: o.id, digest: sha256(canonicalJson({ op: "undo", change: o.changeId })), author };
+    const writing: Writing = { id: o.id, digest: sha256(logJson({ op: "undo", change: o.changeId })), author };
     return this.#track(this.#undo(writing, o.changeId, o.signal));
   }
 
@@ -1566,7 +1600,7 @@ class VectorDBSession implements MemorySession {
     if (typeof o.id !== "string" || o.id === "") throw new TypeError("a change id must be a non-empty string");
     const author = checkAuthor(o.author);
     const item = checkEraseTarget(o.target);
-    const writing: Writing = { id: o.id, digest: sha256(canonicalJson({ op: "erase", item })), author };
+    const writing: Writing = { id: o.id, digest: sha256(logJson({ op: "erase", item: BigInt(item) })), author };
     const applied = await this.#locked(o.signal, (db) => {
       const known = knownChange(db, writing.id, writing.digest);
       if (known !== null) return known;
@@ -1672,7 +1706,7 @@ class VectorDBSession implements MemorySession {
     const { limits, scheduler } = this.#store;
     if (vector !== null) checkDimensions(db, vector);
     const at = new Date(scheduler.now()).toISOString();
-    const author = canonicalJson(writing.author);
+    const author = logJson(writing.author);
     return transaction(db, () => {
       const seq = storedVersion(db) + 1;
       const { row } = plan;
@@ -1786,7 +1820,7 @@ class VectorDBSession implements MemorySession {
     const { limits, scheduler } = this.#store;
     if (vector !== null) checkDimensions(db, vector);
     const at = new Date(scheduler.now()).toISOString();
-    const author = canonicalJson(writing.author);
+    const author = logJson(writing.author);
     const { change, row, restore } = plan;
     const item = change.item;
     return transaction(db, () => {
@@ -1843,7 +1877,7 @@ class VectorDBSession implements MemorySession {
     if (chars > limits.maxTextChars) {
       throw refusal(`the query is ${chars} characters; it may be at most ${limits.maxTextChars}`);
     }
-    const wanted = Object.entries(filter ?? {}).map(([key, value]) => [key, canonicalJson(value)] as const);
+    const wanted = Object.entries(filter ?? {});
     const [vector] = await this.#embed([query], signal);
     const queryNorm = norm(vector!);
     return this.#locked(signal, (db) => {
@@ -1865,8 +1899,8 @@ class VectorDBSession implements MemorySession {
           }
           if (wanted.length > 0) {
             const fields = storedJson(row.fields);
-            const matches = (key: string, value: string) =>
-              isObject(fields) && Object.hasOwn(fields, key) && canonicalJson(fields[key]) === value;
+            const matches = (key: string, value: JsonValue) =>
+              isObject(fields) && Object.hasOwn(fields, key) && sameValue(fields[key]!, value);
             if (!wanted.every(([key, value]) => matches(key, value))) continue;
           }
           const score = cosine(vector!, queryNorm, item);

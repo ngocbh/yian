@@ -1508,3 +1508,53 @@ describe("the lock and the queue", () => {
     await s.close();
   });
 });
+
+describe("numbers that aren't ints", () => {
+  /** An item type with a float field and a float bound. */
+  const SCORED: JsonObject = {
+    type: "object",
+    properties: { title: { type: "string" }, score: { type: "number", minimum: 0.5 } },
+    required: ["title", "score"],
+    additionalProperties: false,
+  };
+
+  test("float fields add, edit, resend and filter; a float bound in the item schema opens again", async () => {
+    const at = join(dir, "store", "scored.db");
+    const s = await openAt({ path: at }, SCORED);
+    const added = await apply(s, { op: "add", text: "alpha", fields: { title: "a", score: 0.5 } }, "a1");
+    expect(added).toMatchObject({ ok: true, result: { id: 1n } });
+    embedded = [];
+    // The same change under its id answers with its stored result, embedding nothing.
+    expect(await apply(s, { op: "add", text: "alpha", fields: { title: "a", score: 0.5 } }, "a1")).toEqual(added);
+    expect(embedded).toEqual([]);
+    const other = { op: "add", text: "alpha", fields: { title: "a", score: 0.75 } };
+    await expect(apply(s, other, "a1")).rejects.toBeInstanceOf(ChangeIdReusedError);
+    await apply(s, { op: "add", text: "alpha bravo", fields: { title: "b", score: 2n } }, "a2");
+    const edit = { op: "edit", id: 1n, if_version: 1n, fields: { title: "a", score: 1.5 } };
+    const edited = await apply(s, edit, "e1");
+    expect(edited).toMatchObject({ ok: true });
+    expect(await apply(s, edit, "e1")).toEqual(edited);
+    expect(await call(s, "read", { id: 1n })).toMatchObject({ fields: { title: "a", score: 1.5 } });
+    // A filter matches by value: an int equals the same number as a float, and floats compare as numbers.
+    const ids = async (filter: JsonObject) =>
+      ((await call(s, "search", { query: "alpha", k: 5n, filter })).items as JsonObject[]).map((item) => item.id);
+    expect(await ids({ score: 1.5 })).toEqual([1n]);
+    expect(await ids({ score: 2 })).toEqual([2n]);
+    expect(await ids({ score: 2n })).toEqual([2n]);
+    expect(await ids({ score: 0.5 })).toEqual([]);
+    await s.close();
+    await (await openAt({ path: at }, SCORED)).close();
+    expect(JSON.parse(metaRows(at).settings!).item_schema.properties.score.minimum).toBe(0.5);
+  });
+
+  test("an edit whose fields are undefined changes its text alone", async () => {
+    const s = await openAt();
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    const change = { op: "edit", id: 1n, if_version: 1n, text: "bravo", fields: undefined } as unknown as JsonObject;
+    expect(await apply(s, change, "e1")).toMatchObject({
+      ok: true,
+    });
+    expect(await call(s, "read", { id: 1n })).toMatchObject({ text: "bravo" });
+    await s.close();
+  });
+});

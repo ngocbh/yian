@@ -27,7 +27,9 @@ import { main } from "../../src/cli/index.ts";
 import { defaultIdentity, defaultLocation } from "../../src/cli/memory_bind.ts";
 import { resolveTarget } from "../../src/cli/memory_cmd.ts";
 import { type CliIo, UsageError } from "../../src/cli/utils.ts";
+import type { Embed } from "../../src/llm/embeddings.ts";
 import { FileMemory } from "../../src/memory/file.ts";
+import { VectorDBMemory } from "../../src/memory/vectordb.ts";
 import { lockFile } from "../../src/platform.ts";
 import { DOWN, ENTER, FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
 
@@ -164,7 +166,7 @@ describe("the target", () => {
     expect(at).toMatchObject({ location: lessons().location, identity: null });
   });
 
-  test("neither, both, a name that isn't a default memory, or a .db store is a usage error", async () => {
+  test("neither, both, or a name that isn't a default memory is a usage error", async () => {
     const flow = flowFile();
     const { io } = testIo();
     const refusals: [Parameters<typeof resolveTarget>[0], string][] = [
@@ -172,8 +174,7 @@ describe("the target", () => {
       [{ flow, name: "lessons", at: tmp }, "give the memory as FLOW NAME or --at PATH, not both"],
       [{ flow }, "Missing argument 'NAME'."],
       [{ flow, name: "line" }, "the flow has no memory input `line`"],
-      [{ flow, name: "notes" }, "`notes` is Optional, so it has no default memory; name its folder with --at"],
-      [{ at: join(tmp, "cases.db") }, "a .db store is a VectorDBMemory, which yian memory doesn't open yet"],
+      [{ flow, name: "notes" }, "`notes` is Optional, so it has no default memory; name its folder or store with --at"],
     ];
     for (const [given, message] of refusals) {
       const error = await resolveTarget(given, io).then(
@@ -585,8 +586,8 @@ describe("undo and erase name the memory first", () => {
     const wrong: [string[], string][] = [
       [["undo", flow, "lessons"], "give FLOW NAME CHANGE, or --at PATH CHANGE"],
       [["undo", "--at", lessons().location, flow, "c1"], "give FLOW NAME CHANGE, or --at PATH CHANGE"],
-      [["erase", flow, "MEMORY.md", "--yes"], "give FLOW NAME FILE, or --at PATH FILE"],
-      [["erase", "--at", lessons().location, "--yes"], "give FLOW NAME FILE, or --at PATH FILE"],
+      [["erase", flow, "MEMORY.md", "--yes"], "give FLOW NAME TARGET, or --at PATH TARGET"],
+      [["erase", "--at", lessons().location, "--yes"], "give FLOW NAME TARGET, or --at PATH TARGET"],
     ];
     for (const [args, message] of wrong) {
       const result = await yian(["memory", ...args]);
@@ -649,8 +650,8 @@ describe("yian memory erase", () => {
     await runOnce(flow, "first");
     for (const [extra, refusal] of [
       [["MEMORY.md", "--text", ""], "Invalid value for --text: give the text to erase"],
-      [["../x.md"], "Invalid value for 'FILE': `../x.md` can't be a file of the memory: a `..` part"],
-      [[".yian/identity"], "Invalid value for 'FILE': `.yian/identity` can't be a file of the memory: a hidden name"],
+      [["../x.md"], "Invalid value for 'TARGET': `../x.md` can't be a file of the memory: a `..` part"],
+      [[".yian/identity"], "Invalid value for 'TARGET': `.yian/identity` can't be a file of the memory: a hidden name"],
     ] as const) {
       const answer = new FakeInput({ tty: true });
       answer.write(`${DOWN}${ENTER}`);
@@ -860,4 +861,145 @@ describe("yian memory edit as a process", () => {
     },
     30_000,
   );
+});
+
+/** An embedder that never calls a provider: a 4-dimension vector from each text's length. */
+const fakeEmbed: Embed = async (texts) => texts.map((text) => Float32Array.of((text.length % 7) + 1, 1, 0, 0));
+
+/** A flow that adds `line` (an input) to its VectorDB memory. */
+const CASES = `id: cases
+name: cases
+input:
+  line: !str
+  cases: !VectorDBMemory
+nodes:
+  add:
+    kind: tool
+    tool_id: {cases: add}
+    input:
+      text: \${input.line}
+output: \${add.output.id}
+`;
+
+describe("VectorDB stores", () => {
+  /** The io a store's commands get: embeddings that never call a provider. */
+  const vectors = { embed: fakeEmbed };
+
+  /** Write `CASES` as `<tmp>/proj/cases.yaml`; return its path. */
+  function casesFile(): string {
+    const path = join(project, "cases.yaml");
+    writeFileSync(path, CASES);
+    return path;
+  }
+
+  /** Add `line` to the store through a run, made with a test model. */
+  async function addCase(flow: string, line: string): Promise<void> {
+    const args = ["run", flow, "--quiet", "--input", `line=${line}`, "--embedding", "openai/test-embedding"];
+    const result = await yian(args, { embed: fakeEmbed });
+    expect(result.code, result.stderr).toBe(0);
+  }
+
+  /** The default identity and store of `cases.yaml`'s `cases`. */
+  function cases(): { identity: string; location: string } {
+    const identity = defaultIdentity(project, "cases", "cases");
+    return { identity, location: defaultLocation(home, identity, "VectorDBMemory") };
+  }
+
+  /** Retire item `id` (at `version`) as a TOOL node would. */
+  async function retire(id: bigint, version: bigint): Promise<void> {
+    const store = new VectorDBMemory({ path: cases().location, embed: fakeEmbed });
+    const session = await store.open({ create: false, itemType: null, signal: new AbortController().signal });
+    const author = { kind: "tool" as const, name: "tidy" };
+    const change = { op: "retire", id, if_version: version, why: "stale" };
+    const applied = await session.apply({ id: "retire-1", change, author, signal: new AbortController().signal });
+    expect(applied.ok).toBe(true);
+    await session.close();
+  }
+
+  test("list includes each .db store under ~/.yian/memory, with the identity it records", async () => {
+    await addCase(casesFile(), "Check sums twice.");
+    const listed = JSON.parse((await yian(["memory", "list", "--json"])).stdout).memories;
+    expect(listed).toEqual([{ identity: cases().identity, type: "VectorDBMemory", location: cases().location }]);
+  });
+
+  test("show counts items and shows the recall; --all shows every item; --at x.db names a store", async () => {
+    const flow = casesFile();
+    await addCase(flow, "Check sums twice.");
+    await addCase(flow, "Carry the one.");
+    await retire(2n, 2n);
+    const { identity, location } = cases();
+    const shown = await yian(["memory", "show", flow, "cases"], { embed: fakeEmbed });
+    expect(shown.code, shown.stderr).toBe(0);
+    expect(shown.stdout).toStartWith(`${identity} (VectorDBMemory) at ${location}: 2 items, 1 retired\n1 item`);
+    const all = await yian(["memory", "show", "--at", location, "--all"], { embed: fakeEmbed });
+    expect(all.code, all.stderr).toBe(0);
+    expect(all.stdout).toContain("== item 1 (version 1) ==\nCheck sums twice.\n");
+    expect(all.stdout).toContain("== item 2 (version 3), retired: stale ==\nCarry the one.\n");
+    const json = JSON.parse((await yian(["memory", "show", flow, "cases", "--all", "--json"], vectors)).stdout);
+    expect(json).toMatchObject({ identity, type: "VectorDBMemory", location, count: 2, retired: 1 });
+    expect(json.items.map((item: { id: number; text: string }) => [item.id, item.text])).toEqual([
+      [1, "Check sums twice."],
+      [2, "Carry the one."],
+    ]);
+  });
+
+  test("history names each change's item; erase takes an item; edit has --add, --id --text and --delete", async () => {
+    const flow = casesFile();
+    await addCase(flow, "Check sums twice.");
+    await addCase(flow, "Carry the one.");
+    const history = await yian(["memory", "history", flow, "cases"], { embed: fakeEmbed });
+    expect(history.stdout.split("\n")[0]).toContain("add item 2 by tool add (run ");
+    const added = await yian(["memory", "edit", flow, "cases", "--add", "Round at the end."], { embed: fakeEmbed });
+    expect(added.code, added.stderr).toBe(0);
+    expect(added.stdout).toMatch(/^added item 3; the memory's version is \d+\n$/);
+    const edited = await yian(["memory", "edit", flow, "cases", "--id", "1", "--text", "Check sums thrice."], {
+      embed: fakeEmbed,
+    });
+    expect(edited.code, edited.stderr).toBe(0);
+    expect(edited.stdout).toStartWith("edited item 1;");
+    const deleted = await yian(["memory", "edit", flow, "cases", "--delete", "2"], { embed: fakeEmbed });
+    expect(deleted.code, deleted.stderr).toBe(0);
+    const [newest] = JSON.parse((await yian(["memory", "history", flow, "cases", "--json"], vectors)).stdout).changes;
+    expect(newest).toMatchObject({ op: "delete", target: { item: 2 }, author: { kind: "user", name: "ada" } });
+    const erased = await yian(["memory", "erase", flow, "cases", "3", "--yes"], { embed: fakeEmbed });
+    expect(erased.code, erased.stderr).toBe(0);
+    expect(erased.stdout).toContain("erased item 3;");
+    const json = JSON.parse((await yian(["memory", "show", flow, "cases", "--all", "--json"], vectors)).stdout);
+    expect(json.items.map((item: { id: number; text: string }) => [item.id, item.text])).toEqual([
+      [1, "Check sums thrice."],
+    ]);
+  });
+
+  test("edit and erase take a store's own arguments, and refuse a FileMemory's", async () => {
+    const flow = casesFile();
+    await addCase(flow, "Check sums twice.");
+    for (const [args, message] of [
+      [["edit", flow, "cases"], "give --add TEXT, --id N --text TEXT, or --delete N"],
+      [["edit", flow, "cases", "--id", "1"], "give --add TEXT, --id N --text TEXT, or --delete N"],
+      [["edit", flow, "cases", "--file", "MEMORY.md"], "--file is a FileMemory's"],
+      [["erase", flow, "cases", "MEMORY.md", "--yes"], "a VectorDBMemory's TARGET is an item's id"],
+      [["erase", flow, "cases", "1", "--text", "x", "--yes"], "--text is a FileMemory's"],
+    ] as const) {
+      const result = await yian(["memory", ...args], { embed: fakeEmbed });
+      expect(result.code, args.join(" ")).toBe(2);
+      expect(result.stderr).toContain(message);
+    }
+    const files = flowFile();
+    await runOnce(files, "first");
+    const wrong = await yian(["memory", "edit", files, "lessons", "--add", "x"]);
+    expect(wrong.code).toBe(2);
+    expect(wrong.stderr).toContain("--add, --id, --text and --delete are a VectorDBMemory's");
+  });
+
+  test("reset's question counts the store's items", async () => {
+    const flow = casesFile();
+    await addCase(flow, "Check sums twice.");
+    const no = new FakeInput({ tty: true });
+    no.write(ENTER);
+    const output = new FakeOutput({ tty: true, columns: 400 });
+    const declined = await yian(["memory", "reset", flow, "cases"], { ...vectors, stdin: no, stderrStream: output });
+    expect(declined.code).toBe(1);
+    const { identity, location } = cases();
+    expect(output.text).toContain(`Empty ${identity} at ${location}? This deletes 1 item and its history.`);
+  });
 });

@@ -4,9 +4,9 @@
  * folder). It is a host the user runs, so its own output may name a memory's folder; a change it
  * makes is authored by the user.
  *
- * Knows about: compose (the flow's inputs), memory (`FileMemory`), the run index (the runs that used
- * a memory), the type language, the CLI's memory binding (`memory_bind.ts`), start-up and
- * terminal, and the file system.
+ * Knows about: compose (the flow's inputs), memory (`FileMemory`, `VectorDBMemory`), the embeddings
+ * client, the run index (the runs that used a memory), the type language, the CLI's memory binding
+ * (`memory_bind.ts`), start-up and terminal, and the file system.
  */
 
 import { spawn } from "node:child_process";
@@ -26,22 +26,31 @@ import { basename, join } from "node:path";
 
 import { type Env, processEnvNames } from "../defaults.ts";
 import { compareCodeUnits, Diagnostic } from "../diagnostics.ts";
+import { defaultEmbed } from "../llm_clients/factory.ts";
 import { type Applied, type Author, type ChangeEntry, memoryErrorKind, type MemorySession } from "../memory/base.ts";
 import { diskProblem, FileMemory, type MemberFile, pathProblem, readMembers } from "../memory/file.ts";
+import { VectorDBMemory } from "../memory/vectordb.ts";
 import { homeDir, isSystemError, withWarnings } from "../platform.ts";
 import { readRunIndex, type RunIndexRow, updateRunIndex } from "../run.ts";
-import type { JsonObject } from "../typesys/json.ts";
+import { type JsonObject, logJson } from "../typesys/json.ts";
 import { isMemoryType } from "../typesys/values.ts";
-import { checkMemoryFolder, defaultLocation, defaultMemories, memoryRoot, projectFolder } from "./memory_bind.ts";
+import {
+  checkMemoryFolder,
+  type CliMemory,
+  defaultIdentity,
+  defaultLocation,
+  memoryRoot,
+  projectFolder,
+} from "./memory_bind.ts";
 import { diagnosticJson, printStyled } from "./render.ts";
 import { defaultRunsDir, loadFlowFile } from "./startup.ts";
 import { Terminal } from "./terminal.ts";
 import { atTerminal, checkPath, type CliIo, forTerminal, type ParsedArgs, printJson, UsageError } from "./utils.ts";
 
-/** A memory `yian memory` acts on: its instance and folder, and, for a default, its identity. */
+/** A memory `yian memory` acts on: its instance and location, and, for a default, its identity. */
 export interface MemoryTarget {
-  readonly memory: FileMemory;
-  /** The memory's folder. */
+  readonly memory: CliMemory;
+  /** The memory's folder, or a VectorDBMemory's store file. */
   readonly location: string;
   /** For `FLOW NAME`, the input's default identity; `null` for `--at`. */
   readonly identity: string | null;
@@ -49,14 +58,15 @@ export interface MemoryTarget {
 
 /**
  * Return the memory `o` names: `flow` and `name` give that input's default memory, at its default
- * location under the home in `io.env`; `at` gives the memory in a folder. Nothing is opened or
- * created. A flow that doesn't load prints its diagnostic and gives it back.
+ * location under the home in `io.env`; `at` gives the memory in a folder, or the store a `.db`
+ * path names. A store's embeddings go through `io.embed`, or `defaultEmbed` over `io.env`. Nothing
+ * is opened or created. A flow that doesn't load prints its diagnostic and gives it back.
  *
  * @throws {UsageError} When neither or both forms are given, `name` is missing, the flow has no
- *   such memory input or it is Optional (it has no default), or `at` is empty, names a file, a
- *   `.db` store or a folder that can't be a memory (`checkMemoryFolder`). A leading `~/` in `at` is
- *   the home folder.
- * @throws {RangeError} When the input's default can't be bound (`defaultMemories`).
+ *   such memory input, it is Optional (it has no default) or of a type yian memory doesn't open, or
+ *   `at` is empty, names a file where a folder goes (or a folder where a store goes), or a folder
+ *   that can't be a memory (`checkMemoryFolder`). A leading `~/` in `at` is the home folder.
+ * @throws {RangeError} When the input has no default identity (`defaultIdentity`) or location.
  */
 export async function resolveTarget(
   o: { flow?: string | undefined; name?: string | undefined; at?: string | undefined },
@@ -69,17 +79,21 @@ export async function resolveTarget(
   if (flowPath !== undefined && at !== undefined) {
     throw new UsageError("Invalid value: give the memory as FLOW NAME or --at PATH, not both");
   }
+  const embed = io.embed ?? defaultEmbed(io.env);
+  const home = homeDir(io.env);
   if (at !== undefined) {
-    if (at === "") throw new UsageError("Invalid value for --at: give the memory's folder");
+    if (at === "") throw new UsageError("Invalid value for --at: give the memory's folder or store");
     // As --memory reads its path: `--at=~/x` reaches us unexpanded.
-    const home = homeDir(io.env);
     const path = at === "~" || at.startsWith("~/") ? home + at.slice(1) : at;
+    const stats = statSync(path, { throwIfNoEntry: false });
     if (path.endsWith(".db")) {
-      throw new UsageError(
-        "Invalid value for --at: a .db store is a VectorDBMemory, which yian memory doesn't open yet",
-      );
+      if (stats?.isDirectory() === true) {
+        throw new UsageError(`Invalid value for --at: ${path} is a folder, not a VectorDBMemory's store`);
+      }
+      const memory = new VectorDBMemory({ path, embed });
+      return { memory, location: memory.path, identity: null };
     }
-    if (statSync(path, { throwIfNoEntry: false })?.isDirectory() === false) {
+    if (stats?.isDirectory() === false) {
       throw new UsageError(`Invalid value for --at: ${path} is a file, not a memory's folder`);
     }
     try {
@@ -96,28 +110,36 @@ export async function resolveTarget(
   if (flow instanceof Diagnostic) return flow;
   const typ = flow.input.find((param) => param.name === name)?.contract?.type;
   if (!isMemoryType(typ)) throw new UsageError(`Invalid value: the flow has no memory input \`${name}\``);
-  const home = homeDir(io.env);
-  // yian memory names a memory with --at, not --memory.
-  const defaults = defaultMemories(flow, { home, project: projectFolder(flowPath!), memoryFlag: false });
-  const found = defaults.find((each) => each.input === name);
-  if (found === undefined) {
+  if (typ.nullable) {
     throw new UsageError(
-      `Invalid value: \`${name}\` is Optional, so it has no default memory; name its folder with --at`,
+      `Invalid value: \`${name}\` is Optional, so it has no default memory; name its folder or store with --at`,
     );
   }
-  const location = defaultLocation(home, found.identity, "FileMemory");
-  return { memory: new FileMemory({ root: location, id: found.identity }), location, identity: found.identity };
+  if (typ.memory !== "FileMemory" && typ.memory !== "VectorDBMemory") {
+    throw new UsageError(`Invalid value: \`${name}\` is a ${typ.memory}, which yian memory doesn't open`);
+  }
+  // yian memory names a memory with --at, not --memory.
+  const identity = defaultIdentity(projectFolder(flowPath!), flow.compiled.flowId, name, false);
+  const location = defaultLocation(home, identity, typ.memory);
+  const memory =
+    typ.memory === "FileMemory"
+      ? new FileMemory({ root: location, id: identity })
+      : new VectorDBMemory({ path: location, id: identity, embed });
+  return { memory, location, identity };
 }
 
 /**
- * Open `target`'s memory, never creating it.
+ * Open `target`'s memory, never creating it; a store with the item type it records, which a host
+ * opening it by its path doesn't know.
  *
- * @throws {UsageError} When no memory is at its folder.
- * @throws What `FileMemory.open` throws otherwise.
+ * @throws {UsageError} When no memory is at its location.
+ * @throws What the memory's `open` throws otherwise.
  */
 export async function openTarget(target: MemoryTarget, signal: AbortSignal): Promise<MemorySession> {
   try {
-    return await target.memory.open({ create: false, itemType: null, signal });
+    const { memory } = target;
+    const itemType = memory instanceof VectorDBMemory ? ((await memory.stored({ signal }))?.itemSchema ?? null) : null;
+    return await memory.open({ create: false, itemType, signal });
   } catch (error) {
     if (memoryErrorKind(error) !== "missing") throw error;
     throw new UsageError(`Invalid value: no memory at ${target.location}`);
@@ -133,32 +155,44 @@ interface Listed {
 
 /**
  * Return the memories under the folder `root`, by identity: each folder holding a memory's
- * identity file (`.yian/identity`, in a real `.yian` folder), and the folders that couldn't be
- * read. The walk follows no symlink and doesn't look inside a memory.
+ * identity file (`.yian/identity`, in a real `.yian` folder), and each `.db` store with the
+ * identity it records; and what couldn't be read, each with why. The walk follows no symlink and
+ * doesn't look inside a memory.
  */
-function findMemories(root: string): { found: Listed[]; unreadable: string[] } {
+async function findMemories(root: string, signal: AbortSignal): Promise<{ found: Listed[]; unreadable: string[] }> {
   const found: Listed[] = [];
   const unreadable: string[] = [];
-  const walk = (dir: string): void => {
+  const walk = async (dir: string): Promise<void> => {
     let names: string[];
     try {
       names = readdirSync(dir);
     } catch (error) {
       if (!isSystemError(error)) throw error;
       // A folder removed, or never made, holds no memory.
-      if (error.code !== "ENOENT" && error.code !== "ENOTDIR") unreadable.push(dir);
+      if (error.code !== "ENOENT" && error.code !== "ENOTDIR") unreadable.push(`can't read ${dir}`);
       return;
     }
     for (const name of names.sort(compareCodeUnits)) {
       const path = join(dir, name);
-      if (lstatOrNull(path)?.isDirectory() !== true) continue;
+      const stats = lstatOrNull(path);
+      if (stats?.isFile() === true && name.endsWith(".db")) {
+        try {
+          const stored = await new VectorDBMemory({ path }).stored({ signal });
+          if (stored !== null) found.push({ identity: stored.identity, type: "VectorDBMemory", location: path });
+        } catch (error) {
+          if (!(error instanceof Error) || signal.aborted) throw error;
+          unreadable.push(`${path} isn't a memory's store: ${error.message}`);
+        }
+        continue;
+      }
+      if (stats?.isDirectory() !== true) continue;
       const identity = storedIdentity(path);
-      if (identity === undefined) unreadable.push(path);
-      else if (identity === null) walk(path);
+      if (identity === undefined) unreadable.push(`can't read ${path}`);
+      else if (identity === null) await walk(path);
       else found.push({ identity, type: "FileMemory", location: path });
     }
   };
-  walk(root);
+  await walk(root);
   return { found: found.sort((a, b) => compareCodeUnits(a.identity, b.identity)), unreadable };
 }
 
@@ -188,16 +222,14 @@ function lstatOrNull(path: string): ReturnType<typeof lstatSync> | null {
 }
 
 /**
- * `yian memory list`: every memory under `~/.yian/memory`, by identity, as aligned columns of its
- * identity, type and folder after a header (nothing when there is none), or with `--json` one
- * document whose `memories` holds `{identity, type, location}` each. A folder it can't read is a
- * `warning:` line on stderr.
+ * `yian memory list`: every memory under `~/.yian/memory`, folders and `.db` stores, by identity, as
+ * aligned columns of its identity, type and location after a header (nothing when there is none),
+ * or with `--json` one document whose `memories` holds `{identity, type, location}` each. What it
+ * can't read is a `warning:` line on stderr.
  */
 export async function memoryList({ options }: ParsedArgs, io: CliIo): Promise<number> {
-  const { found: memories, unreadable } = findMemories(memoryRoot(homeDir(io.env)));
-  for (const dir of unreadable) {
-    await printStyled(io, `warning: can't read ${dir}; a memory in it isn't listed`, "yellow");
-  }
+  const { found: memories, unreadable } = await findMemories(memoryRoot(homeDir(io.env)), stopOf(io));
+  for (const why of unreadable) await printStyled(io, `warning: ${why}; it isn't listed`, "yellow");
   if (options["json"] === true) {
     const listed = memories.map(({ identity, type, location }) => ({ identity, type, location }));
     await printJson({ memories: listed }, io.stdout);
@@ -332,7 +364,8 @@ function counted(count: number, noun: string): string {
  */
 export async function memoryShow(command: ParsedArgs, io: CliIo): Promise<number> {
   const all = command.options["all"] === true;
-  return onMemory(command, io, namedOf(command), async (session, { location }) => {
+  return onMemory(command, io, namedOf(command), async (session, { memory, location }) => {
+    if (memory instanceof VectorDBMemory) return showStore(command, io, session, memory, location);
     const { version, recall } = await session.snapshot();
     const files = membersOf(session, location);
     const characters = files.reduce((sum, file) => sum + file.chars, 0);
@@ -359,6 +392,57 @@ export async function memoryShow(command: ParsedArgs, io: CliIo): Promise<number
   });
 }
 
+/** Items a page of `VectorDBMemory.items` reads. */
+const ITEMS_PAGE = 500;
+
+/** Every item of the store `memory`, by id, retired ones included, read a page at a time. */
+async function allItems(memory: VectorDBMemory, signal: AbortSignal): Promise<JsonObject[]> {
+  const items: JsonObject[] = [];
+  for (;;) {
+    const after = items.length === 0 ? 0 : Number(items.at(-1)!["id"]);
+    const page = await memory.items({ after, limit: ITEMS_PAGE, signal });
+    items.push(...page);
+    if (page.length < ITEMS_PAGE) return items;
+  }
+}
+
+/**
+ * `yian memory show` of a VectorDB store: a line naming it and counting its items and the retired
+ * ones, then its recall; with `--all` every item, each after an `== item <id> (version <v>) ==`
+ * line that says why it was retired, its fields after its text. `--json` prints the identity,
+ * type, location, version, count, retired and recall, and with `--all` the items.
+ */
+async function showStore(
+  command: ParsedArgs,
+  io: CliIo,
+  session: MemorySession,
+  memory: VectorDBMemory,
+  location: string,
+): Promise<number> {
+  const all = command.options["all"] === true;
+  const { version, recall } = await session.snapshot();
+  const items = await allItems(memory, stopOf(io));
+  const retired = items.filter((item) => item["retired"] !== undefined).length;
+  const { identity, type } = session.info;
+  if (command.options["json"] === true) {
+    const counts = { count: BigInt(items.length), retired: BigInt(retired) };
+    const document = { identity, type, location, version, ...counts, recall: { text: recall.text, cut: recall.cut } };
+    await printJson(all ? { ...document, items } : document, io.stdout);
+    return 0;
+  }
+  const lines = [`${identity} (${type}) at ${location}: ${counted(items.length, "item")}, ${retired} retired`];
+  lines.push(recall.text, ...(recall.cut === null ? [] : [`(${recall.cut})`]));
+  if (all) {
+    for (const item of items) {
+      const why = item["retired"] === undefined ? "" : `, retired: ${String(item["retired"])}`;
+      lines.push(`== item ${String(item["id"])} (version ${String(item["version"])})${why} ==`, String(item["text"]));
+      if (item["fields"] !== undefined) lines.push(logJson(item["fields"]));
+    }
+  }
+  await io.stdout.write(`${forTerminal(lines.join("\n"), io.stdout)}\n`);
+  return 0;
+}
+
 /** `author` as history shows it: its kind and name, and its run and node when it has them. */
 function authorText(author: Author): string {
   const shown: string[] = [];
@@ -367,11 +451,15 @@ function authorText(author: Author): string {
   return `${author.kind} ${author.name}${shown.length === 0 ? "" : ` (${shown.join(", ")})`}`;
 }
 
-/** `change` as one line of history: its id, time, op and path, the change it undoes, and its author. */
+/**
+ * `change` as one line of history: its id, time, op and what it changed (a file's path, or a
+ * store's item), the change it undoes, and its author.
+ */
 function changeLine(change: ChangeEntry): string {
-  const { path, undoes } = change.target;
+  const { path, item, undoes } = change.target;
+  const what = typeof path === "string" ? path : `item ${String(item)}`;
   const undoing = typeof undoes === "string" ? ` (undoes ${undoes})` : "";
-  return `${change.id}  ${change.at}  ${change.op} ${String(path)}${undoing} by ${authorText(change.author)}`;
+  return `${change.id}  ${change.at}  ${change.op} ${what}${undoing} by ${authorText(change.author)}`;
 }
 
 /**
@@ -477,7 +565,13 @@ async function runEditor(env: Env, path: string, json: boolean): Promise<void> {
  */
 export async function memoryEdit(command: ParsedArgs, io: CliIo): Promise<number> {
   const json = command.options["json"] === true;
-  return onMemory(command, io, namedOf(command), async (session, { location }) => {
+  return onMemory(command, io, namedOf(command), async (session, { memory, location }) => {
+    if (memory instanceof VectorDBMemory) return editStore(command, io, session);
+    if (["add", "id", "text", "delete"].some((name) => command.options[name] !== undefined)) {
+      throw new UsageError(
+        "Invalid value: --add, --id, --text and --delete are a VectorDBMemory's; a FileMemory is edited in $EDITOR",
+      );
+    }
     const path = (command.options["file"] as string | undefined) ?? String(session.info.settings["index"]);
     const file = membersOf(session, location).find((each) => each.path === path) ?? null;
     // Before the editor opens: the person mustn't type what can't be applied.
@@ -541,6 +635,54 @@ export async function memoryEdit(command: ParsedArgs, io: CliIo): Promise<number
       if (!keep) rmSync(folder, { recursive: true, force: true });
     }
   });
+}
+
+/**
+ * `yian memory edit` of a VectorDB store: `--add TEXT` adds an item, `--id N --text TEXT` changes
+ * item N's text and `--delete N` deletes it, each as the user and against the item's version as
+ * read just before. Prints `<added|edited|deleted> item <id>` and the new version (`--json`:
+ * `{change, version, item}`); a change the store refuses prints `edit refused: <reason>` and exits
+ * 1.
+ *
+ * @throws {UsageError} For `--file`, or anything but exactly one of the three.
+ */
+async function editStore(command: ParsedArgs, io: CliIo, session: MemorySession): Promise<number> {
+  const json = command.options["json"] === true;
+  const { add, id, text, delete: gone, file } = command.options as Record<string, string | number | undefined>;
+  if (file !== undefined) {
+    throw new UsageError(
+      "Invalid value for --file: --file is a FileMemory's; give --add TEXT, --id N --text TEXT, or --delete N",
+    );
+  }
+  const actions = [add !== undefined, id !== undefined || text !== undefined, gone !== undefined];
+  if (actions.filter(Boolean).length !== 1 || (id === undefined) !== (text === undefined)) {
+    throw new UsageError("Invalid value: give --add TEXT, --id N --text TEXT, or --delete N");
+  }
+  const signal = stopOf(io);
+  let change: JsonObject;
+  let verb: string;
+  if (add !== undefined) {
+    change = { op: "add", text: String(add) };
+    verb = "added";
+  } else {
+    const item = BigInt((id ?? gone) as number);
+    // Against the version read now: a run that changes the item meanwhile makes it a conflict.
+    const current = await session.call("read", { id: item }, { signal });
+    change =
+      id !== undefined
+        ? { op: "edit", id: item, if_version: current["version"]!, text: String(text) }
+        : { op: "delete", id: item, if_version: current["version"]! };
+    verb = id !== undefined ? "edited" : "deleted";
+  }
+  const changed = changeId();
+  const applied = await session.apply({ id: changed, change, author: userAuthor(io), signal });
+  if (!applied.ok) {
+    return failed(io, json, { label: "edit refused", code: notAppliedCode(applied), message: applied.reason });
+  }
+  const item = add !== undefined ? applied.result["id"]! : change["id"]!;
+  if (json) await printJson({ change: changed, version: applied.version, item }, io.stdout);
+  else await io.stdout.write(`${verb} item ${String(item)}; the memory's version is ${applied.version}\n`);
+  return 0;
 }
 
 /**
@@ -617,17 +759,14 @@ async function goesOn(command: ParsedArgs, io: CliIo, question: string): Promise
  */
 export async function memoryErase(command: ParsedArgs, io: CliIo): Promise<number> {
   const json = command.options["json"] === true;
-  const { named, value: path } = namedWith(command, "file");
+  const { named, value: given } = namedWith(command, "target");
   const text = command.options["text"] as string | undefined;
   if (text === "") throw new UsageError("Invalid value for --text: give the text to erase");
   checkAsks(command, io, "erase");
-  return onMemory(command, io, named, async (session) => {
+  return onMemory(command, io, named, async (session, { memory }) => {
     const { identity } = session.info;
-    // Before anything is listed or asked: a path erase can't take would only fail after the yes.
-    const why = pathProblem(path, Number(session.info.settings["max_depth"]));
-    if (why !== null) {
-      throw new UsageError(`Invalid value for 'FILE': \`${path}\` can't be a file of the memory: ${why}`);
-    }
+    // Before anything is listed or asked: a target erase can't take would only fail after the yes.
+    const { target, what } = eraseTarget(memory, session, given, text);
     const runs = runsUsing(io, identity);
     const unseen = "yian can't see runs on other machines or in a host's own logs";
     const heading = `the runs on this machine that used ${identity}; their logs may hold copies:`;
@@ -638,11 +777,9 @@ export async function memoryErase(command: ParsedArgs, io: CliIo): Promise<numbe
         ? [`no run on this machine used ${identity}; ${unseen}`]
         : [heading, ...runLines(io, runs), unseen],
     );
-    const what = text === undefined ? path : `${JSON.stringify(text)} from ${path}`;
     if (!(await goesOn(command, io, `Erase ${what} from ${identity}? It can't be undone.`))) {
       return failed(io, json, { label: "erase cancelled", code: "memory.cancelled", message: "nothing erased" });
     }
-    const target: JsonObject = text === undefined ? { path } : { path, text };
     const erased = await session.erase({ id: changeId(), target, author: userAuthor(io), signal: stopOf(io) });
     const disabled = erased.disabledUndos;
     if (json) {
@@ -654,6 +791,39 @@ export async function memoryErase(command: ParsedArgs, io: CliIo): Promise<numbe
     await io.stdout.write(`${forTerminal(lines.join("\n"), io.stdout)}\n`);
     return 0;
   });
+}
+
+/**
+ * Return what erase takes out of `memory` for its argument `given`, and how a line names it: a
+ * file of a FileMemory (with `text`, that text in it), or an item of a store, by its id.
+ *
+ * @throws {UsageError} For a path that can't be a file of the memory, an item id that isn't one,
+ *   or `--text` on a store.
+ */
+function eraseTarget(
+  memory: CliMemory,
+  session: MemorySession,
+  given: string,
+  text: string | undefined,
+): { target: JsonObject; what: string } {
+  if (memory instanceof VectorDBMemory) {
+    if (text !== undefined) {
+      throw new UsageError(
+        "Invalid value for --text: --text is a FileMemory's; a VectorDBMemory's TARGET is an item's id",
+      );
+    }
+    if (!/^[1-9][0-9]*$/.test(given)) {
+      throw new UsageError("Invalid value for 'TARGET': a VectorDBMemory's TARGET is an item's id");
+    }
+    return { target: { item: BigInt(given) }, what: `item ${given}` };
+  }
+  const why = pathProblem(given, Number(session.info.settings["max_depth"]));
+  if (why !== null) {
+    throw new UsageError(`Invalid value for 'TARGET': \`${given}\` can't be a file of the memory: ${why}`);
+  }
+  return text === undefined
+    ? { target: { path: given }, what: given }
+    : { target: { path: given, text }, what: `${JSON.stringify(text)} from ${given}` };
 }
 
 /** The index statuses of a run that hasn't ended, whose resume would go on with the memory. */
@@ -687,9 +857,14 @@ export async function memoryReset(command: ParsedArgs, io: CliIo): Promise<numbe
         ? [`no unfinished run on this machine uses ${identity}`]
         : [`${heading}; a resume goes on with the emptied memory:`, ...runLines(io, runs)],
     );
-    const files = membersOf(session, target.location).map((file) => file.path);
-    const named = files.length === 0 ? "" : ` (${files.slice(0, 3).join(", ")}${files.length > 3 ? ", …" : ""})`;
-    const deletes = `This deletes ${counted(files.length, "file")}${named} and its history.`;
+    let deletes: string;
+    if (target.memory instanceof VectorDBMemory) {
+      deletes = `This deletes ${counted((await allItems(target.memory, stopOf(io))).length, "item")} and its history.`;
+    } else {
+      const files = membersOf(session, target.location).map((file) => file.path);
+      const named = files.length === 0 ? "" : ` (${files.slice(0, 3).join(", ")}${files.length > 3 ? ", …" : ""})`;
+      deletes = `This deletes ${counted(files.length, "file")}${named} and its history.`;
+    }
     const question = `Empty ${identity} at ${target.location}? ${deletes}`;
     if (!(await goesOn(command, io, question))) {
       return failed(io, json, { label: "reset cancelled", code: "memory.cancelled", message: "nothing reset" });

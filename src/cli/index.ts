@@ -461,11 +461,15 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
   "memory edit": {
     spec: {
       name: "memory edit",
-      summary: "Edit a file of a memory in $EDITOR.",
+      summary: "Edit a file of a memory in $EDITOR, or add, change or delete a store's item.",
       positionals: [MEMORY_FLOW, MEMORY_NAME],
       options: [
         MEMORY_AT,
         { name: "file", type: "string", metavar: "FILE", help: "The file to edit (the memory's index by default)." },
+        { name: "add", type: "string", metavar: "TEXT", help: "VectorDBMemory: add an item holding TEXT." },
+        { name: "id", type: "int", min: 1, metavar: "N", help: "VectorDBMemory: the item whose text --text replaces." },
+        { name: "text", type: "string", metavar: "TEXT", help: "VectorDBMemory: item N's new text." },
+        { name: "delete", type: "int", min: 1, metavar: "N", help: "VectorDBMemory: delete item N." },
         JSON_OPTION,
       ],
     },
@@ -477,8 +481,8 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
   "memory erase": {
     spec: {
       name: "memory erase",
-      summary: "Erase a file, or text in it, from a memory and its history: FLOW NAME FILE, or --at PATH FILE.",
-      positionals: memoryThen({ name: "file", help: "The memory's file to erase from." }),
+      summary: "Erase a file, text in it, or an item from a memory and its history.",
+      positionals: memoryThen({ name: "target", help: "The file to erase from, or a VectorDBMemory's item id." }),
       options: [
         MEMORY_AT,
         { name: "text", type: "string", help: "Erase only this text from the file." },

@@ -3,6 +3,7 @@
 import { reprText, type SourceRange } from "../../diagnostics.ts";
 import { BUILTIN_MEMORY_TOOLS, type MemoryBase } from "../../memory/base.ts";
 import { MEMORY_KEY_PREFIX } from "../../nodes/base.ts";
+import { sameNames } from "../../runtime/memories.ts";
 import { checkVisibleNames, expandGrants, GrantError, type GrantScope, type ToolGrant } from "../../tools/grants.ts";
 import { RESERVED_TOOL_NAMES } from "../../tools/registry.ts";
 import { parseType, type TypeExpr, type TypeRegistry, withMemoryTypes } from "../../typesys/types.ts";
@@ -69,7 +70,7 @@ export function memoryTypeTools(memoryTypes: unknown): ReadonlyMap<string, reado
       throw new TypeError(`${String(name)}: ${error.message}`, { cause: error });
     }
     const known = tools.get(type);
-    if (known !== undefined && known.join() !== names.join()) {
+    if (known !== undefined && !sameNames(known, names)) {
       throw new TypeError(`memoryTypes lists two classes for ${reprText(type)} with different tools`);
     }
     tools.set(type, Object.freeze(names));

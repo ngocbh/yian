@@ -289,7 +289,7 @@ function checkInstance(binding: MemoryBinding, hostTypes: ReadonlyMap<string, re
 }
 
 /** Whether two lists of tool names hold the same names in the same order. */
-function sameNames(a: readonly string[], b: readonly string[]): boolean {
+export function sameNames(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((name, i) => name === b[i]);
 }
 

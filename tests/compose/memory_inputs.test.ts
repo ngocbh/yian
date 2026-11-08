@@ -138,6 +138,27 @@ test("memoryTypes refuses a contract that lists a tool twice", async () => {
   );
 });
 
+test("memoryTypes refuses two classes for one type whose tools differ, even when they join to one text", async () => {
+  const spec = TradeJournal.contract.tools[0]!;
+  /** A host class for the type `Pair` with tools named `names`. */
+  const pair = (names: string[]) =>
+    class extends TradeJournal {
+      static override readonly contract: MemoryContract = {
+        type: "Pair",
+        tools: names.map((name) => ({ ...spec, name })),
+      };
+    };
+  for (const [first, second] of [
+    [["a"], ["b"]],
+    [["a,b"], ["a", "b"]],
+  ]) {
+    await expect(loadFlow(flowWith("q: !str"), { memoryTypes: [pair(first!), pair(second!)] })).rejects.toThrow(
+      "memoryTypes lists two classes for 'Pair' with different tools",
+    );
+  }
+  expect((await loadFlow(flowWith("q: !str"), { memoryTypes: [pair(["a", "b"]), pair(["a", "b"])] })).input).toHaveLength(1);
+});
+
 describe("hostInputs", () => {
   test("a memory input given a plain value is refused", async () => {
     const flow = await loadFlow(flowWith("lessons: !FileMemory\nnotes: !Optional(FileMemory)"));

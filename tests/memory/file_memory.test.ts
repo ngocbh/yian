@@ -1153,6 +1153,18 @@ describe("history and undo", () => {
     await other.close();
   });
 
+  test("an undo of a hand-edited append that left no file is refused, not failed", async () => {
+    const s = await openAt();
+    await apply(s, { op: "append", path: "a.md", text: "one" }, "1");
+    const entry = { ...journalLines()[1]!, id: "h", path: "gone.md", after: "absent", inverse: { truncate: 3 } };
+    const commit = { id: "h", ok: true, version: "v", result: { path: "gone.md" } };
+    fs.appendFileSync(join(root, ".yian/journal.jsonl"), `${JSON.stringify(entry)}\n${JSON.stringify(commit)}\n`);
+    const before = tree(dir);
+    expect(await undo(s, "h")).toEqual(refusal("change `h` can't be undone: its journal entry is damaged"));
+    expect(tree(dir)).toEqual(before);
+    await s.close();
+  });
+
   test.each([
     ["../x.md", "`../x.md` isn't part of the memory: a `..` part"],
     [".yian/identity", "`.yian/identity` isn't part of the memory: a hidden name"],

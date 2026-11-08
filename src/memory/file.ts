@@ -1420,8 +1420,10 @@ class FileMemorySession implements MemorySession {
     let text: string | null;
     if ("text" in inverse) text = inverse.text;
     else if ("absent" in inverse) text = null;
+    // An append always leaves a file: only a hand-edited entry has none to cut back.
+    else if (old === null) return refused(`change ${shownId} can't be undone: its journal entry is damaged`);
     // The file is what the append wrote, so its first bytes are exactly the ones it had before.
-    else text = Buffer.from(old!.text, "utf8").subarray(0, inverse.truncate).toString("utf8");
+    else text = Buffer.from(old.text, "utf8").subarray(0, inverse.truncate).toString("utf8");
     const back: Inverse = old === null ? { absent: true } : { text: old.text };
     return this.#commit({ id, digest, op: "undo", path, author, undoes: changeId }, old, { text, inverse: back });
   }

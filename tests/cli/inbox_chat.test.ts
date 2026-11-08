@@ -1017,6 +1017,7 @@ describe("runOrChat", () => {
         verbose: false,
         engineTrace: false,
         mcpConfig: [],
+        memory: [],
         json: false,
         ...(options.resume === undefined ? { log } : {}),
         ...options,

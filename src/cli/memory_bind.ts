@@ -1,16 +1,27 @@
 /**
- * How the command line binds a flow's memory inputs: the default identity of an unbound input,
- * `<project key>/<flow id>/<input>`, and its location under `~/.yian/memory`, confined there.
+ * How the command line binds a flow's memory inputs to instances: `--memory NAME=PATH` binds one
+ * to a folder, and an unbound one gets its default identity, `<project key>/<flow id>/<input>`,
+ * at its location under `~/.yian/memory`, confined there. The instances are `CliFileMemory`s,
+ * which say when their `open` created the memory.
  *
- * Knows about: the platform's path helpers and the file system.
+ * Knows about: compose (the flow's inputs), memory (`FileMemory`), the type language, the
+ * platform's path helpers and the file system.
  */
 
 import { createHash } from "node:crypto";
 import { lstatSync, type Stats } from "node:fs";
 import { basename, join, relative, sep } from "node:path";
 
+import type { ComposedFlow } from "../compose/build/pipeline.ts";
+import { reprText } from "../diagnostics.ts";
+import type { MemoryBase, MemorySession } from "../memory/base.ts";
+import { FileMemory, type FileMemoryOptions } from "../memory/file.ts";
+import type { Parameter } from "../nodes/contracts.ts";
+import type { JsonObject } from "../typesys/json.ts";
+import { isMemoryType } from "../typesys/values.ts";
 import { isSystemError, leavesRoot } from "../platform.ts";
 import { resolveFlowPath } from "./confined_load.ts";
+import { UsageError } from "./utils.ts";
 
 /** Hex digits of the real-path hash in a project key. */
 const PROJECT_KEY_HEX = 8;
@@ -101,4 +112,90 @@ function lstatOrNull(path: string): Stats | null {
     if (isSystemError(error) && error.code === "ENOENT") return null;
     throw error;
   }
+}
+
+/** What `bindMemories` needs beside the flow and the flags. */
+export interface BindOptions {
+  /** The home folder whose `~/.yian/memory` holds the default memories. */
+  home: string;
+  /** Shows the user a line, such as the one an instance's `open` gives when it creates a memory. */
+  note: (line: string) => void;
+}
+
+/**
+ * A FileMemory the command line binds: its `open` notes, through `note`, each memory it creates
+ * (or adopts), with the inputs bound to it, its identity and its folder.
+ */
+class CliFileMemory extends FileMemory {
+  /** The inputs bound to this instance, in the order they were bound. */
+  readonly inputs: string[] = [];
+  readonly #note: (line: string) => void;
+
+  constructor(options: FileMemoryOptions, note: (line: string) => void) {
+    super(options);
+    this.#note = note;
+  }
+
+  override async open(o: { create: boolean; itemType: JsonObject | null; signal: AbortSignal }): Promise<MemorySession> {
+    const session = await super.open(o);
+    if (session.created) this.#note(`memory ${this.inputs.join(", ")}: ${session.info.identity} at ${this.root} (new)`);
+    return session;
+  }
+}
+
+/**
+ * Return the `--memory NAME=PATH` flags as each named memory input's path, checked against the
+ * flow's inputs `params`. The name is trimmed; the path is everything after the first `=`.
+ *
+ * @throws {UsageError} For a flag without `=` or a path, a name that isn't a memory input or
+ *   comes twice, or a `.db` path for a FileMemory input.
+ */
+export function memoryFlags(params: readonly Parameter[], flags: readonly string[]): Map<string, string> {
+  const paths = new Map<string, string>();
+  const refuse = (why: string) => new UsageError(`Invalid value for --memory: ${why}`);
+  for (const flag of flags) {
+    const at = flag.indexOf("=");
+    if (at === -1) throw new UsageError(`Invalid value: --memory must be NAME=PATH (got ${reprText(flag)})`);
+    const name = flag.slice(0, at).trim();
+    const path = flag.slice(at + 1);
+    const param = params.find((each) => each.name === name);
+    const typ = param?.contract?.type;
+    if (param === undefined) throw refuse(`the flow has no memory input \`${name}\``);
+    if (!isMemoryType(typ)) throw refuse(`input \`${name}\` isn't a memory`);
+    if (paths.has(name)) throw refuse(`\`${name}\` is given twice`);
+    if (path === "") throw refuse(`\`${name}\` needs a path`);
+    if (typ.memory === "FileMemory" && path.endsWith(".db")) {
+      throw refuse(`\`${name}\` is a FileMemory, a folder, not a .db file`);
+    }
+    paths.set(name, path);
+  }
+  return paths;
+}
+
+/**
+ * Return the instance each memory input of `flow` that a `--memory` flag names is bound to, by
+ * input name. Inputs given one folder, however its path is spelled, share one instance.
+ *
+ * @throws {UsageError} As `memoryFlags` throws.
+ * @throws {RangeError} For an input of a memory type the command line can't bind.
+ */
+export function bindMemories(flow: ComposedFlow, flags: readonly string[], options: BindOptions): Record<string, MemoryBase> {
+  const paths = memoryFlags(flow.input, flags);
+  const bound: Record<string, MemoryBase> = {};
+  const byRoot = new Map<string, CliFileMemory>();
+  for (const param of flow.input) {
+    const typ = param.contract?.type;
+    const path = paths.get(param.name);
+    if (!isMemoryType(typ) || path === undefined) continue;
+    if (typ.memory !== "FileMemory") {
+      throw new RangeError(`\`${param.name}\` is a ${typ.memory}; the command line binds only FileMemory inputs`);
+    }
+    const made = new CliFileMemory({ root: path }, options.note);
+    // Keyed by the real folder, so two spellings of one path share one memory.
+    const instance = byRoot.get(made.root) ?? made;
+    byRoot.set(instance.root, instance);
+    instance.inputs.push(param.name);
+    bound[param.name] = instance;
+  }
+  return bound;
 }

@@ -130,6 +130,13 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
             "first when it exists.",
         },
         {
+          name: "memory",
+          type: "string",
+          multiple: true,
+          metavar: "NAME=PATH",
+          help: "Bind memory input NAME to the folder PATH (repeatable); inputs given one path share it.",
+        },
+        {
           name: "json",
           type: "boolean",
           help: "Print one yian.cli.v1 JSON document on stdout: the run's result, or the error that stopped it.",
@@ -154,6 +161,7 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
             model: o["model"] as string | undefined,
             engineTrace: o["engine-trace"] === true,
             mcpConfig: o["mcp-config"] as string[],
+            memory: o["memory"] as string[],
             json: o["json"] === true,
           },
           io,

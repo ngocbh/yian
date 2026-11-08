@@ -43,6 +43,7 @@ import {
   canonicalTypeLabel,
   FileRef,
   isInboxType,
+  isMemoryType,
   isRecord,
   type Value,
   writeAsText,
@@ -60,7 +61,7 @@ import {
 } from "../llm_clients/connection.ts";
 import { checkInputNames } from "../nodes/binding.ts";
 import type { Parameter } from "../nodes/contracts.ts";
-import { FileLockError, isSystemError, sqliteErrorCode, statOrNull, withWarnings } from "../platform.ts";
+import { FileLockError, homeDir, isSystemError, sqliteErrorCode, statOrNull, withWarnings } from "../platform.ts";
 import {
   advance,
   inspectRun,
@@ -81,6 +82,7 @@ import { McpConnectError, McpSdkMissingError, type McpServer } from "../tools/mc
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { loadConfined } from "./confined_load.ts";
 import { loadMcpConfig, McpConfigError, userMcpConfig } from "./mcp_config.ts";
+import { bindMemories } from "./memory_bind.ts";
 import {
   box,
   diagnosticJson,
@@ -477,9 +479,10 @@ export const INPUTS_HINT = "Invalid value for '--input' / '--inputs'";
 
 /**
  * @internal Check that each name in `supplied` is one of `decls`' inputs that take a value at the
- * start; an inbox input takes events through `send`, so a value for one is refused too.
+ * start; an inbox input takes events through `send`, and a memory input is bound with `--memory`,
+ * so a value for either is refused too.
  *
- * @throws {UsageError} For a name of an inbox input, or one no input has.
+ * @throws {UsageError} For a name of an inbox or memory input, or one no input has.
  */
 export function checkSuppliedInputs(decls: readonly Parameter[], supplied: Readonly<Record<string, unknown>>): void {
   // An inbox takes events through `send`, never a value at the start.
@@ -489,6 +492,9 @@ export function checkSuppliedInputs(decls: readonly Parameter[], supplied: Reado
     const name = JSON.stringify(inbox.sort(compareCodeUnits)[0]);
     throw new UsageError(`${INPUTS_HINT}: input ${name} is an inbox; it takes messages through send, not a value`);
   }
+  // A memory is bound to an instance, never given as a value.
+  const memory = decls.find((decl) => isMemoryType(decl.contract?.type) && Object.hasOwn(supplied, decl.name));
+  if (memory !== undefined) throw new UsageError(`${INPUTS_HINT}: \`${memory.name}\` is a memory; bind it with --memory`);
   const values = decls.filter((decl) => !isInbox(decl));
   try {
     checkInputNames(values, supplied);
@@ -501,8 +507,8 @@ export function checkSuppliedInputs(decls: readonly Parameter[], supplied: Reado
 /**
  * @internal Return the inputs to add to `supplied`: each declaration it lacks (key presence)
  * answered at `terminal`'s prompts, or `{}` without a terminal, leaving optional and defaulted
- * inputs absent for START. An inbox input is never asked for. Returns null when a prompt is
- * cancelled.
+ * inputs absent for START. An inbox or memory input is never asked for. Returns null when a prompt
+ * is cancelled.
  *
  * @throws {UsageError} Without a terminal, when required inputs are missing, naming them all in
  *   declaration order.
@@ -512,8 +518,8 @@ export async function gatherMissingInputs(
   supplied: Readonly<Record<string, unknown>>,
   terminal: Terminal | null,
 ): Promise<Record<string, unknown> | null> {
-  // An inbox takes events through `send`, never a value at the start.
-  const values = decls.filter((decl) => !isInboxType(decl.contract?.type ?? null));
+  // An inbox takes events through `send`, and a memory is bound, never a value given at the start.
+  const values = decls.filter((decl) => !isInboxType(decl.contract?.type ?? null) && !isMemoryType(decl.contract?.type));
   if (terminal !== null) return terminal.promptInputs(values, supplied);
   const required = values.filter((decl) => decl.required && !Object.hasOwn(supplied, decl.name));
   if (required.length > 0) {
@@ -643,6 +649,8 @@ export interface RunOptions {
   model?: string | undefined;
   engineTrace: boolean;
   mcpConfig: readonly string[];
+  /** The `--memory NAME=PATH` flags. */
+  memory: readonly string[];
   json: boolean;
 }
 
@@ -1123,6 +1131,9 @@ async function startRun(
     return fail(new Diagnostic({ code: "run.setup", message }));
   };
   const writeStack = (error: Error) => writeEngineTrace(error, engineTrace, io);
+  // A memory's own line, such as the one its `open` gives when it creates it.
+  const memoryNote = (line: string) =>
+    void io.stderr.write(`${paint(forTerminal(line, io.stderr), "dim", io.stderr, io.env)}\n`).catch(() => {});
   const action = options.resume === undefined ? "run" : "resume";
   // Only the MCP selection's lines follow the message; the error's own notes, such as a cleanup
   // failure's, stay out of it.
@@ -1259,6 +1270,7 @@ async function startRun(
       const supplied = mergeInputs(options.inputs, options.inputValues);
       // Before prompting, so a typo'd name fails instead of prompting for the real one.
       checkSuppliedInputs(flow.input, supplied);
+      const memories = bindMemories(flow, options.memory, { home: homeDir(io.env), note: memoryNote });
       // A signal during the load stops the command before it prompts.
       controller.signal.throwIfAborted();
       const prompter = io.stdin.isTTY === true ? terminal : null;
@@ -1281,7 +1293,7 @@ async function startRun(
       return startLogged(
         log,
         (tools) =>
-          runFlow(flow, supplied, {
+          runFlow(flow, { ...supplied, ...memories }, {
             log,
             runId,
             llmConfig: Object.keys(cliCfg).length > 0 ? cliCfg : null,

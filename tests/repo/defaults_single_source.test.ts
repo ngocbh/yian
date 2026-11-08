@@ -31,6 +31,7 @@ const ALLOWED: Record<string, string> = {
   "runtime/log.ts: SCHEMA_VERSION": "run-record schema version",
   "runtime/log.ts: RETIRED_SCHEMAS": "schema versions this version refuses by name",
   "runtime/run_index.ts: INDEX_VERSION": "run index layout version",
+  "memory/vectordb.ts: SEARCH_CHUNK_ROWS": "rows a VectorDBMemory search reads at once, so its memory use stays bounded",
   "platform.ts: SQLITE_BUSY": "SQLite result code",
   "platform.ts: SQLITE_LOCKED": "SQLite result code",
   "platform.ts: SQLITE_CANTOPEN": "SQLite result code",

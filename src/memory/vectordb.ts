@@ -37,7 +37,8 @@ import {
   syncFolder,
   waitForLock,
 } from "../platform.ts";
-import { canonicalJson, type JsonObject, logJson, parseJson } from "../typesys/json.ts";
+import { ReportedToolError } from "../tools/errors.ts";
+import { canonicalJson, type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
 import {
   type Applied,
   type Author,
@@ -51,10 +52,13 @@ import {
   type MemoryToolSpec,
   type Recall,
 } from "./base.ts";
-import { isObject, openRegular } from "./file_journal.ts";
+import { charCount, isObject, openRegular } from "./file_journal.ts";
 
 /** The layout of the store's tables; a store of another layout is refused. */
 const STORE_VERSION = 1;
+
+/** The rows a search reads at once, so its memory use stays bounded however many items there are. */
+const SEARCH_CHUNK_ROWS = 1_000;
 
 /** The store's tables, made in one transaction when the store is created. */
 const SCHEMA = `
@@ -326,7 +330,10 @@ function makeFolder(folder: string): void {
   }
 }
 
-/** Make the empty store file `path`, private, and sync it into its folder. SQLite reads an empty file as an empty database. */
+/**
+ * Make the empty store file `path`, private, and sync it into its folder. SQLite reads an empty
+ * file as an empty database.
+ */
 function makeStoreFile(path: string): void {
   const { O_CREAT, O_EXCL, O_WRONLY } = fs.constants;
   const fd = openRegular(path, O_CREAT | O_EXCL | O_WRONLY, 0o600);
@@ -498,6 +505,194 @@ function itemTypeProblem(stored: JsonObject | null, given: JsonObject | null): s
   return "this memory's items have another type than its input's; bind a memory made with that type";
 }
 
+/** Return `count` and `noun`, plural unless `count` is 1: `plural(2, "item")` is `"2 items"`. */
+function plural(count: number, noun: string): string {
+  return `${count} ${count === 1 ? noun : `${noun}s`}`;
+}
+
+/** Return the first `limit` code points of `text`. */
+function firstChars(text: string, limit: number): string {
+  let index = 0;
+  for (let n = 0; n < limit && index < text.length; n++) index += text.codePointAt(index)! > 0xffff ? 2 : 1;
+  return text.slice(0, index);
+}
+
+/** A refusal the calling model reads: a TOOL node doesn't retry it, since it can't change. */
+function refusal(message: string): ReportedToolError {
+  return new ReportedToolError(message, { permanent: true });
+}
+
+/** Return `args[name]` when it is a string, or `undefined` when it is absent and not `required`. */
+function stringArg(args: JsonObject, name: string, required: true): string;
+function stringArg(args: JsonObject, name: string, required: false): string | undefined;
+function stringArg(args: JsonObject, name: string, required: boolean): string | undefined {
+  const value = Object.hasOwn(args, name) ? args[name] : undefined;
+  if (value === undefined && !required) return undefined;
+  if (typeof value !== "string" || !value.isWellFormed()) {
+    throw new TypeError(`VectorDBMemory ${name} must be a string`);
+  }
+  return value;
+}
+
+/**
+ * Return `args[name]` as a number when it is an integer of at least 1, or `undefined` when it is
+ * absent and not `required`.
+ */
+function intArg(args: JsonObject, name: string, required: true): number;
+function intArg(args: JsonObject, name: string, required: false): number | undefined;
+function intArg(args: JsonObject, name: string, required: boolean): number | undefined {
+  const value = Object.hasOwn(args, name) ? args[name] : undefined;
+  if (value === undefined && !required) return undefined;
+  const number = typeof value === "bigint" ? Number(value) : value;
+  if (typeof number !== "number" || !Number.isSafeInteger(number) || number < 1) {
+    throw new TypeError(`VectorDBMemory ${name} must be an integer of at least 1`);
+  }
+  return number;
+}
+
+/** Return the vector a store row's `bytes` hold: float32s, in the byte order every platform yian runs on uses. */
+function vectorOf(bytes: Uint8Array): Float32Array {
+  const size = Float32Array.BYTES_PER_ELEMENT;
+  // A view needs aligned bytes; the drivers don't promise them.
+  if (bytes.byteOffset % size === 0) return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / size);
+  return new Float32Array(bytes.slice().buffer);
+}
+
+/** Return the bytes a store row keeps for `vector`. */
+function bytesOf(vector: Float32Array): Uint8Array {
+  return new Uint8Array(vector.buffer.slice(vector.byteOffset, vector.byteOffset + vector.byteLength));
+}
+
+/** Return the Euclidean length of `vector`. */
+function norm(vector: Float32Array): number {
+  let sum = 0;
+  for (const x of vector) sum += x * x;
+  return Math.sqrt(sum);
+}
+
+/** Return the cosine similarity of `query`, whose length is `queryNorm`, and `vector`; 0 when either is zero. */
+function cosine(query: Float32Array, queryNorm: number, vector: Float32Array): number {
+  let dot = 0;
+  let sum = 0;
+  for (let i = 0; i < query.length; i++) {
+    dot += query[i]! * vector[i]!;
+    sum += vector[i]! * vector[i]!;
+  }
+  return queryNorm === 0 || sum === 0 ? 0 : dot / (queryNorm * Math.sqrt(sum));
+}
+
+/** Return the yian value a store column holds as yian JSON, or `null` for none. */
+function storedJson(text: unknown): JsonValue {
+  return typeof text === "string" ? parseJson(text, "codec") : null;
+}
+
+/** An item row as the store holds it. */
+interface ItemRow {
+  readonly id: number;
+  readonly version: number;
+  readonly text: string;
+  /** The fields as yian JSON, or `null` for an item that is text only. */
+  readonly fields: string | null;
+  /** The author as JSON. */
+  readonly author: string;
+  /** Why it was retired, or `null` while it is live. */
+  readonly retired: string | null;
+}
+
+/** Return the item `id`'s row, or `undefined` when there is none. */
+function itemRow(db: Sqlite, id: number): ItemRow | undefined {
+  return db.prepare("SELECT id, text, fields, version, author, retired FROM items WHERE id = ?").get(id) as
+    | ItemRow
+    | undefined;
+}
+
+/**
+ * Return `row` as a tool result shows an item: its id, version, text and fields, and with `full`
+ * its author and why it was retired.
+ */
+function itemResult(row: ItemRow, full: boolean): JsonObject {
+  const item: JsonObject = { id: BigInt(row.id), version: BigInt(row.version), text: row.text };
+  if (row.fields !== null) item.fields = storedJson(row.fields);
+  if (!full) return item;
+  item.author = storedJson(row.author);
+  if (row.retired !== null) item.retired = row.retired;
+  return item;
+}
+
+/** Return the store's change counter: the memory's version. */
+function storedVersion(db: Sqlite): number {
+  return Number(db.prepare("SELECT value FROM meta WHERE key = 'version'").get()!.value);
+}
+
+/** Return the number of items that aren't retired. */
+function liveCount(db: Sqlite): number {
+  return Number(db.prepare("SELECT count(*) AS n FROM items WHERE retired IS NULL").get()!.n);
+}
+
+/** Return `text` as one entry of the recall: its later lines indented under the first. */
+function recallLine(id: number, text: string): string {
+  return `[${id}] ${text.replaceAll("\n", "\n  ")}`;
+}
+
+/**
+ * Return the recall: the count of items that aren't retired, then the `recallRecent` newest of them
+ * (by their last change), all within `maxRecallChars`. An item that doesn't fit is left out whole
+ * and counted in the cut note, and an older one that fits still shows.
+ */
+function recallOf(db: Sqlite, limits: Limits): Recall {
+  const count = liveCount(db);
+  const header = firstChars(plural(count, "item"), limits.maxRecallChars);
+  const lines = [header];
+  let used = charCount(header);
+  let unshown = 0;
+  const newest = db
+    .prepare("SELECT id, text FROM items WHERE retired IS NULL ORDER BY version DESC, id DESC LIMIT ?")
+    .all(limits.recallRecent);
+  for (const row of newest) {
+    const line = recallLine(row.id as number, row.text as string);
+    const cost = charCount(line) + 1;
+    if (used + cost > limits.maxRecallChars) {
+      unshown++;
+      continue;
+    }
+    lines.push(line);
+    used += cost;
+  }
+  return {
+    text: lines.join("\n"),
+    cut: unshown > 0 ? `${unshown} of the ${newest.length} newest items not shown` : null,
+    hint: count > 0 ? { tool: "search", text: "Search them with {tool}." } : null,
+  };
+}
+
+/**
+ * Check that `vectors` is one non-empty vector of finite numbers per text, `count` in all, each of
+ * one length.
+ *
+ * @throws Error naming what is wrong, for an embedder that breaks its contract.
+ */
+function checkVectors(vectors: unknown, count: number): Float32Array[] {
+  if (!Array.isArray(vectors) || vectors.length !== count) {
+    const got = Array.isArray(vectors) ? vectors.length : 0;
+    throw new Error(`the embedder returned ${plural(got, "vector")} for ${plural(count, "text")}`);
+  }
+  for (const vector of vectors) {
+    if (!(vector instanceof Float32Array) || vector.length === 0 || !vector.every(Number.isFinite)) {
+      throw new Error("the embedder returned a vector that isn't a non-empty list of finite numbers");
+    }
+    if (vector.length !== (vectors[0] as Float32Array).length) {
+      throw new Error("the embedder returned vectors of different lengths");
+    }
+  }
+  return vectors as Float32Array[];
+}
+
+/** Return the length of the store's vectors, or `null` while it holds no item. */
+function storedDimensions(db: Sqlite): number | null {
+  const row = db.prepare("SELECT length(vector) AS bytes FROM items LIMIT 1").get();
+  return row === undefined ? null : (row.bytes as number) / Float32Array.BYTES_PER_ELEMENT;
+}
+
 /** What a session needs of its memory: the store, its caps, its lock and its clock. */
 interface Store {
   /** The store's SQLite file, symlinks resolved. */
@@ -631,7 +826,9 @@ export class VectorDBMemory extends MemoryBase {
     if (typeof path !== "string" || path === "" || path.includes("\0")) {
       throw new TypeError("VectorDBMemory path must be a file path");
     }
-    if (id !== undefined && !isLine(id)) throw new TypeError("VectorDBMemory id must be a non-empty string on one line");
+    if (id !== undefined && !isLine(id)) {
+      throw new TypeError("VectorDBMemory id must be a non-empty string on one line");
+    }
     const embedding = options.embedding === undefined ? undefined : checkEmbedding(options.embedding);
     if (options.embed !== undefined && typeof options.embed !== "function") {
       throw new TypeError("VectorDBMemory embed must be a function");
@@ -796,15 +993,18 @@ function sessionInfo(meta: Meta, limits: Limits): MemoryInfo {
   });
 }
 
+/** A body that runs on the store holding its lock; like `Held`, it can't be async. */
+type OnStore<T> = ((db: Sqlite) => T) & (T extends PromiseLike<unknown> ? never : unknown);
+
 /** One open VectorDBMemory. Every call takes the memory's lock; embedding happens outside it. */
 class VectorDBSession implements MemorySession {
   readonly info: MemoryInfo;
   readonly created: boolean;
   readonly #store: Store;
-  /** The identity and settings the session was opened with, which every access checks the store still holds. */
+  /** The settings the store held when the session opened, which every access checks it still holds. */
   readonly #stored: StoredSettings;
   /** The session's calls and turns not yet settled: `close` waits for them. */
-  readonly #pending = new Set<Promise<unknown>>();
+  readonly #pending = new Set<Promise<void>>();
   #closed = false;
 
   /**
@@ -820,14 +1020,60 @@ class VectorDBSession implements MemorySession {
     this.created = created;
   }
 
+  /**
+   * Read the version and the recall in one read under the lock.
+   *
+   * @throws {MemoryBusyError} If another writer holds the lock past the timeout.
+   */
   async snapshot(): Promise<{ version: string; recall: Recall }> {
     this.#checkOpen();
-    throw new Error("VectorDBMemory snapshot isn't available yet");
+    return this.#locked(undefined, (db) => ({
+      version: String(storedVersion(db)),
+      recall: recallOf(db, this.#store.limits),
+    }));
   }
 
-  async call(_tool: string, _args: JsonObject, _o: { signal: AbortSignal }): Promise<JsonObject> {
+  /**
+   * Call the read tool `tool`: `search`, `read` or `list`. A search embeds its query before it
+   * takes the lock.
+   *
+   * @throws {ReportedToolError} (permanent) For a missing item, an empty or too long query, or a
+   *   `k` past `maxK`, with the reason.
+   * @throws {TypeError} For a tool that isn't a read tool, or an argument of the wrong type.
+   * @throws Error when the embedder fails or breaks its contract, and the embedder's own errors.
+   */
+  async call(tool: string, args: JsonObject, o: { signal: AbortSignal }): Promise<JsonObject> {
     this.#checkOpen();
-    throw new Error("VectorDBMemory tools aren't available yet");
+    o.signal.throwIfAborted();
+    const spec = this.info.tools.find((each) => each.name === tool);
+    if (spec === undefined) {
+      const names = this.info.tools.map((each) => each.name).join(", ");
+      throw new TypeError(`VectorDBMemory has no tool ${tool}; it has ${names}`);
+    }
+    if (spec.write) throw new TypeError(`${tool} is a write tool: apply it as a change`);
+    if (!isObject(args)) throw new TypeError(`VectorDBMemory ${tool} takes its arguments as an object`);
+    if (tool === "search") return this.#track(this.#search(args, o.signal));
+    if (tool === "read") {
+      const id = intArg(args, "id", true);
+      return this.#locked(o.signal, (db) => {
+        const row = itemRow(db, id);
+        if (row === undefined) throw refusal(`item ${id} doesn't exist`);
+        return itemResult(row, true);
+      });
+    }
+    const recent = Math.min(intArg(args, "recent", false) ?? Number.POSITIVE_INFINITY, this.#store.limits.maxK);
+    return this.#locked(o.signal, (db) => {
+      const rows = db
+        .prepare(
+          "SELECT id, text, fields, version, author, retired FROM items WHERE retired IS NULL " +
+            "ORDER BY version DESC, id DESC LIMIT ?",
+        )
+        .all(recent) as unknown as ItemRow[];
+      const result: JsonObject = { items: rows.map((row) => itemResult(row, false)) };
+      const more = liveCount(db) - rows.length;
+      if (more > 0) result.cut = `${more} more; search them`;
+      return result;
+    });
   }
 
   async apply(_c: { id: string; change: JsonObject; author: Author; signal: AbortSignal }): Promise<Applied> {
@@ -853,13 +1099,152 @@ class VectorDBSession implements MemorySession {
   /** Close the session once every call and turn it started has settled; later calls reject. */
   async close(): Promise<void> {
     this.#closed = true;
-    // A call may queue its second turn while the first settles, so wait until none is left.
-    while (this.#pending.size > 0) await Promise.allSettled([...this.#pending]);
-    void this.#stored;
+    // A change queues its second turn after its first settles, so wait until none is left.
+    while (this.#pending.size > 0) await Promise.all([...this.#pending]);
+  }
+
+  /**
+   * Embed `query`, then return the `k` items most like it, best first, among those that aren't
+   * retired and whose fields equal `filter`'s values. The store is read `SEARCH_CHUNK_ROWS` rows
+   * at a time.
+   */
+  async #search(args: JsonObject, signal: AbortSignal): Promise<JsonObject> {
+    const { limits } = this.#store;
+    const query = stringArg(args, "query", true);
+    const k = intArg(args, "k", true);
+    const filter = Object.hasOwn(args, "filter") ? args.filter : undefined;
+    if (filter !== undefined && !isObject(filter)) throw new TypeError("VectorDBMemory filter must be an object");
+    if (filter !== undefined && this.#stored.item_schema === null) {
+      throw new TypeError("this memory's items are text only; they have no fields to filter");
+    }
+    if (k > limits.maxK) throw refusal(`k is ${k}; search returns at most ${limits.maxK} items`);
+    if (query === "") throw refusal("query is empty");
+    const chars = charCount(query);
+    if (chars > limits.maxTextChars) {
+      throw refusal(`the query is ${chars} characters; it may be at most ${limits.maxTextChars}`);
+    }
+    const wanted = Object.entries(filter ?? {}).map(([key, value]) => [key, canonicalJson(value)] as const);
+    const [vector] = await this.#embed([query], signal);
+    const queryNorm = norm(vector!);
+    return this.#locked(signal, (db) => {
+      const best: { id: number; score: number }[] = [];
+      const page = db.prepare(
+        "SELECT id, fields, vector FROM items WHERE retired IS NULL AND id > ? ORDER BY id LIMIT ?",
+      );
+      for (let after = 0; ; ) {
+        const rows = page.all(after, SEARCH_CHUNK_ROWS);
+        for (const row of rows) {
+          const id = row.id as number;
+          after = id;
+          const item = vectorOf(row.vector as Uint8Array);
+          if (item.length !== vector!.length) {
+            throw new Error(
+              `the query's embedding has ${vector!.length} dimensions, but this memory's items have ${item.length}; ` +
+                "re-embed it with `yian memory reembed`",
+            );
+          }
+          if (wanted.length > 0) {
+            const fields = storedJson(row.fields);
+            const matches = (key: string, value: string) =>
+              isObject(fields) && Object.hasOwn(fields, key) && canonicalJson(fields[key]) === value;
+            if (!wanted.every(([key, value]) => matches(key, value))) continue;
+          }
+          const score = cosine(vector!, queryNorm, item);
+          // Kept best first; an equal score keeps the lower id first, since rows come in id order.
+          let at = best.length;
+          while (at > 0 && best[at - 1]!.score < score) at--;
+          if (at < k) best.splice(at, 0, { id, score });
+          if (best.length > k) best.pop();
+        }
+        if (rows.length < SEARCH_CHUNK_ROWS) break;
+      }
+      const items = best.map(({ id, score }) => {
+        const { version, text, fields } = itemResult(itemRow(db, id)!, false);
+        // Rounded for the model and the run log; the ranking used the exact score.
+        const item: JsonObject = { id: BigInt(id), version: version!, score: Math.round(score * 10_000) / 10_000 };
+        item.text = text!;
+        if (fields !== undefined) item.fields = fields;
+        return item;
+      });
+      return { items };
+    });
+  }
+
+  /**
+   * Return the vectors of `texts` from the embedding model the store holds.
+   *
+   * @throws Error when the memory was built with no embed function, or the embedder breaks its
+   *   contract; the embedder's own errors pass through.
+   */
+  async #embed(texts: readonly string[], signal: AbortSignal): Promise<Float32Array[]> {
+    const { embed } = this.#store;
+    if (embed === undefined) {
+      throw new Error("this VectorDBMemory has no embed function; build it with one to search or write");
+    }
+    const { provider, model } = this.#stored.embedding;
+    return checkVectors(await embed(texts, { provider, model, signal }), texts.length);
+  }
+
+  /**
+   * Check that the store still holds the memory this session opened: its identity, and the
+   * settings its vectors depend on.
+   *
+   * @throws Error when it was replaced or re-embedded since.
+   */
+  #checkStore(db: Sqlite): void {
+    const { identity } = this.info;
+    const meta = readMeta(db, "the memory's store");
+    if (meta === null || meta.identity !== identity) {
+      const now = meta === null ? "nothing" : shown(meta.identity);
+      throw new Error(
+        `this memory's store now holds ${now}, not ${shown(identity)}: it was replaced while this session had it open`,
+      );
+    }
+    if (modelName(meta.settings.embedding) !== modelName(this.#stored.embedding)) {
+      throw new Error(
+        `this memory was re-embedded with ${modelName(meta.settings.embedding)} while this session had it open; ` +
+          "open it again",
+      );
+    }
+    if (settingsText(meta.settings) !== settingsText(this.#stored)) {
+      throw new Error("this memory's settings changed while this session had it open; open it again");
+    }
   }
 
   /** Throw when the session is closed. */
   #checkOpen(): void {
     if (this.#closed) throw new Error("this VectorDBMemory session is closed");
+  }
+
+  /** Return `promise`, keeping it among the pending calls `close` waits for until it settles. */
+  #track<T>(promise: Promise<T>): Promise<T> {
+    const settled = promise.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.#pending.add(settled);
+    void settled.then(() => this.#pending.delete(settled));
+    return promise;
+  }
+
+  /**
+   * Run `body` on the store holding the memory's lock, in this process's turn on the store, after
+   * checking the store is still the session's. Its errors name no location.
+   */
+  #locked<T>(signal: AbortSignal | undefined, body: OnStore<T>): Promise<T> {
+    const { path } = this.#store;
+    const run = () =>
+      withDb(path, (db) => {
+        this.#checkStore(db);
+        return body(db);
+      });
+    const { result, done } = this.#store.locked(signal, run as Held<T>);
+    // The turn itself, not the call: an abort while queued lets the call go before its turn runs.
+    this.#track(done);
+    return this.#track(
+      result.catch((error: unknown) => {
+        throw withoutLocation(error, path);
+      }),
+    );
   }
 }

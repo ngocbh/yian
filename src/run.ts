@@ -890,10 +890,10 @@ function suppliedValue(record: Readonly<Record<string, unknown>>, name: string):
 }
 
 /**
- * @internal Return the memory inputs `inputs` binds to `MemoryBase` instances, in declaration
- * order, each with its input's memory type and item type. `hostInputs` checked them first.
+ * Return the memory inputs `inputs` binds to `MemoryBase` instances, in declaration order, each
+ * with its input's memory type and item type. `hostInputs` checked them first.
  */
-export function memoryBindings(params: readonly Parameter[], inputs: Readonly<Record<string, unknown>>): MemoryBinding[] {
+function memoryBindings(params: readonly Parameter[], inputs: Readonly<Record<string, unknown>>): MemoryBinding[] {
   const bindings: MemoryBinding[] = [];
   for (const param of params) {
     const typ = param.contract?.type;

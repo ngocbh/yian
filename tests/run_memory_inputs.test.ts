@@ -12,6 +12,7 @@ import { loadFlow } from "../src/compose/loader.ts";
 import { ScriptedModel } from "../src/llm/testing.ts";
 import { FileMemory } from "../src/memory/file.ts";
 import { withWarnings } from "../src/platform.ts";
+import * as runModule from "../src/run.ts";
 import { hostInputs, inspectRun, type RunFlowOptions, runFlow } from "../src/run.ts";
 import { FunctionTool } from "../src/tools/function_tools.ts";
 import type { JsonObject } from "../src/typesys/json.ts";
@@ -210,4 +211,8 @@ test("a memory that fails to close after the call failed is noted on its error, 
   expect(memory.opens).toBe(1);
   expect(error?.notes).toEqual(["closing memory `t/lessons` also raised Error: rpc close failed"]);
   expect(warnings).toEqual([]);
+});
+
+test("the run entry point doesn't export how it reads memory bindings", () => {
+  expect("memoryBindings" in runModule).toBe(false);
 });

@@ -305,6 +305,50 @@ describe("yian memory edit", () => {
     rmSync(join(kept, ".."), { recursive: true });
   });
 
+  test("edited text that isn't applied for any reason is kept, and edit says where", async () => {
+    const flow = flowFile();
+    await runOnce(flow, "first");
+    /** The copy `stderr` names, read and removed. */
+    const keptText = (stderr: string): string => {
+      const kept = /your text is in (.+)$/m.exec(stderr)![1]!;
+      const text = readFileSync(kept, "utf8");
+      rmSync(join(kept, ".."), { recursive: true });
+      return text;
+    };
+    // The command is stopped while the person edits: the change never applies.
+    const stop = new AbortController();
+    const stopped = await yian(["memory", "edit", flow, "lessons", "--json"], {
+      stop: stop.signal,
+      editor: async (path) => {
+        writeFileSync(path, "first\nstopped");
+        stop.abort(new Error("stopped by the test"));
+      },
+    });
+    expect(stopped.code).toBe(1);
+    expect(stopped.stderr).toContain("edit failed: stopped by the test; your text is in ");
+    expect(JSON.parse(stopped.stdout).error.code).toBe("memory.failed");
+    expect(keptText(stopped.stderr)).toBe("first\nstopped");
+    // The editor fails after the person typed.
+    const crashed = await yian(["memory", "edit", flow, "lessons"], {
+      editor: async (path) => {
+        writeFileSync(path, "first\ntyped");
+        throw new RangeError("the editor exited with code 1; nothing was changed");
+      },
+    });
+    expect(crashed.code).toBe(1);
+    expect(keptText(crashed.stderr)).toBe("first\ntyped");
+    expect(readFileSync(join(lessons().location, "MEMORY.md"), "utf8")).toBe("first");
+    // An editor that fails before anything was typed leaves nothing behind.
+    const untouched = await yian(["memory", "edit", flow, "lessons"], {
+      editor: async () => {
+        throw new RangeError("the editor didn't start");
+      },
+    });
+    expect(untouched.code).toBe(1);
+    expect(untouched.stderr).not.toContain("your text is in");
+    expect(readdirSync(join(tmp, "tmpdir"))).toEqual([]);
+  });
+
   test("--file names another file, made when it is new; an unchanged file changes nothing", async () => {
     const flow = flowFile();
     await runOnce(flow, "first");

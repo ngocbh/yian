@@ -17,7 +17,7 @@ import { basename, join } from "node:path";
 
 import { type Env, processEnvNames } from "../defaults.ts";
 import { compareCodeUnits, Diagnostic } from "../diagnostics.ts";
-import { type Author, type ChangeEntry, memoryErrorKind, type MemorySession } from "../memory/base.ts";
+import { type Applied, type Author, type ChangeEntry, memoryErrorKind, type MemorySession } from "../memory/base.ts";
 import { FileMemory, type MemberFile, readMembers } from "../memory/file.ts";
 import { homeDir, isSystemError, withWarnings } from "../platform.ts";
 import { readRunIndex, type RunIndexRow, updateRunIndex } from "../run.ts";
@@ -410,24 +410,37 @@ async function runEditor(env: Env, path: string): Promise<void> {
  * `yian memory edit`: open a file of the memory (`--file`, the memory's index by default) in an
  * editor (`$EDITOR`), on a private copy, then apply what the person wrote as the user: a `rewrite`
  * of the file, checked against the hash it had when it was read, or a `create` for a new file. An
- * unchanged file changes nothing. A file changed meanwhile prints `edit refused: <reason>` (a
- * `memory.conflict` document) and the copy that keeps the edited text, and exits 1. `--json`
- * prints `{change, version}` for an edit, or `{change: null}` for none.
+ * unchanged file changes nothing. Edited text that isn't applied is never lost: the copy stays and
+ * the message says where. A file changed meanwhile prints `edit refused: <reason>` (a
+ * `memory.conflict` document); a failure of the editor or the change prints `edit failed:
+ * <message>` (`memory.failed`); either exits 1. `--json` prints `{change, version}` for an edit,
+ * or `{change: null}` for none.
  */
 export async function memoryEdit(command: ParsedArgs, io: CliIo): Promise<number> {
   const json = command.options["json"] === true;
   return onMemory(command, io, namedOf(command), async (session, { location }) => {
     const path = (command.options["file"] as string | undefined) ?? String(session.info.settings["index"]);
     const file = membersOf(session, location).find((each) => each.path === path) ?? null;
+    const before = file?.text ?? "";
     // Private: the copy holds the memory's text. In the command's TMPDIR, as the editor would look.
     const folder = mkdtempSync(join(io.env("TMPDIR") || tmpdir(), "yian-memory-edit-"));
     const copy = join(folder, basename(path));
     let keep = false;
+    // Once the person has typed, the copy holds their text until the change applies.
+    const keptFailure = (label: string, code: string, message: string) => {
+      keep = true;
+      return failed(io, json, { label, code, message: `${message}; your text is in ${copy}` });
+    };
     try {
-      writeFileSync(copy, file?.text ?? "", { mode: 0o600 });
-      await (io.editor ?? ((each: string) => runEditor(io.env, each)))(copy);
+      writeFileSync(copy, before, { mode: 0o600 });
+      try {
+        await (io.editor ?? ((each: string) => runEditor(io.env, each)))(copy);
+      } catch (error) {
+        if (!(error instanceof Error) || readFileSync(copy, "utf8") === before) throw error;
+        return keptFailure("edit failed", "memory.failed", error.message);
+      }
       const text = readFileSync(copy, "utf8");
-      if (text === (file?.text ?? "")) {
+      if (text === before) {
         if (json) await printJson({ change: null }, io.stdout);
         else await io.stdout.write(`${forTerminal(path, io.stdout)} is unchanged\n`);
         return 0;
@@ -435,12 +448,14 @@ export async function memoryEdit(command: ParsedArgs, io: CliIo): Promise<number
       const change: JsonObject =
         file === null ? { op: "create", path, text } : { op: "rewrite", path, text, if_hash: file.hash };
       const id = changeId();
-      const applied = await session.apply({ id, change, author: userAuthor(io), signal: stopOf(io) });
-      if (!applied.ok) {
-        keep = true;
-        const message = `${applied.reason}; your text is in ${copy}`;
-        return failed(io, json, { label: "edit refused", code: "memory.conflict", message });
+      let applied: Applied;
+      try {
+        applied = await session.apply({ id, change, author: userAuthor(io), signal: stopOf(io) });
+      } catch (error) {
+        if (!(error instanceof Error)) throw error;
+        return keptFailure("edit failed", "memory.failed", error.message);
       }
+      if (!applied.ok) return keptFailure("edit refused", "memory.conflict", applied.reason);
       if (json) await printJson({ change: id, version: applied.version }, io.stdout);
       else {
         await io.stdout.write(`edited ${forTerminal(path, io.stdout)}; the memory's version is ${applied.version}\n`);

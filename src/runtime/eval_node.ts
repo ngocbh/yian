@@ -38,6 +38,7 @@ import {
   type Node,
   NodeBodyError,
   type NodeCaps,
+  type NodeMemories,
   type NodeResult,
   Output,
   Pending,
@@ -241,6 +242,8 @@ export interface EvalNodeOptions {
   sourceResolver?: SourceResolver | null;
   /** The run's tool set, delivered only to a node declaring `needsTools`. */
   tools?: ToolSet | null;
+  /** The run's memory sessions, delivered only to a node declaring `needsMemories`. */
+  memories?: NodeMemories | null;
   /** The run's environment and model builder, delivered only to a node declaring `needsModels`. */
   models?: ModelAccess | null;
   /**
@@ -301,6 +304,7 @@ export async function evalNode(
     skills = null,
     sourceResolver = null,
     tools = null,
+    memories = null,
     models = null,
     steps = null,
     steerInbox = null,
@@ -331,6 +335,7 @@ export async function evalNode(
     emitEvent,
     skills,
     tools,
+    memories,
     models,
     steps,
     steerInbox,
@@ -359,6 +364,7 @@ async function evaluateNode(
     emitEvent: NonNullable<NodeCaps["emitEvent"]> | null;
     skills: ReadonlyMap<string, Skill> | null;
     tools: ToolSet | null;
+    memories: NodeMemories | null;
     models: ModelAccess | null;
     steps: NodeSteps | null;
     steerInbox: ((inbox: string) => SteerInbox) | null;
@@ -367,7 +373,7 @@ async function evaluateNode(
   },
 ): Promise<WorkerOutcome> {
   const { wiringOverride, signal, collector, captureInputs, sourceResolver } = context;
-  const { emitStream, emitEvent, skills, tools, models, steps, steerInbox, scheduler, random, runDir } = context;
+  const { emitStream, emitEvent, skills, tools, memories, models, steps, steerInbox, scheduler, random, runDir } = context;
   // The flow owns every source. A missing trait-declared reserved key is a malformed compiled
   // graph and deliberately escapes the expected binder catch.
   const nodeWiring = wiringFor(node, flow, wiringOverride);
@@ -431,6 +437,7 @@ async function evaluateNode(
     };
   }
   if (node.needsTools === true) caps.tools = tools ?? new ToolSet();
+  if (memories !== null && node.needsMemories === true) caps.memories = memories;
   // Closed once the node settles, so a step, event or steer read the node's dropped code makes after
   // the outcome is decided is refused or dropped rather than reaching the run with no evaluation
   // left to fail.

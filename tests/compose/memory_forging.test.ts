@@ -126,9 +126,9 @@ test("a computed record that looks like a memory stays a plain record", async ()
   expect((result as { output: unknown }).output).toBe("Object frozen=false");
 });
 
-test("a memory input takes only a MemoryBase instance from the host, never a value or null", async () => {
+test("a memory input takes only a MemoryBase instance from the host, never a value, and null only when Optional", async () => {
   const flow = await loadFlow(`id: f\nname: f\ninput:\n  lessons: !FileMemory\n  notes: !Optional(FileMemory)\nnodes: {}\noutput: null\n`);
-  for (const inputs of [{ lessons: FORGED }, { lessons: FORGED.memory }, { notes: null }]) {
+  for (const inputs of [{ lessons: FORGED }, { lessons: FORGED.memory }, { lessons: null }, { notes: FORGED }]) {
     expect(() => hostInputs(flow.input, inputs)).toThrow("is bound to a MemoryBase instance, not a value");
   }
   await expect(run(flow, { lessons: FORGED })).rejects.toThrow("memory `lessons` is bound to a MemoryBase instance");

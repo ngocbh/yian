@@ -34,6 +34,7 @@ import { ExpressionError, parseCondition, promptRefs } from "../expr/index.ts";
 import { type DeclaredTypes, evaluateWhenRecord, localDeclared } from "../expr/expressions.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import type { Request, ToolSpec } from "../llm/messages.ts";
+import type { MemorySession } from "../memory/base.ts";
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
 import type { MemoryGrant, ToolGrant } from "../tools/grants.ts";
@@ -586,6 +587,16 @@ export class AssertionStageError extends Error {
   }
 }
 
+/** A run's sessions on its memories, which every node bound to a memory shares. */
+export interface NodeMemories {
+  /**
+   * Return the session on the memory `identity`.
+   *
+   * @throws Error when the run has none: a node bound to a memory the run didn't bind.
+   */
+  session(identity: string): MemorySession;
+}
+
 /**
  * The capabilities a node's `run` and `forward` receive, as one object. The evaluator passes
  * every node its own `signal`, and the `scheduler` and `random` the host gave it, plus only what
@@ -606,6 +617,8 @@ export interface NodeCaps {
   readonly steps?: NodeSteps;
   /** The run's tool set; supplied to a node that declares `needsTools`. */
   readonly tools?: ToolSet;
+  /** The run's memory sessions; supplied to a node that declares `needsMemories` in a run that has them. */
+  readonly memories?: NodeMemories;
   /** The run's host-supplied skills by name; supplied to a node that declares `needsSkills`. */
   readonly skills?: ReadonlyMap<string, Skill>;
   /** The transient stream-chunk sink; supplied to a node that declares `needsLiveEvents`. */
@@ -693,6 +706,11 @@ export abstract class Node {
    * per-run tools and the per-run ask handler never leak between runs. TOOL and AGENT opt in.
    */
   readonly needsTools: boolean = false;
+  /**
+   * Declares "I call memory tools": the evaluator supplies the run's memory sessions, which the
+   * run opened on the memories its host bound. TOOL and AGENT opt in.
+   */
+  readonly needsMemories: boolean = false;
   /**
    * Declares "I can publish transient in-loop observers": the evaluator supplies the stream and
    * event sinks the host has. AGENT is the only built-in kind that opts in.

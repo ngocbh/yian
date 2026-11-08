@@ -40,6 +40,7 @@ import {
   type CompleteResult,
   Grow,
   markerMessage,
+  type NodeMemories,
   Output,
   type Pending,
   Route,
@@ -124,6 +125,8 @@ export interface FlowEngineOptions {
   onStream?: ((chunk: StreamChunk) => unknown) | null;
   /** The run's tool set, bound to the run id and signal; the global registry when omitted. */
   tools?: ToolSet | null;
+  /** The run's memory sessions, passed to nodes declaring `needsMemories`; none when omitted. */
+  memories?: NodeMemories | null;
   /** The run's host-supplied skills, passed to nodes declaring `needsSkills`. */
   skills?: ReadonlyMap<string, Skill> | null;
   /** The run's environment and model builder, passed to nodes declaring `needsModels`. */
@@ -335,6 +338,7 @@ export class FlowEngine {
   readonly onStream: ((chunk: StreamChunk) => unknown) | null;
   /** The run's tool set bound to the state's run id and the run signal. */
   readonly tools: ToolSet;
+  readonly memories: NodeMemories | null;
   readonly skills: ReadonlyMap<string, Skill> | null;
   readonly scheduler: Scheduler | null;
   readonly random: (() => number) | null;
@@ -378,6 +382,7 @@ export class FlowEngine {
     const { growBuilder, numWorkers, onEvent = null, onStream = null } = options;
     const { tools = null, skills = null, models = null, signal = null, scheduler = null, random = null } =
       options;
+    const { memories = null } = options;
     const { runDir = null, live = null } = options;
     if (!isExactly(state, RunState)) throw new TypeError("FlowEngine expects a RunState");
     if (!isRunLog(log)) throw new TypeError("FlowEngine expects a RunLog");
@@ -388,6 +393,7 @@ export class FlowEngine {
     this.onEvent = onEvent;
     this.onStream = onStream;
     this.tools = (tools ?? new ToolSet()).forRun(state.runId ?? "", { signal: this.#controller.signal });
+    this.memories = memories;
     this.skills = skills;
     this.scheduler = scheduler;
     this.random = random;
@@ -1000,6 +1006,7 @@ export class FlowEngine {
         captureBindings: derived,
         sourceResolver,
         tools: this.tools,
+        memories: this.memories,
         skills: this.skills,
         scheduler: this.scheduler,
         random: this.random,

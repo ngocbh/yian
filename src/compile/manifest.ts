@@ -90,6 +90,7 @@ const IGNORED_NODE_FIELDS = [
   "isLoop",
   "needsSkills",
   "needsTools",
+  "needsMemories",
   "needsLiveEvents",
   "needsSteps",
   "wakesWithoutWorker",

@@ -163,12 +163,12 @@ The log is append-only:
 Every line has the same envelope. This is the record that stores `greet`'s value:
 
 ```json
-{"at":"2026-10-27T08:43:00.746Z","kind":"pool_commit","payload":{"key":"greet","kind":"str","node_id":"greet","value":"hi Ada"},"run_id":"281f84a4cdb54f26a59aaa23c0f1b593","schema":27,"seq":9}
+{"at":"2026-10-27T08:43:00.746Z","kind":"pool_commit","payload":{"key":"greet","kind":"str","node_id":"greet","value":"hi Ada"},"run_id":"281f84a4cdb54f26a59aaa23c0f1b593","schema":28,"seq":9}
 ```
 
 | Field | Meaning |
 |---|---|
-| `schema` | The log format version. This yian reads and writes only schema 27 |
+| `schema` | The log format version. This yian reads and writes only schema 28 |
 | `run_id` | The run's id; the same on every line |
 | `seq` | The record's place in the log, from 0 with no gaps |
 | `at` | When the record was written (UTC). Use `seq` for order, since clocks can move |
@@ -288,7 +288,7 @@ You give these again, since the log doesn't hold them:
 | Give again | Why |
 |---|---|
 | API keys, in the environment | Keys are never recorded |
-| The same MCP servers and skills | Agents' tools and skills must match the recorded descriptions |
+| The same MCP servers and skills | Agents' tools and skills must match the recorded descriptions, and tools their recorded `resumable` flags |
 | The same `YIAN_*` settings | A resume refuses settings that differ from the recorded ones |
 
 A resume under another yian version works, with a warning that names both versions.
@@ -302,9 +302,10 @@ was running when the process died runs again, so its effect may happen twice:
 |---|---|
 | `code` | Runs from the start |
 | `tool` | Runs with the same `ctx.callId` and the next `ctx.attempt`. A tool with `retries:` keeps only the retries it had left |
-| `agent` | Reuses each recorded model reply and tool result without calling them again. A tool call with no recorded result is reported to the model as "The tool call was interrupted; its outcome is unknown. Check its effect before retrying." Then the agent carries on from its first unrecorded model call |
+| `agent` | Reuses each recorded model reply and tool result without calling them again. A tool call with no recorded result is sent again, with the same `ctx.callId` and a higher `ctx.attempt`, when its tool is resumable; otherwise it is reported to the model as "The tool call was interrupted; its outcome is unknown. Check its effect before retrying." Then the agent carries on from its first unrecorded model call |
 | `case`, `call`, `map`, `loop`, START, END | Computes the same result from the same inputs |
 
 So write tools that change the world to be safe to repeat. Pass `ctx.callId` to the service as an
-idempotency key: it stays the same on every attempt and after a resume. See
-[Code and tools](/code-and-tools/).
+idempotency key: it stays the same on every attempt and after a resume. Such a tool can say
+`resumable: true`, so an agent sends its cut-off call again (see [Host tools](/agents/#host-tools)).
+See [Code and tools](/code-and-tools/).

@@ -690,6 +690,11 @@ export class FlowEngine {
     // The node reads its calls on every evaluation, so a node holding a call reuses it instead of
     // calling its handler again after a wake or a crash.
     const calls = callViews(state, nodeId);
+    const stepSeq = (n: number): number => {
+      const seq = state.nodeStepSeqs.get(nodeId)?.[n - 1];
+      if (seq === undefined) throw new RangeError(`node ${reprText(nodeId)} has no step ${String(n)}`);
+      return seq;
+    };
     return new NodeSteps(
       state.nodeStarts.get(nodeId)!,
       prior,
@@ -700,6 +705,13 @@ export class FlowEngine {
       () => callViews(state, nodeId),
       // A steer read and a host's answer append the node's steps without `record`.
       () => (state.nodeSteps.get(nodeId)?.length ?? 0) + 1,
+      // Only a resume that found the node cut off (by a crash or a stop) starts it again; a wake
+      // records no start.
+      (n) => {
+        const seq = stepSeq(n);
+        return (state.nodeStartSeqs.get(nodeId) ?? []).filter((start) => start > seq).length;
+      },
+      stepSeq,
     );
   }
 

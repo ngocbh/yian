@@ -306,6 +306,12 @@ export class RunState {
    */
   nodeStarts = new Map<string, number>();
   /**
+   * The seq of each accepted `NodeStarted` record of each unsettled node, in start order; as many
+   * as `nodeStarts` counts. A wake records no start. Appended in place, and gone with the node's
+   * start count.
+   */
+  nodeStartSeqs = new Map<string, readonly number[]>();
+  /**
    * The canonical steps each unsettled node recorded, in record order. They survive a resume and
    * go when the node's outcome is applied. The reducer appends to a node's list in place, so a
    * reader copies it to keep a snapshot.
@@ -379,7 +385,7 @@ export class RunState {
   unadmittedCommits = new Map<string, number>();
   /**
    * @internal The nodes whose entries in `nodeState` or a per-node inventory (`inFlight`,
-   * `acceptedStarts`, `nodeStarts`, `nodeSteps`, `nodeStepSeqs`, `pendingCommits`,
+   * `acceptedStarts`, `nodeStarts`, `nodeStartSeqs`, `nodeSteps`, `nodeStepSeqs`, `pendingCommits`,
    * `pendingMessages`, `crashedAttempts`) changed since a transition last checked them. Each
    * write adds its node, and the next transition checks those nodes before its append
    * (`requireTouchedInventories`).
@@ -2778,6 +2784,7 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       state.inFlight.add(delta.nodeId);
       state.acceptedStarts.set(delta.nodeId, prepared.expectedSequence);
       state.nodeStarts.set(delta.nodeId, (state.nodeStarts.get(delta.nodeId) ?? 0) + 1);
+      appendTo(state.nodeStartSeqs, delta.nodeId, prepared.expectedSequence);
       break;
     case "resumed":
       // The retries are exactly the in-flight nodes, which `acceptedStarts` holds in start order.
@@ -3109,6 +3116,7 @@ function hasReducerContainers(state: RunState): boolean {
     isExactly(state.inFlight, Set) &&
     isExactly(state.acceptedStarts, Map) &&
     isExactly(state.nodeStarts, Map) &&
+    isExactly(state.nodeStartSeqs, Map) &&
     isExactly(state.nodeSteps, Map) &&
     isExactly(state.nodeStepSeqs, Map) &&
     isExactly(state.pendingCommits, Map) &&
@@ -3194,6 +3202,7 @@ function inventoryFault(state: RunState, nodeId: string): string | null {
     (inFlight && starts === undefined) ||
     (starts !== undefined && !(Number.isSafeInteger(starts) && starts >= 1)) ||
     (steps !== undefined && (starts === undefined || !Array.isArray(steps) || steps.length === 0)) ||
+    state.nodeStartSeqs.get(nodeId)?.length !== starts ||
     state.nodeStepSeqs.get(nodeId)?.length !== steps?.length ||
     (pending !== undefined &&
       (pending.admitted
@@ -3230,7 +3239,7 @@ function requireTouchedInventories(state: RunState): void {
   if (state.acceptedStarts.size !== state.inFlight.size) {
     throw new RangeError("accepted starts must match the unfinished invocation inventory");
   }
-  if (state.nodeStepSeqs.size !== state.nodeSteps.size) {
+  if (state.nodeStepSeqs.size !== state.nodeSteps.size || state.nodeStartSeqs.size !== state.nodeStarts.size) {
     throw new RangeError("node starts, steps and pending commits must match the unsettled invocations");
   }
   for (const nodeId of state.touched) {
@@ -3256,6 +3265,7 @@ function requireInventories(state: RunState): void {
     ...state.inFlight,
     ...state.acceptedStarts.keys(),
     ...state.nodeStarts.keys(),
+    ...state.nodeStartSeqs.keys(),
     ...state.nodeSteps.keys(),
     ...state.nodeStepSeqs.keys(),
     ...state.pendingCommits.keys(),
@@ -3933,6 +3943,7 @@ function appendTo<T>(lists: Map<string, readonly T[]>, key: string, item: T): vo
 function forgetNodeSteps(state: RunState, nodeId: string): void {
   state.touched.add(nodeId);
   if (!state.nodeStarts.delete(nodeId)) throw new RangeError(`node ${reprText(nodeId)} has no start count`);
+  state.nodeStartSeqs.delete(nodeId);
   for (const step of state.nodeSteps.get(nodeId) ?? []) {
     if (step["kind"] === "steer") for (const seq of seqList(step["from"]) ?? []) state.inboxEvents.delete(seq);
   }
@@ -5775,6 +5786,7 @@ function requirePristine(state: RunState): void {
     state.inFlight.size === 0 &&
     state.acceptedStarts.size === 0 &&
     state.nodeStarts.size === 0 &&
+    state.nodeStartSeqs.size === 0 &&
     state.nodeSteps.size === 0 &&
     state.nodeStepSeqs.size === 0 &&
     state.pendingCommits.size === 0 &&

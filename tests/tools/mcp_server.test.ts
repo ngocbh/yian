@@ -747,6 +747,7 @@ describe("McpServer open and close", () => {
             expect(tool.description).toBe(listed[i]!.description!);
             expect(tool.outputJsonSchema).toBeNull();
             expect(tool.isConcurrencySafe).toBeNull();
+            expect(tool.resumable).toBe(false);
           });
           [pid] = pids(file) as [number];
           expect(childAlive(pid)).toBe(true);
@@ -868,6 +869,8 @@ describe("McpServer open and close", () => {
     expect(tools.map((tool) => tool.description)).toEqual(["The a tool.", "B", "c"]);
     expect(tools.map((tool) => tool.isConcurrencySafe?.({}) ?? null)).toEqual([null, true, null]);
     expect(tools.map((tool) => tool.outputJsonSchema)).toEqual([null, null, null]);
+    // An MCP call has no idempotency key yian can rely on, so no MCP tool is resumable.
+    expect(tools.map((tool) => tool.resumable)).toEqual([false, false, false]);
     expect(lister.calls).toEqual([undefined]);
   });
 

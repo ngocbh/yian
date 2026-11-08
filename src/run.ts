@@ -1193,7 +1193,8 @@ function recordedTools(flow: CompiledFlow, tools: ToolSet): Record<string, Recor
     if (recorded.has(key)) return;
     const tool = tools.resolve([ref])[0]!;
     const { name, description } = tool;
-    recorded.set(key, { name, description, parameters: tool.parametersJsonSchema });
+    // A tool built by an older copy of yian has no `resumable` field, and isn't resumable.
+    recorded.set(key, { name, description, parameters: tool.parametersJsonSchema, resumable: tool.resumable === true });
   };
   for (const [, node] of staticNodes(flow)) {
     const grants = node.grantedTools();

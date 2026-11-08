@@ -168,6 +168,8 @@ export interface RecordedResult {
   readonly isError: boolean;
   /** `skipped`, `crashed`, `timed_out` or `interrupted` for a result yian wrote in place of running the call, else `null`. */
   readonly closed: string | null;
+  /** The `n` of its `tool_result` step. */
+  readonly n: number;
 }
 
 /**
@@ -215,6 +217,8 @@ export class AgentSteps {
   readonly #scrub: (error: unknown) => unknown;
   readonly #nodeId: string;
   #count = 0;
+  /** The `n` of the last step this start wrote, or `null`. */
+  #lastWritten: number | null = null;
   /** The recorded logical calls, each its failed attempts then its reply or its last failure. */
   readonly #calls: readonly (readonly NumberedStep[])[];
   /** How many of `#calls` were taken. */
@@ -223,6 +227,8 @@ export class AgentSteps {
   #trailing: readonly NumberedStep[];
   /** The recorded tool results, by the `n` of the reply they answer, then by call id. */
   readonly #results: ReadonlyMap<number, StepExchange["results"]>;
+  /** The `n` of each recorded `pending` step, by its yian call id. */
+  readonly #pending: ReadonlyMap<string, number>;
   /** The recorded steer steps, by the index in `#calls` of the logical call they preceded. */
   readonly #steers: Map<number, readonly NumberedStep[]>;
   /** The `by` of a recorded `interrupted` step: the interrupt an earlier start honored, else `null`. */
@@ -252,6 +258,11 @@ export class AgentSteps {
     this.#calls = exchanges.map((exchange) => exchange.attempts);
     this.#trailing = open.attempts;
     this.#results = new Map(exchanges.map((exchange) => [exchange.attempts.at(-1)!.n, exchange.results]));
+    this.#pending = new Map(
+      (steps?.prior ?? []).flatMap((step, index) =>
+        step["kind"] === "pending" ? [[step["call_id"] as string, index + 1] as const] : [],
+      ),
+    );
     this.#steers = new Map(
       [...exchanges, open].flatMap((exchange, index) => (exchange.steers.length > 0 ? [[index, exchange.steers]] : [])),
     );
@@ -345,14 +356,21 @@ export class AgentSteps {
    * `model_call` step is `n`, or `null`.
    */
   recordedResult(n: number, callId: string): RecordedResult | null {
-    const step = this.#results.get(n)?.get(callId)?.step;
-    if (step === undefined) return null;
+    const recorded = this.#results.get(n)?.get(callId);
+    if (recorded === undefined) return null;
+    const { step } = recorded;
     const closed = step["closed"];
     return {
       output: step["output"] as string,
       isError: step["is_error"] === true,
       closed: typeof closed === "string" ? closed : null,
+      n: recorded.n,
     };
+  }
+
+  /** Return the `n` of the `pending` step an earlier start recorded for yian call `callId`, or `null`. */
+  recordedPending(callId: string): number | null {
+    return this.#pending.get(callId) ?? null;
   }
 
   /** Throw the replay mismatch fault unless each of `steps` recorded `purpose` and `digest`. */
@@ -523,8 +541,13 @@ export class AgentSteps {
   }
 
   #record(step: ValueRecord, options?: { settled?: boolean }): number {
-    if (this.#steps === undefined) return ++this.#count;
-    return this.#steps.record(step, options);
+    this.#lastWritten = this.#steps === undefined ? ++this.#count : this.#steps.record(step, options);
+    return this.#lastWritten;
+  }
+
+  /** The `n` of the last step this start wrote, or `null` before any. */
+  lastWritten(): number | null {
+    return this.#lastWritten;
   }
 }
 

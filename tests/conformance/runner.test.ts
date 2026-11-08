@@ -273,6 +273,10 @@ describe("checkCase", () => {
       `${RUN}host: {tools: {t: {parameters: {}, results: [], concurrency_safe: 1}}}`,
       "`host.tools.t.concurrency_safe` must be a boolean",
     ],
+    [
+      `${RUN}host: {tools: {save: {parameters: {}, resumable: 1, results: []}}}`,
+      "`host.tools.save.resumable` must be a boolean",
+    ],
     [TOOL("1"), "`host.tools.t.results` must be a list or a mapping of lists"],
     [TOOL("{n: 1}"), "`host.tools.t.results` must be a list or a mapping of lists"],
     [TOOL("[1]"), "`host.tools.t.results[0]` must be a mapping"],
@@ -983,6 +987,28 @@ describe("run", () => {
   /** The answer schema a TOOL `ask` typed `str` sends. */
   const SCHEMA = "[{name: answer, type: str, required: true}]";
   const CALL = "call_id: r1/n, attempt: 1, node: n";
+
+  test("a resumable stub answers a call id it answered with the same answer, taking no entry", async () => {
+    // The crash cuts the agent after its reply's model_call (record 9), once `save` took its one
+    // entry; the resume sends the call again, and the stub answers it from what it gave first.
+    const text =
+      "kind: resume\nflow: |\n  id: f\n  name: f\n  nodes:\n    research:\n      kind: agent\n" +
+      "      tools: [save]\n      output: str\n      llm_config: {provider: openai, model: gpt-5.5}\n" +
+      "      prompt: Save x.\n  output: ${research.output}\n" +
+      'env: {OPENAI_API_KEY: "<key:1>"}\nrun: {run_id: r1, num_workers: 0}\nhost:\n  tools:\n' +
+      "    save: {parameters: {type: object, properties: {q: {type: string}}}, resumable: true, results: [{return: S1}]}\n" +
+      "  models:\n    research:\n      agent:\n" +
+      "        - reply: {format: yian.message.v1, role: assistant, parts: [{type: tool_call, id: c1, name: save, arguments: {q: x}}]}\n" +
+      "        - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: saved}]}\n" +
+      "  crash_after_record: 9\n" +
+      "expect:\n  output: {status: succeeded, output: saved}\n  tool_calls:\n    save:\n" +
+      "      - {args: {q: x}, attempt: 1, call_id: r1/research/1/0, node: research}\n" +
+      "      - {args: {q: x}, attempt: 2, call_id: r1/research/1/0, node: research}\n";
+    const case_ = prepare(checkCase(readCase(text)));
+    const ctx = setUp(case_, join(tmpdir(), "none"));
+    made.push(ctx.dir);
+    await RUNNERS.resume!(case_, ctx);
+  });
 
   test("`host.human` answers a TOOL `ask` through the ask slot, recorded under `ask`", async () => {
     const calls =

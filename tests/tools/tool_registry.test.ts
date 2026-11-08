@@ -621,6 +621,13 @@ describe("ask_user invocation", () => {
     expect(seen).toEqual([{ ...NO_FIELDS, question: "Approve?", deadline: "2026-10-24T10:30:00.000Z" }]);
   });
 
+  test("the ask and ask_user tools aren't resumable", () => {
+    const fromAsk = new ToolSet({ ask: () => "answer" });
+    expect(fromAsk.resolve(["ask", "ask_user"]).map((each) => each.resumable)).toEqual([false, false]);
+    const fromAskUser = new ToolSet({ ask_user: () => "answer" });
+    expect(fromAskUser.resolve(["ask_user"])[0]!.resumable).toBe(false);
+  });
+
   test("test_ask_user_never_falls_back_to_the_global_registry (invoke)", async () => {
     TOOL_REGISTRY.set("ask_user", tool("ask_user", "global answer"));
     for (const tools of [new ToolSet(), new ToolSet({})]) {

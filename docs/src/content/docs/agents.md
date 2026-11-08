@@ -258,6 +258,11 @@ const search = tool({
 const result = await runFlow(flow, { question }, { tools: { search, toolbox: [a, b] } });
 ```
 
+A tool that passes `ctx.callId` to its service as an idempotency key can set `resumable: true`.
+When a crash or a stop cuts off an agent's call to it before the result is recorded, the resumed
+agent sends the call again, with the same `ctx.callId`, instead of telling the model the outcome
+is unknown. Leave it unset (`false`) for any tool that could act twice.
+
 A key holding one tool must match its name; a key holding a list is a tool group. Two groups may
 hold tools of one name, but two tools that could show one name, such as a tool `github_search` and
 group `github`'s `search`, are refused. The `tools` option replaces the run's tools, so pass

@@ -1,25 +1,38 @@
-/** The durable steps a node records. */
+/** The durable steps a node records, and the resumes that cut it off since a step. */
 
 import { describe, expect, test } from "bun:test";
 
-import { copyGraph, END_ID, START_ID } from "../../src/compile/model.ts";
-import { NodeStarted, NodeSucceeded, type RunEvent, RunFailed, RunSucceeded, StreamChunk } from "../../src/events.ts";
+import { type CompiledFlow, copyGraph, END_ID, START_ID } from "../../src/compile/model.ts";
+import {
+  NodeStarted,
+  NodeSucceeded,
+  type RunEvent,
+  RunFailed,
+  RunSucceeded,
+  RunWaiting,
+  StreamChunk,
+} from "../../src/events.ts";
 import { CapabilityFault, Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { FlowEngine } from "../../src/runtime/engine.ts";
 import { evalNode } from "../../src/runtime/eval_node.ts";
 import {
+  MemoryRunLog,
   NodeFailedRecord,
   NodeStartedRecord,
   NodeStepRecord,
   NodeSucceededRecord,
+  NodeWokenRecord,
   PoolCommitRecord,
+  type RecordEnvelope,
   type RunRecord,
+  RunStoppedRecord,
 } from "../../src/runtime/log.ts";
 import { commitPrepared, prepareRunResumed, replayRecords, RunState } from "../../src/runtime/state.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import type { ValueRecord } from "../../src/typesys/values.ts";
-import { aborted, engine, graph, noGrowth, rejected } from "../helpers/run_state_fixtures.ts";
+import { FakeHost, inboxEngine, inboxFlow, recordNames } from "../helpers/inbox_fixtures.ts";
+import { aborted, engine, FIXED_CLOCK, graph, noGrowth, rejected } from "../helpers/run_state_fixtures.ts";
 
 /** A node that opts into steps and runs a scripted body over its capabilities; it may stream. */
 class StepNode extends Node {
@@ -503,4 +516,169 @@ test("pooled nodes interleave their own steps", async () => {
     ["a", 2, { attempt: 2n, kind: "test", node: "a" }],
     ["b", 2, { attempt: 2n, kind: "test", node: "b" }],
   ]);
+});
+
+// ---------- resumesSince ----------
+
+/**
+ * A node `work` whose first evaluation records step 1; every evaluation then pushes
+ * `steps.resumesSince(1)` to `seen` and returns what `then` returns.
+ */
+function sinceNode(seen: number[], then: (caps: NodeCaps) => NodeResult | Promise<NodeResult> = () => new Output("done")): StepNode {
+  return new StepNode("work", (caps) => {
+    const steps = caps.steps!;
+    if (steps.prior.length === 0) steps.record({ kind: "test" });
+    seen.push(steps.resumesSince(1));
+    return then(caps);
+  });
+}
+
+/** `START -> node -> END`. */
+const lone = (node: Node) => graph([node], [
+  [START_ID, node.id],
+  [node.id, END_ID],
+]);
+
+/**
+ * A fresh engine over `records` cut after the record that `cutAfter` picks (a crash there), replayed
+ * into a new state of `flow`, with the resume's `RunResumed` appended.
+ */
+function crashedAt(flow: CompiledFlow, records: readonly RecordEnvelope[], cutAfter: (record: RunRecord) => boolean): FlowEngine {
+  const kept = records.slice(0, records.findLastIndex(({ record }) => cutAfter(record)) + 1);
+  const state = replayRecords(new RunState(copyGraph(flow)), kept, { growBuilder: noGrowth });
+  const log = MemoryRunLog.fromRecords(kept, { clock: FIXED_CLOCK });
+  commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
+  return new FlowEngine(state, log, { growBuilder: noGrowth, numWorkers: 0 });
+}
+
+/** Whether `record` is `kind` about the node `work`. */
+const workRecord = (kind: abstract new (...args: never[]) => unknown) => (record: RunRecord) =>
+  record instanceof kind && (record as { nodeId?: string }).nodeId === "work";
+
+describe("NodeSteps.resumesSince counts the resumes that cut the node off since a step", () => {
+  test("0 live", async () => {
+    const seen: number[] = [];
+    const built = single(sinceNode(seen));
+    await built.run();
+    expect(built.state.result).toBeInstanceOf(RunSucceeded);
+    expect(seen).toEqual([0]);
+  });
+
+  test("1 after a crash cut the start that recorded it and a resume started the node again", async () => {
+    const seen: number[] = [];
+    const flow = lone(sinceNode(seen));
+    const uncut = engine(flow);
+    await uncut.run();
+    const resumed = crashedAt(flow, uncut.log.records(), workRecord(NodeStepRecord));
+    await resumed.run();
+    expect(resumed.state.result).toBeInstanceOf(RunSucceeded);
+    expect(seen).toEqual([0, 1]);
+  });
+
+  test("2 after two crashes", async () => {
+    const seen: number[] = [];
+    const flow = lone(sinceNode(seen));
+    const uncut = engine(flow);
+    await uncut.run();
+    const once = crashedAt(flow, uncut.log.records(), workRecord(NodeStepRecord));
+    await once.run();
+    // The second crash cuts the resumed start right after it began.
+    const twice = crashedAt(flow, once.log.records(), workRecord(NodeStartedRecord));
+    await twice.run();
+    expect(twice.state.result).toBeInstanceOf(RunSucceeded);
+    expect(seen).toEqual([0, 1, 2]);
+  });
+
+  for (const replay of [false, true]) {
+    test(`1 after a stop and a resume (${replay ? "replayed" : "live"} state)`, async () => {
+      const seen: number[] = [];
+      const host = new AbortController();
+      const stop = new Error("stop");
+      const node = sinceNode(seen, async (caps) => {
+        if (caps.steps!.starts > 1) return new Output("done");
+        host.abort(stop);
+        return await aborted(caps.signal!);
+      });
+      const flow = lone(node);
+      const first = engine(flow, { signal: host.signal });
+      expect(await rejected(first.run())).toBe(stop);
+      expect(first.log.records().some(({ record }) => record instanceof RunStoppedRecord)).toBe(true);
+      const state = replay
+        ? replayRecords(new RunState(copyGraph(flow)), first.log.records(), { growBuilder: noGrowth })
+        : first.state;
+      commitPrepared(first.log, state, prepareRunResumed(state, { numWorkers: 0 }));
+      const resumed = new FlowEngine(state, first.log, { growBuilder: noGrowth, numWorkers: 0 });
+      await resumed.run();
+      expect(resumed.state.result).toBeInstanceOf(RunSucceeded);
+      expect(seen).toEqual([0, 1]);
+    });
+  }
+
+  /** A host call `work` that records step 1 before its pending step, and pushes `resumesSince(1)` to `seen`. */
+  class SinceHost extends FakeHost {
+    readonly seen: number[] = [];
+    override forward(inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
+      const steps = caps.steps!;
+      if (steps.prior.length === 0) steps.record({ kind: "test" });
+      this.seen.push(steps.resumesSince(1));
+      return super.forward(inputs, caps);
+    }
+  }
+
+  /** A run of `host` that a complete wakes as soon as it waits; the run has ended. */
+  async function woken(host: SinceHost): Promise<FlowEngine> {
+    const run: FlowEngine = inboxEngine(inboxFlow([], [host], [[START_ID, "work"], ["work", END_ID]]), {
+      onEvent: (event: RunEvent) => {
+        if (event instanceof RunWaiting) run.deliver({ kind: "complete", callId: host.callId, result: { output: "yes" } });
+      },
+    });
+    await run.run();
+    return run;
+  }
+
+  test("0 when the node waited after the step, was woken, and runs on", async () => {
+    const host = new SinceHost("work");
+    const run = await woken(host);
+    expect(run.state.result).toBeInstanceOf(RunSucceeded);
+    expect(recordNames(run.log)).toContain("NodeWokenRecord");
+    expect(host.seen).toEqual([0, 0]);
+  });
+
+  test("1 when a crash cut the woken start and a resume started the node again", async () => {
+    const host = new SinceHost("work");
+    const run = await woken(host);
+    const resumed = crashedAt(
+      inboxFlow([], [host], [[START_ID, "work"], ["work", END_ID]]),
+      run.log.records(),
+      workRecord(NodeWokenRecord),
+    );
+    await resumed.run();
+    expect(resumed.state.result).toBeInstanceOf(RunSucceeded);
+    expect(host.seen).toEqual([0, 0, 1]);
+  });
+
+  test("outside a run it is 0", () => {
+    expect(new NodeSteps(2, [{ kind: "test" }], () => 2).resumesSince(1)).toBe(0);
+  });
+});
+
+test("NodeSteps.seqOf gives a step's seq in the log, and refuses a step it doesn't hold", async () => {
+  const seen: unknown[] = [];
+  const built = single(
+    new StepNode("work", (caps) => {
+      const steps = caps.steps!;
+      const n = steps.record({ kind: "test" });
+      seen.push(steps.seqOf(n));
+      try {
+        steps.seqOf(n + 1);
+      } catch (error) {
+        seen.push((error as Error).message);
+      }
+      return new Output("done");
+    }),
+  );
+  await built.run();
+  const step = built.log.records().find((envelope) => envelope.record instanceof NodeStepRecord)!;
+  expect(seen).toEqual([step.seq, "node 'work' has no step 2"]);
+  expect(() => new NodeSteps(1, [], () => 1).seqOf(1)).toThrow("step 1 has no seq outside a run");
 });

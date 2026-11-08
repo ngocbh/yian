@@ -1,0 +1,164 @@
+# One reply calls the plain `note` and the resumable `save`, both concurrency safe, so they run
+# together and `note`'s result is written first. Under `--crash-sweep`, a cut after the reply
+# leaves calls with no result: the resume closes `note` `crashed` and sends `save` again. A cut
+# after note's result leaves only `save`, which took its entry before the cut: the stub answers
+# the call sent again from what it gave then.
+kind: run
+flow: |
+  id: resumable-mixed-sweep
+  name: resumable_mixed_sweep
+  llm_config: {provider: anthropic, model: claude-test}
+  nodes:
+    writer:
+      kind: agent
+      tools: [note, save]
+      system_prompt: Help.
+      prompt: hi
+      output: str
+  output: ${writer.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    note:
+      description: Note a topic.
+      concurrency_safe: true
+      parameters:
+        type: object
+        properties:
+          topic:
+            type: string
+        required: [topic]
+      results:
+      - return: noted:a
+    save:
+      description: Save a topic.
+      concurrency_safe: true
+      resumable: true
+      parameters:
+        type: object
+        properties:
+          topic:
+            type: string
+        required: [topic]
+      results:
+      - return: saved:b
+  models:
+    writer:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: c1, name: note, arguments: {topic: a}}
+          - {type: tool_call, id: c2, name: save, arguments: {topic: b}}
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: text, text: done}
+expect:
+  output: {status: succeeded, output: done}
+  tool_calls:
+    note:
+    - args: {topic: a}
+      call_id: r1/writer/1/0
+      attempt: 1
+      node: writer
+    save:
+    - args: {topic: b}
+      call_id: r1/writer/1/1
+      attempt: 1
+      node: writer
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        writer:
+          model: claude-test
+          provider: anthropic
+          _connection: {method: api_key, source: environment, endpoint: null}
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, writer]
+  - - node_step
+    - writer
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: claude-test
+        output:
+          format: yian.message.v1
+          parts:
+          - arguments: {topic: a}
+            id: c1
+            name: note
+            type: tool_call
+          - arguments: {topic: b}
+            id: c2
+            name: save
+            type: tool_call
+          role: assistant
+        purpose: chat
+        request_sha256: e1f14179fa92600bf59864b364a271bcae2a2109da24767e13ba4b810a18beef
+        response_id: null
+        usage: null
+  - - node_step
+    - writer
+    - n: 2
+      step: {call_id: c1, is_error: false, kind: tool_result, output: noted:a}
+  - - node_step
+    - writer
+    - n: 3
+      step: {call_id: c2, is_error: false, kind: tool_result, output: saved:b}
+  - - node_step
+    - writer
+    - n: 4
+      step:
+        finish: null
+        kind: model_call
+        model: claude-test
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: done, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: 58e1a1c920496aa29f4f423d3433574e19ee664964d08a1255791695bfec5302
+        response_id: null
+        usage: null
+  - - pool_commit
+    - writer
+    - {value: done}
+  - - pool_commit
+    - writer
+    - key: writer.new_messages
+      steps: [9, 10, 11, 12]
+  - - node_succeeded
+    - writer
+    - {commit: 13, messages: 14}
+  - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - {value: done}
+  - - node_succeeded
+    - __end__
+    - {commit: 17}

@@ -436,7 +436,12 @@ let logCount = 0;
 const freshLog = () => join(logs, `run-${++logCount}.jsonl`);
 
 /** The tool `name` the flows call: it answers `<name>:<q>`, or runs `action`. */
-const lookup = (name = "lookup", description = "Look a word up.", action?: () => void): FunctionTool =>
+const lookup = (
+  name = "lookup",
+  description = "Look a word up.",
+  action?: () => void,
+  resumable = false,
+): FunctionTool =>
   tool({
     name,
     description,
@@ -445,6 +450,7 @@ const lookup = (name = "lookup", description = "Look a word up.", action?: () =>
       action?.();
       return `${name}:${args.q}`;
     },
+    resumable,
   });
 
 /** The skill `s`, with `instructions`. */
@@ -534,8 +540,18 @@ test("run_started records the tools and skills the AGENTs grant", async () => {
 
   const record = started(await runInto(flow, { tools: { t }, skills: skill(), models }, {}));
 
-  expect(record.tools).toEqual({ t: { name: "t", description: "Look it up.", parameters: t.parametersJsonSchema } });
+  expect(record.tools).toEqual({
+    t: { name: "t", description: "Look it up.", parameters: t.parametersJsonSchema, resumable: false },
+  });
   expect(record.skills).toEqual({ s: { description: "Answer briefly.", instructions: "Be brief." } });
+});
+
+test("run_started records each tool's resumable flag", async () => {
+  const t = lookup("t", "Look it up.", undefined, true);
+
+  const record = started(await runInto(await loadFlow(AGENT_FLOW), { tools: { t }, skills: skill(), models }, {}));
+
+  expect(record.tools["t"]).toEqual({ name: "t", description: "Look it up.", parameters: t.parametersJsonSchema, resumable: true });
 });
 
 /** Run AGENT_FLOW with the agent's `tools:` line `line`, no skills, and the host tools `tools`; return its log. */
@@ -858,6 +874,18 @@ test.each<[string, Partial<{ t: FunctionTool; skills: Map<string, Skill> }>, str
 
   expect(error).toBeInstanceOf(RangeError);
   expect((error as Error).message).toStartWith(`resume refused: ${field}`);
+  expect(readFileSync(log).equals(before)).toBe(true);
+});
+
+test("a resume whose tool changed its resumable flag is refused", async () => {
+  const log = await cutAgentRun(lookup("t", "Look it up.", undefined, true));
+  const before = readFileSync(log);
+
+  const error = await rejected(
+    advance({ log, env: hostEnv(logs), tools: { t: lookup("t", "Look it up.") }, skills: skill(), models }),
+  );
+
+  expect((error as Error).message).toBe("resume refused: tools.t resumable differs from the recorded one");
   expect(readFileSync(log).equals(before)).toBe(true);
 });
 

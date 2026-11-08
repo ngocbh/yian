@@ -263,11 +263,12 @@ export function registerTool(
           parametersJsonSchema: tool.parametersJsonSchema,
           execute: tool.execute,
           isConcurrencySafe: tool.isConcurrencySafe,
-          // A tool from an older copy of yian (the brand check accepts one) lacks the next three
-          // fields; `FunctionTool` stores their `undefined` as `null`.
+          // A tool from an older copy of yian (the brand check accepts one) lacks the next four
+          // fields; `FunctionTool` stores their `undefined` as `null`, or `false` for `resumable`.
           parametersValidator: tool.parametersValidator,
           outputJsonSchema: tool.outputJsonSchema,
           outputValidator: tool.outputValidator,
+          resumable: tool.resumable,
         })
       : tool,
   );

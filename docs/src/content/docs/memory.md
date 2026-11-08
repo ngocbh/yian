@@ -342,3 +342,9 @@ nodes:
     output: str
 output: ${tidy.output}
 ```
+
+A default memory belongs to its flow's `id:`, so `yian run tidy.yaml` alone tidies the flow's own,
+empty `<project>/tidy-lessons/lessons`. To tidy another flow's memory, pass the folder
+`yian memory list` shows: `yian run tidy.yaml --memory lessons=FOLDER`, or bind it from your
+program. `yian chat` binds only each flow's own defaults, so it can't run this tidy on another
+flow's memory.

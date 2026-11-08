@@ -1,0 +1,47 @@
+# A TOOL node's `tool_id: {cases: search}` embeds its query and returns the items most like it, best
+# first, each with its id, version, similarity score, text and fields. The runner's embedder counts
+# the words `alpha` to `hotel`, so `charlie delta` matches itself fully and `charlie echo` by half.
+# The store is unchanged.
+kind: run
+flow: |
+  id: search
+  name: search
+  typedefs:
+    Case:
+      title: str
+      tags: list(str)
+  input:
+    q: !str
+    cases: !VectorDBMemory(Case)
+  nodes:
+    found:
+      kind: tool
+      tool_id: {cases: search}
+      input:
+        query: ${input.q}
+        k: 2
+  output: ${found.output}
+inputs: {q: charlie delta}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    cases:
+      type: VectorDBMemory
+      id: t/cases
+      embedding: {provider: openai, model: text-embedding-3-small}
+      items:
+      - {text: alpha bravo, fields: {title: Login, tags: [auth]}}
+      - {text: charlie delta, fields: {title: Outage, tags: [ops]}}
+      - {text: charlie echo, fields: {title: Deploy, tags: [ops]}}
+expect:
+  output:
+    status: succeeded
+    output:
+      items:
+      - {id: 2, version: 2, score: 1.0, text: charlie delta, fields: {title: Outage, tags: [ops]}}
+      - {id: 3, version: 3, score: 0.5, text: charlie echo, fields: {title: Deploy, tags: [ops]}}
+  memory:
+    cases:
+    - {id: 1, text: alpha bravo, fields: {title: Login, tags: [auth]}}
+    - {id: 2, text: charlie delta, fields: {title: Outage, tags: [ops]}}
+    - {id: 3, text: charlie echo, fields: {title: Deploy, tags: [ops]}}

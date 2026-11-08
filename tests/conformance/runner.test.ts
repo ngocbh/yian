@@ -47,6 +47,7 @@ import { lintSchema, loadSchema, validate } from "../helpers/schema.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { current, forget, read, reload } from "../../src/defaults.ts";
 import { Failure } from "../../src/diagnostics.ts";
+import { openSqlite } from "../../src/platform.ts";
 import {
   decodeRecord,
   encodeRecord,
@@ -142,6 +143,8 @@ describe("readCase", () => {
 
 const LOAD = "kind: load\nflow: x\nexpect: {load: ok}\n";
 const RUN = "kind: run\nflow: x\nexpect: {output: 1}\n";
+/** A VectorDBMemory entry's embedding model, as a case writes it. */
+const EMBEDDING = "{provider: openai, model: small}";
 const BARE_RESUME = "kind: resume\nflow: x\nexpect: {output: 1}\n";
 const RESUME = `${BARE_RESUME}run: {num_workers: 0}\nhost: {crash_after_record: 2}\n`;
 const EXPR = "kind: expr\nexpect: {value: 1}\n";
@@ -249,7 +252,34 @@ describe("checkCase", () => {
       "`host.crash_after_record` is not a key of a `run` case",
     ],
     [`${RUN}host: {memory: {m: {id: a}}}`, "`host.memory.m.type` is required"],
-    [`${RUN}host: {memory: {m: {type: VectorDBMemory}}}`, "`host.memory.m.type` must be FileMemory"],
+    [`${RUN}host: {memory: {m: {type: Other}}}`, "`host.memory.m.type` must be FileMemory or VectorDBMemory"],
+    [`${RUN}host: {memory: {m: {type: VectorDBMemory}}}`, "`host.memory.m.embedding` is required"],
+    [
+      `${RUN}host: {memory: {m: {type: VectorDBMemory, embedding: {provider: openai}}}}`,
+      "`host.memory.m.embedding` must be `{provider, model}`, each text",
+    ],
+    [
+      `${RUN}host: {memory: {m: {type: VectorDBMemory, embedding: ${EMBEDDING}, files: {a: x}}}}`,
+      "unknown key `host.memory.m.files`",
+    ],
+    [
+      `${RUN}host: {memory: {m: {type: VectorDBMemory, embedding: ${EMBEDDING}, held: {node: a, model_call: 1}}}}`,
+      "unknown key `host.memory.m.held`",
+    ],
+    [
+      `${RUN}host: {memory: {m: {type: VectorDBMemory, embedding: ${EMBEDDING}, items: [{fields: {}}]}}}`,
+      "`host.memory.m.items` must be a list of `{text, fields}`, each `text` text and `fields` a mapping",
+    ],
+    [
+      `${RUN}host: {memory: {m: {type: VectorDBMemory, embedding: ${EMBEDDING}, recall_recent: -1}}}`,
+      "`host.memory.m.recall_recent` must be an int of 0 or more",
+    ],
+    [`${RUN}host: {memory: {m: {type: FileMemory, items: []}}}`, "unknown key `host.memory.m.items`"],
+    [
+      `kind: run\nflow: x\nhost: {memory: {m: {type: VectorDBMemory, embedding: ${EMBEDDING}}}}\n` +
+        "expect: {output: 1, memory: {m: {a: x}}}\n",
+      "`expect.memory.m` must be null or a list of items `{id, text, fields, retired}`",
+    ],
     [`${RUN}host: {memory: {m: {type: FileMemory, id: 1}}}`, "`host.memory.m.id` must be text"],
     [`${RUN}host: {memory: {m: {type: FileMemory, files: {a: 1}}}}`, "`host.memory.m.files` values must be text"],
     [
@@ -597,6 +627,13 @@ describe("checkCase", () => {
       'host: {memory: {lessons: {type: FileMemory, id: t/lessons, files: {"MEMORY.md": x}},',
       "  notes: {same_as: lessons}, other: {type: FileMemory, held: {node: a, model_call: 1}}}}",
       'expect: {output: 1, memory: {lessons: {"MEMORY.md": "x\\ny"}, other: null}}',
+    ].join("\n"),
+    [
+      "kind: run",
+      "flow: x",
+      `host: {memory: {cases: {type: VectorDBMemory, id: t/cases, embedding: ${EMBEDDING}, recall_recent: 2,`,
+      "  items: [{text: a}, {text: b, fields: {title: b}}]}, same: {same_as: cases}}}",
+      "expect: {output: 1, memory: {cases: [{id: 1, text: a}, {id: 2, text: b, fields: {title: b}, retired: why}]}}",
     ].join("\n"),
     `${BARE_RESUME}run: {num_workers: 0}\nhost: {crash_after_record: 1, memory: {m: {type: FileMemory}}}\n` +
       "resume: {memory: {m: null, n: {id: t/n}}}",
@@ -1201,6 +1238,65 @@ describe("run", () => {
         "  output: ${add.output.path + where.output}\n",
     ).replace("run: {", `files: {leak.ts: ${JSON.stringify(leak)}}\nrun: {`);
     await expect(runCase(text)).rejects.toThrow("memory `lessons`'s folder appears in the run log");
+  });
+
+  /**
+   * A `run` case whose TOOL node `add` adds `bravo charlie` to `cases`, a VectorDBMemory of `Case`
+   * items seeded with `alpha`, then searches it for `charlie`; the case adds `expect.memory`.
+   */
+  const VECTOR_CASE = `kind: run
+flow: |
+  id: f
+  name: f
+  typedefs:
+    Case: {title: str}
+  input:
+    cases: !VectorDBMemory(Case)
+  nodes:
+    add:
+      kind: tool
+      tool_id: {cases: add}
+      input: {text: bravo charlie, fields: {title: b}}
+    found:
+      kind: tool
+      tool_id: {cases: search}
+      depends_on: [add]
+      input: {query: charlie, k: 1}
+  output: \${found.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    cases:
+      type: VectorDBMemory
+      id: t/cases
+      embedding: ${EMBEDDING}
+      items: [{text: alpha, fields: {title: a}}]
+expect:
+  output:
+    status: succeeded
+    output: {items: [{id: 2, version: 2, score: 0.7071, text: bravo charlie, fields: {title: b}}]}
+`;
+
+  test("`host.memory` seeds a VectorDBMemory's items, typed as its input; `expect.memory` reads them after the run", async () => {
+    const alpha = "{id: 1, text: alpha, fields: {title: a}}";
+    await runCase(`${VECTOR_CASE}  memory: {cases: [${alpha}, {id: 2, text: bravo charlie, fields: {title: b}}]}\n`);
+    await expect(runCase(`${VECTOR_CASE}  memory: {cases: [${alpha}]}\n`)).rejects.toThrow(
+      "memory differs\n--- actual\ncases:\n  - id: 1\n",
+    );
+  });
+
+  test("a VectorDBMemory's store is in its input's folder, which the run log must not hold", async () => {
+    const leak =
+      "import { dirname, join } from 'node:path';\nimport { fileURLToPath } from 'node:url';\n" +
+      "export function leak(): string {\n" +
+      "  return join(dirname(fileURLToPath(import.meta.url)), 'memory', 'cases');\n}\n";
+    const text = VECTOR_CASE.replace(
+      "  output: \${found.output}\n",
+      "    where:\n      kind: code\n      code: ./leak.ts:leak\n      output: str\n  output: \${where.output}\n",
+    )
+      .replace("run: {", `files: {leak.ts: ${JSON.stringify(leak)}}\nrun: {`)
+      .replace(/  output:\n {4}status: succeeded\n {4}output: .*\n/, "  output: {status: succeeded, output: x}\n");
+    await expect(runCase(text)).rejects.toThrow("memory `cases`'s folder appears in the run log");
   });
 
   test("a `host.sends` item with `after` is sent live when the run reaches it", async () => {
@@ -2124,6 +2220,30 @@ expect:
     const failure = crashSweep(case_, ctx, { beforeResume: (_log, memory) => rmSync(join(memory.get("lessons")!, "notes.md")) });
     await expect(failure).rejects.toBeInstanceOf(CaseFailure);
     await expect(failure).rejects.toThrow("memory (crash sweep, cut after record 4) differs");
+  }, SWEEP);
+
+  test("a VectorDBMemory case's sweep resumes every cut on its own store, the agent's add landing once", async () => {
+    const [case_, ctx] = committed("run-memory/vectordb_memory__an_agent_adds_an_item");
+    expect(sweepable(case_)).toBe(true);
+    const folders = new Set<string>();
+    await crashSweep(case_, ctx, { beforeResume: (_log, memory) => folders.add(memory.get("cases")!) });
+    expect(folders.size).toBeGreaterThan(1);
+    for (const folder of folders) expect(readdirSync(folder)).toContain("store.db");
+  }, SWEEP);
+
+  test("fails a VectorDBMemory case's sweep whose store loses its items before the resume", async () => {
+    const [case_, ctx] = committed("run-memory/vectordb_memory__an_agent_adds_an_item");
+    const emptied = (_log: string, memory: ReadonlyMap<string, string>) => {
+      const db = openSqlite(join(memory.get("cases")!, "store.db"));
+      try {
+        db.exec("DELETE FROM items");
+      } finally {
+        db.close();
+      }
+    };
+    const failure = crashSweep(case_, ctx, { beforeResume: emptied });
+    await expect(failure).rejects.toBeInstanceOf(CaseFailure);
+    await expect(failure).rejects.toThrow(/memory \(crash sweep, cut after record \d+\) differs/);
   }, SWEEP);
 
   test("a sweep still going refuses no other run's appends", async () => {

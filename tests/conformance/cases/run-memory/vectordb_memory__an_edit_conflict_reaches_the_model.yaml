@@ -1,0 +1,86 @@
+# An edit whose `if_version` isn't the item's version is a conflict: nothing is written, and the
+# model reads the reason and the item's current state as an error result. It then answers, and the
+# store is unchanged.
+kind: run
+flow: |
+  id: conflict
+  name: conflict
+  llm_config: {provider: anthropic, model: claude-test}
+  typedefs:
+    Case:
+      title: str
+      tags: list(str)
+  input:
+    cases: !VectorDBMemory(Case)
+  nodes:
+    answer:
+      kind: agent
+      input:
+        cases: ${input.cases}
+      tools: [{cases: [edit]}]
+      system_prompt: Help.
+      prompt: Retitle case 1.
+      output: str
+  output: ${answer.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    cases:
+      type: VectorDBMemory
+      id: t/cases
+      embedding: {provider: openai, model: text-embedding-3-small}
+      items:
+      - {text: alpha bravo, fields: {title: Login, tags: [auth]}}
+      - {text: charlie delta, fields: {title: Outage, tags: [ops]}}
+  models:
+    answer:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: c1, name: cases_edit, arguments: {id: 1, if_version: 2, fields: {title: Sign-in, tags: [auth]}}}
+      - request:
+          messages:
+          - {format: yian.message.v1, role: system, parts: [{type: text, text: Help.}]}
+          - {format: yian.message.v1, role: user, parts: [{type: text, text: Retitle case 1.}]}
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - {type: tool_call, id: c1, name: cases_edit, arguments: {id: 1, if_version: 2, fields: {title: Sign-in, tags: [auth]}}}
+          - format: yian.message.v1
+            role: tool
+            parts:
+            - type: tool_result
+              call_id: c1
+              name: cases_edit
+              content: |-
+                item 1 changed since it was read: its version is 1, not 2
+                current: {"id":1,"version":1,"text":"alpha bravo","fields":{"tags":["auth"],"title":"Login"},"author":{"kind":"host","name":"conformance"}}
+              is_error: true
+          tools:
+          - name: cases_edit
+            description: Change an item's text, its fields or both. Conflicts unless the item's version is if_version, as read or search gives it.
+            parameters:
+              type: object
+              properties:
+                id: {type: integer, minimum: 1.0, description: "The item's id, as search, list or read gives it."}
+                if_version: {type: integer, minimum: 1.0, description: "The item's version, as search, list or read gave it."}
+                text: {type: string, description: "The item's new text."}
+                fields:
+                  type: object
+                  title: Record
+                  description: The item's typed fields.
+                  properties:
+                    title: {type: string, title: Title}
+                    tags: {type: array, title: Tags, items: {type: string}}
+                  required: [title, tags]
+              required: [id, if_version]
+              additionalProperties: false
+        reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: left as is}]}
+expect:
+  output: {status: succeeded, output: left as is}
+  memory:
+    cases:
+    - {id: 1, text: alpha bravo, fields: {title: Login, tags: [auth]}}
+    - {id: 2, text: charlie delta, fields: {title: Outage, tags: [ops]}}

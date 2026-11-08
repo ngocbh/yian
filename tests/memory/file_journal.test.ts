@@ -1022,3 +1022,31 @@ test("a call queued with a signal already aborted is rejected at once", async ()
   await blocker;
   await s.close();
 });
+
+test("a wall-clock step while a call is queued neither stretches nor cuts its wait", async () => {
+  let step = 0;
+  const scheduler = { now: () => Date.now() - step, sleep: realScheduler.sleep };
+  const s = await openAt({ lockTimeoutMs: 300, scheduler });
+  const lock = lockFile(join(root, ".yian/lock"), { private: true });
+  const start = Date.now();
+  const ended = (p: Promise<unknown>) =>
+    p.then(
+      () => ({ ok: true, ms: Date.now() - start }),
+      (error: unknown) => ({ error, ms: Date.now() - start }),
+    );
+  const first = ended(append(s, "a", "a"));
+  const second = ended(append(s, "b", "b"));
+  setTimeout(() => (step = 3_600_000), 100);
+  const release = setTimeout(() => lock.release(), 1_500);
+  try {
+    const [one, two] = await Promise.all([first, second]);
+    expect((one as { error: unknown }).error).toBeInstanceOf(MemoryBusyError);
+    // The clock went back an hour, but the second call still had only its 300 ms.
+    expect((two as { error: unknown }).error).toBeInstanceOf(MemoryBusyError);
+    expect(two.ms).toBeLessThan(1_000);
+  } finally {
+    clearTimeout(release);
+    lock.release();
+  }
+  await s.close();
+});

@@ -204,7 +204,10 @@ export interface FileMemoryOptions {
   maxHistoryChars?: number;
   /** Longest wait in milliseconds for the memory's lock; 0 fails at once when it is held. */
   lockTimeoutMs?: number;
-  /** The clock and sleep the lock wait uses, and the clock that stamps changes. */
+  /**
+   * The sleep the lock wait uses between tries, and the clock that stamps changes. A wait's
+   * deadline runs on a monotonic clock, not this one.
+   */
   scheduler?: Scheduler;
 }
 
@@ -731,12 +734,13 @@ export class FileMemory extends MemoryBase {
       limits,
       scheduler,
       locked<T>(signal: AbortSignal | undefined, body: Held<T>): Turn<T> {
-        const deadline = scheduler.now() + timeoutMs;
+        // A monotonic clock, so a wall-clock step while queued neither stretches nor cuts the wait.
+        const deadline = performance.now() + timeoutMs;
         return inTurn(real, signal, async () => {
           // Checked before the lock file is opened, and on every call: the folder may change.
           checkMeta(real);
           // Only what is left of the timeout: a call waits it out once, queued or not.
-          const left = Math.max(0, deadline - scheduler.now());
+          const left = Math.max(0, deadline - performance.now());
           let lock: FileLock;
           try {
             lock = await waitForLock(join(real, META, "lock"), { timeoutMs: left, signal, scheduler, private: true });

@@ -1509,7 +1509,8 @@ export interface AdvanceOptions {
  * @throws TypeError when `flow` isn't a `ComposedFlow` or `null`, `signal` isn't an `AbortSignal`,
  *   `live` isn't a `LiveChannel`, `onEvent` or `onStream` isn't a function, a `tools` entry is
  *   malformed, `skills`, `scheduler`, `random` or `models` is malformed, a worker count isn't an
- *   integer, or a recorded carrier has the wrong type.
+ *   integer, a recorded carrier has the wrong type, or `memory` isn't a record of `MemoryBase`
+ *   instances (or `null`, for an Optional memory).
  * @throws ExpressionError as `runFlow`, for an unfinished run.
  * @throws RangeError when the log's prefix is invalid, the run's flow was built in code and no
  *   `flow` was passed, or its flow files were recorded and one was, `codeRoot` isn't the recorded
@@ -1521,9 +1522,9 @@ export interface AdvanceOptions {
  *   was opened by another run in progress, or a started call-time agent resolves to another config
  *   than the one it recorded (`node '<path>' llm_config: recorded config differs from the
  *   recomputed one; ...`), before its model call. Also when `learnable`, a removed option, is
- *   given; or, for an unfinished run, a memory it recorded isn't bound or isn't at its location,
- *   differs from the recorded one, or `memory` names an input that isn't a memory input or one
- *   recorded null.
+ *   given; when `memory` names an input that isn't a memory input, or gives an instance to one
+ *   recorded null (checked for any run, finished or not); or, for an unfinished run, a memory it
+ *   recorded isn't bound or isn't at its location, or differs from the recorded one.
  * @throws AuthError when a call-time agent resolves to the provider of the run's host key and
  *   `apiKey` (or a recorded header) wasn't given, before its model call, or the credential store
  *   can't be read.
@@ -1578,6 +1579,9 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       // The caller's credentials, which the replay used, before a flow that sends no host key
       // drops them below: a later call passing the same ones then reuses the entry.
       keep = () => idleRun(state, flow, key, opened, { hostFlow, ...credentials });
+      // Checked before any early return, so a bad binding is never silently ignored.
+      const recordedMemories = startMemories(flow.input, state);
+      const memoryBound = resumeBindings(flow.input, options.memory ?? null, recordedMemories);
       const callTime = state.callTimeLlm as CallTimeLlm | null;
       if (!usesHostKey(state.effectiveLlmByStaticPath, callTime)) {
         apiKey = null;
@@ -1628,9 +1632,8 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       checkToolTypes(flow.compiled, runTools);
       checkRecordedSpecs("tools", start.tools, recordedTools(flow.compiled, runTools));
       checkRecordedToolGroups(start.toolGroups, recordedToolGroups(flow.compiled, runTools));
-      const recordedMemories = startMemories(flow.input, state);
       const reopened = await RunMemories.reopen(
-        resumeBindings(flow.input, options.memory ?? null, recordedMemories),
+        memoryBound,
         recordedMemories,
         { signal: signal ?? new AbortController().signal, hostTypes, drift: crashed },
       );

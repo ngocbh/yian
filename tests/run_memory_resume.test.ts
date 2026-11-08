@@ -268,3 +268,35 @@ test("runFlow still refuses a memory option", async () => {
     runFlow(await loadFlow(FLOW), {}, { env: NO_ENV, memory: {} } as RunFlowOptions),
   ).rejects.toThrow("the memory option was removed: pass each memory as a flow input");
 });
+
+test("a bad memory option is refused even when nothing is left to run", async () => {
+  const text = `
+id: w
+name: w
+input:
+  lessons: !FileMemory
+nodes:
+  hold:
+    kind: tool
+    tool_id: hold
+output: \${hold.output}
+`;
+  const hold = new FunctionTool({ name: "hold", description: "Hold.", parametersJsonSchema: { type: "object" }, execute: () => pending() });
+  const memory = new FakeMemory(() => new RecordingSession(fileInfo("t/lessons")));
+  const log = runLog();
+  const waiting = await runFlow(await loadFlow(text), { lessons: memory }, { env: NO_ENV, log, tools: { hold } });
+  expect(waiting.status).toBe("waiting");
+  // A waiting run that can't move, then a finished one.
+  for (const settle of [async () => {}, async () => {
+    await complete(log, waiting.waits[0]!.callId, { output: "x" });
+    expect((await advance({ log, env: NO_ENV, tools: { hold }, memory: { lessons: memory } })).status).toBe("succeeded");
+  }]) {
+    await settle();
+    await expect(advance({ log, env: NO_ENV, tools: { hold }, memory: { stray: memory } })).rejects.toThrow(
+      "memory `stray` isn't a memory input of this run's flow",
+    );
+    await expect(advance({ log, env: NO_ENV, tools: { hold }, memory: { lessons: "folder" as never } })).rejects.toThrow(
+      "memory `lessons` takes a MemoryBase instance",
+    );
+  }
+});

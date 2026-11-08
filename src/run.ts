@@ -35,7 +35,8 @@
  * A run binds each memory input to the instance its host passes (`runtime/memories.ts`): before
  * `RunStarted` it opens and snapshots each into the value START's inputs record, and a resume
  * binds the same memories again; `RunResult.memoryDrift` and the `MemoryDrift` type report a
- * memory that moved while a crashed run was down.
+ * memory that changed since the run started (including the run's own writes), as a crash resume
+ * finds it.
  *
  * Knows about:   compile, compose, defaults, diagnostics, events, expr, llm_clients, memory,
  *                nodes, platform, runtime, skills, tools, typesys.
@@ -304,8 +305,9 @@ export class RunResult {
    */
   readonly crashedAttempts: ReadonlyMap<string, number>;
   /**
-   * The memories whose version moved since the run started, as this call's crash resume found
-   * them, one per memory; frozen, and empty for a fresh run and any other call.
+   * The memories that changed since the run started (including the run's own writes), as this
+   * call's crash resume found them: one per memory whose version isn't the one recorded at the
+   * run's start; frozen, and empty for a fresh run and any other call.
    */
   readonly memoryDrift: readonly MemoryDrift[];
   /**
@@ -1484,8 +1486,9 @@ export interface AdvanceOptions {
  *
  * An unfinished run binds the memories it started with again (`memory`): each is opened with
  * `create: false` and must match the identity, type, settings and tool specs its run recorded. The
- * recorded recall stays the run's. A crash resume reads each memory's version and reports one that
- * moved in `RunResult.memoryDrift`; advancing a waiting run doesn't read them. The sessions close
+ * recorded recall stays the run's. A crash resume reads each memory's version and reports, in
+ * `RunResult.memoryDrift`, one that changed since the run started (including the run's own
+ * writes); advancing a waiting run doesn't read them. The sessions close
  * when the segment ends, a failed close reported as `runFlow` reports it.
  *
  * `RunResumed` is written only when the last segment crashed or stopped (work in flight, a

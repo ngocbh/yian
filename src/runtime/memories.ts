@@ -55,7 +55,10 @@ export interface ReopenMemoriesOptions {
   readonly drift: boolean;
 }
 
-/** A memory whose version moved since its run started, as a crash resume found it. */
+/**
+ * A memory that changed since its run started (including the run's own writes), as a crash resume
+ * found it: its version isn't the one recorded at the run's start.
+ */
 export interface MemoryDrift {
   /** The first input bound to the memory. */
   readonly input: string;
@@ -128,8 +131,8 @@ export class RunMemories {
    *
    * @param recorded The value each memory input recorded at the run's start; an Optional one left
    *   out has none and takes no binding.
-   * @returns The sessions, and one drift entry per memory whose version moved (none without
-   *   `drift`), frozen.
+   * @returns The sessions, and one drift entry per memory whose version isn't the recorded one
+   *   (none without `drift`), frozen.
    * @throws RangeError when a recorded memory has no binding or isn't at its location ("bind it
    *   with --memory"), or its identity, type, settings or tool specs differ from the recorded ones.
    * @throws As `open` throws, for the instance checks and a failed open or snapshot.

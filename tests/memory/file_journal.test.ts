@@ -959,3 +959,19 @@ test("an abort while queued leaves the others in their order", async () => {
   expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("1\n3");
   await s.close();
 });
+
+test("the journal won't be rewritten while an entry has no outcome", async () => {
+  const s = await openAt();
+  await append(s, "x", "one");
+  await s.close();
+  const meta = join(root, ".yian");
+  const journal = new Journal(meta, { maxChangeIds: 10, maxUndo: 10, maxHistoryChars: 100 });
+  journal.catchUp();
+  const entry = { ...(journalLines()[1] as unknown as JournalEntry), id: "y" };
+  journal.writeEntry(entry);
+  const before = fs.readFileSync(join(meta, "journal.jsonl"), "utf8");
+  const message = "`.yian/journal.jsonl` can't be rewritten while change `y` has no outcome";
+  expect(() => journal.compact()).toThrow(message);
+  expect(() => journal.erase({ ...entry, id: "e", op: "erase", inverse: null }, () => true)).toThrow(message);
+  expect(fs.readFileSync(join(meta, "journal.jsonl"), "utf8")).toBe(before);
+});

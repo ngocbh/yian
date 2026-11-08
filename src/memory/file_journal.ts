@@ -494,6 +494,10 @@ export class Journal {
    * its first line and reads it whole too.
    */
   #rewrite(lines: string[]): void {
+    // A rewrite keeps only changes with an outcome, so a pending entry would be lost unresolved.
+    if (this.#pending !== null) {
+      throw new Error(`${SHOWN} can't be rewritten while change \`${this.#pending.entry.id}\` has no outcome`);
+    }
     const generation = randomBytes(8).toString("hex");
     const text = `${[JSON.stringify({ generation }), ...lines].join("\n")}\n`;
     const tmp = join(this.#meta, "tmp");

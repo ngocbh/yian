@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
 import {
+  type Applied,
   type Author,
   ChangeIdReusedError,
   MemoryBusyError,
@@ -372,3 +373,309 @@ test("writers in separate processes serialize through the lock: every append lan
     expect(journal[i + 1]).toMatchObject({ id: journal[i]!.id, ok: true });
   }
 });
+
+/** The error a simulated crash throws. */
+class Crash extends Error {
+  override name = "Crash";
+}
+
+/** Return a Node system error with `code`, as a failing disk gives it. */
+function systemError(code: string): Error {
+  return Object.assign(new Error(`${code}: simulated`), { code, syscall: "write" });
+}
+
+/**
+ * Spy on `fs.writeSync` with `fake`, which gets each call's descriptor and the bytes it writes, and
+ * a `write` that writes the first `length` of them (all by default).
+ */
+function onWrite(fake: (fd: number, data: Buffer, write: (length?: number) => number) => number): void {
+  const { writeSync } = fs;
+  type Offset = number | null | undefined;
+  spyOn(fs, "writeSync").mockImplementation(((fd: number, data: Uint8Array, offset: Offset, length: Offset) => {
+    const start = offset ?? 0;
+    const bytes = Buffer.from(data.buffer, data.byteOffset + start, length ?? data.length - start);
+    return fake(fd, bytes, (part = bytes.length) => writeSync(fd, bytes, 0, part));
+  }) as typeof fs.writeSync);
+}
+
+/**
+ * Apply an append to `path` as change `id` that stops partway: `before` stops before its file is
+ * replaced (the rename fails), `after` once the file is replaced but before its commit line is
+ * whole (a crash cuts the line). Either leaves the change's entry with no outcome.
+ */
+async function crashedAppend(s: MemorySession, id: string, text: string, at: "before" | "after", path = "a.md") {
+  if (at === "before") {
+    spyOn(fs, "renameSync").mockImplementation(() => {
+      throw systemError("ENOSPC");
+    });
+  } else {
+    onWrite((_, data, write) => {
+      if (!data.includes('"ok":true')) return write();
+      write(data.length >> 1);
+      throw new Crash("cut in the commit line");
+    });
+  }
+  try {
+    await expect(append(s, id, text, path)).rejects.toThrow();
+  } finally {
+    mock.restore();
+  }
+}
+
+/** Return the journal's lines with no outcome check: the generation line dropped. */
+function journalBody(): JsonObject[] {
+  return journalLines().slice(1);
+}
+
+test("an entry with no outcome whose file is at its after hash is committed on open", async () => {
+  const s = await openAt();
+  await append(s, "first", "one");
+  await crashedAppend(s, "x", "two", "after");
+  expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("one\ntwo");
+  const t = await openAt();
+  const version = versionNow();
+  const committed = { ok: true, version, result: { path: "a.md", hash: sha256("one\ntwo"), version } };
+  expect(journalBody().slice(-2)).toEqual([
+    expect.objectContaining({ id: "x", after: sha256("one\ntwo") }),
+    { id: "x", ...committed },
+  ]);
+  // Its id returns the stored result: the resumed call doesn't append again.
+  expect(await append(t, "x", "two")).toEqual(committed as Applied);
+  expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("one\ntwo");
+  await s.close();
+  await t.close();
+});
+
+test("an entry with no outcome whose file is at its before hash is aborted on open; its id applies again", async () => {
+  const s = await openAt();
+  await append(s, "first", "one");
+  await crashedAppend(s, "x", "two", "before");
+  const t = await openAt();
+  expect(journalBody().slice(-2)).toEqual([expect.objectContaining({ id: "x" }), { id: "x", aborted: true }]);
+  expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("one");
+  expect((await append(t, "x", "two")).ok).toBe(true);
+  expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("one\ntwo");
+  expect(journalBody().map((line) => (line.aborted ? "abort" : line.digest ? "entry" : "commit"))).toEqual([
+    "entry",
+    "commit",
+    "entry",
+    "abort",
+    "entry",
+    "commit",
+  ]);
+  await s.close();
+  await t.close();
+});
+
+test("an aborted id is free: one session reuses it, and a session opened earlier reads both", async () => {
+  const b = await openAt();
+  const crashed = await openAt();
+  await crashedAppend(crashed, "x", "text", "before");
+  const a = await openAt();
+  expect(journalBody().at(-1)).toEqual({ id: "x", aborted: true });
+  const landed = await append(a, "x", "text");
+  expect(landed.ok).toBe(true);
+  // b read the journal before the crash; its next write reads entry 1 as aborted and entry 2 as committed.
+  expect(await append(b, "x", "text")).toEqual(landed);
+  expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("text");
+  for (const s of [a, b, crashed]) await s.close();
+});
+
+test("an entry whose file is at neither hash is stored as an unknown outcome, never applied twice", async () => {
+  const s = await openAt();
+  await append(s, "first", "one");
+  await crashedAppend(s, "x", "two", "after");
+  fs.writeFileSync(join(root, "a.md"), "edited by hand");
+  const t = await openAt();
+  const unknown = {
+    ok: false,
+    reason: "this change may have landed; check the file",
+    current: { path: "a.md", hash: sha256("edited by hand") },
+  };
+  expect(journalBody().at(-1)).toEqual({ id: "x", ...unknown });
+  expect(await append(t, "x", "two")).toEqual(unknown as Applied);
+  expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("edited by hand");
+  await s.close();
+  await t.close();
+});
+
+test("every write first resolves another session's cut-off entry, then applies its own", async () => {
+  const a = await openAt();
+  const b = await openAt();
+  await crashedAppend(b, "bx", "from b", "after", "b.md");
+  await append(a, "ay", "from a");
+  expect(journalBody().map((line) => `${line.id}:${line.digest ? "entry" : line.ok ? "commit" : "other"}`)).toEqual([
+    "bx:entry",
+    "bx:commit",
+    "ay:entry",
+    "ay:commit",
+  ]);
+  await a.close();
+  await b.close();
+});
+
+test("an entry with no outcome before later entries makes open fail, naming its line", async () => {
+  const s = await openAt();
+  await append(s, "x", "one");
+  const lines = fs.readFileSync(join(root, ".yian/journal.jsonl"), "utf8").split("\n");
+  // Drop x's commit line, then add y: x's entry no longer ends the journal.
+  const entry = JSON.parse(lines[1]!) as JsonObject;
+  const y = { ...entry, id: "y" };
+  const damagedLines = [lines[0], lines[1], JSON.stringify(y), JSON.stringify({ id: "y", aborted: true }), ""];
+  fs.writeFileSync(join(root, ".yian/journal.jsonl"), damagedLines.join("\n"));
+  await expect(openAt()).rejects.toThrow(
+    "`.yian/journal.jsonl` line 2 has an entry with no outcome before later entries; restore the journal or " +
+      "remove it (undo history and change ids are lost)",
+  );
+  await s.close();
+});
+
+test("a temp file a crash left in .yian/tmp/ isn't a member and goes on the next write", async () => {
+  const s = await openAt();
+  await append(s, "x", "one");
+  fs.writeFileSync(join(root, ".yian/tmp/0123456789abcdef"), "half a file");
+  const version = versionNow();
+  expect((await s.snapshot()).version).toBe(version);
+  await append(s, "y", "two");
+  expect(fs.readdirSync(join(root, ".yian/tmp"))).toEqual([]);
+  await s.close();
+});
+
+test.each([
+  ["ENOSPC writing the content", "next write"],
+  ["ENOSPC writing the content", "open"],
+  ["EXDEV renaming it into place", "next write"],
+  ["EXDEV renaming it into place", "open"],
+])("a change whose content write fails with %s is recovered by the %s, not left blocking", async (fault, by) => {
+  const s = await openAt();
+  await append(s, "first", "one");
+  if (fault.startsWith("ENOSPC")) {
+    onWrite((_, data, write) => {
+      if (data.includes("zzz-content")) throw systemError("ENOSPC");
+      return write();
+    });
+  } else {
+    spyOn(fs, "renameSync").mockImplementation(() => {
+      throw systemError("EXDEV");
+    });
+  }
+  try {
+    await expect(append(s, "x", "zzz-content")).rejects.toThrow(fault.slice(0, fault.indexOf(" ")));
+  } finally {
+    mock.restore();
+  }
+  expect(journalBody().at(-1)).toMatchObject({ id: "x", op: "append" });
+  expect(fs.readdirSync(join(root, ".yian/tmp"))).toEqual([]);
+  const writer = by === "open" ? await openAt() : s;
+  if (by === "open") expect(journalBody().at(-1)).toEqual({ id: "x", aborted: true });
+  // The resumed call sends x again: it lands once.
+  expect((await append(writer, "x", "zzz-content")).ok).toBe(true);
+  expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("one\nzzz-content");
+  expect(journalBody().filter((line) => line.aborted)).toEqual([{ id: "x", aborted: true }]);
+  await s.close();
+  if (writer !== s) await writer.close();
+});
+
+test.if(process.platform === "linux")("a recovery's outcome line is synced before the next write", async () => {
+  const s = await openAt();
+  await append(s, "first", "one");
+  await crashedAppend(s, "x", "two", "after");
+  const events: string[] = [];
+  const where = (fd: number) =>
+    relative(root, fs.readlinkSync(`/proc/self/fd/${fd}`)).replace(/^\.yian\/tmp\/.+$/, ".yian/tmp/*") || ".";
+  const { fsyncSync, ftruncateSync } = fs;
+  onWrite((fd, data, write) => {
+    const kind = data.includes('"ok":true') ? " commit" : data.includes('"digest"') ? " entry" : "";
+    events.push(`write ${where(fd)}${kind}`);
+    return write();
+  });
+  spyOn(fs, "fsyncSync").mockImplementation((fd: number) => {
+    events.push(`fsync ${where(fd)}`);
+    fsyncSync(fd);
+  });
+  spyOn(fs, "ftruncateSync").mockImplementation((fd: number, length?: number) => {
+    events.push(`truncate ${where(fd)}`);
+    ftruncateSync(fd, length);
+  });
+  await append(s, "y", "three");
+  expect(events.slice(0, 6)).toEqual([
+    // The cut-off commit line goes, x is committed and synced, and only then is y's entry written.
+    "truncate .yian/journal.jsonl",
+    "fsync .yian/journal.jsonl",
+    "write .yian/journal.jsonl commit",
+    "fsync .yian/journal.jsonl",
+    "write .yian/journal.jsonl entry",
+    "fsync .yian/journal.jsonl",
+  ]);
+  await s.close();
+});
+
+/**
+ * Make the `cut`th call to a function that writes to disk crash, as a process killed there would
+ * stop: a write writes half its bytes first. Returns the number of such calls made so far.
+ */
+function cutAt(cut: number): () => number {
+  let calls = 0;
+  onWrite((_, data, write) => {
+    if (++calls !== cut) return write();
+    write(data.length >> 1);
+    throw new Crash(`cut at call ${cut}`);
+  });
+  for (const name of ["fsyncSync", "ftruncateSync", "rmSync", "unlinkSync", "renameSync"] as const) {
+    const original = fs[name] as (...args: unknown[]) => unknown;
+    spyOn(fs, name).mockImplementation(((...args: unknown[]) => {
+      if (++calls === cut) throw new Crash(`cut at call ${cut}`);
+      return original(...args);
+    }) as never);
+  }
+  return () => calls;
+}
+
+/**
+ * Leave a memory at `root` that needs recovery: change x's entry with no outcome (`at` its after
+ * hash with its commit line cut, or at its before hash), and a temp file a crash left.
+ */
+async function needsRecovery(at: "before" | "after"): Promise<void> {
+  const s = await openAt();
+  await append(s, "first", "one");
+  await crashedAppend(s, "x", "two", at);
+  fs.writeFileSync(join(root, ".yian/tmp/0123456789abcdef"), "left by a crash");
+  await s.close();
+}
+
+/** Return what recovery leaves: the journal without its generation line, and the members' texts. */
+function recovered(): string {
+  const files = readMembers(root, { maxDepth: 4, maxFileChars: 100_000 }).files.map((file) => [file.path, file.text]);
+  return JSON.stringify({ journal: journalBody(), files, tmp: fs.readdirSync(join(root, ".yian/tmp")) });
+}
+
+test.each(["before", "after"] as const)(
+  "a crash at each of a recovery's writes (entry at %s) is recovered again, to the same state",
+  async (at) => {
+    const base = dir;
+    root = join(base, "reference");
+    await needsRecovery(at);
+    const calls = cutAt(Number.POSITIVE_INFINITY);
+    const reference = await openAt();
+    const writes = calls();
+    mock.restore();
+    await reference.close();
+    const expected = recovered();
+    expect(writes).toBeGreaterThanOrEqual(at === "after" ? 5 : 3);
+    for (let cut = 1; cut <= writes; cut++) {
+      root = join(base, `cut-${cut}`);
+      await needsRecovery(at);
+      cutAt(cut);
+      try {
+        await expect(openAt()).rejects.toThrow(`cut at call ${cut}`);
+      } finally {
+        mock.restore();
+      }
+      const again = await openAt();
+      expect({ cut, state: recovered() }).toEqual({ cut, state: expected });
+      expect((await append(again, "x", "two")).ok).toBe(true);
+      expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("one\ntwo");
+      await again.close();
+    }
+  },
+);

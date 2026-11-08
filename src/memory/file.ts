@@ -42,7 +42,15 @@ import {
   type MemoryToolSpec,
   type Recall,
 } from "./base.ts";
-import { ABSENT, authorOf, type Inverse, Journal, openRegular, writeAll } from "./file_journal.ts";
+import {
+  ABSENT,
+  authorOf,
+  type Inverse,
+  Journal,
+  type JournalEntry,
+  openRegular,
+  writeAll,
+} from "./file_journal.ts";
 
 /** The arguments `path` takes in every tool. */
 const PATH_PARAMETER: JsonObject = {
@@ -695,9 +703,11 @@ export class FileMemory extends MemoryBase {
    * `.yian/identity` and reports `created`.
    *
    * @throws {TypeError} If `itemType` isn't `null`.
+   * Before it returns, it catches up on the journal and resolves a change a crash cut off.
+   *
    * @throws Error when the memory doesn't exist and `create` is false, its stored identity isn't
-   *   the constructor's `id`, or the root or `.yian` isn't a folder.
-   * @throws {MemoryBusyError} If creating it waits for the lock longer than the timeout.
+   *   the constructor's `id`, the root or `.yian` isn't a folder, or the journal is damaged.
+   * @throws {MemoryBusyError} If it waits for the lock longer than the timeout.
    */
   override async open(o: {
     create: boolean;
@@ -738,7 +748,10 @@ export class FileMemory extends MemoryBase {
     if (this.#id !== undefined && identity !== this.#id) {
       throw new Error(`this memory is ${shown(identity)}, not ${shown(this.#id)}`);
     }
-    return new FileMemorySession(this.#store, sessionInfo(identity, this.#store), created);
+    const session = new FileMemorySession(this.#store, sessionInfo(identity, this.#store), created);
+    // A change a crash cut off is resolved before the session reads or writes anything.
+    await session.recover(o.signal);
+    return session;
   }
 
   /** Empty the memory, keeping its identity. */
@@ -837,6 +850,48 @@ function removeMember(root: string, path: string): void {
   syncFolder(dirname(join(root, path)));
 }
 
+/**
+ * Return the sha256 of the bytes at `rel` under `root`, `absent` when no file is there, or `null`
+ * when the path can't hold a member, so that no hash a change recorded matches it.
+ */
+function fileHash(root: string, rel: string, limits: Limits): string | null {
+  if (pathProblem(rel, limits.maxDepth) !== null || diskProblem(root, rel) !== null) return null;
+  let fd: number;
+  try {
+    fd = openRegular(join(root, rel), fs.constants.O_RDONLY);
+  } catch (error) {
+    if (isSystemError(error) && error.code === "ENOENT") return ABSENT;
+    if (isSystemError(error) && ["ELOOP", "EISDIR", "EINVAL", "ENXIO"].includes(error.code)) return null;
+    throw error;
+  }
+  try {
+    // A file this big was never a member, so no recorded hash can be its.
+    if (fs.fstatSync(fd).size > 4 * limits.maxFileChars) return null;
+    return sha256(fs.readFileSync(fd));
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** Return the result a committed change `entry` reports when the memory's version is `version`. */
+function resultOf(entry: JournalEntry, version: string): JsonObject {
+  const { path, after } = entry;
+  return after === ABSENT ? { path, version } : { path, hash: after, version };
+}
+
+/** Remove what a crash left in `.yian/tmp/`: holding the lock, no write is using it. */
+function clearTmp(root: string): void {
+  const tmp = join(root, META, "tmp");
+  let names: string[];
+  try {
+    names = fs.readdirSync(tmp);
+  } catch (error) {
+    if (isSystemError(error) && error.code === "ENOENT") return;
+    throw error;
+  }
+  for (const name of names) fs.rmSync(join(tmp, name), { recursive: true, force: true });
+}
+
 /** One open FileMemory. Read tools take no lock; writes and snapshots take the memory's lock. */
 class FileMemorySession implements MemorySession {
   readonly info: MemoryInfo;
@@ -908,10 +963,7 @@ class FileMemorySession implements MemorySession {
     const change = checkChange(c.change);
     const digest = sha256(canonicalJson(c.change));
     return this.#locked(c.signal, () => {
-      const pending = this.#journal.catchUp();
-      if (pending !== null) {
-        throw new Error(`\`.yian/journal.jsonl\` ends with change ${shown(pending.id)}, whose outcome isn't recorded`);
-      }
+      this.#recover();
       const known = this.#journal.known(c.id);
       if (known !== undefined) {
         if (known.digest !== digest) throw new ChangeIdReusedError(c.id);
@@ -1096,11 +1148,7 @@ class FileMemorySession implements MemorySession {
     if (bytes === null) removeMember(root, path);
     else writeMember(root, path, bytes);
     const version = memoryVersion(files);
-    const applied: Applied = {
-      ok: true,
-      version,
-      result: bytes === null ? { path, version } : { path, hash: after, version },
-    };
+    const applied: Applied = { ok: true, version, result: resultOf({ path, after } as JournalEntry, version) };
     this.#journal.writeOutcome(id, applied);
     return applied;
   }
@@ -1153,6 +1201,46 @@ class FileMemorySession implements MemorySession {
       current.cut = `${plural(file.chars - maxReadChars, "more character")} not shown; read the file for the rest`;
     }
     return { ok: false, reason, current };
+  }
+
+  /**
+   * @internal Catch up on the journal and resolve a change a crash cut off, holding the lock, as
+   * `open` does before it returns the session.
+   *
+   * @throws {MemoryBusyError} If another writer holds the lock past the timeout.
+   */
+  recover(signal: AbortSignal): Promise<void> {
+    return this.#locked(signal, () => this.#recover());
+  }
+
+  /**
+   * Catch up on the journal and resolve its last entry when it has no outcome: commit it when its
+   * file is at the entry's after hash (the change landed), abort it at its before hash (nothing
+   * landed, so its id is free), and otherwise store an unknown outcome, which is never applied
+   * again. Then remove the temp files a crash left.
+   *
+   * Each outcome line is synced before anything else is written, and a crash at any point here
+   * leaves a journal the next recovery resolves the same way.
+   */
+  #recover(): void {
+    const { root, limits } = this.#store;
+    const pending = this.#journal.catchUp();
+    if (pending !== null) {
+      const hash = fileHash(root, pending.path, limits);
+      if (hash === pending.after) {
+        const version = memoryVersion(readMembers(root, limits).files);
+        this.#journal.writeOutcome(pending.id, { ok: true, version, result: resultOf(pending, version) });
+      } else if (hash === pending.before) {
+        this.#journal.writeOutcome(pending.id, "aborted");
+      } else {
+        this.#journal.writeOutcome(pending.id, {
+          ok: false,
+          reason: "this change may have landed; check the file",
+          current: hash === null ? null : { path: pending.path, hash },
+        });
+      }
+    }
+    clearTmp(root);
   }
 
   /** Throw when the session is closed. */

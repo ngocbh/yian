@@ -20,7 +20,7 @@
 import { randomBytes } from "node:crypto";
 // The default import keeps calls patchable by test spies.
 import fs from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { isSystemError, syncFolder } from "../platform.ts";
 import type { JsonObject } from "../typesys/json.ts";
@@ -79,6 +79,16 @@ export interface KnownChange {
   readonly applied: Applied;
 }
 
+/** A change as a journal holds it, with the bytes its lines take, to tell when to compact. */
+interface Held extends JournalChange {
+  /** The entry line's bytes, its line break included. */
+  readonly entryBytes: number;
+  /** The entry line's bytes with no inverse. */
+  readonly bareBytes: number;
+  /** The outcome line's bytes. */
+  readonly outcomeBytes: number;
+}
+
 /** One parsed journal line. */
 type JournalLine =
   | { kind: "generation"; generation: string }
@@ -113,6 +123,50 @@ export function openRegular(path: string, flags: number, mode?: number): number 
 /** @internal Write all of `bytes` to `fd` at its current position. */
 export function writeAll(fd: number, bytes: Uint8Array): void {
   for (let done = 0; done < bytes.length; ) done += fs.writeSync(fd, bytes, done, bytes.length - done);
+}
+
+/**
+ * @internal Write `data` to `target` atomically: a private temp file in `tmp`, synced, renamed
+ * onto `target`, then both folders synced, so a crash leaves the old file or the new one.
+ */
+export function replaceFile(target: string, data: Uint8Array, tmp: string): void {
+  const temporary = join(tmp, randomBytes(8).toString("hex"));
+  const { O_CREAT, O_EXCL, O_WRONLY } = fs.constants;
+  const fd = openRegular(temporary, O_CREAT | O_EXCL | O_WRONLY, 0o600);
+  try {
+    try {
+      // The open's mode is masked by the umask; fchmod isn't.
+      fs.fchmodSync(fd, 0o600);
+      writeAll(fd, data);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(temporary, target);
+  } catch (error) {
+    fs.rmSync(temporary, { force: true });
+    throw error;
+  }
+  syncFolder(dirname(target));
+  syncFolder(tmp);
+}
+
+/**
+ * @internal Make the private folder `path` unless it exists, and sync its parent when it was
+ * made. `name` is how a message shows it.
+ *
+ * @throws Error when `path` exists and isn't a folder (a symlink to one included).
+ */
+export function makeDirectory(path: string, name: string): void {
+  try {
+    fs.mkdirSync(path, { mode: 0o700 });
+  } catch (error) {
+    if (!isSystemError(error) || error.code !== "EEXIST") throw error;
+    if (!fs.lstatSync(path).isDirectory()) throw new Error(`\`${name}\` isn't a folder`);
+    return;
+  }
+  fs.chmodSync(path, 0o700);
+  syncFolder(dirname(path));
 }
 
 /** Read `bytes.length` bytes of `fd` from `position` into `bytes`. */
@@ -175,6 +229,14 @@ function asInverse(value: unknown): Inverse | undefined {
   }
   if (value.absent === true) return { absent: true };
   return undefined;
+}
+
+/** Return the journal line of `entry`, holding `inverse` as its inverse. */
+function entryLine(entry: JournalEntry, inverse: Inverse): JsonObject {
+  const { id, digest, op, path, author, at, before, after, undoes } = entry;
+  const line: JsonObject = { id, digest, op, path, author: authorOf(author), at, before, after, inverse };
+  if (undoes !== undefined) line.undoes = undoes;
+  return line;
 }
 
 /** Return the journal line `text` parsed, or `null` when it isn't one. */
@@ -256,9 +318,11 @@ export class Journal {
   /** The last `maxChangeIds` change ids with an outcome, oldest first. */
   readonly #ids = new Map<string, KnownChange>();
   /** The changes the journal holds with an outcome, in journal order. */
-  #changes: JournalChange[] = [];
-  /** The last entry, while it has no outcome, and its line. */
-  #pending: { entry: JournalEntry; line: number } | null = null;
+  #changes: Held[] = [];
+  /** The last entry, while it has no outcome, its line and its bytes. */
+  #pending: { entry: JournalEntry; line: number; bytes: number } | null = null;
+  /** The bytes of the generation line. */
+  #headerBytes = 0;
 
   /**
    * @param meta The memory's `.yian` folder.
@@ -336,10 +400,62 @@ export class Journal {
 
   /** Append `entry` and sync it, making the journal first when there is none. */
   writeEntry(entry: JournalEntry): void {
-    const { id, digest, op, path, author, at, before, after, inverse, undoes } = entry;
-    const line: JsonObject = { id, digest, op, path, author: authorOf(author), at, before, after, inverse };
-    if (undoes !== undefined) line.undoes = undoes;
-    this.#append(line);
+    this.#append(entryLine(entry, entry.inverse));
+  }
+
+  /**
+   * Return whether the journal has grown past twice what a compaction would keep: the changes
+   * whose ids the table holds, and the inverses the caps keep.
+   */
+  shouldCompact(): boolean {
+    let kept = this.#headerBytes;
+    for (const { change, inverse } of this.#kept()) {
+      kept += (inverse ? change.entryBytes : change.bareBytes) + change.outcomeBytes;
+    }
+    return this.#offset > 2 * kept;
+  }
+
+  /**
+   * Rewrite the journal as a new generation holding only what the caps keep: each change whose id
+   * the table holds, with its outcome, and the inverses `undoable` keeps; other inverses become
+   * `null`, and aborted changes go. Hold the lock, with no entry pending.
+   */
+  compact(): void {
+    const lines = this.#kept().flatMap(({ change, inverse }) => [
+      JSON.stringify(entryLine(change.entry, inverse ? change.entry.inverse : null)),
+      JSON.stringify({ id: change.entry.id, ...change.applied }),
+    ]);
+    this.#rewrite(lines);
+  }
+
+  /** Return the changes a compaction keeps, in journal order, and whether each keeps its inverse. */
+  #kept(): { change: Held; inverse: boolean }[] {
+    const inverses = this.undoable();
+    const latest = new Map<string, Held>();
+    for (const change of this.#changes) latest.set(change.entry.id, change);
+    const tabled = new Set<Held>();
+    for (const id of this.#ids.keys()) {
+      const change = latest.get(id);
+      if (change !== undefined) tabled.add(change);
+    }
+    return this.#changes
+      .filter((change) => tabled.has(change) || inverses.has(change))
+      .map((change) => ({ change, inverse: inverses.has(change) }));
+  }
+
+  /**
+   * Replace the journal with a new generation holding `lines`, through a synced temp file in
+   * `.yian/tmp/`, then read it whole. A session that read the old generation sees the new one on
+   * its first line and reads it whole too.
+   */
+  #rewrite(lines: string[]): void {
+    const generation = randomBytes(8).toString("hex");
+    const text = `${[JSON.stringify({ generation }), ...lines].join("\n")}\n`;
+    const tmp = join(this.#meta, "tmp");
+    makeDirectory(tmp, ".yian/tmp");
+    replaceFile(this.#path, Buffer.from(text, "utf8"), tmp);
+    this.#reset(null);
+    this.catchUp();
   }
 
   /** Append the outcome of the pending entry `id`, a commit or an abort, and sync it. */
@@ -360,6 +476,7 @@ export class Journal {
     }
     const header = parseLine(first);
     if (header?.kind !== "generation") throw damaged(1, "isn't a journal line");
+    this.#headerBytes = Buffer.byteLength(first, "utf8") + 1;
     if (header.generation !== this.#generation || size < this.#offset) this.#reset(header.generation);
     if (size === this.#offset) return;
     const bytes = Buffer.alloc(size - this.#offset);
@@ -377,14 +494,14 @@ export class Journal {
       const line = this.#lines + 1;
       const parsed = parseLine(text);
       if (parsed === null) throw damaged(line, "isn't a journal line");
-      this.#fold(parsed, line);
+      this.#fold(parsed, line, Buffer.byteLength(text, "utf8") + 1);
       this.#lines = line;
     }
     this.#offset += end;
   }
 
-  /** Take one journal line into the table and the pending entry. */
-  #fold(parsed: JournalLine, line: number): void {
+  /** Take one journal line, of `bytes` bytes, into the table, the changes and the pending entry. */
+  #fold(parsed: JournalLine, line: number, bytes: number): void {
     if (parsed.kind === "generation") {
       if (line !== 1) throw damaged(line, "isn't a journal line");
       return;
@@ -394,15 +511,19 @@ export class Journal {
       if (this.#pending !== null) {
         throw damaged(this.#pending.line, "has an entry with no outcome before later entries");
       }
-      this.#pending = { entry: parsed.entry, line };
+      this.#pending = { entry: parsed.entry, line, bytes };
       return;
     }
     if (this.#pending === null || this.#pending.entry.id !== parsed.id) {
       throw damaged(line, "has an outcome for no entry");
     }
     if (parsed.kind === "commit") {
-      this.#remember(parsed.id, this.#pending.entry.digest, parsed.applied);
-      this.#changes.push({ entry: this.#pending.entry, applied: parsed.applied });
+      const { entry, bytes: entryBytes } = this.#pending;
+      this.#remember(parsed.id, entry.digest, parsed.applied);
+      // The same line with `null` for its inverse: what a compaction that drops it writes.
+      const bareBytes =
+        entry.inverse === null ? entryBytes : entryBytes - Buffer.byteLength(JSON.stringify(entry.inverse)) + 4;
+      this.#changes.push({ entry, applied: parsed.applied, entryBytes, bareBytes, outcomeBytes: bytes });
     }
     this.#pending = null;
   }
@@ -445,7 +566,7 @@ export class Journal {
     }
     this.#lines++;
     this.#offset += bytes.length;
-    this.#fold(parsed, this.#lines);
+    this.#fold(parsed, this.#lines, bytes.length);
   }
 
   /** Start the journal: its generation line, synced with its entry in `.yian/`. */
@@ -467,5 +588,6 @@ export class Journal {
     this.#reset(generation);
     this.#lines = 1;
     this.#offset = bytes.length;
+    this.#headerBytes = bytes.length;
   }
 }

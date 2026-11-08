@@ -49,8 +49,9 @@ import {
   type Inverse,
   Journal,
   type JournalEntry,
+  makeDirectory,
   openRegular,
-  writeAll,
+  replaceFile,
 } from "./file_journal.ts";
 
 /** The arguments `path` takes in every tool. */
@@ -397,49 +398,6 @@ export function memoryVersion(files: readonly MemberFile[]): string {
   const pairs = files.map((file) => [file.path, file.hash]);
   pairs.sort((a, b) => compareCodeUnits(a[0]!, b[0]!));
   return sha256(canonicalJson(pairs));
-}
-
-/**
- * Write `data` to `target` atomically: a private temp file in `tmp`, synced, renamed onto
- * `target`, then both folders synced, so a crash leaves the old file or the new one.
- */
-function replaceFile(target: string, data: Uint8Array, tmp: string): void {
-  const temporary = join(tmp, randomBytes(8).toString("hex"));
-  const { O_CREAT, O_EXCL, O_WRONLY } = fs.constants;
-  const fd = openRegular(temporary, O_CREAT | O_EXCL | O_WRONLY, 0o600);
-  try {
-    try {
-      // The open's mode is masked by the umask; fchmod isn't.
-      fs.fchmodSync(fd, 0o600);
-      writeAll(fd, data);
-      fs.fsyncSync(fd);
-    } finally {
-      fs.closeSync(fd);
-    }
-    fs.renameSync(temporary, target);
-  } catch (error) {
-    fs.rmSync(temporary, { force: true });
-    throw error;
-  }
-  syncFolder(dirname(target));
-  syncFolder(tmp);
-}
-
-/**
- * Make the private folder `path` unless it exists, and sync its parent when it was made.
- *
- * @throws Error when `path` exists and isn't a folder (a symlink to one included).
- */
-function makeDirectory(path: string, name: string): void {
-  try {
-    fs.mkdirSync(path, { mode: 0o700 });
-  } catch (error) {
-    if (!isSystemError(error) || error.code !== "EEXIST") throw error;
-    if (!fs.lstatSync(path).isDirectory()) throw new Error(`${shown(name)} isn't a folder`);
-    return;
-  }
-  fs.chmodSync(path, 0o700);
-  syncFolder(dirname(path));
 }
 
 /** Return `path`'s real path, resolving the symlinks of the part of it that exists. */
@@ -960,6 +918,7 @@ class FileMemorySession implements MemorySession {
         if (known.digest !== digest) throw new ChangeIdReusedError(c.id);
         return known.applied;
       }
+      if (this.#journal.shouldCompact()) this.#journal.compact();
       return this.#write(c.id, digest, change, author);
     });
   }
@@ -987,6 +946,7 @@ class FileMemorySession implements MemorySession {
         if (known.digest !== digest) throw new ChangeIdReusedError(o.id);
         return known.applied;
       }
+      if (this.#journal.shouldCompact()) this.#journal.compact();
       return this.#undo(o.id, digest, o.changeId, author);
     });
   }

@@ -679,3 +679,125 @@ test.each(["before", "after"] as const)(
     }
   },
 );
+
+/** Return the journal's generation. */
+function generation(): string {
+  return journalLines()[0]!.generation as string;
+}
+
+/**
+ * Append lines to `a.md` on `s` as ids `<prefix>1`, `<prefix>2`, ... until the journal, which
+ * must exist, is compacted (its generation changes), at most 40 of them. Returns the ids applied.
+ */
+async function appendUntilCompacted(s: MemorySession, prefix: string): Promise<string[]> {
+  const first = generation();
+  const ids: string[] = [];
+  for (let n = 1; n <= 40; n++) {
+    ids.push(`${prefix}${n}`);
+    await append(s, `${prefix}${n}`, `line ${prefix}${n}`);
+    if (generation() !== first) return ids;
+  }
+  throw new Error("the journal was never compacted");
+}
+
+test("past twice its kept size, a write rewrites the journal as a new generation of what the caps keep", async () => {
+  const s = await openAt({ maxChangeIds: 2, maxUndo: 1 });
+  await append(s, "start", "start");
+  const old = generation();
+  const renames: string[] = [];
+  const { renameSync } = fs;
+  spyOn(fs, "renameSync").mockImplementation((from: fs.PathLike, to: fs.PathLike) => {
+    renames.push(`${relative(root, String(from)).replace(/[0-9a-f]{16}$/, "*")} -> ${relative(root, String(to))}`);
+    renameSync(from, to);
+  });
+  const ids = await appendUntilCompacted(s, "c");
+  mock.restore();
+  expect(generation()).not.toBe(old);
+  // The rewrite goes through a temp file renamed over the journal, as a content write does.
+  const journalRenames = renames.filter((rename) => rename.endsWith(".yian/journal.jsonl"));
+  expect(journalRenames).toEqual([".yian/tmp/* -> .yian/journal.jsonl"]);
+  const body = journalBody();
+  // The write that found the journal too big rewrote it before its own change: the two ids before
+  // it stay, with their entries and commits, and only the newer of them keeps its inverse.
+  expect(body.map((line) => `${line.id}:${line.digest ? "entry" : "commit"}`)).toEqual([
+    `${ids.at(-3)}:entry`,
+    `${ids.at(-3)}:commit`,
+    `${ids.at(-2)}:entry`,
+    `${ids.at(-2)}:commit`,
+    `${ids.at(-1)}:entry`,
+    `${ids.at(-1)}:commit`,
+  ]);
+  const truncate = { truncate: expect.any(Number) };
+  expect(body.map((line) => line.inverse)).toEqual([null, undefined, truncate, undefined, truncate, undefined]);
+  // A fresh session reads the same table: the last two ids answer, an older one applies again.
+  const fresh = await openAt({ maxChangeIds: 2, maxUndo: 1 });
+  const before = written();
+  expect((await append(fresh, ids.at(-2)!, `line ${ids.at(-2)}`)).ok).toBe(true);
+  expect(written()).toBe(before);
+  await append(fresh, ids.at(-3)!, `line ${ids.at(-3)}`);
+  expect(written()).not.toBe(before);
+  expect(fs.readdirSync(join(root, ".yian/tmp"))).toEqual([]);
+  await s.close();
+  await fresh.close();
+});
+
+test("a session that read an older generation reads the compacted journal whole on its next write", async () => {
+  const a = await openAt({ maxChangeIds: 2, maxUndo: 1 });
+  const b = await openAt({ maxChangeIds: 2, maxUndo: 1 });
+  await append(b, "b1", "from b");
+  const old = generation();
+  const ids = await appendUntilCompacted(a, "a");
+  expect(generation()).not.toBe(old);
+  const before = written();
+  // b's next write reads the new journal from its first line: it knows a's last id, and adds its own.
+  expect(await append(b, ids.at(-1)!, `line ${ids.at(-1)}`)).toMatchObject({ ok: true });
+  expect(written()).toBe(before);
+  await append(b, "b2", "from b again");
+  const body = journalBody();
+  expect(body.slice(-2).map((line) => line.id)).toEqual(["b2", "b2"]);
+  const entries = body.filter((line) => line.digest).map((line) => line.id);
+  expect(entries).toEqual([ids.at(-3), ids.at(-2), ids.at(-1), "b2"]);
+  // and a, which compacted, reads b's write the same way.
+  expect(await append(a, "b2", "from b again")).toMatchObject({ ok: true });
+  expect(journalBody()).toEqual(body);
+  await a.close();
+  await b.close();
+});
+
+test("a compaction keeps neither an aborted entry nor its id", async () => {
+  const s = await openAt({ maxChangeIds: 2, maxUndo: 1 });
+  await append(s, "first", "one");
+  spyOn(fs, "renameSync").mockImplementation(() => {
+    throw systemError("ENOSPC");
+  });
+  await expect(append(s, "cut", "never")).rejects.toThrow("ENOSPC");
+  mock.restore();
+  await appendUntilCompacted(s, "c");
+  expect(journalBody().filter((line) => line.id === "cut" || line.aborted)).toEqual([]);
+  expect((await append(s, "cut", "never")).ok).toBe(true);
+  await s.close();
+});
+
+test("a compaction first resolves another session's cut-off entry, and the new journal holds its outcome", async () => {
+  const a = await openAt();
+  for (const n of [1, 2, 3, 4, 5, 6]) await append(a, `a${n}`, `a${n}`);
+  // c keeps two ids and no inverses, so its next write finds the journal far past twice that.
+  const c = await openAt({ maxChangeIds: 2, maxUndo: 0 });
+  const b = await openAt();
+  const old = generation();
+  await crashedAppend(b, "bx", "from b", "after", "b.md");
+  await append(c, "c1", "from c");
+  expect(generation()).not.toBe(old);
+  expect(journalBody().map((line) => `${line.id}:${line.digest ? "entry" : line.ok ? "commit" : "other"}`)).toEqual([
+    "a6:entry",
+    "a6:commit",
+    "bx:entry",
+    "bx:commit",
+    "c1:entry",
+    "c1:commit",
+  ]);
+  const { id: _, ...stored } = journalBody()[3]!;
+  expect(stored).toMatchObject({ ok: true, result: { path: "b.md", hash: sha256("from b") } });
+  expect(await append(b, "bx", "from b", "b.md")).toEqual(stored as unknown as Applied);
+  for (const s of [a, b, c]) await s.close();
+});

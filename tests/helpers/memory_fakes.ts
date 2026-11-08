@@ -1,8 +1,9 @@
 /**
  * Fake memories for tests: `RecordingSession`, a `MemorySession` that records the calls it gets and
  * answers as its test sets, `FakeMemory`, a `MemoryBase` over one that counts its opens,
- * `wordEmbed`, a deterministic embedder for a VectorDBMemory, and `foreignWal`, another program's
- * database a VectorDBMemory must leave alone.
+ * `wordEmbed`, a deterministic embedder for a VectorDBMemory, `foreignWal` and `foreignHotJournal`,
+ * other programs' databases a VectorDBMemory must leave alone, and `hotJournal`, which leaves a
+ * database as a crash mid-transaction does.
  */
 
 import fs from "node:fs";
@@ -170,4 +171,35 @@ export function foreignWal(dir: string, name: string): string {
   db.close();
   fs.rmSync(source);
   return copy;
+}
+
+/**
+ * Leave `path`, a rollback-journal database, as a crash mid-transaction leaves it: a transaction
+ * big enough to spill pages into the file, the file and its hot `-journal` copied back over `path`
+ * before the rollback. Reading it rolls the journal back, dropping the table `spill`.
+ */
+export function hotJournal(path: string): void {
+  const source = `${path}.source`;
+  fs.copyFileSync(path, source);
+  const db = openSqlite(source);
+  db.exec("PRAGMA cache_size = 10");
+  db.exec("BEGIN IMMEDIATE");
+  db.exec("CREATE TABLE spill(x BLOB)");
+  const insert = db.prepare("INSERT INTO spill VALUES (?)");
+  for (let i = 0; i < 3000; i++) insert.run(new Uint8Array(1000).fill(i % 255));
+  fs.copyFileSync(source, path);
+  fs.copyFileSync(`${source}-journal`, `${path}-journal`);
+  db.exec("ROLLBACK");
+  db.close();
+  fs.rmSync(source);
+}
+
+/** Make `<dir>/<name>`, another program's rollback-journal database with a hot journal; return its path. */
+export function foreignHotJournal(dir: string, name: string): string {
+  const path = join(dir, name);
+  const db = openSqlite(path);
+  db.exec("CREATE TABLE notes(x); INSERT INTO notes VALUES (1)");
+  db.close();
+  hotJournal(path);
+  return path;
 }

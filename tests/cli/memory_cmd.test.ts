@@ -32,7 +32,7 @@ import { FileMemory } from "../../src/memory/file.ts";
 import { VectorDBMemory } from "../../src/memory/vectordb.ts";
 import { lockFile } from "../../src/platform.ts";
 import { shellWords } from "../docs/doc_blocks.ts";
-import { foreignWal } from "../helpers/memory_fakes.ts";
+import { foreignHotJournal, foreignWal } from "../helpers/memory_fakes.ts";
 import { DOWN, ENTER, FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
 
 let tmp: string;
@@ -1204,6 +1204,21 @@ output: \${add.output.id}
     const json = JSON.parse((await yian(["memory", "show", flow, "cases", "--all", "--json"], vectors)).stdout);
     expect(json).toMatchObject({ count: 501, retired: 0 });
     expect(json.items.map((item: { id: number }) => item.id)).toEqual(Array.from({ length: 501 }, (_, i) => i + 1));
+  });
+
+  test("show --at and list leave another program's database and its hot journal as they were", async () => {
+    const folder = join(home, ".yian", "memory", "apps");
+    mkdirSync(folder, { recursive: true });
+    const foreign = foreignHotJournal(folder, "app.db");
+    const before = [readFileSync(foreign), readFileSync(`${foreign}-journal`)];
+    const shown = await yian(["memory", "show", "--at", foreign], vectors);
+    expect(shown.code).toBe(1);
+    expect(shown.stderr).toContain("it has a rollback journal and no lock file");
+    const listed = await yian(["memory", "list"], vectors);
+    expect(listed.code, listed.stderr).toBe(0);
+    expect(listed.stderr).toContain("it has a rollback journal and no lock file");
+    expect([readFileSync(foreign), readFileSync(`${foreign}-journal`)]).toEqual(before);
+    expect(readdirSync(folder).sort()).toEqual(["app.db", "app.db-journal"]);
   });
 
   test("reset's question counts the store's items", async () => {

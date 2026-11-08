@@ -36,7 +36,7 @@ import type { Embed } from "../../src/llm/embeddings.ts";
 import type { FileMemory } from "../../src/memory/file.ts";
 import { VectorDBMemory } from "../../src/memory/vectordb.ts";
 import { parseJson } from "../../src/typesys/json.ts";
-import { foreignWal } from "../helpers/memory_fakes.ts";
+import { foreignHotJournal, foreignWal } from "../helpers/memory_fakes.ts";
 import { loadSchema, type Schema, validate } from "../helpers/schema.ts";
 
 let tmp: string;
@@ -687,6 +687,17 @@ describe("VectorDBMemory inputs", () => {
     expect(result.code, result.stderr).toBe(0);
     const stored = await new VectorDBMemory({ path: store }).stored({ signal: new AbortController().signal });
     expect(stored?.embedding).toEqual({ provider: "openai", model: "default" });
+  });
+
+  test("a .db that is another program's database with a hot journal is refused, nothing rolled back", async () => {
+    const foreign = foreignHotJournal(tmp, "app.db");
+    const before = [readFileSync(foreign), readFileSync(`${foreign}-journal`)];
+    const args = ["run", flowFile(ADD_CASE), "--quiet", "--memory", `cases=${foreign}`, ...embedding];
+    const result = await yian(args, {}, { embed: fakeEmbed });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("it has a rollback journal and no lock file");
+    expect([readFileSync(foreign), readFileSync(`${foreign}-journal`)]).toEqual(before);
+    expect(existsSync(`${foreign}.lock`)).toBe(false);
   });
 
   test("a VectorDB input given a folder is a usage error", async () => {

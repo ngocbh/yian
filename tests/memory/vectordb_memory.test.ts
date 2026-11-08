@@ -26,7 +26,7 @@ import { openStore, VectorDBMemory, type VectorDBMemoryOptions } from "../../src
 import { isLocked, lockFile, openSqlite, virtualScheduler } from "../../src/platform.ts";
 import { isPermanentToolError, isReportedToolError } from "../../src/tools/errors.ts";
 import { type JsonObject, logJson } from "../../src/typesys/json.ts";
-import { foreignWal } from "../helpers/memory_fakes.ts";
+import { foreignHotJournal, foreignWal, hotJournal } from "../helpers/memory_fakes.ts";
 
 let dir: string;
 let path: string;
@@ -360,6 +360,32 @@ test("another program's WAL database is refused unopened: its bytes and -wal sta
   }
   expect([fs.readFileSync(foreign), fs.readFileSync(`${foreign}-wal`)]).toEqual(before);
   expect(fs.readdirSync(dir).filter((name) => name.startsWith("app.db")).sort()).toEqual(["app.db", "app.db-wal"]);
+});
+
+test("another program's database with a hot journal and no lock file is refused unread, not rolled back", async () => {
+  const foreign = foreignHotJournal(dir, "app.db");
+  const before = [fs.readFileSync(foreign), fs.readFileSync(`${foreign}-journal`)];
+  for (const [action, run] of everyAction(memory({ path: foreign }))) {
+    const refusal = `\`${foreign}\` isn't a VectorDBMemory store: it has a rollback journal and no lock file`;
+    await expect(run(), action).rejects.toThrow(refusal);
+  }
+  expect([fs.readFileSync(foreign), fs.readFileSync(`${foreign}-journal`)]).toEqual(before);
+  expect(fs.existsSync(`${foreign}.lock`)).toBe(false);
+});
+
+test("a crashed store, with its lock file and a hot journal, recovers on its next open", async () => {
+  const s = await openAt();
+  await apply(s, { op: "add", text: "alpha" }, "a1");
+  await s.close();
+  hotJournal(path);
+  expect(fs.existsSync(`${path}-journal`)).toBe(true);
+  const reopened = await openAt();
+  expect((await reopened.snapshot()).recall.text).toBe("1 item");
+  await reopened.close();
+  expect(fs.existsSync(`${path}-journal`)).toBe(false);
+  const db = openSqlite(path, { readonly: true });
+  expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 'spill'").all()).toEqual([]);
+  db.close();
 });
 
 test("a file that isn't a store is refused by every action before a lock file is made beside it", async () => {

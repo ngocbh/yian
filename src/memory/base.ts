@@ -217,7 +217,7 @@ export function memoryErrorKind(error: unknown): MemoryErrorKind | null {
   }
 }
 
-/** The tool names of each built-in contract, in spec order. */
+/** @internal The tool names of each built-in contract, in spec order. */
 export const BUILTIN_MEMORY_TOOLS: Readonly<Record<"FileMemory" | "VectorDBMemory", readonly string[]>> =
   Object.freeze({
     FileMemory: Object.freeze(["list", "read", "search", "append", "create", "edit", "delete", "rewrite"]),
@@ -225,7 +225,7 @@ export const BUILTIN_MEMORY_TOOLS: Readonly<Record<"FileMemory" | "VectorDBMemor
   });
 
 /**
- * Check that `instance`'s class declares a contract that names each tool once and, for a
+ * @internal Check that `instance`'s class declares a contract that names each tool once and, for a
  * built-in contract type, exactly that contract's tools.
  *
  * @throws {TypeError} If it declares no contract, names a tool twice, or lacks or adds a

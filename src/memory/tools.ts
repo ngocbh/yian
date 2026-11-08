@@ -22,12 +22,12 @@ import type { RecordedMemoryTool } from "../typesys/memory.ts";
 import { fromHost, type MemoryRef, writeAsText } from "../typesys/values.ts";
 import { type Applied, type Author, memoryErrorKind, type MemorySession } from "./base.ts";
 
-/** What a node's memory tools are, as a grant scope's messages name them. */
+/** @internal What a node's memory tools are, as a grant scope's messages name them. */
 export const MEMORY_SCOPE_LABEL = "this node's memories";
 
 /**
- * Return a FunctionTool per tool `grant` grants of the memory `value`, in the value's spec order,
- * each over `session` and built from its recorded spec.
+ * @internal Return a FunctionTool per tool `grant` grants of the memory `value`, in the value's
+ * spec order, each over `session` and built from its recorded spec.
  *
  * @param grant The memory input the tools are reached through, and the tools it grants (`null`
  *   for all of them).
@@ -45,8 +45,8 @@ export function memoryTools(
 }
 
 /**
- * Return the recorded specs of the tools `grant` grants of the memory `value`, in the value's spec
- * order: what `memoryTools` builds its tools from, and what a rebuilt request lists.
+ * @internal Return the recorded specs of the tools `grant` grants of the memory `value`, in the
+ * value's spec order: what `memoryTools` builds its tools from, and what a rebuilt request lists.
  *
  * @throws RangeError when `grant` names a tool the value doesn't have.
  */

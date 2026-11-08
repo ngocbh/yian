@@ -77,8 +77,9 @@ interface Opened {
 }
 
 /**
- * The sessions of one run segment on its memories, one per bound instance, and the value each
- * memory input records. Every node of the run bound to a memory reaches it through its session.
+ * @internal The sessions of one run segment on its memories, one per bound instance, and the value
+ * each memory input records. Every node of the run bound to a memory reaches it through its
+ * session.
  */
 export class RunMemories {
   /** The memory value of each bound input, in binding order. */
@@ -288,7 +289,7 @@ function checkInstance(binding: MemoryBinding, hostTypes: ReadonlyMap<string, re
   }
 }
 
-/** Whether two lists of tool names hold the same names in the same order. */
+/** @internal Whether two lists of tool names hold the same names in the same order. */
 export function sameNames(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((name, i) => name === b[i]);
 }

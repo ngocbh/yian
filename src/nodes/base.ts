@@ -603,10 +603,13 @@ export class AssertionStageError extends Error {
   }
 }
 
-/** A tool of a node's own group as a rebuilt request lists it: a recorded memory tool's spec. */
+/**
+ * @internal A tool of a node's own group as a rebuilt request lists it: a recorded memory tool's
+ * spec.
+ */
 export type LocalToolSpec = Omit<RecordedMemoryTool, "write">;
 
-/** A run's sessions on its memories, which every node bound to a memory shares. */
+/** @internal A run's sessions on its memories, which every node bound to a memory shares. */
 export interface NodeMemories {
   /**
    * Return the session on the memory `identity`.
@@ -617,7 +620,7 @@ export interface NodeMemories {
 }
 
 /**
- * Return the run's session on the memory `identity`, through `caps.memories`.
+ * @internal Return the run's session on the memory `identity`, through `caps.memories`.
  *
  * @throws CapabilityFault carrying the error when the evaluator gave no memory sessions, or none on
  *   that memory: the run didn't bind a memory its nodes were bound to.

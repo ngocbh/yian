@@ -328,7 +328,10 @@ function sha256(data: string | Uint8Array): string {
   return createHash("sha256").update(data).digest("hex");
 }
 
-/** One member: its path under the root, its text, the sha256 of its bytes and its characters. */
+/**
+ * @internal One member: its path under the root, its text, the sha256 of its bytes and its
+ * characters.
+ */
 export interface MemberFile {
   readonly path: string;
   readonly text: string;

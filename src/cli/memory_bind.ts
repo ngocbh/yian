@@ -202,6 +202,11 @@ class CliFileMemory extends FileMemory {
   /** For a default memory, the home and its path under `~/.yian/memory`; `null` for another. */
   readonly #confined: { readonly home: string; readonly path: string } | null;
 
+  /** Whether this is an input's default memory, rather than one a `--memory` flag names. */
+  get isDefault(): boolean {
+    return this.#confined !== null;
+  }
+
   constructor(
     options: FileMemoryOptions,
     note: (created: CreatedMemory) => void,
@@ -278,7 +283,7 @@ export function memoryFlags(params: readonly Parameter[], flags: readonly string
  *
  * @param options.project The flow file's project folder (`projectFolder`), or `null` for a flow
  *   with no file, whose memories have no default.
- * @throws {UsageError} As `memoryFlags` throws.
+ * @throws {UsageError} As `memoryFlags` throws, and for a flag naming another input's default.
  * @throws {RangeError} For an input of a memory type the command line can't bind; for a default,
  *   as `defaultIdentity` and `defaultLocation` throw, and when there is no project folder.
  */
@@ -303,7 +308,7 @@ export function bindMemories(
  * default is, since a log can be edited. An Optional input left out at the start gets none.
  * Nothing is created here, and the resume opens each memory without creating it.
  *
- * @throws {UsageError} As `memoryFlags` throws.
+ * @throws {UsageError} As `memoryFlags` throws, and for a flag naming another input's default.
  * @throws {RangeError} For an input of a memory type the command line can't bind; as
  *   `defaultLocation` throws; when the log's START inputs hold a malformed memory value.
  * @throws Error when the log can't be read.
@@ -376,7 +381,15 @@ function bindEach(
       throw new RangeError(`\`${param.name}\` is a ${typ.memory}; the command line binds only FileMemory inputs`);
     }
     // Keyed by the real folder, so two spellings of one path share one memory.
-    const instance = byRoot.get(made.root) ?? made;
+    const known = byRoot.get(made.root);
+    // Only flagged inputs share: a flag naming another input's default is a slip, not a choice.
+    if (known !== undefined && known.isDefault !== made.isDefault) {
+      const [flagged, other] = made.isDefault ? [known.inputs[0]!, param.name] : [param.name, known.inputs[0]!];
+      throw new UsageError(
+        `Invalid value for --memory: \`${flagged}=${paths.get(flagged)}\` points at \`${other}\`'s default memory`,
+      );
+    }
+    const instance = known ?? made;
     byRoot.set(instance.root, instance);
     instance.inputs.push(param.name);
     bound[param.name] = instance;

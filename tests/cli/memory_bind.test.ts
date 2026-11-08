@@ -219,6 +219,23 @@ describe("--memory", () => {
     expect(readFileSync(join(shared, "b.md"), "utf8")).toContain("from notes");
   });
 
+  test("a flag naming another input's default memory is a usage error, whichever input comes first", async () => {
+    const flow = flowFile(TWO);
+    const project = realpathSync(join(tmp, "proj"));
+    for (const [flagged, other] of [
+      ["notes", "lessons"],
+      ["lessons", "notes"],
+    ] as const) {
+      const location = defaultLocation(home, defaultIdentity(project, "two", other), "FileMemory");
+      const result = await yian(["run", flow, "--quiet", "--memory", `${flagged}=${location}`]);
+      expect(result.code, result.stderr).toBe(2);
+      expect(result.stderr).toContain(
+        `Invalid value for --memory: \`${flagged}=${location}\` points at \`${other}\`'s default memory`,
+      );
+    }
+    expect(runFolders()).toEqual([]);
+  });
+
   test("a flag naming no memory input, a .db for a FileMemory, a repeat or a bad form is a usage error", async () => {
     const flow = flowFile(TWO);
     const cases: [string[], string][] = [

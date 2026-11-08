@@ -11,7 +11,16 @@
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { basename, join } from "node:path";
 
@@ -44,8 +53,9 @@ export interface MemoryTarget {
  * created. A flow that doesn't load prints its diagnostic and gives it back.
  *
  * @throws {UsageError} When neither or both forms are given, `name` is missing, the flow has no
- *   such memory input or it is Optional (it has no default), or `at` names a `.db` store or a folder
- *   that can't be a memory (`checkMemoryFolder`).
+ *   such memory input or it is Optional (it has no default), or `at` is empty, names a file, a
+ *   `.db` store or a folder that can't be a memory (`checkMemoryFolder`). A leading `~/` in `at` is
+ *   the home folder.
  * @throws {RangeError} When the input's default can't be bound (`defaultMemories`).
  */
 export async function resolveTarget(
@@ -60,18 +70,25 @@ export async function resolveTarget(
     throw new UsageError("Invalid value: give the memory as FLOW NAME or --at PATH, not both");
   }
   if (at !== undefined) {
-    if (at.endsWith(".db")) {
+    if (at === "") throw new UsageError("Invalid value for --at: give the memory's folder");
+    // As --memory reads its path: `--at=~/x` reaches us unexpanded.
+    const home = homeDir(io.env);
+    const path = at === "~" || at.startsWith("~/") ? home + at.slice(1) : at;
+    if (path.endsWith(".db")) {
       throw new UsageError(
         "Invalid value for --at: a .db store is a VectorDBMemory, which yian memory doesn't open yet",
       );
     }
+    if (statSync(path, { throwIfNoEntry: false })?.isDirectory() === false) {
+      throw new UsageError(`Invalid value for --at: ${path} is a file, not a memory's folder`);
+    }
     try {
-      checkMemoryFolder(at, homeDir(io.env));
+      checkMemoryFolder(path, home);
     } catch (error) {
       if (!(error instanceof RangeError)) throw error;
       throw new UsageError(`Invalid value for --at: ${error.message}`);
     }
-    const memory = new FileMemory({ root: at });
+    const memory = new FileMemory({ root: path });
     return { memory, location: memory.root, identity: null };
   }
   if (name === undefined) throw new UsageError("Missing argument 'NAME'.");

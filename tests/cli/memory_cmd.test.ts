@@ -122,6 +122,23 @@ describe("the target", () => {
     expect(result.stderr).not.toContain("--memory");
   });
 
+  test("--at takes ~/ as the home folder; an empty path or a file is a usage error", async () => {
+    const flow = flowFile();
+    await runOnce(flow, "first", "--memory", `lessons=${join(home, "notes")}`);
+    const shown = await yian(["memory", "show", "--at=~/notes"]);
+    expect(shown.code, shown.stderr).toBe(0);
+    expect(shown.stdout).toContain("first");
+    writeFileSync(join(tmp, "a-file"), "");
+    for (const [at, refusal] of [
+      ["", "Invalid value for --at: give the memory's folder"],
+      [join(tmp, "a-file"), `Invalid value for --at: ${join(tmp, "a-file")} is a file, not a memory's folder`],
+    ] as const) {
+      const result = await yian(["memory", "show", "--at", at]);
+      expect(result.code, at).toBe(2);
+      expect(result.stderr).toContain(refusal);
+    }
+  });
+
   test("--at refuses /, the home folder and a folder holding ~/.yian", async () => {
     for (const [path, refusal] of [
       ["/", "`/` can't be a memory"],

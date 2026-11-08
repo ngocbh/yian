@@ -16,6 +16,7 @@ import {
   type MemorySession,
 } from "../../src/memory/base.ts";
 import { FileMemory, type FileMemoryOptions, memoryVersion, readMembers } from "../../src/memory/file.ts";
+import { Journal } from "../../src/memory/file_journal.ts";
 import { lockFile, virtualScheduler } from "../../src/platform.ts";
 import { canonicalJson, type JsonObject } from "../../src/typesys/json.ts";
 
@@ -829,3 +830,28 @@ test.each(['{"generati', '{"generation":"0123', '{"generation":"0123456789abcdef
     await t.close();
   },
 );
+
+test("starting a journal never overwrites one the session hasn't read", () => {
+  const meta = join(root, ".yian");
+  fs.mkdirSync(meta, { recursive: true });
+  const journalPath = join(meta, "journal.jsonl");
+  const existing = '{"generation":"aaaaaaaaaaaaaaaa"}\n';
+  fs.writeFileSync(journalPath, existing);
+  const journal = new Journal(meta, { maxChangeIds: 10, maxUndo: 10, maxHistoryChars: 100 });
+  const entry = {
+    id: "x",
+    digest: sha256("x"),
+    op: "append",
+    path: "a.md",
+    author,
+    at: "2026-11-07T00:00:00.000Z",
+    before: "absent",
+    after: sha256("x"),
+    inverse: { absent: true as const },
+  };
+  // This journal was never caught up, so it holds no generation and would otherwise start one.
+  expect(() => journal.writeEntry(entry)).toThrow(
+    "`.yian/journal.jsonl` isn't empty, but this session hasn't read it; try again",
+  );
+  expect(fs.readFileSync(journalPath, "utf8")).toBe(existing);
+});

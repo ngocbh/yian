@@ -596,10 +596,14 @@ export class Journal {
   #create(): void {
     const generation = randomBytes(8).toString("hex");
     const bytes = Buffer.from(`${JSON.stringify({ generation })}\n`, "utf8");
-    const { O_CREAT, O_TRUNC, O_WRONLY } = fs.constants;
-    // Truncating is safe: holding the lock, only an empty journal or a cut-off first line is here.
-    const fd = openRegular(this.#path, O_CREAT | O_TRUNC | O_WRONLY, 0o600);
+    const { O_APPEND, O_CREAT, O_WRONLY } = fs.constants;
+    // Never truncated: a catch-up drops a cut-off first line itself, so anything here is a journal
+    // this session hasn't read, which must not be overwritten.
+    const fd = openRegular(this.#path, O_CREAT | O_WRONLY | O_APPEND, 0o600);
     try {
+      if (fs.fstatSync(fd).size !== 0) {
+        throw new Error(`${SHOWN} isn't empty, but this session hasn't read it; try again`);
+      }
       // The open's mode is masked by the umask; fchmod isn't.
       fs.fchmodSync(fd, 0o600);
       writeAll(fd, bytes);

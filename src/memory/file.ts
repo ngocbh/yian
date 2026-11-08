@@ -1024,7 +1024,7 @@ class FileMemorySession implements MemorySession {
    * @throws {RangeError} If `limit` isn't an integer of at least 0.
    * @throws {MemoryBusyError} If another writer holds the lock past the timeout.
    */
-  history(o: { limit: number }): Promise<ChangeEntry[]> {
+  async history(o: { limit: number }): Promise<ChangeEntry[]> {
     this.#checkOpen();
     if (!Number.isSafeInteger(o.limit) || o.limit < 0) {
       throw new RangeError(`history needs a limit of 0 or more changes, not ${String(o.limit)}`);

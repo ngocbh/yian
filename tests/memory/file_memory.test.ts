@@ -245,6 +245,28 @@ async function rejection(promise: Promise<unknown>): Promise<unknown> {
   throw new Error("expected a rejection");
 }
 
+test("a closed session's methods return rejected promises; none throws at the call", async () => {
+  const s = await openAt();
+  await s.close();
+  const host: Author = { kind: "host", name: "h" };
+  const calls: (() => Promise<unknown>)[] = [
+    () => s.snapshot(),
+    () => s.call("list", {}, { signal }),
+    () => s.apply({ id: "x", change: { op: "append", path: "a.md", text: "x" }, author: host, signal }),
+    () => s.undo({ id: "u", changeId: "x", author: host, signal }),
+    () => s.history({ limit: 1 }),
+    () => s.history({ limit: -1 }),
+  ];
+  for (const call of calls) {
+    let promise: Promise<unknown> | undefined;
+    expect(() => {
+      promise = call();
+    }).not.toThrow();
+    await expect(promise!).rejects.toThrow();
+  }
+  await expect(s.snapshot()).rejects.toThrow("this FileMemory session is closed");
+});
+
 describe("recall and snapshot", () => {
   test("the recall is the index when it exists, with no hint when nothing else is there", async () => {
     put(root, "profile.md", "Ada.");

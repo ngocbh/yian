@@ -385,8 +385,12 @@ function checkFiles(path: string): void {
 /**
  * @internal Open the store at `path` with the settings every access uses: no busy timeout, since
  * the memory's lock serializes all access; `secure_delete`, so deleted text doesn't stay in free
- * pages; a rollback journal deleted after each commit; full syncs; and temporary tables in memory,
- * so no copy of a text lands in a temporary file.
+ * pages; a rollback journal deleted after each commit; `EXTRA` syncs; and temporary tables in
+ * memory, so no copy of a text lands in a temporary file.
+ *
+ * With a rollback journal, a transaction commits when its journal is deleted. `FULL` doesn't sync
+ * the folder after that, so a power loss could bring the journal back and roll back a change
+ * already reported as applied; `EXTRA` syncs it.
  */
 export function openStore(path: string): Sqlite {
   const db = openSqlite(path);
@@ -394,7 +398,7 @@ export function openStore(path: string): Sqlite {
     db.exec("PRAGMA busy_timeout = 0");
     db.exec("PRAGMA secure_delete = 1");
     db.exec("PRAGMA journal_mode = DELETE");
-    db.exec("PRAGMA synchronous = FULL");
+    db.exec("PRAGMA synchronous = EXTRA");
     db.exec("PRAGMA temp_store = MEMORY");
   } catch (error) {
     db.close();

@@ -204,13 +204,16 @@ test("an item type that isn't a JSON object is refused", async () => {
   await expect(memory().open({ ...o, itemType: [] as unknown as JsonObject })).rejects.toThrow(TypeError);
 });
 
-test("the store's connection has busy_timeout 0 and secure_delete on, with a rollback journal", async () => {
+test("the store's connection has busy_timeout 0, secure_delete, a rollback journal and extra syncs", async () => {
   await (await openAt()).close();
   const db = openStore(path);
   try {
     expect(db.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: 0 });
     expect(db.prepare("PRAGMA secure_delete").get()).toEqual({ secure_delete: 1 });
     expect(db.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "delete" });
+    // EXTRA (3) syncs the folder once the journal is deleted, the commit point in this mode.
+    expect(db.prepare("PRAGMA synchronous").get()).toEqual({ synchronous: 3 });
+    expect(db.prepare("PRAGMA temp_store").get()).toEqual({ temp_store: 2 });
   } finally {
     db.close();
   }

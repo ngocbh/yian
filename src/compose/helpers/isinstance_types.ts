@@ -22,6 +22,7 @@ import { bindingSource, iterSourceStrings } from "../../nodes/contracts.ts";
 import { type TypeRegistry, typeFor } from "../../typesys/types.ts";
 import {
   canonicalUnionOrder,
+  isMemoryType,
   type Type,
   TypeCheckError,
   typeEquals,
@@ -125,7 +126,8 @@ function collect(
  * @param name The bare type name written as the second `isinstance` argument.
  * @param registry The flow's `readTypedefs(...)` table.
  * @returns The resolved type.
- * @throws {TypeCheckError} When `name` is neither a `typedefs:` name nor a builtin scalar name.
+ * @throws {TypeCheckError} When `name` is neither a `typedefs:` name nor a builtin scalar name, or
+ *   names a host memory type: only the runner binds a memory, so no check narrows a value to one.
  */
 export function resolveIsinstanceType(name: string, registry: TypeRegistry): Type {
   if (!registry.has(name) && !ISINSTANCE_SCALAR_NAMES.includes(name)) {
@@ -134,7 +136,13 @@ export function resolveIsinstanceType(name: string, registry: TypeRegistry): Typ
         ISINSTANCE_SCALAR_NAMES.join(", "),
     );
   }
-  return typeFor(name, registry);
+  const typ = typeFor(name, registry);
+  if (isMemoryType(typ)) {
+    throw new TypeCheckError(
+      `\`${name}\` is a memory type; isinstance can't test for one (only the runner binds a memory)`,
+    );
+  }
+  return typ;
 }
 
 /**

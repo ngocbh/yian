@@ -808,8 +808,8 @@ function checkFlowBeforeServers(
  *
  * @throws TypeError when `inputs` isn't a record or is a Proxy.
  * @throws RangeError when a key names no declared input, names an inbox, which takes events
- *   through `send` instead, or gives a memory input anything but a `MemoryBase` instance (or null
- *   for an Optional one).
+ *   through `send` instead, or gives a memory input anything but a `MemoryBase` instance (an
+ *   Optional one is left out, never null).
  * @throws TypeCheckError when an input is an accessor property or isn't a yian value.
  */
 export function hostInputs(params: readonly Parameter[], inputs: unknown): Record<string, Value> {
@@ -821,12 +821,9 @@ export function hostInputs(params: readonly Parameter[], inputs: unknown): Recor
     if (isInboxType(param.contract?.type) && Object.hasOwn(record, param.name)) {
       throw new RangeError(`inbox \`${param.name}\` receives events through send(); it takes no run input`);
     }
-    const memory = param.contract?.type;
-    if (isMemoryType(memory) && Object.hasOwn(record, param.name)) {
-      const value: unknown = record[param.name];
-      if (!isMemory(value) && !(value === null && memory.nullable)) {
-        throw new RangeError(`memory \`${param.name}\` is bound to a MemoryBase instance, not a value`);
-      }
+    // An Optional memory left out is left out of the START inputs, never recorded as null.
+    if (isMemoryType(param.contract?.type) && Object.hasOwn(record, param.name) && !isMemory(record[param.name])) {
+      throw new RangeError(`memory \`${param.name}\` is bound to a MemoryBase instance, not a value`);
     }
   }
   const taken: ValueRecord = {};

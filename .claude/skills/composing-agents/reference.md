@@ -142,6 +142,7 @@ False values are `false`, `null`, `0`, `0.0`, `""`, `[]` and an empty record. Bu
 | `Message` | Built in: `role` (`user`, `assistant`, `tool`) and `parts` (text, tool calls, ...) |
 | `Inbox(X)` | A flow input whose events arrive while the run goes on |
 | `FileMemory` | A flow input the host binds to a memory; see [Memory](https://yian.readthedocs.io/memory/) |
+| `VectorDBMemory(T)` | A flow input the host binds to a memory of items with `T` fields, searched by meaning |
 
 Records are closed: an extra field fails the check (an agent's record reply drops it instead; a
 union member's reply gets a correction). Every field is required except an `Optional(...)` one.

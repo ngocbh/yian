@@ -1,12 +1,12 @@
 ---
 title: "Memory"
-description: "Notes agents keep across runs: memory inputs, recall, memory tools and FileMemory."
+description: "Notes agents keep across runs: memory inputs, recall, memory tools, FileMemory and VectorDBMemory."
 ---
 
 This page explains memory: notes agents keep across runs, such as lessons learned or facts about a
 customer. A memory is a flow input that your program binds to a store. Agents read its recall in
-their prompts and change it through the tools you grant them. yian's memory type is `FileMemory`,
-a folder of text files.
+their prompts and change it through the tools you grant them. yian has two memory types:
+`FileMemory`, a folder of text files, and `VectorDBMemory`, items found by meaning.
 
 ## Declare a memory
 
@@ -97,8 +97,8 @@ note:
 
 | A call that | In an agent | In a TOOL node |
 |---|---|---|
-| Conflicts or passes a cap, writing nothing | The model reads the reason and the file's current hash and text | Fails with `node.execute`, never retried |
-| Finds the memory busy past `YIAN_MEMORY_LOCK_TIMEOUT_SECONDS` (30) | The model reads "`lessons` is busy; try again" | Retried per `retries:`, then fails with `node.execute` |
+| Conflicts or passes a cap, writing nothing | The model reads the reason and the file's or item's current state | Fails with `node.execute`, never retried |
+| Finds the memory busy past `YIAN_MEMORY_LOCK_TIMEOUT_SECONDS` (30), or its embedder rate-limited, overloaded or down | The model reads "`lessons` is busy; try again" or "`cases` couldn't embed: rate_limit; try again" | Retried per `retries:`, then fails with `node.execute` |
 | Hits any other fault, such as an I/O error | Fails the node with `node.execute` | Fails with `node.execute` |
 
 ## FileMemory
@@ -146,6 +146,93 @@ lessons/
 - Every process that writes one memory must give it the same `maxChangeIds`.
 - `.yian/` records this machine's changes. To share a memory across machines, sync its files and
   `.yian/identity` (or pass the same `id` everywhere), never `journal.jsonl` or `lock`.
+
+## VectorDBMemory
+
+A VectorDBMemory holds items, each a text with optional typed fields. It embeds each text with an
+embedding model and finds the items most like a query:
+
+```yaml
+id: triage
+name: triage
+typedefs:
+  Case:
+    title: str
+    tags: list(str)
+input:
+  ticket: !str
+  cases: !VectorDBMemory(Case)
+nodes:
+  similar:
+    kind: tool
+    tool_id: {cases: search}
+    input:
+      query: ${input.ticket}
+      k: 3
+  triage:
+    kind: agent
+    input:
+      ticket: ${input.ticket}
+      similar: ${similar.output}
+    tools: [{cases: [add]}]
+    prompt: |-
+      Past cases like this one: ${similar}
+      Triage this ticket, then add it as a case: ${ticket}
+    output: str
+output: ${triage.output}
+```
+
+- `!VectorDBMemory(Case)` types each item's `fields` with the record typedef `Case`;
+  `!VectorDBMemory` holds text only. The store keeps the item type it was made with, and a run
+  whose input has another fails before it starts.
+- The recall is the item count, then the `recallRecent` newest items (none by default), then
+  `Search them with cases_search.` when the agent holds that tool. To recall by meaning, search in
+  a TOOL node, as above.
+
+| Tool | What it does | Conflicts when |
+|---|---|---|
+| `search({query, k, filter?})` | The `k` items most like `query`, best first, each with its id, version and score. `filter` keeps the items whose fields equal its values | |
+| `read({id})` | One item, with its author | |
+| `list({recent?})` | The newest items | |
+| `add({text, fields?})` | Adds an item, with its fields when the items are typed | never |
+| `edit({id, if_version, text?, fields?})` | Changes an item's text, fields or both | its version isn't `if_version` |
+| `retire({id, if_version, why})` | Hides an item from search, list and recall, keeping its history | its version isn't `if_version` |
+| `delete({id, if_version})` | Deletes an item, its vector and its history | its version isn't `if_version` |
+
+- An item's version is the memory's change count at the item's last change. `search`, `read` and
+  `list` give it.
+- The embedding model is part of the memory. A new store records it, and an instance built with
+  another model is refused. `memory.reembed({embedding, embed, signal})` embeds every item again
+  with a new model; no run does.
+- A search or write embeds outside the memory's lock. If the embedder fails, nothing is written.
+- `maxItems`, `maxK` and `maxTextChars` refuse a call that passes them, with the reason, and the
+  recall is cut to `maxRecallChars`. [Reference](/reference/#all-defaults-and-limits) lists the
+  defaults.
+- The store is one SQLite file, mode 0600, beside its lock `<path>.lock`. Every read and write
+  takes the lock, so writers in any process take turns; keep the file on a local disk. Deleted
+  text is overwritten, and `memory.compact({signal})` gives the space back.
+- `undo`, `history`, `reset` and `erase({target: {item}})` work as for a FileMemory (see
+  [Undo, erase and reset](#undo-erase-and-reset)). A delete or an erase can't be undone.
+
+Build it with the function that embeds, `defaultEmbed()` from `@ngocbh/yian/llm_clients`. It calls
+the provider's `/embeddings` endpoint with your saved API-key login or key: `openai` or an
+OpenAI-compatible provider, such as `openrouter` or `vllm`.
+
+```ts check=fragment
+import { VectorDBMemory } from "@ngocbh/yian";
+import { defaultEmbed } from "@ngocbh/yian/llm_clients";
+
+const cases = new VectorDBMemory({
+  path: "./memory/cases.db",
+  id: "support/cases",
+  embedding: { provider: "openai", model: "text-embedding-3-small" },
+  embed: defaultEmbed(),
+  recallRecent: 5,
+});
+const result = await runFlow(flow, { ticket, cases }, { log });
+```
+
+An instance for `advance` may leave `embedding` out: the store's model is used.
 
 ## Bind a memory
 

@@ -57,6 +57,7 @@ unknown name is a load error that suggests a close match.
 | `dict(K, V)` | The same as `object`; `K` and `V` must name known types |
 | `Inbox(X)` | A handle on an inbox of `X` events (see [Inboxes and waiting](/inboxes/)) |
 | `FileMemory` | A memory, written only as a flow input's tag (see [Memory](/memory/)) |
+| `VectorDBMemory(T)` | A memory of items whose fields are the record `T`, or text only when written `VectorDBMemory`; a flow input's tag only (see [Memory](/memory/#vectordbmemory)) |
 | `Message` | A chat message, built in (see [Agents](/agents/)) |
 
 Types use parentheses, not brackets: `Optional[str]` is a load error.

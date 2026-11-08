@@ -11,12 +11,12 @@ runs on disk, move messages and answers into them, and watch what they do. Insta
 
 | Import | What it's for |
 |---|---|
-| `@ngocbh/yian` | Load and run flows: `loadFlow`, `runFlow`, `advance`; the host calls `send`, `withdraw`, `close`, `complete`, `interrupt`, `cancel`, `pendingCalls` and their errors `DeliveryRefused` and `RunBusyError`; host tools (`tool`, `ToolContext`, `pending`, the tool errors); memories (`FileMemory`, `MemoryBase`, `MemoryBusyError`, `ChangeIdReusedError`); `LoadError`, `Failure`, `Diagnostic` |
+| `@ngocbh/yian` | Load and run flows: `loadFlow`, `runFlow`, `advance`; the host calls `send`, `withdraw`, `close`, `complete`, `interrupt`, `cancel`, `pendingCalls` and their errors `DeliveryRefused` and `RunBusyError`; host tools (`tool`, `ToolContext`, `pending`, the tool errors); memories (`FileMemory`, `VectorDBMemory`, `MemoryBase`, `MemoryBusyError`, `ChangeIdReusedError`); `LoadError`, `Failure`, `Diagnostic` |
 | `@ngocbh/yian/run` | Everything about runs: `runFlow`, `advance`, the host calls and their errors, plus `RunResult`, `runLogPath`, `inspectRun`, `loadRecordedFlow`, the types `RunFlowOptions`, `AdvanceOptions`, `MemoryDrift`, `EventHook` and `StreamHook`; for hosts that show runs, `LiveChannel`, `iterRunRecords`, `foldRunLog`, `agentCalls`, `agentCall`, `updateRunIndex` and `readRunIndex` |
 | `@ngocbh/yian/tools` | Tools without the run API: `registerTool`, `registeredTools`, `invokeTool`, `mcpServer` and the `Mcp*` errors, `pending`, `isPending`, and the ask handler types `AskHandler` and `AskRequest` |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
 | `@ngocbh/yian/platform` | yian's file lock and SQLite wrapper, for hosts that lock files the same way: `lockFile`, `waitForLock`, `isLocked`, `FileLockError`, `openSqlite`, `sqliteErrorCode`; and `syncFolder`, which makes a folder's new entries durable |
-| `@ngocbh/yian/llm_clients` | Provider setup: `LLMConfig`, `SUPPORTED_LLM_PROVIDERS`, `listModels`, `AuthStore`, `AuthError` |
+| `@ngocbh/yian/llm_clients` | Provider setup: `LLMConfig`, `SUPPORTED_LLM_PROVIDERS`, `listModels`, `AuthStore`, `AuthError`; `defaultEmbed` and `embedderFromConfig`, the embeddings calls a `VectorDBMemory` takes |
 | `@ngocbh/yian/code-worker` | Import it only for its side effect, as a bundle entry (see [Bundling](#bundling)) |
 
 On Bun each import loads the TypeScript source; on Node it loads the built JavaScript. The event
@@ -93,7 +93,9 @@ in a sandbox. [`yian check --root`](/cli/#yian-check) checks that they stay insi
 refuses a flow that sets `system.paths`.
 
 A [memory](/memory/) input takes a memory instance as its value:
-`runFlow(flow, { question, lessons: new FileMemory({ root, id }) })`.
+`runFlow(flow, { question, lessons: new FileMemory({ root, id }) })`. A `VectorDBMemory` also takes
+its embedding model and the function that embeds:
+`new VectorDBMemory({ path, embedding: { provider, model }, embed: defaultEmbed() })`.
 
 A flow that fails still resolves, with `status: "failed"`. `runFlow` rejects for problems in your
 program or setup: a bad option, a tool, provider or model the flow needs but the run lacks, an MCP

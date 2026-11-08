@@ -10,8 +10,10 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  linkSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { type ChildProcess, spawn } from "node:child_process";
@@ -346,6 +348,32 @@ describe("yian memory edit", () => {
     });
     expect(untouched.code).toBe(1);
     expect(untouched.stderr).not.toContain("your text is in");
+    expect(readdirSync(join(tmp, "tmpdir"))).toEqual([]);
+  });
+
+  test("a --file that can't be a file of the memory is refused before the editor opens", async () => {
+    const flow = flowFile();
+    await runOnce(flow, "first");
+    const { location } = lessons();
+    writeFileSync(join(tmp, "outside.md"), "outside");
+    symlinkSync(join(tmp, "outside.md"), join(location, "linked.md"));
+    linkSync(join(tmp, "outside.md"), join(location, "hard.md"));
+    writeFileSync(join(location, "binary.md"), new Uint8Array([0xff, 0xfe, 0x00]));
+    const opened: string[] = [];
+    const editor = async (path: string) => void opened.push(path);
+    for (const [file, why] of [
+      ["../x.md", "a `..` part"],
+      [".yian/identity", "a hidden name"],
+      ["linked.md", "a symlink"],
+      ["hard.md", "a hard link"],
+      ["binary.md", "it isn't UTF-8 text, or is over the memory's size cap"],
+    ]) {
+      const result = await yian(["memory", "edit", flow, "lessons", "--file", file!], { editor });
+      expect(result.code, file).toBe(2);
+      const refusal = `\`${file}\` can't be edited as a file of the memory: ${why}`;
+      expect(result.stderr).toContain(`Invalid value for --file: ${refusal}`);
+    }
+    expect(opened).toEqual([]);
     expect(readdirSync(join(tmp, "tmpdir"))).toEqual([]);
   });
 

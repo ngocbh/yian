@@ -18,7 +18,7 @@ import { basename, join } from "node:path";
 import { type Env, processEnvNames } from "../defaults.ts";
 import { compareCodeUnits, Diagnostic } from "../diagnostics.ts";
 import { type Applied, type Author, type ChangeEntry, memoryErrorKind, type MemorySession } from "../memory/base.ts";
-import { FileMemory, type MemberFile, readMembers } from "../memory/file.ts";
+import { diskProblem, FileMemory, type MemberFile, pathProblem, readMembers } from "../memory/file.ts";
 import { homeDir, isSystemError, withWarnings } from "../platform.ts";
 import { readRunIndex, type RunIndexRow, updateRunIndex } from "../run.ts";
 import type { JsonObject } from "../typesys/json.ts";
@@ -412,7 +412,9 @@ async function runEditor(env: Env, path: string, json: boolean): Promise<void> {
  * `yian memory edit`: open a file of the memory (`--file`, the memory's index by default) in an
  * editor (`$EDITOR`), on a private copy, then apply what the person wrote as the user: a `rewrite`
  * of the file, checked against the hash it had when it was read, or a `create` for a new file. An
- * unchanged file changes nothing. Edited text that isn't applied is never lost: the copy stays and
+ * unchanged file changes nothing. A file that can't be a member (a path outside the rules, a
+ * symlink or hard link, text that isn't UTF-8 or is over the cap) is refused before the editor
+ * opens, as a usage error. Edited text that isn't applied is never lost: the copy stays and
  * the message says where. A file changed meanwhile prints `edit refused: <reason>` (a
  * `memory.conflict` document); a failure of the editor or the change prints `edit failed:
  * <message>` (`memory.failed`); either exits 1. `--json` prints `{change, version}` for an edit,
@@ -423,6 +425,16 @@ export async function memoryEdit(command: ParsedArgs, io: CliIo): Promise<number
   return onMemory(command, io, namedOf(command), async (session, { location }) => {
     const path = (command.options["file"] as string | undefined) ?? String(session.info.settings["index"]);
     const file = membersOf(session, location).find((each) => each.path === path) ?? null;
+    // Before the editor opens: the person mustn't type what can't be applied.
+    const why =
+      pathProblem(path, Number(session.info.settings["max_depth"])) ??
+      diskProblem(location, path) ??
+      (file === null && lstatOrNull(join(location, path)) !== null
+        ? "it isn't UTF-8 text, or is over the memory's size cap"
+        : null);
+    if (why !== null) {
+      throw new UsageError(`Invalid value for --file: \`${path}\` can't be edited as a file of the memory: ${why}`);
+    }
     const before = file?.text ?? "";
     // Private: the copy holds the memory's text. In the command's TMPDIR, as the editor would look.
     const folder = mkdtempSync(join(io.env("TMPDIR") || tmpdir(), "yian-memory-edit-"));

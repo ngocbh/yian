@@ -312,9 +312,14 @@ export class LoopDescriptor extends NodeDescriptor {
       }
     }
     const extra = sig.inputs.map((input) => input.name).filter((name) => !carried.has(name));
-    if (extra.length > 0) {
+    // A memory is bound by the runner only at the top level, so the loop must carry it in.
+    for (const name of extra.filter((each) => memoryFields.has(each))) {
+      errors.push(`${subject}: the runner binds only the top-level flow's memories; pass \`${name}\` from the caller`);
+    }
+    const uncarried = extra.filter((name) => !memoryFields.has(name));
+    if (uncarried.length > 0) {
       errors.push(
-        `${subject}: body input(s) ${namesText(extra)} are not carried record fields ${carriedText} ` +
+        `${subject}: body input(s) ${namesText(uncarried)} are not carried record fields ${carriedText} ` +
           "(the body reads a subset of the carried record)",
       );
     }

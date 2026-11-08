@@ -126,6 +126,12 @@ test("a loop carries a memory but never returns it, and its predicate can't read
   ).toContain("`while:` reads `m`, a memory; a loop predicate can't read a memory");
 });
 
+test("a loop body's memory input must be carried from the loop's caller", () => {
+  const message = refused(`  l:\n    kind: loop\n    call: body\n    input:\n      done: false\n    while: not done\n`);
+  expect(message).toContain("loop node 'l': the runner binds only the top-level flow's memories; pass `m` from the caller");
+  expect(message).not.toContain("are not carried record fields");
+});
+
 test("a child's memory input must be wired from its parent", () => {
   expect(refused(`  c:\n    kind: call\n    call: file\n    input: {}\n`)).toContain(
     "call node 'c': the runner binds only the top-level flow's memories; pass `notes` from the caller",

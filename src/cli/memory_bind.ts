@@ -238,8 +238,11 @@ class CliFileMemory extends FileMemory {
   /** The inputs bound to this instance, in the order they were bound. */
   readonly inputs: string[] = [];
   readonly #note: (created: CreatedMemory) => void;
-  /** For a default memory, the home and its path under `~/.yian/memory`; `null` for another. */
-  readonly #confined: { readonly home: string; readonly path: string } | null;
+  /**
+   * For a default memory, the home, its path under `~/.yian/memory`, and whether its host takes
+   * `--memory`; `null` for another.
+   */
+  readonly #confined: { readonly home: string; readonly path: string; readonly memoryFlag: boolean } | null;
 
   /** Whether this is an input's default memory, rather than one a `--memory` flag names. */
   get isDefault(): boolean {
@@ -254,7 +257,7 @@ class CliFileMemory extends FileMemory {
   constructor(
     options: FileMemoryOptions,
     note: (created: CreatedMemory) => void,
-    confined: { home: string; path: string } | null = null,
+    confined: { home: string; path: string; memoryFlag: boolean } | null = null,
   ) {
     super(options);
     this.#note = note;
@@ -267,7 +270,8 @@ class CliFileMemory extends FileMemory {
    * prompts may come between the bind and the open.
    *
    * @throws {RangeError} When a default location no longer passes the checks, or its real path
-   *   changed after the bind; for a resume's folder given with `--memory`, when it isn't a memory.
+   *   changed after the bind. For a resume's memory that isn't there: a folder given with
+   *   `--memory`, or a default of a host without the flag, whose run can't go on.
    */
   override async open(o: {
     create: boolean;
@@ -284,9 +288,14 @@ class CliFileMemory extends FileMemory {
     try {
       session = await super.open(o);
     } catch (error) {
-      // A resume's "bind it with --memory" would point back at the flag the user gave.
-      if (this.#confined !== null || memoryErrorKind(error) !== "missing") throw error;
-      throw new RangeError("the folder given with --memory isn't a memory", { cause: error });
+      // A resume's "bind it with --memory" would point back at the flag the user gave, or at one
+      // the host (`yian chat`) doesn't take.
+      if (memoryErrorKind(error) !== "missing" || this.#confined?.memoryFlag === true) throw error;
+      const reason =
+        this.#confined === null
+          ? "the folder given with --memory isn't a memory"
+          : "its folder is gone, so the run can't continue";
+      throw new RangeError(reason, { cause: error });
     }
     if (session.created) {
       this.#note({ inputs: [...this.inputs], identity: session.info.identity, location: this.root });
@@ -496,5 +505,6 @@ function bindEach(
  */
 function defaultInstance(identity: string, options: BindOptions): CliFileMemory {
   const root = defaultLocation(options.home, identity, "FileMemory");
-  return new CliFileMemory({ root, id: identity }, options.note, { home: options.home, path: identity });
+  const confined = { home: options.home, path: identity, memoryFlag: options.memoryFlag ?? true };
+  return new CliFileMemory({ root, id: identity }, options.note, confined);
 }

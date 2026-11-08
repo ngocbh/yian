@@ -1005,6 +1005,25 @@ describe("memory", () => {
   );
 
   test(
+    "a waiting child whose memory folder is gone fails without pointing at --memory, which the chat lacks",
+    async () => {
+      const children = childRuns();
+      await children.start(await flow(REMEMBER_LATER), {}, { project: root });
+      const waiting = await settled(children, "r1");
+      expect(waiting.status).toBe("waiting");
+      const identity = defaultIdentity(root, "answer", "lessons");
+      rmSync(defaultLocation(join(root, "home"), identity, "FileMemory"), { recursive: true });
+      await children.message("r1", "messages", "hi");
+      const failed = await settled(children, "r1", waiting.seq);
+      expect(failed).toMatchObject({ status: "failed" });
+      expect(failed.note).toBe(
+        "the chat couldn't move the run: memory `lessons`: its folder is gone, so the run can't continue",
+      );
+    },
+    TIMEOUT,
+  );
+
+  test(
     "a child given no project folder has no default memories",
     async () => {
       const children = childRuns();

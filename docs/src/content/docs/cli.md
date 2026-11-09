@@ -361,15 +361,16 @@ review.yaml: ok
 | Flag | Value | What it does |
 |---|---|---|
 | `FLOWS...` | paths | The flow files to check |
-| `--root` | dir | Load each flow, its `uses:` imports and its CODE files only from inside this folder |
+| `--root` | dir | Load each flow, its `uses:` imports, its CODE files and the files it includes only from inside this folder |
 | `--json` | | Print one JSON document |
 
 A flow that doesn't load prints its path and the located error on stderr, and the command exits 1.
 
 With `--root DIR`, each flow and each `uses:` import must be inside `DIR` (`compose.outside_root`
 otherwise), a `uses:` ref loads only from the importing file's folder, and a flow that sets
-`system.paths` is refused. Each `./file.ts:fn` CODE reference must resolve inside `DIR` too,
-symlinks followed, as with `loadFlow`'s `codeRoot`; one outside fails with `compose.load`.
+`system.paths` is refused. Each `./file.ts:fn` CODE reference and each file an
+[`!include`](/agents/#prompts-in-files) reads must resolve inside `DIR` too, symlinks followed, as
+with `loadFlow`'s `codeRoot`; one outside fails with `compose.load`.
 
 With `--json`, `flows` holds one result per argument, in order. A flow that loads gives its `id`,
 `name`, `description` and `inputs`, each input with its `type`, `required` and `has_default`; one

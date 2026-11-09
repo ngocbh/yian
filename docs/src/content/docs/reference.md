@@ -111,6 +111,7 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MAX_CONNECTION_HEADERS` | input cap | 32 | 1 or more | Most extra request headers a provider connection may send |
 | `YIAN_MAX_HEADER_VALUE_CHARS` | input cap | 8,192 | 1 or more | Longest connection header name or value accepted |
 | `YIAN_MAX_ORGANIZATION_CHARS` | input cap | 256 | 1 or more | Longest OpenAI organization or project id accepted |
+| `YIAN_MAX_INCLUDE_BYTES` | input cap | 262,144 | 1 or more | Largest file a flow's `!include` reads |
 | `YIAN_MAX_SKILL_FILE_BYTES` | input cap | 262,144 | 1 or more | Largest SKILL.md or bundled skill file returned to a model |
 | `YIAN_MAX_SKILL_NAME_CHARS` | input cap | 64 | 1 or more | Longest skill name accepted |
 | `YIAN_MAX_SKILL_DESCRIPTION_CHARS` | input cap | 1,024 | 2 or more | Longest skill description shown in the skill listing |
@@ -201,7 +202,7 @@ A `--json` command that fails without its own result prints an error document wh
 
 | Code | When |
 |---|---|
-| `compose.load` | The flow doesn't load, or its file can't be read |
+| `compose.load` | The flow doesn't load, or its file can't be read, or a file it reads with `!include` is missing, unreadable, not a regular file, too large, not UTF-8 text or outside the root |
 | `expr.nullable_field_read` | The flow doesn't load because it reads a field of a value that may be null. The message names the fix |
 | `compose.outside_root` | `yian check --root`: a flow or a `uses:` import is outside the root |
 | `defaults.invalid` | A `YIAN_*` variable holds a value it doesn't take (any command) |

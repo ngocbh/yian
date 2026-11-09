@@ -77,17 +77,20 @@ console.log(result.status, result.output); // succeeded total: 7.5
 `loadFlow` takes `searchPaths` (where [`uses:`](/control-flow/#import-a-flow-from-another-file-with-uses)
 targets are found, in order, then the flow's `system.paths` joined onto the first entry; put the
 flow's own folder first),
-`sourceLabel` (the name errors show), `baseDir` (where `./file.ts:fn` references resolve),
-`codeRoot` (a folder every CODE file must stay inside), `env`, and `memoryTypes` (your own
+`sourceLabel` (the name errors show), `baseDir` (where `./file.ts:fn` references and
+[`!include`](/agents/#prompts-in-files) paths resolve), `codeRoot` (a folder every CODE file and
+included file must stay inside), `env`, and `memoryTypes` (your own
 [memory types](/memory/#your-own-memory-types)). A broken flow rejects with
-`LoadError`, whose `diagnostic` points into the source. A CODE reference outside `codeRoot` is
-named as the flow wrote it (`'../x.ts:fn' is outside the code root`) and reads the same whether
-or not its file exists. Under `codeRoot` no CODE error names an absolute path, so you can show it
-to the flow's author. A run records the flow's `codeRoot`, and every later call on its log holds
-the CODE files to it ([Keep runs on disk](#keep-runs-on-disk)).
+`LoadError`, whose `diagnostic` points into the source. A CODE reference or `!include` outside
+`codeRoot` is named as the flow wrote it (`'../x.ts:fn' is outside the code root`) and reads the
+same whether or not its file exists. Under `codeRoot` no CODE or `!include` error names an
+absolute path, so you can show it to the flow's author. A run records the flow's `codeRoot`, and
+every later call on its log holds the CODE and included files to it
+([Keep runs on disk](#keep-runs-on-disk)).
 
 yian follows local `uses:` refs and the flow's `system.paths` as written, so an absolute path,
-`..` or a symlink can load any file your process can read; `codeRoot` confines only CODE files.
+`..` or a symlink can load any file your process can read; `codeRoot` confines only CODE files
+and the files `!include` reads.
 If you run flows you didn't write, vet each flow and every file it imports yourself, or run yian
 in a sandbox. [`yian check --root`](/cli/#yian-check) checks that they stay inside a folder, and
 refuses a flow that sets `system.paths`.

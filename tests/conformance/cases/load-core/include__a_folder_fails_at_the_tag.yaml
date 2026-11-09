@@ -1,0 +1,17 @@
+# An `!include` names a text file: a folder fails at the value, naming the path as written.
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes: {}
+  output: !include prompts
+files:
+  prompts/a.md: a
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "`!include` file 'prompts' is not a regular file; include a text file"
+      frames:
+      - label: flow.yaml
+        range: [4, 9, 4, 25]

@@ -13,7 +13,7 @@ import { pathToFileURL } from "node:url";
 import { defaultSkillRoots, loadSkills } from "../../src/compose/skills.ts";
 import { current } from "../../src/defaults.ts";
 import { openFilePath } from "../../src/platform.ts";
-import { readSkillFile, readSkillText, resolvedPath } from "../../src/skills/catalog.ts";
+import { readSkillFile, readSkillText } from "../../src/skills/catalog.ts";
 import { Skill, SkillError } from "../../src/skills/index.ts";
 import { testNode } from "../helpers/test_node.ts";
 
@@ -242,12 +242,6 @@ test("read skill text labels errors with the path by default", () => {
   writeFileSync(path, new Uint8Array([0xff]));
   expectSkillError(() => readSkillText(path), `${path} is not UTF-8 text`);
   expectSkillError(() => readSkillText(path, ""), `${path} is not UTF-8 text`);
-});
-
-test("resolved path resolves a symlink above a missing path", () => {
-  mkdirSync(join(tmp, "real"));
-  symlinkSync(join(tmp, "real"), join(tmp, "link"));
-  expect(resolvedPath(join(tmp, "link", "missing", "x"))).toBe(join(realpathSync(join(tmp, "real")), "missing", "x"));
 });
 
 /** The package root. */

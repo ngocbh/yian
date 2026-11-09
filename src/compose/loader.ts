@@ -24,7 +24,9 @@
  * reachable keys, and installs `ComposedFlow.originResolver`. Source-free graphs carry `null`;
  * private `assemble` products keep the resolver unset.
  *
- * After a file assembles, its CODE nodes are checked (each def's in written order, then the
+ * Before a file is parsed for good, the file each `!include` names is read: from disk, against the
+ * including file's folder, or from a recorded source. The including file records where each path
+ * went. After a file assembles, its CODE nodes are checked (each def's in written order, then the
  * root's) against the file's base directory, and inside the load's `codeRoot` when it has one.
  * Only the root load sees the fully assembled graph, so `loadFlow` then refuses an `llm_config`
  * value a child flow's agent would inherit before it is known.
@@ -33,7 +35,7 @@
  * nesting limit, counted apart from call depth; each loaded flow records its own `importDepth`.
  *
  * Imports flow down only: this module composes the compose package's own components plus
- * `compile`, `defaults`, `diagnostics`, `llm_clients`, `nodes` and `typesys`, and the
+ * `compile`, `defaults`, `diagnostics`, `llm_clients`, `nodes`, `platform` and `typesys`, and the
  * `FlowSource` type of `runtime/log`; nothing in the engine imports it back.
  */
 
@@ -55,6 +57,7 @@ import {
   type SourceRange,
 } from "../diagnostics.ts";
 import { Binding, type ValuePath, ValueTemplate } from "../nodes/contracts.ts";
+import { isSystemError, leavesRoot, readRegularFile, resolvedPath } from "../platform.ts";
 import { typeName, readTypedefs, type TypeRegistry, withMemoryTypes } from "../typesys/types.ts";
 import {
   isList,
@@ -303,12 +306,21 @@ function rejectAuthoredPrivateCallableNames(root: SourceCursor, defs: ValueRecor
   }
 }
 
-/** A flow file a load read from disk: its text, and the path each `uses:` path in it resolved to. */
+/**
+ * A file a load read from disk, a flow or a file one includes: its text, and the path each `uses:`
+ * and `!include` path in it resolved to.
+ */
 interface ReadFile {
   readonly text: string;
-  /** Each `uses:` ref written in the file (`usesRef`), mapped to the real path it resolved to. */
+  /**
+   * Each `uses:` ref written in the file (`usesRef`) and each `!include` path as
+   * `include:<path>`, mapped to the real path it resolved to.
+   */
   readonly refs: Map<string, string>;
 }
+
+/** The `refs` key prefix of an `!include` path; a local `uses:` ref never has a scheme. */
+const INCLUDE_REF = "include:";
 
 /** Return a `uses:` ref as written: its path, and `@<version>` when pinned. */
 function usesRef(path: string, version: string | null): string {
@@ -615,7 +627,8 @@ export function makeFileResolver(
         const file: ReadFile = { text, refs: new Map() };
         ctx.read.set(real, file);
         const own = dirname(real);
-        return loadFlowFile(parseSourceDocument(text, basename(real)), null, [own], ctx, own, file);
+        const document = await parseIncluding(text, basename(real), diskIncludes(own, ctx, file));
+        return loadFlowFile(document, null, [own], ctx, own, file);
       });
     }
     throw UNLOCATED_DIAGNOSTICS.error(
@@ -651,14 +664,15 @@ interface LoadOptions {
  *   targets (`<dir>/<path>.yaml`). Pass the flow file's own directory first; the list is extended
  *   by the flow's `system: paths:`.
  * @param options.sourceLabel The name load diagnostics give this text (default `<flow>`).
- * @param options.baseDir The directory a CODE node's `./file.ts:fn` reference resolves against
- *   (default: the first search path, else the current directory). A file read through the search
- *   path resolves its own references against its own directory.
+ * @param options.baseDir The directory a CODE node's `./file.ts:fn` reference and an `!include`
+ *   path resolve against (default: the first search path, else the current directory). A file
+ *   read through the search path resolves its own against its own directory.
  * @param options.codeRoot A directory every CODE reference's file must resolve inside (a relative
  *   one against the current directory); symlinks are resolved on both sides. A reference outside
  *   it is a `LoadError` at its `code:` value. The files read through the search path are checked
  *   too, and so is each flow a `childResolver` returns, however the host loaded it. An inline
- *   `code:` body is not confined. `null` or absent confines nothing. The flow's `source` keeps the root's
+ *   `code:` body is not confined. Each file an `!include` reads must resolve inside it too, or the
+ *   load fails at the `!include`. `null` or absent confines nothing. The flow's `source` keeps the root's
  *   real path, so a run records it and a resume confines the recorded files to it again.
  * @param options.env The environment this load reads the `YIAN_*` values from; default
  *   `processEnv`, which keeps the values in effect, so a `childResolver` that calls `loadFlow`
@@ -667,8 +681,8 @@ interface LoadOptions {
  *   contract's type (`j: !TradeJournal`) and a grant is checked against its tools. A class that
  *   implements a built-in contract needs no entry. The flow keeps the list in `memoryTypes`.
  * @returns The compiled, validated flow. Its `source` holds `text` under `sourceLabel` and every
- *   file the load read, with where each `uses:` path resolved (see `FlowSource`); it is `null`
- *   when a `childResolver` returned a flow without a source (one built in code).
+ *   file the load read, with where each `uses:` and `!include` path resolved (see `FlowSource`);
+ *   it is `null` when a `childResolver` returned a flow without a source (one built in code).
  * @throws LoadError (as a rejection) for any malformed or inconsistent flow, located at the
  *   offending line when source provenance is available: among them an `llm_config` value a child
  *   flow's agent would inherit before it is known.
@@ -688,11 +702,11 @@ async function loadText(text: string, options: Omit<LoadOptions, "env">): Promis
   const { memoryTypes = [] } = options;
   if (typeof sourceLabel !== "string") throw new TypeError("source_label must be a string");
   const memoryTools = memoryTypeTools(memoryTypes);
-  const document = parseSourceDocument(text, sourceLabel);
   // Absolute, so a CODE reference doesn't depend on the cwd when the node runs.
   const ownDir = resolvePath(baseDir ?? searchPaths?.[0] ?? process.cwd());
   const ctx = await newLoadCtx(codeRoot, memoryTools);
   const rootFile: ReadFile = { text, refs: new Map() };
+  const document = await parseIncluding(text, sourceLabel, diskIncludes(ownDir, ctx, rootFile));
   const hosted = new Map<string, unknown>();
   const resolver: ChildResolver | null =
     childResolver === null
@@ -703,7 +717,10 @@ async function loadText(text: string, options: Omit<LoadOptions, "env">): Promis
           return child;
         };
   const loaded = await loadFlowFile(document, resolver, searchPaths, ctx, ownDir, rootFile);
-  if (ctx.codeRoot !== null) await checkHostedCode(hosted, document, ctx.codeRoot);
+  if (ctx.codeRoot !== null) {
+    await checkHostedCode(hosted, document, ctx.codeRoot);
+    checkHostedIncludes(hosted, ctx.codeRoot);
+  }
   const flow = replaceFlow(loaded, {
     source: await flowSource(ctx, rootFile, hosted, sourceLabel, ownDir),
     memoryTypes: Object.freeze([...memoryTypes]),
@@ -734,19 +751,168 @@ async function checkHostedCode(
 }
 
 /**
+ * Throw at the first file a host child's source includes from outside `codeRoot`: the host may
+ * have loaded it under no root, and a load from the run's recorded source holds every included
+ * file to the root.
+ *
+ * @throws LoadError naming the including file and the path as written.
+ */
+function checkHostedIncludes(hosted: ReadonlyMap<string, unknown>, codeRoot: string): void {
+  for (const child of hosted.values()) {
+    if (!(child instanceof ComposedFlow) || child.source === null) continue;
+    const { dir, files } = child.source;
+    for (const [key, file] of Object.entries(files)) {
+      for (const [ref, target] of Object.entries(file.refs)) {
+        if (!ref.startsWith(INCLUDE_REF) || !leavesRoot(relative(codeRoot, resolvePath(dir, target)))) continue;
+        throw UNLOCATED_DIAGNOSTICS.error(`${basename(key)}: ${outsideRoot(ref.slice(INCLUDE_REF.length))}`);
+      }
+    }
+  }
+}
+
+/** Reads the file an `!include` path names; `fail` makes the error, at the value, for one it can't. */
+type IncludeReader = (path: string, fail: (message: string) => LoadError) => Promise<string>;
+
+/** Name the file `!include <path>` reads, as messages start. */
+function includeFile(path: string): string {
+  return `\`!include\` file ${reprText(path)}`;
+}
+
+/** The message for an included file outside the code root. */
+function outsideRoot(path: string): string {
+  return `${includeFile(path)} is outside the code root; include a file inside it`;
+}
+
+/** The message for an included file over the cap `limit`. */
+function tooLarge(path: string, limit: number): string {
+  return `${includeFile(path)} is larger than ${limit} bytes (YIAN_MAX_INCLUDE_BYTES); shorten it or raise the cap`;
+}
+
+/**
+ * Parse `text` as `parseSourceDocument` does, each `!include` value reading the text `read` gives
+ * its path. Each distinct path is read once, in document order.
+ *
+ * @throws LoadError at the first `!include` with an empty path, a path holding a NUL, or a file
+ *   `read` refuses.
+ */
+async function parseIncluding(text: string, label: string, read: IncludeReader): Promise<SourceDocument> {
+  const document = parseSourceDocument(text, label);
+  if (document.includes.length === 0) return document;
+  const diagnostics = LoadDiagnostics.fromDocument(document);
+  const texts = new Map<string, string>();
+  for (const { path, range } of document.includes) {
+    if (texts.has(path)) continue;
+    const fail = (message: string) => diagnostics.error(message, { range });
+    if (path === "") throw fail("`!include` needs a file path, e.g. `prompt: !include prompts/answer.md`");
+    // No file system takes it; Node and Bun throw a TypeError naming the absolute path.
+    if (path.includes("\0")) throw fail(`${includeFile(path)} holds a NUL character; write the path without it`);
+    texts.set(path, await read(path, fail));
+  }
+  return parseSourceDocument(text, label, texts);
+}
+
+/**
+ * Return the reader of the files `!include` paths name, resolved against `dir`. A file must
+ * resolve, symlinks followed, inside `ctx.codeRoot` when it has one, which is checked first and
+ * named without an absolute path; be a regular file, read through one descriptor that doesn't
+ * wait for a FIFO's writer; hold at most `YIAN_MAX_INCLUDE_BYTES`, of which at most one byte more
+ * is read; and be UTF-8 text, whose line endings read as LF. Under a code root, the path must then
+ * still resolve inside it, to the file read. The file is kept in `ctx.read` by its real path, which
+ * `file.refs` records under `include:<path>`.
+ */
+function diskIncludes(dir: string, ctx: LoadCtx, file: ReadFile): IncludeReader {
+  return async (path, fail) => {
+    const { codeRoot } = ctx;
+    const target = resolvePath(dir, path);
+    try {
+      let real: string;
+      try {
+        real = await fsp.realpath(target);
+      } catch (error) {
+        if (codeRoot !== null && leavesRoot(relative(codeRoot, resolvedPath(target)))) throw fail(outsideRoot(path));
+        if (!isMissingPath(error)) throw error;
+        const where = codeRoot === null ? ` in ${reprText(dir)}` : "";
+        throw fail(`${includeFile(path)} does not exist${where}; its path is relative to the including file's folder`);
+      }
+      if (codeRoot !== null && leavesRoot(relative(codeRoot, real))) throw fail(outsideRoot(path));
+      const limit = current().maxIncludeBytes;
+      const opened = await readRegularFile(real, limit);
+      if (opened === null) throw fail(`${includeFile(path)} is not a regular file; include a text file`);
+      if (opened.bytes.length > limit) throw fail(tooLarge(path, limit));
+      if (codeRoot !== null) {
+        // A folder on the path swapped for a symlink after the check opens another file, so the
+        // path must still resolve inside the root, to the file that was read.
+        const again = await fsp.realpath(target);
+        if (leavesRoot(relative(codeRoot, again))) throw fail(outsideRoot(path));
+        const now = await fsp.stat(again, { bigint: true });
+        if (now.dev !== opened.dev || now.ino !== opened.ino) {
+          throw fail(`${includeFile(path)} changed while it was read; load the flow again`);
+        }
+      }
+      let read = ctx.read.get(real);
+      if (read === undefined) {
+        let text: string;
+        try {
+          text = UTF8.decode(opened.bytes);
+        } catch (error) {
+          if (!(error instanceof TypeError)) throw error;
+          throw fail(`${includeFile(path)} is not UTF-8 text; save it as UTF-8`);
+        }
+        read = { text: text.replace(/\r\n?/g, "\n"), refs: new Map() };
+        ctx.read.set(real, read);
+      }
+      file.refs.set(INCLUDE_REF + path, real);
+      return read.text;
+    } catch (error) {
+      // A system error's message holds absolute paths.
+      if (!isSystemError(error)) throw error;
+      throw fail(`${includeFile(path)} can't be read (${error.code}); include a text file you can read`);
+    }
+  };
+}
+
+/**
+ * Return the reader of the files `!include` paths in `source`'s file `from` name, through its
+ * `refs`, never from disk. As when it was read from disk, a file's key must be inside
+ * `source.codeRoot` when it has one, and its text at most `YIAN_MAX_INCLUDE_BYTES`.
+ */
+function sourceIncludes(source: FlowSource, from: string): IncludeReader {
+  return async (path, fail) => {
+    const refs = source.files[from]!.refs;
+    const ref = INCLUDE_REF + path;
+    // A host may build a source by hand, its ref naming no file.
+    if (!Object.hasOwn(refs, ref) || !Object.hasOwn(source.files, refs[ref]!)) {
+      throw fail(
+        `${includeFile(path)} is not among the recorded files; record it under the including file's ` +
+          `\`${ref}\` ref`,
+      );
+    }
+    const key = refs[ref]!;
+    if (source.codeRoot !== null && leavesRoot(relative(source.codeRoot, resolvePath(source.dir, key)))) {
+      throw fail(outsideRoot(path));
+    }
+    const text = source.files[key]!.text;
+    const limit = current().maxIncludeBytes;
+    if (new TextEncoder().encode(text).length > limit) throw fail(tooLarge(path, limit));
+    return text;
+  };
+}
+
+/**
  * Compile the flow files `source` holds, as a run recorded them, without reading them from disk:
- * the load starts at `source.root` and resolves each `uses:` ref through the file's `refs`. Each
- * file is labelled with its key's file name, and its CODE references resolve on disk in its key's
- * folder below `source.dir`, inside `source.codeRoot` when it has one (a host child's recorded
- * file included), as `loadFlow`'s `codeRoot`. A flow input's tag naming a type no file declares
- * reads as a memory type: the run's start checked its memories, so the host need not pass its
- * memory classes again, and the fingerprint is the same.
+ * the load starts at `source.root` and resolves each `uses:` ref and `!include` path through the
+ * file's `refs`. Each file is labelled with its key's file name, and its CODE references resolve
+ * on disk in its key's folder below `source.dir`, inside `source.codeRoot` when it has one (a host
+ * child's recorded file included), as `loadFlow`'s `codeRoot`; each included file's key must be
+ * inside it too. A flow input's tag naming a type no file declares reads as a memory type: the
+ * run's start checked its memories, so the host need not pass its memory classes again, and the
+ * fingerprint is the same.
  *
  * @param source A loaded flow's `source`, or a run's recorded `flow`.
  * @param options.env The environment the load reads the `YIAN_*` values from, as `loadFlow`'s.
  * @returns The flow, whose `source` is `source`.
- * @throws LoadError for a flow that doesn't load, a `uses:` ref its file's `refs` lacks, or a CODE
- *   reference resolving outside `source.codeRoot`.
+ * @throws LoadError for a flow that doesn't load, a `uses:` ref or `!include` path its file's
+ *   `refs` lacks, or a CODE reference or included file outside `source.codeRoot`.
  * @throws DefaultsError when a `YIAN_<NAME>` value in `env` isn't accepted.
  */
 export async function loadFlowSource(
@@ -763,8 +929,8 @@ export async function loadFlowSource(
 }
 
 /** Load `source`'s file `key`, its refs resolved through `source` too. */
-function loadSourceFile(source: FlowSource, key: string, ctx: LoadCtx): Promise<ComposedFlow> {
-  const document = parseSourceDocument(source.files[key]!.text, basename(key));
+async function loadSourceFile(source: FlowSource, key: string, ctx: LoadCtx): Promise<ComposedFlow> {
+  const document = await parseIncluding(source.files[key]!.text, basename(key), sourceIncludes(source, key));
   return loadFlowFile(document, sourceResolver(source, key, ctx), null, ctx, resolvePath(source.dir, dirname(key)));
 }
 
@@ -1064,6 +1230,31 @@ function typedefErrorRange(root: SourceCursor, path: ValuePath): SourceRange | n
 }
 
 /**
+ * Reject text `!include` read as a typedef or a typedef's field: each is a type.
+ *
+ * @throws LoadError at the first such value.
+ */
+function rejectIncludedTypedefs(root: SourceCursor, diagnostics: LoadDiagnostics): void {
+  try {
+    const typedefs = sourceChild(root, "typedefs");
+    if (typedefs === null || !isRecord(typedefs._valueView())) return;
+    for (const typedef of typedefs.children()) {
+      const fields = isRecord(typedef._valueView()) ? typedef.children() : [];
+      const found = [typedef, ...fields].find((cursor) => cursor.included);
+      if (found === undefined) continue;
+      const name = reprText(typedef.keyText!);
+      throw diagnostics.error(
+        `typedef ${name}: a type definition is written as a type, which \`!include\` can't give`,
+        { range: found.range },
+      );
+    }
+  } catch (error) {
+    // A typedef at a recursive alias can't be walked; reading the typedefs reports it.
+    if (!(error instanceof SourceAccessError)) throw error;
+  }
+}
+
+/**
  * Load one parsed flow file: its checks, its `uses:` imports, its `defs:`, then its assembly.
  *
  * Every step before the imports is synchronous; each alias then resolves, in source order, and
@@ -1096,8 +1287,9 @@ export async function loadFlowFile(
   validateEnv(f.env, "flow ", root.has("env") ? root.child("env") : null, diagnostics);
   validateSystem(f.system, root.has("system") ? root.child("system") : null);
 
-  // Typedefs are read as plain values, so a tag in them is rejected before they are.
+  // Typedefs are read as plain values, so a tag or included text in them is rejected before they are.
   rejectUnreadTags(document, new Set(), diagnostics, { typedefsOnly: true });
+  rejectIncludedTypedefs(root, diagnostics);
   let registry: TypeRegistry;
   try {
     registry = readTypedefs(f.typedefs, ctx.memoryTools.keys());

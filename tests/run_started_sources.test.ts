@@ -674,6 +674,19 @@ test("a symlinked child's CODE node resolves beside the link's target on resume 
   expect(resumed.output).toBe("up:x");
 });
 
+test("a resume runs the included text the run started with, whatever the file holds now", async () => {
+  const dir = freshDir("resume-include");
+  const child = CHILD.replace("q: ${input.q}", "q: !include q.txt");
+  writeTree(dir, { "flow.yaml": ROOT, "lib/child.yaml": child, "lib/q.txt": "${input.q} before" });
+  const log = await cutRun(await loadRoot(dir), 9);
+  writeTree(dir, { "lib/q.txt": "${input.q} after" });
+
+  const resumed = await advance({ log, env: hostEnv(logs), tools: { lookup: lookup() } });
+
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toBe("lookup:x before");
+});
+
 /**
  * Write, in `root/flows`, a flow whose child runs the CODE file `lib/fn.ts`; return the flow,
  * loaded under `codeRoot` when given.

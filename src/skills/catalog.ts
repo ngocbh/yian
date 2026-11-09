@@ -6,12 +6,12 @@
  * lives in `compose/skills.ts`, because only Compose parses YAML.
  */
 
-import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { closeSync, constants, fstatSync, openSync, readFileSync, statSync } from "node:fs";
+import { join, relative, sep } from "node:path";
 
 import { current } from "../defaults.ts";
 import { reprText } from "../diagnostics.ts";
-import { isMissingPath, isSystemError, leavesRoot, openFilePath, statOrNull } from "../platform.ts";
+import { isMissingPath, isSystemError, leavesRoot, openFilePath, resolvedPath, statOrNull } from "../platform.ts";
 import { valueRepr } from "../typesys/values.ts";
 
 export const SKILL_FILE = "SKILL.md";
@@ -193,23 +193,4 @@ function readOpenText(fd: number, label: string): string {
   }
   // `\r\n` and `\r` read as `\n`.
   return text.replace(/\r\n?/g, "\n");
-}
-
-/**
- * @internal The real path of the longest existing prefix of `path`, with the rest appended unchanged.
- */
-export function resolvedPath(path: string): string {
-  const abs = resolve(path);
-  let candidate = abs;
-  for (;;) {
-    try {
-      const real = realpathSync(candidate);
-      return join(real, relative(candidate, abs));
-    } catch (error) {
-      if (!isSystemError(error)) throw error;
-      const parent = dirname(candidate);
-      if (parent === candidate) return abs;
-      candidate = parent;
-    }
-  }
 }

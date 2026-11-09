@@ -52,11 +52,11 @@ const STRAY = /^\s*(?:\$\s+)?(?:yian\b|(?:npx|bunx)\s+(?:-\S+\s+)*@ngocbh\/yian\
 const LLM_CONFIG = { provider: "anthropic", model: "claude-test" };
 
 // Each page's titled blocks are files in their own folder, so a `uses:` ref finds another
-// titled block of its page before a flow of examples/.
+// titled block of its page before a flow of examples/, and an `!include` finds a titled prompt.
 const PAGES_DIR = mkdtempSync(join(tmpdir(), "yian-docs-"));
 afterAll(() => rmSync(PAGES_DIR, { recursive: true, force: true }));
 const PAGE_FILES = new Map(
-  [...Map.groupBy(YAML_BLOCKS, (block) => block.file)].flatMap(([file, blocks]) => [
+  [...Map.groupBy(BLOCKS, (block) => block.file)].flatMap(([file, blocks]) => [
     ...writePageFiles(blocks, join(PAGES_DIR, file)),
   ]),
 );

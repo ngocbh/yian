@@ -1,0 +1,121 @@
+# `system_prompt:` and `prompt:` read from text files beside the flow: the text keeps its final
+# newline, and a `${...}` template in it renders.
+kind: run
+flow: |
+  id: brief
+  name: brief
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    topic: !str
+  nodes:
+    writer:
+      kind: agent
+      input: {topic: "${input.topic}"}
+      system_prompt: !include prompts/system.md
+      prompt: !include prompts/writer.md
+      output: str
+  output: ${writer.output}
+files:
+  prompts/system.md: |
+    You write short briefs.
+  prompts/writer.md: "Write about ${topic}."
+inputs: {topic: tides}
+run: {num_workers: 0}
+host:
+  models:
+    writer:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: done
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: "You write short briefs.\n"
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: Write about tides.
+expect:
+  output: {status: succeeded, output: done}
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        writer:
+          _connection:
+            endpoint: null
+            method: api_key
+            source: environment
+          model: claude-test
+          provider: anthropic
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - key: system.now
+  - - pool_commit
+    - __start__
+    - key: system.run_id
+      value: <id:1>
+  - - pool_commit
+    - __start__
+    - key: system.today
+  - - pool_commit
+    - __start__
+    - value:
+        topic: tides
+  - - node_started
+    - __start__
+  - - pool_commit
+    - __start__
+    - value:
+        topic: tides
+  - - node_succeeded
+    - __start__
+    - commit: 6
+  - - node_started
+    - writer
+  - - node_step
+    - writer
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: claude-test
+        output:
+          format: yian.message.v1
+          parts:
+          - text: done
+            type: text
+          role: assistant
+        purpose: chat
+        request_sha256: 63417a2e80894cb8887c1b839a48b5fb25b76da866c69499c7c3ea88d3d89d20
+        response_id: null
+        usage: null
+  - - pool_commit
+    - writer
+    - value: done
+  - - pool_commit
+    - writer
+    - key: writer.new_messages
+      steps:
+      - 9
+  - - node_succeeded
+    - writer
+    - commit: 10
+      messages: 11
+  - - node_started
+    - __end__
+  - - pool_commit
+    - __end__
+    - value: done
+  - - node_succeeded
+    - __end__
+    - commit: 14

@@ -188,6 +188,8 @@ output: !Size ${size.output}
   `w: !int ${...}`.
 - `output: !T {...}` is one value of type `T`. Without the tag, `output: {...}` is a record of
   flow outputs.
+- `!include` is the one tag that isn't a type: it reads a text value from a file (see
+  [Prompts in files](/agents/#prompts-in-files)).
 
 ### What a tag checks
 

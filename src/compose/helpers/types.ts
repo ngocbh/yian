@@ -605,6 +605,16 @@ export function readSourceParameters(
       );
 
       try {
+        if (declarationCursor.included) {
+          const noun = declarationLabel === "input" ? "flow input" : declarationLabel;
+          const tagged = requireDefault
+            ? `a tag and a default, e.g. \`${name}: !str <text>\``
+            : `a tag, e.g. \`${name}: !str\``;
+          throw diagnostics.error(
+            `${noun} ${reprText(name)}: \`!include\` gives text, not a type; declare it with ${tagged}`,
+            { range: declarationCursor.range },
+          );
+        }
         if (declarationCursor.tag === null) {
           throw diagnostics.error(
             untaggedDeclarationError(name, value, registry, { declarationLabel, requireDefault }),

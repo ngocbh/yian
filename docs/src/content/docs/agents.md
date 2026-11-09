@@ -81,6 +81,46 @@ output: ${writer.output}
   name with an input, and can't be named `__llm_config` or `__steer_inbox`, or start with
   `__memory_`.
 
+### Prompts in files
+
+To keep a long prompt in its own file, read it with `!include` and a path relative to the flow
+file's folder.
+
+```md title="prompts/writer.md"
+Write ${sentences} ${tone} sentences about ${topic}.
+```
+
+```yaml title="brief_file.yaml"
+id: brief_file
+name: brief_file
+input:
+  topic: !str
+nodes:
+  writer:
+    kind: agent
+    input:
+      topic: ${input.topic}
+    variables:
+      sentences: !int(1..12) 3
+      tone: !str plain
+    system_prompt: You write short briefs for busy readers.
+    prompt: !include prompts/writer.md
+    output: str
+output: ${writer.output}
+```
+
+- The file's text is the value, as if written there in quotes: a `${...}` in it is checked at
+  load, and its final newline is kept. The text isn't YAML, so an included file can't include
+  another.
+- `!include` works on any text value. It fails at load on a key, a list or a mapping, and where
+  a type goes: `input:` and `variables:` declarations, a node's `output:` type and `typedefs:`.
+- The file must be UTF-8 text of at most `YIAN_MAX_INCLUDE_BYTES` (see
+  [Reference](/reference/#all-defaults-and-limits)), and a load with a root folder, such as
+  `yian check --root`, refuses one outside it. A missing or unreadable file fails at load, at the
+  `!include`.
+- A run records the text, so a resume uses the text the run started with, whatever the file
+  holds by then.
+
 ### A list prompt
 
 To send a conversation as real turns, give `prompt:` a list. Each item is either `${name}`

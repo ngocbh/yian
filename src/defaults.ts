@@ -420,6 +420,12 @@ export const ENTRIES = Object.freeze([
     group: "input cap",
     minimum: 1,
   }),
+  entry("MAX_INCLUDE_BYTES", {
+    default: 256 * 1024,
+    description: "Largest file a flow's `!include` reads",
+    group: "input cap",
+    minimum: 1,
+  }),
   entry("MAX_SKILL_FILE_BYTES", {
     default: 256 * 1024,
     description: "Largest SKILL.md or bundled skill file returned to a model",

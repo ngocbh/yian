@@ -476,6 +476,42 @@ export function statOrNull(path: string): fs.Stats | null {
   }
 }
 
+/** The first bytes of a regular file and the file's device and inode, as `readRegularFile` reads them. */
+export interface RegularFileHead {
+  readonly bytes: Uint8Array;
+  readonly dev: bigint;
+  readonly ino: bigint;
+}
+
+/**
+ * @internal Read at most `limit + 1` bytes of the file at `path` through one descriptor, and
+ * return them with the file's device and inode; `null` when the file opened isn't a regular file.
+ * The open doesn't block, so a FIFO can't hang it, and the read stops at `limit + 1` bytes
+ * however large the file or whatever size `stat` gives it (a `/proc` file's is 0).
+ *
+ * @throws a system error when the file can't be opened or read.
+ */
+export async function readRegularFile(path: string, limit: number): Promise<RegularFileHead | null> {
+  // Windows has no O_NONBLOCK, and no FIFO a path opens.
+  const handle = await fs.promises.open(path, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0));
+  try {
+    const stat = await handle.stat({ bigint: true });
+    if (!stat.isFile()) return null;
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    while (size <= limit) {
+      const chunk = new Uint8Array(Math.min(64 * 1024, limit + 1 - size));
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+      if (bytesRead === 0) break;
+      chunks.push(chunk.subarray(0, bytesRead));
+      size += bytesRead;
+    }
+    return { bytes: Buffer.concat(chunks), dev: stat.dev, ino: stat.ino };
+  } finally {
+    await handle.close();
+  }
+}
+
 /**
  * @internal The path the OS holds for open file `fd`, read from the descriptor rather than
  * resolved again from a path, or `null` where the runtime can't tell (Node on macOS, Linux

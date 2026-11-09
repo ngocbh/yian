@@ -7,9 +7,10 @@
  * each included file, and a load from the source reads it from there, never from disk.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -231,6 +232,55 @@ test("under a code root, a file outside it is refused whether or not it exists, 
   }
   expect(await outputOf(await load(outputFlow("!include inside.txt"), { dir: root, codeRoot: root }))).toBe("inside");
 });
+
+/**
+ * Run `fn` with `fsp.realpath` calling `swap` once, right after it first resolves `target`: a
+ * change on disk between the loader's check of a path and its read.
+ */
+async function swappingAfterCheck<T>(target: string, swap: () => void, fn: () => Promise<T>): Promise<T> {
+  const realpath = fsp.realpath;
+  let swapped = false;
+  const spy = spyOn(fsp, "realpath").mockImplementation((async (path: string) => {
+    const real = await realpath(path);
+    if (!swapped && path === target) {
+      swapped = true;
+      swap();
+    }
+    return real;
+  }) as typeof fsp.realpath);
+  try {
+    return await fn();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+test("a folder swapped for a symlink out of the code root after the check is refused", async () => {
+  const root = join(tmp, "root");
+  write({ "root/dir/a.txt": "inside", "outside/a.txt": "outside" });
+  const swap = () => {
+    renameSync(join(root, "dir"), join(root, "old"));
+    symlinkSync(join(tmp, "outside"), join(root, "dir"));
+  };
+  const loading = () => load(outputFlow("!include dir/a.txt"), { dir: root, codeRoot: root });
+
+  const { message } = await failure(swappingAfterCheck(join(root, "dir", "a.txt"), swap, loading));
+
+  expect(message).toBe("`!include` file 'dir/a.txt' is outside the code root; include a file inside it");
+});
+
+test("a file swapped for a FIFO after the check is refused without waiting for a writer", async () => {
+  if (spawnSync("mkfifo", [join(tmp, "probe")]).status !== 0) return;
+  write({ "a.txt": "text" });
+  const swap = () => {
+    rmSync(join(tmp, "a.txt"));
+    spawnSync("mkfifo", [join(tmp, "a.txt")]);
+  };
+
+  const { message } = await failure(swappingAfterCheck(join(tmp, "a.txt"), swap, () => load(outputFlow("!include a.txt"))));
+
+  expect(message).toBe("`!include` file 'a.txt' is not a regular file; include a text file");
+}, 5000);
 
 test("under a code root, a missing file names no folder", async () => {
   const { message } = await failure(load(outputFlow("!include none.md"), { codeRoot: tmp }));

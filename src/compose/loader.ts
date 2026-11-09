@@ -57,7 +57,7 @@ import {
   type SourceRange,
 } from "../diagnostics.ts";
 import { Binding, type ValuePath, ValueTemplate } from "../nodes/contracts.ts";
-import { isSystemError, leavesRoot, resolvedPath } from "../platform.ts";
+import { isSystemError, leavesRoot, readRegularFile, resolvedPath } from "../platform.ts";
 import { typeName, readTypedefs, type TypeRegistry, withMemoryTypes } from "../typesys/types.ts";
 import {
   isList,
@@ -814,10 +814,11 @@ async function parseIncluding(text: string, label: string, read: IncludeReader):
 /**
  * Return the reader of the files `!include` paths name, resolved against `dir`. A file must
  * resolve, symlinks followed, inside `ctx.codeRoot` when it has one, which is checked first and
- * named without an absolute path; be a regular file, checked before it is opened (a FIFO's open
- * would wait for a writer); hold at most `YIAN_MAX_INCLUDE_BYTES`; and be UTF-8 text, whose line
- * endings read as LF. It is kept in `ctx.read` by its real path, which `file.refs` records under
- * `include:<path>`.
+ * named without an absolute path; be a regular file, read through one descriptor that doesn't
+ * wait for a FIFO's writer; hold at most `YIAN_MAX_INCLUDE_BYTES`, of which at most one byte more
+ * is read; and be UTF-8 text, whose line endings read as LF. Under a code root, the path must then
+ * still resolve inside it, to the file read. The file is kept in `ctx.read` by its real path, which
+ * `file.refs` records under `include:<path>`.
  */
 function diskIncludes(dir: string, ctx: LoadCtx, file: ReadFile): IncludeReader {
   return async (path, fail) => {
@@ -833,18 +834,25 @@ function diskIncludes(dir: string, ctx: LoadCtx, file: ReadFile): IncludeReader 
         throw fail(`${includeFile(path)} does not exist${codeRoot === null ? ` in ${reprText(dir)}` : ""}`);
       }
       if (codeRoot !== null && leavesRoot(relative(codeRoot, real))) throw fail(outsideRoot(path));
-      const stat = await fsp.stat(real);
-      if (!stat.isFile()) throw fail(`${includeFile(path)} is not a regular file; include a text file`);
       const limit = current().maxIncludeBytes;
-      if (stat.size > limit) throw fail(tooLarge(path, limit));
+      const opened = await readRegularFile(real, limit);
+      if (opened === null) throw fail(`${includeFile(path)} is not a regular file; include a text file`);
+      if (opened.bytes.length > limit) throw fail(tooLarge(path, limit));
+      if (codeRoot !== null) {
+        // A folder on the path swapped for a symlink after the check opens another file, so the
+        // path must still resolve inside the root, to the file that was read.
+        const again = await fsp.realpath(target);
+        if (leavesRoot(relative(codeRoot, again))) throw fail(outsideRoot(path));
+        const now = await fsp.stat(again, { bigint: true });
+        if (now.dev !== opened.dev || now.ino !== opened.ino) {
+          throw fail(`${includeFile(path)} changed while it was read; load the flow again`);
+        }
+      }
       let read = ctx.read.get(real);
       if (read === undefined) {
-        const bytes = await fsp.readFile(real);
-        // It may have grown since its size was read.
-        if (bytes.length > limit) throw fail(tooLarge(path, limit));
         let text: string;
         try {
-          text = UTF8.decode(bytes);
+          text = UTF8.decode(opened.bytes);
         } catch (error) {
           if (!(error instanceof TypeError)) throw error;
           throw fail(`${includeFile(path)} is not UTF-8 text; save it as UTF-8`);

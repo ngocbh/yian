@@ -30,6 +30,7 @@ import {
   openSqlite,
   realScheduler,
   RedirectError,
+  readRegularFile,
   redirectDetail,
   resolvedPath,
   runtime,
@@ -916,6 +917,29 @@ describe("leavesRoot", () => {
   test.each(["", "x", `x${path.sep}..`, "..x", `...${path.sep}x`])("%j stays inside", (rel) => {
     expect(leavesRoot(rel)).toBe(false);
   });
+});
+
+describe("readRegularFile", () => {
+  test("reads at most one byte past the limit, and returns the file's device and inode", async () => {
+    const file = path.join(dir, "a.txt");
+    fs.writeFileSync(file, "0123456789");
+    const stat = fs.statSync(file, { bigint: true });
+    const head = await readRegularFile(file, 4);
+    expect([Buffer.from(head!.bytes).toString(), head!.dev, head!.ino]).toEqual(["01234", stat.dev, stat.ino]);
+    expect(Buffer.from((await readRegularFile(file, 20))!.bytes).toString()).toBe("0123456789");
+  });
+
+  test("reads past a size stat understates", async () => {
+    if (!fs.existsSync("/proc/self/status") || fs.statSync("/proc/self/status").size !== 0) return;
+    expect((await readRegularFile("/proc/self/status", 4))!.bytes.length).toBe(5);
+  });
+
+  test("returns null for a folder, and for a FIFO without waiting for a writer", async () => {
+    expect(await readRegularFile(dir, 4)).toBeNull();
+    const fifo = path.join(dir, "pipe");
+    if (spawnSync("mkfifo", [fifo]).status !== 0) return;
+    expect(await readRegularFile(fifo, 4)).toBeNull();
+  }, 5000);
 });
 
 describe("resolvedPath", () => {

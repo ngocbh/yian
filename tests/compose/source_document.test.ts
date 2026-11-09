@@ -1005,3 +1005,14 @@ test.each([
   "yaml/compose_source_document__syntax_error_after_lone_cr_lines",
   "yaml/compose_source_document__syntax_error_after_yaml11_only_line_breaks",
 ])("parseSourceDocument: %s", (id) => runTextCase({ id, call: parseSourceDocument }));
+
+test("an !include given its text reads as that text, untagged and marked, and is written as the !include", () => {
+  const text = "a: !include a.txt\nb: !include 'b c.txt'\nc: !include d.txt\n";
+  const document = SourceDocument.parse(text, "<flow>", new Map([["a.txt", "true\n"], ["b c.txt", "B"]]));
+  const [a, b, c] = ["a", "b", "c"].map((key) => document.root.child(key));
+  expect([a!.value, a!.tag, a!.included, a!.scalarText]).toEqual(["true\n", null, true, "!include a.txt"]);
+  expect([b!.value, b!.scalarText]).toEqual(["B", "!include 'b c.txt'"]);
+  // A path the parse wasn't given stays tagged and is listed for the loader to read.
+  expect([c!.value, c!.tag, c!.included]).toEqual(["d.txt", "include", false]);
+  expect(document.includes.map((site) => site.path)).toEqual(["d.txt"]);
+});

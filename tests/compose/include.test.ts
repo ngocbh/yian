@@ -130,6 +130,15 @@ test("a path is resolved against loadFlow's baseDir when the text has no file", 
   expect(await outputOf(flow)).toBe("from base");
 });
 
+test("an error about an included value quotes the !include, never the file's text", async () => {
+  write({ "big.txt": "a long prompt\n" });
+  const { message } = await failure(load("id: f\nname: f\nnodes:\n  v: !include big.txt\noutput: ${v.output}\n"));
+  expect(message).toBe(
+    "node 'v': an entry in `nodes:` is a node or a value; add `kind:` for a node, or a tag (`!object`, " +
+      "`!Buy`, ...) for a value",
+  );
+});
+
 // ---------- where !include may go ----------
 
 test.each([

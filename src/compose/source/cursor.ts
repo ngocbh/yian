@@ -230,7 +230,8 @@ export class SourceCursor {
 
   /**
    * The authored text of an unchanged source scalar, before YAML resolves its type: a plain
-   * `yes` reads `"yes"`. Null where `scalarStyle` is.
+   * `yes` reads `"yes"`, and an included value its `!include` (`"!include a.md"`). Null where
+   * `scalarStyle` is.
    */
   get scalarText(): string | null {
     return this._unchangedScalarDefinition()?.raw ?? null;

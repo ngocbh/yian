@@ -694,7 +694,8 @@ function build(
       kind: "scalar",
       value,
       range,
-      raw: value,
+      // An included value is written as its `!include`, so a message never quotes the file.
+      raw: text === undefined ? path : `!include ${source.slice(node.range![0], node.range![1])}`,
       constructedLineRanges: null,
       style: text === undefined ? STYLES[node.type!] : "literal",
       tag: text === undefined ? INCLUDE_TAG : null,

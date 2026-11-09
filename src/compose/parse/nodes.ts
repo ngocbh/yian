@@ -298,7 +298,8 @@ function rejectUntaggedValue(
   // the suggested entry either.
   checkWrittenValue(value, `value entry ${reprText(nodeId)}`, range, diagnostics);
   let message = nodeOrValue(nodeId);
-  if (!isReference(value, cursor.scalarStyle) && !containsItself(value)) {
+  // An included value can't take a tag, and its example would quote the file.
+  if (!isReference(value, cursor.scalarStyle) && !containsItself(value) && !cursor.included) {
     const typ = exampleType(value);
     if (typ !== null) message += `, e.g. ${suggestTag(nodeId, typ, exampleText(value, cursor))}`;
   }

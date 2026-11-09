@@ -35,7 +35,7 @@ import {
 } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentSteps, requestSha256 } from "../../src/nodes/agent/context.ts";
-import { SKIPPED_TOOL_RESULT, TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/results.ts";
+import { SKIPPED_TOOL_RESULT, TOOL_OUTCOME_UNKNOWN, unparsedText } from "../../src/nodes/agent/results.ts";
 import { CapabilityFault } from "../../src/nodes/base.ts";
 import { INTERRUPTED_MARKER } from "../../src/nodes/agent/messages.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
@@ -587,6 +587,22 @@ test("a replayed call with no result whose check fails fails the node as live, w
   expect(resumed.failure?.message).toBe(uncut.result.failure?.message);
   expect(model.requests.length).toBe(0);
   expect(steps(log).map((step) => step["kind"])).toEqual(["model_call"]);
+});
+
+test("a call cut off before its unparsed-arguments result gets the same error again, not a closer", async () => {
+  const unparsed = new ToolCallPart({ id: "call-a", name: "save", arguments: null, rawArguments: '{"topic": ' });
+  const reply = new Response({ message: new Message({ role: "assistant", parts: [unparsed] }), finishReason: "tool_calls" });
+  const model = () => new ScriptedModel([reply, textReply("done")], CONFIG);
+  const ran: string[] = [];
+  const tools = { save: topicTool("save", { log: ran }) };
+  const uncut = await run(model(), { tools });
+  expect(uncut.result.status, uncut.result.failure?.message).toBe("succeeded");
+  const log = await cutRun(afterCall(uncut.log), model(), { tools });
+  const resumed = await resume(log, new ScriptedModel([textReply("done")], CONFIG), { tools });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(ran).toEqual([]);
+  expect(toolResults(log)).toEqual([{ call_id: "call-a", output: unparsedText("save"), is_error: true }]);
+  expect(comparable(log)).toEqual(comparable(uncut.log));
 });
 
 test("a crash in a retry wait waits the recorded delay again, and the attempt count continues", async () => {

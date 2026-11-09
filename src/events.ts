@@ -434,8 +434,10 @@ export class ModelCallFinished {
 }
 
 /**
- * An AGENT node is about to run one granted tool call from a model reply; `n` is the reply's
- * `model_call` step.
+ * An AGENT node is about to run one tool call from a model reply; `n` is the reply's `model_call`
+ * step and `callIndex` the call's place among the reply's tool calls. `arguments` is a copy of the
+ * call's arguments, `null` when they didn't parse (the call then finishes with a reported error and
+ * never reaches its tool) or can't be copied.
  */
 export class ToolCallStarted {
   readonly type = "ToolCallStarted" as const;

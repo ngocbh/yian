@@ -1,6 +1,6 @@
 /**
- * The text the model reads for a tool result, a reported tool error, a skipped call, or a call a
- * crash, a deadline or an interrupt closed.
+ * The text the model reads for a tool result, a reported tool error, a skipped call, a call a
+ * crash, a deadline or an interrupt closed, or a call the loop refused before its tool.
  *
  * Knows about:   diagnostics, typesys, and the peer AGENT module `live`.
  * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
@@ -23,6 +23,14 @@ export const ASK_TIMED_OUT_RESULT = "timed out: no answer";
 /** The result the model reads for a pending call a host interrupt closed before its answer. */
 export const TOOL_INTERRUPTED_OUTCOME =
   "The user interrupted this tool call; its outcome is unknown. Check its effect before retrying.";
+
+/**
+ * The result the model reads for a tool call whose arguments aren't valid JSON. Fixed text, not the
+ * parser's message, so it reads the same on every runtime.
+ */
+export function unparsedText(name: string): string {
+  return `Arguments for ${name} are not valid JSON; send them as one JSON object.`;
+}
 
 /** Why a call was closed without its result, as an agent's closer records it. */
 export type CloserReason = "crashed" | "timed_out" | "interrupted";

@@ -22,6 +22,7 @@ import {
 } from "../../src/nodes/agent/context.ts";
 import { Interrupted } from "../../src/nodes/agent/interrupts.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
+import { unparsedText } from "../../src/nodes/agent/results.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
 import type { Output, SteerInbox } from "../../src/nodes/base.ts";
 import { Skill } from "../../src/skills/catalog.ts";
@@ -212,10 +213,12 @@ test("a parsed tool call with no grant fails with AgentLoopError", async () => {
   expect((error as Error).message).toBe("agent node 'n' requested tool 'lookup', but it is not granted; granted tools: []");
 });
 
-test("an unparsed tool call is ignored", async () => {
+test("an unparsed tool call gets an error result, and the model answers again", async () => {
   const unparsed = new ToolCallPart({ id: "c1", name: "lookup", arguments: null, rawArguments: "{not json" });
-  const model = new ScriptedModel([reply(new TextPart("answer"), unparsed)]);
-  expect(((await runAgent(context(model, { maxToolIterations: 1 }))) as Output).value).toBe("answer");
+  const model = new ScriptedModel([reply(new TextPart("calling"), unparsed), textReply("answer")]);
+  expect(((await runAgent(context(model))) as Output).value).toBe("answer");
+  const sent = model.requests[1]!.messages.at(-1)!.parts;
+  expect(sent).toEqual([new ToolResultPart({ callId: "c1", name: "lookup", content: unparsedText("lookup"), isError: true })]);
 });
 
 for (const [name, response] of [

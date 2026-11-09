@@ -445,14 +445,17 @@ export const SKIPPED_TOOL_ERROR = "interrupted";
 export interface ToolCallIdentity {
   /** The `n` of the reply's `model_call` step. */
   readonly n: number;
+  /** The call's place among the reply's tool calls. */
   readonly callIndex: number;
   readonly toolCallId: string;
   readonly name: string;
-  readonly arguments: JsonObject;
+  /** The parsed arguments; `null` when they didn't parse. */
+  readonly arguments: JsonObject | null;
 }
 
-/** Return a copy of a call's arguments for its started event; `null` when they can't be copied. */
-function shown(args: JsonObject): Value | null {
+/** Return a copy of a call's arguments for its started event; `null` for none or when they can't be copied. */
+function shown(args: JsonObject | null): Value | null {
+  if (args === null) return null;
   try {
     return copyValue(args);
   } catch {

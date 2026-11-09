@@ -3767,7 +3767,7 @@ function validatePendingStep(state: RunState, nodeId: string, step: Readonly<Jso
 /**
  * Require an AGENT's `pending` step to register a call of its latest reply: `tool` a granted
  * tool's name, neither take nor sleep; `tool_call_id` the provider's id; `reply` the `n` of the
- * node's latest `model_call` step and `index` the call's place among its runnable calls, which
+ * node's latest `model_call` step and `index` the call's place among its tool calls, which
  * `call_id` (`<run>/<node>/<reply>/<index>`) names; no `arguments` (they are in the reply); a
  * `deadline` only on `ask_user`, as a record time; not yet registered, and within the run's
  * `MAX_EVENT_BYTES`.

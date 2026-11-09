@@ -490,7 +490,7 @@ export class AgentSteps {
   /**
    * Write a call whose handler returned `pending()` as a `pending` step: `call_id` (the yian call
    * id), `tool`, `tool_call_id`, `reply` (the reply's `model_call` step `n`), `index` (the call's
-   * place among the reply's runnable calls), and `deadline` (a record time) for an `ask_user` with a
+   * place among the reply's tool calls), and `deadline` (a record time) for an `ask_user` with a
    * timeout.
    *
    * @returns The step's `n`.

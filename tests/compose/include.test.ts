@@ -4,7 +4,7 @@
  * as if written there quoted. It is refused on a key, a list, a mapping and a merge source, and in
  * a type position; a file that is missing, not a regular file, not UTF-8, over
  * `YIAN_MAX_INCLUDE_BYTES` or outside the code root fails at the tag. The flow's source records
- * each included file.
+ * each included file, and a load from the source reads it from there, never from disk.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -15,11 +15,12 @@ import { dirname, join } from "node:path";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { flowFingerprint } from "../../src/compile/manifest.ts";
-import { loadFlow } from "../../src/compose/loader.ts";
+import { loadFlow, loadFlowSource } from "../../src/compose/loader.ts";
 import type { Env } from "../../src/defaults.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { MemoryBase, type MemoryContract, type MemorySession } from "../../src/memory/base.ts";
 import { runFlow } from "../../src/run.ts";
+import type { FlowSource } from "../../src/runtime/log.ts";
 import { loadErrorAsync } from "../helpers/declarations.ts";
 import { NO_ENV, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
@@ -269,9 +270,61 @@ test("the flow's source records each included file under the include: ref", asyn
   });
 });
 
+test("a load from the recorded source reads the included text it recorded, not the file on disk", async () => {
+  write({ "a.txt": "before" });
+  const loaded = await load(outputFlow("!include a.txt"));
+  write({ "a.txt": "after" });
+
+  const again = await loadFlowSource(loaded.source!, { env: NO_ENV });
+
+  expect(await outputOf(again)).toBe("before");
+  expect(flowFingerprint(again.compiled)).toBe(flowFingerprint(loaded.compiled));
+});
+
 test("the fingerprint differs when an included file's text differs", async () => {
   write({ "a.txt": "before" });
   const before = flowFingerprint((await load(outputFlow("!include a.txt"))).compiled);
   write({ "a.txt": "after" });
   expect(flowFingerprint((await load(outputFlow("!include a.txt"))).compiled)).not.toBe(before);
+});
+
+/** A recorded source of `flow.yaml` including `a.txt` (recorded under `key`), with `codeRoot`. */
+const recorded = (key: string, codeRoot: string | null): FlowSource => ({
+  root: "flow.yaml",
+  dir: tmp,
+  codeRoot,
+  files: {
+    "flow.yaml": { text: outputFlow("!include a.txt"), refs: { "include:a.txt": key } },
+    [key]: { text: "12345", refs: {} },
+  },
+});
+
+test("a load from a recorded source holds an included file to its code root and the cap", async () => {
+  expect(await outputOf(await loadFlowSource(recorded("a.txt", tmp), { env: NO_ENV }))).toBe("12345");
+  const outside = await failure(loadFlowSource(recorded("../a.txt", tmp), { env: NO_ENV }));
+  expect(outside.message).toBe("`!include` file 'a.txt' is outside the code root; include a file inside it");
+  expect([outside.label, outside.line]).toEqual(["flow.yaml", 4]);
+  const env: Env = (name) => (name === "YIAN_MAX_INCLUDE_BYTES" ? "4" : NO_ENV(name));
+  const large = await failure(loadFlowSource(recorded("a.txt", null), { env }));
+  expect(large.message).toContain("is larger than 4 bytes");
+});
+
+test("a recorded file whose include: ref is missing fails at the tag", async () => {
+  const source = recorded("a.txt", null);
+  const bare = { ...source, files: { ...source.files, "flow.yaml": { text: outputFlow("!include a.txt"), refs: {} } } };
+  const { message, line } = await failure(loadFlowSource(bare, { env: NO_ENV }));
+  expect(message).toBe("`!include` file 'a.txt' is not among the recorded files");
+  expect(line).toBe(4);
+});
+
+test("a host child's included file outside the code root is refused at load, as a load from its source would be", async () => {
+  const root = join(tmp, "root");
+  write({ "note.txt": "outside", "root/lib/child.yaml": outputFlow("!include ../../note.txt") });
+  const childResolver = () =>
+    loadFlow(outputFlow("!include ../../note.txt"), { baseDir: join(root, "lib"), sourceLabel: "child.yaml", env: NO_ENV });
+  const text = "id: f\nname: f\nuses:\n  child: lib/child\nnodes:\n  c:\n    kind: call\n    call: child\noutput: ${c.output}\n";
+
+  const { message } = await loadErrorAsync(loadFlow(text, { childResolver, baseDir: root, codeRoot: root, env: NO_ENV }));
+
+  expect(message).toBe("child.yaml: `!include` file '../../note.txt' is outside the code root; include a file inside it");
 });

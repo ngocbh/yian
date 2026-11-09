@@ -24,10 +24,10 @@
  * reachable keys, and installs `ComposedFlow.originResolver`. Source-free graphs carry `null`;
  * private `assemble` products keep the resolver unset.
  *
- * Before a file is parsed for good, the file each `!include` names is read from disk, against the
- * including file's folder, and the including file records where each path went. After a file
- * assembles, its CODE nodes are checked (each def's in written order, then the root's) against the
- * file's base directory, and inside the load's `codeRoot` when it has one.
+ * Before a file is parsed for good, the file each `!include` names is read: from disk, against the
+ * including file's folder, or from a recorded source. The including file records where each path
+ * went. After a file assembles, its CODE nodes are checked (each def's in written order, then the
+ * root's) against the file's base directory, and inside the load's `codeRoot` when it has one.
  * Only the root load sees the fully assembled graph, so `loadFlow` then refuses an `llm_config`
  * value a child flow's agent would inherit before it is known.
  *
@@ -719,7 +719,10 @@ async function loadText(text: string, options: Omit<LoadOptions, "env">): Promis
           return child;
         };
   const loaded = await loadFlowFile(document, resolver, searchPaths, ctx, ownDir, rootFile);
-  if (ctx.codeRoot !== null) await checkHostedCode(hosted, document, ctx.codeRoot);
+  if (ctx.codeRoot !== null) {
+    await checkHostedCode(hosted, document, ctx.codeRoot);
+    checkHostedIncludes(hosted, ctx.codeRoot);
+  }
   const flow = replaceFlow(loaded, {
     source: await flowSource(ctx, rootFile, hosted, sourceLabel, ownDir),
     memoryTypes: Object.freeze([...memoryTypes]),
@@ -746,6 +749,26 @@ async function checkHostedCode(
     const resolver = child.originResolver;
     const resolveOrigin = resolver === null ? null : (origin: OriginRef) => resolver.resolve(origin);
     await checkFlowCode(child.compiled, { diagnostics, resolveOrigin, seen, codeRoot });
+  }
+}
+
+/**
+ * Throw at the first file a host child's source includes from outside `codeRoot`: the host may
+ * have loaded it under no root, and a load from the run's recorded source holds every included
+ * file to the root.
+ *
+ * @throws LoadError naming the including file and the path as written.
+ */
+function checkHostedIncludes(hosted: ReadonlyMap<string, unknown>, codeRoot: string): void {
+  for (const child of hosted.values()) {
+    if (!(child instanceof ComposedFlow) || child.source === null) continue;
+    const { dir, files } = child.source;
+    for (const [key, file] of Object.entries(files)) {
+      for (const [ref, target] of Object.entries(file.refs)) {
+        if (!ref.startsWith(INCLUDE_REF) || !leavesRoot(relative(codeRoot, resolvePath(dir, target)))) continue;
+        throw UNLOCATED_DIAGNOSTICS.error(`${basename(key)}: ${outsideRoot(ref.slice(INCLUDE_REF.length))}`);
+      }
+    }
   }
 }
 
@@ -839,19 +862,41 @@ function diskIncludes(dir: string, ctx: LoadCtx, file: ReadFile): IncludeReader 
 }
 
 /**
+ * Return the reader of the files `!include` paths in `source`'s file `from` name, through its
+ * `refs`, never from disk. As when it was read from disk, a file's key must be inside
+ * `source.codeRoot` when it has one, and its text at most `YIAN_MAX_INCLUDE_BYTES`.
+ */
+function sourceIncludes(source: FlowSource, from: string): IncludeReader {
+  return async (path, fail) => {
+    const refs = source.files[from]!.refs;
+    const ref = INCLUDE_REF + path;
+    if (!Object.hasOwn(refs, ref)) throw fail(`${includeFile(path)} is not among the recorded files`);
+    const key = refs[ref]!;
+    if (source.codeRoot !== null && leavesRoot(relative(source.codeRoot, resolvePath(source.dir, key)))) {
+      throw fail(outsideRoot(path));
+    }
+    const text = source.files[key]!.text;
+    const limit = current().maxIncludeBytes;
+    if (new TextEncoder().encode(text).length > limit) throw fail(tooLarge(path, limit));
+    return text;
+  };
+}
+
+/**
  * Compile the flow files `source` holds, as a run recorded them, without reading them from disk:
- * the load starts at `source.root` and resolves each `uses:` ref through the file's `refs`. Each
- * file is labelled with its key's file name, and its CODE references resolve on disk in its key's
- * folder below `source.dir`, inside `source.codeRoot` when it has one (a host child's recorded
- * file included), as `loadFlow`'s `codeRoot`. A flow input's tag naming a type no file declares
- * reads as a memory type: the run's start checked its memories, so the host need not pass its
- * memory classes again, and the fingerprint is the same.
+ * the load starts at `source.root` and resolves each `uses:` ref and `!include` path through the
+ * file's `refs`. Each file is labelled with its key's file name, and its CODE references resolve
+ * on disk in its key's folder below `source.dir`, inside `source.codeRoot` when it has one (a host
+ * child's recorded file included), as `loadFlow`'s `codeRoot`; each included file's key must be
+ * inside it too. A flow input's tag naming a type no file declares reads as a memory type: the
+ * run's start checked its memories, so the host need not pass its memory classes again, and the
+ * fingerprint is the same.
  *
  * @param source A loaded flow's `source`, or a run's recorded `flow`.
  * @param options.env The environment the load reads the `YIAN_*` values from, as `loadFlow`'s.
  * @returns The flow, whose `source` is `source`.
- * @throws LoadError for a flow that doesn't load, a `uses:` ref its file's `refs` lacks, or a CODE
- *   reference resolving outside `source.codeRoot`.
+ * @throws LoadError for a flow that doesn't load, a `uses:` ref or `!include` path its file's
+ *   `refs` lacks, or a CODE reference or included file outside `source.codeRoot`.
  * @throws DefaultsError when a `YIAN_<NAME>` value in `env` isn't accepted.
  */
 export async function loadFlowSource(
@@ -868,8 +913,8 @@ export async function loadFlowSource(
 }
 
 /** Load `source`'s file `key`, its refs resolved through `source` too. */
-function loadSourceFile(source: FlowSource, key: string, ctx: LoadCtx): Promise<ComposedFlow> {
-  const document = parseSourceDocument(source.files[key]!.text, basename(key));
+async function loadSourceFile(source: FlowSource, key: string, ctx: LoadCtx): Promise<ComposedFlow> {
+  const document = await parseIncluding(source.files[key]!.text, basename(key), sourceIncludes(source, key));
   return loadFlowFile(document, sourceResolver(source, key, ctx), null, ctx, resolvePath(source.dir, dirname(key)));
 }
 

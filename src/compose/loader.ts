@@ -794,7 +794,8 @@ function tooLarge(path: string, limit: number): string {
  * Parse `text` as `parseSourceDocument` does, each `!include` value reading the text `read` gives
  * its path. Each distinct path is read once, in document order.
  *
- * @throws LoadError at the first `!include` with an empty path or a file `read` refuses.
+ * @throws LoadError at the first `!include` with an empty path, a path holding a NUL, or a file
+ *   `read` refuses.
  */
 async function parseIncluding(text: string, label: string, read: IncludeReader): Promise<SourceDocument> {
   const document = parseSourceDocument(text, label);
@@ -805,6 +806,8 @@ async function parseIncluding(text: string, label: string, read: IncludeReader):
     if (texts.has(path)) continue;
     const fail = (message: string) => diagnostics.error(message, { range });
     if (path === "") throw fail("`!include` needs a file path, e.g. `prompt: !include prompts/answer.md`");
+    // No file system takes it; Node and Bun throw a TypeError naming the absolute path.
+    if (path.includes("\0")) throw fail(`${includeFile(path)} holds a NUL character; write the path without it`);
     texts.set(path, await read(path, fail));
   }
   return parseSourceDocument(text, label, texts);

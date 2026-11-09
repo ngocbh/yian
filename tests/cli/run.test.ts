@@ -1548,6 +1548,14 @@ describe("check", () => {
     expect((await checkJson(["--root", root, flow])).code).toBe(0);
   });
 
+  test("--root: an !include path holding a NUL is a load diagnostic", async () => {
+    const root = join(tmp, "company");
+    const flow = file("company/main.yaml", 'id: c\nname: c\nnodes: {}\noutput: !include "in\\0.md"\n');
+    const diagnostic = await rootDiagnostic(root, flow);
+    expect(diagnostic.code).toBe("compose.load");
+    expect(diagnostic.message).toBe("`!include` file 'in\\x00.md' holds a NUL character; write the path without it");
+  });
+
   test("--root: a uses: child's CODE reference outside the root fails; inside, it loads", async () => {
     const root = join(tmp, "company");
     const flow = file("company/main.yaml", parentFlow("lib/child"));

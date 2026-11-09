@@ -186,6 +186,12 @@ test.each(["!include", '!include ""'])("an empty path %p fails at the tag", asyn
   expect(line).toBe(4);
 });
 
+test.each([false, true])("a path holding a NUL fails at the tag, under a code root: %p", async (rooted) => {
+  const { message, line } = await failure(load(outputFlow('!include "in\\0.txt"'), rooted ? { codeRoot: tmp } : {}));
+  expect(message).toBe("`!include` file 'in\\x00.txt' holds a NUL character; write the path without it");
+  expect(line).toBe(4);
+});
+
 test("a folder is refused", async () => {
   mkdirSync(join(tmp, "prompts"));
   const { message } = await failure(load(outputFlow("!include prompts")));

@@ -14,11 +14,10 @@ import { basename, dirname, join, resolve } from "node:path";
 
 import { type Env, processEnv } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
-import { homeDir, isSystemError, statOrNull, warn as platformWarn } from "../platform.ts";
+import { homeDir, isSystemError, resolvedPath, statOrNull, warn as platformWarn } from "../platform.ts";
 import {
   checkSkillName,
   readSkillText,
-  resolvedPath,
   SKILL_FILE,
   Skill,
   SkillError,

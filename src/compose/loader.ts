@@ -35,9 +35,8 @@
  * nesting limit, counted apart from call depth; each loaded flow records its own `importDepth`.
  *
  * Imports flow down only: this module composes the compose package's own components plus
- * `compile`, `defaults`, `diagnostics`, `llm_clients`, `nodes`, `platform`, `skills` (a path
- * helper) and `typesys`, and the `FlowSource` type of `runtime/log`; nothing in the engine imports
- * it back.
+ * `compile`, `defaults`, `diagnostics`, `llm_clients`, `nodes`, `platform` and `typesys`, and the
+ * `FlowSource` type of `runtime/log`; nothing in the engine imports it back.
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -58,8 +57,7 @@ import {
   type SourceRange,
 } from "../diagnostics.ts";
 import { Binding, type ValuePath, ValueTemplate } from "../nodes/contracts.ts";
-import { isSystemError, leavesRoot } from "../platform.ts";
-import { resolvedPath } from "../skills/catalog.ts";
+import { isSystemError, leavesRoot, resolvedPath } from "../platform.ts";
 import { typeName, readTypedefs, type TypeRegistry, withMemoryTypes } from "../typesys/types.ts";
 import {
   isList,

@@ -31,6 +31,7 @@ import {
   realScheduler,
   RedirectError,
   redirectDetail,
+  resolvedPath,
   runtime,
   safeFetch,
   type Scheduler,
@@ -914,6 +915,15 @@ describe("leavesRoot", () => {
 
   test.each(["", "x", `x${path.sep}..`, "..x", `...${path.sep}x`])("%j stays inside", (rel) => {
     expect(leavesRoot(rel)).toBe(false);
+  });
+});
+
+describe("resolvedPath", () => {
+  test("resolves a symlink above a missing path", () => {
+    fs.mkdirSync(path.join(dir, "real"));
+    fs.symlinkSync(path.join(dir, "real"), path.join(dir, "link"));
+    const real = path.join(fs.realpathSync(path.join(dir, "real")), "missing", "x");
+    expect(resolvedPath(path.join(dir, "link", "missing", "x"))).toBe(real);
   });
 });
 

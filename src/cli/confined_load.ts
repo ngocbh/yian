@@ -16,8 +16,7 @@ import { loadFlow } from "../compose/loader.ts";
 import { parseSourceDocument } from "../compose/parse/file.ts";
 import type { Env } from "../defaults.ts";
 import { Diagnostic, reprText } from "../diagnostics.ts";
-import { isSystemError, leavesRoot, statOrNull } from "../platform.ts";
-import { resolvedPath } from "../skills/catalog.ts";
+import { isSystemError, leavesRoot, resolvedPath, statOrNull } from "../platform.ts";
 import { isRecord } from "../typesys/values.ts";
 import { readFlowText } from "./startup.ts";
 

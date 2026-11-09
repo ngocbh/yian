@@ -17,7 +17,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 // Default import, like `fs`, so tests can spy on `userInfo`.
 import os from "node:os";
-import { isAbsolute, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
 import { type Env, processEnv } from "./defaults.ts";
@@ -502,6 +502,25 @@ export function openFilePath(fd: number): string | null {
  */
 export function leavesRoot(rel: string): boolean {
   return rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+}
+
+/**
+ * @internal The real path of the longest existing prefix of `path`, with the rest appended unchanged.
+ */
+export function resolvedPath(path: string): string {
+  const abs = resolve(path);
+  let candidate = abs;
+  for (;;) {
+    try {
+      const real = fs.realpathSync(candidate);
+      return join(real, relative(candidate, abs));
+    } catch (error) {
+      if (!isSystemError(error)) throw error;
+      const parent = dirname(candidate);
+      if (parent === candidate) return abs;
+      candidate = parent;
+    }
+  }
 }
 
 /**

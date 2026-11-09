@@ -9,7 +9,7 @@
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -186,7 +186,9 @@ test.each([
 
 test("a missing file fails at the tag, naming the path and the folder", async () => {
   const { message, line } = await failure(load(outputFlow("!include prompts/none.md")));
-  expect(message).toBe(`\`!include\` file 'prompts/none.md' does not exist in '${tmp}'`);
+  expect(message).toBe(
+    `\`!include\` file 'prompts/none.md' does not exist in '${tmp}'; its path is relative to the including file's folder`,
+  );
   expect(line).toBe(4);
 });
 
@@ -214,6 +216,14 @@ test("a FIFO is refused without being opened", async () => {
   const { message } = await failure(load(outputFlow("!include pipe")));
   expect(message).toBe("`!include` file 'pipe' is not a regular file; include a text file");
 }, 5000);
+
+test("a file that can't be opened says why and what to do", async () => {
+  if (process.getuid?.() === 0) return;
+  write({ "a.txt": "secret" });
+  chmodSync(join(tmp, "a.txt"), 0o000);
+  const { message } = await failure(load(outputFlow("!include a.txt")));
+  expect(message).toBe("`!include` file 'a.txt' can't be read (EACCES); include a text file you can read");
+});
 
 test("a file that isn't UTF-8 is refused", async () => {
   write({ "a.txt": new Uint8Array([0x68, 0xff, 0x69]) });
@@ -293,7 +303,7 @@ test("a file swapped for a FIFO after the check is refused without waiting for a
 
 test("under a code root, a missing file names no folder", async () => {
   const { message } = await failure(load(outputFlow("!include none.md"), { codeRoot: tmp }));
-  expect(message).toBe("`!include` file 'none.md' does not exist");
+  expect(message).toBe("`!include` file 'none.md' does not exist; its path is relative to the including file's folder");
 });
 
 test("a typedef can't be named include", async () => {
@@ -374,11 +384,17 @@ test("a load from a recorded source holds an included file to its code root and 
   expect(large.message).toContain("is larger than 4 bytes");
 });
 
-test("a recorded file whose include: ref is missing fails at the tag", async () => {
+test.each([
+  ["has no include: ref", {}],
+  ["has an include: ref to a file the source lacks", { "include:a.txt": "gone.txt" }],
+])("a recorded file that %s fails at the tag", async (_, refs) => {
   const source = recorded("a.txt", null);
-  const bare = { ...source, files: { ...source.files, "flow.yaml": { text: outputFlow("!include a.txt"), refs: {} } } };
+  const bare = { ...source, files: { ...source.files, "flow.yaml": { text: outputFlow("!include a.txt"), refs } } };
   const { message, line } = await failure(loadFlowSource(bare, { env: NO_ENV }));
-  expect(message).toBe("`!include` file 'a.txt' is not among the recorded files");
+  expect(message).toBe(
+    "`!include` file 'a.txt' is not among the recorded files; record it under the including file's " +
+      "`include:a.txt` ref",
+  );
   expect(line).toBe(4);
 });
 

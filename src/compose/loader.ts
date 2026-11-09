@@ -831,7 +831,8 @@ function diskIncludes(dir: string, ctx: LoadCtx, file: ReadFile): IncludeReader 
       } catch (error) {
         if (codeRoot !== null && leavesRoot(relative(codeRoot, resolvedPath(target)))) throw fail(outsideRoot(path));
         if (!isMissingPath(error)) throw error;
-        throw fail(`${includeFile(path)} does not exist${codeRoot === null ? ` in ${reprText(dir)}` : ""}`);
+        const where = codeRoot === null ? ` in ${reprText(dir)}` : "";
+        throw fail(`${includeFile(path)} does not exist${where}; its path is relative to the including file's folder`);
       }
       if (codeRoot !== null && leavesRoot(relative(codeRoot, real))) throw fail(outsideRoot(path));
       const limit = current().maxIncludeBytes;
@@ -865,7 +866,7 @@ function diskIncludes(dir: string, ctx: LoadCtx, file: ReadFile): IncludeReader 
     } catch (error) {
       // A system error's message holds absolute paths.
       if (!isSystemError(error)) throw error;
-      throw fail(`${includeFile(path)} can't be read (${error.code})`);
+      throw fail(`${includeFile(path)} can't be read (${error.code}); include a text file you can read`);
     }
   };
 }
@@ -879,7 +880,13 @@ function sourceIncludes(source: FlowSource, from: string): IncludeReader {
   return async (path, fail) => {
     const refs = source.files[from]!.refs;
     const ref = INCLUDE_REF + path;
-    if (!Object.hasOwn(refs, ref)) throw fail(`${includeFile(path)} is not among the recorded files`);
+    // A host may build a source by hand, its ref naming no file.
+    if (!Object.hasOwn(refs, ref) || !Object.hasOwn(source.files, refs[ref]!)) {
+      throw fail(
+        `${includeFile(path)} is not among the recorded files; record it under the including file's ` +
+          `\`${ref}\` ref`,
+      );
+    }
     const key = refs[ref]!;
     if (source.codeRoot !== null && leavesRoot(relative(source.codeRoot, resolvePath(source.dir, key)))) {
       throw fail(outsideRoot(path));

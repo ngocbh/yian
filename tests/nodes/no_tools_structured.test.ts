@@ -14,7 +14,7 @@ import { Message, type Part, Response, TextPart, ToolCallPart, ToolResultPart } 
 import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
 import { Route } from "../../src/llm/route.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { type AgentRunContext, DEFAULT_SYSTEM, ToolIterationLimitError } from "../../src/nodes/agent/context.ts";
+import { type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { Interrupted } from "../../src/nodes/agent/interrupts.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { unparsedText } from "../../src/nodes/agent/results.ts";
@@ -190,14 +190,15 @@ test("a granted skill binds load_skill", async () => {
   expect(model.requests[0]!.tools).toEqual([loadSkillTool()]);
 });
 
-test("a parsed tool call at a cap of 1 fails with ToolIterationLimitError", async () => {
+test("parsed tool calls at a cap of 1 each get the cap's result, and the next reply answers", async () => {
   const second = new ToolCallPart({ id: "c2", name: "lookup", arguments: { q: "y" } });
-  const model = new ScriptedModel([reply(new TextPart("calling"), CALL, second)]);
-  const error = await rejection(runAgent(context(model, { nodeId: "n", maxToolIterations: 1 })));
-  expect(error).toBeInstanceOf(ToolIterationLimitError);
-  expect((error as Error).message).toBe(
-    "agent node 'n' hit the tool-iteration cap (1) without a final answer; the last reply's 2 tool call(s) were not run",
-  );
+  const model = new ScriptedModel([reply(new TextPart("calling"), CALL, second), textReply("answer")]);
+  expect(((await runAgent(context(model, { nodeId: "n", maxToolIterations: 1 }))) as Output).value).toBe("answer");
+  const capped = "Tool-call limit reached (1 turn). No more tool calls will run; give your final answer now.";
+  expect(model.requests[1]!.messages.slice(-2).map((message) => message.parts[0])).toEqual([
+    new ToolResultPart({ callId: "c1", name: "lookup", content: capped, isError: true }),
+    new ToolResultPart({ callId: "c2", name: "lookup", content: capped, isError: true }),
+  ]);
 });
 
 test("a parsed tool call with no grant gets an error result, and the model answers again", async () => {

@@ -441,6 +441,9 @@ function interruptible(scheduler: Scheduler, interrupt: AbortSignal, onWait: () 
 /** The `error` of the finished event of a tool call a host interrupt skipped. */
 export const SKIPPED_TOOL_ERROR = "interrupted";
 
+/** The `error` of the finished event of a call of a reply at the tool-call cap, which never ran. */
+export const CAPPED_TOOL_ERROR = "tool_limit";
+
 /** One requested tool call, as its brackets name it. */
 export interface ToolCallIdentity {
   /** The `n` of the reply's `model_call` step. */
@@ -518,15 +521,21 @@ export async function observeToolCall(
 }
 
 /**
- * Report a tool call that a host interrupt skipped as started, then finished `interrupted`.
+ * Report a tool call that never ran as started, then finished with `error`: `SKIPPED_TOOL_ERROR`
+ * (the default) for one a host interrupt skipped, `CAPPED_TOOL_ERROR` for one of a reply at the
+ * tool-call cap.
  *
- * The same pair a run call emits, so a host can mark that call's part as interrupted; the tool
- * itself never runs. Without an event sink nothing is emitted.
+ * The same pair a run call emits, so a host can mark that call's part; the tool itself never runs.
+ * Without an event sink nothing is emitted.
  */
-export function observeSkippedToolCall(live: LiveSinks | null, identity: ToolCallIdentity): void {
+export function observeSkippedToolCall(
+  live: LiveSinks | null,
+  identity: ToolCallIdentity,
+  error: string = SKIPPED_TOOL_ERROR,
+): void {
   const emitEvent = live?.emitEvent ?? null;
   if (live === null || emitEvent === null) return;
   const ids = toolEventIdentity(live, identity);
   emitEvent(new ToolCallStarted({ ...ids, arguments: shown(identity.arguments) }));
-  emitEvent(new ToolCallFinished({ ...ids, error: SKIPPED_TOOL_ERROR }));
+  emitEvent(new ToolCallFinished({ ...ids, error }));
 }

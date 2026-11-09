@@ -37,6 +37,12 @@ export function unavailableText(name: string): string {
   return `Unavailable tool: ${name}`;
 }
 
+/** The result the model reads for each tool call of a reply at the tool-call cap of `cap` turns. */
+export function toolLimitText(cap: number): string {
+  const turns = cap === 1 ? "1 turn" : `${cap} turns`;
+  return `Tool-call limit reached (${turns}). No more tool calls will run; give your final answer now.`;
+}
+
 /** Why a call was closed without its result, as an agent's closer records it. */
 export type CloserReason = "crashed" | "timed_out" | "interrupted";
 

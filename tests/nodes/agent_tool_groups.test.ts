@@ -23,7 +23,7 @@ import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { ToolCallFinished, ToolCallStarted } from "../../src/events.ts";
 import { Message, Response, TextPart, ToolCallPart, ToolResultPart, ToolSpec } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { type AgentRunContext, DEFAULT_SYSTEM, ToolIterationLimitError } from "../../src/nodes/agent/context.ts";
+import { type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { rebuildStepRequests, runAgent } from "../../src/nodes/agent/loop.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
@@ -797,14 +797,15 @@ test("a run stop inside a group before a failed check rejects with the stop, and
   await expectRebuilt(run);
 });
 
-test("a reply at the tool-iteration cap fails the node, running none of its calls, and learning reads its calls", async () => {
+test("a reply at the tool-iteration cap runs none of its calls, and its requests rebuild", async () => {
   const log: string[] = [];
   const model = new ScriptedModel([callsReply(["a", { n: 1 }], ["b"]), textReply("done")], CONFIG);
   const run = agent(model, new ToolSet({ a: instant("a", log), b: instant("b", log) }), ["a", "b"], {
     maxToolIterations: 1,
   });
 
-  expect(await rejected(run.running)).toBeInstanceOf(ToolIterationLimitError);
+  expect(((await run.running) as Output).value).toBe("done");
   expect(log).toEqual([]);
+  expect(toolEvents(run.events)).toEqual(["started a", "finished a tool_limit", "started b", "finished b tool_limit"]);
   await expectRebuilt(run);
 });

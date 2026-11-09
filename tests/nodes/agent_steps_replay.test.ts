@@ -35,7 +35,7 @@ import {
 } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentSteps, requestSha256 } from "../../src/nodes/agent/context.ts";
-import { SKIPPED_TOOL_RESULT, TOOL_OUTCOME_UNKNOWN, unparsedText } from "../../src/nodes/agent/results.ts";
+import { SKIPPED_TOOL_RESULT, TOOL_OUTCOME_UNKNOWN, toolLimitText, unparsedText } from "../../src/nodes/agent/results.ts";
 import { CapabilityFault } from "../../src/nodes/base.ts";
 import { INTERRUPTED_MARKER } from "../../src/nodes/agent/messages.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
@@ -1095,6 +1095,46 @@ test("an AGENT run resumed at every cut point ends as the uncut run, running no 
     expect(resumed.status, `cut at ${k}: ${resumed.failure?.message}`).toBe("succeeded");
     expect(resumed.output).toBe("all done");
     expect(new Set(ran).size, `cut at ${k}: ${ran.join(", ")}`).toBe(ran.length);
+  }
+});
+
+/** The request digests of the log's `model_call` steps for `writer`, in order. */
+function digests(path: string): unknown[] {
+  return steps(path)
+    .filter((step) => step["kind"] === "model_call")
+    .map((step) => step["request_sha256"]);
+}
+
+test("a run at the tool-call cap resumed at every cut point ends as the uncut run, the capped calls never run", async () => {
+  const replies = () => [
+    calls(["call-a", "save", "a"]),
+    calls(["call-b", "save", "b"], ["call-c", "save", "c"]),
+    calls(["call-d", "save", "d"]),
+  ];
+  const flow = flowText(["save"]).replace("    prompt: hi", "    env: {max_tool_iterations: 2}\n    prompt: hi");
+  const capped = toolLimitText(2);
+  const uncut = await run(new ScriptedModel(replies(), CONFIG), { flow, tools: { save: topicTool("save") } });
+  expect(uncut.result.status, uncut.result.failure?.message).toBe("succeeded");
+  expect(toolResults(uncut.log)).toEqual([
+    { call_id: "call-a", output: "save:a", is_error: false },
+    { call_id: "call-b", output: capped, is_error: true },
+    { call_id: "call-c", output: capped, is_error: true },
+    { call_id: "call-d", output: capped, is_error: true },
+  ]);
+  const count = records(uncut.log).length;
+  // From the cut after the first tool result: no later cut cuts a call that ran.
+  for (let k = seqOf(uncut.log, "tool_result") + 1; k < count - 1; k += 1) {
+    const ran: string[] = [];
+    const log = await cutRun(k, new ScriptedModel(replies(), CONFIG), { flow, tools: { save: topicTool("save") } });
+    const kept = steps(log).filter((step) => step["kind"] === "model_call").length;
+    const model = new ScriptedModel(replies().slice(kept), CONFIG);
+    const resumed = await resume(log, model, { tools: { save: topicTool("save", { log: ran }) } });
+    expect(resumed.status, `cut at ${k}: ${resumed.failure?.message}`).toBe("succeeded");
+    expect(resumed.output).toBe(uncut.result.output);
+    expect(ran).toEqual([]);
+    expect(toolResults(log), `cut at ${k}`).toEqual(toolResults(uncut.log));
+    // Each request the resumed run sent or replayed is the uncut run's.
+    expect(digests(log), `cut at ${k}`).toEqual(digests(uncut.log));
   }
 });
 

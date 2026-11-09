@@ -39,7 +39,7 @@ import {
 import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
 import { Route } from "../../src/llm/route.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { AgentLoopError, DEFAULT_SYSTEM, ToolIterationLimitError } from "../../src/nodes/agent/context.ts";
+import { AgentLoopError, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
 import { SKIPPED_TOOL_ERROR } from "../../src/nodes/agent/live.ts";
 import { CallTimeLLM, contractNullable, LLM_CONFIG_KEY, splitLayers } from "../../src/nodes/agent/llm_values.ts";
@@ -106,16 +106,14 @@ test("the skipped tool text is interrupted", () => {
   expect(SKIPPED_TOOL_ERROR).toBe("interrupted");
 });
 
-test("the DEFAULT_SYSTEM text and the loop errors' names", () => {
+test("the DEFAULT_SYSTEM text and the loop error's name", () => {
   expect(DEFAULT_SYSTEM).toBe(
     "You are an analysis agent inside a larger workflow. Follow the instructions " +
       "precisely, use the available tools to gather any facts you need, and return " +
       "a clear, self-contained answer. Ask the user only through an explicitly granted tool.",
   );
-  const limit = new ToolIterationLimitError("cap");
-  expect(limit).toBeInstanceOf(AgentLoopError);
-  expect(limit).toBeInstanceOf(Error);
-  expect([limit.name, new AgentLoopError("x").name]).toEqual(["ToolIterationLimitError", "AgentLoopError"]);
+  expect(new AgentLoopError("x")).toBeInstanceOf(Error);
+  expect(new AgentLoopError("x").name).toBe("AgentLoopError");
 });
 
 /** Return what `fn` throws; fails the test when it returns. */
@@ -627,14 +625,14 @@ describe("forward", () => {
     expect(result.failure?.message).toBe("Incorrect API key: [REDACTED]");
   });
 
-  test("a reply calling a tool at a cap of one model turn is agent.max_tool_iterations", async () => {
+  test("a reply calling a tool at a cap of one model turn gets the cap's result, and the next reply answers", async () => {
     const node = agent();
     node.env = { max_tool_iterations: 1n };
     const call = new ToolCallPart({ id: "c1", name: "lookup", arguments: { q: "x" } });
     const message = new Message({ role: "assistant", parts: [call] });
-    const model = new ScriptedModel([new Response({ message, finishReason: "tool_calls" })], NATIVE);
-    const failure = failureOf(await evaluate(node, model));
-    expect([failure.code, failure.causeType]).toEqual(["agent.max_tool_iterations", "ToolIterationLimitError"]);
+    const model = new ScriptedModel([new Response({ message, finishReason: "tool_calls" }), reply("done")], NATIVE);
+    expect(((await evaluate(node, model)) as Output).value).toBe("done");
+    expect(model.requests).toHaveLength(2);
   });
 
   test("without models the node builds through defaultModelAccess", async () => {
@@ -805,15 +803,21 @@ describe("forward", () => {
     expect(failure.trace).toEqual([new OriginRef("node")]);
   });
 
-  test("the tool loop cap trips when bounded", async () => {
+  test("the tool loop cap answers when bounded: the reply at the cap runs no call, and one more call answers", async () => {
     const noop = fakeTool("noop", () => "ok");
     const node = toolAgent(["noop"]);
     node.env = { max_tool_iterations: 5n };
-    const model = new ScriptedModel(noopReplies(5), NATIVE);
-    const failure = failureOf(await evaluate(node, model, { tools: new ToolSet({ noop }) }));
-    expect([failure.code, failure.causeType]).toEqual(["agent.max_tool_iterations", "ToolIterationLimitError"]);
-    expect(failure.message).toBe(
-      "agent node 'n' hit the tool-iteration cap (5) without a final answer; the last reply's 1 tool call(s) were not run",
+    const model = new ScriptedModel([...noopReplies(5), reply("done")], NATIVE);
+    const outcome = await evaluate(node, model, { tools: new ToolSet({ noop }) });
+    expect((outcome as Output).value).toBe("done");
+    expect(model.requests).toHaveLength(6);
+    expect(sentResults(model, 5).at(-1)).toEqual(
+      new ToolResultPart({
+        callId: "4",
+        name: "noop",
+        content: "Tool-call limit reached (5 turns). No more tool calls will run; give your final answer now.",
+        isError: true,
+      }),
     );
   });
 
@@ -831,11 +835,11 @@ describe("forward", () => {
     const noop = fakeTool("noop", () => "ok");
     const node = toolAgent(["noop"]);
     node.env = { max_tool_iterations: 2n };
-    const model = new ScriptedModel(noopReplies(2), NATIVE);
-    const failure = failureOf(await evaluate(node, model, { tools: new ToolSet({ noop }) }));
-    expect(failure.code).toBe("agent.max_tool_iterations");
-    expect(failure.message).toContain("(2)");
-    expect(model.requests).toHaveLength(2);
+    const model = new ScriptedModel([...noopReplies(2), reply("done")], NATIVE);
+    const outcome = await evaluate(node, model, { tools: new ToolSet({ noop }) });
+    expect((outcome as Output).value).toBe("done");
+    expect(sentResults(model, 2).at(-1)!.content).toContain("(2 turns)");
+    expect(model.requests).toHaveLength(3);
   });
 
   test("the tool loop cap does not run the last reply's tools", async () => {
@@ -843,11 +847,10 @@ describe("forward", () => {
     const noop = fakeTool("noop", () => "ok", {}, seen);
     const node = toolAgent(["noop"]);
     node.env = { max_tool_iterations: 2n };
-    const model = new ScriptedModel(noopReplies(2), NATIVE);
-    const failure = failureOf(await evaluate(node, model, { tools: new ToolSet({ noop }) }));
-    expect(failure.code).toBe("agent.max_tool_iterations");
-    expect(failure.message).toContain("not run");
-    expect(model.requests).toHaveLength(2);
+    const model = new ScriptedModel([...noopReplies(2), reply("done")], NATIVE);
+    const outcome = await evaluate(node, model, { tools: new ToolSet({ noop }) });
+    expect((outcome as Output).value).toBe("done");
+    expect(sentResults(model, 2).at(-1)!.content).toContain("No more tool calls will run");
     // Only the first reply's call ran.
     expect(seen).toHaveLength(1);
   });

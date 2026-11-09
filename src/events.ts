@@ -482,8 +482,9 @@ export class ToolCallStarted {
  * One tool call returned (`result` text) or raised (`error` type name); `n` is the reply's
  * `model_call` step.
  *
- * A call that a host interrupt skipped is reported as started and then finished
- * with `error: "interrupted"`; the tool did not run.
+ * A call that a host interrupt skipped is reported as started and then finished with
+ * `error: "interrupted"`, and a call of a reply at the tool-call cap with `error: "tool_limit"`;
+ * the tool did not run.
  */
 export class ToolCallFinished {
   readonly type = "ToolCallFinished" as const;

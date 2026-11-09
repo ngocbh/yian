@@ -6,6 +6,11 @@
  * started and finished events, and its error result is written as a `tool_result` step. A
  * validator that throws something other than its issues still fails the node.
  *
+ * At `maxToolIterations`, a reply that still calls tools runs none of them: each call gets the
+ * cap's error result, with started and finished (`tool_limit`) events, and one more model call
+ * gives the answer. That reply is the last: its calls get the same result, and its text is the
+ * output; a structured agent then makes its structured call.
+ *
  * Each path's requests rebuild from the steps it recorded (`rebuildStepRequests`), each matching
  * the digest the call recorded. Rows run `runAgent` directly with sinks for events and steps.
  */
@@ -21,7 +26,7 @@ import { ScriptedModel } from "../../src/llm/testing.ts";
 import { type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { rebuildStepRequests, runAgent } from "../../src/nodes/agent/loop.ts";
 import { checkModelConversation } from "../../src/nodes/agent/messages.ts";
-import { unavailableText, unparsedText } from "../../src/nodes/agent/results.ts";
+import { toolLimitText, unavailableText, unparsedText } from "../../src/nodes/agent/results.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
 import type { Output } from "../../src/nodes/base.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
@@ -29,7 +34,7 @@ import { FunctionTool, type StandardSchemaV1 } from "../../src/tools/function_to
 import { asToolGrant, expandGrants, type GrantedTool, requestToolSpecs } from "../../src/tools/grants.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import type { JsonObject, JsonValue } from "../../src/typesys/json.ts";
-import type { ValueRecord } from "../../src/typesys/values.ts";
+import { Type, type ValueRecord, ValueKind } from "../../src/typesys/values.ts";
 import { rejected, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
@@ -70,15 +75,21 @@ function reply(...parts: Part[]): Response {
  * One `runAgent` over `model`, granting `tools`, with sinks for its events and steps. `material()`
  * rebuilds its requests from the recorded steps, with the messages and tool specs the run sent.
  */
-function agent(model: ScriptedModel, toolset: ToolSet, tools: readonly string[], options: { maxToolIterations?: number } = {}) {
+function agent(
+  model: ScriptedModel,
+  toolset: ToolSet,
+  tools: readonly string[],
+  options: { maxToolIterations?: number; outputType?: Type } = {},
+) {
   const events: unknown[] = [];
   const steps: ValueRecord[] = [];
+  const outputType = options.outputType ?? null;
   const ctx: AgentRunContext = {
     nodeId: "n",
     messages: [userMessage("go")],
     tools,
     llmConfig: CONFIG,
-    outputType: null,
+    outputType,
     retries: 0,
     maxToolIterations: options.maxToolIterations ?? -1,
     steps: new NodeSteps(1, [], (step) => steps.push(step)),
@@ -96,7 +107,8 @@ function agent(model: ScriptedModel, toolset: ToolSet, tools: readonly string[],
       return new ToolSpec({ name: tool.name, description: tool.description, parameters: tool.parametersJsonSchema });
     };
     const specs = requestToolSpecs(expandGrants(tools.map(asToolGrant), toolset.scopes()), specOf, null)!;
-    return rebuildStepRequests(steps, { messages: [system, ...ctx.messages], tools: specs, structured: async () => null });
+    const structured = async () => (outputType === null ? null : { model, typ: outputType });
+    return rebuildStepRequests(steps, { messages: [system, ...ctx.messages], tools: specs, structured });
   };
   return { running: runAgent(ctx), events, steps, material };
 }
@@ -268,4 +280,95 @@ test("a validator that throws something other than its issues fails the node onc
   expect(resultSteps(run.steps)).toEqual([["c0", "a done", false]]);
   expect(toolEvents(run.events)).toEqual(["started a", "finished a a done", "started b", "finished b Error"]);
   await expectRebuilt(run, 1);
+});
+
+test("a reply at the cap runs none of its calls: each gets the cap's result, and one more call answers", async () => {
+  const log: string[] = [];
+  const replies = [reply(call(0, "a")), reply(call(0, "a", { n: 1 }), call(1, "b", "{"), call(2, "x")), textReply("done")];
+  const model = new ScriptedModel(replies, CONFIG);
+  const run = agent(model, new ToolSet({ a: instant("a", log), b: instant("b", log) }), ["a", "b"], { maxToolIterations: 2 });
+
+  expect(((await run.running) as Output).value).toBe("done");
+  expect(log).toEqual(["a"]);
+  expect(model.requests).toHaveLength(3);
+  const capped = "Tool-call limit reached (2 turns). No more tool calls will run; give your final answer now.";
+  expect(toolLimitText(2)).toBe(capped);
+  expect(toolLimitText(1)).toBe("Tool-call limit reached (1 turn). No more tool calls will run; give your final answer now.");
+  expect(toolResults(model, 2).slice(1)).toEqual([result(0, "a", capped, true), result(1, "b", capped, true), result(2, "x", capped, true)]);
+  // The same tools go out with the last call.
+  expect(model.requests[2]!.tools).toEqual(model.requests[0]!.tools);
+  expect(resultSteps(run.steps)).toEqual([
+    ["c0", "a done", false],
+    ["c0", capped, true],
+    ["c1", capped, true],
+    ["c2", capped, true],
+  ]);
+  expect(toolEvents(run.events)).toEqual([
+    "started a",
+    "finished a a done",
+    "started a",
+    "finished a tool_limit",
+    "started b",
+    "finished b tool_limit",
+    "started x",
+    "finished x tool_limit",
+  ]);
+  await expectRebuilt(run, 3);
+});
+
+test("the reply after the cap that still calls tools is the last: its calls get the cap's result, its text the output", async () => {
+  const log: string[] = [];
+  const replies = [reply(call(0, "a")), reply(new TextPart("best guess: 4"), call(0, "a"))];
+  const model = new ScriptedModel(replies, CONFIG);
+  const run = agent(model, new ToolSet({ a: instant("a", log) }), ["a"], { maxToolIterations: 1 });
+
+  expect(((await run.running) as Output).value).toBe("best guess: 4");
+  expect(log).toEqual([]);
+  expect(model.requests).toHaveLength(2);
+  expect(resultSteps(run.steps)).toEqual([
+    ["c0", toolLimitText(1), true],
+    ["c0", toolLimitText(1), true],
+  ]);
+  await expectRebuilt(run, 2);
+});
+
+test("a cap of one: the first reply's calls get the cap's result, and the second call's answer is the output", async () => {
+  const log: string[] = [];
+  const model = new ScriptedModel([reply(call(0, "a")), textReply("done")], CONFIG);
+  const run = agent(model, new ToolSet({ a: instant("a", log) }), ["a"], { maxToolIterations: 1 });
+
+  expect(((await run.running) as Output).value).toBe("done");
+  expect(log).toEqual([]);
+  expect(toolResults(model, 1)).toEqual([result(0, "a", toolLimitText(1), true)]);
+  await expectRebuilt(run, 2);
+});
+
+test("an all-unparsed reply counts toward the cap", async () => {
+  const log: string[] = [];
+  const model = new ScriptedModel([reply(call(0, "a", "{")), reply(call(0, "a")), textReply("done")], CONFIG);
+  const run = agent(model, new ToolSet({ a: instant("a", log) }), ["a"], { maxToolIterations: 2 });
+
+  expect(((await run.running) as Output).value).toBe("done");
+  expect(log).toEqual([]);
+  expect(resultSteps(run.steps)).toEqual([
+    ["c0", unparsedText("a"), true],
+    ["c0", toolLimitText(2), true],
+  ]);
+  await expectRebuilt(run, 3);
+});
+
+test("a structured agent at the cap makes its structured call after the last reply, reading the cap's results", async () => {
+  const log: string[] = [];
+  const replies = [reply(call(0, "a")), reply(call(0, "a")), textReply('{"value": 4}')];
+  const model = new ScriptedModel(replies, CONFIG);
+  const run = agent(model, new ToolSet({ a: instant("a", log) }), ["a"], {
+    maxToolIterations: 1,
+    outputType: Type.scalar(ValueKind.INTEGER),
+  });
+
+  expect(((await run.running) as Output).value).toBe(4n);
+  expect(log).toEqual([]);
+  expect(model.requests).toHaveLength(3);
+  expect(toolResults(model, 2)).toEqual([result(0, "a", toolLimitText(1), true), result(0, "a", toolLimitText(1), true)]);
+  await expectRebuilt(run, 3);
 });

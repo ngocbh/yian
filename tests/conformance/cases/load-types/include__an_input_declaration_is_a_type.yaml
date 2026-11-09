@@ -1,0 +1,19 @@
+# A flow input's declaration is a type tag, which text read by `!include` can't be.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    q: !include q.txt
+  nodes: {}
+  output: ${input.q}
+files:
+  q.txt: str
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "flow input 'q': `!include` gives text, not a type; declare it with a tag, e.g. `q: !str`"
+      frames:
+      - label: flow.yaml
+        range: [4, 6, 4, 20]

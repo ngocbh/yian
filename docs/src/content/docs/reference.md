@@ -181,7 +181,6 @@ log prints the same failure, so "retry" below means a new run.
 | `contract.growth` | A CALL, MAP or LOOP would grow the graph past `YIAN_MAX_TOTAL_NODES` | Bound the fan-out, or raise the limit |
 | `graph.terminal_unreachable` | A route skipped every path to the flow's output | Fix the graph |
 | `loop.max_exceeded` | A `while:` or `until:` LOOP with `max: M` would start its body run M+1 | Raise `max:`, or treat it as the loop ending unmet |
-| `agent.max_tool_iterations` | An AGENT reached its `max_tool_iterations` and its last reply still asked for tools | Raise the cap, or simplify the task |
 | `agent.output_invalid` | An AGENT's structured reply still breaks its `output:` type after its `retries:` | Loosen the type, or improve the prompt |
 | `agent.interrupted` | An AGENT was interrupted and its output type doesn't allow null | Declare `output: Optional(...)` and route on null |
 | `tool.timeout` | An `ask` timed out with no answer and its output type doesn't allow null | Declare `output: Optional(...)`, or give it longer |

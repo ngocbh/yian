@@ -231,8 +231,21 @@ server. Each entry grants one of these:
 - A tool that throws `ReportedToolError` doesn't fail the node: the model reads the message as
   the call's result and carries on. MCP tool errors work this way. Any other error fails the node.
 - `max_tool_iterations` caps the model turns. The default, `-1`, means no cap. At the cap, a
-  reply that still asks for tools fails the node with `agent.max_tool_iterations`. Set it in the
-  node's `env:` or the flow's `env:`.
+  reply that still asks for tools runs none of them, and the model answers once more. Set it in
+  the node's `env:` or the flow's `env:`.
+
+Neither the model's own mistakes nor the cap fail the node. The call never reaches a tool, and
+the model reads an error result instead:
+
+| The model | It reads |
+|---|---|
+| Sends arguments that aren't valid JSON | `Arguments for <tool> are not valid JSON; send them as one JSON object.` |
+| Calls a tool it wasn't granted | `Unavailable tool: <tool>` |
+| Sends arguments the tool's schema or validator refuses | The check's message |
+| Still calls tools at `max_tool_iterations: N` | `Tool-call limit reached (N turns). No more tool calls will run; give your final answer now.` |
+
+The model's reply after the cap is the last. If it still calls tools, they get the same result,
+and its text is the output. A structured agent then makes its structured call.
 
 ### MCP servers
 

@@ -1,0 +1,197 @@
+# A structured agent at `max_tool_iterations: 1`: the reply at the cap runs no call, the next reply
+# is the last, and the agent then makes its structured call, which reads the cap's results.
+kind: run
+flow: |
+  id: cap-structured
+  name: cap_structured
+  llm_config: {provider: openai, model: gpt-5.5}
+  nodes:
+    agent:
+      kind: agent
+      tools: [lookup]
+      env: {max_tool_iterations: 1}
+      system_prompt: Help.
+      prompt: go
+      output: int
+  output: ${agent.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    lookup:
+      description: Look up a topic.
+      parameters:
+        type: object
+        properties:
+          topic:
+            type: string
+      results: []
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: tool_call
+            id: call-1
+            name: lookup
+            arguments:
+              topic: x
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: about 4
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: '{"value": 4}'
+expect:
+  output:
+    status: succeeded
+    output: 4
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        agent:
+          model: gpt-5.5
+          provider: openai
+          _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, agent]
+  - - node_step
+    - agent
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - arguments: {topic: x}
+            id: call-1
+            name: lookup
+            type: tool_call
+          role: assistant
+        purpose: chat
+        request_sha256: d3a6341473d5e7c672e605fbc57f782737f3dbd896ba6f07a1c850505c0d9ea2
+        response_id: null
+        usage: null
+  - - node_step
+    - agent
+    - n: 2
+      step: {call_id: call-1, is_error: true, kind: tool_result, output: Tool-call limit reached (1 turn). No more tool calls will run; give your final answer now.}
+  - - node_step
+    - agent
+    - n: 3
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: about 4, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: 1ed8b925842336ee4a98168a8d3bd24e70ab7e51f47aba0ebe74472d030bfe0e
+        response_id: null
+        usage: null
+  - - node_step
+    - agent
+    - n: 4
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: '{"value": 4}', type: text}
+          role: assistant
+        purpose: structured_native
+        request_sha256: 48b19d6a06705f8881ac28c2a7601927d393b76761ec680794e00a8675ab1276
+        response_id: null
+        usage: null
+  - - pool_commit
+    - agent
+    - {value: 4}
+  - - pool_commit
+    - agent
+    - key: agent.new_messages
+      steps: [9, 10, 11, 12]
+  - - node_succeeded
+    - agent
+    - {commit: 13, messages: 14}
+  - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - {value: 4}
+  - - node_succeeded
+    - __end__
+    - {commit: 17}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - {node_id: __start__}
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+      interrupted: false
+  - - NodeStarted
+    - {node_id: agent}
+  - - ModelCallStarted
+    - {node_id: agent, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
+  - - ModelCallFinished
+    - {node_id: agent, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
+  - - ToolCallStarted
+    - node_id: agent
+      n: 1
+      call_index: 0
+      tool_call_id: call-1
+      name: lookup
+      arguments: {topic: x}
+  - - ToolCallFinished
+    - {node_id: agent, n: 1, call_index: 0, tool_call_id: call-1, name: lookup, error: tool_limit}
+  - - ModelCallStarted
+    - {node_id: agent, n: 3, purpose: chat, provider: openai, model: gpt-5.5}
+  - - ModelCallFinished
+    - {node_id: agent, n: 3, purpose: chat, provider: openai, model: gpt-5.5}
+  - - ModelCallStarted
+    - {node_id: agent, n: 4, purpose: structured_native, provider: openai, model: gpt-5.5}
+  - - ModelCallFinished
+    - {node_id: agent, n: 4, purpose: structured_native, provider: openai, model: gpt-5.5}
+  - - NodeSucceeded
+    - {node_id: agent, output: 4, interrupted: false}
+  - - NodeStarted
+    - {node_id: __end__}
+  - - NodeSucceeded
+    - {node_id: __end__, output: 4, interrupted: false}
+  - - RunSucceeded
+    - {output: 4}

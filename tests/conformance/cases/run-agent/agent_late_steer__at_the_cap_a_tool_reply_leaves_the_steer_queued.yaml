@@ -1,0 +1,185 @@
+# At `max_tool_iterations: 1` the reply still calls lookup, so its call gets the cap's error result
+# and one more model call follows. That call reads no steer: the one sent during the first reply
+# stays queued, with no `steer` step.
+kind: run
+flow: |
+  id: late-cap
+  name: late_cap
+  llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    notes: !Inbox(str)
+  nodes:
+    chat:
+      kind: agent
+      steer_inbox: ${input.notes}
+      tools: [lookup]
+      system_prompt: Help.
+      prompt: Help the user.
+      output: str
+      env:
+        max_tool_iterations: 1
+  output: ${chat.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  sends:
+  - inbox: notes
+    event: and cite your sources
+    after: {node: chat, model_call: 1}
+  tools:
+    lookup:
+      description: Look up a topic.
+      parameters:
+        type: object
+        properties:
+          topic:
+            type: string
+      results: []
+  models:
+    chat:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: tool_call
+            id: call-1
+            name: lookup
+            arguments:
+              topic: x
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: final
+expect:
+  output:
+    status: succeeded
+    output: final
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        chat:
+          model: gpt-5.5
+          provider: openai
+          _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        notes: {inbox: notes}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, chat]
+  - - pool_commit
+    - __start__
+    - {key: __start__.notes, value: and cite your sources}
+  - - node_step
+    - chat
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - arguments: {topic: x}
+            id: call-1
+            name: lookup
+            type: tool_call
+          role: assistant
+        purpose: chat
+        request_sha256: a424ee3c6a7b08bcaba7b2bcfa0ad0b2f55338a73459567c5eeb4c27c2a438f0
+        response_id: null
+        usage: null
+  - - node_step
+    - chat
+    - n: 2
+      step: {call_id: call-1, is_error: true, kind: tool_result, output: Tool-call limit reached (1 turn). No more tool calls will run; give your final answer now.}
+  - - node_step
+    - chat
+    - n: 3
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: final, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: 0dd313d29d3e40fd6e6284c3a2ea08109e85b4758e8b4320db96b066f78769be
+        response_id: null
+        usage: null
+  - - pool_commit
+    - chat
+    - {value: final}
+  - - pool_commit
+    - chat
+    - key: chat.new_messages
+      steps: [10, 11, 12]
+  - - node_succeeded
+    - chat
+    - {commit: 13, messages: 14}
+  - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - {value: final}
+  - - node_succeeded
+    - __end__
+    - {commit: 17}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - {node_id: __start__}
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        notes: {inbox: notes}
+      interrupted: false
+  - - NodeStarted
+    - {node_id: chat}
+  - - ModelCallStarted
+    - {node_id: chat, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
+  - - ModelCallFinished
+    - {node_id: chat, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
+  - - ToolCallStarted
+    - node_id: chat
+      n: 1
+      call_index: 0
+      tool_call_id: call-1
+      name: lookup
+      arguments: {topic: x}
+  - - ToolCallFinished
+    - {node_id: chat, n: 1, call_index: 0, tool_call_id: call-1, name: lookup, error: tool_limit}
+  - - ModelCallStarted
+    - {node_id: chat, n: 3, purpose: chat, provider: openai, model: gpt-5.5}
+  - - ModelCallFinished
+    - {node_id: chat, n: 3, purpose: chat, provider: openai, model: gpt-5.5}
+  - - NodeSucceeded
+    - {node_id: chat, output: final, interrupted: false}
+  - - NodeStarted
+    - {node_id: __end__}
+  - - NodeSucceeded
+    - {node_id: __end__, output: final, interrupted: false}
+  - - RunSucceeded
+    - {output: final}

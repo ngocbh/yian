@@ -1,0 +1,189 @@
+# A reply calls lookup twice: the first call's arguments aren't valid JSON, the second's are. The
+# unparsed call never reaches the tool and gets the error result "Arguments for lookup are not
+# valid JSON; send them as one JSON object.", the other runs, and the next request answers both.
+kind: run
+flow: |
+  id: unparsed
+  name: unparsed
+  llm_config: {provider: openai, model: gpt-5.5}
+  nodes:
+    agent:
+      kind: agent
+      tools: [lookup]
+      system_prompt: Help.
+      prompt: go
+      output: str
+  output: ${agent.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    lookup:
+      description: Look up a topic.
+      parameters:
+        type: object
+        properties:
+          topic:
+            type: string
+      results:
+      - return: found x
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: tool_call
+            id: call-1
+            name: lookup
+            raw_arguments: '{"topic": '
+          - type: tool_call
+            id: call-2
+            name: lookup
+            arguments:
+              topic: x
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: done
+expect:
+  output:
+    status: succeeded
+    output: done
+  # The tool's one call is the reply's second: its call id's index counts the unparsed call.
+  tool_calls:
+    lookup:
+    - {args: {topic: x}, call_id: r1/agent/1/1, attempt: 1, node: agent}
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        agent:
+          model: gpt-5.5
+          provider: openai
+          _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, agent]
+  - - node_step
+    - agent
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - {id: call-1, name: lookup, raw_arguments: '{"topic": ', type: tool_call}
+          - arguments: {topic: x}
+            id: call-2
+            name: lookup
+            type: tool_call
+          role: assistant
+        purpose: chat
+        request_sha256: d3a6341473d5e7c672e605fbc57f782737f3dbd896ba6f07a1c850505c0d9ea2
+        response_id: null
+        usage: null
+  - - node_step
+    - agent
+    - n: 2
+      step: {call_id: call-1, is_error: true, kind: tool_result, output: Arguments for lookup are not valid JSON; send them as one JSON object.}
+  - - node_step
+    - agent
+    - n: 3
+      step: {call_id: call-2, is_error: false, kind: tool_result, output: found x}
+  - - node_step
+    - agent
+    - n: 4
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: done, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: 1993fc3ac21a2fb14a1dbd6e15f56d9a92094b50a5000e00f07f8a53adce986d
+        response_id: null
+        usage: null
+  - - pool_commit
+    - agent
+    - {value: done}
+  - - pool_commit
+    - agent
+    - key: agent.new_messages
+      steps: [9, 10, 11, 12]
+  - - node_succeeded
+    - agent
+    - {commit: 13, messages: 14}
+  - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - {value: done}
+  - - node_succeeded
+    - __end__
+    - {commit: 17}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - {node_id: __start__}
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+      interrupted: false
+  - - NodeStarted
+    - {node_id: agent}
+  - - ModelCallStarted
+    - {node_id: agent, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
+  - - ModelCallFinished
+    - {node_id: agent, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
+  - - ToolCallStarted
+    - {node_id: agent, n: 1, call_index: 0, tool_call_id: call-1, name: lookup}
+  - - ToolCallFinished
+    - {node_id: agent, n: 1, call_index: 0, tool_call_id: call-1, name: lookup, error: ReportedToolError}
+  - - ToolCallStarted
+    - node_id: agent
+      n: 1
+      call_index: 1
+      tool_call_id: call-2
+      name: lookup
+      arguments: {topic: x}
+  - - ToolCallFinished
+    - {node_id: agent, n: 1, call_index: 1, tool_call_id: call-2, name: lookup, result: found x}
+  - - ModelCallStarted
+    - {node_id: agent, n: 4, purpose: chat, provider: openai, model: gpt-5.5}
+  - - ModelCallFinished
+    - {node_id: agent, n: 4, purpose: chat, provider: openai, model: gpt-5.5}
+  - - NodeSucceeded
+    - {node_id: agent, output: done, interrupted: false}
+  - - NodeStarted
+    - {node_id: __end__}
+  - - NodeSucceeded
+    - {node_id: __end__, output: done, interrupted: false}
+  - - RunSucceeded
+    - {output: done}

@@ -202,7 +202,7 @@ A `--json` command that fails without its own result prints an error document wh
 
 | Code | When |
 |---|---|
-| `compose.load` | The flow doesn't load, or its file can't be read, or a file it reads with `!include` is missing, not a regular file, too large, not UTF-8 text or outside the root |
+| `compose.load` | The flow doesn't load, or its file can't be read, or a file it reads with `!include` is missing, unreadable, not a regular file, too large, not UTF-8 text or outside the root |
 | `expr.nullable_field_read` | The flow doesn't load because it reads a field of a value that may be null. The message names the fix |
 | `compose.outside_root` | `yian check --root`: a flow or a `uses:` import is outside the root |
 | `defaults.invalid` | A `YIAN_*` variable holds a value it doesn't take (any command) |

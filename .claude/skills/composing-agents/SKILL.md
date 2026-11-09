@@ -129,7 +129,7 @@ output:
 - **A long prompt can live in its own file**: `prompt: !include prompts/answer.md` reads a UTF-8
   file, its path relative to the flow's folder, as if its text were written there quoted (its
   `${...}` checked at load). It works on any text value, never on a key, list or mapping or where
-  a type goes (`input:` declarations, `output:`, `typedefs:`). See
+  a type goes (`input:` and `variables:` declarations, a node's `output:` type, `typedefs:`). See
   [Agents](https://yian.readthedocs.io/agents/#prompts-in-files).
 - **Order without data** with `depends_on: [a]` (skipped when `a` is skipped) or
   `runs_after: [a]` (runs either way). Both take a list.

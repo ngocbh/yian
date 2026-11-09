@@ -55,9 +55,9 @@ Fields every node takes: `kind`, `input` (not on `case`), `asserts` (not on `cas
 **agent** ([Agents](https://yian.readthedocs.io/agents/)): `input`, `prompt` (a template, or a
 list of messages; `!include <file>` reads a template from a file), `system_prompt` (replaces the
 default instruction), `variables` (tagged values the prompts read, such as `tone: !str plain`),
-`output`, `retries`, `tools` (tool, group
-and memory input names, or `{group: [tool, ...]}`; a group's tools show as `<group>_<tool>`), `skills`
-(names or `all`), `steer_inbox`, `llm_config`, `env` (`max_tool_iterations`).
+`output`, `retries`, `tools` (tool, group and memory input names, or `{group: [tool, ...]}`; a
+group's tools show as `<group>_<tool>`), `skills` (names or `all`), `steer_inbox`, `llm_config`,
+`env` (`max_tool_iterations`).
 
 **code** ([Code and tools](https://yian.readthedocs.io/code-and-tools/)): `code` (an inline body
 or `./file.ts:fn`), `input`, `output`. The body reads `inputs.<name>` and returns a value.

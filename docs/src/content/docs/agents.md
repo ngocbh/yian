@@ -113,7 +113,7 @@ output: ${writer.output}
   load, and its final newline is kept. The text isn't YAML, so an included file can't include
   another.
 - `!include` works on any text value. It fails at load on a key, a list or a mapping, and where
-  a type goes: `input:` declarations, an `output:` type and `typedefs:`.
+  a type goes: `input:` and `variables:` declarations, a node's `output:` type and `typedefs:`.
 - The file must be UTF-8 text of at most `YIAN_MAX_INCLUDE_BYTES` (see
   [Reference](/reference/#all-defaults-and-limits)), and a load with a root folder, such as
   `yian check --root`, refuses one outside it. A missing or unreadable file fails at load, at the

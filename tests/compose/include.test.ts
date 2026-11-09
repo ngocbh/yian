@@ -1,9 +1,10 @@
 /**
  * `!include PATH` reads a string value from a UTF-8 text file, the path relative to the including
  * file's folder: the text, its final newline kept and its line endings read as LF, is the value,
- * as if written there quoted. It is refused on a key, a list, a mapping and a merge source; a
- * file that is missing, not a regular file, not UTF-8, over `YIAN_MAX_INCLUDE_BYTES` or outside
- * the code root fails at the tag. The flow's source records each included file.
+ * as if written there quoted. It is refused on a key, a list, a mapping and a merge source, and in
+ * a type position; a file that is missing, not a regular file, not UTF-8, over
+ * `YIAN_MAX_INCLUDE_BYTES` or outside the code root fails at the tag. The flow's source records
+ * each included file.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -140,6 +141,33 @@ test.each([
   const { message, label, line: at } = await failure(load(`id: f\nname: f\nnodes: {}\n${yaml}`));
   expect(message).toContain("`!include`");
   expect(message).toContain(words);
+  expect([label, at]).toEqual(["flow.yaml", line]);
+});
+
+test.each([
+  ["a flow input", "input:\n  q: !include a.txt\nnodes: {}\noutput: done\n", 4, "flow input 'q'"],
+  [
+    "a def input",
+    "defs:\n  d:\n    input:\n      q: !include a.txt\n    nodes: {}\n    output: done\nnodes: {}\noutput: done\n",
+    6,
+    "flow input 'q'",
+  ],
+  [
+    "a single-node def input",
+    "defs:\n  d:\n    kind: code\n    code: return 1\n    input:\n      q: !include a.txt\n    output: int\n" +
+      "nodes: {}\noutput: done\n",
+    8,
+    "flow input 'q'",
+  ],
+  ["a node output", "nodes:\n  a:\n    kind: code\n    code: return 1\n    output: !include a.txt\noutput: ${a.output}\n", 7, "`output:`"],
+  ["a compact flow's output", "kind: code\ncode: return 1\noutput: !include a.txt\n", 5, "`output:`"],
+  ["a typedef", "typedefs:\n  T: !include a.txt\nnodes: {}\noutput: done\n", 4, "typedef 'T'"],
+  ["a typedef field", "typedefs:\n  T:\n    f: !include a.txt\nnodes: {}\noutput: done\n", 5, "typedef 'T'"],
+])("!include in %s, a type position, fails at load", async (_, yaml, line, subject) => {
+  write({ "a.txt": "str" });
+  const { message, label, line: at } = await failure(load(`id: f\nname: f\n${yaml}`));
+  expect(message).toContain(subject);
+  expect(message).toContain("`!include`");
   expect([label, at]).toEqual(["flow.yaml", line]);
 });
 

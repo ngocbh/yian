@@ -213,6 +213,14 @@ export class SourceCursor {
   }
 
   /**
+   * Whether this is an unchanged source scalar whose text `!include` read from a file, which
+   * can't be a type.
+   */
+  get included(): boolean {
+    return this._unchangedScalarDefinition()?.included ?? false;
+  }
+
+  /**
    * The document-local id of the tagged definition this cursor reads, which aliases of one
    * tagged node share; null whenever `tag` is.
    */

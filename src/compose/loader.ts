@@ -1169,6 +1169,31 @@ function typedefErrorRange(root: SourceCursor, path: ValuePath): SourceRange | n
 }
 
 /**
+ * Reject text `!include` read as a typedef or a typedef's field: each is a type.
+ *
+ * @throws LoadError at the first such value.
+ */
+function rejectIncludedTypedefs(root: SourceCursor, diagnostics: LoadDiagnostics): void {
+  try {
+    const typedefs = sourceChild(root, "typedefs");
+    if (typedefs === null || !isRecord(typedefs._valueView())) return;
+    for (const typedef of typedefs.children()) {
+      const fields = isRecord(typedef._valueView()) ? typedef.children() : [];
+      const found = [typedef, ...fields].find((cursor) => cursor.included);
+      if (found === undefined) continue;
+      const name = reprText(typedef.keyText!);
+      throw diagnostics.error(
+        `typedef ${name}: a type definition is written as a type, which \`!include\` can't give`,
+        { range: found.range },
+      );
+    }
+  } catch (error) {
+    // A typedef at a recursive alias can't be walked; reading the typedefs reports it.
+    if (!(error instanceof SourceAccessError)) throw error;
+  }
+}
+
+/**
  * Load one parsed flow file: its checks, its `uses:` imports, its `defs:`, then its assembly.
  *
  * Every step before the imports is synchronous; each alias then resolves, in source order, and
@@ -1201,8 +1226,9 @@ export async function loadFlowFile(
   validateEnv(f.env, "flow ", root.has("env") ? root.child("env") : null, diagnostics);
   validateSystem(f.system, root.has("system") ? root.child("system") : null);
 
-  // Typedefs are read as plain values, so a tag in them is rejected before they are.
+  // Typedefs are read as plain values, so a tag or included text in them is rejected before they are.
   rejectUnreadTags(document, new Set(), diagnostics, { typedefsOnly: true });
+  rejectIncludedTypedefs(root, diagnostics);
   let registry: TypeRegistry;
   try {
     registry = readTypedefs(f.typedefs, ctx.memoryTools.keys());

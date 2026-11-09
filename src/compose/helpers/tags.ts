@@ -995,13 +995,13 @@ function mismatchReason(error: TypeCheckError, value: unknown): string | null {
 }
 
 /**
- * Reject a tag on a node's `output:` type declaration or inside it.
+ * Reject a tag or text `!include` read on a node's `output:` type declaration or inside it.
  *
  * An `output:` declaration is a type, so a tag there would type nothing.
  *
  * @param cursor The node's `output:` value.
  * @param diagnostics Factory for located load errors.
- * @throws LoadError at the first tag on or inside the declaration.
+ * @throws LoadError at the first tag or `!include` on or inside the declaration.
  */
 export function rejectTaggedOutput(cursor: SourceCursor, diagnostics: LoadDiagnostics): void {
   // Each entry: a cursor, the key it sits under, and whether it is a list item.
@@ -1010,6 +1010,11 @@ export function rejectTaggedOutput(cursor: SourceCursor, diagnostics: LoadDiagno
     const [current, key, isItem] = stack.pop()!;
     const tag = current.tag;
     const value = current.value;
+    if (current.included) {
+      throw diagnostics.error("`output:` declares a type, which `!include` can't give; write the type", {
+        range: current.range,
+      });
+    }
     if (tag !== null) {
       let message: string;
       if (isItem) {

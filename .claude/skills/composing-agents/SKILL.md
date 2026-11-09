@@ -126,6 +126,11 @@ output:
   names and `variables:`, bare: bind `topic: ${input.topic}`, then write `${topic}`. Writing
   `${input.topic}` in a prompt is a load error. An `ask` node is the exception: its `prompt:` and
   `questions:` sit in its `input:`, so they read `${draft.output}` directly.
+- **A long prompt can live in its own file**: `prompt: !include prompts/answer.md` reads a UTF-8
+  file, its path relative to the flow's folder, as if its text were written there quoted (its
+  `${...}` checked at load). It works on any text value, never on a key, list or mapping or where
+  a type goes (`input:` declarations, `output:`, `typedefs:`). See
+  [Agents](https://yian.readthedocs.io/agents/#prompts-in-files).
 - **Order without data** with `depends_on: [a]` (skipped when `a` is skipped) or
   `runs_after: [a]` (runs either way). Both take a list.
 - **Compact form** (the node's fields at the top level, no `nodes:`) is only for a flow whose

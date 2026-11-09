@@ -141,18 +141,29 @@ const FILES_PAGE = [
   '```yaml title="app/part.yaml" check=fragment',
   "a: 1",
   "```",
+  '```md title="app/prompt.md"',
+  "Hello ${name}.",
+  "```",
+  "```md",
+  "untitled",
+  "```",
   "```yaml",
   "id: untitled",
   "```",
 ].join("\n");
 
-test("a page's titled YAML blocks are written at their title paths", () => {
+test("a page's titled blocks but YAML fragments are written at their title paths", () => {
   inTempDir((dir) => {
     const blocks = readBlocks(FILES_PAGE, "p.md");
     const files = writePageFiles(blocks, dir);
-    expect([...files.values()]).toEqual([join(dir, "common", "clean.yaml"), join(dir, "app", "report.yaml")]);
+    expect([...files.values()]).toEqual([
+      join(dir, "common", "clean.yaml"),
+      join(dir, "app", "report.yaml"),
+      join(dir, "app", "prompt.md"),
+    ]);
     expect(files.get(blocks[1]!)).toBe(join(dir, "app", "report.yaml"));
     expect(readFileSync(join(dir, "app", "report.yaml"), "utf8")).toBe("id: report\n");
+    expect(readFileSync(join(dir, "app", "prompt.md"), "utf8")).toBe("Hello ${name}.\n");
   });
 });
 

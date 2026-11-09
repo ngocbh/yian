@@ -52,8 +52,8 @@ blocks in the root `README.md`.
 
 - A titled block that isn't a fragment is written at its `title=` path, beside the page's other
   titled blocks, so a `uses:` ref can import another block of the same page
-  (`title="app/report.yaml"` importing `../common/clean`). Two blocks of a page can't share a
-  title.
+  (`title="app/report.yaml"` importing `../common/clean`), and an `!include` can read a titled
+  `md` block. Two blocks of a page can't share a title.
 - A runnable block has `title="<name>.yaml"`. Follow it with a `console` block whose first line
   is `$ yian run <name>.yaml --input k=v ...` and whose next lines are what the run prints.
 - When a runnable flow calls a model, give the model's replies, in order, on the line before the

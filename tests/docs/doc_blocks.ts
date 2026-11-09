@@ -105,16 +105,16 @@ export function readDocs(root: string): Block[] {
 }
 
 /**
- * Write each titled YAML block of one page that isn't a fragment under `dir`, at its `title=`
- * path, so a block's `uses:` refs find the page's other files. Return each written block's path,
- * in page order. Throw for a title outside `dir`, or one that two blocks share.
+ * Write each titled block of one page under `dir`, at its `title=` path, but a YAML fragment, so
+ * a block's `uses:` refs and `!include` paths find the page's other files. Return each written
+ * block's path, in page order. Throw for a title outside `dir`, or one that two blocks share.
  */
 export function writePageFiles(blocks: readonly Block[], dir: string): Map<Block, string> {
   const files = new Map<Block, string>();
   const byPath = new Map<string, Block>();
   for (const block of blocks) {
     const title = block.meta["title"];
-    if (block.lang !== "yaml" || title === undefined || checkOf(block) === "fragment") continue;
+    if (title === undefined || (block.lang === "yaml" && checkOf(block) === "fragment")) continue;
     const where = `${block.file}:${block.line}`;
     const path = resolve(dir, title);
     if (!path.startsWith(resolve(dir) + sep)) throw new Error(`${where}: title=${title} is outside the page's folder`);

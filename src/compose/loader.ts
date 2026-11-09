@@ -24,8 +24,10 @@
  * reachable keys, and installs `ComposedFlow.originResolver`. Source-free graphs carry `null`;
  * private `assemble` products keep the resolver unset.
  *
- * After a file assembles, its CODE nodes are checked (each def's in written order, then the
- * root's) against the file's base directory, and inside the load's `codeRoot` when it has one.
+ * Before a file is parsed for good, the file each `!include` names is read from disk, against the
+ * including file's folder, and the including file records where each path went. After a file
+ * assembles, its CODE nodes are checked (each def's in written order, then the root's) against the
+ * file's base directory, and inside the load's `codeRoot` when it has one.
  * Only the root load sees the fully assembled graph, so `loadFlow` then refuses an `llm_config`
  * value a child flow's agent would inherit before it is known.
  *
@@ -33,8 +35,9 @@
  * nesting limit, counted apart from call depth; each loaded flow records its own `importDepth`.
  *
  * Imports flow down only: this module composes the compose package's own components plus
- * `compile`, `defaults`, `diagnostics`, `llm_clients`, `nodes` and `typesys`, and the
- * `FlowSource` type of `runtime/log`; nothing in the engine imports it back.
+ * `compile`, `defaults`, `diagnostics`, `llm_clients`, `nodes`, `platform`, `skills` (a path
+ * helper) and `typesys`, and the `FlowSource` type of `runtime/log`; nothing in the engine imports
+ * it back.
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -55,6 +58,8 @@ import {
   type SourceRange,
 } from "../diagnostics.ts";
 import { Binding, type ValuePath, ValueTemplate } from "../nodes/contracts.ts";
+import { isSystemError, leavesRoot } from "../platform.ts";
+import { resolvedPath } from "../skills/catalog.ts";
 import { typeName, readTypedefs, type TypeRegistry, withMemoryTypes } from "../typesys/types.ts";
 import {
   isList,
@@ -303,12 +308,21 @@ function rejectAuthoredPrivateCallableNames(root: SourceCursor, defs: ValueRecor
   }
 }
 
-/** A flow file a load read from disk: its text, and the path each `uses:` path in it resolved to. */
+/**
+ * A file a load read from disk, a flow or a file one includes: its text, and the path each `uses:`
+ * and `!include` path in it resolved to.
+ */
 interface ReadFile {
   readonly text: string;
-  /** Each `uses:` ref written in the file (`usesRef`), mapped to the real path it resolved to. */
+  /**
+   * Each `uses:` ref written in the file (`usesRef`) and each `!include` path as
+   * `include:<path>`, mapped to the real path it resolved to.
+   */
   readonly refs: Map<string, string>;
 }
+
+/** The `refs` key prefix of an `!include` path; a local `uses:` ref never has a scheme. */
+const INCLUDE_REF = "include:";
 
 /** Return a `uses:` ref as written: its path, and `@<version>` when pinned. */
 function usesRef(path: string, version: string | null): string {
@@ -615,7 +629,8 @@ export function makeFileResolver(
         const file: ReadFile = { text, refs: new Map() };
         ctx.read.set(real, file);
         const own = dirname(real);
-        return loadFlowFile(parseSourceDocument(text, basename(real)), null, [own], ctx, own, file);
+        const document = await parseIncluding(text, basename(real), diskIncludes(own, ctx, file));
+        return loadFlowFile(document, null, [own], ctx, own, file);
       });
     }
     throw UNLOCATED_DIAGNOSTICS.error(
@@ -651,14 +666,15 @@ interface LoadOptions {
  *   targets (`<dir>/<path>.yaml`). Pass the flow file's own directory first; the list is extended
  *   by the flow's `system: paths:`.
  * @param options.sourceLabel The name load diagnostics give this text (default `<flow>`).
- * @param options.baseDir The directory a CODE node's `./file.ts:fn` reference resolves against
- *   (default: the first search path, else the current directory). A file read through the search
- *   path resolves its own references against its own directory.
+ * @param options.baseDir The directory a CODE node's `./file.ts:fn` reference and an `!include`
+ *   path resolve against (default: the first search path, else the current directory). A file
+ *   read through the search path resolves its own against its own directory.
  * @param options.codeRoot A directory every CODE reference's file must resolve inside (a relative
  *   one against the current directory); symlinks are resolved on both sides. A reference outside
  *   it is a `LoadError` at its `code:` value. The files read through the search path are checked
  *   too, and so is each flow a `childResolver` returns, however the host loaded it. An inline
- *   `code:` body is not confined. `null` or absent confines nothing. The flow's `source` keeps the root's
+ *   `code:` body is not confined. Each file an `!include` reads must resolve inside it too, or the
+ *   load fails at the `!include`. `null` or absent confines nothing. The flow's `source` keeps the root's
  *   real path, so a run records it and a resume confines the recorded files to it again.
  * @param options.env The environment this load reads the `YIAN_*` values from; default
  *   `processEnv`, which keeps the values in effect, so a `childResolver` that calls `loadFlow`
@@ -667,8 +683,8 @@ interface LoadOptions {
  *   contract's type (`j: !TradeJournal`) and a grant is checked against its tools. A class that
  *   implements a built-in contract needs no entry. The flow keeps the list in `memoryTypes`.
  * @returns The compiled, validated flow. Its `source` holds `text` under `sourceLabel` and every
- *   file the load read, with where each `uses:` path resolved (see `FlowSource`); it is `null`
- *   when a `childResolver` returned a flow without a source (one built in code).
+ *   file the load read, with where each `uses:` and `!include` path resolved (see `FlowSource`);
+ *   it is `null` when a `childResolver` returned a flow without a source (one built in code).
  * @throws LoadError (as a rejection) for any malformed or inconsistent flow, located at the
  *   offending line when source provenance is available: among them an `llm_config` value a child
  *   flow's agent would inherit before it is known.
@@ -688,11 +704,11 @@ async function loadText(text: string, options: Omit<LoadOptions, "env">): Promis
   const { memoryTypes = [] } = options;
   if (typeof sourceLabel !== "string") throw new TypeError("source_label must be a string");
   const memoryTools = memoryTypeTools(memoryTypes);
-  const document = parseSourceDocument(text, sourceLabel);
   // Absolute, so a CODE reference doesn't depend on the cwd when the node runs.
   const ownDir = resolvePath(baseDir ?? searchPaths?.[0] ?? process.cwd());
   const ctx = await newLoadCtx(codeRoot, memoryTools);
   const rootFile: ReadFile = { text, refs: new Map() };
+  const document = await parseIncluding(text, sourceLabel, diskIncludes(ownDir, ctx, rootFile));
   const hosted = new Map<string, unknown>();
   const resolver: ChildResolver | null =
     childResolver === null
@@ -731,6 +747,95 @@ async function checkHostedCode(
     const resolveOrigin = resolver === null ? null : (origin: OriginRef) => resolver.resolve(origin);
     await checkFlowCode(child.compiled, { diagnostics, resolveOrigin, seen, codeRoot });
   }
+}
+
+/** Reads the file an `!include` path names; `fail` makes the error, at the value, for one it can't. */
+type IncludeReader = (path: string, fail: (message: string) => LoadError) => Promise<string>;
+
+/** Name the file `!include <path>` reads, as messages start. */
+function includeFile(path: string): string {
+  return `\`!include\` file ${reprText(path)}`;
+}
+
+/** The message for an included file outside the code root. */
+function outsideRoot(path: string): string {
+  return `${includeFile(path)} is outside the code root; include a file inside it`;
+}
+
+/** The message for an included file over the cap `limit`. */
+function tooLarge(path: string, limit: number): string {
+  return `${includeFile(path)} is larger than ${limit} bytes (YIAN_MAX_INCLUDE_BYTES); shorten it or raise the cap`;
+}
+
+/**
+ * Parse `text` as `parseSourceDocument` does, each `!include` value reading the text `read` gives
+ * its path. Each distinct path is read once, in document order.
+ *
+ * @throws LoadError at the first `!include` with an empty path or a file `read` refuses.
+ */
+async function parseIncluding(text: string, label: string, read: IncludeReader): Promise<SourceDocument> {
+  const document = parseSourceDocument(text, label);
+  if (document.includes.length === 0) return document;
+  const diagnostics = LoadDiagnostics.fromDocument(document);
+  const texts = new Map<string, string>();
+  for (const { path, range } of document.includes) {
+    if (texts.has(path)) continue;
+    const fail = (message: string) => diagnostics.error(message, { range });
+    if (path === "") throw fail("`!include` needs a file path, e.g. `prompt: !include prompts/answer.md`");
+    texts.set(path, await read(path, fail));
+  }
+  return parseSourceDocument(text, label, texts);
+}
+
+/**
+ * Return the reader of the files `!include` paths name, resolved against `dir`. A file must
+ * resolve, symlinks followed, inside `ctx.codeRoot` when it has one, which is checked first and
+ * named without an absolute path; be a regular file, checked before it is opened (a FIFO's open
+ * would wait for a writer); hold at most `YIAN_MAX_INCLUDE_BYTES`; and be UTF-8 text, whose line
+ * endings read as LF. It is kept in `ctx.read` by its real path, which `file.refs` records under
+ * `include:<path>`.
+ */
+function diskIncludes(dir: string, ctx: LoadCtx, file: ReadFile): IncludeReader {
+  return async (path, fail) => {
+    const { codeRoot } = ctx;
+    const target = resolvePath(dir, path);
+    try {
+      let real: string;
+      try {
+        real = await fsp.realpath(target);
+      } catch (error) {
+        if (codeRoot !== null && leavesRoot(relative(codeRoot, resolvedPath(target)))) throw fail(outsideRoot(path));
+        if (!isMissingPath(error)) throw error;
+        throw fail(`${includeFile(path)} does not exist${codeRoot === null ? ` in ${reprText(dir)}` : ""}`);
+      }
+      if (codeRoot !== null && leavesRoot(relative(codeRoot, real))) throw fail(outsideRoot(path));
+      const stat = await fsp.stat(real);
+      if (!stat.isFile()) throw fail(`${includeFile(path)} is not a regular file; include a text file`);
+      const limit = current().maxIncludeBytes;
+      if (stat.size > limit) throw fail(tooLarge(path, limit));
+      let read = ctx.read.get(real);
+      if (read === undefined) {
+        const bytes = await fsp.readFile(real);
+        // It may have grown since its size was read.
+        if (bytes.length > limit) throw fail(tooLarge(path, limit));
+        let text: string;
+        try {
+          text = UTF8.decode(bytes);
+        } catch (error) {
+          if (!(error instanceof TypeError)) throw error;
+          throw fail(`${includeFile(path)} is not UTF-8 text; save it as UTF-8`);
+        }
+        read = { text: text.replace(/\r\n?/g, "\n"), refs: new Map() };
+        ctx.read.set(real, read);
+      }
+      file.refs.set(INCLUDE_REF + path, real);
+      return read.text;
+    } catch (error) {
+      // A system error's message holds absolute paths.
+      if (!isSystemError(error)) throw error;
+      throw fail(`${includeFile(path)} can't be read (${error.code})`);
+    }
+  };
 }
 
 /**

@@ -123,7 +123,8 @@ export type ScalarStyle = "plain" | "single" | "double" | "literal" | "folded";
 /**
  * @internal One scalar-shaped YAML definition. `style` is `null` when `raw` is; `tag` is the
  * local tag text without the leading `!`, `null` when the scalar is untagged or carries a
- * YAML core tag.
+ * YAML core tag. `included` says the value is a file's text an `!include` read: untagged, its
+ * `raw` that text and its style `literal`.
  */
 export interface ScalarDef {
   readonly kind: "scalar";
@@ -133,6 +134,7 @@ export interface ScalarDef {
   readonly constructedLineRanges: readonly SourceRange[] | null;
   readonly style: ScalarStyle | null;
   readonly tag: string | null;
+  readonly included: boolean;
 }
 
 /**

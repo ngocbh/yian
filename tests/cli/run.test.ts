@@ -1534,6 +1534,20 @@ describe("check", () => {
     }
   });
 
+  test("--root: an !include outside the root fails, written as in the flow, whether or not its file exists; inside, it loads", async () => {
+    const root = join(tmp, "company");
+    file("prompt.md", "outside\n");
+    file("company/prompt.md", "inside\n");
+    for (const path of ["../prompt.md", "../missing.md"]) {
+      const flow = file("company/main.yaml", `id: c\nname: c\nnodes: {}\noutput: !include ${path}\n`);
+      const diagnostic = await rootDiagnostic(root, flow);
+      expect(diagnostic.code).toBe("compose.load");
+      expect(diagnostic.message).toBe(`\`!include\` file '${path}' is outside the code root; include a file inside it`);
+    }
+    const flow = file("company/main.yaml", "id: c\nname: c\nnodes: {}\noutput: !include prompt.md\n");
+    expect((await checkJson(["--root", root, flow])).code).toBe(0);
+  });
+
   test("--root: a uses: child's CODE reference outside the root fails; inside, it loads", async () => {
     const root = join(tmp, "company");
     const flow = file("company/main.yaml", parentFlow("lib/child"));

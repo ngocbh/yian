@@ -550,13 +550,18 @@ function nonTextKeyMessage(key: Value, text: string, cutValue: string | undefine
  *
  * @param text The flow file's YAML text.
  * @param label The name that identifies the file in diagnostics.
+ * @param included The text of each `!include` path, as `SourceDocument.parse` takes it.
  * @throws LoadError at the problem for invalid YAML, at the key for a key YAML read as non-text,
  *   and at the second key for a repeated key.
  */
-export function parseSourceDocument(text: string, label: string): SourceDocument {
+export function parseSourceDocument(
+  text: string,
+  label: string,
+  included?: ReadonlyMap<string, string>,
+): SourceDocument {
   let document: SourceDocument;
   try {
-    document = SourceDocument.parse(text, label);
+    document = SourceDocument.parse(text, label, included);
   } catch (error) {
     if (!(error instanceof SourceSyntaxError)) throw error;
     throw new LoadDiagnostics(label, text).error(`invalid YAML: ${error.message}`, {

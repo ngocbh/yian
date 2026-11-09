@@ -17,7 +17,9 @@
  * without creating a document, and one plain scalar's text may be read on its own without
  * parsing YAML structure. Documents and isolated literals parse under eemeli/yaml's failsafe
  * schema and read plain scalars with yian's one shared table: YAML 1.2 core-schema rules plus
- * unquoted timestamps and `<<` merge keys.
+ * unquoted timestamps and `<<` merge keys. A parse given the text of each `!include` path
+ * reads the value as that text, marked so a type position can refuse it; a path it wasn't given
+ * is listed for the loader to read.
  *
  * Knows about:   yaml, defaults, diagnostics, typesys.
  * Never imports: compose helpers or phases, nodes, compile, runtime, the run boundary,

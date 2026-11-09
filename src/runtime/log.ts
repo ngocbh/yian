@@ -97,12 +97,16 @@ export const RUN_STOP_REASONS = Object.freeze(["signal", "callback"] as const);
 export type RunStopReason = (typeof RUN_STOP_REASONS)[number];
 
 /**
- * One flow file a load read: its text, and where each `uses:` ref written in it resolved. A type,
- * not an interface, so it is a `JsonObject` as recorded.
+ * One file a load read, a flow or a text file one includes: its text, and where each `uses:` ref
+ * and `!include` path written in it resolved. A type, not an interface, so it is a `JsonObject` as
+ * recorded.
  */
 export type FlowSourceFile = {
   readonly text: string;
-  /** Each `uses:` ref (its path, with `@<version>` when pinned), mapped to the key of its file. */
+  /**
+   * Each `uses:` ref (its path, with `@<version>` when pinned) and each `!include` path (as
+   * `include:<path>`), mapped to the key of its file.
+   */
   readonly refs: Readonly<Record<string, string>>;
 };
 
@@ -112,7 +116,7 @@ export type FlowSourceFile = {
  * (`..` for a file outside it); a file is labelled with its key's file name, and its CODE
  * references resolve in its key's folder. Two different files claiming one path (texts a host
  * resolver gave) get keys of their own, `<key>~1`, ... A load from the source follows `refs`
- * and reads no flow file from disk.
+ * and reads no flow file, and no file a flow includes, from disk.
  */
 export interface FlowSource {
   /**
@@ -127,7 +131,7 @@ export interface FlowSource {
    * `codeRoot`), which a load from the source holds them to again; `null` for none.
    */
   readonly codeRoot: string | null;
-  /** Each flow file the load read, by key. */
+  /** Each flow file the load read, and each file one included, by key. */
   readonly files: Readonly<Record<string, FlowSourceFile>>;
 }
 

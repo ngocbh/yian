@@ -11,7 +11,7 @@ import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
-import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
+import { evalNode } from "../../src/runtime/eval_node.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { type AskHandler, type AskRequest, ToolSet } from "../../src/tools/registry.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
@@ -187,14 +187,14 @@ test("agent binds and calls granted per-run tools", async () => {
   expect(seen).toEqual([]);
 });
 
-test("agent cannot call a per-run tool the flow did not grant", async () => {
-  const model = new ScriptedModel([toolCallReply("shout", { text: "hi" })], CONFIG);
+test("agent cannot call a per-run tool the flow did not grant: the model reads it's unavailable", async () => {
+  const model = new ScriptedModel(replies(["shout", { text: "hi" }]), CONFIG);
   const tools = new ToolSet({ shout: upper(), ask_user: () => "yes" });
 
   const outcome = await runAgentNode(model, ["ask_user"], tools);
 
-  expect(outcome).toBeInstanceOf(EvaluationFailure);
-  expect((outcome as EvaluationFailure).failure.message).toContain("not granted");
+  expect(outcome).toEqual(new Output("done"));
+  expect(resultContents(model)).toEqual(["Unavailable tool: shout"]);
 });
 
 test("agent granted three groups sees the union of their tools", async () => {
@@ -214,15 +214,13 @@ test("agent granted three groups sees the union of their tools", async () => {
 });
 
 test.each(["e", "toolbox", "a"])("agent grant check sees expanded group names (%s)", async (name) => {
-  const model = new ScriptedModel([toolCallReply(name, { text: "x" })], CONFIG);
+  const model = new ScriptedModel(replies([name, { text: "x" }]), CONFIG);
   const tools = new ToolSet({ toolbox: [named("a")], hidden: [named("e")] });
 
   const outcome = await runAgentNode(model, ["toolbox"], tools);
 
-  expect(outcome).toBeInstanceOf(EvaluationFailure);
-  expect((outcome as EvaluationFailure).failure.message).toContain(
-    `requested tool '${name}', but it is not granted; granted tools: ["toolbox_a"]`,
-  );
+  expect(outcome).toEqual(new Output("done"));
+  expect(resultContents(model)).toEqual([`Unavailable tool: ${name}`]);
 });
 
 test("agent binds a tool shared by overlapping groups once", async () => {

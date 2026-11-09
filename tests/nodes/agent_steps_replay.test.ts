@@ -574,36 +574,64 @@ test("a crash while tools run closes each call with no result lazily, without ru
   ]);
 });
 
-test("a replayed call with no result whose check fails fails the node as live, with no closer", async () => {
-  // A call to a tool the agent isn't granted fails its check.
-  const reply = () => new ScriptedModel([calls(["call-a", "drop", "a"]), textReply("done")], CONFIG);
-  const uncut = await run(reply(), { tools: { save: topicTool("save") } });
+test("a replayed call with no result whose check faults fails the node as live, with no closer", async () => {
+  // A validator that throws something other than its issues faults the check.
+  const save = new FunctionTool({
+    name: "save",
+    description: "Tool save.",
+    parametersJsonSchema: { type: "object", properties: { topic: { type: "string" } } },
+    parametersValidator: {
+      "~standard": {
+        version: 1,
+        vendor: "test",
+        validate: () => {
+          throw new Error("validator down");
+        },
+      },
+    },
+    execute: () => "never",
+  });
+  const reply = () => new ScriptedModel([calls(["call-a", "save", "a"]), textReply("done")], CONFIG);
+  const uncut = await run(reply(), { tools: { save } });
   expect(uncut.result.status).toBe("failed");
   // Cut after the model_call, before the node's failure.
-  const log = await cutRun(seqOf(uncut.log, "model_call") + 1, reply(), { tools: { save: topicTool("save") } });
+  const log = await cutRun(seqOf(uncut.log, "model_call") + 1, reply(), { tools: { save } });
   const model = new ScriptedModel([], CONFIG);
-  const resumed = await resume(log, model, { tools: { save: topicTool("save") } });
+  const resumed = await resume(log, model, { tools: { save } });
   expect(resumed.status).toBe("failed");
   expect(resumed.failure?.message).toBe(uncut.result.failure?.message);
   expect(model.requests.length).toBe(0);
   expect(steps(log).map((step) => step["kind"])).toEqual(["model_call"]);
 });
 
-test("a call cut off before its unparsed-arguments result gets the same error again, not a closer", async () => {
-  const unparsed = new ToolCallPart({ id: "call-a", name: "save", arguments: null, rawArguments: '{"topic": ' });
-  const reply = new Response({ message: new Message({ role: "assistant", parts: [unparsed] }), finishReason: "tool_calls" });
-  const model = () => new ScriptedModel([reply, textReply("done")], CONFIG);
-  const ran: string[] = [];
-  const tools = { save: topicTool("save", { log: ran }) };
-  const uncut = await run(model(), { tools });
-  expect(uncut.result.status, uncut.result.failure?.message).toBe("succeeded");
-  const log = await cutRun(afterCall(uncut.log), model(), { tools });
-  const resumed = await resume(log, new ScriptedModel([textReply("done")], CONFIG), { tools });
-  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
-  expect(ran).toEqual([]);
-  expect(toolResults(log)).toEqual([{ call_id: "call-a", output: unparsedText("save"), is_error: true }]);
-  expect(comparable(log)).toEqual(comparable(uncut.log));
-});
+for (const [what, part, output] of [
+  [
+    "unparsed arguments",
+    new ToolCallPart({ id: "call-a", name: "save", arguments: null, rawArguments: '{"topic": ' }),
+    unparsedText("save"),
+  ],
+  ["a tool it wasn't granted", new ToolCallPart({ id: "call-a", name: "drop", arguments: { topic: "a" } }), "Unavailable tool: drop"],
+  [
+    "arguments that fail the schema",
+    new ToolCallPart({ id: "call-a", name: "save", arguments: { topic: 1 } }),
+    "tool 'save' argument 'topic': 1 does not match declared type str",
+  ],
+] as const) {
+  test(`a call refused for ${what}, cut off before its result, gets the same error again, not a closer`, async () => {
+    const reply = new Response({ message: new Message({ role: "assistant", parts: [part] }), finishReason: "tool_calls" });
+    const model = () => new ScriptedModel([reply, textReply("done")], CONFIG);
+    const ran: string[] = [];
+    const tools = { save: topicTool("save", { log: ran }), drop: topicTool("drop", { log: ran }) };
+    const uncut = await run(model(), { tools });
+    expect(uncut.result.status, uncut.result.failure?.message).toBe("succeeded");
+    const log = await cutRun(afterCall(uncut.log), model(), { tools });
+    const resumed = await resume(log, new ScriptedModel([textReply("done")], CONFIG), { tools });
+    expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+    expect(ran).toEqual([]);
+    expect(toolResults(log)).toEqual([{ call_id: "call-a", output, is_error: true }]);
+    expect(comparable(log)).toEqual(comparable(uncut.log));
+  });
+}
 
 test("a crash in a retry wait waits the recorded delay again, and the attempt count continues", async () => {
   const slow = () => new ProviderError("rate_limit", "slow down", { status: 429, retryAfter: 2 });

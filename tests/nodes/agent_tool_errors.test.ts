@@ -1,8 +1,10 @@
 /**
  * An AGENT answers its model's mistakes with error tool results the model reads, and the loop goes
  * on: every tool call of a reply gets a result, so the next request answers each one. A call whose
- * arguments aren't valid JSON never reaches its tool; it runs alone, with started and finished
- * events, and its error result is written as a `tool_result` step.
+ * arguments aren't valid JSON, that names a tool the agent wasn't granted, or whose arguments fail
+ * their check (the schema, or the validator's issues) never reaches its tool; it runs alone, with
+ * started and finished events, and its error result is written as a `tool_result` step. A
+ * validator that throws something other than its issues still fails the node.
  *
  * Each path's requests rebuild from the steps it recorded (`rebuildStepRequests`), each matching
  * the digest the call recorded. Rows run `runAgent` directly with sinks for events and steps.
@@ -19,28 +21,32 @@ import { ScriptedModel } from "../../src/llm/testing.ts";
 import { type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { rebuildStepRequests, runAgent } from "../../src/nodes/agent/loop.ts";
 import { checkModelConversation } from "../../src/nodes/agent/messages.ts";
-import { unparsedText } from "../../src/nodes/agent/results.ts";
+import { unavailableText, unparsedText } from "../../src/nodes/agent/results.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
 import type { Output } from "../../src/nodes/base.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
-import { FunctionTool } from "../../src/tools/function_tools.ts";
+import { FunctionTool, type StandardSchemaV1 } from "../../src/tools/function_tools.ts";
 import { asToolGrant, expandGrants, type GrantedTool, requestToolSpecs } from "../../src/tools/grants.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import type { JsonObject, JsonValue } from "../../src/typesys/json.ts";
 import type { ValueRecord } from "../../src/typesys/values.ts";
-import { serving, textReply } from "../helpers/run_state_fixtures.ts";
+import { rejected, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
 
 const CONFIG = { provider: "openai", model: "gpt-5.5" };
 
-/** A tool `name` taking an optional int `n`, which logs `<name>` and returns `<name> done`. */
-function instant(name: string, log: string[]): FunctionTool {
+/**
+ * A tool `name` taking an optional int `n`, which logs `<name>` and returns `<name> done`;
+ * `validator` is its parameters validator.
+ */
+function instant(name: string, log: string[], validator: StandardSchemaV1 | null = null): FunctionTool {
   return new FunctionTool({
     name,
     description: `Tool ${name}.`,
     parametersJsonSchema: { type: "object", properties: { n: { type: "integer" } } },
+    parametersValidator: validator,
     execute: () => {
       log.push(name);
       return `${name} done`;
@@ -189,4 +195,77 @@ test("a reply whose calls are all unparsed is a tool turn: the model reads the e
   expect(log).toEqual([]);
   expect(toolResults(model, 1)).toEqual([result(0, "a", unparsedText("a"), true)]);
   await expectRebuilt(run, 2);
+});
+
+for (const [what, name] of [
+  ["a tool the agent wasn't granted", "x"],
+  ["a tool that doesn't exist", "nope"],
+] as const) {
+  test(`a call to ${what} gets "Unavailable tool", never reaching a tool, and the loop goes on`, async () => {
+    const log: string[] = [];
+    const model = new ScriptedModel([reply(call(0, "a"), call(1, name, { n: 1 })), textReply("done")], CONFIG);
+    const run = agent(model, new ToolSet({ a: instant("a", log), x: instant("x", log) }), ["a"]);
+
+    expect(((await run.running) as Output).value).toBe("done");
+    expect(log).toEqual(["a"]);
+    expect(unavailableText(name)).toBe(`Unavailable tool: ${name}`);
+    expect(toolResults(model, 1)).toEqual([result(0, "a", "a done"), result(1, name, `Unavailable tool: ${name}`, true)]);
+    expect(resultSteps(run.steps)).toEqual([
+      ["c0", "a done", false],
+      ["c1", `Unavailable tool: ${name}`, true],
+    ]);
+    expect(toolEvents(run.events)).toEqual(["started a", "finished a a done", `started ${name}`, `finished ${name} ReportedToolError`]);
+    const started = run.events.filter((event) => event instanceof ToolCallStarted).at(-1)!;
+    expect([started.n, started.callIndex, started.toolCallId, started.arguments]).toEqual([1, 1, "c1", { n: 1 }]);
+    await expectRebuilt(run, 2);
+  });
+}
+
+/** A validator that reports one issue at `n`, or throws `thrown` when given. */
+function validator(thrown?: Error): StandardSchemaV1 {
+  return {
+    "~standard": {
+      version: 1,
+      vendor: "test",
+      validate: () => {
+        if (thrown !== undefined) throw thrown;
+        return { issues: [{ message: "too big", path: ["n"] }] };
+      },
+    },
+  };
+}
+
+for (const [what, args, tool, message] of [
+  ["an argument the schema lacks", { bogus: 1 }, null, `tool 'b' received unsupported argument(s) ["bogus"]; allowed: ["n"]`],
+  ["an argument of the wrong type", { n: "one" }, null, `tool 'b' argument 'n': "one" does not match declared type int`],
+  ["the validator's issues", { n: 9 }, validator(), "tool 'b' arguments failed its validator: n: too big"],
+] as const) {
+  test(`a failed argument check (${what}): the model reads its message as the call's error result, and the loop goes on`, async () => {
+    const log: string[] = [];
+    const model = new ScriptedModel([reply(call(0, "a"), call(1, "b", args)), textReply("done")], CONFIG);
+    const run = agent(model, new ToolSet({ a: instant("a", log), b: instant("b", log, tool) }), ["a", "b"]);
+
+    expect(((await run.running) as Output).value).toBe("done");
+    expect(log).toEqual(["a"]);
+    expect(toolResults(model, 1)).toEqual([result(0, "a", "a done"), result(1, "b", message, true)]);
+    expect(resultSteps(run.steps)).toEqual([
+      ["c0", "a done", false],
+      ["c1", message, true],
+    ]);
+    expect(toolEvents(run.events)).toEqual(["started a", "finished a a done", "started b", "finished b ReportedToolError"]);
+    await expectRebuilt(run, 2);
+  });
+}
+
+test("a validator that throws something other than its issues fails the node once the calls before it ran", async () => {
+  const log: string[] = [];
+  const fault = new Error("validator down");
+  const model = new ScriptedModel([reply(call(0, "a"), call(1, "b")), textReply("done")], CONFIG);
+  const run = agent(model, new ToolSet({ a: instant("a", log), b: instant("b", log, validator(fault)) }), ["a", "b"]);
+
+  expect(await rejected(run.running)).toBe(fault);
+  expect(log).toEqual(["a"]);
+  expect(resultSteps(run.steps)).toEqual([["c0", "a done", false]]);
+  expect(toolEvents(run.events)).toEqual(["started a", "finished a a done", "started b", "finished b Error"]);
+  await expectRebuilt(run, 1);
 });

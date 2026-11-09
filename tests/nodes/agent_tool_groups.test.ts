@@ -1,8 +1,8 @@
 /**
  * Concurrent tool calls within one AGENT turn. Calls form groups in call order: consecutive calls
  * whose tools say `isConcurrencySafe` (and `load_skill`) run together, an unsafe call runs alone,
- * and a failed check (an ungranted name, invalid arguments) ends the calls before it as their own
- * group, which runs and commits before the node fails. Results commit in call order whatever order
+ * and so does a call whose check failed (an ungranted name, invalid arguments), after the group
+ * before it ran and committed, with its error result. Results commit in call order whatever order
  * the calls finish in; a failing call aborts its group's siblings, and the node rejects only once
  * every started call has settled. A host interrupt never aborts a running group: it skips the calls
  * not started yet, a failed check after a committed group included, with interrupted brackets,
@@ -23,12 +23,7 @@ import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { ToolCallFinished, ToolCallStarted } from "../../src/events.ts";
 import { Message, Response, TextPart, ToolCallPart, ToolResultPart, ToolSpec } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import {
-  AgentLoopError,
-  type AgentRunContext,
-  DEFAULT_SYSTEM,
-  ToolIterationLimitError,
-} from "../../src/nodes/agent/context.ts";
+import { type AgentRunContext, DEFAULT_SYSTEM, ToolIterationLimitError } from "../../src/nodes/agent/context.ts";
 import { rebuildStepRequests, runAgent } from "../../src/nodes/agent/loop.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
@@ -38,7 +33,7 @@ import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { LOAD_SKILL, loadSkillTool } from "../../src/skills/tool.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
-import { ReportedToolError, ToolCheckError } from "../../src/tools/errors.ts";
+import { ReportedToolError } from "../../src/tools/errors.ts";
 import { FunctionTool, type StandardSchemaV1 } from "../../src/tools/function_tools.ts";
 import { asToolGrant, expandGrants, type GrantedTool, requestToolSpecs } from "../../src/tools/grants.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
@@ -414,7 +409,7 @@ test("load_skill joins a group with safe tools; ask_user runs alone", async () =
   expect(toolResults(model, 1).map((part) => part.content)).toEqual(["a result", "Tag, then publish.", "yes", "b done"]);
 });
 
-test("an ungranted call fails the node after the group before it ran and committed", async () => {
+test("an ungranted call gets its error result after the group before it ran and committed", async () => {
   const log: string[] = [];
   const a = gated("a", log);
   const model = new ScriptedModel([callsReply(["a"], ["x"]), textReply("done")], CONFIG);
@@ -423,16 +418,14 @@ test("an ungranted call fails the node after the group before it ran and committ
   await a.entered;
   a.resolve("a result");
 
-  const error = await rejected(run.running);
-  expect(error).toBeInstanceOf(AgentLoopError);
-  expect((error as Error).message).toContain("requested tool 'x', but it is not granted");
+  expect(((await run.running) as Output).value).toBe("done");
   expect(log).toEqual(["a start", "a end"]);
-  expect(toolEvents(run.events)).toEqual(["started a", "finished a a result"]);
-  // The reply's calls, then the result the group before the refused call recorded.
+  expect(toolEvents(run.events)).toEqual(["started a", "finished a a result", "started x", "finished x ReportedToolError"]);
+  expect(toolResults(model, 1)).toEqual([result(0, "a", "a result"), result(1, "x", "Unavailable tool: x", true)]);
   await expectRebuilt(run);
 });
 
-test("invalid arguments fail the node after the group before them ran and committed", async () => {
+test("invalid arguments get their error result after the group before them ran and committed", async () => {
   const log: string[] = [];
   const a = gated("a", log);
   const b = gated("b", log);
@@ -442,10 +435,11 @@ test("invalid arguments fail the node after the group before them ran and commit
   await a.entered;
   a.resolve("a result");
 
-  const error = await rejected(run.running);
-  expect(error).toBeInstanceOf(RangeError);
+  expect(((await run.running) as Output).value).toBe("done");
   expect(log).toEqual(["a start", "a end"]);
-  expect(toolEvents(run.events)).toEqual(["started a", "finished a a result", "started b", "finished b RangeError"]);
+  expect(toolEvents(run.events)).toEqual(["started a", "finished a a result", "started b", "finished b ReportedToolError"]);
+  const refused = `tool 'b' received unsupported argument(s) ["bogus"]; allowed: ["n"]`;
+  expect(toolResults(model, 1)).toEqual([result(0, "a", "a result"), result(1, "b", refused, true)]);
   await expectRebuilt(run);
 });
 
@@ -461,9 +455,13 @@ test("a call after an unsafe one is validated only once the unsafe call ran", as
   expect(log).toEqual(["a start"]);
   a.resolve("a result");
 
-  expect(await rejected(run.running)).toBeInstanceOf(ToolCheckError);
+  expect(((await run.running) as Output).value).toBe("done");
   expect(log).toEqual(["a start", "a end", "b validate"]);
-  expect(toolEvents(run.events)).toEqual(["started a", "finished a a result", "started b", "finished b ToolCheckError"]);
+  expect(toolEvents(run.events)).toEqual(["started a", "finished a a result", "started b", "finished b ReportedToolError"]);
+  expect(toolResults(model, 1)).toEqual([
+    result(0, "a", "a result"),
+    result(1, "b", "tool 'b' arguments failed its validator: bad", true),
+  ]);
 });
 
 test("a reported error from the argument check is the call's error result, and the loop goes on", async () => {
@@ -500,9 +498,9 @@ test("nothing in a group starts until the group is formed", async () => {
   expect(log).toEqual(["b validate", "a start"]);
   a.resolve("a result");
 
-  expect(await rejected(run.running)).toBeInstanceOf(ToolCheckError);
+  expect(((await run.running) as Output).value).toBe("done");
   expect(log).toEqual(["b validate", "a start", "a end"]);
-  expect(toolEvents(run.events)).toEqual(["started a", "finished a a result", "started b", "finished b ToolCheckError"]);
+  expect(toolEvents(run.events)).toEqual(["started a", "finished a a result", "started b", "finished b ReportedToolError"]);
 });
 
 test("a failing call aborts its siblings, and the node rejects with it once all settled", async () => {

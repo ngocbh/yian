@@ -1,0 +1,211 @@
+# A model call to a tool the AGENT wasn't granted never reaches a tool: it gets the error result
+# "Unavailable tool: shout", which the model reads in its next request, and the agent goes on to
+# answer.
+kind: run
+flow: |
+  id: grant
+  name: grant
+  llm_config: {provider: openai, model: gpt-5.5}
+  nodes:
+    agent:
+      kind: agent
+      tools: [lookup]
+      system_prompt: Help.
+      prompt: go
+      output: str
+  output: ${agent.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    lookup:
+      description: Look up a topic.
+      parameters:
+        type: object
+        properties:
+          topic:
+            type: string
+      results: []
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: tool_call
+            id: call-1
+            name: shout
+            arguments:
+              text: x
+      - request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: Help.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: go
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - type: tool_call
+              id: call-1
+              name: shout
+              arguments:
+                text: x
+          - format: yian.message.v1
+            role: tool
+            parts:
+            - type: tool_result
+              call_id: call-1
+              name: shout
+              content: 'Unavailable tool: shout'
+              is_error: true
+          tools:
+          - name: lookup
+            description: Look up a topic.
+            parameters:
+              type: object
+              properties:
+                topic:
+                  type: string
+        reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: done
+expect:
+  output:
+    status: succeeded
+    output: done
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        agent:
+          model: gpt-5.5
+          provider: openai
+          _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, agent]
+  - - node_step
+    - agent
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - arguments: {text: x}
+            id: call-1
+            name: shout
+            type: tool_call
+          role: assistant
+        purpose: chat
+        request_sha256: d3a6341473d5e7c672e605fbc57f782737f3dbd896ba6f07a1c850505c0d9ea2
+        response_id: null
+        usage: null
+  - - node_step
+    - agent
+    - n: 2
+      step: {call_id: call-1, is_error: true, kind: tool_result, output: 'Unavailable tool: shout'}
+  - - node_step
+    - agent
+    - n: 3
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: done, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: b4d73335bfff397fc04e4529ecf93846c8c51be70993a1fbc0ce0bf69c9d7a02
+        response_id: null
+        usage: null
+  - - pool_commit
+    - agent
+    - {value: done}
+  - - pool_commit
+    - agent
+    - key: agent.new_messages
+      steps: [9, 10, 11]
+  - - node_succeeded
+    - agent
+    - {commit: 12, messages: 13}
+  - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - {value: done}
+  - - node_succeeded
+    - __end__
+    - {commit: 16}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - {node_id: __start__}
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {}
+      interrupted: false
+  - - NodeStarted
+    - {node_id: agent}
+  - - ModelCallStarted
+    - {node_id: agent, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
+  - - ModelCallFinished
+    - {node_id: agent, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
+  - - ToolCallStarted
+    - node_id: agent
+      n: 1
+      call_index: 0
+      tool_call_id: call-1
+      name: shout
+      arguments: {text: x}
+  - - ToolCallFinished
+    - {node_id: agent, n: 1, call_index: 0, tool_call_id: call-1, name: shout, error: ReportedToolError}
+  - - ModelCallStarted
+    - {node_id: agent, n: 3, purpose: chat, provider: openai, model: gpt-5.5}
+  - - ModelCallFinished
+    - {node_id: agent, n: 3, purpose: chat, provider: openai, model: gpt-5.5}
+  - - NodeSucceeded
+    - {node_id: agent, output: done, interrupted: false}
+  - - NodeStarted
+    - {node_id: __end__}
+  - - NodeSucceeded
+    - {node_id: __end__, output: done, interrupted: false}
+  - - RunSucceeded
+    - {output: done}
+  stream:
+  - {node_id: agent, key: text, chunk: '', final: true, n: 1, index: 0}
+  - {node_id: agent, key: text, chunk: done, final: false, n: 3, index: 0}
+  - {node_id: agent, key: text, chunk: '', final: true, n: 3, index: 1}

@@ -14,12 +14,7 @@ import { Message, type Part, Response, TextPart, ToolCallPart, ToolResultPart } 
 import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
 import { Route } from "../../src/llm/route.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import {
-  AgentLoopError,
-  type AgentRunContext,
-  DEFAULT_SYSTEM,
-  ToolIterationLimitError,
-} from "../../src/nodes/agent/context.ts";
+import { type AgentRunContext, DEFAULT_SYSTEM, ToolIterationLimitError } from "../../src/nodes/agent/context.ts";
 import { Interrupted } from "../../src/nodes/agent/interrupts.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { unparsedText } from "../../src/nodes/agent/results.ts";
@@ -205,12 +200,11 @@ test("a parsed tool call at a cap of 1 fails with ToolIterationLimitError", asyn
   );
 });
 
-test("a parsed tool call with no grant fails with AgentLoopError", async () => {
-  const model = new ScriptedModel([reply(CALL)]);
-  const error = await rejection(runAgent(context(model, { nodeId: "n" })));
-  expect(error).toBeInstanceOf(AgentLoopError);
-  expect(error).not.toBeInstanceOf(ToolIterationLimitError);
-  expect((error as Error).message).toBe("agent node 'n' requested tool 'lookup', but it is not granted; granted tools: []");
+test("a parsed tool call with no grant gets an error result, and the model answers again", async () => {
+  const model = new ScriptedModel([reply(CALL), textReply("answer")]);
+  expect(((await runAgent(context(model, { nodeId: "n" }))) as Output).value).toBe("answer");
+  const sent = model.requests[1]!.messages.at(-1)!.parts;
+  expect(sent).toEqual([new ToolResultPart({ callId: "c1", name: "lookup", content: "Unavailable tool: lookup", isError: true })]);
 });
 
 test("an unparsed tool call gets an error result, and the model answers again", async () => {

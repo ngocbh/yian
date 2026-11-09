@@ -740,27 +740,41 @@ describe("forward", () => {
     ]);
   });
 
-  test("agent rejects a globally registered but ungranted tool", async () => {
+  /** The tool result parts of `model`'s request `index`. */
+  function sentResults(model: ScriptedModel, index: number): ToolResultPart[] {
+    return model.requests[index]!.messages.flatMap((message) => (message.role === "tool" ? [message.parts[0] as ToolResultPart] : []));
+  }
+
+  test("agent answers a call to a globally registered but ungranted tool as unavailable", async () => {
     const seen: Record<string, unknown>[] = [];
     const secret = fakeTool("secret", () => "secret", {}, seen);
     registerTool("secret", secret);
     try {
-      const model = new ScriptedModel([toolReply(toolCall("secret", {}))], NATIVE);
-      const failure = failureOf(await evaluate(toolAgent([]), model));
-      expect(failure.message).toContain("not granted");
+      const model = new ScriptedModel([toolReply(toolCall("secret", {})), reply("done")], NATIVE);
+      expect(((await evaluate(toolAgent([]), model)) as Output).value).toBe("done");
+      expect(sentResults(model, 1)).toEqual([
+        new ToolResultPart({ callId: "1", name: "secret", content: "Unavailable tool: secret", isError: true }),
+      ]);
       expect(seen).toEqual([]);
     } finally {
       TOOL_REGISTRY.delete("secret");
     }
   });
 
-  test("tool loop rejects model-injected arguments", async () => {
+  test("tool loop answers model-injected arguments with the check's error", async () => {
     const seen: Record<string, unknown>[] = [];
     const lookup = fakeTool("lookup", (args) => args.question, { question: { type: "string" } }, seen);
-    const model = new ScriptedModel([toolReply(toolCall("lookup", { question: "status?", node_id: "injected" }))], NATIVE);
-    const failure = failureOf(await evaluate(toolAgent(["lookup"]), model, { tools: new ToolSet({ lookup }) }));
-    expect(failure.causeType).toBe("RangeError");
-    expect(failure.message).toContain("unsupported argument");
+    const model = new ScriptedModel(
+      [toolReply(toolCall("lookup", { question: "status?", node_id: "injected" })), reply("done")],
+      NATIVE,
+    );
+    const outcome = await evaluate(toolAgent(["lookup"]), model, { tools: new ToolSet({ lookup }) });
+    expect((outcome as Output).value).toBe("done");
+    const [answer] = sentResults(model, 1);
+    expect([answer!.isError, answer!.content]).toEqual([
+      true,
+      `tool 'lookup' received unsupported argument(s) ["node_id"]; allowed: ["question"]`,
+    ]);
     expect(seen).toEqual([]);
   });
 
@@ -778,13 +792,14 @@ describe("forward", () => {
     expect(failure.message).toContain("cannot load ACME");
   });
 
-  test("a tool validation error does not claim the scalar output origin", async () => {
-    // The tool's argument is named like the generated scalar output's `value` wrapper.
-    const wrapper = fakeTool("scalar_wrapper", (args) => args.value, { value: { type: "integer" } });
+  test("a tool's type error does not claim the scalar output origin", async () => {
+    // The tool's argument is named like the generated scalar output's `value` wrapper; its result
+    // isn't a yian value.
+    const wrapper = fakeTool("scalar_wrapper", () => new Map(), { value: { type: "integer" } });
     const node = toolAgent(["scalar_wrapper"]);
     node.origin = new OriginRef("node");
     node.outputContract = new ValueContract(INT, new ContractOrigins({ default: new OriginRef("output") }));
-    const model = new ScriptedModel([toolReply(toolCall("scalar_wrapper", { value: "bad" }))], NATIVE);
+    const model = new ScriptedModel([toolReply(toolCall("scalar_wrapper", { value: 1n }))], NATIVE);
     const failure = failureOf(await evaluate(node, model, { tools: new ToolSet({ scalar_wrapper: wrapper }) }));
     expect(failure.causeType).toBe("TypeCheckError");
     expect(failure.trace).toEqual([new OriginRef("node")]);
@@ -837,12 +852,12 @@ describe("forward", () => {
     expect(seen).toHaveLength(1);
   });
 
-  test("an ungranted tool stays node.execute", async () => {
+  test("an ungranted tool's call doesn't fail the node: the model reads it's unavailable and answers", async () => {
     const noop = fakeTool("noop", () => "ok");
-    const model = new ScriptedModel([toolReply(toolCall("other", {}))], NATIVE);
-    const failure = failureOf(await evaluate(toolAgent(["noop"]), model, { tools: new ToolSet({ noop }) }));
-    expect([failure.code, failure.causeType]).toEqual(["node.execute", "AgentLoopError"]);
-    expect(failure.message).toContain("not granted");
+    const model = new ScriptedModel([toolReply(toolCall("other", {})), reply("done")], NATIVE);
+    const outcome = await evaluate(toolAgent(["noop"]), model, { tools: new ToolSet({ noop }) });
+    expect((outcome as Output).value).toBe("done");
+    expect(sentResults(model, 1).map((part) => part.content)).toEqual(["Unavailable tool: other"]);
   });
 
   test("a tool loop cap of one still answers without tools", async () => {
@@ -878,31 +893,40 @@ describe("forward", () => {
     );
   }
 
-  test("a call with invalid arguments gets its tool brackets, then fails the node", async () => {
+  test("a call with invalid arguments gets its tool brackets, finished with the reported error", async () => {
     const seen: Record<string, unknown>[] = [];
     const lookup = fakeTool("lookup", () => "unused", { q: { type: "string" } }, seen);
     const events: unknown[] = [];
-    const model = new ScriptedModel([toolReply(toolCall("lookup", { q: "x", extra: 1n }))], NATIVE);
+    const model = new ScriptedModel([toolReply(toolCall("lookup", { q: "x", extra: 1n })), reply("done")], NATIVE);
     const outcome = await evaluate(toolAgent(["lookup"]), model, {
       tools: new ToolSet({ lookup }),
       emitEvent: (event) => void events.push(event),
     });
-    expect(failureOf(outcome).causeType).toBe("RangeError");
+    expect((outcome as Output).value).toBe("done");
     expect(brackets(events)).toEqual([
       ["ModelCallStarted"],
       ["ModelCallFinished"],
       ["ToolCallStarted", "lookup", { q: "x", extra: 1n }],
-      ["ToolCallFinished", "lookup", null, "RangeError"],
+      ["ToolCallFinished", "lookup", null, "ReportedToolError"],
+      ["ModelCallStarted"],
+      ["ModelCallFinished"],
     ]);
     expect(seen).toEqual([]);
   });
 
-  test("an ungranted call gets no brackets", async () => {
+  test("an ungranted call gets its brackets too, finished with the reported error", async () => {
     const events: unknown[] = [];
-    const model = new ScriptedModel([toolReply(toolCall("other", {}))], NATIVE);
+    const model = new ScriptedModel([toolReply(toolCall("other", {})), reply("done")], NATIVE);
     const outcome = await evaluate(toolAgent([]), model, { emitEvent: (event) => void events.push(event) });
-    expect(failureOf(outcome).causeType).toBe("AgentLoopError");
-    expect(brackets(events)).toEqual([["ModelCallStarted"], ["ModelCallFinished"]]);
+    expect((outcome as Output).value).toBe("done");
+    expect(brackets(events)).toEqual([
+      ["ModelCallStarted"],
+      ["ModelCallFinished"],
+      ["ToolCallStarted", "other", {}],
+      ["ToolCallFinished", "other", null, "ReportedToolError"],
+      ["ModelCallStarted"],
+      ["ModelCallFinished"],
+    ]);
   });
 
   test("the request binds the granted tools in grant order, load_skill last", async () => {

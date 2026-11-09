@@ -12,6 +12,7 @@ import {
   isReportedToolError,
   isToolCheckError,
   isTransientToolError,
+  markToolCheck,
   PermanentToolError,
   ReportedToolError,
   TOOL_ERROR,
@@ -182,6 +183,16 @@ describe("kinds and guards", () => {
       for (const guard of Object.values(guards)) expect(guard(value)).toBe(false);
     });
   }
+});
+
+test("markToolCheck brands an error as a failed check, keeping its class; one with kinds keeps them", () => {
+  const range = new RangeError("bad key");
+  expect(markToolCheck(range)).toBe(range);
+  expect(range).toBeInstanceOf(RangeError);
+  expect([range.name, range.message, toolErrorKinds(range)]).toEqual(["RangeError", "bad key", ["check"]]);
+  const reported = new ReportedToolError("x");
+  expect(toolErrorKinds(markToolCheck(reported))).toEqual(["reported"]);
+  expect(markToolCheck("text")).toBe("text");
 });
 
 test("a second module copy's errors are classified by the brand", async () => {

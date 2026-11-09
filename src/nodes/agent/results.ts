@@ -32,6 +32,11 @@ export function unparsedText(name: string): string {
   return `Arguments for ${name} are not valid JSON; send them as one JSON object.`;
 }
 
+/** The result the model reads for a call to a tool it wasn't granted, or that doesn't exist. */
+export function unavailableText(name: string): string {
+  return `Unavailable tool: ${name}`;
+}
+
 /** Why a call was closed without its result, as an agent's closer records it. */
 export type CloserReason = "crashed" | "timed_out" | "interrupted";
 

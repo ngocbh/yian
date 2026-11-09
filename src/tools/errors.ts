@@ -127,6 +127,18 @@ export class ToolCheckError extends TypeError {
 }
 
 /**
+ * Brand `error`, thrown by a check yian runs on a tool call's arguments, as a failed check
+ * (`isToolCheckError`), keeping its class and message, and return it. An error that isn't an
+ * `Error`, or that already carries kinds, is returned as is.
+ */
+export function markToolCheck(error: unknown): unknown {
+  if (error instanceof Error && toolErrorKinds(error).length === 0) {
+    Object.defineProperty(error, TOOL_ERROR, { value: CHECK, configurable: true });
+  }
+  return error;
+}
+
+/**
  * Return the known kinds in `error`'s `TOOL_ERROR` array, frozen, or none when it has no such
  * array. Never throws, so a hostile object (a throwing getter or proxy trap) has no kinds.
  */

@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { ToolContext } from "../../src/tools/context.ts";
-import { TOOL_ERROR } from "../../src/tools/errors.ts";
+import { isToolCheckError, TOOL_ERROR } from "../../src/tools/errors.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import {
   type AskRequest,
@@ -684,6 +684,47 @@ describe("validate", () => {
     );
     expect(await rejected(tools.validate("nope", {}), RangeError)).toContain("unknown tool id 'nope'");
     expect(calls).toBe(0);
+  });
+
+  test("a failed argument check is a check failure, keeping its class; an unknown tool or a validator's throw isn't", async () => {
+    const thrown = new RangeError("validator down");
+    const guarded = new FunctionTool({
+      name: "guarded",
+      description: "Guarded.",
+      parametersJsonSchema: { type: "object", properties: {} },
+      parametersValidator: {
+        "~standard": {
+          version: 1,
+          vendor: "test",
+          validate: () => {
+            throw thrown;
+          },
+        },
+      },
+      execute: () => null,
+    });
+    const tools = new ToolSet({ echo: tool("echo"), guarded });
+    const failure = async (promise: Promise<unknown>) => {
+      try {
+        await promise;
+      } catch (error) {
+        return error;
+      }
+      throw new Error("expected a rejection");
+    };
+    for (const [call, kind] of [
+      [tools.validate("echo", { town: "Paris" }), RangeError],
+      [tools.validate("echo", { text: 1 }), TypeCheckError],
+      [tools.validate("echo", [] as never), TypeError],
+    ] as const) {
+      const error = await failure(call);
+      expect(error).toBeInstanceOf(kind);
+      expect(isToolCheckError(error)).toBe(true);
+    }
+    expect(isToolCheckError(await failure(tools.validate("nope", {})))).toBe(false);
+    const raised = await failure(tools.validate("guarded", {}));
+    expect(raised).toBe(thrown);
+    expect(isToolCheckError(raised)).toBe(false);
   });
 
   test("refuses arguments that aren't a record", async () => {

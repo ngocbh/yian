@@ -43,7 +43,17 @@ import {
   listKindForElement,
   valueRepr,
 } from "../typesys/values.ts";
-import { bindArguments, builtinResultType, kindName, TEMPLATE_FNS, type TemplateFn } from "./builtins.ts";
+import {
+  type ArgType,
+  bindArguments,
+  builtinResultType,
+  floatParts,
+  isShipped,
+  kindName,
+  roundQuotient,
+  TEMPLATE_FNS,
+  type TemplateFn,
+} from "./builtins.ts";
 import { ResolvedValue, type RootRead, SourceRef, type TracedValue, ValueRoute } from "./lineage.ts";
 import {
   callSuffixOf,
@@ -71,16 +81,17 @@ export class ConstructorTypeError extends ExpressionError {
 }
 
 /**
- * Return the hint for calling a builtin type name, else `""`.
+ * Return the hint for calling a builtin type name that is no builtin, else `""`.
  *
- * `int(x)` reads like a conversion, but constructors are `typedefs:` names that only check.
+ * `bool(x)` reads like a conversion, but constructors are `typedefs:` names that only check;
+ * only `str`, `int` and `float` are conversions, as builtins.
  *
  * @param name The callee.
- * @returns `"; types in expressions are typedef names; ..."` for a builtin type name (`int`,
- *   `list`, `Optional`), else empty.
+ * @returns `"; types in expressions are typedef names; ..."` for a builtin type name (`bool`,
+ *   `list`, `Optional`) no builtin has, else empty.
  */
 export function conversionHint(name: string): string {
-  if (!BUILTIN_TYPE_NAMES.has(name)) return "";
+  if (!BUILTIN_TYPE_NAMES.has(name) || TEMPLATE_FNS.has(name)) return "";
   return `; types in expressions are typedef names; \`${name}(...)\` is not a conversion`;
 }
 
@@ -629,14 +640,7 @@ function trueDivide(x: bigint, y: bigint): number {
  */
 function floatPow(x: number, n: number): number {
   if (n === 0) return 1;
-  // |x| = m · 2^e exactly, read off its bits.
-  const view = new DataView(new ArrayBuffer(8));
-  view.setFloat64(0, x);
-  const bits = view.getBigUint64(0);
-  const field = Number((bits >> 52n) & 0x7ffn);
-  const fraction = bits & ((1n << 52n) - 1n);
-  const m = field === 0 ? fraction : fraction | (1n << 52n);
-  const e = field === 0 ? -1074 : field - 1075;
+  const [m, e] = floatParts(x);
   const power = m ** BigInt(Math.abs(n));
   let num = n > 0 ? power : 1n;
   let den = n > 0 ? 1n : power;
@@ -644,32 +648,6 @@ function floatPow(x: number, n: number): number {
   else den <<= BigInt(-e * n);
   const result = roundQuotient(num, den);
   return x < 0 && n % 2 !== 0 ? -result : result;
-}
-
-/**
- * Return the float nearest `num / den` for a non-negative `num` and a positive `den`: ties to
- * even, subnormals included, `Infinity` past the float range.
- */
-function roundQuotient(num: bigint, den: bigint): number {
-  if (num === 0n) return 0;
-  const bitLength = (value: bigint) => value.toString(2).length;
-  // Scale so the integer quotient q has at least 55 bits: num / den = (q + a remainder) · 2^-s.
-  const s = 55 - (bitLength(num) - bitLength(den));
-  const [scaledNum, scaledDen] = s >= 0 ? [num << BigInt(s), den] : [num, den << BigInt(-s)];
-  const q = scaledNum / scaledDen;
-  const sticky = scaledNum % scaledDen !== 0n;
-  const k = bitLength(q);
-  // q's leading bit is worth 2^(k - 1 - s).
-  if (k - 1 - s > 1023) return Infinity;
-  // Keep 53 bits, or fewer for a subnormal, whose lowest bit is worth 2^-1074.
-  const drop = Math.max(k - 53, s - 1074);
-  const rest = q & ((1n << BigInt(drop)) - 1n);
-  const half = 1n << BigInt(drop - 1);
-  let mantissa = q >> BigInt(drop);
-  if (rest > half || (rest === half && (sticky || (mantissa & 1n) === 1n))) mantissa += 1n;
-  // Exact: mantissa <= 2^53 and the scale is a power of two in [2^-1074, 2^971], so only a
-  // mantissa rounded up to 2^53 at the top overflows, to Infinity as IEEE rounding does.
-  return Number(mantissa) * 2 ** (drop - s);
 }
 
 /**
@@ -1386,9 +1364,9 @@ class EvalExpr {
    * Run a builtin call through `TEMPLATE_FNS`.
    *
    * The arguments are evaluated in source order (a keyword argument carries a leading `NAME`),
-   * bound to the builtin's parameters with `bindArguments`, and passed in parameter order. The
-   * result is read as a host value: a top-level `undefined` is `null`, anything else goes
-   * through `fromHost`.
+   * bound to the builtin's parameters with `bindArguments`, and passed in parameter order. A
+   * shipped builtin's result is taken as it is (`isShipped`); a host function's is read as a host
+   * value: a top-level `undefined` is `null`, anything else goes through `fromHost`.
    *
    * @throws {ExpressionError} If `callee` is no builtin, or the call fails: arguments that don't
    *   bind, an error the builtin throws, or a result that is no yian value
@@ -1411,6 +1389,7 @@ class EvalExpr {
     if (typeof bound === "string") throw failed(bound);
     try {
       const result = fn.call(...bound);
+      if (isShipped(fn)) return result as Value;
       return result === undefined ? null : fromHost(result, "result");
     } catch (error) {
       if (error instanceof ExpressionError) throw error;
@@ -1732,10 +1711,14 @@ export function inferExprType(
   }
   if (tree.data === "refcall") {
     const { head: name, steps } = splitReference(tree);
-    if (callSuffixOf(tree) !== undefined) {
+    const callSuffix = callSuffixOf(tree);
+    if (callSuffix !== undefined) {
       // `parseExpr` rejects dotted access on an `isinstance(...)` result.
       if (name === ISINSTANCE) return Type.scalar(ValueKind.BOOLEAN);
-      if (TEMPLATE_FNS.has(name)) return stepsType(builtinResultType(name), steps);
+      if (TEMPLATE_FNS.has(name)) {
+        const args = () => argumentTypes(name, callSuffix, (node) => infer(node));
+        return stepsType(builtinResultType(name, args), steps);
+      }
       return stepsType(typeFn === null ? null : typeFn(name), steps);
     }
     const typ = refTypeFn(referencePath(tree));
@@ -1780,6 +1763,22 @@ export function inferExprType(
     }
   }
   return BOOLEAN_NODES.has(tree.data) ? Type.scalar(ValueKind.BOOLEAN) : null;
+}
+
+/**
+ * Return the type of each parameter's argument in a call to builtin `name`, in parameter order:
+ * `infer`'s type for a given argument, `undefined` for one the call leaves out; `null` when the
+ * arguments don't bind (`checkCalls` reports that).
+ */
+function argumentTypes(name: string, callSuffix: Tree, infer: (node: ExprNode) => Type | null): ArgType[] | null {
+  const args = callSuffix.children as Tree[];
+  const positional = args.filter((arg) => arg.children.length === 1).map((arg) => arg.children[0]!);
+  const keywords = new Map(
+    args.filter((arg) => arg.children.length === 2).map((arg) => [String(arg.children[0]), arg.children[1]!]),
+  );
+  const bound = bindArguments(TEMPLATE_FNS.get(name)!, positional, keywords);
+  if (typeof bound === "string") return null;
+  return bound.map((arg) => (arg instanceof Tree || arg instanceof Token ? infer(arg) : undefined));
 }
 
 /** Return the type of reading `steps` from a value of type `typ`, if proven; a `?.` step makes it `Optional`. */

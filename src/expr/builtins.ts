@@ -23,7 +23,7 @@
 
 import { reprText } from "../diagnostics.ts";
 import { FileRef, InboxRef, MemoryRef, Type, type Value, ValueKind } from "../typesys/index.ts";
-import { fromHost, valueRepr, writeAsJson, writeAsText } from "../typesys/values.ts";
+import { fromHost, isListKind, valueRepr, writeAsJson, writeAsText } from "../typesys/values.ts";
 import { uncallableReason } from "./grammar.ts";
 
 /** One parameter of a builtin; one with an own `default` is optional. */
@@ -267,6 +267,191 @@ function replace(s: Value, old: Value, replacement: Value): string {
 }
 registerTemplateFn("replace", { params: [{ name: "s" }, { name: "old" }, { name: "new" }], call: replace });
 
+// --- Conversions --- //
+
+// The whitespace `int()` and `float()` skip around a number: Python's set without U+001C to
+// U+001F, which Python's number parser doesn't skip.
+const SPACE = "[\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*";
+// ASCII digits, with single underscores between them.
+const DIGITS = "[0-9](?:_?[0-9])*";
+// Python's `int()` text in base 10.
+const INT_TEXT = new RegExp(`^${SPACE}([+-]?)(${DIGITS})${SPACE}$`);
+// Python's `float()` text: digits with an optional fraction and exponent, or `inf`, `infinity`
+// or `nan` in any case.
+const DECIMAL = `(?:${DIGITS}(?:\\.(?:${DIGITS})?)?|\\.${DIGITS})(?:e[+-]?${DIGITS})?`;
+const FLOAT_TEXT = new RegExp(`^${SPACE}([+-]?)(?:(inf(?:inity)?)|(nan)|(${DECIMAL}))${SPACE}$`, "i");
+
+/**
+ * Return `value` as text, as `${value}` writes it into text: text as is, anything else as
+ * compact JSON.
+ */
+function str(value: Value): string {
+  rejectNull("str", value);
+  // `${x}` refuses a memory too: only an AGENT renders one, as its recall.
+  if (MemoryRef.isMemoryRef(value)) throw new TypeError("str() can't write a memory as text");
+  return writeAsText(value);
+}
+
+/**
+ * Return `value` as an int: text in Python's `int()` syntax (ASCII digits only), a float
+ * truncated toward zero, a bool as 0 or 1.
+ */
+function int(value: Value): bigint {
+  rejectNull("int", value, "0");
+  if (typeof value === "bigint") return value;
+  if (typeof value === "boolean") return value ? 1n : 0n;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new TypeError(`int() can't convert ${valueRepr(value)} to an int`);
+    return BigInt(Math.trunc(value));
+  }
+  if (typeof value !== "string") throw new TypeError(`int() takes str, int, float or bool, got ${kindName(value)}`);
+  const match = INT_TEXT.exec(value);
+  if (match === null) throw new TypeError(`int() can't convert ${valueRepr(value)} to an int`);
+  const digits = BigInt(match[2]!.replaceAll("_", ""));
+  return match[1] === "-" ? -digits : digits;
+}
+
+/**
+ * Return `value` as a float: text in Python's `float()` syntax (ASCII digits only, `inf` but no
+ * `nan`), an int rounded to the nearest float, a bool as 0.0 or 1.0.
+ */
+function float(value: Value): number {
+  rejectNull("float", value, "0.0");
+  if (typeof value === "number") return value;
+  if (typeof value === "boolean") return value ? 1 : 0;
+  if (typeof value === "bigint") {
+    // `Number` rounds a bigint to the nearest float, ties to even, as Python does.
+    const rounded = Number(value);
+    if (!Number.isFinite(rounded)) throw new TypeError("float() got an int too large for a float");
+    return rounded;
+  }
+  if (typeof value !== "string") throw new TypeError(`float() takes str, int, float or bool, got ${kindName(value)}`);
+  const match = FLOAT_TEXT.exec(value);
+  if (match === null) throw new TypeError(`float() can't convert ${valueRepr(value)} to a float`);
+  if (match[3] !== undefined) throw new TypeError(`float() can't convert ${valueRepr(value)}: yian has no NaN`);
+  const sign = match[1] === "-" ? -1 : 1;
+  if (match[2] !== undefined) return sign * Infinity;
+  // The syntax is checked, so `Number` reads only digits, a point and an exponent, and rounds to
+  // the nearest float.
+  return sign * Number(match[4]!.replaceAll("_", ""));
+}
+
+registerTemplateFn("str", { params: [{ name: "x" }], call: str });
+registerTemplateFn("int", { params: [{ name: "x" }], call: int });
+registerTemplateFn("float", { params: [{ name: "x" }], call: float });
+
+// --- Exact float arithmetic --- //
+
+/** Return `[m, e]` with `|x| = m · 2^e` exactly, for a finite `x`. */
+export function floatParts(x: number): [m: bigint, e: number] {
+  const view = new DataView(new ArrayBuffer(8));
+  view.setFloat64(0, x);
+  const bits = view.getBigUint64(0);
+  const field = Number((bits >> 52n) & 0x7ffn);
+  const fraction = bits & ((1n << 52n) - 1n);
+  return field === 0 ? [fraction, -1074] : [fraction | (1n << 52n), field - 1075];
+}
+
+/**
+ * Return the float nearest `num / den` for a non-negative `num` and a positive `den`: ties to
+ * even, subnormals included, `Infinity` past the float range.
+ */
+export function roundQuotient(num: bigint, den: bigint): number {
+  if (num === 0n) return 0;
+  const bitLength = (value: bigint) => value.toString(2).length;
+  // Scale so the integer quotient q has at least 55 bits: num / den = (q + a remainder) · 2^-s.
+  const s = 55 - (bitLength(num) - bitLength(den));
+  const [scaledNum, scaledDen] = s >= 0 ? [num << BigInt(s), den] : [num, den << BigInt(-s)];
+  const q = scaledNum / scaledDen;
+  const sticky = scaledNum % scaledDen !== 0n;
+  const k = bitLength(q);
+  // q's leading bit is worth 2^(k - 1 - s).
+  if (k - 1 - s > 1023) return Infinity;
+  // Keep 53 bits, or fewer for a subnormal, whose lowest bit is worth 2^-1074.
+  const drop = Math.max(k - 53, s - 1074);
+  const rest = q & ((1n << BigInt(drop)) - 1n);
+  const half = 1n << BigInt(drop - 1);
+  let mantissa = q >> BigInt(drop);
+  if (rest > half || (rest === half && (sticky || (mantissa & 1n) === 1n))) mantissa += 1n;
+  // Exact: mantissa <= 2^53 and the scale is a power of two in [2^-1074, 2^971], so only a
+  // mantissa rounded up to 2^53 at the top overflows, to Infinity as IEEE rounding does.
+  return Number(mantissa) * 2 ** (drop - s);
+}
+
+
+/** Return `num / den` rounded to an integer, ties to even, for a non-negative `num` and a positive `den`. */
+function divideHalfEven(num: bigint, den: bigint): bigint {
+  const q = num / den;
+  const twice = (num % den) * 2n;
+  return twice > den || (twice === den && q % 2n === 1n) ? q + 1n : q;
+}
+
+// Past these, `round(x, n)` of a float gives `x`, or a zero with `x`'s sign, as in Python.
+const ROUND_DIGITS_MAX = 323n;
+const ROUND_DIGITS_MIN = -308n;
+
+/**
+ * Round `x` to `n` decimal places, ties to even, exactly on its true value, then to the nearest
+ * float, as Python's `round(x, n)` does: `round(2.675, 2)` is `2.67`, since the float 2.675 is a
+ * little below it.
+ */
+function roundFloat(x: number, n: bigint): number {
+  if (!Number.isFinite(x) || x === 0 || n > ROUND_DIGITS_MAX) return x;
+  if (n < ROUND_DIGITS_MIN) return x < 0 ? -0 : 0;
+  const [m, e] = floatParts(x);
+  const scale = 10n ** (n < 0n ? -n : n);
+  let num = n < 0n ? m : m * scale;
+  let den = n < 0n ? scale : 1n;
+  if (e >= 0) num <<= BigInt(e);
+  else den <<= BigInt(-e);
+  const q = divideHalfEven(num, den);
+  const rounded = n < 0n ? roundQuotient(q * scale, 1n) : roundQuotient(q, scale);
+  if (rounded === Infinity) throw new TypeError(`round() of ${valueRepr(x)} is too large for a float`);
+  return x < 0 ? -rounded : rounded;
+}
+
+/** Round the int `x` to `n` decimal places, ties to even: itself for `n >= 0`. */
+function roundInt(x: bigint, n: bigint): bigint {
+  if (n >= 0n) return x;
+  const size = x < 0n ? -x : x;
+  // `size < 10^digits`, so past `digits` places it rounds to 0 without building the power.
+  if (-n > BigInt(size.toString().length)) return 0n;
+  const scale = 10n ** -n;
+  const q = divideHalfEven(size, scale) * scale;
+  return x < 0n ? -q : q;
+}
+
+/** Return `x` rounded to a whole number, ties to even. */
+function roundToEven(x: number): number {
+  const floor = Math.floor(x);
+  // Exact: below 2^52 the fraction is representable, and above it every float is whole.
+  const fraction = x - floor;
+  if (fraction !== 0.5) return fraction < 0.5 ? floor : floor + 1;
+  return floor % 2 === 0 ? floor : floor + 1;
+}
+
+/**
+ * Round `x` as Python's `round` does, ties to even: with `n` null, to an int; with `n`, to `n`
+ * decimal places (negative `n` rounds to tens, hundreds, ...), giving a float for a float `x`
+ * and an int for an int.
+ */
+function round(x: Value, n: Value): bigint | number {
+  rejectNull("round", x, "0");
+  const value = typeof x === "boolean" ? BigInt(x) : x;
+  if (typeof value !== "bigint" && typeof value !== "number") {
+    throw new TypeError(`round() takes a number, got ${kindName(x)}`);
+  }
+  if (n === null) {
+    if (typeof value === "bigint") return value;
+    if (!Number.isFinite(value)) throw new TypeError(`round() can't round ${valueRepr(value)} to an int`);
+    return BigInt(roundToEven(value));
+  }
+  const places = typeof n === "boolean" ? BigInt(n) : n;
+  if (typeof places !== "bigint") throw new TypeError(`round() takes int for n, got ${kindName(n)}`);
+  return typeof value === "bigint" ? roundInt(value, places) : roundFloat(value, places);
+}
+registerTemplateFn("round", { params: [{ name: "x" }, { name: "n", default: null }], call: round });
+
 /** Return the length of text (code points) or of a list (items). */
 function len(value: Value): bigint {
   rejectNull("len", value, "[]");
@@ -278,17 +463,82 @@ registerTemplateFn("len", { params: [{ name: "obj" }], call: len });
 
 const STR = Type.scalar(ValueKind.STRING);
 const BOOL = Type.scalar(ValueKind.BOOLEAN);
+const INT = Type.scalar(ValueKind.INTEGER);
+const FLOAT = Type.scalar(ValueKind.NUMBER);
 
-// Each shipped builtin's result type, keyed by its stored entry, so a host that registers another
-// function under a shipped name gets no result type, and a prompt may call it. Typedef names are
-// PascalCase, so no typedef can take one of these names.
-const SHIPPED = new Map<TemplateFn | undefined, { name: string; type: Type }>(
+/** An argument at load: its inferred type, `null` when unknown, or `undefined` when the call leaves it out. */
+export type ArgType = Type | null | undefined;
+
+// The kind name (as `kindName` gives it) of a non-null value of each scalar kind.
+const KIND_NAMES: ReadonlyMap<ValueKind, string> = new Map([
+  [ValueKind.STRING, "str"],
+  [ValueKind.DATE, "str"],
+  [ValueKind.DATETIME, "str"],
+  [ValueKind.INTEGER, "int"],
+  [ValueKind.NUMBER, "float"],
+  [ValueKind.BOOLEAN, "bool"],
+  [ValueKind.FILE, "file"],
+  [ValueKind.INBOX, "inbox"],
+  [ValueKind.MEMORY, "memory"],
+]);
+
+/**
+ * Return the kinds (as `kindName` names them) a non-null value of `typ` may have: none for
+ * `None`; `null` when `typ` doesn't tell (`Any`, an untyped `object`).
+ */
+export function valueKinds(typ: Type): ReadonlySet<string> | null {
+  if (typ.members !== undefined) {
+    const kinds = new Set<string>();
+    for (const member of typ.members) {
+      const each = valueKinds(member);
+      if (each === null) return null;
+      for (const kind of each) kinds.add(kind);
+    }
+    return kinds;
+  }
+  if (typ.kind === ValueKind.NONE) return new Set();
+  if (isListKind(typ.kind)) return new Set(["list"]);
+  if (typ.kind === ValueKind.OBJECT) return typ.fields !== undefined ? new Set(["record"]) : null;
+  const kind = KIND_NAMES.get(typ.kind);
+  return kind === undefined ? null : new Set([kind]);
+}
+
+/** Whether every non-null value of `typ` is an int or a bool; `false` when `typ` is unknown. */
+function intLike(typ: ArgType): boolean {
+  const kinds = typ ? valueKinds(typ) : null;
+  return kinds !== null && kinds.size > 0 && [...kinds].every((kind) => kind === "int" || kind === "bool");
+}
+
+/** Whether every non-null value of `typ` is a float; `false` when `typ` is unknown. */
+function floatLike(typ: ArgType): boolean {
+  const kinds = typ ? valueKinds(typ) : null;
+  return kinds !== null && kinds.size === 1 && kinds.has("float");
+}
+
+/**
+ * `round(x)` gives an int; `round(x, n)` an int for an int `x` and a float for a float `x`. A
+ * null `n` is left out, so an `n` that may be null leaves a float `x`'s result unknown.
+ */
+function roundType([x, n]: readonly ArgType[]): Type | null {
+  if (n === undefined || (n !== null && valueKinds(n)?.size === 0) || intLike(x)) return INT;
+  const nNeverNull = n !== null && !n.nullable && n.members === undefined && valueKinds(n) !== null;
+  return nNeverNull && floatLike(x) ? FLOAT : null;
+}
+
+/** How a builtin's result type follows from its arguments' types, in parameter order. */
+type ResultType = (args: readonly ArgType[]) => Type | null;
+
+// Each shipped builtin's result type, or how its arguments' types give it, keyed by its stored
+// entry, so a host that registers another function under a shipped name gets no result type,
+// and a prompt may call it. Typedef names are PascalCase, so no typedef can take one of these
+// names.
+const SHIPPED = new Map<TemplateFn | undefined, { name: string; type: Type | ResultType }>(
   Object.entries({
     render_as_json: STR,
     join: STR,
     upper: STR,
     lower: STR,
-    len: Type.scalar(ValueKind.INTEGER),
+    len: INT,
     startswith: BOOL,
     endswith: BOOL,
     split: new Type({ kind: ValueKind.LIST_STRING, element: STR }),
@@ -296,6 +546,10 @@ const SHIPPED = new Map<TemplateFn | undefined, { name: string; type: Type }>(
     lstrip: STR,
     rstrip: STR,
     replace: STR,
+    str: STR,
+    int: INT,
+    float: FLOAT,
+    round: roundType,
   }).map(([name, type]) => [TEMPLATE_FNS.get(name), { name, type }]),
 );
 
@@ -310,6 +564,7 @@ const PROMPT_BUILTINS: ReadonlySet<string> = new Set([
   "lstrip",
   "rstrip",
   "replace",
+  "str",
 ]);
 
 /**
@@ -322,9 +577,26 @@ export function isNonPromptBuiltin(name: string): boolean {
 }
 
 /**
- * Return the type builtin `name` always returns (`int` for the shipped `len`, `str` for `upper`,
- * ...), `null` for an unknown name or a host function registered under the name.
+ * Return whether `fn` is a builtin shipped here, whose result is a yian value as it is: a float
+ * stays a float even when whole, where a host function's `2.0` reads as the int `2`.
  */
-export function builtinResultType(name: string): Type | null {
-  return SHIPPED.get(TEMPLATE_FNS.get(name))?.type ?? null;
+export function isShipped(fn: TemplateFn): boolean {
+  return SHIPPED.has(fn);
+}
+
+/**
+ * Return the type a call to builtin `name` gives (`int` for the shipped `len`, `str` for `upper`,
+ * ...), `null` for an unknown name, a host function registered under the name, or a result the
+ * argument types don't decide.
+ *
+ * @param args Gives each parameter's argument type, in parameter order (`ArgType`), or `null`
+ *   when the arguments don't bind; called only for a result that depends on them. Left out, only
+ *   a result that doesn't depend on the arguments is given.
+ */
+export function builtinResultType(name: string, args: (() => readonly ArgType[] | null) | null = null): Type | null {
+  const type = SHIPPED.get(TEMPLATE_FNS.get(name))?.type;
+  if (type === undefined) return null;
+  if (type instanceof Type) return type;
+  const bound = args?.() ?? null;
+  return bound === null ? null : type(bound);
 }

@@ -464,14 +464,14 @@ test("a parent cannot construct a child's typedef", async () => {
 // ---------- names that are not constructors ----------
 
 test("a builtin type name in a binding is not a conversion", () => {
-  const text = consumer("${int(d.output)}");
+  const text = consumer("${bool(d.output)}");
 
   const error = loadError(() => loadedNodes(text));
 
   expect(error.message).toContain(
-    "unknown expression function 'int'; types in expressions are typedef names; `int(...)` is not a conversion",
+    "unknown expression function 'bool'; types in expressions are typedef names; `bool(...)` is not a conversion",
   );
-  expect(errorLine(error)).toBe(lineOf(text, "x: ${int"));
+  expect(errorLine(error)).toBe(lineOf(text, "x: ${bool"));
 });
 
 test("Message, a built-in type, is not a constructor", () => {
@@ -482,12 +482,12 @@ test("Message, a built-in type, is not a constructor", () => {
 });
 
 test("a builtin type name in a case when is not a conversion", () => {
-  const text = CASE_FLOW.replace("Buy(d.output).conviction > 0.4", "int(d.output) > 0");
+  const text = CASE_FLOW.replace("Buy(d.output).conviction > 0.4", "bool(d.output) > 0");
 
   const error = loadError(() => loadedNodes(text));
 
-  expect(error.message).toContain("case node 'route' cases[0].when: unknown expression function 'int'; types");
-  expect(errorLine(error)).toBe(lineOf(text, "int(d.output)"));
+  expect(error.message).toContain("case node 'route' cases[0].when: unknown expression function 'bool'; types");
+  expect(errorLine(error)).toBe(lineOf(text, "bool(d.output)"));
 });
 
 test("an unknown name in a case when is an unknown function", () => {

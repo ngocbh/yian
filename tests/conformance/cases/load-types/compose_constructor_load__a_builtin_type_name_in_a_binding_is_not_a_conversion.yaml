@@ -20,7 +20,7 @@ flow: |
     c:
       kind: code
       input:
-        x: ${int(d.output)}
+        x: ${bool(d.output)}
       code: |
         return inputs["x"]
   output: ${c.output}
@@ -28,7 +28,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'c: unknown expression function ''int''; types in expressions are typedef names; `int(...)` is not a conversion'
+      message: 'c: unknown expression function ''bool''; types in expressions are typedef names; `bool(...)` is not a conversion'
       frames:
       - label: flow.yaml
-        range: [21, 10, 21, 26]
+        range: [21, 10, 21, 27]

@@ -20,7 +20,7 @@ flow: |
     route:
       kind: case
       cases:
-        - when: int(d.output) > 0
+        - when: bool(d.output) > 0
           then: strong
       else: weak
     strong:
@@ -34,7 +34,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'case node ''route'' cases[0].when: unknown expression function ''int''; types in expressions are typedef names; `int(...)` is not a conversion'
+      message: 'case node ''route'' cases[0].when: unknown expression function ''bool''; types in expressions are typedef names; `bool(...)` is not a conversion'
       frames:
       - label: flow.yaml
-        range: [21, 15, 21, 32]
+        range: [21, 15, 21, 33]

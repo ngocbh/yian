@@ -143,8 +143,8 @@ describe("resolution", () => {
 
   test("resolveConstructorType takes a typedef and refuses a builtin with the hint", () => {
     expect(typeEquals(resolveConstructorType("Buy", REG), BUY)).toBe(true);
-    expect(typeCheckError(() => resolveConstructorType("int", REG)).message).toBe(
-      "unknown expression function 'int'; types in expressions are typedef names; `int(...)` is not a conversion",
+    expect(typeCheckError(() => resolveConstructorType("bool", REG)).message).toBe(
+      "unknown expression function 'bool'; types in expressions are typedef names; `bool(...)` is not a conversion",
     );
   });
 

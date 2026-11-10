@@ -119,6 +119,8 @@ function fieldsOf(desc: CaseDescriptor): Record<string, unknown> {
     elseStyle: _elseStyle,
     thenTags: _thenTags,
     elseTag: _elseTag,
+    thenIncludes: _thenIncludes,
+    elseInclude: _elseInclude,
     whenOrigins: _whenOrigins,
     onOrigin: _onOrigin,
     ...fields

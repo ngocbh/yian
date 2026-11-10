@@ -71,12 +71,17 @@ export type OccurrencePath = readonly OccurrenceStep[];
 /**
  * The file a typed `!include(T) PATH` value was read from: `T` as written, which is the value's
  * tag, and the path as written. `data` is the file read as a YAML value, whose ranges locate a
- * part of the value in the file; `null` for `!include(str)`, whose value is the file's text.
+ * part of the value in the file; `null` for a `T` whose values are text, whose value is the file's
+ * text.
  */
 export interface TypedInclude {
   readonly type: string;
   readonly path: string;
   readonly data: SourceDocument | null;
+  /** The file's text, which is the value, for a `T` whose values are text; `null` with `data`. */
+  readonly text: string | null;
+  /** The `!include(T) PATH` as written, which a message quotes in place of the value. */
+  readonly written: string;
 }
 
 /** One YAML node that carries a local tag. */

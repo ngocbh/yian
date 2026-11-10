@@ -896,7 +896,7 @@ function build(
     }
     if (value !== undefined) {
       const id = graft(node, value, type, range, written);
-      typedIncludes.set(id, Object.freeze({ type, path, data: value }));
+      typedIncludes.set(id, Object.freeze({ type, path, written, data: value, text: null }));
       return id;
     }
     const id = reserve(node, text!);
@@ -911,7 +911,7 @@ function build(
       included: false,
       verbatim: true,
     });
-    typedIncludes.set(id, Object.freeze({ type, path, data: null }));
+    typedIncludes.set(id, Object.freeze({ type, path, written, data: null, text: text! }));
     return id;
   };
   /**

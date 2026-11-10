@@ -1445,7 +1445,7 @@ export async function loadFlowFile(
   await checkFlowCode(staged.compiled, code);
   // Defs, inline bodies and the root are assembled now, so every slot has read its tags; a
   // `uses:` child checks its own document in its own load.
-  rejectUnreadTags(document, scope.catalogBuilder.consumedTags, diagnostics);
+  rejectUnreadTags(document, scope.catalogBuilder.consumedTags, diagnostics, { registry });
   return replaceFlow(scope.finalize(staged), { importDepth: scope.importDepth });
 }
 

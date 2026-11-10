@@ -91,6 +91,8 @@ interface Branch {
   readonly style: ScalarStyle | null;
   /** Its local YAML tag, such as `"int"`, or `null`. */
   readonly tag: string | null;
+  /** The `!include(T) PATH` it was read with, as written, or `null`. */
+  readonly include: string | null;
   /** The branch's range, else the case's range. */
   readonly range: SourceRange | null;
   /**
@@ -170,6 +172,7 @@ function branches(desc: CaseDescriptor): Branch[] {
       value: spec["then"],
       style: nth(desc.thenStyles, index),
       tag: nth(desc.thenTags, index),
+      include: nth(desc.thenIncludes, index),
       range: nth(desc.thenRanges, index) ?? desc.range,
       entryBase: `${desc.id}_then_${index}`,
     });
@@ -180,6 +183,7 @@ function branches(desc: CaseDescriptor): Branch[] {
       value: desc.else_,
       style: desc.elseStyle,
       tag: desc.elseTag,
+      include: desc.elseInclude,
       range: desc.fieldRanges.get(siteKey("field", "else")) ?? desc.range,
       entryBase: `${desc.id}_else`,
     });
@@ -214,6 +218,11 @@ function checkBranch(
 ): void {
   const { caseId, output, descriptors, registry, inputTypes, diagnostics } = options;
   const host = `case node ${reprText(caseId)} ${branch.label}`;
+  if (branch.include !== null) {
+    // A value a file holds goes in its own entry read the same way, never spelled out.
+    const entry = freeId(branch.entryBase, descriptors);
+    throw valueError(host, branch, entry, `\`${entry}: ${branch.include}\``, diagnostics);
+  }
   const value = branch.value;
   if (typeof value === "string" && !QUOTED_STYLES.has(branch.style)) {
     if (CALL_HEAD.test(value.trim())) {

@@ -85,6 +85,10 @@ export class ToolDescriptor extends NodeDescriptor {
   );
   static override readonly required = this.require("tool_id");
   static override readonly bindingFields: readonly string[] = ["inputs"];
+  static override readonly writtenFields = [
+    ...NodeDescriptor.writtenFields,
+    ["adaptive_questions.prompt", "a template"],
+  ] as const;
 
   /** The tool, looked up in the run's `ToolSet`: a bare id, or a group's tool. */
   readonly toolRef: ToolRef;

@@ -28,6 +28,7 @@ import type { Env } from "../../src/defaults.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { MemoryBase, type MemoryContract, type MemorySession } from "../../src/memory/base.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
+import { CodeNode } from "../../src/nodes/code/node.ts";
 import { runFlow } from "../../src/run.ts";
 import type { FlowSource } from "../../src/runtime/log.ts";
 import { loadErrorAsync } from "../helpers/declarations.ts";
@@ -581,7 +582,7 @@ test.each([
     7,
     "`output:` declares a type",
   ],
-  ["a field that takes no tag", "nodes: {}\noutput: done\nversion: !include(str) a.txt\n", 5, "`version:` is none of these"],
+  ["a field that takes no tag", "nodes: {}\noutput: done\nversion: !include(list(str)) a.txt\n", 5, "`version:` is not one"],
 ])("!include(T) on %s fails at load", async (_, yaml, line, words) => {
   write({ "a.txt": "str" });
   const head = yaml.startsWith("nodes:") || yaml.startsWith("typedefs:") ? "id: f\nname: f\n" : "id: f\nname: f\nnodes: {}\n";
@@ -738,7 +739,7 @@ test("a steer render !include(str) reads fails at the tag: a render is a templat
     "    output: str\noutput: ${a.output}\n";
   const { message, line } = await failure(load(flow));
   expect(message).toBe(
-    "`!include(str)` file 'render.md': `render:` is a template over each steer event; read the file with `!include`",
+    "`!include(str)` file 'render.md': `render:` holds a template over each steer event, written in the flow; a file can't give it",
   );
   expect(line).toBe(11);
 });
@@ -787,4 +788,82 @@ test("a prompt read with a text T other than str is sent as written", async () =
   write({ "ask.md": "Say $$ for ${question}." });
   const prompts = "    prompt: !include(Optional(str)) ask.md\n";
   expect((await sentMessages(await load(agentFlow(prompts)))).at(-1)).toEqual(["user", "Say $$ for ${question}."]);
+});
+
+// ---------- !include(T): text fields and fields written in the flow ----------
+
+test("text fields take the exact text a text !include(T) reads, as they take !include's", async () => {
+  write({ "code.ts": 'return inputs.x + "$$" + `${inputs.x}`;\r\n', "d.md": "About ${x}\n", "n.txt": "Step $$1" });
+  const flow = await load(
+    "id: f\nname: f\ndescription: !include(str) d.md\ntypedefs:\n  Text: str\nnodes:\n  c:\n    kind: code\n" +
+      "    node_name: !include(Text) n.txt\n    input:\n      x: hi\n    output: str\n    code: !include(str) code.ts\n" +
+      "output: ${c.output}\n",
+  );
+  expect(await outputOf(flow)).toBe("hi$$hi");
+  const code = flow.compiled.nodes.get("c") as CodeNode;
+  expect([code.code, code.title]).toEqual(['return inputs.x + "$$" + `${inputs.x}`;\r\n', "Step $$1"]);
+});
+
+test.each([
+  ["names no type", "Txt", "x", "'description': `!include(Txt)` file 'd.md': `Txt` is not a type"],
+  ["doesn't fit T", "Literal(a)", "b", "'description': `!include(Literal(a))` file 'd.md' is not a valid Literal(a)"],
+])("text a text !include(T) reads for a text field fails at the tag when T %s", async (_, type, text, start) => {
+  write({ "d.md": text });
+  const { message, line } = await failure(load(`id: f\nname: f\ndescription: !include(${type}) d.md\nnodes: {}\noutput: done\n`));
+  expect(message).toStartWith(start);
+  expect(line).toBe(3);
+});
+
+/** A map node `m` over the flow's def `d`, its `over:` written as `over`. */
+const mapFlow = (over: string) =>
+  "id: f\nname: f\ndefs:\n  d:\n    input:\n      item: !str\n    nodes: {}\n    output: ${input.item}\n" +
+  `nodes:\n  m:\n    kind: map\n    call: d\n    over: ${over}\noutput: \${m.output}\n`;
+
+test.each([
+  ["a case's when:", "input:\n  x: !int\nnodes:\n  g:\n    kind: case\n    cases:\n      - when: !include(str) c.txt\n        then: a\n    else: a\n  a: !str done\noutput: ${a.output}\n", 9, "`when:` holds a condition"],
+  ["a case's on:", "input:\n  x: !str\nnodes:\n  g:\n    kind: case\n    on: !include(str) c.txt\n    cases:\n      - when: a\n        then: a\n    else: a\n  a: !str done\noutput: ${a.output}\n", 8, "`on:` holds the value a case matches"],
+  ["a case's cases:", "nodes:\n  g:\n    kind: case\n    cases: !include(list(object)) c.yaml\n    else: a\n  a: !str done\noutput: ${a.output}\n", 6, "`cases:` holds `when:`, a condition"],
+  ["a node's asserts:", "nodes:\n  c:\n    kind: code\n    code: return 1\n    output: int\n    asserts:\n      - !include(str) c.txt\noutput: ${c.output}\n", 9, "`asserts:` holds assertions"],
+  ["a flow's asserts:", "nodes: {}\noutput: done\nasserts:\n  - !include(str) c.txt\n", 6, "`asserts:` holds assertions"],
+])("an !include(T) in %s, written in the flow, fails first, at the tag", async (_, yaml, line, words) => {
+  write({ "c.txt": "${HOME} > 1", "c.yaml": "[{when: '${HOME}', then: a}]" });
+  const { message, label, line: at } = await failure(load(`id: f\nname: f\n${yaml}`));
+  expect(message).toMatch(/^`!include\([^`]*\)` file 'c\.(txt|yaml)': /);
+  expect(message).toContain(`${words}, written in the flow; a file can't give it`);
+  expect([label, at]).toEqual(["flow.yaml", line]);
+});
+
+test.each(["!include(list(str)) h.yaml", "!include(str) h.txt"])(
+  "a map's over: %s fails first, at the tag, whatever the file holds",
+  async (over) => {
+    write({ "h.yaml": "- ${HOME}\n", "h.txt": "${HOME}" });
+    const { message, line } = await failure(load(mapFlow(over)));
+    expect(message).toEndWith("`over:` holds a list or a reference, written in the flow; a file can't give it");
+    expect(line).toBe(13);
+  },
+);
+
+test("a case branch an !include(T) reads is shown as the entry to write with the !include, not the text", async () => {
+  write({ "a.md": "the whole file ${HOME}" });
+  const flow =
+    "id: f\nname: f\ninput:\n  x: !int\nnodes:\n  g:\n    kind: case\n    cases:\n      - when: input.x > 1\n" +
+    "        then: !include(str) a.md\n    else: b\n  b: !str no\noutput: ${b.output}\n";
+  const { message, line } = await failure(load(flow));
+  expect(message).toBe(
+    "case node 'g' then: a branch names a node or calls a flow; put the value in its own entry in `nodes:` " +
+      "and name it: `g_then_0: !include(str) a.md` and `then: g_then_0`",
+  );
+  expect(line).toBe(10);
+});
+
+test.each([
+  ["steer_inbox: !include(str) s.txt", "`steer_inbox:` holds an inbox reference"],
+  ["steer_inbox:\n      from: ${input.s}\n      render: !include(str) s.txt", "`render:` holds a template over each steer event"],
+  ["steer_inbox: !include(object) s.yaml", "`steer_inbox:` holds `render:`, a template over each steer event"],
+])("an agent's %p fails first, at the tag", async (steer, words) => {
+  write({ "s.txt": "${input.s}", "s.yaml": "{from: '${input.s}'}" });
+  const flow =
+    "id: f\nname: f\nllm_config: {provider: openai, model: gpt-test}\ninput:\n  s: !Inbox(str)\nnodes:\n  a:\n" +
+    `    kind: agent\n    ${steer}\n    prompt: hi\n    output: str\noutput: \${a.output}\n`;
+  expect((await failure(load(flow))).message).toContain(`${words}, written in the flow; a file can't give it`);
 });

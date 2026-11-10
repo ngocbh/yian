@@ -507,8 +507,7 @@ function promptTextCursors(cursor: SourceCursor): SourceCursor[] {
 }
 
 /**
- * Refuse a value `!include(T)` read as YAML, for a `T` that isn't text, as prompt text, and any
- * `!include(T)` as a `steer_inbox:` render, which is a template over each event.
+ * Refuse a value `!include(T)` read as YAML, for a `T` that isn't text, as prompt text.
  *
  * @throws LoadError at the first one.
  */
@@ -520,16 +519,6 @@ function rejectTypedPromptText(cursor: SourceCursor, diagnostics: LoadDiagnostic
       `${includeFile(include.path, include.type)}: \`${field.keyText}:\` takes text; read the file with ` +
         "`!include(str)`",
       { range: field.range },
-    );
-  }
-  const steer = cursor.has("steer_inbox") ? cursor.child("steer_inbox") : null;
-  const render = steer !== null && isRecord(steer._valueView()) && steer.has("render") ? steer.child("render") : null;
-  const include = render?.typedInclude ?? null;
-  if (include !== null) {
-    throw diagnostics.error(
-      `${includeFile(include.path, include.type)}: \`render:\` is a template over each steer event; read ` +
-        "the file with `!include`",
-      { range: render!.range },
     );
   }
 }
@@ -649,6 +638,11 @@ export class AgentDescriptor extends NodeDescriptor {
   );
   static override readonly required = this.require();
   static override readonly bindingFields: readonly string[] = ["inputs"];
+  static override readonly writtenFields = [
+    ...NodeDescriptor.writtenFields,
+    ["steer_inbox.render", "a template over each steer event"],
+    ["steer_inbox", "an inbox reference"],
+  ] as const;
 
   /** The prompt template, `Verbatim` text or list prompt; `null` when absent. */
   readonly prompt: PromptText | readonly PromptItem[] | null;
@@ -760,18 +754,6 @@ export class AgentDescriptor extends NodeDescriptor {
     }
     if (!isList(desc.prompt)) return desc as InstanceType<T>;
     return desc.replace({ prompt: readPromptList(nodeId, desc, cursor, diagnostics) }) as InstanceType<T>;
-  }
-
-  /** Record the tag of each prompt text `!include(str)` read as read, so the load keeps it. */
-  override withSourceOrigins(
-    cursor: SourceCursor,
-    options: { sitePath: readonly (string | number)[]; catalogBuilder: SourceCatalogBuilder },
-  ): this {
-    for (const field of promptTextCursors(cursor)) {
-      const definitionId = field.typedInclude?.data === null ? field.tagDefinitionId : null;
-      if (definitionId !== null) options.catalogBuilder.consumedTags.add(definitionId);
-    }
-    return super.withSourceOrigins(cursor, options);
   }
 
   /**

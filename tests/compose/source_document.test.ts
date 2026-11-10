@@ -1024,7 +1024,7 @@ test("an !include(T) given its value reads as that value, or a text T as the tex
   const [a, b, c] = ["a", "b", "c"].map((key) => document.root.child(key));
 
   expect([a!.value, a!.tag, a!.verbatim, a!.included, a!.scalarText]).toEqual(["$$\r\n", "Text", true, false, "!include(Text) a.txt"]);
-  expect(a!.typedInclude).toEqual({ type: "Text", path: "a.txt", data: null });
+  expect(a!.typedInclude).toEqual({ type: "Text", path: "a.txt", written: "!include(Text) a.txt", data: null, text: "$$\r\n" });
   expect([b!.value, b!.tag, b!.typedInclude?.path]).toEqual([["x", 1n], "list(str)", "b.yaml"]);
   const [x, one] = [b!.child(0), b!.child(1)];
   expect([x.verbatim, x.tag, one.verbatim]).toEqual([true, null, false]);

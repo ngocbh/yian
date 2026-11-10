@@ -63,6 +63,7 @@ import {
   type SourceCursor,
   type SourceDocument,
   SourceSyntaxError,
+  type TaggedNode,
   type TypedInclude,
 } from "../source/index.ts";
 import { CALL_HEAD } from "./directives.ts";
@@ -1093,20 +1094,24 @@ function authoredKey(cursor: SourceCursor): string {
  * (the whole record or a field), a value entry in `nodes:`, or a value inside one; anywhere
  * else it would be silently ignored. Tags reached only through top-level `x-*` keys are exempt.
  * Tags under `typedefs:` and on mapping keys get their own messages. Keys are spelled as
- * written, so `on:` stays `on:`.
+ * written, so `on:` stays `on:`. The text an `!include(T)` of a text `T` reads is a text value
+ * anywhere `!include` gives one, so no slot need read it; with `options.registry`, its `T` must
+ * name a type its text fits.
  *
  * @param document The loaded document.
  * @param consumed Definition ids of the tags slot readers read.
  * @param diagnostics Factory for located load errors.
  * @param options.typedefsOnly Check only tags under `typedefs:`, which are read before any
  *   slot. Defaults to `false`.
+ * @param options.registry The flow's typedefs, which an unread `!include(T)` text's `T` resolves
+ *   against.
  * @throws LoadError at the first offending tag, in document order.
  */
 export function rejectUnreadTags(
   document: SourceDocument,
   consumed: ReadonlySet<number>,
   diagnostics: LoadDiagnostics,
-  options: { typedefsOnly?: boolean } = {},
+  options: { typedefsOnly?: boolean; registry?: TypeRegistry } = {},
 ): void {
   const typedefsOnly = options.typedefsOnly ?? false;
   for (const node of document.taggedNodes({ skipTopLevel: isExtensionKey })) {
@@ -1133,12 +1138,19 @@ export function rejectUnreadTags(
     if (consumed.has(node.definitionId)) continue;
     const where = key !== null ? `\`${key}:\`` : "the document root";
     if (node.include !== null) {
-      const { type, path: file } = node.include;
+      const { type, path: file, data } = node.include;
+      // Text is a text value wherever `!include` gives one; only its type is left to check.
+      if (data === null) {
+        if (options.registry !== undefined) {
+          checkIncludedText(node, key ?? "value", options.registry, diagnostics);
+        }
+        continue;
+      }
       throw diagnostics.error(
-        `${includeFile(file, type)}: a value read with \`!include(T)\` goes where a tag goes — a flow ` +
+        `${includeFile(file, type)}: a YAML value \`!include(T)\` reads goes where a tag goes — a flow ` +
           "input, a binding, a flow output, an agent variable, an `llm_config` value, a value entry in " +
-          "`nodes:`, or a value inside one — and `!include(str)` text also on an agent's `prompt:`, " +
-          `\`system_prompt:\` or prompt message; ${where} is none of these`,
+          `\`nodes:\`, or a value inside one; ${where} is not one. Elsewhere read the file's text, as ` +
+          "`!include(str)` does",
         { range: node.range },
       );
     }
@@ -1148,6 +1160,60 @@ export function rejectUnreadTags(
         `${where} is not one`,
       { range: node.range },
     );
+  }
+}
+
+/**
+ * Check the text an `!include(T)` read for a text field no slot reads against `T`.
+ *
+ * @throws LoadError at the `!include(T)` when `T` names no type or the text doesn't fit it.
+ */
+function checkIncludedText(
+  node: TaggedNode,
+  label: string,
+  registry: TypeRegistry,
+  diagnostics: LoadDiagnostics,
+): void {
+  const { type, path, text } = node.include!;
+  const typ = readTagType(type, registry, { label, diagnostics, range: node.range, include: path });
+  try {
+    buildValueAs(typ, text);
+  } catch (error) {
+    if (!(error instanceof TypeCheckError)) throw error;
+    throw diagnostics.error(
+      `${reprText(label)}: ${includeFile(path, type)} is not a valid ${type}: ${error.message}`,
+      { range: node.range },
+    );
+  }
+}
+
+/**
+ * Refuse an `!include(T)` on or inside `cursor`, the value of a field that holds `what` written in
+ * the flow, such as a condition, which no file gives.
+ *
+ * @param cursor The field's value, or `null` when absent.
+ * @param key The field as messages name it, such as `when`.
+ * @throws LoadError at the first `!include(T)`, naming its file and the field.
+ */
+export function rejectIncludeIn(
+  cursor: SourceCursor | null,
+  key: string,
+  what: string,
+  diagnostics: LoadDiagnostics,
+): void {
+  const stack = cursor === null ? [] : [cursor];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    const include = current.typedInclude;
+    if (include !== null) {
+      throw diagnostics.error(
+        `${includeFile(include.path, include.type)}: \`${key}:\` holds ${what}, written in the flow; ` +
+          "a file can't give it",
+        { range: current.range },
+      );
+    }
+    const value = current._valueView();
+    if (isRecord(value) || isList(value)) stack.push(...[...current.children()].reverse());
   }
 }
 

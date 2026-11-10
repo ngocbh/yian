@@ -163,8 +163,13 @@ output: ${tutor.output}
   one such value, or holds one that doesn't fit, fails at the tag; the error names the file, the
   line in it and the place in the value, such as `examples[2]`.
 - `${examples}` writes a variable's value as it is, without reading it as a template again.
-- On `prompt:`, `system_prompt:` and a list prompt's messages, only a `T` that reads text works.
-  Anywhere else, `!include(T)` goes only where a tag goes.
+- A `T` that reads text works on any text value, as `!include` does, and gives the text exactly:
+  `prompt:`, `system_prompt:`, a list prompt's messages, `code:`, `description:` and the like.
+  It fails at load where the flow writes a condition, an expression or a template of its own:
+  `when:`, `on:`, `while:`, `until:`, `times:`, `max:`, `asserts:`, a map's `over:`,
+  `steer_inbox:` and its `render:`, and an ask's `adaptive_questions.prompt`. A case's `then:` or
+  `else:` takes it in its own entry in `nodes:`.
+- A `T` that reads YAML goes only where a tag goes.
 - Its path, the root folder, the size cap and the record work as for `!include`.
 
 ### A list prompt

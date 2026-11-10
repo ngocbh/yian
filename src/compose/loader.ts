@@ -773,7 +773,8 @@ function checkHostedIncludes(hosted: ReadonlyMap<string, unknown>, codeRoot: str
     for (const [key, file] of Object.entries(files)) {
       for (const [ref, target] of Object.entries(file.refs)) {
         if (!ref.startsWith(INCLUDE_REF) || !leavesRoot(relative(codeRoot, resolvePath(dir, target)))) continue;
-        throw UNLOCATED_DIAGNOSTICS.error(`${basename(key)}: ${outsideRoot(includeFile(ref.slice(INCLUDE_REF.length)))}`);
+        const file = includeFile(ref.slice(INCLUDE_REF.length));
+        throw UNLOCATED_DIAGNOSTICS.error(`${basename(key)}: ${outsideRoot(file)}`);
       }
     }
   }
@@ -840,7 +841,7 @@ function readIncludedValue(
   fail: (message: string) => LoadError,
 ): SourceDocument {
   const at = (message: string, range: SourceRange | null): LoadError =>
-    fail(range === null ? `${file}: ${message}` : `${file}, line ${range.startLine}, column ${range.startCol}: ${message}`);
+    fail(`${file}${range === null ? "" : `, line ${range.startLine}, column ${range.startCol}`}: ${message}`);
   let value: SourceDocument;
   try {
     value = SourceDocument.parseData(text, path);

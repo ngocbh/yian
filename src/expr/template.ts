@@ -597,7 +597,11 @@ export function rewriteConditionReads(
  * @throws {ExpressionError} On a malformed span, an unresolved reference, a final `null` span
  *   value, an unknown builtin or one that fails, or a value the runtime can't write as text.
  */
-export function renderTemplateRecord(text: string | Verbatim, record: ValueRecord, declared: DeclaredTypes | null = null): string {
+export function renderTemplateRecord(
+  text: string | Verbatim,
+  record: ValueRecord,
+  declared: DeclaredTypes | null = null,
+): string {
   const value = evalTemplate(scanTemplate(text), (names) => resolveInRecord(names, record), {
     mode: ResolveMode.STRICT_RAISE,
     declared,

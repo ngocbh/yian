@@ -525,22 +525,25 @@ function refuseNonPlain(flow: FlowDocument, starts: readonly number[], spanOf: S
   while (stack.length > 0) {
     const node = stack.pop()!;
     if (isAlias(node)) {
-      throw new SourceSyntaxError(`an alias (\`*${node.source}\`) can't be used here; ${fix}`, pointRange(starts, node.range[0]));
+      const at = pointRange(starts, node.range[0]);
+      throw new SourceSyntaxError(`an alias (\`*${node.source}\`) can't be used here; ${fix}`, at);
     }
     const span = spanOf(node);
+    const at = pointRange(starts, span.start);
     if (node.tag !== undefined || span.bare) {
       const tag = writtenTag(node.tag ?? "!");
-      throw new SourceSyntaxError(`a tag (\`${tag}\`) can't be used here; ${fix}`, pointRange(starts, span.start));
+      throw new SourceSyntaxError(`a tag (\`${tag}\`) can't be used here; ${fix}`, at);
     }
     if (node.anchor !== undefined) {
-      throw new SourceSyntaxError(`an anchor (\`&${node.anchor}\`) can't be used here; ${fix}`, pointRange(starts, span.start));
+      throw new SourceSyntaxError(`an anchor (\`&${node.anchor}\`) can't be used here; ${fix}`, at);
     }
     const children: ParsedNode[] = [];
     if (isMap(node)) {
       for (const pair of node.items) {
         const key = pair.key as ParsedNode;
         if (isScalar(key) && isMergeKey(key)) {
-          throw new SourceSyntaxError(`a \`<<:\` merge key can't be used here; ${fix}`, pointRange(starts, key.range[0]));
+          const keyAt = pointRange(starts, key.range[0]);
+          throw new SourceSyntaxError(`a \`<<:\` merge key can't be used here; ${fix}`, keyAt);
         }
         children.push(key);
         if (pair.value !== null) children.push(pair.value as ParsedNode);
@@ -898,7 +901,13 @@ function build(
    * marked `verbatim`. A plain document has no merge, alias or repeated key, so each mapping is
    * one leaf of arcs and each definition is reached once.
    */
-  const graft = (node: AnchoredNode, value: SourceDocument, type: string, range: SourceRange, written: string): number => {
+  const graft = (
+    node: AnchoredNode,
+    value: SourceDocument,
+    type: string,
+    range: SourceRange,
+    written: string,
+  ): number => {
     const offset = definitions.length;
     ids.set(node, offset + value._rootDefinition);
     const shift = (arc: MapArc): MapArc =>

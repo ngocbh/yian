@@ -62,6 +62,7 @@ import type { SourceCursor } from "../source/index.ts";
 import {
   type BuildContext,
   BuildResult,
+  cursorAt,
   NodeDescriptor,
   type NodeDescriptorFields,
   notTextDetail,
@@ -565,11 +566,13 @@ function readPromptList(
     const range = rangeAt(cursor, ["prompt", index]) ?? fieldRange;
     if (range !== null) desc.fieldRanges.set(siteKey("field", `prompt[${index}]`), range);
     if (typeof item === "string") {
-      const itemCursor = rangeAt(cursor, ["prompt", index]) === null ? null : cursor.child("prompt").child(index);
-      if (itemCursor?.verbatim === true) {
-        throw diagnostics.error(`${where}: a prompt list item is \`\${name}\` or \`user:\`/\`assistant:\` text; put the \`!include(str)\` under \`user:\``, {
-          range,
-        });
+      // Quoting the item would quote the whole file.
+      if (cursorAt(cursor, ["prompt", index])?.verbatim === true) {
+        throw diagnostics.error(
+          `${where}: a prompt list item is \`\${name}\` or \`user:\`/\`assistant:\` text; put the ` +
+            "`!include(str)` under `user:`",
+          { range },
+        );
       }
       const name = wholeRefName(item);
       if (name !== null) return { splice: name };
@@ -595,8 +598,7 @@ function readPromptList(
       throw diagnostics.error(`${where}: ${notTextError(`prompt[${index}].${role}`, text)}`, { range: textRange });
     }
     checkWrittenValue(text, `node ${reprText(nodeId)} field 'prompt[${index}].${role}'`, textRange, diagnostics);
-    const textCursor = rangeAt(cursor, ["prompt", index, role]) === null ? null : cursor.child("prompt").child(index).child(role);
-    return { role: role as "user" | "assistant", text: promptText(text, textCursor) };
+    return { role: role as "user" | "assistant", text: promptText(text, cursorAt(cursor, ["prompt", index, role])) };
   });
   const last = items.at(-1)!;
   if ("role" in last && last.role === "assistant") {
@@ -728,12 +730,12 @@ export class AgentDescriptor extends NodeDescriptor {
     rejectTypedPromptText(cursor, diagnostics);
     let desc = super.parse(nodeId, cursor) as AgentDescriptor;
     // Text `!include(str)` read is sent as written.
-    const field = (key: string): SourceCursor | null => (cursor.has(key) ? cursor.child(key) : null);
-    if (typeof desc.prompt === "string" || typeof desc.systemPrompt === "string") {
+    const { prompt, systemPrompt } = desc;
+    if (typeof prompt === "string" || typeof systemPrompt === "string") {
       desc = desc.replace({
-        prompt: typeof desc.prompt === "string" ? promptText(desc.prompt, field("prompt")) : desc.prompt,
+        prompt: typeof prompt === "string" ? promptText(prompt, cursorAt(cursor, ["prompt"])) : prompt,
         systemPrompt:
-          typeof desc.systemPrompt === "string" ? promptText(desc.systemPrompt, field("system_prompt")) : desc.systemPrompt,
+          typeof systemPrompt === "string" ? promptText(systemPrompt, cursorAt(cursor, ["system_prompt"])) : systemPrompt,
       });
     }
     // A `steer_inbox:` mapping's errors and reads point at its `from:` and `render:` values.

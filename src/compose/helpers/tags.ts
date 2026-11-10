@@ -957,7 +957,8 @@ class TaggedValueReader {
       const places = error.path.length > 0 ? [`at \`${pathLabel(label, error.path)}\``] : [];
       const line = includedLine(include, error.path);
       if (line !== null) places.push(`line ${line} of the file`);
-      const message = `${reprText(label)}: ${includeFile(include.path, include.type)} is not a valid ${tag}: ${error.message}`;
+      const file = includeFile(include.path, include.type);
+      const message = `${reprText(label)}: ${file} is not a valid ${tag}: ${error.message}`;
       return places.length === 0 ? message : `${message} (${places.join(", ")})`;
     }
     const text = cursor.scalarText;
@@ -1027,8 +1028,9 @@ function includedLine(include: TypedInclude, path: ValuePath): number | null {
   if (include.data === null) return null;
   let cursor = include.data.root;
   for (const step of path) {
+    const value = cursor._valueView();
     // A missing field's path ends past the value; the line is the record's.
-    if (typeof step === "string" ? !cursor.has(step) : !isList(cursor.value) || step >= cursor.value.length) break;
+    if (typeof step === "string" ? !cursor.has(step) : !isList(value) || step >= value.length) break;
     cursor = cursor.child(step);
   }
   return cursor.range?.startLine ?? null;

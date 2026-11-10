@@ -263,13 +263,21 @@ export function rejectNonText(
  * caller's error falls back to an enclosing range.
  */
 export function rangeAt(cursor: SourceCursor, path: readonly (string | number)[]): SourceRange | null {
+  return cursorAt(cursor, path)?.range ?? null;
+}
+
+/**
+ * Return the value at `path` under `cursor`, or `null` for a path the cursor can't walk (such as
+ * past a recursive alias cut).
+ */
+export function cursorAt(cursor: SourceCursor, path: readonly (string | number)[]): SourceCursor | null {
   try {
     for (const step of path) cursor = cursor.child(step);
   } catch (error) {
     if (error instanceof SourceAccessError) return null;
     throw error;
   }
-  return cursor.range;
+  return cursor;
 }
 
 /**

@@ -6,7 +6,7 @@
  * can traverse into object outputs such as `${x.output.output.ratio}`.
  *
  * Grammar: comparisons (`==` `!=` `<` `<=` `>` `>=` `in` `not in`) and arithmetic over
- * references and literals, combined with `and` / `or` / `not` and parentheses. The same parsed
+ * references and literals, combined with `and` / `or` / `not`, conditionals and parentheses. The same parsed
  * tree feeds the evaluator, conservative type inference, and the reference walkers. Conditions
  * route through the one unified engine; a bare reference with no comparison operator is a
  * truthiness test (not an error). `isinstance(x, T)` checks a value against a type named in the

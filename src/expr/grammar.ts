@@ -395,6 +395,7 @@ type ChainFrame = Extract<Frame, { kind: "chain" }>;
 type CallFrame = Extract<Frame, { kind: "call" }>;
 type SubscriptFrame = Extract<Frame, { kind: "subscript" }>;
 type CompFrame = Extract<Frame, { kind: "comp" }>;
+type CondFrame = Extract<Frame, { kind: "cond" }>;
 
 /** A new tree for an omitted slice bound. */
 const omitted = (): Tree => new Tree("omitted", []);
@@ -589,7 +590,7 @@ function nearestBracket(stack: Frame[]): Frame | undefined {
 }
 
 /** Whether `frame` is a conditional reading its test, which only `else` may end. */
-function readsTest(frame: Frame | undefined): boolean {
+function readsTest(frame: Frame | undefined): frame is CondFrame {
   return frame?.kind === "cond" && frame.test === null;
 }
 
@@ -692,7 +693,7 @@ function parseRaw(text: string): ExprNode {
       value = reduce(stack, value, LEVEL.COND);
       const frame = stack.at(-1);
       if (!readsTest(frame)) cursor.fail(token.startPos, frame?.kind === "comp" ? COMP_ELSE : COND_ELSE);
-      (frame as Extract<Frame, { kind: "cond" }>).test = value;
+      frame.test = value;
       value = null;
       continue;
     }

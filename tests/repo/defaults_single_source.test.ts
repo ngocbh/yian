@@ -114,6 +114,11 @@ const ALLOWED: Record<string, string> = {
     "open nodes past which the YAML parser stops reading, above any YAML nesting limit",
   // Math, language and host constants.
   "expr/expressions.ts: EXACT_LIMIT": "2^53, past which a float is not exact",
+  "expr/builtins.ts: INT64_MIN": "the least 64-bit int, where CPython's sum keeps its running int",
+  "expr/builtins.ts: INT64_MAX": "the greatest 64-bit int, where CPython's sum keeps its running int",
+  "expr/builtins.ts: ROUND_DIGITS_MAX": "CPython's round: past these places a float rounds to itself",
+  "expr/builtins.ts: ROUND_DIGITS_MIN": "CPython's round: past these places a float rounds to zero",
+  "expr/builtins.ts: WHITESPACE": "Python's str.isspace() code points",
   "typesys/json.ts: MAX_SAFE": "the largest safe integer",
   "typesys/json.ts: byCodeUnits": "a comparator's -1 result",
   "tools/mcp.ts: MAX_TIMER_MS": "the longest delay setTimeout takes",

@@ -867,3 +867,19 @@ test.each([
     `    kind: agent\n    ${steer}\n    prompt: hi\n    output: str\noutput: \${a.output}\n`;
   expect((await failure(load(flow))).message).toContain(`${words}, written in the flow; a file can't give it`);
 });
+
+test("a file both a uses: child and read with !include(str) is recorded as decoded, so a replay matches", async () => {
+  const child = outputFlow("done").replace("id: f\nname: f", "id: child\nname: child").replaceAll("\n", "\r\n");
+  write({ "lib/child.yaml": child });
+  const root =
+    "id: f\nname: f\nuses:\n  child: lib/child\nnodes:\n  c:\n    kind: call\n    call: child\n" +
+    "output: {text: !include(str) lib/child.yaml, c: '${c.output}'}\n";
+
+  const loaded = await load(root);
+  const again = await loadFlowSource(loaded.source!, { env: NO_ENV });
+
+  expect(loaded.source!.files["lib/child.yaml"]!.text).toBe(child);
+  expect(await outputOf(loaded)).toEqual({ text: child, c: "done" });
+  expect(await outputOf(again)).toEqual({ text: child, c: "done" });
+  expect(flowFingerprint(again.compiled)).toBe(flowFingerprint(loaded.compiled));
+});

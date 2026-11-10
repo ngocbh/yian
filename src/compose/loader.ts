@@ -633,10 +633,14 @@ export function makeFileResolver(
       }
       from?.refs.set(usesRef(path, version), real);
       return ctx.loadOnce(real, async () => {
-        const text = UTF8.decode(await fsp.readFile(real)).replace(/\r\n?/g, "\n");
-        const file: ReadFile = { text, refs: new Map() };
-        ctx.read.set(real, file);
+        // Kept as decoded, as an `!include` of the same file keeps it, whichever reads it first.
+        let file = ctx.read.get(real);
+        if (file === undefined) {
+          file = { text: UTF8.decode(await fsp.readFile(real)), refs: new Map() };
+          ctx.read.set(real, file);
+        }
         const own = dirname(real);
+        const text = flowText(file.text);
         const document = await parseIncluding(text, basename(real), diskIncludes(own, ctx, file), ctx.memoryTools.keys());
         return loadFlowFile(document, null, [own], ctx, own, file);
       });
@@ -645,6 +649,11 @@ export function makeFileResolver(
       `flow ${reprText(path)} not found on search path ${writeAsText([...searchPaths])}`,
     );
   };
+}
+
+/** Return a flow file's text, as decoded, with its line endings as LF, as a flow reads it. */
+function flowText(text: string): string {
+  return text.replace(/\r\n?/g, "\n");
 }
 
 /** The options `loadFlow` takes. */
@@ -1009,7 +1018,7 @@ export async function loadFlowSource(
 /** Load `source`'s file `key`, its refs resolved through `source` too. */
 async function loadSourceFile(source: FlowSource, key: string, ctx: LoadCtx): Promise<ComposedFlow> {
   const read = sourceIncludes(source, key);
-  const document = await parseIncluding(source.files[key]!.text, basename(key), read, ctx.memoryTools.keys());
+  const document = await parseIncluding(flowText(source.files[key]!.text), basename(key), read, ctx.memoryTools.keys());
   return loadFlowFile(document, sourceResolver(source, key, ctx), null, ctx, resolvePath(source.dir, dirname(key)));
 }
 

@@ -2,10 +2,12 @@
  * The OpenAI Responses API wire format (`POST /responses`).
  *
  * System and user messages become `message` items, an assistant message is replayed from the
- * output items it was parsed from, and tool results become `function_call_output` items. The
- * ChatGPT subscription speaks the same format with its own rules: no stored state, so no
- * message ids; system text moves to `instructions`; encrypted reasoning is included. Every call
- * streams.
+ * output items it was parsed from, and tool results become `function_call_output` items. A
+ * stateless request keeps nothing on the server: system text moves to `instructions`, encrypted
+ * reasoning is included, and reasoning is replayed only with it. The ChatGPT subscription is
+ * always stateless, with rules of its own besides: no message ids, no call status, default
+ * `instructions`. An `openai` block with `store: false` makes the API key route stateless too.
+ * Every call streams.
  *
  * Replies parse into parts whose payloads are replay records, so the next turn can replay them.
  * A reply that failed or stopped early raises `ProviderError`, except a stop at
@@ -97,7 +99,10 @@ export interface OpenAIResponsesOptions {
   provider: string;
   /** A non-secret account id for replay records, or null/absent. */
   account?: string | null;
-  /** The `openai` provider block, merged into every body after yian's fields; copied. */
+  /**
+   * The `openai` provider block, merged into every body after yian's fields; copied. With
+   * `store: false` every request is stateless.
+   */
   block?: JsonObject | null;
   /** Apply the ChatGPT subscription's rules. */
   subscription?: boolean;
@@ -116,12 +121,14 @@ export class OpenAIResponses implements SseProtocol {
   /** The account id for replay records, or `null`. */
   readonly account: string | null;
   /**
-   * Whether the subscription's rules apply: `store: false`, system text in `instructions`,
-   * encrypted reasoning, no message ids.
+   * Whether the subscription's rules apply: stateless requests, default `instructions`, no
+   * message ids, no call status.
    */
   readonly subscription: boolean;
   // Copied so later changes to the caller's block cannot change future bodies.
   readonly #block: JsonObject | null;
+  // Whether no state is kept between turns: on the subscription, or with a block's `store: false`.
+  readonly #stateless: boolean;
   readonly #key: ReplayKey;
   readonly #onReplayDegraded: ((reason: ReplayDegradedReason) => void) | null;
 
@@ -131,6 +138,7 @@ export class OpenAIResponses implements SseProtocol {
     this.account = options.account ?? null;
     this.#block = options.block ? copyJson(options.block) : null;
     this.subscription = options.subscription ?? false;
+    this.#stateless = this.subscription || this.#block?.["store"] === false;
     this.#key = { protocol: PROTOCOL, provider: this.provider, model: this.model, account: this.account };
     this.#onReplayDegraded = options.onReplayDegraded ?? null;
   }
@@ -138,7 +146,12 @@ export class OpenAIResponses implements SseProtocol {
   /**
    * Build the Responses request body: `model`, `input` and `stream: true`, then the tools, the
    * tool choice and `parallel_tool_calls` when set, then `text.format` when the request sets
-   * `outputFormat`, then the provider block, then (on the subscription) its settings.
+   * `outputFormat`, then the provider block, then (when stateless) `store: false`, the encrypted
+   * reasoning in `include`, and `instructions`.
+   *
+   * A stateless request sends the system messages' text as `instructions` instead of in `input`:
+   * each message's parts joined with no separator, the messages with a blank line. With no system
+   * text the subscription sends `DEFAULT_INSTRUCTIONS`, and the API key route no `instructions`.
    *
    * A user message's author is sent as the author wrapper, one `input_text` part per tag; the
    * author tag is escaped in user text and tool output.
@@ -146,8 +159,7 @@ export class OpenAIResponses implements SseProtocol {
    * An assistant message whose replay records can't be used is sent from its neutral fields,
    * and `onReplayDegraded` is called once for it; a throw from the callback propagates.
    *
-   * @throws {TypeError} If a message holds a media part, a part its role cannot carry, or (on
-   *   the subscription) a system message holds anything but text.
+   * @throws {TypeError} If a message holds a media part or a part its role cannot carry.
    */
   buildBody(request: Request): JsonObject {
     const [items, instructions] = this.#input(request.messages);
@@ -159,15 +171,17 @@ export class OpenAIResponses implements SseProtocol {
     if (request.parallelToolCalls !== null) body["parallel_tool_calls"] = request.parallelToolCalls;
     if (request.outputFormat !== null) body["text"] = { format: textFormat(request.outputFormat) };
     if (this.#block) mergeRequestBody(body, this.#block);
-    if (this.subscription) {
-      // Applied after the block so it cannot switch them off: the backend keeps no state, so
-      // every turn must carry the full, replayable conversation.
+    if (this.#stateless) {
+      // Applied after the block so it cannot switch them off: no state is kept, so every turn
+      // must carry the full, replayable conversation.
       body["store"] = false;
       body["stream"] = true;
       const include = body["include"];
       const asked = Array.isArray(include) ? include : [];
       body["include"] = [...new Set([...asked, ENCRYPTED_REASONING])];
-      body["instructions"] = instructions.join("\n\n") || DEFAULT_INSTRUCTIONS;
+      const joined = instructions.join("\n\n");
+      // The subscription endpoint requires instructions; the API does not.
+      if (joined || this.subscription) body["instructions"] = joined || DEFAULT_INSTRUCTIONS;
       delete body["previous_response_id"];
     }
     return body;
@@ -426,7 +440,7 @@ export class OpenAIResponses implements SseProtocol {
   /**
    * Render the conversation as `input` items.
    *
-   * @returns The items, and on the subscription the system messages' texts, which it sends as
+   * @returns The items, and when stateless the system messages' texts, which it sends as
    *   `instructions` instead.
    */
   #input(messages: readonly Message[]): [JsonObject[], string[]] {
@@ -435,8 +449,8 @@ export class OpenAIResponses implements SseProtocol {
     // The call ids of every function call sent so far, kept as items are appended.
     const callIds = new Set<string>();
     for (const message of messages.map((each) => withAuthorWrapper(each))) {
-      if (message.role === "system" && this.subscription) {
-        const text = instructionText(message);
+      if (message.role === "system" && this.#stateless) {
+        const text = instructionText(message, this.subscription);
         if (text) instructions.push(text);
       } else if (message.role === "system" || message.role === "user") {
         const item = inputMessage(message);
@@ -497,7 +511,7 @@ export class OpenAIResponses implements SseProtocol {
    *
    * The whole message falls back to its neutral fields because the API refuses a replayed call
    * or message item whose paired reasoning item is missing; so does a message holding reasoning
-   * without a payload, or (on the subscription) without encrypted content.
+   * without a payload, or (when stateless) without encrypted content.
    *
    * @returns Each part's record fields, `null` for a part without a payload; all `null` when the
    *   message renders neutrally.
@@ -506,8 +520,8 @@ export class OpenAIResponses implements SseProtocol {
   #records(message: Message): (JsonObject | null)[] {
     const records: (JsonObject | null)[] = [];
     let reason: ReplayDegradedReason | null = null;
-    // Set by reasoning that can't be replayed with no record at fault: no payload, or (on the
-    // subscription) no encrypted content.
+    // Set by reasoning that can't be replayed with no record at fault: no payload, or (when
+    // stateless) no encrypted content.
     let unpaired = false;
     for (const part of message.parts) {
       if (part instanceof MediaPart) throw new TypeError(NO_MEDIA);
@@ -524,7 +538,7 @@ export class OpenAIResponses implements SseProtocol {
         continue;
       }
       records.push(read.fields);
-      if (this.subscription && part instanceof ReasoningPart && !encrypted(read.fields["item"] as JsonObject)) {
+      if (this.#stateless && part instanceof ReasoningPart && !encrypted(read.fields["item"] as JsonObject)) {
         unpaired = true;
       }
     }
@@ -852,17 +866,21 @@ function inputMessage(message: Message): JsonObject | null {
 }
 
 /**
- * Return a system message's text for the subscription's `instructions`.
+ * Return a system message's text for a stateless request's `instructions`.
  *
  * The parts are joined with no separator, as the subscription joins a system message's text
  * blocks today.
+ *
+ * @param subscription Whether the request goes to the subscription, whose refusal of a part
+ *   that isn't text has its own message.
+ * @throws {TypeError} If the message holds a media part or another part that isn't text.
  */
-function instructionText(message: Message): string {
+function instructionText(message: Message, subscription: boolean): string {
   if (message.parts.some((part) => part instanceof MediaPart)) throw new TypeError(NO_MEDIA);
   const texts: string[] = [];
   for (const part of message.parts) {
-    if (!(part instanceof TextPart)) throw new TypeError(SUBSCRIPTION_TEXT_ONLY);
-    texts.push(part.text);
+    if (part instanceof TextPart) texts.push(part.text);
+    else throw new TypeError(subscription ? SUBSCRIPTION_TEXT_ONLY : wrongPart(PROTOCOL, part, message.role));
   }
   return texts.join("");
 }

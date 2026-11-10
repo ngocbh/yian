@@ -385,6 +385,7 @@ const RESPONSES_SAMPLE = {
   reasoning: { context: "all_turns", effort: "high", mode: "pro", summary: "auto" },
   safety_identifier: "user-hash",
   service_tier: "flex",
+  store: false,
   temperature: 0.2,
   text: { verbosity: "low" },
   top_logprobs: 5n,
@@ -492,9 +493,9 @@ describe("OpenAI Responses block", () => {
   });
 
   test("every problem is reported", () => {
-    const message = error(OpenAIResponsesBlock, { temprature: 1n, store: false });
+    const message = error(OpenAIResponsesBlock, { temprature: 1n, include: [] });
     expect(message).toContain("`openai.temprature`");
-    expect(message).toContain("`openai.store`");
+    expect(message).toContain("`openai.include`");
   });
 
   test("key problems are one value error at the block, in written order", () => {
@@ -502,12 +503,12 @@ describe("OpenAI Responses block", () => {
       "`openai.temprature` is not a supported field of the OpenAI Responses API request; allowed: " +
       "access_programs, max_output_tokens, max_tool_calls, metadata, moderation, prompt_cache_key, " +
       "prompt_cache_options, prompt_cache_retention, reasoning, safety_identifier, service_tier, " +
-      "temperature, text, top_logprobs, top_p, truncation, user; " +
-      "`openai.store` is built by yian (conversation state); remove it";
-    const result = checkBlock(OpenAIResponsesBlock, { temprature: 1n, store: false, skipped: undefined });
+      "store, temperature, text, top_logprobs, top_p, truncation, user; " +
+      "`openai.include` is built by yian (response items); remove it";
+    const result = checkBlock(OpenAIResponsesBlock, { temprature: 1n, include: [], skipped: undefined });
     expect(result.value).toBeNull();
     expect(result.issues).toEqual([{ loc: [], type: "value_error", msg: `Value error, ${joined}`, error: joined }]);
-    expect(error(OpenAIResponsesBlock, { temprature: 1n, store: false })).toBe(
+    expect(error(OpenAIResponsesBlock, { temprature: 1n, include: [] })).toBe(
       `1 validation error for OpenAIResponsesBlock\n  Value error, ${joined}`,
     );
   });
@@ -546,9 +547,21 @@ describe("OpenAI Responses block", () => {
     { moderation: { model: "omni-moderation-latest", policy: { output: { mode: "warn" } } } },
     { prompt_cache_options: { ttl: "1h" } },
     { prompt_cache_options: { mode: "auto" } },
+    { store: "no" },
+    { store: "false" },
+    { store: 0n },
   ];
   test.each(badValues.map((data) => [data]))("bad value is rejected: %p", (data) => {
     valueIssues(OpenAIResponsesBlock, data);
+  });
+
+  test("store is a boolean, and null leaves it unset", () => {
+    expect(validateBlock(OpenAIResponsesBlock, { store: false })).toEqual({ store: false });
+    expect(validateBlock(OpenAIResponsesBlock, { store: true })).toEqual({ store: true });
+    expect(validateBlock(OpenAIResponsesBlock, { store: null })).toEqual({});
+    expect(valueIssues(OpenAIResponsesBlock, { store: "no" })).toEqual([
+      { loc: ["store"], type: "bool_type", msg: "Input should be a valid boolean" },
+    ]);
   });
 
   const reservedRows: [unknown, string][] = [
@@ -559,7 +572,6 @@ describe("OpenAI Responses block", () => {
     [{ parallel_tool_calls: false }, "parallel_tool_calls"],
     [{ model: "gpt-5" }, "model"],
     [{ text: { format: { type: "text" } } }, "text.format"],
-    [{ store: false }, "store"],
     [{ include: [] }, "include"],
     [{ previous_response_id: "resp_1" }, "previous_response_id"],
     [{ conversation: "conv_1" }, "conversation"],
@@ -603,17 +615,17 @@ describe("OpenAI Responses block", () => {
     expect(validateBlock(OpenAIResponsesBlock, RESPONSES_SAMPLE)).toEqual(RESPONSES_SAMPLE);
   });
 
-  test("fields are in declaration order: the shared fields, then max_output_tokens and temperature", () => {
+  test("fields are in declaration order: the shared fields, then max_output_tokens, store and temperature", () => {
     expect(Object.keys(OpenAIResponsesBlock.fields)).toEqual([
       ...Object.keys(OpenAISubscriptionBlock.fields),
       "max_output_tokens",
+      "store",
       "temperature",
     ]);
   });
 
   test("the paths the Responses adapter builds are reserved", () => {
     const paths = [
-      "store",
       "stream",
       "stream_options",
       "include",
@@ -647,14 +659,24 @@ describe("OpenAI subscription block", () => {
   });
 
   test("keeps the rest of the Responses shape", () => {
-    const { temperature: _t, max_output_tokens: _m, ...sample } = RESPONSES_SAMPLE;
+    const { temperature: _t, max_output_tokens: _m, store: _s, ...sample } = RESPONSES_SAMPLE;
     expect(validateBlock(OpenAISubscriptionBlock, sample)).toEqual(sample);
     const subscription = new Set(Object.keys(OpenAISubscriptionBlock.fields));
     expect(Object.keys(OpenAIResponsesBlock.fields).filter((name) => !subscription.has(name))).toEqual([
       "max_output_tokens",
+      "store",
       "temperature",
     ]);
-    expect(error(OpenAISubscriptionBlock, { store: true })).toContain("`openai.store` is built by yian");
+  });
+
+  test("store is built by yian: the endpoint never stores", () => {
+    for (const store of [true, false]) {
+      expect(error(OpenAISubscriptionBlock, { store })).toContain(
+        "`openai.store` is built by yian (conversation state); remove it",
+      );
+    }
+    expect(Object.hasOwn(OpenAISubscriptionBlock.reserved, "store")).toBe(true);
+    expect(Object.hasOwn(OpenAIResponsesBlock.reserved, "store")).toBe(false);
   });
 });
 

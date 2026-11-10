@@ -27,6 +27,7 @@ import { loadFlow, loadFlowSource } from "../../src/compose/loader.ts";
 import type { Env } from "../../src/defaults.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { MemoryBase, type MemoryContract, type MemorySession } from "../../src/memory/base.ts";
+import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { runFlow } from "../../src/run.ts";
 import type { FlowSource } from "../../src/runtime/log.ts";
 import { loadErrorAsync } from "../helpers/declarations.ts";
@@ -720,4 +721,13 @@ test("a steer render !include(str) reads fails at the tag: a render is a templat
     "`!include(str)` file 'render.md': `render:` is a template over each steer event; read the file with `!include`",
   );
   expect(line).toBe(11);
+});
+
+test("an llm_config value !include(str) reads is its text as written", async () => {
+  write({ "model.txt": "gpt-$$x" });
+  const flow = await load(
+    "id: f\nname: f\nnodes:\n  a:\n    kind: agent\n    llm_config: {provider: openai, model: !include(str) model.txt}\n" +
+      "    prompt: hi\n    output: str\noutput: ${a.output}\n",
+  );
+  expect((flow.compiled.nodes.get("a") as AgentNode).llmConfig).toEqual({ provider: "openai", model: "gpt-$$x" });
 });

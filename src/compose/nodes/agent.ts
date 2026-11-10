@@ -253,6 +253,7 @@ function blockProblemRange(
 /** Return the value a literal template part binds: tags dropped, strings `$$`-unescaped. */
 function literalPart(tree: unknown): unknown {
   if (tree instanceof Binding) return literalPart(tree.source);
+  if (tree instanceof Verbatim) return tree.text;
   if (typeof tree === "string") return evalBinding(tree, MISSING_ROOT);
   if (isRecord(tree)) return Object.fromEntries(Object.entries(tree).map(([key, item]) => [key, literalPart(item)]));
   if (Array.isArray(tree)) return tree.map(literalPart);

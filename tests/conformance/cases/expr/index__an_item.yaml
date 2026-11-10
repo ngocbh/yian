@@ -1,0 +1,6 @@
+kind: expr
+# An index reads one item; a negative one counts from the end.
+expr: "[xs[0], xs[-1]]"
+values: {xs: [1, 2, 3]}
+expect:
+  value: [1, 3]

@@ -14,7 +14,8 @@
  *
  * `builtinFieldErrors` rejects a field read on a builtin whose result type is known
  * (`upper(x).f` reads a field of text), the same way, and `builtinArgumentErrors` an argument of a
- * kind the builtin never takes (`upper(n)` with `n` an int).
+ * kind the builtin never takes (`upper(n)` with `n` an int), and `subscriptErrors` a subscript of a
+ * value that is no list or text (`r[0]` of a record).
  *
  * Given the types of the references an expression reads, a positional argument or a keyword field
  * whose inferred type is disjoint from the declared one is an error too. A narrower or unproven
@@ -28,7 +29,13 @@
 
 import { typeRelation } from "../../compile/validation.ts";
 import { reprText } from "../../diagnostics.ts";
-import { bindArguments, builtinArgumentError, builtinResultType, TEMPLATE_FNS } from "../../expr/builtins.ts";
+import {
+  bindArguments,
+  builtinArgumentError,
+  builtinResultType,
+  TEMPLATE_FNS,
+  valueKinds,
+} from "../../expr/builtins.ts";
 import { constructorShapeError, inferExprType, ISINSTANCE, splitReference, stepsText } from "../../expr/expressions.ts";
 import { callSuffixOf, type ExprNode, iterSubtreesTopdown, Token, Tree } from "../../expr/grammar.ts";
 import { outputContractFieldError, ValueContract } from "../../nodes/contracts.ts";
@@ -151,6 +158,48 @@ export function builtinArgumentErrors(
       const error = typ === null ? null : builtinArgumentError(name, index, typ);
       if (error !== null) errors.push(error);
     });
+  }
+  return errors;
+}
+
+/**
+ * Return why each subscript in one expression can never succeed: a base whose type is never a
+ * list or a text (a record keeps its fields, read with a dot), or an index or slice bound whose
+ * type is never an int. A part of unknown type is left to the evaluation.
+ *
+ * @param tree A parsed `${...}` interior or condition.
+ * @param refType Resolves a reference path to its proven type; `null` (the default) types only
+ *   literals and what they build.
+ * @param typeFn Resolves a constructor name to its type; `null` (the default) leaves them unknown.
+ * @returns One message per problem, in source order.
+ */
+export function subscriptErrors(
+  tree: ExprNode,
+  refType: RefType | null = null,
+  typeFn: TypeFn | null = null,
+): string[] {
+  if (!(tree instanceof Tree)) return [];
+  const errors: string[] = [];
+  const kindsOf = (node: ExprNode) => {
+    if (node instanceof Tree && node.data === "omitted") return null;
+    const typ = argumentType(node, refType, typeFn ?? (() => null));
+    return typ === null ? null : { kinds: valueKinds(typ), label: canonicalTypeLabel(typ) };
+  };
+  for (const node of iterSubtreesTopdown(tree)) {
+    if (node.data !== "subscript") continue;
+    const [base, part] = node.children as [ExprNode, Tree];
+    const doing = part.data === "index" ? "indexing" : "slicing";
+    const baseKinds = kindsOf(base);
+    if (baseKinds?.kinds && baseKinds.kinds.size > 0 && !baseKinds.kinds.has("list") && !baseKinds.kinds.has("str")) {
+      const hint = baseKinds.kinds.has("record") ? "; read a record's field with a dot, as in `r.name`" : "";
+      errors.push(`${doing} takes a list or text, got ${baseKinds.label}${hint}`);
+    }
+    for (const bound of part.children) {
+      const found = kindsOf(bound);
+      if (found?.kinds && found.kinds.size > 0 && !found.kinds.has("int") && !found.kinds.has("bool")) {
+        errors.push(`${part.data === "index" ? "an index takes" : "slice bounds take"} int, got ${found.label}`);
+      }
+    }
   }
   return errors;
 }

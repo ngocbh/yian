@@ -710,6 +710,7 @@ describe("nesting limit", () => {
     coalesce: (n) => "x | (".repeat(n - 1) + "x | 1" + ")".repeat(n - 1),
     default: (n) => "x :- (".repeat(n - 1) + "x :- 1" + ")".repeat(n - 1),
     compare: (n) => "(".repeat(n - 1) + "1 == 1" + ") == true".repeat(n - 1),
+    index: (n) => "x" + "[0]".repeat(n),
     alternating,
     grouped,
   } satisfies Record<string, (n: number) => string>;
@@ -828,6 +829,25 @@ describe("subscripts", () => {
     ["xs[:]", sub(ref("xs"), omitted(), omitted())],
     ["xs[a :- b]", sub(ref("xs"), ref("a"), new Tree("neg", [ref("b")]))],
   ])("%s parses as a slice", (text, expected) => expect(parsed(text)).toEqual(plain(expected)));
+
+  test.each([
+    ["xs[0]", new Tree("subscript", [ref("xs"), new Tree("index", [num("0")])])],
+    ["xs[-1]", new Tree("subscript", [ref("xs"), new Tree("index", [new Tree("neg", [num("1")])])])],
+    [
+      "xs[(i :- 0)]",
+      new Tree("subscript", [ref("xs"), new Tree("index", [new Tree("default_expr", [ref("i"), num("0")])])]),
+    ],
+  ])("%s parses as an index", (text, expected) => expect(parsed(text)).toEqual(plain(expected)));
+
+  test("an index of an index, and of a slice", () => {
+    expect(tree("xs[0][1]").children.map(kindOf)).toEqual(["subscript", "index"]);
+    expect(tree("xs[1:][0]").children.map(kindOf)).toEqual(["subscript", "index"]);
+  });
+
+  test("an index binds tighter than unary minus and **", () => {
+    expect(tree("-xs[0]").children.map(kindOf)).toEqual(["subscript"]);
+    expect(tree("xs[0] ** 2").children.map(kindOf)).toEqual(["subscript", "POW_OP", "NUMBER"]);
+  });
 
   test("a subscript of a subscript", () => {
     const result = tree("xs[1:][:1]");

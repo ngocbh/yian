@@ -1,7 +1,6 @@
 kind: expr
+# A text slices by characters (code points), as len counts them.
 expr: "s[1:]"
-values: {xs: [1, 2, 3, 4], ys: [5], a: 1, b: 1, m: 2, n: null, s: abc}
+values: {xs: [1, 2, 3, 4], ys: [5], a: 1, b: 1, m: 2, n: null, s: "a😀c"}
 expect:
-  raises:
-    class: ExpressionError
-    message: "slicing takes a list, got str"
+  value: "😀c"

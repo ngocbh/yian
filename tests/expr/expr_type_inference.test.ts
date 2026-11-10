@@ -163,7 +163,23 @@ test.each([
   ["xs :- []", "an untyped left operand"],
   ["['a', 1]", "list items of different types"],
   ["[]", "an empty list"],
-  ["'abc'[1:]", "a slice of a non-list"],
+  ["1[1:]", "a slice of a number"],
 ])("inferExprType leaves %s untyped (%s)", (text) => {
   expect(inferExprType(parseExpr(text), refs({}))).toBeNull();
+});
+
+test.each<[string, Type | null]>([
+  ["xs[0]", Type.scalar(ValueKind.INTEGER)],
+  ["xs[1:]", new Type({ kind: ValueKind.LIST_INTEGER, element: Type.scalar(ValueKind.INTEGER) })],
+  ["s[0]", Type.scalar(ValueKind.STRING)],
+  ["s[1:]", Type.scalar(ValueKind.STRING)],
+  ["d[0]", Type.scalar(ValueKind.STRING)],
+  ["u[0]", null],
+])("the subscript %s is typed by its base", (source, want) => {
+  const types: Record<string, Type> = {
+    xs: new Type({ kind: ValueKind.LIST_INTEGER, element: Type.scalar(ValueKind.INTEGER) }),
+    s: Type.scalar(ValueKind.STRING),
+    d: Type.scalar(ValueKind.DATE),
+  };
+  expect(inferExprType(parseExpr(source), (path) => types[path] ?? null)).toEqual(want);
 });

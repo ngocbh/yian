@@ -95,7 +95,7 @@ import {
 import { type CaseRead, caseReadsAsWritten } from "../desugar/case_outputs.ts";
 import { SYNTH_PREFIX } from "../desugar/inline_calls.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
-import { builtinArgumentErrors, builtinFieldErrors, constructorErrors } from "./constructors.ts";
+import { builtinArgumentErrors, builtinFieldErrors, constructorErrors, subscriptErrors } from "./constructors.ts";
 import { Narrowing, parsedWhen, searchedWhenReads } from "./narrowing.ts";
 import type { SearchedWhen } from "./skips.ts";
 import { LocalInput, type ResolveOrigin } from "./typed_bindings.ts";
@@ -293,7 +293,7 @@ function outputBindings(outputs: unknown): unknown[] {
  *
  * Every builtin call in a binding or prompt must pass arguments the builtin takes, and a
  * shipped builtin's argument in a binding must be of a kind it takes when its type is proven
- * (`builtinArgumentErrors`).
+ * (`builtinArgumentErrors`), as must a subscript's base and index (`subscriptErrors`).
  *
  * An inbox input (`Inbox(T)` in `inputContracts`) is read only whole, as the lone
  * `${input.<name>}` bound to an input a named call's or a loop's child declares as an Inbox, or
@@ -324,7 +324,8 @@ function outputBindings(outputs: unknown): unknown[] {
  *   written, once.
  * @throws TypeError when a producer contract is not a `ValueContract` or `PartialRecordContract`.
  * @throws LoadError listing every unresolved reference, else every constructor call that can never
- *   succeed, else every builtin call that can never succeed, else every inbox input nothing reads.
+ *   succeed, else every builtin call or subscript that can never succeed, else every inbox input
+ *   nothing reads.
  */
 export function validateReferences(
   buildResults: ReadonlyMap<string, BuildResult>,
@@ -366,7 +367,7 @@ export function validateReferences(
   }
   const errors: [message: string, range: SourceRange | null][] = [];
   const constructorProblems: [message: string, range: SourceRange | null][] = [];
-  const callProblems: [message: string, range: SourceRange | null][] = [];
+  const typeProblems: [message: string, range: SourceRange | null][] = [];
   const misplacedOptionals: [message: string, range: SourceRange | null][] = [];
   // The `[site name, source, range]` of each plain input binding already scanned, as JSON.
   const scanned = new Set<string>();
@@ -439,9 +440,8 @@ export function validateReferences(
       return outputContractType(contract);
     };
     for (const tree of trees) {
-      for (const problem of builtinArgumentErrors(tree, refType, typeFn)) {
-        callProblems.push([`${where}: ${problem}`, rng]);
-      }
+      const problems = [...builtinArgumentErrors(tree, refType, typeFn), ...subscriptErrors(tree, refType, typeFn)];
+      for (const problem of problems) typeProblems.push([`${where}: ${problem}`, rng]);
     }
     if (registry !== null && constructors) {
       for (const tree of trees) {
@@ -917,7 +917,7 @@ export function validateReferences(
     ["flow has unresolved references", errors],
     ["flow has ?. inside a reference root", misplacedOptionals],
     ["flow has constructor calls that can never succeed", constructorProblems],
-    ["flow has builtin calls that can never succeed", callProblems],
+    ["flow has expressions that can never succeed", typeProblems],
   ] as const) {
     if (problems.length > 0) {
       const firstRange = problems.find(([, range]) => range !== null)?.[1] ?? null;

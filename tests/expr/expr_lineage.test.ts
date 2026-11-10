@@ -639,6 +639,18 @@ test("a slice route projects each kept item of its base", () => {
   expect(sourcesOf(result.route).every((source) => source.executionSeq === producer.executionSeq)).toBe(true);
 });
 
+test("an index route projects its item of the base, and a text slice is a scalar over its base", () => {
+  const sources = new Sources({ producer: { tags: ["a", "b", "c"], name: "Ada" } });
+  const item = sources.evaluate("producer.tags[-1]");
+  expect(item.value).toBe("c");
+  expect([item.route.kind, item.route.source?.path]).toEqual(["source", ["tags", 2]]);
+  const text = sources.evaluate("producer.name[1:]");
+  expect(text.value).toBe("da");
+  expect(text.route.kind).toBe("scalar");
+  expect(text.route.expression).toBe("producer.name[...]");
+  expect(text.route.children.map((child) => child.source?.path)).toEqual([["name"]]);
+});
+
 test("len records an opaque route", () => {
   const sources = new Sources({ producer: { tags: ["a"] } });
   expect(sources.evaluate("len(producer.tags)").route.kind).toBe("opaque");

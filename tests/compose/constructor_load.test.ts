@@ -466,7 +466,10 @@ test("a parent cannot construct a child's typedef", async () => {
 /** A flow whose node `c` binds `x: <binding>`, with typed flow inputs to read. */
 const typedConsumer = (binding: string) => `id: p
 name: p
+typedefs:
+  R: {k: int}
 input:
+  rec: !R
   n: !int
   s: !str
   xs: !list(str)
@@ -482,6 +485,28 @@ nodes:
 output: \${c.output}
 `;
 
+describe("a subscript of a kind it never takes is a load error", () => {
+  test.each([
+    [
+      "${input.rec[0]}",
+      'indexing takes a list or text, got {"k":int}; read a record\'s field with a dot, as in `r.name`',
+    ],
+    ["${input.n[1:]}", "slicing takes a list or text, got int"],
+    ['${input.xs["a"]}', "an index takes int, got Literal(a)"],
+    ["${input.xs[1.5:]}", "slice bounds take int, got float(1.5..1.5)"],
+  ])("%s", (binding, message) => {
+    const error = loadError(() => loadedNodes(typedConsumer(binding)));
+    expect(error.message).toBe(`flow has expressions that can never succeed:\n  node 'c' input 'x' from: ${message}`);
+  });
+
+  test.each(["${input.xs[0]}", "${input.s[-1]}", "${input.s[1:]}", "${input.any[0]}", "${input.xs[input.n]}"])(
+    "%s loads",
+    (binding) => {
+      expect(() => loadedNodes(typedConsumer(binding))).not.toThrow();
+    },
+  );
+});
+
 describe("a builtin argument of a kind the builtin never takes is a load error", () => {
   test.each([
     ["${upper(input.n)}", "upper() takes str, got int"],
@@ -495,7 +520,7 @@ describe("a builtin argument of a kind the builtin never takes is a load error",
     ['${round("2.5")}', 'round() takes a number, got Literal("2.5")'],
   ])("%s", (binding, message) => {
     const error = loadError(() => loadedNodes(typedConsumer(binding)));
-    expect(error.message).toBe(`flow has builtin calls that can never succeed:\n  node 'c' input 'x' from: ${message}`);
+    expect(error.message).toBe(`flow has expressions that can never succeed:\n  node 'c' input 'x' from: ${message}`);
   });
 
   test.each([

@@ -14,8 +14,8 @@
  *   `and` / `or` / `not`, `in` / `not in`. A chain of same-precedence operators is one flat
  *   node holding its operator tokens between the operands: `a + b - c` is one `sum`.
  * - List literals (`[1, "x"]`) and parenthesised sub-expressions.
- * - Subscripts: a list slice `xs[a:b]` after any operand, with either bound omitted
- *   (`xs[1:]`, `xs[:-1]`, `xs[:]`) and no step or index.
+ * - Subscripts after any operand: an index `xs[i]`, or a slice `xs[a:b]` with either bound
+ *   omitted (`xs[1:]`, `xs[:-1]`, `xs[:]`) and no step.
  * - List comprehensions: `[elem for x in xs]`, then any mix of `for x in ys` and
  *   `if cond` clauses. A target is one bare name; each iterable and condition stops before the
  *   escapes, so an escape there needs parentheses.
@@ -43,10 +43,10 @@
  * - `+ -`, `* / %`: `sum`, `product`, flat, with `ADD_OP` / `MUL_OP` tokens between the operands.
  * - Unary `-x`: `neg[x]`, no token.
  * - `**`: `power`, flat, with `POW_OP` tokens between the operands.
- * - A postfix subscript `x[a:b]`: `subscript[x, slice[a, b]]`, where an omitted bound is
- *   `omitted[]`. It binds tighter than unary minus and `**`:
- *   `-xs[1:]` is `neg[subscript]`. It counts one nesting level, like a call; `slice` and
- *   `omitted` add none.
+ * - A postfix subscript: `x[i]` is `subscript[x, index[i]]`, and `x[a:b]` is
+ *   `subscript[x, slice[a, b]]`, where an omitted bound is `omitted[]`. It binds tighter than
+ *   unary minus and `**`: `-xs[1:]` is `neg[subscript]`. It counts one nesting level, like a
+ *   call; `index`, `slice` and `omitted` add none.
  * - A list comprehension: `list_comp[elem, clause, ...]`, clauses in source order, each
  *   `comp_for[NAME, iterable, SOURCE]` (`SOURCE` holds the iterable's source text, for runtime
  *   messages) or `comp_if[cond]`. It counts one nesting level, like a list; its clauses add none.
@@ -371,8 +371,8 @@ type Frame =
   | { kind: "list"; items: ExprNode[] }
   | { kind: "call"; children: ExprNode[]; args: Tree[]; label: Token | null }
   | { kind: "prefix"; level: typeof LEVEL.NOT | typeof LEVEL.UNARY; token: Token }
-  // `lower` is null until the slice's colon is read; `open` is the offset of the `[`.
-  | { kind: "subscript"; base: ExprNode; lower: ExprNode | null; open: number }
+  // `lower` is null until a slice's colon is read; with none, the subscript is an index.
+  | { kind: "subscript"; base: ExprNode; lower: ExprNode | null }
   // A list comprehension after its first `for`: `pending` is the target of a `for` whose iterable,
   // starting at offset `iterStart`, is being read; null while an `if` condition is.
   | { kind: "comp"; elem: ExprNode; clauses: Tree[]; pending: Token | null; iterStart: number }
@@ -389,7 +389,6 @@ const omitted = (): Tree => new Tree("omitted", []);
 
 const SLICE_REQUIRED = "inside a slice, `:` ends a bound; write `(a :? b)` for a required value";
 const SLICE_STEP = "slices take no step; for a default in a bound, use parentheses: `xs[(n :- 0):]`";
-const SLICE_INDEX = "indexing `xs[i]` is not supported; `xs[i:i + 1]` gives a one-item list";
 const COMP_ONE_ELEMENT = "a comprehension has one element before `for`; write `[[a, b] for x in xs]`";
 const COMP_FOR_ONLY = "`for` makes a list comprehension only: write `[x for x in xs]`";
 const COMP_CONDITIONAL = "conditional expressions (`a if c else b`) aren't supported yet";
@@ -522,9 +521,13 @@ function finishCall(cursor: Cursor, call: CallFrame): Tree {
   return new Tree("refcall", call.children);
 }
 
-/** Build the tree of a complete subscript whose lower bound is read. */
-function subscriptTree(frame: SubscriptFrame, upper: ExprNode): Tree {
-  return new Tree("subscript", [frame.base, new Tree("slice", [frame.lower!, upper])]);
+/**
+ * Build the tree of a complete subscript: an index `last` when no colon was read, else a slice
+ * whose upper bound is `last`.
+ */
+function subscriptTree(frame: SubscriptFrame, last: ExprNode): Tree {
+  const part = frame.lower === null ? new Tree("index", [last]) : new Tree("slice", [frame.lower, last]);
+  return new Tree("subscript", [frame.base, part]);
 }
 
 /** Add `value`, under the pending label if any, as `call`'s next argument. */
@@ -644,7 +647,7 @@ function parseRaw(text: string): ExprNode {
     }
     if (token.type === "[") {
       // Before any reduce, so the subscript binds to the bare operand, tighter than `-` and `**`.
-      const frame: SubscriptFrame = { kind: "subscript", base: value, lower: null, open: token.startPos };
+      const frame: SubscriptFrame = { kind: "subscript", base: value, lower: null };
       stack.push(frame);
       value = null;
       if (cursor.accept(":")) {
@@ -686,7 +689,6 @@ function parseRaw(text: string): ExprNode {
       addArg(frame, value);
       value = finishCall(cursor, frame);
     } else if (token.type === "]" && frame?.kind === "subscript") {
-      if (frame.lower === null) cursor.fail(frame.open, SLICE_INDEX);
       stack.pop();
       value = subscriptTree(frame, value);
     } else if (token.type === "]" && frame?.kind === "comp") {
@@ -994,6 +996,7 @@ const WRAPPER_NODES: ReadonlySet<string> = new Set([
   "trailer",
   "call_suffix",
   "arg",
+  "index",
   "slice",
   "omitted",
   "comp_for",
@@ -1165,7 +1168,7 @@ function rejectReservedReferenceRoots(tree: ExprNode): void {
  *   operand makes no node.
  * @throws {ExpressionError} If `text` holds a `${...}` (see `rejectNestedSpans`), does not parse
  *   (`could not parse expression '<text>': unexpected <what> at line L, column C`, or a slice's
- *   step, index or `:?`, or a misplaced `for`/`if`, a bad comprehension target or an escape in
+ *   step or `:?`, or a misplaced `for`/`if`, a bad comprehension target or an escape in
  *   an iterable or condition, with the fix in place of `unexpected <what>`), nests deeper
  *   than `current().maxValueNesting` levels, holds a float literal outside the double range, is a
  *   dotted-callee builtin call, calls `isinstance` with anything but a value and a bare type

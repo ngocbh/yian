@@ -464,8 +464,15 @@ export class SourceDocument {
     const spanOf = propertySpans(source);
     let flow: FlowDocument;
     let built: Built;
+    // An `!include(T)` value counts toward the node limit as the nodes of the value it reads, at
+    // every place it appears, as if written there.
+    const weigh = (node: Scalar.Parsed): number => {
+      const type = node.tag?.startsWith("!") ? includedType(node.tag.slice(1)) : null;
+      const value = type === null || type === TEXT_TYPE ? undefined : data.get(node.source);
+      return value === undefined ? 1 : value._definitions.length;
+    };
     try {
-      flow = composeFlowDocument(source);
+      flow = composeFlowDocument(source, {}, data.size === 0 ? null : weigh);
       if (plain) refuseNonPlain(flow, starts, spanOf);
       // A merge error comes from `mergeSources`, a `FlowLoaderError`.
       built = build(flow, source, starts, spanOf, included, data);

@@ -731,3 +731,34 @@ test("an llm_config value !include(str) reads is its text as written", async () 
   );
   expect((flow.compiled.nodes.get("a") as AgentNode).llmConfig).toEqual({ provider: "openai", model: "gpt-$$x" });
 });
+
+// ---------- !include(T): the YAML node limit ----------
+
+/** An env whose YAML node limit is 50. */
+const FIFTY_NODES: Env = (name) => (name === "YIAN_MAX_YAML_NODES" ? "50" : NO_ENV(name));
+
+test("each !include(T) counts toward the node limit as the value it reads, at every site", async () => {
+  write({ "s.yaml": JSON.stringify(Array.from({ length: 20 }, (_, i) => i)) });
+  const entries = (count: number) =>
+    Array.from({ length: count }, (_, i) => `  v${i}: !include(list(int)) s.yaml\n`).join("");
+  const flow = (count: number) => `id: f\nname: f\nnodes:\n${entries(count)}output: \${v0.output}\n`;
+
+  expect(await outputOf(await load(flow(1), { env: FIFTY_NODES }))).toHaveLength(20);
+  const { message, label } = await failure(load(flow(3), { env: FIFTY_NODES }));
+  expect(message).toContain("holds more than 50 YAML nodes");
+  expect(message).toContain("each `!include(T)` as the value it reads");
+  expect(label).toBe("flow.yaml");
+});
+
+test("an alias of a typed !include counts as a copy of its value, as the value written inline would", async () => {
+  const items = JSON.stringify(Array.from({ length: 20 }, (_, i) => i));
+  write({ "s.yaml": items });
+  const included = outputFlow("{a: &x !include(list(int)) s.yaml, b: [*x, *x]}");
+  const inline = outputFlow(`{a: &x !list(int) ${items}, b: [*x, *x]}`);
+
+  expect((await failure(load(included, { env: FIFTY_NODES }))).message).toContain("holds more than 50 YAML nodes");
+  expect((await failure(load(inline, { env: FIFTY_NODES }))).message).toContain("holds more than 50 YAML nodes");
+  expect(await outputOf(await load(outputFlow("{a: &x !include(list(int)) s.yaml}"), { env: FIFTY_NODES }))).toEqual({
+    a: Array.from({ length: 20 }, (_, i) => BigInt(i)),
+  });
+});

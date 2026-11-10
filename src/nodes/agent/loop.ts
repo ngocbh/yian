@@ -524,7 +524,7 @@ interface PlannedCall {
   readonly deadline: string | null;
   /**
    * Whether a resume sends it again when a crash or a stop cut it off: its tool is resumable, or
-   * the call never reaches its tool.
+   * it is refused for what the recorded reply alone shows.
    */
   readonly resumable: boolean;
   /** Run the call under its group's signal. */
@@ -581,11 +581,12 @@ async function runToolCalls(turn: ToolTurn): Promise<boolean> {
  * run still holds open (it pended and waits on, beside a sibling a deadline closed) is pended
  * again, with no closer and no handler call, and gets no tool message: the loop then returns
  * `Pending`. A call to a resumable tool that no record closed was cut off by a crash or a stop,
- * so it is sent again (`resendCall`), with the same call id; so is a call refused before its tool,
- * which gets the same error result again. Any other call is closed with the word of the record
- * that closed it (`closerResult`: `timed_out` for an ask whose deadline passed, `interrupted` for
- * a call a host interrupt closed), `crashed` when none did (its run was cut off before its
- * result), the closer written as its `tool_result` step, and never runs.
+ * so it is sent again (`resendCall`), with the same call id; so is a call refused for what the
+ * reply alone shows (unparsed arguments, an ungranted name, the schema check), which gets the same
+ * error result again. Any other call is closed with the word of the record that closed it
+ * (`closerResult`: `timed_out` for an ask whose deadline passed, `interrupted` for a call a host
+ * interrupt closed), `crashed` when none did (its run was cut off before its result), the closer
+ * written as its `tool_result` step, and never runs.
  *
  * With a host interrupt pending, only the calls that may have run are sent again or closed, and
  * the rest are skipped from the first one on (`skipFrom`), as live skips the calls it hasn't
@@ -758,7 +759,7 @@ function skipFrom(turn: ToolTurn, start: number): true {
 async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Promise<CallCheck> {
   const { ctx, toolset, skills } = turn;
   const args = call.arguments;
-  if (args === null) return refused(call, index, new ReportedToolError(unparsedText(call.name)));
+  if (args === null) return refused(call, index, new ReportedToolError(unparsedText(call.name)), true);
   if (skills.size > 0 && call.name === LOAD_SKILL) {
     // `load_skill` only reads the granted skills. Every `SkillError` it throws refuses the
     // model's arguments, so the model reads it as the call's result; any other error is a fault.
@@ -774,9 +775,10 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
   }
   const grant = turn.granted.find((each) => each.visible === call.name);
   // The model sees the granted tools in the request, so the name is all it needs.
-  if (grant === undefined) return refused(call, index, new ReportedToolError(unavailableText(call.name)));
+  if (grant === undefined) return refused(call, index, new ReportedToolError(unavailableText(call.name)), true);
   // The call names the tool as the model saw it; the grant names it in its group.
   const ref = { group: grant.group, name: grant.tool };
+  const resumable = turn.resumable.has(call.name);
   // An ask's deadline is fixed before its handler runs, which gets it; the pending step records it.
   let deadline: string | null = null;
   if (call.name === ASK_USER && typeof args["timeout"] === "string") {
@@ -784,7 +786,7 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
       deadline = formatRecordTime((ctx.scheduler ?? realScheduler).now() + parseDuration(args["timeout"]) * 1000);
     } catch (error) {
       if (!(error instanceof RangeError || error instanceof TypeError)) throw error;
-      return refused(call, index, new ReportedToolError(`ask_user timeout: ${error.message}`));
+      return refused(call, index, new ReportedToolError(`ask_user timeout: ${error.message}`), resumable);
     }
   }
   const inputs = deadline === null ? args : { ...args, deadline };
@@ -793,7 +795,7 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
     // the model's to read. The tool was resolved when the request was built, so it is there.
     toolset.checkArguments(ref, inputs, { trusted: deadline !== null });
   } catch (error) {
-    return refused(call, index, new ReportedToolError((error as Error).message, { cause: error }));
+    return refused(call, index, new ReportedToolError((error as Error).message, { cause: error }), true);
   }
   let checked: CheckedCall;
   try {
@@ -806,9 +808,11 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
     checkNodeStopped(turn);
     // The arguments are checked as part of the call, so the validator's issues and a reported
     // error are the call's result.
-    if (isReportedToolError(error)) return refused(call, index, error);
+    // A validator may read outside state the tool changes, so a replay checking again tells
+    // nothing of a call the cut ran: it is answered again only when its tool is resumable.
+    if (isReportedToolError(error)) return refused(call, index, error, resumable);
     if (isToolCheckError(error)) {
-      return refused(call, index, new ReportedToolError((error as Error).message, { cause: error }));
+      return refused(call, index, new ReportedToolError((error as Error).message, { cause: error }), resumable);
     }
     return { error };
   }
@@ -820,18 +824,19 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
   // Above 1 only for a call a crash or a stop cut off after its reply, which a resume sends again.
   const attempt = 1 + (ctx.steps?.resumesSince(turn.n) ?? 0);
   const invoke = (signal: AbortSignal) => toolset.invoke(checked, { node: ctx.nodeId, callId, attempt, signal });
-  const resumable = turn.resumable.has(call.name);
   return { planned: { call, index, callId, deadline, resumable, invoke }, safe: toolset.isConcurrencySafe(checked) };
 }
 
 /**
  * Plan a call refused before it reaches its tool: an unsafe call, so it runs alone, that rejects
- * with `error`, a reported error the model reads as the call's error result. Answering it again has
- * no effect, so a replay that finds no result for it answers it again, as a resumable call.
+ * with `error`, a reported error the model reads as the call's error result. `resumable` says
+ * whether a replay that finds no result for it answers it again: `true` when the refusal follows
+ * from the recorded reply alone (unparsed arguments, an ungranted name, the schema check), else
+ * as its tool is.
  */
-function refused(call: ToolCallPart, index: number, error: unknown): CallCheck {
+function refused(call: ToolCallPart, index: number, error: unknown, resumable: boolean): CallCheck {
   const invoke = () => Promise.reject(error);
-  return { planned: { call, index, callId: undefined, deadline: null, resumable: true, invoke }, safe: false };
+  return { planned: { call, index, callId: undefined, deadline: null, resumable, invoke }, safe: false };
 }
 
 /**

@@ -633,6 +633,39 @@ for (const [what, part, output] of [
   });
 }
 
+for (const [what, refuse] of [
+  ["a reported error", () => {
+    throw new ReportedToolError("already sent");
+  }],
+  ["its issues", () => ({ issues: [{ message: "already sent" }] })],
+] as const) {
+  test(`a call whose validator refuses (${what}) once the tool ran, cut off before its result, is closed crashed`, async () => {
+    // The validator reads outside state the tool changes, so checking again tells nothing of the cut call.
+    let sent = false;
+    const send = new FunctionTool({
+      name: "save",
+      description: "Tool save.",
+      parametersJsonSchema: { type: "object", properties: { topic: { type: "string" } } },
+      parametersValidator: {
+        "~standard": { version: 1, vendor: "test", validate: (value: unknown) => (sent ? refuse() : { value }) },
+      },
+      execute: () => {
+        sent = true;
+        return "sent";
+      },
+    });
+    const uncut = await run(saveModel(), { tools: { save: send } });
+    expect(uncut.result.status, uncut.result.failure?.message).toBe("succeeded");
+    sent = false;
+    // Cut before the call's tool_result: the tool ran, its result was never written.
+    const log = await cutRun(seqOf(uncut.log, "tool_result"), saveModel(), { tools: { save: send } });
+    expect(sent).toBe(true);
+    const resumed = await resume(log, new ScriptedModel([textReply("done")], CONFIG), { tools: { save: send } });
+    expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+    expect(toolResults(log)).toEqual([{ call_id: "call-a", output: TOOL_OUTCOME_UNKNOWN, is_error: true, closed: "crashed" }]);
+  });
+}
+
 test("a crash in a retry wait waits the recorded delay again, and the attempt count continues", async () => {
   const slow = () => new ProviderError("rate_limit", "slow down", { status: 429, retryAfter: 2 });
   const uncut = await run(new ScriptedModel([slow(), textReply("ok")], CONFIG), { flow: flowText([]), modelRetries: 1 });

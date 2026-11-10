@@ -95,7 +95,13 @@ import {
 import { type CaseRead, caseReadsAsWritten } from "../desugar/case_outputs.ts";
 import { SYNTH_PREFIX } from "../desugar/inline_calls.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
-import { builtinArgumentErrors, builtinFieldErrors, constructorErrors, subscriptErrors } from "./constructors.ts";
+import {
+  builtinArgumentErrors,
+  builtinFieldErrors,
+  constructorErrors,
+  fieldReadErrors,
+  subscriptErrors,
+} from "./constructors.ts";
 import { Narrowing, parsedWhen, searchedWhenReads } from "./narrowing.ts";
 import type { SearchedWhen } from "./skips.ts";
 import { LocalInput, type ResolveOrigin } from "./typed_bindings.ts";
@@ -293,7 +299,9 @@ function outputBindings(outputs: unknown): unknown[] {
  *
  * Every builtin call in a binding or prompt must pass arguments the builtin takes, and a
  * shipped builtin's argument in a binding must be of a kind it takes when its type is proven
- * (`builtinArgumentErrors`), as must a subscript's base and index (`subscriptErrors`).
+ * (`builtinArgumentErrors`), as must a subscript's base and index (`subscriptErrors`). A field
+ * read after a subscript or parentheses is checked against its base's proven type
+ * (`fieldReadErrors`).
  *
  * An inbox input (`Inbox(T)` in `inputContracts`) is read only whole, as the lone
  * `${input.<name>}` bound to an input a named call's or a loop's child declares as an Inbox, or
@@ -442,6 +450,7 @@ export function validateReferences(
     for (const tree of trees) {
       const problems = [...builtinArgumentErrors(tree, refType, typeFn), ...subscriptErrors(tree, refType, typeFn)];
       for (const problem of problems) typeProblems.push([`${where}: ${problem}`, rng]);
+      for (const problem of fieldReadErrors(tree, refType, typeFn)) errors.push([`${where}: ${problem}`, rng]);
     }
     if (registry !== null && constructors) {
       for (const tree of trees) {

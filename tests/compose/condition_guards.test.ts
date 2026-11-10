@@ -270,6 +270,7 @@ describe("guardedRefs walks the reads in exprRefs order", () => {
     "${isinstance(v, Buy) and lower(w.name) == v.action}",
     "not (isinstance(r, Done) and r.answer == 'ok') or f(k).z > m",
     "v.qty if isinstance(v, Buy) else w.n > (v.price if v.action == 'sell' else 0)",
+    "rs[i].k > 0 and (v if isinstance(v, Buy) else w).qty > u[0]?.m",
   ];
   for (const text of cases) {
     test(text, () => {

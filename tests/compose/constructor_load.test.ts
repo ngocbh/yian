@@ -470,6 +470,8 @@ typedefs:
   R: {k: int}
 input:
   rec: !R
+  recs: !list(R)
+  orecs: !Optional(list(R))
   n: !int
   s: !str
   xs: !list(str)
@@ -507,6 +509,28 @@ output: \${c.output}
   test("the flow loads and runs with an int for the float", async () => {
     expect(await ok(text, { f: 1n, xs: [1n, 2n, 3n] })).toStrictEqual([[2n, 3n], 2n, "[\n 1,\n 2,\n 3\n]", 2.2]);
   });
+});
+
+describe("a field read after a subscript or parentheses is checked by its base's type", () => {
+  test.each([
+    ["${input.recs[0].nope}", "reference ${input.recs[...].nope} reads unknown field 'nope' on record"],
+    ["${(input.rec).nope}", "reference ${input.rec.nope} reads unknown field 'nope' on record"],
+    ["${input.xs[0].k}", "reference ${input.xs[...].k} reads field 'k' on type str, which has no fields"],
+    [
+      "${input.orecs[0].k}",
+      "${input.orecs[...].k} reads field 'k' of input.orecs[...], which may be null; write input.orecs[...]?.k",
+    ],
+  ])("%s", (binding, message) => {
+    const error = loadError(() => loadedNodes(typedConsumer(binding)));
+    expect(error.message).toContain(`node 'c' input 'x' from: ${message}`);
+  });
+
+  test.each(["${input.recs[0].k}", "${input.orecs[0]?.k}", "${(input.rec).k + 1}", "${input.any[0].k}"])(
+    "%s loads",
+    (binding) => {
+      expect(() => loadedNodes(typedConsumer(binding))).not.toThrow();
+    },
+  );
 });
 
 describe("a subscript of a kind it never takes is a load error", () => {

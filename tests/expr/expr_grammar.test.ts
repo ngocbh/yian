@@ -318,8 +318,8 @@ describe("lists and groups", () => {
     for (const text of ["[1,]", "f(1,)", "f(,)", "()", "(a, b)"]) expectParseError(text);
   });
 
-  test("no trailer after a group, and no call of a call", () => {
-    for (const text of ["(a).b", "f(x)(y)", "f(a=1)(2)", "f(x).g(y)"]) expectParseError(text);
+  test("no call of a call, or of a group's field", () => {
+    for (const text of ["f(x)(y)", "f(a=1)(2)", "f(x).g(y)", "(a).b(c)"]) expectParseError(text);
   });
 });
 
@@ -843,6 +843,39 @@ describe("subscripts", () => {
   test("an index of an index, and of a slice", () => {
     expect(tree("xs[0][1]").children.map(kindOf)).toEqual(["subscript", "index"]);
     expect(tree("xs[1:][0]").children.map(kindOf)).toEqual(["subscript", "index"]);
+  });
+
+  test("`xs[i :- 0]` is a slice: in the brackets `:` ends a bound before `:-`", () => {
+    expect(parsed("xs[i :- 0]")).toEqual(plain(sub(ref("xs"), ref("i"), new Tree("neg", [num("0")]))));
+  });
+
+  test.each([
+    ["xs[0].name", ["subscript", "trailer"]],
+    ["xs[0]?.k.m", ["subscript", "trailer", "trailer"]],
+    ["xs[1:].k", ["subscript", "trailer"]],
+    ["(r).k", ["refcall", "trailer"]],
+    ["(a if c else b).k", ["if_expr", "trailer"]],
+    ["(a + b).k", ["sum", "trailer"]],
+  ])("%s reads fields of a subscript or a parenthesized operand", (text, kinds) => {
+    const result = tree(text);
+    expect(result.data).toBe("field_read");
+    expect(result.children.map(kindOf)).toEqual(kinds);
+  });
+
+  test("a field read keeps the `?.` of each step, and a subscript may follow it", () => {
+    const optional = tree("xs[0]?.k").children[1] as Tree;
+    expect(optional.children.map(kindOf)).toEqual(["NAME", "QDOT"]);
+    expect(tree("xs[0].items[1]").children.map(kindOf)).toEqual(["field_read", "index"]);
+  });
+
+  test("a field read adds no nesting level", () => {
+    install({ ...BUILTIN, maxValueNesting: 1 });
+    try {
+      expect(() => parseExpr("xs[0].a.b")).not.toThrow();
+      expect(() => parseExpr("(x).a")).not.toThrow();
+    } finally {
+      install(BUILTIN);
+    }
   });
 
   test("an index binds tighter than unary minus and **", () => {

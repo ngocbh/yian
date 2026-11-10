@@ -138,6 +138,7 @@ import {
   builtinArgumentErrors,
   builtinFieldErrors,
   constructorErrors,
+  fieldReadErrors,
   subscriptErrors,
 } from "../validate/constructors.ts";
 import { rejectCycles } from "../validate/cycles.ts";
@@ -1437,7 +1438,12 @@ function fillTypeTables(
     }
     for (const tree of trees) {
       const problems = names[1].length > 0 ? constructorErrors(tree, registry) : [];
-      problems.push(...builtinFieldErrors(tree), ...builtinArgumentErrors(tree), ...subscriptErrors(tree));
+      problems.push(
+        ...builtinFieldErrors(tree),
+        ...builtinArgumentErrors(tree),
+        ...subscriptErrors(tree),
+        ...fieldReadErrors(tree),
+      );
       if (problems.length > 0) throw diagnostics.error(`${where}: ${problems[0]}`, { range });
     }
     return resolvedNames;

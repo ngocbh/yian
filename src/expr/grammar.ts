@@ -16,6 +16,7 @@
  * - List literals (`[1, "x"]`) and parenthesised sub-expressions.
  * - Subscripts after any operand: an index `xs[i]`, or a slice `xs[a:b]` with either bound
  *   omitted (`xs[1:]`, `xs[:-1]`, `xs[:]`) and no step.
+ * - Field reads after a subscript or a parenthesized operand: `xs[0].name`, `(a if c else b)?.k`.
  * - List comprehensions: `[elem for x in xs]`, then any mix of `for x in ys` and
  *   `if cond` clauses. A target is one bare name; each iterable and condition stops before the
  *   escapes, so an escape there needs parentheses.
@@ -52,6 +53,8 @@
  *   `subscript[x, slice[a, b]]`, where an omitted bound is `omitted[]`. It binds tighter than
  *   unary minus and `**`: `-xs[1:]` is `neg[subscript]`. It counts one nesting level, like a
  *   call; `index`, `slice` and `omitted` add none.
+ * - Dotted reads after a subscript's `]` or a group's `)`: `field_read[x, trailer, ...]`, with
+ *   `trailer`s as a reference's. Like a reference's steps, it adds no nesting level.
  * - A list comprehension: `list_comp[elem, clause, ...]`, clauses in source order, each
  *   `comp_for[NAME, iterable, SOURCE]` (`SOURCE` holds the iterable's source text, for runtime
  *   messages) or `comp_if[cond]`. It counts one nesting level, like a list; its clauses add none.
@@ -427,13 +430,13 @@ const ESCAPES: ReadonlySet<string> = new Set(["|", ":-", ":?"]);
  *
  * @returns The finished subscript, or null when an upper bound follows.
  */
-function afterColon(cursor: Cursor, stack: Frame[], frame: SubscriptFrame): Tree | null {
+function afterColon(cursor: Cursor, stack: Frame[], frame: SubscriptFrame): ExprNode | null {
   // `:?` and `::` lex as `:` here, so name what the author likely meant.
   if (cursor.peek("?")) cursor.fail(cursor.pos, SLICE_REQUIRED);
   if (cursor.peek(":")) cursor.fail(cursor.pos, SLICE_STEP);
   if (!cursor.accept("]")) return null;
   stack.pop();
-  return subscriptTree(frame, omitted());
+  return withTrailers(cursor, subscriptTree(frame, omitted()));
 }
 
 /** Complete the clause `frame` is reading, whose iterable or condition is `value` and ends at offset `end`. */
@@ -530,6 +533,16 @@ function readTrailers(cursor: Cursor, children: ExprNode[]): void {
       return;
     }
   }
+}
+
+/**
+ * Read the `.NAME` and `?.NAME` trailers after a subscript's `]` or a group's `)`: with any,
+ * `value` becomes `field_read[value, trailer, ...]`.
+ */
+function withTrailers(cursor: Cursor, value: ExprNode): ExprNode {
+  const trailers: ExprNode[] = [];
+  readTrailers(cursor, trailers);
+  return trailers.length === 0 ? value : new Tree("field_read", [value, ...trailers]);
 }
 
 /** Close `call`'s argument list, read the trailers after it, and return the refcall. */
@@ -736,13 +749,14 @@ function parseRaw(text: string): ExprNode {
     const frame = stack.at(-1);
     if (token.type === ")" && frame?.kind === "group") {
       stack.pop();
+      value = withTrailers(cursor, value);
     } else if (token.type === ")" && frame?.kind === "call") {
       stack.pop();
       addArg(frame, value);
       value = finishCall(cursor, frame);
     } else if (token.type === "]" && frame?.kind === "subscript") {
       stack.pop();
-      value = subscriptTree(frame, value);
+      value = withTrailers(cursor, subscriptTree(frame, value));
     } else if (token.type === "]" && frame?.kind === "comp") {
       finishClause(text, frame, value, token.startPos);
       stack.pop();
@@ -1050,6 +1064,7 @@ const WRAPPER_NODES: ReadonlySet<string> = new Set([
   "arg",
   "index",
   "slice",
+  "field_read",
   "omitted",
   "comp_for",
   "comp_if",

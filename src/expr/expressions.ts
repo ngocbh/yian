@@ -742,7 +742,22 @@ function describe(node: Tree, children: readonly ValueRoute[]): string {
     return `(${kind === "neg" ? "-" : "not "}${children[0]!.expression})`;
   }
   if (kind === "subscript") return `${children[0]!.expression}[...]`;
+  if (kind === "field_read") return children[0]!.expression + stepsText(splitReference(node).steps);
   return `${kind}(${children.map((child) => child.expression).join(", ")})`;
+}
+
+/**
+ * Name the base of a field read in a message: a reference or variable as written, a subscript as
+ * `base[...]`, a field read as its base and steps, a literal as written, anything else `(...)`.
+ */
+export function subscriptText(node: ExprNode): string {
+  if (node instanceof Token) return node.value;
+  if ((node.data === "refcall" && callSuffixOf(node) === undefined) || node.data === "comp_var") {
+    return referenceText(node);
+  }
+  if (node.data === "subscript") return `${subscriptText(node.children[0]!)}[...]`;
+  if (node.data === "field_read") return subscriptText(node.children[0]!) + stepsText(splitReference(node).steps);
+  return "(...)";
 }
 
 /** The error for indexing or slicing a value that is no list or text. */
@@ -966,6 +981,8 @@ class EvalExpr {
         return this.listLit(node);
       case "subscript":
         return this.subscript(node);
+      case "field_read":
+        return this.fieldRead(node);
       case "list_comp":
         return this.listComp(node);
       case "comp_var":
@@ -1264,11 +1281,18 @@ class EvalExpr {
   }
 
   /**
-   * The declared element type of a comprehension's iterable: `elementType` of its type, inferred
-   * from the declared types of the references, `item`, constructors and the variables in scope,
-   * without narrowing; `null` when untyped.
+   * The declared element type of a comprehension's iterable: `elementType` of its type
+   * (`declaredType`); `null` when untyped.
    */
   elementDeclared(iterable: ExprNode): Type | null {
+    return elementType(this.declaredType(iterable));
+  }
+
+  /**
+   * The declared type of `node`, inferred from the declared types of the references, `item`,
+   * constructors and the comprehension variables in scope, without narrowing; `null` when untyped.
+   */
+  declaredType(node: ExprNode): Type | null {
     const untyped = this.#declared === null && this.#itemType === null && this.#types === null;
     if (untyped && this.#vars.size === 0) return null;
     const refType = (path: string): Type | null => {
@@ -1278,7 +1302,30 @@ class EvalExpr {
     };
     const typeFn = (name: string): Type | null => this.#types?.get(name) ?? null;
     const vars = new Map([...this.#vars].map(([name, binding]): [string, Type | null] => [name, binding.type]));
-    return elementType(inferExprType(iterable, refType, typeFn, vars));
+    return inferExprType(node, refType, typeFn, vars);
+  }
+
+  /**
+   * `base.k` and `base?.k` after a subscript or a parenthesized operand: the steps as `walkSteps`
+   * walks them from the base's value, typed by the base's declared type. A `?.` on a miss reads
+   * null; a `.` on an index out of range throws the index's error. When tracing, the route is the
+   * base's projected through the steps.
+   */
+  fieldRead(node: Tree): Walked {
+    const baseNode = node.children[0]!;
+    const { steps } = splitReference(node);
+    const base = this.walk(baseNode);
+    const baseRoute = this.#trace ? this.#lastRoute : null;
+    if (base === MISSING && this.#outOfRange !== null) {
+      if (!steps[0]!.optional) throw this.#outOfRange;
+      this.#outOfRange = null;
+    }
+    const membersOf = () => declaredOf(this.declaredType(baseNode));
+    const [value, complete] = this.walkSteps(base, membersOf, steps, subscriptText(baseNode), null);
+    if (baseRoute !== null && complete && value !== null) {
+      this.#frames.at(-1)!.route = baseRoute.project(steps.map((step) => step.name));
+    }
+    return value;
   }
 
   /**
@@ -1745,6 +1792,7 @@ const BOOLEAN_NODES: ReadonlySet<string> = new Set([
  * - `xs[i]`: the item type of `xs`'s list type, `Optional` when `xs` may be null; `s[i]` and
  *   `s[a:b]` of a text: `str`, an index `Optional` as for a list;
  * - `xs[a:b]`: `xs`'s list type, non-null;
+ * - `x.k` after a subscript or parentheses: typed through `x`'s type, as a call's result is;
  * - `[e for ...]`: `list` of `e`'s type in its scope;
  * - a list literal: `list` of its items joined.
  *
@@ -1820,6 +1868,8 @@ export function inferExprType(
     }
     case "required_expr":
       return infer(tree.children[0]!)?.replace({ nullable: false }) ?? null;
+    case "field_read":
+      return stepsType(infer(tree.children[0]!), splitReference(tree).steps);
     case "if_expr": {
       // A `null` branch makes the other's type Optional; an empty `[]` adds nothing.
       const types: Type[] = [];
@@ -1882,7 +1932,7 @@ function argumentTypes(name: string, callSuffix: Tree, infer: (node: ExprNode) =
 }
 
 /** Return the type of reading `steps` from a value of type `typ`, if proven; a `?.` step makes it `Optional`. */
-function stepsType(typ: Type | null, steps: readonly RefStep[]): Type | null {
+export function stepsType(typ: Type | null, steps: readonly RefStep[]): Type | null {
   for (const step of steps) {
     if (typ === null) return null;
     typ = fieldReadType(typ, step.name);

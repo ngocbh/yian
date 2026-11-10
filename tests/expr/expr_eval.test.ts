@@ -596,6 +596,23 @@ describe("indexes and text slices", () => {
     expect(errorOf("xs[xs[4]:]", XS).message).toBe(outOfRange("4", "a list", 3));
   });
 
+  test("a field read after a subscript or parentheses follows the step table", () => {
+    const values = fromRecord({ rs: [{ k: 1n, o: null }], r: { k: 2n }, n: null, xs: [1n] });
+    expect(evaluate("rs[0].k", values)).toBe(1n);
+    expect(evaluate("rs[-1]?.o?.k", values)).toBeNull();
+    expect(evaluate("(r).k + (r if true else n).k", values)).toBe(4n);
+    expect(evaluate("rs[5]?.k :- 7", values)).toBe(7n);
+    expect(evaluate("n[0]?.k", values)).toBeNull();
+    expect(errorOf("rs[0].o.k", values).message).toBe(
+      "cannot read ${rs[...].o.k}: rs[...].o is null; write rs[...].o?.k to read null instead, " +
+        "or check rs[...].o != null first",
+    );
+    expect(errorOf("rs[0].nope", values).message).toBe("cannot read ${rs[...].nope}: rs[...] has no field 'nope'");
+    expect(errorOf("xs[1:].k", values).message).toBe("cannot read ${xs[...].k}: xs[...] is list, which has no fields");
+    // A `.` on an index out of range is the index's error, which `:-` doesn't take.
+    expect(errorOf("rs[5].k :- 7", values).message).toBe(outOfRange("5", "a list", 1));
+  });
+
   test("a null base is a miss, as with a slice", () => {
     expect(evaluate("n[0]", XS)).toBeNull();
     expect(evaluate("n[0] :- 5", XS)).toBe(5n);

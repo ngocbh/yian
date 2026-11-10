@@ -15,7 +15,8 @@
  * `builtinFieldErrors` rejects a field read on a builtin whose result type is known
  * (`upper(x).f` reads a field of text), the same way, and `builtinArgumentErrors` an argument of a
  * kind the builtin never takes (`upper(n)` with `n` an int), and `subscriptErrors` a subscript of a
- * value that is no list or text (`r[0]` of a record).
+ * value that is no list or text (`r[0]` of a record), and `fieldReadErrors` a field read after a
+ * subscript or parentheses that the base's type rules out (`xs[0].k` of a list of texts).
  *
  * Given the types of the references an expression reads, a positional argument or a keyword field
  * whose inferred type is disjoint from the declared one is an error too. A narrower or unproven
@@ -36,11 +37,19 @@ import {
   TEMPLATE_FNS,
   valueKinds,
 } from "../../expr/builtins.ts";
-import { constructorShapeError, inferExprType, ISINSTANCE, splitReference, stepsText } from "../../expr/expressions.ts";
+import {
+  constructorShapeError,
+  inferExprType,
+  ISINSTANCE,
+  splitReference,
+  stepsText,
+  stepsType,
+  subscriptText,
+} from "../../expr/expressions.ts";
 import { callSuffixOf, type ExprNode, iterSubtreesTopdown, Token, Tree } from "../../expr/grammar.ts";
 import { outputContractFieldError, ValueContract } from "../../nodes/contracts.ts";
 import type { RefExpr, TypeRegistry } from "../../typesys/types.ts";
-import { canonicalTypeLabel, isInboxType, isMemoryType, type Type } from "../../typesys/values.ts";
+import { canonicalTypeLabel, isInboxType, isMemoryType, type Type, ValueKind } from "../../typesys/values.ts";
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
 import { literalType, type TypeFn } from "../../compile/output_contracts.ts";
 
@@ -200,6 +209,54 @@ export function subscriptErrors(
         errors.push(`${part.data === "index" ? "an index takes" : "slice bounds take"} int, got ${found.label}`);
       }
     }
+  }
+  return errors;
+}
+
+/**
+ * Return why each field read after a subscript or a parenthesized operand fails, given its base's
+ * proven type: a `.` step on a value that may be null (write `?.`), or a field the type can't
+ * have. A field only some union members have is left to the evaluation, since a check may have
+ * narrowed the value.
+ *
+ * @param tree A parsed `${...}` interior or condition.
+ * @param refType Resolves a reference path to its proven type; `null` (the default) types only
+ *   literals and what they build.
+ * @param typeFn Resolves a constructor name to its type; `null` (the default) leaves them unknown.
+ * @returns One message per field read, in source order.
+ */
+export function fieldReadErrors(
+  tree: ExprNode,
+  refType: RefType | null = null,
+  typeFn: TypeFn | null = null,
+): string[] {
+  if (!(tree instanceof Tree)) return [];
+  const errors: string[] = [];
+  for (const node of iterSubtreesTopdown(tree)) {
+    if (node.data !== "field_read") continue;
+    const base = node.children[0]!;
+    const typ = argumentType(base, refType, typeFn ?? (() => null));
+    if (typ === null) continue;
+    const { steps } = splitReference(node);
+    const text = subscriptText(base);
+    const nullable = steps.findIndex((step, i) => {
+      const receiver = stepsType(typ, steps.slice(0, i));
+      return !step.optional && receiver !== null && (receiver.nullable || receiver.kind === ValueKind.NONE);
+    });
+    if (nullable >= 0) {
+      const receiver = text + stepsText(steps.slice(0, nullable));
+      const name = steps[nullable]!.name;
+      const read = `\${${receiver}.${name}} reads field '${name}' of ${receiver}`;
+      errors.push(`${read}, which may be null; write ${receiver}?.${name}`);
+      continue;
+    }
+    const error = outputContractFieldError(
+      new ValueContract(typ.replace({ nullable: false })),
+      steps.map((step) => step.name),
+      text + stepsText(steps),
+      { partialUnionFields: true },
+    );
+    if (error !== null) errors.push(error);
   }
   return errors;
 }

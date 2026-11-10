@@ -204,3 +204,23 @@ test.each<[string, Type | null]>([
   };
   expect(inferExprType(parseExpr(source), (path) => types[path] ?? null)).toEqual(want);
 });
+
+test.each<[string, Type | null]>([
+  ["rs[0].k", Type.scalar(ValueKind.INTEGER)],
+  ["rs[0]?.k", Type.scalar(ValueKind.INTEGER).replace({ nullable: true })],
+  ["(r).k", Type.scalar(ValueKind.INTEGER)],
+  ["(r if c else r).k", Type.scalar(ValueKind.INTEGER)],
+  ["ors[0].k", Type.scalar(ValueKind.INTEGER).replace({ nullable: true })],
+])("the field read %s is typed through its base", (source, want) => {
+  const R = new Type({
+    kind: ValueKind.OBJECT,
+    fields: new Map([["k", Type.scalar(ValueKind.INTEGER)]]),
+    required: new Set(["k"]),
+  });
+  const types: Record<string, Type> = {
+    r: R,
+    rs: new Type({ kind: ValueKind.LIST_OBJECT, element: R }),
+    ors: new Type({ kind: ValueKind.LIST_OBJECT, element: R, nullable: true }),
+  };
+  expect(inferExprType(parseExpr(source), (path) => types[path] ?? null)).toEqual(want);
+});

@@ -659,6 +659,13 @@ test("a conditional's route selects the branch it picked, not its test", () => {
   expect(result.route.children.map((child) => [child.kind, child.source?.path])).toEqual([["source", ["name"]]]);
 });
 
+test("a field read after an index projects the item's route through its steps", () => {
+  const sources = new Sources({ producer: { rows: [{ name: "Ada" }, { name: "Bo" }] } });
+  const result = sources.evaluate("producer.rows[1].name");
+  expect(result.value).toBe("Bo");
+  expect([result.route.kind, result.route.source?.path]).toEqual(["source", ["rows", 1, "name"]]);
+});
+
 test("len records an opaque route", () => {
   const sources = new Sources({ producer: { tags: ["a"] } });
   expect(sources.evaluate("len(producer.tags)").route.kind).toBe("opaque");

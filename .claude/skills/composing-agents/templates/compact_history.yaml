@@ -6,8 +6,8 @@
 # The history is a list of turns (each a list of built-in Messages), so `keep` counts whole
 # turns (a tool call never parts from its result) and the cut `history[:len(history) - keep]`
 # / `history[len(history) - keep:]` falls between them. The slices sit in the `folded` CALL's binding: a CALL is derived (its binding is
-# rebuilt, never recorded), and the AGENT binds plain references. Prompts call only
-# formatting builtins (join, lower, render_as_json, upper), so `len` stays in bindings.
+# rebuilt, never recorded), and the AGENT binds plain references. Prompts call only the
+# builtins that give text (join, render_as_json, strip, ...), so `len` stays in bindings.
 # The budget and the summarizer read the messages' text parts only.
 
 id: compact_history

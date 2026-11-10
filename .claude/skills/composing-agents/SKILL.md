@@ -155,8 +155,9 @@ output:
 - **A null in a prompt fails the node.** Give it a default: `${note :- "none"}`.
 - **Arithmetic is numeric.** `+` also joins two texts or two lists; `*` and `%` on text fail
   (put the value in a template instead); `/` always gives a float.
-- **Prompts may call only `join`, `upper`, `lower` and `render_as_json`.** Compute `len(...)`,
-  `isinstance(...)` and constructors in a binding.
+- **Prompts may call only the builtins that give text**: `join`, `upper`, `lower`,
+  `render_as_json`, `str`, `strip`, `lstrip`, `rstrip` and `replace`. Compute `len(...)`,
+  `split(...)`, `int(...)`, `isinstance(...)` and constructors in a binding.
 - **Quote YAML that YAML would parse itself**: a slice or comprehension
   (`names: "${[m.text for m in input.msgs]}"`), and any `${...}` inside a `{...}` flow mapping
   (`input: {x: "${input.x}"}`). Block style avoids most of this.

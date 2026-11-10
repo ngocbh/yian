@@ -41,7 +41,7 @@ import {
   scanTemplate,
 } from "../expr/index.ts";
 import { ResolvedValue, ValueRoute } from "../expr/lineage.ts";
-import { Span } from "../expr/template.ts";
+import { Span, Verbatim } from "../expr/template.ts";
 import {
   buildValueAs,
   isRecord,
@@ -548,7 +548,7 @@ class SourceReader {
    * @throws ExpressionError (a `RequiredError` among them) when the template does not parse or
    *   evaluate.
    */
-  string(text: string): SourceRead {
+  string(text: string | Verbatim): SourceRead {
     if (!this.trace) {
       // The item may be a traced caller's `ResolvedValue`; an untraced read needs just its value.
       const item = this.item instanceof ResolvedValue ? this.item.value : this.item;
@@ -567,9 +567,10 @@ class SourceReader {
   /**
    * Evaluate one node of a template tree at `path`.
    *
-   * Each leaf string is a template; a nested typed `Binding` evaluates its source in place, then
-   * checks the result against its contract, converting only its file and object representation.
-   * Other leaves are literals. `label`, when set, names the parameter in an error message in
+   * Each leaf string is a template, and a `Verbatim` leaf its text as written; a nested typed
+   * `Binding` evaluates its source in place, then checks the result against its contract,
+   * converting only its file and object representation. Other leaves are literals. `label`, when
+   * set, names the parameter in an error message in
    * place of `binding '<name>'`.
    *
    * @throws BindingError when a leaf fails to evaluate (located at its registered origin, else
@@ -602,7 +603,7 @@ class SourceReader {
       }
       return [value, route, evaluated];
     }
-    if (typeof node === "string") {
+    if (typeof node === "string" || node instanceof Verbatim) {
       try {
         return this.string(node);
       } catch (error) {
@@ -657,7 +658,8 @@ class SourceReader {
  * Exactly one `Binding` layer is removed at this read boundary; a `Binding` directly inside it
  * stays an ordinary literal payload. A string that is exactly one `${...}` gives the typed value
  * of that expression; a `${...}` embedded in surrounding text is written into it as text; a
- * string with no `${...}` is a plain literal (after `$$` becomes `$`). `${item}` /
+ * string with no `${...}` is a plain literal (after `$$` becomes `$`), and `Verbatim` text is its
+ * text as written. `${item}` /
  * `${item.path}` resolve from the MAP-body-local `item` scope. A `ValueTemplate` evaluates each
  * leaf string the same way at its position and checks each nested typed `Binding`; its route is
  * a record or list of the parts' routes. Any other source, a plain record or list included, is a
@@ -696,7 +698,7 @@ export function resolveSource(
   const { declared = null, itemType = null } = options;
   const origin = sourceOrigin(source);
   const sourceValue = bindingSource(source);
-  if (typeof sourceValue !== "string" && !(sourceValue instanceof ValueTemplate)) {
+  if (typeof sourceValue !== "string" && !(sourceValue instanceof ValueTemplate || sourceValue instanceof Verbatim)) {
     collector?.recordSource(name, ValueRoute.literal(sourceValue), false);
     return sourceValue;
   }

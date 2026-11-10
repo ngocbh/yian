@@ -20,6 +20,7 @@
 import { createHash } from "node:crypto";
 
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
+import { Verbatim } from "../expr/template.ts";
 import { AgentNode, authoredPrompt } from "../nodes/agent/node.ts";
 import { Node, NodeKind } from "../nodes/base.ts";
 import { CallNode } from "../nodes/call/node.ts";
@@ -465,8 +466,8 @@ function floatHex(value: number): string {
  * Encode one value as a deterministic, type-discriminated JSON record.
  *
  * A `ValueTemplate` encodes as `value_template` around its tree, so no literal shares a template's
- * encoding. A float is its IEEE-754 hex (`-0` as `0`), and a `FileRef` its `{uri, mime, name}`
- * mapping.
+ * encoding, and `Verbatim` text as `verbatim`, apart from template text. A float is its IEEE-754
+ * hex (`-0` as `0`), and a `FileRef` its `{uri, mime, name}` mapping.
  *
  * @throws TypeError for NaN (V8 and JavaScriptCore write a NaN's bits differently), a bigint the
  *   runtime can't stringify, or a value that isn't a yian value (`undefined`, a `Map`, a class
@@ -493,6 +494,7 @@ function canonicalValue(value: unknown, ctx: ManifestContext, path: string): Jso
     return { type: "float", value: floatHex(value + 0) };
   }
   if (typeof value === "string") return { type: "str", value };
+  if (value instanceof Verbatim) return { type: "verbatim", value: value.text };
   if (FileRef.isFileRef(value)) {
     // A partial LOOP driver's default for an omitted `file` field encodes as its JSON form.
     const fields = { uri: value.uri, mime: value.mime, name: value.name };

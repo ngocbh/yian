@@ -24,7 +24,7 @@ import {
   splitReference,
 } from "../expr/index.ts";
 import { type ExprNode, Token, Tree } from "../expr/grammar.ts";
-import { Span, templateRefs } from "../expr/template.ts";
+import { Span, templateRefs, Verbatim } from "../expr/template.ts";
 import {
   Binding,
   bindingSource,
@@ -418,13 +418,15 @@ function widened(typ: Type): Type {
  * Return the value a literal binding source binds, or `NOT_LITERAL` for a template.
  *
  * A string with no `${...}` span binds its text after `$$` unescaping, exactly as the binder
- * evaluates it; a value template is a template; any other value is bound as is.
+ * evaluates it; `Verbatim` text binds its text as written; a value template is a template; any
+ * other value is bound as is.
  *
  * @param source The binding's raw source.
  * @returns The bound literal value, or `NOT_LITERAL`.
  */
 export function literalValue(source: unknown): unknown {
   if (source instanceof ValueTemplate) return NOT_LITERAL;
+  if (source instanceof Verbatim) return source.text;
   if (typeof source !== "string") return source;
   try {
     const segments = scanTemplate(source);

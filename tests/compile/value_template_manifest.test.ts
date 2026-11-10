@@ -10,6 +10,7 @@ import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import { CompiledFlow, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
+import { Verbatim } from "../../src/expr/template.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import { Binding, ContractOrigins, Parameter, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
@@ -121,6 +122,16 @@ test("template identity differs from every authored literal", () => {
   const fingerprints = new Set([template, plain, shaped].map(flowFingerprint));
 
   expect(fingerprints.size).toBe(3);
+});
+
+test("verbatim text encodes apart from template text, alone or in a template", () => {
+  const verbatim = fragment({ x: new Verbatim("a$$b") });
+  const template = fragment({ x: "a$$b" });
+  const nested = fragment({ x: new ValueTemplate({ a: new Verbatim("a$$b") }) });
+
+  expect(wired(verbatim, "x")).toEqual({ type: "verbatim", value: "a$$b" });
+  expect(firstTreeValue(wired(nested, "x"))).toEqual({ type: "verbatim", value: "a$$b" });
+  expect(flowFingerprint(verbatim)).not.toBe(flowFingerprint(template));
 });
 
 test("a nested binding is not a bare string or an untyped template part", () => {

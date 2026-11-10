@@ -4,7 +4,14 @@
  * as if written there quoted. It is refused on a key, a list, a mapping and a merge source, and in
  * a type position; a file that is missing, not a regular file, not UTF-8, over
  * `YIAN_MAX_INCLUDE_BYTES` or outside the code root fails at the tag. The flow's source records
- * each included file, and a load from the source reads it from there, never from disk.
+ * each included file's text unchanged, and a load from the source reads it from there, never from
+ * disk.
+ *
+ * `!include(T) PATH` reads the same file as a value of type `T`, wherever a slot takes `!T value`:
+ * `!include(str)` the text exactly, never a template, and any other `T` the text as one plain YAML
+ * value (no tags, anchors, aliases, merge keys, repeated keys or second document), checked against
+ * `T` as an inline literal is, its strings never templates. Each error is at the tag and names the
+ * file.
  */
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
@@ -327,7 +334,7 @@ test("a host memory type can't be named include", async () => {
 
 // ---------- recording ----------
 
-test("the flow's source records each included file under the include: ref", async () => {
+test("the flow's source records each included file's text unchanged, under the include: ref", async () => {
   write({ "prompts/a.md": "a\r\n", "lib/child.yaml": outputFlow("!include ../prompts/a.md") });
   const root = "id: f\nname: f\nuses:\n  child: lib/child\nnodes:\n  c:\n    kind: call\n    call: child\noutput: {a: !include prompts/a.md, c: '${c.output}'}\n";
 
@@ -340,7 +347,7 @@ test("the flow's source records each included file under the include: ref", asyn
     files: {
       "flow.yaml": { text: root, refs: { "include:prompts/a.md": "prompts/a.md", "lib/child": "lib/child.yaml" } },
       "lib/child.yaml": { text: outputFlow("!include ../prompts/a.md"), refs: { "include:../prompts/a.md": "prompts/a.md" } },
-      "prompts/a.md": { text: "a\n", refs: {} },
+      "prompts/a.md": { text: "a\r\n", refs: {} },
     },
   });
 });
@@ -408,4 +415,228 @@ test("a host child's included file outside the code root is refused at load, as 
   const { message } = await loadErrorAsync(loadFlow(text, { childResolver, baseDir: root, codeRoot: root, env: NO_ENV }));
 
   expect(message).toBe("child.yaml: `!include` file '../../note.txt' is outside the code root; include a file inside it");
+});
+
+// ---------- !include(T): the value ----------
+
+/** Text with what a template would change: `$$`, `${...}`, CRLF and a lone CR. */
+const RAW = "a $$ b ${HOME} $${x}\r\nc\rd\n";
+
+/** A flow with typedefs `Row` and `Rows`, no nodes, and `output: output`. */
+const typedOutputFlow = (output: string) =>
+  "id: f\nname: f\ntypedefs:\n  Row: {sku: str, qty: int}\n  Rows: {rows: list(Row)}\n" +
+  `nodes: {}\noutput: ${output}\n`;
+
+test.each([
+  ["a flow output", (tag: string) => outputFlow(tag)],
+  ["a value entry", (tag: string) => `id: f\nname: f\nnodes:\n  v: ${tag}\noutput: \${v.output}\n`],
+  [
+    "a node input",
+    (tag: string) =>
+      `id: f\nname: f\nnodes:\n  c:\n    kind: code\n    input:\n      x: ${tag}\n    output: str\n` +
+      "    code: return inputs.x\noutput: ${c.output}\n",
+  ],
+  ["a flow input's default", (tag: string) => `id: f\nname: f\ninput:\n  x: ${tag}\nnodes: {}\noutput: \${input.x}\n`],
+  ["a record's field", (tag: string) => `id: f\nname: f\nnodes:\n  v: !object {t: ${tag}}\noutput: \${v.output.t}\n`],
+])("!include(str) in %s reads the text exactly, never as a template", async (_, flow) => {
+  write({ "a.md": RAW });
+  expect(await outputOf(await load(flow("!include(str) a.md")))).toBe(RAW);
+});
+
+test.each([
+  ["int", "123456789012345678901234567890\n", 123456789012345678901234567890n],
+  ["list(str)", "- one\n- ${HOME}\n- $$x\n- 'call(x)'\n- call(y)\n", ["one", "${HOME}", "$$x", "call(x)", "call(y)"]],
+  ["list(int)", "[1, 2, 3]", [1n, 2n, 3n]],
+  ["Optional(str)", "", null],
+  ["Optional(int)", "null\n", null],
+  ["Optional(str)", "yes\n", "yes"],
+  ["Rows", "rows:\n  - sku: a\n    qty: 2\n", { rows: [{ sku: "a", qty: 2n }] }],
+  ["object", '{"a": [1, "x", 2.5], "b": null, "c": true}', { a: [1n, "x", 2.5], b: null, c: true }],
+])("!include(%s) reads the file as one YAML value", async (type, text, value) => {
+  write({ "data.yaml": text });
+  expect(await outputOf(await load(typedOutputFlow(`!include(${type}) data.yaml`)))).toEqual(value);
+  const entry = `id: f\nname: f\ntypedefs:\n  Row: {sku: str, qty: int}\n  Rows: {rows: list(Row)}\nnodes:\n  v: !include(${type}) data.yaml\noutput: \${v.output}\n`;
+  expect(await outputOf(await load(entry))).toEqual(value);
+});
+
+test("a typed value's strings stay as written inside a value holding ${...}", async () => {
+  write({ "ex.yaml": "- ${HOME}\n- $$x\n" });
+  const flow = await load(
+    "id: f\nname: f\ninput:\n  n: !int 3\nnodes:\n  v: !object\n    n: ${input.n}\n    ex: !include(list(str)) ex.yaml\n" +
+      "output: ${v.output}\n",
+  );
+  expect(await outputOf(flow)).toEqual({ n: 3n, ex: ["${HOME}", "$$x"] });
+});
+
+test("one file reads as a template with !include and as written with !include(str)", async () => {
+  write({ "a.txt": "x $$ y\r\n" });
+  expect(await outputOf(await load(outputFlow("{t: !include a.txt, v: !include(str) a.txt}")))).toEqual({
+    t: "x $ y\n",
+    v: "x $$ y\r\n",
+  });
+});
+
+test("an alias of a typed !include reads the same value", async () => {
+  write({ "n.yaml": "[1, 2]" });
+  expect(await outputOf(await load(outputFlow("{a: &x !include(list(int)) n.yaml, b: *x}")))).toEqual({
+    a: [1n, 2n],
+    b: [1n, 2n],
+  });
+});
+
+// ---------- !include(T): files that aren't one plain YAML value ----------
+
+test.each([
+  ["a syntax error", "rows: [a,\n", 2, 1, "Flow sequence in block collection must be sufficiently indented"],
+  ["a second document", "- a\n---\n- b\n", 2, 1, "expected a single document in the stream, but found another document"],
+  ["a local tag", "- a\n- !str b\n", 2, 3, "a tag (`!str`) can't be used here; write the value out in plain YAML"],
+  ["a core tag", "- !!str 1\n", 1, 3, "a tag (`!!str`) can't be used here; write the value out in plain YAML"],
+  ["an !include", "- !include b.md\n", 1, 3, "a tag (`!include`) can't be used here; write the value out in plain YAML"],
+  ["an anchor and alias", "- &a x\n- *a\n", 1, 3, "an anchor (`&a`) can't be used here; write the value out in plain YAML"],
+  ["a merge key", "a: 1\n<<: {b: 2}\n", 2, 1, "a `<<:` merge key can't be used here; write the value out in plain YAML"],
+  ["a repeated key", "a: 1\nb: 2\na: 3\n", 3, 1, "duplicate key 'a' (first at line 1); a YAML mapping's keys must be unique"],
+  ["a key YAML reads as non-text", "1: a\n", 1, 1, "the key `1` was read by YAML as an int"],
+])("a file holding %s fails at the tag, naming the file, line and column", async (_, text, line, column, words) => {
+  write({ "data.yaml": text });
+  const { message, label, line: at } = await failure(load(outputFlow("!include(object) data.yaml")));
+  expect(message).toStartWith(`\`!include(object)\` file 'data.yaml', line ${line}, column ${column}: `);
+  expect(message).toContain(words);
+  expect([label, at]).toEqual(["flow.yaml", 4]);
+});
+
+// ---------- !include(T): values that don't fit T ----------
+
+test.each([
+  [
+    "a list item",
+    "list(str)",
+    "- a\n- b\n- 5\n",
+    "'v': `!include(list(str))` file 'data.yaml' is not a valid list(str): 5 does not match declared type str " +
+      "(at `v[2]`, line 3 of the file)",
+  ],
+  [
+    "a record field",
+    "Rows",
+    "rows:\n  - sku: a\n    qty: x\n",
+    "'v': `!include(Rows)` file 'data.yaml' is not a valid Rows: \"x\" does not match declared type int " +
+      "(at `v.rows[0].qty`, line 3 of the file)",
+  ],
+  [
+    "a scalar",
+    "int",
+    "abc\n",
+    "'v': `!include(int)` file 'data.yaml' is not a valid int: \"abc\" does not match declared type int (line 1 of the file)",
+  ],
+])("a value that doesn't fit T at %s fails at the tag, saying where", async (_, type, text, expected) => {
+  write({ "data.yaml": text });
+  const flow =
+    "id: f\nname: f\ntypedefs:\n  Row: {sku: str, qty: int}\n  Rows: {rows: list(Row)}\n" +
+    `nodes:\n  v: !include(${type}) data.yaml\noutput: \${v.output}\n`;
+  const { message, label, line } = await failure(load(flow));
+  expect(message).toBe(expected);
+  expect([label, line]).toEqual(["flow.yaml", 7]);
+});
+
+test("a T that isn't a type fails at the tag, naming the file and a close match", async () => {
+  write({ "a.md": "text" });
+  const { message, line } = await failure(load(`id: f\nname: f\nnodes:\n  v: !include(strr) a.md\noutput: \${v.output}\n`));
+  expect(message).toBe(
+    "'v': `!include(strr)` file 'a.md': `strr` is not a type (unknown type 'strr'). Did you mean `str`?",
+  );
+  expect(line).toBe(4);
+});
+
+// ---------- !include(T): where it may go ----------
+
+test.each([
+  ["a mapping key", "output:\n  !include(str) a.txt: x\n", 5, "can't be on a mapping key"],
+  ["a list", "output: !include(str) [a]\n", 4, "not a list"],
+  ["a mapping", "output: !include(int) {a: b}\n", 4, "not a mapping"],
+  ["a merge source", "output:\n  <<: !include(object) a.txt\n", 5, "`<<:` merge source"],
+  ["a typedef", "typedefs:\n  T: !include(str) a.txt\nnodes: {}\noutput: done\n", 4, "typedef 'T': a type definition is written as a type"],
+  [
+    "a node's output type",
+    "nodes:\n  a:\n    kind: code\n    code: return 1\n    output: !include(str) a.txt\noutput: ${a.output}\n",
+    7,
+    "`output:` declares a type",
+  ],
+  ["a field that takes no tag", "nodes: {}\noutput: done\nversion: !include(str) a.txt\n", 5, "`version:` is none of these"],
+])("!include(T) on %s fails at load", async (_, yaml, line, words) => {
+  write({ "a.txt": "str" });
+  const head = yaml.startsWith("nodes:") || yaml.startsWith("typedefs:") ? "id: f\nname: f\n" : "id: f\nname: f\nnodes: {}\n";
+  const { message, label, line: at } = await failure(load(head + yaml));
+  expect(message).toContain("`!include(");
+  expect(message).toContain(words);
+  expect([label, at]).toEqual(["flow.yaml", line]);
+});
+
+test("!include(str) with no path fails at the tag", async () => {
+  const { message, line } = await failure(load("id: f\nname: f\ninput:\n  x: !include(str)\nnodes: {}\noutput: ${input.x}\n"));
+  expect(message).toBe("`!include(str)` needs a file path, e.g. `prompt: !include(str) prompts/answer.md`");
+  expect(line).toBe(4);
+});
+
+// ---------- !include(T): files that can't be included ----------
+
+test("a typed !include of a missing file names the tag with its type", async () => {
+  const { message } = await failure(load(outputFlow("!include(list(str)) none.yaml")));
+  expect(message).toBe(
+    `\`!include(list(str))\` file 'none.yaml' does not exist in '${tmp}'; its path is relative to the including file's folder`,
+  );
+});
+
+test("a typed !include is held to the cap and the code root", async () => {
+  const root = join(tmp, "root");
+  write({ "root/a.yaml": "[1, 2]", "secret.yaml": "[3]" });
+  const env: Env = (name) => (name === "YIAN_MAX_INCLUDE_BYTES" ? "4" : NO_ENV(name));
+  const large = await failure(load(outputFlow("!include(list(int)) a.yaml"), { dir: root, env }));
+  expect(large.message).toBe(
+    "`!include(list(int))` file 'a.yaml' is larger than 4 bytes (YIAN_MAX_INCLUDE_BYTES); shorten it or raise the cap",
+  );
+  const outside = await failure(load(outputFlow("!include(list(int)) ../secret.yaml"), { dir: root, codeRoot: root }));
+  expect(outside.message).toBe(
+    "`!include(list(int))` file '../secret.yaml' is outside the code root; include a file inside it",
+  );
+  expect(await outputOf(await load(outputFlow("!include(list(int)) a.yaml"), { dir: root, codeRoot: root }))).toEqual([
+    1n,
+    2n,
+  ]);
+});
+
+// ---------- !include(T): recording ----------
+
+test("a load from the recorded source reads the typed value it recorded, with the same fingerprint", async () => {
+  write({ "a.md": "before $$\r\n", "n.yaml": "[1]" });
+  const loaded = await load(outputFlow("{t: !include(str) a.md, n: !include(list(int)) n.yaml}"));
+  write({ "a.md": "after", "n.yaml": "[2]" });
+
+  const again = await loadFlowSource(loaded.source!, { env: NO_ENV });
+
+  expect(await outputOf(again)).toEqual({ t: "before $$\r\n", n: [1n] });
+  expect(flowFingerprint(again.compiled)).toBe(flowFingerprint(loaded.compiled));
+});
+
+test("the fingerprint follows a typed !include's file", async () => {
+  write({ "n.yaml": "[1]" });
+  const before = flowFingerprint((await load(outputFlow("!include(list(int)) n.yaml"))).compiled);
+  write({ "n.yaml": "[2]" });
+  expect(flowFingerprint((await load(outputFlow("!include(list(int)) n.yaml"))).compiled)).not.toBe(before);
+});
+
+test("a source recorded with LF line endings, as one was before typed includes, loads the same", async () => {
+  const source: FlowSource = {
+    root: "flow.yaml",
+    dir: tmp,
+    codeRoot: null,
+    files: {
+      "flow.yaml": { text: outputFlow("!include a.txt"), refs: { "include:a.txt": "a.txt" } },
+      "a.txt": { text: "one\ntwo\n", refs: {} },
+    },
+  };
+  write({ "a.txt": "one\r\ntwo\r\n" });
+  const recorded = await loadFlowSource(source, { env: NO_ENV });
+  const fresh = await load(outputFlow("!include a.txt"));
+
+  expect(await outputOf(recorded)).toBe("one\ntwo\n");
+  expect(flowFingerprint(recorded.compiled)).toBe(flowFingerprint(fresh.compiled));
 });

@@ -1016,3 +1016,27 @@ test("an !include given its text reads as that text, untagged and marked, and is
   expect([c!.value, c!.tag, c!.included]).toEqual(["d.txt", "include", false]);
   expect(document.includes.map((site) => site.path)).toEqual(["d.txt"]);
 });
+
+test("an !include(T) given its value reads as that value, tagged T, at the tag, its strings verbatim", () => {
+  const text = "a: !include(str) a.txt\nb: !include(list(str)) b.yaml\nc: !include(int) c.yaml\n";
+  const data = new Map([["b.yaml", SourceDocument.parseData("- x\n- 1\n", "b.yaml")]]);
+  const document = SourceDocument.parse(text, "<flow>", new Map([["a.txt", "$$\r\n"]]), data);
+  const [a, b, c] = ["a", "b", "c"].map((key) => document.root.child(key));
+
+  expect([a!.value, a!.tag, a!.verbatim, a!.included, a!.scalarText]).toEqual(["$$\r\n", "str", true, false, "!include(str) a.txt"]);
+  expect(a!.typedInclude).toEqual({ type: "str", path: "a.txt", data: null });
+  expect([b!.value, b!.tag, b!.typedInclude?.path]).toEqual([["x", 1n], "list(str)", "b.yaml"]);
+  const [x, one] = [b!.child(0), b!.child(1)];
+  expect([x.verbatim, x.tag, one.verbatim]).toEqual([true, null, false]);
+  expect([x.range, one.range]).toEqual([b!.range, b!.range]);
+  expect([c!.value, c!.tag, c!.typedInclude]).toEqual(["c.yaml", "include(int)", null]);
+  expect(document.includes).toEqual([{ path: "c.yaml", range: c!.range!, type: "int" }]);
+});
+
+test.each([
+  ["- !int 1\n", "a tag (`!int`)"],
+  ["- &a 1\n", "an anchor (`&a`)"],
+  ["a: 1\n<<: {b: 2}\n", "a `<<:` merge key"],
+])("parseData refuses %p", (text, words) => {
+  expect(() => SourceDocument.parseData(text, "d.yaml")).toThrow(words);
+});

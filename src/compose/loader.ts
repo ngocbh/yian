@@ -25,8 +25,9 @@
  * private `assemble` products keep the resolver unset.
  *
  * Before a file is parsed for good, the file each `!include` names is read: from disk, against the
- * including file's folder, or from a recorded source. The including file records where each path
- * went. After a file assembles, its CODE nodes are checked (each def's in written order, then the
+ * including file's folder, or from a recorded source, and for an `!include(T)` other than
+ * `!include(str)` read as one plain YAML value. The including file records where each path went.
+ * After a file assembles, its CODE nodes are checked (each def's in written order, then the
  * root's) against the file's base directory, and inside the load's `codeRoot` when it has one.
  * Only the root load sees the fully assembled graph, so `loadFlow` then refuses an `llm_config`
  * value a child flow's agent would inherit before it is known.
@@ -75,7 +76,7 @@ import { INLINE_FLOW_PREFIX } from "./desugar/inline_bodies.ts";
 import { LoadDiagnostics, LoadError, rejectRemovedMemoryKey } from "./helpers/errors.ts";
 import { type MemoryClass, type MemoryTypeTable, memoryTypeTools, NO_MEMORY_TYPES } from "./helpers/memory.ts";
 import { boundaryFieldRanges, pathText } from "./helpers/source.ts";
-import { rejectUnreadTags } from "./helpers/tags.ts";
+import { includeFile, rejectUnreadTags } from "./helpers/tags.ts";
 import { parseUsesRef } from "./helpers/uses.ts";
 import { checkEnvValues } from "./helpers/value_nesting.ts";
 import { maxToolIterationsError, readLlmConfig, validateLlmConfig } from "./nodes/agent.ts";
@@ -85,13 +86,21 @@ import { checkFlowCode, type CodeCheckOptions } from "./nodes/code.ts";
 import { callNestingScope } from "./nodes/resolver.ts";
 import {
   flowNodesCursor,
+  keyProblem,
   parseFile,
   parseSourceDocument,
   signatureNodeBody,
   signatureParams,
 } from "./parse/file.ts";
 import { scopeOrigin, SourceCatalog, SourceCatalogBuilder } from "./source/catalog.ts";
-import { SourceAccessError, SourceCursor, type SourceDocument } from "./source/index.ts";
+import {
+  includeExample,
+  includeTag,
+  SourceAccessError,
+  SourceCursor,
+  SourceDocument,
+  SourceSyntaxError,
+} from "./source/index.ts";
 
 /**
  * Resolves a `uses:` ref to its flow: `path` is the ref's flow path and `version` its
@@ -764,51 +773,84 @@ function checkHostedIncludes(hosted: ReadonlyMap<string, unknown>, codeRoot: str
     for (const [key, file] of Object.entries(files)) {
       for (const [ref, target] of Object.entries(file.refs)) {
         if (!ref.startsWith(INCLUDE_REF) || !leavesRoot(relative(codeRoot, resolvePath(dir, target)))) continue;
-        throw UNLOCATED_DIAGNOSTICS.error(`${basename(key)}: ${outsideRoot(ref.slice(INCLUDE_REF.length))}`);
+        throw UNLOCATED_DIAGNOSTICS.error(`${basename(key)}: ${outsideRoot(includeFile(ref.slice(INCLUDE_REF.length)))}`);
       }
     }
   }
 }
 
-/** Reads the file an `!include` path names; `fail` makes the error, at the value, for one it can't. */
-type IncludeReader = (path: string, fail: (message: string) => LoadError) => Promise<string>;
+/**
+ * Reads the file an `!include` path names; `fail` makes the error, at the value, for one it can't,
+ * and `file` is how its messages name the file (`includeFile`).
+ */
+type IncludeReader = (path: string, fail: (message: string) => LoadError, file: string) => Promise<string>;
 
-/** Name the file `!include <path>` reads, as messages start. */
-function includeFile(path: string): string {
-  return `\`!include\` file ${reprText(path)}`;
+/** The message for an included file, named as `includeFile` names it, outside the code root. */
+function outsideRoot(file: string): string {
+  return `${file} is outside the code root; include a file inside it`;
 }
 
-/** The message for an included file outside the code root. */
-function outsideRoot(path: string): string {
-  return `${includeFile(path)} is outside the code root; include a file inside it`;
-}
-
-/** The message for an included file over the cap `limit`. */
-function tooLarge(path: string, limit: number): string {
-  return `${includeFile(path)} is larger than ${limit} bytes (YIAN_MAX_INCLUDE_BYTES); shorten it or raise the cap`;
+/** The message for an included file, named as `includeFile` names it, over the cap `limit`. */
+function tooLarge(file: string, limit: number): string {
+  return `${file} is larger than ${limit} bytes (YIAN_MAX_INCLUDE_BYTES); shorten it or raise the cap`;
 }
 
 /**
  * Parse `text` as `parseSourceDocument` does, each `!include` value reading the text `read` gives
- * its path. Each distinct path is read once, in document order.
+ * its path, and each `!include(T)` value of a `T` other than `str` the value that text holds as
+ * YAML (`readIncludedValue`). Each distinct path is read once, in document order.
  *
- * @throws LoadError at the first `!include` with an empty path, a path holding a NUL, or a file
- *   `read` refuses.
+ * @throws LoadError at the first `!include` with an empty path, a path holding a NUL, a file
+ *   `read` refuses, or a file `readIncludedValue` refuses.
  */
 async function parseIncluding(text: string, label: string, read: IncludeReader): Promise<SourceDocument> {
   const document = parseSourceDocument(text, label);
   if (document.includes.length === 0) return document;
   const diagnostics = LoadDiagnostics.fromDocument(document);
   const texts = new Map<string, string>();
-  for (const { path, range } of document.includes) {
-    if (texts.has(path)) continue;
+  const values = new Map<string, SourceDocument>();
+  for (const { path, range, type } of document.includes) {
     const fail = (message: string) => diagnostics.error(message, { range });
-    if (path === "") throw fail("`!include` needs a file path, e.g. `prompt: !include prompts/answer.md`");
-    // No file system takes it; Node and Bun throw a TypeError naming the absolute path.
-    if (path.includes("\0")) throw fail(`${includeFile(path)} holds a NUL character; write the path without it`);
-    texts.set(path, await read(path, fail));
+    const file = includeFile(path, type);
+    if (!texts.has(path)) {
+      if (path === "") throw fail(`${includeTag(type)} needs a file path, e.g. ${includeExample(type)}`);
+      // No file system takes it; Node and Bun throw a TypeError naming the absolute path.
+      if (path.includes("\0")) throw fail(`${file} holds a NUL character; write the path without it`);
+      texts.set(path, await read(path, fail, file));
+    }
+    if (type !== null && type !== "str" && !values.has(path)) {
+      values.set(path, readIncludedValue(texts.get(path)!, path, file, fail));
+    }
   }
-  return parseSourceDocument(text, label, texts);
+  return parseSourceDocument(text, label, texts, values);
+}
+
+/**
+ * Read an included file's `text` as one YAML value (`SourceDocument.parseData`), labelled with its
+ * `path` as written.
+ *
+ * @throws LoadError, made by `fail` and naming the file as `file` and the line and column in it,
+ *   for text that isn't one YAML document, or holds a tag, an anchor, an alias, a `<<:` merge key,
+ *   a key YAML reads as non-text or a repeated key.
+ */
+function readIncludedValue(
+  text: string,
+  path: string,
+  file: string,
+  fail: (message: string) => LoadError,
+): SourceDocument {
+  const at = (message: string, range: SourceRange | null): LoadError =>
+    fail(range === null ? `${file}: ${message}` : `${file}, line ${range.startLine}, column ${range.startCol}: ${message}`);
+  let value: SourceDocument;
+  try {
+    value = SourceDocument.parseData(text, path);
+  } catch (error) {
+    if (!(error instanceof SourceSyntaxError)) throw error;
+    throw at(error.message, error.range);
+  }
+  const problem = keyProblem(value);
+  if (problem !== null) throw at(problem.message, problem.range);
+  return value;
 }
 
 /**
@@ -816,12 +858,12 @@ async function parseIncluding(text: string, label: string, read: IncludeReader):
  * resolve, symlinks followed, inside `ctx.codeRoot` when it has one, which is checked first and
  * named without an absolute path; be a regular file, read through one descriptor that doesn't
  * wait for a FIFO's writer; hold at most `YIAN_MAX_INCLUDE_BYTES`, of which at most one byte more
- * is read; and be UTF-8 text, whose line endings read as LF. Under a code root, the path must then
- * still resolve inside it, to the file read. The file is kept in `ctx.read` by its real path, which
- * `file.refs` records under `include:<path>`.
+ * is read; and be UTF-8 text, kept as decoded. Under a code root, the path must then still resolve
+ * inside it, to the file read. The file is kept in `ctx.read` by its real path, which `file.refs`
+ * records under `include:<path>`.
  */
 function diskIncludes(dir: string, ctx: LoadCtx, file: ReadFile): IncludeReader {
-  return async (path, fail) => {
+  return async (path, fail, named) => {
     const { codeRoot } = ctx;
     const target = resolvePath(dir, path);
     try {
@@ -829,24 +871,24 @@ function diskIncludes(dir: string, ctx: LoadCtx, file: ReadFile): IncludeReader 
       try {
         real = await fsp.realpath(target);
       } catch (error) {
-        if (codeRoot !== null && leavesRoot(relative(codeRoot, resolvedPath(target)))) throw fail(outsideRoot(path));
+        if (codeRoot !== null && leavesRoot(relative(codeRoot, resolvedPath(target)))) throw fail(outsideRoot(named));
         if (!isMissingPath(error)) throw error;
         const where = codeRoot === null ? ` in ${reprText(dir)}` : "";
-        throw fail(`${includeFile(path)} does not exist${where}; its path is relative to the including file's folder`);
+        throw fail(`${named} does not exist${where}; its path is relative to the including file's folder`);
       }
-      if (codeRoot !== null && leavesRoot(relative(codeRoot, real))) throw fail(outsideRoot(path));
+      if (codeRoot !== null && leavesRoot(relative(codeRoot, real))) throw fail(outsideRoot(named));
       const limit = current().maxIncludeBytes;
       const opened = await readRegularFile(real, limit);
-      if (opened === null) throw fail(`${includeFile(path)} is not a regular file; include a text file`);
-      if (opened.bytes.length > limit) throw fail(tooLarge(path, limit));
+      if (opened === null) throw fail(`${named} is not a regular file; include a text file`);
+      if (opened.bytes.length > limit) throw fail(tooLarge(named, limit));
       if (codeRoot !== null) {
         // A folder on the path swapped for a symlink after the check opens another file, so the
         // path must still resolve inside the root, to the file that was read.
         const again = await fsp.realpath(target);
-        if (leavesRoot(relative(codeRoot, again))) throw fail(outsideRoot(path));
+        if (leavesRoot(relative(codeRoot, again))) throw fail(outsideRoot(named));
         const now = await fsp.stat(again, { bigint: true });
         if (now.dev !== opened.dev || now.ino !== opened.ino) {
-          throw fail(`${includeFile(path)} changed while it was read; load the flow again`);
+          throw fail(`${named} changed while it was read; load the flow again`);
         }
       }
       let read = ctx.read.get(real);
@@ -856,9 +898,10 @@ function diskIncludes(dir: string, ctx: LoadCtx, file: ReadFile): IncludeReader 
           text = UTF8.decode(opened.bytes);
         } catch (error) {
           if (!(error instanceof TypeError)) throw error;
-          throw fail(`${includeFile(path)} is not UTF-8 text; save it as UTF-8`);
+          throw fail(`${named} is not UTF-8 text; save it as UTF-8`);
         }
-        read = { text: text.replace(/\r\n?/g, "\n"), refs: new Map() };
+        // Kept as decoded: `!include(str)` reads it exactly, and `!include` reads its line endings as LF.
+        read = { text, refs: new Map() };
         ctx.read.set(real, read);
       }
       file.refs.set(INCLUDE_REF + path, real);
@@ -866,7 +909,7 @@ function diskIncludes(dir: string, ctx: LoadCtx, file: ReadFile): IncludeReader 
     } catch (error) {
       // A system error's message holds absolute paths.
       if (!isSystemError(error)) throw error;
-      throw fail(`${includeFile(path)} can't be read (${error.code}); include a text file you can read`);
+      throw fail(`${named} can't be read (${error.code}); include a text file you can read`);
     }
   };
 }
@@ -877,23 +920,22 @@ function diskIncludes(dir: string, ctx: LoadCtx, file: ReadFile): IncludeReader 
  * `source.codeRoot` when it has one, and its text at most `YIAN_MAX_INCLUDE_BYTES`.
  */
 function sourceIncludes(source: FlowSource, from: string): IncludeReader {
-  return async (path, fail) => {
+  return async (path, fail, named) => {
     const refs = source.files[from]!.refs;
     const ref = INCLUDE_REF + path;
     // A host may build a source by hand, its ref naming no file.
     if (!Object.hasOwn(refs, ref) || !Object.hasOwn(source.files, refs[ref]!)) {
       throw fail(
-        `${includeFile(path)} is not among the recorded files; record it under the including file's ` +
-          `\`${ref}\` ref`,
+        `${named} is not among the recorded files; record it under the including file's ` + `\`${ref}\` ref`,
       );
     }
     const key = refs[ref]!;
     if (source.codeRoot !== null && leavesRoot(relative(source.codeRoot, resolvePath(source.dir, key)))) {
-      throw fail(outsideRoot(path));
+      throw fail(outsideRoot(named));
     }
     const text = source.files[key]!.text;
     const limit = current().maxIncludeBytes;
-    if (new TextEncoder().encode(text).length > limit) throw fail(tooLarge(path, limit));
+    if (new TextEncoder().encode(text).length > limit) throw fail(tooLarge(named, limit));
     return text;
   };
 }

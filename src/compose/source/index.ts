@@ -19,7 +19,9 @@
  * schema and read plain scalars with yian's one shared table: YAML 1.2 core-schema rules plus
  * unquoted timestamps and `<<` merge keys. A parse given the text of each `!include` path
  * reads the value as that text, marked so a type position can refuse it; a path it wasn't given
- * is listed for the loader to read.
+ * is listed for the loader to read. An `!include(T)` reads the text exactly for `T` `str`, else
+ * the value a plain YAML document holds (`SourceDocument.parseData`), tagged `T`, its strings
+ * marked as never templates.
  *
  * Knows about:   yaml, defaults, diagnostics, typesys.
  * Never imports: compose helpers or phases, nodes, compile, runtime, the run boundary,
@@ -27,9 +29,9 @@
  */
 
 export { SourceCatalog } from "./catalog.ts";
-export type { OccurrencePath, ScalarSource, TaggedNode } from "./common.ts";
+export type { OccurrencePath, ScalarSource, TaggedNode, TypedInclude } from "./common.ts";
 export { SourceAccessError, SourceSyntaxError } from "./common.ts";
 export { SourceCursor } from "./cursor.ts";
 export type { NonTextKey, RepeatedKey } from "./document.ts";
-export { SourceDocument } from "./document.ts";
+export { includeExample, includeTag, SourceDocument } from "./document.ts";
 export { parseYamlLiteral, readPlainScalar } from "./literals.ts";

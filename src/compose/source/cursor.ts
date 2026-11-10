@@ -24,6 +24,7 @@ import {
   setRecordKey,
   snapshotValue,
   SourceAccessError,
+  type TypedInclude,
 } from "./common.ts";
 // Type-only: `document.ts` imports this module at runtime.
 import type { SourceDocument } from "./document.ts";
@@ -218,6 +219,23 @@ export class SourceCursor {
    */
   get included(): boolean {
     return this._unchangedScalarDefinition()?.included ?? false;
+  }
+
+  /**
+   * Whether this is an unchanged source string that is never a template: the text
+   * `!include(str)` read, or a string in a value `!include(T)` read.
+   */
+  get verbatim(): boolean {
+    return this._unchangedScalarDefinition()?.verbatim ?? false;
+  }
+
+  /**
+   * The file an unchanged `!include(T)` value was read from, whose `T` is this value's `tag`;
+   * null for any other value.
+   */
+  get typedInclude(): TypedInclude | null {
+    if (this.tag === null) return null;
+    return this._document!._typedIncludes.get(this._definition!) ?? null;
   }
 
   /**

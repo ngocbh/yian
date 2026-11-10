@@ -418,16 +418,15 @@ function widened(typ: Type): Type {
  * Return the value a literal binding source binds, or `NOT_LITERAL` for a template.
  *
  * A string with no `${...}` span binds its text after `$$` unescaping, exactly as the binder
- * evaluates it; `Verbatim` text binds its text as written; a value template is a template; any
- * other value is bound as is.
+ * evaluates it; `Verbatim` text, alone or in a list or record, binds its text as written; a value
+ * template is a template; any other value is bound as is.
  *
  * @param source The binding's raw source.
  * @returns The bound literal value, or `NOT_LITERAL`.
  */
 export function literalValue(source: unknown): unknown {
   if (source instanceof ValueTemplate) return NOT_LITERAL;
-  if (source instanceof Verbatim) return source.text;
-  if (typeof source !== "string") return source;
+  if (typeof source !== "string") return verbatimAsText(source);
   try {
     const segments = scanTemplate(source);
     if (segments.some((segment) => segment instanceof Span)) return NOT_LITERAL;
@@ -436,6 +435,24 @@ export function literalValue(source: unknown): unknown {
     if (error instanceof ExpressionError) return NOT_LITERAL; // malformed text is reported by reference validation
     throw error;
   }
+}
+
+/**
+ * Return `value` with each `Verbatim` in it, at any depth of lists and records, as its text: a
+ * container holding none is `value` itself.
+ */
+function verbatimAsText(value: unknown): unknown {
+  if (value instanceof Verbatim) return value.text;
+  if (isList(value)) {
+    const items = value.map(verbatimAsText);
+    return items.every((item, index) => item === value[index]) ? value : items;
+  }
+  if (isRecord(value)) {
+    const entries = Object.entries(value).map(([key, item]) => [key, verbatimAsText(item)] as const);
+    // `fromEntries` keeps a `__proto__` key as data.
+    return entries.every(([key, item]) => item === value[key]) ? value : Object.fromEntries(entries);
+  }
+  return value;
 }
 
 /**

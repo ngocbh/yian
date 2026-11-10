@@ -1,0 +1,24 @@
+# The message pins that `store` is a boolean field, not a key yian builds.
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    a:
+      kind: agent
+      prompt: hi
+      llm_config:
+        provider: openai
+        openai: {store: "no"}
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        node 'a': llm_config: 1 validation error for LLMConfig
+        openai.store
+          Input should be a valid boolean
+      frames:
+      - label: flow.yaml
+        range: [9, 15, 9, 28]

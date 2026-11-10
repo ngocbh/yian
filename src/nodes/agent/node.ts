@@ -22,7 +22,7 @@ import {
   ResolveMode,
   resolveInRecord,
 } from "../../expr/expressions.ts";
-import { evalTemplate, renderTemplateRecord, scanTemplate } from "../../expr/template.ts";
+import { evalTemplate, renderTemplateRecord, scanTemplate, Verbatim } from "../../expr/template.ts";
 import type { HostConnection } from "../../llm_clients/config.ts";
 import { scrubCallCredentials } from "../../llm_clients/connection.ts";
 import { defaultModelAccess, type ModelAccess } from "../../llm_clients/factory.ts";
@@ -134,27 +134,42 @@ export function isMaxToolIterations(value: unknown): value is bigint {
   return typeof value === "bigint" && (value >= 1n || value === -1n);
 }
 
-/**
- * One item of an AGENT list prompt: a message whose text is a template, or the name of a local
- * input or variable holding a message or a list of messages, spliced in.
- */
-export type PromptItem =
-  | { readonly role: "user" | "assistant"; readonly text: string }
-  | { readonly splice: string };
+/** A prompt's text: a template, or `Verbatim` text sent as written. */
+export type PromptText = string | Verbatim;
+
+/** Say whether a prompt is its text, not a list prompt. */
+export function isPromptText(prompt: PromptText | readonly PromptItem[]): prompt is PromptText {
+  return typeof prompt === "string" || prompt instanceof Verbatim;
+}
 
 /**
- * Return a list prompt as authored: a splice as `${name}`, a message as `{<role>: <text>}`. The
- * manifest holds this form.
+ * One item of an AGENT list prompt: a message whose text is a template or `Verbatim` text, or the
+ * name of a local input or variable holding a message or a list of messages, spliced in.
  */
-export function authoredPrompt(items: readonly PromptItem[]): (string | Record<string, string>)[] {
-  return items.map((item) => ("splice" in item ? `\${${item.splice}}` : { [item.role]: item.text }));
+export type PromptItem =
+  | { readonly role: "user" | "assistant"; readonly text: PromptText }
+  | { readonly splice: string };
+
+/** Return a prompt's text as the manifest holds it: a template as is, `Verbatim` text as `{verbatim: <text>}`. */
+export function authoredText(text: PromptText): string | { verbatim: string } {
+  return text instanceof Verbatim ? { verbatim: text.text } : text;
+}
+
+/**
+ * Return a list prompt as authored: a splice as `${name}`, a message as `{<role>: <text>}`, its
+ * text as `authoredText` gives it. The manifest holds this form.
+ */
+export function authoredPrompt(
+  items: readonly PromptItem[],
+): (string | Record<string, string | { verbatim: string }>)[] {
+  return items.map((item) => ("splice" in item ? `\${${item.splice}}` : { [item.role]: authoredText(item.text) }));
 }
 
 /**
  * Check a list prompt's items.
  *
- * @throws TypeError for an item other than `{role: "user" | "assistant", text: string}` or
- *   `{splice: string}`.
+ * @throws TypeError for an item other than `{role: "user" | "assistant", text}`, its text a string
+ *   or `Verbatim`, or `{splice: string}`.
  * @throws RangeError for an empty list, or one whose last item is an assistant message.
  */
 function checkPromptItems(nodeId: string, items: readonly unknown[]): void {
@@ -166,7 +181,7 @@ function checkPromptItems(nodeId: string, items: readonly unknown[]): void {
     const message =
       keys === "role,text" &&
       (fields.role === "user" || fields.role === "assistant") &&
-      typeof fields.text === "string";
+      (typeof fields.text === "string" || fields.text instanceof Verbatim);
     const splice = keys === "splice" && typeof fields.splice === "string";
     if (!message && !splice) {
       throw new TypeError(`${where}: prompt[${index}] must be {role: user or assistant, text} or {splice: <name>}`);
@@ -344,10 +359,10 @@ export class AgentNode extends Node {
   override readonly needsSteps: boolean = true;
   /** An AGENT's success also commits its new messages, rebuilt from its steps. */
   override readonly producesMessages: boolean = true;
-  /** The prompt template, or a list of messages and splices. */
-  prompt: string | readonly PromptItem[];
-  /** The system prompt template replacing the default one; `null` keeps the default. */
-  systemPrompt: string | null;
+  /** The prompt template or `Verbatim` text, or a list of messages and splices. */
+  prompt: PromptText | readonly PromptItem[];
+  /** The system prompt template or `Verbatim` text replacing the default one; `null` keeps the default. */
+  systemPrompt: PromptText | null;
   /** The authored tool grants, which may name host-filled groups and memory inputs. */
   tools: readonly ToolGrant[];
   /**
@@ -404,8 +419,10 @@ export class AgentNode extends Node {
    * Build an AGENT node.
    *
    * @param nodeId The node's unique id.
-   * @param options.prompt The prompt template or a list prompt; `null` or omitted means `""`.
-   * @param options.systemPrompt A non-empty system prompt template, or `null` (the default).
+   * @param options.prompt The prompt template or `Verbatim` text, or a list prompt; `null` or
+   *   omitted means `""`.
+   * @param options.systemPrompt A non-empty system prompt template or `Verbatim` text, or `null`
+   *   (the default).
    * @param options.tools The tool grants, a text read as a name grant; defaults to `[]`.
    * @param options.llmConfig A config record, a `ValueTemplate` or `Binding` for a layer
    *   holding values, or `null` (the default).
@@ -431,8 +448,8 @@ export class AgentNode extends Node {
   constructor(
     nodeId: string,
     options: {
-      prompt?: string | readonly PromptItem[] | null;
-      systemPrompt?: string | null;
+      prompt?: PromptText | readonly PromptItem[] | null;
+      systemPrompt?: PromptText | null;
       tools?: readonly (string | ToolGrant)[] | null;
       llmConfig?: Readonly<Record<string, unknown>> | ValueTemplate | Binding | null;
       llmInherit?: boolean;
@@ -462,7 +479,8 @@ export class AgentNode extends Node {
     super(nodeId, { title });
     if (isList(prompt)) checkPromptItems(nodeId, prompt);
     this.prompt = prompt ?? "";
-    if (systemPrompt !== null && (typeof systemPrompt !== "string" || systemPrompt === "")) {
+    const systemText = systemPrompt instanceof Verbatim ? systemPrompt.text : systemPrompt;
+    if (systemText !== null && (typeof systemText !== "string" || systemText === "")) {
       throw new TypeError(`AGENT node ${reprText(nodeId)}: system_prompt must be a non-empty string or null`);
     }
     this.systemPrompt = systemPrompt;
@@ -672,7 +690,7 @@ export class AgentNode extends Node {
     const { path = null } = options;
     // `||`, not `??`: an empty path names the node by its id.
     const subject = `node ${reprText(path || this.id)}`;
-    if (typeof this.prompt === "string") {
+    if (isPromptText(this.prompt)) {
       checkNamedPrompt(this.prompt, `${subject} prompt`);
     } else {
       this.prompt.forEach((item, index) => {
@@ -1136,10 +1154,9 @@ export class AgentNode extends Node {
     for (const variable of this.variables) types.set(variable.name, (variable.contract as ValueContract).type);
     this.renderMemories(record, types, inputs);
     const declared = localDeclared(types);
-    const messages =
-      typeof this.prompt === "string"
-        ? [textMessage("user", renderTemplateRecord(this.prompt, record, declared), 0)]
-        : renderPromptList(this.id, this.prompt, record, declared);
+    const messages = !isPromptText(this.prompt)
+      ? renderPromptList(this.id, this.prompt, record, declared)
+      : [textMessage("user", renderTemplateRecord(this.prompt, record, declared), 0)];
     const systemPrompt =
       this.systemPrompt === null ? DEFAULT_SYSTEM : renderTemplateRecord(this.systemPrompt, record, declared);
     signal?.throwIfAborted();

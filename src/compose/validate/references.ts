@@ -51,7 +51,7 @@ import {
 } from "../../expr/index.ts";
 import { Span, templateRefs } from "../../expr/template.ts";
 import { memoryKey, type Node } from "../../nodes/base.ts";
-import { AgentNode, STEER_INBOX_KEY } from "../../nodes/agent/node.ts";
+import { AgentNode, isPromptText, STEER_INBOX_KEY } from "../../nodes/agent/node.ts";
 import { CallNode } from "../../nodes/call/node.ts";
 import { CaseNode } from "../../nodes/case/node.ts";
 import {
@@ -740,18 +740,23 @@ export function validateReferences(
         partialUnionFields,
       };
       const promptRange = franges.get(siteKey("field", "prompt")) ?? nodeRange;
-      if (typeof node.prompt === "string") {
+      // `Verbatim` text is no template, so it reads nothing.
+      if (isPromptText(node.prompt)) {
         const where = result.siteName(nodeId, "prompt");
-        if (node.prompt) checkTemplate(where, node.prompt, declared, promptRange, promptSite);
-        if (node.prompt) checkPromptMemories(where, node.prompt, memories, promptRange);
+        if (typeof node.prompt === "string" && node.prompt) {
+          checkTemplate(where, node.prompt, declared, promptRange, promptSite);
+          checkPromptMemories(where, node.prompt, memories, promptRange);
+        }
       } else {
         // A list prompt: each message's text is a template; a splice names a local holding messages.
         node.prompt.forEach((item, index) => {
           const where = `${result.siteName(nodeId, "prompt")}[${index}]`;
           const rng = franges.get(siteKey("field", `prompt[${index}]`)) ?? promptRange;
           if ("text" in item) {
-            if (item.text) checkTemplate(where, item.text, declared, rng, promptSite);
-            if (item.text) checkPromptMemories(where, item.text, memories, rng);
+            if (typeof item.text === "string" && item.text) {
+              checkTemplate(where, item.text, declared, rng, promptSite);
+              checkPromptMemories(where, item.text, memories, rng);
+            }
             return;
           }
           const ref = `\${${item.splice}}`;
@@ -770,7 +775,7 @@ export function validateReferences(
           }
         });
       }
-      if (node.systemPrompt) {
+      if (typeof node.systemPrompt === "string" && node.systemPrompt) {
         const where = result.siteName(nodeId, "system_prompt");
         const rng = franges.get(siteKey("field", "system_prompt")) ?? nodeRange;
         checkTemplate(where, node.systemPrompt, declared, rng, promptSite);

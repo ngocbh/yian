@@ -640,3 +640,84 @@ test("a source recorded with LF line endings, as one was before typed includes, 
   expect(await outputOf(recorded)).toBe("one\ntwo\n");
   expect(flowFingerprint(recorded.compiled)).toBe(flowFingerprint(fresh.compiled));
 });
+
+// ---------- !include(T) in an agent ----------
+
+/** Run `flow`'s agent on the scripted reply `Four.` and return each message's role and text it sent. */
+async function sentMessages(flow: ComposedFlow): Promise<[string, string][]> {
+  const model = new ScriptedModel([textReply("Four.")], { provider: "openai", model: "gpt-test" });
+  const result = await runFlow(flow, { question: "2+2?" }, { env: NO_ENV, numWorkers: 0, models: serving(model) });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  return model.requests[0]!.messages.map((message) => [message.role, message.text()]);
+}
+
+test("a prompt and a system prompt !include(str) reads are sent exactly as written", async () => {
+  write({ "system.md": "Costs are in $$.\r\n", "ask.md": "Shell advice: use ${HOME}, not ${question}.\n" });
+  const flow = await load(agentFlow("    system_prompt: !include(str) system.md\n    prompt: !include(str) ask.md\n"));
+  expect(await sentMessages(flow)).toEqual([
+    ["system", "Costs are in $$.\r\n"],
+    ["user", "Shell advice: use ${HOME}, not ${question}.\n"],
+  ]);
+});
+
+test("a list prompt's message !include(str) reads is sent as written, beside a template message", async () => {
+  write({ "a.md": "LaTeX: $$x^2$$" });
+  const prompts = "    prompt:\n      - assistant: !include(str) a.md\n      - user: \"Q: ${question}\"\n";
+  expect(await sentMessages(await load(agentFlow(prompts)))).toEqual([
+    ["system", expect.any(String)],
+    ["assistant", "LaTeX: $$x^2$$"],
+    ["user", "Q: 2+2?"],
+  ]);
+});
+
+test("variables !include(T) reads are written into a prompt without being read again", async () => {
+  write({ "system.md": "Use $${x} and ${HOME}.", "examples.yaml": "- 'a: ${b}'\n- c $$ d\n" });
+  const variables =
+    "    variables:\n      system_md: !include(str) system.md\n      examples: !include(list(str)) examples.yaml\n" +
+    '    system_prompt: "${system_md}\\n\\n## Examples\\n${join(examples, \'\\n\')}"\n    prompt: ${question}\n';
+  expect(await sentMessages(await load(agentFlow(variables)))).toEqual([
+    ["system", "Use $${x} and ${HOME}.\n\n## Examples\na: ${b}\nc $$ d"],
+    ["user", "2+2?"],
+  ]);
+});
+
+test("a compact flow's agent sends its !include(str) prompt as written", async () => {
+  write({ "ask.md": "Say $$ for ${question}." });
+  const flow = await load(
+    "id: answer\nname: answer\nkind: agent\nllm_config: {provider: openai, model: gpt-test}\ninput:\n  question: !str\n" +
+      "prompt: !include(str) ask.md\noutput: str\n",
+  );
+  expect((await sentMessages(flow)).at(-1)).toEqual(["user", "Say $$ for ${question}."]);
+});
+
+test.each([
+  ["prompt:", "    prompt: !include(list(str)) a.yaml\n", 11],
+  ["system_prompt:", "    system_prompt: !include(Optional(str)) a.yaml\n    prompt: hi\n", 11],
+  ["user:", "    prompt:\n      - user: !include(object) a.yaml\n", 12],
+])("prompt text a typed !include reads, as %s, fails at the tag: the field takes text", async (field, prompts, line) => {
+  write({ "a.yaml": "[a]" });
+  const { message, label, line: at } = await failure(load(agentFlow(prompts)));
+  expect(message).toMatch(/^`!include\([^`]*\)` file 'a\.yaml': /);
+  expect(message).toEndWith(`\`${field}\` takes text; read the file with \`!include(str)\``);
+  expect([label, at]).toEqual(["flow.yaml", line]);
+});
+
+test("a lone list prompt item !include(str) reads fails without quoting the file", async () => {
+  write({ "a.md": "the whole file" });
+  const { message } = await failure(load(agentFlow("    prompt:\n      - !include(str) a.md\n")));
+  expect(message).toContain("put the `!include(str)` under `user:`");
+  expect(message).not.toContain("the whole file");
+});
+
+test("a steer render !include(str) reads fails at the tag: a render is a template", async () => {
+  write({ "render.md": "Steer: ${event}" });
+  const flow =
+    "id: f\nname: f\nllm_config: {provider: openai, model: gpt-test}\ninput:\n  s: !Inbox(str)\nnodes:\n  a:\n" +
+    "    kind: agent\n    steer_inbox:\n      from: ${input.s}\n      render: !include(str) render.md\n    prompt: hi\n" +
+    "    output: str\noutput: ${a.output}\n";
+  const { message, line } = await failure(load(flow));
+  expect(message).toBe(
+    "`!include(str)` file 'render.md': `render:` is a template over each steer event; read the file with `!include`",
+  );
+  expect(line).toBe(11);
+});

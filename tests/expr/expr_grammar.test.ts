@@ -711,6 +711,7 @@ describe("nesting limit", () => {
     default: (n) => "x :- (".repeat(n - 1) + "x :- 1" + ")".repeat(n - 1),
     compare: (n) => "(".repeat(n - 1) + "1 == 1" + ") == true".repeat(n - 1),
     index: (n) => "x" + "[0]".repeat(n),
+    conditional: (n) => "1 if c else (".repeat(n - 1) + "1 if c else 2" + ")".repeat(n - 1),
     alternating,
     grouped,
   } satisfies Record<string, (n: number) => string>;
@@ -976,6 +977,71 @@ describe("comprehensions", () => {
   test("5,000 if clauses parse, with no recursion and no clause cap", () => {
     const result = tree(`[x for x in xs${" if true".repeat(5000)}]`);
     expect(result.children.length).toBe(5002);
+  });
+});
+
+describe("conditionals", () => {
+  const cond = (then: ExprNode, test: ExprNode, otherwise: ExprNode) => new Tree("if_expr", [then, test, otherwise]);
+  /** The rule name of `node`, or its token type. */
+  const kindOf = (node: ExprNode) => (node instanceof Tree ? node.data : node.type);
+
+  test.each([
+    ["a if c else b", cond(ref("a"), ref("c"), ref("b"))],
+    // The conditional is the lowest level: an escape belongs to a branch.
+    ["x :- y if c else z", cond(new Tree("default_expr", [ref("x"), ref("y")]), ref("c"), ref("z"))],
+    ["x | y if c else z", cond(new Tree("coalesce", [ref("x"), ref("y")]), ref("c"), ref("z"))],
+    ["a if c else x :- y", cond(ref("a"), ref("c"), new Tree("default_expr", [ref("x"), ref("y")]))],
+    ["a if c :- d else b", cond(ref("a"), new Tree("default_expr", [ref("c"), ref("d")]), ref("b"))],
+    ["a if c else b if d else e", cond(ref("a"), ref("c"), cond(ref("b"), ref("d"), ref("e")))],
+    ["(a if c else b) if d else e", cond(cond(ref("a"), ref("c"), ref("b")), ref("d"), ref("e"))],
+    ["a if not c else b", cond(ref("a"), new Tree("negate", [not, ref("c")]), ref("b"))],
+  ])("%s", (text, expected) => expect(parsed(text)).toEqual(plain(expected)));
+
+  test("operators bind tighter than a conditional, on both sides", () => {
+    expect(tree("a + 1 if c or d else b * 2").children.map(kindOf)).toEqual(["sum", "or_expr", "product"]);
+  });
+
+  test("in a comprehension, a conditional is the elem and `if` after a `for` a filter", () => {
+    const result = tree("[a if c else b for x in xs if x]");
+    expect(result.data).toBe("list_comp");
+    expect(result.children.map(kindOf)).toEqual(["if_expr", "comp_for", "comp_if"]);
+  });
+
+  test("a conditional is a list item, a call argument, a slice bound and an index", () => {
+    expect(tree("[a if c else b, d]").children.map(kindOf)).toEqual(["if_expr", "refcall"]);
+    const args = (tree("f(a if c else b)").children[1] as Tree).children as Tree[];
+    expect(args.map((x) => kindOf(x.children[0]!))).toEqual(["if_expr"]);
+    expect((tree("xs[a if c else b:]").children[1] as Tree).children.map(kindOf)).toEqual(["if_expr", "omitted"]);
+    expect((tree("xs[a if c else b]").children[1] as Tree).children.map(kindOf)).toEqual(["if_expr"]);
+  });
+
+  test.each<[string, string]>([
+    ["a if c", "a conditional needs `else`: write `a if c else b` at line 1, column 7"],
+    ["[a if c for x in xs]", "a conditional needs `else`: write `a if c else b` at line 1, column 9"],
+    ["f(a if c)", "a conditional needs `else`: write `a if c else b` at line 1, column 9"],
+    [
+      "a if b if c else d else e",
+      "a conditional's test can't hold another conditional; write `a if (b if c else d) else e` at line 1, column 8",
+    ],
+    ["a else b", "`else` comes after `a if c`, as in `a if c else b` at line 1, column 3"],
+    ["a if c else b else d", "`else` comes after `a if c`, as in `a if c else b` at line 1, column 15"],
+    [
+      "[x for x in xs if a else b]",
+      "a comprehension's `if` is a filter; put a conditional there in parentheses: `(a if c else b)` at line 1, column 21",
+    ],
+  ])("%s fails with the fix", (text, detail) => {
+    expectParseErrorDetail(text, detail);
+  });
+
+  test("if and else are names in operand position and after a dot", () => {
+    expect(parsed("if if else else else")).toEqual(plain(cond(ref("if"), ref("else"), ref("else"))));
+    expect(parsed("x.if")).toEqual(plain(ref("x", "if")));
+    expect(parsed("x.else")).toEqual(plain(ref("x", "else")));
+    expect(tree("[else, if]").children.map(kindOf)).toEqual(["refcall", "refcall"]);
+  });
+
+  test("else can't be a comprehension variable", () => {
+    expectParseErrorDetail("[x for else in xs]", "a comprehension's `for` takes a name, then `in` at line 1, column 8");
   });
 });
 

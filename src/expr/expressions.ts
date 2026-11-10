@@ -941,6 +941,8 @@ class EvalExpr {
         return this.defaultExpr(node);
       case "required_expr":
         return this.requiredExpr(node);
+      case "if_expr":
+        return this.ifExpr(node);
       case "negate":
         return this.negate(node);
       case "or_expr":
@@ -1504,6 +1506,18 @@ class EvalExpr {
     return value;
   }
 
+  /**
+   * `then if test else otherwise`: the test is tested for truth, as `and` and `or` test their
+   * operands, and only the branch it picks is evaluated. The value is that branch's, a miss
+   * included, so `(a if c else b) :- d` falls back when the picked branch misses.
+   */
+  ifExpr(node: Tree): Walked {
+    const [then, test, otherwise] = node.children as [ExprNode, ExprNode, ExprNode];
+    const value = this.walk(truthy(this.asValue(this.walk(test))) ? then : otherwise);
+    this.selectRoute("if");
+    return value;
+  }
+
   // --- boolean combinators --- //
   /** The operand children of a boolean combinator node (the operator keywords dropped). */
   operands(node: Tree): ExprNode[] {
@@ -1726,6 +1740,8 @@ const BOOLEAN_NODES: ReadonlySet<string> = new Set([
  * - `a | b`, `a :- b`: the non-null left operands joined with the last (`joinedType`, equal up
  *   to `Optional`), where an empty `[]` adds nothing, so `(xs :- [])` types like `xs` made
  *   non-null; `a :? m`: the non-null `a` (`m` is the error message);
+ * - `a if c else b`: `a` and `b` joined, where a `null` branch makes the other `Optional` and an
+ *   empty `[]` adds nothing;
  * - `xs[i]`: the item type of `xs`'s list type; `s[i]` and `s[a:b]` of a text: `str`;
  * - `xs[a:b]`: `xs`'s list type, non-null;
  * - `[e for ...]`: `list` of `e`'s type in its scope;
@@ -1803,6 +1819,20 @@ export function inferExprType(
     }
     case "required_expr":
       return infer(tree.children[0]!)?.replace({ nullable: false }) ?? null;
+    case "if_expr": {
+      // A `null` branch makes the other's type Optional; an empty `[]` adds nothing.
+      const types: Type[] = [];
+      let nullable = false;
+      for (const branch of [tree.children[0]!, tree.children[2]!]) {
+        if (branch instanceof Tree && branch.data === "list_lit" && branch.children.length === 0) continue;
+        const typ = infer(branch);
+        if (typ === null) return null;
+        if (typ.kind === ValueKind.NONE && typ.members === undefined) nullable = true;
+        else types.push(typ);
+      }
+      const joined = joinedType(types);
+      return joined !== null && nullable ? joined.replace({ nullable: true }) : joined;
+    }
     case "subscript": {
       const typ = infer(tree.children[0]!);
       if (typ === null) return null;

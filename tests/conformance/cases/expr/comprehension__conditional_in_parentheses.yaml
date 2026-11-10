@@ -1,6 +1,6 @@
 kind: expr
-expr: "(a if c else b)"
+# A conditional in a comprehension's iterable needs parentheses, where `if` would be a filter.
+expr: "[x for x in (a if c else b)]"
+values: {a: [1], b: [2, 3], c: false}
 expect:
-  raises:
-    class: ExpressionError
-    message: "could not parse expression '(a if c else b)': conditional expressions (`a if c else b`) aren't supported yet at line 1, column 4"
+  value: [2, 3]

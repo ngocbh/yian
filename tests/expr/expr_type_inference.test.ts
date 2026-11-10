@@ -183,3 +183,19 @@ test.each<[string, Type | null]>([
   };
   expect(inferExprType(parseExpr(source), (path) => types[path] ?? null)).toEqual(want);
 });
+
+test.each<[string, Type | null]>([
+  ["1 if c else 2", Type.scalar(ValueKind.INTEGER)],
+  ["s if c else 'x'", Type.scalar(ValueKind.STRING)],
+  ["s if c else null", Type.scalar(ValueKind.STRING).replace({ nullable: true })],
+  ["null if c else s", Type.scalar(ValueKind.STRING).replace({ nullable: true })],
+  ["xs if c else []", new Type({ kind: ValueKind.LIST_INTEGER, element: Type.scalar(ValueKind.INTEGER) })],
+  ["1 if c else 'x'", null],
+  ["u if c else 1", null],
+])("the conditional %s is its branches' type, joined", (source, want) => {
+  const types: Record<string, Type> = {
+    s: Type.scalar(ValueKind.STRING),
+    xs: new Type({ kind: ValueKind.LIST_INTEGER, element: Type.scalar(ValueKind.INTEGER) }),
+  };
+  expect(inferExprType(parseExpr(source), (path) => types[path] ?? null)).toEqual(want);
+});

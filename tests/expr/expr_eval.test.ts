@@ -616,6 +616,46 @@ describe("indexes and text slices", () => {
   });
 });
 
+describe("conditionals", () => {
+  const VALUES = fromRecord({ n: 3n, zero: 0n, empty: "", xs: [1n], none: null });
+
+  test.each<[string, Value]>([
+    ["'big' if n > 2 else 'small'", "big"],
+    ["'big' if n > 5 else 'small'", "small"],
+    // The test is tested for truth, as `and` and `or` test theirs.
+    ["1 if zero else 2", 2n],
+    ["1 if empty else 2", 2n],
+    ["1 if xs else 2", 1n],
+    ["1 if missing else 2", 2n],
+    ["1 if none else 2", 2n],
+    ["x :- 'd' if n else 'e'", "d"],
+    ["0 if n < 0 else 1 if n < 5 else 2", 1n],
+    ["[x * 10 if x > 1 else x for x in [1, 2, 3] if x != 2]", [1n, 30n]],
+  ])("%s", (text, want) => {
+    expect(evaluate(text, VALUES)).toEqual(want);
+  });
+
+  test("only the branch the test picks is evaluated", () => {
+    expect(evaluate("1 if true else 1 / 0")).toBe(1n);
+    expect(evaluate("1 / 0 if false else 2")).toBe(2n);
+    expect(evaluate("upper(none) if false else 'ok'", VALUES)).toBe("ok");
+  });
+
+  test("the picked branch's miss is the conditional's, so a default after it fires", () => {
+    expect(evaluate("(missing if true else 1) :- 5", VALUES)).toBe(5n);
+    expect(evaluate("(xs[3] if true else 1) :- 5", VALUES)).toBe(5n);
+    expect(errorOf("missing if true else 1", VALUES, ResolveMode.STRICT_RAISE).message).toBe(
+      "unresolved reference ${missing} in expression",
+    );
+  });
+
+  test("a missing test raises in strict mode", () => {
+    expect(errorOf("1 if missing else 2", VALUES, ResolveMode.STRICT_RAISE).message).toBe(
+      "unresolved reference ${missing} in expression",
+    );
+  });
+});
+
 describe("tokens", () => {
   test.each([
     ["1", 1n],

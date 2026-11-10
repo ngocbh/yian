@@ -651,6 +651,14 @@ test("an index route projects its item of the base, and a text slice is a scalar
   expect(text.route.children.map((child) => child.source?.path)).toEqual([["name"]]);
 });
 
+test("a conditional's route selects the branch it picked, not its test", () => {
+  const sources = new Sources({ producer: { tags: ["a"], name: "Ada", flag: true } });
+  const result = sources.evaluate("producer.name if producer.flag else producer.tags");
+  expect(result.value).toBe("Ada");
+  expect(result.route.kind).toBe("selected");
+  expect(result.route.children.map((child) => [child.kind, child.source?.path])).toEqual([["source", ["name"]]]);
+});
+
 test("len records an opaque route", () => {
   const sources = new Sources({ producer: { tags: ["a"] } });
   expect(sources.evaluate("len(producer.tags)").route.kind).toBe("opaque");

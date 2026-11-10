@@ -9,7 +9,8 @@
  * holds.
  *
  * `and` and `or` short-circuit, so in `A and B` the operand `B` only runs once `A` is true,
- * and in `A or B` once `A` is false; `not` flips what a check proves. `proves` says what holds
+ * and in `A or B` once `A` is false; in `A if C else B`, `A` runs once `C` is true and `B` once
+ * it is false; `not` flips what a check proves. `proves` says what holds
  * when a condition evaluates to a value, `guardedRefs` says what holds whenever each reference
  * is read, and `literalsInContext` says what holds whenever each check is evaluated. This
  * module is syntax only: what a guard means for a value's type is `narrowing_facts.ts`'s job.
@@ -309,7 +310,8 @@ export function checkIn(tree: ExprNode): [Check, boolean] | null {
  *
  * A check gives `Holds`; `not` proves what its operand proves for the other value; an `and`
  * chain is true when every operand is, and false when some operand is false after the ones
- * before it were true (an `or` chain the other way round); a false `and` chain with an operand
+ * before it were true (an `or` chain the other way round); a conditional has the value of the
+ * branch its test picked; a false `and` chain with an operand
  * that proves nothing when false proves `NOTHING`, since that operand may have decided it.
  * Anything else (a comparison that is no check, `:-`, a call, a literal) proves `NOTHING`.
  *
@@ -357,6 +359,14 @@ function provesUncached(tree: ExprNode, value: boolean, memo: ProvesMemo): Guard
   if (!(tree instanceof Tree)) return NOTHING;
   if (tree.data === NEVER_HAS) return value === (String(tree.children[0]) === "true") ? NEVER : NOTHING;
   if (tree.data === "negate") return provesWith(tree.children.at(-1)!, !value, memo);
+  if (tree.data === "if_expr") {
+    // The branch the test picked has the value.
+    const [then, test, otherwise] = tree.children as [ExprNode, ExprNode, ExprNode];
+    return anyOf(
+      allOf(provesWith(test, true, memo), provesWith(then, value, memo)),
+      allOf(provesWith(test, false, memo), provesWith(otherwise, value, memo)),
+    );
+  }
   if (tree.data !== "and_expr" && tree.data !== "or_expr") return NOTHING;
   const operands = operandsOf(tree);
   // An `and` is decided by its first false operand, an `or` by its first true one.
@@ -388,6 +398,19 @@ function operandContexts(node: Tree, context: Guard, memo: ProvesMemo): [ExprNod
 }
 
 /**
+ * The parts of an `if_expr` in source order, each with what holds whenever it is evaluated: the
+ * test under `context`, and each branch under `context` and what the test proves for it.
+ */
+function branchContexts(node: Tree, context: Guard, memo: ProvesMemo): [ExprNode, Guard][] {
+  const [then, test, otherwise] = node.children as [ExprNode, ExprNode, ExprNode];
+  return [
+    [then, allOf(context, provesWith(test, true, memo))],
+    [test, context],
+    [otherwise, allOf(context, provesWith(test, false, memo))],
+  ];
+}
+
+/**
  * One read occurrence of a condition: its refcall (or `comp_var`), its flat path, and the guard it
  * is read under.
  */
@@ -402,8 +425,9 @@ export interface GuardedOccurrence {
  * when it is read.
  *
  * The `i`-th operand of an `and` chain is evaluated only once the operands before it were true,
- * and of an `or` chain once they were false; every other node (`not`, `:-`, `|`, a call, a
- * comparison) evaluates its parts under its own guard. So a check after a read never guards it.
+ * and of an `or` chain once they were false; a conditional's `then` once its test was true and
+ * its `else` once it was false; every other node (`not`, `:-`, `|`, a call, a comparison)
+ * evaluates its parts under its own guard. So a check after a read never guards it.
  * The occurrences are those of `exprRefs` and `conditionReads`, in the same order (plain
  * references, builtin-call argument values, and an `isinstance` call's subject), plus each
  * comprehension variable read, with path `<key>.<steps>`. A comprehension's clauses run left to
@@ -438,6 +462,11 @@ export function guardedReads(tree: ExprNode): GuardedOccurrence[] {
     }
     if (node.data === "and_expr" || node.data === "or_expr") {
       for (const [operand, operandContext] of operandContexts(node, context, memo)) walk(operand, operandContext);
+      return;
+    }
+    if (node.data === "if_expr") {
+      // In source order: the branch the test's truth picks is read under what the test proves.
+      for (const [part, partContext] of branchContexts(node, context, memo)) walk(part, partContext);
       return;
     }
     if (node.data === "list_comp") {
@@ -502,7 +531,8 @@ export class CheckLiteral {
  * Return each literal in a condition's boolean positions with what holds when it is evaluated.
  *
  * Boolean positions are the condition itself, the operands of `and`, `or` and `not`, the first
- * operand of `:-` and `:?`, and a comprehension's `if` clause, wherever the comprehension is. A
+ * operand of `:-` and `:?`, the branches of a conditional in one, and a comprehension's `if`
+ * clause and a conditional's test, wherever the comprehension or conditional is. A
  * check anywhere else (a comparison operand, a call argument, a list item, an operand of `|`) is
  * no literal. Contexts follow the rules of `guardedRefs`.
  *
@@ -534,6 +564,9 @@ export function literalsInContext(tree: ExprNode): CheckLiteral[] {
     } else if (node.data === "default_expr" || node.data === "required_expr") {
       walk(node.children[0]!, context, false);
       scan(node.children[1]!, context);
+    } else if (node.data === "if_expr") {
+      // A branch's truth is the conditional's.
+      for (const [part, partContext] of branchContexts(node, context, memo)) walk(part, partContext, false);
     } else {
       scan(node, context);
     }
@@ -556,6 +589,12 @@ export function literalsInContext(tree: ExprNode): CheckLiteral[] {
       scan(elem!, passed);
     } else if (node.data === "and_expr" || node.data === "or_expr") {
       for (const [operand, operandContext] of operandContexts(node, context, memo)) scan(operand, operandContext);
+    } else if (node.data === "if_expr") {
+      // The test is tested for truth wherever the conditional is.
+      for (const [part, partContext] of branchContexts(node, context, memo)) {
+        if (part === node.children[1]) walk(part, partContext, false);
+        else scan(part, partContext);
+      }
     } else {
       for (const child of node.children) scan(child, context);
     }

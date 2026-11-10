@@ -206,7 +206,8 @@ past either end stops there. There is no step. Inside the brackets a `:` ends a 
 default there needs parentheses: `xs[(n :- 0):]`, `xs[(i :- 0)]`.
 
 Text works the same way, by character: for `s` = `"héllo"`, `s[1]` is `"é"` and `s[-3:]` is
-`"llo"`. A record has no index; read its fields with a dot.
+`"llo"`. A record has no index; read its fields with a dot. A dot may follow a subscript or
+parentheses: `xs[0].name`, `xs[0]?.name`, `(a if c else b).name`.
 
 A list comprehension builds a list from another:
 
@@ -255,7 +256,7 @@ The default after `:-` is an expression, so quote text: `${input.when :- "today"
 | `split(s, sep=null)` | A list of the parts of `s` between each `sep`; with no `sep`, the words between runs of whitespace |
 | `strip(s, chars=null)`, `lstrip(...)`, `rstrip(...)` | The text without whitespace, or the characters in `chars`, at both ends, the start or the end |
 | `replace(s, old, new)` | The text with every `old` replaced by `new` |
-| `str(x)` | The text `${x}` writes into text, such as `[1,2]` for a list |
+| `str(x)` | The text `${x}` writes into text, such as `[1,2]` for a list, `1` for `1.0` and `true` for `true`; not Python's `str` |
 | `int(x)` | An int from text such as `" -42 "` or `"1_000"`, a float cut toward zero, or a boolean as 0 or 1 |
 | `float(x)` | A float from text such as `"2.5"`, `"1e3"` or `"inf"`, or from an int or a boolean |
 | `round(x, n=null)` | `x` rounded to an int, or to `n` decimal places, ties to even |
@@ -283,7 +284,6 @@ Where Python has the same function, the builtin gives Python's result:
   `round(x)` gives an int; `round(x, n)` a float for a float `x` and an int for an int.
 - `sum` keeps ints exact and adds floats as Python 3.12 does: `sum([0.1, 0.2, 0.3])` is `0.6`.
 - `min` and `max` compare texts by code point, and give the first of equal items.
-- `str` writes a float as its shortest text, so `str(1.0)` is `"1"`.
 
 The result types follow the table: `len` and `int` give an int, `float` a float, `round`, `abs`
 and `sum` an int or a float as above, `startswith`, `endswith`, `any` and `all` a boolean,

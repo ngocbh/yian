@@ -116,7 +116,7 @@ Comparisons don't chain.
 | `x :- "none"` | `x`, or `"none"` when `x` is null |
 | `(order.output?.qty :- 0) + 1` | Arithmetic on a node a `case` may skip |
 | `"big" if n > 9 else "small"` | A conditional; only the picked branch runs |
-| `xs[0]`, `s[-1]` | An item or a character; out of range fails unless defaulted: `xs[0] :- ""` |
+| `xs[0]`, `s[-1]`, `xs[0].name` | An item or a character; out of range fails unless defaulted: `xs[0] :- ""` |
 | `xs[1:]`, `s[:-2]` | A slice of a list or a text; no step |
 | `[m.text for m in ms if m.role == "user"]` | A comprehension; more `for` and `if` may follow |
 | `isinstance(x, Buy)` | Whether `x` is a valid `Buy`; narrows the reads after it |
@@ -128,7 +128,8 @@ text, which prompts may call too: `upper`, `lower`, `join(value, sep="\n")`,
 `render_as_json(value, indent=2)`, `str`, `strip(s, chars=null)`, `lstrip`, `rstrip`,
 `replace(s, old, new)`. In bindings and conditions only: `len`, `split(s, sep=null)`,
 `startswith`, `endswith`, `int`, `float`, `round(x, n=null)`, `abs`, `min`, `max`, `sum`, `any`,
-`all`; each works as Python's does. A null argument fails the call: `${upper(name :- "")}`. See
+`all`. They give Python's results, but with ASCII digits only, no `nan` and no digit limit, and
+`str(x)` is the text `${x}` writes. A null argument fails the call: `${upper(name :- "")}`. See
 [Builtins](https://yian.readthedocs.io/expressions/#builtins).
 
 ## Types

@@ -85,8 +85,8 @@ test("a constructor parses when its type is known or left to compose", () => {
 
 test("a builtin type name called in a condition gets the conversion hint", () => {
   expectMessage(
-    "int(x) > 0",
-    "unknown expression function 'int'; types in expressions are typedef names; `int(...)` is not a conversion",
+    "bool(x) > 0",
+    "unknown expression function 'bool'; types in expressions are typedef names; `bool(...)` is not a conversion",
     new Map(),
   );
 });

@@ -703,6 +703,30 @@ test("variables !include(T) reads are written into a prompt without being read a
   ]);
 });
 
+test("a system prompt built from !include(str) files with rstrip sends their text exactly", async () => {
+  write({ "prompts/system.md": "Costs are in $$; keep ${HOME}.\n\n", "prompts/skill.md": "Use ${x} and $$y.\n" });
+  const prompts =
+    "    variables:\n" +
+    "      system_md: !include(str) prompts/system.md\n" +
+    "      skill_md: !include(str) prompts/skill.md\n" +
+    '    system_prompt: "${rstrip(system_md)}\\n\\n## Skill\\n\\n${skill_md}"\n' +
+    "    prompt: ${question}\n";
+  expect(await sentMessages(await load(agentFlow(prompts)))).toEqual([
+    ["system", "Costs are in $$; keep ${HOME}.\n\n## Skill\n\nUse ${x} and $$y.\n"],
+    ["user", "2+2?"],
+  ]);
+});
+
+test("the text builtins and str take a value !include(str) reads as written", async () => {
+  write({ "a.md": "  $${x} $$ \n" });
+  const flow = await load(
+    "id: f\nname: f\nnodes:\n  raw: !include(str) a.md\n" +
+      "  out: !list(str) \"${[rstrip(raw.output), strip(raw.output), replace(raw.output, '$$', 'D'), str(raw.output)]}\"\n" +
+      "output: ${out.output}\n",
+  );
+  expect(await outputOf(flow)).toEqual(["  $${x} $$", "$${x} $$", "  D{x} D \n", "  $${x} $$ \n"]);
+});
+
 test("a compact flow's agent sends its !include(str) prompt as written", async () => {
   write({ "ask.md": "Say $$ for ${question}." });
   const flow = await load(

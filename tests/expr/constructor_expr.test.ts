@@ -226,7 +226,7 @@ function expectConditionMessage(text: string, message: string): void {
 }
 
 test("a builtin type name is not a conversion", () => {
-  for (const name of ["int", "str", "list", "Optional"]) {
+  for (const name of ["bool", "list", "Optional", "date"]) {
     const message =
       `unknown expression function '${name}'; types in expressions are typedef names; ` +
       `\`${name}(...)\` is not a conversion`;
@@ -278,15 +278,15 @@ test("a constructor is not a prompt function", () => {
   expectError(
     () => promptRefs("Order: ${Buy(order)}"),
     "unknown prompt function 'Buy'; prompts call only formatting builtins " +
-      "(join, lower, render_as_json, upper); build or check a typed value with a " +
+      "(join, lower, lstrip, render_as_json, replace, rstrip, str, strip, upper); build or check a typed value with a " +
       "`typedefs:` constructor `T(...)` in an input binding",
   );
 });
 
 test("a builtin type name in a prompt is not a conversion", () => {
   expectError(
-    () => promptRefs("Count: ${int(order)}"),
-    "unknown prompt function 'int'; types in expressions are typedef names; `int(...)` is not a conversion",
+    () => promptRefs("Count: ${bool(order)}"),
+    "unknown prompt function 'bool'; types in expressions are typedef names; `bool(...)` is not a conversion",
   );
 });
 

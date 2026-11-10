@@ -163,7 +163,64 @@ test.each([
   ["xs :- []", "an untyped left operand"],
   ["['a', 1]", "list items of different types"],
   ["[]", "an empty list"],
-  ["'abc'[1:]", "a slice of a non-list"],
+  ["1[1:]", "a slice of a number"],
 ])("inferExprType leaves %s untyped (%s)", (text) => {
   expect(inferExprType(parseExpr(text), refs({}))).toBeNull();
+});
+
+test.each<[string, Type | null]>([
+  ["xs[0]", Type.scalar(ValueKind.INTEGER)],
+  ["xs[1:]", new Type({ kind: ValueKind.LIST_INTEGER, element: Type.scalar(ValueKind.INTEGER) })],
+  ["s[0]", Type.scalar(ValueKind.STRING)],
+  ["s[1:]", Type.scalar(ValueKind.STRING)],
+  ["d[0]", Type.scalar(ValueKind.STRING)],
+  ["u[0]", null],
+  // A null base is a miss, so an index of a list that may be null may be null too.
+  ["oxs[0]", Type.scalar(ValueKind.INTEGER).replace({ nullable: true })],
+  ["os[0]", Type.scalar(ValueKind.STRING).replace({ nullable: true })],
+])("the subscript %s is typed by its base", (source, want) => {
+  const types: Record<string, Type> = {
+    oxs: new Type({ kind: ValueKind.LIST_INTEGER, element: Type.scalar(ValueKind.INTEGER), nullable: true }),
+    os: Type.scalar(ValueKind.STRING).replace({ nullable: true }),
+    xs: new Type({ kind: ValueKind.LIST_INTEGER, element: Type.scalar(ValueKind.INTEGER) }),
+    s: Type.scalar(ValueKind.STRING),
+    d: Type.scalar(ValueKind.DATE),
+  };
+  expect(inferExprType(parseExpr(source), (path) => types[path] ?? null)).toEqual(want);
+});
+
+test.each<[string, Type | null]>([
+  ["1 if c else 2", Type.scalar(ValueKind.INTEGER)],
+  ["s if c else 'x'", Type.scalar(ValueKind.STRING)],
+  ["s if c else null", Type.scalar(ValueKind.STRING).replace({ nullable: true })],
+  ["null if c else s", Type.scalar(ValueKind.STRING).replace({ nullable: true })],
+  ["xs if c else []", new Type({ kind: ValueKind.LIST_INTEGER, element: Type.scalar(ValueKind.INTEGER) })],
+  ["1 if c else 'x'", null],
+  ["u if c else 1", null],
+])("the conditional %s is its branches' type, joined", (source, want) => {
+  const types: Record<string, Type> = {
+    s: Type.scalar(ValueKind.STRING),
+    xs: new Type({ kind: ValueKind.LIST_INTEGER, element: Type.scalar(ValueKind.INTEGER) }),
+  };
+  expect(inferExprType(parseExpr(source), (path) => types[path] ?? null)).toEqual(want);
+});
+
+test.each<[string, Type | null]>([
+  ["rs[0].k", Type.scalar(ValueKind.INTEGER)],
+  ["rs[0]?.k", Type.scalar(ValueKind.INTEGER).replace({ nullable: true })],
+  ["(r).k", Type.scalar(ValueKind.INTEGER)],
+  ["(r if c else r).k", Type.scalar(ValueKind.INTEGER)],
+  ["ors[0].k", Type.scalar(ValueKind.INTEGER).replace({ nullable: true })],
+])("the field read %s is typed through its base", (source, want) => {
+  const R = new Type({
+    kind: ValueKind.OBJECT,
+    fields: new Map([["k", Type.scalar(ValueKind.INTEGER)]]),
+    required: new Set(["k"]),
+  });
+  const types: Record<string, Type> = {
+    r: R,
+    rs: new Type({ kind: ValueKind.LIST_OBJECT, element: R }),
+    ors: new Type({ kind: ValueKind.LIST_OBJECT, element: R, nullable: true }),
+  };
+  expect(inferExprType(parseExpr(source), (path) => types[path] ?? null)).toEqual(want);
 });

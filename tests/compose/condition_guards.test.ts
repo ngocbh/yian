@@ -229,6 +229,29 @@ test("a builtin argument read is guarded", () => {
   expect(guardOf('isinstance(v, Buy) and join(v.tags, ",") == "x"', "v.tags")).toStrictEqual(new Holds(A, true));
 });
 
+test("a conditional's branches are read under what its test proves", () => {
+  const text = "v.qty if isinstance(v, Buy) else w.qty if w != null else 0";
+  expect(guards(text)).toStrictEqual([
+    ["v.qty", new Holds(A, true)],
+    ["v", NOTHING],
+    ["w.qty", new AllOf([new Holds(A, false), new Holds(new NotNullCheck("w"), true)])],
+    ["w", new Holds(A, false)],
+  ]);
+});
+
+test("a conditional proves what the branch its test picked proves", () => {
+  expect(p(`${SB} if ${SA} else ${SC}`)).toStrictEqual(
+    new AnyOf([
+      new AllOf([new Holds(A, true), new Holds(B, true)]),
+      new AllOf([new Holds(A, false), new Holds(C, true)]),
+    ]),
+  );
+  // A branch that proves nothing still tells which way the test went.
+  expect(p(`${SB} if ${SA} else n > 1`)).toStrictEqual(
+    new AnyOf([new AllOf([new Holds(A, true), new Holds(B, true)]), new Holds(A, false)]),
+  );
+});
+
 test("guards of a nested or inside an and", () => {
   const pairs = guards(`${SA} and (v.action == 'sell' or v.qty > 0)`);
   expect(pairs.at(-1)).toStrictEqual(["v.qty", new AllOf([new Holds(A, true), new Holds(B, false)])]);
@@ -246,6 +269,8 @@ describe("guardedRefs walks the reads in exprRefs order", () => {
     'isinstance(v, Buy) and join(v.tags, ",") == upper(w.name)',
     "${isinstance(v, Buy) and lower(w.name) == v.action}",
     "not (isinstance(r, Done) and r.answer == 'ok') or f(k).z > m",
+    "v.qty if isinstance(v, Buy) else w.n > (v.price if v.action == 'sell' else 0)",
+    "rs[i].k > 0 and (v if isinstance(v, Buy) else w).qty > u[0]?.m",
   ];
   for (const text of cases) {
     test(text, () => {
@@ -305,6 +330,15 @@ test("literals are only in boolean positions", () => {
   expect(literals("(v.action == 'buy') | false")).toStrictEqual([]);
   expect(literals("(isinstance(v, Buy) and n > 1) :- false")).toStrictEqual([[NOTHING, A, true, false]]);
   expect(literals("isinstance(v, Buy) :? 'need v'")).toStrictEqual([[NOTHING, A, true, false]]);
+});
+
+test("a conditional's test is a boolean position, and so are its branches in one", () => {
+  expect(literals(`${SB} if ${SA} else ${SC}`)).toStrictEqual([
+    [new Holds(A, true), B, true, false],
+    [NOTHING, A, true, false],
+    [new Holds(A, false), C, true, false],
+  ]);
+  expect(literals(`len(v.tags if ${SA} else []) > 0`)).toStrictEqual([[NOTHING, A, true, false]]);
 });
 
 test("literals under not of a group see their own context", () => {

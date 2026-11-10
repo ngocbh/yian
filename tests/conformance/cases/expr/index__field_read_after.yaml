@@ -1,0 +1,6 @@
+kind: expr
+# Fields read after an index or parentheses, with `?.` reading null past an index out of range.
+expr: "[rs[0].name, (rs[-1]).name, rs[5]?.name :- 'none', (r if ok else rs[0]).name]"
+values: {rs: [{name: a}, {name: b}], r: {name: c}, ok: true}
+expect:
+  value: [a, b, none, c]

@@ -1,0 +1,6 @@
+kind: expr
+expr: "a if c"
+expect:
+  raises:
+    class: ExpressionError
+    message: "could not parse expression 'a if c': a conditional needs `else`: write `a if c else b` at line 1, column 7"

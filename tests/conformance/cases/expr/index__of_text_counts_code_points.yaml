@@ -1,0 +1,5 @@
+kind: expr
+expr: "[s[1], s[-1], s[1:3]]"
+values: {s: "a😀bc"}
+expect:
+  value: ["😀", c, "😀b"]

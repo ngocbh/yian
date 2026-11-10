@@ -1,0 +1,5 @@
+kind: expr
+# sum adds floats as CPython 3.12+ does; min and max compare texts by code point.
+template: "${[sum([0.1, 0.2, 0.3]), sum([1, 2, true]), sum([]), min(['￿', '😀']), max([1, 2.5]), abs(-3), any([0, '']), all([])]}"
+expect:
+  value: [0.6, 4, 0, "￿", 2.5, 3, false, true]

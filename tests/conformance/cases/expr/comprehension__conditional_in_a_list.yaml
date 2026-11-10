@@ -1,6 +1,6 @@
 kind: expr
-expr: "[x if c else y for x in xs]"
+# A conditional is the elem; an `if` after a `for` stays a filter.
+expr: "[x if c else y for x in xs if x != 2]"
+values: {c: false, y: 0, xs: [1, 2, 3]}
 expect:
-  raises:
-    class: ExpressionError
-    message: "could not parse expression '[x if c else y for x in xs]': conditional expressions (`a if c else b`) aren't supported yet at line 1, column 4"
+  value: [0, 0]

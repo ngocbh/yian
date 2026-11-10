@@ -1,6 +1,6 @@
 ---
 title: "Expressions"
-description: "The ${...} expression language: operators, comprehensions, null rules and builtins."
+description: "The ${...} expression language: operators, conditionals, indexes, comprehensions, null rules and builtins."
 ---
 
 Expressions compute small values inside a flow: they read inputs and results, do arithmetic,
@@ -88,8 +88,9 @@ Bonjour, Ada !
 
 - `${input.person}` in a prompt is a load error; bind it in `input:` first.
 - A prompt span whose value is null fails the node. Give it a default, as with `language` above.
-- A prompt may call `join`, `upper`, `lower` and `render_as_json`. Compute anything else, such as
-  `len`, `isinstance` or a constructor, in an input.
+- A prompt may call the builtins that give text: `join`, `upper`, `lower`, `render_as_json`,
+  `str`, `strip`, `lstrip`, `rstrip` and `replace`. Compute anything else, such as `len`, `split`,
+  `isinstance` or a constructor, in an input.
 
 ## Literals
 
@@ -131,6 +132,7 @@ From lowest to highest precedence:
 
 | Operators | Meaning |
 |---|---|
+| `a if c else b` | `a` when `c` is true, else `b` (see [Conditionals](#conditionals)) |
 | `a \| b \| c` | The first value that isn't null |
 | `a :- b`, `a :? "msg"` | A default; a required value (see [Null rules](#null-rules)) |
 | `or` | Either is true |
@@ -141,7 +143,7 @@ From lowest to highest precedence:
 | `*`, `/`, `%` | Multiply, divide, remainder |
 | `-x` | Negative |
 | `**` | Power, grouped from the right |
-| `xs[a:b]`, `f(x)`, `x.field` | Slice, call, field |
+| `xs[i]`, `xs[a:b]`, `f(x)`, `x.field` | Index, slice, call, field |
 
 Use parentheses to group. Comparisons don't chain: write `0 < x and x < 10`, not `0 < x < 10`.
 
@@ -174,20 +176,38 @@ values count as false: `false`, `null`, `0`, `0.0`, `""`, `[]` and a record with
 Everything else counts as true. `and` and `or` stop as soon as the answer is known, so in
 `x != null and x.qty > 0` the field is read only when `x` isn't null.
 
-## Slices and comprehensions
+### Conditionals
 
-`xs[a:b]` takes the items of a list from index `a` up to, not including, `b`:
+`a if c else b` gives `a` when `c` is true and `b` otherwise, testing `c` as `and` and `or` test
+their values. Only the branch it picks runs, so in `x.qty if x != null else 0` the field is read
+only when `x` isn't null. It has the lowest precedence: `x :- y if c else z` means
+`(x :- y) if c else z`, and `a if c else b if d else e` means `a if c else (b if d else e)`.
+A test that is itself a conditional needs parentheses: `a if (b if c else d) else e`.
+
+In a comprehension, `[a if c else b for x in xs]` computes each item, and an `if` after a `for`
+stays a filter.
+
+## Indexes, slices and comprehensions
+
+`xs[i]` reads one item of a list, and `xs[a:b]` takes the items from index `a` up to, not
+including, `b`:
 
 | Write | Gives, for `[1, 2, 3, 4, 5]` |
 |---|---|
+| `xs[0]` | `1` |
+| `xs[-1]` | `5` |
 | `xs[1:3]` | `[2, 3]` |
 | `xs[2:]` | `[3, 4, 5]` |
 | `xs[:-2]` | `[1, 2, 3]` |
-| `xs[-2:]` | `[4, 5]` |
 
-A negative index counts from the end, and an index past either end stops there. There is no
-single index (`xs[0]`) and no step. Inside the brackets a `:` ends a bound, so a default needs
-parentheses: `xs[(n :- 0):]`.
+A negative index counts from the end. An index out of range fails the run with an error naming
+the index and the length, unless `:-`, `|` or `:?` handles it: `${xs[0] :- "none"}`. A slice bound
+past either end stops there. There is no step. Inside the brackets a `:` ends a bound, so a
+default there needs parentheses: `xs[(n :- 0):]`, `xs[(i :- 0)]`.
+
+Text works the same way, by character: for `s` = `"héllo"`, `s[1]` is `"é"` and `s[-3:]` is
+`"llo"`. A record has no index; read its fields with a dot. A dot may follow a subscript or
+parentheses: `xs[0].name`, `xs[0]?.name`, `(a if c else b).name`.
 
 A list comprehension builds a list from another:
 
@@ -232,13 +252,43 @@ The default after `:-` is an expression, so quote text: `${input.when :- "today"
 | `upper(s)`, `lower(s)` | The text in upper or lower case |
 | `join(value, sep="\n")` | The items of a list as text, joined by `sep` |
 | `render_as_json(value, indent=2)` | The value as indented JSON text |
+| `startswith(s, prefix)`, `endswith(s, suffix)` | Whether the text starts or ends with the other |
+| `split(s, sep=null)` | A list of the parts of `s` between each `sep`; with no `sep`, the words between runs of whitespace |
+| `strip(s, chars=null)`, `lstrip(...)`, `rstrip(...)` | The text without whitespace, or the characters in `chars`, at both ends, the start or the end |
+| `replace(s, old, new)` | The text with every `old` replaced by `new` |
+| `str(x)` | The text `${x}` writes into text, such as `[1,2]` for a list, `1` for `1.0` and `true` for `true`; not Python's `str` |
+| `int(x)` | An int from text such as `" -42 "` or `"1_000"`, a float cut toward zero, or a boolean as 0 or 1 |
+| `float(x)` | A float from text such as `"2.5"`, `"1e3"` or `"inf"`, or from an int or a boolean |
+| `round(x, n=null)` | `x` rounded to an int, or to `n` decimal places, ties to even |
+| `abs(x)` | The number without its sign |
+| `min(xs)`, `max(xs)` | The least or greatest of a list of numbers, or of texts |
+| `sum(xs)` | The sum of a list of numbers; `0` for an empty list |
+| `any(xs)`, `all(xs)` | Whether any, or every, item of a list is true |
 
-Arguments may be given by the names in the table: `${join(items, sep=", ")}`. A null argument fails the call, so
-give a default: `${upper(name :- "")}`. Calling a builtin with arguments it doesn't take, or a
-name that isn't a builtin, is a load error. A flow isn't a function: to run a child flow from a
-value, use the `call(...)` form (see [Control flow](/control-flow/)).
+Arguments may be given by the names in the table: `${join(items, sep=", ")}`. A null argument
+fails the call, so give a default: `${upper(name :- "")}`. A `null` for an argument whose default
+is `null` is the same as leaving it out. Calling a builtin with arguments it doesn't take, a name
+that isn't a builtin, or an argument whose type the builtin never takes (`upper` of an int) is a
+load error. A flow isn't a function: to run a child flow from a value, use the `call(...)` form
+(see [Control flow](/control-flow/)).
 
-`len` gives an int and the others give text, so `${upper(name).x}` is a load error.
+Where Python has the same function, the builtin gives Python's result:
+
+- Text is counted and split by character (code point), as `len` counts it.
+- Whitespace is Python's set: U+0009 to U+000D, U+001C to U+001F, U+0020, U+0085, U+00A0,
+  U+1680, U+2000 to U+200A, U+2028, U+2029, U+202F, U+205F and U+3000. `int` and `float` skip it
+  around a number, all but U+001C to U+001F, as Python does.
+- `int` and `float` read Python's syntax with ASCII digits only. `float("nan")` fails, since a
+  value is never NaN, and so does `float` of an int too large for a float.
+- `round` works on the float's exact value: `round(2.5)` is `2`, `round(2.675, 2)` is `2.67`.
+  `round(x)` gives an int; `round(x, n)` a float for a float `x` and an int for an int.
+- `sum` keeps ints exact and adds floats as Python 3.12 does: `sum([0.1, 0.2, 0.3])` is `0.6`.
+- `min` and `max` compare texts by code point, and give the first of equal items.
+
+The result types follow the table: `len` and `int` give an int, `float` a float, `round`, `abs`
+and `sum` an int or a float as above, `startswith`, `endswith`, `any` and `all` a boolean,
+`split` a `list(str)`, `min` and `max` an item of their list, and the others text, so
+`${upper(name).x}` is a load error.
 
 ## Types in expressions
 
@@ -259,6 +309,7 @@ the type wants an int, is a load error; others are checked when they run.
 
 ## Limits
 
-An expression nests at most 100 levels: each call, list, comprehension, slice, comparison,
-unary operator, `:-`, `:?` or `|`, and chain of operators is one level. A deeper one is a load error; split it across values. See
-[Reference](/reference/) for every limit.
+An expression nests at most 100 levels: each call, list, comprehension, index, slice,
+conditional, comparison, unary operator, `:-`, `:?` or `|`, and chain of operators is one level.
+A deeper one is a load error; split it across values. See [Reference](/reference/) for every
+limit.

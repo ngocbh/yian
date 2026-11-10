@@ -1,6 +1,8 @@
 kind: expr
+# A field read after a slice follows the step table: a list has no fields.
 expr: "xs[1:].a"
+values: {xs: [1, 2]}
 expect:
   raises:
     class: ExpressionError
-    message: "could not parse expression 'xs[1:].a': unexpected '.' at line 1, column 7"
+    message: "cannot read ${xs[...].a}: xs[...] is list, which has no fields"

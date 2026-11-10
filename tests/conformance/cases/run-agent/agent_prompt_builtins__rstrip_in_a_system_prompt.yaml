@@ -1,0 +1,87 @@
+# A prompt may call the builtins that give text: a system prompt read from a file drops its
+# trailing newline with rstrip.
+kind: run
+flow: |
+  id: p
+  name: p
+  llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    system_md: !str
+  nodes:
+    write:
+      kind: agent
+      input:
+        system_md: ${input.system_md}
+      system_prompt: "${rstrip(system_md)} Be brief."
+      prompt: Hi
+      output: str
+  output: ${write.output}
+inputs: {system_md: "You help.\n\n"}
+run: {run_id: r1, num_workers: 0}
+host:
+  models:
+    write:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: ok
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You help. Be brief.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: Hi
+expect:
+  output: {status: succeeded, output: ok}
+  trace:
+    [
+      [run_started, null, {effective_llm_by_static_path: {write: {model: gpt-5.5, provider: openai, _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}}}, num_workers: 0}],
+      [pool_commit, __start__, {key: system.now}],
+      [pool_commit, __start__, {key: system.run_id, value: r1}],
+      [pool_commit, __start__, {key: system.today}],
+      [
+          pool_commit,
+          __start__,
+          {
+              value:
+                {
+                  system_md: 'You help.
+
+
+                    '
+                }
+            }
+        ],
+      [node_started, __start__],
+      [
+          pool_commit,
+          __start__,
+          {
+              value:
+                {
+                  system_md: 'You help.
+
+
+                    '
+                }
+            }
+        ],
+      [node_succeeded, __start__, {commit: 6}],
+      [node_started, write],
+      [node_step, write, {n: 1, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{text: ok, type: text}], role: assistant}, purpose: chat, request_sha256: 23c2e992c76e2111dd3a495772c492fc53ffa390d5000e20cd998e62e7ec4507, response_id: null, usage: null}}],
+      [pool_commit, write, {value: ok}],
+      [pool_commit, write, {key: write.new_messages, steps: [9]}],
+      [node_succeeded, write, {commit: 10, messages: 11}],
+      [node_started, __end__],
+      [pool_commit, __end__, {value: ok}],
+      [node_succeeded, __end__, {commit: 14}]
+    ]

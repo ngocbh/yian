@@ -13,7 +13,10 @@
  * - a field read on the result (`T(x).f`) names a field `T` can't have.
  *
  * `builtinFieldErrors` rejects a field read on a builtin whose result type is known
- * (`upper(x).f` reads a field of text), the same way.
+ * (`upper(x).f` reads a field of text), the same way, and `builtinArgumentErrors` an argument of a
+ * kind the builtin never takes (`upper(n)` with `n` an int), and `subscriptErrors` a subscript of a
+ * value that is no list or text (`r[0]` of a record), and `fieldReadErrors` a field read after a
+ * subscript or parentheses that the base's type rules out (`xs[0].k` of a list of texts).
  *
  * Given the types of the references an expression reads, a positional argument or a keyword field
  * whose inferred type is disjoint from the declared one is an error too. A narrower or unproven
@@ -27,12 +30,26 @@
 
 import { typeRelation } from "../../compile/validation.ts";
 import { reprText } from "../../diagnostics.ts";
-import { builtinResultType, TEMPLATE_FNS } from "../../expr/builtins.ts";
-import { constructorShapeError, inferExprType, ISINSTANCE, splitReference, stepsText } from "../../expr/expressions.ts";
+import {
+  bindArguments,
+  builtinArgumentError,
+  builtinResultType,
+  TEMPLATE_FNS,
+  valueKinds,
+} from "../../expr/builtins.ts";
+import {
+  constructorShapeError,
+  inferExprType,
+  ISINSTANCE,
+  splitReference,
+  stepsText,
+  stepsType,
+  subscriptText,
+} from "../../expr/expressions.ts";
 import { callSuffixOf, type ExprNode, iterSubtreesTopdown, Token, Tree } from "../../expr/grammar.ts";
 import { outputContractFieldError, ValueContract } from "../../nodes/contracts.ts";
 import type { RefExpr, TypeRegistry } from "../../typesys/types.ts";
-import { canonicalTypeLabel, isInboxType, isMemoryType, type Type } from "../../typesys/values.ts";
+import { canonicalTypeLabel, isInboxType, isMemoryType, type Type, ValueKind } from "../../typesys/values.ts";
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
 import { literalType, type TypeFn } from "../../compile/output_contracts.ts";
 
@@ -107,6 +124,138 @@ export function builtinFieldErrors(tree: ExprNode): string[] {
     const typ = builtinResultType(name);
     if (typ === null) continue;
     const error = resultFieldError(node, name, typ);
+    if (error !== null) errors.push(error);
+  }
+  return errors;
+}
+
+/**
+ * Return why each call to a shipped builtin in one expression can never succeed: an argument
+ * whose type the parameter never takes (`builtinArgumentError`), such as `upper(n)` with `n` an
+ * int, or a literal `null` where a value is needed. An argument of unknown type is left to the
+ * call.
+ *
+ * @param tree A parsed `${...}` interior or condition.
+ * @param refType Resolves a reference path to its proven type; `null` (the default) types only
+ *   literals and what they build.
+ * @param typeFn Resolves a constructor name to its type; `null` (the default) leaves them unknown.
+ * @returns One message per argument, in source order.
+ */
+export function builtinArgumentErrors(
+  tree: ExprNode,
+  refType: RefType | null = null,
+  typeFn: TypeFn | null = null,
+): string[] {
+  if (!(tree instanceof Tree)) return [];
+  const errors: string[] = [];
+  for (const node of iterSubtreesTopdown(tree)) {
+    const callSuffix = node.data === "refcall" ? callSuffixOf(node) : undefined;
+    const name = String(node.children[0]);
+    const fn = TEMPLATE_FNS.get(name);
+    if (callSuffix === undefined || fn === undefined) continue;
+    const args = callSuffix.children as Tree[];
+    const positional = args.filter((arg) => arg.children.length === 1).map((arg) => arg.children[0]!);
+    const keywords = new Map(
+      args.filter((arg) => arg.children.length === 2).map((arg) => [String(arg.children[0]), arg.children[1]!]),
+    );
+    // A call that doesn't bind is reported by `checkCalls`.
+    const bound = bindArguments(fn, positional, keywords);
+    if (typeof bound === "string") continue;
+    bound.forEach((arg, index) => {
+      if (!(arg instanceof Tree || arg instanceof Token)) return;
+      const typ = argumentType(arg, refType, typeFn ?? (() => null));
+      const error = typ === null ? null : builtinArgumentError(name, index, typ);
+      if (error !== null) errors.push(error);
+    });
+  }
+  return errors;
+}
+
+/**
+ * Return why each subscript in one expression can never succeed: a base whose type is never a
+ * list or a text (a record keeps its fields, read with a dot), or an index or slice bound whose
+ * type is never an int. A part of unknown type is left to the evaluation.
+ *
+ * @param tree A parsed `${...}` interior or condition.
+ * @param refType Resolves a reference path to its proven type; `null` (the default) types only
+ *   literals and what they build.
+ * @param typeFn Resolves a constructor name to its type; `null` (the default) leaves them unknown.
+ * @returns One message per problem, in source order.
+ */
+export function subscriptErrors(
+  tree: ExprNode,
+  refType: RefType | null = null,
+  typeFn: TypeFn | null = null,
+): string[] {
+  if (!(tree instanceof Tree)) return [];
+  const errors: string[] = [];
+  const kindsOf = (node: ExprNode) => {
+    if (node instanceof Tree && node.data === "omitted") return null;
+    const typ = argumentType(node, refType, typeFn ?? (() => null));
+    return typ === null ? null : { kinds: valueKinds(typ), label: canonicalTypeLabel(typ) };
+  };
+  for (const node of iterSubtreesTopdown(tree)) {
+    if (node.data !== "subscript") continue;
+    const [base, part] = node.children as [ExprNode, Tree];
+    const doing = part.data === "index" ? "indexing" : "slicing";
+    const baseKinds = kindsOf(base);
+    if (baseKinds?.kinds && baseKinds.kinds.size > 0 && !baseKinds.kinds.has("list") && !baseKinds.kinds.has("str")) {
+      const hint = baseKinds.kinds.has("record") ? "; read a record's field with a dot, as in `r.name`" : "";
+      errors.push(`${doing} takes a list or text, got ${baseKinds.label}${hint}`);
+    }
+    for (const bound of part.children) {
+      const found = kindsOf(bound);
+      if (found?.kinds && found.kinds.size > 0 && !found.kinds.has("int") && !found.kinds.has("bool")) {
+        errors.push(`${part.data === "index" ? "an index takes" : "slice bounds take"} int, got ${found.label}`);
+      }
+    }
+  }
+  return errors;
+}
+
+/**
+ * Return why each field read after a subscript or a parenthesized operand fails, given its base's
+ * proven type: a `.` step on a value that may be null (write `?.`), or a field the type can't
+ * have. A field only some union members have is left to the evaluation, since a check may have
+ * narrowed the value.
+ *
+ * @param tree A parsed `${...}` interior or condition.
+ * @param refType Resolves a reference path to its proven type; `null` (the default) types only
+ *   literals and what they build.
+ * @param typeFn Resolves a constructor name to its type; `null` (the default) leaves them unknown.
+ * @returns One message per field read, in source order.
+ */
+export function fieldReadErrors(
+  tree: ExprNode,
+  refType: RefType | null = null,
+  typeFn: TypeFn | null = null,
+): string[] {
+  if (!(tree instanceof Tree)) return [];
+  const errors: string[] = [];
+  for (const node of iterSubtreesTopdown(tree)) {
+    if (node.data !== "field_read") continue;
+    const base = node.children[0]!;
+    const typ = argumentType(base, refType, typeFn ?? (() => null));
+    if (typ === null) continue;
+    const { steps } = splitReference(node);
+    const text = subscriptText(base);
+    const nullable = steps.findIndex((step, i) => {
+      const receiver = stepsType(typ, steps.slice(0, i));
+      return !step.optional && receiver !== null && (receiver.nullable || receiver.kind === ValueKind.NONE);
+    });
+    if (nullable >= 0) {
+      const receiver = text + stepsText(steps.slice(0, nullable));
+      const name = steps[nullable]!.name;
+      const read = `\${${receiver}.${name}} reads field '${name}' of ${receiver}`;
+      errors.push(`${read}, which may be null; write ${receiver}?.${name}`);
+      continue;
+    }
+    const error = outputContractFieldError(
+      new ValueContract(typ.replace({ nullable: false })),
+      steps.map((step) => step.name),
+      text + stepsText(steps),
+      { partialUnionFields: true },
+    );
     if (error !== null) errors.push(error);
   }
   return errors;

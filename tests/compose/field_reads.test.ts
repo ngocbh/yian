@@ -527,6 +527,19 @@ test.each([
   expect(errors(text, roots(typ))[0]).toStartWith(message);
 });
 
+test("a nullable read in a conditional's branch of arithmetic needs a default", () => {
+  const [error] = errors("(x.k if c else 0) + 1", roots(Rec.replace({ nullable: true })));
+  expect(error).toBe("${x.k} reads field 'k' of x, which may be null (it is Optional); write (x?.k :- <default>)");
+});
+
+test("a conditional's null check guards the branch it picks", () => {
+  const typ = Rec.replace({ nullable: true });
+  expect(errors("x.k if x != null else 0", roots(typ))).toEqual([]);
+  expect(errors("0 if x == null else x.k", roots(typ))).toEqual([]);
+  const [error] = errors("0 if x != null else x.k", roots(typ));
+  expect(error).toStartWith("${x.k} reads field 'k' of x, which may be null");
+});
+
 test.each(["x?.k", "x != null and x.k", "x == null or x.k", "x.r?.k", "x?.r?.k == null", "u.k.m"])(
   "no error (%s)",
   (text) => {

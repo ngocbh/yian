@@ -1,0 +1,7 @@
+kind: expr
+template: "${int(s)}"
+values: {s: "1.5"}
+expect:
+  raises:
+    class: ExpressionError
+    message: "expression function 'int' failed: int() can't convert \"1.5\" to an int"

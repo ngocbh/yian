@@ -134,7 +134,13 @@ import {
   resolveIsinstanceType,
 } from "../helpers/isinstance_types.ts";
 import { nth } from "../helpers/source.ts";
-import { builtinFieldErrors, constructorErrors } from "../validate/constructors.ts";
+import {
+  builtinArgumentErrors,
+  builtinFieldErrors,
+  constructorErrors,
+  fieldReadErrors,
+  subscriptErrors,
+} from "../validate/constructors.ts";
 import { rejectCycles } from "../validate/cycles.ts";
 import { checkCaseHandles } from "../validate/handles.ts";
 import { validateReferences } from "../validate/references.ts";
@@ -1413,8 +1419,8 @@ function fillTypeTables(
 
   /**
    * Resolve `names` as `table` does, then reject a constructor call in `source` that can never
-   * succeed whatever the references hold, or a field read on a builtin's result its type can't
-   * have.
+   * succeed whatever the references hold, a field read on a builtin's result its type can't
+   * have, or a builtin argument or subscript of a kind it never takes, such as a literal.
    *
    * Only for condition sites: `validateReferences` already checked every binding's constructor
    * calls and builtin field reads, with the references typed. Every
@@ -1432,7 +1438,12 @@ function fillTypeTables(
     }
     for (const tree of trees) {
       const problems = names[1].length > 0 ? constructorErrors(tree, registry) : [];
-      problems.push(...builtinFieldErrors(tree));
+      problems.push(
+        ...builtinFieldErrors(tree),
+        ...builtinArgumentErrors(tree),
+        ...subscriptErrors(tree),
+        ...fieldReadErrors(tree),
+      );
       if (problems.length > 0) throw diagnostics.error(`${where}: ${problems[0]}`, { range });
     }
     return resolvedNames;

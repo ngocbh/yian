@@ -461,17 +461,146 @@ test("a parent cannot construct a child's typedef", async () => {
   expect(error.message).toContain("a flow call 'Hold' inside ${...} is not supported");
 });
 
+// ---------- builtin arguments ----------
+
+/** A flow whose node `c` binds `x: <binding>`, with typed flow inputs to read. */
+const typedConsumer = (binding: string) => `id: p
+name: p
+typedefs:
+  R: {k: int}
+input:
+  rec: !R
+  recs: !list(R)
+  orecs: !Optional(list(R))
+  n: !int
+  s: !str
+  xs: !list(str)
+  maybe: !Optional(int)
+  any: !object
+nodes:
+  c:
+    kind: code
+    input:
+      x: ${binding}
+    code: |
+      return inputs["x"]
+output: \${c.output}
+`;
+
+describe("a float-typed value may hold an int, so it passes where an int goes", () => {
+  const text = `id: p
+name: p
+input:
+  f: !float
+  xs: !list(int)
+nodes:
+  c:
+    kind: code
+    input:
+      tail: \${input.xs[input.f:]}
+      item: \${input.xs[input.f]}
+      json: \${render_as_json(input.xs, input.f)}
+      rounded: \${round(2.25, input.f)}
+    code: |
+      return [inputs["tail"], inputs["item"], inputs["json"], inputs["rounded"]]
+output: \${c.output}
+`;
+
+  test("the flow loads and runs with an int for the float", async () => {
+    expect(await ok(text, { f: 1n, xs: [1n, 2n, 3n] })).toStrictEqual([[2n, 3n], 2n, "[\n 1,\n 2,\n 3\n]", 2.2]);
+  });
+});
+
+describe("a field read after a subscript or parentheses is checked by its base's type", () => {
+  test.each([
+    ["${input.recs[0].nope}", "reference ${input.recs[...].nope} reads unknown field 'nope' on record"],
+    ["${(input.rec).nope}", "reference ${input.rec.nope} reads unknown field 'nope' on record"],
+    ["${input.xs[0].k}", "reference ${input.xs[...].k} reads field 'k' on type str, which has no fields"],
+    [
+      "${input.orecs[0].k}",
+      "${input.orecs[...].k} reads field 'k' of input.orecs[...], which may be null; write input.orecs[...]?.k",
+    ],
+  ])("%s", (binding, message) => {
+    const error = loadError(() => loadedNodes(typedConsumer(binding)));
+    expect(error.message).toContain(`node 'c' input 'x' from: ${message}`);
+  });
+
+  test.each(["${input.recs[0].k}", "${input.orecs[0]?.k}", "${(input.rec).k + 1}", "${input.any[0].k}"])(
+    "%s loads",
+    (binding) => {
+      expect(() => loadedNodes(typedConsumer(binding))).not.toThrow();
+    },
+  );
+});
+
+describe("a subscript of a kind it never takes is a load error", () => {
+  test.each([
+    [
+      "${input.rec[0]}",
+      'indexing takes a list or text, got {"k":int}; read a record\'s field with a dot, as in `r.name`',
+    ],
+    ["${input.n[1:]}", "slicing takes a list or text, got int"],
+    ['${input.xs["a"]}', "an index takes int, got Literal(a)"],
+    ["${input.xs[1.5:]}", "slice bounds take int, got float(1.5..1.5)"],
+  ])("%s", (binding, message) => {
+    const error = loadError(() => loadedNodes(typedConsumer(binding)));
+    expect(error.message).toBe(`flow has expressions that can never succeed:\n  node 'c' input 'x' from: ${message}`);
+  });
+
+  test.each(["${input.xs[0]}", "${input.s[-1]}", "${input.s[1:]}", "${input.any[0]}", "${input.xs[input.n]}"])(
+    "%s loads",
+    (binding) => {
+      expect(() => loadedNodes(typedConsumer(binding))).not.toThrow();
+    },
+  );
+});
+
+describe("a builtin argument of a kind the builtin never takes is a load error", () => {
+  test.each([
+    ["${upper(input.n)}", "upper() takes str, got int"],
+    ["${upper(input.maybe)}", "upper() takes str, got Optional(int)"],
+    ["${upper(null)}", "upper() takes str, got null"],
+    ["${sum(input.xs)}", "sum() takes a list of numbers, got list(str)"],
+    ["${min(input.n)}", "min() takes a list of numbers or texts, got int"],
+    ["${split(input.s, sep=input.n)}", "split() takes str for sep, got int"],
+    ["${int(input.xs)}", "int() takes str, int, float or bool, got list(str)"],
+    ["${len(5)}", "len() takes str or list, got int(5..5)"],
+    ['${round("2.5")}', 'round() takes a number, got Literal("2.5")'],
+  ])("%s", (binding, message) => {
+    const error = loadError(() => loadedNodes(typedConsumer(binding)));
+    expect(error.message).toBe(`flow has expressions that can never succeed:\n  node 'c' input 'x' from: ${message}`);
+  });
+
+  test.each([
+    "${upper(input.s)}",
+    "${upper(input.any.name)}",
+    '${upper(input.maybe :- "")}',
+    "${round(input.n, null)}",
+    "${split(input.s, null)}",
+    "${str(input.xs)}",
+    "${sum([1, 2.5, true])}",
+  ])("%s loads: the argument may be one", (binding) => {
+    expect(() => loadedNodes(typedConsumer(binding))).not.toThrow();
+  });
+
+  test("in a condition, a literal argument is checked", () => {
+    const text = CASE_FLOW.replace("Buy(d.output).conviction > 0.4", 'upper(5) == "5"');
+    const error = loadError(() => loadedNodes(text));
+    expect(error.message).toBe("case node 'route' cases[0].when: upper() takes str, got int(5..5)");
+  });
+});
+
 // ---------- names that are not constructors ----------
 
 test("a builtin type name in a binding is not a conversion", () => {
-  const text = consumer("${int(d.output)}");
+  const text = consumer("${bool(d.output)}");
 
   const error = loadError(() => loadedNodes(text));
 
   expect(error.message).toContain(
-    "unknown expression function 'int'; types in expressions are typedef names; `int(...)` is not a conversion",
+    "unknown expression function 'bool'; types in expressions are typedef names; `bool(...)` is not a conversion",
   );
-  expect(errorLine(error)).toBe(lineOf(text, "x: ${int"));
+  expect(errorLine(error)).toBe(lineOf(text, "x: ${bool"));
 });
 
 test("Message, a built-in type, is not a constructor", () => {
@@ -482,12 +611,12 @@ test("Message, a built-in type, is not a constructor", () => {
 });
 
 test("a builtin type name in a case when is not a conversion", () => {
-  const text = CASE_FLOW.replace("Buy(d.output).conviction > 0.4", "int(d.output) > 0");
+  const text = CASE_FLOW.replace("Buy(d.output).conviction > 0.4", "bool(d.output) > 0");
 
   const error = loadError(() => loadedNodes(text));
 
-  expect(error.message).toContain("case node 'route' cases[0].when: unknown expression function 'int'; types");
-  expect(errorLine(error)).toBe(lineOf(text, "int(d.output)"));
+  expect(error.message).toContain("case node 'route' cases[0].when: unknown expression function 'bool'; types");
+  expect(errorLine(error)).toBe(lineOf(text, "bool(d.output)"));
 });
 
 test("an unknown name in a case when is an unknown function", () => {

@@ -6,7 +6,7 @@
  * can traverse into object outputs such as `${x.output.output.ratio}`.
  *
  * Grammar: comparisons (`==` `!=` `<` `<=` `>` `>=` `in` `not in`) and arithmetic over
- * references and literals, combined with `and` / `or` / `not` and parentheses. The same parsed
+ * references and literals, combined with `and` / `or` / `not`, conditionals and parentheses. The same parsed
  * tree feeds the evaluator, conservative type inference, and the reference walkers. Conditions
  * route through the one unified engine; a bare reference with no comparison operator is a
  * truthiness test (not an error). `isinstance(x, T)` checks a value against a type named in the
@@ -43,7 +43,18 @@ import {
   listKindForElement,
   valueRepr,
 } from "../typesys/values.ts";
-import { bindArguments, builtinResultType, kindName, TEMPLATE_FNS, type TemplateFn } from "./builtins.ts";
+import {
+  type ArgType,
+  bindArguments,
+  builtinResultType,
+  floatParts,
+  isShipped,
+  kindName,
+  roundQuotient,
+  TEMPLATE_FNS,
+  type TemplateFn,
+  truthy,
+} from "./builtins.ts";
 import { ResolvedValue, type RootRead, SourceRef, type TracedValue, ValueRoute } from "./lineage.ts";
 import {
   callSuffixOf,
@@ -71,16 +82,17 @@ export class ConstructorTypeError extends ExpressionError {
 }
 
 /**
- * Return the hint for calling a builtin type name, else `""`.
+ * Return the hint for calling a builtin type name that is no builtin, else `""`.
  *
- * `int(x)` reads like a conversion, but constructors are `typedefs:` names that only check.
+ * `bool(x)` reads like a conversion, but constructors are `typedefs:` names that only check;
+ * only `str`, `int` and `float` are conversions, as builtins.
  *
  * @param name The callee.
- * @returns `"; types in expressions are typedef names; ..."` for a builtin type name (`int`,
- *   `list`, `Optional`), else empty.
+ * @returns `"; types in expressions are typedef names; ..."` for a builtin type name (`bool`,
+ *   `list`, `Optional`) no builtin has, else empty.
  */
 export function conversionHint(name: string): string {
-  if (!BUILTIN_TYPE_NAMES.has(name)) return "";
+  if (!BUILTIN_TYPE_NAMES.has(name) || TEMPLATE_FNS.has(name)) return "";
   return `; types in expressions are typedef names; \`${name}(...)\` is not a conversion`;
 }
 
@@ -629,14 +641,7 @@ function trueDivide(x: bigint, y: bigint): number {
  */
 function floatPow(x: number, n: number): number {
   if (n === 0) return 1;
-  // |x| = m · 2^e exactly, read off its bits.
-  const view = new DataView(new ArrayBuffer(8));
-  view.setFloat64(0, x);
-  const bits = view.getBigUint64(0);
-  const field = Number((bits >> 52n) & 0x7ffn);
-  const fraction = bits & ((1n << 52n) - 1n);
-  const m = field === 0 ? fraction : fraction | (1n << 52n);
-  const e = field === 0 ? -1074 : field - 1075;
+  const [m, e] = floatParts(x);
   const power = m ** BigInt(Math.abs(n));
   let num = n > 0 ? power : 1n;
   let den = n > 0 ? 1n : power;
@@ -644,32 +649,6 @@ function floatPow(x: number, n: number): number {
   else den <<= BigInt(-e * n);
   const result = roundQuotient(num, den);
   return x < 0 && n % 2 !== 0 ? -result : result;
-}
-
-/**
- * Return the float nearest `num / den` for a non-negative `num` and a positive `den`: ties to
- * even, subnormals included, `Infinity` past the float range.
- */
-function roundQuotient(num: bigint, den: bigint): number {
-  if (num === 0n) return 0;
-  const bitLength = (value: bigint) => value.toString(2).length;
-  // Scale so the integer quotient q has at least 55 bits: num / den = (q + a remainder) · 2^-s.
-  const s = 55 - (bitLength(num) - bitLength(den));
-  const [scaledNum, scaledDen] = s >= 0 ? [num << BigInt(s), den] : [num, den << BigInt(-s)];
-  const q = scaledNum / scaledDen;
-  const sticky = scaledNum % scaledDen !== 0n;
-  const k = bitLength(q);
-  // q's leading bit is worth 2^(k - 1 - s).
-  if (k - 1 - s > 1023) return Infinity;
-  // Keep 53 bits, or fewer for a subnormal, whose lowest bit is worth 2^-1074.
-  const drop = Math.max(k - 53, s - 1074);
-  const rest = q & ((1n << BigInt(drop)) - 1n);
-  const half = 1n << BigInt(drop - 1);
-  let mantissa = q >> BigInt(drop);
-  if (rest > half || (rest === half && (sticky || (mantissa & 1n) === 1n))) mantissa += 1n;
-  // Exact: mantissa <= 2^53 and the scale is a power of two in [2^-1074, 2^971], so only a
-  // mantissa rounded up to 2^53 at the top overflows, to Infinity as IEEE rounding does.
-  return Number(mantissa) * 2 ** (drop - s);
 }
 
 /**
@@ -685,14 +664,6 @@ function minus(value: Value): Value {
     );
   }
   return -x;
-}
-
-/** Return whether a value is truthy: all but `false`, `null`, a zero, `""`, `[]` and a record with no field. */
-function truthy(value: Value): boolean {
-  if (value === null || value === false || value === 0n || value === 0 || value === "") return false;
-  if (Array.isArray(value)) return value.length > 0;
-  if (isRecord(value)) return Object.keys(value).length > 0;
-  return true;
 }
 
 // The operator tokens between the operands of a `sum` / `product` / `power` chain. A literal
@@ -770,10 +741,32 @@ function describe(node: Tree, children: readonly ValueRoute[]): string {
   if (kind === "neg" || kind === "negate") {
     return `(${kind === "neg" ? "-" : "not "}${children[0]!.expression})`;
   }
+  if (kind === "subscript") return `${children[0]!.expression}[...]`;
+  if (kind === "field_read") return children[0]!.expression + stepsText(splitReference(node).steps);
   return `${kind}(${children.map((child) => child.expression).join(", ")})`;
 }
 
-/** Name a slice's base in a miss path: a literal's text, a comprehension variable's name, else `(...)`. */
+/**
+ * Name the base of a field read in a message: a reference or variable as written, a subscript as
+ * `base[...]`, a field read as its base and steps, a literal as written, anything else `(...)`.
+ */
+export function subscriptText(node: ExprNode): string {
+  if (node instanceof Token) return node.value;
+  if ((node.data === "refcall" && callSuffixOf(node) === undefined) || node.data === "comp_var") {
+    return referenceText(node);
+  }
+  if (node.data === "subscript") return `${subscriptText(node.children[0]!)}[...]`;
+  if (node.data === "field_read") return subscriptText(node.children[0]!) + stepsText(splitReference(node).steps);
+  return "(...)";
+}
+
+/** The error for indexing or slicing a value that is no list or text. */
+function subscriptKindError(doing: "indexing" | "slicing", base: Value): ExpressionError {
+  const hint = isRecord(base) ? "; read a record's field with a dot, as in `r.name`" : "";
+  return new ExpressionError(`${doing} takes a list or text, got ${kindName(base)}${hint}`);
+}
+
+/** Name a subscript's base in a miss path: a literal's text, a comprehension variable's name, else `(...)`. */
 function sliceBaseText(node: ExprNode): string {
   if (node instanceof Token) return node.value;
   if (node.data === "comp_var" && node.children.length === 1) return String(node.children[0]);
@@ -844,6 +837,9 @@ class EvalExpr {
   readonly #frames: TraceFrame[] = [];
   #lastRoute: ValueRoute | null = null;
   #missPath: string | null = null;
+  // Set when the last miss is an index out of range: only `|`, `:-` and `:?` take that miss, and
+  // every other consumer throws this error, in every mode.
+  #outOfRange: ExpressionError | null = null;
   // Comprehension variables in scope: name -> its item, its declared type (the element type of its
   // un-narrowed iterable) and, when tracing, the item's route.
   readonly #vars = new Map<string, { value: Value; type: Type | null; route: ValueRoute | null }>();
@@ -872,9 +868,13 @@ class EvalExpr {
     return this.#trace ? { value, route: this.#lastRoute! } : value;
   }
 
-  /** Turn `MISSING` into `null` in the non-strict modes; throw in `STRICT_RAISE`. */
+  /**
+   * Turn `MISSING` into `null` in the non-strict modes; throw in `STRICT_RAISE`, and in every mode
+   * for an index out of range.
+   */
   asValue(value: Walked): Value {
     if (value === MISSING) {
+      if (this.#outOfRange !== null) throw this.#outOfRange;
       if (this.#mode === ResolveMode.STRICT_RAISE) {
         const where = this.#missPath !== null ? ` \${${this.#missPath}}` : "";
         throw new ExpressionError(`unresolved reference${where} in expression`);
@@ -885,14 +885,30 @@ class EvalExpr {
   }
 
   /**
-   * Turn `MISSING` into `null` in every mode: an operand whose miss its consumer handles (a
-   * `|` / `:-` / `:?` operand, a comprehension iterable, a slice bound). A handled miss's path is
-   * dropped, so a later error can't name it.
+   * Turn `MISSING` into `null` in every mode: a `|` / `:-` / `:?` operand, whose miss its operator
+   * handles. A handled miss's path is dropped, so a later error can't name it.
    */
   orNone(value: Walked): Value {
     if (value !== MISSING) return value;
     this.#missPath = null;
+    this.#outOfRange = null;
     return null;
+  }
+
+  /**
+   * Turn `MISSING` into `null` for an operand that reports null itself (a comprehension iterable,
+   * a slice bound, an index); an index out of range throws its own error instead.
+   */
+  orNull(value: Walked): Value {
+    if (value === MISSING && this.#outOfRange !== null) throw this.#outOfRange;
+    return this.orNone(value);
+  }
+
+  /** Record a miss at `path`, replacing any earlier one. */
+  missAt(path: string): typeof MISSING {
+    this.#missPath = path;
+    this.#outOfRange = null;
+    return MISSING;
   }
 
   // --- dispatch --- //
@@ -940,6 +956,8 @@ class EvalExpr {
         return this.defaultExpr(node);
       case "required_expr":
         return this.requiredExpr(node);
+      case "if_expr":
+        return this.ifExpr(node);
       case "negate":
         return this.negate(node);
       case "or_expr":
@@ -963,6 +981,8 @@ class EvalExpr {
         return this.listLit(node);
       case "subscript":
         return this.subscript(node);
+      case "field_read":
+        return this.fieldRead(node);
       case "list_comp":
         return this.listComp(node);
       case "comp_var":
@@ -1063,8 +1083,7 @@ class EvalExpr {
       } else if (this.#trace && present && complete) {
         this.#frames.at(-1)!.route = resolvedRoute(item as ResolvedValue, "item").project(stepNames);
       }
-      if (walked === MISSING) this.#missPath = text;
-      return walked;
+      return walked === MISSING ? this.missAt(text) : walked;
     }
     const read = this.#resolve([head, ...stepNames]);
     const rootText = head + stepsText(steps.slice(0, read.used - 1));
@@ -1076,8 +1095,7 @@ class EvalExpr {
       const route = readRoute(read.source ?? null, value as Value, stepNames.slice(read.used - 1), text);
       this.#frames.at(-1)!.route = route;
     }
-    if (value === MISSING) this.#missPath = text;
-    return value;
+    return value === MISSING ? this.missAt(text) : value;
   }
 
   /**
@@ -1133,29 +1151,51 @@ class EvalExpr {
   }
 
   /**
-   * `base[lower:upper]` on a list: an omitted lower is 0
-   * and an omitted upper the length, a negative bound counts from the end, and both clamp to
-   * `[0, n]`. A null or missing base is a miss (a slice of null misses, where a `.field` of
-   * null raises), so `${xs[1:] :- []}` falls back, and its bounds aren't read; a null base's
-   * miss is named `base[...]`, with a non-literal, non-variable base as `(...)`. When tracing, the route is a `list` of the base route projected to each kept index.
+   * `base[i]` or `base[lower:upper]` on a list or a text, whose characters are code points, as
+   * `len` counts them.
    *
-   * @throws {ExpressionError} If a bound is null or not an int (a bool counts as 0 or 1), or the
-   *   base is not a list.
+   * A slice's omitted lower is 0 and omitted upper the length, a negative bound counts from the
+   * end, and both clamp to `[0, n]`. A negative index counts from the end; an index out of range
+   * is a miss that only `|`, `:-` and `:?` take (`${xs[0] :- ""}`), and an error anywhere else. A
+   * null or missing base is a miss (a subscript of null misses, where a `.field` of null raises),
+   * so `${xs[1:] :- []}` falls back, and its bounds aren't read; a null base's miss is named
+   * `base[...]`, with a non-literal, non-variable base as `(...)`. When tracing, a list's index is
+   * its base route projected to the item, and a list's slice a `list` of the base route projected
+   * to each kept index.
+   *
+   * @throws {ExpressionError} If an index or a bound is null or not an int (a bool counts as 0
+   *   or 1), or the base is not a list or a text.
    */
   subscript(node: Tree): Walked {
-    const [baseNode, slice] = node.children as [ExprNode, Tree];
+    const [baseNode, part] = node.children as [ExprNode, Tree];
     const base = this.walk(baseNode);
     // A miss before the bounds are read, so `xs[n:] :- []` falls back whatever the bounds are.
     if (base === MISSING) return MISSING;
-    if (base === null) {
-      this.#missPath = `${sliceBaseText(baseNode)}[...]`;
-      return MISSING;
-    }
+    if (base === null) return this.missAt(`${sliceBaseText(baseNode)}[...]`);
     const baseRoute = this.#trace ? this.#lastRoute! : null;
-    const lower = this.sliceBound(slice.children[0]!);
-    const upper = this.sliceBound(slice.children[1]!);
-    if (!Array.isArray(base)) throw new ExpressionError(`slicing takes a list, got ${kindName(base)}`);
-    const n = BigInt(base.length);
+    if (!Array.isArray(base) && typeof base !== "string") {
+      throw subscriptKindError(part.data === "index" ? "indexing" : "slicing", base);
+    }
+    if (part.data === "index") {
+      const at = this.subscriptInt(part.children[0]!, "index");
+      const items = typeof base === "string" ? [...base] : base;
+      const n = BigInt(items.length);
+      const k = at < 0n ? at + n : at;
+      if (k < 0n || k >= n) {
+        const what = typeof base === "string" ? "a text" : "a list";
+        this.#missPath = null;
+        this.#outOfRange = new ExpressionError(
+          `index ${at} is out of range for ${what} of length ${n}; give a default with \`:-\``,
+        );
+        return MISSING;
+      }
+      if (baseRoute !== null && Array.isArray(base)) this.#frames.at(-1)!.route = baseRoute.project([Number(k)]);
+      return items[Number(k)]!;
+    }
+    const lower = this.sliceBound(part.children[0]!);
+    const upper = this.sliceBound(part.children[1]!);
+    const items = typeof base === "string" ? [...base] : base;
+    const n = BigInt(items.length);
     const clamp = (bound: bigint | null, fallback: bigint): number => {
       let at = bound ?? fallback;
       if (at < 0n) at += n;
@@ -1163,6 +1203,7 @@ class EvalExpr {
     };
     const start = clamp(lower, 0n);
     const stop = Math.max(start, clamp(upper, n));
+    if (typeof base === "string") return items.slice(start, stop).join("");
     if (baseRoute !== null) {
       // Each kept item is its base item, so feedback on it reaches that item.
       const children = Array.from({ length: stop - start }, (_, k) => baseRoute.project([start + k]));
@@ -1214,7 +1255,7 @@ class EvalExpr {
         i = next();
       } else if (clauses[i]!.data === "comp_for") {
         const [target, iterable, source] = clauses[i]!.children as [Token, ExprNode, Token];
-        const items = this.orNone(this.walk(iterable));
+        const items = this.orNull(this.walk(iterable));
         if (items === null) {
           throw new ExpressionError(
             `comprehension \`for ${target} in ${source}\` iterates over null; give a default, e.g. \`(${source} :- [])\``,
@@ -1240,11 +1281,18 @@ class EvalExpr {
   }
 
   /**
-   * The declared element type of a comprehension's iterable: `elementType` of its type, inferred
-   * from the declared types of the references, `item`, constructors and the variables in scope,
-   * without narrowing; `null` when untyped.
+   * The declared element type of a comprehension's iterable: `elementType` of its type
+   * (`declaredType`); `null` when untyped.
    */
   elementDeclared(iterable: ExprNode): Type | null {
+    return elementType(this.declaredType(iterable));
+  }
+
+  /**
+   * The declared type of `node`, inferred from the declared types of the references, `item`,
+   * constructors and the comprehension variables in scope, without narrowing; `null` when untyped.
+   */
+  declaredType(node: ExprNode): Type | null {
     const untyped = this.#declared === null && this.#itemType === null && this.#types === null;
     if (untyped && this.#vars.size === 0) return null;
     const refType = (path: string): Type | null => {
@@ -1254,7 +1302,30 @@ class EvalExpr {
     };
     const typeFn = (name: string): Type | null => this.#types?.get(name) ?? null;
     const vars = new Map([...this.#vars].map(([name, binding]): [string, Type | null] => [name, binding.type]));
-    return elementType(inferExprType(iterable, refType, typeFn, vars));
+    return inferExprType(node, refType, typeFn, vars);
+  }
+
+  /**
+   * `base.k` and `base?.k` after a subscript or a parenthesized operand: the steps as `walkSteps`
+   * walks them from the base's value, typed by the base's declared type. A `?.` on a miss reads
+   * null; a `.` on an index out of range throws the index's error. When tracing, the route is the
+   * base's projected through the steps.
+   */
+  fieldRead(node: Tree): Walked {
+    const baseNode = node.children[0]!;
+    const { steps } = splitReference(node);
+    const base = this.walk(baseNode);
+    const baseRoute = this.#trace ? this.#lastRoute : null;
+    if (base === MISSING && this.#outOfRange !== null) {
+      if (!steps[0]!.optional) throw this.#outOfRange;
+      this.#outOfRange = null;
+    }
+    const membersOf = () => declaredOf(this.declaredType(baseNode));
+    const [value, complete] = this.walkSteps(base, membersOf, steps, subscriptText(baseNode), null);
+    if (baseRoute !== null && complete && value !== null) {
+      this.#frames.at(-1)!.route = baseRoute.project(steps.map((step) => step.name));
+    }
+    return value;
   }
 
   /**
@@ -1278,10 +1349,20 @@ class EvalExpr {
   /** One slice bound: `null` when omitted, else its int (a bool as 0 or 1). */
   sliceBound(node: ExprNode): bigint | null {
     if (node instanceof Tree && node.data === "omitted") return null;
-    const value = this.orNone(this.walk(node));
-    if (value === null) throw new ExpressionError("slice bound is null; omit it to mean the end");
+    return this.subscriptInt(node, "slice bound");
+  }
+
+  /** A slice bound or an index (`what`): its int, a bool as 0 or 1. */
+  subscriptInt(node: ExprNode, what: "slice bound" | "index"): bigint {
+    const value = this.orNull(this.walk(node));
+    if (value === null) {
+      throw new ExpressionError(what === "index" ? "index is null" : "slice bound is null; omit it to mean the end");
+    }
     if (typeof value === "boolean") return value ? 1n : 0n;
-    if (typeof value !== "bigint") throw new ExpressionError(`slice bounds take int, got ${kindName(value)}`);
+    if (typeof value !== "bigint") {
+      const takes = what === "index" ? "an index takes" : "slice bounds take";
+      throw new ExpressionError(`${takes} int, got ${kindName(value)}`);
+    }
     return value;
   }
 
@@ -1386,9 +1467,9 @@ class EvalExpr {
    * Run a builtin call through `TEMPLATE_FNS`.
    *
    * The arguments are evaluated in source order (a keyword argument carries a leading `NAME`),
-   * bound to the builtin's parameters with `bindArguments`, and passed in parameter order. The
-   * result is read as a host value: a top-level `undefined` is `null`, anything else goes
-   * through `fromHost`.
+   * bound to the builtin's parameters with `bindArguments`, and passed in parameter order. A
+   * shipped builtin's result is taken as it is (`isShipped`); a host function's is read as a host
+   * value: a top-level `undefined` is `null`, anything else goes through `fromHost`.
    *
    * @throws {ExpressionError} If `callee` is no builtin, or the call fails: arguments that don't
    *   bind, an error the builtin throws, or a result that is no yian value
@@ -1411,6 +1492,7 @@ class EvalExpr {
     if (typeof bound === "string") throw failed(bound);
     try {
       const result = fn.call(...bound);
+      if (isShipped(fn)) return result as Value;
       return result === undefined ? null : fromHost(result, "result");
     } catch (error) {
       if (error instanceof ExpressionError) throw error;
@@ -1468,6 +1550,18 @@ class EvalExpr {
       throw new RequiredError(typeof text === "string" ? text : valueRepr(text));
     }
     this.selectRoute(":?");
+    return value;
+  }
+
+  /**
+   * `then if test else otherwise`: the test is tested for truth, as `and` and `or` test their
+   * operands, and only the branch it picks is evaluated. The value is that branch's, a miss
+   * included, so `(a if c else b) :- d` falls back when the picked branch misses.
+   */
+  ifExpr(node: Tree): Walked {
+    const [then, test, otherwise] = node.children as [ExprNode, ExprNode, ExprNode];
+    const value = this.walk(truthy(this.asValue(this.walk(test))) ? then : otherwise);
+    this.selectRoute("if");
     return value;
   }
 
@@ -1591,8 +1685,9 @@ export interface TraceOptions extends Omit<EvalOptions, "item"> {
  *
  * The one evaluator for every `${...}` construct: references (bare, dotted with `.` and `?.`,
  * `item`-scoped), arithmetic and comparisons over values (so text + text and list + list
- * concatenate), boolean combinators, list literals, list slices (`xs[a:b]`; a slice of a miss or
- * `null` is a miss), list comprehensions (a `null` item is
+ * concatenate), boolean combinators, list literals, indexes and slices of lists and texts
+ * (`xs[i]`, `xs[a:b]`; a subscript of a miss or `null` is a miss, and so is an index out of range
+ * for `|`, `:-` and `:?`, though an error anywhere else), list comprehensions (a `null` item is
  * returned as is), and coalesce / default / required. The operators follow the TS
  * number model: an int is a `bigint` at any size, a bool counts as 0 or 1, `/` always gives a
  * float, and a float result is IEEE's (`Infinity` is a value, NaN an error).
@@ -1638,9 +1733,10 @@ export interface TraceOptions extends Omit<EvalOptions, "item"> {
  * @throws {ExpressionError} On a field read the step table rejects, an unsupported node, a call to
  *   an unknown function or one that fails, an `isinstance` type absent from `types`, arithmetic or
  *   ordering over operand kinds the operator doesn't take (`null` included), a zero divisor, a NaN
- *   result, an int too large for the runtime, a slice of anything but a list or with a bound that
- *   is null or not an int, a comprehension over anything but a list (`null` or a miss included),
- *   or a strict-mode miss.
+ *   result, an int too large for the runtime, a subscript of anything but a list or a text, or
+ *   with an index or bound that is null or not an int, an index out of range outside `|`, `:-`
+ *   and `:?`, a comprehension over anything but a list (`null` or a miss included), or a
+ *   strict-mode miss.
  */
 export function evalExpr(tree: ExprNode, resolve: RootResolver, options: TraceOptions & { trace: true }): TracedValue;
 export function evalExpr(tree: ExprNode, resolve: RootResolver, options?: EvalOptions & { trace?: false }): Value;
@@ -1663,6 +1759,9 @@ export function evalExpr(
 // --------------------------------------------------------------------------------------- //
 // Conservative compile-time type inference over the unified expression tree.
 // --------------------------------------------------------------------------------------- //
+
+// The kinds of a text value.
+const TEXT_KINDS: ReadonlySet<ValueKind> = new Set([ValueKind.STRING, ValueKind.DATE, ValueKind.DATETIME]);
 
 // The nodes whose value is always a boolean.
 const BOOLEAN_NODES: ReadonlySet<string> = new Set([
@@ -1688,7 +1787,12 @@ const BOOLEAN_NODES: ReadonlySet<string> = new Set([
  * - `a | b`, `a :- b`: the non-null left operands joined with the last (`joinedType`, equal up
  *   to `Optional`), where an empty `[]` adds nothing, so `(xs :- [])` types like `xs` made
  *   non-null; `a :? m`: the non-null `a` (`m` is the error message);
+ * - `a if c else b`: `a` and `b` joined, where a `null` branch makes the other `Optional` and an
+ *   empty `[]` adds nothing;
+ * - `xs[i]`: the item type of `xs`'s list type, `Optional` when `xs` may be null; `s[i]` and
+ *   `s[a:b]` of a text: `str`, an index `Optional` as for a list;
  * - `xs[a:b]`: `xs`'s list type, non-null;
+ * - `x.k` after a subscript or parentheses: typed through `x`'s type, as a call's result is;
  * - `[e for ...]`: `list` of `e`'s type in its scope;
  * - a list literal: `list` of its items joined.
  *
@@ -1732,10 +1836,14 @@ export function inferExprType(
   }
   if (tree.data === "refcall") {
     const { head: name, steps } = splitReference(tree);
-    if (callSuffixOf(tree) !== undefined) {
+    const callSuffix = callSuffixOf(tree);
+    if (callSuffix !== undefined) {
       // `parseExpr` rejects dotted access on an `isinstance(...)` result.
       if (name === ISINSTANCE) return Type.scalar(ValueKind.BOOLEAN);
-      if (TEMPLATE_FNS.has(name)) return stepsType(builtinResultType(name), steps);
+      if (TEMPLATE_FNS.has(name)) {
+        const args = () => argumentTypes(name, callSuffix, (node) => infer(node));
+        return stepsType(builtinResultType(name, args), steps);
+      }
       return stepsType(typeFn === null ? null : typeFn(name), steps);
     }
     const typ = refTypeFn(referencePath(tree));
@@ -1760,9 +1868,34 @@ export function inferExprType(
     }
     case "required_expr":
       return infer(tree.children[0]!)?.replace({ nullable: false }) ?? null;
+    case "field_read":
+      return stepsType(infer(tree.children[0]!), splitReference(tree).steps);
+    case "if_expr": {
+      // A `null` branch makes the other's type Optional; an empty `[]` adds nothing.
+      const types: Type[] = [];
+      let nullable = false;
+      for (const branch of [tree.children[0]!, tree.children[2]!]) {
+        if (branch instanceof Tree && branch.data === "list_lit" && branch.children.length === 0) continue;
+        const typ = infer(branch);
+        if (typ === null) return null;
+        if (typ.kind === ValueKind.NONE && typ.members === undefined) nullable = true;
+        else types.push(typ);
+      }
+      const joined = joinedType(types);
+      return joined !== null && nullable ? joined.replace({ nullable: true }) : joined;
+    }
     case "subscript": {
       const typ = infer(tree.children[0]!);
-      return typ !== null && isListKind(typ.kind) ? typ.replace({ nullable: false }) : null;
+      if (typ === null) return null;
+      const index = (tree.children[1] as Tree).data === "index";
+      const text = typ.members === undefined && TEXT_KINDS.has(typ.kind);
+      let item: Type | null;
+      if (text) item = Type.scalar(ValueKind.STRING);
+      else if (!isListKind(typ.kind)) return null;
+      else if (!index) return typ.replace({ nullable: false });
+      else item = typ.element ?? null;
+      // A null base is a miss, so an index of a base that may be null may be null too.
+      return item !== null && index && typ.nullable ? item.replace({ nullable: true }) : item;
     }
     case "list_comp": {
       const scope = new Map(vars);
@@ -1782,8 +1915,24 @@ export function inferExprType(
   return BOOLEAN_NODES.has(tree.data) ? Type.scalar(ValueKind.BOOLEAN) : null;
 }
 
+/**
+ * Return the type of each parameter's argument in a call to builtin `name`, in parameter order:
+ * `infer`'s type for a given argument, `undefined` for one the call leaves out; `null` when the
+ * arguments don't bind (`checkCalls` reports that).
+ */
+function argumentTypes(name: string, callSuffix: Tree, infer: (node: ExprNode) => Type | null): ArgType[] | null {
+  const args = callSuffix.children as Tree[];
+  const positional = args.filter((arg) => arg.children.length === 1).map((arg) => arg.children[0]!);
+  const keywords = new Map(
+    args.filter((arg) => arg.children.length === 2).map((arg) => [String(arg.children[0]), arg.children[1]!]),
+  );
+  const bound = bindArguments(TEMPLATE_FNS.get(name)!, positional, keywords);
+  if (typeof bound === "string") return null;
+  return bound.map((arg) => (arg instanceof Tree || arg instanceof Token ? infer(arg) : undefined));
+}
+
 /** Return the type of reading `steps` from a value of type `typ`, if proven; a `?.` step makes it `Optional`. */
-function stepsType(typ: Type | null, steps: readonly RefStep[]): Type | null {
+export function stepsType(typ: Type | null, steps: readonly RefStep[]): Type | null {
   for (const step of steps) {
     if (typ === null) return null;
     typ = fieldReadType(typ, step.name);

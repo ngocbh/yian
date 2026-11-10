@@ -105,25 +105,32 @@ it has no offset) or `for:` (a duration). Its output is null.
 
 ## Operators and null
 
-From loosest to tightest: `a | b | c` (first non-null), `a :- b` (default), `a :? "msg"` (fail
-with `msg` when null), `or`, `and`, `not`, comparisons (`== != < <= > >= in`, `not in`), `+ -`,
-`* / %`, unary `-`, `**`, then `xs[a:b]`, calls and `.field`. Comparisons don't chain.
+From loosest to tightest: `a if c else b`, `a | b | c` (first non-null), `a :- b` (default),
+`a :? "msg"` (fail with `msg` when null), `or`, `and`, `not`, comparisons (`== != < <= > >= in`,
+`not in`), `+ -`, `* / %`, unary `-`, `**`, then `xs[i]`, `xs[a:b]`, calls and `.field`.
+Comparisons don't chain.
 
 | Write | Gives |
 |---|---|
 | `x?.name` | `x.name`, or null when `x` is null |
 | `x :- "none"` | `x`, or `"none"` when `x` is null |
 | `(order.output?.qty :- 0) + 1` | Arithmetic on a node a `case` may skip |
-| `xs[1:]`, `xs[:-2]` | A slice; no single index, no step |
+| `"big" if n > 9 else "small"` | A conditional; only the picked branch runs |
+| `xs[0]`, `s[-1]`, `xs[0].name` | An item or a character; out of range fails unless defaulted: `xs[0] :- ""` |
+| `xs[1:]`, `s[:-2]` | A slice of a list or a text; no step |
 | `[m.text for m in ms if m.role == "user"]` | A comprehension; more `for` and `if` may follow |
 | `isinstance(x, Buy)` | Whether `x` is a valid `Buy`; narrows the reads after it |
 | `Buy(x)`, `Buy(action="buy", qty=2)` | `x` checked as a `Buy`; a new `Buy` record |
 | `$$` | A literal `$` |
 
-False values are `false`, `null`, `0`, `0.0`, `""`, `[]` and an empty record. Builtins: `len`
-(bindings and conditions only), `upper`, `lower`, `join(value, sep="\n")`,
-`render_as_json(value, indent=2)`. A null argument fails the call: `${upper(name :- "")}`. See
-[Null rules](https://yian.readthedocs.io/expressions/#null-rules).
+False values are `false`, `null`, `0`, `0.0`, `""`, `[]` and an empty record. Builtins that give
+text, which prompts may call too: `upper`, `lower`, `join(value, sep="\n")`,
+`render_as_json(value, indent=2)`, `str`, `strip(s, chars=null)`, `lstrip`, `rstrip`,
+`replace(s, old, new)`. In bindings and conditions only: `len`, `split(s, sep=null)`,
+`startswith`, `endswith`, `int`, `float`, `round(x, n=null)`, `abs`, `min`, `max`, `sum`, `any`,
+`all`. They give Python's results, but with ASCII digits only, no `nan` and no digit limit, and
+`str(x)` is the text `${x}` writes. A null argument fails the call: `${upper(name :- "")}`. See
+[Builtins](https://yian.readthedocs.io/expressions/#builtins).
 
 ## Types
 

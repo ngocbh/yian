@@ -1,0 +1,8 @@
+kind: expr
+# Anywhere else an index out of range is an error, in a binding too.
+expr: "xs[2]"
+values: {xs: [a, b]}
+expect:
+  raises:
+    class: ExpressionError
+    message: "index 2 is out of range for a list of length 2; give a default with `:-`"

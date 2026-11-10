@@ -172,6 +172,17 @@ output: ${tutor.output}
 - A `T` that reads YAML goes only where a tag goes.
 - Its path, the root folder, the size cap and the record work as for `!include`.
 
+To build a system prompt from several files, read each into a variable and join them in the
+prompt; `rstrip` drops a file's final newline. The files' `$$` and `${...}` reach the model as
+written:
+
+```yaml check=fragment
+variables:
+  system_md: !include(str) prompts/system.md
+  skill_main: !include(str) skills/main.md
+system_prompt: "${rstrip(system_md)}\n\n## Skill: main\n\n${skill_main}"
+```
+
 ### A list prompt
 
 To send a conversation as real turns, give `prompt:` a list. Each item is either `${name}`

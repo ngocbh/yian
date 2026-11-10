@@ -546,6 +546,133 @@ test("every arm of an n-ary coalesce is reachable", () => {
 // TS-era rules
 // --------------------------------------------------------------------------------------- //
 
+describe("indexes and text slices", () => {
+  const XS = fromRecord({ xs: [10n, 20n, 30n], s: "a😀b", r: { k: 1n }, n: null, i: 1n });
+  const outOfRange = (at: string, what: string, n: number) =>
+    `index ${at} is out of range for ${what} of length ${n}; give a default with \`:-\``;
+
+  test.each<[string, Value]>([
+    ["xs[0]", 10n],
+    ["xs[-1]", 30n],
+    ["xs[-3]", 10n],
+    ["xs[i]", 20n],
+    ["xs[true]", 20n],
+    ["xs[1:][0]", 20n],
+    ["s[1]", "😀"],
+    ["s[-1]", "b"],
+    ["s[1:]", "😀b"],
+    ["s[:-1]", "a😀"],
+    ["s[5:]", ""],
+    ["[[1, 2]][0][1]", 2n],
+  ])("%s", (text, want) => {
+    expect(evaluate(text, XS)).toEqual(want);
+  });
+
+  test("an index out of range fails in every mode, naming the index and the length", () => {
+    for (const mode of Object.values(ResolveMode)) {
+      expect(errorOf("xs[3]", XS, mode).message).toBe(outOfRange("3", "a list", 3));
+      expect(errorOf("s[-4]", XS, mode).message).toBe(outOfRange("-4", "a text", 3));
+    }
+    expect(errorOf("xs[3] + 1", XS).message).toBe(outOfRange("3", "a list", 3));
+    expect(errorOf("xs[3] == null", XS, ResolveMode.CONDITION_FALSY).message).toBe(outOfRange("3", "a list", 3));
+  });
+
+  test("|, :- and :? take an index out of range as a miss", () => {
+    expect(evaluate("xs[3] :- 0", XS)).toBe(0n);
+    expect(evaluate("xs[5] | xs[-1]", XS)).toBe(30n);
+    expect(evaluate('s[9] :- ""', XS, { mode: ResolveMode.STRICT_RAISE })).toBe("");
+    expect(evaluate("xs[9][0] :- 1", XS)).toBe(1n);
+    const required = errorOf('xs[3] :? "need a fourth"', XS);
+    expect(required).toBeInstanceOf(RequiredError);
+    expect(required.message).toBe("need a fourth");
+    // The last operand of `|` is no escape.
+    expect(errorOf("xs[5] | xs[6]", XS).message).toBe(outOfRange("6", "a list", 3));
+  });
+
+  test("an index out of range inside another operand isn't a miss there", () => {
+    expect(errorOf("(xs[3] + 1) :- 0", XS).message).toBe(outOfRange("3", "a list", 3));
+    expect(errorOf("[x for x in [xs][2]]", XS).message).toBe(outOfRange("2", "a list", 1));
+    expect(errorOf("xs[xs[4]]", XS).message).toBe(outOfRange("4", "a list", 3));
+    expect(errorOf("xs[xs[4]:]", XS).message).toBe(outOfRange("4", "a list", 3));
+  });
+
+  test("a field read after a subscript or parentheses follows the step table", () => {
+    const values = fromRecord({ rs: [{ k: 1n, o: null }], r: { k: 2n }, n: null, xs: [1n] });
+    expect(evaluate("rs[0].k", values)).toBe(1n);
+    expect(evaluate("rs[-1]?.o?.k", values)).toBeNull();
+    expect(evaluate("(r).k + (r if true else n).k", values)).toBe(4n);
+    expect(evaluate("rs[5]?.k :- 7", values)).toBe(7n);
+    expect(evaluate("n[0]?.k", values)).toBeNull();
+    expect(errorOf("rs[0].o.k", values).message).toBe(
+      "cannot read ${rs[...].o.k}: rs[...].o is null; write rs[...].o?.k to read null instead, " +
+        "or check rs[...].o != null first",
+    );
+    expect(errorOf("rs[0].nope", values).message).toBe("cannot read ${rs[...].nope}: rs[...] has no field 'nope'");
+    expect(errorOf("xs[1:].k", values).message).toBe("cannot read ${xs[...].k}: xs[...] is list, which has no fields");
+    // A `.` on an index out of range is the index's error, which `:-` doesn't take.
+    expect(errorOf("rs[5].k :- 7", values).message).toBe(outOfRange("5", "a list", 1));
+  });
+
+  test("a null base is a miss, as with a slice", () => {
+    expect(evaluate("n[0]", XS)).toBeNull();
+    expect(evaluate("n[0] :- 5", XS)).toBe(5n);
+    const strict = errorOf("n[0]", XS, ResolveMode.STRICT_RAISE);
+    expect(strict.message).toBe("unresolved reference ${(...)[...]} in expression");
+  });
+
+  test.each<[string, string]>([
+    ["r[0]", "indexing takes a list or text, got record; read a record's field with a dot, as in `r.name`"],
+    ['r["k"]', "indexing takes a list or text, got record; read a record's field with a dot, as in `r.name`"],
+    ['xs["k"]', "an index takes int, got str"],
+    ["i[0]", "indexing takes a list or text, got int"],
+    ["r[1:]", "slicing takes a list or text, got record; read a record's field with a dot, as in `r.name`"],
+    ["xs[n]", "index is null"],
+    ["xs[1.0]", "an index takes int, got float"],
+  ])("%s fails", (text, message) => {
+    expectMessage(text, message, XS);
+  });
+});
+
+describe("conditionals", () => {
+  const VALUES = fromRecord({ n: 3n, zero: 0n, empty: "", xs: [1n], none: null });
+
+  test.each<[string, Value]>([
+    ["'big' if n > 2 else 'small'", "big"],
+    ["'big' if n > 5 else 'small'", "small"],
+    // The test is tested for truth, as `and` and `or` test theirs.
+    ["1 if zero else 2", 2n],
+    ["1 if empty else 2", 2n],
+    ["1 if xs else 2", 1n],
+    ["1 if missing else 2", 2n],
+    ["1 if none else 2", 2n],
+    ["x :- 'd' if n else 'e'", "d"],
+    ["0 if n < 0 else 1 if n < 5 else 2", 1n],
+    ["[x * 10 if x > 1 else x for x in [1, 2, 3] if x != 2]", [1n, 30n]],
+  ])("%s", (text, want) => {
+    expect(evaluate(text, VALUES)).toEqual(want);
+  });
+
+  test("only the branch the test picks is evaluated", () => {
+    expect(evaluate("1 if true else 1 / 0")).toBe(1n);
+    expect(evaluate("1 / 0 if false else 2")).toBe(2n);
+    expect(evaluate("upper(none) if false else 'ok'", VALUES)).toBe("ok");
+  });
+
+  test("the picked branch's miss is the conditional's, so a default after it fires", () => {
+    expect(evaluate("(missing if true else 1) :- 5", VALUES)).toBe(5n);
+    expect(evaluate("(xs[3] if true else 1) :- 5", VALUES)).toBe(5n);
+    expect(errorOf("missing if true else 1", VALUES, ResolveMode.STRICT_RAISE).message).toBe(
+      "unresolved reference ${missing} in expression",
+    );
+  });
+
+  test("a missing test raises in strict mode", () => {
+    expect(errorOf("1 if missing else 2", VALUES, ResolveMode.STRICT_RAISE).message).toBe(
+      "unresolved reference ${missing} in expression",
+    );
+  });
+});
+
 describe("tokens", () => {
   test.each([
     ["1", 1n],

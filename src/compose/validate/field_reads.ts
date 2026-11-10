@@ -255,8 +255,8 @@ interface Read {
 type ReadFix = "default" | "optional" | "either";
 
 /**
- * Return the refcalls in arithmetic with their fix: direct operands (parentheses make no node), and
- * the parts of a `:-` or `|` operand.
+ * Return the refcalls in arithmetic with their fix: direct operands (parentheses make no node), the
+ * branches of a conditional operand, and the parts of a `:-` or `|` operand.
  */
 function arithmeticOperands(tree: ExprNode): Map<ExprNode, ReadFix> {
   const operands = new Map<ExprNode, ReadFix>();
@@ -264,6 +264,8 @@ function arithmeticOperands(tree: ExprNode): Map<ExprNode, ReadFix> {
   const add = (node: ExprNode, fix: ReadFix = "default"): void => {
     if (!(node instanceof Tree)) return;
     if (node.data === "refcall" || node.data === "comp_var") operands.set(node, fix);
+    // A conditional's value is a branch's.
+    else if (node.data === "if_expr") [node.children[0]!, node.children[2]!].forEach((branch) => add(branch, fix));
     else if (node.data === "default_expr" || node.data === "coalesce") {
       // A `:- null` default leaves the value null, so it still needs a real default.
       const last = node.children.at(-1);

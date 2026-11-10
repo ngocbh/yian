@@ -95,7 +95,13 @@ import {
 import { type CaseRead, caseReadsAsWritten } from "../desugar/case_outputs.ts";
 import { SYNTH_PREFIX } from "../desugar/inline_calls.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
-import { builtinFieldErrors, constructorErrors } from "./constructors.ts";
+import {
+  builtinArgumentErrors,
+  builtinFieldErrors,
+  constructorErrors,
+  fieldReadErrors,
+  subscriptErrors,
+} from "./constructors.ts";
 import { Narrowing, parsedWhen, searchedWhenReads } from "./narrowing.ts";
 import type { SearchedWhen } from "./skips.ts";
 import { LocalInput, type ResolveOrigin } from "./typed_bindings.ts";
@@ -291,7 +297,11 @@ function outputBindings(outputs: unknown): unknown[] {
  * With `registry`, every `${T(...)}` constructor call in a binding is checked too
  * (`constructorErrors`), with each reference typed by the same contracts.
  *
- * Every builtin call in a binding or prompt must pass arguments the builtin takes.
+ * Every builtin call in a binding or prompt must pass arguments the builtin takes, and a
+ * shipped builtin's argument in a binding must be of a kind it takes when its type is proven
+ * (`builtinArgumentErrors`), as must a subscript's base and index (`subscriptErrors`). A field
+ * read after a subscript or parentheses is checked against its base's proven type
+ * (`fieldReadErrors`).
  *
  * An inbox input (`Inbox(T)` in `inputContracts`) is read only whole, as the lone
  * `${input.<name>}` bound to an input a named call's or a loop's child declares as an Inbox, or
@@ -322,7 +332,8 @@ function outputBindings(outputs: unknown): unknown[] {
  *   written, once.
  * @throws TypeError when a producer contract is not a `ValueContract` or `PartialRecordContract`.
  * @throws LoadError listing every unresolved reference, else every constructor call that can never
- *   succeed, else every inbox input nothing reads.
+ *   succeed, else every builtin call or subscript that can never succeed, else every inbox input
+ *   nothing reads.
  */
 export function validateReferences(
   buildResults: ReadonlyMap<string, BuildResult>,
@@ -364,6 +375,7 @@ export function validateReferences(
   }
   const errors: [message: string, range: SourceRange | null][] = [];
   const constructorProblems: [message: string, range: SourceRange | null][] = [];
+  const typeProblems: [message: string, range: SourceRange | null][] = [];
   const misplacedOptionals: [message: string, range: SourceRange | null][] = [];
   // The `[site name, source, range]` of each plain input binding already scanned, as JSON.
   const scanned = new Set<string>();
@@ -424,18 +436,23 @@ export function validateReferences(
     }
     const trees = spanTrees(text);
     addBuiltinFieldErrors(trees, where, rng);
+    /** The proven type of one reference this site reads. */
+    const refType = (path: string): Type | null => {
+      const [head, ...fields] = path.split(".");
+      let contract: OutputContract | null;
+      if (head === "item") {
+        contract = elementContract !== null ? projectOutputContract(elementContract, fields) : null;
+      } else {
+        contract = referenceContract(path, siteProducers, siteInputs);
+      }
+      return outputContractType(contract);
+    };
+    for (const tree of trees) {
+      const problems = [...builtinArgumentErrors(tree, refType, typeFn), ...subscriptErrors(tree, refType, typeFn)];
+      for (const problem of problems) typeProblems.push([`${where}: ${problem}`, rng]);
+      for (const problem of fieldReadErrors(tree, refType, typeFn)) errors.push([`${where}: ${problem}`, rng]);
+    }
     if (registry !== null && constructors) {
-      /** The proven type of one reference this site reads. */
-      const refType = (path: string): Type | null => {
-        const [head, ...fields] = path.split(".");
-        let contract: OutputContract | null;
-        if (head === "item") {
-          contract = elementContract !== null ? projectOutputContract(elementContract, fields) : null;
-        } else {
-          contract = referenceContract(path, siteProducers, siteInputs);
-        }
-        return outputContractType(contract);
-      };
       for (const tree of trees) {
         for (const problem of constructorErrors(tree, registry, refType)) {
           constructorProblems.push([`${where}: ${problem}`, rng]);
@@ -909,6 +926,7 @@ export function validateReferences(
     ["flow has unresolved references", errors],
     ["flow has ?. inside a reference root", misplacedOptionals],
     ["flow has constructor calls that can never succeed", constructorProblems],
+    ["flow has expressions that can never succeed", typeProblems],
   ] as const) {
     if (problems.length > 0) {
       const firstRange = problems.find(([, range]) => range !== null)?.[1] ?? null;

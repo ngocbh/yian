@@ -1,0 +1,6 @@
+kind: expr
+# The branch the test doesn't pick is never evaluated.
+expr: "1 if ok else 1 / 0"
+values: {ok: true}
+expect:
+  value: 1

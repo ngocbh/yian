@@ -639,6 +639,33 @@ test("a slice route projects each kept item of its base", () => {
   expect(sourcesOf(result.route).every((source) => source.executionSeq === producer.executionSeq)).toBe(true);
 });
 
+test("an index route projects its item of the base, and a text slice is a scalar over its base", () => {
+  const sources = new Sources({ producer: { tags: ["a", "b", "c"], name: "Ada" } });
+  const item = sources.evaluate("producer.tags[-1]");
+  expect(item.value).toBe("c");
+  expect([item.route.kind, item.route.source?.path]).toEqual(["source", ["tags", 2]]);
+  const text = sources.evaluate("producer.name[1:]");
+  expect(text.value).toBe("da");
+  expect(text.route.kind).toBe("scalar");
+  expect(text.route.expression).toBe("producer.name[...]");
+  expect(text.route.children.map((child) => child.source?.path)).toEqual([["name"]]);
+});
+
+test("a conditional's route selects the branch it picked, not its test", () => {
+  const sources = new Sources({ producer: { tags: ["a"], name: "Ada", flag: true } });
+  const result = sources.evaluate("producer.name if producer.flag else producer.tags");
+  expect(result.value).toBe("Ada");
+  expect(result.route.kind).toBe("selected");
+  expect(result.route.children.map((child) => [child.kind, child.source?.path])).toEqual([["source", ["name"]]]);
+});
+
+test("a field read after an index projects the item's route through its steps", () => {
+  const sources = new Sources({ producer: { rows: [{ name: "Ada" }, { name: "Bo" }] } });
+  const result = sources.evaluate("producer.rows[1].name");
+  expect(result.value).toBe("Bo");
+  expect([result.route.kind, result.route.source?.path]).toEqual(["source", ["rows", 1, "name"]]);
+});
+
 test("len records an opaque route", () => {
   const sources = new Sources({ producer: { tags: ["a"] } });
   expect(sources.evaluate("len(producer.tags)").route.kind).toBe("opaque");

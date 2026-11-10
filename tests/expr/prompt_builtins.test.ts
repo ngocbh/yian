@@ -216,6 +216,47 @@ output: \${write.output}
   expect((model.requests[0]!.messages.at(-1)!.parts[0] as TextPart).text).toBe("Note: none");
 });
 
+test("a system prompt may drop a file's trailing newline with rstrip", async () => {
+  const flow = await loadFlow(`id: p
+name: p
+llm_config: {provider: ollama, model: test}
+input:
+  system_md: !str
+nodes:
+  write:
+    kind: agent
+    input:
+      system_md: \${input.system_md}
+    system_prompt: "\${rstrip(system_md)} Be brief."
+    prompt: Hi
+    output: str
+output: \${write.output}
+`);
+  const model = new ScriptedModel([textReply("ok")], { provider: "ollama", model: "test" });
+
+  const result = await runFlow(flow, { system_md: "You help.\n\n" }, { env: NO_ENV, models: serving(model) });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect((model.requests[0]!.messages[0]!.parts[0] as TextPart).text).toBe("You help. Be brief.");
+});
+
+test.each([
+  ["${strip(name)}", "zeta"],
+  ["${lstrip(name, 'z')}", "eta"],
+  ["${rstrip(name, chars='a')}", "zet"],
+  ["${replace(name, 'e', 'E')}", "zEta"],
+  ["${str(sig)}", '{"value":0.8}'],
+])("a prompt may call the builtins that give text: %s", (template, want) => {
+  expect(() => promptRefs(template)).not.toThrow();
+  expect(renderTemplateRecord(template, REC)).toBe(want);
+});
+
+test.each(["split", "int", "float", "round", "startswith", "any", "min", "sum", "abs"])(
+  "%s computes a value, so it belongs in an input, not a prompt",
+  (name) => {
+    expect(() => promptRefs(`\${${name}(name)}`)).toThrow(`unknown prompt function '${name}'; prompts call only`);
+  },
+);
+
 // --- render: plain references --- //
 
 test("plain and dotted references render", () => {

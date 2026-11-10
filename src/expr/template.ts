@@ -30,8 +30,8 @@
  *
  * This module also owns the strict AGENT prompt renderer (`renderTemplateRecord`)
  * and its compile-time companion (`promptRefs`), which lists the inputs a prompt reads and
- * rejects a call to anything but a formatting builtin (every builtin but the shipped `len`, which
- * computes a value and belongs in an input binding). A prompt is not a binding (it reads inputs
+ * rejects a call to anything but a formatting builtin (a builtin that gives text; the shipped
+ * `len`, `split`, `int` and the like compute a value, which belongs in an input binding). A prompt is not a binding (it reads inputs
  * already bound to its node and mints no edge), but it is a `${...}` template and reuses this
  * scanner, so it lives here rather than in `expressions.ts`.
  *
@@ -614,7 +614,7 @@ export function renderTemplateRecord(
  *
  * The compile-time companion to `renderTemplateRecord`, which compose uses to check a prompt's
  * names. Also rejects, so a bad prompt fails at load rather than at render: a callee that is no
- * formatting builtin (one not in `TEMPLATE_FNS`, or the shipped `len`, which computes),
+ * formatting builtin (one not in `TEMPLATE_FNS`, or a shipped one that computes, such as `len`),
  * `isinstance` (a prompt has no type table), and a builtin called with arguments it doesn't take.
  *
  * @param text The prompt template, or `Verbatim` text.
@@ -651,9 +651,9 @@ function callCallees(tree: ExprNode): string[] {
  * Throw if a call in a scanned prompt span names anything but a formatting builtin.
  *
  * The compile-time mirror of the render-time unknown-function error, so compose rejects it
- * without evaluating. `isinstance`, `T(...)` constructors and the shipped `len`
- * (`isNonPromptBuiltin`) are rejected too: prompt builtins only format (a value is computed in an
- * input binding), and a prompt has no type table.
+ * without evaluating. `isinstance`, `T(...)` constructors and the shipped builtins that compute
+ * a value, such as `len` and `split` (`isNonPromptBuiltin`), are rejected too: prompt builtins
+ * only give text (a value is computed in an input binding), and a prompt has no type table.
  */
 function rejectUnknownPromptBuiltin(tree: ExprNode): void {
   const callees = callCallees(tree);

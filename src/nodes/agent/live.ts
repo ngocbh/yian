@@ -483,7 +483,8 @@ function toolEventIdentity(live: LiveSinks, identity: ToolCallIdentity) {
 }
 
 /**
- * Bracket one granted tool call with started/finished observers.
+ * Bracket one tool call of a model reply with started/finished observers; a call refused before
+ * its tool gets them too.
  *
  * Emits `ToolCallStarted` with a copy of the arguments, awaits `invoke()`, then emits
  * `ToolCallFinished` with `result: text(result)` (`null` when `text` throws), or with the

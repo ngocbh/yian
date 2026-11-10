@@ -17,9 +17,11 @@
  * Each model call is written as a `model_call` step before anything acts on its reply, and each
  * tool result as a `tool_result` step as soon as that call finishes, before the next model call
  * (`AgentSteps`). A resumed start replays them: each recorded reply is taken in place of its model
- * call, and each tool call with a recorded result gets it without running; a replayed call with no
- * result is closed with the word of the record that closed it (`crashed` when none did: its
- * outcome is unknown), or pended again while the run still holds it open. Live calls follow the
+ * call, and each tool call with a recorded result gets it without running. A replayed call with no
+ * result is sent again when its tool is resumable or the reply alone refuses it (the same error
+ * result again), pended again while the run still holds it open, or else closed with the word of
+ * the record that closed it (`crashed` when none did: its outcome is unknown). A capped reply's
+ * calls get the cap's result, or skips, as its first recorded result shows. Live calls follow the
  * last recorded one.
  *
  * A tool call whose handler returns `pending()` is written as a `pending` step, which registers it
@@ -528,6 +530,8 @@ interface PlannedCall {
    * it is refused for what the recorded reply alone shows.
    */
   readonly resumable: boolean;
+  /** Whether it was refused before its tool, so it never starts: its result records no start. */
+  readonly refused: boolean;
   /** Run the call under its group's signal. */
   readonly invoke: (signal: AbortSignal) => Promise<unknown>;
 }
@@ -780,7 +784,8 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
         throw error;
       }
     };
-    return { planned: { call, index, callId: undefined, deadline: null, resumable: false, invoke }, safe: true };
+    const planned = { call, index, callId: undefined, deadline: null, resumable: false, refused: false, invoke };
+    return { planned, safe: true };
   }
   const grant = turn.granted.find((each) => each.visible === call.name);
   // The model sees the granted tools in the request, so the name is all it needs.
@@ -833,7 +838,8 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
   // Above 1 only for a call a crash or a stop cut off after its reply, which a resume sends again.
   const attempt = 1 + (ctx.steps?.resumesSince(turn.n) ?? 0);
   const invoke = (signal: AbortSignal) => toolset.invoke(checked, { node: ctx.nodeId, callId, attempt, signal });
-  return { planned: { call, index, callId, deadline, resumable, invoke }, safe: toolset.isConcurrencySafe(checked) };
+  const planned = { call, index, callId, deadline, resumable, refused: false, invoke };
+  return { planned, safe: toolset.isConcurrencySafe(checked) };
 }
 
 /**
@@ -845,7 +851,7 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
  */
 function refused(call: ToolCallPart, index: number, error: unknown, resumable: boolean): CallCheck {
   const invoke = () => Promise.reject(error);
-  return { planned: { call, index, callId: undefined, deadline: null, resumable, invoke }, safe: false };
+  return { planned: { call, index, callId: undefined, deadline: null, resumable, refused: true, invoke }, safe: false };
 }
 
 /**
@@ -913,7 +919,7 @@ async function runGroup(
    * a result with no text, or a write that throws, fails the group. A pended call writes its
    * `pending` step.
    */
-  const settle = (planned: PlannedCall, startedAt: number, value: unknown, reported: boolean): ToolOutcome => {
+  const settle = (planned: PlannedCall, startedAt: number | null, value: unknown, reported: boolean): ToolOutcome => {
     const { call, index, callId, deadline } = planned;
     try {
       if (!reported && isPending(value)) {
@@ -946,12 +952,12 @@ async function runGroup(
       if (controller.signal.aborted) break;
       const { call, index } = planned;
       let started = false;
-      let startedAt = 0;
+      let startedAt: number | null = null;
       const running = observeToolCall(
         live,
         () => {
           started = true;
-          startedAt = turn.steps.now();
+          if (!planned.refused) startedAt = turn.steps.now();
           return planned.invoke(controller.signal);
         },
         identityOf(turn, call, index),

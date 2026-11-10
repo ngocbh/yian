@@ -234,8 +234,8 @@ server. Each entry grants one of these:
   reply that still asks for tools runs none of them, and the model answers once more. Set it in
   the node's `env:` or the flow's `env:`.
 
-Neither the model's own mistakes nor the cap fail the node. The call never reaches a tool, and
-the model reads an error result instead:
+These mistakes of the model, and the cap, don't fail the node. The call never reaches a tool,
+and the model reads an error result instead:
 
 | The model | It reads |
 |---|---|
@@ -246,6 +246,9 @@ the model reads an error result instead:
 
 The model's reply after the cap is the last. If it still calls tools, they get the same result,
 and its text is the output. A structured agent then makes its structured call.
+
+A reply that gives two tool calls the same id, or whose arguments nest deeper than
+`YIAN_MAX_VALUE_NESTING`, still fails the node.
 
 ### MCP servers
 

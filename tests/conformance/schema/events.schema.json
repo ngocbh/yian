@@ -252,7 +252,7 @@
       }
     },
     "ToolCallStarted": {
-      "description": "An AGENT node is about to run one granted tool call from a model reply (in-loop, transient).",
+      "description": "An AGENT node is about to run one tool call from a model reply, or to answer one refused before its tool (in-loop, transient).",
       "type": "object",
       "required": ["node_id", "n", "call_index", "tool_call_id", "name", "arguments"],
       "properties": {

@@ -372,3 +372,19 @@ test("a structured agent at the cap makes its structured call after the last rep
   expect(toolResults(model, 2)).toEqual([result(0, "a", toolLimitText(1), true), result(0, "a", toolLimitText(1), true)]);
   await expectRebuilt(run, 3);
 });
+
+test("a call refused before its tool records no start time; a call that ran records one", async () => {
+  const log: string[] = [];
+  const replies = [reply(call(0, "a", "{"), call(1, "x"), call(2, "a", { n: "one" }), call(3, "a")), textReply("done")];
+  const model = new ScriptedModel(replies, CONFIG);
+  const run = agent(model, new ToolSet({ a: instant("a", log) }), ["a"]);
+
+  expect(((await run.running) as Output).value).toBe("done");
+  const started = run.steps.filter((step) => step["kind"] === "tool_result").map((step) => [step["call_id"], step["started_at"]]);
+  expect(started.slice(0, 3)).toEqual([
+    ["c0", null],
+    ["c1", null],
+    ["c2", null],
+  ]);
+  expect(started[3]![1]).toBeString();
+});

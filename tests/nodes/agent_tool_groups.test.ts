@@ -20,7 +20,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
-import { ToolCallFinished, ToolCallStarted } from "../../src/events.ts";
+import { ModelCallFinished, ToolCallFinished, ToolCallStarted } from "../../src/events.ts";
 import { Message, Response, TextPart, ToolCallPart, ToolResultPart, ToolSpec } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
@@ -807,5 +807,24 @@ test("a reply at the tool-iteration cap runs none of its calls, and its requests
   expect(((await run.running) as Output).value).toBe("done");
   expect(log).toEqual([]);
   expect(toolEvents(run.events)).toEqual(["started a", "finished a tool_limit", "started b", "finished b tool_limit"]);
+  await expectRebuilt(run);
+});
+
+test("an interrupt pending when the reply at the cap arrives skips its calls, and the loop honors it", async () => {
+  const log: string[] = [];
+  const { steerInbox, interrupt } = interruptible();
+  const model = new ScriptedModel([callsReply(["a"], ["b"]), textReply("done")], CONFIG);
+  const run = agent(model, new ToolSet({ a: instant("a", log), b: instant("b", log) }), ["a", "b"], {
+    steerInbox,
+    maxToolIterations: 1,
+    onEvent: (event) => {
+      if (event instanceof ModelCallFinished) interrupt();
+    },
+  });
+
+  expect(await run.running).toEqual(new Interrupted(7));
+  expect(log).toEqual([]);
+  expect(model.requests).toHaveLength(1);
+  expect(toolEvents(run.events)).toEqual(["started a", "finished a interrupted", "started b", "finished b interrupted"]);
   await expectRebuilt(run);
 });

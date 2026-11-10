@@ -1018,6 +1018,37 @@ test("recorded skipped results replay the host interrupt that skipped them", asy
   expect(ran).toEqual([]);
 });
 
+test("an interrupt at the reply at the cap skips its calls, and every cut after the reply resumes to the same", async () => {
+  const flow = flowText(["save"], { steerInbox: true, output: "Optional(str)" }).replace(
+    "    prompt: hi",
+    "    env: {max_tool_iterations: 1}\n    prompt: hi",
+  );
+  const reply = () => [calls(["call-a", "save", "a"], ["call-b", "save", "b"])];
+  const ran: string[] = [];
+  const tools = { save: topicTool("save", { log: ran }) };
+  const uncutLog = runLog();
+  const uncut = await run(hooked(new ScriptedModel(reply(), CONFIG), (k) => k === Infinity && interruptAt(uncutLog)), {
+    flow,
+    tools,
+    log: uncutLog,
+  });
+  expect([uncut.result.status, uncut.result.output]).toEqual(["succeeded", null]);
+  const pattern = ["model_call", "skipped", "skipped", "interrupted"];
+  expect(steps(uncutLog).map((step) => step["closed"] ?? step["kind"])).toEqual(pattern);
+  const count = records(uncutLog).length;
+  for (let k = seqOf(uncutLog, "model_call") + 1; k < count - 1; k += 1) {
+    const log = runLog();
+    await cutRun(k, hooked(new ScriptedModel(reply(), CONFIG), (j) => j === Infinity && interruptAt(log)), { flow, tools, log });
+    const model = new ScriptedModel([], CONFIG);
+    const resumed = await resume(log, model, { tools });
+    expect([resumed.status, resumed.output], `cut at ${k}: ${resumed.failure?.message}`).toEqual(["succeeded", null]);
+    expect(model.requests.length).toBe(0);
+    expect(steps(log).map((step) => step["closed"] ?? step["kind"]), `cut at ${k}`).toEqual(pattern);
+    expect(honors(log)).toEqual([interruptSeq(log)]);
+  }
+  expect(ran).toEqual([]);
+});
+
 test("calls a group committed before a host interrupt skipped the rest replay to the uncut run's success", async () => {
   const flow = flowText(["lookup", "save"], { steerInbox: true, output: "Optional(str)" });
   const replies = () => [calls(["call-x", "lookup", "x"], ["call-y", "lookup", "y"], ["call-z", "save", "z"])];

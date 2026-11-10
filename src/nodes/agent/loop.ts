@@ -11,7 +11,8 @@
  * the model reads, and the loop goes on. At `maxToolIterations`, a reply that still calls tools
  * runs none of them: each call gets the cap's error result (`toolLimitText`), and the model answers
  * once more, reading no steer. That reply is the last: calls it still makes get the same result,
- * and its text is the answer.
+ * and its text is the answer. A host interrupt pending when such a reply arrives skips its calls
+ * instead, as it does any reply's.
  *
  * Each model call is written as a `model_call` step before anything acts on its reply, and each
  * tool result as a `tool_result` step as soon as that call finishes, before the next model call
@@ -298,7 +299,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
     const turn: ToolTurn = { ctx, toolset, granted, resumable, skills, live, n, steps, messages, calls, interrupt, pended };
     if (capped || iterations === ctx.maxToolIterations) {
       // The model reads why its calls didn't run, then gives its answer.
-      answerAtCap(turn, ctx.maxToolIterations);
+      if (answerAtCap(turn, ctx.maxToolIterations)) return honor(ctx, steps);
       if (capped) return await answer();
       capped = true;
       continue;
@@ -696,9 +697,16 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
  * Answer each call of a reply at the tool-call cap with the cap's error result (`toolLimitText`),
  * in call order: none is checked, run or pended. A call an earlier start recorded a result for
  * keeps it; each other gets a `tool_result` step, then started and finished events
- * (`CAPPED_TOOL_ERROR`), as a skipped call does.
+ * (`CAPPED_TOOL_ERROR`), as a skipped call does. A stop wins first; then a host interrupt skips
+ * every call (`skipFrom`), as it would any reply's. The first call's recorded result shows which
+ * an earlier start chose, so a replay finishes what it began.
+ *
+ * @returns Whether a host interrupt skipped the calls.
  */
-function answerAtCap(turn: ToolTurn, cap: number): void {
+function answerAtCap(turn: ToolTurn, cap: number): boolean {
+  checkNodeStopped(turn);
+  const first = turn.steps.recordedResult(turn.n, turn.calls[0]!.id);
+  if (first === null ? turn.interrupt?.aborted === true : first.closed === "skipped") return skipFrom(turn, 0);
   const output = toolLimitText(cap);
   for (const [index, call] of turn.calls.entries()) {
     const recorded = turn.steps.recordedResult(turn.n, call.id);
@@ -710,6 +718,7 @@ function answerAtCap(turn: ToolTurn, cap: number): void {
     observeSkippedToolCall(turn.live, identityOf(turn, call, index), CAPPED_TOOL_ERROR);
     pushToolMessage(turn, call, output, true);
   }
+  return false;
 }
 
 /** Append the tool message the model reads for `call`'s result. */

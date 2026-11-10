@@ -35,7 +35,7 @@ import {
 } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentSteps, requestSha256 } from "../../src/nodes/agent/context.ts";
-import { SKIPPED_TOOL_RESULT, TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/results.ts";
+import { SKIPPED_TOOL_RESULT, TOOL_OUTCOME_UNKNOWN, toolLimitText, unparsedText } from "../../src/nodes/agent/results.ts";
 import { CapabilityFault } from "../../src/nodes/base.ts";
 import { INTERRUPTED_MARKER } from "../../src/nodes/agent/messages.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
@@ -574,20 +574,97 @@ test("a crash while tools run closes each call with no result lazily, without ru
   ]);
 });
 
-test("a replayed call with no result whose check fails fails the node as live, with no closer", async () => {
-  // A call to a tool the agent isn't granted fails its check.
-  const reply = () => new ScriptedModel([calls(["call-a", "drop", "a"]), textReply("done")], CONFIG);
-  const uncut = await run(reply(), { tools: { save: topicTool("save") } });
+test("a replayed call with no result whose check faults fails the node as live, with no closer", async () => {
+  // A validator that throws something other than its issues faults the check.
+  const save = new FunctionTool({
+    name: "save",
+    description: "Tool save.",
+    parametersJsonSchema: { type: "object", properties: { topic: { type: "string" } } },
+    parametersValidator: {
+      "~standard": {
+        version: 1,
+        vendor: "test",
+        validate: () => {
+          throw new Error("validator down");
+        },
+      },
+    },
+    execute: () => "never",
+  });
+  const reply = () => new ScriptedModel([calls(["call-a", "save", "a"]), textReply("done")], CONFIG);
+  const uncut = await run(reply(), { tools: { save } });
   expect(uncut.result.status).toBe("failed");
   // Cut after the model_call, before the node's failure.
-  const log = await cutRun(seqOf(uncut.log, "model_call") + 1, reply(), { tools: { save: topicTool("save") } });
+  const log = await cutRun(seqOf(uncut.log, "model_call") + 1, reply(), { tools: { save } });
   const model = new ScriptedModel([], CONFIG);
-  const resumed = await resume(log, model, { tools: { save: topicTool("save") } });
+  const resumed = await resume(log, model, { tools: { save } });
   expect(resumed.status).toBe("failed");
   expect(resumed.failure?.message).toBe(uncut.result.failure?.message);
   expect(model.requests.length).toBe(0);
   expect(steps(log).map((step) => step["kind"])).toEqual(["model_call"]);
 });
+
+for (const [what, part, output] of [
+  [
+    "unparsed arguments",
+    new ToolCallPart({ id: "call-a", name: "save", arguments: null, rawArguments: '{"topic": ' }),
+    unparsedText("save"),
+  ],
+  ["a tool it wasn't granted", new ToolCallPart({ id: "call-a", name: "drop", arguments: { topic: "a" } }), "Unavailable tool: drop"],
+  [
+    "arguments that fail the schema",
+    new ToolCallPart({ id: "call-a", name: "save", arguments: { topic: 1 } }),
+    "tool 'save' argument 'topic': 1 does not match declared type str",
+  ],
+] as const) {
+  test(`a call refused for ${what}, cut off before its result, gets the same error again, not a closer`, async () => {
+    const reply = new Response({ message: new Message({ role: "assistant", parts: [part] }), finishReason: "tool_calls" });
+    const model = () => new ScriptedModel([reply, textReply("done")], CONFIG);
+    const ran: string[] = [];
+    const tools = { save: topicTool("save", { log: ran }), drop: topicTool("drop", { log: ran }) };
+    const uncut = await run(model(), { tools });
+    expect(uncut.result.status, uncut.result.failure?.message).toBe("succeeded");
+    const log = await cutRun(afterCall(uncut.log), model(), { tools });
+    const resumed = await resume(log, new ScriptedModel([textReply("done")], CONFIG), { tools });
+    expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+    expect(ran).toEqual([]);
+    expect(toolResults(log)).toEqual([{ call_id: "call-a", output, is_error: true }]);
+    expect(comparable(log)).toEqual(comparable(uncut.log));
+  });
+}
+
+for (const [what, refuse] of [
+  ["a reported error", () => {
+    throw new ReportedToolError("already sent");
+  }],
+  ["its issues", () => ({ issues: [{ message: "already sent" }] })],
+] as const) {
+  test(`a call whose validator refuses (${what}) once the tool ran, cut off before its result, is closed crashed`, async () => {
+    // The validator reads outside state the tool changes, so checking again tells nothing of the cut call.
+    let sent = false;
+    const send = new FunctionTool({
+      name: "save",
+      description: "Tool save.",
+      parametersJsonSchema: { type: "object", properties: { topic: { type: "string" } } },
+      parametersValidator: {
+        "~standard": { version: 1, vendor: "test", validate: (value: unknown) => (sent ? refuse() : { value }) },
+      },
+      execute: () => {
+        sent = true;
+        return "sent";
+      },
+    });
+    const uncut = await run(saveModel(), { tools: { save: send } });
+    expect(uncut.result.status, uncut.result.failure?.message).toBe("succeeded");
+    sent = false;
+    // Cut before the call's tool_result: the tool ran, its result was never written.
+    const log = await cutRun(seqOf(uncut.log, "tool_result"), saveModel(), { tools: { save: send } });
+    expect(sent).toBe(true);
+    const resumed = await resume(log, new ScriptedModel([textReply("done")], CONFIG), { tools: { save: send } });
+    expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+    expect(toolResults(log)).toEqual([{ call_id: "call-a", output: TOOL_OUTCOME_UNKNOWN, is_error: true, closed: "crashed" }]);
+  });
+}
 
 test("a crash in a retry wait waits the recorded delay again, and the attempt count continues", async () => {
   const slow = () => new ProviderError("rate_limit", "slow down", { status: 429, retryAfter: 2 });
@@ -941,6 +1018,37 @@ test("recorded skipped results replay the host interrupt that skipped them", asy
   expect(ran).toEqual([]);
 });
 
+test("an interrupt at the reply at the cap skips its calls, and every cut after the reply resumes to the same", async () => {
+  const flow = flowText(["save"], { steerInbox: true, output: "Optional(str)" }).replace(
+    "    prompt: hi",
+    "    env: {max_tool_iterations: 1}\n    prompt: hi",
+  );
+  const reply = () => [calls(["call-a", "save", "a"], ["call-b", "save", "b"])];
+  const ran: string[] = [];
+  const tools = { save: topicTool("save", { log: ran }) };
+  const uncutLog = runLog();
+  const uncut = await run(hooked(new ScriptedModel(reply(), CONFIG), (k) => k === Infinity && interruptAt(uncutLog)), {
+    flow,
+    tools,
+    log: uncutLog,
+  });
+  expect([uncut.result.status, uncut.result.output]).toEqual(["succeeded", null]);
+  const pattern = ["model_call", "skipped", "skipped", "interrupted"];
+  expect(steps(uncutLog).map((step) => step["closed"] ?? step["kind"])).toEqual(pattern);
+  const count = records(uncutLog).length;
+  for (let k = seqOf(uncutLog, "model_call") + 1; k < count - 1; k += 1) {
+    const log = runLog();
+    await cutRun(k, hooked(new ScriptedModel(reply(), CONFIG), (j) => j === Infinity && interruptAt(log)), { flow, tools, log });
+    const model = new ScriptedModel([], CONFIG);
+    const resumed = await resume(log, model, { tools });
+    expect([resumed.status, resumed.output], `cut at ${k}: ${resumed.failure?.message}`).toEqual(["succeeded", null]);
+    expect(model.requests.length).toBe(0);
+    expect(steps(log).map((step) => step["closed"] ?? step["kind"]), `cut at ${k}`).toEqual(pattern);
+    expect(honors(log)).toEqual([interruptSeq(log)]);
+  }
+  expect(ran).toEqual([]);
+});
+
 test("calls a group committed before a host interrupt skipped the rest replay to the uncut run's success", async () => {
   const flow = flowText(["lookup", "save"], { steerInbox: true, output: "Optional(str)" });
   const replies = () => [calls(["call-x", "lookup", "x"], ["call-y", "lookup", "y"], ["call-z", "save", "z"])];
@@ -1051,6 +1159,46 @@ test("an AGENT run resumed at every cut point ends as the uncut run, running no 
     expect(resumed.status, `cut at ${k}: ${resumed.failure?.message}`).toBe("succeeded");
     expect(resumed.output).toBe("all done");
     expect(new Set(ran).size, `cut at ${k}: ${ran.join(", ")}`).toBe(ran.length);
+  }
+});
+
+/** The request digests of the log's `model_call` steps for `writer`, in order. */
+function digests(path: string): unknown[] {
+  return steps(path)
+    .filter((step) => step["kind"] === "model_call")
+    .map((step) => step["request_sha256"]);
+}
+
+test("a run at the tool-call cap resumed at every cut point ends as the uncut run, the capped calls never run", async () => {
+  const replies = () => [
+    calls(["call-a", "save", "a"]),
+    calls(["call-b", "save", "b"], ["call-c", "save", "c"]),
+    calls(["call-d", "save", "d"]),
+  ];
+  const flow = flowText(["save"]).replace("    prompt: hi", "    env: {max_tool_iterations: 2}\n    prompt: hi");
+  const capped = toolLimitText(2);
+  const uncut = await run(new ScriptedModel(replies(), CONFIG), { flow, tools: { save: topicTool("save") } });
+  expect(uncut.result.status, uncut.result.failure?.message).toBe("succeeded");
+  expect(toolResults(uncut.log)).toEqual([
+    { call_id: "call-a", output: "save:a", is_error: false },
+    { call_id: "call-b", output: capped, is_error: true },
+    { call_id: "call-c", output: capped, is_error: true },
+    { call_id: "call-d", output: capped, is_error: true },
+  ]);
+  const count = records(uncut.log).length;
+  // From the cut after the first tool result: no later cut cuts a call that ran.
+  for (let k = seqOf(uncut.log, "tool_result") + 1; k < count - 1; k += 1) {
+    const ran: string[] = [];
+    const log = await cutRun(k, new ScriptedModel(replies(), CONFIG), { flow, tools: { save: topicTool("save") } });
+    const kept = steps(log).filter((step) => step["kind"] === "model_call").length;
+    const model = new ScriptedModel(replies().slice(kept), CONFIG);
+    const resumed = await resume(log, model, { tools: { save: topicTool("save", { log: ran }) } });
+    expect(resumed.status, `cut at ${k}: ${resumed.failure?.message}`).toBe("succeeded");
+    expect(resumed.output).toBe(uncut.result.output);
+    expect(ran).toEqual([]);
+    expect(toolResults(log), `cut at ${k}`).toEqual(toolResults(uncut.log));
+    // Each request the resumed run sent or replayed is the uncut run's.
+    expect(digests(log), `cut at ${k}`).toEqual(digests(uncut.log));
   }
 });
 

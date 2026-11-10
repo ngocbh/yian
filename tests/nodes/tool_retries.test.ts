@@ -419,6 +419,31 @@ test("an unknown argument is not retried", async () => {
   expect(sleeps).toEqual([]);
 });
 
+test("a tool's own failed call of another tool with bad arguments is retried like any error", async () => {
+  // The inner set's argument check throws a plain RangeError, which the outer tool lets through.
+  const echo = new FunctionTool({
+    name: "echo",
+    description: "Echo.",
+    parametersJsonSchema: { type: "object", properties: {} },
+    execute: () => "echoed",
+  });
+  const inner = new ToolSet({ echo });
+  let attempts = 0;
+  const outer = new FunctionTool({
+    name: "outer",
+    description: "Calls echo.",
+    parametersJsonSchema: { type: "object", properties: {} },
+    execute: async () => (++attempts === 1 ? await inner.invoke("echo", { bogus: 1 }) : "done"),
+  });
+
+  const { result, error, sleeps } = await runDirect(outer, { retries: 1 });
+
+  expect(error).toBeUndefined();
+  expect(result).toEqual(new Output("done"));
+  expect(attempts).toBe(2);
+  expect(sleeps).toHaveLength(1);
+});
+
 test("validate checks arguments without calling the tool", async () => {
   const flaky = new FlakyTool([]);
   const tools = new ToolSet({ flaky: flaky.tool });

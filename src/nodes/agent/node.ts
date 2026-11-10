@@ -86,7 +86,7 @@ import {
   ValueTemplate,
 } from "../contracts.ts";
 import { staticPathOf } from "../ids.ts";
-import { type AgentRunContext, checkStopped, DEFAULT_SYSTEM, sentCredentials, ToolIterationLimitError } from "./context.ts";
+import { type AgentRunContext, checkStopped, DEFAULT_SYSTEM, sentCredentials } from "./context.ts";
 import { Interrupted } from "./interrupts.ts";
 import { modelFailureCode } from "./live.ts";
 import {
@@ -982,18 +982,16 @@ export class AgentNode extends Node {
   }
 
   /**
-   * Classify an interrupt the output can't take, the tool-iteration cap, an exhausted structured
-   * reply and the agent's own model failures; defer the rest.
+   * Classify an interrupt the output can't take, an exhausted structured reply and the agent's own
+   * model failures; defer the rest.
    *
-   * An interrupted agent whose output doesn't allow null is `agent.interrupted`, the cap is
-   * `agent.max_tool_iterations` and a structured reply still invalid once `retries:` are spent is
-   * `agent.output_invalid`. An error the agent's own model build or model call
-   * marked takes `modelFailureCode`'s code (`provider.auth` for refused credentials, a
-   * `provider.*` code by provider error kind, else `node.execute`).
+   * An interrupted agent whose output doesn't allow null is `agent.interrupted`, and a structured
+   * reply still invalid once `retries:` are spent is `agent.output_invalid`. An error the agent's
+   * own model build or model call marked takes `modelFailureCode`'s code (`provider.auth` for
+   * refused credentials, a `provider.*` code by provider error kind, else `node.execute`).
    */
   override exceptionCode(error: unknown): FailureCode {
     if (error instanceof AgentInterruptedError) return "agent.interrupted";
-    if (error instanceof ToolIterationLimitError) return "agent.max_tool_iterations";
     if (error instanceof OutputInvalidError) return "agent.output_invalid";
     return modelFailureCode(error) ?? super.exceptionCode(error);
   }

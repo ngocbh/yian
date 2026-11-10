@@ -434,8 +434,11 @@ export class ModelCallFinished {
 }
 
 /**
- * An AGENT node is about to run one granted tool call from a model reply; `n` is the reply's
- * `model_call` step.
+ * An AGENT node is about to run one tool call from a model reply; `n` is the reply's `model_call`
+ * step and `callIndex` the call's place among the reply's tool calls. `arguments` is a copy of the
+ * call's arguments, `null` when they didn't parse or can't be copied. A call refused before its
+ * tool (arguments that didn't parse or fail their check, a tool the agent wasn't granted) starts
+ * too, and finishes with a reported error.
  */
 export class ToolCallStarted {
   readonly type = "ToolCallStarted" as const;
@@ -479,8 +482,9 @@ export class ToolCallStarted {
  * One tool call returned (`result` text) or raised (`error` type name); `n` is the reply's
  * `model_call` step.
  *
- * A call that a host interrupt skipped is reported as started and then finished
- * with `error: "interrupted"`; the tool did not run.
+ * A call that a host interrupt skipped is reported as started and then finished with
+ * `error: "interrupted"`, and a call of a reply at the tool-call cap with `error: "tool_limit"`;
+ * the tool did not run.
  */
 export class ToolCallFinished {
   readonly type = "ToolCallFinished" as const;

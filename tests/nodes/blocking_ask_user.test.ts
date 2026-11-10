@@ -269,8 +269,8 @@ test("a stop during a structured attempt prevents the retry", async () => {
   expect(attempts).toHaveLength(1);
 });
 
-test("ask_user requires an explicit authored grant", async () => {
-  const model = scripted([callReply(["ask_user", { question: "Secret?" }, "question-1"])]);
+test("ask_user requires an explicit authored grant: without one the model reads it's unavailable", async () => {
+  const model = scripted([callReply(["ask_user", { question: "Secret?" }, "question-1"]), textReply("ok")]);
   const handled: AskUserRequest[] = [];
 
   const outcome = await evaluate(agent([]), model, (request) => {
@@ -278,8 +278,7 @@ test("ask_user requires an explicit authored grant", async () => {
     return "no";
   });
 
-  expect(outcome).toBeInstanceOf(EvaluationFailure);
-  expect((outcome as EvaluationFailure).failure.message).toContain("not granted");
+  expect(outcome).toEqual(new Output("ok"));
   expect(handled).toEqual([]);
 });
 

@@ -7,14 +7,16 @@
 
 import { expect, test } from "bun:test";
 
+import type { ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { AgentLoopError, type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
+import { type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
+import type { Output } from "../../src/nodes/base.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { parseToolGrants } from "../../src/tools/grants.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
-import { callReply, rejected, serving, textReply } from "../helpers/run_state_fixtures.ts";
+import { callReply, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 const CONFIG = { provider: "openai", model: "gpt-5.5" };
 
@@ -63,16 +65,17 @@ test("a group grant sends <group>_<tool> names and routes the call to the group'
   expect(calls).toEqual(["docs"]);
 });
 
-test("a call to an ungranted visible name fails the node, listing the visible names", async () => {
+test("a call to a tool's own name, not its visible one, is unavailable to the model", async () => {
+  const calls: string[] = [];
   const model = new ScriptedModel([callReply(["search", { topic: "a" }, "c1"]), textReply("ok")], CONFIG);
-  const toolset = new ToolSet({ docs: [topicTool("search")], web: [topicTool("search")] });
+  const toolset = new ToolSet({ docs: [topicTool("search", () => calls.push("docs"))], web: [topicTool("search")] });
 
-  const error = await rejected(runAgent(context(model, parseToolGrants([{ docs: ["search"] }], "n"), toolset)));
+  const output = await runAgent(context(model, parseToolGrants([{ docs: ["search"] }], "n"), toolset));
 
-  expect(error).toBeInstanceOf(AgentLoopError);
-  expect((error as Error).message).toBe(
-    `agent node 'a' requested tool 'search', but it is not granted; granted tools: ["docs_search"]`,
-  );
+  expect((output as Output).value).toBe("ok");
+  expect(calls).toEqual([]);
+  const answer = model.requests[1]!.messages.at(-1)!.parts[0] as ToolResultPart;
+  expect([answer.content, answer.isError]).toEqual(["Unavailable tool: search", true]);
 });
 
 test("a tool in two granted groups is bound once, under the first grant's name", async () => {

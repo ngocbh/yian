@@ -35,14 +35,9 @@ export const DEFAULT_SYSTEM =
   "precisely, use the available tools to gather any facts you need, and return " +
   "a clear, self-contained answer. Ask the user only through an explicitly granted tool.";
 
-/** The AGENT tool loop could not produce a final answer. */
+/** The AGENT tool loop could not go on: a tool returned `pending()` outside a durable run. */
 export class AgentLoopError extends Error {
   override name = "AgentLoopError";
-}
-
-/** The AGENT tool loop hit `max_tool_iterations` without a final answer. */
-export class ToolIterationLimitError extends AgentLoopError {
-  override name = "ToolIterationLimitError";
 }
 
 /** What the AGENT loop receives to run one invocation. */
@@ -61,7 +56,10 @@ export interface AgentRunContext {
   readonly outputType: Type | null;
   /** The structured-reply corrections allowed after the first call. */
   readonly retries: number;
-  /** The model turns before `ToolIterationLimitError`; -1 means no cap. */
+  /**
+   * The model turns with tool calls that run; -1 means no cap. The reply at the cap runs none of
+   * its calls, and one more model call answers.
+   */
   readonly maxToolIterations: number;
   /** The host's stop; absent for direct loop tests. */
   readonly signal?: AbortSignal;
@@ -490,7 +488,7 @@ export class AgentSteps {
   /**
    * Write a call whose handler returned `pending()` as a `pending` step: `call_id` (the yian call
    * id), `tool`, `tool_call_id`, `reply` (the reply's `model_call` step `n`), `index` (the call's
-   * place among the reply's runnable calls), and `deadline` (a record time) for an `ask_user` with a
+   * place among the reply's tool calls), and `deadline` (a record time) for an `ask_user` with a
    * timeout.
    *
    * @returns The step's `n`.

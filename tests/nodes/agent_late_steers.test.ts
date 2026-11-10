@@ -1,7 +1,8 @@
 /**
  * Late steers: a steer queued when the model gives its final answer gets one more model call;
  * every reply counts toward max_tool_iterations, and at the cap the answer stands and the steers
- * stay queued.
+ * stay queued. A reply at the cap that still calls tools gets one more model call, which reads no
+ * steer either.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,7 +17,7 @@ import { ProviderError } from "../../src/llm/errors.ts";
 import { type ChatModel, EventStream } from "../../src/llm/events.ts";
 import { Message, type Request, TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { type AgentRunContext, DEFAULT_SYSTEM, requestSha256, ToolIterationLimitError } from "../../src/nodes/agent/context.ts";
+import { type AgentRunContext, DEFAULT_SYSTEM, requestSha256 } from "../../src/nodes/agent/context.ts";
 import { rebuildStepRequests, runAgent } from "../../src/nodes/agent/loop.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
 import type { Output, SteerInbox } from "../../src/nodes/base.ts";
@@ -199,14 +200,15 @@ test("-1 is unbounded", async () => {
   expect(model.requests).toHaveLength(4);
 });
 
-test("a reply with tool calls at the cap still fails", async () => {
-  const { inbox } = inboxDouble();
-  const model = new ScriptedModel([callReply(["lookup", { topic: "a" }, "c1"])], CONFIG);
-  const failure = await runAgent(loopContext(model, { steerInbox: inbox, withLookup: true, maxToolIterations: 1 })).then(
-    () => null,
-    (error: unknown) => error,
-  );
-  expect(failure).toBeInstanceOf(ToolIterationLimitError);
+test("a reply with tool calls at the cap gets one more call, which reads no steer: queued steers stay queued", async () => {
+  const { inbox, queue, reads } = inboxDouble();
+  const replies = [callReply(["lookup", { topic: "a" }, "c1"]), textReply("final")];
+  const model = hooked(new ScriptedModel(replies, CONFIG), () => queue.push("late"));
+  expect(await output(loopContext(model, { steerInbox: inbox, withLookup: true, maxToolIterations: 1 }))).toBe("final");
+  expect(model.requests).toHaveLength(2);
+  expect(shown(model.requests[1]!).at(-1)![0]).toBe("tool");
+  expect(queue).toEqual(["late", "late"]);
+  expect(reads).toEqual([null]);
 });
 
 test("an interrupt that lands during the final reply beats a queued steer: the answer stands, the steer stays", async () => {

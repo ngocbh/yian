@@ -178,11 +178,11 @@ function lastResult(messages: readonly Message[]): string {
   return (messages.at(-1)!.parts[0] as ToolResultPart).content;
 }
 
-test("load_skill is not callable without a grant", async () => {
-  const outcome = await drive(new AgentNode("agent", { prompt: "p", llmConfig: CONFIG }), {
-    models: serving(new ScriptedModel([loadCall({ name: "review" })], CONFIG)),
-  });
-  expect(failureMessage(outcome)).toContain("requested tool 'load_skill', but it is not granted");
+test("load_skill is not callable without a grant: the model reads it's unavailable", async () => {
+  const model = new ScriptedModel([loadCall({ name: "review" }), textReply("ok")], CONFIG);
+  const outcome = await drive(new AgentNode("agent", { prompt: "p", llmConfig: CONFIG }), { models: serving(model) });
+  expect(outcome).toEqual(new Output("ok"));
+  expect(lastResult(model.requests[1]!.messages)).toBe("Unavailable tool: load_skill");
 });
 
 test("all grants every supplied skill", async () => {

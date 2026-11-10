@@ -8,7 +8,7 @@ import { afterEach, expect, test } from "bun:test";
 import { flowManifest } from "../../src/compile/manifest.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { type Env, forget, reload } from "../../src/defaults.ts";
-import { Message, Response, ToolCallPart } from "../../src/llm/messages.ts";
+import { Message, Response, ToolCallPart, type ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { RunFlowOptions, RunResult } from "../../src/run.ts";
@@ -125,9 +125,11 @@ async function looping(text: string, replies: Response[]) {
 
 test("the agent max_tool_iterations default caps the loop", async () => {
   const { result, model } = await looping(LOOPING, [0, 1, 2, 3, 4].map((i) => lookupCall(String(i))));
-  expect([result.status, result.failure?.code]).toEqual(["failed", "agent.max_tool_iterations"]);
-  expect(result.failure?.message).toContain("tool-iteration cap (1)");
-  expect(model.requests).toHaveLength(1);
+  // The reply at the cap runs no call; the one after it is the last, its calls unrun too.
+  expect([result.status, result.output]).toEqual(["succeeded", ""]);
+  expect(model.requests).toHaveLength(2);
+  const answer = model.requests[1]!.messages.at(-1)!.parts[0] as ToolResultPart;
+  expect(answer.content).toContain("Tool-call limit reached (1 turn)");
 });
 
 test("the authored max_tool_iterations wins over the default", async () => {

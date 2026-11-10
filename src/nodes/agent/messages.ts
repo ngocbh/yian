@@ -428,8 +428,8 @@ export function messageSteps(steps: readonly Readonly<JsonObject>[]): number[] {
 /**
  * Rebuild an AGENT's new messages from the steps `messageSteps` picked: each reply, then a `tool`
  * message per call it answered, in call order (results are recorded in finish order; `foldSteps`
- * files them under the call before them). A call with no result (its arguments didn't parse, or its reply
- * was cut) is left out, so every tool call has a result; so is media held inline, which only a
+ * files them under the call before them). A call with no result (its reply was cut, or it waits on
+ * an answer) is left out, so every tool call has a result; so is media held inline, which only a
  * run without a folder keeps. A message left with no parts is left out. The accepted structured
  * call becomes one assistant message holding `output` as JSON text; its recorded reply (an
  * internal output-tool call, or the raw JSON) isn't shown. A `steer` step, which carries the

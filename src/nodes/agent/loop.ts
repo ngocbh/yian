@@ -6,14 +6,22 @@
  *
  * A reply's tool calls run in groups: consecutive calls that are safe to run together
  * start together, an unsafe call runs alone, and results commit in call order whatever order the
- * calls finish in.
+ * calls finish in. Every call gets a result. The model's mistakes (unparsed arguments, a name it
+ * wasn't granted, arguments that fail their check) never reach a tool: each gets an error result
+ * the model reads, and the loop goes on. At `maxToolIterations`, a reply that still calls tools
+ * runs none of them: each call gets the cap's error result (`toolLimitText`), and the model answers
+ * once more, reading no steer. That reply is the last: calls it still makes get the same result,
+ * and its text is the answer. A host interrupt pending when such a reply arrives skips its calls
+ * instead, as it does any reply's.
  *
  * Each model call is written as a `model_call` step before anything acts on its reply, and each
  * tool result as a `tool_result` step as soon as that call finishes, before the next model call
  * (`AgentSteps`). A resumed start replays them: each recorded reply is taken in place of its model
- * call, and each tool call with a recorded result gets it without running; a replayed call with no
- * result is closed with the word of the record that closed it (`crashed` when none did: its
- * outcome is unknown), or pended again while the run still holds it open. Live calls follow the
+ * call, and each tool call with a recorded result gets it without running. A replayed call with no
+ * result is sent again when its tool is resumable or the reply alone refuses it (the same error
+ * result again), pended again while the run still holds it open, or else closed with the word of
+ * the record that closed it (`crashed` when none did: its outcome is unknown). A capped reply's
+ * calls get the cap's result, or skips, as its first recorded result shows. Live calls follow the
  * last recorded one.
  *
  * A tool call whose handler returns `pending()` is written as a `pending` step, which registers it
@@ -53,7 +61,7 @@ import { realScheduler, warn } from "../../platform.ts";
 import { type Skill, SkillError } from "../../skills/catalog.ts";
 import { invokeLoadSkill, LOAD_SKILL, loadSkillTool } from "../../skills/tool.ts";
 import { ASK_USER, isPending } from "../../tools/context.ts";
-import { isReportedToolError, ReportedToolError } from "../../tools/errors.ts";
+import { isReportedToolError, isToolCheckError, ReportedToolError } from "../../tools/errors.ts";
 import {
   asToolGrant,
   expandGrants,
@@ -63,7 +71,7 @@ import {
 } from "../../tools/grants.ts";
 import { type CheckedCall, ToolSet } from "../../tools/registry.ts";
 import { formatRecordTime, parseDuration } from "../../typesys/temporal.ts";
-import { rejectDeepNesting, type Type, TypeCheckError, type ValueRecord, writeAsText } from "../../typesys/values.ts";
+import { rejectDeepNesting, type Type, TypeCheckError, type ValueRecord } from "../../typesys/values.ts";
 import { CapabilityFault, Output, Pending, type RebuiltRequest, type RebuiltRequests, type SteerInbox } from "../base.ts";
 import {
   AgentLoopError,
@@ -74,10 +82,10 @@ import {
   recordedResponse,
   RequestDigest,
   sentCredentials,
-  ToolIterationLimitError,
 } from "./context.ts";
 import { Interrupted, ReplyInterrupted } from "./interrupts.ts";
 import {
+  CAPPED_TOOL_ERROR,
   callModel,
   type LiveSinks,
   liveSinks,
@@ -86,7 +94,16 @@ import {
   observeToolCall,
   type ToolCallIdentity,
 } from "./live.ts";
-import { type CloserReason, closerResult, reportedText, SKIPPED_TOOL_RESULT, toolText } from "./results.ts";
+import {
+  type CloserReason,
+  closerResult,
+  reportedText,
+  SKIPPED_TOOL_RESULT,
+  toolLimitText,
+  toolText,
+  unavailableText,
+  unparsedText,
+} from "./results.ts";
 import { foldSteps, type SteerRender, steerMessages, steerValues } from "./messages.ts";
 import { generateStructured, rebuildStructuredRequests, typeToSchema } from "./structured.ts";
 
@@ -96,9 +113,11 @@ import { generateStructured, rebuildStructuredRequests, typeToSchema } from "./s
  * A structured agent without tools or skills reads its queued steers once and makes one structured
  * call. Any other agent runs the chat loop until the model answers; while the model answers with
  * steers queued it reads them and calls again (each reply, late steers included, counts toward
- * `maxToolIterations`; at the cap the answer stands and the steers stay queued). Sets `ctx.sent`
- * to the built model's route credentials once the model is built. Each reason the model gives
- * for leaving out replay state reaches `ctx.emitEvent` once, as `ReplayDegraded`. With
+ * `maxToolIterations`; at the cap the answer stands and the steers stay queued). A reply at the
+ * cap that still calls tools runs none: its calls get the cap's error result, and one more model
+ * call, with no steer read, gives the answer (its text even when it calls tools again). Sets
+ * `ctx.sent` to the built model's route credentials once the model is built. Each reason the
+ * model gives for leaving out replay state reaches `ctx.emitEvent` once, as `ReplayDegraded`. With
  * `ctx.steps`, each model call and failed attempt is recorded as a `model_call` step and each
  * tool result as a `tool_result` step, a failed attempt's error scrubbed of every credential the
  * call may have sent; the steps earlier starts recorded are replayed first (`callModel`,
@@ -114,14 +133,13 @@ import { generateStructured, rebuildStructuredRequests, typeToSchema } from "./s
  *   handler returned `pending()`, once the reply's other calls ran.
  * @throws RangeError when a grant names no tool of the run (`ToolSet.resolve`).
  * @throws TypeCheckError when a reply repeats a tool call id or its tool call arguments nest too deep.
- * @throws ToolIterationLimitError when a reply calls tools at the `maxToolIterations`-th turn.
- * @throws AgentLoopError when a reply calls a tool that isn't granted.
+ * @throws AgentLoopError when a tool returns `pending()` outside a durable run.
  * @throws CapabilityFault when a recorded call doesn't match the rebuilt request
  *   (`AgentSteps.takeRecorded`), or the loop was cut with no pending interrupt.
  * @throws Whatever building or calling the model throws (marked by `markModelFailure`), a stop's
- *   reason, a tool's own error other than a reported one, a failed argument check, a result
- *   `toolText` refuses, or `generateStructured`'s `OutputInvalidError`. The host inbox's faults
- *   pass through.
+ *   reason, a tool's own error other than a reported one, what a parameters validator throws
+ *   other than its issues, a result `toolText` refuses, or `generateStructured`'s
+ *   `OutputInvalidError`. The host inbox's faults pass through.
  */
 export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending | Interrupted> {
   const system = new Message({ role: "system", parts: [new TextPart(ctx.systemPrompt)] });
@@ -217,16 +235,24 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
       .map((each) => each.visible),
   );
   let iterations = 0;
+  // Set once the reply at the cap had its calls answered: the next reply is the last.
+  let capped = false;
   let reply: Message | null = null;
   const digests = new RequestDigest();
+  /** The answer: the structured call's value, or the last reply's visible text. */
+  const answer = async (): Promise<Output | Interrupted> =>
+    schema !== null ? await structured() : new Output(reply!.text());
 
   while (true) {
     checkStopped(ctx);
     // Before the steer read, so an interrupt leaves queued steers for the next reader.
     if (interruptRequested(interrupt, steps)) return honor(ctx, steps);
     // Steers join only here, never between a reply's tool calls and their results. The read is
-    // synchronous, so neither a stop nor an interrupt lands between it and the model call.
-    for (const values of steerReads(steps, ctx.steerInbox)) messages.push(...steerMessages(values, steerOptions));
+    // synchronous, so neither a stop nor an interrupt lands between it and the model call. The
+    // call after the cap reads none: queued steers stay queued, as for an answer at the cap.
+    if (!capped) {
+      for (const values of steerReads(steps, ctx.steerInbox)) messages.push(...steerMessages(values, steerOptions));
+    }
     const request = new Request({ messages, tools: bound });
     let called: { response: Response; n: number; replayed: boolean };
     try {
@@ -251,10 +277,9 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
     reply = response.message;
     iterations += 1;
     messages.push(reply);
-    // A call whose arguments didn't parse is an invalid tool call, which the loop never runs.
-    const calls = reply.parts.filter(
-      (part): part is ToolCallPart => part instanceof ToolCallPart && part.arguments !== null,
-    );
+    // Every call gets a result, one whose arguments didn't parse included: a provider refuses a
+    // conversation that leaves a call unanswered.
+    const calls = reply.parts.filter((part): part is ToolCallPart => part instanceof ToolCallPart);
     if (calls.length === 0) {
       // A late steer an earlier start recorded here was its choice to continue, made before any
       // interrupt or cap check of this start: replay follows it, and the loop top honors an
@@ -267,23 +292,20 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
       // stands too: the cap is checked before anything is read, so nothing is consumed that won't
       // be sent. A structured agent's trailing call is cut like any model call, and never starts
       // once an interrupt is seen (an earlier start's honor included).
-      const late = !interruptRequested(interrupt, steps) && iterations !== ctx.maxToolIterations;
+      const late = !capped && !interruptRequested(interrupt, steps) && iterations !== ctx.maxToolIterations;
       if (late && queuedSteer(steps, ctx.steerInbox)) continue;
-      if (schema !== null) return await structured();
-      return new Output(reply.text());
-    }
-
-    if (iterations === ctx.maxToolIterations) {
-      // No later model call could read these results, so running them would only add side
-      // effects to a node that is already failing.
-      throw new ToolIterationLimitError(
-        `agent node ${reprText(ctx.nodeId)} hit the tool-iteration cap (${ctx.maxToolIterations}) without a final ` +
-          `answer; the last reply's ${calls.length} tool call(s) were not run`,
-      );
+      return await answer();
     }
 
     const pended = new Map<number, string>();
     const turn: ToolTurn = { ctx, toolset, granted, resumable, skills, live, n, steps, messages, calls, interrupt, pended };
+    if (capped || iterations === ctx.maxToolIterations) {
+      // The model reads why its calls didn't run, then gives its answer.
+      if (answerAtCap(turn, ctx.maxToolIterations)) return honor(ctx, steps);
+      if (capped) return await answer();
+      capped = true;
+      continue;
+    }
     const skipped = await (replayed ? replayToolCalls(turn) : runToolCalls(turn));
     // The interrupt closed the reply's pending calls; the agent doesn't wait on them.
     if (skipped || (pended.size > 0 && interruptRequested(interrupt, steps))) {
@@ -403,7 +425,7 @@ export async function rebuildStepRequests(
       }
       messages.push(...steerMessages(values, { render: options.renderSteer ?? null }));
     }
-    // The call's reply's runnable calls, which its results answer.
+    // The call's reply's tool calls, which its results answer.
     let calls: ToolCallPart[] = [];
     for (const [at, { n, step }] of exchange.attempts.entries()) {
       if (step["purpose"] !== "chat") {
@@ -438,7 +460,7 @@ export async function rebuildStepRequests(
         if (error instanceof TypeCheckError) return { requests, digestOk };
         throw error;
       }
-      calls = reply.parts.filter((part): part is ToolCallPart => part instanceof ToolCallPart && part.arguments !== null);
+      calls = reply.parts.filter((part): part is ToolCallPart => part instanceof ToolCallPart);
     }
     for (const call of calls) {
       const result = exchange.results.get(call.id)?.step;
@@ -468,7 +490,7 @@ interface ToolTurn {
   readonly steps: AgentSteps;
   /** The model's messages; each committed result is appended. */
   readonly messages: Message[];
-  /** The reply's runnable tool calls, in call order. */
+  /** The reply's tool calls, in call order, unparsed ones included. */
   readonly calls: readonly ToolCallPart[];
   /** The host's interrupt signal, or `undefined` for an agent without a steer inbox. */
   readonly interrupt: AbortSignal | undefined;
@@ -496,35 +518,42 @@ interface SettledCall {
 interface PlannedCall {
   readonly call: ToolCallPart;
   readonly index: number;
-  /** The call's yian id, which a `pending` step names; `undefined` outside a run or for `load_skill`. */
+  /**
+   * The call's yian id, which a `pending` step names; `undefined` outside a run, for `load_skill`,
+   * or for a call refused before its tool.
+   */
   readonly callId: string | undefined;
   /** When an `ask_user` call times out (a record time), from the model's `timeout`; else `null`. */
   readonly deadline: string | null;
-  /** Whether its tool is resumable, so a resume sends it again when a crash or a stop cut it off. */
+  /**
+   * Whether a resume sends it again when a crash or a stop cut it off: its tool is resumable, or
+   * it is refused for what the recorded reply alone shows.
+   */
   readonly resumable: boolean;
+  /** Whether it was refused before its tool, so it never starts: its result records no start. */
+  readonly refused: boolean;
   /** Run the call under its group's signal. */
   readonly invoke: (signal: AbortSignal) => Promise<unknown>;
 }
 
 /** The outcome of checking one call before it may start. */
-type CallCheck =
-  | { readonly planned: PlannedCall; readonly safe: boolean }
-  | { readonly error: unknown; readonly granted: boolean };
+type CallCheck = { readonly planned: PlannedCall; readonly safe: boolean } | { readonly error: unknown };
 
 /**
  * Run one reply's tool calls in groups, appending a tool message per call in call order.
  *
  * Calls are checked in call order. Consecutive calls that are safe to run together (a
  * `load_skill` call, or a tool whose `isConcurrencySafe` says so) form a group; an unsafe call
- * runs alone, after the group before it. A failed check ends the calls before it as their own
- * group, which runs and commits; then the node fails at it.
+ * runs alone, after the group before it, as does a call refused before its tool, which gets its
+ * error result. A check that faults ends the calls before it as their own group, which runs and
+ * commits; then the node fails at it.
  *
- * A host interrupt seen before a call's check, before a group starts, or at a failed check skips
+ * A host interrupt seen before a call's check, before a group starts, or at a faulted check skips
  * every call not started yet (`skipFrom`); a running group always finishes and commits.
  *
  * @returns Whether a host interrupt skipped the remaining calls.
- * @throws A stop's reason, the first failing call's error, a result `toolText` refuses, the
- *   ungranted `AgentLoopError`, or a failed argument check.
+ * @throws A stop's reason, the first failing call's error, a result `toolText` refuses, or a
+ *   faulted check's error.
  */
 async function runToolCalls(turn: ToolTurn): Promise<boolean> {
   let group: PlannedCall[] = [];
@@ -537,7 +566,7 @@ async function runToolCalls(turn: ToolTurn): Promise<boolean> {
     const check = await checkCall(turn, call, index);
     if ("error" in check) {
       if (await runGroup(turn, group)) return true;
-      return await failCall(turn, call, index, check);
+      return await failCall(turn, call, index, check.error);
     }
     if (check.safe) {
       group.push(check.planned);
@@ -553,15 +582,16 @@ async function runToolCalls(turn: ToolTurn): Promise<boolean> {
 /**
  * Give a replayed reply's tool calls their results, appending a tool message per call in call
  * order, as live commits them. A call keeps the result an earlier start recorded, unchecked. A
- * call with none is checked as live: a failed check fails the node as live. Otherwise a call the
+ * call with none is checked as live: a faulted check fails the node as live. Otherwise a call the
  * run still holds open (it pended and waits on, beside a sibling a deadline closed) is pended
  * again, with no closer and no handler call, and gets no tool message: the loop then returns
  * `Pending`. A call to a resumable tool that no record closed was cut off by a crash or a stop,
- * so it is sent again (`resendCall`), with the same call id. Any other call is closed with the word
- * of the record that closed it (`closerResult`: `timed_out` for an ask whose deadline passed,
- * `interrupted` for a call a host interrupt closed), `crashed` when none did (its run was cut off
- * before its result), the closer written as its `tool_result` step, and never runs. Unparsed calls
- * are not in `turn.calls`, so they get nothing, as live.
+ * so it is sent again (`resendCall`), with the same call id; so is a call refused for what the
+ * reply alone shows (unparsed arguments, an ungranted name, the schema check), which gets the same
+ * error result again. Any other call is closed with the word of the record that closed it
+ * (`closerResult`: `timed_out` for an ask whose deadline passed, `interrupted` for a call a host
+ * interrupt closed), `crashed` when none did (its run was cut off before its result), the closer
+ * written as its `tool_result` step, and never runs.
  *
  * With a host interrupt pending, only the calls that may have run are sent again or closed, and
  * the rest are skipped from the first one on (`skipFrom`), as live skips the calls it hasn't
@@ -578,7 +608,7 @@ async function runToolCalls(turn: ToolTurn): Promise<boolean> {
  *
  * @returns Whether a host interrupt skipped calls of this reply, when it was live (a recorded
  *   `skipped` result) or now.
- * @throws A stop's reason, a failed check's error (`failCall`), or what a call sent again throws
+ * @throws A stop's reason, a faulted check's error (`failCall`), or what a call sent again throws
  *   (`resendCall`).
  */
 async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
@@ -646,7 +676,7 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
       continue;
     }
     const check = await checkCall(turn, call, index);
-    if ("error" in check) return await failCall(turn, call, index, check);
+    if ("error" in check) return await failCall(turn, call, index, check.error);
     const view = turn.ctx.steps?.calls.find((each) => each.callId === callId);
     if (callId !== undefined && view?.state === "open") {
       turn.pended.set(index, callId);
@@ -662,6 +692,34 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
     const closer = steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed });
     // A later start that pended the call reached the next one already.
     if (laterPending === null) reached = closer;
+    pushToolMessage(turn, call, output, true);
+  }
+  return false;
+}
+
+/**
+ * Answer each call of a reply at the tool-call cap with the cap's error result (`toolLimitText`),
+ * in call order: none is checked, run or pended. A call an earlier start recorded a result for
+ * keeps it; each other gets a `tool_result` step, then started and finished events
+ * (`CAPPED_TOOL_ERROR`), as a skipped call does. A stop wins first; then a host interrupt skips
+ * every call (`skipFrom`), as it would any reply's. The first call's recorded result shows which
+ * an earlier start chose, so a replay finishes what it began.
+ *
+ * @returns Whether a host interrupt skipped the calls.
+ */
+function answerAtCap(turn: ToolTurn, cap: number): boolean {
+  checkNodeStopped(turn);
+  const first = turn.steps.recordedResult(turn.n, turn.calls[0]!.id);
+  if (first === null ? turn.interrupt?.aborted === true : first.closed === "skipped") return skipFrom(turn, 0);
+  const output = toolLimitText(cap);
+  for (const [index, call] of turn.calls.entries()) {
+    const recorded = turn.steps.recordedResult(turn.n, call.id);
+    if (recorded !== null) {
+      pushToolMessage(turn, call, recorded.output, recorded.isError);
+      continue;
+    }
+    turn.steps.toolResult({ callId: call.id, startedAt: null, output, isError: true });
+    observeSkippedToolCall(turn.live, identityOf(turn, call, index), CAPPED_TOOL_ERROR);
     pushToolMessage(turn, call, output, true);
   }
   return false;
@@ -702,14 +760,19 @@ function skipFrom(turn: ToolTurn, start: number): true {
 }
 
 /**
- * Check one call before it may start: its grant, then its arguments and whether it is safe to run
- * beside others. A check the stop cut short throws the stop's reason. A `ReportedToolError` from
- * the argument check plans an unsafe call that rejects with it, so it runs alone and the model
- * reads it as the call's error result.
+ * Check one call before it may start: that its arguments parsed, its grant, then its arguments and
+ * whether it is safe to run beside others. A check the stop cut short throws the stop's reason.
+ * The model's mistakes plan a call refused before its tool (`refused`), whose error result the
+ * model reads: arguments that didn't parse, a name it wasn't granted, a bad `ask_user` timeout,
+ * and arguments the schema or the validator refuses (the check's message, or the message of a
+ * `ReportedToolError` the validator threw).
+ *
+ * @returns The planned call, or the error of a check that failed otherwise (a validator that threw).
  */
 async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Promise<CallCheck> {
   const { ctx, toolset, skills } = turn;
-  const args = call.arguments!;
+  const args = call.arguments;
+  if (args === null) return refused(call, index, new ReportedToolError(unparsedText(call.name)), true);
   if (skills.size > 0 && call.name === LOAD_SKILL) {
     // `load_skill` only reads the granted skills. Every `SkillError` it throws refuses the
     // model's arguments, so the model reads it as the call's result; any other error is a fault.
@@ -721,20 +784,14 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
         throw error;
       }
     };
-    return { planned: { call, index, callId: undefined, deadline: null, resumable: false, invoke }, safe: true };
+    const planned = { call, index, callId: undefined, deadline: null, resumable: false, refused: false, invoke };
+    return { planned, safe: true };
   }
   const grant = turn.granted.find((each) => each.visible === call.name);
-  if (grant === undefined) {
-    const error = new AgentLoopError(
-      `agent node ${reprText(ctx.nodeId)} requested tool ${reprText(call.name)}, but it is not granted; ` +
-        `granted tools: ${writeAsText(turn.granted.map((each) => each.visible))}`,
-    );
-    return { error, granted: false };
-  }
+  // The model sees the granted tools in the request, so the name is all it needs.
+  if (grant === undefined) return refused(call, index, new ReportedToolError(unavailableText(call.name)), true);
   // The call names the tool as the model saw it; the grant names it in its group.
   const ref = { group: grant.group, name: grant.tool };
-  // A plan that rejects with a reported error carries it too: checking the arguments again on
-  // replay has no side effect and gives the same error.
   const resumable = turn.resumable.has(call.name);
   // An ask's deadline is fixed before its handler runs, which gets it; the pending step records it.
   let deadline: string | null = null;
@@ -743,26 +800,35 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
       deadline = formatRecordTime((ctx.scheduler ?? realScheduler).now() + parseDuration(args["timeout"]) * 1000);
     } catch (error) {
       if (!(error instanceof RangeError || error instanceof TypeError)) throw error;
-      const reported = new ReportedToolError(`ask_user timeout: ${error.message}`);
-      const invoke = () => Promise.reject(reported);
-      return { planned: { call, index, callId: undefined, deadline: null, resumable, invoke }, safe: false };
+      return refused(call, index, new ReportedToolError(`ask_user timeout: ${error.message}`), resumable);
     }
+  }
+  const inputs = deadline === null ? args : { ...args, deadline };
+  try {
+    // The schema check first, on its own: it reads only the model's arguments, so its failure is
+    // the model's to read. The tool was resolved when the request was built, so it is there.
+    toolset.checkArguments(ref, inputs, { trusted: deadline !== null });
+  } catch (error) {
+    return refused(call, index, new ReportedToolError((error as Error).message, { cause: error }), true);
   }
   let checked: CheckedCall;
   try {
     checked =
       deadline === null
-        ? await toolset.validate(ref, args, { signal: ctx.signal })
-        : await toolset.validateTrusted(ref, { ...args, deadline }, { signal: ctx.signal });
+        ? await toolset.validate(ref, inputs, { signal: ctx.signal })
+        : await toolset.validateTrusted(ref, inputs, { signal: ctx.signal });
   } catch (error) {
     // A check the stop cut short is the stop, not a failed check.
     checkNodeStopped(turn);
-    // The arguments are checked as part of the call, so a reported error is the call's result.
-    if (isReportedToolError(error)) {
-      const invoke = () => Promise.reject(error);
-      return { planned: { call, index, callId: undefined, deadline: null, resumable, invoke }, safe: false };
+    // The arguments are checked as part of the call, so the validator's issues and a reported
+    // error are the call's result.
+    // A validator may read outside state the tool changes, so a replay checking again tells
+    // nothing of a call the cut ran: it is answered again only when its tool is resumable.
+    if (isReportedToolError(error)) return refused(call, index, error, resumable);
+    if (isToolCheckError(error)) {
+      return refused(call, index, new ReportedToolError((error as Error).message, { cause: error }), resumable);
     }
-    return { error, granted: true };
+    return { error };
   }
   // The key names the reply's `model_call` step and the call's place in it. Steps outlive a start
   // and a resumed start numbers its steps after the recorded ones, so a key never names two
@@ -772,35 +838,42 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
   // Above 1 only for a call a crash or a stop cut off after its reply, which a resume sends again.
   const attempt = 1 + (ctx.steps?.resumesSince(turn.n) ?? 0);
   const invoke = (signal: AbortSignal) => toolset.invoke(checked, { node: ctx.nodeId, callId, attempt, signal });
-  return { planned: { call, index, callId, deadline, resumable, invoke }, safe: toolset.isConcurrencySafe(checked) };
+  const planned = { call, index, callId, deadline, resumable, refused: false, invoke };
+  return { planned, safe: toolset.isConcurrencySafe(checked) };
 }
 
 /**
- * Fail the node at a call whose check failed, once the calls before it committed.
+ * Plan a call refused before it reaches its tool: an unsafe call, so it runs alone, that rejects
+ * with `error`, a reported error the model reads as the call's error result. `resumable` says
+ * whether a replay that finds no result for it answers it again: `true` when the refusal follows
+ * from the recorded reply alone (unparsed arguments, an ungranted name, the schema check), else
+ * as its tool is.
+ */
+function refused(call: ToolCallPart, index: number, error: unknown, resumable: boolean): CallCheck {
+  const invoke = () => Promise.reject(error);
+  return { planned: { call, index, callId: undefined, deadline: null, resumable, refused: true, invoke }, safe: false };
+}
+
+/**
+ * Fail the node at a call whose check faulted (its validator threw), once the calls before it
+ * committed.
  *
  * As for a call about to start, a stop wins first, then a host interrupt skips it and every later
- * call. Otherwise a granted call whose arguments failed gets the brackets of a call that threw,
- * since the arguments are checked as part of the call, and an ungranted one gets none.
+ * call. Otherwise the call gets the brackets of a call that threw, since the arguments are checked
+ * as part of the call.
  *
  * @returns `true` when a host interrupt skipped the call.
- * @throws The failed check's error, or what publishing its brackets throws.
+ * @throws The check's error, or what publishing its brackets throws.
  */
-async function failCall(
-  turn: ToolTurn,
-  call: ToolCallPart,
-  index: number,
-  failed: { readonly error: unknown; readonly granted: boolean },
-): Promise<true> {
+async function failCall(turn: ToolTurn, call: ToolCallPart, index: number, error: unknown): Promise<true> {
   checkNodeStopped(turn);
   if (turn.interrupt?.aborted) return skipFrom(turn, index);
-  if (failed.granted) {
-    // Rejects with the failed check's error once its brackets are published.
-    await observeToolCall(turn.live, () => Promise.reject(failed.error), identityOf(turn, call, index), {
-      signal: nodeSignal(turn),
-      text: (value) => toolText(call.name, value),
-    });
-  }
-  throw failed.error;
+  // Rejects with the check's error once its brackets are published.
+  await observeToolCall(turn.live, () => Promise.reject(error), identityOf(turn, call, index), {
+    signal: nodeSignal(turn),
+    text: (value) => toolText(call.name, value),
+  });
+  throw error;
 }
 
 /**
@@ -846,7 +919,7 @@ async function runGroup(
    * a result with no text, or a write that throws, fails the group. A pended call writes its
    * `pending` step.
    */
-  const settle = (planned: PlannedCall, startedAt: number, value: unknown, reported: boolean): ToolOutcome => {
+  const settle = (planned: PlannedCall, startedAt: number | null, value: unknown, reported: boolean): ToolOutcome => {
     const { call, index, callId, deadline } = planned;
     try {
       if (!reported && isPending(value)) {
@@ -879,12 +952,12 @@ async function runGroup(
       if (controller.signal.aborted) break;
       const { call, index } = planned;
       let started = false;
-      let startedAt = 0;
+      let startedAt: number | null = null;
       const running = observeToolCall(
         live,
         () => {
           started = true;
-          startedAt = turn.steps.now();
+          if (!planned.refused) startedAt = turn.steps.now();
           return planned.invoke(controller.signal);
         },
         identityOf(turn, call, index),
@@ -953,7 +1026,7 @@ function checkNodeStopped(turn: ToolTurn): void {
 /** One call's identity on its brackets. */
 function identityOf(turn: ToolTurn, call: ToolCallPart, index: number): ToolCallIdentity {
   const { id: toolCallId, name } = call;
-  return { n: turn.n, callIndex: index, toolCallId, name, arguments: call.arguments! };
+  return { n: turn.n, callIndex: index, toolCallId, name, arguments: call.arguments };
 }
 
 /**

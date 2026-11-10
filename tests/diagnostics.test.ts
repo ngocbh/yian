@@ -39,7 +39,6 @@ const EXPECTED_FAILURE_CODES: readonly FailureCode[] = [
   "contract.growth",
   "graph.terminal_unreachable",
   "loop.max_exceeded",
-  "agent.max_tool_iterations",
   "provider.auth",
   "agent.output_invalid",
   "provider.rate_limit",

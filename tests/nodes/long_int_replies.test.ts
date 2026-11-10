@@ -11,6 +11,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { Finish, ToolCallDelta } from "../../src/llm/events.ts";
 import { Message, Response, TextPart, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
+import { unparsedText } from "../../src/nodes/agent/results.ts";
 import { generateStructured } from "../../src/nodes/agent/structured.ts";
 import { type RunResult, runFlow } from "../../src/run.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
@@ -180,15 +181,17 @@ test.each([
   expect(sentResult(chat)).toBe(`result:${value}`);
 });
 
-test("an invalid tool call with unrelated bad json keeps todays behaviour", async () => {
+test("an invalid tool call with unrelated bad json gets an error result, never reaching the tool", async () => {
   const part = new ToolCallPart({ id: "c1", name: "lookup", arguments: null, rawArguments: '{"value": ' });
   const reply = new Response({ message: new Message({ role: "assistant", parts: [part] }), finishReason: "tool_calls" });
   const { tool, calls } = recordedTool();
+  const chat = new ScriptedModel([reply, text("done")]);
 
-  const result = await run(TOOL_FLOW, new ScriptedModel([reply]), { lookup: tool });
+  const result = await run(TOOL_FLOW, chat, { lookup: tool });
 
-  assertSucceeds(result, "");
+  assertSucceeds(result, "done");
   expect(calls).toEqual([]);
+  expect(sentResult(chat)).toBe(unparsedText("lookup"));
 });
 
 test("a tool returning a long int fails naming the tool", async () => {

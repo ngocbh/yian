@@ -6,9 +6,9 @@
 # child flow does NOT inherit this flow's env), and takes literals only.
 #
 # Keys yian reads:
-#   max_tool_iterations (AGENT node) — tool-loop turns before the node fails with
-#                                 agent.max_tool_iterations (default -1 = no cap; set a
-#                                 positive int to bound it).
+#   max_tool_iterations (AGENT node) — tool-loop turns; the reply at the cap runs none of its
+#                                 tool calls and the model answers once more (default -1 =
+#                                 no cap; set a positive int to bound it).
 
 id: node-env-config
 name: node_env_config

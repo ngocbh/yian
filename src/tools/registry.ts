@@ -905,6 +905,19 @@ export class ToolSet {
   }
 
   /**
+   * Check one call's arguments against the tool's JSON Schema only, as `validate` does first,
+   * without running its `parametersValidator` or calling it.
+   *
+   * @param options `trusted: true` checks against the full schema, host-injected fields included,
+   *   as `validateTrusted` does.
+   * @throws As `validate`'s schema check throws: a `RangeError` (an unknown id, an argument not in
+   *   the schema, a missing one), a `TypeError` (`inputs` is not a record) or a `TypeCheckError`.
+   */
+  checkArguments(toolId: string | ToolRef, inputs: Record<string, unknown>, options?: { trusted?: boolean }): void {
+    this.check(toolId, inputs, options?.trusted ?? false);
+  }
+
+  /**
    * Check one call as `validate` does, against the tool's full schema, host-injected fields
    * included; only the ask tools have any (`ask_user`'s `deadline`, which the agent sets from the
    * model's `timeout`).

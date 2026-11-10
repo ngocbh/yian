@@ -1,3 +1,6 @@
+# At `max_tool_iterations: 2` the second reply still calls lookup. Its call doesn't run: it gets
+# the cap's error result, and one more model call gives the answer. An AGENT tool call id is
+# <run>/<node>/<n>/<index>, n the reply's model_call step.
 kind: run
 flow: |
   id: agent-max-tool-iterations
@@ -33,15 +36,170 @@ host:
             format: yian.message.v1
             role: assistant
             parts: [{type: tool_call, id: c2, name: lookup, arguments: {q: x}}]
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: x is X1}]
 expect:
   output:
-    status: failed
-    failure:
-      code: agent.max_tool_iterations
-      message: "agent node 'research' hit the tool-iteration cap (2) without a final answer; the last reply's 1 tool call(s) were not run"
-      node: research
-      frames: [{label: flow.yaml, range: [4, 3, 4, 11]}]
-  # An AGENT tool call id is <run>/<node>/<n>/<index>, n the reply's model_call step.
+    status: succeeded
+    output: x is X1
   tool_calls:
     lookup:
       - {args: {q: x}, call_id: r1/research/1/0, attempt: 1, node: research}
+  trace:
+    - - run_started
+      - null
+      - effective_llm_by_static_path:
+          research:
+            model: gpt-5.5
+            provider: openai
+            _connection: {method: api_key, source: environment, endpoint: https://api.openai.com/v1}
+        num_workers: 0
+    - - pool_commit
+      - __start__
+      - {key: system.now}
+    - - pool_commit
+      - __start__
+      - {key: system.run_id, value: r1}
+    - - pool_commit
+      - __start__
+      - {key: system.today}
+    - - pool_commit
+      - __start__
+      - value: {}
+    - [node_started, __start__]
+    - - pool_commit
+      - __start__
+      - value: {}
+    - - node_succeeded
+      - __start__
+      - {commit: 6}
+    - [node_started, research]
+    - - node_step
+      - research
+      - n: 1
+        step:
+          finish: null
+          kind: model_call
+          model: gpt-5.5
+          output:
+            format: yian.message.v1
+            parts:
+              - arguments: {q: x}
+                id: c1
+                name: lookup
+                type: tool_call
+            role: assistant
+          purpose: chat
+          request_sha256: 2a88ec7e550ecf7decec738ef550bce3f635cab265c5ff8bb506f4183b7e3b8d
+          response_id: null
+          usage: null
+    - - node_step
+      - research
+      - n: 2
+        step: {call_id: c1, is_error: false, kind: tool_result, output: X1}
+    - - node_step
+      - research
+      - n: 3
+        step:
+          finish: null
+          kind: model_call
+          model: gpt-5.5
+          output:
+            format: yian.message.v1
+            parts:
+              - arguments: {q: x}
+                id: c2
+                name: lookup
+                type: tool_call
+            role: assistant
+          purpose: chat
+          request_sha256: c5c443f570114d6b2143a1e1a41a442c6fded5db5c112949a379461ee5d56fff
+          response_id: null
+          usage: null
+    - - node_step
+      - research
+      - n: 4
+        step: {call_id: c2, is_error: true, kind: tool_result, output: Tool-call limit reached (2 turns). No more tool calls will run; give your final answer now.}
+    - - node_step
+      - research
+      - n: 5
+        step:
+          finish: null
+          kind: model_call
+          model: gpt-5.5
+          output:
+            format: yian.message.v1
+            parts:
+              - {text: x is X1, type: text}
+            role: assistant
+          purpose: chat
+          request_sha256: 3e14f2d25c4d67c41af59c5b2fad376af677acd593ab25d02996c911ef302923
+          response_id: null
+          usage: null
+    - - pool_commit
+      - research
+      - {value: x is X1}
+    - - pool_commit
+      - research
+      - key: research.new_messages
+        steps: [9, 10, 11, 12, 13]
+    - - node_succeeded
+      - research
+      - {commit: 14, messages: 15}
+    - [node_started, __end__]
+    - - pool_commit
+      - __end__
+      - {value: x is X1}
+    - - node_succeeded
+      - __end__
+      - {commit: 18}
+  events:
+    - [RunStarted]
+    - - NodeStarted
+      - {node_id: __start__}
+    - - NodeSucceeded
+      - node_id: __start__
+        output: {}
+        interrupted: false
+    - - NodeStarted
+      - {node_id: research}
+    - - ModelCallStarted
+      - {node_id: research, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
+    - - ModelCallFinished
+      - {node_id: research, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
+    - - ToolCallStarted
+      - node_id: research
+        n: 1
+        call_index: 0
+        tool_call_id: c1
+        name: lookup
+        arguments: {q: x}
+    - - ToolCallFinished
+      - {node_id: research, n: 1, call_index: 0, tool_call_id: c1, name: lookup, result: X1}
+    - - ModelCallStarted
+      - {node_id: research, n: 3, purpose: chat, provider: openai, model: gpt-5.5}
+    - - ModelCallFinished
+      - {node_id: research, n: 3, purpose: chat, provider: openai, model: gpt-5.5}
+    - - ToolCallStarted
+      - node_id: research
+        n: 3
+        call_index: 0
+        tool_call_id: c2
+        name: lookup
+        arguments: {q: x}
+    - - ToolCallFinished
+      - {node_id: research, n: 3, call_index: 0, tool_call_id: c2, name: lookup, error: tool_limit}
+    - - ModelCallStarted
+      - {node_id: research, n: 5, purpose: chat, provider: openai, model: gpt-5.5}
+    - - ModelCallFinished
+      - {node_id: research, n: 5, purpose: chat, provider: openai, model: gpt-5.5}
+    - - NodeSucceeded
+      - {node_id: research, output: x is X1, interrupted: false}
+    - - NodeStarted
+      - {node_id: __end__}
+    - - NodeSucceeded
+      - {node_id: __end__, output: x is X1, interrupted: false}
+    - - RunSucceeded
+      - {output: x is X1}

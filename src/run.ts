@@ -2250,13 +2250,10 @@ function pendingArguments(
   return (step["arguments"] as JsonObject | undefined) ?? null;
 }
 
-/** The arguments of runnable tool call `index` of the reply a `model_call` step recorded, or `null`. */
+/** The arguments of tool call `index` of the reply a `model_call` step recorded, or `null`. */
 function agentCallArguments(reply: Readonly<JsonObject> | undefined, index: number): JsonObject | null {
   if (reply === undefined || reply["kind"] !== "model_call") return null;
-  // A call whose arguments didn't parse never ran, so it has no index.
-  const calls = Message.fromJSON(reply["output"]).parts.filter(
-    (part): part is ToolCallPart => part instanceof ToolCallPart && part.arguments !== null,
-  );
+  const calls = Message.fromJSON(reply["output"]).parts.filter((part): part is ToolCallPart => part instanceof ToolCallPart);
   return (calls[index]?.arguments as JsonObject | undefined) ?? null;
 }
 
@@ -2599,7 +2596,7 @@ export interface AgentToolResult {
   /** The id of the reply's `tool_call` part. */
   readonly callId: string;
   readonly name: string;
-  /** The parsed arguments; `null` when they didn't parse (the call never ran). */
+  /** The parsed arguments; `null` when they didn't parse (the call never reached its tool). */
   readonly arguments: JsonObject | null;
   /** The text the model read, or `null` while no result is recorded (pending, cut off, or the call threw). */
   readonly output: string | null;

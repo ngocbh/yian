@@ -11,11 +11,11 @@ import { join } from "node:path";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import { type RunEvent, ToolCallFinished, ToolCallStarted } from "../../src/events.ts";
-import { ToolResultPart } from "../../src/llm/messages.ts";
+import { Message, Response, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentLoopError, type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
-import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/results.ts";
+import { TOOL_OUTCOME_UNKNOWN, unparsedText } from "../../src/nodes/agent/results.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
 import { advance, cancel, complete, pendingCalls, runFlow, send } from "../../src/run.ts";
 import { decodeRecord, NodeStepRecord, NodeWaitingRecord } from "../../src/runtime/log.ts";
@@ -59,6 +59,14 @@ const kinds = (log: string) =>
     .filter(Boolean)
     .map((line) => decodeRecord(line))
     .map(({ kind, record }) => (record instanceof NodeStepRecord ? String(record.step["kind"]) : kind));
+
+/** The agent's steps in the log at `log`, in order. */
+const steps = (log: string) =>
+  readFileSync(log, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => decodeRecord(line).record)
+    .flatMap((record) => (record instanceof NodeStepRecord ? [record.step] : []));
 
 /** The tool results the model read in its request `index`: `[call id, content, is error]`. */
 const sentResults = (model: ScriptedModel, index: number) =>
@@ -204,6 +212,27 @@ test("cancel names a waiting agent's call with its reply's arguments", async () 
   const { log } = await start(model, { ask_user: () => pending() }, "ask_user");
   expect((await cancel(log)).map((c) => [c.callId, c.tool, c.arguments])).toEqual([["r/agent/1/0", "ask_user", { question: "Ship?" }]]);
   expect(pendingCalls(log)).toEqual([]);
+});
+
+test("a call after an unparsed one keeps its place among the reply's calls: its id, index and arguments", async () => {
+  const unparsed = new ToolCallPart({ id: "c1", name: "lookup", arguments: null, rawArguments: "{" });
+  const ask = new ToolCallPart({ id: "c2", name: "ask_user", arguments: { question: "Ship?" } });
+  const reply = new Response({ message: new Message({ role: "assistant", parts: [unparsed, ask] }), finishReason: "tool_calls" });
+  const model = new ScriptedModel([reply, textReply("done")], CONFIG);
+  const { log, options, result } = await start(model, { ask_user: () => pending(), lookup: lookup(() => "found") });
+
+  expect(result.status, result.failure?.message).toBe("waiting");
+  const step = steps(log).find((each) => each["kind"] === "pending")!;
+  expect([step["call_id"], step["index"]]).toEqual(["r/agent/1/1", 1n]);
+  expect(pendingCalls(log).map((c) => [c.callId, c.arguments])).toEqual([["r/agent/1/1", { question: "Ship?" }]]);
+
+  await complete(log, "r/agent/1/1", { output: "yes" });
+  const resumed = await advance(options);
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(sentResults(model, 1)).toEqual([
+    ["c1", unparsedText("lookup"), true],
+    ["c2", "yes", false],
+  ]);
 });
 
 test("an ask_user answered inline works as before", async () => {

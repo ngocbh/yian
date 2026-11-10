@@ -787,16 +787,25 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
       return refused(call, index, new ReportedToolError(`ask_user timeout: ${error.message}`));
     }
   }
+  const inputs = deadline === null ? args : { ...args, deadline };
+  try {
+    // The schema check first, on its own: it reads only the model's arguments, so its failure is
+    // the model's to read. The tool was resolved when the request was built, so it is there.
+    toolset.checkArguments(ref, inputs, { trusted: deadline !== null });
+  } catch (error) {
+    return refused(call, index, new ReportedToolError((error as Error).message, { cause: error }));
+  }
   let checked: CheckedCall;
   try {
     checked =
       deadline === null
-        ? await toolset.validate(ref, args, { signal: ctx.signal })
-        : await toolset.validateTrusted(ref, { ...args, deadline }, { signal: ctx.signal });
+        ? await toolset.validate(ref, inputs, { signal: ctx.signal })
+        : await toolset.validateTrusted(ref, inputs, { signal: ctx.signal });
   } catch (error) {
     // A check the stop cut short is the stop, not a failed check.
     checkNodeStopped(turn);
-    // The arguments are checked as part of the call, so a reported error is the call's result.
+    // The arguments are checked as part of the call, so the validator's issues and a reported
+    // error are the call's result.
     if (isReportedToolError(error)) return refused(call, index, error);
     if (isToolCheckError(error)) {
       return refused(call, index, new ReportedToolError((error as Error).message, { cause: error }));

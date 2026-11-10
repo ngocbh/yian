@@ -686,45 +686,49 @@ describe("validate", () => {
     expect(calls).toBe(0);
   });
 
-  test("a failed argument check is a check failure, keeping its class; an unknown tool or a validator's throw isn't", async () => {
-    const thrown = new RangeError("validator down");
+  test("a failed argument check keeps its error as thrown: not a check failure", async () => {
+    const tools = new ToolSet({ echo: tool("echo") });
+    for (const inputs of [{ town: "Paris" }, { text: 1 }, [] as never]) {
+      const error = await tools.validate("echo", inputs).then(
+        () => null,
+        (thrown: unknown) => thrown,
+      );
+      expect(error).toBeInstanceOf(Error);
+      expect(isToolCheckError(error)).toBe(false);
+    }
+  });
+
+  test("checkArguments checks the schema only: no validator, no tool call; trusted reads the full schema", () => {
+    let validated = 0;
     const guarded = new FunctionTool({
       name: "guarded",
       description: "Guarded.",
-      parametersJsonSchema: { type: "object", properties: {} },
+      parametersJsonSchema: { type: "object", properties: { text: { type: "string" } } },
       parametersValidator: {
         "~standard": {
           version: 1,
           vendor: "test",
           validate: () => {
-            throw thrown;
+            validated += 1;
+            return { issues: [{ message: "never" }] };
           },
         },
       },
       execute: () => null,
     });
-    const tools = new ToolSet({ echo: tool("echo"), guarded });
-    const failure = async (promise: Promise<unknown>) => {
-      try {
-        await promise;
-      } catch (error) {
-        return error;
-      }
-      throw new Error("expected a rejection");
-    };
-    for (const [call, kind] of [
-      [tools.validate("echo", { town: "Paris" }), RangeError],
-      [tools.validate("echo", { text: 1 }), TypeCheckError],
-      [tools.validate("echo", [] as never), TypeError],
-    ] as const) {
-      const error = await failure(call);
-      expect(error).toBeInstanceOf(kind);
-      expect(isToolCheckError(error)).toBe(true);
-    }
-    expect(isToolCheckError(await failure(tools.validate("nope", {})))).toBe(false);
-    const raised = await failure(tools.validate("guarded", {}));
-    expect(raised).toBe(thrown);
-    expect(isToolCheckError(raised)).toBe(false);
+    const tools = new ToolSet({ guarded, ask_user: () => "yes" });
+
+    tools.checkArguments({ group: null, name: "guarded" }, { text: "hi" });
+    expect(() => tools.checkArguments({ group: null, name: "guarded" }, { town: "Paris" })).toThrow(
+      new RangeError(`tool 'guarded' received unsupported argument(s) ["town"]; allowed: ["text"]`),
+    );
+    expect(() => tools.checkArguments({ group: null, name: "guarded" }, { text: 1 })).toThrow(TypeCheckError);
+    expect(validated).toBe(0);
+    // `deadline` is on the ask's trusted path only.
+    const ask = { group: null, name: "ask_user" };
+    const deadline = "2026-11-09T10:00:00.000Z";
+    expect(() => tools.checkArguments(ask, { question: "Q?", deadline })).toThrow(RangeError);
+    tools.checkArguments(ask, { question: "Q?", deadline }, { trusted: true });
   });
 
   test("refuses arguments that aren't a record", async () => {

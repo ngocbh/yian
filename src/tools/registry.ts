@@ -36,7 +36,7 @@ import {
   writeAsText,
 } from "../typesys/values.ts";
 import { ASK, ASK_USER, isPending, SLEEP, TAKE, ToolContext, toolCallId } from "./context.ts";
-import { isToolCheckError, markToolCheck, ToolCheckError, toolErrorKinds } from "./errors.ts";
+import { isToolCheckError, ToolCheckError, toolErrorKinds } from "./errors.ts";
 import { FunctionTool, isFunctionTool, type StandardIssue, type StandardResult } from "./function_tools.ts";
 import { GrantError, type GrantScope, localGroupScope, visibleToolName } from "./grants.ts";
 import { isMcpServer, type McpServer } from "./mcp.ts";
@@ -889,8 +889,6 @@ export class ToolSet {
    * @throws {TypeCheckError} An argument is not a yian value, or doesn't fit its property's type.
    * @throws {ToolCheckError} The validator reported issues.
    * @throws The signal's reason when it aborts, and whatever the validator throws, unchanged.
-   *   Every failed argument check above but the id's is a check failure (`isToolCheckError`); a
-   *   validator's own throw is not, unless it threw one.
    *
    * @example
    * const tools = new ToolSet({ weather: lookup });
@@ -904,6 +902,19 @@ export class ToolSet {
     options?: { signal?: AbortSignal },
   ): Promise<CheckedCall> {
     return await this.checkedCall(toolId, inputs, false, options?.signal);
+  }
+
+  /**
+   * Check one call's arguments against the tool's JSON Schema only, as `validate` does first,
+   * without running its `parametersValidator` or calling it.
+   *
+   * @param options `trusted: true` checks against the full schema, host-injected fields included,
+   *   as `validateTrusted` does.
+   * @throws As `validate`'s schema check throws: a `RangeError` (an unknown id, an argument not in
+   *   the schema, a missing one), a `TypeError` (`inputs` is not a record) or a `TypeCheckError`.
+   */
+  checkArguments(toolId: string | ToolRef, inputs: Record<string, unknown>, options?: { trusted?: boolean }): void {
+    this.check(toolId, inputs, options?.trusted ?? false);
   }
 
   /**
@@ -1078,18 +1089,13 @@ export class ToolSet {
     // ones.
     const toolId = typeof ref === "string" ? ref : ref.name;
     const where = `tool ${reprText(toolId)} arguments`;
-    try {
-      const payload = fromHost(inputs, where);
-      if (!isRecord(payload)) throw new TypeError(`${where} must be a record, got ${jsTypeName(inputs)}`);
-      if (toolId === ASK_USER && Object.hasOwn(payload, "options")) payload.options = normalizeOptions(payload.options);
-      const schema = trusted ? (this.trustedSchemas.get(toolId) ?? tool.parametersJsonSchema) : tool.parametersJsonSchema;
-      const scope = toolId === ASK || toolId === ASK_USER ? (trusted ? "trusted" : "public") : null;
-      checkArguments(toolId, schema, payload, scope);
-      return [tool, payload];
-    } catch (error) {
-      // Branded, keeping its class, so a caller can tell the arguments' failure from a fault.
-      throw markToolCheck(error);
-    }
+    const payload = fromHost(inputs, where);
+    if (!isRecord(payload)) throw new TypeError(`${where} must be a record, got ${jsTypeName(inputs)}`);
+    if (toolId === ASK_USER && Object.hasOwn(payload, "options")) payload.options = normalizeOptions(payload.options);
+    const schema = trusted ? (this.trustedSchemas.get(toolId) ?? tool.parametersJsonSchema) : tool.parametersJsonSchema;
+    const scope = toolId === ASK || toolId === ASK_USER ? (trusted ? "trusted" : "public") : null;
+    checkArguments(toolId, schema, payload, scope);
+    return [tool, payload];
   }
 
   /**

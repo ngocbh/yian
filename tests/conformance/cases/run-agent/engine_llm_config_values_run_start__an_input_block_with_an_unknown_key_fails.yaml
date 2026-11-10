@@ -18,6 +18,6 @@ run:
 expect:
   raises:
     class: LayerFieldError
-    message: 'node ''chat'' llm_config.openai: `openai.bogus` is not a supported field of the OpenAI Responses API request; allowed: access_programs, max_output_tokens, max_tool_calls, metadata, moderation, prompt_cache_key, prompt_cache_options, prompt_cache_retention, reasoning, safety_identifier, service_tier, temperature, text, top_logprobs, top_p, truncation, user'
+    message: 'node ''chat'' llm_config.openai: `openai.bogus` is not a supported field of the OpenAI Responses API request; allowed: access_programs, max_output_tokens, max_tool_calls, metadata, moderation, prompt_cache_key, prompt_cache_options, prompt_cache_retention, reasoning, safety_identifier, service_tier, store, temperature, text, top_logprobs, top_p, truncation, user'
   trace: []
   events: []

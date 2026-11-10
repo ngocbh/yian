@@ -373,6 +373,29 @@ const CASES: Case[] = [
     expect: openaiKey(HOST_KEY),
   },
   {
+    name: "openai host key with store false",
+    config: { ...OPENAI, api_key: HOST_KEY, openai: { store: false } },
+    env: {},
+    golden: "openai_responses/plain",
+    edit: {
+      json: {
+        input: [{ type: "message", role: "user", content: "Say hello." }],
+        store: false,
+        include: ["reasoning.encrypted_content"],
+        instructions: "You are terse.",
+      },
+    },
+    expect: openaiKey(HOST_KEY),
+  },
+  {
+    name: "openai host key with store true",
+    config: { ...OPENAI, api_key: HOST_KEY, openai: { store: true } },
+    env: {},
+    golden: "openai_responses/plain",
+    edit: { json: { store: true } },
+    expect: openaiKey(HOST_KEY),
+  },
+  {
     name: "subscription with residency",
     config: {},
     saved: SUBSCRIPTION,
@@ -518,6 +541,18 @@ const CASES: Case[] = [
     expect: {
       error: AuthError,
       message: "The saved connection changed. Run 'yian auth openai' and start a new run",
+      at: "build",
+    },
+  },
+  {
+    name: "subscription refuses store",
+    config: { openai: { store: false } },
+    saved: SUBSCRIPTION,
+    env: {},
+    golden: "openai_responses/subscription_plain",
+    expect: {
+      error: RangeError,
+      message: "`openai.store` is built by yian (conversation state); remove it",
       at: "build",
     },
   },

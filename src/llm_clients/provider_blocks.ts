@@ -500,7 +500,6 @@ const OPENAI_RESERVED: Readonly<Record<string, string>> = Object.freeze({
   stream_options: "streaming",
   previous_response_id: "conversation state",
   conversation: "conversation state",
-  store: "conversation state",
   include: "response items",
   background: "request lifecycle",
   context_management: "conversation state",
@@ -509,27 +508,34 @@ const OPENAI_RESERVED: Readonly<Record<string, string>> = Object.freeze({
 /**
  * The `openai` block: the request body of the OpenAI Responses API (`POST /v1/responses`).
  *
- * Every body keyword of the request is a field here or reserved.
+ * Every body keyword of the request is a field here or reserved. `store: false` also makes the
+ * requests stateless, as the subscription's are (see `OpenAIResponses`).
  */
 export const OpenAIResponsesBlock: BlockSchema = block({
   title: "OpenAIResponsesBlock",
   name: "openai",
   api: "is not a supported field of the OpenAI Responses API request",
   reserved: OPENAI_RESERVED,
-  fields: { ...OPENAI_RESPONSES_SHARED, max_output_tokens: int({ ge: 1n }), temperature: float({ ge: 0, le: 2 }) },
+  fields: {
+    ...OPENAI_RESPONSES_SHARED,
+    max_output_tokens: int({ ge: 1n }),
+    store: bool(),
+    temperature: float({ ge: 0, le: 2 }),
+  },
 });
 
 /**
  * The `openai` block when the call goes to the ChatGPT subscription endpoint.
  *
  * The endpoint accepts a subset of the Responses API request: everything in
- * `OpenAIResponsesBlock` except `temperature` and `max_output_tokens`, which it refuses.
+ * `OpenAIResponsesBlock` except `temperature` and `max_output_tokens`, which it refuses, and
+ * `store`, which yian always sets to `false` there.
  */
 export const OpenAISubscriptionBlock: BlockSchema = block({
   title: "OpenAISubscriptionBlock",
   name: "openai",
   api: "is not accepted by the ChatGPT subscription endpoint (a subset of the Responses API)",
-  reserved: OPENAI_RESERVED,
+  reserved: { ...OPENAI_RESERVED, store: "conversation state" },
   fields: OPENAI_RESPONSES_SHARED,
 });
 

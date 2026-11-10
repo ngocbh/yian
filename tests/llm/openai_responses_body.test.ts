@@ -913,3 +913,156 @@ describe("subscription", () => {
     for (const name of ["tools", "tool_choice", "parallel_tool_calls"]) expect(sub[name]).toEqual(key[name]!);
   });
 });
+
+/** A conversation with every kind of item, ending in a second system message, and its request settings. */
+function wholeTurn(block: JsonObject, subscription = false): JsonObject {
+  const schema: JsonObject = { properties: { value: { type: "integer" } }, required: ["value"], type: "object" };
+  return bodyOf(
+    [
+      system("You are terse."),
+      user("Double 3."),
+      assistant(reasoning(), text("Calling.", { id: "msg_1", phase: "commentary" }), call("call_1", { value: 3n }, CALL_ITEM)),
+      message("tool", result("call_1", "6")),
+      system("Answer in digits."),
+    ],
+    {
+      block,
+      subscription,
+      tools: [DOUBLE],
+      toolChoice: "auto",
+      parallelToolCalls: false,
+      outputFormat: new OutputFormat({ name: "Record", schema, strict: true }),
+    },
+  );
+}
+
+const SETTINGS: JsonObject = { reasoning: { effort: "high", summary: "auto" }, max_output_tokens: 4096n, prompt_cache_key: "k1" };
+// The encoded parts of `wholeTurn`'s body, as the API key route sends them without `store`.
+const SYSTEM_A = '{"type":"message","role":"system","content":"You are terse."}';
+const SYSTEM_B = '{"type":"message","role":"system","content":"Answer in digits."}';
+const USER_ITEM = '{"type":"message","role":"user","content":"Double 3."}';
+const REASONING_JSON =
+  '{"id":"rs_1","type":"reasoning","summary":[{"type":"summary_text","text":"Thinking about it."}],' +
+  '"encrypted_content":"ENC-CONTINUATION-1"}';
+const CALL_JSON = '{"id":"fc_1","type":"function_call","name":"double","arguments":"{\\"value\\": 3}","call_id":"call_1"';
+const OUTPUT_JSON = '{"type":"function_call_output","call_id":"call_1","output":"6"}';
+const TEXT_JSON = '{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Calling.","annotations":[]}]';
+const SCHEMA_JSON = '{"properties":{"value":{"type":"integer"}},"required":["value"],"type":"object"}';
+const REQUEST_JSON =
+  `"stream":true,"tools":[{"type":"function","name":"double","description":"Double an integer.","parameters":${SCHEMA_JSON}}],` +
+  `"tool_choice":"auto","parallel_tool_calls":false,` +
+  `"text":{"format":{"type":"json_schema","name":"Record","schema":${SCHEMA_JSON},"strict":true}},` +
+  `"reasoning":{"effort":"high","summary":"auto"}`;
+const TODAY =
+  `{"model":"gpt-5.5","input":[${SYSTEM_A},${USER_ITEM},${REASONING_JSON},${TEXT_JSON},"id":"msg_1","phase":"commentary"},` +
+  `${CALL_JSON},"status":"completed"},${OUTPUT_JSON},${SYSTEM_B}],${REQUEST_JSON},"max_output_tokens":4096,"prompt_cache_key":"k1"}`;
+
+describe("stateless requests", () => {
+  test("without store the API key body is today's, byte for byte", () => {
+    expect(encodeBody(wholeTurn(SETTINGS))).toBe(TODAY);
+  });
+
+  test("store true is sent as written and changes nothing else", () => {
+    expect(encodeBody(wholeTurn({ ...SETTINGS, store: true }))).toBe(`${TODAY.slice(0, -1)},"store":true}`);
+  });
+
+  test("the subscription body is today's, byte for byte", () => {
+    const { max_output_tokens: _, ...settings } = SETTINGS;
+    expect(encodeBody(wholeTurn(settings, true))).toBe(
+      `{"model":"gpt-5.5","input":[${USER_ITEM},${REASONING_JSON},${TEXT_JSON},"phase":"commentary"},` +
+        `${CALL_JSON}},${OUTPUT_JSON}],${REQUEST_JSON},"prompt_cache_key":"k1","store":false,` +
+        `"include":["reasoning.encrypted_content"],"instructions":"You are terse.\\n\\nAnswer in digits."}`,
+    );
+  });
+
+  test("store false on the API key route sends instructions, store false and the encrypted include", () => {
+    expect(encodeBody(wholeTurn({ ...SETTINGS, store: false }))).toBe(
+      `{"model":"gpt-5.5","input":[${USER_ITEM},${REASONING_JSON},${TEXT_JSON},"id":"msg_1","phase":"commentary"},` +
+        `${CALL_JSON},"status":"completed"},${OUTPUT_JSON}],${REQUEST_JSON},"max_output_tokens":4096,` +
+        `"prompt_cache_key":"k1","store":false,"include":["reasoning.encrypted_content"],` +
+        `"instructions":"You are terse.\\n\\nAnswer in digits."}`,
+    );
+  });
+
+  test("a first turn sends the system text as instructions and only the user message as input", () => {
+    expect(bodyOf([system("You are terse."), user("Double 3.")], { block: { store: false } })).toEqual({
+      model: "gpt-5.5",
+      input: [{ type: "message", role: "user", content: "Double 3." }],
+      stream: true,
+      store: false,
+      include: ["reasoning.encrypted_content"],
+      instructions: "You are terse.",
+    });
+  });
+
+  test("a second turn replays reasoning with its encrypted content and sends no previous_response_id", () => {
+    const body = bodyOf(
+      [
+        system("You are terse."),
+        user("Double 3."),
+        assistant(reasoning(), call("call_1", { value: 3n }, CALL_ITEM)),
+        message("tool", result("call_1", "6")),
+      ],
+      { block: { store: false }, tools: [DOUBLE] },
+    );
+    expect(body["input"]).toEqual([
+      { type: "message", role: "user", content: "Double 3." },
+      REASONING_ITEM,
+      CALL_ITEM,
+      { type: "function_call_output", call_id: "call_1", output: "6" },
+    ]);
+    expect(body["store"]).toBe(false);
+    expect(Object.hasOwn(body, "previous_response_id")).toBe(false);
+  });
+
+  test("system messages are joined as on the subscription, empty ones skipped", () => {
+    const joined = message("system", new TextPart("B1"), new TextPart("B2"));
+    const body = bodyOf([system("A."), system(""), user("Hi."), joined], { block: { store: false } });
+    expect(body["instructions"]).toBe("A.\n\nB1B2");
+    expect(body["input"]).toEqual([{ type: "message", role: "user", content: "Hi." }]);
+  });
+
+  test("without system text there are no instructions", () => {
+    for (const messages of [[user("Hi.")], [system(""), message("system"), user("Hi.")]]) {
+      const body = bodyOf(messages, { block: { store: false } });
+      expect(Object.hasOwn(body, "instructions")).toBe(false);
+      expect(body["input"]).toEqual([{ type: "message", role: "user", content: "Hi." }]);
+    }
+  });
+
+  test("message ids and call status are replayed, as the API returned them", () => {
+    expect(degraded([mixed()], { block: { store: false } })).toEqual([OWN, []]);
+  });
+
+  const { encrypted_content: _, ...plain } = REASONING_ITEM;
+  test("reasoning without encrypted content renders the message neutrally without a signal", () => {
+    for (const item of [plain, { ...plain, encrypted_content: "" }, { ...plain, encrypted_content: null }]) {
+      expect(degraded([mixed({ reasoning: record({ item }) })], { block: { store: false } })).toEqual([NEUTRAL, []]);
+    }
+  });
+
+  test("without store false, reasoning without encrypted content replays as before", () => {
+    for (const block of [null, { store: true }]) {
+      const [items, reasons] = degraded([mixed({ reasoning: record({ item: plain }) })], { block });
+      expect(items).toEqual([plain, ...OWN.slice(1)]);
+      expect(reasons).toEqual([]);
+    }
+  });
+
+  test("a part a system message cannot carry is refused as on the API key route", () => {
+    for (const block of [null, { store: false }]) {
+      refuses(
+        () => bodyOf([message("system", result("call_1", "6")), user("Hi.")], { block }),
+        "the openai_responses route cannot send a ToolResultPart in a system message",
+      );
+    }
+  });
+
+  test("media in a system message is refused", () => {
+    const media = new MediaPart({ mime: "image/png", url: "https://x.test/a.png" });
+    refuses(
+      () => bodyOf([message("system", new TextPart("Look."), media), user("Hi.")], { block: { store: false } }),
+      "the openai_responses route does not send media parts yet",
+    );
+  });
+});

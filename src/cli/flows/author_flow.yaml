@@ -125,16 +125,10 @@ defs:
           path: ${input.path}
           content: ${text.output}
         output: str
-      loads:
-        kind: code
-        input:
-          check: ${checked.output}
-        output: bool
-        code: return inputs.check === "ok" || inputs.check.startsWith("ok\n");
     output:
       text: ${text.output}
       check: ${checked.output}
-      ok: ${loads.output}
+      ok: "${checked.output == 'ok' or startswith(checked.output, 'ok\n')}"
 
   fix:
     input:

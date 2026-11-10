@@ -79,7 +79,7 @@ test("a prompt's unknown function keeps its message", () => {
 test("a prompt's unknown function lists the builtins in order", () => {
   expectError(
     () => promptRefs("${nosuch(t)}"),
-    "unknown prompt function 'nosuch'; prompts call only formatting builtins (join, lower, render_as_json, upper); " +
+    "unknown prompt function 'nosuch'; prompts call only formatting builtins (join, lower, lstrip, render_as_json, replace, rstrip, strip, upper); " +
       "build or check a typed value with a `typedefs:` constructor `T(...)` in an input binding",
   );
 });
@@ -87,7 +87,7 @@ test("a prompt's unknown function lists the builtins in order", () => {
 test("len is not a prompt function", () => {
   expectError(
     () => promptRefs("${len(t)}"),
-    "unknown prompt function 'len'; prompts call only formatting builtins (join, lower, render_as_json, upper); " +
+    "unknown prompt function 'len'; prompts call only formatting builtins (join, lower, lstrip, render_as_json, replace, rstrip, strip, upper); " +
       "build or check a typed value with a `typedefs:` constructor `T(...)` in an input binding",
   );
 });

@@ -278,7 +278,7 @@ test("a constructor is not a prompt function", () => {
   expectError(
     () => promptRefs("Order: ${Buy(order)}"),
     "unknown prompt function 'Buy'; prompts call only formatting builtins " +
-      "(join, lower, render_as_json, upper); build or check a typed value with a " +
+      "(join, lower, lstrip, render_as_json, replace, rstrip, strip, upper); build or check a typed value with a " +
       "`typedefs:` constructor `T(...)` in an input binding",
   );
 });

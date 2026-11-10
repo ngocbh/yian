@@ -135,11 +135,13 @@ function rejectNull(fn: string, value: Value, fallback = '""'): void {
   if (value === null) throw new TypeError(`${fn}() got null; give a default, e.g. \`${fn}(x :- ${fallback})\``);
 }
 
-/** Return `s` if it is text; throw on null or any other kind. */
-function requireText(fn: string, s: Value): string {
-  rejectNull(fn, s);
-  if (typeof s !== "string") throw new TypeError(`${fn}() takes str, got ${kindName(s)}`);
-  return s;
+/** Return `value` if it is text; throw on null or any other kind, naming parameter `param` after the first. */
+function requireText(fn: string, value: Value, param: string | null = null): string {
+  if (param === null) rejectNull(fn, value);
+  if (typeof value !== "string") {
+    throw new TypeError(`${fn}() takes str${param ? ` for ${param}` : ""}, got ${kindName(value)}`);
+  }
+  return value;
 }
 
 /**
@@ -176,6 +178,95 @@ registerTemplateFn("join", { params: [{ name: "value" }, { name: "sep", default:
 registerTemplateFn("upper", { params: [{ name: "s" }], call: (s) => requireText("upper", s).toUpperCase() });
 registerTemplateFn("lower", { params: [{ name: "s" }], call: (s) => requireText("lower", s).toLowerCase() });
 
+// Python's `str.isspace()` set, which `strip`, `lstrip`, `rstrip` and `split` remove. JS's `trim()`
+// differs: it removes U+FEFF and keeps U+001C to U+001F and U+0085.
+const WHITESPACE: ReadonlySet<number> = new Set([
+  0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x85, 0xa0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003,
+  0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000,
+]);
+
+/** Return whether the character `ch` (one code point) is whitespace, as Python's `str.isspace()` says. */
+function isSpace(ch: string): boolean {
+  return WHITESPACE.has(ch.codePointAt(0)!);
+}
+
+/** Return `value` if it is text, or null for an omitted (null) optional parameter `param`. */
+function optionalText(fn: string, value: Value, param: string): string | null {
+  return value === null ? null : requireText(fn, value, param);
+}
+
+registerTemplateFn("startswith", {
+  params: [{ name: "s" }, { name: "prefix" }],
+  call: (s, prefix) => requireText("startswith", s).startsWith(requireText("startswith", prefix, "prefix")),
+});
+registerTemplateFn("endswith", {
+  params: [{ name: "s" }, { name: "suffix" }],
+  call: (s, suffix) => requireText("endswith", s).endsWith(requireText("endswith", suffix, "suffix")),
+});
+
+/**
+ * Split text into parts. With no `sep`, split on runs of whitespace and drop empty parts; with a
+ * `sep`, split at each occurrence, keeping empty parts. Both work on whole characters (code
+ * points), as Python's `str.split` does.
+ */
+function split(s: Value, sep: Value): string[] {
+  const text = requireText("split", s);
+  const separator = optionalText("split", sep, "sep");
+  // Well-formed text and separator: a code unit match never starts or ends inside a surrogate pair.
+  if (separator !== null) {
+    if (separator === "") throw new TypeError("split() got an empty sep; omit it to split on whitespace");
+    return text.split(separator);
+  }
+  const parts: string[] = [];
+  let part = "";
+  for (const ch of text) {
+    if (!isSpace(ch)) part += ch;
+    else if (part !== "") {
+      parts.push(part);
+      part = "";
+    }
+  }
+  if (part !== "") parts.push(part);
+  return parts;
+}
+registerTemplateFn("split", { params: [{ name: "s" }, { name: "sep", default: null }], call: split });
+
+/**
+ * Return `s` without the characters at its `ends` that `chars` holds, or without whitespace when
+ * `chars` is null; characters are code points, as in Python's `str.strip`.
+ */
+function stripEnds(fn: string, s: Value, chars: Value, ends: "both" | "left" | "right"): string {
+  const text = [...requireText(fn, s)];
+  const given = optionalText(fn, chars, "chars");
+  const set = given === null ? null : new Set(given);
+  const strips = set === null ? isSpace : (ch: string) => set.has(ch);
+  let start = 0;
+  let stop = text.length;
+  if (ends !== "right") while (start < stop && strips(text[start]!)) start += 1;
+  if (ends !== "left") while (stop > start && strips(text[stop - 1]!)) stop -= 1;
+  return text.slice(start, stop).join("");
+}
+for (const [name, ends] of [["strip", "both"], ["lstrip", "left"], ["rstrip", "right"]] as const) {
+  registerTemplateFn(name, {
+    params: [{ name: "s" }, { name: "chars", default: null }],
+    call: (s, chars) => stripEnds(name, s, chars, ends),
+  });
+}
+
+/**
+ * Replace every occurrence of `old` in `s` with `new`. An empty `old` puts `new` before each
+ * character (code point) and at the end, as Python's `str.replace` does.
+ */
+function replace(s: Value, old: Value, replacement: Value): string {
+  const text = requireText("replace", s);
+  const target = requireText("replace", old, "old");
+  const by = requireText("replace", replacement, "new");
+  // `split`/`join`, not `replaceAll`, which reads `$&` and the like in the replacement.
+  if (target === "") return ["", ...text, ""].join(by);
+  return text.split(target).join(by);
+}
+registerTemplateFn("replace", { params: [{ name: "s" }, { name: "old" }, { name: "new" }], call: replace });
+
 /** Return the length of text (code points) or of a list (items). */
 function len(value: Value): bigint {
   rejectNull("len", value, "[]");
@@ -185,35 +276,55 @@ function len(value: Value): bigint {
 }
 registerTemplateFn("len", { params: [{ name: "obj" }], call: len });
 
-// The shipped `len` entry: a host that registers its own `len` replaces it, and a prompt may call
-// that one.
-const SHIPPED_LEN = TEMPLATE_FNS.get("len")!;
-
-/**
- * Return whether `name` names a shipped builtin a prompt can't call (`len`): it computes a value,
- * which belongs in an input binding. Bindings and conditions can call it.
- */
-export function isNonPromptBuiltin(name: string): boolean {
-  return TEMPLATE_FNS.get(name) === SHIPPED_LEN;
-}
+const STR = Type.scalar(ValueKind.STRING);
+const BOOL = Type.scalar(ValueKind.BOOLEAN);
 
 // Each shipped builtin's result type, keyed by its stored entry, so a host that registers another
-// function under a shipped name gets no result type. Typedef names are PascalCase, so no typedef
-// can take one of these names.
-const SHIPPED = new Map<TemplateFn | undefined, Type>(
+// function under a shipped name gets no result type, and a prompt may call it. Typedef names are
+// PascalCase, so no typedef can take one of these names.
+const SHIPPED = new Map<TemplateFn | undefined, { name: string; type: Type }>(
   Object.entries({
-    render_as_json: Type.scalar(ValueKind.STRING),
-    join: Type.scalar(ValueKind.STRING),
-    upper: Type.scalar(ValueKind.STRING),
-    lower: Type.scalar(ValueKind.STRING),
+    render_as_json: STR,
+    join: STR,
+    upper: STR,
+    lower: STR,
     len: Type.scalar(ValueKind.INTEGER),
-  }).map(([name, type]) => [TEMPLATE_FNS.get(name), type]),
+    startswith: BOOL,
+    endswith: BOOL,
+    split: new Type({ kind: ValueKind.LIST_STRING, element: STR }),
+    strip: STR,
+    lstrip: STR,
+    rstrip: STR,
+    replace: STR,
+  }).map(([name, type]) => [TEMPLATE_FNS.get(name), { name, type }]),
 );
 
+// The shipped builtins a prompt may call: those that give text. The others compute a value,
+// which belongs in an input binding.
+const PROMPT_BUILTINS: ReadonlySet<string> = new Set([
+  "render_as_json",
+  "join",
+  "upper",
+  "lower",
+  "strip",
+  "lstrip",
+  "rstrip",
+  "replace",
+]);
+
 /**
- * Return the type builtin `name` always returns: `int` for the shipped `len`, `str` for the other
- * builtins shipped here, `null` for an unknown name or a host function registered under the name.
+ * Return whether `name` names a shipped builtin a prompt can't call (`len`, `split`, ...): it
+ * computes a value, which belongs in an input binding. Bindings and conditions can call it.
+ */
+export function isNonPromptBuiltin(name: string): boolean {
+  const shipped = SHIPPED.get(TEMPLATE_FNS.get(name));
+  return shipped !== undefined && !PROMPT_BUILTINS.has(shipped.name);
+}
+
+/**
+ * Return the type builtin `name` always returns (`int` for the shipped `len`, `str` for `upper`,
+ * ...), `null` for an unknown name or a host function registered under the name.
  */
 export function builtinResultType(name: string): Type | null {
-  return SHIPPED.get(TEMPLATE_FNS.get(name)) ?? null;
+  return SHIPPED.get(TEMPLATE_FNS.get(name))?.type ?? null;
 }

@@ -23,7 +23,7 @@ expect:
     - code: compose.load
       message: |-
         flow has unresolved references:
-          node 'ask' prompt: unknown prompt function 'Buy'; prompts call only formatting builtins (join, lower, render_as_json, upper); build or check a typed value with a `typedefs:` constructor `T(...)` in an input binding
+          node 'ask' prompt: unknown prompt function 'Buy'; prompts call only formatting builtins (join, lower, lstrip, render_as_json, replace, rstrip, strip, upper); build or check a typed value with a `typedefs:` constructor `T(...)` in an input binding
       frames:
       - label: flow.yaml
         range: [15, 13, 15, 41]

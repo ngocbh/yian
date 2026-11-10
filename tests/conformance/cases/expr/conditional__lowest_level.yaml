@@ -1,0 +1,6 @@
+kind: expr
+# The conditional is the lowest level: `x :- y if c else z` reads `(x :- y) if c else z`.
+expr: "x :- y if c else z"
+values: {x: null, y: 1, c: true, z: 2}
+expect:
+  value: 1

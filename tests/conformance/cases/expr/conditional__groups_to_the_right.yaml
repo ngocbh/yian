@@ -1,0 +1,5 @@
+kind: expr
+expr: "'small' if n < 10 else 'medium' if n < 100 else 'large'"
+values: {n: 50}
+expect:
+  value: medium

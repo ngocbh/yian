@@ -1,0 +1,6 @@
+kind: expr
+# The test is tested for truth, as `and` and `or` test their operands: an empty list is false.
+expr: "'some' if xs else 'none'"
+values: {xs: []}
+expect:
+  value: none

@@ -1,0 +1,6 @@
+kind: expr
+# An index out of range is a miss for `:-`, `|` and `:?`, so the default is used.
+expr: "[xs[5] :- 'none', xs[-9] | xs[0]]"
+values: {xs: [a, b]}
+expect:
+  value: [none, a]

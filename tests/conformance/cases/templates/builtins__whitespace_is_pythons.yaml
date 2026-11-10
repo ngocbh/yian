@@ -1,0 +1,6 @@
+kind: expr
+# Python's str.isspace() set: U+0085 and U+001C are whitespace, U+FEFF is not.
+template: "${[strip(s), split(s)]}"
+values: {s: "\x85\x1cx　y﻿ "}
+expect:
+  value: ["x　y﻿", [x, "y﻿"]]

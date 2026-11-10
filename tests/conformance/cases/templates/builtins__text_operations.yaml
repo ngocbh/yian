@@ -1,0 +1,5 @@
+kind: expr
+template: "${[startswith(s, 'ab'), endswith(s, '😀'), split(' a  b '), split('a,,b', ','), strip(w), lstrip(w, ' ['), rstrip(w), replace(s, '', '-')]}"
+values: {s: "ab😀", w: " [x] "}
+expect:
+  value: [true, true, [a, b], [a, "", b], "[x]", "x] ", " [x]", "-a-b-😀-"]

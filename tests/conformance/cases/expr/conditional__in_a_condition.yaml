@@ -1,0 +1,6 @@
+kind: expr
+mode: condition
+expr: "(limit if strict else 0) < score"
+values: {limit: 5, strict: false, score: 3}
+expect:
+  value: true

@@ -1,0 +1,6 @@
+kind: expr
+mode: strict
+template: "First: ${xs[0] :- 'none'}"
+values: {xs: []}
+expect:
+  value: "First: none"

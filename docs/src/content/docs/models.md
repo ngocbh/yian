@@ -150,6 +150,10 @@ llm_config:
   A field's value is replaced whole.
 - Fields yian builds itself, such as the messages, tools, the output format and streaming, can't
   be set. Setting one fails at load and says why.
+- `openai: {store: false}` makes the agent's requests stateless, so OpenAI stores no response.
+  yian then sends the system prompt as `instructions`, asks for `reasoning.encrypted_content`,
+  and replays the model's reasoning from that encrypted content, which the run log records. A
+  resumed run sends the same requests. Without `store`, OpenAI's default stores responses.
 - On Azure and the Chat Completions providers, a model whose name starts with `gpt-5-pro`,
   `gpt-5.2-pro`, `gpt-5.4-pro`, `gpt-5.5-pro` or `gpt-5.6-sol`, or contains `codex`, is called
   through the Responses API; its block must then be empty. A block there fails at load, or before
@@ -201,8 +205,9 @@ $ yian auth openai --method subscription --login device --model gpt-5.5
 ```
 
 The login refreshes its token by itself and wins over an `OPENAI_API_KEY` in the environment.
-The subscription endpoint refuses `temperature` and `max_output_tokens` in the `openai` block;
-a run that sets either for such an agent fails before its first node. List the models the
+Its requests are always stateless, as with `store: false`, so the `openai` block can't set
+`store`; the subscription endpoint also refuses `temperature` and `max_output_tokens`. A run that
+sets any of them for such an agent fails before its first node. List the models the
 subscription offers with `yian models --auth-file F`; `F` is the auth file, even the default one.
 
 A run records which login each agent used, never the key. If you save or remove that login

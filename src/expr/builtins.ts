@@ -28,7 +28,15 @@
 
 import { compareCodePoints, reprText } from "../diagnostics.ts";
 import { FileRef, InboxRef, MemoryRef, Type, type Value, ValueKind } from "../typesys/index.ts";
-import { fromHost, isListKind, isRecord, valueRepr, writeAsJson, writeAsText } from "../typesys/values.ts";
+import {
+  canonicalTypeLabel,
+  fromHost,
+  isListKind,
+  isRecord,
+  valueRepr,
+  writeAsJson,
+  writeAsText,
+} from "../typesys/values.ts";
 import { uncallableReason } from "./grammar.ts";
 
 /** One parameter of a builtin; one with an own `default` is optional. */
@@ -737,6 +745,76 @@ const PROMPT_BUILTINS: ReadonlySet<string> = new Set([
 export function isNonPromptBuiltin(name: string): boolean {
   const shipped = SHIPPED.get(TEMPLATE_FNS.get(name));
   return shipped !== undefined && !PROMPT_BUILTINS.has(shipped.name);
+}
+
+/** What a shipped builtin's parameter takes, for the load check: kinds as `kindName` names them. */
+interface Takes {
+  /** The kinds it takes, `null` for any non-null value. */
+  readonly kinds: ReadonlySet<string> | null;
+  /** For a list, the kinds its items take. */
+  readonly items?: ReadonlySet<string>;
+  /** Whether a null leaves the parameter out. */
+  readonly omittable?: boolean;
+  /** The kinds as a message names them. */
+  readonly label: string;
+}
+
+const NUMBER_KINDS = ["int", "float", "bool"];
+const TEXT: Takes = { kinds: new Set(["str"]), label: "str" };
+const LIST: Takes = { kinds: new Set(["list"]), label: "a list" };
+const NUMBER: Takes = { kinds: new Set(NUMBER_KINDS), label: "a number" };
+const ANYTHING: Takes = { kinds: null, label: "a value" };
+const OPTIONAL_TEXT: Takes = { ...TEXT, omittable: true };
+
+// What each shipped builtin's parameters take, in order.
+const TAKES: Readonly<Record<string, readonly Takes[]>> = {
+  render_as_json: [ANYTHING, { kinds: new Set(["int"]), label: "int" }],
+  join: [LIST, TEXT],
+  upper: [TEXT],
+  lower: [TEXT],
+  len: [{ kinds: new Set(["str", "list"]), label: "str or list" }],
+  startswith: [TEXT, TEXT],
+  endswith: [TEXT, TEXT],
+  split: [TEXT, OPTIONAL_TEXT],
+  strip: [TEXT, OPTIONAL_TEXT],
+  lstrip: [TEXT, OPTIONAL_TEXT],
+  rstrip: [TEXT, OPTIONAL_TEXT],
+  replace: [TEXT, TEXT, TEXT],
+  str: [ANYTHING],
+  int: [{ kinds: new Set(["str", ...NUMBER_KINDS]), label: "str, int, float or bool" }],
+  float: [{ kinds: new Set(["str", ...NUMBER_KINDS]), label: "str, int, float or bool" }],
+  round: [NUMBER, { kinds: new Set(["int", "bool"]), omittable: true, label: "int" }],
+  any: [LIST],
+  all: [LIST],
+  min: [{ ...LIST, items: new Set(["str", ...NUMBER_KINDS]), label: "a list of numbers or texts" }],
+  max: [{ ...LIST, items: new Set(["str", ...NUMBER_KINDS]), label: "a list of numbers or texts" }],
+  sum: [{ ...LIST, items: new Set(NUMBER_KINDS), label: "a list of numbers" }],
+  abs: [NUMBER],
+};
+
+/**
+ * Return why an argument of type `typ` for parameter `index` of the shipped builtin `name` can
+ * never be taken, else `null`: its value is only ever null where the parameter needs one, or
+ * never of a kind the parameter takes (a list's items included, for `min`, `max` and `sum`). A
+ * type that may hold a value the parameter takes is left to the call.
+ */
+export function builtinArgumentError(name: string, index: number, typ: Type): string | null {
+  const shipped = SHIPPED.get(TEMPLATE_FNS.get(name));
+  const takes = shipped === undefined ? undefined : TAKES[shipped.name]?.[index];
+  const kinds = valueKinds(typ);
+  if (takes === undefined || kinds === null) return null;
+  const param = index === 0 ? "" : ` for ${TEMPLATE_FNS.get(name)!.params[index]!.name}`;
+  const refused = `${name}() takes ${takes.label}${param}, got `;
+  if (kinds.size === 0) return takes.omittable ? null : `${refused}null`;
+  if (takes.kinds !== null && ![...kinds].some((kind) => takes.kinds!.has(kind))) {
+    return refused + canonicalTypeLabel(typ);
+  }
+  const items = takes.items !== undefined && kinds.size === 1 ? itemOf(typ) : null;
+  const itemKinds = items === null ? null : valueKinds(items);
+  if (itemKinds !== null && itemKinds.size > 0 && ![...itemKinds].some((kind) => takes.items!.has(kind))) {
+    return refused + canonicalTypeLabel(typ);
+  }
+  return null;
 }
 
 /**

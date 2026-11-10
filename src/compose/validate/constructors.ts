@@ -13,7 +13,8 @@
  * - a field read on the result (`T(x).f`) names a field `T` can't have.
  *
  * `builtinFieldErrors` rejects a field read on a builtin whose result type is known
- * (`upper(x).f` reads a field of text), the same way.
+ * (`upper(x).f` reads a field of text), the same way, and `builtinArgumentErrors` an argument of a
+ * kind the builtin never takes (`upper(n)` with `n` an int).
  *
  * Given the types of the references an expression reads, a positional argument or a keyword field
  * whose inferred type is disjoint from the declared one is an error too. A narrower or unproven
@@ -27,7 +28,7 @@
 
 import { typeRelation } from "../../compile/validation.ts";
 import { reprText } from "../../diagnostics.ts";
-import { builtinResultType, TEMPLATE_FNS } from "../../expr/builtins.ts";
+import { bindArguments, builtinArgumentError, builtinResultType, TEMPLATE_FNS } from "../../expr/builtins.ts";
 import { constructorShapeError, inferExprType, ISINSTANCE, splitReference, stepsText } from "../../expr/expressions.ts";
 import { callSuffixOf, type ExprNode, iterSubtreesTopdown, Token, Tree } from "../../expr/grammar.ts";
 import { outputContractFieldError, ValueContract } from "../../nodes/contracts.ts";
@@ -108,6 +109,48 @@ export function builtinFieldErrors(tree: ExprNode): string[] {
     if (typ === null) continue;
     const error = resultFieldError(node, name, typ);
     if (error !== null) errors.push(error);
+  }
+  return errors;
+}
+
+/**
+ * Return why each call to a shipped builtin in one expression can never succeed: an argument
+ * whose type the parameter never takes (`builtinArgumentError`), such as `upper(n)` with `n` an
+ * int, or a literal `null` where a value is needed. An argument of unknown type is left to the
+ * call.
+ *
+ * @param tree A parsed `${...}` interior or condition.
+ * @param refType Resolves a reference path to its proven type; `null` (the default) types only
+ *   literals and what they build.
+ * @param typeFn Resolves a constructor name to its type; `null` (the default) leaves them unknown.
+ * @returns One message per argument, in source order.
+ */
+export function builtinArgumentErrors(
+  tree: ExprNode,
+  refType: RefType | null = null,
+  typeFn: TypeFn | null = null,
+): string[] {
+  if (!(tree instanceof Tree)) return [];
+  const errors: string[] = [];
+  for (const node of iterSubtreesTopdown(tree)) {
+    const callSuffix = node.data === "refcall" ? callSuffixOf(node) : undefined;
+    const name = String(node.children[0]);
+    const fn = TEMPLATE_FNS.get(name);
+    if (callSuffix === undefined || fn === undefined) continue;
+    const args = callSuffix.children as Tree[];
+    const positional = args.filter((arg) => arg.children.length === 1).map((arg) => arg.children[0]!);
+    const keywords = new Map(
+      args.filter((arg) => arg.children.length === 2).map((arg) => [String(arg.children[0]), arg.children[1]!]),
+    );
+    // A call that doesn't bind is reported by `checkCalls`.
+    const bound = bindArguments(fn, positional, keywords);
+    if (typeof bound === "string") continue;
+    bound.forEach((arg, index) => {
+      if (!(arg instanceof Tree || arg instanceof Token)) return;
+      const typ = argumentType(arg, refType, typeFn ?? (() => null));
+      const error = typ === null ? null : builtinArgumentError(name, index, typ);
+      if (error !== null) errors.push(error);
+    });
   }
   return errors;
 }

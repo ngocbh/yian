@@ -461,6 +461,62 @@ test("a parent cannot construct a child's typedef", async () => {
   expect(error.message).toContain("a flow call 'Hold' inside ${...} is not supported");
 });
 
+// ---------- builtin arguments ----------
+
+/** A flow whose node `c` binds `x: <binding>`, with typed flow inputs to read. */
+const typedConsumer = (binding: string) => `id: p
+name: p
+input:
+  n: !int
+  s: !str
+  xs: !list(str)
+  maybe: !Optional(int)
+  any: !object
+nodes:
+  c:
+    kind: code
+    input:
+      x: ${binding}
+    code: |
+      return inputs["x"]
+output: \${c.output}
+`;
+
+describe("a builtin argument of a kind the builtin never takes is a load error", () => {
+  test.each([
+    ["${upper(input.n)}", "upper() takes str, got int"],
+    ["${upper(input.maybe)}", "upper() takes str, got Optional(int)"],
+    ["${upper(null)}", "upper() takes str, got null"],
+    ["${sum(input.xs)}", "sum() takes a list of numbers, got list(str)"],
+    ["${min(input.n)}", "min() takes a list of numbers or texts, got int"],
+    ["${split(input.s, sep=input.n)}", "split() takes str for sep, got int"],
+    ["${int(input.xs)}", "int() takes str, int, float or bool, got list(str)"],
+    ["${len(5)}", "len() takes str or list, got int(5..5)"],
+    ['${round("2.5")}', 'round() takes a number, got Literal("2.5")'],
+  ])("%s", (binding, message) => {
+    const error = loadError(() => loadedNodes(typedConsumer(binding)));
+    expect(error.message).toBe(`flow has builtin calls that can never succeed:\n  node 'c' input 'x' from: ${message}`);
+  });
+
+  test.each([
+    "${upper(input.s)}",
+    "${upper(input.any.name)}",
+    '${upper(input.maybe :- "")}',
+    "${round(input.n, null)}",
+    "${split(input.s, null)}",
+    "${str(input.xs)}",
+    "${sum([1, 2.5, true])}",
+  ])("%s loads: the argument may be one", (binding) => {
+    expect(() => loadedNodes(typedConsumer(binding))).not.toThrow();
+  });
+
+  test("in a condition, a literal argument is checked", () => {
+    const text = CASE_FLOW.replace("Buy(d.output).conviction > 0.4", 'upper(5) == "5"');
+    const error = loadError(() => loadedNodes(text));
+    expect(error.message).toBe("case node 'route' cases[0].when: upper() takes str, got int(5..5)");
+  });
+});
+
 // ---------- names that are not constructors ----------
 
 test("a builtin type name in a binding is not a conversion", () => {

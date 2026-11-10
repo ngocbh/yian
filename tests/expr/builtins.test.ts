@@ -5,7 +5,8 @@
  * `tests/fixtures/python_builtins.json` are what CPython 3.12 gives (written by
  * `tests/fixtures/python_builtins.py`): the whitespace set, `split`, `strip`, `lstrip`, `rstrip`
  * and `replace` over astral and whitespace characters, `int` and `float` of text, `int` of a float
- * and `float` of an int, and `round` of floats and ints.
+ * and `float` of an int, `round` of floats and ints, `sum` of floats, ints and bools, and `min` and
+ * `max` of texts beyond the BMP.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -288,5 +289,97 @@ describe("round", () => {
       o: Type.scalar(ValueKind.INTEGER).replace({ nullable: true }),
     };
     expect(inferExprType(parseExpr(text), (path) => types[path] ?? null)).toEqual(want);
+  });
+});
+
+describe("numbers and lists", () => {
+  /** Decode one item of a `sum` row. */
+  const item = (x: Python): Value => (typeof x === "boolean" ? x : pythonValue(x)!);
+
+  test.each(PYTHON["sum"] as [Python[], Python][])("sum(%j) is Python's (no nan)", (xs, want) => {
+    expectPython(() => call("sum", xs.map(item)), want === "nan" ? { error: "ValueError" } : want);
+  });
+
+  test.each(PYTHON["minmax_text"] as [string[], string, string][])(
+    "min and max of %j compare code points",
+    (xs, least, most) => {
+      expect([call("min", xs), call("max", xs)]).toEqual([least, most]);
+    },
+  );
+
+  test.each<[string, Value]>([
+    ["sum([])", 0n],
+    ["sum([1, 2, true])", 4n],
+    ["sum([1, 2.5])", 3.5],
+    ["sum([0.1, 0.2, 0.3])", 0.6],
+    ["min([3, 1.5, 2])", 1.5],
+    ["max([1, 1.0, true])", 1n],
+    ["min([1.0, 1])", 1],
+    ["min([true, 2])", true],
+    ["max(['b', 'a', 'c'])", "c"],
+    ["abs(-3)", 3n],
+    ["abs(-2.5)", 2.5],
+    ["abs(true)", 1n],
+    ["any([0, '', [], 'x'])", true],
+    ["any([])", false],
+    ["all([1, 'a', [0]])", true],
+    ["all([1, null])", false],
+    ["all([])", true],
+  ])("%s", (text, want) => {
+    expect(run(text)).toBe(want);
+  });
+
+  test("a whole float stays a float", () => {
+    expect(run("[sum([0.5, 0.5]), abs(-2.0), max([1.0, 0])]")).toEqual([1, 2, 1]);
+    expect(typeof run("sum([0.5, 0.5])")).toBe("number");
+  });
+
+  test.each<[string, string]>([
+    ["sum(x)", "sum() got null; give a default, e.g. `sum(x :- [])`"],
+    ["sum('12')", "sum() takes a list, got str"],
+    ["sum([1, '2'])", "sum() takes a list of numbers, got a str item"],
+    ["sum([1, null])", "sum() takes a list of numbers, got a null item"],
+    ["sum([inf, -inf])", "sum() has no numeric result: it adds inf and -inf"],
+    ["sum([10 ** 400, 0.5])", "sum() got an int too large for a float"],
+    ["min([])", "min() got an empty list"],
+    ["max([1, 'a'])", "max() can't compare int and str"],
+    ["min([1, null])", "min() got a null item"],
+    ["max([[1]])", "max() takes a list of numbers or texts, got a list item"],
+    ["abs('1')", "abs() takes a number, got str"],
+    ["abs(x)", "abs() got null; give a default, e.g. `abs(x :- 0)`"],
+    ["any('ab')", "any() takes a list, got str"],
+    ["all(x)", "all() got null; give a default, e.g. `all(x :- [])`"],
+  ])("%s fails", (text, message) => {
+    const name = text.slice(0, text.indexOf("("));
+    expect(failure(text)).toBe(`expression function '${name}' failed: ${message}`);
+  });
+
+  const LISTS: Record<string, Type> = {
+    ints: new Type({ kind: ValueKind.LIST_INTEGER, element: Type.scalar(ValueKind.INTEGER) }),
+    floats: new Type({ kind: ValueKind.LIST_NUMBER, element: Type.scalar(ValueKind.NUMBER) }),
+    texts: new Type({ kind: ValueKind.LIST_STRING, element: Type.scalar(ValueKind.STRING) }),
+    maybe: new Type({
+      kind: ValueKind.LIST_INTEGER,
+      element: Type.scalar(ValueKind.INTEGER).replace({ nullable: true }),
+    }),
+    i: Type.scalar(ValueKind.INTEGER),
+    f: Type.scalar(ValueKind.NUMBER),
+  };
+
+  test.each<[string, Type | null]>([
+    ["any(ints)", Type.scalar(ValueKind.BOOLEAN)],
+    ["all(x)", Type.scalar(ValueKind.BOOLEAN)],
+    ["min(ints)", Type.scalar(ValueKind.INTEGER)],
+    ["max(texts)", Type.scalar(ValueKind.STRING)],
+    ["min(maybe)", Type.scalar(ValueKind.INTEGER)],
+    ["max(x)", null],
+    ["sum(ints)", Type.scalar(ValueKind.INTEGER)],
+    ["sum(floats)", Type.scalar(ValueKind.NUMBER)],
+    ["sum(texts)", null],
+    ["abs(i)", Type.scalar(ValueKind.INTEGER)],
+    ["abs(f)", Type.scalar(ValueKind.NUMBER)],
+    ["abs(x)", null],
+  ])("%s is typed at load", (text, want) => {
+    expect(inferExprType(parseExpr(text), (path) => LISTS[path] ?? null)).toEqual(want);
   });
 });

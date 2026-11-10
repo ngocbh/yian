@@ -53,6 +53,7 @@ import {
   roundQuotient,
   TEMPLATE_FNS,
   type TemplateFn,
+  truthy,
 } from "./builtins.ts";
 import { ResolvedValue, type RootRead, SourceRef, type TracedValue, ValueRoute } from "./lineage.ts";
 import {
@@ -663,14 +664,6 @@ function minus(value: Value): Value {
     );
   }
   return -x;
-}
-
-/** Return whether a value is truthy: all but `false`, `null`, a zero, `""`, `[]` and a record with no field. */
-function truthy(value: Value): boolean {
-  if (value === null || value === false || value === 0n || value === 0 || value === "") return false;
-  if (Array.isArray(value)) return value.length > 0;
-  if (isRecord(value)) return Object.keys(value).length > 0;
-  return true;
 }
 
 // The operator tokens between the operands of a `sum` / `product` / `power` chain. A literal

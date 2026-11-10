@@ -743,7 +743,7 @@ function skippedOperandIn(
   const reads = guardedReads(expression);
   for (const tree of iterSubtreesTopdown(expression)) {
     if (!ARITHMETIC.has(tree.data)) continue;
-    for (const operand of tree.children) {
+    for (const operand of tree.children.flatMap(branchesOf)) {
       const guard = reads.find((read) => read.node === operand)?.guard ?? NOTHING;
       if (operand instanceof Tree && provesNotNull(guard, referencePath(operand), registry)) continue;
       for (const group of nullGroups(operand, known)) {
@@ -784,6 +784,15 @@ function excludesNull(typeName: string, registry: TypeRegistry): boolean {
     if (error instanceof TypeCheckError) return false;
     throw error;
   }
+}
+
+/**
+ * Return an arithmetic operand as the operands it may evaluate to: each branch of a conditional,
+ * whose value is the branch's, else the operand itself.
+ */
+function branchesOf(operand: ExprNode): ExprNode[] {
+  if (!(operand instanceof Tree) || operand.data !== "if_expr") return [operand];
+  return [operand.children[0]!, operand.children[2]!].flatMap(branchesOf);
 }
 
 /**

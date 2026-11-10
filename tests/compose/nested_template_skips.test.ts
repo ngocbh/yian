@@ -121,6 +121,18 @@ test("nested arithmetic on a skipped value is rejected at its line", () => {
   expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(line);
 });
 
+test("arithmetic on a conditional looks into both branches", () => {
+  const bindings = ["${(order.output if input.approve else 0) + 1}", "${(0 if input.approve else order.output) + 1}"];
+  for (const binding of bindings) {
+    expect(loadError(() => compiled(flow(binding))).diagnostic.message).toBe(
+      `node 'c' input 'x': ${binding} does arithmetic on order.output, which is null when node 'order' is ` +
+        "skipped; give it a default with :-, e.g. (order.output :- <default>)",
+    );
+  }
+  // A branch the test proves non-null needs no default.
+  expect(() => compiled(flow("${(order.output if order.output != null else 0) + 1}"))).not.toThrow();
+});
+
 test("nested output arithmetic on a skipped value is rejected", () => {
   const text = flow("${order.output}", "\n  r: {a: '${order.output + 1}'}");
 

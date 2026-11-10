@@ -1742,7 +1742,8 @@ const BOOLEAN_NODES: ReadonlySet<string> = new Set([
  *   non-null; `a :? m`: the non-null `a` (`m` is the error message);
  * - `a if c else b`: `a` and `b` joined, where a `null` branch makes the other `Optional` and an
  *   empty `[]` adds nothing;
- * - `xs[i]`: the item type of `xs`'s list type; `s[i]` and `s[a:b]` of a text: `str`;
+ * - `xs[i]`: the item type of `xs`'s list type, `Optional` when `xs` may be null; `s[i]` and
+ *   `s[a:b]` of a text: `str`, an index `Optional` as for a list;
  * - `xs[a:b]`: `xs`'s list type, non-null;
  * - `[e for ...]`: `list` of `e`'s type in its scope;
  * - a list literal: `list` of its items joined.
@@ -1836,10 +1837,15 @@ export function inferExprType(
     case "subscript": {
       const typ = infer(tree.children[0]!);
       if (typ === null) return null;
+      const index = (tree.children[1] as Tree).data === "index";
       const text = typ.members === undefined && TEXT_KINDS.has(typ.kind);
-      if (text) return Type.scalar(ValueKind.STRING);
-      if (!isListKind(typ.kind)) return null;
-      return (tree.children[1] as Tree).data === "index" ? (typ.element ?? null) : typ.replace({ nullable: false });
+      let item: Type | null;
+      if (text) item = Type.scalar(ValueKind.STRING);
+      else if (!isListKind(typ.kind)) return null;
+      else if (!index) return typ.replace({ nullable: false });
+      else item = typ.element ?? null;
+      // A null base is a miss, so an index of a base that may be null may be null too.
+      return item !== null && index && typ.nullable ? item.replace({ nullable: true }) : item;
     }
     case "list_comp": {
       const scope = new Map(vars);

@@ -175,8 +175,13 @@ test.each<[string, Type | null]>([
   ["s[1:]", Type.scalar(ValueKind.STRING)],
   ["d[0]", Type.scalar(ValueKind.STRING)],
   ["u[0]", null],
+  // A null base is a miss, so an index of a list that may be null may be null too.
+  ["oxs[0]", Type.scalar(ValueKind.INTEGER).replace({ nullable: true })],
+  ["os[0]", Type.scalar(ValueKind.STRING).replace({ nullable: true })],
 ])("the subscript %s is typed by its base", (source, want) => {
   const types: Record<string, Type> = {
+    oxs: new Type({ kind: ValueKind.LIST_INTEGER, element: Type.scalar(ValueKind.INTEGER), nullable: true }),
+    os: Type.scalar(ValueKind.STRING).replace({ nullable: true }),
     xs: new Type({ kind: ValueKind.LIST_INTEGER, element: Type.scalar(ValueKind.INTEGER) }),
     s: Type.scalar(ValueKind.STRING),
     d: Type.scalar(ValueKind.DATE),

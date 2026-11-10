@@ -1,0 +1,22 @@
+# `!include(T)` checks the file's value against `T` as a literal after `!T` is checked: one that
+# doesn't fit fails at the tag, naming the file, the place in the value and its line in the file.
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    shots: !include(list(str)) examples.yaml
+  output: ${shots.output}
+files:
+  examples.yaml: |
+    - one
+    - two
+    - 3
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "'shots': `!include(list(str))` file 'examples.yaml' is not a valid list(str): 3 does not match declared type str (at `shots[2]`, line 3 of the file)"
+      frames:
+      - label: flow.yaml
+        range: [4, 10, 4, 43]

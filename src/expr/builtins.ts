@@ -617,17 +617,18 @@ const FLOAT = Type.scalar(ValueKind.NUMBER);
 /** An argument at load: its inferred type, `null` when unknown, or `undefined` when the call leaves it out. */
 export type ArgType = Type | null | undefined;
 
-// The kind name (as `kindName` gives it) of a non-null value of each scalar kind.
-const KIND_NAMES: ReadonlyMap<ValueKind, string> = new Map([
-  [ValueKind.STRING, "str"],
-  [ValueKind.DATE, "str"],
-  [ValueKind.DATETIME, "str"],
-  [ValueKind.INTEGER, "int"],
-  [ValueKind.NUMBER, "float"],
-  [ValueKind.BOOLEAN, "bool"],
-  [ValueKind.FILE, "file"],
-  [ValueKind.INBOX, "inbox"],
-  [ValueKind.MEMORY, "memory"],
+// The kind names (as `kindName` gives them) a non-null value of each scalar kind may have. A
+// `float` slot keeps an int as it is, so a float-typed value may be an int.
+const KIND_NAMES: ReadonlyMap<ValueKind, readonly string[]> = new Map([
+  [ValueKind.STRING, ["str"]],
+  [ValueKind.DATE, ["str"]],
+  [ValueKind.DATETIME, ["str"]],
+  [ValueKind.INTEGER, ["int"]],
+  [ValueKind.NUMBER, ["float", "int"]],
+  [ValueKind.BOOLEAN, ["bool"]],
+  [ValueKind.FILE, ["file"]],
+  [ValueKind.INBOX, ["inbox"]],
+  [ValueKind.MEMORY, ["memory"]],
 ]);
 
 /**
@@ -647,8 +648,13 @@ export function valueKinds(typ: Type): ReadonlySet<string> | null {
   if (typ.kind === ValueKind.NONE) return new Set();
   if (isListKind(typ.kind)) return new Set(["list"]);
   if (typ.kind === ValueKind.OBJECT) return typ.fields !== undefined ? new Set(["record"]) : null;
-  const kind = KIND_NAMES.get(typ.kind);
-  return kind === undefined ? null : new Set([kind]);
+  if (typ.kind === ValueKind.NUMBER && typ.bounds !== undefined) {
+    // Bounds that hold no whole number, as a literal `1.5`'s do, leave no int.
+    const [lo, hi] = typ.bounds;
+    if (lo !== null && hi !== null && Math.ceil(Number(lo)) > Number(hi)) return new Set(["float"]);
+  }
+  const kinds = KIND_NAMES.get(typ.kind);
+  return kinds === undefined ? null : new Set(kinds);
 }
 
 /** Whether every non-null value of `typ` is an int or a bool; `false` when `typ` is unknown. */
@@ -657,10 +663,13 @@ function intLike(typ: ArgType): boolean {
   return kinds !== null && kinds.size > 0 && [...kinds].every((kind) => kind === "int" || kind === "bool");
 }
 
-/** Whether every non-null value of `typ` is a float; `false` when `typ` is unknown. */
+/**
+ * Whether `typ` is a float type: its non-null values are floats, or ints a float slot keeps;
+ * `false` when `typ` is unknown.
+ */
 function floatLike(typ: ArgType): boolean {
   const kinds = typ ? valueKinds(typ) : null;
-  return kinds !== null && kinds.size === 1 && kinds.has("float");
+  return kinds !== null && kinds.has("float") && [...kinds].every((kind) => kind === "float" || kind === "int");
 }
 
 /**

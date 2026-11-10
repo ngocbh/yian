@@ -485,6 +485,30 @@ nodes:
 output: \${c.output}
 `;
 
+describe("a float-typed value may hold an int, so it passes where an int goes", () => {
+  const text = `id: p
+name: p
+input:
+  f: !float
+  xs: !list(int)
+nodes:
+  c:
+    kind: code
+    input:
+      tail: \${input.xs[input.f:]}
+      item: \${input.xs[input.f]}
+      json: \${render_as_json(input.xs, input.f)}
+      rounded: \${round(2.25, input.f)}
+    code: |
+      return [inputs["tail"], inputs["item"], inputs["json"], inputs["rounded"]]
+output: \${c.output}
+`;
+
+  test("the flow loads and runs with an int for the float", async () => {
+    expect(await ok(text, { f: 1n, xs: [1n, 2n, 3n] })).toStrictEqual([[2n, 3n], 2n, "[\n 1,\n 2,\n 3\n]", 2.2]);
+  });
+});
+
 describe("a subscript of a kind it never takes is a load error", () => {
   test.each([
     [

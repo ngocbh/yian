@@ -507,7 +507,7 @@ function promptTextCursors(cursor: SourceCursor): SourceCursor[] {
 }
 
 /**
- * Refuse a value `!include(T)` read, for a `T` other than `str`, as prompt text, and any
+ * Refuse a value `!include(T)` read as YAML, for a `T` that isn't text, as prompt text, and any
  * `!include(T)` as a `steer_inbox:` render, which is a template over each event.
  *
  * @throws LoadError at the first one.
@@ -515,7 +515,7 @@ function promptTextCursors(cursor: SourceCursor): SourceCursor[] {
 function rejectTypedPromptText(cursor: SourceCursor, diagnostics: LoadDiagnostics): void {
   for (const field of promptTextCursors(cursor)) {
     const include = field.typedInclude;
-    if (include === null || include.type === "str") continue;
+    if (include === null || include.data === null) continue;
     throw diagnostics.error(
       `${includeFile(include.path, include.type)}: \`${field.keyText}:\` takes text; read the file with ` +
         "`!include(str)`",
@@ -768,7 +768,7 @@ export class AgentDescriptor extends NodeDescriptor {
     options: { sitePath: readonly (string | number)[]; catalogBuilder: SourceCatalogBuilder },
   ): this {
     for (const field of promptTextCursors(cursor)) {
-      const definitionId = field.typedInclude?.type === "str" ? field.tagDefinitionId : null;
+      const definitionId = field.typedInclude?.data === null ? field.tagDefinitionId : null;
       if (definitionId !== null) options.catalogBuilder.consumedTags.add(definitionId);
     }
     return super.withSourceOrigins(cursor, options);

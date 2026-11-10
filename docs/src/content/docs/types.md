@@ -189,9 +189,9 @@ output: !Size ${size.output}
 - `output: !T {...}` is one value of type `T`. Without the tag, `output: {...}` is a record of
   flow outputs.
 - `!include` is the one tag that isn't a type: it reads a text value from a file. Where a tag
-  goes, `!include(T) PATH` stands for `!T` with the file's value: for `!include(str)` its text
-  as written, for any other `T` the YAML value it holds (see
-  [Prompts in files](/agents/#prompts-in-files)).
+  goes, `!include(T) PATH` stands for `!T` with the file's value: its text as written when
+  every value of `T` but null is text (`str`, `Optional(str)`, a `Literal`, a typedef naming
+  one), else the YAML value it holds (see [Prompts in files](/agents/#prompts-in-files)).
 
 ### What a tag checks
 

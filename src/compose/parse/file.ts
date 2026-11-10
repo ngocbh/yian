@@ -31,6 +31,7 @@ import { yamlReadAs } from "../helpers/yaml_words.ts";
 import { notTextError, rejectInfinityName, valueTypeError } from "../nodes/base.ts";
 import { KINDS, REMOVED_KINDS } from "../nodes/index.ts";
 import {
+  type IncludedValues,
   SourceAccessError,
   SourceCursor,
   SourceDocument,
@@ -551,7 +552,7 @@ function nonTextKeyMessage(key: Value, text: string, cutValue: string | undefine
  * @param text The flow file's YAML text.
  * @param label The name that identifies the file in diagnostics.
  * @param included The text of each `!include` path, as `SourceDocument.parse` takes it.
- * @param data The value of each `!include(T)` path, as `SourceDocument.parse` takes it.
+ * @param typed The values `!include(T)` reads, as `SourceDocument.parse` takes them.
  * @throws LoadError at the problem for invalid YAML, at the key for a key YAML read as non-text,
  *   and at the second key for a repeated key.
  */
@@ -559,11 +560,11 @@ export function parseSourceDocument(
   text: string,
   label: string,
   included?: ReadonlyMap<string, string>,
-  data?: ReadonlyMap<string, SourceDocument>,
+  typed?: IncludedValues,
 ): SourceDocument {
   let document: SourceDocument;
   try {
-    document = SourceDocument.parse(text, label, included, data);
+    document = SourceDocument.parse(text, label, included, typed);
   } catch (error) {
     if (!(error instanceof SourceSyntaxError)) throw error;
     throw new LoadDiagnostics(label, text).error(`invalid YAML: ${error.message}`, {

@@ -448,9 +448,8 @@ test.each([
   ["int", "123456789012345678901234567890\n", 123456789012345678901234567890n],
   ["list(str)", "- one\n- ${HOME}\n- $$x\n- 'call(x)'\n- call(y)\n", ["one", "${HOME}", "$$x", "call(x)", "call(y)"]],
   ["list(int)", "[1, 2, 3]", [1n, 2n, 3n]],
-  ["Optional(str)", "", null],
+  ["Optional(int)", "", null],
   ["Optional(int)", "null\n", null],
-  ["Optional(str)", "yes\n", "yes"],
   ["Rows", "rows:\n  - sku: a\n    qty: 2\n", { rows: [{ sku: "a", qty: 2n }] }],
   ["object", '{"a": [1, "x", 2.5], "b": null, "c": true}', { a: [1n, "x", 2.5], b: null, c: true }],
 ])("!include(%s) reads the file as one YAML value", async (type, text, value) => {
@@ -458,6 +457,27 @@ test.each([
   expect(await outputOf(await load(typedOutputFlow(`!include(${type}) data.yaml`)))).toEqual(value);
   const entry = `id: f\nname: f\ntypedefs:\n  Row: {sku: str, qty: int}\n  Rows: {rows: list(Row)}\nnodes:\n  v: !include(${type}) data.yaml\noutput: \${v.output}\n`;
   expect(await outputOf(await load(entry))).toEqual(value);
+});
+
+test.each([
+  ["a typedef naming str", "Text"],
+  ["Optional(str)", "Optional(str)"],
+  ["an optional typedef", "Note"],
+  ["a Literal", "Literal(yes)"],
+])("!include(T) of %s, whose values are text, reads the file's text exactly", async (_, type) => {
+  write({ "a.md": type.startsWith("Literal") ? "yes" : "# Notes\r\n- $${x}: ${y}\n" });
+  const flow =
+    "id: f\nname: f\ntypedefs:\n  Text: str\n  Note: Optional(Text)\n" +
+    `nodes:\n  v: !include(${type}) a.md\noutput: \${v.output}\n`;
+  expect(await outputOf(await load(flow))).toBe(type.startsWith("Literal") ? "yes" : "# Notes\r\n- $${x}: ${y}\n");
+});
+
+test("text a text T reads is checked against T", async () => {
+  write({ "a.md": "yes\n" });
+  const { message } = await failure(load("id: f\nname: f\nnodes:\n  v: !include(Literal(yes)) a.md\noutput: ${v.output}\n"));
+  expect(message).toBe(
+    "'v': `!include(Literal(yes))` file 'a.md' is not a valid Literal(yes): \"yes\\n\" is not one of Literal(yes)",
+  );
 });
 
 test("a typed value's strings stay as written inside a value holding ${...}", async () => {
@@ -693,7 +713,7 @@ test("a compact flow's agent sends its !include(str) prompt as written", async (
 
 test.each([
   ["prompt:", "    prompt: !include(list(str)) a.yaml\n", 11],
-  ["system_prompt:", "    system_prompt: !include(Optional(str)) a.yaml\n    prompt: hi\n", 11],
+  ["system_prompt:", "    system_prompt: !include(list(str)) a.yaml\n    prompt: hi\n", 11],
   ["user:", "    prompt:\n      - user: !include(object) a.yaml\n", 12],
 ])("prompt text a typed !include reads, as %s, fails at the tag: the field takes text", async (field, prompts, line) => {
   write({ "a.yaml": "[a]" });
@@ -761,4 +781,10 @@ test("an alias of a typed !include counts as a copy of its value, as the value w
   expect(await outputOf(await load(outputFlow("{a: &x !include(list(int)) s.yaml}"), { env: FIFTY_NODES }))).toEqual({
     a: Array.from({ length: 20 }, (_, i) => BigInt(i)),
   });
+});
+
+test("a prompt read with a text T other than str is sent as written", async () => {
+  write({ "ask.md": "Say $$ for ${question}." });
+  const prompts = "    prompt: !include(Optional(str)) ask.md\n";
+  expect((await sentMessages(await load(agentFlow(prompts)))).at(-1)).toEqual(["user", "Say $$ for ${question}."]);
 });

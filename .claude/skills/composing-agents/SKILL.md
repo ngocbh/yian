@@ -131,8 +131,9 @@ output:
   `${...}` checked at load). It works on any text value, never on a key, list or mapping or where
   a type goes (`input:` and `variables:` declarations, a node's `output:` type, `typedefs:`).
   `!include(str) file.md` sends the text exactly as written, never as a template (`$$`, `${...}`
-  and CRLF stay). `!include(T) file.json` reads a YAML or JSON value of type `T` where a tag goes,
-  as `examples: !include(list(str)) examples.json` in `variables:`; write `list(str)`, not
+  and CRLF stay); so does any `T` whose values are text (`Optional(str)`, a typedef naming `str`).
+  `!include(T) file.json` of any other `T` reads a YAML or JSON value where a tag goes, as
+  `examples: !include(list(str)) examples.json` in `variables:`; write `list(str)`, not
   `list[str]`. See [Agents](https://yian.readthedocs.io/agents/#prompts-in-files).
 - **Order without data** with `depends_on: [a]` (skipped when `a` is skipped) or
   `runs_after: [a]` (runs either way). Both take a list.

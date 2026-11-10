@@ -120,12 +120,23 @@ const INCLUDE_TAG = "include";
 /** A local tag `include(T)`, whose scalar names a file to read a value of type `T` from. */
 const TYPED_INCLUDE_TAG = /^include\((.*)\)$/s;
 
-/** The type whose `!include(T)` reads a file's text as written, not as YAML. */
+/** The text type, whose `!include(T)` reads a file's text as written, not as YAML. */
 const TEXT_TYPE = "str";
 
 const NO_INCLUDES: ReadonlyMap<string, string> = new Map();
 
-const NO_DATA: ReadonlyMap<string, SourceDocument> = new Map();
+/** The values `!include(T)` reads, by path as written, and which `T`s read their file's text. */
+export interface IncludedValues {
+  /** Each path's file read as one plain YAML value (`parseData`), for a `T` that doesn't read text. */
+  readonly values: ReadonlyMap<string, SourceDocument>;
+  /**
+   * Each `T`, as written, whose `!include(T)` reads its file's text: one whose every value but
+   * null is text, such as `str` or a typedef naming it.
+   */
+  readonly textTypes: ReadonlySet<string>;
+}
+
+const NO_VALUES: IncludedValues = { values: new Map(), textTypes: new Set([TEXT_TYPE]) };
 
 /** An `!include` value a parse wasn't given the text of, or the data of. */
 export interface IncludeSite {
@@ -410,11 +421,12 @@ export class SourceDocument {
    *
    * `included` maps an `!include` path, as written, to the file's text. Such a value reads as
    * that text, its line endings as LF: a string, never resolved as a plain scalar, untagged,
-   * marked `included`, and located at the `!include` value. An `!include(str)` value reads as the
-   * text exactly, tagged `str` and marked `verbatim`. An `!include(T)` value of any other `T`
-   * reads as the value `data` holds for its path (`parseData`), tagged `T`, each string in it
-   * marked `verbatim`, and every part of it located at the `!include(T)` value. A path `included`
-   * or `data` lacks is listed in `includes`.
+   * marked `included`, and located at the `!include` value. An `!include(T)` value whose `T` is
+   * in `typed.textTypes` (by default only `str`) reads as the text exactly, tagged `T` and marked
+   * `verbatim`. One of any other `T` reads as the value `typed.values` holds for its path
+   * (`parseData`), tagged `T`, each string in it marked `verbatim`, and every part of it located
+   * at the `!include(T)` value; it counts toward the node limit as that value's nodes, at each place
+   * it appears. A path the parse lacks the text or value of is listed in `includes`.
    *
    * @throws SourceSyntaxError when the text holds a character YAML refuses, is not one valid
    *   YAML document, or holds a node the flow loader can't build, a tag that is bare or
@@ -426,9 +438,9 @@ export class SourceDocument {
     text: string,
     label = "<flow>",
     included: ReadonlyMap<string, string> = NO_INCLUDES,
-    data: ReadonlyMap<string, SourceDocument> = NO_DATA,
+    typed: IncludedValues = NO_VALUES,
   ): SourceDocument {
-    return SourceDocument._compose(text, label, included, data, false);
+    return SourceDocument._compose(text, label, included, typed, false);
   }
 
   /**
@@ -439,7 +451,7 @@ export class SourceDocument {
    * @throws SourceSyntaxError as `parse` does, and at the first tag, anchor, alias or merge key.
    */
   static parseData(text: string, label: string): SourceDocument {
-    return SourceDocument._compose(text, label, NO_INCLUDES, NO_DATA, true);
+    return SourceDocument._compose(text, label, NO_INCLUDES, NO_VALUES, true);
   }
 
   /** Parse `text` as `parse` does; `plain` refuses what `parseData` refuses. */
@@ -447,7 +459,7 @@ export class SourceDocument {
     text: string,
     label: string,
     included: ReadonlyMap<string, string>,
-    data: ReadonlyMap<string, SourceDocument>,
+    typed: IncludedValues,
     plain: boolean,
   ): SourceDocument {
     const source = normalizeBreaks(text);
@@ -468,14 +480,14 @@ export class SourceDocument {
     // every place it appears, as if written there.
     const weigh = (node: Scalar.Parsed): number => {
       const type = node.tag?.startsWith("!") ? includedType(node.tag.slice(1)) : null;
-      const value = type === null || type === TEXT_TYPE ? undefined : data.get(node.source);
+      const value = type === null || typed.textTypes.has(type) ? undefined : typed.values.get(node.source);
       return value === undefined ? 1 : value._definitions.length;
     };
     try {
-      flow = composeFlowDocument(source, {}, data.size === 0 ? null : weigh);
+      flow = composeFlowDocument(source, {}, typed.values.size === 0 ? null : weigh);
       if (plain) refuseNonPlain(flow, starts, spanOf);
       // A merge error comes from `mergeSources`, a `FlowLoaderError`.
-      built = build(flow, source, starts, spanOf, included, data);
+      built = build(flow, source, starts, spanOf, included, typed);
     } catch (error) {
       if (error instanceof YAMLError) {
         let message =
@@ -570,9 +582,9 @@ function refuseNonPlain(flow: FlowDocument, starts: readonly number[], spanOf: S
  * it, and an alias to a container still being filled shares it. The root is definition 0.
  *
  * `source` is the normalized text the CST and `starts` index. An `!include` scalar reads as its
- * path's text in `included`, an `!include(str)` one as that text exactly, and an `!include(T)`
- * one as the value `data` holds for its path; a value the parse lacks reads as its path, still
- * tagged and listed in `includes`.
+ * path's text in `included`, an `!include(T)` one of a `T` in `typed.textTypes` as that text
+ * exactly, and one of any other `T` as the value `typed.values` holds for its path; a value the
+ * parse lacks reads as its path, still tagged and listed in `includes`.
  *
  * @throws SourceSyntaxError at a scalar the flow loader can't build, at a list or mapping key,
  *   at a bare tag or one neither local nor core, at a core tag that can't build its node, or at
@@ -584,7 +596,7 @@ function build(
   starts: readonly number[],
   spanOf: SpanOf,
   included: ReadonlyMap<string, string>,
-  data: ReadonlyMap<string, SourceDocument>,
+  typed: IncludedValues,
 ): Built {
   const { document, aliasTargets } = flow;
   const ids = new Map<Node, number>();
@@ -846,9 +858,9 @@ function build(
     return id;
   };
   /**
-   * Intern an `!include(T)` scalar: for `T` `str`, the path's text exactly, tagged `str`; for any
-   * other `T`, the path's value in `data`, tagged `T` (`graft`). A path the parse lacks reads as
-   * its path, tagged `include(T)`.
+   * Intern an `!include(T)` scalar: for a `T` in `typed.textTypes`, the path's text exactly, tagged
+   * `T`; for any other `T`, the path's value in `typed.values`, tagged `T` (`graft`). A path the
+   * parse lacks reads as its path, tagged `include(T)`.
    *
    * @throws SourceSyntaxError at an `!include(T)` on a list or mapping.
    */
@@ -863,8 +875,9 @@ function build(
     const path = node.source;
     // Messages quote the `!include(T)` as written, never the file.
     const written = `!include(${type}) ${source.slice(node.range![0], node.range![1])}`;
-    const text = type === TEXT_TYPE ? included.get(path) : undefined;
-    const value = type === TEXT_TYPE ? undefined : data.get(path);
+    const textual = typed.textTypes.has(type);
+    const text = textual ? included.get(path) : undefined;
+    const value = textual ? undefined : typed.values.get(path);
     if (text === undefined && value === undefined) {
       includes.push(Object.freeze({ path, range, type }));
       const id = reserve(node, path);

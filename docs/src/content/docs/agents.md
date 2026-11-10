@@ -154,14 +154,16 @@ nodes:
 output: ${tutor.output}
 ```
 
-- For any `T` but `str`, the file holds one YAML value, so JSON works too. It can't hold a tag,
-  so it can't include another file, nor an anchor, an alias, a `<<:` merge key or a repeated
-  key. Its strings are never templates.
+- A `T` whose every value but null is text reads the file's text, as `str` does: a typedef
+  naming `str`, `Optional(str)` or a `Literal`. The text is then checked against `T`.
+- Any other `T` reads the file as one YAML value, so JSON works too. It can't hold a tag, so it
+  can't include another file, nor an anchor, an alias, a `<<:` merge key or a repeated key. Its
+  strings are never templates.
 - The value is checked against `T` at load, as a literal after `!T` is. A file that doesn't hold
   one such value, or holds one that doesn't fit, fails at the tag; the error names the file, the
   line in it and the place in the value, such as `examples[2]`.
 - `${examples}` writes a variable's value as it is, without reading it as a template again.
-- On `prompt:`, `system_prompt:` and a list prompt's messages, only `!include(str)` works.
+- On `prompt:`, `system_prompt:` and a list prompt's messages, only a `T` that reads text works.
   Anywhere else, `!include(T)` goes only where a tag goes.
 - Its path, the root folder, the size cap and the record work as for `!include`.
 

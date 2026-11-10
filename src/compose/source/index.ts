@@ -32,6 +32,6 @@ export { SourceCatalog } from "./catalog.ts";
 export type { OccurrencePath, ScalarSource, TaggedNode, TypedInclude } from "./common.ts";
 export { SourceAccessError, SourceSyntaxError } from "./common.ts";
 export { SourceCursor } from "./cursor.ts";
-export type { NonTextKey, RepeatedKey } from "./document.ts";
+export type { IncludedValues, NonTextKey, RepeatedKey } from "./document.ts";
 export { includeExample, includeTag, SourceDocument } from "./document.ts";
 export { parseYamlLiteral, readPlainScalar } from "./literals.ts";

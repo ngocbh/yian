@@ -25,8 +25,8 @@
  * private `assemble` products keep the resolver unset.
  *
  * Before a file is parsed for good, the file each `!include` names is read: from disk, against the
- * including file's folder, or from a recorded source, and for an `!include(T)` other than
- * `!include(str)` read as one plain YAML value. The including file records where each path went.
+ * including file's folder, or from a recorded source, and for an `!include(T)` whose `T` isn't
+ * text read as one plain YAML value. The including file records where each path went.
  * After a file assembles, its CODE nodes are checked (each def's in written order, then the
  * root's) against the file's base directory, and inside the load's `codeRoot` when it has one.
  * Only the root load sees the fully assembled graph, so `loadFlow` then refuses an `llm_config`
@@ -59,12 +59,13 @@ import {
 } from "../diagnostics.ts";
 import { Binding, type ValuePath, ValueTemplate } from "../nodes/contracts.ts";
 import { isSystemError, leavesRoot, readRegularFile, resolvedPath } from "../platform.ts";
-import { typeName, readTypedefs, type TypeRegistry, withMemoryTypes } from "../typesys/types.ts";
+import { readTypedefs, typeFor, typeName, type TypeRegistry, withMemoryTypes } from "../typesys/types.ts";
 import {
   isList,
   isRecord,
   jsTypeName,
   TypeCheckError,
+  ValueKind,
   type Value,
   type ValueRecord,
   valueRepr,
@@ -636,7 +637,7 @@ export function makeFileResolver(
         const file: ReadFile = { text, refs: new Map() };
         ctx.read.set(real, file);
         const own = dirname(real);
-        const document = await parseIncluding(text, basename(real), diskIncludes(own, ctx, file));
+        const document = await parseIncluding(text, basename(real), diskIncludes(own, ctx, file), ctx.memoryTools.keys());
         return loadFlowFile(document, null, [own], ctx, own, file);
       });
     }
@@ -715,7 +716,7 @@ async function loadText(text: string, options: Omit<LoadOptions, "env">): Promis
   const ownDir = resolvePath(baseDir ?? searchPaths?.[0] ?? process.cwd());
   const ctx = await newLoadCtx(codeRoot, memoryTools);
   const rootFile: ReadFile = { text, refs: new Map() };
-  const document = await parseIncluding(text, sourceLabel, diskIncludes(ownDir, ctx, rootFile));
+  const document = await parseIncluding(text, sourceLabel, diskIncludes(ownDir, ctx, rootFile), ctx.memoryTools.keys());
   const hosted = new Map<string, unknown>();
   const resolver: ChildResolver | null =
     childResolver === null
@@ -798,18 +799,26 @@ function tooLarge(file: string, limit: number): string {
 
 /**
  * Parse `text` as `parseSourceDocument` does, each `!include` value reading the text `read` gives
- * its path, and each `!include(T)` value of a `T` other than `str` the value that text holds as
- * YAML (`readIncludedValue`). Each distinct path is read once, in document order.
+ * its path. An `!include(T)` value reads that text too when `T` is text (`readsText`, against the
+ * file's typedefs and the memory types named `memoryTypes`), else the value the text holds as YAML
+ * (`readIncludedValue`). Each distinct path is read once, in document order.
  *
  * @throws LoadError at the first `!include` with an empty path, a path holding a NUL, a file
  *   `read` refuses, or a file `readIncludedValue` refuses.
  */
-async function parseIncluding(text: string, label: string, read: IncludeReader): Promise<SourceDocument> {
+async function parseIncluding(
+  text: string,
+  label: string,
+  read: IncludeReader,
+  memoryTypes: Iterable<string>,
+): Promise<SourceDocument> {
   const document = parseSourceDocument(text, label);
   if (document.includes.length === 0) return document;
   const diagnostics = LoadDiagnostics.fromDocument(document);
+  const textual = readsText(document, memoryTypes);
   const texts = new Map<string, string>();
   const values = new Map<string, SourceDocument>();
+  const textTypes = new Set<string>();
   for (const { path, range, type } of document.includes) {
     const fail = (message: string) => diagnostics.error(message, { range });
     const file = includeFile(path, type);
@@ -819,11 +828,37 @@ async function parseIncluding(text: string, label: string, read: IncludeReader):
       if (path.includes("\0")) throw fail(`${file} holds a NUL character; write the path without it`);
       texts.set(path, await read(path, fail, file));
     }
-    if (type !== null && type !== "str" && !values.has(path)) {
-      values.set(path, readIncludedValue(texts.get(path)!, path, file, fail));
-    }
+    if (type === null) continue;
+    if (textual(type)) textTypes.add(type);
+    else if (!values.has(path)) values.set(path, readIncludedValue(texts.get(path)!, path, file, fail));
   }
-  return parseSourceDocument(text, label, texts, values);
+  return parseSourceDocument(text, label, texts, { values, textTypes });
+}
+
+/**
+ * Return whether an `!include(T)` in `document` reads its file's text: whether `T` names, against
+ * the file's typedefs, a type whose every value but null is text, such as `str`, a typedef naming
+ * it, `Optional(str)` or a `Literal`. A `T` that names no type, or typedefs that don't read, read
+ * text too, so the load reports the type, not the file.
+ */
+function readsText(document: SourceDocument, memoryTypes: Iterable<string>): (type: string) => boolean {
+  let registry: TypeRegistry | null = null;
+  try {
+    const root = document.root;
+    const typedefs = root.has("typedefs") ? root.get("typedefs") : null;
+    registry = readTypedefs(isRecord(typedefs) ? typedefs : null, memoryTypes);
+  } catch (error) {
+    if (!(error instanceof TypeCheckError || error instanceof SourceAccessError)) throw error;
+  }
+  return (type) => {
+    if (registry === null) return true;
+    try {
+      return typeFor(type, registry).kind === ValueKind.STRING;
+    } catch (error) {
+      if (error instanceof TypeCheckError) return true;
+      throw error;
+    }
+  };
 }
 
 /**
@@ -973,7 +1008,8 @@ export async function loadFlowSource(
 
 /** Load `source`'s file `key`, its refs resolved through `source` too. */
 async function loadSourceFile(source: FlowSource, key: string, ctx: LoadCtx): Promise<ComposedFlow> {
-  const document = await parseIncluding(source.files[key]!.text, basename(key), sourceIncludes(source, key));
+  const read = sourceIncludes(source, key);
+  const document = await parseIncluding(source.files[key]!.text, basename(key), read, ctx.memoryTools.keys());
   return loadFlowFile(document, sourceResolver(source, key, ctx), null, ctx, resolvePath(source.dir, dirname(key)));
 }
 

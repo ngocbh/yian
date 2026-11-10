@@ -44,7 +44,7 @@ import { isList, isRecord, type Type, valueRepr, type ValueRecord } from "../../
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
 import { type MemoryTypeTable, NO_MEMORY_TYPES } from "../helpers/memory.ts";
 import { directReferencePath } from "../../compile/output_contracts.ts";
-import { hasSpan } from "../helpers/tags.ts";
+import { hasSpan, rejectIncludeIn } from "../helpers/tags.ts";
 import { readType } from "../helpers/types.ts";
 import { checkEnvValues } from "../helpers/value_nesting.ts";
 import { yamlReadAs } from "../helpers/yaml_words.ts";
@@ -263,13 +263,70 @@ export function rejectNonText(
  * caller's error falls back to an enclosing range.
  */
 export function rangeAt(cursor: SourceCursor, path: readonly (string | number)[]): SourceRange | null {
+  return cursorAt(cursor, path)?.range ?? null;
+}
+
+/**
+ * Refuse an `!include(T)` at each of `fields` of a node body, as `NodeDescriptor.writtenFields`
+ * reads them: on or in each field's value, or as a list or mapping on the way to it, which holds
+ * the field.
+ *
+ * @throws LoadError at the first one, naming its file and the field.
+ */
+function rejectWrittenIncludes(
+  body: SourceCursor,
+  fields: readonly (readonly [path: string, what: string])[],
+  diagnostics: LoadDiagnostics,
+): void {
+  for (const [path, what] of fields) {
+    const steps = path.split(".").map((step) => ({ each: step.endsWith("[]"), key: step.replace(/\[\]$/, "") }));
+    const leaf = steps.at(-1)!.key;
+    // A list or mapping read from a file on the way holds the field.
+    const onTheWay = (cursor: SourceCursor, key: string): void => {
+      const value = cursor._valueView();
+      if (cursor.typedInclude !== null && (isRecord(value) || isList(value))) {
+        rejectIncludeIn(cursor, key, `\`${leaf}:\`, ${what}`, diagnostics);
+      }
+    };
+    let found = [body];
+    for (const [index, { each, key }] of steps.entries()) {
+      const last = index === steps.length - 1;
+      const next: SourceCursor[] = [];
+      for (const at of found) {
+        if (!isRecord(at._valueView()) || !at.has(key)) continue;
+        const child = at.child(key);
+        if (last && !each) {
+          rejectIncludeIn(child, key, what, diagnostics);
+          continue;
+        }
+        onTheWay(child, key);
+        if (!each) {
+          next.push(child);
+        } else if (isList(child._valueView())) {
+          for (const item of child.children()) {
+            if (last) rejectIncludeIn(item, key, what, diagnostics);
+            else onTheWay(item, key);
+            next.push(item);
+          }
+        }
+      }
+      found = next;
+    }
+  }
+}
+
+/**
+ * Return the value at `path` under `cursor`, or `null` for a path the cursor can't walk (such as
+ * past a recursive alias cut).
+ */
+export function cursorAt(cursor: SourceCursor, path: readonly (string | number)[]): SourceCursor | null {
   try {
     for (const step of path) cursor = cursor.child(step);
   } catch (error) {
     if (error instanceof SourceAccessError) return null;
     throw error;
   }
-  return cursor.range;
+  return cursor;
 }
 
 /**
@@ -519,6 +576,13 @@ export class NodeDescriptor {
   /** The descriptor fields carrying `${...}` binding text, for the kind-blind ref walk. */
   static readonly bindingFields: readonly string[] = [];
   /**
+   * The body fields that hold something written in the flow, such as a condition, which no
+   * `!include(T)` may give, each with what it holds. A step `a.b` reads key `b` of mapping `a`,
+   * and `a[].b` key `b` of each item of list `a`. `parse` refuses an `!include(T)` on or in
+   * any of them, or on a list or mapping on the way, before it reads the body.
+   */
+  static readonly writtenFields: readonly (readonly [path: string, what: string])[] = [["asserts", "assertions"]];
+  /**
    * Body key to descriptor field name, where a key collides with a reserved word (`case`'s
    * `else` is `else_`); other keys take their camelCase name.
    */
@@ -638,6 +702,7 @@ export class NodeDescriptor {
     nodeId: string,
     cursor: SourceCursor,
   ): InstanceType<T> {
+    rejectWrittenIncludes(cursor, this.writtenFields, LoadDiagnostics.fromCursor(cursor));
     const normalized = this._normalizeCursor(cursor);
     const diagnostics = LoadDiagnostics.fromCursor(normalized);
     this._checkKeys(nodeId, normalized);

@@ -1,0 +1,119 @@
+# `!include(str)` reads a prompt file as written: the agent sends its `$$`, its `${...}` and its
+# CRLF line endings unchanged, and the load checks no name in it.
+kind: run
+flow: |
+  id: math
+  name: math
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    question: !str
+  nodes:
+    tutor:
+      kind: agent
+      input: {question: "${input.question}"}
+      system_prompt: !include(str) prompts/system.md
+      prompt: "${question}"
+      output: str
+  output: ${tutor.output}
+files:
+  prompts/system.md: "Write math as $$x^2$$.\r\nShell paths start at ${HOME}.\r\n"
+inputs: {question: What is 2+2?}
+run: {num_workers: 0}
+host:
+  models:
+    tutor:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: "4"
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: "Write math as $$x^2$$.\r\nShell paths start at ${HOME}.\r\n"
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: What is 2+2?
+expect:
+  output: {status: succeeded, output: "4"}
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        tutor:
+          _connection:
+            endpoint: null
+            method: api_key
+            source: environment
+          model: claude-test
+          provider: anthropic
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - key: system.now
+  - - pool_commit
+    - __start__
+    - key: system.run_id
+      value: <id:1>
+  - - pool_commit
+    - __start__
+    - key: system.today
+  - - pool_commit
+    - __start__
+    - value:
+        question: What is 2+2?
+  - - node_started
+    - __start__
+  - - pool_commit
+    - __start__
+    - value:
+        question: What is 2+2?
+  - - node_succeeded
+    - __start__
+    - commit: 6
+  - - node_started
+    - tutor
+  - - node_step
+    - tutor
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: claude-test
+        output:
+          format: yian.message.v1
+          parts:
+          - text: "4"
+            type: text
+          role: assistant
+        purpose: chat
+        request_sha256: 5637a3da26c473ae567ae6cb094de3573828ae106cf9b4f78d27e574ea8efb0a
+        response_id: null
+        usage: null
+  - - pool_commit
+    - tutor
+    - value: "4"
+  - - pool_commit
+    - tutor
+    - key: tutor.new_messages
+      steps:
+      - 9
+  - - node_succeeded
+    - tutor
+    - commit: 10
+      messages: 11
+  - - node_started
+    - __end__
+  - - pool_commit
+    - __end__
+    - value: "4"
+  - - node_succeeded
+    - __end__
+    - commit: 14

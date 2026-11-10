@@ -18,6 +18,7 @@ import type {
   RepeatedKey,
   ScalarSource,
   TaggedNode,
+  TypedInclude,
 } from "../../src/compose/source/index.ts";
 import { DiagnosticFrame, OriginRef, SourceRange } from "../../src/diagnostics.ts";
 
@@ -533,6 +534,8 @@ describe("the package index", () => {
       "SourceCursor",
       "SourceDocument",
       "SourceSyntaxError",
+      "includeExample",
+      "includeTag",
       "parseYamlLiteral",
       "readPlainScalar",
     ]);
@@ -540,7 +543,7 @@ describe("the package index", () => {
 
   test("exports the public types", () => {
     // Compile-time only: the type check fails if a type isn't exported.
-    const types: [ScalarSource?, TaggedNode?, OccurrencePath?, NonTextKey?, RepeatedKey?] = [];
+    const types: [ScalarSource?, TaggedNode?, OccurrencePath?, NonTextKey?, RepeatedKey?, TypedInclude?] = [];
     expect(types).toEqual([]);
   });
 });

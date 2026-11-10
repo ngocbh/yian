@@ -16,6 +16,7 @@ import { expect, test } from "bun:test";
 
 import { OriginRef } from "../../src/diagnostics.ts";
 import { type RootRead, SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
+import { Verbatim } from "../../src/expr/template.ts";
 import { BindingCollector, BindingError, bindParams } from "../../src/nodes/binding.ts";
 import {
   Binding,
@@ -311,6 +312,20 @@ test("a plain record source stays a literal", () => {
   expect(record).toEqual({ d: { a: "${n.output}", b: ["${m.output}"], c: "$$x" } });
   expect(bindParams([new Parameter("d")], new Map([["d", ["${n.output}"]]]), poolOf({ n: 1n }))).toEqual({
     d: ["${n.output}"],
+  });
+});
+
+test("verbatim text binds as written, alone or in a template", () => {
+  const template = new ValueTemplate({ a: "${n.output}", b: [new Verbatim("$${n.output}")] });
+  const parameters = [new Parameter("t"), new Parameter("d")];
+  const wiring = new Map<string, unknown>([
+    ["t", new Binding(new Verbatim("$$ and ${n.output}"))],
+    ["d", template],
+  ]);
+
+  expect(bindParams(parameters, wiring, poolOf({ n: 1n }))).toEqual({
+    t: "$$ and ${n.output}",
+    d: { a: 1n, b: ["$${n.output}"] },
   });
 });
 

@@ -111,6 +111,19 @@ export class Span {
 /** A segment of a scanned template: a literal run or a parsed `${...}` span. */
 export type TemplateSegment = Literal | Span;
 
+/**
+ * Text that is never a template: it scans to one literal run, so a `$$` or `${...}` in it stays
+ * as written. A binding source, a template tree's leaf or a prompt may be one. Frozen.
+ */
+export class Verbatim {
+  readonly text: string;
+
+  constructor(text: string) {
+    this.text = text;
+    Object.freeze(this);
+  }
+}
+
 /** The reference a span's value comes from: the span itself, or a default chain's last operand. */
 function nullSource(tree: ExprNode): string | null {
   if (!(tree instanceof Tree)) return null;
@@ -132,15 +145,17 @@ function strictNullError(tree: ExprNode): ExpressionError {
  * Scan a template into its literal runs and `${...}` spans.
  *
  * Only each span's interior is parsed; literal text between spans is kept raw, with `$$`
- * collapsed to `$`. A lone `$` that doesn't start a `${` stays literal.
+ * collapsed to `$`. A lone `$` that doesn't start a `${` stays literal. `Verbatim` text is one
+ * literal run as written.
  *
- * @param text The template: literal text interspersed with `${...}` spans.
+ * @param text The template: literal text interspersed with `${...}` spans, or `Verbatim` text.
  * @returns The segments in order: one `Literal` per literal run (never two in a row) and one
  *   `Span` per `${...}`. A pure-literal template is one `Literal`; an empty one has none.
  * @throws {ExpressionError} On an unbalanced `${`, a `${...}` nested in a span's expression, or
  *   a span interior that doesn't parse.
  */
-export function scanTemplate(text: string): TemplateSegment[] {
+export function scanTemplate(text: string | Verbatim): TemplateSegment[] {
+  if (text instanceof Verbatim) return text.text === "" ? [] : [new Literal(text.text)];
   const segments: TemplateSegment[] = [];
   let literal = "";
   let i = 0;
@@ -295,7 +310,7 @@ function asText(value: Value): string {
  * coalesce or default may fire. A whole single span gives its typed value; otherwise spans are
  * written as text into the literal runs. The full expression grammar is available inside a span.
  *
- * @param source The binding-value template. (A value that isn't text is a literal and never
+ * @param source The binding-value template, or `Verbatim` text. (Any other value is a literal and never
  *   reaches here.)
  * @param resolve Reads a reference's root from its names (see `evalExpr`).
  * @param options.item The MAP-body-local scope for `item` / `item.path`; `null` (the default)
@@ -312,22 +327,22 @@ function asText(value: Value): string {
  *   error a span's evaluation raises.
  */
 export function evalBinding(
-  source: string,
+  source: string | Verbatim,
   resolve: RootResolver,
   options: Omit<TraceOptions, "mode"> & { trace: true },
 ): TracedValue;
 export function evalBinding(
-  source: string,
+  source: string | Verbatim,
   resolve: RootResolver,
   options?: Omit<EvalOptions, "mode"> & { trace?: false },
 ): Value;
 export function evalBinding(
-  source: string,
+  source: string | Verbatim,
   resolve: RootResolver,
   options?: Omit<TraceOptions, "mode">,
 ): Value | TracedValue;
 export function evalBinding(
-  source: string,
+  source: string | Verbatim,
   resolve: RootResolver,
   { item, types = null, trace = false, declared = null, itemType = null }: Omit<TraceOptions, "mode"> = {},
 ): Value | TracedValue {
@@ -573,7 +588,7 @@ export function rewriteConditionReads(
  * (a miss is falsy), a missing reference or a span whose final value is `null` raises. A prompt
  * is text, so a whole single span's value is written as text too. `$$` renders one `$`.
  *
- * @param text The prompt template.
+ * @param text The prompt template, or `Verbatim` text.
  * @param record The node's bound input record.
  * @param declared The declared type of each input, given a reference's names (`localDeclared`);
  *   `null` (the default) leaves every field read undeclared.
@@ -582,7 +597,11 @@ export function rewriteConditionReads(
  * @throws {ExpressionError} On a malformed span, an unresolved reference, a final `null` span
  *   value, an unknown builtin or one that fails, or a value the runtime can't write as text.
  */
-export function renderTemplateRecord(text: string, record: ValueRecord, declared: DeclaredTypes | null = null): string {
+export function renderTemplateRecord(
+  text: string | Verbatim,
+  record: ValueRecord,
+  declared: DeclaredTypes | null = null,
+): string {
   const value = evalTemplate(scanTemplate(text), (names) => resolveInRecord(names, record), {
     mode: ResolveMode.STRICT_RAISE,
     declared,
@@ -598,13 +617,13 @@ export function renderTemplateRecord(text: string, record: ValueRecord, declared
  * formatting builtin (one not in `TEMPLATE_FNS`, or the shipped `len`, which computes),
  * `isinstance` (a prompt has no type table), and a builtin called with arguments it doesn't take.
  *
- * @param text The prompt template.
+ * @param text The prompt template, or `Verbatim` text.
  * @returns Each plain-span path and each builtin-call argument path, in source order (not
  *   deduped); literals contribute nothing.
  * @throws {ExpressionError} On a malformed span, a call to anything but a formatting builtin, or
  *   a builtin called with arguments it doesn't take.
  */
-export function promptRefs(text: string): string[] {
+export function promptRefs(text: string | Verbatim): string[] {
   const segments = scanTemplate(text);
   for (const segment of segments) {
     if (segment instanceof Span) {

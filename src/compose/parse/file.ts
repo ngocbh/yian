@@ -31,6 +31,7 @@ import { yamlReadAs } from "../helpers/yaml_words.ts";
 import { notTextError, rejectInfinityName, valueTypeError } from "../nodes/base.ts";
 import { KINDS, REMOVED_KINDS } from "../nodes/index.ts";
 import {
+  type IncludedValues,
   SourceAccessError,
   SourceCursor,
   SourceDocument,
@@ -551,6 +552,7 @@ function nonTextKeyMessage(key: Value, text: string, cutValue: string | undefine
  * @param text The flow file's YAML text.
  * @param label The name that identifies the file in diagnostics.
  * @param included The text of each `!include` path, as `SourceDocument.parse` takes it.
+ * @param typed The values `!include(T)` reads, as `SourceDocument.parse` takes them.
  * @throws LoadError at the problem for invalid YAML, at the key for a key YAML read as non-text,
  *   and at the second key for a repeated key.
  */
@@ -558,10 +560,11 @@ export function parseSourceDocument(
   text: string,
   label: string,
   included?: ReadonlyMap<string, string>,
+  typed?: IncludedValues,
 ): SourceDocument {
   let document: SourceDocument;
   try {
-    document = SourceDocument.parse(text, label, included);
+    document = SourceDocument.parse(text, label, included, typed);
   } catch (error) {
     if (!(error instanceof SourceSyntaxError)) throw error;
     throw new LoadDiagnostics(label, text).error(`invalid YAML: ${error.message}`, {
@@ -569,11 +572,19 @@ export function parseSourceDocument(
       cause: error,
     });
   }
+  const problem = keyProblem(document);
+  if (problem !== null) throw new LoadDiagnostics(label, text).error(problem.message, { range: problem.range });
+  return document;
+}
+
+/**
+ * Return a parsed document's first key problem, its message and where it is: a key YAML read as
+ * non-text, at the key, else a repeated key, at its second copy; null when it has neither.
+ */
+export function keyProblem(document: SourceDocument): { message: string; range: SourceRange } | null {
   if (document.nonTextKey !== null) {
     const { key, text: keyText, range, cutValue } = document.nonTextKey;
-    throw new LoadDiagnostics(label, text).error(nonTextKeyMessage(key, keyText, cutValue), {
-      range,
-    });
+    return { message: nonTextKeyMessage(key, keyText, cutValue), range };
   }
   if (document.repeatedKey !== null) {
     const { key, first, second, cutValue } = document.repeatedKey;
@@ -582,12 +593,9 @@ export function parseSourceDocument(
         ? "a YAML mapping's keys must be unique, so remove or rename one"
         : `this \`{...}\` mapping's comma split the value that starts \`${cutValue}\`, so ` +
           "quote that value or use block style";
-    throw new LoadDiagnostics(label, text).error(
-      `duplicate key ${reprText(key)} (first at line ${first.startLine}); ${fix}`,
-      { range: second },
-    );
+    return { message: `duplicate key ${reprText(key)} (first at line ${first.startLine}); ${fix}`, range: second };
   }
-  return document;
+  return null;
 }
 
 /**

@@ -100,6 +100,13 @@ export class LoopDescriptor extends NodeDescriptor {
   static override readonly allowed = this.allow("call", "inputs", "while", "until", "times", "max", "asserts");
   static override readonly required = this.require("call");
   static override readonly bindingFields: readonly string[] = ["inputs"];
+  static override readonly writtenFields = [
+    ...NodeDescriptor.writtenFields,
+    ["while", "a condition"],
+    ["until", "a condition"],
+    ["times", "a count"],
+    ["max", "a count"],
+  ] as const;
   static override readonly keywordRemap: ReadonlyMap<string, string> = new Map([
     ["while", "while_"],
     ["until", "until_"],

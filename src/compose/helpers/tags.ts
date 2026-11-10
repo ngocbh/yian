@@ -22,7 +22,7 @@ import {
   type SourceRange,
 } from "../../diagnostics.ts";
 import { ExpressionError, MISSING_ROOT } from "../../expr/expressions.ts";
-import { evalBinding, scanTemplate, Span } from "../../expr/template.ts";
+import { evalBinding, scanTemplate, Span, Verbatim } from "../../expr/template.ts";
 import {
   Binding,
   ContractOrigins,
@@ -43,6 +43,7 @@ import {
   canonicalTypeLabel,
   isInboxType,
   isMemoryType,
+  isList,
   isListKind,
   isRecord,
   requiresFile,
@@ -56,11 +57,14 @@ import {
 import type { SourceCatalogBuilder } from "../source/catalog.ts";
 import type { ScalarStyle } from "../source/common.ts";
 import {
+  includeTag,
   parseYamlLiteral,
   SourceAccessError,
   type SourceCursor,
   type SourceDocument,
   SourceSyntaxError,
+  type TaggedNode,
+  type TypedInclude,
 } from "../source/index.ts";
 import { CALL_HEAD } from "./directives.ts";
 import type { LoadDiagnostics } from "./errors.ts";
@@ -90,6 +94,11 @@ const OLD_SEPARATOR = " = ";
 // YAML drops the trailing space of `qty: int = `, delivering "int =".
 const OLD_TRAILING_SEPARATOR = " =";
 
+/** Return how messages name the file an `!include` (or `!include(T)`, for `type` `T`) reads. */
+export function includeFile(path: string, type: string | null = null): string {
+  return `${includeTag(type)} file ${reprText(path)}`;
+}
+
 /**
  * Resolve a slot's tag text into its type.
  *
@@ -98,6 +107,8 @@ const OLD_TRAILING_SEPARATOR = " =";
  * @param options.label The slot's name, used in error messages.
  * @param options.diagnostics Factory for located load errors.
  * @param options.range The tagged value's location, attached to any error.
+ * @param options.include The path an `!include(T)` names, whose `T` is `tag`: messages name the
+ *   file and the type `T`, not a tag `!T`. `null` (the default) for a tag.
  * @returns The type the tag names.
  * @throws LoadError when the tag holds a bracket or brace (the message shows the
  *   parenthesized spelling), is cut short by a space (it ends in `,` or has an unclosed `(`),
@@ -106,9 +117,11 @@ const OLD_TRAILING_SEPARATOR = " =";
 export function readTagType(
   tag: string,
   registry: TypeRegistry,
-  options: { label: string; diagnostics: LoadDiagnostics; range?: SourceRange | null },
+  options: { label: string; diagnostics: LoadDiagnostics; range?: SourceRange | null; include?: string | null },
 ): Type {
-  const { label, diagnostics, range = null } = options;
+  const { label, diagnostics, range = null, include = null } = options;
+  // How the messages below name the tag.
+  const shown = include === null ? `\`!${tag}\`` : `${includeFile(include, tag)}: \`${tag}\``;
   if (FLOW_INDICATORS.test(tag)) {
     let message =
       `${reprText(label)}: a tag can't contain \`[\`, \`]\`, \`{\` or \`}\` (strict YAML 1.2)`;
@@ -132,7 +145,7 @@ export function readTagType(
   const unclosed = tag.split("(").length > tag.split(")").length;
   if (tag.endsWith(",") || (resolved instanceof TypeCheckError && unclosed)) {
     throw diagnostics.error(
-      `${reprText(label)}: \`!${tag}\` is not a complete type: a YAML tag ends at the first ` +
+      `${reprText(label)}: ${shown} is not a complete type: a YAML tag ends at the first ` +
         "space and can't contain `,`; name a type with several arguments in " +
         `\`typedefs:\` ${TYPEDEF_EXAMPLE}`,
       { range },
@@ -140,13 +153,13 @@ export function readTagType(
   }
   if (tag.includes(",")) {
     throw diagnostics.error(
-      `${reprText(label)}: \`!${tag}\`: a tag can't contain \`,\`; name it in \`typedefs:\` ` +
+      `${reprText(label)}: ${shown}: a tag can't contain \`,\`; name it in \`typedefs:\` ` +
         TYPEDEF_EXAMPLE,
       { range },
     );
   }
   if (resolved instanceof TypeCheckError) {
-    let message = `${reprText(label)}: \`!${tag}\` is not a type (${resolved.message})`;
+    let message = `${reprText(label)}: ${shown} is not a type (${resolved.message})`;
     const match = closeTypeName(tag, registry);
     if (match !== null) message += `. Did you mean \`${match}\`?`;
     throw diagnostics.error(message, { range });
@@ -606,8 +619,10 @@ export interface TaggedValueOptions {
  * template, a `call(...)`, or text the binder unescapes). A tagged node inside a mapping or list
  * becomes a typed `Binding` at its position, and a container holding one, or holding a string
  * with a `${...}` span, becomes a `ValueTemplate` with raw leaf strings; any other container is
- * a plain literal with its leaf strings `$$`-unescaped once. Every span-free tagged literal is
- * checked against its tag here; a tag never fills in a missing field.
+ * a plain literal with its leaf strings `$$`-unescaped once. A string an `!include(T)` read
+ * (`SourceCursor.verbatim`) is never a template: it stays as written, as `Verbatim` text where a
+ * string would be a template. Every span-free tagged literal is checked against its tag here; a
+ * tag never fills in a missing field.
  *
  * Catalog sites: the top-level contract at `[...sitePath, "type", "root"]`, a nested binding at
  * `[...sitePath, "type", "path", ...path]`, and a template's leaf string at
@@ -713,18 +728,15 @@ class TaggedValueReader {
       if (!cursor.hasValue) return new TaggedSlot(null, contract, false);
     }
     const walked = this.walk(cursor, cursor.value, []);
-    if (typeof walked.tree === "string" || !walked.dynamic || this.literalOnly) {
+    const text = typeof walked.tree === "string" || walked.tree instanceof Verbatim;
+    if (text || !walked.dynamic || this.literalOnly) {
       let literal = walked.tree;
       if (!this.isTemplateText(literal, cursor)) {
         literal = this.literal(literal);
         if (contract !== null) this.check(cursor, [], contract.type, literal);
       }
-      // A top-level string stays as written: the binder unescapes it.
-      return new TaggedSlot(
-        typeof walked.tree === "string" ? walked.tree : literal,
-        contract,
-        true,
-      );
+      // A top-level string stays as written: the binder unescapes it, and reads `Verbatim` text as is.
+      return new TaggedSlot(text ? walked.tree : literal, contract, true);
     }
 
     if (contract !== null && !walked.hasSpan) {
@@ -774,6 +786,8 @@ class TaggedValueReader {
   /** Walk one node's own value, reading the tags on its children. */
   walkValue(cursor: SourceCursor, value: unknown, path: ValuePath): Walked {
     if (typeof value === "string") {
+      // A file's text or data is never a template; a literal's strings are text anyway.
+      if (cursor.verbatim) return new Walked(this.literalOnly ? value : new Verbatim(value));
       if (this.literalOnly || path.length === 0) return new Walked(value);
       // Quoted, it is text, as at the top level (`isTemplateText`).
       if (!QUOTED_STYLES.has(cursor.scalarStyle) && CALL_HEAD.test(value.trim())) {
@@ -829,6 +843,7 @@ class TaggedValueReader {
       label,
       diagnostics: this.diagnostics,
       range: cursor.range,
+      include: cursor.typedInclude?.path ?? null,
     });
     if (isInboxType(typ) && !input) {
       throw this.diagnostics.error(
@@ -889,9 +904,10 @@ class TaggedValueReader {
     return cursor.scalarStyle === "plain" && CALL_HEAD.test(value.trim());
   }
 
-  /** Return the value a span-free tree binds: no bindings, strings unescaped. */
+  /** Return the value a span-free tree binds: no bindings, strings unescaped, `Verbatim` text as is. */
   literal(tree: unknown): unknown {
     if (tree instanceof Binding) return this.literal(tree.source);
+    if (tree instanceof Verbatim) return tree.text;
     if (typeof tree === "string") {
       return this.literalOnly ? tree : evalBinding(tree, MISSING_ROOT);
     }
@@ -925,6 +941,8 @@ class TaggedValueReader {
    *
    * A former YAML boolean word such as `yes`, now text, written bare gets the `true`/`false` to
    * write when that boolean fits; a non-string scalar whose text would fit gets the quoted form.
+   * A value an `!include(T)` read names its file, and the place and the line in the file the
+   * check failed at.
    */
   mismatch(
     cursor: SourceCursor,
@@ -935,6 +953,15 @@ class TaggedValueReader {
   ): string {
     const label = pathLabel(this.label, path);
     const tag = cursor.tag;
+    const include = cursor.typedInclude;
+    if (include !== null) {
+      const places = error.path.length > 0 ? [`at \`${pathLabel(label, error.path)}\``] : [];
+      const line = includedLine(include, error.path);
+      if (line !== null) places.push(`line ${line} of the file`);
+      const file = includeFile(include.path, include.type);
+      const message = `${reprText(label)}: ${file} is not a valid ${tag}: ${error.message}`;
+      return places.length === 0 ? message : `${message} (${places.join(", ")})`;
+    }
     const text = cursor.scalarText;
     if (text === null) {
       let message = `${reprText(label)}: the value is not a valid ${tag}: ${error.message}`;
@@ -995,6 +1022,22 @@ function mismatchReason(error: TypeCheckError, value: unknown): string | null {
 }
 
 /**
+ * Return the line, in the file an `!include(T)` read, of the deepest part of its value on `path`;
+ * `null` for text `!include(str)` read, or an empty file.
+ */
+function includedLine(include: TypedInclude, path: ValuePath): number | null {
+  if (include.data === null) return null;
+  let cursor = include.data.root;
+  for (const step of path) {
+    const value = cursor._valueView();
+    // A missing field's path ends past the value; the line is the record's.
+    if (typeof step === "string" ? !cursor.has(step) : !isList(value) || step >= value.length) break;
+    cursor = cursor.child(step);
+  }
+  return cursor.range?.startLine ?? null;
+}
+
+/**
  * Reject a tag or text `!include` read on a node's `output:` type declaration or inside it.
  *
  * An `output:` declaration is a type, so a tag there would type nothing.
@@ -1010,8 +1053,9 @@ export function rejectTaggedOutput(cursor: SourceCursor, diagnostics: LoadDiagno
     const [current, key, isItem] = stack.pop()!;
     const tag = current.tag;
     const value = current.value;
-    if (current.included) {
-      throw diagnostics.error("`output:` declares a type, which `!include` can't give; write the type", {
+    if (current.included || current.typedInclude !== null) {
+      const type = current.typedInclude?.type ?? null;
+      throw diagnostics.error(`\`output:\` declares a type, which ${includeTag(type)} can't give; write the type`, {
         range: current.range,
       });
     }
@@ -1050,20 +1094,24 @@ function authoredKey(cursor: SourceCursor): string {
  * (the whole record or a field), a value entry in `nodes:`, or a value inside one; anywhere
  * else it would be silently ignored. Tags reached only through top-level `x-*` keys are exempt.
  * Tags under `typedefs:` and on mapping keys get their own messages. Keys are spelled as
- * written, so `on:` stays `on:`.
+ * written, so `on:` stays `on:`. The text an `!include(T)` of a text `T` reads is a text value
+ * anywhere `!include` gives one, so no slot need read it; with `options.registry`, its `T` must
+ * name a type its text fits.
  *
  * @param document The loaded document.
  * @param consumed Definition ids of the tags slot readers read.
  * @param diagnostics Factory for located load errors.
  * @param options.typedefsOnly Check only tags under `typedefs:`, which are read before any
  *   slot. Defaults to `false`.
+ * @param options.registry The flow's typedefs, which an unread `!include(T)` text's `T` resolves
+ *   against.
  * @throws LoadError at the first offending tag, in document order.
  */
 export function rejectUnreadTags(
   document: SourceDocument,
   consumed: ReadonlySet<number>,
   diagnostics: LoadDiagnostics,
-  options: { typedefsOnly?: boolean } = {},
+  options: { typedefsOnly?: boolean; registry?: TypeRegistry } = {},
 ): void {
   const typedefsOnly = options.typedefsOnly ?? false;
   for (const node of document.taggedNodes({ skipTopLevel: isExtensionKey })) {
@@ -1080,20 +1128,92 @@ export function rejectUnreadTags(
     }
     if (inTypedefs) {
       const name = path[1]!;
+      const how = node.include === null ? "without a tag" : `which ${includeTag(node.include.type)} can't give`;
       throw diagnostics.error(
         `typedef ${typeof name === "string" ? reprText(name) : name}: a type definition is ` +
-          "written as a type, without a tag",
+          `written as a type, ${how}`,
         { range: node.range },
       );
     }
     if (consumed.has(node.definitionId)) continue;
     const where = key !== null ? `\`${key}:\`` : "the document root";
+    if (node.include !== null) {
+      const { type, path: file, data } = node.include;
+      // Text is a text value wherever `!include` gives one; only its type is left to check.
+      if (data === null) {
+        if (options.registry !== undefined) {
+          checkIncludedText(node, key ?? "value", options.registry, diagnostics);
+        }
+        continue;
+      }
+      throw diagnostics.error(
+        `${includeFile(file, type)}: a YAML value \`!include(T)\` reads goes where a tag goes — a flow ` +
+          "input, a binding, a flow output, an agent variable, an `llm_config` value, a value entry in " +
+          `\`nodes:\`, or a value inside one; ${where} is not one. Elsewhere read the file's text, as ` +
+          "`!include(str)` does",
+        { range: node.range },
+      );
+    }
     throw diagnostics.error(
       "a tag types a value — a flow input, a binding, a flow output, an agent variable, an " +
         "`llm_config` value, a value entry in `nodes:`, or a value inside one; " +
         `${where} is not one`,
       { range: node.range },
     );
+  }
+}
+
+/**
+ * Check the text an `!include(T)` read for a text field no slot reads against `T`.
+ *
+ * @throws LoadError at the `!include(T)` when `T` names no type or the text doesn't fit it.
+ */
+function checkIncludedText(
+  node: TaggedNode,
+  label: string,
+  registry: TypeRegistry,
+  diagnostics: LoadDiagnostics,
+): void {
+  const { type, path, text } = node.include!;
+  const typ = readTagType(type, registry, { label, diagnostics, range: node.range, include: path });
+  try {
+    buildValueAs(typ, text);
+  } catch (error) {
+    if (!(error instanceof TypeCheckError)) throw error;
+    throw diagnostics.error(
+      `${reprText(label)}: ${includeFile(path, type)} is not a valid ${type}: ${error.message}`,
+      { range: node.range },
+    );
+  }
+}
+
+/**
+ * Refuse an `!include(T)` on or inside `cursor`, the value of a field that holds `what` written in
+ * the flow, such as a condition, which no file gives.
+ *
+ * @param cursor The field's value, or `null` when absent.
+ * @param key The field as messages name it, such as `when`.
+ * @throws LoadError at the first `!include(T)`, naming its file and the field.
+ */
+export function rejectIncludeIn(
+  cursor: SourceCursor | null,
+  key: string,
+  what: string,
+  diagnostics: LoadDiagnostics,
+): void {
+  const stack = cursor === null ? [] : [cursor];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    const include = current.typedInclude;
+    if (include !== null) {
+      throw diagnostics.error(
+        `${includeFile(include.path, include.type)}: \`${key}:\` holds ${what}, written in the flow; ` +
+          "a file can't give it",
+        { range: current.range },
+      );
+    }
+    const value = current._valueView();
+    if (isRecord(value) || isList(value)) stack.push(...[...current.children()].reverse());
   }
 }
 

@@ -22,9 +22,11 @@ import {
   evalTemplate,
   Literal,
   renderTemplateRecord,
+  promptRefs,
   scanTemplate,
   Span,
   templateRefs,
+  Verbatim,
 } from "../../src/expr/template.ts";
 import { FileRef, type Value, type ValueRecord } from "../../src/typesys/index.ts";
 import { fieldOf, MemoryRef } from "../../src/typesys/values.ts";
@@ -172,6 +174,20 @@ test("$$ right before or after a span collapses to one $", () => {
 
 test("$$ before a brace escapes the span", () => {
   expect(scanTemplate("$${x}")).toEqual([new Literal("${x}")]);
+});
+
+// --- verbatim text is never a template --- //
+
+test("verbatim text is one literal run, its $$ and ${...} as written", () => {
+  const text = new Verbatim("cost $$5 in ${HOME} and ${a");
+  expect(scanTemplate(text)).toEqual([new Literal("cost $$5 in ${HOME} and ${a")]);
+  expect(evalTemplate(scanTemplate(text), MISSING_ROOT)).toBe("cost $$5 in ${HOME} and ${a");
+  expect(renderTemplateRecord(text, { HOME: "/root" })).toBe("cost $$5 in ${HOME} and ${a");
+  expect(promptRefs(text)).toEqual([]);
+});
+
+test("empty verbatim text has no segments", () => {
+  expect(scanTemplate(new Verbatim(""))).toEqual([]);
 });
 
 test("non-ASCII text around a span is kept whole", () => {

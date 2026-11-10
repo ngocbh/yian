@@ -5,6 +5,8 @@
 
 import type { SourceRange } from "../../diagnostics.ts";
 import { isList, isRecord, jsTypeName, type Value, type ValueRecord } from "../../typesys/index.ts";
+// Type-only: `document.ts` imports this module at runtime.
+import type { SourceDocument } from "./document.ts";
 
 /**
  * A source cursor can't satisfy a requested navigation or typed access. `range` is the
@@ -66,6 +68,22 @@ export type OccurrenceStep = MapStep | SeqStep;
 /** The steps that reach one occurrence from the document root. */
 export type OccurrencePath = readonly OccurrenceStep[];
 
+/**
+ * The file a typed `!include(T) PATH` value was read from: `T` as written, which is the value's
+ * tag, and the path as written. `data` is the file read as a YAML value, whose ranges locate a
+ * part of the value in the file; `null` for a `T` whose values are text, whose value is the file's
+ * text.
+ */
+export interface TypedInclude {
+  readonly type: string;
+  readonly path: string;
+  readonly data: SourceDocument | null;
+  /** The file's text, which is the value, for a `T` whose values are text; `null` with `data`. */
+  readonly text: string | null;
+  /** The `!include(T) PATH` as written, which a message quotes in place of the value. */
+  readonly written: string;
+}
+
 /** One YAML node that carries a local tag. */
 export interface TaggedNode {
   /** The document-local id of the tagged definition; aliases share it. */
@@ -83,6 +101,8 @@ export interface TaggedNode {
   readonly isKey: boolean;
   /** `path` as authored: each mapping key as written and each sequence item's index. */
   readonly keyPath: readonly (string | number)[];
+  /** The file the node's value was read from when it is an `!include(T)`, else `null`. */
+  readonly include: TypedInclude | null;
 }
 
 /** @internal One lazily materialized occurrence-path link. */
@@ -124,7 +144,9 @@ export type ScalarStyle = "plain" | "single" | "double" | "literal" | "folded";
  * @internal One scalar-shaped YAML definition. `style` is `null` when `raw` is; `tag` is the
  * local tag text without the leading `!`, `null` when the scalar is untagged or carries a
  * YAML core tag. `included` says the value is a file's text an `!include` read: untagged, its
- * style `literal` and its `raw` the `!include` as written.
+ * style `literal` and its `raw` the `!include` as written. `verbatim` says the value is text
+ * that is never a template: the text `!include(str)` read, or a string in a value `!include(T)`
+ * read.
  */
 export interface ScalarDef {
   readonly kind: "scalar";
@@ -135,6 +157,7 @@ export interface ScalarDef {
   readonly style: ScalarStyle | null;
   readonly tag: string | null;
   readonly included: boolean;
+  readonly verbatim: boolean;
 }
 
 /**

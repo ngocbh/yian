@@ -20,7 +20,7 @@ import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts
 import { current } from "../../defaults.ts";
 import { MISSING_ROOT } from "../../expr/expressions.ts";
 import { wholeSpanInterior } from "../../expr/grammar.ts";
-import { evalBinding } from "../../expr/template.ts";
+import { evalBinding, Verbatim } from "../../expr/template.ts";
 import { hostOnlyFieldError, LLMConfig, responsesBlockError } from "../../llm_clients/config.ts";
 import { locatedBlockProblems, PROVIDER_BLOCKS, ValidationError } from "../../llm_clients/provider_blocks.ts";
 import {
@@ -30,7 +30,13 @@ import {
   LLM_CONFIG_KEY,
   valueLeaves,
 } from "../../nodes/agent/llm_values.ts";
-import { AgentNode, isMaxToolIterations, type PromptItem, STEER_INBOX_KEY } from "../../nodes/agent/node.ts";
+import {
+  AgentNode,
+  isMaxToolIterations,
+  type PromptItem,
+  type PromptText,
+  STEER_INBOX_KEY,
+} from "../../nodes/agent/node.ts";
 import { MEMORY_KEY_PREFIX, memoryKey } from "../../nodes/base.ts";
 import { typeToSchema } from "../../nodes/agent/structured.ts";
 import {
@@ -47,7 +53,7 @@ import type { TypeRegistry } from "../../typesys/types.ts";
 import { isList, isMemoryType, isRecord, type Type, typeLevels, valueRepr } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError, rejectRemovedMemoryKey } from "../helpers/errors.ts";
 import { checkMemoryGrants, grantErrorText, memoryBinding, rejectMemoryKeyInputs } from "../helpers/memory.ts";
-import { readTaggedValue } from "../helpers/tags.ts";
+import { includeFile, readTaggedValue } from "../helpers/tags.ts";
 import { readVariables } from "../helpers/types.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import { formerBooleanFix } from "../helpers/yaml_words.ts";
@@ -56,6 +62,7 @@ import type { SourceCursor } from "../source/index.ts";
 import {
   type BuildContext,
   BuildResult,
+  cursorAt,
   NodeDescriptor,
   type NodeDescriptorFields,
   notTextDetail,
@@ -247,6 +254,7 @@ function blockProblemRange(
 /** Return the value a literal template part binds: tags dropped, strings `$$`-unescaped. */
 function literalPart(tree: unknown): unknown {
   if (tree instanceof Binding) return literalPart(tree.source);
+  if (tree instanceof Verbatim) return tree.text;
   if (typeof tree === "string") return evalBinding(tree, MISSING_ROOT);
   if (isRecord(tree)) return Object.fromEntries(Object.entries(tree).map(([key, item]) => [key, literalPart(item)]));
   if (Array.isArray(tree)) return tree.map(literalPart);
@@ -476,6 +484,51 @@ export function maxToolIterationsError(env: Readonly<Record<string, unknown>>): 
 const PROMPT_ROLES: ReadonlySet<string> = new Set(["user", "assistant"]);
 
 /**
+ * Return the values of an agent body's prompt text: a text `prompt:`, each `user:` or
+ * `assistant:` message of a list `prompt:`, and `system_prompt:`. Each may be text
+ * `!include(str)` read, which is sent as written.
+ */
+function promptTextCursors(cursor: SourceCursor): SourceCursor[] {
+  const found: SourceCursor[] = [];
+  for (const key of ["prompt", "system_prompt"]) {
+    if (!cursor.has(key)) continue;
+    const field = cursor.child(key);
+    const items = field._valueView();
+    if (key !== "prompt" || !isList(items) || field.typedInclude !== null) {
+      found.push(field);
+      continue;
+    }
+    items.forEach((item, index) => {
+      if (!isRecord(item)) return;
+      for (const role of PROMPT_ROLES) if (Object.hasOwn(item, role)) found.push(field.child(index).child(role));
+    });
+  }
+  return found;
+}
+
+/**
+ * Refuse a value `!include(T)` read as YAML, for a `T` that isn't text, as prompt text.
+ *
+ * @throws LoadError at the first one.
+ */
+function rejectTypedPromptText(cursor: SourceCursor, diagnostics: LoadDiagnostics): void {
+  for (const field of promptTextCursors(cursor)) {
+    const include = field.typedInclude;
+    if (include === null || include.data === null) continue;
+    throw diagnostics.error(
+      `${includeFile(include.path, include.type)}: \`${field.keyText}:\` takes text; read the file with ` +
+        "`!include(str)`",
+      { range: field.range },
+    );
+  }
+}
+
+/** Return `text` as `Verbatim` text when `!include(str)` read it, at `cursor`, else as a template. */
+function promptText(text: string, cursor: SourceCursor | null): PromptText {
+  return cursor?.verbatim === true ? new Verbatim(text) : text;
+}
+
+/**
  * Read an authored list `prompt:` into its items, and range each at
  * `siteKey("field", "prompt[<i>]")` in `desc.fieldRanges`.
  *
@@ -502,6 +555,14 @@ function readPromptList(
     const range = rangeAt(cursor, ["prompt", index]) ?? fieldRange;
     if (range !== null) desc.fieldRanges.set(siteKey("field", `prompt[${index}]`), range);
     if (typeof item === "string") {
+      // Quoting the item would quote the whole file.
+      if (cursorAt(cursor, ["prompt", index])?.verbatim === true) {
+        throw diagnostics.error(
+          `${where}: a prompt list item is \`\${name}\` or \`user:\`/\`assistant:\` text; put the ` +
+            "`!include(str)` under `user:`",
+          { range },
+        );
+      }
       const name = wholeRefName(item);
       if (name !== null) return { splice: name };
       throw diagnostics.error(
@@ -526,7 +587,7 @@ function readPromptList(
       throw diagnostics.error(`${where}: ${notTextError(`prompt[${index}].${role}`, text)}`, { range: textRange });
     }
     checkWrittenValue(text, `node ${reprText(nodeId)} field 'prompt[${index}].${role}'`, textRange, diagnostics);
-    return { role: role as "user" | "assistant", text };
+    return { role: role as "user" | "assistant", text: promptText(text, cursorAt(cursor, ["prompt", index, role])) };
   });
   const last = items.at(-1)!;
   if ("role" in last && last.role === "assistant") {
@@ -539,8 +600,8 @@ function readPromptList(
 
 /** The fields `AgentDescriptor`'s constructor takes: the common ones and the AGENT's own. */
 export interface AgentDescriptorFields extends NodeDescriptorFields {
-  prompt?: string | readonly PromptItem[] | null;
-  systemPrompt?: string | null;
+  prompt?: PromptText | readonly PromptItem[] | null;
+  systemPrompt?: PromptText | null;
   variables?: unknown;
   tools?: readonly ToolGrant[];
   skills?: readonly string[] | "all" | null;
@@ -577,11 +638,16 @@ export class AgentDescriptor extends NodeDescriptor {
   );
   static override readonly required = this.require();
   static override readonly bindingFields: readonly string[] = ["inputs"];
+  static override readonly writtenFields = [
+    ...NodeDescriptor.writtenFields,
+    ["steer_inbox.render", "a template over each steer event"],
+    ["steer_inbox", "an inbox reference"],
+  ] as const;
 
-  /** The prompt template or list prompt; `null` when absent. */
-  readonly prompt: string | readonly PromptItem[] | null;
-  /** The system prompt template; `null` when absent. */
-  readonly systemPrompt: string | null;
+  /** The prompt template, `Verbatim` text or list prompt; `null` when absent. */
+  readonly prompt: PromptText | readonly PromptItem[] | null;
+  /** The system prompt template or `Verbatim` text; `null` when absent. */
+  readonly systemPrompt: PromptText | null;
   /** The authored `variables:` as YAML read it; `build` reads the declarations. */
   readonly variables: unknown;
   /** The authored tool grants. */
@@ -632,9 +698,13 @@ export class AgentDescriptor extends NodeDescriptor {
    * reject a variable named `inf`, since `${inf}` reads infinity, and read a list `prompt:` into
    * its items (`readPromptList`).
    *
+   * Text `!include(str)` read as a prompt, a system prompt or a list prompt's message is
+   * `Verbatim`, sent as written.
+   *
    * @throws LoadError when the node authors `mode:`, `long_term_memory:` or `memory_policy:` (at
-   *   its key) or a variable named `inf` (at its key), a list `prompt:` is malformed, or the
-   *   template `parse` rejects it.
+   *   its key) or a variable named `inf` (at its key), a list `prompt:` is malformed, prompt text
+   *   is a value `!include(T)` read for a `T` other than `str`, or the template `parse` rejects
+   *   it.
    */
   static override parse<T extends typeof NodeDescriptor>(
     this: T,
@@ -651,7 +721,17 @@ export class AgentDescriptor extends NodeDescriptor {
       throw diagnostics.error(message, { range: cursor.keyRangeOf("mode") });
     }
     rejectRemovedMemoryKey((key) => cursor.has(key), cursor, diagnostics, `node ${reprText(nodeId)}: `);
-    const desc = super.parse(nodeId, cursor) as AgentDescriptor;
+    rejectTypedPromptText(cursor, diagnostics);
+    let desc = super.parse(nodeId, cursor) as AgentDescriptor;
+    // Text `!include(str)` read is sent as written.
+    const { prompt, systemPrompt } = desc;
+    if (typeof prompt === "string" || typeof systemPrompt === "string") {
+      desc = desc.replace({
+        prompt: typeof prompt === "string" ? promptText(prompt, cursorAt(cursor, ["prompt"])) : prompt,
+        systemPrompt:
+          typeof systemPrompt === "string" ? promptText(systemPrompt, cursorAt(cursor, ["system_prompt"])) : systemPrompt,
+      });
+    }
     // A `steer_inbox:` mapping's errors and reads point at its `from:` and `render:` values.
     if (isRecord(cursor.get("steer_inbox"))) {
       for (const [key, site] of [

@@ -28,6 +28,7 @@ import {
   isAlias,
   isMap,
   isNode,
+  isScalar,
   isSeq,
   Lexer,
   type Node,
@@ -240,10 +241,15 @@ function parseFlowDocument(
  *   list nested deeper than `current().maxYamlNesting` levels. Otherwise at the first mapping
  *   or list, in post-order, that holds more than `current().maxYamlNodes` nodes, counting
  *   each alias as a copy of what it names (each mapping, list, and scalar, mapping keys
- *   included, counts once per place it appears); under a recursive alias, at the deepest
- *   node on the path already over the limit once the count would need repeating.
+ *   included, counts once per place it appears, and a scalar as many nodes as `weigh` gives
+ *   it, 1 by default); under a recursive alias, at the deepest node on the path already over
+ *   the limit once the count would need repeating.
  */
-export function composeFlowDocument(text: string, options: FlowParseOptions = {}): FlowDocument {
+export function composeFlowDocument(
+  text: string,
+  options: FlowParseOptions = {},
+  weigh: ((node: Scalar.Parsed) => number) | null = null,
+): FlowDocument {
   const document = parseFlowDocument(normalizeBreaks(text), { ...FLOW_OPTIONS, ...options });
   const limits = current();
   const anchors = new Map<string, AnchoredNode>();
@@ -321,7 +327,14 @@ export function composeFlowDocument(text: string, options: FlowParseOptions = {}
     const pathDependent = new Set<Node>();
     // The depth of each node on the path.
     const depths = new Map<Node, number>([[root, 0]]);
-    let counted = 1;
+    // A scalar `weigh` counts as more than one node, as an `!include(T)` value does.
+    let weighted = false;
+    const weightOf = (node: Node): number => {
+      const weight = weigh !== null && isScalar(node) ? weigh(node as Scalar.Parsed) : 1;
+      if (weight > 1) weighted = true;
+      return weight;
+    };
+    let counted = weightOf(root);
     let over: Node | null = null;
     // Each frame: the node, its children, the next child's index, its count so far,
     // and its `low`, which starts one deeper than the node.
@@ -332,7 +345,7 @@ export function composeFlowDocument(text: string, options: FlowParseOptions = {}
       total: number,
       low: number,
     ][] = [
-      [root, countedChildren(root, aliasTargets), 0, 1, 1],
+      [root, countedChildren(root, aliasTargets), 0, counted, 1],
     ];
     while (stack.length > 0) {
       const frame = stack.at(-1)!;
@@ -365,8 +378,9 @@ export function composeFlowDocument(text: string, options: FlowParseOptions = {}
           break;
         } else {
           depths.set(child, stack.length);
-          stack.push([child, countedChildren(child, aliasTargets), 0, 1, stack.length + 1]);
-          counted += 1;
+          const weight = weightOf(child);
+          stack.push([child, countedChildren(child, aliasTargets), 0, weight, stack.length + 1]);
+          counted += weight;
         }
         continue;
       }
@@ -388,7 +402,8 @@ export function composeFlowDocument(text: string, options: FlowParseOptions = {}
       const kind = isSeq(over) ? "list" : "mapping";
       throw new FlowLoaderError(
         `this ${kind} holds more than ${limit} YAML nodes, counting each alias as a copy ` +
-          `of what it names; the limit for a YAML document is ${limit} ` +
+          `of what it names${weighted ? " and each `!include(T)` as the value it reads" : ""}; ` +
+          `the limit for a YAML document is ${limit} ` +
           "(YIAN_MAX_YAML_NODES; each mapping, list, and scalar is a node)",
         over,
       );

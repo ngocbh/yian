@@ -87,7 +87,7 @@ import {
 import { type CaseRead, caseReadsAsWritten } from "../desugar/case_outputs.ts";
 import { bindingCoSkips, scanTemplate, Span } from "../../expr/template.ts";
 import { Binding, bindingSource } from "../../nodes/contracts.ts";
-import { AgentNode, STEER_INBOX_KEY } from "../../nodes/agent/node.ts";
+import { AgentNode, isPromptText, STEER_INBOX_KEY } from "../../nodes/agent/node.ts";
 import { LoopNode } from "../../nodes/loop/node.ts";
 import { messagesKey, NEW_MESSAGES, poolRootLength } from "../../typesys/pool.ts";
 import { LoadDiagnostics, locatedError } from "../helpers/errors.ts";
@@ -1319,17 +1319,18 @@ function localSites(nodeId: string, result: BuildResult): [where: string, text: 
   if (!(node instanceof AgentNode)) return sites;
   const franges = result.fieldRanges;
   const promptRange = franges.get(siteKey("field", "prompt")) ?? result.nodeRange;
-  if (typeof node.prompt === "string") {
-    sites.push([result.siteName(nodeId, "prompt"), node.prompt, promptRange]);
+  // `Verbatim` text is no template, so it reads nothing.
+  if (isPromptText(node.prompt)) {
+    if (typeof node.prompt === "string") sites.push([result.siteName(nodeId, "prompt"), node.prompt, promptRange]);
   } else {
     // A splice `${name}` has no steps, so only message texts are read.
     node.prompt.forEach((item, index) => {
-      if (!("text" in item)) return;
+      if (!("text" in item) || typeof item.text !== "string") return;
       const range = franges.get(siteKey("field", `prompt[${index}]`)) ?? promptRange;
       sites.push([`${result.siteName(nodeId, "prompt")}[${index}]`, item.text, range]);
     });
   }
-  if (node.systemPrompt) {
+  if (typeof node.systemPrompt === "string" && node.systemPrompt) {
     const range = franges.get(siteKey("field", "system_prompt")) ?? result.nodeRange;
     sites.push([result.siteName(nodeId, "system_prompt"), node.systemPrompt, range]);
   }

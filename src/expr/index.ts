@@ -73,4 +73,5 @@ export {
   rewriteConditionReads,
   rewriteTemplateRefs,
   scanTemplate,
+  Verbatim,
 } from "./template.ts";

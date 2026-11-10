@@ -87,6 +87,8 @@ export interface CaseDescriptorFields extends NodeDescriptorFields {
   elseStyle?: ScalarStyle | null;
   thenTags?: readonly (string | null)[];
   elseTag?: string | null;
+  thenIncludes?: readonly (string | null)[];
+  elseInclude?: string | null;
   whenOrigins?: readonly (OriginRef | null)[];
   onOrigin?: OriginRef | null;
 }
@@ -101,7 +103,8 @@ export interface CaseDescriptorFields extends NodeDescriptorFields {
  *
  * `thenStyles` (aligned with `cases`), `elseStyle` and `hasElse` let the branch check tell an
  * unquoted node name from quoted text, and `else: null` from no `else:`; `thenTags` and `elseTag`
- * keep a tagged value's tag. A style is the YAML scalar style of the authored value (`null` for a
+ * keep a tagged value's tag, and `thenIncludes` and `elseInclude` a value's `!include(T)` as
+ * written. A style is the YAML scalar style of the authored value (`null` for a
  * mapping, a list, a missing value or a source-free cursor); downstream reads `null` as plain.
  */
 export class CaseDescriptor extends NodeDescriptor {
@@ -112,6 +115,10 @@ export class CaseDescriptor extends NodeDescriptor {
   static override readonly whenHint =
     "; `when:` goes in each entry of `cases:` (`cases: [{when: ..., then: <node>}]`)";
   static override readonly bindingFields: readonly string[] = [];
+  static override readonly writtenFields = [
+    ["on", "the value a case matches"],
+    ["cases[].when", "a condition"],
+  ] as const;
   static override readonly keywordRemap: ReadonlyMap<string, string> = new Map([["else", "else_"]]);
 
   /**
@@ -142,6 +149,13 @@ export class CaseDescriptor extends NodeDescriptor {
   /** The local tag of the `else:` value; `null` when untagged. */
   readonly elseTag: string | null;
   /**
+   * The `!include(T) PATH` each `cases[N].then` value was read with, as written (`null` for one
+   * written in the flow), aligned with `cases`.
+   */
+  readonly thenIncludes: readonly (string | null)[];
+  /** The `!include(T) PATH` the `else:` value was read with, as written; `null` when none. */
+  readonly elseInclude: string | null;
+  /**
    * The source-neutral site of each `cases[N].when`: empty for a direct or source-free
    * construction, otherwise aligned with `cases`.
    */
@@ -169,6 +183,8 @@ export class CaseDescriptor extends NodeDescriptor {
     this.elseStyle = fields.elseStyle ?? null;
     this.thenTags = fields.thenTags ?? [];
     this.elseTag = fields.elseTag ?? null;
+    this.thenIncludes = fields.thenIncludes ?? [];
+    this.elseInclude = fields.elseInclude ?? null;
     const whenOrigins: unknown = fields.whenOrigins ?? [];
     if (!Array.isArray(whenOrigins)) throw new TypeError("CASE predicate origins must be an array");
     // A frozen copy, so the origins can't change after the alignment check.
@@ -271,6 +287,8 @@ export class CaseDescriptor extends NodeDescriptor {
       thenRanges,
       thenStyles: thens.map((then) => then?.scalarStyle ?? null),
       thenTags: thens.map((then) => then?.tag ?? null),
+      thenIncludes: thens.map((then) => then?.typedInclude?.written ?? null),
+      elseInclude: hasElse ? (cursor.child("else").typedInclude?.written ?? null) : null,
     }) as InstanceType<T>;
   }
 

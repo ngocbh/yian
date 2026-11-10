@@ -77,6 +77,7 @@ import {
   oldTypedText,
   QUOTED_STYLES,
   readTaggedValue,
+  rejectIncludeIn,
   rejectTaggedOutput,
   suggestTag,
   yamlQuoted,
@@ -1790,6 +1791,7 @@ function readSections(options: AssembleOptions, ctx: AssembleContext): ReadSecti
     extractInlineBodies(authoredNodesCursor, { owner }),
   );
 
+  rejectIncludeIn(assertsCursor, "asserts", "assertions", diagnostics);
   const flowAssertionCursors = assertionCursors(options.assertsSection, assertsCursor, diagnostics);
   const flowAssertionRanges = flowAssertionCursors.map((cursor) => (cursor !== null ? cursor.range : null));
   const flowAssertionOriginAt = (index: number): OriginRef | null =>

@@ -30,7 +30,7 @@ import type {
   ToolCallFinished,
   ToolCallStarted,
 } from "../events.ts";
-import { ExpressionError, parseCondition, promptRefs } from "../expr/index.ts";
+import { ExpressionError, parseCondition, promptRefs, Verbatim } from "../expr/index.ts";
 import { type DeclaredTypes, evaluateWhenRecord, localDeclared } from "../expr/expressions.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import type { Request, ToolSpec } from "../llm/messages.ts";
@@ -338,7 +338,7 @@ export function parseNamedCondition(
  *
  * @throws ExpressionError `<subject>: <error>`, with the template error as its `cause`.
  */
-export function checkNamedPrompt(text: string, subject: string): void {
+export function checkNamedPrompt(text: string | Verbatim, subject: string): void {
   try {
     promptRefs(text);
   } catch (error) {

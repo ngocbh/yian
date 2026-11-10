@@ -1,0 +1,123 @@
+# `!include(list(str))` reads few-shot examples into an agent variable, its type and its value
+# from the file; the prompt joins them, and each example's `${...}` stays as written.
+kind: run
+flow: |
+  id: shots
+  name: shots
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    question: !str
+  nodes:
+    tutor:
+      kind: agent
+      input: {question: "${input.question}"}
+      variables:
+        examples: !include(list(str)) examples.yaml
+      system_prompt: Answer briefly.
+      prompt: "Examples:\n${join(examples, '\n')}\n\nQ: ${question}"
+      output: str
+  output: ${tutor.output}
+files:
+  examples.yaml: |
+    - "Q: 1+1? A: 2"
+    - "Q: echo ${HOME}? A: your home folder"
+inputs: {question: What is 2+2?}
+run: {num_workers: 0}
+host:
+  models:
+    tutor:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: "4"
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: Answer briefly.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: "Examples:\nQ: 1+1? A: 2\nQ: echo ${HOME}? A: your home folder\n\nQ: What is 2+2?"
+expect:
+  output: {status: succeeded, output: "4"}
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        tutor:
+          _connection:
+            endpoint: null
+            method: api_key
+            source: environment
+          model: claude-test
+          provider: anthropic
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - key: system.now
+  - - pool_commit
+    - __start__
+    - key: system.run_id
+      value: <id:1>
+  - - pool_commit
+    - __start__
+    - key: system.today
+  - - pool_commit
+    - __start__
+    - value:
+        question: What is 2+2?
+  - - node_started
+    - __start__
+  - - pool_commit
+    - __start__
+    - value:
+        question: What is 2+2?
+  - - node_succeeded
+    - __start__
+    - commit: 6
+  - - node_started
+    - tutor
+  - - node_step
+    - tutor
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: claude-test
+        output:
+          format: yian.message.v1
+          parts:
+          - text: "4"
+            type: text
+          role: assistant
+        purpose: chat
+        request_sha256: ecfa1b9e33a45cee0aab7a90775590020089e6983c75762b51b567a048caed7d
+        response_id: null
+        usage: null
+  - - pool_commit
+    - tutor
+    - value: "4"
+  - - pool_commit
+    - tutor
+    - key: tutor.new_messages
+      steps:
+      - 9
+  - - node_succeeded
+    - tutor
+    - commit: 10
+      messages: 11
+  - - node_started
+    - __end__
+  - - pool_commit
+    - __end__
+    - value: "4"
+  - - node_succeeded
+    - __end__
+    - commit: 14

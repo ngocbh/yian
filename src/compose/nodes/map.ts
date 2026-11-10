@@ -70,6 +70,7 @@ function rejectNonListOver(
 export class MapDescriptor extends CallDescriptor {
   static override readonly kind = "map";
   static override readonly allowed = this.allow("over", "parallel");
+  static override readonly writtenFields = [...CallDescriptor.writtenFields, ["over", "a list or a reference"]] as const;
   static override readonly required = this.require("over");
   static override readonly inputsAreLocals = false;
 

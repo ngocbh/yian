@@ -35,6 +35,7 @@ import {
   setRecordKey,
   SourceSyntaxError,
   type TaggedNode,
+  type TypedInclude,
 } from "./common.ts";
 import { SourceCursor } from "./cursor.ts";
 import {
@@ -116,14 +117,60 @@ const ONLY_SPACES = /^ *$/;
 /** The local tag whose scalar names a file to read the value's text from. */
 const INCLUDE_TAG = "include";
 
+/** A local tag `include(T)`, whose scalar names a file to read a value of type `T` from. */
+const TYPED_INCLUDE_TAG = /^include\((.*)\)$/s;
+
+/** The text type, whose `!include(T)` reads a file's text as written, not as YAML. */
+const TEXT_TYPE = "str";
+
 const NO_INCLUDES: ReadonlyMap<string, string> = new Map();
 
-/** An `!include` value a parse wasn't given the text of. */
+/** The values `!include(T)` reads, by path as written, and which `T`s read their file's text. */
+export interface IncludedValues {
+  /** Each path's file read as one plain YAML value (`parseData`), for a `T` that doesn't read text. */
+  readonly values: ReadonlyMap<string, SourceDocument>;
+  /**
+   * Each `T`, as written, whose `!include(T)` reads its file's text: one whose every value but
+   * null is text, such as `str` or a typedef naming it.
+   */
+  readonly textTypes: ReadonlySet<string>;
+}
+
+const NO_VALUES: IncludedValues = { values: new Map(), textTypes: new Set([TEXT_TYPE]) };
+
+/** An `!include` value a parse wasn't given the text of, or the data of. */
 export interface IncludeSite {
   /** The path as written after the tag. */
   readonly path: string;
   /** The `!include` value's range, its tag included. */
   readonly range: SourceRange;
+  /** `T` as written in `!include(T)`; `null` for a bare `!include`. */
+  readonly type: string | null;
+}
+
+/** Return `T` of a local tag `include(T)` (without its `!`), or null for any other tag. */
+function includedType(tag: string | null): string | null {
+  return tag === null ? null : (TYPED_INCLUDE_TAG.exec(tag)?.[1] ?? null);
+}
+
+/** Say whether a node's raw tag, its `!` included, is `!include` or `!include(T)`. */
+function isIncludeTag(tag: string | undefined): boolean {
+  return tag !== undefined && (tag === `!${INCLUDE_TAG}` || includedType(tag.slice(1)) !== null);
+}
+
+/**
+ * Return how messages name an `!include` tag: `` `!include` ``, or `` `!include(T)` `` for
+ * `type` `T`.
+ */
+export function includeTag(type: string | null): string {
+  return type === null ? "`!include`" : `\`!include(${type})\``;
+}
+
+/** Return an example of an `!include` (or `!include(T)`, for `type` `T`) as messages show one. */
+export function includeExample(type: string | null): string {
+  if (type === null) return "`prompt: !include prompts/answer.md`";
+  if (type === TEXT_TYPE) return "`prompt: !include(str) prompts/answer.md`";
+  return `\`rows: !include(${type}) rows.yaml\``;
 }
 
 /**
@@ -224,6 +271,8 @@ export class SourceDocument {
   readonly _definitions: readonly Definition[];
   /** @internal The root's definition id. */
   readonly _rootDefinition: number;
+  /** @internal The file each `!include(T)` value's definition was read from, by id. */
+  readonly _typedIncludes: ReadonlyMap<number, TypedInclude>;
 
   private constructor(
     text: string,
@@ -232,6 +281,7 @@ export class SourceDocument {
     repeatedKey: RepeatedKey | null,
     nonTextKey: NonTextKey | null,
     includes: readonly IncludeSite[],
+    typedIncludes: ReadonlyMap<number, TypedInclude>,
   ) {
     this.text = text;
     this.label = label;
@@ -241,6 +291,7 @@ export class SourceDocument {
     this._definitions = Object.freeze(definitions);
     this._rootDefinition = 0;
     this._value = definitions[this._rootDefinition]!.value;
+    this._typedIncludes = typedIncludes;
     Object.freeze(this);
   }
 
@@ -334,6 +385,7 @@ export class SourceDocument {
           path: first?.path ?? [],
           isKey: keyIds.has(definitionId),
           keyPath: spellKeyLink(keyLinks.get(definitionId) ?? null),
+          include: this._typedIncludes.get(definitionId) ?? null,
         }),
       );
     });
@@ -368,19 +420,47 @@ export class SourceDocument {
    * Compose and construct exactly one YAML document in one pass.
    *
    * `included` maps an `!include` path, as written, to the file's text. Such a value reads as
-   * that text: a string, never resolved as a plain scalar, untagged, marked `included`, and
-   * located at the `!include` value. A path `included` lacks is listed in `includes`.
+   * that text, its line endings as LF: a string, never resolved as a plain scalar, untagged,
+   * marked `included`, and located at the `!include` value. An `!include(T)` value whose `T` is
+   * in `typed.textTypes` (by default only `str`) reads as the text exactly, tagged `T` and marked
+   * `verbatim`. One of any other `T` reads as the value `typed.values` holds for its path
+   * (`parseData`), tagged `T`, each string in it marked `verbatim`, and every part of it located
+   * at the `!include(T)` value; it counts toward the node limit as that value's nodes, at each place
+   * it appears. A path the parse lacks the text or value of is listed in `includes`.
    *
    * @throws SourceSyntaxError when the text holds a character YAML refuses, is not one valid
    *   YAML document, or holds a node the flow loader can't build, a tag that is bare or
-   *   neither local nor core, or `!include` on a mapping key, a list, a mapping or a `<<:` merge
-   *   source; `range` locates the problem. A YAML error at a character glued to a tag ends with
-   *   `TAG_HINT`.
+   *   neither local nor core, or `!include` or `!include(T)` on a mapping key, a list, a mapping
+   *   or a `<<:` merge source; `range` locates the problem. A YAML error at a character glued to
+   *   a tag ends with `TAG_HINT`.
    */
   static parse(
     text: string,
     label = "<flow>",
     included: ReadonlyMap<string, string> = NO_INCLUDES,
+    typed: IncludedValues = NO_VALUES,
+  ): SourceDocument {
+    return SourceDocument._compose(text, label, included, typed, false);
+  }
+
+  /**
+   * Parse one YAML document as a plain value, as `!include(T)` reads a file: as `parse` does,
+   * refusing any tag, anchor, alias and `<<:` merge key. A repeated or non-text key is reported
+   * as `parse` reports it.
+   *
+   * @throws SourceSyntaxError as `parse` does, and at the first tag, anchor, alias or merge key.
+   */
+  static parseData(text: string, label: string): SourceDocument {
+    return SourceDocument._compose(text, label, NO_INCLUDES, NO_VALUES, true);
+  }
+
+  /** Parse `text` as `parse` does; `plain` refuses what `parseData` refuses. */
+  private static _compose(
+    text: string,
+    label: string,
+    included: ReadonlyMap<string, string>,
+    typed: IncludedValues,
+    plain: boolean,
   ): SourceDocument {
     const source = normalizeBreaks(text);
     const starts = lineStarts(source);
@@ -396,10 +476,18 @@ export class SourceDocument {
     const spanOf = propertySpans(source);
     let flow: FlowDocument;
     let built: Built;
+    // An `!include(T)` value counts toward the node limit as the nodes of the value it reads, at
+    // every place it appears, as if written there.
+    const weigh = (node: Scalar.Parsed): number => {
+      const type = node.tag?.startsWith("!") ? includedType(node.tag.slice(1)) : null;
+      const value = type === null || typed.textTypes.has(type) ? undefined : typed.values.get(node.source);
+      return value === undefined ? 1 : value._definitions.length;
+    };
     try {
-      flow = composeFlowDocument(source);
+      flow = composeFlowDocument(source, {}, typed.values.size === 0 ? null : weigh);
+      if (plain) refuseNonPlain(flow, starts, spanOf);
       // A merge error comes from `mergeSources`, a `FlowLoaderError`.
-      built = build(flow, source, starts, spanOf, included);
+      built = build(flow, source, starts, spanOf, included, typed);
     } catch (error) {
       if (error instanceof YAMLError) {
         let message =
@@ -416,7 +504,7 @@ export class SourceDocument {
       }
       throw error;
     }
-    const { definitions, ids, nonTextKey, includes } = built;
+    const { definitions, ids, nonTextKey, includes, typedIncludes } = built;
     return new SourceDocument(
       text,
       label,
@@ -424,6 +512,7 @@ export class SourceDocument {
       firstRepeatedKey(flow, ids, definitions, starts),
       nonTextKey,
       includes,
+      typedIncludes,
     );
   }
 }
@@ -434,6 +523,55 @@ interface Built {
   readonly ids: ReadonlyMap<Node, number>;
   readonly nonTextKey: NonTextKey | null;
   readonly includes: readonly IncludeSite[];
+  readonly typedIncludes: ReadonlyMap<number, TypedInclude>;
+}
+
+/** Return how a message shows a YAML tag as written: a core tag as `!!str`. */
+function writtenTag(tag: string): string {
+  return tag.startsWith(CORE_TAG_PREFIX) ? "!!" + tag.slice(CORE_TAG_PREFIX.length) : tag;
+}
+
+/**
+ * Throw at the first tag, anchor, alias or `<<:` merge key in `flow`, in document order: a file
+ * `!include(T)` reads is a plain value.
+ *
+ * @throws SourceSyntaxError at the first one.
+ */
+function refuseNonPlain(flow: FlowDocument, starts: readonly number[], spanOf: SpanOf): void {
+  const contents = flow.document.contents;
+  const stack: ParsedNode[] = contents === null ? [] : [contents];
+  const fix = "write the value out in plain YAML";
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    if (isAlias(node)) {
+      const at = pointRange(starts, node.range[0]);
+      throw new SourceSyntaxError(`an alias (\`*${node.source}\`) can't be used here; ${fix}`, at);
+    }
+    const span = spanOf(node);
+    const at = pointRange(starts, span.start);
+    if (node.tag !== undefined || span.bare) {
+      const tag = writtenTag(node.tag ?? "!");
+      throw new SourceSyntaxError(`a tag (\`${tag}\`) can't be used here; ${fix}`, at);
+    }
+    if (node.anchor !== undefined) {
+      throw new SourceSyntaxError(`an anchor (\`&${node.anchor}\`) can't be used here; ${fix}`, at);
+    }
+    const children: ParsedNode[] = [];
+    if (isMap(node)) {
+      for (const pair of node.items) {
+        const key = pair.key as ParsedNode;
+        if (isScalar(key) && isMergeKey(key)) {
+          const keyAt = pointRange(starts, key.range[0]);
+          throw new SourceSyntaxError(`a \`<<:\` merge key can't be used here; ${fix}`, keyAt);
+        }
+        children.push(key);
+        if (pair.value !== null) children.push(pair.value as ParsedNode);
+      }
+    } else if (isSeq(node)) {
+      children.push(...(node.items as ParsedNode[]));
+    }
+    for (let index = children.length - 1; index >= 0; index--) stack.push(children[index]!);
+  }
 }
 
 /**
@@ -444,11 +582,13 @@ interface Built {
  * it, and an alias to a container still being filled shares it. The root is definition 0.
  *
  * `source` is the normalized text the CST and `starts` index. An `!include` scalar reads as its
- * path's text in `included`, else as its path, still tagged and listed in `includes`.
+ * path's text in `included`, an `!include(T)` one of a `T` in `typed.textTypes` as that text
+ * exactly, and one of any other `T` as the value `typed.values` holds for its path; a value the
+ * parse lacks reads as its path, still tagged and listed in `includes`.
  *
  * @throws SourceSyntaxError at a scalar the flow loader can't build, at a list or mapping key,
  *   at a bare tag or one neither local nor core, at a core tag that can't build its node, or at
- *   an `!include` on a key, a list, a mapping or a merge source.
+ *   an `!include` or `!include(T)` on a key, a list, a mapping or a merge source.
  */
 function build(
   flow: FlowDocument,
@@ -456,9 +596,11 @@ function build(
   starts: readonly number[],
   spanOf: SpanOf,
   included: ReadonlyMap<string, string>,
+  typed: IncludedValues,
 ): Built {
   const { document, aliasTargets } = flow;
   const ids = new Map<Node, number>();
+  const typedIncludes = new Map<number, TypedInclude>();
   if (document.contents === null) {
     const empty: ScalarDef = {
       kind: "scalar",
@@ -469,8 +611,9 @@ function build(
       style: null,
       tag: null,
       included: false,
+      verbatim: false,
     };
-    return { definitions: [Object.freeze(empty)], ids, nonTextKey: null, includes: [] };
+    return { definitions: [Object.freeze(empty)], ids, nonTextKey: null, includes: [], typedIncludes };
   }
   const definitions: (Definition | null)[] = [];
   const values: Value[] = [];
@@ -499,6 +642,7 @@ function build(
         style: "plain",
         tag: null,
         included: false,
+        verbatim: false,
       }),
     );
     values.push(null);
@@ -523,6 +667,14 @@ function build(
     if (tag === INCLUDE_TAG) {
       throw new SourceSyntaxError(
         "`!include` gives text, and `<<:` merges a mapping; write the mapping to merge here",
+        range,
+      );
+    }
+    const type = includedType(tag);
+    if (type !== null) {
+      throw new SourceSyntaxError(
+        `${includeTag(type)} can't be a \`<<:\` merge source, which merges a mapping written in the ` +
+          "flow; write the mapping to merge here",
         range,
       );
     }
@@ -599,18 +751,18 @@ function build(
           pointRange(starts, keyAt),
         );
       if (!isScalar(keyNode)) throw collectionKey();
+      if (isIncludeTag(keyNode.tag)) {
+        const type = includedType(keyNode.tag!.slice(1));
+        throw new SourceSyntaxError(
+          `${includeTag(type)} can't be on a mapping key; it gives a value, as in ${includeExample(type)}`,
+          pointRange(starts, keyAt),
+        );
+      }
       const keyDefinition = intern(keyNode);
       const keyScalar = definitions[keyDefinition];
       // A scalar tagged `!!seq` or `!!map` builds a list or record, which can't be
       // a key; it fails here, before the value is built.
       if (keyScalar?.kind !== "scalar") throw collectionKey();
-      if (keyScalar.tag === INCLUDE_TAG || keyScalar.included) {
-        throw new SourceSyntaxError(
-          "`!include` can't be on a mapping key; it gives a value's text, as in " +
-            "`prompt: !include prompts/answer.md`",
-          pointRange(starts, keyAt),
-        );
-      }
       // A missing value sits where the key ends.
       const valueDefinition =
         pair.value === null ? internMissing(pair.key.range[1]) : intern(pair.value);
@@ -687,8 +839,9 @@ function build(
     // The path is the text as written: a plain `3` or `true` names a file too.
     const path = node.source;
     const text = included.get(path);
-    if (text === undefined) includes.push(Object.freeze({ path, range }));
-    const value = text ?? path;
+    if (text === undefined) includes.push(Object.freeze({ path, range, type: null }));
+    // The text is a template, its line endings read as LF.
+    const value = text === undefined ? path : text.replace(/\r\n?/g, "\n");
     const id = reserve(node, value);
     definitions[id] = Object.freeze({
       kind: "scalar",
@@ -700,8 +853,121 @@ function build(
       style: text === undefined ? STYLES[node.type!] : "literal",
       tag: text === undefined ? INCLUDE_TAG : null,
       included: text !== undefined,
+      verbatim: false,
     });
     return id;
+  };
+  /**
+   * Intern an `!include(T)` scalar: for a `T` in `typed.textTypes`, the path's text exactly, tagged
+   * `T`; for any other `T`, the path's value in `typed.values`, tagged `T` (`graft`). A path the
+   * parse lacks reads as its path, tagged `include(T)`.
+   *
+   * @throws SourceSyntaxError at an `!include(T)` on a list or mapping.
+   */
+  const internTypedInclude = (node: AnchoredNode, type: string, range: SourceRange, at: SourceRange): number => {
+    if (!isScalar(node)) {
+      throw new SourceSyntaxError(
+        `${includeTag(type)} reads a value from the file its path names, so it goes on the ` +
+          `path, not a ${isSeq(node) ? "list" : "mapping"}`,
+        at,
+      );
+    }
+    const path = node.source;
+    // Messages quote the `!include(T)` as written, never the file.
+    const written = `!include(${type}) ${source.slice(node.range![0], node.range![1])}`;
+    const textual = typed.textTypes.has(type);
+    const text = textual ? included.get(path) : undefined;
+    const value = textual ? undefined : typed.values.get(path);
+    if (text === undefined && value === undefined) {
+      includes.push(Object.freeze({ path, range, type }));
+      const id = reserve(node, path);
+      definitions[id] = Object.freeze({
+        kind: "scalar",
+        value: path,
+        range,
+        raw: path,
+        constructedLineRanges: null,
+        style: STYLES[node.type!],
+        tag: `${INCLUDE_TAG}(${type})`,
+        included: false,
+        verbatim: false,
+      });
+      return id;
+    }
+    if (value !== undefined) {
+      const id = graft(node, value, type, range, written);
+      typedIncludes.set(id, Object.freeze({ type, path, written, data: value, text: null }));
+      return id;
+    }
+    const id = reserve(node, text!);
+    definitions[id] = Object.freeze({
+      kind: "scalar",
+      value: text!,
+      range,
+      raw: written,
+      constructedLineRanges: null,
+      style: "literal",
+      tag: type,
+      included: false,
+      verbatim: true,
+    });
+    typedIncludes.set(id, Object.freeze({ type, path, written, data: null, text: text! }));
+    return id;
+  };
+  /**
+   * Copy the definitions of `value`, a document `parseData` read, as the value of the
+   * `!include(T)` scalar `node` and return its root's id. Every copy sits at the `!include(T)`
+   * value's `range`; the root is tagged `type` and written as `written`, and each string is
+   * marked `verbatim`. A plain document has no merge, alias or repeated key, so each mapping is
+   * one leaf of arcs and each definition is reached once.
+   */
+  const graft = (
+    node: AnchoredNode,
+    value: SourceDocument,
+    type: string,
+    range: SourceRange,
+    written: string,
+  ): number => {
+    const offset = definitions.length;
+    ids.set(node, offset + value._rootDefinition);
+    const shift = (arc: MapArc): MapArc =>
+      Object.freeze({
+        key: arc.key,
+        keyDefinition: arc.keyDefinition + offset,
+        valueDefinition: arc.valueDefinition + offset,
+      });
+    for (const [index, definition] of value._definitions.entries()) {
+      const tag = index === value._rootDefinition ? type : null;
+      values.push(definition.value);
+      if (definition.kind === "scalar") {
+        const root = tag !== null;
+        definitions.push(
+          Object.freeze({
+            ...definition,
+            range,
+            raw: root ? written : definition.raw,
+            constructedLineRanges: null,
+            style: root ? "literal" : definition.style,
+            tag,
+            verbatim: typeof definition.value === "string",
+          }),
+        );
+      } else if (definition.kind === "sequence") {
+        const itemDefinitions = Object.freeze(definition.itemDefinitions.map((item) => item + offset));
+        definitions.push(Object.freeze({ ...definition, range, itemDefinitions, tag }));
+      } else {
+        const arcs = Object.freeze(definition.pairSequence.arcs.map(shift));
+        const pairSequence: ArcSequence = Object.freeze({ ...definition.pairSequence, arcs });
+        const effectiveIndex = new Map(
+          [...definition.effectiveIndex].map(([key, { pairOrdinal }]) => [
+            key,
+            Object.freeze({ arc: arcs[pairOrdinal]!, pairOrdinal }),
+          ]),
+        );
+        definitions.push(Object.freeze({ ...definition, range, pairSequence, effectiveIndex, tag }));
+      }
+    }
+    return offset + value._rootDefinition;
   };
   const intern = (written: ParsedNode): number => {
     const node = target(aliasTargets, written);
@@ -712,6 +978,8 @@ function build(
     const at = pointRange(starts, span.start);
     const tag = localTag(node, span, starts);
     if (tag === INCLUDE_TAG) return internInclude(node, range, at);
+    const type = includedType(tag);
+    if (type !== null) return internTypedInclude(node, type, range, at);
     // A local tag reads its node as if untagged.
     const core = tag === null ? node.tag : undefined;
     // The tag picks the constructor: `!!seq` builds a list and `!!map` a record
@@ -737,6 +1005,7 @@ function build(
         style: STYLES[node.type!],
         tag,
         included: false,
+        verbatim: false,
       });
       return id;
     }
@@ -809,7 +1078,7 @@ function build(
   includes.sort(
     (a, b) => a.range.startLine - b.range.startLine || a.range.startCol - b.range.startCol,
   );
-  return { definitions: built, ids, nonTextKey, includes };
+  return { definitions: built, ids, nonTextKey, includes, typedIncludes };
 }
 
 /**

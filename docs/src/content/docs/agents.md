@@ -77,7 +77,8 @@ output: ${writer.output}
 
 - `system_prompt:` replaces yian's default instruction; it doesn't add to it. Every model call
   of the node starts with it.
-- Each `variables:` entry is a type tag and a value, checked at load. Variables can't share a
+- Each `variables:` entry is a type tag and a value, checked at load, or an `!include(T)` that
+  reads both from a file (see [Prompts in files](#prompts-in-files)). Variables can't share a
   name with an input, and can't be named `__llm_config` or `__steer_inbox`, or start with
   `__memory_`.
 
@@ -110,8 +111,8 @@ output: ${writer.output}
 ```
 
 - The file's text is the value, as if written there in quotes: a `${...}` in it is checked at
-  load, and its final newline is kept. The text isn't YAML, so an included file can't include
-  another.
+  load, and its final newline is kept. Its line endings read as LF. The text isn't YAML, so an
+  included file can't include another.
 - `!include` works on any text value. It fails at load on a key, a list or a mapping, and where
   a type goes: `input:` and `variables:` declarations, a node's `output:` type and `typedefs:`.
 - The file must be UTF-8 text of at most `YIAN_MAX_INCLUDE_BYTES` (see
@@ -120,6 +121,56 @@ output: ${writer.output}
   `!include`.
 - A run records the text, so a resume uses the text the run started with, whatever the file
   holds by then.
+
+To send a file exactly as written, read it with `!include(str)`. Its text is never a template:
+`$$`, `${...}` and its line endings stay as they are, so a prompt an optimizer rewrites, or one
+that writes math or shell, reaches the model unchanged. `!include(T)` reads a file as a value of
+type `T` wherever a tag goes, as if `!T` and the value were written there. That reads few-shot
+examples or a table into a variable:
+
+```md title="prompts/tutor.md"
+Write math as $$x^2$$. Shell paths start at ${HOME}.
+```
+
+```json title="examples.json"
+["Q: 2+2? A: 4", "Q: 3+3? A: 6"]
+```
+
+```yaml title="tutor.yaml"
+id: tutor
+name: tutor
+input:
+  question: !str
+nodes:
+  tutor:
+    kind: agent
+    input:
+      question: ${input.question}
+    variables:
+      examples: !include(list(str)) examples.json
+    system_prompt: !include(str) prompts/tutor.md
+    prompt: "Examples:\n${join(examples, '\n')}\n\nQ: ${question}"
+    output: str
+output: ${tutor.output}
+```
+
+- A `T` whose every value but null is text reads the file's text, as `str` does: a typedef
+  naming `str`, `Optional(str)` or a `Literal`. The text is then checked against `T`.
+- Any other `T` reads the file as one YAML value, so JSON works too. It can't hold a tag, so it
+  can't include another file, nor an anchor, an alias, a `<<:` merge key or a repeated key. Its
+  strings are never templates.
+- The value is checked against `T` at load, as a literal after `!T` is. A file that doesn't hold
+  one such value, or holds one that doesn't fit, fails at the tag; the error names the file, the
+  line in it and the place in the value, such as `examples[2]`.
+- `${examples}` writes a variable's value as it is, without reading it as a template again.
+- A `T` that reads text works on any text value, as `!include` does, and gives the text exactly:
+  `prompt:`, `system_prompt:`, a list prompt's messages, `code:`, `description:` and the like.
+  It fails at load where the flow writes a condition, an expression or a template of its own:
+  `when:`, `on:`, `while:`, `until:`, `times:`, `max:`, `asserts:`, a map's `over:`,
+  `steer_inbox:` and its `render:`, and an ask's `adaptive_questions.prompt`. A case's `then:` or
+  `else:` takes it in its own entry in `nodes:`.
+- A `T` that reads YAML goes only where a tag goes.
+- Its path, the root folder, the size cap and the record work as for `!include`.
 
 ### A list prompt
 

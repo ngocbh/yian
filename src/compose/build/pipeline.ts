@@ -1907,9 +1907,6 @@ function readSections(options: AssembleOptions, ctx: AssembleContext): ReadSecti
   // A case branch names a node or calls a flow, and a case has no `output:`. Runs BEFORE the
   // inline-call desugar so a branch's text is still as authored.
   checkCaseBranches(descriptors, {
-    registry,
-    isCallable: (name) => scope.has(name),
-    inputTypes: params.types,
     outputAt: (nodeId) => caseOutputCursor(nodesCursor, nodeId, { diagnostics }),
     diagnostics,
   });

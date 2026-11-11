@@ -97,7 +97,6 @@ const ALLOWED: Record<string, string> = {
   "cli/chat_view.ts: SPIN_MS": "the chat's spinner frame interval",
   "cli/chat_view.ts: ARG_CHARS": "length of an argument value a chat's tool line shows",
   "cli/chat_view.ts: LABEL_CELLS": "width of the label column in the chat's banner",
-  "compose/validate/case_branches.ts: SHOWN_LIMIT": "width of a value shown in a message",
   "run.ts: LITERAL_LABEL_WIDTH": "width of a literal shown in a type label",
   "llm_clients/redact.ts: MIN_VISIBLE": "key characters a masked echo must show to count",
   "llm/errors.ts: MAX_DETAIL_CHARS": "length of provider error text kept in a message",

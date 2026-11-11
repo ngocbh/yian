@@ -73,7 +73,15 @@ import { loadFlowSource } from "./compose/loader.ts";
 import { childSignature } from "./compose/nodes/resolver.ts";
 import { checkRecorded, current, type Defaults, type Env, nonDefaults, processEnv, withEnv } from "./defaults.ts";
 import { compareCodeUnits, type Failure, getCloseMatches, noteCleanup, reprText } from "./diagnostics.ts";
-import { CallClosed, RunCancelled, type RunEvent, RunFailed, RunSucceeded, type StreamChunk } from "./events.ts";
+import {
+  CallClosed,
+  type ConsoleLine,
+  RunCancelled,
+  type RunEvent,
+  RunFailed,
+  RunSucceeded,
+  type StreamChunk,
+} from "./events.ts";
 import { ExpressionError } from "./expr/expressions.ts";
 import { checkTemplateCalls } from "./expr/template.ts";
 import { LLMConfig, popHostCredentials } from "./llm_clients/config.ts";
@@ -257,6 +265,7 @@ export {
   type Value,
   type ValueRecord,
 } from "./typesys/values.ts";
+export type { ConsoleLine, ConsoleMethod } from "./events.ts";
 export type { RecordedMemoryTool } from "./typesys/memory.ts";
 export type { WaitInfo } from "./runtime/waits.ts";
 export type { MemoryDrift } from "./runtime/memories.ts";
@@ -276,6 +285,8 @@ export {
 export type EventHook = (event: RunEvent) => unknown;
 /** Sees each transient stream chunk. */
 export type StreamHook = (chunk: StreamChunk) => unknown;
+/** Takes each line a CODE node's code prints. */
+export type ConsoleHook = (line: ConsoleLine) => unknown;
 
 /** Where a run stands when a run call returns: a terminal result, or waiting on calls. */
 export type RunResultStatus = "succeeded" | "failed" | "waiting" | "cancelled";
@@ -651,6 +662,12 @@ export interface RunFlowOptions {
   /** Sees each transient stream chunk; called as `onEvent` is. */
   onStream?: StreamHook | null;
   /**
+   * Takes each line the run's CODE nodes print (`{runId, node, method, text}`) in place of this
+   * process's `console`, a line printed after its node settled too; called as `onEvent` is.
+   * Without it the lines go to `console`.
+   */
+  onConsole?: ConsoleHook | null;
+  /**
    * The run's live channel: gets each record once it is appended, and each AGENT model call's
    * start, chunks and end, for a viewer to follow the run (`LiveChannel`). A subscriber that throws
    * is dropped and reported by the channel; it never affects the run.
@@ -718,7 +735,7 @@ export interface RunFlowOptions {
  * @param options See `RunFlowOptions`.
  * @returns The terminal success or failure, with this call's post-durable observers.
  * @throws TypeError when `flow` isn't a `ComposedFlow`, `signal` isn't an `AbortSignal`, `live`
- *   isn't a `LiveChannel`, `onEvent` or `onStream` isn't a function, `inputs` isn't a record (a
+ *   isn't a `LiveChannel`, `onEvent`, `onStream` or `onConsole` isn't a function, `inputs` isn't a record (a
  *   Proxy included), `llmConfig` is a primitive or an array, a `tools` entry is malformed, `skills`
  *   isn't a `Map` of `Skill`s each keyed by its name, `scheduler` lacks `now` or `sleep`, `random`
  *   isn't a function, or `models` lacks `env` or `createModel`.
@@ -767,7 +784,7 @@ export async function runFlow(
 /** The options `runFlow` and `advance` share, which drive the engine. */
 type DriveOptions = Pick<
   RunFlowOptions,
-  "tools" | "context" | "signal" | "live" | "onEvent" | "onStream" | "scheduler" | "random" | "models"
+  "tools" | "context" | "signal" | "live" | "onEvent" | "onStream" | "onConsole" | "scheduler" | "random" | "models"
 >;
 
 /**
@@ -790,21 +807,22 @@ function refuseRemovedOptions(options: object, takesMemory = false): void {
  * off the servers the call opens.
  *
  * @returns The unopened `tools` servers, as `splitRunServers` returns them.
- * @throws TypeError when `signal` isn't an `AbortSignal`, `live` isn't a `LiveChannel`, `onEvent`
- *   or `onStream` isn't a function, `scheduler` lacks `now` or `sleep`, `random` isn't a function,
- *   `models` lacks `env` or `createModel`, or a `tools` entry is malformed.
+ * @throws TypeError when `signal` isn't an `AbortSignal`, `live` isn't a `LiveChannel`, `onEvent`,
+ *   `onStream` or `onConsole` isn't a function, `scheduler` lacks `now` or `sleep`, `random` isn't a
+ *   function, `models` lacks `env` or `createModel`, or a `tools` entry is malformed.
  * @throws RangeError when a `tools` key is reserved, or a server was opened by another run in
  *   progress, or a removed option is given (`memory` unless `takesMemory`).
  * @throws The signal's reason when it has aborted.
  */
 function checkDriveOptions(options: DriveOptions, takesMemory = false): [string, McpServer][] {
   refuseRemovedOptions(options, takesMemory);
-  const { tools = null, context, signal = null, live = null, onEvent = null, onStream = null } = options;
+  const { tools = null, context, signal = null, live = null, onEvent = null, onStream = null, onConsole = null } = options;
   const { scheduler = null, random = null, models = null } = options;
   if (signal !== null && !(signal instanceof AbortSignal)) throw new TypeError("signal must be an AbortSignal or null");
   if (live !== null && !(live instanceof LiveChannel)) throw new TypeError("live must be a LiveChannel or null");
   if (onEvent !== null && typeof onEvent !== "function") throw new TypeError("onEvent must be a function or null");
   if (onStream !== null && typeof onStream !== "function") throw new TypeError("onStream must be a function or null");
+  if (onConsole !== null && typeof onConsole !== "function") throw new TypeError("onConsole must be a function or null");
   if (
     scheduler !== null &&
     (typeof scheduler !== "object" || typeof scheduler.now !== "function" || typeof scheduler.sleep !== "function")
@@ -1421,6 +1439,8 @@ export interface AdvanceOptions {
   onEvent?: EventHook | null;
   /** Sees each new transient stream chunk; chunks are never replayed. */
   onStream?: StreamHook | null;
+  /** Takes each line this segment's CODE nodes print, as `runFlow`'s does. */
+  onConsole?: ConsoleHook | null;
   /**
    * The live channel of this segment, as `runFlow`'s: it gets the records this call appends and
    * the model calls it makes, never the replayed ones.
@@ -1515,7 +1535,7 @@ export interface AdvanceOptions {
  * @returns The recorded terminal result, or the terminal or waiting result of the new segment with
  *   its post-durable observers; a waiting run that couldn't move returns `waiting` with none.
  * @throws TypeError when `flow` isn't a `ComposedFlow` or `null`, `signal` isn't an `AbortSignal`,
- *   `live` isn't a `LiveChannel`, `onEvent` or `onStream` isn't a function, a `tools` entry is
+ *   `live` isn't a `LiveChannel`, `onEvent`, `onStream` or `onConsole` isn't a function, a `tools` entry is
  *   malformed, `skills`, `scheduler`, `random` or `models` is malformed, a worker count isn't an
  *   integer, a recorded carrier has the wrong type, or `memory` isn't a record of `MemoryBase`
  *   instances (or `null`, for an Optional memory).
@@ -3691,7 +3711,7 @@ async function driveSegment(
   appender: RunLog,
   lead: readonly RunEvent[],
   parts: {
-    options: Pick<RunFlowOptions, "onEvent" | "onStream" | "live" | "signal" | "random">;
+    options: Pick<RunFlowOptions, "onEvent" | "onStream" | "onConsole" | "live" | "signal" | "random">;
     numWorkers: number;
     tools: ToolSet;
     /** The segment's memory sessions, or `null` for a run that binds none. */
@@ -3712,6 +3732,7 @@ async function driveSegment(
     numWorkers: parts.numWorkers,
     onEvent,
     onStream: options.onStream ?? null,
+    onConsole: options.onConsole ?? null,
     live: options.live ?? null,
     tools: parts.tools,
     memories: parts.memories,

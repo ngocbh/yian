@@ -227,6 +227,8 @@ export interface EvalNodeOptions {
   random?: (() => number) | null;
   /** The run's folder, where the run's files go; every node gets it as `caps.runDir`. */
   runDir?: string | null;
+  /** Takes the lines the node's code prints; every node gets it as `caps.console`. */
+  console?: NodeCaps["console"] | null;
   /**
    * The transient stream sink a node declaring `needsLiveEvents` receives; closed, dropping what
    * it gets, once the outcome is decided.
@@ -312,6 +314,7 @@ export async function evalNode(
     scheduler = null,
     random = null,
     runDir = null,
+    console = null,
   } = options;
   const signal = options.signal ?? new AbortController().signal;
   signal.throwIfAborted();
@@ -328,6 +331,7 @@ export async function evalNode(
     scheduler,
     random,
     runDir,
+    console,
     collector,
     captureInputs: captureBindings ? captureInputs : null,
     sourceResolver,
@@ -355,6 +359,7 @@ async function evaluateNode(
     scheduler: Scheduler | null;
     random: (() => number) | null;
     runDir: string | null;
+    console: NonNullable<NodeCaps["console"]> | null;
     /** Retains the bound values and routes, when capturing bindings. */
     collector: BindingCollector | null;
     /** Receives the completed input record before the body runs, when capturing bindings. */
@@ -374,6 +379,7 @@ async function evaluateNode(
 ): Promise<WorkerOutcome> {
   const { wiringOverride, signal, collector, captureInputs, sourceResolver } = context;
   const { emitStream, emitEvent, skills, tools, memories, models, steps, steerInbox, scheduler, random, runDir } = context;
+  const { console } = context;
   // The flow owns every source. A missing trait-declared reserved key is a malformed compiled
   // graph and deliberately escapes the expected binder catch.
   const nodeWiring = wiringFor(node, flow, wiringOverride);
@@ -414,7 +420,7 @@ async function evaluateNode(
     context.onFault?.(fault.original);
   };
 
-  // Every node gets its signal and the given scheduler, random draw and run folder; the rest are
+  // Every node gets its signal and the given scheduler, random draw, run folder and console; the rest are
   // node-owned and trait-gated. The deferred per-item binder throws the same binder-owned marker
   // from inside the body, and the classification below keeps it.
   const caps: { -readonly [K in keyof NodeCaps]: NodeCaps[K] } = { signal };
@@ -422,6 +428,7 @@ async function evaluateNode(
   if (scheduler !== null) caps.scheduler = scheduler;
   if (random !== null) caps.random = random;
   if (runDir !== null) caps.runDir = runDir;
+  if (console !== null) caps.console = console;
   const { bindItem } = bound;
   if (bindItem !== null) {
     caps.bindItem = (element, index) => {

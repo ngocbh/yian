@@ -25,6 +25,7 @@ import { AsyncResource } from "node:async_hooks";
 import { GrowthRejected } from "../compile/model.ts";
 import { addNote, type Failure, type FailureCode, type OriginRef, reprText } from "../diagnostics.ts";
 import {
+  type ConsoleLine,
   ModelCallFinished,
   ModelCallStarted,
   NodeAttemptResumed,
@@ -123,6 +124,11 @@ export interface FlowEngineOptions {
   onEvent?: ((event: RunEvent) => unknown) | null;
   /** Sees each transient stream chunk; called as `onEvent` is. */
   onStream?: ((chunk: StreamChunk) => unknown) | null;
+  /**
+   * Takes each line a node's code prints, in place of this process's `console`; called as
+   * `onEvent` is, also for a line printed after its node settled.
+   */
+  onConsole?: ((line: ConsoleLine) => unknown) | null;
   /** The run's tool set, bound to the run id and signal; the global registry when omitted. */
   tools?: ToolSet | null;
   /** The run's memory sessions, passed to nodes declaring `needsMemories`; none when omitted. */
@@ -336,6 +342,7 @@ export class FlowEngine {
   readonly numWorkers: number;
   readonly onEvent: ((event: RunEvent) => unknown) | null;
   readonly onStream: ((chunk: StreamChunk) => unknown) | null;
+  readonly onConsole: ((line: ConsoleLine) => unknown) | null;
   /** The run's tool set bound to the state's run id and the run signal. */
   readonly tools: ToolSet;
   /** The run's sessions on its memories, which nodes declaring `needsMemories` get; `null` for none. */
@@ -380,7 +387,7 @@ export class FlowEngine {
    *   `nextSequence`.
    */
   constructor(state: RunState, log: RunLog, options: FlowEngineOptions) {
-    const { growBuilder, numWorkers, onEvent = null, onStream = null } = options;
+    const { growBuilder, numWorkers, onEvent = null, onStream = null, onConsole = null } = options;
     const { tools = null, skills = null, models = null, signal = null, scheduler = null, random = null } =
       options;
     const { memories = null } = options;
@@ -393,6 +400,7 @@ export class FlowEngine {
     this.numWorkers = numWorkers;
     this.onEvent = onEvent;
     this.onStream = onStream;
+    this.onConsole = onConsole;
     this.tools = (tools ?? new ToolSet()).forRun(state.runId ?? "", { signal: this.#controller.signal });
     this.memories = memories;
     this.skills = skills;
@@ -971,7 +979,7 @@ export class FlowEngine {
    * signal aborts; the run state changes only through its recorded steps.
    */
   async #evaluate(nodeId: string): Promise<EvaluatedOutcome> {
-    const { state, onEvent, onStream, live } = this;
+    const { state, onEvent, onStream, onConsole, live } = this;
     const node = state.flow.nodes.get(nodeId)!;
     // A derived node gets an input route from the pool and the producer index (sources are
     // pool_commit seqs), kept in memory with the outcome and dropped after the commit.
@@ -1004,6 +1012,7 @@ export class FlowEngine {
         signal: nodeController.signal,
         emitStream: onStream === null && live === null ? null : (chunk) => this.#stream(chunk),
         emitEvent: onEvent === null && live === null ? null : (event) => this.#event(event),
+        console: onConsole === null ? null : (method, text) => this.#console(onConsole, { runId: state.runId!, node: nodeId, method, text }),
         captureBindings: derived,
         sourceResolver,
         tools: this.tools,
@@ -1035,6 +1044,18 @@ export class FlowEngine {
       live.chunk(nodeId, n, index, text);
     }
     if (onStream !== null) this.#emit(onStream, chunk);
+  }
+
+  /**
+   * Pass one line a node's code printed to `onConsole`. A throw stops the run (`#callHost`) and
+   * goes no further: the line comes from a worker's message, not from the node's own code.
+   */
+  #console(onConsole: (line: ConsoleLine) => unknown, line: ConsoleLine): void {
+    try {
+      this.#callHost(onConsole, line);
+    } catch {
+      // `#callHost` has stopped the run with the error.
+    }
   }
 
   /** Pass one in-loop event to the live channel (a model call's start or end) and to `onEvent`. */

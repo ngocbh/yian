@@ -23,6 +23,7 @@
 import { current } from "../defaults.ts";
 import { Failure, type FailureCode, OriginRef, reprText } from "../diagnostics.ts";
 import type {
+  ConsoleMethod,
   ModelCallFinished,
   ModelCallStarted,
   ReplayDegraded,
@@ -671,6 +672,11 @@ export interface NodeCaps {
   readonly openSteerInbox?: (inbox: string) => SteerInbox;
   /** The run's environment and model builder; supplied to a node that declares `needsModels`. */
   readonly models?: ModelAccess;
+  /**
+   * Takes the lines the node's code prints, in place of this process's `console`; supplied to
+   * every node when the run has an `onConsole`.
+   */
+  readonly console?: (method: ConsoleMethod, text: string) => void;
   /**
    * The declared type of each of the node's locals (its inputs, `output` for a post assert,
    * `event` for `render:`), so a field they declare reads null when it's absent; absent leaves

@@ -107,7 +107,8 @@ slow CODE node doesn't block the rest of the run.
   a referenced file takes effect in a new process.
 - Globals and module state may survive between calls on the same thread. Don't rely on it either
   way.
-- `console.log` and the other `console` calls print as usual.
+- `console.log` and the other `console` calls print as usual, or go to a host's
+  [`onConsole`](/embedding/#runflow-options).
 - Don't leave timers or other work running after you return. A late error from it fails
   the call its thread is running then, or prints an error line when the thread is idle; either
   way the thread is replaced.

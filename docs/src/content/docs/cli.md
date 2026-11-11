@@ -632,9 +632,10 @@ instead. `error.code` is one of the [CLI error codes](/reference/#cli-error-code
 | `0` | Success. Also a run that ends waiting, and `yian status` whatever the status |
 | `1` | A reported problem: a failed run, a flow that doesn't load, a setup error, a bad `YIAN_*` value, a cancelled input prompt, a failed check, login or listing. With `--json`, its document is on stdout |
 | `2` | A usage error: an unknown flag, a missing argument, an undeclared input or a value for an inbox input, missing required inputs off a terminal, or flags that don't go together. The message is on stderr and there is no document |
+| `70` | A crash: an internal error, a bug in yian. Its stack is on stderr and there is no document |
 | `130` | Stopped by a signal, or by Ctrl-C during the run. There is no document |
 
-Any other exit, a crash included, prints no document; treat it as an internal error.
+Any other exit prints no document; treat it as an internal error.
 
 ## Troubleshooting
 

@@ -23,6 +23,7 @@ import {
   prepareNodeStep,
   prepareNodeWaiting,
   prepareNodeWoken,
+  type PreparedTransition,
   prepareRecord,
   prepareRunCancelled,
   prepareRunStarted,
@@ -226,7 +227,7 @@ test("a withdraw replays to the same waits", () => {
 test("the withdraw delivery op prepares the withdraw", () => {
   const run = takeRun();
   const x = commitSend(run, "x");
-  const prepared = prepareDelivery(run.state, { kind: "withdraw", inbox: "msgs" })!;
+  const prepared = prepareDelivery(run.state, { kind: "withdraw", inbox: "msgs" }) as PreparedTransition;
   expect(prepared.record).toEqual(new InboxWithdrawnRecord("msgs", [x]));
   expect(() => prepareDelivery(run.state, { kind: "nope" } as never)).toThrow(/send, withdraw, complete, close, interrupt or cancel/);
 });

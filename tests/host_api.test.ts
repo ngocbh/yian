@@ -277,6 +277,26 @@ test.if(process.versions.bun !== undefined)("a warm send and advance on a waitin
   expect((await advance({ log, env })).output).toBe(42n);
 });
 
+test("a keyed send lands once: a repeat returns its seq and appends nothing, after a replay too", async () => {
+  const { log, flow } = await waitingChat();
+  const seq = await send(log, "m", "hi", { env, flow, key: "msg-1" });
+  const after = readFileSync(log);
+  expect(await send(log, "m", "hi", { env, flow, key: "msg-1" })).toBe(seq);
+  expect(readFileSync(log).equals(after)).toBe(true);
+  const reused = await refusedWith(log, () => send(log, "m", "bye", { env, flow, key: "msg-1" }), "key_reused");
+  expect(reused.message).toBe(`send key 'msg-1' was used by send ${seq} with another value or inbox`);
+  // A copy of the log has no state in this process, so the call replays it and knows the key.
+  const copy = freshLog();
+  copyFileSync(log, copy);
+  expect(await send(copy, "m", "hi", { env, flow, key: "msg-1" })).toBe(seq);
+  expect(readFileSync(copy).equals(after)).toBe(true);
+  expect((await advance({ log, flow, env })).output).toEqual({ events: ["hi"], closed: false });
+  for (const key of [3, ""]) {
+    const error = await rejected(send(log, "m", "x", { env, flow, key: key as never }));
+    expect(error).toBeInstanceOf(key === "" ? RangeError : TypeError);
+  }
+});
+
 /** Expect `call` to reject with `DeliveryRefused` for `reason` and leave the file at `log` unchanged; return the error. */
 async function refusedWith(log: string, call: () => Promise<unknown>, reason: DeliveryRefusal): Promise<DeliveryRefused> {
   const before = readFileSync(log);

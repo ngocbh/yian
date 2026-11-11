@@ -39,11 +39,11 @@ import { formatRecordTime as recordTimeText, RECORD_TIME } from "../typesys/temp
 import { isList, isRecord, jsonPart, requireFields, valueRepr, writeAsText } from "../typesys/values.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 29;
+export const SCHEMA_VERSION = 30;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
 const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([
-  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
+  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
 ]);
 
 /** A typed value's wire object `{kind, value}`. */
@@ -836,6 +836,8 @@ export class PoolCommitRecord {
   readonly take: TakeCommit | null;
   /** A messages commit's step seqs, ascending; `null` for any other commit. Frozen. */
   readonly steps: readonly number[] | null;
+  /** A send's idempotency key, which no other send of the run holds; `null` for any other commit. */
+  readonly sendKey: string | null;
 
   /**
    * @param value A typed value's wire form (see `TypedValue.fromWire`), or `null` with `from`,
@@ -843,12 +845,13 @@ export class PoolCommitRecord {
    * @param options.from A derived commit's sources; copied in name order.
    * @param options.take A take commit's pointer form.
    * @param options.steps A messages commit's step seqs.
-   * @throws TypeError when an id isn't a string, `from` isn't a `Map` or `null`, or `take` isn't
-   *   an object or has a field of the wrong type.
+   * @param options.sendKey A send's idempotency key, with `value`.
+   * @throws TypeError when an id or the send key isn't a string, `from` isn't a `Map` or `null`,
+   *   or `take` isn't an object or has a field of the wrong type.
    * @throws RangeError when an id is empty, `value` isn't a typed-value wire form, a `from` name is
    *   empty or its seq isn't a positive safe integer, `take` breaks the take commit rules, `steps`
-   *   aren't strictly increasing positive safe integers, or the commit doesn't hold exactly one of
-   *   `value`, `from`, `take` and `steps`.
+   *   aren't strictly increasing positive safe integers, the commit doesn't hold exactly one of
+   *   `value`, `from`, `take` and `steps`, or a send key is empty or given without `value`.
    * @throws TypeCheckError when the value holds NaN or another non-JSON value.
    */
   constructor(
@@ -859,6 +862,7 @@ export class PoolCommitRecord {
       from?: ReadonlyMap<string, number> | null;
       take?: TakeCommit | null;
       steps?: readonly number[] | null;
+      sendKey?: string | null;
     } = {},
   ) {
     this.nodeId = requireName(nodeId, "node_id");
@@ -869,6 +873,10 @@ export class PoolCommitRecord {
     this.steps = options.steps == null ? null : validatedSteps(options.steps);
     if ([this.value, this.from, this.take, this.steps].filter((form) => form !== null).length !== 1) {
       throw new RangeError("a pool_commit holds exactly one of value, from, take and steps");
+    }
+    this.sendKey = options.sendKey == null ? null : requireName(options.sendKey, "send_key");
+    if (this.sendKey !== null && this.value === null) {
+      throw new RangeError("only a pool_commit that holds a value holds a send key");
     }
     Object.freeze(this);
   }
@@ -2845,7 +2853,9 @@ const RECORD_CODECS: readonly RecordCodec[] = [
     kind: "pool_commit",
     encode: (record): JsonObject => {
       if (record.value !== null) {
-        return { node_id: record.nodeId, key: record.key, kind: record.value.kind, value: record.value.value as JsonValue };
+        const { nodeId: node_id, key, sendKey } = record;
+        const value = record.value.value as JsonValue;
+        return { node_id, key, kind: record.value.kind, value, ...(sendKey === null ? {} : { send_key: sendKey }) };
       }
       if (record.take !== null) {
         const { inbox, events, closed } = record.take;
@@ -2864,7 +2874,9 @@ const RECORD_CODECS: readonly RecordCodec[] = [
           : Object.hasOwn(payload, "inbox")
             ? "take"
             : "value";
-      requireFields(payload, ["node_id", "key", ...POOL_COMMIT_FORM_FIELDS[form]], label);
+      // A send's key rides its value form, and only when it has one.
+      const keyed = form === "value" && Object.hasOwn(payload, "send_key");
+      requireFields(payload, ["node_id", "key", ...POOL_COMMIT_FORM_FIELDS[form], ...(keyed ? ["send_key"] : [])], label);
       let wire: TypedWire | null = null;
       if (form === "value") {
         wire = { kind: payload["kind"], value: payload["value"] } as TypedWire;
@@ -2878,6 +2890,7 @@ const RECORD_CODECS: readonly RecordCodec[] = [
           from: form === "from" ? fromFromPayload(payload["from"], `${label} from`) : null,
           take: form === "take" ? takeFromPayload(payload, label) : null,
           steps: form === "steps" ? wireItems(payload["steps"], `${label} steps`, wireInt) : null,
+          sendKey: keyed ? requireName(payload["send_key"], `${label} send_key`) : null,
         },
       );
     },

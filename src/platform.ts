@@ -15,6 +15,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 // The default import keeps calls patchable by test spies.
 import fs from "node:fs";
 import { createRequire } from "node:module";
+import net from "node:net";
 // Default import, like `fs`, so tests can spy on `userInfo`.
 import os from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -449,6 +450,35 @@ export function syncFolder(path: string): void {
   } finally {
     fs.closeSync(fd);
   }
+}
+
+/**
+ * Call `onEnd` once the writer of the pipe or socket at descriptor `fd` closes its end, however
+ * it ended (a SIGKILL or a crash included); what it writes is discarded. A descriptor that isn't
+ * open, or isn't a pipe or a socket, is left alone. The watch may keep the process up, so a
+ * process that uses it ends with `process.exit`.
+ */
+export function onPipeEnd(fd: number, onEnd: () => void): void {
+  try {
+    const stats = fs.fstatSync(fd);
+    if (!stats.isFIFO() && !stats.isSocket()) return;
+  } catch {
+    return;
+  }
+  // Bun's `net.Socket` over a descriptor never sees the end; Node's file stream would hold a
+  // thread of its pool in a read for as long as the watch lasts.
+  const stream =
+    runtime === "bun" ? fs.createReadStream("", { fd }) : new net.Socket({ fd, readable: true, writable: false });
+  let ended = false;
+  const end = () => {
+    if (ended) return;
+    ended = true;
+    onEnd();
+  };
+  stream.on("data", () => {});
+  stream.once("end", end);
+  stream.once("close", end);
+  stream.on("error", end);
 }
 
 /** @internal Whether `error` is a Node SystemError (an OS error). */

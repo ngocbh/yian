@@ -19,14 +19,14 @@
  *
  * The compile-owned injected builder constructs body and driver at the origin callsite
  * (`this.originId`), never `this.id`, so live and durable-replay windows are byte-identical. The
- * node also owns origin traversal for its cached body signature and exposes the baked body
- * through the source-neutral `originChildren` hook.
+ * body flow and its signature are a child flow's (`ChildFlowNode`).
  *
- * Knows about:   nodes/base, nodes/contracts, nodes/ids, expr, diagnostics and typesys.
+ * Knows about:   nodes/base, nodes/child_flow, nodes/contracts, nodes/ids, expr, diagnostics and
+ * typesys.
  * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
  */
 
-import { type FailureCode, type OriginRef, reprText } from "../../diagnostics.ts";
+import { type FailureCode, reprText } from "../../diagnostics.ts";
 import { evaluateWhenRecord, localDeclared } from "../../expr/expressions.ts";
 import {
   isInboxType,
@@ -37,16 +37,9 @@ import {
   type Value,
   type ValueRecord,
 } from "../../typesys/values.ts";
-import { Grow, isWeakKey, Node, NodeKind, Output, parseNamedCondition } from "../base.ts";
-import {
-  isExactly,
-  iterOriginCarrier,
-  type OriginMapper,
-  Parameter,
-  PartialRecordContract,
-  rewriteOriginCarrier,
-  ValueContract,
-} from "../contracts.ts";
+import { Grow, isWeakKey, NodeKind, Output, parseNamedCondition } from "../base.ts";
+import { ChildFlowNode } from "../child_flow.ts";
+import { isExactly, type Parameter, PartialRecordContract, ValueContract } from "../contracts.ts";
 import { mapCallsite, ns } from "../ids.ts";
 
 /**
@@ -73,7 +66,7 @@ const failedPredicates = new WeakSet<object>();
  *
  * Its fields are baked at load by Compose and copied onto every clone by `respawn`.
  */
-export class LoopNode extends Node {
+export class LoopNode extends ChildFlowNode {
   readonly kind = NodeKind.LOOP;
   /** Grows the graph: each continuing iteration resolves to a seed-first `Grow`. */
   override readonly isSpawner: boolean = true;
@@ -83,17 +76,6 @@ export class LoopNode extends Node {
   override readonly derived: boolean = true;
   /** Each body inherits the enclosing call depth without consuming a level. */
   override readonly growDepthDelta: number | null = 0;
-  /** The id of the body flow. */
-  flowId: string;
-  /** A pinned body flow version, if any. */
-  flowVersion: string | null;
-  /** The compiled body flow (`'a -> 'a`) used by the injected growth builder. */
-  child: unknown;
-  /**
-   * The body's canonical parameters (a subset of the carried record); an omitted signature is
-   * stored as an empty list, as CALL and MAP do.
-   */
-  childInputs: readonly Parameter[];
   /** One of `while`, `until` or `times`. */
   predicateKind: "while" | "until" | "times";
   /**
@@ -162,7 +144,7 @@ export class LoopNode extends Node {
       originId = null,
       returnedFields = null,
     } = options;
-    super(nodeId, { title });
+    super(nodeId, { flowId, flowVersion, child, childInputs, title });
     if (times !== null && predicateKind !== "times") {
       throw new RangeError(
         `loop node ${reprText(nodeId)}: times: is the count of a times loop, not of a ${predicateKind} loop`,
@@ -173,10 +155,6 @@ export class LoopNode extends Node {
         `loop node ${reprText(nodeId)}: a times loop's count is times: ${times}, but maxIters is ${maxIters}`,
       );
     }
-    this.flowId = flowId;
-    this.flowVersion = flowVersion;
-    this.child = child;
-    this.childInputs = childInputs ?? [];
     this.predicateKind = predicateKind;
     this.predicate = predicate;
     this.maxIters = times ?? maxIters;
@@ -191,23 +169,6 @@ export class LoopNode extends Node {
     return this.originId ?? this.id;
   }
 
-  /** Yield the common origins, then the cached body signature's. */
-  override *iterLocalOrigins(seen: Set<object> = new Set()): Generator<OriginRef> {
-    yield* super.iterLocalOrigins(seen);
-    for (const parameter of this.childInputs) yield* iterOriginCarrier(parameter, seen);
-  }
-
-  /** Rewrite the common and the cached signature's origins on a copied LOOP. */
-  override rewriteLocalOrigins(mapper: OriginMapper, seen: Map<object, object> = new Map()): void {
-    super.rewriteLocalOrigins(mapper, seen);
-    this.childInputs = this.childInputs.map((parameter) => rewriteOriginCarrier(parameter, mapper, seen));
-  }
-
-  /** Return the baked body flow, or no child for an unbaked LOOP. */
-  override originChildren(): readonly unknown[] {
-    return this.child === null ? [] : [this.child];
-  }
-
   /**
    * Classify the runaway guard as `loop.max_exceeded` and a predicate that failed to evaluate as
    * `condition.evaluate`; defer everything else.
@@ -219,8 +180,8 @@ export class LoopNode extends Node {
   }
 
   /**
-   * Require the body flow that Compose must bake before execution, a `while`/`until` loop's
-   * predicate and a `times` loop's count.
+   * Require the body flow that Compose must bake before execution (`ChildFlowNode`), a
+   * `while`/`until` loop's predicate and a `times` loop's count.
    *
    * @throws Error when the body flow isn't baked.
    * @throws RangeError when a `while`/`until` loop has no predicate or a `times` loop no count.
@@ -228,7 +189,6 @@ export class LoopNode extends Node {
    */
   override validateExecutionSetup(): void {
     super.validateExecutionSetup();
-    if (this.child === null) throw new Error(`loop node ${reprText(this.id)} was not baked with a body child`);
     if (this.predicateKind === "times") {
       if (this.maxIters === null) throw new RangeError(`loop node ${reprText(this.id)} has no \`times\` count`);
       return;

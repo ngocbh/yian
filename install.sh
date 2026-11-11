@@ -228,10 +228,13 @@ find_bun() {
 get_clone() {
   if [ "$CLONE" = new ]; then
     step "Cloning $REPO_URL ($BRANCH) into $INSTALL_DIR"
+    # The mark says whether the folder is install.sh's too, so uninstall.sh keeps one it found.
+    folder=created
+    if [ -e "$INSTALL_DIR" ]; then folder=existed; fi
     mkdir -p "$(dirname "$INSTALL_DIR")"
     git clone --quiet --recurse-submodules --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR" ||
       die "git clone failed. Check --repo and --branch, then run this again."
-    printf 'Cloned by %s; uninstall.sh removes this clone when it holds no local work.\n' "$MARK" >"$INSTALL_DIR/.git/$CLONE_MARK"
+    printf 'Cloned by %s; uninstall.sh removes this clone when it holds no local work.\nfolder=%s\n' "$MARK" "$folder" >"$INSTALL_DIR/.git/$CLONE_MARK"
     ok "Cloned yian $(git -C "$INSTALL_DIR" rev-parse --short HEAD) into $INSTALL_DIR"
   else
     before=$(git -C "$INSTALL_DIR" rev-parse --short HEAD)

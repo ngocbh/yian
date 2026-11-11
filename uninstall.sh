@@ -192,8 +192,16 @@ remove_clone() {
   case $INSTALL_DIR in
     / | "$HOME" | "$HOME"/) die "Refusing to remove $INSTALL_DIR." ;;
   esac
-  rm -rf "$INSTALL_DIR"
-  ok "Removed $INSTALL_DIR"
+  if LC_ALL=C grep -a -q -x -F 'folder=created' "$INSTALL_DIR/.git/$CLONE_MARK"; then
+    rm -rf "$INSTALL_DIR"
+    ok "Removed $INSTALL_DIR"
+    return 0
+  fi
+  # The folder was there before install.sh cloned into it, so only what's in it goes.
+  for entry in "$INSTALL_DIR"/* "$INSTALL_DIR"/.[!.]* "$INSTALL_DIR"/..?*; do
+    if [ -e "$entry" ] || [ -L "$entry" ]; then rm -rf "$entry"; fi
+  done
+  ok "Removed the clone in $INSTALL_DIR, and kept the folder, which was there before install.sh"
 }
 
 main() {

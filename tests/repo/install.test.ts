@@ -623,6 +623,17 @@ describe.if(process.versions.bun !== undefined)("uninstall.sh", () => {
     expect(result.stdout).toContain("Left Bun");
   });
 
+  test("keeps a folder that was there before install.sh cloned into it, empty", () => {
+    const fx = fixture();
+    const dir = join(fx.base, "mine");
+    mkdirSync(dir);
+    install(fx, ["--dir", dir]);
+    const result = pipe("uninstall.sh", fx, ["--dir", dir]);
+    expect(result.status).toBe(0);
+    expect(readdirSync(dir)).toEqual([]);
+    expect(result.stdout).toContain(`Removed the clone in ${dir}`);
+  });
+
   test("takes the clone's folder from --dir", () => {
     const fx = fixture();
     const dir = join(fx.base, "elsewhere");

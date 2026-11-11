@@ -106,6 +106,19 @@ test("respawn preserves the full output contract carrier", () => {
   expect((clone.outputContract as ValueContract).type).toBe(contract.type);
 });
 
+test("on_max_exceeded: output stops at max with the carried record; fail throws; respawn keeps it", () => {
+  const node = new LoopNode("lp", { flowId: "f", child: { nodes: new Map() }, predicate: "true", maxIters: 1 });
+  node.params = [new Parameter("n")];
+  expect(node.onMaxExceeded).toBe("fail");
+  expect(() => node.respawn(1, { n: 1n }).forward({ n: 1n })).toThrow(LoopMaxExceeded);
+  node.onMaxExceeded = "output";
+  const clone = node.respawn(1, { n: 1n });
+  expect(clone.onMaxExceeded).toBe("output");
+  const stopped = clone.forward({ n: 1n });
+  expect(stopped).toBeInstanceOf(Output);
+  expect([(stopped as Output).value, (stopped as Output).commitAs]).toEqual([{ n: 1n }, "lp"]);
+});
+
 test("respawn defaults omitted fields from the carried record", () => {
   const node = partialLoop();
   const originParams = node.params;

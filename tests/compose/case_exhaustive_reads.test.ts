@@ -211,13 +211,16 @@ test("narrowed read case counts only the tags that reach it", async () => {
   expect(await outputOf(loaded, { kind: "sell" })).toBe("sold");
 });
 
-test("narrowed read case missing its reachable tag is rejected", () => {
+test("narrowed read case listing only a tag that can't reach it is rejected at that when", () => {
   const text = narrowedFlow("sell");
 
   const error = loadError(() => assembleText(text));
 
-  expect(error.message).toBe(`${exhaustive("inner")} (enum tag(s) ["buy"] not covered)`);
-  expect(errorLine(error)).toBe(lineOf(text, "  inner:"));
+  expect(error.message).toBe(
+    "case node 'inner': `when: sell` never matches: the branches that reach this case rule it out, " +
+      "so `on: ${d.output.action}` is `Literal(buy)` here; remove it",
+  );
+  expect(errorLine(error)).toBe(lineOf(text, "when: sell"));
 });
 
 test("unquoted yes routes to a node named yes", async () => {

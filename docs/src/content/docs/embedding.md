@@ -16,7 +16,7 @@ runs on disk, move messages and answers into them, and watch what they do. Insta
 | `@ngocbh/yian/tools` | Tools without the run API: `registerTool`, `registeredTools`, `invokeTool`, `mcpServer` and the `Mcp*` errors, `pending`, `isPending`, and the ask handler types `AskHandler` and `AskRequest` |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
 | `@ngocbh/yian/platform` | yian's file lock and SQLite wrapper, for hosts that lock files the same way: `lockFile`, `waitForLock`, `isLocked`, `FileLockError`, `openSqlite`, `sqliteErrorCode`; and `syncFolder`, which makes a folder's new entries durable |
-| `@ngocbh/yian/llm_clients` | Provider setup: `LLMConfig`, `SUPPORTED_LLM_PROVIDERS`, `listModels`, `AuthStore`, `AuthError`; `defaultEmbed` and `embedderFromConfig`, the embeddings calls a `VectorDBMemory` takes |
+| `@ngocbh/yian/llm_clients` | Provider setup: `LLMConfig`, `SUPPORTED_LLM_PROVIDERS`, `listModels`, `AuthStore`, `AuthError` and `isStorageError` (an auth-store fault, whose message may name the auth file); `defaultEmbed` and `embedderFromConfig`, the embeddings calls a `VectorDBMemory` takes |
 | `@ngocbh/yian/code-worker` | Import it only for its side effect, as a bundle entry (see [Bundling](#bundling)) |
 
 On Bun each import loads the TypeScript source; on Node it loads the built JavaScript. The event
@@ -103,6 +103,8 @@ its embedding model and the function that embeds:
 A flow that fails still resolves, with `status: "failed"`. `runFlow` rejects for problems in your
 program or setup: a bad option, a tool, provider or model the flow needs but the run lacks, an MCP
 server that doesn't start, a bad `YIAN_*` value, a callback that throws, a log it can't write.
+A failure to close the log after a call has done its work, such as a `send` that was appended, is
+only a warning: the call still resolves, so your program doesn't repeat it.
 
 ### `RunResult`
 
@@ -132,6 +134,7 @@ server that doesn't start, a bad `YIAN_*` value, a callback that throws, a log i
 | `llmConfig` | none | The outermost `llm_config` layer (see [Models and providers](/models/)). Its `api_key` and header values are never recorded; its `base_url`, `organization`, `project` and header names are, on the agents that use the key |
 | `context` | `undefined` | Your app object; tools read it as `ctx.context`. Never recorded |
 | `onEvent`, `onStream` | none | Event callbacks (see [Events](#events)) |
+| `onConsole` | none | Takes each line the run's CODE nodes print, as `{ runId, node, method, text }`, instead of `console`; `advance` takes it too |
 | `live` | none | A `LiveChannel` a viewer follows |
 | `signal` | none | An `AbortSignal` that stops the run |
 | `env` | `process.env` | A function `(name) => string \| undefined` that yian reads instead of `process.env` |
@@ -169,7 +172,8 @@ started without one.
 
 Only one writer holds a log at a time. A call on a log another process holds, or an `advance` of a
 run your process is already moving, rejects with `RunBusyError`. While a run waits, its process
-keeps the run's state in memory, so the next call on the same log skips the replay.
+keeps the run's state in memory, so the next call on the same log skips the replay. While the
+file is the one it left (same size, inode and modification time), the call doesn't read it either.
 
 ## Events
 
@@ -216,7 +220,7 @@ Your program reaches a waiting run by its log path:
 
 | Call | Returns | What it does |
 |---|---|---|
-| `send(log, inbox, value)` | the send's seq | Adds a message to an `Inbox(T)` input; `value` must fit `T` |
+| `send(log, inbox, value, { key })` | the send's seq | Adds a message to an `Inbox(T)` input; `value` must fit `T`, read as [a tool's result](/code-and-tools/#values-in-and-out) (a whole number is an `int`). With `key`, a later send with the same key, inbox and value appends nothing and returns the first seq, so a send is safe to retry |
 | `withdraw(log, inbox)` | `[{seq, value}]` | Takes back every message nothing has read yet |
 | `close(log, inbox)` | the seq, or `null` if already closed | Refuses later sends; takes still read what is queued |
 | `complete(log, callId, result)` | the seq, or `null` for the same answer twice | Answers a pending host call (see [Pending host calls](#pending-host-calls)) |
@@ -273,6 +277,7 @@ A refused call appends nothing and throws `DeliveryRefused`, whose `reason` says
 | `unknown_inbox` | The flow has no such inbox input |
 | `inbox_closed` | The inbox is closed |
 | `invalid_value` | The value doesn't fit the inbox's type or the call's output type |
+| `key_reused` | An earlier send used the send's `key` with another inbox or value |
 | `too_large` | The message is over `YIAN_MAX_EVENT_BYTES` (1 MiB by default) |
 | `unknown_call` | No open call has that id |
 | `not_host_call` | The id names a take or a sleep |
@@ -364,9 +369,11 @@ signal's reason, and `advance` runs the stopped nodes again.
   Tool groups may hold same-named tools, which a model sees as `<group>_<tool>`; two tools that
   could show one name are refused.
 - **MCP servers.** `mcpServer({ command, args })` or `mcpServer({ url, headers })` describes a
-  server; pass it as a `tools` entry and its tools become one group. yian opens it for the run
-  and closes it after, unless you opened it yourself with `await server.open()`. It needs the
-  optional peer package `@modelcontextprotocol/client`.
+  server (an `https` url; `http` only on `localhost`, `127.0.0.1` or `[::1]`); pass it as a
+  `tools` entry and its tools become one group. `concurrencySafe: true` (or a list of tool names)
+  lets those tools' calls in one reply run together, as `isConcurrencySafe` does for a host tool.
+  yian opens it for the run and closes it after, unless you opened it yourself with
+  `await server.open()`. It needs the optional peer package `@modelcontextprotocol/client`.
 - **Skills.** `loadSkills(defaultSkillRoots())` reads the Claude Code and Codex skill folders
   into the `Map` that `skills` takes.
 
@@ -379,10 +386,14 @@ signal's reason, and `advance` runs the stopped nodes again.
 | `iterRunRecords(log)` | The log's records, one by one, while another process may still be writing |
 | `foldRunLog(log)` | Each record with the value it wrote |
 | `agentCalls(log)`, `agentCall(log, { nodeId, n })` | The agents' model calls, and one call's full request and reply |
-| `updateRunIndex(runsDir)`, `readRunIndex(runsDir)` | An `index.sqlite` with one row per run folder, which you can delete and rebuild |
+| `updateRunIndex(runsDir)`, `readRunIndex(runsDir)` | An `index.sqlite` with one row per run folder, which you can delete and rebuild. An update rebuilds a damaged one with a warning, and a read gives `[]` until then |
 
 `inspectRun(log).wakeAt` is the earliest deadline of a waiting run: a host that keeps runs
 waiting calls `advance` then.
+
+`readRunIndex` shows a `waiting`, `stopped` or `crashed` run as `running` while a writer holds its
+log, which costs one probe of the lock per such row on every read. A host that knows which runs
+it is moving can pass `{ lockProbe: false }`: each row then has the status its records show.
 
 `iterRunRecords` holds one line in memory at a time, so a huge line takes that much. Pass
 `maxLineBytes` to cap it. `inspectRun`, `loadRecordedFlow`, `foldRunLog`, `agentCalls`,

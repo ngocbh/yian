@@ -3,7 +3,7 @@
  * through this process's engine or offline under the log's lock, with their typed refusals and
  * `RunBusyError`; and a memory a host binds through the package root.
  */
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import { type ChildProcess, spawn } from "node:child_process";
 import {
   copyFileSync,
@@ -13,8 +13,10 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -28,7 +30,7 @@ import type { Node } from "../src/nodes/base.ts";
 import { Parameter, ValueContract } from "../src/nodes/contracts.ts";
 import { StartNode } from "../src/nodes/start/node.ts";
 import { ToolNode } from "../src/nodes/tool/node.ts";
-import { FileLockError, lockFile, sqliteErrorCode } from "../src/platform.ts";
+import { FileLockError, lockFile, sqliteErrorCode, withWarnings } from "../src/platform.ts";
 import { LoadError } from "../src/compose/helpers/errors.ts";
 import { loadFlow } from "../src/compose/loader.ts";
 import { DefaultsMismatchError } from "../src/defaults.ts";
@@ -48,10 +50,11 @@ import {
   runFlow,
   send,
 } from "../src/run.ts";
-import { PoolCommitRecord, readRunLog, RunCancelledRecord } from "../src/runtime/log.ts";
+import { JsonlRunLog, PoolCommitRecord, readRunLog, RunCancelledRecord } from "../src/runtime/log.ts";
 import { pending } from "../src/tools/context.ts";
 import type { AskRequest } from "../src/tools/registry.ts";
 import { FunctionTool } from "../src/tools/function_tools.ts";
+import * as json from "../src/typesys/json.ts";
 import { inboxType, Type, TypeCheckError, ValueKind } from "../src/typesys/values.ts";
 import { gateTool, handClock } from "./helpers/inbox_fixtures.ts";
 import { wordEmbed } from "./helpers/memory_fakes.ts";
@@ -150,6 +153,148 @@ test("send and advance on a log whose lock file holds foreign data throw FileLoc
     expect(sqliteErrorCode(error.cause)).toBe(26);
   }
   expect(readFileSync(log).equals(before)).toBe(true);
+});
+
+test("send takes a whole JS number for an Inbox(int), and a take reads it as an int", async () => {
+  const flow = await yian.loadFlow(`
+id: f
+name: f
+input:
+  box: !Inbox(int)
+nodes:
+  heard:
+    kind: tool
+    tool_id: take
+    input:
+      from: \${input.box}
+      take: all
+output: \${heard.output.events}
+`);
+  const log = freshLog();
+  expect((await runFlow(flow, {}, { log, env })).status).toBe("waiting");
+  expect(typeof (await send(log, "box", 1, { env }))).toBe("number");
+  const half = (await rejected(send(log, "box", 2.5, { env }))) as DeliveryRefused;
+  expect([half.constructor, half.reason]).toEqual([DeliveryRefused, "invalid_value"]);
+  await close(log, "box", { env });
+  const done = await advance({ log, env });
+  expect([done.status, done.output]).toEqual(["succeeded", [1n]]);
+});
+
+/** Make the next `JsonlRunLog.close` close the log, then throw; return the spy to restore. */
+function failNextClose() {
+  const close = JsonlRunLog.prototype.close;
+  return spyOn(JsonlRunLog.prototype, "close").mockImplementationOnce(function (this: JsonlRunLog) {
+    close.call(this);
+    throw new Error("close failed");
+  });
+}
+
+test("a send whose log close fails after the append returns its seq, with a warning", async () => {
+  const { log, flow } = await waitingChat();
+  const warnings: string[] = [];
+  const spy = failNextClose();
+  let seq: number;
+  try {
+    seq = await withWarnings((message) => warnings.push(message), () => send(log, "m", "hi", { env, flow }));
+  } finally {
+    spy.mockRestore();
+  }
+  expect(warnings).toEqual([`run log ${resolve(log)} holds this call's records, but closing it failed: close failed`]);
+  expect(readRunLog(log).map((entry) => entry.seq).at(-1)).toBe(seq);
+  expect((await advance({ log, flow, env })).output).toEqual({ events: ["hi"], closed: false });
+});
+
+test("a close failure after a refused or no-op delivery is not a warning: nothing landed", async () => {
+  const { log, flow } = await waitingChat();
+  const spy = failNextClose();
+  try {
+    const refused = (await rejected(send(log, "other", "hi", { env, flow }))) as DeliveryRefused;
+    expect(refused).toBeInstanceOf(DeliveryRefused);
+    expect((refused as DeliveryRefused & { notes?: string[] }).notes).toEqual(["run-log close also raised Error: close failed"]);
+  } finally {
+    spy.mockRestore();
+  }
+  expect(await close(log, "m", { env, flow })).not.toBeNull();
+  const again = failNextClose();
+  try {
+    expect(((await rejected(close(log, "m", { env, flow }))) as Error).message).toBe("close failed");
+  } finally {
+    again.mockRestore();
+  }
+});
+
+/** A flow that counts the notes it takes one at a time, waiting on its inbox between them. */
+const COLLECT = `
+id: collect
+name: collect
+input:
+  notes: !Inbox(str)
+nodes:
+  gather:
+    kind: loop
+    input: {notes: "\${input.notes}", count: 0, closed: false}
+    while: not closed
+    nodes:
+      heard:
+        kind: tool
+        tool_id: take
+        input: {from: "\${input.notes}", take: one}
+    output:
+      count: \${input.count + len(heard.output.events)}
+      closed: \${heard.output.closed}
+output: \${gather.output.count}
+`;
+
+/** The characters `parseJson` reads while `call` runs. */
+async function parsedDuring(call: () => Promise<unknown>): Promise<number> {
+  const parse = spyOn(json, "parseJson");
+  try {
+    await call();
+    return parse.mock.calls.reduce((total, [text]) => total + text.length, 0);
+  } finally {
+    parse.mockRestore();
+  }
+}
+
+// `parsedDuring` spies on `parseJson` through its module, which only Bun lets a test replace.
+test.if(process.versions.bun !== undefined)("a warm send and advance on a waiting run read none of the records it already holds", async () => {
+  const log = freshLog();
+  expect((await runFlow(await yian.loadFlow(COLLECT), {}, { log, env })).status).toBe("waiting");
+  for (let i = 0; i < 40; i++) {
+    await send(log, "notes", `note ${i}`, { env });
+    await advance({ log, env });
+  }
+  const size = statSync(log).size;
+  // Each call parses what it appends, a few times over, but none of the log before it.
+  expect(await parsedDuring(() => send(log, "notes", "one more", { env }))).toBeLessThan(size / 10);
+  expect(await parsedDuring(() => advance({ log, env }))).toBeLessThan(size / 10);
+  // A rewrite that keeps the size but moves the mtime is read again, and gives the same state.
+  const later = new Date(Date.now() + 5000);
+  writeFileSync(log, readFileSync(log));
+  utimesSync(log, later, later);
+  expect(await parsedDuring(() => send(log, "notes", "after", { env }))).toBeGreaterThan(size);
+  await close(log, "notes", { env });
+  expect((await advance({ log, env })).output).toBe(42n);
+});
+
+test("a keyed send lands once: a repeat returns its seq and appends nothing, after a replay too", async () => {
+  const { log, flow } = await waitingChat();
+  const seq = await send(log, "m", "hi", { env, flow, key: "msg-1" });
+  const after = readFileSync(log);
+  expect(await send(log, "m", "hi", { env, flow, key: "msg-1" })).toBe(seq);
+  expect(readFileSync(log).equals(after)).toBe(true);
+  const reused = await refusedWith(log, () => send(log, "m", "bye", { env, flow, key: "msg-1" }), "key_reused");
+  expect(reused.message).toBe(`send key 'msg-1' was used by send ${seq} with another value or inbox`);
+  // A copy of the log has no state in this process, so the call replays it and knows the key.
+  const copy = freshLog();
+  copyFileSync(log, copy);
+  expect(await send(copy, "m", "hi", { env, flow, key: "msg-1" })).toBe(seq);
+  expect(readFileSync(copy).equals(after)).toBe(true);
+  expect((await advance({ log, flow, env })).output).toEqual({ events: ["hi"], closed: false });
+  for (const key of [3, ""]) {
+    const error = await rejected(send(log, "m", "x", { env, flow, key: key as never }));
+    expect(error).toBeInstanceOf(key === "" ? RangeError : TypeError);
+  }
 });
 
 /** Expect `call` to reject with `DeliveryRefused` for `reason` and leave the file at `log` unchanged; return the error. */

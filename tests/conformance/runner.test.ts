@@ -1159,8 +1159,8 @@ describe("run", () => {
   });
 
   test("an interrupt item with `after` is delivered live when the run reaches it", async () => {
-    // At the end of the only reply, which arrived whole: the answer stands, the record is logged.
-    const text = STEER_CASE("done").replace("host:\n", "host:\n  sends: [{interrupt: notes, after: {node: chat, model_call: 1}}]\n");
+    // At the end of the only reply, before its call returns: the reply is cut, the record is logged.
+    const text = STEER_CASE("null").replace("host:\n", "host:\n  sends: [{interrupt: notes, after: {node: chat, model_call: 1}}]\n");
     await runCase(text);
     const kinds = readFileSync(join(made.at(-1)!, "run.jsonl"), "utf8")
       .split("\n")

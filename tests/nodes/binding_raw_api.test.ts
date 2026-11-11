@@ -5,14 +5,13 @@
  * These cover the binding semantics (a typed whole span, an embedded span written as text, `$$`,
  * coalesce `|`, default `:-`, required `:?`, a default reference `${x :- y}`, the `${item}`
  * scope) and full expressions inside a binding span (arithmetic, text and list operations). The
- * values follow the TS number model (ints are `bigint`s). A binding capture marks only the
- * inputs whose template it actually evaluated.
+ * values follow the TS number model (ints are `bigint`s).
  */
 
 import { expect, test } from "bun:test";
 
 import { evalBinding, exprRefsOf, MISSING_ROOT, RequiredError, type RootResolver } from "../../src/expr/index.ts";
-import { BindingCollector, bindParams } from "../../src/nodes/binding.ts";
+import { bindParams } from "../../src/nodes/binding.ts";
 import { Parameter } from "../../src/nodes/contracts.ts";
 import { type ValueRecord, VariablePool } from "../../src/typesys/index.ts";
 
@@ -92,8 +91,7 @@ test("exprRefsOf collects item references", () => {
   expect(exprRefsOf("${item.x}")).toEqual(["item.x"]);
 });
 
-test("capture marks actual template evaluation in a materialized seed", () => {
-  const collector = new BindingCollector();
+test("a materialized seed evaluates templates and keeps escaped text and literals", () => {
   const result = bindParams(
     [new Parameter("evaluated"), new Parameter("escaped"), new Parameter("literal")],
     new Map<string, unknown>([
@@ -102,10 +100,7 @@ test("capture marks actual template evaluation in a materialized seed", () => {
       ["literal", null],
     ]),
     new VariablePool(),
-    { collector, sourceResolver: MISSING_ROOT },
+    { sourceResolver: MISSING_ROOT },
   );
-  const captured = collector.freeze();
   expect(result).toEqual({ evaluated: null, escaped: "${missing | absent}", literal: null });
-  expect(captured.evaluatedKeys).toEqual(new Set(["evaluated"]));
-  expect(captured.route.children.every((route) => route.kind === "literal")).toBe(true);
 });

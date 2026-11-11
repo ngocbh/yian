@@ -15,7 +15,7 @@ import { Message, Response, TextPart, ToolCallPart, ToolResultPart } from "../..
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { runFlow, type RunFlowOptions } from "../../src/run.ts";
-import { isRunLogLocked } from "../../src/runtime/log.ts";
+import { isRunLogLocked, NodeStepRecord, readRunLog } from "../../src/runtime/log.ts";
 import type { Skill } from "../../src/skills/catalog.ts";
 import { McpConnectError, McpServer, mcpServer } from "../../src/tools/mcp.ts";
 import type { ToolEntry } from "../../src/tools/registry.ts";
@@ -162,6 +162,46 @@ test(
     expect(result.failure).toBeNull();
     expect(model.requests[0]!.tools.map((spec) => spec.name)).toEqual(["fake_echo"]);
     expect(toolResults(model, 1).map((part) => part.content)).toEqual(["hi"]);
+    await expectClosed(server);
+  },
+  SLOW,
+);
+
+test(
+  "an agent reads cut text with U+FFFD, and cut structured content as a failed call, and carries on",
+  async () => {
+    for (const [tool, content, isError] of [
+      ["cut_text", "Hi \ufffd", false],
+      ["cut_structured", "MCP server 'cut' tool 'cut_structured' failed (TypeCheckError)", true],
+    ] as const) {
+      const model = callThenAnswer(`cut_${tool}`, {});
+      const server = mcpServer({ ...stdioOptions("--lone-surrogate"), label: "cut" });
+      const result = await run(await agentFlow("cut"), { cut: server }, { models: serving(model) });
+      expect(result.failure).toBeNull();
+      expect(result.output).toBe("done");
+      expect(model.requests).toHaveLength(2);
+      expect(toolResults(model, 1).map((part) => [part.content, part.isError])).toEqual([[content, isError]]);
+      await expectClosed(server);
+    }
+  },
+  SLOW,
+);
+
+test(
+  "a tool node whose cut structured content isn't a yian value fails once, naming the server",
+  async () => {
+    const server = mcpServer({ ...stdioOptions("--lone-surrogate"), label: "cut" });
+    const flow = await loadFlow(
+      "id: cut\nname: cut\nnodes:\n  call:\n    kind: tool\n    tool_id: cut_structured\n    retries: 2\n" +
+        "output: ${call.output}\n",
+    );
+    const log = join(dir, "cut.jsonl");
+    const result = await run(flow, { cut: server }, { log });
+    expect(result.status).toBe("failed");
+    expect(result.failure!.message).toContain("MCP server 'cut' tool 'cut_structured' failed (TypeCheckError)");
+    // A check yian runs is permanent: `retries` never calls the tool again.
+    // A retry would write the failed attempt as a step first.
+    expect(readRunLog(log).filter((envelope) => envelope.record instanceof NodeStepRecord)).toEqual([]);
     await expectClosed(server);
   },
   SLOW,
@@ -497,13 +537,13 @@ test(
 );
 
 test(
-  "a stop while the servers open closes the opened one and opens no more",
+  "a stop while the servers open rejects with its reason and closes every server",
   async () => {
     const files = [marker("a.pid"), marker("b.pid")];
     const [first, second] = files.map((file) => fake("--marker", file)) as [McpServer, McpServer];
     const stop = new AbortController();
     const openForRun = McpServer.prototype.openForRun;
-    // Open the server, then abort as if Ctrl-C came during the open.
+    // Open the server, then abort as if Ctrl-C came during the open; the other may still be opening.
     McpServer.prototype.openForRun = async function (this: McpServer, token, options) {
       const opened = await openForRun.call(this, token, options);
       stop.abort(new Error("stopped"));
@@ -518,10 +558,60 @@ test(
       McpServer.prototype.openForRun = openForRun;
     }
     expect(error).toBe(stop.signal.reason);
-    expect(pids(files[0]!)).toHaveLength(1);
-    expect(existsSync(files[1]!)).toBe(false);
     await expectClosed(first, files[0]);
-    await expectClosed(second);
+    await expectClosed(second, files[1]);
+  },
+  SLOW,
+);
+
+test(
+  "a run's servers open together and close together",
+  async () => {
+    const files = [marker("a.pid"), marker("b.pid"), marker("c.pid")];
+    const [a, b, c] = files.map((file) => fake("--marker", file)) as [McpServer, McpServer, McpServer];
+    const { openForRun, close } = McpServer.prototype;
+    const busy = { opening: 0, closing: 0, mostOpening: 0, mostClosing: 0 };
+    McpServer.prototype.openForRun = async function (this: McpServer, token, options) {
+      busy.mostOpening = Math.max(busy.mostOpening, ++busy.opening);
+      try {
+        return await openForRun.call(this, token, options);
+      } finally {
+        busy.opening--;
+      }
+    };
+    McpServer.prototype.close = async function (this: McpServer) {
+      busy.mostClosing = Math.max(busy.mostClosing, ++busy.closing);
+      try {
+        await close.call(this);
+      } finally {
+        busy.closing--;
+      }
+    };
+    let result;
+    try {
+      result = await run(await toolFlow("{c: echo}", '{text: "hi"}'), { a, b, c });
+    } finally {
+      McpServer.prototype.openForRun = openForRun;
+      McpServer.prototype.close = close;
+    }
+    expect(result.failure).toBeNull();
+    expect(busy).toMatchObject({ mostOpening: 3, mostClosing: 3 });
+    for (const [index, server] of [a, b, c].entries()) await expectClosed(server, files[index]);
+  },
+  SLOW,
+);
+
+test(
+  "when two servers fail to open, the earlier one's error is reported though the later one failed first",
+  async () => {
+    const files = [marker("a.pid"), marker("b.pid"), marker("c.pid")];
+    const slow = mcpServer({ ...stdioOptions("--hang", "--marker", files[0]!), label: "a", connectTimeout: 1 });
+    const fast = mcpServer({ ...stdioOptions("--stderr", "boom", "--marker", files[1]!), label: "b" });
+    const after = mcpServer({ ...stdioOptions("--marker", files[2]!), label: "c" });
+    const error = await rejection(run(await toolFlow("{a: echo}", '{text: "hi"}'), { a: slow, b: fast, c: after }));
+    expect(error).toBeInstanceOf(McpConnectError);
+    expect(error.message).toStartWith("MCP server 'a' didn't start within 1 s");
+    for (const [index, server] of [slow, fast, after].entries()) await expectClosed(server, files[index]);
   },
   SLOW,
 );

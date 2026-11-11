@@ -274,14 +274,14 @@ function foldTags(part: TextPart, open: string | null, close: string | null): Te
  * with the author tag escaped, and an authored user message's parts wrapped in `authorOpen` and
  * `authorClose` text parts.
  *
- * A user message is wrapped only when it has an author, `wrap` isn't `false`, and some text part
- * holds more than whitespace; an unauthored one stays unmarked, as the flow's own user. With
+ * A user message is wrapped only when it has an author and some text part holds more than
+ * whitespace; an unauthored one stays unmarked, as the flow's own user. With
  * `inline`, the tags are folded into the first and last parts with `"\n"` when those are text,
  * and added as parts of their own otherwise, for routes that send a one-text message as a
  * string. System and assistant messages, and any message with nothing to change, are returned
  * as they are; a copy keeps the role, author, protocol and payload.
  */
-export function withAuthorWrapper(message: Message, options: { wrap?: boolean; inline?: boolean } = {}): Message {
+export function withAuthorWrapper(message: Message, options: { inline?: boolean } = {}): Message {
   // Every user and tool text is escaped, author or not, because a forged wrapper claims an
   // author even where no real one exists.
   let parts: Part[];
@@ -291,7 +291,7 @@ export function withAuthorWrapper(message: Message, options: { wrap?: boolean; i
     const sendable = message.parts.some((part) => part instanceof TextPart && part.text.trim() !== "");
     // The wrapper always closes: Anthropic merges consecutive user turns, and the next message's
     // text must not read as this author's.
-    if (author !== null && options.wrap !== false && sendable) {
+    if (author !== null && sendable) {
       const open = authorOpen(author);
       const close = authorClose();
       if (!options.inline) {

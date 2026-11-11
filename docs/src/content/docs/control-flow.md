@@ -60,6 +60,7 @@ page the on-call
 | A `when:` is a value of the `on:` type | `when: 1` on an `int`, `when: "1"` on a `str` |
 | Ints and floats compare as numbers | `when: 2` matches `2.0` |
 | A `when:` the `on:` type can't hold is a load error, even with `else:` | `when: true` on an `int`; `when: nogo` on `Literal(go, no_go)` |
+| A `when:` is a literal, so a `${...}` in it is a load error | To compare with `${input.v}`, drop `on:` and write `when: input.k == input.v` |
 
 ### Test conditions
 
@@ -101,8 +102,9 @@ A `then:` or `else:` names what runs on that branch:
 - a value entry, which is also a node (`then: approve`);
 - a child flow call, as an unquoted `call(...)` (`else: call(respond, text=${input.text})`).
 
-Anything else, such as quoted text, a number or `null`, is a load error that shows the value
-entry to write instead. A word that names no node is a load error that suggests the nearest node.
+Anything else, such as quoted text, a number or `null`, is a load error: put the value in a
+value entry and name that. A word that names no node is a load error that suggests the nearest
+node.
 
 A node that names the `case` itself in `depends_on:` or `runs_after:` isn't on a branch: it runs
 whichever branch is taken.
@@ -195,7 +197,8 @@ route:
 ```
 
 A condition narrows its branch too: `when: isinstance(decide.output, Buy)` or
-`when: lookup.output != null`.
+`when: lookup.output != null`. A later `on:` case's `when:` that a branch has ruled out never
+matches, so it is a load error: under `log_hold`, `when: buy` on `${decide.output.action}`.
 
 ## Reuse a flow with `defs` and `call`
 
@@ -309,7 +312,8 @@ Shipped.
 
 - A ref is the child's path without its extension, relative to the importing file's folder:
   `../common/clean` loads `../common/clean.yaml`. Only `.yaml` files are found, so a ref that
-  ends in `.yaml` and a `.yml` file both fail with `not found`.
+  ends in `.yaml` and a `.yml` file both fail with `not found`, naming the file looked for and
+  why. A folder named like the file is skipped.
 - `@<version>` pins the child: its `version:` must be the same text, or the flow doesn't load.
   Quote a number there (`version: "1"`). A ref without `@` takes any version.
 - `yian run` and `yian check` look in the importing file's folder, then in each `system.paths`
@@ -412,6 +416,9 @@ Exactly one driver decides how often the body runs:
   or field the record doesn't have is a load error.
 - `max:` is a runaway guard. A loop that would run more than `max` times fails with
   `loop.max_exceeded`. Without `max:`, a loop runs until its condition ends it.
+- `on_max_exceeded: output` makes reaching `max:` end the loop instead, with the record its last
+  run left, as if its condition had ended it. The default is `fail`. It needs `max:`, and is a
+  load error with `times:`.
 - A condition that reads only fields the body never returns can't change, so it is a load error
   unless you give `max:`. So is one that reads no carried field and doesn't end the loop at once
   (`until: 1 > 2`).

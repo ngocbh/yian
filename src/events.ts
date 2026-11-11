@@ -47,6 +47,17 @@ export class NodeStarted {
   }
 }
 
+/** The `console` methods a CODE body's output is printed through. */
+export type ConsoleMethod = "log" | "info" | "warn" | "error" | "debug";
+
+/** One line a node's code printed: the run and node it came from, the `console` method and its text. */
+export interface ConsoleLine {
+  readonly runId: string;
+  readonly node: string;
+  readonly method: ConsoleMethod;
+  readonly text: string;
+}
+
 /**
  * A streamed fragment of a node's output (e.g. an LLM token).
  *

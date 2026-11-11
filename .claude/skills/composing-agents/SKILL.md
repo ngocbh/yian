@@ -155,7 +155,8 @@ output:
   `case` may skip. Write `${x?.qty :- 0}`, or check first: `x != null and x.qty > 0`.
 - **A null in a prompt fails the node.** Give it a default: `${note :- "none"}`.
 - **Arithmetic is numeric.** `+` also joins two texts or two lists; `*` and `%` on text fail
-  (put the value in a template instead); `/` always gives a float.
+  (put the value in a template instead); `/` always gives a float. Space it: `n / 2`, since
+  `n/2` reads as one name.
 - **Prompts may call only the builtins that give text**: `join`, `upper`, `lower`,
   `render_as_json`, `str`, `strip`, `lstrip`, `rstrip` and `replace`. Compute `len(...)`,
   `split(...)`, `int(...)`, `isinstance(...)` and constructors in a binding.
@@ -174,8 +175,8 @@ output:
   expression or condition. Tag it where one type is needed: `output: !Turn ${route.output}`.
 - **A `case` whose result is read must be exhaustive**: an `else:`, every tag of a `Literal`
   `on:`, or `when: true` and `when: false` on a `bool`.
-- **`on:` holds a reference** (`on: ${input.kind}`), and each `when:` is a value of its type.
-  Without `on:`, each `when:` is a condition and the first true one wins.
+- **`on:` holds a reference** (`on: ${input.kind}`), and each `when:` is a literal value of its
+  type, never a `${...}`. Without `on:`, each `when:` is a condition and the first true one wins.
 - **Skipped branches spread.** A node that reads a skipped node whole is skipped too; inside
   text the value is empty; with `:-` it runs on the default; a flow output reads null. See
   [When a node is skipped](https://yian.readthedocs.io/flows/#when-a-node-is-skipped).
@@ -196,6 +197,7 @@ output:
   a list in order. A `map` can't have `asserts:`.
 - **`loop`** takes exactly one driver: `while:` (checked before each run), `until:` (after each
   run) or `times: N`. `max:` guards `while:` and `until:`, and is a load error with `times:`.
+  Reaching `max:` fails the loop, unless `on_max_exceeded: output` ends it with the last record.
   The body reads carried fields as `${input.<name>}`, and the condition reads them bare
   (`while: not done`). Without `max:`, a condition that doesn't end the loop at once must
   read a carried field the body returns. The body returns only carried fields, at least one; a field it leaves out
@@ -225,11 +227,11 @@ output:
 - **An agent a host may interrupt needs an `Optional(...)` output.** An interrupted agent's
   output is null; with `str` or any other type it fails with `agent.interrupted`. This applies
   to every agent with `steer_inbox:`.
-- **`llm_config:` holds `provider`, `model` and, on an agent, `inherit:`.** Set `provider` and
-  `model` together: an agent that sets only `provider:` keeps an outer `model:`, even one for
-  another provider. Request settings go in a block named after the provider, written as that API's
-  request body: `anthropic: {max_tokens: 8000}`, `openai: {reasoning: {effort: high}}`. See [Models
-  and providers](https://yian.readthedocs.io/models/).
+- **`llm_config:` holds `provider`, `model` and, on an agent, `inherit:`.** An agent that sets
+  only `provider:` drops an outer `model:` chosen for another provider and gets its provider's
+  saved model; set `model:` too to pick one. Request settings go in a block named after the
+  provider, written as that API's request body: `anthropic: {max_tokens: 8000}`,
+  `openai: {reasoning: {effort: high}}`. See [Models and providers](https://yian.readthedocs.io/models/).
 - **No `session` memory.** Carry a conversation as a `loop` field and compact it with a `call`;
   see `templates/chat.yaml`.
 - **Memory across runs is a flow input** (`lessons: !FileMemory`) that the host binds. Pass it

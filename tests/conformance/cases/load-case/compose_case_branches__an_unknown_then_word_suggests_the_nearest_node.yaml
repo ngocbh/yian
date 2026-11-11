@@ -23,7 +23,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'case node ''route'' then: `replyy` names no node. Did you mean `reply`? For the text, add a value entry and name it: `replyy_text: !str replyy`'
+      message: 'case node ''route'' then: `replyy` names no node. Did you mean `reply`? For a value, put it in an entry in `nodes:` and name that entry'
       frames:
       - label: flow.yaml
         range: [11, 15, 11, 21]

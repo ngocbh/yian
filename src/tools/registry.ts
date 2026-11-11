@@ -628,7 +628,9 @@ export class ToolSet {
             `group ${reprText(group)} has a tool named ${reprText(name)}, a reserved name; ${reservedReason(name)}`,
           );
         }
-        if (topLevel.has(name)) {
+        // A group may hold a tool of its own name, as MCP servers often do (`fetch`); a tool named
+        // like another key would make the bare name mean two things.
+        if (name !== group && topLevel.has(name)) {
           throw new RangeError(
             `tool ${reprText(name)} in group ${reprText(group)} clashes with tools[${JSON.stringify(name)}]`,
           );
@@ -669,9 +671,10 @@ export class ToolSet {
   /**
    * Return this run's tool, or the registry's when the run has no mapping.
    *
-   * A `ToolRef` with a group names that group's tool. A bare name is a top-level tool, else the one
-   * group tool by that name. `ask` and `ask_user` never come from the registry: a run without its
-   * own handler cannot ask. `take` and `sleep` are engine built-ins, never tools.
+   * A `ToolRef` with a group names that group's tool. A bare name is a top-level tool, the tool a
+   * group of that name holds under its own name, else the one group tool by that name. `ask` and
+   * `ask_user` never come from the registry: a run without its own handler cannot ask. `take` and
+   * `sleep` are engine built-ins, never tools.
    *
    * @throws {GrantError} A bare name is a tool of two groups.
    * @throws {RangeError} No tool answers the ref.
@@ -707,6 +710,9 @@ export class ToolSet {
       );
     }
     const group = this.groupMap.get(toolId);
+    // A group's tool of the group's own name is what the bare name reaches.
+    const own = group?.get(toolId);
+    if (own !== undefined) return own;
     if (group !== undefined) {
       const [first] = group.keys();
       const one = `; name one of its tools, as \`{${toolId}: ${first}}\``;

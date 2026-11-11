@@ -1,0 +1,7 @@
+kind: expr
+# keys, values and items give a record's fields in key order, by code point.
+expr: "[keys(r), values(r), items(r)]"
+values:
+  r: {b: 2, a: x}
+expect:
+  value: [["a", "b"], ["x", 2], [{key: a, value: x}, {key: b, value: 2}]]

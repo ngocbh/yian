@@ -11,7 +11,9 @@ import { isIPv6 } from "node:net";
 
 import { current } from "../defaults.ts";
 import { reprText } from "../diagnostics.ts";
+import { LOOPBACK_HOSTS } from "../platform.ts";
 import { isRecord } from "../typesys/index.ts";
+import type { StructuredOutput } from "../llm/events.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { fromHost as hostValue } from "../typesys/values.ts";
 import { validateHeaderName, validateHeaders, validateOrganization } from "./connection_settings.ts";
@@ -79,7 +81,6 @@ const CODEX_REMOVED =
   "Native Codex configuration has been removed. Run 'yian auth openai', use provider: openai, " +
   "and remove sandbox/cwd. Yian tools are granted explicitly and run on the host.";
 
-const LOCAL_HOSTS: readonly string[] = ["localhost", "127.0.0.1", "::1"];
 // RFC 3986 characters. Everything else (whitespace, controls, non-ASCII) is something a URL parser
 // or HTTP client would strip, normalise, or encode, so the string sent would differ from the one
 // checked here.
@@ -100,6 +101,7 @@ export const LLM_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "organization",
   "project",
   "headers",
+  "structured_output",
   ...SUPPORTED_LLM_PROVIDERS,
 ]);
 
@@ -213,7 +215,7 @@ export function validateBaseUrl(value: unknown): string {
   if (port !== undefined && !(Number(port) >= 1 && Number(port) <= 65535)) {
     throw new RangeError("base_url port must be a number from 1 to 65535");
   }
-  if (groups["scheme"] !== "https" && !LOCAL_HOSTS.includes(host)) {
+  if (groups["scheme"] !== "https" && !LOOPBACK_HOSTS.includes(host)) {
     throw new RangeError("base_url must use https; http is allowed only for localhost, 127.0.0.1, and ::1");
   }
   return value;
@@ -430,6 +432,10 @@ function bindConnectionToKey(connection: Connection): void {
  *   tabs only between characters. Names and values are at most `YIAN_MAX_HEADER_VALUE_CHARS`
  *   characters (default 8192), with at most `YIAN_MAX_CONNECTION_HEADERS` headers (default 32).
  *   Values are secrets: like the key, they never show in `dump()`. An empty record is no headers.
+ * - `structured_output`: how an agent with a declared output asks for it: `"native"` (the route's
+ *   structured output, a tool or a JSON-schema format; unset means this) or `"prompt"` (the schema
+ *   as an instruction in the prompt, for a model that can't call tools). It appears in `dump()`
+ *   when set.
  * - `<provider>`: one block per provider in `SUPPORTED_LLM_PROVIDERS` (`openai`, `qwen-cn`,
  *   `anthropic`, ...), named after it: request-body fields for the API that provider's calls
  *   reach, checked by its block in `PROVIDER_BLOCKS`. Every block is checked, but only the one
@@ -446,6 +452,7 @@ export class LLMConfig {
   readonly baseUrl: string | null;
   readonly organization: string | null;
   readonly project: string | null;
+  readonly structuredOutput: StructuredOutput | null;
   // Secrets and blocks are private, so JSON.stringify, inspect and spreads never show them.
   readonly #apiKey: string | null;
   readonly #headers: Readonly<Record<string, string>> | null;
@@ -493,6 +500,11 @@ export class LLMConfig {
     const organization = text("organization", (value) => validateOrganization(value, "organization"));
     const project = text("project", (value) => validateOrganization(value, "project"));
     const headers = readHeaders(own(data, "headers"), issues);
+    const structured = own(data, "structured_output");
+    const structuredOutput = structured === "native" || structured === "prompt" ? structured : null;
+    if (structured !== null && structured !== undefined && structuredOutput === null) {
+      issues.push({ loc: ["structured_output"], type: "literal_error", msg: "Input should be 'native' or 'prompt'" });
+    }
     const blocks = new Map<string, JsonObject>();
     for (const key of SUPPORTED_LLM_PROVIDERS) {
       const value = own(data, key);
@@ -519,6 +531,7 @@ export class LLMConfig {
     this.baseUrl = baseUrl;
     this.organization = organization;
     this.project = project;
+    this.structuredOutput = structuredOutput;
     this.#apiKey = apiKey;
     this.#headers = headers;
     this.#blocks = blocks;
@@ -572,6 +585,7 @@ export class LLMConfig {
     if (this.baseUrl !== null) dumped["base_url"] = this.baseUrl;
     if (this.organization !== null) dumped["organization"] = this.organization;
     if (this.project !== null) dumped["project"] = this.project;
+    if (this.structuredOutput !== null) dumped["structured_output"] = this.structuredOutput;
     for (const [key, block] of this.#blocks) dumped[key] = structuredClone(block);
     return dumped;
   }
@@ -783,9 +797,12 @@ function unsetDropped(key: string, value: unknown): unknown {
  * `specific`'s set fields win, `base` fills the rest, and a value inside a field (e.g.
  * `thinking: {...}`) is replaced whole. A block that is not a record is kept over the other
  * layer's block, whichever layer sets it (the `specific` one when both do), so it reaches
- * validation instead of being hidden. Every other key, `_connection` included, is replaced whole.
- * Dropping unset values keeps the merge associative, so a cascade can be grouped without changing
- * its result. Block records in the result are new; other values are shared with the inputs.
+ * validation instead of being hidden. Every other key, `_connection` included, is replaced whole,
+ * with one exception: when `specific` sets `provider` to another one than `base`'s and sets no
+ * `model`, `base`'s `model` is dropped, since it was chosen for that other provider; a `model` in a
+ * `base` with no `provider` is kept. So a cascade is merged from its innermost layer over the
+ * merge of the layers outside it. Block records in the result are new; other values are shared
+ * with the inputs.
  *
  * Example: `mergeLlmConfig({anthropic: {output_config: {effort: "high"}}}, {provider: "anthropic",
  * anthropic: {max_tokens: 8000n, output_config: {effort: "low"}}})` gives `{provider: "anthropic",
@@ -811,5 +828,13 @@ export function mergeLlmConfig(
       out.set(key, unsetDropped(key, value));
     }
   }
+  const provider = specific["provider"];
+  const changed = provider !== null && provider !== undefined && !isSet(specific["model"]);
+  if (changed && isSet(base["provider"]) && base["provider"] !== provider) out.delete("model");
   return Object.fromEntries(out);
+}
+
+/** Return whether a layer's field is set: neither `null` nor `undefined`. */
+function isSet(value: unknown): boolean {
+  return value !== null && value !== undefined;
 }

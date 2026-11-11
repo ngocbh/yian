@@ -1,0 +1,20 @@
+kind: load
+# keys, values and items read a record, which a list never is.
+flow: |
+  id: f
+  name: f
+  input:
+    xs: !list(int)
+  nodes:
+    names: !list(str) "${keys(input.xs)}"
+  output: ${names.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has expressions that can never succeed:
+          value entry 'names' from: keys() takes a record, got list(int)
+      frames:
+      - label: flow.yaml
+        range: [6, 10, 6, 40]

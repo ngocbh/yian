@@ -346,12 +346,13 @@ for (const numWorkers of [0, 2]) {
   test(`agent output nesting maximum runs with less stack prompted: ${numWorkers}`, async () => {
     const levels = maximum("MAX_AGENT_OUTPUT_NESTING");
     const env = limitEnv({ MAX_AGENT_OUTPUT_NESTING: levels });
-    // This model has no native structured output, so the reply is prompted for.
-    const [text, reply] = deepAgentFlow(levels, "provider: openai\nmodel: no-structured-sentinel");
+    // The reply is prompted for, not asked for natively.
+    const [text, reply] = deepAgentFlow(levels, "provider: openai\nmodel: gpt-4o\nstructured_output: prompt");
     // A union root is wrapped in a `value` field.
     const model = new ScriptedModel([textReply(jsonText({ value: reply }))], {
       provider: "openai",
-      model: "no-structured-sentinel",
+      model: "gpt-4o",
+      structuredOutput: "prompt",
     });
 
     const flow = await loadConformanceFlow(text, { env });

@@ -340,6 +340,68 @@ test(
   SLOW,
 );
 
+/**
+ * A server stand-in for `openMcpServers` that lists `tools`, takes 50 ms to open and to close, and
+ * logs `<name> open`, `<name> open done`, `<name> close` and `<name> close done` to `log`.
+ */
+function slowServer(name: string, tools: string[], log: string[]): McpServer {
+  let open = false;
+  const listed = tools.map(
+    (tool) => new FunctionTool({ name: tool, description: tool, parametersJsonSchema: { type: "object", properties: {} }, execute: () => tool }),
+  );
+  const step = async (what: string) => {
+    log.push(`${name} ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    log.push(`${name} ${what} done`);
+  };
+  const server = {
+    get isOpen() {
+      return open;
+    },
+    get tools() {
+      return listed;
+    },
+    async open() {
+      await step("open");
+      open = true;
+      return server;
+    },
+    async close() {
+      if (!open) return;
+      open = false;
+      await step("close");
+    },
+  };
+  return server as unknown as McpServer;
+}
+
+test("granted servers open together, a probe closes while the next opens, and every server closes together", async () => {
+  const log: string[] = [];
+  const servers = {
+    a: slowServer("a", ["x"], log),
+    b: slowServer("b", ["y"], log),
+    unused: slowServer("unused", ["other"], log),
+    c: slowServer("c", ["z"], log),
+  };
+  const signal = new AbortController().signal;
+
+  const selected = await openMcpServers(servers, new Set(["z"]), new Set(["a", "b"]), new Set(), { signal, warn: () => {} }, async (opened) => {
+    log.push("body");
+    return Object.keys(opened);
+  });
+
+  expect(selected).toEqual(["a", "b", "c"]);
+  const at = (entry: string) => log.indexOf(entry);
+  expect(at("b open")).toBeLessThan(at("a open done"));
+  // The unused probe's close doesn't hold up the next probe.
+  expect(at("c open")).toBeLessThan(at("unused close done"));
+  const closes = ["a", "b", "c"].map((name) => at(`${name} close`));
+  const closed = ["a", "b", "c"].map((name) => at(`${name} close done`));
+  expect(Math.max(...closes)).toBeLessThan(Math.min(...closed));
+  expect(log).toContain("unused close done");
+  expect(Object.values(servers).some((server) => server.isOpen)).toBe(false);
+});
+
 /** A one-word ("done") chat-completions stream. */
 const DONE =
   [
@@ -380,6 +442,42 @@ test.each(["fake", "{fake: [echo]}"])(
     expect(pids(fakePid)).toHaveLength(1);
     expect(existsSync(otherPid)).toBe(false);
     await expectNoChildren(fakePid);
+  },
+  SLOW,
+);
+
+test(
+  "a server named like its own tool: tool_id reaches the tool, and an agent's grant of the name grants the server",
+  async () => {
+    const bound: string[][] = [];
+    const fakeFetch = async (input: string | URL | Request, init?: RequestInit) => {
+      type Body = { tools?: { function: { name: string } }[] };
+      const body = (await new Request(input as string, init).json()) as Body;
+      bound.push((body.tools ?? []).map((tool) => tool.function.name));
+      return new Response(DONE, { headers: { "content-type": "text/event-stream" } });
+    };
+    const pid = marker("echo.pid");
+    const cfg = config(join(tmp, "cfg.json"), { echo: stdio("--only", "echo", "--marker", pid) });
+
+    const called = await run([toolFlow("echo"), "--mcp-config", cfg]);
+
+    expect(called.code, called.output).toBe(0);
+    expect(lastLine(called.stdout)).toBe("hi");
+
+    const vars = { XAI_API_KEY: "test-xai-key", YIAN_DEFAULT_PROVIDER: "xai", YIAN_DEFAULT_MODEL: "grok-4.3" };
+    const send = globalThis.fetch;
+    globalThis.fetch = fakeFetch as typeof fetch;
+    let granted;
+    try {
+      granted = await run([flowFile(AGENT_FLOW.replace("tools: [fake]", "tools: [echo]")), "--mcp-config", cfg], vars);
+    } finally {
+      globalThis.fetch = send;
+    }
+
+    expect(granted.code, granted.output).toBe(0);
+    expect(bound).toEqual([["echo_echo"]]);
+    expect(pids(pid)).toHaveLength(2);
+    await expectNoChildren(pid);
   },
   SLOW,
 );

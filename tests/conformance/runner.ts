@@ -60,6 +60,7 @@ import {
   type Event,
   EventStream,
   Finish,
+  type StructuredOutput,
   TextDelta,
   ToolCallDelta,
   UsageReport,
@@ -1891,10 +1892,11 @@ function scriptedModels(
   inbox: Inbox,
   taken: (label: string) => number,
   crashed: ReadonlyMap<string, ReadonlySet<string>>,
-): (provider: string, model: string, nodeId: string) => ChatModel {
-  return (provider, model, nodeId) => ({
+): (provider: string, model: string, nodeId: string, structuredOutput: StructuredOutput) => ChatModel {
+  return (provider, model, nodeId, structuredOutput) => ({
     provider,
     model,
+    structuredOutput,
     stream: (request, options = {}) => {
       const consumer = consumerOf(nodeId, request);
       const label = `host.models.${nodeId}.${consumer}`;
@@ -2407,7 +2409,7 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow, memories?:
       // factory does, so its errors stay yian's. No credential is read.
       const values = fromHost(config, "llm_config") as Record<string, unknown>;
       const [validated] = checkModelConfig(resolveModelConfig(values, { env }));
-      return scripted(validated.provider!, validated.model!, nodeId);
+      return scripted(validated.provider!, validated.model!, nodeId, validated.structuredOutput ?? "native");
     },
   };
 

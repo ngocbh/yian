@@ -16,7 +16,7 @@ import type { JsonObject, JsonValue } from "../typesys/json.ts";
 import { scrub } from "./auth.ts";
 import { encodeBody } from "./body.ts";
 import { capDetail, errorFromResponse, MAX_RETRY_AFTER_SECONDS, nonStreamError, ProviderError } from "./errors.ts";
-import { type ChatModel, type Event, EventStream, ReplyAssembler } from "./events.ts";
+import { type ChatModel, type Event, EventStream, ReplyAssembler, type StructuredOutput } from "./events.ts";
 import { iterNdjson, iterSse, type SSEEvent, type SseStats } from "./framing.ts";
 import type { Message, Request, Response } from "./messages.ts";
 import type { Route } from "./route.ts";
@@ -63,18 +63,27 @@ export class RouteModel implements ChatModel {
   readonly route: Route;
   /** Builds the bodies and parses the replies. */
   readonly protocol: WireProtocol;
+  /** How its structured calls ask for their schema. */
+  readonly structuredOutput: StructuredOutput;
   readonly #send: Send | undefined;
   readonly #scheduler: Scheduler | undefined;
 
   /**
    * @param options `send` and `scheduler` go to the transport; they default to the
-   *   runtime's fetch and the real clock.
+   *   runtime's fetch and the real clock. `structuredOutput` defaults to `native`.
    */
-  constructor(options: { route: Route; protocol: WireProtocol; send?: Send; scheduler?: Scheduler }) {
+  constructor(options: {
+    route: Route;
+    protocol: WireProtocol;
+    send?: Send;
+    scheduler?: Scheduler;
+    structuredOutput?: StructuredOutput;
+  }) {
     this.route = options.route;
     this.protocol = options.protocol;
     this.provider = options.route.provider;
     this.model = options.protocol.model;
+    this.structuredOutput = options.structuredOutput ?? "native";
     this.#send = options.send;
     this.#scheduler = options.scheduler;
   }

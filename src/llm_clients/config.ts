@@ -12,6 +12,7 @@ import { isIPv6 } from "node:net";
 import { current } from "../defaults.ts";
 import { reprText } from "../diagnostics.ts";
 import { isRecord } from "../typesys/index.ts";
+import type { StructuredOutput } from "../llm/events.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { fromHost as hostValue } from "../typesys/values.ts";
 import { validateHeaderName, validateHeaders, validateOrganization } from "./connection_settings.ts";
@@ -100,6 +101,7 @@ export const LLM_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "organization",
   "project",
   "headers",
+  "structured_output",
   ...SUPPORTED_LLM_PROVIDERS,
 ]);
 
@@ -430,6 +432,10 @@ function bindConnectionToKey(connection: Connection): void {
  *   tabs only between characters. Names and values are at most `YIAN_MAX_HEADER_VALUE_CHARS`
  *   characters (default 8192), with at most `YIAN_MAX_CONNECTION_HEADERS` headers (default 32).
  *   Values are secrets: like the key, they never show in `dump()`. An empty record is no headers.
+ * - `structured_output`: how an agent with a declared output asks for it: `"native"` (the route's
+ *   structured output, a tool or a JSON-schema format; unset means this) or `"prompt"` (the schema
+ *   as an instruction in the prompt, for a model that can't call tools). It appears in `dump()`
+ *   when set.
  * - `<provider>`: one block per provider in `SUPPORTED_LLM_PROVIDERS` (`openai`, `qwen-cn`,
  *   `anthropic`, ...), named after it: request-body fields for the API that provider's calls
  *   reach, checked by its block in `PROVIDER_BLOCKS`. Every block is checked, but only the one
@@ -446,6 +452,7 @@ export class LLMConfig {
   readonly baseUrl: string | null;
   readonly organization: string | null;
   readonly project: string | null;
+  readonly structuredOutput: StructuredOutput | null;
   // Secrets and blocks are private, so JSON.stringify, inspect and spreads never show them.
   readonly #apiKey: string | null;
   readonly #headers: Readonly<Record<string, string>> | null;
@@ -493,6 +500,11 @@ export class LLMConfig {
     const organization = text("organization", (value) => validateOrganization(value, "organization"));
     const project = text("project", (value) => validateOrganization(value, "project"));
     const headers = readHeaders(own(data, "headers"), issues);
+    const structured = own(data, "structured_output");
+    const structuredOutput = structured === "native" || structured === "prompt" ? structured : null;
+    if (structured !== null && structured !== undefined && structuredOutput === null) {
+      issues.push({ loc: ["structured_output"], type: "literal_error", msg: "Input should be 'native' or 'prompt'" });
+    }
     const blocks = new Map<string, JsonObject>();
     for (const key of SUPPORTED_LLM_PROVIDERS) {
       const value = own(data, key);
@@ -519,6 +531,7 @@ export class LLMConfig {
     this.baseUrl = baseUrl;
     this.organization = organization;
     this.project = project;
+    this.structuredOutput = structuredOutput;
     this.#apiKey = apiKey;
     this.#headers = headers;
     this.#blocks = blocks;
@@ -572,6 +585,7 @@ export class LLMConfig {
     if (this.baseUrl !== null) dumped["base_url"] = this.baseUrl;
     if (this.organization !== null) dumped["organization"] = this.organization;
     if (this.project !== null) dumped["project"] = this.project;
+    if (this.structuredOutput !== null) dumped["structured_output"] = this.structuredOutput;
     for (const [key, block] of this.#blocks) dumped[key] = structuredClone(block);
     return dumped;
   }

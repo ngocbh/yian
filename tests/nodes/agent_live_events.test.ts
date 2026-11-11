@@ -367,7 +367,7 @@ test("observeSkippedToolCall emits started, then finished interrupted", () => {
 
 // ---------- through the node ----------
 
-const PROMPTED = { provider: "vllm", model: "no-structured-sentinel" };
+const PROMPTED = { provider: "vllm", model: "m", structuredOutput: "prompt" as const };
 const INT = Type.scalar(ValueKind.INTEGER);
 
 /** The events an AGENT's event sink receives. */

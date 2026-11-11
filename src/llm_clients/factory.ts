@@ -25,8 +25,8 @@ import {
   SubscriptionAuth,
 } from "../llm/auth.ts";
 import { type Embed, type Embedder, type EmbeddingModel, openaiEmbeddings } from "../llm/embeddings.ts";
-import type { ChatModel } from "../llm/events.ts";
-import { RouteModel } from "../llm/executor.ts";
+import type { ChatModel, StructuredOutput } from "../llm/events.ts";
+import { RouteModel, type WireProtocol } from "../llm/executor.ts";
 import type { ReplayDegradedReason } from "../llm/messages.ts";
 import { AnthropicMessages } from "../llm/protocols/anthropic_messages.ts";
 import { Gemini } from "../llm/protocols/gemini.ts";
@@ -159,14 +159,26 @@ export interface Resolved {
   idHeaders: Record<string, string>;
   /** Connection header values, sent on the auth so the scrub knows them. */
   secretHeaders: Record<string, string>;
+  /** How the model's structured calls ask for their schema (`structured_output`). */
+  structuredOutput: StructuredOutput;
 }
 
-/** What every route passes on: the transport, the clock, the env and the replay observer. */
+/** What every route passes on: the transport, the clock, the env, the replay observer and `structured_output`. */
 interface Wiring {
   env: Env;
   send: Send | undefined;
   scheduler: Scheduler | undefined;
   onReplayDegraded: ((reason: ReplayDegradedReason) => void) | undefined;
+  structuredOutput: StructuredOutput;
+}
+
+/**
+ * Return the model sending `protocol`'s bodies over `route`, with `wiring`'s transport, clock and
+ * `structured_output`.
+ */
+function routeModel(route: Route, protocol: WireProtocol, wiring: Wiring): RouteModel {
+  const { send, scheduler, structuredOutput } = wiring;
+  return new RouteModel({ route, protocol, send, scheduler, structuredOutput });
 }
 
 /** Read the credentials `connection` pins for `provider`. */
@@ -236,7 +248,7 @@ function openaiModel(resolved: Resolved, wiring: Wiring): RouteModel {
     block: resolved.block,
     onReplayDegraded: wiring.onReplayDegraded,
   });
-  return new RouteModel({ route, protocol, send: wiring.send, scheduler: wiring.scheduler });
+  return routeModel(route, protocol, wiring);
 }
 
 /**
@@ -268,7 +280,7 @@ function vendorModel(provider: string, resolved: Resolved, wiring: Wiring): Rout
         onReplayDegraded,
       })
     : new OpenAIChat({ model, provider, block, onReplayDegraded });
-  return new RouteModel({ route, protocol, send: wiring.send, scheduler: wiring.scheduler });
+  return routeModel(route, protocol, wiring);
 }
 
 /**
@@ -327,7 +339,7 @@ function azureModel(resolved: Resolved, wiring: Wiring): RouteModel {
   const protocol = responses
     ? new OpenAIResponses({ model, provider: "azure", account, onReplayDegraded })
     : new OpenAIChat({ model, provider: "azure", block, onReplayDegraded });
-  return new RouteModel({ route, protocol, send: wiring.send, scheduler: wiring.scheduler });
+  return routeModel(route, protocol, wiring);
 }
 
 /**
@@ -357,7 +369,7 @@ function anthropicModel(resolved: Resolved, wiring: Wiring): RouteModel {
     block: resolved.block,
     onReplayDegraded: wiring.onReplayDegraded,
   });
-  return new RouteModel({ route, protocol, send: wiring.send, scheduler: wiring.scheduler });
+  return routeModel(route, protocol, wiring);
 }
 
 /**
@@ -402,7 +414,7 @@ function googleModel(resolved: Resolved, wiring: Wiring): RouteModel {
     block: resolved.block,
     onReplayDegraded: wiring.onReplayDegraded,
   });
-  return new RouteModel({ route, protocol, send: wiring.send, scheduler: wiring.scheduler });
+  return routeModel(route, protocol, wiring);
 }
 
 /**
@@ -429,7 +441,7 @@ function ollamaModel(resolved: Resolved, wiring: Wiring): RouteModel {
     block: resolved.block,
     onReplayDegraded: wiring.onReplayDegraded,
   });
-  return new RouteModel({ route, protocol, send: wiring.send, scheduler: wiring.scheduler });
+  return routeModel(route, protocol, wiring);
 }
 
 /**
@@ -461,7 +473,7 @@ async function subscriptionModel(
     subscription: true,
     onReplayDegraded: wiring.onReplayDegraded,
   });
-  return new RouteModel({ route, protocol, send: wiring.send, scheduler: wiring.scheduler });
+  return routeModel(route, protocol, wiring);
 }
 
 /**
@@ -499,9 +511,10 @@ export async function resolveProviderAccess(
   const provider = validated.provider!;
   const model = validated.model!;
   const block = validated.blockFor(provider);
+  const structuredOutput = validated.structuredOutput ?? "native";
   if (validated.apiKey === null && connection !== null && connection.method === "subscription") {
     const none = { key: null, keyAtBuild: null, baseUrl: null, idHeaders: {}, secretHeaders: {} };
-    return { provider, model, block, subscription: connection, ...none };
+    return { provider, model, block, subscription: connection, ...none, structuredOutput };
   }
   const read = reader(env, signal, scheduler);
 
@@ -542,7 +555,18 @@ export async function resolveProviderAccess(
     idHeaders = openaiIdHeaders(validated.organization, validated.project);
     secretHeaders = { ...validated.headers };
   }
-  return { provider, model, block, subscription: null, key, keyAtBuild, baseUrl, idHeaders, secretHeaders };
+  return {
+    provider,
+    model,
+    block,
+    subscription: null,
+    key,
+    keyAtBuild,
+    baseUrl,
+    idHeaders,
+    secretHeaders,
+    structuredOutput,
+  };
 }
 
 /**
@@ -579,7 +603,7 @@ export async function chatModelFromConfig(
   const onWarning = options.onWarning ?? ((message: string) => warnOnce(WARNED, message));
   const resolved = await resolveProviderAccess(config, { env, snapshot, scheduler, signal });
   const { provider, model, subscription } = resolved;
-  const wiring: Wiring = { env, send, scheduler, onReplayDegraded };
+  const wiring: Wiring = { env, send, scheduler, onReplayDegraded, structuredOutput: resolved.structuredOutput };
   if (subscription !== null) {
     return subscriptionModel(subscription, model, resolved.block, wiring, reader(env, signal, scheduler));
   }

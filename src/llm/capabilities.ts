@@ -127,22 +127,3 @@ export function modelProfile(protocol: string, model: string): ModelProfile {
   }
   return Object.freeze(profile);
 }
-
-// Providers with their own native structured output, whatever the model id.
-const NATIVE_STRUCTURED_PROVIDERS: ReadonlySet<string> = new Set(["anthropic", "google", "azure", "ollama"]);
-
-// Test and escape-hatch sentinel: the one model id with no native structured output, so the
-// prompt fallback is reachable through a concrete (provider, model) pair.
-const NO_NATIVE_STRUCTURED: ReadonlySet<string> = new Set(["no-structured-sentinel"]);
-
-/**
- * Whether `(provider, model)` has native structured output.
- *
- * Native-by-default providers (`anthropic`/`google`/`azure`/`ollama`, any case) always do. Every
- * other provider does unless its model is the no-native sentinel, which falls back to prompt
- * injection; an unknown model stays native.
- */
-export function supportsNativeStructured(provider: string, model: string): boolean {
-  if (NATIVE_STRUCTURED_PROVIDERS.has(provider.toLowerCase())) return true;
-  return !NO_NATIVE_STRUCTURED.has(model);
-}

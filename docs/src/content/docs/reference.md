@@ -95,6 +95,8 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MODEL_RETRIES` | setting | 6 | 0 or more | Extra attempts a model call gets after a transport failure (a network error, 5xx, 429 or timeout) |
 | `YIAN_MODEL_FIRST_RESPONSE_TIMEOUT_SECONDS` | setting | 240 | 1 or more | Longest wait in seconds from sending a model request to the first bytes of its response |
 | `YIAN_MODEL_IDLE_TIMEOUT_SECONDS` | setting | 240 | 1 or more | Longest wait in seconds between bytes of a streamed model response |
+| `YIAN_MODEL_CHECK_TIMEOUT_SECONDS` | setting | 30 | 1 or more | Longest wait in seconds for the reply `yian auth` checks a model with before it saves a login |
+| `YIAN_MODEL_LIST_TIMEOUT_SECONDS` | setting | 8 | 1 or more | Longest wait in seconds for a whole model listing given no timeout (`yian models`, `/model`) |
 | `YIAN_REQUEST_TIMEOUT_SECONDS` | setting | 30 | 1 or more | Longest wait in seconds for a short request (model listing, sign-in calls) |
 | `YIAN_EMBEDDING_TIMEOUT_SECONDS` | setting | 60 | 1 or more | Longest wait in seconds for one embeddings request |
 | `YIAN_EMBEDDING_BATCH_ITEMS` | setting | 64 | 1 or more | Most texts sent in one embeddings request; more go in several requests |

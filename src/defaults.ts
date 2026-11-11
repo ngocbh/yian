@@ -316,6 +316,18 @@ export const ENTRIES = Object.freeze([
     group: "setting",
     minimum: 1,
   }),
+  entry("MODEL_CHECK_TIMEOUT_SECONDS", {
+    default: 30,
+    description: "Longest wait in seconds for the reply `yian auth` checks a model with before it saves a login",
+    group: "setting",
+    minimum: 1,
+  }),
+  entry("MODEL_LIST_TIMEOUT_SECONDS", {
+    default: 8,
+    description: "Longest wait in seconds for a whole model listing given no timeout (`yian models`, `/model`)",
+    group: "setting",
+    minimum: 1,
+  }),
   entry("REQUEST_TIMEOUT_SECONDS", {
     default: 30,
     description: "Longest wait in seconds for a short request (model listing, sign-in calls)",

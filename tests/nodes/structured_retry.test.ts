@@ -209,6 +209,17 @@ describe("a reply without the schema's tool call", () => {
       expect(model.script.requests).toHaveLength(retries + 1);
     },
   );
+
+  test("a call whose arguments don't parse gets a correction naming them, not a missing call", async () => {
+    const bad = new ToolCallPart({ id: "c1", name: "ScalarWrapper", arguments: null, rawArguments: '{"value": 4' });
+    const good = new ToolCallPart({ id: "c2", name: "ScalarWrapper", arguments: { value: 42n } });
+    const model = new ToolRoute([reply(bad), reply(good)]);
+    expect(await generateStructured(model, [QUESTION], INT, { retries: 1 })).toBe(42n);
+    // The correction answers the bad call as its error result.
+    const correction = (model.script.requests[1]!.messages.at(-1)!.parts[0] as ToolResultPart).content;
+    expect(correction).toContain('the ScalarWrapper call\'s arguments are not a JSON object: {"value": 4');
+    expect(correction).not.toContain("did not call");
+  });
 });
 
 describe("structured validation path keeps record fields", () => {

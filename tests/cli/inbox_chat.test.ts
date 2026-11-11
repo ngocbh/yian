@@ -754,9 +754,11 @@ describe("yian chat's model text with escape sequences", () => {
   test(
     "chat failed: is stripped on a TTY stderr and kept exactly when piped",
     async () => {
-      // A log whose folder is a file: the run can't create it, and the error names its path.
-      writeFileSync(join(tmp, "t\x1b]52;c;aGk=\x07"), "");
-      const log = join(tmp, "t\x1b]52;c;aGk=\x07", "run.jsonl");
+      // A log whose name is longer than a file system takes: the run can't create it, and the
+      // error names its path.
+      const name = `${"n".repeat(300)}.jsonl`;
+      mkdirSync(join(tmp, "t\x1b]52;c;aGk=\x07"));
+      const log = join(tmp, "t\x1b]52;c;aGk=\x07", name);
       for (const [outTty, folder] of [
         [true, "/t/"],
         [false, "/t\x1b]52;c;aGk=\x07/"],
@@ -765,8 +767,8 @@ describe("yian chat's model text with escape sequences", () => {
         const { code } = await runChat(flowFile(ECHO), io, { log });
         expect(code).toBe(1);
         const failed = stderr().slice(stderr().indexOf("chat failed: "));
-        expect(failed).toStartWith("chat failed: ENOTDIR");
-        expect(failed).toContain(`${folder}run.jsonl`);
+        expect(failed).toStartWith("chat failed: ENAMETOOLONG");
+        expect(failed).toContain(`${folder}${name}`);
       }
     },
     TIMEOUT,
@@ -792,9 +794,8 @@ describe("yian chat's failures under --engine-trace", () => {
   test(
     "chat failed: adds the stack box under --engine-trace",
     async () => {
-      // A log whose folder is a file: the run can't create it.
-      writeFileSync(join(tmp, "taken"), "");
-      const log = join(tmp, "taken", "run.jsonl");
+      // A log whose name is longer than a file system takes: the run can't create it.
+      const log = join(tmp, `${"n".repeat(300)}.jsonl`);
       for (const engineTrace of [false, true]) {
         const { io, stderr } = chatIo();
         const { code } = await runChat(flowFile(ECHO), io, { engineTrace, log });

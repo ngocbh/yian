@@ -20,7 +20,7 @@ import { join } from "node:path";
 
 import { chat, type ChatDeps, type ChatOptions } from "../../src/cli/chat.ts";
 import { main } from "../../src/cli/index.ts";
-import type { CliIo, Writer } from "../../src/cli/utils.ts";
+import { type CliIo, UsageError, type Writer } from "../../src/cli/utils.ts";
 import { type ChatModel, EventStream } from "../../src/llm/events.ts";
 import { type Request, Response, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
@@ -251,6 +251,17 @@ test(
   },
   TIMEOUT,
 );
+
+test("yian chat --log in a missing folder is a usage error before the banner", async () => {
+  const { io, stderr } = chatIo();
+  const folder = join(tmp, "nodir");
+  const model = new AnsweringModel(() => textReply("hello"));
+  await expect(runChat(io, model, undefined, { options: { log: join(folder, "chat.jsonl") } })).rejects.toThrow(
+    new UsageError(`Invalid value for --log: folder does not exist: ${folder}`),
+  );
+  expect(stderr()).toBe("");
+  expect(model.requests).toEqual([]);
+});
 
 test(
   "yian chat without a provider and model for the assistant says how to set one and exits 1",

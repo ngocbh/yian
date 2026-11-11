@@ -527,25 +527,47 @@ describe.if(process.versions.bun !== undefined)("uninstall.sh", () => {
     expect(existsSync(dir)).toBe(false);
   });
 
-  const LOCAL_WORK: Record<string, (clone: string) => void> = {
-    "an uncommitted change": (clone) => writeFileSync(join(clone, "package.json"), "{}\n"),
-    "an untracked file": (clone) => writeFileSync(join(clone, "notes.md"), "mine\n"),
-    "an ignored file": (clone) => writeFileSync(join(clone, ".env"), "KEY=mine\n"),
-    "a stash": (clone) => {
-      writeFileSync(join(clone, "package.json"), "{}\n");
-      git(clone, "stash", "--quiet");
+  /** The user's git config in the fixture's home, which uninstall.sh reads but must not be steered by. */
+  const gitconfig = (fx: Fixture, text: string) => writeFileSync(join(fx.home, ".gitconfig"), text);
+  const LOCAL_WORK: Record<string, (fx: Fixture) => void> = {
+    "an uncommitted change": (fx) => writeFileSync(join(fx.clone, "package.json"), "{}\n"),
+    "an untracked file": (fx) => writeFileSync(join(fx.clone, "notes.md"), "mine\n"),
+    "an ignored file": (fx) => writeFileSync(join(fx.clone, ".env"), "KEY=mine\n"),
+    "an untracked file that status.showUntrackedFiles=no hides": (fx) => {
+      gitconfig(fx, "[status]\n\tshowUntrackedFiles = no\n");
+      writeFileSync(join(fx.clone, "notes.md"), "mine\n");
     },
-    "a commit that isn't pushed": (clone) => commit(clone, "notes.md", "mine"),
-    "a commit on a detached HEAD": (clone) => {
-      git(clone, "switch", "--quiet", "--detach");
-      commit(clone, "notes.md", "mine");
+    "an ignored file that status.showUntrackedFiles=no hides": (fx) => {
+      gitconfig(fx, "[status]\n\tshowUntrackedFiles = no\n");
+      writeFileSync(join(fx.clone, ".env"), "KEY=mine\n");
     },
+    "a file that a global excludes file ignores": (fx) => {
+      writeFileSync(join(fx.home, ".gitignore_global"), "notes/\n");
+      gitconfig(fx, `[core]\n\texcludesFile = ${join(fx.home, ".gitignore_global")}\n`);
+      mkdirSync(join(fx.clone, "notes"));
+      writeFileSync(join(fx.clone, "notes", "todo.md"), "mine\n");
+    },
+    "a stash": (fx) => {
+      writeFileSync(join(fx.clone, "package.json"), "{}\n");
+      git(fx.clone, "stash", "--quiet");
+    },
+    "a commit that isn't pushed": (fx) => commit(fx.clone, "notes.md", "mine"),
+    "a commit on a detached HEAD": (fx) => {
+      git(fx.clone, "switch", "--quiet", "--detach");
+      commit(fx.clone, "notes.md", "mine");
+    },
+    "a commit that only a tag holds": (fx) => {
+      commit(fx.clone, "notes.md", "mine");
+      git(fx.clone, "tag", "mine");
+      git(fx.clone, "reset", "--quiet", "--hard", "origin/main");
+    },
+    "a linked worktree": (fx) => git(fx.clone, "worktree", "add", "--quiet", join(fx.base, "feature"), "-b", "feature"),
   };
   for (const [work, make] of Object.entries(LOCAL_WORK)) {
     test(`keeps a clone with ${work}, and says why`, () => {
       const fx = fixture();
       install(fx);
-      make(fx.clone);
+      make(fx);
       const result = pipe("uninstall.sh", fx);
       expect(result.status).toBe(0);
       expect(existsSync(join(fx.clone, ".git"))).toBe(true);

@@ -137,21 +137,27 @@ remove_path_lines() {
 }
 
 # Prints what local work the clone $1 holds, or nothing when it holds none; fails when git can't
-# tell. node_modules folders are what `bun install` wrote; any other untracked or ignored file,
-# such as a .env, is someone's.
+# tell. The checks don't follow the user's git config, and every untracked or ignored file counts,
+# whichever ignore file hides it, except the node_modules folders `bun install` writes.
 local_work() {
-  changes=$(git -C "$1" status --porcelain --ignored) || return 1
-  first=$(printf '%s\n' "$changes" | grep -v -E '^!! (.*/)?node_modules/$' | sed -n '1s/^...//p')
+  files=$(git --no-optional-locks -C "$1" status --porcelain --untracked-files=all --ignored=matching) || return 1
+  first=$(printf '%s\n' "$files" | LC_ALL=C grep -a -v -E '^!! (.*/)?node_modules/$' | LC_ALL=C sed -n '1s/^...//p')
   if [ -n "$first" ]; then
     printf 'files that are not committed, such as %s' "$first"
     return 0
   fi
-  stashes=$(git -C "$1" stash list) || return 1
+  stashes=$(git --no-optional-locks -C "$1" stash list) || return 1
   if [ -n "$stashes" ]; then
     printf 'stashed changes'
     return 0
   fi
-  unpushed=$(git -C "$1" log --oneline HEAD --branches --not --remotes) || return 1
+  worktrees=$(git --no-optional-locks -C "$1" worktree list --porcelain | LC_ALL=C grep -a -c '^worktree ') || return 1
+  if [ "$worktrees" -gt 1 ]; then
+    printf 'other worktrees (git worktree list shows them)'
+    return 0
+  fi
+  # Any ref's commits: branches, tags, a detached HEAD.
+  unpushed=$(git --no-optional-locks -C "$1" rev-list --all --not --remotes) || return 1
   if [ -n "$unpushed" ]; then printf 'commits that are not pushed'; fi
 }
 

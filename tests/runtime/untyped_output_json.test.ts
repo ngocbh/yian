@@ -1,6 +1,6 @@
 /**
  * Untyped values that cross the run log's JSON boundary are checked as JSON values, with the value
- * layer's wording (`<Set object> is not a JSON value`); text holding a lone surrogate is refused
+ * layer's wording (`Set is not a yian value`); text holding a lone surrogate is refused
  * before it reaches the writer.
  */
 
@@ -25,8 +25,8 @@ function expectTypeCheck(fn: () => unknown, message: string, path: readonly (str
 }
 
 test.each<[string, unknown, string, (string | number)[]]>([
-  ["a date", { d: new Date(Date.UTC(2026, 0, 1)) }, "<Date object> is not a JSON value", ["d"]],
-  ["a set", { s: new Set([1n, 2n]) }, "<Set object> is not a JSON value", ["s"]],
+  ["a date", { d: new Date(Date.UTC(2026, 0, 1)) }, "Date is not a yian value", ["d"]],
+  ["a set", { s: new Set([1n, 2n]) }, "Set is not a yian value", ["s"]],
 ])("canonicalTyped rejects an untyped non-JSON value: %s", (_name, value, message, path) => {
   expectTypeCheck(() => canonicalTyped(value, null), message, path);
 });
@@ -43,7 +43,7 @@ test.each<[string, unknown, { kind: StorageKind; value: Value }]>([
 });
 
 test.each<[string, unknown, ValueKind, string, (string | number)[]]>([
-  ["a set in an object", { s: new Set([1n, 2n]) }, ValueKind.OBJECT, "<Set object> is not a JSON value", ["s"]],
+  ["a set in an object", { s: new Set([1n, 2n]) }, ValueKind.OBJECT, "Set is not a yian value", ["s"]],
   ["a record as str", { 1: "a" }, ValueKind.STRING, '{"1":"a"} does not match declared type str', []],
 ])("canonicalTyped reports the type check for a typed value: %s", (_name, value, declared, message, path) => {
   expectTypeCheck(() => canonicalTyped(value, declared), message, path);
@@ -68,7 +68,7 @@ test("a partial record checks its opaque field as JSON", () => {
 
   expectTypeCheck(
     () => canonicalOutputValue({ f: new FileRef({ uri: "f" }), g: new Set([1n, 2n]) }, contract, null),
-    "<Set object> is not a JSON value",
+    "Set is not a yian value",
     ["g"],
   );
 });

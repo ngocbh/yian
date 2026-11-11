@@ -106,7 +106,6 @@ const ALLOWED: Record<string, string> = {
   "diagnostics.ts: getCloseMatches.n": "suggestions offered, difflib's own default",
   // Internal sizes that no user input reaches.
   "cli/diff.ts: MAX_TABLE": "line pairs a diff compares before showing the whole change, internal",
-  "expr/lineage.ts: MAX_SNAPSHOT_DEPTH": "diagnostic retention depth, internal",
   "llm/transport.ts: MAX_ERROR_BODY_BYTES": "bytes of an error response read, internal",
   "runtime/log.ts: READ_CHUNK_BYTES": "bytes of a run log read at a time, internal",
   "runtime/log.ts: HEADER_DEPTH": "containers a long line's header scan tracks, fixed by the paths it reads",

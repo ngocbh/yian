@@ -972,22 +972,17 @@ export class FlowEngine {
   async #evaluate(nodeId: string): Promise<EvaluatedOutcome> {
     const { state, onEvent, onStream, live } = this;
     const node = state.flow.nodes.get(nodeId)!;
-    // A derived node gets an input route from the pool and the producer index (sources are
-    // pool_commit seqs), kept in memory with the outcome and dropped after the commit.
-    const derived = node.derived;
-    const resolver: SourceResolver | null = derived
-      ? (names) => resolveFromPool(names, state.pool, state.producers, state.runId!)
-      : null;
-    // A derived node's commit names each pool name its binding read.
-    let sourceResolver = resolver;
-    if (derived) {
+    // A derived node's commit names each pool name its binding read, with the seq of the
+    // pool_commit that wrote it, kept in memory until the commit.
+    let sourceResolver: SourceResolver | null = null;
+    if (node.derived) {
       const reads = new Map<string, number>();
       this.#reads.set(nodeId, reads);
       sourceResolver = (names) => {
         const { name } = referenceRoot(names, state.flow.startId, (held) => state.producers.has(held));
         const seq = name === null ? undefined : state.producers.get(name);
         if (seq !== undefined) reads.set(name!, seq);
-        return resolver!(names);
+        return resolveFromPool(names, state.pool, state.producers);
       };
     }
     // A per-node controller, linked while the node runs, so the listeners node code leaves on its
@@ -1003,7 +998,6 @@ export class FlowEngine {
         signal: nodeController.signal,
         emitStream: onStream === null && live === null ? null : (chunk) => this.#stream(chunk),
         emitEvent: onEvent === null && live === null ? null : (event) => this.#event(event),
-        captureBindings: derived,
         sourceResolver,
         tools: this.tools,
         memories: this.memories,

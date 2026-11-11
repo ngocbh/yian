@@ -70,5 +70,5 @@ test("evalNode resolves a Pending, and the steps it sees carry calls and the lim
   const evaluated = await evalNode(node, null, new VariablePool("__start__"), { steps: new NodeSteps(1, [], record, [view], 64) });
   expect(evaluated.outcome).toBeInstanceOf(Pending);
   expect([node.seen!.calls, node.seen!.maxEventBytes]).toEqual([[view], 64]);
-  expect(new EvaluatedOutcome(new Pending(["x"]), null).outcome).toBeInstanceOf(Pending);
+  expect(new EvaluatedOutcome(new Pending(["x"])).outcome).toBeInstanceOf(Pending);
 });

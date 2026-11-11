@@ -40,7 +40,6 @@ import {
   RunWaiting,
 } from "../events.ts";
 import { ExpressionError } from "../expr/expressions.ts";
-import { type RootRead, SourceRef } from "../expr/lineage.ts";
 import { exprRefsOf } from "../expr/template.ts";
 import { type CompleteResult, ELSE_HANDLE, Grow, Node, NodeKind, Output } from "../nodes/base.ts";
 import { BindingError, copyValue } from "../nodes/binding.ts";
@@ -61,7 +60,7 @@ import {
   validateOutputContract,
 } from "../nodes/contracts.ts";
 import { eventBytes, type JsonObject, type JsonValue, logJson } from "../typesys/json.ts";
-import { messagesKey, NEW_MESSAGES, VariablePool } from "../typesys/pool.ts";
+import { messagesKey, NEW_MESSAGES, referenceRoot, type RootValue, VariablePool } from "../typesys/pool.ts";
 import { newMessagesType } from "../typesys/types.ts";
 import {
   isInboxType,
@@ -116,7 +115,7 @@ import {
   type TakeCommit,
   type WaitEntry,
 } from "./log.ts";
-import { decodeTyped, resolvePoolPath, SYSTEM_PREFIX } from "./sources.ts";
+import { decodeTyped, SYSTEM_PREFIX } from "./sources.ts";
 import { ASK, ASK_USER, SLEEP, TAKE, toolCallId } from "../tools/context.ts";
 import { visibleToolName } from "../tools/grants.ts";
 import {
@@ -485,9 +484,9 @@ export interface PendingMessages {
 }
 
 /**
- * Read a reference's root in `pool` with the commit that wrote it: the seq of the name's accepted
- * `PoolCommitRecord` (`producers`) as its source, so a derived node's binding names the commits it
- * read (`referenceRoot`). A system value gets its run-start commit as its source.
+ * Read a reference's root in `pool` (`VariablePool.readRoot`) for a derived node's binding, whose
+ * commit names the accepted `PoolCommitRecord` (`producers`) that wrote each name it read
+ * (`referenceRoot`); a system value's is its run-start commit.
  *
  * @throws RangeError when a name the pool holds has no entry in `producers`, which always names
  *   every pool name.
@@ -496,13 +495,14 @@ export function resolveFromPool(
   names: readonly string[],
   pool: VariablePool,
   producers: ReadonlyMap<string, number>,
-  runId: string,
-): RootRead {
-  return resolvePoolPath(names, pool, (name) => {
-    const seq = producers.get(name);
-    if (seq === undefined) throw new RangeError(`pool name ${reprText(name)} has no pool_commit in the producer index`);
-    return new SourceRef(runId, seq);
-  });
+): RootValue {
+  const read = pool.readRoot(names);
+  if (!read.present) return read;
+  const { name } = referenceRoot(names, pool.startId, (held) => pool.store.has(held));
+  if (!producers.has(name!)) {
+    throw new RangeError(`pool name ${reprText(name!)} has no pool_commit in the producer index`);
+  }
+  return read;
 }
 
 /**

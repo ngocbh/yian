@@ -413,7 +413,9 @@ on too, though `ready` stays `false`. A log it can't read exits 1.
 
 `yian status` with no `LOG` lists the runs in `~/.yian/runs`, oldest first: run id, status, start
 time and flow file. It first updates the run index, `~/.yian/runs/index.sqlite`, which is rebuilt
-from the logs and safe to delete; a damaged one is rebuilt with a warning. With `--json`, each run
+from the logs and safe to delete; a damaged one is rebuilt with a warning. While another `yian`
+holds the index longer than 5 seconds, it lists what the index holds, after `warning: run index is
+being updated; listing may be stale`. `yian run` adds only its own run to the index. With `--json`, each run
 also has its end time, result, token counts and `memories`, each memory it was bound to by input,
 identity and type.
 

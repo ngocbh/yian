@@ -27,6 +27,7 @@ import { afterAll, describe, expect, spyOn, test } from "bun:test";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { Failure } from "../../src/diagnostics.ts";
+import * as platform from "../../src/platform.ts";
 import { openSqlite, withWarnings } from "../../src/platform.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { FileMemory } from "../../src/memory/file.ts";
@@ -901,6 +902,8 @@ console.log(JSON.stringify({ warnings, runs: readRunIndex(${JSON.stringify(runs)
     const runs = freshRuns();
     writeRun(runs, "run-1", failedRun);
     updateRunIndex(runs);
+    // A new run, so the update has a row to write.
+    writeRun(runs, "run-2", stoppedRun);
     const path = join(runs, "index.sqlite");
     const holder = openSqlite(path);
     try {
@@ -915,7 +918,7 @@ console.log(JSON.stringify({ warnings, runs: readRunIndex(${JSON.stringify(runs)
       const waited = Date.now() - began;
       expect(error).toBeInstanceOf(RunIndexBusyError);
       expect((error as Error).name).toBe("RunIndexBusyError");
-      expect((error as Error).message).toBe(`run index ${path} is locked by another update; gave up after 300 ms`);
+      expect((error as Error).message).toBe(`run index ${path} is locked; gave up after 300 ms`);
       expect(waited).toBeGreaterThanOrEqual(250);
       expect(waited).toBeLessThan(5000);
       expect(readRunIndex(runs).map((row) => row.runId)).toEqual(["run-1"]);
@@ -1279,3 +1282,141 @@ describe("waiting runs in the index", () => {
   });
 });
 
+
+describe("updates that do no more than the logs need", () => {
+  test.skipIf(process.getuid?.() === 0)("a log ending in an unterminated line isn't read again until its size or mtime changes", () => {
+    const runs = freshRuns();
+    writeRun(runs, "run-cut", runningRun);
+    const path = join(runs, "run-cut", "log.jsonl");
+    fs.appendFileSync(path, '{"at":"2026-10-23T00:00:09.000Z","kind":"node_step","payload":{"n":2,');
+    updateRunIndex(runs);
+    const before = readRunIndex(runs);
+    expect(before.map((row) => [row.runId, row.lastSeq, row.unreadable])).toEqual([["run-cut", 3, null]]);
+    // Unchanged, so it isn't opened: a log yian may not open would warn.
+    const { mtime } = statSync(path);
+    fs.chmodSync(path, 0o000);
+    const warnings: string[] = [];
+    try {
+      withWarnings((message) => warnings.push(message), () => updateRunIndex(runs));
+    } finally {
+      fs.chmodSync(path, 0o600);
+    }
+    fs.utimesSync(path, mtime, mtime);
+    expect(warnings).toEqual([]);
+    expect(readRunIndex(runs)).toEqual(before);
+    // The writer finishes the line, so the next update reads it.
+    truncateSync(path, readFileSync(path).length - '{"at":"2026-10-23T00:00:09.000Z","kind":"node_step","payload":{"n":2,'.length);
+    const log = JsonlRunLog.resume(path);
+    try {
+      log.append(new NodeStepRecord("agent", 2, modelCall([1, 1, null, null, null])));
+    } finally {
+      log.close();
+    }
+    updateRunIndex(runs);
+    expect(readRunIndex(runs)[0]!.lastSeq).toBe(4);
+  });
+
+  test("an update given runIds reads only those runs and keeps every other row", () => {
+    const runs = freshRuns();
+    writeRun(runs, "run-a", succeededRun);
+    updateRunIndex(runs);
+    writeRun(runs, "run-b", failedRun);
+    writeRun(runs, "run-c", stoppedRun);
+    // A damaged log in another folder is neither read nor warned about.
+    mkdirSync(join(runs, "run-bad"));
+    writeFileSync(join(runs, "run-bad", "log.jsonl"), "not json\n");
+    rmSync(join(runs, "run-a"), { recursive: true });
+    const warnings: string[] = [];
+    withWarnings((message) => warnings.push(message), () => updateRunIndex(runs, { runIds: ["run-b"] }));
+    expect(warnings).toEqual([]);
+    expect(readRunIndex(runs).map((row) => [row.runId, row.status])).toEqual([
+      ["run-a", "succeeded"],
+      ["run-b", "failed"],
+    ]);
+    // A listed run whose log is gone loses its row.
+    updateRunIndex(runs, { runIds: ["run-a", "run-gone"] });
+    expect(readRunIndex(runs).map((row) => row.runId)).toEqual(["run-b"]);
+    // With no index, it makes one holding the listed run.
+    rmSync(join(runs, "index.sqlite"));
+    updateRunIndex(runs, { runIds: ["run-c"] });
+    expect(readRunIndex(runs).map((row) => row.runId)).toEqual(["run-c"]);
+    // A full update still lists and warns.
+    withWarnings((message) => warnings.push(message), () => updateRunIndex(runs));
+    // A row with no start time comes first.
+    expect(readRunIndex(runs).map((row) => row.runId)).toEqual(["run-bad", "run-b", "run-c"]);
+    expect(warnings).toEqual([expect.stringContaining(`run index skipped ${join(runs, "run-bad", "log.jsonl")}`)]);
+  });
+
+  test.each([[[""]], [["."]], [[".."]], [["a/b"]], [["a\\b"]], [["index.sqlite\0"]], [[3]], ["run-a"]])(
+    "runIds must be run folder names: %p",
+    (runIds) => {
+      const runs = freshRuns();
+      expect(() => updateRunIndex(runs, { runIds: runIds as string[] })).toThrow(RangeError);
+    },
+  );
+
+  test("an update with nothing new takes no write lock: it finishes while another holds the lock or reads", () => {
+    const runs = freshRuns();
+    writeRun(runs, "run-1", failedRun);
+    updateRunIndex(runs);
+    const path = join(runs, "index.sqlite");
+    for (const hold of ["BEGIN IMMEDIATE", "BEGIN; SELECT 1 FROM runs"]) {
+      const holder = openSqlite(path);
+      try {
+        holder.exec(hold);
+        if (hold.startsWith("BEGIN;")) holder.prepare("SELECT * FROM runs").all();
+        updateRunIndex(runs, { timeoutMs: 0 });
+      } finally {
+        holder.close();
+      }
+    }
+    expect(readRunIndex(runs).map((row) => row.runId)).toEqual(["run-1"]);
+  });
+
+  test("an update that has to write waits for the lock, and says the index is locked", () => {
+    const runs = freshRuns();
+    writeRun(runs, "run-1", failedRun);
+    updateRunIndex(runs);
+    writeRun(runs, "run-2", stoppedRun);
+    const path = join(runs, "index.sqlite");
+    const holder = openSqlite(path);
+    try {
+      holder.exec("BEGIN IMMEDIATE");
+      expect(() => updateRunIndex(runs, { timeoutMs: 0 })).toThrow(`run index ${path} is locked; gave up after 0 ms`);
+    } finally {
+      holder.close();
+    }
+    updateRunIndex(runs, { timeoutMs: 0 });
+    expect(readRunIndex(runs).map((row) => row.runId)).toEqual(["run-1", "run-2"]);
+  });
+
+  // Spies on a module export, which only Bun allows (Node's ESM namespaces are frozen).
+  test.skipIf(platform.runtime !== "bun")("a rebuild commits as it goes, so another reader sees rows before it ends", () => {
+    const runs = freshRuns();
+    for (let i = 0; i < 450; i++) writeRun(runs, `run-${String(i).padStart(3, "0")}`, failedRun);
+    const statements: string[] = [];
+    const real = platform.openSqlite;
+    const open = spyOn(platform, "openSqlite").mockImplementation((path, options) => {
+      const db = real(path, options);
+      return { ...db, exec: (sql: string) => (statements.push(sql), db.exec(sql)) };
+    });
+    try {
+      updateRunIndex(runs);
+    } finally {
+      open.mockRestore();
+    }
+    expect(statements.filter((sql) => sql === "COMMIT").length).toBeGreaterThanOrEqual(3);
+    expect(readRunIndex(runs)).toHaveLength(450);
+  });
+
+  test("a read can leave each row's result out", () => {
+    const runs = freshRuns();
+    writeRun(runs, "run-a", succeededRun);
+    updateRunIndex(runs);
+    const [full] = readRunIndex(runs);
+    const [listed] = readRunIndex(runs, { result: false });
+    expect(full!.result).toBe('{"answer":"rain","n":2}');
+    expect(listed).toEqual({ ...full!, result: null });
+    expect(() => readRunIndex(runs, { result: 1 as unknown as boolean })).toThrow(RangeError);
+  });
+});

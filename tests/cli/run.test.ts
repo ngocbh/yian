@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:
 import { EventEmitter, getEventListeners } from "node:events";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
+  copyFileSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -52,7 +53,7 @@ import { registerTool, TOOL_REGISTRY } from "../../src/tools/registry.ts";
 import { inspectRun, readRunIndex } from "../../src/run.ts";
 import { JsonlRunLog, NodeStartedRecord, NodeStepRecord, readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 import { FileRef } from "../../src/typesys/values.ts";
-import { compiled, VERSION } from "../../src/platform.ts";
+import { compiled, openSqlite, VERSION } from "../../src/platform.ts";
 import { NO_ENV } from "../helpers/run_state_fixtures.ts";
 import { FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
 import { parseJson } from "../../src/typesys/json.ts";
@@ -1763,6 +1764,42 @@ describe("status", () => {
       }),
     ]);
   });
+
+  test("yian run indexes only its own run; the next status reads the rest", async () => {
+    const runs = join(tmp, "home", ".yian", "runs");
+    const damaged = join(runs, "damaged");
+    mkdirSync(damaged, { recursive: true });
+    writeFileSync(join(damaged, "log.jsonl"), "not a run log\n");
+    const ran = await runFlowCli(ECHO_FLOW, ["-q", "--input", "topic=clouds"]);
+    expect(ran.code).toBe(0);
+    expect(ran.stderr).not.toContain("warning");
+    expect(readRunIndex(runs).map((row) => row.status)).toEqual(["succeeded"]);
+    const listed = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["status"], listed.io)).toBe(0);
+    expect(listed.stderr()).toStartWith(`warning: run index skipped ${join(damaged, "log.jsonl")}: run log `);
+    expect(readRunIndex(runs).map((row) => row.runId)[0]).toBe("damaged");
+  });
+
+  test("while another update holds the index, status lists what it holds, with a warning", async () => {
+    expect((await runFlowCli(ECHO_FLOW, ["-q", "--input", "topic=clouds"])).code).toBe(0);
+    const runs = join(tmp, "home", ".yian", "runs");
+    // A new run, so the update has to write.
+    expect((await runFlowCli(FAIL_FLOW, ["-q", "--input", "topic=rain", "--log", join(tmp, "elsewhere.jsonl")])).code).toBe(1);
+    mkdirSync(join(runs, "copied"));
+    copyFileSync(join(tmp, "elsewhere.jsonl"), join(runs, "copied", "log.jsonl"));
+    const holder = openSqlite(join(runs, "index.sqlite"));
+    try {
+      holder.exec("BEGIN IMMEDIATE");
+      const text = testIo({ HOME: join(tmp, "home") });
+      const listing = main(["status"], text.io);
+      expect(await listing).toBe(0);
+      expect(text.stderr()).toBe("warning: run index is being updated; listing may be stale\n");
+      expect(text.stdout()).toContain("succeeded");
+      expect(text.stdout()).not.toContain("copied");
+    } finally {
+      holder.close();
+    }
+  }, 30_000);
 
   test("a damaged index is rebuilt from the logs: the runs are listed, with one warning", async () => {
     expect((await runFlowCli(ECHO_FLOW, ["-q", "--input", "topic=clouds"])).code).toBe(0);

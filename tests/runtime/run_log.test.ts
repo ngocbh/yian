@@ -1881,6 +1881,30 @@ test("isRunLogLocked reports whether a writer holds the log", () => {
   expect(fs.existsSync(`${file}.lock`)).toBe(true);
 });
 
+test.skipIf(process.platform === "win32")("isRunLogLocked resolves a path only when the log itself is a symlink", () => {
+  const file = path.join(dir, "probe", "run.jsonl");
+  fs.mkdirSync(path.dirname(file));
+  const linkedLog = path.join(dir, "probe-log-link.jsonl");
+  const linkedFolder = path.join(dir, "probe-folder-link");
+  fs.symlinkSync(file, linkedLog);
+  fs.symlinkSync(path.dirname(file), linkedFolder);
+  fs.symlinkSync(path.join(dir, "nowhere.jsonl"), path.join(dir, "dangling.jsonl"));
+  const log = baselineLog(file);
+  const resolves = spyOn(fs, "realpathSync");
+  try {
+    expect(isRunLogLocked(file)).toBe(true);
+    expect(isRunLogLocked(path.join(linkedFolder, "run.jsonl"))).toBe(true);
+    expect(resolves).not.toHaveBeenCalled();
+    expect(isRunLogLocked(linkedLog)).toBe(true);
+    expect(resolves).toHaveBeenCalledTimes(1);
+  } finally {
+    resolves.mockRestore();
+    log.close();
+  }
+  expect(isRunLogLocked(path.join(dir, "probe", "missing.jsonl"))).toBe(false);
+  expect(isRunLogLocked(path.join(dir, "dangling.jsonl"))).toBe(false);
+});
+
 test.skipIf(process.platform === "win32")("a log reached through a linked folder shares the real log's lock", () => {
   const real = path.join(dir, "real", "run.jsonl");
   fs.mkdirSync(path.dirname(real));

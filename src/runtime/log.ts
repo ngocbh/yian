@@ -2500,9 +2500,11 @@ function locatedError(where: string, error: unknown): unknown {
  * symlinks to the log; a missing log gives `false`.
  */
 export function isRunLogLocked(path: string): boolean {
-  let real: string;
+  let real = path;
   try {
-    real = fs.realpathSync(path);
+    // A writer locks `${realpath(log)}.lock`; a path through linked folders already names that
+    // file, so only a log that is itself a symlink needs the costlier realpath.
+    if (fs.lstatSync(path).isSymbolicLink()) real = fs.realpathSync(path);
   } catch (error) {
     if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") return false;
     throw error;

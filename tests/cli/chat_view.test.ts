@@ -1223,6 +1223,28 @@ const pastEscape = () => new Promise((resolve) => setTimeout(resolve, 600));
 
 describe("the input box while a reply runs", () => {
   test(
+    "draws a chunk of keys typed into it once, not once per key",
+    async () => {
+      const { io, stdin, output, rows } = terminalIo();
+      const model = new GatedModel();
+      const chatting = runChat(io, model, undefined, { ticker: manualClock() });
+      await until(() => rows().includes(HINT));
+      stdin.write(`tell me a story${ENTER}`);
+      await until(() => rows().includes("⏺ Once upon"));
+      const before = output.writes;
+      // 37 full rows of 54, then the last two.
+      stdin.write("x".repeat(2000));
+      await until(() => rows().includes(row("  xx")));
+      expect(output.writes - before).toBeLessThan(5);
+      model.open();
+      await until(() => rows().at(-1) === HINT && !rows().some((line) => line.includes("Thinking")));
+      stdin.write(`\x15/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
     "stays up under the spinner, and a line entered there steers the reply at once",
     async () => {
       const { io, stdin, rows } = terminalIo();

@@ -103,6 +103,8 @@ its embedding model and the function that embeds:
 A flow that fails still resolves, with `status: "failed"`. `runFlow` rejects for problems in your
 program or setup: a bad option, a tool, provider or model the flow needs but the run lacks, an MCP
 server that doesn't start, a bad `YIAN_*` value, a callback that throws, a log it can't write.
+A failure to close the log after a call has done its work, such as a `send` that was appended, is
+only a warning: the call still resolves, so your program doesn't repeat it.
 
 ### `RunResult`
 

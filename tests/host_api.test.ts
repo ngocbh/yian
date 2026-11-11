@@ -3,7 +3,7 @@
  * through this process's engine or offline under the log's lock, with their typed refusals and
  * `RunBusyError`; and a memory a host binds through the package root.
  */
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import { type ChildProcess, spawn } from "node:child_process";
 import {
   copyFileSync,
@@ -28,7 +28,7 @@ import type { Node } from "../src/nodes/base.ts";
 import { Parameter, ValueContract } from "../src/nodes/contracts.ts";
 import { StartNode } from "../src/nodes/start/node.ts";
 import { ToolNode } from "../src/nodes/tool/node.ts";
-import { FileLockError, lockFile, sqliteErrorCode } from "../src/platform.ts";
+import { FileLockError, lockFile, sqliteErrorCode, withWarnings } from "../src/platform.ts";
 import { LoadError } from "../src/compose/helpers/errors.ts";
 import { loadFlow } from "../src/compose/loader.ts";
 import { DefaultsMismatchError } from "../src/defaults.ts";
@@ -48,7 +48,7 @@ import {
   runFlow,
   send,
 } from "../src/run.ts";
-import { PoolCommitRecord, readRunLog, RunCancelledRecord } from "../src/runtime/log.ts";
+import { JsonlRunLog, PoolCommitRecord, readRunLog, RunCancelledRecord } from "../src/runtime/log.ts";
 import { pending } from "../src/tools/context.ts";
 import type { AskRequest } from "../src/tools/registry.ts";
 import { FunctionTool } from "../src/tools/function_tools.ts";
@@ -175,6 +175,49 @@ output: \${heard.output.events}
   await close(log, "box", { env });
   const done = await advance({ log, env });
   expect([done.status, done.output]).toEqual(["succeeded", [1n]]);
+});
+
+/** Make the next `JsonlRunLog.close` close the log, then throw; return the spy to restore. */
+function failNextClose() {
+  const close = JsonlRunLog.prototype.close;
+  return spyOn(JsonlRunLog.prototype, "close").mockImplementationOnce(function (this: JsonlRunLog) {
+    close.call(this);
+    throw new Error("close failed");
+  });
+}
+
+test("a send whose log close fails after the append returns its seq, with a warning", async () => {
+  const { log, flow } = await waitingChat();
+  const warnings: string[] = [];
+  const spy = failNextClose();
+  let seq: number;
+  try {
+    seq = await withWarnings((message) => warnings.push(message), () => send(log, "m", "hi", { env, flow }));
+  } finally {
+    spy.mockRestore();
+  }
+  expect(warnings).toEqual([`run log ${resolve(log)} holds this call's records, but closing it failed: close failed`]);
+  expect(readRunLog(log).map((entry) => entry.seq).at(-1)).toBe(seq);
+  expect((await advance({ log, flow, env })).output).toEqual({ events: ["hi"], closed: false });
+});
+
+test("a close failure after a refused or no-op delivery is not a warning: nothing landed", async () => {
+  const { log, flow } = await waitingChat();
+  const spy = failNextClose();
+  try {
+    const refused = (await rejected(send(log, "other", "hi", { env, flow }))) as DeliveryRefused;
+    expect(refused).toBeInstanceOf(DeliveryRefused);
+    expect((refused as DeliveryRefused & { notes?: string[] }).notes).toEqual(["run-log close also raised Error: close failed"]);
+  } finally {
+    spy.mockRestore();
+  }
+  expect(await close(log, "m", { env, flow })).not.toBeNull();
+  const again = failNextClose();
+  try {
+    expect(((await rejected(close(log, "m", { env, flow }))) as Error).message).toBe("close failed");
+  } finally {
+    again.mockRestore();
+  }
 });
 
 /** Expect `call` to reject with `DeliveryRefused` for `reason` and leave the file at `log` unchanged; return the error. */

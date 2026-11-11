@@ -23,7 +23,7 @@ import { loadFlow } from "../src/compose/loader.ts";
 import { NodeStarted, type RunEvent, RunStarted } from "../src/events.ts";
 import { Parameter } from "../src/nodes/contracts.ts";
 import { ToolNode } from "../src/nodes/tool/node.ts";
-import { lockFile } from "../src/platform.ts";
+import { lockFile, withWarnings } from "../src/platform.ts";
 import { advance, replayRunLog, runFlow } from "../src/run.ts";
 import {
   isRunLogLocked,
@@ -32,6 +32,7 @@ import {
   readRunLog,
   RunResumedRecord,
   RunStoppedRecord,
+  RunWaitingRecord,
 } from "../src/runtime/log.ts";
 import { commitPrepared, prepareRunCancelled } from "../src/runtime/state.ts";
 import { pending } from "../src/tools/context.ts";
@@ -296,21 +297,48 @@ test("a busy refusal releases the hold", async () => {
   expect((await advance({ log, flow, tools, env: NO_ENV })).status).toBe("waiting");
 });
 
-test("a log-close failure releases the hold and the lock", async () => {
+test("a log-close failure after the call is a warning, and releases the hold and the lock", async () => {
   const { log, flow, tools } = await waitingRun();
   const close = JsonlRunLog.prototype.close;
-  const failure = new Error("close failed");
   const spy = spyOn(JsonlRunLog.prototype, "close").mockImplementationOnce(function (this: JsonlRunLog) {
     close.call(this);
-    throw failure;
+    throw new Error("close failed");
   });
+  const warnings: string[] = [];
   try {
-    expect(await rejected(advance({ log, flow, tools, env: NO_ENV }))).toBe(failure);
+    const result = await withWarnings(
+      (message) => warnings.push(message),
+      () => advance({ log, flow, tools, env: NO_ENV }),
+    );
+    expect(result.status).toBe("waiting");
   } finally {
     spy.mockRestore();
   }
+  expect(warnings).toEqual([`run log ${resolve(log)} holds this call's records, but closing it failed: close failed`]);
   expect(isRunLogLocked(log)).toBe(false);
   expect((await advance({ log, flow, tools, env: NO_ENV })).status).toBe("waiting");
+});
+
+test("a log-close failure after runFlow wrote its run is a warning; the result stands", async () => {
+  const log = freshLog();
+  const close = JsonlRunLog.prototype.close;
+  const spy = spyOn(JsonlRunLog.prototype, "close").mockImplementationOnce(function (this: JsonlRunLog) {
+    close.call(this);
+    throw new Error("close failed");
+  });
+  const warnings: string[] = [];
+  try {
+    const result = await withWarnings(
+      (message) => warnings.push(message),
+      () => runFlow(hostFlow(), {}, { log, env: NO_ENV, tools: { lookup: pendingTool() }, numWorkers: 0 }),
+    );
+    expect(result.status).toBe("waiting");
+  } finally {
+    spy.mockRestore();
+  }
+  expect(warnings).toEqual([`run log ${resolve(log)} holds this call's records, but closing it failed: close failed`]);
+  expect(isRunLogLocked(log)).toBe(false);
+  expect(readRunLog(log).at(-1)!.record).toBeInstanceOf(RunWaitingRecord);
 });
 
 /** Write, in a fresh folder, a flow whose CODE node runs `./fn.ts:up`, then a TOOL `ask` calling `lookup`. */

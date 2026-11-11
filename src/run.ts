@@ -579,8 +579,9 @@ function idleRun(
  *    every record appended under this hold), the log closes, and the hold is released.
  *
  * The entry is built only with a hold, and only when nothing failed or `keepAfter(primary)` says a
- * failure changed nothing (a refused delivery). Cleanup errors are noted on `primary`; with no
- * `primary`, the first one is thrown.
+ * failure changed nothing (a refused delivery). Cleanup errors are noted on `primary`. With no
+ * `primary`, the first one is thrown, unless `landed()` says the call's records are in the log:
+ * then it is warned, since a host that saw an error would make the call again and repeat them.
  */
 async function closeAndRelease(parts: {
   servers: readonly McpServer[];
@@ -590,6 +591,7 @@ async function closeAndRelease(parts: {
   hold: RunHold | null;
   keep: () => IdleRun | null;
   keepAfter?: (primary: { error: unknown }) => boolean;
+  landed: () => boolean;
 }): Promise<void> {
   const { primary, hold: runHold } = parts;
   let pending = primary;
@@ -624,7 +626,10 @@ async function closeAndRelease(parts: {
   } finally {
     runHold?.release(next);
   }
-  if (primary === null && pending !== null) throw pending.error;
+  if (primary !== null || pending === null) return;
+  if (!parts.landed()) throw pending.error;
+  const log = parts.authority instanceof JsonlRunLog ? `run log ${parts.authority.path}` : "the run log";
+  warn(`${log} holds this call's records, but closing it failed: ${errorMessage(pending.error)}`);
 }
 
 /** The options of one `runFlow` call. */
@@ -744,7 +749,8 @@ export interface RunFlowOptions {
  *   the OS error's code when that failed (`RunMemories.open`).
  * @throws The signal's reason when it aborts.
  * @throws Error (code `EEXIST`) when `log` names an existing path, and the `fs` error when the log
- *   can't be created, locked, written, synced or closed.
+ *   can't be created, locked, written or synced. Once the run's result is in, a failure to close
+ *   the log is a warning (`warn`), not an error, so the host never makes the run again.
  */
 export async function runFlow(
   flow: ComposedFlow,
@@ -1317,7 +1323,8 @@ async function startRun(
     primary = { error };
     throw error;
   } finally {
-    await closeAndRelease({ servers: runServers, memories, authority, primary, hold: runHold, keep });
+    // A run that returned its result has every record in the log.
+    await closeAndRelease({ servers: runServers, memories, authority, primary, hold: runHold, keep, landed: () => true });
   }
 }
 
@@ -1544,7 +1551,8 @@ export interface AdvanceOptions {
  * @throws RunBusyError when another writer holds the log: another process or outside holder (the
  *   busy `FileLockError` is its cause), or a run this process's engine is moving (no cause).
  * @throws Error (code `ENOENT`) when `log` doesn't exist (from resolving its real path), and the
- *   lock, repair, append, sync or close error of the log.
+ *   lock, repair, append or sync error of the log. Once the segment's result is in, a failure to
+ *   close the log is a warning (`warn`), not an error.
  */
 export async function advance(options: AdvanceOptions): Promise<RunResult> {
   // As in `runFlow`, the scope covers everything the resume reads; a bad YIAN_<NAME> value fails
@@ -1669,7 +1677,8 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       primary = { error };
       throw error;
     } finally {
-      await closeAndRelease({ servers: runServers, memories, authority, primary, hold: runHold, keep });
+      // A segment that returned its result has every record in the log.
+      await closeAndRelease({ servers: runServers, memories, authority, primary, hold: runHold, keep, landed: () => true });
     }
   });
 }
@@ -1901,6 +1910,7 @@ async function deliverTo(
     let authority: JsonlRunLog | null = null;
     let primary: { error: unknown } | null = null;
     let keep: () => IdleRun | null = () => null;
+    let appended = false;
     try {
       // A delivery carries no deadline, so its record time is the wall clock's.
       authority = openLog(locator, () => Date.now());
@@ -1918,6 +1928,7 @@ async function deliverTo(
       const prepared = prepareDelivery(state, op);
       if (prepared === null) return { seq: null, events: [], record: null };
       const events = commitPrepared(authority, state, prepared);
+      appended = true;
       return { seq: prepared.expectedSequence, events, record: prepared.record };
     } catch (error) {
       primary = { error };
@@ -1931,6 +1942,7 @@ async function deliverTo(
         hold: runHold,
         keep,
         keepAfter: (failed) => failed.error instanceof DeliveryRefused,
+        landed: () => appended,
       });
     }
   });
@@ -1962,7 +1974,9 @@ async function deliverTo(
  * @throws LoadError when the recorded flow no longer loads (a CODE file gone, or outside the
  *   recorded code root), before anything is appended.
  * @throws DefaultsMismatchError when the run recorded `YIAN_*` values that differ from `env`'s.
- * @throws Error (code `ENOENT`) when `log` doesn't exist; the log's open, append and close errors.
+ * @throws Error (code `ENOENT`) when `log` doesn't exist; the log's open and append errors, and its
+ *   close error unless the send was appended: then the close error is a warning (`warn`), so a host
+ *   never sends it twice.
  */
 export async function send(log: string, inbox: string, event: unknown, options: DeliveryOptions = {}): Promise<number> {
   if (typeof inbox !== "string") throw new TypeError("inbox must be a string");

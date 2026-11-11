@@ -136,13 +136,28 @@ function isSseLine(line: string): boolean {
  * Parse newline-delimited JSON, yielding each non-blank line's value; a final line without
  * a newline still counts. Ints read as `bigint`.
  *
+ * With `stats`, `stats.jsonLines` grows by one for each line read as JSON, and `stats.invalid`
+ * is set when a line that isn't UTF-8 JSON stops the read.
+ *
  * Throws `ProviderError` (kind `protocol`, not retryable) when a line is not valid UTF-8 JSON
  * or is longer than `maxEventBytes` bytes; the message gives the line number, never the line.
  */
 export async function* iterNdjson(
   chunks: AsyncIterable<Uint8Array> | Iterable<Uint8Array>,
   maxEventBytes: number = current().maxModelEventBytes,
+  stats?: NdjsonStats,
 ): AsyncGenerator<JsonValue> {
+  const read = (line: Uint8Array, number: number): JsonValue => {
+    let value: JsonValue;
+    try {
+      value = jsonLine(line, number);
+    } catch (err) {
+      if (stats && err instanceof ProviderError) stats.invalid = true;
+      throw err;
+    }
+    if (stats) stats.jsonLines += 1;
+    return value;
+  };
   const pending: Uint8Array[] = [];
   let pendingBytes = 0;
   let number = 0;
@@ -156,7 +171,7 @@ export async function* iterNdjson(
       const line = join(pending);
       pending.length = 0;
       pendingBytes = 0;
-      if (!isBlank(line)) yield jsonLine(line, number);
+      if (!isBlank(line)) yield read(line, number);
     }
     if (start < chunk.length) {
       pendingBytes += chunk.length - start;
@@ -166,7 +181,15 @@ export async function* iterNdjson(
     }
   }
   const line = join(pending);
-  if (!isBlank(line)) yield jsonLine(line, number + 1);
+  if (!isBlank(line)) yield read(line, number + 1);
+}
+
+/** What `iterNdjson` counts while it reads. */
+export interface NdjsonStats {
+  /** The lines read so far as JSON. */
+  jsonLines: number;
+  /** Whether a line that isn't UTF-8 JSON stopped the read. */
+  invalid: boolean;
 }
 
 /** Return the concatenation of `pieces`. */

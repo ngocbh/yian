@@ -44,6 +44,7 @@ import {
   loadRecordedFlow,
   pendingCalls,
   type AdvanceOptions,
+  type ConsoleLine,
   RunResult,
   type RunInspection,
   advance,
@@ -52,6 +53,7 @@ import {
   RunLogLineTooLongError,
   RunLogSchemaError,
   runLogPath,
+  send,
   staticNodes,
   staticPathOf,
 } from "../src/run.ts";
@@ -1700,4 +1702,94 @@ test("runLogPath refuses a run id that isn't one folder name", () => {
 
 test("runLogPath takes a run id holding two dots as one folder name", () => {
   expect(runLogPath(dir, "a..b")).toBe(join(dir, "a..b", "log.jsonl"));
+});
+
+/** A flow whose CODE node `say` logs `${input.word}` twice, once to each stream, then a TOOL `take` waits on `more`. */
+const CHATTY = `
+id: chatty
+name: chatty
+input:
+  word: !str
+  more: !Inbox(str)
+nodes:
+  say:
+    kind: code
+    input:
+      word: \${input.word}
+    output: str
+    code: |
+      console.log("said", inputs.word);
+      console.warn("warned", inputs.word);
+      return inputs.word;
+  heard:
+    kind: tool
+    tool_id: take
+    depends_on: [say]
+    input:
+      from: \${input.more}
+      take: one
+  again:
+    kind: code
+    input:
+      heard: \${heard.output.events}
+    output: str
+    code: |
+      console.info("heard", inputs.heard.join());
+      return "done";
+output: \${again.output}
+`;
+
+test("onConsole gets each CODE console line of its own run, named by run and node, in place of the console", async () => {
+  const flow = await load(CHATTY);
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  const info = spyOn(console, "info").mockImplementation(() => {});
+  try {
+    const lines: Record<string, ConsoleLine[]> = { a: [], b: [] };
+    const logs = { a: join(dir, "a.jsonl"), b: join(dir, "b.jsonl") };
+    // Two runs at once in one process, whose CODE calls share the worker pool.
+    await Promise.all(
+      (["a", "b"] as const).map((word) =>
+        run(flow, { word }, { runId: `run-${word}`, log: logs[word], onConsole: (line) => void lines[word]!.push(line) }),
+      ),
+    );
+    expect(lines).toEqual({
+      a: [
+        { runId: "run-a", node: "say", method: "log", text: "said a" },
+        { runId: "run-a", node: "say", method: "warn", text: "warned a" },
+      ],
+      b: [
+        { runId: "run-b", node: "say", method: "log", text: "said b" },
+        { runId: "run-b", node: "say", method: "warn", text: "warned b" },
+      ],
+    });
+    // `advance` takes one too.
+    await send(logs.a, "more", "x", { env: hostEnv(dir) });
+    const resumed: ConsoleLine[] = [];
+    const done = await advance({ log: logs.a, env: hostEnv(dir), onConsole: (line) => void resumed.push(line) });
+    expect([done.status, resumed]).toEqual(["succeeded", [{ runId: "run-a", node: "again", method: "info", text: "heard x" }]]);
+    expect([log.mock.calls.length, warn.mock.calls.length, info.mock.calls.length]).toEqual([0, 0, 0]);
+  } finally {
+    log.mockRestore();
+    warn.mockRestore();
+    info.mockRestore();
+  }
+});
+
+test("an onConsole that throws stops the run with its error; one that isn't a function is refused", async () => {
+  const flow = await load(CHATTY);
+  const thrown = new Error("sink full");
+  const error = await rejected(
+    run(flow, { word: "a" }, {
+      log: join(dir, "stop.jsonl"),
+      onConsole: () => {
+        throw thrown;
+      },
+    }),
+  );
+  expect(error).toBe(thrown);
+  expect(readRunLog(join(dir, "stop.jsonl")).at(-1)!.record).toBeInstanceOf(RunStoppedRecord);
+  expect(await rejected(run(flow, { word: "a" }, { onConsole: "no" as never }))).toEqual(
+    new TypeError("onConsole must be a function or null"),
+  );
 });

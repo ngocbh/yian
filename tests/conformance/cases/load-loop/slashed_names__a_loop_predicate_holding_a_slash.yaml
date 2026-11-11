@@ -1,0 +1,34 @@
+kind: load
+# A node assert and a loop predicate read local names, and give the same fix.
+flow: |
+  id: f
+  name: f
+  input:
+    start: !int
+  nodes:
+    count:
+      kind: loop
+      input:
+        n: ${input.start}
+        m: 2
+      max: 5
+      while: n/m > 0
+      nodes:
+        step:
+          kind: code
+          input:
+            n: ${input.n}
+          output: int
+          code: return inputs.n - 1
+      output:
+        n: ${step.output}
+        m: ${input.m}
+  output: ${count.output.n}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "loop node 'count': `while:` references unknown name(s) [\"n/m\"] — the predicate reads the carried record [\"m\",\"n\"]; `n/m` reads as one name; to divide, write `n / m` with spaces"
+      frames:
+      - label: flow.yaml
+        range: [6, 3, 6, 8]

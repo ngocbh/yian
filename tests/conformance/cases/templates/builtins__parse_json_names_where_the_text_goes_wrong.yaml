@@ -1,0 +1,8 @@
+kind: expr
+expr: "parse_json(s)"
+values:
+  s: "[1, 2,]"
+expect:
+  raises:
+    class: ExpressionError
+    message: "expression function 'parse_json' failed: parse_json() got text that isn't JSON: Expecting value: line 1 column 7 (char 6)"

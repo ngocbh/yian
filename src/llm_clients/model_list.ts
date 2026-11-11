@@ -30,9 +30,6 @@ import {
 // The largest page Anthropic and Google serve, so most listings take one request.
 const PAGE_SIZE = "1000";
 
-/** Seconds a listing may take when the caller gives no `timeout`. */
-export const MODEL_LIST_TIMEOUT_SECONDS = 8;
-
 /**
  * A model listing failed.
  *
@@ -69,7 +66,10 @@ export interface ListModelsOptions {
    * and password sent as Basic auth. When a key is sent it must pass `validateBaseUrl`.
    */
   baseUrl?: string | null;
-  /** Seconds for the whole listing, shared by every page; must be positive. Defaults to 8. */
+  /**
+   * Seconds for the whole listing, shared by every page; must be positive. Defaults to
+   * `YIAN_MODEL_LIST_TIMEOUT_SECONDS`.
+   */
   timeout?: number;
   /** Extra headers sent beside the key, checked by `validateHeaders`; sent only with a key. */
   headers?: Readonly<Record<string, string>> | null;
@@ -114,7 +114,8 @@ export async function listModels(
   provider: unknown,
   options: ListModelsOptions = {},
 ): Promise<readonly string[] | null> {
-  const { apiKey, baseUrl, timeout = MODEL_LIST_TIMEOUT_SECONDS, organization, project, signal, scheduler = realScheduler } = options;
+  const { apiKey, baseUrl, organization, project, signal, scheduler = realScheduler } = options;
+  const timeout = options.timeout ?? current().modelListTimeoutSeconds;
   const name = typeof provider === "string" ? provider.toLowerCase() : "";
   if (name === "azure") return null;
   let base: unknown;

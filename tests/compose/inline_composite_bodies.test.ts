@@ -789,7 +789,7 @@ test.each([
   [
     "loop",
     "call: named\n    times: 1",
-    "asserts, call, depends_on, env, input, kind, max, node_name, runs_after, times, until, while",
+    "asserts, call, depends_on, env, input, kind, max, node_name, on_max_exceeded, runs_after, times, until, while",
   ],
 ])("child_label is not authorable on %s", (kind, body, allowed) => {
   const nodes = SourceDocument.parse(
@@ -2262,7 +2262,7 @@ test.each([
   ],
   [
     "loop",
-    "asserts, call, depends_on, env, input, kind, max, node_name, runs_after, times, until, while",
+    "asserts, call, depends_on, env, input, kind, max, node_name, on_max_exceeded, runs_after, times, until, while",
     `    kind: loop
     llm_config: {model: forbidden}
     times: 1

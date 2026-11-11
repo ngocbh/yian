@@ -128,7 +128,44 @@ describe("references", () => {
   test("ref with hash, slash and item", () => {
     expect(parsed("node#0.output")).toEqual(plain(ref("node#0", "output")));
     expect(parsed("def/child.output")).toEqual(plain(ref("def/child", "output")));
+    expect(parsed("each#1/__end__.output")).toEqual(plain(ref("each#1/__end__", "output")));
     expect(parsed("item.title")).toEqual(plain(ref("item", "title")));
+  });
+
+  // A graph expansion mints a reference head of node ids joined by `/`, each with `#<i>` MAP
+  // element suffixes; nothing mints a `/` or `#` anywhere else, so there it is a missing space.
+  test.each([
+    ["n/2", "`n/2` reads as one name; to divide, write `n / 2` with spaces"],
+    [
+      "input.d.total/2",
+      "`input.d.total/2` reads `total/2` as one name; to divide, write `input.d.total / 2` with spaces",
+    ],
+    [
+      "input.n/input.m > 1",
+      "`input.n/input.m` reads `n/input` as one name; to divide, write `input.n / input.m` with spaces",
+    ],
+    [
+      "a.output/b.output",
+      "`a.output/b.output` reads `output/b` as one name; to divide, write `a.output / b.output` with spaces",
+    ],
+    ["x?.total/2", "`x?.total/2` reads `total/2` as one name; to divide, write `x?.total / 2` with spaces"],
+    ["xs[0].a/2", "`a/2` reads as one name; to divide, write `a / 2` with spaces"],
+    ["[x/2 for x in xs]", "`x/2` reads as one name; to divide, write `x / 2` with spaces"],
+    ["len/2(xs)", "`len/2` reads as one name; to divide, write `len / 2` with spaces"],
+    ["upper(s=a.b/2)", "`a.b/2` reads `b/2` as one name; to divide, write `a.b / 2` with spaces"],
+    ["join(xs, sep/x=1)", "`sep/x` reads as one name; to divide, write `sep / x` with spaces"],
+    ["x.a#1", "`x.a#1` reads `a#1` as one name, and a name can't hold `#`"],
+    ["n#a.output", "`n#a.output` reads `n#a` as one name, and a name can't hold `#`"],
+  ])("a / or # no expansion mints is refused: %s", (text, message) => {
+    expectMessage(text, message);
+  });
+
+  test("spaced division, and a name an expansion could mint, parse", () => {
+    expect(tree("n / 2").data).toBe("product");
+    expect(tree("1/2").data).toBe("product");
+    expect(tree("xs[0]/2").data).toBe("product");
+    // A head shaped like a minted one parses; the load's reference check refuses it with the fix.
+    expect(parsed("a/b")).toEqual(plain(ref("a/b")));
   });
 
   test("whitespace around a dot", () => {
@@ -293,7 +330,9 @@ describe("builtin calls", () => {
     for (const label of ["and", "or", "in"]) {
       expect(parsed(`fn(${label}=x)`)).toEqual(plain(call("fn", [arg(name(label), ref("x"))])));
     }
-    expect(parsed("f(not#0=1)")).toEqual(plain(call("f", [arg(name("not#0"), num("1"))])));
+    expect(parsed("f(not_0=1)")).toEqual(plain(call("f", [arg(name("not_0"), num("1"))])));
+    // `not#0` lexes as one name, which no label may be.
+    expectMessage("f(not#0=1)", "`not#0` reads as one name, and a name can't hold `#`");
   });
 
   test("labels that lex as keywords, or aren't names, are parse errors", () => {

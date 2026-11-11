@@ -72,7 +72,15 @@ import { loadFlowSource } from "./compose/loader.ts";
 import { childSignature } from "./compose/nodes/resolver.ts";
 import { checkRecorded, current, type Defaults, type Env, nonDefaults, processEnv, withEnv } from "./defaults.ts";
 import { compareCodeUnits, type Failure, getCloseMatches, noteCleanup, reprText } from "./diagnostics.ts";
-import { CallClosed, RunCancelled, type RunEvent, RunFailed, RunSucceeded, type StreamChunk } from "./events.ts";
+import {
+  CallClosed,
+  type ConsoleLine,
+  RunCancelled,
+  type RunEvent,
+  RunFailed,
+  RunSucceeded,
+  type StreamChunk,
+} from "./events.ts";
 import { ExpressionError } from "./expr/expressions.ts";
 import { checkTemplateCalls } from "./expr/template.ts";
 import { LLMConfig, popHostCredentials } from "./llm_clients/config.ts";
@@ -165,7 +173,7 @@ import {
   commitInitialPool,
   commitPrepared,
   DeliveryRefused,
-  type PreparedTransition,
+  PreparedTransition,
   prepareRunResumed,
   prepareRunStarted,
   RunState,
@@ -174,7 +182,7 @@ import {
   stepsWithSteerValues,
 } from "./runtime/state.ts";
 import { Skill } from "./skills/catalog.ts";
-import { isAlreadyOpenError, isMcpServer, type McpServer } from "./tools/mcp.ts";
+import { isAlreadyOpenError, isMcpServer, type McpServer, openTogether } from "./tools/mcp.ts";
 import { ASK, ASK_USER, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "./tools/context.ts";
 import {
   checkVisibleNames,
@@ -256,6 +264,7 @@ export {
   type Value,
   type ValueRecord,
 } from "./typesys/values.ts";
+export type { ConsoleLine, ConsoleMethod } from "./events.ts";
 export type { RecordedMemoryTool } from "./typesys/memory.ts";
 export type { WaitInfo } from "./runtime/waits.ts";
 export type { MemoryDrift } from "./runtime/memories.ts";
@@ -275,6 +284,8 @@ export {
 export type EventHook = (event: RunEvent) => unknown;
 /** Sees each transient stream chunk. */
 export type StreamHook = (chunk: StreamChunk) => unknown;
+/** Takes each line a CODE node's code prints. */
+export type ConsoleHook = (line: ConsoleLine) => unknown;
 
 /** Where a run stands when a run call returns: a terminal result, or waiting on calls. */
 export type RunResultStatus = "succeeded" | "failed" | "waiting" | "cancelled";
@@ -381,12 +392,15 @@ interface IdleRun {
   readonly hostFlow: ComposedFlow | null;
   readonly apiKey: string | null;
   readonly headers: Readonly<Record<string, string>> | null;
+  /** The log's first record, its `run_started`, so a call that reuses the entry needn't read it. */
+  readonly first: RecordEnvelope;
   /** The seq of the log's last record when the run was left. */
   readonly lastSeq: number;
-  /** The log file's size, device and inode when the run was left. */
+  /** The log file's size, device, inode and mtime (ns) when the run was left. */
   readonly size: bigint;
   readonly dev: bigint;
   readonly ino: bigint;
+  readonly mtimeNs: bigint;
 }
 
 /**
@@ -456,13 +470,14 @@ export class RunBusyError extends Error {
 }
 
 /**
- * Open the log at `locator` under its lock.
+ * Open the log at `locator` under its lock; while the file is the one `idle` left, without reading
+ * it.
  *
  * @throws RunBusyError when another writer holds the lock; the log's other open errors.
  */
-function openLog(locator: string, clock: () => number): JsonlRunLog {
+function openLog(locator: string, clock: () => number, idle: IdleRun | null): JsonlRunLog {
   try {
-    return JsonlRunLog.resume(locator, { clock });
+    return JsonlRunLog.resume(locator, { clock, known: idle });
   } catch (error) {
     const cause = (error as Error | null)?.cause;
     if (cause instanceof FileLockError && cause.reason === "busy") throw new RunBusyError(locator, { cause });
@@ -530,7 +545,9 @@ function reusable(
   if (idle === null) return null;
   const stat = statSync(key, { bigint: true });
   if (idle.state.runId !== authority.runId || idle.lastSeq !== authority.nextSequence - 1) return null;
-  if (idle.size !== stat.size || idle.dev !== stat.dev || idle.ino !== stat.ino) return null;
+  if (idle.size !== stat.size || idle.dev !== stat.dev || idle.ino !== stat.ino || idle.mtimeNs !== stat.mtimeNs) {
+    return null;
+  }
   if (idle.hostFlow !== want.hostFlow) return null;
   const credentials = want.credentials;
   if (
@@ -562,10 +579,12 @@ function idleRun(
     state,
     flow,
     ...keep,
+    first: authority.first()!,
     lastSeq: authority.nextSequence - 1,
     size: stat.size,
     dev: stat.dev,
     ino: stat.ino,
+    mtimeNs: stat.mtimeNs,
   };
 }
 
@@ -579,8 +598,9 @@ function idleRun(
  *    every record appended under this hold), the log closes, and the hold is released.
  *
  * The entry is built only with a hold, and only when nothing failed or `keepAfter(primary)` says a
- * failure changed nothing (a refused delivery). Cleanup errors are noted on `primary`; with no
- * `primary`, the first one is thrown.
+ * failure changed nothing (a refused delivery). Cleanup errors are noted on `primary`. With no
+ * `primary`, the first one is thrown, unless `landed()` says the call's records are in the log:
+ * then it is warned, since a host that saw an error would make the call again and repeat them.
  */
 async function closeAndRelease(parts: {
   servers: readonly McpServer[];
@@ -590,6 +610,7 @@ async function closeAndRelease(parts: {
   hold: RunHold | null;
   keep: () => IdleRun | null;
   keepAfter?: (primary: { error: unknown }) => boolean;
+  landed: () => boolean;
 }): Promise<void> {
   const { primary, hold: runHold } = parts;
   let pending = primary;
@@ -624,7 +645,10 @@ async function closeAndRelease(parts: {
   } finally {
     runHold?.release(next);
   }
-  if (primary === null && pending !== null) throw pending.error;
+  if (primary !== null || pending === null) return;
+  if (!parts.landed()) throw pending.error;
+  const log = parts.authority instanceof JsonlRunLog ? `run log ${parts.authority.path}` : "the run log";
+  warn(`${log} holds this call's records, but closing it failed: ${errorMessage(pending.error)}`);
 }
 
 /** The options of one `runFlow` call. */
@@ -649,6 +673,12 @@ export interface RunFlowOptions {
   onEvent?: EventHook | null;
   /** Sees each transient stream chunk; called as `onEvent` is. */
   onStream?: StreamHook | null;
+  /**
+   * Takes each line the run's CODE nodes print (`{runId, node, method, text}`) in place of this
+   * process's `console`, a line printed after its node settled too; called as `onEvent` is.
+   * Without it the lines go to `console`.
+   */
+  onConsole?: ConsoleHook | null;
   /**
    * The run's live channel: gets each record once it is appended, and each AGENT model call's
    * start, chunks and end, for a viewer to follow the run (`LiveChannel`). A subscriber that throws
@@ -717,7 +747,7 @@ export interface RunFlowOptions {
  * @param options See `RunFlowOptions`.
  * @returns The terminal success or failure, with this call's post-durable observers.
  * @throws TypeError when `flow` isn't a `ComposedFlow`, `signal` isn't an `AbortSignal`, `live`
- *   isn't a `LiveChannel`, `onEvent` or `onStream` isn't a function, `inputs` isn't a record (a
+ *   isn't a `LiveChannel`, `onEvent`, `onStream` or `onConsole` isn't a function, `inputs` isn't a record (a
  *   Proxy included), `llmConfig` is a primitive or an array, a `tools` entry is malformed, `skills`
  *   isn't a `Map` of `Skill`s each keyed by its name, `scheduler` lacks `now` or `sleep`, `random`
  *   isn't a function, or `models` lacks `env` or `createModel`.
@@ -744,7 +774,8 @@ export interface RunFlowOptions {
  *   the OS error's code when that failed (`RunMemories.open`).
  * @throws The signal's reason when it aborts.
  * @throws Error (code `EEXIST`) when `log` names an existing path, and the `fs` error when the log
- *   can't be created, locked, written, synced or closed.
+ *   can't be created, locked, written or synced. Once the run's result is in, a failure to close
+ *   the log is a warning (`warn`), not an error, so the host never makes the run again.
  */
 export async function runFlow(
   flow: ComposedFlow,
@@ -766,7 +797,7 @@ export async function runFlow(
 /** The options `runFlow` and `advance` share, which drive the engine. */
 type DriveOptions = Pick<
   RunFlowOptions,
-  "tools" | "context" | "signal" | "live" | "onEvent" | "onStream" | "scheduler" | "random" | "models"
+  "tools" | "context" | "signal" | "live" | "onEvent" | "onStream" | "onConsole" | "scheduler" | "random" | "models"
 >;
 
 /**
@@ -789,21 +820,22 @@ function refuseRemovedOptions(options: object, takesMemory = false): void {
  * off the servers the call opens.
  *
  * @returns The unopened `tools` servers, as `splitRunServers` returns them.
- * @throws TypeError when `signal` isn't an `AbortSignal`, `live` isn't a `LiveChannel`, `onEvent`
- *   or `onStream` isn't a function, `scheduler` lacks `now` or `sleep`, `random` isn't a function,
- *   `models` lacks `env` or `createModel`, or a `tools` entry is malformed.
+ * @throws TypeError when `signal` isn't an `AbortSignal`, `live` isn't a `LiveChannel`, `onEvent`,
+ *   `onStream` or `onConsole` isn't a function, `scheduler` lacks `now` or `sleep`, `random` isn't a
+ *   function, `models` lacks `env` or `createModel`, or a `tools` entry is malformed.
  * @throws RangeError when a `tools` key is reserved, or a server was opened by another run in
  *   progress, or a removed option is given (`memory` unless `takesMemory`).
  * @throws The signal's reason when it has aborted.
  */
 function checkDriveOptions(options: DriveOptions, takesMemory = false): [string, McpServer][] {
   refuseRemovedOptions(options, takesMemory);
-  const { tools = null, context, signal = null, live = null, onEvent = null, onStream = null } = options;
+  const { tools = null, context, signal = null, live = null, onEvent = null, onStream = null, onConsole = null } = options;
   const { scheduler = null, random = null, models = null } = options;
   if (signal !== null && !(signal instanceof AbortSignal)) throw new TypeError("signal must be an AbortSignal or null");
   if (live !== null && !(live instanceof LiveChannel)) throw new TypeError("live must be a LiveChannel or null");
   if (onEvent !== null && typeof onEvent !== "function") throw new TypeError("onEvent must be a function or null");
   if (onStream !== null && typeof onStream !== "function") throw new TypeError("onStream must be a function or null");
+  if (onConsole !== null && typeof onConsole !== "function") throw new TypeError("onConsole must be a function or null");
   if (
     scheduler !== null &&
     (typeof scheduler !== "object" || typeof scheduler.now !== "function" || typeof scheduler.sleep !== "function")
@@ -1317,7 +1349,8 @@ async function startRun(
     primary = { error };
     throw error;
   } finally {
-    await closeAndRelease({ servers: runServers, memories, authority, primary, hold: runHold, keep });
+    // A run that returned its result has every record in the log.
+    await closeAndRelease({ servers: runServers, memories, authority, primary, hold: runHold, keep, landed: () => true });
   }
 }
 
@@ -1420,6 +1453,8 @@ export interface AdvanceOptions {
   onEvent?: EventHook | null;
   /** Sees each new transient stream chunk; chunks are never replayed. */
   onStream?: StreamHook | null;
+  /** Takes each line this segment's CODE nodes print, as `runFlow`'s does. */
+  onConsole?: ConsoleHook | null;
   /**
    * The live channel of this segment, as `runFlow`'s: it gets the records this call appends and
    * the model calls it makes, never the replayed ones.
@@ -1514,7 +1549,7 @@ export interface AdvanceOptions {
  * @returns The recorded terminal result, or the terminal or waiting result of the new segment with
  *   its post-durable observers; a waiting run that couldn't move returns `waiting` with none.
  * @throws TypeError when `flow` isn't a `ComposedFlow` or `null`, `signal` isn't an `AbortSignal`,
- *   `live` isn't a `LiveChannel`, `onEvent` or `onStream` isn't a function, a `tools` entry is
+ *   `live` isn't a `LiveChannel`, `onEvent`, `onStream` or `onConsole` isn't a function, a `tools` entry is
  *   malformed, `skills`, `scheduler`, `random` or `models` is malformed, a worker count isn't an
  *   integer, a recorded carrier has the wrong type, or `memory` isn't a record of `MemoryBase`
  *   instances (or `null`, for an Optional memory).
@@ -1544,7 +1579,8 @@ export interface AdvanceOptions {
  * @throws RunBusyError when another writer holds the log: another process or outside holder (the
  *   busy `FileLockError` is its cause), or a run this process's engine is moving (no cause).
  * @throws Error (code `ENOENT`) when `log` doesn't exist (from resolving its real path), and the
- *   lock, repair, append, sync or close error of the log.
+ *   lock, repair, append or sync error of the log. Once the segment's result is in, a failure to
+ *   close the log is a warning (`warn`), not an error.
  */
 export async function advance(options: AdvanceOptions): Promise<RunResult> {
   // As in `runFlow`, the scope covers everything the resume reads; a bad YIAN_<NAME> value fails
@@ -1573,9 +1609,9 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
     let primary: { error: unknown } | null = null;
     let keep: () => IdleRun | null = () => null;
     try {
-      authority = openLog(locator, clock);
+      authority = openLog(locator, clock, runHold.idle);
       const opened = authority;
-      const start = startRecord(authority[Symbol.iterator]().next().value);
+      const start = startRecord(authority.first());
       // Values like AGENT_RETRIES change the loaded flow, so they are checked before it loads.
       checkRecorded(start.defaults);
       checkCodeRoot(log, start, root);
@@ -1669,7 +1705,8 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       primary = { error };
       throw error;
     } finally {
-      await closeAndRelease({ servers: runServers, memories, authority, primary, hold: runHold, keep });
+      // A segment that returned its result has every record in the log.
+      await closeAndRelease({ servers: runServers, memories, authority, primary, hold: runHold, keep, landed: () => true });
     }
   });
 }
@@ -1862,6 +1899,15 @@ export interface DeliveryOptions {
   headers?: Readonly<Record<string, string>> | null;
 }
 
+/** The options of `send`: `DeliveryOptions`, and the send's idempotency key. */
+export interface SendOptions extends DeliveryOptions {
+  /**
+   * A non-empty key recorded with the send. A later send with the same key, inbox and value
+   * appends nothing and returns this send's seq, so a host that lost the reply can send again.
+   */
+  key?: string | null;
+}
+
 /**
  * Deliver `op` to the run at `log`: through this process's engine when it is moving the run,
  * else under the log's lock, which is taken without blocking and released before this returns.
@@ -1869,7 +1915,8 @@ export interface DeliveryOptions {
  * the recorded flow is compiled and the log replayed, as `advance` does. A refused delivery keeps
  * the entry. `before` sees the state just before the delivery, synchronously.
  *
- * @returns The appended record and its seq (both `null` for a no-op), and its observers.
+ * @returns The appended record and its seq (both `null` for a no-op; for a repeat of a keyed
+ *   send, the first send's seq and no record), and its observers.
  */
 async function deliverTo(
   log: string,
@@ -1901,11 +1948,12 @@ async function deliverTo(
     let authority: JsonlRunLog | null = null;
     let primary: { error: unknown } | null = null;
     let keep: () => IdleRun | null = () => null;
+    let appended = false;
     try {
       // A delivery carries no deadline, so its record time is the wall clock's.
-      authority = openLog(locator, () => Date.now());
+      authority = openLog(locator, () => Date.now(), runHold.idle);
       const opened = authority;
-      const start = startRecord(authority[Symbol.iterator]().next().value);
+      const start = startRecord(authority.first());
       checkRecorded(start.defaults);
       const want = given === null ? { hostFlow } : { hostFlow, credentials: given };
       const kept = reusable(runHold.idle, authority, key, want);
@@ -1917,7 +1965,9 @@ async function deliverTo(
       before(state);
       const prepared = prepareDelivery(state, op);
       if (prepared === null) return { seq: null, events: [], record: null };
+      if (!(prepared instanceof PreparedTransition)) return { seq: prepared.repeatOf, events: [], record: null };
       const events = commitPrepared(authority, state, prepared);
+      appended = true;
       return { seq: prepared.expectedSequence, events, record: prepared.record };
     } catch (error) {
       primary = { error };
@@ -1931,6 +1981,7 @@ async function deliverTo(
         hold: runHold,
         keep,
         keepAfter: (failed) => failed.error instanceof DeliveryRefused,
+        landed: () => appended,
       });
     }
   });
@@ -1948,12 +1999,15 @@ async function deliverTo(
  * @param log The run's JSONL log.
  * @param inbox The name of one of the flow's `Inbox(T)` inputs.
  * @param event The value, checked against `T`.
- * @param options See `DeliveryOptions`.
- * @returns The send's seq.
- * @throws TypeError when `inbox` isn't a string, or `options.flow` isn't a `ComposedFlow` or `null`.
+ * @param options See `SendOptions`.
+ * @returns The send's seq; for a repeat of a keyed send, the first send's.
+ * @throws TypeError when `inbox` isn't a string, `options.key` isn't a string or `null`, or
+ *   `options.flow` isn't a `ComposedFlow` or `null`.
+ * @throws RangeError when `options.key` is empty.
  * @throws DeliveryRefused (nothing appended) with reason `ended` once the run has a terminal
- *   result, `unknown_inbox`, `inbox_closed`, `invalid_value` (the `TypeCheckError` is the cause)
- *   or `too_large` (over the run's `YIAN_MAX_EVENT_BYTES`).
+ *   result, `unknown_inbox`, `inbox_closed` (not for a repeat of a keyed send), `invalid_value`
+ *   (the `TypeCheckError` is the cause), `key_reused` (an earlier send holds the key with another
+ *   inbox or value) or `too_large` (over the run's `YIAN_MAX_EVENT_BYTES`).
  * @throws RunBusyError when another writer holds the log.
  * @throws RangeError when the log is empty or doesn't start with `RunStarted`, the run's flow was
  *   built in code and `options.flow` is missing (or was recorded and it is given),
@@ -1962,11 +2016,16 @@ async function deliverTo(
  * @throws LoadError when the recorded flow no longer loads (a CODE file gone, or outside the
  *   recorded code root), before anything is appended.
  * @throws DefaultsMismatchError when the run recorded `YIAN_*` values that differ from `env`'s.
- * @throws Error (code `ENOENT`) when `log` doesn't exist; the log's open, append and close errors.
+ * @throws Error (code `ENOENT`) when `log` doesn't exist; the log's open and append errors, and its
+ *   close error unless the send was appended: then the close error is a warning (`warn`), so a host
+ *   never sends it twice.
  */
-export async function send(log: string, inbox: string, event: unknown, options: DeliveryOptions = {}): Promise<number> {
+export async function send(log: string, inbox: string, event: unknown, options: SendOptions = {}): Promise<number> {
   if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
-  return (await deliverTo(log, { kind: "send", inbox, event }, options)).seq!;
+  const key = options.key ?? null;
+  if (key !== null && typeof key !== "string") throw new TypeError("a send's key must be a string or null");
+  if (key === "") throw new RangeError("a send's key must be a non-empty string");
+  return (await deliverTo(log, { kind: "send", inbox, event, key }, options)).seq!;
 }
 
 /**
@@ -2740,9 +2799,10 @@ export function agentCalls(log: string, options: { maxLineBytes?: number | null 
  * attempts and usage are read from the steps as recorded.
  *
  * A rebuilt request is checked against each attempt's purpose and `request_sha256`: a mismatch
- * returns it with `digestMismatch: true` rather than throwing. A request that can't be rebuilt (a
- * structured call whose model can't be built, a granted tool the recorded specs lack) is `null`,
- * with `digestMismatch: false`.
+ * returns it with `digestMismatch: true` rather than throwing. A structured call's request needs
+ * no credential: the default model access reads its settings off the recorded config. A request
+ * that can't be rebuilt (a structured call whose model settings can't be read, a granted tool the
+ * recorded specs lack) is `null`, with `digestMismatch: false`.
  *
  * @param log The JSONL run log.
  * @param call `nodeId` and the `n` of any attempt of the call, such as an `agentCalls` entry.
@@ -3725,7 +3785,7 @@ async function driveSegment(
   appender: RunLog,
   lead: readonly RunEvent[],
   parts: {
-    options: Pick<RunFlowOptions, "onEvent" | "onStream" | "live" | "signal" | "random">;
+    options: Pick<RunFlowOptions, "onEvent" | "onStream" | "onConsole" | "live" | "signal" | "random">;
     numWorkers: number;
     tools: ToolSet;
     /** The segment's memory sessions, or `null` for a run that binds none. */
@@ -3746,6 +3806,7 @@ async function driveSegment(
     numWorkers: parts.numWorkers,
     onEvent,
     onStream: options.onStream ?? null,
+    onConsole: options.onConsole ?? null,
     live: options.live ?? null,
     tools: parts.tools,
     memories: parts.memories,
@@ -3884,10 +3945,11 @@ function splitRunServers(
 }
 
 /**
- * Open the servers for one run, in order; if one fails, close the ones already open.
+ * Open the servers for one run together (`openTogether`); if one fails, close the ones that
+ * opened and throw the first failure in order.
  *
- * Once `signal` aborts, no further server opens: the ones already open close and the run rejects
- * with its reason, before anything is recorded.
+ * Once `signal` aborts, the servers still opening stop: the ones already open close and the run
+ * rejects with its reason, before anything is recorded.
  *
  * @param servers Unopened servers, each listed once with the `tools` key it sits under.
  * @param signal The run's stop.
@@ -3902,19 +3964,23 @@ async function openRunServers(
   servers: readonly [string, McpServer][],
   signal: AbortSignal | null,
 ): Promise<McpServer[]> {
+  signal?.throwIfAborted();
   const token = `run-${randomUUID().replaceAll("-", "")}`;
-  const opened: McpServer[] = [];
+  const outcomes = await openTogether(
+    servers.map(([, server]) => server),
+    signal ?? undefined,
+    (server, stop) => server.openForRun(token, { signal: stop }),
+  );
+  const opened = servers.filter((_, index) => outcomes[index]!.status === "fulfilled").map(([, server]) => server);
   try {
-    for (const [key, server] of servers) {
-      signal?.throwIfAborted();
-      try {
-        await server.openForRun(token, signal === null ? {} : { signal });
-      } catch (error) {
-        if (isAlreadyOpenError(error)) throw otherRunError(key, { cause: error });
-        throw error;
-      }
-      opened.push(server);
+    const failed = outcomes.findIndex((outcome) => outcome.status === "rejected");
+    if (failed >= 0) {
+      const error: unknown = (outcomes[failed] as PromiseRejectedResult).reason;
+      if (isAlreadyOpenError(error)) throw otherRunError(servers[failed]![0], { cause: error });
+      throw error;
     }
+    // A stop after the last open finished.
+    signal?.throwIfAborted();
   } catch (error) {
     await closeRunServers(opened);
     throw error;
@@ -3923,10 +3989,10 @@ async function openRunServers(
 }
 
 /**
- * Close the run's servers in order.
+ * Close the run's servers together.
  *
  * `McpServer.close()` never rejects, so there is no close error to note on the run's.
  */
 async function closeRunServers(servers: readonly McpServer[]): Promise<void> {
-  for (const server of servers) await server.close();
+  await Promise.all(servers.map((server) => server.close()));
 }

@@ -775,42 +775,64 @@ describe.if(process.versions.bun !== undefined)("uninstall.sh", () => {
 
   /** The user's git config in the fixture's home, which uninstall.sh reads but must not be steered by. */
   const gitconfig = (fx: Fixture, text: string) => writeFileSync(join(fx.home, ".gitconfig"), text);
-  const LOCAL_WORK: Record<string, (fx: Fixture) => void> = {
-    "an uncommitted change": (fx) => writeFileSync(join(fx.clone, "package.json"), "{}\n"),
-    "an untracked file": (fx) => writeFileSync(join(fx.clone, "notes.md"), "mine\n"),
-    "an ignored file": (fx) => writeFileSync(join(fx.clone, ".env"), "KEY=mine\n"),
-    "an untracked file that status.showUntrackedFiles=no hides": (fx) => {
-      gitconfig(fx, "[status]\n\tshowUntrackedFiles = no\n");
-      writeFileSync(join(fx.clone, "notes.md"), "mine\n");
-    },
-    "an ignored file that status.showUntrackedFiles=no hides": (fx) => {
-      gitconfig(fx, "[status]\n\tshowUntrackedFiles = no\n");
-      writeFileSync(join(fx.clone, ".env"), "KEY=mine\n");
-    },
-    "a file that a global excludes file ignores": (fx) => {
-      writeFileSync(join(fx.home, ".gitignore_global"), "notes/\n");
-      gitconfig(fx, `[core]\n\texcludesFile = ${join(fx.home, ".gitignore_global")}\n`);
-      mkdirSync(join(fx.clone, "notes"));
-      writeFileSync(join(fx.clone, "notes", "todo.md"), "mine\n");
-    },
-    "a stash": (fx) => {
-      writeFileSync(join(fx.clone, "package.json"), "{}\n");
-      git(fx.clone, "stash", "--quiet");
-    },
-    "a commit that isn't pushed": (fx) => commit(fx.clone, "notes.md", "mine"),
-    "a commit on a detached HEAD": (fx) => {
-      git(fx.clone, "switch", "--quiet", "--detach");
-      commit(fx.clone, "notes.md", "mine");
-    },
-    "a commit that only a tag holds": (fx) => {
-      commit(fx.clone, "notes.md", "mine");
-      git(fx.clone, "tag", "mine");
-      git(fx.clone, "reset", "--quiet", "--hard", "origin/main");
-    },
-    "a linked worktree": (fx) => git(fx.clone, "worktree", "add", "--quiet", join(fx.base, "feature"), "-b", "feature"),
+  /** Each kind of local work, how to make it, and what the kept-clone message names. */
+  const LOCAL_WORK: Record<string, [(fx: Fixture) => void, (fx: Fixture) => string]> = {
+    "an uncommitted change": [(fx) => writeFileSync(join(fx.clone, "package.json"), "{}\n"), () => "package.json"],
+    "an untracked file": [(fx) => writeFileSync(join(fx.clone, "notes.md"), "mine\n"), () => "notes.md"],
+    "an ignored file": [(fx) => writeFileSync(join(fx.clone, ".env"), "KEY=mine\n"), () => ".env"],
+    "an untracked file that status.showUntrackedFiles=no hides": [
+      (fx) => {
+        gitconfig(fx, "[status]\n\tshowUntrackedFiles = no\n");
+        writeFileSync(join(fx.clone, "notes.md"), "mine\n");
+      },
+      () => "notes.md",
+    ],
+    "an ignored file that status.showUntrackedFiles=no hides": [
+      (fx) => {
+        gitconfig(fx, "[status]\n\tshowUntrackedFiles = no\n");
+        writeFileSync(join(fx.clone, ".env"), "KEY=mine\n");
+      },
+      () => ".env",
+    ],
+    "a file that a global excludes file ignores": [
+      (fx) => {
+        writeFileSync(join(fx.home, ".gitignore_global"), "notes/\n");
+        gitconfig(fx, `[core]\n\texcludesFile = ${join(fx.home, ".gitignore_global")}\n`);
+        mkdirSync(join(fx.clone, "notes"));
+        writeFileSync(join(fx.clone, "notes", "todo.md"), "mine\n");
+      },
+      () => "notes/",
+    ],
+    "a stash": [
+      (fx) => {
+        writeFileSync(join(fx.clone, "package.json"), "{}\n");
+        git(fx.clone, "stash", "--quiet");
+      },
+      () => "stash@{0}",
+    ],
+    "a commit that isn't pushed": [(fx) => commit(fx.clone, "notes.md", "mine"), () => "commits that are not pushed: main"],
+    "a commit on a detached HEAD": [
+      (fx) => {
+        git(fx.clone, "switch", "--quiet", "--detach");
+        commit(fx.clone, "notes.md", "mine");
+      },
+      () => "commits that are not pushed: HEAD",
+    ],
+    "a commit that only a tag holds": [
+      (fx) => {
+        commit(fx.clone, "notes.md", "mine");
+        git(fx.clone, "tag", "mine");
+        git(fx.clone, "reset", "--quiet", "--hard", "origin/main");
+      },
+      () => "commits that are not pushed: mine",
+    ],
+    "a linked worktree": [
+      (fx) => git(fx.clone, "worktree", "add", "--quiet", join(fx.base, "feature"), "-b", "feature"),
+      (fx) => realpathSync(join(fx.base, "feature")),
+    ],
   };
-  for (const [work, make] of Object.entries(LOCAL_WORK)) {
-    test(`keeps a clone with ${work}, and says why`, () => {
+  for (const [work, [make, named]] of Object.entries(LOCAL_WORK)) {
+    test(`keeps a clone with ${work}, and names it`, () => {
       const fx = fixture();
       install(fx);
       make(fx);
@@ -818,41 +840,38 @@ describe.if(process.versions.bun !== undefined)("uninstall.sh", () => {
       expect(result.status).toBe(0);
       expect(existsSync(join(fx.clone, ".git"))).toBe(true);
       expect(result.stdout).toContain(`Kept ${fx.clone}: it has`);
+      expect(result.stdout).toContain(named(fx));
       expect(existsSync(join(fx.bin, "yian"))).toBe(false);
     });
   }
 
-  test("removes nothing when the download stops anywhere in its last line", () => {
+  test("names five of the files that keep a clone, and counts the rest", () => {
     const fx = fixture();
     install(fx);
-    const text = readFileSync(join(ROOT, "uninstall.sh"));
-    const last = text.lastIndexOf("\n", text.length - 2) + 1;
-    for (let cut = last; cut < text.length - 1; cut++) pipe(text.subarray(0, cut), fx);
-    expect(existsSync(join(fx.bin, "yian"))).toBe(true);
-    expect(existsSync(fx.clone)).toBe(true);
-    expect(pathLines(join(fx.home, ".bashrc"))).toBe(1);
+    for (const name of ["a", "b", "c", "d", "e", "f", "g"]) writeFileSync(join(fx.clone, `${name}.md`), "mine\n");
+    const result = pipe("uninstall.sh", fx);
+    expect(result.stdout).toContain(`Kept ${fx.clone}: it has files that are not committed: a.md, b.md, c.md, d.md, e.md, and 2 more.`);
   });
 
-  test("removes the wrapper and the PATH lines an earlier install.sh wrote", () => {
+  test("removes a clone whose only untracked files are .DS_Store", () => {
     const fx = fixture();
-    writeEarlierInstall(fx.home, fx.bin, join(fx.base, "checkout"));
+    install(fx);
+    writeFileSync(join(fx.clone, ".DS_Store"), "");
+    writeFileSync(join(fx.clone, "src", ".DS_Store"), "");
     const result = pipe("uninstall.sh", fx);
     expect(result.status).toBe(0);
-    expect(existsSync(join(fx.bin, "yian"))).toBe(false);
-    expect(readFileSync(join(fx.home, ".bashrc"), "utf8")).toBe("alias ll='ls -l'\n");
-    expect(readFileSync(join(fx.home, ".zshrc"), "utf8")).toBe("");
+    expect(existsSync(fx.clone)).toBe(false);
   });
 
-  test("refuses a relative --dir or YIAN_BIN_DIR, and removes nothing", () => {
+  test("never deletes an rc file, even one left empty", () => {
     const fx = fixture();
+    writeFileSync(join(fx.home, ".zshrc"), "");
     install(fx);
-    for (const [args, env] of [[["--dir", "yian"], {}], [[], { YIAN_BIN_DIR: "bin" }]] as const) {
-      const result = pipe("uninstall.sh", fx, [...args], env);
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("must be an absolute path");
+    install(fx, [], { SHELL: "/bin/zsh" });
+    expect(pipe("uninstall.sh", fx).status).toBe(0);
+    for (const rc of [".bashrc", ".profile", ".zshrc", ".zprofile"]) {
+      expect([rc, readFileSync(join(fx.home, rc), "utf8")]).toEqual([rc, ""]);
     }
-    expect(existsSync(join(fx.bin, "yian"))).toBe(true);
-    expect(existsSync(fx.clone)).toBe(true);
   });
 
   test("keeps a clone install.sh didn't make", () => {

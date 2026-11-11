@@ -174,29 +174,51 @@ remove_path_lines() {
   done
 }
 
-# Prints what local work the clone $1 holds, or nothing when it holds none; fails when git can't
-# tell. The checks don't follow the user's git config, and every untracked or ignored file counts,
-# whichever ignore file hides it, except the node_modules folders `bun install` writes.
+# Prints the first five of the lines $1 holds, joined with commas, and how many more there are.
+first_five() {
+  printf '%s\n' "$1" | LC_ALL=C awk 'NF { n++; if (n <= 5) printf "%s%s", (n > 1 ? ", " : ""), $0 }
+    END { if (n > 5) printf ", and %d more", n - 5 }'
+}
+
+# Prints what local work the clone $1 holds, naming up to five of the files or refs that hold it,
+# or nothing when it holds none; fails when git can't tell. The checks don't follow the user's git
+# config, and every untracked or ignored file counts, whichever ignore file hides it, except the
+# node_modules folders `bun install` writes and macOS's .DS_Store files.
 local_work() {
   files=$(git --no-optional-locks -C "$1" status --porcelain --untracked-files=all --ignored=matching) || return 1
-  first=$(printf '%s\n' "$files" | LC_ALL=C grep -a -v -E '^!! (.*/)?node_modules/$' | LC_ALL=C sed -n '1s/^...//p')
-  if [ -n "$first" ]; then
-    printf 'files that are not committed, such as %s' "$first"
+  files=$(printf '%s\n' "$files" | LC_ALL=C grep -a -v -E -e '^!! (.*/)?node_modules/$' -e '^.. (.*/)?\.DS_Store$' |
+    LC_ALL=C sed -n 's/^...//p')
+  if [ -n "$files" ]; then
+    printf 'files that are not committed: %s' "$(first_five "$files")"
     return 0
   fi
-  stashes=$(git --no-optional-locks -C "$1" stash list) || return 1
+  stashes=$(git --no-optional-locks -C "$1" stash list --format=%gd) || return 1
   if [ -n "$stashes" ]; then
-    printf 'stashed changes'
+    printf 'stashed changes: %s' "$(first_five "$stashes")"
     return 0
   fi
-  worktrees=$(git --no-optional-locks -C "$1" worktree list --porcelain | LC_ALL=C grep -a -c '^worktree ') || return 1
-  if [ "$worktrees" -gt 1 ]; then
-    printf 'other worktrees (git worktree list shows them)'
+  # The first worktree listed is the clone itself.
+  worktrees=$(git --no-optional-locks -C "$1" worktree list --porcelain) || return 1
+  others=$(printf '%s\n' "$worktrees" | LC_ALL=C sed -n 's/^worktree //p' | sed 1d)
+  if [ -n "$others" ]; then
+    printf 'other worktrees: %s' "$(first_five "$others")"
     return 0
   fi
-  # Any ref's commits: branches, tags, a detached HEAD.
+  # Any ref's commits that no remote branch holds: branches, tags, notes, a detached HEAD.
   unpushed=$(git --no-optional-locks -C "$1" rev-list --all --not --remotes) || return 1
-  if [ -n "$unpushed" ]; then printf 'commits that are not pushed'; fi
+  [ -n "$unpushed" ] || return 0
+  refs=$(git --no-optional-locks -C "$1" for-each-ref --format='%(refname) %(refname:short)') || return 1
+  if ! git -C "$1" symbolic-ref --quiet HEAD >/dev/null; then refs=$(printf 'HEAD HEAD\n%s' "$refs"); fi
+  holders=$(printf '%s\n' "$refs" | while read -r ref name; do
+    case $ref in
+      '' | refs/remotes/* | refs/stash) continue ;;
+    esac
+    if [ -n "$(git --no-optional-locks -C "$1" rev-list --max-count=1 "$ref" --not --remotes)" ]; then
+      printf '%s\n' "$name"
+    fi
+  done)
+  printf 'commits that are not pushed'
+  if [ -n "$holders" ]; then printf ': %s' "$(first_five "$holders")"; fi
 }
 
 remove_clone() {

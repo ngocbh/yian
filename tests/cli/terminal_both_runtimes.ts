@@ -389,22 +389,64 @@ async function ctrlDOnANonEmptyLineIsIgnored(): Promise<void> {
 
 async function aThrowingWriteAtAnySiteRestoresTheTerminal(): Promise<void> {
   // A clean run counts the writes: the modes, the first frame, the redraw after "a", the
-  // collapsed line and the restored modes.
+  // collapsed line and the restored modes. Enter comes in a chunk of its own, so "a" is redrawn.
   const clean = setup();
   const answered = clean.terminal.askText("Name:");
-  clean.input.write("a" + ENTER);
+  clean.input.write("a");
+  await tick();
+  clean.input.write(ENTER);
   assert.equal(await answered, "a");
   const sites = clean.output.writes;
   assert.equal(sites, 5);
   for (let throwOn = 1; throwOn <= sites; throwOn++) {
     const { input, output, terminal, exitHooks } = setup({ throwOn });
-    const answer = terminal.askText("Name:");
-    input.write("a" + ENTER);
+    // Settled from the start: the failure can end the prompt before Enter comes.
+    const answer = terminal.askText("Name:").then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    input.write("a");
+    await tick();
+    input.write(ENTER);
     // Up to the redraw the failure is the outcome; after it the answer is recorded and outranks it.
-    if (throwOn <= 3) await assert.rejects(answer, (error) => error === output.failure, `write ${throwOn}`);
-    else assert.equal(await answer, "a", `write ${throwOn}`);
+    const expected = throwOn <= 3 ? { error: output.failure } : { value: "a" };
+    assert.deepEqual(await answer, expected, `write ${throwOn}`);
     assertRestored(input, output, exitHooks, throwOn !== sites);
   }
+}
+
+/** 5,000 `A`s, the keys of one chunk of input. */
+const LONG_LINE = "A".repeat(5000);
+
+async function aChunkOfKeysIsDrawnOnceAtAPlainPromptAndAFramedOne(): Promise<void> {
+  for (const framed of [false, true]) {
+    const { input, output, terminal, view } = setup({ columns: 120 });
+    const answer = terminal.readLine("You:", { frame: framed, hint: "h" });
+    await tick();
+    const before = output.writes;
+    input.write(LONG_LINE);
+    await tick();
+    // One frame for the whole chunk, not one per key.
+    assert.equal(output.writes - before, 1, framed ? "framed" : "plain");
+    assert.ok(view().rows.join("").includes("A".repeat(100)));
+    input.write(ENTER);
+    assert.deepEqual(await answer, { value: LONG_LINE });
+  }
+}
+
+async function enterInTheSameChunkAnswersTheWholeLineAndDrawsNoFrameAfterIt(): Promise<void> {
+  const { input, output, terminal } = setup({ columns: 120 });
+  const answer = terminal.readLine("You:", { frame: true, hint: "h" });
+  await tick();
+  const before = output.writes;
+  input.write(LONG_LINE + ENTER);
+  assert.deepEqual(await answer, { value: LONG_LINE });
+  await tick();
+  const after = output.writes;
+  await tick();
+  // Nothing but what ends the prompt: no frame of the typed line before it, none after.
+  assert.equal(output.writes, after);
+  assert.ok(after - before <= 2, `${after - before} writes`);
 }
 
 async function theExitHookRestoresTheTerminalEvenWhenWritingFails(): Promise<void> {
@@ -871,6 +913,20 @@ async function aPlainTerminalWritesARefusedLinesErrorAndReadsTheNextLineAfresh()
   // The cooked tty already echoed each line, so only the prompt and the error are written.
   input.write("[\n");
   input.write('["b"]\n');
+  assert.deepEqual(await answer, { items: ["b"] });
+  assert.equal(
+    output.text,
+    "? items (list(str)) * Enter a JSON array \nInvalid JSON at line 1, column 2: Expecting value\n",
+  );
+}
+
+async function aPlainTerminalRefusesALineBeforeTheNextOneInTheSameChunk(): Promise<void> {
+  const input = new FakeInput();
+  const output = new FakeOutput();
+  const terminal = new Terminal({ input, output, plain: true });
+  const answer = terminal.promptInputs([decl("items", LIST_STR, { required: true })], {});
+  // Each line is refused or taken before the next key of the chunk, so they never run together.
+  input.write('[\n["b"]\n');
   assert.deepEqual(await answer, { items: ["b"] });
   assert.equal(
     output.text,
@@ -4176,6 +4232,9 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "Ctrl-D on a non-empty line is ignored": ctrlDOnANonEmptyLineIsIgnored,
   "a throwing write at any site restores the terminal": aThrowingWriteAtAnySiteRestoresTheTerminal,
   "the exit hook restores the terminal even when writing fails": theExitHookRestoresTheTerminalEvenWhenWritingFails,
+  "a chunk of keys is drawn once at a plain prompt and a framed one": aChunkOfKeysIsDrawnOnceAtAPlainPromptAndAFramedOne,
+  "Enter in the same chunk answers the whole line and draws no frame after it":
+    enterInTheSameChunkAnswersTheWholeLineAndDrawsNoFrameAfterIt,
   "a non-TTY input still reads a line": aNonTtyInputStillReadsALine,
   "a throwing onStop still restores the terminal": aThrowingOnStopStillRestoresTheTerminal,
   "readLine returns each line, then the end of input": readLineReturnsEachLineThenTheEndOfInput,
@@ -4201,6 +4260,8 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "watchKeys on a plain or non-TTY terminal does nothing": watchKeysOnAPlainOrNonTtyTerminalDoesNothing,
   "a plain terminal writes no escapes and sets no raw mode": aPlainTerminalWritesNoEscapesAndSetsNoRawMode,
   "a plain terminal sets raw mode for a secret prompt": aPlainTerminalSetsRawModeForASecretPrompt,
+  "a plain terminal refuses a line before the next one in the same chunk":
+    aPlainTerminalRefusesALineBeforeTheNextOneInTheSameChunk,
   "a plain terminal writes a refused line's error and reads the next line afresh":
     aPlainTerminalWritesARefusedLinesErrorAndReadsTheNextLineAfresh,
   "a bracketed paste keeps its newlines": aBracketedPasteKeepsItsNewlines,

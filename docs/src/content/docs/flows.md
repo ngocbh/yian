@@ -77,6 +77,9 @@ output: ${title.output}
 Every mapping key in the file must be text. Quote a key YAML would read as a boolean, number or
 null (`"true":`). A mapping can't repeat a key, and a repeated node id is a load error.
 
+Names that start with `__` belong to yian, which generates them. A node id, an input of a flow or
+a node, a flow output or an agent variable can't start with `__`.
+
 ## Inputs
 
 Each input is a name and a [YAML tag](/types/#yaml-tags) that gives its type, with an optional
@@ -131,7 +134,7 @@ A node id is an identifier: ASCII letters, digits and `_`, not starting with a d
 `fetch_data`, not `fetch-data`, so that `${fetch_data.output}` can read it. These ids are taken:
 
 - `input`, `output`, `system` and `item`, which begin `${...}` paths;
-- `inputs`, `outputs`, `__start__` and `__end__`;
+- `inputs` and `outputs`, and any name starting with `__`;
 - the expression keywords `and`, `or`, `not`, `in`, `true`, `false`, `null`, `none` and `inf`.
 
 ### Node kinds

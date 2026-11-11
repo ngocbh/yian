@@ -72,25 +72,38 @@ function eachTitle(name: string, row: unknown, index: number): string {
   return title;
 }
 
-/** Bun's chainable `test`/`describe` (`.each`, `.skip`, `.skipIf`, `.if`, `.todo`) over `define`. */
-function chainable(define: Define) {
-  const skip = (name: string, _body?: Body) => define(name, () => {}, { skip: true });
-  const run = (name: string, body: Body, timeout?: Timeout) => define(name, body as () => unknown, options(timeout));
-  // A new function: `skipIf` and `if` return `run`, which has no `.each` or `.skip`.
-  const api = Object.assign((name: string, body: Body, timeout?: Timeout) => run(name, body, timeout), {
-    each:
-      (rows: readonly unknown[]) =>
-      (name: string, body: Body, timeout?: Timeout) => {
-        rows.forEach((row, index) => {
-          const args = (Array.isArray(row) ? row : [row]) as never[];
-          define(eachTitle(name, row, index), () => body(...args), options(timeout));
-        });
-      },
-    skip,
-    todo: (name: string, _body?: Body) => define(name, () => {}, { todo: true }),
-    skipIf: (condition: unknown) => (condition ? skip : run),
-    if: (condition: unknown) => (condition ? run : skip),
-  });
+type Chain = ((name: string, body: Body, timeout?: Timeout) => void) & {
+  each: (rows: readonly unknown[]) => (name: string, body: Body, timeout?: Timeout) => void;
+  skip: Chain;
+  todo: (name: string, body?: Body) => void;
+  skipIf: (condition: unknown) => Chain;
+  if: (condition: unknown) => Chain;
+};
+
+/**
+ * Bun's chainable `test`/`describe` (`.each`, `.skip`, `.skipIf`, `.if`, `.todo`) over `define`.
+ * `.skip`, `.skipIf` and `.if` chain on, so `test.skipIf(condition).each(rows)` works as on Bun.
+ */
+function chainable(define: Define): Chain {
+  const skipped: Define = (name, _body, settings) => define(name, () => {}, { ...settings, skip: true });
+  const api = Object.assign(
+    (name: string, body: Body, timeout?: Timeout) => define(name, body as () => unknown, options(timeout)),
+    {
+      each:
+        (rows: readonly unknown[]) =>
+        (name: string, body: Body, timeout?: Timeout) => {
+          rows.forEach((row, index) => {
+            const args = (Array.isArray(row) ? row : [row]) as never[];
+            define(eachTitle(name, row, index), () => body(...args), options(timeout));
+          });
+        },
+      todo: (name: string, _body?: Body) => define(name, () => {}, { todo: true }),
+      skipIf: (condition: unknown) => (condition ? chainable(skipped) : api),
+      if: (condition: unknown) => (condition ? api : chainable(skipped)),
+    },
+  ) as Chain;
+  // A getter, so a skipped chain is built only when used.
+  Object.defineProperty(api, "skip", { get: () => chainable(skipped) });
   return api;
 }
 

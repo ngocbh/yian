@@ -530,8 +530,8 @@ test("extraction allows the private prefix in a graph node id", () => {
   expect((maskedNodes.value as ValueRecord)[`${INLINE_FLOW_PREFIX}host`]).toEqual({ kind: "call", call: "named" });
 });
 
-test("the loader allows the private callable prefix in a graph node id", () => {
-  const { flow } = assembleText(`id: prefix-node
+test("a graph node id with the private callable prefix is refused", () => {
+  const error = loadError(() => assembleText(`id: prefix-node
 name: prefix_node
 input:
   x: !str
@@ -542,9 +542,11 @@ nodes:
     input:
       x: \${input.x}
 output: \${${INLINE_FLOW_PREFIX}host.output}
-`);
+`));
 
-  expect(flow.compiled.nodes.has(`${INLINE_FLOW_PREFIX}host`)).toBe(true);
+  expect(error.message).toBe(
+    `node id '${INLINE_FLOW_PREFIX}host' starts with '__', which yian keeps for the names it generates; rename it`,
+  );
 });
 
 const INLINE_CHILD = `nodes:
@@ -2872,7 +2874,7 @@ test.each<CaseRow>([
   { id: "load-map-call/engine_inline_composite_bodies__named_call_with_output", call: assembled },
   { id: "load-map-call/engine_inline_composite_bodies__neither_call_nor_nodes", call: assembled },
   { id: "load-map-call/engine_inline_composite_bodies__non_mapping_inline_nodes", call: assembled },
-  { id: "load-map-call/engine_inline_composite_bodies__private_prefix_in_a_node_id_loads", call: assembled },
+  { id: "load-map-call/engine_inline_composite_bodies__private_prefix_in_a_node_id_is_refused", call: assembled },
   { id: "load-map-call/engine_inline_composite_bodies__inline_map_body_without_output", call: assembled },
   { id: "load-map-call/engine_inline_composite_bodies__inline_loop_body_returns_an_uncarried_field", call: assembled },
   { id: "load-map-call/engine_inline_composite_bodies__inline_signature_self_cycle", call: assembled },

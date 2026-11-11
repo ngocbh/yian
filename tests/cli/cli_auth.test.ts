@@ -200,6 +200,35 @@ describe("configErrors", () => {
     expect(errors.some((error) => error.message.startsWith("Value error, "))).toBe(false);
   });
 
+  test("a block on a model routed to the Responses API is reported at the block", () => {
+    expect(configErrors({ provider: "deepseek", model: "gpt-5-pro", deepseek: { temperature: 1 } })).toEqual([
+      { field: "deepseek", message: responsesBlock("deepseek") },
+    ]);
+    const azure = { provider: "azure", model: "my-codex", azure: { temperature: 1 } };
+    expect(configErrors({ ...azure, base_url: "https://res.openai.azure.com/" })).toEqual([
+      { field: "azure", message: responsesBlock("azure") },
+    ]);
+  });
+
+  test("an Azure Responses model with a block and no base_url has only the block problem", () => {
+    // A single layer is not held to the base_url rule a run applies to the effective config.
+    expect(configErrors({ provider: "azure", model: "my-codex", azure: { temperature: 1 } })).toEqual([
+      { field: "azure", message: responsesBlock("azure") },
+    ]);
+  });
+
+  test.each<[string, Record<string, unknown>]>([
+    ["no model, which another layer may set", { provider: "deepseek", deepseek: { temperature: 1 } }],
+    ["a block of only nulls", { provider: "deepseek", model: "gpt-5-pro", deepseek: { temperature: null } }],
+    [
+      "openai, whose block follows the model's API",
+      { provider: "openai", model: "gpt-5-pro", openai: { temperature: 1 } },
+    ],
+    ["a Chat Completions model", { provider: "deepseek", model: "deepseek-chat", deepseek: { temperature: 1 } }],
+  ])("a provider block passes with %s", (_, layer) => {
+    expect(configErrors(layer)).toEqual([]);
+  });
+
   test("the layer given is not changed", () => {
     const layer = { provider: "openai", api_key: "k" };
     configErrors(layer);
@@ -244,6 +273,17 @@ describe("configCheck", () => {
     expect(io.errWrites()).toBe(1);
   });
 
+  test("text names the block a Responses API model can't take, not the model, and exits 1", async () => {
+    const io = fakeIo({ stdin: '{"provider": "deepseek", "model": "gpt-5-pro", "deepseek": {"temperature": 1}}' });
+    expect(await run(configCheck, jsonArgs(false), io)).toEqual({
+      code: 1,
+      out: "",
+      err:
+        "deepseek: The 'deepseek' block mirrors the Chat Completions request, but the layer's model is routed " +
+        "to the Responses API; remove the block or use a model served through Chat Completions.\n",
+    });
+  });
+
   test("JSON prints ok and the errors", async () => {
     const valid = await run(configCheck, jsonArgs(true), fakeIo({ stdin: '{"provider": "openai"}' }));
     expect(valid.code).toBe(0);
@@ -259,6 +299,14 @@ describe("configCheck", () => {
     });
   });
 });
+
+/** The error config check gives for `provider`'s block on a model routed to the Responses API. */
+function responsesBlock(provider: string): string {
+  return (
+    `The '${provider}' block mirrors the Chat Completions request, but the layer's model is routed to the ` +
+    "Responses API; remove the block or use a model served through Chat Completions."
+  );
+}
 
 /** A fake `listModels` answering with `answer` (a list, `null`, or an error to throw) and recording each call. */
 function fakeListModels(answer: readonly string[] | null | Error = ["m-b", "m-a"]) {

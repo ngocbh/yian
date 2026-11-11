@@ -4,7 +4,10 @@
  * reach.
  *
  * At load it clears `XDG_CONFIG_HOME`, every defaults variable, `YIAN_DEFAULT_PROVIDER` and
- * `YIAN_DEFAULT_MODEL` (never `YIAN_TEST_*`, which switch test groups on) and keeps that
+ * `YIAN_DEFAULT_MODEL` (never `YIAN_TEST_*`, which switch test groups on), and the provider
+ * credentials the conformance runner strips too (`*_API_KEY`, `*_BASE_URL`, `*_ENDPOINT`,
+ * `*_API_VERSION`) with `AZURE_OPENAI_AD_TOKEN`, so no test resolves a developer's key or endpoint;
+ * a test that calls a real provider reads its key from a `YIAN_TEST_*` variable. It keeps that
  * environment as the baseline. Before each test, `process.env` is put back to the baseline, with
  * `YIAN_AUTH_FILE` at `auth.json` (not created) and `HOME` at `home/`, both in a fresh dir inside
  * one per-process `yian-test-*` dir, and the cached defaults are dropped, so the next `current()`
@@ -27,11 +30,16 @@ import { afterAll, beforeEach } from "bun:test";
 import { ENTRIES, forget } from "../src/defaults.ts";
 import { runtime } from "../src/platform.ts";
 
+const CREDENTIAL_SUFFIXES = ["_API_KEY", "_BASE_URL", "_ENDPOINT", "_API_VERSION"];
 const CLEARED = [
   "XDG_CONFIG_HOME",
   ...ENTRIES.map((each) => each.variable),
   "YIAN_DEFAULT_PROVIDER",
   "YIAN_DEFAULT_MODEL",
+  "AZURE_OPENAI_AD_TOKEN",
+  ...Object.keys(process.env).filter(
+    (name) => !name.startsWith("YIAN_TEST_") && CREDENTIAL_SUFFIXES.some((suffix) => name.endsWith(suffix)),
+  ),
 ];
 if (isMainThread) for (const name of CLEARED) delete process.env[name];
 const BASELINE: Readonly<Record<string, string | undefined>> = { ...process.env };

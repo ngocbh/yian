@@ -238,9 +238,8 @@ test("a child START that evaluates to another value than its expansion commit fa
     this: StartNode,
     inputs,
     caps,
-    capture,
   ) {
-    const result = await original.call(this, inputs, caps, capture);
+    const result = await original.call(this, inputs, caps);
     return this.id === "chat#1/__start__" ? new Output({ ...((result as Output).value as object), log: "changed" }) : result;
   });
   try {
@@ -566,9 +565,8 @@ test("a derived node whose value doesn't rebuild from its from fails the run at 
     this: EndNode,
     inputs,
     caps,
-    capture,
   ) {
-    const result = await original.call(this, inputs, caps, capture);
+    const result = await original.call(this, inputs, caps);
     return this.id === "chat#0/__end__" ? new Output({ ...((result as Output).value as object), log: "changed" }) : result;
   });
   try {
@@ -596,9 +594,8 @@ test("a spawner whose growth doesn't rebuild from its from fails the run at its 
     this: CallNode,
     inputs,
     caps,
-    capture,
   ) {
-    const result = await original.call(this, inputs, caps, capture);
+    const result = await original.call(this, inputs, caps);
     return this.id === "count#0/step" ? new Grow({ x: 99n }) : result;
   });
   try {

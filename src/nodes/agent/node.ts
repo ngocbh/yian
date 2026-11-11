@@ -8,7 +8,7 @@
  *
  * Knows about:   nodes/base, nodes/binding, nodes/contracts, nodes/ids, peer AGENT modules, llm
  *                (messages), llm_clients (config, connection, factory), expr (expressions,
- *                templates, lineage), memory (recall rendering, memory tools), skills, tools,
+ *                templates), memory (recall rendering, memory tools), skills, tools,
  *                defaults, diagnostics and typesys.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */

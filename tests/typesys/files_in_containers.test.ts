@@ -14,7 +14,6 @@ import { NodeSucceeded, RunSucceeded } from "../../src/events.ts";
 
 import { evalExpr, MISSING_ROOT } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
-import { ResolvedValue, SourceRef } from "../../src/expr/lineage.ts";
 import { bindParams } from "../../src/nodes/binding.ts";
 import { Binding, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
@@ -557,20 +556,13 @@ describe("fieldOf", () => {
   });
 });
 
-test("a traced item read of a file field routes to its source", () => {
-  const item = new ResolvedValue(REF, true, new SourceRef("run", 1, ["xs", 0]));
-
-  const traced = evalExpr(parseExpr("item.uri"), MISSING_ROOT, { item, trace: true });
-
-  expect(traced.value).toBe("f");
-  expect(traced.route.source).toEqual(new SourceRef("run", 1, ["xs", 0, "uri"]));
+test("an item read of a file field gives the field", () => {
+  expect(evalExpr(parseExpr("item.uri"), MISSING_ROOT, { item: REF })).toBe("f");
 });
 
-test("a traced item read of another file field raises, under . and ?. alike", () => {
-  const item = new ResolvedValue(REF, true, new SourceRef("run", 1, ["xs", 0]));
-
+test("an item read of another file field raises, under . and ?. alike", () => {
   for (const text of ["item.other", "item?.other"]) {
-    expect(() => evalExpr(parseExpr(text), MISSING_ROOT, { item, trace: true })).toThrow(
+    expect(() => evalExpr(parseExpr(text), MISSING_ROOT, { item: REF })).toThrow(
       "item is a file, which has only uri, mime and name",
     );
   }

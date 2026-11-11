@@ -1124,11 +1124,11 @@ export abstract class Node {
    * @param caps The capabilities the node's traits ask for, passed to `forward`.
    */
   run(inputs: Readonly<Record<string, unknown>>, caps: NodeCaps = {}): Promise<NodeResult> {
-    return this.runTemplate(inputs, false, null, caps);
+    return this.runTemplate(inputs, false, caps);
   }
 
   /**
-   * Run the base template with the stage markers and input capture. Used by the evaluator.
+   * Run the base template with the stage markers. Used by the evaluator.
    *
    * A default's `BindingError` rejects as a `BindingStageError`, an assertion failure as an
    * `AssertionStageError`, and anything else the body throws as a `NodeBodyError`, except four
@@ -1137,17 +1137,9 @@ export abstract class Node {
    *
    * @param inputs The bound input record.
    * @param caps The capabilities the node's traits ask for, passed to `forward`.
-   * @param captureInputs Receives the completed input record after defaults and before the
-   *   assertions or the body, before this returns its promise; never passed to `forward`. The
-   *   checks and the synchronous part of `forward` (up to its first `await`) also run before the
-   *   promise is returned.
    */
-  runForEvaluator(
-    inputs: Readonly<Record<string, unknown>>,
-    caps: NodeCaps = {},
-    captureInputs: ((inputs: Record<string, unknown>) => void) | null = null,
-  ): Promise<NodeResult> {
-    return this.runTemplate(inputs, true, captureInputs, caps);
+  runForEvaluator(inputs: Readonly<Record<string, unknown>>, caps: NodeCaps = {}): Promise<NodeResult> {
+    return this.runTemplate(inputs, true, caps);
   }
 
   /**
@@ -1165,12 +1157,9 @@ export abstract class Node {
   private async runTemplate(
     inputs: Readonly<Record<string, unknown>>,
     classify: boolean,
-    captureInputs: ((inputs: Record<string, unknown>) => void) | null,
     caps: NodeCaps,
   ): Promise<NodeResult> {
-    // Everything before the first `await` runs inside the caller's call, the synchronous part of
-    // `forward` included, so `captureInputs` has run by the time `runForEvaluator` returns;
-    // `async` still turns a throw here into a rejection.
+    // `async` turns a throw here into a rejection.
     const params = this.params ?? [];
     let record: Record<string, unknown>;
     try {
@@ -1179,7 +1168,6 @@ export abstract class Node {
       if (classify && error instanceof BindingError) throw new BindingStageError(error);
       throw error;
     }
-    if (captureInputs !== null) captureInputs(record);
     this.validateExecutionSetup();
     const declared = localDeclared(caps.localTypes ?? null);
     const preFailure = this.failingAssertion("pre-assert", this.preAsserts, record, declared);
@@ -1310,9 +1298,10 @@ export abstract class Node {
    *
    * @param nodeWiring The flow-owned wiring for this node.
    * @param pool The live pool the evaluator reads sources from.
-   * @param options.bind Resolves a named source and applies the node-owned check before
-   *   retaining its value; it takes the name, the source and the normalizing callable. Omitted
-   *   for direct read-hook calls.
+   * @param options.bind Resolves a named source through the evaluator's source resolver, so a
+   *   derived node's commit names what it read, and applies the node-owned check; it takes the
+   *   name, the source and the normalizing callable. Omitted without a source resolver and for
+   *   direct read-hook calls, where the node resolves the source itself.
    */
   bindReserved(
     nodeWiring: ReadonlyMap<string, unknown>,

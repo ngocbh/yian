@@ -2,8 +2,7 @@
  * The bind grammar, resolving each declared param's source into a typed record. The local
  * `InputBinding`/`bindInputs` adapter phrases each case as a `Parameter` plus a wiring entry, so
  * the grammar (coalesce, `:-` default, `:?` required, escapes, type checks, deep copies, the
- * `${item}` scope) is tested through `bindParams`, the engine's read boundary; also the binding
- * capture and `BindingCollector`.
+ * `${item}` scope) is tested through `bindParams`, the engine's read boundary.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -11,15 +10,13 @@ import { describe, expect, test } from "bun:test";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { TEMPLATE_FNS, registerTemplateFn } from "../../src/expr/builtins.ts";
 import { RequiredError } from "../../src/expr/index.ts";
-import { type RootRead, SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
 import { Grow, Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import {
   applyDefaults,
-  BindingCapture,
-  BindingCollector,
   BindingError,
   bindParams,
   type ReservedBinder,
+  resolveSource,
 } from "../../src/nodes/binding.ts";
 import { Assertion, Binding, ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
@@ -104,16 +101,16 @@ function errorOf(call: () => unknown): Error {
   throw new Error("call did not throw");
 }
 
-test("binding capture matches the value actually delivered", () => {
+test("a binding reads through the source resolver and delivers a copy", () => {
   const original: ValueRecord = { items: ["before"] };
   const reads: string[] = [];
   const calls: Value[] = [];
 
-  const resolve = (names: readonly string[]): RootRead => {
+  const resolve = (names: readonly string[]) => {
     const path = names.join(".");
     reads.push(path);
     const value = path === "count" ? 12n : original;
-    return { used: 1, present: true, value, why: null, source: new SourceRef("run", 1, [path]) };
+    return { used: 1, present: true, value, why: null };
   };
 
   const previous = TEMPLATE_FNS.get("observe");
@@ -125,7 +122,6 @@ test("binding capture matches the value actually delivered", () => {
     },
   });
   try {
-    const collector = new BindingCollector();
     const delivered = bindParams(
       [new Parameter("count", { contract: NUMBER }), new Parameter("payload")],
       new Map([
@@ -133,25 +129,21 @@ test("binding capture matches the value actually delivered", () => {
         ["payload", "${observe(payload)}"],
       ]),
       poolOf(),
-      { collector, sourceResolver: resolve },
+      { sourceResolver: resolve },
     );
-    const captured = collector.freeze();
-    expect(captured.boundInputs).toEqual(delivered);
     expect(delivered).toEqual({ count: 12n, payload: { items: ["before"] } });
     expect(typeof delivered["count"]).toBe("bigint");
     expect(reads).toEqual(["count", "payload"]);
     expect(calls).toEqual([original]);
     ((delivered["payload"] as ValueRecord)["items"] as Value[]).push("node mutation");
-    (original["items"] as Value[]).push("pool mutation");
-    expect(captured.boundInputs!["payload"]).toEqual({ items: ["before"] });
+    expect(original).toEqual({ items: ["before"] });
   } finally {
     if (previous === undefined) TEMPLATE_FNS.delete("observe");
     else TEMPLATE_FNS.set("observe", previous);
   }
 });
 
-test("an omitted default has no upstream source", () => {
-  const collector = new BindingCollector();
+test("an omitted input takes its default, and a present null shadows it", () => {
   const delivered = bindParams(
     [
       new Parameter("defaulted", { contract: NUMBER, hasDefault: true, default: 30n }),
@@ -160,20 +152,10 @@ test("an omitted default has no upstream source", () => {
     ],
     new Map([["null", "${present}"]]),
     poolOf(),
-    {
-      collector,
-      sourceResolver: () => ({ used: 1, present: true, value: null, why: null, source: new SourceRef("run", 3) }),
-    },
+    { sourceResolver: () => ({ used: 1, present: true, value: null, why: null }) },
   );
-  const captured = collector.freeze();
-  expect(captured.boundInputs).toEqual(delivered);
   expect(delivered).toEqual({ defaulted: 30n, null: null });
-  expect(typeof captured.boundInputs!["defaulted"]).toBe("bigint");
-  expect(captured.route.names).toEqual(["defaulted", "null"]);
-  expect(captured.evaluatedKeys).toEqual(new Set(["null"]));
-  const [defaulted, read] = captured.route.children as [ValueRoute, ValueRoute];
-  expect(defaulted.kind).toBe("literal");
-  expect(read.source).toEqual(new SourceRef("run", 3));
+  expect(typeof delivered["defaulted"]).toBe("bigint");
 });
 
 /** A minimal concrete node; it fails before its body in these tests. */
@@ -191,7 +173,7 @@ class ReservedAtNode extends Node {
 
   override bindReserved(
     nodeWiring: ReadonlyMap<string, unknown>,
-    _pool: VariablePool,
+    pool: VariablePool,
     options: { bind?: ReservedBinder | null } = {},
   ): Record<string, unknown> {
     const source = nodeWiring.get("at");
@@ -202,19 +184,20 @@ class ReservedAtNode extends Node {
         origin: source instanceof Binding ? source.origin : null,
       });
     };
-    return { at: options.bind!("at", source, normalize) };
+    const bind = options.bind ?? ((_name, from, check) => check(resolveSource(from, pool)));
+    return { at: bind("at", source, normalize) };
   }
 }
 
-describe("binding failure keeps partial context without usable inputs", () => {
+describe("a binding failure fails the evaluation at its origin", () => {
   const origin = new OriginRef("bad-input");
-  const rows: [string, () => [Node, Record<string, unknown>, string[]]][] = [
+  const rows: [string, () => [Node, Record<string, unknown>]][] = [
     [
       "ordinary",
       () => {
         const node = new CodeNode("node");
         node.params = [new Parameter("ok"), new Parameter("bad", { contract: INTEGER, origin })];
-        return [node, { ok: { safe: [1n] }, bad: "wrong" }, ["ok", "bad"]];
+        return [node, { ok: { safe: [1n] }, bad: "wrong" }];
       },
     ],
     [
@@ -222,7 +205,7 @@ describe("binding failure keeps partial context without usable inputs", () => {
       () => {
         const node = new ReservedAtNode("node");
         node.params = [new Parameter("ok")];
-        return [node, { ok: { safe: [1n] }, at: new Binding("wrong", { origin }) }, ["ok", "at"]];
+        return [node, { ok: { safe: [1n] }, at: new Binding("wrong", { origin }) }];
       },
     ],
     [
@@ -230,7 +213,7 @@ describe("binding failure keeps partial context without usable inputs", () => {
       () => {
         const node = new MapNode("node", { flowId: "child", child: {} });
         node.params = [new Parameter("ok"), new Parameter("bad", { contract: INTEGER, origin })];
-        return [node, { over: [1n, "wrong"], ok: { safe: [1n] }, bad: "${item}" }, ["over"]];
+        return [node, { over: [1n, "wrong"], ok: { safe: [1n] }, bad: "${item}" }];
       },
     ],
     [
@@ -241,75 +224,23 @@ describe("binding failure keeps partial context without usable inputs", () => {
         node.params = [
           new Parameter("bad", { contract: INTEGER, hasDefault: true, default: "wrong", defaultOrigin: origin }),
         ];
-        return [node, { over: [] }, ["over"]];
+        return [node, { over: [] }];
       },
     ],
   ];
   for (const [stage, build] of rows) {
     test(stage, async () => {
-      const [node, wiring, expectedNames] = build();
-      const evaluated = await evalNode(node, nodeFlow(node, wiring), poolOf(), { captureBindings: true });
+      const [node, wiring] = build();
+      const evaluated = await evalNode(node, nodeFlow(node, wiring), poolOf());
       expect(evaluated.outcome).toBeInstanceOf(EvaluationFailure);
       const { failure } = evaluated.outcome as EvaluationFailure;
       expect(failure.code).toBe(stage === "wrapper_default" ? "binding.evaluate" : "contract.input");
       expect(failure.trace).toEqual([origin]);
-      expect(evaluated.bindings!.boundInputs).toBeNull();
-      expect(evaluated.bindings!.route.names).toEqual(expectedNames);
-      if (stage === "deferred") {
-        expect(evaluated.bindings!.items.map(([index]) => index)).toEqual([0, 1]);
-        for (const [, item] of evaluated.bindings!.items) {
-          expect(item.boundInputs).toBeNull();
-          expect(item.route.names).toEqual(["ok", "bad"]);
-        }
-      }
     });
   }
 });
 
-test("evaluator capture preserves typed values before node mutation", async () => {
-  class MutatingNode extends Node {
-    readonly kind = NodeKind.CODE;
-
-    override forward(inputs: Record<string, unknown>): NodeResult {
-      ((inputs["payload"] as ValueRecord[])[0]!["items"] as Value[]).push("after");
-      return new Output(inputs);
-    }
-  }
-
-  const file = new FileRef({ uri: "file:///input.txt", name: "input.txt" });
-  const node = new MutatingNode("mutate");
-  node.params = [new Parameter("payload")];
-  const flow = nodeFlow(node, { payload: [{ items: [file] }] });
-  const evaluated = await evalNode(node, flow, poolOf(), { captureBindings: true });
-  expect(evaluated.bindings!.boundInputs).toEqual({ payload: [{ items: [file] }] });
-  const captured = evaluated.bindings!.boundInputs!["payload"] as ValueRecord[];
-  expect((captured[0]!["items"] as Value[])[0]).toBe(file);
-  const delivered = (evaluated.outcome as Output).value as ValueRecord;
-  expect((delivered["payload"] as ValueRecord[])[0]!["items"]).toEqual([file, "after"]);
-  expect((await evalNode(node, flow, poolOf())).bindings).toBeNull();
-});
-
-test("capture includes materialized reserved values from node hooks", async () => {
-  class ReservedNode extends Node {
-    readonly kind = NodeKind.CODE;
-
-    override bindReserved(): Record<string, unknown> {
-      return { payload: { items: [1n] } };
-    }
-
-    override forward(inputs: Record<string, unknown>): NodeResult {
-      ((inputs["payload"] as ValueRecord)["items"] as Value[]).push(2n);
-      return new Output(inputs);
-    }
-  }
-
-  const evaluated = await evalNode(new ReservedNode("node"), null, poolOf(), { captureBindings: true });
-  expect(evaluated.bindings!.boundInputs).toEqual({ payload: { items: [1n] } });
-  expect(evaluated.bindings!.route.names).toEqual(["payload"]);
-  expect(evaluated.bindings!.route.children[0]!.kind).toBe("literal");
-});
-
-describe("per-item wrapper capture includes defaults before body and asserts", () => {
+describe("a per-item node gets its defaults before its body and asserts", () => {
   for (const mode of ["return", "mutate", "preassert"]) {
     test(mode, async () => {
       class PerItemNode extends Node {
@@ -325,11 +256,7 @@ describe("per-item wrapper capture includes defaults before body and asserts", (
       const node = new PerItemNode("node");
       node.params = [new Parameter("fallback", { hasDefault: true, default: { items: [1n] } })];
       if (mode === "preassert") node.preAsserts = [new Assertion("false", "must hold")];
-      const evaluated = await evalNode(node, null, poolOf(), { captureBindings: true });
-      expect(evaluated.bindings!.boundInputs).toEqual({ fallback: { items: [1n] } });
-      expect(evaluated.bindings!.route.names).toEqual(["fallback"]);
-      expect(evaluated.bindings!.route.children[0]!.kind).toBe("literal");
-      expect(evaluated.bindings!.evaluatedKeys).toEqual(new Set());
+      const evaluated = await evalNode(node, null, poolOf());
       if (mode === "preassert") {
         expect(evaluated.outcome).toBeInstanceOf(EvaluationFailure);
         expect((evaluated.outcome as EvaluationFailure).failure.code).toBe("assertion.failed");
@@ -341,20 +268,11 @@ describe("per-item wrapper capture includes defaults before body and asserts", (
   }
 });
 
-test("map wrapper capture includes valid defaults and item routes", async () => {
+test("a map wrapper fills a valid default into each item", async () => {
   const node = new MapNode("map", { flowId: "child", child: {} });
   node.params = [new Parameter("fallback", { contract: NUMBER, hasDefault: true, default: 30n })];
-  const evaluated = await evalNode(node, null, poolOf(), { wiringOverride: { over: [1n] }, captureBindings: true });
-  expect(evaluated.bindings!.boundInputs).toEqual({ over: [1n], fallback: 30n });
-  expect(typeof evaluated.bindings!.boundInputs!["fallback"]).toBe("bigint");
-  expect(evaluated.bindings!.route.names).toEqual(["over", "fallback"]);
-  expect(evaluated.bindings!.route.children.at(-1)!.kind).toBe("literal");
+  const evaluated = await evalNode(node, null, poolOf(), { wiringOverride: { over: [1n] } });
   expect((evaluated.outcome as Grow).seed).toEqual([{ fallback: 30n }]);
-  const [index, item] = evaluated.bindings!.items[0]!;
-  expect(index).toBe(0);
-  expect(item.boundInputs).toEqual({ fallback: 30n });
-  expect(item.route.names).toEqual(["fallback"]);
-  expect(item.route.children[0]!.kind).toBe("literal");
 });
 
 test("bind a reference and a literal", () => {
@@ -888,80 +806,4 @@ test("an own __proto__ key in a bound record stays data", () => {
   expect(Object.hasOwn(x, "__proto__")).toBe(true);
   expect(Object.getPrototypeOf(x)).toBe(Object.prototype);
   expect(Object.getOwnPropertyDescriptor(x, "__proto__")?.value).toBe(1n);
-});
-
-test("forItem refuses a negative, non-integer or repeated index", () => {
-  const collector = new BindingCollector();
-  for (const index of [-1, 1.5, Number.NaN]) {
-    const error = errorOf(() => collector.forItem(index));
-    expect(error).toBeInstanceOf(RangeError);
-    expect(error.message).toBe("binding item index must be a nonnegative integer");
-  }
-  collector.forItem(3);
-  const error = errorOf(() => collector.forItem(3));
-  expect(error).toBeInstanceOf(RangeError);
-  expect(error.message).toBe("binding item index 3 was already recorded");
-});
-
-test("an invalidated capture keeps partial routes without usable inputs", () => {
-  const collector = new BindingCollector();
-  collector.forItem(0).finish({ i: 2n });
-  // bindParams invalidates the collector first, then fails before it finishes.
-  bindingError(() =>
-    bindParams(
-      [new Parameter("a"), new Parameter("b", { required: true })],
-      new Map([["a", "${x}"]]),
-      poolOf(),
-      {
-        collector,
-        sourceResolver: () => ({ used: 1, present: true, value: 1n, why: null, source: new SourceRef("run", 1) }),
-      },
-    ),
-  );
-  const captured = collector.freeze();
-  expect(captured.boundInputs).toBeNull();
-  expect(captured.route.names).toEqual(["a"]);
-  expect(captured.route.children[0]!.kind).toBe("source");
-  expect(captured.evaluatedKeys).toEqual(new Set(["a"]));
-  expect(captured.items.map(([index]) => index)).toEqual([0]);
-  const [, item] = captured.items[0]!;
-  expect(item.boundInputs).toBeNull();
-  expect(item.route.names).toEqual(["i"]);
-});
-
-test("a collector freezes once", () => {
-  const collector = new BindingCollector();
-  collector.freeze();
-  const error = errorOf(() => collector.freeze());
-  expect(error.constructor).toBe(Error);
-  expect(error.message).toBe("binding capture is already frozen");
-});
-
-test("boundInputs gives a fresh copy on each read", () => {
-  const collector = new BindingCollector();
-  bindParams([new Parameter("x")], new Map([["x", { items: [1n] }]]), poolOf(), { collector });
-  const captured = collector.freeze();
-  const first = captured.boundInputs!;
-  expect(captured.boundInputs).not.toBe(first);
-  ((first["x"] as ValueRecord)["items"] as Value[]).push(2n);
-  expect(captured.boundInputs).toEqual({ x: { items: [1n] } });
-  expect(Object.isFrozen(captured)).toBe(true);
-});
-
-test("evaluatedKeys gives a fresh copy on each read", () => {
-  const collector = new BindingCollector();
-  bindParams([new Parameter("a")], new Map([["a", "${system.x}"]]), poolOf({ x: 1n }), { collector });
-  const captured = collector.freeze();
-  (captured.evaluatedKeys as Set<string>).add("zzz");
-  expect(captured.evaluatedKeys).toEqual(new Set(["a"]));
-});
-
-test("a capture built directly freezes its item pairs and copies its evaluated keys", () => {
-  const inner = new BindingCapture({ i: 1n }, ValueRoute.record([]), new Set());
-  const keys = new Set(["a"]);
-  const capture = new BindingCapture(null, ValueRoute.record([]), keys, [[0, inner]]);
-  expect(Object.isFrozen(capture.items)).toBe(true);
-  expect(Object.isFrozen(capture.items[0])).toBe(true);
-  keys.add("b");
-  expect(capture.evaluatedKeys).toEqual(new Set(["a"]));
 });

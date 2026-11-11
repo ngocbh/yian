@@ -362,7 +362,8 @@ test.each([
 }, 60_000);
 
 test("a derived node's commit names exactly the pool names its binding reads", async () => {
-  const names = new Map(froms(await loggedRun(CALL_IN_LOOP)).map(([nodeId, from]) => [nodeId, [...from.keys()].sort()]));
+  const found = froms(await loggedRun(CALL_IN_LOOP));
+  const names = new Map(found.map(([nodeId, from]) => [nodeId, [...from.keys()].sort()]));
   expect(names.get("count")).toEqual([]);
   expect(names.get("count#0/step")).toEqual(["count#0/__start__"]);
   expect(names.get("count#0/step/__end__")).toEqual(["count#0/step/inc"]);
@@ -395,13 +396,13 @@ test("a pool name missing from the producer index is a RangeError", () => {
   const pool = new VariablePool(StartNode.ID);
   pool.set("a", { x: 1n });
   pool.addSystem("run_id", "r1");
-  expect(() => resolveFromPool(["a", "output", "x"], pool, new Map(), "r1")).toThrow(
+  expect(() => resolveFromPool(["a", "output", "x"], pool, new Map())).toThrow(
     new RangeError("pool name 'a' has no pool_commit in the producer index"),
   );
-  expect(() => resolveFromPool(["system", "run_id"], pool, new Map(), "r1")).toThrow(RangeError);
+  expect(() => resolveFromPool(["system", "run_id"], pool, new Map())).toThrow(RangeError);
   // A miss is still a miss, not an error.
-  expect(resolveFromPool(["b", "output"], pool, new Map(), "r1").present).toBe(false);
-  const found = resolveFromPool(["a", "output", "x"], pool, new Map([["a", 7]]), "r1");
+  expect(resolveFromPool(["b", "output"], pool, new Map()).present).toBe(false);
+  const found = resolveFromPool(["a", "output", "x"], pool, new Map([["a", 7]]));
   expect([found.used, found.present, found.value]).toEqual([2, true, { x: 1n }]);
 });
 

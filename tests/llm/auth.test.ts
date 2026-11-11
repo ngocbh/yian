@@ -6,6 +6,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   type Auth,
+  base64Forms,
   BasicAuth,
   BearerAuth,
   dropCredentialTail,
@@ -205,15 +206,15 @@ describe("value checks", () => {
 });
 
 describe("secretForms", () => {
-  test("names each form of a value with a slash, space, plus, quote and non-ASCII character", () => {
+  test("names each form of a value with a slash, space, plus, quote and non-ASCII character, each in any letter case", () => {
     expect(secretForms('a/b c+d"é')).toEqual([
-      { form: "plain", text: 'a/b c+d"é' },
-      { form: "percent-encoded", text: "a%2Fb%20c%2Bd%22%C3%A9" },
-      { form: "plus-encoded", text: "a%2Fb+c%2Bd%22%C3%A9" },
-      { form: "JSON-escaped", text: 'a/b c+d\\"\\u00e9' },
-      { form: "JSON-escaped", text: 'a\\/b c+d\\"\\u00e9' },
-      { form: "JSON-escaped", text: 'a/b c+d\\"é' },
-      { form: "JSON-escaped", text: 'a\\/b c+d\\"é' },
+      { form: "plain", text: 'a/b c+d"é', ignoreCase: true },
+      { form: "percent-encoded", text: "a%2Fb%20c%2Bd%22%C3%A9", ignoreCase: true },
+      { form: "plus-encoded", text: "a%2Fb+c%2Bd%22%C3%A9", ignoreCase: true },
+      { form: "JSON-escaped", text: 'a/b c+d\\"\\u00e9', ignoreCase: true },
+      { form: "JSON-escaped", text: 'a\\/b c+d\\"\\u00e9', ignoreCase: true },
+      { form: "JSON-escaped", text: 'a/b c+d\\"é', ignoreCase: true },
+      { form: "JSON-escaped", text: 'a\\/b c+d\\"é', ignoreCase: true },
       {
         form: "\\u-escaped",
         text: "\\u0061\\u002f\\u0062\\u0020\\u0063\\u002b\\u0064\\u0022\\u00e9",
@@ -227,17 +228,19 @@ describe("secretForms", () => {
     expect(forms.find(({ form }) => form === "percent-encoded")?.text).toBe("%21%27%28%29%2A~-_.");
   });
 
-  test("returns each text once, under the first name", () => {
+  test("returns each text once in any letter case, under the first name", () => {
     expect(secretForms("sk1")).toEqual([
-      { form: "plain", text: "sk1" },
+      { form: "plain", text: "sk1", ignoreCase: true },
       { form: "\\u-escaped", text: "\\u0073\\u006b\\u0031", ignoreCase: true },
     ]);
+    // The percent form differs from the \u form's JSON twin only in letter case.
+    expect(secretForms("é").map(({ form }) => form)).toEqual(["plain", "percent-encoded", "JSON-escaped"]);
   });
 
   test("a value with a lone surrogate has no percent or plus form", () => {
     expect(secretForms("a\ud800")).toEqual([
-      { form: "plain", text: "a\ud800" },
-      { form: "JSON-escaped", text: "a\\ud800" },
+      { form: "plain", text: "a\ud800", ignoreCase: true },
+      { form: "JSON-escaped", text: "a\\ud800", ignoreCase: true },
       { form: "\\u-escaped", text: "\\u0061\\ud800", ignoreCase: true },
     ]);
   });
@@ -247,6 +250,28 @@ describe("secretForms", () => {
       { form: "JSON-escaped", text: "\\u00e9", ignoreCase: true },
     ]);
     expect(scrub('{"k": "\\u00E9"}', ["é"])).toBe(`{"k": "${REDACTED}"}`);
+  });
+});
+
+describe("base64Forms", () => {
+  test("names, for each byte alignment, the base64 characters only the value decides, in both alphabets", () => {
+    // Every 3-byte run of "~" encodes as "fn5+", so each alignment's fragment holds a "+".
+    const value = "secret-" + "~".repeat(12) + "-value";
+    const forms = base64Forms(value);
+    expect(forms.map(({ form }) => form)).toEqual(["base64", "URL-safe base64", "base64", "URL-safe base64", "base64", "URL-safe base64"]);
+    for (const [pad, prefix] of ["", "a", "ab"].entries()) {
+      const encoded = Buffer.from(prefix + value + "z").toString("base64");
+      expect(encoded).toContain(forms[2 * pad]!.text);
+      expect(encoded.replaceAll("+", "-").replaceAll("/", "_")).toContain(forms[2 * pad + 1]!.text);
+      expect(forms[2 * pad]!.text).toContain("+");
+    }
+    // base64 is case-sensitive: these forms match exactly.
+    expect(forms.every((form) => !form.ignoreCase)).toBe(true);
+  });
+
+  test("a value too short for an 8-character fragment has none", () => {
+    expect(base64Forms("abcde")).toEqual([]);
+    expect(base64Forms("")).toEqual([]);
   });
 });
 
@@ -275,6 +300,50 @@ describe("scrub", () => {
 
   test("ignores an empty credential", () => {
     expect(scrub("text", ["", "absent"])).toBe("text");
+  });
+
+  test("replaces every form in any letter case", () => {
+    const key = "sk-SecTest-05d503c7Zq";
+    for (const echo of [key.toLowerCase(), key.toUpperCase(), "sK-sECtEST-05D503C7zQ"]) {
+      expect(scrub(`bad key ${key} (echo ${echo})`, [key])).toBe(`bad key ${REDACTED} (echo ${REDACTED})`);
+    }
+    expect(scrub("/k/A%2fB%20C?k=a%2Fb+c", ["a/b c"])).toBe(`/k/${REDACTED}?k=${REDACTED}`);
+    expect(scrub('{"error": "bad key A\\/B\\"C"}', ['a/b"c'])).toBe(`{"error": "bad key ${REDACTED}"}`);
+  });
+
+  test("replaces the base64 of a text holding the credential, in either alphabet and at any offset", () => {
+    const key = "sk-sectest-~~~~~~-05d503c7";
+    for (const before of ["", "u:", "user:"]) {
+      const standard = Buffer.from(`${before}${key}`).toString("base64");
+      const urlSafe = standard.replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+      expect(standard).not.toBe(urlSafe);
+      for (const echo of [standard, urlSafe]) {
+        const text = scrub(`Basic ${echo} rejected`, [key]);
+        expect(text).toContain(REDACTED);
+        expect(text).toEndWith(" rejected");
+        for (const form of base64Forms(key)) expect(text).not.toContain(form.text);
+      }
+    }
+    // base64 matches only in its own letter case: another case is other bytes.
+    const swapped = Buffer.from(key).toString("base64").replace(/[a-z]/gi, (c) => (c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase()));
+    expect(scrub(swapped, [key])).toBe(swapped);
+  });
+
+  test("replaces overlapping matches as one, and matches next to each other one by one", () => {
+    expect(scrub("aaaa1aaa1", ["aaa1"])).toBe(`a${REDACTED}${REDACTED}`);
+    expect(scrub("x abcabca y", ["abca"])).toBe(`x ${REDACTED} y`);
+    expect(scrub("sk-1sk-1", ["sk-1"])).toBe(`${REDACTED}${REDACTED}`);
+  });
+
+  test("replaces a credential of several MiB in any case without a regular expression limit", () => {
+    const key = "Ab".repeat(1 << 20);
+    expect(scrub(`x ${key.toLowerCase()} y`, [key])).toBe(`x ${REDACTED} y`);
+  });
+
+  test("matches non-ASCII letters in any case, and a letter whose lowercase is longer doesn't shift the match", () => {
+    expect(scrub("clé ÉTÉ-ŞIFRE", ["été-şifre"])).toBe(`clé ${REDACTED}`);
+    // "İ" lowers to two code units; the match after it still lands on the credential.
+    expect(scrub("İİ x ÉTÉ-SECRET y", ["été-secret"])).toBe(`İİ x ${REDACTED} y`);
   });
 
   test("uses a custom marker, literally", () => {
@@ -311,6 +380,14 @@ describe("dropCredentialTail", () => {
     expect(dropCredentialTail("a seen", ["", "zz"])).toBe("a");
   });
 
+  test("drops a split credential in another letter case, or a split base64 form", () => {
+    expect(dropCredentialTail("seen user PA", ["user pass"])).toBe("seen");
+    expect(dropCredentialTail("seen \\U0073\\U006B", ["sk-SECRET"])).toBe("seen");
+    const key = "secret user ~~~~~~ word";
+    const encoded = Buffer.from(key).toString("base64");
+    expect(dropCredentialTail(`seen ${encoded.slice(0, 12)}`, [key])).toBe("seen");
+  });
+
   test("drops at most the longest form's length of a long run", () => {
     // `sk-1`'s longest form, all \u-escapes, is 24 characters.
     expect(dropCredentialTail("a".repeat(100), ["sk-1"])).toBe("a".repeat(76));
@@ -344,6 +421,19 @@ describe("BasicAuth", () => {
     expect(error.message).toContain(REDACTED);
     expect(error.message).not.toContain(password);
     expect(error.stack ?? "").not.toContain(password);
+  });
+
+  test("a 401 echoing the password in another case, or base64-encoded with another user, is scrubbed from the error", async () => {
+    const password = "hunter2-secret-pw";
+    const forms = base64Forms(password).map(({ text }) => text);
+    for (const echo of [password.toUpperCase(), Buffer.from(`someone:${password}`).toString("base64")]) {
+      const error = await errorEchoing(echo, new BasicAuth("me", password));
+      expect(error.message).toContain(REDACTED);
+      for (const text of [error.message, error.stack ?? ""]) {
+        expect(text.toLowerCase()).not.toContain(password);
+        for (const form of forms) expect(text).not.toContain(form);
+      }
+    }
   });
 });
 

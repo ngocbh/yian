@@ -21,6 +21,7 @@ import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { ModelCallFinished, ModelCallStarted, type RunEvent } from "../../src/events.ts";
+import { base64Forms } from "../../src/llm/auth.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
 import { type ChatModel, EventStream, Finish, TextDelta, UsageReport } from "../../src/llm/events.ts";
 import {
@@ -381,6 +382,19 @@ test("a key in a failed call's error is scrubbed from both failed model_calls", 
     [2, { kind: "server", message: "upstream saw [REDACTED]" }, null],
   ]);
   expect(readFileSync(log, "utf8")).not.toContain(key);
+});
+
+test("a key echoed in another letter case or base64-encoded leaves no form in the run log", async () => {
+  const key = "sk-sectest-05d503c7154695efa18b90e0zq";
+  const llmConfig = { provider: "vllm", model: "m", api_key: key };
+  const basic = Buffer.from(`user:${key}`).toString("base64");
+  const failure = new ProviderError("bad_request", `key ${key} (lower ${key.toUpperCase()}) basic ${basic}`, { status: 400 });
+  const { log, result } = await run(new ScriptedModel([failure], llmConfig), { llmConfig, flow: flowText([]) });
+  expect(result.status).toBe("failed");
+  expect(steps(log)[0]!["error"]).toEqual({ kind: "bad_request", message: "key [REDACTED] (lower [REDACTED]) basic dXNlcjp[REDACTED]" });
+  const text = readFileSync(log, "utf8");
+  expect(text.toLowerCase()).not.toContain(key.slice(0, 12));
+  for (const form of base64Forms(key)) expect(text).not.toContain(form.text);
 });
 
 test("a failure with no retry left writes a failed model_call before node_failed", async () => {

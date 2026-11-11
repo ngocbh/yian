@@ -197,6 +197,7 @@ output:
   a list in order. A `map` can't have `asserts:`.
 - **`loop`** takes exactly one driver: `while:` (checked before each run), `until:` (after each
   run) or `times: N`. `max:` guards `while:` and `until:`, and is a load error with `times:`.
+  Reaching `max:` fails the loop, unless `on_max_exceeded: output` ends it with the last record.
   The body reads carried fields as `${input.<name>}`, and the condition reads them bare
   (`while: not done`). Without `max:`, a condition that doesn't end the loop at once must
   read a carried field the body returns. The body returns only carried fields, at least one; a field it leaves out

@@ -129,6 +129,7 @@ const KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
     "predicateKind",
     "predicate",
     "maxIters",
+    "onMaxExceeded",
     "iteration",
     "returnedFields",
   ],
@@ -805,6 +806,8 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
         // Left out for a total loop so the feature doesn't change the identity of flows that don't
         // use it.
         if (spawner.returnedFields !== null) manifest.returned_fields = [...spawner.returnedFields];
+        // Left out for the default, as above.
+        if (spawner.onMaxExceeded !== "fail") manifest.on_max_exceeded = spawner.onMaxExceeded;
       }
       break;
     }

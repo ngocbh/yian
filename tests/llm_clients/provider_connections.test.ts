@@ -51,7 +51,7 @@ import {
   splitModelConfig,
   validateConnection,
 } from "../../src/llm_clients/connection.ts";
-import { chatModelFromConfig } from "../../src/llm_clients/factory.ts";
+import { chatModelFromConfig, defaultModelAccess, type SavedKeys } from "../../src/llm_clients/factory.ts";
 import { requireConcreteSelection, validateLayer } from "../../src/llm_clients/layers.ts";
 import type { Send } from "../../src/platform.ts";
 
@@ -982,6 +982,67 @@ test("saved OpenAI settings reach the client", async () => {
   } finally {
     reads.mockRestore();
   }
+});
+
+describe("a run's saved keys", () => {
+  const BUILD = { nodeId: "n", signal: new AbortController().signal };
+
+  test("one model access reads a saved API key once for all its builds", async () => {
+    noProviderKeys();
+    await authStore().save("anthropic", new ApiKeyCredentials("sk-ant"), "claude-x", { makeDefault: false });
+    await saveOpenAIWithSettings({ makeDefault: false });
+    const reads = spyOn(AuthStore.prototype, "credentials");
+    try {
+      const access = defaultModelAccess(env);
+      for (let i = 0; i < 3; i++) {
+        await access.createModel({ provider: "anthropic", model: "claude-x" }, BUILD);
+        await access.createModel({ provider: "openai", model: "gpt-x" }, BUILD);
+      }
+      expect(reads).toHaveBeenCalledTimes(2);
+      // Another model access, as another run has, reads again.
+      await defaultModelAccess(env).createModel({ provider: "anthropic", model: "claude-x" }, BUILD);
+      expect(reads).toHaveBeenCalledTimes(3);
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
+  test("an OpenAI model with a run's saved keys reads its key once, not per request", async () => {
+    noProviderKeys();
+    await saveOpenAIWithSettings();
+    const reads = spyOn(AuthStore.prototype, "credentials");
+    try {
+      const { requests, send } = recorder();
+      const savedKeys: SavedKeys = new Map();
+      const config = { provider: "openai", model: "gpt-x" };
+      const model = await chatModelFromConfig(config, { env, send, savedKeys, onWarning: () => {} });
+      await collect(model.stream(HI)).catch(() => null);
+      await collect(model.stream(HI)).catch(() => null);
+      expect(requests.map(({ headers }) => headers.get("authorization"))).toEqual([
+        "Bearer sk-saved-4b1f",
+        "Bearer sk-saved-4b1f",
+      ]);
+      expect(reads).toHaveBeenCalledTimes(1);
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
+  test("a login replaced in the run keeps the key the run read; without them the old pin is refused", async () => {
+    noProviderKeys();
+    const selection = await authStore().save("anthropic", new ApiKeyCredentials("sk-old"), "m");
+    const config = resolveModelConfig({ provider: "anthropic", model: "m" }, { env });
+    const savedKeys: SavedKeys = new Map();
+    const { requests, send } = recorder();
+    const build = () => chatModelFromConfig(config, { env, send, savedKeys, onWarning: () => {} });
+    await collect((await build()).stream(HI)).catch(() => null);
+    await authStore().save("anthropic", new ApiKeyCredentials("sk-new"), "m");
+    await collect((await build()).stream(HI)).catch(() => null);
+    expect(requests.map(({ headers }) => headers.get("x-api-key"))).toEqual(["sk-old", "sk-old"]);
+    const error = await chatModelFromConfig(config, { env, send, onWarning: () => {} }).catch((caught) => caught);
+    expect((error as Error).message).toStartWith("The saved connection changed");
+    expect(selection.credentialId).not.toBe(authStore().selection("anthropic")!.credentialId);
+  });
 });
 
 test("saved OpenAI ids without headers read the credentials once, at build", async () => {

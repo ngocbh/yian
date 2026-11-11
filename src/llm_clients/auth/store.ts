@@ -445,8 +445,6 @@ export class AuthStore {
   #load(directory: Directory | null): Saved {
     if (directory === null) return [null, new Map(), null];
     const limit = current().maxAuthStoreBytes;
-    // Allocated before the open, so a failed allocation leaves no descriptor open.
-    const raw = new Uint8Array(limit + 1);
     let fd: number;
     try {
       fd = fs.openSync(this.path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
@@ -457,11 +455,21 @@ export class AuthStore {
       this.#checkSameDirectory(directory);
       return [null, new Map(), null];
     }
+    let raw: Uint8Array;
     let size = 0;
     try {
       this.#checkSameDirectory(directory);
-      checkPrivate(fd, this.path, "file");
-      while (size < raw.length) {
+      const info = checkPrivate(fd, this.path, "file");
+      // Sized to the file and one byte more, which shows the file grew: then the read goes on, up
+      // to one byte past the limit.
+      raw = new Uint8Array(Math.min(Number(info.size), limit) + 1);
+      for (;;) {
+        if (size === raw.length) {
+          if (raw.length > limit) break;
+          const grown = new Uint8Array(Math.min(raw.length * 2, limit + 1));
+          grown.set(raw);
+          raw = grown;
+        }
         const n = access(() => fs.readSync(fd, raw, size, raw.length - size, null));
         if (n === 0) break;
         size += n;

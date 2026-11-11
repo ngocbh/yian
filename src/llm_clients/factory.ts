@@ -172,9 +172,33 @@ interface Wiring {
 /** Read the credentials `connection` pins for `provider`. */
 type Read = (connection: Connection, provider: string) => Promise<Credentials>;
 
-/** Return the `Read` that resolves pinned credentials through `env`, `signal` and `scheduler`. */
-function reader(env: Env, signal: AbortSignal | undefined, scheduler: Scheduler | undefined): Read {
-  return (connection, provider) => connectionCredentials(connection, provider, { env, signal, scheduler });
+/**
+ * The saved API keys one run has read, by store path, provider and credential id, so the run reads
+ * each once. Subscription tokens are never kept: they expire and refresh.
+ */
+export type SavedKeys = Map<string, ApiKeyCredentials>;
+
+/**
+ * Return the `Read` that resolves pinned credentials through `env`, `signal` and `scheduler`; with
+ * `savedKeys`, a saved API key it read before is returned again without a read.
+ */
+function reader(
+  env: Env,
+  signal: AbortSignal | undefined,
+  scheduler: Scheduler | undefined,
+  savedKeys: SavedKeys | undefined,
+): Read {
+  return async (connection, provider) => {
+    const id =
+      savedKeys !== undefined && connection.source === "store" && connection.method === "api_key"
+        ? [connection.store_path, provider, connection.credential_id].join("\0")
+        : null;
+    const kept = id === null ? undefined : savedKeys!.get(id);
+    if (kept !== undefined) return kept;
+    const credentials = await connectionCredentials(connection, provider, { env, signal, scheduler });
+    if (id !== null && credentials instanceof ApiKeyCredentials) savedKeys!.set(id, credentials);
+    return credentials;
+  };
 }
 
 /** Wrap `auth` so it also sends the secret connection headers, when there are any. */
@@ -481,6 +505,8 @@ async function subscriptionModel(
  * endpoint. A config `organization`, `project` and `headers` travel with the config key; a saved
  * login's key brings the settings saved with it instead (its header names must equal the recorded
  * ones); an environment key sends none. `signal` and `scheduler` go to every credential read.
+ * With `savedKeys`, a saved API key read before is used again instead of read: a run reads each
+ * once.
  *
  * Throws `RangeError` if `checkModelConfig` rejects the config; `AuthError` if a pinned login
  * changed or was removed, an OpenAI key is missing or changed, or saved header names differ from
@@ -488,9 +514,15 @@ async function subscriptionModel(
  */
 export async function resolveProviderAccess(
   config: Readonly<Record<string, unknown>> | LLMConfig,
-  options: { env?: Env; snapshot?: ConnectionSnapshot; scheduler?: Scheduler; signal?: AbortSignal } = {},
+  options: {
+    env?: Env;
+    snapshot?: ConnectionSnapshot;
+    scheduler?: Scheduler;
+    signal?: AbortSignal;
+    savedKeys?: SavedKeys;
+  } = {},
 ): Promise<Resolved> {
-  const { env = processEnv, snapshot, scheduler, signal } = options;
+  const { env = processEnv, snapshot, scheduler, signal, savedKeys } = options;
   const values = config instanceof LLMConfig
     ? config
     : (fromHost(config, "llm_config") as Record<string, unknown>);
@@ -503,7 +535,7 @@ export async function resolveProviderAccess(
     const none = { key: null, keyAtBuild: null, baseUrl: null, idHeaders: {}, secretHeaders: {} };
     return { provider, model, block, subscription: connection, ...none };
   }
-  const read = reader(env, signal, scheduler);
+  const read = reader(env, signal, scheduler, savedKeys);
 
   let key: Secret | null = null;
   let keyAtBuild: string | null = null;
@@ -557,7 +589,8 @@ export async function resolveProviderAccess(
  * Responses API. Ollama sends only the credentials written in `OLLAMA_BASE_URL`, never a key.
  *
  * `send` and `scheduler` go to the model's transport (`scheduler` also to the credential store),
- * `signal` to every credential read, and `onReplayDegraded` to the protocol.
+ * `signal` to every credential read, `savedKeys` to `resolveProviderAccess`, and
+ * `onReplayDegraded` to the protocol.
  *
  * Throws what `resolveProviderAccess` throws; `RangeError` if a vendor, Anthropic or Google key is
  * missing, `OLLAMA_BASE_URL` is malformed, or Azure has no credential or no `OPENAI_API_VERSION`;
@@ -571,17 +604,18 @@ export async function chatModelFromConfig(
     send?: Send;
     scheduler?: Scheduler;
     signal?: AbortSignal;
+    savedKeys?: SavedKeys;
     onReplayDegraded?: (reason: ReplayDegradedReason) => void;
     onWarning?: (message: string) => void;
   } = {},
 ): Promise<RouteModel> {
-  const { env = processEnv, snapshot, send, scheduler, signal, onReplayDegraded } = options;
+  const { env = processEnv, snapshot, send, scheduler, signal, savedKeys, onReplayDegraded } = options;
   const onWarning = options.onWarning ?? ((message: string) => warnOnce(WARNED, message));
-  const resolved = await resolveProviderAccess(config, { env, snapshot, scheduler, signal });
+  const resolved = await resolveProviderAccess(config, { env, snapshot, scheduler, signal, savedKeys });
   const { provider, model, subscription } = resolved;
   const wiring: Wiring = { env, send, scheduler, onReplayDegraded };
   if (subscription !== null) {
-    return subscriptionModel(subscription, model, resolved.block, wiring, reader(env, signal, scheduler));
+    return subscriptionModel(subscription, model, resolved.block, wiring, reader(env, signal, scheduler, undefined));
   }
   // After the credential and header reads, so a removed login or
   // mismatched header names raise without a warning, while a missing environment key (outside
@@ -691,11 +725,15 @@ export interface ModelAccess {
 
 /**
  * Return the model access that builds through `chatModelFromConfig` with `env` (default
- * `processEnv`), passing on `signal` and `onReplayDegraded`.
+ * `processEnv`), passing on `signal` and `onReplayDegraded`. Its models share one `SavedKeys`, so
+ * a run, which makes one model access, reads each saved API key once: a login replaced or removed
+ * meanwhile is caught when the run resumes, or by the next run.
  */
 export function defaultModelAccess(env: Env = processEnv): ModelAccess {
+  const savedKeys: SavedKeys = new Map();
   return {
     env,
-    createModel: (config, { signal, onReplayDegraded }) => chatModelFromConfig(config, { env, signal, onReplayDegraded }),
+    createModel: (config, { signal, onReplayDegraded }) =>
+      chatModelFromConfig(config, { env, signal, savedKeys, onReplayDegraded }),
   };
 }

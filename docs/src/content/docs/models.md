@@ -213,6 +213,6 @@ subscription offers with `yian models --auth-file F`; `F` is the auth file, even
 
 A run records which login each agent used, never the key. Saving the same login again, even
 with another model, keeps it. If you replace that login (another key, header, endpoint,
-organization or project, or a new subscription sign-in) or remove it, an unfinished run fails at
-its next model call or its resume and names `yian auth PROVIDER`, rather than switching accounts
-silently.
+organization or project, or a new subscription sign-in) or remove it, an unfinished run's resume
+fails and names `yian auth PROVIDER`, rather than switching accounts silently. Until then, a run
+keeps using an API key it has read; on a subscription it fails at its next model call.

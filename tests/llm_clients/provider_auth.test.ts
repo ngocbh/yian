@@ -16,7 +16,7 @@ import { inspect } from "node:util";
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
-import { ENTRIES } from "../../src/defaults.ts";
+import { BUILTIN, ENTRIES, install } from "../../src/defaults.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
 import { OPTIONAL_API_KEY_PROVIDERS, PROVIDER_API_KEY_ENV } from "../../src/llm_clients/api_key_env.ts";
 import {
@@ -767,6 +767,25 @@ describe("AuthStore", () => {
       expect(error.message).toBe(changed());
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  test("a store that grew after its status was read is read whole, up to the size limit", () => {
+    writeStore(file, savedStore);
+    const real = fs.fstatSync;
+    // Every status reports one byte, as if the file grew from that before the read.
+    const spy = spyOn(fs, "fstatSync").mockImplementation(((...args: unknown[]) => {
+      const info = Reflect.apply(real, fs, args) as fs.BigIntStats;
+      return info.isFile() ? Object.assign(Object.create(info), { size: 1n }) : info;
+    }) as typeof fs.fstatSync);
+    try {
+      expect(new AuthStore(file).selection()?.provider).toBe("openai");
+      const size = fs.statSync(file).size;
+      install({ ...BUILTIN, maxAuthStoreBytes: size - 1 });
+      expect(() => new AuthStore(file).read()).toThrow("exceeds its size limit");
+    } finally {
+      spy.mockRestore();
+      install(BUILTIN);
     }
   });
 

@@ -276,7 +276,7 @@ A refused call appends nothing and throws `DeliveryRefused`, whose `reason` says
 | `not_started` | The run hasn't started yet |
 | `unknown_inbox` | The flow has no such inbox input |
 | `inbox_closed` | The inbox is closed |
-| `invalid_value` | The value doesn't fit the inbox's type or the call's output type |
+| `invalid_value` | The value doesn't fit the inbox's type or the call's output type, or nests deeper than `YIAN_MAX_VALUE_NESTING` (a message two levels less, since a take reads it inside `{events: [...]}`) |
 | `key_reused` | An earlier send used the send's `key` with another inbox or value |
 | `too_large` | The message is over `YIAN_MAX_EVENT_BYTES` (1 MiB by default) |
 | `unknown_call` | No open call has that id |

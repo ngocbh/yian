@@ -39,6 +39,7 @@ import {
   MemoryRef,
   jsonSafeText,
   jsTypeName,
+  rejectDeepNesting,
   renderValuePath,
   shownText,
   type Type,
@@ -588,8 +589,9 @@ export class ToolNode extends Node {
    * Shape the `tool_result` step for a host's `complete` on this node's call: the value checked
    * against the declared output (for `ask`, the answer type without null), or the error.
    *
-   * @throws TypeCheckError when the output isn't a yian value or fails that type, or is null for
-   *   an `ask` (null means nobody answered in time).
+   * @throws TypeCheckError when the output isn't a yian value, nests deeper than
+   *   `MAX_VALUE_NESTING`, or fails that type, or is null for an `ask` (null means nobody answered
+   *   in time).
    */
   override waitResultStep(call: CallView, result: CompleteResult): JsonObject {
     if (Object.hasOwn(result, "error")) {
@@ -601,6 +603,8 @@ export class ToolNode extends Node {
     const typ = declared !== null && this.builtin === ASK ? declared.replace({ nullable: false }) : declared;
     const where = `complete(${reprText(call.callId)}) output`;
     const output = fromHost((result as { output: unknown }).output, where);
+    // Here, not at the next advance, which would fail the node's output contract on it.
+    rejectDeepNesting(output, where);
     if (this.builtin === ASK && output === null) {
       throw new TypeCheckError(`${where}: an ask's answer can't be null; null means nobody answered in time`);
     }

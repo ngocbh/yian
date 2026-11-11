@@ -314,7 +314,9 @@ A reply that gives two tool calls the same id, or whose arguments nest deeper th
 ### MCP servers
 
 `yian run` reads `~/.yian/mcp.json` when it exists, then each `--mcp-config FILE`. A later
-file's entry replaces an earlier one of the same name.
+file's entry replaces an earlier one of the same name. Its commands run as you, so `yian run`
+refuses `~/.yian/mcp.json` unless you own it and no one else can write it
+(`chmod go-w ~/.yian/mcp.json` fixes that); `--mcp-config` files aren't checked.
 
 ```console
 $ yian run research.yaml --mcp-config ./mcp.json --input question="Which issues are stale?"

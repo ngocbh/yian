@@ -1222,7 +1222,7 @@ async function startRun(
         const user = userMcpConfig(commandEnv.read);
         const paths = [...(statOrNull(user)?.isFile() ? [user] : []), ...options.mcpConfig];
         try {
-          servers = loadMcpConfig(paths, commandEnv.read, { reserved: known, warn });
+          servers = loadMcpConfig(paths, commandEnv.read, { reserved: known, warn, userConfig: user });
         } catch (error) {
           if (!(error instanceof McpConfigError)) throw error;
           await writeWarnings();

@@ -4,9 +4,9 @@
  * A value path quotes its key as JSON (`env["A"]`).
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -47,7 +47,7 @@ function spec(server: McpServer | undefined): McpServerSpec {
 function loadError(
   paths: readonly string[],
   vars: Record<string, string> = {},
-  options: { reserved?: Iterable<string> } = {},
+  options: { reserved?: Iterable<string>; userConfig?: string } = {},
 ): McpConfigError {
   try {
     loadMcpConfig(paths, envOf(vars), { ...options, warn: () => {} });
@@ -64,6 +64,52 @@ test("user config is under the home yian directory", () => {
 
 test.each<Record<string, string>>([{}, { HOME: "" }])("userMcpConfig falls back to the account's home (%j)", (vars) => {
   expect(userMcpConfig(envOf(vars))).toBe(join(userInfo().homedir, ".yian", "mcp.json"));
+});
+
+describe.skipIf(process.platform === "win32")("the user config's owner and mode", () => {
+  const servers = { files: { command: "npx" } };
+
+  test("a user config others may write is refused, naming the fix; one they may only read is read", () => {
+    const path = write("mcp.json", servers);
+    for (const mode of [0o620, 0o602, 0o666]) {
+      chmodSync(path, mode);
+      expect(loadError([path], {}, { userConfig: path }).message).toBe(
+        `${path}: the MCP config can be changed by other users, and its commands run as you; fix it with: chmod go-w ${path}`,
+      );
+    }
+    for (const mode of [0o600, 0o644, 0o444, 0o755]) {
+      chmodSync(path, mode);
+      expect(Object.keys(loadMcpConfig([path], envOf({}), { userConfig: path }))).toEqual(["files"]);
+    }
+  });
+
+  test("a user config another user owns is refused", () => {
+    const path = write("mcp.json", servers);
+    const uid = spyOn(process, "getuid").mockReturnValue(process.getuid!() + 1);
+    try {
+      expect(loadError([path], {}, { userConfig: path }).message).toBe(
+        `${path}: the MCP config belongs to another user, and its commands would run as you; keep your own copy`,
+      );
+    } finally {
+      uid.mockRestore();
+    }
+  });
+
+  test("a symlinked user config is checked at its target", () => {
+    const target = write("dotfiles.json", servers);
+    const path = join(tmp, "mcp.json");
+    symlinkSync(target, path);
+    expect(Object.keys(loadMcpConfig([path], envOf({}), { userConfig: path }))).toEqual(["files"]);
+    chmodSync(target, 0o666);
+    expect(loadError([path], {}, { userConfig: path }).message).toStartWith(`${path}: the MCP config can be changed by other users`);
+  });
+
+  test("an --mcp-config file is read whatever its owner and mode", () => {
+    const user = write("mcp.json", servers);
+    const flag = write("flag.json", { other: { command: "npx" } });
+    chmodSync(flag, 0o666);
+    expect(Object.keys(loadMcpConfig([user, flag], envOf({}), { userConfig: user }))).toEqual(["files", "other"]);
+  });
 });
 
 test("stdio entry expands env and keeps args", () => {

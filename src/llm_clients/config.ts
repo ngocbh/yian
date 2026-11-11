@@ -783,9 +783,12 @@ function unsetDropped(key: string, value: unknown): unknown {
  * `specific`'s set fields win, `base` fills the rest, and a value inside a field (e.g.
  * `thinking: {...}`) is replaced whole. A block that is not a record is kept over the other
  * layer's block, whichever layer sets it (the `specific` one when both do), so it reaches
- * validation instead of being hidden. Every other key, `_connection` included, is replaced whole.
- * Dropping unset values keeps the merge associative, so a cascade can be grouped without changing
- * its result. Block records in the result are new; other values are shared with the inputs.
+ * validation instead of being hidden. Every other key, `_connection` included, is replaced whole,
+ * with one exception: when `specific` sets `provider` to another one than `base`'s and sets no
+ * `model`, `base`'s `model` is dropped, since it was chosen for that other provider; a `model` in a
+ * `base` with no `provider` is kept. So a cascade is merged from its innermost layer over the
+ * merge of the layers outside it. Block records in the result are new; other values are shared
+ * with the inputs.
  *
  * Example: `mergeLlmConfig({anthropic: {output_config: {effort: "high"}}}, {provider: "anthropic",
  * anthropic: {max_tokens: 8000n, output_config: {effort: "low"}}})` gives `{provider: "anthropic",
@@ -811,5 +814,13 @@ export function mergeLlmConfig(
       out.set(key, unsetDropped(key, value));
     }
   }
+  const provider = specific["provider"];
+  const changed = provider !== null && provider !== undefined && !isSet(specific["model"]);
+  if (changed && isSet(base["provider"]) && base["provider"] !== provider) out.delete("model");
   return Object.fromEntries(out);
+}
+
+/** Return whether a layer's field is set: neither `null` nor `undefined`. */
+function isSet(value: unknown): boolean {
+  return value !== null && value !== undefined;
 }

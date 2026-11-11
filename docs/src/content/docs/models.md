@@ -104,9 +104,10 @@ Approved.
   skip the flow, parent flows and CLI layers; only its own config and the defaults apply.
   `inherit:` goes only in an agent's `llm_config:`, written as `true` or `false`.
 - `--provider` and `--model` fill gaps only. They never override a value the flow sets.
-- Each field resolves on its own. An agent that sets only `provider:` keeps a `model:` from an
-  outer layer or `--model`, even one for another provider, so set both. With no model in any
-  layer, it gets its provider's saved model.
+- Each field resolves on its own, except that an agent (or flow) that sets `provider:` but no
+  `model:` drops a model an outer layer chose for another provider. A model from outer layers
+  that name no provider, such as `--model` alone, is kept. With no model left, it gets its
+  provider's saved model.
 - An agent that ends up with no provider or model fails the run before any node runs:
 
 ```text

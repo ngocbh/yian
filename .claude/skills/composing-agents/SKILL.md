@@ -227,11 +227,11 @@ output:
 - **An agent a host may interrupt needs an `Optional(...)` output.** An interrupted agent's
   output is null; with `str` or any other type it fails with `agent.interrupted`. This applies
   to every agent with `steer_inbox:`.
-- **`llm_config:` holds `provider`, `model` and, on an agent, `inherit:`.** Set `provider` and
-  `model` together: an agent that sets only `provider:` keeps an outer `model:`, even one for
-  another provider. Request settings go in a block named after the provider, written as that API's
-  request body: `anthropic: {max_tokens: 8000}`, `openai: {reasoning: {effort: high}}`. See [Models
-  and providers](https://yian.readthedocs.io/models/).
+- **`llm_config:` holds `provider`, `model` and, on an agent, `inherit:`.** An agent that sets
+  only `provider:` drops an outer `model:` chosen for another provider and gets its provider's
+  saved model; set `model:` too to pick one. Request settings go in a block named after the
+  provider, written as that API's request body: `anthropic: {max_tokens: 8000}`,
+  `openai: {reasoning: {effort: high}}`. See [Models and providers](https://yian.readthedocs.io/models/).
 - **No `session` memory.** Carry a conversation as a `loop` field and compact it with a `call`;
   see `templates/chat.yaml`.
 - **Memory across runs is a flow input** (`lessons: !FileMemory`) that the host binds. Pass it

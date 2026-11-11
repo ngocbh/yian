@@ -87,6 +87,47 @@ test("merge with null is associative", () => {
   );
 });
 
+test("merge: a layer that changes provider without a model drops the other provider's model", () => {
+  const base = { provider: "anthropic", model: "claude-sonnet-4-5", anthropic: { temperature: 0.2 } };
+  expect(mergeLlmConfig({ provider: "openai" }, base)).toEqual({ provider: "openai", anthropic: { temperature: 0.2 } });
+  // Its own model, or the same provider, keeps the pair.
+  expect(mergeLlmConfig({ provider: "openai", model: "gpt-5.5" }, base)).toMatchObject({ model: "gpt-5.5" });
+  expect(mergeLlmConfig({ provider: "anthropic" }, base)).toMatchObject({ model: "claude-sonnet-4-5" });
+  expect(mergeLlmConfig({ provider: "openai", model: null }, base)).toEqual({
+    provider: "openai",
+    anthropic: { temperature: 0.2 },
+  });
+  // A model no layer names a provider for is kept.
+  expect(mergeLlmConfig({ provider: "openai" }, { model: "gpt-5.5" })).toEqual({ provider: "openai", model: "gpt-5.5" });
+});
+
+test("an agent that changes provider gets its provider's saved model, not the flow's or the CLI's", async () => {
+  const flow = await compiled(`
+id: f
+name: f
+llm_config: {provider: anthropic, model: claude-sonnet-4-5}
+nodes:
+  a: {kind: agent, prompt: hi, llm_config: {provider: openai}}
+  b: {kind: agent, prompt: hi}
+output: \${a.output}
+`);
+  const effective = cascade(flow);
+  expect(effective["a"]).toEqual({ provider: "openai", model: "openai-default" });
+  expect(effective["b"]).toEqual({ provider: "anthropic", model: "claude-sonnet-4-5" });
+  const cli = await compiled(`
+id: f
+name: f
+llm_config: {provider: google}
+nodes:
+  a: {kind: agent, prompt: hi}
+output: \${a.output}
+`);
+  expect(cascade(cli, { provider: "anthropic", model: "claude-opus-4-8" })["a"]).toEqual({
+    provider: "google",
+    model: "google-default",
+  });
+});
+
 test("merge does not mutate its inputs", () => {
   const a = { model: "x" };
   const b = { provider: "p" };

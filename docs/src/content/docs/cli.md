@@ -51,7 +51,7 @@ $ yian run --resume ~/.yian/runs/4f1c/log.jsonl
 | `-i`, `--input` | `k=v` | One input. Repeat it for more |
 | `--inputs` | file | A JSON file of inputs |
 | `--inbox` | name | On a terminal, the inbox input to send typed lines to, when the flow has several (see [Chatting on a terminal](#chatting-on-a-terminal)) |
-| `--log` | path | Write the run log here instead of the default location. The path must not exist |
+| `--log` | path | Write the run log here instead of the default location. The path must not exist, and its folder must |
 | `--resume` | path | Resume the run recorded in this run log, with the flow it recorded |
 | `-q`, `--quiet` | | Print no banner and no per-node progress |
 | `-v`, `--verbose` | | Also print each node's output as it finishes |
@@ -242,7 +242,7 @@ $ yian chat hello.yaml
 | Flag | Value | What it does |
 |---|---|---|
 | `FLOW` | path | A flow `.yaml` you want help with |
-| `--log` | path | Where to write the chat's run log. The path must not exist |
+| `--log` | path | Where to write the chat's run log. The path must not exist, and its folder must |
 | `--provider` | name | Provider for the assistant and its flows, when they set none |
 | `--model` | name | Model for the assistant and its flows, when they set none |
 | `--resume` | | Picks an earlier chat in this folder and goes on from it |

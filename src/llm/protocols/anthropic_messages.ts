@@ -62,6 +62,7 @@ import { eventData, notIntMessage, tokenCount, usageOrProtocolError, wrongPart }
 /** The protocol id, in `Finish.protocol` and replay records. */
 export const PROTOCOL = "anthropic_messages";
 const NO_MEDIA = "the anthropic_messages route does not send media parts yet";
+const EMPTY_USER = "an empty user message was not sent; Anthropic rejects empty content";
 // The default `max_tokens` by exact model id, from langchain-anthropic 1.7.5's model profiles;
 // any other model gets 4096. Those profiles carry no limits for the Mythos models (not on
 // models.dev), so theirs are the 128K max output from Anthropic's model docs.
@@ -176,8 +177,9 @@ export class AnthropicMessages implements SseProtocol {
   readonly #block: JsonObject | null;
   readonly #key: ReplayKey;
   readonly #onReplayDegraded: ((reason: ReplayDegradedReason) => void) | null;
-  // The hoist warning is shown once, not on every call.
+  // The hoist and empty-user warnings are shown once, not on every call.
   #hoistWarned = false;
+  #emptyUserWarned = false;
 
   constructor(options: AnthropicMessagesOptions) {
     this.model = options.model;
@@ -427,7 +429,10 @@ export class AnthropicMessages implements SseProtocol {
       throw new TypeError(NO_MEDIA);
     }
     const turns = merge(messages);
-    const lastNonSystem = turns.findLastIndex((turn) => turn.role !== "system");
+    // A user turn with nothing to send is left out, so an assistant turn before it is final.
+    const lastNonSystem = turns.findLastIndex(
+      (turn) => turn.role === "assistant" || (turn.role === "user" && turn.blocks.some(isSendable)),
+    );
     const inPlace = IN_PLACE_SYSTEM_PREFIXES.some((prefix) => this.model.startsWith(prefix));
     let system: JsonValue | null = null;
     const rendered: JsonObject[] = [];
@@ -449,6 +454,10 @@ export class AnthropicMessages implements SseProtocol {
         for (const each of pending) rendered.push({ role: "system", content: each });
       } else {
         content = userContent(turn.blocks);
+        if (content.length === 0) {
+          this.#warnEmptyUser();
+          continue;
+        }
         for (const each of pending) system = this.#hoist(system, each);
       }
       pending = [];
@@ -494,6 +503,13 @@ export class AnthropicMessages implements SseProtocol {
     if (reason !== null) this.#onReplayDegraded?.(reason);
     // An unsigned part is no record mismatch, so nothing is signalled for it.
     return reason !== null || unsigned ? message.parts.map(() => null) : blocks;
+  }
+
+  /** Warn, the first time, that an empty user message was not sent. */
+  #warnEmptyUser(): void {
+    if (this.#emptyUserWarned) return;
+    this.#emptyUserWarned = true;
+    warn(EMPTY_USER);
   }
 
   /** Return `content` as the new `system` field, warning the first time that it was moved there. */
@@ -562,14 +578,18 @@ function systemContent(texts: string[]): JsonValue {
   return texts.length === 1 ? texts[0]! : texts.map(textBlock);
 }
 
-/** Return a user turn's content: one text block as a string, else the blocks without whitespace-only texts. */
-function userContent(blocks: JsonObject[]): JsonValue {
-  return loneText(blocks) ?? blocks.filter(isSendable);
+/**
+ * Return a user turn's content: its blocks without whitespace-only texts, one text block left as
+ * a string; `""` or `[]` when nothing is left.
+ */
+function userContent(blocks: JsonObject[]): string | JsonObject[] {
+  const content = blocks.filter(isSendable);
+  return loneText(content) ?? content;
 }
 
 /**
- * Return an assistant message's content: one lone text block as a string, else its blocks in
- * part order without whitespace-only texts; `""` when it has no text or call.
+ * Return an assistant message's content: its blocks in part order without whitespace-only texts,
+ * one text block left as a string; `""` when it has no text or call.
  *
  * Each text part is its own block and an empty one gives none; a call is a `tool_use` block, an
  * invalid one with empty `input`; a reasoning part is its block in `reasoning`, if any.
@@ -592,12 +612,13 @@ function assistantContent(message: Message, final: boolean, reasoning: readonly 
       blocks.push(thinking);
     }
   }
-  const lone = loneText(blocks);
-  if (lone !== null) return final ? lone.trimEnd() : lone;
-  // Claude often streams a whitespace-only text block before a `tool_use`, which the API refuses back.
+  // Claude often streams a whitespace-only text block before a `tool_use`, and the API refuses
+  // whitespace-only text back, alone or in a list.
   const content = blocks.filter(isSendable);
   // Reasoning goes back only with the text or call it led to.
   if (!content.some((block) => block["type"] === "text" || block["type"] === "tool_use")) return "";
+  const lone = loneText(content);
+  if (lone !== null) return final ? lone.trimEnd() : lone;
   const last = content.at(-1);
   if (final && last?.["type"] === "text") last["text"] = (last["text"] as string).trimEnd();
   return content;

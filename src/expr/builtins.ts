@@ -21,8 +21,8 @@
  * depends on them, so the loader can type its result.
  *
  * Knows about: `typesys` (`Value`, `FileRef`, `InboxRef`, `MemoryRef`, `Type`, `ValueKind`,
- * `fromHost`, `isListKind`, `isRecord`, `valueRepr`, `writeAsText`, `writeAsJson`), `diagnostics`
- * (`reprText`, `compareCodePoints`) and `grammar` (`uncallableReason`). Never imports:
+ * `fromHost`, `isListKind`, `isRecord`, `renderValuePath`, `valueRepr`, `writeAsText`, `writeAsJson`),
+ * `diagnostics` (`reprText`, `compareCodePoints`) and `grammar` (`uncallableReason`). Never imports:
  * `expressions`, `template`, or anything above them.
  */
 
@@ -33,6 +33,7 @@ import {
   fromHost,
   isListKind,
   isRecord,
+  renderValuePath,
   valueRepr,
   writeAsJson,
   writeAsText,
@@ -158,14 +159,43 @@ function requireText(fn: string, value: Value, param: string | null = null): str
 }
 
 /**
+ * Return the first infinite float in `value`, in the order `writeAsJson` writes it, with its
+ * path, else `null`. `checked` holds the containers already found to have none.
+ */
+function firstInfinite(
+  value: Value,
+  checked: Set<object> = new Set(),
+): { x: number; path: (string | number)[] } | null {
+  if (typeof value === "number") return Number.isFinite(value) ? null : { x: value, path: [] };
+  if (!Array.isArray(value) && !isRecord(value)) return null;
+  // A container shared inside `value` is walked once, so the walk stays linear in its size.
+  if (checked.has(value)) return null;
+  const entries: [string | number, Value][] = Array.isArray(value)
+    ? value.map((item, index) => [index, item])
+    : Object.entries(value);
+  for (const [key, item] of entries) {
+    const found = firstInfinite(item, checked);
+    if (found !== null) return { x: found.x, path: [key, ...found.path] };
+  }
+  checked.add(value);
+  return null;
+}
+
+/**
  * Pretty-print `value` as JSON (`writeAsJson`): the headline builtin. A file renders as its
  * mapping `{"uri", "mime", "name"}`. A null `value` is an error; a null nested inside it renders
- * as `null`.
+ * as `null`. An infinite float is an error naming its path, since JSON has no infinity.
  */
 function renderAsJson(value: Value, indent: Value): string {
   rejectNull("render_as_json", value);
   if (typeof indent !== "bigint" || indent < 0n) {
     throw new TypeError(`render_as_json() takes an int indent of 0 or more, got ${valueRepr(indent)}`);
+  }
+  const infinite = firstInfinite(value);
+  if (infinite !== null) {
+    const where = infinite.path.length === 0 ? "" : ` at ${renderValuePath(infinite.path)}`;
+    const shown = infinite.x > 0 ? "inf" : "-inf";
+    throw new TypeError(`render_as_json() can't write ${shown}${where}: JSON has no infinity`);
   }
   // A huge indent becomes a huge number (or Infinity), and the writer's `repeat` then fails.
   return writeAsJson(value, Number(indent));

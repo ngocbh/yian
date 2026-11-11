@@ -92,6 +92,29 @@ test("a syntax error has the problem's range", () => {
   expect(refusal("nodes:\n  broken: ]\n").range).toEqual(new SourceRange(2, 11, 2, 12));
 });
 
+describe("a syntax error at the end of the text", () => {
+  // The YAML reader reports these past the last character; each points at what is still open.
+  const PROMPT = "id: t\nname: t\nkind: agent\nprompt: ";
+  test.each([
+    ["an unclosed double quote", `${PROMPT}"unclosed\noutput: str\n`, 'Missing closing "quote', [4, 9]],
+    ["an unclosed single quote", `${PROMPT}'it is\noutput: str\n`, "Missing closing 'quote", [4, 9]],
+    ["no final line break", `${PROMPT}"unclosed\noutput: str`, 'Missing closing "quote', [4, 9]],
+    ["blank lines after it", `${PROMPT}"unclosed\n\n\n`, 'Missing closing "quote', [4, 9]],
+    ["an unclosed flow list", "nodes:\n  a: !str [1, 2\n", "end with a ]", [2, 11]],
+    ["an unclosed flow map", "nodes:\n  a: !str {k: 1\n", "end with a }", [2, 11]],
+    ["a list open inside a list", "a: [1, [2\n", "end with a ]", [1, 8]],
+    ["a quote open inside a list", 'a: [1, "x\n', 'Missing closing "quote', [1, 8]],
+  ])("%s points at its opener", (_id, text, message, [line, column]) => {
+    const error = refusal(text);
+    expect(error.message).toContain(message);
+    expect(error.range).toEqual(new SourceRange(line!, column!, line!, column! + 1));
+  });
+
+  test("an error before the end keeps its range", () => {
+    expect(refusal("a: [1, 2\nb: 3\n").range).toEqual(new SourceRange(2, 1, 2, 2));
+  });
+});
+
 describe("a character the reader refuses", () => {
   const MESSAGE = "unacceptable character #x0000: special characters are not allowed";
 
@@ -143,8 +166,8 @@ test("a document accepts an empty document", () => {
   expect(document._definitions).toHaveLength(1);
 });
 
-test("an unclosed flow sequence is located at the end of the text", () => {
-  expect(refusal("id: x\nname: x\nnodes: [\n").range).toEqual(new SourceRange(4, 1, 4, 2));
+test("an unclosed flow sequence is located at its opening bracket", () => {
+  expect(refusal("id: x\nname: x\nnodes: [\n").range).toEqual(new SourceRange(3, 8, 3, 9));
 });
 
 test("lone CRs are line breaks; the text is kept as written", () => {

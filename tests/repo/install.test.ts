@@ -2,7 +2,7 @@
  * `install.sh` and `uninstall.sh` at the repository root. Run from a checkout, install puts a
  * `yian` wrapper for that checkout in a bin folder, and that folder on PATH through the login
  * shell's rc files. Piped (`curl ... | bash`), it first clones the repository, or updates the clone
- * it made. Uninstall takes the wrapper and the PATH lines back out.
+ * it made. Uninstall takes the wrapper, the PATH lines and a clone with no local work back out.
  *
  * Each test has a temp `HOME` and an explicit env, so nothing outside its temp dir changes. The
  * checkout tests run this test's Bun on this checkout, where the scripts'
@@ -395,5 +395,65 @@ describe.if(process.versions.bun !== undefined)("uninstall.sh", () => {
     const result = run("uninstall.sh", home);
     expect(result.status).toBe(0);
     expect(readFileSync(join(bin, "yian"), "utf8")).toContain("echo mine");
+  });
+
+  test("piped, removes the clone install.sh made, the wrapper and every PATH line, and leaves Bun and yian's data", () => {
+    const fx = fixture();
+    writeFileSync(join(fx.home, ".bashrc"), "alias ll='ls -l'\n");
+    install(fx);
+    install(fx, [], { SHELL: "/bin/zsh" });
+    const result = pipe("uninstall.sh", fx);
+    expect(result.stderr).not.toContain("✗");
+    expect(result.status).toBe(0);
+    expect(existsSync(fx.clone)).toBe(false);
+    expect(existsSync(join(fx.bin, "yian"))).toBe(false);
+    for (const rc of RC_FILES) expect([rc, pathLines(join(fx.home, rc))]).toEqual([rc, 0]);
+    expect(readFileSync(join(fx.home, ".bashrc"), "utf8")).toBe("alias ll='ls -l'\n");
+    expect(result.stdout).toContain(`Removed ${fx.clone}`);
+    expect(result.stdout).toContain("Left Bun");
+  });
+
+  test("takes the clone's folder from --dir", () => {
+    const fx = fixture();
+    const dir = join(fx.base, "elsewhere");
+    install(fx, ["--dir", dir]);
+    expect(pipe("uninstall.sh", fx, ["--dir", dir]).status).toBe(0);
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  const LOCAL_WORK: Record<string, (clone: string) => void> = {
+    "an uncommitted change": (clone) => writeFileSync(join(clone, "package.json"), "{}\n"),
+    "an untracked file": (clone) => writeFileSync(join(clone, "notes.md"), "mine\n"),
+    "an ignored file": (clone) => writeFileSync(join(clone, ".env"), "KEY=mine\n"),
+    "a stash": (clone) => {
+      writeFileSync(join(clone, "package.json"), "{}\n");
+      git(clone, "stash", "--quiet");
+    },
+    "a commit that isn't pushed": (clone) => commit(clone, "notes.md", "mine"),
+    "a commit on a detached HEAD": (clone) => {
+      git(clone, "switch", "--quiet", "--detach");
+      commit(clone, "notes.md", "mine");
+    },
+  };
+  for (const [work, make] of Object.entries(LOCAL_WORK)) {
+    test(`keeps a clone with ${work}, and says why`, () => {
+      const fx = fixture();
+      install(fx);
+      make(fx.clone);
+      const result = pipe("uninstall.sh", fx);
+      expect(result.status).toBe(0);
+      expect(existsSync(join(fx.clone, ".git"))).toBe(true);
+      expect(result.stdout).toContain(`Kept ${fx.clone}: it has`);
+      expect(existsSync(join(fx.bin, "yian"))).toBe(false);
+    });
+  }
+
+  test("keeps a clone install.sh didn't make", () => {
+    const fx = fixture();
+    git(fx.base, "clone", "--quiet", fx.remote, fx.clone);
+    const result = pipe("uninstall.sh", fx);
+    expect(result.status).toBe(0);
+    expect(existsSync(join(fx.clone, ".git"))).toBe(true);
+    expect(result.stdout).toContain(`Kept ${fx.clone}: install.sh didn't clone it`);
   });
 });

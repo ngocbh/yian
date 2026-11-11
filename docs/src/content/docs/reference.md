@@ -188,6 +188,7 @@ log prints the same failure, so "retry" below means a new run.
 | `agent.interrupted` | An AGENT was interrupted and its output type doesn't allow null | Declare `output: Optional(...)` and route on null |
 | `tool.timeout` | An `ask` timed out with no answer and its output type doesn't allow null | Declare `output: Optional(...)`, or give it longer |
 | `provider.auth` | The provider refused the agent's credentials, or yian couldn't supply them | Fix the login (`yian auth <provider>`) or the key |
+| `provider.auth_storage` | The saved-login file, its folder or its lock can't be used (its mode, owner or contents) | Fix the file the message names; logging in again reads the same file |
 | `provider.rate_limit` | The provider's rate limit (HTTP 429) outlasted yian's model-call retries | Retry later, or run fewer calls at once |
 | `provider.quota` | The account's quota or credit is used up | Add credit or change plan |
 | `provider.unavailable` | The provider was unreachable or failing (a 5xx, a timeout, a dropped connection) past yian's retries | Retry later, or switch provider |

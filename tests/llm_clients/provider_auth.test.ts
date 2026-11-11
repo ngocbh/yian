@@ -72,6 +72,7 @@ test("auth/index.ts exports the auth package names", async () => {
     "OpenAIAuth",
     "ProviderSelection",
     "isAuthFailure",
+    "isStorageError",
   ]);
 });
 

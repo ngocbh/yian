@@ -103,8 +103,9 @@ function hasKeys(value: Record<string, unknown>, keys: readonly string[]): boole
  * fixing the file can. `damaged` is set when the file's logins can't be read back, so only
  * restoring the file keeps them.
  *
- * Its name stays "AuthError": a failed model call is recorded by its error's name, and only that
- * name replays as an `AuthError`.
+ * Its name stays "AuthError", as a run failure's `cause_type` shows it; a failed model call
+ * records it as `StorageError` (`isStorageError`), so a replay rebuilds it. Its message may name
+ * the auth file, so a host relaying errors to others checks `isStorageError` first.
  */
 export class StorageError extends AuthError {
   readonly damaged: boolean;
@@ -113,6 +114,14 @@ export class StorageError extends AuthError {
     super(message);
     this.damaged = damaged;
   }
+}
+
+/**
+ * Whether `error` is an auth-store fault (`StorageError`): one the store's file, folder or lock
+ * causes, whose message may name the auth file, rather than a sign-in failure.
+ */
+export function isStorageError(error: unknown): error is StorageError {
+  return error instanceof StorageError;
 }
 
 /**

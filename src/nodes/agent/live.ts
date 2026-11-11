@@ -44,6 +44,7 @@ import {
 import { callWithRetries } from "../../llm/executor.ts";
 import { Message, ReasoningPart, type Request, Response, TextPart, ToolCallPart } from "../../llm/messages.ts";
 import { AuthError, isAuthFailure } from "../../llm_clients/auth/common.ts";
+import { isStorageError, StorageError } from "../../llm_clients/auth/store.ts";
 import { realScheduler, type Scheduler } from "../../platform.ts";
 import { isPending } from "../../tools/context.ts";
 import type { JsonObject } from "../../typesys/json.ts";
@@ -57,6 +58,7 @@ import {
   inlineToFile,
   type PriorAttempts,
   type RetrySettings,
+  STORAGE_ERROR_KIND,
 } from "./context.ts";
 import { ReplyInterrupted } from "./interrupts.ts";
 
@@ -87,11 +89,13 @@ export function markModelFailure(error: unknown): void {
 /**
  * Return the failure code of an error `markModelFailure` marked, or `null` when unmarked.
  *
- * An auth failure (`isAuthFailure`) is `provider.auth`; a `ProviderError` takes its kind's
- * `provider.*` code; anything else is `node.execute`.
+ * An auth-store fault (`isStorageError`) is `provider.auth_storage`; any other auth failure
+ * (`isAuthFailure`) is `provider.auth`; a `ProviderError` takes its kind's `provider.*` code;
+ * anything else is `node.execute`.
  */
 export function modelFailureCode(error: unknown): FailureCode | null {
   if (typeof error !== "object" || error === null || !modelFailures.has(error)) return null;
+  if (isStorageError(error)) return "provider.auth_storage";
   if (isAuthFailure(error)) return "provider.auth";
   return (error instanceof ProviderError ? PROVIDER_CODES[error.kind] : undefined) ?? "node.execute";
 }
@@ -111,13 +115,14 @@ class RecordedCallError extends Error {
 
 /**
  * Return the error a failed `model_call` step recorded as `{kind, message}`: a `ProviderError` of
- * that kind (not retryable, from `provider`), an `AuthError`, or an error of that name, each with
- * the message.
+ * that kind (not retryable, from `provider`), a `StorageError`, an `AuthError`, or an error of that
+ * name, each with the message.
  */
 function recordedFailure({ kind, message }: { kind: string; message: string }, provider: string): Error {
   if ((ERROR_KINDS as readonly string[]).includes(kind)) {
     return new ProviderError(kind as ErrorKind, message, { retryable: false, provider });
   }
+  if (kind === STORAGE_ERROR_KIND) return new StorageError(message);
   return kind === "AuthError" ? new AuthError(message) : new RecordedCallError(kind, message);
 }
 

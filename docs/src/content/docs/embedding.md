@@ -16,7 +16,7 @@ runs on disk, move messages and answers into them, and watch what they do. Insta
 | `@ngocbh/yian/tools` | Tools without the run API: `registerTool`, `registeredTools`, `invokeTool`, `mcpServer` and the `Mcp*` errors, `pending`, `isPending`, and the ask handler types `AskHandler` and `AskRequest` |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
 | `@ngocbh/yian/platform` | yian's file lock and SQLite wrapper, for hosts that lock files the same way: `lockFile`, `waitForLock`, `isLocked`, `FileLockError`, `openSqlite`, `sqliteErrorCode`; and `syncFolder`, which makes a folder's new entries durable |
-| `@ngocbh/yian/llm_clients` | Provider setup: `LLMConfig`, `SUPPORTED_LLM_PROVIDERS`, `listModels`, `AuthStore`, `AuthError`; `defaultEmbed` and `embedderFromConfig`, the embeddings calls a `VectorDBMemory` takes |
+| `@ngocbh/yian/llm_clients` | Provider setup: `LLMConfig`, `SUPPORTED_LLM_PROVIDERS`, `listModels`, `AuthStore`, `AuthError` and `isStorageError` (an auth-store fault, whose message may name the auth file); `defaultEmbed` and `embedderFromConfig`, the embeddings calls a `VectorDBMemory` takes |
 | `@ngocbh/yian/code-worker` | Import it only for its side effect, as a bundle entry (see [Bundling](#bundling)) |
 
 On Bun each import loads the TypeScript source; on Node it loads the built JavaScript. The event

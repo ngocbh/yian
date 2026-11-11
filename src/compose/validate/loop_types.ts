@@ -13,6 +13,7 @@
 
 import { typesCompatible } from "../../compile/validation.ts";
 import { reprText, type SourceRange } from "../../diagnostics.ts";
+import { conditionRefs, evaluateWhenRecord, ExpressionError } from "../../expr/expressions.ts";
 import {
   Binding,
   bindingSource,
@@ -30,14 +31,24 @@ import {
   isList,
   isRecord,
   jsTypeName,
+  setField,
   type Type,
   TypeCheckError,
+  type Value,
   ValueKind,
+  type ValueRecord,
 } from "../../typesys/values.ts";
 import { LoadDiagnostics, shownLiteral } from "../helpers/errors.ts";
-import { constructorTypeFn } from "../helpers/isinstance_types.ts";
+import {
+  collectConstructorNames,
+  collectIsinstanceNames,
+  constructorTypeFn,
+  resolveConstructorType,
+  resolveIsinstanceType,
+} from "../helpers/isinstance_types.ts";
 import {
   assertExactContracts,
+  literalContract,
   literalValue,
   NOT_LITERAL,
   resolveOutputBindingContract,
@@ -56,7 +67,10 @@ import { carriedFieldTypes, loopEntryInputs } from "../nodes/loop.ts";
  * contract for a total loop, the merged returned-plus-seeded contract for a partial one). An exact
  * record gives those fields from its type; a partly typed record gives its independently proven
  * field contracts. A field outside the node's `returnedFields` (omitted by the body, so carried
- * over unchanged) is skipped. A literal, coalesce or opaque seed source, or an opaque body output
+ * over unchanged) is skipped. A literal seed is typed by its value, exactly, when the loop's
+ * `while:` may be false on its seeds: the body then runs zero times and the loop outputs the
+ * seeds. Under a `while:` true on its literal seeds, or `until:` or `times:`, the body runs at
+ * least once, so a literal seed, like a coalesce or opaque seed source or an opaque body output
  * field, stays lenient (skipped); `checkCallMapTypes` checks every seed against the body's
  * declared input.
  *
@@ -118,13 +132,22 @@ export function checkLoopTypeContract(
     if (carriedFields.size === 0) continue;
     const returned = node.returnedFields;
     const wiring = flowWiring.get(nodeId) ?? new Map<string, unknown>();
+    // A `while:` false on the seeds runs the body zero times, and the loop outputs its seeds; any
+    // other loop runs the body at least once, so a literal seed never reaches its output.
+    const literalsOut =
+      node.predicateKind === "while" &&
+      typeof node.predicate === "string" &&
+      !holdsOnLiteralSeeds(node.predicate, wiring, registry ?? new Map());
     for (const [fieldName, src] of wiring) {
       if (returned !== null && !returned.includes(fieldName)) continue; // omitted: carried over
       // A returned field's carried type is the body's own field type.
       const bodyField = carriedFields.get(fieldName);
       if (bodyField === undefined) continue; // name mismatch caught in build
-      const sourceContract = resolveOutputBindingContract(src, producers, flowInputs, { typeFn });
-      if (sourceContract === null) continue; // literal, coalesce or opaque seed source: lenient
+      let sourceContract = resolveOutputBindingContract(src, producers, flowInputs, { typeFn });
+      const literal = sourceContract === null && literalsOut ? literalValue(bindingSource(src)) : NOT_LITERAL;
+      // Each literal keeps its exact type, so a text seed fits a `Literal` field that names it.
+      if (literal !== NOT_LITERAL) sourceContract = literalContract(literal, { exactLiterals: true });
+      if (sourceContract === null) continue; // coalesce or opaque seed source, or a literal never output: lenient
       if (isExactly(sourceContract, PartialRecordContract)) continue; // no exact type to compare
       if (!isExactly(sourceContract, ValueContract)) {
         throw new TypeError(
@@ -134,10 +157,15 @@ export function checkLoopTypeContract(
       const source = sourceContract.type;
       if (!typesCompatible(source, bodyField)) {
         const range: SourceRange | null = result.fieldRanges.get(siteKey("field", "inputs")) ?? result.nodeRange;
+        const sourceText = literal === NOT_LITERAL ? "carried source is" : "literal seed is";
+        const reason =
+          literal === NOT_LITERAL
+            ? "a returned field must keep its carried type"
+            : "a `while:` false at the start outputs the seeds; a returned field must keep its carried type";
         let message =
           `loop node ${reprText(nodeId)}: carried field ${reprText(fieldName)} — body output is ` +
-          `${reprText(canonicalTypeLabel(bodyField))}, carried source is ` +
-          `${reprText(canonicalTypeLabel(source))} (a returned field must keep its carried type)`;
+          `${reprText(canonicalTypeLabel(bodyField))}, ${sourceText} ` +
+          `${reprText(canonicalTypeLabel(source))} (${reason})`;
         const hint = anySourceHint(fieldName, source, bodyField, { registry });
         if (hint !== null) message += `; ${hint}`;
         throw diagnostics.error(message, { range });
@@ -146,6 +174,39 @@ export function checkLoopTypeContract(
     checkReturnedFields(node, result, carriedFields, wiring, registry, diagnostics, {
       inline: inlineLoops.has(nodeId),
     });
+  }
+}
+
+/**
+ * Say whether a `while:` predicate is true on the loop's literal seeds, so the body runs at least
+ * once. `false` when the predicate reads a field whose seed isn't a literal, or fails to evaluate.
+ *
+ * @param predicate The `while:` text.
+ * @param wiring The loop's seed bindings keyed by carried field.
+ * @param registry The flow's typedefs, which the predicate's `isinstance` and constructor names
+ *   resolve against.
+ */
+function holdsOnLiteralSeeds(predicate: string, wiring: ReadonlyMap<string, unknown>, registry: TypeRegistry): boolean {
+  const seeds: ValueRecord = {};
+  for (const [name, src] of wiring) {
+    const value = literalValue(bindingSource(src));
+    // A literal seed binds a yian value as written.
+    if (value !== NOT_LITERAL) setField(seeds, name, value as Value);
+  }
+  try {
+    if (!conditionRefs(predicate).every((ref) => Object.hasOwn(seeds, ref.split(".", 1)[0]!))) return false;
+    // The node's own type table is filled later in the load.
+    const types = new Map<string, Type>();
+    for (const name of collectIsinstanceNames(predicate, { condition: true })) {
+      types.set(name, resolveIsinstanceType(name, registry));
+    }
+    for (const name of collectConstructorNames(predicate, { condition: true })) {
+      types.set(name, resolveConstructorType(name, registry));
+    }
+    return evaluateWhenRecord(predicate, seeds, types);
+  } catch (error) {
+    if (error instanceof ExpressionError || error instanceof TypeCheckError) return false;
+    throw error;
   }
 }
 

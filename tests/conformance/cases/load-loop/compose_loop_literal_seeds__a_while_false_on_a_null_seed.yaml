@@ -1,0 +1,35 @@
+# A `while:` false on its seeds runs the body zero times and outputs the seeds, so a literal seed
+# of a returned field must fit the body's type for it.
+kind: load
+flow: |
+  id: pages
+  name: pages
+  defs:
+    step:
+      input:
+        cursor: !Optional(str)
+      nodes:
+        next:
+          kind: code
+          output:
+            cursor: str
+          code: |
+            return {"cursor": "page"}
+      output: ${next.output}
+  nodes:
+    pages:
+      kind: loop
+      while: cursor != null
+      max: 3
+      call: step
+      input:
+        cursor: null
+  output: ${pages.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "loop node 'pages': carried field 'cursor' — body output is 'str', literal seed is 'None' (a `while:` false at the start outputs the seeds; a returned field must keep its carried type)"
+      frames:
+      - label: flow.yaml
+        range: [22, 7, 23, 1]

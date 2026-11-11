@@ -726,11 +726,13 @@ test("only the missing mcp sdk import error is a host error", async () => {
   let reported;
   let other;
   let worded;
+  let json;
   try {
     failWith(new McpSdkMissingError(SDK));
     reported = await run([flow, "--mcp-config", cfg]);
     failWith(new Error("no module named 'x'"));
     other = await run([flow, "--mcp-config", cfg]);
+    json = await run([flow, "--mcp-config", cfg, "--json"]);
     // Known by its class, not its message.
     failWith(new Error(SDK));
     worded = await run([flow, "--mcp-config", cfg]);
@@ -740,11 +742,13 @@ test("only the missing mcp sdk import error is a host error", async () => {
 
   expect(reported.code).toBe(1);
   expect(reported.output).toContain("run failed: MCP servers need the MCP SDK");
-  // Any other error is a bug: `main` prints its stack, not a `run failed:` line.
-  for (const bug of [other, worded]) {
-    expect(bug.code).toBe(1);
+  // Any other error is a bug: `main` prints its stack, not a `run failed:` line, and exits 70.
+  for (const bug of [other, worded, json]) {
+    expect(bug.code).toBe(70);
     expect(bug.stderr).toContain("\n    at ");
     expect(bug.stderr).not.toContain("run failed:");
   }
   expect(other.stderr).toContain("Error: no module named 'x'\n    at ");
+  // So a host reading --json tells a crash, with no document, from a reported failure.
+  expect(json.stdout).toBe("");
 });

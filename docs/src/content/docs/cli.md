@@ -540,7 +540,8 @@ listing. A failed listing exits 1.
 ## yian config check
 
 `yian config check` reads an `llm_config` layer as a JSON object on stdin, key included, and checks
-it as a run would. Values never appear in its messages.
+it as a run would if no flow or agent overrides its provider or model. Values never appear in its
+messages.
 
 ```console
 $ cat layer.json | yian config check --json

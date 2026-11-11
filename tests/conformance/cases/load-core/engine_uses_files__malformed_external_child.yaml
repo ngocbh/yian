@@ -21,4 +21,4 @@ expect:
         range: [9, 7, 9, 12]
         note: uses alias 'ch'
       - label: child.yaml
-        range: [1, 6, 1, 7]
+        range: [1, 5, 1, 6]

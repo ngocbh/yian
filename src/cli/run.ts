@@ -80,7 +80,7 @@ import {
 } from "../run.ts";
 import { wakeAt } from "../runtime/waits.ts";
 import { ASK_USER, BUILTIN_TOOL_IDS } from "../tools/context.ts";
-import { McpConnectError, McpSdkMissingError, type McpServer } from "../tools/mcp.ts";
+import { McpConnectError, McpSdkMissingError, type McpServer, openTogether } from "../tools/mcp.ts";
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { loadConfined } from "./confined_load.ts";
 import { loadMcpConfig, McpConfigError, userMcpConfig } from "./mcp_config.ts";
@@ -798,10 +798,11 @@ export function needsMcp(flow: ComposedFlow): boolean {
  * `{group: tool}`) is selected unopened, so the run starts it after its own checks and closes it.
  * A TOOL node's bare id names one tool, never a group, so it counts as unresolved unless it is in
  * `known`; so does a grant that is neither in `known` nor a server name. When some id is
- * unresolved, the granted servers open here instead, and if their tools don't supply every
- * unresolved id, the other servers open in turn to show their tools until every id is supplied;
- * those that list a still-unresolved id stay open and the rest close before the run, so an unused
- * server's tool names can't collide with another's. A server opened only to show its tools that
+ * unresolved, the granted servers open here instead, together, and if their tools don't supply
+ * every unresolved id, the other servers open in turn to show their tools until every id is
+ * supplied; those that list a still-unresolved id stay open and the rest are left out of the run,
+ * so an unused server's tool names can't collide with another's. Their closes run while the next
+ * server opens, and every server closes together when `body` settles. A server opened only to show its tools that
  * fails to start is skipped with a `warn` call, unless the flow still lacks a needed id
  * afterwards. Once `signal` aborts, no further server opens, and only the servers already open are
  * selected. Nothing is selected when the flow needs no tools.
@@ -831,6 +832,8 @@ export async function openMcpServers<T>(
 ): Promise<T> {
   const toolNames = (selected: Record<string, McpServer>) =>
     new Set(Object.values(selected).flatMap((server) => server.tools.map((tool) => tool.name)));
+  // Closes of probes the flow doesn't need, which run while the next probe opens.
+  const closing: Promise<void>[] = [];
   try {
     let selected: Record<string, McpServer> = {};
     const named = Object.entries(servers).filter(([name]) => grants.has(name));
@@ -841,9 +844,15 @@ export async function openMcpServers<T>(
     if (unresolved.size === 0) {
       selected = Object.fromEntries(named);
     } else {
-      for (const [name, server] of named) {
-        if (signal.aborted) break;
-        selected[name] = await server.open({ signal });
+      if (!signal.aborted) {
+        const outcomes = await openTogether(
+          named.map(([, server]) => server),
+          signal,
+          (server, stop) => server.open({ signal: stop }),
+        );
+        const failure = outcomes.find((outcome) => outcome.status === "rejected");
+        if (failure !== undefined) throw failure.reason;
+        selected = Object.fromEntries(named);
       }
       // No other server needs to start for an id a granted server supplies.
       for (const name of toolNames(selected)) unresolved.delete(name);
@@ -862,7 +871,7 @@ export async function openMcpServers<T>(
           // A later server that lists the same id would collide with this one.
           for (const tool of server.tools) unresolved.delete(tool.name);
         } else {
-          await server.close();
+          closing.push(server.close());
         }
       }
       if (signal.aborted) {
@@ -886,7 +895,7 @@ export async function openMcpServers<T>(
   } finally {
     // Closing a server that never opened, or that its run already closed, does nothing; this
     // also covers one stopped between opening and being recorded.
-    for (const server of Object.values(servers)) await server.close();
+    await Promise.all([...closing, ...Object.values(servers).map((server) => server.close())]);
   }
 }
 

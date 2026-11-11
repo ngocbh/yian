@@ -1120,6 +1120,34 @@ export function isMcpServer(value: unknown): value is McpServer {
 }
 
 /**
+ * @internal Open `servers` together with `open`, each under its own stop linked to `signal`, and
+ * return each one's outcome, in order.
+ *
+ * When one fails, the servers after it are stopped, since opened one at a time they would never
+ * have started; the earlier ones finish. So the first failure in order is the one an open one at a
+ * time would report. A server stopped while it opens closes itself, as `open()` does.
+ */
+export async function openTogether<T>(
+  servers: readonly McpServer[],
+  signal: AbortSignal | undefined,
+  open: (server: McpServer, signal: AbortSignal) => Promise<T>,
+): Promise<PromiseSettledResult<T>[]> {
+  const stops = servers.map(() => new AbortController());
+  const earlierFailed = new Error("an MCP server before this one failed to open");
+  return await Promise.allSettled(
+    servers.map(async (server, index) => {
+      const own = stops[index]!.signal;
+      try {
+        return await open(server, signal === undefined ? own : AbortSignal.any([signal, own]));
+      } catch (error) {
+        for (const later of stops.slice(index + 1)) later.abort(earlierFailed);
+        throw error;
+      }
+    }),
+  );
+}
+
+/**
  * Import the MCP SDK client module, and for a stdio server its default environment.
  *
  * @throws {McpSdkMissingError} The SDK is not installed.

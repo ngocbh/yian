@@ -53,6 +53,7 @@ import {
   splitOllamaBaseUrl,
   SUPPORTED_LLM_PROVIDERS,
   validateBaseUrl,
+  validateEndpoint,
 } from "./config.ts";
 import { validateHeaderName, validateOrganization } from "./connection_settings.ts";
 import { OPENAI_API_ENDPOINT, OPENAI_COMPATIBLE, SUBSCRIPTION_ENDPOINT } from "./endpoints.ts";
@@ -577,6 +578,24 @@ export function keyIdentity(key: string): string {
 }
 
 /**
+ * Return the endpoint OpenAI API-key calls go to: a non-empty `OPENAI_BASE_URL`, else
+ * `OPENAI_API_ENDPOINT`.
+ *
+ * @throws {RangeError} `OPENAI_BASE_URL` isn't an allowed endpoint (`validateEndpoint`); the
+ *   message names the variable, never its value.
+ */
+export function openaiEndpoint(env: Env = processEnv): string {
+  const value = env("OPENAI_BASE_URL");
+  if (!value) return OPENAI_API_ENDPOINT;
+  try {
+    return validateEndpoint(value);
+  } catch (error) {
+    if (error instanceof RangeError) throw new RangeError(`Invalid OPENAI_BASE_URL: ${error.message}`);
+    throw error;
+  }
+}
+
+/**
  * Read saved choices and the environment once, without resolving credentials, and return the
  * snapshot.
  *
@@ -596,7 +615,7 @@ export function connectionSnapshot(options: { env?: Env; store?: AuthStore } = {
   const store = options.store ?? new AuthStore(null, { env });
   const state = store.read();
   const envProvider = env("YIAN_DEFAULT_PROVIDER") || null;
-  const apiEndpoint = env("OPENAI_BASE_URL") || OPENAI_API_ENDPOINT;
+  const apiEndpoint = openaiEndpoint(env);
   const provider = (envProvider || state.defaultProvider || "").toLowerCase() || null;
   if (envProvider !== null && !isProvider(provider)) {
     throw new RangeError(
@@ -724,8 +743,14 @@ export function validateConnection(value: unknown, provider: unknown = "openai")
     throw new RangeError("Invalid internal connection method or source");
   }
   if (typeof value["endpoint"] !== "string") throw new RangeError("Invalid internal connection endpoint");
-  if (!isHttpEndpoint(value["endpoint"])) {
-    throw new RangeError("Connection endpoint must be an HTTP URL without credentials, query, or fragment");
+  try {
+    validateEndpoint(value["endpoint"]);
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    throw new RangeError(
+      "Connection endpoint must be an https URL (http only for localhost, 127.0.0.1 and ::1) " +
+        "without credentials, query, or fragment",
+    );
   }
   const identity = value["credential_id"];
   const path = value["store_path"];
@@ -744,24 +769,6 @@ export function validateConnection(value: unknown, provider: unknown = "openai")
     throw new RangeError("Invalid subscription connection routing");
   }
   return structuredClone(value) as unknown as Connection;
-}
-
-/**
- * Whether `text` is an `http`/`https` URL of a host, without credentials, a query or a fragment.
- *
- * The scheme, `//` and a non-empty network location are checked on the text first, as
- * `urlsplit` reads them: `new URL` would also accept `https:host` and `https:///x`, which name no
- * host there.
- */
-function isHttpEndpoint(text: string): boolean {
-  if (!/^https?:\/\/[^/?#]/i.test(text)) return false;
-  let url: URL;
-  try {
-    url = new URL(text);
-  } catch {
-    return false;
-  }
-  return url.hostname !== "" && url.username === "" && url.password === "" && url.search === "" && url.hash === "";
 }
 
 /**
@@ -1168,19 +1175,53 @@ export function legacyConnectionMap(
 }
 
 /**
+ * Check that the saved OpenAI API-key login `selection` was made for `endpoint`, where a call with
+ * its key goes, so a key checked against a gateway is never sent to OpenAI's API, or the reverse.
+ * Endpoints compare by scheme, host, port and path, trailing slashes aside.
+ *
+ * @throws {AuthError} The login was made for another endpoint, or doesn't record one (it was
+ *   saved before logins did).
+ */
+export function checkLoginEndpoint(selection: ProviderSelection, endpoint: string): void {
+  if (selection.endpoint === null) {
+    throw new AuthError(
+      "The saved OpenAI API-key login doesn't record its endpoint; run 'yian auth openai' again and start a new run",
+    );
+  }
+  const key = (url: string) => {
+    try {
+      const { origin, pathname } = new URL(url);
+      return origin + pathname.replace(/\/+$/, "");
+    } catch {
+      return null;
+    }
+  };
+  const saved = key(selection.endpoint);
+  if (saved === null || saved !== key(endpoint)) {
+    throw new AuthError(
+      "The saved OpenAI API-key login was made for another endpoint than this run's OPENAI_BASE_URL " +
+        "(unset is OpenAI's API); set OPENAI_BASE_URL to the endpoint 'yian auth' lists for it, or run " +
+        "'yian auth openai' again, and start a new run",
+    );
+  }
+}
+
+/**
  * Resolve fresh credentials while enforcing the recorded connection identity.
  *
  * A `store` connection resolves the saved login it was pinned to, so a later login or removal
- * fails instead of switching accounts; an API key comes with the header values saved beside it.
+ * fails instead of switching accounts; an API key comes with the header values saved beside it,
+ * and an OpenAI one only for the endpoint its login was made for (`checkLoginEndpoint`).
  * `refresh` renews an expiring OpenAI subscription and defaults to `OpenAIAuth`'s; other providers
  * get none. OpenAI also resolves its environment key, checking that it is the recorded one. Another
  * provider's `environment` connection resolves nothing here: its client reads the key variable
  * itself. `provider` is the provider of the config that carries `connection`; `signal` and
  * `scheduler` go to the store and the default refresh.
  *
- * Rejects with `AuthError` if the pinned login changed, was removed, or cannot be read, or an
- * OpenAI key is missing or changed; with `RangeError` if the metadata is invalid for `provider`,
- * or it is a non-OpenAI `environment` connection.
+ * Rejects with `AuthError` if the pinned login changed, was removed, or cannot be read, a saved
+ * OpenAI key's login was made for another endpoint, or an OpenAI key is missing or changed; with
+ * `RangeError` if the metadata is invalid for `provider`, or it is a non-OpenAI `environment`
+ * connection.
  */
 export async function connectionCredentials(
   connection: unknown,
@@ -1196,6 +1237,7 @@ export async function connectionCredentials(
   const checked = validateConnection(connection, provider);
   if (checked.source === "store") {
     let credentials: Credentials;
+    let login: ProviderSelection | null = null;
     try {
       // `validateConnection` requires a saved login's credential id and absolute store path.
       const store = new AuthStore(checked.store_path, { env, signal, scheduler });
@@ -1205,6 +1247,11 @@ export async function connectionCredentials(
             ? (refresh ?? ((current) => new OpenAIAuth({ signal, scheduler }).refresh(current)))
             : undefined,
       });
+      if (provider === "openai" && checked.method === "api_key") {
+        // The pinned login's endpoint never changes; a login saved since is another one.
+        login = store.selection(provider);
+        if (login?.credentialId !== checked.credential_id) throw new AuthError("The saved connection changed");
+      }
     } catch (error) {
       // A storage error names the file and its fix; logging in again would read the same file.
       if (error instanceof AuthError && !(error instanceof StorageError)) {
@@ -1218,6 +1265,8 @@ export async function connectionCredentials(
     if (credentials.method !== checked.method) {
       throw new AuthError(`The saved connection method changed; run 'yian auth ${provider}' and start a new run`);
     }
+    // `validateConnection` requires an OpenAI connection's endpoint.
+    if (login !== null) checkLoginEndpoint(login, checked.endpoint!);
     return credentials;
   }
   if (provider !== "openai") throw new RangeError(`An environment connection for ${provider} is read by its client`);

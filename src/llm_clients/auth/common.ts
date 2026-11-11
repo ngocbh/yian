@@ -4,7 +4,7 @@ import { current } from "../../defaults.ts";
 import { compareCodeUnits } from "../../diagnostics.ts";
 import { isRecord } from "../../typesys/index.ts";
 import { OPTIONAL_API_KEY_PROVIDERS, PROVIDER_API_KEY_ENV } from "../api_key_env.ts";
-import { validateBaseUrl } from "../config.ts";
+import { validateBaseUrl, validateEndpoint } from "../config.ts";
 import { validateHeaderName, validateHeaders, validateOrganization } from "../connection_settings.ts";
 
 /**
@@ -233,8 +233,9 @@ function isLoginMethod(value: unknown): value is LoginMethod {
  * The nonsecret provider choice that a run may pin to one connection.
  *
  * `method` is `"none"` for a provider saved without a credential, such as a local server.
- * `endpoint` is the provider's base URL when it needs one, such as an Azure resource, and `null`
- * otherwise. `organization` and `project` are the OpenAI ids an `openai` API-key login sends.
+ * `endpoint` is the provider's base URL when it needs one: an Azure resource, or the endpoint an
+ * OpenAI API-key login was made for (`null` on one saved before logins recorded it); otherwise
+ * `null`. `organization` and `project` are the OpenAI ids an `openai` API-key login sends.
  * `headerNames` names, sorted, the extra headers its API-key credential sends; their values stay
  * with the credential. Throws `AuthError` if a field is invalid.
  */
@@ -321,23 +322,26 @@ const KEYLESS_LOGINS: ReadonlySet<string> = new Set([
  * Whether a supported provider's login is a kind it can use.
  *
  * It isn't if a provider that needs a key (per `api_key_env.ts`) has no credential; a provider
- * other than OpenAI has a subscription; a provider other than Azure has an endpoint; Azure has no
- * valid endpoint; or Ollama has a key.
+ * other than OpenAI has a subscription; a login other than Azure's or an OpenAI API key's has an
+ * endpoint; Azure has no valid endpoint; an OpenAI API key's endpoint is invalid
+ * (`validateEndpoint`); or Ollama has a key. An OpenAI API key without an endpoint is usable here;
+ * its calls refuse it (`checkLoginEndpoint`).
  */
 export function isUsableLogin(selection: ProviderSelection): boolean {
   const { provider, method, endpoint } = selection;
+  const openaiKey = provider === "openai" && method === "api_key";
   if (
     (method === "none" && !KEYLESS_LOGINS.has(provider)) ||
     (provider !== "openai" && method === "subscription") ||
-    (provider !== "azure" && endpoint !== null) ||
+    (provider !== "azure" && !openaiKey && endpoint !== null) ||
     (provider === "azure" && endpoint === null) ||
     (provider === "ollama" && method !== "none")
   ) {
     return false;
   }
-  if (provider !== "azure") return true;
+  if (provider !== "azure" && (!openaiKey || endpoint === null)) return true;
   try {
-    validateBaseUrl(endpoint);
+    (openaiKey ? validateEndpoint : validateBaseUrl)(endpoint);
   } catch (error) {
     if (!(error instanceof RangeError)) throw error;
     return false;

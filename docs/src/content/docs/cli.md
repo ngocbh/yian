@@ -487,7 +487,9 @@ Setup changes nothing until sign-in and a check of the model succeed. The first 
 becomes the default. Listing never prints a secret. Off a terminal, give every value the setup
 would ask for.
 
-An OpenAI API key is checked against `OPENAI_BASE_URL` when it is set.
+An OpenAI API key is checked against `OPENAI_BASE_URL` when it is set, and saved with that
+endpoint (OpenAI's API when it is unset). A run whose `OPENAI_BASE_URL` names another endpoint is
+refused, so the key goes only where it was checked.
 
 ## yian providers
 

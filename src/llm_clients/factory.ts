@@ -52,6 +52,7 @@ import {
   connectionCredentials,
   type ConnectionSnapshot,
   keyIdentity,
+  openaiEndpoint,
   resolveModelConfig,
 } from "./connection.ts";
 import { openaiIdHeaders } from "./connection_settings.ts";
@@ -60,7 +61,6 @@ import {
   ANTHROPIC_VERSION,
   GOOGLE_ENDPOINT,
   OLLAMA_ENDPOINT,
-  OPENAI_API_ENDPOINT,
   prefersResponses,
   PROVIDER_BASE_URL,
 } from "./endpoints.ts";
@@ -191,12 +191,13 @@ function missingKey(provider: string, variables: readonly string[]): RangeError 
 }
 
 /**
- * Return the endpoint an OpenAI API-key call goes to: the resolved one, else a non-empty
- * `OPENAI_BASE_URL`, else `OPENAI_API_ENDPOINT`.
+ * Return the endpoint an OpenAI API-key call goes to: the resolved one, else `openaiEndpoint`'s.
+ *
+ * @throws {RangeError} `OPENAI_BASE_URL` is read and isn't an allowed endpoint.
  */
 function openaiBaseUrl(resolved: Resolved, env: Env): string {
   // Only a host key on a pinned subscription connection has no endpoint.
-  return resolved.baseUrl ?? (env("OPENAI_BASE_URL") || OPENAI_API_ENDPOINT);
+  return resolved.baseUrl ?? openaiEndpoint(env);
 }
 
 /**

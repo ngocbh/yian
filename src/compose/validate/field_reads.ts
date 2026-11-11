@@ -45,6 +45,7 @@ import {
   fileFieldType,
   joinedType,
   Type,
+  TypeCheckError,
   typeEquals,
   unionField,
   unionTagFields,
@@ -61,6 +62,7 @@ import {
   literalsInContext,
   literalText,
   NotNullCheck,
+  proves,
   sameGuard,
   TagCheck,
   unknownCheck,
@@ -71,6 +73,7 @@ import {
   candidateEnvs,
   type Env,
   factType,
+  guardEnv,
   guardedReadTypes,
   ImpossibleCheck,
   impossibleCheckMessage,
@@ -188,7 +191,7 @@ function nullableReads(
   registry: TypeRegistry,
   typeFn: TypeFn | null = null,
 ): [string, FieldReadError][] {
-  const roots = withVariables(tree, siteRoots, typeFn);
+  const roots = withVariables(tree, siteRoots, typeFn, registry);
   const messages: [string, FieldReadError][] = [];
   const operands = arithmeticOperands(tree);
   // What `checkedRefs` gives under each root's alternative, index-aligned with `guardedReads`.
@@ -464,36 +467,70 @@ function isVariableKey(name: string): boolean {
 /**
  * Return each comprehension variable of `tree` by key, with the element type of its iterable
  * (`elementType`), or `null` when untyped. `refType` types a reference path; a variable in scope
- * types an iterable that reads it.
+ * types an iterable that reads it, as narrowed by the comprehension's `if`s before it.
  */
 function variableTypes(
   tree: ExprNode,
   refType: (path: string) => Type | null,
   typeFn: TypeFn | null,
+  registry: TypeRegistry,
 ): Map<string, Type | null> {
   const types = new Map<string, Type | null>();
-  const visit = (node: ExprNode, scope: ReadonlyMap<string, Type | null>): void => {
+  const visit = (node: ExprNode, scope: ReadonlyMap<string, Type | null>, keys: ReadonlyMap<string, string>): void => {
     if (!(node instanceof Tree)) return;
     if (node.data !== "list_comp") {
-      for (const child of node.children) visit(child, scope);
+      for (const child of node.children) visit(child, scope, keys);
       return;
     }
     const local = new Map(scope);
+    const localKeys = new Map(keys);
     for (const clause of node.children.slice(1) as Tree[]) {
       if (clause.data === "comp_if") {
-        visit(clause.children[0]!, local);
+        visit(clause.children[0]!, local, localKeys);
+        narrowByIf(clause.children[0]!, local, localKeys, registry);
         continue;
       }
       const [target, iterable] = clause.children as [Token, ExprNode];
-      visit(iterable, local);
+      visit(iterable, local, localKeys);
       const typ = elementType(inferExprType(iterable, refType, typeFn, local));
       types.set(bindingKey(target), typ);
       local.set(target.value, typ);
+      localKeys.set(target.value, bindingKey(target));
     }
-    visit(node.children[0]!, local);
+    visit(node.children[0]!, local, localKeys);
   };
-  visit(tree, new Map());
+  visit(tree, new Map(), new Map());
   return types;
+}
+
+/**
+ * Narrow each variable in `local` (keyed by name; `keys` gives each one's binding key) to what a
+ * comprehension's `if` proves of it when true, so the clauses after the `if` read it narrowed.
+ */
+function narrowByIf(
+  condition: ExprNode,
+  local: Map<string, Type | null>,
+  keys: ReadonlyMap<string, string>,
+  registry: TypeRegistry,
+): void {
+  const names = new Map([...keys].map(([name, key]) => [key, name]));
+  const baseTypeOf: BaseTypeOf = (base) => {
+    const name = names.get(base);
+    return name === undefined ? NOT_NARROWABLE : (local.get(name) ?? null);
+  };
+  let env: Env;
+  try {
+    env = guardEnv(proves(condition, true), baseTypeOf, registry);
+  } catch (error) {
+    // An `isinstance` type that doesn't resolve: the type-table pass reports it.
+    if (error instanceof TypeCheckError) return;
+    throw error;
+  }
+  for (const [base, fact] of env) {
+    const name = names.get(base);
+    const typ = name === undefined ? null : factType(fact);
+    if (typ !== null) local.set(name!, typ);
+  }
 }
 
 /**
@@ -523,8 +560,8 @@ function siteRefType(
  * one's contract is its element type under the site's (narrowed) contracts, and it is untyped when
  * the element type under the un-narrowed ones is.
  */
-function withVariables(tree: ExprNode, roots: ReadRoots, typeFn: TypeFn | null): ReadRoots {
-  const narrowed = variableTypes(tree, siteRefType(roots, (root) => roots.contracts(root)), typeFn);
+function withVariables(tree: ExprNode, roots: ReadRoots, typeFn: TypeFn | null, registry: TypeRegistry): ReadRoots {
+  const narrowed = variableTypes(tree, siteRefType(roots, (root) => roots.contracts(root)), typeFn, registry);
   if (narrowed.size === 0) return roots;
   const base = variableTypes(
     tree,
@@ -533,6 +570,7 @@ function withVariables(tree: ExprNode, roots: ReadRoots, typeFn: TypeFn | null):
       return contract === undefined ? undefined : [contract];
     }),
     typeFn,
+    registry,
   );
   const contractOf = (typ: Type | null | undefined) => (typ ? new ValueContract(typ) : null);
   return {
@@ -576,7 +614,7 @@ export function variableNameErrors(
   registry: TypeRegistry,
   typeFn: TypeFn | null = null,
 ): string[] {
-  const types = variableTypes(tree, siteRefType(roots, (root) => roots.contracts(root)), typeFn);
+  const types = variableTypes(tree, siteRefType(roots, (root) => roots.contracts(root)), typeFn, registry);
   if (types.size === 0) return [];
   // An untyped variable walks as `Any`, which accepts every field until a check narrows it.
   const any = new ValueContract(Type.scalar(ValueKind.ANY));

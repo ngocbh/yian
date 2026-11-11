@@ -914,8 +914,12 @@ function variableFlow(binding: string): string {
     "  Msg: {role: str, text: str, opt: Optional(Inner)}\n" +
     "  Inner: {x: str}\n" +
     "  T: {f: Optional(str)}\n" +
+    "  A: {kind: Literal(a), items: list(Inner)}\n" +
+    "  B: {kind: Literal(b), n: int}\n" +
+    "  AB: Union(A, B)\n" +
     "input:\n" +
     "  ms: !list(Msg)\n" +
+    "  abl: !list(AB)\n" +
     "  maybe: !list(Optional(Msg))\n" +
     "  one: !Optional(Inner)\n" +
     "  hist: !list(Message)\n" +
@@ -942,6 +946,8 @@ test.each([
   ["${[input.one.x for m in input.ms if input.one != null]}"],
   [`'\${[p.text for m in input.hist for p in m.parts if p.type == "text"]}'`],
   ["${[m.text for m in (input.om :- [])]}"],
+  [`'\${[p.x for a in input.abl if a.kind == "a" for p in a.items]}'`],
+  ["${[p.x for a in mk.output if isinstance(a, A) for p in a.items]}"],
 ])("a read through a comprehension variable loads: %s", (binding) => {
   expect(() => load(variableFlow(binding))).not.toThrow();
 });
@@ -954,6 +960,9 @@ test.each([
   ["${[p.text for m in input.hist for p in m.parts]}", "compose.load", "reference ${p.text} reads field 'text'"],
   ["${[m.k for m in (input.om :- [])]}", "compose.load", "reference ${m.k} reads unknown field 'k' on record"],
   ["${[p.f for p in mk.output if isinstance(p, T)]}", NULLABLE_FIELD_READ, "only narrowed to T; write p?.f"],
+  // An earlier `if` narrows the variable a later iterable reads.
+  [`'\${[p.zz for a in input.abl if a.kind == "a" for p in a.items]}'`, "compose.load", "reference ${p.zz} reads unknown field 'zz' on record"],
+  ["${[p.zz for a in mk.output if isinstance(a, A) for p in a.items]}", "compose.load", "reference ${p.zz} reads unknown field 'zz' on record"],
 ])("a read through a comprehension variable is checked: %s", (binding, code, message) => {
   const error = loadError(() => load(variableFlow(binding)));
   expect(error.message).toStartWith("node 'use' input 'v': ");

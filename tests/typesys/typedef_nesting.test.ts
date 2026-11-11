@@ -249,6 +249,13 @@ describe("types at the limit", () => {
     expect(await loadedLevels(diamond(12), "D11")).toBe(12);
   });
 
+  test("a flow with a diamond of 30 typedefs loads quickly", async () => {
+    // Resolving each typedef once keeps this linear; resolving every path takes 2^30 steps.
+    const start = performance.now();
+    expect(await loadedLevels(diamond(30), "D29")).toBe(30);
+    expect(performance.now() - start).toBeLessThan(2000);
+  });
+
   test("an empty record and an enum load", () => {
     readTypedefs({ E: {}, V: "Literal(a)" });
   });

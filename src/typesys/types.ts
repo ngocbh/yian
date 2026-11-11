@@ -974,7 +974,10 @@ export interface MemoryDef {
 /** One typedef of a flow, or a host memory type. */
 export type TypeDef = RecordDef | VariantDef | AliasDef | MemoryDef;
 
-/** A flow's typedefs by name, which a `RefExpr` resolves against. */
+/**
+ * A flow's typedefs by name, which a `RefExpr` resolves against. It is never changed once built,
+ * since `resolveType` keeps the types its names resolved to.
+ */
 export type TypeRegistry = ReadonlyMap<string, TypeDef>;
 
 /** A record typedef from its field type texts. */
@@ -1146,7 +1149,32 @@ export function resolveType(
     throw new TypeCheckError(`unknown type ${reprText(name)}`);
   }
   if (defn.kind === "memory") return memoryType(name, null);
-  const inner = new Set([...seen, name]);
+  let resolved = resolvedNames.get(registry);
+  const known = resolved?.get(name);
+  if (known !== undefined) return known;
+  const typ = resolveName(defn, registry, new Set([...seen, name]));
+  if (resolved === undefined) {
+    resolved = new Map();
+    resolvedNames.set(registry, resolved);
+  }
+  resolved.set(name, typ);
+  return typ;
+}
+
+/**
+ * The types each registry's names resolved to, so a typedef named on many paths (a diamond of
+ * records each naming the next twice) is expanded once, not once per path. Only a success is
+ * kept: a name that resolved once never meets a cycle on another path, since every name on that
+ * path leads to it, so a cycle back to one would have failed it the first time.
+ */
+const resolvedNames = new WeakMap<TypeRegistry, Map<string, Type>>();
+
+/** Resolve a registry name's alias, enum or record `defn`, with the names `inner` on its path. */
+function resolveName(
+  defn: RecordDef | VariantDef | AliasDef,
+  registry: TypeRegistry,
+  inner: ReadonlySet<string>,
+): Type {
   if (defn.kind === "alias") return resolveType(defn.target, registry, inner);
   if (defn.kind === "variant") {
     return new Type({ kind: ValueKind.STRING, tags: new Set(defn.tags) });

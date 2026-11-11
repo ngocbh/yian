@@ -40,6 +40,7 @@ export interface Writer {
   write(text: string): Promise<void>;
   readonly isTTY?: boolean;
   readonly columns?: number;
+  readonly rows?: number;
 }
 
 /**
@@ -120,7 +121,9 @@ function isClosedPipe(error: Error): boolean {
  * A write to a closed pipe (`yian check --json | head`) resolves quietly; another write error
  * rejects.
  */
-export function streamWriter(stream: NodeJS.WritableStream & { isTTY?: boolean; columns?: number }): Writer {
+export function streamWriter(
+  stream: NodeJS.WritableStream & { isTTY?: boolean; columns?: number; rows?: number },
+): Writer {
   if (!quieted.has(stream)) {
     quieted.add(stream);
     // A failed write also emits `error`, which would end the process unheard; the write's
@@ -140,6 +143,9 @@ export function streamWriter(stream: NodeJS.WritableStream & { isTTY?: boolean; 
     },
     get columns() {
       return stream.columns;
+    },
+    get rows() {
+      return stream.rows;
     },
   };
   return writer;

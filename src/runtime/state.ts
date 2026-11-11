@@ -65,6 +65,7 @@ import { eventBytes, type JsonObject, type JsonValue, logJson } from "../typesys
 import { messagesKey, NEW_MESSAGES, VariablePool } from "../typesys/pool.ts";
 import { newMessagesType } from "../typesys/types.ts";
 import {
+  fromHost,
   isInboxType,
   isMemoryType,
   isRecord,
@@ -75,6 +76,7 @@ import {
   Type,
   TypeCheckError,
   TypedValue,
+  type Value,
   ValueKind,
   type ValueRecord,
   writeAsText,
@@ -1170,13 +1172,14 @@ export function prepareInitialCommit(state: RunState, key: string, value: unknow
  *
  * @param state The run's state.
  * @param inbox The name of one of the START's `Inbox(T)` params.
- * @param event The value, checked against `T`.
+ * @param event The host value, taken as `fromHost` takes it (a whole number is an int), then
+ *   checked against `T`.
  * @returns The canonical `PoolCommitRecord` and its plan, with no observers.
  * @throws TypeError when `state` or `inbox` has the wrong type.
  * @throws DeliveryRefused, in this order: `ended` once the run has a terminal result;
  *   `not_started` before its run start is complete; `unknown_inbox` when the START declares no
- *   such inbox; `inbox_closed` once it is closed; `invalid_value` when `event` fails `T` (the
- *   `TypeCheckError` is the cause); `too_large` when its run-log JSON is over the run's
+ *   such inbox; `inbox_closed` once it is closed; `invalid_value` when `event` isn't a host value
+ *   or fails `T` (the `TypeCheckError` is the cause); `too_large` when its run-log JSON is over the run's
  *   `MAX_EVENT_BYTES`.
  */
 export function prepareSend(state: RunState, inbox: string, event: unknown): PreparedTransition {
@@ -1187,9 +1190,17 @@ export function prepareSend(state: RunState, inbox: string, event: unknown): Pre
   if (state.waits.inboxes.get(inbox)?.closed === true) {
     throw new DeliveryRefused("inbox_closed", `inbox ${reprText(inbox)} is closed`);
   }
+  let value: Value;
+  try {
+    // The host intake every host call shares: a whole JS number is an int, whatever the slot.
+    value = fromHost(event, "the event");
+  } catch (error) {
+    if (!(error instanceof TypeCheckError)) throw error;
+    throw new DeliveryRefused("invalid_value", `inbox ${reprText(inbox)} refuses ${error.message}`, { cause: error });
+  }
   let wire: TypedWire;
   try {
-    [wire] = canonicalTyped(event, element);
+    [wire] = canonicalTyped(value, element);
   } catch (error) {
     if (!(error instanceof TypeCheckError)) throw error;
     const at = error.path.length > 0 ? ` at ${renderValuePath(error.path)}` : "";

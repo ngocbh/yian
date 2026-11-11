@@ -178,7 +178,30 @@ describe("sends", () => {
     const inner = refused(run.state, run.log, () => prepareSend(run.state, "lists", [1n, "x"]));
     expect(inner.message).toBe("inbox 'lists' refuses the event at [1]: list element \"x\" is not int (declared list(int))");
     const root = refused(run.state, run.log, () => prepareSend(run.state, "msgs", 3));
-    expect(root.message).toBe("inbox 'msgs' refuses the event: 3.0 does not match declared type str");
+    expect(root.message).toBe("inbox 'msgs' refuses the event: 3 does not match declared type str");
+  });
+
+  test("an event is taken as a host value: a whole JS number is an int, in a record too", () => {
+    const ints = new Parameter("ints", { contract: new ValueContract(inboxType(Type.scalar(ValueKind.INTEGER))) });
+    const note = new Type({
+      kind: ValueKind.OBJECT,
+      fields: new Map([["n", Type.scalar(ValueKind.INTEGER)]]),
+      required: new Set(["n"]),
+    });
+    const notes = new Parameter("notes", { contract: new ValueContract(inboxType(note)) });
+    const run = started(paramFlow([MSGS, ints, notes], tool("heard", "take")));
+    const one = send(run.log, run.state, 1, "ints");
+    expect(logJson(run.state.inboxEvents.get(one)!.toWire())).toBe(logJson({ kind: "int", value: 1n }));
+    const record = send(run.log, run.state, { n: 1 }, "notes");
+    expect(run.state.inboxEvents.get(record)!.value).toEqual({ n: 1n });
+    const half = refused(run.state, run.log, () => prepareSend(run.state, "ints", 2.5));
+    expect(half.reason).toBe("invalid_value");
+    const missing = refused(run.state, run.log, () => prepareSend(run.state, "ints", undefined));
+    expect(missing.reason).toBe("invalid_value");
+    expect(missing.cause).toBeInstanceOf(TypeCheckError);
+    expect(missing.message).toBe("inbox 'ints' refuses the event: undefined is not a yian value; use null");
+    const hole = refused(run.state, run.log, () => prepareSend(run.state, "notes", { n: Number.NaN }));
+    expect(hole.message).toBe("inbox 'notes' refuses the event at n: NaN is not a yian value");
   });
 
   test("the size cap is the run's MAX_EVENT_BYTES over the value's run-log JSON", () => {

@@ -134,6 +134,31 @@ test("advance while another writer holds the lock is RunBusyError with the lock 
   }
 });
 
+test("send takes a whole JS number for an Inbox(int), and a take reads it as an int", async () => {
+  const flow = await yian.loadFlow(`
+id: f
+name: f
+input:
+  box: !Inbox(int)
+nodes:
+  heard:
+    kind: tool
+    tool_id: take
+    input:
+      from: \${input.box}
+      take: all
+output: \${heard.output.events}
+`);
+  const log = freshLog();
+  expect((await runFlow(flow, {}, { log, env })).status).toBe("waiting");
+  expect(typeof (await send(log, "box", 1, { env }))).toBe("number");
+  const half = (await rejected(send(log, "box", 2.5, { env }))) as DeliveryRefused;
+  expect([half.constructor, half.reason]).toEqual([DeliveryRefused, "invalid_value"]);
+  await close(log, "box", { env });
+  const done = await advance({ log, env });
+  expect([done.status, done.output]).toEqual(["succeeded", [1n]]);
+});
+
 /** Expect `call` to reject with `DeliveryRefused` for `reason` and leave the file at `log` unchanged; return the error. */
 async function refusedWith(log: string, call: () => Promise<unknown>, reason: DeliveryRefusal): Promise<DeliveryRefused> {
   const before = readFileSync(log);

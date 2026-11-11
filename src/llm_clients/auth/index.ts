@@ -29,4 +29,4 @@ export {
   ProviderSelection,
 } from "./common.ts";
 export { type AuthRequest, type AuthRequestOptions, OpenAIAuth } from "./openai.ts";
-export { AuthStore, type AuthStoreOptions } from "./store.ts";
+export { AuthStore, type AuthStoreOptions, isStorageError } from "./store.ts";

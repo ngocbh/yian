@@ -18,6 +18,7 @@ import {
   ToolCallStarted,
 } from "../../src/events.ts";
 import { AuthError } from "../../src/llm_clients/auth/common.ts";
+import { StorageError } from "../../src/llm_clients/auth/store.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { ERROR_KINDS, type ErrorKind, ProviderError } from "../../src/llm/errors.ts";
 import { Finish, TextDelta, UsageReport } from "../../src/llm/events.ts";
@@ -148,6 +149,22 @@ test("refused credentials are reported by name and coded provider.auth", async (
   await callModel(live, model(error), REQUEST, { purpose: "chat" }).catch(() => {});
   expect((events.at(-1) as ModelCallFinished).error).toBe("ProviderError");
   expect(modelFailureCode(error)).toBe("provider.auth");
+});
+
+test("an auth-store fault is coded provider.auth_storage, a sign-in fault provider.auth", async () => {
+  const storage = new StorageError("Credential storage at /tmp/x/auth.json must be private to its owner");
+  await callModel(null, model(storage), REQUEST, { purpose: "chat" }).catch(() => {});
+  expect(modelFailureCode(storage)).toBe("provider.auth_storage");
+  expect(storage.name).toBe("AuthError");
+  const signIn = new AuthError("Subscription credentials expired; sign in again");
+  await callModel(null, model(signIn), REQUEST, { purpose: "chat" }).catch(() => {});
+  expect(modelFailureCode(signIn)).toBe("provider.auth");
+});
+
+test("a failed model_call step records an auth-store fault as StorageError", async () => {
+  const storage = new StorageError("Credential storage at /tmp/x/auth.json must be private to its owner");
+  const { log } = await withSteps(model(storage));
+  expect(stepsOf(log)[0]!["error"]).toEqual({ kind: "StorageError", message: storage.message });
 });
 
 test("a call without sinks still marks its error", async () => {

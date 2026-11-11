@@ -152,6 +152,7 @@ Use parentheses to group. Comparisons don't chain: write `0 < x and x < 10`, not
 - Two ints give an exact int, however large: `${2 ** 100}` is
   `1267650600228229401496703205376`.
 - `/` always gives a float: `${7 / 2}` is `3.5`, and `${4 / 2}` is a float too.
+- Put spaces around `/` between names: `n/2` reads as one name, a load error that shows `n / 2`.
 - `%` takes the sign of the left side: `${-7 % 3}` is `-1`.
 - A float on either side gives a float: `${1 + 1.5}` is `2.5`.
 - `+` joins two texts (`${"a" + "b"}`) or two lists (`${xs + [item]}`).

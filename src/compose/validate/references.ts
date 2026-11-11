@@ -38,7 +38,7 @@
 
 import { classifyPath } from "../../compile/validation.ts";
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
-import { callSuffixOf, type ExprNode, iterSubtreesTopdown, Tree } from "../../expr/grammar.ts";
+import { callSuffixOf, type ExprNode, iterSubtreesTopdown, slashedNameHint, Tree } from "../../expr/grammar.ts";
 import {
   checkTemplateCalls,
   ExpressionError,
@@ -706,7 +706,7 @@ export function validateReferences(
           PROMPT_FORBIDDEN_HEADS.has(head) || validTargets.has(head)
             ? ` (a pool ref belongs in an input \`from:\`, not ${site.hintTail})`
             : "";
-        errors.push([`${where}: \${${ref}} is not a declared ${site.noun}${hint}`, rng]);
+        errors.push([`${where}: \${${ref}} is not a declared ${site.noun}${hint}${slashedNameHint(head)}`, rng]);
         continue;
       }
       const path = ref.trim();

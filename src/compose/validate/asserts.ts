@@ -50,7 +50,7 @@
 
 import { classifyPath } from "../../compile/validation.ts";
 import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
-import type { ExprNode } from "../../expr/grammar.ts";
+import { type ExprNode, slashedNameHint } from "../../expr/grammar.ts";
 import {
   ExpressionError,
   exprRefs,
@@ -621,7 +621,8 @@ export function validateNodeAsserts(
           ]);
         } else {
           errors.push([
-            `node ${reprText(nid)} assert: \${${ref}} is not a declared input or \`\${output}\``,
+            `node ${reprText(nid)} assert: \${${ref}} is not a declared input or \`\${output}\`` +
+              slashedNameHint(head),
             errorRange,
           ]);
         }

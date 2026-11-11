@@ -15,11 +15,12 @@
  * `FlowValidationError` is the shared structural-error type the compose loader catches and
  * rethrows as a located `LoadError`.
  *
- * Knows about:   compile/model (the boundary ids), diagnostics and typesys.
+ * Knows about:   compile/model (the boundary ids), diagnostics, expr (`slashedNameHint`) and typesys.
  * Never imports: compose, runtime, the run boundary, the CLI, or provider SDKs.
  */
 
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
+import { slashedNameHint } from "../expr/grammar.ts";
 import { messagesKey, NEW_MESSAGES } from "../typesys/pool.ts";
 import {
   type Bound,
@@ -498,6 +499,7 @@ function relateFields(inferred: Type, declared: Type): TypeRelation {
  * - `extraHeads` is a per-call set of body-local scopes (e.g. MAP's `${item}`).
  * - Legacy `${inputs.X}` / `${outputs.X}` return the retired-plural-head typo hint ("did you
  *   mean `input` / `<node>.output`?").
+ * - An unknown head holding `/` or `#` names no node, so it gets the spaced division as its fix.
  */
 export function classifyPath(
   path: string,
@@ -559,5 +561,5 @@ export function classifyPath(
     }
     return null;
   }
-  return `${ref} uses unknown namespace ${reprText(head)}`;
+  return `${ref} uses unknown namespace ${reprText(head)}${slashedNameHint(head)}`;
 }

@@ -21,7 +21,7 @@
  */
 
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
-import type { ExprNode } from "../../expr/grammar.ts";
+import { type ExprNode, slashedNameHint } from "../../expr/grammar.ts";
 import { evaluateWhenRecord } from "../../expr/expressions.ts";
 import { ExpressionError, exprRefs, parseCondition } from "../../expr/index.ts";
 import {
@@ -357,7 +357,7 @@ export class LoopDescriptor extends NodeDescriptor {
       if (unknown.length > 0) {
         errors.push(
           `${subject}: \`${key}:\` references unknown name(s) ${namesText(unknown)} — the predicate reads ` +
-            `the carried record ${carriedText}`,
+            `the carried record ${carriedText}${unknown.map(slashedNameHint).find((hint) => hint !== "") ?? ""}`,
         );
       }
       const inboxHeads = [...heads].filter((head) => carriedOnly.has(head)).toSorted(compareCodeUnits);

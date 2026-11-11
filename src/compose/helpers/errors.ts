@@ -1,11 +1,12 @@
 /**
  * Canonical, source-owned diagnostics for Compose load failures, and the helpers the validate
  * passes share to build them: `locatedError` points an error at a binding's origin,
- * `rejectRemovedMemoryKey` refuses a removed memory key with its fix, and `shownLiteral` writes a
- * value the way messages show it.
+ * `rejectReservedName` refuses an authored name starting with `__`, `rejectRemovedMemoryKey`
+ * refuses a removed memory key with its fix, and `shownLiteral` writes a value the way messages
+ * show it.
  */
 
-import { Diagnostic, DiagnosticFrame, type OriginRef, type SourceRange } from "../../diagnostics.ts";
+import { Diagnostic, DiagnosticFrame, type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
 import { type Value, valueRepr, writeAsJson } from "../../typesys/values.ts";
 import type { SourceCursor, SourceDocument } from "../source/index.ts";
 import { oneLineSlice } from "./source.ts";
@@ -168,6 +169,30 @@ export class LoadError extends RangeError {
     super(diagnostic.message, cause === undefined ? undefined : { cause });
     this.diagnostic = diagnostic;
     Object.freeze(this);
+  }
+}
+
+/**
+ * Reject an authored name that starts with `__`. yian generates such names (a node's reserved
+ * wiring keys, synthesized nodes and END inputs), so an author's could collide with one.
+ *
+ * @param what What the name is, for the message, such as `node id` or `node 'a' input`.
+ * @param name The authored name.
+ * @param range Where the error points.
+ * @param diagnostics Factory for located load errors.
+ * @throws LoadError when `name` starts with `__`.
+ */
+export function rejectReservedName(
+  what: string,
+  name: string,
+  range: SourceRange | null,
+  diagnostics: LoadDiagnostics,
+): void {
+  if (name.startsWith("__")) {
+    throw diagnostics.error(
+      `${what} ${reprText(name)} starts with '__', which yian keeps for the names it generates; rename it`,
+      { range },
+    );
   }
 }
 

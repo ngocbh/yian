@@ -3,7 +3,7 @@ flow: "id: x\nname: x\nnodes: [\n"
 expect:
   load:
     diagnostics:
-      # The message is the YAML parser's text. The range is the end of the stream, where
-      # the parser finds the sequence still open.
+      # The message is the YAML parser's text. The parser finds the sequence still open at the
+      # end of the stream; the range is its opening bracket.
       - code: compose.load
-        frames: [{label: flow.yaml, range: [4, 1, 4, 2]}]
+        frames: [{label: flow.yaml, range: [3, 8, 3, 9]}]

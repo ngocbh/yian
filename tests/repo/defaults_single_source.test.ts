@@ -41,6 +41,8 @@ const ALLOWED: Record<string, string> = {
   "memory/vectordb.ts: SQLITE_NOTADB": "SQLite result code",
   "runtime/run_index.ts: busyOr.??": "no SQLite result code, which matches no primary code",
   "compile/validation.ts: RELATION_RANK": "ordering of type relations",
+  "compose/validate/skips.ts: TARGET": "a bit of a position's search flags",
+  "compose/validate/skips.ts: BRANCHING": "a bit of a position's search flags",
   "expr/grammar.ts: LEVEL": "operator precedence levels",
   "tools/mcp.ts: INVALID_REQUEST": "JSON-RPC error code",
   "cli/index.ts: LIFELINE_FD": "the run --json child's descriptor whose end means its parent died",

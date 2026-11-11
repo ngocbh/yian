@@ -11,6 +11,7 @@ import {
   buildValue,
   buildValueAs,
   FileRef,
+  fromHost,
   type StorageKind,
   Type,
   TypeCheckError,
@@ -168,14 +169,26 @@ describe("inference", () => {
       "text holding a lone surrogate is not a yian value",
       ["a"],
     ],
-    ["a Date in a record", { a: new Date(0) }, "<Date object> is not a JSON value", ["a"]],
-    ["a Map in a list", [new Map()], "<Map object> is not a JSON value", [0]],
-    ["a class instance in a record", { a: new Foo() }, "<Foo object> is not a JSON value", ["a"]],
-    ["undefined in a record", { a: undefined }, "undefined is not a JSON value", ["a"]],
-    ["a hole in a list", [1n, , 2n], "undefined is not a JSON value", [1]],
-    ["a symbol in a list", [Symbol("s")], "<symbol object> is not a JSON value", [0]],
+    ["a Date in a record", { a: new Date(0) }, "Date is not a yian value", ["a"]],
+    ["a Map in a list", [new Map()], "Map is not a yian value", [0]],
+    ["a class instance in a record", { a: new Foo() }, "Foo is not a yian value", ["a"]],
+    ["undefined in a record", { a: undefined }, "undefined is not a yian value; use null", ["a"]],
+    ["a hole in a list", [1n, , 2n], "undefined is not a yian value; use null", [1]],
+    ["a symbol in a list", [Symbol("s")], "symbol is not a yian value", [0]],
   ])("refuses %s", (_id, value, message, path) => {
     expectTypeCheckError(() => buildValue(value), message, path);
+  });
+
+  test.each<[string, unknown]>([
+    ["a Date", new Date(0)],
+    ["a class instance", new Foo()],
+    ["undefined", undefined],
+    ["a symbol", Symbol("s")],
+    ["NaN", NaN],
+    ["a lone surrogate", "x\udc00"],
+  ])("refuses %s in the words host intake uses", (_id, part) => {
+    const intake = typeCheckError(() => fromHost({ a: part }, "output")).message;
+    expect(intake).toBe(`output at a: ${typeCheckError(() => buildValue({ a: part })).message}`);
   });
 
   test("refuses a value that contains itself", () => {

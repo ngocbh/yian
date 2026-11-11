@@ -431,10 +431,8 @@ export class OpenAIResponses implements SseProtocol {
     const kind = (typeof code === "string" ? OPENAI_STREAM_ERROR_KINDS.get(code) : undefined) ?? "server";
     const rawMessage = error["message"];
     const message = typeof rawMessage === "string" && rawMessage ? rawMessage : "no message";
-    const text = this.subscription
-      ? `OpenAI subscription stream ended before a complete response: ${message}`
-      : `${this.provider} stream failed (${kind}): ${message}`;
-    return new ProviderError(kind, text);
+    const prefix = this.subscription ? "OpenAI subscription" : this.provider;
+    return new ProviderError(kind, `${prefix} stream failed (${kind}): ${message}`);
   }
 
   /**

@@ -1329,10 +1329,12 @@ describe("stream failures", () => {
       expect(error.message).toBe(`openai stream failed (${kind}): It broke.`);
     });
 
-    test("on the subscription the message is appended to its wording", async () => {
-      const error = await failure([created(), source("server_error", "It broke.")], subscription());
-      expect(error.kind).toBe("server");
-      expect(error.message).toBe("OpenAI subscription stream ended before a complete response: It broke.");
+    test("on the subscription the message names the failure's kind", async () => {
+      for (const [code, kind] of [["server_error", "server"], ["rate_limit_exceeded", "rate_limit"]] as const) {
+        const error = await failure([created(), source(code, "It broke.")], subscription());
+        expect(error.kind).toBe(kind);
+        expect(error.message).toBe(`OpenAI subscription stream failed (${kind}): It broke.`);
+      }
     });
 
     test("the message is the provider's text uncapped, for RouteModel to scrub and cap", async () => {

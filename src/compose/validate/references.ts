@@ -90,6 +90,7 @@ import {
   localFieldError,
   projectOutputContract,
   referenceContract,
+  type TypeFn,
 } from "../../compile/output_contracts.ts";
 import { type CaseRead, caseReadsAsWritten } from "../desugar/case_outputs.ts";
 import { SYNTH_PREFIX } from "../desugar/inline_calls.ts";
@@ -101,7 +102,7 @@ import {
   fieldReadErrors,
   subscriptErrors,
 } from "./constructors.ts";
-import { Narrowing, parsedWhen, searchedWhenReads } from "./narrowing.ts";
+import { Narrowing, parsedWhen, searchedWhenReads, type Views } from "./narrowing.ts";
 import type { SearchedWhen } from "./skips.ts";
 import { LocalInput, type ResolveOrigin } from "./typed_bindings.ts";
 
@@ -177,6 +178,53 @@ interface ScanOptions {
    * allowed. Defaults to saying it can't be read here.
    */
   memoryTail?: string | null;
+}
+
+/** The site a rendered template is checked as, by `checkTemplate`. */
+interface TemplateSite {
+  /** What a declared name is, in the error for an undeclared one. */
+  noun: string;
+  /** What the template is, in the pool-ref hint. */
+  hintTail: string;
+  /** The proven contracts of the declared names a field read is checked against. */
+  contracts: ReadonlyMap<string, LocalInput>;
+  /** Lets a field only some union members have be read. */
+  partialUnionFields: boolean;
+}
+
+/**
+ * What the per-site checks of one `validateReferences` call share: its scanners, which add to its
+ * errors, and the facts the sites read against.
+ */
+interface ReferenceSites {
+  scan(fromValue: unknown, where: string, rng: SourceRange | null, site: ScanOptions): void;
+  checkTemplate(
+    where: string,
+    template: string,
+    declared: ReadonlySet<string>,
+    rng: SourceRange | null,
+    site: TemplateSite,
+  ): void;
+  checkPromptMemories(where: string, template: string, memories: ReadonlySet<string>, rng: SourceRange | null): void;
+  checkSteerInbox(
+    fromValue: unknown,
+    where: string,
+    rng: SourceRange | null,
+    site: Pick<ScanOptions, "siteProducers" | "siteInputs">,
+  ): string | null;
+  checkSteerRender(
+    where: string,
+    template: string,
+    inbox: string,
+    rng: SourceRange | null,
+    partialUnionFields: boolean,
+  ): void;
+  /** Add one unresolved-reference error. */
+  error(message: string, rng: SourceRange | null): void;
+  /** The `[site name, source, range]` of each plain input binding already scanned, as JSON. */
+  readonly scanned: Set<string>;
+  /** Resolves a constructor name to its type, else `null`. */
+  readonly typeFn: TypeFn | null;
 }
 
 /** Why most sites refuse a whole inbox read: only `take` reads its events. */
@@ -681,12 +729,7 @@ export function validateReferences(
     template: string,
     declared: ReadonlySet<string>,
     rng: SourceRange | null,
-    site: {
-      noun: string;
-      hintTail: string;
-      contracts: ReadonlyMap<string, LocalInput>;
-      partialUnionFields: boolean;
-    },
+    site: TemplateSite,
   ): void {
     let refs: string[];
     try {
@@ -721,193 +764,38 @@ export function validateReferences(
     }
   }
 
+  const sites: ReferenceSites = {
+    scan,
+    checkTemplate,
+    checkPromptMemories,
+    checkSteerInbox,
+    checkSteerRender,
+    error: (message, rng) => void errors.push([message, rng]),
+    scanned,
+    typeFn,
+  };
   for (const [nodeId, result] of buildResults) {
     const node = result.node;
-    const franges = result.fieldRanges;
-    const nodeRange = result.nodeRange;
-    const [nodeProducers, nodeInputs] =
-      narrowing !== null ? narrowing.forNode(nodeId) : [producers, inputContracts];
+    const view = narrowing !== null ? narrowing.forNode(nodeId) : ([producers, inputContracts] as const);
     const partialUnionFields = unordered.has(nodeId);
-    // Prompt scope: a strict AGENT prompt or system prompt may interpolate ONLY this node's
-    // declared inputs and variables as `${name}` (or a builtin-call argument); a pool ref in either
-    // is loud, and an unknown builtin or malformed span is rejected here (via `promptRefs`, the
-    // renderer's compile-time companion).
-    const nodeLocals = localContracts.get(nodeId) ?? new Map<string, LocalInput>();
     if (node instanceof AgentNode) {
-      const declared = new Set((node.params ?? []).map((param) => param.name));
-      for (const variable of node.variables) declared.add(variable.name);
-      // The inputs bound to a memory: a prompt renders one only as a lone `${<name>}`, which
-      // `checkPromptMemories` checks, so no field of one is checked as a value's.
-      const memories = new Set(
-        [...nodeLocals]
-          .filter(([, local]) =>
-            local.alternatives.some((alt) => isExactly(alt, ValueContract) && isMemoryType(alt.type)),
-          )
-          .map(([name]) => name),
-      );
-      const promptContracts = new Map([...nodeLocals].filter(([name]) => !memories.has(name)));
-      for (const variable of node.variables) {
-        if (variable.contract !== null) promptContracts.set(variable.name, new LocalInput([variable.contract]));
-      }
-      const promptSite = {
-        noun: "input or variable",
-        hintTail: "a strict AGENT prompt",
-        contracts: promptContracts,
-        partialUnionFields,
-      };
-      const promptRange = franges.get(siteKey("field", "prompt")) ?? nodeRange;
-      // `Verbatim` text is no template, so it reads nothing.
-      if (isPromptText(node.prompt)) {
-        const where = result.siteName(nodeId, "prompt");
-        if (typeof node.prompt === "string" && node.prompt) {
-          checkTemplate(where, node.prompt, declared, promptRange, promptSite);
-          checkPromptMemories(where, node.prompt, memories, promptRange);
-        }
-      } else {
-        // A list prompt: each message's text is a template; a splice names a local holding messages.
-        node.prompt.forEach((item, index) => {
-          const where = `${result.siteName(nodeId, "prompt")}[${index}]`;
-          const rng = franges.get(siteKey("field", `prompt[${index}]`)) ?? promptRange;
-          if ("text" in item) {
-            if (typeof item.text === "string" && item.text) {
-              checkTemplate(where, item.text, declared, rng, promptSite);
-              checkPromptMemories(where, item.text, memories, rng);
-            }
-            return;
-          }
-          const ref = `\${${item.splice}}`;
-          if (memories.has(item.splice)) {
-            errors.push([`${where}: ${ref} ${MEMORY_USE} (not as a prompt splice)`, rng]);
-            return;
-          }
-          checkTemplate(where, ref, declared, rng, promptSite);
-          const label = declared.has(item.splice) ? spliceTypeError(promptContracts.get(item.splice)) : null;
-          if (label !== null) {
-            errors.push([
-              `${where}: ${ref} is \`${label}\`, which can't hold messages; splice a \`Message\`, a record ` +
-                "with `role` and `text: str`, or a list of them",
-              rng,
-            ]);
-          }
-        });
-      }
-      if (typeof node.systemPrompt === "string" && node.systemPrompt) {
-        const where = result.siteName(nodeId, "system_prompt");
-        const rng = franges.get(siteKey("field", "system_prompt")) ?? nodeRange;
-        checkTemplate(where, node.systemPrompt, declared, rng, promptSite);
-        checkPromptMemories(where, node.systemPrompt, memories, rng);
-      }
+      const nodeLocals = localContracts.get(nodeId) ?? new Map<string, LocalInput>();
+      checkAgentPrompts(sites, nodeId, result, node, nodeLocals, partialUnionFields);
     }
-    // Node-owned reserved wiring (`over`, `until`, ...) follows the same pool reference grammar as
-    // ordinary inputs. It never receives a body-local scope: in particular, MAP's `${item}` is
-    // valid only in each per-element input, not in `over:`.
     const nwiring = flowWiring.get(nodeId) ?? new Map<string, unknown>();
-    const reserved = node.reservedWiringKeys();
-    const inputRng = franges.get(siteKey("field", "inputs")) ?? nodeRange;
-    for (const key of [...reserved].sort(compareCodeUnits)) {
-      // A reserved wiring key is a KIND FIELD, so its range is keyed `field` — not the bare key,
-      // which would silently fall back to the whole `input:` block or node header.
-      const reservedRng = franges.get(siteKey("field", key)) ?? inputRng;
-      if (node instanceof AgentNode && key === STEER_INBOX_KEY) {
-        const where = result.siteName(nodeId, "steer_inbox");
-        const inbox = checkSteerInbox(nwiring.get(key), where, reservedRng, {
-          siteProducers: nodeProducers,
-          siteInputs: nodeInputs,
-        });
-        if (node.steerRender !== null && inbox !== null) {
-          const renderRng = franges.get(siteKey("field", "steer_inbox.render")) ?? reservedRng;
-          checkSteerRender(`${where} render`, node.steerRender, inbox, renderRng, partialUnionFields);
-        }
-        continue;
-      }
-      scan(nwiring.get(key), result.siteName(nodeId, node.reservedKeyLabel(key)), reservedRng, {
-        siteProducers: nodeProducers,
-        siteInputs: nodeInputs,
-        partialUnionFields,
-        constructors: false,
-        inboxTail: node.bindsPerItem ? MAP_TAIL : TAKE_TAIL,
-        memoryTail: memoryReservedTail(node, key, node.reservedKeyLabel(key)),
-      });
-    }
-
-    // A per-item binder (MAP) reads its iteration source above, then validates each element
-    // input with the body-local `${item}` scope enabled.
+    checkReservedWiring(sites, nodeId, result, nwiring, view, partialUnionFields);
+    // A per-item binder (MAP) reads its iteration source above, then each element input.
     if (node.bindsPerItem) {
-      const item = itemContract(node, nwiring, nodeProducers, nodeInputs, typeFn);
-      for (const [param, src] of nwiring) {
-        if (reserved.has(param)) continue;
-        scan(
-          src,
-          `node ${reprText(nodeId)} map input ${reprText(param)} from`,
-          franges.get(siteKey("input", param)) ?? inputRng,
-          {
-            siteProducers: nodeProducers,
-            siteInputs: nodeInputs,
-            itemContract: item,
-            extraHeads: ["item"],
-            partialUnionFields,
-            inboxTail: MAP_TAIL,
-            memoryTail: bindingPassesWhole(src) ? memorySiteTail(nodeId, node, param) : MEMORY_VALUE_TAIL,
-          },
-        );
-      }
+      checkMapInputs(sites, nodeId, result, nwiring, view, partialUnionFields);
       continue;
     }
-
-    // Each node input `from:` source, read from the flow-owned wiring. For a desugared CASE these
-    // are the `__rN`/`__on` SOURCES (the original `${<id>.output}` refs), validated against the
-    // pool. The rewritten node-local `__rN`/`__on` live in `node.cases` `when:` and are excluded
-    // here (they resolve against the record).
-    // Anchor each error on the OFFENDING ENTRY, not the whole `input:` mapping: the parse loop
-    // stamps a per-binding `input` range for every kind, and a desugar stamps one for its
-    // synthetic params (a CASE `__rN` -> its `cases[N].when` line); the block range is only the
-    // fallback (a spanless flow has no ranges at all). `wiringRefLabel` gives a synthetic param
-    // the author-facing name it was hoisted from instead of leaking `__rN`.
     const whens = node instanceof CaseNode ? searchedWhens.get(nodeId) : undefined;
     if (whens !== undefined) {
-      // A searched CASE's `__rN` inputs bind only the roots its `when:`s read; each read is
-      // checked as written, at its own `when:`, under the checks before it.
       const views = narrowing ?? new Narrowing({ producers, inputs: inputContracts });
-      for (const [index, when, , whenRange] of whens) {
-        // The CASE build reports a malformed `when:`.
-        const tree = parsedWhen(when);
-        if (tree === null) continue;
-        const where = `${result.siteName(nodeId, `cases[${index}].when`)} from`;
-        for (const read of searchedWhenReads(views, nodeId, tree, registry ?? new Map())) {
-          scan(`\${${referenceText(read.node)}}`, where, whenRange ?? inputRng, {
-            siteProducers: read.views[0],
-            siteInputs: read.views[1],
-            partialUnionFields,
-            readFacts: read.facts,
-            routedBases: read.routed,
-            inboxTail: inboxSiteTail(nodeId, node, ""),
-            memoryTail: EXPRESSION_TAIL,
-          });
-        }
-      }
+      checkSearchedWhens(sites, nodeId, result, whens, views, registry ?? new Map(), partialUnionFields);
       continue;
     }
-    for (const [param, src] of nwiring) {
-      if (reserved.has(param)) continue;
-      const label = node.wiringRefLabel(param);
-      const paramRng = franges.get(siteKey("input", param)) ?? inputRng;
-      const where = `${result.siteName(nodeId, label)} from`;
-      const source = bindingSource(src);
-      if (typeof source === "string") {
-        // A desugar may copy an authored binding to a synth node, so check the authored site once.
-        const key = JSON.stringify([where, source, paramRng]);
-        if (scanned.has(key)) continue;
-        scanned.add(key);
-      }
-      const whole = bindingPassesWhole(src);
-      scan(src, where, paramRng, {
-        siteProducers: nodeProducers,
-        siteInputs: nodeInputs,
-        partialUnionFields,
-        inboxTail: whole ? inboxSiteTail(nodeId, node, param) : TAKE_TAIL,
-        memoryTail: whole ? memorySiteTail(nodeId, node, param) : MEMORY_VALUE_TAIL,
-      });
-    }
+    checkInputBindings(sites, nodeId, result, nwiring, view, partialUnionFields);
   }
 
   // Flow outputs (the codomain): each binding `from:` is checked like a node input and located at
@@ -946,6 +834,247 @@ export function validateReferences(
     });
     throw diagnostics.error(`flow has unread inbox inputs:\n  ${problems.map(([message]) => message).join("\n  ")}`, {
       range: problems.find(([, range]) => range !== null)?.[1] ?? null,
+    });
+  }
+}
+
+/**
+ * Check an AGENT node's `prompt:`, list prompt and `system_prompt:`. Each may interpolate only the
+ * node's declared inputs and variables as `${name}` (or a builtin-call argument), a memory only as
+ * a lone `${<name>}`, and a list prompt's splice must name messages. A pool ref in either is loud,
+ * and an unknown builtin or malformed span is rejected here (via `promptRefs`, the renderer's
+ * compile-time companion).
+ */
+function checkAgentPrompts(
+  sites: ReferenceSites,
+  nodeId: string,
+  result: BuildResult,
+  node: AgentNode,
+  nodeLocals: ReadonlyMap<string, LocalInput>,
+  partialUnionFields: boolean,
+): void {
+  const franges = result.fieldRanges;
+  const nodeRange = result.nodeRange;
+  const declared = new Set((node.params ?? []).map((param) => param.name));
+  for (const variable of node.variables) declared.add(variable.name);
+  // The inputs bound to a memory: a prompt renders one only as a lone `${<name>}`, which
+  // `checkPromptMemories` checks, so no field of one is checked as a value's.
+  const memories = new Set(
+    [...nodeLocals]
+      .filter(([, local]) =>
+        local.alternatives.some((alt) => isExactly(alt, ValueContract) && isMemoryType(alt.type)),
+      )
+      .map(([name]) => name),
+  );
+  const promptContracts = new Map([...nodeLocals].filter(([name]) => !memories.has(name)));
+  for (const variable of node.variables) {
+    if (variable.contract !== null) promptContracts.set(variable.name, new LocalInput([variable.contract]));
+  }
+  const promptSite = {
+    noun: "input or variable",
+    hintTail: "a strict AGENT prompt",
+    contracts: promptContracts,
+    partialUnionFields,
+  };
+  const promptRange = franges.get(siteKey("field", "prompt")) ?? nodeRange;
+  // `Verbatim` text is no template, so it reads nothing.
+  if (isPromptText(node.prompt)) {
+    const where = result.siteName(nodeId, "prompt");
+    if (typeof node.prompt === "string" && node.prompt) {
+      sites.checkTemplate(where, node.prompt, declared, promptRange, promptSite);
+      sites.checkPromptMemories(where, node.prompt, memories, promptRange);
+    }
+  } else {
+    // A list prompt: each message's text is a template; a splice names a local holding messages.
+    node.prompt.forEach((item, index) => {
+      const where = `${result.siteName(nodeId, "prompt")}[${index}]`;
+      const rng = franges.get(siteKey("field", `prompt[${index}]`)) ?? promptRange;
+      if ("text" in item) {
+        if (typeof item.text === "string" && item.text) {
+          sites.checkTemplate(where, item.text, declared, rng, promptSite);
+          sites.checkPromptMemories(where, item.text, memories, rng);
+        }
+        return;
+      }
+      const ref = `\${${item.splice}}`;
+      if (memories.has(item.splice)) {
+        sites.error(`${where}: ${ref} ${MEMORY_USE} (not as a prompt splice)`, rng);
+        return;
+      }
+      sites.checkTemplate(where, ref, declared, rng, promptSite);
+      const label = declared.has(item.splice) ? spliceTypeError(promptContracts.get(item.splice)) : null;
+      if (label !== null) {
+        sites.error(
+          `${where}: ${ref} is \`${label}\`, which can't hold messages; splice a \`Message\`, a record ` +
+            "with `role` and `text: str`, or a list of them",
+          rng,
+        );
+      }
+    });
+  }
+  if (typeof node.systemPrompt === "string" && node.systemPrompt) {
+    const where = result.siteName(nodeId, "system_prompt");
+    const rng = franges.get(siteKey("field", "system_prompt")) ?? nodeRange;
+    sites.checkTemplate(where, node.systemPrompt, declared, rng, promptSite);
+    sites.checkPromptMemories(where, node.systemPrompt, memories, rng);
+  }
+}
+
+/**
+ * Check a node's reserved wiring (`over:`, `until:`, `steer_inbox:`, ...), keyed by its kind
+ * fields. An AGENT's `steer_inbox:` names an inbox, and its `render:` reads only `${event}`.
+ */
+function checkReservedWiring(
+  sites: ReferenceSites,
+  nodeId: string,
+  result: BuildResult,
+  nwiring: ReadonlyMap<string, unknown>,
+  [nodeProducers, nodeInputs]: Views,
+  partialUnionFields: boolean,
+): void {
+  const node = result.node;
+  const franges = result.fieldRanges;
+  const nodeRange = result.nodeRange;
+  // Node-owned reserved wiring (`over`, `until`, ...) follows the same pool reference grammar as
+  // ordinary inputs. It never receives a body-local scope: in particular, MAP's `${item}` is
+  // valid only in each per-element input, not in `over:`.
+  const reserved = node.reservedWiringKeys();
+  const inputRng = franges.get(siteKey("field", "inputs")) ?? nodeRange;
+  for (const key of [...reserved].sort(compareCodeUnits)) {
+    // A reserved wiring key is a KIND FIELD, so its range is keyed `field` — not the bare key,
+    // which would silently fall back to the whole `input:` block or node header.
+    const reservedRng = franges.get(siteKey("field", key)) ?? inputRng;
+    if (node instanceof AgentNode && key === STEER_INBOX_KEY) {
+      const where = result.siteName(nodeId, "steer_inbox");
+      const inbox = sites.checkSteerInbox(nwiring.get(key), where, reservedRng, {
+        siteProducers: nodeProducers,
+        siteInputs: nodeInputs,
+      });
+      if (node.steerRender !== null && inbox !== null) {
+        const renderRng = franges.get(siteKey("field", "steer_inbox.render")) ?? reservedRng;
+        sites.checkSteerRender(`${where} render`, node.steerRender, inbox, renderRng, partialUnionFields);
+      }
+      continue;
+    }
+    sites.scan(nwiring.get(key), result.siteName(nodeId, node.reservedKeyLabel(key)), reservedRng, {
+      siteProducers: nodeProducers,
+      siteInputs: nodeInputs,
+      partialUnionFields,
+      constructors: false,
+      inboxTail: node.bindsPerItem ? MAP_TAIL : TAKE_TAIL,
+      memoryTail: memoryReservedTail(node, key, node.reservedKeyLabel(key)),
+    });
+  }
+}
+
+/** Check a MAP's per-element inputs, each with the body-local `${item}` scope enabled. */
+function checkMapInputs(
+  sites: ReferenceSites,
+  nodeId: string,
+  result: BuildResult,
+  nwiring: ReadonlyMap<string, unknown>,
+  [nodeProducers, nodeInputs]: Views,
+  partialUnionFields: boolean,
+): void {
+  const node = result.node;
+  const franges = result.fieldRanges;
+  const inputRng = franges.get(siteKey("field", "inputs")) ?? result.nodeRange;
+  const reserved = node.reservedWiringKeys();
+  const item = itemContract(node, nwiring, nodeProducers, nodeInputs, sites.typeFn);
+  for (const [param, src] of nwiring) {
+    if (reserved.has(param)) continue;
+    sites.scan(
+      src,
+      `node ${reprText(nodeId)} map input ${reprText(param)} from`,
+      franges.get(siteKey("input", param)) ?? inputRng,
+      {
+        siteProducers: nodeProducers,
+        siteInputs: nodeInputs,
+        itemContract: item,
+        extraHeads: ["item"],
+        partialUnionFields,
+        inboxTail: MAP_TAIL,
+        memoryTail: bindingPassesWhole(src) ? memorySiteTail(nodeId, node, param) : MEMORY_VALUE_TAIL,
+      },
+    );
+  }
+}
+
+/**
+ * Check a searched CASE's `when:`s. Its `__rN` inputs bind only the roots the `when:`s read; each
+ * read is checked as written, at its own `when:`, under the checks before it.
+ */
+function checkSearchedWhens(
+  sites: ReferenceSites,
+  nodeId: string,
+  result: BuildResult,
+  whens: readonly SearchedWhen[],
+  views: Narrowing,
+  registry: TypeRegistry,
+  partialUnionFields: boolean,
+): void {
+  const node = result.node;
+  const inputRng = result.fieldRanges.get(siteKey("field", "inputs")) ?? result.nodeRange;
+  for (const [index, when, , whenRange] of whens) {
+    // The CASE build reports a malformed `when:`.
+    const tree = parsedWhen(when);
+    if (tree === null) continue;
+    const where = `${result.siteName(nodeId, `cases[${index}].when`)} from`;
+    for (const read of searchedWhenReads(views, nodeId, tree, registry)) {
+      sites.scan(`\${${referenceText(read.node)}}`, where, whenRange ?? inputRng, {
+        siteProducers: read.views[0],
+        siteInputs: read.views[1],
+        partialUnionFields,
+        readFacts: read.facts,
+        routedBases: read.routed,
+        inboxTail: inboxSiteTail(nodeId, node, ""),
+        memoryTail: EXPRESSION_TAIL,
+      });
+    }
+  }
+}
+
+/** Check each node input `from:` source, read from the flow-owned wiring, once at its authored site. */
+function checkInputBindings(
+  sites: ReferenceSites,
+  nodeId: string,
+  result: BuildResult,
+  nwiring: ReadonlyMap<string, unknown>,
+  [nodeProducers, nodeInputs]: Views,
+  partialUnionFields: boolean,
+): void {
+  const node = result.node;
+  const franges = result.fieldRanges;
+  const inputRng = franges.get(siteKey("field", "inputs")) ?? result.nodeRange;
+  const reserved = node.reservedWiringKeys();
+  // Each node input `from:` source, read from the flow-owned wiring. For a desugared CASE these
+  // are the `__rN`/`__on` SOURCES (the original `${<id>.output}` refs), validated against the
+  // pool. The rewritten node-local `__rN`/`__on` live in `node.cases` `when:` and are excluded
+  // here (they resolve against the record).
+  // Anchor each error on the OFFENDING ENTRY, not the whole `input:` mapping: the parse loop
+  // stamps a per-binding `input` range for every kind, and a desugar stamps one for its
+  // synthetic params (a CASE `__rN` -> its `cases[N].when` line); the block range is only the
+  // fallback (a spanless flow has no ranges at all). `wiringRefLabel` gives a synthetic param
+  // the author-facing name it was hoisted from instead of leaking `__rN`.
+  for (const [param, src] of nwiring) {
+    if (reserved.has(param)) continue;
+    const label = node.wiringRefLabel(param);
+    const paramRng = franges.get(siteKey("input", param)) ?? inputRng;
+    const where = `${result.siteName(nodeId, label)} from`;
+    const source = bindingSource(src);
+    if (typeof source === "string") {
+      // A desugar may copy an authored binding to a synth node, so check the authored site once.
+      const key = JSON.stringify([where, source, paramRng]);
+      if (sites.scanned.has(key)) continue;
+      sites.scanned.add(key);
+    }
+    const whole = bindingPassesWhole(src);
+    sites.scan(src, where, paramRng, {
+      siteProducers: nodeProducers,
+      siteInputs: nodeInputs,
+      partialUnionFields,
+      inboxTail: whole ? inboxSiteTail(nodeId, node, param) : TAKE_TAIL,
+      memoryTail: whole ? memorySiteTail(nodeId, node, param) : MEMORY_VALUE_TAIL,
     });
   }
 }

@@ -9,6 +9,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import v8 from "node:v8";
+import vm from "node:vm";
 
 import { FileLockError, isLocked, lockFile } from "../../src/platform.ts";
 import {
@@ -1199,11 +1201,21 @@ test("iterRunRecords with maxLineBytes stops at a torn long last line, and refus
   expect((error as RunLogLineTooLongError).end).toBe(fs.statSync(file).size);
 });
 
+/** A full garbage collection: `Bun.gc` on Bun; on Node, V8's `gc`, exposed for the call. */
+function collectGarbage(): void {
+  if (typeof Bun !== "undefined") {
+    Bun.gc(true);
+    return;
+  }
+  v8.setFlagsFromString("--expose-gc");
+  (vm.runInNewContext("gc") as () => void)();
+}
+
 test("iterRunRecords with maxLineBytes keeps no stack for a deeply nested long line", () => {
   const file = path.join(dir, "run.jsonl");
   const depth = 8_000_000;
   fs.writeFileSync(file, `${"[".repeat(depth)}\n`);
-  Bun.gc(true);
+  collectGarbage();
   const before = process.memoryUsage().heapUsed;
   let peak = before;
   const realRead = fs.readSync;
@@ -1325,6 +1337,27 @@ describe.skipIf(process.platform === "win32")("a log path that isn't a regular f
     expect(result).toMatchObject({ status: 0, signal: null, stderr: "" });
     expect(result.errors).toEqual([notRegularFields(file), notRegularFields(file)]);
   }, 15_000);
+
+  test("a symlink to a regular log: iterRunRecords and resume throw EINVAL, and the log isn't touched", () => {
+    const real = path.join(dir, "real.jsonl");
+    baselineLog(real).close();
+    const before = fs.readFileSync(real);
+    const link = path.join(dir, "link.jsonl");
+    fs.symlinkSync(real, link);
+    const fields = (call: () => unknown) => {
+      try {
+        call();
+        return "no error";
+      } catch (error) {
+        const { code, errno, syscall, path, message } = error as NodeJS.ErrnoException;
+        return { code, errno, syscall, path, message };
+      }
+    };
+    expect(fields(() => [...iterRunRecords(link)])).toEqual(notRegularFields(link));
+    expect(fields(() => JsonlRunLog.resume(link).close())).toEqual(notRegularFields(link));
+    expect(isRunLogLocked(real)).toBe(false);
+    expect(fs.readFileSync(real)).toEqual(before);
+  });
 
   test("a folder: iterRunRecords throws EINVAL, and resume the open's EISDIR", () => {
     const file = path.join(dir, "folder.jsonl");
@@ -1698,11 +1731,12 @@ test("isRunLogLocked reports whether a writer holds the log", () => {
   expect(fs.existsSync(`${file}.lock`)).toBe(true);
 });
 
-test("a symlink to a log shares the real log's lock", () => {
-  const real = path.join(dir, "real.jsonl");
-  const link = path.join(dir, "link.jsonl");
+test.skipIf(process.platform === "win32")("a log reached through a linked folder shares the real log's lock", () => {
+  const real = path.join(dir, "real", "run.jsonl");
+  fs.mkdirSync(path.dirname(real));
+  const link = path.join(dir, "linked", "run.jsonl");
   const first = baselineLog(real);
-  fs.symlinkSync(real, link);
+  fs.symlinkSync(path.dirname(real), path.dirname(link));
   try {
     expectError(() => JsonlRunLog.resume(link), Error, busyMessage(link));
     expect(isRunLogLocked(link)).toBe(true);
@@ -1720,7 +1754,7 @@ test("a symlink to a log shares the real log's lock", () => {
       resumed[Symbol.dispose]();
     }
   }
-  expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+  expect(fs.lstatSync(path.dirname(link)).isSymbolicLink()).toBe(true);
   expect(nodeIds(readRunLog(real))).toEqual(["first", "second"]);
 });
 

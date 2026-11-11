@@ -278,7 +278,17 @@ test(
     const hung: Runner = (_command, _args, options = {}) =>
       new Promise((_, reject) => {
         const signal = options.signal!;
-        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        // A hung child holds the event loop open, as this timer does; Node's `AbortSignal.timeout`
+        // doesn't, so without it Node's runner ends the file before the check times out.
+        const child = setInterval(() => {}, 1000);
+        signal.addEventListener(
+          "abort",
+          () => {
+            clearInterval(child);
+            reject(signal.reason);
+          },
+          { once: true },
+        );
       });
     const { asked, fileHost } = host("Cancel", { run: hung });
     await fileIssue(fileHost, TITLE, BODY);

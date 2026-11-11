@@ -22,6 +22,7 @@ import { ToolCallFinished, ToolCallStarted } from "../../src/events.ts";
 import { Message, type Part, Response, TextPart, ToolCallPart, ToolResultPart, ToolSpec } from "../../src/llm/messages.ts";
 import { AnthropicMessages } from "../../src/llm/protocols/anthropic_messages.ts";
 import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
+import { structuredTarget } from "../../src/llm/structured.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { rebuildStepRequests, runAgent } from "../../src/nodes/agent/loop.ts";
@@ -107,7 +108,7 @@ function agent(
       return new ToolSpec({ name: tool.name, description: tool.description, parameters: tool.parametersJsonSchema });
     };
     const specs = requestToolSpecs(expandGrants(tools.map(asToolGrant), toolset.scopes()), specOf, null)!;
-    const structured = async () => (outputType === null ? null : { model, typ: outputType });
+    const structured = async () => (outputType === null ? null : { target: structuredTarget(model), typ: outputType });
     return rebuildStepRequests(steps, { messages: [system, ...ctx.messages], tools: specs, structured });
   };
   return { running: runAgent(ctx), events, steps, material };

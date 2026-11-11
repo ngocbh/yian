@@ -136,6 +136,27 @@ test("inline body that logs still returns its value", async () => {
   }
 });
 
+test("caps.console takes a body's console lines, a late one too, in place of this thread's console", async () => {
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const lines: [string, string][] = [];
+    const caps = { console: (method: string, text: string) => void lines.push([method, text]) };
+    const code = 'console.log("a", 1)\nconsole.error("b")\nsetTimeout(() => { throw new RangeError("later") }, 20)\nreturn 1';
+    expect((await new CodeNode("n", { code }).run({}, caps)) as Output).toEqual(new Output(1n));
+    for (let waited = 0; waited < 2000 && lines.length < 3; waited += 10) await sleep(10);
+    expect(lines).toEqual([
+      ["log", "a 1"],
+      ["error", "b"],
+      ["error", "CODE error after its body returned: RangeError: later"],
+    ]);
+    expect([log.mock.calls.length, error.mock.calls.length]).toEqual([0, 0]);
+  } finally {
+    log.mockRestore();
+    error.mockRestore();
+  }
+});
+
 test("syntax error rejected by the load check", async () => {
   const node = new CodeNode("n", { code: "return (" });
 

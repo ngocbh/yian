@@ -15,9 +15,8 @@
 import { expect, test } from "bun:test";
 
 import { OriginRef } from "../../src/diagnostics.ts";
-import { type RootRead, SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
 import { Verbatim } from "../../src/expr/template.ts";
-import { BindingCollector, BindingError, bindParams } from "../../src/nodes/binding.ts";
+import { BindingError, bindParams } from "../../src/nodes/binding.ts";
 import {
   Binding,
   bindingInputGroups,
@@ -430,36 +429,23 @@ test("the MAP item scope reaches template strings", () => {
   });
 });
 
-test("template routes record each part and its source", () => {
+test("each part of a template reads through the source resolver", () => {
   const template = new ValueTemplate({ a: "${n.output}", b: [1n, "${m.output}"], c: "lit" });
   const roots: Record<string, ValueRecord> = { n: { output: 3n }, m: { output: "x" } };
+  const reads: string[] = [];
 
-  const resolve = (names: readonly string[]): RootRead => {
+  const resolve = (names: readonly string[]) => {
     const [node, field] = names as [string, string];
-    const seq = node === "n" ? 1 : 2;
-    const source = new SourceRef("run", seq, [field]);
-    return { used: 2, present: true, value: roots[node]![field]!, why: null, source };
+    reads.push(node);
+    return { used: 2, present: true, value: roots[node]![field]!, why: null };
   };
 
-  const collector = new BindingCollector();
-  const delivered = bindParams(
-    [new Parameter("p")],
-    new Map([["p", new Binding(template)]]),
-    poolOf({ n: 3n, m: "x" }),
-    { collector, sourceResolver: resolve },
-  );
-  const captured = collector.freeze();
+  const delivered = bindParams([new Parameter("p")], new Map([["p", new Binding(template)]]), poolOf({}), {
+    sourceResolver: resolve,
+  });
 
-  expect(captured.boundInputs).toEqual(delivered);
   expect(delivered).toEqual({ p: { a: 3n, b: [1n, "x"], c: "lit" } });
-  expect(captured.evaluatedKeys).toEqual(new Set(["p"]));
-  const route = captured.route.children[0]!;
-  expect(route.kind).toBe("record");
-  expect(route.names).toEqual(["a", "b", "c"]);
-  expect(route.children[1]!.kind).toBe("list");
-  expect(route.children[1]!.children[0]).toEqual(ValueRoute.literal(1n));
-  expect(route.children[0]!.source).toEqual(new SourceRef("run", 1, ["output"]));
-  expect(route.children[1]!.children[1]!.source).toEqual(new SourceRef("run", 2, ["output"]));
+  expect(reads).toEqual(["n", "m"]);
 });
 
 // --- TS-only rows --- //

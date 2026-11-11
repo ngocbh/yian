@@ -3,7 +3,7 @@
  * object from the reply.
  *
  * `planStructured` picks a strategy (a forced or unforced tool, the route's JSON-schema output
- * format, or a prompt for a model with no native structured output) from the first matching row
+ * format, or a prompt for a model set to `structured_output: prompt`) from the first matching row
  * of a fixed table, and the request fields it needs. The resulting `StructuredPlan` `apply`s
  * those fields to a request, gives the prompt strategy's `instruction` and the retry
  * `correction` texts, and `parse`s the reply's JSON object; `parse` throws
@@ -13,8 +13,8 @@
 
 import type { JsonObject } from "../typesys/json.ts";
 import { encodeBody } from "./body.ts";
-import { getCapabilities, supportsNativeStructured } from "./capabilities.ts";
-import { type ChatModel, parseArguments } from "./events.ts";
+import { modelProfile } from "./capabilities.ts";
+import { type ChatModel, parseArguments, type StructuredOutput } from "./events.ts";
 import { RouteModel } from "./executor.ts";
 import {
   anthropicOutputSchema,
@@ -70,39 +70,22 @@ export interface StructuredTarget {
   readonly block: JsonObject | null;
   /** Whether the route is the ChatGPT subscription. */
   readonly subscription: boolean;
-}
-
-/** Model id prefixes the Anthropic Messages API refuses a forced tool choice for. */
-export const FORCED_TOOL_REFUSING_PREFIXES: readonly string[] = Object.freeze([
-  "claude-fable-5-1",
-  "claude-opus-5-5",
-  "claude-sonnet-5-5",
-  "claude-mythos-5-1",
-]);
-
-/** Return whether the Anthropic model `model` accepts a forced tool choice. */
-export function forcesTool(model: string): boolean {
-  return !FORCED_TOOL_REFUSING_PREFIXES.some((prefix) => model.startsWith(prefix));
-}
-
-/**
- * Return whether the Azure deployment `model` is a legacy one that gets its schema as a forced
- * tool rather than a JSON-schema output format (LangChain's check for `gpt-3*`, `gpt-4-*` and
- * `gpt-4`).
- */
-export function sendsJsonSchemaAsTool(model: string): boolean {
-  return model.startsWith("gpt-3") || model.startsWith("gpt-4-") || model === "gpt-4";
+  /** How the model's structured calls ask for their schema; unset is `native`. */
+  readonly structuredOutput?: StructuredOutput;
 }
 
 /**
  * Return the target `planStructured` reads off `model`.
  *
  * A `RouteModel` gives its protocol's name, an `AnthropicMessages` block and an `OpenAIResponses`
- * subscription flag; any other `ChatModel` has no wire protocol.
+ * subscription flag; any other `ChatModel` has no wire protocol. Every model gives its
+ * `structuredOutput`.
  */
 export function structuredTarget(model: ChatModel): StructuredTarget {
+  const structuredOutput = model.structuredOutput ?? "native";
   if (!(model instanceof RouteModel)) {
-    return { provider: model.provider, model: model.model, protocol: null, block: null, subscription: false };
+    const { provider } = model;
+    return { provider, model: model.model, protocol: null, block: null, subscription: false, structuredOutput };
   }
   const protocol = model.protocol;
   return {
@@ -111,6 +94,7 @@ export function structuredTarget(model: ChatModel): StructuredTarget {
     protocol: protocol.name,
     block: protocol instanceof AnthropicMessages ? protocol.block : null,
     subscription: protocol instanceof OpenAIResponses && protocol.subscription,
+    structuredOutput,
   };
 }
 
@@ -271,21 +255,22 @@ function parseObject(text: string): JsonObject | null {
 /**
  * Return how a structured call for `schema` is sent to `target`: the first matching row wins.
  *
- * 1. no native structured output (neither the subscription nor `supportsNativeStructured`):
+ * 1. the target's `structuredOutput` is `prompt` (`structured_output: prompt` in `llm_config`):
  *    `prompt`;
  * 1a. no wire protocol: `json_schema` with the tool's parameters (the provider-neutral form);
  * 2. Anthropic with `thinking` on and an open schema: the tool, unforced (thinking forbids a
  *    forced tool, and the output format's grammar rejects an open schema);
  * 3. Anthropic with `thinking` on: `json_schema` with `anthropicOutputSchema`;
- * 4. Anthropic, a model that `forcesTool`: the tool, forced;
+ * 4. Anthropic, a model whose profile (`modelProfile`) takes a named tool choice: the tool, forced;
  * 5. Anthropic otherwise: the tool, unforced;
  * 6. Ollama: `json_schema` with the schema as given;
  * 7. Gemini: `json_schema` with `constAsEnum`;
  * 8. Azure, an open schema: the tool, forced (`strict: false` on Responses);
- * 9. Azure, a legacy deployment (`sendsJsonSchemaAsTool`): the tool, forced, keywords kept;
+ * 9. Azure, a legacy deployment (`schemaAsTool` in its profile): the tool, forced, keywords kept;
  * 10. Azure otherwise: strict `json_schema` with the rejected keywords moved into descriptions;
  * 11. any other route: the tool (`strict: false` for an open schema on Responses), forced when
- *    the route is the subscription or the model accepts a tool choice, else unforced.
+ *    the route is the subscription or the model's profile takes a named tool choice, else
+ *    unforced.
  *
  * Azure's tool rows send `parallelToolCalls: false` on Chat and leave it unsent on Responses;
  * row 11 sends `false`.
@@ -306,7 +291,7 @@ export function planStructured(target: StructuredTarget, schema: JsonObject): St
     new OutputFormat({ name, schema: formatSchema, strict });
   const tools = (strict: boolean | null) => [functionTool(schema, strict)];
 
-  if (!(target.subscription || supportsNativeStructured(target.provider, target.model))) return plan("prompt");
+  if (target.structuredOutput === "prompt") return plan("prompt");
   if (target.protocol === null) {
     return plan("json_schema", { outputFormat: format(functionTool(schema, null).parameters) });
   }
@@ -318,7 +303,7 @@ export function planStructured(target: StructuredTarget, schema: JsonObject): St
     const thinkingOn = isPlainObject(thinking) && thinking["type"] !== "disabled";
     if (thinkingOn && open) return plan("unforced_tool", { tools: tools(null) });
     if (thinkingOn) return plan("json_schema", { outputFormat: format(anthropicOutputSchema(schema)) });
-    if (forcesTool(target.model)) {
+    if (modelProfile(target.protocol, target.model).namedToolChoice) {
       return plan("forced_tool", { tools: tools(null), toolChoice: new NamedTool(name) });
     }
     return plan("unforced_tool", { tools: tools(null) });
@@ -332,7 +317,7 @@ export function planStructured(target: StructuredTarget, schema: JsonObject): St
       const strict = responses ? false : null;
       return plan("forced_tool", { tools: tools(strict), toolChoice: new NamedTool(name), parallelToolCalls });
     }
-    if (sendsJsonSchemaAsTool(target.model)) {
+    if (modelProfile(target.protocol, target.model).schemaAsTool) {
       return plan("forced_tool", { tools: tools(null), toolChoice: new NamedTool(name), parallelToolCalls });
     }
     const strictSchema = strictJsonSchema(schema);
@@ -340,7 +325,7 @@ export function planStructured(target: StructuredTarget, schema: JsonObject): St
   }
 
   const strict = responses && open ? false : null;
-  if (target.subscription || getCapabilities(target.model).supportsToolChoice) {
+  if (target.subscription || modelProfile(target.protocol, target.model).namedToolChoice) {
     return plan("forced_tool", { tools: tools(strict), toolChoice: new NamedTool(name), parallelToolCalls: false });
   }
   return plan("unforced_tool", { tools: tools(strict), parallelToolCalls: false });

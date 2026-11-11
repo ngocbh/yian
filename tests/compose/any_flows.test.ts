@@ -299,12 +299,12 @@ test("a reader tagging a case result Any gets the taken branch value (runs)", as
   expect(await ok(routed(), { s: "x" })).toBe("a");
 });
 
-test("a case output Any is a load error suggesting the reader tag", () => {
+test("a case output Any is a load error saying to tag the result where it is read", () => {
   const error = loadError(() => assembleText(routed("    output: Any\n", "${route.output}")));
 
   expect(error.message).toBe(
     "case node 'route': a `case` routes and has no `output:`; tag its result where you read it, " +
-      "e.g. `x: !Any ${route.output}`",
+      "e.g. `x: !<type> ${route.output}`",
   );
 });
 

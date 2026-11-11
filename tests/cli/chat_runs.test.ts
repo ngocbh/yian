@@ -622,7 +622,7 @@ output: \${talk.output}
 // These replace the process's console methods, so they run one at a time (a file's tests do).
 describe("console", () => {
   test(
-    "a child's CODE console output goes to the console file while it runs, and the console comes back after",
+    "a child's CODE console output goes to the console file, never through the process's console",
     async () => {
       const printed: string[] = [];
       const original = { log: console.log, error: console.error };

@@ -20,7 +20,6 @@ import {
   rewriteExprRefs,
 } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
-import { SourceRef } from "../../src/expr/lineage.ts";
 import { bindingCoSkips, evalBinding, flowCallCalleesInSpans, promptRefs } from "../../src/expr/template.ts";
 import { BindingError, bindParams } from "../../src/nodes/binding.ts";
 import { Parameter, ValueTemplate } from "../../src/nodes/contracts.ts";
@@ -294,48 +293,6 @@ test("a prompt call with several arguments is an unknown prompt function", () =>
   const error = errorOf(() => promptRefs("${foo(a, b)}"));
   expect(error).toBeInstanceOf(ExpressionError);
   expect(error.message.startsWith("unknown prompt function 'foo';")).toBe(true);
-});
-
-// --- lineage --- //
-
-/** Return a traced `resolve` over `values`: each head is sourced at its name in run 1. */
-function tracedResolver(values: ValueRecord): RootResolver {
-  const resolve = resolver(values);
-  return (names) => ({ ...resolve(names), source: new SourceRef("run", 1, [names[0]!]) });
-}
-
-test("a positional constructor routes to its argument", () => {
-  const traced = evalBinding("${Buy(d.output)}", tracedResolver({ d: { output: A_BUY } }), {
-    trace: true,
-    types: TYPES,
-  });
-  expect(traced.value).toEqual(A_BUY);
-  const route = traced.route;
-  expect(route.kind).toBe("selected");
-  expect(route.expression).toBe("Buy(d.output)");
-  expect(route.children[0]!.source).toEqual(new SourceRef("run", 1, ["d", "output"]));
-});
-
-test("a keyword constructor routes each field", () => {
-  const traced = evalBinding('${Buy(action="buy", conviction=s.output)}', tracedResolver({ s: { output: 0.7 } }), {
-    trace: true,
-    types: TYPES,
-  });
-  const route = traced.route;
-  expect(route.kind).toBe("record");
-  expect(route.names).toEqual(["action", "conviction"]);
-  expect(route.expression).toBe('Buy(action="buy", conviction=s.output)');
-  expect(route.children[1]!.source).toEqual(new SourceRef("run", 1, ["s", "output"]));
-});
-
-test("a field read on a constructor projects its route", () => {
-  const traced = evalBinding("${Buy(d.output).conviction}", tracedResolver({ d: { output: A_BUY } }), {
-    trace: true,
-    types: TYPES,
-  });
-  expect(traced.value).toBe(0.5);
-  expect(traced.route.kind).toBe("project");
-  expect(traced.route.path).toEqual(["conviction"]);
 });
 
 // --- the binder --- //

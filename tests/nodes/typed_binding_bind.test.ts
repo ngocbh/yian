@@ -167,7 +167,7 @@ test("a typed binding checks a non-string literal", () => {
   expect(bind(30n, new ValueContract(INTEGER), poolOf())).toEqual({ qty: 30n });
 });
 
-test("a binding type failure keeps the route without usable inputs", async () => {
+test("a binding type failure fails the evaluation at the contract's origin", async () => {
   const origin = new OriginRef("contract:bad");
   const node = new CodeNode("node");
   node.params = [new Parameter("ok"), new Parameter("bad")];
@@ -176,14 +176,12 @@ test("a binding type failure keeps the route without usable inputs", async () =>
     bad: new Binding("wrong", { contract: new ValueContract(INTEGER, new ContractOrigins({ default: origin })) }),
   };
 
-  const evaluated = await evalNode(node, nodeFlow(node, wiring), poolOf(), { captureBindings: true });
+  const evaluated = await evalNode(node, nodeFlow(node, wiring), poolOf());
 
   expect(evaluated.outcome).toBeInstanceOf(EvaluationFailure);
   const { failure } = evaluated.outcome as EvaluationFailure;
   expect(failure.code).toBe("binding.type");
   expect(failure.trace).toEqual([origin]);
-  expect(evaluated.bindings!.boundInputs).toBeNull();
-  expect(evaluated.bindings!.route.names).toEqual(["ok", "bad"]);
 });
 
 test("an untyped binding and raw sources are unchanged", () => {

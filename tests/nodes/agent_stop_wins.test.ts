@@ -21,7 +21,7 @@ beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
 
 const CONFIG = { provider: "openai", model: "gpt-5.5" };
-const PROMPTED = { provider: "vllm", model: "no-structured-sentinel" };
+const PROMPTED = { provider: "vllm", model: "m", structuredOutput: "prompt" as const };
 
 /** A model whose call runs `during`, then throws `error`. */
 function failing(error: unknown, during: () => void, config = CONFIG): ChatModel {

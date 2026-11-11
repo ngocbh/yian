@@ -7,8 +7,8 @@
 #
 # Keys yian reads:
 #   max_tool_iterations (AGENT node) — tool-loop turns; the reply at the cap runs none of its
-#                                 tool calls and the model answers once more (default -1 =
-#                                 no cap; set a positive int to bound it).
+#                                 tool calls and the model answers once more (default 50;
+#                                 -1 = no cap).
 
 id: node-env-config
 name: node_env_config

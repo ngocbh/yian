@@ -6,9 +6,11 @@
  *
  * Each test has a temp `HOME` and an explicit env, so nothing outside its temp dir changes. The
  * checkout tests run this test's Bun on this checkout, where the scripts'
- * `bun install --frozen-lockfile` changes nothing. The piped tests clone a fixture repository from
- * a local path and run a stub `bun`, and a stub `curl` stands in for Bun's installer, so nothing
- * touches the network.
+ * `bun install --frozen-lockfile` changes nothing, behind a proxy that refuses every connection.
+ * The piped tests clone a fixture repository from a local path and run a stub `bun`, and a stub
+ * `curl` stands in for Bun's installer, so nothing touches the network. With `YIAN_TEST_INSTALL=1`,
+ * one more test installs a clone of this checkout with real Bun, offline, from the Bun cache that
+ * `BUN_INSTALL_CACHE_DIR` names.
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
@@ -26,7 +28,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { VERSION } from "../../src/platform.ts";
@@ -46,6 +48,14 @@ function setup(): { base: string; home: string; bin: string } {
   return { base, home, bin: join(home, ".local", "bin") };
 }
 
+/** A proxy that refuses every connection, so a Bun that tries to fetch a package fails instead. */
+const NO_NETWORK = {
+  HTTP_PROXY: "http://127.0.0.1:9",
+  HTTPS_PROXY: "http://127.0.0.1:9",
+  http_proxy: "http://127.0.0.1:9",
+  https_proxy: "http://127.0.0.1:9",
+};
+
 /** Runs `script` from the repo root with an explicit env: the temp home, bash, a plain PATH. */
 function run(script: string, home: string, extra: Record<string, string> = {}) {
   return spawnSync("sh", [join(ROOT, script)], {
@@ -54,6 +64,7 @@ function run(script: string, home: string, extra: Record<string, string> = {}) {
       SHELL: "/bin/bash",
       PATH: "/usr/bin:/bin",
       YIAN_BUN: process.execPath,
+      ...NO_NETWORK,
       ...extra,
     },
     encoding: "utf8",
@@ -199,7 +210,10 @@ describe.if(process.versions.bun !== undefined)("install.sh", () => {
       expect(result.stderr).not.toContain("✗");
       expect(result.status).toBe(0);
     }
-    const version = spawnSync(join(bin, "yian"), ["--version"], { env: { PATH: "/usr/bin:/bin" }, encoding: "utf8" });
+    const version = spawnSync(join(bin, "yian"), ["--version"], {
+      env: { HOME: home, PATH: "/usr/bin:/bin" },
+      encoding: "utf8",
+    });
     expect(version.stdout.trim()).toBe(VERSION);
     expect(pathLines(join(home, ".bashrc"))).toBe(1);
   });
@@ -340,6 +354,35 @@ describe.if(process.versions.bun !== undefined)("install.sh, piped", () => {
     expect(readFileSync(join(fx.clone, "package.json"), "utf8")).toBe("{}\n");
   });
 
+  test("refuses a clone on a detached HEAD", () => {
+    const fx = fixture();
+    install(fx);
+    git(fx.clone, "switch", "--quiet", "--detach");
+    const result = pipe("install.sh", fx, ["--repo", fx.remote]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(`${fx.clone} is not on a branch`);
+  });
+
+  test("refuses a folder of files that isn't a git clone, and a file, and changes neither", () => {
+    const fx = fixture();
+    const dir = join(fx.base, "notes");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "todo.md"), "mine\n");
+    const file = join(fx.base, "file");
+    writeFileSync(file, "mine\n");
+    for (const [path, error] of [
+      [dir, `${dir} holds files but isn't a git clone`],
+      [file, `${file} is a file, not a folder`],
+    ] as const) {
+      const result = pipe("install.sh", fx, ["--repo", fx.remote, "--dir", path]);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(error);
+    }
+    expect(readdirSync(dir)).toEqual(["todo.md"]);
+    expect(readFileSync(file, "utf8")).toBe("mine\n");
+    expect(calls(fx)).toBe("");
+  });
+
   test("refuses a folder that holds a clone of another repository", () => {
     const fx = fixture();
     install(fx);
@@ -443,7 +486,8 @@ describe.if(process.versions.bun !== undefined)("install.sh, piped", () => {
     expect(wrapper).not.toContain(project);
   });
 
-  test("installs Bun with Bun's installer when it finds none", () => {
+  // The installer finds a bun in /usr/bin or /bin before it would install one.
+  test.skipIf(existsSync("/usr/bin/bun") || existsSync("/bin/bun"))("installs Bun with Bun's installer when it finds none", () => {
     const fx = fixture();
     rmSync(join(fx.stubs, "bun"));
     // Bun's installer, as the stub curl serves it, puts the stub Bun in ~/.bun/bin.
@@ -612,6 +656,12 @@ describe.if(process.versions.bun !== undefined)("uninstall.sh", () => {
     writeFileSync(join(fx.home, ".bashrc"), "alias ll='ls -l'\n");
     install(fx);
     install(fx, [], { SHELL: "/bin/zsh" });
+    install(fx, [], { SHELL: "/bin/fish" });
+    const kept = [".bun/bin/bun", ".config/yian/auth.json", ".yian/runs/r1/log.jsonl"];
+    for (const file of kept) {
+      mkdirSync(dirname(join(fx.home, file)), { recursive: true });
+      writeFileSync(join(fx.home, file), "mine\n");
+    }
     const result = pipe("uninstall.sh", fx);
     expect(result.stderr).not.toContain("✗");
     expect(result.status).toBe(0);
@@ -620,7 +670,19 @@ describe.if(process.versions.bun !== undefined)("uninstall.sh", () => {
     for (const rc of RC_FILES) expect([rc, pathLines(join(fx.home, rc))]).toEqual([rc, 0]);
     expect(readFileSync(join(fx.home, ".bashrc"), "utf8")).toBe("alias ll='ls -l'\n");
     expect(result.stdout).toContain(`Removed ${fx.clone}`);
+    for (const file of kept) expect([file, readFileSync(join(fx.home, file), "utf8")]).toEqual([file, "mine\n"]);
     expect(result.stdout).toContain("Left Bun");
+  });
+
+  test("refuses to remove the home folder, even a clean clone install.sh marked", () => {
+    const fx = fixture();
+    const home = join(fx.base, "home2");
+    git(fx.base, "clone", "--quiet", fx.remote, home);
+    writeFileSync(join(home, ".git", "yian-install"), "folder=created\n");
+    const result = pipe("uninstall.sh", fx, ["--dir", home], { HOME: home });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(`Refusing to remove ${home}`);
+    expect(existsSync(join(home, "package.json"))).toBe(true);
   });
 
   test("keeps a folder that was there before install.sh cloned into it, empty", () => {
@@ -722,4 +784,47 @@ describe.if(process.versions.bun !== undefined)("uninstall.sh", () => {
     expect(existsSync(join(fx.clone, ".git"))).toBe(true);
     expect(result.stdout).toContain(`Kept ${fx.clone}: install.sh didn't clone it`);
   });
+});
+
+describe.if(process.versions.bun !== undefined && process.env["YIAN_TEST_INSTALL"] === "1")("install.sh with real Bun", () => {
+  test(
+    "installs a clone of this checkout offline, runs it, finds it clean on a re-run, and uninstall removes it",
+    () => {
+      const cache = process.env["BUN_INSTALL_CACHE_DIR"];
+      if (!cache) throw new Error("Set BUN_INSTALL_CACHE_DIR to a Bun cache that holds this checkout's packages.");
+      const { base, home, bin } = setup();
+      // A repository whose main is this checkout's HEAD, whatever branch the checkout is on.
+      const src = join(base, "src");
+      // Shallow, since a full clone of the history copies far more than the test needs.
+      git(base, "clone", "--quiet", "--depth=1", `file://${ROOT}`, src);
+      git(src, "switch", "--quiet", "-C", "main");
+      const env = {
+        HOME: home,
+        SHELL: "/bin/bash",
+        PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+        BUN_INSTALL_CACHE_DIR: cache,
+        ...NO_NETWORK,
+      };
+      const script = (name: string, args: string[] = []) =>
+        spawnSync("sh", ["-s", "--", ...args], {
+          input: readFileSync(join(ROOT, name)),
+          cwd: home,
+          env,
+          encoding: "utf8",
+          timeout: 240_000,
+        });
+      for (let i = 0; i < 2; i++) {
+        const result = script("install.sh", ["--repo", src]);
+        expect(result.stderr).not.toContain("✗");
+        expect(result.status).toBe(0);
+      }
+      const version = spawnSync(join(bin, "yian"), ["--version"], { env: { HOME: home, PATH: "/usr/bin:/bin" }, encoding: "utf8" });
+      expect(version.status).toBe(0);
+      expect(version.stdout.trim()).toBe(VERSION);
+      const removed = script("uninstall.sh");
+      expect(removed.status).toBe(0);
+      expect(existsSync(join(home, ".local", "share", "yian"))).toBe(false);
+    },
+    600_000,
+  );
 });

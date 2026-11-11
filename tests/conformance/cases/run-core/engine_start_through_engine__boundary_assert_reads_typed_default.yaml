@@ -10,7 +10,7 @@ flow: |2
       kind: code
       input:
         x: ${input.n}
-      output: int
+      output: !int
       code: ./fixtures/compose_codefns.ts:echo_x
   output: ${echo.output}
   asserts:

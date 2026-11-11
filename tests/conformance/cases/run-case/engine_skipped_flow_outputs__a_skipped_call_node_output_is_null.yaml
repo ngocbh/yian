@@ -11,7 +11,7 @@ flow: |
       nodes:
         x:
           kind: code
-          output: str
+          output: !str
           input:
             stance: ${input.stance}
           code: |
@@ -31,7 +31,7 @@ flow: |
         stance: "pro"
     rejected:
       kind: code
-      output: str
+      output: !str
       code: |
         return "no"
   output:

@@ -11,7 +11,7 @@ flow: |
   nodes:
     s:
       kind: code
-      output: str
+      output: !str
       code: |
         return 0.5
     x: !Buy

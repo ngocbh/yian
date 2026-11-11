@@ -16,7 +16,7 @@ flow: |
       tool_id: ask
       input:
         prompt: "Use ${fetch.output}?"
-      output: str
+      output: !str
   output:
     found: ${fetch.output}
     answer: ${ok.output}

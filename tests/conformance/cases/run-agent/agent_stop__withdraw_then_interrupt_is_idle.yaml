@@ -20,7 +20,7 @@ flow: |
       input: {got: "${heard.output.events}"}
       system_prompt: Help.
       prompt: "answer ${got}"
-      output: Optional(str)
+      output: !Optional(str)
   output: ${reply.output}
 run:
   run_id: r1

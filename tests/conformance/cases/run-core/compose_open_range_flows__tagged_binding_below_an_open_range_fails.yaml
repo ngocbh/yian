@@ -12,14 +12,14 @@ flow: |2
         v: ${input.v}
       code: |
         return inputs["v"]
-      output: int
+      output: !int
     use:
       kind: code
       input:
         x: !int(0..) ${a.output}
       code: |
         return inputs["x"]
-      output: int
+      output: !int
   output: ${use.output}
 inputs:
   v: -1

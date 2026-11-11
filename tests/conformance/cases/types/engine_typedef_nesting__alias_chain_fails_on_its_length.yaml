@@ -11,7 +11,7 @@ flow: |
     A5: A4
   input:
     n: !int
-  output: 'int'
+  output: !int
   kind: code
   code: |
     return 1

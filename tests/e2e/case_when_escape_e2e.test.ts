@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { type RunResult, runFlow } from "../../src/run.ts";
 import { assembleText, loadConformanceFlow, loadError, loadErrorAsync } from "../helpers/declarations.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-case-when-escape-e2e-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -39,13 +40,13 @@ nodes:
     code: ./fixtures/compose_codefns.ts:pick_pro
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
   con:
     kind: code
     code: ./fixtures/compose_codefns.ts:pick_con
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
   gate2:
     kind: case
     cases:
@@ -56,13 +57,13 @@ nodes:
     code: ./fixtures/compose_codefns.ts:positive
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
   cold:
     kind: code
     code: ./fixtures/compose_codefns.ts:cautious
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
 output: \${gate2.output}
 `;
 
@@ -145,7 +146,7 @@ nodes:
         then: x
   x:
     kind: code
-    output: Rec
+    output: !Rec
     code: "return {'k': 2}"
   gate:
     kind: case
@@ -155,11 +156,11 @@ nodes:
     else: cold
   hot:
     kind: code
-    output: str
+    output: !str
     code: return 'hot'
   cold:
     kind: code
-    output: str
+    output: !str
     code: return 'cold'
 output: \${hot.output | cold.output}
 `;
@@ -202,7 +203,7 @@ typedefs:
 nodes:
   x:
     kind: code
-${output !== null ? `    output: ${output}\n` : ""}    code: |
+${output !== null ? `    output: ${outputTag(output)}\n` : ""}    code: |
       return ${value}
   pick:
     kind: case

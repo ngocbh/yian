@@ -17,7 +17,7 @@ flow: |
           input:
             x: ${input.x}
             y: ${input.y}
-          output: str
+          output: !str
           code: return inputs["x"] + inputs["y"]
       output: ${j.output}
     side:
@@ -29,7 +29,7 @@ flow: |
           code: ./fixtures/compose_codefns.ts:record
           input:
             tag: ${input.tag}
-          output: str
+          output: !str
       output: ${fx.output}
   nodes:
     pick:
@@ -39,13 +39,13 @@ flow: |
           then: maybe
     maybe:
       kind: code
-      output: str
+      output: !str
       code: return "m"
     publish:
       kind: code
       input:
         draft: call(pair, x=call(side, tag="inner"), y=${maybe.output})
-      output: str
+      output: !str
       code: return inputs["draft"]
   output:
     r: ${publish.output}

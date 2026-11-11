@@ -12,7 +12,7 @@ flow: |
       input:
         n: ${input.n}
         m: ${input.m}
-      output: int
+      output: !int
       code: return 1
       asserts:
         - n/m > 0

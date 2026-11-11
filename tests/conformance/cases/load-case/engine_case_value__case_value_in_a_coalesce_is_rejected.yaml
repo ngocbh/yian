@@ -11,7 +11,7 @@ flow: |2
       code: ./fixtures/compose_codefns.ts:score
       input:
         seed: ${input.seed}
-      output: float
+      output: !float
     gate:
       kind: case
       cases:
@@ -23,13 +23,13 @@ flow: |2
       code: ./fixtures/compose_codefns.ts:echo
       input:
         seed: ${input.seed}
-      output: float
+      output: !float
     b:
       kind: code
       code: ./fixtures/compose_codefns.ts:echo
       input:
         seed: ${input.seed}
-      output: float
+      output: !float
   output: ${gate.output | s.output}
 expect:
   load:

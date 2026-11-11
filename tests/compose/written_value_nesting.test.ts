@@ -138,7 +138,7 @@ const compactDefaultFlow: Flow = (header, value) =>
 const agentVariableFlow: Flow = (header, value) =>
   `id: f\nname: f\n${header}llm_config: {provider: ollama, model: test}\n` +
   "nodes:\n  writer:\n    kind: agent\n    variables:\n" +
-  `      t: !object ${value}\n    prompt: go\n    output: str\n` +
+  `      t: !object ${value}\n    prompt: go\n    output: !str\n` +
   "output: ${writer.output}\n";
 
 // ---------- helpers ----------
@@ -322,7 +322,7 @@ describe("node bindings", () => {
     const text =
       "id: f\nname: f\nnodes:\n  use:\n    kind: code\n" +
       "    code: ./fixtures/compose_codefns.ts:echo\n" +
-      `    input:\n      topic: [${items}]\n    output: str\noutput: \${use.output}\n`;
+      `    input:\n      topic: [${items}]\n    output: !str\noutput: \${use.output}\n`;
 
     expectLimitError(text, "node 'use' input 'topic' at ", "      topic:");
   });

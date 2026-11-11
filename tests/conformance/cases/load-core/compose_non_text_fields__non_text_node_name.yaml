@@ -6,7 +6,7 @@ flow: |
     a:
       kind: code
       node_name: {x: 1}
-      output: str
+      output: !str
       code: "return 'x'"
   output: ${a.output}
 expect:

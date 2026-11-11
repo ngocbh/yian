@@ -53,7 +53,7 @@ defs:
         code: ./fixtures/compose_codefns.ts:took
         input:
           stance: \${input.stance}
-        output: str
+        output: !str
     output: \${x.output}
 `;
 
@@ -156,7 +156,7 @@ defs:
         code: ./fixtures/compose_codefns.ts:took
         input:
           stance: \${input.stance}
-        output: str
+        output: !str
     output: \${x.output}
   enrich:
     input:
@@ -167,7 +167,7 @@ defs:
         code: ./fixtures/compose_codefns.ts:echo
         input:
           topic: \${input.topic}
-        output: str
+        output: !str
     output: \${y.output}
 nodes:
   use:
@@ -175,7 +175,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: call(enrich, topic=\${input.topic})
-    output: str
+    output: !str
   gate:
     kind: case
     cases:
@@ -287,7 +287,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:took
     input:
       stance: x
-    output: str
+    output: !str
 output: \${gate.output}
 `;
   const error = loadError(() => load(text));
@@ -349,7 +349,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: safe
-    output: str
+    output: !str
   gate:
     kind: case
     cases:

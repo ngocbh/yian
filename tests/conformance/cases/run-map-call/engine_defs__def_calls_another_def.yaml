@@ -16,8 +16,8 @@ flow: |2
           input:
             topic: ${input.topic}
           output:
-            report: str
-            n: int
+            report: !str
+            n: !int
       output: ${x.output.report}
     outer:
       input:

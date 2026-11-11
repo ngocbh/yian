@@ -12,8 +12,8 @@ flow: |2
         - when: "input.n > 5"
           then: default
       else: small
-    default: {kind: code, code: "return 'big'", output: str}
-    small: {kind: code, code: "return 'small'", output: str}
+    default: {kind: code, code: "return 'big'", output: !str}
+    small: {kind: code, code: "return 'small'", output: !str}
   output: ${default.output | small.output}
 inputs:
   n: 1

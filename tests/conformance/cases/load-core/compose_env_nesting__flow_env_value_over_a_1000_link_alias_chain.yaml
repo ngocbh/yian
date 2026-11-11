@@ -8,7 +8,7 @@ flow: |
   nodes:
     use:
       kind: code
-      output: int
+      output: !int
       code: return 1
   output: ${use.output}
 env:

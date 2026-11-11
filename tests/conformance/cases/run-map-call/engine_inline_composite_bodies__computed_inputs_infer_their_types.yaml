@@ -12,7 +12,7 @@ flow: |
       code: |
         return {"a": 4}
       output:
-        a: int
+        a: !int
     q:
       kind: code
       code: |
@@ -45,15 +45,15 @@ flow: |
           code: |
             return inputs
           output:
-            positive: bool
-            listed: int
-            big: bool
-            small: bool
-            t: Optional(str)
-            named: str
-            either: str
-            count: int
-            pair: list(int)
+            positive: !bool
+            listed: !int
+            big: !bool
+            small: !bool
+            t: !Optional(str)
+            named: !str
+            either: !str
+            count: !int
+            pair: !list(int)
       output: ${echo.output}
   output: ${wrap.output}
 inputs: {k: 2, xs: [a, b, c]}

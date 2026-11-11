@@ -406,7 +406,7 @@ nodes:
     input:
       prompt: "Ship?"
       timeout: "1m"
-    output: Optional(str)
+    output: !Optional(str)
   slow:
     kind: tool
     tool_id: gate

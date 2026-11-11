@@ -11,7 +11,7 @@ flow: |
           kind: code
           code: ./fixtures/compose_codefns.ts:echo
           input: {topic: ready}
-          output: str
+          output: !str
       output: ${inner.output}
   output: ${composite.output}
 expect:

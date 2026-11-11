@@ -168,7 +168,7 @@ defs:
     model_id: x
     input:
       topic: !str
-    output: float
+    output: !float
 nodes:
   rank:
     kind: call
@@ -199,7 +199,7 @@ nodes:
       return inputs.x
     input:
       x: \${input.value}
-    output: int
+    output: !int
 output: \${echo.output}
 `;
 
@@ -335,7 +335,7 @@ nodes:
     kind: agent
     input:
       topic: \${input.topic}
-    output: Literal(pro, con, flat)
+    output: !Literal(pro;con;flat)
     prompt: "Classify \${topic}."
   route:
     kind: case
@@ -349,13 +349,13 @@ nodes:
     kind: agent
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
     prompt: "Pro note for \${topic}."
   con_note:
     kind: agent
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
     prompt: "Con note for \${topic}."
 
 output: \${pro_note.output | con_note.output}
@@ -371,7 +371,7 @@ const E04_WITH_ELSE = E04_NONEXHAUSTIVE.replace(
     "    kind: agent\n" +
     "    input:\n" +
     "      topic: ${input.topic}\n" +
-    "    output: str\n" +
+    "    output: !str\n" +
     '    prompt: "Flat note for ${topic}."\n' +
     "  pro_note:",
 );

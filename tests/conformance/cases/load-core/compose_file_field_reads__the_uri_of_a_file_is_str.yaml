@@ -9,7 +9,7 @@ flow: |
       kind: code
       input:
         x: !int ${input.f.uri}
-      output: int
+      output: !int
       code: return 1
   output: ${b.output}
 expect:

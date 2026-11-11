@@ -13,7 +13,7 @@ flow: |
           code: ./fixtures/compose_codefns.ts:echo_x
           input:
             x: ${input.value}
-          output: str
+          output: !str
       output: ${echo.output}
   output: ${first.output}
 expect:

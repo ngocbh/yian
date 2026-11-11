@@ -18,15 +18,15 @@ flow: |
     first:
       kind: tool
       tool_id: first
-      output: str
+      output: !str
     second:
       kind: tool
       tool_id: second
-      output: str
+      output: !str
     other:
       kind: tool
       tool_id: other
-      output: str
+      output: !str
   output: ${first.output | second.output | other.output}
 other: |
   id: case
@@ -46,15 +46,15 @@ other: |
     first:
       kind: tool
       tool_id: first
-      output: str
+      output: !str
     second:
       kind: tool
       tool_id: second
-      output: str
+      output: !str
     other:
       kind: tool
       tool_id: other
-      output: str
+      output: !str
   output: ${first.output | second.output | other.output}
 expect:
   fingerprint: different

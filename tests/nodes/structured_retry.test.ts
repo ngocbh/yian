@@ -409,8 +409,8 @@ describe("an agent reply without the schema's tool call", () => {
   /** Run `PLAIN_FLOW` as an int AGENT with `retries` over `model`. */
   async function runAgent(model: ToolRoute, retries: number) {
     const text = PLAIN_FLOW.replace("{provider: openai, model: test-model}", "{provider: openai, model: gpt-5.5}").replace(
-      "    output: str",
-      `    retries: ${retries}\n    output: int`,
+      "    output: !str",
+      `    retries: ${retries}\n    output: !int`,
     );
     return runWith(await loadFlow(text), { question: "q" }, model, { env: hostEnv(dir) });
   }

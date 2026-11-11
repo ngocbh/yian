@@ -7,7 +7,7 @@ flow: |
       kind: code
       code: |
         return 1
-      output: int
+      output: !int
   output:
     result: ${missing.output}
 expect:

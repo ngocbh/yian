@@ -11,7 +11,7 @@ flow: |
       kind: code
       input:
         topic: ${input.topic}
-      output: int
+      output: !int
       code: ./fixtures/seeds.ts:const_one     # returns 1
   asserts:
     - "calc.output > 100"      # 1 > 100 is false

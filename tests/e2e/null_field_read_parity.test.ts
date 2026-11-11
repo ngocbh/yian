@@ -10,6 +10,7 @@ import { join } from "node:path";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import { advance, type RunResult, runFlow } from "../../src/run.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-null-parity-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -24,7 +25,7 @@ const TYPES = `typedefs:
 
 /** CODE node `id` returning `value`, typed `output` when given. */
 function code(id: string, value: string, output: string | null = null, input = ""): string {
-  const typed = output === null ? "" : `    output: ${output}\n`;
+  const typed = output === null ? "" : `    output: ${outputTag(output)}\n`;
   return `  ${id}:\n    kind: code\n${typed}${input}    code: |\n      return ${value}\n`;
 }
 

@@ -130,7 +130,7 @@ input:
 nodes:
   clock:
     kind: code
-    output: datetime
+    output: !datetime
     code: |
       return "2026-01-01T00:00:00Z"
   settle:
@@ -168,7 +168,7 @@ nodes:
     kind: code
     input:
       t: SOURCE
-    output: str
+    output: !str
     code: |
       return String(inputs["t"])
 output: \${read.output}
@@ -197,7 +197,7 @@ nodes:
     else: done
   done:
     kind: code
-    output: int
+    output: !int
     code: |
       return 1
 output: \${done.output}

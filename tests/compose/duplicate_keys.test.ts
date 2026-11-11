@@ -16,11 +16,11 @@ nodes:
   a:
     kind: code
     code: return 1
-    output: int
+    output: !int
   a:
     kind: code
     code: return 2
-    output: int
+    output: !int
 output: \${a.output}
 `;
 
@@ -31,7 +31,7 @@ nodes:
     kind: code
     code: return 1
     code: return 2
-    output: int
+    output: !int
 output: \${a.output}
 `;
 
@@ -41,7 +41,7 @@ nodes:
   a:
     kind: code
     code: return 1
-    output: int
+    output: !int
 output: \${a.output}
 output: \${a.output}
 `;
@@ -53,7 +53,7 @@ nodes:
     kind: code
     input: {x: 1, x: 2}
     code: return inputs["x"]
-    output: int
+    output: !int
 output: \${a.output}
 `;
 
@@ -76,7 +76,7 @@ name: f
 x-base: &base
   kind: code
   code: return 1
-  output: int
+  output: !int
 x-other: &other
   code: return 3
 nodes:
@@ -90,7 +90,8 @@ output: \${a.output}
 
   expect(loaded.compiled.nodes.has("a")).toBe(true);
   const f = parseFile(parseSourceDocument(text, "<flow>"));
-  expect(f.nodes["a"]).toEqual({ kind: "code", code: "return 2", outputs: "int" });
+  // The parsed value drops the `!int` tag; the loader reads it from the source.
+  expect(f.nodes["a"]).toEqual({ kind: "code", code: "return 2", outputs: null });
 });
 
 test("a shared anchor reports its duplicate once at the definition", () => {
@@ -100,7 +101,7 @@ x-base: &base
   kind: code
   code: return 1
   code: return 2
-  output: int
+  output: !int
 nodes:
   a: *base
   b: *base
@@ -120,11 +121,11 @@ nodes:
   &k a:
     kind: code
     code: return 1
-    output: int
+    output: !int
   *k :
     kind: code
     code: return 2
-    output: int
+    output: !int
 output: \${a.output}
 `;
 
@@ -146,7 +147,7 @@ nodes:
   a:
     kind: code
     code: return 1
-    output: int
+    output: !int
 output: \${a.output}
 `;
 
@@ -168,7 +169,7 @@ nodes:
   a:
     kind: code
     code: return 1
-    output: int
+    output: !int
 output: \${a.output}
 `;
 
@@ -180,7 +181,7 @@ output: \${a.output}
 });
 
 /** A flow's `nodes:` section, after the part a test writes. */
-const NODES = "nodes:\n  a:\n    kind: code\n    code: return 1\n    output: int\n";
+const NODES = "nodes:\n  a:\n    kind: code\n    code: return 1\n    output: !int\n";
 
 test.each([
   ["{a: Dict(str, int), b: Dict(str, int)}", "int)", "Dict(str", 4],

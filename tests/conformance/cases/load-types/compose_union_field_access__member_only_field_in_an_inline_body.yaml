@@ -17,7 +17,7 @@ flow: |
       kind: code
       input:
         x: ${input.s}
-      output: Decision
+      output: !Decision
       code: "return null"
     c:
       kind: call
@@ -28,7 +28,7 @@ flow: |
           kind: code
           input:
             w: ${input.v.qty}
-          output: str
+          output: !str
           code: return 'x'
       output: ${inner.output}
   output: ${c.output}

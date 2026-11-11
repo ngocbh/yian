@@ -128,7 +128,7 @@ test("a composer model from an input resolves at run start", async () => {
   expect(models.configs.map(selection)).toEqual([["openai", "gpt-input"]]);
 });
 
-const PICK = `  pick: {kind: code, output: str, code: "return 'gpt-picked'"}\n`;
+const PICK = `  pick: {kind: code, output: !str, code: "return 'gpt-picked'"}\n`;
 
 test("a composer model from an upstream node resolves at call time", async () => {
   const models = composing();
@@ -162,7 +162,7 @@ test("a composer whole record from an input resolves at run start", async () => 
 
 test("a composer whole record from an upstream node resolves at call time", async () => {
   const models = composing();
-  const pick = `  pick: {kind: code, output: Cfg, code: "return {provider: 'openai', model: 'whole'}"}\n`;
+  const pick = `  pick: {kind: code, output: !Cfg, code: "return {provider: 'openai', model: 'whole'}"}\n`;
   const text = gate("!Cfg ${pick.output}", { typedefs: CFG, pick });
   const { result, records } = await run(text, { proj: "x" }, models);
   expect(result.status, result.failure?.message).toBe("succeeded");
@@ -199,7 +199,7 @@ async function failed(text: string, inputs: Record<string, unknown> = {}) {
 }
 
 test("a composer call time error names the gate", async () => {
-  const pick = `  pick: {kind: code, output: str, code: "return 'nope'"}\n`;
+  const pick = `  pick: {kind: code, output: !str, code: "return 'nope'"}\n`;
   const failure = await failed(gate("{provider: '${pick.output}', model: m}", { pick }), { proj: "x" });
   expect(failure.nodeId).toBe(COMPOSER);
   expect(failure.code).toBe("contract.input");
@@ -209,7 +209,7 @@ test("a composer call time error names the gate", async () => {
 test("a composer whole record error names the gate field", async () => {
   const typedefs = "typedefs:\n  Cfg: {provider: str, model: str, openai: object}\n";
   const pick =
-    `  pick: {kind: code, output: Cfg, code: "return {provider: 'openai', ` +
+    `  pick: {kind: code, output: !Cfg, code: "return {provider: 'openai', ` +
     `model: 'm', openai: {temperature: 9.0}}"}\n`;
   const failure = await failed(gate("!Cfg ${pick.output}", { typedefs, pick }), { proj: "x" });
   expect(failure.code).toBe("contract.input");
@@ -231,7 +231,7 @@ defs:
           llm_config: {provider: '\${input.p}', model: m}
     output: \${ask.output}
 nodes:
-  pick: {kind: code, output: str, code: "return 'nope'"}
+  pick: {kind: code, output: !str, code: "return 'nope'"}
   sub: {kind: call, call: child, input: {p: '\${pick.output}'}}
 output: \${sub.output}
 `);
@@ -255,7 +255,7 @@ defs:
           llm_config: {model: !str '\${input.m}'}
     output: \${ask.output}
 nodes:
-  pick: {kind: code, output: Optional(str), code: "return null"}
+  pick: {kind: code, output: !Optional(str), code: "return null"}
   sub: {kind: call, call: child, input: {m: '\${pick.output}'}}
 output: \${sub.output}
 `);

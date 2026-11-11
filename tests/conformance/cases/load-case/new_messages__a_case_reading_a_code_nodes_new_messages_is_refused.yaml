@@ -8,7 +8,7 @@ flow: |
     count:
       kind: code
       code: return 1
-      output: int
+      output: !int
     gate:
       kind: case
       cases:

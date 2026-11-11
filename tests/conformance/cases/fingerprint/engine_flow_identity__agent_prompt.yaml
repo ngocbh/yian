@@ -7,7 +7,7 @@ flow: |
     ask:
       kind: agent
       prompt: first
-      output: str
+      output: !str
   output: ${ask.output}
 other: |
   id: agent
@@ -16,7 +16,7 @@ other: |
     ask:
       kind: agent
       prompt: second
-      output: str
+      output: !str
   output: ${ask.output}
 expect:
   fingerprint: different

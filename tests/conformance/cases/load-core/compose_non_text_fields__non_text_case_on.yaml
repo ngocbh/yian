@@ -14,11 +14,11 @@ flow: |
       else: c
     b:
       kind: code
-      output: str
+      output: !str
       code: "return 'b'"
     c:
       kind: code
-      output: str
+      output: !str
       code: "return 'c'"
   output: ${b.output | c.output}
 expect:

@@ -15,11 +15,11 @@ flow: |
     order:
       kind: tool
       tool_id: order
-      output: str
+      output: !str
     rejected:
       kind: tool
       tool_id: rejected
-      output: str
+      output: !str
   output:
     order: ${order.output}
 other: |
@@ -37,11 +37,11 @@ other: |
     order:
       kind: tool
       tool_id: order
-      output: str
+      output: !str
     rejected:
       kind: tool
       tool_id: rejected
-      output: str
+      output: !str
   output:
     order: ${order.output:-null}
 expect:

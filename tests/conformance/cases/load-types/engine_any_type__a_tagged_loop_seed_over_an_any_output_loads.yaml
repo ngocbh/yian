@@ -11,14 +11,14 @@ flow: |
           kind: code
           input:
             n: ${input.n}
-          output: int
+          output: !int
           code: "return inputs[\"n\"] + 1"
       output:
         n: ${step.output}
   nodes:
     seed:
       kind: code
-      output: Any
+      output: !Any
       code: return 1
     loop:
       kind: loop

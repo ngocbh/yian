@@ -13,7 +13,7 @@ flow: |2
   nodes:
     score:
       kind: code
-      output: float
+      output: !float
       code: |
         return 0.5
     c:

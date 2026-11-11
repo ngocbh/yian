@@ -54,7 +54,7 @@ name: p
 input:
   n: !int
 output:
-  n: int
+  n: !int
 nodes:
   L:
     kind: loop

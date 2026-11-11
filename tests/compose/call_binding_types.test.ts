@@ -59,7 +59,7 @@ defs:
         kind: code
         input:
           t: \${input.t}
-        output: str
+        output: !str
         code: return JSON.stringify(inputs["t"])
     output: \${n.output}
 nodes:
@@ -348,7 +348,7 @@ defs:
         kind: code
         input:
           t: \${input.t}
-        output: str
+        output: !str
         code: return JSON.stringify(inputs["t"])
     output: \${n.output}
 nodes:
@@ -396,7 +396,7 @@ defs:
           n: \${input.n}
           f: \${input.f}
           b: \${input.b}
-        output: str
+        output: !str
         code: return JSON.stringify([inputs["n"], inputs["f"], inputs["b"]])
     output: \${e.output}
 nodes:

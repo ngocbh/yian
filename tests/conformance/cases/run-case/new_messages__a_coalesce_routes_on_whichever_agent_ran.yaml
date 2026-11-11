@@ -24,12 +24,12 @@ flow: |
       kind: agent
       system_prompt: Help.
       prompt: hi
-      output: str
+      output: !str
     right:
       kind: agent
       system_prompt: Help.
       prompt: hi
-      output: str
+      output: !str
     nobody: !str nobody ran
     gate:
       kind: case

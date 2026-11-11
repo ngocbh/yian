@@ -9,7 +9,7 @@ flow: |
       tool_id: ask
       input:
         prompt: p
-      output: {first: str}
+      output: {first: !str}
   output: ${node.output}
 other: |
   id: human
@@ -20,7 +20,7 @@ other: |
       tool_id: ask
       input:
         prompt: p
-      output: {second: str}
+      output: {second: !str}
   output: ${node.output}
 expect:
   fingerprint: different

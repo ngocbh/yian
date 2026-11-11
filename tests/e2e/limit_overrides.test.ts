@@ -60,7 +60,7 @@ const bindingFlow = (binding: string) =>
   "id: f\nname: f\ninput:\n  s: !str\nnodes:\n  use:\n    kind: code\n    input:\n" +
   "      topic: ${" +
   binding +
-  "}\n    output: str\n" +
+  "}\n    output: !str\n" +
   "    code: |\n      return inputs['topic']\noutput: ${use.output}\n";
 
 /** Return a flow whose CODE node's `topic` input is written out as `topic`. */
@@ -69,7 +69,7 @@ const yamlFlow = (topic: string) =>
   "    code: ./fixtures/compose_codefns.ts:echo\n" +
   "    input:\n      topic: " +
   topic +
-  "\n    output: str\noutput: ${use.output}\n";
+  "\n    output: !str\noutput: ${use.output}\n";
 
 // ---- call chain helpers ----
 
@@ -82,7 +82,7 @@ const LEAF =
   "        code: ./fixtures/compose_codefns.ts:echo\n" +
   "        input:\n" +
   "          topic: ${input.x}\n" +
-  "        output: str\n" +
+  "        output: !str\n" +
   "    output: ${step.output}\n";
 
 /** Return a def body whose one `step` node calls `target` with `x`. */
@@ -116,7 +116,7 @@ const ROOT_LEAF =
   "    code: ./fixtures/compose_codefns.ts:echo\n" +
   "    input:\n" +
   "      topic: ${input.x}\n" +
-  "    output: str\n" +
+  "    output: !str\n" +
   "output: ${step.output}\n";
 
 /** Return a flow `name` that imports `uses` without calling them; its node is a CODE leaf. */
@@ -246,9 +246,9 @@ test("condition at the expression maximum runs thirty calls deep", async () => {
         "      route:", "        kind: case", "        cases:",
         `          - when: "${condition}"`, "            then: yes",
         "        else: no",
-        "      yes:", "        kind: code", "        output: str", "        code: |",
+        "      yes:", "        kind: code", "        output: !str", "        code: |",
         "          return 'yes'",
-        "      no:", "        kind: code", "        output: str", "        code: |",
+        "      no:", "        kind: code", "        output: !str", "        code: |",
         "          return 'no'",
         "    output: ${yes.output | no.output}",
       );
@@ -334,7 +334,7 @@ function deepAgentFlow(levels: number, llmConfig: string): [string, unknown] {
   const leaf =
     "  leaf:\n    input:\n      x: !str\n    nodes:\n      writer:\n" +
     "        kind: agent\n        prompt: hi\n        retries: 0\n" +
-    `        llm_config:\n${config}        output: U${levels}\n` +
+    `        llm_config:\n${config}        output: !U${levels}\n` +
     "    output: ${writer.output}\n";
   return [defsChain(49, "leaf").replace("defs:\n", typedefs + "defs:\n" + leaf), reply];
 }

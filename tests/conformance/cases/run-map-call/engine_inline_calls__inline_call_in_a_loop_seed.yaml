@@ -15,7 +15,7 @@ flow: |2
           code: ./fixtures/compose_codefns.ts:echo
           input:
             topic: ${input.n}
-          output: int
+          output: !int
       output: ${echo.output}
     body:
       input:
@@ -27,7 +27,7 @@ flow: |2
           input:
             n: ${input.n}
           output:
-            n: int
+            n: !int
       output: ${step.output}
   nodes:
     repeat:

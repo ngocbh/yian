@@ -8,7 +8,7 @@ flow: |
       code: ./fixtures/compose_codefns.ts:echo
       input:
         topic: x
-      output: {k: {k: {k: {k: {k: "str"}}}}}
+      output: {k: {k: {k: {k: {k: !str}}}}}
   output: ${use.output}
 env:
   YIAN_MAX_TYPE_NESTING: '5'

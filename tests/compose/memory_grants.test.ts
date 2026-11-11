@@ -45,7 +45,7 @@ const TRADE_JOURNAL = hostType("TradeJournal", ["record_trade"]);
 const flow = (inputs: string, nodes: string, extra = "") =>
   `id: f\nname: f\n${extra}input:\n${inputs.replace(/^/gm, "  ")}\nnodes:\n${nodes.replace(/^/gm, "  ")}\noutput: null\n`;
 const agent = (tools: string, extra = "") =>
-  `a:\n  kind: agent\n  output: str\n  prompt: hi\n  tools: ${tools}\n${extra}`;
+  `a:\n  kind: agent\n  output: !str\n  prompt: hi\n  tools: ${tools}\n${extra}`;
 const nodeOf = <T>(loaded: { compiled: { nodes: ReadonlyMap<string, unknown> } }, id: string) =>
   loaded.compiled.nodes.get(id) as T;
 
@@ -117,7 +117,7 @@ test.each([
 });
 
 test("an agent variable named like a reserved memory key is refused", async () => {
-  const text = "id: f\nname: f\nkind: agent\nvariables:\n  __memory_x: !int 1\nprompt: hi\noutput: str\n";
+  const text = "id: f\nname: f\nkind: agent\nvariables:\n  __memory_x: !int 1\nprompt: hi\noutput: !str\n";
   const error = await loadErrorAsync(loadFlow(text));
   expect(error.diagnostic.message).toBe("variable '__memory_x' starts with '__', which yian keeps for the names it generates; rename it");
 });
@@ -134,7 +134,7 @@ defs:
     nodes:
       a:
         kind: agent
-        output: str
+        output: !str
         prompt: hi
         tools: [notes]
     output: \${a.output}
@@ -168,7 +168,7 @@ nodes:
     nodes:
       a:
         kind: agent
-        output: bool
+        output: !bool
         prompt: hi
         tools: ${tools}
     output:
@@ -204,7 +204,7 @@ nodes:
     nodes:
       a:
         kind: agent
-        output: bool
+        output: !bool
         prompt: hi
         tools: [lessons]
         llm_config: {provider: openai, model: gpt-test}

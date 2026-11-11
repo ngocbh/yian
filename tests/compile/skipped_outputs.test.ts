@@ -109,7 +109,7 @@ name: f
 nodes:
   cls:
     kind: code
-    output: Literal(a, b, c)
+    output: !Literal(a;b;c)
     code: |
       return "a"
   route:
@@ -122,12 +122,12 @@ nodes:
         then: nb
   na:
     kind: code
-    output: str
+    output: !str
     code: |
       return "A"
   nb:
     kind: code
-    output: str
+    output: !str
     code: |
       return "B"
 output: \${na.output | nb.output}

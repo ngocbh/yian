@@ -82,7 +82,7 @@ defs:
         tool_id: ask
         input:
           prompt: "next turn"
-        output: str
+        output: !str
     output:
       count: \${input.count + 1}
       last: \${ask.output}
@@ -111,7 +111,7 @@ defs:
         tool_id: ask
         input:
           prompt: "item?"
-        output: str
+        output: !str
     output: \${ask.output}
 input:
   items: !list(str)

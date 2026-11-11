@@ -29,7 +29,7 @@ defs:
         tool_id: ask
         input:
           prompt: "your message (type 'bye' to end)"
-        output: str                # the typed answer
+        output: !str               # the typed answer
     output:                        # carried fields only; here it returns both
       messages: ${input.messages + [ask.output]}   # this turn's message appended
       exited: ${ask.output == "bye"}

@@ -17,12 +17,12 @@ flow: |
       kind: code
       code: |
         return "A"
-      output: str
+      output: !str
     pb:
       kind: code
       code: |
         return "B"
-      output: str
+      output: !str
   output: ${pa.output | pb.output:-'none'}
 inputs:
   x: c

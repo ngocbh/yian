@@ -26,7 +26,7 @@ test("an unknown ordering target is located", () => {
   // DECLARING node descriptor's range.
   const text =
     "id: f\nname: f\nnodes:\n" +
-    "  a:\n    kind: code\n    code: ./m.ts:f\n    depends_on: [ghost]\n    output: str\n" +
+    "  a:\n    kind: code\n    code: ./m.ts:f\n    depends_on: [ghost]\n    output: !str\n" +
     "output: ${a.output}\n";
   const nodesCursor = nodesReader(text);
   const descriptors = parseNodes(nodesCursor);
@@ -47,8 +47,8 @@ test("ordering edges are built", () => {
   // A valid `depends_on:` lowers to a zero-data ordering edge (optional=false).
   const text =
     "id: f\nname: f\nnodes:\n" +
-    "  warm:\n    kind: code\n    code: ./m.ts:f\n    output: str\n" +
-    "  a:\n    kind: code\n    code: ./m.ts:f\n    depends_on: [warm]\n    output: str\n" +
+    "  warm:\n    kind: code\n    code: ./m.ts:f\n    output: !str\n" +
+    "  a:\n    kind: code\n    code: ./m.ts:f\n    depends_on: [warm]\n    output: !str\n" +
     "output: ${a.output}\n";
   const descriptors = parseNodes(nodesReader(text));
 

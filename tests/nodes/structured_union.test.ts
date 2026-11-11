@@ -174,7 +174,7 @@ nodes:
   a:
     kind: agent
     prompt: decide a trade
-    output: Decision
+    output: !Decision
   route:
     kind: case
     on: \${a.output.action}
@@ -190,7 +190,7 @@ nodes:
       qty: \${a.output.qty}
     code: |
       return "buy " + str(inputs["qty"])
-    output: str
+    output: !str
   place_sell:
     kind: code
     input:
@@ -198,14 +198,14 @@ nodes:
       price: \${a.output.price}
     code: |
       return inputs["qty"] * inputs["price"]
-    output: float
+    output: !float
   log_hold:
     kind: code
     input:
       note: \${a.output.note}
     code: |
       return "hold: " + inputs["note"]
-    output: str
+    output: !str
 output:
   decision: \${a.output}
   trade: \${place_buy.output | place_sell.output | log_hold.output}

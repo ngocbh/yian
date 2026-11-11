@@ -20,13 +20,13 @@ flow: |
       code: ./fixtures/compose_codefns.ts:echo
       input:
         topic: agreed
-      output: str
+      output: !str
     refuse:
       kind: code
       code: ./fixtures/compose_codefns.ts:echo
       input:
         topic: refused
-      output: str
+      output: !str
   output: ${agree.output | refuse.output}
 inputs:
   cmd: no

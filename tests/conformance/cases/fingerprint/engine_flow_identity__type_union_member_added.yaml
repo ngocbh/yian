@@ -16,7 +16,7 @@ flow: |
     body:
       kind: tool
       tool_id: body
-      output: Union(Buy, Sell)
+      output: !Union(Buy;Sell)
   output: ${body.output}
 other: |
   id: typed
@@ -34,7 +34,7 @@ other: |
     body:
       kind: tool
       tool_id: body
-      output: Union(Buy, Sell, Hold)
+      output: !Union(Buy;Sell;Hold)
   output: ${body.output}
 expect:
   fingerprint: different

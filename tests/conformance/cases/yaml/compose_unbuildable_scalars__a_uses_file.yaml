@@ -19,7 +19,7 @@ files:
         code: return 1
         input:
           topic: 2026-13-45
-        output: str
+        output: !str
     output: ${use.output}
 expect:
   load:

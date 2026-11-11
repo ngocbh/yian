@@ -7,7 +7,7 @@ flow: |
   nodes:
     helper:
       kind: code
-      output: str
+      output: !str
       code: pkg.mod:helper
   output: ${helper.output}
 expect:

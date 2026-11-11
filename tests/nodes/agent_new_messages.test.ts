@@ -105,7 +105,7 @@ nodes:
     kind: agent
     tools: [lookup]
     prompt: hi
-    output: str
+    output: !str
 output:
   history: \${reply.new_messages}
   answer: \${reply.output}
@@ -129,7 +129,7 @@ defs:
         kind: agent
         tools: [lookup]
         prompt: hi
-        output: str
+        output: !str
     output: \${reply.new_messages}
 nodes:
   c:
@@ -196,7 +196,7 @@ defs:
         prompt:
           - \${history}
           - user: "turn \${n}"
-        output: str
+        output: !str
     output:
       history: \${input.history + reply.new_messages}
       n: \${input.n + 1}
@@ -250,13 +250,13 @@ nodes:
   reply:
     kind: agent
     prompt: hi
-    output: str
+    output: !str
   reader:
     kind: code
     input:
       history: \${reply.new_messages}
     code: return inputs['history'].length
-    output: int
+    output: !int
 output: \${reader.output}
 `;
   const { log, flow } = await run(new ScriptedModel([textReply("hi")], CONFIG), text);
@@ -284,11 +284,11 @@ nodes:
   reply:
     kind: agent
     prompt: hi
-    output: str
+    output: !str
   other:
     kind: code
     code: return 1
-    output: int
+    output: !int
 output: \${reply.new_messages :- []}
 `,
     { inputs: { go: false } },
@@ -310,7 +310,7 @@ nodes:
   reply:
     kind: agent
     prompt: hi
-    output: {answer: str}
+    output: {answer: !str}
 output: \${reply.new_messages}
 `,
   );
@@ -329,7 +329,7 @@ nodes:
   reply:
     kind: agent
     prompt: hi
-    output: str
+    output: !str
 output: \${reply.output}
 asserts:
   - ${check}

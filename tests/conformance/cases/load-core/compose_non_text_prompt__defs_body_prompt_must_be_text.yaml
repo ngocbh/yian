@@ -13,7 +13,7 @@ flow: |
           kind: agent
           input:
             topic: ${input.topic}
-          output: str
+          output: !str
           prompt: 5
       output: ${summarize.output}
   nodes:

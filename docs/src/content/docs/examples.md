@@ -28,7 +28,7 @@ description: Greet someone with a short, friendly one-liner.
 
 input:
   name: !str
-output: str
+output: !str
 kind: agent
 prompt: |-
   Write a short, warm one-sentence greeting addressed to ${name}.
@@ -56,7 +56,7 @@ nodes:
     kind: agent
     input:
       text: ${input.text}
-    output: str
+    output: !str
     prompt: |-
       Summarize the following text in one clear, neutral sentence:
 
@@ -87,7 +87,7 @@ nodes:
     kind: agent
     input:
       text: ${input.text}
-    output: Literal(positive, neutral, negative)
+    output: !Literal(positive;neutral;negative)
     prompt: |-
       Classify the sentiment of the following text as exactly one of:
       positive, neutral, or negative.
@@ -121,8 +121,8 @@ nodes:
     input:
       text: ${input.text}
     output:
-      name: str
-      age: int
+      name: !str
+      age: !int
     prompt: |-
       Extract a single person from the text as a name (string) and an age (integer).
       If the age is not stated, make a reasonable guess.
@@ -132,7 +132,7 @@ nodes:
     kind: agent
     input:
       text: ${input.text}
-    output: int
+    output: !int
     prompt: |-
       Return ONLY the number of words in the text as an integer.
       Text: ${text}
@@ -141,7 +141,7 @@ nodes:
     kind: agent
     input:
       text: ${input.text}
-    output: Literal(positive, neutral, negative)
+    output: !Literal(positive;neutral;negative)
     prompt: |-
       Classify the sentiment of the text as exactly one of: positive, neutral, negative.
       Text: ${text}
@@ -150,7 +150,7 @@ nodes:
     kind: agent
     input:
       text: ${input.text}
-    output: list(str)
+    output: !list(str)
     prompt: |-
       Extract up to 3 short keywords from the text as a list of strings.
       Text: ${text}
@@ -201,10 +201,10 @@ nodes:
     input:
       message: ${input.message}
     output:                                  # a record: the model must fill every field
-      category: Literal(billing, bug, feature_request, account, other)
-      priority: Literal(low, medium, high, urgent)
-      summary: str                           # one sentence capturing the core issue
-      sentiment: Literal(positive, neutral, negative)
+      category: !Literal(billing;bug;feature_request;account;other)
+      priority: !Literal(low;medium;high;urgent)
+      summary: !str                          # one sentence capturing the core issue
+      sentiment: !Literal(positive;neutral;negative)
     prompt: |-
       You are a support triage assistant. Read the customer message and extract:
       - category: the kind of issue
@@ -222,7 +222,7 @@ nodes:
       summary: ${triage.output.summary}
       priority: ${triage.output.priority}
       sentiment: ${triage.output.sentiment}
-    output: str
+    output: !str
     prompt: |-
       Draft a short, empathetic support reply (3-4 sentences).
       Issue: ${summary}
@@ -272,21 +272,21 @@ nodes:
     kind: agent
     input:
       question: ${input.question}
-    output: str
+    output: !str
     prompt: "Restate the decision in '${question}' and list the 2-3 criteria that should drive it."
 
   for_case:
     kind: agent
     input:
       brief: ${frame.output}            # edge: frame -> for_case
-    output: str
+    output: !str
     prompt: "Make the strongest good-faith case FOR, judged against these criteria: ${brief}"
 
   against_case:
     kind: agent
     input:
       brief: ${frame.output}            # edge: frame -> against_case (parallel with for_case)
-    output: str
+    output: !str
     prompt: "Make the strongest good-faith case AGAINST, judged against these criteria: ${brief}"
 
   verdict:
@@ -294,7 +294,7 @@ nodes:
     input:
       for_case: ${for_case.output}      # fan-in: verdict waits for BOTH sides
       against_case: ${against_case.output}
-    output: str
+    output: !str
     prompt: |-
       Weigh both sides and give a clear recommendation in 2-3 sentences, with the
       single most important reason.
@@ -348,21 +348,21 @@ nodes:
     kind: agent
     input:
       question: ${input.question}
-    output: str
+    output: !str
     prompt: "Make the strongest good-faith case FOR: ${question}. Three concise sentences, no hedging."
 
   the_case_against:
     kind: agent
     input:
       question: ${input.question}
-    output: str
+    output: !str
     prompt: "Make the strongest good-faith case AGAINST: ${question}. Three concise sentences, no hedging."
 
   the_risks:
     kind: agent
     input:
       question: ${input.question}
-    output: str
+    output: !str
     prompt: "List the three biggest risks or unknowns relevant to: ${question}. One sentence each."
 
   # --- fan-in: weigh all three angles into ONE typed enum decision ---
@@ -373,7 +373,7 @@ nodes:
       for_case: ${the_case_for.output}
       against_case: ${the_case_against.output}
       risks: ${the_risks.output}
-    output: Decision               # the model must answer with exactly one enum tag
+    output: !Decision              # the model must answer with exactly one enum tag
     prompt: |-
       Weigh this decision and answer with EXACTLY ONE of: go | no_go | needs_more_info.
 
@@ -399,21 +399,21 @@ nodes:
     kind: agent
     input:
       question: ${input.question}
-    output: str
+    output: !str
     prompt: "Write a 4-sentence action brief for proceeding with: ${question}"
 
   no_go_brief:
     kind: agent
     input:
       question: ${input.question}
-    output: str
+    output: !str
     prompt: "Write a 4-sentence brief explaining why to hold off on: ${question}"
 
   more_info_brief:
     kind: agent
     input:
       question: ${input.question}
-    output: str
+    output: !str
     prompt: "Write a 4-sentence brief naming exactly what to investigate before deciding on: ${question}"
 
   # --- finalize: combine the decision with whichever brief ran (the `|` coalesces the
@@ -424,7 +424,7 @@ nodes:
       audience: ${input.audience:-"a general audience"}
       decision: ${synth.output}
       brief: ${go_brief.output | no_go_brief.output | more_info_brief.output}
-    output: str
+    output: !str
     prompt: |-
       Write a tight executive summary (<= 5 sentences) for ${audience}.
       Decision: ${decision}.
@@ -475,7 +475,7 @@ nodes:
     kind: agent
     input:
       task: ${input.task}
-    output: str
+    output: !str
     prompt: "Draft a short, concrete plan (exactly 3 numbered steps) for: ${task}"
 
   approve:
@@ -488,7 +488,7 @@ nodes:
         ${draft.output}
 
         Approve it as-is, or send it back to be revised? (approve / revise)
-    output: Approval                     # the human's answer, validated against Approval's tags
+    output: !Approval                    # the human's answer, validated against Approval's tags
 
   gate:
     kind: case                           # route on the human's answer (simple form)
@@ -502,14 +502,14 @@ nodes:
     kind: agent
     input:
       plan: ${draft.output}
-    output: str
+    output: !str
     prompt: "The plan was approved. Write a short, upbeat kickoff message for it:\n\n${plan}"
 
   revise_plan:
     kind: agent
     input:
       plan: ${draft.output}
-    output: str
+    output: !str
     prompt: "The plan needs work. Rewrite it tighter and clearer, keeping 3 steps:\n\n${plan}"
 
 # kickoff runs on approve; revise_plan runs otherwise. Coalesce picks whichever ran.
@@ -554,7 +554,7 @@ nodes:
     tools: [ask_user]                    # explicitly grant the blocking ask_user tool
     input:
       request: ${input.request}
-    output: str
+    output: !str
     prompt: |-
       The user asks: ${request}
 
@@ -584,7 +584,7 @@ Ask the lead to approve a plan, and the manager when the lead doesn't answer in 
 # against that declaration and passes it through in the request.
 #
 # The flow output is the lead's answer, else the manager's, else null when neither answered
-# in time. With strict outputs (`output: Approval`), a timeout fails the node with
+# in time. With strict outputs (`output: !Approval`), a timeout fails the node with
 # `tool.timeout` instead.
 #
 # Exercises: `ask` with `timeout:` and a host extension, an Optional answer, a routing-only
@@ -609,7 +609,7 @@ nodes:
 
         ${input.plan}
       timeout: 24h
-    output: Optional(Approval)           # null: the lead didn't answer in time
+    output: !Optional(Approval)          # null: the lead didn't answer in time
   escalate:
     kind: case
     cases:
@@ -625,7 +625,7 @@ nodes:
 
         ${input.plan}
       timeout: 48h
-    output: Optional(Approval)
+    output: !Optional(Approval)
 output: !Optional(Approval) ${lead.output | manager.output}
 ```
 
@@ -668,7 +668,7 @@ defs:
         llm_config:
           provider: ${input.model?.provider}
           model: ${input.model?.model}
-        output: str
+        output: !str
         system_prompt: |-
           You keep a running summary of a conversation between a user and an assistant, so the
           assistant can continue it without the older messages.
@@ -760,7 +760,7 @@ defs:
           history: ${input.history}
           said: ${input.said}
         steer_inbox: ${input.owner_messages}
-        output: Optional(str)            # text; null only after an interrupt
+        output: !Optional(str)           # text; null only after an interrupt
         system_prompt: |-
           You are a helpful conversational assistant.
 

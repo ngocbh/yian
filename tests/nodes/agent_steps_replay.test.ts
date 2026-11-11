@@ -52,6 +52,7 @@ import { ToolSet } from "../../src/tools/registry.ts";
 import { type JsonObject, logJson } from "../../src/typesys/json.ts";
 import type { ValueRecord } from "../../src/typesys/values.ts";
 import { crashAfter, NO_ENV, rejected, serving, textReply } from "../helpers/run_state_fixtures.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 const root = mkdtempSync(join(tmpdir(), "yian-agent-replay-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -74,7 +75,7 @@ ${steerInbox ? "input:\n  notes: !Inbox(str)\n" : ""}nodes:
     kind: agent
     tools: [${tools.join(", ")}]
 ${steerInbox ? "    steer_inbox: ${input.notes}\n" : ""}    prompt: hi
-    output: ${output}
+    output: ${outputTag(output)}
 output: \${writer.output}
 `;
 }

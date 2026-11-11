@@ -7,11 +7,11 @@ flow: |
     a:
       kind: tool
       tool_id: a
-      output: int
+      output: !int
     b:
       kind: tool
       tool_id: b
-      output: int
+      output: !int
   output:
     a: ${a.output}
     b: ${b.output}
@@ -22,11 +22,11 @@ other: |
     a:
       kind: tool
       tool_id: a
-      output: int
+      output: !int
     b:
       kind: tool
       tool_id: b
-      output: int
+      output: !int
   output:
     b: ${b.output}
     a: ${a.output}

@@ -6,7 +6,7 @@ flow: |
     child:
       input: [topic]
       kind: code
-      output: object
+      output: !object
       code: "return {...inputs}"
   nodes: {}
 expect:

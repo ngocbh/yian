@@ -11,7 +11,7 @@ flow: |
           kind: code
           input:
             x: ${input.x}
-          output: str
+          output: !str
           code: "return String(inputs['x'])"
       output: ${n.output}
   input:

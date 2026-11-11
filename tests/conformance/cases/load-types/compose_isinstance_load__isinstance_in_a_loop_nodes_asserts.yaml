@@ -22,8 +22,8 @@ flow: |
             const n = inputs["n"] + 1
             return {n: n, status: n >= 4 ? "done" : "running"}
           output:
-            n: int
-            status: str
+            n: !int
+            status: !str
       output: ${step.output}
   nodes:
     loop:

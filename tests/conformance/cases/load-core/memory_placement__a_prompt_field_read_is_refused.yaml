@@ -8,7 +8,7 @@ flow: |
   nodes:
     a:
       kind: agent
-      output: str
+      output: !str
       input:
         lessons: ${input.lessons}
       prompt: "Notes: ${lessons.text}"

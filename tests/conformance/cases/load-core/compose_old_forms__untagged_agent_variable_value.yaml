@@ -8,7 +8,7 @@ flow: |
       prompt: Count to ${n}.
       variables:
         n: 4
-      output: str
+      output: !str
   output: ${ask.output}
 expect:
   load:

@@ -11,7 +11,7 @@ flow: |
         run:
           kind: tool
           tool_id: run
-          output: str
+          output: !str
       output: ${run.output}
   nodes:
     n:
@@ -19,7 +19,7 @@ flow: |
       tool_id: n
       input:
         x: call(g, password=hunter2)
-      output: str
+      output: !str
   output: ${n.output}
 other: |
   id: f
@@ -32,7 +32,7 @@ other: |
         run:
           kind: tool
           tool_id: run
-          output: str
+          output: !str
       output: ${run.output}
   nodes:
     n:
@@ -40,7 +40,7 @@ other: |
       tool_id: n
       input:
         x: call(g, password=hunter3)
-      output: str
+      output: !str
   output: ${n.output}
 expect:
   fingerprint: different

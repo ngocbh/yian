@@ -171,7 +171,7 @@ nodes:
     code: "return inputs['v']"
     input:
       v: <value>
-    output: Optional(str)
+    output: !Optional(str)
 output: \${n.output}
 `;
 
@@ -212,15 +212,15 @@ nodes:
     kind: code
     code: "return inputs['n']"
     input: {n: '\${input.n}'}
-    output: Optional(int)
+    output: !Optional(int)
   gate:
     kind: case
     cases:
       - when: ${when}
         then: hot
     else: cold
-  hot: {kind: code, code: "return 'hot'", output: str}
-  cold: {kind: code, code: "return 'cold'", output: str}
+  hot: {kind: code, code: "return 'hot'", output: !str}
+  cold: {kind: code, code: "return 'cold'", output: !str}
 output: \${hot.output | cold.output}
 `;
 
@@ -261,7 +261,7 @@ nodes:
     kind: code
     code: "return inputs['n']"
     input: {n: '\${input.n}'}
-    output: int
+    output: !int
     asserts:
       - <node_assert>
 output: \${n.output}
@@ -299,8 +299,8 @@ defs:
         input:
           n: \${input.n}
         output:
-          n: int
-          exited: bool
+          n: !int
+          exited: !bool
     output: \${s.output}
 nodes:
   repeat:
@@ -333,7 +333,7 @@ nodes:
   brief:
     kind: agent
     input: {name: '\${input.name}'}
-    output: str
+    output: !str
     prompt: "Hello \${upper(\${name})}"
 output: \${brief.output}
 `;

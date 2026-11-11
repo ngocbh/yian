@@ -53,7 +53,7 @@ ${INBOX}${extra}output: null
 test.each([
   ["retries", "    retries: 2\n", "`retries:` doesn't apply to take: there is no tool call to retry"],
   ["asserts", "    asserts:\n      - output != null\n", "`asserts:` doesn't apply to take"],
-  ["output", "    output: str\n", "take's output is inferred ({events: list(T), closed: bool}); remove `output:`"],
+  ["output", "    output: !str\n", "take's output is inferred ({events: list(T), closed: bool}); remove `output:`"],
 ])("take refuses %s", (_label, extra, message) => {
   expect(refused(takeFlow(extra))).toContain(message);
 });
@@ -70,7 +70,7 @@ test.each([
 });
 
 test("sleep refuses output", () => {
-  const text = toolFlow("sleep", "    input:\n      for: 90s\n    output: str\n");
+  const text = toolFlow("sleep", "    input:\n      for: 90s\n    output: !str\n");
   expect(refused(text)).toContain("sleep's output is None; remove `output:`");
 });
 

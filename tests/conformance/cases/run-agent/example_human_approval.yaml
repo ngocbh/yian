@@ -36,7 +36,7 @@ flow: |
       kind: agent
       input:
         task: ${input.task}
-      output: str
+      output: !str
       prompt: "Draft a short, concrete plan (exactly 3 numbered steps) for: ${task}"
 
     approve:
@@ -49,7 +49,7 @@ flow: |
           ${draft.output}
 
           Approve it as-is, or send it back to be revised? (approve / revise)
-      output: Approval                     # the human's answer, validated against Approval's tags
+      output: !Approval                    # the human's answer, validated against Approval's tags
 
     gate:
       kind: case                           # route on the human's answer (simple form)
@@ -63,14 +63,14 @@ flow: |
       kind: agent
       input:
         plan: ${draft.output}
-      output: str
+      output: !str
       prompt: "The plan was approved. Write a short, upbeat kickoff message for it:\n\n${plan}"
 
     revise_plan:
       kind: agent
       input:
         plan: ${draft.output}
-      output: str
+      output: !str
       prompt: "The plan needs work. Rewrite it tighter and clearer, keeping 3 steps:\n\n${plan}"
 
   # kickoff runs on approve; revise_plan runs otherwise. Coalesce picks whichever ran.

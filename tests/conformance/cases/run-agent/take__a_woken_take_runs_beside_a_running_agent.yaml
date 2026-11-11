@@ -19,7 +19,7 @@ flow: |
     chat:
       kind: agent
       prompt: Help the user.
-      output: str
+      output: !str
   output:
     answer: ${chat.output}
     heard: ${heard.output.events}

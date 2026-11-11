@@ -103,13 +103,13 @@ output: \${a.output}
 
 /** A compact (single-node) flow with `kind: <v>`. */
 function compactKind(v: string): string {
-  return `id: f\nname: f\noutput: int\nkind: ${v}\ncode: return 1\n`;
+  return `id: f\nname: f\noutput: !int\nkind: ${v}\ncode: return 1\n`;
 }
 
 /** A compact (single-node) flow with `id: <v>`, or no `id:` when `v` is null. */
 function compactId(v: string | null): string {
   const head = v === null ? "" : `id: ${v}\n`;
-  return `${head}name: f\noutput: int\nkind: code\ncode: return 1\n`;
+  return `${head}name: f\noutput: !int\nkind: code\ncode: return 1\n`;
 }
 
 /** A flow whose code node `a` has `node_name: <v>`. */
@@ -120,7 +120,7 @@ nodes:
   a:
     kind: code
     node_name: ${v}
-    output: str
+    output: !str
     code: "return 'x'"
 output: \${a.output}
 `;
@@ -133,7 +133,7 @@ name: f
 nodes:
   a:
     kind: code
-    output: str
+    output: !str
     code: ${v}
 output: \${a.output}
 `;
@@ -168,11 +168,11 @@ nodes:
     else: c
   b:
     kind: code
-    output: str
+    output: !str
     code: "return 'b'"
   c:
     kind: code
-    output: str
+    output: !str
     code: "return 'c'"
 output: \${b.output | c.output}
 `;
@@ -198,7 +198,7 @@ defs:
     nodes:
       one:
         kind: code
-        output: {v: int}
+        output: {v: !int}
         code: "return {'v': 1}"
     output: \${one.output}
 nodes:
@@ -218,7 +218,7 @@ name: f
 nodes:
   a:
     kind: code
-    output: str
+    output: !str
     code: "return 'x'"
 output: \${a.output}
 `;
@@ -232,7 +232,7 @@ version: '1'
 nodes:
   a:
     kind: code
-    output: str
+    output: !str
     code: "return 'x'"
 output: \${a.output}
 `;
@@ -465,7 +465,7 @@ describe("parseNodes", () => {
   });
 
   test("a node's asserts must be a list of strings, located", () => {
-    const text = FLOW.replace("    output: str\n", '    output: str\n    asserts: ["true", 5]\n');
+    const text = FLOW.replace("    output: !str\n", '    output: !str\n    asserts: ["true", 5]\n');
 
     const error = loadError(() => nodesOf(text));
 
@@ -585,7 +585,7 @@ nodes:
     nodes:
       echo:
         kind: code
-        output: str
+        output: !str
         code: 5
     output: \${echo.output}
 output: \${a.output}
@@ -598,7 +598,7 @@ nodes:
     nodes:
       echo:
         kind: [a]
-        output: str
+        output: !str
         code: "return 'x'"
     output: \${echo.output}
 output: \${a.output}
@@ -636,11 +636,11 @@ defs:
     nodes:
       one:
         kind: code
-        output: str
+        output: !str
         code: "return 'x'"
       two:
         kind: code
-        output: str
+        output: !str
         code: 5
     output: \${two.output}
 nodes:
@@ -649,7 +649,7 @@ nodes:
     call: body
 output: \${a.output}
 `;
-  const codeCompact = "id: f\nname: f\noutput: str\nkind: code\ncode: 5\n";
+  const codeCompact = "id: f\nname: f\noutput: !str\nkind: code\ncode: 5\n";
   const codeMerged = `id: f
 name: f
 x-base: &base {code: 5}
@@ -657,7 +657,7 @@ nodes:
   a:
     <<: *base
     kind: code
-    output: str
+    output: !str
 output: \${a.output}
 `;
   const kindInDef = `id: f
@@ -665,7 +665,7 @@ name: f
 defs:
   sub:
     kind: [a]
-    output: str
+    output: !str
     code: "return 'x'"
 nodes:
   a:
@@ -796,7 +796,7 @@ defs:
     nodes:
       c:
         kind: code
-        output: int
+        output: !int
         code: return 1
     output: \${c.output}
     asserts: ${v}

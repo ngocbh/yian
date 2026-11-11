@@ -30,7 +30,7 @@ class TradeJournal extends MemoryBase {
 
 /** A flow declaring `inputs` (YAML lines under `input:`), whose one node reads nothing. */
 function flowWith(inputs: string, extra = ""): string {
-  return `id: f\nname: f\n${extra}input:\n${inputs.replace(/^/gm, "  ")}\nnodes:\n  greet:\n    kind: code\n    output: str\n    code: return "hi"\noutput: \${greet.output}\n`;
+  return `id: f\nname: f\n${extra}input:\n${inputs.replace(/^/gm, "  ")}\nnodes:\n  greet:\n    kind: code\n    output: !str\n    code: return "hi"\noutput: \${greet.output}\n`;
 }
 
 describe("memory inputs", () => {
@@ -54,10 +54,10 @@ describe("memory inputs", () => {
   });
 
   test.each([
-    ["a variable", "id: f\nname: f\nkind: agent\nvariables:\n  v: !FileMemory\nprompt: hi\noutput: str\n"],
+    ["a variable", "id: f\nname: f\nkind: agent\nvariables:\n  v: !FileMemory\nprompt: hi\noutput: !str\n"],
     [
       "a typed binding",
-      "id: f\nname: f\ninput:\n  lessons: !FileMemory\nnodes:\n  n:\n    kind: code\n    input:\n      m: !FileMemory ${input.lessons}\n    code: return 1\n    output: int\noutput: ${n.output}\n",
+      "id: f\nname: f\ninput:\n  lessons: !FileMemory\nnodes:\n  n:\n    kind: code\n    input:\n      m: !FileMemory ${input.lessons}\n    code: return 1\n    output: !int\noutput: ${n.output}\n",
     ],
   ])("a memory type in %s is refused", async (_, text) => {
     const error = await loadErrorAsync(loadFlow(text));
@@ -65,7 +65,7 @@ describe("memory inputs", () => {
   });
 
   test("a node output can't be a memory", async () => {
-    const text = "id: f\nname: f\nnodes:\n  n:\n    kind: code\n    output: FileMemory\n    code: return null\noutput: null\n";
+    const text = "id: f\nname: f\nnodes:\n  n:\n    kind: code\n    output: !FileMemory\n    code: return null\noutput: null\n";
     const error = await loadErrorAsync(loadFlow(text));
     expect(error.diagnostic.message).toBe("an output can't be a memory (`FileMemory` declares a flow input)");
   });
@@ -95,7 +95,7 @@ describe("host memory types", () => {
   test("a recorded flow reads an unknown tag as a memory only on an input", async () => {
     const flow = await loadFlow(flowWith("j: !TradeJournal"), { memoryTypes: [TradeJournal] });
     const root = Object.keys(flow.source!.files)[0]!;
-    const text = flow.source!.files[root]!.text.replace("output: str", "output: TradeJournal");
+    const text = flow.source!.files[root]!.text.replace("output: !str", "output: !TradeJournal");
     const edited = { ...flow.source!, files: { ...flow.source!.files, [root]: { ...flow.source!.files[root]!, text } } };
     const error = await loadErrorAsync(loadFlowSource(edited));
     expect(error.diagnostic.message).toContain("unknown type 'TradeJournal'");

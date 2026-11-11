@@ -103,7 +103,7 @@ nodes:
     tool_id: place_order
     input:
       qty: 5
-    output: int
+    output: !int
 output: \${place.output}
 `;
 
@@ -125,7 +125,7 @@ test("a value that does not fit fails at the output declaration", async () => {
   expect(result.failure!.nodeId).toBe("place");
   expect(result.failure!.code).toBe("contract.output");
   expect(result.failure!.message).toContain("does not match declared type int");
-  expect(authoredLine(flow, result).trim()).toStartWith("output: int");
+  expect(authoredLine(flow, result).trim()).toStartWith("output: !int");
 });
 
 const ONE_NODE_FLOW = `
@@ -135,7 +135,7 @@ input:
   qty: !int
 kind: tool
 tool_id: place_order
-output: int
+output: !int
 `;
 
 test("a one node tool flow gates its output", async () => {
@@ -149,7 +149,7 @@ test("a one node tool flow gates its output", async () => {
   expect(bad.status).toBe("failed");
   expect(bad.failure!.nodeId).toBe("count");
   expect(bad.failure!.code).toBe("contract.output");
-  expect(authoredLine(flow, bad).trim()).toStartWith("output: int");
+  expect(authoredLine(flow, bad).trim()).toStartWith("output: !int");
 });
 
 const ORDERS_FLOW = `
@@ -165,7 +165,7 @@ nodes:
     tool_id: place_order
     input:
       qty: 5
-    output: OrderResult
+    output: !OrderResult
   route:
     kind: case
     on: \${place.output.type}
@@ -179,13 +179,13 @@ nodes:
     input:
       qty: \${place.output.qty}
     code: 'return "filled " + inputs["qty"]'
-    output: str
+    output: !str
   on_interrupted:
     kind: code
     input:
       by: \${place.output.by}
     code: 'return "stopped by " + inputs["by"]'
-    output: str
+    output: !str
 output: \${on_filled.output | on_interrupted.output}
 `;
 
@@ -292,7 +292,7 @@ nodes:
   fine:
     kind: code
     code: 'return "ok"'
-    output: str
+    output: !str
   place:
     kind: tool
     tool_id: place_order
@@ -411,7 +411,7 @@ nodes:
         input:
           qty: \${input.n}
           sym: X
-        output: str
+        output: !str
     output: \${place.output}
 output: \${wrap.output}
 `;
@@ -434,7 +434,7 @@ nodes:
         input:
           qty: \${input.count}
           sym: X
-        output: str
+        output: !str
     output:
       count: \${input.count + 1}
       last: \${place.output}
@@ -801,7 +801,7 @@ nodes:
     tool_id: place_order
     input:
       qty: 5
-    output: Short
+    output: !Short
 output: \${place.output}
 `;
 
@@ -883,7 +883,7 @@ nodes:
     tool_id: place_order
     input:
       qty: 5
-    output: {qty: int}
+    output: {qty: !int}
 output: \${place.output}
 `;
 
@@ -898,7 +898,7 @@ nodes:
     tool_id: place_order
     input:
       qty: 5
-    output: Quote
+    output: !Quote
 output: \${quote.output}
 `;
 
@@ -952,7 +952,7 @@ for (const [name, unread] of [
 test("a node without output runs any return type", async () => {
   expect(toolTypes(placeInt).output).not.toBeNull();
 
-  const result = await run(INT_FLOW.replace("    output: int\n", ""), {}, { tools: { place_order: placeInt } });
+  const result = await run(INT_FLOW.replace("    output: !int\n", ""), {}, { tools: { place_order: placeInt } });
 
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(result.output).toBe("placed 5");

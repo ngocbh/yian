@@ -8,7 +8,7 @@ flow: |
       kind: agent
       prompt: Help the user.
       steerable: true
-      output: str
+      output: !str
   output: ${chat.output}
 expect:
   load:

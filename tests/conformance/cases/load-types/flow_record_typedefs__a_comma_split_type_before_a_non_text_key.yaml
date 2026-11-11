@@ -13,7 +13,7 @@ flow: |
       kind: code
       input:
         msg: ${input.msg}
-      output: str
+      output: !str
       code: ./fixtures/seeds.ts:echo_value
   output: ${echo.output}
 expect:

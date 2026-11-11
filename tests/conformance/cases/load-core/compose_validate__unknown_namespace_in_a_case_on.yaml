@@ -12,7 +12,7 @@ flow: |
       else: p
     p:
       kind: code
-      output: int
+      output: !int
       code: "return {'output': 1}"
   output: ${p.output}
 expect:

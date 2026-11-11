@@ -10,7 +10,7 @@ flow: |
   nodes:
     answer:
       kind: agent
-      output: str
+      output: !str
       input:
         lessons: ${input.lessons}
         notes: ${input.notes}

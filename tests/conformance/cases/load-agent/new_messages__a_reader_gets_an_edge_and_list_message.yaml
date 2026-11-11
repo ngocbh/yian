@@ -7,12 +7,12 @@ flow: |
     reply:
       kind: agent
       prompt: hi
-      output: str
+      output: !str
     reader:
       kind: code
       input:
         history: !list(Message) ${reply.new_messages}
-      output: int
+      output: !int
       code: return inputs['history'].length
   output: ${reader.output}
 expect:

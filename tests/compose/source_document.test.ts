@@ -96,8 +96,8 @@ describe("a syntax error at the end of the text", () => {
   // The YAML reader reports these past the last character; each points at what is still open.
   const PROMPT = "id: t\nname: t\nkind: agent\nprompt: ";
   test.each([
-    ["an unclosed double quote", `${PROMPT}"unclosed\noutput: str\n`, 'Missing closing "quote', [4, 9]],
-    ["an unclosed single quote", `${PROMPT}'it is\noutput: str\n`, "Missing closing 'quote", [4, 9]],
+    ["an unclosed double quote", `${PROMPT}"unclosed\noutput: !str\n`, 'Missing closing "quote', [4, 9]],
+    ["an unclosed single quote", `${PROMPT}'it is\noutput: !str\n`, "Missing closing 'quote", [4, 9]],
     ["no final line break", `${PROMPT}"unclosed\noutput: str`, 'Missing closing "quote', [4, 9]],
     ["blank lines after it", `${PROMPT}"unclosed\n\n\n`, 'Missing closing "quote', [4, 9]],
     ["an unclosed flow list", "nodes:\n  a: !str [1, 2\n", "end with a ]", [2, 11]],

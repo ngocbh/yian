@@ -16,7 +16,7 @@ flow: |
   nodes:
     p:
       kind: code
-      output: float
+      output: !float
       code: |
         return "hi"
     c:

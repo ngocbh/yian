@@ -7,7 +7,7 @@ flow: |
     review:
       kind: agent
       prompt: Review the change.
-      output: str
+      output: !str
   output: ${review.output}
 other: |
   id: skills
@@ -17,7 +17,7 @@ other: |
       kind: agent
       prompt: Review the change.
       skills: [a, b]
-      output: str
+      output: !str
   output: ${review.output}
 expect:
   fingerprint: different

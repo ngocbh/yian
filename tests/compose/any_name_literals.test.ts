@@ -34,7 +34,7 @@ const MULTI_NODE_DEF_ENV = (v: string) =>
   "id: f\nname: f\n" +
   "defs:\n  g:\n    env:\n" +
   `      secret: ${v}\n` +
-  "    nodes:\n      run:\n        kind: code\n        output: str\n" +
+  "    nodes:\n      run:\n        kind: code\n        output: !str\n" +
   "        code: |\n          return 'x'\n" +
   "    output: ${run.output}\n" +
   "nodes:\n  b:\n    kind: call\n    call: g\n" +
@@ -44,7 +44,7 @@ const SINGLE_NODE_DEF_ENV = (v: string) =>
   "id: f\nname: f\n" +
   "defs:\n  g:\n    kind: code\n    env:\n" +
   `      password: ${v}\n` +
-  "    output: str\n    code: |\n      return 'x'\n" +
+  "    output: !str\n    code: |\n      return 'x'\n" +
   "nodes:\n  b:\n    kind: call\n    call: g\n" +
   "output: ${b.output}\n";
 
@@ -60,7 +60,7 @@ test("a def input default under a credential name loads", async () => {
     "id: f\nname: f\n" +
     "defs:\n  g:\n    input:\n" +
     `      password: !str ${value}\n` +
-    "    nodes:\n      run:\n        kind: code\n        output: str\n" +
+    "    nodes:\n      run:\n        kind: code\n        output: !str\n" +
     "        code: |\n          return 'x'\n" +
     "    output: ${run.output}\n" +
     "nodes:\n  b:\n    kind: call\n    call: g\n" +
@@ -84,7 +84,7 @@ test("a map over literal under a credential name loads", () => {
     "id: p\nname: p\n" +
     "defs:\n  leaf:\n    input:\n      x: !object\n    nodes:\n" +
     "      up:\n        kind: code\n        input:\n          x: ${input.x}\n" +
-    "        output: str\n        code: return 'x'\n    output: ${up.output}\n" +
+    "        output: !str\n        code: return 'x'\n    output: ${up.output}\n" +
     "nodes:\n  m:\n    kind: map\n" +
     `    over: [{password: ${value}}, {password: b}]\n` +
     "    call: leaf\n    input:\n      x: ${item}\n" +
@@ -108,9 +108,9 @@ test("an inline call in a node assert shows the assert under any keyword", () =>
   const text =
     "id: f\nname: f\n" +
     "defs:\n  g:\n    input:\n      password: !Optional(str) null\n    nodes:\n" +
-    "      run:\n        kind: code\n        output: str\n        code: |\n          return 'x'\n" +
+    "      run:\n        kind: code\n        output: !str\n        code: |\n          return 'x'\n" +
     "    output: ${run.output}\n" +
-    "nodes:\n  b:\n    kind: code\n    output: str\n    code: |\n      return 'x'\n" +
+    "nodes:\n  b:\n    kind: code\n    output: !str\n    code: |\n      return 'x'\n" +
     "    asserts:\n      - call(g, password=x)\n" +
     "output: ${b.output}\n";
 

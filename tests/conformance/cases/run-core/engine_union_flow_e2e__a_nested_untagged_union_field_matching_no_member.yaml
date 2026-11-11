@@ -20,8 +20,8 @@ flow: |2
       code: |
         return inputs["value"]
       output:
-        decision: Decision
-        notes: list(Note)
+        decision: !Decision
+        notes: !list(Note)
   output: ${d.output}
 inputs:
   value:
@@ -40,7 +40,7 @@ expect:
       code: contract.output
       frames:
       - label: flow.yaml
-        range: [22, 14, 22, 24]
+        range: [22, 14, 22, 25]
       message: 'output at notes[1]: value matches no member of Union({"num":int},{"text":str}): {"num":int}: record missing required fields: ["num"]; {"text":str}: record missing required fields: ["text"]'
       node: d
   trace:
@@ -85,7 +85,7 @@ expect:
         code: contract.output
         frames:
         - label: flow.yaml
-          range: [22, 14, 22, 24]
+          range: [22, 14, 22, 25]
         message: 'output at notes[1]: value matches no member of Union({"num":int},{"text":str}): {"num":int}: record missing required fields: ["num"]; {"text":str}: record missing required fields: ["text"]'
         node: d
   events:
@@ -110,7 +110,7 @@ expect:
         code: contract.output
         frames:
         - label: flow.yaml
-          range: [22, 14, 22, 24]
+          range: [22, 14, 22, 25]
         message: 'output at notes[1]: value matches no member of Union({"num":int},{"text":str}): {"num":int}: record missing required fields: ["num"]; {"text":str}: record missing required fields: ["text"]'
         node: d
   - - RunFailed
@@ -118,6 +118,6 @@ expect:
         code: contract.output
         frames:
         - label: flow.yaml
-          range: [22, 14, 22, 24]
+          range: [22, 14, 22, 25]
         message: 'output at notes[1]: value matches no member of Union({"num":int},{"text":str}): {"num":int}: record missing required fields: ["num"]; {"text":str}: record missing required fields: ["text"]'
         node: d

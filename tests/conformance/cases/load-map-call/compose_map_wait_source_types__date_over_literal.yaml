@@ -19,7 +19,7 @@ flow: |
       nodes:
         c:
           kind: code
-          output: list(str)
+          output: !list(str)
           code: |
             return ["a", "b"]
       output: ${c.output}

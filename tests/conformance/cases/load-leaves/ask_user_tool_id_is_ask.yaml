@@ -9,7 +9,7 @@ flow: |
       tool_id: ask_user
       input:
         prompt: Ship it?
-      output: Literal(yes, no)
+      output: !Literal(yes;no)
   output: ${q.output}
 expect:
   load: ok

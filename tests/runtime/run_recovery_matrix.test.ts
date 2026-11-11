@@ -75,7 +75,7 @@ defs:
         kind: code
         input:
           x: \${input.value}
-        output: int
+        output: !int
         code: ./compose_codefns.ts:echo_x
     output: \${echo.output}
   bump_once:
@@ -89,8 +89,8 @@ defs:
           n: \${input.n}
           exited: \${input.exited}
         output:
-          n: int
-          exited: bool
+          n: !int
+          exited: !bool
         code: ./compose_codefns.ts:loop_bump
     output: \${bump.output}
   composite:
@@ -137,7 +137,7 @@ nodes:
             kind: code
             input:
               x: \${input.value}
-            output: int
+            output: !int
             code: ./compose_codefns.ts:echo_x
         output: \${echo.output}
       repeated:
@@ -153,8 +153,8 @@ nodes:
               n: \${input.n}
               exited: \${input.exited}
             output:
-              n: int
-              exited: bool
+              n: !int
+              exited: !bool
             code: ./compose_codefns.ts:loop_bump
         output: \${bump.output}
     output:
@@ -176,7 +176,7 @@ defs:
         tool_id: ask
         input:
           prompt: nested call input
-        output: str
+        output: !str
     output: \${ask.output}
 nodes:
   invoke:
@@ -199,7 +199,7 @@ defs:
         kind: code
         input:
           x: \${input.value}
-        output: int
+        output: !int
         code: ./compose_codefns.ts:echo_x
     output: \${echo.output}
   turn:
@@ -225,8 +225,8 @@ defs:
           n: \${input.n}
           exited: \${input.exited}
         output:
-          n: int
-          exited: bool
+          n: !int
+          exited: !bool
         code: ./compose_codefns.ts:loop_bump
     output: \${bump.output}
 nodes:
@@ -252,7 +252,7 @@ defs:
         kind: code
         input:
           x: \${input.value}
-        output: int
+        output: !int
         code: ./compose_codefns.ts:echo_x
     output: \${echo.output}
   inc:
@@ -290,8 +290,8 @@ defs:
           n: \${pick.output}
           exited: \${input.exited}
         output:
-          n: int
-          exited: bool
+          n: !int
+          exited: !bool
         code: ./compose_codefns.ts:loop_bump
     output: \${bump.output}
 nodes:
@@ -321,7 +321,7 @@ defs:
         input:
           n: \${input.n}
         output:
-          n: int
+          n: !int
     output: \${step.output}
 nodes:
   repeated:
@@ -344,7 +344,7 @@ nodes:
     tool_id: ask
     input:
       prompt: this host interaction must never be invoked
-    output: str
+    output: !str
 output: \${effect.output}
 `,
   sleep: `
@@ -367,7 +367,7 @@ nodes:
   release:
     kind: code
     input: {x: ready}
-    output: str
+    output: !str
     code: ./compose_codefns.ts:echo_x
   wait:
     kind: tool
@@ -386,12 +386,12 @@ nodes:
     depends_on: [release]
     input:
       prompt: never invoked
-    output: str
+    output: !str
   later:
     kind: code
     depends_on: [release]
     input: {x: still-ready}
-    output: str
+    output: !str
     code: ./compose_codefns.ts:echo_x
 output:
   agent: \${agent.output}

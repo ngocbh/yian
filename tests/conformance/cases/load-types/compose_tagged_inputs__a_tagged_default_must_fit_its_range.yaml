@@ -10,7 +10,7 @@ flow: |
     qty: !int
     n: !int(1..12) 13
   kind: code
-  output: object
+  output: !object
   code: "return {...inputs}"
 expect:
   load:

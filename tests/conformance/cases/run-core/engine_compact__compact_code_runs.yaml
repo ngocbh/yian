@@ -5,7 +5,7 @@ flow: |2
   name: echo_one
   input:
     topic: !str
-  output: str
+  output: !str
   kind: code
   code: ./fixtures/compose_codefns.ts:echo
 inputs:

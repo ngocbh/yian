@@ -79,7 +79,7 @@ const ROOT = caller("root", "child", "lib/child");
 /** A flow `id` taking `q` whose CODE node runs `ref`. */
 const codeFlow = (id: string, ref: string) =>
   `id: ${id}\nname: ${id}\ninput:\n  q: !str\nnodes:\n  up:\n    kind: code\n    code: ${ref}\n` +
-  "    input:\n      q: ${input.q}\n    output: str\noutput: ${up.output}\n";
+  "    input:\n      q: ${input.q}\n    output: !str\noutput: ${up.output}\n";
 /** A child flow whose CODE node runs `./fn.ts:up`, a file beside the child. */
 const CODE_CHILD = codeFlow("child", "./fn.ts:up");
 const UP = "export function up(inputs: Record<string, any>): string {\n  return `up:${inputs.q}`;\n}\n";

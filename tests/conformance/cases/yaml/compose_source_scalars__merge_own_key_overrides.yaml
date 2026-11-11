@@ -9,7 +9,7 @@ flow: |
   nodes:
     a:
       <<: *base
-      output: int
+      output: !int
   output: ${a.output}
 expect:
   load: ok

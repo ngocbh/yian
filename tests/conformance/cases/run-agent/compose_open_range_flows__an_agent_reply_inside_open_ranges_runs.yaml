@@ -15,7 +15,7 @@ flow: |2
       llm_config:
         provider: openai
         model: gpt-4o
-      output: Order
+      output: !Order
   output: ${writer.output}
 run:
   num_workers: 0

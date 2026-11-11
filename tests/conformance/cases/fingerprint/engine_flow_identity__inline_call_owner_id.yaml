@@ -10,7 +10,7 @@ flow: |
         step:
           kind: tool
           tool_id: step
-          output: int
+          output: !int
       output: ${step.output}
   output: ${wrapper.output}
 other: |
@@ -23,7 +23,7 @@ other: |
         step:
           kind: tool
           tool_id: step
-          output: int
+          output: !int
       output: ${step.output}
   output: ${renamed.output}
 expect:

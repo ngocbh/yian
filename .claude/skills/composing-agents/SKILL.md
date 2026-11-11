@@ -51,7 +51,7 @@ nodes:
     kind: agent
     input:
       ticket: ${input.ticket}         # bind first; the prompt reads the local name
-    output: Severity                  # a non-str type asks for structured output
+    output: !Severity                 # a non-str type asks for structured output
     prompt: Classify this ticket's severity as low or high. ${ticket}
   route:
     kind: case
@@ -66,13 +66,13 @@ nodes:
     kind: agent
     input:
       ticket: ${input.ticket}
-    output: str
+    output: !str
     prompt: Write a short, friendly reply to this ticket. ${ticket}
   words:
     kind: code
     input:
       text: ${route.output}           # the output of whichever branch ran
-    output: int
+    output: !int
     code: |
       return inputs.text.split(/\s+/).filter(Boolean).length;
 output:

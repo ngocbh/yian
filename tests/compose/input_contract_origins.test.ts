@@ -46,7 +46,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo_x
     input:
       x: \${input.topic}
-    output: str
+    output: !str
 output: \${echo.output}
 `;
 
@@ -117,7 +117,7 @@ nodes:
       settings: !Settings {limit: 4, tags: [a, b]}
       note: !Optional(str) null
     prompt: \${note}
-    output: str
+    output: !str
 output: \${writer.output}
 `;
   const document = SourceDocument.parse(text);
@@ -138,7 +138,7 @@ output: \${writer.output}
 test.each(["compact", "definition", "flat-definition", "inline"])(
   "agent variable locations follow existing node projections (%s)",
   async (placement) => {
-    const body = "kind: agent\nvariables:\n  count: !int(1..12) 4\nprompt: ${count}\noutput: str\n";
+    const body = "kind: agent\nvariables:\n  count: !int(1..12) 4\nprompt: ${count}\noutput: !str\n";
     const header = "id: projected_variables\nname: projected_variables\n";
     let text: string;
     let cursorPath: string[];
@@ -194,7 +194,7 @@ kind: agent
 variables:
   count: !int(1..12) 4
 prompt: \${count}
-output: str
+output: !str
 `;
   const child = await loadConformanceFlow(childText, { sourceLabel: "variable-child.yaml" });
   const parent = await loadConformanceFlow(
@@ -373,7 +373,7 @@ test.each(
     code: ./fixtures/compose_codefns.ts:echo_x
     input:
       ${key}: !int
-    output: int
+    output: !int
 `
       : `    input:
       ${key}: !int
@@ -419,7 +419,7 @@ test("compact root and both definition forms retain input contract sites", async
 name: compact_input_contract
 input:
   x: !int 3
-output: int
+output: !int
 kind: code
 code: ./fixtures/compose_codefns.ts:echo_x
 `;
@@ -445,14 +445,14 @@ defs:
         code: ./fixtures/compose_codefns.ts:echo_x
         input:
           x: \${input.x}
-        output: int
+        output: !int
     output: \${echo.output}
   compact:
     kind: code
     code: ./fixtures/compose_codefns.ts:echo_x
     input:
       x: !int
-    output: int
+    output: !int
 nodes:
   named_call:
     kind: call
@@ -503,7 +503,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo_x
         input:
           x: \${input.x}
-        output: int
+        output: !int
     output: \${echo.output}
 output: \${invoke.output}
 `;
@@ -535,7 +535,7 @@ nodes:
       x: \${input.payload}
     output:
       profile:
-        age: int
+        age: !int
 output: \${echo.output}
 `;
   const child = await loadConformanceFlow(childText, { sourceLabel: "child.yaml" });

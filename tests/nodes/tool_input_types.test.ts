@@ -114,7 +114,7 @@ nodes:
       decision: \${input.decision}
     code: |
       return inputs["decision"]
-    output: Decision
+    output: !Decision
   route:
     kind: case
     on: \${d.output.action}

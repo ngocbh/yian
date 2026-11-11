@@ -9,7 +9,7 @@ flow: |
       kind: agent
       input:
         name: ${input.name}
-      output: str
+      output: !str
       llm_config: {provider: openai, model: gpt-5.5}
       prompt: "Greet ${name}."
   output: ${write.output}

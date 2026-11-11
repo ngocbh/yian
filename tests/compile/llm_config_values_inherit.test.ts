@@ -30,7 +30,7 @@ nodes:
   pick:
     kind: agent
     prompt: Pick a model.
-    output: str
+    output: !str
     llm_config: {model: m0}
   c:
     kind: call
@@ -78,7 +78,7 @@ nodes:
   pick:
     kind: agent
     prompt: Pick.
-    output: str
+    output: !str
     llm_config: {model: m0}
   c:
     kind: call
@@ -232,13 +232,13 @@ nodes:
   pick:
     kind: agent
     prompt: Pick a model.
-    output: str
+    output: !str
     llm_config: {model: m0}
   c:
     kind: call
     input: {}
     nodes:
-      a: {kind: agent, prompt: Go., output: str}
+      a: {kind: agent, prompt: Go., output: !str}
     output: \${a.output}
     depends_on: [pick]
 output: \${c.output}
@@ -256,7 +256,7 @@ nodes:
   pick:
     kind: agent
     prompt: Pick a model.
-    output: str
+    output: !str
     llm_config: {model: m0}
   repeat:
     kind: loop
@@ -267,7 +267,7 @@ nodes:
         kind: agent
         input: {t: '\${input.t}'}
         prompt: Go \${t}.
-        output: str
+        output: !str
     output: {t: '\${a.output}'}
     depends_on: [pick]
 output: \${repeat.output}
@@ -307,7 +307,7 @@ nodes:
   pick:
     kind: agent
     prompt: Pick a model.
-    output: str
+    output: !str
     llm_config: {model: m0}
   c:
     kind: call
@@ -345,15 +345,15 @@ function diamond(depth: number, leaf: string, rootLlm = ""): string {
 test("a deep diamond of defs walks each def once", async () => {
   // Walking every static path would take 2^24 steps.
   const start = performance.now();
-  await loadFlow(diamond(24, "{kind: agent, prompt: Go., output: str}"), { sourceLabel: "f.yaml" });
+  await loadFlow(diamond(24, "{kind: agent, prompt: Go., output: !str}"), { sourceLabel: "f.yaml" });
   expect(performance.now() - start).toBeLessThan(2000);
 });
 
 test("a deep diamond reports the first path that inherits a run-time value", async () => {
   const rootLlm = "llm_config: {model: '${pick.output}'}\n";
-  const text = diamond(24, "{kind: agent, prompt: Go., output: str}", rootLlm).replace(
+  const text = diamond(24, "{kind: agent, prompt: Go., output: !str}", rootLlm).replace(
     "nodes:\n  k0:",
-    "nodes:\n  pick: {kind: agent, prompt: Pick., output: str, llm_config: {model: m0}}\n  k0:",
+    "nodes:\n  pick: {kind: agent, prompt: Pick., output: !str, llm_config: {model: m0}}\n  k0:",
   );
   const start = performance.now();
   const message = (await error(text)).diagnostic.message;

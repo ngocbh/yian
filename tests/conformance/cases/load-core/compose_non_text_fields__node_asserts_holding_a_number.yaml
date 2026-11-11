@@ -5,7 +5,7 @@ flow: |
   nodes:
     a:
       kind: code
-      output: str
+      output: !str
       asserts: ["true", 5]
       code: "return 'x'"
   output: ${a.output}

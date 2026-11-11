@@ -18,7 +18,7 @@ nodes:
     kind: agent
     input:
       review: ${input.review}
-    output: Sentiment
+    output: !Sentiment
     prompt: |-
       Classify the sentiment of this review as exactly one of: positive, negative.
       Review: ${review}
@@ -38,14 +38,14 @@ nodes:
     kind: agent
     input:
       review: ${input.review}
-    output: str
+    output: !str
     prompt: "Write a warm thank-you reply to: ${review}"
 
   apologize:
     kind: agent
     input:
       review: ${input.review}
-    output: str
+    output: !str
     prompt: "Write an apologetic, helpful reply to: ${review}"
 
 # The output of whichever branch ran.

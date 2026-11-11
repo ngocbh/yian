@@ -26,7 +26,7 @@ flow: |
       input:
         rating: ${input.rating}
         label:  ${input.label}
-      output: str
+      output: !str
       code: |
         const [lean, sign] = inputs.rating >= 0 ? ["positive", "+"] : ["negative", ""]
         return inputs.label + ": " + lean + " (" + sign + inputs.rating.toFixed(2) + ")"

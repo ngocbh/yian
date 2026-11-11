@@ -50,7 +50,7 @@ const PICKED = `id: f
 name: f
 llm_config: {provider: openai}
 nodes:
-  pick: {kind: code, output: str, code: "return 'gpt-picked'"}
+  pick: {kind: code, output: !str, code: "return 'gpt-picked'"}
   chat:
     kind: agent
     prompt: Go.
@@ -195,7 +195,7 @@ const TWO_CALL_TIME = `id: f
 name: f
 llm_config: {provider: openai}
 nodes:
-  pick: {kind: code, output: str, code: "return 'anthropic'"}
+  pick: {kind: code, output: !str, code: "return 'anthropic'"}
   chat:
     kind: agent
     prompt: Go.

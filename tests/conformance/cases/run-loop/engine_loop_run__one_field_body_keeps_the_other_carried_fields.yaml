@@ -15,7 +15,7 @@ flow: |2
           kind: code
           input:
             n: ${input.count}
-          output: int
+          output: !int
           code: |
             return inputs["n"] + 1
       output:

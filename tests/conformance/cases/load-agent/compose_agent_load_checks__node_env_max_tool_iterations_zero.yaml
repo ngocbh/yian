@@ -6,7 +6,7 @@ flow: |
     a:
       kind: agent
       prompt: Go.
-      output: str
+      output: !str
       env: {max_tool_iterations: 0}
   output: ${a.output}
 expect:

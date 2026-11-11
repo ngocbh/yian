@@ -3,7 +3,7 @@ flow: |
   id: f
   name: f
   nodes:
-    pick: {kind: code, output: object, code: "return {'provider': 'azure', 'model': 'dep', 'base_url': 'https://res.openai.azure.com'}"}
+    pick: {kind: code, output: !object, code: "return {'provider': 'azure', 'model': 'dep', 'base_url': 'https://res.openai.azure.com'}"}
     chat:
       kind: agent
       prompt: Go.

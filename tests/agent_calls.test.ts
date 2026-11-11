@@ -50,6 +50,7 @@ import { FunctionTool } from "../src/tools/function_tools.ts";
 import { logJson } from "../src/typesys/json.ts";
 import { RecordingSession } from "./helpers/memory_fakes.ts";
 import { callReply, crashAfter, NO_ENV, serving, textReply } from "./helpers/run_state_fixtures.ts";
+import { outputTag } from "./helpers/output_tags.ts";
 
 const root = mkdtempSync(join(tmpdir(), "yian-agent-calls-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -124,7 +125,7 @@ nodes:
     tools: [lookup, save]
     system_prompt: Be exact.
     prompt: Write about \${topic}.
-    output: str
+    output: !str
 output: \${writer.output}
 `;
 
@@ -221,7 +222,7 @@ nodes:
     prompt:
       - \${history}
       - user: \${message}
-    output: ${output}
+    output: ${outputTag(output)}
 output: \${reply.output}
 `;
 
@@ -361,7 +362,7 @@ test("a run whose flow files changed on disk is read with the recorded flow", as
   const child = (system: string) =>
     `id: child\nname: child\ninput:\n  q: !str\nnodes:\n  writer:\n    kind: agent\n` +
     `    input:\n      q: \${input.q}\n` +
-    `    system_prompt: ${system}\n    prompt: Answer \${q}.\n    output: str\noutput: \${writer.output}\n`;
+    `    system_prompt: ${system}\n    prompt: Answer \${q}.\n    output: !str\noutput: \${writer.output}\n`;
   writeFileSync(join(dir, "lib", "child.yaml"), child("Old system."));
   const rootPath = join(dir, "flow.yaml");
   writeFileSync(
@@ -460,11 +461,11 @@ nodes:
   pick:
     kind: agent
     prompt: Pick a model.
-    output: str
+    output: !str
   chat:
     kind: agent
     prompt: Go.
-    output: str
+    output: !str
     llm_config: {model: '\${pick.output}'}
 output: \${chat.output}
 `;
@@ -502,7 +503,7 @@ nodes:
   count:
     kind: agent
     prompt: How many?
-    output: int
+    output: !int
 output: \${count.output}
 `;
 
@@ -581,7 +582,7 @@ nodes:
     kind: agent
     tools: [lookup]
     prompt: How many?
-    output: int
+    output: !int
 output: \${count.output}
 `;
 
@@ -615,7 +616,7 @@ nodes:
     kind: agent
     skills: [style]
     prompt: review it
-    output: str
+    output: !str
 output: \${review.output}
 `;
   const skill = new Skill({ name: "style", description: "House style.", instructions: "Prefer small diffs." });
@@ -727,7 +728,7 @@ nodes:
     input:
       topic: !${tag} \${input.data}
     prompt: Write about \${topic}.
-    output: str
+    output: !str
 output: \${writer.output}
 `;
 
@@ -846,7 +847,7 @@ nodes:
     tools: [lookup, ${grant}]
     skills: [style]
     prompt: "<memory>\${lessons}</memory> write"
-    output: str
+    output: !str
 output: \${writer.output}
 `;
 

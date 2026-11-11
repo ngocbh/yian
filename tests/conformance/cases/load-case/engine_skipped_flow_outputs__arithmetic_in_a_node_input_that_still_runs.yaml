@@ -14,17 +14,17 @@ flow: |
     order:
       kind: code
       output:
-        qty: int
+        qty: !int
       code: |
         return {"qty": 2}
     rejected:
       kind: code
-      output: str
+      output: !str
       code: |
         return "no"
     use:
       kind: code
-      output: int
+      output: !int
       input:
         q: ${order.output.qty * 2}
       code: |

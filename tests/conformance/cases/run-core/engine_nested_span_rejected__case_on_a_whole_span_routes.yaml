@@ -12,7 +12,7 @@ flow: |2
       kind: code
       code: "return inputs['n']"
       input: {n: '${input.n}'}
-      output: Optional(int)
+      output: !Optional(int)
     gate:
       kind: case
       on: ${input.label}
@@ -20,8 +20,8 @@ flow: |2
         - when: go
           then: hot
       else: cold
-    hot: {kind: code, code: "return 'hot'", output: str}
-    cold: {kind: code, code: "return 'cold'", output: str}
+    hot: {kind: code, code: "return 'hot'", output: !str}
+    cold: {kind: code, code: "return 'cold'", output: !str}
   output: ${hot.output | cold.output}
 inputs:
   label: go

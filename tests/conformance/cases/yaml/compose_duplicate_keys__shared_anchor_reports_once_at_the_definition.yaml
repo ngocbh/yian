@@ -6,7 +6,7 @@ flow: |
     kind: code
     code: return 1
     code: return 2
-    output: int
+    output: !int
   nodes:
     a: *base
     b: *base

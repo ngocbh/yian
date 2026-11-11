@@ -45,12 +45,12 @@ nodes:
   label:
     kind: agent
     input: {message: "${input.message}"}
-    output: Literal(billing, bug, other)
+    output: !Literal(billing;bug;other)
     prompt: "Label this support message: ${message}"
   reply:
     kind: agent
     input: {message: "${input.message}", label: "${label.output}"}
-    output: str
+    output: !str
     prompt: "Write a one-line reply to this ${label} message: ${message}"
 output: {label: "${label.output}", reply: "${reply.output}"}
 ```

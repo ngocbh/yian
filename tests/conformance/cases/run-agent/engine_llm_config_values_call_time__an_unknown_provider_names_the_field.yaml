@@ -5,7 +5,7 @@ flow: |
   typedefs:
     Some: Literal(openai, nope)
   nodes:
-    pick: {kind: code, output: Some, code: "return 'nope'"}
+    pick: {kind: code, output: !Some, code: "return 'nope'"}
     chat:
       kind: agent
       prompt: Go.

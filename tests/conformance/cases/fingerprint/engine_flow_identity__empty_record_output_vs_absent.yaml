@@ -7,7 +7,7 @@ flow: |
     step:
       kind: tool
       tool_id: step
-      output: str
+      output: !str
   output: {}
 other: |
   id: pin
@@ -16,6 +16,6 @@ other: |
     step:
       kind: tool
       tool_id: step
-      output: str
+      output: !str
 expect:
   fingerprint: different

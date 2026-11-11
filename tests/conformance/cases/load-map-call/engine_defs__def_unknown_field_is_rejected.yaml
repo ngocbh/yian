@@ -16,7 +16,7 @@ flow: |2
           code: ./fixtures/compose_codefns.ts:echo
           input:
             topic: ${input.topic}
-          output: str
+          output: !str
       output: ${x.output}
       bogus: 1
   nodes:

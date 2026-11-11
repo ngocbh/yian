@@ -7,7 +7,7 @@ flow: |
       nodes:
         c:
           kind: code
-          output: int
+          output: !int
           code: return 1
       output: ${c.output}
       asserts: null

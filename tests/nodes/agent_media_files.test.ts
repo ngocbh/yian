@@ -337,7 +337,7 @@ nodes:
     kind: agent
     input: {message: "\${input.message}"}
     prompt: \${message}
-    output: str
+    output: !str
 output: \${reply.output}
 `;
 // The records before `reply`'s output: the run start (RunStarted and four commits), START's start,

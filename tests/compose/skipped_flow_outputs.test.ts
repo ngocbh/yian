@@ -26,6 +26,7 @@ import {
   loadError,
   runCase,
 } from "../helpers/declarations.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 /** Return a flow text with the given `typedefs:`, `input:`, `defs:`, `nodes:` and `output:` blocks. */
 function flow(
@@ -39,7 +40,7 @@ function flow(
 
 /** Return an inline CODE node returning the expression `value`. */
 function code(node: string, value: string, output = "str", extra = ""): string {
-  return `  ${node}:\n    kind: code\n    output: ${output}\n${extra}    code: |\n      return ${value}\n`;
+  return `  ${node}:\n    kind: code\n    output: ${outputTag(output)}\n${extra}    code: |\n      return ${value}\n`;
 }
 
 /** Return a CASE that routes to `then` when `input.<when>` holds, else to `else_`. */
@@ -157,7 +158,7 @@ const TAKE = `defs:
     nodes:
       x:
         kind: code
-        output: str
+        output: !str
         input:
           stance: \${input.stance}
         code: |
@@ -196,7 +197,7 @@ const BUMP = `defs:
         input:
           n: \${input.n}
         output:
-          n: int
+          n: !int
         code: |
           return {"n": inputs["n"] + 1}
     output: \${step.output}
@@ -309,7 +310,7 @@ test("a defs child returns null to its caller", async () => {
     "defs:\n  child:\n    input:\n      approve: !bool\n    nodes:\n" +
     "      gate:\n        kind: case\n        cases:\n" +
     "          - when: ${input.approve}\n            then: order\n" +
-    "      order:\n        kind: code\n        output: str\n" +
+    "      order:\n        kind: code\n        output: !str\n" +
     '        code: |\n          return "filled"\n' +
     "    output: ${order.output}\n";
   const nodes = "  c:\n    kind: call\n    call: child\n    input:\n      approve: ${input.approve}\n";
@@ -387,7 +388,7 @@ const USE_STR = `  use:
     nodes:
       x:
         kind: code
-        output: str
+        output: !str
         input:
           s: \${input.s}
         code: |
@@ -440,14 +441,14 @@ const FLIP_BODY = `      gate:
             then: mk
       mk:
         kind: code
-        output: str
+        output: !str
         code: |
           return "made"
       bump:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: |
           return inputs["n"] + 1
 `;
@@ -514,7 +515,7 @@ test("a map inline body returns null per skipped element", async () => {
     "  each:\n    kind: map\n    over: [true, false]\n    input:\n      flag: ${item}\n    nodes:\n" +
     "      gate:\n        kind: case\n        cases:\n" +
     "          - when: ${input.flag}\n            then: mk\n" +
-    "      mk:\n        kind: code\n        output: str\n" +
+    "      mk:\n        kind: code\n        output: !str\n" +
     '        code: |\n          return "made"\n' +
     "    output: ${mk.output}\n";
   expect(await run(flow(nodes, " ${each.output}"), { approve: true })).toEqual(["made", null]);
@@ -830,12 +831,12 @@ nodes:
     else: rejected
   d:
     kind: code
-    output: Decision
+    output: !Decision
     code: |
       return {"action": "sell", "qty": 9}
   rejected:
     kind: code
-    output: str
+    output: !str
     code: |
       return "no"
   gate2:
@@ -846,12 +847,12 @@ nodes:
     else: cold
   hot:
     kind: code
-    output: str
+    output: !str
     code: |
       return "hot"
   cold:
     kind: code
-    output: str
+    output: !str
     code: |
       return "cold"
 output:
@@ -867,7 +868,7 @@ test("an isinstance guard in a searched when: over a skippable union routes", as
 
 const CHILD =
   "defs:\n  child:\n    input:\n      n: !int\n    nodes:\n      k:\n        kind: code\n" +
-  "        input:\n          n: ${input.n}\n        output: int\n        code: |\n" +
+  "        input:\n          n: ${input.n}\n        output: !int\n        code: |\n" +
   "          return inputs['n']\n    output: ${k.output}\n";
 
 // then: order / else: rejected, where `order` returns a list field and a str field

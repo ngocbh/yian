@@ -18,6 +18,7 @@ import {
   loadError,
   runCase,
 } from "../helpers/declarations.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-union-narrowing-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -96,7 +97,7 @@ const DEFS =
 /** A CODE node typed `output` that reads the flow input `s`. */
 function producer(nodeId: string, output: string): string {
   return (
-    `  ${nodeId}:\n    kind: code\n    input:\n      s: \${input.s}\n` + `    output: ${output}\n    code: return None\n`
+    `  ${nodeId}:\n    kind: code\n    input:\n      s: \${input.s}\n` + `    output: ${outputTag(output)}\n    code: return None\n`
   );
 }
 
@@ -804,14 +805,14 @@ test("a partly shared union branch runs", async () => {
     "  d:\n" +
     "    kind: code\n" +
     "    input:\n      s: ${input.s}\n" +
-    "    output: Decision\n" +
+    "    output: !Decision\n" +
     "    code: |\n" +
     "      return {'action': 'sell', 'qty': 2, 'price': 1.5, 'note': 'n'}\n" +
     searched(["isinstance(d.output, Rest)", "t"]) +
     "  t:\n" +
     "    kind: code\n" +
     "    input:\n      n: ${d.output.note}\n" +
-    "    output: str\n" +
+    "    output: !str\n" +
     "    code: return inputs['n']\n" +
     code("e") +
     "output: ${route.output}\n";
@@ -998,14 +999,14 @@ test("a searched when with a tag check and a member read runs", async () => {
     "  d:\n" +
     "    kind: code\n" +
     "    input:\n      s: ${input.s}\n" +
-    "    output: Decision\n" +
+    "    output: !Decision\n" +
     "    code: |\n" +
     "      if (inputs['s'] === 'buy')\n" +
     "          return {'action': 'buy', 'qty': 1, 'limit': 6.0, 'leg': {'type': 'market'}}\n" +
     "      return {'action': 'sell', 'qty': 2, 'price': 1.5, 'note': 'n'}\n" +
     searched(["\"d.output.action == 'buy' and d.output.limit > 5\"", "t"]) +
-    "  t:\n    kind: code\n    output: str\n    code: return 'branch'\n" +
-    "  e:\n    kind: code\n    output: str\n    code: return 'else'\n" +
+    "  t:\n    kind: code\n    output: !str\n    code: return 'branch'\n" +
+    "  e:\n    kind: code\n    output: !str\n    code: return 'else'\n" +
     "output: ${route.output}\n";
   const loaded = await loadConformanceFlow(text);
 

@@ -12,7 +12,7 @@ flow: |
           code: ./fixtures/compose_codefns.ts:echo
           input:
             topic: ${input.topic}
-          output: str
+          output: !str
       output: ${e.output}
   nodes:
     use:
@@ -20,7 +20,7 @@ flow: |
       code: ./fixtures/compose_codefns.ts:echo
       input:
         topic: call(f, topic = "a = b")
-      output: str
+      output: !str
   output: ${use.output}
 run:
   num_workers: 0

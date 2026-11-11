@@ -69,7 +69,7 @@ function flow(topic: string, header = ""): string {
   return (
     `id: f\nname: f\n${header}nodes:\n  use:\n    kind: code\n` +
     "    code: tests.engine._compose_codefns:echo\n" +
-    `    input:\n      topic: ${topic}\n    output: str\noutput: \${use.output}\n`
+    `    input:\n      topic: ${topic}\n    output: !str\noutput: \${use.output}\n`
   );
 }
 

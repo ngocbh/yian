@@ -32,7 +32,7 @@ defs:
         llm_config:
           provider: ${input.model?.provider}
           model: ${input.model?.model}
-        output: str
+        output: !str
         system_prompt: |-
           You keep a running summary of a conversation between a user and an assistant, so the
           assistant can continue it without the older messages.

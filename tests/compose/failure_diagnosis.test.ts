@@ -214,7 +214,7 @@ nodes:
     kind: code
     code: |
       return 1
-    output: int
+    output: !int
 output: \${work.output}
 `;
   const loaded = await loadFlow(source, { env });
@@ -246,7 +246,7 @@ nodes:
           return inputs["value"]
         input:
           value: \${input.value}
-        output: str
+        output: !str
     output: \${fail.output}
 output: \${outer.output}
 `,
@@ -267,7 +267,7 @@ nodes:
         input:
           n: \${input.n}
         output:
-          n: int
+          n: !int
     output: \${fail.output}
 output: \${outer.output}
 `,
@@ -303,7 +303,7 @@ nodes:
     input:
       n: \${input.n}
     output:
-      n: int
+      n: !int
 output: \${fail.output}
 `;
 

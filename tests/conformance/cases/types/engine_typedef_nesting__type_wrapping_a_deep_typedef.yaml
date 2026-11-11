@@ -10,7 +10,7 @@ flow: |
     T4: {a: T3}
   input:
     n: !int
-  output: 'list(T4)'
+  output: !list(T4)
   kind: code
   code: |
     return 1
@@ -23,4 +23,4 @@ expect:
       message: 'bad type expression ''list(T4)'': type nests deeper than 5 levels once its typedef names are expanded, the limit for a type (each record and list is a level)'
       frames:
       - label: flow.yaml
-        range: [11, 9, 11, 19]
+        range: [11, 9, 11, 18]

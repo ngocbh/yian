@@ -13,7 +13,7 @@ flow: |
         now: !datetime ${system.now}
         now_text: !str ${system.now}
         run: !str ${system.run_id}
-      output: str
+      output: !str
       code: return String(inputs.day)
   output: ${e.output}
 expect:

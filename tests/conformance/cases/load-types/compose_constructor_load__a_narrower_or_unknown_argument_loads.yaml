@@ -14,7 +14,7 @@ flow: |
       kind: code
       input:
         order: ${input.order}
-      output: Decision
+      output: !Decision
       code: |
         return inputs["order"]
   output: ${Buy(d.output)}

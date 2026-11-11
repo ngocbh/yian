@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
-import { readTaggedValue } from "../../src/compose/helpers/tags.ts";
+import { readOutputDeclaration, readTaggedValue } from "../../src/compose/helpers/tags.ts";
 import { readSourceParameters, readType, readValueContract } from "../../src/compose/helpers/types.ts";
 import { encodeSitePath, SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
@@ -204,12 +204,15 @@ test("readValueContract registers the root and each authored field in canonical 
 
 /** Read the `output:` declaration at `path` as the loader reads node `nodeId`'s output. */
 function output(path: readonly string[], nodeId: string): CaseCall {
-  return (document, registry, diagnostics, builder) =>
-    readValueContract(cursorAt(document, path), registry, {
+  return (document, registry, diagnostics, builder) => {
+    const cursor = cursorAt(document, path);
+    const declared = readOutputDeclaration(cursor, { registry, diagnostics, ledger: builder.consumedTags });
+    return readValueContract(cursor.withValue(declared), registry, {
       sitePath: ["node", nodeId, "output", "contract"],
       catalogBuilder: builder,
       diagnostics,
     });
+  };
 }
 
 const RECORD_NESTING = "types/compose_record_type_nesting__";
@@ -224,10 +227,7 @@ test.each<CaseRow>([
   { id: `${RECORD_NESTING}record_past_a_configured_limit`, call: use },
   { id: `${RECORD_NESTING}record_at_a_configured_limit_loads`, call: use },
   { id: `${RECORD_NESTING}list_typedef_at_the_limit_loads`, call: use },
-  { id: "types/compose_type_name_checks__surrogate_literal_member_in_an_output", call: compact },
   { id: "types/engine_typedef_nesting__type_wrapping_a_deep_typedef", call: compact },
-  { id: "types/engine_types__type_text_brackets_hint", call: compact },
-  { id: `${UNION_TYPEDEFS}bar_operator_hints_union`, call: compact },
   { id: `${UNION_TYPEDEFS}member_must_be_a_record`, call: compact },
   { id: `${UNION_TYPEDEFS}none_member_hints_optional`, call: compact },
   { id: `${UNION_TYPEDEFS}nullable_member_rejected`, call: compact },

@@ -15,12 +15,12 @@ flow: |
           then: b
     a:
       kind: code
-      output: str
+      output: !str
       code: |
         return "A"
     b:
       kind: code
-      output: str
+      output: !str
       code: |
         return "B"
   output:

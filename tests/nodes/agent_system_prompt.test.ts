@@ -189,12 +189,12 @@ nodes:
     input: {name: "\${input.name}", title: "\${input.title}", message: "\${input.message}"}
     system_prompt: "SYSTEM"
     prompt: \${message}
-    output: str
+    output: !str
   after:
     kind: agent
     input: {draft: "\${reply.output}"}
     prompt: "polish: \${draft}"
-    output: str
+    output: !str
 output: \${after.output}
 `;
 const INPUTS = { name: "Ada", title: "CTO", message: "How are we doing?" };

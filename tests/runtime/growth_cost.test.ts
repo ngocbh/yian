@@ -41,7 +41,7 @@ nodes:
           a:
             kind: code
             input: {x: "\${input.x}"}
-            output: int
+            output: !int
             code: |
               return 1
         output: \${a.output}
@@ -64,7 +64,7 @@ nodes:
       a:
         kind: code
         input: {x: "\${input.x}"}
-        output: int
+        output: !int
         code: |
           return 1
     output: \${a.output}
@@ -80,7 +80,7 @@ nodes:
         input:
           n: \${input.n}
         output:
-          n: int
+          n: !int
         code: |
           return {"n": inputs["n"] + 1}
     output: \${bump.output}
@@ -110,7 +110,7 @@ nodes:
             input:
               n: \${input.n}
             output:
-              n: int
+              n: !int
             code: |
               return {"n": inputs["n"] + 1}
         output: \${bump.output}
@@ -133,7 +133,7 @@ nodes:
       work:
         kind: code
         input: {v: "\${input.value}"}
-        output: int
+        output: !int
         code: |
           return inputs.v.length
     output: \${work.output}

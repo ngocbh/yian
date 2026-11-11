@@ -14,7 +14,7 @@ flow: |2
           then: maybe
     maybe:
       kind: code
-      output: str
+      output: !str
       code: |
         return 'm'
     whole: !object

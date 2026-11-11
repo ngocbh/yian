@@ -67,7 +67,7 @@ function flow(
     "    code: ./fixtures/compose_codefns.ts:echo\n" +
     "    input:\n" +
     "      topic: replied\n" +
-    "    output: str\n" +
+    "    output: !str\n" +
     extraNodes +
     "output: ${route.output}\n"
   );
@@ -106,7 +106,7 @@ function namesNoNode(label: string, word: string, nearest: string | null = null)
 
 test("case output over node branches reads the taken branch", async () => {
   const text = flow(on("other"), {
-    extraNodes: "  other:\n" + "    kind: code\n" + "    code: |\n" + "      return 'other'\n" + "    output: str\n",
+    extraNodes: "  other:\n" + "    kind: code\n" + "    code: |\n" + "      return 'other'\n" + "    output: !str\n",
   });
   const loaded = await loadConformanceFlow(text);
 
@@ -190,7 +190,7 @@ test("a value in a later then is located at its branch", () => {
 });
 
 test("a value branch is reported before the CASE's output:", () => {
-  const text = flow(on("3", "reply", { output: "    output: str\n" }));
+  const text = flow(on("3", "reply", { output: "    output: !str\n" }));
 
   const error = loadErrorWith(text, valueBranch("then"));
 
@@ -278,7 +278,7 @@ test.each([
   ["output: Optional(str)", "output:"],
   ["output: Union(int, str)", "output: Union"],
   ["output:", "output:"],
-  ["output:\n      a: int", "output:"],
+  ["output:\n      a: !int", "output:"],
   ["output: &a [*a]", "output: &a"],
 ])("a case output is rejected at its line: %j", (output, needle) => {
   const text = flow(on("reply", "reply", { output: `    ${output}\n` }));

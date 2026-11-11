@@ -14,7 +14,7 @@ flow: |
         tone: !str warm
       system_prompt: "You are ${input.name}."
       prompt: ${message}
-      output: str
+      output: !str
   output: ${reply.output}
 expect:
   load:

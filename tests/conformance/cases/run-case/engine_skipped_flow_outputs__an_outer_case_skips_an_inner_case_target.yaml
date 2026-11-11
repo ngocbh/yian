@@ -20,17 +20,17 @@ flow: |
       else: hold
     order:
       kind: code
-      output: str
+      output: !str
       code: |
         return "filled"
     hold:
       kind: code
-      output: str
+      output: !str
       code: |
         return "held"
     rejected:
       kind: code
-      output: str
+      output: !str
       code: |
         return "no"
   output:

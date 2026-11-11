@@ -42,21 +42,21 @@ flow: |
       kind: agent
       input:
         question: ${input.question}
-      output: str
+      output: !str
       prompt: "Make the strongest good-faith case FOR: ${question}. Three concise sentences, no hedging."
 
     the_case_against:
       kind: agent
       input:
         question: ${input.question}
-      output: str
+      output: !str
       prompt: "Make the strongest good-faith case AGAINST: ${question}. Three concise sentences, no hedging."
 
     the_risks:
       kind: agent
       input:
         question: ${input.question}
-      output: str
+      output: !str
       prompt: "List the three biggest risks or unknowns relevant to: ${question}. One sentence each."
 
     # --- fan-in: weigh all three angles into ONE typed enum decision ---
@@ -67,7 +67,7 @@ flow: |
         for_case: ${the_case_for.output}
         against_case: ${the_case_against.output}
         risks: ${the_risks.output}
-      output: Decision               # the model must answer with exactly one enum tag
+      output: !Decision              # the model must answer with exactly one enum tag
       prompt: |-
         Weigh this decision and answer with EXACTLY ONE of: go | no_go | needs_more_info.
 
@@ -93,21 +93,21 @@ flow: |
       kind: agent
       input:
         question: ${input.question}
-      output: str
+      output: !str
       prompt: "Write a 4-sentence action brief for proceeding with: ${question}"
 
     no_go_brief:
       kind: agent
       input:
         question: ${input.question}
-      output: str
+      output: !str
       prompt: "Write a 4-sentence brief explaining why to hold off on: ${question}"
 
     more_info_brief:
       kind: agent
       input:
         question: ${input.question}
-      output: str
+      output: !str
       prompt: "Write a 4-sentence brief naming exactly what to investigate before deciding on: ${question}"
 
     # --- finalize: combine the decision with whichever brief ran (the `|` coalesces the
@@ -118,7 +118,7 @@ flow: |
         audience: ${input.audience:-"a general audience"}
         decision: ${synth.output}
         brief: ${go_brief.output | no_go_brief.output | more_info_brief.output}
-      output: str
+      output: !str
       prompt: |-
         Write a tight executive summary (<= 5 sentences) for ${audience}.
         Decision: ${decision}.

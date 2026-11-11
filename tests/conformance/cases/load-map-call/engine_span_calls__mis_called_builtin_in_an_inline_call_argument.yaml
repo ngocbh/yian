@@ -8,13 +8,13 @@ flow: |2
     body:
       input: {w: !str }
       nodes:
-        s: {kind: code, code: "return inputs['n']", input: {n: '${input.w}'}, output: str}
+        s: {kind: code, code: "return inputs['n']", input: {n: '${input.w}'}, output: !str}
       output: ${s.output}
   nodes:
     x:
       kind: code
       code: "return inputs['n']"
-      output: str
+      output: !str
       input:
         n: call(body, w=${upper(input.v, 1)})
   output: ${x.output}

@@ -18,7 +18,7 @@ flow: |
           input:
             x: ${input.x}
             y: ${input.y}
-          output: str
+          output: !str
           code: return inputs["x"] + inputs["y"]
       output: ${j.output}
     side:
@@ -30,7 +30,7 @@ flow: |
           code: ./fixtures/compose_codefns.ts:record
           input:
             tag: ${input.tag}
-          output: str
+          output: !str
       output: ${fx.output}
   nodes:
     pick:
@@ -40,7 +40,7 @@ flow: |
           then: maybe
     maybe:
       kind: code
-      output: str
+      output: !str
       code: return "m"
     gate:
       kind: case
@@ -50,7 +50,7 @@ flow: |
       else: b
     b:
       kind: code
-      output: str
+      output: !str
       code: return "B"
   output:
     r: ${gate.output}

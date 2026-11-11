@@ -241,7 +241,7 @@ test.each([
 
 /** Return a flow whose root `top` nests `n` inline call bodies around a CODE leaf. */
 function inlineChain(n: number): string {
-  let body = "kind: code\ncode: ./fixtures/compose_codefns.ts:echo\ninput:\n  topic: ${input.x}\noutput: str\n";
+  let body = "kind: code\ncode: ./fixtures/compose_codefns.ts:echo\ninput:\n  topic: ${input.x}\noutput: !str\n";
   for (let i = 0; i < n; i++) {
     body =
       "kind: call\ninput:\n  x: ${input.x}\nnodes:\n  step:\n" +
@@ -308,7 +308,7 @@ const ROOT_LEAF =
   "    code: ./fixtures/compose_codefns.ts:echo\n" +
   "    input:\n" +
   "      topic: ${input.x}\n" +
-  "    output: str\n" +
+  "    output: !str\n" +
   "output: ${step.output}\n";
 
 /** Return a flow `name` that imports `uses` without calling them; its node is a CODE leaf. */
@@ -646,7 +646,7 @@ const LEAF =
   "        code: ./fixtures/compose_codefns.ts:echo\n" +
   "        input:\n" +
   "          topic: ${input.x}\n" +
-  "        output: str\n" +
+  "        output: !str\n" +
   "    output: ${step.output}\n";
 
 /** Return a def body whose one `step` node calls `target` with `x`. */
@@ -700,7 +700,7 @@ function mixedChain(n: number): string {
     if (i === n - 1) {
       node =
         "        kind: code\n        code: ./fixtures/compose_codefns.ts:echo\n" +
-        "        input:\n          topic: ${input.v}\n        output: str\n";
+        "        input:\n          topic: ${input.v}\n        output: !str\n";
       result = "${step.output}";
     } else {
       const callee = `c${i + 1}`;
@@ -733,7 +733,7 @@ function directiveChain(n: number): string {
     `${indent}  code: ./fixtures/compose_codefns.ts:echo\n` +
     `${indent}  input:\n` +
     `${indent}    topic: call(${target}, x=\${input.x})\n` +
-    `${indent}  output: str\n`;
+    `${indent}  output: !str\n`;
   const entries: string[] = [];
   for (let i = 0; i < n; i++) {
     const body =

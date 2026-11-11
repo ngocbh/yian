@@ -11,7 +11,7 @@ flow: |
           code: return inputs["value"]
           input:
             value: hello
-          output: str
+          output: !str
 expect:
   load:
     diagnostics:

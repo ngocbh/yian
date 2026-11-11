@@ -14,7 +14,7 @@ flow: |
       kind: code
       input:
         topic: ${input.topic}
-      output: object
+      output: !object
       code: |
         return {topic: inputs.topic, handle: new Date(0)}
   output: ${bad.output}
@@ -28,7 +28,7 @@ expect:
       message: "output at handle: Date is not a yian value"
       node: bad
       # The declared type `object` on line 14.
-      frames: [{label: flow.yaml, range: [14, 13, 14, 19]}]
+      frames: [{label: flow.yaml, range: [14, 13, 14, 20]}]
   trace:
     - [run_started, null, {num_workers: 0}]
     - [pool_commit, __start__, {key: system.now}]
@@ -45,4 +45,4 @@ expect:
           code: contract.output
           message: "output at handle: Date is not a yian value"
           node: bad
-          frames: [{label: flow.yaml, range: [14, 13, 14, 19]}]
+          frames: [{label: flow.yaml, range: [14, 13, 14, 20]}]

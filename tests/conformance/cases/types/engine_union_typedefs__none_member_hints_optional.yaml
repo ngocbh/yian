@@ -7,7 +7,7 @@ flow: |
     Sell: {action: 'Literal(sell)', price: float}
   input:
     n: !int
-  output: 'Union(Buy, None)'
+  output: !Union(Buy;None)
   kind: code
   code: |
     return 1
@@ -15,7 +15,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'bad type expression ''Union(Buy, None)'': None is not a union member in ''Union(Buy, None)''; use Optional(Union(...))'
+      message: "bad type expression 'Union(Buy;None)': None is not a union member in 'Union(Buy;None)'; use Optional(Union(...))"
       frames:
       - label: flow.yaml
-        range: [8, 9, 8, 27]
+        range: [8, 9, 8, 25]

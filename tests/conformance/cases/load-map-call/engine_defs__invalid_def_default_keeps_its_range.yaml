@@ -9,7 +9,7 @@ flow: |
         return inputs["value"]
       input:
         value: !int null
-      output: int
+      output: !int
   nodes:
     go:
       kind: call

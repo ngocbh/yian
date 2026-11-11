@@ -77,7 +77,7 @@ nodes:
     prompt: \${topic}
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
 output: \${write.output}
 `;
 
@@ -98,7 +98,7 @@ defs:
         prompt: \${topic}
         input:
           topic: \${input.topic}
-        output: str
+        output: !str
     output: \${write.output}
 nodes:
   each:

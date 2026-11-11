@@ -13,7 +13,7 @@ flow: |
       input:
         count: ${input.n}
         total: ${input.m}
-      output: str
+      output: !str
       prompt: "The ratio is ${count/total}."
   output: ${say.output}
 expect:

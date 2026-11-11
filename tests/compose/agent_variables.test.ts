@@ -187,7 +187,7 @@ nodes:
       tone: !Tone concise
       instruction: !str \${missing.output}
     prompt: "\${topic}: \${tone}, \${instruction}"
-    output: str
+    output: !str
 output: \${writer.output}
 `;
     const compiled = assembleText(text).flow.compiled;
@@ -215,7 +215,7 @@ nodes:
     variables:
       topic: !str fallback
     prompt: \${topic}
-    output: str
+    output: !str
 output: \${writer.output}
 `;
     const document = SourceDocument.parse(text);
@@ -244,7 +244,7 @@ nodes:
     kind: agent
     variables:
       value: ${declaration}
-    output: str
+    output: !str
 output: \${writer.output}
 `;
       const document = SourceDocument.parse(text);
@@ -268,7 +268,7 @@ nodes:
     kind: agent
     variables:
       ${key}: !int 4
-    output: str
+    output: !str
 output: \${writer.output}
 `;
     const variables = SourceDocument.parse(text).root.child("nodes").child("writer").child("variables");

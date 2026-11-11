@@ -46,8 +46,8 @@ const T99 = "list(".repeat(99) + "int" + ")".repeat(99);
  * `levels = 1` is `{k: <leaf>}`. Past 10 levels the record is built over an alias chain.
  */
 function records(levels: number, leaf: string): [string, string] {
-  if (levels <= 10) return ["", "{k: ".repeat(levels) + `"${leaf}"` + "}".repeat(levels)];
-  const items = [`&m0 {k: "${leaf}"}`];
+  if (levels <= 10) return ["", "{k: ".repeat(levels) + `!${leaf}` + "}".repeat(levels)];
+  const items = [`&m0 {k: !${leaf}}`];
   for (let i = 1; i < levels - 1; i++) items.push(`&m${i} {k: *m${i - 1}}`);
   return [`x-anchors: [${items.join(", ")}]\n`, `{k: *m${levels - 2}}`];
 }
@@ -165,7 +165,12 @@ test("a record at the highest configurable limit loads and runs", async () => {
   expect(result).toBeInstanceOf(RunResult);
 });
 
-test.each(["&R {a: *R}", "&R [{a: *R}]"])("a recursive record alias keeps its error (%s)", async (output) => {
+test.each([
+  ["&R {a: *R}", "cannot descend through a recursive alias occurrence"],
+  ["&R {a: {b: *R}}", "cannot descend through a recursive alias occurrence"],
+  // A list is refused before its items are walked.
+  ["&R [{a: *R}]", "`output:` declares a type, which can't be a YAML list"],
+])("a recursive record alias keeps its error (%s)", async (output, message) => {
   const error = await loadErrorAsync(loadConformanceFlow(code("", output)));
-  expect(error.message).toContain("cannot descend through a recursive alias occurrence");
+  expect(error.message).toContain(message);
 });

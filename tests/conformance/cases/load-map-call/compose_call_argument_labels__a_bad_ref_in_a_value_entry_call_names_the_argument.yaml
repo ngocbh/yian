@@ -14,7 +14,7 @@ flow: |2
           code: "return inputs['y']"
           input:
             y: ${input.y}
-          output: str
+          output: !str
       output: ${x.output}
 
   nodes:

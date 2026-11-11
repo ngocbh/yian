@@ -31,12 +31,12 @@ flow: |
           tool_id: ask
           input:
             prompt: "Approve this action? ${input.action}  (approve / reject)"
-          output: Approval       # the injected answer, validated against Approval's tags
+          output: !Approval      # the injected answer, validated against Approval's tags
         record:
           kind: code
           input:
             answer: ${approve.output}
-          output: str
+          output: !str
           code: ./fixtures/seeds.ts:confirm_action
       output: ${record.output}  # the child's codomain (the confirmed answer)
 

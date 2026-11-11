@@ -33,20 +33,20 @@ flow: |
       input:
         topic: ${input.topic}
         as_of: ${input.as_of:-"today"}     # :- default — the optional param, else literal "today"
-      output: str
+      output: !str
       prompt: "Summarize ${topic} fundamentals as of ${as_of} in 3 neutral sentences."
     news:
       kind: agent
       input:
         topic: ${input.topic}
         as_of: ${input.as_of:-"today"}
-      output: str
+      output: !str
       prompt: "Summarize recent ${topic} news as of ${as_of} in 3 neutral sentences. Keep [n] citations."
     social:
       kind: agent
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       prompt: "Summarize current social sentiment on ${topic} in 3 neutral sentences."
 
     # --- fan-in: synthesize a typed View ---
@@ -56,7 +56,7 @@ flow: |
         fundamentals: ${fundamentals.output}
         news: ${news.output}
         social: ${social.output}
-      output: View                       # one object {stance, claim, confidence}
+      output: !View                      # one object {stance, claim, confidence}
       prompt: |-
         Given three neutral briefs —
         fundamentals: ${fundamentals}
@@ -80,19 +80,19 @@ flow: |
       kind: agent
       input:
         claim: ${synth.output.claim}
-      output: str
+      output: !str
       prompt: "Expand this into a neutral 5-sentence pro note: ${claim}"
     con_note:
       kind: agent
       input:
         claim: ${synth.output.claim}
-      output: str
+      output: !str
       prompt: "Expand this into a neutral 5-sentence con note: ${claim}"
     neutral_note:
       kind: agent
       input:
         claim: ${synth.output.claim}
-      output: str
+      output: !str
       prompt: "Expand this into a balanced 5-sentence note: ${claim}"
 
   output:                                # multi-output: the flow returns one object

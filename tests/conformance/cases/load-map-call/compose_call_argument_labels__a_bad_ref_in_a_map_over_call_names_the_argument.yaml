@@ -13,7 +13,7 @@ flow: |2
           code: "return [inputs['n']]"
           input:
             n: ${input.n}
-          output: list(str)
+          output: !list(str)
       output: ${x.output}
     one:
       input:
@@ -24,7 +24,7 @@ flow: |2
           code: "return inputs['topic']"
           input:
             topic: ${input.topic}
-          output: str
+          output: !str
       output: ${x.output}
   nodes:
     m:

@@ -10,7 +10,7 @@ flow: |
         zero:
           kind: code
           code: "return 0"
-          output: int
+          output: !int
         gate:
           kind: case
           cases:
@@ -22,15 +22,15 @@ flow: |
         positive:
           kind: code
           code: 'return "positive"'
-          output: str
+          output: !str
         broken:
           kind: code
           code: 'return "broken"'
-          output: str
+          output: !str
         negative:
           kind: code
           code: 'return "negative"'
-          output: str
+          output: !str
       output: ${positive.output | broken.output | negative.output}
   nodes:
     invoke:

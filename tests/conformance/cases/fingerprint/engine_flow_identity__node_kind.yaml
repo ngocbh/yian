@@ -6,7 +6,7 @@ flow: |
   nodes:
     leaf:
       kind: code
-      output: str
+      output: !str
       code: |
         return "ok"
   output: ${leaf.output}
@@ -17,7 +17,7 @@ other: |
     leaf:
       kind: tool
       tool_id: leaf
-      output: str
+      output: !str
   output: ${leaf.output}
 expect:
   fingerprint: different

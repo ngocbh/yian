@@ -12,7 +12,7 @@ flow: |
   nodes:
     s:
       kind: code
-      output: float
+      output: !float
       code: |
         return 0.5
     x: !Buy {conviction: 1}

@@ -61,7 +61,7 @@ defs:
         input:
           path: ${input.path}
           content: ${input.content}
-        output: Written
+        output: !Written
     output: !str "${'wrote ' + written.output.path if written.output.written else 'not written: ' + (written.output.reason :- '')}"
 
   agree:
@@ -82,7 +82,7 @@ defs:
         tools: [ask_user]
         env:
           max_tool_iterations: 10
-        output: Contract
+        output: !Contract
         system_prompt: |-
           You design a yian flow's contract before any YAML is written: its path (the path
           given, or a short snake_case .yaml name in the chat's folder), its typed inputs and
@@ -101,7 +101,7 @@ defs:
         input:
           given: ${input.given}
           path: ${proposed.output.path}
-        output: Checked
+        output: !Checked
         code: |
           // A path the chat was given is the one used; one the model chose must be a plain
           // relative .yaml or .yml path. The chat's tools still confine it to the chat's folder.
@@ -134,7 +134,7 @@ defs:
         kind: code
         input:
           reply: ${input.reply}
-        output: str
+        output: !str
         code: |
           // A model may fence the YAML or add a line around it; keep what is inside the fence.
           const fenced = inputs.reply.match(/```(?:ya?ml)?[ \t]*\n([\s\S]*?)\n```/);
@@ -145,7 +145,7 @@ defs:
         input:
           path: ${input.path}
           content: ${text.output}
-        output: Check
+        output: !Check
     output:
       text: ${text.output}
       check: ${checked.output}
@@ -168,7 +168,7 @@ defs:
         skills: [composing-agents]
         env:
           max_tool_iterations: 8
-        output: str
+        output: !str
         system_prompt: |-
           You fix a yian flow that doesn't load. Change only what the error needs and keep
           everything else as it is. Load the composing-agents skill, and read yian's docs with
@@ -213,7 +213,7 @@ defs:
         skills: [composing-agents]
         env:
           max_tool_iterations: 12
-        output: str
+        output: !str
         system_prompt: |-
           You write flows in yian, a YAML language for flows of agent, code, tool, case, call,
           map and loop nodes. Load the composing-agents skill first and follow it; read yian's
@@ -267,7 +267,7 @@ defs:
           ok: ${fixing.output.ok}
           inbox: ${any([startswith(i.type, "Inbox(") for i in fixing.output.check.inputs])}
           findings: ${reviewed.output :- []}
-        output: Gate
+        output: !Gate
         code: |
           // Whether to try the draft is decided here, not left to a model.
           if (!inputs.ok) return { go: false, why: "not reviewed or tried: it doesn't load" };
@@ -299,7 +299,7 @@ defs:
         tools: [start_flow, wait_flow]
         env:
           max_tool_iterations: 6
-        output: str
+        output: !str
         system_prompt: |-
           You try a draft yian flow on its sample inputs. Start the draft with start_flow,
           passing its text as content and the samples as inputs; the user approves the run on
@@ -325,7 +325,7 @@ defs:
         tools: [ask_user]
         env:
           max_tool_iterations: 6
-        output: Plan
+        output: !Plan
         system_prompt: |-
           You help the user finish a yian flow. Tell them, with ask_user and in a few short
           lines: whether it loads (and the error if not), each high-severity finding of the
@@ -361,7 +361,7 @@ nodes:
     tools: [ask_user, read_flow]
     env:
       max_tool_iterations: 8
-    output: Brief
+    output: !Brief
     system_prompt: |-
       You help the user plan a yian flow, a YAML workflow of agents, code and tools. Find out
       what the flow is for, who runs it and how often, its inputs and its output, and what

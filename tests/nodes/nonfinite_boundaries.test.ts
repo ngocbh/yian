@@ -19,6 +19,7 @@ import { tool } from "../../src/tools/function_tools.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/index.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import { rejected, serving, startedIds, textReply } from "../helpers/run_state_fixtures.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-nonfinite-boundaries-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -73,7 +74,7 @@ name: overflow
 nodes:
   n:
     kind: code
-    output: ${output}
+    output: ${outputTag(output)}
     code: |
       return ${value}
 output: \${n.output}
@@ -151,7 +152,7 @@ function expectOutputFailsBeforeReader(result: RunResult, message: string): void
 }
 
 test("a NaN object output fails the node at the field", async () => {
-  const result = await run(readerFlow("    output: object", '{"a": NaN}'));
+  const result = await run(readerFlow("    output: !object", '{"a": NaN}'));
 
   expectOutputFailsBeforeReader(result, "output at a: NaN is not a yian value");
   expect(result.failure!.trace[0]!.key.endsWith("/s:output/s:contract/s:root")).toBe(true);
@@ -165,7 +166,7 @@ test("an infinite undeclared output reaches the reader", async () => {
 });
 
 test("an infinity inside a record field reaches the reader", async () => {
-  const result = await run(readerFlow("    output: {stats: object}", '{"stats": {"a": Infinity}}'));
+  const result = await run(readerFlow("    output: {stats: !object}", '{"stats": {"a": Infinity}}'));
 
   expectSucceeds(result, { stats: { a: Infinity } });
   expect(startedIds(result)).toContain("d");
@@ -383,7 +384,7 @@ nodes:
     variables:
       t: !float .inf
     prompt: 'go \${t}'
-    output: str
+    output: !str
 output: \${writer.output}
 `,
     {},

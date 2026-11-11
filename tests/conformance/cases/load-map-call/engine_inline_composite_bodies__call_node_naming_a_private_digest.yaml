@@ -11,7 +11,7 @@ flow: |
           code: ./fixtures/compose_codefns.ts:echo_x
           input:
             x: safe
-          output: str
+          output: !str
       output: ${echo.output}
     attacker:
       kind: call

@@ -110,7 +110,7 @@ output: \${d.output}
 `;
 
 test("a NaN object output from a CODE power fails the node at the field", async () => {
-  const result = await run(readerFlow("    output: object", '{"a": [(-8) ** 0.5]}'));
+  const result = await run(readerFlow("    output: !object", '{"a": [(-8) ** 0.5]}'));
 
   expect(result.status).toBe("failed");
   expect(result.failure!.code).toBe("contract.output");

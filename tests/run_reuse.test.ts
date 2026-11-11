@@ -58,7 +58,7 @@ defs:
         depends_on: [inspect]
         input:
           topic: \${input.topic}
-        output: str
+        output: !str
         code: ./compose_codefns.ts:echo
     output: \${emit.output}
   loop_child:
@@ -77,8 +77,8 @@ defs:
           n: \${input.n}
           exited: \${input.exited}
         output:
-          n: int
-          exited: bool
+          n: !int
+          exited: !bool
         code: ./compose_codefns.ts:loop_bump
     output: \${step.output}
 nodes:
@@ -122,7 +122,7 @@ defs:
         tool_id: ask
         input:
           prompt: approve?
-        output: str
+        output: !str
     output: \${ask.output}
 nodes:
   gate:

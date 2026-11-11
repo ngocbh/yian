@@ -456,8 +456,8 @@ defs:
           const n = inputs["n"] + 1
           return {n, status: n >= 4 ? "done" : "running"}
         output:
-          n: int
-          status: str
+          n: !int
+          status: !str
     output: \${step.output}
 nodes:
   loop:
@@ -535,7 +535,7 @@ nodes:
       decision: \${input.decision}
     code: |
       return inputs["decision"]
-    output: Decision
+    output: !Decision
   route:
     kind: case
     cases:
@@ -581,7 +581,7 @@ nodes:
       decision: \${input.decision}
     code: |
       return inputs["decision"]
-    output: Decision
+    output: !Decision
   route:
     kind: case
     cases:
@@ -594,12 +594,12 @@ nodes:
       qty: \${d.output.qty}
     code: |
       return inputs["qty"]
-    output: int
+    output: !int
   other:
     kind: code
     code: |
       return 0
-    output: int
+    output: !int
 output: \${default.output | other.output}
 `;
 

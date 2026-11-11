@@ -8,7 +8,7 @@ flow: |2
       kind: code
       code: |
         return 1
-      output: int
+      output: !int
     use:
       kind: code
       code: ./fixtures/compose_codefns.ts:echo_x

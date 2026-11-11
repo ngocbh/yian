@@ -1087,7 +1087,7 @@ nodes:
     kind: code
     input:
       name: \${input.name}
-    output: str
+    output: !str
     code: |
       return "Hi " + inputs["name"];
 output: \${greet.output}
@@ -1672,7 +1672,7 @@ nodes:
     tool_id: ask
     input:
       prompt: "Which colour?"
-    output: str
+    output: !str
 output: \${pick.output}
 `;
 
@@ -1782,7 +1782,7 @@ nodes:
     kind: code
     input:
       slept: \${nap.output}
-    output: str
+    output: !str
     code: |
       return "rested";
 output: \${done.output}

@@ -11,7 +11,7 @@ flow: |
       kind: agent
       input:
         topic: ${input.topic}
-      output: Literal(pro, con, flat)
+      output: !Literal(pro;con;flat)
       prompt: "Classify ${topic}."
     route:
       kind: case
@@ -26,13 +26,13 @@ flow: |
       kind: agent
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       prompt: "Pro ${topic}."
     con_note:
       kind: agent
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       prompt: "Con ${topic}."
   output: ${pro_note.output | con_note.output}
 expect:

@@ -35,13 +35,13 @@ nodes:
     input:
       decision: \${input.decision}
     code: return inputs['decision']
-    output: Decision
+    output: !Decision
   place:
     kind: code
     input:
       buy: !Buy \${decide.output}
     code: return 'buy ' + String(inputs['buy']['qty'])
-    output: str
+    output: !str
 output: \${place.output}
 `;
 
@@ -58,7 +58,7 @@ defs:
         input:
           decision: \${input.decision}
         code: return inputs['decision']
-        output: Decision
+        output: !Decision
     output: !Buy \${decide.output}
 nodes:
   picked:
@@ -71,7 +71,7 @@ nodes:
     input:
       d: !Decision \${picked.output}
     code: return inputs['d']['qty']
-    output: int
+    output: !int
 output: \${widen.output}
 `;
 

@@ -17,7 +17,7 @@ flow: |
       code: ./fixtures/compose_codefns.ts:echo
       input:
         topic: replied
-      output: str
+      output: !str
   output: ${route.output}
 expect:
   load:

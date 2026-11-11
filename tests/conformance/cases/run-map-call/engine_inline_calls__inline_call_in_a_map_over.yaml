@@ -15,7 +15,7 @@ flow: |2
           code: ./fixtures/compose_codefns.ts:echo
           input:
             topic: ${input.topic}
-          output: str
+          output: !str
       output: ${x.output}
     producelist:
       input:
@@ -26,7 +26,7 @@ flow: |2
           code: ./fixtures/compose_codefns.ts:echo
           input:
             topic: ${input.xs}
-          output: list(str)
+          output: !list(str)
       output: ${x.output}
   nodes:
     each:

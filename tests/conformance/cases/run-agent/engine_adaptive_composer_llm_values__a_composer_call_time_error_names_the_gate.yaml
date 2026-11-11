@@ -4,7 +4,7 @@ flow: |
   name: f
   input: {proj: !str }
   nodes:
-    pick: {kind: code, output: str, code: "return 'nope'"}
+    pick: {kind: code, output: !str, code: "return 'nope'"}
     ask:
       kind: tool
       tool_id: ask

@@ -16,12 +16,12 @@ flow: |
       kind: code
       code: |
         return "A"
-      output: str
+      output: !str
     pb:
       kind: code
       code: |
         return "B"
-      output: str
+      output: !str
     inner:
       kind: case
       on: ${input.x}

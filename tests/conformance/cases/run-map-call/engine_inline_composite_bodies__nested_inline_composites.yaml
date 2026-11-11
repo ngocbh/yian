@@ -21,7 +21,7 @@ flow: |
               code: ./fixtures/compose_codefns.ts:echo_x
               input:
                 x: ${input.value}
-              output: int
+              output: !int
           output: ${echo.output}
       output: ${inner.output}
     outer_loop:
@@ -44,8 +44,8 @@ flow: |
                 n: ${input.n}
                 exited: ${input.exited}
               output:
-                n: int
-                exited: bool
+                n: !int
+                exited: !bool
           output: ${bump.output}
       output: ${inner.output}
   output:

@@ -9,7 +9,7 @@ flow: |
       kind: code
       input:
         s: ${input.s}
-      output: list(Any)
+      output: !list(Any)
       code: |
         return [1, "two"]
   output: ${mk.output}

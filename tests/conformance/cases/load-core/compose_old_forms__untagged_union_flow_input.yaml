@@ -9,7 +9,7 @@ flow: |
     u: Union[A, B]
   kind: code
   code: return 1
-  output: int
+  output: !int
 expect:
   load:
     diagnostics:

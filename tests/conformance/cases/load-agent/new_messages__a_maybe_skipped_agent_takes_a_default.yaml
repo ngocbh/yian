@@ -16,16 +16,16 @@ flow: |
     reply:
       kind: agent
       prompt: hi
-      output: str
+      output: !str
     other:
       kind: code
       code: return 1
-      output: int
+      output: !int
     reader:
       kind: code
       input:
         history: !list(Message) ${reply.new_messages :- []}
-      output: int
+      output: !int
       code: return inputs['history'].length
   output: ${reader.output}
 expect:

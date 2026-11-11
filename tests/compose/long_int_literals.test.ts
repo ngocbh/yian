@@ -123,7 +123,7 @@ test.each<[string, string, Value | undefined]>([
   ],
   [
     "agent-prompt",
-    HEAD + "nodes:\n  a:\n    kind: agent\n" + '    prompt: "${' + D + '}"\n    output: str\noutput: ${a.output}\n',
+    HEAD + "nodes:\n  a:\n    kind: agent\n" + '    prompt: "${' + D + '}"\n    output: !str\noutput: ${a.output}\n',
     undefined,
   ],
   ["constructor-argument", HEAD + PT + "nodes:\n" + node("${Pt(x=" + D + ")}") + "output: ${use.output}\n", { x: ONES }],

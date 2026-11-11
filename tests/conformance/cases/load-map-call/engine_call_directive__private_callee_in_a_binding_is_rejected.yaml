@@ -8,7 +8,7 @@ flow: |
       code: ./fixtures/compose_codefns.ts:echo
       input:
         topic: call(__inline_flow_dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd)
-      output: str
+      output: !str
   output: ${use.output}
 expect:
   load:

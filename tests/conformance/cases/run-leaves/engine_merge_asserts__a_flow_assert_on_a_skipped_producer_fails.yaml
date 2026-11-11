@@ -17,14 +17,14 @@ flow: |2
       kind: code
       input:
         n: ${input.v}
-      output: int
+      output: !int
       code: |
         return inputs["n"] * 2
     lo:
       kind: code
       input:
         n: ${input.v}
-      output: int
+      output: !int
       code: |
         return inputs["n"] * 2
   output: ${hi.output | lo.output}

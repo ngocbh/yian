@@ -15,7 +15,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: cannot read type from 7 (type int)
+      message: "`output:` declares a type as a tag: write `age: !<type>`, e.g. `age: !str`"
       frames:
       - label: flow.yaml
         range: [9, 14, 9, 15]

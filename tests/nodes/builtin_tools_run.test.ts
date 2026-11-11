@@ -155,7 +155,7 @@ nodes:
       to: lead
       prompt: Approve this plan?
       timeout: 24h
-    output: Optional(Approval)
+    output: !Optional(Approval)
   escalate:
     kind: case
     cases:
@@ -168,7 +168,7 @@ nodes:
       to: manager
       prompt: No answer from the lead in 24h. Approve this plan?
       timeout: 48h
-    output: Optional(Approval)
+    output: !Optional(Approval)
 output: !Optional(Approval) \${lead.output | manager.output}
 `;
 

@@ -19,6 +19,7 @@ import {
   loadError,
   runCase,
 } from "../helpers/declarations.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 /**
  * A flow whose LOOP `repeat` calls the `defs:` body `step`, carrying `n`.
@@ -53,7 +54,7 @@ defs:
         input:
           n: \${input.n}
         output:
-          n: ${bodyOut}
+          n: ${outputTag(bodyOut)}
         code: |
           return {"n": ${ret}}
     output: \${bump.output}
@@ -242,8 +243,8 @@ defs:
         input:
           n: \${input.n}
         output:
-          n: int
-          m: int
+          n: !int
+          m: !int
         code: |
           return {"n": inputs["n"] + 1, "m": 0}
     output: \${bump.output}
@@ -277,7 +278,7 @@ defs:
         input:
           n: \${input.n}
         output:
-          n: int
+          n: !int
         code: |
           return {"n": inputs["n"] + 1}
     output: \${bump.output}
@@ -319,7 +320,7 @@ defs:
         input:
           n: \${input.n}
         output:
-          n: Optional(int)
+          n: !Optional(int)
         code: |
           return {"n": null}
     output: \${bump.output}

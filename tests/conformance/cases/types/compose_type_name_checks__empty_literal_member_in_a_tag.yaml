@@ -4,7 +4,7 @@ flow: |
   name: e
   input:
     m: !Literal('')
-  output: str
+  output: !str
   kind: code
   code: |
     return 1

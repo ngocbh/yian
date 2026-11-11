@@ -13,8 +13,8 @@ flow: |2
         - when: "upper('a', 'b') == 'A'"
           then: hot
       else: cold
-    hot: {kind: code, code: "return 'hot'", output: str}
-    cold: {kind: code, code: "return 'cold'", output: str}
+    hot: {kind: code, code: "return 'hot'", output: !str}
+    cold: {kind: code, code: "return 'cold'", output: !str}
   output: ${hot.output | cold.output}
 expect:
   load:

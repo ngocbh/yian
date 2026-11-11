@@ -16,7 +16,7 @@ flow: |
           code: ./fixtures/compose_codefns.ts:record
           input:
             tag: ${input.tag}
-          output: str
+          output: !str
       output: ${fx.output}
   nodes:
     pick:
@@ -26,14 +26,14 @@ flow: |
           then: maybe
     maybe:
       kind: code
-      output: str
+      output: !str
       code: return "m"
     publish:
       kind: code
       input:
         draft: call(side, tag="draft")
         notes: ${maybe.output :- "none"}
-      output: str
+      output: !str
       code: return inputs["draft"] + inputs["notes"]
   output:
     r: ${publish.output}

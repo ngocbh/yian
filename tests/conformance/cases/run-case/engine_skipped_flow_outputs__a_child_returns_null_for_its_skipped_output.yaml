@@ -16,7 +16,7 @@ flow: |
               then: order
         order:
           kind: code
-          output: str
+          output: !str
           code: |
             return "filled"
       output: ${order.output}

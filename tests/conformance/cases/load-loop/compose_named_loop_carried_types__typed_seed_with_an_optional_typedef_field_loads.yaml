@@ -18,7 +18,7 @@ flow: |
           input:
             n: ${input.n}
           output:
-            n: Optional(P)
+            n: !Optional(P)
           code: |
             return {"n": inputs["n"]}
       output: ${bump.output}

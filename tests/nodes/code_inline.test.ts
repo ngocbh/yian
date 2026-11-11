@@ -236,7 +236,7 @@ name: frames
 nodes:
   boom:
     kind: code
-    output: str
+    output: !str
 ${code}
 output: \${boom.output}
 `;
@@ -1190,7 +1190,7 @@ nodes:
     kind: code
     input:
       rating: \${input.rating}
-    output: str
+    output: !str
     code: |
       return "r=" + inputs['rating'].toFixed(1)
 output: \${verdict.output}

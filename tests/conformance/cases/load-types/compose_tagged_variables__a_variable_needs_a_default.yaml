@@ -11,7 +11,7 @@ flow: |
     instruction: !str "Summarize clearly"
     x: !int
   prompt: "${instruction} in ${num_sentences} sentences, ${tone}."
-  output: str
+  output: !str
 expect:
   load:
     diagnostics:

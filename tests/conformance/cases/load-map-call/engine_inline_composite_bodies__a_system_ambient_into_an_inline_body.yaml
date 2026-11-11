@@ -16,7 +16,7 @@ flow: |
             day: !date ${input.day}
             now: !datetime ${input.now}
             run: !str ${input.run}
-          output: str
+          output: !str
           code: return String(inputs.day)
       output: ${echo.output}
   output: ${wrap.output}

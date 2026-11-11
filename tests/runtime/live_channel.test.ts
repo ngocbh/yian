@@ -172,7 +172,7 @@ const CODE_ONLY = `
 id: plain
 name: plain
 nodes:
-  one: {kind: code, output: int, code: return 1}
+  one: {kind: code, output: !int, code: return 1}
 output: \${one.output}
 `;
 

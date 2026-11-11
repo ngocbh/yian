@@ -7,7 +7,7 @@ flow: |
   variables:
     v: !FileMemory
   prompt: hi
-  output: str
+  output: !str
 expect:
   load:
     diagnostics:

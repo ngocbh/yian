@@ -80,7 +80,7 @@ defs:
         kind: code
         input:
           answer: \${input.v}
-        output: str
+        output: !str
         code: return String(inputs["answer"] ?? "cancel")
     output: \${e.output}
   mid:
@@ -137,7 +137,7 @@ function mixedChainSource(levels: number): string {
     "        kind: code",
     "        input:",
     "          answer: ${input.v}",
-    "        output: str",
+    "        output: !str",
     '        code: return String(inputs["answer"] ?? "cancel")',
     "    output: ${e.output}",
   ];

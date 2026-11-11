@@ -19,7 +19,7 @@ nodes:
     kind: agent
     prompt: Review.
     skills: [code-review, release-notes]
-    output: str
+    output: !str
 output: \${review.output}
 `;
 

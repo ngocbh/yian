@@ -59,7 +59,7 @@ function agentBody(variables: string): string {
     "kind: agent\nvariables:\n" +
     variables.replace(/^(?=.)/gm, "  ") +
     'prompt: "${instruction} in ${num_sentences} sentences, ${tone}."\n' +
-    "output: str\n"
+    "output: !str\n"
   );
 }
 

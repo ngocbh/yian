@@ -55,14 +55,14 @@ async function run(lines: string[], model: ScriptedModel, options: RunFlowOption
 
 test("text agent without tools makes one unbound call", async () => {
   const model = new ScriptedModel([reply("hello")], CONFIG);
-  expect(await run(["output: str"], model)).toBe("hello");
+  expect(await run(["output: !str"], model)).toBe("hello");
   expect(model.requests).toHaveLength(1);
   expect(model.requests[0]!.tools).toEqual([]);
 });
 
 test("structured agent without tools makes one structured call", async () => {
   const model = new ScriptedModel([reply('{"name": "Ada", "score": 3}')], CONFIG);
-  expect(await run(["output: {name: str, score: int}"], model)).toEqual({ name: "Ada", score: 3n });
+  expect(await run(["output: {name: !str, score: !int}"], model)).toEqual({ name: "Ada", score: 3n });
   expect(model.requests).toHaveLength(1);
   expect(model.requests[0]!.tools).toEqual([]);
 });
@@ -102,7 +102,7 @@ test("a steer joins the single request after the prompt", async () => {
   const onEvent = (event: RunEvent) => {
     if (event instanceof RunStarted) void send(log, "notes", "be brief");
   };
-  expect(await run([STEER, "output: str"], model, { log, onEvent })).toBe("ok");
+  expect(await run([STEER, "output: !str"], model, { log, onEvent })).toBe("ok");
   expect(model.requests).toHaveLength(1);
   expect(model.requests[0]!.messages.slice(-2).map((message) => [message.role, message.text()])).toEqual([
     ["user", "Help the user."],
@@ -122,7 +122,7 @@ test("an interrupt while streaming records the partial text; an Optional(str) ag
     // A live delivery lands in this tick, before the next chunk.
     if (chunk.chunk === " big") void interrupt(log, "notes");
   };
-  expect(await run([STEER, "output: Optional(str)"], model, { log, onStream, numWorkers: 0 })).toBeNull();
+  expect(await run([STEER, "output: !Optional(str)"], model, { log, onStream, numWorkers: 0 })).toBeNull();
   expect(chunks.map((chunk) => [chunk.chunk, chunk.final])).toEqual([
     ["hello", false],
     [" big", false],
@@ -138,7 +138,7 @@ test("an interrupt while streaming records the partial text; an Optional(str) ag
 
 test("an Optional(str) agent without tools makes one unbound call and returns the text", async () => {
   const model = new ScriptedModel([reply("hello")], CONFIG);
-  expect(await run(["output: Optional(str)"], model)).toBe("hello");
+  expect(await run(["output: !Optional(str)"], model)).toBe("hello");
   expect(model.requests).toHaveLength(1);
   expect(model.requests[0]!.tools).toEqual([]);
   expect(model.requests[0]!.outputFormat).toBeNull();
@@ -146,5 +146,5 @@ test("an Optional(str) agent without tools makes one unbound call and returns th
 
 test("an empty reply from an Optional(str) agent is empty text, not null", async () => {
   const model = new ScriptedModel([reply("")], CONFIG);
-  expect(await run(["output: Optional(str)"], model)).toBe("");
+  expect(await run(["output: !Optional(str)"], model)).toBe("");
 });

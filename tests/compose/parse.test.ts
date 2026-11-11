@@ -48,7 +48,7 @@ test("parse nodes uses span tree", () => {
 });
 
 test("parse nodes unknown kind is located", () => {
-  const text = "id: f\nname: f\nnodes:\n  n:\n    kind: wizard\n    output: str\noutput: 1\n";
+  const text = "id: f\nname: f\nnodes:\n  n:\n    kind: wizard\n    output: !str\noutput: 1\n";
   const error = loadError(() => parseNodes(nodesReader(text)));
 
   expect(error.message).toContain("wizard");

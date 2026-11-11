@@ -12,7 +12,7 @@ flow: |
       input: {n: '${input.n}'}
       asserts: ['n >= 0']
       prompt: 'Write ${n} lines.'
-      output: str
+      output: !str
   output: ${writer.output}
 inputs: {n: -1}
 run: {run_id: r1, num_workers: 0}

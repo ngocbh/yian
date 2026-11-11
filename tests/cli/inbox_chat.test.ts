@@ -193,7 +193,7 @@ const ECHO_REPLY = `      reply:
         kind: code
         input:
           events: \${heard.output.events}
-        output: str
+        output: !str
         code: |
           return "echo: " + inputs["events"].join(" | ");
 `;
@@ -220,7 +220,7 @@ nodes:
     kind: code
     input:
       events: \${heard.output.events}
-    output: str
+    output: !str
     code: |
       return "Sure about " + inputs["events"].join(" ") + "?";
   sure:
@@ -228,13 +228,13 @@ nodes:
     tool_id: ask
     input:
       prompt: \${question.output}
-    output: str
+    output: !str
   reply:
     kind: code
     input:
       events: \${heard.output.events}
       sure: \${sure.output}
-    output: str
+    output: !str
     code: |
       return "echo: " + inputs["events"].join(" | ") + " (" + inputs["sure"] + ")";
 output: \${reply.output}
@@ -245,7 +245,7 @@ const NAP_NODES = `      delay:
         kind: code
         input:
           events: \${heard.output.events}
-        output: str
+        output: !str
         code: |
           return "60s";
       nap:
@@ -259,7 +259,7 @@ const NAP_REPLY = `      reply:
         input:
           events: \${heard.output.events}
           napped: \${nap.output}
-        output: str
+        output: !str
         code: |
           return "echo: " + inputs["events"].join(" | ");
 `;
@@ -568,7 +568,7 @@ output: \${add.output.path}
         kind: code
         input:
           events: \${heard.output.events}
-        output: str
+        output: !str
         code: |
           throw new Error("no reply today");
 `;
@@ -665,7 +665,7 @@ test(
   async () => {
     const reply = `      reply:
         kind: code
-        output: str
+        output: !str
         code: |
           return "\\u001b[31mred\\u001b[0m\\u0007 text";
 `;
@@ -730,7 +730,7 @@ test(
 const ESCAPED = "x\x1b]52;c;aGk=\x07y\x1b]8;;https://e.example\x1b\\z\x1b[2J";
 const ESCAPED_REPLY = `      reply:
         kind: code
-        output: str
+        output: !str
         code: |
           return "x\\u001b]52;c;aGk=\\u0007y\\u001b]8;;https://e.example\\u001b\\\\z\\u001b[2J";
 `;
@@ -780,7 +780,7 @@ describe("yian chat's failures under --engine-trace", () => {
   test(
     "a load error is located, with the stack below only under --engine-trace",
     async () => {
-      const broken = flowFile("id: b\nname: b\nnodes:\n  n: {kind: code, output: str, code: return ${nope.output}}\n");
+      const broken = flowFile("id: b\nname: b\nnodes:\n  n: {kind: code, output: !str, code: return ${nope.output}}\n");
       for (const engineTrace of [false, true]) {
         const { io, stderr } = chatIo();
         const { code } = await runChat(broken, io, { engineTrace });
@@ -817,7 +817,7 @@ const HOLD = turnFlow(`      reply:
         tool_id: hold
         input:
           events: \${heard.output.events}
-        output: str
+        output: !str
 `);
 
 /**
@@ -837,7 +837,7 @@ const NAP_HOLD = turnFlow(
         input:
           events: \${heard.output.events}
           napped: \${nap.output}
-        output: str
+        output: !str
 `,
   { nodes: NAP_NODES },
 ).replace("said: ${input.said + heard.output.events}", "said: ${input.said + heard.output.events + [reply.output]}");
@@ -906,7 +906,7 @@ const HOLD_THEN_NAP = turnFlow(NAP_REPLY, {
         tool_id: hold
         input:
           events: \${heard.output.events}
-        output: str
+        output: !str
 ` + NAP_NODES.replace("events: ${heard.output.events}", "events: ${heard.output.events}\n          held: ${held.output}"),
 }).replace("said: ${input.said + heard.output.events}", "said: ${input.said + heard.output.events + [reply.output]}");
 
@@ -967,7 +967,7 @@ describe("the chat's inbox and inputs", () => {
     const takes = names
       .map((name) => `  take_${name}:\n    kind: tool\n    tool_id: take\n    input:\n      from: \${input.${name}}\n`)
       .join("");
-    const node = "  n:\n    kind: code\n    output: str\n    code: return \"x\";\n";
+    const node = "  n:\n    kind: code\n    output: !str\n    code: return \"x\";\n";
     return `id: f\nname: f\n${input ? `input:\n${input}` : ""}nodes:\n${node}${takes}output: \${n.output}\n`;
   };
 
@@ -1033,7 +1033,7 @@ describe("the chat's inbox and inputs", () => {
         input:
           topic: \${input.topic}
           events: \${heard.output.events}
-        output: str
+        output: !str
         code: |
           return inputs["topic"] + ": " + inputs["events"].join(" | ");
 `;
@@ -1125,7 +1125,7 @@ describe("runOrChat", () => {
         input:
           topic: \${input.topic}
           events: \${heard.output.events}
-        output: str
+        output: !str
         code: |
           return inputs["topic"] + ": " + inputs["events"].join(" | ");
 `;
@@ -1190,7 +1190,7 @@ describe("runOrChat", () => {
     async () => {
       const ints = ECHO.replaceAll("!Inbox(str)", "!Inbox(int)").replace("said: !list(str)", "said: !list(int)");
       waited(await runOn(flowFile(ints, "ints.yaml"), { typed: BYE }));
-      const code = '  n: {kind: code, output: str, code: return "x";}\n';
+      const code = '  n: {kind: code, output: !str, code: return "x";}\n';
       const plain = flowFile(`id: plain\nname: plain\nnodes:\n${code}output: \${n.output}\n`, "plain.yaml");
       const result = await runOn(plain, { typed: BYE });
       expect([result.code, result.stdout]).toEqual([0, "x\n"]);
@@ -1907,7 +1907,7 @@ ${NAP_NODES}      reply:
           events: \${heard.output.events}
           napped: \${nap.output}
         steer_inbox: \${input.messages}
-        output: Optional(str)
+        output: !Optional(str)
         prompt: "Reply to: \${events}"
     output:
       said: \${input.said + heard.output.events + [reply.output :- ""]}
@@ -2014,7 +2014,7 @@ defs:
         tool_id: sender
         input:
           events: \${heard.output.events}
-        output: str
+        output: !str
     output:
       said: \${input.said + [reply.output]}
       closed: \${heard.output.closed}
@@ -2319,7 +2319,7 @@ describe("yian chat's skills", () => {
         input:
           events: \${heard.output.events}
         skills: [code-review]
-        output: str
+        output: !str
         prompt: "Reply to: \${events}"
 `);
 
@@ -2520,7 +2520,7 @@ nodes:
     kind: code
     input:
       events: \${heard.output.events}
-    output: str
+    output: !str
     code: |
       return "echo: " + inputs["events"].join(" | ");
 output: \${reply.output}

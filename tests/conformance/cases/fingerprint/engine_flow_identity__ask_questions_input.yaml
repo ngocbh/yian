@@ -7,11 +7,11 @@ flow: |
     first:
       kind: tool
       tool_id: src
-      output: list(object)
+      output: !list(object)
     second:
       kind: tool
       tool_id: src
-      output: list(object)
+      output: !list(object)
     node:
       kind: tool
       tool_id: ask
@@ -25,11 +25,11 @@ other: |
     first:
       kind: tool
       tool_id: src
-      output: list(object)
+      output: !list(object)
     second:
       kind: tool
       tool_id: src
-      output: list(object)
+      output: !list(object)
     node:
       kind: tool
       tool_id: ask

@@ -11,7 +11,7 @@ flow: |
       nodes:
         run:
           kind: code
-          output: str
+          output: !str
           code: |
             return "x"
       output: ${run.output}
@@ -21,7 +21,7 @@ flow: |
       code: ./fixtures/compose_codefns.ts:echo
       input:
         topic: call(g, d=2026-13-45)
-      output: str
+      output: !str
   output: ${use.output}
 expect:
   load:

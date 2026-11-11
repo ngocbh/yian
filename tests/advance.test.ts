@@ -355,7 +355,7 @@ async function codeHostFlow(root: string, codeRoot: string | null = null): Promi
     "    code: ./fn.ts:up",
     "    input:",
     "      q: hi",
-    "    output: str",
+    "    output: !str",
     "  ask:",
     "    kind: tool",
     "    tool_id: lookup",

@@ -11,7 +11,7 @@ flow: |
     qty: !int
     cfg: !Cfg {a: 1}
   kind: code
-  output: object
+  output: !object
   code: "return {...inputs}"
 expect:
   load:

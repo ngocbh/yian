@@ -9,7 +9,7 @@ flow: |
       kind: code
       input:
         topic: ${upper(upper(upper(upper(input.s))))}
-      output: str
+      output: !str
       code: |
         return inputs['topic']
   output: ${use.output}

@@ -111,13 +111,13 @@ nodes:
   top:
     kind: code
     input: {n: "\${input.n}"}
-    output: float
+    output: !float
     code: |
       return inputs["n"]
   rec:
     kind: code
     input: {n: "\${input.n}"}
-    output: Score
+    output: !Score
     code: |
       return {"value": inputs["n"]}
 output:

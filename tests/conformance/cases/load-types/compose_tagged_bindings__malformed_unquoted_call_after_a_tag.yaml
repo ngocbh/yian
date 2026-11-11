@@ -13,18 +13,18 @@ flow: |2
       input:
         topic: ${input.n}
       output:
-        qty: int
+        qty: !int
     note:
       kind: code
       code: |
         return "hi"
-      output: str
+      output: !str
     use:
       kind: code
       code: ./fixtures/compose_codefns.ts:echo
       input:
         qty: !str call(f) and more
-      output: int
+      output: !int
   output: ${use.output}
 expect:
   load:

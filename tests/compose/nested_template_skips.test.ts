@@ -28,12 +28,12 @@ nodes:
     else: rejected
   order:
     kind: code
-    output: str
+    output: !str
     code: |
       return "filled"
   rejected:
     kind: code
-    output: str
+    output: !str
     code: |
       return "no"
 `;
@@ -145,7 +145,7 @@ test("nested output arithmetic on a skipped value is rejected", () => {
 /** Return a flow whose CODE node `d` sums `a`, `b` and `c`, with `then`/`otherwise` gated. */
 function chainFlow(then: string, otherwise: string): string {
   const producers = ["a", "b", "c", "e"]
-    .map((node) => `  ${node}:\n    kind: code\n    output: int\n    code: |\n      return 1\n`)
+    .map((node) => `  ${node}:\n    kind: code\n    output: !int\n    code: |\n      return 1\n`)
     .join("");
   return `
 id: chain_skips

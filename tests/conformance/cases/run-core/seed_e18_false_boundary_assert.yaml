@@ -12,7 +12,7 @@ flow: |
       kind: code
       input:
         window: ${input.window}
-      output: int
+      output: !int
       code: ./fixtures/seeds.ts:const_one
   asserts:
     - "input.window > 0"      # false when window <= 0

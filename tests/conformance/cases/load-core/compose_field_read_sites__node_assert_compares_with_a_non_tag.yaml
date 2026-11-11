@@ -17,19 +17,19 @@ flow: |
       kind: code
       input:
         x: ${input.s}
-      output: Rec
+      output: !Rec
       code: "return ({a: \"x\"})"
     d:
       kind: code
       input:
         s: ${input.s}
-      output: Order
+      output: !Order
       code: "return null"
     c:
       kind: code
       input:
         v: ${d.output}
-      output: str
+      output: !str
       code: return 'x'
       asserts:
         - "v.action == 'byu' and v.zz > 0"

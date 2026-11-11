@@ -333,7 +333,7 @@ describe("validateReferences", () => {
     const text =
       "id: f\nname: f\nnodes:\n" +
       "  a:\n    kind: agent\n    prompt: hi\n" +
-      "    input:\n      x: ${ghost.output}\n    output: str\n" +
+      "    input:\n      x: ${ghost.output}\n    output: !str\n" +
       "output: ${a.output}\n";
     const { buildResults, wiring, producers } = builtFlow(text);
 
@@ -361,7 +361,7 @@ describe("validateReferences", () => {
       "  a:\n    kind: case\n" +
       '    cases:\n      - when: "ghost.output >= 1"\n        then: b\n' + // `when:` on line 7
       "    else: b\n" +
-      "  b:\n    kind: code\n    output: int\n    code: \"return {'output': 1}\"\n" +
+      "  b:\n    kind: code\n    output: !int\n    code: \"return {'output': 1}\"\n" +
       "output: ${b.output}\n";
 
     const error = loadError(() => assembleText(text));
@@ -380,7 +380,7 @@ describe("validateReferences", () => {
       "    on: ${nope.output}\n" + // `on:` on line 6
       "    cases:\n      - when: hi\n        then: p\n" +
       "    else: p\n" +
-      "  p:\n    kind: code\n    output: int\n    code: \"return {'output': 1}\"\n" +
+      "  p:\n    kind: code\n    output: !int\n    code: \"return {'output': 1}\"\n" +
       "output: ${p.output}\n";
 
     const error = loadError(() => assembleText(text));
@@ -396,11 +396,11 @@ describe("validateReferences", () => {
     // ref carets this `when:` line and names `cases[0].when`.
     const text =
       "id: f\nname: f\nnodes:\n" +
-      "  s:\n    kind: code\n    output: int\n    code: \"return {'output': 1}\"\n" +
+      "  s:\n    kind: code\n    output: !int\n    code: \"return {'output': 1}\"\n" +
       "  gate:\n    kind: case\n" +
       '    cases:\n      - when: "s.output >= 1 and nope.output >= 1"\n        then: p\n' + // line 11
       "    else: p\n" +
-      "  p:\n    kind: code\n    output: int\n    code: \"return {'output': 1}\"\n" +
+      "  p:\n    kind: code\n    output: !int\n    code: \"return {'output': 1}\"\n" +
       "output: ${p.output}\n";
 
     const error = loadError(() => assembleText(text));
@@ -416,7 +416,7 @@ describe("validateReferences", () => {
     // synth node's own provenance), not the case header.
     const text =
       "id: f\nname: f\nnodes:\n" +
-      "  s:\n    kind: code\n    output: int\n    code: \"return {'output': 1}\"\n" +
+      "  s:\n    kind: code\n    output: !int\n    code: \"return {'output': 1}\"\n" +
       "  gate:\n    kind: case\n" +
       '    cases:\n      - when: "s.output >= 1"\n' +
       "        then: call(helper, x=${nope.output})\n" + // `then:` on line 12
@@ -425,7 +425,7 @@ describe("validateReferences", () => {
       "defs:\n" +
       "  helper:\n    input:\n      x: !int\n" +
       "    nodes:\n      h:\n        kind: code\n        code: \"return {'output': 1}\"\n" +
-      "        input:\n          x: ${input.x}\n        output: int\n" +
+      "        input:\n          x: ${input.x}\n        output: !int\n" +
       "    output: ${h.output}\n";
 
     const error = loadError(() => assembleText(text));
@@ -451,7 +451,7 @@ nodes:
     prompt: "Rate \${topic}"
     input:
       topic: \${input.topic}
-    output: int
+    output: !int
     asserts:
       - output >= 0
       - output <= 10
@@ -473,7 +473,7 @@ nodes:
     input:
       topic: \${input.topic}
       as_of: \${input.as_of:?"as_of is required"}
-    output: str
+    output: !str
 output: \${report.output}
 `;
     const fr = nodesOf(flow).get("report")!.fieldRanges;
@@ -494,7 +494,7 @@ nodes:
       retries: 2
     input:
       env: \${input.data}
-    output: int
+    output: !int
     code: ./fixtures/compose_codefns.ts:pick_pro
 input:
   data: !str
@@ -518,7 +518,7 @@ bogus: x
 nodes:
   n:
     kind: code
-    output: int
+    output: !int
     code: ./fixtures/compose_codefns.ts:pick_pro
 output: \${n.output}
 `;
@@ -537,7 +537,7 @@ nodes:
   calc:
     kind: code
     prompt: hi
-    output: int
+    output: !int
     code: ./fixtures/compose_codefns.ts:pick_pro
 output: \${calc.output}
 `;
@@ -564,7 +564,7 @@ test("a case output over a 1000-link alias chain is rejected as a case output", 
     "    on: ${input.cmd}\n    output: {k: *m998}\n    cases:\n      - when: a\n" +
     "        then: reply\n    else: reply\n  reply:\n" +
     "    kind: code\n    code: ./fixtures/compose_codefns.ts:echo\n" +
-    "    input:\n      topic: replied\n    output: str\n" +
+    "    input:\n      topic: replied\n    output: !str\n" +
     "output: ${route.output}\n";
 
   expect(loadError(() => assembleText(text)).message).toBe(

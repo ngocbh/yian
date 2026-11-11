@@ -91,8 +91,8 @@ test("both time out: the run ends with null", async () => {
 test("a strict answer type: the lead's timeout fails the run with tool.timeout", async () => {
   const { log, tools } = setUp();
   const strict = TEXT.replace(
-    "    output: Optional(Approval)           # null: the lead didn't answer in time",
-    "    output: Approval",
+    "    output: !Optional(Approval)          # null: the lead didn't answer in time",
+    "    output: !Approval",
   );
   expect(strict).not.toBe(TEXT);
   await runFlow(await loadFlow(strict), PLAN, { log, env, tools, scheduler: handClock(T0) });

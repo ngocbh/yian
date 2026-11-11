@@ -1,5 +1,5 @@
 kind: run
-flow: "id: f\nname: f\ninput:\n  approve: !bool\nnodes:\n  gate:\n    kind: case\n    cases:\n      - when: ${input.approve}\n        then: order\n    else: rejected\n  order:\n    kind: code\n    output: \n      qty: int\n    code: |\n      return {\"qty\": 2}\n  rejected:\n    kind: code\n    output: str\n    code: |\n      return \"no\"\n  check:\n    kind: case\n    cases:\n      - when: ${order.output.qty > 1}\n        then: use\n  use:\n    kind: code\n    output: int\n    input:\n      q: ${order.output.qty * 2}\n    code: |\n      return inputs[\"q\"]\noutput:\n  u: ${use.output}\n"
+flow: "id: f\nname: f\ninput:\n  approve: !bool\nnodes:\n  gate:\n    kind: case\n    cases:\n      - when: ${input.approve}\n        then: order\n    else: rejected\n  order:\n    kind: code\n    output: \n      qty: !int\n    code: |\n      return {\"qty\": 2}\n  rejected:\n    kind: code\n    output: !str\n    code: |\n      return \"no\"\n  check:\n    kind: case\n    cases:\n      - when: ${order.output.qty > 1}\n        then: use\n  use:\n    kind: code\n    output: !int\n    input:\n      q: ${order.output.qty * 2}\n    code: |\n      return inputs[\"q\"]\noutput:\n  u: ${use.output}\n"
 inputs:
   approve: false
 run:

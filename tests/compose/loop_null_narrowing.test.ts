@@ -190,7 +190,7 @@ const fetchPageDef = (output: string) => `  fetch_page:
         kind: code
         input:
           cursor: \${input.cursor}
-        output: Optional(str)
+        output: !Optional(str)
         code: |
           if (inputs["cursor"] === null) throw new Error("body saw a null cursor")
           return ({p1: "p2", p2: null})[inputs["cursor"]] ?? null
@@ -436,7 +436,7 @@ test("partial loop seed check alone decides a carried over field", async () => {
           cursor: \${input.cursor}
           n: \${input.n}
         output:
-          n: int
+          n: !int
         code: |
           if (inputs["cursor"] === null) throw new Error("assert")
           return {n: inputs["n"] + 1}
@@ -519,7 +519,7 @@ test("nested null check narrows the record above it", async () => {
         input:
           page: \${input.page}
         output:
-          page: Optional(Page)
+          page: !Optional(Page)
         code: |
           if (inputs["page"]["next"] === null) throw new Error("assert")
           const n = inputs["page"]["n"] + 1
@@ -533,7 +533,7 @@ test("nested null check narrows the record above it", async () => {
         kind: code
         input:
           s: \${input.s}
-        output: Optional(Page)
+        output: !Optional(Page)
         code: |
           return inputs["s"] === null ? null : {next: inputs["s"], n: 0}
     output: \${mk.output}
@@ -632,7 +632,7 @@ nodes:
     kind: code
     input:
       s: \${input.s}
-    output: Union(Buy, Hold)
+    output: !Union(Buy;Hold)
     code: 'return inputs["s"] === "b" ? {kind: "buy", qty: 2n} : {kind: "hold", note: "n"}'
   route:
     kind: case
@@ -688,8 +688,8 @@ test("while null check keeps the case narrowed seed", async () => {
           cursor: \${input.cursor}
           k: \${input.k}
         output:
-          cursor: Optional(str)
-          k: int
+          cursor: !Optional(str)
+          k: !int
         code: |
           if (inputs["cursor"] === null) throw new Error("assert")
           return {cursor: null, k: inputs["k"] + inputs["order"]["qty"]}
@@ -843,7 +843,7 @@ nodes:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: return inputs["n"] + 1
     output:
       token: \${input.token}
@@ -871,7 +871,7 @@ nodes:
         kind: code
         input:
           k: \${input.k}
-        output: int
+        output: !int
         code: return inputs["k"] + 1
     output:
       page: \${input.page}
@@ -1142,7 +1142,7 @@ defs:
         kind: code
         input:
           d: \${input.draft}
-        output: Optional(Draft)
+        output: !Optional(Draft)
         code: return null
     output:
       draft: \${get.output}
@@ -1191,7 +1191,7 @@ defs:
         kind: code
         input:
           d: \${input.draft}
-${carried === null ? "" : `        output: ${carried}\n`}        code: |
+${carried === null ? "" : `        output: !${carried}\n`}        code: |
           return ${value}
     output:
       draft: \${get.output}

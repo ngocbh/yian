@@ -322,7 +322,7 @@ nodes:
       x: \${input.x}
     code: |
       return inputs["x"]
-    output: Any
+    output: !Any
 output: \${keep.output}
 `;
 

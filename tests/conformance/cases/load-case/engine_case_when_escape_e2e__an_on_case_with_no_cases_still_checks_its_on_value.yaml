@@ -6,7 +6,7 @@ flow: |2
   nodes:
     a:
       kind: code
-      output: int
+      output: !int
       code: |
         return 1
     gate:
@@ -16,7 +16,7 @@ flow: |2
       else: cold
     cold:
       kind: code
-      output: str
+      output: !str
       code: |
         return "cold"
   output: ${cold.output}

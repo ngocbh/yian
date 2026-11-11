@@ -14,7 +14,7 @@ flow: |
       nodes:
         a:
           kind: agent
-          output: bool
+          output: !bool
           prompt: hi
           tools: [{m: [read]}]
       output:

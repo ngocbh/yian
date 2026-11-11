@@ -1158,7 +1158,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
 output: \${emit.output}
 `);
 

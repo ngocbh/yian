@@ -19,7 +19,7 @@ nodes:
     kind: code
     input:
       topic: \${input.topic}
-    output: int
+    output: !int
     code: "return {'output': 1}"
 output: \${n.output}
 `;

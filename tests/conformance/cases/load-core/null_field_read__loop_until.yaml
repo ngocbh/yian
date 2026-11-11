@@ -17,7 +17,7 @@ flow: |
           kind: code
           input:
             d: ${input.draft}
-          output: Optional(Draft)
+          output: !Optional(Draft)
           code: |
             return {"done": 1 == 1}
       output:

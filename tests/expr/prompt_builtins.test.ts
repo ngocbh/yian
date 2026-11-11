@@ -206,7 +206,7 @@ nodes:
     input:
       note: \${input.note}
     prompt: 'Note: \${note :- "none"}'
-    output: str
+    output: !str
 output: \${write.output}
 `);
   const model = new ScriptedModel([textReply("ok")], { provider: "ollama", model: "test" });
@@ -229,7 +229,7 @@ nodes:
       system_md: \${input.system_md}
     system_prompt: "\${rstrip(system_md)} Be brief."
     prompt: Hi
-    output: str
+    output: !str
 output: \${write.output}
 `);
   const model = new ScriptedModel([textReply("ok")], { provider: "ollama", model: "test" });
@@ -304,7 +304,7 @@ nodes:
     kind: agent
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
     prompt: "Render ${call}"
 output: \${brief.output}
 `;

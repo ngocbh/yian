@@ -8,7 +8,7 @@ flow: |
     a:
       kind: agent
       prompt: Go.
-      output: str
+      output: !str
   output: ${a.output}
 expect:
   load:

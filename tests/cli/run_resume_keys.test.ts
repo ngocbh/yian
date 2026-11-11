@@ -27,7 +27,7 @@ nodes:
     kind: code
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
     code: |
       return inputs["topic"]
   write:
@@ -35,7 +35,7 @@ nodes:
     input:
       text: \${prep.output}
     prompt: "Write about \${text}"
-    output: str
+    output: !str
 output: \${write.output}
 llm_config: {provider: PROVIDER, model: offline-model}
 `;
@@ -306,7 +306,7 @@ test("agents sharing one connection get one prompt", async () => {
   const text = FLOW.replace(
     "output: ${write.output}",
     "  again:\n    kind: agent\n    input:\n      text: ${write.output}\n" +
-      '    prompt: "Rewrite ${text}"\n    output: str\noutput: ${again.output}',
+      '    prompt: "Rewrite ${text}"\n    output: !str\noutput: ${again.output}',
   );
   const flow = flowFile(tmp, "openai", text);
   const log = await unfinishedLog(flow);

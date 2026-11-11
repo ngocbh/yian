@@ -424,7 +424,7 @@ nodes:
           \${lessons}
           </memory>
       - user: \${question}
-    output: str
+    output: !str
   keep:
     kind: tool
     tool_id: {lessons: append}

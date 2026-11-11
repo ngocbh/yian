@@ -29,7 +29,7 @@ id: echo_one
 name: echo_one
 input:
   topic: !str
-output: str
+output: !str
 kind: code
 code: tests.engine._compose_codefns:echo
 `;
@@ -109,7 +109,7 @@ id: rank
 name: rank
 input:
   topic: !str
-output: float
+output: !float
 kind: model
 model_id: x
 `;
@@ -183,7 +183,7 @@ id: hello-agent
 name: hello
 input:
   topic: !str
-output: str
+output: !str
 kind: code
 code: tests.engine._compose_codefns:echo
 `;
@@ -235,8 +235,8 @@ name: plan
 input:
   topic: !str
 output:
-  rating: str
-  score: float
+  rating: !str
+  score: !float
 kind: code
 code: ./fixtures/compose_codefns.ts:make_plan
 `);

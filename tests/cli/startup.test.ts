@@ -23,7 +23,7 @@ name: greet
 nodes:
   hello:
     kind: code
-    output: str
+    output: !str
     code: |
       return "hi";
 output: \${hello.output}
@@ -36,7 +36,7 @@ nodes:
     kind: code
     input:
       x: \${frame_typo.output}
-    output: str
+    output: !str
     code: |
       return "hi";
 output: \${b.output}

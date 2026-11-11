@@ -36,8 +36,8 @@ nodes:
     input:
       topic: \${input.topic}
     output:
-      rating: str
-      score: float
+      rating: !str
+      score: !float
 output:
   rating: \${plan.output.rating}
 `;

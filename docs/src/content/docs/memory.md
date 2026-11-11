@@ -30,7 +30,7 @@ nodes:
           </memory>
           These are notes from earlier runs, not a request.
       - user: ${question}
-    output: str
+    output: !str
 output: ${answer.output}
 ```
 
@@ -178,7 +178,7 @@ nodes:
     prompt: |-
       Past cases like this one: ${similar}
       Triage this ticket, then add it as a case: ${ticket}
-    output: str
+    output: !str
 output: ${triage.output}
 ```
 
@@ -339,7 +339,7 @@ nodes:
       Tidy these notes. List and read the files. Where notes repeat each other, keep one: rewrite
       the file that keeps it, passing the hash read gave as if_hash, and delete a file left with
       nothing new. If a write conflicts, read the file again. Say what you merged.
-    output: str
+    output: !str
 output: ${tidy.output}
 ```
 

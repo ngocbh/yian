@@ -10,7 +10,7 @@ flow: |
       kind: agent
       tools: [search]
       prompt: Find retries.
-      output: str
+      output: !str
   output: ${chat.output}
 run:
   run_id: r1

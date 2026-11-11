@@ -10,6 +10,7 @@ import { expect, test } from "bun:test";
 
 import { runFlow } from "../../src/run.ts";
 import { assembled, assembleText, type CaseRow, loadConformanceFlow, loadError, runCase } from "../helpers/declarations.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 /** A flow whose inline LOOP body returns `seen` as `Optional(list(str))`, seeded by `seed`. */
 function seenLoop(seed: string): string {
@@ -30,8 +31,8 @@ nodes:
         input:
           n: \${input.n}
         output:
-          seen: Optional(list(str))
-          n: int
+          seen: !Optional(list(str))
+          n: !int
         code: |
           return {"seen": ["a", "b"].slice(0, inputs["n"] + 1), "n": inputs["n"] + 1}
     output: \${bump.output}
@@ -63,7 +64,7 @@ nodes:
         input:
           n: \${input.n}
         output:
-          n: ${bodyOutput}
+          n: ${outputTag(bodyOutput)}
         code: |
           return {"n": ${bodyValue}}
     output: \${bump.output}
@@ -93,7 +94,7 @@ nodes:
         kind: code
         input:
           note: \${input.note}
-        output: ${bodyOutput}
+        output: ${outputTag(bodyOutput)}
         code: |
           return ${bodyValue}
     output:
@@ -181,7 +182,7 @@ nodes:
         input:
           n: \${input.n}
         output:
-          n: int
+          n: !int
         code: |
           return {"n": inputs["n"] + 1}
     output: \${bump.output}
@@ -267,7 +268,7 @@ nodes:
         input:
           n: \${input.n}
         output:
-          n: ${bodyType}
+          n: ${outputTag(bodyType)}
         code: |
           return {"n": ${bodyValue}}
     output: \${bump.output}

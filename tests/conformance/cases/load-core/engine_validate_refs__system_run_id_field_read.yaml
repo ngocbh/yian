@@ -7,7 +7,7 @@ flow: |
       kind: code
       input:
         t: ${system.run_id.x.y}
-      output: str
+      output: !str
       code: |
         return String(inputs["t"])
   output: ${read.output}

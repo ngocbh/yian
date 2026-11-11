@@ -9,7 +9,7 @@ flow: |
         return inputs["maybe"]
       input:
         maybe: !Optional(int) null
-      output: Optional(int)
+      output: !Optional(int)
   nodes:
     go:
       kind: call

@@ -43,7 +43,7 @@ flow: |
           input:
             topic: ${input.topic}
             window: ${input.window}
-          output: float
+          output: !float
           code: |
             // A deterministic stand-in score in [-1, 1], so the asserts below hold.
             return (inputs.topic.length % 21 - 10) / 10
@@ -87,7 +87,7 @@ flow: |
       input:
         topic: ${input.topic}
         rating: ${score.output}
-      output: str
+      output: !str
       prompt: "Write a two-sentence rationale for buying ${topic} (rating ${rating}). No advice."
       asserts:
         - "output != \"\""    # NODE POST — the rationale must be non-empty
@@ -96,7 +96,7 @@ flow: |
       kind: agent
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       prompt: "Write a two-sentence note on why ${topic} is passed for now. No advice."
 
   output:

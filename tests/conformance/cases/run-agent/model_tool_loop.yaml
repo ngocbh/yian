@@ -6,7 +6,7 @@ flow: |
     research:
       kind: agent
       tools: [lookup]
-      output: str
+      output: !str
       llm_config: {provider: openai, model: gpt-5.5}
       prompt: "Look up x."
   output: ${research.output}

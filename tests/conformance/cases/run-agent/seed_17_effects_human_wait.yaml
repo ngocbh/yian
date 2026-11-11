@@ -32,7 +32,7 @@ flow: |
       kind: agent
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       prompt: "Propose one concrete, neutral action for ${topic} in a single sentence."
 
     approve:
@@ -40,7 +40,7 @@ flow: |
       tool_id: ask
       input:
         prompt: "Approve this action? ${propose.output}  (approve / reject)"
-      output: Approval                   # the injected answer is validated against Approval's tags
+      output: !Approval                  # the injected answer is validated against Approval's tags
 
     gate:
       kind: case                          # route on the human's answer (simple form)
@@ -63,14 +63,14 @@ flow: |
       input:
         action: ${propose.output}
         answer: ${approve.output}
-      output: str
+      output: !str
       code: ./fixtures/seeds.ts:confirm_action
 
     abort:
       kind: agent
       input:
         action: ${propose.output}
-      output: str
+      output: !str
       prompt: "Write one neutral sentence noting this action was NOT approved: ${action}."
 
   # settle/confirm run only on approve; abort runs otherwise. Coalesce picks whichever ran.

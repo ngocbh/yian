@@ -15,8 +15,8 @@ flow: |2
       input:
         topic: ${input.topic}
       output:
-        report: str
-        n: int
+        report: !str
+        n: !int
       asserts:
         - "output >= 0"
   output: ${x.output}

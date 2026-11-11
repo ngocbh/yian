@@ -6,7 +6,7 @@ flow: |
     writer:
       kind: agent
       prompt: !str write
-      output: str
+      output: !str
   output: ${writer.output}
 expect:
   load:

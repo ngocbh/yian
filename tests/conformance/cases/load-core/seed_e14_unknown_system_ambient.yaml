@@ -12,7 +12,7 @@ flow: |
       input:
         topic: ${input.topic}
         rid: ${system.bogus}       # ERROR: system.bogus is not a valid ambient (only today/now/run_id)
-      output: str
+      output: !str
       prompt: "Rate ${topic} (${rid})."
   output: ${note.output}
 expect:

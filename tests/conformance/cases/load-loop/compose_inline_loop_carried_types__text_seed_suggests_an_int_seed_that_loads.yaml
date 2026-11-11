@@ -14,7 +14,7 @@ flow: |
           input:
             n: ${input.n}
           output:
-            n: int
+            n: !int
           code: |
             return {"n": inputs["n"] + 1}
       output: ${bump.output}

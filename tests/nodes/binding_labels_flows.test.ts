@@ -237,7 +237,7 @@ defs:
         code: "return inputs['y']"
         input:
           y: \${input.y}
-        output: float
+        output: !float
     output: \${c.output}
 nodes:
   n:
@@ -245,7 +245,7 @@ nodes:
     code: "return inputs['a']"
     input:
       a: call(child, y=\${[[v] for v in input.x]})
-    output: float
+    output: !float
 output: \${n.output}
 `;
   const result = await run(text, { x: DEEP });
@@ -266,7 +266,7 @@ defs:
         code: "return inputs['y']"
         input:
           y: \${input.y}
-        output: float
+        output: !float
     output: \${c.output}
   check:
     input:
@@ -277,7 +277,7 @@ defs:
         code: "return true"
         input:
           y: \${input.y}
-        output: bool
+        output: !bool
     output: \${c.output}
   lister:
     input:
@@ -288,7 +288,7 @@ defs:
         code: "return [inputs['n']]"
         input:
           n: \${input.n}
-        output: list(float)
+        output: !list(float)
     output: \${c.output}
 `;
 
@@ -314,7 +314,7 @@ nodes:
     code: "return inputs['a']"
     input:
       a: call(child, y=${BAD_ARG})
-    output: float
+    output: !float
 output: \${n.output}
 `);
   const result = await run(text, { x: DEEP });
@@ -365,7 +365,7 @@ nodes:
     code: "return inputs['a']"
     input:
       a: call(child, y=call(child, y=${BAD_ARG}))
-    output: float
+    output: !float
 output: \${n.output}
 `);
   const result = await run(text, { x: DEEP });
@@ -414,7 +414,7 @@ test("a read case else call argument failure points at the else field", async ()
     code: "return inputs['v']"
     input:
       v: \${g.output}
-    output: float
+    output: !float
 `;
   const text = caseCallFlow(
     `    cases:
@@ -469,7 +469,7 @@ nodes:
     code: "return inputs['a']"
     input:
       a: call(child, y=\${m.output})
-    output: float
+    output: !float
 output: \${n.output}
 `,
     "",

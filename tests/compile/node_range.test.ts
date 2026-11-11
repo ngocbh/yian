@@ -34,11 +34,11 @@ nodes:
     tool_id: ask
     input:
       prompt: "continue?"
-    output: Optional(str)
+    output: !Optional(str)
   done:
     kind: code
     depends_on: [settle]
-    output: str
+    output: !str
     code: ./fixtures/seeds.ts:confirm_action
 output: \${done.output}
 `;

@@ -84,7 +84,7 @@ nodes:
     prompt: "v=\${10 ** n}"
     input:
       n: \${input.n}
-    output: str
+    output: !str
 output: \${a.output}
 `,
     { models: serving(model, env) },
@@ -116,7 +116,7 @@ nodes:
     tool_id: ask
     input:
       prompt: "v=\${10 ** input.n}"
-    output: str
+    output: !str
 output: \${ask.output}
 `,
     { tools: { ask: askUser } },

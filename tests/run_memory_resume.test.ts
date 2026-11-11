@@ -39,7 +39,7 @@ nodes:
       lessons: \${input.lessons}
     tools: [{lessons: [append]}]
     prompt: "<memory>\${lessons}</memory> go"
-    output: str
+    output: !str
 output: \${answer.output}
 `;
 
@@ -320,7 +320,7 @@ nodes:
       cases: \${input.cases}
     tools: [{cases: [add]}]
     prompt: "<memory>\${cases}</memory> keep it"
-    output: str
+    output: !str
 output: \${keep.output}
 `;
 

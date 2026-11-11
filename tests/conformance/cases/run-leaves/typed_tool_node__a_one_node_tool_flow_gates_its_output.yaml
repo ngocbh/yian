@@ -1,4 +1,4 @@
-# A compact one-node TOOL flow checks its `output: int`; the failure names the flow's node (`count`)
+# A compact one-node TOOL flow checks its `output: !int`; the failure names the flow's node (`count`)
 # at that line.
 kind: run
 flow: |
@@ -8,7 +8,7 @@ flow: |
     qty: !int
   kind: tool
   tool_id: place_order
-  output: int
+  output: !int
 inputs:
   qty: 5
 run:
@@ -33,7 +33,7 @@ expect:
       message: '"x" does not match declared type int'
       frames:
       - label: flow.yaml
-        range: [7, 9, 7, 12]
+        range: [7, 9, 7, 13]
       node: count
   trace:
   - - run_started
@@ -67,7 +67,7 @@ expect:
         message: '"x" does not match declared type int'
         frames:
         - label: flow.yaml
-          range: [7, 9, 7, 12]
+          range: [7, 9, 7, 13]
         node: count
   events:
   - [RunStarted]
@@ -86,7 +86,7 @@ expect:
         message: '"x" does not match declared type int'
         frames:
         - label: flow.yaml
-          range: [7, 9, 7, 12]
+          range: [7, 9, 7, 13]
         node: count
   - - RunFailed
     - failure:
@@ -94,7 +94,7 @@ expect:
         message: '"x" does not match declared type int'
         frames:
         - label: flow.yaml
-          range: [7, 9, 7, 12]
+          range: [7, 9, 7, 13]
         node: count
   tool_calls:
     place_order:

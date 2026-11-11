@@ -53,7 +53,7 @@ typedefs:
   ChatMsg: {role: str, content: str}
 `;
 
-const WORKER = "kind: code\noutput: object\ncode: return {...inputs}\n";
+const WORKER = "kind: code\noutput: !object\ncode: return {...inputs}\n";
 
 /** Bind every declared input by name, as a multi-node body must. */
 function workerBindings(declarations: string): string {

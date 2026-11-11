@@ -34,7 +34,7 @@ defs:
         code: ./fixtures/compose_codefns.ts:double
         input:
           n: \${input.n}
-        output: int
+        output: !int
     output: \${x.output}
 `;
 
@@ -50,7 +50,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:double
     input:
       n: \${input.v}
-    output: int
+    output: !int
   dbl_call:
     kind: call
     call: dbl

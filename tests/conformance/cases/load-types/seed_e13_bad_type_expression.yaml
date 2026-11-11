@@ -11,7 +11,7 @@ flow: |
       kind: code
       input:
         topic: ${input.topic}
-      output: "list("         # ERROR: not a parseable type
+      output: !list(         # ERROR: not a parseable type
       code: ./fixtures/seeds.ts:echo_value
   output: ${calc.output}
 expect:
@@ -19,4 +19,4 @@ expect:
     diagnostics:
       - code: compose.load
         message: "bad type expression 'list(': malformed type expression 'list(': unbalanced parentheses — if this type sits inside a `{...}` mapping, its comma split it; quote it or use block style"
-        frames: [{label: flow.yaml, range: [11, 13, 11, 20]}]
+        frames: [{label: flow.yaml, range: [11, 13, 11, 19]}]

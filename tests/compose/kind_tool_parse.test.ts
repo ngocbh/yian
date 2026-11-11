@@ -65,7 +65,7 @@ nodes:
     tool_id: place_order
     input:
       qty: 5
-    output: int
+    output: !int
 output: \${place.output}
 `);
 

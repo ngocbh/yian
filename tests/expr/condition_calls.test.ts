@@ -245,7 +245,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:double
     input:
       n: \${input.v}
-    output: int
+    output: !int
     asserts:
       - "<cond>"
 output: \${x.output}
@@ -264,7 +264,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:double
     input:
       n: \${input.v}
-    output: int
+    output: !int
 output: \${x.output}
 `;
 
@@ -280,8 +280,8 @@ nodes:
       - when: "<cond>"
         then: hot
     else: cold
-  hot: {kind: code, code: "return 'hot'", output: str}
-  cold: {kind: code, code: "return 'cold'", output: str}
+  hot: {kind: code, code: "return 'hot'", output: !str}
+  cold: {kind: code, code: "return 'cold'", output: !str}
 output: \${hot.output | cold.output}
 `;
 
@@ -298,8 +298,8 @@ defs:
         input:
           n: \${input.n}
         output:
-          n: int
-          exited: bool
+          n: !int
+          exited: !bool
     output: \${s.output}
 nodes:
   repeat:

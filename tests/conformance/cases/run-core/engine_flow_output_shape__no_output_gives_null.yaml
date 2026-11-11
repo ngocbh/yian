@@ -6,7 +6,7 @@ flow: |2
   nodes:
     step:
       kind: code
-      output: str
+      output: !str
       code: |
         return "filled"
 run:

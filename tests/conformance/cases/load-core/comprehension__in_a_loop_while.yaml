@@ -13,7 +13,7 @@ flow: |
           input:
             ns: ${input.ns}
           output:
-            ns: list(int)
+            ns: !list(int)
           code: "return ({ns: [...inputs['ns'], 1]})"
       output: ${bump.output}
   input:

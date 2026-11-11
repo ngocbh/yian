@@ -44,7 +44,7 @@ nodes:
   pick:
     kind: code
     code: "return 'plain'"
-    output: str
+    output: !str
 output: \${pick.output}
 `;
 

@@ -9,7 +9,7 @@ flow: |
       kind: code
       input:
         x: ${input.s}
-      output: {a: str}
+      output: {a: !str}
       code: "return null"
   output:
     o: ${step.output.b}

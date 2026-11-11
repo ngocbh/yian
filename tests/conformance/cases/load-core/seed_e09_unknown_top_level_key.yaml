@@ -12,7 +12,7 @@ flow: |
       kind: agent
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       prompt: "Rate ${topic}."
   bogus: oops            # ERROR: not an allowed top-level key
   output: ${note.output}

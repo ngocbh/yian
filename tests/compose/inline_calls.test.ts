@@ -69,7 +69,7 @@ defs:
         code: ./fixtures/compose_codefns.ts:echo
         input:
           topic: \${input.topic}
-        output: str
+        output: !str
     output: \${x.output}
 `;
 const ENRICH = { enrich: def("  topic: !str\n", "str") };
@@ -109,7 +109,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: call(enrich, topic=\${input.topic})
-    output: str
+    output: !str
 output: \${use.output}
 `);
   expect(callees(compiled)).toEqual({ __call_0: "enrich" }); // the inline call became a synth node
@@ -129,7 +129,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: call(enrich, topic=\${input.topic})
-    output: str
+    output: !str
 output: \${use.output}
 `,
     { topic: "ACME" },
@@ -152,7 +152,7 @@ nodes:
     input:
       prompt: Review
       context: call(enrich, topic=\${input.topic})
-    output: str
+    output: !str
 output: \${ask.output}
 `);
   expect(callees(compiled)).toEqual({ __call_0: "enrich" });
@@ -176,7 +176,7 @@ defs:
         code: ./fixtures/compose_codefns.ts:echo
         input:
           topic: \${input.n}
-        output: int
+        output: !int
     output: \${echo.output}
   body:
     input:
@@ -188,7 +188,7 @@ defs:
         input:
           n: \${input.n}
         output:
-          n: int
+          n: !int
     output: \${step.output}
 nodes:
   repeat:
@@ -219,7 +219,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: call(enrich, topic="HARDCODED")
-    output: str
+    output: !str
 output: \${use.output}
 `);
   expect(compiled.wiring.get("__call_0")!.get("topic")!.source).toBe("HARDCODED");
@@ -240,7 +240,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: call(enrich, topic="HARDCODED")
-    output: str
+    output: !str
 output: \${use.output}
 `,
     { topic: "ACME" },
@@ -261,13 +261,13 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
   use:
     kind: code
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: call(enrich, topic=\${y.output})
-    output: str
+    output: !str
 output: \${use.output}
 `);
   expect(edgePairs(compiled)).toContainEqual(["y", "__call_0"]); // y -> synth call (the fan-in)
@@ -288,13 +288,13 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
   use:
     kind: code
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: call(enrich, topic=\${y.output})
-    output: str
+    output: !str
 output: \${use.output}
 `,
     { topic: "ACME" },
@@ -317,7 +317,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: call(outer, topic=call(inner, topic=\${input.topic}))
-    output: str
+    output: !str
 output: \${use.output}
 `,
     { inner: topic, outer: topic },
@@ -338,7 +338,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
 output: call(enrich, topic=\${seed.output})
 `);
   expect(callees(compiled)).toEqual({ __call_0: "enrich" });
@@ -356,7 +356,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
 output: \${x.output}
 `;
   const text = `
@@ -372,7 +372,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: call(ext_flow, topic=\${input.topic})
-    output: str
+    output: !str
 output: \${use.output}
 `;
   const asked: string[] = [];
@@ -398,7 +398,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
 output: \${x.output}
 `;
   const text = `
@@ -414,7 +414,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: call(ext_flow, topic=\${input.topic})
-    output: str
+    output: !str
 output: \${use.output}
 `;
   // The resolver knows only `ext_flow`, so asking for any other flow fails the load.
@@ -441,7 +441,7 @@ defs:
         code: ./fixtures/compose_codefns.ts:echo
         input:
           topic: \${input.topic}
-        output: str
+        output: !str
     output: \${x.output}
   enrich:
     input:
@@ -452,7 +452,7 @@ defs:
         code: ./fixtures/compose_codefns.ts:echo
         input:
           topic: call(helper, topic=\${input.topic})
-        output: str
+        output: !str
     output: \${y.output}
 nodes:
   go:
@@ -480,7 +480,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: call(nope, x=\${input.topic})
-    output: str
+    output: !str
 output: \${use.output}
 `;
   const error = await loadErrorAsync(loadConformanceFlow(text));
@@ -527,7 +527,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
 output: \${__call_0.output}
 `;
   expect(loadError(() => assembleText(text)).message).toBe(
@@ -547,7 +547,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: call(enrich, 30)
-    output: str
+    output: !str
 output: \${use.output}
 `;
   const error = loadError(() => assembleText(text));
@@ -575,7 +575,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: call(enrich, topic="hi \${input.name}")
-    output: str
+    output: !str
 output: \${use.output}
 `);
   expect(compiled.wiring.get("__call_0")!.get("topic")!.source).toBe("hi ${input.name}");
@@ -593,7 +593,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
 output: call(enrich, 30)
 `;
   const error = loadError(() => assembleText(text));
@@ -652,13 +652,13 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: call(enrich, topic=\${input.topic})
-    output: str
+    output: !str
   b:
     kind: code
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: call(enrich, topic=\${input.topic})
-    output: str
+    output: !str
 output:
   ra: \${a.output}
   rb: \${b.output}
@@ -682,13 +682,13 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: \${input.topic}
-    output: int
+    output: !int
   use:
     kind: code
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: call(enrich, topic=\${num.output})
-    output: str
+    output: !str
 output: \${use.output}
 `),
   );
@@ -750,14 +750,14 @@ defs:
     code: ./fixtures/compose_codefns.ts:echo_x
     input:
       x: !int
-    output: int
+    output: !int
 nodes:
   consumer:
     kind: code
     code: ./fixtures/compose_codefns.ts:echo_x
     input:
       x: call(helper, x=3)
-    output: int
+    output: !int
 output: \${consumer.output}
 `;
   const hostCursor = SourceDocument.parse(text).root.child("nodes").child("consumer").child("input").child("x");
@@ -794,14 +794,14 @@ defs:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: !str
-    output: str
+    output: !str
 nodes:
   consumer:
     kind: code
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: call(echo, topic=\${input.topic})
-    output: str
+    output: !str
 output: \${consumer.output}
 `;
   const compiled = load(text, { echo: def("  topic: !str\n", "str") });
@@ -829,7 +829,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: call(outer, topic=call(inner, topic=\${input.topic}))
-    output: str
+    output: !str
 output: \${use.output}
 `,
     { inner: topic, outer: topic },
@@ -855,7 +855,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
 output: call(enrich, topic=\${seed.output})
 `);
   const origin = compiled.outputs[0]!.binding.origin;
@@ -877,7 +877,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
 output: \${seed.output}
 asserts:
   - call(enrich, topic=\${input.topic})

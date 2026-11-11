@@ -14,7 +14,7 @@ nodes:
     kind: agent
     input:
       text: ${input.text}
-    output: str
+    output: !str
     prompt: "Summarize in one sentence: ${text}"
 
 output: ${summarize.output}

@@ -13,13 +13,13 @@ flow: |
     draft:
       kind: agent
       prompt: Draft.
-      output: str
+      output: !str
     score:
       kind: agent
       steer_inbox: ${input.notes}
       depends_on: [draft]
       prompt: Score it.
-      output: {score: int}
+      output: {score: !int}
   output: ${score.output}
 run:
   run_id: r1

@@ -12,7 +12,7 @@ flow: |2
       code: ./fixtures/compose_codefns.ts:pick_pro
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
   output: ${fetch.output}
 expect:
   load:

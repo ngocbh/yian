@@ -27,6 +27,7 @@ import {
   nodesOf,
   runCase,
 } from "../helpers/declarations.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 /** A build context with no typedefs; a CASE build reads none. */
 const CTX = new BuildContext({ registry: new Map() });
@@ -46,7 +47,7 @@ function errorLine(error: LoadError): number {
 
 /** Return a CODE node `name` that returns its own name. */
 function branch(name: string): string {
-  return `  ${name}:\n    kind: code\n    code: |\n      return "${name}"\n    output: str\n`;
+  return `  ${name}:\n    kind: code\n    code: |\n      return "${name}"\n    output: !str\n`;
 }
 
 /**
@@ -87,7 +88,7 @@ function flow(
     text =
       "id: f\nname: f\ninput:\n  pick: !str\nnodes:\n  src:\n    kind: code\n    input:\n" +
       `      p: \${input.pick}\n    code: |\n      ${srcCode}\n`;
-    if (srcOutput !== null) text += `    output: ${srcOutput}\n`;
+    if (srcOutput !== null) text += `    output: ${outputTag(srcOutput)}\n`;
     on = "${src.output}";
   }
   text += `  route:\n    kind: case\n    on: ${on}\n    cases:\n`;
@@ -440,7 +441,7 @@ test("tags that read as other values are listed quoted", () => {
 
 /** Return an inline-body CODE node `name` returning `value` as `output`, indented six. */
 function branchBody(name: string, output: string, value: string): string {
-  return `      ${name}:\n        kind: code\n        code: |\n          return ${value}\n        output: ${output}\n`;
+  return `      ${name}:\n        kind: code\n        code: |\n          return ${value}\n        output: ${outputTag(output)}\n`;
 }
 
 test("map child input", () => {
@@ -839,8 +840,8 @@ test("routing-only bool join is exhaustive", async () => {
     "  route:\n    kind: case\n    on: ${input.n}\n    cases:\n" +
     "      - when: true\n        then: one\n" +
     "      - when: false\n        then: two\n" +
-    "  one:\n    kind: code\n    code: |\n      return 1\n    output: int\n" +
-    "  two:\n    kind: code\n    code: |\n      return 2\n    output: int\n" +
+    "  one:\n    kind: code\n    code: |\n      return 1\n    output: !int\n" +
+    "  two:\n    kind: code\n    code: |\n      return 2\n    output: !int\n" +
     "output: ${(one.output | two.output) + 1}\n";
 
   expect(await route(text, { n: true })).toBe(2n);
@@ -868,15 +869,15 @@ test("unquoted date when narrows a date-shaped union tag", async () => {
     "  B: {d: 'Literal(other)', y: int}\n" +
     "  U: Union(A, B)\n" +
     "input:\n  pick: !str\nnodes:\n" +
-    "  p:\n    kind: code\n    input:\n      s: ${input.pick}\n    output: U\n" +
+    "  p:\n    kind: code\n    input:\n      s: ${input.pick}\n    output: !U\n" +
     "    code: |\n" +
     '      return inputs["s"] == "a" ? {"d": "2026-01-02", "x": 5} : {"d": "other", "y": 1}\n' +
     "  route:\n    kind: case\n    on: ${p.output.d}\n    cases:\n" +
     "      - when: 2026-01-02\n        then: a\n" +
     "    else: e\n" +
     "  a:\n    kind: code\n    input:\n      x: ${p.output.x}\n" +
-    '    code: |\n      return inputs["x"]\n    output: int\n' +
-    "  e:\n    kind: code\n    code: |\n      return 0\n    output: int\n" +
+    '    code: |\n      return inputs["x"]\n    output: !int\n' +
+    "  e:\n    kind: code\n    code: |\n      return 0\n    output: !int\n" +
     "output: ${a.output | e.output}\n";
 
   expect(await route(text, { pick: "a" })).toBe(5n);

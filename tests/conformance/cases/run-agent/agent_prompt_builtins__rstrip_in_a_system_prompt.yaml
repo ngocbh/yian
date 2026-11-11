@@ -14,7 +14,7 @@ flow: |
         system_md: ${input.system_md}
       system_prompt: "${rstrip(system_md)} Be brief."
       prompt: Hi
-      output: str
+      output: !str
   output: ${write.output}
 inputs: {system_md: "You help.\n\n"}
 run: {run_id: r1, num_workers: 0}

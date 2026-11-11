@@ -17,7 +17,7 @@ flow: |
       kind: code
       input:
         v: ${input.d.qty}
-      output: str
+      output: !str
       code: return 'x'
   output: ${step.output}
 expect:

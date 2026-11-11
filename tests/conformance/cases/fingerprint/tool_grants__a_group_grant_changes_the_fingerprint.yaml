@@ -8,7 +8,7 @@ flow: |
       kind: agent
       prompt: Help the user.
       tools: [{github: [search]}]
-      output: str
+      output: !str
   output: ${a.output}
 other: |
   id: grants
@@ -18,7 +18,7 @@ other: |
       kind: agent
       prompt: Help the user.
       tools: [github]
-      output: str
+      output: !str
   output: ${a.output}
 expect:
   fingerprint: different

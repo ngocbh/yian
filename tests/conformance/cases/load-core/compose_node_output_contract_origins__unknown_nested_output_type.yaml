@@ -8,7 +8,7 @@ flow: |
       code: 'return {"profile": {"age": 7}}'
       output:
         profile:
-          age: DefinitelyNotAType
+          age: !DefinitelyNotAType
   output: ${emit.output}
 expect:
   load:
@@ -17,4 +17,4 @@ expect:
       message: 'bad type expression ''DefinitelyNotAType'': unknown type ''DefinitelyNotAType'''
       frames:
       - label: flow.yaml
-        range: [9, 14, 9, 32]
+        range: [9, 14, 9, 33]

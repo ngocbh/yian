@@ -21,7 +21,7 @@ const LEAF = `  leaf:
         kind: code
         input:
           x: \${input.x}
-        output: str
+        output: !str
         code: return inputs.x.toUpperCase()
     output: \${up.output}
 `;

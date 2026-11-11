@@ -13,14 +13,14 @@ flow: |
       kind: code
       input:
         s: ${input.s}
-      output: Any
+      output: !Any
       code: |
         return {"f": "a"}
     use:
       kind: code
       input:
         v: ${isinstance(mk.output, T) and mk.output.f == 'a'}
-      output: bool
+      output: !bool
       code: |
         return 1 == 1
   output: ${use.output}

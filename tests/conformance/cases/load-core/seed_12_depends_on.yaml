@@ -25,7 +25,7 @@ flow: |
       kind: code
       input:
         topic: ${input.topic}
-      output: bool                # returns true; nothing binds it
+      output: !bool               # returns true; nothing binds it
       code: ./fixtures/seeds.ts:prime_cache
 
     fetch:
@@ -34,8 +34,8 @@ flow: |
       input:                      #   not consume its output (it primed a shared cache)
         topic: ${input.topic}
       output:
-        values: list(float)
-        news: list(str)
+        values: !list(float)
+        news: !list(str)
       code: ./fixtures/seeds.ts:fetch_facts
 
     note:
@@ -43,7 +43,7 @@ flow: |
       input:
         topic: ${input.topic}
         values: ${fetch.output.values}
-      output: str
+      output: !str
       prompt: "Write a neutral one-line note on ${topic} given recent closes ${values}. No advice."
 
   output: ${note.output}

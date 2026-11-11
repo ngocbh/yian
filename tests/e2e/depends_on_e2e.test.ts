@@ -28,21 +28,21 @@ nodes:
     code: ${FNS}:pick_pro
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
   dep_fetch:
     kind: code
     depends_on: [warm]
     code: ${FNS}:positive
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
   after_fetch:
     kind: code
     runs_after: [warm]
     code: ${FNS}:cautious
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
 output: \${dep_fetch.output | after_fetch.output}
 `;
 
@@ -86,19 +86,19 @@ nodes:
     code: ${FNS}:pick_pro
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
   con:
     kind: code
     code: ${FNS}:pick_con
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
   note:
     kind: code${noteDep}
     code: ${FNS}:cautious
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
 output:
   pick: "\${pro.output | con.output}"
   note: \${note.output}
@@ -140,8 +140,8 @@ test.each<CaseRow>([
 test("an unknown depends_on target is reported before an unknown reference", () => {
   const text =
     "id: f\nname: f\nnodes:\n" +
-    "  a:\n    kind: code\n    output: int\n    depends_on: [ghost]\n    code: return 1\n" +
-    "  b:\n    kind: code\n    output: int\n    input:\n      v: ${nope.output}\n    code: return 1\n" +
+    "  a:\n    kind: code\n    output: !int\n    depends_on: [ghost]\n    code: return 1\n" +
+    "  b:\n    kind: code\n    output: !int\n    input:\n      v: ${nope.output}\n    code: return 1\n" +
     "output: ${a.output}\n";
   expect(loadError(() => assembleText(text)).message).toContain("`depends_on` references unknown node 'ghost'");
 });

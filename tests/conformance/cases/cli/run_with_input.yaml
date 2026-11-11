@@ -9,7 +9,7 @@ flow: |
       kind: code
       input:
         name: ${input.name}
-      output: str
+      output: !str
       code: |
         return "hi " + inputs.name
   output: ${greet.output}

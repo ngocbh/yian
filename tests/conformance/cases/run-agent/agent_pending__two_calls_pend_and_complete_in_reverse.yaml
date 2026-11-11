@@ -12,7 +12,7 @@ flow: |
       tools: [hold]
       system_prompt: Help.
       prompt: hi
-      output: str
+      output: !str
   output: ${agent.output}
 run: {run_id: r1, num_workers: 0}
 host:

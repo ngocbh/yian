@@ -18,7 +18,7 @@ flow: |
           kind: code
           input:
             n: ${input.n}
-          output: int
+          output: !int
           code: return inputs.n - 1
       output:
         n: ${step.output}

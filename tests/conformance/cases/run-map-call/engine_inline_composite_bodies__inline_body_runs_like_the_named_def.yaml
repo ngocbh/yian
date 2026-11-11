@@ -12,7 +12,7 @@ flow: |
           code: ./fixtures/compose_codefns.ts:echo_x
           input:
             x: ${input.x}
-          output: int
+          output: !int
         pack:
           kind: code
           code: |
@@ -20,7 +20,7 @@ flow: |
           input:
             value: ${echo.output}
           output:
-            value: int
+            value: !int
       output: ${pack.output}
   nodes:
     named_call:
@@ -38,7 +38,7 @@ flow: |
           code: ./fixtures/compose_codefns.ts:echo_x
           input:
             x: ${input.x}
-          output: int
+          output: !int
         pack:
           kind: code
           code: |
@@ -46,7 +46,7 @@ flow: |
           input:
             value: ${echo.output}
           output:
-            value: int
+            value: !int
       output: ${pack.output}
   output:
     named: ${named_call.output}

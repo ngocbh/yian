@@ -64,7 +64,7 @@ defs:
   add1:
     input: {x: !int}
     nodes:
-      inc: {kind: code, input: {x: "\${input.x}"}, output: {y: int}, code: "return {y: inputs.x + 1}"}
+      inc: {kind: code, input: {x: "\${input.x}"}, output: {y: !int}, code: "return {y: inputs.x + 1}"}
     output: {y: "\${inc.output.y}"}
   body:
     input: {x: !int}
@@ -85,7 +85,7 @@ defs:
   double:
     input: {x: !int}
     nodes:
-      times2: {kind: code, input: {x: "\${input.x}"}, output: {y: int}, code: "return {y: inputs.x * 2}"}
+      times2: {kind: code, input: {x: "\${input.x}"}, output: {y: !int}, code: "return {y: inputs.x * 2}"}
     output: \${times2.output.y}
 nodes:
   each: {kind: map, over: "\${input.xs}", call: double, input: {x: "\${item}"}}
@@ -127,13 +127,13 @@ id: values
 name: values
 input: {when: !date}
 nodes:
-  huge: {kind: code, output: int, code: "return 2n ** 80n"}
-  negative: {kind: code, output: float, code: "return -Infinity"}
-  nums: {kind: code, output: list(float), code: "return [1n, 0.5, Infinity]"}
+  huge: {kind: code, output: !int, code: "return 2n ** 80n"}
+  negative: {kind: code, output: !float, code: "return -Infinity"}
+  nums: {kind: code, output: !list(float), code: "return [1n, 0.5, Infinity]"}
   make:
     kind: code
     input: {when: "\${input.when}"}
-    output: {big: int, inf: float, tag: object, esc: object, when: date}
+    output: {big: !int, inf: !float, tag: !object, esc: !object, when: !date}
     code: |
       return {big: -(2n ** 80n), inf: Infinity, tag: {$float: "inf"}, esc: {$record: {a: 1n}}, when: inputs.when}
 output: {make: "\${make.output}", whole: "\${0.5 + 1.5}"}

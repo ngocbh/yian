@@ -10,7 +10,7 @@ flow: |
       kind: code
       input:
         s: ${input.s}
-      output: Any
+      output: !Any
       code: |
         return null
   output: ${mk.output}
@@ -25,7 +25,7 @@ expect:
       code: contract.output
       frames:
       - label: flow.yaml
-        range: [10, 13, 10, 16]
+        range: [10, 13, 10, 17]
       message: null does not match declared type Any
       node: mk
   trace:
@@ -59,7 +59,7 @@ expect:
         code: contract.output
         frames:
         - label: flow.yaml
-          range: [10, 13, 10, 16]
+          range: [10, 13, 10, 17]
         message: null does not match declared type Any
         node: mk
   events:
@@ -78,7 +78,7 @@ expect:
         code: contract.output
         frames:
         - label: flow.yaml
-          range: [10, 13, 10, 16]
+          range: [10, 13, 10, 17]
         message: null does not match declared type Any
         node: mk
   - - RunFailed
@@ -86,6 +86,6 @@ expect:
         code: contract.output
         frames:
         - label: flow.yaml
-          range: [10, 13, 10, 16]
+          range: [10, 13, 10, 17]
         message: null does not match declared type Any
         node: mk

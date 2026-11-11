@@ -7,7 +7,7 @@ flow: |
       kind: code
       code: |
         return 'parent'
-      output: str
+      output: !str
     wrapper:
       kind: call
       nodes:
@@ -16,7 +16,7 @@ flow: |
           code: ./fixtures/compose_codefns.ts:echo_x
           input:
             x: ${parent.output}
-          output: str
+          output: !str
       output: ${leak.output}
   output: ${wrapper.output}
 expect:

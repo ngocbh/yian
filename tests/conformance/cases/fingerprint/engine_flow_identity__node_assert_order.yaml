@@ -11,7 +11,7 @@ flow: |
       tool_id: body
       input:
         x: ${input.x}
-      output: int
+      output: !int
       asserts:
         - x >= 0
         - x < 100
@@ -27,7 +27,7 @@ other: |
       tool_id: body
       input:
         x: ${input.x}
-      output: int
+      output: !int
       asserts:
         - x < 100
         - x >= 0

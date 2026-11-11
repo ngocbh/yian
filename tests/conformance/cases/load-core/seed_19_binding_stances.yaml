@@ -32,14 +32,14 @@ flow: |
       kind: agent
       input:
         topic: ${input.topic}
-      output: float
+      output: !float
       prompt: "Rate ${topic}'s near-term relevance in [-1, 1]. Output only the number."
 
     macro:
       kind: agent
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       prompt: "Write one neutral sentence on the macro backdrop for ${topic}. No advice."
 
     # --- the branch: exactly one of pro/con runs ---
@@ -54,14 +54,14 @@ flow: |
       kind: agent
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       prompt: "Write a neutral 2-sentence pro case for ${topic}. No advice."
 
     con:
       kind: agent
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       prompt: "Write a neutral 2-sentence cautionary note for ${topic}. No advice."
 
     # --- co-skip: a plain (required) ref to a branch output. Runs ONLY in the pro
@@ -70,7 +70,7 @@ flow: |
       kind: agent
       input:
         claim: ${pro.output}            # plain -> REQUIRED -> co-skips with pro
-      output: str
+      output: !str
       prompt: "Expand this pro claim into one extra neutral sentence: ${claim}"
 
     # --- the assembler: every stance in one node's inputs ---
@@ -84,7 +84,7 @@ flow: |
                                                          #   default: as_of, else the host clock
         topic:   ${input.topic:?"a topic is required"} # REQUIRED + FAIL-LOUD at the use site
                                                          #   (belt-and-suspenders: topic is already a required param)
-      output: str
+      output: !str
       prompt: |-
         Backdrop: ${backdrop}
         Claim: ${claim}

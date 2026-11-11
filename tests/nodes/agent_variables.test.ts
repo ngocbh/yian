@@ -267,7 +267,7 @@ nodes:
       instruction: !str \${absent.output}
       tone: !str concise
     prompt: '\${topic}: \${tone}, \${instruction}'
-    output: str
+    output: !str
 output: \${writer.output}
 `)
   ).compiled;
@@ -297,7 +297,7 @@ nodes:
     variables:
       temperature: !float(0..1) 0.4
     prompt: '\${topic}: \${temperature}'
-    output: str
+    output: !str
 output: \${writer.output}
 `);
   const dir = mkdtempSync(join(tmpdir(), "yian-agent-variables-"));

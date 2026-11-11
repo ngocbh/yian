@@ -15,19 +15,19 @@ flow: |
       code: ./fixtures/compose_codefns.ts:echo_x
       input:
         x: ${input.n}
-      output: int
+      output: !int
     b:
       kind: code
       code: ./fixtures/compose_codefns.ts:echo_x
       input:
         x: ${input.n}
-      output: int
+      output: !int
     c:
       kind: code
       code: ./fixtures/compose_codefns.ts:echo_x
       input:
         x: ${input.n}
-      output: int
+      output: !int
   output:
     a: ${a.output}
     b: ${b.output}

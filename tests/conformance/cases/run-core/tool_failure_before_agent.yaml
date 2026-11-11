@@ -14,14 +14,14 @@ flow: |
       kind: agent
       input:
         found: ${check.output}
-      output: str
+      output: !str
       llm_config: {provider: openai, model: gpt-5.5}
       prompt: "Write about ${found}."
     review:
       kind: agent
       input:
         found: ${check.output}
-      output: str
+      output: !str
       llm_config: {provider: openai, model: !str "${check.output}"}
       prompt: "Review ${found}."
   output:

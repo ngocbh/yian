@@ -36,10 +36,10 @@ flow: |
       input:
         message: ${input.message}
       output:                                  # a record: the model must fill every field
-        category: Literal(billing, bug, feature_request, account, other)
-        priority: Literal(low, medium, high, urgent)
-        summary: str                           # one sentence capturing the core issue
-        sentiment: Literal(positive, neutral, negative)
+        category: !Literal(billing;bug;feature_request;account;other)
+        priority: !Literal(low;medium;high;urgent)
+        summary: !str                          # one sentence capturing the core issue
+        sentiment: !Literal(positive;neutral;negative)
       prompt: |-
         You are a support triage assistant. Read the customer message and extract:
         - category: the kind of issue
@@ -57,7 +57,7 @@ flow: |
         summary: ${triage.output.summary}
         priority: ${triage.output.priority}
         sentiment: ${triage.output.sentiment}
-      output: str
+      output: !str
       prompt: |-
         Draft a short, empathetic support reply (3-4 sentences).
         Issue: ${summary}

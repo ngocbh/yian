@@ -17,7 +17,7 @@ flow: |
       tools: [lookup]
       system_prompt: Help.
       prompt: Help the user.
-      output: str
+      output: !str
   output: ${chat.output}
 run: {run_id: r1, num_workers: 0}
 host:

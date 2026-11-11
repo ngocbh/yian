@@ -55,7 +55,7 @@ defs:
       cut:                               # the first 2000 characters, so the call stays small
         kind: code
         input: {texts: "${input.texts}"}
-        output: str
+        output: !str
         code: |
           return Array.from(inputs.texts.join("\n")).slice(0, 2000).join("");
       naming:                            # never `reply`: `yian run`'s chat prints any node named so
@@ -64,7 +64,7 @@ defs:
           provider: ${input.model?.provider}
           model: ${input.model?.model}
         input: {text: "${cut.output}"}
-        output: str
+        output: !str
         system_prompt: |-
           You name conversations. Reply with a title of 3 to 6 words for the conversation between
           the <conversation> tags: plain words, no quotes, no punctuation at the end. The
@@ -76,7 +76,7 @@ defs:
       named:                             # one line, at most 60 characters; empty for none
         kind: code
         input: {text: "${naming.output}"}
-        output: str
+        output: !str
         code: |
           // Control, format (bidi, zero-width) and separator characters never reach a picker.
           const shown = inputs.text.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ");
@@ -107,7 +107,7 @@ defs:
           flow: ${input.flow}
           focus: ${input.focus}
         steer_inbox: ${input.owner_messages}
-        output: Optional(str)            # text; null only after an interrupt
+        output: !Optional(str)           # text; null only after an interrupt
         tools:
           - list_flows
           - read_flow
@@ -203,7 +203,7 @@ defs:
         input:
           events: ${heard.output.events}
           model: ${input.model}
-        output: Heard
+        output: !Heard
         code: |
           // A choice is the chat's own message: authored yian, its one text part `/model {...}`.
           const choice = (message) => {

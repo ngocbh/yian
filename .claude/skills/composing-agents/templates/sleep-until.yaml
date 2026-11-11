@@ -15,7 +15,7 @@ nodes:
   continue:
     kind: code
     depends_on: [settle]
-    output: str
+    output: !str
     code: |
       return "deadline reached"
 output: ${continue.output}

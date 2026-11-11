@@ -47,7 +47,7 @@ defs:
           price: \${input.order.price}
         code: |
           return inputs["qty"] * inputs["price"]
-        output: float
+        output: !float
     output: \${fill.output}
 nodes:
   d:
@@ -56,7 +56,7 @@ nodes:
       decision: \${input.decision}
     code: |
       return inputs["decision"]
-    output: Decision
+    output: !Decision
   route:
     kind: case
     on: \${d.output.action}
@@ -72,21 +72,21 @@ nodes:
       qty: \${d.output.qty}
     code: |
       return "buy " + String(inputs["qty"])
-    output: str
+    output: !str
   log_hold:
     kind: code
     input:
       note: \${d.output.note}
     code: |
       return "hold: " + inputs["note"]
-    output: str
+    output: !str
   n:
     kind: code
     input:
       note: \${input.note}
     code: |
       return inputs["note"]
-    output: Note
+    output: !Note
   kind_of:
     kind: case
     cases:
@@ -99,13 +99,13 @@ nodes:
       text: \${n.output.text}
     code: |
       return inputs["text"].toUpperCase()
-    output: str
+    output: !str
   double:
     kind: code
     depends_on: [n]
     code: |
       return "number"
-    output: str
+    output: !str
 output:
   action: \${d.output.action}
   trade: \${place_buy.output | __call_0.output | log_hold.output}
@@ -191,8 +191,8 @@ nodes:
     code: |
       return inputs["value"]
     output:
-      decision: Decision
-      notes: list(Note)
+      decision: !Decision
+      notes: !list(Note)
 output: \${d.output}
 `;
 

@@ -11,7 +11,7 @@ flow: |
   nodes:
     step:
       kind: code
-      output: int
+      output: !int
       code: "return 99"
     use:
       kind: code

@@ -8,7 +8,7 @@ flow: |
       nodes:
         inner:
           kind: code
-          output: str
+          output: !str
           code: |
             return "ok"
       output: ${inner.output}
@@ -25,7 +25,7 @@ other: |
       nodes:
         inner:
           kind: code
-          output: str
+          output: !str
           code: |
             return "no"
       output: ${inner.output}

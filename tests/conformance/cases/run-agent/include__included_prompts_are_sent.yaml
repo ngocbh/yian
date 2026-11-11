@@ -13,7 +13,7 @@ flow: |
       input: {topic: "${input.topic}"}
       system_prompt: !include prompts/system.md
       prompt: !include prompts/writer.md
-      output: str
+      output: !str
   output: ${writer.output}
 files:
   prompts/system.md: |

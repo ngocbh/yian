@@ -9,7 +9,7 @@ flow: |
       kind: code
       input:
         v: ${input.x}
-      output: str
+      output: !str
       code: return 1
   output:
     result: ${n.output}

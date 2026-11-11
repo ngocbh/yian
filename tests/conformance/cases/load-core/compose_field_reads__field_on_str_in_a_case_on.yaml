@@ -9,13 +9,13 @@ flow: |
       kind: code
       input:
         x: ${input.s}
-      output: str
+      output: !str
       code: "return null"
     a:
       kind: code
       input:
         v: ${input.s}
-      output: str
+      output: !str
       code: return 'x'
     route:
       kind: case

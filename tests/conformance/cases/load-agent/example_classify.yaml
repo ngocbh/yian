@@ -19,7 +19,7 @@ flow: |
       kind: agent
       input:
         text: ${input.text}
-      output: Literal(positive, neutral, negative)
+      output: !Literal(positive;neutral;negative)
       prompt: |-
         Classify the sentiment of the following text as exactly one of:
         positive, neutral, or negative.

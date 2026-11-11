@@ -14,6 +14,7 @@ import { forget } from "../../src/defaults.ts";
 import { runFlow } from "../../src/run.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import { assembled, assembleText, loadConformanceFlow, loadError, runCase } from "../helpers/declarations.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-any-flows-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -31,7 +32,7 @@ function flow(
   options: { code?: string; out?: string; head?: string } = {},
 ): string {
   const { code = "null", out = "${mk.output}", head = "" } = options;
-  const typed = output === null ? "" : `    output: ${output}\n`;
+  const typed = output === null ? "" : `    output: ${outputTag(output)}\n`;
   return (
     `id: p\nname: p\n${head}input:\n  s: !str\nnodes:\n  mk:\n    kind: code\n` +
     `    input:\n      s: \${input.s}\n${typed}    code: |\n      return ${code}\n${rest}output: ${out}\n`
@@ -41,7 +42,7 @@ function flow(
 /** A `defs:` entry `name` taking `x: !<inputType>` and returning its text. */
 const childDef = (name: string, inputType: string) =>
   `  ${name}:\n    input:\n      x: !${inputType}\n    nodes:\n      n:\n        kind: code\n` +
-  "        input:\n          x: ${input.x}\n        output: str\n" +
+  "        input:\n          x: ${input.x}\n        output: !str\n" +
   "        code: return JSON.stringify(inputs['x'])\n    output: ${n.output}\n";
 
 /** A CALL node `nodeId` calling `callee` with `x: <binding>`. */
@@ -97,8 +98,8 @@ const FIELD_CASE =
   "  route:\n    kind: case\n    cases:\n" +
   "      - when: ${mk.output.a == 1}\n        then: hit\n" +
   "    else: miss\n" +
-  "  hit:\n    kind: code\n    output: str\n    code: return 'hit'\n" +
-  "  miss:\n    kind: code\n    output: str\n    code: return 'miss'\n";
+  "  hit:\n    kind: code\n    output: !str\n    code: return 'hit'\n" +
+  "  miss:\n    kind: code\n    output: !str\n    code: return 'miss'\n";
 
 test("a field read on an Any output loads in a case condition (loads)", () => {
   assembleText(flow("Any", FIELD_CASE, { code: '{"a": 1}', out: "${hit.output | miss.output}" }));
@@ -168,7 +169,7 @@ function narrowed(bindingNode: string): string {
     "      - when: isinstance(mk.output, str)\n        then: go\n" +
     "    else: other\n" +
     bindingNode +
-    "  other:\n    kind: code\n    output: str\n    code: return 'other'\n";
+    "  other:\n    kind: code\n    output: !str\n    code: return 'other'\n";
   return flow("Any", rest, {
     code: '"hi"',
     out: "${go.output | other.output}",
@@ -247,7 +248,7 @@ const inlineLoop = (seed: string, bodyOutput: string, code: string) =>
   "id: p\nname: p\nnodes:\n" +
   `  loop:\n    kind: loop\n    times: 2\n    input:\n      acc: ${seed}\n    nodes:\n` +
   "      step:\n        kind: code\n        input:\n          acc: ${input.acc}\n" +
-  `        output: ${bodyOutput}\n        code: |\n          return ${code}\n` +
+  `        output: ${outputTag(bodyOutput)}\n        code: |\n          return ${code}\n` +
   "    output:\n      acc: ${step.output}\noutput: ${loop.output}\n";
 
 test.each([
@@ -265,7 +266,7 @@ test("a typed loop seed accepts an optional Any body field (runs)", async () => 
 test("an untyped seed into an Any body input rejects an optional Any body field", () => {
   const text = inlineLoop("${mk.output}", "Optional(Any)", "inputs['acc']").replace(
     "nodes:\n",
-    "nodes:\n  mk:\n    kind: code\n    output: Any\n    code: return 0\n",
+    "nodes:\n  mk:\n    kind: code\n    output: !Any\n    code: return 0\n",
   );
 
   const error = loadError(() => assembleText(text));
@@ -300,7 +301,7 @@ test("a reader tagging a case result Any gets the taken branch value (runs)", as
 });
 
 test("a case output Any is a load error saying to tag the result where it is read", () => {
-  const error = loadError(() => assembleText(routed("    output: Any\n", "${route.output}")));
+  const error = loadError(() => assembleText(routed("    output: !Any\n", "${route.output}")));
 
   expect(error.message).toBe(
     "case node 'route': a `case` routes and has no `output:`; tag its result where you read it, " +
@@ -316,8 +317,8 @@ function onAny(when: string, code = "1"): string {
     "  route:\n    kind: case\n    on: ${mk.output}\n    cases:\n" +
     `      - when: ${when}\n        then: hit\n` +
     "    else: miss\n" +
-    "  hit:\n    kind: code\n    output: str\n    code: return 'hit'\n" +
-    "  miss:\n    kind: code\n    output: str\n    code: return 'miss'\n";
+    "  hit:\n    kind: code\n    output: !str\n    code: return 'hit'\n" +
+    "  miss:\n    kind: code\n    output: !str\n    code: return 'miss'\n";
   return flow("Any", rest, { code, out: "${hit.output | miss.output}" });
 }
 

@@ -54,13 +54,13 @@ nodes:
     input:
       topic: \${input.n}
     output:
-      qty: int
+      qty: !int
   use:
     kind: code
     code: ./fixtures/compose_codefns.ts:echo
     input:
       qty: ${binding}
-    output: int
+    output: !int
 output: \${use.output}
 `;
 
@@ -133,7 +133,7 @@ defs:
         code: ./fixtures/compose_codefns.ts:echo
         input:
           topic: \${input.a}
-        output: int
+        output: !int
     output: \${x.output}
 nodes:
   use:
@@ -141,7 +141,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       x: !int call(f, a=1)
-    output: int
+    output: !int
 output: \${use.output}
 `);
 
@@ -171,19 +171,19 @@ nodes:
     code: ./fixtures/compose_codefns.ts:pick_pro
     input:
       flag: \${input.flag}
-    output: Decision
+    output: !Decision
   stop:
     kind: code
     code: ./fixtures/compose_codefns.ts:pick_pro
     input:
       flag: \${input.flag}
-    output: Decision
+    output: !Decision
   use:
     kind: code
     code: ./fixtures/compose_codefns.ts:echo
     input:
       x: !Decision \${route.output}
-    output: str
+    output: !str
 output: \${use.output}
 `);
 
@@ -208,7 +208,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       note: ${note}
-    output: str
+    output: !str
 output: \${use.output}
 `);
 
@@ -254,7 +254,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       note: a = b
-    output: str
+    output: !str
 output: \${use.output}
 `;
   const binding = (await loadConformanceFlow(text)).compiled.wiring.get("use")!.get("note");
@@ -277,7 +277,7 @@ defs:
         code: ./fixtures/compose_codefns.ts:echo
         input:
           topic: !int \${input.a}
-        output: int
+        output: !int
     output: \${x.output}
 nodes:
   use:
@@ -310,7 +310,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo
         input:
           value: !int \${input.n}
-        output: int
+        output: !int
     output: \${echo.output}
 output: \${wrapper.output}
 `);
@@ -337,7 +337,7 @@ nodes:
           return inputs["value"]
         input:
           value: !int \${input.x}
-        output: int
+        output: !int
     output: \${echo.output}
 output: \${each.output}
 `);
@@ -357,7 +357,7 @@ defs:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       p: !int 3
-    output: int
+    output: !int
 nodes:
   use:
     kind: call
@@ -390,7 +390,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo
         input:
           note: "a = b"
-        output: str
+        output: !str
     output: \${use.output}
 output: \${host.output}
 `;
@@ -412,7 +412,7 @@ nodes:
         input:
           n: \${input.n}
           note: "a = b"
-        output: int
+        output: !int
     output:
       n: \${use.output}
 output: \${host.output}
@@ -429,7 +429,7 @@ defs:
         code: ./fixtures/compose_codefns.ts:echo
         input:
           note: "a = b"
-        output: str
+        output: !str
     output: \${use.output}
 nodes:
   host:

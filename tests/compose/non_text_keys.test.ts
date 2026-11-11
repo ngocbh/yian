@@ -45,7 +45,7 @@ defs:
       @def_node:
         kind: code
         code: return 1
-        output: int
+        output: !int
     output: 1
 input:
   q: !str
@@ -58,23 +58,23 @@ nodes:
       v: \${input.q}
       @node_input: x
       w: {@record: a}
-    output: str
+    output: !str
   b:
     kind: call
     nodes:
       inner:
         kind: code
         code: return 1
-        output: int
+        output: !int
       @inline_node:
         kind: code
         code: return 2
-        output: int
+        output: !int
     output: \${inner.output}
   @root_node:
     kind: code
     code: return 3
-    output: int
+    output: !int
 output:
   r: \${a.output}
   @flow_output: \${a.output}
@@ -201,7 +201,7 @@ nodes:
   done:
     kind: code
     code: return 1
-    output: int
+    output: !int
 output: \${done.output}
 `;
 
@@ -220,7 +220,7 @@ test("a child flow file reports its own key", async () => {
     writeFileSync(
       join(tmp, "child.yaml"),
       "id: child\nname: child\nnodes:\n  a:\n    1: x\n    kind: code\n" +
-        "    code: return 1\n    output: int\noutput: ${a.output}\n",
+        "    code: return 1\n    output: !int\noutput: ${a.output}\n",
     );
     const parent =
       "id: parent\nname: parent\nnodes:\n  c:\n    kind: call\n    call: kid\n" +
@@ -244,7 +244,7 @@ test.each([
   const text =
     "id: f\nname: f\n" +
     meta +
-    "nodes:\n  a:\n    kind: code\n    code: return 1\n    output: int\n" +
+    "nodes:\n  a:\n    kind: code\n    code: return 1\n    output: !int\n" +
     "output: ${a.output}\n";
 
   const error = parseError(text);
@@ -275,7 +275,7 @@ nodes:
     kind: code
     input: {1: 2}
     code: return 1
-    output: int
+    output: !int
 output: \${a.output}
 `;
 
@@ -302,13 +302,13 @@ test.each([
     line = `      v: ${written}`;
     text =
       "id: f\nname: f\ninput:\n  q: !str\nnodes:\n  a:\n    kind: code\n" +
-      `    code: return 1\n    input:\n${line}\n    output: int\n` +
+      `    code: return 1\n    input:\n${line}\n    output: !int\n` +
       "output: ${a.output}\n";
   } else {
     line = `  v: ${written}`;
     text =
       `id: f\nname: f\ninput:\n${line}\nnodes:\n  a:\n    kind: code\n` +
-      "    code: return 1\n    output: int\noutput: ${a.output}\n";
+      "    code: return 1\n    output: !int\noutput: ${a.output}\n";
   }
 
   const error = parseError(text);

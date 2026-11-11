@@ -13,7 +13,7 @@ flow: |
           kind: code
           input:
             cursor: ${input.cursor}
-          output: str
+          output: !str
           code: |
             if (inputs["cursor"] === null) throw new Error("body saw a null cursor")
             return ({p1: "p2", p2: null})[inputs["cursor"]] ?? null

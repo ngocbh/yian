@@ -7,7 +7,7 @@ flow: |
       kind: agent
       variables:
         '': !int 4
-      output: str
+      output: !str
   output: ${writer.output}
 expect:
   load:

@@ -1470,6 +1470,9 @@ test.each<{ id: string; path: string[] }>([
   { id: "types/engine_typedefs__alias_cycle_rejected", path: ["A"] },
   { id: "types/engine_typedefs__non_pascalcase_rejected", path: ["rating"] },
   { id: "types/engine_union_typedefs__load_flow_locates_bad_union_at_its_typedef", path: ["Mood"] },
+  { id: `${TYPE_NAME_CHECKS}surrogate_literal_member_in_a_typedef`, path: ["T"] },
+  { id: "types/engine_types__type_text_brackets_hint", path: ["T"] },
+  { id: "types/engine_union_typedefs__bar_operator_hints_union", path: ["Order"] },
 ])("readTypedefs: $id", ({ id, path }) => {
   const { case_, document } = caseDocument(id);
   const root = document.root;

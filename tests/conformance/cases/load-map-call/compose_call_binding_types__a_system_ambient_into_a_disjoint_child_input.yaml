@@ -11,7 +11,7 @@ flow: |
           kind: code
           input:
             n: ${input.n}
-          output: int
+          output: !int
           code: return inputs.n
       output: ${echo.output}
   nodes:

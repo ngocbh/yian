@@ -270,7 +270,7 @@ nodes:
     steer_inbox: \${input.notes}
     system_prompt: Help.
     prompt: Help the user.
-    output: str
+    output: !str
 output: \${chat.output}
 `;
 
@@ -373,7 +373,7 @@ test("a crash after the late model_call: replay takes it with a matching digest"
 });
 
 /** FLOW with `Optional(str)` output, so an interrupted agent succeeds null and the flow says "(stopped)". */
-const STOPPABLE = FLOW.replace("    output: str\noutput: ${chat.output}", '    output: Optional(str)\noutput: ${chat.output :- "(stopped)"}');
+const STOPPABLE = FLOW.replace("    output: !str\noutput: ${chat.output}", '    output: !Optional(str)\noutput: ${chat.output :- "(stopped)"}');
 
 /**
  * A model answering "draft" while it sends "and cite" to `log`'s `notes`; its second call's stream
@@ -489,7 +489,7 @@ nodes:
         Note: \${event.text}
     system_prompt: Help.
     prompt: Help the user.
-    output: str
+    output: !str
 output: \${chat.output}
 `;
   const log = freshLog();

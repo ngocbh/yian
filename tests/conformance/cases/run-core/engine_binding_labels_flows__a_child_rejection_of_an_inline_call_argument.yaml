@@ -12,7 +12,7 @@ flow: |
           code: "return inputs['y']"
           input:
             y: ${input.y}
-          output: float
+          output: !float
       output: ${c.output}
   nodes:
     m:
@@ -23,7 +23,7 @@ flow: |
       code: "return inputs['a']"
       input:
         a: call(child, y=${m.output})
-      output: float
+      output: !float
   output: ${n.output}
 run:
   num_workers: 0

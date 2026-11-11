@@ -17,7 +17,7 @@ flow: |
       steer_inbox: ${input.notes}
       tools: [lookup]
       prompt: Help the user.
-      output: Optional(str)
+      output: !Optional(str)
   output: ${chat.output}
 run: {run_id: r1, num_workers: 0}
 host:

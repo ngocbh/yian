@@ -15,7 +15,7 @@ flow: |
     reply:
       kind: code
       input: {got: "${heard.output.events}"}
-      output: str
+      output: !str
       code: |
         return inputs.got[0]
   output: ${reply.output}

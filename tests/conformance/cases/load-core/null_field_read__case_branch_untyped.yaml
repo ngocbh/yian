@@ -13,7 +13,7 @@ flow: |
       kind: code
       input:
         s: ${input.s}
-      output: Any
+      output: !Any
       code: |
         return {"g": "a"}
     route:
@@ -26,12 +26,12 @@ flow: |
       kind: code
       input:
         v: ${mk.output.f}
-      output: str
+      output: !str
       code: |
         return "go"
     other:
       kind: code
-      output: str
+      output: !str
       code: |
         return "other"
   output: ${go.output | other.output}

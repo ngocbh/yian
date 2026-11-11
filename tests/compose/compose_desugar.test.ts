@@ -55,7 +55,7 @@ test("the block's retries count is the composer's", () => {
 });
 
 test("a composer id collision is located at the gate", () => {
-  const text = AUTO.replace("output:", "  ask__compose:\n    kind: code\n    code: return 1\n    output: int\noutput:");
+  const text = AUTO.replace("output:", "  ask__compose:\n    kind: code\n    code: return 1\n    output: !int\noutput:");
   const error = loadError(() => assembleText(text));
   expect(error.message).toBe(
     "node 'ask' (tool_id: ask): synthesized composer id 'ask__compose' collides with an existing node id",

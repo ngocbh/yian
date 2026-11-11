@@ -15,6 +15,7 @@ import { Binding, ValueContract } from "../../src/nodes/contracts.ts";
 import { messagesKey } from "../../src/typesys/pool.ts";
 import { newMessagesType, typeFor } from "../../src/typesys/types.ts";
 import { loadErrorAsync } from "../helpers/declarations.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 /** The load error for reading `node`'s new messages when it isn't an AGENT, or not here. */
 const NOT_AN_AGENT = (node: string) =>
@@ -65,7 +66,7 @@ nodes:
   reply:
     kind: agent
     prompt: hi
-    output: str
+    output: !str
 ${reader}
 output: ${output}
 `;
@@ -75,7 +76,7 @@ const CODE_READER = (input: string, output = "int") => `  reader:
     kind: code
     input:
 ${input}
-    output: ${output}
+    output: ${outputTag(output)}
     code: return inputs['history'].length`;
 
 test("a CODE input reading reply.new_messages loads, with an edge from reply", async () => {
@@ -95,7 +96,7 @@ test("reading new_messages of a CODE node is a load error naming the field", asy
     kind: code
     input:
       history: \${reader.new_messages}
-    output: int
+    output: !int
     code: return 1`, "${second.output}");
   expect((await loadErrorAsync(loadFlow(flow))).message).toContain(NOT_AN_AGENT("reader"));
 });
@@ -118,7 +119,7 @@ test("a second agent splices the first's new_messages into its prompt list", asy
     prompt:
       - \${history}
       - user: again
-    output: str`));
+    output: !str`));
 });
 
 test("an llm_config source reading reply.new_messages is refused, naming the llm_config rule", async () => {
@@ -128,14 +129,14 @@ test("an llm_config source reading reply.new_messages is refused, naming the llm
     llm_config:
       provider: anthropic
       model: \${reply.new_messages}
-    output: str`);
+    output: !str`);
   const message = (await loadErrorAsync(loadFlow(flow))).message;
   expect(message).toContain(
     "node 'reader' llm_config.model: reference ${reply.new_messages} reads new_messages, which an llm_config " +
       "value can't read; read it in a node input",
   );
   expect(message).not.toContain("isn't one there");
-  const flowLayer = FLOW("  reader:\n    kind: agent\n    prompt: hi\n    output: str").replace(
+  const flowLayer = FLOW("  reader:\n    kind: agent\n    prompt: hi\n    output: !str").replace(
     "nodes:",
     "llm_config: {provider: anthropic, model: '${reply.new_messages}'}\nnodes:",
   );
@@ -161,11 +162,11 @@ nodes:
   reply:
     kind: agent
     prompt: hi
-    output: str
+    output: !str
   other:
     kind: code
     code: return 1
-    output: int
+    output: !int
 output: ${output}
 `;
 
@@ -185,7 +186,7 @@ test("a typed !list(Message) input takes a maybe-skipped agent's new_messages wi
     kind: code
     input:
       history: !list(Message) \${reply.new_messages :- []}
-    output: int
+    output: !int
     code: return inputs['history'].length
 output: \${reader.output}`,
     ),
@@ -218,8 +219,8 @@ test("a flow assert reading new_messages of a CODE node is refused", async () =>
 
 test("a node's own assert reading its new_messages is refused: it reads only its locals", async () => {
   const flow = FLOW("", "${reply.output}").replace(
-    "    output: str\n",
-    "    output: str\n    asserts:\n      - reply.new_messages != null\n",
+    "    output: !str\n",
+    "    output: !str\n    asserts:\n      - reply.new_messages != null\n",
   );
   expect((await loadErrorAsync(loadFlow(flow))).message).toContain(
     "${reply.new_messages} is not a declared input or `${output}`",
@@ -231,11 +232,11 @@ const ROUTED = (gate: string) => `${FLOW(`${gate}
   a:
     kind: code
     code: return 1
-    output: int
+    output: !int
   b:
     kind: code
     code: return 2
-    output: int`, "${a.output :- b.output}")}`;
+    output: !int`, "${a.output :- b.output}")}`;
 
 /** Return each edge into node `to` as `[from, inputGroup, optional]`, in order. */
 const edgesInto = (flow: Awaited<ReturnType<typeof loadFlow>>, to: string) =>
@@ -281,11 +282,11 @@ test("a CASE reads a maybe-skipped agent's new_messages through an optional edge
   a:
     kind: code
     code: return 1
-    output: int
+    output: !int
   b:
     kind: code
     code: return 2
-    output: int
+    output: !int
 output: \${a.output :- b.output}`,
     );
   expect(edgesInto(await loadFlow(gated("${(reply.new_messages :- []) == []}")), "route")).toEqual([["reply", "__r0", true]]);
@@ -346,7 +347,7 @@ const INLINE_READER = (value: string) => `  reader:
         kind: code
         input:
           h: \${input.h}
-        output: int
+        output: !int
         code: return inputs['h'].length
     output: \${count.output}`;
 

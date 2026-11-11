@@ -24,7 +24,7 @@ defs:
         kind: code
         input:
           seed: \${input.seed}
-        output: {n: int}
+        output: {n: !int}
         code: |
           return {"n": inputs["seed"] + 1}
     output: \${emit.output}
@@ -54,7 +54,7 @@ nodes:
     kind: code
     input:
       age: \${input.age}
-    output: int
+    output: !int
     code: |
       return inputs["age"]
 output: \${echo.output}

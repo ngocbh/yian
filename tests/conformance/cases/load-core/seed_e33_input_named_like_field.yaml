@@ -36,7 +36,7 @@ flow: |
       input:                          # L33 key; its VALUE block is L34-L35 (range_of -> the value)
         keep: ${input.topic}
         env: ${nope.output}           # L35 — an INPUT named `env` — THE ERROR
-      output: int
+      output: !int
       code: |
         return 1
   output: ${calc.output}

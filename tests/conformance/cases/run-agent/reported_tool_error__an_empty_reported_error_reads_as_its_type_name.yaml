@@ -12,7 +12,7 @@ flow: |
       system_prompt: Help.
       prompt: go
       tools: [read_file]
-      output: str
+      output: !str
   output: ${worker.output}
 run:
   run_id: r1

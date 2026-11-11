@@ -48,7 +48,7 @@ files:
         code: ./fixtures/seeds.ts:fail_always
         input:
           topic: ${input.topic}
-        output: str
+        output: !str
 
     output: ${kaboom.output}
 inputs: {topic: X}

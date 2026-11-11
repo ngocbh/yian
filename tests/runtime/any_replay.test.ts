@@ -32,38 +32,38 @@ input:
 nodes:
   mixed:
     kind: code
-    output: Any
+    output: !Any
     code: |
       return [1, 2.5, true, null]
   obj:
     kind: code
-    output: Any
+    output: !Any
     code: |
       return {"a": [1, null]}
   big:
     kind: code
-    output: Any
+    output: !Any
     code: |
       return 2n ** 80n
   flt:
     kind: code
-    output: Any
+    output: !Any
     code: |
       return 1.5
   items:
     kind: code
-    output: list(Any)
+    output: !list(Any)
     code: |
       return [1, "two"]
   nothing:
     kind: code
-    output: Optional(Any)
+    output: !Optional(Any)
     code: |
       return null
   rec:
     kind: code
     output:
-      v: Any
+      v: !Any
     code: |
       return {"v": [1, true]}
   ask:
@@ -72,7 +72,7 @@ nodes:
     runs_after: [mixed, obj, big, flt, items, nothing, rec]
     input:
       prompt: "Go on?"
-    output: str
+    output: !str
   seen:
     kind: code
     input:

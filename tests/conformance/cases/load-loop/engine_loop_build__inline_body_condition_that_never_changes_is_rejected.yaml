@@ -18,7 +18,7 @@ flow: |2
             n: ${input.n}
             exited: ${input.exited}
           output:
-            n: int
+            n: !int
       output: ${bump.output}
   output: ${repeat.output}
 expect:

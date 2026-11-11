@@ -13,7 +13,7 @@ flow: |
               code: ./fixtures/compose_codefns.ts:echo
               input:
                 topic: ready
-              output: str
+              output: !str
           output: ${missing.output}
       output: ${wrapper.output}
   nodes:

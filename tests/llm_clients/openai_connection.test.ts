@@ -382,14 +382,14 @@ output: \${w.output}
     kind: code
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
     code: |
       return inputs["topic"]
   w:
     kind: agent
     input:
       text: \${first.output}
-    output: str
+    output: !str
     prompt: Write about \${text}.
 `;
 

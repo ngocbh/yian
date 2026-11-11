@@ -17,13 +17,13 @@ flow: |
       code: ./fixtures/compose_codefns.ts:echo
       input:
         topic: replied
-      output: str
+      output: !str
     yes:
       kind: code
       code: ./fixtures/compose_codefns.ts:echo
       input:
         topic: agreed
-      output: str
+      output: !str
   output: ${route.output}
 inputs:
   cmd: b

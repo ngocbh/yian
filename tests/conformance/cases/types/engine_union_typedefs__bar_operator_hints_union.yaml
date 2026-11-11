@@ -5,9 +5,10 @@ flow: |
   typedefs:
     Buy: {action: 'Literal(buy)', qty: int}
     Sell: {action: 'Literal(sell)', price: float}
+    Order: 'Buy | Sell'
   input:
     n: !int
-  output: 'Buy | Sell'
+  output: !Order
   kind: code
   code: |
     return 1
@@ -15,7 +16,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'bad type expression ''Buy | Sell'': malformed type expression ''Buy | Sell'': use Union(Buy, Sell) (| is not a type operator)'
+      message: "bad typedefs: typedef 'Order': malformed type expression 'Buy | Sell': use Union(Buy, Sell) (| is not a type operator)"
       frames:
       - label: flow.yaml
-        range: [8, 9, 8, 21]
+        range: [6, 3, 6, 8]

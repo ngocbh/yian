@@ -1587,7 +1587,7 @@ nodes:
     prompt: \${question}
     input:
       question: \${input.question}
-    output: str
+    output: !str
 output: \${agent.output}
 `;
 

@@ -14,7 +14,7 @@ flow: |
           input:
             n: ${input.n}
           output:
-            n: int
+            n: !int
           code: |
             return {"n": inputs["n"] + 1}
       output: ${b.output}
@@ -24,7 +24,7 @@ flow: |
       input:
         z: ${input.z}
       output:
-        n: int
+        n: !int
       code: |
         return {"n": inputs["z"]}
     repeat:

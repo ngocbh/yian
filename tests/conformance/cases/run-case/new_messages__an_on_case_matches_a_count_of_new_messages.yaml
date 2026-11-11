@@ -17,7 +17,7 @@ flow: |
       kind: agent
       system_prompt: Help.
       prompt: hi
-      output: str
+      output: !str
     one: !str one message
     more: !str more messages
   output: ${gate.output}

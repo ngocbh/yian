@@ -16,8 +16,8 @@ nodes:
     input:
       text: ${input.text}
     output:
-      name: str
-      age: int
+      name: !str
+      age: !int
     prompt: |-
       Extract a single person from the text as a name (string) and an age (integer).
       If the age is not stated, make a reasonable guess.
@@ -27,7 +27,7 @@ nodes:
     kind: agent
     input:
       text: ${input.text}
-    output: int
+    output: !int
     prompt: |-
       Return ONLY the number of words in the text as an integer.
       Text: ${text}
@@ -36,7 +36,7 @@ nodes:
     kind: agent
     input:
       text: ${input.text}
-    output: Literal(positive, neutral, negative)
+    output: !Literal(positive;neutral;negative)
     prompt: |-
       Classify the sentiment of the text as exactly one of: positive, neutral, negative.
       Text: ${text}
@@ -45,7 +45,7 @@ nodes:
     kind: agent
     input:
       text: ${input.text}
-    output: list(str)
+    output: !list(str)
     prompt: |-
       Extract up to 3 short keywords from the text as a list of strings.
       Text: ${text}

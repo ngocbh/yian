@@ -35,7 +35,7 @@ defs:
         kind: agent
         input:
           text: ${input.text}
-        output: str
+        output: !str
         prompt: "In one sentence, critique this draft: ${text}"
     output: ${judge.output}
 
@@ -44,7 +44,7 @@ nodes:
     kind: agent
     input:
       topic: ${input.topic}
-    output: str
+    output: !str
     prompt: "Write two sentences about ${topic}."
 
   review:
@@ -56,7 +56,7 @@ nodes:
       note: call(critique, text=${draft.output})
       # ARITHMETIC in a binding: base 7 plus the caller's bonus, computed at wiring time.
       score: ${input.bonus + 7}
-    output: str
+    output: !str
     prompt: |-
       Draft critique: ${note}
       Score: ${score}/10. Write a one-line verdict.

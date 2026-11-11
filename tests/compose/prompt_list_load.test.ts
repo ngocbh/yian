@@ -35,7 +35,7 @@ nodes:
     input:
       history: \${input.history}
       message: \${input.message}
-    output: str
+    output: !str
     system_prompt: You are a helpful conversational assistant.
     variables: {greeting: !str hello}
     prompt:
@@ -215,6 +215,6 @@ test("a typedef holding Messages or text records loads", () => {
 });
 
 test("an AGENT can't output a Message", () => {
-  const { message } = failure(chatFlow(["- ${history}", "- user: ${message}"]).replace("    output: str\n", "    output: Message\n"));
+  const { message } = failure(chatFlow(["- ${history}", "- user: ${message}"]).replace("    output: !str\n", "    output: !Message\n"));
   expect(message).toContain("an AGENT can't produce this `output:`");
 });

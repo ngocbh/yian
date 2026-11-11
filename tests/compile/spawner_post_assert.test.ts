@@ -44,7 +44,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:double
     input:
       n: \${input.v}
-    output: int
+    output: !int
 output: \${x.output}
 `;
 
@@ -154,7 +154,7 @@ nodes:
     tool_id: ask
     input:
       prompt: "value \${input.v}?"
-    output: int
+    output: !int
 output: \${approve.output}
 `;
 
@@ -225,7 +225,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:double
     input:
       n: \${input.v}
-    output: int
+    output: !int
 output: \${x.output}
 `;
 

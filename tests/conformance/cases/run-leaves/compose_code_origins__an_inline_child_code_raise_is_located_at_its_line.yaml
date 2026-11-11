@@ -10,7 +10,7 @@ flow: |
       nodes:
         worker:
           kind: code
-          output: int
+          output: !int
           code: |-
             const marker = 1
             throw new Error("boom")

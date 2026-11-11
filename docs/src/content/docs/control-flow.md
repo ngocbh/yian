@@ -166,7 +166,7 @@ nodes:
   order:
     kind: code
     output:
-      qty: int
+      qty: !int
     code: |
       return { qty: 2 };
   rejected: !str no
@@ -221,7 +221,7 @@ defs:
         kind: code
         input:
           name: ${input.name}
-        output: str
+        output: !str
         code: return `Hi, ${inputs.name}!`
     output: ${line.output}
 nodes:
@@ -229,7 +229,7 @@ nodes:
     kind: code
     input:
       team: ${input.team}
-    output: list(str)
+    output: !list(str)
     code: return inputs.team.split(",").map((name) => name.trim())
   first:
     kind: call
@@ -284,7 +284,7 @@ nodes:
     kind: code
     input:
       text: ${input.text}
-    output: str
+    output: !str
     code: return inputs.text.trim()
 output: ${trimmed.output}
 ```
@@ -356,7 +356,7 @@ brief:
   kind: code
   input:
     notes: call(enrich, topic=${input.topic})
-  output: str
+  output: !str
   code: return `Brief on ${inputs.notes}`
 ```
 
@@ -391,7 +391,7 @@ nodes:
         kind: code
         input:
           n: ${input.n}
-        output: int
+        output: !int
         code: return inputs.n - 1
     output:
       n: ${step.output}
@@ -457,7 +457,7 @@ nodes:
         kind: code
         input:
           n: ${input.n}
-        output: Optional(int)
+        output: !Optional(int)
         code: |
           return inputs.n < 2 ? inputs.n * 10 : null
     output:
@@ -491,7 +491,7 @@ nodes:
         kind: code
         input:
           n: ${input.n}
-        output: Optional(int)
+        output: !Optional(int)
         code: |
           return inputs.n < 2 ? inputs.n * 10 : null
     output:
@@ -522,7 +522,7 @@ nodes:
     nodes:
       read:
         kind: code
-        output: str
+        output: !str
         code: return "b"
     output:
       n: ${input.n + 1}
@@ -559,7 +559,7 @@ loud:
       kind: code
       input:
         word: ${input.word}
-      output: str
+      output: !str
       code: return inputs.word.toUpperCase()
   output: ${shout.output}
 ```

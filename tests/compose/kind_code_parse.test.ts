@@ -168,14 +168,14 @@ name: child-code-check
 nodes:
   first:
     kind: code
-    output: int
+    output: !int
     code: return 1
   invoke:
     kind: call
     nodes:
       worker:
         kind: code
-        output: int
+        output: !int
         code: |-
           const value = 1
           return (

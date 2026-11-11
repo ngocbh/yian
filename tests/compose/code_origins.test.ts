@@ -32,7 +32,7 @@ name: code-origins
 nodes:
   worker:
     kind: code
-    output: int
+    output: !int
     code: |-
       value = 1
       return value
@@ -64,7 +64,7 @@ function expectResolvesCodeCursor(node: CodeNode, resolver: OriginResolver, curs
 
 // A CODE body that throws on its second line.
 const FAILING_CODE = `    kind: code
-    output: int
+    output: !int
     code: |-
       const marker = 1
       throw new Error("boom")
@@ -158,7 +158,7 @@ test("literal code carries whole scalar and exact constructed lines", async () =
 test("compact root code origins retain the projected authored scalar", async () => {
   const text = `id: compact_worker
 name: compact_worker
-output: int
+output: !int
 kind: code
 code: |-
   value = 1
@@ -180,7 +180,7 @@ test.each([
   ["folded", "    code: >-\n      return 1\n"],
 ])("nonliteral code carries only whole scalar fallback: %s", async (_id, codeSource) => {
   const text =
-    "id: code-origins\nname: code-origins\nnodes:\n  worker:\n    kind: code\n    output: int\n" +
+    "id: code-origins\nname: code-origins\nnodes:\n  worker:\n    kind: code\n    output: !int\n" +
     codeSource +
     "output: ${worker.output}\n";
 
@@ -313,7 +313,7 @@ defs:
     nodes:
       worker:
         kind: code
-        output: int
+        output: !int
         code: |-
           value = 1
           return value
@@ -343,7 +343,7 @@ name: flat-def-code-origins
 defs:
   child:
     kind: code
-    output: int
+    output: !int
     code: |-
       value = 1
       return value
@@ -375,7 +375,7 @@ nodes:
     nodes:
       worker:
         kind: code
-        output: int
+        output: !int
         code: |-
           value = 1
           return value
@@ -456,7 +456,7 @@ name: code-origins
 nodes:
   worker:
     kind: code
-    output: int
+    output: !int
     # Another formatting-only comment.
     code: |-
       value = 1

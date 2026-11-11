@@ -38,7 +38,7 @@ nodes:
     kind: code
     input:
       x: \${input.x}
-    output: str
+    output: !str
     code: ./fixtures/compose_codefns.ts:echo_x
 output: \${n.output}
 `;
@@ -91,7 +91,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:score
     input:
       seed: \${input.seed}
-    output: float
+    output: !float
   gate:
     kind: case
     cases:
@@ -103,13 +103,13 @@ nodes:
     code: ./fixtures/compose_codefns.ts:cautious
     input:
       topic: \${input.seed}
-    output: str
+    output: !str
   cold:
     kind: code
     code: ./fixtures/compose_codefns.ts:cautious
     input:
       topic: \${input.seed}
-    output: str
+    output: !str
 output: \${kept.output}
 `;
 

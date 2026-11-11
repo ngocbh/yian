@@ -18,6 +18,7 @@ import {
   loadError,
   runCase,
 } from "../helpers/declarations.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-field-read-sites-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -38,7 +39,7 @@ const STEP =
   "  step:\n" +
   "    kind: code\n" +
   "    input:\n      x: ${input.s}\n" +
-  "    output: Rec\n" +
+  "    output: !Rec\n" +
   '    code: "return ({a: \\"x\\"})"\n';
 
 const ASSERT_QTY_HINT =
@@ -102,7 +103,7 @@ const run = async (text: string, inputs: Record<string, unknown> = {}) =>
 
 /** A CODE node typed `output` reading the flow input `s`. */
 function producer(nodeId: string, output: string): string {
-  return `  ${nodeId}:\n    kind: code\n    input:\n      s: \${input.s}\n    output: ${output}\n    code: "return null"\n`;
+  return `  ${nodeId}:\n    kind: code\n    input:\n      s: \${input.s}\n    output: ${outputTag(output)}\n    code: "return null"\n`;
 }
 
 /** Producer `d` (Order), a case on its action routing buy to `ag`, sell to `other`. */
@@ -119,7 +120,7 @@ function routed(node: string): string {
     "  other:\n" +
     "    kind: code\n" +
     "    input:\n      s: ${input.s}\n" +
-    "    output: str\n" +
+    "    output: !str\n" +
     "    code: return 'x'\n"
   );
 }
@@ -128,7 +129,7 @@ function routed(node: string): string {
 function code(inputs: Record<string, string>, asserts: readonly string[], nodeId = "c"): string {
   let text = `  ${nodeId}:\n    kind: code\n    input:\n`;
   for (const [name, source] of Object.entries(inputs)) text += `      ${name}: ${source}\n`;
-  text += "    output: str\n    code: return 'x'\n    asserts:\n";
+  text += "    output: !str\n    code: return 'x'\n    asserts:\n";
   return text + asserts.map((a) => `      - "${a}"\n`).join("");
 }
 
@@ -148,7 +149,7 @@ function childText(typ: string): string {
     "      inner:\n" +
     "        kind: code\n" +
     "        input:\n          v: ${input.v}\n" +
-    "        output: str\n" +
+    "        output: !str\n" +
     "        code: return 'x'\n" +
     "    output: ${inner.output}\n"
   );
@@ -352,7 +353,7 @@ const LOOP_NAMED_BODY =
   "      bump:\n" +
   "        kind: code\n" +
   "        input:\n          st: ${input.st}\n" +
-  "        output:\n          st: Rec3\n" +
+  "        output:\n          st: !Rec3\n" +
   '        code: "return ({st: {a: \\"x\\", b: \\"y\\"}})"\n' +
   "    output: ${bump.output}\n";
 
@@ -375,7 +376,7 @@ function inlineLoop(assertion: string): string {
     "      bump:\n" +
     "        kind: code\n" +
     "        input:\n          st: ${input.st}\n" +
-    "        output:\n          st: Rec3\n" +
+    "        output:\n          st: !Rec3\n" +
     '        code: "return ({st: {a: \\"x\\", b: \\"y\\"}})"\n' +
     "    output: ${bump.output}\n";
   return flow(nodes, "${drive.output}");
@@ -447,7 +448,7 @@ function isinstanceRouted(produced: string, member: string, node: string): strin
     "  other:\n" +
     "    kind: code\n" +
     "    input:\n      s: ${input.s}\n" +
-    "    output: str\n" +
+    "    output: !str\n" +
     "    code: return 'x'\n"
   );
 }
@@ -526,7 +527,7 @@ test("agent node assert reads are narrowed", () => {
 function outputAssert(assertion: string): string {
   const node =
     "  c:\n    kind: code\n    input:\n      s: ${input.s}\n" +
-    '    output: Order\n    code: "return ({action: \\"sell\\"})"\n' +
+    '    output: !Order\n    code: "return ({action: \\"sell\\"})"\n' +
     `    asserts:\n      - "${assertion}"\n`;
   return flow(node, "${c.output}");
 }
@@ -550,7 +551,7 @@ test("a partial-union node assert reads the narrowed member", () => {
   const nodes =
     producer("d", "LOrder") +
     "  b:\n    kind: code\n    input:\n      y: ${c.output}\n" +
-    "    output: str\n    code: return 'x'\n" +
+    "    output: !str\n    code: return 'x'\n" +
     code({ v: "${d.output}", y: "${b.output}" }, ["isinstance(v, LBuy) and v.leg.price > 0"]);
   const message = loadMessage(flow(nodes, "${c.output}", { typedefs }));
   expect(message).toContain('flow has a cycle involving ["b","c"]');
@@ -730,7 +731,7 @@ function orderLoop(assertion: string): string {
     "      bump:\n" +
     "        kind: code\n" +
     "        input:\n          o: ${input.o}\n" +
-    "        output:\n          o: Order\n" +
+    "        output:\n          o: !Order\n" +
     '        code: "return ({o: inputs.o})"\n' +
     "    output: ${bump.output}\n";
   return flow(nodes, "${drive.output}", { inputs: "  o: !Order\n" });
@@ -761,7 +762,7 @@ const PARTIAL_CHILD_TEXT =
   "      typed:\n" +
   "        kind: code\n" +
   "        input:\n          x: ${input.x}\n" +
-  "        output: str\n" +
+  "        output: !str\n" +
   "        code: return 'a'\n" +
   "      untyped:\n" +
   "        kind: code\n" +
@@ -967,13 +968,13 @@ test.each([
 const TEXT_FIELD = (name: string) => `reference \${${name}(...).f} reads field 'f' on type str, which has no fields`;
 
 /** CODE nodes `a` and `b`, the targets of the CASE rows. */
-const CASE_TARGETS = `  a: {kind: code, code: "return 'a'", output: str}
-  b: {kind: code, code: "return 'b'", output: str}
+const CASE_TARGETS = `  a: {kind: code, code: "return 'a'", output: !str}
+  b: {kind: code, code: "return 'b'", output: !str}
 `;
 
 test("a binding reads a field on a builtin result", () => {
   const nodes =
-    "  c:\n    kind: code\n    input:\n      v: ${upper(input.s).f}\n    output: str\n    code: return 'x'\n";
+    "  c:\n    kind: code\n    input:\n      v: ${upper(input.s).f}\n    output: !str\n    code: return 'x'\n";
   expect(loadMessage(flow(nodes, "${c.output}"))).toContain(`node 'c' input 'v' from: ${TEXT_FIELD("upper")}`);
 });
 
@@ -1026,7 +1027,7 @@ const MAP_CHILD_TEXT =
   "      inner:\n" +
   "        kind: code\n" +
   "        input:\n          x: ${input.x}\n" +
-  "        output: str\n" +
+  "        output: !str\n" +
   "        code: return 'x'\n" +
   "    output: ${inner.output}\n";
 
@@ -1047,7 +1048,7 @@ test.each([
   [
     "inline-call-arg",
     "  c:\n    kind: code\n    input:\n      v: call(child, x=${upper(input.s).f})\n" +
-      "    output: str\n    code: return 'x'\n",
+      "    output: !str\n    code: return 'x'\n",
     "${c.output}",
     "node 'c' input 'v' call(child) argument 'x' from",
   ],
@@ -1073,7 +1074,7 @@ test("host builtin field reads load", () => {
       const nodes =
         "  c:\n    kind: code\n" +
         `    input:\n      v: \${${name}(input.s).f}\n` +
-        "    output: str\n    code: return 'x'\n" +
+        "    output: !str\n    code: return 'x'\n" +
         `    asserts:\n      - "${name}(v).f == v"\n`;
       load(flow(nodes, "${c.output}"));
     }
@@ -1168,8 +1169,8 @@ const routedBinding = (text: string) =>
   NULLABLE_PREAMBLE +
   "nodes:\n" +
   "  gate:\n    kind: case\n    cases:\n      - when: ${input.maybe != null}\n        then: use\n    else: skip\n" +
-  `  use:\n    kind: code\n    output: str\n    input:\n      v: \${${text}}\n    code: return 'u'\n` +
-  "  skip:\n    kind: code\n    output: str\n    code: return 'n'\n" +
+  `  use:\n    kind: code\n    output: !str\n    input:\n      v: \${${text}}\n    code: return 'u'\n` +
+  "  skip:\n    kind: code\n    output: !str\n    code: return 'n'\n" +
   "output: ${use.output | skip.output}\n";
 
 /**
@@ -1178,13 +1179,13 @@ const routedBinding = (text: string) =>
  */
 const typeBranch = (binding: string, reader: "go" | "other" = "go") => {
   const node = (id: string) =>
-    `  ${id}:\n    kind: code\n    output: str\n` +
+    `  ${id}:\n    kind: code\n    output: !str\n` +
     (id === reader ? `    input:\n      v: ${binding}\n` : "") +
     `    code: return '${id}'\n`;
   return (
     NULLABLE_PREAMBLE +
     "nodes:\n" +
-    "  mk:\n    kind: code\n    output: Any\n    code: \"return {'g': 'x'}\"\n" +
+    "  mk:\n    kind: code\n    output: !Any\n    code: \"return {'g': 'x'}\"\n" +
     "  route:\n    kind: case\n    cases:\n      - when: isinstance(mk.output, T)\n        then: go\n    else: other\n" +
     node("go") +
     node("other") +
@@ -1247,13 +1248,13 @@ function promptFlow(source: string, prompt: string, options: { extra?: string; r
     `  ag:\n    kind: agent\n    input:\n      r: ${source}\n` + (prompt !== "" ? `    prompt: "${prompt}"\n` : "") + extra;
   const route = routed
     ? "  route:\n    kind: case\n    cases:\n      - when: ${input.maybe != null}\n        then: ag\n    else: skip\n" +
-      "  skip:\n    kind: code\n    output: str\n    code: return 'n'\n"
+      "  skip:\n    kind: code\n    output: !str\n    code: return 'n'\n"
     : "";
   return (
     NULLABLE_PREAMBLE +
     "nodes:\n" +
     "  gate:\n    kind: case\n    cases:\n      - when: ${input.maybe != null}\n        then: ms\n" +
-    "  ms:\n    kind: code\n    output: Rec\n    code: \"return {'a': 'x'}\"\n" +
+    "  ms:\n    kind: code\n    output: !Rec\n    code: \"return {'a': 'x'}\"\n" +
     route +
     ag +
     `output: ${routed ? "${ag.output | skip.output}" : "${ag.output}"}\n`
@@ -1306,7 +1307,7 @@ const steerRender = (render: string) =>
   "input:\n  notes: !Inbox(Ev)\n" +
   "nodes:\n  chat:\n    kind: agent\n    prompt: Help the user.\n" +
   `    steer_inbox:\n      from: \${input.notes}\n      render: |-\n        ${render}\n` +
-  "    output: str\n" +
+  "    output: !str\n" +
   "output: ${chat.output}\n";
 
 test("a render reading a field through an Optional field of event is a load error", () => {

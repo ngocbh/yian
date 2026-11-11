@@ -10,7 +10,7 @@ flow: |
       kind: agent
       tools: [lookup]
       env: {max_tool_iterations: 2}
-      output: str
+      output: !str
       llm_config: {provider: openai, model: gpt-5.5}
       prompt: "Look up x."
   output: ${research.output}

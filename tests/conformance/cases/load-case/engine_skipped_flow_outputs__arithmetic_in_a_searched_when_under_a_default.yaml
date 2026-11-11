@@ -14,12 +14,12 @@ flow: |
     a:
       kind: code
       output:
-        n: int
+        n: !int
       code: |
         return {"n": 2}
     rejected:
       kind: code
-      output: str
+      output: !str
       code: |
         return "no"
     gate2:
@@ -30,12 +30,12 @@ flow: |
       else: cold
     hot:
       kind: code
-      output: str
+      output: !str
       code: |
         return "hot"
     cold:
       kind: code
-      output: str
+      output: !str
       code: |
         return "cold"
   output:

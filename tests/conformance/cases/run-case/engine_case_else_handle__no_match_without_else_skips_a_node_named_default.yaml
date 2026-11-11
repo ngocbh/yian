@@ -11,7 +11,7 @@ flow: |2
       cases:
         - when: "input.n > 5"
           then: default
-    default: {kind: code, code: "return 'big'", output: str}
+    default: {kind: code, code: "return 'big'", output: !str}
   output: ${default.output :- "none"}
 inputs:
   n: 1

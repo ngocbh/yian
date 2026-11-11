@@ -16,8 +16,8 @@ flow: |2
             n: ${input.n}
             exited: ${input.exited}
           output:
-            n: int
-            exited: bool
+            n: !int
+            exited: !bool
       output: ${step.output}
   nodes:
     loop:
@@ -33,7 +33,7 @@ flow: |2
       code: ./fixtures/compose_codefns.ts:double
       input:
         n: ${loop.output.n}
-      output: int
+      output: !int
   output: ${after.output}
 run:
   num_workers: 0

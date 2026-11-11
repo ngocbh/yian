@@ -13,7 +13,7 @@ flow: |
       system_prompt: Help.
       prompt: q
       retries: 1
-      output: object
+      output: !object
   output: ${agent.output}
 env:
   YIAN_MAX_VALUE_NESTING: '3'

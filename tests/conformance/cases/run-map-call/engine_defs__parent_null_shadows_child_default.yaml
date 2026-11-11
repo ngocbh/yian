@@ -11,7 +11,7 @@ flow: |2
       code: ./fixtures/compose_codefns.ts:echo
       input:
         topic: !Optional(str) "fallback"
-      output: Optional(str)
+      output: !Optional(str)
   nodes:
     go:
       kind: call

@@ -160,7 +160,7 @@ nodes:
     node_name: Plan approval
     input:
       prompt: "Approve \${input.plan}?"
-    output: Literal(approve, revise)
+    output: !Literal(approve;revise)
 output: \${approve.output}
 `;
   const result = await runFlow(await loadFlow(flow), { plan: "release" }, {

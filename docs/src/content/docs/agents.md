@@ -21,7 +21,7 @@ nodes:
     kind: agent
     input:
       review: ${input.review}
-    output: str
+    output: !str
     prompt: Summarize this review in one sentence. ${review}
 output: ${summary.output}
 ```
@@ -71,7 +71,7 @@ nodes:
       tone: !str plain
     system_prompt: You write short briefs for busy readers.
     prompt: Write ${sentences} ${tone} sentences about ${topic}.
-    output: str
+    output: !str
 output: ${writer.output}
 ```
 
@@ -105,7 +105,7 @@ nodes:
       tone: !str plain
     system_prompt: You write short briefs for busy readers.
     prompt: !include prompts/writer.md
-    output: str
+    output: !str
 output: ${writer.output}
 ```
 
@@ -149,7 +149,7 @@ nodes:
       examples: !include(list(str)) examples.json
     system_prompt: !include(str) prompts/tutor.md
     prompt: "Examples:\n${join(examples, '\n')}\n\nQ: ${question}"
-    output: str
+    output: !str
 output: ${tutor.output}
 ```
 
@@ -200,7 +200,7 @@ nodes:
     input:
       history: ${input.history}
       message: ${input.message}
-    output: str
+    output: !str
     prompt:
       - ${history}
       - user: ${message}
@@ -226,8 +226,8 @@ name: extract
 input:
   text: !str
 output:
-  name: str
-  score: int(0..10)
+  name: !str
+  score: !int(0..10)
 kind: agent
 prompt: Give the person's name and a 0-10 score for how happy they sound. ${text}
 ```
@@ -266,7 +266,7 @@ researcher:
   env:
     max_tool_iterations: 20
   prompt: Answer ${question}. Ask the user only if a detail is missing.
-  output: str
+  output: !str
 ```
 
 `tools:` is always a list. A **tool group** holds several tools, such as all the tools of one MCP
@@ -424,7 +424,7 @@ reviewer:
   input:
     diff: ${input.diff}
   prompt: Review this change. ${diff}
-  output: str
+  output: !str
 ```
 
 The model sees only each skill's name and description. When it needs one, it calls the built-in
@@ -471,7 +471,7 @@ nodes:
       question: ${input.question}
     steer_inbox: ${input.notes}
     prompt: Research ${question} and answer it.
-    output: Optional(str)
+    output: !Optional(str)
 output: ${worker.output :- "(stopped)"}
 ```
 

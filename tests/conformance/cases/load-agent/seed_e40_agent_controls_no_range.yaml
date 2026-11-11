@@ -17,7 +17,7 @@ flow: |
       controls: [ask_user, nope_control]    # L13 — THE ERROR (the whole field is retired)
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       prompt: "Rate ${topic}."
   output: ${note.output}
 expect:

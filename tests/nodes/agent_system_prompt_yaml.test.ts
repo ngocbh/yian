@@ -30,7 +30,7 @@ nodes:
       tone: !str warm
 ${systemLine}
     prompt: \${message}
-    output: str
+    output: !str
 output: \${reply.output}
 `;
 }
@@ -44,7 +44,7 @@ input:
   name: !str
   title: !str
   message: !str
-output: str
+output: !str
 kind: agent
 ${systemLine}
 prompt: \${message}

@@ -12,7 +12,7 @@ flow: |
       input:
         question: ${input.question}
       retries: 1
-      output: object
+      output: !object
   output: ${agent.output}
 inputs:
   question: q

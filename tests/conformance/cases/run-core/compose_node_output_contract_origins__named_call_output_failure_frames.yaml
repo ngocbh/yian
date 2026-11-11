@@ -11,7 +11,7 @@ flow: |
             return {"profile": {"age": "bad"}}
           output:
             profile:
-              age: int
+              age: !int
       output: ${emit.output}
   nodes:
     invoke:
@@ -29,7 +29,7 @@ expect:
       - label: flow.yaml
         range: [15, 3, 15, 9]
       - label: flow.yaml
-        range: [12, 18, 12, 21]
+        range: [12, 18, 12, 22]
       message: 'output at profile.age: "bad" does not match declared type int'
       node: invoke/emit
   trace:
@@ -76,7 +76,7 @@ expect:
         - label: flow.yaml
           range: [15, 3, 15, 9]
         - label: flow.yaml
-          range: [12, 18, 12, 21]
+          range: [12, 18, 12, 22]
         message: 'output at profile.age: "bad" does not match declared type int'
         node: invoke/emit
   events:
@@ -109,7 +109,7 @@ expect:
         - label: flow.yaml
           range: [15, 3, 15, 9]
         - label: flow.yaml
-          range: [12, 18, 12, 21]
+          range: [12, 18, 12, 22]
         message: 'output at profile.age: "bad" does not match declared type int'
         node: invoke/emit
   - - RunFailed
@@ -119,6 +119,6 @@ expect:
         - label: flow.yaml
           range: [15, 3, 15, 9]
         - label: flow.yaml
-          range: [12, 18, 12, 21]
+          range: [12, 18, 12, 22]
         message: 'output at profile.age: "bad" does not match declared type int'
         node: invoke/emit

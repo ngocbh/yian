@@ -32,7 +32,7 @@ const ROOT = `id: f
 name: f
 llm_config: {provider: openai, openai: {temperature: 0.5}}
 nodes:
-  pick: {kind: agent, prompt: Pick., output: str, llm_config: {model: pick-model}}
+  pick: {kind: agent, prompt: Pick., output: !str, llm_config: {model: pick-model}}
   chat: {kind: agent, prompt: Go., llm_config: {model: '\${pick.output}'}}
   solo:
     kind: agent
@@ -380,7 +380,7 @@ const LITERAL_PROVIDERS = `id: f
 name: f
 llm_config: {provider: google}
 nodes:
-  pick: {kind: agent, prompt: Pick., output: str, llm_config: {model: pick-model}}
+  pick: {kind: agent, prompt: Pick., output: !str, llm_config: {model: pick-model}}
   chat: {kind: agent, prompt: Go., llm_config: {provider: anthropic, model: '\${pick.output}'}}
   flowed: {kind: agent, prompt: Go., llm_config: {model: '\${pick.output}'}}
   solo:
@@ -394,7 +394,7 @@ const VALUE_PROVIDER = `id: f
 name: f
 llm_config: {provider: google}
 nodes:
-  pick: {kind: agent, prompt: Pick., output: str, llm_config: {model: pick-model}}
+  pick: {kind: agent, prompt: Pick., output: !str, llm_config: {model: pick-model}}
   chat: {kind: agent, prompt: Go., llm_config: {provider: '\${pick.output}', model: m}}
 output: \${chat.output}
 `;

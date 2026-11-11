@@ -18,7 +18,7 @@ flow: |
         events: !list(str) ${heard.output.events}
         closed: !bool ${heard.output.closed}
       code: return inputs.events
-      output: list(str)
+      output: !list(str)
   output: ${first.output}
 expect:
   load: ok

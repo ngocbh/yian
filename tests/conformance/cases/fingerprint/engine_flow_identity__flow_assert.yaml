@@ -11,7 +11,7 @@ flow: |
     body:
       kind: tool
       tool_id: body
-      output: int
+      output: !int
   output: ${body.output}
 other: |
   id: asserted
@@ -24,7 +24,7 @@ other: |
     body:
       kind: tool
       tool_id: body
-      output: int
+      output: !int
   output: ${body.output}
 expect:
   fingerprint: different

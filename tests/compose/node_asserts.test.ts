@@ -36,6 +36,7 @@ import {
   runCase,
 } from "../helpers/declarations.ts";
 import { expectFailsBeforeTheRun, rejected, stoppedRunLog } from "../helpers/run_state_fixtures.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 const DOUBLE = "./fixtures/compose_codefns.ts:double";
 
@@ -54,7 +55,7 @@ nodes:
     code: ${DOUBLE}
     input:
       ${inputDecl}
-    output: ${outputs}
+    output: ${outputTag(outputs)}
     asserts:
 ${lines}
 output: \${x.output}
@@ -255,7 +256,7 @@ defs:
         code: ${DOUBLE}
         input:
           n: \${input.n}
-        output: int
+        output: !int
     output: \${y.output}
 `;
 
@@ -273,7 +274,7 @@ nodes:
     code: ${DOUBLE}
     input:
       n: \${input.v}
-    output: int
+    output: !int
     asserts:
       - ${assertion}
 output: \${x.output}
@@ -368,7 +369,7 @@ defs:
         code: ${DOUBLE}
         input:
           n: \${input.n}
-        output: int
+        output: !int
         asserts:
           - "output >= 0"
     output: \${y.output}
@@ -430,13 +431,13 @@ nodes:
     code: ${DOUBLE}
     input:
       n: \${input.v}
-    output: int
+    output: !int
   b:
     kind: code
     code: ${DOUBLE}
     input:
       n: \${a.output}
-    output: int
+    output: !int
 output: \${b.output}
 `;
 
@@ -504,19 +505,19 @@ const NULLABLE_HEAD =
 const localAssert = (source: string, assertion: string) =>
   NULLABLE_HEAD +
   "  gate:\n    kind: case\n    cases:\n      - when: ${input.go}\n        then: maybe_skipped\n" +
-  "  maybe_skipped:\n    kind: code\n    output: Rec\n    code: \"return {'a': 'x'}\"\n" +
-  `  use:\n    kind: code\n    input:\n      r: ${source}\n    output: int\n    code: return 1\n` +
+  "  maybe_skipped:\n    kind: code\n    output: !Rec\n    code: \"return {'a': 'x'}\"\n" +
+  `  use:\n    kind: code\n    input:\n      r: ${source}\n    output: !int\n    code: return 1\n` +
   `    asserts:\n      - "${assertion}"\n` +
   "output: ${use.output}\n";
 
 /** A flow where `isinstance(mk.output, T)` routes `go`, which binds `u: ${mk.output}` and asserts `assertion`. */
 const routedAssert = (assertion: string) =>
   NULLABLE_HEAD +
-  "  mk:\n    kind: code\n    output: Any\n    code: \"return {'g': 'x'}\"\n" +
+  "  mk:\n    kind: code\n    output: !Any\n    code: \"return {'g': 'x'}\"\n" +
   "  route:\n    kind: case\n    cases:\n      - when: isinstance(mk.output, T)\n        then: go\n    else: other\n" +
-  "  go:\n    kind: code\n    input:\n      u: ${mk.output}\n    output: str\n    code: return 'go'\n" +
+  "  go:\n    kind: code\n    input:\n      u: ${mk.output}\n    output: !str\n    code: return 'go'\n" +
   `    asserts:\n      - "${assertion}"\n` +
-  "  other:\n    kind: code\n    output: str\n    code: return 'other'\n" +
+  "  other:\n    kind: code\n    output: !str\n    code: return 'other'\n" +
   "output: ${go.output | other.output}\n";
 
 test("a node assert on a local bound from a producer that may skip needs a guard", () => {
@@ -569,7 +570,7 @@ nodes:
       return {k: "x"}
     input:
       ${input}
-    output: ${output}
+    output: ${outputTag(output)}
     asserts:
 ${lines}
 output: \${x.output.k}

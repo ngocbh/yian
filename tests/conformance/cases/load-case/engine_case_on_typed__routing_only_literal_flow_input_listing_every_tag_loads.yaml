@@ -19,12 +19,12 @@ flow: |
       kind: code
       code: |
         return "one"
-      output: str
+      output: !str
     two:
       kind: code
       code: |
         return "two"
-      output: str
+      output: !str
   output: ${one.output | two.output}
 expect:
   load: ok

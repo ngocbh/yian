@@ -16,7 +16,7 @@ flow: |2
           code: ./fixtures/compose_codefns.ts:echo
           input:
             topic: ${input.v}
-          output: str
+          output: !str
       output: ${x.output}
   nodes:
     s:
@@ -24,7 +24,7 @@ flow: |2
       code: ./fixtures/compose_codefns.ts:score
       input:
         seed: ${input.seed}
-      output: float
+      output: !float
     gate:
       kind: case
       cases:
@@ -36,19 +36,19 @@ flow: |2
       code: ./fixtures/compose_codefns.ts:positive
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
     caut:
       kind: code
       code: ./fixtures/compose_codefns.ts:cautious
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
     wrap:
       kind: code
       code: ./fixtures/compose_codefns.ts:echo
       input:
         topic: call(passthru, v=${gate.output})
-      output: str
+      output: !str
   output: ${wrap.output}
 inputs:
   seed: 0.9

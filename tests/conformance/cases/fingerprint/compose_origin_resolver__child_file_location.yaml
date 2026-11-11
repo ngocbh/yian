@@ -36,7 +36,7 @@ files:
       worker:
         kind: tool
         tool_id: worker
-        output: int
+        output: !int
     output: ${worker.output}
   twin.yaml: |
     id: child
@@ -45,7 +45,7 @@ files:
       worker:
         kind: tool
         tool_id: worker
-        output: int
+        output: !int
     output: ${worker.output}
 expect:
   fingerprint: same

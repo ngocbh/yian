@@ -50,7 +50,7 @@ function codeFlow(
   return (
     "id: f\nname: f\ninput:\n  x: !int\n  s: !str\n" +
     "nodes:\n  use:\n    kind: code\n    input:\n      topic: " + binding + "\n" +
-    "    output: str\n" + nodeExtra +
+    "    output: !str\n" + nodeExtra +
     "    code: |\n      return String(inputs.topic)\n" +
     "output: " + output + "\n" + tail
   );
@@ -61,8 +61,8 @@ const routed = (caseFields: string) =>
   "id: f\nname: f\ninput:\n  x: !int\n  s: !str\nnodes:\n  route:\n    kind: case\n" +
   caseFields +
   "    else: no\n" +
-  "  yes:\n    kind: code\n    output: str\n    code: |\n      return 'yes'\n" +
-  "  no:\n    kind: code\n    output: str\n    code: |\n      return 'no'\n" +
+  "  yes:\n    kind: code\n    output: !str\n    code: |\n      return 'yes'\n" +
+  "  no:\n    kind: code\n    output: !str\n    code: |\n      return 'no'\n" +
   "output: ${yes.output | no.output}\n";
 
 /** A routed flow with one searched branch on `condition`. */
@@ -85,7 +85,7 @@ const seed = (id: string) => caseText(id).text;
 
 const CALL_DEF =
   "defs:\n  g:\n    input:\n      d: !int\n    nodes:\n      run:\n        kind: code\n" +
-  "        output: str\n        code: |\n          return 'x'\n    output: ${run.output}\n";
+  "        output: !str\n        code: |\n          return 'x'\n    output: ${run.output}\n";
 
 /** Site -> builder of [flow text, needle on the line the error is located at]. */
 const SITES: Record<string, (n: number) => [string, string]> = {
@@ -151,7 +151,7 @@ test(
   async () => {
     const text =
       "id: f\nname: f\ninput:\n  x: !int\nnodes:\n  use:\n    kind: code\n    input:\n" +
-      "      total: ${" + sum(CHAIN) + "}\n    output: int\n" +
+      "      total: ${" + sum(CHAIN) + "}\n    output: !int\n" +
       "    code: |\n      return inputs.total\noutput: ${use.output}\n";
     const result = await runFlow(await loadConformanceFlow(text), { x: 7 }, { env });
     expect(result.status).toBe("succeeded");
@@ -177,7 +177,7 @@ test(
   async () => {
     const text =
       "id: f\nname: f\ninput:\n  x: !int\nnodes:\n  use:\n    kind: code\n    input:\n" +
-      "      total: ${input.x * " + Array(CHAIN).fill("1").join(" * ") + "}\n    output: int\n" +
+      "      total: ${input.x * " + Array(CHAIN).fill("1").join(" * ") + "}\n    output: !int\n" +
       "    code: |\n      return inputs.total\noutput: ${use.output}\n";
     const result = await runFlow(await loadConformanceFlow(text), { x: 5 }, { env });
     expect(result.status).toBe("succeeded");
@@ -216,7 +216,7 @@ test(
 
 const SUM_DEF =
   "defs:\n  add:\n    input:\n      x: !int\n    nodes:\n      use:\n        kind: code\n" +
-  "        input:\n          total: ${" + sum(CHAIN) + "}\n        output: int\n" +
+  "        input:\n          total: ${" + sum(CHAIN) + "}\n        output: !int\n" +
   "        code: |\n          return inputs.total\n    output: ${use.output}\n";
 
 test(
@@ -261,9 +261,9 @@ test("a condition at the limit runs thirty calls deep", async () => {
       lines.push(
         "      route:", "        kind: case", "        cases:",
         `          - when: "${condition}"`, "            then: yes", "        else: no",
-        "      yes:", "        kind: code", "        output: str", "        code: |",
+        "      yes:", "        kind: code", "        output: !str", "        code: |",
         "          return 'yes'",
-        "      no:", "        kind: code", "        output: str", "        code: |",
+        "      no:", "        kind: code", "        output: !str", "        code: |",
         "          return 'no'",
         "    output: ${yes.output | no.output}",
       );

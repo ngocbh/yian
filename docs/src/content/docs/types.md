@@ -317,7 +317,7 @@ nodes:
     input:
       action: ${input.action}
       amount: ${input.amount}
-    output: Order
+    output: !Order
     code: |
       if (inputs.action === "buy") return { action: "buy", qty: inputs.amount };
       return { action: "sell", price: Number(inputs.amount) / 100 };

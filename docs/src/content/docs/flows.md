@@ -24,7 +24,7 @@ nodes:
     input:
       price: ${input.price}
       rate: ${input.rate}
-    output: float
+    output: !float
     code: |
       return inputs.price * (1 + inputs.rate);
   summary: !str "Total with tax: ${total.output}"
@@ -178,7 +178,7 @@ nodes:
       heading: "Notes on ${input.topic}"    # text
       limit: 3                              # a literal
       options: {tone: plain, tags: ["${input.topic}", draft]}
-    output: str
+    output: !str
     code: |
       return `${inputs.heading} (${inputs.limit})`;
 output: ${brief.output}
@@ -237,7 +237,7 @@ id: hello
 name: hello
 input:
   name: !str
-output: str
+output: !str
 kind: agent
 prompt: Write a short, warm greeting for ${name}.
 ```
@@ -293,7 +293,7 @@ nodes:
   after:
     kind: code
     runs_after: [a]
-    output: str
+    output: !str
     code: |
       return "after ran";
 output:
@@ -332,7 +332,7 @@ nodes:
     kind: code
     input:
       n: ${input.qty}
-    output: int
+    output: !int
     code: |
       return inputs.n * 2;
     asserts:

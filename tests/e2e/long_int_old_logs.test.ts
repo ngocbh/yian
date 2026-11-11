@@ -38,7 +38,7 @@ input:
 nodes:
   c:
     kind: code
-    output: str
+    output: !str
     code: |
       return "done"
 output: \${c.output}
@@ -54,7 +54,7 @@ nodes:
     kind: code
     input:
       t: \${input.t}
-    output: int
+    output: !int
     code: |
       return 123456789000 + 123
 output: \${c.output}

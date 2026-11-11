@@ -14,7 +14,7 @@ flow: |
           code: ./fixtures/compose_codefns.ts:echo
           input:
             value: !int ${input.x}
-          output: int
+          output: !int
       output: !int ${echo.output}
   output: ${each.output}
 expect:

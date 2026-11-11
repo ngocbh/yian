@@ -11,7 +11,7 @@ flow: |
       kind: code
       input:
         x: ${input.s}
-      output: Optional(Rec)
+      output: !Optional(Rec)
       code: "return null"
   output:
     a: ${step.output?.a}

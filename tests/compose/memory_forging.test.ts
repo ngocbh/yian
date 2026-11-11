@@ -55,7 +55,7 @@ ${GEN}  make:
     kind: code
     input:
       m: ${source}
-    output: str
+    output: !str
     code: |
       const m = inputs["m"];
       return String(Object.getPrototypeOf(m)?.constructor?.name) + " frozen=" + Object.isFrozen(m)

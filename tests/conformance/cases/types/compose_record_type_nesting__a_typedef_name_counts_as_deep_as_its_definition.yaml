@@ -10,7 +10,7 @@ flow: |
       code: ./fixtures/compose_codefns.ts:echo
       input:
         topic: x
-      output: {k: {k: "T"}}
+      output: {k: {k: !T}}
   output: ${use.output}
 expect:
   load:
@@ -19,4 +19,4 @@ expect:
       message: type at k.k nests deeper than 100 levels, the limit for a type (each record and list is a level); its type 'T' adds 99
       frames:
       - label: flow.yaml
-        range: [11, 21, 11, 24]
+        range: [11, 21, 11, 23]

@@ -710,7 +710,7 @@ defs:
         tools: [ping]
         input:
           transcript: \${input.transcript}
-        output: Optional(str)
+        output: !Optional(str)
         prompt: "history \${transcript}"
       fold:
         kind: code
@@ -721,8 +721,8 @@ defs:
           reply:      \${reply.output}
           exited:     \${input.exited}
         output:
-          transcript: str
-          exited: bool
+          transcript: !str
+          exited: !bool
     output: \${fold.output}
 nodes:
   loop:
@@ -1330,7 +1330,7 @@ nodes:
     steer_inbox: \${input.notes}
     input:
       got: \${heard.output.events}
-    output: Optional(str)
+    output: !Optional(str)
 output: \${reply.output}
 `;
 
@@ -1366,7 +1366,7 @@ nodes:
     prompt: go
     tools: [ping]
     steer_inbox: \${input.notes}
-    output: Optional(str)
+    output: !Optional(str)
 output: \${reply.output}
 `;
 

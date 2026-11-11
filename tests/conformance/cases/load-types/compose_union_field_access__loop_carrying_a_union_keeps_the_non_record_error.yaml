@@ -24,7 +24,7 @@ flow: |
           kind: code
           input:
             action: ${input.action}
-          output: Decision
+          output: !Decision
           code: "return null"
       output: ${step.output}
   output: ${drive.output}

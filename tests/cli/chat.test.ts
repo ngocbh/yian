@@ -161,7 +161,7 @@ nodes:
     kind: code
     input:
       name: \${input.name}
-    output: str
+    output: !str
     code: |
       return "Hi " + inputs["name"];
 output: \${greet.output}
@@ -179,7 +179,7 @@ nodes:
     tool_id: ask
     input:
       prompt: "Which region?"
-    output: str
+    output: !str
 output: \${sure.output}
 `;
 
@@ -209,7 +209,7 @@ name: region
 nodes:
   gate:
     kind: code
-    output: str
+    output: !str
     code: |
       const fs = await import("node:fs");
       const cap = Date.now() + 5000;
@@ -223,7 +223,7 @@ nodes:
     depends_on: [gate]
     input:
       prompt: "Which region?"
-    output: str
+    output: !str
 output: \${sure.output}
 `;
 

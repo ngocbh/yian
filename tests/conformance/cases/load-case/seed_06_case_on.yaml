@@ -20,7 +20,7 @@ flow: |
       kind: agent
       input:
         topic: ${input.topic}
-      output: str                # one of "pro" | "con" | "mixed"
+      output: !str               # one of "pro" | "con" | "mixed"
       prompt: |-
         Classify ${topic}'s current market category as exactly one lowercase word —
         pro, con, or mixed. Output only that word.
@@ -41,21 +41,21 @@ flow: |
       kind: agent
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       prompt: "Write a neutral 2-sentence note on ${topic} in an rising context. No advice."
 
     con_note:
       kind: agent
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       prompt: "Write a neutral 2-sentence note on ${topic} in a falling context. No advice."
 
     choppy_note:
       kind: agent
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       prompt: "Write a neutral 2-sentence note on ${topic} in a range-bound context. No advice."
 
   # Exactly one branch runs; the rest skip-flood to null. The 3-way coalesce returns

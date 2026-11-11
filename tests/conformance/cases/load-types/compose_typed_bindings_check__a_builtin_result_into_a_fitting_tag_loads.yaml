@@ -17,7 +17,7 @@ flow: |
         quiet: !AB ${lower(input.s)}
         joined: !str ${join(input.xs, ", ")}
         shown: !Optional(str) ${render_as_json(input.xs)}
-      output: int
+      output: !int
       code: return inputs.count
   output: ${e.output}
 expect:

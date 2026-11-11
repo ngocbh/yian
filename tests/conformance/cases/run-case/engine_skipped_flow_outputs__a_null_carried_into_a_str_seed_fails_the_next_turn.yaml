@@ -20,14 +20,14 @@ flow: |
                 then: mk
           mk:
             kind: code
-            output: str
+            output: !str
             code: |
               return "made"
           bump:
             kind: code
             input:
               n: ${input.n}
-            output: int
+            output: !int
             code: |
               return inputs["n"] + 1
       output:

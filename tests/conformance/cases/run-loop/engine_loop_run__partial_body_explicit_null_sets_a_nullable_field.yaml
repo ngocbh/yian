@@ -17,8 +17,8 @@ flow: |2
           input:
             n: ${input.n}
           output:
-            n: int
-            note: Optional(str)
+            n: !int
+            note: !Optional(str)
       output: ${step.output}
   nodes:
     loop:

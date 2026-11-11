@@ -27,14 +27,14 @@ nodes:
     kind: agent
     input:
       topic: ${input.topic}
-    output: str
+    output: !str
     prompt: "Write a short note about ${topic}."
 
   parse:
     kind: code
     input:
       text: ${draft.output}        # the reference IS the edge draft -> parse
-    output: Parsed                 # one typed value; an AGENT node supports records too
+    output: !Parsed                # one typed value; an AGENT node supports records too
     code: |
       const text = inputs.text;
       return { title: text.split("\n", 1)[0], word_count: text.split(/\s+/).filter(Boolean).length };

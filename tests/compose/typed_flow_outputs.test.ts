@@ -190,7 +190,7 @@ typedefs:
 kind: code
 code: |
   return {"qty": 1}
-output: Size
+output: !Size
 `);
 
   expectType((contractOf(loaded.compiled, "compact") as ValueContract).type, SIZE);

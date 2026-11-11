@@ -34,7 +34,7 @@ flow: |
           code: ./fixtures/compose_codefns.ts:echo
           input:
             topic: ${input.x}
-          output: str
+          output: !str
       output: ${step.output}
   nodes:
     top:

@@ -12,7 +12,7 @@ flow: |2
       code: ./fixtures/compose_codefns.ts:score
       input:
         seed: ${input.seed}
-      output: float
+      output: !float
     gate:
       kind: case
       cases:
@@ -24,13 +24,13 @@ flow: |2
       code: ./fixtures/compose_codefns.ts:positive
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
     cautious:
       kind: code
       code: ./fixtures/compose_codefns.ts:cautious
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
   output: ${positive.output | cautious.output}
 inputs:
   topic: BETA

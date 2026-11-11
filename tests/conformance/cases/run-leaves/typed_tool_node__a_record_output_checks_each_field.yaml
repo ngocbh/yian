@@ -9,7 +9,7 @@ flow: |
       tool_id: place_order
       input:
         qty: 5
-      output: {qty: int}
+      output: {qty: !int}
   output: ${place.output}
 run:
   run_id: r1
@@ -34,7 +34,7 @@ expect:
       message: 'output at qty: "bad" does not match declared type int'
       frames:
       - label: flow.yaml
-        range: [9, 19, 9, 22]
+        range: [9, 19, 9, 23]
       node: place
   trace:
   - - run_started
@@ -67,7 +67,7 @@ expect:
         message: 'output at qty: "bad" does not match declared type int'
         frames:
         - label: flow.yaml
-          range: [9, 19, 9, 22]
+          range: [9, 19, 9, 23]
         node: place
   events:
   - [RunStarted]
@@ -85,7 +85,7 @@ expect:
         message: 'output at qty: "bad" does not match declared type int'
         frames:
         - label: flow.yaml
-          range: [9, 19, 9, 22]
+          range: [9, 19, 9, 23]
         node: place
   - - RunFailed
     - failure:
@@ -93,7 +93,7 @@ expect:
         message: 'output at qty: "bad" does not match declared type int'
         frames:
         - label: flow.yaml
-          range: [9, 19, 9, 22]
+          range: [9, 19, 9, 23]
         node: place
   tool_calls:
     place_order:

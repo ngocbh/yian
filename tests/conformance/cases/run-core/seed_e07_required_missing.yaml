@@ -24,7 +24,7 @@ flow: |
       input:
         topic: ${input.topic}
         as_of:  ${input.as_of:?"as_of is required for the report"}   # required AT THIS SITE
-      output: str
+      output: !str
       prompt: "Write a neutral one-line note on ${topic} as of ${as_of}. No advice."
 
   output: ${report.output}

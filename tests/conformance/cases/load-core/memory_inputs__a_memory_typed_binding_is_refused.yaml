@@ -11,7 +11,7 @@ flow: |
       input:
         m: !FileMemory ${input.lessons}
       code: return 1
-      output: int
+      output: !int
   output: ${n.output}
 expect:
   load:

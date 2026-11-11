@@ -46,7 +46,7 @@ nodes:
     steer_inbox: \${input.m}
     input:
       got: \${heard.output.events}
-    output: Optional(str)
+    output: !Optional(str)
 output: \${reply.output}
 `;
 

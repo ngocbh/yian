@@ -333,7 +333,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: ${binding}
-    output: str
+    output: !str
 output: \${use.output}
 `;
 }
@@ -529,7 +529,7 @@ defs:
     nodes:
       run:
         kind: code
-        output: str
+        output: !str
         code: |
           return "x"
     output: \${run.output}
@@ -541,7 +541,7 @@ ${node}`;
 function bindingNode(binding: string): string {
   return (
     "  use:\n    kind: code\n    code: ./fixtures/compose_codefns.ts:echo\n" +
-    `    input:\n      topic: ${binding}\n    output: str\n` +
+    `    input:\n      topic: ${binding}\n    output: !str\n` +
     "output: ${use.output}\n"
   );
 }
@@ -560,7 +560,7 @@ function caseNode(target: string): string {
     "  route:\n    kind: case\n    on: ${input.cmd}\n" +
     `    cases:\n      - when: a\n        then: ${target}\n` +
     "    else: other\n" +
-    "  other:\n    kind: code\n    output: str\n    code: |\n      return 'other'\n" +
+    "  other:\n    kind: code\n    output: !str\n    code: |\n      return 'other'\n" +
     "output: ${route.output}\n"
   );
 }
@@ -731,7 +731,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: ${binding}
-    output: str
+    output: !str
 output: ${output}
 `;
 }
@@ -793,7 +793,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: call(f, topic = "a = b")
-    output: str
+    output: !str
 output: \${use.output}
 `;
   const f = handChild({

@@ -32,7 +32,7 @@ defs:
         code: throw new Error("always fails")
         input:
           topic: \${input.topic}
-        output: str
+        output: !str
     output: \${boom.output}
 
 nodes:
@@ -59,7 +59,7 @@ defs:
         input:
           n: \${input.n}
         output:
-          n: int
+          n: !int
     output: \${step.output}
   runaway:
     nodes:
@@ -90,7 +90,7 @@ defs:
         input:
           okay: literal
           bad: \${input.maybe:?"missing nested value"}
-        output: str
+        output: !str
         code: return inputs.okay
     output: \${leaf.output}
 nodes:
@@ -113,7 +113,7 @@ defs:
         input:
           okay: literal
           bad: \${input.maybe:?"missing mapped value"}
-        output: str
+        output: !str
         code: return inputs.okay
     output: \${leaf.output}
 nodes:
@@ -136,7 +136,7 @@ nodes:
     code: return inputs.n * 2
     input:
       n: \${input.v}
-    output: int
+    output: !int
 output: \${x.output}
 `;
 
@@ -167,7 +167,7 @@ defs:
         code: return inputs.n * 2
         input:
           n: \${input.v}
-        output: int
+        output: !int
     output: \${x.output}
   middle:
     input:

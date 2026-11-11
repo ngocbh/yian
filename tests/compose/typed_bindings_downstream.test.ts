@@ -37,7 +37,7 @@ const STRICT_CHILD = `defs:
         kind: code
         input:
           x: \${input.x}
-        output: int
+        output: !int
         code: |
           return inputs["x"] * 2
     output: \${twice.output}
@@ -59,10 +59,10 @@ output: \${run.output}
 
 /** A `maybe` CODE producer declaring `Optional(int)` that returns `value`. */
 const maybe = (value: string) =>
-  `  maybe:\n    kind: code\n    output: Optional(int)\n    code: |\n      return ${value}\n`;
+  `  maybe:\n    kind: code\n    output: !Optional(int)\n    code: |\n      return ${value}\n`;
 
 /** An `i` CODE producer declaring `int`. */
-const INT_PRODUCER = "  i:\n    kind: code\n    output: int\n    code: |\n      return 3\n";
+const INT_PRODUCER = "  i:\n    kind: code\n    output: !int\n    code: |\n      return 3\n";
 
 /** An `opaque` CODE producer with no declared output that returns `value`. */
 const opaque = (value: string) => `  opaque:\n    kind: code\n    code: |\n      return ${value}\n`;
@@ -149,7 +149,7 @@ defs:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: |
           return inputs["n"] + 1
     output:
@@ -244,7 +244,7 @@ nodes:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: |
           return inputs["n"] * 2
     output: \${twice.output}
@@ -275,7 +275,7 @@ nodes:
         kind: code
         input:
           items: \${input.items}
-        output: int
+        output: !int
         code: |
           return inputs["items"].length
     output: \${count.output}
@@ -303,7 +303,7 @@ nodes:
         kind: code
         input:
           r: \${input.r}
-        output: float
+        output: !float
         code: |
           return inputs["r"] + 0.5
     output:
@@ -344,7 +344,7 @@ nodes:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: |
           return inputs["n"] + 1
     output:
@@ -384,7 +384,7 @@ ${opaque('["a", "b"]')}  each:
         kind: code
         input:
           t: \${input.t}
-        output: str
+        output: !str
         code: |
           return inputs["t"].toUpperCase()
     output: \${shout.output}

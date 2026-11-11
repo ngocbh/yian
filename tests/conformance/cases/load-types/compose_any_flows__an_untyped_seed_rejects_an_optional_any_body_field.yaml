@@ -5,7 +5,7 @@ flow: |
   nodes:
     mk:
       kind: code
-      output: Any
+      output: !Any
       code: return 0
     loop:
       kind: loop
@@ -17,7 +17,7 @@ flow: |
           kind: code
           input:
             acc: ${input.acc}
-          output: Optional(Any)
+          output: !Optional(Any)
           code: |
             return inputs['acc']
       output:

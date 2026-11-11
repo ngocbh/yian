@@ -14,13 +14,13 @@ flow: |
       steer_inbox: ${input.notes}
       system_prompt: Help.
       prompt: Help the user.
-      output: Optional(str)
+      output: !Optional(str)
     after:
       kind: agent
       input: {draft: "${chat.output}"}
       system_prompt: Help.
       prompt: "summarize: ${draft :- \"nothing\"}"
-      output: str
+      output: !str
   output: ${after.output}
 run:
   run_id: r1

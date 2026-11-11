@@ -48,7 +48,7 @@ const ITEMS_DEF = `  items:
     nodes:
       c:
         kind: code
-        output: list(str)
+        output: !list(str)
         code: |
           return ["a", "b"]
     output: \${c.output}
@@ -215,14 +215,14 @@ function mapRef(over: string, inputs = "  s: !str\n", typedefs = ""): string {
     nodes:
       c:
         kind: code
-        output: str
+        output: !str
         code: |
           return "a"
     output: \${c.output}
 nodes:
   c:
     kind: code
-    output: int
+    output: !int
     code: |
       return 1
   u:
@@ -313,7 +313,7 @@ typedefs:
 nodes:
   d:
     kind: code
-    output: U
+    output: !U
     code: return None
   r:
     kind: case

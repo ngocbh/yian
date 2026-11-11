@@ -5,7 +5,7 @@ flow: |
   id: f
   name: f
   nodes:
-    a: {kind: code, code: ./fixtures/compose_codefns.ts:echo, input: {topic: x}, output: str}
+    a: {kind: code, code: ./fixtures/compose_codefns.ts:echo, input: {topic: x}, output: !str}
   asserts:
     - ${a.output == 'x'}
   output:

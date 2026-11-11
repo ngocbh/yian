@@ -15,7 +15,7 @@ flow: |2
           input:
             n: ${input.n}
           output:
-            n: Any
+            n: !Any
           code: |
             return {"n": 1}
       output: ${bump.output}

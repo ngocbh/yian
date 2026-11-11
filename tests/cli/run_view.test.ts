@@ -41,7 +41,7 @@ nodes:
     kind: agent
     prompt: Pick a colour.
     tools: [options]
-    output: str
+    output: !str
   route:
     kind: case
     on: \${choose.output}
@@ -55,7 +55,7 @@ nodes:
     tool_id: ask
     input:
       prompt: "Is \${choose.output} right?"
-    output: str
+    output: !str
 output: \${sure.output}
 `;
 
@@ -65,7 +65,7 @@ name: boom
 nodes:
   boom:
     kind: code
-    output: str
+    output: !str
     code: |
       throw new Error("a\\tb " + "word ".repeat(12));
 output: \${boom.output}

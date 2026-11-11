@@ -21,7 +21,7 @@ flow: |
             price: ${input.order.price}
           code: |
             return Number(inputs["qty"]) * inputs["price"]
-          output: float
+          output: !float
       output: ${fill.output}
   nodes:
     d:
@@ -30,7 +30,7 @@ flow: |
         decision: ${input.decision}
       code: |
         return inputs["decision"]
-      output: Decision
+      output: !Decision
     route:
       kind: case
       on: ${d.output.action}
@@ -46,14 +46,14 @@ flow: |
         qty: ${d.output.qty}
       code: |
         return "buy " + String(inputs["qty"])
-      output: str
+      output: !str
     log_hold:
       kind: code
       input:
         note: ${d.output.note}
       code: |
         return "hold: " + inputs["note"]
-      output: str
+      output: !str
   output:
     action: ${d.output.action}
     trade: ${place_buy.output | __call_0.output | log_hold.output}

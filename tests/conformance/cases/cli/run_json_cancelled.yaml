@@ -8,7 +8,7 @@ flow: |
       tool_id: ask
       input:
         prompt: "Proceed?"
-      output: str
+      output: !str
   output: ${ok.output}
 args: [run, flow.yaml, -w, "0", --log, run.jsonl, --json]
 expect:

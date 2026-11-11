@@ -18,7 +18,7 @@ flow: |
           input:
             st: ${input.st}
           output:
-            st: Rec3
+            st: !Rec3
           code: "return ({st: {a: \"x\", b: \"y\"}})"
       output: ${bump.output}
   input:
@@ -29,7 +29,7 @@ flow: |
       kind: code
       input:
         x: ${input.s}
-      output: Rec
+      output: !Rec
       code: "return ({a: \"x\"})"
     drive:
       kind: loop

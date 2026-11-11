@@ -11,7 +11,7 @@ flow: |2
       code: ./fixtures/compose_codefns.ts:double
       input:
         n: ${input.v}
-      output: int
+      output: !int
       asserts:
         - "output.field >= 0"
   output: ${x.output}

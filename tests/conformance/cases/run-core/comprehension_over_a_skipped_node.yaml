@@ -15,7 +15,7 @@ flow: |
       else: other
     maybe:
       kind: code
-      output: list(int)
+      output: !list(int)
       code: "return [1]"
     other:
       kind: code

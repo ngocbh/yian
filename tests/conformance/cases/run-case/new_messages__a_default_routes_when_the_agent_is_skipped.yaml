@@ -18,7 +18,7 @@ flow: |
       kind: agent
       system_prompt: Help.
       prompt: hi
-      output: str
+      output: !str
     skipped: !str not asked
     gate:
       kind: case

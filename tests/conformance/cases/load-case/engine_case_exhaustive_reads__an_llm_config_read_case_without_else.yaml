@@ -11,7 +11,7 @@ flow: |
       cases:
         - when: input.big
           then: slow
-    slow: {kind: code, output: str, code: "return 'model-big'"}
+    slow: {kind: code, output: !str, code: "return 'model-big'"}
     chat:
       kind: agent
       prompt: Go.

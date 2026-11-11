@@ -51,7 +51,7 @@ nodes:
   pick:
     kind: agent
     prompt: Pick a model.
-    output: str
+    output: !str
   chat:
     kind: agent
     prompt: Go.
@@ -76,7 +76,7 @@ nodes:
   pick:
     kind: agent
     prompt: Pick a model.
-    output: str
+    output: !str
     llm_config: {model: m0}
   open:
     kind: agent
@@ -225,7 +225,7 @@ nodes:
   pick:
     kind: agent
     prompt: Pick a model.
-    output: str
+    output: !str
     llm_config: {model: PICK_MODEL}
   chat:
     kind: agent
@@ -259,12 +259,12 @@ nodes:
     else: other
   pick:
     kind: code
-    output: str
+    output: !str
     code: |
       return "gpt-x"
   other:
     kind: code
-    output: str
+    output: !str
     code: |
       return "no"
   chat:

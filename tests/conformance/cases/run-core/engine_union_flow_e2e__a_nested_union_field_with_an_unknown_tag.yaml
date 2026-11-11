@@ -20,8 +20,8 @@ flow: |2
       code: |
         return inputs["value"]
       output:
-        decision: Decision
-        notes: list(Note)
+        decision: !Decision
+        notes: !list(Note)
   output: ${d.output}
 inputs:
   value:
@@ -38,7 +38,7 @@ expect:
       code: contract.output
       frames:
       - label: flow.yaml
-        range: [21, 17, 21, 25]
+        range: [21, 17, 21, 26]
       message: 'output at decision.action: "bid" is not a tag of the union (expected one of ["buy","sell"])'
       node: d
   trace:
@@ -79,7 +79,7 @@ expect:
         code: contract.output
         frames:
         - label: flow.yaml
-          range: [21, 17, 21, 25]
+          range: [21, 17, 21, 26]
         message: 'output at decision.action: "bid" is not a tag of the union (expected one of ["buy","sell"])'
         node: d
   events:
@@ -102,7 +102,7 @@ expect:
         code: contract.output
         frames:
         - label: flow.yaml
-          range: [21, 17, 21, 25]
+          range: [21, 17, 21, 26]
         message: 'output at decision.action: "bid" is not a tag of the union (expected one of ["buy","sell"])'
         node: d
   - - RunFailed
@@ -110,6 +110,6 @@ expect:
         code: contract.output
         frames:
         - label: flow.yaml
-          range: [21, 17, 21, 25]
+          range: [21, 17, 21, 26]
         message: 'output at decision.action: "bid" is not a tag of the union (expected one of ["buy","sell"])'
         node: d

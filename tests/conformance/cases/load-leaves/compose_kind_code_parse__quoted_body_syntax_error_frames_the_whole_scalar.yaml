@@ -1,7 +1,7 @@
 # `return (` is a syntax error; a non-literal `code:` scalar puts the frame on the whole scalar
 # (seed_e30 frames a block line).
 kind: load
-# `output: str`, a valid type: CODE is checked after assembly, so an invalid output type would be
+# `output: !str`, a valid type: CODE is checked after assembly, so an invalid output type would be
 # reported before the syntax error.
 flow: |
   id: syntax-fallback
@@ -9,7 +9,7 @@ flow: |
   nodes:
     broken:
       kind: code
-      output: str
+      output: !str
       code: "return (\n"
   output: ${broken.output}
 expect:

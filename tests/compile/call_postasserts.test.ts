@@ -35,8 +35,8 @@ nodes:
     input:
       topic: \${input.topic}
     output:
-      report: str
-      n: int
+      report: !str
+      n: !int
     code: ./fixtures/compose_codefns.ts:make_report
 output:
   report: \${emit.output.report}
@@ -131,7 +131,7 @@ nodes:
     tool_id: ask
     input:
       prompt: "Approve \${input.action}?"
-    output: str
+    output: !str
 output: \${approve.output}
 `;
 

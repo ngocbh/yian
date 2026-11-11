@@ -1,0 +1,20 @@
+kind: load
+flow: |
+  id: e
+  name: e
+  typedefs:
+    T: 'Literal("\uD800", a)'
+  input:
+    n: !int
+  output: !T
+  kind: code
+  code: |
+    return 1
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "bad typedefs: typedef 'T': Literal member '\\ud800' in 'Literal(\"\\\\uD800\", a)' contains a Unicode surrogate (tags must be valid UTF-8 text)"
+      frames:
+      - label: flow.yaml
+        range: [4, 3, 4, 4]

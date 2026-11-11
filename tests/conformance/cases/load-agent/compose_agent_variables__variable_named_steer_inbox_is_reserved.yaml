@@ -13,7 +13,7 @@ flow: |
       steer_inbox: ${input.notes}
       variables:
         __steer_inbox: !str hello
-      output: str
+      output: !str
   output: ${chat.output}
 expect:
   load:

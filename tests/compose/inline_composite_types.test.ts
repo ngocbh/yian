@@ -287,7 +287,7 @@ nodes:
         kind: code
         input:
           xs: \${input.xs}
-        output: int
+        output: !int
         code: return 1
     output: \${echo.output}
 output: \${wrap.output}

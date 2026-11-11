@@ -14,7 +14,7 @@ flow: |
           kind: code
           input:
             w: ${input.v.z}
-          output: str
+          output: !str
           code: return 'x'
       output: ${inner.output}
   output: ${c.output}

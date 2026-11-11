@@ -11,7 +11,7 @@ flow: |
       kind: agent
       prompt: Help the user.
       steer_inbox: ${input.notes}
-      output: int
+      output: !int
   output: ${chat.output}
 expect:
   load: ok

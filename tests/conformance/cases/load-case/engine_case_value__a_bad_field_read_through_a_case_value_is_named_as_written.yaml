@@ -11,8 +11,8 @@ flow: |
         - when: input.big
           then: x
       else: y
-    x: {kind: code, output: {a: str}, code: "return {a: 'b'}"}
-    y: {kind: code, output: {a: str}, code: "return {a: 'c'}"}
+    x: {kind: code, output: {a: !str}, code: "return {a: 'b'}"}
+    y: {kind: code, output: {a: !str}, code: "return {a: 'c'}"}
   output:
     b: ${gate.output.nope}
 expect:

@@ -159,11 +159,11 @@ test.each(["score.output >= 0.5", "${score.output >= 0.5}"])(
     const text =
       "id: f\nname: f\ninput:\n  x: !float\nnodes:\n" +
       "  score:\n    kind: code\n    input:\n      x: ${input.x}\n" +
-      "    output: float\n    code: ./m.ts:fn\n" +
+      "    output: !float\n    code: ./m.ts:fn\n" +
       "  gate:\n    kind: case\n    cases:\n" +
       `      - when: "${when}"\n        then: hi\n    else: lo\n` +
-      '  hi:\n    kind: agent\n    prompt: "hi"\n    output: str\n' +
-      '  lo:\n    kind: agent\n    prompt: "lo"\n    output: str\n' +
+      '  hi:\n    kind: agent\n    prompt: "hi"\n    output: !str\n' +
+      '  lo:\n    kind: agent\n    prompt: "lo"\n    output: !str\n' +
       "output: ${hi.output | lo.output}\n";
 
     const edges = inferDataEdges(...leaves(SourceDocument.parse(text)));

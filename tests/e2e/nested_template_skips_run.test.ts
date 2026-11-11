@@ -31,12 +31,12 @@ const GATED_NODES = `
     else: rejected
   order:
     kind: code
-    output: str
+    output: !str
     code: |
       return "filled"
   rejected:
     kind: code
-    output: str
+    output: !str
     code: |
       return "no"
 `;
@@ -178,12 +178,12 @@ defs:
         else: rejected
       order:
         kind: code
-        output: str
+        output: !str
         code: |
           return "filled"
       rejected:
         kind: code
-        output: str
+        output: !str
         code: |
           return "no"
       c:

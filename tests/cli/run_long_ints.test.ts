@@ -21,7 +21,7 @@ nodes:
     kind: code
     input:
       xs: \${input.xs}
-    output: list(int)
+    output: !list(int)
     code: return inputs.xs
 output: \${echo.output}
 `;
@@ -35,7 +35,7 @@ nodes:
     kind: code
     input:
       n: \${input.n}
-    output: int
+    output: !int
     code: return inputs.n
 output: \${echo.output}
 `;

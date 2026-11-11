@@ -12,12 +12,12 @@ flow: |
       else: other
     pick:
       kind: code
-      output: str
+      output: !str
       code: |
         return "gpt-x"
     other:
       kind: code
-      output: str
+      output: !str
       code: |
         return "no"
     chat:

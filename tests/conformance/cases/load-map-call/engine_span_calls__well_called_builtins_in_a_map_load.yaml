@@ -8,7 +8,7 @@ flow: |2
     body:
       input: {item: !str }
       nodes:
-        s: {kind: code, code: "return inputs['n']", input: {n: '${input.item}'}, output: str}
+        s: {kind: code, code: "return inputs['n']", input: {n: '${input.item}'}, output: !str}
       output: ${s.output}
   nodes:
     m: {kind: map, over: '${[upper(input.v)]}', call: body, input: {item: '${lower(item)}'}}

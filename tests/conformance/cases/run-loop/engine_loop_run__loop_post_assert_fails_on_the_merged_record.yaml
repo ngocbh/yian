@@ -28,8 +28,8 @@ flow: |2
             talking_to: ${input.talking_to}
             n: ${input.n}
           output:
-            n: int
-            done: bool
+            n: !int
+            done: !bool
       output: ${step.output}
   nodes:
     loop:

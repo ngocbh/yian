@@ -8,7 +8,7 @@ flow: |
       tags: lst(str)
   input:
     s: !Signal
-  output: float
+  output: !float
   kind: code
   code: |
     return inputs["s"]["score"]

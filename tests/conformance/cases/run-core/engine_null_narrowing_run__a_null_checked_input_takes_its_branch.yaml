@@ -18,7 +18,7 @@ flow: |2
           code: ./fixtures/compose_codefns.ts:echo
           input:
             topic: ${input.item.qty}
-          output: int
+          output: !int
       output: ${d.output}
   nodes:
     gate:
@@ -37,7 +37,7 @@ flow: |2
       code: ./fixtures/compose_codefns.ts:echo
       input:
         topic: 0
-      output: int
+      output: !int
   output: ${use.output :- skip.output}
 inputs:
   item: null

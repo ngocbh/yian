@@ -12,7 +12,7 @@ flow: |
       steer_inbox:
         render: |-
           From the owner: ${event}
-      output: str
+      output: !str
   output: ${chat.output}
 expect:
   load:

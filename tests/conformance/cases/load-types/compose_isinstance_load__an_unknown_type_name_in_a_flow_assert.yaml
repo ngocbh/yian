@@ -14,7 +14,7 @@ flow: |
       kind: code
       input:
         order: ${input.order}
-      output: Order
+      output: !Order
       code: |
         return inputs["order"]
   output: ${d.output}

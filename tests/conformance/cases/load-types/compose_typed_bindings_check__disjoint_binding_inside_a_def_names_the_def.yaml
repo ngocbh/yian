@@ -8,7 +8,7 @@ flow: |2
       nodes:
         note:
           kind: code
-          output: str
+          output: !str
           code: |
             return "hi"
         use:

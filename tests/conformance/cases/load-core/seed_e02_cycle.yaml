@@ -16,13 +16,13 @@ flow: |
       kind: agent
       input:
         x: ${b.output}          # a depends on b ...
-      output: str
+      output: !str
       prompt: "Echo ${x}."
     b:
       kind: agent
       input:
         x: ${a.output}          # ... and b depends on a -> cycle
-      output: str
+      output: !str
       prompt: "Echo ${x}."
 
   output: ${a.output}

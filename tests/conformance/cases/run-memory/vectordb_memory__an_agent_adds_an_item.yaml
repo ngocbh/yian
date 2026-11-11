@@ -20,7 +20,7 @@ flow: |
       tools: [{cases: [add]}]
       system_prompt: Help.
       prompt: "<memory>${cases}</memory> Keep the outage."
-      output: str
+      output: !str
   output: ${keep.output}
 run: {run_id: r1, num_workers: 0}
 host:

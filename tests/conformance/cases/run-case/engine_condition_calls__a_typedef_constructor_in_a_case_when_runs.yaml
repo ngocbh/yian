@@ -14,8 +14,8 @@ flow: |2
         - when: "Small(input.v) > 4"
           then: hot
       else: cold
-    hot: {kind: code, code: "return 'hot'", output: str}
-    cold: {kind: code, code: "return 'cold'", output: str}
+    hot: {kind: code, code: "return 'hot'", output: !str}
+    cold: {kind: code, code: "return 'cold'", output: !str}
   output: ${hot.output | cold.output}
 inputs:
   v: 7

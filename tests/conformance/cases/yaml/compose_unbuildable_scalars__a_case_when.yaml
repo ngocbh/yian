@@ -14,7 +14,7 @@ flow: |
       else: x
     x:
       kind: code
-      output: str
+      output: !str
       code: |
         return 'x'
   output: ${route.output}

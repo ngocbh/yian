@@ -29,7 +29,7 @@ flow: |
       input:
         topic:   ${input.topic}
         window: ${input.window}
-      output: str
+      output: !str
       prompt: "Write a one-line note on ${topic} over ${window} days. No advice."
 
   output: ${note.output}

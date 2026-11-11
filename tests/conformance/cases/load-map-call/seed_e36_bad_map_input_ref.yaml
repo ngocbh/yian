@@ -23,7 +23,7 @@ flow: |
           kind: code
           input:
             item: ${input.item}
-          output: int
+          output: !int
           code: "return {'output': 1}"
       output: ${double.output}
   nodes:

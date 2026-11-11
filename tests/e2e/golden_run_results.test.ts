@@ -44,7 +44,7 @@ nodes:
     tool_id: ask
     input:
       prompt: "approve? (approve/reject)"
-    output: Approval
+    output: !Approval
   gate:
     kind: case
     on: \${approve.output}
@@ -62,13 +62,13 @@ nodes:
     depends_on: [settle]
     input:
       answer: \${approve.output}
-    output: str
+    output: !str
     code: ./fixtures/seeds.ts:confirm_action
   abort:
     kind: code
     input:
       answer: \${approve.output}
-    output: str
+    output: !str
     code: ./fixtures/seeds.ts:confirm_action
 output: \${confirm.output | abort.output}
 `;
@@ -92,7 +92,7 @@ nodes:
     kind: code
     input:
       x: \${input.x}
-    output: str
+    output: !str
     code: ./fixtures/compose_codefns.ts:echo_x
 output: \${n.output}
 `;
@@ -120,8 +120,8 @@ nodes:
       topic: \${input.topic}
       window: \${input.window}
     output:
-      report: str
-      n: int
+      report: !str
+      n: !int
     code: ./fixtures/compose_codefns.ts:make_report
 output:
   report: \${emit.output.report}
@@ -149,7 +149,7 @@ nodes:
     kind: code
     input:
       topic: \${input.x}
-    output: str
+    output: !str
     code: ./fixtures/compose_codefns.ts:echo
 `;
 
@@ -163,7 +163,7 @@ nodes:
     kind: code
     input:
       topic: \${input.x}
-    output: str
+    output: !str
     code: ./fixtures/compose_codefns.ts:echo
 output: \${n.output}
 `;
@@ -179,8 +179,8 @@ nodes:
     input:
       topic: \${input.x}
     output:
-      report: str
-      n: int
+      report: !str
+      n: !int
     code: ./fixtures/compose_codefns.ts:make_report
 output:
   report: \${n.output.report}

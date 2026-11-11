@@ -28,7 +28,7 @@ flow: |
       kind: code
       input:
         s: ${input.s}
-      output: Decision
+      output: !Decision
       code: |
         if (inputs['s'] === 'buy')
             return {'action': 'buy', 'qty': 1, 'limit': 6.0, 'leg': {'type': 'market'}}
@@ -41,11 +41,11 @@ flow: |
       else: e
     t:
       kind: code
-      output: str
+      output: !str
       code: return 'branch'
     e:
       kind: code
-      output: str
+      output: !str
       code: return 'else'
   output: ${route.output}
 inputs:

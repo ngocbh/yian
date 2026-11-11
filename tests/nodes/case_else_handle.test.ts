@@ -35,8 +35,8 @@ nodes:
       - when: "input.n > 5"
         then: default
     else: small
-  default: {kind: code, code: "return 'big'", output: str}
-  small: {kind: code, code: "return 'small'", output: str}
+  default: {kind: code, code: "return 'big'", output: !str}
+  small: {kind: code, code: "return 'small'", output: !str}
 output: \${default.output | small.output}
 `;
 
@@ -51,7 +51,7 @@ nodes:
     cases:
       - when: "input.n > 5"
         then: default
-  default: {kind: code, code: "return 'big'", output: str}
+  default: {kind: code, code: "return 'big'", output: !str}
 output: \${default.output :- "none"}
 `;
 
@@ -68,8 +68,8 @@ nodes:
       - when: a
         then: default
     else: other
-  default: {kind: code, code: "return 'a'", output: str}
-  other: {kind: code, code: "return 'other'", output: str}
+  default: {kind: code, code: "return 'a'", output: !str}
+  other: {kind: code, code: "return 'other'", output: !str}
 output: \${default.output | other.output}
 `;
 
@@ -121,7 +121,7 @@ test("the else handle is no possible node id", async () => {
 id: f
 name: f
 nodes:
-  "#else": {kind: code, code: "return 1", output: int}
+  "#else": {kind: code, code: "return 1", output: !int}
 output: \${#else.output}
 `;
   const error = await loadErrorAsync(loadFlow(flow));
@@ -180,7 +180,7 @@ nodes:
     cases:
       - when: "input.n > 5"
         then: big
-  big: {kind: code, code: "return 'big'", output: str}
+  big: {kind: code, code: "return 'big'", output: !str}
 output: \${big.output :- "none"}
 `;
 

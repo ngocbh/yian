@@ -130,7 +130,7 @@ nodes:
     tools: [save, look, note, hold, wait]
     steer_inbox: \${input.notes}
     prompt: hi
-    output: Optional(str)
+    output: !Optional(str)
 output: \${writer.output}
 `;
 

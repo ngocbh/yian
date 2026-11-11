@@ -9,7 +9,7 @@ flow: |
   nodes:
     compute:
       kind: code
-      output: int
+      output: !int
       code: ./fixtures/seeds.ts:const_one
       asserts:
         - output < 0

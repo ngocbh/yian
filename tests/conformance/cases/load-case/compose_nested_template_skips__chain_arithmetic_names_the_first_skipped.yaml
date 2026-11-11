@@ -14,22 +14,22 @@ flow: |2
       else: c
     a:
       kind: code
-      output: int
+      output: !int
       code: |
         return 1
     b:
       kind: code
-      output: int
+      output: !int
       code: |
         return 1
     c:
       kind: code
-      output: int
+      output: !int
       code: |
         return 1
     e:
       kind: code
-      output: int
+      output: !int
       code: |
         return 1
     d:

@@ -92,7 +92,7 @@ nodes:
     kind: code
     input:
       command: \${input.command}
-    output: str
+    output: !str
     code: |
       return String(eval(inputs.command));
 output: \${run.output}
@@ -130,7 +130,7 @@ nodes:
         kind: agent
         input:
           text: \${input.text}
-        output: {text: str, good: bool}
+        output: {text: !str, good: !bool}
         prompt: Improve this text; say whether it is good now. \${text}
     output:
       text: \${better.output.text}

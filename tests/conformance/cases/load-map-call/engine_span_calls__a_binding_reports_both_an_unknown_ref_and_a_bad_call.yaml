@@ -5,7 +5,7 @@ flow: |2
   name: f
   input: {v: !str }
   nodes:
-    x: {kind: code, code: "return inputs['n']", input: {n: '${upper(input.nosuch, 1)}'}, output: str}
+    x: {kind: code, code: "return inputs['n']", input: {n: '${upper(input.nosuch, 1)}'}, output: !str}
   output: ${x.output}
 expect:
   load:

@@ -23,7 +23,7 @@ flow: |
       kind: agent
       input:
         topic: ${input.topic}
-      output: float
+      output: !float
       prompt: "Rate ${topic}'s near-term relevance as a single number in [-1, 1]. Output only the number."
 
     gate:
@@ -37,14 +37,14 @@ flow: |
       kind: agent
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       prompt: "Write a neutral pro case for ${topic} in 3 sentences. No advice."
 
     cautious:
       kind: agent
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       prompt: "Write a neutral cautionary note for ${topic} in 3 sentences. No advice."
 
   # ${gate.output} = the taken branch's value — desugars to ${positive.output | cautious.output}.

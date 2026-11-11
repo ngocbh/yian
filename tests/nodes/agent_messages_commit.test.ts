@@ -45,6 +45,7 @@ import { advance, foldRunLog, replayRunLog, runFlow } from "../../src/run.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { logJson } from "../../src/typesys/json.ts";
 import { crashAfter, NO_ENV, serving, textReply } from "../helpers/run_state_fixtures.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 const root = mkdtempSync(join(tmpdir(), "yian-agent-messages-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -65,7 +66,7 @@ nodes:
     kind: agent
     tools: [${tools.join(", ")}]
     prompt: hi
-    output: ${output}
+    output: ${outputTag(output)}
   after:
     kind: code
     input:
@@ -435,7 +436,7 @@ defs:
         input:
           n: \${input.n}
         prompt: turn \${n}
-        output: str
+        output: !str
     output:
       n: \${input.n}
 nodes:

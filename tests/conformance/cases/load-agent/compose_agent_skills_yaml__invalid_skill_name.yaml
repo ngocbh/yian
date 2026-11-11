@@ -7,7 +7,7 @@ flow: |
       kind: agent
       prompt: Review the change.
       skills: [Code_Review]
-      output: str
+      output: !str
   output: ${review.output}
 expect:
   load:

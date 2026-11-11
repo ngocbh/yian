@@ -6,7 +6,7 @@ flow: |
   nodes:
     up:
       kind: code
-      output: int
+      output: !int
       code: "return 1"
     ask:
       kind: tool

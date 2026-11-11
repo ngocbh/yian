@@ -9,7 +9,7 @@ flow: |
       kind: code
       input:
         s: ${input.s}
-      output: Any
+      output: !Any
       code: |
         return "a"
     route:
@@ -21,11 +21,11 @@ flow: |
       else: miss
     hit:
       kind: code
-      output: str
+      output: !str
       code: return 'hit'
     miss:
       kind: code
-      output: str
+      output: !str
       code: return 'miss'
   output: ${hit.output | miss.output}
 inputs:

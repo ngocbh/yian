@@ -9,7 +9,7 @@ flow: |
       variables:
         password: !str hunter2
       prompt: hi
-      output: str
+      output: !str
   output: ${writer.output}
 other: |
   id: f
@@ -20,7 +20,7 @@ other: |
       variables:
         password: !str hunter3
       prompt: hi
-      output: str
+      output: !str
   output: ${writer.output}
 expect:
   fingerprint: different

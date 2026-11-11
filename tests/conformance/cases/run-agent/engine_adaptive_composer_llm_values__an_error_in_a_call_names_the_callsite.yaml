@@ -16,7 +16,7 @@ flow: |
               model: m
       output: ${ask.output}
   nodes:
-    pick: {kind: code, output: str, code: "return 'nope'"}
+    pick: {kind: code, output: !str, code: "return 'nope'"}
     sub:
       kind: call
       call: child

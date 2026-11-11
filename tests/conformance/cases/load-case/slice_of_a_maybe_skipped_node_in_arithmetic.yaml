@@ -14,17 +14,17 @@ flow: |
       else: rejected
     maybe:
       kind: code
-      output: list(int)
+      output: !list(int)
       code: |
         return [1, 2]
     rejected:
       kind: code
-      output: str
+      output: !str
       code: |
         return "no"
     use:
       kind: code
-      output: list(int)
+      output: !list(int)
       input:
         q: ${maybe.output[1:] + input.xs}
       code: |

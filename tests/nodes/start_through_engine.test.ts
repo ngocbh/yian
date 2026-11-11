@@ -99,7 +99,7 @@ defs:
         code: ./compose_codefns.ts:double
         input:
           n: \${input.n}
-        output: int
+        output: !int
     output: \${x.output}
     asserts:
       - "input.n >= 0"
@@ -154,7 +154,7 @@ nodes:
     kind: code
     input:
       x: \${input.age}
-    output: int
+    output: !int
     code: ./compose_codefns.ts:echo_x
 output: \${n.output}
 asserts:
@@ -189,7 +189,7 @@ nodes:
     kind: code
     input:
       x: \${input.n}
-    output: int
+    output: !int
     code: ./compose_codefns.ts:echo_x
 output: \${echo.output}
 `;
@@ -212,8 +212,8 @@ nodes:
       topic: \${input.topic}
       window: \${input.window}
     output:
-      report: str
-      n: int
+      report: !str
+      n: !int
     code: ./compose_codefns.ts:make_report
 output:
   report: \${emit.output.report}

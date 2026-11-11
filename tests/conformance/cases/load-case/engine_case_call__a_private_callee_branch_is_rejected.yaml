@@ -8,7 +8,7 @@ flow: |
       code: ./fixtures/compose_codefns.ts:echo
       input:
         topic: safe
-      output: str
+      output: !str
     gate:
       kind: case
       cases:

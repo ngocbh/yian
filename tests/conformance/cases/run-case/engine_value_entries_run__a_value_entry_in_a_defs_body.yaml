@@ -16,12 +16,12 @@ flow: |
   nodes:
     a:
       kind: code
-      output: int
+      output: !int
       code: |
         return 2
     b:
       kind: code
-      output: int
+      output: !int
       code: |
         return 3
     x: !object call(g, n=${a.output})

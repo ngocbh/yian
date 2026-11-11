@@ -304,8 +304,8 @@ defs:
           n: \${input.n}
           exited: \${input.exited}
         output:
-          n: int
-          exited: bool
+          n: !int
+          exited: !bool
     output: \${step.output}
 nodes:
   chat_loop:

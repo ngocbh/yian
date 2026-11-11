@@ -15,7 +15,7 @@ flow: |
   x-owner: ngocbh                  # custom metadata — opaque to the engine
   x-agent-defaults: &agent_defaults    # parked under x- so the strict schema ignores it
     kind: agent
-    output: str
+    output: !str
     llm_config:
       provider: anthropic
       anthropic:

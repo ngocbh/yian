@@ -21,8 +21,8 @@ flow: |
       input:
         topic: ${input.topic}
       output:                    # an OBJECT type (this node returns one object = a record)
-        rating: float             #   a relevance-ish score in [-1, 1]
-        rationale: str
+        rating: !float            #   a relevance-ish score in [-1, 1]
+        rationale: !str
       # A structured AGENT is constrained to emit exactly these typed fields; the
       # declaration is the node's output contract.
       prompt: |-
@@ -34,7 +34,7 @@ flow: |
       input:                     # sink bindings — dot into the object output of `score`
         rating: ${score.output.rating}
         rationale: ${score.output.rationale}
-      output: str
+      output: !str
       code: ./fixtures/seeds.ts:one_line_summary   # file:function (flat kind-field)
 
   output:

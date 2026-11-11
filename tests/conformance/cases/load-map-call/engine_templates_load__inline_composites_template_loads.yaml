@@ -18,7 +18,7 @@ flow: |
           kind: code
           input:
             value: ${input.value}
-          output: int
+          output: !int
           code: |
             return inputs["value"] + 1
       output: ${increment.output}
@@ -33,7 +33,7 @@ flow: |
           kind: code
           input:
             value: ${input.value}
-          output: int
+          output: !int
           code: |
             return inputs["value"] * 2
       output: ${double.output}
@@ -49,7 +49,7 @@ flow: |
           input:
             n: ${input.n}
           output:
-            n: int
+            n: !int
           code: |
             return {"n": inputs["n"] + 1}
       output: ${bump.output}

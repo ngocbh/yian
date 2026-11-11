@@ -9,7 +9,7 @@ flow: |
       kind: agent
       input:
         name: ${input.name}
-      output: {name: str, score: int}
+      output: {name: !str, score: !int}
       llm_config: {provider: openai, model: gpt-5.5}
       prompt: "Score ${name}."
   output: ${score.output}

@@ -36,14 +36,14 @@ nodes:
     kind: code
     input:
       name: ${input.name}
-    output: str
+    output: !str
     code: |
       return "hi " + inputs.name
   shout:
     kind: code
     input:
       text: ${greet.output}
-    output: str
+    output: !str
     code: |
       return inputs.text.toUpperCase()
 output: ${shout.output}

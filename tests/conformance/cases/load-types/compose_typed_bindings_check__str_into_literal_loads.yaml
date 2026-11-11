@@ -10,7 +10,7 @@ flow: |2
       kind: code
       code: |
         return "a"
-      output: str
+      output: !str
     use:
       kind: code
       code: ./fixtures/compose_codefns.ts:echo_x

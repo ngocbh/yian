@@ -220,8 +220,10 @@ ends. See [Agents](/agents/) for the file format.
   are dropped from what prints. Piped or redirected output keeps every byte.
 
 A load error shows where the flow broke: the lines around it, the line marked `❱`, and the message
-below. A runtime error points at the line it came from the same way. Add `--engine-trace` only to
-debug yian itself.
+below. A span of more than 10 lines shows its first and last 4 lines around a `⋮ N lines` row, and
+a line wider than the terminal (200 columns when stderr isn't one) is cut with `…` around the error.
+A runtime error points at the line it came from the same way. Add `--engine-trace` only to debug
+yian itself.
 
 ### Stopping a run
 

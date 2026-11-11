@@ -1,4 +1,4 @@
-# A memory grant rides the reserved wiring `__memory_<input>`, so no node input takes that name.
+# A memory grant rides the reserved wiring `__memory_<input>`; no node input may start with `__`.
 kind: load
 flow: |
   id: f
@@ -18,11 +18,7 @@ expect:
   load:
     diagnostics:
       - code: compose.load
-        message: input '__memory_lessons' is reserved for memory grants; rename the input
+        message: "node 'a' input '__memory_lessons' starts with '__', which yian keeps for the names it generates; rename it"
         frames:
           - label: flow.yaml
-            range:
-              - 12
-              - 25
-              - 12
-              - 41
+            range: [12, 7, 12, 23]

@@ -1422,11 +1422,18 @@ export async function loadFlowFile(
     diagnostics,
     cursor: root,
   });
-  // A collision is reported before a colliding alias's broken target.
-  const collide = Object.keys(f.uses)
-    .filter((alias) => Object.hasOwn(f.nodes, alias))
-    .sort(compareCodeUnits);
-  if (collide.length > 0) throw diagnostics.error(`uses: alias ${writeAsText(collide)} collides with a node id`);
+  // A callable named like a node reads as that node in `call:`, so neither section may take a node
+  // id. A collision is reported before a colliding callable's broken body or target.
+  for (const [section, noun, names] of [
+    ["uses", "alias", Object.keys(f.uses)],
+    ["defs", "name", Object.keys(f.defs)],
+  ] as const) {
+    const collide = names.filter((name) => Object.hasOwn(f.nodes, name)).sort(compareCodeUnits);
+    if (collide.length === 0) continue;
+    throw diagnostics.error(`${section}: ${noun} ${writeAsText(collide)} collides with a node id`, {
+      range: root.has(section) ? root.child(section).keyRangeOf(collide[0]!) : null,
+    });
+  }
   // Imports load before anything assembles, so assembly reads every alias from the memo.
   for (const alias of Object.keys(f.uses)) await scope.resolveAlias(alias);
 

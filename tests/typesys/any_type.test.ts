@@ -259,20 +259,20 @@ describe("Any values", () => {
 
   test.each<[string, unknown, string, (string | number)[]]>([
     ["null", null, "null does not match declared type Any", []],
-    ["a Set", new Set([1n, 2n]), "<Set object> is not a JSON value", []],
-    ["bytes", new Uint8Array([120]), "<Uint8Array object> is not a JSON value", []],
-    ["a Date", new Date(0), "<Date object> is not a JSON value", []],
-    ["a Map", new Map(), "<Map object> is not a JSON value", []],
-    ["undefined", undefined, "undefined is not a JSON value", []],
+    ["a Set", new Set([1n, 2n]), "Set is not a yian value", []],
+    ["bytes", new Uint8Array([120]), "Uint8Array is not a yian value", []],
+    ["a Date", new Date(0), "Date is not a yian value", []],
+    ["a Map", new Map(), "Map is not a yian value", []],
+    ["undefined", undefined, "undefined is not a yian value; use null", []],
     [
       "a file",
       new FileRef({ uri: "f" }),
       '{"uri":"f","mime":null,"name":null} is not a JSON value',
       [],
     ],
-    ["a class instance", new Foo(), "<Foo object> is not a JSON value", []],
-    ["a nested Set", { a: new Set([1n]) }, "<Set object> is not a JSON value", ["a"]],
-    ["a Set in a list", { a: [1n, new Set([2n])] }, "<Set object> is not a JSON value", ["a", 1]],
+    ["a class instance", new Foo(), "Foo is not a yian value", []],
+    ["a nested Set", { a: new Set([1n]) }, "Set is not a yian value", ["a"]],
+    ["a Set in a list", { a: [1n, new Set([2n])] }, "Set is not a yian value", ["a", 1]],
   ])("Any rejects a non-JSON value at its path: %s", (_id, value, message, path) => {
     const error = typeCheckError(() => buildValueAs(ANY, value));
     expect(error.message).toBe(message);
@@ -303,7 +303,7 @@ describe("Any values", () => {
     const error = typeCheckError(() =>
       buildValueAs(ANY, { a: [1n, new Set([2n])], b: new Map() }),
     );
-    expect(error.message).toBe("<Set object> is not a JSON value");
+    expect(error.message).toBe("Set is not a yian value");
     expect(error.path).toEqual(["a", 1]);
   });
 
@@ -318,7 +318,7 @@ describe("Any values", () => {
     ["a Date", { d: new Date(0) }, ["d"]],
   ])("object rejects a non-JSON member: %s", (_id, value, path) => {
     const error = typeCheckError(() => buildValueAs(ValueKind.OBJECT, value));
-    expect(error.message).toContain("is not a JSON value");
+    expect(error.message).toContain("is not a yian value");
     expect(error.path).toEqual(path);
   });
 
@@ -332,7 +332,7 @@ describe("Any values", () => {
   test("an elementless list(Any) checks its items are JSON values", () => {
     expect(buildValueAs(ValueKind.LIST_ANY, [1n, null, "x"]).value).toEqual([1n, null, "x"]);
     const error = typeCheckError(() => buildValueAs(ValueKind.LIST_ANY, [new Set([1n])]));
-    expect(error.message).toContain("is not a JSON value");
+    expect(error.message).toContain("is not a yian value");
     expect(error.path).toEqual([0]);
   });
 
@@ -853,9 +853,9 @@ describe("an array whose prototype was swapped", () => {
     expect(error.path).toEqual([]);
   });
 
-  test("Any refuses it as not a JSON value", () => {
+  test("Any refuses it as not a yian value", () => {
     const error = typeCheckError(() => buildValueAs(ValueKind.ANY, swapped()));
-    expect(error.message).toBe("<Object object> is not a JSON value");
+    expect(error.message).toBe("Object is not a yian value");
     expect(error.path).toEqual([]);
   });
 });

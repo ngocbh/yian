@@ -145,8 +145,8 @@ test.each<[string, unknown, unknown, unknown, new (...args: never[]) => Error, s
   ["text", "a", 1, "text", TypeError, "node step must be a JSON object", null],
   ["null", "a", 1, null, TypeError, "node step must be a JSON object", null],
   ["NaN", "a", 1, { kind: "x", retry_in: NaN }, TypeCheckError, "NaN is not a yian value", ["retry_in"]],
-  ["a class instance", "a", 1, { kind: "x", when: new Thing() }, TypeCheckError, "<Thing object> is not a JSON value", ["when"]],
-  ["a Set", "a", 1, { kind: "x", items: new Set([1, 2]) }, TypeCheckError, "<Set object> is not a JSON value", ["items"]],
+  ["a class instance", "a", 1, { kind: "x", when: new Thing() }, TypeCheckError, "Thing is not a yian value", ["when"]],
+  ["a Set", "a", 1, { kind: "x", items: new Set([1, 2]) }, TypeCheckError, "Set is not a yian value", ["items"]],
   [
     "a FileRef",
     "a",

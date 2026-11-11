@@ -1,0 +1,19 @@
+kind: run
+# parse_json's result is untyped; a constructor checks it as the flow's type.
+flow: |
+  id: f
+  name: f
+  typedefs:
+    Finding: {title: str, score: float}
+  input:
+    s: !str
+  nodes:
+    found: !Finding "${Finding(parse_json(input.s))}"
+  output: ${found.output.score}
+inputs: {s: '{"title": "slow login", "score": 0.5}'}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: 0.5

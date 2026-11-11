@@ -383,3 +383,162 @@ describe("numbers and lists", () => {
     expect(inferExprType(parseExpr(text), (path) => LISTS[path] ?? null)).toEqual(want);
   });
 });
+
+describe("sorting", () => {
+  const TASKS = [
+    { name: "b", qty: 2n },
+    { name: "a", qty: 1n },
+    { name: "c", qty: 2n },
+  ];
+
+  test.each<[string, ValueRecord, Value]>([
+    ["sorted([3, 1.5, true, -2])", {}, [-2n, true, 1.5, 3n]],
+    ["sorted(['b', 'B', '😀', '￿'])", {}, ["B", "b", "￿", "😀"]],
+    ["sorted([])", {}, []],
+    ["sorted([2, 1], reverse=true)", {}, [2n, 1n]],
+    // Stable, in both directions, as Python's `sorted` is.
+    ["sorted([1, 1.0, true])", {}, [1n, 1, true]],
+    ["sorted([1, 2, 1.0], reverse=true)", {}, [2n, 1n, 1]],
+    ['sorted(ts, by="qty")', { ts: TASKS }, [TASKS[1]!, TASKS[0]!, TASKS[2]!]],
+    ['sorted(ts, by="qty", reverse=true)', { ts: TASKS }, [TASKS[0]!, TASKS[2]!, TASKS[1]!]],
+    ['sorted(ts, "name")', { ts: TASKS }, [TASKS[1]!, TASKS[0]!, TASKS[2]!]],
+    ["sorted(xs, by=null)", { xs: [2n, 1n] }, [1n, 2n]],
+  ])("%s", (text, values, want) => {
+    expect(run(text, values)).toEqual(want);
+  });
+
+  test("sorted gives a new list", () => {
+    const xs = [2n, 1n];
+    expect(run("sorted(xs)", { xs })).toEqual([1n, 2n]);
+    expect(xs).toEqual([2n, 1n]);
+  });
+
+  test.each<[string, ValueRecord, string]>([
+    ["sorted(xs)", {}, "sorted() got null; give a default, e.g. `sorted(x :- [])`"],
+    ["sorted('ba')", {}, "sorted() takes a list, got str"],
+    ["sorted([1, null])", {}, "sorted() got a null item"],
+    ["sorted([1, 'a'])", {}, "sorted() can't compare int and str"],
+    ["sorted([[1]])", {}, "sorted() takes a list of numbers or texts, got a list item"],
+    ["sorted([1], reverse=1)", {}, "sorted() takes bool for reverse, got int"],
+    ["sorted([1], by=1)", {}, "sorted() takes str for by, got int"],
+    ['sorted([1], by="qty")', {}, "sorted() by 'qty' takes a list of records, got a int item"],
+    ['sorted(ts, by="qty")', { ts: [{ qty: 1n }, {}] }, "sorted() by 'qty' got an item with no 'qty'"],
+    ['sorted(ts, by="qty")', { ts: [{ qty: 1n }, { qty: null }] }, "sorted() by 'qty' got a null 'qty'"],
+    ['sorted(ts, by="qty")', { ts: [{ qty: 1n }, { qty: "2" }] }, "sorted() by 'qty' can't compare int and str"],
+    ['sorted(ts, by="qty")', { ts: [{ qty: [1n] }] }, "sorted() by 'qty' takes numbers or texts, got a list 'qty'"],
+  ])("%s fails", (text, values, message) => {
+    expect(failure(text, values)).toBe(`expression function 'sorted' failed: ${message}`);
+  });
+
+  const TYPES: Record<string, Type> = {
+    ints: new Type({ kind: ValueKind.LIST_INTEGER, element: Type.scalar(ValueKind.INTEGER) }),
+    maybe: new Type({ kind: ValueKind.LIST_STRING, element: Type.scalar(ValueKind.STRING), nullable: true }),
+  };
+
+  test.each<[string, Type | null]>([
+    ["sorted(ints)", TYPES["ints"]!],
+    ["sorted(maybe)", TYPES["maybe"]!.replace({ nullable: false })],
+    ["sorted(x)", null],
+  ])("%s is typed at load", (text, want) => {
+    expect(inferExprType(parseExpr(text), (path) => TYPES[path] ?? null)).toEqual(want);
+  });
+});
+
+describe("json", () => {
+  test.each<[string, Value]>([
+    ['{"a": [1, 2.5, true, null], "b": {"c": "é"}}', { a: [1n, 2.5, true, null], b: { c: "é" } }],
+    ["12345678901234567890", 12345678901234567890n],
+    ["2.0", 2],
+    ['"text"', "text"],
+    ["  [ ]  ", []],
+  ])("parse_json(%j)", (text, want) => {
+    const got = run("parse_json(s)", { s: text });
+    expect(got).toEqual(want);
+    if (text === "2.0") expect(typeof got).toBe("number");
+  });
+
+  test("parse_json reads back what render_as_json writes", () => {
+    const d = { a: [1n, 2.5, "x"], b: null };
+    expect(run("parse_json(render_as_json(d))", { d })).toEqual(d);
+  });
+
+  const NOT_JSON = "parse_json() got text that isn't JSON: ";
+
+  test.each<[string, ValueRecord, string]>([
+    ["parse_json(s)", {}, 'parse_json() got null; give a default, e.g. `parse_json(x :- "")`'],
+    ["parse_json(s)", { s: 1n }, "parse_json() takes str, got int"],
+    [
+      "parse_json(s)",
+      { s: '{"a": 1,}' },
+      `${NOT_JSON}Expecting property name enclosed in double quotes: line 1 column 9 (char 8)`,
+    ],
+    ["parse_json(s)", { s: "[1,\n 2" }, `${NOT_JSON}Expecting ',' delimiter: line 2 column 3 (char 6)`],
+    ["parse_json(s)", { s: "[NaN]" }, `${NOT_JSON}NaN is not JSON: line 1 column 2 (char 1)`],
+    [
+      "parse_json(s)",
+      { s: '{"a": 1, "a": 2}' },
+      `${NOT_JSON}duplicate JSON object key: "a": line 1 column 10 (char 9)`,
+    ],
+  ])("%s fails", (text, values, message) => {
+    expect(failure(text, values)).toBe(`expression function 'parse_json' failed: ${message}`);
+  });
+
+  test("parse_json refuses a value nested past the limit", () => {
+    expect(failure("parse_json(s)", { s: "[".repeat(200) + "]".repeat(200) })).toContain("nest");
+  });
+
+  test("parse_json's result is untyped, for a constructor to check", () => {
+    expect(inferExprType(parseExpr("parse_json(s)"), () => Type.scalar(ValueKind.STRING))).toBeNull();
+  });
+});
+
+describe("records", () => {
+  const R = { b: 2n, a: "x", "10": true, "9": null };
+
+  test.each<[string, Value]>([
+    ["keys(r)", ["10", "9", "a", "b"]],
+    ["values(r)", [true, null, "x", 2n]],
+    [
+      "items(r)",
+      [
+        { key: "10", value: true },
+        { key: "9", value: null },
+        { key: "a", value: "x" },
+        { key: "b", value: 2n },
+      ],
+    ],
+    ["keys(e)", []],
+  ])("%s gives the fields in key order", (text, want) => {
+    expect(run(text, { r: R, e: {} })).toEqual(want);
+  });
+
+  test.each<[string, ValueRecord, string]>([
+    ["keys(r)", {}, "keys() got null; read it only when it isn't, e.g. `keys(r) if r != null else []`"],
+    ["values(r)", { r: [1n] }, "values() takes a record, got list"],
+    ["items(r)", { r: "ab" }, "items() takes a record, got str"],
+  ])("%s fails", (text, values, message) => {
+    const name = text.slice(0, text.indexOf("("));
+    expect(failure(text, values)).toBe(`expression function '${name}' failed: ${message}`);
+  });
+
+  test.each<[string, Type]>([
+    ["keys(r)", new Type({ kind: ValueKind.LIST_STRING, element: Type.scalar(ValueKind.STRING) })],
+    ["values(r)", new Type({ kind: ValueKind.LIST_ANY, element: Type.scalar(ValueKind.ANY) })],
+    [
+      "items(r)",
+      new Type({
+        kind: ValueKind.LIST_OBJECT,
+        element: new Type({
+          kind: ValueKind.OBJECT,
+          fields: new Map([
+            ["key", Type.scalar(ValueKind.STRING)],
+            ["value", Type.scalar(ValueKind.ANY)],
+          ]),
+          required: new Set(["key", "value"]),
+        }),
+      }),
+    ],
+  ])("%s is typed at load", (text, want) => {
+    expect(inferExprType(parseExpr(text), () => null)).toEqual(want);
+  });
+});

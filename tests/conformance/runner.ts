@@ -2156,22 +2156,24 @@ async function resumeMemories(
 }
 
 /**
- * Return the files in the folder `root` but `.yian/`, by `/`-separated path, or `null` when there
- * is no folder.
+ * Return the files in the folder `root` but `.yian/`, by `/`-separated path sorted in code-unit
+ * order, or `null` when there is no folder.
  */
 function folderFiles(root: string): Case | null {
   if (!existsSync(root)) return null;
-  const files: Case = {};
+  const paths: string[] = [];
   const walk = (rel: string): void => {
     for (const entry of readdirSync(join(root, rel), { withFileTypes: true })) {
       const path = rel === "" ? entry.name : `${rel}/${entry.name}`;
       if (path === ".yian") continue;
       if (entry.isDirectory()) walk(path);
-      else files[path] = readFileSync(join(root, path), "utf8");
+      else paths.push(path);
     }
   };
   walk("");
-  return files;
+  // readdir's order is the file system's (unsorted on some, such as GPFS); the default sort
+  // compares UTF-16 code units, so a listing reads the same everywhere.
+  return Object.fromEntries(paths.sort().map((path) => [path, readFileSync(join(root, path), "utf8")]));
 }
 
 /**

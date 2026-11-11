@@ -512,6 +512,35 @@ test("a lone surrogate in on is refused at the value", () => {
   expect(error.diagnostic.frames.at(-1)!.range).toEqual(readerFor(text, "r").rangeOf("on")!);
 });
 
+test.each([
+  ["${input.v}", ", as in `when: input.k == input.v`"],
+  ["v-${input.v}", ""],
+  ["${input.v", ""],
+])("an on-form when holding a span is refused at that when: %s", (when, example) => {
+  const text =
+    "nodes:\n  r:\n    kind: case\n    on: ${input.k}\n    cases:\n      - when: a\n        then: b\n" +
+    `      - when: "${when}"\n        then: c\n`;
+
+  const error = loadError(() => CaseDescriptor.parse("r", readerFor(text, "r")));
+
+  expect(error.message).toBe(
+    `case node 'r': an on: case's \`when:\` is a literal, so \`when: ${when}\` would match that text ` +
+      `itself; to compare with a value, drop \`on:\` and write each \`when:\` as a condition${example}`,
+  );
+  expect(error.diagnostic.frames.at(-1)!.range).toEqual(
+    readerFor(text, "r").child("cases").child(1).child("when").range!,
+  );
+});
+
+test("an on-form when may hold an escaped dollar, and a searched when a span", () => {
+  const onForm =
+    'nodes:\n  r:\n    kind: case\n    on: ${input.k}\n    cases:\n      - when: "$${x}"\n        then: b\n';
+  const searched = "nodes:\n  g:\n    kind: case\n    cases:\n      - when: ${a.output > 1}\n        then: b\n";
+
+  expect(CaseDescriptor.parse("r", readerFor(onForm, "r")).cases[0]!["when"]).toBe("$${x}");
+  expect(CaseDescriptor.parse("g", readerFor(searched, "g")).cases[0]!["when"]).toBe("${a.output > 1}");
+});
+
 test("a lone surrogate in a searched when is refused at that when", () => {
   const text =
     "nodes:\n  g:\n    kind: case\n    cases:\n      - when: a.output\n        then: b\n" +

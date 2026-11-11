@@ -131,12 +131,14 @@ test.each(Object.keys(SITES).flatMap((site) => [101, CHAIN].map((depth) => [site
 );
 
 test(
-  "a deep case on match value is text and loads",
+  "a deep span in a case on match value is refused as a literal, not a nesting error",
   async () => {
-    // A match value under `on:` is compared as written, never evaluated.
+    // A match value under `on:` is a literal, so a span in it is refused before it is parsed.
     const text = routed('    on: ${input.s}\n    cases:\n      - when: "${' + neg(CHAIN) + '}"\n        then: yes\n');
-    const flow = await loadConformanceFlow(text);
-    expect((await runFlow(flow, { x: 1, s: "a" }, { env })).output).toBe("no");
+    const error = await loadErrorAsync(loadConformanceFlow(text));
+    expect(error.message).toContain("an on: case's `when:` is a literal");
+    expect(error.message.length).toBeLessThan(500);
+    expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(lineOf(text, "- when:"));
   },
   SLOW,
 );

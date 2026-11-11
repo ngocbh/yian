@@ -161,12 +161,31 @@ export function buildServer({ name = "fake", only, marker, flood }: FakeServerOp
   tool("pid", { description: "Return the server's process id." }, () => text(String(process.pid)));
   tool("exit_now", { description: "Exit the server process mid-call." }, () => process.exit(3));
   tool(
+    "exit_loudly",
+    { description: "Write a line naming `SECRET_TOKEN`'s value to stderr, then exit with code 3 mid-call." },
+    () => {
+      const secret = process.env.SECRET_TOKEN;
+      const line = `FATAL: database file /data/x.db is locked${secret === undefined ? "" : ` (token ${secret})`}\n`;
+      // Exits once the line is written: stderr is asynchronous on a macOS pipe.
+      process.stderr.write(line, () => process.exit(3));
+      return new Promise<never>(() => {});
+    },
+  );
+  tool("kill_self", { description: "Kill the server process with SIGKILL mid-call." }, () => {
+    process.kill(process.pid, "SIGKILL");
+    return text("");
+  });
+  tool(
     "answer_then_exit",
-    { description: 'Exit at once, leaving a `sh` that writes the answer "bye" 50 ms later.' },
-    (ctx) => {
+    {
+      description:
+        'Exit at once, leaving a `sh` that writes the answer "bye" 50 ms later and holds stdout `hold` seconds more.',
+      inputSchema: z.object({ hold: z.number().optional() }),
+    },
+    ({ hold = 0 }, ctx) => {
       // The `sh` holds stdout but not stderr, so stderr ends at the exit and the answer comes later.
       const answer = JSON.stringify({ jsonrpc: "2.0", id: ctx.mcpReq.id, result: text("bye") });
-      spawn("sh", ["-c", 'sleep 0.05; printf "%s\\n" "$ANSWER"'], {
+      spawn("sh", ["-c", `sleep 0.05; printf "%s\\n" "$ANSWER"; sleep ${hold}`], {
         env: { ...process.env, ANSWER: answer },
         stdio: ["ignore", "inherit", "ignore"],
       });

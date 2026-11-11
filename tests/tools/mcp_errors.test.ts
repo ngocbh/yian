@@ -206,7 +206,7 @@ describe("errors that end a call", () => {
   );
 
   test(
-    "a server that exits is closed and later calls fail at once",
+    "a server that exits is closed and later calls fail at once, naming the exit code",
     async () => {
       const server = await fake([], { label: "quitter" }).open();
       const set = tools(server);
@@ -214,12 +214,55 @@ describe("errors that end a call", () => {
       expect(error).toBeInstanceOf(McpServerClosed);
       expect(isPermanentToolError(error)).toBe(true);
       expect(isReportedToolError(error)).toBe(false);
-      expect(error.message).toBe("MCP server 'quitter' is closed");
+      expect(error.message).toBe("MCP server 'quitter' exited (code 3) during tool 'exit_now'");
       expect(server.isClosed).toBe(true);
       expect(server.isOpen).toBe(true);
       const { error: later, ended } = await timed(set.invoke("echo", { text: "x" }));
       expect(later).toBeInstanceOf(McpServerClosed);
+      expect(later!.message).toBe("MCP server 'quitter' exited (code 3)");
       expect(ended).toBeLessThan(0.5);
+    },
+    SLOW,
+  );
+
+  test(
+    "a server that exits during a call names its exit code and its last stderr lines",
+    async () => {
+      const server = await fake([], { label: "loud" }).open();
+      const set = tools(server);
+      const error = await rejection(set.invoke("exit_loudly", {}));
+      expect(error).toBeInstanceOf(McpServerClosed);
+      expect(error.message).toBe(
+        "MCP server 'loud' exited (code 3) during tool 'exit_loudly'\n" +
+          "server stderr:\nFATAL: database file /data/x.db is locked",
+      );
+      // A later call gets the exit code only, so the stderr isn't copied into every error.
+      expect((await rejection(set.invoke("echo", { text: "x" }))).message).toBe("MCP server 'loud' exited (code 3)");
+    },
+    SLOW,
+  );
+
+  test(
+    "a server killed during a call names the signal",
+    async () => {
+      const server = await fake([], { label: "killed" }).open();
+      const error = await rejection(tools(server).invoke("kill_self", {}));
+      expect(error).toBeInstanceOf(McpServerClosed);
+      expect(error.message).toBe("MCP server 'killed' was killed by SIGKILL during tool 'kill_self'");
+    },
+    SLOW,
+  );
+
+  test(
+    "every call in flight when the server exits names the tool it was running",
+    async () => {
+      const server = await fake([], { label: "busy" }).open();
+      const set = tools(server);
+      const waiting = rejection(set.invoke("slow", { seconds: 30 }));
+      await sleep(0.3);
+      const exited = await rejection(set.invoke("exit_now", {}));
+      expect(exited.message).toBe("MCP server 'busy' exited (code 3) during tool 'exit_now'");
+      expect((await waiting).message).toBe("MCP server 'busy' exited (code 3) during tool 'slow'");
     },
     SLOW,
   );
@@ -245,9 +288,12 @@ describe("errors that end a call", () => {
       const closing = server.close();
       const { error, ended } = await outcome;
       expect(error).toBeInstanceOf(McpServerClosed);
+      expect(error!.message).toBe("MCP server 'closing' is closed");
       expect(ended).toBeLessThan(0.3 + 3);
       await closing;
-      expect(await rejection(set.invoke("echo", { text: "x" }))).toBeInstanceOf(McpServerClosed);
+      const later = await rejection(set.invoke("echo", { text: "x" }));
+      expect(later).toBeInstanceOf(McpServerClosed);
+      expect(later.message).toBe("MCP server 'closing' is closed");
     },
     SLOW,
   );
@@ -315,6 +361,18 @@ describe("scrubbing the server's secrets", () => {
       expect(error).toBeInstanceOf(McpToolError);
       expect(error.message).toBe("secret: [REDACTED]");
       expect(error.cause).toBeUndefined();
+      expect(error.stack ?? "").not.toContain(secret);
+    },
+    SLOW,
+  );
+
+  test(
+    "an env value is scrubbed from the stderr of a server that exits during a call",
+    async () => {
+      const server = await fake([], { env: { SECRET_TOKEN: secret }, label: "leaky" }).open();
+      const error = await rejection(tools(server).invoke("exit_loudly", {}));
+      expect(error).toBeInstanceOf(McpServerClosed);
+      expect(error.message).toEndWith("\nserver stderr:\nFATAL: database file /data/x.db is locked (token [REDACTED])");
       expect(error.stack ?? "").not.toContain(secret);
     },
     SLOW,

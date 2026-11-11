@@ -163,7 +163,10 @@ export class McpTransportError extends McpError {
  * The MCP server is gone: yian closed it, its process, connection or session ended, or it sent a
  * message over `YIAN_MAX_MCP_MESSAGE_BYTES`, which the message then names.
  *
- * Later calls to the same server throw it at once; the host still closes it.
+ * For a stdio server that ended on its own, the message says how: its exit code or signal. A call
+ * in flight then also names its tool and ends with the last lines the server wrote to stderr,
+ * with the server's secrets scrubbed. Later calls to the same server throw it at once; the host
+ * still closes it.
  */
 export class McpServerClosed extends McpError {
   override name = "McpServerClosed";
@@ -435,6 +438,12 @@ function remember(error: unknown, init: RequestInit | undefined): never {
   }
   throw error;
 }
+
+/**
+ * The errors a stdio send waiting on a full pipe failed with: the server may have read some or
+ * all of its line, so the call counts as sent.
+ */
+const partlyWritten = new WeakSet<object>();
 
 const CR = 0x0d;
 const LF = 0x0a;
@@ -913,21 +922,23 @@ export class McpServer {
    */
   private callError(generation: Generation, name: string, error: unknown, signal: AbortSignal): Error {
     const label = this.label;
-    if (generation.closed || generation.gone) return this.closedError(generation);
-    if (signal.aborted) return cancelledError(name);
     const sdk = generation.sdk!;
     const code = error instanceof sdk.SdkError ? error.code : undefined;
+    // The tool is named only for a call the server may have been running.
+    const tool = neverSent(error, sdk) ? undefined : name;
+    if (generation.closed || generation.gone) return this.closedError(generation, tool);
+    if (signal.aborted) return cancelledError(name);
     if (code === sdk.SdkErrorCode.RequestTimeout) {
       return new McpTimeoutError(
         `MCP server '${label}' tool '${name}' timed out after ${secondsText(generation.callTimeout)} s`,
       );
     }
     if (code === sdk.SdkErrorCode.ConnectionClosed || code === sdk.SdkErrorCode.NotConnected) {
-      return this.closedError(generation);
+      return this.closedError(generation, tool);
     }
     if (code === undefined && error instanceof Error && error.message === "Not connected") {
-      // The SDK's own error for a request sent after the transport closed.
-      return this.closedError(generation);
+      // The SDK's own error for a request sent after the transport closed, or the transport's.
+      return this.closedError(generation, tool);
     }
     const failure = httpFailure(error, sdk);
     if (failure instanceof RedirectError) {
@@ -961,14 +972,25 @@ export class McpServer {
   }
 
   /**
-   * Mark `generation` gone, when given, and return the `McpServerClosed` a call throws; it names
-   * the message cap when a message past it closed the connection.
+   * Mark `generation` gone, when given, and return the `McpServerClosed` a call throws. It names
+   * the message cap when a message past it closed the connection. For a stdio server that ended
+   * on its own it says how; for `tool`, a call the server may have been running then, it also
+   * names the tool and adds the server's stderr tail.
    */
-  private closedError(generation?: Generation): McpServerClosed {
+  private closedError(generation?: Generation, tool?: string): McpServerClosed {
     if (generation !== undefined) generation.gone = true;
-    const overflow = (generation ?? this.generation)?.overflow;
-    const reason = overflow === undefined ? "" : `: it ${overflowText(overflow)}`;
-    return new McpServerClosed(`MCP server '${this.label}' is closed${reason}`);
+    const current = generation ?? this.generation;
+    const closed = `MCP server '${this.label}' is closed`;
+    if (current?.overflow !== undefined) return new McpServerClosed(`${closed}: it ${overflowText(current.overflow)}`);
+    const transport = current?.transport;
+    if (this.closeRequested || current?.closed || !(transport instanceof StdioTransport)) {
+      return new McpServerClosed(closed);
+    }
+    const ended = transport.exitText();
+    if (ended === "") return new McpServerClosed(closed);
+    // Only the calls in flight get the stderr tail, so later calls don't copy it into every error.
+    const during = tool === undefined ? "" : ` during tool '${tool}'` + transport.stderrTail();
+    return new McpServerClosed(`MCP server '${this.label}' ${ended}${during}`);
   }
 
   /**
@@ -1149,6 +1171,15 @@ function httpFailure(error: unknown, sdk: typeof Sdk): unknown {
   if (error instanceof RedirectError || error instanceof sdk.SdkHttpError) return error;
   if (typeof error === "object" && error !== null && transportFailures.has(error)) return error;
   return undefined;
+}
+
+/**
+ * Whether `error` failed a call before any of it was written: the SDK found no transport, or the
+ * stdio transport had already ended.
+ */
+function neverSent(error: unknown, sdk: typeof Sdk): boolean {
+  if (error instanceof sdk.SdkError) return error.code === sdk.SdkErrorCode.NotConnected;
+  return error instanceof Error && error.message === "Not connected" && !partlyWritten.has(error);
 }
 
 /** `<Name>: <message>` for an error. */
@@ -1350,7 +1381,10 @@ function oneDecimal(bytes: number, unit: number): string {
   return `${Math.floor(tenths / 10)}.${tenths % 10}`;
 }
 
-/** How much of a stdio server's stderr yian keeps, and how many of its last lines an error shows. */
+/**
+ * How much of a stdio server's stderr yian keeps, and how many of its last lines a start error, or
+ * the error of a call in flight when the server ends, shows.
+ */
 const STDERR_KEEP_CHARS = 16 * 1024;
 const STDERR_LINES = 20;
 
@@ -1394,8 +1428,15 @@ export class StdioTransport {
   private stdoutEnded = false;
   private stderrEnded = false;
   private exited = false;
+  /** The server's exit code, or the signal that killed it, once it exited. */
+  private exitCode: number | null = null;
+  private exitSignal: NodeJS.Signals | null = null;
   private closed = false;
   private ended = false;
+  /** Whether the server ended before `close()` ran: it exited or closed its stdout by itself. */
+  private endedAlone = false;
+  /** Fires `onclose` when the server ended but a pipe or the exit is still missing. */
+  private endTimer: ReturnType<typeof setTimeout> | undefined;
   private closeFired = false;
   private closing: Promise<void> | undefined;
   /** Settles on stdin's next `drain` or `close`; every send waiting on a full pipe shares it. */
@@ -1412,6 +1453,17 @@ export class StdioTransport {
   /** The server's process id, or `null` before it started. */
   get pid(): number | null {
     return this.child?.pid ?? null;
+  }
+
+  /**
+   * How the server ended by itself: `exited (code N)`, `was killed by SIGNAL` or `closed its
+   * stdout`; `""` while it runs, or when `close()` ended it.
+   */
+  exitText(): string {
+    if (!this.endedAlone) return "";
+    if (this.exitSignal !== null) return `was killed by ${this.exitSignal}`;
+    if (this.exitCode !== null) return `exited (code ${this.exitCode})`;
+    return "closed its stdout";
   }
 
   /** The last lines the server wrote to stderr, as an error message suffix, or `""`. */
@@ -1457,8 +1509,10 @@ export class StdioTransport {
           reject(error);
         }
       });
-      child.once("exit", () => {
+      child.once("exit", (code, signal) => {
         this.exited = true;
+        this.exitCode = code;
+        this.exitSignal = signal;
         this.end();
       });
       child.stdin!.on("error", (error) => this.report(error));
@@ -1473,7 +1527,10 @@ export class StdioTransport {
       child.stderr!.on("data", (text: string) => {
         this.stderrText = (this.stderrText + text).slice(-STDERR_KEEP_CHARS);
       });
-      child.stderr!.once("close", () => (this.stderrEnded = true));
+      child.stderr!.once("close", () => {
+        this.stderrEnded = true;
+        this.checkEnded();
+      });
     });
   }
 
@@ -1507,7 +1564,11 @@ export class StdioTransport {
         else resolve();
       };
       const onDrain = () => done();
-      const onClose = () => done(new Error("Not connected"));
+      const onClose = () => {
+        const error = new Error("Not connected");
+        partlyWritten.add(error);
+        done(error);
+      };
       stdin.once("drain", onDrain);
       stdin.once("close", onClose);
     }));
@@ -1622,28 +1683,32 @@ export class StdioTransport {
   }
 
   /**
-   * Fire `onclose` once the process exited or stdout ended, after both stdout and stderr ended or
-   * 200 ms, so a grandchild holding a pipe open can't delay it longer.
+   * Fire `onclose` once the process exited or stdout ended, after the exit and both stdout and
+   * stderr ended or 200 ms, so a grandchild holding a pipe open can't delay it longer.
    */
   private end(): void {
-    if (this.ended) return;
-    this.ended = true;
-    // `exit` may come before the pipes end: the server's last answer must reach `onmessage` first.
-    const timer = setTimeout(() => this.fireClose(), 200);
-    const check = () => {
-      if (!this.stdoutEnded || !this.stderrEnded) return;
-      clearTimeout(timer);
-      this.fireClose();
-    };
-    this.child?.stdout?.once("end", check);
-    this.child?.stderr?.once("close", check);
-    check();
+    if (!this.ended) {
+      this.ended = true;
+      this.endedAlone = !this.closed;
+      this.endTimer = setTimeout(() => this.fireClose(), 200);
+    }
+    this.checkEnded();
+  }
+
+  /**
+   * Fire `onclose` when the server ended and its exit and both pipes' ends came: `exit` may come
+   * before the pipes end, and the server's last answer must reach `onmessage` first; the pipes
+   * may end before `exit`, and the calls `onclose` fails must read the exit code.
+   */
+  private checkEnded(): void {
+    if (this.ended && this.exited && this.stdoutEnded && this.stderrEnded) this.fireClose();
   }
 
   /** Call `onclose`, once. */
   private fireClose(): void {
     if (this.closeFired) return;
     this.closeFired = true;
+    clearTimeout(this.endTimer);
     this.settle();
     try {
       this.onclose?.();

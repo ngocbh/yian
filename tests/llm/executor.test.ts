@@ -906,6 +906,15 @@ describe("RouteModel 2xx reply that is not an event stream", () => {
     expectNotStream(error, "ollama", "content-type text/html", "<html> bad");
   });
 
+  test("an NDJSON first line past the received-JSON bounds names the bound, not a reply that isn't a stream", async () => {
+    const deep = "[".repeat(10_000) + "]".repeat(10_000);
+    const { send, sent } = fake({ headers: { "content-type": "application/x-ndjson" }, body: [`${deep}\n`] });
+    const error = await rejection(callWithRetries(ollama(send), REQUEST, { budget: 1, scheduler: virtualScheduler(0) }));
+    expect(error).toBeInstanceOf(ProviderError);
+    expect((error as ProviderError).message).toBe("NDJSON line 1 nests deeper than 512 levels");
+    expect(sent).toHaveLength(1);
+  });
+
   test("a JSON error over several lines from Ollama shows its message", async () => {
     const { send } = fake({ headers: JSON_TYPE, body: ['{\n  "error": "model not found"\n}\n'] });
     expectNotStream(await failure(ollama(send)), "ollama", "content-type application/json", "model not found");

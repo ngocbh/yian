@@ -137,10 +137,12 @@ function isSseLine(line: string): boolean {
  * a newline still counts. Ints read as `bigint`.
  *
  * With `stats`, `stats.jsonLines` grows by one for each line read as JSON, and `stats.invalid`
- * is set when a line that isn't UTF-8 JSON stops the read.
+ * is set when a line that isn't UTF-8 JSON stops the read; a line past `parseReceivedJson`'s
+ * bounds is JSON and doesn't set it.
  *
- * Throws `ProviderError` (kind `protocol`, not retryable) when a line is not valid UTF-8 JSON
- * or is longer than `maxEventBytes` bytes; the message gives the line number, never the line.
+ * Throws `ProviderError` (kind `protocol`, not retryable) when a line is not valid UTF-8 JSON,
+ * passes `parseReceivedJson`'s bounds or is longer than `maxEventBytes` bytes; the message gives
+ * the line number, never the line.
  */
 export async function* iterNdjson(
   chunks: AsyncIterable<Uint8Array> | Iterable<Uint8Array>,
@@ -148,13 +150,7 @@ export async function* iterNdjson(
   stats?: NdjsonStats,
 ): AsyncGenerator<JsonValue> {
   const read = (line: Uint8Array, number: number): JsonValue => {
-    let value: JsonValue;
-    try {
-      value = jsonLine(line, number);
-    } catch (err) {
-      if (stats && err instanceof ProviderError) stats.invalid = true;
-      throw err;
-    }
+    const value = jsonLine(line, number, stats);
     if (stats) stats.jsonLines += 1;
     return value;
   };
@@ -211,21 +207,28 @@ function isBlank(line: Uint8Array): boolean {
   return line.every((byte) => ASCII_SPACE.has(byte));
 }
 
-/** Parse one NDJSON line within `parseReceivedJson`'s bounds, throwing a `ProviderError` that does not echo it. */
-function jsonLine(line: Uint8Array, number: number): JsonValue {
+/**
+ * Parse one NDJSON line within `parseReceivedJson`'s bounds, throwing a `ProviderError` that does
+ * not echo it; one that isn't UTF-8 JSON sets `stats.invalid` first.
+ */
+function jsonLine(line: Uint8Array, number: number, stats: NdjsonStats | undefined): JsonValue {
+  const invalid = () => {
+    if (stats) stats.invalid = true;
+    return invalidLine(number);
+  };
   let text: string;
   try {
     text = STRICT_UTF8.decode(line);
   } catch (err) {
     if (!(err instanceof TypeError)) throw err;
-    throw invalidLine(number);
+    throw invalid();
   }
   try {
     return parseReceivedJson(text);
   } catch (err) {
     if (!(err instanceof JSONDecodeError)) throw err;
     const bound = receivedBound(err);
-    throw bound === null ? invalidLine(number) : new ProviderError("protocol", `NDJSON line ${number} ${bound}`);
+    throw bound === null ? invalid() : new ProviderError("protocol", `NDJSON line ${number} ${bound}`);
   }
 }
 

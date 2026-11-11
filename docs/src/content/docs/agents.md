@@ -237,7 +237,9 @@ $ yian run extract.yaml --input text="Ada loved the new release."
 {"name":"Ada","score":9}
 ```
 
-- yian uses the provider's structured output when it has one, and a JSON instruction otherwise.
+- yian uses the provider's structured output (a tool or a JSON-schema format). For a model that
+  can't call tools, such as some self-hosted ones, set `structured_output: prompt` in
+  `llm_config:`: the schema then goes in the prompt as a JSON instruction.
 - A `date` or `datetime` field tells the model the [form](/types/) yian accepts, such as
   `2026-10-14` or `2026-10-14T10:30:00Z`.
 - A reply that doesn't fit stays in the conversation, followed by a correction naming the

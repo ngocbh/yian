@@ -197,6 +197,9 @@ A field may come from a value (`model: ${input.model}`); null leaves it unset. A
 agent in a child flow would inherit must read the root flow's inputs; otherwise pass it down as
 an input.
 
+`structured_output: prompt` sends an agent's `output:` schema as an instruction in the prompt,
+for a model that can't call tools; the default, `native`, uses the provider's structured output.
+
 ## Chat pattern
 
 `templates/chat.yaml` is the shape for a conversation. The flow takes

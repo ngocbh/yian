@@ -240,7 +240,7 @@ const PLANS: [Strategy, StructuredPlan][] = [
   ["json_schema", planStructured(target({ provider: "azure", model: "gpt-4o" }), BOUNDED)],
   [
     "prompt",
-    planStructured(target({ provider: "xai", model: "no-structured-sentinel", protocol: "openai_chat" }), REC),
+    planStructured(target({ provider: "xai", model: "grok-4", protocol: "openai_chat", structuredOutput: "prompt" }), REC),
   ],
 ];
 
@@ -250,38 +250,28 @@ describe("the test plans", () => {
   });
 });
 
-describe("planStructured: row 1, no native structured output", () => {
+describe("planStructured: row 1, structured_output: prompt", () => {
   test.each([
-    ["xai", "openai_chat"],
-    ["openai", "openai_responses"],
-    ["openai", null],
-    ["xai", null],
-  ] as const)("the sentinel on %s over %p is prompted", (provider, protocol) => {
-    const plan = planStructured(target({ provider, model: "no-structured-sentinel", protocol }), REC);
+    ["xai", "grok-4", "openai_chat"],
+    ["openai", "gpt-5", "openai_responses"],
+    ["anthropic", "claude-opus-5", "anthropic_messages"],
+    ["azure", "gpt-4o", "openai_chat"],
+    ["vllm", "m", null],
+  ] as const)("%s %s over %p is prompted", (provider, model, protocol) => {
+    const plan = planStructured(target({ provider, model, protocol, structuredOutput: "prompt" }), REC);
     expectSame(fields(plan), want({ strategy: "prompt" }));
   });
 
-  test("the subscription is native, so the sentinel gets row 11's forced tool", () => {
-    const plan = planStructured(target({ model: "no-structured-sentinel", subscription: true }), REC);
-    expectSame(
-      fields(plan),
-      want({ strategy: "forced_tool", tools: [{ schema: REC, strict: null }], named: "Record", parallel: false }),
-    );
+  test("the subscription is prompted when set so", () => {
+    const plan = planStructured(target({ subscription: true, structuredOutput: "prompt" }), REC);
+    expectSame(fields(plan), want({ strategy: "prompt" }));
   });
 
-  test("azure with the sentinel stays native (row 10)", () => {
-    const azure = target({ provider: "azure", model: "no-structured-sentinel", protocol: "openai_chat" });
-    const format = { schema: strictJsonSchema(REC), strict: true };
-    expectSame(fields(planStructured(azure, REC)), want({ strategy: "json_schema", format }));
-  });
-
-  test("anthropic with the sentinel stays native (row 4)", () => {
-    const plan = planStructured(
-      target({ provider: "anthropic", model: "no-structured-sentinel", protocol: "anthropic_messages" }),
-      REC,
-    );
-    const tools = [{ schema: REC, strict: null }];
-    expectSame(fields(plan), want({ strategy: "forced_tool", tools, named: "Record" }));
+  test("native, or unset, takes the native rows", () => {
+    for (const structuredOutput of ["native", undefined] as const) {
+      const plan = planStructured(target({ provider: "xai", model: "grok-4", protocol: "openai_chat", structuredOutput }), REC);
+      expect(plan.strategy).toBe("forced_tool");
+    }
   });
 });
 
@@ -538,7 +528,7 @@ describe("planStructured: a date or datetime field's format hint reaches every r
   // Each route with the `format` the date field keeps; Azure's strict mode rejects `format`, so it
   // moves into the description after the hint.
   test.each([
-    ["row 1, prompted", "prompt", target({ model: "no-structured-sentinel" }), "date"],
+    ["row 1, prompted", "prompt", target({ structuredOutput: "prompt" }), "date"],
     ["row 3, anthropic thinking", "json_schema", anthropic("claude-opus-5-5", thinking), "date"],
     ["row 4, anthropic tool", "forced_tool", anthropic("claude-sonnet-4-5", null), "date"],
     ["row 6, ollama", "json_schema", target({ provider: "ollama", model: "llama3", protocol: "ollama_chat" }), "date"],
@@ -598,6 +588,7 @@ describe("structuredTarget", () => {
       protocol: "anthropic_messages",
       block,
       subscription: false,
+      structuredOutput: "native",
     });
   });
 
@@ -615,6 +606,7 @@ describe("structuredTarget", () => {
       protocol: "openai_responses",
       block: null,
       subscription,
+      structuredOutput: "native",
     });
   });
 
@@ -634,7 +626,16 @@ describe("structuredTarget", () => {
       protocol: name,
       block: null,
       subscription: false,
+      structuredOutput: "native",
     });
+  });
+
+  test("a model's structured_output is read, with or without a wire protocol", () => {
+    const scripted = new ScriptedModel([], { provider: "vllm", model: "m", structuredOutput: "prompt" });
+    expect(structuredTarget(scripted).structuredOutput).toBe("prompt");
+    const protocol = new OpenAIChat({ model: "m", provider: "vllm" });
+    const route = new Route({ provider: "vllm", baseUrl: "https://api.example", path: "x", auth: new NoAuth() });
+    expect(structuredTarget(new RouteModel({ route, protocol, structuredOutput: "prompt" })).structuredOutput).toBe("prompt");
   });
 
   test("a model without a wire protocol", () => {
@@ -645,6 +646,7 @@ describe("structuredTarget", () => {
       protocol: null,
       block: null,
       subscription: false,
+      structuredOutput: "native",
     });
   });
 });

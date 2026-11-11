@@ -240,7 +240,7 @@ test("a stop during tool resolution prevents the model call", async () => {
 
 test("a stop during a structured attempt prevents the retry", async () => {
   const stop = new AbortController();
-  const prompted = { provider: "vllm", model: "no-structured-sentinel" };
+  const prompted = { provider: "vllm", model: "m", structuredOutput: "prompt" as const };
   const attempts: Request[] = [];
   const model: ChatModel = {
     ...prompted,

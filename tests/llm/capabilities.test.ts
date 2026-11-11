@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { modelProfile, supportsNativeStructured } from "../../src/llm/capabilities.ts";
+import { modelProfile } from "../../src/llm/capabilities.ts";
 import { getKnownModels } from "../../src/llm_clients/model_catalog.ts";
 
 describe("modelProfile", () => {
@@ -65,25 +65,5 @@ describe("modelProfile", () => {
   test("every Anthropic catalog model has its own max_tokens", () => {
     expect(claudes.length).toBeGreaterThan(0);
     for (const model of claudes) expect(modelProfile("anthropic_messages", model).maxTokens, model).not.toBe(4096n);
-  });
-});
-
-describe("supportsNativeStructured", () => {
-  test("anthropic, openai and google support native", () => {
-    expect(supportsNativeStructured("anthropic", "claude-sonnet-4-5")).toBe(true);
-    expect(supportsNativeStructured("openai", "gpt-5.5")).toBe(true);
-    expect(supportsNativeStructured("google", "gemini-3-pro")).toBe(true);
-  });
-
-  test("the no-native sentinel returns false", () => {
-    expect(supportsNativeStructured("vllm", "no-structured-sentinel")).toBe(false);
-  });
-
-  test("unknown defaults to native", () => {
-    expect(supportsNativeStructured("some-future-provider", "some-model")).toBe(true);
-  });
-
-  test("provider is compared case-insensitively", () => {
-    expect(supportsNativeStructured("AZURE", "no-structured-sentinel")).toBe(true);
   });
 });

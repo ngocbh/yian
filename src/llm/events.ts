@@ -421,6 +421,13 @@ export class EventStream implements AsyncIterableIterator<Event> {
 }
 
 /**
+ * How a structured call asks for its schema: `native`, the route's structured output (a tool or a
+ * JSON-schema format), or `prompt`, an instruction in the prompt, for a model that can't call
+ * tools.
+ */
+export type StructuredOutput = "native" | "prompt";
+
+/**
  * A model that answers requests, provider-neutral.
  *
  * A failed call throws a `ProviderError`; any other error from a stream is a defect.
@@ -430,6 +437,8 @@ export interface ChatModel {
   readonly provider: string;
   /** The model name. */
   readonly model: string;
+  /** How its structured calls ask for their schema; unset is `native`. */
+  readonly structuredOutput?: StructuredOutput;
 
   /**
    * Start one call and return its events; each call opens its own stream.

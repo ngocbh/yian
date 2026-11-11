@@ -296,6 +296,28 @@ test("factory resolves vllm as openai compatible", async () => {
   expect(model.provider).toBe("vllm");
 });
 
+test("structured_output reaches the built model, native when unset", async () => {
+  for (const [config, expected] of [
+    [{ provider: "vllm", model: "m", structured_output: "prompt" }, "prompt"],
+    [{ provider: "anthropic", model: "claude-opus-4-8", api_key: "k", structured_output: "native" }, "native"],
+    [{ provider: "vllm", model: "m" }, "native"],
+  ] as const) {
+    expect((await build(config)).structuredOutput).toBe(expected);
+  }
+});
+
+test("structured_output takes only native or prompt, and dumps when set", () => {
+  expect(new LLMConfig({ structured_output: "prompt" }).dump()).toEqual({
+    provider: null,
+    model: null,
+    structured_output: "prompt",
+  });
+  expect(new LLMConfig({}).structuredOutput).toBeNull();
+  for (const value of ["tools", 1n, true]) {
+    expect(() => new LLMConfig({ structured_output: value })).toThrow("Input should be 'native' or 'prompt'");
+  }
+});
+
 test("vllm keyless sends dummy key and default base url", async () => {
   const model = await build({ provider: "vllm", model: "some-local-model" });
   expect(model.route.baseUrl).toBe("http://localhost:8000/v1");

@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 
 import { BearerAuth, HeaderKeyAuth, NoAuth, SubscriptionAuth } from "../../src/llm/auth.ts";
 import { type ErrorKind, ProviderError } from "../../src/llm/errors.ts";
+import type { StructuredOutput } from "../../src/llm/events.ts";
 import { callWithRetries, type RetryInfo, RouteModel } from "../../src/llm/executor.ts";
 import { Message, Request, TextPart } from "../../src/llm/messages.ts";
 import { AnthropicMessages } from "../../src/llm/protocols/anthropic_messages.ts";
@@ -153,6 +154,8 @@ interface Scenario {
   budget?: number;
   /** The kinds of the errors `callWithRetries` retried, in order; none when absent. */
   retried?: ErrorKind[];
+  /** The model's `structured_output`; `native` when absent. */
+  structuredOutput?: StructuredOutput;
 }
 
 /** A scenario on `family`'s route to `provider`, `extra` adding its block, budget or retries. */
@@ -373,7 +376,7 @@ const SCENARIOS: Record<string, Scenario> = {
     block: { generationConfig: { maxOutputTokens: 64n } },
   }),
   // A model with no structured output gets the instruction; its fenced reply is parsed.
-  p_sentinel: scenario("chat", "xai", "no-structured-sentinel", "corpus:Rec", "prompt", { value: REC }),
+  p_prompted: scenario("chat", "xai", "grok-4", "corpus:Rec", "prompt", { value: REC }, { structuredOutput: "prompt" }),
 };
 
 /**
@@ -443,8 +446,8 @@ function route({ family, provider, model }: Scenario): Route {
 
 /** Build a scenario's model on its route, speaking its family's protocol. */
 function buildModel(scenario: Scenario, send: Send): RouteModel {
-  const { family, provider, model, block } = scenario;
-  const routed = { route: route(scenario), send };
+  const { family, provider, model, block, structuredOutput } = scenario;
+  const routed = { route: route(scenario), send, structuredOutput };
   switch (family) {
     case "anthropic":
       return new RouteModel({ ...routed, protocol: new AnthropicMessages({ model, provider, block }) });

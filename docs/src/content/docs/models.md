@@ -211,6 +211,8 @@ Its requests are always stateless, as with `store: false`, so the `openai` block
 sets any of them for such an agent fails before its first node. List the models the
 subscription offers with `yian models --auth-file F`; `F` is the auth file, even the default one.
 
-A run records which login each agent used, never the key. If you save or remove that login
-before an unfinished run resumes, the resume fails and names `yian auth PROVIDER`, rather than
-switching accounts silently.
+A run records which login each agent used, never the key. Saving the same login again, even
+with another model, keeps it. If you replace that login (another key, header, endpoint,
+organization or project, or a new subscription sign-in) or remove it, an unfinished run fails at
+its next model call or its resume and names `yian auth PROVIDER`, rather than switching accounts
+silently.

@@ -1041,11 +1041,13 @@ test("environment and host keys never get saved settings", async () => {
   }
 });
 
-test("resaving the login fails the build", async () => {
+test("resaving the login with another key fails the build; resaving it unchanged doesn't", async () => {
   noProviderKeys();
   await saveOpenAIWithSettings();
   const recorded = resolveModelConfig({ provider: "openai", model: "gpt-x" }, { env });
   await saveOpenAIWithSettings();
+  await chatModelFromConfig(recorded, { env, onWarning: () => {} });
+  await authStore().save("openai", new ApiKeyCredentials("sk-other"), "gpt-x", { organization: "org-saved" });
   const { requests, send } = recorder();
   const error = await rejected(chatModelFromConfig(recorded, { env, send, onWarning: () => {} }));
   expect(error).toBeInstanceOf(AuthError);

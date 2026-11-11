@@ -529,6 +529,18 @@ const CASES: Case[] = [
     },
   },
   {
+    name: "openai saved login saved again unchanged after resolving",
+    config: async ({ env, store }) => {
+      const config = resolveModelConfig({}, { env });
+      await store.save("openai", new ApiKeyCredentials(SAVED_KEY), "gpt-5.4");
+      return config;
+    },
+    saved: SAVED,
+    env: {},
+    golden: "openai_responses/plain",
+    expect: openaiKey(SAVED_KEY),
+  },
+  {
     name: "openai saved login saved again after resolving",
     config: async ({ env, store }) => {
       const config = resolveModelConfig({}, { env });

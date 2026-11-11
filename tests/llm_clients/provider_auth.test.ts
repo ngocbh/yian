@@ -965,6 +965,75 @@ describe("AuthStore", () => {
     expect(error.message).toBe("The saved connection changed");
   });
 
+  test("saving the same login again keeps its identity, even with another model", async () => {
+    const store = new AuthStore(file);
+    const first = await store.save("vllm", gateway("k"), "m");
+    const again = await store.save("vllm", gateway("k"), "m");
+    const moved = await store.save("vllm", gateway("k"), "m2", { makeDefault: false });
+    expect([again.credentialId, moved.credentialId]).toEqual([first.credentialId, first.credentialId]);
+    expect(store.selection("vllm")).toEqual(moved);
+    expect(((await store.credentials("vllm", first.credentialId)) as ApiKeyCredentials).apiKey).toBe("k");
+    const openai = { organization: "org-a", project: "proj-a" };
+    const keyed = await store.save("openai", new ApiKeyCredentials("sk"), "gpt", openai);
+    expect((await store.save("openai", new ApiKeyCredentials("sk"), "gpt", openai)).credentialId).toBe(keyed.credentialId);
+    const azure = { endpoint: "https://r.openai.azure.com/" };
+    const deployed = await store.save("azure", new ApiKeyCredentials("az"), "dep", azure);
+    expect((await store.save("azure", new ApiKeyCredentials("az"), "dep2", azure)).credentialId).toBe(deployed.credentialId);
+    const keyless = await store.save("ollama", null, "llama3");
+    expect((await store.save("ollama", null, "llama3")).credentialId).toBe(keyless.credentialId);
+  });
+
+  test("a save that changes what a request sends gets a new identity, and the old pin is refused", async () => {
+    const changes: [string, () => Promise<ProviderSelection>, () => Promise<ProviderSelection>][] = [
+      ["key", () => new AuthStore(file).save("vllm", gateway("k"), "m"), () => new AuthStore(file).save("vllm", gateway("k2"), "m")],
+      [
+        "header value",
+        () => new AuthStore(file).save("vllm", new ApiKeyCredentials("k", { "X-Gateway": "a" }), "m"),
+        () => new AuthStore(file).save("vllm", new ApiKeyCredentials("k", { "X-Gateway": "b" }), "m"),
+      ],
+      [
+        "header name",
+        () => new AuthStore(file).save("vllm", new ApiKeyCredentials("k", { "X-Gateway": "a" }), "m"),
+        () => new AuthStore(file).save("vllm", new ApiKeyCredentials("k", { "X-Other": "a" }), "m"),
+      ],
+      [
+        "organization",
+        () => new AuthStore(file).save("openai", new ApiKeyCredentials("sk"), "gpt", { organization: "org-a" }),
+        () => new AuthStore(file).save("openai", new ApiKeyCredentials("sk"), "gpt", { organization: "org-b" }),
+      ],
+      [
+        "project",
+        () => new AuthStore(file).save("openai", new ApiKeyCredentials("sk"), "gpt", { project: "proj-a" }),
+        () => new AuthStore(file).save("openai", new ApiKeyCredentials("sk"), "gpt"),
+      ],
+      [
+        "endpoint",
+        () => new AuthStore(file).save("azure", new ApiKeyCredentials("az"), "dep", { endpoint: "https://r.openai.azure.com/" }),
+        () => new AuthStore(file).save("azure", new ApiKeyCredentials("az"), "dep", { endpoint: "https://s.openai.azure.com/" }),
+      ],
+      [
+        "subscription",
+        () => new AuthStore(file).save("openai", oauth("access", "refresh", 9000), "gpt"),
+        () => new AuthStore(file).save("openai", oauth("access", "refresh", 9000), "gpt"),
+      ],
+      [
+        "removal",
+        () => new AuthStore(file).save("vllm", gateway("k"), "m"),
+        async () => {
+          await new AuthStore(file).remove("vllm");
+          return new AuthStore(file).save("vllm", gateway("k"), "m");
+        },
+      ],
+    ];
+    for (const [change, before, after] of changes) {
+      const first = await before();
+      const second = await after();
+      expect(second.credentialId, change).not.toBe(first.credentialId);
+      const error = await rejected(new AuthStore(file).credentials(first.provider, first.credentialId));
+      expect(error.message, change).toBe("The saved connection changed");
+    }
+  });
+
   test("refresh is serialized and preserves identity", async () => {
     const store = new AuthStore(file, { scheduler: fixedClock(1_000_000) });
     const selection = await store.save("openai", oauth("old", "old-refresh", 900), "model");

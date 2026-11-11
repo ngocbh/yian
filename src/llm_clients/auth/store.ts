@@ -1,6 +1,7 @@
 /** Private credential storage: one saved login per provider, with locked atomic writes and refresh. */
 
-import { randomBytes } from "node:crypto";
+import { Buffer } from "node:buffer";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 // The default import keeps calls patchable by test spies.
 import fs from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -104,6 +105,38 @@ export class StorageError extends AuthError {
     super(message);
     this.damaged = damaged;
   }
+}
+
+/**
+ * Whether the saved login `previous` sends what `selection` with `credentials` would: the same
+ * method, endpoint, organization and project and, for an API key, the same key and header names
+ * and values. A subscription is never the same: a new sign-in brings new tokens. The secrets are
+ * compared by digest, in constant time.
+ */
+function sameLogin(
+  [saved, savedCredentials]: [ProviderSelection, Credentials | null],
+  selection: ProviderSelection,
+  credentials: Credentials | null,
+): boolean {
+  if (
+    saved.method !== selection.method ||
+    saved.method === "subscription" ||
+    saved.endpoint !== selection.endpoint ||
+    saved.organization !== selection.organization ||
+    saved.project !== selection.project
+  ) {
+    return false;
+  }
+  if (!(savedCredentials instanceof ApiKeyCredentials && credentials instanceof ApiKeyCredentials)) {
+    return savedCredentials === null && credentials === null;
+  }
+  return timingSafeEqual(keyDigest(savedCredentials), keyDigest(credentials));
+}
+
+/** Return the sha256 digest of an API key and its headers, sorted by name. */
+function keyDigest(credentials: ApiKeyCredentials): Buffer {
+  const headers = [...credentials.headers].sort(([a], [b]) => compareCodeUnits(a, b));
+  return createHash("sha256").update(JSON.stringify([credentials.apiKey, headers])).digest();
 }
 
 /** What a store path names: the store file, its folder, or its lock file. */
@@ -589,7 +622,11 @@ export class AuthStore {
    * resource; `organization` and `project` are OpenAI ids, for an `openai` API key only;
    * `makeDefault` (default `true`) makes the provider the default.
    *
-   * @returns The saved selection, with a new credential id.
+   * A login saved again unchanged keeps its credential id, so runs pinned to it go on: same method,
+   * key, header names and values, endpoint, organization and project, whatever the model. Any
+   * other save, a subscription's included, gets a new id.
+   *
+   * @returns The saved selection.
    * @throws AuthError The values are invalid or storage cannot be written.
    */
   async save(
@@ -615,16 +652,16 @@ export class AuthStore {
     ) {
       throw new AuthError("Unsupported credential type");
     }
-    const selection = new ProviderSelection({
+    const fields = {
       provider,
       method: credentials === null ? "none" : credentials.method,
       model,
-      credentialId: randomBytes(16).toString("hex"),
       endpoint,
       organization,
       project,
       headerNames: credentials instanceof ApiKeyCredentials ? credentials.headers.map(([name]) => name) : [],
-    });
+    };
+    let selection = new ProviderSelection({ ...fields, credentialId: randomBytes(16).toString("hex") });
     // The snapshot refuses such a login, so saving it would make every run throw. A provider this
     // version doesn't run is never read, so its login isn't checked.
     if ((SUPPORTED_LLM_PROVIDERS as readonly string[]).includes(provider) && !isUsableLogin(selection)) {
@@ -635,6 +672,10 @@ export class AuthStore {
     try {
       await this.#locked(() => {
         const [defaultProvider, providers, defaultEmbedding] = this.#load(directory);
+        const previous = providers.get(provider);
+        if (previous !== undefined && sameLogin(previous, selection, credentials)) {
+          selection = new ProviderSelection({ ...fields, credentialId: previous[0].credentialId });
+        }
         providers.set(provider, [selection, credentials]);
         this.#write(directory, [makeDefault ? provider : defaultProvider, providers, defaultEmbedding]);
       });

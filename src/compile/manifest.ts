@@ -23,6 +23,7 @@ import { Verbatim } from "../expr/template.ts";
 import { AgentNode, authoredPrompt, authoredText, isPromptText } from "../nodes/agent/node.ts";
 import { Node, NodeKind } from "../nodes/base.ts";
 import { CallNode } from "../nodes/call/node.ts";
+import type { ChildFlowNode } from "../nodes/child_flow.ts";
 import { Case, CaseNode } from "../nodes/case/node.ts";
 import { classifyCodeSource, CodeNode } from "../nodes/code/node.ts";
 import {
@@ -128,6 +129,7 @@ const KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
     "predicateKind",
     "predicate",
     "maxIters",
+    "onMaxExceeded",
     "iteration",
     "returnedFields",
   ],
@@ -788,7 +790,7 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
     case NodeKind.CALL:
     case NodeKind.MAP:
     case NodeKind.LOOP: {
-      const spawner = node as CallNode | MapNode | LoopNode;
+      const spawner = node as ChildFlowNode;
       manifest.child = flowManifestOf(spawner.child, ctx, `${path}.child`, topologyOnly);
       manifest.flow_id = spawner.flowId;
       manifest.flow_version = canonicalValue(spawner.flowVersion, ctx, `${path}.flowVersion`);
@@ -804,6 +806,8 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
         // Left out for a total loop so the feature doesn't change the identity of flows that don't
         // use it.
         if (spawner.returnedFields !== null) manifest.returned_fields = [...spawner.returnedFields];
+        // Left out for the default, as above.
+        if (spawner.onMaxExceeded !== "fail") manifest.on_max_exceeded = spawner.onMaxExceeded;
       }
       break;
     }

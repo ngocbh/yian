@@ -2,7 +2,7 @@
  * External callables through the default local file resolver (search path, inert paths, cycle,
  * cache).
  *
- * A child file that isn't UTF-8 fails at its alias as `could not resolve`; a CODE node's
+ * A child file that isn't UTF-8 fails at its alias, naming the file and the reason; a CODE node's
  * `baseDir` is `loadFlow`'s option, else the first search path, else the current directory, made
  * absolute, for the root, its defs and its inline bodies alike, and a child file's own directory;
  * an importer doesn't check a `uses:` child's CODE again, so a host's cached child whose CODE file
@@ -185,7 +185,7 @@ test("a nested path resolves", async () => {
 test("a missing ref is loud", async () => {
   const parent = write(tmp, "p", "p", { call: "ch", uses: { ch: "nope" } });
   const error = await loadErrorAsync(loadFlow(readFileSync(parent, "utf8"), { searchPaths: [tmp] }));
-  expect(error.message).toBe(`flow 'nope' not found on search path ["${tmp}"]`);
+  expect(error.message).toBe(`flow 'nope' not found on search path ["${tmp}"] (looked for 'nope.yaml')`);
   // A local ref has no hub: scheme, so the miss says nothing about a marketplace.
   expect(error.message).not.toContain("marketplace");
 });
@@ -197,7 +197,8 @@ test("search path entries drop . segments and extra slashes and keep ..", async 
   const parent = write(own, "p", "p", { call: "ch", uses: { ch: "nope" }, system });
   const error = await loadErrorAsync(loadFlow(readFileSync(parent, "utf8"), { searchPaths: [`${own}/`] }));
   expect(error.message).toBe(
-    `flow 'nope' not found on search path ["${own}","${own}/../shared","${own}/lib","${own}/x/y","${tmp}/abs"]`,
+    `flow 'nope' not found on search path ["${own}","${own}/../shared","${own}/lib","${own}/x/y","${tmp}/abs"] ` +
+      "(looked for 'nope.yaml')",
   );
 });
 
@@ -377,12 +378,49 @@ test("diamond reuse reads each path once", async () => {
 
 // ---------- TS-only ----------
 
-test("a child file that isn't UTF-8 fails at its alias", async () => {
+test("a child file that isn't UTF-8 fails at its alias, naming the file and the reason", async () => {
   writeFileSync(join(tmp, "child.yaml"), new Uint8Array([0x69, 0x64, 0x3a, 0x20, 0xff, 0xfe, 0x0a]));
   const parent = write(tmp, "p", "p", { call: "ch", uses: { ch: "child" } });
   const error = await loadErrorAsync(loadFlow(readFileSync(parent, "utf8"), { searchPaths: [tmp] }));
-  expect(error.message).toStartWith("callable 'ch' (uses: 'child'): could not resolve: ");
+  expect(error.message).toBe(`callable 'ch' (uses: 'child'): could not resolve: can't read ${tmp}/child.yaml: not UTF-8 text`);
   expect(error.diagnostic.frames.map((frame) => frame.note)).toEqual(["uses alias 'ch'"]);
+});
+
+test("a ref written with .yaml names the file it looked for and says to drop the extension", async () => {
+  write(tmp, "child", "child");
+  const parent = write(tmp, "p", "p", { call: "ch", uses: { ch: "./child.yaml" } });
+  const error = await loadErrorAsync(loadFlow(readFileSync(parent, "utf8"), { searchPaths: [tmp] }));
+  expect(error.message).toBe(
+    `flow './child.yaml' not found on search path ["${tmp}"] (looked for './child.yaml.yaml'); ` +
+      "write a uses: ref without its extension",
+  );
+});
+
+test("a ref whose file is .yml says only .yaml files are imported", async () => {
+  writeFileSync(join(tmp, "child.yml"), flowText("child"));
+  const parent = write(tmp, "p", "p", { call: "ch", uses: { ch: "child" } });
+  const error = await loadErrorAsync(loadFlow(readFileSync(parent, "utf8"), { searchPaths: [tmp] }));
+  expect(error.message).toBe(
+    `flow 'child' not found on search path ["${tmp}"] (looked for 'child.yaml'); uses: imports only .yaml files`,
+  );
+});
+
+test("a folder named like the child is skipped, and the miss says it is not a file", async () => {
+  mkdirSync(join(tmp, "dir.yaml"));
+  const parent = write(tmp, "p", "p", { call: "ch", uses: { ch: "dir" } });
+  const error = await loadErrorAsync(loadFlow(readFileSync(parent, "utf8"), { searchPaths: [tmp] }));
+  expect(error.message).toBe(
+    `flow 'dir' not found on search path ["${tmp}"] (looked for 'dir.yaml'); '${tmp}/dir.yaml' is not a file`,
+  );
+});
+
+test("a folder named like the child doesn't hide the file in a later search folder", async () => {
+  const later = join(tmp, "later");
+  mkdirSync(later);
+  mkdirSync(join(tmp, "dir.yaml"));
+  write(later, "dir", "dir");
+  const parent = write(tmp, "p", "p", { call: "ch", uses: { ch: "dir" } });
+  expect(await loadFlow(readFileSync(parent, "utf8"), { searchPaths: [tmp, later] })).toBeDefined();
 });
 
 test("a CODE node's baseDir is loadFlow's, else the first search path; a child file's is its directory", async () => {

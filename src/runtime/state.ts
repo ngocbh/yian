@@ -40,7 +40,6 @@ import {
   RunWaiting,
 } from "../events.ts";
 import { ExpressionError } from "../expr/expressions.ts";
-import { type RootRead, SourceRef } from "../expr/lineage.ts";
 import { exprRefsOf } from "../expr/template.ts";
 import { type CompleteResult, ELSE_HANDLE, Grow, Node, NodeKind, Output } from "../nodes/base.ts";
 import { BindingError, copyValue } from "../nodes/binding.ts";
@@ -61,9 +60,10 @@ import {
   validateOutputContract,
 } from "../nodes/contracts.ts";
 import { eventBytes, type JsonObject, type JsonValue, logJson } from "../typesys/json.ts";
-import { messagesKey, NEW_MESSAGES, VariablePool } from "../typesys/pool.ts";
+import { messagesKey, NEW_MESSAGES, referenceRoot, type RootValue, VariablePool } from "../typesys/pool.ts";
 import { newMessagesType } from "../typesys/types.ts";
 import {
+  fromHost,
   isInboxType,
   isMemoryType,
   isRecord,
@@ -74,6 +74,7 @@ import {
   Type,
   TypeCheckError,
   TypedValue,
+  type Value,
   ValueKind,
   type ValueRecord,
   writeAsText,
@@ -116,7 +117,7 @@ import {
   type TakeCommit,
   type WaitEntry,
 } from "./log.ts";
-import { decodeTyped, resolvePoolPath, SYSTEM_PREFIX } from "./sources.ts";
+import { decodeTyped, SYSTEM_PREFIX } from "./sources.ts";
 import { ASK, ASK_USER, SLEEP, TAKE, toolCallId } from "../tools/context.ts";
 import { visibleToolName } from "../tools/grants.ts";
 import {
@@ -206,6 +207,7 @@ export type DeliveryRefusal =
   | "ended"
   | "inbox_closed"
   | "invalid_value"
+  | "key_reused"
   | "too_large"
   | "unknown_call"
   | "call_settled"
@@ -334,6 +336,8 @@ export class RunState {
   readonly waits = new WaitsState();
   /** Each send's value by its seq, kept until its consumer settles. */
   readonly inboxEvents = new Map<number, TypedValue>();
+  /** Each keyed send by its key: its seq, inbox and run-log JSON value, kept for the whole run. */
+  readonly sendKeys = new Map<string, SentKey>();
   /**
    * The first route-derived proof that the terminal output is unreachable, kept independently of
    * later frontier and topology changes.
@@ -485,9 +489,9 @@ export interface PendingMessages {
 }
 
 /**
- * Read a reference's root in `pool` with the commit that wrote it: the seq of the name's accepted
- * `PoolCommitRecord` (`producers`) as its source, so a derived node's binding names the commits it
- * read (`referenceRoot`). A system value gets its run-start commit as its source.
+ * Read a reference's root in `pool` (`VariablePool.readRoot`) for a derived node's binding, whose
+ * commit names the accepted `PoolCommitRecord` (`producers`) that wrote each name it read
+ * (`referenceRoot`); a system value's is its run-start commit.
  *
  * @throws RangeError when a name the pool holds has no entry in `producers`, which always names
  *   every pool name.
@@ -496,13 +500,14 @@ export function resolveFromPool(
   names: readonly string[],
   pool: VariablePool,
   producers: ReadonlyMap<string, number>,
-  runId: string,
-): RootRead {
-  return resolvePoolPath(names, pool, (name) => {
-    const seq = producers.get(name);
-    if (seq === undefined) throw new RangeError(`pool name ${reprText(name)} has no pool_commit in the producer index`);
-    return new SourceRef(runId, seq);
-  });
+): RootValue {
+  const read = pool.readRoot(names);
+  if (!read.present) return read;
+  const { name } = referenceRoot(names, pool.startId, (held) => pool.store.has(held));
+  if (!producers.has(name!)) {
+    throw new RangeError(`pool name ${reprText(name!)} has no pool_commit in the producer index`);
+  }
+  return read;
 }
 
 /**
@@ -965,6 +970,19 @@ type PreparedPlan =
   | EndingPlan
   | GrowthPlan;
 
+/** A keyed send as the run keeps it, to answer a repeat of it. */
+export interface SentKey {
+  readonly seq: number;
+  readonly inbox: string;
+  /** The send's typed wire, as the run log writes it. */
+  readonly value: string;
+}
+
+/** A send that repeats a keyed send the run holds: it appends nothing, and its seq is that send's. */
+export interface RepeatedSend {
+  readonly repeatOf: number;
+}
+
 /**
  * One canonical record plus its already validated total state-change plan. Frozen.
  *
@@ -1167,28 +1185,52 @@ export function prepareInitialCommit(state: RunState, key: string, value: unknow
  * Prepare a host's send of `event` to the top-level inbox `inbox`: a commit by the START under
  * `<START>.<inbox>`, applied at once to the inbox store, never to the pool.
  *
+ * With `key`, the send is recorded with it, and a later send with the same key, inbox and value
+ * is its repeat: it appends nothing and gives the first send's seq, even once the inbox is closed.
+ *
  * @param state The run's state.
  * @param inbox The name of one of the START's `Inbox(T)` params.
- * @param event The value, checked against `T`.
- * @returns The canonical `PoolCommitRecord` and its plan, with no observers.
- * @throws TypeError when `state` or `inbox` has the wrong type.
+ * @param event The host value, taken as `fromHost` takes it (a whole number is an int), then
+ *   checked against `T`.
+ * @param key The send's idempotency key, or `null` for none.
+ * @returns The canonical `PoolCommitRecord` and its plan, with no observers; or, for a repeat of a
+ *   keyed send, that send's seq.
+ * @throws TypeError when `state` or `inbox` has the wrong type, or `key` isn't a string or null.
  * @throws DeliveryRefused, in this order: `ended` once the run has a terminal result;
  *   `not_started` before its run start is complete; `unknown_inbox` when the START declares no
- *   such inbox; `inbox_closed` once it is closed; `invalid_value` when `event` fails `T` (the
- *   `TypeCheckError` is the cause); `too_large` when its run-log JSON is over the run's
- *   `MAX_EVENT_BYTES`.
+ *   such inbox; `inbox_closed` once it is closed (unless `key` repeats a send); `invalid_value`
+ *   when `event` isn't a host value or fails `T` (the `TypeCheckError` is the cause); `key_reused`
+ *   when an earlier send holds `key` with another inbox or value; `too_large` when its run-log
+ *   JSON is over the run's `MAX_EVENT_BYTES`.
  */
-export function prepareSend(state: RunState, inbox: string, event: unknown): PreparedTransition {
+export function prepareSend(state: RunState, inbox: string, event: unknown): PreparedTransition;
+export function prepareSend(state: RunState, inbox: string, event: unknown, key: string | null): PreparedTransition | RepeatedSend;
+export function prepareSend(
+  state: RunState,
+  inbox: string,
+  event: unknown,
+  key: string | null = null,
+): PreparedTransition | RepeatedSend {
   if (!isExactly(state, RunState)) throw new TypeError("prepareSend expects a RunState");
   if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
+  if (key !== null && typeof key !== "string") throw new TypeError("a send's key must be a string or null");
   requireDeliverable(state);
   const element = requireDeclaredInbox(state, inbox);
-  if (state.waits.inboxes.get(inbox)?.closed === true) {
+  const sent = key === null ? undefined : state.sendKeys.get(key);
+  if (sent === undefined && state.waits.inboxes.get(inbox)?.closed === true) {
     throw new DeliveryRefused("inbox_closed", `inbox ${reprText(inbox)} is closed`);
+  }
+  let value: Value;
+  try {
+    // The host intake every host call shares: a whole JS number is an int, whatever the slot.
+    value = fromHost(event, "the event");
+  } catch (error) {
+    if (!(error instanceof TypeCheckError)) throw error;
+    throw new DeliveryRefused("invalid_value", `inbox ${reprText(inbox)} refuses ${error.message}`, { cause: error });
   }
   let wire: TypedWire;
   try {
-    [wire] = canonicalTyped(event, element);
+    [wire] = canonicalTyped(value, element);
   } catch (error) {
     if (!(error instanceof TypeCheckError)) throw error;
     const at = error.path.length > 0 ? ` at ${renderValuePath(error.path)}` : "";
@@ -1196,11 +1238,18 @@ export function prepareSend(state: RunState, inbox: string, event: unknown): Pre
       cause: error,
     });
   }
+  if (sent !== undefined) {
+    if (sent.inbox === inbox && sent.value === logJson(wire)) return { repeatOf: sent.seq };
+    throw new DeliveryRefused(
+      "key_reused",
+      `send key ${reprText(key!)} was used by send ${sent.seq} with another value or inbox`,
+    );
+  }
   const size = eventBytes(wire.value);
   if (size > state.runDefaults.maxEventBytes) {
     throw new DeliveryRefused("too_large", eventTooLarge(`the event to inbox ${reprText(inbox)}`, size, state));
   }
-  return prepareRecord(state, new PoolCommitRecord(state.flow.startId, sendKey(state, inbox), wire));
+  return prepareRecord(state, new PoolCommitRecord(state.flow.startId, sendKey(state, inbox), wire, { sendKey: key }));
 }
 
 /**
@@ -1866,6 +1915,7 @@ export function prepareRecord(
       validateSend(state, record);
       return prepareCommitTransition(state, record, "send");
     }
+    if (record.sendKey !== null) throw new RangeError("only a send holds a send key");
     // A key the flow doesn't hold yet is a child START the spawner's expansion is about to add.
     const expansion = !state.flow.nodes.has(record.key) && state.flow.nodes.get(record.nodeId)?.isSpawner === true;
     if (expansion) validateExpansionCommit(state, record);
@@ -2718,6 +2768,11 @@ function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransi
   appendAndVerify(log, prepared);
   if (plan.commitKind === "send") {
     state.inboxEvents.set(prepared.expectedSequence, decodeTyped(plan.valueJson!));
+    const { key, sendKey: sent } = prepared.record as PoolCommitRecord;
+    if (sent !== null) {
+      const inbox = key.slice(sendKey(state, "").length);
+      state.sendKeys.set(sent, Object.freeze({ seq: prepared.expectedSequence, inbox, value: plan.valueJson! }));
+    }
   } else if (plan.commitKind === "messages") {
     const pending: PendingMessages = { seq: prepared.expectedSequence, key: plan.key, valueJson: plan.messagesJson! };
     state.pendingMessages.set(plan.nodeId, Object.freeze(pending));
@@ -3151,6 +3206,7 @@ function hasReducerContainers(state: RunState): boolean {
     isExactly(state.wiringOverrides, Map) &&
     isExactly(state.waits, WaitsState) &&
     isExactly(state.inboxEvents, Map) &&
+    isExactly(state.sendKeys, Map) &&
     isRecord(state.input) &&
     isRecord(state.effectiveLlmByStaticPath) &&
     isExactly(state.initialStaticIds, Set)
@@ -5121,6 +5177,8 @@ function validateSend(state: RunState, record: PoolCommitRecord): void {
   }
   const size = eventBytes(record.value.value);
   if (size > state.runDefaults.maxEventBytes) throw new RangeError(eventTooLarge(`the send to ${reprText(name)}`, size, state));
+  const held = record.sendKey === null ? undefined : state.sendKeys.get(record.sendKey);
+  if (held !== undefined) throw new RangeError(`send key ${reprText(record.sendKey!)} is already held by send ${held.seq}`);
 }
 
 /**
@@ -5825,6 +5883,7 @@ function requirePristine(state: RunState): void {
     state.deferredPrune.size === 0 &&
     state.wiringOverrides.size === 0 &&
     state.inboxEvents.size === 0 &&
+    state.sendKeys.size === 0 &&
     state.waits.waiting.size === 0 &&
     state.waits.calls.size === 0 &&
     state.waits.inboxes.size === 0 &&

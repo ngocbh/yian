@@ -18,6 +18,7 @@ import { type ChatModel, EventStream } from "../../src/llm/events.ts";
 import { Message, type Request, TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { type AgentRunContext, DEFAULT_SYSTEM, requestSha256 } from "../../src/nodes/agent/context.ts";
+import { Interrupted } from "../../src/nodes/agent/interrupts.ts";
 import { rebuildStepRequests, runAgent } from "../../src/nodes/agent/loop.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
 import type { Output, SteerInbox } from "../../src/nodes/base.ts";
@@ -211,7 +212,7 @@ test("a reply with tool calls at the cap gets one more call, which reads no stee
   expect(reads).toEqual([null]);
 });
 
-test("an interrupt that lands during the final reply beats a queued steer: the answer stands, the steer stays", async () => {
+test("an interrupt that lands during the final reply beats a queued steer: the reply is cut, the steer stays", async () => {
   const interrupt = new AbortController();
   const { inbox, queue, reads } = inboxDouble([], interrupt.signal, 9);
   const model = afterFirstEvent(new ScriptedModel([textReply("final")], CONFIG), () => {
@@ -220,12 +221,15 @@ test("an interrupt that lands during the final reply beats a queued steer: the a
   });
   const recorded: ValueRecord[] = [];
   const steps = new NodeSteps(1, [], (step) => recorded.push(step));
-  expect(await output(loopContext(model, { steerInbox: inbox, steps }))).toBe("final");
+  expect(await runAgent(loopContext(model, { steerInbox: inbox, steps }))).toEqual(new Interrupted(9));
   expect(model.requests).toHaveLength(1);
   expect(queue).toEqual(["late"]);
   expect(reads).toEqual([null]);
-  // Neither a steer nor the honor of the interrupt is written: the reply was whole.
-  expect(recorded.map((step) => step["kind"])).toEqual(["model_call"]);
+  // The stream hadn't ended, so the whole text is cut; no steer is read.
+  expect(recorded.map((step) => [step["kind"], step["finish"] ?? null])).toEqual([
+    ["model_call", "interrupted"],
+    ["interrupted", null],
+  ]);
 });
 
 test("rebuildStepRequests rebuilds a late-steered occurrence with a matching digest", async () => {

@@ -929,6 +929,30 @@ function native(payload: string, calls = 1): ScriptedModel {
   return new ScriptedModel(Array.from({ length: calls }, () => text), { provider: "openai", model: "gpt-5.5" });
 }
 
+describe("an integral float in an int slot of a model reply", () => {
+  test("is read as an int, in a field, a list or an optional", () => {
+    expect(checkReply({ value: 2 }, t("int"))).toBe(2n);
+    expect(checkReply({ value: -0 }, t("int"))).toBe(0n);
+    expect(checkReply({ items: [1, 2n] }, t("list(int)"))).toEqual([1n, 2n]);
+    const typ = t("Order", readTypedefs({ Line: { qty: "int(1..)" }, Order: { lines: "list(Line)", n: "Optional(int)" } }));
+    expect(checkReply({ lines: [{ qty: 3 }], n: 4 }, typ)).toEqual({ lines: [{ qty: 3n }], n: 4n });
+  });
+
+  test("a fraction, an unsafe integer or one out of bounds is still refused", () => {
+    expect(refused(t("int"), { value: 2.5 }).message).toBe("structured output: 2.5 does not match declared type int");
+    refused(t("int"), { value: 2 ** 53 });
+    refused(t("int(1..12)"), { value: 13 });
+  });
+
+  test("a float slot keeps the float", () => {
+    expect(checkReply({ value: 2 }, t("float"))).toBe(2);
+  });
+
+  test("a reply's 2.0 fills an int output", async () => {
+    expect(await generateStructured(native('{"value": 2.0}'), [], t("int"), { retries: 0 })).toBe(2n);
+  });
+});
+
 describe("validate and unwrap halves, through checkReply", () => {
   test("test_variant_str_gets_scalar_schema (validate half)", () => {
     const typ = new Type({ kind: ValueKind.STRING, tags: new Set(["a", "b"]) });

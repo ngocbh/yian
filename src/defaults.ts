@@ -167,8 +167,9 @@ export const ENTRIES = Object.freeze([
     group: "setting",
     minimum: 0,
   }),
+  // Bounded, since each turn is a paid model call; at the cap the model still gives an answer.
   entry("AGENT_MAX_TOOL_ITERATIONS", {
-    default: -1,
+    default: 50,
     description: "AGENT tool-call turns when the node sets none; -1 is no cap",
     group: "setting",
     minimum: 1,
@@ -316,6 +317,18 @@ export const ENTRIES = Object.freeze([
     group: "setting",
     minimum: 1,
   }),
+  entry("MODEL_CHECK_TIMEOUT_SECONDS", {
+    default: 30,
+    description: "Longest wait in seconds for the reply `yian auth` checks a model with before it saves a login",
+    group: "setting",
+    minimum: 1,
+  }),
+  entry("MODEL_LIST_TIMEOUT_SECONDS", {
+    default: 8,
+    description: "Longest wait in seconds for a whole model listing given no timeout (`yian models`, `/model`)",
+    group: "setting",
+    minimum: 1,
+  }),
   entry("REQUEST_TIMEOUT_SECONDS", {
     default: 30,
     description: "Longest wait in seconds for a short request (model listing, sign-in calls)",
@@ -378,6 +391,13 @@ export const ENTRIES = Object.freeze([
   entry("MAX_MODEL_EVENT_BYTES", {
     default: 16 * 1024 * 1024,
     description: "Largest event read from a model's reply stream: an SSE event's data or one NDJSON line",
+    group: "input cap",
+    minimum: 1,
+  }),
+  // Four of the largest events: a reply may carry several images or long tool arguments.
+  entry("MAX_MODEL_RESPONSE_BYTES", {
+    default: 64 * 1024 * 1024,
+    description: "Largest reply body read from one model call",
     group: "input cap",
     minimum: 1,
   }),

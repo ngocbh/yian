@@ -291,6 +291,36 @@ describe("tools that break their output schema", () => {
   });
 });
 
+describe("results holding a lone surrogate, from a tool with no output schema", () => {
+  let server: McpServer;
+  const tools = () => new ToolSet({ cut: [...server.tools] });
+
+  beforeAll(async () => {
+    server = await openFake(["--lone-surrogate"], "cut");
+  }, SLOW);
+
+  afterAll(async () => {
+    await server?.close();
+  }, SLOW);
+
+  test("text, a text resource and an error result's text arrive with U+FFFD for the broken character", async () => {
+    expect(await tools().invoke("cut_text", {})).toBe("Hi \ufffd");
+    expect(await tools().invoke("cut_resource", {})).toBe("Hi \ufffd");
+    const error = await rejection(tools().invoke("cut_error", {}));
+    expect(error).toBeInstanceOf(McpToolError);
+    expect(error.message).toBe("Hi \ufffd");
+  });
+
+  test("structured content that isn't a yian value is a reported, permanent output error naming the server", async () => {
+    const error = await rejection(tools().invoke("cut_structured", {}));
+    expect(error).toBeInstanceOf(McpOutputError);
+    expect(error.message).toBe("MCP server 'cut' tool 'cut_structured' failed (TypeCheckError)");
+    expect(error.cause).toBeInstanceOf(TypeCheckError);
+    expect(isReportedToolError(error)).toBe(true);
+    expect(isPermanentToolError(error)).toBe(true);
+  });
+});
+
 describe("resultValue", () => {
   /** `size` zero bytes in base64. */
   const b64 = (size: number) => Buffer.alloc(size).toString("base64");
@@ -327,6 +357,13 @@ describe("resultValue", () => {
     expect(resultValue({ content: [], structuredContent: [1, 2] })).toEqual([1, 2]);
     expect(resultValue({ content: [{ type: "text", text: "x" }], structuredContent: 0 })).toBe(0);
     expect(resultValue({ content: [] })).toBe("");
+  });
+
+  test("rendered text repairs a lone surrogate, and structured content is returned as sent", () => {
+    const cut = "Hi \ud83d";
+    expect(resultValue({ content: [{ type: "text", text: cut }] })).toBe("Hi \ufffd");
+    expect(resultValue({ content: [{ type: "resource", resource: { uri: "text://t", text: cut } }] })).toBe("Hi \ufffd");
+    expect(resultValue({ content: [], structuredContent: { k: cut } })).toEqual({ k: cut });
   });
 
   test("an error result throws its rendered content", () => {

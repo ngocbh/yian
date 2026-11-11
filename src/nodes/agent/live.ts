@@ -42,8 +42,9 @@ import {
   UsageReport,
 } from "../../llm/events.ts";
 import { callWithRetries } from "../../llm/executor.ts";
-import { Message, ReasoningPart, type Request, Response, TextPart } from "../../llm/messages.ts";
+import { Message, ReasoningPart, type Request, Response, TextPart, ToolCallPart } from "../../llm/messages.ts";
 import { AuthError, isAuthFailure } from "../../llm_clients/auth/common.ts";
+import { isStorageError, StorageError } from "../../llm_clients/auth/store.ts";
 import { realScheduler, type Scheduler } from "../../platform.ts";
 import { isPending } from "../../tools/context.ts";
 import type { JsonObject } from "../../typesys/json.ts";
@@ -57,6 +58,7 @@ import {
   inlineToFile,
   type PriorAttempts,
   type RetrySettings,
+  STORAGE_ERROR_KIND,
 } from "./context.ts";
 import { ReplyInterrupted } from "./interrupts.ts";
 
@@ -87,11 +89,13 @@ export function markModelFailure(error: unknown): void {
 /**
  * Return the failure code of an error `markModelFailure` marked, or `null` when unmarked.
  *
- * An auth failure (`isAuthFailure`) is `provider.auth`; a `ProviderError` takes its kind's
- * `provider.*` code; anything else is `node.execute`.
+ * An auth-store fault (`isStorageError`) is `provider.auth_storage`; any other auth failure
+ * (`isAuthFailure`) is `provider.auth`; a `ProviderError` takes its kind's `provider.*` code;
+ * anything else is `node.execute`.
  */
 export function modelFailureCode(error: unknown): FailureCode | null {
   if (typeof error !== "object" || error === null || !modelFailures.has(error)) return null;
+  if (isStorageError(error)) return "provider.auth_storage";
   if (isAuthFailure(error)) return "provider.auth";
   return (error instanceof ProviderError ? PROVIDER_CODES[error.kind] : undefined) ?? "node.execute";
 }
@@ -111,13 +115,14 @@ class RecordedCallError extends Error {
 
 /**
  * Return the error a failed `model_call` step recorded as `{kind, message}`: a `ProviderError` of
- * that kind (not retryable, from `provider`), an `AuthError`, or an error of that name, each with
- * the message.
+ * that kind (not retryable, from `provider`), a `StorageError`, an `AuthError`, or an error of that
+ * name, each with the message.
  */
 function recordedFailure({ kind, message }: { kind: string; message: string }, provider: string): Error {
   if ((ERROR_KINDS as readonly string[]).includes(kind)) {
     return new ProviderError(kind as ErrorKind, message, { retryable: false, provider });
   }
+  if (kind === STORAGE_ERROR_KIND) return new StorageError(message);
   return kind === "AuthError" ? new AuthError(message) : new RecordedCallError(kind, message);
 }
 
@@ -213,10 +218,12 @@ interface Called<N extends number | null> {
  * any event but reasoning, usage and empty text) it aborts the request at once (a slow first
  * token, a model thinking, a non-streaming reply), cutting an empty reply that drops any reasoning
  * so far; after it, the interrupt is checked right before each non-empty `TextDelta` (a later
- * chunk, as a host sees it). A cut closes the stream, sends the final chunk when streaming and `ModelCallFinished` with
- * the usage of the last `UsageReport` before the cut (else `null`) and no error. A reply whose
- * text had all arrived is never cut. During a retry wait the interrupt ends the wait at once with
- * nothing more emitted. A stop wins over an interrupt.
+ * chunk, as a host sees it), and once more when the stream ends: an interrupt that landed after
+ * the last text cuts an answer with all its text, while a reply with tool calls stands. A cut
+ * closes the stream, sends the final chunk when streaming and `ModelCallFinished` with the usage
+ * of the last `UsageReport` before the cut (the reply's own, for a cut at the end; else `null`)
+ * and no error. During a retry wait the interrupt ends the wait at once with nothing more emitted.
+ * A stop wins over an interrupt.
  *
  * @param live The sinks, or `null` when there are none.
  * @param options `purpose` goes on every event; `signal` stops the call;
@@ -362,6 +369,13 @@ export async function callModel(
       // provider error, with its step written and its bracket closed, and a resume doesn't pay again.
       const { message, usage: used, finishReason, responseId } = response;
       response = new Response({ message: inlineToFile(message, runDir), usage: used, finishReason, responseId });
+    }
+    // An interrupt that landed after the last text but before the stream ended named this reader
+    // as stopped, and the reply wasn't whole until the end: an answer is cut with all its text. A
+    // reply with tool calls stands; the loop skips its calls.
+    if (interrupt?.aborted && opened && !response.message.parts.some((part) => part instanceof ToolCallPart)) {
+      const parts = shownText ? [new TextPart(shownText)] : [];
+      throw new ReplyInterrupted(new Message({ role: "assistant", parts }), usageOf(response));
     }
     emitStream?.(chunk("", true));
   } catch (error) {

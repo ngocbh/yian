@@ -23,7 +23,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'node ''composite'' (kind=loop): field ''llm_config'' is not allowed (allowed: asserts, call, depends_on, env, input, kind, max, node_name, runs_after, times, until, while)'
+      message: 'node ''composite'' (kind=loop): field ''llm_config'' is not allowed (allowed: asserts, call, depends_on, env, input, kind, max, node_name, on_max_exceeded, runs_after, times, until, while)'
       frames:
       - label: flow.yaml
         range: [6, 17, 6, 35]

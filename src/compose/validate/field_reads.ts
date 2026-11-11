@@ -1096,6 +1096,7 @@ function declaredReadError(
  * @param options.why Why a root in `nullableRoots` may be null (default "it is Optional").
  * @param options.untyped Whether a root's un-narrowed value is untyped (default: every one of its
  *   `roots` contracts is untyped, or it has none).
+ * @param options.typeFn Resolves a constructor name in a comprehension's iterable (default none).
  * @returns The errors in order: name errors with code `compose.load`, then `nullableReads`'.
  */
 export function fieldReadErrors(
@@ -1112,11 +1113,13 @@ export function fieldReadErrors(
     rootLength?: (names: readonly string[]) => number;
     why?: (root: string) => string;
     untyped?: (root: string, fields: readonly string[]) => boolean;
+    typeFn?: TypeFn | null;
   } = {},
 ): FieldReadError[] {
   const {
     nullableRoots = new Set<string>(),
     opaqueRoots = new Set<string>(),
+    typeFn = null,
     rootLength = () => 1,
     why = () => "it is Optional",
     untyped = (root: string, fields: readonly string[]) =>
@@ -1135,10 +1138,10 @@ export function fieldReadErrors(
     untyped,
     routing: () => null,
   };
-  const names = [...nameErrors(tree, roots, registry, options), ...variableNameErrors(tree, readRoots, registry)];
+  const names = [...nameErrors(tree, roots, registry, options), ...variableNameErrors(tree, readRoots, registry, typeFn)];
   // A read the name checks reject gets no second message.
   const named = (read: string) => names.some((message) => message.includes("${" + read + "}"));
-  const reads = nullableReads(tree, readRoots, registry).filter(
+  const reads = nullableReads(tree, readRoots, registry, typeFn).filter(
     ([read, error]) => !named(read) && !names.includes(error.message),
   );
   const nullable = reads

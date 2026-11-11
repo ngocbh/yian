@@ -237,6 +237,15 @@ test("a field on str in a flow assert is a load error", () => {
   );
 });
 
+test("a flow assert types a comprehension over a constructor", () => {
+  // `Box(...)` types its value, so the variable over its items is an `Inner`.
+  const preamble = "typedefs:\n  Inner: {x: str}\n  Box: {items: list(Inner)}\n";
+  const read = (field: string) =>
+    flow("object", `asserts:\n  - \${len([i.${field} for i in Box(step.output).items]) > 0}\noutput: \${step.output}\n`, preamble);
+  expect(() => load(read("x"))).not.toThrow();
+  expect(failure(read("zz"))).toContain("reference ${i.zz} reads unknown field 'zz' on record");
+});
+
 // A child whose output is a partial record: `a` is typed, `b` comes from an untyped CODE node.
 const PARTIAL_CHILD =
   "id: p\nname: p\n" +

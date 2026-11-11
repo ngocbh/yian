@@ -208,4 +208,5 @@ main() {
   if [ -n "$FAILED" ]; then exit 1; fi
 }
 
-main "$@"
+# In braces, so a download cut anywhere in this line is a syntax error and runs nothing.
+{ main "$@"; }

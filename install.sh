@@ -205,6 +205,7 @@ find_bun() {
   else
     command -v curl >/dev/null 2>&1 || die "Bun is not installed and curl is missing. Install Bun from https://bun.sh, then run this again."
     step "Installing Bun with https://bun.sh/install"
+    warn "Bun's installer adds Bun to PATH in your shell's rc files itself, even with --no-modify-path, and uninstall.sh leaves Bun and those lines."
     curl -fsSL https://bun.sh/install | bash
     BUN=$BUN_HOME/bin/bun
     [ -x "$BUN" ] || die "Bun's installer did not leave $BUN. Install Bun from https://bun.sh, then run this again."
@@ -384,7 +385,8 @@ main() {
 
   wire_path
 
-  ok "Installed yian $("$TARGET" --version) at $TARGET"
+  version=$("$TARGET" --version) || die "$TARGET --version failed. Run it to see why, then run this again."
+  ok "Installed yian $version at $TARGET"
   if [ -z "$SKIP_SETUP" ]; then
     step "Next, save a login for a model provider: yian auth anthropic"
     step "For other providers, see https://yian.readthedocs.io/models/"
@@ -392,4 +394,5 @@ main() {
   path_hint
 }
 
-main "$@"
+# In braces, so a download cut anywhere in this line is a syntax error and runs nothing.
+{ main "$@"; }

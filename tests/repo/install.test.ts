@@ -163,14 +163,14 @@ esac
  * shell, with the stubs first on PATH. It starts in the home unless `cwd` says otherwise.
  */
 function pipe(
-  script: string,
+  script: string | Buffer,
   fx: Fixture,
   args: string[] = [],
   extra: Record<string, string> = {},
   cwd: string = fx.home,
 ) {
   return spawnSync("sh", ["-s", "--", ...args], {
-    input: readFileSync(join(ROOT, script)),
+    input: typeof script === "string" ? readFileSync(join(ROOT, script)) : script,
     cwd,
     env: { HOME: fx.home, SHELL: "/bin/bash", PATH: `${fx.stubs}:/usr/bin:/bin`, ...extra },
     encoding: "utf8",
@@ -360,6 +360,26 @@ describe.if(process.versions.bun !== undefined)("install.sh, piped", () => {
     expect(git(fx.clone, "rev-parse", "HEAD")).toBe(git(fx.remote, "rev-parse", "main"));
   });
 
+  test("runs nothing when the download stops anywhere in its last line", () => {
+    const fx = fixture();
+    const text = readFileSync(join(ROOT, "install.sh"));
+    const last = text.lastIndexOf("\n", text.length - 2) + 1;
+    for (let cut = last; cut < text.length - 1; cut++) {
+      pipe(text.subarray(0, cut), fx, ["--repo", fx.remote, "--no-modify-path", "--dir", join(fx.base, "elsewhere")]);
+    }
+    expect(calls(fx)).toBe("");
+    expect(readdirSync(fx.home)).toEqual([]);
+    expect(existsSync(join(fx.base, "elsewhere"))).toBe(false);
+  });
+
+  test("fails when the installed yian doesn't run", () => {
+    const fx = fixture();
+    writeScript(join(fx.stubs, "bun"), `#!/bin/sh\ncase $1 in --version) echo 1.4.2 ;; install) ;; *) exit 3 ;; esac\n`);
+    const result = pipe("install.sh", fx, ["--repo", fx.remote]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(`✗ ${join(fx.bin, "yian")} --version failed`);
+  });
+
   test("refuses someone else's yian before it clones or installs anything", () => {
     const fx = fixture();
     mkdirSync(fx.bin, { recursive: true });
@@ -431,7 +451,8 @@ describe.if(process.versions.bun !== undefined)("install.sh, piped", () => {
       join(fx.stubs, "curl"),
       `#!/bin/sh\necho "curl $*" >>'${fx.log}'\necho 'mkdir -p "$HOME/.bun/bin" && cp ${fx.stubBun} "$HOME/.bun/bin/bun"'\n`,
     );
-    install(fx);
+    const result = install(fx, ["--no-modify-path"]);
+    expect(result.stdout).toContain("⚠ Bun's installer adds Bun to PATH in your shell's rc files itself");
     expect(calls(fx)).toContain("curl -fsSL https://bun.sh/install");
     expect(readFileSync(join(fx.bin, "yian"), "utf8")).toContain(join(fx.home, ".bun", "bin", "bun"));
   });
@@ -658,6 +679,17 @@ describe.if(process.versions.bun !== undefined)("uninstall.sh", () => {
       expect(existsSync(join(fx.bin, "yian"))).toBe(false);
     });
   }
+
+  test("removes nothing when the download stops anywhere in its last line", () => {
+    const fx = fixture();
+    install(fx);
+    const text = readFileSync(join(ROOT, "uninstall.sh"));
+    const last = text.lastIndexOf("\n", text.length - 2) + 1;
+    for (let cut = last; cut < text.length - 1; cut++) pipe(text.subarray(0, cut), fx);
+    expect(existsSync(join(fx.bin, "yian"))).toBe(true);
+    expect(existsSync(fx.clone)).toBe(true);
+    expect(pathLines(join(fx.home, ".bashrc"))).toBe(1);
+  });
 
   test("refuses a relative --dir or YIAN_BIN_DIR, and removes nothing", () => {
     const fx = fixture();

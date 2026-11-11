@@ -31,7 +31,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'loop node ''ask'' until: unknown type ''Dnoe''; isinstance takes a typedefs: name or one of str, int, float, bool, date, datetime, object'
+      message: 'loop node ''ask'' until: unknown type ''Dnoe''; isinstance takes a typedefs: name or one of str, int, float, bool, date, datetime, object, list, Message'
       frames:
       - label: flow.yaml
         range: [11, 12, 11, 52]

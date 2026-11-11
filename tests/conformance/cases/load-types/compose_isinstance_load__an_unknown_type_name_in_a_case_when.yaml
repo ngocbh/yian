@@ -42,7 +42,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'case node ''route'' cases[1].when: unknown type ''Ordr''; isinstance takes a typedefs: name or one of str, int, float, bool, date, datetime, object'
+      message: 'case node ''route'' cases[1].when: unknown type ''Ordr''; isinstance takes a typedefs: name or one of str, int, float, bool, date, datetime, object, list, Message'
       frames:
       - label: flow.yaml
         range: [23, 15, 23, 41]

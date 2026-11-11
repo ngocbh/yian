@@ -175,7 +175,7 @@ test("isinstance unknown type names the gate", () => {
   const error = loadError(() => assembleText(inputFlow("      proj: ${isinstance(input.proj, Nope)}\n", "Q ${proj}")));
   expect(error.message).toBe(
     "node 'ask' input 'proj': unknown type 'Nope'; isinstance takes a typedefs: name or one of str, int, float, " +
-      "bool, date, datetime, object",
+      "bool, date, datetime, object, list, Message",
   );
   expect(lineOf(error)).toBe(13);
 });

@@ -4,9 +4,9 @@
  * `isinstance` and constructors read their type from the evaluating node's `types` table.
  * Compose fills that table from the names a node's expressions use, resolved against the flow's
  * own `typedefs:` registry, so each flow (root, `defs:`, inline bodies, `uses:` children) sees
- * its own types. `isinstance` also takes a builtin scalar name; a constructor takes only a
- * `typedefs:` name. `isinstanceMembers` also says which members of a union an `isinstance`
- * check narrows it to.
+ * its own types. `isinstance` also takes a built-in type name (`int`, `list`, `Message`, ...); a
+ * constructor takes only a `typedefs:` name. `isinstanceMembers` also says which members of a union
+ * an `isinstance` check narrows it to.
  */
 
 import { reprText } from "../../diagnostics.ts";
@@ -29,16 +29,19 @@ import {
   typesOverlap,
 } from "../../typesys/values.ts";
 
-/** The scalar names `isinstance` accepts besides a `typedefs:` name. */
-const ISINSTANCE_SCALAR_NAMES: readonly string[] = [
-  "str",
-  "int",
-  "float",
-  "bool",
-  "date",
-  "datetime",
-  "object",
-];
+/** The built-in type names `isinstance` accepts besides a `typedefs:` name, each with its type text. */
+const ISINSTANCE_BUILTIN_TYPES: ReadonlyMap<string, string> = new Map([
+  ["str", "str"],
+  ["int", "int"],
+  ["float", "float"],
+  ["bool", "bool"],
+  ["date", "date"],
+  ["datetime", "datetime"],
+  ["object", "object"],
+  // Any list, whatever its items.
+  ["list", "list(Any)"],
+  ["Message", "Message"],
+]);
 
 /**
  * Return the type names the `isinstance(x, T)` calls in `source` name.
@@ -123,20 +126,22 @@ function collect(
 /**
  * Resolve one `isinstance` type name against a flow's `typedefs:` registry.
  *
- * @param name The bare type name written as the second `isinstance` argument.
+ * @param name The bare type name written as the second `isinstance` argument: a `typedefs:` name,
+ *   a scalar name, `object` (any record), `list` (any list) or `Message`.
  * @param registry The flow's `readTypedefs(...)` table.
  * @returns The resolved type.
- * @throws {TypeCheckError} When `name` is neither a `typedefs:` name nor a builtin scalar name, or
+ * @throws {TypeCheckError} When `name` is neither a `typedefs:` name nor a built-in type name, or
  *   names a host memory type: only the runner binds a memory, so no check narrows a value to one.
  */
 export function resolveIsinstanceType(name: string, registry: TypeRegistry): Type {
-  if (!registry.has(name) && !ISINSTANCE_SCALAR_NAMES.includes(name)) {
+  const builtin = ISINSTANCE_BUILTIN_TYPES.get(name);
+  if (!registry.has(name) && builtin === undefined) {
     throw new TypeCheckError(
       `unknown type ${reprText(name)}; isinstance takes a typedefs: name or one of ` +
-        ISINSTANCE_SCALAR_NAMES.join(", "),
+        [...ISINSTANCE_BUILTIN_TYPES.keys()].join(", "),
     );
   }
-  const typ = typeFor(name, registry);
+  const typ = typeFor(registry.has(name) ? name : builtin!, registry);
   if (isMemoryType(typ)) {
     throw new TypeCheckError(
       `\`${name}\` is a memory type; isinstance can't test for one (only the runner binds a memory)`,

@@ -15,8 +15,10 @@ set -eu
 unset CDPATH
 
 MARK="yian install.sh"
-# The wrapper's own line that says install.sh wrote it, matched whole.
+# The wrapper's own line that says install.sh wrote it, matched whole, and the line an earlier
+# install.sh wrote there instead (an extended regular expression, matched whole).
 WRAPPER_MARK="# Written by $MARK"
+OLD_WRAPPER_MARK='# Written by yian install\.sh: runs the yian checkout at /.* with Bun\.'
 # The file in a clone's .git that says install.sh made the clone.
 CLONE_MARK=yian-install
 
@@ -54,9 +56,62 @@ fish_path_line() {
   printf '%s' "fish_add_path --path $(quote "$1")  # added by $MARK"
 }
 
+# The unguarded line an earlier install.sh added to one rc file, which install.sh swaps for
+# sh_path_line's and uninstall.sh removes.
+old_path_line() {
+  printf '%s' "export PATH=$(quote "$1"):\"\$PATH\"  # added by $MARK"
+}
+
+# True when the file $1 is a wrapper install.sh wrote, now or in its earlier form.
+our_wrapper() {
+  LC_ALL=C grep -a -q -x -F -e "$WRAPPER_MARK" "$1" 2>/dev/null ||
+    LC_ALL=C grep -a -q -x -E -e "$OLD_WRAPPER_MARK" "$1" 2>/dev/null
+}
+
 # The size of the file $1 in bytes.
 size() {
   wc -c <"$1" | tr -d ' '
+}
+
+# Removes from the rc file $1 the lines given after it, matched whole, and fails when $1 is left as
+# it was. grep reads the file as bytes, whatever the locale and whatever it holds. The new text is
+# checked to be the old one less exactly those lines before it's written back, through the file so
+# its permissions and any symlink stay; a failed write puts the old text back.
+strip_lines() {
+  file=$1
+  shift
+  for stripped_line do
+    set -- "$@" -e "$stripped_line"
+    shift
+  done
+  if [ ! -w "$file" ]; then
+    warn "Left the PATH line in $file: the file isn't writable."
+    return 1
+  fi
+  if ! NEW=$(mktemp) || ! OLD=$(mktemp); then
+    fail "Could not make a temp file, so the PATH line is still in $file."
+    return 1
+  fi
+  code=0
+  LC_ALL=C grep -a -v -x -F "$@" "$file" >"$NEW" || code=$?
+  # grep ends a last line that has no newline with one.
+  expected=$(($(size "$file") - $(LC_ALL=C grep -a -x -F "$@" "$file" | wc -c)))
+  if [ -n "$(tail -c 1 "$file")" ]; then expected=$((expected + 1)); fi
+  stripped=
+  if [ "$code" -gt 1 ] || [ "$(size "$NEW")" -ne "$expected" ] ||
+    ! cat "$file" >"$OLD" || [ "$(size "$OLD")" -ne "$(size "$file")" ]; then
+    fail "Could not write the new text of $file, so it's as it was, PATH line included."
+  elif cat "$NEW" >"$file" && [ "$(size "$file")" -eq "$expected" ]; then
+    stripped=1
+  elif cat "$OLD" >"$file"; then
+    fail "Could not write $file, so it's as it was, PATH line included."
+  else
+    fail "Could not write $file. Its old text is in $OLD."
+    OLD=
+  fi
+  rm -f "$NEW" ${OLD:+"$OLD"}
+  NEW= OLD=
+  [ -n "$stripped" ]
 }
 
 # Refuses the path $2, which $1 names, unless it's absolute and holds no newline: a relative folder
@@ -97,7 +152,7 @@ parse_args() {
 remove_wrapper() {
   target=$BIN_DIR/yian
   [ -e "$target" ] || return 0
-  if LC_ALL=C grep -a -q -x -F -e "$WRAPPER_MARK" "$target" 2>/dev/null; then
+  if our_wrapper "$target"; then
     rm -f "$target"
     ok "Removed $target"
   else
@@ -105,47 +160,16 @@ remove_wrapper() {
   fi
 }
 
-# Removes the marked PATH lines from the rc file $1. grep reads it as bytes, whatever the locale
-# and whatever it holds. The new text is checked to be the old one less exactly those lines before
-# it's written back, through the file so its permissions and any symlink stay; a failed write puts
-# the old text back.
-strip_path_lines() {
-  if [ ! -w "$1" ]; then
-    warn "Left the PATH line in $1: the file isn't writable."
-    return 0
-  fi
-  if ! NEW=$(mktemp) || ! OLD=$(mktemp); then
-    fail "Could not make a temp file, so the PATH line is still in $1."
-    return 0
-  fi
-  code=0
-  LC_ALL=C grep -a -v -x -F -e "$SH_LINE" -e "$FISH_LINE" "$1" >"$NEW" || code=$?
-  # grep ends a last line that has no newline with one.
-  expected=$(($(size "$1") - $(LC_ALL=C grep -a -x -F -e "$SH_LINE" -e "$FISH_LINE" "$1" | wc -c)))
-  if [ -n "$(tail -c 1 "$1")" ]; then expected=$((expected + 1)); fi
-  if [ "$code" -gt 1 ] || [ "$(size "$NEW")" -ne "$expected" ] ||
-    ! cat "$1" >"$OLD" || [ "$(size "$OLD")" -ne "$(size "$1")" ]; then
-    fail "Could not write the new text of $1, so it's as it was, PATH line included."
-  elif cat "$NEW" >"$1" && [ "$(size "$1")" -eq "$expected" ]; then
-    ok "Removed the PATH line from $1"
-  elif cat "$OLD" >"$1"; then
-    fail "Could not write $1, so it's as it was, PATH line included."
-  else
-    fail "Could not write $1. Its old text is in $OLD."
-    OLD=
-  fi
-  rm -f "$NEW" ${OLD:+"$OLD"}
-  NEW= OLD=
-}
-
 remove_path_lines() {
   SH_LINE=$(sh_path_line "$BIN_DIR")
   FISH_LINE=$(fish_path_line "$BIN_DIR")
+  OLD_LINE=$(old_path_line "$BIN_DIR")
   zdir=${ZDOTDIR:-$HOME}
   for rc in "$HOME/.bashrc" "$HOME/.profile" "$HOME/.bash_profile" "$HOME/.bash_login" \
     "$zdir/.zshrc" "$zdir/.zprofile" "${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"; do
-    if [ -f "$rc" ] && LC_ALL=C grep -a -q -x -F -e "$SH_LINE" -e "$FISH_LINE" "$rc"; then
-      strip_path_lines "$rc"
+    if [ -f "$rc" ] && LC_ALL=C grep -a -q -x -F -e "$SH_LINE" -e "$FISH_LINE" -e "$OLD_LINE" "$rc" &&
+      strip_lines "$rc" "$SH_LINE" "$FISH_LINE" "$OLD_LINE"; then
+      ok "Removed the PATH line from $rc"
     fi
   done
 }

@@ -90,6 +90,24 @@ function markedLine(shell: string, bin: string): string {
   return `${line}  # added by yian install.sh`;
 }
 
+/**
+ * Writes the wrapper and the PATH line that install.sh wrote before it matched its marks as whole
+ * lines, in their exact formats, for a checkout at `checkout`.
+ */
+function writeEarlierInstall(home: string, bin: string, checkout: string) {
+  mkdirSync(bin, { recursive: true });
+  writeScript(
+    join(bin, "yian"),
+    `#!/bin/sh
+# Written by yian install.sh: runs the yian checkout at ${checkout} with Bun.
+# The flags keep Bun from reading the current folder's .env and bunfig.toml and from installing packages.
+exec '/usr/bin/true' --no-install --no-env-file --config=/dev/null '${checkout}/src/cli/bin.ts' "$@"
+`,
+  );
+  writeFileSync(join(home, ".bashrc"), `alias ll='ls -l'\nexport PATH='${bin}':"$PATH"  # added by yian install.sh\n`);
+  writeFileSync(join(home, ".zshrc"), `export PATH='${bin}':"$PATH"  # added by yian install.sh\n`);
+}
+
 /** A temp home with a stub `bun` and `curl`, and a fixture repository to clone. */
 interface Fixture {
   base: string;
@@ -183,7 +201,7 @@ function pipe(
   return spawnSync("sh", ["-s", "--", ...args], {
     input: typeof script === "string" ? readFileSync(join(ROOT, script)) : script,
     cwd,
-    env: { HOME: fx.home, SHELL: "/bin/bash", PATH: `${fx.stubs}:/usr/bin:/bin`, ...extra },
+    env: { HOME: fx.home, SHELL: "/bin/bash", PATH: `${fx.stubs}:/usr/bin:/bin`, ...NO_NETWORK, ...extra },
     encoding: "utf8",
     timeout: 60_000,
   });
@@ -244,6 +262,42 @@ describe.if(process.versions.bun !== undefined)("install.sh", () => {
     expect(readFileSync(join(bin, "yian"), "utf8")).toContain("echo mine");
   });
 
+  test("run as sh install.sh in a checkout, installs that checkout", () => {
+    const fx = fixture();
+    const checkout = join(fx.base, "co");
+    mkdirSync(join(checkout, "src", "cli"), { recursive: true });
+    writeFileSync(join(checkout, "src", "cli", "bin.ts"), "");
+    copyFileSync(join(ROOT, "install.sh"), join(checkout, "install.sh"));
+    const result = spawnSync("sh", ["install.sh", "--repo", fx.remote, "--skip-setup"], {
+      cwd: checkout,
+      env: { HOME: fx.home, SHELL: "/bin/bash", PATH: `${fx.stubs}:/usr/bin:/bin`, ...NO_NETWORK },
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    expect(result.stderr).not.toContain("✗");
+    expect(result.stdout).toContain(`Installing yian from the checkout at ${realpathSync(checkout)}`);
+    expect(existsSync(fx.clone)).toBe(false);
+  });
+
+  test("replaces the wrapper and the PATH line an earlier install.sh wrote", () => {
+    const fx = fixture();
+    writeEarlierInstall(fx.home, fx.bin, fx.clone);
+    const result = install(fx);
+    expect(readFileSync(join(fx.bin, "yian"), "utf8").split("\n")[1]).toBe("# Written by yian install.sh");
+    expect(readFileSync(join(fx.home, ".bashrc"), "utf8")).toBe(`alias ll='ls -l'\n${markedLine("bash", fx.bin)}\n`);
+    expect(pathLines(join(fx.home, ".profile"))).toBe(1);
+    expect(result.stdout).toContain(`Replaced the old PATH line in ${join(fx.home, ".bashrc")}`);
+  });
+
+  test("swaps an earlier install.sh's PATH line in its own file when the folder is on PATH already, as that line put it", () => {
+    const fx = fixture();
+    writeEarlierInstall(fx.home, fx.bin, fx.clone);
+    install(fx, [], { PATH: `${fx.bin}:${fx.stubs}:/usr/bin:/bin` });
+    expect(readFileSync(join(fx.home, ".bashrc"), "utf8")).toBe(`alias ll='ls -l'\n${markedLine("bash", fx.bin)}\n`);
+    expect(readFileSync(join(fx.home, ".zshrc"), "utf8")).toBe(`${markedLine("zsh", fx.bin)}\n`);
+    expect(existsSync(join(fx.home, ".profile"))).toBe(false);
+  });
+
   test("finds the checkout it is in when CDPATH names another folder of the same name", () => {
     const fx = fixture();
     const checkout = join(fx.base, "co");
@@ -253,7 +307,7 @@ describe.if(process.versions.bun !== undefined)("install.sh", () => {
     mkdirSync(join(fx.base, "elsewhere", "co"), { recursive: true });
     const result = spawnSync("sh", ["co/install.sh", "--repo", fx.remote], {
       cwd: fx.base,
-      env: { HOME: fx.home, SHELL: "/bin/bash", PATH: `${fx.stubs}:/usr/bin:/bin`, CDPATH: join(fx.base, "elsewhere") },
+      env: { HOME: fx.home, SHELL: "/bin/bash", PATH: `${fx.stubs}:/usr/bin:/bin`, ...NO_NETWORK, CDPATH: join(fx.base, "elsewhere") },
       encoding: "utf8",
       timeout: 60_000,
     });
@@ -269,7 +323,7 @@ describe.if(process.versions.bun !== undefined)("install.sh", () => {
     writeFileSync(join(checkout, "src", "cli", "bin.ts"), "");
     copyFileSync(join(ROOT, "install.sh"), join(checkout, "install.sh"));
     const result = spawnSync("sh", [join(checkout, "install.sh")], {
-      env: { HOME: fx.home, SHELL: "/bin/bash", PATH: `${fx.stubs}:/usr/bin:/bin` },
+      env: { HOME: fx.home, SHELL: "/bin/bash", PATH: `${fx.stubs}:/usr/bin:/bin`, ...NO_NETWORK },
       encoding: "utf8",
       timeout: 60_000,
     });
@@ -472,18 +526,33 @@ describe.if(process.versions.bun !== undefined)("install.sh, piped", () => {
     expect(calls(fx)).toBe("");
   });
 
-  test("never takes a bun from a relative PATH entry or the current folder", () => {
+  test("never takes a bun from a relative PATH entry, the current folder or a folder inside it", () => {
     const fx = fixture();
     const project = join(fx.base, "project");
-    mkdirSync(project);
-    copyFileSync(fx.stubBun, join(project, "bun"));
-    chmodSync(join(project, "bun"), 0o755);
-    const result = pipe("install.sh", fx, ["--repo", fx.remote], { PATH: `.:${project}:${fx.stubs}:/usr/bin:/bin` }, project);
+    // Where direnv's PATH_add puts a project's own commands.
+    const tools = join(project, "node_modules", ".bin");
+    mkdirSync(tools, { recursive: true });
+    for (const dir of [project, tools]) {
+      copyFileSync(fx.stubBun, join(dir, "bun"));
+      chmodSync(join(dir, "bun"), 0o755);
+    }
+    const path = `.:${project}:${tools}:${fx.stubs}:/usr/bin:/bin`;
+    const result = pipe("install.sh", fx, ["--repo", fx.remote], { PATH: path }, project);
     expect(result.stderr).not.toContain("✗");
     expect(result.status).toBe(0);
     const wrapper = readFileSync(join(fx.bin, "yian"), "utf8");
     expect(wrapper).toContain(`'${join(fx.stubs, "bun")}'`);
     expect(wrapper).not.toContain(project);
+  });
+
+  test("run from the home, takes a bun from a folder inside the home", () => {
+    const fx = fixture();
+    const tools = join(fx.home, "tools");
+    mkdirSync(tools);
+    copyFileSync(fx.stubBun, join(tools, "bun"));
+    chmodSync(join(tools, "bun"), 0o755);
+    install(fx, [], { PATH: `${tools}:/usr/bin:/bin` });
+    expect(readFileSync(join(fx.bin, "yian"), "utf8")).toContain(`'${join(tools, "bun")}'`);
   });
 
   // The installer finds a bun in /usr/bin or /bin before it would install one.
@@ -616,7 +685,7 @@ describe.if(process.versions.bun !== undefined)("uninstall.sh", () => {
     const result = spawnSync("sh", ["-c", 'trap "" XFSZ; ulimit -f 8; exec sh -s'], {
       input: readFileSync(join(ROOT, "uninstall.sh")),
       cwd: fx.home,
-      env: { HOME: fx.home, SHELL: "/bin/bash", PATH: `${fx.stubs}:/usr/bin:/bin`, TMPDIR: tmp },
+      env: { HOME: fx.home, SHELL: "/bin/bash", PATH: `${fx.stubs}:/usr/bin:/bin`, ...NO_NETWORK, TMPDIR: tmp },
       encoding: "utf8",
       timeout: 60_000,
     });
@@ -762,6 +831,16 @@ describe.if(process.versions.bun !== undefined)("uninstall.sh", () => {
     expect(existsSync(join(fx.bin, "yian"))).toBe(true);
     expect(existsSync(fx.clone)).toBe(true);
     expect(pathLines(join(fx.home, ".bashrc"))).toBe(1);
+  });
+
+  test("removes the wrapper and the PATH lines an earlier install.sh wrote", () => {
+    const fx = fixture();
+    writeEarlierInstall(fx.home, fx.bin, join(fx.base, "checkout"));
+    const result = pipe("uninstall.sh", fx);
+    expect(result.status).toBe(0);
+    expect(existsSync(join(fx.bin, "yian"))).toBe(false);
+    expect(readFileSync(join(fx.home, ".bashrc"), "utf8")).toBe("alias ll='ls -l'\n");
+    expect(readFileSync(join(fx.home, ".zshrc"), "utf8")).toBe("");
   });
 
   test("refuses a relative --dir or YIAN_BIN_DIR, and removes nothing", () => {

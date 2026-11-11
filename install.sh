@@ -21,8 +21,10 @@ set -eu
 unset CDPATH
 
 MARK="yian install.sh"
-# The wrapper's own line that says install.sh wrote it, matched whole.
+# The wrapper's own line that says install.sh wrote it, matched whole, and the line an earlier
+# install.sh wrote there instead (an extended regular expression, matched whole).
 WRAPPER_MARK="# Written by $MARK"
+OLD_WRAPPER_MARK='# Written by yian install\.sh: runs the yian checkout at /.* with Bun\.'
 # The file in a clone's .git that says install.sh made the clone, so uninstall.sh may remove it.
 CLONE_MARK=yian-install
 DEFAULT_REPO=https://github.com/ngocbh/yian.git
@@ -39,8 +41,12 @@ fi
 step() { printf '%s→%s %s\n' "$C_STEP" "$C_OFF" "$1"; }
 ok() { printf '%s✓%s %s\n' "$C_OK" "$C_OFF" "$1"; }
 warn() { printf '%s⚠%s %s\n' "$C_WARN" "$C_OFF" "$1"; }
-die() {
+fail() {
   printf '%s✗%s %s\n' "$C_ERR" "$C_OFF" "$1" >&2
+  FAILED=1
+}
+die() {
+  fail "$1"
   exit 1
 }
 
@@ -111,10 +117,10 @@ parse_args() {
 # Sets ROOT to the checkout this script is in, or leaves it empty when the script was piped.
 find_checkout() {
   ROOT=
-  # Run as a file, $0 is a path to install.sh. Piped through `curl | bash`, it's the shell's name,
-  # so a current folder holding a file of that name must not pass for a checkout.
+  # Run as a file, $0 is install.sh or a path to it. Piped through `curl | bash`, it's the shell's
+  # name, so a current folder holding a file of that name must not pass for a checkout.
   case $0 in
-    */install.sh) ;;
+    install.sh | */install.sh) ;;
     *) return 0 ;;
   esac
   [ -f "$0" ] || return 0
@@ -140,7 +146,7 @@ check_target() {
   BIN_DIR=${YIAN_BIN_DIR:-$HOME/.local/bin}
   check_path YIAN_BIN_DIR "$BIN_DIR"
   TARGET=$BIN_DIR/yian
-  if [ -e "$TARGET" ] && ! LC_ALL=C grep -a -q -x -F -e "$WRAPPER_MARK" "$TARGET" 2>/dev/null; then
+  if [ -e "$TARGET" ] && ! our_wrapper "$TARGET"; then
     die "$TARGET exists and was not written by install.sh. Move it away, or set YIAN_BIN_DIR."
   fi
 }
@@ -171,10 +177,17 @@ check_clone() {
   CLONE=update
 }
 
-# Prints the first bun in a PATH folder that is absolute and isn't the current folder. Either kind
-# would make whatever project this runs in supply the Bun the wrapper keeps.
+# Prints the first bun in a PATH folder that is absolute and is neither the current folder nor
+# inside it, as direnv's PATH_add makes a project's folders. Any of those would make whatever
+# project this runs in supply the Bun the wrapper keeps. Run from the home, or a folder above it,
+# folders inside it are the user's own.
 bun_on_path() {
   cwd=$(pwd -P)
+  home=$(cd "$HOME" 2>/dev/null && pwd -P) || home=$HOME
+  project=$cwd
+  case $home/ in
+    "${cwd%/}"/*) project= ;;
+  esac
   rest=$PATH:
   while [ -n "$rest" ]; do
     entry=${rest%%:*}
@@ -184,7 +197,13 @@ bun_on_path() {
       *) continue ;;
     esac
     [ -f "$entry/bun" ] && [ -x "$entry/bun" ] || continue
-    [ "$(cd "$entry" && pwd -P)" != "$cwd" ] || continue
+    dir=$(cd "$entry" && pwd -P) || continue
+    [ "$dir" != "$cwd" ] || continue
+    if [ -n "$project" ]; then
+      case $dir/ in
+        "${project%/}"/*) continue ;;
+      esac
+    fi
     printf '%s\n' "$entry/bun"
     return 0
   done
@@ -286,6 +305,64 @@ fish_path_line() {
   printf '%s' "fish_add_path --path $(quote "$1")  # added by $MARK"
 }
 
+# The unguarded line an earlier install.sh added to one rc file, which install.sh swaps for
+# sh_path_line's and uninstall.sh removes.
+old_path_line() {
+  printf '%s' "export PATH=$(quote "$1"):\"\$PATH\"  # added by $MARK"
+}
+
+# True when the file $1 is a wrapper install.sh wrote, now or in its earlier form.
+our_wrapper() {
+  LC_ALL=C grep -a -q -x -F -e "$WRAPPER_MARK" "$1" 2>/dev/null ||
+    LC_ALL=C grep -a -q -x -E -e "$OLD_WRAPPER_MARK" "$1" 2>/dev/null
+}
+
+# The size of the file $1 in bytes.
+size() {
+  wc -c <"$1" | tr -d ' '
+}
+
+# Removes from the rc file $1 the lines given after it, matched whole, and fails when $1 is left as
+# it was. grep reads the file as bytes, whatever the locale and whatever it holds. The new text is
+# checked to be the old one less exactly those lines before it's written back, through the file so
+# its permissions and any symlink stay; a failed write puts the old text back.
+strip_lines() {
+  file=$1
+  shift
+  for stripped_line do
+    set -- "$@" -e "$stripped_line"
+    shift
+  done
+  if [ ! -w "$file" ]; then
+    warn "Left the PATH line in $file: the file isn't writable."
+    return 1
+  fi
+  if ! NEW=$(mktemp) || ! OLD=$(mktemp); then
+    fail "Could not make a temp file, so the PATH line is still in $file."
+    return 1
+  fi
+  code=0
+  LC_ALL=C grep -a -v -x -F "$@" "$file" >"$NEW" || code=$?
+  # grep ends a last line that has no newline with one.
+  expected=$(($(size "$file") - $(LC_ALL=C grep -a -x -F "$@" "$file" | wc -c)))
+  if [ -n "$(tail -c 1 "$file")" ]; then expected=$((expected + 1)); fi
+  stripped=
+  if [ "$code" -gt 1 ] || [ "$(size "$NEW")" -ne "$expected" ] ||
+    ! cat "$file" >"$OLD" || [ "$(size "$OLD")" -ne "$(size "$file")" ]; then
+    fail "Could not write the new text of $file, so it's as it was, PATH line included."
+  elif cat "$NEW" >"$file" && [ "$(size "$file")" -eq "$expected" ]; then
+    stripped=1
+  elif cat "$OLD" >"$file"; then
+    fail "Could not write $file, so it's as it was, PATH line included."
+  else
+    fail "Could not write $file. Its old text is in $OLD."
+    OLD=
+  fi
+  rm -f "$NEW" ${OLD:+"$OLD"}
+  NEW= OLD=
+  [ -n "$stripped" ]
+}
+
 # True when the rc file $1 already puts BIN_DIR on PATH: with the line $2 install.sh writes, or
 # with a line of its own that names the folder, by its path or from $HOME. grep reads the file as
 # bytes, whatever the locale and whatever it holds.
@@ -297,10 +374,19 @@ puts_on_path() {
     LC_ALL=C grep -a -q -F -e "$BIN_DIR" -e "\$HOME/$from_home" -e "\${HOME}/$from_home" -e "~/$from_home"
 }
 
-# Appends the line $2 to the rc file $1, unless $1 already puts BIN_DIR on PATH. A file it can't
-# write gets a warning, and the other files are still written.
+# Appends the line $2 to the rc file $1, unless $1 already puts BIN_DIR on PATH, first taking out
+# the line an earlier install.sh wrote there. A file it can't write gets a warning, and the other
+# files are still written.
 add_path_line() {
-  if puts_on_path "$1" "$2"; then return 0; fi
+  replaced=
+  if [ -f "$1" ] && LC_ALL=C grep -a -q -x -F -e "$OLD_LINE" "$1"; then
+    strip_lines "$1" "$OLD_LINE" || return 0
+    replaced=1
+  fi
+  if puts_on_path "$1" "$2"; then
+    if [ -n "$replaced" ]; then ok "Removed the old PATH line from $1, which puts $BIN_DIR on PATH itself"; fi
+    return 0
+  fi
   if { [ -e "$1" ] && [ ! -w "$1" ]; } || ! mkdir -p "$(dirname "$1")" 2>/dev/null; then
     warn "Could not write $1, so it doesn't put $BIN_DIR on PATH."
     return 0
@@ -308,10 +394,12 @@ add_path_line() {
   # A last line with no newline stays whole.
   newline=
   if [ -s "$1" ] && [ -n "$(tail -c 1 "$1")" ]; then newline='\n'; fi
-  if printf "$newline%s\n" "$2" >>"$1"; then
-    ok "Added $BIN_DIR to PATH in $1"
-  else
+  if ! printf "$newline%s\n" "$2" >>"$1"; then
     warn "Could not write $1, so it doesn't put $BIN_DIR on PATH."
+  elif [ -n "$replaced" ]; then
+    ok "Replaced the old PATH line in $1"
+  else
+    ok "Added $BIN_DIR to PATH in $1"
   fi
 }
 
@@ -321,16 +409,24 @@ add_path_line() {
 wire_path() {
   RELOAD=
   [ -n "$MODIFY_PATH" ] || return 0
-  case ":$PATH:" in
-    *":$BIN_DIR:"*) return 0 ;;
-  esac
   # Guarded, since a shell can read more than one of these files.
   line=$(sh_path_line "$BIN_DIR")
+  OLD_LINE=$(old_path_line "$BIN_DIR")
+  zdir=${ZDOTDIR:-$HOME}
+  case ":$PATH:" in
+    *":$BIN_DIR:"*)
+      # On PATH already: only an earlier install.sh's line is swapped, in its own file.
+      for rc in "$HOME/.bashrc" "$HOME/.profile" "$HOME/.bash_profile" "$HOME/.bash_login" "$zdir/.zshrc" "$zdir/.zprofile"; do
+        if [ -f "$rc" ] && LC_ALL=C grep -a -q -x -F -e "$OLD_LINE" "$rc"; then add_path_line "$rc" "$line"; fi
+      done
+      return 0
+      ;;
+  esac
   case $(basename "${SHELL:-sh}") in
     zsh)
-      add_path_line "${ZDOTDIR:-$HOME}/.zshrc" "$line"
-      add_path_line "${ZDOTDIR:-$HOME}/.zprofile" "$line"
-      RELOAD="source $(quote "${ZDOTDIR:-$HOME}/.zshrc")"
+      add_path_line "$zdir/.zshrc" "$line"
+      add_path_line "$zdir/.zprofile" "$line"
+      RELOAD="source $(quote "$zdir/.zshrc")"
       ;;
     bash)
       add_path_line "$HOME/.bashrc" "$line"
@@ -369,6 +465,9 @@ path_hint() {
 }
 
 main() {
+  FAILED= NEW= OLD=
+  trap 'rm -f ${NEW:+"$NEW"} ${OLD:+"$OLD"}' EXIT
+  trap 'exit 1' HUP INT TERM
   parse_args "$@"
   find_checkout
   check_prerequisites
@@ -395,6 +494,7 @@ main() {
     step "For other providers, see https://yian.readthedocs.io/models/"
   fi
   path_hint
+  if [ -n "$FAILED" ]; then exit 1; fi
 }
 
 # In braces, so a download cut anywhere in this line is a syntax error and runs nothing.

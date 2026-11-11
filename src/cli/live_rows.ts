@@ -111,6 +111,8 @@ export class LiveRows {
   #placed: { row: number; col: number } | null = null;
   /** The width the lines on screen were drawn at. */
   #width: number | null = null;
+  /** The height the output reported when they were drawn (`undefined` when it reports none). */
+  #height: number | undefined | null = null;
   /** Set once the terminal may have reflowed the lines (a resize): the next frame starts over. */
   #lost = false;
   /**
@@ -152,7 +154,10 @@ export class LiveRows {
     this.flush(write);
   }
 
-  /** The terminal may have reflowed the rows on screen (a resize): the next frame starts over. */
+  /**
+   * The terminal may have reflowed the rows on screen (a resize): the next frame starts over. A
+   * frame at a new width or height starts over by itself.
+   */
   lose(): void {
     this.#lost = true;
   }
@@ -206,7 +211,10 @@ export class LiveRows {
     };
     const above = this.#rerender;
     this.#rerender = null;
-    const lost = this.#lost || (this.#width !== null && this.#width !== columns);
+    // A new height is a resize too: a terminal that shrank may have scrolled the rows up.
+    const height = this.#output.rows;
+    const resized = this.#width !== null && (this.#width !== columns || this.#height !== height);
+    const lost = this.#lost || resized;
     this.#lost = false;
     let prev = above !== null ? [] : this.#lines;
     let heights = prev.map((line) => layout(line, columns, -1).rows);
@@ -314,6 +322,7 @@ export class LiveRows {
     this.#lines = lines;
     this.#cursor = cursor;
     this.#width = columns;
+    this.#height = height;
     this.#row = row;
     this.#placed = placed;
     if (out === "" && show === this.#visible) return;

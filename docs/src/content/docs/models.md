@@ -157,7 +157,8 @@ llm_config:
 - On Azure and the Chat Completions providers, a model whose name starts with `gpt-5-pro`,
   `gpt-5.2-pro`, `gpt-5.4-pro`, `gpt-5.5-pro` or `gpt-5.6-sol`, or contains `codex`, is called
   through the Responses API; its block must then be empty. A block there fails at load, or before
-  the agent runs when the provider or model is set elsewhere.
+  the agent runs when the provider or model is set elsewhere. `yian config check` refuses a layer
+  that sets both the provider and such a model with a block, as if no flow or agent overrides them.
 - A setting one model doesn't accept passes the load check; the provider's error then fails the
   node.
 

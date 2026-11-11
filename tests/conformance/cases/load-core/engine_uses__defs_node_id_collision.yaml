@@ -1,0 +1,25 @@
+# A def shares the callable namespace with uses: aliases, so it can't take a node id either.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    x: !str
+  nodes:
+    a: {kind: call, call: a, input: {x: "${input.x}"}}
+  output: {y: "${a.output}"}
+  defs:
+    a:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        x: !str
+      output: str
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs: name ["a"] collides with a node id'
+      frames:
+      - label: flow.yaml
+        range: [9, 3, 9, 4]

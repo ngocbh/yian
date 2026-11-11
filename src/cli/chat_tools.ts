@@ -307,10 +307,30 @@ export async function renderedDiagnostic(diag: Diagnostic, env: Env): Promise<st
 }
 
 /**
- * Check `text` as the flow at `path`, confined to `root`: `ok`, the flow's name and its inputs as
- * `name: type` lines, or `invalid:` and the diagnostic.
+ * What `check_flow` finds of a flow: whether it loads (`ok`), and then its name and its inputs,
+ * each with its type's label; else the error, as `yian check` writes it.
  */
-async function checkText(root: string, path: string, text: string, env: Env): Promise<string> {
+export interface FlowCheck {
+  readonly ok: boolean;
+  readonly name: string | null;
+  readonly inputs: readonly { readonly name: string; readonly type: string }[];
+  readonly error: string | null;
+}
+
+/** What `write_flow` did with a flow file: whether it `written` it at `path`, else why not. */
+export interface FlowWrite {
+  readonly written: boolean;
+  readonly path: string;
+  readonly reason: string | null;
+}
+
+/** A `FlowCheck` of a flow that doesn't load, for `error`. */
+function failedCheck(error: string): FlowCheck {
+  return { ok: false, name: null, inputs: [], error };
+}
+
+/** Check `text` as the flow at `path`, confined to `root`, as `FlowCheck` says. */
+async function checkText(root: string, path: string, text: string, env: Env): Promise<FlowCheck> {
   return (await checkedFlow(root, path, text, env)).check;
 }
 
@@ -320,21 +340,19 @@ async function checkedFlow(
   path: string,
   text: string,
   env: Env,
-): Promise<{ check: string; flow: ComposedFlow | null }> {
+): Promise<{ check: FlowCheck; flow: ComposedFlow | null }> {
   let flow: ComposedFlow;
   try {
     flow = await loadConfinedText(root, path, text, env);
   } catch (error) {
     if (error instanceof LoadError) {
-      return { check: `invalid:\n${await renderedDiagnostic(error.diagnostic, env)}`, flow: null };
+      return { check: failedCheck(await renderedDiagnostic(error.diagnostic, env)), flow: null };
     }
     throw error;
   }
   // A flow's `input:` entry always declares its type, so its contract is set.
-  const inputs = flow.input.map((decl) => `  ${decl.name}: ${shownTypeLabel(decl.contract!.type)}`);
-  const name = flow.name ?? flow.compiled.flowId;
-  const lines = ["ok", `name: ${name}`, ...(inputs.length > 0 ? ["inputs:", ...inputs] : ["inputs: none"])];
-  return { check: lines.join("\n"), flow };
+  const inputs = flow.input.map((decl) => ({ name: decl.name, type: shownTypeLabel(decl.contract!.type) }));
+  return { check: { ok: true, name: flow.name ?? flow.compiled.flowId, inputs, error: null }, flow };
 }
 
 /**
@@ -360,14 +378,14 @@ function focusText(text: string): string {
  * Read and check the flow the chat is about (its focus) at `path`, confined to its own folder, so
  * a flow outside the chat's root works: its text, cut at `FOCUS_BYTES` with a note, its check as
  * `check_flow` gives it, of the whole text, and whether it loads with an `Inbox` input. A file
- * that can't be read gives no text and why.
+ * that can't be read gives no text, and why as the check's error.
  */
-export async function checkFocus(path: string, env: Env): Promise<{ text: string; check: string; inbox: boolean }> {
+export async function checkFocus(path: string, env: Env): Promise<{ text: string; check: FlowCheck; inbox: boolean }> {
   let text: string;
   try {
     text = readFlowText(path);
   } catch (error) {
-    return { text: "", check: toReadFailure(path, error).message, inbox: false };
+    return { text: "", check: failedCheck(toReadFailure(path, error).message), inbox: false };
   }
   const real = realpathSync(path);
   const { check, flow } = await checkedFlow(dirname(real), real, text, env);
@@ -423,22 +441,24 @@ function sameSnapshot(a: Snapshot, b: Snapshot): boolean {
  * during the approval is left alone; a new file is created only if still absent, and an existing
  * one is replaced through a temporary file in its folder, flushed to disk before the rename.
  *
- * Returns what happened, for the model: `wrote <path>`, `invalid:` and the diagnostic, or `not
- * written: <why>`. Once the user is asked, every outcome is returned, a refusal or a failed write
+ * Returns what happened as a `FlowWrite`, its path relative to the root: not written for content
+ * that doesn't load (the reason `it doesn't load:` and the diagnostic), or a reason of the user's
+ * or the file's. Once the user is asked, every outcome is returned, a refusal or a failed write
  * included.
  *
  * @throws {ToolRefused} Before asking, for a path that is refused or content or a file too large.
  * @throws {ReportedToolError} Before asking, for a file that can't be read.
  */
-async function writeFlow(host: ChatToolHost, path: string, content: string, signal: AbortSignal): Promise<string> {
+async function writeFlow(host: ChatToolHost, path: string, content: string, signal: AbortSignal): Promise<FlowWrite> {
   const root = resolveRoot(host.root);
   const real = confine(root, path);
   refuseContent(path, real, content);
   const shown = slashed(relative(root, real));
+  const notWritten = (reason: string): FlowWrite => ({ written: false, path: shown, reason });
   // Taken first, so a file write_flow can't replace is refused before the content is checked.
   const before = snapshot(path, real);
   const check = await checkText(root, real, content, host.env);
-  if (check.startsWith("invalid:")) return check;
+  if (!check.ok) return notWritten(`it doesn't load:\n${check.error}`);
   const diff = unifiedDiff(before === null ? "" : before.bytes.toString("utf8"), content, {
     oldLabel: before === null ? "/dev/null" : shown,
     newLabel: shown,
@@ -450,29 +470,29 @@ async function writeFlow(host: ChatToolHost, path: string, content: string, sign
     choices: WRITE_CHOICES,
     signal,
   });
-  if (answer === null) return "not written: not approved (no terminal, or the prompt ended)";
-  if (answer !== WRITE_CHOICES[0]) return "not written: rejected";
+  if (answer === null) return notWritten("not approved (no terminal, or the prompt ended)");
+  if (answer !== WRITE_CHOICES[0]) return notWritten("rejected");
   try {
-    return writeApproved(root, path, real, before, content);
+    const changed = writeApproved(root, path, real, before, content);
+    return changed === null ? { written: true, path: shown, reason: null } : notWritten(changed);
   } catch (error) {
     // The model reads why the write failed (a read-only folder, a full disk, a path that now
     // leaves the root) as the outcome.
-    if (isReportedToolError(error)) return `not written: ${(error as Error).message}`;
-    if (isSystemError(error)) return `not written: ${osReason(error)}`;
+    if (isReportedToolError(error)) return notWritten((error as Error).message);
+    if (isSystemError(error)) return notWritten(osReason(error));
     throw error;
   }
 }
 
 /**
  * Write `content` to `real` (`path` as the model gave it) once approved, as `writeFlow` describes,
- * unless the file is no longer as `before` saw it.
+ * unless the file is no longer as `before` saw it. Returns `null` once written, else why not.
  *
  * @throws {ReportedToolError} When the path is now refused or the file can't be read.
  * @throws {Error} A system error when a write fails; the temporary file is gone either way.
  */
-function writeApproved(root: string, path: string, real: string, before: Snapshot, content: string): string {
-  const changed = "not written: changed during approval";
-  const shown = slashed(relative(root, real));
+function writeApproved(root: string, path: string, real: string, before: Snapshot, content: string): string | null {
+  const changed = "changed during approval";
   // The path is resolved again: a folder on it may have become a symlink meanwhile.
   if (confine(root, path) !== real || !sameSnapshot(before, snapshot(path, real))) return changed;
   const folder = dirname(real);
@@ -488,7 +508,7 @@ function writeApproved(root: string, path: string, real: string, before: Snapsho
       if (isSystemError(error) && error.code === "EEXIST") return changed;
       throw error;
     }
-    return `wrote ${shown}`;
+    return null;
   }
   const temporary = join(folder, `.${basename(real)}.yian-tmp-${process.pid}`);
   // A leftover from an earlier write goes first; a folder there is left alone and fails the write.
@@ -507,7 +527,7 @@ function writeApproved(root: string, path: string, real: string, before: Snapsho
   } finally {
     if (created) quietly(() => unlinkSync(temporary));
   }
-  return `wrote ${shown}`;
+  return null;
 }
 
 /**
@@ -590,10 +610,10 @@ export function chatFileTools(host: ChatToolHost): FunctionTool[] {
     tool({
       name: "check_flow",
       description:
-        "Check that a flow file in the chat's folder loads, running nothing: ok with its name and inputs, " +
-        "or invalid with the error. Flows it imports (uses:) and code files it references must also be " +
-        "inside the chat's folder; system.paths isn't supported. With content, checks that " +
-        "text as the file at path would be, without writing it: a draft.",
+        "Check that a flow file in the chat's folder loads, running nothing. Returns {ok, name, inputs, " +
+        "error}: ok with its name and inputs (each {name, type}), or not ok with the error. Flows it imports " +
+        "(uses:) and code files it references must also be inside the chat's folder; system.paths isn't " +
+        "supported. With content, checks that text as the file at path would be, without writing it: a draft.",
       parameters: stringArguments(
         ["path", "The flow file, relative to the chat's folder.", true],
         ["content", "A draft's whole text, checked in place of the file's.", false],
@@ -611,8 +631,8 @@ export function chatFileTools(host: ChatToolHost): FunctionTool[] {
       description:
         "Write a flow file (.yaml, .yml) in the chat's folder, creating it (and any missing folders) or " +
         "replacing it whole; read the file first when replacing it. The content must load (as check_flow " +
-        "checks it), and the user approves the write on their terminal first. Returns `wrote <path>`, " +
-        "`invalid:` and the error, or `not written: <why>`; don't retry a rejected write unchanged.",
+        "checks it), and the user approves the write on their terminal first. Returns {written, path, " +
+        "reason}: the reason says why it wasn't written; don't retry a rejected write unchanged.",
       parameters: {
         type: "object",
         properties: {

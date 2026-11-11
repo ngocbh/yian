@@ -979,6 +979,24 @@ test.each([
   expect(error.diagnostic.code).toBe(code);
 });
 
+test.each([
+  ["${[p.f for p in mk.output if isinstance(p, T)]}", "type mk.output as list(T) where it is bound"],
+  ["${[p.f for p in w.output.items if isinstance(p, T)]}", "declare w.output.items as list(T) in the type that holds it"],
+  ["${[p.f for x in w.output.lists for p in x if isinstance(p, T)]}", "type the list p iterates as list(T)"],
+  ["${[p.f for p in [mk.output] if isinstance(p, T)]}", "type the list p iterates as list(T)"],
+])("a narrowed untyped variable names the list to type: %s", (binding, fix) => {
+  const text = variableFlow(binding)
+    .replace("  T: {f: Optional(str)}\n", "  T: {f: Optional(str)}\n  W: {items: list(Any), lists: list(list(Any))}\n")
+    .replace("  use:\n", "  w:\n    kind: code\n    code: return {}\n    output: W\n  use:\n");
+  expect(loadError(() => load(text)).message).toContain(`write p?.f, or ${fix}`);
+});
+
+test("a member-only read through a comprehension variable says to add an if", () => {
+  expect(loadError(() => load(variableFlow("${[p.text for m in input.hist for p in m.parts]}"))).message).toEndWith(
+    'check the member first with an `if p.type == "reasoning"` before the read in the comprehension',
+  );
+});
+
 /** A LOOP that carries `ms: list(Msg)`, driven by `predicate`. */
 function variableLoop(predicate: string): string {
   return `id: p

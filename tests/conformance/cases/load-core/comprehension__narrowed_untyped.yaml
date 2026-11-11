@@ -24,7 +24,7 @@ expect:
   load:
     diagnostics:
       - code: expr.nullable_field_read
-        message: "node 'use' input 'v': ${p.f} reads field 'f', which T doesn't require, of p, which is untyped and only narrowed to T; write p?.f, or type the list p iterates as list(T)"
+        message: "node 'use' input 'v': ${p.f} reads field 'f', which T doesn't require, of p, which is untyped and only narrowed to T; write p?.f, or type mk.output as list(T) where it is bound (`output: list(T)` or `!list(T)`)"
         frames:
           - label: flow.yaml
             range: [16, 10, 16, 57]

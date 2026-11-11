@@ -16,7 +16,7 @@ expect:
   load:
     diagnostics:
       - code: compose.load
-        message: "node 'use' input 'unchecked': reference ${p.text} reads field 'text', which only union members with type reasoning, refusal, text have; check the member first with `isinstance(p, <Type>) and ...`"
+        message: "node 'use' input 'unchecked': reference ${p.text} reads field 'text', which only union members with type reasoning, refusal, text have; check the member first with an `if p.type == \"reasoning\"` before the read in the comprehension"
         frames:
           - label: flow.yaml
             range: [9, 18, 9, 64]

@@ -685,7 +685,7 @@ const UNCHECKED_FIELD_KINDS: ReadonlySet<ValueKind> = new Set([ValueKind.OBJECT,
  * `path` is the whole reference path, `unionPath` the path of the union value, and
  * `readUnionPath` its path within `path`. `isinstanceHint` points the fix at an `isinstance`
  * conjunct instead of a case; `tagHint` points it at a tag comparison conjunct instead, when the
- * union is tagged.
+ * union is tagged; `comprehensionHint` points it at a comprehension `if`, which wins over both.
  */
 function memberOnlyFieldError(
   union: Type,
@@ -696,6 +696,7 @@ function memberOnlyFieldError(
   isinstanceHint: boolean,
   tagHint = false,
   readUnionPath = "",
+  comprehensionHint = false,
 ): string {
   const tag = unionTagFields(union)[0];
   let which: string;
@@ -708,8 +709,11 @@ function memberOnlyFieldError(
     which = `only ${having.length} of ${union.members!.length} union members have`;
     fix = `check the member with isinstance(${unionPath}, <Type>) in a case first`;
   }
-  if (tagHint && tag !== undefined) {
-    const value = [...having[0]!.fields!.get(tag)!.tags!].sort(compareCodeUnits)[0]!;
+  const value = tag === undefined ? null : [...having[0]!.fields!.get(tag)!.tags!].sort(compareCodeUnits)[0]!;
+  if (comprehensionHint) {
+    const check = value !== null ? `${readUnionPath}.${tag} == "${value}"` : `isinstance(${readUnionPath}, <Type>)`;
+    fix = `check the member first with an \`if ${check}\` before the read in the comprehension`;
+  } else if (tagHint && value !== null) {
     fix = `check the member first with \`${readUnionPath}.${tag} == "${value}" and ...\``;
   } else if (isinstanceHint && !tagHint) {
     fix = `check the member first with \`isinstance(${unionPath}, <Type>) and ...\``;
@@ -750,6 +754,9 @@ export function fileFieldError(path: string, fieldName: string): string {
  *   compare the tag (`v.<tag> == "<value>" and ...`) before the read, for a condition where
  *   `isinstance` is not allowed (a CALL or LOOP node's asserts). An untagged union keeps the case
  *   hint. Wins over `isinstanceHint`. Default `false`.
+ * @param options.comprehensionHint Whether a member-only field error tells the author to check the
+ *   member with an `if` in the comprehension, for a read through a comprehension variable. Wins
+ *   over both other hints. Default `false`.
  * @param options.unionRoot The pool path the referenced value is bound from, when `path` reads a
  *   node-local name. A member-only field error's fix then names the union from this path, which a
  *   case can route on, instead of from the local name. Default `null`.
@@ -766,10 +773,17 @@ export function outputContractFieldError(
     partialUnionFields?: boolean;
     isinstanceHint?: boolean;
     tagHint?: boolean;
+    comprehensionHint?: boolean;
     unionRoot?: string | null;
   } = {},
 ): string | null {
-  const { partialUnionFields = false, isinstanceHint = false, tagHint = false, unionRoot = null } = options;
+  const {
+    partialUnionFields = false,
+    isinstanceHint = false,
+    tagHint = false,
+    comprehensionHint = false,
+    unionRoot = null,
+  } = options;
   if (!Array.isArray(fields) || (fields as unknown[]).some((field) => typeof field !== "string" || !field)) {
     throw new TypeError("output contract fields must be non-empty strings");
   }
@@ -785,6 +799,7 @@ export function outputContractFieldError(
       partialUnionFields,
       isinstanceHint,
       tagHint,
+      comprehensionHint,
       unionRoot: unionRoot === null ? null : `${unionRoot}.${fieldName}`,
     });
   }
@@ -818,6 +833,7 @@ export function outputContractFieldError(
           isinstanceHint,
           tagHint,
           readUnionPath,
+          comprehensionHint,
         );
       }
       if (read.type === null) return null;

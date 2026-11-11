@@ -1079,8 +1079,11 @@ export function configErrors(layer: Readonly<Record<string, unknown>>): ConfigPr
   }
   const { provider, model } = config;
   // A run refuses this only on the merged config, so the host layer would otherwise pass here.
+  // The model is a value, which this check's messages never show.
   const blockError =
-    provider !== null && model !== null ? responsesBlockError(provider, model, config.blockFor(provider)) : null;
+    provider !== null && model !== null
+      ? responsesBlockError(provider, model, config.blockFor(provider), "the layer's model")
+      : null;
   return blockError === null ? [] : [{ field: provider, message: blockError }];
 }
 

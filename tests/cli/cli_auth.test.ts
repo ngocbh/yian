@@ -202,18 +202,18 @@ describe("configErrors", () => {
 
   test("a block on a model routed to the Responses API is reported at the block", () => {
     expect(configErrors({ provider: "deepseek", model: "gpt-5-pro", deepseek: { temperature: 1 } })).toEqual([
-      { field: "deepseek", message: responsesBlock("deepseek", "gpt-5-pro") },
+      { field: "deepseek", message: responsesBlock("deepseek") },
     ]);
     const azure = { provider: "azure", model: "my-codex", azure: { temperature: 1 } };
     expect(configErrors({ ...azure, base_url: "https://res.openai.azure.com/" })).toEqual([
-      { field: "azure", message: responsesBlock("azure", "my-codex") },
+      { field: "azure", message: responsesBlock("azure") },
     ]);
   });
 
   test("an Azure Responses model with a block and no base_url has only the block problem", () => {
     // A single layer is not held to the base_url rule a run applies to the effective config.
     expect(configErrors({ provider: "azure", model: "my-codex", azure: { temperature: 1 } })).toEqual([
-      { field: "azure", message: responsesBlock("azure", "my-codex") },
+      { field: "azure", message: responsesBlock("azure") },
     ]);
   });
 
@@ -273,13 +273,13 @@ describe("configCheck", () => {
     expect(io.errWrites()).toBe(1);
   });
 
-  test("text names the block a Responses API model can't take and exits 1", async () => {
+  test("text names the block a Responses API model can't take, not the model, and exits 1", async () => {
     const io = fakeIo({ stdin: '{"provider": "deepseek", "model": "gpt-5-pro", "deepseek": {"temperature": 1}}' });
     expect(await run(configCheck, jsonArgs(false), io)).toEqual({
       code: 1,
       out: "",
       err:
-        "deepseek: The 'deepseek' block mirrors the Chat Completions request, but model 'gpt-5-pro' is routed " +
+        "deepseek: The 'deepseek' block mirrors the Chat Completions request, but the layer's model is routed " +
         "to the Responses API; remove the block or use a model served through Chat Completions.\n",
     });
   });
@@ -300,10 +300,10 @@ describe("configCheck", () => {
   });
 });
 
-/** The error a run gives for `provider`'s block on a `model` routed to the Responses API. */
-function responsesBlock(provider: string, model: string): string {
+/** The error config check gives for `provider`'s block on a model routed to the Responses API. */
+function responsesBlock(provider: string): string {
   return (
-    `The '${provider}' block mirrors the Chat Completions request, but model '${model}' is routed to the ` +
+    `The '${provider}' block mirrors the Chat Completions request, but the layer's model is routed to the ` +
     "Responses API; remove the block or use a model served through Chat Completions."
   );
 }

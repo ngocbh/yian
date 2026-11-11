@@ -152,3 +152,112 @@ output: \${helper.output}
   expect(done.status).toBe("succeeded");
   expect(sentResults(model, 1)).toEqual([["c1", "signed", false]]);
 });
+
+test("arguments too large to record are the call's error result, and the flow never starts", async () => {
+  const log = freshLog();
+  const model = new ScriptedModel([callReply(["shout", { text: "x".repeat(5000) }, "c1"]), textReply("too big")]);
+  const env = hostEnv(dir, { YIAN_MAX_EVENT_BYTES: "2000" });
+  const result = await runFlow(await loadFlow(shoutFlow()), {}, { log, runId: "r1", models: serving(model), env });
+  expect(result.status).toBe("succeeded");
+  const [[callId, content, isError]] = sentResults(model, 1) as [[string, string, boolean]];
+  expect([callId, isError]).toEqual(["c1", true]);
+  expect(content).toMatch(/^Arguments for shout make a call of \d+ bytes, over the run's limit of 2000 \(YIAN_MAX_EVENT_BYTES\); send less\.$/);
+  expect(readFileSync(log, "utf8")).not.toContain("helper/shout#0");
+});
+
+test("a failure inside a flow stops its other running nodes, whose late outcomes are dropped", async () => {
+  const log = freshLog();
+  const flow = await loadFlow(`
+id: helping
+name: helping
+llm_config: {provider: openai, model: test-model}
+defs:
+  race:
+    description: Race two nodes.
+    nodes:
+      slow:
+        kind: code
+        output: str
+        code: |
+          await new Promise((resolve) => setTimeout(resolve, 20000));
+          return "late";
+      boom:
+        kind: code
+        output: str
+        code: |
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          throw new Error("boom");
+    output:
+      slow: \${slow.output}
+      boom: \${boom.output}
+nodes:
+  helper:
+    kind: agent
+    prompt: go
+    tools: [race]
+output: \${helper.output}
+`);
+  const model = new ScriptedModel([callReply(["race", {}, "c1"]), textReply("lost")]);
+  const started = Date.now();
+  const result = await runFlow(flow, {}, { log, runId: "r1", models: serving(model), env: hostEnv(dir), numWorkers: 4 });
+  expect(result.status).toBe("succeeded");
+  // Well under the slow node's 20 s: the failure stopped it.
+  expect(Date.now() - started).toBeLessThan(15000);
+  expect(sentResults(model, 1)).toEqual([["c1", "Flow race failed at node boom (node.execute): Error: boom", true]]);
+  const records = readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => decodeRecord(line));
+  const failedAt = records.findIndex(({ kind }) => kind === "node_failed");
+  expect(records.slice(failedAt + 1).some(({ record }) => (record as { nodeId?: string }).nodeId === "helper/race#0/slow")).toBe(false);
+});
+
+test("a nested flow call's failure is its own call's error result; the outer call still answers", async () => {
+  const flow = await loadFlow(`
+id: helping
+name: helping
+llm_config: {provider: openai, model: test-model}
+defs:
+  inner:
+    description: Fail.
+    nodes:
+      boom:
+        kind: code
+        output: str
+        code: throw new Error("inner boom")
+    output: \${boom.output}
+  outer:
+    description: Ask a sub-agent.
+    nodes:
+      sub:
+        kind: agent
+        prompt: try inner
+        tools: [inner]
+    output: \${sub.output}
+nodes:
+  helper:
+    kind: agent
+    prompt: go
+    tools: [outer]
+output: \${helper.output}
+`);
+  const model = new ScriptedModel([
+    callReply(["outer", {}, "c1"]),
+    callReply(["inner", {}, "c2"]),
+    textReply("inner failed"),
+    textReply("outer said inner failed"),
+  ]);
+  const result = await runFlow(flow, {}, { models: serving(model), env: hostEnv(dir), numWorkers: 4 });
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBe("outer said inner failed");
+  expect(sentResults(model, 2)).toEqual([["c2", "Flow inner failed at node boom (node.execute): Error: inner boom", true]]);
+  expect(sentResults(model, 3)).toEqual([["c1", "inner failed", false]]);
+});
+
+test("in one reply, a failed flow call and a good one each get their own result", async () => {
+  const flow = await loadFlow(shoutFlow('if (inputs.text === "bad") throw new Error("bad text"); return inputs.text.toUpperCase();'));
+  const model = new ScriptedModel([callReply(["shout", { text: "bad" }, "c1"], ["shout", { text: "ok" }, "c2"]), textReply("done")]);
+  const result = await runFlow(flow, {}, { models: serving(model), env: hostEnv(dir), numWorkers: 4 });
+  expect(result.status).toBe("succeeded");
+  expect(sentResults(model, 1)).toEqual([
+    ["c1", "Flow shout failed at node loud (node.execute): Error: bad text", true],
+    ["c2", "OK", false],
+  ]);
+});

@@ -31,6 +31,7 @@ import {
   hardLinked,
   isRunLogLocked,
   iterRunRecords,
+  InterruptedRecord,
   NodeExpandedRecord,
   NodeFailedRecord,
   NodeRoutedRecord,
@@ -52,7 +53,7 @@ import {
   SCHEMA_VERSION,
 } from "./log.ts";
 import { addCrashedAttempts } from "./state.ts";
-import { applyWaitsRecord, type WaitInfo, WaitsState, wakeableNodes, wakeAt, waitInfos } from "./waits.ts";
+import { applyWaitsRecord, nodeCalls, type WaitInfo, WaitsState, wakeableNodes, wakeAt, waitInfos } from "./waits.ts";
 
 /** The index file's name in the runs folder. */
 const INDEX_FILE = "index.sqlite";
@@ -309,6 +310,10 @@ export function foldRunScan(scan: RunScan, envelope: { readonly seq: number; rea
   const settle = (node: string) => {
     scan.inFlight = scan.inFlight.filter(([id]) => id !== node);
   };
+  // A flow call's scope that ends takes its unfinished nodes with it.
+  const endScope = (scope: string) => {
+    scan.inFlight = scan.inFlight.filter(([id]) => !id.startsWith(`${scope}/`));
+  };
   applyWaitsRecord(scan.waits, envelope);
   if (record instanceof NodeStartedRecord || record instanceof NodeWokenRecord) {
     const entry = scan.inFlight.find(([id]) => id === record.nodeId);
@@ -326,8 +331,18 @@ export function foldRunScan(scan: RunScan, envelope: { readonly seq: number; rea
     // A flow call's scope leaves its agent in flight.
     if (record.callId === null) settle(record.spawnerId);
   } else if (record instanceof NodeFailedRecord) {
-    settle(record.failure.nodeId!);
-    scan.nodeFailureSeq ??= seq;
+    if (record.scope !== null) {
+      endScope(record.scope);
+    } else {
+      settle(record.failure.nodeId!);
+      scan.nodeFailureSeq ??= seq;
+    }
+  } else if (record instanceof InterruptedRecord) {
+    for (const nodeId of record.nodes) {
+      for (const call of nodeCalls(scan.waits, nodeId)) {
+        if (call.scope !== null && call.closedReason === "interrupted") endScope(call.scope);
+      }
+    }
   } else if (record instanceof RunStoppedRecord) {
     scan.lastStop = seq;
   } else if (record instanceof RunResumedRecord) {

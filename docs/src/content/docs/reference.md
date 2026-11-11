@@ -75,7 +75,7 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MAX_SHOWN_VALUE_CHARS` | limit | 200 | 2 or more | Longest rendering of a value or key an error message shows |
 | `YIAN_MAX_FAILURE_CHARS` | limit | 10,000 | 1 or more | Longest message or traceback a failure records; a longer one is cut and says how much was cut |
 | `YIAN_AGENT_RETRIES` | setting | 2 | 0 or more | Extra attempts an AGENT gets to correct an invalid structured reply when the node sets none |
-| `YIAN_AGENT_MAX_TOOL_ITERATIONS` | setting | -1 | 1 or more, or -1 for no cap | AGENT tool-call turns when the node sets none; -1 is no cap |
+| `YIAN_AGENT_MAX_TOOL_ITERATIONS` | setting | 50 | 1 or more, or -1 for no cap | AGENT tool-call turns when the node sets none; -1 is no cap |
 | `YIAN_TOOL_RETRIES` | setting | 0 | 0 or more | Extra attempts a TOOL node gets after a failed tool call when the node sets none |
 | `YIAN_TOOL_RETRY_DELAY_SECONDS` | setting | 1 | 0 or more | Base wait in seconds before a TOOL node's first retry; each later wait doubles, up to the cap |
 | `YIAN_TOOL_RETRY_MAX_DELAY_SECONDS` | setting | 30 | 0 or more | Longest wait in seconds before a TOOL node retries a failed tool call |
@@ -98,6 +98,8 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MODEL_RETRIES` | setting | 6 | 0 or more | Extra attempts a model call gets after a transport failure (a network error, 5xx, 429 or timeout) |
 | `YIAN_MODEL_FIRST_RESPONSE_TIMEOUT_SECONDS` | setting | 240 | 1 or more | Longest wait in seconds from sending a model request to the first bytes of its response |
 | `YIAN_MODEL_IDLE_TIMEOUT_SECONDS` | setting | 240 | 1 or more | Longest wait in seconds between bytes of a streamed model response |
+| `YIAN_MODEL_CHECK_TIMEOUT_SECONDS` | setting | 30 | 1 or more | Longest wait in seconds for the reply `yian auth` checks a model with before it saves a login |
+| `YIAN_MODEL_LIST_TIMEOUT_SECONDS` | setting | 8 | 1 or more | Longest wait in seconds for a whole model listing given no timeout (`yian models`, `/model`) |
 | `YIAN_REQUEST_TIMEOUT_SECONDS` | setting | 30 | 1 or more | Longest wait in seconds for a short request (model listing, sign-in calls) |
 | `YIAN_EMBEDDING_TIMEOUT_SECONDS` | setting | 60 | 1 or more | Longest wait in seconds for one embeddings request |
 | `YIAN_EMBEDDING_BATCH_ITEMS` | setting | 64 | 1 or more | Most texts sent in one embeddings request; more go in several requests |
@@ -108,6 +110,7 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MAX_MODEL_LIST_PAGES` | input cap | 100 | 1 or more | Most pages read from a provider's model listing |
 | `YIAN_MAX_MCP_MESSAGE_BYTES` | input cap | 16,777,216 | 1 or more | Largest message read from an MCP server: a stdio line, an SSE event or an HTTP reply body |
 | `YIAN_MAX_MODEL_EVENT_BYTES` | input cap | 16,777,216 | 1 or more | Largest event read from a model's reply stream: an SSE event's data or one NDJSON line |
+| `YIAN_MAX_MODEL_RESPONSE_BYTES` | input cap | 67,108,864 | 1 or more | Largest reply body read from one model call |
 | `YIAN_MAX_EMBEDDING_REPLY_BYTES` | input cap | 33,554,432 | 1 or more | Largest reply read from an embeddings request |
 | `YIAN_MAX_EVENT_BYTES` | input cap | 1,048,576 | 1 or more | Largest event sent to a run's inbox, host call's pending step or completed answer, in run-log JSON bytes |
 | `YIAN_MAX_BASE_URL_CHARS` | input cap | 2,048 | 1 or more | Longest provider base URL accepted |
@@ -155,7 +158,7 @@ Provider API keys and base URLs, such as `ANTHROPIC_API_KEY`, are listed on
 | `~/.yian/runs/<run_id>/log.jsonl` | A run's log, written by `yian run` and `yian chat` |
 | `~/.yian/runs/<run_id>/log.jsonl.lock` | The lock the process writing the log holds |
 | `~/.yian/runs/<run_id>/media/` | Media files the run keeps, named by their SHA-256 |
-| `~/.yian/runs/index.sqlite` | The run index `yian status` lists. It is rebuilt from the logs, so you can delete it |
+| `~/.yian/runs/index.sqlite` | The run index `yian status` lists. It is rebuilt from the logs, so you can delete it; yian rebuilds a damaged one itself |
 | `~/.yian/memory/<project>/<flow id>/<input>` | The default memory `yian run` keeps for a flow's memory input: a folder, or `<input>.db` for a VectorDBMemory (see [CLI](/cli/#memory)) |
 | `~/.claude/skills`, `~/.agents/skills` | Your skills, read when an agent grants skills |
 | `.claude/skills`, `.agents/skills` | Project skills, from the current folder up to the git root |
@@ -183,11 +186,12 @@ log prints the same failure, so "retry" below means a new run.
 | `contract.route` | A node returned a route handle that isn't a non-empty string | Report a bug in that node |
 | `contract.growth` | A CALL, MAP or LOOP would grow the graph past `YIAN_MAX_TOTAL_NODES` | Bound the fan-out, or raise the limit |
 | `graph.terminal_unreachable` | A route skipped every path to the flow's output | Fix the graph |
-| `loop.max_exceeded` | A `while:` or `until:` LOOP with `max: M` would start its body run M+1 | Raise `max:`, or treat it as the loop ending unmet |
+| `loop.max_exceeded` | A `while:` or `until:` LOOP with `max: M` would start its body run M+1 | Raise `max:`, or set `on_max_exceeded: output` to end the loop with its last record |
 | `agent.output_invalid` | An AGENT's structured reply still breaks its `output:` type after its `retries:` | Loosen the type, or improve the prompt |
 | `agent.interrupted` | An AGENT was interrupted and its output type doesn't allow null | Declare `output: Optional(...)` and route on null |
 | `tool.timeout` | An `ask` timed out with no answer and its output type doesn't allow null | Declare `output: Optional(...)`, or give it longer |
 | `provider.auth` | The provider refused the agent's credentials, or yian couldn't supply them | Fix the login (`yian auth <provider>`) or the key |
+| `provider.auth_storage` | The saved-login file, its folder or its lock can't be used (its mode, owner or contents) | Fix the file the message names; logging in again reads the same file |
 | `provider.rate_limit` | The provider's rate limit (HTTP 429) outlasted yian's model-call retries | Retry later, or run fewer calls at once |
 | `provider.quota` | The account's quota or credit is used up | Add credit or change plan |
 | `provider.unavailable` | The provider was unreachable or failing (a 5xx, a timeout, a dropped connection) past yian's retries | Retry later, or switch provider |
@@ -225,12 +229,12 @@ A run log is a JSON Lines file: one record per line, appended and never rewritte
 compact JSON with its keys sorted:
 
 ```json
-{"at":"2026-10-27T08:47:40.404Z","kind":"node_started","payload":{"node_id":"greet"},"run_id":"31fc75ac4c0640de867d47f59f928ea3","schema":29,"seq":8}
+{"at":"2026-10-27T08:47:40.404Z","kind":"node_started","payload":{"node_id":"greet"},"run_id":"31fc75ac4c0640de867d47f59f928ea3","schema":30,"seq":8}
 ```
 
 | Key | What it holds |
 |---|---|
-| `schema` | The record format, `29`. yian reads only this one. A log of schema 10 to 28 reads as `run log schema N predates schema 29 and is not supported`, any other as `unsupported run-record schema: N` |
+| `schema` | The record format, `30`. yian reads only this one. A log of schema 10 to 29 reads as `run log schema N predates schema 30 and is not supported`, any other as `unsupported run-record schema: N` |
 | `run_id` | The run's id |
 | `seq` | The record's place in the log, from 0 |
 | `at` | When the record was appended, in UTC with milliseconds. Use `seq`, not `at`, for order |

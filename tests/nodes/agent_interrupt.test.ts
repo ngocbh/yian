@@ -992,6 +992,31 @@ test("callModel: an interrupt before the first event rejects with an empty reply
   expect(((await rejected(stopped)) as Error).message).toBe("stopped");
 });
 
+test("an interrupt after the last text chunk, before the stream ends, cuts the whole reply", async () => {
+  const events: unknown[] = [];
+  const chunks: StreamChunk[] = [];
+  const usage = new Usage({ inputTokens: 5, outputTokens: 3, totalTokens: 8 });
+  const model = new Paced(words("hello", " world", new UsageReport(usage), new Finish({ reason: "stop" })), (index) => {
+    if (index === 1) interruptNow();
+  });
+  const output = await run(chatFlow(), model, {
+    onEvent: (event) => void events.push(event),
+    onStream: (chunk) => void chunks.push(chunk),
+  });
+  expect(output).toBeNull();
+  expect(shape()).toEqual(["cut", "interrupted"]);
+  expect(cutText()).toBe("hello world");
+  expect(steps("chat")[0]!["usage"]).toMatchObject({ input_tokens: 5n, output_tokens: 3n });
+  expect(events.filter((event) => event instanceof ModelCallFinished).map((event) => event.usage)).toEqual([
+    new TokenUsage({ inputTokens: 5, outputTokens: 3, totalTokens: 8 }),
+  ]);
+  expect(chunked(chunks)).toEqual([
+    ["hello", false],
+    [" world", false],
+    ["", true],
+  ]);
+});
+
 test("a cut with no stream sink still records the text received", async () => {
   const model = new Paced(words("hello", " big", " world", new Finish({ reason: "stop" })), (index) => void (index === 1 && interruptNow()));
   expect(await run(chatFlow(), model)).toBeNull();

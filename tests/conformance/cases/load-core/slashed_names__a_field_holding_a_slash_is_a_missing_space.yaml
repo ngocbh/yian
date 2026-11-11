@@ -1,0 +1,18 @@
+kind: load
+# A name may hold `/` only where a graph expansion mints one, so `total/2` is a missing space.
+flow: |
+  id: f
+  name: f
+  input:
+    d: !object
+  nodes:
+    half: !float "${input.d.total/2}"
+  output: ${half.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "half: `input.d.total/2` reads `total/2` as one name; to divide, write `input.d.total / 2` with spaces"
+      frames:
+      - label: flow.yaml
+        range: [6, 9, 6, 36]

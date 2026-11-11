@@ -3,7 +3,7 @@ kind: run
 flow: |
   id: plain-session
   name: plain_session
-  llm_config: {provider: vllm, model: no-structured-sentinel}
+  llm_config: {provider: vllm, model: m, structured_output: prompt}
   input:
     question: !str
   nodes:
@@ -50,8 +50,9 @@ expect:
             endpoint: null
             method: api_key
             source: environment
-          model: no-structured-sentinel
+          model: m
           provider: vllm
+          structured_output: prompt
       num_workers: 0
   - - pool_commit
     - __start__
@@ -80,7 +81,7 @@ expect:
       step:
         finish: null
         kind: model_call
-        model: no-structured-sentinel
+        model: m
         output:
           format: yian.message.v1
           parts:
@@ -96,14 +97,14 @@ expect:
       step:
         finish: null
         kind: model_call
-        model: no-structured-sentinel
+        model: m
         output:
           format: yian.message.v1
           parts:
           - {text: '{"value": {"k": 1}}', type: text}
           role: assistant
         purpose: structured_fallback
-        request_sha256: 43d49e77c0d0c54b3ea516888778f1503bc19cbba22a0d81ed0be6b511d27bdd
+        request_sha256: e8dbbf53ee5b64ba929423dfaff3e9ff608ff9c8c52ec837a139313d7d0032e0
         response_id: null
         usage: null
   - - pool_commit
@@ -136,21 +137,21 @@ expect:
   - - NodeStarted
     - node_id: agent
   - - ModelCallStarted
-    - model: no-structured-sentinel
+    - model: m
       node_id: agent
       provider: vllm
       purpose: structured_fallback
       n: 1
   - - ModelCallFinished
-    - model: no-structured-sentinel
+    - model: m
       node_id: agent
       provider: vllm
       purpose: structured_fallback
       n: 1
   - - ModelCallStarted
-    - {model: no-structured-sentinel, node_id: agent, provider: vllm, purpose: structured_fallback, n: 2}
+    - {model: m, node_id: agent, provider: vllm, purpose: structured_fallback, n: 2}
   - - ModelCallFinished
-    - {model: no-structured-sentinel, node_id: agent, provider: vllm, purpose: structured_fallback, n: 2}
+    - {model: m, node_id: agent, provider: vllm, purpose: structured_fallback, n: 2}
   - - NodeSucceeded
     - node_id: agent
       output:

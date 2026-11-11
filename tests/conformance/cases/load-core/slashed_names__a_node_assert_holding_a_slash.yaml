@@ -1,0 +1,29 @@
+kind: load
+# A node assert reads local names, and gives the same fix.
+flow: |
+  id: f
+  name: f
+  input:
+    n: !int
+    m: !int
+  nodes:
+    c:
+      kind: code
+      input:
+        n: ${input.n}
+        m: ${input.m}
+      output: int
+      code: return 1
+      asserts:
+        - n/m > 0
+  output: ${c.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has invalid node asserts:
+          node 'c' assert: ${n/m} is not a declared input or `${output}`; `n/m` reads as one name; to divide, write `n / m` with spaces
+      frames:
+      - label: flow.yaml
+        range: [15, 9, 15, 16]

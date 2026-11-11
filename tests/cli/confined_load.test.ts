@@ -122,6 +122,37 @@ describe("loadConfined", () => {
   });
 });
 
+describe("loadConfined child errors", () => {
+  test("a child that isn't UTF-8 names its path from the root and the reason", async () => {
+    writeFileSync(join(root, "main.yaml"), parentFlow("lib/child"));
+    writeFileSync(join(root, "lib", "child.yaml"), new Uint8Array([0x69, 0x64, 0x3a, 0x20, 0xff, 0xfe, 0x0a]));
+    const error = await loadError(loadConfined(root, join(root, "main.yaml"), new Set(), NO_ENV));
+    expect(error.diagnostic.message).toBe(
+      "callable 'child' (uses: 'lib/child'): could not resolve: can't read lib/child.yaml: not UTF-8 text",
+    );
+  });
+
+  test("a ref written with .yaml says to drop the extension", async () => {
+    writeFileSync(join(root, "main.yaml"), parentFlow("./lib/child.yaml"));
+    writeFileSync(join(root, "lib", "child.yaml"), FLOW);
+    const error = await loadError(loadConfined(root, join(root, "main.yaml"), new Set(), NO_ENV));
+    expect(error.diagnostic.message).toBe(
+      "callable 'child' (uses: './lib/child.yaml'): could not resolve: flow './lib/child.yaml' not found: " +
+        "lib/child.yaml.yaml; write a uses: ref without its extension",
+    );
+  });
+
+  test("a ref whose file is .yml says only .yaml files are imported", async () => {
+    writeFileSync(join(root, "main.yaml"), parentFlow("lib/child"));
+    writeFileSync(join(root, "lib", "child.yml"), FLOW);
+    const error = await loadError(loadConfined(root, join(root, "main.yaml"), new Set(), NO_ENV));
+    expect(error.diagnostic.message).toBe(
+      "callable 'child' (uses: 'lib/child'): could not resolve: flow 'lib/child' not found: lib/child.yaml; " +
+        "uses: imports only .yaml files",
+    );
+  });
+});
+
 describe("loadConfinedText", () => {
   test("loads text not on disk, its children from the virtual path's folder", async () => {
     writeFileSync(join(root, "lib", "child.yaml"), FLOW);

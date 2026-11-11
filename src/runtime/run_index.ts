@@ -7,7 +7,8 @@
  * scan (`RunScan`, folded by `foldRunScan`, read by `scanStatus`), which `inspectRun` folds too, so
  * both read a status from the records by one set of rules; `readRunIndex` puts `running` on top
  * while a writer holds a run's lock. A run whose log can't be read keeps a row marked unreadable
- * at the first record yian couldn't read, holding the records before it.
+ * at the first record yian couldn't read, holding the records before it. An index of another
+ * layout or run-log schema is rebuilt, and so is a damaged one, as deleting it would.
  *
  * Knows about: compile (the START and END ids), compose's source parser (a run's declared memory
  * inputs), diagnostics, platform, runtime/log, runtime/state (`addCrashedAttempts`), runtime/waits
@@ -47,6 +48,7 @@ import {
   RunStartedRecord,
   type RunRecord,
   RunStoppedRecord,
+  SCHEMA_VERSION,
 } from "./log.ts";
 import { addCrashedAttempts } from "./state.ts";
 import { applyWaitsRecord, type WaitInfo, WaitsState, wakeableNodes, wakeAt, waitInfos } from "./waits.ts";
@@ -54,8 +56,15 @@ import { applyWaitsRecord, type WaitInfo, WaitsState, wakeableNodes, wakeAt, wai
 /** The index file's name in the runs folder. */
 const INDEX_FILE = "index.sqlite";
 
-/** The index layout's version, kept in `PRAGMA user_version`; an index of another is rebuilt. */
+/** The index layout's version. */
 const INDEX_VERSION = 7;
+
+/**
+ * What `PRAGMA user_version` holds: the layout version and the run-log schema the stored scans
+ * were read under. An index of another is rebuilt, so a schema bump gives the rows a fresh build
+ * gives.
+ */
+const STORED_VERSION = INDEX_VERSION * 1000 + SCHEMA_VERSION;
 
 /** How long an update or read waits for SQLite's lock by default, in milliseconds. */
 const DEFAULT_TIMEOUT_MS = 5000;
@@ -113,7 +122,12 @@ const COLUMNS = [
   "memories",
 ];
 
+/** The `runs` table's column names, in order, as `PRAGMA table_info` gives them. */
+const COLUMN_NAMES = COLUMNS.map((column) => column.replaceAll('"', ""));
+
 const SQLITE_BUSY = 5;
+const SQLITE_CORRUPT = 11;
+const SQLITE_NOTADB = 26;
 
 /** A memory input of a run, as its START inputs recorded it. */
 export interface RunIndexMemory {
@@ -412,7 +426,11 @@ function checkedTimeout(timeoutMs: unknown): number {
  * one that failed, marked unreadable at it (`RunIndexRow.unreadable`), and is read again only once
  * its size or mtime changed, or with a higher `maxLineBytes` than it was read with. A file error keeps the row
  * as it was, and the next update tries again. A row whose stored scan can't be read is built
- * again from the start of its log. An index of another layout version is dropped and built again.
+ * again from the start of its log. An index of another layout version or run-log schema, or whose
+ * `runs` table has other columns, is dropped and built again.
+ *
+ * An index that is damaged or isn't a database (SQLite's CORRUPT or NOTADB) is deleted, with its
+ * journal, and built again from the logs, with a warning.
  *
  * The update is one SQLite transaction (`BEGIN IMMEDIATE`), so builders in any process take turns.
  * It waits at most `timeoutMs` for another builder's lock, then throws. Synchronous: it blocks its
@@ -425,8 +443,8 @@ function checkedTimeout(timeoutMs: unknown): number {
  * @throws RunIndexBusyError when another update holds the lock longer than `timeoutMs`.
  * @throws RangeError when `timeoutMs` isn't a non-negative integer, or `maxLineBytes` isn't a
  *   positive integer.
- * @throws Error (code `ENOENT`) when `runsDir` doesn't exist, and SQLite's error when the index
- *   file isn't a database.
+ * @throws Error (code `ENOENT`) when `runsDir` doesn't exist, and SQLite's other errors, such as
+ *   an index rebuilt after damage that is still damaged.
  */
 export function updateRunIndex(
   runsDir: string,
@@ -437,6 +455,20 @@ export function updateRunIndex(
   // Checked here: a log's read errors become warnings, and a bad option must not.
   checkMaxLineBytes(maxLineBytes);
   const path = join(runsDir, INDEX_FILE);
+  try {
+    updateIndexFile(runsDir, path, timeoutMs, maxLineBytes);
+  } catch (error) {
+    if (!damaged(error)) throw error;
+    // The index is a cache of the logs: build it again, as deleting it by hand would. Its journal
+    // goes too, so SQLite can't play a stale one into the new file.
+    warn(`run index ${path} was damaged (${(error as Error).message}); rebuilt it from the logs`);
+    for (const file of [path, `${path}-journal`]) fs.rmSync(file, { force: true });
+    updateIndexFile(runsDir, path, timeoutMs, maxLineBytes);
+  }
+}
+
+/** Run `updateRunIndex`'s transaction on the index file `path`, creating the file (0600) when missing. */
+function updateIndexFile(runsDir: string, path: string, timeoutMs: number, maxLineBytes: number | null): void {
   createPrivate(path);
   const db = openSqlite(path);
   try {
@@ -518,8 +550,10 @@ export function updateRunIndex(
 /**
  * Return the rows of `<runsDir>/index.sqlite`, by start time then run id (a row with no start time
  * first), as the last update left them, with `running` put on top of a `waiting`, `stopped` or `crashed` run whose log a writer holds now
- * (`isRunLogLocked`, probed on every read; a lock that can't be probed counts as free). A missing
- * index, or one of another layout version, has no rows. A row whose stored scan can't be read is
+ * (`isRunLogLocked`, probed on every read unless `lockProbe` is `false`; a lock that can't be
+ * probed counts as free). A missing
+ * index, or one of another layout, has no rows; so has a damaged one, with a warning through `warn`
+ * (the next update rebuilds it). A row whose stored scan can't be read is
  * left out with a warning through `warn`; the next update builds it again. A `waiting` row's
  * `waits`, `ready` and `wakeAt` are read from its scan's waits fold, as `inspectRun` reads them.
  * Reading doesn't update the index; it reads while a builder works, and waits only while one
@@ -527,20 +561,30 @@ export function updateRunIndex(
  *
  * @param runsDir The runs folder.
  * @param options.timeoutMs How long to wait while a builder commits, in milliseconds; 5000 by default.
- * @throws RangeError when `timeoutMs` isn't a non-negative integer.
- * @throws SQLite's error when the index file isn't a database or stays locked past `timeoutMs`.
+ * @param options.lockProbe `false` skips the lock probes, which cost a file open per such row, so
+ *   each row has the status its records show and none is `running`; `true` by default.
+ * @throws RangeError when `timeoutMs` isn't a non-negative integer, or `lockProbe` isn't a boolean.
+ * @throws SQLite's error when the index file stays locked past `timeoutMs`, or can't be read for
+ *   another reason than damage.
  */
-export function readRunIndex(runsDir: string, options: { timeoutMs?: number } = {}): RunIndexRow[] {
+export function readRunIndex(runsDir: string, options: { timeoutMs?: number; lockProbe?: boolean } = {}): RunIndexRow[] {
   const timeoutMs = checkedTimeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const lockProbe = options.lockProbe ?? true;
+  if (typeof lockProbe !== "boolean") throw new RangeError(`lockProbe must be a boolean, got ${valueRepr(lockProbe)}`);
   const path = join(runsDir, INDEX_FILE);
   if (!fs.existsSync(path)) return [];
-  const db = openSqlite(path, { readonly: true });
+  let db: Sqlite | undefined;
   let rows: SqliteRow[];
   try {
+    db = openSqlite(path, { readonly: true });
     db.exec(`PRAGMA busy_timeout = ${timeoutMs}`);
     rows = indexRows(db);
+  } catch (error) {
+    if (!damaged(error)) throw error;
+    warn(`run index ${path} is damaged (${(error as Error).message}); the next update rebuilds it`);
+    return [];
   } finally {
-    db.close();
+    db?.close();
   }
   return rows.flatMap((columns) => {
     let stored: StoredRow;
@@ -554,7 +598,11 @@ export function readRunIndex(runsDir: string, options: { timeoutMs?: number } = 
     }
     const { scan, unreadable, ...row } = stored;
     let status: RunIndexStatus = scanStatus(scan);
-    if ((status === "waiting" || status === "stopped" || status === "crashed") && locked(join(runsDir, row.runId, "log.jsonl"))) {
+    if (
+      lockProbe &&
+      (status === "waiting" || status === "stopped" || status === "crashed") &&
+      locked(join(runsDir, row.runId, "log.jsonl"))
+    ) {
       status = "running";
     }
     const waiting = status === "waiting";
@@ -572,18 +620,42 @@ export function readRunIndex(runsDir: string, options: { timeoutMs?: number } = 
 }
 
 /**
- * @internal Return the index's rows in run order, or `[]` for an index of another layout version.
- * One read transaction holds the version check and the rows, so a rebuild by another yian version
+ * @internal Return the index's rows in run order, or `[]` for an index of another layout.
+ * One read transaction holds the layout check and the rows, so a rebuild by another yian version
  * between the two can't hand back rows of its layout.
  */
 export function indexRows(db: Sqlite): SqliteRow[] {
   db.exec("BEGIN");
   try {
-    if (db.prepare("PRAGMA user_version").get()?.["user_version"] !== INDEX_VERSION) return [];
+    if (!currentLayout(db)) return [];
     return db.prepare("SELECT * FROM runs ORDER BY started_at, run_id").all();
   } finally {
     db.exec("COMMIT");
   }
+}
+
+/**
+ * Return whether the index holds this version's layout: its `user_version`, and a `runs` table
+ * with this version's columns (a hand edit or a partial restore can leave either alone).
+ */
+function currentLayout(db: Sqlite): boolean {
+  if (db.prepare("PRAGMA user_version").get()?.["user_version"] !== STORED_VERSION) return false;
+  const names = db.prepare("PRAGMA table_info(runs)").all().map((column) => column["name"]);
+  return names.length === COLUMN_NAMES.length && names.every((name, i) => name === COLUMN_NAMES[i]);
+}
+
+/**
+ * @internal Return why the run folder named `folder` can't hold the log of run `runId` (the folder
+ * of a run is named by its id), or `null` when it can.
+ */
+export function folderMismatch(runId: string, folder: string): string | null {
+  return runId === folder ? null : `the log is run ${reprText(runId)}, not its folder's ${reprText(folder)}`;
+}
+
+/** Return whether `error` is SQLite's report that the index file is damaged or isn't a database. */
+function damaged(error: unknown): boolean {
+  const code = (sqliteErrorCode(error) ?? -1) & 0xff;
+  return code === SQLITE_CORRUPT || code === SQLITE_NOTADB;
 }
 
 /** Return whether a writer holds the lock of `log`; a lock that can't be probed counts as free. */
@@ -608,11 +680,10 @@ function createPrivate(path: string): void {
   }
 }
 
-/** Create the `runs` table, dropping one of another layout version first. */
+/** Create the `runs` table, dropping one of another layout first. */
 function prepareSchema(db: Sqlite): void {
-  const version = db.prepare("PRAGMA user_version").get()?.["user_version"];
-  if (version === INDEX_VERSION) return;
-  db.exec(`DROP TABLE IF EXISTS runs; ${SCHEMA}; PRAGMA user_version = ${INDEX_VERSION}`);
+  if (currentLayout(db)) return;
+  db.exec(`DROP TABLE IF EXISTS runs; ${SCHEMA}; PRAGMA user_version = ${STORED_VERSION}`);
 }
 
 /** Return a busy SQLite `error` as a `RunIndexBusyError`, and any other error as it is. */
@@ -664,9 +735,8 @@ function readRun(log: string, runId: string, saved: StoredRow | null, stat: fs.S
       const record = entry.envelope.record;
       if (row === null) {
         if (!(record instanceof RunStartedRecord)) throw new RangeError("the first run log record must be RunStarted");
-        if (entry.runId !== runId) {
-          throw new RangeError(`the log is run ${reprText(entry.runId)}, not its folder's ${reprText(runId)}`);
-        }
+        const mismatch = folderMismatch(entry.runId, runId);
+        if (mismatch !== null) throw new RangeError(mismatch);
         row = emptyRow(runId);
         row.flow = record.flow === null ? null : join(record.flow.dir, record.flow.root);
         declared = declaredMemories(record.flow);

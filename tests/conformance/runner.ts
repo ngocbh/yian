@@ -60,6 +60,7 @@ import {
   type Event,
   EventStream,
   Finish,
+  type StructuredOutput,
   TextDelta,
   ToolCallDelta,
   UsageReport,
@@ -1891,10 +1892,11 @@ function scriptedModels(
   inbox: Inbox,
   taken: (label: string) => number,
   crashed: ReadonlyMap<string, ReadonlySet<string>>,
-): (provider: string, model: string, nodeId: string) => ChatModel {
-  return (provider, model, nodeId) => ({
+): (provider: string, model: string, nodeId: string, structuredOutput: StructuredOutput) => ChatModel {
+  return (provider, model, nodeId, structuredOutput) => ({
     provider,
     model,
+    structuredOutput,
     stream: (request, options = {}) => {
       const consumer = consumerOf(nodeId, request);
       const label = `host.models.${nodeId}.${consumer}`;
@@ -2154,22 +2156,24 @@ async function resumeMemories(
 }
 
 /**
- * Return the files in the folder `root` but `.yian/`, by `/`-separated path, or `null` when there
- * is no folder.
+ * Return the files in the folder `root` but `.yian/`, by `/`-separated path sorted in code-unit
+ * order, or `null` when there is no folder.
  */
 function folderFiles(root: string): Case | null {
   if (!existsSync(root)) return null;
-  const files: Case = {};
+  const paths: string[] = [];
   const walk = (rel: string): void => {
     for (const entry of readdirSync(join(root, rel), { withFileTypes: true })) {
       const path = rel === "" ? entry.name : `${rel}/${entry.name}`;
       if (path === ".yian") continue;
       if (entry.isDirectory()) walk(path);
-      else files[path] = readFileSync(join(root, path), "utf8");
+      else paths.push(path);
     }
   };
   walk("");
-  return files;
+  // readdir's order is the file system's (unsorted on some, such as GPFS); the default sort
+  // compares UTF-16 code units, so a listing reads the same everywhere.
+  return Object.fromEntries(paths.sort().map((path) => [path, readFileSync(join(root, path), "utf8")]));
 }
 
 /**
@@ -2407,7 +2411,7 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow, memories?:
       // factory does, so its errors stay yian's. No credential is read.
       const values = fromHost(config, "llm_config") as Record<string, unknown>;
       const [validated] = checkModelConfig(resolveModelConfig(values, { env }));
-      return scripted(validated.provider!, validated.model!, nodeId);
+      return scripted(validated.provider!, validated.model!, nodeId, validated.structuredOutput ?? "native");
     },
   };
 

@@ -27,6 +27,7 @@ import { NodeStarted, type RunEvent } from "../../src/events.ts";
 import { readRunIndex, runFlow } from "../../src/run.ts";
 import { JsonlRunLog, readRunLog, RunResumedRecord, RunStartedRecord } from "../../src/runtime/log.ts";
 import { NO_ENV } from "../helpers/run_state_fixtures.ts";
+import { FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
 
 let tmp: string;
 
@@ -39,6 +40,11 @@ afterEach(() => {
 });
 
 const mode = (path: string) => statSync(path).mode & 0o777;
+
+/** Resolve once `check` holds, polling every few milliseconds. */
+async function until(check: () => boolean): Promise<void> {
+  while (!check()) await new Promise((resolve) => setTimeout(resolve, 5));
+}
 
 describe("validateRunLogOptions", () => {
   test("resume names each fresh-only option given, in order", () => {
@@ -77,6 +83,31 @@ describe("validateRunLogOptions", () => {
     expect(() =>
       validateRunLogOptions({ flow: "flow.yaml", inputValues: ["a=1"], log: join(tmp, "new.jsonl") }),
     ).not.toThrow();
+  });
+
+  test("a log whose folder is missing, dangling or a file is rejected, naming the folder", () => {
+    const check = (log: string) => () => validateRunLogOptions({ flow: "flow.yaml", inputValues: [], log });
+    const missing = join(tmp, "nodir", "run1");
+    expect(check(join(missing, "log.jsonl"))).toThrow(
+      new UsageError(`Invalid value for --log: folder does not exist: ${missing}`),
+    );
+    const dangling = join(tmp, "gone");
+    symlinkSync(join(tmp, "missing-target"), dangling);
+    expect(check(join(dangling, "log.jsonl"))).toThrow(
+      new UsageError(`Invalid value for --log: folder does not exist: ${dangling}`),
+    );
+    const file = join(tmp, "afile");
+    writeFileSync(file, "");
+    expect(check(join(file, "log.jsonl"))).toThrow(new UsageError(`Invalid value for --log: not a folder: ${file}`));
+    expect(check(join(file, "deeper", "log.jsonl"))).toThrow(
+      new UsageError(`Invalid value for --log: folder does not exist: ${join(file, "deeper")}`),
+    );
+    // A folder reached through a symlink is a folder, and a bare name's folder is the current one.
+    const linked = join(tmp, "linked");
+    mkdirSync(join(tmp, "real"));
+    symlinkSync(join(tmp, "real"), linked);
+    expect(check(join(linked, "log.jsonl"))).not.toThrow();
+    expect(check("a-log-that-is-not-there.jsonl")).not.toThrow();
   });
 
   test("a resume takes no flow file, and a fresh run needs one", () => {
@@ -164,6 +195,42 @@ describe("fresh runs", () => {
     expect(mode(path)).toBe(0o600);
     expect(stderr).toContain(`Run log: ${path}`);
     expect(existsSync(join(tmp, "home", ".yian"))).toBe(false);
+  });
+
+  test("a --log in a folder that is missing or a file is a usage error before the banner", async () => {
+    const file = join(tmp, "afile");
+    writeFileSync(file, "");
+    for (const [log, message] of [
+      [join(tmp, "nodir", "run1", "log.jsonl"), `folder does not exist: ${join(tmp, "nodir", "run1")}`],
+      [join(file, "log.jsonl"), `not a folder: ${file}`],
+    ] as const) {
+      for (const json of [[], ["--json"]]) {
+        const { code, stdout, stderr } = await runCli(["--input", "topic=x", "--log", log, ...json]);
+        expect(code).toBe(2);
+        expect(stdout).toBe("");
+        expect(stderr).toEndWith(`Error: Invalid value for --log: ${message}\n`);
+        expect(stderr).not.toContain("Run log:");
+        expect(stderr).not.toContain("cli_log");
+      }
+    }
+    expect(existsSync(join(tmp, "nodir"))).toBe(false);
+    expect(existsSync(join(tmp, "home"))).toBe(false);
+  });
+
+  test("a --log another process creates after the check is the same usage error, and its file is kept", async () => {
+    const log = join(tmp, "race.jsonl");
+    const stdin = new FakeInput();
+    const stderrStream = new FakeOutput();
+    // The prompt for the required input holds the run between the check and the log's creation.
+    const running = runCli(["--log", log], { stdin, stderrStream });
+    await until(() => stderrStream.text.includes("topic"));
+    writeFileSync(log, "another run's log");
+    stdin.write("x\r");
+    const { code, stdout, stderr } = await running;
+    expect(code).toBe(2);
+    expect(stdout).toBe("");
+    expect(stderr).toEndWith(`Error: Invalid value for --log: --log path already exists: ${log}\n`);
+    expect(readFileSync(log, "utf8")).toBe("another run's log");
   });
 
   test("a default directory failure is a clean CLI error", async () => {

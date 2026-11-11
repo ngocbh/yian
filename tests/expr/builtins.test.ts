@@ -383,3 +383,235 @@ describe("numbers and lists", () => {
     expect(inferExprType(parseExpr(text), (path) => LISTS[path] ?? null)).toEqual(want);
   });
 });
+
+describe("dates", () => {
+  test.each<[string, Value]>([
+    ['add_days("2026-02-27", 2)', "2026-03-01"],
+    ['add_days("2024-02-28", 1)', "2024-02-29"],
+    ['add_days("2026-01-01", -1)', "2025-12-31"],
+    ['add_days("2026-05-21", 0)', "2026-05-21"],
+    ['add_days("0001-01-01", 3652058)', "9999-12-31"],
+    // A datetime keeps its time and offset as written.
+    ['add_days("2026-05-21T14:30Z", 1)', "2026-05-22T14:30Z"],
+    ['add_days("2026-12-31 23:59:59.5-07:00", 1)', "2027-01-01 23:59:59.5-07:00"],
+    ['days_between("2026-01-01", "2026-03-01")', 59n],
+    ['days_between("2026-03-01", "2026-01-01")', -59n],
+    ['days_between("2024-01-01", "2025-01-01")', 366n],
+    // Datetimes count whole days in UTC, rounded down, as Python's `timedelta.days` does.
+    ['days_between("2026-01-01T12:00Z", "2026-01-02T11:59Z")', 0n],
+    ['days_between("2026-01-02T11:59Z", "2026-01-01T12:00Z")', -1n],
+    ['days_between("2026-01-01T00:00:00.000001", "2026-01-02T00:00")', 0n],
+    ['days_between("2026-01-01T23:00-02:00", "2026-01-02T01:00Z")', 0n],
+    // A date is its midnight in UTC, and a datetime without an offset is UTC.
+    ['days_between("2026-01-01", "2026-01-03T00:00")', 2n],
+  ])("%s", (text, want) => {
+    expect(run(text)).toBe(want);
+  });
+
+  test("add_days reads system.today as any date", () => {
+    expect(run("add_days(today, -7)", { today: "2026-11-10" })).toBe("2026-11-03");
+  });
+
+  const SHAPE = "must be a date (2026-05-21) or datetime (2026-05-21T14:30[:00][Z|+07:00])";
+
+  test.each<[string, ValueRecord, string]>([
+    ["add_days(d, 1)", {}, "add_days() got null; give a default, e.g. `add_days(x :- system.today)`"],
+    [
+      'add_days("2026-13-01", 1)',
+      {},
+      'add_days() takes a date or datetime, got "2026-13-01": not a valid date: month must be in 1..12',
+    ],
+    ['add_days("soon", 1)', {}, `add_days() takes a date or datetime, got "soon": ${SHAPE}`],
+    ["add_days(n, 1)", { n: 3n }, "add_days() takes a date or datetime, got int"],
+    ['add_days("2026-01-01", 1.5)', {}, "add_days() takes int for n, got float"],
+    ['add_days("2026-01-01", n)', {}, "add_days() takes int for n, got null"],
+    ['add_days("9999-12-31", 1)', {}, "add_days() gives a date past the year 9999"],
+    ['add_days("0001-01-01", -1)', {}, "add_days() gives a date before the year 1"],
+    ['add_days("2026-01-01", 10 ** 20)', {}, "add_days() gives a date past the year 9999"],
+    [
+      'days_between("2026-01-01", b)',
+      {},
+      "days_between() got null for b; give a default, e.g. `days_between(a, b :- system.today)`",
+    ],
+    ['days_between("2026-01-01", "x")', {}, `days_between() takes a date or datetime for b, got "x": ${SHAPE}`],
+  ])("%s fails", (text, values, message) => {
+    const name = text.slice(0, text.indexOf("("));
+    expect(failure(text, values)).toBe(`expression function '${name}' failed: ${message}`);
+  });
+
+  const TYPES: Record<string, Type> = {
+    d: Type.scalar(ValueKind.DATE),
+    t: Type.scalar(ValueKind.DATETIME),
+    od: Type.scalar(ValueKind.DATE).replace({ nullable: true }),
+    s: Type.scalar(ValueKind.STRING),
+  };
+
+  test.each<[string, Type | null]>([
+    ["add_days(d, 1)", Type.scalar(ValueKind.DATE)],
+    ["add_days(od, 1)", Type.scalar(ValueKind.DATE)],
+    ["add_days(t, 1)", Type.scalar(ValueKind.DATETIME)],
+    ["add_days(s, 1)", null],
+    ["days_between(d, t)", Type.scalar(ValueKind.INTEGER)],
+  ])("%s is typed at load", (text, want) => {
+    expect(inferExprType(parseExpr(text), (path) => TYPES[path] ?? null)).toEqual(want);
+  });
+});
+
+describe("sorting", () => {
+  const TASKS = [
+    { name: "b", qty: 2n },
+    { name: "a", qty: 1n },
+    { name: "c", qty: 2n },
+  ];
+
+  test.each<[string, ValueRecord, Value]>([
+    ["sorted([3, 1.5, true, -2])", {}, [-2n, true, 1.5, 3n]],
+    ["sorted(['b', 'B', '😀', '￿'])", {}, ["B", "b", "￿", "😀"]],
+    ["sorted([])", {}, []],
+    ["sorted([2, 1], reverse=true)", {}, [2n, 1n]],
+    // Stable, in both directions, as Python's `sorted` is.
+    ["sorted([1, 1.0, true])", {}, [1n, 1, true]],
+    ["sorted([1, 2, 1.0], reverse=true)", {}, [2n, 1n, 1]],
+    ['sorted(ts, by="qty")', { ts: TASKS }, [TASKS[1]!, TASKS[0]!, TASKS[2]!]],
+    ['sorted(ts, by="qty", reverse=true)', { ts: TASKS }, [TASKS[0]!, TASKS[2]!, TASKS[1]!]],
+    ['sorted(ts, "name")', { ts: TASKS }, [TASKS[1]!, TASKS[0]!, TASKS[2]!]],
+    ["sorted(xs, by=null)", { xs: [2n, 1n] }, [1n, 2n]],
+  ])("%s", (text, values, want) => {
+    expect(run(text, values)).toEqual(want);
+  });
+
+  test("sorted gives a new list", () => {
+    const xs = [2n, 1n];
+    expect(run("sorted(xs)", { xs })).toEqual([1n, 2n]);
+    expect(xs).toEqual([2n, 1n]);
+  });
+
+  test.each<[string, ValueRecord, string]>([
+    ["sorted(xs)", {}, "sorted() got null; give a default, e.g. `sorted(x :- [])`"],
+    ["sorted('ba')", {}, "sorted() takes a list, got str"],
+    ["sorted([1, null])", {}, "sorted() got a null item"],
+    ["sorted([1, 'a'])", {}, "sorted() can't compare int and str"],
+    ["sorted([[1]])", {}, "sorted() takes a list of numbers or texts, got a list item"],
+    ["sorted([1], reverse=1)", {}, "sorted() takes bool for reverse, got int"],
+    ["sorted([1], by=1)", {}, "sorted() takes str for by, got int"],
+    ['sorted([1], by="qty")', {}, "sorted() by 'qty' takes a list of records, got a int item"],
+    ['sorted(ts, by="qty")', { ts: [{ qty: 1n }, {}] }, "sorted() by 'qty' got an item with no 'qty'"],
+    ['sorted(ts, by="qty")', { ts: [{ qty: 1n }, { qty: null }] }, "sorted() by 'qty' got a null 'qty'"],
+    ['sorted(ts, by="qty")', { ts: [{ qty: 1n }, { qty: "2" }] }, "sorted() by 'qty' can't compare int and str"],
+    ['sorted(ts, by="qty")', { ts: [{ qty: [1n] }] }, "sorted() by 'qty' takes numbers or texts, got a list 'qty'"],
+  ])("%s fails", (text, values, message) => {
+    expect(failure(text, values)).toBe(`expression function 'sorted' failed: ${message}`);
+  });
+
+  const TYPES: Record<string, Type> = {
+    ints: new Type({ kind: ValueKind.LIST_INTEGER, element: Type.scalar(ValueKind.INTEGER) }),
+    maybe: new Type({ kind: ValueKind.LIST_STRING, element: Type.scalar(ValueKind.STRING), nullable: true }),
+  };
+
+  test.each<[string, Type | null]>([
+    ["sorted(ints)", TYPES["ints"]!],
+    ["sorted(maybe)", TYPES["maybe"]!.replace({ nullable: false })],
+    ["sorted(x)", null],
+  ])("%s is typed at load", (text, want) => {
+    expect(inferExprType(parseExpr(text), (path) => TYPES[path] ?? null)).toEqual(want);
+  });
+});
+
+describe("json", () => {
+  test.each<[string, Value]>([
+    ['{"a": [1, 2.5, true, null], "b": {"c": "é"}}', { a: [1n, 2.5, true, null], b: { c: "é" } }],
+    ["12345678901234567890", 12345678901234567890n],
+    ["2.0", 2],
+    ['"text"', "text"],
+    ["  [ ]  ", []],
+  ])("parse_json(%j)", (text, want) => {
+    const got = run("parse_json(s)", { s: text });
+    expect(got).toEqual(want);
+    if (text === "2.0") expect(typeof got).toBe("number");
+  });
+
+  test("parse_json reads back what render_as_json writes", () => {
+    const d = { a: [1n, 2.5, "x"], b: null };
+    expect(run("parse_json(render_as_json(d))", { d })).toEqual(d);
+  });
+
+  const NOT_JSON = "parse_json() got text that isn't JSON: ";
+
+  test.each<[string, ValueRecord, string]>([
+    ["parse_json(s)", {}, 'parse_json() got null; give a default, e.g. `parse_json(x :- "")`'],
+    ["parse_json(s)", { s: 1n }, "parse_json() takes str, got int"],
+    [
+      "parse_json(s)",
+      { s: '{"a": 1,}' },
+      `${NOT_JSON}Expecting property name enclosed in double quotes: line 1 column 9 (char 8)`,
+    ],
+    ["parse_json(s)", { s: "[1,\n 2" }, `${NOT_JSON}Expecting ',' delimiter: line 2 column 3 (char 6)`],
+    ["parse_json(s)", { s: "[NaN]" }, `${NOT_JSON}NaN is not JSON: line 1 column 2 (char 1)`],
+    [
+      "parse_json(s)",
+      { s: '{"a": 1, "a": 2}' },
+      `${NOT_JSON}duplicate JSON object key: "a": line 1 column 10 (char 9)`,
+    ],
+  ])("%s fails", (text, values, message) => {
+    expect(failure(text, values)).toBe(`expression function 'parse_json' failed: ${message}`);
+  });
+
+  test("parse_json refuses a value nested past the limit", () => {
+    expect(failure("parse_json(s)", { s: "[".repeat(200) + "]".repeat(200) })).toContain("nest");
+  });
+
+  test("parse_json's result is untyped, for a constructor to check", () => {
+    expect(inferExprType(parseExpr("parse_json(s)"), () => Type.scalar(ValueKind.STRING))).toBeNull();
+  });
+});
+
+describe("records", () => {
+  const R = { b: 2n, a: "x", "10": true, "9": null };
+
+  test.each<[string, Value]>([
+    ["keys(r)", ["10", "9", "a", "b"]],
+    ["values(r)", [true, null, "x", 2n]],
+    [
+      "items(r)",
+      [
+        { key: "10", value: true },
+        { key: "9", value: null },
+        { key: "a", value: "x" },
+        { key: "b", value: 2n },
+      ],
+    ],
+    ["keys(e)", []],
+  ])("%s gives the fields in key order", (text, want) => {
+    expect(run(text, { r: R, e: {} })).toEqual(want);
+  });
+
+  test.each<[string, ValueRecord, string]>([
+    ["keys(r)", {}, "keys() got null; read it only when it isn't, e.g. `keys(r) if r != null else []`"],
+    ["values(r)", { r: [1n] }, "values() takes a record, got list"],
+    ["items(r)", { r: "ab" }, "items() takes a record, got str"],
+  ])("%s fails", (text, values, message) => {
+    const name = text.slice(0, text.indexOf("("));
+    expect(failure(text, values)).toBe(`expression function '${name}' failed: ${message}`);
+  });
+
+  test.each<[string, Type]>([
+    ["keys(r)", new Type({ kind: ValueKind.LIST_STRING, element: Type.scalar(ValueKind.STRING) })],
+    ["values(r)", new Type({ kind: ValueKind.LIST_ANY, element: Type.scalar(ValueKind.ANY) })],
+    [
+      "items(r)",
+      new Type({
+        kind: ValueKind.LIST_OBJECT,
+        element: new Type({
+          kind: ValueKind.OBJECT,
+          fields: new Map([
+            ["key", Type.scalar(ValueKind.STRING)],
+            ["value", Type.scalar(ValueKind.ANY)],
+          ]),
+          required: new Set(["key", "value"]),
+        }),
+      }),
+    ],
+  ])("%s is typed at load", (text, want) => {
+    expect(inferExprType(parseExpr(text), () => null)).toEqual(want);
+  });
+});

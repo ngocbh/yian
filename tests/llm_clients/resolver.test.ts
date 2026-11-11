@@ -27,6 +27,7 @@ import type { Env } from "../../src/defaults.ts";
 import { collect } from "../../src/llm/events.ts";
 import { Message, Request, TextPart } from "../../src/llm/messages.ts";
 import type { RouteModel } from "../../src/llm/executor.ts";
+import { structuredTarget } from "../../src/llm/structured.ts";
 import { type Cassette, CASSETTE_REDACTED, CassetteReplay, IGNORED_HEADERS, loadCassette } from "../../src/llm/testing.ts";
 import { ApiKeyCredentials, AuthError, isAuthFailure, OAuthCredentials } from "../../src/llm_clients/auth/common.ts";
 import { AuthStore } from "../../src/llm_clients/auth/store.ts";
@@ -40,7 +41,7 @@ import {
   resolveModelConfig,
 } from "../../src/llm_clients/connection.ts";
 import { OPENAI_API_ENDPOINT, prefersResponses } from "../../src/llm_clients/endpoints.ts";
-import { accountHash, chatModelFromConfig, warnOnce } from "../../src/llm_clients/factory.ts";
+import { accountHash, chatModelFromConfig, chatModelTarget, warnOnce } from "../../src/llm_clients/factory.ts";
 import { AnthropicMessagesBlock } from "../../src/llm_clients/provider_blocks.ts";
 import { virtualScheduler } from "../../src/platform.ts";
 import type { JsonObject, JsonValue } from "../../src/typesys/json.ts";
@@ -527,6 +528,18 @@ const CASES: Case[] = [
         "run 'yian auth openai' and start a new run",
       at: "build",
     },
+  },
+  {
+    name: "openai saved login saved again unchanged after resolving",
+    config: async ({ env, store }) => {
+      const config = resolveModelConfig({}, { env });
+      await store.save("openai", new ApiKeyCredentials(SAVED_KEY), "gpt-5.4");
+      return config;
+    },
+    saved: SAVED,
+    env: {},
+    golden: "openai_responses/plain",
+    expect: openaiKey(SAVED_KEY),
   },
   {
     name: "openai saved login saved again after resolving",
@@ -1343,6 +1356,8 @@ describe("chatModelFromConfig", () => {
       const names = [...sent.keys()].filter((name) => !IGNORED_HEADERS.has(name));
       expect(names.sort()).toEqual(recorded.filter((name) => !IGNORED_HEADERS.has(name)).sort());
       expectTracked(model, config, env);
+      // What structured output reads off the config, with no credential, is what the built model gives.
+      expect(chatModelTarget(config, { env })).toEqual(structuredTarget(model));
     });
   }
 });

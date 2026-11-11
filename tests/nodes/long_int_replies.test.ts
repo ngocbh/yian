@@ -27,7 +27,7 @@ const env = hostEnv(dir);
 const BIG = 10n ** 4999n + 12345n;
 const D = "1".repeat(5000);
 const NATIVE = { provider: "openai", model: "gpt-4o" };
-const PROMPTED = { provider: "vllm", model: "no-structured-sentinel" };
+const PROMPTED = { provider: "vllm", model: "m", structuredOutput: "prompt" as const };
 const RECORD = new Type({
   kind: ValueKind.OBJECT,
   fields: new Map([["n", Type.scalar(ValueKind.INTEGER)]]),
@@ -53,7 +53,7 @@ function generate(model: ScriptedModel, typ: Type, retries = 2): Promise<unknown
 
 /** `PLAIN_FLOW` with its AGENT's `output`, model and `retries`. */
 function structuredFlow(output: string, options: { native: boolean; retries?: number }): string {
-  const config = options.native ? "{provider: openai, model: gpt-4o}" : "{provider: vllm, model: no-structured-sentinel}";
+  const config = options.native ? "{provider: openai, model: gpt-4o}" : "{provider: vllm, model: m, structured_output: prompt}";
   let flow = PLAIN_FLOW.replace("{provider: openai, model: test-model}", config).replace(
     "    output: str",
     `    output: ${output}`,

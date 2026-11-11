@@ -23,7 +23,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'case node ''route'': a `case` routes and has no `output:`; tag its result where you read it, e.g. `x: !int ${route.output}`'
+      message: "case node 'route': a `case` routes and has no `output:`; tag its result where you read it, e.g. `x: !<type> ${route.output}`"
       frames:
       - label: flow.yaml
         range: [13, 5, 13, 11]

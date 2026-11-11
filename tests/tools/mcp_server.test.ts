@@ -86,12 +86,12 @@ function build(options: Record<string, unknown>): McpServer {
 describe("mcpServer arguments", () => {
   const rows: [Record<string, unknown>, typeof RangeError | typeof TypeError, string][] = [
     [{}, RangeError, "command"],
-    [{ command: "x", url: "http://h/mcp" }, RangeError, "url"],
+    [{ command: "x", url: "https://h/mcp" }, RangeError, "url"],
     [{ url: "ftp://x" }, RangeError, "url"],
     [{ command: "x", args: "x" }, TypeError, "args"],
     [{ command: "x", args: ["a", 1] }, TypeError, "args"],
     [{ command: "x", env: { A: 1 } }, TypeError, "env"],
-    [{ url: "http://h/mcp", headers: { "x-test": 1 } }, TypeError, "headers"],
+    [{ url: "https://h/mcp", headers: { "x-test": 1 } }, TypeError, "headers"],
     [{ command: "x", timeout: 0 }, RangeError, "timeout"],
     [{ command: "x", connectTimeout: -1 }, RangeError, "connectTimeout"],
     [{ command: "x", timeout: "5" }, TypeError, "timeout"],
@@ -101,7 +101,7 @@ describe("mcpServer arguments", () => {
     [{ command: "x", env: [] }, TypeError, "env"],
     [{ url: "not a url" }, RangeError, "url"],
     [{ url: "http:example.com" }, RangeError, "url"],
-    [{ url: "http://h/mcp", args: "" }, TypeError, "args"],
+    [{ url: "https://h/mcp", args: "" }, TypeError, "args"],
   ];
 
   for (const [options, error, field] of rows) {
@@ -126,11 +126,11 @@ describe("mcpServer arguments", () => {
     );
     expect(() => build({ url: 3 })).toThrow("mcpServer url must be a string, got number");
     expect(() => build({ url: "HTTPS://" })).toThrow("mcpServer url must be an http or https URL with a host");
-    expect(() => build({ url: "http://h", args: ["a"] })).toThrow(
+    expect(() => build({ url: "https://h", args: ["a"] })).toThrow(
       "mcpServer args needs command; a url server takes headers instead",
     );
-    expect(() => build({ url: "http://h", env: {} })).toThrow("mcpServer env needs command");
-    expect(() => build({ url: "http://h", cwd: "/" })).toThrow("mcpServer cwd needs command");
+    expect(() => build({ url: "https://h", env: {} })).toThrow("mcpServer env needs command");
+    expect(() => build({ url: "https://h", cwd: "/" })).toThrow("mcpServer cwd needs command");
     expect(() => build({ command: "x", args: "x" })).toThrow(
       "mcpServer args must be an array of strings, not a single string",
     );
@@ -183,11 +183,34 @@ describe("mcpServer arguments", () => {
       label: undefined,
       concurrencySafe: false,
     });
-    expect(build({ url: "http://h/mcp", command: null, args: null, env: null, cwd: null }).label).toBe("h");
+    expect(build({ url: "https://h/mcp", command: null, args: null, env: null, cwd: null }).label).toBe("h");
+  });
+
+  test("an http url is refused unless its host is localhost, 127.0.0.1 or ::1, as base_url's is", () => {
+    const refused = "mcpServer url must use https; http is allowed only for localhost, 127.0.0.1, and ::1";
+    for (const url of [
+      "http://mcp.example.com/mcp?token=abc",
+      "http://192.168.1.5:8080/mcp",
+      "http://127.0.0.2/mcp",
+      "http://localhost.example.com/mcp",
+      "http://[::2]/mcp",
+      "HTTP://mcp.example.com/mcp",
+    ]) {
+      expect(() => build({ url, headers: { Authorization: "Bearer sk-secret-123" } })).toThrow(refused);
+    }
+    for (const url of [
+      "http://localhost:3000/mcp",
+      "http://LOCALHOST/mcp",
+      "http://127.0.0.1/mcp",
+      "http://[::1]:8080/mcp",
+      "https://mcp.example.com/mcp",
+    ]) {
+      expect(isMcpServer(build({ url }))).toBe(true);
+    }
   });
 
   test("good arguments build an unopened server", () => {
-    expect(isMcpServer(build({ url: "http://h/mcp", args: [] }))).toBe(true);
+    expect(isMcpServer(build({ url: "https://h/mcp", args: [] }))).toBe(true);
     expect(isMcpServer(build({ url: "HTTPS://h/mcp", headers: { Authorization: "Bearer t" } }))).toBe(true);
     const server = mcpServer({
       command: "npx",

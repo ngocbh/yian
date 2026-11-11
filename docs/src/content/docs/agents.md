@@ -346,6 +346,8 @@ The file uses the `mcpServers` format other MCP clients use:
 | `disabled` | `true` turns the server off, even one an earlier file defines |
 
 - An entry has exactly one of `command` and `url`. SSE servers aren't supported.
+- A `url` must use `https`. Plain `http` works only for `localhost`, `127.0.0.1` and `[::1]`,
+  as for a provider's `base_url`, so headers and tokens never cross the network in cleartext.
 - A key set to `null` counts as absent.
 - A server can't share a name with a registered tool or a built-in: `take`, `sleep`, `ask`,
   `ask_user`, `load_skill`.

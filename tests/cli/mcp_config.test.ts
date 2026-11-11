@@ -327,6 +327,13 @@ test("bad entries' messages", () => {
   }
 });
 
+test("an http server off this machine names the file and server", () => {
+  const path = write("mcp.json", { remote: { url: "http://tools.example.com/mcp", headers: { Authorization: "Bearer t" } } });
+  expect(loadError([path]).message).toBe(
+    `${path}: server 'remote': mcpServer url must use https; http is allowed only for localhost, 127.0.0.1, and ::1`,
+  );
+});
+
 test("mcp server validation errors are reraised", () => {
   const path = write("mcp.json", { s: { url: "ftp://x.example.com/mcp" }, t: { command: "" } });
 

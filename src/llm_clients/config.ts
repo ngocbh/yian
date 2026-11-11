@@ -11,6 +11,7 @@ import { isIPv6 } from "node:net";
 
 import { current } from "../defaults.ts";
 import { reprText } from "../diagnostics.ts";
+import { LOOPBACK_HOSTS } from "../platform.ts";
 import { isRecord } from "../typesys/index.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { fromHost as hostValue } from "../typesys/values.ts";
@@ -72,7 +73,6 @@ const CODEX_REMOVED =
   "Native Codex configuration has been removed. Run 'yian auth openai', use provider: openai, " +
   "and remove sandbox/cwd. Yian tools are granted explicitly and run on the host.";
 
-const LOCAL_HOSTS: readonly string[] = ["localhost", "127.0.0.1", "::1"];
 // RFC 3986 characters. Everything else (whitespace, controls, non-ASCII) is something a URL parser
 // or HTTP client would strip, normalise, or encode, so the string sent would differ from the one
 // checked here.
@@ -206,7 +206,7 @@ export function validateBaseUrl(value: unknown): string {
   if (port !== undefined && !(Number(port) >= 1 && Number(port) <= 65535)) {
     throw new RangeError("base_url port must be a number from 1 to 65535");
   }
-  if (groups["scheme"] !== "https" && !LOCAL_HOSTS.includes(host)) {
+  if (groups["scheme"] !== "https" && !LOOPBACK_HOSTS.includes(host)) {
     throw new RangeError("base_url must use https; http is allowed only for localhost, 127.0.0.1, and ::1");
   }
   return value;

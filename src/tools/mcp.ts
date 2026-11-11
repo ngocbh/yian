@@ -26,7 +26,7 @@ import { reprText } from "../diagnostics.ts";
 import { scrub } from "../llm/auth.ts";
 import { encodeBody } from "../llm/body.ts";
 import { scrubError } from "../llm/errors.ts";
-import { RedirectError, safeFetch, VERSION } from "../platform.ts";
+import { LOOPBACK_HOSTS, RedirectError, safeFetch, VERSION } from "../platform.ts";
 import { type JsonObject, parseJson } from "../typesys/json.ts";
 import {
   buildValueAs,
@@ -216,7 +216,7 @@ export interface McpServerOptions {
   env?: Readonly<Record<string, string>>;
   /** The command's working directory; the host's when absent. Only with `command`. */
   cwd?: string;
-  /** The `http` or `https` endpoint of a streamable HTTP server. */
+  /** The `https` endpoint of a streamable HTTP server; `http` only on `localhost`, `127.0.0.1` or `[::1]`. */
   url?: string;
   /** HTTP headers sent with every request, for example `Authorization`. Only with `url`. */
   headers?: Readonly<Record<string, string>>;
@@ -261,8 +261,9 @@ export interface McpServerSpec {
  *   or `headers` not a record of strings to strings, a timeout not a number, `concurrencySafe`
  *   neither a boolean nor an array of strings.
  * @throws {RangeError} Neither or both of `command` and `url` are given, `url` is not an `http` or
- *   `https` URL with a host, an option is given for the other kind of server, a timeout is not
- *   positive and finite, or `command` or `label` is empty.
+ *   `https` URL with a host or is an `http` URL of a host other than `localhost`, `127.0.0.1` and
+ *   `[::1]`, an option is given for the other kind of server, a timeout is not positive and
+ *   finite, or `command` or `label` is empty.
  *
  * @example
  * const files = mcpServer({ command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "."] });
@@ -293,7 +294,12 @@ export function mcpServer(options: McpServerOptions): McpServer {
     }
   } else {
     if (typeof url !== "string") throw new TypeError(`mcpServer url must be a string, got ${jsTypeName(url)}`);
-    if (urlHost(url) === "") throw new RangeError("mcpServer url must be an http or https URL with a host");
+    const host = urlHost(url);
+    if (host === "") throw new RangeError("mcpServer url must be an http or https URL with a host");
+    // As base_url's rule: headers and URL tokens never cross the network in cleartext.
+    if (/^http:/i.test(url) && !LOOPBACK_HOSTS.includes(host.replace(/^\[(.*)\]$/, "$1"))) {
+      throw new RangeError("mcpServer url must use https; http is allowed only for localhost, 127.0.0.1, and ::1");
+    }
     // An empty args array or string counts as not given.
     const argsGiven = args !== undefined && (args as unknown) !== "" && !(Array.isArray(args) && args.length === 0);
     for (const [name, given] of [

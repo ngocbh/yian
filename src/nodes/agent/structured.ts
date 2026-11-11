@@ -40,7 +40,7 @@
 import { current } from "../../defaults.ts";
 import { compareCodeUnits } from "../../diagnostics.ts";
 import type { ChatModel } from "../../llm/events.ts";
-import { Message, Request, type Response, TextPart } from "../../llm/messages.ts";
+import { Message, Request, type Response, TextPart, ToolCallPart, ToolResultPart } from "../../llm/messages.ts";
 import { planStructured, StructuredOutputError, structuredTarget } from "../../llm/structured.ts";
 import { type JsonObject, type JsonValue, logJson } from "../../typesys/json.ts";
 import {
@@ -447,6 +447,20 @@ export function userMessage(text: string): Message {
 }
 
 /**
+ * Return the messages an invalid structured `reply` adds before the next call: the reply, then
+ * `correction`, as the error result of each of its tool calls (a provider refuses a call left
+ * unanswered) or, with none, as a user message. An empty reply adds only the correction.
+ */
+function correctionTurns(reply: Message, correction: string): Message[] {
+  const calls = reply.parts.filter((part): part is ToolCallPart => part instanceof ToolCallPart);
+  if (calls.length === 0) return [...(reply.parts.length > 0 ? [reply] : []), userMessage(correction)];
+  const results = calls.map(
+    (call) => new ToolResultPart({ callId: call.id, name: call.name, content: correction, isError: true }),
+  );
+  return [reply, ...results.map((part) => new Message({ role: "tool", parts: [part] }))];
+}
+
+/**
  * The conversation one structured generation of `typ` sends: `generateStructured` runs it and
  * `rebuildStructuredRequests` rebuilds it, so the rebuilt requests' digests match the ones sent.
  */
@@ -459,7 +473,8 @@ interface StructuredConversation {
   request(): Request;
   /**
    * Return the reply's checked value (`checkReply`), or, for a reply holding no valid answer or
-   * failing the check, its error, after adding the correction naming it to the conversation.
+   * failing the check, its error, after adding the reply and the correction naming the error to
+   * the conversation (`correctionTurns`).
    *
    * @throws Any other error parsing or checking the reply, unchanged.
    */
@@ -469,8 +484,8 @@ interface StructuredConversation {
 /**
  * Start the structured conversation (`StructuredConversation`) for `typ` with `model` after
  * `messages`: the schema is sent the way `planStructured` picks for the model, and the prompt
- * strategy appends its instruction as a user message. An invalid reply is not kept: the next
- * request has the earlier messages and the correction.
+ * strategy appends its instruction as a user message. An invalid reply is kept: the next request
+ * has the earlier messages, the reply and the correction.
  */
 function structuredConversation(model: ChatModel, messages: readonly Message[], typ: Type): StructuredConversation {
   const plan = planStructured(structuredTarget(model), typeToSchema(typ)!);
@@ -485,7 +500,7 @@ function structuredConversation(model: ChatModel, messages: readonly Message[], 
         return { value: checkReply(plan.parse(response), typ) };
       } catch (error) {
         if (!(error instanceof StructuredOutputError || error instanceof TypeCheckError)) throw error;
-        conversation = [...conversation, userMessage(plan.correction(error.message))];
+        conversation = [...conversation, ...correctionTurns(response.message, plan.correction(error.message))];
         return { invalid: error };
       }
     },
@@ -498,8 +513,9 @@ function structuredConversation(model: ChatModel, messages: readonly Message[], 
  * The schema is sent the way `planStructured` picks for the model; the prompt strategy appends its
  * instruction as a user message. Each call goes through `callModel` with purpose
  * `structured_fallback` for the prompt strategy, else `structured_native`. A reply
- * holding no valid answer (`StructuredOutputError`) or failing `checkReply` is not kept in the
- * conversation: the next call gets the earlier messages and a correction naming the error.
+ * holding no valid answer (`StructuredOutputError`) or failing `checkReply` stays in the
+ * conversation: the next call gets the earlier messages, the reply and a correction naming the
+ * error (`correctionTurns`).
  *
  * @param messages The conversation so far; not changed.
  * @param typ The declared output type; `typeToSchema` must give it a schema.
@@ -560,7 +576,8 @@ export async function generateStructured(
 
 /**
  * Rebuild each request `generateStructured(model, messages, typ)` sent from its recorded
- * `model_call` steps, in order: an invalid reply adds the correction the next request carries.
+ * `model_call` steps, in order: an invalid reply adds itself and the correction the next request
+ * carries.
  *
  * @param steps The structured calls' `model_call` steps.
  * @returns Each step's rebuilt request and whether the step recorded its purpose and digest, index
@@ -629,7 +646,8 @@ export function checkReply(data: JsonObject, typ: Type): Value {
  * A record is rebuilt in its declared field order: an absent nullable field becomes `null`, and
  * an unknown field is dropped from an open record but kept in a closed one, so the check refuses
  * it. Union members and everything inside them are closed; a tagged union reads the member its tag
- * names, an untagged one the first member whose normalized value passes the check. `Any`, a
+ * names, an untagged one the first member whose normalized value passes the check. An `int`
+ * slot reads a float with no fraction, within `Number.MAX_SAFE_INTEGER`, as that int. `Any`, a
  * field-less `object`, a flat list and a value of the wrong shape are kept as given.
  */
 function normalize(value: Value, typ: Type, closed = false): Value {
@@ -654,6 +672,8 @@ function normalize(value: Value, typ: Type, closed = false): Value {
   if (isListKind(typ.kind) && typ.element !== undefined && Array.isArray(value)) {
     return value.map((item) => normalize(item, typ.element!, closed));
   }
+  // The JSON Schema `integer` the model was sent admits 2.0, which the reply's JSON reads as a float.
+  if (typ.kind === ValueKind.INTEGER && typeof value === "number" && Number.isSafeInteger(value)) return BigInt(value);
   return value;
 }
 

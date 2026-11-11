@@ -240,8 +240,10 @@ $ yian run extract.yaml --input text="Ada loved the new release."
 - yian uses the provider's structured output when it has one, and a JSON instruction otherwise.
 - A `date` or `datetime` field tells the model the [form](/types/) yian accepts, such as
   `2026-10-14` or `2026-10-14T10:30:00Z`.
-- A reply that doesn't fit gets a correction and another try, up to `retries:` times. Then the
-  node fails with `agent.output_invalid`.
+- A reply that doesn't fit stays in the conversation, followed by a correction naming the
+  problem, and the model tries again, up to `retries:` times. Then the node fails with
+  `agent.output_invalid`.
+- An `int` takes a whole number the model writes as a float, such as `2.0`.
 - A record reply keeps only the fields its type declares, and drops any other field without a
   correction. A [union](/types/#unions) member is stricter: a field it, or a record inside it,
   doesn't declare gets a correction and another try.

@@ -1597,7 +1597,7 @@ export class StdioTransport {
   private stdoutEnded = false;
   private stderrEnded = false;
   private exited = false;
-  /** The server's exit code, or the signal that killed it, once it exited. */
+  /** The server's exit code, or the signal that killed it, once it exited before `close()`. */
   private exitCode: number | null = null;
   private exitSignal: NodeJS.Signals | null = null;
   private closed = false;
@@ -1680,8 +1680,11 @@ export class StdioTransport {
       });
       child.once("exit", (code, signal) => {
         this.exited = true;
-        this.exitCode = code;
-        this.exitSignal = signal;
+        // An exit `close()` caused, for a server that had closed its stdout, isn't how it ended.
+        if (!this.closed) {
+          this.exitCode = code;
+          this.exitSignal = signal;
+        }
         this.end();
       });
       child.stdin!.on("error", (error) => this.report(error));

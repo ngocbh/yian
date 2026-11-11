@@ -1214,15 +1214,15 @@ describe("run setup errors", () => {
   });
 
   test("--engine-trace prints the stack box after run failed:", async () => {
-    // A log whose directory is a file: the run can't create it.
-    const log = join(file("taken", ""), "run.jsonl");
+    // A log whose name is longer than a file system takes: the run can't create it.
+    const log = join(tmp, `${"n".repeat(300)}.jsonl`);
     const argv = ["-q", "--engine-trace", "--log", log, "--input", "topic=clouds"];
     const { code, stderr } = await runFlowCli(ECHO_FLOW, argv);
     expect(code).toBe(1);
     const failed = stderr.indexOf("run failed: ");
     expect(failed).toBeGreaterThan(-1);
     expect(stderr.indexOf("─ traceback ")).toBeGreaterThan(failed);
-    expect(stderr).toContain("ENOTDIR");
+    expect(stderr).toContain("ENAMETOOLONG");
     expect(stderr).toContain("    at ");
   });
 });
@@ -1282,14 +1282,16 @@ describe("run's model and tool text with escape sequences", () => {
   });
 
   test("a setup failure's message is stripped on a TTY and kept exactly when piped", async () => {
-    // A log under a file can't be created, and the error names its path.
-    const taken = file("t\x1b]52;c;aGk=\x07", "");
-    const argv = ["-q", "--log", join(taken, "run.jsonl")];
+    // A log whose name is longer than a file system takes can't be created, and the error names
+    // its path.
+    const folder = join(tmp, "t\x1b]52;c;aGk=\x07");
+    mkdirSync(folder);
+    const argv = ["-q", "--log", join(folder, `${"n".repeat(300)}.jsonl`)];
     const tty = await runAt(output, argv, true);
     expect(tty.code).toBe(1);
-    expect(tty.stderr).toMatch(/run failed: ENOTDIR\b.*\/t\/run\.jsonl'\n$/);
+    expect(tty.stderr).toMatch(/run failed: ENAMETOOLONG\b.*\/t\/n+\.jsonl'\n$/);
     const piped = await runAt(output, argv, false);
-    expect(piped.stderr).toMatch(/run failed: ENOTDIR\b.*\/t\x1b\]52;c;aGk=\x07\/run\.jsonl'\n$/);
+    expect(piped.stderr).toMatch(/run failed: ENAMETOOLONG\b.*\/t\x1b\]52;c;aGk=\x07\/n+\.jsonl'\n$/);
   });
 });
 

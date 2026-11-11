@@ -24,8 +24,8 @@
  * Output is raw ANSI on stderr, coloured only on a TTY without `NO_COLOR`.
  */
 
-import { existsSync, lstatSync, realpathSync, rmdirSync } from "node:fs";
-import { basename, dirname, join, relative } from "node:path";
+import { existsSync, lstatSync, realpathSync, rmdirSync, type Stats } from "node:fs";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { END_ID, START_ID } from "../compile/model.ts";
@@ -565,15 +565,17 @@ export const CHAT_FLOW_FILE = "chat.yaml";
 
 /**
  * Reject a flow file or fresh-only options on `--resume`, a fresh run without a flow file, and a
- * `--log` path that already exists. Absent options are `undefined`; `inputValues` is empty when
- * no `--input` is given.
+ * `--log` path that already exists or whose folder doesn't. Absent options are `undefined`;
+ * `inputValues` is empty when no `--input` is given.
  *
  * Run before input files are read, prompts are shown, or provider configuration is resolved.
  *
  * @throws {UsageError} When `resume` is given with `flow` (the resume runs the flow the log
  *   recorded), or with `--input`, `--inputs`, `--provider`, `--model`, `--embedding` or `--log`
- *   (each one given is named, in that order); when neither `flow` nor `resume` is given; or when a
- *   directory entry, even a dangling symlink, exists at `log`.
+ *   (each one given is named, in that order); when neither `flow` nor `resume` is given; when a
+ *   directory entry, even a dangling symlink, exists at `log`; or when `log`'s folder is missing
+ *   (`folder does not exist: <folder>`) or isn't a folder (`not a folder: <folder>`). A folder
+ *   that can't be checked for another reason is left to the log's creation to report.
  */
 export function validateRunLogOptions(options: {
   flow?: string | undefined;
@@ -604,9 +606,31 @@ export function validateRunLogOptions(options: {
     }
     return;
   }
-  if (log !== undefined && lexists(log)) {
-    throw new UsageError(`Invalid value for --log: --log path already exists: ${log}`);
+  if (log === undefined) return;
+  if (lexists(log)) throw logExists(log);
+  const folder = dirname(log);
+  let stats: Stats | null;
+  try {
+    stats = statOrNull(folder);
+  } catch {
+    return;
   }
+  if (stats === null) throw new UsageError(`Invalid value for --log: folder does not exist: ${folder}`);
+  if (!stats.isDirectory()) throw new UsageError(`Invalid value for --log: not a folder: ${folder}`);
+}
+
+/** The usage error for a `--log` path that is already taken. */
+function logExists(log: string): UsageError {
+  return new UsageError(`Invalid value for --log: --log path already exists: ${log}`);
+}
+
+/**
+ * Whether `error` is the exclusive create of the log at `log` finding it there: another process
+ * made it after `validateRunLogOptions` checked. A lock or media file beside it doesn't count.
+ */
+function lostLogRace(error: Error, log: string): boolean {
+  if (!isSystemError(error) || error.code !== "EEXIST" || error.path === undefined) return false;
+  return resolve(error.path) === resolve(log);
 }
 
 /** Remove the directory `dir` if it is empty; otherwise, or when that fails, leave it as it is. */
@@ -1041,7 +1065,8 @@ export function resumeKeyCheck(context: ResumeKeyContext): LlmConfigsCheck {
  * host failure (a bad option value, a log that can't be created, an MCP server that doesn't start,
  * the missing MCP SDK) prints `run failed: <message>` on stderr, and when no started server
  * supplies a needed tool the missing ids and the other failed servers on the lines below, and
- * exits 1.
+ * exits 1. A `--log` another process created after it was checked is the usage error of one that
+ * was there before.
  *
  * With `resume` there is no `flowPath`: the flow the log recorded is compiled (`loadRecordedFlow`),
  * never a file on disk, and its skills and MCP config are read as for a fresh run; then the log
@@ -1353,6 +1378,8 @@ async function startRun(
     if (error instanceof TerminalStopped && error.reason === "eof") return cancelled();
     if (error instanceof ResumeKeyError) return refused(error.message);
     if (!isSetupError(error)) throw error;
+    // The same usage error as when the path was there before the command.
+    if (options.log !== undefined && lostLogRace(error, options.log)) throw logExists(options.log);
     return setupFailed(error);
   }
   if (typeof outcome === "number") return outcome;

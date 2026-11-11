@@ -27,6 +27,7 @@ import { isRecord, type MemoryRef, shownText, TypedValue, valueRepr } from "../t
 import {
   checkMaxLineBytes,
   type FlowSource,
+  hardLinked,
   isRunLogLocked,
   iterRunRecords,
   NodeExpandedRecord,
@@ -407,7 +408,8 @@ function checkedTimeout(timeoutMs: unknown): number {
  * with no complete record yet, has no row; a row whose log is gone is deleted. A log that can't be
  * read (an old schema, a damaged line, a first record that isn't `run_started` of the folder's run,
  * a line over `maxLineBytes`, or a file error such as no permission, or a log that is a symlink
- * or isn't a regular file, `EINVAL: not a regular file, open '<log>'`, which is never opened) raises a
+ * or isn't a regular file, `EINVAL: not a regular file, open '<log>'`, which is never opened, or
+ * has another link, `EINVAL: has more than one link, open '<log>'`) raises a
  * warning through `warn`. A log whose content can't be read gets a row of the records before the
  * one that failed, marked unreadable at it (`RunIndexRow.unreadable`), and is read again only once
  * its size or mtime changed, or with a higher `maxLineBytes` than it was read with. A file error keeps the row
@@ -468,8 +470,10 @@ export function updateRunIndex(
         try {
           // lstat, so a symlink at the log is skipped as the readers refuse it, not read as its target.
           const stat = fs.lstatSync(log);
-          // Before `readUpTo`: a FIFO or a device reads as size 0, and is never opened here.
+          // Before `readUpTo`: a FIFO or a device reads as size 0, and is never opened here; a hard
+          // link, which the readers refuse, would otherwise keep a row read through it current.
           if (!stat.isFile()) throw notRegularFile(log);
+          if (stat.nlink > 1) throw hardLinked(log);
           if (saved !== null && readUpTo(saved, stat, maxLineBytes)) {
             kept.add(runId);
             continue;

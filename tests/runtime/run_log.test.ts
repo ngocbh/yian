@@ -1430,6 +1430,36 @@ describe.skipIf(process.platform === "win32")("a log path that isn't a regular f
     expect(fs.readFileSync(real)).toEqual(before);
   });
 
+  test("a hard link to a regular log: readers and resume throw EINVAL at either name, and the log isn't touched", () => {
+    const real = path.join(dir, "real.jsonl");
+    baselineLog(real).close();
+    const before = fs.readFileSync(real);
+    // Someone who can write the runs folder points a run's log at a file elsewhere.
+    const link = path.join(dir, "link.jsonl");
+    fs.linkSync(real, link);
+    const fields = (call: () => unknown) => {
+      try {
+        call();
+        return "no error";
+      } catch (error) {
+        const { code, errno, syscall, path, message } = error as NodeJS.ErrnoException;
+        return { code, errno, syscall, path, message };
+      }
+    };
+    for (const file of [link, real]) {
+      const refused = { ...notRegularFields(file), message: `EINVAL: has more than one link, open '${file}'` };
+      expect(fields(() => [...iterRunRecords(file)])).toEqual(refused);
+      expect(fields(() => readRunLog(file))).toEqual(refused);
+      expect(fields(() => JsonlRunLog.resume(file).close())).toEqual(refused);
+    }
+    expect(isRunLogLocked(real)).toBe(false);
+    expect(fs.readFileSync(real)).toEqual(before);
+    // With the other link gone, the log reads and resumes again.
+    fs.rmSync(link);
+    expect([...iterRunRecords(real)].length).toBeGreaterThan(0);
+    JsonlRunLog.resume(real).close();
+  });
+
   test("a folder: iterRunRecords throws EINVAL, and resume the open's EISDIR", () => {
     const file = path.join(dir, "folder.jsonl");
     fs.mkdirSync(file);

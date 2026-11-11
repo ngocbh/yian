@@ -388,11 +388,14 @@ function textWidget(options: {
   caret(): number;
   units(): readonly Unit[];
   set(text: string | Draft): void;
+  /** A count that changes whenever the text or the caret may have. */
+  version(): number;
 } {
   const mark = options.mark ?? "?";
   let chars: Unit[] = Array.from(options.initial ?? "");
   let pos = chars.length;
   let error: string | undefined;
+  let version = 0;
   const shown = (part: readonly Unit[]): string =>
     options.mask ? "*".repeat(part.length) : part.map((unit) => drawn(unit)).join("");
   const head = (): string => `${promptHead(mark, options.label, options.instruction)} `;
@@ -415,9 +418,13 @@ function textWidget(options: {
   };
   return {
     preface: labelPreface(mark, options.label),
-    lines: () => (error === undefined ? [head() + shown(chars)] : [head() + shown(chars), style("31", error)]),
+    lines: () => {
+      const line = head() + shown(chars);
+      return error === undefined ? [line] : [line, style("31", error)];
+    },
     cursor: () => ({ row: 0, before: head() + shown(chars.slice(0, pos)) }),
     key(key) {
+      version++;
       const newline = key.name === "return" || key.name === "enter";
       error = undefined;
       if (key.paste) paste(key.str ?? "");
@@ -445,6 +452,7 @@ function textWidget(options: {
       collapsed(mark, options.label, "value" in outcome && !options.mask ? shown(Array.from(outcome.value)) : ""),
     refused() {
       if (error === undefined) return undefined;
+      version++;
       chars.length = 0;
       pos = 0;
       return error;
@@ -453,11 +461,13 @@ function textWidget(options: {
     caret: () => pos,
     units: () => chars.slice(),
     set(text) {
+      version++;
       // A new array rather than a splice, whose arguments a long text would overflow.
       chars = unitsOf(text);
       pos = chars.length;
       error = undefined;
     },
+    version: () => version,
   };
 }
 
@@ -543,6 +553,8 @@ export class LineEditor {
   #menu = false;
   /** The menu's highlighted row, and the text it was for: a new text starts again at the top. */
   #highlight = { index: 0, text: "" };
+  /** The last fold, for the text's version and the width it was folded at. */
+  #folded: { version: number; columns: number; fold: Fold } | null = null;
 
   /** @param options.rows The screen's height, which the list keeps within; no bound when absent. */
   constructor(options: {
@@ -807,10 +819,22 @@ export class LineEditor {
 
   /**
    * The rows the text folds onto, each with the index of its first unit (a character or a token)
-   * and what each unit draws, and the cursor's row.
+   * and what each unit draws, and the cursor's row. Kept until the text, the caret or the width
+   * changes, since a frame reads it several times.
    */
-  #fold(): { rows: { start: number; chars: string[] }[]; row: number; width: number } {
-    const width = Math.max(1, this.#columns() - 6);
+  #fold(): Fold {
+    const version = this.#text.version();
+    const columns = this.#columns();
+    const kept = this.#folded;
+    if (kept !== null && kept.version === version && kept.columns === columns) return kept.fold;
+    const fold = this.#foldText(columns);
+    this.#folded = { version, columns, fold };
+    return fold;
+  }
+
+  /** `#fold` worked out afresh for a terminal `columns` wide. */
+  #foldText(columns: number): Fold {
+    const width = Math.max(1, columns - 6);
     // A token is drawn whole on one row, cut to fit when it is wider than one.
     const chars = this.#text
       .units()
@@ -834,6 +858,9 @@ export class LineEditor {
     return { rows, row, width };
   }
 }
+
+/** The rows a `LineEditor`'s text folds onto, the cursor's row among them, and their width. */
+type Fold = { rows: { start: number; chars: string[] }[]; row: number; width: number };
 
 /**
  * At most `room` of `rows`, the one at `focus` among them: a run of rows ending with a dim
@@ -2167,13 +2194,32 @@ export class Terminal {
       const cursor = widget.cursor();
       live.draw(lines, cursor === null ? null : { line: cursor.row, before: cursor.before });
     };
+    let drawing = false;
+    // The keys of one chunk of input come in one synchronous burst, so they get one frame, drawn
+    // once the burst is over: a long paste without bracketed paste would otherwise draw a frame
+    // per character. A plain terminal still draws per key: a refused line's error must be written
+    // before the next line's keys.
+    const redraw = (): void => {
+      if (this.#plain) return draw();
+      if (drawing) return;
+      drawing = true;
+      queueMicrotask(() => {
+        drawing = false;
+        if (outcome !== undefined) return;
+        try {
+          draw();
+        } catch (error) {
+          finish({ error });
+        }
+      });
+    };
     const feed = (key: Key): void => {
       try {
         if (key.ctrl && key.name === "c") return stop("interrupt");
         if (this.#redraws(key)) return draw(true);
         const ended = widget.key(key);
         if (ended !== undefined) return "value" in ended ? finish(ended) : stop(ended.stop);
-        draw();
+        redraw();
       } catch (error) {
         finish({ error });
       }

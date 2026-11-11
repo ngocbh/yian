@@ -143,6 +143,17 @@ describe("after a resize", () => {
     output.columns = 30;
     expect(draw(["a", "b"])).toContain("\x1b[J");
   });
+
+  test("a frame at a new height starts over as well, and one at the same size doesn't", () => {
+    const { output, draw, view } = setup();
+    output.rows = 10;
+    draw(["a", "b"]);
+    expect(draw(["a", "b"])).toBe("");
+    output.rows = 5;
+    expect(draw(["a", "b"])).toContain("\x1b[J");
+    expect(view().rows).toEqual(["a", "b"]);
+    expect(draw(["a", "b"])).toBe("");
+  });
 });
 
 describe("after a rerender", () => {

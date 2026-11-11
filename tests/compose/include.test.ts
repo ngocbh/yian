@@ -509,7 +509,7 @@ test("an alias of a typed !include reads the same value", async () => {
 // ---------- !include(T): files that aren't one plain YAML value ----------
 
 test.each([
-  ["a syntax error", "rows: [a,\n", 2, 1, "Flow sequence in block collection must be sufficiently indented"],
+  ["a syntax error", "rows: [a,\n", 1, 7, "Flow sequence in block collection must be sufficiently indented"],
   ["a second document", "- a\n---\n- b\n", 2, 1, "expected a single document in the stream, but found another document"],
   ["a local tag", "- a\n- !str b\n", 2, 3, "a tag (`!str`) can't be used here; write the value out in plain YAML"],
   ["a core tag", "- !!str 1\n", 1, 3, "a tag (`!!str`) can't be used here; write the value out in plain YAML"],

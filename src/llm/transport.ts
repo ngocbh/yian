@@ -95,10 +95,16 @@ export const MAX_ERROR_BODY_BYTES = 64 * 1024;
 
 /**
  * Return the first `MAX_ERROR_BODY_BYTES` of `chunks`, `size` bytes in all, decoded as UTF-8 with
- * replacement. Text cut at the cap loses what `dropCredentialTail` drops: the cut may split a
- * credential, and no scrub matches the part before it.
+ * replacement. Text cut at the cap, or `cut` short (a read that failed before the body ended),
+ * loses what `dropCredentialTail` drops: the cut may split a credential, and no scrub matches the
+ * part before it.
  */
-export function errorBodyText(chunks: readonly Uint8Array[], size: number, credentials: readonly string[]): string {
+export function errorBodyText(
+  chunks: readonly Uint8Array[],
+  size: number,
+  credentials: readonly string[],
+  cut: boolean = false,
+): string {
   const bytes = new Uint8Array(Math.min(size, MAX_ERROR_BODY_BYTES));
   let at = 0;
   for (const chunk of chunks) {
@@ -107,7 +113,7 @@ export function errorBodyText(chunks: readonly Uint8Array[], size: number, crede
     at += part.length;
   }
   const text = new TextDecoder().decode(bytes);
-  return size < MAX_ERROR_BODY_BYTES ? text : dropCredentialTail(text, credentials);
+  return cut || size >= MAX_ERROR_BODY_BYTES ? dropCredentialTail(text, credentials) : text;
 }
 
 /** The part of a body reader the transport uses; Node's and Bun's reader types differ. */

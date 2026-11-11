@@ -25,6 +25,7 @@ import {
   LLM_CONFIG_KEYS,
   LLMConfig,
   popHostCredentials,
+  responsesBlockError,
   SUPPORTED_LLM_PROVIDERS,
   validateBaseUrl,
 } from "../llm_clients/config.ts";
@@ -1048,17 +1049,21 @@ export interface ConfigProblem {
  *
  * The credentials are popped from a copy, then the rest is validated; the first failing step's
  * errors are returned. An unknown top-level key is reported without its name, since a pasted key
- * could be the name; a provider block reports its own field problems at its block's name.
+ * could be the name; a provider block reports its own field problems at its block's name. When
+ * the layer sets both the provider and the model, its block is then checked against the model's
+ * API as if no flow or agent layer overrides either, so a layer a run with such overrides accepts
+ * can still be refused here.
  *
  * @returns Each distinct error, where `field` is the error's location joined with `.`, or `null`
- *   for an unknown top-level key, a plain `RangeError` or a model-level error; empty when the
- *   layer is valid.
+ *   for an unknown top-level key, a plain `RangeError` or a model-level error, and the block's
+ *   name for a block the model's API can't take; empty when the layer is valid.
  */
 export function configErrors(layer: Readonly<Record<string, unknown>>): ConfigProblem[] {
   const rest = { ...layer };
+  let config: LLMConfig;
   try {
     popHostCredentials(rest);
-    new LLMConfig(rest);
+    config = new LLMConfig(rest);
   } catch (error) {
     if (error instanceof ValidationError) {
       const errors: ConfigProblem[] = [];
@@ -1074,7 +1079,14 @@ export function configErrors(layer: Readonly<Record<string, unknown>>): ConfigPr
     if (error instanceof RangeError) return [{ field: null, message: error.message }];
     throw error;
   }
-  return [];
+  const { provider, model } = config;
+  // A run refuses this only on the merged config, so the host layer would otherwise pass here.
+  // The model is a value, which this check's messages never show.
+  const blockError =
+    provider !== null && model !== null
+      ? responsesBlockError(provider, model, config.blockFor(provider), "the layer's model")
+      : null;
+  return blockError === null ? [] : [{ field: provider, message: blockError }];
 }
 
 /**

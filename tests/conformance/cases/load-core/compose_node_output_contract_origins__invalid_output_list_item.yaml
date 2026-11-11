@@ -1,4 +1,4 @@
-# The message spells the list item as JSON text.
+# A type written as a YAML list (once a spelling of a record) is refused at the list.
 kind: load
 flow: |
   id: invalid-output-list-item
@@ -15,7 +15,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'a list of fields must hold single-key maps, got "malformed"'
+      message: "a type can't be a YAML list: write a record as one mapping of its fields, as in {a: int, b: str}, and a list type as list(T)"
       frames:
       - label: flow.yaml
-        range: [9, 9, 9, 18]
+        range: [8, 7, 10, 1]

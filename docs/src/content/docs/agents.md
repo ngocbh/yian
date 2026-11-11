@@ -291,9 +291,9 @@ server. Each entry grants one of these:
   the model in call order.
 - A tool that throws `ReportedToolError` doesn't fail the node: the model reads the message as
   the call's result and carries on. MCP tool errors work this way. Any other error fails the node.
-- `max_tool_iterations` caps the model turns. The default, `-1`, means no cap. At the cap, a
-  reply that still asks for tools runs none of them, and the model answers once more. Set it in
-  the node's `env:` or the flow's `env:`.
+- `max_tool_iterations` caps the model turns. The default is 50, and `-1` means no cap. At the
+  cap, a reply that still asks for tools runs none of them, and the model answers once more. Set
+  it in the node's `env:` or the flow's `env:`.
 
 These mistakes of the model, and the cap, don't fail the node. The call never reaches a tool,
 and the model reads an error result instead:

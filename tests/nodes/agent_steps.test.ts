@@ -616,7 +616,8 @@ test("a 200-turn tool loop serializes each message a bounded number of times: li
   replies.push(calls(["h", "hold", "h"]));
   const model = new ScriptedModel(replies, CONFIG);
   const tools = { lookup: topicTool("lookup"), hold: topicTool("hold", { run: () => pending() }) };
-  const flow = flowText(["lookup", "hold"]);
+  // Past the default cap of 50 turns.
+  const flow = flowText(["lookup", "hold"]).replace("    prompt: hi\n", "    prompt: hi\n    env: {max_tool_iterations: -1}\n");
   const spy = spyOn(Message.prototype, "toJSON");
   try {
     const { log, result } = await run(model, { tools, flow });

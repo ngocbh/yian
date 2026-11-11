@@ -1023,7 +1023,11 @@ output: \${sure.output}
       ]);
       expect(runs.status("r2")).toMatchObject({ status: "succeeded", output: "hi ada" });
       // The fix saw the check's error, and the review the fixed flow.
-      expect(requestsOf(model, "You fix a yian")[0]).toContain("Its error:\ngreet.yaml\ninvalid YAML:");
+      // The YAML error at the end of the draft is located at the bracket it never closes.
+      const fix = requestsOf(model, "You fix a yian")[0]!;
+      expect(fix).toContain("Its error:\n╭─ greet.yaml:2 ─╮");
+      expect(fix).toContain("│ ❱ 2 nodes: [   │");
+      expect(fix).toContain("invalid YAML: Flow sequence in block collection must be sufficiently indented");
       expect(requestsOf(model, "You review flows")[0]).toContain("Review the flow greet.yaml:");
       const plan = requestsOf(model, "finish a yian")[0]!;
       expect(plan).toContain("No description.");

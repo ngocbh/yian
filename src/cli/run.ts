@@ -78,6 +78,7 @@ import {
   staticNodes,
   updateRunIndex,
 } from "../run.ts";
+import { folderMismatch } from "../runtime/run_index.ts";
 import { wakeAt } from "../runtime/waits.ts";
 import { ASK_USER, BUILTIN_TOOL_IDS } from "../tools/context.ts";
 import { McpConnectError, McpSdkMissingError, type McpServer, openTogether } from "../tools/mcp.ts";
@@ -1579,13 +1580,17 @@ export async function check(
  * <id>=<n>` lines when there are any; with `json`, one document with `status`, `in_flight` (in
  * start order), `crashed_attempts`, and for a waiting run `ready` and `wake_at` (`false` and
  * `null` otherwise). A log that isn't a readable run log (empty, damaged,
- * not a run log, unreadable) prints its message on stderr and exits 1 (`run.setup`).
+ * not a run log, unreadable), or the log of a `~/.yian/runs` folder named for another run (which
+ * the run list shows unreadable), prints its message on stderr and exits 1 (`run.setup`).
  */
 export async function status(log: string | undefined, { json }: { json: boolean }, io: CliIo): Promise<number> {
   if (log === undefined) return listRuns({ json }, io);
   let inspection: RunInspection;
   try {
     inspection = inspectRun(log);
+    // The run index lists such a log as unreadable, so this says why too.
+    const mismatch = runFolderMismatch(log, inspection.runId, defaultRunsDir(io.env));
+    if (mismatch !== null) throw new RangeError(`run log ${log}: ${mismatch}`);
   } catch (error) {
     let message: string;
     if (error instanceof RangeError) message = error.message;
@@ -1619,6 +1624,17 @@ export async function status(log: string | undefined, { json }: { json: boolean 
 }
 
 /**
+ * Return why the run index can't list `log` though its records read: it is the log of a run folder
+ * of `runsDir` named for another run than `runId`, as a copied run folder is; `null` otherwise.
+ */
+function runFolderMismatch(log: string, runId: string | null, runsDir: string): string | null {
+  if (runId === null || basename(log) !== "log.jsonl" || !existsSync(runsDir)) return null;
+  const folder = dirname(resolve(log));
+  if (realpathSync(dirname(folder)) !== realpathSync(runsDir)) return null;
+  return folderMismatch(runId, basename(folder));
+}
+
+/**
  * Update the run index of `~/.yian/runs` (`updateRunIndex`) and list its rows (`readRunIndex`), by
  * start time; returns the exit code. A missing runs folder lists nothing.
  *
@@ -1630,9 +1646,9 @@ export async function status(log: string | undefined, { json }: { json: boolean 
  * `result` (the run's output, `null` until it succeeded), the token sums, for a waiting
  * run `ready` and `wake_at` (`false` and `null` otherwise), and `unreadable` (`seq` and `reason`,
  * or `null`). A log the update can't read is a `warning:` line on stderr: once until it changes, or
- * on every update for a file error such as no permission, which leaves the run's row as it was. An
- * index that can't be updated (another update held it too long, or it isn't a database) prints its
- * message on stderr and exits 1 (`run.setup`).
+ * on every update for a file error such as no permission, which leaves the run's row as it was; so
+ * is a damaged index, which the update rebuilds. An index that can't be updated (another update
+ * held it too long, or SQLite can't use it) prints its message on stderr and exits 1 (`run.setup`).
  */
 async function listRuns({ json }: { json: boolean }, io: CliIo): Promise<number> {
   const runsDir = defaultRunsDir(io.env);

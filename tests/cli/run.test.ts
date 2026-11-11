@@ -5,7 +5,18 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { EventEmitter, getEventListeners } from "node:events";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os, { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -1751,6 +1762,51 @@ describe("status", () => {
         unreadable: { seq: 0, reason: expect.stringMatching(/^run log .*line 1/) },
       }),
     ]);
+  });
+
+  test("a damaged index is rebuilt from the logs: the runs are listed, with one warning", async () => {
+    expect((await runFlowCli(ECHO_FLOW, ["-q", "--input", "topic=clouds"])).code).toBe(0);
+    const runs = join(tmp, "home", ".yian", "runs");
+    const index = join(runs, "index.sqlite");
+    writeFileSync(index, "garbage");
+    const text = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["status"], text.io)).toBe(0);
+    expect(text.stdout()).toContain("succeeded");
+    expect(text.stderr()).toBe(
+      `warning: run index ${index} was damaged (file is not a database); rebuilt it from the logs\n`,
+    );
+    writeFileSync(index, "garbage");
+    const json = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["status", "--json"], json.io)).toBe(0);
+    expect(JSON.parse(json.stdout()).runs.map((run: { status: string }) => run.status)).toEqual(["succeeded"]);
+    const again = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["status"], again.io)).toBe(0);
+    expect(again.stderr()).toBe("");
+  });
+
+  test("a copied run folder: status LOG names the run id its folder lacks, as the list does", async () => {
+    expect((await runFlowCli(ECHO_FLOW, ["-q", "--input", "topic=clouds"])).code).toBe(0);
+    const runs = join(tmp, "home", ".yian", "runs");
+    const [runId] = readdirSync(runs).filter((name) => name !== "index.sqlite");
+    cpSync(join(runs, runId!), join(runs, `${runId}-backup`), { recursive: true });
+    const listed = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["status", "--json"], listed.io)).toBe(0);
+    const backup = JSON.parse(listed.stdout()).runs.find((run: { run_id: string }) => run.run_id === `${runId}-backup`);
+    const reason = `the log is run '${runId}', not its folder's '${runId}-backup'`;
+    expect(backup.unreadable).toEqual({ seq: 0, reason });
+    const log = join(runs, `${runId}-backup`, "log.jsonl");
+    const json = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["status", log, "--json"], json.io)).toBe(1);
+    const message = `run log ${log}: ${reason}`;
+    expect(json.stderr()).toBe(`${message}\n`);
+    expect(JSON.parse(json.stdout())).toEqual({ format: "yian.cli.v1", error: { code: "run.setup", message } });
+    // The same log outside the runs folder is a plain run log.
+    mkdirSync(join(tmp, "elsewhere-copy"));
+    const elsewhere = join(tmp, "elsewhere-copy", "log.jsonl");
+    cpSync(log, elsewhere);
+    const plain = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["status", elsewhere], plain.io)).toBe(0);
+    expect(plain.stdout()).toBe("status: succeeded\n");
   });
 
   /** Run `ECHO_FLOW` to the end with its log at `tmp/<name>`, and return the log's path. */

@@ -228,6 +228,8 @@ debug yian itself.
 
 A signal (SIGINT, SIGTERM, SIGHUP) or Ctrl-C at an `ask` prompt stops a run: `cancelled by user`,
 exit 130. Once the log exists, `yian run --resume` continues it. A second signal ends at once.
+With `--json`, killing `yian` in a way it can't catch (SIGKILL, an out-of-memory kill) stops the
+run too; if it hasn't stopped 5 seconds later, its process ends and the run reads `crashed`.
 
 ## yian chat
 

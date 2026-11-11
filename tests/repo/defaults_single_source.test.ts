@@ -46,6 +46,7 @@ const ALLOWED: Record<string, string> = {
   "compose/validate/skips.ts: BRANCHING": "a bit of a position's search flags",
   "expr/grammar.ts: LEVEL": "operator precedence levels",
   "tools/mcp.ts: INVALID_REQUEST": "JSON-RPC error code",
+  "cli/index.ts: LIFELINE_FD": "the run --json child's descriptor whose end means its parent died",
   "tools/mcp.ts: INVALID_REQUEST_CODES": "JSON-RPC error codes",
   "llm/framing.ts: LF": "the line feed byte",
   "tools/mcp.ts: CR": "the carriage return byte",
@@ -143,6 +144,8 @@ const ALLOWED: Record<string, string> = {
   "tools/types.ts: MAX_NODES": "schema nodes one tool-type translation visits; past it the schema is unchecked, which only widens",
   "platform.ts: LOCK_POLL_MS": "sleep between tries on a busy file lock",
   "platform.ts: LOCK_BUSY_WAIT_MS": "wait a file lock attempt gives another connection's brief lock",
+  "cli/index.ts: ORPHAN_EXIT_MS":
+    "fixed wait before a run --json child whose parent died exits, standing in for the second signal",
   // Provider contracts.
   "llm/errors.ts: MAX_RETRY_AFTER_SECONDS": "provider retry-after cap, as openai's",
   "llm/errors.ts: OVERFLOW_RETRY_AFTER": "one past the retry-after cap, so an overflowing delay is refused",

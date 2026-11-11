@@ -38,7 +38,7 @@ import {
 import { Diagnostic, DiagnosticFrame, SourceRange } from "../../src/diagnostics.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { registerTool, TOOL_REGISTRY } from "../../src/tools/registry.ts";
-import { readRunIndex } from "../../src/run.ts";
+import { inspectRun, readRunIndex } from "../../src/run.ts";
 import { JsonlRunLog, NodeStartedRecord, NodeStepRecord, readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 import { FileRef } from "../../src/typesys/values.ts";
 import { compiled, VERSION } from "../../src/platform.ts";
@@ -2007,6 +2007,35 @@ describe("the entry's run --json", () => {
     } finally {
       child.kill("SIGKILL"); // no-op once it has exited
     }
+  }, 30_000);
+});
+
+describe("the entry's run --json killed without a stop", () => {
+  test("SIGKILL of the command stops its run, which never runs on and resumes", async () => {
+    const marker = join(tmp, "marker");
+    const write = `(await import('node:fs')).writeFileSync(${JSON.stringify(marker)}, 'ran')`;
+    const wait = "await new Promise((r) => setTimeout(r, 3000))";
+    const code = `|\n      console.log('ready');\n      ${wait};\n      ${write};\n      return 'done';`;
+    const flow = file("flow.yaml", topicFlow(code));
+    const log = join(tmp, "run.jsonl");
+    const args = ["run", flow, "-q", "--json", "--log", log, "--input", "topic=t"];
+    const { child, streams, closed } = spawnEntry(args);
+    for (let i = 0; i < 500 && !streams.err.includes("ready"); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(streams.err).toContain("ready");
+    child.kill("SIGKILL");
+    // The run's process shares the command's stderr, so `close` waits for it too.
+    const timeout = new Promise((resolve) => setTimeout(() => resolve("timed out"), 10_000));
+    expect(await Promise.race([closed, timeout])).toEqual({ code: null, signal: "SIGKILL" });
+    expect(streams.out).toBe("");
+    expect(inspectRun(log).status).toBe("stopped");
+    // Past when the body would have written it.
+    await new Promise((resolve) => setTimeout(resolve, 3500));
+    expect(existsSync(marker)).toBe(false);
+    const resumed = runEntrySync(["run", "--resume", log, "--json"]);
+    expect(resumed.status).toBe(0);
+    expect(JSON.parse(resumed.stdout)).toMatchObject({ status: "succeeded", output: { topic: "done" } });
   }, 30_000);
 });
 

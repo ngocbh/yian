@@ -7,8 +7,7 @@
  * a few request rules, which `ChatOptions` holds per route: DeepSeek gets earlier reasoning back
  * as `reasoning_content`, MiniMax's reasoning models get `reasoning_split`, some models refuse a
  * named tool choice, and most Azure deployments refuse `parallel_tool_calls`. A user message's
- * author is folded into its first and last texts as the author wrapper (`name` is built, but no
- * route sends it).
+ * author is folded into its first and last texts as the author wrapper.
  *
  * Replies stream text, reasoning and tool calls as deltas; a refusal is collected into one part.
  * A call without an id, or with one an earlier call took, gets `yian_call_<n>`. The finish is
@@ -138,13 +137,6 @@ export interface ChatOptions {
   readonly namedToolChoice: boolean;
   /** Send `parallel_tool_calls` when the request sets it. */
   readonly sendParallelToolCalls: boolean;
-  /** Send `stream_options: {include_usage: true}`, so the stream reports usage. */
-  readonly streamUsage: boolean;
-  /**
-   * Send a user message's author as `name`, on routes known to read it; other Chat Completions
-   * servers may drop the field silently, so they get the author wrapper instead.
-   */
-  readonly messageName: boolean;
 }
 
 /**
@@ -168,15 +160,8 @@ export function chatOptions(provider: string, model: string): ChatOptions {
     // LangChain's Azure client disables `parallel_tool_calls` for every deployment but `gpt-4o`;
     // kept so today's requests stay the same.
     sendParallelToolCalls: !azure || model === "gpt-4o",
-    streamUsage: true,
-    // Off on every route: the wrapper attributes the same way everywhere, and some servers drop
-    // `name` silently.
-    messageName: false,
   });
 }
-
-// The conservative `name` pattern Chat Completions accepts; other authors go in the wrapper.
-const NAME = /^[A-Za-z0-9_-]{1,64}$/;
 
 /** What `OpenAIChat` is built from. */
 export interface OpenAIChatOptions {
@@ -221,14 +206,13 @@ export class OpenAIChat implements SseProtocol {
   }
 
   /**
-   * Build the Chat Completions request body: `model`, `messages`, `stream: true` and (when the
-   * route reports usage) `stream_options`, then the tools, the tool choice and
+   * Build the Chat Completions request body: `model`, `messages`, `stream: true` and
+   * `stream_options: {include_usage: true}`, then the tools, the tool choice and
    * `parallel_tool_calls` as the route allows, then `response_format` when the request sets
    * `outputFormat`, then `reasoning_split` when the route needs it, then the provider block.
    *
-   * A user message's author goes as `name` when the route sends it and the author matches
-   * `^[A-Za-z0-9_-]{1,64}$`, and otherwise as the author wrapper folded into its first and last
-   * texts; the author tag is escaped in user and tool text.
+   * A user message's author goes as the author wrapper folded into its first and last texts; the
+   * author tag is escaped in user and tool text.
    *
    * On a route that echoes reasoning, an assistant message holding a reasoning record that
    * can't be used is sent without that reasoning, and `onReplayDegraded` is called once for it;
@@ -239,8 +223,13 @@ export class OpenAIChat implements SseProtocol {
    * @throws {TypeError} If a message holds a media part or a part its role cannot carry.
    */
   buildBody(request: Request): JsonObject {
-    const body: JsonObject = { model: this.model, messages: this.#messages(request), stream: true };
-    if (this.options.streamUsage) body["stream_options"] = { include_usage: true };
+    const body: JsonObject = {
+      model: this.model,
+      messages: this.#messages(request),
+      stream: true,
+      // So the stream reports usage.
+      stream_options: { include_usage: true },
+    };
     if (request.tools.length > 0) body["tools"] = request.tools.map(tool);
     const choice = request.toolChoice;
     if (choice instanceof NamedTool) {
@@ -459,16 +448,11 @@ export class OpenAIChat implements SseProtocol {
     const requireReasoning = this.options.echoReasoningContent && request.tools.length > 0;
     const rendered: JsonObject[] = [];
     for (const message of request.messages) {
-      const native =
-        this.options.messageName && message.role === "user" && message.author !== null && NAME.test(message.author);
       // Folded inline, so a one-text message still goes as a string.
-      const shown = withAuthorWrapper(message, { wrap: !native, inline: true });
+      const shown = withAuthorWrapper(message, { inline: true });
       if (shown.role === "system" || shown.role === "user") {
         const item = inputMessage(shown);
-        if (item !== null) {
-          if (native) item["name"] = message.author;
-          rendered.push(item);
-        }
+        if (item !== null) rendered.push(item);
       } else if (shown.role === "assistant") {
         rendered.push(this.#assistant(shown, requireReasoning));
       } else {

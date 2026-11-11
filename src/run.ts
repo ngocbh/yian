@@ -175,7 +175,7 @@ import {
   stepsWithSteerValues,
 } from "./runtime/state.ts";
 import { Skill } from "./skills/catalog.ts";
-import { isAlreadyOpenError, isMcpServer, type McpServer } from "./tools/mcp.ts";
+import { isAlreadyOpenError, isMcpServer, type McpServer, openTogether } from "./tools/mcp.ts";
 import { ASK, ASK_USER, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "./tools/context.ts";
 import {
   checkVisibleNames,
@@ -3850,10 +3850,11 @@ function splitRunServers(
 }
 
 /**
- * Open the servers for one run, in order; if one fails, close the ones already open.
+ * Open the servers for one run together (`openTogether`); if one fails, close the ones that
+ * opened and throw the first failure in order.
  *
- * Once `signal` aborts, no further server opens: the ones already open close and the run rejects
- * with its reason, before anything is recorded.
+ * Once `signal` aborts, the servers still opening stop: the ones already open close and the run
+ * rejects with its reason, before anything is recorded.
  *
  * @param servers Unopened servers, each listed once with the `tools` key it sits under.
  * @param signal The run's stop.
@@ -3868,19 +3869,23 @@ async function openRunServers(
   servers: readonly [string, McpServer][],
   signal: AbortSignal | null,
 ): Promise<McpServer[]> {
+  signal?.throwIfAborted();
   const token = `run-${randomUUID().replaceAll("-", "")}`;
-  const opened: McpServer[] = [];
+  const outcomes = await openTogether(
+    servers.map(([, server]) => server),
+    signal ?? undefined,
+    (server, stop) => server.openForRun(token, { signal: stop }),
+  );
+  const opened = servers.filter((_, index) => outcomes[index]!.status === "fulfilled").map(([, server]) => server);
   try {
-    for (const [key, server] of servers) {
-      signal?.throwIfAborted();
-      try {
-        await server.openForRun(token, signal === null ? {} : { signal });
-      } catch (error) {
-        if (isAlreadyOpenError(error)) throw otherRunError(key, { cause: error });
-        throw error;
-      }
-      opened.push(server);
+    const failed = outcomes.findIndex((outcome) => outcome.status === "rejected");
+    if (failed >= 0) {
+      const error: unknown = (outcomes[failed] as PromiseRejectedResult).reason;
+      if (isAlreadyOpenError(error)) throw otherRunError(servers[failed]![0], { cause: error });
+      throw error;
     }
+    // A stop after the last open finished.
+    signal?.throwIfAborted();
   } catch (error) {
     await closeRunServers(opened);
     throw error;
@@ -3889,10 +3894,10 @@ async function openRunServers(
 }
 
 /**
- * Close the run's servers in order.
+ * Close the run's servers together.
  *
  * `McpServer.close()` never rejects, so there is no close error to note on the run's.
  */
 async function closeRunServers(servers: readonly McpServer[]): Promise<void> {
-  for (const server of servers) await server.close();
+  await Promise.all(servers.map((server) => server.close()));
 }

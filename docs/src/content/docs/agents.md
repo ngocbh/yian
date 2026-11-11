@@ -355,8 +355,12 @@ The file uses the `mcpServers` format other MCP clients use:
   environment variable, `${VAR:-default}` gives a fallback, and `$$` is a literal `$`. An unset
   variable with no fallback is an error, so keep tokens in the environment, not the file.
 - A stdio server gets only a minimal environment (`PATH`, `HOME` and a few more) plus its `env`.
-- Servers start only when the flow needs their tools, and stop when the run ends. The config
-  files are read only when the flow names a tool yian doesn't already have.
+- A server starts when the flow names it: a grant of `github` or `{github: [search]}`, or a TOOL
+  node's `tool_id: {github: search}`. A bare tool name, as `tool_id: search` or a grant of
+  `search`, starts the servers in file order until one lists it, then stops those the flow
+  doesn't use, so name the server when one is slow to start or does something when it starts.
+- The run's servers start together and stop together when it ends. The config files are read
+  only when the flow names a tool yian doesn't already have.
 - MCP needs the optional package `@modelcontextprotocol/client` 2.3.1 installed beside yian.
 
 ### Host tools

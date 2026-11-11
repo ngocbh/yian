@@ -204,8 +204,9 @@ has fails before it starts.
 
 When a flow names a tool that isn't built in, `yian run` reads MCP servers from
 `~/.yian/mcp.json`, when it exists, then from each `--mcp-config` file; a later entry with the same
-name replaces an earlier one. It starts only the servers the flow needs and stops them when the run
-ends. See [Agents](/agents/) for the file format.
+name replaces an earlier one. It starts the servers the flow names, and for a bare tool name the
+servers in file order until one lists it, and stops them when the run ends. See
+[Agents](/agents/#mcp-servers) for the file format and which servers start.
 
 ### Output and progress
 

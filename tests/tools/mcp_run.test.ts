@@ -497,13 +497,13 @@ test(
 );
 
 test(
-  "a stop while the servers open closes the opened one and opens no more",
+  "a stop while the servers open rejects with its reason and closes every server",
   async () => {
     const files = [marker("a.pid"), marker("b.pid")];
     const [first, second] = files.map((file) => fake("--marker", file)) as [McpServer, McpServer];
     const stop = new AbortController();
     const openForRun = McpServer.prototype.openForRun;
-    // Open the server, then abort as if Ctrl-C came during the open.
+    // Open the server, then abort as if Ctrl-C came during the open; the other may still be opening.
     McpServer.prototype.openForRun = async function (this: McpServer, token, options) {
       const opened = await openForRun.call(this, token, options);
       stop.abort(new Error("stopped"));
@@ -518,10 +518,60 @@ test(
       McpServer.prototype.openForRun = openForRun;
     }
     expect(error).toBe(stop.signal.reason);
-    expect(pids(files[0]!)).toHaveLength(1);
-    expect(existsSync(files[1]!)).toBe(false);
     await expectClosed(first, files[0]);
-    await expectClosed(second);
+    await expectClosed(second, files[1]);
+  },
+  SLOW,
+);
+
+test(
+  "a run's servers open together and close together",
+  async () => {
+    const files = [marker("a.pid"), marker("b.pid"), marker("c.pid")];
+    const [a, b, c] = files.map((file) => fake("--marker", file)) as [McpServer, McpServer, McpServer];
+    const { openForRun, close } = McpServer.prototype;
+    const busy = { opening: 0, closing: 0, mostOpening: 0, mostClosing: 0 };
+    McpServer.prototype.openForRun = async function (this: McpServer, token, options) {
+      busy.mostOpening = Math.max(busy.mostOpening, ++busy.opening);
+      try {
+        return await openForRun.call(this, token, options);
+      } finally {
+        busy.opening--;
+      }
+    };
+    McpServer.prototype.close = async function (this: McpServer) {
+      busy.mostClosing = Math.max(busy.mostClosing, ++busy.closing);
+      try {
+        await close.call(this);
+      } finally {
+        busy.closing--;
+      }
+    };
+    let result;
+    try {
+      result = await run(await toolFlow("{c: echo}", '{text: "hi"}'), { a, b, c });
+    } finally {
+      McpServer.prototype.openForRun = openForRun;
+      McpServer.prototype.close = close;
+    }
+    expect(result.failure).toBeNull();
+    expect(busy).toMatchObject({ mostOpening: 3, mostClosing: 3 });
+    for (const [index, server] of [a, b, c].entries()) await expectClosed(server, files[index]);
+  },
+  SLOW,
+);
+
+test(
+  "when two servers fail to open, the earlier one's error is reported though the later one failed first",
+  async () => {
+    const files = [marker("a.pid"), marker("b.pid"), marker("c.pid")];
+    const slow = mcpServer({ ...stdioOptions("--hang", "--marker", files[0]!), label: "a", connectTimeout: 1 });
+    const fast = mcpServer({ ...stdioOptions("--stderr", "boom", "--marker", files[1]!), label: "b" });
+    const after = mcpServer({ ...stdioOptions("--marker", files[2]!), label: "c" });
+    const error = await rejection(run(await toolFlow("{a: echo}", '{text: "hi"}'), { a: slow, b: fast, c: after }));
+    expect(error).toBeInstanceOf(McpConnectError);
+    expect(error.message).toStartWith("MCP server 'a' didn't start within 1 s");
+    for (const [index, server] of [slow, fast, after].entries()) await expectClosed(server, files[index]);
   },
   SLOW,
 );

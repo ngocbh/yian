@@ -23,6 +23,7 @@ import { Verbatim } from "../expr/template.ts";
 import { AgentNode, authoredPrompt, authoredText, isPromptText } from "../nodes/agent/node.ts";
 import { Node, NodeKind } from "../nodes/base.ts";
 import { CallNode } from "../nodes/call/node.ts";
+import type { ChildFlowNode } from "../nodes/child_flow.ts";
 import { Case, CaseNode } from "../nodes/case/node.ts";
 import { classifyCodeSource, CodeNode } from "../nodes/code/node.ts";
 import {
@@ -788,7 +789,7 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
     case NodeKind.CALL:
     case NodeKind.MAP:
     case NodeKind.LOOP: {
-      const spawner = node as CallNode | MapNode | LoopNode;
+      const spawner = node as ChildFlowNode;
       manifest.child = flowManifestOf(spawner.child, ctx, `${path}.child`, topologyOnly);
       manifest.flow_id = spawner.flowId;
       manifest.flow_version = canonicalValue(spawner.flowVersion, ctx, `${path}.flowVersion`);

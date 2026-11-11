@@ -684,8 +684,8 @@ interface LoadOptions {
  *   by the flow's `system: paths:`.
  * @param options.sourceLabel The name load diagnostics give this text (default `<flow>`).
  * @param options.baseDir The directory a CODE node's `./file.ts:fn` reference and an `!include`
- *   path resolve against (default: the first search path, else the current directory). A file
- *   read through the search path resolves its own against its own directory.
+ *   path resolve against (default: the first search path, else the current directory), symlinks
+ *   followed. A file read through the search path resolves its own against its own real directory.
  * @param options.codeRoot A directory every CODE reference's file must resolve inside (a relative
  *   one against the current directory); symlinks are resolved on both sides. A reference outside
  *   it is a `LoadError` at its `code:` value. The files read through the search path are checked
@@ -721,8 +721,9 @@ async function loadText(text: string, options: Omit<LoadOptions, "env">): Promis
   const { memoryTypes = [] } = options;
   if (typeof sourceLabel !== "string") throw new TypeError("source_label must be a string");
   const memoryTools = memoryTypeTools(memoryTypes);
-  // Absolute, so a CODE reference doesn't depend on the cwd when the node runs.
-  const ownDir = resolvePath(baseDir ?? searchPaths?.[0] ?? process.cwd());
+  // Absolute, so a CODE reference doesn't depend on the cwd when the node runs; real, as a child's
+  // folder is, so a root reached through a symlink resolves where a load from its recorded source does.
+  const ownDir = await realOr(resolvePath(baseDir ?? searchPaths?.[0] ?? process.cwd()));
   const ctx = await newLoadCtx(codeRoot, memoryTools);
   const rootFile: ReadFile = { text, refs: new Map() };
   const document = await parseIncluding(text, sourceLabel, diskIncludes(ownDir, ctx, rootFile), ctx.memoryTools.keys());

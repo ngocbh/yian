@@ -65,6 +65,10 @@ Any other key is a load error, so a typo such as `nodez:` fails loudly. Keys tha
 `x-` are the exception: yian ignores them, so use them for notes or to hold YAML anchors.
 Run `yian check flow.yaml` to see a flow's load errors without running it.
 
+The paths a flow file names (`uses:` refs, `system.paths`, CODE files and `!include` files)
+resolve from the file's real folder, symlinks followed: a flow run through a symlink, or from a
+symlinked folder, uses the files beside its target, not beside the link.
+
 ```yaml
 id: weekly-report
 name: Weekly report

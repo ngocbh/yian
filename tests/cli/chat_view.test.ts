@@ -1064,6 +1064,11 @@ describe("the view's helpers", () => {
     expect(summary("ok\ninputs:\n  a: int\n  b: str\n\nnext", 60)).toEqual(["ok · inputs: a: int, b: str · next"]);
     expect(summary("x ".repeat(50), 20)).toEqual(["x x x x x x x x x x", "x x x x x x x x x x…"]);
   });
+
+  test("summary shows a JSON record's fields, a null one left out", () => {
+    const written = JSON.stringify({ written: true, path: "a.yaml", reason: null });
+    expect(summary(written, 60)).toEqual(["written: true · path: a.yaml"]);
+  });
 });
 
 /** A reply streamed in `chunks`. */
@@ -1134,7 +1139,7 @@ describe("a session on a terminal", () => {
         "> run hello for Ada",
         "",
         "⏺ check_flow(hello.yaml)",
-        "  ⎿  ok · name: hello · inputs: name: str",
+        `  ⎿  ok: true · name: hello · inputs: [{name: "name", ty…`,
         '⏺ start_flow(hello.yaml, {name: "Ada"})',
         `╭─ Run hello.yaml ${"─".repeat(41)}╮`,
         ...CARD.slice(0, 4).map(row),
@@ -1180,16 +1185,22 @@ describe("a session on a terminal", () => {
 
 /**
  * A model whose first reply streams "Once upon", then waits for `open` before it ends; each later
- * reply is "Short.".
+ * reply is "Short.". The call naming the chat is kept apart (`named`) and answered `A chat`, so
+ * `requests` holds only the replies, whenever the naming call comes.
  */
 class GatedModel implements ChatModel {
   readonly provider = "xai";
   readonly model = "grok-4.3";
   readonly requests: Request[] = [];
+  readonly named: Request[] = [];
   readonly #gate = Promise.withResolvers<void>();
   readonly open = () => this.#gate.resolve();
 
-  stream(request: Request): EventStream {
+  stream(request: Request, options: { signal?: AbortSignal } = {}): EventStream {
+    if (namingRequest(request)) {
+      this.named.push(request);
+      return new ScriptedModel([textReply("A chat")], this).stream(request, options);
+    }
     this.requests.push(request);
     const first = this.requests.length === 1;
     const gate = this.#gate.promise;
@@ -1216,6 +1227,28 @@ const asked = (request: Request, text: string) =>
 const pastEscape = () => new Promise((resolve) => setTimeout(resolve, 600));
 
 describe("the input box while a reply runs", () => {
+  test(
+    "draws a chunk of keys typed into it once, not once per key",
+    async () => {
+      const { io, stdin, output, rows } = terminalIo();
+      const model = new GatedModel();
+      const chatting = runChat(io, model, undefined, { ticker: manualClock() });
+      await until(() => rows().includes(HINT));
+      stdin.write(`tell me a story${ENTER}`);
+      await until(() => rows().includes("⏺ Once upon"));
+      const before = output.writes;
+      // 37 full rows of 54, then the last two.
+      stdin.write("x".repeat(2000));
+      await until(() => rows().includes(row("  xx")));
+      expect(output.writes - before).toBeLessThan(5);
+      model.open();
+      await until(() => rows().at(-1) === HINT && !rows().some((line) => line.includes("Thinking")));
+      stdin.write(`\x15/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
+
   test(
     "stays up under the spinner, and a line entered there steers the reply at once",
     async () => {

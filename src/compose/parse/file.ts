@@ -25,7 +25,7 @@
 
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
 import { isList, isRecord, type Value, type ValueRecord } from "../../typesys/values.ts";
-import { LoadDiagnostics, rejectRemovedMemoryKey } from "../helpers/errors.ts";
+import { LoadDiagnostics, rejectRemovedMemoryKey, rejectReservedName } from "../helpers/errors.ts";
 import { isExtensionKey } from "../helpers/source.ts";
 import { yamlReadAs } from "../helpers/yaml_words.ts";
 import { notTextError, rejectInfinityName, valueTypeError } from "../nodes/base.ts";
@@ -260,7 +260,7 @@ function backMapToPlural(body: Value, active: Set<ValueRecord> = new Set()): Val
 
 /**
  * Return the parameters of a one-node signature (a compact flow or a single-node def): its
- * `input:`, which must be a param map, with no parameter named `inf`.
+ * `input:`, which must be a param map, with no parameter named `inf` or starting with `__`.
  *
  * @param input The authored `input:`, or `undefined` when it is absent and so declares no
  *   parameters. A written empty `input:` is refused, as in a full flow.
@@ -269,7 +269,8 @@ function backMapToPlural(body: Value, active: Set<ValueRecord> = new Set()): Val
  * @param options.inputCursor The authored `input:`, or `null`.
  * @param options.fallbackRange Where a malformed `input:` without a range of its own points.
  * @param options.diagnostics The file's diagnostics.
- * @throws LoadError when `input:` isn't a param map or a parameter is named `inf`.
+ * @throws LoadError when `input:` isn't a param map or a parameter is named `inf` or starts with
+ *   `__`.
  */
 export function signatureParams(
   input: Value | undefined,
@@ -292,6 +293,9 @@ export function signatureParams(
   // The node reads each parameter by bare name, so `inf` would read infinity instead.
   if (Object.hasOwn(params, "inf")) {
     rejectInfinityName(`${where}: input 'inf'`, "inf", inputCursor?.keyRangeOf("inf") ?? null, diagnostics);
+  }
+  for (const name of Object.keys(params)) {
+    rejectReservedName(`${where}: input`, name, inputCursor?.keyRangeOf(name) ?? null, diagnostics);
   }
   return params;
 }

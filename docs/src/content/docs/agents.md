@@ -79,8 +79,7 @@ output: ${writer.output}
   of the node starts with it.
 - Each `variables:` entry is a type tag and a value, checked at load, or an `!include(T)` that
   reads both from a file (see [Prompts in files](#prompts-in-files)). Variables can't share a
-  name with an input, and can't be named `__llm_config` or `__steer_inbox`, or start with
-  `__memory_`.
+  name with an input or start with `__`.
 
 ### Prompts in files
 

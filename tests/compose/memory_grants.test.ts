@@ -113,13 +113,13 @@ test.each([
   ],
 ])("%s named like a reserved memory key is refused", async (_, nodes) => {
   const error = await loadErrorAsync(loadFlow(flow("lessons: !FileMemory", nodes)));
-  expect(error.diagnostic.message).toMatch(/input '__memory_\w+' is reserved for memory grants; rename the input/);
+  expect(error.diagnostic.message).toMatch(/input '__memory_\w+' starts with '__', which yian keeps for the names it generates/);
 });
 
 test("an agent variable named like a reserved memory key is refused", async () => {
   const text = "id: f\nname: f\nkind: agent\nvariables:\n  __memory_x: !int 1\nprompt: hi\noutput: str\n";
   const error = await loadErrorAsync(loadFlow(text));
-  expect(error.diagnostic.message).toContain("variable '__memory_x' is reserved for memory grants; rename the variable");
+  expect(error.diagnostic.message).toBe("variable '__memory_x' starts with '__', which yian keeps for the names it generates; rename it");
 });
 
 test("a def grants its own renamed memory input", async () => {

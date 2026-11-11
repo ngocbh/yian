@@ -1,11 +1,10 @@
 /**
  * Compose type declarations -> source-neutral runtime contracts.
  *
- * A node here is a leaf type string (`"float"`, `"list(str)"`, a registry name), a map of
- * field -> node (a record, nested natively), or a list of single-key maps (the list-of-fields
- * style). Resolution of leaf strings and nested records is the type layer's job (`typeFor`
- * recurses over aliases/lists/Optional); this reader walks native record syntax and wraps any
- * type error loudly. A record counts its levels against `current().maxTypeNesting`: each
+ * A node here is a leaf type string (`"float"`, `"list(str)"`, a registry name) or a map of
+ * field -> node (a record, nested natively); a YAML list is refused. Resolution of leaf strings
+ * and nested records is the type layer's job (`typeFor` recurses over aliases/lists/Optional);
+ * this reader walks native record syntax and wraps any type error loudly. A record counts its levels against `current().maxTypeNesting`: each
  * record is a level and a field's type adds its own (see `typeLevels`), however YAML text or
  * aliases built the record, so a deep alias chain is a load error before the walk recurses
  * past the limit. `readType` is the source-free semantic view. `readValueContract` performs
@@ -49,7 +48,7 @@ import {
   ValueKind,
   valueRepr,
 } from "../../typesys/values.ts";
-import { LoadDiagnostics, LoadError } from "./errors.ts";
+import { LoadDiagnostics, LoadError, rejectReservedName } from "./errors.ts";
 import { type MemoryTypeTable, NO_MEMORY_TYPES } from "./memory.ts";
 import {
   closeTypeName,
@@ -126,7 +125,7 @@ function readRecordType(
 /**
  * Read one type node and collect each physically authored record-field site.
  *
- * @param node Type text, a record mapping, or a list of single-key maps.
+ * @param node Type text or a record mapping.
  * @param registry The typedefs type text resolves against.
  * @param options.cursor The node's source, or `null` for a source-free read.
  * @param options.path The node's field path from the declaration's root.
@@ -179,7 +178,15 @@ function readTypeAndSites(
     return [typ, []];
   }
 
-  if ((isRecord(node) || Array.isArray(node)) && levels + 1 > limit) {
+  if (Array.isArray(node)) {
+    throw diagnostics.error(
+      "a type can't be a YAML list: write a record as one mapping of its fields, as in " +
+        "{a: int, b: str}, and a list type as list(T)",
+      { range },
+    );
+  }
+
+  if (isRecord(node) && levels + 1 > limit) {
     // Checked before reading the entries: an alias chain can nest a record far deeper than
     // this walk could recurse.
     throw diagnostics.error(tooDeep(path, limit), { range });
@@ -188,27 +195,6 @@ function readTypeAndSites(
   if (isRecord(node)) {
     return readRecordType(
       Object.entries(node).map(([key, value]) => [key, value, cursor?.child(key) ?? null] as const),
-      registry,
-      { path, diagnostics, levels: levels + 1 },
-    );
-  }
-
-  if (Array.isArray(node)) {
-    // The list syntax is another spelling of one record: the first occurrence of a key
-    // keeps its place and the last one its value, along with that value's source.
-    const merged = new Map<string, readonly [unknown, SourceCursor | null]>();
-    for (const [index, element] of (node as unknown[]).entries()) {
-      const itemCursor = cursor?.child(index) ?? null;
-      if (!(isRecord(element) && Object.keys(element).length === 1)) {
-        throw diagnostics.error(`a list of fields must hold single-key maps, got ${valueRepr(element)}`, {
-          range: itemCursor?.range ?? null,
-        });
-      }
-      const [key, value] = Object.entries(element)[0]!;
-      merged.set(key, [value, itemCursor?.child(key) ?? null]);
-    }
-    return readRecordType(
-      [...merged].map(([key, [value, childCursor]]) => [key, value, childCursor] as const),
       registry,
       { path, diagnostics, levels: levels + 1 },
     );
@@ -332,6 +318,7 @@ export function readFlowInputs(
   const parameters: Parameter[] = [];
   for (const [name, value] of Object.entries(mapping ?? {})) {
     const sourceRange = ranges?.get(name) ?? null;
+    rejectReservedName("flow input", name, sourceRange, diagnostics);
     try {
       parameters.push(readTypeOnly(name, value, registry, { diagnostics }));
     } catch (error) {
@@ -597,6 +584,12 @@ export function readSourceParameters(
           range: declarationCursor.keyRange ?? declarationCursor.range,
         });
       }
+      rejectReservedName(
+        declarationLabel === "input" ? "flow input" : declarationLabel,
+        name,
+        declarationCursor.keyRange ?? declarationCursor.range,
+        diagnostics,
+      );
       const parameterPath = [...sitePath, fieldName, name];
       const parameterOrigin = catalogBuilder.register(
         [...parameterPath, "parameter"],

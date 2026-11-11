@@ -14,27 +14,30 @@
  * A builtin is a host callback: it declares its parameters, so a call's arguments are checked
  * (`bindArguments`) before it runs, and it receives yian values. The ones shipped here format
  * (`render_as_json`, `join`, `upper`, `lower`, `str`), work on text (`startswith`, `endswith`,
- * `split`, `strip`, `lstrip`, `rstrip`, `replace`), convert (`int`, `float`), compute over
- * numbers and lists (`len`, `round`, `abs`, `min`, `max`, `sum`, `any`, `all`), and count days
- * over date and datetime texts in UTC (`add_days`, `days_between`). Where Python has the same
- * operation they give Python's result, character for character and bit for bit.
+ * `split`, `strip`, `lstrip`, `rstrip`, `replace`), convert (`int`, `float`, `parse_json`),
+ * compute over numbers and lists (`len`, `round`, `abs`, `min`, `max`, `sum`, `any`, `all`,
+ * `sorted`), read a record's fields (`keys`, `values`, `items`), and count days over date and
+ * datetime texts in UTC (`add_days`, `days_between`). Where Python has the same operation they
+ * give Python's result, character for character and bit for bit.
  * `builtinResultType` gives the type a shipped builtin returns, from its arguments' types where it
  * depends on them, so the loader can type its result.
  *
  * Knows about: `typesys` (`Value`, `FileRef`, `InboxRef`, `MemoryRef`, `Type`, `ValueKind`,
- * `fromHost`, `isListKind`, `isRecord`, `renderValuePath`, `valueRepr`, `writeAsText`, `writeAsJson`,
- * `parseDateOrDatetime`), `diagnostics` (`reprText`, `compareCodePoints`) and `grammar`
- * (`uncallableReason`).
+ * `fromHost`, `isListKind`, `isRecord`, `rejectDeepNesting`, `renderValuePath`, `valueRepr`,
+ * `writeAsText`, `writeAsJson`, `parseJson`, `parseDateOrDatetime`), `diagnostics` (`reprText`,
+ * `compareCodePoints`) and `grammar` (`uncallableReason`).
  */
 
 import { compareCodePoints, reprText } from "../diagnostics.ts";
 import { FileRef, InboxRef, MemoryRef, Type, type Value, ValueKind } from "../typesys/index.ts";
+import { JSONDecodeError, parseJson } from "../typesys/json.ts";
 import { type ParsedDate, type ParsedDatetime, parseDateOrDatetime } from "../typesys/temporal.ts";
 import {
   canonicalTypeLabel,
   fromHost,
   isListKind,
   isRecord,
+  rejectDeepNesting,
   renderValuePath,
   valueRepr,
   writeAsJson,
@@ -385,6 +388,30 @@ registerTemplateFn("str", { params: [{ name: "x" }], call: str });
 registerTemplateFn("int", { params: [{ name: "x" }], call: int });
 registerTemplateFn("float", { params: [{ name: "x" }], call: float });
 
+/**
+ * Return the value JSON text `s` holds: an int token as an int, any other number as a float, an
+ * object as a record. Text that isn't JSON fails with where it goes wrong, and so do NaN,
+ * Infinity, a duplicate key and a value nested past the limit, which no yian value holds.
+ */
+function parseJsonText(s: Value): Value {
+  const text = requireText("parse_json", s);
+  let value: Value;
+  try {
+    value = parseJson(text, "plain") as Value;
+  } catch (error) {
+    if (!(error instanceof JSONDecodeError)) throw error;
+    throw new TypeError(`parse_json() got text that isn't JSON: ${error.message}`);
+  }
+  try {
+    rejectDeepNesting(value, "parse_json() result");
+  } catch (error) {
+    if (!(error instanceof Error)) throw error;
+    throw new TypeError(error.message);
+  }
+  return value;
+}
+registerTemplateFn("parse_json", { params: [{ name: "s" }], call: parseJsonText });
+
 // --- Exact float arithmetic --- //
 
 /** Return `[m, e]` with `|x| = m · 2^e` exactly, for a finite `x`. */
@@ -556,6 +583,52 @@ function extreme(fn: "min" | "max", xs: Value): Value {
 registerTemplateFn("min", { params: [{ name: "xs" }], call: (xs) => extreme("min", xs) });
 registerTemplateFn("max", { params: [{ name: "xs" }], call: (xs) => extreme("max", xs) });
 
+/**
+ * Return `xs` sorted from the least, or with `reverse` from the greatest: numbers by value or
+ * texts by code point, or with `by`, records by that field's number or text. Equal items keep
+ * their order either way, as in Python's `sorted`.
+ */
+function sorted(xs: Value, by: Value, reverse: Value): Value[] {
+  const items = requireList("sorted", xs);
+  const field = optionalText("sorted", by, "by");
+  if (typeof reverse !== "boolean") throw new TypeError(`sorted() takes bool for reverse, got ${kindName(reverse)}`);
+  const fn = field === null ? "sorted()" : `sorted() by ${reprText(field)}`;
+  const keys = items.map((item): Value => {
+    if (field === null) {
+      if (item === null) throw new TypeError("sorted() got a null item");
+      return item;
+    }
+    if (!isRecord(item)) throw new TypeError(`${fn} takes a list of records, got a ${kindName(item)} item`);
+    if (!Object.hasOwn(item, field)) throw new TypeError(`${fn} got an item with no ${reprText(field)}`);
+    if (item[field] === null) throw new TypeError(`${fn} got a null ${reprText(field)}`);
+    return item[field]!;
+  });
+  const kindOf = (key: Value): "number" | "text" => {
+    if (typeof key === "string") return "text";
+    if (numberOf(key) !== null) return "number";
+    if (field === null) throw new TypeError(`sorted() takes a list of numbers or texts, got a ${kindName(key)} item`);
+    throw new TypeError(`${fn} takes numbers or texts, got a ${kindName(key)} ${reprText(field)}`);
+  };
+  const kind = keys.length === 0 ? "number" : kindOf(keys[0]!);
+  for (const key of keys) {
+    if (kindOf(key) !== kind) throw new TypeError(`${fn} can't compare ${kindName(keys[0]!)} and ${kindName(key)}`);
+  }
+  const order = (a: Value, b: Value): number => {
+    if (kind === "text") return compareCodePoints(a as string, b as string);
+    // JS compares a bigint with a number by exact value.
+    const [x, y] = [numberOf(a)!, numberOf(b)!];
+    return x < y ? -1 : x > y ? 1 : 0;
+  };
+  // `Array.prototype.sort` is stable, so negating the order keeps equal items in place.
+  const sign = reverse ? -1 : 1;
+  const indices = items.map((_, index) => index).sort((i, j) => sign * order(keys[i]!, keys[j]!));
+  return indices.map((index) => items[index]!);
+}
+registerTemplateFn("sorted", {
+  params: [{ name: "xs" }, { name: "by", default: null }, { name: "reverse", default: false }],
+  call: sorted,
+});
+
 const INT64_MIN = -(2n ** 63n);
 const INT64_MAX = 2n ** 63n - 1n;
 
@@ -717,6 +790,24 @@ function daysBetween(a: Value, b: Value): bigint {
   return diff < 0n && diff % MICROS_PER_DAY !== 0n ? days - 1n : days;
 }
 registerTemplateFn("days_between", { params: [{ name: "a" }, { name: "b" }], call: daysBetween });
+// --- Records --- //
+
+/** Return the record `r`'s fields as `[key, value]` pairs, sorted by key (code point). */
+function fieldsOf(fn: string, r: Value): [string, Value][] {
+  if (r === null) {
+    throw new TypeError(`${fn}() got null; read it only when it isn't, e.g. \`${fn}(r) if r != null else []\``);
+  }
+  if (!isRecord(r)) throw new TypeError(`${fn}() takes a record, got ${kindName(r)}`);
+  return Object.keys(r)
+    .sort(compareCodePoints)
+    .map((key) => [key, r[key]!]);
+}
+registerTemplateFn("keys", { params: [{ name: "r" }], call: (r) => fieldsOf("keys", r).map(([key]) => key) });
+registerTemplateFn("values", { params: [{ name: "r" }], call: (r) => fieldsOf("values", r).map(([, value]) => value) });
+registerTemplateFn("items", {
+  params: [{ name: "r" }],
+  call: (r) => fieldsOf("items", r).map(([key, value]) => ({ key, value })),
+});
 
 const STR = Type.scalar(ValueKind.STRING);
 const BOOL = Type.scalar(ValueKind.BOOLEAN);
@@ -724,6 +815,16 @@ const INT = Type.scalar(ValueKind.INTEGER);
 const FLOAT = Type.scalar(ValueKind.NUMBER);
 const DATE = Type.scalar(ValueKind.DATE);
 const DATETIME = Type.scalar(ValueKind.DATETIME);
+const ANY = Type.scalar(ValueKind.ANY);
+// `items` gives `{key, value}` records.
+const ITEM = new Type({
+  kind: ValueKind.OBJECT,
+  fields: new Map([
+    ["key", STR],
+    ["value", ANY],
+  ]),
+  required: new Set(["key", "value"]),
+});
 
 /** An argument at load: its inferred type, `null` when unknown, or `undefined` when the call leaves it out. */
 export type ArgType = Type | null | undefined;
@@ -816,6 +917,11 @@ function addDaysType([d]: readonly ArgType[]): Type | null {
   return d.kind === ValueKind.DATE ? DATE : d.kind === ValueKind.DATETIME ? DATETIME : null;
 }
 
+/** `sorted` gives the list type it takes, non-null (a null list fails the call). */
+function sortedType([xs]: readonly ArgType[]): Type | null {
+  return xs && isListKind(xs.kind) && xs.members === undefined ? xs.replace({ nullable: false }) : null;
+}
+
 /** How a builtin's result type follows from its arguments' types, in parameter order. */
 type ResultType = (args: readonly ArgType[]) => Type | null;
 
@@ -849,6 +955,12 @@ const SHIPPED = new Map<TemplateFn | undefined, { name: string; type: Type | Res
     abs: absType,
     add_days: addDaysType,
     days_between: INT,
+    sorted: sortedType,
+    // Untyped: a constructor such as `Finding(parse_json(s))` checks it.
+    parse_json: () => null,
+    keys: new Type({ kind: ValueKind.LIST_STRING, element: STR }),
+    values: new Type({ kind: ValueKind.LIST_ANY, element: ANY }),
+    items: new Type({ kind: ValueKind.LIST_OBJECT, element: ITEM }),
   }).map(([name, type]) => [TEMPLATE_FNS.get(name), { name, type }]),
 );
 
@@ -894,6 +1006,7 @@ const NUMBER: Takes = { kinds: new Set(NUMBER_KINDS), label: "a number" };
 const ANYTHING: Takes = { kinds: null, label: "a value" };
 // A date or datetime is text.
 const TEMPORAL: Takes = { kinds: new Set(["str"]), label: "a date or datetime" };
+const RECORD: Takes = { kinds: new Set(["record"]), label: "a record" };
 const OPTIONAL_TEXT: Takes = { ...TEXT, omittable: true };
 
 // What each shipped builtin's parameters take, in order.
@@ -922,6 +1035,15 @@ const TAKES: Readonly<Record<string, readonly Takes[]>> = {
   abs: [NUMBER],
   add_days: [TEMPORAL, { kinds: new Set(["int"]), label: "int" }],
   days_between: [TEMPORAL, TEMPORAL],
+  sorted: [
+    { ...LIST, items: new Set(["str", ...NUMBER_KINDS, "record"]), label: "a list of numbers, texts or records" },
+    OPTIONAL_TEXT,
+    { kinds: new Set(["bool"]), label: "bool" },
+  ],
+  parse_json: [TEXT],
+  keys: [RECORD],
+  values: [RECORD],
+  items: [RECORD],
 };
 
 /**

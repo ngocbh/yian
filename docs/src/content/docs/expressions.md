@@ -265,6 +265,9 @@ The default after `:-` is an expression, so quote text: `${input.when :- "today"
 | `min(xs)`, `max(xs)` | The least or greatest of a list of numbers, or of texts |
 | `sum(xs)` | The sum of a list of numbers; `0` for an empty list |
 | `any(xs)`, `all(xs)` | Whether any, or every, item of a list is true |
+| `sorted(xs, by=null, reverse=false)` | The list sorted: numbers or texts, or with `by`, records by that field |
+| `parse_json(s)` | The value JSON text holds, untyped |
+| `keys(r)`, `values(r)`, `items(r)` | A record's field names, values, or `{key, value}` records, in key order |
 | `add_days(d, n)` | The date or datetime `n` days after `d`; a negative `n` counts back |
 | `days_between(a, b)` | The whole days from `a` to `b`, negative when `b` is earlier |
 
@@ -287,6 +290,15 @@ Where Python has the same function, the builtin gives Python's result:
   `round(x)` gives an int; `round(x, n)` a float for a float `x` and an int for an int.
 - `sum` keeps ints exact and adds floats as Python 3.12 does: `sum([0.1, 0.2, 0.3])` is `0.6`.
 - `min` and `max` compare texts by code point, and give the first of equal items.
+- `sorted` compares as `min` and `max` do, and keeps equal items in order, with `reverse` too.
+
+For another order, such as high, medium, then low, join one comprehension per level:
+`${[t for t in ts if t.p == "high"] + [t for t in ts if t.p == "medium"] + [t for t in ts if t.p == "low"]}`.
+
+`parse_json` reads an int as an int and any other number as a float, and fails on text that
+isn't JSON with where it goes wrong. Its value is untyped, so check it with a constructor:
+`${Finding(parse_json(reply))}`. `keys`, `values` and `items` give the fields sorted by key, by
+code point.
 
 `add_days` and `days_between` take [dates and datetimes](/types/) and count in UTC: a date is its
 midnight, and a datetime without an offset is UTC. `add_days` keeps a datetime's time and offset
@@ -296,8 +308,10 @@ ago is `${add_days(system.today, -7)}`; the days since a date `d` are
 
 The result types follow the table: `len`, `int` and `days_between` give an int, `float` a float,
 `round`, `abs` and `sum` an int or a float as above, `startswith`, `endswith`, `any` and `all` a
-boolean, `split` a `list(str)`, `min` and `max` an item of their list, `add_days` a date for a
-date and a datetime for a datetime, and the others text, so `${upper(name).x}` is a load error.
+boolean, `split` and `keys` a `list(str)`, `min` and `max` an item of their list, `sorted` its
+list, `values` a `list(Any)`, `items` a list of `{key: str, value: Any}`, `parse_json` an untyped
+value, `add_days` a date for a date and a datetime for a datetime, and the others text, so
+`${upper(name).x}` is a load error.
 
 ## Types in expressions
 

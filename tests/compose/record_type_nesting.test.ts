@@ -1,11 +1,11 @@
 /**
  * A record type in `output:` counts its levels against the type nesting limit at load.
  *
- * A record written as a mapping, or as a list of single-key maps, in a node's `output:` is one
- * level, and so is every record inside it. A field's type text adds the levels of its resolved
- * type; the total must stay within `MAX_TYPE_NESTING` (100 by default), however YAML text or
- * aliases built the record, so a 1000-link alias chain is a located load error (under a raised
- * `YIAN_MAX_YAML_NODES`: at the default, the chain's anchors exceed the node limit first).
+ * A record written as a mapping in a node's `output:` is one level, and so is every record
+ * inside it. A field's type text adds the levels of its resolved type; the total must stay
+ * within `MAX_TYPE_NESTING` (100 by default), however YAML text or aliases built the record,
+ * so a 1000-link alias chain is a located load error (under a raised `YIAN_MAX_YAML_NODES`: at
+ * the default, the chain's anchors exceed the node limit first).
  */
 
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
@@ -50,14 +50,6 @@ function records(levels: number, leaf: string): [string, string] {
   const items = [`&m0 {k: "${leaf}"}`];
   for (let i = 1; i < levels - 1; i++) items.push(`&m${i} {k: *m${i - 1}}`);
   return [`x-anchors: [${items.join(", ")}]\n`, `{k: *m${levels - 2}}`];
-}
-
-/** `records(levels, leaf)` spelled as lists of fields, each level `[{k: ...}]`. */
-function fieldListRecords(levels: number, leaf: string): [string, string] {
-  if (levels <= 10) return ["", "[{k: ".repeat(levels) + `"${leaf}"` + "}]".repeat(levels)];
-  const items = [`&m0 [{k: "${leaf}"}]`];
-  for (let i = 1; i < levels - 1; i++) items.push(`&m${i} [{k: *m${i - 1}}]`);
-  return [`x-anchors: [${items.join(", ")}]\n`, `[{k: *m${levels - 2}}]`];
 }
 
 // ---------- flows: each puts `value` at one node's `output:` ----------
@@ -129,10 +121,6 @@ test.each(Object.keys(SITES))(
     await limitError(SITES[site]!(...records(1000, "str")));
   },
 );
-
-test("a list of fields output over a 1000-link alias chain is a located load error", async () => {
-  await limitError(code(...fieldListRecords(1000, "str")));
-});
 
 // ---------- records and field types counted together ----------
 

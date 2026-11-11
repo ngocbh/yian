@@ -39,10 +39,10 @@
  * gates it on the host's other inputs, so it runs only when the host can. A synth node from the
  * flow `output:`/`asserts:` has no host.
  *
- * Three guards (loud): an inline call cannot target the compiler-private `__inline_flow_`
+ * Two guards (loud): an inline call cannot target the compiler-private `__inline_flow_`
  * namespace or capture `${item}` (the synth node is a top-level node with no map-element scope;
- * use a named `call` node with `over:`), and a user node id may not use the reserved synth prefix
- * `__call_`.
+ * use a named `call` node with `over:`). A synth id can't collide with a user node id, since
+ * parsing refuses every id starting with `__`.
  *
  * Located parse metadata: each parsed host descriptor carries its own `range`/`fieldRanges` (read
  * from its source cursor). A synth `call` node locates at the SITE it desugared from, the host
@@ -148,7 +148,7 @@ export function synthIdGen(): () => string {
  *   `output:` section, and the assertion carriers (`[]` for no `asserts:`).
  * @throws LoadError on a malformed inline call (any unquoted value starting with `call(` that is
  *   not exactly one directive), a quoted `call(...)` holding a span, a `${item}` capture, or a
- *   reserved-prefix collision, located at the host node, `output:` or `asserts:`.
+ *   call to a reserved `__inline_flow_` target, located at the host node, `output:` or `asserts:`.
  * @throws TypeError when an `asserts:` item is neither text nor an `Assertion`.
  */
 export function desugarInlineCalls(
@@ -179,17 +179,6 @@ export function desugarInlineCalls(
   } = options;
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
   const mint = options.nextId ?? synthIdGen();
-
-  // Reserve the synth namespace: a user node id must not use the prefix (else it could collide
-  // with or shadow a generated id). Checked unconditionally.
-  for (const [nodeId, desc] of descriptors) {
-    if (nodeId.startsWith(SYNTH_PREFIX)) {
-      throw diagnostics.error(
-        `node id ${reprText(nodeId)} uses the reserved inline-call prefix ${reprText(SYNTH_PREFIX)}`,
-        { range: desc.range },
-      );
-    }
-  }
 
   const synth = new Map<string, CallDescriptor>();
   const newDescriptors = new Map<string, NodeDescriptor>();

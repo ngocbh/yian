@@ -1729,13 +1729,13 @@ export class JsonlRunLog implements RunLog {
    * @throws Error the busy message, as `create`; `run log <path> was replaced while being opened`
    *   when `path` stops naming the opened file before the lock is taken.
    * @throws Error (code `EINVAL`, `EINVAL: not a regular file, open '<path>'`) when `path` is a
-   *   FIFO or a device; it is never read, and no lock file is created.
+   *   symlink, a FIFO or a device; it is never read, and no lock file is created.
    * @throws the `fs` error (`code` `ENOENT` for a missing log, `EISDIR` for a folder, neither of
    *   which creates a lock file) and other `lockFile` errors.
    */
   static resume(path: string, options: RunLogOptions = {}): JsonlRunLog {
     const clock = logClock(options);
-    // Checked before the lock, so a FIFO or a device gets no lock file beside it.
+    // Checked before the lock, so a symlink, a FIFO or a device gets no lock file beside it.
     const fd = openRegular(path, fs.constants.O_RDWR);
     let lock: FileLock | undefined;
     try {
@@ -1948,7 +1948,7 @@ export interface IterRunRecordsOptions {
  *   no record has, or a complete line isn't a valid record, breaks the seq count or names another
  *   run id; the message names `path` and the line (or, after an offset, the byte).
  * @throws Error (code `EINVAL`, `EINVAL: not a regular file, open '<path>'`) when `path` isn't a
- *   regular file (a FIFO, a device or a folder); it is never read.
+ *   regular file (a symlink, a FIFO, a device or a folder); it is never read.
  * @throws Error (code `ENOENT`) when `path` doesn't exist, and the `fs` error of a failed read.
  */
 export function iterRunRecords(
@@ -3040,7 +3040,8 @@ function decodeCompletePrefix(data: Uint8Array, path: string): RecordEnvelope[] 
 
 /**
  * Take the writer's lock on the log at `path`, opened as `fd`, without waiting. The lock is the
- * sibling `<real>.lock` of the log's resolved path, so every symlink to the log shares it.
+ * sibling `<real>.lock` of the log's resolved path, so every path to the log through linked
+ * folders shares it.
  *
  * @throws Error naming the log and the likely cause when another writer holds it, with the busy
  *   `FileLockError` as `cause`; `run log <path> was replaced while being opened` when the
@@ -3111,8 +3112,8 @@ function rollbackAppend(fd: number, prefixSize: number): unknown[] {
 }
 
 /**
- * @internal The `EINVAL` error for a run log at `path` that isn't a regular file (a FIFO, a device
- * or a folder), shaped as Node's own file errors: `EINVAL: not a regular file, open '<path>'`.
+ * @internal The `EINVAL` error for a run log at `path` that isn't a regular file (a symlink, a FIFO,
+ * a device or a folder), shaped as Node's own file errors: `EINVAL: not a regular file, open '<path>'`.
  */
 export function notRegularFile(path: string): NodeJS.ErrnoException {
   return Object.assign(new Error(`EINVAL: not a regular file, open '${path}'`), {
@@ -3124,15 +3125,27 @@ export function notRegularFile(path: string): NodeJS.ErrnoException {
 }
 
 /**
- * Open the run log at `path` with `flags` and return its descriptor.
+ * Open the run log at `path` with `flags` and return its descriptor. A symlink at `path` itself is
+ * never followed; folders on the way to it may be links.
  *
- * @throws Error `notRegularFile(path)` when the file opened isn't a regular file; it is closed.
+ * @throws Error `notRegularFile(path)` when `path` is a symlink or the file opened isn't a regular
+ *   file; it is closed.
  * @throws the `fs` error of a failed open.
  */
 function openRegular(path: string, flags: number): number {
   // Non-blocking, so a FIFO with no writer can't hang the open, and without O_NOCTTY a tty
-  // opened here could become the controlling terminal.
-  const fd = fs.openSync(path, flags | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOCTTY ?? 0));
+  // opened here could become the controlling terminal. O_NOFOLLOW, so a link swapped in after a
+  // caller's own check can't make a run read or append to another file.
+  const { O_NOCTTY, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
+  let fd: number;
+  try {
+    fd = fs.openSync(path, flags | (O_NONBLOCK ?? 0) | (O_NOCTTY ?? 0) | (O_NOFOLLOW ?? 0));
+  } catch (error) {
+    // A symlink under O_NOFOLLOW: ELOOP on Linux and macOS, EMLINK on FreeBSD.
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    if (code === "ELOOP" || code === "EMLINK") throw notRegularFile(path);
+    throw error;
+  }
   try {
     // The descriptor's type, not the path's, so a file swapped in after a check can't slip by.
     if (!fs.fstatSync(fd).isFile()) throw notRegularFile(path);

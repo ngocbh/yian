@@ -33,6 +33,13 @@ typedefs:
     outline: list(str)     # the nodes, one line each
     samples: str           # inputs to try the flow on, as a JSON object
   Checked: {path: str, problem: str}
+  Input: {name: str, type: str}
+  Check:                   # what check_flow returns
+    ok: bool
+    name: Optional(str)
+    inputs: list(Input)
+    error: Optional(str)
+  Written: {written: bool, path: str, reason: Optional(str)}   # what write_flow returns
   Gate: {go: bool, why: str}
   Next: Literal(refine, write, stop)
   Plan: {next: Next, changes: str}
@@ -43,6 +50,20 @@ input:
   path: !Optional(str)
 
 defs:
+  write:                   # write_flow's card, and what it did, in words
+    input:
+      path: !str
+      content: !str
+    nodes:
+      written:
+        kind: tool
+        tool_id: write_flow
+        input:
+          path: ${input.path}
+          content: ${input.content}
+        output: Written
+    output: !str "${'wrote ' + written.output.path if written.output.written else 'not written: ' + (written.output.reason :- '')}"
+
   agree:
     input:
       brief: !Brief
@@ -124,17 +145,17 @@ defs:
         input:
           path: ${input.path}
           content: ${text.output}
-        output: str
+        output: Check
     output:
       text: ${text.output}
       check: ${checked.output}
-      ok: "${checked.output == 'ok' or startswith(checked.output, 'ok\n')}"
+      ok: ${checked.output.ok}
 
   fix:
     input:
       path: !str
       text: !str
-      check: !str
+      check: !Check
       ok: !bool
       tries: !int
     nodes:
@@ -142,7 +163,7 @@ defs:
         kind: agent
         input:
           text: ${input.text}
-          check: ${input.check}
+          error: ${input.check.error :- ""}
         tools: [read_docs]
         skills: [composing-agents]
         env:
@@ -158,8 +179,8 @@ defs:
           The flow:
           ${text}
 
-          Its check:
-          ${check}
+          Its error:
+          ${error}
       checked:
         kind: call
         call: check_draft
@@ -244,7 +265,7 @@ defs:
         kind: code
         input:
           ok: ${fixing.output.ok}
-          check: ${fixing.output.check}
+          inbox: ${any([startswith(i.type, "Inbox(") for i in fixing.output.check.inputs])}
           findings: ${reviewed.output :- []}
         output: Gate
         code: |
@@ -259,7 +280,7 @@ defs:
             return { go: false, why: `${why} (${risks.join("; ")})` };
           }
           // An Inbox input needs messages a try started here has no way to get.
-          if (/^ {2}[^:\n]+: Inbox\(/m.test(inputs.check)) {
+          if (inputs.inbox) {
             const why = "not tried: it takes an Inbox input, which a try here can't feed";
             return { go: false, why };
           }
@@ -320,7 +341,7 @@ defs:
           The draft:
           ${text}
 
-          Its check: ${check}
+          Its check: ${render_as_json(check)}
 
           The review's findings: ${render_as_json(findings)}
 
@@ -394,12 +415,11 @@ nodes:
         then: stopped
     else: out_of_rounds
   written:
-    kind: tool
-    tool_id: write_flow
+    kind: call
+    call: write
     input:
       path: ${build.output.contract.path}
       content: ${build.output.text}
-    output: str
   stopped: !str "not written: the user stopped before the write"
   out_of_rounds: !str "not written: five rounds ran out before the user chose the write"
   no_path: !str "not written: no usable path was agreed for the flow"

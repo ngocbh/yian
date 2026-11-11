@@ -569,6 +569,20 @@ console.log(JSON.stringify({ warnings, runs: readRunIndex(${JSON.stringify(runs)
     });
   }, 15_000);
 
+  test.skipIf(process.platform === "win32")("a symlink at a run's log, even to a valid log of that run, is skipped with a warning and has no row", () => {
+    const runs = freshRuns();
+    writeRun(runs, "good", succeededRun);
+    const elsewhere = freshRuns();
+    writeRun(elsewhere, "linked", failedRun);
+    const link = join(runs, "linked", "log.jsonl");
+    mkdirSync(join(runs, "linked"));
+    symlinkSync(join(elsewhere, "linked", "log.jsonl"), link);
+    const warnings: string[] = [];
+    withWarnings((message) => warnings.push(message), () => updateRunIndex(runs));
+    expect(warnings).toEqual([`run index skipped ${link}: EINVAL: not a regular file, open '${link}'`]);
+    expect(readRunIndex(runs).map((row) => row.runId)).toEqual(["good"]);
+  });
+
   test.skipIf(process.platform === "win32")("a log replaced by a FIFO keeps the row it had, and the scan never opens it", () => {
     const runs = freshRuns();
     writeRun(runs, "run-1", stoppedRun);

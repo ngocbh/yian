@@ -1,0 +1,21 @@
+# yian names the END input an assert on node `a` reads `__assert_a`, so a flow output can't take
+# that name, or any other starting with `__`.
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    a: {kind: code, code: ./fixtures/compose_codefns.ts:echo, input: {topic: x}, output: str}
+  asserts:
+    - ${a.output == 'x'}
+  output:
+    __assert_a: ${a.output}
+    b: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "flow output '__assert_a' starts with '__', which yian keeps for the names it generates; rename it"
+      frames:
+      - label: flow.yaml
+        range: [8, 3, 8, 13]

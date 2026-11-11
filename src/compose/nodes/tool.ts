@@ -36,7 +36,7 @@ import {
   valueRepr,
 } from "../../typesys/values.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
-import { checkMemoryGrants, grantErrorText, memoryBinding, rejectMemoryKeyInputs } from "../helpers/memory.ts";
+import { checkMemoryGrants, grantErrorText, memoryBinding } from "../helpers/memory.ts";
 import { literalValue, NOT_LITERAL } from "../../compile/output_contracts.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import { SourceAccessError, type SourceCursor } from "../source/index.ts";
@@ -311,11 +311,9 @@ export class ToolDescriptor extends NodeDescriptor {
    * memory's tool, routed through the reserved `__memory_<input>` wiring, never the run's tools.
    *
    * @throws LoadError when `output:` isn't a valid type expression, a built-in's input is unknown,
-   *   missing or of the wrong type (at the input), an input is named like a reserved memory key,
-   *   or a memory's tool names an Optional memory or a tool its type lacks.
+   *   missing or of the wrong type (at the input), or a memory's tool names an Optional memory or a tool its type lacks.
    */
   override build(ctx: BuildContext): BuildResult {
-    rejectMemoryKeyInputs(Object.keys(this.inputs), (name) => this.inputRange(name), ctx.diagnostics);
     const { group, name } = this.toolRef;
     const memory = group === null ? undefined : ctx.flowInputs.get(group);
     if (isMemoryType(memory)) return this.buildMemoryTool(ctx, memory);

@@ -552,11 +552,24 @@ describe("RouteModel status errors", () => {
     expect(sent[0]!.signal.aborted).toBe(true);
   });
 
-  test("a body read failure after the status keeps what arrived", async () => {
+  test("a body read failure after the status keeps what arrived, less a last word the failure may have cut", async () => {
     const reset = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
     const error = await callError({ status: 500, body: ["upstream ", "exploded", reset] }, new BearerAuth(KEY));
     expect(error.kind).toBe("server");
-    expect(error.message).toBe("openai returned HTTP 500 (server): upstream exploded");
+    expect(error.message).toBe("openai returned HTTP 500 (server): upstream");
+    const spaced = await callError({ status: 500, body: ["upstream exploded\n", reset] }, new BearerAuth(KEY));
+    expect(spaced.message).toBe("openai returned HTTP 500 (server): upstream exploded");
+  });
+
+  test("a status error body whose read fails partway through the key holds no part of it", async () => {
+    const reset = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+    const key = "sk-Qz7xLm2Pk4Rt9Vw3Yb6Nc8";
+    for (const echo of [key.slice(0, 12), "sk-Qz7xL\\u006d2Pk4"]) {
+      const error = await callError({ status: 500, body: [`error near key ${echo}`, reset] }, new BearerAuth(key));
+      expect(error.message).not.toContain("sk-Q");
+      expect(error.stack ?? "").not.toContain("sk-Q");
+      expect(error.message).toBe("openai returned HTTP 500 (server): error near key");
+    }
   });
 
   test("a caller abort during the error body read rethrows its reason", async () => {

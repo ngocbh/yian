@@ -1,0 +1,9 @@
+kind: value
+# The retired `topics` name is refused with the spelling to write.
+type: topics
+value: [a, b]
+expect:
+  raises:
+    class: TypeCheckError
+    message: "unknown type 'topics'; write list(str)"
+    path: []

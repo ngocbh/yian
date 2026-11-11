@@ -251,7 +251,7 @@ The default after `:-` is an expression, so quote text: `${input.when :- "today"
 | `len(obj)` | The number of items in a list, or of characters in a text |
 | `upper(s)`, `lower(s)` | The text in upper or lower case |
 | `join(value, sep="\n")` | The items of a list as text, joined by `sep` |
-| `render_as_json(value, indent=2)` | The value as indented JSON text |
+| `render_as_json(value, indent=2)` | The value as indented JSON text; an infinite float fails, as JSON has no infinity |
 | `startswith(s, prefix)`, `endswith(s, suffix)` | Whether the text starts or ends with the other |
 | `split(s, sep=null)` | A list of the parts of `s` between each `sep`; with no `sep`, the words between runs of whitespace |
 | `strip(s, chars=null)`, `lstrip(...)`, `rstrip(...)` | The text without whitespace, or the characters in `chars`, at both ends, the start or the end |

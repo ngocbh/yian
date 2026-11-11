@@ -36,7 +36,7 @@ import {
   type PromptText,
   STEER_INBOX_KEY,
 } from "../../nodes/agent/node.ts";
-import { MEMORY_KEY_PREFIX, memoryKey } from "../../nodes/base.ts";
+import { memoryKey } from "../../nodes/base.ts";
 import { typeToSchema } from "../../nodes/agent/structured.ts";
 import {
   Binding,
@@ -51,7 +51,7 @@ import { GrantError, parseToolGrants, type ToolGrant } from "../../tools/grants.
 import type { TypeRegistry } from "../../typesys/types.ts";
 import { isList, isMemoryType, isRecord, type Type, typeLevels, valueRepr } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError, rejectRemovedMemoryKey } from "../helpers/errors.ts";
-import { checkMemoryGrants, grantErrorText, memoryBinding, rejectMemoryKeyInputs } from "../helpers/memory.ts";
+import { checkMemoryGrants, grantErrorText, memoryBinding } from "../helpers/memory.ts";
 import { includeFile, readTaggedValue } from "../helpers/tags.ts";
 import { readVariables } from "../helpers/types.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
@@ -890,8 +890,8 @@ export class AgentDescriptor extends NodeDescriptor {
    * @throws LoadError for a bad `env.max_tool_iterations`, a bad variable declaration, a tool or
    *   skill grant the node refuses, an `output:` nesting deeper than
    *   `current().maxAgentOutputNesting` or holding a type a model can't produce, a variable named
-   *   like an input, an input or variable named `__llm_config`, `__steer_inbox` or `__memory_*`,
-   *   or a memory grant naming a tool its type lacks or showing a tool under a reserved name.
+   *   like an input, or a memory grant naming a tool its type lacks or showing a tool under a
+   *   reserved name.
    * @throws TypeError when `ctx.variableDeclarationReader` returns anything but an array of exact
    *   `Parameter`s or `null`.
    */
@@ -997,25 +997,11 @@ export class AgentDescriptor extends NodeDescriptor {
     }
     node.params = this.sinkParams();
     const inputNames = new Set(node.params.map((parameter) => parameter.name));
+    // The reserved keys the run binds beside the inputs start with `__`, which no input or
+    // variable may, so only an input's name can collide with a variable's.
     for (const variable of variables) {
-      // The reserved keys are refused whether or not this agent wires them, as for an input: the
-      // run binds them beside the inputs, so a variable of that name collides there.
-      let message: string;
-      if (variable.name === LLM_CONFIG_KEY) {
-        message =
-          `node ${id}: variable ${reprText(LLM_CONFIG_KEY)} is reserved for the values of \`llm_config\`; ` +
-          "rename the variable";
-      } else if (variable.name === STEER_INBOX_KEY) {
-        message =
-          `node ${id}: variable ${reprText(STEER_INBOX_KEY)} is reserved for \`steer_inbox:\`; ` +
-          "rename the variable";
-      } else if (variable.name.startsWith(MEMORY_KEY_PREFIX)) {
-        message = `node ${id}: variable ${reprText(variable.name)} is reserved for memory grants; rename the variable`;
-      } else if (inputNames.has(variable.name)) {
-        message = `node ${id}: variable ${reprText(variable.name)} collides with an input name`;
-      } else {
-        continue;
-      }
+      if (!inputNames.has(variable.name)) continue;
+      const message = `node ${id}: variable ${reprText(variable.name)} collides with an input name`;
       const frame =
         ctx.resolveOrigin !== null && variable.origin !== null ? ctx.resolveOrigin(variable.origin) : null;
       if (frame !== null) throw ctx.diagnostics.error(message, { frames: [frame] });
@@ -1023,24 +1009,6 @@ export class AgentDescriptor extends NodeDescriptor {
         range: this.fieldRanges.get(siteKey("field", "variables")) ?? this.range,
       });
     }
-    if (inputNames.has(LLM_CONFIG_KEY)) {
-      throw ctx.diagnostics.error(
-        `node ${id}: input ${reprText(LLM_CONFIG_KEY)} is reserved for the values of \`llm_config\`; ` +
-          "rename the input",
-        { range: this.fieldRanges.get(siteKey("input", LLM_CONFIG_KEY)) ?? this.range },
-      );
-    }
-    if (inputNames.has(STEER_INBOX_KEY)) {
-      throw ctx.diagnostics.error(
-        `input ${reprText(STEER_INBOX_KEY)} is reserved for \`steer_inbox:\`; rename the input`,
-        { range: this.fieldRanges.get(siteKey("input", STEER_INBOX_KEY)) ?? this.range },
-      );
-    }
-    rejectMemoryKeyInputs(
-      inputNames,
-      (name) => this.fieldRanges.get(siteKey("input", name)) ?? this.range,
-      ctx.diagnostics,
-    );
     const wiring = this.sinkWiring();
     if (this.steerInbox !== null) wiring.set(STEER_INBOX_KEY, this.steerInbox);
     for (const input of memoryInputs) wiring.set(memoryKey(input), memoryBinding(input));

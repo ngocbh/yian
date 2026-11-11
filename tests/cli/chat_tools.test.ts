@@ -23,6 +23,8 @@ import {
   type ChatToolHost,
   chatFileTools,
   checkFocus,
+  type FlowCheck,
+  type FlowWrite,
   confine,
   listFlows,
   ToolRefused,
@@ -99,6 +101,13 @@ async function rejection(promise: Promise<unknown>): Promise<Error> {
     return error as Error;
   }
   throw new Error("expected a rejection");
+}
+
+/** The error of the check `checking` gives, which must not be ok. */
+async function failed(checking: Promise<unknown>): Promise<string> {
+  const check = (await checking) as FlowCheck;
+  expect(check).toMatchObject({ ok: false, name: null, inputs: [] });
+  return check.error!;
 }
 
 /** What `action` threw. */
@@ -287,13 +296,12 @@ describe("check_flow", () => {
   test("a flow that loads is ok, with its name and inputs", async () => {
     writeFileSync(join(root, "main.yaml"), parentFlow("sub/child"));
     writeFileSync(join(root, "sub", "child.yaml"), FLOW);
-    expect(await call("check_flow", { path: "main.yaml" })).toBe("ok\nname: main\ninputs:\n  n: int");
+    expect(await call("check_flow", { path: "main.yaml" })).toEqual({ ok: true, name: "main", inputs: [{ name: "n", type: "int" }], error: null });
   });
 
   test("a flow that doesn't load shows the diagnostic as yian check does, without colour", async () => {
     writeFileSync(join(root, "bad.yaml"), "id: [\n");
-    const text = String(await call("check_flow", { path: "bad.yaml" }));
-    expect(text).toStartWith("invalid:\n");
+    const text = await failed(call("check_flow", { path: "bad.yaml" }));
     expect(text).toContain("bad.yaml");
     expect(text).not.toContain("\x1b");
   });
@@ -301,15 +309,14 @@ describe("check_flow", () => {
   test("a uses: child outside the root is refused", async () => {
     writeFileSync(join(tmp, "child.yaml"), FLOW);
     writeFileSync(join(root, "main.yaml"), parentFlow("../child"));
-    const text = String(await call("check_flow", { path: "main.yaml" }));
-    expect(text).toStartWith("invalid:\n");
+    const text = await failed(call("check_flow", { path: "main.yaml" }));
     expect(text).toContain(`${join("..", "child.yaml")} is outside the root`);
   });
 
   test("a CODE reference outside the root is refused", async () => {
     writeFileSync(join(tmp, "helpers.ts"), "export function fn(inputs) { return 1 }\n");
     writeFileSync(join(root, "code.yaml"), codeFlowText("../helpers.ts:fn"));
-    const text = String(await call("check_flow", { path: "code.yaml" }));
+    const text = await failed(call("check_flow", { path: "code.yaml" }));
     expect(text).toContain("`code:` reference '../helpers.ts:fn' is outside the code root");
   });
 
@@ -328,9 +335,8 @@ describe("check_flow", () => {
   test("checks given content as the file at the path, without writing it", async () => {
     writeFileSync(join(root, "sub", "child.yaml"), FLOW);
     const ok = await call("check_flow", { path: "draft.yaml", content: parentFlow("sub/child") });
-    expect(ok).toBe("ok\nname: main\ninputs:\n  n: int");
-    const bad = String(await call("check_flow", { path: "sub/a.yaml", content: "id: [\n" }));
-    expect(bad).toStartWith("invalid:\n");
+    expect(ok).toEqual({ ok: true, name: "main", inputs: [{ name: "n", type: "int" }], error: null });
+    const bad = await failed(call("check_flow", { path: "sub/a.yaml", content: "id: [\n" }));
     expect(bad).toContain("a.yaml");
     expect(existsSync(join(root, "draft.yaml"))).toBe(false);
     expect(readFileSync(join(root, "sub", "a.yaml"), "utf8")).toBe("id: a\n");
@@ -356,7 +362,7 @@ describe("checkFocus", () => {
     writeFileSync(join(tmp, "elsewhere", "lib", "child.yaml"), FLOW);
     expect(await checkFocus(path, NO_ENV)).toEqual({
       text: parentFlow("lib/child"),
-      check: "ok\nname: main\ninputs:\n  n: int",
+      check: { ok: true, name: "main", inputs: [{ name: "n", type: "int" }], error: null },
       inbox: false,
     });
   });
@@ -368,9 +374,10 @@ describe("checkFocus", () => {
       "id: talk\nname: talk\ninput:\n  messages: !Inbox(Message)\n  seen: !Optional(list(Message))\n" +
         "nodes:\n  heard:\n    kind: tool\n    tool_id: take\n    input:\n      from: ${input.messages}\noutput: done\n",
     );
-    expect((await checkFocus(path, NO_ENV)).check).toBe(
-      "ok\nname: talk\ninputs:\n  messages: Inbox(Message)\n  seen: Optional(list(Message))",
-    );
+    expect((await checkFocus(path, NO_ENV)).check.inputs).toEqual([
+      { name: "messages", type: "Inbox(Message)" },
+      { name: "seen", type: "Optional(list(Message))" },
+    ]);
   });
 
   test("says whether the flow has an Inbox input", async () => {
@@ -390,7 +397,7 @@ describe("checkFocus", () => {
     expect(focus.text).toStartWith(FLOW);
     expect(focus.text).toEndWith("\n(cut at 32768 bytes)");
     expect(Buffer.byteLength(focus.text)).toBeLessThan(33 * 1024);
-    expect(focus.check).toBe("ok\nname: f\ninputs:\n  n: int");
+    expect(focus.check).toEqual({ ok: true, name: "f", inputs: [{ name: "n", type: "int" }], error: null });
   });
 
   test("a flow that doesn't load gives its diagnostic", async () => {
@@ -398,7 +405,8 @@ describe("checkFocus", () => {
     writeFileSync(path, "id: [\n");
     const focus = await checkFocus(path, NO_ENV);
     expect(focus.text).toBe("id: [\n");
-    expect(focus.check).toStartWith("invalid:\n");
+    expect(focus.check.ok).toBe(false);
+    expect(focus.check.error).toContain("bad.yaml");
     expect(focus.inbox).toBe(false);
   });
 });
@@ -420,30 +428,32 @@ function approving(answer: string | null, during: () => void = () => {}) {
 }
 
 describe("write_flow", () => {
-  test("content that doesn't load is invalid and never asks", async () => {
+  test("content that doesn't load is not written, with its diagnostic, and never asks", async () => {
     const { chatHost, requests } = approving("Approve");
-    const result = String(await call("write_flow", { path: "a.yaml", content: "id: [\n" }, chatHost));
-    expect(result).toStartWith("invalid:\n");
+    const result = (await call("write_flow", { path: "a.yaml", content: "id: [\n" }, chatHost)) as FlowWrite;
+    expect(result).toMatchObject({ written: false, path: "a.yaml" });
+    expect(result.reason).toStartWith("it doesn't load:\n");
+    expect(result.reason).toContain("a.yaml");
     expect(requests).toEqual([]);
     expect(existsSync(join(root, "a.yaml"))).toBe(false);
   });
 
   test("an approved new file is written, its folders created", async () => {
     const { chatHost, requests } = approving("Approve");
-    expect(await call("write_flow", { path: "a.yaml", content: FLOW }, chatHost)).toBe("wrote a.yaml");
+    expect(await call("write_flow", { path: "a.yaml", content: FLOW }, chatHost)).toEqual({ written: true, path: "a.yaml", reason: null });
     expect(readFileSync(join(root, "a.yaml"), "utf8")).toBe(FLOW);
     expect(requests).toHaveLength(1);
     expect(requests[0]!.title).toBe("Write a.yaml");
     expect(requests[0]!.choices).toEqual(["Approve", "Reject"]);
     expect(requests[0]!.diff).toStartWith("--- /dev/null\n+++ a.yaml\n@@ -0,0 +1,6 @@\n+id: f\n");
     const deep = await call("write_flow", { path: "new/deep/b.yaml", content: FLOW }, chatHost);
-    expect(deep).toBe("wrote new/deep/b.yaml");
+    expect(deep).toEqual({ written: true, path: "new/deep/b.yaml", reason: null });
     expect(readFileSync(join(root, "new", "deep", "b.yaml"), "utf8")).toBe(FLOW);
   });
 
   test("a rejected write is not written", async () => {
     const { chatHost } = approving("Reject");
-    expect(await call("write_flow", { path: "a.yaml", content: FLOW }, chatHost)).toBe("not written: rejected");
+    expect(await call("write_flow", { path: "a.yaml", content: FLOW }, chatHost)).toMatchObject({ written: false, reason: "rejected" });
     expect(existsSync(join(root, "a.yaml"))).toBe(false);
   });
 
@@ -451,7 +461,7 @@ describe("write_flow", () => {
     writeFileSync(join(root, "sub", "f.yaml"), FLOW.replace("name: f", "name: old"));
     const { chatHost, requests } = approving("Approve");
     const content = FLOW.replace("name: f", "name: new");
-    expect(await call("write_flow", { path: "sub/f.yaml", content }, chatHost)).toBe("wrote sub/f.yaml");
+    expect(await call("write_flow", { path: "sub/f.yaml", content }, chatHost)).toEqual({ written: true, path: "sub/f.yaml", reason: null });
     expect(requests[0]!.diff).toContain("\n-name: old\n+name: new\n");
     expect(readFileSync(join(root, "sub", "f.yaml"), "utf8")).toBe(content);
     expect(readdirSync(join(root, "sub")).toSorted()).toEqual(["a.yaml", "f.yaml"]);
@@ -463,7 +473,7 @@ describe("write_flow", () => {
     const { chatHost } = approving("Approve", () => writeFileSync(path, FLOW + "# edited\n"));
     const content = FLOW.replace("name: f", "name: new");
     const result = await call("write_flow", { path: "sub/f.yaml", content }, chatHost);
-    expect(result).toBe("not written: changed during approval");
+    expect(result).toMatchObject({ written: false, reason: "changed during approval" });
     expect(readFileSync(path, "utf8")).toBe(FLOW + "# edited\n");
   });
 
@@ -471,7 +481,7 @@ describe("write_flow", () => {
     const path = join(root, "a.yaml");
     const { chatHost } = approving("Approve", () => writeFileSync(path, "theirs\n"));
     const result = await call("write_flow", { path: "a.yaml", content: FLOW }, chatHost);
-    expect(result).toBe("not written: changed during approval");
+    expect(result).toMatchObject({ written: false, reason: "changed during approval" });
     expect(readFileSync(path, "utf8")).toBe("theirs\n");
   });
 
@@ -484,7 +494,7 @@ describe("write_flow", () => {
       renameSync(`${path}.new`, path);
     });
     const result = await call("write_flow", { path: "sub/f.yaml", content: FLOW + "# new\n" }, chatHost);
-    expect(result).toBe("not written: changed during approval");
+    expect(result).toMatchObject({ written: false, reason: "changed during approval" });
     expect(readFileSync(path, "utf8")).toBe(FLOW);
   });
 
@@ -507,7 +517,7 @@ describe("write_flow", () => {
   test("a folder swapped for a symlink out during approval leaves an existing file alone", async () => {
     const { chatHost, outside } = swappingSub();
     const result = await call("write_flow", { path: "sub/f.yaml", content: FLOW + "# new\n" }, chatHost);
-    expect(result).toBe("not written: sub/f.yaml is outside the folder the chat started in");
+    expect(result).toMatchObject({ written: false, reason: "sub/f.yaml is outside the folder the chat started in" });
     expect(readdirSync(outside)).toEqual(["f.yaml"]);
     expect(readFileSync(join(outside, "f.yaml"), "utf8")).toBe(FLOW);
   });
@@ -515,7 +525,7 @@ describe("write_flow", () => {
   test("a folder swapped for a symlink out during approval creates no new file", async () => {
     const { chatHost, outside } = swappingSub();
     const result = await call("write_flow", { path: "sub/new.yaml", content: FLOW }, chatHost);
-    expect(result).toBe("not written: sub/new.yaml is outside the folder the chat started in");
+    expect(result).toMatchObject({ written: false, reason: "sub/new.yaml is outside the folder the chat started in" });
     expect(readdirSync(outside)).toEqual(["f.yaml"]);
   });
 
@@ -528,7 +538,7 @@ describe("write_flow", () => {
       symlinkSync(join(tmp, "out.yaml"), path);
     });
     const result = await call("write_flow", { path: "sub/f.yaml", content: FLOW + "# new\n" }, chatHost);
-    expect(result).toBe("not written: sub/f.yaml is outside the folder the chat started in");
+    expect(result).toMatchObject({ written: false, reason: "sub/f.yaml is outside the folder the chat started in" });
     expect(readFileSync(join(tmp, "out.yaml"), "utf8")).toBe(FLOW);
   });
 
@@ -571,9 +581,7 @@ describe("write_flow", () => {
     writeFileSync(path, FLOW);
     chmodSync(path, 0o640);
     const { chatHost } = approving("Approve");
-    expect(await call("write_flow", { path: "sub/f.yaml", content: FLOW + "# new\n" }, chatHost)).toBe(
-      "wrote sub/f.yaml",
-    );
+    expect(await call("write_flow", { path: "sub/f.yaml", content: FLOW + "# new\n" }, chatHost)).toEqual({ written: true, path: "sub/f.yaml", reason: null });
     expect(statSync(path).mode & 0o777).toBe(0o640);
   });
 
@@ -586,13 +594,9 @@ describe("write_flow", () => {
     try {
       const { chatHost } = approving("Approve");
       const overwrite = await call("write_flow", { path: "ro/a.yaml", content: FLOW + "# x\n" }, chatHost);
-      expect(overwrite).toBe("not written: Permission denied");
-      expect(await call("write_flow", { path: "ro/b.yaml", content: FLOW }, chatHost)).toBe(
-        "not written: Permission denied",
-      );
-      expect(await call("write_flow", { path: "ro/deep/c.yaml", content: FLOW }, chatHost)).toBe(
-        "not written: Permission denied",
-      );
+      expect(overwrite).toMatchObject({ written: false, reason: "Permission denied" });
+      expect(await call("write_flow", { path: "ro/b.yaml", content: FLOW }, chatHost)).toMatchObject({ written: false, reason: "Permission denied" });
+      expect(await call("write_flow", { path: "ro/deep/c.yaml", content: FLOW }, chatHost)).toMatchObject({ written: false, reason: "Permission denied" });
       expect(readdirSync(folder)).toEqual(["a.yaml"]);
     } finally {
       chmodSync(folder, 0o755);
@@ -604,8 +608,8 @@ describe("write_flow", () => {
     const temporary = join(root, `.t.yaml.yian-tmp-${process.pid}`);
     mkdirSync(temporary);
     const { chatHost } = approving("Approve");
-    const result = String(await call("write_flow", { path: "t.yaml", content: FLOW + "# y\n" }, chatHost));
-    expect(result).toStartWith("not written: ");
+    const result = await call("write_flow", { path: "t.yaml", content: FLOW + "# y\n" }, chatHost);
+    expect(result).toMatchObject({ written: false, path: "t.yaml" });
     expect(readFileSync(join(root, "t.yaml"), "utf8")).toBe(FLOW);
     expect(existsSync(temporary)).toBe(true);
   });
@@ -614,7 +618,7 @@ describe("write_flow", () => {
     writeFileSync(join(root, "t.yaml"), FLOW);
     writeFileSync(join(root, `.t.yaml.yian-tmp-${process.pid}`), "stale\n");
     const { chatHost } = approving("Approve");
-    expect(await call("write_flow", { path: "t.yaml", content: FLOW + "# y\n" }, chatHost)).toBe("wrote t.yaml");
+    expect(await call("write_flow", { path: "t.yaml", content: FLOW + "# y\n" }, chatHost)).toEqual({ written: true, path: "t.yaml", reason: null });
     expect(readFileSync(join(root, "t.yaml"), "utf8")).toBe(FLOW + "# y\n");
     expect(readdirSync(root).toSorted()).toEqual(["sub", "t.yaml"]);
   });
@@ -622,7 +626,7 @@ describe("write_flow", () => {
   test("without a terminal to approve, nothing is written", async () => {
     const { chatHost } = approving(null);
     const result = await call("write_flow", { path: "a.yaml", content: FLOW }, chatHost);
-    expect(result).toBe("not written: not approved (no terminal, or the prompt ended)");
+    expect(result).toMatchObject({ written: false, reason: "not approved (no terminal, or the prompt ended)" });
     expect(existsSync(join(root, "a.yaml"))).toBe(false);
   });
 

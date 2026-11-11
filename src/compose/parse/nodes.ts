@@ -39,7 +39,7 @@ import {
   ValueKind,
 } from "../../typesys/values.ts";
 import { CALL_HEAD } from "../helpers/directives.ts";
-import { LoadDiagnostics } from "../helpers/errors.ts";
+import { LoadDiagnostics, rejectReservedName } from "../helpers/errors.ts";
 import { oneLineText } from "../helpers/source.ts";
 import { QUOTED_STYLES, suggestTag, yamlQuoted } from "../helpers/tags.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
@@ -200,6 +200,14 @@ function parseNode(
   for (const [name, range] of normalized.mappingValueRanges("inputs")) {
     desc.fieldRanges.set(siteKey("input", name), range);
   }
+  // Only the written `input:` keys: a kind's parse may add a reserved key of its own (`__on`).
+  const writtenInputs = normalized.get("inputs");
+  if (isRecord(writtenInputs)) {
+    for (const name of Object.keys(writtenInputs)) {
+      const range = normalized.child("inputs").keyRangeOf(name) ?? normalized.range;
+      rejectReservedName(`node ${reprText(nodeId)} input`, name, range, diagnostics);
+    }
+  }
   desc.assertRanges.push(...normalized.itemRangeList("asserts"));
   const localNames = cls.inputsAreLocals ? Object.keys(desc.inputs) : [];
   if (localNames.length > 0) {
@@ -220,8 +228,8 @@ function kindNames(): string {
 
 /**
  * Reject a node id that isn't a referenceable identifier or collides with a reserved name, at
- * the node body: an expression keyword, the synthesized boundary or a resolver head; `#`, `/`
- * and `.` get their own reserved-separator message.
+ * the node body: an expression keyword, the synthesized boundary, any other name starting with
+ * `__`, or a resolver head; `#`, `/` and `.` get their own reserved-separator message.
  *
  * @throws LoadError for a bad id.
  */
@@ -252,6 +260,7 @@ function rejectReservedNodeId(nodeId: string, cursor: SourceCursor): void {
       { range },
     );
   }
+  rejectReservedName("node id", nodeId, range, diagnostics);
   if (EXPRESSION_KEYWORDS.has(nodeId)) {
     throw diagnostics.error(
       `node id ${id} is an expression keyword, so \${${nodeId}.output} can't reference it; ` +

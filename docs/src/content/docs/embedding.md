@@ -216,7 +216,7 @@ Your program reaches a waiting run by its log path:
 
 | Call | Returns | What it does |
 |---|---|---|
-| `send(log, inbox, value)` | the send's seq | Adds a message to an `Inbox(T)` input; `value` must fit `T` |
+| `send(log, inbox, value)` | the send's seq | Adds a message to an `Inbox(T)` input; `value` must fit `T`, read as [a tool's result](/code-and-tools/#values-in-and-out) (a whole number is an `int`) |
 | `withdraw(log, inbox)` | `[{seq, value}]` | Takes back every message nothing has read yet |
 | `close(log, inbox)` | the seq, or `null` if already closed | Refuses later sends; takes still read what is queued |
 | `complete(log, callId, result)` | the seq, or `null` for the same answer twice | Answers a pending host call (see [Pending host calls](#pending-host-calls)) |

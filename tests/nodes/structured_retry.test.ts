@@ -24,6 +24,7 @@ import {
   Response,
   TextPart,
   ToolCallPart,
+  ToolResultPart,
 } from "../../src/llm/messages.ts";
 import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
 import { Route } from "../../src/llm/route.ts";
@@ -261,16 +262,41 @@ test("contract path validation rejects foreign location shapes", () => {
 });
 
 describe("TS-only", () => {
-  test("a corrected request holds the earlier messages and the correction, not the invalid reply", async () => {
+  test("a corrected request holds the earlier messages, the invalid reply and the correction", async () => {
     const model = scripted([text('{"value": "x"}'), text('{"value": 1}')]);
     await generateStructured(model, [QUESTION], INT, { retries: 1 });
     const second = model.requests[1]!.messages;
-    expect(second.map((message) => message.role)).toEqual(["user", "user"]);
+    expect(second.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
     expect(second[0]!.text()).toBe("question");
-    expect(second[1]!.text()).toBe(
+    expect(second[1]!.text()).toBe('{"value": "x"}');
+    expect(second[2]!.text()).toBe(
       'Your previous output was invalid: structured output: "x" does not match declared type int. ' +
         "Respond with valid data matching the schema.",
     );
+  });
+
+  test("an invalid tool call is answered by the correction as its error result", async () => {
+    const bad = new ToolCallPart({ id: "c1", name: "ScalarWrapper", arguments: { value: "x" } });
+    const other = new ToolCallPart({ id: "c2", name: "other", arguments: {} });
+    const good = new ToolCallPart({ id: "c3", name: "ScalarWrapper", arguments: { value: 1n } });
+    const model = new ToolRoute([reply(new TextPart("Trying."), bad, other), reply(good)]);
+    expect(await generateStructured(model, [QUESTION], INT, { retries: 1 })).toBe(1n);
+    const second = model.script.requests[1]!.messages;
+    expect(second.map((message) => message.role)).toEqual(["user", "assistant", "tool", "tool"]);
+    expect(second[1]!.parts).toEqual([new TextPart("Trying."), bad, other]);
+    const correction =
+      'Your previous output was invalid: structured output: "x" does not match declared type int. ' +
+      "Respond with valid data matching the schema.";
+    expect(second.slice(2).map((message) => message.parts[0])).toEqual([
+      new ToolResultPart({ callId: "c1", name: "ScalarWrapper", content: correction, isError: true }),
+      new ToolResultPart({ callId: "c2", name: "other", content: correction, isError: true }),
+    ]);
+  });
+
+  test("an empty invalid reply adds only the correction", async () => {
+    const model = scripted([reply(), text('{"value": 1}')]);
+    await generateStructured(model, [QUESTION], INT, { retries: 1 });
+    expect(model.requests[1]!.messages.map((message) => message.role)).toEqual(["user", "user"]);
   });
 
   test("a stop during the call of an invalid last reply wins over the OutputInvalidError", async () => {
@@ -398,7 +424,8 @@ describe("an agent reply without the schema's tool call", () => {
     const requests = model.script.requests;
     expect(requests).toHaveLength(2);
     const messages = requests[1]!.messages;
-    expect(messages.map((message) => message.role)).toEqual(["system", "user", "user"]);
+    expect(messages.map((message) => message.role)).toEqual(["system", "user", "assistant", "user"]);
+    expect(messages[2]!.text()).toBe("7");
     const correction = messages.at(-1)!.text();
     expect(correction).toContain(missing);
     expect(correction).not.toContain("provider error (");

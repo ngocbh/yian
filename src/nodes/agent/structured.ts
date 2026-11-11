@@ -647,7 +647,8 @@ export function checkReply(data: JsonObject, typ: Type): Value {
  * A record is rebuilt in its declared field order: an absent nullable field becomes `null`, and
  * an unknown field is dropped from an open record but kept in a closed one, so the check refuses
  * it. Union members and everything inside them are closed; a tagged union reads the member its tag
- * names, an untagged one the first member whose normalized value passes the check. `Any`, a
+ * names, an untagged one the first member whose normalized value passes the check. An `int`
+ * slot reads a float with no fraction, within `Number.MAX_SAFE_INTEGER`, as that int. `Any`, a
  * field-less `object`, a flat list and a value of the wrong shape are kept as given.
  */
 function normalize(value: Value, typ: Type, closed = false): Value {
@@ -672,6 +673,8 @@ function normalize(value: Value, typ: Type, closed = false): Value {
   if (isListKind(typ.kind) && typ.element !== undefined && Array.isArray(value)) {
     return value.map((item) => normalize(item, typ.element!, closed));
   }
+  // The JSON Schema `integer` the model was sent admits 2.0, which the reply's JSON reads as a float.
+  if (typ.kind === ValueKind.INTEGER && typeof value === "number" && Number.isSafeInteger(value)) return BigInt(value);
   return value;
 }
 

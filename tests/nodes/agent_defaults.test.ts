@@ -20,11 +20,10 @@ afterEach(() => {
   forget();
 });
 
-// The sentinel model has no native structured output, so the reply is parsed from text and a bad
-// reply costs one retry.
+// The agent's reply is prompted for, so it is parsed from text and a bad reply costs one retry.
 const STRUCTURED = `id: scored
 name: scored
-llm_config: {provider: vllm, model: no-structured-sentinel}
+llm_config: {provider: vllm, model: m, structured_output: prompt}
 input:
   question: !str
 nodes:
@@ -69,7 +68,8 @@ async function run(text: string, model: ScriptedModel, env: Env, options: RunFlo
 function badThenGood(): ScriptedModel {
   return new ScriptedModel(['{"score": "bad"}', '{"score": 1.5}'].map(textReply), {
     provider: "vllm",
-    model: "no-structured-sentinel",
+    model: "m",
+    structuredOutput: "prompt",
   });
 }
 

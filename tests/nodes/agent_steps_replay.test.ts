@@ -26,7 +26,7 @@ import { type ChatModel, EventStream, Finish, TextDelta } from "../../src/llm/ev
 import {
   MediaPart,
   Message,
-  type Request,
+  Request,
   Response,
   TextPart,
   ToolCallPart,
@@ -34,7 +34,9 @@ import {
   Usage,
 } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
+import { isStorageError } from "../../src/llm_clients/auth/store.ts";
 import { AgentSteps, requestSha256 } from "../../src/nodes/agent/context.ts";
+import { callModel, modelFailureCode } from "../../src/nodes/agent/live.ts";
 import { SKIPPED_TOOL_RESULT, TOOL_OUTCOME_UNKNOWN, toolLimitText, unparsedText } from "../../src/nodes/agent/results.ts";
 import { CapabilityFault } from "../../src/nodes/base.ts";
 import { INTERRUPTED_MARKER } from "../../src/nodes/agent/messages.ts";
@@ -385,6 +387,16 @@ test("an attempt that wasn't to be retried is a recorded call that failed, repla
   expect(steps.takeRecorded("chat", D2)).toEqual({ n: 3, failure: { kind: "server", message: "boom" } });
   expect(steps.replaying()).toBe(false);
   expect(steps.priorAttempts("chat", D2)).toBeNull();
+});
+
+test("a recorded auth-store fault replays as one, coded provider.auth_storage", async () => {
+  const message = "Credential storage at /tmp/x/auth.json must be private to its owner";
+  const steps = replaying([{ ...failedStep(D1, null), error: { kind: "StorageError", message } }]);
+  const record = { steps, digest: D1 };
+  const error = await rejected(callModel(null, new ScriptedModel([]), new Request({ messages: [] }), { purpose: "chat", record }));
+  expect(isStorageError(error)).toBe(true);
+  expect((error as Error).message).toBe(message);
+  expect(modelFailureCode(error)).toBe("provider.auth_storage");
 });
 
 test("a recorded call whose digest or purpose differs is a host fault naming the node, n and both", () => {

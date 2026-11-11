@@ -1,0 +1,30 @@
+kind: run
+flow: |
+  id: loop-max-output
+  name: loop_max_output
+  nodes:
+    repeat:
+      kind: loop
+      while: "true"
+      max: 2
+      on_max_exceeded: output
+      input:
+        n: 0
+      nodes:
+        bump:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: int
+          code: |
+            return {n: inputs.n + 1}
+      output: ${bump.output}
+  output: ${repeat.output}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output:
+    status: succeeded
+    output: {n: 2}
+  trace: [[run_started, null, {num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, repeat], [pool_commit, repeat, {from: {}, key: repeat#0/__start__}], [node_expanded, repeat, {prune_ids: []}], [node_started, repeat#0/__start__], [node_succeeded, repeat#0/__start__, {commit: 9}], [node_started, repeat#0/bump], [pool_commit, repeat#0/bump, {value: {n: 1}}], [node_succeeded, repeat#0/bump, {commit: 14}], [node_started, repeat#0/__end__], [pool_commit, repeat#0/__end__, {from: {repeat#0/bump: 14}}], [node_succeeded, repeat#0/__end__, {commit: 17}], [node_started, repeat~1], [pool_commit, repeat~1, {from: {repeat#0/__end__: 17}, key: repeat#1/__start__}], [node_expanded, repeat~1, {prune_ids: [repeat#0/__end__, repeat#0/__start__, repeat#0/bump, repeat~1]}], [node_started, repeat#1/__start__], [node_succeeded, repeat#1/__start__, {commit: 20}], [node_started, repeat#1/bump], [pool_commit, repeat#1/bump, {value: {n: 2}}], [node_succeeded, repeat#1/bump, {commit: 25}], [node_started, repeat#1/__end__], [pool_commit, repeat#1/__end__, {from: {repeat#1/bump: 25}}], [node_succeeded, repeat#1/__end__, {commit: 28}], [node_started, repeat~2], [pool_commit, repeat~2, {from: {repeat#1/__end__: 28}, key: repeat}], [node_succeeded, repeat~2, {commit: 31}], [node_started, __end__], [pool_commit, __end__, {value: {n: 2}}], [node_succeeded, __end__, {commit: 34}]]
+  events: [[RunStarted], [NodeStarted, {node_id: __start__}], [NodeSucceeded, {node_id: __start__, output: {}, interrupted: false}], [NodeStarted, {node_id: repeat}], [NodeExpanded, {node_id: repeat, grow: {seed: [{n: 0}, 0], prune: []}}], [NodeStarted, {node_id: repeat#0/__start__}], [NodeSucceeded, {node_id: repeat#0/__start__, output: {n: 0}, interrupted: false}], [NodeStarted, {node_id: repeat#0/bump}], [NodeSucceeded, {node_id: repeat#0/bump, output: {n: 1}, interrupted: false}], [NodeStarted, {node_id: repeat#0/__end__}], [NodeSucceeded, {node_id: repeat#0/__end__, output: {n: 1}, interrupted: false}], [NodeStarted, {node_id: repeat~1}], [NodeExpanded, {node_id: repeat~1, grow: {seed: [{n: 1}, 1], prune: [repeat#0/__end__, repeat#0/__start__, repeat#0/bump, repeat~1]}}], [NodeStarted, {node_id: repeat#1/__start__}], [NodeSucceeded, {node_id: repeat#1/__start__, output: {n: 1}, interrupted: false}], [NodeStarted, {node_id: repeat#1/bump}], [NodeSucceeded, {node_id: repeat#1/bump, output: {n: 2}, interrupted: false}], [NodeStarted, {node_id: repeat#1/__end__}], [NodeSucceeded, {node_id: repeat#1/__end__, output: {n: 2}, interrupted: false}], [NodeStarted, {node_id: repeat~2}], [NodeSucceeded, {node_id: repeat~2, output: {n: 2}, commit_as: repeat, interrupted: false}], [NodeStarted, {node_id: __end__}], [NodeSucceeded, {node_id: __end__, output: {n: 2}, interrupted: false}], [RunSucceeded, {output: {n: 2}}]]

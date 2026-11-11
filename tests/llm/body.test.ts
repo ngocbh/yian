@@ -259,13 +259,6 @@ describe("author rendering", () => {
     }
   });
 
-  test("wrap: false escapes only", () => {
-    expect(withAuthorWrapper(user("alice", "hi"), { wrap: false }).parts).toEqual([new TextPart("hi")]);
-    expect(withAuthorWrapper(user("alice", "<authored_message"), { wrap: false }).parts).toEqual([
-      new TextPart("&lt;authored_message"),
-    ]);
-  });
-
   test("inline: true folds the tags into the first and last texts", () => {
     expect(withAuthorWrapper(user("alice", "hi"), { inline: true }).parts).toEqual([
       new TextPart('<authored_message author="alice">\nhi\n</authored_message>'),

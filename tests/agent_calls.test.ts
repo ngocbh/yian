@@ -16,7 +16,11 @@ import { afterAll, expect, test } from "bun:test";
 import { loadFlow } from "../src/compose/loader.ts";
 import { ProviderError } from "../src/llm/errors.ts";
 import { type ChatModel, EventStream, Finish, TextDelta } from "../src/llm/events.ts";
-import { NamedTool, type Request, Response, Usage } from "../src/llm/messages.ts";
+import { NoAuth } from "../src/llm/auth.ts";
+import { RouteModel } from "../src/llm/executor.ts";
+import { Message as ModelMessage, NamedTool, type Request, Response, ToolCallPart, Usage } from "../src/llm/messages.ts";
+import { AnthropicMessages } from "../src/llm/protocols/anthropic_messages.ts";
+import { Route } from "../src/llm/route.ts";
 import { BindingError } from "../src/nodes/binding.ts";
 import { ScriptedModel } from "../src/llm/testing.ts";
 import { AuthError } from "../src/llm_clients/auth/index.ts";
@@ -511,6 +515,38 @@ test("a structured call's request is rebuilt with the model the host builds", as
   const view = await agentCall(log, entry!, { env: NO_ENV, models: serving(model) });
   expect(view.digestMismatch).toBe(false);
   expect(requestOf(view)).toMatchObject(sentView(model.requests[0]!));
+});
+
+/** A `RouteModel` on Anthropic Messages (`claude-test`, so the forced tool) that replays `replies`. */
+class ScriptedRoute extends RouteModel {
+  readonly script: ScriptedModel;
+
+  constructor(replies: Response[]) {
+    super({
+      route: new Route({ provider: "anthropic", baseUrl: "https://api.example", path: "x", auth: new NoAuth() }),
+      protocol: new AnthropicMessages({ model: "claude-test", provider: "anthropic" }),
+    });
+    this.script = new ScriptedModel(replies, { provider: "anthropic", model: "claude-test" });
+  }
+
+  override stream(request: Request, options: { signal?: AbortSignal } = {}): EventStream {
+    return this.script.stream(request, options);
+  }
+}
+
+test("a structured call's request is rebuilt by the default model access without any credential", async () => {
+  const call = new ToolCallPart({ id: "toolu_1", name: "ScalarWrapper", arguments: { value: 3n } });
+  const reply = new Response({ message: new ModelMessage({ role: "assistant", parts: [call] }), finishReason: "tool_calls" });
+  const model = new ScriptedRoute([reply]);
+  const { log, result } = await run(STRUCTURED, model);
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const [entry] = agentCalls(log);
+  // No model access is passed and no key is set, so nothing could build the model.
+  const view = await agentCall(log, entry!, { env: NO_ENV });
+  expect(view.digestMismatch).toBe(false);
+  const sent = model.script.requests[0]!;
+  expect(sent.toolChoice).toEqual(new NamedTool("ScalarWrapper"));
+  expect(requestOf(view)).toMatchObject(sentView(sent));
 });
 
 test("a structured call in a host-key run is rebuilt with the key, and is null without it", async () => {

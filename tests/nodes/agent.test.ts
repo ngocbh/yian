@@ -420,7 +420,7 @@ describe("forward", () => {
   afterEach(forget);
 
   const NATIVE = { provider: "openai", model: "gpt-5.5" };
-  const PROMPTED = { provider: "vllm", model: "no-structured-sentinel" };
+  const PROMPTED = { provider: "vllm", model: "m", structuredOutput: "prompt" as const };
   const INT = Type.scalar(ValueKind.INTEGER);
 
   function reply(text: string): Response {
@@ -821,14 +821,27 @@ describe("forward", () => {
     );
   });
 
-  test("the default no cap runs unbounded", async () => {
-    // The default is the -1 no-cap sentinel: many tool turns, then an answer, still finish.
-    expect(current().agentMaxToolIterations).toBe(-1);
+  test("the default cap is 50 turns", async () => {
+    expect(current().agentMaxToolIterations).toBe(50);
     const noop = fakeTool("noop", () => "ok");
-    const model = new ScriptedModel([...noopReplies(150), reply("done")], NATIVE);
+    const model = new ScriptedModel([...noopReplies(50), reply("done")], NATIVE);
     const outcome = await evaluate(toolAgent(["noop"]), model, { tools: new ToolSet({ noop }) });
     expect((outcome as Output).value).toBe("done");
+    expect(model.requests).toHaveLength(51);
+    expect(sentResults(model, 50).at(-1)!.content).toBe(
+      "Tool-call limit reached (50 turns). No more tool calls will run; give your final answer now.",
+    );
+  });
+
+  test("env max_tool_iterations -1 runs unbounded", async () => {
+    const noop = fakeTool("noop", () => "ok");
+    const node = toolAgent(["noop"]);
+    node.env = { max_tool_iterations: -1n };
+    const model = new ScriptedModel([...noopReplies(150), reply("done")], NATIVE);
+    const outcome = await evaluate(node, model, { tools: new ToolSet({ noop }) });
+    expect((outcome as Output).value).toBe("done");
     expect(model.requests).toHaveLength(151);
+    expect(sentResults(model, 150).at(-1)!.content).toBe("ok");
   });
 
   test("env max_tool_iterations overrides the cap", async () => {

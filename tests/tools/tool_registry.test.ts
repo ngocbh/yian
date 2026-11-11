@@ -269,6 +269,37 @@ describe("ToolSet construction", () => {
     });
   }
 
+  test("a group may hold a tool of its own name: the bare name reaches the tool, and a grant of it the group", () => {
+    const fetch = tool("fetch");
+    const other = tool("other");
+    const alone = new ToolSet({ fetch: [fetch] });
+    expect(alone.resolve(["fetch"])).toEqual([fetch]);
+    expect(alone.resolve([{ group: "fetch", name: "fetch" }])).toEqual([fetch]);
+    expect(expandGrants([asToolGrant("fetch")], alone.scopes()).map((granted) => granted.visible)).toEqual(["fetch_fetch"]);
+
+    const two = new ToolSet({ fetch: [fetch, other] });
+    expect(two.resolve(["fetch"])).toEqual([fetch]);
+    expect(expandGrants([asToolGrant("fetch")], two.scopes()).map((granted) => granted.visible)).toEqual([
+      "fetch_fetch",
+      "fetch_other",
+    ]);
+    // Just the tool, in the group form.
+    const one = expandGrants([{ kind: "group", group: "fetch", tools: ["fetch"] }], two.scopes());
+    expect(one.map((granted) => granted.visible)).toEqual(["fetch_fetch"]);
+  });
+
+  test("a tool named like another group still clashes, beside a group named like its own tool", () => {
+    expect(thrown(() => new ToolSet({ fetch: [tool("fetch")], web: [tool("fetch")] }), RangeError)).toBe(
+      `tool 'fetch' in group 'web' clashes with tools["fetch"]`,
+    );
+  });
+
+  test("a bare group name with no tool of its own name is still a group, not a tool", () => {
+    expect(thrown(() => new ToolSet({ web: [tool("fetch")] }).resolve(["web"]), RangeError)).toBe(
+      "'web' is a tool group, not a tool; name one of its tools, as `{web: fetch}`",
+    );
+  });
+
   test("two tools under one name in two groups are both kept", () => {
     const a = tool("echo");
     const b = tool("echo");

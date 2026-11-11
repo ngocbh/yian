@@ -11,7 +11,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'case node ''gate'' then: `done` names no node. For the text, add a value entry and name it: `done_text: !str done`'
+      message: "case node 'gate' then: `done` names no node. For a value, put it in an entry in `nodes:` and name that entry"
       frames:
       - label: flow.yaml
         range: [6, 20, 6, 24]

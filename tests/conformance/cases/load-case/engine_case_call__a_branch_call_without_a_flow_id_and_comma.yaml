@@ -38,7 +38,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'case node ''gate'' then: a branch target must be a node id or a single call: a call(...) must start with a flow id (a bare name) and a comma, got ''take stance="a"''. For the text, add a value entry and name it: `gate_then_0: !str ''call(take stance="a")''`'
+      message: "case node 'gate' then: a branch target must be a node id or a single call: a call(...) must start with a flow id (a bare name) and a comma, got 'take stance=\"a\"'"
       frames:
       - label: flow.yaml
         range: [25, 15, 25, 36]

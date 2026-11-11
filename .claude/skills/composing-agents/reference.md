@@ -74,7 +74,8 @@ fit.
 
 **call / map / loop** ([Control flow](https://yian.readthedocs.io/control-flow/)): `call` or
 inline `nodes` plus `output`; `input` (the child's arguments, or the loop's seed record); `map`
-adds `over`; `loop` adds one of `while`, `until`, `times`, and optional `max`.
+adds `over`; `loop` adds one of `while`, `until`, `times`, and optional `max` and
+`on_max_exceeded` (`fail` or `output`).
 
 **ask** ([Inboxes and waiting](https://yian.readthedocs.io/inboxes/#ask-a-person)):
 `tool_id: ask`, `input` with one of `prompt` or `questions` (1 to 4, each with `question`, a
@@ -128,7 +129,9 @@ text, which prompts may call too: `upper`, `lower`, `join(value, sep="\n")`,
 `render_as_json(value, indent=2)`, `str`, `strip(s, chars=null)`, `lstrip`, `rstrip`,
 `replace(s, old, new)`. In bindings and conditions only: `len`, `split(s, sep=null)`,
 `startswith`, `endswith`, `int`, `float`, `round(x, n=null)`, `abs`, `min`, `max`, `sum`, `any`,
-`all`. They give Python's results, but with ASCII digits only, no `nan` and no digit limit, and
+`all`, `sorted(xs, by=null, reverse=false)`, `parse_json(s)` (untyped: check it with a constructor,
+`Finding(parse_json(s))`), `keys`, `values` and `items` of a record, in key order, and in UTC
+`add_days(d, n)` and `days_between(a, b)` (`${add_days(system.today, -7)}`). They give Python's results, but with ASCII digits only, no `nan` and no digit limit, and
 `str(x)` is the text `${x}` writes. A null argument fails the call: `${upper(name :- "")}`. See
 [Builtins](https://yian.readthedocs.io/expressions/#builtins).
 
@@ -193,6 +196,9 @@ llm_config:
 A field may come from a value (`model: ${input.model}`); null leaves it unset. A value that an
 agent in a child flow would inherit must read the root flow's inputs; otherwise pass it down as
 an input.
+
+`structured_output: prompt` sends an agent's `output:` schema as an instruction in the prompt,
+for a model that can't call tools; the default, `native`, uses the provider's structured output.
 
 ## Chat pattern
 

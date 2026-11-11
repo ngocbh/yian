@@ -1,0 +1,7 @@
+kind: expr
+expr: "add_days(d, 1)"
+values: {d: "9999-12-31"}
+expect:
+  raises:
+    class: ExpressionError
+    message: "expression function 'add_days' failed: add_days() gives a date past the year 9999"

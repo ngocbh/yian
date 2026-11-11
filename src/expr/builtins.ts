@@ -14,19 +14,22 @@
  * A builtin is a host callback: it declares its parameters, so a call's arguments are checked
  * (`bindArguments`) before it runs, and it receives yian values. The ones shipped here format
  * (`render_as_json`, `join`, `upper`, `lower`, `str`), work on text (`startswith`, `endswith`,
- * `split`, `strip`, `lstrip`, `rstrip`, `replace`), convert (`int`, `float`), and compute over
- * numbers and lists (`len`, `round`, `abs`, `min`, `max`, `sum`, `any`, `all`). Where Python has
- * the same operation they give Python's result, character for character and bit for bit.
+ * `split`, `strip`, `lstrip`, `rstrip`, `replace`), convert (`int`, `float`), compute over
+ * numbers and lists (`len`, `round`, `abs`, `min`, `max`, `sum`, `any`, `all`), and count days
+ * over date and datetime texts in UTC (`add_days`, `days_between`). Where Python has the same
+ * operation they give Python's result, character for character and bit for bit.
  * `builtinResultType` gives the type a shipped builtin returns, from its arguments' types where it
  * depends on them, so the loader can type its result.
  *
  * Knows about: `typesys` (`Value`, `FileRef`, `InboxRef`, `MemoryRef`, `Type`, `ValueKind`,
- * `fromHost`, `isListKind`, `isRecord`, `renderValuePath`, `valueRepr`, `writeAsText`, `writeAsJson`),
- * `diagnostics` (`reprText`, `compareCodePoints`) and `grammar` (`uncallableReason`).
+ * `fromHost`, `isListKind`, `isRecord`, `renderValuePath`, `valueRepr`, `writeAsText`, `writeAsJson`,
+ * `parseDateOrDatetime`), `diagnostics` (`reprText`, `compareCodePoints`) and `grammar`
+ * (`uncallableReason`).
  */
 
 import { compareCodePoints, reprText } from "../diagnostics.ts";
 import { FileRef, InboxRef, MemoryRef, Type, type Value, ValueKind } from "../typesys/index.ts";
+import { type ParsedDate, type ParsedDatetime, parseDateOrDatetime } from "../typesys/temporal.ts";
 import {
   canonicalTypeLabel,
   fromHost,
@@ -638,10 +641,89 @@ function len(value: Value): bigint {
 }
 registerTemplateFn("len", { params: [{ name: "obj" }], call: len });
 
+// --- Dates --- //
+
+/**
+ * Return `value` parsed as a date or datetime text; throw on null or anything else, naming
+ * parameter `param` when the builtin has two.
+ */
+function requireTemporal(fn: string, value: Value, param: string | null = null): ParsedDate | ParsedDatetime {
+  const forParam = param === null ? "" : ` for ${param}`;
+  if (value === null) {
+    const example =
+      param === null ? "x :- system.today" : param === "a" ? "a :- system.today, b" : "a, b :- system.today";
+    throw new TypeError(`${fn}() got null${forParam}; give a default, e.g. \`${fn}(${example})\``);
+  }
+  if (typeof value !== "string") {
+    throw new TypeError(`${fn}() takes a date or datetime${forParam}, got ${kindName(value)}`);
+  }
+  try {
+    return parseDateOrDatetime(value);
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    throw new TypeError(`${fn}() takes a date or datetime${forParam}, got ${valueRepr(value)}: ${error.message}`);
+  }
+}
+
+// Past this many days, any date leaves the years 1 to 9999.
+const DAYS_IN_RANGE = 3_652_059n;
+
+/**
+ * Return the date `n` days after the date `d`, or before it for a negative `n`; a datetime keeps
+ * its time and offset as written, since a day is always 24 hours at a fixed offset.
+ */
+function addDays(d: Value, n: Value): string {
+  const parsed = requireTemporal("add_days", d);
+  if (typeof n !== "bigint") throw new TypeError(`add_days() takes int for n, got ${kindName(n)}`);
+  const days = n > DAYS_IN_RANGE ? DAYS_IN_RANGE : n < -DAYS_IN_RANGE ? -DAYS_IN_RANGE : n;
+  // `setUTCFullYear` takes years 0 to 99 as written (`Date.UTC` would add 1900), and rolls a day
+  // past the month's end into the next.
+  const date = new Date(0);
+  date.setUTCFullYear(parsed.year, parsed.month - 1, parsed.day + Number(days));
+  const year = date.getUTCFullYear();
+  if (year > 9999) throw new TypeError("add_days() gives a date past the year 9999");
+  if (year < 1) throw new TypeError("add_days() gives a date before the year 1");
+  const pad = (part: number, width: number) => String(part).padStart(width, "0");
+  const text = `${pad(year, 4)}-${pad(date.getUTCMonth() + 1, 2)}-${pad(date.getUTCDate(), 2)}`;
+  // The date is the text's first ten characters in both forms.
+  return text + (d as string).slice(10);
+}
+registerTemplateFn("add_days", { params: [{ name: "d" }, { name: "n" }], call: addDays });
+
+const MICROS_PER_DAY = 86_400_000_000n;
+
+/**
+ * Return a date's midnight, or a datetime, in microseconds since 1970 in UTC; a datetime without
+ * an offset is UTC. A `bigint`, since microseconds over years 1 to 9999 pass 2^53.
+ */
+function epochMicros(parsed: ParsedDate | ParsedDatetime): bigint {
+  const midnight = new Date(0);
+  midnight.setUTCFullYear(parsed.year, parsed.month - 1, parsed.day);
+  const micros = BigInt(midnight.getTime()) * 1000n;
+  if (parsed.kind === "date") return micros;
+  const seconds = (parsed.hour * 60 + parsed.minute - (parsed.offsetMinutes ?? 0)) * 60 + parsed.second;
+  return micros + BigInt(seconds) * 1_000_000n + BigInt(parsed.microsecond);
+}
+
+/**
+ * Return the whole days from `a` to `b` in UTC, negative when `b` is earlier, rounded down as
+ * Python's `timedelta.days` is; a date is its midnight.
+ */
+function daysBetween(a: Value, b: Value): bigint {
+  const start = epochMicros(requireTemporal("days_between", a, "a"));
+  const diff = epochMicros(requireTemporal("days_between", b, "b")) - start;
+  const days = diff / MICROS_PER_DAY;
+  // `bigint` division rounds toward zero.
+  return diff < 0n && diff % MICROS_PER_DAY !== 0n ? days - 1n : days;
+}
+registerTemplateFn("days_between", { params: [{ name: "a" }, { name: "b" }], call: daysBetween });
+
 const STR = Type.scalar(ValueKind.STRING);
 const BOOL = Type.scalar(ValueKind.BOOLEAN);
 const INT = Type.scalar(ValueKind.INTEGER);
 const FLOAT = Type.scalar(ValueKind.NUMBER);
+const DATE = Type.scalar(ValueKind.DATE);
+const DATETIME = Type.scalar(ValueKind.DATETIME);
 
 /** An argument at load: its inferred type, `null` when unknown, or `undefined` when the call leaves it out. */
 export type ArgType = Type | null | undefined;
@@ -728,6 +810,12 @@ function absType([x]: readonly ArgType[]): Type | null {
   return intLike(x) ? INT : floatLike(x) ? FLOAT : null;
 }
 
+/** `add_days` gives a date for a date and a datetime for a datetime; for text, either. */
+function addDaysType([d]: readonly ArgType[]): Type | null {
+  if (!d || d.members !== undefined) return null;
+  return d.kind === ValueKind.DATE ? DATE : d.kind === ValueKind.DATETIME ? DATETIME : null;
+}
+
 /** How a builtin's result type follows from its arguments' types, in parameter order. */
 type ResultType = (args: readonly ArgType[]) => Type | null;
 
@@ -759,6 +847,8 @@ const SHIPPED = new Map<TemplateFn | undefined, { name: string; type: Type | Res
     max: ([xs]: readonly ArgType[]) => itemOf(xs),
     sum: sumType,
     abs: absType,
+    add_days: addDaysType,
+    days_between: INT,
   }).map(([name, type]) => [TEMPLATE_FNS.get(name), { name, type }]),
 );
 
@@ -802,6 +892,8 @@ const TEXT: Takes = { kinds: new Set(["str"]), label: "str" };
 const LIST: Takes = { kinds: new Set(["list"]), label: "a list" };
 const NUMBER: Takes = { kinds: new Set(NUMBER_KINDS), label: "a number" };
 const ANYTHING: Takes = { kinds: null, label: "a value" };
+// A date or datetime is text.
+const TEMPORAL: Takes = { kinds: new Set(["str"]), label: "a date or datetime" };
 const OPTIONAL_TEXT: Takes = { ...TEXT, omittable: true };
 
 // What each shipped builtin's parameters take, in order.
@@ -828,6 +920,8 @@ const TAKES: Readonly<Record<string, readonly Takes[]>> = {
   max: [{ ...LIST, items: new Set(["str", ...NUMBER_KINDS]), label: "a list of numbers or texts" }],
   sum: [{ ...LIST, items: new Set(NUMBER_KINDS), label: "a list of numbers" }],
   abs: [NUMBER],
+  add_days: [TEMPORAL, { kinds: new Set(["int"]), label: "int" }],
+  days_between: [TEMPORAL, TEMPORAL],
 };
 
 /**

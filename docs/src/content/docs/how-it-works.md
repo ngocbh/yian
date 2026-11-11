@@ -158,6 +158,8 @@ The log is append-only:
 - Each record is written and synced to disk before the engine applies it.
 - A record is never changed or removed. A resume adds records after the old ones.
 - One process writes at a time. It holds a lock on `<log>.lock`; a second writer is refused.
+  A `<log>.lock` that holds other data is refused with its path; when no run is active, removing
+  it is safe.
 - The file is readable only by you (mode 0600).
 
 Every line has the same envelope. This is the record that stores `greet`'s value:

@@ -423,11 +423,24 @@ describe("lockFile", () => {
     hold(file, { private: true });
   });
 
-  test("a non-SQLite file throws the driver error and isn't locked", () => {
+  test("a held lock is reported busy after a short wait, well under a second", () => {
+    hold(file);
+    const started = performance.now();
+    expect(lockError(() => lockFile(file), file).reason).toBe("busy");
+    const elapsed = performance.now() - started;
+    // A SQLite built without usleep sleeps whole seconds in its busy handler.
+    expect(elapsed).toBeGreaterThanOrEqual(40);
+    expect(elapsed).toBeLessThan(500);
+  });
+
+  test("a non-SQLite file is unsafe, naming the path, and isn't locked or changed", () => {
     fs.writeFileSync(file, "caller data, not sqlite", { mode: 0o600 });
-    const error = thrown(() => lockFile(file));
-    expect(error).not.toBeInstanceOf(FileLockError);
-    expect(sqliteErrorCode(error)).toBe(26);
+    const error = lockError(() => lockFile(file), file);
+    expect(error.reason).toBe("unsafe");
+    expect(error.message).toBe(
+      `lock file ${file} holds data yian didn't write; remove it if nothing holds the lock`,
+    );
+    expect(sqliteErrorCode(error.cause)).toBe(26);
     expect(isLocked(file)).toBe(false);
     expect(fs.readFileSync(file, "utf8")).toBe("caller data, not sqlite");
   });
@@ -698,13 +711,14 @@ describe("waitForLock", () => {
     const now = spyOn(scheduler, "now");
     const started = performance.now();
     const error = await rejection(waitForLock(file, { timeoutMs: 500, scheduler }));
-    // The budget counts the sleeps, never the clock.
+    // The budget counts the sleeps and each try's 50 ms busy wait, never the clock: four tries
+    // (200 ms) and three sleeps (300 ms).
     expect(now).not.toHaveBeenCalled();
     expect(error).toBeInstanceOf(FileLockError);
     expect((error as FileLockError).reason).toBe("busy");
     expect((error as FileLockError).message).toContain("timed out");
-    expect(scheduler.now()).toBe(1500);
-    expect(scheduler.sleeps).toBe(5);
+    expect(scheduler.now()).toBe(1300);
+    expect(scheduler.sleeps).toBe(3);
     expect(performance.now() - started).toBeLessThan(1000);
   });
 
@@ -1446,6 +1460,42 @@ server.close();
   return { status: result.status, stderr: result.stderr };
 }
 
+/**
+ * Start a Bun child that probes `p` with `isLocked` in a loop, and resolve once its first probe
+ * ran. Stdin EOF, or 30 s, ends the child, so a crashed test leaves no orphan.
+ */
+async function spawnProber(p: string): Promise<Holder> {
+  const script = `
+const { isLocked } = await import(${JSON.stringify(SOURCE_URL)});
+const p = ${JSON.stringify(p)};
+let open = true;
+process.stdin.on("end", () => { open = false; }).resume();
+isLocked(p);
+console.log("probing");
+const deadline = Date.now() + 30_000;
+while (open && Date.now() < deadline) {
+  for (let i = 0; i < 200; i++) isLocked(p);
+  await new Promise((resolve) => setImmediate(resolve));
+}
+`;
+  const child = spawn(process.execPath, ["-e", script], { cwd: ROOT, stdio: "pipe" });
+  const prober: Holder = {
+    child,
+    lines: createInterface({ input: child.stdout! })[Symbol.asyncIterator](),
+    closed: new Promise((resolve) => child.on("close", resolve)),
+    failed: new Promise((_, reject) => child.on("error", reject)),
+    stderr: "",
+  };
+  prober.failed.catch(() => {});
+  children.push(prober);
+  child.stderr!.setEncoding("utf8").on("data", (chunk: string) => {
+    prober.stderr += chunk;
+  });
+  const line = await nextLine(prober);
+  if (line !== "probing") throw new Error(`the prober printed ${line}; stderr:\n${prober.stderr}`);
+  return prober;
+}
+
 /** SIGKILL the holder and wait for it to exit and close its pipes. */
 async function kill(holder: Holder): Promise<void> {
   holder.child.kill("SIGKILL");
@@ -1498,6 +1548,24 @@ describe("warn", () => {
 });
 
 describe("the lock across processes", () => {
+  test(
+    "probes from other processes never make a lock attempt busy",
+    async () => {
+      for (let i = 0; i < 3; i++) await spawnProber(file);
+      let busy = 0;
+      for (let i = 0; i < 2000; i++) {
+        try {
+          lockFile(file).release();
+        } catch (error) {
+          if (!(error instanceof FileLockError) || error.reason !== "busy") throw error;
+          busy += 1;
+        }
+      }
+      expect(busy).toBe(0);
+    },
+    SPAWNED_MS,
+  );
+
   test(
     "a Bun child's lock is busy here until the child is killed, and leaves nothing behind",
     async () => {

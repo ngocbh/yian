@@ -8,7 +8,15 @@ import process from "node:process";
 
 import { current, type Env, processEnv } from "../../defaults.ts";
 import { compareCodeUnits, shellQuote } from "../../diagnostics.ts";
-import { FileLockError, type FileLock, homeDir, realScheduler, type Scheduler, waitForLock } from "../../platform.ts";
+import {
+  FileLockError,
+  type FileLock,
+  homeDir,
+  realScheduler,
+  type Scheduler,
+  sqliteErrorCode,
+  waitForLock,
+} from "../../platform.ts";
 import { isRecord } from "../../typesys/index.ts";
 import { parseJson } from "../../typesys/json.ts";
 import { SUPPORTED_LLM_PROVIDERS } from "../config.ts";
@@ -476,7 +484,9 @@ export class AuthStore {
       if (!(error instanceof FileLockError)) throw accessError();
       if (error.reason === "busy") throw new StorageError("Timed out waiting for credential storage");
       if (error.reason === "not-private") throw notPrivate("lock", path, ownedByUser(path));
-      throw error.reason === "changed" ? changed("lock", path) : notRegular("lock", path);
+      if (error.reason === "changed") throw changed("lock", path);
+      // A lock file SQLite can't read is a failure of the lock itself, not of the path's kind.
+      throw sqliteErrorCode(error.cause) === undefined ? notRegular("lock", path) : accessError();
     }
     try {
       return await body();

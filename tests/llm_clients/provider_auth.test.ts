@@ -1620,7 +1620,8 @@ describe("AuthStore", () => {
         } else {
           expect(error).toBeInstanceOf(AuthError);
           expect(error.message).toBe("Timed out waiting for credential storage");
-          expect(scheduler.now()).toBe(1_000_500);
+          // Three sleeps; each of the four tries' 50 ms busy waits counts too.
+          expect(scheduler.now()).toBe(1_000_300);
         }
       } finally {
         holder.release();

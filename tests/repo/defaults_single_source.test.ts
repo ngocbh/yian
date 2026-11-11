@@ -34,6 +34,7 @@ const ALLOWED: Record<string, string> = {
   "memory/vectordb.ts: SEARCH_CHUNK_ROWS": "rows a VectorDBMemory search reads at once, so its memory use stays bounded",
   "platform.ts: SQLITE_BUSY": "SQLite result code",
   "platform.ts: SQLITE_LOCKED": "SQLite result code",
+  "platform.ts: SQLITE_CORRUPT": "SQLite result code",
   "platform.ts: SQLITE_CANTOPEN": "SQLite result code",
   "platform.ts: SQLITE_NOTADB": "SQLite result code",
   "platform.ts: primaryCode.??": "no SQLite result code, which matches no primary code",
@@ -142,6 +143,7 @@ const ALLOWED: Record<string, string> = {
   "tools/mcp.ts: TERMINATE_SESSION_MS": "wait for an HTTP MCP server to end its session on close",
   "tools/types.ts: MAX_NODES": "schema nodes one tool-type translation visits; past it the schema is unchecked, which only widens",
   "platform.ts: LOCK_POLL_MS": "sleep between tries on a busy file lock",
+  "platform.ts: LOCK_BUSY_WAIT_MS": "wait a file lock attempt gives another connection's brief lock",
   // Provider contracts.
   "llm/errors.ts: MAX_RETRY_AFTER_SECONDS": "provider retry-after cap, as openai's",
   "llm/errors.ts: OVERFLOW_RETRY_AFTER": "one past the retry-after cap, so an overflowing delay is refused",

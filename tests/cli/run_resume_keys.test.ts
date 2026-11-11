@@ -323,8 +323,8 @@ test("resume relays a reconnected store credential", async () => {
   const store = new AuthStore(null, { env });
   await store.save("openai", new ApiKeyCredentials("saved-key"), "gpt-5.5");
   const log = await unfinishedLog(flow, { envVar: null });
-  // A reconnect mints a new credential id, so the pinned one is gone.
-  await store.save("openai", new ApiKeyCredentials("saved-key"), "gpt-5.5");
+  // A reconnect with another key mints a new credential id, so the pinned one is gone.
+  await store.save("openai", new ApiKeyCredentials("saved-key-2"), "gpt-5.5");
   const before = readFileSync(log);
 
   const result = await withFetch(noModel, () => resume(log));
@@ -486,8 +486,8 @@ test("resume checks saved login of non openai provider", async () => {
   mkdirSync(secondDir);
   flow = flowFile(secondDir, "xai");
   log = await unfinishedLog(flow, { envVar: null });
-  // A reconnect mints a new credential id, so the pinned one is gone.
-  await store.save("xai", new ApiKeyCredentials("saved-xai"), "m", { makeDefault: false });
+  // A reconnect with another key mints a new credential id, so the pinned one is gone.
+  await store.save("xai", new ApiKeyCredentials("saved-xai-2"), "m", { makeDefault: false });
   let before = readFileSync(log);
 
   result = await withFetch(noModel, () => resume(log));

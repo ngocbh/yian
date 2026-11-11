@@ -83,7 +83,7 @@ test("bindParams rejects a filled default over the limit", () => {
 // spent.
 
 const NATIVE = { provider: "openai", model: "gpt-5.5" };
-const PROMPTED = { provider: "vllm", model: "no-structured-sentinel" };
+const PROMPTED = { provider: "vllm", model: "m", structuredOutput: "prompt" as const };
 const FREEFORM = Type.scalar(ValueKind.OBJECT);
 /** `{t: object, n: int}`. */
 const T_AND_N = new Type({

@@ -26,7 +26,7 @@ import { reprText } from "../diagnostics.ts";
 import { scrub } from "../llm/auth.ts";
 import { encodeBody } from "../llm/body.ts";
 import { scrubError } from "../llm/errors.ts";
-import { RedirectError, safeFetch, VERSION } from "../platform.ts";
+import { LOOPBACK_HOSTS, RedirectError, safeFetch, VERSION } from "../platform.ts";
 import { type JsonObject, parseJson } from "../typesys/json.ts";
 import {
   buildValueAs,
@@ -85,9 +85,9 @@ export class McpSdkMissingError extends McpError {
  *
  * For an error result the message is the result's content rendered as text, as a successful
  * call's text result is: text blocks, then one-line markers for media. For any other failure
- * while the server is up (for example structured content that fails the tool's output schema,
- * thrown as the subclass `McpOutputError`) it names only the server, the tool and the error
- * type. An AGENT's model reads it as the call's result.
+ * while the server is up (for example structured content that isn't a yian value or fails the
+ * tool's output schema, thrown as the subclass `McpOutputError`) it names only the server, the
+ * tool and the error type. An AGENT's model reads it as the call's result.
  */
 export class McpToolError extends McpError {
   override name = "McpToolError";
@@ -95,8 +95,9 @@ export class McpToolError extends McpError {
 }
 
 /**
- * An MCP server's tool result broke the tool's `outputSchema`: it had no structured content, or
- * the content isn't a yian value or doesn't fit the schema.
+ * An MCP server's tool result failed yian's check: its structured content isn't a yian value, or
+ * the tool lists an `outputSchema` and the result had no structured content or content that
+ * doesn't fit the schema.
  *
  * It is permanent as well as reported, since yian ran the check and another attempt would call the
  * tool again.
@@ -220,7 +221,7 @@ export interface McpServerOptions {
   env?: Readonly<Record<string, string>>;
   /** The command's working directory; the host's when absent. Only with `command`. */
   cwd?: string;
-  /** The `http` or `https` endpoint of a streamable HTTP server. */
+  /** The `https` endpoint of a streamable HTTP server; `http` only on `localhost`, `127.0.0.1` or `[::1]`. */
   url?: string;
   /** HTTP headers sent with every request, for example `Authorization`. Only with `url`. */
   headers?: Readonly<Record<string, string>>;
@@ -265,8 +266,9 @@ export interface McpServerSpec {
  *   or `headers` not a record of strings to strings, a timeout not a number, `concurrencySafe`
  *   neither a boolean nor an array of strings.
  * @throws {RangeError} Neither or both of `command` and `url` are given, `url` is not an `http` or
- *   `https` URL with a host, an option is given for the other kind of server, a timeout is not
- *   positive and finite, or `command` or `label` is empty.
+ *   `https` URL with a host or is an `http` URL of a host other than `localhost`, `127.0.0.1` and
+ *   `[::1]`, an option is given for the other kind of server, a timeout is not positive and
+ *   finite, or `command` or `label` is empty.
  *
  * @example
  * const files = mcpServer({ command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "."] });
@@ -297,7 +299,12 @@ export function mcpServer(options: McpServerOptions): McpServer {
     }
   } else {
     if (typeof url !== "string") throw new TypeError(`mcpServer url must be a string, got ${jsTypeName(url)}`);
-    if (urlHost(url) === "") throw new RangeError("mcpServer url must be an http or https URL with a host");
+    const host = urlHost(url);
+    if (host === "") throw new RangeError("mcpServer url must be an http or https URL with a host");
+    // As base_url's rule: headers and URL tokens never cross the network in cleartext.
+    if (/^http:/i.test(url) && !LOOPBACK_HOSTS.includes(host.replace(/^\[(.*)\]$/, "$1"))) {
+      throw new RangeError("mcpServer url must use https; http is allowed only for localhost, 127.0.0.1, and ::1");
+    }
     // An empty args array or string counts as not given.
     const argsGiven = args !== undefined && (args as unknown) !== "" && !(Array.isArray(args) && args.length === 0);
     for (const [name, given] of [
@@ -990,8 +997,7 @@ export class McpServer {
       generation.calls.delete(call);
     }
     // `undefined`: the tool listed no `outputSchema`; `null`: one yian can't read as a type.
-    const outputType = generation.outputTypes.get(name);
-    if (outputType !== undefined) this.checkOutput(name, outputType, result as CallResult);
+    this.checkOutput(name, generation.outputTypes.get(name), result as CallResult);
     return resultValue(result as CallResult);
   }
 
@@ -1128,20 +1134,24 @@ export class McpServer {
   }
 
   /**
-   * Check a non-error result of the tool `name`, which listed an `outputSchema` read open as
-   * `type`, as the registry checks a declared output: its structured content must be there and fit
-   * the type; a `null` type checks only that the content is a yian value.
+   * Check a non-error result of the tool `name`, as the registry checks a declared output: its
+   * structured content, when there is any, must be a yian value. A tool that listed an
+   * `outputSchema`, read open as `type`, must also send structured content that fits the type; a
+   * `null` type checks only that it is a yian value, and `undefined` means the tool listed none.
    *
-   * @throws {McpOutputError} The structured content is missing, or isn't a yian value or doesn't
-   *   fit the type (the `TypeCheckError` is the `cause`).
+   * @throws {McpOutputError} The structured content isn't a yian value, or for a tool with an
+   *   `outputSchema` is missing or doesn't fit the type (the `TypeCheckError` is the `cause`).
    */
-  private checkOutput(name: string, type: Type | null, result: CallResult): void {
+  private checkOutput(name: string, type: Type | null | undefined, result: CallResult): void {
     if (result.isError) return;
     const failed = `MCP server '${this.label}' tool '${name}' failed`;
-    if (result.structuredContent == null) throw new McpOutputError(`${failed} (no structured content)`);
+    if (result.structuredContent == null) {
+      if (type === undefined) return;
+      throw new McpOutputError(`${failed} (no structured content)`);
+    }
     try {
       const value = fromHost(result.structuredContent, `MCP server '${this.label}' tool '${name}' structured content`);
-      if (type !== null) buildValueAs(type, value);
+      if (type !== null && type !== undefined) buildValueAs(type, value);
     } catch (error) {
       if (error instanceof TypeCheckError) throw new McpOutputError(`${failed} (TypeCheckError)`, { cause: error });
       throw error;
@@ -1298,6 +1308,34 @@ Object.defineProperty(McpServer.prototype, MCP_SERVER, { value: true });
 /** Return whether `value` is an `McpServer` from any copy of yian. */
 export function isMcpServer(value: unknown): value is McpServer {
   return hasBrand(value, MCP_SERVER);
+}
+
+/**
+ * @internal Open `servers` together with `open`, each under its own stop linked to `signal`, and
+ * return each one's outcome, in order.
+ *
+ * When one fails, the servers after it are stopped, since opened one at a time they would never
+ * have started; the earlier ones finish. So the first failure in order is the one an open one at a
+ * time would report. A server stopped while it opens closes itself, as `open()` does.
+ */
+export async function openTogether<T>(
+  servers: readonly McpServer[],
+  signal: AbortSignal | undefined,
+  open: (server: McpServer, signal: AbortSignal) => Promise<T>,
+): Promise<PromiseSettledResult<T>[]> {
+  const stops = servers.map(() => new AbortController());
+  const earlierFailed = new Error("an MCP server before this one failed to open");
+  return await Promise.allSettled(
+    servers.map(async (server, index) => {
+      const own = stops[index]!.signal;
+      try {
+        return await open(server, signal === undefined ? own : AbortSignal.any([signal, own]));
+      } catch (error) {
+        for (const later of stops.slice(index + 1)) later.abort(earlierFailed);
+        throw error;
+      }
+    }),
+  );
 }
 
 /**
@@ -1481,7 +1519,8 @@ export function resultValue(result: CallResult): unknown {
  *
  * Text blocks and embedded text resources give their text. Images, audio, embedded blob resources
  * and resource links give a one-line marker with the mime type, when known, and the decoded size;
- * their bytes are dropped. Empty content renders as `""`.
+ * their bytes are dropped. Empty content renders as `""`. A lone surrogate, as a server that cuts
+ * text inside an emoji sends, becomes U+FFFD.
  */
 function renderContent(content: readonly unknown[]): string {
   const parts: string[] = [];
@@ -1503,7 +1542,8 @@ function renderContent(content: readonly unknown[]): string {
       parts.push(`[${String(kind)}]`);
     }
   }
-  return parts.join("\n\n");
+  // The rendering is already a lossy view for the model, so half an emoji is repaired, not refused.
+  return parts.join("\n\n").toWellFormed();
 }
 
 /** The base64 alphabet. */

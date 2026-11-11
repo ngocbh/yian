@@ -40,6 +40,7 @@ export interface Writer {
   write(text: string): Promise<void>;
   readonly isTTY?: boolean;
   readonly columns?: number;
+  readonly rows?: number;
 }
 
 /**
@@ -77,6 +78,8 @@ export interface CliIo {
 const ESCAPE_SEQUENCE = new RegExp(String.raw`${SEQUENCE_SOURCE}|\x1b[ -/]*[0-~]`, "g");
 // Each C0 control but `\t` and `\n`, DEL and each C1 control.
 const CONTROL = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
+// The BIDI embeddings, overrides and isolates, which reorder the text after them.
+const BIDI = /[\u202a-\u202e\u2066-\u2069]/g;
 
 /**
  * Return `text` with what a terminal would act on taken out: `\r\n` read as `\n`, each escape
@@ -88,12 +91,16 @@ export function stripControls(text: string): string {
 }
 
 /**
- * Return `text` as it may be written to `out`: through `stripControls` when `out` is a TTY, as is
- * otherwise. Model, tool and provider text can carry escape sequences that move the cursor, set
- * the clipboard or forge a link; piped output keeps its exact bytes.
+ * Return `text` as it may be written to `out`: when `out` is a TTY, through `stripControls`, with
+ * each BIDI embedding, override and isolate (U+202A to U+202E, U+2066 to U+2069) shown as its code
+ * point (`\u{202e}`), as `sanitize` shows it; as is otherwise. Model, tool and provider text can
+ * carry escape sequences that move the cursor, set the clipboard or forge a link, and BIDI
+ * characters that make a line read in another order than its bytes; piped output keeps its exact
+ * bytes.
  */
 export function forTerminal(text: string, out: Writer): string {
-  return out.isTTY ? stripControls(text) : text;
+  if (!out.isTTY) return text;
+  return stripControls(text).replace(BIDI, (char) => `\\u{${char.codePointAt(0)!.toString(16)}}`);
 }
 
 /**
@@ -120,7 +127,9 @@ function isClosedPipe(error: Error): boolean {
  * A write to a closed pipe (`yian check --json | head`) resolves quietly; another write error
  * rejects.
  */
-export function streamWriter(stream: NodeJS.WritableStream & { isTTY?: boolean; columns?: number }): Writer {
+export function streamWriter(
+  stream: NodeJS.WritableStream & { isTTY?: boolean; columns?: number; rows?: number },
+): Writer {
   if (!quieted.has(stream)) {
     quieted.add(stream);
     // A failed write also emits `error`, which would end the process unheard; the write's
@@ -140,6 +149,9 @@ export function streamWriter(stream: NodeJS.WritableStream & { isTTY?: boolean; 
     },
     get columns() {
       return stream.columns;
+    },
+    get rows() {
+      return stream.rows;
     },
   };
   return writer;

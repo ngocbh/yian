@@ -1,0 +1,14 @@
+kind: run
+# The run reads the clock once, so a week from system.today is seven days from it.
+flow: |
+  id: f
+  name: f
+  nodes:
+    week: !date "${add_days(system.today, 7)}"
+  output: ${days_between(system.today, week.output)}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: 7

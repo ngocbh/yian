@@ -20,6 +20,7 @@ import { SSEEvent } from "../../src/llm/framing.ts";
 import { Message, Request, Response as ModelResponse, TextPart } from "../../src/llm/messages.ts";
 import { AnthropicMessages } from "../../src/llm/protocols/anthropic_messages.ts";
 import { Gemini } from "../../src/llm/protocols/gemini.ts";
+import { OllamaChat } from "../../src/llm/protocols/ollama_chat.ts";
 import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
 import { OpenAIResponses } from "../../src/llm/protocols/openai_responses.ts";
 import { type Cassette, CassetteReplay, ScriptedModel } from "../../src/llm/testing.ts";
@@ -869,6 +870,54 @@ describe("RouteModel 2xx reply that is not an event stream", () => {
       expect(sent).toHaveLength(1);
     });
   }
+
+  /** An Ollama model, sending with `send`. */
+  const ollama = (send: Send): RouteModel =>
+    model(send, new OllamaChat({ model: "llama3", provider: "ollama" }), {
+      provider: "ollama",
+      path: "api/chat",
+      auth: new NoAuth(),
+    });
+
+  test("an HTML body over Ollama names its media type and shows the page", async () => {
+    const { send, sent } = fake({ headers: { "content-type": "text/html" }, body: ["<html>\n", "gateway</html>\n"] });
+    const error = await rejection(callWithRetries(ollama(send), REQUEST, { budget: 1, scheduler: virtualScheduler(0) }));
+    expect(error).toBeInstanceOf(ProviderError);
+    expectNotStream(error as ProviderError, "ollama", "content-type text/html", "<html> gateway</html>");
+    expect(sent).toHaveLength(1);
+  });
+
+  test("a body that is not NDJSON is read on only to 64 KiB", async () => {
+    const { send, sent } = fake({ headers: { "content-type": "text/html" }, body: ["<html>\n", "x".repeat(70_000), HANG] });
+    const error = await failure(ollama(send));
+    expect(error.message).toStartWith("ollama returned a reply that is not an event stream (content-type text/html): <html> xxx");
+    expect(sent[0]!.signal.aborted).toBe(true);
+  });
+
+  test("a body that is not NDJSON and fails partway through a key holds no part of it", async () => {
+    const reset = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+    const { send } = fake({ headers: { "content-type": "text/html" }, body: ["<html>\n", `bad ${KEY.slice(0, 9)}`, reset] });
+    const m = model(send, new OllamaChat({ model: "llama3", provider: "ollama" }), {
+      provider: "ollama",
+      auth: new BearerAuth(KEY),
+    });
+    const error = await failure(m);
+    expect(error.message).not.toContain("sk-t");
+    expectNotStream(error, "ollama", "content-type text/html", "<html> bad");
+  });
+
+  test("a JSON error over several lines from Ollama shows its message", async () => {
+    const { send } = fake({ headers: JSON_TYPE, body: ['{\n  "error": "model not found"\n}\n'] });
+    expectNotStream(await failure(ollama(send)), "ollama", "content-type application/json", "model not found");
+  });
+
+  test("an invalid NDJSON line after a JSON line keeps its line error", async () => {
+    const line = JSON.stringify({ message: { role: "assistant", content: "Hi" }, done: false });
+    const { send } = fake({ headers: { "content-type": "application/x-ndjson" }, body: [`${line}\n<html>\n`] });
+    const error = await failure(ollama(send));
+    expect(error.message).toBe("invalid JSON line 2 in NDJSON stream");
+    expect(error.kind).toBe("protocol");
+  });
 
   test("a body echoing the key holds no part of it", async () => {
     const { send } = fake({ headers: JSON_TYPE, body: [`{"error":{"message":"bad key ${KEY}"}}`] });

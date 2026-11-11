@@ -542,6 +542,30 @@ function badOutputServer(): Server {
   return server;
 }
 
+/** Text cut inside an emoji, as `"Hi 🙂".slice(0, 4)` cuts it: it ends in a lone surrogate. */
+const CUT = "Hi \ud83d";
+
+/**
+ * A low-level server whose tools, none with an `outputSchema`, answer with `CUT`: in a text block
+ * (`cut_text`), an embedded text resource (`cut_resource`), structured content (`cut_structured`)
+ * and an error result (`cut_error`).
+ */
+function loneSurrogateServer(): Server {
+  const server = new Server({ name: "cut", version: "0" }, { capabilities: { tools: {} } });
+  const inputSchema = { type: "object", properties: {} } as const;
+  const results: Record<string, CallToolResult> = {
+    cut_text: text(CUT),
+    cut_resource: { content: [{ type: "resource", resource: { uri: "text://cut", text: CUT } }] },
+    cut_structured: { content: [{ type: "text", text: "{}" }], structuredContent: { k: CUT } },
+    cut_error: { content: [{ type: "text", text: CUT }], isError: true },
+  };
+  server.setRequestHandler("tools/list", () => ({
+    tools: Object.keys(results).map((name) => ({ name, description: `Answer with cut text: ${name}.`, inputSchema })),
+  }));
+  server.setRequestHandler("tools/call", (request) => results[request.params.name]!);
+  return server;
+}
+
 /** A low-level server listing the tool `twin` twice. */
 function twinsServer(): Server {
   const server = new Server({ name: "twins", version: "0" }, { capabilities: { tools: {} } });
@@ -595,6 +619,7 @@ async function main(): Promise<void> {
       "ignore-cancel": { type: "boolean" },
       pages: { type: "string" },
       "bad-output": { type: "boolean" },
+      "lone-surrogate": { type: "boolean" },
       twins: { type: "boolean" },
       grandchild: { type: "string" },
       "grandchild-ignores-term": { type: "string" },
@@ -656,14 +681,16 @@ async function main(): Promise<void> {
       ? pagedServer(Number(values.pages))
       : values["bad-output"]
         ? badOutputServer()
-        : values.twins
-          ? twinsServer()
-          : buildServer({
-              name: values.name,
-              only: values.only?.split(","),
-              marker: values.marker,
-              flood: values.flood === undefined ? undefined : Number(values.flood),
-            });
+        : values["lone-surrogate"]
+          ? loneSurrogateServer()
+          : values.twins
+            ? twinsServer()
+            : buildServer({
+                name: values.name,
+                only: values.only?.split(","),
+                marker: values.marker,
+                flood: values.flood === undefined ? undefined : Number(values.flood),
+              });
   const transport = new StdioServerTransport(values["exit-before-init"] ? await stdinAfterInitialize() : undefined);
   await server.connect(transport);
   if (values["ignore-cancel"]) {

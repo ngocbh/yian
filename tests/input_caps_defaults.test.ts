@@ -112,6 +112,28 @@ test("auth store cap", () => {
   }
 });
 
+test("an auth store at the cap loads and one byte over it is refused", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "yian-auth-"));
+  try {
+    const directory = join(tmp, "auth");
+    mkdirSync(directory, { mode: 0o700 });
+    const file = join(directory, "auth.json");
+    const entry = { method: "api_key", model: "m", credential_id: "c".repeat(32), credentials: { api_key: "sk" } };
+    const text = JSON.stringify({ version: 1, default_provider: "anthropic", providers: { anthropic: entry } });
+    writeFileSync(file, text);
+    chmodSync(file, 0o600);
+    const size = Buffer.byteLength(text);
+    for (const limit of [size, size + 1, 2 * size]) {
+      install({ ...BUILTIN, maxAuthStoreBytes: limit });
+      expect(new AuthStore(file).read().selections.map((selection) => selection.model)).toEqual(["m"]);
+    }
+    install({ ...BUILTIN, maxAuthStoreBytes: size - 1 });
+    expect(() => new AuthStore(file).read()).toThrow(`Credential storage at ${file} exceeds its size limit`);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("auth store cap applies to writes", async () => {
   const tmp = mkdtempSync(join(tmpdir(), "yian-auth-"));
   try {

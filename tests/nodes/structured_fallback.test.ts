@@ -1,7 +1,6 @@
 /**
- * `generateStructured` on the prompt strategy, for a model with no native structured output (the
- * catalog's `vllm`/`no-structured-sentinel` pair, through the real capability check). The strategy
- * shows in the request: no tools and no output format.
+ * `generateStructured` on the prompt strategy, for a model set to `structured_output: prompt`. The
+ * strategy shows in the request: no tools and no output format.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -15,7 +14,7 @@ import { Type, ValueKind } from "../../src/typesys/values.ts";
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
 
-const PROMPTED = { provider: "vllm", model: "no-structured-sentinel" };
+const PROMPTED = { provider: "vllm", model: "m", structuredOutput: "prompt" as const };
 const INT = Type.scalar(ValueKind.INTEGER);
 
 function text(text: string): Response {

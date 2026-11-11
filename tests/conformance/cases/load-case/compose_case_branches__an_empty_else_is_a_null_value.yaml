@@ -23,7 +23,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'case node ''route'' else: a branch names a node or calls a flow; put the value in its own entry in `nodes:` and name it: `route_else: !Optional(str) null` and `else: route_else`'
+      message: 'case node ''route'' else: a branch names a node or calls a flow; put the value in an entry in `nodes:` and name that entry'
       frames:
       - label: flow.yaml
         range: [12, 10, 12, 10]

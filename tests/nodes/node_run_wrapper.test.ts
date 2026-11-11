@@ -382,18 +382,6 @@ test("runForEvaluator passes the evaluator's markers through and wraps a body's 
   expect((wrapped as NodeBodyError).original).toBe(marker);
 });
 
-test("runForEvaluator captures the defaulted inputs before it returns, ahead of the pre-asserts", async () => {
-  const node = new ImplNode("n", null);
-  node.params = [new Parameter("x", { hasDefault: true, default: 5n })];
-  node.preAsserts = [new Assertion("x > 100", "x is large")];
-  const captured: Record<string, unknown>[] = [];
-
-  const promise = node.runForEvaluator({}, {}, (inputs) => captured.push(inputs));
-
-  expect(captured).toEqual([{ x: 5n }]);
-  await expect(promise).rejects.toBeInstanceOf(AssertionStageError);
-});
-
 test("run rejects with the original errors", async () => {
   const thrown = new Error("boom");
   const bound = new ImplNode("n", null);

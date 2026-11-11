@@ -529,7 +529,7 @@ $ printf '%s' "$OPENROUTER_API_KEY" | yian models --provider openrouter
 | `--auth-file` | path | List the models of the OpenAI subscription login saved in this file |
 | `--provider` | name | List the models this provider's host offers for the key on stdin |
 | `--base-url` | URL | With `--provider`: list this host instead of the provider's own |
-| `--timeout` | seconds | Time for the whole listing, above 0 (default 8) |
+| `--timeout` | seconds | Time for the whole listing, above 0 (default 8, or `YIAN_MODEL_LIST_TIMEOUT_SECONDS`) |
 | `--json` | | Print one JSON document |
 
 Give exactly one of `--auth-file` and `--provider`. The key comes from stdin, never from the

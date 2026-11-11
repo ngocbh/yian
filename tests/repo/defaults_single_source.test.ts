@@ -135,7 +135,6 @@ const ALLOWED: Record<string, string> = {
   "typesys/event_limit.ts: MAX_EVENT_BYTES":
     "the built-in YIAN_MAX_EVENT_BYTES, its one source: defaults.ts's entry reads it, and builtin-free layers read it here",
   "llm_clients/auth/store.ts: AuthStore.constructor.refreshMarginMs": "time before token expiry to refresh",
-  "llm_clients/model_list.ts: MODEL_LIST_TIMEOUT_SECONDS": "network timeout",
   "tools/mcp.ts: MAX_PAGES": "tool-list pages read from an MCP server, as the SDK's cap",
   "tools/mcp.ts: TERMINATE_SESSION_MS": "wait for an HTTP MCP server to end its session on close",
   "tools/types.ts: MAX_NODES": "schema nodes one tool-type translation visits; past it the schema is unchecked, which only widens",

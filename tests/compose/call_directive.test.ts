@@ -404,7 +404,10 @@ test("shared minter yields distinct ids across bindings", () => {
 test("old form rejected, new form desugars", () => {
   // The old `${flow(args)}` form is a hard-break load error; the `call(...)` form desugars.
   expect(() =>
-    desugarInlineCalls(nodes(code("old", { topic: "${ enrich(topic=input.topic) }" })), null, { nextId: synthIdGen() }),
+    desugarInlineCalls(nodes(code("old", { topic: "${ enrich(topic=input.topic) }" })), null, {
+      nextId: synthIdGen(),
+      isCallable: () => true,
+    }),
   ).toThrow(
     "old: a flow call 'enrich' inside ${...} is not supported — write it as the whole value with the call(...) " +
       "directive: call(enrich, ...)",
@@ -630,6 +633,10 @@ test("raw duplicate flow assertions become distinct ordered carriers", () => {
 
 // The hard break: a FLOW call embedded inside a `${...}` span (the retired `${flow(args)}` form)
 // is a load error pointing at the call(...) directive. A pure builtin inside `${...}` stays legal.
+// Each name these rows call is a callable the flow could run with `call(...)`.
+
+/** Every name is a `defs:` callable or a `uses:` alias. */
+const CALLABLE = { isCallable: () => true };
 
 test.each([
   ["whole value flow call in span", "${summarize(messages=messages)}", "summarize"],
@@ -637,7 +644,7 @@ test.each([
   ["embedded flow call in text", "pe=${relevance(t=input.t)}", "relevance"],
   ["coalesce of flow calls in span", "${a(x=1) | b(y=2)}", "a"],
 ])("%s is loud", (_name, value, callee) => {
-  expect(topicError(value).message).toBe(
+  expect(topicError(value, CALLABLE).message).toBe(
     `use: a flow call '${callee}' inside \${...} is not supported — write it as the whole value with the ` +
       `call(...) directive: call(${callee}, ...)`,
   );
@@ -659,18 +666,49 @@ test.each([
 });
 
 test("flow call in outputs span is loud", () => {
-  expect(() => desugarInlineCalls(new Map(), { result: "${summarize(m=m)}" }, { nextId: synthIdGen() })).toThrow(
-    "flow outputs: a flow call 'summarize' inside ${...} is not supported",
-  );
+  expect(() =>
+    desugarInlineCalls(new Map(), { result: "${summarize(m=m)}" }, { nextId: synthIdGen(), ...CALLABLE }),
+  ).toThrow("flow outputs: a flow call 'summarize' inside ${...} is not supported");
 });
 
 test.each([
   ["a keyword argument", "call(f, v=${g(1)})", "use: call(f) argument 'v'", "g"],
   ["a nested call's argument", "call(f, v=call(h, w=pre ${g(x=1)}))", "use: call(h) argument 'w'", "g"],
 ])("flow call in %s span is loud", (_name, value, where, callee) => {
-  expect(topicError(value).message).toBe(
+  expect(topicError(value, CALLABLE).message).toBe(
     `${where}: a flow call '${callee}' inside \${...} is not supported — write it as the whole value ` +
       `with the call(...) directive: call(${callee}, ...)`,
+  );
+});
+
+// A call to a name `call(...)` can't run is a typo: it reads as an unknown function, as in a
+// condition, with the closest builtin when one is close.
+
+test.each([
+  ["a binding", "${lenght(input.xs)}", "use", "unknown expression function 'lenght'; did you mean 'len'?"],
+  ["text", "count: ${lenght(input.xs)}", "use", "unknown expression function 'lenght'; did you mean 'len'?"],
+  [
+    "a keyword argument",
+    "call(f, v=${uper(x)})",
+    "use: call(f) argument 'v'",
+    "unknown expression function 'uper'; did you mean 'upper'?",
+  ],
+  ["a binding with no close builtin", "${nosuchfn(x)}", "use", "unknown expression function 'nosuchfn'"],
+])("an unknown function in %s span is no flow call", (_name, value, where, message) => {
+  expect(topicError(value).message).toBe(`${where}: ${message}`);
+});
+
+test("an unknown function in an outputs span is no flow call", () => {
+  expect(() => desugarInlineCalls(new Map(), { result: "${lenght(m)}" }, { nextId: synthIdGen() })).toThrow(
+    "flow outputs: unknown expression function 'lenght'; did you mean 'len'?",
+  );
+});
+
+test("only a callable name gets the call(...) hint", () => {
+  const isCallable = (name: string) => name === "summarize";
+  expect(topicError("${summarize(m) + summ(m)}", { isCallable }).message).toContain("a flow call 'summarize'");
+  expect(topicError("${summ(m) + summarize(m)}", { isCallable }).message).toBe(
+    "use: unknown expression function 'summ'; did you mean 'sum'?",
   );
 });
 

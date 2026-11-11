@@ -280,9 +280,18 @@ test.each(Object.keys(SITES).sort())("a mis-called builtin fails to load at its 
   expect(lines.map((line) => line.trim())).toEqual([`${where}${UPPER}`]);
 });
 
-test("an unknown function in a binding keeps the flow call message", () => {
-  const message = loadErrorOf(fill(CODE, { ...GOOD_CODE, n: "${nosuchfn(input.v)}" }));
-  expect(message).toContain("a flow call 'nosuchfn' inside ${...} is not supported");
+test("an unknown function in a binding is an unknown function, with the closest builtin", () => {
+  const message = loadErrorOf(fill(CODE, { ...GOOD_CODE, n: "${lenght(input.v)}" }), { located: "lenght(" });
+  expect(message).toBe("x: unknown expression function 'lenght'; did you mean 'len'?");
+});
+
+test("a def called in a binding keeps the flow call message", () => {
+  const defs = "defs:\n  wrap:\n    input: {s: !str }\n    nodes:\n      w: !str ${input.s}\n    output: ${w.output}\n";
+  const message = loadErrorOf(defs + fill(CODE, { ...GOOD_CODE, n: "${wrap(input.v)}" }));
+  expect(message).toBe(
+    "x: a flow call 'wrap' inside ${...} is not supported — write it as the whole value " +
+      "with the call(...) directive: call(wrap, ...)",
+  );
 });
 
 test("a binding reports both an unknown ref and a bad call", () => {

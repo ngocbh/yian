@@ -1,0 +1,25 @@
+kind: load
+# A call(...) keyword argument is a binding too: a typo in its span is an unknown function.
+flow: |
+  id: f
+  name: f
+  input:
+    xs: !list(int) [1, 2, 3]
+  defs:
+    wrap:
+      input:
+        s: !str
+      nodes:
+        w: !str "[${input.s}]"
+      output: ${w.output}
+  nodes:
+    n: !str call(wrap, s="${lenght(input.xs)}")
+  output: ${n.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "n: call(wrap) argument 's': unknown expression function 'lenght'; did you mean 'len'?"
+      frames:
+      - label: flow.yaml
+        range: [13, 6, 13, 46]

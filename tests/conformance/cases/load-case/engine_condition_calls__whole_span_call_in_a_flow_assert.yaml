@@ -19,7 +19,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'assert: a flow call ''nosuchfn'' inside ${...} is not supported — write it as the whole value with the call(...) directive: call(nosuchfn, ...)'
+      message: 'assert: unknown expression function ''nosuchfn'''
       frames:
       - label: flow.yaml
         range: [7, 5, 7, 31]

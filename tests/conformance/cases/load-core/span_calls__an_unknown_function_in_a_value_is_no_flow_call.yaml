@@ -1,0 +1,18 @@
+kind: load
+# A name that is no builtin and no defs: or uses: callable is a typo, not a flow to call(...).
+flow: |
+  id: f
+  name: f
+  input:
+    xs: !list(int) [1, 2, 3]
+  nodes:
+    n: !str "count: ${lenght(input.xs)}"
+  output: ${n.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "n: unknown expression function 'lenght'; did you mean 'len'?"
+      frames:
+      - label: flow.yaml
+        range: [6, 6, 6, 39]

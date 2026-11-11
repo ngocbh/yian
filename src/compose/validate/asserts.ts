@@ -50,6 +50,7 @@
 
 import { classifyPath } from "../../compile/validation.ts";
 import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
+import { unknownFunctionMessage } from "../../expr/expressions.ts";
 import type { ExprNode } from "../../expr/grammar.ts";
 import {
   ExpressionError,
@@ -432,6 +433,8 @@ export const POOL_HEADS: ReadonlySet<string> = new Set(["input", "system", "item
  * @param options.assertionSiteAt Optionally supplies each carrier's opaque origin and validation
  *   range from the same authored occurrence, keyed by node id and original authored index.
  * @param options.typeNames The flow's `typedefs:` names (default none).
+ * @param options.isCallable Whether `call(...)` can run a name (default none); a span call to any
+ *   other name that is no builtin is an unknown expression function, not an inline call.
  * @param options.localContracts Each node's local input contracts (default none).
  * @param options.partialUnionNodes The nodes whose locals may read member-only fields (default none).
  * @param options.skips Which producers may be skipped while a node runs: a local bound straight
@@ -454,6 +457,7 @@ export function validateNodeAsserts(
       | ((nodeId: string, index: number) => readonly [OriginRef | null, SourceRange | null] | null)
       | null;
     typeNames?: ReadonlySet<string>;
+    isCallable?: (name: string) => boolean;
     localContracts?: ReadonlyMap<string, ReadonlyMap<string, LocalInput>> | null;
     partialUnionNodes?: ReadonlySet<string>;
     skips?: SkipModel | null;
@@ -465,6 +469,7 @@ export function validateNodeAsserts(
   const skips = options.skips ?? null;
   const assertionSiteAt = options.assertionSiteAt ?? null;
   const typeNames = options.typeNames ?? new Set<string>();
+  const isCallable = options.isCallable ?? (() => false);
   const localContracts = options.localContracts ?? new Map<string, ReadonlyMap<string, LocalInput>>();
   const partialUnionNodes = options.partialUnionNodes ?? new Set<string>();
   const registry = options.registry ?? new Map();
@@ -526,6 +531,12 @@ export function validateNodeAsserts(
       } catch (error) {
         if (!(error instanceof ExpressionError)) throw error;
         spanCallees = [];
+      }
+      // A span call to a name `call(...)` can't run is a typo, not an inline call.
+      const unknown = directiveCalls.length === 0 ? spanCallees.find((callee) => !isCallable(callee)) : undefined;
+      if (unknown !== undefined) {
+        errors.push([`node ${reprText(nid)} assert ${reprText(a)}: ${unknownFunctionMessage(unknown)}`, errorRange]);
+        return;
       }
       if (directiveCalls.length > 0 || spanCallees.length > 0) {
         errors.push([

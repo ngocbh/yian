@@ -142,7 +142,9 @@ export function synthIdGen(): () => string {
  * would drop the type.
  *
  * A call inside `${...}` to a name in `typeNames` (the flow's `typedefs:` names) is a `T(...)`
- * constructor, not a flow call.
+ * constructor, not a flow call. Any other call is the retired `${flow(args)}` form when
+ * `isCallable` says `call(...)` can run the name (a `defs:` callable or a `uses:` alias; by
+ * default none), and an unknown expression function otherwise.
  *
  * @param descriptors The flow's parsed descriptors, keyed by node id.
  * @param outputsSection The flow `output:` section.
@@ -166,6 +168,7 @@ export function desugarInlineCalls(
     typedOutputs?: ReadonlySet<string | null>;
     nextId?: (() => string) | null;
     typeNames?: ReadonlySet<string>;
+    isCallable?: (name: string) => boolean;
     diagnostics?: LoadDiagnostics | null;
   } = {},
 ): [descriptors: Map<string, NodeDescriptor>, outputsSection: unknown, assertsSection: Assertion[]] {
@@ -178,6 +181,7 @@ export function desugarInlineCalls(
     outputStyleAt = null,
     typedOutputs = new Set<string | null>(),
     typeNames = new Set<string>(),
+    isCallable = () => false,
   } = options;
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
   const mint = options.nextId ?? synthIdGen();
@@ -189,6 +193,7 @@ export function desugarInlineCalls(
       host: nodeId,
       styleAt: bindingStyleAt === null ? null : (field, key, path) => bindingStyleAt(nodeId, field, key, path),
       typeNames,
+      isCallable,
       diagnostics,
     });
     newDescriptors.set(nodeId, newDesc);
@@ -215,6 +220,7 @@ export function desugarInlineCalls(
     styleAt: outputStyleAt,
     typed: typedOutputs,
     typeNames,
+    isCallable,
     diagnostics,
   });
   for (const call of outCalls) {
@@ -233,7 +239,7 @@ export function desugarInlineCalls(
   const [newAsserts, assertCalls, assertRanges, assertSites, assertCallSites] = desugarAsserts(
     assertsSection,
     mint,
-    { assertionRangeAt, assertionOriginAt, typeNames, diagnostics },
+    { assertionRangeAt, assertionOriginAt, typeNames, isCallable, diagnostics },
   );
   for (const call of assertCalls) {
     synth.set(
@@ -340,6 +346,7 @@ function desugarDescriptor(
     host: string;
     styleAt: ((field: string, key: string, path: ValuePath) => ScalarStyle | null) | null;
     typeNames: ReadonlySet<string>;
+    isCallable: (name: string) => boolean;
     diagnostics: LoadDiagnostics;
   },
 ): [
@@ -349,7 +356,7 @@ function desugarDescriptor(
   Map<string, string>,
   Map<string, CallSite>,
 ] {
-  const { host, styleAt, typeNames, diagnostics } = options;
+  const { host, styleAt, typeNames, isCallable, diagnostics } = options;
   const calls: InlineCall[] = [];
   const origins = new Map<string, SourceRange | null>();
   const sites = new Map<string, string>();
@@ -375,6 +382,7 @@ function desugarDescriptor(
       // Quoting a typed binding would drop its type, so no quoting fix is offered.
       quotable: !(field === "inputs" && desc.inputTypes.has(key)),
       typeNames,
+      isCallable,
       diagnostics,
     });
     for (const call of calls.slice(before)) {
@@ -404,13 +412,14 @@ function desugarSource(
     styleAt?: ((path: ValuePath) => ScalarStyle | null) | null;
     quotable?: boolean;
     typeNames: ReadonlySet<string>;
+    isCallable: (name: string) => boolean;
     diagnostics: LoadDiagnostics;
   },
 ): unknown {
-  const { range = null, styleAt = null, quotable = true, typeNames, diagnostics } = options;
+  const { range = null, styleAt = null, quotable = true, typeNames, isCallable, diagnostics } = options;
   if (!(source instanceof ValueTemplate)) {
     const style = styleAt === null ? null : styleAt([]);
-    return desugarValue(source, mint, calls, host, { range, style, quotable, typeNames, diagnostics });
+    return desugarValue(source, mint, calls, host, { range, style, quotable, typeNames, isCallable, diagnostics });
   }
   for (const [path, text] of iterSourceStrings(source)) {
     if (!CALL_HEAD.test(text.trim())) continue;
@@ -423,7 +432,9 @@ function desugarSource(
   }
   // The leaves starting with `call(` passed above as quoted text.
   return mapSourceStrings(source, (text) =>
-    CALL_HEAD.test(text.trim()) ? text : desugarValue(text, mint, calls, host, { range, typeNames, diagnostics }),
+    CALL_HEAD.test(text.trim())
+      ? text
+      : desugarValue(text, mint, calls, host, { range, typeNames, isCallable, diagnostics }),
   );
 }
 
@@ -455,10 +466,12 @@ function desugarValue(
     quotable?: boolean;
     expression?: boolean;
     typeNames: ReadonlySet<string>;
+    isCallable: (name: string) => boolean;
     diagnostics: LoadDiagnostics;
   },
 ): string {
-  const { range = null, style = null, quotable = true, expression = false, typeNames, diagnostics } = options;
+  const { range = null, style = null, quotable = true, expression = false, typeNames, isCallable, diagnostics } =
+    options;
   const quoted = !expression && QUOTED_STYLES.has(style);
   const isCall = CALL_HEAD.test(value.trim());
   if (quoted && isCall) rejectQuotedCallSpan(value, host, { range, diagnostics });
@@ -484,6 +497,7 @@ function desugarValue(
           rejectSpanFlowCalls(arg, `${host}: call(${call.callee}) argument ${reprText(name)}`, {
             range,
             typeNames,
+            isCallable,
             diagnostics,
             skipMalformed: true,
           });
@@ -493,7 +507,7 @@ function desugarValue(
     calls.push(...found);
     return newValue;
   }
-  rejectSpanFlowCalls(value, host, { range, typeNames, diagnostics });
+  rejectSpanFlowCalls(value, host, { range, typeNames, isCallable, diagnostics });
   return value;
 }
 
@@ -515,8 +529,9 @@ function rejectQuotedCallSpan(
 }
 
 /**
- * Throw a located `LoadError` (prefixed `where:`) when a `${...}` span of `value` calls a flow,
- * the retired `${flow(args)}` form, or calls a builtin type name like a function; also when a
+ * Throw a located `LoadError` (prefixed `where:`) when a `${...}` span of `value` calls a flow
+ * (a name `isCallable` takes: the retired `${flow(args)}` form), a builtin type name like a
+ * function, or any other name that is no builtin (an unknown expression function); also when a
  * span doesn't parse, unless `skipMalformed`. A call to a name in `typeNames` is a constructor
  * and passes.
  */
@@ -526,11 +541,12 @@ function rejectSpanFlowCalls(
   options: {
     range: SourceRange | null;
     typeNames: ReadonlySet<string>;
+    isCallable: (name: string) => boolean;
     diagnostics: LoadDiagnostics;
     skipMalformed?: boolean;
   },
 ): void {
-  const { range, typeNames, diagnostics, skipMalformed = false } = options;
+  const { range, typeNames, isCallable, diagnostics, skipMalformed = false } = options;
   let flowCallees: string[];
   try {
     flowCallees = flowCallCalleesInSpans(value, typeNames);
@@ -541,7 +557,7 @@ function rejectSpanFlowCalls(
   }
   if (flowCallees.length === 0) return;
   const callee = flowCallees[0]!;
-  if (BUILTIN_TYPE_NAMES.has(callee)) {
+  if (BUILTIN_TYPE_NAMES.has(callee) || (callee !== "call" && !isCallable(callee))) {
     throw diagnostics.error(`${where}: ${unknownFunctionMessage(callee)}`, { range });
   }
   if (callee === "call") {
@@ -689,10 +705,11 @@ function desugarOutputs(
     styleAt: ((key: string | null, path: ValuePath) => ScalarStyle | null) | null;
     typed: ReadonlySet<string | null>;
     typeNames: ReadonlySet<string>;
+    isCallable: (name: string) => boolean;
     diagnostics: LoadDiagnostics;
   },
 ): [unknown, InlineCall[], Map<string, string>, Map<string, CallSite>] {
-  const { range, styleAt, typed, typeNames, diagnostics } = options;
+  const { range, styleAt, typed, typeNames, isCallable, diagnostics } = options;
   const calls: InlineCall[] = [];
   const sites = new Map<string, string>();
   const callSites = new Map<string, CallSite>();
@@ -704,6 +721,7 @@ function desugarOutputs(
       styleAt: styleAt === null ? null : (path) => styleAt(key, path),
       quotable: !typed.has(key),
       typeNames,
+      isCallable,
       diagnostics,
     });
     for (const call of calls.slice(before)) {
@@ -738,10 +756,11 @@ function desugarAsserts(
     assertionRangeAt: ((index: number) => SourceRange | null) | null;
     assertionOriginAt: ((index: number) => OriginRef | null) | null;
     typeNames: ReadonlySet<string>;
+    isCallable: (name: string) => boolean;
     diagnostics: LoadDiagnostics;
   },
 ): [Assertion[], InlineCall[], Map<string, SourceRange | null>, Map<string, string>, Map<string, CallSite>] {
-  const { assertionRangeAt, assertionOriginAt, typeNames, diagnostics } = options;
+  const { assertionRangeAt, assertionOriginAt, typeNames, isCallable, diagnostics } = options;
   const calls: InlineCall[] = [];
   const callRanges = new Map<string, SourceRange | null>();
   const sites = new Map<string, string>();
@@ -768,6 +787,7 @@ function desugarAsserts(
       range: assertionRange,
       expression: true,
       typeNames,
+      isCallable,
       diagnostics,
     });
     for (const call of calls.slice(before)) {

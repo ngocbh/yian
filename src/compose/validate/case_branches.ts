@@ -38,6 +38,7 @@
 
 import { typeRelation } from "../../compile/validation.ts";
 import { getCloseMatches, reprText, type SourceRange } from "../../diagnostics.ts";
+import { unknownFunctionMessage } from "../../expr/expressions.ts";
 import { ExpressionError, exprRefsOf } from "../../expr/index.ts";
 import { wholeSpanInterior } from "../../expr/grammar.ts";
 import { flowCallCalleesInSpans } from "../../expr/template.ts";
@@ -120,6 +121,8 @@ interface CaseOutput {
  *
  * @param descriptors The flow's parsed descriptors, keyed by node id; branches are as authored.
  * @param options.registry The flow's typedefs, for spelling a type as a tag.
+ * @param options.isCallable Whether `call(...)` can run a name (default none): a span call to one
+ *   is a flow call, and to any other name that is no builtin an unknown expression function.
  * @param options.inputTypes The flow's input types, which tag the value entry of a lone
  *   `${input.x}` branch.
  * @param options.outputAt Returns a case's authored `output:` by node id, or `null` when it has
@@ -140,17 +143,19 @@ export function checkCaseBranches(
   descriptors: ReadonlyMap<string, NodeDescriptor>,
   options: {
     registry: TypeRegistry;
+    isCallable?: (name: string) => boolean;
     inputTypes: ReadonlyMap<string, Type>;
     outputAt: OutputReader;
     diagnostics: LoadDiagnostics;
   },
 ): void {
   const { registry, inputTypes, outputAt, diagnostics } = options;
+  const isCallable = options.isCallable ?? (() => false);
   for (const [nid, desc] of descriptors) {
     if (!(desc instanceof CaseDescriptor)) continue;
     const output = readOutput(desc, outputAt(desc.id), registry);
     for (const branch of branches(desc)) {
-      checkBranch(branch, { caseId: nid, output, descriptors, registry, inputTypes, diagnostics });
+      checkBranch(branch, { caseId: nid, output, descriptors, registry, isCallable, inputTypes, diagnostics });
     }
     if (output !== null) {
       throw diagnostics.error(
@@ -201,6 +206,7 @@ function branches(desc: CaseDescriptor): Branch[] {
  * @param options.descriptors The flow's descriptors; a bare word must name one, and a suggested
  *   entry id must not.
  * @param options.registry The flow's typedefs.
+ * @param options.isCallable Whether `call(...)` can run a name.
  * @param options.inputTypes The flow's input types.
  * @param options.diagnostics Source ownership for located errors.
  * @throws LoadError as `checkCaseBranches` says.
@@ -212,11 +218,12 @@ function checkBranch(
     output: CaseOutput | null;
     descriptors: ReadonlyMap<string, NodeDescriptor>;
     registry: TypeRegistry;
+    isCallable: (name: string) => boolean;
     inputTypes: ReadonlyMap<string, Type>;
     diagnostics: LoadDiagnostics;
   },
 ): void {
-  const { caseId, output, descriptors, registry, inputTypes, diagnostics } = options;
+  const { caseId, output, descriptors, registry, isCallable, inputTypes, diagnostics } = options;
   const host = `case node ${reprText(caseId)} ${branch.label}`;
   if (branch.include !== null) {
     // A value a file holds goes in its own entry read the same way, never spelled out.
@@ -248,7 +255,7 @@ function checkBranch(
       { range: branch.range },
     );
   }
-  rejectUnholdable(value, { host, branch, caseId, typeNames: new Set(registry.keys()), diagnostics });
+  rejectUnholdable(value, { host, branch, caseId, typeNames: new Set(registry.keys()), isCallable, diagnostics });
   const entry = freeId(branch.entryBase, descriptors);
   const shown = entryText(entry, branch, { host, output, descriptors, registry, inputTypes, diagnostics });
   throw valueError(host, branch, entry, shown, diagnostics);
@@ -335,6 +342,8 @@ function unknownWordError(
  * @param options.caseId The case that owns the branch.
  * @param options.typeNames The flow's typedef names; a call to one inside `${...}` builds a record
  *   and is no flow call.
+ * @param options.isCallable Whether `call(...)` can run a name; a call to any other name that is no
+ *   builtin is an unknown expression function.
  * @param options.diagnostics Source ownership for located errors.
  * @param options.nested Whether `value` sits inside a mapping or list (default `false`).
  * @throws LoadError when the value contains itself, or a nested string starts with `call(`, or a
@@ -347,6 +356,7 @@ function rejectUnholdable(
     branch: Branch;
     caseId: string;
     typeNames: ReadonlySet<string>;
+    isCallable: (name: string) => boolean;
     diagnostics: LoadDiagnostics;
     nested?: boolean;
   },
@@ -380,6 +390,7 @@ function rejectUnholdable(
  * @param options.branch The branch, for its label and range.
  * @param options.caseId The case that owns the branch.
  * @param options.typeNames The flow's typedef names.
+ * @param options.isCallable Whether `call(...)` can run a name.
  * @param options.diagnostics Source ownership for located errors.
  * @throws LoadError as `rejectUnholdable` says for a span.
  */
@@ -390,10 +401,11 @@ function rejectSpan(
     branch: Branch;
     caseId: string;
     typeNames: ReadonlySet<string>;
+    isCallable: (name: string) => boolean;
     diagnostics: LoadDiagnostics;
   },
 ): void {
-  const { host, branch, caseId, typeNames, diagnostics } = options;
+  const { host, branch, caseId, typeNames, isCallable, diagnostics } = options;
   let refs: string[];
   let callees: string[];
   try {
@@ -410,6 +422,9 @@ function rejectSpan(
         `\`${branch.label} call(${spanCallFlowId(text)}, ...)\`.`,
       { range: branch.range },
     );
+  }
+  if (callees.length > 0 && !isCallable(callees[0]!)) {
+    throw diagnostics.error(`${host} ${unknownFunctionMessage(callees[0]!)}`, { range: branch.range });
   }
   if (callees.length > 0) {
     throw diagnostics.error(

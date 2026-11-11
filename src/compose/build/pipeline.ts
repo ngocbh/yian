@@ -473,6 +473,8 @@ export interface CallableScope extends PrivateRegistrar {
   readonly catalogBuilder: SourceCatalogBuilder;
   /** How this file's flow inputs read memory types beyond the built-ins. */
   readonly memoryTypes: MemoryTypeTable;
+  /** Whether `flowId` names a `defs:` callable or a `uses:` alias, which `call(...)` can run. */
+  has(flowId: string): boolean;
   /** Resolve one named or compiler-owned callable in this file scope. */
   resolve(flowId: string): ComposedFlow;
 }
@@ -1906,6 +1908,7 @@ function readSections(options: AssembleOptions, ctx: AssembleContext): ReadSecti
   // inline-call desugar so a branch's text is still as authored.
   checkCaseBranches(descriptors, {
     registry,
+    isCallable: (name) => scope.has(name),
     inputTypes: params.types,
     outputAt: (nodeId) => caseOutputCursor(nodesCursor, nodeId, { diagnostics }),
     diagnostics,
@@ -1963,6 +1966,7 @@ function desugarSections(
         : new Set(),
     nextId: mint,
     typeNames: new Set(registry.keys()),
+    isCallable: (name) => ctx.scope.has(name),
     diagnostics,
   });
 
@@ -2429,6 +2433,7 @@ function checkReferences(
   validateNodeAsserts(nodesBuilt, descriptors, {
     assertionSiteAt: nodeAssertionSiteAt,
     typeNames: new Set(registry.keys()),
+    isCallable: (name) => ctx.scope.has(name),
     localContracts,
     partialUnionNodes: narrowing.unordered,
     skips,

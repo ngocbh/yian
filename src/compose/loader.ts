@@ -58,7 +58,7 @@ import {
   type SourceRange,
 } from "../diagnostics.ts";
 import { Binding, type ValuePath, ValueTemplate } from "../nodes/contracts.ts";
-import { isSystemError, leavesRoot, readRegularFile, resolvedPath } from "../platform.ts";
+import { isSystemError, leavesRoot, readRegularFile, resolvedPath, statOrNull } from "../platform.ts";
 import { readTypedefs, typeFor, typeName, type TypeRegistry, withMemoryTypes } from "../typesys/types.ts";
 import {
   isList,
@@ -622,21 +622,30 @@ export function makeFileResolver(
   from: ReadFile | null = null,
 ): ChildResolver {
   return async (path: string, version: string | null = null): Promise<ComposedFlow> => {
+    const name = `${path}.yaml`;
+    // A folder, FIFO or device named like the flow is no flow, so the search goes on past it.
+    const notFiles: string[] = [];
     for (const dir of searchPaths) {
+      // Shown with the search folder as given, never the real path.
+      const shown = `${dir}/${name}`;
       let real: string;
       try {
-        real = await fsp.realpath(resolvePath(dir, path + ".yaml"));
+        real = await fsp.realpath(resolvePath(dir, name));
       } catch (error) {
         // A search directory or file that doesn't exist is skipped; any other failure is loud.
         if (isMissingPath(error)) continue;
         throw error;
+      }
+      if (!(await fsp.stat(real)).isFile()) {
+        notFiles.push(shown);
+        continue;
       }
       from?.refs.set(usesRef(path, version), real);
       return ctx.loadOnce(real, async () => {
         // Kept as decoded, as an `!include` of the same file keeps it, whichever reads it first.
         let file = ctx.read.get(real);
         if (file === undefined) {
-          file = { text: UTF8.decode(await fsp.readFile(real)), refs: new Map() };
+          file = { text: await readChildText(real, shown), refs: new Map() };
           ctx.read.set(real, file);
         }
         const own = dirname(real);
@@ -645,10 +654,42 @@ export function makeFileResolver(
         return loadFlowFile(document, null, [own], ctx, own, file);
       });
     }
-    throw UNLOCATED_DIAGNOSTICS.error(
-      `flow ${reprText(path)} not found on search path ${writeAsText([...searchPaths])}`,
-    );
+    let message = `flow ${reprText(path)} not found on search path ${writeAsText([...searchPaths])} (looked for ${reprText(name)})`;
+    for (const shown of notFiles) message += `; ${reprText(shown)} is not a file`;
+    const yml = searchPaths.some((dir) => statOrNull(resolvePath(dir, `${path}.yml`))?.isFile() === true);
+    throw UNLOCATED_DIAGNOSTICS.error(message + usesRefHint(path, yml));
   };
+}
+
+/**
+ * Return the hint a `uses:` ref's not-found error ends with, else `""`: a ref written with its
+ * extension (`./child.yaml`) drops it, and a flow saved as `.yml` (`ymlExists`) isn't imported.
+ */
+export function usesRefHint(path: string, ymlExists: boolean): string {
+  if (/\.ya?ml$/.test(path)) return "; write a uses: ref without its extension";
+  return ymlExists ? "; uses: imports only .yaml files" : "";
+}
+
+/**
+ * Read the `uses:` child file at `real` as UTF-8 text, kept as decoded.
+ *
+ * @throws Error `can't read <shown>: not UTF-8 text`, or `can't read <shown> (<code>)` for a
+ *   system error, naming the file as `shown` rather than by its real path.
+ */
+async function readChildText(real: string, shown: string): Promise<string> {
+  let bytes: Uint8Array;
+  try {
+    bytes = await fsp.readFile(real);
+  } catch (error) {
+    if (!isSystemError(error)) throw error;
+    throw new Error(`can't read ${shown} (${error.code})`, { cause: error });
+  }
+  try {
+    return UTF8.decode(bytes);
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    throw new Error(`can't read ${shown}: not UTF-8 text`, { cause: error });
+  }
 }
 
 /** Return a flow file's text, as decoded, with its line endings as LF, as a flow reads it. */

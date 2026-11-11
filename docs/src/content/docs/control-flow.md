@@ -309,7 +309,8 @@ Shipped.
 
 - A ref is the child's path without its extension, relative to the importing file's folder:
   `../common/clean` loads `../common/clean.yaml`. Only `.yaml` files are found, so a ref that
-  ends in `.yaml` and a `.yml` file both fail with `not found`.
+  ends in `.yaml` and a `.yml` file both fail with `not found`, naming the file looked for and
+  why. A folder named like the file is skipped.
 - `@<version>` pins the child: its `version:` must be the same text, or the flow doesn't load.
   Quote a number there (`version: "1"`). A ref without `@` takes any version.
 - `yian run` and `yian check` look in the importing file's folder, then in each `system.paths`

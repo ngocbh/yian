@@ -1505,6 +1505,17 @@ describe("check", () => {
     expect(diagnostic.frames.map((f: { note: string }) => f.note)).toEqual(["uses alias 'child'"]);
   });
 
+  test("a ref written with .yaml gets the same hint with and without --root", async () => {
+    const root = join(tmp, "company");
+    const flow = file("company/main.yaml", parentFlow("./lib/child.yaml"));
+    file("company/lib/child.yaml", FLOW);
+    const hint = "; write a uses: ref without its extension";
+    const { code, flows } = await checkJson([flow]);
+    expect(code).toBe(1);
+    expect(flows[0].diagnostics[0].message).toEndWith(`(looked for './lib/child.yaml.yaml')${hint}`);
+    expect((await rootDiagnostic(root, flow)).message).toEndWith(`not found: lib/child.yaml.yaml${hint}`);
+  });
+
   test("--root: a child under a regular file is not found", async () => {
     const root = join(tmp, "company");
     const flow = file("company/main.yaml", parentFlow("lib/child"));

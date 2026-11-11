@@ -11,7 +11,6 @@
  * Knows about: `expr` template syntax, node-owned semantic binding/output-contract carriers,
  * `typesys` structural types, the shared output-contract inference in `compile`, and Compose
  * source ranges/errors.
- * Never imports: the loader, the runtime, or node kinds.
  */
 
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";

@@ -10,8 +10,8 @@
  * branches that route the node; an unproven binding is left out. A TOOL has no item scope
  * (`${item}` is legal only in a MAP's own `input:`), so none is used.
  *
- * Knows about: the TOOL node, build results, the narrowing view, and typed-binding inference.
- * Never imports: the loader or the compose package facade; they import this back.
+ * Knows about: the TOOL node, node contracts, compile's output-contract types, build results, the
+ * narrowing view, and typed-binding inference.
  */
 
 import type { OutputContract, ValueContract } from "../../nodes/contracts.ts";

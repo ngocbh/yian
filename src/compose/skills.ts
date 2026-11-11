@@ -5,8 +5,7 @@
  * the Compose safe YAML literal parser; only `name` and `description` are read and every other
  * field is ignored.
  *
- * Knows about:   skills, compose/source, compose/helpers/source, defaults, diagnostics, typesys.
- * Never imports: other Compose phases, compile, runtime, the run boundary, or CLI.
+ * Knows about: skills, compose/source, compose/helpers/source, defaults, diagnostics, typesys.
  */
 
 import { readdirSync } from "node:fs";

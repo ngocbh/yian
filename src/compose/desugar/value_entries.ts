@@ -20,7 +20,6 @@
  *
  * Knows about: diagnostics, the compose helpers (errors, output contracts, tags), the CODE
  * descriptor, the compose source, node contracts, and typesys.
- * Never imports: compose/parse, edges, validate, build, the loader, or the runtime.
  */
 
 import { reprText } from "../../diagnostics.ts";

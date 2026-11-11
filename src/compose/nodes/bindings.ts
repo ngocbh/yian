@@ -7,7 +7,6 @@
  * changing a kind's binding surface is a local edit in its `compose/nodes/<kind>.ts`.
  *
  * Knows about: the sibling kind tables, nodes contracts and typesys values.
- * Never imports: the desugar passes that call it.
  */
 
 import { ValueTemplate, mapSourceStrings } from "../../nodes/contracts.ts";

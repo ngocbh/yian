@@ -2,8 +2,7 @@
  * The text the model reads for a tool result, a reported tool error, a skipped call, a call a
  * crash, a deadline or an interrupt closed, or a call the loop refused before its tool.
  *
- * Knows about:   diagnostics, typesys, and the peer AGENT module `live`.
- * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
+ * Knows about: diagnostics, typesys, and the peer AGENT module `live`.
  */
 
 import { reprText } from "../../diagnostics.ts";

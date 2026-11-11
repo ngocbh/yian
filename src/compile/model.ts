@@ -14,8 +14,7 @@
  * flow's result). They are owned canonically by the node classes (`StartNode.ID` / `EndNode.ID`)
  * and re-exported here so runtime consumers can import them alongside the graph types.
  *
- * Knows about:   nodes, diagnostics and typesys.
- * Never imports: compose, runtime, the run boundary, the CLI, or provider SDKs.
+ * Knows about: nodes, diagnostics and typesys.
  */
 
 import { type OriginRef, reprText } from "../diagnostics.ts";

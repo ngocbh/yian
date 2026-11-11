@@ -9,7 +9,6 @@
  * output-contract inference, tag advice, load diagnostics and the text form of a literal) and
  * `compose/nodes/loop` (a body's inputs as the carried values enter them, and the carried field
  * types).
- * Never imports: the loader or the compose package facade; only they import this back.
  */
 
 import { typesCompatible } from "../../compile/validation.ts";

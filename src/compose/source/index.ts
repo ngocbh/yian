@@ -23,9 +23,7 @@
  * the value a plain YAML document holds (`SourceDocument.parseData`), tagged `T`, its strings
  * marked as never templates.
  *
- * Knows about:   yaml, defaults, diagnostics, typesys.
- * Never imports: compose helpers or phases, nodes, compile, runtime, the run boundary,
- *                CLI modules.
+ * Knows about: yaml, defaults, diagnostics, typesys.
  */
 
 export { SourceCatalog } from "./catalog.ts";

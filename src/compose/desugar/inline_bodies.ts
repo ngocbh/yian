@@ -7,7 +7,6 @@
  * its mapping has a `kind:` key.
  *
  * Knows about: diagnostics, typesys values, the compose error helpers and source cursors.
- * Never imports: compose/parse, edges, validate, build, the loader, or the runtime.
  */
 
 import { createHash } from "node:crypto";

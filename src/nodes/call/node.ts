@@ -14,8 +14,7 @@
  * for its cached child signature and exposes its baked child through the source-neutral
  * `originChildren` hook.
  *
- * Knows about:   nodes/base, nodes/contracts and diagnostics.
- * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
+ * Knows about: nodes/base, nodes/contracts and diagnostics.
  */
 
 import { type OriginRef, reprText } from "../../diagnostics.ts";

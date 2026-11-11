@@ -15,7 +15,6 @@
  *
  * Knows about: the compile model (`Edge` and the boundary ids), the shared Kahn check, and load
  * diagnostics.
- * Never imports: build, the loader, or the runtime.
  */
 
 import { END_ID, START_ID, type Edge } from "../../compile/model.ts";

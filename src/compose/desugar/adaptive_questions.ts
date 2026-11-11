@@ -37,8 +37,6 @@
  *
  * Knows about: diagnostics, node contracts, the ask's question type and tool id, and the AGENT
  * and TOOL descriptors.
- * Never imports: compose/parse, edges, validate, build, the loader, or the runtime; the pipeline
- * imports this back.
  */
 
 import { reprText, type SourceRange } from "../../diagnostics.ts";

@@ -18,7 +18,6 @@
  * 1.1 boolean words, load diagnostics and the text form of a literal), `compose/nodes/loop` (a LOOP
  * body's inputs as its seeds enter them, and its carried field types), and `nodes/binding` (the run
  * boundary's string conversion, named in a hint only).
- * Never imports: the loader or the compose package facade; only they import this back.
  */
 
 import { typesCompatible } from "../../compile/validation.ts";

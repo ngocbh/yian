@@ -7,7 +7,6 @@
  * accept it. A schema with no yian equivalent translates to `null`, which means "do not check".
  *
  * Knows about: typesys, `tools/context` and, for types only, `tools/function_tools`.
- * Never imports: nodes, compile, compose, runtime, the run boundary, or CLI.
  */
 
 import {

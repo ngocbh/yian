@@ -2,8 +2,7 @@
  * The values a binding reads from the pool and the producers they come from: decoding a typed
  * value from its log text, the system-value key prefix, and the root read with its source.
  *
- * Knows about:   expr/lineage, typesys.
- * Never imports: runtime state, engine or run, compile, compose, or the CLI.
+ * Knows about: expr/lineage, typesys.
  */
 
 import { type RootRead, SourceRef } from "../expr/lineage.ts";

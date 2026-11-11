@@ -23,8 +23,7 @@
  * Values cross by structured clone, which drops a `FileRef`'s class, so a `FileRef` crosses as a
  * `Map` of its fields (no yian value holds a `Map`).
  *
- * Knows about:   typesys/values, diagnostics, defaults and `node:*`.
- * Never imports: nodes/base, nodes/contracts, nodes/code/node, compile, compose, runtime.
+ * Knows about: typesys/values, diagnostics, defaults and `node:*`.
  */
 
 import { resolve } from "node:path";

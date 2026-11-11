@@ -8,8 +8,7 @@
  * binding, resolve that binding against a pool, check the resolved layers, and build a call-time
  * agent's config. Precedence and merge granularity follow `mergeLlmConfig`.
  *
- * Knows about:   diagnostics, expr, llm_clients, nodes/binding, nodes/contracts and typesys.
- * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
+ * Knows about: diagnostics, expr, llm_clients, nodes/binding, nodes/contracts and typesys.
  */
 
 import { type OriginRef, reprText } from "../../diagnostics.ts";

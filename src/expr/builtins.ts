@@ -22,8 +22,7 @@
  *
  * Knows about: `typesys` (`Value`, `FileRef`, `InboxRef`, `MemoryRef`, `Type`, `ValueKind`,
  * `fromHost`, `isListKind`, `isRecord`, `valueRepr`, `writeAsText`, `writeAsJson`), `diagnostics`
- * (`reprText`, `compareCodePoints`) and `grammar` (`uncallableReason`). Never imports:
- * `expressions`, `template`, or anything above them.
+ * (`reprText`, `compareCodePoints`) and `grammar` (`uncallableReason`).
  */
 
 import { compareCodePoints, reprText } from "../diagnostics.ts";

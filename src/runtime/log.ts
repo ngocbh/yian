@@ -8,8 +8,7 @@
  * reducer, so the same validated carriers can back memory and JSONL logs without creating an
  * authority cycle.
  *
- * Knows about:   diagnostics, nodes/base, nodes/contracts, platform, typesys.
- * Never imports: state, engine, run, compile, compose, or the CLI.
+ * Knows about: diagnostics, nodes/base, nodes/contracts, platform, typesys.
  */
 
 import fs from "node:fs";

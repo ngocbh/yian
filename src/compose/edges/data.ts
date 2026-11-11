@@ -13,7 +13,6 @@
  *
  * Knows about: the compile model (`Edge`), `expr` co-skip analysis, binding input groups, the
  * `case` descriptor, and `edges/producers.ts`.
- * Never imports: validate, build, the loader, or the runtime.
  */
 
 import { Edge } from "../../compile/model.ts";

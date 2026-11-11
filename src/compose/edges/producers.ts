@@ -9,7 +9,6 @@
  *
  * Knows about: the compile model (`START_ID`), `expr` reference scanning, binding sources, and
  * the pool name of an AGENT's new messages (`typesys/pool.ts`).
- * Never imports: validate, build, the loader, or the runtime.
  */
 
 import { START_ID } from "../../compile/model.ts";

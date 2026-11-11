@@ -8,7 +8,7 @@
  * `{"$float":"inf"}`, and a record shaped like a tag escaped with `$record`.
  *
  * Knows about: `typesys` (`logJson`, `buildValue`, `TypeCheckError`, `isRecord`, `RootValue`),
- * `builtins` (`kindName`). Never imports: `expressions`, `template`, `nodes`, `runtime`.
+ * `builtins` (`kindName`).
  */
 
 import { buildValue, isRecord, TypeCheckError, type Value } from "../typesys/index.ts";

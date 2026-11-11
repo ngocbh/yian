@@ -23,8 +23,6 @@
  * Knows about: diagnostics, `expr` (the ref walk), node contracts, the compose helpers (errors,
  * positional metadata), the kind-blind binding-field walk, the CASE descriptor and the inline-call
  * desugar (the `output:` walk — a within-phase peer).
- * Never imports: compose/parse, edges, validate, build, the loader, or the runtime; only the
- * pipeline imports this back.
  */
 
 import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";

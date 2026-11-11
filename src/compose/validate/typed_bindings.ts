@@ -36,7 +36,6 @@
  * inference, literals and the `${item}` scope), `compile/model`, `expr` (template scanning),
  * `typesys`, `nodes` (binding carriers, the LOOP node, the AGENT's reserved key), `compose/helpers`
  * (load diagnostics and tag labels), `compose/nodes/base` and the narrowing view.
- * Never imports: the loader or the compose package facade; they import this back.
  */
 
 import type { FlowOutput } from "../../compile/model.ts";

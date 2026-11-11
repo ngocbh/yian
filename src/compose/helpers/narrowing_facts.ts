@@ -13,7 +13,6 @@
  *
  * Knows about: `typesys` types and unions, `compile/validation`, `isinstance` type resolution,
  * condition guards, output-contract projection, and type labels.
- * Never imports: `compose/validate`, runtime.
  */
 
 import { typesCompatible } from "../../compile/validation.ts";

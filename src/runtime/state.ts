@@ -8,11 +8,10 @@
  * and relinquishes direct mutation of its execution fields; chronological reducer transitions are
  * the only topology writers. Everything here is synchronous.
  *
- * Knows about:   compile/declared_types, compile/manifest, compile/model, compile/validation,
- *                defaults, diagnostics, events, expr, nodes, runtime/common,
- *                runtime/eval_node, runtime/log, runtime/sources, runtime/waits, tools/context,
- *                typesys.
- * Never imports: engine, run, compose, or the CLI.
+ * Knows about: compile/declared_types, compile/manifest, compile/model, compile/validation,
+ *              defaults, diagnostics, events, expr, nodes, runtime/common,
+ *              runtime/eval_node, runtime/log, runtime/sources, runtime/waits, tools/context,
+ *              typesys.
  */
 
 import { localTypes } from "../compile/declared_types.ts";

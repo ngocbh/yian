@@ -6,8 +6,7 @@
  * children through source-neutral hooks. This module joins those responsibilities without
  * importing Compose, resolving a source, or inspecting arbitrary semantic payloads.
  *
- * Knows about:   compile/model, nodes, typesys and diagnostics.
- * Never imports: compose, runtime, the run boundary, the CLI, or provider SDKs.
+ * Knows about: compile/model, nodes, typesys and diagnostics.
  */
 
 import { OriginRef, type OriginResolver, ResolverTable, reprText } from "../diagnostics.ts";

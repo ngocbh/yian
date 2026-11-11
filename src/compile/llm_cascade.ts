@@ -14,7 +14,6 @@
  * Knows about: diagnostics, typesys, llm_clients, nodes (base, binding, contracts, the AGENT node
  * and its `llm_config` values) and the compiled model (`copyGraph`). Defaults are injected by the
  * host.
- * Never imports: compose, runtime, the package-root run boundary, or the CLI.
  */
 
 import { compareCodeUnits, type OriginRef, reprText } from "../diagnostics.ts";

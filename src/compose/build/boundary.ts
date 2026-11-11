@@ -16,7 +16,6 @@
  * Knows about: the compile model, `expr` co-skip scanning, the START/END nodes, inbox types, binding
  * input groups, `edges/producers`, `compile/output_contracts` and `validate/asserts`
  * (`LoweredAsserts`; a forward edge only, since `validate/asserts.ts` never imports this module).
- * Never imports: `build/pipeline`, the loader, or the runtime.
  */
 
 import { compareCodeUnits, reprText } from "../../diagnostics.ts";

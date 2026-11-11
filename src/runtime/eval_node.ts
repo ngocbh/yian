@@ -14,11 +14,10 @@
  * node's aborted signal), host capability faults, unexpected binder faults, and malformed compiled
  * or setup state reject `evalNode` instead of becoming an `EvaluationFailure`.
  *
- * Knows about:   compile/model (types), compile/declared_types (the declared types reads go
- *                through), compile/output_contracts (a binding's lone reference, to name an
- *                authored root), diagnostics, expr grammar and lineage, llm_clients (types), nodes,
- *                platform, runtime sources, skills, tools, typesys.
- * Never imports: runtime state or engine, the run boundary, compose, or the CLI.
+ * Knows about: compile/model (types), compile/declared_types (the declared types reads go
+ *              through), compile/output_contracts (a binding's lone reference, to name an
+ *              authored root), diagnostics, expr grammar and lineage, llm_clients (types), nodes,
+ *              platform, runtime sources, skills, tools, typesys.
  */
 
 import { itemDeclaredType, localTypes, poolDeclaredTypes } from "../compile/declared_types.ts";

@@ -27,8 +27,6 @@
  * Knows about: diagnostics, `expr` (the expression error), the compose helpers (errors, positional
  * metadata), the CASE descriptor and the inline-call desugar (the shared `call(...)` recognizer
  * and synth-node factory).
- * Never imports: compose/parse, edges, validate, build, the loader, or the runtime; only the
- * pipeline imports this back.
  */
 
 import { reprText, type SourceRange } from "../../diagnostics.ts";

@@ -37,7 +37,6 @@
  * `m@12`), so its path is `m@12.k` and two comprehensions that both bind `m` don't mix.
  *
  * Knows about: `expr` parse trees and `directReferenceParts`.
- * Never imports: types, `compose/validate`.
  */
 
 import { isinstanceSubject, isinstanceTypeNames } from "../../expr/index.ts";

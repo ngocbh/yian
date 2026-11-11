@@ -15,9 +15,7 @@
  * `current().maxYamlNodes` nodes when each alias counts as a copy of what it names, is a
  * located `FlowLoaderError`.
  *
- * Knows about:   yaml, defaults, diagnostics, typesys.
- * Never imports: compose helpers or phases, nodes, compile, runtime, the run boundary,
- *                CLI modules.
+ * Knows about: yaml, defaults, diagnostics, typesys.
  */
 
 import {

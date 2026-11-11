@@ -54,9 +54,8 @@
  * and this thread's later change reaches the body). Loading a flow from an untrusted or
  * agent-generated source runs that source's code when the flow runs.
  *
- * Knows about:   nodes/base, nodes/contracts, nodes/code/worker, diagnostics, typesys, defaults,
- *                platform and `node:*`.
- * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
+ * Knows about: nodes/base, nodes/contracts, nodes/code/worker, diagnostics, typesys, defaults,
+ *              platform and `node:*`.
  */
 
 import { readlinkSync, realpathSync, statSync } from "node:fs";

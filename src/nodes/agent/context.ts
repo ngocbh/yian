@@ -2,10 +2,9 @@
  * Process-local context for one AGENT invocation, the steps it records, and the run files its
  * replies' media go to.
  *
- * Knows about:   diagnostics, events, llm errors, llm messages, llm_clients factory, nodes/base,
- *                nodes/contracts, platform, skills, tools, typesys, peer AGENT modules, node's
- *                crypto and node's fs.
- * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
+ * Knows about: diagnostics, events, llm errors, llm messages, llm_clients factory, nodes/base,
+ *              nodes/contracts, platform, skills, tools, typesys, peer AGENT modules, node's
+ *              crypto and node's fs.
  */
 
 import { createHash, randomBytes } from "node:crypto";

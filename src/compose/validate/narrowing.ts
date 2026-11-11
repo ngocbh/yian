@@ -25,7 +25,6 @@
  *
  * Knows about: descriptors, compiled edges and their topological order, output contracts, condition
  * guards, narrowing facts, and `typesys` unions.
- * Never imports: runtime.
  */
 
 import { Edge } from "../../compile/model.ts";

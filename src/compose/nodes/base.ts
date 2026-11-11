@@ -16,7 +16,6 @@
  *
  * Knows about: diagnostics, typesys, the compile model, llm_clients (provider blocks), nodes
  *              (base and contracts), compose source and helpers, and expr.
- * Never imports: compose/parse, the runtime or the CLI.
  */
 
 import type { Edge } from "../../compile/model.ts";

@@ -33,7 +33,6 @@
  * (`constructors` for the constructor and builtin checks, `narrowing` for each node's view, and
  * `typed_bindings` for the node-local contracts and a MAP's item contract), and `compose/desugar`
  * (`case_outputs` to spell an expanded case value read as written).
- * Never imports: the loader or the compose package facade; they import this back.
  */
 
 import { classifyPath } from "../../compile/validation.ts";

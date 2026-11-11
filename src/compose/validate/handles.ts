@@ -6,7 +6,6 @@
  *
  * Knows about: the compile model (`Edge`), nodes (`CaseNode`, `ELSE_HANDLE`), and load
  * diagnostics.
- * Never imports: build, the loader, or the runtime.
  */
 
 import type { Edge } from "../../compile/model.ts";

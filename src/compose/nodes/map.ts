@@ -10,7 +10,6 @@
  * the graph. Registered in `KINDS` and `BINDING_FIELDS` by `compose/nodes/index.ts`.
  *
  * Knows about: diagnostics, compose source and helpers, `base.ts` and `call.ts`.
- * Never imports: compose/parse, the runtime or the CLI.
  */
 
 import { reprText, type SourceRange } from "../../diagnostics.ts";

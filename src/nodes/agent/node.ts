@@ -6,11 +6,10 @@
  * `ask_user`, are ordinary explicitly authored tool grants. A crash or host interruption unwinds
  * the node; no conversation or continuation state is stored in the graph or variable pool.
  *
- * Knows about:   nodes/base, nodes/binding, nodes/contracts, nodes/ids, peer AGENT modules, llm
- *                (messages), llm_clients (config, connection, factory), expr (expressions,
- *                templates, lineage), memory (recall rendering, memory tools), skills, tools,
- *                defaults, diagnostics and typesys.
- * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
+ * Knows about: nodes/base, nodes/binding, nodes/contracts, nodes/ids, peer AGENT modules, llm
+ *              (messages), llm_clients (config, connection, factory), expr (expressions,
+ *              templates, lineage), memory (recall rendering, memory tools), skills, tools,
+ *              defaults, diagnostics and typesys.
  */
 
 import { current } from "../../defaults.ts";

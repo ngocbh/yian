@@ -27,7 +27,6 @@
  *
  * Knows about: compiled edges and their topological order, flow outputs, node wiring, binding
  * producers, and expression trees.
- * Never imports: the runtime.
  */
 
 import { type Edge, FlowOutput } from "../../compile/model.ts";

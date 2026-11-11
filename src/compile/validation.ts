@@ -15,8 +15,7 @@
  * `FlowValidationError` is the shared structural-error type the compose loader catches and
  * rethrows as a located `LoadError`.
  *
- * Knows about:   compile/model (the boundary ids), diagnostics and typesys.
- * Never imports: compose, runtime, the run boundary, the CLI, or provider SDKs.
+ * Knows about: compile/model (the boundary ids), diagnostics and typesys.
  */
 
 import { compareCodeUnits, reprText } from "../diagnostics.ts";

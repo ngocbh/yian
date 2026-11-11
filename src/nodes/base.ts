@@ -15,9 +15,9 @@
  * Invariant: a node never writes the pool. It describes its one output value as
  * `new Output(value)`; the engine performs the write under the node's id. This keeps nodes pure.
  *
- * Knows about:   diagnostics, events, expr, llm_clients (types), platform (the `Scheduler` type),
- *                skills, tools, typesys, nodes/binding, nodes/contracts.
- * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
+ * Knows about: defaults, diagnostics, events, expr, llm and llm_clients (types), memory (the
+ *              session type), platform (the `Scheduler` type), skills, tools, typesys,
+ *              nodes/binding, nodes/contracts.
  */
 
 import { current } from "../defaults.ts";

@@ -20,7 +20,6 @@
  *
  * Knows about: diagnostics, compose source, helpers and node kinds, compile model, expr and
  * typesys.
- * Never imports: the runtime, the run boundary, the CLI or provider SDKs.
  */
 
 import { END_ID, START_ID } from "../../compile/model.ts";

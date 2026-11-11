@@ -10,7 +10,6 @@
  *
  * Knows about: `output_contracts`, `model` (`Flow`), the node kinds whose output has no contract
  * (START, END) and the AGENT's steer inbox key, `expr` (`declaredAt`) and `typesys`.
- * Never imports: compose or runtime.
  */
 
 import { declaredAt, type DeclaredTypes } from "../expr/expressions.ts";

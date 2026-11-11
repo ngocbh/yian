@@ -23,7 +23,6 @@
  *
  * Knows about: `defaults`, `diagnostics`, `platform`, typesys, `llm/messages` (the JSON check),
  * `llm/auth`, `llm/body` and `llm/errors` (for MCP servers) and the skills leaf (`skills/tool`).
- * Never imports: nodes, compile, compose, runtime, run, or cli.
  */
 
 export { ASK, isPending, pending, type PendingMarker, SLEEP, TAKE, ToolContext } from "./context.ts";

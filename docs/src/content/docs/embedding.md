@@ -134,6 +134,7 @@ only a warning: the call still resolves, so your program doesn't repeat it.
 | `llmConfig` | none | The outermost `llm_config` layer (see [Models and providers](/models/)). Its `api_key` and header values are never recorded; its `base_url`, `organization`, `project` and header names are, on the agents that use the key |
 | `context` | `undefined` | Your app object; tools read it as `ctx.context`. Never recorded |
 | `onEvent`, `onStream` | none | Event callbacks (see [Events](#events)) |
+| `onConsole` | none | Takes each line the run's CODE nodes print, as `{ runId, node, method, text }`, instead of `console`; `advance` takes it too |
 | `live` | none | A `LiveChannel` a viewer follows |
 | `signal` | none | An `AbortSignal` that stops the run |
 | `env` | `process.env` | A function `(name) => string \| undefined` that yian reads instead of `process.env` |

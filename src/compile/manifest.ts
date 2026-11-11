@@ -13,8 +13,7 @@
  * (`{"type": "int", "value": "1"}`, a float as its IEEE-754 big-endian hex), and only counts are
  * raw JSON ints. The fingerprint is SHA-256 over that text.
  *
- * Knows about:   diagnostics, nodes, typesys and compile/model.
- * Never imports: compose, runtime, the run boundary, the CLI, or provider SDKs.
+ * Knows about: diagnostics, expr (`Verbatim`), nodes, tools (grants), typesys and compile/model.
  */
 
 import { createHash } from "node:crypto";

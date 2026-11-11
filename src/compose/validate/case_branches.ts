@@ -33,7 +33,6 @@
  * entry descriptors and the values they can't hold), `helpers` (errors, the `call(` head,
  * positional metadata, YAML quoting, tag spelling, type reading), `nodes/case` (the descriptor,
  * number spelling), `parse/nodes` (identifiers, the example type of a value) and `source`.
- * Never imports: build, the loader, or the runtime; only the loader pipeline imports this back.
  */
 
 import { typeRelation } from "../../compile/validation.ts";

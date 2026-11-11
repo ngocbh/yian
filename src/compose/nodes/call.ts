@@ -11,7 +11,6 @@
  *
  * Knows about: diagnostics, the CALL and MAP runtime nodes, node contracts, typesys, compose
  * helpers, `base.ts` and `resolver.ts`.
- * Never imports: `map.ts`, compose/parse, the runtime engine or the CLI.
  */
 
 import { reprText, type SourceRange } from "../../diagnostics.ts";

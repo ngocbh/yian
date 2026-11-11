@@ -11,7 +11,6 @@
  *
  * Knows about: diagnostics, compose source, helpers and peer phases, compile model, nodes,
  *              typesys and expr.
- * Never imports: the runtime, the run boundary, the CLI or provider SDKs.
  */
 
 import type { NodeDescriptor } from "./base.ts";

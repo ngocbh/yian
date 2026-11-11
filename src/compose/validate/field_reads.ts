@@ -11,7 +11,6 @@
  * Knows about: `expr` (reference steps), `nodes/contracts` (the output-contract sum),
  * `compile/output_contracts` (the type a contract gives field reads), `typesys`, and the compose
  * peers `helpers/condition_guards` and `helpers/narrowing_facts`.
- * Never imports: build, the loader, or the runtime.
  */
 
 import {

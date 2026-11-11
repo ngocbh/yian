@@ -12,7 +12,6 @@
  *
  * Knows about: compose nodes (descriptors, `BINDING_FIELDS`, `siteKey`), value entries, the
  * written-value check, and load diagnostics.
- * Never imports: build, the loader, or the runtime.
  */
 
 import { reprText, type SourceRange } from "../../diagnostics.ts";

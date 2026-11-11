@@ -12,8 +12,7 @@
  * The node writes no state: it returns the selected handle on its result, and the engine's
  * branching does the skip-flood.
  *
- * Knows about:   expr, nodes/base, nodes/contracts and diagnostics.
- * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
+ * Knows about: expr, nodes/base, nodes/contracts and diagnostics.
  */
 
 import { type FailureCode, type OriginRef, reprText } from "../../diagnostics.ts";

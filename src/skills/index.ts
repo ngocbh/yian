@@ -6,7 +6,6 @@
  * lives in `compose/skills.ts`, and its loaders are never re-exported here.
  *
  * Knows about: `defaults`, `diagnostics`, `typesys` and `llm`.
- * Never imports: nodes, compile, compose, runtime, run, or cli.
  */
 
 export { Skill, SkillError } from "./catalog.ts";

@@ -12,8 +12,8 @@
  * boundary asserts share one seam. Not START's job: system, clock or run id. Hidden from authors:
  * a reserved `__`-prefixed id, never parseable.
  *
- * Knows about:   nodes/base and nodes/contracts.
- * Never imports: anything above nodes; the loader synthesizes and seeds it.
+ * Knows about: nodes/base and nodes/contracts.
+ * The loader synthesizes and seeds it.
  */
 
 import { Node, NodeKind, Output } from "../base.ts";

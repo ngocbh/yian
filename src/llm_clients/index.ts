@@ -20,8 +20,6 @@
  *
  * Knows about: `llm/` (routes, auth objects, wire protocols, errors), `defaults.ts`, `platform.ts`
  * and the `typesys` and `diagnostics.ts` helpers.
- * Never imports: nodes, compose, compile, runtime, memory or the CLI. It is a leaf, so those may
- * import it, never the reverse.
  */
 
 export type { AuthRequest, AuthRequestOptions, AuthState, AuthStoreOptions, Credentials } from "./auth/index.ts";

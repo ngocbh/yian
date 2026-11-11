@@ -55,8 +55,6 @@
  * detector), typesys, the compose helpers (errors, directives, YAML style and quoting), the
  * compose source (a bare argument's plain-scalar reading), the kind-blind binding-field walk and
  * the CALL descriptor.
- * Never imports: compose/parse, edges, validate, build, the loader, or the runtime; the loader,
- * the case desugars and the assert check import this back.
  */
 
 import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";

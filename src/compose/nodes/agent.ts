@@ -12,8 +12,7 @@
  *
  * Knows about: diagnostics, compose source and helpers, expr (span reading and the binder),
  *              llm_clients (config and provider blocks), nodes (agent and contracts), skills,
- *              typesys and defaults.
- * Never imports: compose/parse, the runtime or the CLI.
+ *              tools (grants), typesys and defaults.
  */
 
 import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";

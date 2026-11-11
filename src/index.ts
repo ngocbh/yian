@@ -29,7 +29,7 @@
  * holds, is on both, as are `MemoryRef` and `RecordedMemoryTool`.
  *
  * Knows about: compile, compose, diagnostics, expr, memory, nodes, `run`, tools and typesys.
- * Never imports: the CLI; nothing in the package imports this module.
+ * Nothing in the package imports this module.
  */
 
 export { CompiledFlow } from "./compile/model.ts";

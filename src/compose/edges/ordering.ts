@@ -10,7 +10,6 @@
  * `rejectCycles` set.
  *
  * Knows about: the compile model (`Edge`), descriptors, and load diagnostics.
- * Never imports: validate, build, the loader, or the runtime.
  */
 
 import { Edge } from "../../compile/model.ts";

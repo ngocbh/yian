@@ -17,7 +17,6 @@
  *
  * Knows about: `compose/helpers` (literal detection, tag labels, load diagnostics), build results,
  * the narrowing view, typed-binding inference, the MAP node, and `typesys`.
- * Never imports: the loader or the compose package facade; they import this back.
  */
 
 import { reprText } from "../../diagnostics.ts";

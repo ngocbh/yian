@@ -21,8 +21,7 @@
  * Templates are copied with `copyGraph`, which shares arrays, records and carriers with the
  * original, so this module assigns fresh values and never changes a copied node's field in place.
  *
- * Knows about:   compile/model, expr, nodes, diagnostics and typesys.
- * Never imports: compose, runtime, or the package-root run boundary.
+ * Knows about: compile/model, expr, nodes, diagnostics and typesys.
  */
 
 import { type OriginRef, reprText } from "../diagnostics.ts";

@@ -38,9 +38,8 @@
  * answer gets one more model call, within `maxToolIterations`; a structured agent without tools or
  * skills reads its steers once, before its single call.
  *
- * Knows about:   diagnostics, events, llm, llm_clients connection, platform, nodes/base, skills,
- *                tools, typesys, peer AGENT modules.
- * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
+ * Knows about: diagnostics, events, llm, llm_clients connection, platform, nodes/base, skills,
+ *              tools, typesys, peer AGENT modules.
  */
 
 import { reprText } from "../../diagnostics.ts";

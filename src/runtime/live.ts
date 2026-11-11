@@ -19,8 +19,7 @@
  * The stream is ephemeral: a subscriber's failure never reaches the run. A subscriber that throws is
  * dropped and reported to the host.
  *
- * Knows about:   platform (warnings), runtime/log.
- * Never imports: nodes, the run boundary, or the CLI.
+ * Knows about: platform (warnings), runtime/log.
  */
 
 import { warn } from "../platform.ts";

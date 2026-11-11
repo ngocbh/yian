@@ -33,9 +33,8 @@
  * corrected under `retries:`; once they are spent the node fails with `OutputInvalidError`, whose
  * `path` locates the last error inside the output when it can.
  *
- * Knows about:   defaults, diagnostics, llm, nodes/base (types), nodes/contracts, typesys, peer
- *                AGENT modules.
- * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
+ * Knows about: defaults, diagnostics, llm, nodes/base (types), nodes/contracts, typesys, peer
+ *              AGENT modules.
  */
 
 import { current } from "../../defaults.ts";

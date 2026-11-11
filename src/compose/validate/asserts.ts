@@ -44,8 +44,6 @@
  * peers (`errors`, `isinstance_types`, `value_nesting`), `nodes`, `compose/nodes/base`,
  * `desugar/inline_calls` (inline-call rejection), the field-read walk of `field_reads`, `SkipModel`
  * from `skips` and `LocalInput` from `typed_bindings`.
- * Never imports: build, the loader, or the runtime; nothing in helpers, nodes, parse, desugar or
- * edges imports this back.
  */
 
 import { classifyPath } from "../../compile/validation.ts";

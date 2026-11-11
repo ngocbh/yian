@@ -6,8 +6,7 @@
  * into frozen `QuestionSpec` objects, applying the engine's authoring constraints (1 to
  * `current().maxQuestions` questions, unique headers, option labels unique within a question).
  *
- * Knows about:   defaults, diagnostics and typesys.
- * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
+ * Knows about: defaults, diagnostics and typesys.
  */
 
 import { current } from "../../defaults.ts";

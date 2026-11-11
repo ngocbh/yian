@@ -25,7 +25,6 @@
  * Knows about: the type relation (`compile/validation`), expressions, the type system, the
  * field-read message (`nodes/contracts`), and compose helpers. Callers are the reference
  * validator and the pipeline's type-table pass.
- * Never imports: build, the loader, or the runtime.
  */
 
 import { typeRelation } from "../../compile/validation.ts";

@@ -20,7 +20,6 @@
  * first. `nodes` stays a raw mapping here; `compose/parse/nodes.ts` builds the descriptors.
  *
  * Knows about: diagnostics, compose source, helpers and node kinds, typesys values.
- * Never imports: the runtime, the run boundary, the CLI or provider SDKs.
  */
 
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";

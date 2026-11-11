@@ -11,7 +11,6 @@
  * `LoadError`. Registered in `KINDS` and `BINDING_FIELDS` by `compose/nodes/index.ts`.
  *
  * Knows about: diagnostics, platform, compose source and helpers, and nodes (base, code).
- * Never imports: compose/parse, the runtime or the CLI.
  */
 
 import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";

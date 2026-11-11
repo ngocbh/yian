@@ -17,8 +17,7 @@
  * carried for the `over` case. The node also owns origin traversal for its cached child signature
  * and exposes its baked child through the source-neutral `originChildren` hook.
  *
- * Knows about:   nodes/base, nodes/binding, nodes/contracts, diagnostics and typesys.
- * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
+ * Knows about: nodes/base, nodes/binding, nodes/contracts, diagnostics and typesys.
  */
 
 import { type OriginRef, reprText } from "../../diagnostics.ts";

@@ -10,7 +10,6 @@
  *
  * Knows about: `expr` AST result inference, semantic binding/contract carriers, and
  * source-neutral `typesys` values.
- * Never imports: YAML/source documents, node kinds, graph-stage passes, the loader, or runtime.
  */
 
 import { type OriginRef, reprText } from "../diagnostics.ts";

@@ -6,7 +6,6 @@
  * the two in step, so a mismatch is a defect in yian, never in the flow.
  *
  * Knows about: compose nodes (`BuildResult`) and value text.
- * Never imports: build, the loader, or the runtime.
  */
 
 import { compareCodeUnits, reprText } from "../../diagnostics.ts";

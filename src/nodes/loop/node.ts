@@ -22,8 +22,7 @@
  * node also owns origin traversal for its cached body signature and exposes the baked body
  * through the source-neutral `originChildren` hook.
  *
- * Knows about:   nodes/base, nodes/contracts, nodes/ids, expr, diagnostics and typesys.
- * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
+ * Knows about: nodes/base, nodes/contracts, nodes/ids, expr, diagnostics and typesys.
  */
 
 import { type FailureCode, type OriginRef, reprText } from "../../diagnostics.ts";

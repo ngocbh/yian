@@ -7,9 +7,9 @@
  * Also owns the question helpers an asking node shares: the answer schema derived from an
  * `output:` type, the `adaptive_questions:` keys, and the non-text question check.
  *
- * Knows about: diagnostics, compose source and helpers, the AGENT reader (`retriesError`), nodes
- *              (tool), typesys and defaults.
- * Never imports: compose/parse, the runtime or the CLI.
+ * Knows about: diagnostics, compile (type relations and output contracts), compose source and
+ *              helpers, the AGENT reader (`retriesError`), nodes (tool, its questions and the
+ *              contracts), tools (the built-in ids, grants and the registry), typesys and defaults.
  */
 
 import { typeRelation } from "../../compile/validation.ts";

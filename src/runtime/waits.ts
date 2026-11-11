@@ -5,7 +5,6 @@
  *
  * Knows about: runtime/log (record types, record times), events (`CloseReason`), nodes/base
  * (`WaitRequest`), nodes/start and nodes/end (the START and END ids), diagnostics.
- * Never imports: runtime/state, engine, run.
  */
 
 import { reprText } from "../diagnostics.ts";

@@ -19,9 +19,8 @@
  * loaded flow never co-skips END through an output. Hidden from authors: a reserved
  * `__`-prefixed id, never parseable.
  *
- * Knows about:   nodes/base, nodes/contracts and diagnostics.
- * Never imports: anything above nodes; the loader synthesizes it and the engine reads it as the
- *   terminal.
+ * Knows about: nodes/base, nodes/contracts and diagnostics.
+ * The loader synthesizes it and the engine reads it as the terminal.
  */
 
 import { Node, NodeKind, Output } from "../base.ts";

@@ -11,7 +11,6 @@
  * set of rules (`foldSteps`), which the loop's replay and the request rebuild read too.
  *
  * Knows about: llm (messages), diagnostics, typesys.
- * Never imports: compose, compile, runtime, the run boundary or the CLI.
  */
 
 import { reprText } from "../../diagnostics.ts";

@@ -15,9 +15,8 @@
  * body's inputs read that way, and `carriedFieldTypes` gives the carried record's proven field
  * types.
  *
- * Knows about: diagnostics, expr, the LOOP runtime node, node contracts, typesys, compose helpers,
- * `base.ts` and `resolver.ts`.
- * Never imports: compose/parse, the runtime engine or the CLI.
+ * Knows about: diagnostics, expr, the LOOP runtime node, node contracts, compile's output
+ * contracts, typesys, compose helpers, `base.ts` and `resolver.ts`.
  */
 
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";

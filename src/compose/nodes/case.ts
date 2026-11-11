@@ -28,7 +28,6 @@
  *
  * Knows about: diagnostics, the compile model, expr, nodes (base, case, contracts), typesys,
  * compose source and helpers.
- * Never imports: compose/parse, the runtime or the CLI.
  */
 
 import { Edge } from "../../compile/model.ts";

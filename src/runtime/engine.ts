@@ -15,9 +15,8 @@
  * `run_failed` once END can't be reached) and `run()` resolves. A host's send, complete, close or
  * cancel lands synchronously between two awaits through `deliver`.
  *
- * Knows about:   compile/model, diagnostics, events, llm_clients (types), nodes, platform (the
- *                scheduler), runtime eval_node, live, log, state and waits, skills, tools, typesys.
- * Never imports: the run boundary, compose, or the CLI.
+ * Knows about: compile/model, diagnostics, events, llm_clients (types), nodes, platform (the
+ *              scheduler), runtime eval_node, live, log, state and waits, skills, tools, typesys.
  */
 
 import { AsyncResource } from "node:async_hooks";

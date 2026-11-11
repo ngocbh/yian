@@ -15,9 +15,8 @@
  * A memory's tool (`tool_id: {lessons: read}`) is looked up in the memory the node's flow binds to
  * that input instead, and called on the run's session on it.
  *
- * Knows about:   nodes/base, nodes/binding, nodes/contracts, nodes/ids, nodes/tool/questions,
- *                defaults, diagnostics, memory (memory tools), platform, tools and typesys.
- * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
+ * Knows about: nodes/base, nodes/binding, nodes/contracts, nodes/ids, nodes/tool/questions,
+ *              defaults, diagnostics, memory (memory tools), platform, tools and typesys.
  */
 
 import { current } from "../../defaults.ts";

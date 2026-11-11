@@ -39,9 +39,8 @@
  * memory that changed since the run started (including the run's own writes), as a crash resume
  * finds it.
  *
- * Knows about:   compile, compose, defaults, diagnostics, events, expr, llm_clients, memory,
- *                nodes, platform, runtime, skills, tools, typesys.
- * Never imports: the CLI.
+ * Knows about: compile, compose, defaults, diagnostics, events, expr, llm_clients, memory,
+ *              nodes, platform, runtime, skills, tools, typesys.
  */
 
 import { randomUUID } from "node:crypto";

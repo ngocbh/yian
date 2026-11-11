@@ -5,8 +5,7 @@
  * A leaf module, so the stream loop and the effect recorder share it without importing each
  * other.
  *
- * Knows about:   events, llm messages.
- * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
+ * Knows about: events, llm messages.
  */
 
 import type { TokenUsage } from "../../events.ts";

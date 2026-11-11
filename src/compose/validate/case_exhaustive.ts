@@ -30,7 +30,6 @@
  * output-contract sum), `typesys` (`Type` and the strict value check), `compile/output_contracts`,
  * and the compose peers `helpers/errors`, `helpers/tags`, `helpers/yaml_words`,
  * `nodes/case`, `source` and `validate/narrowing`.
- * Never imports: build, the loader, or the runtime; nothing in the engine imports this back.
  */
 
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";

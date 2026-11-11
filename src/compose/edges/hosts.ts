@@ -39,7 +39,6 @@
  * the host, which is the authored node. An unknown data producer gives no gate either.
  *
  * Knows about: the compile model (`Edge`), diagnostics (`reprText`), and descriptors.
- * Never imports: validate, build, the loader, or the runtime.
  */
 
 import { Edge } from "../../compile/model.ts";

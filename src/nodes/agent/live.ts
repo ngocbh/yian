@@ -17,9 +17,8 @@
  * unchanged; provider and tool errors are reported by name only, because their text can contain
  * credentials, then rethrown.
  *
- * Knows about:   diagnostics, events, llm, llm_clients auth, nodes/base, nodes/binding, tools
- *                context, typesys, peer AGENT modules.
- * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
+ * Knows about: diagnostics, events, llm, llm_clients auth, nodes/base, nodes/binding, tools
+ *              context, typesys, peer AGENT modules.
  */
 
 import type { FailureCode } from "../../diagnostics.ts";

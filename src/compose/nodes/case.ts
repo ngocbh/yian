@@ -16,7 +16,8 @@
  *   root in a `when:` is rewritten to its local `__rN`, keeping the steps after it; the `when:`
  *   itself stays lazily evaluated.
  * - `on:` (`on: ${ref}`, `cases: [{when: <value>, then: <t>}]`): one input `__on = ${ref}`; each
- *   `when: <value>` is a literal compared exactly: text becomes `__on == "<value>"`, a number
+ *   `when: <value>` is a literal compared exactly (so a text holding a `${...}` span, which would
+ *   be matched as text, is refused at parse): text becomes `__on == "<value>"`, a number
  *   `__on == <n> and not isinstance(__on, bool)`, a bool `__on == true and isinstance(__on, bool)`.
  *   The `isinstance` guard keeps a bool from equalling a number even when the `on:` type is
  *   unknown.
@@ -32,7 +33,7 @@
 
 import { Edge } from "../../compile/model.ts";
 import { OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
-import type { ExprNode } from "../../expr/grammar.ts";
+import { type ExprNode, wholeSpanInterior } from "../../expr/grammar.ts";
 import {
   bindingCoSkips,
   type ConditionRead,
@@ -53,7 +54,7 @@ import {
 } from "../../nodes/contracts.ts";
 import { NEW_MESSAGES, poolRootLength } from "../../typesys/pool.ts";
 import { typeName } from "../../typesys/types.ts";
-import { isRecord, valueRepr } from "../../typesys/values.ts";
+import { isRecord, shownText, valueRepr } from "../../typesys/values.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { hasSpan } from "../helpers/tags.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
@@ -70,6 +71,9 @@ import {
 } from "./base.ts";
 
 const ON_FIX = "write a reference such as `on: ${input.x}`";
+
+// A plain dotted reference, which reads the same on either side of `==`.
+const PLAIN_REFERENCE = /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/;
 
 /** One authored `cases:` entry as YAML read it: `when:` and `then:` to their values. */
 export type CaseSpec = Readonly<Record<string, unknown>>;
@@ -250,7 +254,8 @@ export class CaseDescriptor extends NodeDescriptor {
    * positional `sequenceFieldRanges` does.
    *
    * @throws LoadError when `cases:` isn't a list of mappings (at the field or the item), a text
-   *   `when:` holds a lone surrogate (at that `when:`), or the template `parse` rejects the body.
+   *   `when:` holds a lone surrogate, or an `on:` case's text `when:` holds a `${...}` span (at that
+   *   `when:`), or the template `parse` rejects the body.
    */
   static override parse<T extends typeof NodeDescriptor>(
     this: T,
@@ -271,6 +276,9 @@ export class CaseDescriptor extends NodeDescriptor {
           whenRanges[index] ?? desc.range,
           diagnostics,
         );
+        if (desc.on !== null && hasSpan(when)) {
+          throw diagnostics.error(onWhenSpanMessage(nodeId, desc.on, when), { range: whenRanges[index] ?? desc.range });
+        }
       }
     });
     const hasElse = cursor.has("else");
@@ -406,6 +414,25 @@ function nodeProducer(ref: string): string | null {
   const parts = ref.split(".");
   if (parts.length < 2 || NON_NODE_HEADS.has(parts[0]!)) return null;
   return parts[1] === "output" || parts[1] === NEW_MESSAGES ? parts[0]! : null;
+}
+
+/**
+ * Return the error for an `on:` case's text `when:` that holds a `${...}` span: the value is a
+ * literal, so the span would be matched as text and never read. When `on:` and the `when:` are
+ * each one plain reference, the message shows the condition that compares them.
+ */
+function onWhenSpanMessage(nodeId: string, on: string, when: string): string {
+  const onRead = wholeSpanInterior(on)?.trim();
+  const whenRead = wholeSpanInterior(when)?.trim();
+  const example =
+    onRead !== undefined && whenRead !== undefined && PLAIN_REFERENCE.test(onRead) && PLAIN_REFERENCE.test(whenRead)
+      ? `, as in \`when: ${onRead} == ${whenRead}\``
+      : "";
+  return (
+    `case node ${reprText(nodeId)}: an on: case's \`when:\` is a literal, so \`when: ${shownText(when)}\` ` +
+    "would match that text itself; to compare with a value, drop `on:` and write each `when:` as a " +
+    `condition${example}`
+  );
 }
 
 /**

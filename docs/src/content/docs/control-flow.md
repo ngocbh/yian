@@ -60,6 +60,7 @@ page the on-call
 | A `when:` is a value of the `on:` type | `when: 1` on an `int`, `when: "1"` on a `str` |
 | Ints and floats compare as numbers | `when: 2` matches `2.0` |
 | A `when:` the `on:` type can't hold is a load error, even with `else:` | `when: true` on an `int`; `when: nogo` on `Literal(go, no_go)` |
+| A `when:` is a literal, so a `${...}` in it is a load error | To compare with `${input.v}`, drop `on:` and write `when: input.k == input.v` |
 
 ### Test conditions
 
@@ -196,7 +197,8 @@ route:
 ```
 
 A condition narrows its branch too: `when: isinstance(decide.output, Buy)` or
-`when: lookup.output != null`.
+`when: lookup.output != null`. A later `on:` case's `when:` that a branch has ruled out never
+matches, so it is a load error: under `log_hold`, `when: buy` on `${decide.output.action}`.
 
 ## Reuse a flow with `defs` and `call`
 

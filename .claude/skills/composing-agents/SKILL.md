@@ -174,8 +174,8 @@ output:
   expression or condition. Tag it where one type is needed: `output: !Turn ${route.output}`.
 - **A `case` whose result is read must be exhaustive**: an `else:`, every tag of a `Literal`
   `on:`, or `when: true` and `when: false` on a `bool`.
-- **`on:` holds a reference** (`on: ${input.kind}`), and each `when:` is a value of its type.
-  Without `on:`, each `when:` is a condition and the first true one wins.
+- **`on:` holds a reference** (`on: ${input.kind}`), and each `when:` is a literal value of its
+  type, never a `${...}`. Without `on:`, each `when:` is a condition and the first true one wins.
 - **Skipped branches spread.** A node that reads a skipped node whole is skipped too; inside
   text the value is empty; with `:-` it runs on the default; a flow output reads null. See
   [When a node is skipped](https://yian.readthedocs.io/flows/#when-a-node-is-skipped).

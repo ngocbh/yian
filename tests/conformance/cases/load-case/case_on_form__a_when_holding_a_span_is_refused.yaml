@@ -1,0 +1,30 @@
+kind: load
+# An on: case's when: is a literal, so a ${...} in it would be matched as text and never read.
+flow: |
+  id: f
+  name: f
+  input:
+    k: !str
+    v: !str
+  nodes:
+    route:
+      kind: case
+      on: ${input.k}
+      cases:
+        - when: a
+          then: one
+        - when: ${input.v}
+          then: two
+      else: other
+    one: !str one
+    two: !str two
+    other: !str other
+  output: ${one.output | two.output | other.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "case node 'route': an on: case's `when:` is a literal, so `when: ${input.v}` would match that text itself; to compare with a value, drop `on:` and write each `when:` as a condition, as in `when: input.k == input.v`"
+      frames:
+      - label: flow.yaml
+        range: [13, 15, 13, 25]

@@ -8,7 +8,7 @@
  */
 
 import { realpathSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, relative, resolve } from "node:path";
 
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
@@ -35,8 +35,9 @@ export function resolveFlowPath(path: string): string {
 
 /**
  * Load the flow at `path` from inside `root`, labelled with its path relative to `root`; its
- * `uses:` children load the same way, each ref only from `<importing file's dir>/<ref>.yaml`.
- * Every `./file.ts:fn` CODE reference must resolve inside `root` too.
+ * `uses:` children load the same way, each ref only from `<ref>.yaml` resolved against the
+ * importing file's real folder, as `yian run` resolves it (an absolute ref as written). Every
+ * `./file.ts:fn` CODE reference must resolve inside `root` too.
  *
  * The loader puts the `uses:` alias frame on a child's `LoadError` and turns anything else a child
  * throws into a `compose.load` error there.
@@ -117,9 +118,11 @@ async function loadConfinedSource(
   const dir = dirname(resolved);
   const importing = new Set([...loading, resolved]);
   const childResolver = async (ref: string, version: string | null): Promise<ComposedFlow> => {
-    const childPath = join(dir, `${ref}.yaml`);
+    // Resolved as the default file resolver resolves it, so an absolute ref is the file `yian run`
+    // loads, not one under `dir`.
+    const childPath = resolveFlowPath(resolve(dir, `${ref}.yaml`));
     // A missing child outside the root is reported as outside, by `loadConfinedSource`.
-    const inside = !leavesRoot(relative(root, resolveFlowPath(childPath)));
+    const inside = !leavesRoot(relative(root, childPath));
     if (inside && !statOrNull(childPath)?.isFile()) {
       throw new Error(`flow ${reprText(ref)} not found: ${relative(root, childPath)}`);
     }

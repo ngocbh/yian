@@ -110,6 +110,58 @@ describe("loadConfined", () => {
     expect(error.diagnostic.message).toContain("pinned lib/child@2");
   });
 
+  test("an absolute uses: ref outside the root is outside the root, even with a decoy at the joined path", async () => {
+    writeFileSync(join(tmp, "evil.yaml"), FLOW);
+    // A flow could ship this copy to pass the check while `yian run` loads the file outside.
+    mkdirSync(join(root, tmp), { recursive: true });
+    writeFileSync(join(root, tmp, "evil.yaml"), FLOW);
+    writeFileSync(join(root, "main.yaml"), parentFlow(join(tmp, "evil")));
+    const error = await loadError(loadConfined(root, join(root, "main.yaml"), new Set(), NO_ENV));
+    expect(error.diagnostic.code).toBe("compose.outside_root");
+    expect(error.diagnostic.message).toBe(`${join("..", "evil.yaml")} is outside the root`);
+  });
+
+  test("an absolute uses: ref to a missing file outside the root is outside the root, not missing", async () => {
+    writeFileSync(join(root, "main.yaml"), parentFlow("/etc/passwd"));
+    const error = await loadError(loadConfined(root, join(root, "main.yaml"), new Set(), NO_ENV));
+    expect(error.diagnostic.code).toBe("compose.outside_root");
+  });
+
+  test("an absolute uses: ref inside the root loads that file, not a copy at the joined path", async () => {
+    writeFileSync(join(root, "lib", "child.yaml"), "id: [broken\n");
+    mkdirSync(join(root, root, "lib"), { recursive: true });
+    writeFileSync(join(root, root, "lib", "child.yaml"), FLOW);
+    writeFileSync(join(root, "main.yaml"), parentFlow(join(root, "lib", "child")));
+    const error = await loadError(loadConfined(root, join(root, "main.yaml"), new Set(), NO_ENV));
+    expect(error.diagnostic.code).toBe("compose.load");
+    expect(error.diagnostic.message).toContain("invalid YAML");
+  });
+
+  test.each([
+    ["a bare ref", () => "lib/child"],
+    ["a ./ ref", () => "./lib/child"],
+    ["a ../ ref", () => "../shared/child"],
+    ["an absolute ref", () => join(root, "shared", "child")],
+  ])("%s loads the child the default loader loads", async (_name, ref) => {
+    const app = join(root, "app");
+    mkdirSync(join(app, "lib"), { recursive: true });
+    mkdirSync(join(root, "shared"), { recursive: true });
+    writeFileSync(join(app, "lib", "child.yaml"), FLOW.replace("name: f", "name: app-lib"));
+    writeFileSync(join(root, "shared", "child.yaml"), FLOW.replace("name: f", "name: shared"));
+    // Where a join would put an absolute ref.
+    mkdirSync(join(app, root, "shared"), { recursive: true });
+    writeFileSync(join(app, root, "shared", "child.yaml"), FLOW.replace("name: f", "name: decoy"));
+    const text = parentFlow(ref());
+    writeFileSync(join(app, "main.yaml"), text);
+    const confined = await loadConfined(root, join(app, "main.yaml"), new Set(), NO_ENV);
+    const options = { searchPaths: [app], baseDir: app, codeRoot: root, sourceLabel: join("app", "main.yaml"), env: NO_ENV };
+    const searched = await loadFlow(text, options);
+    expect(confined.source).toEqual(searched.source);
+    expect(Object.values(confined.source!.files).map((file) => file.text)).not.toContain(
+      FLOW.replace("name: f", "name: decoy"),
+    );
+  });
+
   // Guards against a regression: the default loader also shares one flow per file between importers.
   test("loads a diamond to the flow the default loader loads", async () => {
     writeDiamond(root, 3);

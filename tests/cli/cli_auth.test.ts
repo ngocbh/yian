@@ -266,6 +266,17 @@ describe("configCheck", () => {
     });
   });
 
+  test("text on a terminal shows an error line's control characters; piped, it keeps them", async () => {
+    const key = "\u001b]0;PWNEDTITLE\u0007\u001b[2J\u001b[41mXX";
+    const stdin = JSON.stringify({ provider: "openai", openai: { [key]: 1 } });
+    const tty = await run(configCheck, jsonArgs(false), fakeIo({ stdin, outTty: true }));
+    expect(tty.code).toBe(1);
+    expect(tty.err).not.toContain("\x1b");
+    expect(tty.err).toContain("^[]0;PWNEDTITLE^G^[[2J^[[41mXX");
+    const piped = await run(configCheck, jsonArgs(false), fakeIo({ stdin }));
+    expect(piped.err).toContain(key);
+  });
+
   test("text writes every error line at once", async () => {
     const io = fakeIo({ stdin: '{"provider": "openai", "openai": {"temperature": "hot"}, "x": 1}' });
     const result = await run(configCheck, jsonArgs(false), io);

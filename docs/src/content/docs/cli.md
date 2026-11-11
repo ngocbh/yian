@@ -217,7 +217,11 @@ ends. See [Agents](/agents/) for the file format.
 - Warnings print as `warning: <message>` lines on stderr.
 - Colour is used only on a terminal, and never when `NO_COLOR` is set.
 - On a terminal, escape sequences and control characters other than newlines and tabs
-  are dropped from what prints. Piped or redirected output keeps every byte.
+  are dropped from model, tool and run output. In text from a flow file, a file name or a run log
+  (the banner, a flow's source in an error, paths, run and node ids, `yian config check` lines)
+  they show instead (`^[` for ESC, `^G` for BEL), and BIDI and invisible characters show as their
+  code points (`\u{202e}`). A CODE body's `console` output prints as it is. Piped or redirected
+  output keeps every byte.
 
 A load error shows where the flow broke: the lines around it, the line marked `❱`, and the message
 below. A runtime error points at the line it came from the same way. Add `--engine-trace` only to

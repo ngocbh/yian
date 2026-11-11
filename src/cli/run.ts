@@ -120,6 +120,7 @@ import {
   readFlowText,
 } from "./startup.ts";
 import { cells, columnsOf } from "./cells.ts";
+import { showForTerminal } from "./sanitize.ts";
 import { Terminal, TerminalStopped } from "./terminal.ts";
 import {
   atTerminal,
@@ -195,7 +196,8 @@ function expandTabs(spans: readonly [string, Style | null][]): [string, Style | 
 /**
  * Return the box printed when a run starts: `Running flow: <name>  (version: v)` and
  * `Description: …`, wrapped inside a box no wider than the terminal's columns (80 when unknown),
- * ending in a newline; `null` when the flow has no name, description or version.
+ * ending in a newline; `null` when the flow has no name, description or version. On a terminal
+ * each field shows its control characters (`showForTerminal`), each description line apart.
  */
 export function flowBanner(
   flow: { name: string | null; description: string | null; version: string | null },
@@ -204,14 +206,15 @@ export function flowBanner(
 ): string | null {
   const { name, description, version } = flow;
   if (!(name || description || version)) return null;
+  const shown = (text: string) => showForTerminal(text, out);
   // Each logical line is a list of [text, style] spans, wrapped as one plain text.
-  const head: [string, Style | null][] = [["Running flow: ", "bold"], [name || "(unnamed)", null]];
-  if (version) head.push([`  (version: ${version})`, "dim"]);
+  const head: [string, Style | null][] = [["Running flow: ", "bold"], [name ? shown(name) : "(unnamed)", null]];
+  if (version) head.push([`  (version: ${shown(version)})`, "dim"]);
   const lines = [head];
   if (description) {
     const label = "Description: ";
     splitLines(label + description).forEach((line, i) => {
-      lines.push(i === 0 ? [[label, "bold"], [line.slice(label.length), null]] : [[line, null]]);
+      lines.push(i === 0 ? [[label, "bold"], [shown(line.slice(label.length)), null]] : [[shown(line), null]]);
     });
   }
   // Rich measures the box before it expands tabs, counting a tab as no cells.
@@ -645,9 +648,9 @@ export async function indexRun(log: string, io: CliIo): Promise<void> {
   }
 }
 
-/** Write the run's log path to `out`, even when progress is quiet. */
+/** Write the run's log path to `out`, even when progress is quiet, showing its control characters on a terminal. */
 export async function reportRunLog(path: string, out: Writer, env: Env): Promise<void> {
-  await out.write(`${paint(`Run log: ${path}`, "dim", out, env)}\n`);
+  await out.write(`${paint(`Run log: ${showForTerminal(path, out)}`, "dim", out, env)}\n`);
 }
 
 /**
@@ -1463,8 +1466,8 @@ async function checkFlow(path: string, root: string | undefined, env: Env): Prom
  * With `root`, each flow, its `uses:` imports and its CODE references must be inside that
  * directory, a flow may not set `system.paths`, and its diagnostics are labelled with its path
  * relative to the root. As text, a loaded flow is a `<path>: ok` line on stdout and a failure its
- * `<path>:` line and diagnostic on stderr; with `json`, one document lists every result, each
- * path as given.
+ * `<path>:` line and diagnostic on stderr, each path showing its control characters on a terminal;
+ * with `json`, one document lists every result, each path as given.
  */
 export async function check(
   flows: readonly string[],
@@ -1482,9 +1485,9 @@ export async function check(
   } else {
     for (const result of results) {
       if (result.ok) {
-        await io.stdout.write(`${result.path}: ok\n`);
+        await io.stdout.write(`${showForTerminal(result.path, io.stdout)}: ok\n`);
       } else {
-        await printStyled(io, `${result.path}:`, "red");
+        await printStyled(io, `${showForTerminal(result.path, io.stderr)}:`, "red");
         await renderDiagnostic(result.diagnostic, io.stderr, io.env);
       }
     }
@@ -1497,7 +1500,8 @@ export async function check(
  * it or taking its lock; returns the exit code. Without `log`, list the runs instead (`listRuns`).
  *
  * As text, a `status: <status>` line on stdout, then `in flight: <ids>` and `crashed attempts:
- * <id>=<n>` lines when there are any; with `json`, one document with `status`, `in_flight` (in
+ * <id>=<n>` lines when there are any, each id showing its control characters on a terminal; with
+ * `json`, one document with `status`, `in_flight` (in
  * start order), `crashed_attempts`, and for a waiting run `ready` and `wake_at` (`false` and
  * `null` otherwise). A log that isn't a readable run log (empty, damaged,
  * not a run log, unreadable) prints its message on stderr and exits 1 (`run.setup`).
@@ -1529,10 +1533,11 @@ export async function status(log: string | undefined, { json }: { json: boolean 
     );
     return 0;
   }
+  const shown = (node: string) => showForTerminal(node, io.stdout);
   let text = `status: ${runStatus}\n`;
-  if (inFlight.length > 0) text += `in flight: ${inFlight.join(", ")}\n`;
+  if (inFlight.length > 0) text += `in flight: ${inFlight.map(shown).join(", ")}\n`;
   if (crashedAttempts.size > 0) {
-    const counts = [...crashedAttempts].map(([node, n]) => `${node}=${n}`);
+    const counts = [...crashedAttempts].map(([node, n]) => `${shown(node)}=${n}`);
     text += `crashed attempts: ${counts.join(", ")}\n`;
   }
   await io.stdout.write(text);
@@ -1545,7 +1550,8 @@ export async function status(log: string | undefined, { json }: { json: boolean 
  *
  * As text, a header and one line per run on stdout, in aligned columns: run id, status
  * (`unreadable at seq N` for a log yian can't read from seq N), start time and flow file (`-` for
- * none, or a flow built in code); nothing when there are no runs. With `json`, one document whose
+ * none, or a flow built in code), each cell showing its control characters on a terminal; nothing
+ * when there are no runs. With `json`, one document whose
  * `runs` holds each row: `run_id`, `flow`, `status`, `started_at`, `ended_at`, `parent_run_id`,
  * `memories` (each memory input's `input`, `identity` and `type`, never its location), `last_seq`,
  * `result` (the run's output, `null` until it succeeded), the token sums, for a waiting
@@ -1599,15 +1605,19 @@ async function listRuns({ json }: { json: boolean }, io: CliIo): Promise<number>
   if (rows.length === 0) return 0;
   const table = [
     ["run id", "status", "started", "flow"],
-    ...rows.map((row) => [
-      row.runId,
-      row.unreadable === null ? row.status : `unreadable at seq ${row.unreadable.seq}`,
-      row.startedAt ?? "-",
-      row.flow ?? "-",
-    ]),
+    ...rows.map((row) =>
+      [
+        row.runId,
+        row.unreadable === null ? row.status : `unreadable at seq ${row.unreadable.seq}`,
+        row.startedAt ?? "-",
+        row.flow ?? "-",
+      ].map((cell) => showForTerminal(cell, io.stdout)),
+    ),
   ];
-  const widths = [0, 1, 2].map((column) => Math.max(...table.map((cells) => cells[column]!.length)));
-  const lines = table.map((cells) => cells.map((cell, column) => (column < 3 ? cell.padEnd(widths[column]!) : cell)).join("  "));
+  // Measured as printed, so the columns line up however wide a cell's characters are.
+  const widths = [0, 1, 2].map((column) => Math.max(...table.map((row) => cells(row[column]!))));
+  const pad = (cell: string, column: number) => cell + " ".repeat(widths[column]! - cells(cell));
+  const lines = table.map((row) => row.map((cell, column) => (column < 3 ? pad(cell, column) : cell)).join("  "));
   await io.stdout.write(`${lines.join("\n")}\n`);
   return 0;
 }
@@ -1637,7 +1647,7 @@ type SkillResult =
  * 1 when any fails.
  *
  * As text, each loaded skill is a `<path>: ok (<name>)` line on stdout and each failure its message
- * on stderr; with `json`, one document lists every result, each path as given. Two directories
+ * on stderr, showing their control characters on a terminal; with `json`, one document lists every result, each path as given. Two directories
  * with one skill name are not reported; that is the caller's concern.
  */
 export async function skillsCheck(dirs: readonly string[], { json }: { json: boolean }, io: CliIo): Promise<number> {
@@ -1655,8 +1665,8 @@ export async function skillsCheck(dirs: readonly string[], { json }: { json: boo
   } else {
     for (const result of results) {
       // The message already names the path.
-      if (result.ok) await io.stdout.write(`${result.path}: ok (${result.name})\n`);
-      else await io.stderr.write(`${result.error.message}\n`);
+      if (result.ok) await io.stdout.write(`${showForTerminal(`${result.path}: ok (${result.name})`, io.stdout)}\n`);
+      else await io.stderr.write(`${showForTerminal(result.error.message, io.stderr)}\n`);
     }
   }
   return results.every((result) => result.ok) ? 0 : 1;

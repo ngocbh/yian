@@ -11,6 +11,7 @@
 import type { Env } from "../defaults.ts";
 import type { Diagnostic } from "../diagnostics.ts";
 import { cells, wrapLine } from "./cells.ts";
+import { showForTerminal } from "./sanitize.ts";
 import { type CliIo, forTerminal, type Writer } from "./utils.ts";
 
 const SGR = { bold: 1, dim: 2, italic: 3, red: 31, green: 32, yellow: 33, cyan: 36 } as const;
@@ -119,7 +120,9 @@ const ERR_CONTEXT = 5;
  * Return one boxed source frame, or `null` when no line of `marks` is in `text`.
  *
  * The box shows the source from 5 lines above the first mark to 5 below the last, numbered, each
- * marked line flagged `❱`, and is titled `title:line[,line...]`.
+ * marked line flagged `❱`, and is titled `title:line[,line...]`. On a TTY the lines and the title
+ * show their control characters (`showForTerminal`), split into lines first so the numbers stay
+ * right, and the box is sized to what prints.
  */
 function renderFrameBox(text: string, marks: readonly number[], title: string, out: Writer, env: Env): string | null {
   const lines = splitLines(text);
@@ -132,10 +135,10 @@ function renderFrameBox(text: string, marks: readonly number[], title: string, o
   for (let line = start; line <= end; line++) {
     const marked = shown.includes(line);
     const gutter = `${marked ? "❱" : " "} ${String(line).padStart(width)} `;
-    const code = lines[line - 1]!;
+    const code = showForTerminal(lines[line - 1]!, out);
     rows.push([gutter + code, paint(gutter, marked ? "red bold" : "dim", out, env) + code]);
   }
-  return box(rows, "red", out, env, `${title}:${shown.join(",")}`);
+  return box(rows, "red", out, env, `${showForTerminal(title, out)}:${shown.join(",")}`);
 }
 
 /**
@@ -143,15 +146,16 @@ function renderFrameBox(text: string, marks: readonly number[], title: string, o
  *
  * A frame is boxed around the lines its range covers (`SourceRange.coveredLines`), or shown as
  * its label when none is in its text; its note follows it. Several frames are headed `source
- * locations:`. A diagnostic without frames prints only its message. On a TTY the message and notes,
- * which can carry provider or tool text, go through `forTerminal`.
+ * locations:`. A diagnostic without frames prints only its message. On a TTY a frame's source and
+ * label, which a flow file or its name supplies, show their control characters; the message and
+ * notes, which can carry provider or tool text, go through `forTerminal`.
  */
 export async function renderDiagnostic(diag: Diagnostic, out: Writer, env: Env): Promise<void> {
   const parts: string[] = [];
   if (diag.frames.length > 1) parts.push(paint("source locations:", "red bold", out, env));
   for (const frame of diag.frames) {
     const framed = renderFrameBox(frame.text, frame.range.coveredLines(frame.text), frame.label, out, env);
-    parts.push(framed ?? paint(frame.label, "red bold", out, env));
+    parts.push(framed ?? paint(showForTerminal(frame.label, out), "red bold", out, env));
     if (frame.note !== null) parts.push(paint(`  ↳ ${forTerminal(frame.note, out)}`, "yellow", out, env));
   }
   parts.push(paint(forTerminal(diag.message, out), "red", out, env));

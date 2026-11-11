@@ -350,7 +350,7 @@ describe("levels and chains", () => {
     R: { a: "int", b: "list(str)", c: "Optional(E)" },
     S: { k: "Literal(s)", r: "R" },
     U: "Union(R, S)",
-    W: { u: "U", t: "topics", d: "dict(str, int)", o: "object", v: "V" },
+    W: { u: "U", t: "list(str)", d: "dict(str, int)", o: "object", v: "V" },
     L: "list(list(W))",
     M: { l: "Optional(L)", b: "B", e: "list(E)" },
   };

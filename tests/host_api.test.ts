@@ -50,6 +50,7 @@ import {
 } from "../src/run.ts";
 import { PoolCommitRecord, readRunLog, RunCancelledRecord } from "../src/runtime/log.ts";
 import { pending } from "../src/tools/context.ts";
+import type { AskRequest } from "../src/tools/registry.ts";
 import { FunctionTool } from "../src/tools/function_tools.ts";
 import { inboxType, Type, TypeCheckError, ValueKind } from "../src/typesys/values.ts";
 import { gateTool, handClock } from "./helpers/inbox_fixtures.ts";
@@ -218,12 +219,57 @@ test("pendingCalls lists an open ask; complete answers it and it leaves the list
   const { log, flow, tools, callId } = await waitingAsk();
   const pendingSeq = readRunLog(log).findIndex((envelope) => envelope.kind === "node_step");
   expect(pendingCalls(log)).toEqual([
-    { callId, node: "ask", tool: "ask", arguments: { prompt: "Ship?" }, pendingSeq, deadline: null },
+    {
+      callId,
+      node: "ask",
+      tool: "ask",
+      arguments: { prompt: "Ship?" },
+      pendingSeq,
+      deadline: null,
+      ask: { question: "Ship?", questions: null, answerSchema: null, title: null },
+    },
   ]);
   const seq = await complete(log, callId, { output: "yes" }, { env, flow });
   expect(readRunLog(log)[seq!]!.kind).toBe("node_step");
   expect(pendingCalls(log)).toEqual([]);
   expect((await advance({ log, flow, tools, env })).output).toBe("yes");
+});
+
+test("pendingCalls gives an ask's question as its handler got it, so a restarted host shows the same card", async () => {
+  const flow = await yian.loadFlow(`
+id: f
+name: f
+nodes:
+  pick:
+    kind: tool
+    tool_id: ask
+    node_name: Pick a plan
+    input:
+      questions:
+        - question: Which plan?
+          header: plan
+          options: [{label: basic}, {label: pro, description: more seats}]
+        - question: Why?
+          header: why
+    output:
+      plan: str
+      why: str
+output: \${pick.output}
+`);
+  const log = freshLog();
+  let seen: AskRequest | undefined;
+  const ask = (request: AskRequest) => {
+    seen = request;
+    return pending();
+  };
+  expect((await runFlow(flow, {}, { log, env, tools: { ask } })).status).toBe("waiting");
+  const { question, questions, answerSchema, title } = seen!;
+  expect([questions?.length, answerSchema?.length, title]).toEqual([2, 2, "Pick a plan"]);
+  // A host restarted mid-question has only the log.
+  const [call] = pendingCalls(log);
+  expect(call!.ask).toEqual({ question, questions, answerSchema, title });
+  // The calls cancel closes are listed the same way.
+  expect((await cancel(log, { env }))[0]!.ask).toEqual(call!.ask);
 });
 
 test("an identical repeat complete is a no-op; a different one is call_settled", async () => {

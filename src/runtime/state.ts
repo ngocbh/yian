@@ -3760,6 +3760,9 @@ function validatePendingStep(state: RunState, nodeId: string, step: Readonly<Jso
     requirePendingDeadline(step);
   }
   if (!isRecord(step["arguments"])) throw new RangeError("pending arguments must be an object");
+  if (Object.hasOwn(step, "request") && (tool !== ASK || !isRecord(step["request"]))) {
+    throw new RangeError("only an ask's pending step holds a request, its question as an object");
+  }
   requireNewPendingCall(state, callId, step);
 }
 

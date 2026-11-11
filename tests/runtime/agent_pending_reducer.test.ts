@@ -267,7 +267,7 @@ test("pendingCalls reads an agent call's arguments from its reply", () => {
   const seq = step(log, state, "a", pendingOf("a", 1, 1, "c2", "lookup"));
   log.close();
   expect(pendingCalls(path)).toEqual([
-    { callId: agentCall("a", 1, 1), node: "a", tool: "lookup", arguments: { x: 1n }, pendingSeq: seq, deadline: null },
+    { callId: agentCall("a", 1, 1), node: "a", tool: "lookup", arguments: { x: 1n }, pendingSeq: seq, deadline: null, ask: null },
   ]);
 });
 

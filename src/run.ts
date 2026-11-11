@@ -188,7 +188,7 @@ import {
   type ToolGrant,
   visibleToolName,
 } from "./tools/grants.ts";
-import { RESERVED_TOOL_NAMES, type ToolEntry, type ToolRef, ToolSet } from "./tools/registry.ts";
+import { type AskRequest, RESERVED_TOOL_NAMES, type ToolEntry, type ToolRef, ToolSet } from "./tools/registry.ts";
 import { toolTypes } from "./tools/types.ts";
 import { type JsonObject, logJson } from "./typesys/json.ts";
 import { VariablePool } from "./typesys/pool.ts";
@@ -2150,7 +2150,15 @@ export interface PendingCall {
   readonly pendingSeq: number;
   /** When it times out, as a record time, or `null` when it doesn't. */
   readonly deadline: string | null;
+  /**
+   * For a TOOL `ask`, its question as its ask handler got it, so a host can show the same card
+   * again after a restart; `null` for any other call.
+   */
+  readonly ask: AskQuestion | null;
 }
+
+/** The question of a TOOL `ask`: these fields of the `AskRequest` its handler got. */
+export type AskQuestion = Pick<AskRequest, "question" | "questions" | "answerSchema" | "title">;
 
 /**
  * List the open host calls (not takes or sleeps) of the run at `log`, in the order they were made,
@@ -2166,8 +2174,9 @@ export interface PendingCall {
  */
 export function pendingCalls(log: string, options: { maxLineBytes?: number | null } = {}): readonly PendingCall[] {
   const waits = new WaitsState();
-  // Each unsettled call's recorded arguments; a settled node's calls leave the fold, so theirs go.
-  const args = new Map<string, JsonObject | null>();
+  // Each unsettled call's recorded arguments and question; a settled node's calls leave the fold,
+  // so theirs go.
+  const args = new Map<string, { arguments: JsonObject | null; ask: AskQuestion | null }>();
   // Each running node's step count and latest `model_call` step with its number: an agent call's
   // `reply` must name that step, so the earlier ones needn't be kept.
   const nodes = new Map<string, { count: number; replyN: number; reply: Readonly<JsonObject> | undefined }>();
@@ -2189,7 +2198,7 @@ export function pendingCalls(log: string, options: { maxLineBytes?: number | nul
         node.reply = step;
       } else if (step["kind"] === "pending") {
         const replyAt = (n: number) => (n === node.replyN ? node.reply : undefined);
-        args.set(String(step["call_id"]), pendingArguments(replyAt, step));
+        args.set(String(step["call_id"]), { arguments: pendingArguments(replyAt, step), ask: askQuestion(step) });
       }
     } else {
       const settled = settledNodeId(record);
@@ -2199,7 +2208,7 @@ export function pendingCalls(log: string, options: { maxLineBytes?: number | nul
     }
   }
   if (first) throw new RangeError(`cannot read an empty run log: ${log}`);
-  return openHostCalls(waits, (call) => args.get(call.callId) ?? null);
+  return openHostCalls(waits, (call) => args.get(call.callId) ?? { arguments: null, ask: null });
 }
 
 /**
@@ -2213,15 +2222,18 @@ function settledNodeId(record: RunRecord): string | null {
   return null;
 }
 
-/** The open host calls of `waits`, in registration order, with the arguments `argumentsOf` reads. */
-function openHostCalls(waits: WaitsState, argumentsOf: (call: Call) => JsonObject | null): PendingCall[] {
+/** The open host calls of `waits`, in registration order, with the arguments and question `recorded` reads. */
+function openHostCalls(
+  waits: WaitsState,
+  recorded: (call: Call) => { arguments: JsonObject | null; ask: AskQuestion | null },
+): PendingCall[] {
   return [...waits.calls.values()]
     .filter((call) => call.state === "open" && call.pendingSeq !== null && call.tool !== TAKE && call.tool !== SLEEP)
     .map((call) => ({
       callId: call.callId,
       node: call.nodeId,
       tool: call.tool,
-      arguments: argumentsOf(call),
+      ...recorded(call),
       pendingSeq: call.pendingSeq!,
       deadline: call.deadline,
     }));
@@ -2229,12 +2241,35 @@ function openHostCalls(waits: WaitsState, argumentsOf: (call: Call) => JsonObjec
 
 /**
  * The arguments of `call`'s `pending` step among its node's steps in `state` (for an agent's call,
- * those of its reply's tool call), or `null`.
+ * those of its reply's tool call), or `null`, and the question it recorded.
  */
-function stateArguments(state: RunState, call: Call): JsonObject | null {
+function stateArguments(state: RunState, call: Call): { arguments: JsonObject | null; ask: AskQuestion | null } {
   const steps = state.nodeSteps.get(call.nodeId) ?? [];
   const step = call.pendingSeq === null ? undefined : steps[stepIndexAt(state, call.nodeId, call.pendingSeq)];
-  return step === undefined ? null : pendingArguments((n) => steps[n - 1], step);
+  if (step === undefined) return { arguments: null, ask: null };
+  return { arguments: pendingArguments((n) => steps[n - 1], step), ask: askQuestion(step) };
+}
+
+/**
+ * The question a TOOL `ask`'s `pending` step recorded, in `AskRequest`'s form (each question's
+ * `multi_select` as `multiSelect`); `null` for any other step.
+ */
+function askQuestion(step: Readonly<JsonObject>): AskQuestion | null {
+  const request = step["request"];
+  if (step["tool"] !== ASK || !isRecord(request)) return null;
+  const questions = request["questions"];
+  const answerSchema = request["answer_schema"];
+  return {
+    question: String(request["question"]),
+    questions: Array.isArray(questions)
+      ? questions.map((spec) => {
+          const { multi_select: multiSelect, ...rest } = spec as JsonObject;
+          return { ...rest, multiSelect };
+        })
+      : null,
+    answerSchema: Array.isArray(answerSchema) ? [...answerSchema] : null,
+    title: typeof request["title"] === "string" ? request["title"] : null,
+  };
 }
 
 /**

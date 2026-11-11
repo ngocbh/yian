@@ -27,7 +27,7 @@ import {
 } from "../../src/llm/messages.ts";
 import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
 import { Route } from "../../src/llm/route.ts";
-import { MissingToolCallError, StructuredOutputError } from "../../src/llm/structured.ts";
+import { MissingToolCallError, StructuredOutputError, structuredTarget } from "../../src/llm/structured.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
 import {
   generateStructured,
@@ -350,7 +350,7 @@ describe("TS-only", () => {
       const record = (step: ValueRecord) => recorded.push(step);
       const steps = new AgentSteps(new NodeSteps(1, [], record), () => 0, null, (error) => error, "agent");
       await generateStructured(model, [], INT, { retries, steps });
-      const { requests, digestOk } = rebuildStructuredRequests(model, [], INT, recorded);
+      const { requests, digestOk } = rebuildStructuredRequests(structuredTarget(model), [], INT, recorded);
       // Each step's rebuilt request is the one the model received.
       expect(requests.map(({ request }) => requestSha256(request!))).toEqual(model.requests.map(requestSha256));
       return digestOk;
@@ -366,7 +366,7 @@ describe("TS-only", () => {
       await generateStructured(model, [], INT, { retries: 0, steps });
       // The cut keeps the reply received so far, which the node never output.
       const cut = recorded.map((step) => ({ ...step, finish: "interrupted" }));
-      const rebuilt = rebuildStructuredRequests(model, [], INT, cut);
+      const rebuilt = rebuildStructuredRequests(structuredTarget(model), [], INT, cut);
       expect(rebuilt.digestOk).toBe(true);
       expect(rebuilt.requests).toHaveLength(1);
     }

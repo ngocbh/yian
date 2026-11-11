@@ -379,7 +379,7 @@ export interface RebuiltRequests {
 export interface RebuiltRequest {
   /**
    * The request as the call sent it; `null` when it can't be rebuilt (a tool the recorded specs
-   * lack, a structured model that can't be built).
+   * lack, a structured model whose settings can't be read).
    */
   readonly request: Request | null;
   /** Whether the step recorded the purpose and the `request_sha256` of the rebuilt request. */
@@ -401,7 +401,10 @@ export interface RebuildCaps {
     loadSkill: ToolSpec | null,
     local?: ReadonlyMap<string, readonly LocalToolSpec[]>,
   ) => readonly ToolSpec[] | null;
-  /** Builds the invocation's model to read its request settings off; never called. */
+  /**
+   * Gives the invocation's structured target (`ModelAccess.structuredTarget`), or builds its model
+   * to read it off; the model is never called.
+   */
   readonly models: ModelAccess | null;
   /** The declared type of each of the node's locals, as `NodeCaps.localTypes` gives it. */
   readonly localTypes?: ReadonlyMap<string, Type | null>;

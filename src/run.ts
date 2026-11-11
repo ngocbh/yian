@@ -2706,9 +2706,10 @@ export function agentCalls(log: string, options: { maxLineBytes?: number | null 
  * attempts and usage are read from the steps as recorded.
  *
  * A rebuilt request is checked against each attempt's purpose and `request_sha256`: a mismatch
- * returns it with `digestMismatch: true` rather than throwing. A request that can't be rebuilt (a
- * structured call whose model can't be built, a granted tool the recorded specs lack) is `null`,
- * with `digestMismatch: false`.
+ * returns it with `digestMismatch: true` rather than throwing. A structured call's request needs
+ * no credential: the default model access reads its settings off the recorded config. A request
+ * that can't be rebuilt (a structured call whose model settings can't be read, a granted tool the
+ * recorded specs lack) is `null`, with `digestMismatch: false`.
  *
  * @param log The JSONL run log.
  * @param call `nodeId` and the `n` of any attempt of the call, such as an `agentCalls` entry.

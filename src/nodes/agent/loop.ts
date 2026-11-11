@@ -105,6 +105,7 @@ import {
   unparsedText,
 } from "./results.ts";
 import { foldSteps, type SteerRender, steerMessages, steerValues } from "./messages.ts";
+import type { StructuredTarget } from "../../llm/structured.ts";
 import { generateStructured, rebuildStructuredRequests, typeToSchema } from "./structured.ts";
 
 /**
@@ -392,8 +393,8 @@ function steerReads(steps: AgentSteps, inbox: SteerInbox | undefined): (readonly
  * @param steps The invocation's steps across its starts.
  * @param options `messages` are the system message and the prompt's messages; `tools` the specs
  *   every chat request carries, `null` when they can't be rebuilt (no chat request then matches);
- *   `structured` builds the model the structured calls read their plan off and gives the output
- *   type, or `null` when it can't (no structured request then matches); `renderSteer` is the
+ *   `structured` gives what the structured calls read their plan off (`structuredTarget`) and the
+ *   output type, or `null` when it can't (no structured request then matches); `renderSteer` is the
  *   agent's steer render, which steer steps render through as the live loop did.
  * @returns Each `model_call` step's rebuilt request, by its index in `steps` (a step after a reply
  *   that failed the node, or after a steer step without its values, has none; with no `tools` or
@@ -404,7 +405,7 @@ export async function rebuildStepRequests(
   options: {
     messages: readonly Message[];
     tools: readonly ToolSpec[] | null;
-    structured: () => Promise<{ model: ChatModel; typ: Type } | null>;
+    structured: () => Promise<{ target: StructuredTarget; typ: Type } | null>;
     renderSteer?: SteerRender | null;
   },
 ): Promise<RebuiltRequests> {
@@ -436,7 +437,7 @@ export async function rebuildStepRequests(
           return { requests, digestOk: false };
         }
         const rebuilt = rebuildStructuredRequests(
-          structured.model,
+          structured.target,
           messages,
           structured.typ,
           rest.map((later) => later.step),

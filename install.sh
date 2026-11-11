@@ -49,6 +49,19 @@ quote() {
   printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
 }
 
+# Refuses the path $2, which $1 names, unless it's absolute and holds no newline: a relative folder
+# on PATH would run whatever the current folder holds, and a newline would break the lines written.
+check_path() {
+  case $2 in
+    /*) ;;
+    *) die "$1 must be an absolute path, not '$2'." ;;
+  esac
+  case $2 in
+    *"
+"*) die "$1 must not hold a newline." ;;
+  esac
+}
+
 usage() {
   cat <<'EOF'
 Usage: install.sh [options]
@@ -66,6 +79,7 @@ EOF
 }
 
 parse_args() {
+  check_path HOME "${HOME:-}"
   INSTALL_DIR=${YIAN_INSTALL_DIR:-$HOME/.local/share/yian}
   REPO_URL=${YIAN_REPO_URL:-$DEFAULT_REPO}
   BRANCH=main
@@ -91,10 +105,7 @@ parse_args() {
       *) die "Unknown option $1. Run with --help to list the options." ;;
     esac
   done
-  case $INSTALL_DIR in
-    /*) ;;
-    *) INSTALL_DIR=$(pwd -P)/$INSTALL_DIR ;;
-  esac
+  check_path "--dir or YIAN_INSTALL_DIR" "$INSTALL_DIR"
 }
 
 # Sets ROOT to the checkout this script is in, or leaves it empty when the script was piped.
@@ -108,7 +119,10 @@ find_checkout() {
   esac
   [ -f "$0" ] || return 0
   here=$(cd "$(dirname "$0")" && pwd -P)
-  if [ -f "$here/src/cli/bin.ts" ]; then ROOT=$here; fi
+  if [ -f "$here/src/cli/bin.ts" ]; then
+    check_path "The checkout's path" "$here"
+    ROOT=$here
+  fi
 }
 
 check_prerequisites() {
@@ -124,6 +138,7 @@ check_prerequisites() {
 # Refuses, before anything is installed, to replace a `yian` that install.sh didn't write.
 check_target() {
   BIN_DIR=${YIAN_BIN_DIR:-$HOME/.local/bin}
+  check_path YIAN_BIN_DIR "$BIN_DIR"
   TARGET=$BIN_DIR/yian
   if [ -e "$TARGET" ] && ! LC_ALL=C grep -a -q -x -F -e "$WRAPPER_MARK" "$TARGET" 2>/dev/null; then
     die "$TARGET exists and was not written by install.sh. Move it away, or set YIAN_BIN_DIR."
@@ -156,6 +171,26 @@ check_clone() {
   CLONE=update
 }
 
+# Prints the first bun in a PATH folder that is absolute and isn't the current folder. Either kind
+# would make whatever project this runs in supply the Bun the wrapper keeps.
+bun_on_path() {
+  cwd=$(pwd -P)
+  rest=$PATH:
+  while [ -n "$rest" ]; do
+    entry=${rest%%:*}
+    rest=${rest#*:}
+    case $entry in
+      /*) ;;
+      *) continue ;;
+    esac
+    [ -f "$entry/bun" ] && [ -x "$entry/bun" ] || continue
+    [ "$(cd "$entry" && pwd -P)" != "$cwd" ] || continue
+    printf '%s\n' "$entry/bun"
+    return 0
+  done
+  return 1
+}
+
 # Sets BUN to an absolute path to Bun 1.4 or later, and BUN_VERSION to its version: YIAN_BUN, then
 # bun on PATH, then Bun's own install folder, where Bun's installer puts it when none is found.
 find_bun() {
@@ -163,8 +198,8 @@ find_bun() {
   if [ -n "${YIAN_BUN:-}" ]; then
     BUN=$YIAN_BUN
     [ -x "$BUN" ] || die "YIAN_BUN=$BUN is not an executable file."
-  elif command -v bun >/dev/null 2>&1; then
-    BUN=$(command -v bun)
+  elif BUN=$(bun_on_path); then
+    :
   elif [ -x "$BUN_HOME/bin/bun" ]; then
     BUN=$BUN_HOME/bin/bun
   else

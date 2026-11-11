@@ -59,7 +59,21 @@ size() {
   wc -c <"$1" | tr -d ' '
 }
 
+# Refuses the path $2, which $1 names, unless it's absolute and holds no newline: a relative folder
+# on PATH would run whatever the current folder holds, and a newline would break the lines written.
+check_path() {
+  case $2 in
+    /*) ;;
+    *) die "$1 must be an absolute path, not '$2'." ;;
+  esac
+  case $2 in
+    *"
+"*) die "$1 must not hold a newline." ;;
+  esac
+}
+
 parse_args() {
+  check_path HOME "${HOME:-}"
   INSTALL_DIR=${YIAN_INSTALL_DIR:-$HOME/.local/share/yian}
   while [ $# -gt 0 ]; do
     case $1 in
@@ -75,14 +89,13 @@ parse_args() {
       *) die "Unknown option $1. Run with --help to list the options." ;;
     esac
   done
-  case $INSTALL_DIR in
-    /*) ;;
-    *) INSTALL_DIR=$(pwd -P)/$INSTALL_DIR ;;
-  esac
+  check_path "--dir or YIAN_INSTALL_DIR" "$INSTALL_DIR"
+  BIN_DIR=${YIAN_BIN_DIR:-$HOME/.local/bin}
+  check_path YIAN_BIN_DIR "$BIN_DIR"
 }
 
 remove_wrapper() {
-  target=${YIAN_BIN_DIR:-$HOME/.local/bin}/yian
+  target=$BIN_DIR/yian
   [ -e "$target" ] || return 0
   if LC_ALL=C grep -a -q -x -F -e "$WRAPPER_MARK" "$target" 2>/dev/null; then
     rm -f "$target"
@@ -126,9 +139,8 @@ strip_path_lines() {
 }
 
 remove_path_lines() {
-  bin_dir=${YIAN_BIN_DIR:-$HOME/.local/bin}
-  SH_LINE=$(sh_path_line "$bin_dir")
-  FISH_LINE=$(fish_path_line "$bin_dir")
+  SH_LINE=$(sh_path_line "$BIN_DIR")
+  FISH_LINE=$(fish_path_line "$BIN_DIR")
   zdir=${ZDOTDIR:-$HOME}
   for rc in "$HOME/.bashrc" "$HOME/.profile" "$HOME/.bash_profile" "$HOME/.bash_login" \
     "$zdir/.zshrc" "$zdir/.zprofile" "${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"; do

@@ -248,6 +248,22 @@ describe.if(process.versions.bun !== undefined)("install.sh", () => {
     expect(existsSync(fx.clone)).toBe(false);
   });
 
+  test("refuses a checkout whose path holds a newline", () => {
+    const fx = fixture();
+    const checkout = join(fx.base, "co\nx");
+    mkdirSync(join(checkout, "src", "cli"), { recursive: true });
+    writeFileSync(join(checkout, "src", "cli", "bin.ts"), "");
+    copyFileSync(join(ROOT, "install.sh"), join(checkout, "install.sh"));
+    const result = spawnSync("sh", [join(checkout, "install.sh")], {
+      env: { HOME: fx.home, SHELL: "/bin/bash", PATH: `${fx.stubs}:/usr/bin:/bin` },
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("The checkout's path must not hold a newline");
+    expect(calls(fx)).toBe("");
+  });
+
   test("refuses a Bun older than 1.4 and names its version", () => {
     const { home, bin } = setup();
     const oldBun = join(home, "old-bun");
@@ -354,6 +370,57 @@ describe.if(process.versions.bun !== undefined)("install.sh, piped", () => {
     expect(readFileSync(join(fx.bin, "yian"), "utf8")).toContain("echo mine");
     expect(existsSync(fx.clone)).toBe(false);
     expect(calls(fx)).toBe("");
+  });
+
+  const RELATIVE: Record<string, [string[], Record<string, string>]> = {
+    "--dir": [["--dir", "yian"], {}],
+    YIAN_INSTALL_DIR: [[], { YIAN_INSTALL_DIR: "yian" }],
+    YIAN_BIN_DIR: [[], { YIAN_BIN_DIR: "bin" }],
+  };
+  for (const [name, [args, env]] of Object.entries(RELATIVE)) {
+    test(`refuses a relative ${name} before it installs anything`, () => {
+      const fx = fixture();
+      const result = pipe("install.sh", fx, ["--repo", fx.remote, ...args], env);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("must be an absolute path");
+      expect(calls(fx)).toBe("");
+      expect(readdirSync(fx.home)).toEqual([]);
+    });
+  }
+
+  test("refuses a folder whose path holds a newline", () => {
+    const fx = fixture();
+    for (const [args, env] of [
+      [["--dir", join(fx.base, "a\nb")], {}],
+      [[], { YIAN_BIN_DIR: join(fx.base, "a\nb") }],
+    ] as const) {
+      const result = pipe("install.sh", fx, ["--repo", fx.remote, ...args], env);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("must not hold a newline");
+    }
+    expect(calls(fx)).toBe("");
+  });
+
+  test("refuses an empty HOME", () => {
+    const fx = fixture();
+    const result = pipe("install.sh", fx, ["--repo", fx.remote], { HOME: "" });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("HOME must be an absolute path");
+    expect(calls(fx)).toBe("");
+  });
+
+  test("never takes a bun from a relative PATH entry or the current folder", () => {
+    const fx = fixture();
+    const project = join(fx.base, "project");
+    mkdirSync(project);
+    copyFileSync(fx.stubBun, join(project, "bun"));
+    chmodSync(join(project, "bun"), 0o755);
+    const result = pipe("install.sh", fx, ["--repo", fx.remote], { PATH: `.:${project}:${fx.stubs}:/usr/bin:/bin` }, project);
+    expect(result.stderr).not.toContain("✗");
+    expect(result.status).toBe(0);
+    const wrapper = readFileSync(join(fx.bin, "yian"), "utf8");
+    expect(wrapper).toContain(`'${join(fx.stubs, "bun")}'`);
+    expect(wrapper).not.toContain(project);
   });
 
   test("installs Bun with Bun's installer when it finds none", () => {
@@ -598,6 +665,18 @@ describe.if(process.versions.bun !== undefined)("uninstall.sh", () => {
       expect(existsSync(join(fx.bin, "yian"))).toBe(false);
     });
   }
+
+  test("refuses a relative --dir or YIAN_BIN_DIR, and removes nothing", () => {
+    const fx = fixture();
+    install(fx);
+    for (const [args, env] of [[["--dir", "yian"], {}], [[], { YIAN_BIN_DIR: "bin" }]] as const) {
+      const result = pipe("uninstall.sh", fx, [...args], env);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("must be an absolute path");
+    }
+    expect(existsSync(join(fx.bin, "yian"))).toBe(true);
+    expect(existsSync(fx.clone)).toBe(true);
+  });
 
   test("keeps a clone install.sh didn't make", () => {
     const fx = fixture();

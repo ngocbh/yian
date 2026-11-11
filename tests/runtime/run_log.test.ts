@@ -700,6 +700,76 @@ describe("decoding a value line", () => {
   });
 });
 
+// The spies read `parseJson` through its module, which only Bun lets a test replace.
+describe.if(process.versions.bun !== undefined)("resume from a known prefix", () => {
+  /** A closed log at `dir/run.jsonl` of `n` records, and the prefix a host kept of it as it closed. */
+  function knownLog(n = 4) {
+    const file = path.join(dir, "run.jsonl");
+    const log = JsonlRunLog.create(file, "run", { clock: CLOCK });
+    for (let i = 0; i < n; i++) log.append(new NodeStartedRecord(`node${i}`));
+    const records = log.records();
+    const stat = fs.statSync(file, { bigint: true });
+    log.close();
+    const known = { first: records[0]!, lastSeq: n - 1, size: stat.size, dev: stat.dev, ino: stat.ino, mtimeNs: stat.mtimeNs };
+    return { file, records, known };
+  }
+
+  test("a file that is still the known prefix reopens without being read; its records decode when read", () => {
+    const { file, records, known } = knownLog();
+    const parse = spyOn(json, "parseJson");
+    const read = spyOn(fs, "readFileSync");
+    let log: JsonlRunLog | undefined;
+    try {
+      log = JsonlRunLog.resume(file, { clock: CLOCK, known });
+      expect([parse.mock.calls.length, read.mock.calls.length]).toEqual([0, 0]);
+      expect([log.nextSequence, log.first()]).toEqual([4, records[0]]);
+      log.append(new NodeStartedRecord("next"));
+      expect(nodeIds(log)).toEqual(["node0", "node1", "node2", "node3", "next"]);
+    } finally {
+      parse.mockRestore();
+      read.mockRestore();
+      log?.close();
+    }
+    expect(nodeIds(readRunLog(file))).toEqual(["node0", "node1", "node2", "node3", "next"]);
+  });
+
+  test.each([
+    ["another writer appended", (file: string) => {
+      const other = JsonlRunLog.resume(file, { clock: CLOCK });
+      other.append(new NodeStartedRecord("other"));
+      other.close();
+    }],
+    ["it was replaced by a copy", (file: string) => {
+      fs.copyFileSync(file, `${file}.copy`);
+      fs.renameSync(`${file}.copy`, file);
+    }],
+    ["it was cut by a line", (file: string) => {
+      const text = fs.readFileSync(file, "utf8");
+      fs.writeFileSync(file, text.slice(0, text.lastIndexOf("\n", text.length - 2) + 1));
+    }],
+    ["it was rewritten at the same size", (file: string) => {
+      const bytes = fs.readFileSync(file);
+      const later = new Date(Date.now() + 5000);
+      fs.writeFileSync(file, bytes);
+      fs.utimesSync(file, later, later);
+    }],
+  ])("a file that changed since (%s) is read in full, as without a known prefix", (_name, change) => {
+    const { file, known } = knownLog();
+    change(file);
+    const expected = nodeIds(readRunLog(file));
+    const parse = spyOn(json, "parseJson");
+    let log: JsonlRunLog | undefined;
+    try {
+      log = JsonlRunLog.resume(file, { clock: CLOCK, known });
+      expect(parse.mock.calls.length).toBe(expected.length);
+      expect([nodeIds(log), log.nextSequence]).toEqual([expected, expected.length]);
+    } finally {
+      parse.mockRestore();
+      log?.close();
+    }
+  });
+});
+
 test("readRunLog reads the complete prefix without the lock", () => {
   const file = path.join(dir, "run.jsonl");
   fs.writeFileSync(file, `${wireLine()}\n${wireLine({ seq: 1, nodeId: "next" })}\n`);

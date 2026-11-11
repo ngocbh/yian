@@ -381,12 +381,15 @@ interface IdleRun {
   readonly hostFlow: ComposedFlow | null;
   readonly apiKey: string | null;
   readonly headers: Readonly<Record<string, string>> | null;
+  /** The log's first record, its `run_started`, so a call that reuses the entry needn't read it. */
+  readonly first: RecordEnvelope;
   /** The seq of the log's last record when the run was left. */
   readonly lastSeq: number;
-  /** The log file's size, device and inode when the run was left. */
+  /** The log file's size, device, inode and mtime (ns) when the run was left. */
   readonly size: bigint;
   readonly dev: bigint;
   readonly ino: bigint;
+  readonly mtimeNs: bigint;
 }
 
 /**
@@ -456,13 +459,14 @@ export class RunBusyError extends Error {
 }
 
 /**
- * Open the log at `locator` under its lock.
+ * Open the log at `locator` under its lock; while the file is the one `idle` left, without reading
+ * it.
  *
  * @throws RunBusyError when another writer holds the lock; the log's other open errors.
  */
-function openLog(locator: string, clock: () => number): JsonlRunLog {
+function openLog(locator: string, clock: () => number, idle: IdleRun | null): JsonlRunLog {
   try {
-    return JsonlRunLog.resume(locator, { clock });
+    return JsonlRunLog.resume(locator, { clock, known: idle });
   } catch (error) {
     const cause = (error as Error | null)?.cause;
     if (cause instanceof FileLockError && cause.reason === "busy") throw new RunBusyError(locator, { cause });
@@ -530,7 +534,9 @@ function reusable(
   if (idle === null) return null;
   const stat = statSync(key, { bigint: true });
   if (idle.state.runId !== authority.runId || idle.lastSeq !== authority.nextSequence - 1) return null;
-  if (idle.size !== stat.size || idle.dev !== stat.dev || idle.ino !== stat.ino) return null;
+  if (idle.size !== stat.size || idle.dev !== stat.dev || idle.ino !== stat.ino || idle.mtimeNs !== stat.mtimeNs) {
+    return null;
+  }
   if (idle.hostFlow !== want.hostFlow) return null;
   const credentials = want.credentials;
   if (
@@ -562,10 +568,12 @@ function idleRun(
     state,
     flow,
     ...keep,
+    first: authority.first()!,
     lastSeq: authority.nextSequence - 1,
     size: stat.size,
     dev: stat.dev,
     ino: stat.ino,
+    mtimeNs: stat.mtimeNs,
   };
 }
 
@@ -1581,9 +1589,9 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
     let primary: { error: unknown } | null = null;
     let keep: () => IdleRun | null = () => null;
     try {
-      authority = openLog(locator, clock);
+      authority = openLog(locator, clock, runHold.idle);
       const opened = authority;
-      const start = startRecord(authority[Symbol.iterator]().next().value);
+      const start = startRecord(authority.first());
       // Values like AGENT_RETRIES change the loaded flow, so they are checked before it loads.
       checkRecorded(start.defaults);
       checkCodeRoot(log, start, root);
@@ -1913,9 +1921,9 @@ async function deliverTo(
     let appended = false;
     try {
       // A delivery carries no deadline, so its record time is the wall clock's.
-      authority = openLog(locator, () => Date.now());
+      authority = openLog(locator, () => Date.now(), runHold.idle);
       const opened = authority;
-      const start = startRecord(authority[Symbol.iterator]().next().value);
+      const start = startRecord(authority.first());
       checkRecorded(start.defaults);
       const want = given === null ? { hostFlow } : { hostFlow, credentials: given };
       const kept = reusable(runHold.idle, authority, key, want);

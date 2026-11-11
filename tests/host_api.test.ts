@@ -13,8 +13,10 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,6 +54,7 @@ import { JsonlRunLog, PoolCommitRecord, readRunLog, RunCancelledRecord } from ".
 import { pending } from "../src/tools/context.ts";
 import type { AskRequest } from "../src/tools/registry.ts";
 import { FunctionTool } from "../src/tools/function_tools.ts";
+import * as json from "../src/typesys/json.ts";
 import { inboxType, Type, TypeCheckError, ValueKind } from "../src/typesys/values.ts";
 import { gateTool, handClock } from "./helpers/inbox_fixtures.ts";
 import { wordEmbed } from "./helpers/memory_fakes.ts";
@@ -218,6 +221,60 @@ test("a close failure after a refused or no-op delivery is not a warning: nothin
   } finally {
     again.mockRestore();
   }
+});
+
+/** A flow that counts the notes it takes one at a time, waiting on its inbox between them. */
+const COLLECT = `
+id: collect
+name: collect
+input:
+  notes: !Inbox(str)
+nodes:
+  gather:
+    kind: loop
+    input: {notes: "\${input.notes}", count: 0, closed: false}
+    while: not closed
+    nodes:
+      heard:
+        kind: tool
+        tool_id: take
+        input: {from: "\${input.notes}", take: one}
+    output:
+      count: \${input.count + len(heard.output.events)}
+      closed: \${heard.output.closed}
+output: \${gather.output.count}
+`;
+
+/** The characters `parseJson` reads while `call` runs. */
+async function parsedDuring(call: () => Promise<unknown>): Promise<number> {
+  const parse = spyOn(json, "parseJson");
+  try {
+    await call();
+    return parse.mock.calls.reduce((total, [text]) => total + text.length, 0);
+  } finally {
+    parse.mockRestore();
+  }
+}
+
+// `parsedDuring` spies on `parseJson` through its module, which only Bun lets a test replace.
+test.if(process.versions.bun !== undefined)("a warm send and advance on a waiting run read none of the records it already holds", async () => {
+  const log = freshLog();
+  expect((await runFlow(await yian.loadFlow(COLLECT), {}, { log, env })).status).toBe("waiting");
+  for (let i = 0; i < 40; i++) {
+    await send(log, "notes", `note ${i}`, { env });
+    await advance({ log, env });
+  }
+  const size = statSync(log).size;
+  // Each call parses what it appends, a few times over, but none of the log before it.
+  expect(await parsedDuring(() => send(log, "notes", "one more", { env }))).toBeLessThan(size / 10);
+  expect(await parsedDuring(() => advance({ log, env }))).toBeLessThan(size / 10);
+  // A rewrite that keeps the size but moves the mtime is read again, and gives the same state.
+  const later = new Date(Date.now() + 5000);
+  writeFileSync(log, readFileSync(log));
+  utimesSync(log, later, later);
+  expect(await parsedDuring(() => send(log, "notes", "after", { env }))).toBeGreaterThan(size);
+  await close(log, "notes", { env });
+  expect((await advance({ log, env })).output).toBe(42n);
 });
 
 /** Expect `call` to reject with `DeliveryRefused` for `reason` and leave the file at `log` unchanged; return the error. */

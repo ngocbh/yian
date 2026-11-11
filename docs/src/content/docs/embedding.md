@@ -171,7 +171,8 @@ started without one.
 
 Only one writer holds a log at a time. A call on a log another process holds, or an `advance` of a
 run your process is already moving, rejects with `RunBusyError`. While a run waits, its process
-keeps the run's state in memory, so the next call on the same log skips the replay.
+keeps the run's state in memory, so the next call on the same log skips the replay. While the
+file is the one it left (same size, inode and modification time), the call doesn't read it either.
 
 ## Events
 

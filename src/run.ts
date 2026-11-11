@@ -113,6 +113,7 @@ import {
   type StepExchange,
 } from "./nodes/agent/messages.ts";
 import { staticPathOf } from "./nodes/ids.ts";
+import { FLOW_SCOPE_LABEL } from "./nodes/agent/flow_tools.ts";
 import { typeToSchema } from "./nodes/agent/structured.ts";
 import { type CompleteResult, type LocalToolSpec, type Node, NodeKind, type RebuildCaps } from "./nodes/base.ts";
 import { applyDefaults, BindingError, checkInputNames, coerceInputs, copyValue } from "./nodes/binding.ts";
@@ -191,6 +192,7 @@ import {
   type GrantedTool,
   type GrantScope,
   localGroupScope,
+  localToolScope,
   reachedGroups,
   requestToolSpecs,
   type ToolGrant,
@@ -1242,9 +1244,9 @@ async function startRun(
     runServers = await openRunServers(unopened, signal);
     const runTools = new ToolSet(tools, { context });
     const hostTypes = memoryTypeTools(flow.memoryTypes);
-    refuseFlowTools(flow.compiled);
     checkToolGrants(flow.compiled, runTools);
     checkMemoryGrantNames(flow.compiled, runTools, hostTypes);
+    checkFlowGrantNames(flow.compiled, runTools);
     checkToolTypes(flow.compiled, runTools);
 
     // Identity belongs to the authored program, before cascade resolution or any per-run copy can
@@ -1704,6 +1706,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       const hostTypes = memoryTypeTools(flow.memoryTypes);
       checkToolGrants(flow.compiled, runTools);
       checkMemoryGrantNames(flow.compiled, runTools, hostTypes);
+      checkFlowGrantNames(flow.compiled, runTools);
       checkToolTypes(flow.compiled, runTools);
       checkRecordedSpecs("tools", start.tools, recordedTools(flow.compiled, runTools));
       checkRecordedToolGroups(start.toolGroups, recordedToolGroups(flow.compiled, runTools));
@@ -2313,13 +2316,16 @@ function settledNodeId(record: RunRecord): string | null {
   return null;
 }
 
-/** The open host calls of `waits`, in registration order, with the arguments and question `recorded` reads. */
+/**
+ * The open host calls of `waits`, in registration order, with the arguments and question
+ * `recorded` reads; a flow call is the run's to answer, so it is left out.
+ */
 function openHostCalls(
   waits: WaitsState,
   recorded: (call: Call) => { arguments: JsonObject | null; ask: AskQuestion | null },
 ): PendingCall[] {
   return [...waits.calls.values()]
-    .filter((call) => call.state === "open" && call.pendingSeq !== null && call.tool !== TAKE && call.tool !== SLEEP)
+    .filter((call) => call.state === "open" && call.pendingSeq !== null && call.tool !== TAKE && call.tool !== SLEEP && !call.flow)
     .map((call) => ({
       callId: call.callId,
       node: call.nodeId,
@@ -2980,10 +2986,17 @@ function recordedGrants(state: RunState): Pick<RebuildCaps, "skills" | "toolSpec
     grants: readonly ToolGrant[],
     loadSkill: ToolSpec | null,
     local: ReadonlyMap<string, readonly LocalToolSpec[]> = new Map(),
+    localTools: readonly LocalToolSpec[] = [],
   ) => {
-    // The node's own groups come first, as `ToolSet.withLocalGroups` puts them live.
+    // The node's own groups, then its own tools, come first, as `ToolSet.withLocalGroups` and
+    // `withLocalTools` put them live.
     const names = new Map([...local].map(([group, specs]) => [group, specs.map((spec) => spec.name)]));
-    const scopes = local.size === 0 ? [scope] : [localGroupScope(MEMORY_SCOPE_LABEL, names), scope];
+    const own = new Map(localTools.map((spec) => [spec.name, spec]));
+    const scopes = [
+      ...(local.size === 0 ? [] : [localGroupScope(MEMORY_SCOPE_LABEL, names)]),
+      ...(own.size === 0 ? [] : [localToolScope(FLOW_SCOPE_LABEL, new Set(own.keys()))]),
+      scope,
+    ];
     let granted: GrantedTool[];
     try {
       granted = expandGrants(grants, scopes);
@@ -2993,7 +3006,8 @@ function recordedGrants(state: RunState): Pick<RebuildCaps, "skills" | "toolSpec
     }
     const specOf = (tool: GrantedTool) => {
       if (tool.scope < scopes.length - 1) {
-        const { name, description, parameters } = local.get(tool.group!)!.find((spec) => spec.name === tool.tool)!;
+        const { name, description, parameters } =
+          tool.group === null ? own.get(tool.tool)! : local.get(tool.group)!.find((spec) => spec.name === tool.tool)!;
         return new ToolSpec({ name, description, parameters });
       }
       if (!Object.hasOwn(state.recordedTools, tool.key)) return null;
@@ -3254,17 +3268,23 @@ function checkMemoryGrantNames(
 }
 
 /**
- * Refuse a flow whose agents grant flows as tools, which this yian loads but doesn't run yet.
+ * Refuse a flow an agent grants under the name of a host tool or tool group of the run, before any
+ * record is written: the grant would mean two tools. Every static node is checked, child flows'
+ * included.
  *
- * @throws RangeError naming the first such node and flow.
+ * @throws RangeError naming the node, the flow and the fix.
  */
-function refuseFlowTools(flow: CompiledFlow): void {
-  for (const [path, node] of staticNodes(flow)) {
-    const [granted] = node.originChildSegments().filter((segment) => segment !== null);
-    if (granted === undefined) continue;
-    throw new RangeError(
-      `${node.kind.toUpperCase()} node ${reprText(path)} grants flow ${reprText(granted)} as a tool; flows as tools don't run yet`,
-    );
+function checkFlowGrantNames(flow: CompiledFlow, tools: ToolSet): void {
+  const scope = tools.scope();
+  for (const [nodeId, node] of staticNodes(flow)) {
+    for (const name of node.originChildSegments()) {
+      if (name === null) continue;
+      const host = scope.group(name) !== null ? "a tool group" : scope.hasTool(name) ? "a tool" : null;
+      if (host === null) continue;
+      throw new RangeError(
+        `${node.kind.toUpperCase()} node ${reprText(nodeId)}: \`${name}\` is both a flow it grants and ${host} of this run; rename one`,
+      );
+    }
   }
 }
 

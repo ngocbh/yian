@@ -82,6 +82,7 @@ import {
   RequestDigest,
   sentCredentials,
 } from "./context.ts";
+import { isFlowCall } from "./flow_tools.ts";
 import { Interrupted, ReplyInterrupted } from "./interrupts.ts";
 import {
   CAPPED_TOOL_ERROR,
@@ -682,6 +683,15 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
       turn.pended.set(index, callId);
       continue;
     }
+    // A flow call its scope answered: the agent records the answer the run shaped for it.
+    if (view?.state === "answered" && view.result !== null) {
+      const output = view.result["output"] as string;
+      const isError = view.result["is_error"] === true;
+      const written = steps.toolResult({ callId: call.id, startedAt: null, output, isError });
+      if (laterPending === null) reached = written;
+      pushToolMessage(turn, call, output, isError);
+      continue;
+    }
     if (ran === null && !joins(check.safe) && by !== null && !mayHaveRun(call, by)) return skipFrom(turn, index);
     if (view === undefined && check.planned.resumable) {
       await resendCall(turn, check.planned);
@@ -922,6 +932,19 @@ async function runGroup(
   const settle = (planned: PlannedCall, startedAt: number | null, value: unknown, reported: boolean): ToolOutcome => {
     const { call, index, callId, deadline } = planned;
     try {
+      // A flow call pends without a host: the run grows the flow's scope and answers it, so it
+      // needs no durable log.
+      if (!reported && isFlowCall(value)) {
+        if (callId === undefined || turn.ctx.steps === undefined) {
+          throw new AgentLoopError(`agent node ${reprText(turn.ctx.nodeId)}: flow tool ${reprText(call.name)} runs only in a run`);
+        }
+        if (!signal?.aborted) {
+          const flowArguments = value.arguments;
+          turn.steps.pending({ callId, tool: call.name, toolCallId: call.id, reply: turn.n, index, deadline, flowArguments });
+          turn.pended.set(index, callId);
+        }
+        return { pending: callId };
+      }
       if (!reported && isPending(value)) {
         if (callId === undefined || turn.ctx.steps === undefined || !turn.ctx.steps.durable) {
           throw new AgentLoopError(

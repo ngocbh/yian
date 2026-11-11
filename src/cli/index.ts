@@ -17,10 +17,11 @@
 
 import { spawn } from "node:child_process";
 import { createWriteStream, writeSync } from "node:fs";
+import type { Socket } from "node:net";
 import { constants } from "node:os";
 
 import { DefaultsError, read, withEnv } from "../defaults.ts";
-import { compiled, VERSION, withWarnings } from "../platform.ts";
+import { compiled, onPipeEnd, VERSION, withWarnings } from "../platform.ts";
 import { showForTerminal } from "./sanitize.ts";
 import {
   type CliIo,
@@ -746,7 +747,8 @@ function isRunJson(args: readonly string[]): boolean {
 
 /**
  * Run `args` in a child of this runtime marked `JSON_CHILD`, whose fd 1 is this process's fd 2,
- * copy its fd 3 to stdout, and exit as it did.
+ * copy its fd 3 to stdout, and exit as it did. The child's fd 4 is a pipe this process holds open
+ * and never writes to, so its end tells the child this process died without forwarding a stop.
  *
  * The first SIGINT, SIGTERM or SIGHUP is forwarded as SIGUSR2 (except on Windows), a signal no
  * terminal sends, so a group Ctrl-C (which the child gets too) and the forwarded stop are one
@@ -774,7 +776,9 @@ async function runJsonParent(args: readonly string[]): Promise<never> {
   // On before the spawn, so a stop during it isn't the default action; it reaches the child after.
   for (const name of signals) process.on(name, onStop);
   const command = childCommand(args, compiled);
-  const child = spawn(process.execPath, command, { stdio: ["inherit", 2, "inherit", "pipe"] });
+  const child = spawn(process.execPath, command, { stdio: ["inherit", 2, "inherit", "pipe", "pipe"] });
+  // A process the run started may hold the lifeline's other end; the child's exit is its end.
+  child.once("exit", () => (child.stdio[LIFELINE_FD] as Socket | null)?.destroy());
   child.on("error", (error) => {
     // Once started, only a failed `kill` errors, and the run goes on.
     if (child.pid !== undefined) return;
@@ -805,13 +809,26 @@ async function runJsonParent(args: readonly string[]): Promise<never> {
   process.exit(128 + constants.signals[signal!]);
 }
 
+/** The `run --json` child's descriptor whose end means the parent died. */
+const LIFELINE_FD = 4;
+/** How long the child of a dead parent waits for its run to stop before it exits anyway. */
+const ORPHAN_EXIT_MS = 5000;
+
 /**
  * Run `args` as the `run --json` child: `main` with `stdout` writing to fd 3, and `CliIo.stop`
- * aborted with a `HostStop("SIGINT")` by the SIGUSR2 the parent forwards. Return the exit code.
+ * aborted with a `HostStop("SIGINT")` by the SIGUSR2 the parent forwards, or by the end of fd 4
+ * when the parent died without forwarding one (SIGKILL, say). Then, as a second signal would, a
+ * run that hasn't stopped within `ORPHAN_EXIT_MS` is ended by exiting. Return the exit code.
  */
 async function runJsonChild(args: readonly string[]): Promise<number> {
   // First, so a stop during start-up is kept until `run` links it.
-  const stop = abortOnSignal("SIGUSR2", new HostStop("SIGINT"));
+  const forwarded = abortOnSignal("SIGUSR2", new HostStop("SIGINT"));
+  const orphaned = new AbortController();
+  onPipeEnd(LIFELINE_FD, () => {
+    orphaned.abort(new HostStop("SIGINT"));
+    setTimeout(() => process.exit(130), ORPHAN_EXIT_MS).unref();
+  });
+  const stop = AbortSignal.any([forwarded, orphaned.signal]);
   const stdout = streamWriter(createWriteStream("", { fd: 3 }));
   const io: CliIo = { ...processIo(), stdout, stop };
   const code = await main(args, io);

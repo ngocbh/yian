@@ -41,7 +41,7 @@ flowchart LR
 | `typesys/` | Typed values, the type language, the variable pool, the JSON codec, and the plain shapes a memory value records (`memory.ts`) |
 | `diagnostics.ts` | Failures, diagnostics and the closed list of failure codes (`FAILURE_CODES`) |
 | `events.ts` | The observer events a run emits |
-| `defaults.ts` | Every default and limit, each overridable by a `YIAN_*` variable |
+| `defaults.ts` | Every default and limit, each overridable by a `YIAN_*` variable; an internal wait no one needs to tune, such as the 1 s the CLI waits for the run index's lock, stays in its module |
 | `llm/` | Provider-neutral messages, wire protocols, the HTTP transport and structured output |
 | `llm_clients/` | `LLMConfig`, provider blocks, connections and saved logins, the model catalog |
 | `tools/` | The tool registry, the context a tool gets, MCP tools, the `pending` marker, and tool grants (`grants.ts`): parsing `tools:`, the `<group>_<tool>` names a model sees, and their expansion |

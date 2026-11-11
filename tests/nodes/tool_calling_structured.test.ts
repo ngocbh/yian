@@ -24,7 +24,7 @@ beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
 
 const NATIVE = { provider: "openai", model: "gpt-5.5" };
-const PROMPTED = { provider: "vllm", model: "no-structured-sentinel" };
+const PROMPTED = { provider: "vllm", model: "m", structuredOutput: "prompt" as const };
 const INT = Type.scalar(ValueKind.INTEGER);
 const SENTIMENT = new Type({ kind: ValueKind.STRING, tags: new Set(["positive", "neutral", "negative"]) });
 

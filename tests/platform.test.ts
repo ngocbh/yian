@@ -26,6 +26,7 @@ import {
   isSystemError,
   leavesRoot,
   lockFile,
+  onPipeEnd,
   openFilePath,
   openSqlite,
   realScheduler,
@@ -843,6 +844,23 @@ describe("syncFolder", () => {
     const close = spyOn(fs, "closeSync");
     expect(thrown(() => syncFolder(dir))).toBe(failure);
     expect(close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("onPipeEnd", () => {
+  test("leaves a descriptor that is a file, or isn't open, alone", async () => {
+    const file = path.join(dir, "plain.txt");
+    fs.writeFileSync(file, "text");
+    const fd = fs.openSync(file, "r");
+    const ended: number[] = [];
+    try {
+      onPipeEnd(fd, () => ended.push(fd));
+    } finally {
+      fs.closeSync(fd);
+    }
+    onPipeEnd(fd, () => ended.push(fd));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(ended).toEqual([]);
   });
 });
 

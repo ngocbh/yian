@@ -67,6 +67,11 @@ host:
             - type: text
               text: q
           - format: yian.message.v1
+            role: assistant
+            parts:
+            - type: text
+              text: '{"value": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": "leaf"}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}'
+          - format: yian.message.v1
             role: user
             parts:
             - type: text
@@ -145,7 +150,7 @@ expect:
           - {text: '{"value": {"k": 1}}', type: text}
           role: assistant
         purpose: structured_native
-        request_sha256: fc5b00dc58cfed8063b9372b7107a818e985a0fcf4756b3c3c90294ed8002d5c
+        request_sha256: edd276070269823c95927f2e17987094c210dad6aa526382a9b29d2e1efa80d8
         response_id: null
         usage: null
   - - pool_commit

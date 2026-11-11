@@ -16,7 +16,7 @@
  *
  * Knows about: compile/model (types), compile/declared_types (the declared types reads go
  *              through), compile/output_contracts (a binding's lone reference, to name an
- *              authored root), diagnostics, expr grammar and lineage, llm_clients (types), nodes,
+ *              authored root), diagnostics, expr grammar, llm_clients (types), nodes,
  *              platform, runtime sources, skills, tools, typesys.
  */
 
@@ -25,7 +25,6 @@ import { directReferenceParts, loneSpanTree } from "../compile/output_contracts.
 import { Tree } from "../expr/grammar.ts";
 import type { CompiledFlow, Flow } from "../compile/model.ts";
 import { Failure, type FailureCode, type OriginRef, reprText } from "../diagnostics.ts";
-import { ResolvedValue, ValueRoute } from "../expr/lineage.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import {
   AssertionStageError,
@@ -47,8 +46,6 @@ import {
 } from "../nodes/base.ts";
 import {
   applyDefaults,
-  BindingCapture,
-  BindingCollector,
   BindingError,
   bindParams,
   type ReservedBinder,
@@ -192,19 +189,13 @@ function steerInboxCapability(
 export type WorkerOutcome = Output | Route | Grow | Pending | EvaluationFailure;
 
 /**
- * One raw worker outcome with what its evaluation captured. Frozen.
- *
- * `bindings` holds the inputs the node was bound to and the routes evaluated while binding them,
- * or `null` when the evaluation captured none. It isn't accepted history until the dispatcher
- * records this outcome.
+ * One raw worker outcome, which isn't accepted history until the dispatcher records it. Frozen.
  */
 export class EvaluatedOutcome {
   readonly outcome: WorkerOutcome;
-  readonly bindings: BindingCapture | null;
 
-  constructor(outcome: WorkerOutcome, bindings: BindingCapture | null = null) {
+  constructor(outcome: WorkerOutcome) {
     this.outcome = outcome;
-    this.bindings = bindings;
     Object.freeze(this);
   }
 }
@@ -226,6 +217,8 @@ export interface EvalNodeOptions {
   random?: (() => number) | null;
   /** The run's folder, where the run's files go; every node gets it as `caps.runDir`. */
   runDir?: string | null;
+  /** Takes the lines the node's code prints; every node gets it as `caps.console`. */
+  console?: NodeCaps["console"] | null;
   /**
    * The transient stream sink a node declaring `needsLiveEvents` receives; closed, dropping what
    * it gets, once the outcome is decided.
@@ -233,11 +226,9 @@ export interface EvalNodeOptions {
   emitStream?: NodeCaps["emitStream"] | null;
   /** The transient model and tool call observer sink, received and closed as `emitStream` is. */
   emitEvent?: NodeCaps["emitEvent"] | null;
-  /** Whether to retain the bound input values and their routes. */
-  captureBindings?: boolean;
   /** The run's host-supplied skills, delivered only to a node declaring `needsSkills`. */
   skills?: ReadonlyMap<string, Skill> | null;
-  /** The paired value and source lookup used while capturing bindings. */
+  /** Reads each reference root the node's binding reads, in place of the pool. */
   sourceResolver?: SourceResolver | null;
   /** The run's tool set, delivered only to a node declaring `needsTools`. */
   tools?: ToolSet | null;
@@ -275,13 +266,11 @@ export interface EvalNodeOptions {
  * @param node The node to evaluate.
  * @param flow The flow whose wiring holds the node's sources; `null` is empty wiring.
  * @param pool The pool the sources read.
- * @param options The capabilities and captures; see `EvalNodeOptions`.
- * @returns The outcome, with captures when asked for.
+ * @param options The capabilities; see `EvalNodeOptions`.
+ * @returns The outcome.
  * @throws The original error of the first capability fault (a failing stream or event sink, a
  *   `CapabilityFault` from `steps.record` or the steer inbox), whatever the node then returned or
  *   threw.
- * @throws TypeError, RangeError or the hook's own error when capturing bindings and the input
- *   inventory fails; the body hasn't run.
  * @throws The signal's reason when the signal is already aborted, before binding, or when the node
  *   rejects after it aborted.
  * @throws RangeError when a node reading its steps fails to bind its reserved keys after an earlier
@@ -299,7 +288,6 @@ export async function evalNode(
     wiringOverride = null,
     emitStream = null,
     emitEvent = null,
-    captureBindings = false,
     skills = null,
     sourceResolver = null,
     tools = null,
@@ -311,24 +299,17 @@ export async function evalNode(
     scheduler = null,
     random = null,
     runDir = null,
+    console = null,
   } = options;
   const signal = options.signal ?? new AbortController().signal;
   signal.throwIfAborted();
-  const collector = captureBindings ? new BindingCollector() : null;
-
-  /** Snapshot the completed inputs before the body can change them. */
-  const captureInputs = (inputs: Record<string, unknown>): void => {
-    collector!.finish(inputs as ValueRecord);
-  };
-
   const outcome = await evaluateNode(node, flow, pool, {
     wiringOverride,
     signal,
     scheduler,
     random,
     runDir,
-    collector,
-    captureInputs: captureBindings ? captureInputs : null,
+    console,
     sourceResolver,
     emitStream,
     emitEvent,
@@ -340,7 +321,7 @@ export async function evalNode(
     steerInbox,
     onFault,
   });
-  return new EvaluatedOutcome(outcome, collector?.freeze() ?? null);
+  return new EvaluatedOutcome(outcome);
 }
 
 /** Bind and run one node, resolving to one normalized result. */
@@ -354,10 +335,7 @@ async function evaluateNode(
     scheduler: Scheduler | null;
     random: (() => number) | null;
     runDir: string | null;
-    /** Retains the bound values and routes, when capturing bindings. */
-    collector: BindingCollector | null;
-    /** Receives the completed input record before the body runs, when capturing bindings. */
-    captureInputs: ((inputs: Record<string, unknown>) => void) | null;
+    console: NonNullable<NodeCaps["console"]> | null;
     sourceResolver: SourceResolver | null;
     emitStream: NonNullable<NodeCaps["emitStream"]> | null;
     emitEvent: NonNullable<NodeCaps["emitEvent"]> | null;
@@ -371,15 +349,15 @@ async function evaluateNode(
     onFault: ((original: unknown) => void) | null;
   },
 ): Promise<WorkerOutcome> {
-  const { wiringOverride, signal, collector, captureInputs, sourceResolver } = context;
+  const { wiringOverride, signal, sourceResolver } = context;
   const { emitStream, emitEvent, skills, tools, memories, models, steps, steerInbox, scheduler, random, runDir } = context;
+  const { console } = context;
   // The flow owns every source. A missing trait-declared reserved key is a malformed compiled
   // graph and deliberately escapes the expected binder catch.
   const nodeWiring = wiringFor(node, flow, wiringOverride);
   let bound: BoundNode;
   try {
     bound = bindNode(node, flow, nodeWiring, pool, {
-      collector,
       sourceResolver,
       bindReserved: (bind) => {
         try {
@@ -399,7 +377,6 @@ async function evaluateNode(
     });
   } catch (error) {
     if (!(error instanceof BindingError)) throw error;
-    collector?.invalidate();
     return withAuthoredRoots(evaluationFailure(node, error.failureCode, error, error.origin), nodeWiring);
   }
   const { record } = bound;
@@ -413,7 +390,7 @@ async function evaluateNode(
     context.onFault?.(fault.original);
   };
 
-  // Every node gets its signal and the given scheduler, random draw and run folder; the rest are
+  // Every node gets its signal and the given scheduler, random draw, run folder and console; the rest are
   // node-owned and trait-gated. The deferred per-item binder throws the same binder-owned marker
   // from inside the body, and the classification below keeps it.
   const caps: { -readonly [K in keyof NodeCaps]: NodeCaps[K] } = { signal };
@@ -421,16 +398,14 @@ async function evaluateNode(
   if (scheduler !== null) caps.scheduler = scheduler;
   if (random !== null) caps.random = random;
   if (runDir !== null) caps.runDir = runDir;
+  if (console !== null) caps.console = console;
   const { bindItem } = bound;
   if (bindItem !== null) {
     caps.bindItem = (element, index) => {
       try {
         return bindItem(element, index);
       } catch (error) {
-        if (error instanceof BindingError) {
-          collector?.invalidate();
-          throw new BindingStageError(error);
-        }
+        if (error instanceof BindingError) throw new BindingStageError(error);
         throw new DeferredBindingFault(error);
       }
     };
@@ -480,7 +455,7 @@ async function evaluateNode(
   let result: unknown;
   let rejection: { error: unknown } | null = null;
   try {
-    result = await node.runForEvaluator(record, caps, captureInputs);
+    result = await node.runForEvaluator(record, caps);
   } catch (error) {
     rejection = { error };
   }
@@ -491,10 +466,7 @@ async function evaluateNode(
   if (faults.first !== null) throw faults.first.original;
   if (rejection !== null && signal.aborted) throw signal.reason;
   if (rejection !== null) {
-    const { error } = rejection;
-    // A template default that fails to bind leaves no usable input record.
-    if (error instanceof BindingStageError) collector?.invalidate();
-    return withAuthoredRoots(stageFailure(node, error), nodeWiring);
+    return withAuthoredRoots(stageFailure(node, rejection.error), nodeWiring);
   }
   const contractError = resultContractError(node, result);
   if (contractError !== null) return evaluationFailure(node, "contract.node_result", contractError);
@@ -583,7 +555,7 @@ export function bindStarted(
 /** `bindFrom`'s binding over a built `pool`. */
 function bindPool(node: Node, flow: Flow, pool: VariablePool, wiringOverride: JsonObject | null): Rebound {
   const nodeWiring = wiringFor(node, flow, wiringOverride);
-  const { record, bindItem } = bindNode(node, flow, nodeWiring, pool, { collector: null, sourceResolver: null });
+  const { record, bindItem } = bindNode(node, flow, nodeWiring, pool, { sourceResolver: null });
   const inputs = applyDefaults(node.params ?? [], record);
   const caps: { -readonly [K in keyof NodeCaps]: NodeCaps[K] } = {
     signal: new AbortController().signal,
@@ -609,12 +581,12 @@ interface BoundNode {
 /**
  * Bind `node`'s params and reserved values from `pool` through `wiring`: the one binding both the
  * evaluator and the run reducer's rebuild run, so a rebuilt value is the one the evaluator bound.
- * With a `collector`, each route is collected too; a reserved value its hook made without the
- * binder gets a literal route. Defaults aren't filled and the capture isn't finished.
+ * With a `sourceResolver`, every reference root, the reserved values' included, is read through
+ * it. Defaults aren't filled.
  *
  * @param flow The flow whose declared types the reads go through; `null` declares none.
- * @param options.bindReserved Gives the reserved values from the binder (`null` when not
- *   collecting) in place of `node.bindReserved(wiring, pool, { bind })`.
+ * @param options.bindReserved Gives the reserved values from the binder (`null` without a
+ *   `sourceResolver`) in place of `node.bindReserved(wiring, pool, { bind })`.
  * @returns The record, and a per-item binder that throws what binding an item throws.
  * @throws BindingError when a source doesn't evaluate, and what the reserved hook throws.
  */
@@ -624,12 +596,11 @@ function bindNode(
   wiring: ReadonlyMap<string, unknown>,
   pool: VariablePool,
   options: {
-    collector: BindingCollector | null;
     sourceResolver: SourceResolver | null;
     bindReserved?: ((bind: ReservedBinder | null) => Record<string, unknown>) | null;
   },
 ): BoundNode {
-  const { collector, sourceResolver, bindReserved = null } = options;
+  const { sourceResolver, bindReserved = null } = options;
   const params = node.params ?? [];
   // The declared types field reads go through: a declared field that is absent reads null.
   const declared = flow !== null ? poolDeclaredTypes(flow) : null;
@@ -637,31 +608,17 @@ function bindNode(
   const bindOptions = { sourceResolver, types: node.types, labels: node.bindingLabels, declared };
   const record = node.bindsPerItem
     ? {}
-    : bindParams(params, wiring, pool, { ...bindOptions, collector, finishCapture: false });
-  const reservedSources = new Set<string>();
+    : bindParams(params, wiring, pool, bindOptions);
+  // A source resolver reads each reserved value too, so a derived node's commit names it.
   const binder: ReservedBinder | null =
-    collector === null
+    sourceResolver === null
       ? null
-      : (name, source, normalize) => {
-          // Retain the route of the value the node delivers, after its normalization.
-          const value = normalize(resolveSource(source, pool, { collector, name, sourceResolver }));
-          reservedSources.add(name);
-          return value;
-        };
+      : (name, source, normalize) => normalize(resolveSource(source, pool, { name, sourceResolver }));
   const reserved = bindReserved !== null ? bindReserved(binder) : node.bindReserved(wiring, pool, { bind: binder });
-  for (const name of Object.keys(reserved)) {
-    const value = reserved[name] as Value;
-    setField(record, name, value);
-    if (collector !== null && !reservedSources.has(name)) collector.recordSource(name, ValueRoute.literal(value), false);
-  }
+  for (const name of Object.keys(reserved)) setField(record, name, reserved[name] as Value);
   if (!node.bindsPerItem) return { record, bindItem: null };
-  const bindItem = (element: Value, index: number): ValueRecord => {
-    if (collector === null) return bindParams(params, wiring, pool, { ...bindOptions, item: element, itemType });
-    const itemCollector = collector.forItem(index);
-    const key = node.itemSourceKey;
-    const item = new ResolvedValue(element, true, key !== null ? collector.routeFor(key).project([index]) : null);
-    return bindParams(params, wiring, pool, { ...bindOptions, item, itemType, collector: itemCollector });
-  };
+  const bindItem = (element: Value): ValueRecord =>
+    bindParams(params, wiring, pool, { ...bindOptions, item: element, itemType });
   return { record, bindItem };
 }
 

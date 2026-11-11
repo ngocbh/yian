@@ -1,6 +1,6 @@
-# An interrupt delivered once `chat`'s final reply (no tool calls) has been taken is recorded
-# (`interrupted {inbox, nodes: [chat]}`) but cuts nothing: the answer is whole, so `chat`
-# succeeds with "chat done" and writes no honor step; the next AGENT renders it.
+# An interrupt delivered once `chat`'s final reply (no tool calls) has been taken, before its call
+# returns, cuts the reply with all its text: the `model_call` step records finish `interrupted`,
+# `chat` writes its honor step and succeeds with null, and the next AGENT renders that.
 kind: run
 flow: |
   id: steer
@@ -19,7 +19,7 @@ flow: |
       kind: agent
       input: {draft: "${chat.output}"}
       system_prompt: Help.
-      prompt: "summarize: ${draft}"
+      prompt: "summarize: ${draft :- \"nothing\"}"
       output: str
   output: ${after.output}
 run:
@@ -56,7 +56,7 @@ host:
             role: user
             parts:
             - type: text
-              text: 'summarize: chat done'
+              text: 'summarize: nothing'
 expect:
   output:
     status: succeeded
@@ -108,7 +108,7 @@ expect:
     - chat
     - n: 1
       step:
-        finish: null
+        finish: interrupted
         kind: model_call
         model: gpt-5.5
         output:
@@ -120,15 +120,18 @@ expect:
         request_sha256: 7de94d825befe72ccf8ab4b0b2607e0d8e52aeda6c2004860876ee65a05e3882
         response_id: null
         usage: null
+  - - node_step
+    - chat
+    - n: 2
+      step: {by: 9, kind: interrupted}
   - - pool_commit
     - chat
-    - value: chat done
   - - pool_commit
     - chat
-    - {key: chat.new_messages, steps: [10]}
+    - {key: chat.new_messages, steps: [10, 11]}
   - - node_succeeded
     - chat
-    - {commit: 11, messages: 12}
+    - {commit: 12, messages: 13}
   - [node_started, after]
   - - node_step
     - after
@@ -143,7 +146,7 @@ expect:
           - {text: summary, type: text}
           role: assistant
         purpose: chat
-        request_sha256: f00ecd6b8e198032b2999410d1d6658d699a957395beaff48fa75783b23eed15
+        request_sha256: 8ea9b5f32d9e766e0b9d04b97e96d3ef82c01ac2c4fbb0d3c44c3a419bb2f433
         response_id: null
         usage: null
   - - pool_commit
@@ -151,17 +154,17 @@ expect:
     - value: summary
   - - pool_commit
     - after
-    - {key: after.new_messages, steps: [15]}
+    - {key: after.new_messages, steps: [16]}
   - - node_succeeded
     - after
-    - {commit: 16, messages: 17}
+    - {commit: 17, messages: 18}
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: summary
   - - node_succeeded
     - __end__
-    - {commit: 20}
+    - {commit: 21}
   events:
   - [RunStarted]
   - - NodeStarted
@@ -186,8 +189,7 @@ expect:
       n: 1
   - - NodeSucceeded
     - node_id: chat
-      output: chat done
-      interrupted: false
+      interrupted: true
   - - NodeStarted
     - node_id: after
   - - ModelCallStarted

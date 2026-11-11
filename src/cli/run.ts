@@ -24,8 +24,8 @@
  * Output is raw ANSI on stderr, coloured only on a TTY without `NO_COLOR`.
  */
 
-import { existsSync, lstatSync, realpathSync, rmdirSync } from "node:fs";
-import { basename, dirname, join, relative } from "node:path";
+import { existsSync, lstatSync, realpathSync, rmdirSync, type Stats } from "node:fs";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { END_ID, START_ID } from "../compile/model.ts";
@@ -78,9 +78,10 @@ import {
   staticNodes,
   updateRunIndex,
 } from "../run.ts";
+import { folderMismatch } from "../runtime/run_index.ts";
 import { wakeAt } from "../runtime/waits.ts";
 import { ASK_USER, BUILTIN_TOOL_IDS } from "../tools/context.ts";
-import { McpConnectError, McpSdkMissingError, type McpServer } from "../tools/mcp.ts";
+import { McpConnectError, McpSdkMissingError, type McpServer, openTogether } from "../tools/mcp.ts";
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { loadConfined } from "./confined_load.ts";
 import { loadMcpConfig, McpConfigError, userMcpConfig } from "./mcp_config.ts";
@@ -119,7 +120,7 @@ import {
   preflightKeys,
   readFlowText,
 } from "./startup.ts";
-import { cells, columnsOf } from "./cells.ts";
+import { cells, columnsOf, rowsOf } from "./cells.ts";
 import { showForTerminal } from "./sanitize.ts";
 import { Terminal, TerminalStopped } from "./terminal.ts";
 import {
@@ -241,8 +242,9 @@ const SPIN_MS = 80;
  * spinner and frozen on the finished line; a node whose start wasn't seen has none. With
  * `verbose` each node's output follows its check. Several nodes can run at once (a fan-out), so
  * there is one spinner line per running node. On a TTY the spinners are redrawn every 80 ms and
- * each finished line is printed over them; off a TTY only the finished lines are printed. Outputs,
- * failure messages and warnings go through `forTerminal`.
+ * each finished line is printed over them; off a TTY only the finished lines are printed. The
+ * spinner block keeps to one row less than the screen, its last row `… and N more running` when
+ * more nodes run. Outputs, failure messages and warnings go through `forTerminal`.
  */
 export class ProgressReporter {
   readonly #out: Writer;
@@ -251,8 +253,8 @@ export class ProgressReporter {
   readonly #now: () => number;
   // Each running node's start time on `#now`.
   readonly #running = new Map<string, number>();
-  // Warning lines raised while paused, printed on `resume` or `stop`.
-  readonly #held: string[] = [];
+  // What was printed while paused (warning and console lines), printed on `resume` or `stop`.
+  readonly #held: (() => void)[] = [];
   #paused = false;
   #frame = 0;
   // Spinner lines on screen, which the next draw or finished line erases.
@@ -320,10 +322,28 @@ export class ProgressReporter {
   warn(message: string): void {
     const line = paint(`warning: ${forTerminal(message, this.#out)}`, "yellow", this.#out, this.#env);
     if (this.#paused) {
-      this.#held.push(line);
+      this.#held.push(() => this.#print(line));
       return;
     }
     this.#print(line);
+    this.#sync();
+  }
+
+  /**
+   * Run `print`, which prints whole lines elsewhere on the terminal (a `console` call of the
+   * run's), with the spinners erased first and drawn again below what it printed; while paused it
+   * is held, as a warning is.
+   */
+  around(print: () => void): void {
+    if (this.#paused) {
+      this.#held.push(print);
+      return;
+    }
+    if (this.#drawn > 0) {
+      this.#write(this.#erase());
+      this.#drawn = 0;
+    }
+    print();
     this.#sync();
   }
 
@@ -354,9 +374,9 @@ export class ProgressReporter {
     return start === undefined ? "" : ` ${elapsedTag(this.#now() - start)}`;
   }
 
-  /** Print the warning lines held while paused. */
+  /** Print the lines held while paused. */
   #flushHeld(): void {
-    for (const line of this.#held.splice(0)) this.#print(line);
+    for (const print of this.#held.splice(0)) print();
   }
 
   #write(text: string): void {
@@ -376,12 +396,18 @@ export class ProgressReporter {
     this.#write(`${erase}${text}\n`);
   }
 
-  /** Draw one spinner line per running node in place of those on screen. */
+  /**
+   * Draw one spinner line per running node in place of those on screen, at most one row less than
+   * the screen has: a taller block would scroll its top out of the erase's reach.
+   */
   #draw(): void {
     const columns = this.#out.columns;
     const frame = SPINNER.charAt(this.#frame);
     const now = this.#now();
-    const lines = [...this.#running].map(([nodeId, start]) => {
+    const running = [...this.#running];
+    const room = Math.max(1, rowsOf(this.#out) - 1);
+    const shown = running.length > room ? running.slice(0, room - 1) : running;
+    const lines = shown.map(([nodeId, start]) => {
       const chars = [...nodeId];
       const tag = ` ${elapsedTag(now - start)}`;
       // A line wider than the terminal would wrap, and the erase would miss its first part: the
@@ -391,6 +417,7 @@ export class ProgressReporter {
       const id = paint(chars.slice(0, width).join(""), "cyan", this.#out, this.#env);
       return `${frame} ${id}${fits ? tag : ""}`;
     });
+    if (shown.length < running.length) lines.push(`${frame} … and ${running.length - shown.length} more running`);
     this.#write(this.#erase() + lines.join("\n"));
     this.#drawn = lines.length;
   }
@@ -568,15 +595,17 @@ export const CHAT_FLOW_FILE = "chat.yaml";
 
 /**
  * Reject a flow file or fresh-only options on `--resume`, a fresh run without a flow file, and a
- * `--log` path that already exists. Absent options are `undefined`; `inputValues` is empty when
- * no `--input` is given.
+ * `--log` path that already exists or whose folder doesn't. Absent options are `undefined`;
+ * `inputValues` is empty when no `--input` is given.
  *
  * Run before input files are read, prompts are shown, or provider configuration is resolved.
  *
  * @throws {UsageError} When `resume` is given with `flow` (the resume runs the flow the log
  *   recorded), or with `--input`, `--inputs`, `--provider`, `--model`, `--embedding` or `--log`
- *   (each one given is named, in that order); when neither `flow` nor `resume` is given; or when a
- *   directory entry, even a dangling symlink, exists at `log`.
+ *   (each one given is named, in that order); when neither `flow` nor `resume` is given; when a
+ *   directory entry, even a dangling symlink, exists at `log`; or when `log`'s folder is missing
+ *   (`folder does not exist: <folder>`) or isn't a folder (`not a folder: <folder>`). A folder
+ *   that can't be checked for another reason is left to the log's creation to report.
  */
 export function validateRunLogOptions(options: {
   flow?: string | undefined;
@@ -607,9 +636,31 @@ export function validateRunLogOptions(options: {
     }
     return;
   }
-  if (log !== undefined && lexists(log)) {
-    throw new UsageError(`Invalid value for --log: --log path already exists: ${log}`);
+  if (log === undefined) return;
+  if (lexists(log)) throw logExists(log);
+  const folder = dirname(log);
+  let stats: Stats | null;
+  try {
+    stats = statOrNull(folder);
+  } catch {
+    return;
   }
+  if (stats === null) throw new UsageError(`Invalid value for --log: folder does not exist: ${folder}`);
+  if (!stats.isDirectory()) throw new UsageError(`Invalid value for --log: not a folder: ${folder}`);
+}
+
+/** The usage error for a `--log` path that is already taken. */
+function logExists(log: string): UsageError {
+  return new UsageError(`Invalid value for --log: --log path already exists: ${log}`);
+}
+
+/**
+ * Whether `error` is the exclusive create of the log at `log` finding it there: another process
+ * made it after `validateRunLogOptions` checked. A lock or media file beside it doesn't count.
+ */
+function lostLogRace(error: Error, log: string): boolean {
+  if (!isSystemError(error) || error.code !== "EEXIST" || error.path === undefined) return false;
+  return resolve(error.path) === resolve(log);
 }
 
 /** Remove the directory `dir` if it is empty; otherwise, or when that fails, leave it as it is. */
@@ -751,10 +802,11 @@ export function needsMcp(flow: ComposedFlow): boolean {
  * `{group: tool}`) is selected unopened, so the run starts it after its own checks and closes it.
  * A TOOL node's bare id names one tool, never a group, so it counts as unresolved unless it is in
  * `known`; so does a grant that is neither in `known` nor a server name. When some id is
- * unresolved, the granted servers open here instead, and if their tools don't supply every
- * unresolved id, the other servers open in turn to show their tools until every id is supplied;
- * those that list a still-unresolved id stay open and the rest close before the run, so an unused
- * server's tool names can't collide with another's. A server opened only to show its tools that
+ * unresolved, the granted servers open here instead, together, and if their tools don't supply
+ * every unresolved id, the other servers open in turn to show their tools until every id is
+ * supplied; those that list a still-unresolved id stay open and the rest are left out of the run,
+ * so an unused server's tool names can't collide with another's. Their closes run while the next
+ * server opens, and every server closes together when `body` settles. A server opened only to show its tools that
  * fails to start is skipped with a `warn` call, unless the flow still lacks a needed id
  * afterwards. Once `signal` aborts, no further server opens, and only the servers already open are
  * selected. Nothing is selected when the flow needs no tools.
@@ -784,6 +836,8 @@ export async function openMcpServers<T>(
 ): Promise<T> {
   const toolNames = (selected: Record<string, McpServer>) =>
     new Set(Object.values(selected).flatMap((server) => server.tools.map((tool) => tool.name)));
+  // Closes of probes the flow doesn't need, which run while the next probe opens.
+  const closing: Promise<void>[] = [];
   try {
     let selected: Record<string, McpServer> = {};
     const named = Object.entries(servers).filter(([name]) => grants.has(name));
@@ -794,9 +848,15 @@ export async function openMcpServers<T>(
     if (unresolved.size === 0) {
       selected = Object.fromEntries(named);
     } else {
-      for (const [name, server] of named) {
-        if (signal.aborted) break;
-        selected[name] = await server.open({ signal });
+      if (!signal.aborted) {
+        const outcomes = await openTogether(
+          named.map(([, server]) => server),
+          signal,
+          (server, stop) => server.open({ signal: stop }),
+        );
+        const failure = outcomes.find((outcome) => outcome.status === "rejected");
+        if (failure !== undefined) throw failure.reason;
+        selected = Object.fromEntries(named);
       }
       // No other server needs to start for an id a granted server supplies.
       for (const name of toolNames(selected)) unresolved.delete(name);
@@ -815,7 +875,7 @@ export async function openMcpServers<T>(
           // A later server that lists the same id would collide with this one.
           for (const tool of server.tools) unresolved.delete(tool.name);
         } else {
-          await server.close();
+          closing.push(server.close());
         }
       }
       if (signal.aborted) {
@@ -839,7 +899,7 @@ export async function openMcpServers<T>(
   } finally {
     // Closing a server that never opened, or that its run already closed, does nothing; this
     // also covers one stopped between opening and being recorded.
-    for (const server of Object.values(servers)) await server.close();
+    await Promise.all([...closing, ...Object.values(servers).map((server) => server.close())]);
   }
 }
 
@@ -1044,7 +1104,8 @@ export function resumeKeyCheck(context: ResumeKeyContext): LlmConfigsCheck {
  * host failure (a bad option value, a log that can't be created, an MCP server that doesn't start,
  * the missing MCP SDK) prints `run failed: <message>` on stderr, and when no started server
  * supplies a needed tool the missing ids and the other failed servers on the lines below, and
- * exits 1.
+ * exits 1. A `--log` another process created after it was checked is the usage error of one that
+ * was there before.
  *
  * With `resume` there is no `flowPath`: the flow the log recorded is compiled (`loadRecordedFlow`),
  * never a file on disk, and its skills and MCP config are read as for a fresh run; then the log
@@ -1081,6 +1142,8 @@ export async function run(flowPath: string | undefined, options: RunOptions, io:
   // Building it has no side effects; the terminal pauses it while a prompt is up.
   const { quiet, verbose } = options;
   const reporter = quiet ? null : new ProgressReporter(io.stderr, { verbose, env: io.env });
+  // The spinner owns the cursor's line, so a CODE body's console line prints through it.
+  const restoreConsole = reporter !== null && io.stderr.isTTY === true ? consoleAround(reporter) : () => {};
   // `startRun` sets it just before `runFlow`.
   const started = { value: false };
   // Building it touches neither stream; it reads keys only when it prompts.
@@ -1119,7 +1182,22 @@ export async function run(flowPath: string | undefined, options: RunOptions, io:
     disposeSignals();
     stop?.removeEventListener("abort", forwardStop);
     reporter?.stop();
+    restoreConsole();
   }
+}
+
+/**
+ * Send `console`'s `log`, `info`, `debug`, `warn` and `error` calls through `reporter.around`, so
+ * each prints its line above the spinners, until the function returned puts them back.
+ */
+function consoleAround(reporter: ProgressReporter): () => void {
+  const saved = (["log", "info", "debug", "warn", "error"] as const).map((name) => [name, console[name]] as const);
+  for (const [name, method] of saved) {
+    console[name] = (...args: unknown[]) => reporter.around(() => method.apply(console, args));
+  }
+  return () => {
+    for (const [name, method] of saved) console[name] = method;
+  };
 }
 
 /** What `run` builds for its body: the terminal, the run's stop, progress, whether it started. */
@@ -1356,6 +1434,8 @@ async function startRun(
     if (error instanceof TerminalStopped && error.reason === "eof") return cancelled();
     if (error instanceof ResumeKeyError) return refused(error.message);
     if (!isSetupError(error)) throw error;
+    // The same usage error as when the path was there before the command.
+    if (options.log !== undefined && lostLogRace(error, options.log)) throw logExists(options.log);
     return setupFailed(error);
   }
   if (typeof outcome === "number") return outcome;
@@ -1504,13 +1584,17 @@ export async function check(
  * `json`, one document with `status`, `in_flight` (in
  * start order), `crashed_attempts`, and for a waiting run `ready` and `wake_at` (`false` and
  * `null` otherwise). A log that isn't a readable run log (empty, damaged,
- * not a run log, unreadable) prints its message on stderr and exits 1 (`run.setup`).
+ * not a run log, unreadable), or the log of a `~/.yian/runs` folder named for another run (which
+ * the run list shows unreadable), prints its message on stderr and exits 1 (`run.setup`).
  */
 export async function status(log: string | undefined, { json }: { json: boolean }, io: CliIo): Promise<number> {
   if (log === undefined) return listRuns({ json }, io);
   let inspection: RunInspection;
   try {
     inspection = inspectRun(log);
+    // The run index lists such a log as unreadable, so this says why too.
+    const mismatch = runFolderMismatch(log, inspection.runId, defaultRunsDir(io.env));
+    if (mismatch !== null) throw new RangeError(`run log ${log}: ${mismatch}`);
   } catch (error) {
     let message: string;
     if (error instanceof RangeError) message = error.message;
@@ -1545,6 +1629,17 @@ export async function status(log: string | undefined, { json }: { json: boolean 
 }
 
 /**
+ * Return why the run index can't list `log` though its records read: it is the log of a run folder
+ * of `runsDir` named for another run than `runId`, as a copied run folder is; `null` otherwise.
+ */
+function runFolderMismatch(log: string, runId: string | null, runsDir: string): string | null {
+  if (runId === null || basename(log) !== "log.jsonl" || !existsSync(runsDir)) return null;
+  const folder = dirname(resolve(log));
+  if (realpathSync(dirname(folder)) !== realpathSync(runsDir)) return null;
+  return folderMismatch(runId, basename(folder));
+}
+
+/**
  * Update the run index of `~/.yian/runs` (`updateRunIndex`) and list its rows (`readRunIndex`), by
  * start time; returns the exit code. A missing runs folder lists nothing.
  *
@@ -1557,9 +1652,9 @@ export async function status(log: string | undefined, { json }: { json: boolean 
  * `result` (the run's output, `null` until it succeeded), the token sums, for a waiting
  * run `ready` and `wake_at` (`false` and `null` otherwise), and `unreadable` (`seq` and `reason`,
  * or `null`). A log the update can't read is a `warning:` line on stderr: once until it changes, or
- * on every update for a file error such as no permission, which leaves the run's row as it was. An
- * index that can't be updated (another update held it too long, or it isn't a database) prints its
- * message on stderr and exits 1 (`run.setup`).
+ * on every update for a file error such as no permission, which leaves the run's row as it was; so
+ * is a damaged index, which the update rebuilds. An index that can't be updated (another update
+ * held it too long, or SQLite can't use it) prints its message on stderr and exits 1 (`run.setup`).
  */
 async function listRuns({ json }: { json: boolean }, io: CliIo): Promise<number> {
   const runsDir = defaultRunsDir(io.env);

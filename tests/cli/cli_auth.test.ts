@@ -27,6 +27,7 @@ import {
   providers,
 } from "../../src/cli/auth.ts";
 import { type CliIo, type OptionValue, type ParsedArgs, UsageError, type Writer } from "../../src/cli/utils.ts";
+import { withEnv } from "../../src/defaults.ts";
 import { PROVIDER_API_KEY_ENV } from "../../src/llm_clients/api_key_env.ts";
 import {
   ApiKeyCredentials,
@@ -377,6 +378,15 @@ describe("models --provider", () => {
     expect(result.code).toBe(0);
     expect(JSON.parse(result.out)).toEqual({ format: "yian.cli.v1", models: ["m-b", "m-a"] });
     expect(fake.calls).toEqual([{ provider: "openrouter", options: { apiKey: "k", baseUrl: null, timeout: 8 } }]);
+  });
+
+  test("YIAN_MODEL_LIST_TIMEOUT_SECONDS sets the default timeout", async () => {
+    const fake = fakeListModels();
+    const env = (name: string) => (name === "YIAN_MODEL_LIST_TIMEOUT_SECONDS" ? "20" : undefined);
+    const args = modelsArgs({ provider: "openrouter", json: true });
+    const result = await withEnv(env, () => run(models, args, fakeIo({ stdin: "k" }), fake));
+    expect(result.code).toBe(0);
+    expect(fake.calls).toEqual([{ provider: "openrouter", options: { apiKey: "k", baseUrl: null, timeout: 20 } }]);
   });
 
   test.each<[string, { stdin?: string; isTTY?: boolean }]>([
@@ -1926,6 +1936,19 @@ describe("modelAnswers", () => {
     const problem = await modelAnswers("anthropic", "claude-x", "private-key", null, {}, io(), deps, never);
     expect(problem).toBe("TimeoutError: The model didn't reply within 30 seconds");
     expect(scheduler.now()).toBe(30_000);
+  });
+
+  test("YIAN_MODEL_CHECK_TIMEOUT_SECONDS sets how long the model has to reply", async () => {
+    const fake = fakeChatModel();
+    fake.hang = true;
+    const scheduler = virtualScheduler();
+    const deps = { chatModel: fake.chatModel, scheduler };
+    const env = (name: string) => (name === "YIAN_MODEL_CHECK_TIMEOUT_SECONDS" ? "90" : undefined);
+    const problem = await withEnv(env, () =>
+      modelAnswers("anthropic", "claude-x", "private-key", null, {}, io(), deps, never),
+    );
+    expect(problem).toBe("TimeoutError: The model didn't reply within 90 seconds");
+    expect(scheduler.now()).toBe(90_000);
   });
 
   test("any failure once the deadline passed reads as the timeout", async () => {

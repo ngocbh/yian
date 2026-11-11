@@ -25,6 +25,7 @@ import type { ChatEvents } from "../../src/cli/chat_flush.ts";
 import { ChatView } from "../../src/cli/chat_view.ts";
 import { main } from "../../src/cli/index.ts";
 import { type CliIo, HostStop, UsageError, type Writer } from "../../src/cli/utils.ts";
+import { Message } from "../../src/llm/messages.ts";
 import { FileLockError, lockFile, virtualScheduler } from "../../src/platform.ts";
 import { advance, cancel, inspectRun, readRunIndex, send } from "../../src/run.ts";
 import {
@@ -754,9 +755,11 @@ describe("yian chat's model text with escape sequences", () => {
   test(
     "chat failed: is stripped on a TTY stderr and kept exactly when piped",
     async () => {
-      // A log whose folder is a file: the run can't create it, and the error names its path.
-      writeFileSync(join(tmp, "t\x1b]52;c;aGk=\x07"), "");
-      const log = join(tmp, "t\x1b]52;c;aGk=\x07", "run.jsonl");
+      // A log whose name is longer than a file system takes: the run can't create it, and the
+      // error names its path.
+      const name = `${"n".repeat(300)}.jsonl`;
+      mkdirSync(join(tmp, "t\x1b]52;c;aGk=\x07"));
+      const log = join(tmp, "t\x1b]52;c;aGk=\x07", name);
       for (const [outTty, folder] of [
         [true, "/t/"],
         [false, "/t\x1b]52;c;aGk=\x07/"],
@@ -765,8 +768,8 @@ describe("yian chat's model text with escape sequences", () => {
         const { code } = await runChat(flowFile(ECHO), io, { log });
         expect(code).toBe(1);
         const failed = stderr().slice(stderr().indexOf("chat failed: "));
-        expect(failed).toStartWith("chat failed: ENOTDIR");
-        expect(failed).toContain(`${folder}run.jsonl`);
+        expect(failed).toStartWith("chat failed: ENAMETOOLONG");
+        expect(failed).toContain(`${folder}${name}`);
       }
     },
     TIMEOUT,
@@ -792,9 +795,8 @@ describe("yian chat's failures under --engine-trace", () => {
   test(
     "chat failed: adds the stack box under --engine-trace",
     async () => {
-      // A log whose folder is a file: the run can't create it.
-      writeFileSync(join(tmp, "taken"), "");
-      const log = join(tmp, "taken", "run.jsonl");
+      // A log whose name is longer than a file system takes: the run can't create it.
+      const log = join(tmp, `${"n".repeat(300)}.jsonl`);
       for (const engineTrace of [false, true]) {
         const { io, stderr } = chatIo();
         const { code } = await runChat(flowFile(ECHO), io, { engineTrace, log });
@@ -1307,6 +1309,42 @@ function gatedStream() {
 
 const XAI = { XAI_API_KEY: "test-xai-key", YIAN_DEFAULT_PROVIDER: "xai", YIAN_DEFAULT_MODEL: "grok-4.3" };
 
+/**
+ * Mock `fetch` with a chat-completions stream that sends all of "Once upon a time", resolves
+ * `read` once the reader asks for more (so the text has been taken), and sends the finish once
+ * the test's `release` is called; `restore` puts `fetch` back.
+ */
+function streamHeldAtFinish() {
+  const { promise: read, resolve: asked } = Promise.withResolvers<void>();
+  const { promise: gate, resolve: open } = Promise.withResolvers<void>();
+  release = open;
+  const chunk = (delta: Record<string, unknown>, finish: string | null) =>
+    `data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+  const original = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    const encoder = new TextEncoder();
+    let pulls = 0;
+    const body = new ReadableStream<Uint8Array>(
+      {
+        async pull(controller) {
+          pulls += 1;
+          if (pulls === 1) {
+            controller.enqueue(encoder.encode(chunk({ role: "assistant", content: "Once upon a time" }, null)));
+            return;
+          }
+          asked();
+          await gate;
+          controller.enqueue(encoder.encode(chunk({}, "stop") + "data: [DONE]\n\n"));
+          controller.close();
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    return new Response(body, { headers: { "content-type": "text/event-stream" } });
+  }) as unknown as typeof fetch;
+  return { read, restore: () => (globalThis.fetch = original) };
+}
+
 test(
   "Ctrl-C while the example's reply streams interrupts it; the chat goes on to the next line",
   async () => {
@@ -1337,6 +1375,35 @@ test(
       expect(cut.step["finish"]).toBe("interrupted");
       const output = inspectRun(log);
       expect(output.status).toBe("succeeded");
+    } finally {
+      restore();
+    }
+  },
+  TIMEOUT,
+);
+
+test(
+  "Ctrl-C after the reply's last text, before its stream ends, still cuts it",
+  async () => {
+    const { io, stdin, stderr } = chatIo({ env: XAI });
+    stdin.write("tell me a story\n");
+    const { read, restore } = streamHeldAtFinish();
+    try {
+      const chatting = runChat(EXAMPLE_CHAT, io);
+      const log = join(tmp, "run.jsonl");
+      await read;
+      signals.emit("SIGINT");
+      await until(() => records(log).some((record) => record instanceof InterruptedRecord));
+      release!();
+      await until(() => stderr().includes("(interrupted)"));
+      stdin.write("/exit\n");
+      expect((await chatting).code).toBe(0);
+      expect(stderr()).toContain(`${INTERRUPTING}\n(interrupted)\n`);
+      const cut = records(log).find(
+        (record) => record instanceof NodeStepRecord && record.step["kind"] === "model_call",
+      ) as NodeStepRecord;
+      expect(cut.step["finish"]).toBe("interrupted");
+      expect(Message.fromJSON(cut.step["output"]).text()).toBe("Once upon a time");
     } finally {
       restore();
     }

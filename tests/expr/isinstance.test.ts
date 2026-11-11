@@ -30,7 +30,6 @@ import {
   rewriteExprRefs,
 } from "../../src/expr/expressions.ts";
 import { type ExprNode, parseExpr, Token } from "../../src/expr/grammar.ts";
-import { SourceRef } from "../../src/expr/lineage.ts";
 import {
   bindingCoSkips,
   evalBinding,
@@ -319,23 +318,6 @@ test("isinstance is not a prompt function", () => {
   const message = "isinstance is not a prompt function; compute it in an input binding";
   expectError(() => promptRefs("${isinstance(x, Buy)}"), message);
   expectError(() => promptRefs("Order: ${render_as_json(x)} ${upper(isinstance(x, Buy))}"), message);
-});
-
-// --- tracing --- //
-
-test("traced isinstance records one route over the first argument", () => {
-  const source = new SourceRef("run", 0, ["output"]);
-  const resolve = () => ({ used: 2, present: true, value: A_BUY, why: null, source });
-  const traced = evalBinding("${isinstance(d.output, Buy)}", resolve, { trace: true, types: TYPES });
-  expect(traced.value).toBe(true);
-  const route = traced.route;
-  expect(route.kind).toBe("opaque");
-  expect(route.expression).toBe("isinstance(d.output, Buy)");
-  expect(route.children).toHaveLength(1);
-  expect(route.names).toEqual([""]);
-  const child = route.children[0]!;
-  expect(child.kind).toBe("source");
-  expect(child.source).toEqual(new SourceRef("run", 0, ["output"]));
 });
 
 // --- nodes --- //

@@ -1,0 +1,7 @@
+kind: expr
+# An int token reads as an int and any other number as a float.
+expr: "parse_json(s)"
+values:
+  s: '{"a": [1, 2.0, true, null], "b": "é"}'
+expect:
+  value: {a: [1, 2.0, true, null], b: "é"}

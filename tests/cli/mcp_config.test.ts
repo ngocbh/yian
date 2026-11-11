@@ -399,9 +399,38 @@ test("no files gives no servers", () => {
   expect(Object.keys(loadMcpConfig([], envOf({})))).toEqual([]);
 });
 
+test("concurrencySafe marks all or some of a server's tools, without a warning", () => {
+  const path = write("mcp.json", {
+    all: { command: "srv", concurrencySafe: true },
+    none: { command: "srv", concurrencySafe: false },
+    some: { url: "https://x.example.com/mcp", concurrencySafe: ["search", "fetch"] },
+    unset: { command: "srv" },
+  });
+  const messages: string[] = [];
+
+  const servers = loadMcpConfig([path], envOf({}), { warn: (message) => messages.push(message) });
+
+  expect(messages).toEqual([]);
+  expect(spec(servers["all"]).concurrencySafe).toBe(true);
+  expect(spec(servers["none"]).concurrencySafe).toBe(false);
+  expect(spec(servers["some"]).concurrencySafe).toEqual(["search", "fetch"]);
+  expect(spec(servers["unset"]).concurrencySafe).toBe(false);
+});
+
+test.each<[unknown, string]>([
+  ["yes", "a string"],
+  [[1], "an array holding a number"],
+  [{ search: true }, "an object"],
+])("concurrencySafe %j names the file and the server", (value, got) => {
+  const path = write("mcp.json", { s: { command: "srv", concurrencySafe: value } });
+  expect(loadError([path]).message).toBe(
+    `${path}: server 's': 'concurrencySafe' must be true, false or a list of tool names, got ${got}`,
+  );
+});
+
 test("null counts as absent for every key", () => {
   const path = write("mcp.json", {
-    local: { command: "srv", args: null, type: null, env: null, cwd: null, url: null, disabled: null },
+    local: { command: "srv", args: null, type: null, env: null, cwd: null, url: null, disabled: null, concurrencySafe: null },
     remote: { url: "https://x.example.com/mcp", headers: null, command: null },
   });
 
@@ -413,6 +442,7 @@ test("null counts as absent for every key", () => {
     env: undefined,
     cwd: undefined,
     url: undefined,
+    concurrencySafe: false,
   });
   expect(spec(servers["remote"])).toMatchObject({ url: "https://x.example.com/mcp", headers: undefined });
 });

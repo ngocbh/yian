@@ -287,8 +287,9 @@ server. Each entry grants one of these:
 | MCP servers | `yian run` reads them from config files (below). Each server is a tool group named after it |
 | Host tools | A program passes them to the run (below) |
 
-- Consecutive calls in one reply run together when their tools say that is safe. Results reach
-  the model in call order.
+- The calls in one reply run one at a time, except that consecutive calls to tools marked safe to
+  run together start together: a host tool's `isConcurrencySafe`, or an MCP server's
+  `concurrencySafe`. Results reach the model in call order.
 - A tool that throws `ReportedToolError` doesn't fail the node: the model reads the message as
   the call's result and carries on. MCP tool errors work this way. Any other error fails the node.
 - `max_tool_iterations` caps the model turns. The default, `-1`, means no cap. At the cap, a
@@ -345,6 +346,7 @@ The file uses the `mcpServers` format other MCP clients use:
 | `url`, `headers` | A streamable HTTP server |
 | `type` | Optional: `stdio`, `http` or `streamable-http`; must match `command` or `url` |
 | `disabled` | `true` turns the server off, even one an earlier file defines |
+| `concurrencySafe` | `true`, or a list of tool names: those tools' calls in one reply may run together (default `false`) |
 
 - An entry has exactly one of `command` and `url`. SSE servers aren't supported.
 - A `url` must use `https`. Plain `http` works only for `localhost`, `127.0.0.1` and `[::1]`,
@@ -379,11 +381,16 @@ const search = tool({
   name: "search",
   description: "Search the docs and return the best matching passage.",
   parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+  isConcurrencySafe: () => true,
   execute: async ({ query }) => lookup(String(query)),
 });
 
 const result = await runFlow(flow, { question }, { tools: { search, toolbox: [a, b] } });
 ```
+
+`isConcurrencySafe` lets the model's calls to `search` in one reply run together. It gets the
+checked arguments and must return `true` at once; without it, or when it throws or returns a
+Promise, the call runs alone. Mark only tools whose calls don't depend on each other.
 
 A tool that passes `ctx.callId` to its service as an idempotency key can set `resumable: true`.
 When a crash or a stop cuts off an agent's call to it before the result is recorded, the resumed

@@ -1180,16 +1180,22 @@ describe("a session on a terminal", () => {
 
 /**
  * A model whose first reply streams "Once upon", then waits for `open` before it ends; each later
- * reply is "Short.".
+ * reply is "Short.". The call naming the chat is kept apart (`named`) and answered `A chat`, so
+ * `requests` holds only the replies, whenever the naming call comes.
  */
 class GatedModel implements ChatModel {
   readonly provider = "xai";
   readonly model = "grok-4.3";
   readonly requests: Request[] = [];
+  readonly named: Request[] = [];
   readonly #gate = Promise.withResolvers<void>();
   readonly open = () => this.#gate.resolve();
 
-  stream(request: Request): EventStream {
+  stream(request: Request, options: { signal?: AbortSignal } = {}): EventStream {
+    if (namingRequest(request)) {
+      this.named.push(request);
+      return new ScriptedModel([textReply("A chat")], this).stream(request, options);
+    }
     this.requests.push(request);
     const first = this.requests.length === 1;
     const gate = this.#gate.promise;

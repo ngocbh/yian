@@ -810,6 +810,7 @@ test("an output disjoint from a one sided return field fails at run start", asyn
     type: "object",
     properties: { n: { type: "integer", minimum: 0 } },
     required: ["n"],
+    additionalProperties: false,
   };
   const placeCounted = placeOrder({ qty: INT }, (args) => ({ n: args.qty }), { output: counted });
 
@@ -835,6 +836,7 @@ function variant(tag: string, fields: Record<string, JsonObject>): JsonObject {
     type: "object",
     properties: { type: { type: "string", const: tag }, ...fields },
     required: ["type", ...Object.keys(fields)],
+    additionalProperties: false,
   };
 }
 
@@ -884,6 +886,38 @@ nodes:
     output: {qty: int}
 output: \${place.output}
 `;
+
+const QUOTE_FLOW = `
+id: quoting
+name: quoting
+typedefs:
+  Quote: {price: float, venue: str}
+nodes:
+  quote:
+    kind: tool
+    tool_id: place_order
+    input:
+      qty: 5
+    output: Quote
+output: \${quote.output}
+`;
+
+test("an output schema without additionalProperties: false admits other keys at run start, as at the call", async () => {
+  const price: JsonObject = { type: "object", properties: { price: { type: "number" } }, required: ["price"] };
+  const quoting = placeOrder({ qty: INT }, () => ({ price: 1.5, venue: "x" }), { output: price });
+  const closed = placeOrder({ qty: INT }, () => ({ price: 1.5, venue: "x" }), {
+    output: { ...price, additionalProperties: false },
+  });
+
+  const result = await run(QUOTE_FLOW, {}, { tools: { place_order: quoting } });
+  const message = await refused(run(QUOTE_FLOW, {}, { tools: { place_order: closed } }));
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toEqual({ price: 1.5, venue: "x" });
+  expect(message).toBe(
+    `TOOL node 'quote' output: declared {"price":float,"venue":str}, but tool 'place_order' returns {"price":float}`,
+  );
+});
 
 test("a wider return type runs and the gate still checks each value", async () => {
   const placeDict = placeOrder({ qty: INT }, (args) => ({ qty: args.qty }), { output: { type: "object" } });

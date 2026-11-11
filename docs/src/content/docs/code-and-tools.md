@@ -164,7 +164,9 @@ branches and child flows that may never run. The run doesn't start when:
 - the node passes an argument the tool doesn't take, or leaves out a required one;
 - an argument, literal or `${...}`, can never fit the tool's parameter type, such as a `str` for
   an `int`;
-- the declared `output:` can never match what the tool says it returns.
+- the declared `output:` can never match what the tool says it returns. As in JSON Schema, an
+  object in the tool's output schema allows other keys unless it says
+  `additionalProperties: false`.
 
 Nothing is converted for you: pass `10`, not `"10"`, to an `int` parameter.
 

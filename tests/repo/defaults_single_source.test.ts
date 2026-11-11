@@ -121,6 +121,8 @@ const ALLOWED: Record<string, string> = {
   "expr/builtins.ts: ROUND_DIGITS_MAX": "CPython's round: past these places a float rounds to itself",
   "expr/builtins.ts: ROUND_DIGITS_MIN": "CPython's round: past these places a float rounds to zero",
   "expr/builtins.ts: WHITESPACE": "Python's str.isspace() code points",
+  "expr/builtins.ts: DAYS_IN_RANGE": "the days from year 1 to year 9999, past which add_days leaves the date range",
+  "expr/builtins.ts: MICROS_PER_DAY": "the microseconds in a day",
   "typesys/json.ts: MAX_SAFE": "the largest safe integer",
   "typesys/json.ts: byCodeUnits": "a comparator's -1 result",
   "tools/mcp.ts: MAX_TIMER_MS": "the longest delay setTimeout takes",

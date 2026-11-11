@@ -383,3 +383,76 @@ describe("numbers and lists", () => {
     expect(inferExprType(parseExpr(text), (path) => LISTS[path] ?? null)).toEqual(want);
   });
 });
+
+describe("dates", () => {
+  test.each<[string, Value]>([
+    ['add_days("2026-02-27", 2)', "2026-03-01"],
+    ['add_days("2024-02-28", 1)', "2024-02-29"],
+    ['add_days("2026-01-01", -1)', "2025-12-31"],
+    ['add_days("2026-05-21", 0)', "2026-05-21"],
+    ['add_days("0001-01-01", 3652058)', "9999-12-31"],
+    // A datetime keeps its time and offset as written.
+    ['add_days("2026-05-21T14:30Z", 1)', "2026-05-22T14:30Z"],
+    ['add_days("2026-12-31 23:59:59.5-07:00", 1)', "2027-01-01 23:59:59.5-07:00"],
+    ['days_between("2026-01-01", "2026-03-01")', 59n],
+    ['days_between("2026-03-01", "2026-01-01")', -59n],
+    ['days_between("2024-01-01", "2025-01-01")', 366n],
+    // Datetimes count whole days in UTC, rounded down, as Python's `timedelta.days` does.
+    ['days_between("2026-01-01T12:00Z", "2026-01-02T11:59Z")', 0n],
+    ['days_between("2026-01-02T11:59Z", "2026-01-01T12:00Z")', -1n],
+    ['days_between("2026-01-01T00:00:00.000001", "2026-01-02T00:00")', 0n],
+    ['days_between("2026-01-01T23:00-02:00", "2026-01-02T01:00Z")', 0n],
+    // A date is its midnight in UTC, and a datetime without an offset is UTC.
+    ['days_between("2026-01-01", "2026-01-03T00:00")', 2n],
+  ])("%s", (text, want) => {
+    expect(run(text)).toBe(want);
+  });
+
+  test("add_days reads system.today as any date", () => {
+    expect(run("add_days(today, -7)", { today: "2026-11-10" })).toBe("2026-11-03");
+  });
+
+  const SHAPE = "must be a date (2026-05-21) or datetime (2026-05-21T14:30[:00][Z|+07:00])";
+
+  test.each<[string, ValueRecord, string]>([
+    ["add_days(d, 1)", {}, "add_days() got null; give a default, e.g. `add_days(x :- system.today)`"],
+    [
+      'add_days("2026-13-01", 1)',
+      {},
+      'add_days() takes a date or datetime, got "2026-13-01": not a valid date: month must be in 1..12',
+    ],
+    ['add_days("soon", 1)', {}, `add_days() takes a date or datetime, got "soon": ${SHAPE}`],
+    ["add_days(n, 1)", { n: 3n }, "add_days() takes a date or datetime, got int"],
+    ['add_days("2026-01-01", 1.5)', {}, "add_days() takes int for n, got float"],
+    ['add_days("2026-01-01", n)', {}, "add_days() takes int for n, got null"],
+    ['add_days("9999-12-31", 1)', {}, "add_days() gives a date past the year 9999"],
+    ['add_days("0001-01-01", -1)', {}, "add_days() gives a date before the year 1"],
+    ['add_days("2026-01-01", 10 ** 20)', {}, "add_days() gives a date past the year 9999"],
+    [
+      'days_between("2026-01-01", b)',
+      {},
+      "days_between() got null for b; give a default, e.g. `days_between(a, b :- system.today)`",
+    ],
+    ['days_between("2026-01-01", "x")', {}, `days_between() takes a date or datetime for b, got "x": ${SHAPE}`],
+  ])("%s fails", (text, values, message) => {
+    const name = text.slice(0, text.indexOf("("));
+    expect(failure(text, values)).toBe(`expression function '${name}' failed: ${message}`);
+  });
+
+  const TYPES: Record<string, Type> = {
+    d: Type.scalar(ValueKind.DATE),
+    t: Type.scalar(ValueKind.DATETIME),
+    od: Type.scalar(ValueKind.DATE).replace({ nullable: true }),
+    s: Type.scalar(ValueKind.STRING),
+  };
+
+  test.each<[string, Type | null]>([
+    ["add_days(d, 1)", Type.scalar(ValueKind.DATE)],
+    ["add_days(od, 1)", Type.scalar(ValueKind.DATE)],
+    ["add_days(t, 1)", Type.scalar(ValueKind.DATETIME)],
+    ["add_days(s, 1)", null],
+    ["days_between(d, t)", Type.scalar(ValueKind.INTEGER)],
+  ])("%s is typed at load", (text, want) => {
+    expect(inferExprType(parseExpr(text), (path) => TYPES[path] ?? null)).toEqual(want);
+  });
+});

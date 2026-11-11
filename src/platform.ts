@@ -932,6 +932,12 @@ export const VERSION = "0.0.4";
 /** The `User-Agent` every request carries unless its caller sets one. */
 export const USER_AGENT = `yian/${VERSION}`;
 
+/**
+ * The hosts a credential may be sent to over plain `http`: to any other host it would cross the
+ * network in cleartext. IPv6 is without brackets.
+ */
+export const LOOPBACK_HOSTS: readonly string[] = ["localhost", "127.0.0.1", "::1"];
+
 /** A request got a 3xx; its message names the target only by scheme, host and port. */
 export class RedirectError extends Error {
   override name = "RedirectError";

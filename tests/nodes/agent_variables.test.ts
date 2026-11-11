@@ -110,7 +110,7 @@ test("an object variable default holding a class instance is rejected", () => {
       default: { nested: new Extras({ child: new Extras({ lost: 1.0 }) }) },
     });
   expect(() => new AgentNode("writer", { prompt: "ready", variables: [variable()] })).toThrow(TypeCheckError);
-  expect(() => new AgentNode("writer", { prompt: "ready", variables: [variable()] })).toThrow("is not a JSON value");
+  expect(() => new AgentNode("writer", { prompt: "ready", variables: [variable()] })).toThrow("is not a yian value");
 });
 
 test("declared variable inventory preserves canonical declarations", () => {

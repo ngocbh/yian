@@ -340,9 +340,28 @@ describe("the shipped builtins' TS-era rules", () => {
   });
 
   test("render_as_json uses JS key order, the float text form, and keeps non-ASCII", () => {
-    const d = { b: 1, a: [Infinity, null], "1": "é" };
+    const d = { b: 1, a: [2.5, null], "1": "é" };
     expect(evaluate("render_as_json(d, 2)", fromRecord({ d }))).toBe(
-      '{\n  "1": "é",\n  "b": 1,\n  "a": [\n    Infinity,\n    null\n  ]\n}',
+      '{\n  "1": "é",\n  "b": 1,\n  "a": [\n    2.5,\n    null\n  ]\n}',
+    );
+  });
+
+  test.each<[string, ValueRecord, string]>([
+    ["render_as_json(inf)", {}, "render_as_json() can't write inf: JSON has no infinity"],
+    ["render_as_json(d)", { d: { b: 1, a: [2.5, -Infinity] } }, "render_as_json() can't write -inf at a[1]: JSON has no infinity"],
+    ["render_as_json(xs, 0)", { xs: [[1n], { "my key": Infinity }] }, 'render_as_json() can\'t write inf at [1]["my key"]: JSON has no infinity'],
+  ])("render_as_json refuses an infinite float, naming its path: %s", (text, values, message) => {
+    expectMessage(text, `expression function 'render_as_json' failed: ${message}`, fromRecord(values));
+  });
+
+  test("render_as_json walks a container shared inside its value once", () => {
+    // Walked as a tree, 60 levels of sharing would take 2^60 steps before reaching the inf.
+    let shared: Value = [1n];
+    for (let i = 0; i < 60; i++) shared = [shared, shared];
+    expectMessage(
+      "render_as_json(d)",
+      "expression function 'render_as_json' failed: render_as_json() can't write inf at [1]: JSON has no infinity",
+      fromRecord({ d: [shared, Infinity] }),
     );
   });
 

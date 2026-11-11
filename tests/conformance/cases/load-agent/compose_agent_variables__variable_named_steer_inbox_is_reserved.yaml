@@ -1,4 +1,5 @@
-# A variable can't take the steer inbox's reserved key, as an input can't; it would fail every run.
+# A variable can't take the steer inbox's reserved key, or any name starting with `__`; it would
+# fail every run.
 kind: load
 flow: |
   id: steer
@@ -18,7 +19,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'node ''chat'': variable ''__steer_inbox'' is reserved for `steer_inbox:`; rename the variable'
+      message: "variable '__steer_inbox' starts with '__', which yian keeps for the names it generates; rename it"
       frames:
       - label: flow.yaml
         range: [11, 7, 11, 20]

@@ -1,0 +1,7 @@
+kind: expr
+# JSON has no infinity, so render_as_json fails naming where the infinite float is.
+expr: "render_as_json([1, [2.5, -inf]])"
+expect:
+  raises:
+    class: ExpressionError
+    message: "expression function 'render_as_json' failed: render_as_json() can't write -inf at [1][1]: JSON has no infinity"

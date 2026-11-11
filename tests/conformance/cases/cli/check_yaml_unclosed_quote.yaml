@@ -1,0 +1,20 @@
+# The YAML reader reports an unclosed quote past the end of the file; check points at the quote.
+kind: cli
+flow: |
+  id: t
+  name: t
+  kind: agent
+  prompt: "unclosed
+  output: str
+args: [check, --json, flow.yaml]
+expect:
+  exit: 1
+  json:
+    format: yian.cli.v1
+    flows:
+      - path: flow.yaml
+        ok: false
+        diagnostics:
+          - code: compose.load
+            message: 'invalid YAML: Missing closing "quote'
+            frames: [{label: flow.yaml, range: [4, 9, 4, 10]}]

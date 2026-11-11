@@ -216,7 +216,7 @@ Your program reaches a waiting run by its log path:
 
 | Call | Returns | What it does |
 |---|---|---|
-| `send(log, inbox, value)` | the send's seq | Adds a message to an `Inbox(T)` input; `value` must fit `T` |
+| `send(log, inbox, value, { key })` | the send's seq | Adds a message to an `Inbox(T)` input; `value` must fit `T`. With `key`, a later send with the same key, inbox and value appends nothing and returns the first seq, so a send is safe to retry |
 | `withdraw(log, inbox)` | `[{seq, value}]` | Takes back every message nothing has read yet |
 | `close(log, inbox)` | the seq, or `null` if already closed | Refuses later sends; takes still read what is queued |
 | `complete(log, callId, result)` | the seq, or `null` for the same answer twice | Answers a pending host call (see [Pending host calls](#pending-host-calls)) |
@@ -273,6 +273,7 @@ A refused call appends nothing and throws `DeliveryRefused`, whose `reason` says
 | `unknown_inbox` | The flow has no such inbox input |
 | `inbox_closed` | The inbox is closed |
 | `invalid_value` | The value doesn't fit the inbox's type or the call's output type |
+| `key_reused` | An earlier send used the send's `key` with another inbox or value |
 | `too_large` | The message is over `YIAN_MAX_EVENT_BYTES` (1 MiB by default) |
 | `unknown_call` | No open call has that id |
 | `not_host_call` | The id names a take or a sleep |

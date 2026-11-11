@@ -76,7 +76,8 @@ import {
   type GrowBuilder,
   isDerivedCommit,
   NodeDataError,
-  type PreparedTransition,
+  PreparedTransition,
+  type RepeatedSend,
   planExpansion,
   prepareExpandedFromPlan,
   prepareExpansionCommit,
@@ -240,7 +241,7 @@ export function resumedAttemptEvents(state: RunState, record: RunResumedRecord):
  * reader for the idle rule.
  */
 export type DeliveryOp =
-  | { readonly kind: "send"; readonly inbox: string; readonly event: unknown }
+  | { readonly kind: "send"; readonly inbox: string; readonly event: unknown; readonly key?: string | null }
   | { readonly kind: "withdraw"; readonly inbox: string }
   | { readonly kind: "complete"; readonly callId: string; readonly result: CompleteResult }
   | { readonly kind: "close"; readonly inbox: string }
@@ -252,14 +253,14 @@ export type DeliveryOp =
  *
  * @returns null for a no-op (nothing to withdraw, an identical repeat complete, closing a closed
  *   inbox, or an interrupt while the run waits for the inbox's next message or is already
- *   stopping).
+ *   stopping), and the seq of the first send for a repeat of a keyed send.
  * @throws DeliveryRefused when the run refuses it.
  * @throws TypeError when `op` is no delivery.
  */
-export function prepareDelivery(state: RunState, op: DeliveryOp): PreparedTransition | null {
+export function prepareDelivery(state: RunState, op: DeliveryOp): PreparedTransition | RepeatedSend | null {
   switch (op.kind) {
     case "send":
-      return prepareSend(state, op.inbox, op.event);
+      return prepareSend(state, op.inbox, op.event, op.key ?? null);
     case "withdraw":
       return prepareWithdraw(state, op.inbox);
     case "complete":
@@ -425,7 +426,8 @@ export class FlowEngine {
    * ones, and aborts the running ones' interrupt signals. Then nudge the dispatcher and publish
    * the observers.
    *
-   * @returns The appended seq and record (both null for a no-op) and the observers.
+   * @returns The appended seq and record (both null for a no-op; for a repeat of a keyed send,
+   *   the first send's seq and no record) and the observers.
    * @throws DeliveryRefused when the run refuses it; nothing is appended.
    * @throws Error before `run()` was called.
    * @throws The error of an `onEvent` that throws on these observers. The record is durable by
@@ -442,6 +444,7 @@ export class FlowEngine {
         : op;
     const prepared = prepareDelivery(state, delivery);
     if (prepared === null) return { seq: null, events: [], record: null };
+    if (!(prepared instanceof PreparedTransition)) return { seq: prepared.repeatOf, events: [], record: null };
     const seq = prepared.expectedSequence;
     const observers = commitPrepared(log, state, prepared);
     if (state.result instanceof RunCancelled) this.#controller.abort(this.#cancelled);

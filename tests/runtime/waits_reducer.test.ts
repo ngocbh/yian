@@ -122,7 +122,7 @@ function commit(log: RunLog, state: RunState, prepared: PreparedTransition): num
 
 /** Commit a send of `event` to `inbox` (default `msgs`) and return its seq. */
 function send(log: RunLog, state: RunState, event: unknown, inbox = "msgs"): number {
-  return commit(log, state, prepareSend(state, inbox, event));
+  return commit(log, state, prepareSend(state, inbox, event) as PreparedTransition);
 }
 
 /** Run `nodeId`'s start, commit `output` and its success, then END's; the run succeeds. */
@@ -179,6 +179,39 @@ describe("sends", () => {
     expect(inner.message).toBe("inbox 'lists' refuses the event at [1]: list element \"x\" is not int (declared list(int))");
     const root = refused(run.state, run.log, () => prepareSend(run.state, "msgs", 3));
     expect(root.message).toBe("inbox 'msgs' refuses the event: 3.0 does not match declared type str");
+  });
+
+  test("a keyed send lands once: a repeat with the key returns its seq and appends nothing", () => {
+    const lists = new Parameter("other", { contract: new ValueContract(inboxType(Type.scalar(ValueKind.STRING))) });
+    const run = started(paramFlow([MSGS, lists], tool("heard", "take")));
+    const seq = commit(run.log, run.state, prepareSend(run.state, "msgs", "hi", "k1") as PreparedTransition);
+    expect((run.log.records().at(-1)!.record as PoolCommitRecord).sendKey).toBe("k1");
+    const before = snapshot(run.state);
+    const next = run.log.nextSequence;
+    expect(prepareSend(run.state, "msgs", "hi", "k1")).toEqual({ repeatOf: seq });
+    // Still once the inbox is closed: the send landed before.
+    commitPrepared(run.log, run.state, prepareInboxClosed(run.state, "msgs")!);
+    expect(prepareSend(run.state, "msgs", "hi", "k1")).toEqual({ repeatOf: seq });
+    expect(run.log.nextSequence).toBe(next + 1);
+    expect(snapshot(run.state).values.inboxEvents).toEqual(before.values.inboxEvents);
+    const other = refused(run.state, run.log, () => prepareSend(run.state, "msgs", "bye", "k1"));
+    expect([other.reason, other.message]).toEqual([
+      "key_reused",
+      "send key 'k1' was used by send " + seq + " with another value or inbox",
+    ]);
+    expect(refused(run.state, run.log, () => prepareSend(run.state, "other", "hi", "k1")).reason).toBe("key_reused");
+    // A new key to a closed inbox is refused as any send to it.
+    expect(refused(run.state, run.log, () => prepareSend(run.state, "msgs", "hi", "k2")).reason).toBe("inbox_closed");
+  });
+
+  test("replay refuses a send whose key an earlier send holds, and a key on a commit that isn't a send", () => {
+    const run = started(waitFlow(tool("heard", "take")));
+    commit(run.log, run.state, prepareSend(run.state, "msgs", "hi", "k1") as PreparedTransition);
+    const again = new PoolCommitRecord(START_ID, `${START_ID}.msgs`, { kind: "str", value: "hi" }, { sendKey: "k1" });
+    expect(() => prepareRecord(run.state, again)).toThrow(new RangeError(`send key 'k1' is already held by send ${run.log.nextSequence - 1}`));
+    start(run.log, run.state, "heard");
+    const node = new PoolCommitRecord("heard", "heard", { kind: "str", value: "x" }, { sendKey: "k3" });
+    expect(() => prepareRecord(run.state, node)).toThrow(new RangeError("only a send holds a send key"));
   });
 
   test("the size cap is the run's MAX_EVENT_BYTES over the value's run-log JSON", () => {

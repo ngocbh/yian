@@ -166,7 +166,7 @@ import {
   commitInitialPool,
   commitPrepared,
   DeliveryRefused,
-  type PreparedTransition,
+  PreparedTransition,
   prepareRunResumed,
   prepareRunStarted,
   RunState,
@@ -1863,6 +1863,15 @@ export interface DeliveryOptions {
   headers?: Readonly<Record<string, string>> | null;
 }
 
+/** The options of `send`: `DeliveryOptions`, and the send's idempotency key. */
+export interface SendOptions extends DeliveryOptions {
+  /**
+   * A non-empty key recorded with the send. A later send with the same key, inbox and value
+   * appends nothing and returns this send's seq, so a host that lost the reply can send again.
+   */
+  key?: string | null;
+}
+
 /**
  * Deliver `op` to the run at `log`: through this process's engine when it is moving the run,
  * else under the log's lock, which is taken without blocking and released before this returns.
@@ -1870,7 +1879,8 @@ export interface DeliveryOptions {
  * the recorded flow is compiled and the log replayed, as `advance` does. A refused delivery keeps
  * the entry. `before` sees the state just before the delivery, synchronously.
  *
- * @returns The appended record and its seq (both `null` for a no-op), and its observers.
+ * @returns The appended record and its seq (both `null` for a no-op; for a repeat of a keyed
+ *   send, the first send's seq and no record), and its observers.
  */
 async function deliverTo(
   log: string,
@@ -1918,6 +1928,7 @@ async function deliverTo(
       before(state);
       const prepared = prepareDelivery(state, op);
       if (prepared === null) return { seq: null, events: [], record: null };
+      if (!(prepared instanceof PreparedTransition)) return { seq: prepared.repeatOf, events: [], record: null };
       const events = commitPrepared(authority, state, prepared);
       return { seq: prepared.expectedSequence, events, record: prepared.record };
     } catch (error) {
@@ -1949,12 +1960,15 @@ async function deliverTo(
  * @param log The run's JSONL log.
  * @param inbox The name of one of the flow's `Inbox(T)` inputs.
  * @param event The value, checked against `T`.
- * @param options See `DeliveryOptions`.
- * @returns The send's seq.
- * @throws TypeError when `inbox` isn't a string, or `options.flow` isn't a `ComposedFlow` or `null`.
+ * @param options See `SendOptions`.
+ * @returns The send's seq; for a repeat of a keyed send, the first send's.
+ * @throws TypeError when `inbox` isn't a string, `options.key` isn't a string or `null`, or
+ *   `options.flow` isn't a `ComposedFlow` or `null`.
+ * @throws RangeError when `options.key` is empty.
  * @throws DeliveryRefused (nothing appended) with reason `ended` once the run has a terminal
- *   result, `unknown_inbox`, `inbox_closed`, `invalid_value` (the `TypeCheckError` is the cause)
- *   or `too_large` (over the run's `YIAN_MAX_EVENT_BYTES`).
+ *   result, `unknown_inbox`, `inbox_closed` (not for a repeat of a keyed send), `invalid_value`
+ *   (the `TypeCheckError` is the cause), `key_reused` (an earlier send holds the key with another
+ *   inbox or value) or `too_large` (over the run's `YIAN_MAX_EVENT_BYTES`).
  * @throws RunBusyError when another writer holds the log.
  * @throws RangeError when the log is empty or doesn't start with `RunStarted`, the run's flow was
  *   built in code and `options.flow` is missing (or was recorded and it is given),
@@ -1965,9 +1979,12 @@ async function deliverTo(
  * @throws DefaultsMismatchError when the run recorded `YIAN_*` values that differ from `env`'s.
  * @throws Error (code `ENOENT`) when `log` doesn't exist; the log's open, append and close errors.
  */
-export async function send(log: string, inbox: string, event: unknown, options: DeliveryOptions = {}): Promise<number> {
+export async function send(log: string, inbox: string, event: unknown, options: SendOptions = {}): Promise<number> {
   if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
-  return (await deliverTo(log, { kind: "send", inbox, event }, options)).seq!;
+  const key = options.key ?? null;
+  if (key !== null && typeof key !== "string") throw new TypeError("a send's key must be a string or null");
+  if (key === "") throw new RangeError("a send's key must be a non-empty string");
+  return (await deliverTo(log, { kind: "send", inbox, event, key }, options)).seq!;
 }
 
 /**

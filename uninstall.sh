@@ -51,7 +51,7 @@ sh_path_line() {
   printf '%s' "case \":\$PATH:\" in *:$dir:*) ;; *) export PATH=$dir:\"\$PATH\" ;; esac  # added by $MARK"
 }
 fish_path_line() {
-  printf '%s' "fish_add_path -g $(quote "$1")  # added by $MARK"
+  printf '%s' "fish_add_path --path $(quote "$1")  # added by $MARK"
 }
 
 # The size of the file $1 in bytes.

@@ -75,7 +75,7 @@ function pathLines(rc: string): number {
 /** The line install.sh adds to an rc file for `shell` to put `bin` on PATH. */
 function markedLine(shell: string, bin: string): string {
   const line =
-    shell === "fish" ? `fish_add_path -g '${bin}'` : `case ":$PATH:" in *:'${bin}':*) ;; *) export PATH='${bin}':"$PATH" ;; esac`;
+    shell === "fish" ? `fish_add_path --path '${bin}'` : `case ":$PATH:" in *:'${bin}':*) ;; *) export PATH='${bin}':"$PATH" ;; esac`;
   return `${line}  # added by yian install.sh`;
 }
 
@@ -454,13 +454,6 @@ describe.if(process.versions.bun !== undefined)("install.sh, PATH", () => {
       }
     });
   }
-
-  test("for fish, adds the folder with fish_add_path -g, which lasts only as long as the session", () => {
-    const fx = fixture();
-    install(fx, [], { SHELL: "/usr/bin/fish" });
-    const config = readFileSync(join(fx.home, ".config", "fish", "config.fish"), "utf8");
-    expect(config).toStartWith(`fish_add_path -g '${fx.bin}'`);
-  });
 
   test("for bash, also writes a .bash_profile there is, and the lines put the folder on PATH once however many a shell reads", () => {
     const fx = fixture();

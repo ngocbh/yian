@@ -279,7 +279,7 @@ sh_path_line() {
   printf '%s' "case \":\$PATH:\" in *:$dir:*) ;; *) export PATH=$dir:\"\$PATH\" ;; esac  # added by $MARK"
 }
 fish_path_line() {
-  printf '%s' "fish_add_path -g $(quote "$1")  # added by $MARK"
+  printf '%s' "fish_add_path --path $(quote "$1")  # added by $MARK"
 }
 
 # True when the rc file $1 already puts BIN_DIR on PATH: with the line $2 install.sh writes, or
@@ -339,7 +339,8 @@ wire_path() {
       ;;
     fish)
       rc=${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish
-      # -g sets fish_user_paths for the session, not saved, so removing the line undoes it.
+      # --path changes PATH, and not fish_user_paths, whose scope the user's own fish_add_path
+      # would then follow; removing the line undoes it.
       add_path_line "$rc" "$(fish_path_line "$BIN_DIR")"
       RELOAD="source $(quote "$rc")"
       ;;

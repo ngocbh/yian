@@ -145,6 +145,28 @@ export const ENTRIES = Object.freeze([
     group: "limit",
     minimum: 1,
   }),
+  // Chained `for` clauses multiply, so one comprehension could otherwise bind billions of items.
+  entry("MAX_COMPREHENSION_ITEMS", {
+    default: 1_000_000,
+    description: "Most items the comprehensions of one expression may bind, counting every `for` clause",
+    group: "limit",
+    minimum: 1,
+  }),
+  // CPython's default and smallest `sys.set_int_max_str_digits` values. `*` and `**` can double
+  // an int's size per operator, so without a cap one expression could take minutes and gigabytes.
+  entry("MAX_INT_DIGITS", {
+    default: 4300,
+    description: "Most decimal digits an int that an operator or a builtin gives may have",
+    group: "limit",
+    minimum: 640,
+  }),
+  // `render_as_json`'s default indent is 2, so the minimum is 2.
+  entry("MAX_JSON_INDENT", {
+    default: 10,
+    description: "Largest indent `render_as_json` takes",
+    group: "limit",
+    minimum: 2,
+  }),
   // A cut keeps one character less than the cap and adds `…`, so the minimum is 2.
   entry("MAX_SHOWN_VALUE_CHARS", {
     default: 200,

@@ -1,0 +1,7 @@
+# 10 ** 4300 has 4301 digits, one more than the default cap; it is refused before it is built.
+kind: expr
+expr: 10 ** 4300
+expect:
+  raises:
+    class: ExpressionError
+    message: 10 ** 4300 gives an int over the limit of 4300 digits (YIAN_MAX_INT_DIGITS)

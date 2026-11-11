@@ -22,9 +22,11 @@
  *
  * Knows about: `typesys` (`Value`, `FileRef`, `InboxRef`, `MemoryRef`, `Type`, `ValueKind`,
  * `fromHost`, `isListKind`, `isRecord`, `renderValuePath`, `valueRepr`, `writeAsText`, `writeAsJson`),
- * `diagnostics` (`reprText`, `compareCodePoints`) and `grammar` (`uncallableReason`).
+ * `defaults` (`YIAN_MAX_INT_DIGITS` and `YIAN_MAX_JSON_INDENT`), `diagnostics` (`reprText`,
+ * `compareCodePoints`) and `grammar` (`uncallableReason`).
  */
 
+import { current } from "../defaults.ts";
 import { compareCodePoints, reprText } from "../diagnostics.ts";
 import { FileRef, InboxRef, MemoryRef, Type, type Value, ValueKind } from "../typesys/index.ts";
 import {
@@ -140,6 +142,11 @@ export function kindName(value: Value): string {
   return FileRef.isFileRef(value) ? "file" : "record";
 }
 
+/** The end of a message for an int result over `cap` digits (`YIAN_MAX_INT_DIGITS`). */
+export function intOverCap(cap: number): string {
+  return `gives an int over the limit of ${cap} digits (YIAN_MAX_INT_DIGITS)`;
+}
+
 /**
  * Throw when a builtin argument is null, so it never becomes text like "null". `fallback` is the
  * example default the message suggests.
@@ -183,12 +190,17 @@ function firstInfinite(
 /**
  * Pretty-print `value` as JSON (`writeAsJson`): the headline builtin. A file renders as its
  * mapping `{"uri", "mime", "name"}`. A null `value` is an error; a null nested inside it renders
- * as `null`. An infinite float is an error naming its path, since JSON has no infinity.
+ * as `null`. An infinite float is an error naming its path, since JSON has no infinity. The
+ * indent is at most `YIAN_MAX_JSON_INDENT`.
  */
 function renderAsJson(value: Value, indent: Value): string {
   rejectNull("render_as_json", value);
   if (typeof indent !== "bigint" || indent < 0n) {
     throw new TypeError(`render_as_json() takes an int indent of 0 or more, got ${valueRepr(indent)}`);
+  }
+  const cap = current().maxJsonIndent;
+  if (indent > BigInt(cap)) {
+    throw new TypeError(`render_as_json() takes an indent of at most ${cap} (YIAN_MAX_JSON_INDENT), got ${indent}`);
   }
   const infinite = firstInfinite(value);
   if (infinite !== null) {
@@ -196,7 +208,6 @@ function renderAsJson(value: Value, indent: Value): string {
     const shown = infinite.x > 0 ? "inf" : "-inf";
     throw new TypeError(`render_as_json() can't write ${shown}${where}: JSON has no infinity`);
   }
-  // A huge indent becomes a huge number (or Infinity), and the writer's `repeat` then fails.
   return writeAsJson(value, Number(indent));
 }
 
@@ -336,7 +347,8 @@ function str(value: Value): string {
 
 /**
  * Return `value` as an int: text in Python's `int()` syntax (ASCII digits only), a float
- * truncated toward zero, a bool as 0 or 1.
+ * truncated toward zero, a bool as 0 or 1. Text with more digits than `YIAN_MAX_INT_DIGITS`,
+ * after leading zeros, is refused before it is read.
  */
 function int(value: Value): bigint {
   rejectNull("int", value, "0");
@@ -349,7 +361,11 @@ function int(value: Value): bigint {
   if (typeof value !== "string") throw new TypeError(`int() takes str, int, float or bool, got ${kindName(value)}`);
   const match = INT_TEXT.exec(value);
   if (match === null) throw new TypeError(`int() can't convert ${valueRepr(value)} to an int`);
-  const digits = BigInt(match[2]!.replaceAll("_", ""));
+  // Reading a long text as a bigint takes time that grows faster than its length.
+  const text = match[2]!.replaceAll("_", "").replace(/^0+(?=.)/, "");
+  const cap = current().maxIntDigits;
+  if (text.length > cap) throw new TypeError(`int() ${intOverCap(cap)}`);
+  const digits = BigInt(text);
   return match[1] === "-" ? -digits : digits;
 }
 

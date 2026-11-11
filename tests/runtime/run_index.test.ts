@@ -1227,6 +1227,24 @@ describe("waiting runs in the index", () => {
     expect([released["run-w"]!.status, released["run-x"]!.status]).toEqual(["waiting", "cancelled"]);
   });
 
+  test("lockProbe: false reads each row's recorded status, never running, even while a writer holds it", () => {
+    const runs = freshRuns();
+    writeRun(runs, "run-s", stoppedRun);
+    const waiting = waitRun(runs, "run-w", WAITING, { keep: true });
+    try {
+      updateRunIndex(runs);
+      const held = byId(readRunIndex(runs, { lockProbe: false }));
+      expect([held["run-s"]!.status, held["run-w"]!.status]).toEqual(["stopped", "waiting"]);
+      expect(held["run-w"]).toMatchObject({ waits: [expect.objectContaining({ node: "heard" })] });
+      expect(byId(readRunIndex(runs, { lockProbe: true }))["run-w"]!.status).toBe("running");
+    } finally {
+      waiting.close();
+    }
+    expect(() => readRunIndex(runs, { lockProbe: "no" as never })).toThrow(
+      new RangeError('lockProbe must be a boolean, got "no"'),
+    );
+  });
+
   test.each(Object.entries(WAIT_LOGS))("the index and inspectRun agree at every cut: %s", (_name, scenario) => {
     const records = [...runStart(), ...scenario];
     for (let k = 1; k <= records.length; k++) {

@@ -550,7 +550,8 @@ function updateIndexFile(runsDir: string, path: string, timeoutMs: number, maxLi
 /**
  * Return the rows of `<runsDir>/index.sqlite`, by start time then run id (a row with no start time
  * first), as the last update left them, with `running` put on top of a `waiting`, `stopped` or `crashed` run whose log a writer holds now
- * (`isRunLogLocked`, probed on every read; a lock that can't be probed counts as free). A missing
+ * (`isRunLogLocked`, probed on every read unless `lockProbe` is `false`; a lock that can't be
+ * probed counts as free). A missing
  * index, or one of another layout, has no rows; so has a damaged one, with a warning through `warn`
  * (the next update rebuilds it). A row whose stored scan can't be read is
  * left out with a warning through `warn`; the next update builds it again. A `waiting` row's
@@ -560,12 +561,16 @@ function updateIndexFile(runsDir: string, path: string, timeoutMs: number, maxLi
  *
  * @param runsDir The runs folder.
  * @param options.timeoutMs How long to wait while a builder commits, in milliseconds; 5000 by default.
- * @throws RangeError when `timeoutMs` isn't a non-negative integer.
+ * @param options.lockProbe `false` skips the lock probes, which cost a file open per such row, so
+ *   each row has the status its records show and none is `running`; `true` by default.
+ * @throws RangeError when `timeoutMs` isn't a non-negative integer, or `lockProbe` isn't a boolean.
  * @throws SQLite's error when the index file stays locked past `timeoutMs`, or can't be read for
  *   another reason than damage.
  */
-export function readRunIndex(runsDir: string, options: { timeoutMs?: number } = {}): RunIndexRow[] {
+export function readRunIndex(runsDir: string, options: { timeoutMs?: number; lockProbe?: boolean } = {}): RunIndexRow[] {
   const timeoutMs = checkedTimeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const lockProbe = options.lockProbe ?? true;
+  if (typeof lockProbe !== "boolean") throw new RangeError(`lockProbe must be a boolean, got ${valueRepr(lockProbe)}`);
   const path = join(runsDir, INDEX_FILE);
   if (!fs.existsSync(path)) return [];
   let db: Sqlite | undefined;
@@ -593,7 +598,11 @@ export function readRunIndex(runsDir: string, options: { timeoutMs?: number } = 
     }
     const { scan, unreadable, ...row } = stored;
     let status: RunIndexStatus = scanStatus(scan);
-    if ((status === "waiting" || status === "stopped" || status === "crashed") && locked(join(runsDir, row.runId, "log.jsonl"))) {
+    if (
+      lockProbe &&
+      (status === "waiting" || status === "stopped" || status === "crashed") &&
+      locked(join(runsDir, row.runId, "log.jsonl"))
+    ) {
       status = "running";
     }
     const waiting = status === "waiting";

@@ -294,43 +294,90 @@ function unicodeEscape(value: string): string {
 }
 
 /**
+ * Return `text` lowercased, as long as it is: a character whose lowercase is longer (such as
+ * "İ") stays as it is, so an index into the result is the same index into `text`.
+ */
+function foldCase(text: string): string {
+  if (/^[\x00-\x7f]*$/.test(text)) return text.toLowerCase();
+  let out = "";
+  for (const char of text) {
+    const lower = char.toLowerCase();
+    out += lower.length === char.length ? lower : char;
+  }
+  return out;
+}
+
+/**
  * Return the forms a secret may take in text, each distinct text once under its first name.
  *
  * The forms are `plain`; `percent-encoded` (`%20` for a space, as in a path) and `plus-encoded`
  * (`+`, as in a query), both encoding all but `A-Za-z0-9_.-~`; `JSON-escaped`, as a JSON
  * string holds it with and without non-ASCII escaped and with and without `/` as `\/`; and
- * `\u-escaped`, every character as a `\uXXXX` escape, in lowercase hex and flagged
- * `ignoreCase`, since a writer may use either case. A form whose text is also the
- * `\u-escaped` text keeps the flag.
+ * `\u-escaped`, every character as a `\uXXXX` escape, in lowercase hex. Every form is flagged
+ * `ignoreCase`: a server may echo a secret lowered or raised, and an encoder may write either
+ * hex case. Texts that differ only in letter case count as one.
  *
  * @param value The secret.
  * @returns The forms, plain first.
  */
 export function secretForms(value: string): SecretForm[] {
-  const candidates: SecretForm[] = [{ form: "plain", text: value }];
+  const candidates: SecretForm[] = [{ form: "plain", text: value, ignoreCase: true }];
   // encodeURIComponent throws on a lone surrogate, which no request could send encoded.
   if (value.isWellFormed()) {
     const percent = percentEncode(value);
-    candidates.push({ form: "percent-encoded", text: percent });
-    candidates.push({ form: "plus-encoded", text: percent.replaceAll("%20", "+") });
+    candidates.push({ form: "percent-encoded", text: percent, ignoreCase: true });
+    candidates.push({ form: "plus-encoded", text: percent.replaceAll("%20", "+"), ignoreCase: true });
   }
   const json = JSON.stringify(value).slice(1, -1);
   // Encoders that escape everything outside printable ASCII write the first form; JSON.stringify
   // keeps it.
   const asciiJson = json.replace(/[^\x20-\x7e]/g, unicodeEscape);
   for (const escaped of [asciiJson, json]) {
-    candidates.push({ form: "JSON-escaped", text: escaped });
-    candidates.push({ form: "JSON-escaped", text: escaped.replaceAll("/", "\\/") });
+    candidates.push({ form: "JSON-escaped", text: escaped, ignoreCase: true });
+    candidates.push({ form: "JSON-escaped", text: escaped.replaceAll("/", "\\/"), ignoreCase: true });
   }
   candidates.push({ form: "\\u-escaped", text: unicodeEscape(value), ignoreCase: true });
 
   const forms = new Map<string, SecretForm>();
   for (const candidate of candidates) {
-    const first = forms.get(candidate.text);
-    if (!first) forms.set(candidate.text, candidate);
-    else if (candidate.ignoreCase) first.ignoreCase = true;
+    const key = foldCase(candidate.text);
+    if (!forms.has(key)) forms.set(key, candidate);
   }
   return [...forms.values()];
+}
+
+// Shorter base64 fragments would match too much unrelated text.
+const MIN_BASE64_FRAGMENT = 8;
+
+/**
+ * Return the base64 forms of `secret`: for each of the three byte alignments, the characters of
+ * its standard and URL-safe encoding that only the secret's bits decide, when there are
+ * `MIN_BASE64_FRAGMENT` or more. They match in their own letter case only: base64 is
+ * case-sensitive. A `Basic` credential holds one, whatever the user name before the secret.
+ */
+export function base64Forms(secret: string): SecretForm[] {
+  const bytes = Buffer.from(secret, "utf8");
+  const forms: SecretForm[] = [];
+  for (let pad = 0; pad < 3; pad++) {
+    const encoded = Buffer.concat([Buffer.alloc(pad), bytes]).toString("base64");
+    // Character i holds bits [6i, 6i + 6); keep those wholly inside the secret's bits.
+    const start = Math.ceil((8 * pad) / 6);
+    const end = Math.floor((8 * (pad + bytes.length)) / 6);
+    const fragment = encoded.slice(start, end);
+    if (fragment.length < MIN_BASE64_FRAGMENT) continue;
+    forms.push({ form: "base64", text: fragment });
+    forms.push({ form: "URL-safe base64", text: fragment.replaceAll("+", "-").replaceAll("/", "_") });
+  }
+  return forms;
+}
+
+/** Return every form `scrub` replaces of each distinct non-empty credential: `secretForms`' and `base64Forms`'. */
+function credentialForms(credentials: Iterable<string>): SecretForm[] {
+  const forms: SecretForm[] = [];
+  for (const value of new Set(credentials)) {
+    if (value) forms.push(...secretForms(value), ...base64Forms(value));
+  }
+  return forms;
 }
 
 /**
@@ -338,28 +385,29 @@ export function secretForms(value: string): SecretForm[] {
  *
  * The cut can only split the last credential form, so the trailing run of non-whitespace is
  * dropped, but at most as many characters as the longest form of any credential; that removes
- * any escape mix. Then a trailing start of any form is dropped, for a credential with
- * whitespace inside, and trailing whitespace. Every proper prefix counts, down to one character,
- * so a little more than a credential may go. Empty credentials are ignored.
+ * any escape mix. Then a trailing start of any form `scrub` replaces is dropped, in any letter
+ * case but base64's, for a credential with whitespace inside, and trailing whitespace. Every
+ * proper prefix counts, down to one character, so a little more than a credential may go. Empty
+ * credentials are ignored.
  *
  * @param text The cut text.
  * @param credentials The secrets the cut may have split.
  * @returns `text` without those tails.
  */
 export function dropCredentialTail(text: string, credentials: Iterable<string>): string {
-  const forms = [...new Set(credentials)].filter((value) => value).flatMap((value) => secretForms(value));
+  const forms = credentialForms(credentials);
   const longest = Math.max(0, ...forms.map((form) => form.text.length));
   // A loop, not /\S*$/, which backtracks quadratically over a long run before whitespace.
   let end = text.length;
   while (end > 0 && text.length - end < longest && !/\s/.test(text[end - 1]!)) end--;
   text = text.slice(0, end).trimEnd();
   let cut = text.length;
-  const lower = (value: string): string => value.replace(/[A-Z]/g, (char) => char.toLowerCase());
+  let folded: string | null = null;
   for (const form of forms) {
     const max = Math.min(form.text.length - 1, text.length);
-    // Lowered once per form, ASCII only so lengths stay; an ignoreCase form is all escapes.
-    const tail = form.ignoreCase ? lower(text.slice(text.length - max)) : text.slice(text.length - max);
-    const start = form.ignoreCase ? lower(form.text) : form.text;
+    // The fold keeps lengths, so the tail of the folded text is the folded tail.
+    const tail = form.ignoreCase ? (folded ??= foldCase(text)).slice(text.length - max) : text.slice(text.length - max);
+    const start = form.ignoreCase ? foldCase(form.text) : form.text;
     // Only a tail longer than the one already found can move the cut.
     for (let length = max; length > text.length - cut; length--) {
       if (tail.endsWith(start.slice(0, length))) {
@@ -372,10 +420,53 @@ export function dropCredentialTail(text: string, credentials: Iterable<string>):
 }
 
 /**
+ * Replace each match of `forms` in `text` with `marker`.
+ *
+ * Every match is found in `text` as given, an `ignoreCase` form's in any letter case; matches
+ * that overlap are replaced as one, so a form inside a longer one goes with it, while matches
+ * that only touch get a marker each. A plain search, not a regular expression, so a form of any
+ * length can be looked for.
+ *
+ * @param text The text to scrub.
+ * @param forms The forms to replace; empty texts are ignored.
+ * @param marker What replaces each match, literally; defaults to `REDACTED`.
+ * @returns The scrubbed text.
+ */
+export function replaceForms(text: string, forms: Iterable<SecretForm>, marker: string = REDACTED): string {
+  const matches: [number, number][] = [];
+  let folded: string | null = null;
+  for (const form of forms) {
+    if (!form.text) continue;
+    const within = form.ignoreCase ? (folded ??= foldCase(text)) : text;
+    const needle = form.ignoreCase ? foldCase(form.text) : form.text;
+    for (let at = within.indexOf(needle); at !== -1; at = within.indexOf(needle, at + 1)) {
+      matches.push([at, at + needle.length]);
+    }
+  }
+  if (matches.length === 0) return text;
+  matches.sort((a, b) => a[0] - b[0]);
+  let out = "";
+  // Where the text after the last marker written starts.
+  let kept = 0;
+  let [start, end] = matches[0]!;
+  for (const [from, to] of matches.slice(1)) {
+    if (from < end) {
+      end = Math.max(end, to);
+      continue;
+    }
+    out += text.slice(kept, start) + marker;
+    kept = end;
+    [start, end] = [from, to];
+  }
+  return out + text.slice(kept, start) + marker + text.slice(end);
+}
+
+/**
  * Replace each form of each credential in `text` with `marker`.
  *
- * Forms come from `secretForms` and are replaced longest first across all credentials, so a
- * credential that contains a shorter one is replaced whole. Empty credentials are ignored.
+ * The forms are `secretForms`', in any letter case, and `base64Forms`'; overlapping matches are
+ * replaced as one, so a credential that contains a shorter one is replaced whole. Empty
+ * credentials are ignored.
  *
  * @param text The text to scrub.
  * @param credentials The secrets to replace.
@@ -383,17 +474,5 @@ export function dropCredentialTail(text: string, credentials: Iterable<string>):
  * @returns The scrubbed text.
  */
 export function scrub(text: string, credentials: Iterable<string>, marker: string = REDACTED): string {
-  const forms: SecretForm[] = [];
-  for (const value of new Set(credentials)) {
-    if (value) forms.push(...secretForms(value));
-  }
-  forms.sort((a, b) => b.text.length - a.text.length);
-  for (const form of forms) {
-    // split/join and a replacer function keep `$` in the marker literal.
-    // Escaping only `\` is safe: an ignoreCase form is always a run of `\uXXXX` escapes.
-    text = form.ignoreCase
-      ? text.replace(new RegExp(form.text.replaceAll("\\", "\\\\"), "gi"), () => marker)
-      : text.split(form.text).join(marker);
-  }
-  return text;
+  return replaceForms(text, credentialForms(credentials), marker);
 }

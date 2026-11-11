@@ -16,7 +16,7 @@ import { readFileSync } from "node:fs";
 import type { Env } from "../defaults.ts";
 import type { Send } from "../platform.ts";
 import { JSONDecodeError, type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
-import { scrub, type SecretForm, secretForms } from "./auth.ts";
+import { base64Forms, replaceForms, secretForms } from "./auth.ts";
 import { encodeBody } from "./body.ts";
 import {
   EventStream,
@@ -549,9 +549,13 @@ export class CassetteRecorder {
   }
 }
 
-/** Return `text` with each of `secrets`, in each of its forms, replaced by `CASSETTE_REDACTED`. */
+/**
+ * Return `text` with each of `secrets`, in each of its `secretForms` forms, replaced by
+ * `CASSETTE_REDACTED`. Base64 inside a larger blob can't be replaced in place without breaking
+ * the blob, so its forms are only scanned for.
+ */
 function redact(text: string, secrets: readonly string[]): string {
-  return scrub(text, secrets, CASSETTE_REDACTED);
+  return replaceForms(text, secrets.filter(Boolean).flatMap(secretForms), CASSETTE_REDACTED);
 }
 
 /** Return `value` with `secrets` redacted in every string and key. */
@@ -574,31 +578,6 @@ function saveHeaders(headers: Headers, keep: (name: string) => boolean, secrets:
     saved[name] = Object.hasOwn(saved, name) ? `${saved[name]}, ${value}` : value;
   }
   return saved;
-}
-
-// Shorter base64 fragments would match too much unrelated text.
-const MIN_BASE64_FRAGMENT = 8;
-
-/**
- * Return the base64 forms of `secret`: for each of the three byte alignments, the characters of
- * its standard and URL-safe encoding that only the secret's bits decide, when there are
- * `MIN_BASE64_FRAGMENT` or more. Base64 inside a larger blob can't be replaced in place, so
- * these are only scanned for.
- */
-function base64Forms(secret: string): SecretForm[] {
-  const bytes = Buffer.from(secret, "utf8");
-  const forms: SecretForm[] = [];
-  for (let pad = 0; pad < 3; pad++) {
-    const encoded = Buffer.concat([Buffer.alloc(pad), bytes]).toString("base64");
-    // Character i holds bits [6i, 6i + 6); keep those wholly inside the secret's bits.
-    const start = Math.ceil((8 * pad) / 6);
-    const end = Math.floor((8 * (pad + bytes.length)) / 6);
-    const fragment = encoded.slice(start, end);
-    if (fragment.length < MIN_BASE64_FRAGMENT) continue;
-    forms.push({ form: "base64", text: fragment });
-    forms.push({ form: "URL-safe base64", text: fragment.replaceAll("+", "-").replaceAll("/", "_") });
-  }
-  return forms;
 }
 
 /** Yield every string in `value` with its place; an object's keys come before its values. */

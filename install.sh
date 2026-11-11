@@ -123,7 +123,8 @@ check_target() {
 }
 
 # Sets CLONE to `new` when INSTALL_DIR is free to clone into, or to `update` when it holds a clean
-# clone of REPO_URL on a branch. Refuses anything else, so local work is never lost.
+# clone of REPO_URL on a branch, whichever branch that is. Refuses anything else, so local work is
+# never lost.
 check_clone() {
   CLONE=new
   [ -e "$INSTALL_DIR" ] || return 0
@@ -142,7 +143,7 @@ check_clone() {
     die "$INSTALL_DIR has uncommitted changes. Commit or stash them, then run this again."
   fi
   if [ -n "$BRANCH_GIVEN" ] && [ "$current" != "$BRANCH" ]; then
-    die "$INSTALL_DIR is on branch $current, not $BRANCH. Switch it with git -C $(quote "$INSTALL_DIR") switch $(quote "$BRANCH"), then run this again."
+    warn "$INSTALL_DIR is on branch $current, not $BRANCH, so this updates $current. To change, run git -C $(quote "$INSTALL_DIR") switch $(quote "$BRANCH"), then this again."
   fi
   CLONE=update
 }
@@ -279,8 +280,8 @@ wire_path() {
       ;;
     fish)
       rc=${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish
-      # --path changes PATH, not the saved fish_user_paths, so removing the line undoes it.
-      add_path_line "$rc" "fish_add_path --path $dir"
+      # -g sets fish_user_paths for the session, not saved, so removing the line undoes it.
+      add_path_line "$rc" "fish_add_path -g $dir"
       RELOAD="source $(quote "$rc")"
       ;;
     *)

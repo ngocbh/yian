@@ -302,6 +302,17 @@ describe.if(process.versions.bun !== undefined)("install.sh, piped", () => {
     expect(result.stderr).toContain(`${fx.clone} is a clone of ${fx.remote}, not ${other}`);
   });
 
+  test("given a --branch other than the clone's, warns and updates the branch the clone is on", () => {
+    const fx = fixture();
+    install(fx);
+    git(fx.remote, "branch", "next");
+    commit(fx.remote, "NEWS", "second");
+    const result = install(fx, ["--branch", "next"]);
+    expect(result.stdout).toContain(`⚠ ${fx.clone} is on branch main, not next`);
+    expect(git(fx.clone, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+    expect(git(fx.clone, "rev-parse", "HEAD")).toBe(git(fx.remote, "rev-parse", "main"));
+  });
+
   test("refuses someone else's yian before it clones or installs anything", () => {
     const fx = fixture();
     mkdirSync(fx.bin, { recursive: true });
@@ -342,6 +353,13 @@ describe.if(process.versions.bun !== undefined)("install.sh, PATH", () => {
       for (const rc of RC_FILES) expect([rc, pathLines(join(fx.home, rc))]).toEqual([rc, files.includes(rc) ? 1 : 0]);
     });
   }
+
+  test("for fish, adds the folder with fish_add_path -g, which lasts only as long as the session", () => {
+    const fx = fixture();
+    install(fx, [], { SHELL: "/usr/bin/fish" });
+    const config = readFileSync(join(fx.home, ".config", "fish", "config.fish"), "utf8");
+    expect(config).toStartWith(`fish_add_path -g '${fx.bin}'`);
+  });
 
   test("for bash, also writes a .bash_profile there is, and the lines put the folder on PATH once however many a shell reads", () => {
     const fx = fixture();
@@ -395,6 +413,14 @@ describe.if(process.versions.bun !== undefined)("uninstall.sh", () => {
     const result = run("uninstall.sh", home);
     expect(result.status).toBe(0);
     expect(readFileSync(join(bin, "yian"), "utf8")).toContain("echo mine");
+  });
+
+  test("keeps an rc file's last line whole when it had no newline", () => {
+    const fx = fixture();
+    writeFileSync(join(fx.home, ".bashrc"), "alias ll='ls -l'");
+    install(fx);
+    expect(pipe("uninstall.sh", fx).status).toBe(0);
+    expect(readFileSync(join(fx.home, ".bashrc"), "utf8")).toBe("alias ll='ls -l'\n");
   });
 
   test("piped, removes the clone install.sh made, the wrapper and every PATH line, and leaves Bun and yian's data", () => {

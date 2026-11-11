@@ -1,21 +1,52 @@
 #!/bin/sh
-# Puts this checkout's `yian` on PATH: finds Bun 1.4 or later (installing it when there is none),
-# installs the checkout's dependencies, writes a `yian` wrapper into YIAN_BIN_DIR (default
-# ~/.local/bin), and adds that folder to PATH in the shell's rc file when it isn't there yet.
-# Running it again updates the wrapper. `uninstall.sh` takes it back out.
+# Installs the `yian` command. Piped from curl, it clones yian into ~/.local/share/yian, or updates
+# the clone it made there; run as ./install.sh from a checkout, it installs that checkout. Then it
+# finds Bun 1.4 or later (installing it when there is none), installs the checkout's dependencies,
+# writes a `yian` wrapper into ~/.local/bin, and adds that folder to PATH in the login shell's rc
+# files. Running it again updates the install. `uninstall.sh` takes it back out.
 #
+#   curl -fsSL https://raw.githubusercontent.com/ngocbh/yian/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/ngocbh/yian/main/install.sh | bash -s -- --dir DIR
 #   ./install.sh
 #
-# Environment: YIAN_BUN, the Bun to use; YIAN_BIN_DIR, the folder for the wrapper.
+# Options: --dir DIR, --branch BRANCH and --repo URL pick a piped install's clone; --no-modify-path
+# leaves the rc files alone; --skip-setup skips the next-step hint. --help lists them.
+# Environment: YIAN_INSTALL_DIR, the clone's folder; YIAN_REPO_URL, the repository to clone;
+# YIAN_BUN, the Bun to use; YIAN_BIN_DIR, the folder for the wrapper.
+#
+# The body is one function, called on the last line, so a download cut short runs nothing.
 
 set -eu
+# An exported CDPATH would send a relative cd elsewhere, and make it print the folder.
+unset CDPATH
 
 MARK="yian install.sh"
+# The wrapper's own line that says install.sh wrote it, matched whole, and the line an earlier
+# install.sh wrote there instead (an extended regular expression, matched whole).
+WRAPPER_MARK="# Written by $MARK"
+OLD_WRAPPER_MARK='# Written by yian install\.sh: runs the yian checkout at /.* with Bun\.'
+# The file in a clone's .git that says install.sh made the clone, so uninstall.sh may remove it.
+CLONE_MARK=yian-install
+DEFAULT_REPO=https://github.com/ngocbh/yian.git
 BUN_FLOOR_MAJOR=1
 BUN_FLOOR_MINOR=4
 
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+  C_STEP=$(printf '\033[0;36m') C_OK=$(printf '\033[0;32m') C_WARN=$(printf '\033[0;33m')
+  C_ERR=$(printf '\033[0;31m') C_OFF=$(printf '\033[0m')
+else
+  C_STEP='' C_OK='' C_WARN='' C_ERR='' C_OFF=''
+fi
+
+step() { printf '%s→%s %s\n' "$C_STEP" "$C_OFF" "$1"; }
+ok() { printf '%s✓%s %s\n' "$C_OK" "$C_OFF" "$1"; }
+warn() { printf '%s⚠%s %s\n' "$C_WARN" "$C_OFF" "$1"; }
+fail() {
+  printf '%s✗%s %s\n' "$C_ERR" "$C_OFF" "$1" >&2
+  FAILED=1
+}
 die() {
-  printf 'Error: %s\n' "$1" >&2
+  fail "$1"
   exit 1
 }
 
@@ -24,79 +55,447 @@ quote() {
   printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
 }
 
-ROOT=$(cd "$(dirname "$0")" && pwd -P)
-[ -f "$ROOT/src/cli/bin.ts" ] || die "$ROOT is not a yian checkout (no src/cli/bin.ts)."
-BIN_DIR=${YIAN_BIN_DIR:-$HOME/.local/bin}
-TARGET=$BIN_DIR/yian
+# Refuses the path $2, which $1 names, unless it's absolute and holds no newline: a relative folder
+# on PATH would run whatever the current folder holds, and a newline would break the lines written.
+check_path() {
+  case $2 in
+    /*) ;;
+    *) die "$1 must be an absolute path, not '$2'." ;;
+  esac
+  case $2 in
+    *"
+"*) die "$1 must not hold a newline." ;;
+  esac
+}
 
-# Refuse early, before installing anything, if the target is someone else's file.
-if [ -e "$TARGET" ] && ! grep -q "$MARK" "$TARGET" 2>/dev/null; then
-  die "$TARGET exists and was not written by install.sh. Move it away, or set YIAN_BIN_DIR."
-fi
+usage() {
+  cat <<'EOF'
+Usage: install.sh [options]
 
-# Find Bun: YIAN_BUN, then bun on PATH, then Bun's own install folder.
-BUN_HOME=${BUN_INSTALL:-$HOME/.bun}
-if [ -n "${YIAN_BUN:-}" ]; then
-  BUN=$YIAN_BUN
-  [ -x "$BUN" ] || die "YIAN_BUN=$BUN is not an executable file."
-elif command -v bun >/dev/null 2>&1; then
-  BUN=$(command -v bun)
-elif [ -x "$BUN_HOME/bin/bun" ]; then
-  BUN=$BUN_HOME/bin/bun
-else
-  command -v curl >/dev/null 2>&1 || die "Bun is not installed and curl is missing. Install Bun from https://bun.sh, then run this again."
-  printf 'Bun not found; installing it with https://bun.sh/install\n'
-  curl -fsSL https://bun.sh/install | bash
-  BUN=$BUN_HOME/bin/bun
-  [ -x "$BUN" ] || die "Bun's installer did not leave $BUN. Install Bun from https://bun.sh, then run this again."
-fi
+Piped from curl, clones yian and installs the clone; run from a checkout, installs that checkout.
 
-BUN_VERSION=$("$BUN" --version)
-major=$(printf '%s' "$BUN_VERSION" | cut -d. -f1)
-minor=$(printf '%s' "$BUN_VERSION" | cut -d. -f2)
-case "$major.$minor" in
-  *[!0-9.]* | .* | *.) die "could not read a version from $BUN --version: $BUN_VERSION" ;;
-esac
-if [ "$major" -lt "$BUN_FLOOR_MAJOR" ] || { [ "$major" -eq "$BUN_FLOOR_MAJOR" ] && [ "$minor" -lt "$BUN_FLOOR_MINOR" ]; }; then
-  die "yian needs Bun $BUN_FLOOR_MAJOR.$BUN_FLOOR_MINOR or later; $BUN is $BUN_VERSION. Run 'bun upgrade', then run this again."
-fi
-BUN=$(cd "$(dirname "$BUN")" && pwd -P)/$(basename "$BUN")
+  --dir DIR         where a piped install clones yian (YIAN_INSTALL_DIR, default ~/.local/share/yian)
+  --branch BRANCH   the branch to clone (default main)
+  --repo URL        the repository to clone (YIAN_REPO_URL, default https://github.com/ngocbh/yian.git)
+  --no-modify-path  leave the shell rc files alone
+  --skip-setup      don't print the next step
 
-(cd "$ROOT" && "$BUN" install --frozen-lockfile) || die "bun install failed in $ROOT."
-
-mkdir -p "$BIN_DIR"
-TMP=$TARGET.tmp.$$
-cat >"$TMP" <<EOF
-#!/bin/sh
-# Written by $MARK: runs the yian checkout at $ROOT with Bun.
-# The flags keep Bun from reading the current folder's .env and bunfig.toml and from installing packages.
-exec $(quote "$BUN") --no-install --no-env-file --config=/dev/null $(quote "$ROOT/src/cli/bin.ts") "\$@"
+YIAN_BUN sets the Bun to use, and YIAN_BIN_DIR the folder for the wrapper (default ~/.local/bin).
 EOF
-chmod 755 "$TMP"
-mv -f "$TMP" "$TARGET"
+}
 
-# Put BIN_DIR on PATH for new shells, unless it already is.
-RC=
-case ":$PATH:" in
-  *":$BIN_DIR:"*) ;;
-  *)
-    case "$(basename "${SHELL:-sh}")" in
-      bash) RC=$HOME/.bashrc ;;
-      zsh) RC=${ZDOTDIR:-$HOME}/.zshrc ;;
-      fish) RC= ;;
-      *) RC=$HOME/.profile ;;
+parse_args() {
+  check_path HOME "${HOME:-}"
+  INSTALL_DIR=${YIAN_INSTALL_DIR:-$HOME/.local/share/yian}
+  REPO_URL=${YIAN_REPO_URL:-$DEFAULT_REPO}
+  BRANCH=main
+  BRANCH_GIVEN=
+  CLONE_FLAGS=
+  MODIFY_PATH=1
+  SKIP_SETUP=
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --dir | --branch | --repo)
+        [ $# -ge 2 ] || die "$1 needs a value."
+        case $1 in
+          --dir) INSTALL_DIR=$2 ;;
+          --branch) BRANCH=$2 BRANCH_GIVEN=1 ;;
+          --repo) REPO_URL=$2 ;;
+        esac
+        CLONE_FLAGS="$CLONE_FLAGS $1"
+        shift 2
+        ;;
+      --no-modify-path) MODIFY_PATH= && shift ;;
+      --skip-setup) SKIP_SETUP=1 && shift ;;
+      -h | --help) usage && exit 0 ;;
+      *) die "Unknown option $1. Run with --help to list the options." ;;
     esac
-    if [ -z "$RC" ]; then
-      printf 'Add %s to PATH in your shell config: fish_add_path %s\n' "$BIN_DIR" "$(quote "$BIN_DIR")"
-    elif ! grep -q "$MARK" "$RC" 2>/dev/null; then
-      printf 'export PATH=%s:"$PATH"  # added by %s\n' "$(quote "$BIN_DIR")" "$MARK" >>"$RC"
-    else
-      RC=
-    fi
-    ;;
-esac
+  done
+  check_path "--dir or YIAN_INSTALL_DIR" "$INSTALL_DIR"
+}
 
-printf 'Installed yian %s at %s (Bun %s).\n' "$("$TARGET" --version)" "$TARGET" "$BUN_VERSION"
-if [ -n "$RC" ]; then
-  printf 'Added %s to PATH in %s. Open a new shell, or run: export PATH=%s:"$PATH"\n' "$BIN_DIR" "$RC" "$(quote "$BIN_DIR")"
-fi
+# Sets ROOT to the checkout this script is in, or leaves it empty when the script was piped.
+find_checkout() {
+  ROOT=
+  # Run as a file, $0 is install.sh or a path to it. Piped through `curl | bash`, it's the shell's
+  # name, so a current folder holding a file of that name must not pass for a checkout.
+  case $0 in
+    install.sh | */install.sh) ;;
+    *) return 0 ;;
+  esac
+  [ -f "$0" ] || return 0
+  here=$(cd "$(dirname "$0")" && pwd -P)
+  if [ -f "$here/src/cli/bin.ts" ]; then
+    check_path "The checkout's path" "$here"
+    ROOT=$here
+  fi
+}
+
+check_prerequisites() {
+  case $(uname -s) in
+    Linux | Darwin) ;;
+    *) die "install.sh runs on macOS and Linux. Elsewhere, install the npm package: npm install -g @ngocbh/yian" ;;
+  esac
+  if [ -z "$ROOT" ] && ! command -v git >/dev/null 2>&1; then
+    die "git is missing. Install git, then run this again."
+  fi
+}
+
+# Refuses, before anything is installed, to replace a `yian` that install.sh didn't write.
+check_target() {
+  BIN_DIR=${YIAN_BIN_DIR:-$HOME/.local/bin}
+  check_path YIAN_BIN_DIR "$BIN_DIR"
+  TARGET=$BIN_DIR/yian
+  if [ -e "$TARGET" ] && ! our_wrapper "$TARGET"; then
+    die "$TARGET exists and was not written by install.sh. Move it away, or set YIAN_BIN_DIR."
+  fi
+}
+
+# Sets CLONE to `new` when INSTALL_DIR is free to clone into, or to `update` when it holds a clean
+# clone of REPO_URL on a branch, whichever branch that is. Refuses anything else, so local work is
+# never lost.
+check_clone() {
+  CLONE=new
+  [ -e "$INSTALL_DIR" ] || return 0
+  [ -d "$INSTALL_DIR" ] || die "$INSTALL_DIR is a file, not a folder. Move it away, or pass --dir for another folder."
+  if [ ! -e "$INSTALL_DIR/.git" ]; then
+    [ -n "$(ls -A "$INSTALL_DIR")" ] || return 0
+    die "$INSTALL_DIR holds files but isn't a git clone. Move it away, or pass --dir for another folder."
+  fi
+  origin=$(git -C "$INSTALL_DIR" config --get remote.origin.url) || origin=
+  if [ "$origin" != "$REPO_URL" ]; then
+    die "$INSTALL_DIR is a clone of ${origin:-no remote}, not $REPO_URL. Pass --dir for another folder, or --repo for the repository it clones."
+  fi
+  current=$(git -C "$INSTALL_DIR" symbolic-ref --quiet --short HEAD) ||
+    die "$INSTALL_DIR is not on a branch. Switch it to one with git switch, then run this again."
+  if [ -n "$(git -C "$INSTALL_DIR" status --porcelain)" ]; then
+    die "$INSTALL_DIR has uncommitted changes. Commit or stash them, then run this again."
+  fi
+  if [ -n "$BRANCH_GIVEN" ] && [ "$current" != "$BRANCH" ]; then
+    warn "$INSTALL_DIR is on branch $current, not $BRANCH, so this updates $current. To change, run git -C $(quote "$INSTALL_DIR") switch $(quote "$BRANCH"), then this again."
+  fi
+  CLONE=update
+}
+
+# Prints the first bun in a PATH folder that is absolute and is neither the current folder nor
+# inside it, as direnv's PATH_add makes a project's folders. Any of those would make whatever
+# project this runs in supply the Bun the wrapper keeps. Run from the home, or a folder above it,
+# folders inside it are the user's own.
+bun_on_path() {
+  cwd=$(pwd -P)
+  home=$(cd "$HOME" 2>/dev/null && pwd -P) || home=$HOME
+  project=$cwd
+  case $home/ in
+    "${cwd%/}"/*) project= ;;
+  esac
+  rest=$PATH:
+  while [ -n "$rest" ]; do
+    entry=${rest%%:*}
+    rest=${rest#*:}
+    case $entry in
+      /*) ;;
+      *) continue ;;
+    esac
+    [ -f "$entry/bun" ] && [ -x "$entry/bun" ] || continue
+    dir=$(cd "$entry" && pwd -P) || continue
+    [ "$dir" != "$cwd" ] || continue
+    if [ -n "$project" ]; then
+      case $dir/ in
+        "${project%/}"/*) continue ;;
+      esac
+    fi
+    printf '%s\n' "$entry/bun"
+    return 0
+  done
+  return 1
+}
+
+# Sets BUN to an absolute path to Bun 1.4 or later, and BUN_VERSION to its version: YIAN_BUN, then
+# bun on PATH, then Bun's own install folder, where Bun's installer puts it when none is found.
+find_bun() {
+  BUN_HOME=${BUN_INSTALL:-$HOME/.bun}
+  if [ -n "${YIAN_BUN:-}" ]; then
+    BUN=$YIAN_BUN
+    [ -x "$BUN" ] || die "YIAN_BUN=$BUN is not an executable file."
+  elif BUN=$(bun_on_path); then
+    :
+  elif [ -x "$BUN_HOME/bin/bun" ]; then
+    BUN=$BUN_HOME/bin/bun
+  else
+    command -v curl >/dev/null 2>&1 || die "Bun is not installed and curl is missing. Install Bun from https://bun.sh, then run this again."
+    step "Installing Bun with https://bun.sh/install"
+    warn "Bun's installer adds Bun to PATH in your shell's rc files itself, even with --no-modify-path, and uninstall.sh leaves Bun and those lines."
+    curl -fsSL https://bun.sh/install | bash
+    BUN=$BUN_HOME/bin/bun
+    [ -x "$BUN" ] || die "Bun's installer did not leave $BUN. Install Bun from https://bun.sh, then run this again."
+  fi
+
+  BUN_VERSION=$("$BUN" --version)
+  major=$(printf '%s' "$BUN_VERSION" | cut -d. -f1)
+  minor=$(printf '%s' "$BUN_VERSION" | cut -d. -f2)
+  case "$major.$minor" in
+    *[!0-9.]* | .* | *.) die "Could not read a version from $BUN --version: $BUN_VERSION" ;;
+  esac
+  if [ "$major" -lt "$BUN_FLOOR_MAJOR" ] || { [ "$major" -eq "$BUN_FLOOR_MAJOR" ] && [ "$minor" -lt "$BUN_FLOOR_MINOR" ]; }; then
+    die "yian needs Bun $BUN_FLOOR_MAJOR.$BUN_FLOOR_MINOR or later; $BUN is $BUN_VERSION. Run 'bun upgrade', then run this again."
+  fi
+  BUN=$(cd "$(dirname "$BUN")" && pwd -P)/$(basename "$BUN")
+  ok "Bun $BUN_VERSION at $BUN"
+}
+
+# Clones REPO_URL into INSTALL_DIR, or fast-forwards the clone there, and sets ROOT to it.
+get_clone() {
+  if [ "$CLONE" = new ]; then
+    step "Cloning $REPO_URL ($BRANCH) into $INSTALL_DIR"
+    # The mark says whether the folder is install.sh's too, so uninstall.sh keeps one it found.
+    folder=created
+    if [ -e "$INSTALL_DIR" ]; then folder=existed; fi
+    mkdir -p "$(dirname "$INSTALL_DIR")"
+    git clone --quiet --recurse-submodules --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR" ||
+      die "git clone failed. Check --repo and --branch, then run this again."
+    printf 'Cloned by %s; uninstall.sh removes this clone when it holds no local work.\nfolder=%s\n' "$MARK" "$folder" >"$INSTALL_DIR/.git/$CLONE_MARK"
+    ok "Cloned yian $(git -C "$INSTALL_DIR" rev-parse --short HEAD) into $INSTALL_DIR"
+  else
+    before=$(git -C "$INSTALL_DIR" rev-parse --short HEAD)
+    step "Updating $INSTALL_DIR"
+    git -C "$INSTALL_DIR" pull --quiet --ff-only ||
+      die "git pull --ff-only failed in $INSTALL_DIR. Bring it up to date with its remote, then run this again."
+    git -C "$INSTALL_DIR" submodule --quiet update --init --recursive ||
+      die "git submodule update failed in $INSTALL_DIR."
+    after=$(git -C "$INSTALL_DIR" rev-parse --short HEAD)
+    if [ "$before" = "$after" ]; then
+      ok "$INSTALL_DIR is up to date ($after)"
+    else
+      ok "Updated $INSTALL_DIR from $before to $after"
+    fi
+  fi
+  [ -f "$INSTALL_DIR/src/cli/bin.ts" ] || die "$INSTALL_DIR is not a yian checkout (no src/cli/bin.ts)."
+  ROOT=$INSTALL_DIR
+}
+
+install_dependencies() {
+  step "Installing dependencies in $ROOT"
+  (cd "$ROOT" && "$BUN" install --frozen-lockfile) || die "bun install failed in $ROOT."
+  ok "Installed dependencies"
+}
+
+# Writes the wrapper to a temp file and moves it into place, so a run never sees half of it.
+write_wrapper() {
+  mkdir -p "$BIN_DIR"
+  tmp=$TARGET.tmp.$$
+  cat >"$tmp" <<EOF
+#!/bin/sh
+$WRAPPER_MARK
+# Runs a yian checkout with Bun, or with YIAN_BUN when it's set. The flags keep Bun from reading the
+# current folder's .env and bunfig.toml and from installing packages.
+bun=\${YIAN_BUN:-$(quote "$BUN")}
+exec "\$bun" --no-install --no-env-file --config=/dev/null $(quote "$ROOT/src/cli/bin.ts") "\$@"
+EOF
+  chmod 755 "$tmp"
+  mv -f "$tmp" "$TARGET"
+}
+
+# The lines install.sh adds to rc files to put the folder $1 on PATH: one guarded line each, with
+# the mark at its end. uninstall.sh removes exactly these lines.
+sh_path_line() {
+  dir=$(quote "$1")
+  printf '%s' "case \":\$PATH:\" in *:$dir:*) ;; *) export PATH=$dir:\"\$PATH\" ;; esac  # added by $MARK"
+}
+fish_path_line() {
+  printf '%s' "fish_add_path --path $(quote "$1")  # added by $MARK"
+}
+
+# The unguarded line an earlier install.sh added to one rc file, which install.sh swaps for
+# sh_path_line's and uninstall.sh removes.
+old_path_line() {
+  printf '%s' "export PATH=$(quote "$1"):\"\$PATH\"  # added by $MARK"
+}
+
+# True when the file $1 is a wrapper install.sh wrote, now or in its earlier form.
+our_wrapper() {
+  LC_ALL=C grep -a -q -x -F -e "$WRAPPER_MARK" "$1" 2>/dev/null ||
+    LC_ALL=C grep -a -q -x -E -e "$OLD_WRAPPER_MARK" "$1" 2>/dev/null
+}
+
+# The size of the file $1 in bytes.
+size() {
+  wc -c <"$1" | tr -d ' '
+}
+
+# Removes from the rc file $1 the lines given after it, matched whole, and fails when $1 is left as
+# it was. grep reads the file as bytes, whatever the locale and whatever it holds. The new text is
+# checked to be the old one less exactly those lines before it's written back, through the file so
+# its permissions and any symlink stay; a failed write puts the old text back.
+strip_lines() {
+  file=$1
+  shift
+  for stripped_line do
+    set -- "$@" -e "$stripped_line"
+    shift
+  done
+  if [ ! -w "$file" ]; then
+    warn "Left the PATH line in $file: the file isn't writable."
+    return 1
+  fi
+  if ! NEW=$(mktemp) || ! OLD=$(mktemp); then
+    fail "Could not make a temp file, so the PATH line is still in $file."
+    return 1
+  fi
+  code=0
+  LC_ALL=C grep -a -v -x -F "$@" "$file" >"$NEW" || code=$?
+  # grep ends a last line that has no newline with one.
+  expected=$(($(size "$file") - $(LC_ALL=C grep -a -x -F "$@" "$file" | wc -c)))
+  if [ -n "$(tail -c 1 "$file")" ]; then expected=$((expected + 1)); fi
+  stripped=
+  if [ "$code" -gt 1 ] || [ "$(size "$NEW")" -ne "$expected" ] ||
+    ! cat "$file" >"$OLD" || [ "$(size "$OLD")" -ne "$(size "$file")" ]; then
+    fail "Could not write the new text of $file, so it's as it was, PATH line included."
+  elif cat "$NEW" >"$file" && [ "$(size "$file")" -eq "$expected" ]; then
+    stripped=1
+  elif cat "$OLD" >"$file"; then
+    fail "Could not write $file, so it's as it was, PATH line included."
+  else
+    fail "Could not write $file. Its old text is in $OLD."
+    OLD=
+  fi
+  rm -f "$NEW" ${OLD:+"$OLD"}
+  NEW= OLD=
+  [ -n "$stripped" ]
+}
+
+# True when the rc file $1 already puts BIN_DIR on PATH: with the line $2 install.sh writes, or
+# with a line of its own that names the folder, by its path or from $HOME. grep reads the file as
+# bytes, whatever the locale and whatever it holds.
+puts_on_path() {
+  [ -f "$1" ] || return 1
+  if LC_ALL=C grep -a -q -x -F -e "$2" "$1"; then return 0; fi
+  from_home=${BIN_DIR#"$HOME"/}
+  LC_ALL=C grep -a -v '^[[:space:]]*#' "$1" | LC_ALL=C grep -a -E 'PATH|fish_add_path' |
+    LC_ALL=C grep -a -q -F -e "$BIN_DIR" -e "\$HOME/$from_home" -e "\${HOME}/$from_home" -e "~/$from_home"
+}
+
+# Appends the line $2 to the rc file $1, unless $1 already puts BIN_DIR on PATH, first taking out
+# the line an earlier install.sh wrote there. A file it can't write gets a warning, and the other
+# files are still written.
+add_path_line() {
+  replaced=
+  if [ -f "$1" ] && LC_ALL=C grep -a -q -x -F -e "$OLD_LINE" "$1"; then
+    strip_lines "$1" "$OLD_LINE" || return 0
+    replaced=1
+  fi
+  if puts_on_path "$1" "$2"; then
+    if [ -n "$replaced" ]; then ok "Removed the old PATH line from $1, which puts $BIN_DIR on PATH itself"; fi
+    return 0
+  fi
+  if { [ -e "$1" ] && [ ! -w "$1" ]; } || ! mkdir -p "$(dirname "$1")" 2>/dev/null; then
+    warn "Could not write $1, so it doesn't put $BIN_DIR on PATH."
+    return 0
+  fi
+  # A last line with no newline stays whole.
+  newline=
+  if [ -s "$1" ] && [ -n "$(tail -c 1 "$1")" ]; then newline='\n'; fi
+  if ! printf "$newline%s\n" "$2" >>"$1"; then
+    warn "Could not write $1, so it doesn't put $BIN_DIR on PATH."
+  elif [ -n "$replaced" ]; then
+    ok "Replaced the old PATH line in $1"
+  else
+    ok "Added $BIN_DIR to PATH in $1"
+  fi
+}
+
+# Puts BIN_DIR on PATH for new shells in the login shell's rc files, unless --no-modify-path was
+# given or it's on PATH already, and sets RELOAD to the command that reads those files into this
+# shell.
+wire_path() {
+  RELOAD=
+  [ -n "$MODIFY_PATH" ] || return 0
+  # Guarded, since a shell can read more than one of these files.
+  line=$(sh_path_line "$BIN_DIR")
+  OLD_LINE=$(old_path_line "$BIN_DIR")
+  zdir=${ZDOTDIR:-$HOME}
+  case ":$PATH:" in
+    *":$BIN_DIR:"*)
+      # On PATH already: only an earlier install.sh's line is swapped, in its own file.
+      for rc in "$HOME/.bashrc" "$HOME/.profile" "$HOME/.bash_profile" "$HOME/.bash_login" "$zdir/.zshrc" "$zdir/.zprofile"; do
+        if [ -f "$rc" ] && LC_ALL=C grep -a -q -x -F -e "$OLD_LINE" "$rc"; then add_path_line "$rc" "$line"; fi
+      done
+      return 0
+      ;;
+  esac
+  case $(basename "${SHELL:-sh}") in
+    zsh)
+      add_path_line "$zdir/.zshrc" "$line"
+      add_path_line "$zdir/.zprofile" "$line"
+      RELOAD="source $(quote "$zdir/.zshrc")"
+      ;;
+    bash)
+      add_path_line "$HOME/.bashrc" "$line"
+      add_path_line "$HOME/.profile" "$line"
+      # A login bash reads the first of .bash_profile, .bash_login and .profile it finds.
+      for rc in "$HOME/.bash_profile" "$HOME/.bash_login"; do
+        if [ -f "$rc" ]; then add_path_line "$rc" "$line"; fi
+      done
+      RELOAD="source $(quote "$HOME/.bashrc")"
+      ;;
+    fish)
+      rc=${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish
+      # --path changes PATH, and not fish_user_paths, whose scope the user's own fish_add_path
+      # would then follow; removing the line undoes it.
+      add_path_line "$rc" "$(fish_path_line "$BIN_DIR")"
+      RELOAD="source $(quote "$rc")"
+      ;;
+    *)
+      add_path_line "$HOME/.profile" "$line"
+      RELOAD=". $(quote "$HOME/.profile")"
+      ;;
+  esac
+}
+
+# Says how to run yian from the shell that ran this, whose PATH the rc files can't change, when
+# BIN_DIR isn't on it.
+path_hint() {
+  case ":$PATH:" in
+    *":$BIN_DIR:"*) return 0 ;;
+  esac
+  if [ -n "$RELOAD" ]; then
+    step "To use yian in this shell, open a new terminal or run: $RELOAD"
+  else
+    warn "$BIN_DIR is not on PATH. Put it on PATH, or run $TARGET."
+  fi
+}
+
+main() {
+  FAILED= NEW= OLD=
+  trap 'rm -f ${NEW:+"$NEW"} ${OLD:+"$OLD"}' EXIT
+  trap 'exit 1' HUP INT TERM
+  parse_args "$@"
+  find_checkout
+  check_prerequisites
+  check_target
+  if [ -n "$ROOT" ]; then
+    if [ -n "$CLONE_FLAGS" ]; then
+      warn "Ignoring$CLONE_FLAGS: they pick a piped install's clone, and this run installs the checkout at $ROOT."
+    fi
+    step "Installing yian from the checkout at $ROOT"
+  else
+    check_clone
+  fi
+  find_bun
+  if [ -z "$ROOT" ]; then get_clone; fi
+  install_dependencies
+  write_wrapper
+
+  wire_path
+
+  version=$("$TARGET" --version) || die "$TARGET --version failed. Run it to see why, then run this again."
+  ok "Installed yian $version at $TARGET"
+  if [ -z "$SKIP_SETUP" ]; then
+    step "Next, save a login for a model provider: yian auth anthropic"
+    step "For other providers, see https://yian.readthedocs.io/models/"
+  fi
+  path_hint
+  if [ -n "$FAILED" ]; then exit 1; fi
+}
+
+# In braces, so a download cut anywhere in this line is a syntax error and runs nothing.
+{ main "$@"; }

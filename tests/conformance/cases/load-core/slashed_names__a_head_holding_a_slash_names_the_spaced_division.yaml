@@ -1,0 +1,29 @@
+kind: load
+# A head shaped like a minted one names no node at load, so the name checks give the spaced fix.
+flow: |
+  id: f
+  name: f
+  input:
+    n: !int
+    m: !int
+  nodes:
+    ratio: !float "${n/m}"
+    say:
+      kind: agent
+      input:
+        count: ${input.n}
+        total: ${input.m}
+      output: str
+      prompt: "The ratio is ${count/total}."
+  output: ${say.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          value entry 'ratio' from: reference ${n/m} uses unknown namespace 'n/m'; `n/m` reads as one name; to divide, write `n / m` with spaces
+          node 'say' prompt: ${count/total} is not a declared input or variable; `count/total` reads as one name; to divide, write `count / total` with spaces
+      frames:
+      - label: flow.yaml
+        range: [7, 10, 7, 25]

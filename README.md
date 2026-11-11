@@ -20,20 +20,23 @@ Claude Code or OpenCode for that.
 ## Install
 
 ```console
+$ curl -fsSL https://raw.githubusercontent.com/ngocbh/yian/main/install.sh | bash
+```
+
+This clones yian into `~/.local/share/yian`, installs Bun if you have none, and puts a `yian`
+command in `~/.local/bin` and on your PATH. Run it again to update. Flags such as `--dir` go after
+`bash -s --`. In a clone of your own, `./install.sh` installs that clone. The same line with
+`uninstall.sh` takes it back out.
+
+As a package:
+
+```console
 $ npm install @ngocbh/yian
 ```
 
-Or `bun add @ngocbh/yian`. yian runs on Node ≥ 22.18 or Bun ≥ 1.4. To put the `yian` command on
-your PATH, install it globally with `npm i -g @ngocbh/yian`, or run it with `npx @ngocbh/yian`
-or `bunx --bun @ngocbh/yian`. Plain `npx yian` fetches an unrelated package.
-
-From a clone of the repository, `install.sh` puts that checkout's `yian` on your PATH. It installs
-Bun if you have none and writes a `yian` wrapper into `~/.local/bin`, so the command runs your
-checkout and follows `git pull`. `./uninstall.sh` takes it back out.
-
-```console
-$ ./install.sh
-```
+Or `bun add @ngocbh/yian`. yian runs on Node ≥ 22.18 or Bun ≥ 1.4. `npm i -g @ngocbh/yian` puts
+the `yian` command on your PATH, and `npx @ngocbh/yian` or `bunx --bun @ngocbh/yian` runs it once.
+Plain `npx yian` fetches an unrelated package.
 
 ## Set up a model
 

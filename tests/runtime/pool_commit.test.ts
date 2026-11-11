@@ -475,7 +475,7 @@ test.if(process.versions.bun !== undefined)("on Bun the run entry is the source 
 const WRITTEN_LINE =
   '{"at":"2026-10-23T20:22:41.126Z","kind":"pool_commit","payload":{"key":"make","kind":"object","node_id":"make",' +
   '"value":{"big":1208925819614629174706176,"esc":{"$record":{"$record":{"a":1}}},"inf":{"$float":"inf"},' +
-  '"ninf":{"$float":"-inf"},"whole":2.0}},"run_id":"r1","schema":29,"seq":9}';
+  '"ninf":{"$float":"-inf"},"whole":2.0}},"run_id":"r1","schema":30,"seq":9}';
 
 test("a fixed pool_commit line with a big int, infinities and an escaped record round-trips through the public JSON form", () => {
   expect(roundTrip(WRITTEN_LINE)).toBe(WRITTEN_LINE);
@@ -563,6 +563,23 @@ test.each([
 test("a pool_commit with steps and another form is refused", () => {
   expect(() => new PoolCommitRecord("reply", "reply", { kind: "str", value: "x" }, { steps: [1] })).toThrow(
     "a pool_commit holds exactly one of value, from, take and steps",
+  );
+});
+
+test("a send's key is recorded with its value and read back; other commits hold none", () => {
+  const record = new PoolCommitRecord("__start__", "__start__.m", { kind: "str", value: "hi" }, { sendKey: "k1" });
+  expect(record.sendKey).toBe("k1");
+  const text = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "r1", 10, record, "2026-10-24T00:00:00.000Z"));
+  expect(text).toContain('"payload":{"key":"__start__.m","kind":"str","node_id":"__start__","send_key":"k1","value":"hi"}');
+  expect((decodeRecord(text).record as PoolCommitRecord).sendKey).toBe("k1");
+  expect(new PoolCommitRecord("x", "x", { kind: "str", value: "v" }).sendKey).toBeNull();
+  const plain = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "r1", 10, new PoolCommitRecord("x", "x", { kind: "str", value: "v" }), "2026-10-24T00:00:00.000Z"));
+  expect(plain).not.toContain("send_key");
+  expect(() => new PoolCommitRecord("reply", "reply.new_messages", null, { steps: [1], sendKey: "k" })).toThrow(
+    new RangeError("only a pool_commit that holds a value holds a send key"),
+  );
+  expect(() => new PoolCommitRecord("__start__", "__start__.m", { kind: "str", value: "hi" }, { sendKey: "" })).toThrow(
+    new RangeError("send_key must be a non-empty string"),
   );
 });
 

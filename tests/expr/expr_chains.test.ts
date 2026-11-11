@@ -1,5 +1,5 @@
 /**
- * Operator chains are flat nodes that evaluate and trace like binary trees, at any length. The
+ * Operator chains are flat nodes that evaluate like binary trees, at any length. The
  * generated chains come from a small seeded PRNG, and values compare kind-strictly (`1n` is not
  * `1`).
  */
@@ -8,7 +8,6 @@ import { expect, test } from "bun:test";
 
 import { ExpressionError, evalExpr, MISSING_ROOT, ResolveMode, type RootResolver } from "../../src/expr/expressions.ts";
 import { type ExprNode, parseExpr, Token, Tree } from "../../src/expr/grammar.ts";
-import { type RootRead, SourceRef, type TracedValue, ValueRoute } from "../../src/expr/lineage.ts";
 import type { Value, ValueRecord } from "../../src/typesys/index.ts";
 import { fieldOf } from "../../src/typesys/values.ts";
 
@@ -380,121 +379,4 @@ test.each([
   ["c ** (1 / 0)", "unresolved reference ${c} in expression"],
 ])("error precedence keeps left-to-right order: %s", (text, message) => {
   expect(messageOf(text, ResolveMode.STRICT_RAISE)).toBe(message);
-});
-
-// --------------------------------------------------------------------------------------- //
-// Traced chains against their old binary forms
-// --------------------------------------------------------------------------------------- //
-
-/** Named root values, each read from its own `SourceRef`, that traced expressions read. */
-class Sources {
-  readonly values: ValueRecord;
-  readonly identities: Record<string, SourceRef>;
-
-  constructor(values: ValueRecord = {}) {
-    this.values = values;
-    this.identities = Object.fromEntries(Object.keys(values).map((name, i) => [name, new SourceRef("run", i)]));
-  }
-
-  resolve = (names: readonly string[]): RootRead => {
-    const head = names[0]!;
-    if (!Object.hasOwn(this.values, head)) return { used: 1, present: false, value: null, why: null };
-    return { used: 1, present: true, value: this.values[head]!, why: null, source: this.identities[head]! };
-  };
-
-  evaluate(expression: string): TracedValue {
-    return evalExpr(parseExpr(expression), this.resolve, { trace: true });
-  }
-}
-
-// The traced pool: list content, scalars and text. Repetition is a type error in TS, so the
-// concat chains have list leaves only.
-const TRACED: ValueRecord = { x: 3n, s: "ab", xs: [1n, 2n], ys: ["c"], t: true, q: 3n, n: -2n };
-const LIST_LEAVES = ["[x]", "xs", "ys", "[]", "[s, x]", "[1]"];
-
-function randomConcat(rng: Rng): Node {
-  const count = rng.randint(2, 8);
-  const operands = Array.from({ length: count }, () => leaf(rng.choice(LIST_LEAVES)));
-  return chain("sum", operands, Array(count - 1).fill("+"));
-}
-
-function tracedExpressions(): Node[] {
-  const rng = new Rng(610);
-  const nodes = Array.from({ length: 150 }, () => randomConcat(rng));
-  return [...nodes, ...randomExpressions(400).filter((node) => !flat(node).includes("m")).slice(0, 100)];
-}
-
-function jsonLike(value: Value): boolean {
-  if (Array.isArray(value)) return value.every(jsonLike);
-  return ["bigint", "number", "string", "boolean"].includes(typeof value);
-}
-
-test("traced chains match the old binary steps", () => {
-  const sources = new Sources(TRACED);
-  const shapes = new Set<string>();
-  for (const node of tracedExpressions()) {
-    const [flatText, binaryText] = [flat(node), binary(node)];
-    let got: TracedValue;
-    try {
-      got = sources.evaluate(flatText);
-    } catch (error) {
-      if (!(error instanceof ExpressionError)) throw error;
-      let oldMessage: string | null = null;
-      try {
-        sources.evaluate(binaryText);
-      } catch (oldError) {
-        expect(oldError).toBeInstanceOf(ExpressionError);
-        oldMessage = (oldError as Error).message;
-      }
-      expect(oldMessage).toBe(error.message);
-      continue;
-    }
-    const old = sources.evaluate(binaryText);
-    expect(sameValue(got.value, old.value)).toBe(true);
-    if (!jsonLike(got.value)) continue;
-    shapes.add(got.route.kind);
-  }
-  expect(shapes.has("concat") && shapes.has("scalar")).toBe(true);
-});
-
-/** The height of a route tree: 0 for a leaf. */
-function depth(route: ValueRoute): number {
-  return 1 + Math.max(-1, ...route.children.map(depth));
-}
-
-test("a list chain traces as balanced two-child concats", () => {
-  const sources = new Sources({ left: ["a"], right: ["b", "c"] });
-  const result = sources.evaluate("[] + right + []");
-  const route = result.route;
-  expect(route.kind).toBe("concat");
-  expect(route.expression).toBe("([] + right + [])");
-  expect(route.sizes).toEqual([0, 2]);
-  const [first, rest] = route.children as [ValueRoute, ValueRoute];
-  expect(rest.kind).toBe("concat");
-  expect(rest.sizes).toEqual([2, 0]);
-  expect(rest.expression).toBe("(right + [])");
-  expect([first, ...rest.children]).toEqual([
-    sources.evaluate("[]").route,
-    sources.evaluate("right").route,
-    sources.evaluate("[]").route,
-  ]);
-});
-
-test("a long traced list chain stays shallow", () => {
-  const sources = new Sources({ x: "v" });
-  const result = sources.evaluate(Array(3000).fill("[x]").join(" + "));
-  const route = result.route;
-  expect(result.value).toEqual(Array(3000).fill("v"));
-  expect(depth(route)).toBeLessThanOrEqual(13);
-});
-
-test("a scalar chain traces as one scalar", () => {
-  let sources = new Sources();
-  const route = sources.evaluate("1 + 2 - 3").route;
-  expect(route.kind).toBe("scalar");
-  expect(route.children).toHaveLength(3);
-  expect(route.expression).toBe("(1 + 2 - 3)");
-  expect(route.valueJson).toBe("0");
-  sources = new Sources({ left: 3n, right: 4n });
-  expect(sources.evaluate("left + right").route.expression).toBe("(left + right)");
 });

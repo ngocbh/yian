@@ -152,6 +152,7 @@ Use parentheses to group. Comparisons don't chain: write `0 < x and x < 10`, not
 - Two ints give an exact int, however large: `${2 ** 100}` is
   `1267650600228229401496703205376`.
 - `/` always gives a float: `${7 / 2}` is `3.5`, and `${4 / 2}` is a float too.
+- Put spaces around `/` between names: `n/2` reads as one name, a load error that shows `n / 2`.
 - `%` takes the sign of the left side: `${-7 % 3}` is `-1`.
 - A float on either side gives a float: `${1 + 1.5}` is `2.5`.
 - `+` joins two texts (`${"a" + "b"}`) or two lists (`${xs + [item]}`).
@@ -264,6 +265,11 @@ The default after `:-` is an expression, so quote text: `${input.when :- "today"
 | `min(xs)`, `max(xs)` | The least or greatest of a list of numbers, or of texts |
 | `sum(xs)` | The sum of a list of numbers; `0` for an empty list |
 | `any(xs)`, `all(xs)` | Whether any, or every, item of a list is true |
+| `sorted(xs, by=null, reverse=false)` | The list sorted: numbers or texts, or with `by`, records by that field |
+| `parse_json(s)` | The value JSON text holds, untyped |
+| `keys(r)`, `values(r)`, `items(r)` | A record's field names, values, or `{key, value}` records, in key order |
+| `add_days(d, n)` | The date or datetime `n` days after `d`; a negative `n` counts back |
+| `days_between(a, b)` | The whole days from `a` to `b`, negative when `b` is earlier |
 
 Arguments may be given by the names in the table: `${join(items, sep=", ")}`. A null argument
 fails the call, so give a default: `${upper(name :- "")}`. A `null` for an argument whose default
@@ -284,10 +290,27 @@ Where Python has the same function, the builtin gives Python's result:
   `round(x)` gives an int; `round(x, n)` a float for a float `x` and an int for an int.
 - `sum` keeps ints exact and adds floats as Python 3.12 does: `sum([0.1, 0.2, 0.3])` is `0.6`.
 - `min` and `max` compare texts by code point, and give the first of equal items.
+- `sorted` compares as `min` and `max` do, and keeps equal items in order, with `reverse` too.
 
-The result types follow the table: `len` and `int` give an int, `float` a float, `round`, `abs`
-and `sum` an int or a float as above, `startswith`, `endswith`, `any` and `all` a boolean,
-`split` a `list(str)`, `min` and `max` an item of their list, and the others text, so
+For another order, such as high, medium, then low, join one comprehension per level:
+`${[t for t in ts if t.p == "high"] + [t for t in ts if t.p == "medium"] + [t for t in ts if t.p == "low"]}`.
+
+`parse_json` reads an int as an int and any other number as a float, and fails on text that
+isn't JSON with where it goes wrong. Its value is untyped, so check it with a constructor:
+`${Finding(parse_json(reply))}`. `keys`, `values` and `items` give the fields sorted by key, by
+code point.
+
+`add_days` and `days_between` take [dates and datetimes](/types/) and count in UTC: a date is its
+midnight, and a datetime without an offset is UTC. `add_days` keeps a datetime's time and offset
+as written. `days_between` rounds a part of a day down, as Python's `timedelta.days` does. A week
+ago is `${add_days(system.today, -7)}`; the days since a date `d` are
+`${days_between(d, system.today)}`.
+
+The result types follow the table: `len`, `int` and `days_between` give an int, `float` a float,
+`round`, `abs` and `sum` an int or a float as above, `startswith`, `endswith`, `any` and `all` a
+boolean, `split` and `keys` a `list(str)`, `min` and `max` an item of their list, `sorted` its
+list, `values` a `list(Any)`, `items` a list of `{key: str, value: Any}`, `parse_json` an untyped
+value, `add_days` a date for a date and a datetime for a datetime, and the others text, so
 `${upper(name).x}` is a load error.
 
 ## Types in expressions

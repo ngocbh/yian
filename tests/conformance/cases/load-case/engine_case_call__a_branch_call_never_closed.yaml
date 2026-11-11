@@ -37,7 +37,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'case node ''gate'' then: a branch target must be a node id or a single call: `call(` is never closed (check its parentheses and quotes). For the text, add a value entry and name it: `gate_then_0: !str "call(take"`'
+      message: "case node 'gate' then: a branch target must be a node id or a single call: `call(` is never closed (check its parentheses and quotes)"
       frames:
       - label: flow.yaml
         range: [25, 15, 25, 24]

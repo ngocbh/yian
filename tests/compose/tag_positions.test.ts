@@ -180,8 +180,7 @@ output: \${hot.output | cold.output}
   expectError(
     text,
     "case node 'route' then: a branch names a node or calls a flow; put the value " +
-      "in its own entry in `nodes:` and name it: `route_then_0: !str hot` and " +
-      "`then: route_then_0`",
+      "in an entry in `nodes:` and name that entry",
     "        then: !str hot",
   );
 });
@@ -353,7 +352,7 @@ output: \${route.output}
   expectError(
     text,
     "case node 'route': a `case` routes and has no `output:`; tag its result where " +
-      "you read it, e.g. `x: !int ${route.output}`",
+      "you read it, e.g. `x: !<type> ${route.output}`",
     "    output: !int",
   );
 });

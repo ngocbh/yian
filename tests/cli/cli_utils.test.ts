@@ -660,4 +660,23 @@ describe("forTerminal", () => {
     expect(forTerminal(text, { write: async () => {}, isTTY: false })).toBe(text);
     expect(forTerminal(text, { write: async () => {} })).toBe(text);
   });
+
+  // The BIDI embeddings, overrides and isolates: each can make a line read in another order.
+  const BIDI = ["\u202a", "\u202b", "\u202c", "\u202d", "\u202e", "\u2066", "\u2067", "\u2068", "\u2069"];
+
+  test.each(BIDI.map((char) => [char.codePointAt(0)!.toString(16), char]))(
+    "shows U+%s on a TTY as its code point",
+    (hex, char) => {
+      const line = `rm -rf ${char}safe${char}.txt`;
+      expect(forTerminal(line, { write: async () => {}, isTTY: true })).toBe(`rm -rf \\u{${hex}}safe\\u{${hex}}.txt`);
+    },
+  );
+
+  test("keeps the BIDI characters off a TTY, and the marks and joiners on one", () => {
+    const line = BIDI.join("x");
+    expect(forTerminal(line, { write: async () => {}, isTTY: false })).toBe(line);
+    // Joiners (a family emoji's) and marks (a right-to-left mark) are neither, and stay.
+    const kept = "👨\u200d👩\u200d👧 \u200fשלום";
+    expect(forTerminal(kept, { write: async () => {}, isTTY: true })).toBe(kept);
+  });
 });

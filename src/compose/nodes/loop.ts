@@ -20,7 +20,7 @@
  */
 
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
-import type { ExprNode } from "../../expr/grammar.ts";
+import { type ExprNode, slashedNameHint } from "../../expr/grammar.ts";
 import { evaluateWhenRecord } from "../../expr/expressions.ts";
 import { ExpressionError, exprRefs, parseCondition } from "../../expr/index.ts";
 import {
@@ -74,6 +74,7 @@ export interface LoopDescriptorFields extends NodeDescriptorFields {
   until_?: string | null;
   times?: unknown;
   max?: unknown;
+  onMaxExceeded?: unknown;
   asserts?: readonly string[] | null;
 }
 
@@ -83,11 +84,13 @@ export interface LoopDescriptorFields extends NodeDescriptorFields {
  * `call` names the body child flow, resolved as a `call`'s is. The authored `input:` mapping
  * seeds the carried record at turn 0. The body returns a subset of the carried record; each
  * omitted field keeps its previous value. Exactly one of `while_`, `until_` and `times` drives
- * the loop; `max` optionally limits a `while:` or `until:` loop's iterations. `times` and `max`
- * hold the YAML value as read (an int is a `bigint`; `null` means unset); the build checks them.
+ * the loop; `max` optionally limits a `while:` or `until:` loop's iterations, and
+ * `on_max_exceeded` says whether reaching it fails (`fail`, the default) or ends the loop with the
+ * carried record (`output`). `times`, `max` and `onMaxExceeded` hold the YAML value as read (an
+ * int is a `bigint`; `null` means unset); the build checks them.
  *
- * `allowed` adds `call`, `inputs`, `while`, `until`, `times`, `max` and `asserts` to the
- * commons, and `call` is required. `bindingFields` is `inputs`: the carried-record seed bindings
+ * `allowed` adds `call`, `inputs`, `while`, `until`, `times`, `max`, `on_max_exceeded` and
+ * `asserts` to the commons, and `call` is required. `bindingFields` is `inputs`: the carried-record seed bindings
  * take part in the inline-call and case-output rewrites. `keywordRemap` reads `while:` and
  * `until:` into `while_` and `until_`; their ranges stay keyed by the YAML key.
  *
@@ -96,7 +99,16 @@ export interface LoopDescriptorFields extends NodeDescriptorFields {
  */
 export class LoopDescriptor extends NodeDescriptor {
   static override readonly kind = "loop";
-  static override readonly allowed = this.allow("call", "inputs", "while", "until", "times", "max", "asserts");
+  static override readonly allowed = this.allow(
+    "call",
+    "inputs",
+    "while",
+    "until",
+    "times",
+    "max",
+    "on_max_exceeded",
+    "asserts",
+  );
   static override readonly required = this.require("call");
   static override readonly bindingFields: readonly string[] = ["inputs"];
   static override readonly writtenFields = [
@@ -123,6 +135,8 @@ export class LoopDescriptor extends NodeDescriptor {
   readonly times: unknown;
   /** The authored `max:` as YAML read it; `null` when absent. */
   readonly max: unknown;
+  /** The authored `on_max_exceeded:` as YAML read it; `null` when absent. */
+  readonly onMaxExceeded: unknown;
   /** The node asserts. */
   readonly asserts: readonly string[];
 
@@ -139,6 +153,7 @@ export class LoopDescriptor extends NodeDescriptor {
     this.until_ = fields.until_ ?? null;
     this.times = fields.times ?? null;
     this.max = fields.max ?? null;
+    this.onMaxExceeded = fields.onMaxExceeded ?? null;
     this.asserts = fields.asserts ?? [];
   }
 
@@ -197,7 +212,8 @@ export class LoopDescriptor extends NodeDescriptor {
    * wiring holds their sources. Exactly one of `while:`, `until:` and `times:` drives the loop:
    * a predicate loop keeps its text and its optional `max:` limit; a `times:` loop has no
    * predicate, and `max:` beside it is redundant. A count must be a YAML int from 1 to
-   * `Number.MAX_SAFE_INTEGER`; the node holds it as a number.
+   * `Number.MAX_SAFE_INTEGER`; the node holds it as a number. `on_max_exceeded:` is `fail` or
+   * `output`, and needs a predicate loop with `max:`.
    *
    * The body's returned field names must be carried fields, at least one of them, and its input
    * names carried fields too. A body returning every carried field stamps its codomain as the
@@ -268,6 +284,18 @@ export class LoopDescriptor extends NodeDescriptor {
       node.predicateKind = kind;
       node.predicate = kind === "while" ? this.while_ : this.until_;
       node.maxIters = this.max === null ? null : checkedCount(subject, "max", this.max, errors);
+    }
+    const onMax = this.onMaxExceeded;
+    if (onMax !== null) {
+      if (onMax !== "fail" && onMax !== "output") {
+        errors.push(`${subject}: on_max_exceeded: must be fail or output (got ${valueRepr(onMax)})`);
+      } else if (present.length === 1 && present[0] === "times") {
+        errors.push(`${subject}: on_max_exceeded: is redundant with times: (a times loop always ends at its count)`);
+      } else if (present.length === 1 && this.max === null) {
+        errors.push(`${subject}: on_max_exceeded: needs max: (without it a ${present[0]} loop has no limit to reach)`);
+      } else {
+        node.onMaxExceeded = onMax;
+      }
     }
 
     // The field-name half of the `'a -> 'a` contract. The carried record's names are the seed
@@ -356,7 +384,7 @@ export class LoopDescriptor extends NodeDescriptor {
       if (unknown.length > 0) {
         errors.push(
           `${subject}: \`${key}:\` references unknown name(s) ${namesText(unknown)} — the predicate reads ` +
-            `the carried record ${carriedText}`,
+            `the carried record ${carriedText}${unknown.map(slashedNameHint).find((hint) => hint !== "") ?? ""}`,
         );
       }
       const inboxHeads = [...heads].filter((head) => carriedOnly.has(head)).toSorted(compareCodeUnits);

@@ -17,16 +17,13 @@
  *   (`checkTemplateCalls`). It also lists each reference a condition reads with the `:-` / `:?` /
  *   `|` escape around it and whether that escape co-skips as a binding (`conditionReads`,
  *   `ConditionRead`), and renames those references by occurrence (`rewriteConditionReads`).
- * - `lineage`: the routes a traced evaluation records (`evalExpr`, `evalTemplate` and
- *   `evalBinding` with `trace: true`); this module re-exports the root read type (`RootRead`).
  *
  * Flow invocation is not a `${...}` construct: it is compose's compile-time whole-value
  * `call(...)` directive, not part of this engine.
  *
  * Knows about: `typesys` (the pool and value types, in `expressions`; `writeAsText`, in
- * `builtins` and `template`; `writeAsJson`, `Type` and `ValueKind`, in `builtins`; `buildValue`,
- * in `lineage`), `typesys/json` (`logJson` and `parseJson`, in `lineage`), `defaults` (the value
- * nesting bound, in `grammar`) and `diagnostics`.
+ * `builtins` and `template`; `writeAsJson`, `Type` and `ValueKind`, in `builtins`), `defaults`
+ * (the value nesting bound, in `grammar`) and `diagnostics`.
  */
 
 export {
@@ -58,7 +55,6 @@ export {
 } from "./expressions.ts";
 export type { DeclaredTypes, RefRename, RefRenamed, RefStep, RootResolver } from "./expressions.ts";
 export { parseExpr } from "./grammar.ts";
-export type { RootRead } from "./lineage.ts";
 export type { ConditionRead } from "./template.ts";
 export {
   bindingCoSkips,

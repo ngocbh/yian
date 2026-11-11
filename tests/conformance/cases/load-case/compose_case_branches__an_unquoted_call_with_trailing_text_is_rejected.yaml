@@ -24,7 +24,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'case node ''route'' then: a branch target must be a node id or a single call: text follows the closing `)`: ''| x''; a call(...) must be the whole value. For the text, add a value entry and name it: `route_then_0: !str "call(child, x=1) | x"`'
+      message: 'case node ''route'' then: a branch target must be a node id or a single call: text follows the closing `)`: ''| x''; a call(...) must be the whole value'
       frames:
       - label: flow.yaml
         range: [11, 15, 11, 35]

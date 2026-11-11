@@ -40,6 +40,7 @@ import {
   prepareNodeStep,
   prepareNodeWaiting,
   prepareNodeWoken,
+  type PreparedTransition,
   prepareRecord,
   prepareRunCancelled,
   prepareRunResumed,
@@ -482,11 +483,12 @@ test("a timeout re-wait whose open call an interrupt closed in between is accept
 
 test("the interrupt delivery op prepares the interrupt; a missing running is none", () => {
   const { state } = interruptible();
-  const viaOp = prepareDelivery(state, { kind: "interrupt", inbox: "msgs", running: ["a"] })!;
+  const viaOp = prepareDelivery(state, { kind: "interrupt", inbox: "msgs", running: ["a"] }) as PreparedTransition;
   expect([...(viaOp.record as InterruptedRecord).nodes]).toEqual(["a", "w"]);
   // Without `running` the delivery is offline: `a` in flight counts as an open reader for the idle
   // rule, and only the waiting reader is named.
-  expect([...(prepareDelivery(state, { kind: "interrupt", inbox: "msgs" })!.record as InterruptedRecord).nodes]).toEqual(["w"]);
+  const offline = prepareDelivery(state, { kind: "interrupt", inbox: "msgs" }) as PreparedTransition;
+  expect([...(offline.record as InterruptedRecord).nodes]).toEqual(["w"]);
   expect(() => prepareDelivery(state, { kind: "nope" } as never)).toThrow(/send, withdraw, complete, close, interrupt or cancel/);
 });
 

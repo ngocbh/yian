@@ -1,0 +1,42 @@
+kind: load
+# `r2` runs only on `r1`'s else, where `e` is a B or a C, so its `when: a` never matches.
+flow: |
+  id: f
+  name: f
+  typedefs:
+    A: {kind: Literal(a), x: int}
+    B: {kind: Literal(b), y: int}
+    C: {kind: Literal(c), z: int}
+    E: Union(A, B, C)
+  input:
+    e: !E
+  nodes:
+    r1:
+      kind: case
+      on: ${input.e.kind}
+      cases:
+        - when: a
+          then: x
+      else: r2
+    r2:
+      kind: case
+      on: ${input.e.kind}
+      cases:
+        - when: b
+          then: y
+        - when: a
+          then: y
+        - when: c
+          then: z
+    x: !str x
+    y: !str y
+    z: !str z
+  output: ${x.output | y.output | z.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "case node 'r2': `when: a` never matches: the branches that reach this case rule it out, so `on: ${input.e.kind}` is `Literal(b, c)` here; remove it"
+      frames:
+      - label: flow.yaml
+        range: [24, 15, 24, 16]

@@ -237,11 +237,15 @@ $ yian run extract.yaml --input text="Ada loved the new release."
 {"name":"Ada","score":9}
 ```
 
-- yian uses the provider's structured output when it has one, and a JSON instruction otherwise.
+- yian uses the provider's structured output (a tool or a JSON-schema format). For a model that
+  can't call tools, such as some self-hosted ones, set `structured_output: prompt` in
+  `llm_config:`: the schema then goes in the prompt as a JSON instruction.
 - A `date` or `datetime` field tells the model the [form](/types/) yian accepts, such as
   `2026-10-14` or `2026-10-14T10:30:00Z`.
-- A reply that doesn't fit gets a correction and another try, up to `retries:` times. Then the
-  node fails with `agent.output_invalid`.
+- A reply that doesn't fit stays in the conversation, followed by a correction naming the
+  problem, and the model tries again, up to `retries:` times. Then the node fails with
+  `agent.output_invalid`.
+- An `int` takes a whole number the model writes as a float, such as `2.0`.
 - A record reply keeps only the fields its type declares, and drops any other field without a
   correction. A [union](/types/#unions) member is stricter: a field it, or a record inside it,
   doesn't declare gets a correction and another try.
@@ -287,13 +291,14 @@ server. Each entry grants one of these:
 | MCP servers | `yian run` reads them from config files (below). Each server is a tool group named after it |
 | Host tools | A program passes them to the run (below) |
 
-- Consecutive calls in one reply run together when their tools say that is safe. Results reach
-  the model in call order.
+- The calls in one reply run one at a time, except that consecutive calls to tools marked safe to
+  run together start together: a host tool's `isConcurrencySafe`, or an MCP server's
+  `concurrencySafe`. Results reach the model in call order.
 - A tool that throws `ReportedToolError` doesn't fail the node: the model reads the message as
   the call's result and carries on. MCP tool errors work this way. Any other error fails the node.
-- `max_tool_iterations` caps the model turns. The default, `-1`, means no cap. At the cap, a
-  reply that still asks for tools runs none of them, and the model answers once more. Set it in
-  the node's `env:` or the flow's `env:`.
+- `max_tool_iterations` caps the model turns. The default is 50, and `-1` means no cap. At the
+  cap, a reply that still asks for tools runs none of them, and the model answers once more. Set
+  it in the node's `env:` or the flow's `env:`.
 
 These mistakes of the model, and the cap, don't fail the node. The call never reaches a tool,
 and the model reads an error result instead:
@@ -345,19 +350,31 @@ The file uses the `mcpServers` format other MCP clients use:
 | `url`, `headers` | A streamable HTTP server |
 | `type` | Optional: `stdio`, `http` or `streamable-http`; must match `command` or `url` |
 | `disabled` | `true` turns the server off, even one an earlier file defines |
+| `concurrencySafe` | `true`, or a list of tool names: those tools' calls in one reply may run together (default `false`) |
 
 - An entry has exactly one of `command` and `url`. SSE servers aren't supported.
+- A `url` must use `https`. Plain `http` works only for `localhost`, `127.0.0.1` and `[::1]`,
+  as for a provider's `base_url`, so headers and tokens never cross the network in cleartext.
 - A key set to `null` counts as absent.
 - A server can't share a name with a registered tool or a built-in: `take`, `sleep`, `ask`,
   `ask_user`, `load_skill`.
+- A server may share its name with one of its own tools, as a server keyed `fetch` that lists
+  `fetch` does. `tools: [fetch]` then grants the whole server, `{fetch: [fetch]}` just the tool,
+  and a TOOL node's `tool_id: fetch` calls the tool.
 - A model sees a server's tools as `<server>_<tool>`, so name servers with letters, digits, `_`
   and `-`. The run fails before it starts on a name a model can't call, or one past 64 characters.
 - In `command`, `args`, `cwd`, `url` and the values of `env` and `headers`, `${VAR}` reads an
   environment variable, `${VAR:-default}` gives a fallback, and `$$` is a literal `$`. An unset
   variable with no fallback is an error, so keep tokens in the environment, not the file.
 - A stdio server gets only a minimal environment (`PATH`, `HOME` and a few more) plus its `env`.
-- Servers start only when the flow needs their tools, and stop when the run ends. The config
-  files are read only when the flow names a tool yian doesn't already have.
+- A result's text that holds half a character, as text cut inside an emoji does, reaches the model
+  with `�` in its place. Structured content that isn't a yian value is reported as a failed call.
+- A server starts when the flow names it: a grant of `github` or `{github: [search]}`, or a TOOL
+  node's `tool_id: {github: search}`. A bare tool name, as `tool_id: search` or a grant of
+  `search`, starts the servers in file order until one lists it, then stops those the flow
+  doesn't use, so name the server when one is slow to start or does something when it starts.
+- The run's servers start together and stop together when it ends. The config files are read
+  only when the flow names a tool yian doesn't already have.
 - MCP needs the optional package `@modelcontextprotocol/client` 2.3.1 installed beside yian.
 
 ### Host tools
@@ -372,11 +389,16 @@ const search = tool({
   name: "search",
   description: "Search the docs and return the best matching passage.",
   parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+  isConcurrencySafe: () => true,
   execute: async ({ query }) => lookup(String(query)),
 });
 
 const result = await runFlow(flow, { question }, { tools: { search, toolbox: [a, b] } });
 ```
+
+`isConcurrencySafe` lets the model's calls to `search` in one reply run together. It gets the
+checked arguments and must return `true` at once; without it, or when it throws or returns a
+Promise, the call runs alone. Mark only tools whose calls don't depend on each other.
 
 A tool that passes `ctx.callId` to its service as an idempotency key can set `resumable: true`.
 When a crash or a stop cuts off an agent's call to it before the result is recorded, the resumed
@@ -460,8 +482,9 @@ output: ${worker.output :- "(stopped)"}
 - **Render.** `steer_inbox: {from: ${input.notes}, render: "From the owner: ${event}"}` wraps each
   message in a template. The template reads only `${event}`.
 - **Interrupts.** A host can interrupt every agent reading an inbox. The agent stops at its next
-  safe point: before a model call, while it waits for a reply, between streamed chunks, or before
-  a tool call. A running tool call finishes. In `yian run`'s chat, Ctrl-C or Esc during a turn
+  safe point: before a model call, while it waits for a reply, between streamed chunks, at the end
+  of the stream (a reply whose text had all arrived is still cut), or before a tool call. A running
+  tool call finishes. In `yian run`'s chat, Ctrl-C or Esc during a turn
   does this.
 - **The result.** An interrupted agent's output is null. With an `Optional(...)` output it
   succeeds, so the flow can route on null as above. Any other output fails the node with

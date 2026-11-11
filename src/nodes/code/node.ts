@@ -394,17 +394,23 @@ function replyError(reply: Exclude<CodeReply, { ok: true }>): Error {
   return reply.as === "plain" && original instanceof Error ? original : new CodeError(original);
 }
 
-/** A call running on a worker: its job id and how it settles. */
+/** A call running on a worker: its job id, how it settles, and where its console lines go. */
 interface Call {
   readonly id: number;
   readonly resolve: (reply: CodeReply) => void;
   readonly reject: (error: unknown) => void;
+  /** The caller's console sink; `null` prints to this thread's `console`. */
+  readonly console: NodeCaps["console"] | null;
 }
 
-/** A started worker and the call it runs; `call` is `null` while it is idle or out of service. */
+/**
+ * A started worker, the call it runs (`null` while it is idle or out of service), and the call it
+ * last replied to, whose sink takes a line its code prints after its body returned.
+ */
 interface CodeWorker {
   readonly worker: Worker;
   call: Call | null;
+  last: Call | null;
 }
 
 /** At most this many idle workers wait for a call. */
@@ -435,13 +441,15 @@ function retire(entry: CodeWorker): Call | null {
 function startWorker(): CodeWorker {
   // `SHARE_ENV`: a body reads and writes the host's live environment, as it did in-process.
   const worker = new Worker(WORKER_URL, { env: SHARE_ENV, workerData: { yianCodeWorker: true } });
-  const entry: CodeWorker = { worker, call: null };
+  const entry: CodeWorker = { worker, call: null, last: null };
   const failed = (error: unknown): void => {
     retire(entry)?.reject(new Error(`CODE worker failed: ${markerMessage(error)}`, { cause: error }));
   };
   worker.on("message", (message: CodeMessage) => {
     if ("console" in message) {
-      console[message.console](message.text);
+      const sink = (message.late === true ? entry.last : entry.call)?.console ?? null;
+      if (sink === null) console[message.console](message.text);
+      else sink(message.console, message.text);
       // A late error leaves the thread suspect (`bun test` kills it); an idle one stops now.
       if (message.late === true && entry.call === null) retire(entry);
       return;
@@ -449,6 +457,7 @@ function startWorker(): CodeWorker {
     const call = entry.call;
     if (call === null || message.id !== call.id) return;
     entry.call = null;
+    entry.last = call;
     if (message.late === true || idle.length >= POOL_SIZE) {
       void worker.terminate();
     } else {
@@ -477,11 +486,16 @@ function startWorker(): CodeWorker {
  * @throws Error when the worker exits before it replies, or fails to start.
  * @throws The clone's error when `job` can't be sent; the worker is retired.
  */
-function runInWorker(job: CodeJob, signal: AbortSignal | undefined): Promise<CodeReply> {
+function runInWorker(
+  job: CodeJob,
+  signal: AbortSignal | undefined,
+  sink: NodeCaps["console"] | null,
+): Promise<CodeReply> {
   return new Promise((resolve, reject) => {
     const entry = idle.pop() ?? startWorker();
     const call: Call = {
       id: ++lastJobId,
+      console: sink,
       resolve: (reply) => {
         signal?.removeEventListener("abort", onAbort);
         resolve(reply);
@@ -714,7 +728,8 @@ export class CodeNode extends Node {
    * `number`s, big ones as `bigint`s) behind a proxy that throws on an undeclared name; what it
    * throws rejects as a `CodeError` (an inline body's frames in its stack named after
    * `sourceFile` and the file line, else the node and the body line), its `console` calls go to
-   * this thread's `console`, and its result goes through host intake (a top-level `return inputs`
+   * `caps.console` (a line it prints after its body returned too), else to this thread's
+   * `console`, and its result goes through host intake (a top-level `return inputs`
    * returns the record). The worker runs with the caller's `current()` values and goes back to the
    * idle pool after its reply.
    *
@@ -757,6 +772,7 @@ export class CodeNode extends Node {
         defaults: current(),
       },
       caps.signal,
+      caps.console ?? null,
     );
     if (!reply.ok) {
       const error = replyError(reply);

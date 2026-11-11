@@ -1947,6 +1947,11 @@ test.each([
   ["loop-max-iters-none", () => loopNode({ maxIters: null }), () => loopNode({ maxIters: 5 })],
   ["loop-iteration", () => loopNode({ iteration: 1 }), () => loopNode({ iteration: 2 })],
   ["loop-returned-fields", () => loopNode({ returnedFields: null }), () => loopNode({ returnedFields: ["x"] })],
+  [
+    "loop-on-max-exceeded",
+    () => loopNode({ maxIters: 2, onMaxExceeded: "fail" }),
+    () => loopNode({ maxIters: 2, onMaxExceeded: "output" }),
+  ],
 ] as const)("test_flow_fingerprint_covers_each_included_kind_field: %s", (_, makeFirst, makeSecond) => {
   expect(flowFingerprint(singleNodeFlow(makeFirst()))).not.toBe(flowFingerprint(singleNodeFlow(makeSecond())));
 });
@@ -2050,6 +2055,12 @@ test("a literal in MAP wiring and a CALL argument literal are identity", () => {
     entries: [{ key: { type: "str", value: "x" }, value: { type: "str", value: "first" } }],
     type: "mapping",
   });
+});
+
+test("a loop that fails at max leaves on_max_exceeded out of its manifest", () => {
+  expect("on_max_exceeded" in nodeManifest(singleNodeFlow(loopNode({ maxIters: 2 })), "node")).toBe(false);
+  const output = nodeManifest(singleNodeFlow(loopNode({ maxIters: 2, onMaxExceeded: "output" })), "node");
+  expect(output.on_max_exceeded).toBe("output");
 });
 
 test("total loop manifest omits returned fields", () => {

@@ -1639,11 +1639,26 @@ export class MemoryRunLog implements RunLog {
 const UTF8_ENCODER = new TextEncoder();
 
 /**
+ * What a caller kept of a log it closed, so `JsonlRunLog.resume` can reopen the file without reading
+ * it while the file is still the one it left: its first record, the seq of its last, and the
+ * file's size, device, inode and mtime (ns) at close.
+ */
+export interface KnownRunLog {
+  readonly first: RecordEnvelope;
+  readonly lastSeq: number;
+  readonly size: bigint;
+  readonly dev: bigint;
+  readonly ino: bigint;
+  readonly mtimeNs: bigint;
+}
+
+/**
  * An exclusively locked, append-and-fsync JSONL log for one run.
  *
  * Built only by `create` or `resume`. The log holds the non-blocking exclusive lock on its
  * sibling `<path>.lock` for its whole life, and keeps its validated records in memory, so they
- * stay iterable after `close`.
+ * stay iterable after `close`; but one resumed from a known prefix reads that prefix only when
+ * its records are first read, which must be before `close`.
  */
 export class JsonlRunLog implements RunLog {
   /** The sole run id this log accepts. */
@@ -1653,7 +1668,10 @@ export class JsonlRunLog implements RunLog {
   readonly #fd: number;
   readonly #lock: FileLock;
   readonly #clock: () => number;
-  readonly #records: RecordEnvelope[];
+  /** The records read or appended; after `#unread`'s records, while those aren't read yet. */
+  #records: RecordEnvelope[];
+  /** A known prefix not read yet: its first record, its record count and its size in bytes. */
+  #unread: { first: RecordEnvelope; count: number; size: number } | null = null;
   #prefixSize: number;
   #closed = false;
   /**
@@ -1721,8 +1739,13 @@ export class JsonlRunLog implements RunLog {
    * decode as a non-empty log, so a rejected file is left unchanged. Any failure closes the file
    * and releases the lock.
    *
+   * With `known`, a file whose size, device, inode and mtime still match it isn't read: the log
+   * continues after `known.lastSeq`, and its records are read and checked as above only when
+   * something first reads them. A file that doesn't match is read as without it.
+   *
    * @param options.clock The clock appends read their times from (default `Date.now`). The
    *   records read keep the times they were written with.
+   * @param options.known What the caller kept of the log when it last closed it.
    * @throws RangeError when the file holds no complete line (`cannot resume an empty run log:
    *   <path>`) or a complete line isn't a valid record, or the records don't share one run id with
    *   contiguous sequences from 0 (the message names `path`, the line and its seq).
@@ -1734,13 +1757,23 @@ export class JsonlRunLog implements RunLog {
    * @throws the `fs` error (`code` `ENOENT` for a missing log, `EISDIR` for a folder, neither of
    *   which creates a lock file) and other `lockFile` errors.
    */
-  static resume(path: string, options: RunLogOptions = {}): JsonlRunLog {
+  static resume(path: string, options: RunLogOptions & { known?: KnownRunLog | null } = {}): JsonlRunLog {
     const clock = logClock(options);
     // Checked before the lock, so a symlink, a FIFO or a device gets no lock file beside it.
     const fd = openRegular(path, fs.constants.O_RDWR);
     let lock: FileLock | undefined;
     try {
       lock = lockRunLog(path, fd);
+      const known = options.known ?? null;
+      if (known !== null) {
+        const stat = fs.fstatSync(fd, { bigint: true });
+        if (stat.size === known.size && stat.dev === known.dev && stat.ino === known.ino && stat.mtimeNs === known.mtimeNs) {
+          const size = Number(stat.size);
+          const log = new JsonlRunLog(path, known.first.runId, fd, lock, clock, [], size);
+          log.#unread = { first: known.first, count: known.lastSeq + 1, size };
+          return log;
+        }
+      }
       const data = fs.readFileSync(fd);
       const completeEnd = data.lastIndexOf(0x0a) + 1;
       const records = decodeCompletePrefix(data.subarray(0, completeEnd), path);
@@ -1758,16 +1791,47 @@ export class JsonlRunLog implements RunLog {
 
   /** The sequence the next successful append receives. */
   get nextSequence(): number {
-    return this.#records.length;
+    return (this.#unread?.count ?? 0) + this.#records.length;
+  }
+
+  /** The log's first record, read without reading the others. */
+  first(): RecordEnvelope | undefined {
+    return this.#unread?.first ?? this.#records[0];
   }
 
   /** Iterate the records retained when the iteration starts. */
   [Symbol.iterator](): Iterator<RecordEnvelope> {
-    return [...this.#records][Symbol.iterator]();
+    return [...this.#read()][Symbol.iterator]();
   }
 
   records(): readonly RecordEnvelope[] {
-    return Object.freeze([...this.#records]);
+    return Object.freeze([...this.#read()]);
+  }
+
+  /**
+   * Return every record, reading the known prefix first if it isn't read yet.
+   *
+   * @throws Error when the log closed before its prefix was read.
+   * @throws RangeError as `resume` does for a line it can't read, and when the prefix holds
+   *   another number of records than it was known to.
+   */
+  #read(): RecordEnvelope[] {
+    const unread = this.#unread;
+    if (unread === null) return this.#records;
+    if (this.#closed) throw new Error(`run log ${this.path} closed before its records were read`);
+    const data = Buffer.alloc(unread.size);
+    for (let at = 0; at < unread.size; ) {
+      const count = fs.readSync(this.#fd, data, at, unread.size - at, at);
+      if (count === 0) throw new RangeError(`run log ${this.path} is shorter than its known ${unread.size} bytes`);
+      at += count;
+    }
+    const prefix = decodeCompletePrefix(data, this.path);
+    if (prefix.length !== unread.count || prefix[0]!.runId !== this.runId) {
+      throw new RangeError(`run log ${this.path} doesn't hold the ${unread.count} records it was known to`);
+    }
+    this.#records = [...prefix, ...this.#records];
+    this.#unread = null;
+    return this.#records;
   }
 
   /**

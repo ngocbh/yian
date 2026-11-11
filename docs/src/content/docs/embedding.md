@@ -360,7 +360,9 @@ abort its `signal` instead: the run records a stop, rejects with the signal's re
   Tool groups may hold same-named tools, which a model sees as `<group>_<tool>`; two tools that
   could show one name are refused.
 - **MCP servers.** `mcpServer({ command, args })` or `mcpServer({ url, headers })` describes a
-  server; pass it as a `tools` entry and its tools become one group. yian opens it for the run
+  server; pass it as a `tools` entry and its tools become one group. `concurrencySafe: true` (or a
+  list of tool names) lets those tools' calls in one reply run together, as `isConcurrencySafe`
+  does for a host tool. yian opens it for the run
   and closes it after, unless you opened it yourself with `await server.open()`. It needs the
   optional peer package `@modelcontextprotocol/client`.
 - **Skills.** `loadSkills(defaultSkillRoots())` reads the Claude Code and Codex skill folders

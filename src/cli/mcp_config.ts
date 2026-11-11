@@ -28,6 +28,7 @@ const KNOWN_KEYS: ReadonlySet<string> = new Set([
   "headers",
   "type",
   "disabled",
+  "concurrencySafe",
 ]);
 const TYPES: readonly string[] = ["stdio", "http", "streamable-http"];
 // `$$` first so `$${X}` is a literal `${X}`; any other `${` that doesn't match the reference form
@@ -54,8 +55,9 @@ export function userMcpConfig(env: Env): string {
  * A later file's entry replaces an earlier entry of the same name whole; an entry with
  * `"disabled": true` drops the server, so `{"disabled": true}` alone turns off a server an earlier
  * file defines. Entry keys read are `command`, `args`, `env`, `cwd`, `url`, `headers`, `type`
- * (`"stdio"`, `"http"` or `"streamable-http"`) and `disabled`, each absent when `null`; any other
- * key is ignored with a warning. In `command`, each `args` item, `cwd`, `url`, and the values of
+ * (`"stdio"`, `"http"` or `"streamable-http"`), `disabled` and `concurrencySafe` (`true`, `false`
+ * or a list of tool names, as `mcpServer` takes it), each absent when `null`; any other key is
+ * ignored with a warning. In `command`, each `args` item, `cwd`, `url`, and the values of
  * `env` and `headers`, `${VAR}` expands to `env(VAR)`, `${VAR:-default}` to `default` when `VAR`
  * is unset or empty, and `$$` to `$`; a default can't contain `$`, and any other `$` stays as
  * written.
@@ -194,6 +196,7 @@ function build(
   const vars = optionalStringRecord(where, entry, "env");
   const headers = optionalStringRecord(where, entry, "headers");
   const cwd = optionalString(where, entry, "cwd");
+  const concurrencySafe = optionalConcurrencySafe(where, entry);
 
   const expandText = (field: string, text: string | undefined): string | undefined =>
     text === undefined ? undefined : expand(where, field, text, env);
@@ -217,7 +220,7 @@ function build(
     headers: expandRecord("headers", headers),
   };
   try {
-    return mcpServer({ ...fields, label: name });
+    return mcpServer({ ...fields, label: name, concurrencySafe });
   } catch (error) {
     if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
     throw new McpConfigError(`${where}: ${error.message}`, { cause: error });
@@ -232,6 +235,20 @@ function optionalString(where: string, entry: JsonObject, key: string): string |
     throw new McpConfigError(`${where}: ${reprText(key)} must be a string, got ${kind(value)}`);
   }
   return value;
+}
+
+/**
+ * Return `entry.concurrencySafe` when it is `true`, `false` or a list of tool names, `undefined`
+ * when absent or `null`, else throw.
+ */
+function optionalConcurrencySafe(where: string, entry: JsonObject): boolean | string[] | undefined {
+  const value = Object.hasOwn(entry, "concurrencySafe") ? (entry.concurrencySafe as JsonValue) : null;
+  if (value === null) return undefined;
+  if (typeof value === "boolean") return value;
+  if (Array.isArray(value) && value.every((name) => typeof name === "string")) return value as string[];
+  const bad = Array.isArray(value) ? value.find((name) => typeof name !== "string")! : undefined;
+  const got = bad === undefined ? kind(value) : `an array holding ${kind(bad)}`;
+  throw new McpConfigError(`${where}: 'concurrencySafe' must be true, false or a list of tool names, got ${got}`);
 }
 
 /**

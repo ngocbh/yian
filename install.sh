@@ -2,15 +2,15 @@
 # Installs the `yian` command. Piped from curl, it clones yian into ~/.local/share/yian, or updates
 # the clone it made there; run as ./install.sh from a checkout, it installs that checkout. Then it
 # finds Bun 1.4 or later (installing it when there is none), installs the checkout's dependencies,
-# writes a `yian` wrapper into ~/.local/bin, and adds that folder to PATH in the shell's rc file.
-# Running it again updates the install. `uninstall.sh` takes it back out.
+# writes a `yian` wrapper into ~/.local/bin, and adds that folder to PATH in the login shell's rc
+# files. Running it again updates the install. `uninstall.sh` takes it back out.
 #
 #   curl -fsSL https://raw.githubusercontent.com/ngocbh/yian/main/install.sh | bash
 #   curl -fsSL https://raw.githubusercontent.com/ngocbh/yian/main/install.sh | bash -s -- --dir DIR
 #   ./install.sh
 #
-# Options: --dir DIR, --branch BRANCH and --repo URL pick a piped install's clone; --skip-setup
-# skips the next-step hint. --help lists them.
+# Options: --dir DIR, --branch BRANCH and --repo URL pick a piped install's clone; --no-modify-path
+# leaves the rc files alone; --skip-setup skips the next-step hint. --help lists them.
 # Environment: YIAN_INSTALL_DIR, the clone's folder; YIAN_REPO_URL, the repository to clone;
 # YIAN_BUN, the Bun to use; YIAN_BIN_DIR, the folder for the wrapper.
 #
@@ -51,10 +51,11 @@ Usage: install.sh [options]
 
 Piped from curl, clones yian and installs the clone; run from a checkout, installs that checkout.
 
-  --dir DIR        where a piped install clones yian (YIAN_INSTALL_DIR, default ~/.local/share/yian)
-  --branch BRANCH  the branch to clone (default main)
-  --repo URL       the repository to clone (YIAN_REPO_URL, default https://github.com/ngocbh/yian.git)
-  --skip-setup     don't print the next step
+  --dir DIR         where a piped install clones yian (YIAN_INSTALL_DIR, default ~/.local/share/yian)
+  --branch BRANCH   the branch to clone (default main)
+  --repo URL        the repository to clone (YIAN_REPO_URL, default https://github.com/ngocbh/yian.git)
+  --no-modify-path  leave the shell rc files alone
+  --skip-setup      don't print the next step
 
 YIAN_BUN sets the Bun to use, and YIAN_BIN_DIR the folder for the wrapper (default ~/.local/bin).
 EOF
@@ -66,6 +67,7 @@ parse_args() {
   BRANCH=main
   BRANCH_GIVEN=
   CLONE_FLAGS=
+  MODIFY_PATH=1
   SKIP_SETUP=
   while [ $# -gt 0 ]; do
     case $1 in
@@ -79,6 +81,7 @@ parse_args() {
         CLONE_FLAGS="$CLONE_FLAGS $1"
         shift 2
         ;;
+      --no-modify-path) MODIFY_PATH= && shift ;;
       --skip-setup) SKIP_SETUP=1 && shift ;;
       -h | --help) usage && exit 0 ;;
       *) die "Unknown option $1. Run with --help to list the options." ;;
@@ -224,6 +227,82 @@ EOF
   mv -f "$tmp" "$TARGET"
 }
 
+# True when the rc file $1 already puts BIN_DIR on PATH: with the line install.sh writes, or with a
+# line of its own that names the folder, by its path or from $HOME.
+puts_on_path() {
+  [ -f "$1" ] || return 1
+  if grep -qF "$MARK" "$1"; then return 0; fi
+  from_home=${BIN_DIR#"$HOME"/}
+  grep -v '^[[:space:]]*#' "$1" | grep -E 'PATH|fish_add_path' |
+    grep -qF -e "$BIN_DIR" -e "\$HOME/$from_home" -e "\${HOME}/$from_home" -e "~/$from_home"
+}
+
+# Appends the line $2, marked for uninstall.sh, to the rc file $1, unless $1 already puts BIN_DIR
+# on PATH.
+add_path_line() {
+  if puts_on_path "$1"; then return 0; fi
+  mkdir -p "$(dirname "$1")"
+  # A last line with no newline stays whole.
+  newline=
+  if [ -s "$1" ] && [ -n "$(tail -c 1 "$1")" ]; then newline='\n'; fi
+  printf "$newline%s  # added by %s\n" "$2" "$MARK" >>"$1" ||
+    die "Could not write $1. Pass --no-modify-path, and put $BIN_DIR on PATH yourself."
+  ok "Added $BIN_DIR to PATH in $1"
+}
+
+# Puts BIN_DIR on PATH for new shells in the login shell's rc files, unless --no-modify-path was
+# given or it's on PATH already, and sets RELOAD to the command that reads those files into this
+# shell.
+wire_path() {
+  RELOAD=
+  [ -n "$MODIFY_PATH" ] || return 0
+  case ":$PATH:" in
+    *":$BIN_DIR:"*) return 0 ;;
+  esac
+  dir=$(quote "$BIN_DIR")
+  # Guarded, since a shell can read more than one of these files.
+  line="case \":\$PATH:\" in *:$dir:*) ;; *) export PATH=$dir:\"\$PATH\" ;; esac"
+  case $(basename "${SHELL:-sh}") in
+    zsh)
+      add_path_line "${ZDOTDIR:-$HOME}/.zshrc" "$line"
+      add_path_line "${ZDOTDIR:-$HOME}/.zprofile" "$line"
+      RELOAD="source $(quote "${ZDOTDIR:-$HOME}/.zshrc")"
+      ;;
+    bash)
+      add_path_line "$HOME/.bashrc" "$line"
+      add_path_line "$HOME/.profile" "$line"
+      # A login bash reads the first of .bash_profile, .bash_login and .profile it finds.
+      for rc in "$HOME/.bash_profile" "$HOME/.bash_login"; do
+        if [ -f "$rc" ]; then add_path_line "$rc" "$line"; fi
+      done
+      RELOAD="source $(quote "$HOME/.bashrc")"
+      ;;
+    fish)
+      rc=${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish
+      # --path changes PATH, not the saved fish_user_paths, so removing the line undoes it.
+      add_path_line "$rc" "fish_add_path --path $dir"
+      RELOAD="source $(quote "$rc")"
+      ;;
+    *)
+      add_path_line "$HOME/.profile" "$line"
+      RELOAD=". $(quote "$HOME/.profile")"
+      ;;
+  esac
+}
+
+# Says how to run yian from the shell that ran this, whose PATH the rc files can't change, when
+# BIN_DIR isn't on it.
+path_hint() {
+  case ":$PATH:" in
+    *":$BIN_DIR:"*) return 0 ;;
+  esac
+  if [ -n "$RELOAD" ]; then
+    step "To use yian in this shell, open a new terminal or run: $RELOAD"
+  else
+    warn "$BIN_DIR is not on PATH. Put it on PATH, or run $TARGET."
+  fi
+}
+
 main() {
   parse_args "$@"
   find_checkout
@@ -242,35 +321,14 @@ main() {
   install_dependencies
   write_wrapper
 
-  # Put BIN_DIR on PATH for new shells, unless it already is.
-  RC=
-  case ":$PATH:" in
-    *":$BIN_DIR:"*) ;;
-    *)
-      case "$(basename "${SHELL:-sh}")" in
-        bash) RC=$HOME/.bashrc ;;
-        zsh) RC=${ZDOTDIR:-$HOME}/.zshrc ;;
-        fish) RC= ;;
-        *) RC=$HOME/.profile ;;
-      esac
-      if [ -z "$RC" ]; then
-        printf 'Add %s to PATH in your shell config: fish_add_path %s\n' "$BIN_DIR" "$(quote "$BIN_DIR")"
-      elif ! grep -q "$MARK" "$RC" 2>/dev/null; then
-        printf 'export PATH=%s:"$PATH"  # added by %s\n' "$(quote "$BIN_DIR")" "$MARK" >>"$RC"
-      else
-        RC=
-      fi
-      ;;
-  esac
+  wire_path
 
   ok "Installed yian $("$TARGET" --version) at $TARGET"
   if [ -z "$SKIP_SETUP" ]; then
     step "Next, save a login for a model provider: yian auth anthropic"
     step "For other providers, see https://yian.readthedocs.io/models/"
   fi
-  if [ -n "$RC" ]; then
-    printf 'Added %s to PATH in %s. Open a new shell, or run: export PATH=%s:"$PATH"\n' "$BIN_DIR" "$RC" "$(quote "$BIN_DIR")"
-  fi
+  path_hint
 }
 
 main "$@"

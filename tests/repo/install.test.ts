@@ -328,6 +328,55 @@ describe.if(process.versions.bun !== undefined)("install.sh, piped", () => {
   });
 });
 
+describe.if(process.versions.bun !== undefined)("install.sh, PATH", () => {
+  const SHELL_FILES: Record<string, string[]> = {
+    bash: [".bashrc", ".profile"],
+    zsh: [".zshrc", ".zprofile"],
+    fish: [".config/fish/config.fish"],
+    ksh: [".profile"],
+  };
+  for (const [shell, files] of Object.entries(SHELL_FILES)) {
+    test(`for ${shell}, puts the bin folder on PATH once, in ${files.join(" and ")}`, () => {
+      const fx = fixture();
+      for (let i = 0; i < 2; i++) install(fx, [], { SHELL: `/bin/${shell}` });
+      for (const rc of RC_FILES) expect([rc, pathLines(join(fx.home, rc))]).toEqual([rc, files.includes(rc) ? 1 : 0]);
+    });
+  }
+
+  test("for bash, also writes a .bash_profile there is, and the lines put the folder on PATH once however many a shell reads", () => {
+    const fx = fixture();
+    // Its last line has no newline, and stays whole.
+    writeFileSync(join(fx.home, ".bash_profile"), "export EDITOR=vi");
+    const result = install(fx);
+    expect(readFileSync(join(fx.home, ".bash_profile"), "utf8").split("\n")[0]).toBe("export EDITOR=vi");
+    expect(pathLines(join(fx.home, ".bash_profile"))).toBe(1);
+    expect(existsSync(join(fx.home, ".bash_login"))).toBe(false);
+    const sourced = spawnSync(
+      "sh",
+      ["-c", '. "$HOME/.bash_profile"; . "$HOME/.profile"; . "$HOME/.bashrc"; printf %s "$PATH"'],
+      { env: { HOME: fx.home, PATH: "/usr/bin:/bin" }, encoding: "utf8" },
+    );
+    expect(sourced.stdout.split(":").filter((dir) => dir === fx.bin)).toHaveLength(1);
+    expect(result.stdout).toContain(`source '${join(fx.home, ".bashrc")}'`);
+  });
+
+  test("leaves alone an rc file that already puts the folder on PATH", () => {
+    const fx = fixture();
+    const own = 'export PATH="$HOME/.local/bin:$PATH"\n';
+    writeFileSync(join(fx.home, ".zshrc"), own);
+    install(fx, [], { SHELL: "/bin/zsh" });
+    expect(readFileSync(join(fx.home, ".zshrc"), "utf8")).toBe(own);
+    expect(pathLines(join(fx.home, ".zprofile"))).toBe(1);
+  });
+
+  test("with --no-modify-path, writes no rc file and says the folder isn't on PATH", () => {
+    const fx = fixture();
+    const result = install(fx, ["--no-modify-path"]);
+    for (const rc of RC_FILES) expect(existsSync(join(fx.home, rc))).toBe(false);
+    expect(result.stdout).toContain(`${fx.bin} is not on PATH`);
+  });
+});
+
 describe.if(process.versions.bun !== undefined)("uninstall.sh", () => {
   test("removes the wrapper and the PATH line and keeps the rest of the rc file", () => {
     const { home, bin } = setup();

@@ -124,7 +124,7 @@ async function loadConfinedSource(
     // A missing child outside the root is reported as outside, by `loadConfinedSource`.
     const inside = !leavesRoot(relative(root, childPath));
     if (inside && !statOrNull(childPath)?.isFile()) {
-      const yml = statOrNull(join(dir, `${ref}.yml`))?.isFile() === true;
+      const yml = statOrNull(resolve(dir, `${ref}.yml`))?.isFile() === true;
       throw new Error(`flow ${reprText(ref)} not found: ${relative(root, childPath)}${usesRefHint(ref, yml)}`);
     }
     try {
@@ -133,7 +133,7 @@ async function loadConfinedSource(
     } catch (error) {
       // Named from the root, as every child is; the error's own text is the absolute path.
       if (!(error instanceof NotUtf8Error)) throw error;
-      throw new Error(`can't read ${relative(root, resolveFlowPath(childPath))}: not UTF-8 text`, { cause: error });
+      throw new Error(`can't read ${relative(root, childPath)}: not UTF-8 text`, { cause: error });
     }
   };
   // `CodeNode.check()` resolves a `./file.ts:fn` reference against `baseDir`, here and in a child,

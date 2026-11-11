@@ -436,10 +436,11 @@ chunk of a streamed reply and before each tool call. A host can't act "before" a
 
 An interrupt while a call waits for its first chunk aborts the call: its `model_call` step
 records an empty reply. After the first chunk, yian checks for an interrupt before each later
-**text** chunk, before each tool call's check, before each group, and before failing at a call
-whose check failed. So a case that cuts mid-stream needs a text chunk after its point (an
-interrupt before a `tool_call`, `usage` or `finish` chunk keeps the reply whole, and its calls are
-skipped with brackets).
+**text** chunk, once more when the stream ends, before each tool call's check, before each group,
+and before failing at a call whose check failed. So a case that cuts mid-stream needs a text chunk
+after its point. An interrupt after the last text chunk, or at `{model_call: n}`, cuts a reply
+without tool calls with all its text; a reply with tool calls stays whole, and its calls are
+skipped with brackets.
 
 An interrupted AGENT records the cut reply in its `model_call` step (finish `interrupted`; a cut
 stream ends with a final `""` chunk), writes each skipped tool call as a `skipped` result

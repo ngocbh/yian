@@ -110,7 +110,7 @@ expect:
           - {text: '{"value": {"a": {"a": {"a": {"a": 2}}}}}', type: text}
           role: assistant
         purpose: structured_native
-        request_sha256: cc88ab0055be2675f609c57884074cf1488d0875618bd3a1f2729d3eb51fa897
+        request_sha256: f33b89adcc41d21c2bc3594d39a60aa747348fb1534b3600e013fce8911f45c6
         response_id: null
         usage: null
   - - node_failed

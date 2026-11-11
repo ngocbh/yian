@@ -12,13 +12,13 @@ import { dirname, relative, resolve } from "node:path";
 
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
-import { loadFlow } from "../compose/loader.ts";
+import { loadFlow, usesRefHint } from "../compose/loader.ts";
 import { parseSourceDocument } from "../compose/parse/file.ts";
 import type { Env } from "../defaults.ts";
 import { Diagnostic, reprText } from "../diagnostics.ts";
 import { isSystemError, leavesRoot, resolvedPath, statOrNull } from "../platform.ts";
 import { isRecord } from "../typesys/values.ts";
-import { readFlowText } from "./startup.ts";
+import { NotUtf8Error, readFlowText } from "./startup.ts";
 
 /**
  * Return `path` resolved without requiring it to exist (the real path of its longest existing
@@ -124,10 +124,17 @@ async function loadConfinedSource(
     // A missing child outside the root is reported as outside, by `loadConfinedSource`.
     const inside = !leavesRoot(relative(root, childPath));
     if (inside && !statOrNull(childPath)?.isFile()) {
-      throw new Error(`flow ${reprText(ref)} not found: ${relative(root, childPath)}`);
+      const yml = statOrNull(join(dir, `${ref}.yml`))?.isFile() === true;
+      throw new Error(`flow ${reprText(ref)} not found: ${relative(root, childPath)}${usesRefHint(ref, yml)}`);
     }
-    // The loader holds the child to a pinned `@<version>`.
-    return loadConfinedSource(root, childPath, null, importing, env, loaded);
+    try {
+      // The loader holds the child to a pinned `@<version>`.
+      return await loadConfinedSource(root, childPath, null, importing, env, loaded);
+    } catch (error) {
+      // Named from the root, as every child is; the error's own text is the absolute path.
+      if (!(error instanceof NotUtf8Error)) throw error;
+      throw new Error(`can't read ${relative(root, resolveFlowPath(childPath))}: not UTF-8 text`, { cause: error });
+    }
   };
   // `CodeNode.check()` resolves a `./file.ts:fn` reference against `baseDir`, here and in a child,
   // and refuses one outside `codeRoot`; a child is loaded here, so it gets the root too.

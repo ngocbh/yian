@@ -1,5 +1,5 @@
 /**
- * AGENT local variables: declarations, defaults, rendering, the retained render capture, and
+ * AGENT local variables: declarations, defaults, rendering, and
  * keeping variables out of wiring and the pool.
  */
 
@@ -138,27 +138,19 @@ test("declared variable inventory preserves canonical declarations", () => {
   expect(new AgentNode("empty").declaredVariables()).toEqual([]);
 });
 
-test("a capturing evaluation keeps early binding unavailable, and capture off dormant", async () => {
+test("an evaluation whose binding fails resolves no variables", async () => {
   const node = new AgentNode("writer", { prompt: "${topic}", variables: variables("tone: !str concise\n") });
   node.params = [new Parameter("topic", { required: true })];
   const resolved = spyResolve(node);
   const models = echo();
 
-  const missing = await evalNode(node, null, new VariablePool(), { captureBindings: true, models });
+  const missing = await evalNode(node, null, new VariablePool(), { models });
   expect(missing.outcome).toBeInstanceOf(EvaluationFailure);
-  expect(missing.bindings!.boundInputs).toBeNull();
   expect(resolved).toEqual([]);
 
   const ordinary = await evalNode(node, null, new VariablePool(), { wiringOverride: { topic: "reefs" }, models });
-  const retained = await evalNode(node, null, new VariablePool(), {
-    wiringOverride: { topic: "reefs" },
-    captureBindings: true,
-    models,
-  });
   expect(ordinary.outcome).toEqual(new Output("reefs"));
-  expect(retained.outcome).toEqual(ordinary.outcome);
-  expect(ordinary.bindings).toBeNull();
-  expect(resolved).toHaveLength(2);
+  expect(resolved).toHaveLength(1);
 });
 
 test("an agent renders inputs and variable defaults", async () => {

@@ -1,6 +1,7 @@
 /** Private credential storage: one saved login per provider, with locked atomic writes and refresh. */
 
-import { randomBytes } from "node:crypto";
+import { Buffer } from "node:buffer";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 // The default import keeps calls patchable by test spies.
 import fs from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -102,8 +103,9 @@ function hasKeys(value: Record<string, unknown>, keys: readonly string[]): boole
  * fixing the file can. `damaged` is set when the file's logins can't be read back, so only
  * restoring the file keeps them.
  *
- * Its name stays "AuthError": a failed model call is recorded by its error's name, and only that
- * name replays as an `AuthError`.
+ * Its name stays "AuthError", as a run failure's `cause_type` shows it; a failed model call
+ * records it as `StorageError` (`isStorageError`), so a replay rebuilds it. Its message may name
+ * the auth file, so a host relaying errors to others checks `isStorageError` first.
  */
 export class StorageError extends AuthError {
   readonly damaged: boolean;
@@ -112,6 +114,46 @@ export class StorageError extends AuthError {
     super(message);
     this.damaged = damaged;
   }
+}
+
+/**
+ * Whether `error` is an auth-store fault (`StorageError`): one the store's file, folder or lock
+ * causes, whose message may name the auth file, rather than a sign-in failure.
+ */
+export function isStorageError(error: unknown): error is StorageError {
+  return error instanceof StorageError;
+}
+
+/**
+ * Whether the saved login `previous` sends what `selection` with `credentials` would: the same
+ * method, endpoint, organization and project and, for an API key, the same key and header names
+ * and values. A subscription is never the same: a new sign-in brings new tokens. The secrets are
+ * compared by digest, in constant time.
+ */
+function sameLogin(
+  [saved, savedCredentials]: [ProviderSelection, Credentials | null],
+  selection: ProviderSelection,
+  credentials: Credentials | null,
+): boolean {
+  if (
+    saved.method !== selection.method ||
+    saved.method === "subscription" ||
+    saved.endpoint !== selection.endpoint ||
+    saved.organization !== selection.organization ||
+    saved.project !== selection.project
+  ) {
+    return false;
+  }
+  if (!(savedCredentials instanceof ApiKeyCredentials && credentials instanceof ApiKeyCredentials)) {
+    return savedCredentials === null && credentials === null;
+  }
+  return timingSafeEqual(keyDigest(savedCredentials), keyDigest(credentials));
+}
+
+/** Return the sha256 digest of an API key and its headers, sorted by name. */
+function keyDigest(credentials: ApiKeyCredentials): Buffer {
+  const headers = [...credentials.headers].sort(([a], [b]) => compareCodeUnits(a, b));
+  return createHash("sha256").update(JSON.stringify([credentials.apiKey, headers])).digest();
 }
 
 /** What a store path names: the store file, its folder, or its lock file. */
@@ -420,8 +462,6 @@ export class AuthStore {
   #load(directory: Directory | null): Saved {
     if (directory === null) return [null, new Map(), null];
     const limit = current().maxAuthStoreBytes;
-    // Allocated before the open, so a failed allocation leaves no descriptor open.
-    const raw = new Uint8Array(limit + 1);
     let fd: number;
     try {
       fd = fs.openSync(this.path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
@@ -432,11 +472,21 @@ export class AuthStore {
       this.#checkSameDirectory(directory);
       return [null, new Map(), null];
     }
+    let raw: Uint8Array;
     let size = 0;
     try {
       this.#checkSameDirectory(directory);
-      checkPrivate(fd, this.path, "file");
-      while (size < raw.length) {
+      const info = checkPrivate(fd, this.path, "file");
+      // Sized to the file and one byte more, which shows the file grew: then the read goes on, up
+      // to one byte past the limit.
+      raw = new Uint8Array(Math.min(Number(info.size), limit) + 1);
+      for (;;) {
+        if (size === raw.length) {
+          if (raw.length > limit) break;
+          const grown = new Uint8Array(Math.min(raw.length * 2, limit + 1));
+          grown.set(raw);
+          raw = grown;
+        }
         const n = access(() => fs.readSync(fd, raw, size, raw.length - size, null));
         if (n === 0) break;
         size += n;
@@ -599,7 +649,11 @@ export class AuthStore {
    * resource; `organization` and `project` are OpenAI ids, for an `openai` API key only;
    * `makeDefault` (default `true`) makes the provider the default.
    *
-   * @returns The saved selection, with a new credential id.
+   * A login saved again unchanged keeps its credential id, so runs pinned to it go on: same method,
+   * key, header names and values, endpoint, organization and project, whatever the model. Any
+   * other save, a subscription's included, gets a new id.
+   *
+   * @returns The saved selection.
    * @throws AuthError The values are invalid or storage cannot be written.
    */
   async save(
@@ -625,16 +679,16 @@ export class AuthStore {
     ) {
       throw new AuthError("Unsupported credential type");
     }
-    const selection = new ProviderSelection({
+    const fields = {
       provider,
       method: credentials === null ? "none" : credentials.method,
       model,
-      credentialId: randomBytes(16).toString("hex"),
       endpoint,
       organization,
       project,
       headerNames: credentials instanceof ApiKeyCredentials ? credentials.headers.map(([name]) => name) : [],
-    });
+    };
+    let selection = new ProviderSelection({ ...fields, credentialId: randomBytes(16).toString("hex") });
     // The snapshot refuses such a login, so saving it would make every run throw. A provider this
     // version doesn't run is never read, so its login isn't checked.
     if ((SUPPORTED_LLM_PROVIDERS as readonly string[]).includes(provider) && !isUsableLogin(selection)) {
@@ -645,6 +699,10 @@ export class AuthStore {
     try {
       await this.#locked(() => {
         const [defaultProvider, providers, defaultEmbedding] = this.#load(directory);
+        const previous = providers.get(provider);
+        if (previous !== undefined && sameLogin(previous, selection, credentials)) {
+          selection = new ProviderSelection({ ...fields, credentialId: previous[0].credentialId });
+        }
         providers.set(provider, [selection, credentials]);
         this.#write(directory, [makeDefault ? provider : defaultProvider, providers, defaultEmbedding]);
       });

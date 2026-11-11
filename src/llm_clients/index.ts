@@ -28,6 +28,7 @@ export {
   AuthError,
   AuthStore,
   HttpResponse,
+  isStorageError,
   OAuthCredentials,
   OpenAIAuth,
   ProviderSelection,

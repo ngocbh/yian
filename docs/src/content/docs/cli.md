@@ -51,7 +51,7 @@ $ yian run --resume ~/.yian/runs/4f1c/log.jsonl
 | `-i`, `--input` | `k=v` | One input. Repeat it for more |
 | `--inputs` | file | A JSON file of inputs |
 | `--inbox` | name | On a terminal, the inbox input to send typed lines to, when the flow has several (see [Chatting on a terminal](#chatting-on-a-terminal)) |
-| `--log` | path | Write the run log here instead of the default location. The path must not exist |
+| `--log` | path | Write the run log here instead of the default location. The path must not exist, and its folder must |
 | `--resume` | path | Resume the run recorded in this run log, with the flow it recorded |
 | `-q`, `--quiet` | | Print no banner and no per-node progress |
 | `-v`, `--verbose` | | Also print each node's output as it finishes |
@@ -204,8 +204,9 @@ has fails before it starts.
 
 When a flow names a tool that isn't built in, `yian run` reads MCP servers from
 `~/.yian/mcp.json`, when it exists, then from each `--mcp-config` file; a later entry with the same
-name replaces an earlier one. It starts only the servers the flow needs and stops them when the run
-ends. See [Agents](/agents/) for the file format.
+name replaces an earlier one. It starts the servers the flow names, and for a bare tool name the
+servers in file order until one lists it, and stops them when the run ends. See
+[Agents](/agents/#mcp-servers) for the file format and which servers start.
 
 ### Output and progress
 
@@ -213,11 +214,14 @@ ends. See [Agents](/agents/) for the file format.
   `{"k":"v"}`).
 - The banner (the flow's name, version and description) and per-node progress go to stderr. Each
   node shows a spinner, then `✓ node` or `✗ node` with the error below. Each line ends with how
-  long the node has run (`✓ frame [5s]`). Off a terminal, only the finished lines print.
+  long the node has run (`✓ frame [5s]`). Off a terminal, only the finished lines print. When more
+  nodes run than the screen has rows, the last spinner line counts the rest (`… and 17 more
+  running`). A `console` line from a CODE body prints on its own line above the spinners.
 - Warnings print as `warning: <message>` lines on stderr.
 - Colour is used only on a terminal, and never when `NO_COLOR` is set.
 - On a terminal, escape sequences and control characters other than newlines and tabs
-  are dropped from what prints. Piped or redirected output keeps every byte.
+  are dropped from what prints, and BIDI embeddings, overrides and isolates show as their code
+  points (`\u{202e}`). Piped or redirected output keeps every byte.
 
 A load error shows where the flow broke: the lines around it, the line marked `❱`, and the message
 below. A runtime error points at the line it came from the same way. Add `--engine-trace` only to
@@ -227,6 +231,8 @@ debug yian itself.
 
 A signal (SIGINT, SIGTERM, SIGHUP) or Ctrl-C at an `ask` prompt stops a run: `cancelled by user`,
 exit 130. Once the log exists, `yian run --resume` continues it. A second signal ends at once.
+With `--json`, killing `yian` in a way it can't catch (SIGKILL, an out-of-memory kill) stops the
+run too; if it hasn't stopped 5 seconds later, its process ends and the run reads `crashed`.
 
 ## yian chat
 
@@ -242,7 +248,7 @@ $ yian chat hello.yaml
 | Flag | Value | What it does |
 |---|---|---|
 | `FLOW` | path | A flow `.yaml` you want help with |
-| `--log` | path | Where to write the chat's run log. The path must not exist |
+| `--log` | path | Where to write the chat's run log. The path must not exist, and its folder must |
 | `--provider` | name | Provider for the assistant and its flows, when they set none |
 | `--model` | name | Model for the assistant and its flows, when they set none |
 | `--resume` | | Picks an earlier chat in this folder and goes on from it |
@@ -408,11 +414,13 @@ on too, though `ready` stays `false`. A log it can't read exits 1.
 
 `yian status` with no `LOG` lists the runs in `~/.yian/runs`, oldest first: run id, status, start
 time and flow file. It first updates the run index, `~/.yian/runs/index.sqlite`, which is rebuilt
-from the logs and safe to delete. With `--json`, each run also has its end time, result, token
-counts and `memories`, each memory it was bound to by input, identity and type.
+from the logs and safe to delete; a damaged one is rebuilt with a warning. With `--json`, each run
+also has its end time, result, token counts and `memories`, each memory it was bound to by input,
+identity and type.
 
 A run whose log yian can't read from record N on shows `unreadable at seq N`; `yian status LOG`
-says what is wrong. With `--json`, it has `unreadable: {seq, reason}` (`null` for other runs).
+says what is wrong. So does a run folder named for another run, such as a copy of one. With
+`--json`, it has `unreadable: {seq, reason}` (`null` for other runs).
 
 ## yian memory
 
@@ -530,7 +538,7 @@ $ printf '%s' "$OPENROUTER_API_KEY" | yian models --provider openrouter
 | `--auth-file` | path | List the models of the OpenAI subscription login saved in this file |
 | `--provider` | name | List the models this provider's host offers for the key on stdin |
 | `--base-url` | URL | With `--provider`: list this host instead of the provider's own |
-| `--timeout` | seconds | Time for the whole listing, above 0 (default 8) |
+| `--timeout` | seconds | Time for the whole listing, above 0 (default 8, or `YIAN_MODEL_LIST_TIMEOUT_SECONDS`) |
 | `--json` | | Print one JSON document |
 
 Give exactly one of `--auth-file` and `--provider`. The key comes from stdin, never from the

@@ -1,0 +1,20 @@
+kind: load
+# A date or datetime is text, so an int argument can never be one.
+flow: |
+  id: f
+  name: f
+  input:
+    n: !int
+  nodes:
+    later: !date "${add_days(input.n, 1)}"
+  output: ${later.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has expressions that can never succeed:
+          value entry 'later' from: add_days() takes a date or datetime, got int
+      frames:
+      - label: flow.yaml
+        range: [6, 10, 6, 41]

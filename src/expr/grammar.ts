@@ -77,7 +77,11 @@
  * `NAME` is `[A-Za-z_][A-Za-z0-9_#/]*`. With `-` in it, `a - b` would lex as the one name `a-b`
  * and subtraction would break, so a hyphenated identifier is unavailable inside an expression.
  * `#` and `/` are in it because runtime graph expansion mints segments like `node#0` and
- * `def/child`.
+ * `def/child`. Expansion mints only a reference's head, node ids joined by `/`, each with `#<i>`
+ * suffixes, so a `/` or `#` anywhere else (a field, a callee, a keyword label, a comprehension
+ * variable) or in a head of another shape is a missing space, as in `n/2`, refused with the
+ * spaced rewrite. A head of that shape that no node has is refused where the load checks names
+ * (`slashedNameHint`).
  *
  * ## Keywords are contextual
  *
@@ -1223,6 +1227,69 @@ function rejectReservedReferenceRoots(tree: ExprNode): void {
   }
 }
 
+// A name graph expansion mints: node ids joined by `/`, each with `#<i>` MAP element suffixes.
+const MINTED_NAME = /^[A-Za-z_][A-Za-z0-9_]*(?:#[0-9]+)*(?:\/[A-Za-z_][A-Za-z0-9_]*(?:#[0-9]+)*)*$/;
+
+/**
+ * Return why `name` reads as one name though it holds `/` or `#`, with the fix, else `null`.
+ *
+ * @param name A `NAME` token's text.
+ * @param written The reference it starts or ends, as written; `name` itself by default.
+ * @returns ``reads as one name; to divide, write `n / 2` with spaces`` for a `/`, ``reads as one
+ *   name, and a name can't hold `#` `` for a `#` alone, each after the reference as written.
+ */
+function oneNameProblem(name: string, written: string = name): string | null {
+  if (!name.includes("/") && !name.includes("#")) return null;
+  const reads = written === name ? `\`${name}\` reads as one name` : `\`${written}\` reads \`${name}\` as one name`;
+  if (!name.includes("/")) return `${reads}, and a name can't hold \`#\``;
+  return `${reads}; to divide, write \`${written.replaceAll("/", " / ")}\` with spaces`;
+}
+
+/**
+ * Return the hint a name check adds for a reference head that holds `/` or `#`, else `""`: such
+ * a head names no node an author wrote, so it is most likely a division without spaces.
+ *
+ * @param head A reference's first name, as a load check reads it.
+ * @returns `"; `n/m` reads as one name; to divide, write `n / m` with spaces"`, or `""`.
+ */
+export function slashedNameHint(head: string): string {
+  const problem = oneNameProblem(head);
+  return problem === null ? "" : `; ${problem}`;
+}
+
+/**
+ * Throw if a name holds a `/` or `#` that no graph expansion mints: anywhere but a reference's
+ * head, or in a head not shaped as node ids joined by `/` with `#<i>` suffixes.
+ *
+ * @param text The parsed text, which the tree's token offsets index into.
+ */
+function rejectUnmintedNames(tree: ExprNode, text: string): void {
+  if (!(tree instanceof Tree)) return;
+  const check = (name: Token, written: string = name.value): void => {
+    const problem = oneNameProblem(name.value, written);
+    if (problem !== null) throw new ExpressionError(problem);
+  };
+  for (const node of iterSubtrees(tree)) {
+    if (node.data === "refcall" || node.data === "comp_var") {
+      const head = node.children[0] as Token;
+      const callSuffix = callSuffixOf(node);
+      const cut = callSuffix === undefined ? node.children.length : node.children.indexOf(callSuffix);
+      const steps = node.children.slice(1, cut) as Tree[];
+      // The read as written, so the fix can show it spaced.
+      const end = steps.length === 0 ? head.endPos : (steps.at(-1)!.children[0] as Token).endPos;
+      const read = text.slice(head.startPos, end);
+      if (callSuffix !== undefined) check(head);
+      else if (!MINTED_NAME.test(head.value)) check(head, read);
+      for (const step of steps) check(step.children[0] as Token, read);
+      for (const step of node.children.slice(cut + 1)) check((step as Tree).children[0] as Token);
+    } else if (node.data === "field_read") {
+      for (const step of node.children.slice(1)) check((step as Tree).children[0] as Token);
+    } else if (node.data === "comp_for" || (node.data === "arg" && node.children.length === 2)) {
+      check(node.children[0] as Token);
+    }
+  }
+}
+
 /**
  * Parse one unified `${...}` expression into a tree.
  *
@@ -1261,5 +1328,6 @@ export function parseExpr(text: string): ExprNode {
   validateIsinstance(tree);
   validateCallArguments(tree);
   rejectReservedReferenceRoots(tree);
+  rejectUnmintedNames(tree, text);
   return tree;
 }

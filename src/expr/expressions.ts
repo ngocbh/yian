@@ -12,11 +12,6 @@
  * truthiness test (not an error). `isinstance(x, T)` checks a value against a type named in the
  * `types` table every evaluation entry point accepts, and a constructor `T(x)` /
  * `T(a=..., b=...)` checks (or builds and checks) a value of that type.
- *
- * With `trace`, evaluation also records a `ValueRoute` for the value: the source each read came
- * from, the arm a coalesce or default selected, list and constructor structure, `+` chains of
- * lists as concats, and every other operation as a scalar or (for a call) an opaque route over
- * its operands' routes, so feedback on the value can go back to its sources.
  */
 
 import { compareCodeUnits, getCloseMatches, reprText } from "../diagnostics.ts";
@@ -33,6 +28,7 @@ import {
   type ValueRecord,
   type VariablePool,
 } from "../typesys/index.ts";
+import type { RootValue } from "../typesys/pool.ts";
 import {
   fieldOf,
   fileFieldType,
@@ -55,7 +51,6 @@ import {
   type TemplateFn,
   truthy,
 } from "./builtins.ts";
-import { ResolvedValue, type RootRead, SourceRef, type TracedValue, ValueRoute } from "./lineage.ts";
 import {
   callSuffixOf,
   type ExprNode,
@@ -135,11 +130,8 @@ export function constructorShapeError(name: string, callSuffix: Tree): string | 
   return null;
 }
 
-/**
- * Reads a reference's root, given all its names; the evaluator walks the names after the root.
- * With `trace`, a root read also gives its producer or route.
- */
-export type RootResolver = (names: readonly string[]) => RootRead;
+/** Reads a reference's root, given all its names; the evaluator walks the names after the root. */
+export type RootResolver = (names: readonly string[]) => RootValue;
 
 /** The resolver for an evaluation with nothing in scope: every root is absent. */
 export const MISSING_ROOT: RootResolver = () => ({ used: 1, present: false, value: null, why: null });
@@ -209,7 +201,7 @@ function checkNames(names: readonly string[]): void {
  *
  * @throws {ExpressionError} If a name is empty.
  */
-export function resolveReference(names: readonly string[], pool: VariablePool): RootRead {
+export function resolveReference(names: readonly string[], pool: VariablePool): RootValue {
   checkNames(names);
   return pool.readRoot(names);
 }
@@ -225,7 +217,7 @@ export function resolveReference(names: readonly string[], pool: VariablePool): 
  *
  * @throws {ExpressionError} If a name is empty.
  */
-export function resolveInRecord(names: readonly string[], record: ValueRecord): RootRead {
+export function resolveInRecord(names: readonly string[], record: ValueRecord): RootValue {
   checkNames(names);
   const [present, value] = fieldOf(record, names[0]!);
   return { used: 1, present, value, why: present ? null : `input '${names[0]}' is not bound` };
@@ -694,65 +686,6 @@ function splitChain(node: Tree): [ExprNode[], string[]] {
 }
 
 /**
- * Describe a chain from its operand routes, e.g. `(a + b - c)`.
- *
- * @param operators The operator symbols between the operands.
- * @param routes The operand routes, one more than `operators`.
- * @returns The operand expressions joined by their operators, in parentheses.
- */
-function chainText(operators: readonly string[], routes: readonly ValueRoute[]): string {
-  const parts = [routes[0]!.expression];
-  operators.forEach((symbol, i) => parts.push(symbol, routes[i + 1]!.expression));
-  return "(" + parts.join(" ") + ")";
-}
-
-/**
- * Trace a `+` chain of lists as a balanced tree of two-child `concat` routes.
- *
- * Two-child routes keep the run-record format of a single `left + right`, and the balanced split
- * keeps a long chain's route about `log2(n)` deep.
- *
- * @param routes The operand routes, in order.
- * @param sizes Each operand list's length.
- * @returns The lone route for one operand, else a `concat` of the two halves, whose expression is
- *   the halves' operands joined by `+`.
- */
-function balancedConcat(routes: readonly ValueRoute[], sizes: readonly number[]): ValueRoute {
-  if (routes.length === 1) return routes[0]!;
-  const middle = Math.floor(routes.length / 2);
-  const total = (part: readonly number[]) => part.reduce((sum, size) => sum + size, 0);
-  return new ValueRoute("concat", {
-    children: [
-      balancedConcat(routes.slice(0, middle), sizes.slice(0, middle)),
-      balancedConcat(routes.slice(middle), sizes.slice(middle)),
-    ],
-    expression: chainText(Array<string>(routes.length - 1).fill("+"), routes),
-    sizes: [total(sizes.slice(0, middle)), total(sizes.slice(middle))],
-  });
-}
-
-const DESCRIBE_SYMBOLS: Readonly<Record<string, string>> = {
-  or_expr: "or",
-  and_expr: "and",
-  compare_in: "in",
-  compare_notin: "not in",
-};
-
-/** Describe a node from its evaluated operands' routes, without another expression walk. */
-function describe(node: Tree, children: readonly ValueRoute[]): string {
-  const kind = node.data;
-  if (kind === "sum" || kind === "product" || kind === "power") return chainText(splitChain(node)[1], children);
-  const symbol = kind === "compare" ? String(node.children[1]) : DESCRIBE_SYMBOLS[kind];
-  if (symbol !== undefined) return "(" + children.map((child) => child.expression).join(` ${symbol} `) + ")";
-  if (kind === "neg" || kind === "negate") {
-    return `(${kind === "neg" ? "-" : "not "}${children[0]!.expression})`;
-  }
-  if (kind === "subscript") return `${children[0]!.expression}[...]`;
-  if (kind === "field_read") return children[0]!.expression + stepsText(splitReference(node).steps);
-  return `${kind}(${children.map((child) => child.expression).join(", ")})`;
-}
-
-/**
  * Name the base of a field read in a message: a reference or variable as written, a subscript as
  * `base[...]`, a field read as its base and steps, a literal as written, anything else `(...)`.
  */
@@ -779,45 +712,6 @@ function sliceBaseText(node: ExprNode): string {
   return "(...)";
 }
 
-/**
- * The route of a read: a `source` for a `SourceRef`, a `selected` over a prior route, else a
- * literal of the value.
- */
-function resolvedRoute(resolved: ResolvedValue, path: string): ValueRoute {
-  const source = resolved.source;
-  if (source instanceof SourceRef) return new ValueRoute("source", { source, expression: path });
-  if (source instanceof ValueRoute) return new ValueRoute("selected", { children: [source], expression: path });
-  return ValueRoute.literal(resolved.value);
-}
-
-/**
- * The route of a reference whose root and every step were present: the root's source extended
- * by `steps`, a projection of its prior route, else a literal of the value read. `text` is the
- * read as written.
- */
-function readRoute(
-  source: SourceRef | ValueRoute | null,
-  value: Value,
-  steps: readonly string[],
-  text: string,
-): ValueRoute {
-  if (source instanceof SourceRef) {
-    const extended = new SourceRef(source.runId, source.executionSeq, [...source.path, ...steps]);
-    return new ValueRoute("source", { source: extended, expression: text });
-  }
-  if (source instanceof ValueRoute) {
-    const selected = new ValueRoute("selected", { children: [source], expression: text });
-    return selected.project(steps).with({ expression: text });
-  }
-  return ValueRoute.literal(value);
-}
-
-/** The routes collected by one traced subtree evaluation: its operands', and its own if it sets one. */
-interface TraceFrame {
-  children: ValueRoute[];
-  route: ValueRoute | null;
-}
-
 // The operator keyword tokens among a boolean combinator's operands. An operand may also be a
 // top-level `Token` (a bare literal), so only these token types are skipped.
 const OP_TOKEN_TYPES: ReadonlySet<string> = new Set(["NOT", "AND", "OR"]);
@@ -834,28 +728,24 @@ const OP_TOKEN_TYPES: ReadonlySet<string> = new Set(["NOT", "AND", "OR"]);
  */
 class EvalExpr {
   readonly #resolve: RootResolver;
-  readonly #item: Value | ResolvedValue | undefined;
+  readonly #item: Value | undefined;
   readonly #mode: ResolveMode;
   readonly #types: ReadonlyMap<string, Type> | null;
-  readonly #trace: boolean;
   readonly #declared: DeclaredTypes | null;
   readonly #itemType: Type | null;
-  readonly #frames: TraceFrame[] = [];
-  #lastRoute: ValueRoute | null = null;
   #missPath: string | null = null;
   // Set when the last miss is an index out of range: only `|`, `:-` and `:?` take that miss, and
   // every other consumer throws this error, in every mode.
   #outOfRange: ExpressionError | null = null;
-  // Comprehension variables in scope: name -> its item, its declared type (the element type of its
-  // un-narrowed iterable) and, when tracing, the item's route.
-  readonly #vars = new Map<string, { value: Value; type: Type | null; route: ValueRoute | null }>();
+  // Comprehension variables in scope: name -> its item and its declared type (the element type of
+  // its un-narrowed iterable).
+  readonly #vars = new Map<string, { value: Value; type: Type | null }>();
 
   constructor(
     resolve: RootResolver,
-    item: Value | ResolvedValue | undefined,
+    item: Value | undefined,
     mode: ResolveMode,
     types: ReadonlyMap<string, Type> | null,
-    trace: boolean,
     declared: DeclaredTypes | null,
     itemType: Type | null,
   ) {
@@ -863,15 +753,13 @@ class EvalExpr {
     this.#item = item;
     this.#mode = mode;
     this.#types = types;
-    this.#trace = trace;
     this.#declared = declared;
     this.#itemType = itemType;
   }
 
   // --- top-level entry: turn a `MISSING` head into a value per mode --- //
-  eval(node: ExprNode): Value | TracedValue {
-    const value = this.asValue(this.walk(node));
-    return this.#trace ? { value, route: this.#lastRoute! } : value;
+  eval(node: ExprNode): Value {
+    return this.asValue(this.walk(node));
   }
 
   /**
@@ -918,40 +806,8 @@ class EvalExpr {
   }
 
   // --- dispatch --- //
-  /**
-   * Evaluate one subtree: the single hook every subtree goes through. When tracing, it also
-   * builds the subtree's route: the one its handler set, else a `scalar` over its operands'
-   * routes, else a literal of its value; and adds it to the enclosing subtree's operand routes.
-   */
+  /** Evaluate one subtree: the single hook every subtree goes through. */
   walk(node: ExprNode): Walked {
-    if (!this.#trace) return this.dispatch(node);
-    const frame: TraceFrame = { children: [], route: null };
-    this.#frames.push(frame);
-    let value: Walked;
-    try {
-      value = this.dispatch(node);
-    } finally {
-      this.#frames.pop();
-    }
-    let route = frame.route;
-    if (route === null) {
-      const captured = value === MISSING ? null : value;
-      // A token has no operands, so a frame with children is a tree's.
-      route =
-        frame.children.length > 0
-          ? ValueRoute.literal(captured).with({
-              kind: "scalar",
-              children: frame.children,
-              expression: describe(node as Tree, frame.children),
-            })
-          : ValueRoute.literal(captured);
-    }
-    this.#lastRoute = route;
-    this.#frames.at(-1)?.children.push(route);
-    return value;
-  }
-
-  dispatch(node: ExprNode): Walked {
     if (node instanceof Token) return this.token(node);
     switch (node.data) {
       case "refcall":
@@ -1035,25 +891,6 @@ class EvalExpr {
     // A constructor's value has its type, as `inferExprType` types it.
     const membersOf = constructor ? () => declaredOf(this.#types!.get(name)!) : NO_MEMBERS;
     [value] = this.walkSteps(value, membersOf, steps, `${name}(...)`, null);
-    if (this.#trace) {
-      const frame = this.#frames.at(-1)!;
-      if (constructor) {
-        frame.route = this.constructorRoute(name, callSuffix).project(steps.map((step) => step.name));
-      } else {
-        const routes = frame.children;
-        const names = valueArgs(name, callSuffix).map((arg) =>
-          arg.children.length === 2 ? String(arg.children[0]) : "",
-        );
-        let args = names.map((key, i) => (key ? `${key}=${routes[i]!.expression}` : routes[i]!.expression)).join(", ");
-        if (name === ISINSTANCE) args += `, ${isinstanceTypeName(callSuffix)}`;
-        frame.route = ValueRoute.literal(value === MISSING ? null : value).with({
-          kind: "opaque",
-          children: routes,
-          names,
-          expression: `${name}(${args})${stepsText(steps)}`,
-        });
-      }
-    }
     return value;
   }
 
@@ -1064,7 +901,7 @@ class EvalExpr {
    *
    * @param head The reference's first name.
    * @param steps Its steps as written.
-   * @param text The read as written (`?.` included), for miss messages and routes.
+   * @param text The read as written (`?.` included), for miss messages.
    * @throws {ExpressionError} When a step raises (see `walkSteps`).
    */
   reference(head: string, steps: readonly RefStep[], text: string): Walked {
@@ -1072,23 +909,8 @@ class EvalExpr {
     if (head === "item") {
       // MAP-body-local scope (not a resolver head); an absent item means no item scope.
       const item = this.#item;
-      let present: boolean;
-      let value: Value;
-      let source: SourceRef | ValueRoute | null = null;
-      if (item instanceof ResolvedValue) {
-        ({ present, value, source } = item);
-        if (!this.#trace) source = null;
-      } else {
-        present = item !== undefined;
-        value = item ?? null;
-      }
       const membersOf = () => declaredOf(this.#itemType);
-      const [walked, complete] = this.walkSteps(present ? value : MISSING, membersOf, steps, "item", null);
-      if (this.#trace && source === null) {
-        this.#frames.at(-1)!.route = ValueRoute.literal(walked === MISSING ? null : walked).with({ expression: text });
-      } else if (this.#trace && present && complete) {
-        this.#frames.at(-1)!.route = resolvedRoute(item as ResolvedValue, "item").project(stepNames);
-      }
+      const [walked] = this.walkSteps(item === undefined ? MISSING : item, membersOf, steps, "item", null);
       return walked === MISSING ? this.missAt(text) : walked;
     }
     const read = this.#resolve([head, ...stepNames]);
@@ -1096,11 +918,7 @@ class EvalExpr {
     const rest = steps.slice(read.used - 1);
     // The declared type is looked up only when a record lacks a key.
     const membersOf = () => declaredOf(this.#declared?.([head, ...stepNames.slice(0, read.used - 1)]) ?? null);
-    const [value, complete] = this.walkSteps(read.present ? read.value : MISSING, membersOf, rest, rootText, read.why);
-    if (this.#trace && read.present && complete) {
-      const route = readRoute(read.source ?? null, value as Value, stepNames.slice(read.used - 1), text);
-      this.#frames.at(-1)!.route = route;
-    }
+    const [value] = this.walkSteps(read.present ? read.value : MISSING, membersOf, rest, rootText, read.why);
     return value === MISSING ? this.missAt(text) : value;
   }
 
@@ -1165,9 +983,7 @@ class EvalExpr {
    * is a miss that only `|`, `:-` and `:?` take (`${xs[0] :- ""}`), and an error anywhere else. A
    * null or missing base is a miss (a subscript of null misses, where a `.field` of null raises),
    * so `${xs[1:] :- []}` falls back, and its bounds aren't read; a null base's miss is named
-   * `base[...]`, with a non-literal, non-variable base as `(...)`. When tracing, a list's index is
-   * its base route projected to the item, and a list's slice a `list` of the base route projected
-   * to each kept index.
+   * `base[...]`, with a non-literal, non-variable base as `(...)`.
    *
    * @throws {ExpressionError} If an index or a bound is null or not an int (a bool counts as 0
    *   or 1), or the base is not a list or a text.
@@ -1178,7 +994,6 @@ class EvalExpr {
     // A miss before the bounds are read, so `xs[n:] :- []` falls back whatever the bounds are.
     if (base === MISSING) return MISSING;
     if (base === null) return this.missAt(`${sliceBaseText(baseNode)}[...]`);
-    const baseRoute = this.#trace ? this.#lastRoute! : null;
     if (!Array.isArray(base) && typeof base !== "string") {
       throw subscriptKindError(part.data === "index" ? "indexing" : "slicing", base);
     }
@@ -1195,7 +1010,6 @@ class EvalExpr {
         );
         return MISSING;
       }
-      if (baseRoute !== null && Array.isArray(base)) this.#frames.at(-1)!.route = baseRoute.project([Number(k)]);
       return items[Number(k)]!;
     }
     const lower = this.sliceBound(part.children[0]!);
@@ -1210,14 +1024,6 @@ class EvalExpr {
     const start = clamp(lower, 0n);
     const stop = Math.max(start, clamp(upper, n));
     if (typeof base === "string") return items.slice(start, stop).join("");
-    if (baseRoute !== null) {
-      // Each kept item is its base item, so feedback on it reaches that item.
-      const children = Array.from({ length: stop - start }, (_, k) => baseRoute.project([start + k]));
-      this.#frames.at(-1)!.route = new ValueRoute("list", {
-        children,
-        expression: "[" + children.map((child) => child.expression).join(", ") + "]",
-      });
-    }
     return base.slice(start, stop);
   }
 
@@ -1225,27 +1031,22 @@ class EvalExpr {
    * A list comprehension, as nested loops: the first iterable in the enclosing scope,
    * each later clause once per binding of the clauses before it, an `if` keeping a binding when
    * its condition is truthy, and the elem appended after the last clause. The clauses run depth
-   * first without recursion, so a long comprehension can't overflow the stack. When tracing, the
-   * route is a `list` of the elems' routes, and a variable carries its item's route, the
-   * iterable's route projected to the item, so feedback on an elem reaches that item. Conditions
-   * aren't part of the route, as a CASE condition isn't.
+   * first without recursion, so a long comprehension can't overflow the stack.
    *
    * @throws {ExpressionError} If an iterable is null, misses, or is not a list.
    */
   listComp(node: Tree): Value[] {
     const [elem, ...clauses] = node.children as [ExprNode, ...Tree[]];
     const out: Value[] = [];
-    const routes: ValueRoute[] = [];
-    // One entry per active `for`: its clause index, its items, the next index, and its iterable's route.
-    const loops: { at: number; items: Value[]; k: number; type: Type | null; route: ValueRoute | null }[] = [];
+    // One entry per active `for`: its clause index, its items, the next index, and its items' type.
+    const loops: { at: number; items: Value[]; k: number; type: Type | null }[] = [];
     // Move to the next binding of the innermost loop that has one; return the next clause index, or -1.
     const next = (): number => {
       while (loops.length > 0) {
         const loop = loops.at(-1)!;
         const name = String(clauses[loop.at]!.children[0]);
         if (loop.k < loop.items.length) {
-          const route = loop.route?.project([loop.k]) ?? null;
-          this.#vars.set(name, { value: loop.items[loop.k++]!, type: loop.type, route });
+          this.#vars.set(name, { value: loop.items[loop.k++]!, type: loop.type });
           return loop.at + 1;
         }
         this.#vars.delete(name);
@@ -1257,7 +1058,6 @@ class EvalExpr {
     while (i >= 0) {
       if (i === clauses.length) {
         out.push(this.asValue(this.walk(elem)));
-        if (this.#trace) routes.push(this.#lastRoute!);
         i = next();
       } else if (clauses[i]!.data === "comp_for") {
         const [target, iterable, source] = clauses[i]!.children as [Token, ExprNode, Token];
@@ -1270,18 +1070,11 @@ class EvalExpr {
         if (!Array.isArray(items)) {
           throw new ExpressionError(`comprehension \`for ${target} in ${source}\` takes a list, got ${kindName(items)}`);
         }
-        const route = this.#trace ? this.#lastRoute : null;
-        loops.push({ at: i, items, k: 0, type: this.elementDeclared(iterable), route });
+        loops.push({ at: i, items, k: 0, type: this.elementDeclared(iterable) });
         i = next();
       } else {
         i = truthy(this.asValue(this.walk(clauses[i]!.children[0]!))) ? i + 1 : next();
       }
-    }
-    if (this.#trace) {
-      this.#frames.at(-1)!.route = new ValueRoute("list", {
-        children: routes,
-        expression: "[" + routes.map((route) => route.expression).join(", ") + "]",
-      });
     }
     return out;
   }
@@ -1314,30 +1107,22 @@ class EvalExpr {
   /**
    * `base.k` and `base?.k` after a subscript or a parenthesized operand: the steps as `walkSteps`
    * walks them from the base's value, typed by the base's declared type. A `?.` on a miss reads
-   * null; a `.` on an index out of range throws the index's error. When tracing, the route is the
-   * base's projected through the steps.
+   * null; a `.` on an index out of range throws the index's error.
    */
   fieldRead(node: Tree): Walked {
     const baseNode = node.children[0]!;
     const { steps } = splitReference(node);
     const base = this.walk(baseNode);
-    const baseRoute = this.#trace ? this.#lastRoute : null;
     if (base === MISSING && this.#outOfRange !== null) {
       if (!steps[0]!.optional) throw this.#outOfRange;
       this.#outOfRange = null;
     }
     const membersOf = () => declaredOf(this.declaredType(baseNode));
-    const [value, complete] = this.walkSteps(base, membersOf, steps, subscriptText(baseNode), null);
-    if (baseRoute !== null && complete && value !== null) {
-      this.#frames.at(-1)!.route = baseRoute.project(steps.map((step) => step.name));
-    }
+    const [value] = this.walkSteps(base, membersOf, steps, subscriptText(baseNode), null);
     return value;
   }
 
-  /**
-   * A comprehension variable read, then any `.field` trailers as `walkSteps` walks them. When
-   * tracing, its route is its item's route projected through the trailers.
-   */
+  /** A comprehension variable read, then any `.field` trailers as `walkSteps` walks them. */
   compVar(node: Tree): Walked {
     const name = String(node.children[0]);
     const binding = this.#vars.get(name);
@@ -1345,10 +1130,7 @@ class EvalExpr {
     if (binding === undefined) throw new ExpressionError(`comprehension variable ${reprText(name)} read outside its comprehension`);
     const { steps } = splitReference(node);
     // A null item is returned as is; a `.field` on it follows the step table.
-    const [value, complete] = this.walkSteps(binding.value, () => declaredOf(binding.type), steps, name, null);
-    if (this.#trace && binding.route !== null && complete && value !== null) {
-      this.#frames.at(-1)!.route = binding.route.project(steps.map((step) => step.name));
-    }
+    const [value] = this.walkSteps(binding.value, () => declaredOf(binding.type), steps, name, null);
     return value;
   }
 
@@ -1451,25 +1233,6 @@ class EvalExpr {
   }
 
   /**
-   * The route of a constructor call, from its argument routes.
-   *
-   * `T(x)` selects its argument's route, so feedback passes through to `x`; the keyword form is a
-   * record route, so feedback on a field reaches that field's argument.
-   */
-  constructorRoute(name: string, callSuffix: Tree): ValueRoute {
-    const routes = this.#frames.at(-1)!.children;
-    const args = callSuffix.children as Tree[];
-    if (args.length === 1 && args[0]!.children.length === 1) {
-      return new ValueRoute("selected", { children: routes, expression: `${name}(${routes[0]!.expression})` });
-    }
-    const names = args.map((arg) => String(arg.children[0]));
-    const expression = names.map((key, i) => `${key}=${routes[i]!.expression}`).join(", ");
-    return ValueRoute.record(names.map((key, i) => [key, routes[i]!] as const)).with({
-      expression: `${name}(${expression})`,
-    });
-  }
-
-  /**
    * Run a builtin call through `TEMPLATE_FNS`.
    *
    * The arguments are evaluated in source order (a keyword argument carries a leading `NAME`),
@@ -1507,13 +1270,6 @@ class EvalExpr {
   }
 
   // --- coalesce / default / required (short-circuit) --- //
-  /** When tracing, set the current subtree's route to a `selected` over the last walked subtree's. */
-  selectRoute(expression: string): void {
-    if (this.#trace) {
-      this.#frames.at(-1)!.route = new ValueRoute("selected", { children: [this.#lastRoute!], expression });
-    }
-  }
-
   /**
    * `a | b | c`: the first operand that resolves to a non-null value wins; a present falsy
    * value (`0`, `""`, `false`) wins. Only the last operand's miss is subject to `STRICT_RAISE`.
@@ -1523,12 +1279,8 @@ class EvalExpr {
     for (const [i, child] of node.children.entries()) {
       const walked = this.walk(child);
       const value = i === last ? this.asValue(walked) : this.orNone(walked);
-      if (value !== null) {
-        this.selectRoute("|");
-        return value;
-      }
+      if (value !== null) return value;
     }
-    if (this.#trace) this.#frames.at(-1)!.route = ValueRoute.literal(null);
     return null;
   }
 
@@ -1540,7 +1292,6 @@ class EvalExpr {
     const [head, fallback] = node.children as [ExprNode, ExprNode];
     let value = this.orNone(this.walk(head));
     if (value === null) value = this.asValue(this.walk(fallback));
-    this.selectRoute(":-");
     return value;
   }
 
@@ -1555,7 +1306,6 @@ class EvalExpr {
       const text = this.asValue(this.walk(message));
       throw new RequiredError(typeof text === "string" ? text : valueRepr(text));
     }
-    this.selectRoute(":?");
     return value;
   }
 
@@ -1566,9 +1316,7 @@ class EvalExpr {
    */
   ifExpr(node: Tree): Walked {
     const [then, test, otherwise] = node.children as [ExprNode, ExprNode, ExprNode];
-    const value = this.walk(truthy(this.asValue(this.walk(test))) ? then : otherwise);
-    this.selectRoute("if");
-    return value;
+    return this.walk(truthy(this.asValue(this.walk(test))) ? then : otherwise);
   }
 
   // --- boolean combinators --- //
@@ -1609,8 +1357,6 @@ class EvalExpr {
   sum(node: Tree): Value {
     const [operands, operators] = splitChain(node);
     let acc = this.asValue(this.walk(operands[0]!));
-    // The operand values, kept only when tracing (for the route).
-    const values: Value[] | null = this.#trace ? [acc] : null;
     // True while `acc` is the fresh list a list `+` step built, which nothing else holds: the
     // next list `+` can then append in place instead of copying the running list again.
     let owned = false;
@@ -1623,16 +1369,6 @@ class EvalExpr {
         acc = applyStep(op, acc, rhs);
         owned = op === "+" && Array.isArray(acc);
       }
-      values?.push(rhs);
-    }
-    if (
-      values !== null &&
-      node.data === "sum" &&
-      operators.every((op) => op === "+") &&
-      values.every((value): value is Value[] => Array.isArray(value))
-    ) {
-      const frame = this.#frames.at(-1)!;
-      frame.route = balancedConcat(frame.children, values.map((value) => value.length));
     }
     return acc;
   }
@@ -1654,19 +1390,11 @@ class EvalExpr {
   }
 
   listLit(node: Tree): Value[] {
-    const value = node.children.map((c) => this.asValue(this.walk(c)));
-    if (this.#trace) {
-      const frame = this.#frames.at(-1)!;
-      frame.route = new ValueRoute("list", {
-        children: frame.children,
-        expression: "[" + frame.children.map((child) => child.expression).join(", ") + "]",
-      });
-    }
-    return value;
+    return node.children.map((c) => this.asValue(this.walk(c)));
   }
 }
 
-/** The options of `evalExpr` besides `trace`. */
+/** The options of `evalExpr`. */
 export interface EvalOptions {
   item?: Value;
   mode?: ResolveMode;
@@ -1675,15 +1403,6 @@ export interface EvalOptions {
   declared?: DeclaredTypes | null;
   /** The declared type of `item`; `null` leaves its steps undeclared. */
   itemType?: Type | null;
-}
-
-/**
- * The options of an `evalExpr` that may trace: `item` may be a `ResolvedValue`, and `trace` turns
- * tracing on.
- */
-export interface TraceOptions extends Omit<EvalOptions, "item"> {
-  item?: Value | ResolvedValue;
-  trace?: boolean;
 }
 
 /**
@@ -1718,11 +1437,9 @@ export interface TraceOptions extends Omit<EvalOptions, "item"> {
  *
  * @param tree The parsed expression: a `Tree`, or a lone literal `Token`.
  * @param resolve Reads a reference's root from its names (`RootResolver`); the evaluator walks the
- *   names after the root. `item`-headed references bypass it. With `trace`, the root read also
- *   gives its `SourceRef` or prior `ValueRoute`.
+ *   names after the root. `item`-headed references bypass it.
  * @param options.item The MAP-body-local scope for `item` / `item.path` (record and file
- *   fields); `null` (the default) means no item scope. With `trace`, a `ResolvedValue` may give
- *   the item's presence and its route through a composed collection.
+ *   fields); `null` (the default) means no item scope.
  * @param options.mode How a missing root is treated (default `BINDING_NONE`).
  * @param options.types The type table `isinstance(x, T)` and a `T(...)` constructor look `T` up
  *   in, keyed by type name; `null` (the default) means no types.
@@ -1730,10 +1447,8 @@ export interface TraceOptions extends Omit<EvalOptions, "item"> {
  *   field that is absent reads `null`; `null` (the default) leaves every step undeclared.
  * @param options.itemType The declared type of `item`; `null` (the default) leaves its steps
  *   undeclared.
- * @param options.trace Record the value's route while evaluating, and return both as a
- *   `TracedValue` (default `false`).
  * @returns The value: `null`, a boolean, a `bigint`, a number, text, a list, a record or a file
- *   (`FileRef`). With `trace`, the same value with its route.
+ *   (`FileRef`).
  * @throws {RequiredError} When a `head :? message` head misses or is `null`.
  * @throws {ConstructorTypeError} When a `T(...)` constructor's value does not fit `T`.
  * @throws {ExpressionError} On a field read the step table rejects, an unsupported node, a call to
@@ -1744,22 +1459,12 @@ export interface TraceOptions extends Omit<EvalOptions, "item"> {
  *   and `:?`, a comprehension over anything but a list (`null` or a miss included), or a
  *   strict-mode miss.
  */
-export function evalExpr(tree: ExprNode, resolve: RootResolver, options: TraceOptions & { trace: true }): TracedValue;
-export function evalExpr(tree: ExprNode, resolve: RootResolver, options?: EvalOptions & { trace?: false }): Value;
-export function evalExpr(tree: ExprNode, resolve: RootResolver, options?: TraceOptions): Value | TracedValue;
 export function evalExpr(
   tree: ExprNode,
   resolve: RootResolver,
-  {
-    item,
-    mode = ResolveMode.BINDING_NONE,
-    types = null,
-    trace = false,
-    declared = null,
-    itemType = null,
-  }: TraceOptions = {},
-): Value | TracedValue {
-  return new EvalExpr(resolve, item, mode, types, trace, declared, itemType).eval(tree);
+  { item, mode = ResolveMode.BINDING_NONE, types = null, declared = null, itemType = null }: EvalOptions = {},
+): Value {
+  return new EvalExpr(resolve, item, mode, types, declared, itemType).eval(tree);
 }
 
 // --------------------------------------------------------------------------------------- //

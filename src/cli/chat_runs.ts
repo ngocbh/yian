@@ -27,7 +27,7 @@
 
 import { appendFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { format, isDeepStrictEqual } from "node:util";
+import { isDeepStrictEqual } from "node:util";
 
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import type { Env } from "../defaults.ts";
@@ -41,6 +41,7 @@ import {
   cancel,
   close,
   complete,
+  type ConsoleHook,
   type DeliveryOptions,
   DeliveryRefused,
   pendingCalls,
@@ -145,8 +146,8 @@ export interface ChildRunsOptions {
   /** The skills a child's flow grants, as `yian run` reads them, or `null` for none. */
   skillsFor: (flow: ComposedFlow) => ReadonlyMap<string, Skill> | null;
   /**
-   * The file the console output of the children's CODE nodes is appended to while any pass runs,
-   * so it doesn't land on the chat's terminal; `null` (the default) leaves it on the console.
+   * The file the console output of the children's CODE nodes is appended to, so it doesn't land on
+   * the chat's terminal; `null` (the default) leaves it on the console.
    */
   consoleFile?: string | null;
   /**
@@ -231,9 +232,6 @@ interface Said {
   readonly text: string;
 }
 
-/** The console methods a CODE worker's output is replayed through. */
-const CONSOLE_METHODS = ["log", "info", "warn", "error", "debug"] as const;
-
 /** The terminal statuses: no pass follows them. */
 const ENDED: ReadonlySet<ChildStatus["status"]> = new Set(["succeeded", "failed", "cancelled"]);
 
@@ -251,27 +249,16 @@ function questionText(args: Readonly<Record<string, unknown>> | null): string {
 }
 
 /**
- * Append the console methods' output to `file` instead, and return what puts them back as they
- * were at this call (undoing any change made to them meanwhile).
- *
- * A CODE worker's console lines are replayed through this process's `console` with no run named,
- * so routing the whole console while a child runs is the only way to keep them off the chat's
- * terminal; a sink per run would replace this. A CODE error reported after its body returned can
- * still arrive once the last pass has ended, and then reaches the terminal.
+ * Return an `onConsole` that appends each line a child's CODE prints to `file`, so it doesn't
+ * land on the chat's terminal.
  */
-function routeConsole(file: string): () => void {
-  const saved = new Map(CONSOLE_METHODS.map((method) => [method, console[method]] as const));
-  for (const method of CONSOLE_METHODS) {
-    console[method] = (...args: unknown[]) => {
-      try {
-        appendFileSync(file, `${format(...args)}\n`);
-      } catch {
-        // A line that can't be kept mustn't fail the node that printed it.
-      }
-    };
-  }
-  return () => {
-    for (const [method, original] of saved) console[method] = original;
+function consoleTo(file: string): ConsoleHook {
+  return ({ text }) => {
+    try {
+      appendFileSync(file, `${text}\n`);
+    } catch {
+      // A line that can't be kept mustn't fail the node that printed it.
+    }
   };
 }
 
@@ -291,9 +278,6 @@ export class ChildRuns {
   #disposed = false;
   /** Aborted by `haltAll`: a dispose waits no longer. */
   readonly #halting = new AbortController();
-  /** The passes running, and what puts the console back once none does. */
-  #passes = 0;
-  #restoreConsole: (() => void) | null = null;
 
   constructor(options: ChildRunsOptions) {
     this.#options = options;
@@ -688,25 +672,25 @@ export class ChildRuns {
         child.fresh.push({ kind: "reply", text: writeAsText(event.output as Value) });
       }
     };
+    const consoleFile = this.#options.consoleFile ?? null;
     const common = {
       tools: child.tools,
       skills: child.skills,
       onEvent,
+      onConsole: consoleFile === null ? null : consoleTo(consoleFile),
       signal: child.halt.signal,
       env,
       scheduler,
       models,
     };
     try {
-      let result = await this.#pass(() =>
-        runFlow(child.flow, { ...inputs, ...child.memory }, {
-          log: child.log,
-          runId,
-          parent: { runId: chatRunId },
-          llmConfig: Object.keys(llmConfig).length > 0 ? llmConfig : null,
-          ...common,
-        }),
-      );
+      let result = await runFlow(child.flow, { ...inputs, ...child.memory }, {
+        log: child.log,
+        runId,
+        parent: { runId: chatRunId },
+        llmConfig: Object.keys(llmConfig).length > 0 ? llmConfig : null,
+        ...common,
+      });
       // Already settled by `RunStarted`; kept so that `start` can never hang.
       started.resolve();
       // The deadline the run was last moved at. A node is due once any of its calls passes its
@@ -721,9 +705,7 @@ export class ChildRuns {
         const wake: string | null = next === spent ? null : next;
         if (await this.#rest(child, wake)) spent = wake;
         if (child.halt.signal.aborted) return;
-        result = await this.#pass(() =>
-          move({ log: child.log, ...this.#deliveryOptions(child), ...common, memory: child.memory }),
-        );
+        result = await move({ log: child.log, ...this.#deliveryOptions(child), ...common, memory: child.memory });
       }
     } catch (thrown) {
       // A memory's open names its folder or store, which the chat's log and model never hold. A
@@ -744,20 +726,6 @@ export class ChildRuns {
       // A run that never started leaves no folder behind.
       removeEmptyDir(dirname(child.log));
       this.#release(child);
-    }
-  }
-
-  /** Run `move` as a pass, the console routed to the console file meanwhile. */
-  async #pass(move: () => Promise<RunResult>): Promise<RunResult> {
-    const file = this.#options.consoleFile ?? null;
-    if (this.#passes++ === 0 && file !== null) this.#restoreConsole = routeConsole(file);
-    try {
-      return await move();
-    } finally {
-      if (--this.#passes === 0) {
-        this.#restoreConsole?.();
-        this.#restoreConsole = null;
-      }
     }
   }
 

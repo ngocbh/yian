@@ -27,12 +27,13 @@ const noColor = (name: string) => (name === "NO_COLOR" ? "1" : undefined);
  * A reporter writing to an in-memory writer, a TTY one when `isTTY`, on a clock the test moves
  * with `tick(ms)`; and what it was given.
  */
-function sinkReporter(options: { verbose?: boolean; isTTY?: boolean; columns?: number } = {}) {
+function sinkReporter(options: { verbose?: boolean; isTTY?: boolean; columns?: number; rows?: number } = {}) {
   const chunks: string[] = [];
   const out: Writer = {
     write: async (text) => void chunks.push(text),
     isTTY: options.isTTY ?? false,
     columns: options.columns,
+    rows: options.rows,
   };
   let clock = 0;
   const reporter = new ProgressReporter(out, { verbose: options.verbose ?? false, env: noColor, now: () => clock });
@@ -289,6 +290,47 @@ test("a warning while paused is held until resume or stop", () => {
   expect(chunks.slice(count)).toEqual(["warning: x\n"]);
 });
 
+test("a console line prints on its own line above the spinners, which come back below it", () => {
+  jest.useFakeTimers();
+  const { reporter, chunks } = sinkReporter({ isTTY: true });
+  reporter.handle(started("c"));
+  reporter.around(() => chunks.push("hello from code\n"));
+  expect(chunks).toEqual(["\r\x1b[K⠋ c [0s]", "\r\x1b[K", "hello from code\n", "\r\x1b[K⠋ c [0s]"]);
+  reporter.stop();
+});
+
+test("a console line and a warning while paused are held, in order, until resume", () => {
+  jest.useFakeTimers();
+  const { reporter, chunks } = sinkReporter({ isTTY: true });
+  reporter.handle(started("c"));
+  reporter.pause();
+  reporter.around(() => chunks.push("one\n"));
+  reporter.warn("w");
+  reporter.around(() => chunks.push("two\n"));
+  expect(chunks).toEqual(["\r\x1b[K⠋ c [0s]", "\r\x1b[K"]);
+  reporter.resume();
+  expect(chunks.slice(2)).toEqual(["one\n", "warning: w\n", "two\n", "\r\x1b[K⠋ c [0s]"]);
+  reporter.stop();
+});
+
+test("off a TTY a console line is printed as it comes", () => {
+  const { reporter, chunks } = sinkReporter();
+  reporter.handle(started("c"));
+  reporter.around(() => chunks.push("hello\n"));
+  expect(chunks).toEqual(["hello\n"]);
+});
+
+test("a spinner block taller than the screen keeps to one row less, its last row the rest", () => {
+  jest.useFakeTimers();
+  const { reporter, chunks } = sinkReporter({ isTTY: true, rows: 5, columns: 80 });
+  for (let i = 0; i < 20; i++) reporter.handle(started(`n${i}`));
+  expect(chunks.at(-1)).toBe("\r\x1b[K\x1b[A\x1b[K\x1b[A\x1b[K\x1b[A\x1b[K⠋ n0 [0s]\n⠋ n1 [0s]\n⠋ n2 [0s]\n⠋ … and 17 more running");
+  jest.advanceTimersByTime(80);
+  // The erase moves up exactly the rows drawn, never past the top of the block.
+  expect(chunks.at(-1)).toStartWith(`\r\x1b[K${"\x1b[A\x1b[K".repeat(3)}⠙ n0 [0s]`);
+  reporter.stop();
+});
+
 // ---------- the flags of `yian run` ----------
 
 const FLOW = "id: f\nname: f\nnodes:\n  a: {kind: code, output: str, code: return 'hello'}\noutput: ${a.output}\n";
@@ -353,4 +395,33 @@ test("cli num workers threads through", async () => {
     expect((await runCli([...args, "-q"], log)).code).toBe(0);
     expect(loggedWorkers(log)).toBe(workers);
   }
+});
+
+test("on a TTY a CODE body's console line prints above the spinners, and console comes back after", async () => {
+  const flow = join(tmp, "conlog.yaml");
+  const wait = "await new Promise((r) => setTimeout(r, 200))";
+  const code = `|\n      ${wait};\n      console.log('hello from code');\n      return 'ok';`;
+  writeFileSync(flow, `id: c\nname: c\nnodes:\n  c:\n    kind: code\n    output: str\n    code: ${code}\noutput: \${c.output}\n`);
+  const seen: string[] = [];
+  const io: CliIo = {
+    stdout: { write: async (text) => void seen.push(`out ${text}`) },
+    stderr: { write: async (text) => void seen.push(`err ${text}`), isTTY: true, columns: 80 },
+    stdin: new PassThrough(),
+    stderrStream: new PassThrough(),
+    env: (name) => (name === "HOME" ? tmp : name === "NO_COLOR" ? "1" : undefined),
+  };
+  const log = console.log;
+  const logged = (...args: unknown[]) => void seen.push(`log ${args.join(" ")}`);
+  console.log = logged;
+  try {
+    expect(await main(["run", flow, "--log", join(tmp, "run.jsonl")], io)).toBe(0);
+    expect(console.log).toBe(logged);
+  } finally {
+    console.log = log;
+  }
+  const at = seen.indexOf("log hello from code");
+  // The spinner line was erased just before, and is drawn again just after.
+  expect(seen[at - 1]).toBe("err \r\x1b[K");
+  expect(seen[at + 1]).toMatch(/^err \r\x1b\[K. c \[0s\]$/);
+  expect(seen.at(-1)).toBe("out ok\n");
 });

@@ -55,10 +55,10 @@ test("public evaluation always returns frozen slotted wrapper", async () => {
 
   expect(evaluated).toBeInstanceOf(EvaluatedOutcome);
   expect(evaluated).toEqual(new EvaluatedOutcome(new Output("done")));
-  expect(Object.keys(evaluated)).toEqual(["outcome", "bindings"]);
+  expect(Object.keys(evaluated)).toEqual(["outcome"]);
   expect(Object.isFrozen(evaluated)).toBe(true);
   expect(() => {
-    (evaluated as { bindings: unknown }).bindings = null;
+    (evaluated as { outcome: unknown }).outcome = null;
   }).toThrow(TypeError);
 });
 

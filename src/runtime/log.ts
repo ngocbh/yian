@@ -39,11 +39,11 @@ import { formatRecordTime as recordTimeText, RECORD_TIME } from "../typesys/temp
 import { isList, isRecord, jsonPart, requireFields, valueRepr, writeAsText } from "../typesys/values.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 29;
+export const SCHEMA_VERSION = 30;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
 const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([
-  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
+  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
 ]);
 
 /** A typed value's wire object `{kind, value}`. */
@@ -836,6 +836,8 @@ export class PoolCommitRecord {
   readonly take: TakeCommit | null;
   /** A messages commit's step seqs, ascending; `null` for any other commit. Frozen. */
   readonly steps: readonly number[] | null;
+  /** A send's idempotency key, which no other send of the run holds; `null` for any other commit. */
+  readonly sendKey: string | null;
 
   /**
    * @param value A typed value's wire form (see `TypedValue.fromWire`), or `null` with `from`,
@@ -843,12 +845,13 @@ export class PoolCommitRecord {
    * @param options.from A derived commit's sources; copied in name order.
    * @param options.take A take commit's pointer form.
    * @param options.steps A messages commit's step seqs.
-   * @throws TypeError when an id isn't a string, `from` isn't a `Map` or `null`, or `take` isn't
-   *   an object or has a field of the wrong type.
+   * @param options.sendKey A send's idempotency key, with `value`.
+   * @throws TypeError when an id or the send key isn't a string, `from` isn't a `Map` or `null`,
+   *   or `take` isn't an object or has a field of the wrong type.
    * @throws RangeError when an id is empty, `value` isn't a typed-value wire form, a `from` name is
    *   empty or its seq isn't a positive safe integer, `take` breaks the take commit rules, `steps`
-   *   aren't strictly increasing positive safe integers, or the commit doesn't hold exactly one of
-   *   `value`, `from`, `take` and `steps`.
+   *   aren't strictly increasing positive safe integers, the commit doesn't hold exactly one of
+   *   `value`, `from`, `take` and `steps`, or a send key is empty or given without `value`.
    * @throws TypeCheckError when the value holds NaN or another non-JSON value.
    */
   constructor(
@@ -859,6 +862,7 @@ export class PoolCommitRecord {
       from?: ReadonlyMap<string, number> | null;
       take?: TakeCommit | null;
       steps?: readonly number[] | null;
+      sendKey?: string | null;
     } = {},
   ) {
     this.nodeId = requireName(nodeId, "node_id");
@@ -869,6 +873,10 @@ export class PoolCommitRecord {
     this.steps = options.steps == null ? null : validatedSteps(options.steps);
     if ([this.value, this.from, this.take, this.steps].filter((form) => form !== null).length !== 1) {
       throw new RangeError("a pool_commit holds exactly one of value, from, take and steps");
+    }
+    this.sendKey = options.sendKey == null ? null : requireName(options.sendKey, "send_key");
+    if (this.sendKey !== null && this.value === null) {
+      throw new RangeError("only a pool_commit that holds a value holds a send key");
     }
     Object.freeze(this);
   }
@@ -1680,11 +1688,26 @@ export class MemoryRunLog implements RunLog {
 const UTF8_ENCODER = new TextEncoder();
 
 /**
+ * What a caller kept of a log it closed, so `JsonlRunLog.resume` can reopen the file without reading
+ * it while the file is still the one it left: its first record, the seq of its last, and the
+ * file's size, device, inode and mtime (ns) at close.
+ */
+export interface KnownRunLog {
+  readonly first: RecordEnvelope;
+  readonly lastSeq: number;
+  readonly size: bigint;
+  readonly dev: bigint;
+  readonly ino: bigint;
+  readonly mtimeNs: bigint;
+}
+
+/**
  * An exclusively locked, append-and-fsync JSONL log for one run.
  *
  * Built only by `create` or `resume`. The log holds the non-blocking exclusive lock on its
  * sibling `<path>.lock` for its whole life, and keeps its validated records in memory, so they
- * stay iterable after `close`.
+ * stay iterable after `close`; but one resumed from a known prefix reads that prefix only when
+ * its records are first read, which must be before `close`.
  */
 export class JsonlRunLog implements RunLog {
   /** The sole run id this log accepts. */
@@ -1694,7 +1717,10 @@ export class JsonlRunLog implements RunLog {
   readonly #fd: number;
   readonly #lock: FileLock;
   readonly #clock: () => number;
-  readonly #records: RecordEnvelope[];
+  /** The records read or appended; after `#unread`'s records, while those aren't read yet. */
+  #records: RecordEnvelope[];
+  /** A known prefix not read yet: its first record, its record count and its size in bytes. */
+  #unread: { first: RecordEnvelope; count: number; size: number } | null = null;
   #prefixSize: number;
   #closed = false;
   /**
@@ -1762,8 +1788,13 @@ export class JsonlRunLog implements RunLog {
    * decode as a non-empty log, so a rejected file is left unchanged. Any failure closes the file
    * and releases the lock.
    *
+   * With `known`, a file whose size, device, inode and mtime still match it isn't read: the log
+   * continues after `known.lastSeq`, and its records are read and checked as above only when
+   * something first reads them. A file that doesn't match is read as without it.
+   *
    * @param options.clock The clock appends read their times from (default `Date.now`). The
    *   records read keep the times they were written with.
+   * @param options.known What the caller kept of the log when it last closed it.
    * @throws RangeError when the file holds no complete line (`cannot resume an empty run log:
    *   <path>`) or a complete line isn't a valid record, or the records don't share one run id with
    *   contiguous sequences from 0 (the message names `path`, the line and its seq).
@@ -1775,13 +1806,23 @@ export class JsonlRunLog implements RunLog {
    * @throws the `fs` error (`code` `ENOENT` for a missing log, `EISDIR` for a folder, neither of
    *   which creates a lock file) and other `lockFile` errors.
    */
-  static resume(path: string, options: RunLogOptions = {}): JsonlRunLog {
+  static resume(path: string, options: RunLogOptions & { known?: KnownRunLog | null } = {}): JsonlRunLog {
     const clock = logClock(options);
     // Checked before the lock, so a symlink, a FIFO or a device gets no lock file beside it.
     const fd = openRegular(path, fs.constants.O_RDWR);
     let lock: FileLock | undefined;
     try {
       lock = lockRunLog(path, fd);
+      const known = options.known ?? null;
+      if (known !== null) {
+        const stat = fs.fstatSync(fd, { bigint: true });
+        if (stat.size === known.size && stat.dev === known.dev && stat.ino === known.ino && stat.mtimeNs === known.mtimeNs) {
+          const size = Number(stat.size);
+          const log = new JsonlRunLog(path, known.first.runId, fd, lock, clock, [], size);
+          log.#unread = { first: known.first, count: known.lastSeq + 1, size };
+          return log;
+        }
+      }
       const data = fs.readFileSync(fd);
       const completeEnd = data.lastIndexOf(0x0a) + 1;
       const records = decodeCompletePrefix(data.subarray(0, completeEnd), path);
@@ -1799,16 +1840,47 @@ export class JsonlRunLog implements RunLog {
 
   /** The sequence the next successful append receives. */
   get nextSequence(): number {
-    return this.#records.length;
+    return (this.#unread?.count ?? 0) + this.#records.length;
+  }
+
+  /** The log's first record, read without reading the others. */
+  first(): RecordEnvelope | undefined {
+    return this.#unread?.first ?? this.#records[0];
   }
 
   /** Iterate the records retained when the iteration starts. */
   [Symbol.iterator](): Iterator<RecordEnvelope> {
-    return [...this.#records][Symbol.iterator]();
+    return [...this.#read()][Symbol.iterator]();
   }
 
   records(): readonly RecordEnvelope[] {
-    return Object.freeze([...this.#records]);
+    return Object.freeze([...this.#read()]);
+  }
+
+  /**
+   * Return every record, reading the known prefix first if it isn't read yet.
+   *
+   * @throws Error when the log closed before its prefix was read.
+   * @throws RangeError as `resume` does for a line it can't read, and when the prefix holds
+   *   another number of records than it was known to.
+   */
+  #read(): RecordEnvelope[] {
+    const unread = this.#unread;
+    if (unread === null) return this.#records;
+    if (this.#closed) throw new Error(`run log ${this.path} closed before its records were read`);
+    const data = Buffer.alloc(unread.size);
+    for (let at = 0; at < unread.size; ) {
+      const count = fs.readSync(this.#fd, data, at, unread.size - at, at);
+      if (count === 0) throw new RangeError(`run log ${this.path} is shorter than its known ${unread.size} bytes`);
+      at += count;
+    }
+    const prefix = decodeCompletePrefix(data, this.path);
+    if (prefix.length !== unread.count || prefix[0]!.runId !== this.runId) {
+      throw new RangeError(`run log ${this.path} doesn't hold the ${unread.count} records it was known to`);
+    }
+    this.#records = [...prefix, ...this.#records];
+    this.#unread = null;
+    return this.#records;
   }
 
   /**
@@ -2781,7 +2853,9 @@ const RECORD_CODECS: readonly RecordCodec[] = [
     kind: "pool_commit",
     encode: (record): JsonObject => {
       if (record.value !== null) {
-        return { node_id: record.nodeId, key: record.key, kind: record.value.kind, value: record.value.value as JsonValue };
+        const { nodeId: node_id, key, sendKey } = record;
+        const value = record.value.value as JsonValue;
+        return { node_id, key, kind: record.value.kind, value, ...(sendKey === null ? {} : { send_key: sendKey }) };
       }
       if (record.take !== null) {
         const { inbox, events, closed } = record.take;
@@ -2800,7 +2874,9 @@ const RECORD_CODECS: readonly RecordCodec[] = [
           : Object.hasOwn(payload, "inbox")
             ? "take"
             : "value";
-      requireFields(payload, ["node_id", "key", ...POOL_COMMIT_FORM_FIELDS[form]], label);
+      // A send's key rides its value form, and only when it has one.
+      const keyed = form === "value" && Object.hasOwn(payload, "send_key");
+      requireFields(payload, ["node_id", "key", ...POOL_COMMIT_FORM_FIELDS[form], ...(keyed ? ["send_key"] : [])], label);
       let wire: TypedWire | null = null;
       if (form === "value") {
         wire = { kind: payload["kind"], value: payload["value"] } as TypedWire;
@@ -2814,6 +2890,7 @@ const RECORD_CODECS: readonly RecordCodec[] = [
           from: form === "from" ? fromFromPayload(payload["from"], `${label} from`) : null,
           take: form === "take" ? takeFromPayload(payload, label) : null,
           steps: form === "steps" ? wireItems(payload["steps"], `${label} steps`, wireInt) : null,
+          sendKey: keyed ? requireName(payload["send_key"], `${label} send_key`) : null,
         },
       );
     },

@@ -152,7 +152,7 @@ Provider API keys and base URLs, such as `ANTHROPIC_API_KEY`, are listed on
 | `~/.yian/runs/<run_id>/log.jsonl` | A run's log, written by `yian run` and `yian chat` |
 | `~/.yian/runs/<run_id>/log.jsonl.lock` | The lock the process writing the log holds |
 | `~/.yian/runs/<run_id>/media/` | Media files the run keeps, named by their SHA-256 |
-| `~/.yian/runs/index.sqlite` | The run index `yian status` lists. It is rebuilt from the logs, so you can delete it |
+| `~/.yian/runs/index.sqlite` | The run index `yian status` lists. It is rebuilt from the logs, so you can delete it; yian rebuilds a damaged one itself |
 | `~/.yian/memory/<project>/<flow id>/<input>` | The default memory `yian run` keeps for a flow's memory input: a folder, or `<input>.db` for a VectorDBMemory (see [CLI](/cli/#memory)) |
 | `~/.claude/skills`, `~/.agents/skills` | Your skills, read when an agent grants skills |
 | `.claude/skills`, `.agents/skills` | Project skills, from the current folder up to the git root |

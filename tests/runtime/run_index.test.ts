@@ -61,6 +61,7 @@ import {
   RunStoppedRecord,
   RunWaitingRecord,
   readRunLog,
+  SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
 import type { TypedValue } from "../../src/typesys/values.ts";
 
@@ -651,6 +652,81 @@ console.log(JSON.stringify({ warnings, runs: readRunIndex(${JSON.stringify(runs)
     expect(readRunIndex(runs).map((row) => [row.runId, row.status])).toEqual([["run-1", "failed"]]);
   });
 
+  test("an index of this version whose runs table is missing or misshaped reads as [] and is rebuilt", () => {
+    for (const damage of ["DROP TABLE runs", "ALTER TABLE runs DROP COLUMN memories"]) {
+      const runs = freshRuns();
+      writeRun(runs, "run-1", failedRun);
+      updateRunIndex(runs);
+      const db = openSqlite(join(runs, "index.sqlite"));
+      db.exec(damage);
+      db.close();
+      expect(readRunIndex(runs)).toEqual([]);
+      updateRunIndex(runs);
+      expect(readRunIndex(runs).map((row) => [row.runId, row.status])).toEqual([["run-1", "failed"]]);
+    }
+  });
+
+  test("an index built under another run-log schema is rebuilt, so its rows are a fresh build's", () => {
+    const runs = freshRuns();
+    writeRun(runs, "run-1", (log) => {
+      start(log);
+      log.append(new RunCancelledRecord());
+    });
+    updateRunIndex(runs);
+    expect(readRunIndex(runs).map((row) => [row.runId, row.status])).toEqual([["run-1", "cancelled"]]);
+    // The log now reads as an older schema, its size unchanged, so a plain update skips it.
+    const path = join(runs, "run-1", "log.jsonl");
+    const old = `"schema":${SCHEMA_VERSION - 1}`;
+    writeFileSync(path, readFileSync(path, "utf8").replaceAll(`"schema":${SCHEMA_VERSION}`, old));
+    updateRunIndex(runs);
+    expect(readRunIndex(runs).map((row) => row.status)).toEqual(["cancelled"]);
+    // The index as a yian of the older schema left it is rebuilt, as deleting it would rebuild it.
+    const db = openSqlite(join(runs, "index.sqlite"));
+    db.exec(`PRAGMA user_version = ${7 * 1000 + SCHEMA_VERSION - 1}`);
+    db.close();
+    expect(readRunIndex(runs)).toEqual([]);
+    withWarnings(() => {}, () => updateRunIndex(runs));
+    const rebuilt = readRunIndex(runs);
+    rmSync(join(runs, "index.sqlite"));
+    withWarnings(() => {}, () => updateRunIndex(runs));
+    expect(readRunIndex(runs)).toEqual(rebuilt);
+    expect(rebuilt.map((row) => row.unreadable?.reason)).toEqual([expect.stringContaining("predates schema")]);
+  });
+
+  test("an index that isn't a database reads as [] with a warning; an update warns once and rebuilds it private", () => {
+    const runs = freshRuns();
+    writeRun(runs, "run-1", failedRun);
+    const index = join(runs, "index.sqlite");
+    writeFileSync(index, "garbage");
+    const warnings: string[] = [];
+    expect(withWarnings((message) => warnings.push(message), () => readRunIndex(runs))).toEqual([]);
+    expect(warnings).toEqual([`run index ${index} is damaged (file is not a database); the next update rebuilds it`]);
+    warnings.length = 0;
+    withWarnings((message) => warnings.push(message), () => updateRunIndex(runs));
+    expect(warnings).toEqual([`run index ${index} was damaged (file is not a database); rebuilt it from the logs`]);
+    expect(readRunIndex(runs).map((row) => [row.runId, row.status])).toEqual([["run-1", "failed"]]);
+    expect(statSync(index).mode & 0o777).toBe(0o600);
+    warnings.length = 0;
+    withWarnings((message) => warnings.push(message), () => updateRunIndex(runs));
+    expect(warnings).toEqual([]);
+  });
+
+  test("an index cut short is rebuilt with the rows it had, and a stale journal beside it is removed", () => {
+    const runs = freshRuns();
+    for (let i = 0; i < 40; i++) writeRun(runs, `run-${String(i).padStart(2, "0")}`, succeededRun);
+    updateRunIndex(runs);
+    const before = readRunIndex(runs);
+    const index = join(runs, "index.sqlite");
+    expect(statSync(index).size).toBeGreaterThanOrEqual(8 * 4096);
+    truncateSync(index, Math.floor(statSync(index).size / 2 / 4096) * 4096);
+    writeFileSync(`${index}-journal`, "stale journal");
+    const warnings: string[] = [];
+    withWarnings((message) => warnings.push(message), () => updateRunIndex(runs));
+    expect(warnings).toEqual([expect.stringMatching(/^run index .* was damaged \(.*\); rebuilt it from the logs$/)]);
+    expect(readRunIndex(runs)).toEqual(before);
+    expect(existsSync(`${index}-journal`)).toBe(false);
+  });
+
   test("an index of version 3, whose scans hold no remembered Stops, is rebuilt", () => {
     const runs = freshRuns();
     writeRun(runs, "run-1", failedRun);
@@ -666,7 +742,7 @@ console.log(JSON.stringify({ warnings, runs: readRunIndex(${JSON.stringify(runs)
     try {
       const { scan } = reader.prepare("SELECT scan FROM runs").get() as { scan: string };
       expect(JSON.parse(scan).waits.stops).toEqual([]);
-      expect(reader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 7 });
+      expect(reader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 7 * 1000 + SCHEMA_VERSION });
     } finally {
       reader.close();
     }

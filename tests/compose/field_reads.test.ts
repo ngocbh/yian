@@ -1007,7 +1007,7 @@ test("a LOOP predicate checks reads through a comprehension variable", () => {
 function untypedFlow(binding: string): string {
   return (
     "id: p\nname: p\n" +
-    "typedefs:\n  T: {f: Optional(str), g: str}\n  W: {u: Any}\n" +
+    "typedefs:\n  T: {f: Optional(str), g: str}\n  T2: {f: str}\n  T3: {h: str}\n  W: {u: Any}\n" +
     "input:\n  s: !str\n" +
     "nodes:\n" +
     "  u:\n    kind: code\n    input:\n      s: ${input.s}\n    output: Any\n    code: return 1\n" +
@@ -1021,6 +1021,7 @@ test.each([
   ["${u.output != null and isinstance(u.output, T) and u.output.g}"],
   ["${u.output != null and isinstance(u.output, T) and u.output?.f}"],
   ["${mk.output != null and isinstance(mk.output.u, T) and mk.output.u.g}"],
+  ["${(isinstance(u.output, T) or isinstance(u.output, T2)) and u.output?.f}"],
 ])("an isinstance after a null check narrows an untyped value: %s loads", (binding) => {
   expect(() => load(untypedFlow(binding))).not.toThrow();
 });
@@ -1031,6 +1032,9 @@ test.each([
   ["${isinstance(u.output, T) and u.output.zz}", "compose.load", "reference ${u.output.zz} reads field 'zz', which T doesn't have; u.output is T here"],
   ["${u.output != null and isinstance(u.output, T) and u.output.zz}", "compose.load", "reads field 'zz', which T doesn't have"],
   ["${mk.output != null and isinstance(mk.output.u, T) and mk.output.u.zz}", "compose.load", "reference ${mk.output.u.zz} reads field 'zz', which T doesn't have"],
+  // Either check passing narrows to both records; both checks passing, to either.
+  ["${(isinstance(u.output, T) or isinstance(u.output, T2)) and u.output.g}", NULLABLE_FIELD_READ, "which T | T2 doesn't require, of u.output, which is untyped and only narrowed to T | T2"],
+  ["${isinstance(u.output, T) and isinstance(u.output, T3) and u.output.zz}", "compose.load", "reference ${u.output.zz} reads field 'zz', which T doesn't have"],
 ])("an isinstance after a null check narrows an untyped value: %s", (binding, code, message) => {
   const error = loadError(() => load(untypedFlow(binding)));
   expect(error.message).toContain(message);

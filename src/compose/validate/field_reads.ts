@@ -356,7 +356,7 @@ function walk(
       return { message: narrowedReadMessage(ref, step.name, label, prefix, new Set(names)), code: "compose.load" };
     }
     if (field.nullable && !step.optional && roots.untyped(read.root, fields)) {
-      const label = namedTypeLabel(typ, registry);
+      const label = narrowedTypeLabel(typ, registry);
       return nullableError(
         narrowedUntypedMessage(prefix, step.name, label, fields.length === 0, isVariableKey(read.root)),
       );

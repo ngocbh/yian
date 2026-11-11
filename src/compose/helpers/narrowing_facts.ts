@@ -128,18 +128,30 @@ function isEmptyMembers(fact: Fact | null | undefined): boolean {
  *
  * @param a One fact; `null` is unconstrained.
  * @param b The other fact; `null` is unconstrained.
- * @returns The set union of two `Members`, an `Exact` both sides share, or `null`.
+ * @returns The set union of two `Members`, an `Exact` both sides share, an `Exact` of the union of
+ *   two `Exact` records or unions of records, or `null`.
  *
  * @example
  * `unionFacts(new Members([Buy]), new Members([Sell]))` is `new Members([Buy, Sell])`;
+ * `unionFacts(new Exact(Buy), new Exact(Text))` is `new Exact(Union(Buy, Text))`;
  * `unionFacts(new Members([Buy]), null)` is `null`.
  */
 export function unionFacts(a: Fact | null, b: Fact | null): Fact | null {
   if (a instanceof Members && b instanceof Members) {
     return new Members([...a.members, ...b.members], a.nullable || b.nullable);
   }
-  if (a instanceof Exact && b instanceof Exact && typeEquals(a.type, b.type)) return a;
-  return null;
+  if (!(a instanceof Exact && b instanceof Exact)) return null;
+  if (typeEquals(a.type, b.type)) return a;
+  const [am, bm] = [recordMembers(a.type), recordMembers(b.type)];
+  if (am === null || bm === null) return null;
+  const unique = [...am, ...bm].filter((member, index, all) => all.findIndex((m) => typeEquals(m, member)) === index);
+  return new Exact(membersType(unique, a.type.nullable || b.type.nullable)!);
+}
+
+/** Return the records a value of `typ` may be: its union members, `[typ]` for a record, else `null`. */
+function recordMembers(typ: Type): readonly Type[] | null {
+  if (typ.members !== undefined) return typ.members;
+  return typ.fields !== undefined ? [typ.replace({ nullable: false })] : null;
 }
 
 /**
@@ -604,9 +616,10 @@ export function unresolvedType(guard: Guard, registry: TypeRegistry): boolean {
  * `guardedReadTypes`, by base path.
  *
  * A meet drops a base whose facts can't be combined (two unrelated exact types), and a conjunct's
- * candidate keeps its fact there. Elsewhere the candidate keeps the meet's facts, which are at
- * least as narrow: a conjunct alone would forget the others (in `x != null and isinstance(x, T)`,
- * the null check alone says nothing of `T`).
+ * candidate keeps its fact there; the meet itself is then no candidate, since it leaves that base
+ * unconstrained though each conjunct narrows it. Elsewhere the candidate keeps the meet's facts,
+ * which are at least as narrow: a conjunct alone would forget the others (in
+ * `x != null and isinstance(x, T)`, the null check alone says nothing of `T`).
  */
 export function candidateEnvs(guard: Guard, baseTypeOf: BaseTypeOf, registry: TypeRegistry): Env[] {
   return candidateEnvsWith(guard, baseTypeOf, registry, guardEnvMemo());
@@ -623,7 +636,8 @@ function candidateEnvsWith(guard: Guard, baseTypeOf: BaseTypeOf, registry: TypeR
     }
     if (!envs.some((seen) => sameEnv(seen, env))) envs.push(env);
   }
-  return envs;
+  // A conjunct's candidate only ever adds to the meet's facts.
+  return envs.some((env) => env.size > met.size) ? envs.slice(1) : envs;
 }
 
 /**

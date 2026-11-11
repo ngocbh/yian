@@ -136,9 +136,12 @@ test("union of members is the set union and or of nullability", () => {
   expect(joined).toStrictEqual(new Members([BUY, SELL], true));
 });
 
-test("union of exact facts keeps only an equal type", () => {
+test("union of exact facts keeps an equal type, and joins records as a union", () => {
   expect(unionFacts(new Exact(TEXT), new Exact(TEXT))).toStrictEqual(new Exact(TEXT));
-  expect(unionFacts(new Exact(TEXT), new Exact(BUY))).toBeNull();
+  const joined = unionFacts(new Exact(TEXT), new Exact(BUY_OR_SELL));
+  expect(joined).toBeInstanceOf(Exact);
+  expect(canonicalTypeLabel((joined as Exact).type)).toBe(canonicalTypeLabel(t("Union(Text, Buy, Sell)")));
+  expect(unionFacts(new Exact(TEXT), new Exact(OBJECT))).toBeNull();
   expect(unionFacts(new Exact(BUY), new Members([BUY]))).toBeNull();
   expect(unionFacts(new Members([BUY]), null)).toBeNull();
 });
@@ -987,7 +990,7 @@ test("two isinstance cases into one target join by union", () => {
   expect(typeEquals(searchedView(cases), BUY_OR_SELL)).toBe(true);
 });
 
-test("two isinstance cases on unrelated types into one target drop the fact", () => {
+test("two isinstance cases on unrelated types into one target narrow to their union", () => {
   const obj = new ValueContract(OBJECT);
   const cases = [
     ["isinstance(d.output, Text)", "b"],
@@ -995,8 +998,9 @@ test("two isinstance cases on unrelated types into one target drop the fact", ()
   ] as const;
   const nodes = [node("d"), caseNode("c", null, cases), node("b")];
   const narrowing = compute(nodes, [], produced(obj));
-  expect(narrowing.environment("b")).toStrictEqual(new Map());
-  expect(narrowing.forNode("b")[0].get("d")).toBe(obj);
+  const fact = narrowing.environment("b").get("d.output");
+  expect(fact).toBeInstanceOf(Exact);
+  expect(canonicalTypeLabel((fact as Exact).type)).toBe(canonicalTypeLabel(t("Union(Buy, Text)")));
 });
 
 test("a plain case or else into the target drops the fact", () => {

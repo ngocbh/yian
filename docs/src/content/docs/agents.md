@@ -352,6 +352,9 @@ The file uses the `mcpServers` format other MCP clients use:
 - A key set to `null` counts as absent.
 - A server can't share a name with a registered tool or a built-in: `take`, `sleep`, `ask`,
   `ask_user`, `load_skill`.
+- A server may share its name with one of its own tools, as a server keyed `fetch` that lists
+  `fetch` does. `tools: [fetch]` then grants the whole server, `{fetch: [fetch]}` just the tool,
+  and a TOOL node's `tool_id: fetch` calls the tool.
 - A model sees a server's tools as `<server>_<tool>`, so name servers with letters, digits, `_`
   and `-`. The run fails before it starts on a name a model can't call, or one past 64 characters.
 - In `command`, `args`, `cwd`, `url` and the values of `env` and `headers`, `${VAR}` reads an

@@ -10,6 +10,7 @@
 
 import { reprText } from "../diagnostics.ts";
 import { ToolSpec } from "../llm/messages.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import { isRecord } from "../typesys/values.ts";
 
 /** One authored grant: a tool or a group by name, or some tools of a group. */
@@ -24,7 +25,7 @@ export type ToolGrant =
 export type MemoryGrant = { readonly input: string; readonly tools: readonly string[] | null };
 
 /** A grant that can't be parsed or resolved; its message names the fix. */
-export class GrantError extends RangeError {
+export class GrantError extends YianRangeError {
   /** The index of the `tools:` entry at fault, or `null` when no one entry is. */
   readonly index: number | null;
 

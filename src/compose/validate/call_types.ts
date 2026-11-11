@@ -46,6 +46,7 @@ import {
 import { coerceParam } from "../../nodes/binding.ts";
 import type { LoopNode } from "../../nodes/loop/node.ts";
 import { MapNode } from "../../nodes/map/node.ts";
+import { YianTypeError } from "../../typesys/errors.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import {
   buildValueAs,
@@ -527,7 +528,7 @@ function contractMismatch(
   const { nonNull, registry = null } = options;
   if (contract === null || isExactly(contract, PartialRecordContract)) return null;
   if (!isExactly(contract, ValueContract)) {
-    throw new TypeError("resolved source contract must be ValueContract, PartialRecordContract, or None");
+    throw new YianTypeError("resolved source contract must be ValueContract, PartialRecordContract, or None");
   }
   const childType = decl.contract!.type;
   let source = contract.type;

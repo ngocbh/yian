@@ -59,6 +59,7 @@ import {
 } from "../diagnostics.ts";
 import { Binding, type ValuePath, ValueTemplate } from "../nodes/contracts.ts";
 import { isSystemError, leavesRoot, readRegularFile, resolvedPath, statOrNull } from "../platform.ts";
+import { YianTypeError } from "../typesys/errors.ts";
 import { readTypedefs, typeFor, typeName, type TypeRegistry, withMemoryTypes } from "../typesys/types.ts";
 import {
   isList,
@@ -760,7 +761,7 @@ export async function loadFlow(text: string, options: LoadOptions = {}): Promise
 async function loadText(text: string, options: Omit<LoadOptions, "env">): Promise<ComposedFlow> {
   const { childResolver = null, searchPaths = null, sourceLabel = "<flow>", baseDir = null, codeRoot = null } = options;
   const { memoryTypes = [] } = options;
-  if (typeof sourceLabel !== "string") throw new TypeError("source_label must be a string");
+  if (typeof sourceLabel !== "string") throw new YianTypeError("source_label must be a string");
   const memoryTools = memoryTypeTools(memoryTypes);
   // Absolute, so a CODE reference doesn't depend on the cwd when the node runs.
   const ownDir = resolvePath(baseDir ?? searchPaths?.[0] ?? process.cwd());

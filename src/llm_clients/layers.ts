@@ -10,6 +10,7 @@
  */
 
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import { writeAsText } from "../typesys/values.ts";
 import {
   has,
@@ -71,7 +72,7 @@ export function resolveAgentConfig(
   const config = mergeLlmConfig(written, fill);
   const provider = own(config, "provider");
   if (!truthy(provider)) {
-    throw new RangeError(missingModelMessage(path, null, { strayModel, label }));
+    throw new YianRangeError(missingModelMessage(path, null, { strayModel, label }));
   }
   if (!truthy(own(written, "model"))) {
     // Keyed by value: a primitive default provider matches its clone, a list or record one never
@@ -84,7 +85,7 @@ export function resolveAgentConfig(
     }
     const model = models.get(provider);
     if (!truthy(model)) {
-      throw new RangeError(missingModelMessage(path, provider, { strayModel, label }));
+      throw new YianRangeError(missingModelMessage(path, provider, { strayModel, label }));
     }
     config["model"] = model;
   }
@@ -109,15 +110,15 @@ export function requireConcreteSelection(
   const subject = options.label || reprText(options.path);
   const marked = has(config, HOST_KEY_MARKER);
   if (marked && config[HOST_KEY_MARKER] !== true) {
-    throw new RangeError(`effective LLM config for ${subject} has an invalid host key marker`);
+    throw new YianRangeError(`effective LLM config for ${subject} has an invalid host key marker`);
   }
   const provider = own(config, "provider");
   for (const key of HOST_SETTING_KEYS) {
     if (!has(config, key)) continue;
     // Only the host's settings, sent with its key, are recorded beside the marker.
-    if (!marked) throw new RangeError(`effective LLM config for ${subject} has ${key} without a host key`);
+    if (!marked) throw new YianRangeError(`effective LLM config for ${subject} has ${key} without a host key`);
     if (key !== HEADER_NAMES_KEY && provider !== "openai") {
-      throw new RangeError(`effective LLM config for ${subject}: ${key} applies only to provider openai`);
+      throw new YianRangeError(`effective LLM config for ${subject}: ${key} applies only to provider openai`);
     }
     prefixed(subject, () => {
       if (key === HEADER_NAMES_KEY) validateHeaderNames(config[key], provider);
@@ -127,7 +128,7 @@ export function requireConcreteSelection(
   if (has(config, "base_url")) {
     // An Azure base_url is its resource endpoint; any other serves only a host key.
     if (!marked && provider !== "azure") {
-      throw new RangeError(
+      throw new YianRangeError(
         `effective LLM config for ${subject} has a base_url without a host key; ` +
           "only provider azure takes a base_url from a flow file",
       );
@@ -149,7 +150,7 @@ export function requireConcreteSelection(
     return typeof value !== "string" || !value;
   });
   if (missing.length > 0) {
-    throw new RangeError(`effective LLM config for ${subject} lacks concrete fields: ${writeAsText(missing)}`);
+    throw new YianRangeError(`effective LLM config for ${subject} lacks concrete fields: ${writeAsText(missing)}`);
   }
 }
 
@@ -164,11 +165,11 @@ export function validateLayer(config: Readonly<AgentConfig>): void {
   if (hostOnly !== null) {
     // Every layer here ends up in the recorded effective map, and a lower layer's base_url would
     // redirect the host key.
-    throw new RangeError(hostOnly[1]);
+    throw new YianRangeError(hostOnly[1]);
   }
   rejectInternalKeys(config);
   const removed = removedFormError(config);
-  if (removed !== null) throw new RangeError(removed);
+  if (removed !== null) throw new YianRangeError(removed);
   // The loader checks authored values; a host layer is checked here only for unknown keys, which
   // would otherwise be recorded and silently ignored. Its values, including block contents, are
   // checked against the effective config before the run starts (`checkModelConfig`) and when the
@@ -177,7 +178,7 @@ export function validateLayer(config: Readonly<AgentConfig>): void {
     .filter((key) => has(config, key) && !LLM_CONFIG_KEYS.has(key) && key !== "_connection")
     .sort(compareCodeUnits);
   if (unknown.length > 0) {
-    throw new RangeError(
+    throw new YianRangeError(
       `llm_config has unknown field(s) ${writeAsText(unknown)} ` +
         `(allowed: ${[...LLM_CONFIG_KEYS].sort(compareCodeUnits).join(", ")})`,
     );
@@ -189,7 +190,7 @@ export function validateLayer(config: Readonly<AgentConfig>): void {
 /** Reject the fields only a resolved, recorded config may hold. */
 function rejectInternalKeys(config: Readonly<AgentConfig>): void {
   for (const internal of [HOST_KEY_MARKER, HEADER_NAMES_KEY]) {
-    if (has(config, internal)) throw new RangeError(`llm_config.${internal} is internal to recorded runs`);
+    if (has(config, internal)) throw new YianRangeError(`llm_config.${internal} is internal to recorded runs`);
   }
 }
 
@@ -199,7 +200,7 @@ function prefixed(subject: string, check: () => unknown): void {
     check();
   } catch (error) {
     if (!(error instanceof RangeError)) throw error;
-    throw new RangeError(`effective LLM config for ${subject}: ${error.message}`);
+    throw new YianRangeError(`effective LLM config for ${subject}: ${error.message}`);
   }
 }
 

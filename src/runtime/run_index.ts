@@ -22,6 +22,7 @@ import { END_ID, START_ID } from "../compile/model.ts";
 import { SourceDocument } from "../compose/source/document.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { openSqlite, type Sqlite, type SqliteRow, sqliteErrorCode, warn } from "../platform.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import { logJson } from "../typesys/json.ts";
 import { parseType, type TypeExpr } from "../typesys/types.ts";
 import { isRecord, type MemoryRef, shownText, TypedValue, valueRepr } from "../typesys/values.ts";
@@ -262,10 +263,10 @@ export function runScanFromJson(text: string): RunScan {
   try {
     raw = JSON.parse(text);
   } catch (error) {
-    throw new RangeError(`run scan isn't JSON: ${(error as Error).message}`, { cause: error });
+    throw new YianRangeError(`run scan isn't JSON: ${(error as Error).message}`, { cause: error });
   }
-  const bad = (field: string, what: string) => new RangeError(`run scan ${field} must be ${what}`);
-  if (!isRecord(raw)) throw new RangeError("run scan must be an object");
+  const bad = (field: string, what: string) => new YianRangeError(`run scan ${field} must be ${what}`);
+  if (!isRecord(raw)) throw new YianRangeError("run scan must be an object");
   const seqOrNull = (field: string): number | null => {
     const value = raw[field];
     if (value !== null && !Number.isSafeInteger(value)) throw bad(field, "an integer or null");
@@ -406,7 +407,7 @@ interface StoredRow {
 /** Return `timeoutMs` when it is a non-negative safe integer. */
 function checkedTimeout(timeoutMs: unknown): number {
   if (typeof timeoutMs !== "number" || !Number.isSafeInteger(timeoutMs) || timeoutMs < 0) {
-    throw new RangeError(`timeoutMs must be a non-negative integer, got ${valueRepr(timeoutMs)}`);
+    throw new YianRangeError(`timeoutMs must be a non-negative integer, got ${valueRepr(timeoutMs)}`);
   }
   return timeoutMs;
 }
@@ -570,7 +571,7 @@ function updateIndexFile(runsDir: string, path: string, timeoutMs: number, maxLi
 export function readRunIndex(runsDir: string, options: { timeoutMs?: number; lockProbe?: boolean } = {}): RunIndexRow[] {
   const timeoutMs = checkedTimeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const lockProbe = options.lockProbe ?? true;
-  if (typeof lockProbe !== "boolean") throw new RangeError(`lockProbe must be a boolean, got ${valueRepr(lockProbe)}`);
+  if (typeof lockProbe !== "boolean") throw new YianRangeError(`lockProbe must be a boolean, got ${valueRepr(lockProbe)}`);
   const path = join(runsDir, INDEX_FILE);
   if (!fs.existsSync(path)) return [];
   let db: Sqlite | undefined;
@@ -734,9 +735,9 @@ function readRun(log: string, runId: string, saved: StoredRow | null, stat: fs.S
     for (const entry of iterRunRecords(log, options)) {
       const record = entry.envelope.record;
       if (row === null) {
-        if (!(record instanceof RunStartedRecord)) throw new RangeError("the first run log record must be RunStarted");
+        if (!(record instanceof RunStartedRecord)) throw new YianRangeError("the first run log record must be RunStarted");
         const mismatch = folderMismatch(entry.runId, runId);
-        if (mismatch !== null) throw new RangeError(mismatch);
+        if (mismatch !== null) throw new YianRangeError(mismatch);
         row = emptyRow(runId);
         row.flow = record.flow === null ? null : join(record.flow.dir, record.flow.root);
         declared = declaredMemories(record.flow);
@@ -868,7 +869,7 @@ function memoriesFromJson(text: unknown): RunIndexMemory[] {
       (each) =>
         isRecord(each) && ["input", "identity", "type"].every((field) => typeof each[field] === "string"),
     );
-  if (!valid) throw new RangeError("the stored memories aren't a list of memory inputs");
+  if (!valid) throw new YianRangeError("the stored memories aren't a list of memory inputs");
   return (parsed as RunIndexMemory[]).map(({ input, identity, type }) => ({ input, identity, type }));
 }
 
@@ -919,13 +920,13 @@ function addUsage(row: StoredRow, step: Readonly<Record<string, unknown>>): void
  */
 function committedValue(log: string, seq: number, maxLineBytes: number | null): string | null {
   const offset = runRecordOffsets(log, { maxLineBytes })[seq];
-  if (offset === undefined) throw new RangeError(`the log has no record at seq ${seq}`);
+  if (offset === undefined) throw new YianRangeError(`the log has no record at seq ${seq}`);
   for (const entry of iterRunRecords(log, { afterOffset: offset, maxLineBytes })) {
     const record = entry.envelope.record;
-    if (!(record instanceof PoolCommitRecord)) throw new RangeError(`the record at seq ${seq} isn't a pool_commit`);
+    if (!(record instanceof PoolCommitRecord)) throw new YianRangeError(`the record at seq ${seq} isn't a pool_commit`);
     return record.value === null ? null : logJson(record.value.value);
   }
-  throw new RangeError(`the log has no record at seq ${seq}`);
+  throw new YianRangeError(`the log has no record at seq ${seq}`);
 }
 
 /** Return a row's column values, in `COLUMNS` order. */

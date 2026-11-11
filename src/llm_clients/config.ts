@@ -12,6 +12,7 @@ import { isIPv6 } from "node:net";
 import { current } from "../defaults.ts";
 import { reprText } from "../diagnostics.ts";
 import { LOOPBACK_HOSTS } from "../platform.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import { isRecord } from "../typesys/index.ts";
 import type { StructuredOutput } from "../llm/events.ts";
 import type { JsonObject } from "../typesys/json.ts";
@@ -190,11 +191,11 @@ export function retiredKeyError(config: unknown): string | null {
  * `RangeError` if `value` is not an allowed URL; messages never echo the value.
  */
 export function validateBaseUrl(value: unknown): string {
-  if (typeof value !== "string") throw new RangeError("base_url must be a string");
+  if (typeof value !== "string") throw new YianRangeError("base_url must be a string");
   const limit = current().maxBaseUrlChars;
-  if ([...value].length > limit) throw new RangeError(`base_url must be at most ${limit} characters`);
+  if ([...value].length > limit) throw new YianRangeError(`base_url must be at most ${limit} characters`);
   if (!URL_CHARACTERS.test(value)) {
-    throw new RangeError(
+    throw new YianRangeError(
       "base_url may contain only ASCII URL characters, with no whitespace or control characters; " +
         "write an internationalised host in its xn-- form",
     );
@@ -206,17 +207,17 @@ export function validateBaseUrl(value: unknown): string {
     if (!isIPv6(host)) host = undefined;
   }
   if (groups === undefined || !host) {
-    throw new RangeError(
+    throw new YianRangeError(
       "base_url must be a lowercase https:// or http:// URL of a host, an optional port, and a path, " +
         "without credentials, query, or fragment",
     );
   }
   const port = groups["port"];
   if (port !== undefined && !(Number(port) >= 1 && Number(port) <= 65535)) {
-    throw new RangeError("base_url port must be a number from 1 to 65535");
+    throw new YianRangeError("base_url port must be a number from 1 to 65535");
   }
   if (groups["scheme"] !== "https" && !LOOPBACK_HOSTS.includes(host)) {
-    throw new RangeError("base_url must use https; http is allowed only for localhost, 127.0.0.1, and ::1");
+    throw new YianRangeError("base_url must use https; http is allowed only for localhost, 127.0.0.1, and ::1");
   }
   return value;
 }
@@ -256,14 +257,14 @@ function unquote(text: string): string {
  * such a URL; messages never echo the value, which may hold a password.
  */
 export function splitOllamaBaseUrl(value: unknown): [baseUrl: string, credentials: [string, string] | null] {
-  if (typeof value !== "string") throw new RangeError(OLLAMA_SHAPE);
+  if (typeof value !== "string") throw new YianRangeError(OLLAMA_SHAPE);
   const text = !HAS_SCHEME.test(value) && value.includes(":") ? `http://${value}` : value;
   const groups = OLLAMA_URL.exec(text)?.groups;
-  if (groups === undefined) throw new RangeError(OLLAMA_SHAPE);
+  if (groups === undefined) throw new YianRangeError(OLLAMA_SHAPE);
   // The pattern always matches `scheme` and `host`; the defaults only satisfy the group types.
   const { scheme = "", userinfo, host = "", port, path = "" } = groups;
   if (port && !(Number(port) >= 1 && Number(port) <= 65535)) {
-    throw new RangeError("OLLAMA_BASE_URL port must be a number from 1 to 65535");
+    throw new YianRangeError("OLLAMA_BASE_URL port must be a number from 1 to 65535");
   }
   let credentials: [string, string] | null = null;
   if (userinfo !== undefined) {
@@ -353,31 +354,31 @@ interface Connection {
 function bindConnectionToKey(connection: Connection): void {
   if (connection.baseUrl !== null && connection.provider !== "azure") {
     if (connection.apiKey === null || connection.provider === null) {
-      throw new RangeError(
+      throw new YianRangeError(
         "llm_config.base_url needs llm_config.api_key and llm_config.provider in the same config, " +
           "since it decides where that key is sent",
       );
     }
     // The native Ollama client sends no key, so it cannot take a host base_url.
     if (connection.provider === "ollama") {
-      throw new RangeError(
+      throw new YianRangeError(
         "provider ollama does not take llm_config.base_url; it sends no api_key, so set OLLAMA_BASE_URL instead",
       );
     }
   }
   if (connection.provider !== null) {
     if ((connection.organization !== null || connection.project !== null) && connection.provider !== "openai") {
-      throw new RangeError("llm_config.organization and llm_config.project apply only to provider openai");
+      throw new YianRangeError("llm_config.organization and llm_config.project apply only to provider openai");
     }
     if (connection.headers !== null && connection.provider === "ollama") {
-      throw new RangeError("provider ollama does not take llm_config.headers; it sends no api_key");
+      throw new YianRangeError("provider ollama does not take llm_config.headers; it sends no api_key");
     }
     // The field check could not see the provider; openai refuses more names.
     for (const name of Object.keys(connection.headers ?? {})) validateHeaderName(name, connection.provider);
   }
   for (const field of ["organization", "project", "headers"] as const) {
     if (connection[field] !== null && (connection.apiKey === null || connection.provider === null)) {
-      throw new RangeError(
+      throw new YianRangeError(
         `llm_config.${field} needs llm_config.api_key and llm_config.provider in the same config, ` +
           "since it goes wherever that key is sent",
       );
@@ -491,9 +492,9 @@ export class LLMConfig {
     const model = text("model");
     const apiKey = text("api_key", (value) => {
       // Some clients would replace an empty key with an environment variable.
-      if (value === "") throw new RangeError("api_key must not be empty");
+      if (value === "") throw new YianRangeError("api_key must not be empty");
       // A pasted key often carries a newline; sent as a header it fails late or splits the header.
-      if (/[\x00-\x1f\x7f]/.test(value)) throw new RangeError("api_key must not contain a control character");
+      if (/[\x00-\x1f\x7f]/.test(value)) throw new YianRangeError("api_key must not contain a control character");
       return value;
     });
     const baseUrl = text("base_url", validateBaseUrl);
@@ -675,7 +676,7 @@ export function popApiKey(config: Record<string, unknown>): string | null {
   if (raw === null || raw === undefined) return null;
   const provider = own(config, "provider");
   if (provider === null || provider === undefined) {
-    throw new RangeError("llm_config.api_key needs llm_config.provider, so the key goes only to that provider");
+    throw new YianRangeError("llm_config.api_key needs llm_config.provider, so the key goes only to that provider");
   }
   return new LLMConfig({ provider, api_key: raw }).apiKey;
 }
@@ -763,7 +764,7 @@ export function popHostCredentials(config: Record<string, unknown>): HostConnect
   }
   const noBaseUrl = baseUrl === null || baseUrl === undefined;
   if (noBaseUrl && apiKey !== null && provider === "azure") {
-    throw new RangeError(
+    throw new YianRangeError(
       "llm_config.api_key for provider azure needs llm_config.base_url in the same config, " +
         "since it decides where that key is sent",
     );

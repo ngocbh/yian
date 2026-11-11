@@ -36,6 +36,7 @@ import { OpenAIResponses, PROTOCOL as OPENAI_RESPONSES } from "../llm/protocols/
 import { Route } from "../llm/route.ts";
 import type { StructuredTarget } from "../llm/structured.ts";
 import { type Scheduler, type Send, warn } from "../platform.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { fromHost } from "../typesys/values.ts";
 import { apiKeyEnvNames, getApiKeyEnv, OPTIONAL_API_KEY_PROVIDERS } from "./api_key_env.ts";
@@ -221,7 +222,7 @@ function withHeaders(auth: Auth, headers: Record<string, string>): Auth {
 
 /** The error for `provider` with no key, naming every environment variable that could hold it. */
 function missingKey(provider: string, variables: readonly string[]): RangeError {
-  return new RangeError(
+  return new YianRangeError(
     `API key for provider '${provider}' is not set. Please set the ${variables.join(" or ")} environment ` +
       `variable (e.g. add ${variables[0]}=your_key to your .env file).`,
   );
@@ -323,7 +324,7 @@ function azureAuth(key: string | null, endpoint: string, env: Env): [Auth, strin
   if (adToken) return [new BearerAuth(adToken), accountHash(endpoint)];
   const envKey = env("AZURE_OPENAI_API_KEY");
   if (envKey) return [new HeaderKeyAuth("api-key", envKey), accountHash(envKey)];
-  throw new RangeError(
+  throw new YianRangeError(
     "provider azure has no credential; set llm_config.api_key with llm_config.base_url, run " +
       "'yian auth azure', or set AZURE_OPENAI_API_KEY or AZURE_OPENAI_AD_TOKEN",
   );
@@ -344,7 +345,7 @@ function azureModel(resolved: Resolved, wiring: Wiring): RouteModel {
   const [auth, account] = azureAuth(resolved.keyAtBuild, endpoint, env);
   const version = env("OPENAI_API_VERSION");
   if (!version) {
-    throw new RangeError(
+    throw new YianRangeError(
       "provider azure needs OPENAI_API_VERSION, the Azure OpenAI API version (for example " +
         "2025-03-01-preview)",
     );
@@ -727,7 +728,7 @@ export async function embedderFromConfig(
 ): Promise<Embedder> {
   const { provider, model } = config;
   checkEmbeddingProvider(provider);
-  if (typeof model !== "string" || model === "") throw new RangeError("an embedding model needs a model name");
+  if (typeof model !== "string" || model === "") throw new YianRangeError("an embedding model needs a model name");
   const { env = processEnv, send, scheduler } = options;
   const resolved = await resolveProviderAccess({ provider, model }, options);
   if (resolved.subscription !== null) {

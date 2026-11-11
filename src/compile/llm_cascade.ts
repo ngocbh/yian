@@ -50,6 +50,7 @@ import { AgentNode } from "../nodes/agent/node.ts";
 import type { Node } from "../nodes/base.ts";
 import { BindingError, bindParams, copyValue } from "../nodes/binding.ts";
 import { Binding, type Parameter, type ValuePath, ValueTemplate } from "../nodes/contracts.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { isRecord, type Type, TypeCheckError, type Value, type ValueRecord, VariablePool } from "../typesys/index.ts";
 import { setField, writeAsText } from "../typesys/values.ts";
 import { copyGraph, type Flow, nodeChild, setNodeChild } from "./model.ts";
@@ -140,7 +141,7 @@ export function resolveRunLlm(
         ? "the run's flow"
         : `the flow node ${reprText(pathKey(inherited.owner))} calls`;
     const agent = inherited.gate || `node ${reprText(pathKey(inherited.agent))}`;
-    throw new RangeError(
+    throw new YianRangeError(
       `${agent} would inherit ${fieldLabel(inherited.field)} from ${where}, a value read only when that flow ` +
         `runs; ${inheritedValueFix(inherited.field)}`,
     );
@@ -217,10 +218,10 @@ class RunInputs {
   /** Bind one input as START binds it, and return its value. */
   private check(name: string, where: string): unknown {
     const parameter = this.params.get(name);
-    if (parameter === undefined) throw new RangeError(`${where}: input ${reprText(name)} is not declared`);
+    if (parameter === undefined) throw new YianRangeError(`${where}: input ${reprText(name)} is not declared`);
     const present = this.supplied.has(name);
     if (!present && parameter.required) {
-      throw new RangeError(`${where}: input ${reprText(name)} is required and was not given`);
+      throw new YianRangeError(`${where}: input ${reprText(name)} is required and was not given`);
     }
     const wiring = new Map<string, unknown>(present ? [[name, `\${input.${name}}`]] : []);
     let record: ValueRecord;
@@ -230,8 +231,8 @@ class RunInputs {
       pool.set(this.startId, present ? { [name]: this.supplied.get(name) } : {});
       record = bindParams([parameter], wiring, pool);
     } catch (error) {
-      if (error instanceof BindingError) throw new RangeError(`${where}: ${error.message}`);
-      if (error instanceof TypeCheckError) throw new RangeError(`${where}: input ${reprText(name)}: ${error.message}`);
+      if (error instanceof BindingError) throw new YianRangeError(`${where}: ${error.message}`);
+      if (error instanceof TypeCheckError) throw new YianRangeError(`${where}: input ${reprText(name)}: ${error.message}`);
       throw error;
     }
     return Object.hasOwn(record, name) ? record[name] : null;
@@ -431,18 +432,18 @@ function valueOrigin(layer: unknown, field: ValuePath, leaf: unknown): OriginRef
  * @throws {TypeError} If a map or one of its entries is not a record.
  */
 export function applyEffectiveLlmMap(flow: CascadeFlow, effective: unknown, callTime: unknown = null): void {
-  if (!isRecord(effective)) throw new TypeError("effective LLM map must be a dict keyed by static agent path");
+  if (!isRecord(effective)) throw new YianTypeError("effective LLM map must be a dict keyed by static agent path");
   let selection: ConnectionSelection | null = null;
   let agents: Record<string, unknown> = {};
   if (callTime !== null && callTime !== undefined) {
-    if (!isRecord(callTime)) throw new TypeError("call-time LLM record must be a dict of selection and agents");
+    if (!isRecord(callTime)) throw new YianTypeError("call-time LLM record must be a dict of selection and agents");
     const keys = Object.keys(callTime);
     if (keys.length !== 2 || !keys.includes("selection") || !keys.includes("agents")) {
-      throw new RangeError("call-time LLM record must hold exactly selection and agents");
+      throw new YianRangeError("call-time LLM record must hold exactly selection and agents");
     }
     selection = restoreSelection(callTime["selection"]);
     if (!isRecord(callTime["agents"])) {
-      throw new TypeError("call-time LLM agents must be a dict keyed by static agent path");
+      throw new YianTypeError("call-time LLM agents must be a dict keyed by static agent path");
     }
     agents = callTime["agents"];
   }
@@ -460,14 +461,14 @@ export function applyEffectiveLlmMap(flow: CascadeFlow, effective: unknown, call
     if (missing.length > 0) details.push(`missing paths: ${writeAsText(missing)}`);
     if (extra.length > 0) details.push(`extra paths: ${writeAsText(extra)}`);
     if (both.length > 0) details.push(`paths in both maps: ${writeAsText(both)}`);
-    throw new RangeError("effective LLM map path mismatch; " + details.join("; "));
+    throw new YianRangeError("effective LLM map path mismatch; " + details.join("; "));
   }
 
   const labels = agentLabels(statics);
   for (const path of Object.keys(effective).sort(compareCodeUnits)) {
     const config = effective[path];
     if (!isRecord(config)) {
-      throw new TypeError(`effective LLM config for ${labels.get(path) || reprText(path)} must be a dict`);
+      throw new YianTypeError(`effective LLM config for ${labels.get(path) || reprText(path)} must be a dict`);
     }
     requireConcreteSelection(config, { path, label: labels.get(path) ?? null });
   }
@@ -475,15 +476,15 @@ export function applyEffectiveLlmMap(flow: CascadeFlow, effective: unknown, call
   for (const path of Object.keys(agents).sort(compareCodeUnits)) {
     const subject = labels.get(path) || reprText(path);
     if (!carrying.has(path)) {
-      throw new RangeError(`call-time LLM base for ${subject}: the agent has no llm_config value`);
+      throw new YianRangeError(`call-time LLM base for ${subject}: the agent has no llm_config value`);
     }
     const base = agents[path];
-    if (!isRecord(base)) throw new TypeError(`call-time LLM base for ${subject} must be a dict`);
+    if (!isRecord(base)) throw new YianTypeError(`call-time LLM base for ${subject} must be a dict`);
     try {
       validateLayer(base);
     } catch (error) {
       if (!(error instanceof RangeError)) throw error;
-      throw new RangeError(`call-time LLM base for ${subject}: ${error.message}`);
+      throw new YianRangeError(`call-time LLM base for ${subject}: ${error.message}`);
     }
   }
 
@@ -798,7 +799,7 @@ function resolved<T>(resolve: () => T): T {
     return resolve();
   } catch (error) {
     if (!(error instanceof BindingError)) throw error;
-    throw new RangeError(error.message);
+    throw new YianRangeError(error.message);
   }
 }
 

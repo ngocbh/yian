@@ -12,6 +12,7 @@
  */
 
 import { compareCodeUnits } from "../diagnostics.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import { isList, isRecord } from "../typesys/index.ts";
 import type { JsonObject, JsonValue } from "../typesys/json.ts";
 import { valueRepr } from "../typesys/values.ts";
@@ -54,7 +55,7 @@ export interface Issue {
  * A value a block refuses. The message is a count header ("N validation errors for <title>"), then
  * each issue's dotted location, if any, and its indented message.
  */
-export class ValidationError extends RangeError {
+export class ValidationError extends YianRangeError {
   override name = "ValidationError";
   /** What was validated, e.g. the block's schema name. */
   readonly title: string;
@@ -1218,7 +1219,7 @@ export function blockSchema(provider: string, connection?: unknown, apiKey?: unk
     return OpenAISubscriptionBlock;
   }
   if (!Object.hasOwn(PROVIDER_BLOCKS, provider)) {
-    throw new RangeError(`no provider block named ${valueRepr(provider)}`);
+    throw new YianRangeError(`no provider block named ${valueRepr(provider)}`);
   }
   return PROVIDER_BLOCKS[provider]!;
 }

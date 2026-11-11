@@ -42,6 +42,7 @@ import { MapNode } from "../nodes/map/node.ts";
 import { StartNode } from "../nodes/start/node.ts";
 import { ToolNode } from "../nodes/tool/node.ts";
 import { authoredGrant, type ToolGrant } from "../tools/grants.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { canonicalJson, type JsonObject, type JsonValue } from "../typesys/json.ts";
 import {
   canonicalUnionOrder,
@@ -254,7 +255,7 @@ function typeName(value: unknown): string {
  * @throws RangeError `message` when `value` is already an ancestor.
  */
 function within<T>(stack: Set<object>, value: object, message: string, body: () => T): T {
-  if (stack.has(value)) throw new RangeError(message);
+  if (stack.has(value)) throw new YianRangeError(message);
   stack.add(value);
   try {
     return body();
@@ -278,8 +279,8 @@ function checkFields(
   const actual = new Set(Object.keys(value));
   const unknown = [...actual].filter((name) => !expected.has(name)).sort(compareCodeUnits);
   const missing = [...expected].filter((name) => !actual.has(name)).sort(compareCodeUnits);
-  if (unknown.length > 0) throw new RangeError(`${path}: unknown ${label}: ${writeAsText(unknown)}`);
-  if (missing.length > 0) throw new RangeError(`${path}: missing canonical field(s): ${writeAsText(missing)}`);
+  if (unknown.length > 0) throw new YianRangeError(`${path}: unknown ${label}: ${writeAsText(unknown)}`);
+  if (missing.length > 0) throw new YianRangeError(`${path}: missing canonical field(s): ${writeAsText(missing)}`);
 }
 
 /**
@@ -292,7 +293,7 @@ function checkFields(
  * @throws RangeError when its fields aren't the policy's.
  */
 function checkedBinding(value: unknown, path: string): Binding {
-  if (!(value instanceof Binding)) throw new TypeError(`${path}: expected Binding, got ${typeName(value)}`);
+  if (!(value instanceof Binding)) throw new YianTypeError(`${path}: expected Binding, got ${typeName(value)}`);
   checkFields(value, BINDING_FIELDS, path);
   return value;
 }
@@ -310,7 +311,7 @@ function bindingTypeManifest(value: Binding, ctx: ManifestContext, path: string)
  */
 function bindingManifestEntries(value: ReadonlyMap<unknown, unknown>, path: string): [string, Binding][] {
   for (const key of value.keys()) {
-    if (typeof key !== "string") throw new TypeError(`${path}: mapping keys must be strings, got ${typeName(key)}`);
+    if (typeof key !== "string") throw new YianTypeError(`${path}: mapping keys must be strings, got ${typeName(key)}`);
   }
   return Array.from(value, ([key, item], index): [string, Binding] => [
     key as string,
@@ -324,7 +325,7 @@ function bindingManifestEntries(value: ReadonlyMap<unknown, unknown>, path: stri
  * @throws TypeError when `value` isn't exactly an `Assertion`.
  */
 function assertionManifest(value: unknown, ctx: ManifestContext, path: string): JsonObject {
-  if (!isExactly(value, Assertion)) throw new TypeError(`${path}: expected Assertion, got ${typeName(value)}`);
+  if (!isExactly(value, Assertion)) throw new YianTypeError(`${path}: expected Assertion, got ${typeName(value)}`);
   checkFields(value, ASSERTION_FIELDS, path);
   return {
     expression: canonicalValue(value.expression, ctx, `${path}.expression`),
@@ -340,10 +341,10 @@ function assertionManifest(value: unknown, ctx: ManifestContext, path: string): 
  */
 function checkNodeFields(node: Node, path: string): void {
   const kind = node.kind;
-  if (!NODE_KINDS.has(kind)) throw new RangeError(`${path}: node kind must be a NodeKind`);
+  if (!NODE_KINDS.has(kind)) throw new YianRangeError(`${path}: node kind must be a NodeKind`);
   const expectedClass = KIND_CLASSES[kind]!;
   if (!isExactly(node, expectedClass)) {
-    throw new RangeError(`${path}: node kind ${reprText(kind)} requires ${expectedClass.name}, got ${typeName(node)}`);
+    throw new YianRangeError(`${path}: node kind ${reprText(kind)} requires ${expectedClass.name}, got ${typeName(node)}`);
   }
   checkFields(node, NODE_FIELDS.get(kind)!, path, `noncanonical execution field(s) for ${kind}`);
 }
@@ -358,7 +359,7 @@ function checkNodeFields(node: Node, path: string): void {
  * @throws TypeError when `value` isn't a plain record.
  */
 function sortedMapping(value: unknown, ctx: ManifestContext, path: string): JsonObject {
-  if (!isRecord(value)) throw new TypeError(`${path}: expected a record, got ${typeName(value)}`);
+  if (!isRecord(value)) throw new YianTypeError(`${path}: expected a record, got ${typeName(value)}`);
   return mappingManifest(Object.entries(value), value, ctx, path, canonicalValue);
 }
 
@@ -450,7 +451,7 @@ function count(value: unknown, path: string, nullable: boolean): number | null;
 function count(value: unknown, path: string, nullable: boolean): number | null {
   if (nullable && value === null) return null;
   if (typeof value !== "number" || !Number.isSafeInteger(value)) {
-    throw new TypeError(`${path}: expected a safe integer, got ${valueRepr(value)}`);
+    throw new YianTypeError(`${path}: expected a safe integer, got ${valueRepr(value)}`);
   }
   // `-0 + 0` is `0`: negative zero never reaches a fingerprint.
   return value + 0;
@@ -485,13 +486,13 @@ function canonicalValue(value: unknown, ctx: ManifestContext, path: string): Jso
       digits = value.toString();
     } catch (error) {
       // JavaScriptCore reports running out of memory for a huge bigint as a RangeError.
-      if (error instanceof RangeError) throw new TypeError(`${path}: integer is too large for this runtime`);
+      if (error instanceof RangeError) throw new YianTypeError(`${path}: integer is too large for this runtime`);
       throw error;
     }
     return { type: "int", value: digits };
   }
   if (typeof value === "number") {
-    if (Number.isNaN(value)) throw new TypeError(`${path}: NaN is not a yian value`);
+    if (Number.isNaN(value)) throw new YianTypeError(`${path}: NaN is not a yian value`);
     return { type: "float", value: floatHex(value + 0) };
   }
   if (typeof value === "string") return { type: "str", value };
@@ -509,7 +510,7 @@ function canonicalValue(value: unknown, ctx: ManifestContext, path: string): Jso
   if (MemoryRef.isMemoryRef(value)) return canonicalValue(jsonPart(value, [], "mapping"), ctx, path);
   if (isList(value)) return { items: canonicalSequence(value, ctx, path), type: "list" };
   if (isRecord(value)) return mappingManifest(Object.entries(value), value, ctx, path, canonicalValue);
-  throw new TypeError(`${path}: unsupported non-JSON value of type ${jsTypeName(value)}`);
+  throw new YianTypeError(`${path}: unsupported non-JSON value of type ${jsTypeName(value)}`);
 }
 
 /**
@@ -572,10 +573,10 @@ function typeManifest(value: Type | null | undefined, ctx: ManifestContext, path
  *   `ContractOrigins`.
  */
 function valueContractManifest(value: unknown, ctx: ManifestContext, path: string): { type: JsonValue } {
-  if (!isExactly(value, ValueContract)) throw new TypeError(`${path}: expected ValueContract, got ${typeName(value)}`);
+  if (!isExactly(value, ValueContract)) throw new YianTypeError(`${path}: expected ValueContract, got ${typeName(value)}`);
   checkFields(value, VALUE_CONTRACT_FIELDS, path);
   if (!isExactly(value.origins, ContractOrigins)) {
-    throw new TypeError(`${path}.origins: expected ContractOrigins, got ${typeName(value.origins)}`);
+    throw new YianTypeError(`${path}.origins: expected ContractOrigins, got ${typeName(value.origins)}`);
   }
   checkFields(value.origins, CONTRACT_ORIGINS_IGNORED_FIELDS, `${path}.origins`);
   return { type: typeManifest(value.type, ctx, `${path}.type`) };
@@ -590,7 +591,7 @@ function valueContractManifest(value: unknown, ctx: ManifestContext, path: strin
 function outputContractManifest(value: unknown, ctx: ManifestContext, path: string): JsonValue {
   if (isExactly(value, ValueContract)) return valueContractManifest(value, ctx, path).type;
   if (!isExactly(value, PartialRecordContract)) {
-    throw new TypeError(`${path}: expected ValueContract or PartialRecordContract, got ${typeName(value)}`);
+    throw new YianTypeError(`${path}: expected ValueContract or PartialRecordContract, got ${typeName(value)}`);
   }
   checkFields(value, PARTIAL_RECORD_CONTRACT_FIELDS, path);
   value.validateShape();
@@ -608,7 +609,7 @@ function outputContractManifest(value: unknown, ctx: ManifestContext, path: stri
  * @throws TypeError when `value` isn't exactly a `Parameter`.
  */
 function parameterManifest(value: unknown, ctx: ManifestContext, path: string): JsonObject {
-  if (!isExactly(value, Parameter)) throw new TypeError(`${path}: expected Parameter, got ${typeName(value)}`);
+  if (!isExactly(value, Parameter)) throw new YianTypeError(`${path}: expected Parameter, got ${typeName(value)}`);
   checkFields(value, PARAMETER_FIELDS, path);
   const contract = value.contract === null ? null : valueContractManifest(value.contract, ctx, `${path}.contract`);
   return {
@@ -628,7 +629,7 @@ function parameterManifest(value: unknown, ctx: ManifestContext, path: string): 
  * @throws RangeError when its fields aren't the policy's.
  */
 function caseManifest(value: unknown, ctx: ManifestContext, path: string): JsonObject {
-  if (!isExactly(value, Case)) throw new TypeError(`${path}: expected Case, got ${typeName(value)}`);
+  if (!isExactly(value, Case)) throw new YianTypeError(`${path}: expected Case, got ${typeName(value)}`);
   checkFields(value, CASE_FIELDS, path);
   return { handle: value.handle, when: canonicalValue(value.when, ctx, `${path}.when`) };
 }
@@ -645,10 +646,10 @@ function codeManifest(code: unknown, path: string): JsonObject {
   // Text is classified from itself, not the stored `mode`, which is a derived cache.
   if (typeof code === "string") return classifyCodeSource(code) === "reference" ? { ref: code } : { inline: code };
   const message = `${path}: expected code text or a built-in operation, got ${typeName(code)}`;
-  if (!isRecord(code)) throw new TypeError(message);
+  if (!isRecord(code)) throw new YianTypeError(message);
   checkFields(code, BUILTIN_CODE_FIELDS, path);
-  if (code.builtin !== "identity" || typeof code.field !== "string") throw new TypeError(message);
-  if (code.field === "") throw new RangeError(`${path}: built-in field must be non-empty`);
+  if (code.builtin !== "identity" || typeof code.field !== "string") throw new YianTypeError(message);
+  if (code.field === "") throw new YianRangeError(`${path}: built-in field must be non-empty`);
   return { builtin: "identity", field: code.field };
 }
 
@@ -665,13 +666,13 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
   let params: JsonValue = null;
   const declared: unknown = node.params;
   if (declared !== null) {
-    if (!isList(declared)) throw new TypeError(`${path}.params: expected array, got ${typeName(declared)}`);
+    if (!isList(declared)) throw new YianTypeError(`${path}.params: expected array, got ${typeName(declared)}`);
     params = declared.map((param, index) => parameterManifest(param, ctx, `${path}.params[${index}]`));
   }
   const preAsserts: unknown = node.preAsserts;
-  if (!isList(preAsserts)) throw new TypeError(`${path}.preAsserts: expected array, got ${typeName(preAsserts)}`);
+  if (!isList(preAsserts)) throw new YianTypeError(`${path}.preAsserts: expected array, got ${typeName(preAsserts)}`);
   const postAsserts: unknown = node.postAsserts;
-  if (!isList(postAsserts)) throw new TypeError(`${path}.postAsserts: expected array, got ${typeName(postAsserts)}`);
+  if (!isList(postAsserts)) throw new YianTypeError(`${path}.postAsserts: expected array, got ${typeName(postAsserts)}`);
   const outputType =
     node.outputContract === null ? null : outputContractManifest(node.outputContract, ctx, `${path}.outputContract`);
   const manifest: JsonObject = {
@@ -694,10 +695,10 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
   // Emitted only when non-empty, so a node without `isinstance` or a `T(...)` constructor doesn't
   // carry the key.
   const types: unknown = node.types;
-  if (!isExactly(types, Map)) throw new TypeError(`${path}.types: expected Map, got ${typeName(types)}`);
+  if (!isExactly(types, Map)) throw new YianTypeError(`${path}.types: expected Map, got ${typeName(types)}`);
   const typeEntries = sortedStringKeys(types, `${path}.types`).map((name) => {
     const typ: unknown = types.get(name);
-    if (!isExactly(typ, Type)) throw new TypeError(`${path}.types.${name}: expected Type, got ${typeName(typ)}`);
+    if (!isExactly(typ, Type)) throw new YianTypeError(`${path}.types.${name}: expected Type, got ${typeName(typ)}`);
     return { name, type: typeManifest(typ, ctx, `${path}.types.${name}`) };
   });
   if (typeEntries.length > 0) manifest.types = typeEntries;
@@ -723,7 +724,7 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
     case NodeKind.AGENT: {
       const agent = node as AgentNode;
       const variables: unknown = agent.variables;
-      if (!isList(variables)) throw new TypeError(`${path}.variables: expected array, got ${typeName(variables)}`);
+      if (!isList(variables)) throw new YianTypeError(`${path}.variables: expected array, got ${typeName(variables)}`);
       if (variables.length > 0) {
         manifest.variables = variables.map((variable, index) =>
           parameterManifest(variable, ctx, `${path}.variables[${index}]`),
@@ -735,10 +736,10 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
       if (skills === "all") {
         manifest.skills = "all";
       } else {
-        if (!isList(skills)) throw new TypeError(`${path}.skills: expected "all" or an array, got ${typeName(skills)}`);
+        if (!isList(skills)) throw new YianTypeError(`${path}.skills: expected "all" or an array, got ${typeName(skills)}`);
         skills.forEach((skill, index) => {
           if (typeof skill !== "string") {
-            throw new TypeError(`${path}.skills[${index}]: expected a string, got ${typeName(skill)}`);
+            throw new YianTypeError(`${path}.skills[${index}]: expected a string, got ${typeName(skill)}`);
           }
         });
         if (skills.length > 0) manifest.skills = [...(skills as string[])].sort(compareCodeUnits);
@@ -748,7 +749,7 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
       // Left out when unset so flows without a render keep their identity.
       if (agent.steerRender !== null) manifest.steer_render = agent.steerRender;
       const tools: unknown = agent.tools;
-      if (!isList(tools)) throw new TypeError(`${path}.tools: expected array, got ${typeName(tools)}`);
+      if (!isList(tools)) throw new YianTypeError(`${path}.tools: expected array, got ${typeName(tools)}`);
       manifest.llm_inherit = agent.llmInherit;
       // A list prompt as authored; a text prompt stays text, so text-prompt flows keep their identity.
       manifest.prompt = isPromptText(agent.prompt) ? authoredText(agent.prompt) : authoredPrompt(agent.prompt);
@@ -783,7 +784,7 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
     }
     case NodeKind.CASE: {
       const cases: unknown = (node as CaseNode).cases;
-      if (!isList(cases)) throw new TypeError(`${path}.cases: expected array, got ${typeName(cases)}`);
+      if (!isList(cases)) throw new YianTypeError(`${path}.cases: expected array, got ${typeName(cases)}`);
       manifest.cases = cases.map((branch, index) => caseManifest(branch, ctx, `${path}.cases[${index}]`));
       break;
     }
@@ -812,14 +813,14 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
       break;
     }
     default:
-      throw new RangeError(`${path}: unsupported node kind ${reprText(node.kind)}`);
+      throw new YianRangeError(`${path}: unsupported node kind ${reprText(node.kind)}`);
   }
   return manifest;
 }
 
 /** Canonicalize one edge; callers preserve the flow's semantic edge order. */
 function edgeManifest(edge: unknown, ctx: ManifestContext, path: string): JsonObject {
-  if (!isExactly(edge, Edge)) throw new TypeError(`${path}: expected Edge, got ${typeName(edge)}`);
+  if (!isExactly(edge, Edge)) throw new YianTypeError(`${path}: expected Edge, got ${typeName(edge)}`);
   checkFields(edge, EDGE_FIELDS, path);
   return {
     from: edge.from,
@@ -834,7 +835,7 @@ function edgeManifest(edge: unknown, ctx: ManifestContext, path: string): JsonOb
 
 /** Canonicalize one declared flow output; callers preserve declaration order. */
 function outputManifest(output: unknown, ctx: ManifestContext, path: string): JsonObject {
-  if (!isExactly(output, FlowOutput)) throw new TypeError(`${path}: expected FlowOutput, got ${typeName(output)}`);
+  if (!isExactly(output, FlowOutput)) throw new YianTypeError(`${path}: expected FlowOutput, got ${typeName(output)}`);
   checkFields(output, FLOW_OUTPUT_FIELDS, path);
   const binding = checkedBinding(output.binding, `${path}.binding`);
   const manifest: JsonObject = {
@@ -849,10 +850,10 @@ function outputManifest(output: unknown, ctx: ManifestContext, path: string): Js
 
 /** Require `value` to be a `Map` with string keys, returning its keys sorted. */
 function sortedStringKeys(value: unknown, path: string): string[] {
-  if (!(value instanceof Map)) throw new TypeError(`${path}: expected Map, got ${typeName(value)}`);
+  if (!(value instanceof Map)) throw new YianTypeError(`${path}: expected Map, got ${typeName(value)}`);
   const keys = [...(value as Map<unknown, unknown>).keys()];
   for (const key of keys) {
-    if (typeof key !== "string") throw new TypeError(`${path}: keys must be strings, got ${typeName(key)}`);
+    if (typeof key !== "string") throw new YianTypeError(`${path}: keys must be strings, got ${typeName(key)}`);
   }
   return (keys as string[]).sort(compareCodeUnits);
 }
@@ -864,19 +865,19 @@ function sortedStringKeys(value: unknown, path: string): string[] {
  *   child-flow cycle.
  */
 function flowManifestOf(flow: unknown, ctx: ManifestContext, path: string, topologyOnly: boolean): JsonObject {
-  if (!(flow instanceof Flow)) throw new TypeError(`${path}: expected Flow, got ${typeName(flow)}`);
+  if (!(flow instanceof Flow)) throw new YianTypeError(`${path}: expected Flow, got ${typeName(flow)}`);
   return within(ctx.flows, flow, `${path}: recursive child-flow cycle is not manifestable`, () => {
     let expected: ReadonlySet<string>;
     if (isExactly(flow, CompiledFlow)) expected = COMPILED_FLOW_FIELD_SET;
     else if (isExactly(flow, Flow)) expected = FLOW_FIELD_SET;
-    else throw new TypeError(`${path}: unsupported Flow subclass ${typeName(flow)}`);
+    else throw new YianTypeError(`${path}: unsupported Flow subclass ${typeName(flow)}`);
     checkFields(flow, expected, path);
     validateGrowthMetadata(flow);
 
     const nodes = flow.nodes as Map<string, unknown>;
     const nodeEntries = sortedStringKeys(nodes, `${path}.nodes`).map((nodeId): [string, JsonObject] => {
       const node = nodes.get(nodeId);
-      if (!(node instanceof Node)) throw new TypeError(`${path}.nodes.${nodeId}: expected Node, got ${typeName(node)}`);
+      if (!(node instanceof Node)) throw new YianTypeError(`${path}.nodes.${nodeId}: expected Node, got ${typeName(node)}`);
       return [nodeId, nodeManifest(node, ctx, `${path}.nodes.${nodeId}`, topologyOnly)];
     });
 
@@ -886,7 +887,7 @@ function flowManifestOf(flow: unknown, ctx: ManifestContext, path: string, topol
     for (const nodeId of sortedStringKeys(wiring, `${path}.wiring`)) {
       const nodeWiring = wiring.get(nodeId);
       if (!(nodeWiring instanceof Map)) {
-        throw new TypeError(`${path}.wiring.${nodeId}: expected Map, got ${typeName(nodeWiring)}`);
+        throw new YianTypeError(`${path}.wiring.${nodeId}: expected Map, got ${typeName(nodeWiring)}`);
       }
       const bindings = bindingManifestEntries(nodeWiring, `${path}.wiring.${nodeId}`);
       const sources = bindings.map(([param, binding]): [string, unknown] => [param, binding.source]);
@@ -903,7 +904,7 @@ function flowManifestOf(flow: unknown, ctx: ManifestContext, path: string, topol
     }
 
     const edges: unknown = flow.edges;
-    if (!isList(edges)) throw new TypeError(`${path}.edges: expected array, got ${typeName(edges)}`);
+    if (!isList(edges)) throw new YianTypeError(`${path}.edges: expected array, got ${typeName(edges)}`);
     // Built with `Object.fromEntries`, so a node id such as `__proto__` stays an own key.
     const manifest: JsonObject = {
       edges: Array.from(edges, (edge, index) => edgeManifest(edge, ctx, `${path}.edges[${index}]`)),
@@ -941,13 +942,13 @@ function flowManifestOf(flow: unknown, ctx: ManifestContext, path: string, topol
     if (flow instanceof CompiledFlow) {
       const flowId: unknown = flow.flowId;
       if (flowId !== null && (typeof flowId !== "string" || !flowId)) {
-        throw new RangeError(`${path}.flowId: expected a non-empty exact string or null`);
+        throw new YianRangeError(`${path}.flowId: expected a non-empty exact string or null`);
       }
       if (!topologyOnly) {
         if (flowId !== null) manifest.flow_id = flowId;
         manifest.flow_llm_config = llmLayerManifest(flow.flowLlmConfig, ctx, `${path}.flowLlmConfig`);
         const outputs: unknown = flow.outputs;
-        if (!isList(outputs)) throw new TypeError(`${path}.outputs: expected array, got ${typeName(outputs)}`);
+        if (!isList(outputs)) throw new YianTypeError(`${path}.outputs: expected array, got ${typeName(outputs)}`);
         manifest.outputs = Array.from(outputs, (output, index) =>
           outputManifest(output, ctx, `${path}.outputs[${index}]`),
         );

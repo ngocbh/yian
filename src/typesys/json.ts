@@ -15,6 +15,8 @@
  * It imports nothing from yian, so the `llm/` leaf can use it.
  */
 
+
+import { YianTypeError } from "./errors.ts";
 /** A JSON value as yian reads it: an int token is a `bigint`, any other number a `number`. */
 export type JsonValue = null | boolean | bigint | number | string | JsonValue[] | JsonObject;
 
@@ -358,7 +360,7 @@ const byCodeUnits = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 
 
 /** Return `text` as a JSON string; for well-formed text `JSON.stringify` is RFC 8785's form. */
 function quote(text: string): string {
-  if (!text.isWellFormed()) throw new TypeError("Unicode surrogate is not valid canonical JSON");
+  if (!text.isWellFormed()) throw new YianTypeError("Unicode surrogate is not valid canonical JSON");
   return JSON.stringify(text);
 }
 
@@ -366,7 +368,7 @@ function quote(text: string): string {
 function jcsNumber(n: number | bigint): string {
   if (typeof n === "bigint" && -MAX_SAFE <= n && n <= MAX_SAFE) return n.toString();
   if (typeof n === "number" && Number.isSafeInteger(n)) return String(n);
-  throw new TypeError("JCS numbers are ints within ±(2^53-1)");
+  throw new YianTypeError("JCS numbers are ints within ±(2^53-1)");
 }
 
 /** Return `n` as a log number: a `bigint`'s digits, a float with `.0` when it has no `.` or exponent. */
@@ -377,7 +379,7 @@ function logNumber(n: number | bigint): string {
     } catch (error) {
       // A runtime may refuse to stringify a huge bigint (JavaScriptCore reports running out of
       // memory as a RangeError); every boundary turns that into a defined error.
-      if (error instanceof RangeError) throw new TypeError("integer is too large for this runtime");
+      if (error instanceof RangeError) throw new YianTypeError("integer is too large for this runtime");
       throw error;
     }
   }
@@ -407,15 +409,15 @@ function write(root: unknown, number: (n: number | bigint) => string): string {
     } else if (typeof value === "bigint") {
       out += number(value);
     } else if (typeof value === "number") {
-      if (Number.isNaN(value)) throw new TypeError("NaN is not valid canonical JSON");
-      if (Object.is(value, -0)) throw new TypeError("negative zero is not valid canonical JSON");
+      if (Number.isNaN(value)) throw new YianTypeError("NaN is not valid canonical JSON");
+      if (Object.is(value, -0)) throw new YianTypeError("negative zero is not valid canonical JSON");
       if (value === Infinity) out += '{"$float":"inf"}';
       else if (value === -Infinity) out += '{"$float":"-inf"}';
       else out += number(value);
     } else if (typeof value !== "object") {
-      throw new TypeError(`${typeof value} is not a canonical JSON value`);
+      throw new YianTypeError(`${typeof value} is not a canonical JSON value`);
     } else if (Array.isArray(value)) {
-      if (active.has(value)) throw new TypeError("cyclic container cannot be canonicalized");
+      if (active.has(value)) throw new YianTypeError("cyclic container cannot be canonicalized");
       active.add(value);
       stack.push({ array: value, index: 0 });
       out += "[";
@@ -424,12 +426,12 @@ function write(root: unknown, number: (n: number | bigint) => string): string {
       if (proto !== Object.prototype && proto !== null) {
         const name: unknown = (value as { constructor?: { name?: unknown } }).constructor?.name;
         const kind = typeof name === "string" && name !== "" ? name : "object";
-        throw new TypeError(`${kind} is not a canonical JSON value`);
+        throw new YianTypeError(`${kind} is not a canonical JSON value`);
       }
       if (Object.getOwnPropertySymbols(value).length > 0) {
-        throw new TypeError("canonical JSON object keys must be strings");
+        throw new YianTypeError("canonical JSON object keys must be strings");
       }
-      if (active.has(value)) throw new TypeError("cyclic container cannot be canonicalized");
+      if (active.has(value)) throw new YianTypeError("cyclic container cannot be canonicalized");
       active.add(value);
       const record = value as Record<string, unknown>;
       const keys = Object.keys(record).sort(byCodeUnits);

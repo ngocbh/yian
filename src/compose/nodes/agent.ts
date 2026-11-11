@@ -48,6 +48,7 @@ import {
 } from "../../nodes/contracts.ts";
 import { SkillError } from "../../skills/index.ts";
 import { GrantError, parseToolGrants, type ToolGrant } from "../../tools/grants.ts";
+import { YianTypeError } from "../../typesys/errors.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import { isList, isMemoryType, isRecord, type Type, typeLevels, valueRepr } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError, rejectRemovedMemoryKey } from "../helpers/errors.ts";
@@ -1037,7 +1038,7 @@ export class AgentDescriptor extends NodeDescriptor {
         const variables: unknown = ctx.variableDeclarationReader(this.id, this.variables);
         if (variables !== null) {
           if (!isList(variables) || !variables.every((variable) => isExactly(variable, Parameter))) {
-            throw new TypeError("variable declaration reader must return a list of exact Parameters or null");
+            throw new YianTypeError("variable declaration reader must return a list of exact Parameters or null");
           }
           return variables;
         }

@@ -23,6 +23,7 @@
  */
 
 import { warn } from "../platform.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { decodeRecordHeader, encodeRecord, NodeStepRecord, type RecordEnvelope, type RunLog } from "./log.ts";
 
 /** One live frame: a record the log appended, or the start, a chunk or the end of a model call. */
@@ -80,7 +81,7 @@ export class LiveChannel {
   constructor(options: LiveChannelOptions = {}) {
     const { onSubscriberError = null } = options;
     if (onSubscriberError !== null && typeof onSubscriberError !== "function") {
-      throw new TypeError("onSubscriberError must be a function or null");
+      throw new YianTypeError("onSubscriberError must be a function or null");
     }
     this.#onSubscriberError = onSubscriberError ?? reportAsWarning;
   }
@@ -263,11 +264,11 @@ export class LiveView {
     let next = 0;
     for (const { seq } of records) {
       if (seq > lastSeq) break;
-      if (seq !== next) throw new RangeError(`records must run from seq 0 to ${lastSeq}; got seq ${seq} for ${next}`);
+      if (seq !== next) throw new YianRangeError(`records must run from seq 0 to ${lastSeq}; got seq ${seq} for ${next}`);
       next++;
     }
     if (next !== lastSeq + 1) {
-      throw new RangeError(`records must run from seq 0 to ${lastSeq}; they stop before seq ${next}`);
+      throw new YianRangeError(`records must run from seq 0 to ${lastSeq}; they stop before seq ${next}`);
     }
     const view = new LiveView(lastSeq);
     for (const { node, n, chunks, next_index } of calls) {

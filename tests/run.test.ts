@@ -86,6 +86,7 @@ import {
   textReply,
   thrownBy,
 } from "./helpers/run_state_fixtures.ts";
+import { YianTypeError } from "../src/typesys/errors.ts";
 
 const FIXTURES = fileURLToPath(new URL("./conformance/fixtures", import.meta.url));
 
@@ -1775,6 +1776,6 @@ test("an onConsole that throws stops the run with its error; one that isn't a fu
   expect(error).toBe(thrown);
   expect(readRunLog(join(dir, "stop.jsonl")).at(-1)!.record).toBeInstanceOf(RunStoppedRecord);
   expect(await rejected(run(flow, { word: "a" }, { onConsole: "no" as never }))).toEqual(
-    new TypeError("onConsole must be a function or null"),
+    new YianTypeError("onConsole must be a function or null"),
   );
 });

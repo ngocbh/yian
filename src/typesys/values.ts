@@ -21,6 +21,7 @@ import { types } from "node:util";
 
 import { current } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
+import { YianRangeError, YianTypeError } from "./errors.ts";
 import { freezeParsed, type JsonObject, logJson, parseJson } from "./json.ts";
 import type { Recall, RecordedMemoryTool } from "./memory.ts";
 import { parseDate, parseDatetime } from "./temporal.ts";
@@ -31,7 +32,7 @@ import { parseDate, parseDatetime } from "./temporal.ts";
  * `path` is relative to the checked type: strings name record fields and numbers are
  * actual list indices. Type-language errors and root mismatches use the empty path.
  */
-export class TypeCheckError extends RangeError {
+export class TypeCheckError extends YianRangeError {
   override name = "TypeCheckError";
   /** The frozen record-field/list-index path to the rejected value. */
   readonly path: ValuePath;
@@ -300,7 +301,7 @@ export function writeAsJson(value: Value, indent: number | null = null): string 
     return jsonText(value, indent, 0);
   } catch (error) {
     // Bun and Node word an over-long string differently; both throw a RangeError.
-    if (error instanceof RangeError) throw new TypeError("text is too long for this runtime");
+    if (error instanceof RangeError) throw new YianTypeError("text is too long for this runtime");
     throw error;
   }
 }
@@ -313,7 +314,7 @@ function jsonText(value: Value, indent: number | null, level: number): string {
       return value.toString();
     } catch (error) {
       // JavaScriptCore reports a bigint too large to stringify as a RangeError.
-      if (error instanceof RangeError) throw new TypeError("integer is too large for this runtime");
+      if (error instanceof RangeError) throw new YianTypeError("integer is too large for this runtime");
       throw error;
     }
   }
@@ -875,10 +876,10 @@ function checkFileField(field: string, value: unknown, nullable: boolean): void 
   if (nullable && value === null) return;
   if (typeof value !== "string") {
     const expected = nullable ? "text or null" : "text";
-    throw new RangeError(`file ${field} must be ${expected}, got ${valueRepr(value)}`);
+    throw new YianRangeError(`file ${field} must be ${expected}, got ${valueRepr(value)}`);
   }
   if (!value.isWellFormed()) {
-    throw new RangeError(`file ${field} holds a lone surrogate`);
+    throw new YianRangeError(`file ${field} holds a lone surrogate`);
   }
 }
 
@@ -909,9 +910,9 @@ export class InboxRef {
    */
   constructor(inbox: string) {
     if (typeof inbox !== "string" || inbox === "") {
-      throw new RangeError(`inbox name must be non-empty text, got ${valueRepr(inbox)}`);
+      throw new YianRangeError(`inbox name must be non-empty text, got ${valueRepr(inbox)}`);
     }
-    if (!inbox.isWellFormed()) throw new RangeError("inbox name holds a lone surrogate");
+    if (!inbox.isWellFormed()) throw new YianRangeError("inbox name holds a lone surrogate");
     this.inbox = inbox;
     Object.freeze(this);
   }
@@ -996,35 +997,35 @@ export class MemoryRef {
 function memoryText(field: string, value: unknown, nonEmpty: boolean): string {
   if (typeof value !== "string" || (nonEmpty && value === "")) {
     const expected = nonEmpty ? "non-empty text" : "text";
-    throw new RangeError(`memory ${field} must be ${expected}, got ${valueRepr(value)}`);
+    throw new YianRangeError(`memory ${field} must be ${expected}, got ${valueRepr(value)}`);
   }
-  if (!value.isWellFormed()) throw new RangeError(`memory ${field} holds a lone surrogate`);
+  if (!value.isWellFormed()) throw new YianRangeError(`memory ${field} holds a lone surrogate`);
   return value;
 }
 
 /** Return a frozen copy of the JSON record `value`, memory field `field`, as the run log reads it back. */
 function memoryJson(field: string, value: unknown): JsonObject {
-  if (!isRecord(value)) throw new RangeError(`memory ${field} must be a JSON object, got ${valueRepr(value)}`);
+  if (!isRecord(value)) throw new YianRangeError(`memory ${field} must be a JSON object, got ${valueRepr(value)}`);
   let text: string;
   try {
     text = logJson(jsonPart(value, [], "refuse"));
   } catch (error) {
     if (!(error instanceof RangeError || error instanceof TypeError)) throw error;
-    throw new RangeError(`memory ${field} must be JSON: ${error.message}`, { cause: error });
+    throw new YianRangeError(`memory ${field} must be JSON: ${error.message}`, { cause: error });
   }
   return freezeParsed(parseJson(text, "codec") as JsonObject);
 }
 
 /** Return a frozen copy of the recall `value`. */
 function memoryRecall(value: unknown): Recall {
-  if (!isRecord(value)) throw new RangeError(`memory recall must be a JSON object, got ${valueRepr(value)}`);
+  if (!isRecord(value)) throw new YianRangeError(`memory recall must be a JSON object, got ${valueRepr(value)}`);
   requireFields(value, RECALL_FIELDS, "memory recall");
   const cut = value["cut"] === null ? null : memoryText("recall cut", value["cut"], false);
   const hint = value["hint"];
   let copy: Recall["hint"] = null;
   if (hint !== null) {
     if (!isRecord(hint)) {
-      throw new RangeError(`memory recall hint must be a JSON object or null, got ${valueRepr(hint)}`);
+      throw new YianRangeError(`memory recall hint must be a JSON object or null, got ${valueRepr(hint)}`);
     }
     requireFields(hint, HINT_FIELDS, "memory recall hint");
     const tool = memoryText("hint tool", hint["tool"], true);
@@ -1035,16 +1036,16 @@ function memoryRecall(value: unknown): Recall {
 
 /** Return a frozen copy of the tool specs `value`, in their order. */
 function memoryTools(value: unknown): readonly RecordedMemoryTool[] {
-  if (!isList(value)) throw new RangeError(`memory tools must be a list, got ${valueRepr(value)}`);
+  if (!isList(value)) throw new YianRangeError(`memory tools must be a list, got ${valueRepr(value)}`);
   const names = new Set<string>();
   const tools = value.map((tool): RecordedMemoryTool => {
-    if (!isRecord(tool)) throw new RangeError(`memory tool must be a JSON object, got ${valueRepr(tool)}`);
+    if (!isRecord(tool)) throw new YianRangeError(`memory tool must be a JSON object, got ${valueRepr(tool)}`);
     requireFields(tool, TOOL_FIELDS, "memory tool");
     const name = memoryText("tool name", tool["name"], true);
-    if (names.has(name)) throw new RangeError(`memory tool ${reprText(name)} is listed twice`);
+    if (names.has(name)) throw new YianRangeError(`memory tool ${reprText(name)} is listed twice`);
     names.add(name);
     if (typeof tool["write"] !== "boolean") {
-      throw new RangeError(`memory tool ${reprText(name)} write must be a bool, got ${valueRepr(tool["write"])}`);
+      throw new YianRangeError(`memory tool ${reprText(name)} write must be a bool, got ${valueRepr(tool["write"])}`);
     }
     return Object.freeze({
       name,
@@ -1234,16 +1235,16 @@ export class TypedValue {
    * @throws RangeError naming the kind when `data` isn't such a wire form.
    */
   static fromWire(data: unknown): TypedValue {
-    if (!isRecord(data)) throw new RangeError("typed-value wire must be a JSON object");
+    if (!isRecord(data)) throw new YianRangeError("typed-value wire must be a JSON object");
     requireFields(data, ["kind", "value"], "typed value");
     const kind: unknown = data["kind"];
     if (typeof kind !== "string" || !STORAGE_KINDS.has(kind)) {
-      throw new RangeError(`typed-value kind must be a storage kind, got ${valueRepr(kind)}`);
+      throw new YianRangeError(`typed-value kind must be a storage kind, got ${valueRepr(kind)}`);
     }
     const storage = kind as StorageKind;
     const value = data["value"] as Value;
     if (storage === ValueKind.FILE) {
-      if (!isRecord(value)) throw new RangeError("file typed value must contain a JSON object");
+      if (!isRecord(value)) throw new YianRangeError("file typed value must contain a JSON object");
       requireFields(value, FILE_FIELDS, "file reference");
       // The constructor checks each field's type.
       const fields = value as { uri: string; mime: string | null; name: string | null };
@@ -1256,7 +1257,7 @@ export class TypedValue {
     if (storage === ValueKind.MEMORY && isRecord(value)) {
       requireFields(value, ["memory"], "memory value");
       const fields = value["memory"];
-      if (!isRecord(fields)) throw new RangeError("invalid memory typed value: memory must be a JSON object");
+      if (!isRecord(fields)) throw new YianRangeError("invalid memory typed value: memory must be a JSON object");
       requireFields(fields, MEMORY_FIELDS, "memory");
       return decodedAs("memory", () => new TypedValue(storage, new MemoryRef(fields as unknown as MemoryRefInit)));
     }
@@ -1288,7 +1289,7 @@ export class TypedValue {
         : typeof value === "number"
           ? `float ${floatText(value)}`
           : floatSpelledRepr(value);
-    throw new RangeError(`invalid ${storage} typed value: expected ${expected}, got ${got}`);
+    throw new YianRangeError(`invalid ${storage} typed value: expected ${expected}, got ${got}`);
   }
 }
 
@@ -1298,7 +1299,7 @@ function decodedAs<T>(label: string, build: () => T): T {
     return build();
   } catch (error) {
     if (error instanceof RangeError) {
-      throw new RangeError(`invalid ${label} typed value: ${error.message}`);
+      throw new YianRangeError(`invalid ${label} typed value: ${error.message}`);
     }
     throw error;
   }
@@ -1318,7 +1319,7 @@ export function requireFields(
   const missing = expected.filter((key) => !Object.hasOwn(record, key)).sort(compareCodeUnits);
   const extra = actual.filter((key) => !expected.includes(key)).sort(compareCodeUnits);
   if (missing.length > 0 || extra.length > 0) {
-    throw new RangeError(`invalid ${label} fields; missing=${shownNames(missing)}, extra=${shownNames(extra)}`);
+    throw new YianRangeError(`invalid ${label} fields; missing=${shownNames(missing)}, extra=${shownNames(extra)}`);
   }
 }
 
@@ -1508,24 +1509,24 @@ export function typeLevels(typ: Type): number {
 
 /** Validate one recursive type graph while permitting shared child objects. */
 function validateTypeShape(typ: unknown, active: Set<Type>, validated: Set<Type>): void {
-  if (!(typ instanceof Type)) throw new TypeError("nested type must be a Type");
-  if (active.has(typ)) throw new RangeError("type refinements must form an acyclic graph");
+  if (!(typ instanceof Type)) throw new YianTypeError("nested type must be a Type");
+  if (active.has(typ)) throw new YianRangeError("type refinements must form an acyclic graph");
   if (validated.has(typ)) return;
-  if (!VALUE_KINDS.has(typ.kind)) throw new TypeError("type kind must be a ValueKind");
-  if (typeof typ.nullable !== "boolean") throw new TypeError("type nullable must be a bool");
+  if (!VALUE_KINDS.has(typ.kind)) throw new YianTypeError("type kind must be a ValueKind");
+  if (typeof typ.nullable !== "boolean") throw new YianTypeError("type nullable must be a bool");
   if (typ.bounds !== undefined) validateNumericBounds(typ.kind, typ.bounds);
 
   active.add(typ);
   try {
     const fields = typ.fields;
     if (fields !== undefined) {
-      if (!(fields instanceof Map)) throw new TypeError("type fields must be a Map or undefined");
+      if (!(fields instanceof Map)) throw new YianTypeError("type fields must be a Map or undefined");
       if (typ.kind !== ValueKind.OBJECT) {
-        throw new RangeError("only object types may declare record fields");
+        throw new YianRangeError("only object types may declare record fields");
       }
       for (const [name, fieldType] of fields) {
         if (!isNonEmptyString(name)) {
-          throw new TypeError("type field names must be non-empty strings");
+          throw new YianTypeError("type field names must be non-empty strings");
         }
         validateTypeMetadataString(name);
         validateTypeShape(fieldType, active, validated);
@@ -1535,56 +1536,56 @@ function validateTypeShape(typ: unknown, active: Set<Type>, validated: Set<Type>
     const required = typ.required;
     if (required !== undefined) {
       if (!(required instanceof Set) || ![...required].every(isNonEmptyString)) {
-        throw new TypeError(
+        throw new YianTypeError(
           "type required fields must be a Set of non-empty strings or undefined",
         );
       }
       for (const name of required) validateTypeMetadataString(name);
       if (fields === undefined) {
-        throw new RangeError("type required fields need a record field mapping");
+        throw new YianRangeError("type required fields need a record field mapping");
       }
       const unknown = [...required].filter((name) => !fields.has(name)).sort(compareCodeUnits);
       if (unknown.length > 0) {
-        throw new RangeError(`type requires unknown record fields: ${JSON.stringify(unknown)}`);
+        throw new YianRangeError(`type requires unknown record fields: ${JSON.stringify(unknown)}`);
       }
     }
 
     const tags = typ.tags;
     if (tags !== undefined) {
       if (!(tags instanceof Set) || ![...tags].every(isNonEmptyString)) {
-        throw new TypeError("type tags must be a Set of non-empty strings or undefined");
+        throw new YianTypeError("type tags must be a Set of non-empty strings or undefined");
       }
       for (const tag of tags) validateTypeMetadataString(tag);
       if (typ.kind !== ValueKind.STRING) {
-        throw new RangeError("only string types may declare variant tags");
+        throw new YianRangeError("only string types may declare variant tags");
       }
     }
 
     const element = typ.element;
     if (typ.kind === ValueKind.MEMORY) {
-      if (!isNonEmptyString(typ.memory)) throw new RangeError("a memory type needs its name");
+      if (!isNonEmptyString(typ.memory)) throw new YianRangeError("a memory type needs its name");
       validateTypeMetadataString(typ.memory);
       if (element !== undefined) {
         validateTypeShape(element, active, validated);
         if (element.fields === undefined || element.nullable) {
-          throw new RangeError("a memory's item type must be a record");
+          throw new YianRangeError("a memory's item type must be a record");
         }
       }
     } else if (typ.memory !== undefined) {
-      throw new RangeError("only memory types may name a memory type");
+      throw new YianRangeError("only memory types may name a memory type");
     } else if (typ.kind === ValueKind.INBOX) {
-      if (element === undefined) throw new RangeError("an inbox type needs an element type");
-      if (typ.nullable) throw new RangeError("an inbox is never optional");
+      if (element === undefined) throw new YianRangeError("an inbox type needs an element type");
+      if (typ.nullable) throw new YianRangeError("an inbox is never optional");
       validateTypeShape(element, active, validated);
-      if (element.kind === ValueKind.INBOX) throw new RangeError("an inbox holds values, not inboxes");
+      if (element.kind === ValueKind.INBOX) throw new YianRangeError("an inbox holds values, not inboxes");
     } else if (element !== undefined) {
       if (!isListKind(typ.kind)) {
-        throw new RangeError("only list types may declare an element type");
+        throw new YianRangeError("only list types may declare an element type");
       }
       validateTypeShape(element, active, validated);
       const expectedKind = listKindForElement(element);
       if (typ.kind !== ValueKind.LIST_ANY && typ.kind !== expectedKind) {
-        throw new RangeError(
+        throw new YianRangeError(
           `list storage kind ${reprText(typ.kind)} does not match ` +
             `element type; expected ${reprText(expectedKind)}`,
         );
@@ -1594,18 +1595,18 @@ function validateTypeShape(typ: unknown, active: Set<Type>, validated: Set<Type>
     const members = typ.members;
     if (members !== undefined) {
       if (!Array.isArray(members)) {
-        throw new TypeError("type members must be an array or undefined");
+        throw new YianTypeError("type members must be an array or undefined");
       }
       if (typ.kind !== ValueKind.OBJECT) {
-        throw new RangeError("only object types may declare union members");
+        throw new YianRangeError("only object types may declare union members");
       }
-      if (members.length < 2) throw new RangeError("a union needs at least two members");
+      if (members.length < 2) throw new YianRangeError("a union needs at least two members");
       for (const member of members) {
         validateTypeShape(member, active, validated);
         if (member.fields === undefined) {
-          throw new RangeError("every union member must be a record type");
+          throw new YianRangeError("every union member must be a record type");
         }
-        if (member.nullable) throw new RangeError("union members must not be nullable");
+        if (member.nullable) throw new YianRangeError("union members must not be nullable");
       }
     }
 
@@ -1613,7 +1614,7 @@ function validateTypeShape(typ: unknown, active: Set<Type>, validated: Set<Type>
       (value) => value !== undefined,
     ).length;
     if (refinements > 1) {
-      throw new RangeError("a type may declare only one structural refinement");
+      throw new YianRangeError("a type may declare only one structural refinement");
     }
   } finally {
     active.delete(typ);
@@ -1637,39 +1638,39 @@ function isNonEmptyString(value: unknown): value is string {
  */
 export function validateNumericBounds(kind: ValueKind, bounds: Bounds): void {
   if (kind !== ValueKind.INTEGER && kind !== ValueKind.NUMBER) {
-    throw new RangeError("only int and float types may declare bounds");
+    throw new YianRangeError("only int and float types may declare bounds");
   }
   if (!Array.isArray(bounds) || bounds.length !== 2) {
-    throw new TypeError("type bounds must be a two-item array");
+    throw new YianTypeError("type bounds must be a two-item array");
   }
   const endpoints = bounds.filter((endpoint) => endpoint !== null);
-  if (endpoints.length === 0) throw new RangeError("type bounds need at least one endpoint");
+  if (endpoints.length === 0) throw new YianRangeError("type bounds need at least one endpoint");
   const exact = (endpoint: unknown) =>
     typeof endpoint === "bigint" || (kind === ValueKind.NUMBER && typeof endpoint === "number");
   if (!endpoints.every(exact)) {
-    throw new TypeError(`${kind} bounds require exact numeric endpoints, excluding bool`);
+    throw new YianTypeError(`${kind} bounds require exact numeric endpoints, excluding bool`);
   }
   if (kind === ValueKind.NUMBER) {
     for (const endpoint of endpoints) {
       const represented = Number(endpoint);
       if (!Number.isFinite(represented)) {
-        throw new RangeError("float bounds require finite endpoints");
+        throw new YianRangeError("float bounds require finite endpoints");
       }
       if (typeof endpoint === "bigint" && BigInt(represented) !== endpoint) {
-        throw new RangeError("float bounds require lossless float endpoints");
+        throw new YianRangeError("float bounds require lossless float endpoints");
       }
     }
   }
   // `>` compares a bigint with a number exactly.
   if (endpoints.length === 2 && endpoints[0]! > endpoints[1]!) {
-    throw new RangeError("type bounds must be ordered from minimum to maximum");
+    throw new YianRangeError("type bounds must be ordered from minimum to maximum");
   }
 }
 
 /** Require a type-owned name to be representable in canonical JSON. */
 function validateTypeMetadataString(value: string): void {
   if (!value.isWellFormed()) {
-    throw new RangeError("type metadata contains a Unicode surrogate");
+    throw new YianRangeError("type metadata contains a Unicode surrogate");
   }
 }
 
@@ -2081,10 +2082,10 @@ function orderedMemberLabels(members: readonly Type[]): [Type, string, string][]
  */
 function tagField(typ: Type, field: string | undefined): string {
   const tagFields = unionTagFields(typ);
-  if (tagFields.length === 0) throw new RangeError("the type is not a tagged union");
+  if (tagFields.length === 0) throw new YianRangeError("the type is not a tagged union");
   if (field === undefined) return tagFields[0]!;
   if (!tagFields.includes(field)) {
-    throw new RangeError(`${reprText(field)} is not a tag field of the union`);
+    throw new YianRangeError(`${reprText(field)} is not a tag field of the union`);
   }
   return field;
 }
@@ -2142,9 +2143,9 @@ function tagIndex(members: readonly Type[], field: string, tag: unknown): number
  */
 export function restrictUnion(typ: Type, keep: Iterable<string | Type>, field?: string): Type {
   if (typeof keep === "string") {
-    throw new TypeError("restrictUnion keeps a collection of tags, not a bare string");
+    throw new YianTypeError("restrictUnion keeps a collection of tags, not a bare string");
   }
-  if (typ.members === undefined) throw new RangeError("only a union can be restricted");
+  if (typ.members === undefined) throw new YianRangeError("only a union can be restricted");
   const members = typ.members;
   let selectedField: string | null = null;
   const selected = new Set<number>();
@@ -2153,16 +2154,16 @@ export function restrictUnion(typ: Type, keep: Iterable<string | Type>, field?: 
     if (item instanceof Type) {
       index = members.findIndex((member) => typeEquals(member, item));
       if (index === -1) {
-        throw new RangeError("restrictUnion got a type that is not a union member");
+        throw new YianRangeError("restrictUnion got a type that is not a union member");
       }
     } else {
       selectedField ??= tagField(typ, field);
       index = tagIndex(members, selectedField, item);
-      if (index === null) throw new RangeError(`${reprText(item)} is not a tag of the union`);
+      if (index === null) throw new YianRangeError(`${reprText(item)} is not a tag of the union`);
     }
     selected.add(index);
   }
-  if (selected.size === 0) throw new RangeError("restrictUnion needs at least one member");
+  if (selected.size === 0) throw new YianRangeError("restrictUnion needs at least one member");
   const indexes = [...selected].sort((a, b) => a - b);
   if (indexes.length === 1) return members[indexes[0]!]!.replace({ nullable: typ.nullable });
   const kept = canonicalUnionOrder(indexes.map((index) => members[index]!));
@@ -2181,7 +2182,7 @@ export function restrictUnion(typ: Type, keep: Iterable<string | Type>, field?: 
  * @throws RangeError when `typ` is not a union.
  */
 export function unionField(typ: Type, name: string): FieldRead | FieldPartial | FieldAbsent {
-  if (typ.members === undefined) throw new RangeError("unionField needs a union type");
+  if (typ.members === undefined) throw new YianRangeError("unionField needs a union type");
   const having = typ.members.filter((member) => member.fields!.has(name));
   if (having.length === 0) return { kind: "absent" };
   if (having.length < typ.members.length) return { kind: "partial", members: having };

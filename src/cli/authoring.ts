@@ -10,6 +10,7 @@
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { loadFlow } from "../compose/loader.ts";
 import type { Env } from "../defaults.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import { FLOWS } from "./bundled.ts";
 
 /** The bundled flows' files, and the alias `author_flow.yaml` uses `review_flow.yaml` by. */
@@ -53,7 +54,7 @@ export async function loadAuthorFlow(env: Env): Promise<ComposedFlow> {
     sourceLabel: AUTHOR_FILE,
     env,
     childResolver: async (ref) => {
-      if (ref !== REVIEW_ALIAS) throw new RangeError(`no bundled flow ${ref}`);
+      if (ref !== REVIEW_ALIAS) throw new YianRangeError(`no bundled flow ${ref}`);
       return review;
     },
   });

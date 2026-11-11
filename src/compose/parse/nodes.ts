@@ -27,6 +27,7 @@ import { compareCodeUnits, reprText } from "../../diagnostics.ts";
 import { ExpressionError } from "../../expr/expressions.ts";
 import { EXPRESSION_KEYWORDS } from "../../expr/grammar.ts";
 import { scanTemplate, Span } from "../../expr/template.ts";
+import { YianTypeError } from "../../typesys/errors.ts";
 import {
   buildValue,
   isList,
@@ -157,7 +158,7 @@ function parseNode(
   // A tag makes the entry a value even when its mapping has a `kind:` key.
   if (cursor.tag !== null) {
     if (readValue === undefined) {
-      throw new TypeError(
+      throw new YianTypeError(
         `node ${reprText(nodeId)} is a tagged value entry; parseNodes needs readValue to read it`,
       );
     }

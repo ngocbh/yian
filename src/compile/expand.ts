@@ -41,6 +41,7 @@ import { mapCallsite, ns } from "../nodes/ids.ts";
 import type { LoopNode } from "../nodes/loop/node.ts";
 import type { MapNode } from "../nodes/map/node.ts";
 import { StartNode } from "../nodes/start/node.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import type { JsonObject, JsonValue } from "../typesys/json.ts";
 import { NEW_MESSAGES } from "../typesys/pool.ts";
 import { isList, isMemoryType, isRecord, jsTypeName, normalizeFiles, type Value } from "../typesys/values.ts";
@@ -71,7 +72,7 @@ const SYNTH_PREFIX = "__assert_";
  */
 export function rensInternal(binding: Binding, callsite: string): Binding {
   if (!(binding instanceof Binding)) {
-    throw new TypeError(`compiled flow wiring must contain Binding values, got ${jsTypeName(binding)}`);
+    throw new YianTypeError(`compiled flow wiring must contain Binding values, got ${jsTypeName(binding)}`);
   }
   const rename = (path: string): RefRenamed | null => {
     const parts = path.split(".");
@@ -192,7 +193,7 @@ export function cloneChild(
     seedPrefix.length > 1 ||
     seedPrefix.some((index) => !Number.isSafeInteger(index) || index < 0)
   ) {
-    throw new RangeError("seed_prefix must be empty or one non-negative item index");
+    throw new YianRangeError("seed_prefix must be empty or one non-negative item index");
   }
 
   const nodes = new Map<string, Node>();
@@ -469,16 +470,16 @@ function reject(error: Error): never {
 
 /** Require one record with non-empty keys from a legal spawner seed. */
 function growthRecord(seed: JsonValue, label: string): JsonObject {
-  if (!isRecord(seed)) reject(new TypeError(`${label} growth seed must be a record`));
+  if (!isRecord(seed)) reject(new YianTypeError(`${label} growth seed must be a record`));
   if (Object.keys(seed).some((key) => !key)) {
-    reject(new RangeError(`${label} growth seed record keys must be non-empty`));
+    reject(new YianRangeError(`${label} growth seed record keys must be non-empty`));
   }
   return seed as JsonObject;
 }
 
 /** Require MAP's ordered list of per-item records. */
 function mapGrowthRecords(seed: JsonValue): JsonObject[] {
-  if (!isList(seed)) reject(new TypeError("MAP growth seed must be a list of records"));
+  if (!isList(seed)) reject(new YianTypeError("MAP growth seed must be a list of records"));
   return (seed as JsonValue[]).map((record, index) => growthRecord(record, `MAP item ${index}`));
 }
 
@@ -489,15 +490,15 @@ function mapGrowthRecords(seed: JsonValue): JsonObject[] {
  */
 function loopGrowthSeed(seed: JsonValue): [JsonObject, number] {
   if (!isList(seed) || seed.length !== 2) {
-    reject(new RangeError("LOOP growth seed must be a two-item (record, iteration) pair"));
+    reject(new YianRangeError("LOOP growth seed must be a two-item (record, iteration) pair"));
   }
   const [record, iteration] = seed as [JsonValue, JsonValue];
   const carried = growthRecord(record, "LOOP carried");
-  if (typeof iteration !== "bigint") reject(new TypeError("LOOP growth seed iteration must be an integer"));
-  if (iteration < 0n) reject(new RangeError("LOOP growth seed iteration must be non-negative"));
+  if (typeof iteration !== "bigint") reject(new YianTypeError("LOOP growth seed iteration must be an integer"));
+  if (iteration < 0n) reject(new YianRangeError("LOOP growth seed iteration must be non-negative"));
   if (iteration > BigInt(Number.MAX_SAFE_INTEGER)) {
     reject(
-      new RangeError(`LOOP growth seed iteration must be at most ${Number.MAX_SAFE_INTEGER}, got ${iteration}`),
+      new YianRangeError(`LOOP growth seed iteration must be at most ${Number.MAX_SAFE_INTEGER}, got ${iteration}`),
     );
   }
   return [carried, Number(iteration)];
@@ -551,6 +552,6 @@ export function buildGrow(spawner: Node, seed: JsonValue): Flow {
       );
     }
     default:
-      throw new RangeError(`node ${reprText(spawner.id)} (${spawner.kind}) cannot build graph growth`);
+      throw new YianRangeError(`node ${reprText(spawner.id)} (${spawner.kind}) cannot build graph growth`);
   }
 }

@@ -11,6 +11,7 @@
  * validates replies against the schema it passed.
  */
 
+import { YianTypeError } from "../typesys/errors.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { encodeBody } from "./body.ts";
 import { modelProfile } from "./capabilities.ts";
@@ -142,7 +143,7 @@ export class StructuredPlan {
    */
   apply(request: Request): Request {
     if (request.tools.length > 0 || request.outputFormat !== null) {
-      throw new TypeError("a structured request carries only the schema's tool");
+      throw new YianTypeError("a structured request carries only the schema's tool");
     }
     if (this.strategy === "prompt") return request;
     return new Request({
@@ -283,7 +284,7 @@ function parseObject(text: string): JsonObject | null {
 export function planStructured(target: StructuredTarget, schema: JsonObject): StructuredPlan {
   const name = schema["title"];
   if (typeof name !== "string" || name === "") {
-    throw new TypeError("a structured output schema needs a title, its name");
+    throw new YianTypeError("a structured output schema needs a title, its name");
   }
   const plan = (strategy: Strategy, fields: PlanFields = {}) =>
     new StructuredPlan({ ...fields, strategy, name, schema });

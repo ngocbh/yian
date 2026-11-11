@@ -12,13 +12,14 @@ import { join, relative, sep } from "node:path";
 import { current } from "../defaults.ts";
 import { reprText } from "../diagnostics.ts";
 import { isMissingPath, isSystemError, leavesRoot, openFilePath, resolvedPath, statOrNull } from "../platform.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import { valueRepr } from "../typesys/values.ts";
 
 export const SKILL_FILE = "SKILL.md";
 const NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 /** A skill package, grant, or resource request is invalid. */
-export class SkillError extends RangeError {
+export class SkillError extends YianRangeError {
   override name = "SkillError";
 }
 

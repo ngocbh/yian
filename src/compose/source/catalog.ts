@@ -16,6 +16,7 @@ import {
   reprText,
   type SourceRange,
 } from "../../diagnostics.ts";
+import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import { jsTypeName } from "../../typesys/index.ts";
 import { type OccurrencePath, SourceAccessError } from "./common.ts";
 import type { SourceCursor } from "./cursor.ts";
@@ -56,8 +57,8 @@ const SCOPED_ORIGIN_PREFIX = "@scope";
  * @throws RangeError when `path` is empty.
  */
 export function encodeSitePath(path: SourceSitePath): string {
-  if (!Array.isArray(path)) throw new TypeError("source site path must be an array");
-  if (path.length === 0) throw new RangeError("source site path cannot be empty");
+  if (!Array.isArray(path)) throw new YianTypeError("source site path must be an array");
+  if (path.length === 0) throw new YianRangeError("source site path cannot be empty");
   const encoded: string[] = [];
   for (const segment of path as readonly unknown[]) {
     if (typeof segment === "string") {
@@ -67,7 +68,7 @@ export function encodeSitePath(path: SourceSitePath): string {
     } else {
       const got =
         typeof segment === "number" ? `non-integer number ${segment}` : jsTypeName(segment);
-      throw new TypeError(`source site path segments must be text or integer values, got ${got}`);
+      throw new YianTypeError(`source site path segments must be text or integer values, got ${got}`);
     }
   }
   return "/" + encoded.join("/");
@@ -83,7 +84,7 @@ export function encodeSitePath(path: SourceSitePath): string {
  * @throws RangeError when `alias` is empty.
  */
 export function scopeOrigin(alias: string, origin: OriginRef): OriginRef {
-  if (alias === "") throw new RangeError("origin scope alias cannot be empty");
+  if (alias === "") throw new YianRangeError("origin scope alias cannot be empty");
   return new OriginRef(SCOPED_ORIGIN_PREFIX + encodeSitePath(["uses", alias, "origin", origin.key]));
 }
 

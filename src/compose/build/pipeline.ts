@@ -66,6 +66,7 @@ import {
   type ValueTemplate,
 } from "../../nodes/contracts.ts";
 import { ASK } from "../../tools/context.ts";
+import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import { messagesKey, NEW_MESSAGES } from "../../typesys/pool.ts";
 import { newMessagesType, type TypeRegistry } from "../../typesys/types.ts";
 import { isList, isListKind, isRecord, type Type, type Value, writeAsText } from "../../typesys/values.ts";
@@ -406,13 +407,13 @@ export class ComposedFlow {
   get input(): readonly Parameter[] {
     const start = this.compiled.nodes.get(this.compiled.startId);
     if (start === undefined) {
-      throw new RangeError(`compiled flow has no START node ${reprText(this.compiled.startId)}`);
+      throw new YianRangeError(`compiled flow has no START node ${reprText(this.compiled.startId)}`);
     }
     const parameters = start.params;
-    if (!isList(parameters)) throw new TypeError("compiled START params must be an exact list");
+    if (!isList(parameters)) throw new YianTypeError("compiled START params must be an exact list");
     for (const parameter of parameters) {
       if (!isExactly(parameter, Parameter)) {
-        throw new TypeError("compiled START params must contain exact Parameter values");
+        throw new YianTypeError("compiled START params must contain exact Parameter values");
       }
     }
     return parameters;
@@ -431,7 +432,7 @@ export class ComposedFlow {
    * @throws TypeError when `failure` is not a `Failure`.
    */
   diagnose(failure: Failure): Diagnostic {
-    if (!(failure instanceof Failure)) throw new TypeError("diagnose requires a Failure");
+    if (!(failure instanceof Failure)) throw new YianTypeError("diagnose requires a Failure");
 
     const diagnostic = new Diagnostic({
       code: failure.code,
@@ -512,13 +513,13 @@ export function registerInlineBodies(
     const label = `inline body of node ${reprText(body.nodeId)}`;
     const descriptor = descriptors.get(body.nodeId);
     if (descriptor === undefined) {
-      throw new RangeError(`${label}: no matching composite node descriptor`);
+      throw new YianRangeError(`${label}: no matching composite node descriptor`);
     }
     if (!(descriptor instanceof CallDescriptor || descriptor instanceof LoopDescriptor)) {
-      throw new RangeError(`${label}: final node descriptor is not CALL, MAP, or LOOP`);
+      throw new YianRangeError(`${label}: final node descriptor is not CALL, MAP, or LOOP`);
     }
     if (descriptor.call !== body.flowId) {
-      throw new RangeError(`${label}: final node descriptor does not target its retained inline body`);
+      throw new YianRangeError(`${label}: final node descriptor does not target its retained inline body`);
     }
 
     const labelledDescriptor = descriptor.replace({ childLabel: label });
@@ -552,7 +553,7 @@ export function assertionCursors(
   if (assertsCursor === null) return assertions.map(() => null);
   const cursors = locateSourceAccess(diagnostics, () => assertsCursor.children());
   if (cursors.length !== assertions.length) {
-    throw new RangeError("retained assertion cursor does not align with semantic assertions");
+    throw new YianRangeError("retained assertion cursor does not align with semantic assertions");
   }
   return cursors;
 }
@@ -1093,7 +1094,7 @@ export function attachInputContracts(
       // Every kind keeps its authored inputs in its wiring, so a declared type with no binding
       // to land on would be silently unchecked at runtime.
       if (!wiring.has(name)) {
-        throw new RangeError(`node ${reprText(nodeId)}: typed input ${reprText(name)} has no wiring binding`);
+        throw new YianRangeError(`node ${reprText(nodeId)}: typed input ${reprText(name)} has no wiring binding`);
       }
       const binding = asBinding(wiring.get(name));
       wiring.set(name, new Binding(binding.source, { origin: binding.origin, contract }));
@@ -1227,11 +1228,11 @@ export function stampFlowOutputOrigins(
   if (isRecord(outputsSection)) {
     const rawKeys = Object.keys(outputsSection);
     if (rawKeys.length !== outputs.length) {
-      throw new RangeError("flow output carriers do not align with their section");
+      throw new YianRangeError("flow output carriers do not align with their section");
     }
     cursors = locateSourceAccess(diagnostics, () => rawKeys.map((key) => outputsCursor.child(key)));
   } else {
-    if (outputs.length !== 1) throw new RangeError("a bare flow output requires exactly one carrier");
+    if (outputs.length !== 1) throw new YianRangeError("a bare flow output requires exactly one carrier");
     cursors = [outputsCursor];
   }
 
@@ -2075,7 +2076,7 @@ function buildNodes(
       if (!desugared.descriptors.has(producerId)) return null;
 
       const cache = descriptorCache;
-      if (cache === null) throw new RangeError("descriptor cache was not initialized before inline child resolution");
+      if (cache === null) throw new YianRangeError("descriptor cache was not initialized before inline child resolution");
       const node = cache.buildOne(producerId, bindingLabel, bindingRange).node;
       if (messages) {
         if (node.producesMessages) return new ValueContract(newMessagesType());
@@ -2170,7 +2171,7 @@ function buildNodes(
   /** Resolve one parent binding's contract, building referenced producers on demand. */
   const readBindingContract: BindingContractReader = (bindingLabel, binding, bindingRange) => {
     const cache = descriptorCache;
-    if (cache === null) throw new RangeError("descriptor cache was not initialized before binding contract resolution");
+    if (cache === null) throw new YianRangeError("descriptor cache was not initialized before binding contract resolution");
     const producers = new Map<string, OutputContract>();
     for (const producerId of new Set(bindingProducers(binding))) {
       if (!desugared.descriptors.has(producerId)) continue;
@@ -2668,10 +2669,10 @@ function checkGraph(
 export function assemble(options: AssembleOptions): ComposedFlow {
   const { inputsSection = null, inputParameters = null, inputsCursor = null } = options;
   if ((inputsSection === null) === (inputParameters === null)) {
-    throw new RangeError("assemble requires exactly one of inputsSection or inputParameters");
+    throw new YianRangeError("assemble requires exactly one of inputsSection or inputParameters");
   }
   if (inputParameters !== null && inputsCursor !== null) {
-    throw new RangeError("pre-resolved input parameters cannot carry an inputs cursor");
+    throw new YianRangeError("pre-resolved input parameters cannot carry an inputs cursor");
   }
 
   const { scope, registry } = options;

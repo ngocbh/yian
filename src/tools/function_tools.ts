@@ -10,6 +10,7 @@
 
 import { reprText } from "../diagnostics.ts";
 import { checkJsonValue, MessageFormatError } from "../llm/messages.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { isRecord, jsTypeName } from "../typesys/values.ts";
 import type { ToolContext } from "./context.ts";
@@ -122,27 +123,27 @@ export class FunctionTool {
     const { name, description, parametersJsonSchema, execute, isConcurrencySafe } = options;
     const { parametersValidator, outputJsonSchema, outputValidator, resumable } = options;
     if (typeof name !== "string") {
-      throw new TypeError(`FunctionTool name must be a string, got ${jsTypeName(name)}`);
+      throw new YianTypeError(`FunctionTool name must be a string, got ${jsTypeName(name)}`);
     }
-    if (name === "") throw new RangeError("FunctionTool name must not be empty");
+    if (name === "") throw new YianRangeError("FunctionTool name must not be empty");
     const prefix = `FunctionTool ${reprText(name)}`;
     if (typeof description !== "string") {
-      throw new TypeError(`${prefix} description must be a string, got ${jsTypeName(description)}`);
+      throw new YianTypeError(`${prefix} description must be a string, got ${jsTypeName(description)}`);
     }
     if (!isRecord(parametersJsonSchema)) {
-      throw new TypeError(
+      throw new YianTypeError(
         `${prefix} parametersJsonSchema must be an object, got ${jsTypeName(parametersJsonSchema)}`,
       );
     }
     if (!Object.hasOwn(parametersJsonSchema, "type") || parametersJsonSchema.type !== "object") {
-      throw new RangeError(`${prefix} parametersJsonSchema must have type 'object'`);
+      throw new YianRangeError(`${prefix} parametersJsonSchema must have type 'object'`);
     }
     // The model sees the schema, so it must be JSON: no Infinity, Date or runaway nesting.
     const schema = frozenJsonCopy(prefix, parametersJsonSchema, "parametersJsonSchema");
     let output: JsonObject | null = null;
     if (outputJsonSchema !== undefined && outputJsonSchema !== null) {
       if (!isRecord(outputJsonSchema)) {
-        throw new TypeError(`${prefix} outputJsonSchema must be an object, got ${jsTypeName(outputJsonSchema)}`);
+        throw new YianTypeError(`${prefix} outputJsonSchema must be an object, got ${jsTypeName(outputJsonSchema)}`);
       }
       output = frozenJsonCopy(prefix, outputJsonSchema, "outputJsonSchema");
     }
@@ -151,19 +152,19 @@ export class FunctionTool {
       ["outputValidator", outputValidator],
     ] as const) {
       if (validator !== undefined && validator !== null && !isStandardSchema(validator)) {
-        throw new TypeError(`${prefix} ${option} must be a Standard Schema v1 validator`);
+        throw new YianTypeError(`${prefix} ${option} must be a Standard Schema v1 validator`);
       }
     }
-    if (typeof execute !== "function") throw new TypeError(`${prefix} execute must be a function`);
+    if (typeof execute !== "function") throw new YianTypeError(`${prefix} execute must be a function`);
     if (
       isConcurrencySafe !== undefined &&
       isConcurrencySafe !== null &&
       typeof isConcurrencySafe !== "function"
     ) {
-      throw new TypeError(`${prefix} isConcurrencySafe must be a function`);
+      throw new YianTypeError(`${prefix} isConcurrencySafe must be a function`);
     }
     if (resumable !== undefined && typeof resumable !== "boolean") {
-      throw new TypeError(`${prefix} resumable must be a boolean, got ${jsTypeName(resumable)}`);
+      throw new YianTypeError(`${prefix} resumable must be a boolean, got ${jsTypeName(resumable)}`);
     }
     this.name = name;
     this.description = description;
@@ -297,23 +298,23 @@ function schemaOf(
     ((typeof value === "object" && value !== null) || typeof value === "function") && "~standard" in value;
   if (!isValidator) {
     if (role === "output" && value === undefined) {
-      if (given !== undefined) throw new TypeError(`${prefix} ${option} needs an output validator`);
+      if (given !== undefined) throw new YianTypeError(`${prefix} ${option} needs an output validator`);
       return [undefined, null];
     }
     if (!isRecord(value)) {
-      throw new TypeError(`${prefix} ${role} must be a JSON Schema object or a Standard Schema v1 validator`);
+      throw new YianTypeError(`${prefix} ${role} must be a JSON Schema object or a Standard Schema v1 validator`);
     }
-    if (given !== undefined) throw new TypeError(`${prefix} ${option} is only for a validator`);
+    if (given !== undefined) throw new YianTypeError(`${prefix} ${option} is only for a validator`);
     return [value, null];
   }
-  if (!isStandardSchema(value)) throw new TypeError(`${prefix} ${role} must be a Standard Schema v1 validator`);
+  if (!isStandardSchema(value)) throw new YianTypeError(`${prefix} ${role} must be a Standard Schema v1 validator`);
   const validator = value;
   if (given !== undefined) return [given, validator];
   const { vendor, jsonSchema } = validator["~standard"] as { vendor: unknown; jsonSchema?: unknown };
   const input =
     typeof jsonSchema === "object" && jsonSchema !== null ? (jsonSchema as { input?: unknown }).input : undefined;
   if (typeof input !== "function") {
-    throw new TypeError(
+    throw new YianTypeError(
       `${prefix} ${role}: the ${String(vendor)} validator has no Standard JSON Schema (~standard.jsonSchema); ` +
         `pass ${option} too`,
     );
@@ -323,7 +324,7 @@ function schemaOf(
   } catch (error) {
     const what = role === "parameters" ? "an argument" : "an output";
     const message = error instanceof Error ? error.message : String(error);
-    throw new TypeError(`${prefix} has ${what} type with no JSON Schema: ${message}`, { cause: error });
+    throw new YianTypeError(`${prefix} has ${what} type with no JSON Schema: ${message}`, { cause: error });
   }
 }
 
@@ -341,7 +342,7 @@ function frozenJsonCopy(prefix: string, schema: JsonObject, label: string): Json
   try {
     return deepFreeze(checkJsonValue(schema, label) as JsonObject);
   } catch (error) {
-    if (error instanceof MessageFormatError) throw new TypeError(`${prefix} ${error.message}`);
+    if (error instanceof MessageFormatError) throw new YianTypeError(`${prefix} ${error.message}`);
     throw error;
   }
 }

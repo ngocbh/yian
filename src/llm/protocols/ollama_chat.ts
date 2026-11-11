@@ -28,6 +28,7 @@
  * then caps.
  */
 
+import { YianTypeError } from "../../typesys/errors.ts";
 import { encodeBody, mergeRequestBody, withAuthorWrapper } from "../body.ts";
 import type { JsonObject, JsonValue } from "../../typesys/json.ts";
 import { ProviderError } from "../errors.ts";
@@ -148,7 +149,7 @@ export class OllamaChat implements NdjsonProtocol {
    */
   buildBody(request: Request): JsonObject {
     if (request.messages.some((message) => message.parts.some((part) => part instanceof MediaPart))) {
-      throw new TypeError(NO_MEDIA);
+      throw new YianTypeError(NO_MEDIA);
     }
     const messages: JsonObject[] = [];
     for (const message of request.messages.map((each) => withAuthorWrapper(each))) {
@@ -174,7 +175,7 @@ export class OllamaChat implements NdjsonProtocol {
     const texts: string[] = [];
     const calls: JsonObject[] = [];
     for (const part of message.parts) {
-      if (part instanceof ToolResultPart) throw new TypeError(wrongPart(PROTOCOL, part, "assistant"));
+      if (part instanceof ToolResultPart) throw new YianTypeError(wrongPart(PROTOCOL, part, "assistant"));
       if (part instanceof TextPart) {
         texts.push(part.text);
       } else if (part instanceof ToolCallPart) {
@@ -337,7 +338,7 @@ export class OllamaChat implements NdjsonProtocol {
 function joinedText(message: Message): string {
   return message.parts
     .map((part) => {
-      if (!(part instanceof TextPart)) throw new TypeError(wrongPart(PROTOCOL, part, message.role));
+      if (!(part instanceof TextPart)) throw new YianTypeError(wrongPart(PROTOCOL, part, message.role));
       return part.text;
     })
     .join("\n");
@@ -349,7 +350,7 @@ function joinedText(message: Message): string {
  * @throws {TypeError} If the part is not a tool result.
  */
 function toolMessage(part: Part): JsonObject {
-  if (!(part instanceof ToolResultPart)) throw new TypeError(wrongPart(PROTOCOL, part, "tool"));
+  if (!(part instanceof ToolResultPart)) throw new YianTypeError(wrongPart(PROTOCOL, part, "tool"));
   const rendered = withContent({ role: "tool" }, part.content);
   rendered["tool_name"] = part.name;
   rendered["tool_call_id"] = part.callId;

@@ -38,6 +38,7 @@ import { commitInitialPool, commitPrepared, type GrowBuilder, NodeDataError, pre
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { aborted, BlockingNode, fragment, fragmentBuilder, noGrowth, rejected } from "../helpers/run_state_fixtures.ts";
+import { YianRangeError, YianTypeError } from "../../src/typesys/errors.ts";
 
 const RUN_ID = "recorded-dispatch";
 const FINGERPRINT = "d".repeat(64);
@@ -342,7 +343,7 @@ describe("durability and host faults", () => {
     };
 
     const error = await rejected(dispatcher(state, log, 0).run());
-    expect(error).toEqual(new RangeError("run-log append result does not match prepared transition"));
+    expect(error).toEqual(new YianRangeError("run-log append result does not match prepared transition"));
     expect(inFlight(state)).toEqual(["work"]);
     expect(anyFailure(log)).toBe(false);
   });
@@ -758,7 +759,7 @@ describe("growth", () => {
     const { state, log } = initialized(fanFlow([spawner]), 0);
 
     const error = await rejected(dispatcher(state, log, 0, { growBuilder: fragmentBuilder }).run());
-    expect((error as Error).constructor).toBe(RangeError);
+    expect((error as Error).constructor).toBe(YianRangeError);
     expect((error as Error).message).toContain("grow_depth_delta");
     expect(inFlight(state)).toEqual(["spawn"]);
     expect(anyFailure(log)).toBe(false);
@@ -782,8 +783,8 @@ describe("growth", () => {
     const { state, log } = initialized(fanFlow([new GrowNode("spawn")]), numWorkers);
 
     const error = await rejected(dispatcher(state, log, numWorkers, { growBuilder: () => ({}) as Flow }).run());
-    expect(error).toEqual(new TypeError("grow_builder must return a Flow"));
-    expect((error as Error).constructor).toBe(TypeError);
+    expect(error).toEqual(new YianTypeError("grow_builder must return a Flow"));
+    expect((error as Error).constructor).toBe(YianTypeError);
     expect(inFlight(state)).toEqual(["spawn"]);
     expect(anyFailure(log)).toBe(false);
   });

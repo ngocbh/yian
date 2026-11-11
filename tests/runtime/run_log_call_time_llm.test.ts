@@ -18,6 +18,7 @@ import { commitPrepared, type PreparedTransition, prepareRunStarted, RunState } 
 import { TypeCheckError } from "../../src/typesys/index.ts";
 import { type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
 import { flow } from "../helpers/run_state_fixtures.ts";
+import { thrownClass } from "../helpers/own_errors.ts";
 
 /** Assert `fn` throws an error of exactly class `cls` with exactly `message`, and return it. */
 function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, message: string): Error {
@@ -27,7 +28,7 @@ function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, me
   } catch (error) {
     caught = error;
   }
-  expect((caught as Error | undefined)?.constructor).toBe(cls);
+  expect((caught as Error | undefined)?.constructor).toBe(thrownClass(cls));
   expect((caught as Error).message).toBe(message);
   return caught as Error;
 }

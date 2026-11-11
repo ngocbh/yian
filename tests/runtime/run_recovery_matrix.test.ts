@@ -56,6 +56,7 @@ import {
   snapshot,
   startedRun,
 } from "../helpers/run_state_fixtures.ts";
+import { YianRangeError } from "../../src/typesys/errors.ts";
 
 const FIXTURES = fileURLToPath(new URL("../conformance/fixtures", import.meta.url));
 const RUN_ID = "recovery-matrix";
@@ -815,7 +816,7 @@ test("a forged resume plan can't change the retry frontier", () => {
     caught = error;
   }
 
-  expect((caught as Error).constructor).toBe(RangeError);
+  expect((caught as Error).constructor).toBe(YianRangeError);
   expect((caught as Error).message).toBe("frontier resume delta disagrees with its record");
   expectUnchanged(state, before);
   expect([...state.inFlight]).toEqual(["agent"]);

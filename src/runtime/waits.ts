@@ -11,6 +11,7 @@ import { reprText } from "../diagnostics.ts";
 import type { WaitRequest } from "../nodes/base.ts";
 import { EndNode } from "../nodes/end/node.ts";
 import { StartNode } from "../nodes/start/node.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import {
   formatRecordTime,
   InboxClosedRecord,
@@ -171,10 +172,10 @@ export class WaitsState {
    * @throws RangeError when `json` isn't such a form.
    */
   static fromJSON(json: unknown): WaitsState {
-    if (!isObject(json)) throw new RangeError("waits JSON must be an object");
+    if (!isObject(json)) throw new YianRangeError("waits JSON must be an object");
     const keys = Object.keys(json);
     if (keys.length !== WAITS_JSON_KEYS.length || !WAITS_JSON_KEYS.every((key) => json[key] !== undefined)) {
-      throw new RangeError(
+      throw new YianRangeError(
         "waits JSON must hold exactly waiting, calls, inboxes, interrupts, stops, lastFrontier, inputsCommitted, lastWoken, pendingTakes, replies, honored and interruptInboxes",
       );
     }
@@ -185,21 +186,21 @@ export class WaitsState {
     for (const [node, seq] of entries(json, "interrupts")) w.interrupts.set(node, int(seq, `interrupts ${reprText(node)}`));
     for (const [name, stop] of entries(json, "stops")) w.stops.set(name, stopFromJson(stop, `stops ${reprText(name)}`));
     if (json.lastFrontier !== null && typeof json.lastFrontier !== "string") {
-      throw new RangeError("waits JSON lastFrontier must be a string or null");
+      throw new YianRangeError("waits JSON lastFrontier must be a string or null");
     }
     w.lastFrontier = json.lastFrontier;
-    if (typeof json.inputsCommitted !== "boolean") throw new RangeError("waits JSON inputsCommitted must be a boolean");
+    if (typeof json.inputsCommitted !== "boolean") throw new YianRangeError("waits JSON inputsCommitted must be a boolean");
     w._inputsCommitted = json.inputsCommitted;
     for (const [node, seq] of entries(json, "lastWoken")) w._lastWoken.set(node, int(seq, `lastWoken ${reprText(node)}`));
     for (const [node, take] of entries(json, "pendingTakes")) w._pendingTakes.set(node, takeFromJson(take, `pendingTakes ${reprText(node)}`));
     for (const [node, seq] of entries(json, "replies")) w._replies.set(node, int(seq, `replies ${reprText(node)}`));
     const honored = json.honored;
     if (!Array.isArray(honored) || !honored.every((node) => typeof node === "string")) {
-      throw new RangeError("waits JSON honored must be an array of node ids");
+      throw new YianRangeError("waits JSON honored must be an array of node ids");
     }
     for (const node of honored) w._honored.add(node);
     for (const [node, inbox] of entries(json, "interruptInboxes")) {
-      if (typeof inbox !== "string") throw new RangeError(`waits JSON interruptInboxes ${reprText(node)} must be an inbox name`);
+      if (typeof inbox !== "string") throw new YianRangeError(`waits JSON interruptInboxes ${reprText(node)} must be an inbox name`);
       w._interruptInboxes.set(node, inbox);
     }
     return w;
@@ -239,7 +240,7 @@ function intOrNull(value: unknown): number | null {
 /** Return the int `value` as a number. @throws RangeError naming `label` when it isn't one. */
 function int(value: unknown, label: string): number {
   const n = intOrNull(value);
-  if (n === null) throw new RangeError(`waits JSON ${label} must be an integer`);
+  if (n === null) throw new YianRangeError(`waits JSON ${label} must be an integer`);
   return n;
 }
 
@@ -259,7 +260,7 @@ function texts(value: unknown): string[] | null {
 function entries(json: Record<string, unknown>, name: string): [string, unknown][] {
   const value = json[name];
   if (!Array.isArray(value) || !value.every((entry) => Array.isArray(entry) && entry.length === 2 && typeof entry[0] === "string")) {
-    throw new RangeError(`waits JSON ${name} must be an array of [key, value] entries`);
+    throw new YianRangeError(`waits JSON ${name} must be an array of [key, value] entries`);
   }
   return value as [string, unknown][];
 }
@@ -270,14 +271,14 @@ function waitingFromJson(value: unknown, label: string): WaitingNode {
   const callIds = isObject(value) ? texts(value["callIds"]) : null;
   const steer = isObject(value) ? value["steerInbox"] : undefined;
   if (seq === null || callIds === null || (steer !== null && typeof steer !== "string")) {
-    throw new RangeError(`waits JSON ${label} must be a waiting node`);
+    throw new YianRangeError(`waits JSON ${label} must be a waiting node`);
   }
   return { seq, callIds, steerInbox: steer };
 }
 
 /** Return a stored call. @throws RangeError when it isn't one. */
 function callFromJson(value: unknown, label: string): Call {
-  const bad = () => new RangeError(`waits JSON ${label} must be a call`);
+  const bad = () => new YianRangeError(`waits JSON ${label} must be a call`);
   if (!isObject(value)) throw bad();
   const text = (key: string) => (typeof value[key] === "string" ? (value[key] as string) : undefined);
   const textOrNull = (key: string) => (value[key] === null ? null : text(key));
@@ -314,7 +315,7 @@ function inboxFromJson(value: unknown, label: string): InboxState {
   const unread = isObject(value) ? seqList(value["unread"]) : null;
   const absorbing = isObject(value) ? texts(value["absorbing"]) : null;
   const closed = isObject(value) ? value["closed"] : undefined;
-  if (unread === null || absorbing === null || typeof closed !== "boolean") throw new RangeError(`waits JSON ${label} must be an inbox`);
+  if (unread === null || absorbing === null || typeof closed !== "boolean") throw new YianRangeError(`waits JSON ${label} must be an inbox`);
   return { unread, closed, absorbing };
 }
 
@@ -322,7 +323,7 @@ function inboxFromJson(value: unknown, label: string): InboxState {
 function stopFromJson(value: unknown, label: string): StopState {
   const seq = isObject(value) ? intOrNull(value["seq"]) : null;
   const stopped = isObject(value) ? value["stopped"] : undefined;
-  if (seq === null || typeof stopped !== "boolean") throw new RangeError(`waits JSON ${label} must be a stop`);
+  if (seq === null || typeof stopped !== "boolean") throw new YianRangeError(`waits JSON ${label} must be a stop`);
   return { seq, stopped };
 }
 
@@ -333,7 +334,7 @@ function takeFromJson(value: unknown, label: string): { readonly seq: number } &
   const inbox = isObject(value) ? value["inbox"] : undefined;
   const closed = isObject(value) ? value["closed"] : undefined;
   if (seq === null || events === null || typeof inbox !== "string" || typeof closed !== "boolean") {
-    throw new RangeError(`waits JSON ${label} must be a take commit`);
+    throw new YianRangeError(`waits JSON ${label} must be a take commit`);
   }
   return { seq, inbox, events, closed };
 }
@@ -854,10 +855,10 @@ export function decideWait(w: WaitsState, callId: string, request: WaitRequest, 
 /** Return the decision a held take or sleep call has already reached. */
 function heldDecision(w: WaitsState, call: Call): WaitDecision {
   if (call.tool !== "take" && call.tool !== "sleep") {
-    throw new RangeError(`call ${reprText(call.callId)} isn't a take or sleep (tool ${reprText(call.tool)})`);
+    throw new YianRangeError(`call ${reprText(call.callId)} isn't a take or sleep (tool ${reprText(call.tool)})`);
   }
-  if (call.state === "open") throw new RangeError(`call ${reprText(call.callId)} is still open; its node can't decide its wait`);
-  if (call.state === "closed") throw new RangeError(`call ${reprText(call.callId)} was closed (${call.closedReason})`);
+  if (call.state === "open") throw new YianRangeError(`call ${reprText(call.callId)} is still open; its node can't decide its wait`);
+  if (call.state === "closed") throw new YianRangeError(`call ${reprText(call.callId)} was closed (${call.closedReason})`);
   if (call.tool === "sleep") return { kind: "slept" };
   const inbox = call.inbox!;
   if (call.state === "timed_out") return take(inbox, [], false);

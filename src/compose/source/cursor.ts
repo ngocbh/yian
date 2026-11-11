@@ -1,6 +1,7 @@
 /** Immutable cursors over physical and virtual YAML source values. */
 
 import { reprText, type SourceRange } from "../../diagnostics.ts";
+import { YianTypeError } from "../../typesys/errors.ts";
 import {
   isList,
   isRecord,
@@ -627,7 +628,7 @@ export class SourceCursor {
     const sources = new Map<string, SourceCursor | null>();
     for (const [key, [value, source]] of entries) {
       if (source !== null && !(source instanceof SourceCursor)) {
-        throw new TypeError("projected entry source must be a SourceCursor or null");
+        throw new YianTypeError("projected entry source must be a SourceCursor or null");
       }
       setRecordKey(displayed, key, value);
       sources.set(key, source);

@@ -42,6 +42,7 @@ import { compareCodeUnits } from "../../diagnostics.ts";
 import type { ChatModel } from "../../llm/events.ts";
 import { Message, Request, type Response, TextPart, ToolCallPart, ToolResultPart } from "../../llm/messages.ts";
 import { planStructured, StructuredOutputError, type StructuredTarget, structuredTarget } from "../../llm/structured.ts";
+import { YianRangeError } from "../../typesys/errors.ts";
 import { type JsonObject, type JsonValue, logJson } from "../../typesys/json.ts";
 import {
   type Bounds,
@@ -195,7 +196,7 @@ function nonNullSchema(typ: Type, defs: Defs, position: string, closed: boolean)
     if (scalar === null || !SCALAR_TYPES.has(scalar)) return bareList();
     return { items: scalarSchema(scalar, undefined), type: "array" };
   }
-  throw new RangeError(`type_to_schema: no structured mapping for segment type ${kind}`);
+  throw new YianRangeError(`type_to_schema: no structured mapping for segment type ${kind}`);
 }
 
 /**

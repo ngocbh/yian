@@ -23,6 +23,7 @@
  * The loader synthesizes it and the engine reads it as the terminal.
  */
 
+import { YianRangeError } from "../../typesys/errors.ts";
 import { Node, NodeKind, Output } from "../base.ts";
 import { reprText } from "../../diagnostics.ts";
 import { Parameter } from "../contracts.ts";
@@ -34,7 +35,7 @@ import { Parameter } from "../contracts.ts";
  */
 function inputOf(inputs: Record<string, unknown>, name: string): unknown {
   if (Object.hasOwn(inputs, name)) return inputs[name];
-  throw new RangeError(`END input ${reprText(name)} is missing`);
+  throw new YianRangeError(`END input ${reprText(name)} is missing`);
 }
 
 /**
@@ -82,10 +83,10 @@ export class EndNode extends Node {
     const { outputNames = null, n = null, title = null, value = false } = options;
     super(nodeId, { title });
     if ((outputNames === null) === (n === null)) {
-      throw new RangeError("EndNode takes exactly one of outputNames (value/record) or n (list)");
+      throw new YianRangeError("EndNode takes exactly one of outputNames (value/record) or n (list)");
     }
     if (value && (outputNames === null || outputNames.length > 1)) {
-      throw new RangeError("EndNode value mode takes at most one output name");
+      throw new YianRangeError("EndNode value mode takes at most one output name");
     }
     if (outputNames !== null) {
       this.mode = value ? "value" : "record";

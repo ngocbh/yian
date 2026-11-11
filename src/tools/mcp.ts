@@ -27,6 +27,7 @@ import { scrub } from "../llm/auth.ts";
 import { encodeBody } from "../llm/body.ts";
 import { scrubError } from "../llm/errors.ts";
 import { LOOPBACK_HOSTS, RedirectError, safeFetch, VERSION } from "../platform.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { type JsonObject, parseJson } from "../typesys/json.ts";
 import {
   buildValueAs,
@@ -283,23 +284,23 @@ export function mcpServer(options: McpServerOptions): McpServer {
   const label = absent(options.label);
   const concurrencySafe = absent(options.concurrencySafe);
   if ((command === undefined) === (url === undefined)) {
-    throw new RangeError("mcpServer needs exactly one of command or url");
+    throw new YianRangeError("mcpServer needs exactly one of command or url");
   }
   if (command !== undefined) {
     if (typeof command !== "string") {
-      throw new TypeError(`mcpServer command must be a string, got ${jsTypeName(command)}`);
+      throw new YianTypeError(`mcpServer command must be a string, got ${jsTypeName(command)}`);
     }
-    if (command === "") throw new RangeError("mcpServer command must not be empty");
+    if (command === "") throw new YianRangeError("mcpServer command must not be empty");
     if (headers !== undefined) {
-      throw new RangeError("mcpServer headers needs url; a command server takes env instead");
+      throw new YianRangeError("mcpServer headers needs url; a command server takes env instead");
     }
   } else {
-    if (typeof url !== "string") throw new TypeError(`mcpServer url must be a string, got ${jsTypeName(url)}`);
+    if (typeof url !== "string") throw new YianTypeError(`mcpServer url must be a string, got ${jsTypeName(url)}`);
     const host = urlHost(url);
-    if (host === "") throw new RangeError("mcpServer url must be an http or https URL with a host");
+    if (host === "") throw new YianRangeError("mcpServer url must be an http or https URL with a host");
     // As base_url's rule: headers and URL tokens never cross the network in cleartext.
     if (/^http:/i.test(url) && !LOOPBACK_HOSTS.includes(host.replace(/^\[(.*)\]$/, "$1"))) {
-      throw new RangeError("mcpServer url must use https; http is allowed only for localhost, 127.0.0.1, and ::1");
+      throw new YianRangeError("mcpServer url must use https; http is allowed only for localhost, 127.0.0.1, and ::1");
     }
     // An empty args array or string counts as not given.
     const argsGiven = args !== undefined && (args as unknown) !== "" && !(Array.isArray(args) && args.length === 0);
@@ -308,20 +309,20 @@ export function mcpServer(options: McpServerOptions): McpServer {
       ["env", env !== undefined],
       ["cwd", cwd !== undefined],
     ] as const) {
-      if (given) throw new RangeError(`mcpServer ${name} needs command; a url server takes headers instead`);
+      if (given) throw new YianRangeError(`mcpServer ${name} needs command; a url server takes headers instead`);
     }
   }
   const checkedArgs = checkArgs(args);
   const checkedEnv = checkStringRecord("env", env);
   const checkedHeaders = checkStringRecord("headers", headers);
   if (cwd !== undefined && typeof cwd !== "string") {
-    throw new TypeError(`mcpServer cwd must be a string, got ${jsTypeName(cwd)}`);
+    throw new YianTypeError(`mcpServer cwd must be a string, got ${jsTypeName(cwd)}`);
   }
   checkSeconds("timeout", timeout);
   checkSeconds("connectTimeout", connectTimeout);
   if (label !== undefined) {
-    if (typeof label !== "string") throw new TypeError(`mcpServer label must be a string, got ${jsTypeName(label)}`);
-    if (label === "") throw new RangeError("mcpServer label must not be empty");
+    if (typeof label !== "string") throw new YianTypeError(`mcpServer label must be a string, got ${jsTypeName(label)}`);
+    if (label === "") throw new YianRangeError("mcpServer label must not be empty");
   }
   return new McpServer({
     command,
@@ -354,13 +355,13 @@ function urlHost(url: string): string {
 function checkArgs(args: unknown): readonly string[] {
   if (args === undefined) return Object.freeze([]);
   if (!Array.isArray(args)) {
-    throw new TypeError("mcpServer args must be an array of strings, not a single string");
+    throw new YianTypeError("mcpServer args must be an array of strings, not a single string");
   }
   const copy: string[] = [];
   // Index every slot, so a hole reads as `undefined` and fails.
   for (let i = 0; i < args.length; i++) {
     const arg: unknown = args[i];
-    if (typeof arg !== "string") throw new TypeError("mcpServer args must hold only strings");
+    if (typeof arg !== "string") throw new YianTypeError("mcpServer args must hold only strings");
     copy.push(arg);
   }
   return Object.freeze(copy);
@@ -369,11 +370,11 @@ function checkArgs(args: unknown): readonly string[] {
 /** Return a frozen copy of `value`, or throw `TypeError` unless it is a record of strings to strings. */
 function checkStringRecord(name: string, value: unknown): Readonly<Record<string, string>> | undefined {
   if (value === undefined) return undefined;
-  if (!isRecord(value)) throw new TypeError(`mcpServer ${name} must be a record of strings to strings`);
+  if (!isRecord(value)) throw new YianTypeError(`mcpServer ${name} must be a record of strings to strings`);
   const entries = Object.entries(value);
   for (const [key, item] of entries) {
     if (typeof item !== "string") {
-      throw new TypeError(`mcpServer ${name} must map strings to strings; ${reprText(key)} doesn't`);
+      throw new YianTypeError(`mcpServer ${name} must map strings to strings; ${reprText(key)} doesn't`);
     }
   }
   return Object.freeze(Object.fromEntries(entries) as Record<string, string>);
@@ -383,10 +384,10 @@ function checkStringRecord(name: string, value: unknown): Readonly<Record<string
 function checkSeconds(name: string, value: unknown): void {
   if (value === undefined) return;
   if (typeof value !== "number") {
-    throw new TypeError(`mcpServer ${name} must be a number of seconds, got ${jsTypeName(value)}`);
+    throw new YianTypeError(`mcpServer ${name} must be a number of seconds, got ${jsTypeName(value)}`);
   }
   if (!(value > 0 && value < Infinity)) {
-    throw new RangeError(`mcpServer ${name} must be positive and finite, got ${value}`);
+    throw new YianRangeError(`mcpServer ${name} must be positive and finite, got ${value}`);
   }
 }
 
@@ -395,11 +396,11 @@ function checkConcurrencySafe(value: unknown): boolean | readonly string[] {
   const message = "mcpServer concurrencySafe must be a boolean or an array of tool names";
   if (value === undefined) return false;
   if (typeof value === "boolean") return value;
-  if (!Array.isArray(value)) throw new TypeError(message);
+  if (!Array.isArray(value)) throw new YianTypeError(message);
   const names: string[] = [];
   for (let i = 0; i < value.length; i++) {
     const name: unknown = value[i];
-    if (typeof name !== "string") throw new TypeError(message);
+    if (typeof name !== "string") throw new YianTypeError(message);
     names.push(name);
   }
   return Object.freeze(names);

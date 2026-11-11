@@ -39,6 +39,7 @@ import { pending } from "../src/tools/context.ts";
 import { FunctionTool } from "../src/tools/function_tools.ts";
 import { completeByHand, gateTool, handClock } from "./helpers/inbox_fixtures.ts";
 import { crashAfter, graph, NO_ENV, rejected } from "./helpers/run_state_fixtures.ts";
+import { YianTypeError } from "../src/typesys/errors.ts";
 
 const ROOT = mkdtempSync(join(tmpdir(), "advance-"));
 afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
@@ -152,7 +153,7 @@ test.each([
   const before = readFileSync(log);
   // Another worker count would write run_resumed.
   const options = { log, flow, tools, env: NO_ENV, numWorkers: 2, ...option } as never;
-  expect(await rejected(advance(options))).toEqual(new TypeError(message));
+  expect(await rejected(advance(options))).toEqual(new YianTypeError(message));
   expect(readFileSync(log).equals(before)).toBe(true);
 });
 

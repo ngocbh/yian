@@ -1,0 +1,18 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    n:
+      kind: agent
+      prompt: Pick one.
+      output: Literal(positive, neutral, negative)
+  output: ${n.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '`output:` declares a type as a tag: write `output: !Literal(positive;neutral;negative)`'
+      frames:
+      - label: flow.yaml
+        range: [7, 13, 7, 49]

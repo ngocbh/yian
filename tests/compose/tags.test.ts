@@ -16,7 +16,7 @@ import {
   pathLabel,
   readTaggedValue,
   readTagType,
-  rejectTaggedOutput,
+  readOutputDeclaration,
   rejectUnreadTags,
   spellTypeText,
   splitTypedText,
@@ -72,12 +72,18 @@ describe("readTagType", () => {
     expect(rt("list(Buy)").element?.fields).toBeTruthy();
   });
 
+  test("reads a tag whose arguments `;` separates", () => {
+    expect([...rt("Literal(positive;neutral;negative)").tags!]).toEqual(["positive", "neutral", "negative"]);
+    expect(rt("Union(Buy;Sell)").members).toHaveLength(2);
+    expect(rt("Optional(Literal(a;b))").nullable).toBe(true);
+  });
+
   test.each([
-    ["Union(Buy,Sell)", "name it in `typedefs:`"],
-    ["int,b:", "a tag can't contain `,`"],
+    ["Union(Buy,Sell)", "a tag can't contain `,`; write `!Union(Buy;Sell)`"],
+    ["int,b:", "a tag can't contain `,`; separate a type's arguments with `;`"],
     ["Optional[str]", "`!Optional(str)`"],
     ["list[Buy]", "(strict YAML 1.2); write `!list(Buy)`"],
-    ["Union[Buy, Sell]", "name `Union(Buy, Sell)` in `typedefs:`"],
+    ["Union[Buy, Sell]", "write `!Union(Buy;Sell)`"],
     ["Union(Buy,", "ends at the first space"],
     ["Literal(a", "ends at the first space"],
     ["Strr", "Did you mean `str`?"],
@@ -96,8 +102,7 @@ describe("readTagType", () => {
   test("an incomplete tag's message names the tag and the fix", () => {
     const message = rejected("Union(Buy,").message;
     expect(message).toContain("`!Union(Buy,` is not a complete type");
-    expect(message).toContain("(e.g. `Decision: Union(Buy, Sell)`)");
-    expect(message).toContain("(`!Decision`)");
+    expect(message).toContain("separate a type's arguments with `;`, with no space, as in `!Union(Buy;Sell)`");
   });
 
   test("an unknown inner name gets no misleading head hint", () => {
@@ -126,9 +131,8 @@ describe("suggestTag", () => {
     );
     expect(suggestTag("a", t("Literal(buy)"), "buy")).toBe("`a: !Literal(buy) buy`");
     expect(suggestTag("d", t("Union(Buy, Sell)"), "${x}")).toContain("typedefs:");
-    expect(suggestTag("d", t("Literal(a, b)"), null)).toBe(
-      "name `Literal(a, b)` in `typedefs:` and tag with its name",
-    );
+    expect(suggestTag("d", t("Literal(a, b)"), null)).toBe("`d: !Literal(a;b)`");
+    expect(suggestTag("d", t("Literal(a, b)"), null, { typeText: "Literal(a, b)" })).toBe("`d: !Literal(a;b)`");
     expect(suggestTag("d", t("Buy"), null)).toContain("typedefs:");
     expect(suggestTag("d", t('Literal("a b")'), null)).toContain("typedefs:");
   });
@@ -574,7 +578,7 @@ describe("readTaggedValue", () => {
     );
     fails(
       "x: !<!Union(Buy,Sell)> v\n",
-      "'x': `!Union(Buy,Sell)`: a tag can't contain `,`; name it in `typedefs:`",
+      "'x': `!Union(Buy,Sell)`: a tag can't contain `,`; write `!Union(Buy;Sell)`",
     );
   });
 
@@ -595,13 +599,19 @@ describe("readTaggedValue", () => {
   });
 });
 
-// ---------- rejectTaggedOutput, rejectUnreadTags ----------
+// ---------- readOutputDeclaration, rejectUnreadTags ----------
 
 /** Return the message of the `LoadError` checking `output:` in `text` throws. */
-function outputRejection(text: string): string {
+/** Read the `output:` of `text` as a node's declaration, with an empty ledger. */
+function readOutput(text: string, ledger = new Set<number>()): unknown {
   const document = SourceDocument.parse(text);
   const diagnostics = LoadDiagnostics.fromDocument(document);
-  return loadError(() => rejectTaggedOutput(document.root.child("output"), diagnostics)).message;
+  return readOutputDeclaration(document.root.child("output"), { registry: REG, diagnostics, ledger });
+}
+
+/** Return the message reading the `output:` of `text` fails with. */
+function outputRejection(text: string): string {
+  return loadError(() => readOutput(text)).message;
 }
 
 /** Check `text` for unread tags with an empty ledger. */
@@ -610,17 +620,53 @@ function checkUnread(text: string, options: { typedefsOnly?: boolean } = {}): vo
   rejectUnreadTags(document, new Set(), LoadDiagnostics.fromDocument(document), options);
 }
 
-describe("tag positions", () => {
-  test("rejectTaggedOutput names a nested record key and a list item", () => {
-    expect(outputRejection("output:\n  a:\n    b: !int\n")).toBe(
-      "`output:` declares a type; write `b: int`, without a tag",
-    );
-    expect(outputRejection("output:\n  - str\n  - !int\n")).toBe(
-      "`output:` declares a type; an item of `output:` is tagged `!int`; write the type " +
-        "without a tag",
-    );
+describe("readOutputDeclaration", () => {
+  test("reads a tag, and a record of tags, into type text", () => {
+    expect(readOutput("output: !Optional(str)\n")).toBe("Optional(str)");
+    expect(readOutput("output: !Literal(a;b)\n")).toBe("Literal(a;b)");
+    expect(readOutput("output:\n  a: !int\n  b: {c: !list(str), d: !Buy}\n")).toEqual({
+      a: "int",
+      b: { c: "list(str)", d: "Buy" },
+    });
   });
 
+  test("a field named __proto__ stays a field", () => {
+    expect(Object.keys(readOutput("output:\n  __proto__: !int\n") as object)).toEqual(["__proto__"]);
+  });
+
+  test("an empty output declares nothing", () => {
+    expect(readOutput("output:\n")).toBeNull();
+  });
+
+  test("records each tag it reads in the ledger", () => {
+    const ledger = new Set<number>();
+    readOutput("output:\n  a: !int\n  b: !str\n", ledger);
+    expect(ledger.size).toBe(2);
+  });
+
+  test.each([
+    ["output: str\n", "`output:` declares a type as a tag: write `output: !str`"],
+    ["output: Literal(a, b)\n", "`output:` declares a type as a tag: write `output: !Literal(a;b)`"],
+    ["output: Union(Buy, Sell)\n", "`output:` declares a type as a tag: write `output: !Union(Buy;Sell)`"],
+    ["output: strr\n", "`output:` declares a type as a tag: write `output: !str`"],
+    ['output: Literal("a b")\n', '`output:` declares a type as a tag: name `Literal("a b")` in `typedefs:` and tag with its name'],
+    ["output: 5\n", "`output:` declares a type as a tag: write `output: !<type>`, e.g. `output: !str`"],
+    ["output:\n  a:\n    b: int\n", "`output:` declares a type as a tag: write `b: !int`"],
+    ["output: {a: }\n", "`output:` declares a type as a tag: write `a: !<type>`, e.g. `a: !str`"],
+    ["output: !str hello\n", "`output:` declares a type, so nothing follows its tag: write `output: !str`"],
+    ["output: !Buy {qty: 1}\n", "`output:` declares a type, so nothing follows its tag: write `output: !Buy`"],
+    ["output: !Literal(a; b)\n", "a YAML tag ends at the first space; write `output: !Literal(a;b)` without spaces"],
+    [
+      "output:\n  - !int\n",
+      "`output:` declares a type, which can't be a YAML list: write a record as a mapping of tagged " +
+        "fields, as in `{a: !int, b: !str}`, and a list type as `!list(T)`",
+    ],
+  ])("refuses %p", (text, message) => {
+    expect(outputRejection(text)).toBe(message);
+  });
+});
+
+describe("tag positions", () => {
   test("rejectUnreadTags with typedefsOnly checks only typedefs", () => {
     checkUnread("kind: !str code\ntypedefs:\n  A: int\n", { typedefsOnly: true });
     expect(
@@ -680,17 +726,18 @@ const slot =
 
 const output =
   (path: string[]): CaseCall =>
-  (document, _registry, diagnostics) =>
-    rejectTaggedOutput(cursorAt(document, path), diagnostics);
+  (document, registry, diagnostics, builder) =>
+    readOutputDeclaration(cursorAt(document, path), { registry, diagnostics, ledger: builder.consumedTags });
 
 /**
- * Check for unread tags as the loader does, after reading the `ledger` slots, so the ledger
- * holds every legitimately read tag.
+ * Check for unread tags as the loader does, after reading the `ledger` slots and the node
+ * `outputs` declarations, so the ledger holds every legitimately read tag.
  */
 const unread =
-  (options: { typedefsOnly?: boolean; ledger?: Slot[] } = {}): CaseCall =>
+  (options: { typedefsOnly?: boolean; ledger?: Slot[]; outputs?: string[][] } = {}): CaseCall =>
   (document, registry, diagnostics, builder) => {
     for (const read of options.ledger ?? []) readSlot(read, document, registry, diagnostics, builder);
+    for (const path of options.outputs ?? []) output(path)(document, registry, diagnostics, builder);
     rejectUnreadTags(document, builder.consumedTags, diagnostics, { typedefsOnly: options.typedefsOnly });
   };
 
@@ -796,27 +843,39 @@ describe("harvested cases", () => {
 
   test.each<CaseRow>([
     {
-      id: "load-types/compose_tag_positions__tagged_agent_output_is_rejected",
+      id: "load-types/compose_tag_positions__an_untagged_agent_output_is_rejected",
       call: output(["nodes", "n", "output"]),
     },
     {
-      id: "load-types/compose_tag_positions__tagged_compact_output_is_rejected_at_its_line",
+      id: "load-types/compose_tag_positions__an_untagged_compact_output_is_rejected_at_its_line",
       call: output(["output"]),
     },
     {
-      id: "load-types/compose_tag_positions__tagged_list_item_in_a_node_output_says_the_item_is_tagged",
+      id: "load-types/compose_tag_positions__an_untagged_tool_output_is_rejected",
       call: output(["nodes", "n", "output"]),
     },
     {
-      id: "load-types/compose_tag_positions__tagged_tool_output_is_rejected",
+      id: "load-types/compose_tag_positions__an_untagged_output_field_is_rejected_at_its_line",
       call: output(["nodes", "n", "output"]),
     },
     {
-      id: "load-types/compose_tag_positions__tagged_single_node_def_output_is_rejected",
+      id: "load-types/compose_tag_positions__a_list_in_a_node_output_is_rejected",
+      call: output(["nodes", "n", "output"]),
+    },
+    {
+      id: "load-types/compose_tag_positions__a_value_after_a_node_output_tag_is_rejected",
+      call: output(["nodes", "n", "output"]),
+    },
+    {
+      id: "load-types/compose_tag_positions__a_comma_type_in_an_output_is_shown_with_semicolons",
+      call: output(["nodes", "n", "output"]),
+    },
+    {
+      id: "load-types/compose_tag_positions__an_untagged_single_node_def_output_is_rejected",
       call: output(["defs", "echo", "output"]),
       prefix: "defs entry 'echo': ",
     },
-  ])("rejectTaggedOutput: $id", runCase);
+  ])("readOutputDeclaration: $id", runCase);
 
   test.each<CaseRow>([
     {
@@ -855,6 +914,7 @@ describe("harvested cases", () => {
           [["input", "n"], LITERAL],
           [["input", "m"], LITERAL],
         ],
+        outputs: [["nodes", "n", "output"]],
       }),
     },
     {
@@ -864,11 +924,12 @@ describe("harvested cases", () => {
           [["defs", "sub", "input", "x"], LITERAL],
           [["defs", "sub", "nodes", "echo", "input", "value"]],
         ],
+        outputs: [["defs", "sub", "nodes", "echo", "output"]],
       }),
     },
     {
       id: "load-types/compose_tag_positions__tag_under_an_extension_key_aliased_into_a_slot_loads",
-      call: unread({ ledger: [[["nodes", "n", "input", "qty"]]] }),
+      call: unread({ ledger: [[["nodes", "n", "input", "qty"]]], outputs: [["nodes", "n", "output"]] }),
     },
   ])("rejectUnreadTags: $id", runCase);
 

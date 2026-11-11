@@ -23,6 +23,7 @@ import {
 
 import { reprText, SourceRange } from "../../diagnostics.ts";
 import type { Value, ValueRecord } from "../../typesys/index.ts";
+import { tagSpelling } from "../../typesys/types.ts";
 import {
   type ArcSequence,
   type Definition,
@@ -65,12 +66,12 @@ import {
 
 /**
  * The hint added to a YAML error at a `,`, `[`, `]`, `{` or `}` glued to a tag, which ends the
- * tag there: a type with several arguments, or written with brackets, can't be a tag.
+ * tag there, when the tag can't be shown rewritten: a tag separates a type's arguments with `;`
+ * and writes no brackets. A tag cut at a comma that `;` mends gets its rewrite instead.
  */
 export const TAG_HINT =
-  "hint: a YAML tag ends at `,`, `[`, `]`, `{` or `}`; name a type with several arguments in " +
-  "`typedefs:` and tag with its name (e.g. `Decision: Union(Buy, Sell)`, then `!Decision`), " +
-  "and write `list(str)`, not `list[str]`";
+  "hint: a YAML tag ends at `,`, `[`, `]`, `{` or `}`; separate a type's arguments with `;` " +
+  "(e.g. `!Union(Buy;Sell)`), and write `list(str)`, not `list[str]`";
 
 /** The first key a mapping repeats among its own pairs. */
 export interface RepeatedKey {
@@ -111,6 +112,9 @@ const CORE_TAG_PREFIX = "tag:yaml.org,2002:";
 
 // A tag glued to the flow indicator that ends a line's text.
 const GLUED_TAG = /(?:^|[\s[{,])![^\s,[\]{}]*[,[\]{}]$/;
+
+// Text a YAML tag reads whole: no space, flow indicator, `!` or `%`.
+const TAG_TEXT = /^[A-Za-z0-9\-;/?:@&=+$_.~*'()]+$/;
 
 const ONLY_SPACES = /^ *$/;
 
@@ -432,7 +436,7 @@ export class SourceDocument {
    *   YAML document, or holds a node the flow loader can't build, a tag that is bare or
    *   neither local nor core, or `!include` or `!include(T)` on a mapping key, a list, a mapping
    *   or a `<<:` merge source; `range` locates the problem. A YAML error at a character glued to
-   *   a tag ends with `TAG_HINT`.
+   *   a tag ends with a hint: the tag spelled with `;` when that mends it, else `TAG_HINT`.
    */
   static parse(
     text: string,
@@ -494,7 +498,8 @@ export class SourceDocument {
           error.code === "MULTIPLE_DOCS"
             ? "expected a single document in the stream, but found another document"
             : error.message;
-        if (gluedToTag(error, source)) message += "\n" + TAG_HINT;
+        const hint = tagHint(error, source);
+        if (hint !== null) message += "\n" + hint;
         // eemeli reports an unclosed quote or flow collection past the last character, a line the
         // text doesn't have.
         const at = error.pos[0] < source.length ? error.pos[0] : openAtEnd(source);
@@ -1481,14 +1486,46 @@ function literalLineRanges(
 }
 
 /** Say whether a YAML error is at a `,`, `[`, `]`, `{` or `}` glued to the tag before it. */
-function gluedToTag(error: YAMLError, source: string): boolean {
+function tagHint(error: YAMLError, source: string): string | null {
   // eemeli ends a tag at a flow indicator even in block context and reports MISSING_CHAR, a
   // code it also uses for an anchor glued to the next token and an unclosed flow collection,
   // so the error must sit on a flow indicator right after a `!` tag.
-  if (error.code !== "MISSING_CHAR") return false;
+  if (error.code !== "MISSING_CHAR") return null;
   const at = error.pos[0];
   const lineStart = source.lastIndexOf("\n", at - 1) + 1;
-  return GLUED_TAG.test(source.slice(lineStart, at + 1));
+  const glued = GLUED_TAG.exec(source.slice(lineStart, at + 1));
+  if (glued === null) return null;
+  if (source[at] !== ",") return TAG_HINT;
+  const tagStart = lineStart + glued.index + glued[0].indexOf("!") + 1;
+  const lineEnd = source.indexOf("\n", at);
+  const spelled = mendedTag(source.slice(tagStart, lineEnd < 0 ? source.length : lineEnd));
+  if (spelled === null) return TAG_HINT;
+  return `hint: a YAML tag ends at \`,\`; separate a type's arguments with \`;\`: write \`!${spelled}\``;
+}
+
+/**
+ * Return the type a tag cut at a comma meant, spelled with `;`, from the text starting at the
+ * tag: through the `)` that closes its first `(`, quotes respected. `null` when that `)` isn't on
+ * the line, or the `;` spelling still isn't a tag.
+ */
+function mendedTag(text: string): string | null {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (quote !== null) {
+      if (ch === "\\") i++;
+      else if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === "(") {
+      depth++;
+    } else if (ch === ")" && --depth === 0) {
+      const spelled = tagSpelling(text.slice(0, i + 1));
+      return TAG_TEXT.test(spelled) ? spelled : null;
+    }
+  }
+  return null;
 }
 
 /**

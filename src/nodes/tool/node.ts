@@ -502,7 +502,7 @@ export class ToolNode extends Node {
     if (typ !== null && acceptsNull(typ)) return new Output(null);
     throw new ToolTimeoutError(
       `TOOL node ${reprText(this.id)} (ask): nobody answered by ${held.deadline}; ` +
-        "declare output: Optional(...) to route on a timeout",
+        "declare `output: !Optional(...)` to route on a timeout",
     );
   }
 

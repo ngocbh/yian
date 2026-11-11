@@ -40,7 +40,7 @@ import {
   sameOutputContract,
   ValueContract,
 } from "../../nodes/contracts.ts";
-import type { TypeRegistry } from "../../typesys/types.ts";
+import { tagSpelling, type TypeRegistry } from "../../typesys/types.ts";
 import {
   fileFieldType,
   joinedType,
@@ -452,7 +452,7 @@ function narrowedUntypedMessage(
   // a comprehension variable by the list it iterates.
   const typeAs = (path: string, type: string, root: boolean) =>
     root
-      ? `type ${path} as ${type} where it is bound (\`output: ${type}\` or \`!${type}\`)`
+      ? `type ${path} as ${type} where it is bound (\`!${tagSpelling(type)}\`)`
       : `declare ${path} as ${type} in the type that holds it`;
   let typeIt: string;
   if (!variable) typeIt = typeAs(prefix, label, atRoot);

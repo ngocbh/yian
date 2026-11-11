@@ -43,7 +43,7 @@ import { isList, isRecord, type Type, valueRepr, type ValueRecord } from "../../
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
 import { type MemoryTypeTable, NO_MEMORY_TYPES } from "../helpers/memory.ts";
 import { directReferencePath } from "../../compile/output_contracts.ts";
-import { hasSpan, rejectIncludeIn } from "../helpers/tags.ts";
+import { hasSpan, outputDeclarationText, rejectIncludeIn } from "../helpers/tags.ts";
 import { readType } from "../helpers/types.ts";
 import { checkEnvValues } from "../helpers/value_nesting.ts";
 import { yamlReadAs } from "../helpers/yaml_words.ts";
@@ -713,7 +713,10 @@ export class NodeDescriptor {
       if (NodeDescriptor.allowed.has(key) || !Object.hasOwn(body, key)) continue;
       const range = normalized.rangeOf(key);
       if (range !== null) ranges.set(siteKey("field", key), range);
-      fields[this.keywordRemap.get(key) ?? camelCase(key)] = normalized.get(key);
+      // A node's `output:` types are tags, which the parsed value drops; a case's `output:` is
+      // only read to be refused.
+      const value = key === "outputs" && this.kind !== "case" ? outputDeclarationText(normalized.child(key)) : normalized.get(key);
+      fields[this.keywordRemap.get(key) ?? camelCase(key)] = value;
     }
     this._validateFields(nodeId, fields, ranges, ownRange, diagnostics, normalized);
     this._readCommonFields(nodeId, normalized, fields, ranges);

@@ -60,13 +60,15 @@ $ yian run triage.yaml --input message="I was charged twice this month."
 {"label":"billing","reply":"Sorry about the double charge; we have refunded it."}
 ```
 
-- `input:` and `output:` give the flow typed boundaries, like a function. Flow inputs take the
-  tag form `!str`, which can carry a default (`!int 3`); outputs take a plain type.
+- `input:` and `output:` give the flow typed boundaries, like a function. A `!` marks each type:
+  a flow input `!str` can carry a default (`!int 3`), and a step's `output: !str` declares what
+  it returns.
 - Each entry under `nodes:` is a step. `kind: agent` is a step backed by an LLM.
 - A step's `input:` maps names to values (`${input.message}` is the flow's input); its prompt
   reads those names (`${message}`).
 - `reply` reads `${label.output}`, so it runs after `label`. You don't draw that edge by hand.
-- `Literal(billing, bug, other)` makes the model answer with exactly one of those labels.
+- `!Literal(billing;bug;other)` makes the model answer with exactly one of those labels. Inside a
+  tag, `;` separates a type's arguments.
 
 ```mermaid
 flowchart LR

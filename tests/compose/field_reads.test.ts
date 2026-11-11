@@ -630,7 +630,7 @@ test("an untyped value narrowed by isinstance needs ?. for a field T doesn't req
   const r = roots(Rec);
   expect(nullableReadErrors(parseCondition("isinstance(u, T) and u.f == 'a'"), r, types)[0]).toBe(
     "${u.f} reads field 'f', which T doesn't require, of u, which is untyped and only narrowed to T; " +
-      "write u?.f, or type u as T where it is bound (`output: T` or `!T`)",
+      "write u?.f, or type u as T where it is bound (`!T`)",
   );
   expect(nullableReadErrors(parseCondition("isinstance(u, T) and u?.f == 'a'"), r, types)).toEqual([]);
   expect(nullableReadErrors(parseCondition("isinstance(u, T) and u.g == 'a'"), r, types)).toEqual([]);

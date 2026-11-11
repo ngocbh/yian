@@ -9,14 +9,18 @@ page explains the types you can write and where they go.
 
 ## Where types go
 
-A type goes in one of two places:
+A `!` marks a type everywhere except under `typedefs:`. Write a type as a YAML tag on a flow
+input, a node input, a node's `output:`, a value entry or a flow output, and as plain text only
+in a `typedefs:` entry:
 
-| Place | How you write it | Example |
-|---|---|---|
-| A type definition: a `typedefs:` entry, or the `output:` of an `agent`, `code` or `tool` node | As plain text | `output: Optional(str)` |
-| A slot, a place that holds a value: a flow input, a node input, a value entry, a flow output | As a YAML tag before the value | `qty: !int ${size.output}` |
+| Place | Example |
+|---|---|
+| A flow input | `text: !str` |
+| A node input or a flow output | `qty: !int ${size.output}` |
+| A node's `output:` | `output: !Optional(str)`, or a record `output: {n: !int}` |
+| A `typedefs:` entry | `Size: Literal(small, large)` |
 
-A tag on a type definition is a load error, and so is a type without a tag on a flow input. See
+A plain type outside `typedefs:` and a tag inside it are load errors that show the fix. See
 [YAML tags](#yaml-tags) for how to write one.
 
 ## Scalars
@@ -161,7 +165,7 @@ mapping that leaves a key out isn't a file.
 
 ## YAML tags
 
-A slot's type is a YAML tag: `!`, then the type, then the value.
+A type is a YAML tag: `!`, then the type, then the value if the place holds one.
 
 ```yaml
 id: tags-demo
@@ -171,21 +175,32 @@ typedefs:
 input:
   text: !str                         # a required input: a tag and no value
   rounds: !int(1..5) 3               # a default
+  mood: !Literal(calm;angry) calm    # `;` separates a tag's arguments
 nodes:
   size: !Size small                  # a literal: checked at load
   count: !int ${input.rounds}        # an expression
   order: !object                     # a record, with tags inside
     qty: !int ${input.rounds}
     note: !str ""
+  plan:
+    kind: code
+    input:
+      n: ${count.output}
+    output:                          # a node's type: tags with no values
+      steps: !list(str)
+      done: !bool
+    code: |
+      return { steps: [], done: inputs.n > 0 };
 output: !Size ${size.output}
 ```
 
-- A tag ends at the first space and can't hold `,`, `[`, `]`, `{` or `}`. Name a type with
-  several arguments in `typedefs:` and tag with its name: `Order: Union(Buy, Sell)`, then
-  `!Order`. One-argument types work inline: `!Optional(list(str))`, `!Literal(draft)`.
+- A tag ends at the first space and can't hold `,`, `[`, `]`, `{` or `}`, so `;` separates a
+  type's arguments, with no space: `!Literal(a;b)`, `!Union(Buy;Sell)`, `!dict(str;int)`. A tag
+  cut at a comma is a load error that shows the `;` spelling. `;` works in `typedefs:` too, and
+  `,` stays valid there.
 - Inside `{...}` or `[...]`, a `,` ends the tag: `{qty: !int 5, note: !str ""}` works.
-- A tag with no value is allowed only on a flow input. A binding needs a value:
-  `w: !int ${...}`.
+- A tag with no value goes on a flow input or a node's `output:`. A binding needs a value:
+  `w: !int ${...}`. A node's `output:` takes none: its record is an untagged mapping of tags.
 - `output: !T {...}` is one value of type `T`. Without the tag, `output: {...}` is a record of
   flow outputs.
 - `!include` is the one tag that isn't a type: it reads a text value from a file. Where a tag

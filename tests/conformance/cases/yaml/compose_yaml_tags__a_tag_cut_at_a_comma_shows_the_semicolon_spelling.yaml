@@ -1,0 +1,22 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    mood: !Literal(happy, sad)
+  nodes:
+    n:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        value: ${input.mood}
+      output: !str
+  output: ${n.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "invalid YAML: Tags and anchors must be separated from the next token by white space\nhint: a YAML tag ends at `,`; separate a type's arguments with `;`: write `!Literal(happy;sad)`"
+      frames:
+      - label: flow.yaml
+        range: [4, 23, 4, 24]

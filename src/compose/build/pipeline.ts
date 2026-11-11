@@ -78,7 +78,7 @@ import {
   QUOTED_STYLES,
   readTaggedValue,
   rejectIncludeIn,
-  rejectTaggedOutput,
+  readOutputDeclaration,
   suggestTag,
   yamlQuoted,
 } from "../helpers/tags.ts";
@@ -1885,15 +1885,17 @@ function readSections(options: AssembleOptions, ctx: AssembleContext): ReadSecti
     diagnostics,
   });
 
-  // A node's `output:` is a type declaration; a tag there is rejected before a declaration with
-  // nothing after its tag reads as no output at all. A case has no `output:`; the case-branch
-  // check below rejects it, tagged or not, with the rewrite.
+  // A node's `output:` declares its type with tags, which the parsed value has dropped, so the
+  // declaration is read again from its source; a virtual one is type text already. A case has
+  // no `output:`; the case-branch check below rejects it, tagged or not, with the rewrite.
   locateSourceAccess(diagnostics, () => {
     for (const [nodeId, descriptor] of located) {
-      if (descriptor.kind === "case") continue;
-      if (valueEntries.has(nodeId)) continue;
+      if (descriptor.kind === "case" || valueEntries.has(nodeId)) continue;
+      if (!(descriptor.constructor as typeof NodeDescriptor).allowed.has("outputs")) continue;
       const outputCursor = authoredField(nodesCursor, nodeId, "outputs");
-      if (outputCursor !== null) rejectTaggedOutput(outputCursor, diagnostics);
+      if (outputCursor === null || outputCursor.range === null) continue;
+      const outputs = readOutputDeclaration(outputCursor, { registry, diagnostics, ledger: catalogBuilder.consumedTags });
+      located.set(nodeId, descriptor.replace({ outputs }));
     }
   });
 

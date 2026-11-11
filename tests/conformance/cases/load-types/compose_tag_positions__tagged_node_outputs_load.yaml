@@ -1,0 +1,49 @@
+kind: load
+# A node's output is a tag with nothing after it, and a record an untagged mapping of tags, in a
+# full flow, a compact def and an inline body; `;` separates a tag's arguments.
+flow: |
+  id: f
+  name: f
+  defs:
+    echo:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        value: !int
+      output: !int
+  nodes:
+    pick:
+      kind: agent
+      prompt: Pick one.
+      output: !Literal(positive;neutral;negative)
+    plan:
+      kind: agent
+      prompt: Plan.
+      output:
+        steps: !list(str)
+        budget: {total: !float, note: !Optional(str)}
+    once:
+      kind: call
+      call: echo
+      input:
+        value: 1
+    each:
+      kind: map
+      over: [1, 2]
+      input:
+        value: ${item}
+      nodes:
+        twice:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:echo
+          input:
+            value: ${input.value}
+          output: {value: !int}
+      output: ${twice.output}
+  output:
+    pick: ${pick.output}
+    plan: ${plan.output}
+    once: ${once.output}
+    each: ${each.output}
+expect:
+  load: ok

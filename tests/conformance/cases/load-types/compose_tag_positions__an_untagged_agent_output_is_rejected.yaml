@@ -6,13 +6,13 @@ flow: |
     n:
       kind: agent
       prompt: write
-      output: !str
+      output: str
   output: ${n.output}
 expect:
   load:
     diagnostics:
     - code: compose.load
-      message: '`output:` declares a type; write `output: str`, without a tag'
+      message: '`output:` declares a type as a tag: write `output: !str`'
       frames:
       - label: flow.yaml
-        range: [7, 13, 7, 17]
+        range: [7, 13, 7, 16]

@@ -1089,7 +1089,7 @@ test.each([
   expect((last as RunFailed).failure.code).toBe("agent.interrupted");
   expect((last as RunFailed).failure.nodeId).toBe("chat");
   expect((last as RunFailed).failure.message).toBe(
-    "agent node 'chat' was interrupted and its output doesn't allow null; declare output: Optional(...) to route on an interrupt",
+    "agent node 'chat' was interrupted and its output doesn't allow null; declare `output: !Optional(...)` to route on an interrupt",
   );
   expect(running!.state.pool.store.has("chat.new_messages")).toBe(false);
 });

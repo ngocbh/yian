@@ -108,7 +108,7 @@ const quoteHint = (name: string, text: string) => `. If you meant the text, quot
 test.each([
   ["qty", "int = ${size.output.qty}", "`qty: !int ${size.output.qty}`"],
   ["q", "Optional[int] = ${size.output.qty}", "`q: !Optional(int) ${size.output.qty}`"],
-  ["d", "Union[Buy, Sell] = ${size.output}", "name `Union(Buy, Sell)` in `typedefs:` and tag with its name"],
+  ["d", "Union[Buy, Sell] = ${size.output}", "`d: !Union(Buy;Sell) ${size.output}`"],
   ["s", 'str = "30"', '`s: !str "30"`'],
   ["s", "str = 30", '`s: !str "30"`'],
   ["b", "bool = yes", "`b: !bool true` (`yes` is text; write `true`)"],
@@ -233,8 +233,7 @@ describe("untagged declarations", () => {
     ["x: Optional(Foo)", "flow input 'x': write the type as a tag: `x: !Optional(Foo)`"],
     [
       "u: Union[A, B]",
-      "flow input 'u': write the type as a tag: " +
-        "name `Union(A, B)` in `typedefs:` and tag with its name",
+      "flow input 'u': write the type as a tag: `u: !Union(A;B)`",
     ],
     ["s: str = 30", "flow input 's': write the type as a tag: `s: !str \"30\"`"],
     [

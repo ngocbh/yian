@@ -14,7 +14,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: a tag types a value — a flow input, a binding, a flow output, an agent variable, an `llm_config` value, a value entry in `nodes:`, or a value inside one; `kind:` is not one
+      message: a tag types a value — a flow input, a binding, a node or flow output, an agent variable, an `llm_config` value, a value entry in `nodes:`, or a value inside one; `kind:` is not one
       frames:
       - label: flow.yaml
         range: [5, 11, 5, 20]

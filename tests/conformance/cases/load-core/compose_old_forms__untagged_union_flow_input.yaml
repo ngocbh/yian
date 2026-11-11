@@ -14,7 +14,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'flow input ''u'': write the type as a tag: name `Union(A, B)` in `typedefs:` and tag with its name'
+      message: 'flow input ''u'': write the type as a tag: `u: !Union(A;B)`'
       frames:
       - label: flow.yaml
         range: [6, 6, 6, 17]

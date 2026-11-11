@@ -187,8 +187,9 @@ function isShadow(name: string): boolean {
  * constructors `list(X)`/`Optional(X)`/`dict(K, V)`/`Literal(a, "b c")`/
  * `Union(A, B, ...)`/`Inbox(X)`, and the memory types `FileMemory` and `VectorDBMemory`/
  * `VectorDBMemory(X)`. A bare name that is neither a scalar, a constructor nor a memory type is
- * a registry reference. `Union(...)` members are only checked to be records when the type is
- * resolved. A quoted `Literal` member takes JSON escapes.
+ * a registry reference. `;` separates arguments as `,` does (`Literal(a;b)`), since a YAML tag
+ * can hold a `;` but not a `,`. `Union(...)` members are only checked to be records when the
+ * type is resolved. A quoted `Literal` member takes JSON escapes.
  *
  * Example: `parseType("Union(Buy, Sell)")` gives
  * `{kind: "union", members: [{kind: "ref", name: "Buy"}, {kind: "ref", name: "Sell"}]}`.
@@ -294,7 +295,7 @@ const QUOTED = String.raw`"(?:[^"\\]|\\[^\n])*"|'(?:[^'\\]|\\[^\n])*'`;
 const TYPE_TOKEN = new RegExp(
   String.raw`\s*(?:(?<number>[+-]?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)` +
     `|(?<name>${NAME_PATTERN})|(?<string>${QUOTED})` +
-    String.raw`|(?<punct>\.\.|[(),|]))`,
+    String.raw`|(?<punct>\.\.|[(),;|]))`,
   "uy",
 );
 
@@ -382,9 +383,17 @@ class TypeParser {
     this.malformed();
   }
 
-  /** Reject a `,` directly before `)`. */
-  private trailingComma(ctor: string): void {
-    if (this.peek() === ")") this.malformed(`remove the trailing comma in ${ctor}(...)`);
+  /** Whether the next token separates arguments: `,`, or `;`, which a YAML tag can hold. */
+  private atSeparator(): boolean {
+    const next = this.peek();
+    return next === "," || next === ";";
+  }
+
+  /** Read a separator, rejecting one directly before `)`. */
+  private separator(ctor: string): void {
+    const written = this.next().text;
+    if (this.peek() !== ")") return;
+    this.malformed(`remove the trailing ${written === "," ? "comma" : "`;`"} in ${ctor}(...)`);
   }
 
   private unbalanced(): never {
@@ -473,9 +482,8 @@ class TypeParser {
   private args(ctor: string, count: number | null): TypeExpr[] {
     if (this.peek() === ")") this.malformed(`${ctor}(...) needs a type`);
     const args = [this.type()];
-    while (this.peek() === ",") {
-      this.next();
-      this.trailingComma(ctor);
+    while (this.atSeparator()) {
+      this.separator(ctor);
       args.push(this.type());
     }
     this.expect(")");
@@ -490,7 +498,7 @@ class TypeParser {
   private range(ctor: "int" | "float"): ScalarExpr {
     let example = ctor === "int" ? "int(1..12)" : "float(0.0..1.0)";
     const low = this.endpoint();
-    if (this.peek() === ",") {
+    if (this.atSeparator()) {
       this.next();
       const high = this.endpoint();
       if ((low !== null || high !== null) && validBounds(ctor, [low, high])) {
@@ -506,7 +514,7 @@ class TypeParser {
     }
     const after = this.peek();
     if (after === null) this.ended();
-    if (after === "," || after === "..") {
+    if (this.atSeparator() || after === "..") {
       this.malformed(`a range takes one lo..hi, e.g. ${example}`);
     }
     if (after !== ")") {
@@ -547,9 +555,8 @@ class TypeParser {
           `invalid Literal member in ${reprText(this.src)} (use names or quoted strings)`,
         );
       }
-      if (this.peek() === ",") {
-        this.next();
-        this.trailingComma("Literal");
+      if (this.atSeparator()) {
+        this.separator("Literal");
         continue;
       }
       this.expect(")");
@@ -1341,6 +1348,37 @@ export function formatTypeExpr(t: TypeExpr): string {
       if (t.args === undefined) return "object";
       return "dict(" + t.args.map(formatTypeExpr).join(", ") + ")";
   }
+}
+
+/**
+ * Spell type text as a YAML tag holds it: each `,` outside a quoted `Literal` member becomes `;`,
+ * and the spaces after it are dropped. Nothing else changes, so text with another space, a
+ * quoted comma or a character a tag can't hold still can't be a tag.
+ *
+ * Example: `tagSpelling("Literal(a, b)")` gives `"Literal(a;b)"`.
+ */
+export function tagSpelling(text: string): string {
+  let out = "";
+  let quote: string | null = null;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (quote !== null) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === quote) quote = null;
+      out += ch;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+      out += ch;
+    } else if (ch === ",") {
+      out += ";";
+      while (text[i + 1] === " ") i++;
+    } else {
+      out += ch;
+    }
+  }
+  return out;
 }
 
 /**

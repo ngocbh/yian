@@ -113,7 +113,7 @@ output: ${writer.output}
   load, and its final newline is kept. Its line endings read as LF. The text isn't YAML, so an
   included file can't include another.
 - `!include` works on any text value. It fails at load on a key, a list or a mapping, and where
-  a type goes: `input:` and `variables:` declarations, a node's `output:` type and `typedefs:`.
+  a type goes: `input:` and `variables:` declarations, a node's `output:` and `typedefs:`.
 - The file must be UTF-8 text of at most `YIAN_MAX_INCLUDE_BYTES` (see
   [Reference](/reference/#all-defaults-and-limits)), and a load with a root folder, such as
   `yian check --root`, refuses one outside it. A missing or unreadable file fails at load, at the
@@ -214,9 +214,9 @@ to its history, and a `case` can route on them.
 
 ## Structured output
 
-An `output:` of `str` or `Optional(str)` keeps the reply as free text. Any other type, such as a
-record, a list, a number or a `Literal(...)`, asks the model for a value of that type and checks
-the reply against it.
+An `output:` of `!str` or `!Optional(str)` keeps the reply as free text. Any other type, such as
+a record (`{name: !str, score: !int}`), a list, a number or a `Literal(...)`, asks the model for a
+value of that type and checks the reply against it.
 
 <!-- yian-test {"replies": ["{\"name\": \"Ada\", \"score\": 9}"]} -->
 

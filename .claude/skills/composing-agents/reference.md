@@ -48,7 +48,9 @@ a load error, except `x-` keys, which yian ignores.
 | none | null |
 
 Fields every node takes: `kind`, `input` (not on `case`), `asserts` (not on `case` or `map`),
-`depends_on`, `runs_after`, `node_name`, `env`. `output` is a type on `agent`, `code` and `tool`.
+`depends_on`, `runs_after`, `node_name`, `env`. `output` is a type on `agent`, `code` and `tool`,
+written as a tag (`output: !str`), or for a record as an untagged mapping of tags
+(`output: {n: !int}`).
 
 ## Node fields
 
@@ -156,6 +158,9 @@ text, which prompts may call too: `upper`, `lower`, `join(value, sep="\n")`,
 | `FileMemory` | A flow input the host binds to a memory; see [Memory](https://yian.readthedocs.io/memory/) |
 | `VectorDBMemory(T)` | A flow input the host binds to a memory of items with `T` fields, searched by meaning |
 
+In a tag, `;` separates a type's arguments: `!Literal(a;b)`, `!dict(str;int)`. Under
+`typedefs:` a type is plain text, and `,` or `;` works.
+
 Records are closed: an extra field fails the check (an agent's record reply drops it instead; a
 union member's reply gets a correction). Every field is required except an `Optional(...)` one.
 A typedef can't take a built-in name such as `Message`.
@@ -211,7 +216,7 @@ inbox. Each turn:
    passes a budget.
 2. A condition `case` sends a non-empty `events` to `answered`, a `call` of `respond`.
 3. In `respond`, the agent `reply` reads the history as a list `prompt:`, takes the inbox as
-   `steer_inbox:` and has `output: Optional(str)`; the def's `output:` is
+   `steer_inbox:` and has `output: !Optional(str)`; the def's `output:` is
    `${[input.said + reply.new_messages]}`, this turn as one list.
 4. The turn returns `history: ${compacted.output.history + (answered.output :- [])}` and
    `closed: ${heard.output.closed}`; the loop runs `while: not closed`.

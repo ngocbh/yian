@@ -128,7 +128,8 @@ text, which prompts may call too: `upper`, `lower`, `join(value, sep="\n")`,
 `render_as_json(value, indent=2)`, `str`, `strip(s, chars=null)`, `lstrip`, `rstrip`,
 `replace(s, old, new)`. In bindings and conditions only: `len`, `split(s, sep=null)`,
 `startswith`, `endswith`, `int`, `float`, `round(x, n=null)`, `abs`, `min`, `max`, `sum`, `any`,
-`all`. They give Python's results, but with ASCII digits only, no `nan` and no digit limit, and
+`all`, `sorted(xs, by=null, reverse=false)`, `parse_json(s)` (untyped: check it with a constructor,
+`Finding(parse_json(s))`), and `keys`, `values` and `items` of a record, in key order. They give Python's results, but with ASCII digits only, no `nan` and no digit limit, and
 `str(x)` is the text `${x}` writes. A null argument fails the call: `${upper(name :- "")}`. See
 [Builtins](https://yian.readthedocs.io/expressions/#builtins).
 

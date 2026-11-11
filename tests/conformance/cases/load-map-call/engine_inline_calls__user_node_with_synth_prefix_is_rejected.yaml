@@ -17,7 +17,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: node id '__call_0' uses the reserved inline-call prefix '__call_'
+      message: "node id '__call_0' starts with '__', which yian keeps for the names it generates; rename it"
       frames:
       - label: flow.yaml
-        range: [7, 3, 7, 11]
+        range: [8, 5, 13, 1]

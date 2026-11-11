@@ -167,6 +167,9 @@ nodes:
 output: \${greet.output}
 `;
 
+/** What check_flow says of HELLO, as the model reads it. */
+const HELLO_CHECK = { ok: true, name: "hello", inputs: [{ name: "name", type: "str" }], error: null };
+
 /** A flow that asks which region at once. */
 const ASK = `id: ask
 name: ask
@@ -315,7 +318,7 @@ test(
       "as they were when the chat opened. read_flow and check_flow give its current state.",
     );
     expect(system).toContain(`<<<FLOW TEXT\n${HELLO}`);
-    expect(system).toContain("ok\nname: hello\ninputs:\n  name: str\nFLOW TEXT>>>");
+    expect(system).toContain(`\n\n${JSON.stringify(HELLO_CHECK)}\nFLOW TEXT>>>`);
     expect(system.replace(/\s+/g, " ")).toContain("between <<<FLOW TEXT and FLOW TEXT>>>");
   },
   TIMEOUT,
@@ -418,7 +421,7 @@ test(
     const { code } = await chatting;
     expect(code).toBe(0);
     const results = toolResults(model.requests[3]!);
-    expect(results[0]).toStartWith("ok\nname: hello");
+    expect(JSON.parse(results[0]!)).toEqual(HELLO_CHECK);
     expect(JSON.parse(results[1]!)).toMatchObject({ run: "r1" });
     expect(JSON.parse(results[2]!)).toMatchObject({
       run: "r1",

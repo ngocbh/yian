@@ -5,7 +5,7 @@
  */
 
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -513,6 +513,22 @@ test(
     // The cut run and the resume each started the recorded flow's server.
     expect(pids(pid)).toHaveLength(2);
     await expectNoChildren(pid);
+  },
+  SLOW,
+);
+
+test.skipIf(process.platform === "win32")(
+  "a user config others may write is refused before any server starts",
+  async () => {
+    const pid = marker();
+    const user = config(join(home, ".yian", "mcp.json"), { fake: stdio("--marker", pid) });
+    chmodSync(user, 0o664);
+
+    const result = await run([toolFlow()]);
+
+    expect(result.code).toBe(1);
+    expect(flat(result.output)).toContain(`${user}: the MCP config can be changed by other users`);
+    expect(existsSync(pid)).toBe(false);
   },
   SLOW,
 );

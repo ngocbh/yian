@@ -7,11 +7,12 @@
  * from the given environment at load.
  */
 
-import { readFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import process from "node:process";
 
 import type { Env } from "../defaults.ts";
-import { reprText } from "../diagnostics.ts";
+import { reprText, shellQuote } from "../diagnostics.ts";
 import { homeDir, isSystemError, warn as platformWarn } from "../platform.ts";
 import { type McpServer, mcpServer } from "../tools/mcp.ts";
 import { RESERVED_TOOL_NAMES } from "../tools/registry.ts";
@@ -60,21 +61,28 @@ export function userMcpConfig(env: Env): string {
  * is unset or empty, and `$$` to `$`; a default can't contain `$`, and any other `$` stays as
  * written.
  *
+ * The user's own config, `userConfig`, holds commands that run as this user, so it is read only
+ * when this user owns it (its target, for a symlink) and no one else may write it. Other files,
+ * which the command line names each time, aren't checked.
+ *
  * @param paths The config files to read, each of which must exist. Later files win.
  * @param env The variables `${VAR}` references expand from.
  * @param options `reserved` names no enabled server may take, such as the run's other tool ids
- *   (default none); `warn` receives each unknown-key warning (default yian's `warn`).
+ *   (default none); `warn` receives each unknown-key warning (default yian's `warn`);
+ *   `userConfig` is the path in `paths`, if any, that is the user's own config (`userMcpConfig`).
  * @returns The enabled servers by name, in a null-prototype record, each labelled with its name
  *   and not yet open. As in any JS record, integer-like names come first, then the rest in file order.
  * @throws {McpConfigError} When a file can't be read or isn't JSON, has no `mcpServers` object,
  *   or an entry isn't an object, has both or neither of `command` and `url`, has a value of the
  *   wrong type, a `type` that is unknown, `"sse"`, or disagrees with `command`/`url`, references an
  *   unset variable without a default or holds a `$` in a default, fails `mcpServer`'s checks, or
- *   when an enabled server's name is in `reserved`.
+ *   when an enabled server's name is in `reserved`; and when `userConfig` belongs to another user
+ *   or has a group or other write bit (not on Windows, which has neither).
  *
  * @example
  * const user = userMcpConfig(processEnv);
- * const servers = loadMcpConfig(statSync(user, { throwIfNoEntry: false })?.isFile() ? [user] : [], processEnv);
+ * const paths = statSync(user, { throwIfNoEntry: false })?.isFile() ? [user] : [];
+ * const servers = loadMcpConfig(paths, processEnv, { userConfig: user });
  */
 export function loadMcpConfig(
   paths: readonly string[],
@@ -82,13 +90,14 @@ export function loadMcpConfig(
   {
     reserved = [],
     warn = platformWarn,
-  }: { reserved?: Iterable<string>; warn?: (message: string) => void } = {},
+    userConfig,
+  }: { reserved?: Iterable<string>; warn?: (message: string) => void; userConfig?: string } = {},
 ): Record<string, McpServer> {
   // Null-prototype records, so a server named `__proto__` stays data.
   const servers: Record<string, McpServer> = Object.create(null);
   const sources: Record<string, string> = Object.create(null);
   for (const path of paths) {
-    for (const [name, entry] of Object.entries(readEntries(path))) {
+    for (const [name, entry] of Object.entries(readEntries(path, path === userConfig))) {
       const server = build(path, name, entry, env, warn);
       if (server === null) {
         delete servers[name];
@@ -110,11 +119,14 @@ export function loadMcpConfig(
   return servers;
 }
 
-/** Return the `mcpServers` object of the file at `path`. */
-function readEntries(path: string): JsonObject {
+/**
+ * Return the `mcpServers` object of the file at `path`; with `own`, only when this user owns the
+ * file and no one else may write it.
+ */
+function readEntries(path: string, own: boolean): JsonObject {
   let bytes: Buffer;
   try {
-    bytes = readFileSync(path);
+    bytes = own ? readOwnFile(path) : readFileSync(path);
   } catch (error) {
     if (!isSystemError(error)) throw error;
     throw new McpConfigError(`${path}: can't read the MCP config: ${osReason(error)}`, { cause: error });
@@ -144,6 +156,38 @@ function readEntries(path: string): JsonObject {
     throw new McpConfigError(`${path}: the MCP config needs an "mcpServers" object mapping names to servers`);
   }
   return servers;
+}
+
+/**
+ * Return the bytes of the file at `path`, which this user must own and no one else may write.
+ * The checks read the opened file, so a file swapped in after them is never read.
+ *
+ * @throws {McpConfigError} When another user owns the file or it has a group or other write bit.
+ * @throws the `fs` error of a failed open or read.
+ */
+function readOwnFile(path: string): Buffer {
+  // Non-blocking, so a FIFO swapped in can't hang the open; its read fails instead.
+  const fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+  try {
+    // Windows has no uid and no POSIX mode bits to check.
+    if (process.getuid !== undefined) {
+      const info = fstatSync(fd);
+      if (info.uid !== process.getuid()) {
+        throw new McpConfigError(
+          `${path}: the MCP config belongs to another user, and its commands would run as you; keep your own copy`,
+        );
+      }
+      if ((info.mode & 0o022) !== 0) {
+        throw new McpConfigError(
+          `${path}: the MCP config can be changed by other users, and its commands run as you; fix it with: ` +
+            `chmod go-w ${shellQuote(path)}`,
+        );
+      }
+    }
+    return readFileSync(fd);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** Return the server one entry describes, or `null` when it is disabled. */

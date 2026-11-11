@@ -23,6 +23,7 @@ import { createHash } from "node:crypto";
 
 import type { JsonObject, JsonValue } from "../../typesys/json.ts";
 import { encodeBody, mergeRequestBody, withAuthorWrapper } from "../body.ts";
+import { modelProfile } from "../capabilities.ts";
 import { type ErrorKind, kindForStatus, ProviderError } from "../errors.ts";
 import {
   type Event,
@@ -63,42 +64,6 @@ import { eventData, notIntMessage, tokenCount, usageOrProtocolError, wrongPart }
 export const PROTOCOL = "anthropic_messages";
 const NO_MEDIA = "the anthropic_messages route does not send media parts yet";
 const EMPTY_USER = "an empty user message was not sent; Anthropic rejects empty content";
-// The default `max_tokens` by exact model id, from langchain-anthropic 1.7.5's model profiles;
-// any other model gets 4096. Those profiles carry no limits for the Mythos models (not on
-// models.dev), so theirs are the 128K max output from Anthropic's model docs.
-const MAX_TOKENS: ReadonlyMap<string, bigint> = new Map([
-  ...[
-    "claude-haiku-4-5",
-    "claude-haiku-4-5-20251001",
-    "claude-opus-4-5",
-    "claude-opus-4-5-20251101",
-    "claude-sonnet-4-5",
-    "claude-sonnet-4-5-20250929",
-  ].map((model) => [model, 64000n] as const),
-  ...[
-    "claude-fable-5",
-    "claude-fable-5-1",
-    "claude-mythos-5",
-    "claude-mythos-5-1",
-    "claude-opus-4-6",
-    "claude-opus-4-7",
-    "claude-opus-4-8",
-    "claude-opus-5",
-    "claude-opus-5-5",
-    "claude-sonnet-4-6",
-    "claude-sonnet-5",
-    "claude-sonnet-5-5",
-  ].map((model) => [model, 128000n] as const),
-]);
-const DEFAULT_MAX_TOKENS = 4096n;
-// Models that accept a system message in the middle of the conversation (LangChain's list).
-const IN_PLACE_SYSTEM_PREFIXES = [
-  "claude-fable-5",
-  "claude-mythos-5",
-  "claude-opus-4-8",
-  "claude-opus-5",
-  "claude-sonnet-5-5",
-];
 // The `tool_choice` type for each choice yian names by string.
 const CHOICE_TYPES = { auto: "auto", required: "any", none: "none" } as const;
 // The tool ids the API accepts on `tool_use` and `tool_result`.
@@ -199,7 +164,7 @@ export class AnthropicMessages implements SseProtocol {
   }
 
   /**
-   * Build the Messages request body: `model`, `max_tokens` (the model's default), `messages`,
+   * Build the Messages request body: `model`, `max_tokens` (the model's profile's), `messages`,
    * `system` when there is one, `tools` and `tool_choice` when tools are sent,
    * `output_config: {format: {type: "json_schema", schema}}` when the request has an
    * `outputFormat` (its schema copied; its name and `strict` are not sent, the API having neither),
@@ -232,7 +197,7 @@ export class AnthropicMessages implements SseProtocol {
     const [system, messages] = this.#messages(request.messages.map((message) => withAuthorWrapper(message)));
     const body: JsonObject = {
       model: this.model,
-      max_tokens: MAX_TOKENS.get(this.model) ?? DEFAULT_MAX_TOKENS,
+      max_tokens: modelProfile(PROTOCOL, this.model).maxTokens,
       messages,
     };
     if (system !== null) body["system"] = system;
@@ -433,7 +398,7 @@ export class AnthropicMessages implements SseProtocol {
     const lastNonSystem = turns.findLastIndex(
       (turn) => turn.role === "assistant" || (turn.role === "user" && turn.blocks.some(isSendable)),
     );
-    const inPlace = IN_PLACE_SYSTEM_PREFIXES.some((prefix) => this.model.startsWith(prefix));
+    const inPlace = modelProfile(PROTOCOL, this.model).inPlaceSystem;
     let system: JsonValue | null = null;
     const rendered: JsonObject[] = [];
     // Later system messages held until the next rendered turn shows whether they stay in place.

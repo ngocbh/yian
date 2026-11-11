@@ -22,7 +22,7 @@
 
 import type { JsonObject, JsonValue } from "../../typesys/json.ts";
 import { encodeBody, mergeRequestBody, withAuthorWrapper } from "../body.ts";
-import { getCapabilities } from "../capabilities.ts";
+import { modelProfile } from "../capabilities.ts";
 import { type ErrorKind, ProviderError } from "../errors.ts";
 import {
   type Event,
@@ -143,20 +143,20 @@ export interface ChatOptions {
  * Return the request rules for a route, frozen.
  *
  * Only DeepSeek echoes reasoning, for any model. MiniMax's reasoning models get
- * `reasoning_split`. A named tool choice is sent unless the model's capabilities, read by model
- * name only, refuse it; Azure always sends it. Azure sends `parallel_tool_calls` only for a
+ * `reasoning_split`. A named tool choice is sent unless the model's profile (`modelProfile`),
+ * read by model name only, refuses it; Azure always sends it. Azure sends `parallel_tool_calls` only for a
  * deployment named `gpt-4o`.
  *
  * @param provider The route's provider name.
  * @param model The model name (the deployment name on Azure).
  */
 export function chatOptions(provider: string, model: string): ChatOptions {
-  const capabilities = getCapabilities(model);
+  const profile = modelProfile(PROTOCOL, model);
   const azure = provider === "azure";
   return Object.freeze({
     echoReasoningContent: provider === "deepseek",
-    reasoningSplit: (provider === "minimax" || provider === "minimax-cn") && capabilities.requiresReasoningSplit,
-    namedToolChoice: azure || capabilities.supportsToolChoice,
+    reasoningSplit: (provider === "minimax" || provider === "minimax-cn") && profile.reasoningSplit,
+    namedToolChoice: azure || profile.namedToolChoice,
     // LangChain's Azure client disables `parallel_tool_calls` for every deployment but `gpt-4o`;
     // kept so today's requests stay the same.
     sendParallelToolCalls: !azure || model === "gpt-4o",

@@ -1,48 +1,70 @@
-/** Tests for the per-model capability table in `src/llm/capabilities.ts`. */
+/** Tests for the model profile table in `src/llm/capabilities.ts`. */
 
 import { describe, expect, test } from "bun:test";
 
-import { getCapabilities, supportsNativeStructured } from "../../src/llm/capabilities.ts";
+import { modelProfile, supportsNativeStructured } from "../../src/llm/capabilities.ts";
+import { getKnownModels } from "../../src/llm_clients/model_catalog.ts";
 
-describe("getCapabilities", () => {
-  test("deepseek-reasoner rejects tool choice", () => {
-    const caps = getCapabilities("deepseek-reasoner");
-    expect(caps.supportsToolChoice).toBe(false);
-  });
+describe("modelProfile", () => {
+  const DEFAULT = { maxTokens: 4096n, inPlaceSystem: false, namedToolChoice: true, reasoningSplit: false, schemaAsTool: false };
 
-  test("MiniMax requires reasoning_split", () => {
-    expect(getCapabilities("MiniMax-M2.7").requiresReasoningSplit).toBe(true);
-  });
-
-  test("default model allows tool choice", () => {
-    const caps = getCapabilities("gpt-4o");
-    expect(caps.supportsToolChoice).toBe(true);
-    expect(caps.preferredStructuredMethod).toBe("function_calling");
-  });
-
-  test("forward-compat pattern", () => {
-    // An unseen deepseek-v5 or MiniMax-M3 variant inherits the thinking-mode quirks.
-    expect(getCapabilities("deepseek-v5-pro").supportsToolChoice).toBe(false);
-    expect(getCapabilities("MiniMax-M3").requiresReasoningSplit).toBe(true);
-  });
-
-  test("deepseek-chat allows tool choice", () => {
-    expect(getCapabilities("deepseek-chat").supportsToolChoice).toBe(true);
-  });
-
-  test("exact ids and patterns share profiles", () => {
-    expect(getCapabilities("deepseek-v4-pro")).toBe(getCapabilities("deepseek-reasoner"));
-    expect(getCapabilities("MiniMax-M2")).toBe(getCapabilities("MiniMax-M9"));
-  });
-
-  test("the catalog sentinel has no structured method", () => {
-    expect(getCapabilities("no-structured-sentinel").preferredStructuredMethod).toBe("none");
-  });
-
-  test("profiles are frozen", () => {
-    for (const model of ["deepseek-chat", "deepseek-reasoner", "MiniMax-M2.7", "gpt-4o", "no-structured-sentinel"]) {
-      expect(Object.isFrozen(getCapabilities(model))).toBe(true);
+  test("a model no row names gets the defaults, on every protocol", () => {
+    for (const protocol of ["anthropic_messages", "openai_chat", "openai_responses", "gemini"]) {
+      expect(modelProfile(protocol, "some-model")).toEqual(DEFAULT);
     }
+  });
+
+  test("an Anthropic model's rows combine, and rows of one protocol leave the others alone", () => {
+    expect(modelProfile("anthropic_messages", "claude-opus-5-5")).toEqual({
+      ...DEFAULT,
+      maxTokens: 128000n,
+      inPlaceSystem: true,
+      namedToolChoice: false,
+    });
+    expect(modelProfile("anthropic_messages", "claude-opus-5")).toEqual({ ...DEFAULT, maxTokens: 128000n, inPlaceSystem: true });
+    expect(modelProfile("openai_chat", "claude-opus-5-5")).toEqual(DEFAULT);
+    expect(modelProfile("anthropic_messages", "MiniMax-M2.7")).toEqual(DEFAULT);
+  });
+
+  test("max_tokens goes by exact id; the other Anthropic rows by prefix", () => {
+    expect(modelProfile("anthropic_messages", "claude-sonnet-4-5-20250929").maxTokens).toBe(64000n);
+    expect(modelProfile("anthropic_messages", "claude-sonnet-4-5-20990101").maxTokens).toBe(4096n);
+    expect(modelProfile("anthropic_messages", "claude-opus-5-5-20260101").namedToolChoice).toBe(false);
+    expect(modelProfile("anthropic_messages", "claude-mythos-5-20260101").inPlaceSystem).toBe(true);
+  });
+
+  test("DeepSeek's thinking models and MiniMax M2.x refuse a named tool choice; MiniMax splits reasoning", () => {
+    for (const model of ["deepseek-reasoner", "deepseek-v4-pro", "deepseek-v5-pro"]) {
+      expect(modelProfile("openai_chat", model)).toEqual({ ...DEFAULT, namedToolChoice: false });
+    }
+    for (const model of ["MiniMax-M2", "MiniMax-M2.7", "MiniMax-M3"]) {
+      expect(modelProfile("openai_chat", model)).toEqual({ ...DEFAULT, namedToolChoice: false, reasoningSplit: true });
+    }
+    expect(modelProfile("openai_chat", "deepseek-chat")).toEqual(DEFAULT);
+    expect(modelProfile("openai_chat", "MiniMax-Text-01")).toEqual(DEFAULT);
+  });
+
+  test.each(["gpt-3.5-turbo", "gpt-35-turbo", "gpt-4", "gpt-4-turbo", "gpt-4-0613"])("%s sends its schema as a tool", (model) => {
+    expect(modelProfile("openai_chat", model).schemaAsTool).toBe(true);
+  });
+
+  test.each(["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-40", "gpt-5", "gpt-5.5", "o3", "my-deploy", ""])(
+    "%p sends its schema as a JSON-schema format",
+    (model) => {
+      expect(modelProfile("openai_chat", model).schemaAsTool).toBe(false);
+    },
+  );
+
+  test("a profile is frozen", () => {
+    expect(Object.isFrozen(modelProfile("anthropic_messages", "claude-opus-5-5"))).toBe(true);
+    expect(Object.isFrozen(modelProfile("openai_chat", "gpt-4o"))).toBe(true);
+  });
+
+  // A catalog model missing from the table would fall back to 4096 and cut long outputs.
+  const claudes = getKnownModels()["anthropic"] ?? [];
+  test("every Anthropic catalog model has its own max_tokens", () => {
+    expect(claudes.length).toBeGreaterThan(0);
+    for (const model of claudes) expect(modelProfile("anthropic_messages", model).maxTokens, model).not.toBe(4096n);
   });
 });
 
@@ -53,8 +75,7 @@ describe("supportsNativeStructured", () => {
     expect(supportsNativeStructured("google", "gemini-3-pro")).toBe(true);
   });
 
-  test("known no-native model returns false", () => {
-    // The catalog sentinel: the one entry whose method is `none`.
+  test("the no-native sentinel returns false", () => {
     expect(supportsNativeStructured("vllm", "no-structured-sentinel")).toBe(false);
   });
 

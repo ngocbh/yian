@@ -253,7 +253,7 @@ test.each([
   const marked = { provider, model, _host_key: true };
   const built = await rejection(build(marked));
   expect(built).toBeInstanceOf(AuthError);
-  expect((built as AuthError).message).toMatch(/llm_config\.api_key/);
+  expect((built as AuthError).message).toMatch(/llmConfig\.api_key/);
   let error: unknown;
   try {
     splitModelConfig(marked);
@@ -261,7 +261,7 @@ test.each([
     error = caught;
   }
   expect(error).toBeInstanceOf(AuthError);
-  expect((error as AuthError).message).toMatch(/llm_config\.api_key/);
+  expect((error as AuthError).message).toMatch(/llmConfig\.api_key/);
   const [validated] = splitModelConfig({ ...marked, api_key: SENTINEL });
   expect(validated.apiKey).toBe(SENTINEL);
   expect(() => splitModelConfig({ ...marked, _host_key: "yes", api_key: SENTINEL })).toThrow(/marker/);

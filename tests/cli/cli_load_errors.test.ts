@@ -140,3 +140,33 @@ test("cli cycle error highlights both nodes", async () => {
   expect(err).toContain("a depends on b (a.input.x)");
   expect(err).toContain("b depends on a (b.input.y)");
 });
+
+/** Run `yian check flow.yaml ...args` on `text`; return the exit code, stdout and stderr. */
+async function checkCli(text: string, args: string[] = []): Promise<{ code: number; out: string; err: string }> {
+  const flow = join(tmp, "flow.yaml");
+  writeFileSync(flow, text);
+  const out: string[] = [];
+  const err: string[] = [];
+  const io: CliIo = {
+    stdout: { write: async (chunk) => void out.push(chunk) },
+    stderr: { write: async (chunk) => void err.push(chunk) },
+    stdin: new PassThrough(),
+    stderrStream: new PassThrough(),
+    env: (name) => (name === "HOME" ? tmp : undefined),
+  };
+  const code = await main(["check", flow, ...args], io);
+  return { code, out: out.join(""), err: err.join("") };
+}
+
+test.each([
+  ["an unclosed quote", 'id: t\nname: t\nkind: agent\nprompt: "unclosed\noutput: str\n', 4, [4, 9, 4, 10]],
+  ["an unclosed flow list", "id: x\nname: x\noutput: x\nnodes:\n  a: !str [1, 2\n", 5, [5, 11, 5, 12]],
+])("cli check boxes %s at its opener", async (_id, text, line, range) => {
+  const { code, err } = await checkCli(text);
+  expect(code).toBe(1);
+  expect(err).toContain(`flow.yaml:${line}`);
+
+  const json = await checkCli(text, ["--json"]);
+  expect(JSON.parse(json.out).flows[0].diagnostics[0].frames[0].range).toEqual(range);
+});
+

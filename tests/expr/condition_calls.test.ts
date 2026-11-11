@@ -342,12 +342,21 @@ test.each<[string, string]>([
   expect(loadErrorOf(text).message).toContain("expression function 'upper' takes (s): too many positional arguments");
 });
 
-test("a whole-span unknown call in an assert keeps the inline call message", () => {
+test("a whole-span unknown call in an assert is an unknown function", () => {
   expect(loadErrorOf(NODE_ASSERT.replace("<cond>", "${nosuchfn(n) > 0}")).message).toContain(
+    "node 'x' assert '${nosuchfn(n) > 0}': unknown expression function 'nosuchfn'",
+  );
+  expect(loadErrorOf(FLOW_ASSERT.replace("<cond>", "${lenght(input.v) > 0}")).message).toContain(
+    "assert: unknown expression function 'lenght'; did you mean 'len'?",
+  );
+});
+
+test("a whole-span call to a def in an assert keeps the inline call message", () => {
+  expect(loadErrorOf(NODE_ASSERT.replace("<cond>", "${step(n) > 0}")).message).toContain(
     "an inline call is not allowed in a node-local assert",
   );
-  expect(loadErrorOf(FLOW_ASSERT.replace("<cond>", "${nosuchfn(input.v) > 0}")).message).toContain(
-    "a flow call 'nosuchfn' inside ${...} is not supported",
+  expect(loadErrorOf(FLOW_ASSERT.replace("<cond>", "${step(input.v) > 0}")).message).toContain(
+    "a flow call 'step' inside ${...} is not supported",
   );
 });
 

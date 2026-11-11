@@ -1720,6 +1720,11 @@ export class CallableScope implements AssemblyScope {
     this.#private.set(flowId, new PrivateCallable(owner, label, builder));
   }
 
+  /** Whether `flowId` names a `defs:` callable or a `uses:` alias, which `call(...)` can run. */
+  has(flowId: string): boolean {
+    return Object.hasOwn(this.#defsSection, flowId) || Object.hasOwn(this.#uses, flowId);
+  }
+
   /**
    * Resolve one callable once, synchronously, for assembly.
    *

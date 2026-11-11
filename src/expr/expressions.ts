@@ -19,7 +19,7 @@
  * its operands' routes, so feedback on the value can go back to its sources.
  */
 
-import { compareCodeUnits, reprText } from "../diagnostics.ts";
+import { compareCodeUnits, getCloseMatches, reprText } from "../diagnostics.ts";
 import {
   BUILTIN_TYPE_NAMES,
   buildValueAs,
@@ -100,10 +100,16 @@ export function conversionHint(name: string): string {
  * Return the error text for a call to `name`, which is no builtin or type.
  *
  * @param name The callee.
- * @returns The message, with `conversionHint` for a builtin type name.
+ * @returns The message, with `conversionHint` for a builtin type name, else the closest builtin
+ *   when one is close (`getCloseMatches`'s cutoff): `unknown expression function 'lenght'; did you
+ *   mean 'len'?`.
  */
 export function unknownFunctionMessage(name: string): string {
-  return `unknown expression function ${reprText(name)}` + conversionHint(name);
+  const message = `unknown expression function ${reprText(name)}`;
+  const hint = conversionHint(name);
+  if (hint !== "") return message + hint;
+  const [close] = getCloseMatches(name, [...TEMPLATE_FNS.keys(), ISINSTANCE], 1);
+  return close === undefined ? message : `${message}; did you mean ${reprText(close)}?`;
 }
 
 /**

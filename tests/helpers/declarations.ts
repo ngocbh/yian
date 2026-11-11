@@ -282,6 +282,7 @@ function resolveFrom(scope: CallableScope, children: ChildFlows = {}): AssemblyS
     catalogBuilder: scope.catalogBuilder,
     memoryTypes: scope.memoryTypes,
     registerPrivate: (flowId, owner, label, build) => scope.registerPrivate(flowId, owner, label, build),
+    has: (flowId) => Object.hasOwn(children, flowId) || scope.has(flowId),
     resolve: (flowId) => (Object.hasOwn(children, flowId) ? children[flowId]! : scope.resolve(flowId)),
   };
 }

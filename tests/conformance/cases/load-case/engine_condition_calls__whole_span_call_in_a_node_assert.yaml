@@ -21,7 +21,7 @@ expect:
     - code: compose.load
       message: |-
         flow has invalid node asserts:
-          node 'x' assert '${nosuchfn(n) > 0}': an inline call is not allowed in a node-local assert (use a flow-level assert)
+          node 'x' assert '${nosuchfn(n) > 0}': unknown expression function 'nosuchfn'
       frames:
       - label: flow.yaml
         range: [14, 9, 14, 29]

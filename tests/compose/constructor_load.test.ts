@@ -434,10 +434,10 @@ test("a uses child resolves constructors against its own typedefs (runs)", async
   expect(result.output).toStrictEqual({ action: "hold" });
 });
 
-test("a flow call with several arguments keeps the flow call message", () => {
+test("a call with several arguments to an unknown name is an unknown function, not a constructor", () => {
   const error = loadError(() => loadedNodes(consumer("${review(d.output, d.output)}")));
 
-  expect(error.message).toContain("a flow call 'review' inside ${...} is not supported");
+  expect(error.message).toBe("c: unknown expression function 'review'");
 });
 
 test.each([
@@ -458,7 +458,7 @@ test("a parent cannot construct a child's typedef", async () => {
 
   const error = await loadErrorAsync(loadFlow(text, { childResolver: await usesResolver() }));
 
-  expect(error.message).toContain("a flow call 'Hold' inside ${...} is not supported");
+  expect(error.message).toContain("unknown expression function 'Hold'");
 });
 
 // ---------- builtin arguments ----------

@@ -103,6 +103,28 @@ output: \${gate.output}
   expect(loadError(() => load(text)).message).toBe(spanFlowCall("then"));
 });
 
+test("an unknown function in a span branch is no flow call", () => {
+  // `lenght` is neither a builtin nor a callable, so it reads as a typo, not as a flow to call.
+  const text = `
+id: bad
+name: bad
+input:
+  xs: !list(int)
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: "len(input.xs) > 1"
+        then: \${lenght(input.xs)}
+    else: other
+  other: !str other
+output: \${gate.output}
+`;
+  const error = loadError(() => load(text, {}));
+  expect(error.message).toBe("case node 'gate' then: unknown expression function 'lenght'; did you mean 'len'?");
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(lineOf(text, "then: ${lenght"));
+});
+
 test("call directive inside a span branch names the flow", () => {
   // `call` is the directive, not a flow: the hint names the flow it calls.
   const text = `

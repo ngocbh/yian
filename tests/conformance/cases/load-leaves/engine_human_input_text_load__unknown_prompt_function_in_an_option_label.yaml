@@ -20,7 +20,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: "ask: a flow call 'nosuch' inside ${...} is not supported — write it as the whole value with the call(...) directive: call(nosuch, ...)"
+      message: "ask: unknown expression function 'nosuch'"
       frames:
       - label: flow.yaml
         range: [11, 9, 16, 1]

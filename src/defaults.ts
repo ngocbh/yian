@@ -167,8 +167,9 @@ export const ENTRIES = Object.freeze([
     group: "setting",
     minimum: 0,
   }),
+  // Bounded, since each turn is a paid model call; at the cap the model still gives an answer.
   entry("AGENT_MAX_TOOL_ITERATIONS", {
-    default: -1,
+    default: 50,
     description: "AGENT tool-call turns when the node sets none; -1 is no cap",
     group: "setting",
     minimum: 1,

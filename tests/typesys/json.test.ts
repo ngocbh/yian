@@ -266,6 +266,54 @@ function own(key: string, value: unknown): Record<string, unknown> {
   return object;
 }
 
+/** The least of three timings of `run`, in milliseconds. */
+function fastest(run: () => unknown): number {
+  let best = Infinity;
+  for (let i = 0; i < 3; i++) {
+    const started = performance.now();
+    run();
+    best = Math.min(best, performance.now() - started);
+  }
+  return best;
+}
+
+describe("parseJson strings with escapes", () => {
+  test("an escape-dense string decodes as JSON.parse reads it, in a small multiple of a plain one's time", () => {
+    for (const unit of ['abé"', 'k\\"v', "\u{1F600}\n\t\"\\"]) {
+      const original = unit.repeat(1_000_000);
+      const text = JSON.stringify(original);
+      expect(parseJson(text, "plain")).toBe(original);
+      // Against plain text of the same length, which no escape slows, so the engine's state
+      // after earlier tests weighs on both alike.
+      const plain = JSON.stringify("x".repeat(original.length));
+      expect(fastest(() => parseJson(text, "plain"))).toBeLessThan(4 * fastest(() => parseJson(plain, "plain")) + 5);
+    }
+  });
+
+  test.each([
+    ['"\\ud83d\ude00 x"', "\u{1F600} x"],
+    ['"\\ud83d\\ude00"', "\u{1F600}"],
+    ['"a\\/b\\"c\\\\"', 'a/b"c\\'],
+    ['"\\u00e9\\u00E9\\b\\f\\n\\r\\t"', "éé\b\f\n\r\t"],
+  ])("a string with escapes reads as JSON.parse reads it: %j", (text, expected) => {
+    expect(parseJson(text, "plain")).toBe(expected);
+    expect(parseJson(text, "plain")).toBe(JSON.parse(text));
+  });
+
+  test.each([
+    ['"\\ud800"', "string has an unpaired surrogate", 0],
+    ['["a\\n", "\\x"]', "Invalid \\escape", 9],
+    ['"\\u12"', "Invalid \\uXXXX escape", 2],
+    ['"\\u12', "Invalid \\uXXXX escape", 2],
+    ['"a\\nb\u0001"', "Invalid control character at", 5],
+    ['"a\\nb', "Unterminated string starting at", 0],
+    ['"a\\', "Unterminated string starting at", 0],
+    ['{"k\\n": "v\\q"}', "Invalid \\escape", 10],
+  ])("a bad string with escapes fails as before: %j", (text, reason, position) => {
+    expectError(text, reason, position);
+  });
+});
+
 describe("canonicalJson", () => {
   test("writes JCS", () => {
     // U+10000 is the code units D800 DC00, so it sorts before U+E000 though its code point is higher.
@@ -351,6 +399,12 @@ describe("logJson", () => {
     } finally {
       BigInt.prototype.toString = original;
     }
+  });
+
+  test("refuses the first bad part in writing order, an object's keys before its values", () => {
+    expectRefusal(logJson, [1n, [NaN], "\ud800"], "NaN is not valid canonical JSON");
+    expectRefusal(logJson, { a: NaN, "\ud800": 1n }, "Unicode surrogate is not valid canonical JSON");
+    expectRefusal(logJson, { a: [1n, Symbol("s")], b: NaN }, "symbol is not a canonical JSON value");
   });
 
   test("logJson equals canonicalJson without floats and big ints", () => {

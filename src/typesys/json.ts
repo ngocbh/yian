@@ -106,8 +106,54 @@ function hex4(text: string, pos: number): number {
   return value;
 }
 
-/** Return the string whose opening quote is at `quote`, and the index after its closing quote. */
+/**
+ * Return the string whose opening quote is at `quote`, and the index after its closing quote.
+ *
+ * It finds the closing quote first: a string without escapes is its slice, and one with escapes
+ * what `JSON.parse` reads, which follows the same rules and builds no rope of pieces. Anything
+ * that isn't a closed string of valid escapes is read by `scanStringSlowly`, for its exact error.
+ */
 function scanString(text: string, quote: number): [string, number] {
+  const found = closingQuote(text, quote);
+  if (found >= 0) return [text.slice(quote + 1, found), found + 1];
+  if (found !== -1) {
+    const end = ~found;
+    try {
+      return [JSON.parse(text.slice(quote, end + 1)) as string, end + 1];
+    } catch {
+      // The slow reader names what is wrong.
+    }
+  }
+  return scanStringSlowly(text, quote);
+}
+
+/**
+ * Return the index of the closing quote of the string whose opening quote is at `quote`: as is
+ * when the string holds no backslash, as its bitwise NOT (`~end`, at most -2) when it does; -1
+ * when a raw control character or the end of the text comes first.
+ *
+ * It never throws, so the engine keeps this loop, which every string runs through, optimized
+ * even after bad strings make `JSON.parse` throw in `scanString`.
+ */
+function closingQuote(text: string, quote: number): number {
+  let end = quote + 1;
+  let escaped = false;
+  for (;;) {
+    while (end < text.length) {
+      const c = text.charCodeAt(end);
+      if (c === 0x22 || c === 0x5c || c < 0x20) break;
+      end++;
+    }
+    if (end >= text.length || text.charCodeAt(end) < 0x20) return -1;
+    if (text.charCodeAt(end) === 0x22) return escaped ? ~end : end;
+    // A backslash: its escape's second unit is never the string's closing quote.
+    escaped = true;
+    end += 2;
+  }
+}
+
+/** `scanString`, one escape at a time, with the reason and position of what is wrong. */
+function scanStringSlowly(text: string, quote: number): [string, number] {
   let out = "";
   let pos = quote + 1;
   for (;;) {
@@ -299,8 +345,10 @@ export function parseJson(text: string, mode: JsonMode): JsonValue {
   }
 }
 
-/** One step of writing: a value and the text before it, or a container closing and leaving the active path. */
-type Task = { value: unknown; before: string } | { leave: object; close: string };
+/** A container being written: its entries (an object's keys already quoted), the next one, and its close. */
+type WriteFrame =
+  | { readonly array: readonly unknown[]; index: number }
+  | { readonly object: object; readonly keys: readonly string[]; readonly values: readonly unknown[]; index: number; readonly close: string };
 
 const MAX_SAFE = 2n ** 53n - 1n;
 
@@ -347,16 +395,9 @@ function write(root: unknown, number: (n: number | bigint) => string): string {
   let out = "";
   // Ancestors only, so a shared sub-value writes twice and only a cycle is refused.
   const active = new Set<object>();
-  const stack: Task[] = [{ value: root, before: "" }];
-  while (stack.length > 0) {
-    const task = stack.pop()!;
-    if ("leave" in task) {
-      out += task.close;
-      active.delete(task.leave);
-      continue;
-    }
-    const { value } = task;
-    out += task.before;
+  const stack: WriteFrame[] = [];
+  /** Write a scalar `value` at once, or open a container and push it, to be written in turn. */
+  const visit = (value: unknown): void => {
     if (value === null) {
       out += "null";
     } else if (typeof value === "boolean") {
@@ -376,9 +417,7 @@ function write(root: unknown, number: (n: number | bigint) => string): string {
     } else if (Array.isArray(value)) {
       if (active.has(value)) throw new TypeError("cyclic container cannot be canonicalized");
       active.add(value);
-      stack.push({ leave: value, close: "]" });
-      // Pushed last to first so they pop in order; a hole reads as `undefined` and is refused.
-      for (let i = value.length - 1; i >= 0; i--) stack.push({ value: value[i], before: i > 0 ? "," : "" });
+      stack.push({ array: value, index: 0 });
       out += "[";
     } else {
       const proto = Object.getPrototypeOf(value);
@@ -401,11 +440,34 @@ function write(root: unknown, number: (n: number | bigint) => string): string {
       const escaped =
         keys.length === 1 &&
         (keys[0] === "$record" || (keys[0] === "$float" && (values[0] === "inf" || values[0] === "-inf")));
-      stack.push({ leave: value, close: escaped ? "}}" : "}" });
-      for (let i = keys.length - 1; i >= 0; i--) {
-        stack.push({ value: values[i], before: `${i > 0 ? "," : ""}${quote(keys[i]!)}:` });
-      }
+      // Quoted as the object opens, so a bad key is refused before any of its values.
+      stack.push({ object: value, keys: keys.map(quote), values, index: 0, close: escaped ? "}}" : "}" });
       out += escaped ? '{"$record":{' : "{";
+    }
+  };
+  visit(root);
+  while (stack.length > 0) {
+    const frame = stack.at(-1)!;
+    const i = frame.index++;
+    if ("array" in frame) {
+      if (i === frame.array.length) {
+        out += "]";
+        active.delete(frame.array);
+        stack.pop();
+        continue;
+      }
+      if (i > 0) out += ",";
+      // A hole reads as `undefined` and is refused.
+      visit(frame.array[i]);
+    } else {
+      if (i === frame.keys.length) {
+        out += frame.close;
+        active.delete(frame.object);
+        stack.pop();
+        continue;
+      }
+      out += `${i > 0 ? "," : ""}${frame.keys[i]!}:`;
+      visit(frame.values[i]);
     }
   }
   return out;
@@ -433,12 +495,40 @@ export function eventBytes(value: unknown): number {
  * is checked. An explicit stack walks it, so any depth works.
  */
 export function freezeParsed<T extends JsonValue>(root: T): T {
-  const stack: JsonValue[] = [root];
-  while (stack.length > 0) {
-    const value = stack.pop()!;
-    if (typeof value !== "object" || value === null) continue;
-    Object.freeze(value);
-    for (const item of Object.values(value)) stack.push(item);
-  }
+  freezeTree(root, false);
   return root;
+}
+
+/**
+ * Freeze `root`, a fresh value `parseJson` returned, as `freezeParsed` does, when each object in
+ * it holds its keys in code-unit order, as a canonical copy of it would; return whether it did. A
+ * tree with an object out of that order may be left part frozen.
+ */
+export function freezeIfCanonical(root: JsonValue): boolean {
+  return freezeTree(root, true);
+}
+
+/** Freeze every container of `root`; with `sorted`, stop and return `false` at an object whose keys aren't in code-unit order. */
+function freezeTree(root: JsonValue, sorted: boolean): boolean {
+  if (typeof root !== "object" || root === null) return true;
+  // Only containers are pushed: walking every scalar of a large list costs more than freezing it.
+  const stack: (JsonValue[] | JsonObject)[] = [root];
+  while (stack.length > 0) {
+    const container = stack.pop()!;
+    Object.freeze(container);
+    if (Array.isArray(container)) {
+      for (let i = 0; i < container.length; i++) {
+        const item = container[i];
+        if (typeof item === "object" && item !== null) stack.push(item);
+      }
+      continue;
+    }
+    const keys = Object.keys(container);
+    for (let i = 0; i < keys.length; i++) {
+      if (sorted && i > 0 && !(keys[i - 1]! < keys[i]!)) return false;
+      const item = container[keys[i]!]!;
+      if (typeof item === "object" && item !== null) stack.push(item);
+    }
+  }
+  return true;
 }

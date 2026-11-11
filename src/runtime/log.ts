@@ -19,13 +19,21 @@ import { compareCodeUnits, Failure, OriginRef, reprText } from "../diagnostics.t
 import { retainFailure } from "../nodes/base.ts";
 import { type FileLock, FileLockError, isLocked, lockFile, syncFolder, VERSION } from "../platform.ts";
 import { isExactly } from "../nodes/contracts.ts";
-import { freezeParsed, JSONDecodeError, type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
+import {
+  freezeIfCanonical,
+  freezeParsed,
+  JSONDecodeError,
+  type JsonObject,
+  type JsonValue,
+  logJson,
+  parseJson,
+} from "../typesys/json.ts";
 import {
   buildValue,
   buildValueAs,
   type Type,
   TypedValue,
-  type ValueKind,
+  ValueKind,
 } from "../typesys/index.ts";
 import { formatRecordTime as recordTimeText, RECORD_TIME } from "../typesys/temporal.ts";
 import { isList, isRecord, jsonPart, requireFields, valueRepr, writeAsText } from "../typesys/values.ts";
@@ -84,6 +92,20 @@ export function canonicalSeed(value: unknown): [JsonValue, JsonValue] {
  */
 function canonicalCopy(value: unknown): JsonValue {
   return parseJson(logJson(value), "codec");
+}
+
+/**
+ * The typed wires and steps a record decoder built from a line it just parsed: fresh trees no one
+ * else holds, which a record may freeze and keep in place of a canonical copy.
+ */
+const FRESH = new WeakSet<object>();
+
+/**
+ * Freeze `value` in place and return it when a decoder just parsed it (`FRESH`) and its objects
+ * hold their keys in code-unit order, as a canonical copy would; else return `null`.
+ */
+function freshCanonical<T extends JsonObject>(value: T): T | null {
+  return FRESH.has(value) && freezeIfCanonical(value) ? value : null;
 }
 
 /**
@@ -777,7 +799,9 @@ export class NodeStepRecord {
     if (n < 1) throw new RangeError("node step n must be at least 1");
     this.n = n;
     if (!isRecord(step)) throw new TypeError("node step must be a JSON object");
-    this.step = freezeParsed(canonicalCopy(jsonPart(step, [], "refuse")) as JsonObject);
+    // A parsed step holds only JSON, which `jsonPart` takes unchanged.
+    this.step =
+      freshCanonical(step as JsonObject) ?? freezeParsed(canonicalCopy(jsonPart(step, [], "refuse")) as JsonObject);
     const kind = this.step["kind"];
     if (typeof kind !== "string" || kind === "") throw new TypeError("node step kind must be a non-empty string");
     Object.freeze(this);
@@ -839,8 +863,7 @@ export class PoolCommitRecord {
   ) {
     this.nodeId = requireName(nodeId, "node_id");
     this.key = requireName(key, "key");
-    this.value =
-      value === null ? null : (freezeParsed(canonicalCopy(TypedValue.fromWire(value).toWire())) as TypedWire);
+    this.value = value === null ? null : committedWire(value);
     this.from = validatedFrom(options.from ?? null);
     this.take = options.take == null ? null : validatedTake(options.take);
     this.steps = options.steps == null ? null : validatedSteps(options.steps);
@@ -849,6 +872,25 @@ export class PoolCommitRecord {
     }
     Object.freeze(this);
   }
+}
+
+/** The kinds whose decoded value is a reference object, which a wire holds as its mapping. */
+const REF_KINDS: ReadonlySet<string> = new Set([ValueKind.FILE, ValueKind.INBOX, ValueKind.MEMORY]);
+
+/**
+ * Return `value`'s deep-frozen canonical typed wire, after checking it holds its kind. A wire a
+ * decoder just parsed is kept in place, unless it holds a reference or keys out of order.
+ *
+ * @throws RangeError when `value` isn't a typed-value wire form.
+ * @throws TypeCheckError when the value holds NaN or another non-JSON value.
+ */
+function committedWire(value: TypedWire): TypedWire {
+  const typed = TypedValue.fromWire(value);
+  if (!REF_KINDS.has(typed.kind)) {
+    const kept = freshCanonical(value as unknown as JsonObject);
+    if (kept !== null) return kept as unknown as TypedWire;
+  }
+  return freezeParsed(canonicalCopy(typed.toWire())) as TypedWire;
 }
 
 /** A take commit's pointer form: the events it consumed from its inbox. Frozen. */
@@ -2723,10 +2765,13 @@ const RECORD_CODECS: readonly RecordCodec[] = [
     encode: (record) => ({ node_id: record.nodeId, n: BigInt(record.n), step: record.step as JsonObject }),
     decode: (payload, label) => {
       requireFields(payload, ["node_id", "n", "step"], label);
+      const step = wireObject(payload["step"], `${label} step`);
+      // Decoders only ever get a payload the line's parse just built.
+      FRESH.add(step);
       return new NodeStepRecord(
         requireName(payload["node_id"], `${label} node_id`),
         wireInt(payload["n"], `${label} n`),
-        wireObject(payload["step"], `${label} step`),
+        step,
       );
     },
     nodeId: payloadNodeId,
@@ -2756,10 +2801,15 @@ const RECORD_CODECS: readonly RecordCodec[] = [
             ? "take"
             : "value";
       requireFields(payload, ["node_id", "key", ...POOL_COMMIT_FORM_FIELDS[form]], label);
+      let wire: TypedWire | null = null;
+      if (form === "value") {
+        wire = { kind: payload["kind"], value: payload["value"] } as TypedWire;
+        FRESH.add(wire);
+      }
       return new PoolCommitRecord(
         requireName(payload["node_id"], `${label} node_id`),
         requireName(payload["key"], `${label} key`),
-        form === "value" ? ({ kind: payload["kind"], value: payload["value"] } as TypedWire) : null,
+        wire,
         {
           from: form === "from" ? fromFromPayload(payload["from"], `${label} from`) : null,
           take: form === "take" ? takeFromPayload(payload, label) : null,

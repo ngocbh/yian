@@ -463,13 +463,17 @@ describe("parseType", () => {
     expect(parseType("Any")).toEqual(scalar("Any"));
   });
 
-  test("lists and topics", () => {
+  test("lists", () => {
     expect(parseType("List(float)")).toEqual(list(scalar("float")));
     expect(parseType("list(str)")).toEqual(list(scalar("str")));
-    expect(parseType("topics")).toEqual(list(scalar("str")));
     expect(parseType("List(Rating)")).toEqual(list(ref("Rating")));
     expect(parseType("List(int)")).toEqual(list(scalar("int")));
     expect(parseType("list(Rating)")).toEqual(list(ref("Rating")));
+  });
+
+  test("the retired topics name is refused with its spelling", () => {
+    expect(parseError("topics")).toBe("unknown type 'topics'; write list(str)");
+    expect(parseError("Optional(topics)")).toBe("unknown type 'topics'; write list(str)");
   });
 
   test("references", () => {
@@ -524,7 +528,6 @@ describe("parseType", () => {
     ["None", scalar("None")],
     ["none", scalar("None")],
     ["Optional(None)", optional(scalar("None"))],
-    ["topics", list(scalar("str"))],
     ["Literal('a'\n)", literal("a")],
   ] as const)("parenthesized syntax %p", (text, expr) => {
     expect(parseType(text)).toEqual(expr);

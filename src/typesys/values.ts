@@ -538,6 +538,17 @@ function locatedError(where: string, path: ValuePath, reason: string): TypeCheck
 /** Why text or a record key holding a lone surrogate is not a yian value. */
 const LONE_SURROGATE_REASON = "text holding a lone surrogate is not a yian value";
 
+/**
+ * Return why `value`, a part `fromHost` or `jsonPart` refuses, is not a yian value, in the one
+ * wording both use: `undefined` (an array hole too) gets the hint to use null, NaN and text holding
+ * a lone surrogate are named, and anything else (a `Date`, a `Map`, a class instance, a `Proxy`, a
+ * symbol, a function) is named by its type.
+ */
+function notAValueReason(value: unknown): string {
+  if (value === undefined) return "undefined is not a yian value; use null";
+  return nonValueReason(value) ?? `${jsTypeName(value)} is not a yian value`;
+}
+
 /** An open array or record in host intake, with the fresh copy being filled. */
 interface HostFrame {
   readonly source: Record<string | number, unknown>;
@@ -605,16 +616,16 @@ export function fromHost(value: unknown, where: string): Value {
       case "bigint":
         return item;
       case "string":
-        return item.isWellFormed() ? item : fail(LONE_SURROGATE_REASON, ...at);
+        return item.isWellFormed() ? item : fail(notAValueReason(item), ...at);
       case "number":
-        if (Number.isNaN(item)) fail("NaN is not a yian value", ...at);
+        if (Number.isNaN(item)) fail(notAValueReason(item), ...at);
         return Number.isSafeInteger(item) ? BigInt(item) : item;
       case "undefined":
-        return fail("undefined is not a yian value; use null", ...at);
+        return fail(notAValueReason(item), ...at);
     }
     // Checked first: every later check (FileRef.isFileRef, isList, isRecord, jsTypeName) could
     // run a trap.
-    if (types.isProxy(item)) fail("Proxy is not a yian value", ...at);
+    if (types.isProxy(item)) fail(notAValueReason(item), ...at);
     if (item === null || FileRef.isFileRef(item) || InboxRef.isInboxRef(item) || MemoryRef.isMemoryRef(item)) {
       return item;
     }
@@ -632,7 +643,7 @@ export function fromHost(value: unknown, where: string): Value {
       stack.push({ source, keys, size, key, copy, index: 0 });
       return copy;
     }
-    return fail(`${jsTypeName(item)} is not a yian value`, ...at);
+    return fail(notAValueReason(item), ...at);
   };
 
   const root = enter(value, null);
@@ -2476,6 +2487,9 @@ interface JsonFrame {
  * Return `root` as a JSON value: `null`, a boolean, a `bigint`, a `number`, text, and lists and
  * records of those, with `FileRef`s, `InboxRef`s and `MemoryRef`s handled as `files` says.
  *
+ * `root` is a yian value: one `fromHost` took in, or one yian built. The walk reads entries as
+ * plain properties, so a host value with a getter or a `Proxy` must go through `fromHost` first.
+ *
  * `-0` becomes `0`, and under `"mapping"` each `FileRef` (the root too) becomes its mapping
  * `{uri, mime, name}`, each `InboxRef` its mapping `{inbox}` and each `MemoryRef` its mapping
  * `{memory}`; `"object"` maps files and handles but refuses a `MemoryRef`. Only the containers on the
@@ -2483,12 +2497,12 @@ interface JsonFrame {
  * shared by two parents is walked once. The walk uses an explicit stack, so any depth works;
  * nesting depth is left to the boundaries.
  *
- * @throws TypeCheckError at the bad part's path, the first depth-first in order: NaN or text
- *   holding a lone surrogate (a key: at its record's path) is not a yian value; `undefined` or
- *   a list hole is `undefined is not a JSON value`; a container inside itself is `value
- *   contains itself` at the entry holding it; anything else (a `Date`, a `Map`, a class
- *   instance, a `FileRef`, `InboxRef` or `MemoryRef` under `"refuse"`) is `<valueRepr> is not a
- *   JSON value`.
+ * @throws TypeCheckError at the bad part's path, the first depth-first in order, with the reason
+ *   `fromHost` gives: `undefined` or a list hole is `undefined is not a yian value; use null`, NaN
+ *   or text holding a lone surrogate (a key: at its record's path) is not a yian value, and so is
+ *   anything else (a `Date`, a `Map`, a class instance: `<Name> is not a yian value`); a container
+ *   inside itself is `value contains itself` at the entry holding it; a `FileRef`, `InboxRef` or
+ *   `MemoryRef` under `"refuse"` is `<valueRepr> is not a JSON value`.
  */
 export function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value {
   const stack: JsonFrame[] = [];
@@ -2536,8 +2550,7 @@ export function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value
       active.add(value);
       return undefined;
     }
-    if (value === undefined) fail(key, "undefined is not a JSON value");
-    return fail(key, `${valueRepr(value)} is not a JSON value`);
+    return fail(key, notAValueReason(value));
   };
 
   /** Record that `frame`'s last-read entry, holding `original`, stores `stored`. */

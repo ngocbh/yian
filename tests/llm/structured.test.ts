@@ -1,7 +1,7 @@
 /**
  * Tests for `src/llm/structured.ts`, choosing how a structured call is sent and reading the JSON
  * object from the reply: `structuredTarget`, `planStructured` (one test per row of the selection
- * table, first match wins), `forcesTool` and `sendsJsonSchemaAsTool`; a plan's `apply` to a
+ * table, first match wins) and the forced tool on Anthropic; a plan's `apply` to a
  * request, its `instruction` and `correction` texts, and `parse` of tool and text replies, with
  * `parseObjectReply`; `StructuredOutputError` and `MissingToolCallError`; and that `typeToSchema`
  * emits the schema copies used here.
@@ -42,12 +42,9 @@ import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
 import { OpenAIResponses } from "../../src/llm/protocols/openai_responses.ts";
 import { Route } from "../../src/llm/route.ts";
 import {
-  FORCED_TOOL_REFUSING_PREFIXES,
-  forcesTool,
   MissingToolCallError,
   parseObjectReply,
   planStructured,
-  sendsJsonSchemaAsTool,
   type Strategy,
   StructuredOutputError,
   type StructuredPlan,
@@ -562,22 +559,14 @@ describe("planStructured: a date or datetime field's format hint reaches every r
   });
 });
 
-describe("forcesTool and sendsJsonSchemaAsTool", () => {
-  test("the refusing prefixes", () => {
-    expect([...FORCED_TOOL_REFUSING_PREFIXES]).toEqual([
-      "claude-fable-5-1",
-      "claude-opus-5-5",
-      "claude-sonnet-5-5",
-      "claude-mythos-5-1",
-    ]);
-  });
+describe("the forced tool on Anthropic", () => {
+  const REFUSING = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-mythos-5-1"];
+  const anthropic = (model: string) =>
+    planStructured(target({ provider: "anthropic", model, protocol: "anthropic_messages" }), REC).strategy;
 
-  test.each([...FORCED_TOOL_REFUSING_PREFIXES.flatMap((p) => [p, `${p}-20260101`]), "claude-opus-5-50"])(
-    "%s refuses a forced tool",
-    (model) => {
-      expect(forcesTool(model)).toBe(false);
-    },
-  );
+  test.each([...REFUSING.flatMap((p) => [p, `${p}-20260101`]), "claude-opus-5-50"])("%s refuses a forced tool", (model) => {
+    expect(anthropic(model)).toBe("unforced_tool");
+  });
 
   test.each([
     "claude-opus-5",
@@ -588,19 +577,8 @@ describe("forcesTool and sendsJsonSchemaAsTool", () => {
     "claude-sonnet-4-5",
     "claude-haiku-4-5",
   ])("%s accepts a forced tool", (model) => {
-    expect(forcesTool(model)).toBe(true);
+    expect(anthropic(model)).toBe("forced_tool");
   });
-
-  test.each(["gpt-3.5-turbo", "gpt-35-turbo", "gpt-4", "gpt-4-turbo", "gpt-4-0613"])("%s is legacy", (model) => {
-    expect(sendsJsonSchemaAsTool(model)).toBe(true);
-  });
-
-  test.each(["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-40", "gpt-5", "gpt-5.5", "o3", "my-deploy", ""])(
-    "%p is not legacy",
-    (model) => {
-      expect(sendsJsonSchemaAsTool(model)).toBe(false);
-    },
-  );
 });
 
 describe("structuredTarget", () => {

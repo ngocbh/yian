@@ -146,8 +146,8 @@ const ALLOWED: Record<string, string> = {
   "llm/errors.ts: MAX_RETRY_AFTER_SECONDS": "provider retry-after cap, as openai's",
   "llm/errors.ts: OVERFLOW_RETRY_AFTER": "one past the retry-after cap, so an overflowing delay is refused",
   "llm/executor.ts: MAX_RETRY_DELAY_SECONDS": "longest model retry backoff, as openai's",
-  "llm/protocols/anthropic_messages.ts: MAX_TOKENS": "Anthropic's max_tokens per model, a provider contract",
-  "llm/protocols/anthropic_messages.ts: DEFAULT_MAX_TOKENS": "Anthropic's max_tokens for other models, a provider contract",
+  "llm/capabilities.ts: ROWS": "per-model API quirks, such as Anthropic's max_tokens per model, a provider contract",
+  "llm/capabilities.ts: DEFAULT_PROFILE": "Anthropic's max_tokens for other models, a provider contract",
 };
 
 // Files whose int literals are all outside the scan's scope.

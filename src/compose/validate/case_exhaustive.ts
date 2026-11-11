@@ -16,7 +16,8 @@
  *
  * One membership law for `on:`-form `when:` values (`checkCaseWhenValues`): where the `on:` type
  * is known, every `when:` value must be a possible member of it (compared exactly: no text
- * conversion, a bool is not a number), even when the case has an `else:`. A value that can never
+ * conversion, a bool is not a number), even when the case has an `else:`, and of the type the
+ * case's narrowed view gives it, which coverage uses too. A value that can never
  * equal the `on:` value is a `LoadError` naming the value, the type, and the fix. Two `when:`
  * values that are equal (typed equality, `onMatchKey`) are a `LoadError` at the later one, for
  * every `on:`-form case, since the later one never matches.
@@ -42,6 +43,7 @@ import {
   canonicalTypeLabel,
   type Type,
   TypeCheckError,
+  typeEquals,
   ValueKind,
   writeAsText,
 } from "../../typesys/values.ts";
@@ -116,19 +118,21 @@ export function checkCaseExhaustive(
  * A `when:` value is a member of the `on:` type when the type accepts it as is: text is never
  * converted, a bool is not a number, an int fits a float, and `Literal` tags and numeric bounds
  * apply. The `on:` ref resolves against the unnarrowed producers and flow inputs first, then the
- * case's narrowed view, so a field only a branch's members have is checked too. A case whose `on:`
- * type is unknown or `object` gets no membership check (duplicates are still rejected).
+ * case's narrowed view, so a field only a branch's members have is checked too. A value that is a
+ * member of the unnarrowed type but not of the narrowed one never matches: the branches that reach
+ * the case rule it out, as the coverage check sees. A case whose `on:` type is unknown or `object`
+ * gets no membership check (duplicates are still rejected).
  *
  * @param descriptors The level's node descriptors by id. Non-CASE and searched CASE descriptors
  *   are ignored.
  * @param producers Each producer node's output contract by id.
  * @param flowInputs The flow-input contracts by name.
- * @param options.narrowing Per-node narrowed views, tried when the unnarrowed `on:` type is
- *   unknown.
+ * @param options.narrowing Per-node narrowed views: the `on:` type when the unnarrowed one is
+ *   unknown, and the members a branch rules out.
  * @param options.diagnostics Source ownership for located errors and the authored `when:` text.
  * @throws LoadError when two `when:` values are equal (typed equality), located at the later one;
- *   or when a `when:` value can never be a member of its case's `on:` type, located at the first
- *   such value in source order.
+ *   or when a `when:` value can never be a member of its case's `on:` type, or of its narrowed
+ *   view, located at the first such value in source order.
  *
  * @example
  * A case `route` with `on: ${input.n}` over `n: !int` and `when: "1"` fails with
@@ -146,12 +150,21 @@ export function checkCaseWhenValues(
   for (const desc of descriptors.values()) {
     if (!(desc instanceof CaseDescriptor) || desc.on === null) continue;
     checkDuplicateWhens(desc, diagnostics);
-    let typ = resolveOnType(desc.on, producers, flowInputs);
-    if (typ === null && narrowing !== null) typ = resolveOnType(desc.on, ...narrowing.forNode(desc.id));
+    const narrowed = narrowing === null ? null : resolveOnType(desc.on, ...narrowing.forNode(desc.id));
+    const typ = resolveOnType(desc.on, producers, flowInputs) ?? narrowed;
     if (typ === null || typ.kind === ValueKind.OBJECT) continue;
+    // The branch view, when it rules out values the `on:` type has.
+    const view =
+      narrowed !== null && narrowed.kind !== ValueKind.OBJECT && !typeEquals(narrowed, typ) ? narrowed : null;
     for (const [index, spec] of desc.cases.entries()) {
       const range = whenRange(desc, index);
-      const message = whenValueError(desc.on, spec["when"], typ, sourceText(diagnostics, range));
+      const src = sourceText(diagnostics, range);
+      let message = whenValueError(desc.on, spec["when"], typ, src);
+      if (message === null && view !== null && whenValueError(desc.on, spec["when"], view, src) !== null) {
+        message =
+          `\`when: ${src || spelling(spec["when"])}\` never matches: the branches that reach this case rule ` +
+          `it out, so \`on: ${desc.on}\` is \`${canonicalTypeLabel(view)}\` here; remove it`;
+      }
       if (message !== null) {
         throw diagnostics.error(`case node ${reprText(desc.id)}: ${message}`, { range: range ?? desc.range });
       }

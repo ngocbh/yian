@@ -620,7 +620,7 @@ test("a defensive else after every tag loads and is not narrowed", () => {
   expect(message).toContain(`node 'e' input 'l' from: ${LIMIT_ERROR}`);
 });
 
-test("a contradictory nested case target is not narrowed", () => {
+test("a nested case's when the outer branch rules out is a load error", () => {
   const branches = [
     caseNode("route", ON, [["buy", "inner"]], "e"),
     caseNode("inner", ON, [
@@ -630,9 +630,11 @@ test("a contradictory nested case target is not narrowed", () => {
     code("t1"),
     code("e"),
   ];
-  load(flow(...branches, code("t", { a: "${d.output.action}" })));
-  const message = assembleError(flow(...branches, code("t", { l: "${d.output.limit}" })));
-  expect(message).toContain(`node 't' input 'l' from: ${LIMIT_ERROR}`);
+  const message = assembleError(flow(...branches, code("t", { a: "${d.output.action}" })));
+  expect(message).toBe(
+    "case node 'inner': `when: sell` never matches: the branches that reach this case rule it out, " +
+      "so `on: ${d.output.action}` is `Literal(buy)` here; remove it",
+  );
 });
 
 test("required groups from buy and sell branches meet empty", () => {

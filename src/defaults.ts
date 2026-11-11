@@ -381,6 +381,13 @@ export const ENTRIES = Object.freeze([
     group: "input cap",
     minimum: 1,
   }),
+  // Four of the largest events: a reply may carry several images or long tool arguments.
+  entry("MAX_MODEL_RESPONSE_BYTES", {
+    default: 64 * 1024 * 1024,
+    description: "Largest reply body read from one model call",
+    group: "input cap",
+    minimum: 1,
+  }),
   // 64 texts at 3,072 dimensions take about 4 MiB as JSON numbers; this leaves room for larger
   // batches and models.
   entry("MAX_EMBEDDING_REPLY_BYTES", {

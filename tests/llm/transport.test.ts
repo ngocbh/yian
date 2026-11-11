@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 
+import { withEnv } from "../../src/defaults.ts";
 import { RedirectError, type Scheduler, type Send, virtualScheduler } from "../../src/platform.ts";
 import { REDACTED } from "../../src/llm/auth.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
@@ -307,6 +308,44 @@ describe("idle", () => {
     await h.clock.sleep(1_000_000 * S);
     expect(decoder.decode((await iterator.next()).value!)).toBe("b");
     expect((await iterator.next()).done).toBe(true);
+  });
+});
+
+describe("the reply's size", () => {
+  const OVER = "openai reply is over the limit of 6 bytes (YIAN_MAX_MODEL_RESPONSE_BYTES)";
+
+  test("a body past maxBytes fails as a protocol error and aborts the request", async () => {
+    const h = harness({ steps: [{ at: 0, chunk: "abcd" }, { at: 1, chunk: "efg" }, { at: 2, chunk: "h" }] });
+    const exchange = await h.open({ maxBytes: 6 });
+    const seen: string[] = [];
+    const error = await failure(
+      (async () => {
+        for await (const chunk of exchange.body) seen.push(decoder.decode(chunk));
+      })(),
+    );
+    expect(seen).toEqual(["abcd"]);
+    expect(error).toBeInstanceOf(ProviderError);
+    const e = error as ProviderError;
+    expect([e.kind, e.retryable, e.provider, e.message]).toEqual(["protocol", false, "openai", OVER]);
+    expect(h.calls[0]!.signal!.aborted).toBe(true);
+  });
+
+  test("a first chunk past maxBytes fails before it is read", async () => {
+    const h = harness({ steps: [{ at: 0, chunk: "abcdefg" }] });
+    const exchange = await h.open({ maxBytes: 6 });
+    expect(((await failure(readAll(exchange))) as ProviderError).message).toBe(OVER);
+  });
+
+  test("a body of exactly maxBytes is read whole", async () => {
+    const h = harness({ steps: [{ at: 0, chunk: "abc" }, { at: 1, chunk: "def" }] });
+    expect(await readAll(await h.open({ maxBytes: 6 }))).toEqual(["abc", "def"]);
+  });
+
+  test("the cap defaults to YIAN_MAX_MODEL_RESPONSE_BYTES", async () => {
+    const env = (name: string) => (name === "YIAN_MAX_MODEL_RESPONSE_BYTES" ? "6" : undefined);
+    const h = harness({ steps: [{ at: 0, chunk: "abcd" }, { at: 1, chunk: "efg" }] });
+    const exchange = await withEnv(env, () => h.open());
+    expect(((await failure(readAll(exchange))) as ProviderError).message).toBe(OVER);
   });
 });
 

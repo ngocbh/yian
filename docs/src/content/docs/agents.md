@@ -361,6 +361,8 @@ The file uses the `mcpServers` format other MCP clients use:
   environment variable, `${VAR:-default}` gives a fallback, and `$$` is a literal `$`. An unset
   variable with no fallback is an error, so keep tokens in the environment, not the file.
 - A stdio server gets only a minimal environment (`PATH`, `HOME` and a few more) plus its `env`.
+- A result's text that holds half a character, as text cut inside an emoji does, reaches the model
+  with `�` in its place. Structured content that isn't a yian value is reported as a failed call.
 - Servers start only when the flow needs their tools, and stop when the run ends. The config
   files are read only when the flow names a tool yian doesn't already have.
 - MCP needs the optional package `@modelcontextprotocol/client` 2.3.1 installed beside yian.

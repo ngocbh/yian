@@ -85,9 +85,9 @@ export class McpSdkMissingError extends McpError {
  *
  * For an error result the message is the result's content rendered as text, as a successful
  * call's text result is: text blocks, then one-line markers for media. For any other failure
- * while the server is up (for example structured content that fails the tool's output schema,
- * thrown as the subclass `McpOutputError`) it names only the server, the tool and the error
- * type. An AGENT's model reads it as the call's result.
+ * while the server is up (for example structured content that isn't a yian value or fails the
+ * tool's output schema, thrown as the subclass `McpOutputError`) it names only the server, the
+ * tool and the error type. An AGENT's model reads it as the call's result.
  */
 export class McpToolError extends McpError {
   override name = "McpToolError";
@@ -95,8 +95,9 @@ export class McpToolError extends McpError {
 }
 
 /**
- * An MCP server's tool result broke the tool's `outputSchema`: it had no structured content, or
- * the content isn't a yian value or doesn't fit the schema.
+ * An MCP server's tool result failed yian's check: its structured content isn't a yian value, or
+ * the tool lists an `outputSchema` and the result had no structured content or content that
+ * doesn't fit the schema.
  *
  * It is permanent as well as reported, since yian ran the check and another attempt would call the
  * tool again.
@@ -908,8 +909,7 @@ export class McpServer {
       generation.calls.delete(call);
     }
     // `undefined`: the tool listed no `outputSchema`; `null`: one yian can't read as a type.
-    const outputType = generation.outputTypes.get(name);
-    if (outputType !== undefined) this.checkOutput(name, outputType, result as CallResult);
+    this.checkOutput(name, generation.outputTypes.get(name), result as CallResult);
     return resultValue(result as CallResult);
   }
 
@@ -978,20 +978,24 @@ export class McpServer {
   }
 
   /**
-   * Check a non-error result of the tool `name`, which listed an `outputSchema` read open as
-   * `type`, as the registry checks a declared output: its structured content must be there and fit
-   * the type; a `null` type checks only that the content is a yian value.
+   * Check a non-error result of the tool `name`, as the registry checks a declared output: its
+   * structured content, when there is any, must be a yian value. A tool that listed an
+   * `outputSchema`, read open as `type`, must also send structured content that fits the type; a
+   * `null` type checks only that it is a yian value, and `undefined` means the tool listed none.
    *
-   * @throws {McpOutputError} The structured content is missing, or isn't a yian value or doesn't
-   *   fit the type (the `TypeCheckError` is the `cause`).
+   * @throws {McpOutputError} The structured content isn't a yian value, or for a tool with an
+   *   `outputSchema` is missing or doesn't fit the type (the `TypeCheckError` is the `cause`).
    */
-  private checkOutput(name: string, type: Type | null, result: CallResult): void {
+  private checkOutput(name: string, type: Type | null | undefined, result: CallResult): void {
     if (result.isError) return;
     const failed = `MCP server '${this.label}' tool '${name}' failed`;
-    if (result.structuredContent == null) throw new McpOutputError(`${failed} (no structured content)`);
+    if (result.structuredContent == null) {
+      if (type === undefined) return;
+      throw new McpOutputError(`${failed} (no structured content)`);
+    }
     try {
       const value = fromHost(result.structuredContent, `MCP server '${this.label}' tool '${name}' structured content`);
-      if (type !== null) buildValueAs(type, value);
+      if (type !== null && type !== undefined) buildValueAs(type, value);
     } catch (error) {
       if (error instanceof TypeCheckError) throw new McpOutputError(`${failed} (TypeCheckError)`, { cause: error });
       throw error;
@@ -1287,7 +1291,8 @@ export function resultValue(result: CallResult): unknown {
  *
  * Text blocks and embedded text resources give their text. Images, audio, embedded blob resources
  * and resource links give a one-line marker with the mime type, when known, and the decoded size;
- * their bytes are dropped. Empty content renders as `""`.
+ * their bytes are dropped. Empty content renders as `""`. A lone surrogate, as a server that cuts
+ * text inside an emoji sends, becomes U+FFFD.
  */
 function renderContent(content: readonly unknown[]): string {
   const parts: string[] = [];
@@ -1309,7 +1314,8 @@ function renderContent(content: readonly unknown[]): string {
       parts.push(`[${String(kind)}]`);
     }
   }
-  return parts.join("\n\n");
+  // The rendering is already a lossy view for the model, so half an emoji is repaired, not refused.
+  return parts.join("\n\n").toWellFormed();
 }
 
 /** The base64 alphabet. */

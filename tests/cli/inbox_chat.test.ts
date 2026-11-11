@@ -2493,6 +2493,28 @@ output: \${reply.output}
   );
 
   test(
+    "a log cut inside its run start is refused with what to do, and nothing is appended",
+    async () => {
+      const first = chatIo();
+      first.stdin.write("/exit\n");
+      const { code, log } = await runChat(flowFile(ECHO), first.io);
+      expect(code).toBe(0);
+      // `run_started` and two of the system values' commits.
+      writeFileSync(log, `${readFileSync(log, "utf8").split("\n").slice(0, 3).join("\n")}\n`);
+      const before = readFileSync(log, "utf8");
+
+      const second = chatIo();
+      expect(await resumeChat(log, second.io)).toBe(1);
+      expect(second.stderr()).toContain(
+        `chat failed: the run in ${log} ended inside its run start, before its inputs were recorded; ` +
+          "delete its log and start a new chat",
+      );
+      expect(readFileSync(log, "utf8")).toBe(before);
+    },
+    TIMEOUT,
+  );
+
+  test(
     "the recorded keys are checked before the run moves; with them the queued line gets its reply first",
     async () => {
       const first = chatIo({ env: XAI });

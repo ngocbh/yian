@@ -135,10 +135,11 @@ export interface RunIndexRow {
   /** The path of the flow file the run started from, or `null` for a flow built in code. */
   readonly flow: string | null;
   /**
-   * `succeeded`, `failed` or `cancelled` once the records show the run ended; `waiting` when it
-   * ended its last segment with every unsettled node waiting; `stopped` when the host stopped the
-   * last segment; `crashed` otherwise. `running` replaces `waiting`, `stopped` or `crashed` while a
-   * writer holds the log's lock.
+   * `succeeded`, `failed` or `cancelled` once the records show the run ended; `unstarted` when the
+   * log ends inside its run start, before the START inputs' commit; `waiting` when it ended its last
+   * segment with every unsettled node waiting; `stopped` when the host stopped the last segment;
+   * `crashed` otherwise. `running` replaces any but an ended status while a writer holds the log's
+   * lock.
    */
   readonly status: RunIndexStatus;
   /** The time of the run's `run_started` record, or `null` when that record can't be read. */
@@ -155,8 +156,8 @@ export interface RunIndexRow {
   /** The seq of the last record the index read, or `null` when it read none (see `unreadable`). */
   readonly lastSeq: number | null;
   /**
-   * The run's result as a run-log line (`logJson`): the value of the `pool_commit` the top-level
-   * END's success names; `null` until the END succeeded.
+   * For a `succeeded` run, its result as a run-log line (`logJson`): the value of the `pool_commit`
+   * the top-level END's success names; `null` for any other status, though END may have succeeded.
    */
   readonly result: string | null;
   /** The sum of every `model_call` step's `input_tokens`, failed attempts included. */
@@ -347,12 +348,17 @@ export function scanStatus(scan: RunScan): "succeeded" | "failed" | "cancelled" 
 }
 
 /**
- * Return where an unfinished run stands: `waiting` when its last frontier record is `run_waiting`
- * (every unsettled node waits, and no worker runs), `stopped` when the host stopped the last
- * segment (`lastStop`, the seq of the last `RunStopped` since the last `RunResumed`), else
+ * Return where an unfinished run stands: `unstarted` when its log ends inside its run start, before
+ * the START inputs' commit, so no resume can go on from it; `waiting` when its last frontier record
+ * is `run_waiting` (every unsettled node waits, and no worker runs); `stopped` when the host stopped
+ * the last segment (`lastStop`, the seq of the last `RunStopped` since the last `RunResumed`); else
  * `crashed`.
  */
-export function unfinishedStatus(waits: WaitsState, lastStop: number | null): "waiting" | "stopped" | "crashed" {
+export function unfinishedStatus(
+  waits: WaitsState,
+  lastStop: number | null,
+): "unstarted" | "waiting" | "stopped" | "crashed" {
+  if (!waits._inputsCommitted) return "unstarted";
   if (waits.lastFrontier === "run_waiting") return "waiting";
   return lastStop === null ? "crashed" : "stopped";
 }
@@ -378,6 +384,7 @@ interface StoredRow {
   parentRunId: string | null;
   memories: RunIndexMemory[];
   lastSeq: number | null;
+  /** The value END's success names, whatever the status; `null` until END succeeded. */
   result: string | null;
   inputTokens: number;
   outputTokens: number;
@@ -517,13 +524,13 @@ export function updateRunIndex(
 
 /**
  * Return the rows of `<runsDir>/index.sqlite`, by start time then run id (a row with no start time
- * first), as the last update left them, with `running` put on top of a `waiting`, `stopped` or `crashed` run whose log a writer holds now
- * (`isRunLogLocked`, probed on every read; a lock that can't be probed counts as free). A missing
- * index, or one of another layout version, has no rows. A row whose stored scan can't be read is
- * left out with a warning through `warn`; the next update builds it again. A `waiting` row's
- * `waits`, `ready` and `wakeAt` are read from its scan's waits fold, as `inspectRun` reads them.
- * Reading doesn't update the index; it reads while a builder works, and waits only while one
- * commits.
+ * first), as the last update left them, with `running` put on top of a run that hasn't ended whose
+ * log a writer holds now (`isRunLogLocked`, probed on every read; a lock that can't be probed
+ * counts as free). A missing index, or one of another layout version, has no rows. A row whose
+ * stored scan can't be read is left out with a warning through `warn`; the next update builds it
+ * again. A `waiting` row's `waits`, `ready` and `wakeAt` are read from its scan's waits fold, as
+ * `inspectRun` reads them, and only a `succeeded` row has a `result`. Reading doesn't update the
+ * index; it reads while a builder works, and waits only while one commits.
  *
  * @param runsDir The runs folder.
  * @param options.timeoutMs How long to wait while a builder commits, in milliseconds; 5000 by default.
@@ -554,14 +561,15 @@ export function readRunIndex(runsDir: string, options: { timeoutMs?: number } = 
     }
     const { scan, unreadable, ...row } = stored;
     let status: RunIndexStatus = scanStatus(scan);
-    if ((status === "waiting" || status === "stopped" || status === "crashed") && locked(join(runsDir, row.runId, "log.jsonl"))) {
-      status = "running";
-    }
+    const ended = status === "succeeded" || status === "failed" || status === "cancelled";
+    if (!ended && locked(join(runsDir, row.runId, "log.jsonl"))) status = "running";
     const waiting = status === "waiting";
     return [
       {
         ...row,
         status,
+        // The stored row keeps END's value, so a run that succeeds later needn't read it again.
+        result: status === "succeeded" ? row.result : null,
         waits: waiting ? waitInfos(scan.waits) : [],
         ready: waiting && wakeableNodes(scan.waits).length > 0,
         wakeAt: waiting ? wakeAt(scan.waits) : null,

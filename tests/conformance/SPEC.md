@@ -652,8 +652,9 @@ trace fields of the `pool_commit` it names (a `from` seq by the kind and node of
 names). A node
 cut right after its `pool_commit` runs again, so what it took from the host scripts goes back from
 its last record before the commit (its steps replay). A cut inside the run start (before the START
-inputs' commit) can't be resumed: the sweep expects the resume to refuse it (`run log <path> ends
-inside its run start; start the run again`) and leave the log as it is. Each resume is held to
+inputs' commit) can't be resumed: the sweep expects `inspectRun`, with and without the flow, to read
+it `unstarted`, and the resume to refuse it (`run log <path> ends inside its run start, before its
+inputs were recorded; delete it and start the run again`) and leave the log as it is. Each resume is held to
 the host scripts as the uncut run is: a model request that differs from its entry's `request`, a
 call past a script's end, or an entry left unused fails the sweep. An AGENT tool call whose reply
 is in the cut log, but not its result, and that the uncut run made is closed `crashed`, not made

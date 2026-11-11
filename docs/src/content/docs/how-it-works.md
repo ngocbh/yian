@@ -280,6 +280,7 @@ A resume does this:
 | `waiting` | Every unfinished node is waiting | Wakes the nodes whose answer or deadline has arrived; if none has and `--num-workers` is unchanged, writes nothing and returns `waiting` |
 | `stopped` | The host stopped the run (`run_stopped`) | Runs the stopped nodes again |
 | `crashed` | The process ended without a stop | Runs the unfinished nodes again, each counted as a crashed attempt |
+| `unstarted` | The process ended before the run's inputs were recorded | Refuses; delete the log and start the run again |
 | `running` | Another process holds the lock | Refuses |
 
 ### What comes from the log, and what you give again

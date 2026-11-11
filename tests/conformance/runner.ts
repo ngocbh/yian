@@ -3393,10 +3393,18 @@ export async function crashSweep(
     // since the resume replays that record's steps.
     scripted.putBack(k > inputsCommit && uncutRecords[k]!.kind === "pool_commit" ? k - 1 : k);
     if (k < inputsCommit) {
-      // A log cut inside its run start doesn't hold the run's inputs yet, so it can't be resumed.
+      // A log cut inside its run start doesn't hold the run's inputs yet, so it can't be resumed,
+      // and reads `unstarted` from its records and replayed with the flow.
       const before = readFileSync(log);
+      for (const [how, inspection] of [
+        ["without the flow", () => inspectRun(log)],
+        ["with the flow", () => inspectRun(log, { flow, env })],
+      ] as const) {
+        const status = inspection().status;
+        if (status !== "unstarted") throw new CaseFailure(`inspectRun ${how} read ${status}, not unstarted${at}`);
+      }
       const refused = await settle(() => advance({ ...hooks, ...memory() }));
-      const message = `run log ${log} ends inside its run start; start the run again`;
+      const message = `run log ${log} ends inside its run start, before its inputs were recorded; delete it and start the run again`;
       if (!(refused instanceof RangeError) || refused.message !== message) {
         throw new CaseFailure(`the resume didn't refuse the incomplete run start${at}\n${failureText(refused)}`);
       }

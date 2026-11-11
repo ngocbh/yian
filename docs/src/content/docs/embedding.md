@@ -155,6 +155,7 @@ holds media fails if `media` is a symlink, another user's, or writable by others
 | Crashed or stopped | Replays the log, then runs the unfinished nodes again |
 | Waiting, with an answer or deadline in | Wakes those nodes and runs on |
 | Waiting, with nothing new | Writes nothing and returns `waiting` again |
+| Unstarted: the log ends before the run's inputs | Throws a `RangeError`; delete the log and start the run again |
 
 `advance` runs the flow the log recorded, not the file on disk, with the log's inputs, run id and
 model settings. Pass again what the log doesn't hold: `tools`, `skills`, `context`, the memories
@@ -372,7 +373,7 @@ abort its `signal` instead: the run records a stop, rejects with the signal's re
 
 | Call | Gives |
 |---|---|
-| `inspectRun(log)` | Where a run stands, without the lock: `status` (`running`, `succeeded`, `failed`, `cancelled`, `waiting`, `stopped`, `crashed`), `inFlight`, `waits`, `ready`, `wakeAt`. Pass `{ flow }` (from `loadRecordedFlow`) for an exact `status` |
+| `inspectRun(log)` | Where a run stands, without the lock: `status` (`running`, `succeeded`, `failed`, `cancelled`, `unstarted`, `waiting`, `stopped`, `crashed`), `inFlight`, `waits`, `ready`, `wakeAt`. Pass `{ flow }` (from `loadRecordedFlow`) for an exact `status` |
 | `loadRecordedFlow(log)` | The flow the log recorded |
 | `iterRunRecords(log)` | The log's records, one by one, while another process may still be writing |
 | `foldRunLog(log)` | Each record with the value it wrote |

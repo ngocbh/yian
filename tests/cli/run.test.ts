@@ -1730,9 +1730,10 @@ describe("status", () => {
     const runsDocument = (schema["$defs"] as Record<string, Schema>)["runs_document"]!;
     expect(validate(schema, runsDocument, parseJson(again.stdout(), "plain"))).toEqual([]);
     expect(JSON.parse(again.stdout()).runs).toEqual([
+      // No record could be read, so not even the run's start.
       expect.objectContaining({
         run_id: "damaged",
-        status: "crashed",
+        status: "unstarted",
         started_at: null,
         last_seq: null,
         unreadable: { seq: 0, reason: expect.stringMatching(/^run log .*line 1/) },
@@ -1792,6 +1793,50 @@ describe("status", () => {
     expect(crashed.stdout()).toBe(
       "status: crashed\nin flight: echo\ncrashed attempts: echo=1\n",
     );
+  });
+
+  test("a log cut inside its run start is unstarted, in the list too, and a resume says to delete it", async () => {
+    const runs = join(tmp, "home", ".yian", "runs");
+    expect((await runFlowCli(ECHO_FLOW, ["-q", "--input", "topic=clouds"])).code).toBe(0);
+    const [runId] = readRunIndex(runs).map((row) => row.runId);
+    const log = join(runs, runId!, "log.jsonl");
+    // `run_started` and two of the system values' commits.
+    writeFileSync(log, `${readFileSync(log, "utf8").split("\n").slice(0, 3).join("\n")}\n`);
+    const text = testIo();
+    expect(await main(["status", log], text.io)).toBe(0);
+    expect(text.stdout()).toBe("status: unstarted\n");
+    const json = testIo();
+    expect(await main(["status", log, "--json"], json.io)).toBe(0);
+    expect(json.stdout()).toBe(
+      '{"format":"yian.cli.v1","crashed_attempts":{},"in_flight":[],"ready":false,"status":"unstarted","wake_at":null}\n',
+    );
+    const schema = JSON.parse(readFileSync(fileURLToPath(new URL("../conformance/schema/cli.schema.json", import.meta.url)), "utf8")) as Schema;
+    const statusDocument = (schema["$defs"] as Record<string, Schema>)["status_document"]!;
+    expect(validate(schema, statusDocument, parseJson(json.stdout(), "plain"))).toEqual([]);
+    const listed = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["status", "--json"], listed.io)).toBe(0);
+    expect(JSON.parse(listed.stdout()).runs).toEqual([expect.objectContaining({ run_id: runId, status: "unstarted", result: null })]);
+    const resumed = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["run", "-q", "--resume", log], resumed.io)).toBe(1);
+    expect(resumed.stderr()).toContain(
+      `run log ${log} ends inside its run start, before its inputs were recorded; delete it and start the run again`,
+    );
+  });
+
+  test("with no log, a failed or waiting run whose END succeeded lists no result", async () => {
+    const failAfter =
+      "id: failafter\nname: failafter\nnodes:\n  boom:\n    kind: code\n    output: str\n    code: |\n" +
+      '      await new Promise((r) => setTimeout(r, 300));\n      throw new Error("boom");\noutput: done\n';
+    const nap = "id: nap\nname: nap\nnodes:\n  nap:\n    kind: tool\n    tool_id: sleep\n    input:\n      for: 1h\noutput: done\n";
+    expect((await runFlowCli(failAfter, ["-q"])).code).toBe(1);
+    expect((await runFlowCli(nap, ["-q"])).code).toBe(0);
+    const json = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["status", "--json"], json.io)).toBe(0);
+    const listed = JSON.parse(json.stdout()).runs.map((run: { status: string; result: unknown }) => [run.status, run.result]);
+    expect(listed.sort()).toEqual([
+      ["failed", null],
+      ["waiting", null],
+    ]);
   });
 
   test("a log a writer holds is running", async () => {

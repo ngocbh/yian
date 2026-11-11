@@ -12,7 +12,8 @@
  *
  * Knows about: diagnostics, compose source and helpers, expr (span reading and the binder),
  *              llm_clients (config and provider blocks), nodes (agent and contracts), skills,
- *              tools (grants), typesys and defaults.
+ *              tools (grants and reserved names), typesys, defaults, and the callable resolver
+ *              (`resolver.ts`), which bakes the flows an agent grants as tools.
  */
 
 import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
@@ -36,8 +37,9 @@ import {
   type PromptText,
   STEER_INBOX_KEY,
 } from "../../nodes/agent/node.ts";
+import type { FlowTool } from "../../nodes/agent/flow_tools.ts";
 import { memoryKey } from "../../nodes/base.ts";
-import { typeToSchema } from "../../nodes/agent/structured.ts";
+import { argumentsSchema, typeToSchema } from "../../nodes/agent/structured.ts";
 import {
   Binding,
   isExactly,
@@ -47,9 +49,19 @@ import {
   ValueTemplate,
 } from "../../nodes/contracts.ts";
 import { SkillError } from "../../skills/index.ts";
-import { GrantError, parseToolGrants, type ToolGrant } from "../../tools/grants.ts";
+import { checkVisibleNames, GrantError, parseToolGrants, type ToolGrant } from "../../tools/grants.ts";
+import { RESERVED_TOOL_NAMES } from "../../tools/registry.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
-import { isList, isMemoryType, isRecord, type Type, typeLevels, valueRepr } from "../../typesys/values.ts";
+import {
+  isInboxType,
+  isList,
+  isMemoryType,
+  isRecord,
+  type Type,
+  typeLevels,
+  ValueKind,
+  valueRepr,
+} from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError, rejectRemovedMemoryKey } from "../helpers/errors.ts";
 import { checkMemoryGrants, grantErrorText, memoryBinding } from "../helpers/memory.ts";
 import { includeFile, readTaggedValue } from "../helpers/tags.ts";
@@ -72,6 +84,7 @@ import {
   siteKey,
   wholeRefName,
 } from "./base.ts";
+import { resolveChild } from "./resolver.ts";
 
 /** Shared by the AGENT and `adaptive_questions:` errors for the removed `mode:` key. */
 export const MODE_REMOVED_FIX =
@@ -927,6 +940,7 @@ export class AgentDescriptor extends NodeDescriptor {
       ),
     ];
     const toolsRange = this.fieldRanges.get(siteKey("field", "tools")) ?? this.range;
+    const flowTools = this.readFlowTools(ctx, memoryInputs, toolsRange);
     try {
       checkMemoryGrants(
         this.tools.filter((grant) => memoryInputs.includes(grant.kind === "name" ? grant.name : grant.group)),
@@ -955,6 +969,7 @@ export class AgentDescriptor extends NodeDescriptor {
         steerInbox: this.steerInbox !== null,
         steerRender: this.steerRender,
         memoryInputs,
+        flowTools,
       });
     } catch (error) {
       // AgentNode checks skill grants and tool names; a refusal is the loader's one error type.
@@ -1021,6 +1036,72 @@ export class AgentDescriptor extends NodeDescriptor {
       fieldRanges.set(siteKey("field", STEER_INBOX_KEY), steerInboxRange);
     }
     return new BuildResult({ ...result, fieldRanges });
+  }
+
+  /**
+   * Bake each flow `tools:` grants by name, a `defs:` entry or `uses:` alias of the file, with the
+   * description and argument schema the model sees for it. The flow resolves as a `call:` does,
+   * under the same nesting limit and recursion check.
+   *
+   * @throws LoadError, at `tools:`, when a grant names both a memory input and a flow, grants a
+   *   flow in the group form, names one by a built-in tool's name or a name a model can't call,
+   *   or names one with no `description:` or with an input a model can't send (an inbox, a
+   *   memory, a file); or as `resolveChild` throws.
+   */
+  private readFlowTools(ctx: BuildContext, memoryInputs: readonly string[], range: SourceRange | null): FlowTool[] {
+    const fail = (message: string, cause: unknown = null) =>
+      ctx.diagnostics.error(`node ${reprText(this.id)}: ${message}`, cause === null ? { range } : { range, cause });
+    const tools: FlowTool[] = [];
+    for (const grant of this.tools) {
+      const name = grant.kind === "name" ? grant.name : grant.group;
+      const section = ctx.callableSection(name);
+      if (section === null) continue;
+      const entry = section === "defs" ? "the defs entry" : "the uses: alias";
+      if (memoryInputs.includes(name)) throw fail(`\`${name}\` is both a memory input and a flow; rename one`);
+      if (grant.kind === "group") {
+        throw fail(`\`tools:\` grants flow \`${name}\` as a group; a flow is one tool, so grant it as \`${name}\``);
+      }
+      if (RESERVED_TOOL_NAMES.has(name)) throw fail(`flow \`${name}\` has the name of a built-in tool; rename ${entry}`);
+      try {
+        checkVisibleNames([{ visible: name, group: null, tool: name, scope: 0, key: name }]);
+      } catch (error) {
+        if (!(error instanceof GrantError)) throw error;
+        throw fail(error.message, error);
+      }
+      const child = resolveChild(this.id, name, ctx.resolver, null, { diagnostics: ctx.diagnostics, range, kind: this.kind });
+      const description = child.description ?? null;
+      if (description === null || description.trim() === "") {
+        const where = section === "defs" ? "the defs entry" : "its file";
+        throw fail(
+          `flow \`${name}\` is granted as a tool, so it needs a \`description:\`, which the model reads to choose it; ` +
+            `add one to ${where}`,
+        );
+      }
+      const args: { name: string; type: Type; required: boolean }[] = [];
+      for (const input of child.input) {
+        const type = input.contract?.type ?? null;
+        const what = isInboxType(type)
+          ? "an inbox"
+          : isMemoryType(type)
+            ? "a memory"
+            : type !== null && type.kind === ValueKind.FILE
+              ? "a file"
+              : null;
+        if (what !== null) {
+          throw fail(`flow \`${name}\` can't be a tool: its input \`${input.name}\` is ${what}, which a model can't send`);
+        }
+        if (type !== null) args.push({ name: input.name, type, required: input.required });
+      }
+      let parameters;
+      try {
+        parameters = argumentsSchema(args);
+      } catch (error) {
+        if (!(error instanceof RangeError)) throw error;
+        throw fail(`flow \`${name}\` can't be a tool: ${error.message}`, error);
+      }
+      tools.push({ name, description, parameters, child: child.compiled });
+    }
+    return tools;
   }
 
   /**

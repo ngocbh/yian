@@ -406,6 +406,16 @@ describe("redact", () => {
     expect(redactKey("sk-***", key)).toBe("[REDACTED]");
   });
 
+  test("a masked echo matching on one side only: a matching tail takes the whole head, a matching head keeps the tail", () => {
+    const key = "sk-sentinel-scrub-zqxw";
+    // Only the tail ends the key: the head goes too, a short key prefix with it.
+    expect(redactKey("x file_v2...zqxw y", key)).toBe("x [REDACTED] y");
+    expect(redactKey("x sk...zqxw y", key)).toBe("x [REDACTED] y");
+    // Only the head begins the key: the tail stays, so up to two key characters may survive it.
+    expect(redactKey("x sk-sen...file_v2 y", key)).toBe("x [REDACTED]file_v2 y");
+    expect(redactKey("x sk-sen****xw y", key)).toBe("x [REDACTED]xw y");
+  });
+
   test("masked echoes of a key with other characters are redacted whole", () => {
     const key = "sk.sentinel+scrub/zq.w";
     for (const echo of [`${key.slice(0, 8)}****${key.slice(-4)}`, `${key.slice(0, 9)}...`, `***${key.slice(-5)}`]) {

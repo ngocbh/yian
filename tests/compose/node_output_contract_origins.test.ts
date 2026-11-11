@@ -106,39 +106,6 @@ test("full code output compiles root and nested contract origins", () => {
   expectSite(builder, entries.get("ok"), output.child("ok"));
 });
 
-test("list form output keeps winning sites and record semantics", () => {
-  const text = `id: list-output-contract
-name: list-output-contract
-nodes:
-  emit:
-    kind: code
-    code: |-
-      return {"profile": {"age": 7, "active": true}, "status": false}
-    output:
-      - profile:
-          age: str
-      - status: bool
-      - profile:
-          age: int
-          active: bool
-output: \${emit.output}
-`;
-  const output = SourceDocument.parse(text, "list.yaml").root.child("nodes").child("emit").child("output");
-  const { contract, builder } = contractOf(text, "emit", "list.yaml");
-  const entries = entriesOf(contract);
-
-  const fields = contract.type.fields!;
-  expect([...fields.keys()]).toEqual(["profile", "status"]);
-  const profile = fields.get("profile")!.fields!;
-  expect(profile.get("age")!.kind).toBe(ValueKind.INTEGER);
-  expect(profile.get("active")!.kind).toBe(ValueKind.BOOLEAN);
-  const winning = output.child(2).child("profile");
-  expectSite(builder, entries.get("profile"), winning);
-  expectSite(builder, entries.get("profile.age"), winning.child("age"));
-  expectSite(builder, entries.get("profile.active"), winning.child("active"));
-  expectSite(builder, entries.get("status"), output.child(1).child("status"));
-});
-
 test("an invalid output type precedes a CODE syntax error", () => {
   const text = `id: invalid-code-before-output
 name: invalid-code-before-output

@@ -495,7 +495,10 @@ export class SourceDocument {
             ? "expected a single document in the stream, but found another document"
             : error.message;
         if (gluedToTag(error, source)) message += "\n" + TAG_HINT;
-        throw new SourceSyntaxError(message, pointRange(starts, error.pos[0]));
+        // eemeli reports an unclosed quote or flow collection past the last character, a line the
+        // text doesn't have.
+        const at = error.pos[0] < source.length ? error.pos[0] : openAtEnd(source);
+        throw new SourceSyntaxError(message, pointRange(starts, at));
       }
       if (error instanceof FlowLoaderError) {
         const node = error.node;
@@ -1486,6 +1489,50 @@ function gluedToTag(error: YAMLError, source: string): boolean {
   const at = error.pos[0];
   const lineStart = source.lastIndexOf("\n", at - 1) + 1;
   return GLUED_TAG.test(source.slice(lineStart, at + 1));
+}
+
+/**
+ * Return the offset of the opening quote or bracket of the innermost quoted scalar or flow
+ * collection still open at the end of `source`, else of its last character that isn't white
+ * space (0 for blank text).
+ */
+function openAtEnd(source: string): number {
+  // The innermost open construct opened last, so it has the largest offset.
+  let opener = -1;
+  const stack: CST.Token[] = [];
+  for (const token of parseTokens(source)) {
+    if (token.type === "document" && token.value) stack.push(token.value);
+  }
+  while (stack.length > 0) {
+    const token = stack.pop()!;
+    if (token.type === "double-quoted-scalar" || token.type === "single-quoted-scalar") {
+      if (!quoteCloses(token.source)) opener = Math.max(opener, token.offset);
+    } else if (token.type === "flow-collection" || token.type === "block-map" || token.type === "block-seq") {
+      if (token.type === "flow-collection" && !token.end.some((end) => FLOW_ENDS.has(end.type))) {
+        opener = Math.max(opener, token.start.offset);
+      }
+      for (const item of token.items as readonly { key?: CST.Token | null; value?: CST.Token }[]) {
+        if (item.key) stack.push(item.key);
+        if (item.value) stack.push(item.value);
+      }
+    }
+  }
+  return opener >= 0 ? opener : Math.max(source.trimEnd().length - 1, 0);
+}
+
+// The tokens that close a flow list and a flow map.
+const FLOW_ENDS: ReadonlySet<string> = new Set(["flow-seq-end", "flow-map-end"]);
+
+/** Say whether a quoted scalar's source, from its opening quote, holds its closing quote. */
+function quoteCloses(text: string): boolean {
+  const quote = text[0];
+  for (let i = 1; i < text.length; i++) {
+    // `\` escapes the next character in double quotes; `''` is a quote in single quotes.
+    if (quote === '"' && text[i] === "\\") i++;
+    else if (text[i] === quote && !(quote === "'" && text[i + 1] === "'")) return true;
+    else if (quote === "'" && text[i] === "'") i++;
+  }
+  return false;
 }
 
 /** Return the node `written` names: an alias's target, else `written` itself. */

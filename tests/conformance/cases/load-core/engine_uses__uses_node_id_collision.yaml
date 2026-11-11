@@ -15,3 +15,6 @@ expect:
     diagnostics:
     - code: compose.load
       message: 'uses: alias ["a"] collides with a node id'
+      frames:
+      - label: flow.yaml
+        range: [9, 3, 9, 4]

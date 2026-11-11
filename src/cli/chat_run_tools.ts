@@ -67,15 +67,15 @@ const START_CHOICES = ["Approve", "Approve this flow for this chat", "Reject"] a
 /** The run tools' word for a run's id, and for the status each returns. */
 const RUN = "The run's id, as start_flow returned it (r1, r2, ...).";
 const STATUS =
-  "Returns the run's status as JSON: status (running, waiting, succeeded, failed or cancelled), " +
+  "Returns the run's status, a record: status (running, waiting, succeeded, failed or cancelled), " +
   "output, failure, waits, asks (questions with their call ids), replies (what it said since " +
   "you last looked), memory_notes (a memory it created or that changed, since you last looked), " +
   "note (something that couldn't be done) and log.";
 
 /** How a set of run tools reads and shows the chat's runs (`chatRunTools`' `view`). */
 interface View {
-  /** `status` as JSON for the model, marked shown. */
-  show(status: ChildStatus): string;
+  /** `status` as the model reads it (`shownStatus`), marked shown. */
+  show(status: ChildStatus): Record<string, unknown>;
   /** The last seq of `run` this view has shown (or the chat has, for the assistant's). */
   lastSeen(run: string): number;
   /**
@@ -437,8 +437,7 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
         shown.set(status.run, Math.max(status.seq, last));
         // The stored status keeps the replies and notes it was published with; once shown, they are read.
         const { replies: _, memory_notes: __, ...unrepeated } = status;
-        // yian's JSON, so an int output (a bigint) is written as its digits.
-        return writeAsJson(shownStatus(status.seq <= last ? unrepeated : status) as Value);
+        return shownStatus(status.seq <= last ? unrepeated : status);
       },
       known: (args) => {
         const id = knownRun(runs, args);
@@ -558,7 +557,7 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
       load: () => Promise<ComposedFlow>,
       inputs: Record<string, unknown>,
       signal: AbortSignal,
-    ): Promise<string> => {
+    ): Promise<string | Record<string, unknown>> => {
       const own = view(false, name);
       const granted: FunctionTool[] = [...chatFileTools(host), startTool(own), waitTool(own)];
       const tools = Object.fromEntries(
@@ -674,7 +673,7 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
     inputs: unknown,
     content: string | undefined,
     signal: AbortSignal,
-  ): Promise<string> {
+  ): Promise<string | Record<string, unknown>> {
     const { real, shown: file, text, flow } = await loadForStart(host, path, content);
     checkStartInputs(flow, inputs);
     const files = codeFiles(flow);

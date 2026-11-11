@@ -122,15 +122,6 @@ test("case output over a value entry branch reads the taken branch", async () =>
   expect((await runFlow(loaded, { cmd: "b" }, { env })).output).toBe("replied");
 });
 
-test.each(["__value_0", "__case_x"])("former reserved prefixes name authored nodes: %s", async (nodeId) => {
-  const text = flow(on(nodeId), {
-    extraNodes: `  ${nodeId}:\n` + "    kind: code\n" + "    code: |\n" + "      return 'own'\n" + "    output: str\n",
-  });
-
-  const result = await runFlow(await loadConformanceFlow(text), { cmd: "a" }, { env });
-  expect(result.output).toBe("own");
-});
-
 // ---------- value branches ----------
 
 test.each<[string, string]>([

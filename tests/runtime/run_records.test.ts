@@ -91,7 +91,7 @@ const TOPOLOGY_DIGEST = "b".repeat(64);
 test("a typed object output rejects a non-JSON member", () => {
   expectTypeCheck(
     () => canonicalTyped({ items: [1n, 2n], nested: { at: new Date(Date.UTC(2026, 7, 13)) } }, ValueKind.OBJECT),
-    "<Date object> is not a JSON value",
+    "Date is not a yian value",
     ["nested", "at"],
   );
 });
@@ -161,12 +161,12 @@ test("a typed output rejects NaN at its field path", () => {
 });
 
 test("the canonical helpers reject unordered containers", () => {
-  expectTypeCheck(() => canonicalSeed({ values: new Set(["alpha", "beta"]) }), "<Set object> is not a JSON value", [
+  expectTypeCheck(() => canonicalSeed({ values: new Set(["alpha", "beta"]) }), "Set is not a yian value", [
     "values",
   ]);
   expectTypeCheck(
     () => canonicalTyped({ values: new Set(["alpha", "beta"]) }, ValueKind.OBJECT),
-    "<Set object> is not a JSON value",
+    "Set is not a yian value",
     ["values"],
   );
 });

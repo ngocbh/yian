@@ -544,10 +544,11 @@ describe("realScheduler", () => {
     expect(await rejection(realScheduler.sleep(Number.POSITIVE_INFINITY))).toBeInstanceOf(RangeError);
   });
 
-  test("sleep(30) takes at least 30 ms", async () => {
+  test("sleep(30) takes at least 30 ms, less Node's timer rounding", async () => {
     const started = performance.now();
     await realScheduler.sleep(30);
-    expect(performance.now() - started).toBeGreaterThanOrEqual(30);
+    // Node may fire a timer up to 1 ms early: it measures timeouts on a whole-millisecond clock.
+    expect(performance.now() - started).toBeGreaterThanOrEqual(29);
   });
 
   test("a sleep longer than a chunk arms timers chunk by chunk and never reads the clock", async () => {

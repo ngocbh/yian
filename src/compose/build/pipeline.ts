@@ -69,7 +69,7 @@ import { ASK } from "../../tools/context.ts";
 import { messagesKey, NEW_MESSAGES } from "../../typesys/pool.ts";
 import { newMessagesType, type TypeRegistry } from "../../typesys/types.ts";
 import { isList, isListKind, isRecord, type Type, type Value, writeAsText } from "../../typesys/values.ts";
-import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
+import { LoadDiagnostics, LoadError, rejectReservedName } from "../helpers/errors.ts";
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
 import { assertExactContracts, resolveOutputBindingContract, type TypeFn } from "../../compile/output_contracts.ts";
 import {
@@ -1852,6 +1852,14 @@ function readSections(options: AssembleOptions, ctx: AssembleContext): ReadSecti
   // load. The loader already resolved them in source order before the defs, so this only hits
   // its cache.
   for (const alias of usesAliases) scope.resolve(alias);
+
+  // A record section's keys name END's inputs, beside the ones yian generates for asserts.
+  if (isRecord(options.outputsSection) && outputsCursor?.tag == null) {
+    for (const name of Object.keys(options.outputsSection)) {
+      const range = locateSourceAccess(diagnostics, () => outputsCursor?.keyRangeOf(name) ?? null);
+      rejectReservedName("flow output", name, range ?? outputsRange, diagnostics);
+    }
+  }
 
   /** One flow output's authored range, else the whole `output:` range. */
   const outputRange = (outputName: unknown): SourceRange | null => {

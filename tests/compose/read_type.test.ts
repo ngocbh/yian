@@ -29,6 +29,12 @@ import {
 import type { Case } from "../conformance/runner.ts";
 
 const EMPTY: TypeRegistry = new Map();
+
+/** The load error for a type written as a YAML list. */
+const LIST_TYPE =
+  "a type can't be a YAML list: write a record as one mapping of its fields, as in {a: int, b: str}, " +
+  "and a list type as list(T)";
+
 const LIMIT_TEXT = "the limit for a type (each record and list is a level)";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
@@ -73,11 +79,8 @@ describe("readType", () => {
     expect(field(meta, "as_of").kind).toBe(ValueKind.DATE);
   });
 
-  test("list of single-key maps", () => {
-    const listed = readType([{ decision: "str" }, { why: "str" }], EMPTY);
-    const flat = readType({ decision: "str", why: "str" }, EMPTY);
-    expect(listed).toEqual(flat);
-    expect([...listed.fields!.keys()]).toEqual(["decision", "why"]);
+  test("a list of single-key maps is refused with the mapping to write", () => {
+    expect(loadError(() => readType([{ decision: "str" }, { why: "str" }], EMPTY)).message).toBe(LIST_TYPE);
   });
 
   test("optional field excluded from required", () => {
@@ -162,14 +165,14 @@ describe("record field names", () => {
   });
 });
 
-test("a list of fields must hold single-key maps", () => {
-  expect(loadError(() => readType([{ a: "int", b: "str" }], EMPTY)).message).toBe(
-    'a list of fields must hold single-key maps, got {"a":"int","b":"str"}',
-  );
+test("any YAML list is refused as a type", () => {
+  for (const node of [[{ a: "int", b: "str" }], ["str"], []]) {
+    expect(loadError(() => readType(node, EMPTY)).message).toBe(LIST_TYPE);
+  }
 });
 
 test("readValueContract registers the root and each authored field in canonical order", () => {
-  const text = "output:\n  b: int\n  a:\n    - y: str\n    - x: int\n";
+  const text = "output:\n  b: int\n  a:\n    y: str\n    x: int\n";
   const document = SourceDocument.parse(text, "flow.yaml");
   const catalogBuilder = new SourceCatalogBuilder();
   const prefix = ["node", "n", "output", "contract"];
@@ -191,8 +194,8 @@ test("readValueContract registers the root and each authored field in canonical 
   expect(ranges).toEqual([
     new SourceRange(2, 3, 6, 1),
     new SourceRange(4, 5, 6, 1),
-    new SourceRange(5, 10, 5, 13),
-    new SourceRange(4, 10, 4, 13),
+    new SourceRange(5, 8, 5, 11),
+    new SourceRange(4, 8, 4, 11),
     new SourceRange(2, 6, 2, 9),
   ]);
 });

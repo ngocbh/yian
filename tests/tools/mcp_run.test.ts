@@ -15,7 +15,7 @@ import { Message, Response, TextPart, ToolCallPart, ToolResultPart } from "../..
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { runFlow, type RunFlowOptions } from "../../src/run.ts";
-import { isRunLogLocked } from "../../src/runtime/log.ts";
+import { isRunLogLocked, NodeStepRecord, readRunLog } from "../../src/runtime/log.ts";
 import type { Skill } from "../../src/skills/catalog.ts";
 import { McpConnectError, McpServer, mcpServer } from "../../src/tools/mcp.ts";
 import type { ToolEntry } from "../../src/tools/registry.ts";
@@ -162,6 +162,46 @@ test(
     expect(result.failure).toBeNull();
     expect(model.requests[0]!.tools.map((spec) => spec.name)).toEqual(["fake_echo"]);
     expect(toolResults(model, 1).map((part) => part.content)).toEqual(["hi"]);
+    await expectClosed(server);
+  },
+  SLOW,
+);
+
+test(
+  "an agent reads cut text with U+FFFD, and cut structured content as a failed call, and carries on",
+  async () => {
+    for (const [tool, content, isError] of [
+      ["cut_text", "Hi \ufffd", false],
+      ["cut_structured", "MCP server 'cut' tool 'cut_structured' failed (TypeCheckError)", true],
+    ] as const) {
+      const model = callThenAnswer(`cut_${tool}`, {});
+      const server = mcpServer({ ...stdioOptions("--lone-surrogate"), label: "cut" });
+      const result = await run(await agentFlow("cut"), { cut: server }, { models: serving(model) });
+      expect(result.failure).toBeNull();
+      expect(result.output).toBe("done");
+      expect(model.requests).toHaveLength(2);
+      expect(toolResults(model, 1).map((part) => [part.content, part.isError])).toEqual([[content, isError]]);
+      await expectClosed(server);
+    }
+  },
+  SLOW,
+);
+
+test(
+  "a tool node whose cut structured content isn't a yian value fails once, naming the server",
+  async () => {
+    const server = mcpServer({ ...stdioOptions("--lone-surrogate"), label: "cut" });
+    const flow = await loadFlow(
+      "id: cut\nname: cut\nnodes:\n  call:\n    kind: tool\n    tool_id: cut_structured\n    retries: 2\n" +
+        "output: ${call.output}\n",
+    );
+    const log = join(dir, "cut.jsonl");
+    const result = await run(flow, { cut: server }, { log });
+    expect(result.status).toBe("failed");
+    expect(result.failure!.message).toContain("MCP server 'cut' tool 'cut_structured' failed (TypeCheckError)");
+    // A check yian runs is permanent: `retries` never calls the tool again.
+    // A retry would write the failed attempt as a step first.
+    expect(readRunLog(log).filter((envelope) => envelope.record instanceof NodeStepRecord)).toEqual([]);
     await expectClosed(server);
   },
   SLOW,

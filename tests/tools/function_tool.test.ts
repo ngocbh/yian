@@ -778,7 +778,8 @@ describe("tool()", () => {
     qty: z.number().int().min(1),
     mode: z.enum(["a", "b"]).optional(),
   });
-  const FILLED = z.object({ filled: z.number().int() });
+  // Strict, so its JSON Schema is closed and the output reads as a record.
+  const FILLED = z.strictObject({ filled: z.number().int() });
 
   /** Build the zod `place` tool. */
   function place(): FunctionTool {

@@ -4,7 +4,9 @@
  *
  * The translation is never narrower than what the schema accepts; it may widen. That keeps a
  * run-start check against the result from reporting a binding as disjoint when the tool would
- * accept it. A schema with no yian equivalent translates to `null`, which means "do not check".
+ * accept it, or an output as disjoint when the tool may return it. Inputs and outputs are both
+ * read open, as JSON Schema reads them and as a call's checks do. A schema with no yian
+ * equivalent translates to `null`, which means "do not check".
  *
  * Knows about: typesys, `tools/context` and, for types only, `tools/function_tools`.
  * Never imports: nodes, compile, compose, runtime, the run boundary, or CLI.
@@ -40,9 +42,9 @@ function get(schema: ValueRecord, key: string): unknown {
 /**
  * Translate a JSON Schema into a yian `Type` that accepts at least what it accepts.
  *
- * `closed` says whether an object schema with `properties` describes only those keys: `false`
- * for tool inputs, which accept extra keys, and `true` for tool outputs. An object with
- * `additionalProperties: false` is closed either way. `root` is the document `$ref` pointers
+ * `closed` says whether an object schema with `properties` describes only those keys; tools read
+ * theirs with `false`, as JSON Schema does. An object with `additionalProperties: false` is closed
+ * either way. `root` is the document `$ref` pointers
  * resolve against; absent, it is `schema`. Returns `null` when the schema has no yian
  * equivalent or is too big to translate (`MAX_NODES` nodes, counting each path to a def that
  * sits on a `$ref` cycle).
@@ -85,8 +87,8 @@ export function typeFromJsonSchema(
 const INPUT_TYPES = new WeakMap<object, WeakMap<object, Type | null>>();
 
 /**
- * Translate one tool input's JSON Schema as an open schema, or return `null` when it nests
- * too deeply.
+ * Translate one tool input's or output's JSON Schema as an open schema, or return `null` when it
+ * nests too deeply.
  *
  * The result for a frozen schema and root is kept and returned again, since a tool's schemas are
  * read on every call.
@@ -418,8 +420,9 @@ export interface ToolTypes {
    */
   readonly extra?: Type | null;
   /**
-   * The return type, read from `outputJsonSchema` as a closed schema, or `null` when it is not
-   * checked: the tool has no output schema, or yian can't translate it.
+   * The return type, read from `outputJsonSchema` as `inputTypeFromJsonSchema` reads a schema (the
+   * reading a call's result check uses), or `null` when it is not checked: the tool has no output
+   * schema, or yian can't translate it.
    */
   readonly output: Type | null;
 }
@@ -456,17 +459,12 @@ export function toolTypes(tool: FunctionTool): ToolTypes {
   };
 }
 
-/** Translate `tool`'s output JSON Schema as a closed schema, or return `null` when it has none. */
+/**
+ * Translate `tool`'s output JSON Schema as a call's result check reads it, or return `null` when
+ * it has none.
+ */
 function outputType(tool: FunctionTool): Type | null {
   // `??`: a tool built by an older copy of yian has no `outputJsonSchema` field.
   const schema = tool.outputJsonSchema ?? null;
-  if (schema === null) return null;
-  try {
-    return typeFromJsonSchema(schema, { closed: true });
-  } catch (error) {
-    // Deep nesting overflows the translator's recursion; the output is then unchecked, as an
-    // input is in `inputTypeFromJsonSchema`.
-    if (error instanceof RangeError) return null;
-    throw error;
-  }
+  return schema === null ? null : inputTypeFromJsonSchema(schema);
 }

@@ -326,3 +326,37 @@ test("a child flow value that may be null leaves the outer value reaching", asyn
   expect(message).toStartWith("flow llm_config.model: ");
   expect(message).toContain("agent 'c/a'");
 });
+
+/**
+ * Return a flow whose defs `d1` .. `d<depth - 1>` each call the next twice, under a root that calls
+ * `d1` twice, so the last def is reached along 2^depth static paths; `leaf` is the last def's node.
+ */
+function diamond(depth: number, leaf: string, rootLlm = ""): string {
+  const calls = (callee: string, pad: string) =>
+    `${pad}nodes:\n${pad}  k0: {kind: call, call: ${callee}, input: {}}\n${pad}  k1: {kind: call, call: ${callee}, input: {}}\n` +
+    `${pad}output: \${k0.output}\n`;
+  let text = `id: f\nname: f\n${rootLlm}defs:\n`;
+  for (let i = 1; i < depth; i++) {
+    text += `  d${i}:\n` + (i === depth - 1 ? `    nodes:\n      a: ${leaf}\n    output: \${a.output}\n` : calls(`d${i + 1}`, "    "));
+  }
+  return text + calls("d1", "");
+}
+
+test("a deep diamond of defs walks each def once", async () => {
+  // Walking every static path would take 2^24 steps.
+  const start = performance.now();
+  await loadFlow(diamond(24, "{kind: agent, prompt: Go., output: str}"), { sourceLabel: "f.yaml" });
+  expect(performance.now() - start).toBeLessThan(2000);
+});
+
+test("a deep diamond reports the first path that inherits a run-time value", async () => {
+  const rootLlm = "llm_config: {model: '${pick.output}'}\n";
+  const text = diamond(24, "{kind: agent, prompt: Go., output: str}", rootLlm).replace(
+    "nodes:\n  k0:",
+    "nodes:\n  pick: {kind: agent, prompt: Pick., output: str, llm_config: {model: m0}}\n  k0:",
+  );
+  const start = performance.now();
+  const message = (await error(text)).diagnostic.message;
+  expect(performance.now() - start).toBeLessThan(2000);
+  expect(message).toContain(`agent '${["k0", ...Array(22).fill("k0"), "a"].join("/")}'`);
+});

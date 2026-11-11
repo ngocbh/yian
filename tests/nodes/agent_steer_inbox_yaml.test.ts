@@ -131,7 +131,7 @@ test("an input named __steer_inbox is reserved", () => {
   const error = loadError(() =>
     assembleText(steerFlow("    steer_inbox: ${input.notes}\n    input:\n      __steer_inbox: ${input.notes}")),
   );
-  expect(error.message).toContain("input '__steer_inbox' is reserved for `steer_inbox:`; rename the input");
+  expect(error.message).toBe("node 'chat' input '__steer_inbox' starts with '__', which yian keeps for the names it generates; rename it");
 });
 
 test("agent node rejects a non-bool steerInbox", () => {

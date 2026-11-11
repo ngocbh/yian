@@ -299,7 +299,7 @@ export class InheritedValue {
  * @returns The first such value in static tree order, or `null`.
  */
 export function findInheritedLlmValue(flow: CascadeFlow): InheritedValue | null {
-  return findInherited(flow, [], null, []);
+  return findInherited(flow, [], null, [], { ids: new Map(), empty: new Set() });
 }
 
 /** Name an `llm_config` field path in a message, such as `llm_config.model`. */
@@ -315,10 +315,24 @@ export function inheritedValueFix(field: ValuePath): string {
 
 /** One enclosing flow's layer on the way down to a child flow. */
 interface Enclosing {
+  /** The flow's number in the walk's `InheritWalk.ids`. */
+  readonly flow: number;
   readonly layer: unknown;
   readonly nullable: Nullable;
   readonly owner: readonly string[];
   readonly callsite: Callsite | null;
+}
+
+/**
+ * What `findInherited` remembers across one walk. Whether a flow's subtree holds an inherited
+ * value depends only on the flow and the flows enclosing it (the outermost one is the run's flow),
+ * never on the callsites in between, so a def called from many nodes is searched once per chain.
+ */
+interface InheritWalk {
+  /** A number for each flow met, which a chain is keyed by. */
+  readonly ids: Map<CascadeFlow, number>;
+  /** The chains of flows, from the run's flow down to the one searched, found to hold no value. */
+  readonly empty: Set<string>;
 }
 
 /** Answer from the static types Compose proved for a flow layer's values, else from tags. */
@@ -333,9 +347,17 @@ function findInherited(
   path: readonly string[],
   callsite: Callsite | null,
   enclosing: readonly Enclosing[],
+  walk: InheritWalk,
 ): InheritedValue | null {
+  let id = walk.ids.get(flow);
+  if (id === undefined) {
+    id = walk.ids.size;
+    walk.ids.set(flow, id);
+  }
+  const chain = [...enclosing.map((outer) => outer.flow), id].join(",");
+  if (walk.empty.has(chain)) return null;
   const layer = flow.flowLlmConfig ?? {};
-  const own: Enclosing = { layer, nullable: flowNullable(flow, layer), owner: path, callsite };
+  const own: Enclosing = { flow: id, layer, nullable: flowNullable(flow, layer), owner: path, callsite };
   for (const [nodeId, node] of flow.nodes) {
     const nodePath = [...path, nodeId];
     if (node instanceof AgentNode && node.llmInherit && enclosing.length > 0) {
@@ -344,10 +366,11 @@ function findInherited(
     }
     const child = nodeChild(node);
     if (child !== null) {
-      const found = findInherited(child, nodePath, node as Callsite, [...enclosing, own]);
+      const found = findInherited(child, nodePath, node as Callsite, [...enclosing, own], walk);
       if (found !== null) return found;
     }
   }
+  walk.empty.add(chain);
   return null;
 }
 

@@ -832,6 +832,7 @@ export async function inboxChat(
         });
     };
     /** A key at the input box while a turn runs; false for one it leaves to `watchKeys` (Esc). */
+    let refreshing = false;
     const liveKey = (key: Key): boolean => {
       // Once the inbox is closing, no prompt comes back: the keys go to no box. Once the turn is
       // ending, they wait for the prompt, which sends a line entered then.
@@ -845,7 +846,14 @@ export async function inboxChat(
       } else if (action !== null && "open" in action) {
         openRow(action.open);
       }
-      view?.refresh();
+      // The keys of one chunk of input come in one burst: the box is redrawn once, after them.
+      if (!refreshing) {
+        refreshing = true;
+        queueMicrotask(() => {
+          refreshing = false;
+          view?.refresh();
+        });
+      }
       return true;
     };
     /**

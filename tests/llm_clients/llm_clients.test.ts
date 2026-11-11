@@ -45,7 +45,7 @@ import {
   SUPPORTED_LLM_PROVIDERS,
 } from "../../src/llm_clients/config.ts";
 import { OPENAI_COMPATIBLE } from "../../src/llm_clients/endpoints.ts";
-import { chatModelFromConfig, DEDICATED_PROVIDERS } from "../../src/llm_clients/factory.ts";
+import { chatModelFromConfig, chatModelTarget, DEDICATED_PROVIDERS } from "../../src/llm_clients/factory.ts";
 import { getKnownModels, getModelOptions, isKnownModel, MODEL_OPTIONS } from "../../src/llm_clients/model_catalog.ts";
 import { listModels, ModelListError } from "../../src/llm_clients/model_list.ts";
 import { ValidationError } from "../../src/llm_clients/provider_blocks.ts";
@@ -296,13 +296,14 @@ test("factory resolves vllm as openai compatible", async () => {
   expect(model.provider).toBe("vllm");
 });
 
-test("structured_output reaches the built model, native when unset", async () => {
+test("structured_output reaches the built model and its credential-free target, native when unset", async () => {
   for (const [config, expected] of [
     [{ provider: "vllm", model: "m", structured_output: "prompt" }, "prompt"],
     [{ provider: "anthropic", model: "claude-opus-4-8", api_key: "k", structured_output: "native" }, "native"],
     [{ provider: "vllm", model: "m" }, "native"],
   ] as const) {
     expect((await build(config)).structuredOutput).toBe(expected);
+    expect(chatModelTarget(config, { env }).structuredOutput).toBe(expected);
   }
 });
 

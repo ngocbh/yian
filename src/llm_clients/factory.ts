@@ -662,8 +662,8 @@ export async function chatModelFromConfig(
 /**
  * Return what `chatModelFromConfig(config)` would build, as structured output reads it
  * (`structuredTarget`), without reading any credential: the provider and model, the wire protocol
- * the route speaks, the Anthropic provider block, and whether the route is the ChatGPT
- * subscription.
+ * the route speaks, the Anthropic provider block, whether the route is the ChatGPT subscription,
+ * and its `structured_output`.
  *
  * A config with its provider, model and connection (a recorded one) reads nothing; otherwise the
  * gaps come from `snapshot`, else one read from `env`, as `resolveProviderAccess` fills them.
@@ -684,7 +684,8 @@ export function chatModelTarget(
   // The Gemini route names the model by its id, without a leading `models/`.
   const model = protocol === GEMINI ? geminiPath(validated.model!)[1] : validated.model!;
   const block = protocol === ANTHROPIC_MESSAGES ? validated.blockFor(provider) : null;
-  return { provider, model, protocol, block, subscription };
+  const structuredOutput = validated.structuredOutput ?? "native";
+  return { provider, model, protocol, block, subscription, structuredOutput };
 }
 
 /**

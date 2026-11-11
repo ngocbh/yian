@@ -40,6 +40,7 @@ import { ScriptedModel } from "../../src/llm/testing.ts";
 import { VectorDBMemory } from "../../src/memory/vectordb.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { ToolContext } from "../../src/tools/context.ts";
+import { toolText } from "../../src/nodes/agent/results.ts";
 import { isReportedToolError } from "../../src/tools/errors.ts";
 import { type FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import type { ToolEntry } from "../../src/tools/registry.ts";
@@ -48,6 +49,11 @@ import { heldScheduler } from "../helpers/schedulers.ts";
 
 let tmp: string;
 let root: string;
+
+/** The status record tool `name` gave, read back from the JSON text the model sees of it. */
+function seenAs(name: string, result: unknown): Record<string, unknown> {
+  return JSON.parse(toolText(name, result)) as Record<string, unknown>;
+}
 
 afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
@@ -222,7 +228,7 @@ output: done
       return found.execute(args, ctx);
     };
     const json = async (name: string, args: Record<string, unknown>, abort?: AbortSignal) =>
-      JSON.parse(String(await invoke(name, args, abort))) as Record<string, unknown>;
+      seenAs(name, await invoke(name, args, abort));
     return { runs, tools, requests, seen, invoke, json };
   }
 
@@ -419,7 +425,7 @@ output: done
       const { invoke, json } = runTools();
       await json("start_flow", { path: "legs.yaml", inputs: { legs: [{ to: "a", mode: "train" }] } });
       expect(await settledJson(json, "r1")).toMatchObject({ status: "succeeded", output: 1 });
-      expect(String(await invoke("flow_status", { run: "r1" }))).toContain('"output":1');
+      expect(toolText("flow_status", await invoke("flow_status", { run: "r1" }))).toContain('"output":1');
     },
     TIMEOUT,
   );
@@ -782,7 +788,7 @@ describe("report_issue", () => {
         signal: new AbortController().signal,
       });
       const args = { problem: "yian check crashed", context: "ran: yian check a.yaml" };
-      const started = JSON.parse(String(await reportIssue.execute(args, ctx)));
+      const started = seenAs("report_issue", await reportIssue.execute(args, ctx));
       expect(started).toMatchObject({ run: "r1" });
       let status = runs.status("r1");
       while (status.status === "running") status = await runs.next("r1", status.seq);
@@ -995,7 +1001,7 @@ output: \${sure.output}
         ...answered({ next: "write", changes: "" }),
       ]);
       const goal = "greet someone by name";
-      const started = JSON.parse(String(await invoke("author_flow", { goal })));
+      const started = seenAs("author_flow", await invoke("author_flow", { goal }));
       expect(started).toMatchObject({ run: "r1", status: "running" });
       const answers = ["Me, daily.", "Yes.", "Write it."];
       const { status, asked } = await drive(runs, "r1", answers);
@@ -1017,7 +1023,7 @@ output: \${sure.output}
       ]);
       expect(runs.status("r2")).toMatchObject({ status: "succeeded", output: "hi ada" });
       // The fix saw the check's error, and the review the fixed flow.
-      expect(requestsOf(model, "You fix a yian")[0]).toContain("invalid:");
+      expect(requestsOf(model, "You fix a yian")[0]).toContain("Its error:\ngreet.yaml\ninvalid YAML:");
       expect(requestsOf(model, "You review flows")[0]).toContain("Review the flow greet.yaml:");
       const plan = requestsOf(model, "finish a yian")[0]!;
       expect(plan).toContain("No description.");
@@ -1185,7 +1191,7 @@ output: \${sure.output}
       };
       const { runs, requests, invoke, model } = authoringTools(answered({ findings: [finding] }));
       const starts = recordStarts(runs);
-      const started = JSON.parse(String(await invoke("review_flow", { path: "greet.yaml" })));
+      const started = seenAs("review_flow", await invoke("review_flow", { path: "greet.yaml" }));
       expect(started).toMatchObject({ run: "r1" });
       expect(Object.keys(starts[0]!).sort(compareCodeUnits)).toEqual(["read_docs", "read_flow"]);
       const { status } = await drive(runs, "r1", []);
@@ -1240,14 +1246,12 @@ output: \${sure.output}
       const refused = await call("start_flow", { ...args, content: GREEDY, inputs: {} });
       expect(String(refused)).toStartWith("not started:");
       expect(String(refused)).toContain("write_flow");
-      const tried = JSON.parse(
-        String(await call("start_flow", { ...args, content: GREET, inputs: { who: "ada" } })),
-      );
+      const tried = seenAs("start_flow", await call("start_flow", { ...args, content: GREET, inputs: { who: "ada" } }));
       expect(tried).toMatchObject({ run: "r2" });
       expect(requests.at(-1)!.title).toBe("Run g.yaml (a draft, for author_flow)");
-      let status = JSON.parse(String(await call("wait_flow", { run: "r2", seconds: 60 })));
-      while (status.status === "running") {
-        status = JSON.parse(String(await call("wait_flow", { run: "r2", seconds: 60 })));
+      let status = seenAs("wait_flow", await call("wait_flow", { run: "r2", seconds: 60 }));
+      while (status["status"] === "running") {
+        status = seenAs("wait_flow", await call("wait_flow", { run: "r2", seconds: 60 }));
       }
       expect(status).toMatchObject({ status: "succeeded", output: "hi ada" });
       // What it saw isn't marked seen: the chat still tells the assistant how the run ended.

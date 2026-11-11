@@ -36,7 +36,7 @@ import type { SourceCatalogBuilder } from "../source/catalog.ts";
 import type { SourceCursor } from "../source/index.ts";
 
 /** Why a written-out `!object` can't hold a mapping with an empty key. */
-export const EMPTY_RECORD_KEY =
+const EMPTY_RECORD_KEY =
   "a record key can't be empty; a written-out `!object` keeps its keys as record fields";
 
 /**
@@ -46,7 +46,7 @@ export const EMPTY_RECORD_KEY =
  * @param value The entry's value, unwrapped from any `ValueTemplate`.
  * @returns True when the tag is a bare, non-optional `object` and the value is a record.
  */
-export function infersRecord(tag: Type, value: unknown): boolean {
+function infersRecord(tag: Type, value: unknown): boolean {
   return tag.kind === ValueKind.OBJECT && tag.fields === undefined && !tag.nullable && isRecord(value);
 }
 

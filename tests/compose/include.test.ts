@@ -867,15 +867,15 @@ test.each(["!include(list(str)) h.yaml", "!include(str) h.txt"])(
   },
 );
 
-test("a case branch an !include(T) reads is shown as the entry to write with the !include, not the text", async () => {
+test("a case branch an !include(T) reads is a value branch", async () => {
   write({ "a.md": "the whole file ${HOME}" });
   const flow =
     "id: f\nname: f\ninput:\n  x: !int\nnodes:\n  g:\n    kind: case\n    cases:\n      - when: input.x > 1\n" +
     "        then: !include(str) a.md\n    else: b\n  b: !str no\noutput: ${b.output}\n";
   const { message, line } = await failure(load(flow));
   expect(message).toBe(
-    "case node 'g' then: a branch names a node or calls a flow; put the value in its own entry in `nodes:` " +
-      "and name it: `g_then_0: !include(str) a.md` and `then: g_then_0`",
+    "case node 'g' then: a branch names a node or calls a flow; put the value in an entry in `nodes:` " +
+      "and name that entry",
   );
   expect(line).toBe(10);
 });

@@ -275,8 +275,8 @@ test("case descriptor rejects misaligned or non-opaque origins", () => {
 test.each([
   [
     "[{then: done}]",
-    "case node 'gate' then: `done` names no node. For the text, add a value entry and name it: " +
-      "`done_text: !str done`",
+    "case node 'gate' then: `done` names no node. For a value, put it in an entry in `nodes:` and " +
+      "name that entry",
   ],
   [
     "[{when: 1}]",

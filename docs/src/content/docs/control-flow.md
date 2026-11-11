@@ -101,8 +101,9 @@ A `then:` or `else:` names what runs on that branch:
 - a value entry, which is also a node (`then: approve`);
 - a child flow call, as an unquoted `call(...)` (`else: call(respond, text=${input.text})`).
 
-Anything else, such as quoted text, a number or `null`, is a load error that shows the value
-entry to write instead. A word that names no node is a load error that suggests the nearest node.
+Anything else, such as quoted text, a number or `null`, is a load error: put the value in a
+value entry and name that. A word that names no node is a load error that suggests the nearest
+node.
 
 A node that names the `case` itself in `depends_on:` or `runs_after:` isn't on a branch: it runs
 whichever branch is taken.

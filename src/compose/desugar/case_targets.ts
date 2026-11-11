@@ -133,8 +133,8 @@ function liftCaseTarget(
   if (typeof target !== "string") return target; // null (handled by the caller) or a native literal
   // A whole-value `call(...)` directive: recognized BEFORE the plain-id passthrough, since a
   // directive carries no `${` and would otherwise look like a bare node id. The loader's
-  // `checkCaseBranches` rejects a malformed branch call first, with the value entry to write for
-  // the text; this keeps a direct caller's error located too.
+  // `checkCaseBranches` rejects a malformed branch call first; this keeps a direct caller's error
+  // located too.
   let calls: InlineCall[];
   try {
     [, calls] = desugarCallDirectives(target, mint);

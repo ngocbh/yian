@@ -15,7 +15,6 @@ import { expect, test } from "bun:test";
 import type { CompiledFlow } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { INLINE_FLOW_PREFIX } from "../../src/compose/desugar/inline_bodies.ts";
-import { yamlQuoted } from "../../src/compose/helpers/tags.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { runFlow } from "../../src/run.ts";
 import { typeFor } from "../../src/typesys/types.ts";
@@ -66,14 +65,9 @@ const load = (text: string, children: Record<string, ComposedFlow> = { take: TAK
 const run = async (text: string, inputs: Record<string, unknown>) => runFlow(await loadConformanceFlow(text), inputs);
 
 /** Return the full message for a value branch of `gate`. */
-const valueBranch = (label: string, entry: string, shown: string) =>
-  `case node 'gate' ${label}: a branch names a node or calls a flow; put the value in ` +
-  `its own entry in \`nodes:\` and name it: \`${entry}: ${shown}\` and \`${label}: ${entry}\``;
-
-/** Return the full message for a `take` call inside a `${...}` branch of `gate`. */
-const spanFlowCall = (label: string) =>
-  `case node 'gate' ${label}: a flow call 'take' inside \`\${...}\` is not supported; ` +
-  `call the flow as the branch: \`${label}: call(take, ...)\``;
+const valueBranch = (label: string) =>
+  `case node 'gate' ${label}: a branch names a node or calls a flow; put the value in an entry ` +
+  "in `nodes:` and name that entry";
 
 /** Return the 1-based line number of the first line containing `needle`. */
 const lineOf = (text: string, needle: string) => text.split("\n").findIndex((line) => line.includes(needle)) + 1;
@@ -82,9 +76,9 @@ const lineOf = (text: string, needle: string) => text.split("\n").findIndex((lin
 const synthIds = (compiled: CompiledFlow) =>
   [...compiled.nodes.keys()].filter((nodeId) => nodeId.startsWith("__call_"));
 
-test("non bare then call is rejected", () => {
-  // A flow call inside a `${...}` branch is the retired inline `${flow(args)}` form, which a value
-  // entry can't hold either: the error points at the call directive.
+test("a flow call inside a span branch is a value branch", () => {
+  // A flow call inside a `${...}` branch is the retired inline `${flow(args)}` form; its value
+  // entry then says to write the call directive.
   const text = `
 id: bad
 name: bad
@@ -100,11 +94,10 @@ nodes:
     else: call(take, stance="c")
 output: \${gate.output}
 `;
-  expect(loadError(() => load(text)).message).toBe(spanFlowCall("then"));
+  expect(loadError(() => load(text)).message).toBe(valueBranch("then"));
 });
 
-test("call directive inside a span branch names the flow", () => {
-  // `call` is the directive, not a flow: the hint names the flow it calls.
+test("a call directive inside a span branch is a value branch", () => {
   const text = `
 id: bad
 name: bad
@@ -120,10 +113,7 @@ nodes:
     else: call(take, stance="c")
 output: \${gate.output}
 `;
-  expect(loadError(() => load(text)).message).toBe(
-    "case node 'gate' then: call(...) can't go inside `${...}`. Write it unquoted as the branch, " +
-      "`then: call(take, ...)`.",
-  );
+  expect(loadError(() => load(text)).message).toBe(valueBranch("then"));
 });
 
 // An inline-binding call(...) AND a then: call(...) in one flow: the two share one minter.
@@ -232,9 +222,7 @@ output: \${gate.output}
 `;
   expect(loadError(() => load(text)).message).toBe(
     "case node 'gate' then: a branch target must be a node id or a single call: text follows the " +
-      "closing `)`: '| call(take, stance=\"b\")'; a call(...) must be the whole value. For the text, " +
-      "add a value entry and name it: " +
-      "`gate_then_0: !str 'call(take, stance=\"a\") | call(take, stance=\"b\")'`",
+      "closing `)`: '| call(take, stance=\"b\")'; a call(...) must be the whole value",
   );
 });
 
@@ -280,11 +268,7 @@ nodes:
 output: \${gate.output}
 `;
   const error = loadError(() => load(text));
-  const entry = label === "then" ? "gate_then_0" : "gate_else";
-  expect(error.message).toBe(
-    `case node 'gate' ${label}: a branch target must be a node id or a single call: ` +
-      `${problem}. For the text, add a value entry and name it: \`${entry}: !str ${yamlQuoted(target)}\``,
-  );
+  expect(error.message).toBe(`case node 'gate' ${label}: a branch target must be a node id or a single call: ${problem}`);
   expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(lineOf(text, `${label}: call(`));
 });
 
@@ -303,7 +287,7 @@ nodes:
     else: "call(take) tail"
 output: \${gate.output}
 `;
-  expect(loadError(() => load(text, {})).message).toBe(valueBranch("then", "gate_then_0", '!str "call(take"'));
+  expect(loadError(() => load(text, {})).message).toBe(valueBranch("then"));
 });
 
 test("case output over call directive then taken", async () => {
@@ -380,23 +364,22 @@ test.each([
   ["then", '${ take(stance="pro") }'],
   ["else", '"${ take(stance=\'con\') }"'],
   ["then", '{a: "${ take(stance=\'pro\') }"}'],
-])("then span flow call target is rejected: %s %s", (label, branch) => {
-  // The retired inline `${flow(args)}` case branch is a LoadError pointing at call(...).
+])("a span flow call branch is a value branch: %s %s", (label, branch) => {
+  // The retired inline `${flow(args)}` case branch is a value, located at the branch.
   const [then, else_] =
     label === "else" ? ['call(take, stance="pro")', branch] : [branch, 'call(take, stance="con")'];
   const text = SPAN_CALL_FLOW.replace("THEN", then).replace("ELSE", else_);
   const error = loadError(() => load(text));
-  expect(error.message).toBe(spanFlowCall(label));
+  expect(error.message).toBe(valueBranch(label));
   expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(lineOf(text, `${label}: ${branch}`));
 });
 
-test("the call directive a span flow call points at loads", async () => {
+test("the call directive written for a span flow call loads", async () => {
   const text = SPAN_CALL_FLOW.replace("THEN", 'call(take, stance="pro")').replace("ELSE", 'call(take, stance="con")');
   expect((await run(text, { score: 0.9 })).output).toBe("took:pro");
 });
 
-test("malformed branch call holding a span offers no text rewrite", () => {
-  // Quoted call text holding a span is its own load error, so no value entry is shown.
+test("a malformed branch call holding a span names the problem", () => {
   const text = `
 id: bad
 name: bad

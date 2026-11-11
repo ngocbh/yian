@@ -25,7 +25,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'case node ''a'' then: a branch names a node or calls a flow; put the value in its own entry in `nodes:` and name it: `a_then_0: !int 5` and `then: a_then_0`'
+      message: "case node 'a' then: a branch names a node or calls a flow; put the value in an entry in `nodes:` and name that entry"
       frames:
       - label: flow.yaml
         range: [11, 15, 11, 16]

@@ -250,7 +250,7 @@ $ yian run greet_team.yaml --input lead=Ada --input team="Bo, Cy"
 ```
 
 - `call:` names a `defs:` entry first, then a [`uses:`](#import-a-flow-from-another-file-with-uses)
-  alias. Any other name is a load error.
+  alias. Any other name is a load error, and so is a `defs:` name or alias that is also a node id.
 - `input:` lists the child's arguments, one per name. A whole `${...}` record there is a load
   error.
 - Each argument must fit the child's input type, checked at load. Nothing is converted: a `str`

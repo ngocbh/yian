@@ -531,7 +531,7 @@ nodes:
 output: \${__call_0.output}
 `;
   expect(loadError(() => assembleText(text)).message).toBe(
-    "node id '__call_0' uses the reserved inline-call prefix '__call_'",
+    "node id '__call_0' starts with '__', which yian keeps for the names it generates; rename it",
   );
 });
 

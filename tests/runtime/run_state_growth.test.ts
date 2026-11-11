@@ -1041,7 +1041,7 @@ test.each([
     name: "Set in the seed",
     grow: () => new Grow({ bad: new Set([1, 2]) }),
     original: TypeCheckError,
-    message: /^<Set object> is not a JSON value$/,
+    message: /^Set is not a yian value$/,
   },
 ])("growth wraps a node-produced carrier rejection: $name", ({ grow, original, message }) => {
   const { state } = initializedSpawner();

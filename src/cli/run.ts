@@ -119,7 +119,7 @@ import {
   preflightKeys,
   readFlowText,
 } from "./startup.ts";
-import { cells, columnsOf } from "./cells.ts";
+import { cells, columnsOf, rowsOf } from "./cells.ts";
 import { Terminal, TerminalStopped } from "./terminal.ts";
 import {
   atTerminal,
@@ -238,8 +238,9 @@ const SPIN_MS = 80;
  * spinner and frozen on the finished line; a node whose start wasn't seen has none. With
  * `verbose` each node's output follows its check. Several nodes can run at once (a fan-out), so
  * there is one spinner line per running node. On a TTY the spinners are redrawn every 80 ms and
- * each finished line is printed over them; off a TTY only the finished lines are printed. Outputs,
- * failure messages and warnings go through `forTerminal`.
+ * each finished line is printed over them; off a TTY only the finished lines are printed. The
+ * spinner block keeps to one row less than the screen, its last row `… and N more running` when
+ * more nodes run. Outputs, failure messages and warnings go through `forTerminal`.
  */
 export class ProgressReporter {
   readonly #out: Writer;
@@ -248,8 +249,8 @@ export class ProgressReporter {
   readonly #now: () => number;
   // Each running node's start time on `#now`.
   readonly #running = new Map<string, number>();
-  // Warning lines raised while paused, printed on `resume` or `stop`.
-  readonly #held: string[] = [];
+  // What was printed while paused (warning and console lines), printed on `resume` or `stop`.
+  readonly #held: (() => void)[] = [];
   #paused = false;
   #frame = 0;
   // Spinner lines on screen, which the next draw or finished line erases.
@@ -317,10 +318,28 @@ export class ProgressReporter {
   warn(message: string): void {
     const line = paint(`warning: ${forTerminal(message, this.#out)}`, "yellow", this.#out, this.#env);
     if (this.#paused) {
-      this.#held.push(line);
+      this.#held.push(() => this.#print(line));
       return;
     }
     this.#print(line);
+    this.#sync();
+  }
+
+  /**
+   * Run `print`, which prints whole lines elsewhere on the terminal (a `console` call of the
+   * run's), with the spinners erased first and drawn again below what it printed; while paused it
+   * is held, as a warning is.
+   */
+  around(print: () => void): void {
+    if (this.#paused) {
+      this.#held.push(print);
+      return;
+    }
+    if (this.#drawn > 0) {
+      this.#write(this.#erase());
+      this.#drawn = 0;
+    }
+    print();
     this.#sync();
   }
 
@@ -351,9 +370,9 @@ export class ProgressReporter {
     return start === undefined ? "" : ` ${elapsedTag(this.#now() - start)}`;
   }
 
-  /** Print the warning lines held while paused. */
+  /** Print the lines held while paused. */
   #flushHeld(): void {
-    for (const line of this.#held.splice(0)) this.#print(line);
+    for (const print of this.#held.splice(0)) print();
   }
 
   #write(text: string): void {
@@ -373,12 +392,18 @@ export class ProgressReporter {
     this.#write(`${erase}${text}\n`);
   }
 
-  /** Draw one spinner line per running node in place of those on screen. */
+  /**
+   * Draw one spinner line per running node in place of those on screen, at most one row less than
+   * the screen has: a taller block would scroll its top out of the erase's reach.
+   */
   #draw(): void {
     const columns = this.#out.columns;
     const frame = SPINNER.charAt(this.#frame);
     const now = this.#now();
-    const lines = [...this.#running].map(([nodeId, start]) => {
+    const running = [...this.#running];
+    const room = Math.max(1, rowsOf(this.#out) - 1);
+    const shown = running.length > room ? running.slice(0, room - 1) : running;
+    const lines = shown.map(([nodeId, start]) => {
       const chars = [...nodeId];
       const tag = ` ${elapsedTag(now - start)}`;
       // A line wider than the terminal would wrap, and the erase would miss its first part: the
@@ -388,6 +413,7 @@ export class ProgressReporter {
       const id = paint(chars.slice(0, width).join(""), "cyan", this.#out, this.#env);
       return `${frame} ${id}${fits ? tag : ""}`;
     });
+    if (shown.length < running.length) lines.push(`${frame} … and ${running.length - shown.length} more running`);
     this.#write(this.#erase() + lines.join("\n"));
     this.#drawn = lines.length;
   }
@@ -1103,6 +1129,8 @@ export async function run(flowPath: string | undefined, options: RunOptions, io:
   // Building it has no side effects; the terminal pauses it while a prompt is up.
   const { quiet, verbose } = options;
   const reporter = quiet ? null : new ProgressReporter(io.stderr, { verbose, env: io.env });
+  // The spinner owns the cursor's line, so a CODE body's console line prints through it.
+  const restoreConsole = reporter !== null && io.stderr.isTTY === true ? consoleAround(reporter) : () => {};
   // `startRun` sets it just before `runFlow`.
   const started = { value: false };
   // Building it touches neither stream; it reads keys only when it prompts.
@@ -1141,7 +1169,22 @@ export async function run(flowPath: string | undefined, options: RunOptions, io:
     disposeSignals();
     stop?.removeEventListener("abort", forwardStop);
     reporter?.stop();
+    restoreConsole();
   }
+}
+
+/**
+ * Send `console`'s `log`, `info`, `debug`, `warn` and `error` calls through `reporter.around`, so
+ * each prints its line above the spinners, until the function returned puts them back.
+ */
+function consoleAround(reporter: ProgressReporter): () => void {
+  const saved = (["log", "info", "debug", "warn", "error"] as const).map((name) => [name, console[name]] as const);
+  for (const [name, method] of saved) {
+    console[name] = (...args: unknown[]) => reporter.around(() => method.apply(console, args));
+  }
+  return () => {
+    for (const [name, method] of saved) console[name] = method;
+  };
 }
 
 /** What `run` builds for its body: the terminal, the run's stop, progress, whether it started. */

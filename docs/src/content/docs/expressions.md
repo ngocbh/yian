@@ -300,9 +300,10 @@ YAML tags can't go inside `${...}`, so two forms work with [types](/types/) ther
 | `Buy(x)` | `x`, checked as a `Buy`, like `!Buy ${x}` |
 | `Buy(action="buy", qty=2)` | A `Buy` record with exactly those fields, checked |
 
-`Buy` is a name from `typedefs:`; `isinstance` also takes a built-in type, as in
-`isinstance(v, int)`. A constructor that can never succeed, such as a text where
-the type wants an int, is a load error; others are checked when they run.
+`Buy` is a name from `typedefs:`. `isinstance` also takes a built-in type: `str`, `int`, `float`,
+`bool`, `date`, `datetime`, `object` (any record), `list` (any list) or `Message` (a chat message),
+as in `isinstance(v, list)`. A constructor that can never succeed, such as a text where the type
+wants an int, is a load error; others are checked when they run.
 
 `isinstance` and field checks also narrow a value for the reads after them; see
 [Narrowing](/types/#narrowing).

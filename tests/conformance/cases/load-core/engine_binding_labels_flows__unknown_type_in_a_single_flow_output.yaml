@@ -15,7 +15,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'flow output: unknown type ''Nope''; isinstance takes a typedefs: name or one of str, int, float, bool, date, datetime, object'
+      message: 'flow output: unknown type ''Nope''; isinstance takes a typedefs: name or one of str, int, float, bool, date, datetime, object, list, Message'
       frames:
       - label: flow.yaml
         range: [11, 9, 11, 37]

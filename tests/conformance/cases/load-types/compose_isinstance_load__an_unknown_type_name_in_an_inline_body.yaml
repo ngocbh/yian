@@ -52,7 +52,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'node ''inner'' input ''is_buy'': unknown type ''By''; isinstance takes a typedefs: name or one of str, int, float, bool, date, datetime, object'
+      message: 'node ''inner'' input ''is_buy'': unknown type ''By''; isinstance takes a typedefs: name or one of str, int, float, bool, date, datetime, object, list, Message'
       frames:
       - label: flow.yaml
         range: [41, 23, 41, 53]

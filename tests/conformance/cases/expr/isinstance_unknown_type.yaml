@@ -5,5 +5,5 @@ values: {x: 1}
 expect:
   raises:
     class: TypeCheckError
-    message: "unknown type 'Nope'; isinstance takes a typedefs: name or one of str, int, float, bool, date, datetime, object"
+    message: "unknown type 'Nope'; isinstance takes a typedefs: name or one of str, int, float, bool, date, datetime, object, list, Message"
     path: []

@@ -1411,7 +1411,7 @@ test("a predicate's isinstance check with an unknown type reports the type", () 
   // A typo in the checked type is reported as that typo, not as an unguarded read.
   expect(askError(UNION_STATE, "until: isinstance(r, Dnoe) and r.answer == 'ok'")).toBe(
     "loop node 'ask' until: unknown type 'Dnoe'; isinstance takes a typedefs: name or one of str, int, float, " +
-      "bool, date, datetime, object",
+      "bool, date, datetime, object, list, Message",
   );
 });
 

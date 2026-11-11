@@ -1,0 +1,10 @@
+kind: expr
+# `list` is any list, whatever its items; `Message` is the built-in chat message record.
+expr: "[isinstance(xs, list), isinstance(s, list), isinstance(m, Message), isinstance(r, Message)]"
+values:
+  xs: [1, "a"]
+  s: abc
+  m: {role: user, parts: [{type: text, text: hi}]}
+  r: {role: user}
+expect:
+  value: [true, false, true, false]

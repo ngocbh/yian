@@ -135,9 +135,15 @@ describe("resolution", () => {
     expect(typeEquals(resolveIsinstanceType("Buy", REG), BUY)).toBe(true);
   });
 
-  test("resolveIsinstanceType refuses an unknown name", () => {
-    expect(typeCheckError(() => resolveIsinstanceType("list", REG)).message).toBe(
-      "unknown type 'list'; isinstance takes a typedefs: name or one of str, int, float, bool, date, datetime, object",
+  test("resolveIsinstanceType takes list as any list and Message as the built-in record", () => {
+    expect(typeEquals(resolveIsinstanceType("list", REG), typeFor("list(Any)", REG))).toBe(true);
+    expect(typeEquals(resolveIsinstanceType("Message", REG), typeFor("Message", REG))).toBe(true);
+  });
+
+  test.each(["file", "Any", "lst"])("resolveIsinstanceType refuses %s", (name) => {
+    expect(typeCheckError(() => resolveIsinstanceType(name, REG)).message).toBe(
+      `unknown type '${name}'; isinstance takes a typedefs: name or one of str, int, float, bool, date, ` +
+        "datetime, object, list, Message",
     );
   });
 
@@ -794,10 +800,29 @@ asserts:
   expect(errorLine(error)).toBe(lineOf(text, "Nope"));
 });
 
-test("list is not an isinstance type name", () => {
-  const text = INPUT_FLOW.replace("d.output, Buy", "d.output, list");
-
-  expect(loadError(() => loadedNodes(text)).message).toContain("unknown type 'list'");
+test("isinstance tells a list and a Message apart in an Any (runs)", async () => {
+  const loaded = await loadConformanceFlow(`id: k
+name: k
+input:
+  v: !Any
+nodes:
+  route:
+    kind: case
+    cases:
+      - when: isinstance(input.v, list)
+        then: items
+      - when: isinstance(input.v, Message)
+        then: role
+    else: other
+  items: !str "\${len(input.v)} items"
+  role: !str "\${input.v.role}"
+  other: !str other
+output: \${items.output | role.output | other.output}
+`);
+  const message = { role: "user", parts: [{ type: "text", text: "hi" }] };
+  for (const [v, output] of [[[1n, "a"], "2 items"], [message, "user"], [{ role: "user" }, "other"], ["hi", "other"]]) {
+    expect(await runFlow(loaded, { v }, { env })).toMatchObject({ status: "succeeded", output });
+  }
 });
 
 test("isinstance in a sleep until is a located load error", () => {

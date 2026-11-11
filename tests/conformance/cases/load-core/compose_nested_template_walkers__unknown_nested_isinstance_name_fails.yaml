@@ -19,7 +19,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'node ''c'' input ''x'': unknown type ''Nope''; isinstance takes a typedefs: name or one of str, int, float, bool, date, datetime, object'
+      message: 'node ''c'' input ''x'': unknown type ''Nope''; isinstance takes a typedefs: name or one of str, int, float, bool, date, datetime, object, list, Message'
       frames:
       - label: flow.yaml
         range: [12, 10, 12, 47]

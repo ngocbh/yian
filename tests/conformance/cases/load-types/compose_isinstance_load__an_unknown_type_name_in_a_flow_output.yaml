@@ -24,7 +24,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'flow output ''is_buy'': unknown type ''Bye''; isinstance takes a typedefs: name or one of str, int, float, bool, date, datetime, object'
+      message: 'flow output ''is_buy'': unknown type ''Bye''; isinstance takes a typedefs: name or one of str, int, float, bool, date, datetime, object, list, Message'
       frames:
       - label: flow.yaml
         range: [20, 11, 20, 39]

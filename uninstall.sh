@@ -13,6 +13,8 @@
 set -eu
 
 MARK="yian install.sh"
+# The wrapper's own line that says install.sh wrote it, matched whole.
+WRAPPER_MARK="# Written by $MARK"
 # The file in a clone's .git that says install.sh made the clone.
 CLONE_MARK=yian-install
 
@@ -26,9 +28,33 @@ fi
 step() { printf '%s→%s %s\n' "$C_STEP" "$C_OFF" "$1"; }
 ok() { printf '%s✓%s %s\n' "$C_OK" "$C_OFF" "$1"; }
 warn() { printf '%s⚠%s %s\n' "$C_WARN" "$C_OFF" "$1"; }
-die() {
+fail() {
   printf '%s✗%s %s\n' "$C_ERR" "$C_OFF" "$1" >&2
+  FAILED=1
+}
+die() {
+  fail "$1"
   exit 1
+}
+
+# Single-quotes $1 for a shell script.
+quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+# The lines install.sh adds to rc files to put the folder $1 on PATH: one guarded line each, with
+# the mark at its end. These are the only lines uninstall.sh removes.
+sh_path_line() {
+  dir=$(quote "$1")
+  printf '%s' "case \":\$PATH:\" in *:$dir:*) ;; *) export PATH=$dir:\"\$PATH\" ;; esac  # added by $MARK"
+}
+fish_path_line() {
+  printf '%s' "fish_add_path -g $(quote "$1")  # added by $MARK"
+}
+
+# The size of the file $1 in bytes.
+size() {
+  wc -c <"$1" | tr -d ' '
 }
 
 parse_args() {
@@ -56,7 +82,7 @@ parse_args() {
 remove_wrapper() {
   target=${YIAN_BIN_DIR:-$HOME/.local/bin}/yian
   [ -e "$target" ] || return 0
-  if grep -q "$MARK" "$target" 2>/dev/null; then
+  if LC_ALL=C grep -a -q -x -F -e "$WRAPPER_MARK" "$target" 2>/dev/null; then
     rm -f "$target"
     ok "Removed $target"
   else
@@ -64,17 +90,49 @@ remove_wrapper() {
   fi
 }
 
+# Removes the marked PATH lines from the rc file $1. grep reads it as bytes, whatever the locale
+# and whatever it holds. The new text is checked to be the old one less exactly those lines before
+# it's written back, through the file so its permissions and any symlink stay; a failed write puts
+# the old text back.
+strip_path_lines() {
+  if [ ! -w "$1" ]; then
+    warn "Left the PATH line in $1: the file isn't writable."
+    return 0
+  fi
+  if ! NEW=$(mktemp) || ! OLD=$(mktemp); then
+    fail "Could not make a temp file, so the PATH line is still in $1."
+    return 0
+  fi
+  code=0
+  LC_ALL=C grep -a -v -x -F -e "$SH_LINE" -e "$FISH_LINE" "$1" >"$NEW" || code=$?
+  # grep ends a last line that has no newline with one.
+  expected=$(($(size "$1") - $(LC_ALL=C grep -a -x -F -e "$SH_LINE" -e "$FISH_LINE" "$1" | wc -c)))
+  if [ -n "$(tail -c 1 "$1")" ]; then expected=$((expected + 1)); fi
+  if [ "$code" -gt 1 ] || [ "$(size "$NEW")" -ne "$expected" ] ||
+    ! cat "$1" >"$OLD" || [ "$(size "$OLD")" -ne "$(size "$1")" ]; then
+    fail "Could not write the new text of $1, so it's as it was, PATH line included."
+  elif cat "$NEW" >"$1" && [ "$(size "$1")" -eq "$expected" ]; then
+    ok "Removed the PATH line from $1"
+  elif cat "$OLD" >"$1"; then
+    fail "Could not write $1, so it's as it was, PATH line included."
+  else
+    fail "Could not write $1. Its old text is in $OLD."
+    OLD=
+  fi
+  rm -f "$NEW" ${OLD:+"$OLD"}
+  NEW= OLD=
+}
+
 remove_path_lines() {
+  bin_dir=${YIAN_BIN_DIR:-$HOME/.local/bin}
+  SH_LINE=$(sh_path_line "$bin_dir")
+  FISH_LINE=$(fish_path_line "$bin_dir")
   zdir=${ZDOTDIR:-$HOME}
   for rc in "$HOME/.bashrc" "$HOME/.profile" "$HOME/.bash_profile" "$HOME/.bash_login" \
     "$zdir/.zshrc" "$zdir/.zprofile" "${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"; do
-    [ -f "$rc" ] && grep -q "$MARK" "$rc" || continue
-    tmp=$(mktemp)
-    grep -v "$MARK" "$rc" >"$tmp" || true
-    # Write back through the original file, so its permissions and any symlink stay.
-    cat "$tmp" >"$rc"
-    rm -f "$tmp"
-    ok "Removed the PATH line from $rc"
+    if [ -f "$rc" ] && LC_ALL=C grep -a -q -x -F -e "$SH_LINE" -e "$FISH_LINE" "$rc"; then
+      strip_path_lines "$rc"
+    fi
   done
 }
 
@@ -119,11 +177,15 @@ remove_clone() {
 }
 
 main() {
+  FAILED= NEW= OLD=
+  trap 'rm -f ${NEW:+"$NEW"} ${OLD:+"$OLD"}' EXIT
+  trap 'exit 1' HUP INT TERM
   parse_args "$@"
   remove_wrapper
   remove_path_lines
   remove_clone
   step "Left Bun, your saved logins in ${XDG_CONFIG_HOME:-$HOME/.config}/yian and your run logs in $HOME/.yian in place."
+  if [ -n "$FAILED" ]; then exit 1; fi
 }
 
 main "$@"

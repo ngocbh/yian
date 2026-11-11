@@ -19,6 +19,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -63,12 +64,19 @@ function run(script: string, home: string, extra: Record<string, string> = {}) {
 /** Every rc file install.sh may write, relative to the home. */
 const RC_FILES = [".bashrc", ".profile", ".bash_profile", ".bash_login", ".zshrc", ".zprofile", ".config/fish/config.fish"];
 
-/** How many times the installer's PATH line is in `rc`. */
+/** How many of the installer's marked PATH lines `rc` holds. */
 function pathLines(rc: string): number {
   if (!existsSync(rc)) return 0;
-  return readFileSync(rc, "utf8")
+  return readFileSync(rc, "latin1")
     .split("\n")
-    .filter((line) => line.includes("yian install.sh")).length;
+    .filter((line) => line.endsWith("  # added by yian install.sh")).length;
+}
+
+/** The line install.sh adds to an rc file for `shell` to put `bin` on PATH. */
+function markedLine(shell: string, bin: string): string {
+  const line =
+    shell === "fish" ? `fish_add_path -g '${bin}'` : `case ":$PATH:" in *:'${bin}':*) ;; *) export PATH='${bin}':"$PATH" ;; esac`;
+  return `${line}  # added by yian install.sh`;
 }
 
 /** A temp home with a stub `bun` and `curl`, and a fixture repository to clone. */
@@ -212,10 +220,10 @@ describe.if(process.versions.bun !== undefined)("install.sh", () => {
     expect(existsSync(join(bin, "yian"))).toBe(true);
   });
 
-  test("refuses to overwrite a yian it didn't write", () => {
+  test("refuses to overwrite a yian it didn't write, even one that names yian install.sh", () => {
     const { home, bin } = setup();
     mkdirSync(bin, { recursive: true });
-    writeFileSync(join(bin, "yian"), "#!/bin/sh\necho mine\n");
+    writeFileSync(join(bin, "yian"), "#!/bin/sh\n# Written by yian install.sh, then changed\necho mine\n");
     const result = run("install.sh", home);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(join(bin, "yian"));
@@ -347,10 +355,13 @@ describe.if(process.versions.bun !== undefined)("install.sh, PATH", () => {
     ksh: [".profile"],
   };
   for (const [shell, files] of Object.entries(SHELL_FILES)) {
-    test(`for ${shell}, puts the bin folder on PATH once, in ${files.join(" and ")}`, () => {
+    test(`for ${shell}, adds one guarded PATH line to ${files.join(" and ")}, and a second run adds none`, () => {
       const fx = fixture();
       for (let i = 0; i < 2; i++) install(fx, [], { SHELL: `/bin/${shell}` });
-      for (const rc of RC_FILES) expect([rc, pathLines(join(fx.home, rc))]).toEqual([rc, files.includes(rc) ? 1 : 0]);
+      for (const rc of RC_FILES) {
+        const want = files.includes(rc) ? `${markedLine(shell, fx.bin)}\n` : null;
+        expect([rc, existsSync(join(fx.home, rc)) ? readFileSync(join(fx.home, rc), "utf8") : null]).toEqual([rc, want]);
+      }
     });
   }
 
@@ -387,6 +398,16 @@ describe.if(process.versions.bun !== undefined)("install.sh, PATH", () => {
     expect(pathLines(join(fx.home, ".zprofile"))).toBe(1);
   });
 
+  test("writes the rc files it can and warns about one it can't write", () => {
+    const fx = fixture();
+    writeFileSync(join(fx.home, ".bashrc"), "alias ll='ls -l'\n");
+    chmodSync(join(fx.home, ".bashrc"), 0o444);
+    const result = install(fx);
+    expect(readFileSync(join(fx.home, ".bashrc"), "utf8")).toBe("alias ll='ls -l'\n");
+    expect(pathLines(join(fx.home, ".profile"))).toBe(1);
+    expect(result.stdout).toContain(`⚠ Could not write ${join(fx.home, ".bashrc")}`);
+  });
+
   test("with --no-modify-path, writes no rc file and says the folder isn't on PATH", () => {
     const fx = fixture();
     const result = install(fx, ["--no-modify-path"]);
@@ -406,13 +427,72 @@ describe.if(process.versions.bun !== undefined)("uninstall.sh", () => {
     expect(readFileSync(join(home, ".bashrc"), "utf8")).toBe("alias ll='ls -l'\n");
   });
 
-  test("leaves a yian it didn't write in place", () => {
+  test("leaves a yian it didn't write in place, even one that names yian install.sh", () => {
     const { home, bin } = setup();
     mkdirSync(bin, { recursive: true });
-    writeFileSync(join(bin, "yian"), "#!/bin/sh\necho mine\n");
+    writeFileSync(join(bin, "yian"), "#!/bin/sh\n# Written by yian install.sh, then changed\necho mine\n");
     const result = run("uninstall.sh", home);
     expect(result.status).toBe(0);
     expect(readFileSync(join(bin, "yian"), "utf8")).toContain("echo mine");
+  });
+
+  test("keeps every other byte of an rc file, a NUL and a byte that isn't UTF-8 included", () => {
+    const fx = fixture();
+    const own = Buffer.from("export A=1\n# caf\xe9\nprintf 'a\x00b'\nexport B=2\n", "latin1");
+    writeFileSync(join(fx.home, ".bashrc"), own);
+    const utf8 = { LANG: "en_US.UTF-8" };
+    install(fx, [], utf8);
+    expect(pathLines(join(fx.home, ".bashrc"))).toBe(1);
+    expect(pipe("uninstall.sh", fx, [], utf8).status).toBe(0);
+    expect(readFileSync(join(fx.home, ".bashrc"))).toEqual(own);
+  });
+
+  test("leaves a line of the user's that names yian install.sh alone, in install and uninstall", () => {
+    const fx = fixture();
+    const own = "alias yian-update='sh ~/yian/install.sh'  # re-runs yian install.sh\n";
+    writeFileSync(join(fx.home, ".bashrc"), own);
+    install(fx);
+    expect(pathLines(join(fx.home, ".bashrc"))).toBe(1);
+    expect(pipe("uninstall.sh", fx).status).toBe(0);
+    expect(readFileSync(join(fx.home, ".bashrc"), "utf8")).toBe(own);
+  });
+
+  test("leaves an rc file as it was, and fails, when its new text can't be written in full", () => {
+    const fx = fixture();
+    writeFileSync(join(fx.home, ".bashrc"), "# a line of the user's\n".repeat(1000));
+    install(fx);
+    const before = readFileSync(join(fx.home, ".bashrc"));
+    const tmp = join(fx.base, "tmp");
+    mkdirSync(tmp);
+    // A file-size limit, with SIGXFSZ ignored, makes the write fail partway, as a full disk does.
+    const result = spawnSync("sh", ["-c", 'trap "" XFSZ; ulimit -f 8; exec sh -s'], {
+      input: readFileSync(join(ROOT, "uninstall.sh")),
+      cwd: fx.home,
+      env: { HOME: fx.home, SHELL: "/bin/bash", PATH: `${fx.stubs}:/usr/bin:/bin`, TMPDIR: tmp },
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(`✗ Could not write the new text of ${join(fx.home, ".bashrc")}`);
+    expect(result.stdout).not.toContain(`Removed the PATH line from ${join(fx.home, ".bashrc")}`);
+    expect(readFileSync(join(fx.home, ".bashrc"))).toEqual(before);
+    expect(pathLines(join(fx.home, ".profile"))).toBe(0);
+    expect(readdirSync(tmp)).toEqual([]);
+  });
+
+  test("goes on past an rc file it can't write, and leaves no temp file", () => {
+    const fx = fixture();
+    install(fx);
+    chmodSync(join(fx.home, ".bashrc"), 0o444);
+    const tmp = join(fx.base, "tmp");
+    mkdirSync(tmp);
+    const result = pipe("uninstall.sh", fx, [], { TMPDIR: tmp });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(`⚠ Left the PATH line in ${join(fx.home, ".bashrc")}`);
+    expect(pathLines(join(fx.home, ".bashrc"))).toBe(1);
+    expect(pathLines(join(fx.home, ".profile"))).toBe(0);
+    expect(existsSync(fx.clone)).toBe(false);
+    expect(readdirSync(tmp)).toEqual([]);
   });
 
   test("keeps an rc file's last line whole when it had no newline", () => {

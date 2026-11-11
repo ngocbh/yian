@@ -19,6 +19,8 @@
 set -eu
 
 MARK="yian install.sh"
+# The wrapper's own line that says install.sh wrote it, matched whole.
+WRAPPER_MARK="# Written by $MARK"
 # The file in a clone's .git that says install.sh made the clone, so uninstall.sh may remove it.
 CLONE_MARK=yian-install
 DEFAULT_REPO=https://github.com/ngocbh/yian.git
@@ -117,7 +119,7 @@ check_prerequisites() {
 check_target() {
   BIN_DIR=${YIAN_BIN_DIR:-$HOME/.local/bin}
   TARGET=$BIN_DIR/yian
-  if [ -e "$TARGET" ] && ! grep -q "$MARK" "$TARGET" 2>/dev/null; then
+  if [ -e "$TARGET" ] && ! LC_ALL=C grep -a -q -x -F -e "$WRAPPER_MARK" "$TARGET" 2>/dev/null; then
     die "$TARGET exists and was not written by install.sh. Move it away, or set YIAN_BIN_DIR."
   fi
 }
@@ -219,8 +221,9 @@ write_wrapper() {
   tmp=$TARGET.tmp.$$
   cat >"$tmp" <<EOF
 #!/bin/sh
-# Written by $MARK: runs the yian checkout at $ROOT with Bun, or with YIAN_BUN when it's set.
-# The flags keep Bun from reading the current folder's .env and bunfig.toml and from installing packages.
+$WRAPPER_MARK
+# Runs a yian checkout with Bun, or with YIAN_BUN when it's set. The flags keep Bun from reading the
+# current folder's .env and bunfig.toml and from installing packages.
 bun=\${YIAN_BUN:-$(quote "$BUN")}
 exec "\$bun" --no-install --no-env-file --config=/dev/null $(quote "$ROOT/src/cli/bin.ts") "\$@"
 EOF
@@ -228,27 +231,43 @@ EOF
   mv -f "$tmp" "$TARGET"
 }
 
-# True when the rc file $1 already puts BIN_DIR on PATH: with the line install.sh writes, or with a
-# line of its own that names the folder, by its path or from $HOME.
-puts_on_path() {
-  [ -f "$1" ] || return 1
-  if grep -qF "$MARK" "$1"; then return 0; fi
-  from_home=${BIN_DIR#"$HOME"/}
-  grep -v '^[[:space:]]*#' "$1" | grep -E 'PATH|fish_add_path' |
-    grep -qF -e "$BIN_DIR" -e "\$HOME/$from_home" -e "\${HOME}/$from_home" -e "~/$from_home"
+# The lines install.sh adds to rc files to put the folder $1 on PATH: one guarded line each, with
+# the mark at its end. uninstall.sh removes exactly these lines.
+sh_path_line() {
+  dir=$(quote "$1")
+  printf '%s' "case \":\$PATH:\" in *:$dir:*) ;; *) export PATH=$dir:\"\$PATH\" ;; esac  # added by $MARK"
+}
+fish_path_line() {
+  printf '%s' "fish_add_path -g $(quote "$1")  # added by $MARK"
 }
 
-# Appends the line $2, marked for uninstall.sh, to the rc file $1, unless $1 already puts BIN_DIR
-# on PATH.
+# True when the rc file $1 already puts BIN_DIR on PATH: with the line $2 install.sh writes, or
+# with a line of its own that names the folder, by its path or from $HOME. grep reads the file as
+# bytes, whatever the locale and whatever it holds.
+puts_on_path() {
+  [ -f "$1" ] || return 1
+  if LC_ALL=C grep -a -q -x -F -e "$2" "$1"; then return 0; fi
+  from_home=${BIN_DIR#"$HOME"/}
+  LC_ALL=C grep -a -v '^[[:space:]]*#' "$1" | LC_ALL=C grep -a -E 'PATH|fish_add_path' |
+    LC_ALL=C grep -a -q -F -e "$BIN_DIR" -e "\$HOME/$from_home" -e "\${HOME}/$from_home" -e "~/$from_home"
+}
+
+# Appends the line $2 to the rc file $1, unless $1 already puts BIN_DIR on PATH. A file it can't
+# write gets a warning, and the other files are still written.
 add_path_line() {
-  if puts_on_path "$1"; then return 0; fi
-  mkdir -p "$(dirname "$1")"
+  if puts_on_path "$1" "$2"; then return 0; fi
+  if { [ -e "$1" ] && [ ! -w "$1" ]; } || ! mkdir -p "$(dirname "$1")" 2>/dev/null; then
+    warn "Could not write $1, so it doesn't put $BIN_DIR on PATH."
+    return 0
+  fi
   # A last line with no newline stays whole.
   newline=
   if [ -s "$1" ] && [ -n "$(tail -c 1 "$1")" ]; then newline='\n'; fi
-  printf "$newline%s  # added by %s\n" "$2" "$MARK" >>"$1" ||
-    die "Could not write $1. Pass --no-modify-path, and put $BIN_DIR on PATH yourself."
-  ok "Added $BIN_DIR to PATH in $1"
+  if printf "$newline%s\n" "$2" >>"$1"; then
+    ok "Added $BIN_DIR to PATH in $1"
+  else
+    warn "Could not write $1, so it doesn't put $BIN_DIR on PATH."
+  fi
 }
 
 # Puts BIN_DIR on PATH for new shells in the login shell's rc files, unless --no-modify-path was
@@ -260,9 +279,8 @@ wire_path() {
   case ":$PATH:" in
     *":$BIN_DIR:"*) return 0 ;;
   esac
-  dir=$(quote "$BIN_DIR")
   # Guarded, since a shell can read more than one of these files.
-  line="case \":\$PATH:\" in *:$dir:*) ;; *) export PATH=$dir:\"\$PATH\" ;; esac"
+  line=$(sh_path_line "$BIN_DIR")
   case $(basename "${SHELL:-sh}") in
     zsh)
       add_path_line "${ZDOTDIR:-$HOME}/.zshrc" "$line"
@@ -281,7 +299,7 @@ wire_path() {
     fish)
       rc=${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish
       # -g sets fish_user_paths for the session, not saved, so removing the line undoes it.
-      add_path_line "$rc" "fish_add_path -g $dir"
+      add_path_line "$rc" "$(fish_path_line "$BIN_DIR")"
       RELOAD="source $(quote "$rc")"
       ;;
     *)

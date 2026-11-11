@@ -384,6 +384,42 @@ test.each(["fake", "{fake: [echo]}"])(
   SLOW,
 );
 
+test(
+  "a server named like its own tool: tool_id reaches the tool, and an agent's grant of the name grants the server",
+  async () => {
+    const bound: string[][] = [];
+    const fakeFetch = async (input: string | URL | Request, init?: RequestInit) => {
+      type Body = { tools?: { function: { name: string } }[] };
+      const body = (await new Request(input as string, init).json()) as Body;
+      bound.push((body.tools ?? []).map((tool) => tool.function.name));
+      return new Response(DONE, { headers: { "content-type": "text/event-stream" } });
+    };
+    const pid = marker("echo.pid");
+    const cfg = config(join(tmp, "cfg.json"), { echo: stdio("--only", "echo", "--marker", pid) });
+
+    const called = await run([toolFlow("echo"), "--mcp-config", cfg]);
+
+    expect(called.code, called.output).toBe(0);
+    expect(lastLine(called.stdout)).toBe("hi");
+
+    const vars = { XAI_API_KEY: "test-xai-key", YIAN_DEFAULT_PROVIDER: "xai", YIAN_DEFAULT_MODEL: "grok-4.3" };
+    const send = globalThis.fetch;
+    globalThis.fetch = fakeFetch as typeof fetch;
+    let granted;
+    try {
+      granted = await run([flowFile(AGENT_FLOW.replace("tools: [fake]", "tools: [echo]")), "--mcp-config", cfg], vars);
+    } finally {
+      globalThis.fetch = send;
+    }
+
+    expect(granted.code, granted.output).toBe(0);
+    expect(bound).toEqual([["echo_echo"]]);
+    expect(pids(pid)).toHaveLength(2);
+    await expectNoChildren(pid);
+  },
+  SLOW,
+);
+
 const WHOAMI_FLOW = `id: mcp_resume
 name: mcp_resume
 nodes:

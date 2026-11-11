@@ -140,7 +140,7 @@ export const BUILTIN_MEMORY_TYPES: ReadonlySet<string> = new Set(["FileMemory", 
 
 /**
  * Names a type expression may start with besides typedefs, derived from the keyword sets
- * so they cannot drift. `topics` is a retired alias, so it is not listed.
+ * so they cannot drift.
  */
 export const BUILTIN_TYPE_NAMES: ReadonlySet<string> = new Set([
   ...SCALAR_KEYWORDS,
@@ -185,17 +185,17 @@ function isShadow(name: string): boolean {
  * `None`, where `Any` is any JSON value except null and `object` is a JSON object,
  * inclusive ranges `int(1..12)`/`float(0.0..1.0)` (either end may be open), and the
  * constructors `list(X)`/`Optional(X)`/`dict(K, V)`/`Literal(a, "b c")`/
- * `Union(A, B, ...)`/`Inbox(X)`, the memory types `FileMemory` and `VectorDBMemory`/
- * `VectorDBMemory(X)`, plus the `topics` alias. A bare name that is neither a scalar, a
- * constructor nor a memory type is a registry reference. `Union(...)` members are only checked to
- * be records when the type is resolved. A quoted `Literal` member takes JSON escapes.
+ * `Union(A, B, ...)`/`Inbox(X)`, and the memory types `FileMemory` and `VectorDBMemory`/
+ * `VectorDBMemory(X)`. A bare name that is neither a scalar, a constructor nor a memory type is
+ * a registry reference. `Union(...)` members are only checked to be records when the type is
+ * resolved. A quoted `Literal` member takes JSON escapes.
  *
  * Example: `parseType("Union(Buy, Sell)")` gives
  * `{kind: "union", members: [{kind: "ref", name: "Buy"}, {kind: "ref", name: "Sell"}]}`.
  *
  * @throws TypeCheckError when the text is not a valid expression (including unbalanced
  *   parentheses, a lone Unicode surrogate, or an empty `Literal` member), uses an unknown
- *   constructor or the lowercase `any`, writes a constructor without its arguments, gives a
+ *   constructor, the lowercase `any` or the retired `topics`, writes a constructor without its arguments, gives a
  *   numeric range with no end, no `..`, or as two arguments, spells a union as `A | B` (the hint suggests `Union(A, B)`), lists
  *   `None` as a `Union(...)` member (the hint suggests `Optional(Union(...))`), wraps an
  *   `Inbox(...)` in `Optional(...)`, or holds a `[` outside a quoted string (the message shows
@@ -623,11 +623,10 @@ export function bareConstructorHint(text: string): string | null {
 }
 
 /**
- * Read a bare type name: a scalar keyword, a built-in memory type, an alias, or a registry
- * reference.
+ * Read a bare type name: a scalar keyword, a built-in memory type, or a registry reference.
  *
- * @throws TypeCheckError for the lowercase `any`, or a typing constructor written without its
- *   arguments (the hint shows them).
+ * @throws TypeCheckError for the lowercase `any`, the retired `topics`, or a typing constructor
+ *   written without its arguments (each hint shows the spelling to write).
  */
 function namedType(name: string): TypeExpr {
   const hint = bareConstructorHint(name);
@@ -637,7 +636,7 @@ function namedType(name: string): TypeExpr {
     // registry reference.
     throw new TypeCheckError("unknown type 'any'; write Any");
   }
-  if (name === "topics") return { kind: "list", element: { kind: "scalar", name: "str" } };
+  if (name === "topics") throw new TypeCheckError("unknown type 'topics'; write list(str)");
   // The historical lowercase token.
   if (name === "none") return { kind: "scalar", name: "None" };
   if (SCALAR_KEYWORDS.has(name)) return { kind: "scalar", name: name as ScalarName };
@@ -974,7 +973,10 @@ export interface MemoryDef {
 /** One typedef of a flow, or a host memory type. */
 export type TypeDef = RecordDef | VariantDef | AliasDef | MemoryDef;
 
-/** A flow's typedefs by name, which a `RefExpr` resolves against. */
+/**
+ * A flow's typedefs by name, which a `RefExpr` resolves against. It is never changed once built,
+ * since `resolveType` keeps the types its names resolved to.
+ */
 export type TypeRegistry = ReadonlyMap<string, TypeDef>;
 
 /** A record typedef from its field type texts. */
@@ -1146,7 +1148,32 @@ export function resolveType(
     throw new TypeCheckError(`unknown type ${reprText(name)}`);
   }
   if (defn.kind === "memory") return memoryType(name, null);
-  const inner = new Set([...seen, name]);
+  let resolved = resolvedNames.get(registry);
+  const known = resolved?.get(name);
+  if (known !== undefined) return known;
+  const typ = resolveName(defn, registry, new Set([...seen, name]));
+  if (resolved === undefined) {
+    resolved = new Map();
+    resolvedNames.set(registry, resolved);
+  }
+  resolved.set(name, typ);
+  return typ;
+}
+
+/**
+ * The types each registry's names resolved to, so a typedef named on many paths (a diamond of
+ * records each naming the next twice) is expanded once, not once per path. Only a success is
+ * kept: a name that resolved once never meets a cycle on another path, since every name on that
+ * path leads to it, so a cycle back to one would have failed it the first time.
+ */
+const resolvedNames = new WeakMap<TypeRegistry, Map<string, Type>>();
+
+/** Resolve a registry name's alias, enum or record `defn`, with the names `inner` on its path. */
+function resolveName(
+  defn: RecordDef | VariantDef | AliasDef,
+  registry: TypeRegistry,
+  inner: ReadonlySet<string>,
+): Type {
   if (defn.kind === "alias") return resolveType(defn.target, registry, inner);
   if (defn.kind === "variant") {
     return new Type({ kind: ValueKind.STRING, tags: new Set(defn.tags) });

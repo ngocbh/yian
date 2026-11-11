@@ -589,10 +589,11 @@ describe("StdioTransport", () => {
       const stdin = (t as unknown as { child: { stdin: NodeJS.WritableStream } }).child.stdin;
       const drains = stdin.listenerCount("drain");
       const closes = stdin.listenerCount("close");
-      const message = { jsonrpc: "2.0", method: "notifications/x", params: { text: "x".repeat(100_000) } };
-      // How many writes the runtime accepts at once varies (on Bun the first few resolve); every
-      // send after those waits for a drain that never comes, and fails once close ends the server.
-      const sends = Promise.allSettled(Array.from({ length: 20 }, () => t.send(message)));
+      const message = { jsonrpc: "2.0", method: "notifications/x", params: { text: "x".repeat(1_000_000) } };
+      // How many writes the runtime accepts at once varies (Bun on Linux takes 16 MB before a
+      // write waits); every send after those waits for a drain that never comes, and fails once
+      // close ends the server.
+      const sends = Promise.allSettled(Array.from({ length: 40 }, () => t.send(message)));
       expect(stdin.listenerCount("drain")).toBe(drains + 1);
       expect(stdin.listenerCount("close")).toBe(closes + 1);
       await t.close();

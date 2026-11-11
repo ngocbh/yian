@@ -162,12 +162,13 @@ export class RouteModel implements ChatModel {
  * runs its own release. A `ProviderError` from a read keeps what arrived; any other error,
  * such as a caller abort, propagates.
  *
- * A body cut at the cap loses what `dropCredentialTail` drops: the cut may split a credential,
- * and no scrub matches the part before it.
+ * A body cut at the cap or by a failed read loses what `dropCredentialTail` drops: the cut may
+ * split a credential, and no scrub matches the part before it.
  */
 async function readErrorBody(exchange: Exchange, credentials: readonly string[]): Promise<string> {
   const chunks: Uint8Array[] = [];
   let size = 0;
+  let failed = false;
   try {
     for await (const chunk of exchange.body) {
       chunks.push(chunk);
@@ -177,8 +178,9 @@ async function readErrorBody(exchange: Exchange, credentials: readonly string[])
   } catch (error) {
     // The status already names the failure.
     if (!(error instanceof ProviderError)) throw error;
+    failed = true;
   }
-  return errorBodyText(chunks, size, credentials);
+  return errorBodyText(chunks, size, credentials, failed);
 }
 
 /** The first bytes of a 2xx body, kept in case it turns out not to be a stream. */

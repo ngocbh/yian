@@ -217,7 +217,8 @@ ends. See [Agents](/agents/) for the file format.
 - Warnings print as `warning: <message>` lines on stderr.
 - Colour is used only on a terminal, and never when `NO_COLOR` is set.
 - On a terminal, escape sequences and control characters other than newlines and tabs
-  are dropped from what prints. Piped or redirected output keeps every byte.
+  are dropped from what prints, and BIDI embeddings, overrides and isolates show as their code
+  points (`\u{202e}`). Piped or redirected output keeps every byte.
 
 A load error shows where the flow broke: the lines around it, the line marked `❱`, and the message
 below. A runtime error points at the line it came from the same way. Add `--engine-trace` only to

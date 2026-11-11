@@ -72,7 +72,7 @@ import type { TypeRegistry } from "../../typesys/types.ts";
 import { isInboxType, isMemoryType, ValueKind } from "../../typesys/values.ts";
 import { desugarCallDirectives } from "../desugar/inline_calls.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
-import { collectConstructorNames, collectIsinstanceNames } from "../helpers/isinstance_types.ts";
+import { collectConstructorNames, collectIsinstanceNames, constructorTypeFn } from "../helpers/isinstance_types.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import { type NodeDescriptor, siteKey } from "../nodes/base.ts";
 import { assertExactContracts, contractType } from "../../compile/output_contracts.ts";
@@ -196,6 +196,7 @@ export function lowerFlowAsserts(
   const skips = options.skips ?? null;
   const inputContracts = options.inputContracts ?? new Map<string, ValueContract>();
   const registry = options.registry ?? new Map();
+  const typeFn = constructorTypeFn(registry);
   // Retain exact and partial carriers so a closed partial root can reject an unknown field without
   // inventing a semantic Type for opaque siblings.
   assertExactContracts(producers);
@@ -309,6 +310,7 @@ export function lowerFlowAsserts(
     // producer it reads as `${<id>.output :- null}`, so a producer the flow's routing skips reads
     // null.
     const errors = fieldReadErrors(qualified, roots, registry, {
+      typeFn,
       nullableRoots: producerRoots,
       authored,
       opaqueRoots,
@@ -471,6 +473,7 @@ export function validateNodeAsserts(
   const localContracts = options.localContracts ?? new Map<string, ReadonlyMap<string, LocalInput>>();
   const partialUnionNodes = options.partialUnionNodes ?? new Set<string>();
   const registry = options.registry ?? new Map();
+  const typeFn = constructorTypeFn(registry);
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
   const baseLocals = options.baseLocals ?? localContracts;
   const errors: [message: string, range: SourceRange | null, code?: string][] = [];
@@ -647,6 +650,7 @@ export function validateNodeAsserts(
       };
       const baseNodeLocals = baseLocals.get(nid) ?? new Map<string, LocalInput>();
       const messages = fieldReadErrors(tree, roots, registry, {
+        typeFn,
         partialUnionRoots: partialUnionNodes.has(nid)
           ? new Set([...roots.keys()].filter((root) => root !== "output"))
           : new Set(),

@@ -15,6 +15,7 @@
 
 import {
   contractType,
+  directReferenceParts,
   directReferencePath,
   itemContract,
   projectOutputContract,
@@ -44,6 +45,7 @@ import {
   fileFieldType,
   joinedType,
   Type,
+  TypeCheckError,
   typeEquals,
   unionField,
   unionTagFields,
@@ -60,6 +62,7 @@ import {
   literalsInContext,
   literalText,
   NotNullCheck,
+  proves,
   sameGuard,
   TagCheck,
   unknownCheck,
@@ -70,6 +73,7 @@ import {
   candidateEnvs,
   type Env,
   factType,
+  guardEnv,
   guardedReadTypes,
   ImpossibleCheck,
   impossibleCheckMessage,
@@ -132,6 +136,11 @@ export interface ReadRoots {
   untyped(root: string, fields: readonly string[]): boolean;
   /** The facts the CASE branch routing this site proves; `null` for none. */
   routing(): Env | null;
+  /**
+   * The list a comprehension variable iterates, when it is a reference: its path as written, and
+   * whether it is a root of the site (else a field of one, or of another variable).
+   */
+  iterable?(root: string): { path: string; atRoot: boolean } | null;
 }
 
 /** Return whether `typ` is untyped for these rules: unknown, `Any`, or `object` with no fields. */
@@ -187,7 +196,7 @@ function nullableReads(
   registry: TypeRegistry,
   typeFn: TypeFn | null = null,
 ): [string, FieldReadError][] {
-  const roots = withVariables(tree, siteRoots, typeFn);
+  const roots = withVariables(tree, siteRoots, typeFn, registry);
   const messages: [string, FieldReadError][] = [];
   const operands = arithmeticOperands(tree);
   // What `checkedRefs` gives under each root's alternative, index-aligned with `guardedReads`.
@@ -355,9 +364,12 @@ function walk(
       return { message: narrowedReadMessage(ref, step.name, label, prefix, new Set(names)), code: "compose.load" };
     }
     if (field.nullable && !step.optional && roots.untyped(read.root, fields)) {
-      const label = namedTypeLabel(typ, registry);
+      const label = narrowedTypeLabel(typ, registry);
       return nullableError(
-        narrowedUntypedMessage(prefix, step.name, label, fields.length === 0, isVariableKey(read.root)),
+        narrowedUntypedMessage(prefix, step.name, label, fields.length === 0, {
+          variable: isVariableKey(read.root),
+          iterable: roots.iterable?.(read.root) ?? null,
+        }),
       );
     }
     typ = field.type?.replace({ nullable: field.nullable }) ?? null;
@@ -424,17 +436,28 @@ export function untypedAt(contract: OutputContract | null, fields: readonly stri
 }
 
 /**
- * Return the message for `.name` read on `prefix`, untyped and only narrowed to `label`; `variable`
- * when `prefix` is a comprehension variable.
+ * Return the message for `.name` read on `prefix`, untyped and only narrowed to `label`.
+ * `options.variable` says `prefix` is a comprehension variable, and `options.iterable` names the
+ * list it iterates when that is a reference.
  */
-function narrowedUntypedMessage(prefix: string, name: string, label: string, atRoot: boolean, variable: boolean): string {
+function narrowedUntypedMessage(
+  prefix: string,
+  name: string,
+  label: string,
+  atRoot: boolean,
+  options: { variable: boolean; iterable: { path: string; atRoot: boolean } | null },
+): string {
+  const { variable, iterable } = options;
   // Only a root is bound by an `output:` or input declaration; a field is typed by its record, and
   // a comprehension variable by the list it iterates.
-  const typeIt = variable
-    ? `type the list ${prefix} iterates as list(${label})`
-    : atRoot
-      ? `type ${prefix} as ${label} where it is bound (\`output: ${label}\` or \`!${label}\`)`
-      : `declare ${prefix} as ${label} in the type that holds it`;
+  const typeAs = (path: string, type: string, root: boolean) =>
+    root
+      ? `type ${path} as ${type} where it is bound (\`output: ${type}\` or \`!${type}\`)`
+      : `declare ${path} as ${type} in the type that holds it`;
+  let typeIt: string;
+  if (!variable) typeIt = typeAs(prefix, label, atRoot);
+  else if (iterable !== null) typeIt = typeAs(iterable.path, `list(${label})`, iterable.atRoot);
+  else typeIt = `type the list ${prefix} iterates as list(${label})`;
   return (
     `\${${prefix}.${name}} reads field '${name}', which ${label} doesn't require, of ${prefix}, ` +
     `which is untyped and only narrowed to ${label}; write ${prefix}?.${name}, or ${typeIt}`
@@ -463,36 +486,72 @@ function isVariableKey(name: string): boolean {
 /**
  * Return each comprehension variable of `tree` by key, with the element type of its iterable
  * (`elementType`), or `null` when untyped. `refType` types a reference path; a variable in scope
- * types an iterable that reads it.
+ * types an iterable that reads it, as narrowed by the comprehension's `if`s before it.
  */
 function variableTypes(
   tree: ExprNode,
   refType: (path: string) => Type | null,
   typeFn: TypeFn | null,
+  registry: TypeRegistry,
+  iterables: Map<string, ExprNode> | null = null,
 ): Map<string, Type | null> {
   const types = new Map<string, Type | null>();
-  const visit = (node: ExprNode, scope: ReadonlyMap<string, Type | null>): void => {
+  const visit = (node: ExprNode, scope: ReadonlyMap<string, Type | null>, keys: ReadonlyMap<string, string>): void => {
     if (!(node instanceof Tree)) return;
     if (node.data !== "list_comp") {
-      for (const child of node.children) visit(child, scope);
+      for (const child of node.children) visit(child, scope, keys);
       return;
     }
     const local = new Map(scope);
+    const localKeys = new Map(keys);
     for (const clause of node.children.slice(1) as Tree[]) {
       if (clause.data === "comp_if") {
-        visit(clause.children[0]!, local);
+        visit(clause.children[0]!, local, localKeys);
+        narrowByIf(clause.children[0]!, local, localKeys, registry);
         continue;
       }
       const [target, iterable] = clause.children as [Token, ExprNode];
-      visit(iterable, local);
+      visit(iterable, local, localKeys);
       const typ = elementType(inferExprType(iterable, refType, typeFn, local));
       types.set(bindingKey(target), typ);
+      iterables?.set(bindingKey(target), iterable);
       local.set(target.value, typ);
+      localKeys.set(target.value, bindingKey(target));
     }
-    visit(node.children[0]!, local);
+    visit(node.children[0]!, local, localKeys);
   };
-  visit(tree, new Map());
+  visit(tree, new Map(), new Map());
   return types;
+}
+
+/**
+ * Narrow each variable in `local` (keyed by name; `keys` gives each one's binding key) to what a
+ * comprehension's `if` proves of it when true, so the clauses after the `if` read it narrowed.
+ */
+function narrowByIf(
+  condition: ExprNode,
+  local: Map<string, Type | null>,
+  keys: ReadonlyMap<string, string>,
+  registry: TypeRegistry,
+): void {
+  const names = new Map([...keys].map(([name, key]) => [key, name]));
+  const baseTypeOf: BaseTypeOf = (base) => {
+    const name = names.get(base);
+    return name === undefined ? NOT_NARROWABLE : (local.get(name) ?? null);
+  };
+  let env: Env;
+  try {
+    env = guardEnv(proves(condition, true), baseTypeOf, registry);
+  } catch (error) {
+    // An `isinstance` type that doesn't resolve: the type-table pass reports it.
+    if (error instanceof TypeCheckError) return;
+    throw error;
+  }
+  for (const [base, fact] of env) {
+    const name = names.get(base);
+    const typ = name === undefined ? null : factType(fact);
+    if (typ !== null) local.set(name!, typ);
+  }
 }
 
 /**
@@ -522,8 +581,9 @@ function siteRefType(
  * one's contract is its element type under the site's (narrowed) contracts, and it is untyped when
  * the element type under the un-narrowed ones is.
  */
-function withVariables(tree: ExprNode, roots: ReadRoots, typeFn: TypeFn | null): ReadRoots {
-  const narrowed = variableTypes(tree, siteRefType(roots, (root) => roots.contracts(root)), typeFn);
+function withVariables(tree: ExprNode, roots: ReadRoots, typeFn: TypeFn | null, registry: TypeRegistry): ReadRoots {
+  const iterables = new Map<string, ExprNode>();
+  const narrowed = variableTypes(tree, siteRefType(roots, (root) => roots.contracts(root)), typeFn, registry, iterables);
   if (narrowed.size === 0) return roots;
   const base = variableTypes(
     tree,
@@ -532,6 +592,7 @@ function withVariables(tree: ExprNode, roots: ReadRoots, typeFn: TypeFn | null):
       return contract === undefined ? undefined : [contract];
     }),
     typeFn,
+    registry,
   );
   const contractOf = (typ: Type | null | undefined) => (typ ? new ValueContract(typ) : null);
   return {
@@ -543,6 +604,17 @@ function withVariables(tree: ExprNode, roots: ReadRoots, typeFn: TypeFn | null):
     untyped: (root, fields) =>
       base.has(root) ? untypedAt(contractOf(base.get(root)), fields) : roots.untyped(root, fields),
     routing: () => roots.routing(),
+    iterable: (root) => {
+      const node = iterables.get(root);
+      if (node === undefined) return roots.iterable?.(root) ?? null;
+      if (node instanceof Tree && node.data === "comp_var") {
+        // Iterating another variable whole leaves only the list that one iterates to type.
+        const { head, steps } = splitReference(node);
+        return steps.length === 0 ? null : { path: [head, ...steps.map((step) => step.name)].join("."), atRoot: false };
+      }
+      const parts = directReferenceParts(node);
+      return parts === null ? null : { path: parts.join("."), atRoot: roots.rootLength(parts) === parts.length };
+    },
   };
 }
 
@@ -575,12 +647,14 @@ export function variableNameErrors(
   registry: TypeRegistry,
   typeFn: TypeFn | null = null,
 ): string[] {
-  const types = variableTypes(tree, siteRefType(roots, (root) => roots.contracts(root)), typeFn);
+  const types = variableTypes(tree, siteRefType(roots, (root) => roots.contracts(root)), typeFn, registry);
   if (types.size === 0) return [];
   // An untyped variable walks as `Any`, which accepts every field until a check narrows it.
   const any = new ValueContract(Type.scalar(ValueKind.ANY));
   const keyed = new Map([...types].map(([key, typ]) => [key, [typ === null ? any : new ValueContract(typ)]] as const));
-  return nameErrors(tree, keyed, registry).map((message) => unkeyed(message, types.keys()));
+  return nameErrors(tree, keyed, registry, { site: new ReadSite({ comprehension: true }) }).map((message) =>
+    unkeyed(message, types.keys()),
+  );
 }
 
 /**
@@ -717,10 +791,15 @@ export class ReadSite {
   readonly spawner: boolean;
   /** The pool path each root is bound from, named by a spawner's case hint. */
   readonly unionRoots: ReadonlyMap<string, string>;
+  /** Whether the reads are through comprehension variables, which an `if` in the comprehension checks. */
+  readonly comprehension: boolean;
 
-  constructor(options: { spawner?: boolean; unionRoots?: ReadonlyMap<string, string> } = {}) {
+  constructor(
+    options: { spawner?: boolean; unionRoots?: ReadonlyMap<string, string>; comprehension?: boolean } = {},
+  ) {
     this.spawner = options.spawner ?? false;
     this.unionRoots = options.unionRoots ?? new Map();
+    this.comprehension = options.comprehension ?? false;
     Object.freeze(this);
   }
 
@@ -736,6 +815,7 @@ export class ReadSite {
       unionRoot: this.spawner ? (options.unionRoot ?? null) : null,
       isinstanceHint: !this.spawner,
       tagHint: this.spawner,
+      comprehensionHint: this.comprehension,
     });
   }
 }
@@ -1057,6 +1137,7 @@ function declaredReadError(
  * @param options.why Why a root in `nullableRoots` may be null (default "it is Optional").
  * @param options.untyped Whether a root's un-narrowed value is untyped (default: every one of its
  *   `roots` contracts is untyped, or it has none).
+ * @param options.typeFn Resolves a constructor name in a comprehension's iterable (default none).
  * @returns The errors in order: name errors with code `compose.load`, then `nullableReads`'.
  */
 export function fieldReadErrors(
@@ -1073,11 +1154,13 @@ export function fieldReadErrors(
     rootLength?: (names: readonly string[]) => number;
     why?: (root: string) => string;
     untyped?: (root: string, fields: readonly string[]) => boolean;
+    typeFn?: TypeFn | null;
   } = {},
 ): FieldReadError[] {
   const {
     nullableRoots = new Set<string>(),
     opaqueRoots = new Set<string>(),
+    typeFn = null,
     rootLength = () => 1,
     why = () => "it is Optional",
     untyped = (root: string, fields: readonly string[]) =>
@@ -1096,10 +1179,10 @@ export function fieldReadErrors(
     untyped,
     routing: () => null,
   };
-  const names = [...nameErrors(tree, roots, registry, options), ...variableNameErrors(tree, readRoots, registry)];
+  const names = [...nameErrors(tree, roots, registry, options), ...variableNameErrors(tree, readRoots, registry, typeFn)];
   // A read the name checks reject gets no second message.
   const named = (read: string) => names.some((message) => message.includes("${" + read + "}"));
-  const reads = nullableReads(tree, readRoots, registry).filter(
+  const reads = nullableReads(tree, readRoots, registry, typeFn).filter(
     ([read, error]) => !named(read) && !names.includes(error.message),
   );
   const nullable = reads

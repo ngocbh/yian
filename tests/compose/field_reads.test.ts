@@ -237,6 +237,15 @@ test("a field on str in a flow assert is a load error", () => {
   );
 });
 
+test("a flow assert types a comprehension over a constructor", () => {
+  // `Box(...)` types its value, so the variable over its items is an `Inner`.
+  const preamble = "typedefs:\n  Inner: {x: str}\n  Box: {items: list(Inner)}\n";
+  const read = (field: string) =>
+    flow("object", `asserts:\n  - \${len([i.${field} for i in Box(step.output).items]) > 0}\noutput: \${step.output}\n`, preamble);
+  expect(() => load(read("x"))).not.toThrow();
+  expect(failure(read("zz"))).toContain("reference ${i.zz} reads unknown field 'zz' on record");
+});
+
 // A child whose output is a partial record: `a` is typed, `b` comes from an untyped CODE node.
 const PARTIAL_CHILD =
   "id: p\nname: p\n" +
@@ -914,8 +923,12 @@ function variableFlow(binding: string): string {
     "  Msg: {role: str, text: str, opt: Optional(Inner)}\n" +
     "  Inner: {x: str}\n" +
     "  T: {f: Optional(str)}\n" +
+    "  A: {kind: Literal(a), items: list(Inner)}\n" +
+    "  B: {kind: Literal(b), n: int}\n" +
+    "  AB: Union(A, B)\n" +
     "input:\n" +
     "  ms: !list(Msg)\n" +
+    "  abl: !list(AB)\n" +
     "  maybe: !list(Optional(Msg))\n" +
     "  one: !Optional(Inner)\n" +
     "  hist: !list(Message)\n" +
@@ -942,6 +955,8 @@ test.each([
   ["${[input.one.x for m in input.ms if input.one != null]}"],
   [`'\${[p.text for m in input.hist for p in m.parts if p.type == "text"]}'`],
   ["${[m.text for m in (input.om :- [])]}"],
+  [`'\${[p.x for a in input.abl if a.kind == "a" for p in a.items]}'`],
+  ["${[p.x for a in mk.output if isinstance(a, A) for p in a.items]}"],
 ])("a read through a comprehension variable loads: %s", (binding) => {
   expect(() => load(variableFlow(binding))).not.toThrow();
 });
@@ -954,11 +969,32 @@ test.each([
   ["${[p.text for m in input.hist for p in m.parts]}", "compose.load", "reference ${p.text} reads field 'text'"],
   ["${[m.k for m in (input.om :- [])]}", "compose.load", "reference ${m.k} reads unknown field 'k' on record"],
   ["${[p.f for p in mk.output if isinstance(p, T)]}", NULLABLE_FIELD_READ, "only narrowed to T; write p?.f"],
+  // An earlier `if` narrows the variable a later iterable reads.
+  [`'\${[p.zz for a in input.abl if a.kind == "a" for p in a.items]}'`, "compose.load", "reference ${p.zz} reads unknown field 'zz' on record"],
+  ["${[p.zz for a in mk.output if isinstance(a, A) for p in a.items]}", "compose.load", "reference ${p.zz} reads unknown field 'zz' on record"],
 ])("a read through a comprehension variable is checked: %s", (binding, code, message) => {
   const error = loadError(() => load(variableFlow(binding)));
   expect(error.message).toStartWith("node 'use' input 'v': ");
   expect(error.message).toContain(message);
   expect(error.diagnostic.code).toBe(code);
+});
+
+test.each([
+  ["${[p.f for p in mk.output if isinstance(p, T)]}", "type mk.output as list(T) where it is bound"],
+  ["${[p.f for p in w.output.items if isinstance(p, T)]}", "declare w.output.items as list(T) in the type that holds it"],
+  ["${[p.f for x in w.output.lists for p in x if isinstance(p, T)]}", "type the list p iterates as list(T)"],
+  ["${[p.f for p in [mk.output] if isinstance(p, T)]}", "type the list p iterates as list(T)"],
+])("a narrowed untyped variable names the list to type: %s", (binding, fix) => {
+  const text = variableFlow(binding)
+    .replace("  T: {f: Optional(str)}\n", "  T: {f: Optional(str)}\n  W: {items: list(Any), lists: list(list(Any))}\n")
+    .replace("  use:\n", "  w:\n    kind: code\n    code: return {}\n    output: W\n  use:\n");
+  expect(loadError(() => load(text)).message).toContain(`write p?.f, or ${fix}`);
+});
+
+test("a member-only read through a comprehension variable says to add an if", () => {
+  expect(loadError(() => load(variableFlow("${[p.text for m in input.hist for p in m.parts]}"))).message).toEndWith(
+    'check the member first with an `if p.type == "reasoning"` before the read in the comprehension',
+  );
 });
 
 /** A LOOP that carries `ms: list(Msg)`, driven by `predicate`. */
@@ -1007,7 +1043,7 @@ test("a LOOP predicate checks reads through a comprehension variable", () => {
 function untypedFlow(binding: string): string {
   return (
     "id: p\nname: p\n" +
-    "typedefs:\n  T: {f: Optional(str), g: str}\n  W: {u: Any}\n" +
+    "typedefs:\n  T: {f: Optional(str), g: str}\n  T2: {f: str}\n  T3: {h: str}\n  W: {u: Any}\n" +
     "input:\n  s: !str\n" +
     "nodes:\n" +
     "  u:\n    kind: code\n    input:\n      s: ${input.s}\n    output: Any\n    code: return 1\n" +
@@ -1021,6 +1057,7 @@ test.each([
   ["${u.output != null and isinstance(u.output, T) and u.output.g}"],
   ["${u.output != null and isinstance(u.output, T) and u.output?.f}"],
   ["${mk.output != null and isinstance(mk.output.u, T) and mk.output.u.g}"],
+  ["${(isinstance(u.output, T) or isinstance(u.output, T2)) and u.output?.f}"],
 ])("an isinstance after a null check narrows an untyped value: %s loads", (binding) => {
   expect(() => load(untypedFlow(binding))).not.toThrow();
 });
@@ -1031,6 +1068,9 @@ test.each([
   ["${isinstance(u.output, T) and u.output.zz}", "compose.load", "reference ${u.output.zz} reads field 'zz', which T doesn't have; u.output is T here"],
   ["${u.output != null and isinstance(u.output, T) and u.output.zz}", "compose.load", "reads field 'zz', which T doesn't have"],
   ["${mk.output != null and isinstance(mk.output.u, T) and mk.output.u.zz}", "compose.load", "reference ${mk.output.u.zz} reads field 'zz', which T doesn't have"],
+  // Either check passing narrows to both records; both checks passing, to either.
+  ["${(isinstance(u.output, T) or isinstance(u.output, T2)) and u.output.g}", NULLABLE_FIELD_READ, "which T | T2 doesn't require, of u.output, which is untyped and only narrowed to T | T2"],
+  ["${isinstance(u.output, T) and isinstance(u.output, T3) and u.output.zz}", "compose.load", "reference ${u.output.zz} reads field 'zz', which T doesn't have"],
 ])("an isinstance after a null check narrows an untyped value: %s", (binding, code, message) => {
   const error = loadError(() => load(untypedFlow(binding)));
   expect(error.message).toContain(message);

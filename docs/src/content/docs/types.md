@@ -266,7 +266,9 @@ Three checks narrow a value:
 | `x != null` | `x` isn't null |
 
 `not`, `and` and `or` carry these through: in `x != null and x.qty > 0`, `x.qty` is read only
-after the check. A check written after a read doesn't narrow it. In a condition, comparing a tag
+after the check, and after `isinstance(x, Buy) or isinstance(x, Sell)` a read of `x` must work on
+both records. A comprehension's `if` narrows its variables for the clauses after it. A check
+written after a read doesn't narrow it. In a condition, comparing a tag
 field with a value no member has, such as `x.action == "bye"`, is a load error that suggests a
 close match.
 

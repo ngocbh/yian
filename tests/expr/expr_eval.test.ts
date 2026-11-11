@@ -1266,7 +1266,7 @@ test("comprehension variables, item and call results follow the same table", () 
 });
 
 test("a variable the loader could not narrow names the variable and the field it lacks", () => {
-  // `or`-combined isinstance doesn't narrow at load (#1175); the read raises at run time.
+  // The evaluator alone: a read the loader would refuse still names the variable and the field.
   const T = new Type({ kind: ValueKind.OBJECT, fields: new Map([["text", str]]), required: new Set(["text"]) });
   const N = new Type({ kind: ValueKind.OBJECT, fields: new Map([["n", str]]), required: new Set(["n"]) });
   const types = new Map([["T", T], ["N", N]]);

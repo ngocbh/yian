@@ -1153,7 +1153,7 @@ test("isinstance narrows an opaque object to the checked type", () => {
   expect(message).toBe(`node 'route' cases[0].then ${PLACE_EXPECTS}, source is '${SELL}'`);
 });
 
-test("isinstance cases on unrelated types into one target do not narrow", () => {
+test("isinstance cases on unrelated types into one target narrow to their union", () => {
   const routed = (...whens: string[]) =>
     flow(
       producer("x", "object"),
@@ -1164,7 +1164,7 @@ test("isinstance cases on unrelated types into one target do not narrow", () => 
 
   load(routed("isinstance(x.output, Buy)"));
   const message = assembleError(routed("isinstance(x.output, Buy)", "isinstance(x.output, Text)"));
-  expect(message).toBe(`call node 'b': binding 'order' — child expects '${BUY}', source is 'object'`);
+  expect(message).toBe(`call node 'b': binding 'order' — child expects '${BUY}', source is 'Union(${BUY},{"text":str})'`);
 });
 
 test("an opaque object outside isinstance does not fit a record", () => {

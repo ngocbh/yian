@@ -9,7 +9,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, realpathSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { PassThrough, type Readable } from "node:stream";
@@ -600,12 +600,25 @@ async function main(): Promise<void> {
       "grandchild-ignores-term": { type: "string" },
       stubborn: { type: "boolean" },
       flood: { type: "string" },
+      restart: { type: "string" },
     },
   });
   // A process with nothing else to do keeps running on this (setInterval's longest delay).
   const keepAlive = () => setInterval(() => {}, 2 ** 31 - 1);
 
+  // For `--restart fail` or `hang`: a start after the first, whose marker lists an earlier pid.
+  const again =
+    values.marker !== undefined && existsSync(values.marker) && /^\d+$/m.test(readFileSync(values.marker, "utf8"));
   if (values.marker !== undefined) appendLine(values.marker, String(process.pid));
+  if (again && values.restart === "fail") {
+    process.stderr.write("FATAL: can't start again\n");
+    process.exitCode = 1;
+    return;
+  }
+  if (again && values.restart === "hang") {
+    keepAlive();
+    return;
+  }
   if (values.stderr !== undefined) {
     process.stderr.write(values.stderr + "\n");
     // Not `process.exit(1)`, which could drop the write: stderr is asynchronous on a macOS pipe.

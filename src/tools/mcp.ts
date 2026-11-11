@@ -165,8 +165,9 @@ export class McpTransportError extends McpError {
  *
  * For a stdio server that ended on its own, the message says how: its exit code or signal. A call
  * in flight then also names its tool and ends with the last lines the server wrote to stderr,
- * with the server's secrets scrubbed. Later calls to the same server throw it at once; the host
- * still closes it.
+ * with the server's secrets scrubbed. A later call reconnects such a server once (see
+ * `McpServer`); when that fails, the calls that waited on it get the reason, and later calls,
+ * like calls to a server yian closed, throw it at once. The host still closes the server.
  */
 export class McpServerClosed extends McpError {
   override name = "McpServerClosed";
@@ -525,6 +526,37 @@ interface Generation {
   readonly calls: Set<AbortController>;
   /** The shutdown, once started. */
   closing: Promise<void> | undefined;
+  /**
+   * The one attempt to reconnect, once a call found the server gone: the new connection, or
+   * `undefined` when the attempt failed or `close()` ran.
+   */
+  reconnecting: Promise<Generation | undefined> | undefined;
+  /** The connection the reconnect is opening, which `close()` closes too. */
+  next: Generation | undefined;
+  /** Why the reconnect failed. */
+  reconnectError: Error | undefined;
+}
+
+/** A new connection, not yet started. */
+function newGeneration(): Generation {
+  return {
+    stop: new AbortController(),
+    sdk: undefined,
+    client: undefined,
+    transport: undefined,
+    owner: undefined,
+    tools: undefined,
+    outputTypes: new Map(),
+    callTimeout: 0,
+    closed: false,
+    gone: false,
+    overflow: undefined,
+    calls: new Set(),
+    closing: undefined,
+    reconnecting: undefined,
+    next: undefined,
+    reconnectError: undefined,
+  };
 }
 
 /**
@@ -533,6 +565,11 @@ interface Generation {
  * Build one with `mcpServer`. While open, `tools` holds the tools the server listed when it
  * opened; a later change to the server's tool list is ignored. A server opened with `open()`
  * belongs to the host, which closes it; `await using` does both.
+ *
+ * When an open server ends on its own (its process exits, or an HTTP server forgets the session),
+ * the next call reconnects it once, with the same tools: it starts the command again or opens a
+ * new session, then sends the call. Concurrent calls share that one attempt. A call the server may
+ * have been running is never sent again; it fails with `McpServerClosed`.
  *
  * @example
  * await using files = await mcpServer({ command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "."] }).open();
@@ -570,7 +607,10 @@ export class McpServer {
     return this.generation?.owner !== undefined;
   }
 
-  /** Whether an open server has gone away, so its calls fail at once until it is reopened. */
+  /**
+   * Whether an open server has gone away. The next call reconnects it once when it ended on its
+   * own; otherwise calls fail at once until it is reopened.
+   */
   get isClosed(): boolean {
     const generation = this.generation;
     return generation?.owner !== undefined && generation.gone;
@@ -626,8 +666,9 @@ export class McpServer {
 
   /**
    * Stop the server and its client: end the calls in flight, then the client and the server's
-   * process group. Never rejects; closing twice, or before `open()`, does nothing more. A close
-   * that is still running when the server is opened again leaves the new connection alone.
+   * process group, and a reconnect's new server too. Never rejects; closing twice, or before
+   * `open()`, does nothing more. A close that is still running when the server is opened again
+   * leaves the new connection alone.
    */
   close(): Promise<void> {
     this.closeRequested = true;
@@ -636,7 +677,10 @@ export class McpServer {
     generation.closed = true;
     // Detached at once, so an `open()` right after starts a connection this close leaves alone.
     this.generation = undefined;
-    return this.shutdown(generation);
+    const next = generation.next;
+    if (next === undefined) return this.shutdown(generation);
+    next.closed = true;
+    return Promise.all([this.shutdown(generation), this.shutdown(next)]).then(() => {});
   }
 
   /** Close the server, for `await using`. */
@@ -649,21 +693,7 @@ export class McpServer {
     // Checked and set before the first `await`, so two racing opens can't both start.
     if (this.generation !== undefined) throw new AlreadyOpenError(`MCP server '${this.label}' is already open`);
     this.closeRequested = false;
-    const generation: Generation = {
-      stop: new AbortController(),
-      sdk: undefined,
-      client: undefined,
-      transport: undefined,
-      owner: undefined,
-      tools: undefined,
-      outputTypes: new Map(),
-      callTimeout: 0,
-      closed: false,
-      gone: false,
-      overflow: undefined,
-      calls: new Set(),
-      closing: undefined,
-    };
+    const generation = newGeneration();
     this.generation = generation;
     try {
       await this.connect(generation, owner, signal);
@@ -687,9 +717,15 @@ export class McpServer {
 
   /**
    * Load the SDK, start the server, connect and list its tools within one connect deadline, and
-   * record `owner`; throw the error `open()` reports.
+   * record `owner`; throw the error `open()` reports. A reconnect passes the connection it
+   * replaces as `kept`, whose tools it keeps without listing them again.
    */
-  private async connect(generation: Generation, owner: string, signal: AbortSignal | undefined): Promise<void> {
+  private async connect(
+    generation: Generation,
+    owner: string,
+    signal: AbortSignal | undefined,
+    kept?: Generation,
+  ): Promise<void> {
     const label = this.label;
     const http = this.spec.url !== undefined;
     const settings = current();
@@ -752,21 +788,27 @@ export class McpServer {
       started = true;
       await client.connect(transport, request());
       check();
-      const listed = await listAll(
-        {
-          listTools: (params, options) => client.listTools(params, options),
-          getServerCapabilities: () => client.getServerCapabilities(),
-        },
-        {
-          label,
-          concurrencySafe: this.spec.concurrencySafe,
-          call: (tool, args, ctx) => this.callTool(tool, args, ctx),
-          ...request(),
-        },
-      );
-      check();
-      generation.tools = listed.tools;
-      generation.outputTypes = listed.outputTypes;
+      if (kept === undefined) {
+        const listed = await listAll(
+          {
+            listTools: (params, options) => client.listTools(params, options),
+            getServerCapabilities: () => client.getServerCapabilities(),
+          },
+          {
+            label,
+            concurrencySafe: this.spec.concurrencySafe,
+            call: (tool, args, ctx) => this.callTool(tool, args, ctx),
+            ...request(),
+          },
+        );
+        check();
+        generation.tools = listed.tools;
+        generation.outputTypes = listed.outputTypes;
+      } else {
+        // The run already holds these tools, and a later change to the server's list is ignored.
+        generation.tools = kept.tools;
+        generation.outputTypes = kept.outputTypes;
+      }
       generation.owner = owner;
     } catch (error) {
       const transport = generation.transport;
@@ -868,22 +910,58 @@ export class McpServer {
     }
   }
 
-  /** The body of `callTool`, before scrubbing. */
+  /**
+   * The body of `callTool`, before scrubbing. A call that finds the server ended on its own, or
+   * that the server refused unsent because it ended or forgot the session, reconnects it once and
+   * is sent then. A call the server may have been running is never sent again.
+   */
   private async sendCall(tool: ListedTool, args: Record<string, unknown>, ctx: ToolContext<unknown>): Promise<unknown> {
-    const { name, inputSchema } = tool;
+    const { name } = tool;
     const http = this.spec.url !== undefined;
     const refused = unsendable(args, http);
     if (refused !== null) {
       throw new ToolCheckError(`tool call '${name}' arguments at ${renderValuePath(refused.path)}: ${refused.reason}`);
     }
     const sent = http ? (numbersForBigints(args) as Record<string, unknown>) : args;
-    // The connection this call goes to; a later open replaces it.
-    const generation = this.generation;
-    if (this.closeRequested || generation?.gone) throw this.closedError();
-    if (generation?.owner === undefined || generation.client === undefined) {
-      throw new Error(`MCP server '${this.label}' is not open`);
+    // Whether this call waited on a reconnect, and whether the server refused it unread once: after
+    // either it is sent at most once more.
+    let reconnected = false;
+    let unread = false;
+    for (;;) {
+      // The connection this call goes to; a later open or a reconnect replaces it.
+      let generation = this.generation;
+      if (this.closeRequested) throw this.closedError();
+      if (generation?.gone) {
+        if (reconnected || !this.mayReconnect(generation)) throw this.closedError(generation);
+        if (ctx.signal.aborted) throw cancelledError(name);
+        generation = await this.reconnect(generation, name, ctx.signal);
+        reconnected = true;
+      }
+      if (generation?.owner === undefined || generation.client === undefined) {
+        throw new Error(`MCP server '${this.label}' is not open`);
+      }
+      if (ctx.signal.aborted) throw cancelledError(name);
+      const result = await this.sendOnce(generation, tool, sent, ctx, !reconnected && !unread);
+      if (result !== RESEND) return result;
+      // The server ended or forgot the session before it read the call: reconnect, then send it.
+      unread = true;
+      generation.gone = true;
     }
-    if (ctx.signal.aborted) throw cancelledError(name);
+  }
+
+  /**
+   * Send one call on `generation` and return its result as a yian value, or, when `resend` and
+   * the server refused the call unread in a way a reconnect may fix, `RESEND`.
+   */
+  private async sendOnce(
+    generation: Generation,
+    tool: ListedTool,
+    sent: Record<string, unknown>,
+    ctx: ToolContext<unknown>,
+    resend: boolean,
+  ): Promise<unknown> {
+    const { name, inputSchema } = tool;
+    const client = generation.client!;
     const call = new AbortController();
     // A listener removed when the call settles, not `AbortSignal.any`, which would keep a
     // long-lived run signal holding every call it ever saw.
@@ -894,7 +972,7 @@ export class McpServer {
     const ms = Math.min(generation.callTimeout * 1000, MAX_TIMER_MS);
     let result: unknown;
     try {
-      result = await generation.client.callTool(
+      result = await client.callTool(
         { name, arguments: sent, _meta: { "yian/call_id": ctx.callId, "yian/attempt": ctx.attempt } },
         // No `outputSchema`, so the SDK never validates the output itself; yian checks it below.
         {
@@ -905,6 +983,7 @@ export class McpServer {
         },
       );
     } catch (error) {
+      if (resend && refusedUnread(generation, error) && this.mayReconnect(generation)) return RESEND;
       throw this.callError(generation, name, error, ctx.signal);
     } finally {
       ctx.signal.removeEventListener("abort", onAbort);
@@ -948,15 +1027,7 @@ export class McpServer {
       );
     }
     if (failure instanceof sdk.SdkHttpError) {
-      const transport = generation.transport;
-      const session = !(transport instanceof StdioTransport) && transport?.sessionId !== undefined;
-      // The server forgot the session (a restart), so this client can't reach it again.
-      if (
-        (failure.status === 404 && session) ||
-        (failure.status === 400 && failure.message.includes("Server not initialized"))
-      ) {
-        return this.closedError(generation);
-      }
+      if (sessionLost(generation, failure)) return this.closedError(generation);
       return new McpTransportError(`MCP server '${label}' transport error (HTTP ${failure.status})`);
     }
     if (failure !== undefined) {
@@ -972,25 +1043,88 @@ export class McpServer {
   }
 
   /**
+   * Whether a call may reconnect `generation`, which is gone: it was open, and neither `close()`
+   * nor a message over the cap ended it.
+   */
+  private mayReconnect(generation: Generation): boolean {
+    return (
+      !this.closeRequested && !generation.closed && generation.overflow === undefined && generation.tools !== undefined
+    );
+  }
+
+  /**
+   * Wait for the one reconnect of `old`, which the first call to find it gone starts, and return
+   * the new connection.
+   *
+   * @throws {McpCallCancelled} `signal` aborted first; the reconnect carries on for other calls.
+   * @throws {McpServerClosed} The reconnect failed, or `close()` ran.
+   */
+  private async reconnect(old: Generation, name: string, signal: AbortSignal): Promise<Generation> {
+    // A call that comes once the attempt has failed gets no copy of its error, which may hold stderr.
+    const late = old.reconnectError !== undefined;
+    const next = await orCancelled((old.reconnecting ??= this.reopen(old)), signal, name);
+    if (next === undefined) throw this.closedError(old, undefined, !late);
+    return next;
+  }
+
+  /**
+   * End what is left of `old`, then open a new connection for its owner with its tools and make it
+   * the server's. Never rejects.
+   *
+   * @returns The new connection; `undefined` when it didn't open, with the error kept in
+   *   `old.reconnectError`, or when `close()` ran meanwhile.
+   */
+  private async reopen(old: Generation): Promise<Generation | undefined> {
+    // First, so nothing the old server left running holds a lock or a port the new one needs.
+    await this.shutdown(old);
+    if (this.generation !== old) return undefined;
+    const next = newGeneration();
+    old.next = next;
+    try {
+      await this.connect(next, old.owner!, undefined, old);
+    } catch (error) {
+      await this.shutdown(next);
+      if (!next.closed) old.reconnectError = error instanceof Error ? error : new Error(String(error));
+      return undefined;
+    } finally {
+      old.next = undefined;
+    }
+    if (this.generation !== old) {
+      await this.shutdown(next);
+      return undefined;
+    }
+    this.generation = next;
+    return next;
+  }
+
+  /**
    * Mark `generation` gone, when given, and return the `McpServerClosed` a call throws. It names
    * the message cap when a message past it closed the connection. For a stdio server that ended
    * on its own it says how; for `tool`, a call the server may have been running then, it also
-   * names the tool and adds the server's stderr tail.
+   * names the tool and adds the server's stderr tail. It says when reconnecting failed, and with
+   * `detail` why.
    */
-  private closedError(generation?: Generation, tool?: string): McpServerClosed {
+  private closedError(generation?: Generation, tool?: string, detail = false): McpServerClosed {
     if (generation !== undefined) generation.gone = true;
     const current = generation ?? this.generation;
-    const closed = `MCP server '${this.label}' is closed`;
-    if (current?.overflow !== undefined) return new McpServerClosed(`${closed}: it ${overflowText(current.overflow)}`);
-    const transport = current?.transport;
-    if (this.closeRequested || current?.closed || !(transport instanceof StdioTransport)) {
-      return new McpServerClosed(closed);
+    const label = `MCP server '${this.label}'`;
+    let text = `${label} is closed`;
+    if (current?.overflow !== undefined) return new McpServerClosed(`${text}: it ${overflowText(current.overflow)}`);
+    if (current === undefined || this.closeRequested || current.closed) return new McpServerClosed(text);
+    const transport = current.transport;
+    if (transport instanceof StdioTransport && transport.exitText() !== "") {
+      text = `${label} ${transport.exitText()}`;
+      // Only the calls in flight get the stderr tail, so later calls don't copy it into every error.
+      if (tool !== undefined) text += ` during tool '${tool}'` + transport.stderrTail();
     }
-    const ended = transport.exitText();
-    if (ended === "") return new McpServerClosed(closed);
-    // Only the calls in flight get the stderr tail, so later calls don't copy it into every error.
-    const during = tool === undefined ? "" : ` during tool '${tool}'` + transport.stderrTail();
-    return new McpServerClosed(`MCP server '${this.label}' ${ended}${during}`);
+    const failure = current.reconnectError;
+    if (failure === undefined) return new McpServerClosed(text);
+    if (!detail) return new McpServerClosed(`${text}; reconnecting failed`);
+    // The failure is an `open()` error, which names the server first.
+    const reason = failure.message.startsWith(`${label} `)
+      ? `it ${failure.message.slice(label.length + 1)}`
+      : describeError(failure);
+    return new McpServerClosed(`${text}; reconnecting failed: ${reason}`, { cause: failure });
   }
 
   /**
@@ -1018,6 +1152,41 @@ export class McpServer {
 /** The `McpCallCancelled` for a call to `name`. */
 function cancelledError(name: string): McpCallCancelled {
   return new McpCallCancelled(`MCP call to '${name}' cancelled by a run stop`);
+}
+
+/** What `sendOnce` returns for a call to send again on a new connection. */
+const RESEND = Symbol("resend");
+
+/** Resolve as `promise` does, or reject with the `McpCallCancelled` for `name` once `signal` aborts. */
+function orCancelled<T>(promise: Promise<T>, signal: AbortSignal, name: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(cancelledError(name));
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+
+/**
+ * Whether the server behind `generation` refused a call with `error` without reading it: none of
+ * the call was written, or an HTTP server answered that it doesn't know the session.
+ */
+function refusedUnread(generation: Generation, error: unknown): boolean {
+  const sdk = generation.sdk!;
+  return neverSent(error, sdk) || sessionLost(generation, httpFailure(error, sdk));
+}
+
+/**
+ * Whether `failure` is an HTTP server's answer that it doesn't know the session of `generation`: it
+ * restarted, so this client can't reach it again.
+ */
+function sessionLost(generation: Generation, failure: unknown): boolean {
+  if (!(failure instanceof generation.sdk!.SdkHttpError)) return false;
+  const transport = generation.transport;
+  const session = !(transport instanceof StdioTransport) && transport?.sessionId !== undefined;
+  return (
+    (failure.status === 404 && session) ||
+    (failure.status === 400 && failure.message.includes("Server not initialized"))
+  );
 }
 
 /** Why a server's connection closed when one of its messages passed the `max` bytes cap. */

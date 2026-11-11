@@ -358,6 +358,8 @@ The file uses the `mcpServers` format other MCP clients use:
 - A stdio server gets only a minimal environment (`PATH`, `HOME` and a few more) plus its `env`.
 - Servers start only when the flow needs their tools, and stop when the run ends. The config
   files are read only when the flow names a tool yian doesn't already have.
+- If a server dies mid-run, the next call starts it again (over HTTP, opens a new session), once.
+  A call it was running fails with its exit code and last stderr lines, and isn't sent again.
 - MCP needs the optional package `@modelcontextprotocol/client` 2.3.1 installed beside yian.
 
 ### Host tools

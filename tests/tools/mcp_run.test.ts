@@ -167,6 +167,33 @@ test(
   SLOW,
 );
 
+test(
+  "a server that exits between a run's calls starts again for the next, and the run closes both",
+  async () => {
+    const file = marker();
+    const server = fake("--marker", file);
+    const flow = await loadFlow(`
+id: mcp_restart
+name: mcp_restart
+nodes:
+  first:
+    kind: tool
+    tool_id: answer_then_exit
+  second:
+    kind: tool
+    tool_id: echo
+    input: {text: "\${first.output} again"}
+output: \${second.output}
+`);
+    const result = await run(flow, { fake: server });
+    expect(result.failure).toBeNull();
+    expect(result.output).toBe("bye again");
+    expect(pids(file)).toHaveLength(2);
+    await expectClosed(server, file);
+  },
+  SLOW,
+);
+
 test.each(["{fake: echo}", "echo"])(
   "a tool node calls a server tool as tool_id: %s",
   async (toolId) => {

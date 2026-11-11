@@ -9,6 +9,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import v8 from "node:v8";
+import vm from "node:vm";
 
 import { FileLockError, isLocked, lockFile } from "../../src/platform.ts";
 import {
@@ -1199,11 +1201,21 @@ test("iterRunRecords with maxLineBytes stops at a torn long last line, and refus
   expect((error as RunLogLineTooLongError).end).toBe(fs.statSync(file).size);
 });
 
+/** A full garbage collection: `Bun.gc` on Bun; on Node, V8's `gc`, exposed for the call. */
+function collectGarbage(): void {
+  if (typeof Bun !== "undefined") {
+    Bun.gc(true);
+    return;
+  }
+  v8.setFlagsFromString("--expose-gc");
+  (vm.runInNewContext("gc") as () => void)();
+}
+
 test("iterRunRecords with maxLineBytes keeps no stack for a deeply nested long line", () => {
   const file = path.join(dir, "run.jsonl");
   const depth = 8_000_000;
   fs.writeFileSync(file, `${"[".repeat(depth)}\n`);
-  Bun.gc(true);
+  collectGarbage();
   const before = process.memoryUsage().heapUsed;
   let peak = before;
   const realRead = fs.readSync;

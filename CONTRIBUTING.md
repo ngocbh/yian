@@ -13,7 +13,7 @@ bun src/cli/index.ts --help        # the yian CLI, run from source
 
 `./install.sh` puts this checkout's `yian` on your PATH, so `yian` runs your working tree. Set
 `YIAN_BIN_DIR` to choose the folder (default `~/.local/bin`) and `YIAN_BUN` to choose the Bun.
-`./uninstall.sh` removes the wrapper and the PATH line.
+`./uninstall.sh` removes the wrapper and the PATH lines, and leaves your checkout.
 
 ## Tests
 

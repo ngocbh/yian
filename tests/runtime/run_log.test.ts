@@ -1326,6 +1326,27 @@ describe.skipIf(process.platform === "win32")("a log path that isn't a regular f
     expect(result.errors).toEqual([notRegularFields(file), notRegularFields(file)]);
   }, 15_000);
 
+  test("a symlink to a regular log: iterRunRecords and resume throw EINVAL, and the log isn't touched", () => {
+    const real = path.join(dir, "real.jsonl");
+    baselineLog(real).close();
+    const before = fs.readFileSync(real);
+    const link = path.join(dir, "link.jsonl");
+    fs.symlinkSync(real, link);
+    const fields = (call: () => unknown) => {
+      try {
+        call();
+        return "no error";
+      } catch (error) {
+        const { code, errno, syscall, path, message } = error as NodeJS.ErrnoException;
+        return { code, errno, syscall, path, message };
+      }
+    };
+    expect(fields(() => [...iterRunRecords(link)])).toEqual(notRegularFields(link));
+    expect(fields(() => JsonlRunLog.resume(link).close())).toEqual(notRegularFields(link));
+    expect(isRunLogLocked(real)).toBe(false);
+    expect(fs.readFileSync(real)).toEqual(before);
+  });
+
   test("a folder: iterRunRecords throws EINVAL, and resume the open's EISDIR", () => {
     const file = path.join(dir, "folder.jsonl");
     fs.mkdirSync(file);
@@ -1698,11 +1719,12 @@ test("isRunLogLocked reports whether a writer holds the log", () => {
   expect(fs.existsSync(`${file}.lock`)).toBe(true);
 });
 
-test("a symlink to a log shares the real log's lock", () => {
-  const real = path.join(dir, "real.jsonl");
-  const link = path.join(dir, "link.jsonl");
+test.skipIf(process.platform === "win32")("a log reached through a linked folder shares the real log's lock", () => {
+  const real = path.join(dir, "real", "run.jsonl");
+  fs.mkdirSync(path.dirname(real));
+  const link = path.join(dir, "linked", "run.jsonl");
   const first = baselineLog(real);
-  fs.symlinkSync(real, link);
+  fs.symlinkSync(path.dirname(real), path.dirname(link));
   try {
     expectError(() => JsonlRunLog.resume(link), Error, busyMessage(link));
     expect(isRunLogLocked(link)).toBe(true);
@@ -1720,7 +1742,7 @@ test("a symlink to a log shares the real log's lock", () => {
       resumed[Symbol.dispose]();
     }
   }
-  expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+  expect(fs.lstatSync(path.dirname(link)).isSymbolicLink()).toBe(true);
   expect(nodeIds(readRunLog(real))).toEqual(["first", "second"]);
 });
 

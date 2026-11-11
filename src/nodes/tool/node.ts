@@ -65,7 +65,7 @@ import {
 import { BindingError, type ReservedBinder } from "../binding.ts";
 import { acceptsNull, type CallView, HostToolCall, outputContractType } from "../contracts.ts";
 import { staticPathOf } from "../ids.ts";
-import { dropRepeatedLabels, parseQuestions } from "./questions.ts";
+import { dropRepeatedLabels, parseQuestions, type QuestionSpec } from "./questions.ts";
 
 /**
  * A TOOL call failed after at least one retry; the message lists every attempt.
@@ -198,6 +198,38 @@ function deadlineAfter(caps: NodeCaps, seconds: number, tool: string, name: stri
 }
 
 /**
+ * Return an ask's question as a `pending` step records it: `question`, `questions` (each with
+ * `question`, `header`, `options` and `multi_select`), `answer_schema` and `title`, the null ones
+ * left out.
+ *
+ * @throws TypeCheckError when a part isn't a yian value.
+ */
+function askRequestData(request: {
+  question: unknown;
+  questions: readonly QuestionSpec[] | null;
+  answerSchema: readonly Readonly<Record<string, unknown>>[] | null;
+  title: string | null;
+}): JsonObject {
+  const { question, questions, answerSchema, title } = request;
+  const data = {
+    question,
+    ...(questions === null
+      ? {}
+      : {
+          questions: questions.map((spec) => ({
+            question: spec.question,
+            header: spec.header,
+            options: spec.options.map((option) => ({ label: option.label, description: option.description })),
+            multi_select: spec.multiSelect,
+          })),
+        }),
+    ...(answerSchema === null ? {} : { answer_schema: answerSchema }),
+    ...(title === null ? {} : { title }),
+  };
+  return jsonPart(fromHost(data, "ask request"), [], "mapping") as JsonObject;
+}
+
+/**
  * A direct, deterministic invocation of one tool from the run's `ToolSet` (no LLM in the loop).
  *
  * The node's bound input record is checked by `ToolSet.validate` and passed to `ToolSet.invoke`;
@@ -224,7 +256,8 @@ function deadlineAfter(caps: NodeCaps, seconds: number, tool: string, name: stri
  * whether the call completes at once or the node waits.
  *
  * A host tool, or the run's `ask` handler, may return `pending()`: the node records a
- * `{kind: "pending", call_id, tool, arguments, deadline?}` step and returns `Pending([call_id])`,
+ * `{kind: "pending", call_id, tool, arguments, deadline?, request?}` step and returns
+ * `Pending([call_id])`; an `ask`'s `request` is the question its handler got (`askRequestData`),
  * and the host answers later through `complete`. The call id is the same on every attempt and
  * start, so a handler must be idempotent by `callId`: a crash before it returned calls it again.
  * Every evaluation reads `caps.steps.calls` first: an open call waits again without calling the
@@ -487,13 +520,21 @@ export class ToolNode extends Node {
     tool: string,
     inputs: Record<string, unknown>,
     deadline: string | null,
+    request: JsonObject | null = null,
   ): Pending {
     const steps = caps.steps;
     if (steps === undefined || callId === null || !steps.durable) {
       throw new Error(`tool ${reprText(tool)} returned pending() outside a durable run; give the run a log`);
     }
     const args = jsonPart(fromHost(inputs, `tool ${reprText(tool)} arguments`), [], "mapping") as ValueRecord;
-    const step = { kind: "pending", call_id: callId, tool, arguments: args, ...(deadline === null ? {} : { deadline }) };
+    const step = {
+      kind: "pending",
+      call_id: callId,
+      tool,
+      arguments: args,
+      ...(deadline === null ? {} : { deadline }),
+      ...(request === null ? {} : { request }),
+    };
     // The cap is on the whole step, measured as the run log measures an event.
     const size = eventBytes(step);
     if (size > steps.maxEventBytes) {
@@ -530,20 +571,17 @@ export class ToolNode extends Node {
     const seconds = durationSeconds(timeout, ASK, "timeout");
     // Computed before the handler runs so the request carries it; recorded only on pending().
     const deadline = seconds === null ? null : deadlineAfter(caps, seconds, ASK, "timeout", timeout);
+    const answerSchema = this.answerSchema.length > 0 ? this.answerSchema : null;
     const answer = await tools.invokeTrusted(
       ASK,
-      {
-        prompt,
-        questions: parsed,
-        ...extra,
-        answerSchema: this.answerSchema.length > 0 ? this.answerSchema : null,
-        title: this.title,
-        nodeId: this.id,
-        deadline,
-      },
+      { prompt, questions: parsed, ...extra, answerSchema, title: this.title, nodeId: this.id, deadline },
       { node: this.id, ...(callId === null ? {} : { callId }), attempt: caps.steps?.starts ?? 1, signal: caps.signal },
     );
-    if (isPending(answer)) return this.registerPending(caps, callId, ASK, inputs, deadline);
+    if (isPending(answer)) {
+      // The handler's request as the ask tool builds it, so a host can show the question again.
+      const request = askRequestData({ question: prompt ?? "", questions: parsed, answerSchema, title: this.title });
+      return this.registerPending(caps, callId, ASK, inputs, deadline, request);
+    }
     return new Output(hostOutput(answer));
   }
 

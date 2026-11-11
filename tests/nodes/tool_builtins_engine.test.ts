@@ -141,6 +141,7 @@ test("an ask that pends records its deadline; a recorded complete gives the answ
       tool: "ask",
       arguments: { prompt: "Ship?", timeout: "1h" },
       deadline: "2026-10-23T01:00:00.000Z",
+      request: { question: "Ship?" },
     },
   ]);
   expect(seen.map((request) => [request.callId, request.deadline])).toEqual([

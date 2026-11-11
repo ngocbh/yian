@@ -349,6 +349,7 @@ describe("ask", () => {
         tool: "ask",
         arguments: { prompt: "Approve?", timeout: 86400n, to: "lead" },
         deadline: "2026-10-24T00:00:00.000Z",
+        request: { question: "Approve?", answer_schema: [{ name: "decision", type: "str", required: true }] },
       },
     ]);
   });

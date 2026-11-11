@@ -324,6 +324,8 @@ console.log(done.status, done.output); // succeeded yes
 - `request.callId` stays the same when a resumed run asks again, so use it to drop duplicates.
   An `ask` also gets `deadline` and the `extra` inputs your handler declares (pass
   `{ handler, inputs }` instead of a function to declare them).
+- For a TOOL `ask`, the pending call's `ask` holds the `question`, `questions`, `answerSchema` and
+  `title` your handler got, so a restarted host can show the same question again.
 - When a deadline passes, `advance` times the call out: `null` for an `Optional(...)` output,
   else the node fails with `tool.timeout`. yian doesn't wake the run itself; call `advance` after
   the earliest `deadline`.

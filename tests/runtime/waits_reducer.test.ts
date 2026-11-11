@@ -396,6 +396,8 @@ describe("pending and tool_result steps", () => {
     refuse("echo", { kind: "pending", call_id: call("echo"), tool: "echo", arguments: {}, deadline: DEADLINE });
     refuse("ask", pendingStep("ask", { deadline: "tomorrow" }));
     refuse("ask", pendingStep("ask", { arguments: ["ok?"] }));
+    refuse("ask", pendingStep("ask", { request: "ok?" })); // an ask's question is an object
+    refuse("echo", { kind: "pending", call_id: call("echo"), tool: "echo", arguments: {}, request: { question: "?" } });
     step(log, state, "echo", { kind: "pending", call_id: call("echo"), tool: "echo", arguments: {} });
     step(log, state, "ask", pendingStep("ask"));
     refuse("ask", pendingStep("ask")); // a second registration of an open call

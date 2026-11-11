@@ -176,8 +176,9 @@ output:
 ```
 
 Elsewhere, read a field of a node that may be skipped through `?.` and give it a default:
-`${(order.output?.qty :- 0) + 1}`. A plain field read or arithmetic there is a load error that
-shows this fix.
+`${(order.output?.qty :- 0) + 1}`. A plain field read there is a load error that shows this
+fix, and so is a read where null fails: arithmetic, a builtin's argument (`len(order.output)`),
+the right side of `in`, or a comprehension's list.
 
 ### Narrow a union
 

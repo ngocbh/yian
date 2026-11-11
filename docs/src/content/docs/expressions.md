@@ -272,8 +272,9 @@ The default after `:-` is an expression, so quote text: `${input.when :- "today"
 | `days_between(a, b)` | The whole days from `a` to `b`, negative when `b` is earlier |
 
 Arguments may be given by the names in the table: `${join(items, sep=", ")}`. A null argument
-fails the call, so give a default: `${upper(name :- "")}`. A `null` for an argument whose default
-is `null` is the same as leaving it out. Calling a builtin with arguments it doesn't take, a name
+fails the call, so give a default: `${upper(name :- "")}`; passing a node a `case` may skip
+without one is a load error. A `null` for an argument whose default is `null` is the same as
+leaving it out. Calling a builtin with arguments it doesn't take, a name
 that isn't a builtin, or an argument whose type the builtin never takes (`upper` of an int) is a
 load error. A flow isn't a function: to run a child flow from a value, use the `call(...)` form
 (see [Control flow](/control-flow/)).

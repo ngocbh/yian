@@ -1,0 +1,24 @@
+# `count` runs when `gate` skips `tags`, and null fails here, so it is a load error.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    go: !bool
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.go}
+          then: tags
+    tags: !list(int) "${[1, 2]}"
+    count: !bool "${3 in tags.output}"
+  output: ${count.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "value entry 'count': ${3 in tags.output} uses tags.output as the right side of `in`, which is null when node 'tags' is skipped; give it a default with :-, e.g. (tags.output :- <default>)"
+      frames:
+      - label: flow.yaml
+        range: [12, 10, 12, 37]

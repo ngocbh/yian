@@ -178,7 +178,9 @@ output:
 - **`on:` holds a reference** (`on: ${input.kind}`), and each `when:` is a literal value of its
   type, never a `${...}`. Without `on:`, each `when:` is a condition and the first true one wins.
 - **Skipped branches spread.** A node that reads a skipped node whole is skipped too; inside
-  text the value is empty; with `:-` it runs on the default; a flow output reads null. See
+  text the value is empty; with `:-` it runs on the default; a flow output reads null. Reading a
+  node a `case` may skip where null fails (arithmetic, `len(a.output)`, `x in a.output`,
+  `[y for y in a.output]`) is a load error: write `(a.output :- [])`. See
   [When a node is skipped](https://yian.readthedocs.io/flows/#when-a-node-is-skipped).
 
 ### Child flows: `call`, `map`, `loop`

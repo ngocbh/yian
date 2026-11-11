@@ -270,6 +270,7 @@ node that reads a skipped one depends on how it reads it:
 | Reads it as a whole value, `${a.output}` | Skipped too |
 | Reads it inside text, `"got ${a.output}"` | Runs; the skipped value is empty text |
 | Reads it with a default, `${a.output :- "none"}` | Runs with the default |
+| Reads it where null fails, without a default: arithmetic, a builtin's argument, the right side of `in`, a comprehension's list (`${len(a.output)}`) | Load error |
 | Lists it in `depends_on:` | Skipped too |
 | Lists it in `runs_after:` | Runs |
 | Is the flow's `output:` | Reads null |

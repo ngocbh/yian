@@ -640,8 +640,9 @@ function bindNode(
     ? {}
     : bindParams(params, wiring, pool, { ...bindOptions, collector, finishCapture: false });
   const reservedSources = new Set<string>();
+  // A source resolver reads each reserved value too, so a derived node's commit names it.
   const binder: ReservedBinder | null =
-    collector === null
+    collector === null && sourceResolver === null
       ? null
       : (name, source, normalize) => {
           // Retain the route of the value the node delivers, after its normalization.

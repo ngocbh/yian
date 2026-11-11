@@ -1004,7 +1004,7 @@ export class FlowEngine {
         signal: nodeController.signal,
         emitStream: onStream === null && live === null ? null : (chunk) => this.#stream(chunk),
         emitEvent: onEvent === null && live === null ? null : (event) => this.#event(event),
-        captureBindings: derived,
+        captureBindings: false,
         sourceResolver,
         tools: this.tools,
         memories: this.memories,

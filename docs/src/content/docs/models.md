@@ -150,6 +150,8 @@ llm_config:
   A field's value is replaced whole.
 - Fields yian builds itself, such as the messages, tools, the output format and streaming, can't
   be set. Setting one fails at load and says why.
+- A free-form field, such as `vllm.chat_template_kwargs` or `openrouter.provider`, nests at most
+  `YIAN_MAX_VALUE_NESTING` levels (100 by default), its own mapping the first, like any yian value.
 - `openai: {store: false}` makes the agent's requests stateless, so OpenAI stores no response.
   yian then sends the system prompt as `instructions`, asks for `reasoning.encrypted_content`,
   and replays the model's reasoning from that encrypted content, which the run log records. A

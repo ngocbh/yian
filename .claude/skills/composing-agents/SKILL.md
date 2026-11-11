@@ -155,7 +155,8 @@ output:
   `case` may skip. Write `${x?.qty :- 0}`, or check first: `x != null and x.qty > 0`.
 - **A null in a prompt fails the node.** Give it a default: `${note :- "none"}`.
 - **Arithmetic is numeric.** `+` also joins two texts or two lists; `*` and `%` on text fail
-  (put the value in a template instead); `/` always gives a float.
+  (put the value in a template instead); `/` always gives a float. Space it: `n / 2`, since
+  `n/2` reads as one name.
 - **Prompts may call only the builtins that give text**: `join`, `upper`, `lower`,
   `render_as_json`, `str`, `strip`, `lstrip`, `rstrip` and `replace`. Compute `len(...)`,
   `split(...)`, `int(...)`, `isinstance(...)` and constructors in a binding.

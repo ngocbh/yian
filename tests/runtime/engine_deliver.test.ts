@@ -48,6 +48,16 @@ test("a send to a declared inbox after run() resolved waiting appends it", async
   expect(record.record).toBeInstanceOf(PoolCommitRecord);
 });
 
+test("a keyed send lands once: a repeat gives its seq and appends nothing; another value is key_reused", async () => {
+  const { run } = await waitingRun();
+  const first = run.deliver({ kind: "send", inbox: "m", event: "hi", key: "k1" });
+  const after = run.log.nextSequence;
+  expect(run.deliver({ kind: "send", inbox: "m", event: "hi", key: "k1" })).toEqual({ seq: first.seq, events: [], record: null });
+  expect(refusal(run, { kind: "send", inbox: "m", event: "bye", key: "k1" }).reason).toBe("key_reused");
+  expect(run.log.nextSequence).toBe(after);
+  expect((run.log.records()[first.seq!]!.record as PoolCommitRecord).sendKey).toBe("k1");
+});
+
 test("complete answers once; an identical repeat is a no-op and a different one is call_settled", async () => {
   const { run, host } = await waitingRun();
   const first = run.deliver({ kind: "complete", callId: host.callId, result: { output: "yes" } });

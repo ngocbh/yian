@@ -1438,6 +1438,52 @@ test("a tag error on a base only the branch view has", () => {
   expect(message).toEndWith("); use one of: limit, market");
 });
 
+test("a when value the branch view rules out is a load error", () => {
+  // `c2` runs only on `c`'s else, where `d` is a Hold or a Sell, so its `when: buy` is dead.
+  const nodes = [
+    node("d"),
+    caseNode("c", "${d.output.action}", [["buy", "b"]], "c2"),
+    caseNode("c2", "${d.output.action}", [
+      ["sell", "s"],
+      ["buy", "b2"],
+      ["hold", "h"],
+    ]),
+    node("b"),
+    node("s"),
+    node("b2"),
+    node("h"),
+  ];
+  const producers = produced();
+  const narrowing = compute(nodes, [], producers);
+
+  const message = loadError(() => checkCaseWhenValues(descriptorsOf(nodes), producers, new Map(), { narrowing }))
+    .message;
+
+  expect(message).toStartWith(
+    "case node 'c2': `when: buy` never matches: the branches that reach this case rule it out, so " +
+      "`on: ${d.output.action}` is `",
+  );
+  expect(message).toEndWith("` here; remove it");
+});
+
+test("a when value the branch view keeps loads", () => {
+  const nodes = [
+    node("d"),
+    caseNode("c", "${d.output.action}", [["buy", "b"]], "c2"),
+    caseNode("c2", "${d.output.action}", [
+      ["sell", "s"],
+      ["hold", "h"],
+    ]),
+    node("b"),
+    node("s"),
+    node("h"),
+  ];
+  const producers = produced();
+  const narrowing = compute(nodes, [], producers);
+
+  expect(() => checkCaseWhenValues(descriptorsOf(nodes), producers, new Map(), { narrowing })).not.toThrow();
+});
+
 // --------------------------------------------------------------------------- //
 // Cycles and unknown ids
 // --------------------------------------------------------------------------- //

@@ -88,6 +88,21 @@ test("until loop max exceeded fails run", async () => {
   expect(result.failure!.message).toContain("exceeded max (2)");
 });
 
+test("on_max_exceeded: output ends a while or until loop at max with the last carried record", async () => {
+  const stopsAtMax = MAXED.replace("max: 2", "max: 2\n    on_max_exceeded: output");
+  const result = await runFlow(await loadConformanceFlow(stopsAtMax), {});
+  expect([result.status, result.output]).toEqual(["succeeded", { n: 2n, exited: false }]);
+  const neverEnds = UNTIL_COUNTDOWN.replace("until: n <= 0", 'until: "false"').replace(
+    "max: 10",
+    "max: 2\n    on_max_exceeded: output",
+  );
+  const until = await runFlow(await loadConformanceFlow(neverEnds), {});
+  expect([until.status, until.output]).toEqual(["succeeded", { n: 1n }]);
+  // A loop that ends by its condition before max is unchanged.
+  const ends = await runFlow(await loadConformanceFlow(COUNTER.replace("max: 10", "max: 10\n    on_max_exceeded: output")), {});
+  expect(ends.output).toEqual({ n: 3n, exited: true });
+});
+
 test("body failure in bounded loop keeps the body code", async () => {
   const result = await runFlow(await loadConformanceFlow(COUNTER.replace("loop_bump", "boom")), {});
 

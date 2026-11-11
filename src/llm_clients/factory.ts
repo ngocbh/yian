@@ -25,15 +25,16 @@ import {
   SubscriptionAuth,
 } from "../llm/auth.ts";
 import { type Embed, type Embedder, type EmbeddingModel, openaiEmbeddings } from "../llm/embeddings.ts";
-import type { ChatModel } from "../llm/events.ts";
-import { RouteModel } from "../llm/executor.ts";
+import type { ChatModel, StructuredOutput } from "../llm/events.ts";
+import { RouteModel, type WireProtocol } from "../llm/executor.ts";
 import type { ReplayDegradedReason } from "../llm/messages.ts";
-import { AnthropicMessages } from "../llm/protocols/anthropic_messages.ts";
-import { Gemini } from "../llm/protocols/gemini.ts";
-import { OllamaChat } from "../llm/protocols/ollama_chat.ts";
-import { OpenAIChat } from "../llm/protocols/openai_chat.ts";
-import { OpenAIResponses } from "../llm/protocols/openai_responses.ts";
+import { AnthropicMessages, PROTOCOL as ANTHROPIC_MESSAGES } from "../llm/protocols/anthropic_messages.ts";
+import { Gemini, PROTOCOL as GEMINI } from "../llm/protocols/gemini.ts";
+import { OllamaChat, PROTOCOL as OLLAMA_CHAT } from "../llm/protocols/ollama_chat.ts";
+import { OpenAIChat, PROTOCOL as OPENAI_CHAT } from "../llm/protocols/openai_chat.ts";
+import { OpenAIResponses, PROTOCOL as OPENAI_RESPONSES } from "../llm/protocols/openai_responses.ts";
 import { Route } from "../llm/route.ts";
+import type { StructuredTarget } from "../llm/structured.ts";
 import { type Scheduler, type Send, warn } from "../platform.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { fromHost } from "../typesys/values.ts";
@@ -159,22 +160,58 @@ export interface Resolved {
   idHeaders: Record<string, string>;
   /** Connection header values, sent on the auth so the scrub knows them. */
   secretHeaders: Record<string, string>;
+  /** How the model's structured calls ask for their schema (`structured_output`). */
+  structuredOutput: StructuredOutput;
 }
 
-/** What every route passes on: the transport, the clock, the env and the replay observer. */
+/** What every route passes on: the transport, the clock, the env, the replay observer and `structured_output`. */
 interface Wiring {
   env: Env;
   send: Send | undefined;
   scheduler: Scheduler | undefined;
   onReplayDegraded: ((reason: ReplayDegradedReason) => void) | undefined;
+  structuredOutput: StructuredOutput;
+}
+
+/**
+ * Return the model sending `protocol`'s bodies over `route`, with `wiring`'s transport, clock and
+ * `structured_output`.
+ */
+function routeModel(route: Route, protocol: WireProtocol, wiring: Wiring): RouteModel {
+  const { send, scheduler, structuredOutput } = wiring;
+  return new RouteModel({ route, protocol, send, scheduler, structuredOutput });
 }
 
 /** Read the credentials `connection` pins for `provider`. */
 type Read = (connection: Connection, provider: string) => Promise<Credentials>;
 
-/** Return the `Read` that resolves pinned credentials through `env`, `signal` and `scheduler`. */
-function reader(env: Env, signal: AbortSignal | undefined, scheduler: Scheduler | undefined): Read {
-  return (connection, provider) => connectionCredentials(connection, provider, { env, signal, scheduler });
+/**
+ * The saved API keys one run has read, by store path, provider and credential id, so the run reads
+ * each once. Subscription tokens are never kept: they expire and refresh.
+ */
+export type SavedKeys = Map<string, ApiKeyCredentials>;
+
+/**
+ * Return the `Read` that resolves pinned credentials through `env`, `signal` and `scheduler`; with
+ * `savedKeys`, a saved API key it read before is returned again without a read.
+ */
+function reader(
+  env: Env,
+  signal: AbortSignal | undefined,
+  scheduler: Scheduler | undefined,
+  savedKeys: SavedKeys | undefined,
+): Read {
+  return async (connection, provider) => {
+    const id =
+      savedKeys !== undefined && connection.source === "store" && connection.method === "api_key"
+        ? [connection.store_path, provider, connection.credential_id].join("\0")
+        : null;
+    const kept = id === null ? undefined : savedKeys!.get(id);
+    if (kept !== undefined) return kept;
+    const credentials = await connectionCredentials(connection, provider, { env, signal, scheduler });
+    if (id !== null && credentials instanceof ApiKeyCredentials) savedKeys!.set(id, credentials);
+    return credentials;
+  };
 }
 
 /** Wrap `auth` so it also sends the secret connection headers, when there are any. */
@@ -237,7 +274,7 @@ function openaiModel(resolved: Resolved, wiring: Wiring): RouteModel {
     block: resolved.block,
     onReplayDegraded: wiring.onReplayDegraded,
   });
-  return new RouteModel({ route, protocol, send: wiring.send, scheduler: wiring.scheduler });
+  return routeModel(route, protocol, wiring);
 }
 
 /**
@@ -269,7 +306,7 @@ function vendorModel(provider: string, resolved: Resolved, wiring: Wiring): Rout
         onReplayDegraded,
       })
     : new OpenAIChat({ model, provider, block, onReplayDegraded });
-  return new RouteModel({ route, protocol, send: wiring.send, scheduler: wiring.scheduler });
+  return routeModel(route, protocol, wiring);
 }
 
 /**
@@ -328,7 +365,7 @@ function azureModel(resolved: Resolved, wiring: Wiring): RouteModel {
   const protocol = responses
     ? new OpenAIResponses({ model, provider: "azure", account, onReplayDegraded })
     : new OpenAIChat({ model, provider: "azure", block, onReplayDegraded });
-  return new RouteModel({ route, protocol, send: wiring.send, scheduler: wiring.scheduler });
+  return routeModel(route, protocol, wiring);
 }
 
 /**
@@ -358,7 +395,7 @@ function anthropicModel(resolved: Resolved, wiring: Wiring): RouteModel {
     block: resolved.block,
     onReplayDegraded: wiring.onReplayDegraded,
   });
-  return new RouteModel({ route, protocol, send: wiring.send, scheduler: wiring.scheduler });
+  return routeModel(route, protocol, wiring);
 }
 
 /**
@@ -403,7 +440,7 @@ function googleModel(resolved: Resolved, wiring: Wiring): RouteModel {
     block: resolved.block,
     onReplayDegraded: wiring.onReplayDegraded,
   });
-  return new RouteModel({ route, protocol, send: wiring.send, scheduler: wiring.scheduler });
+  return routeModel(route, protocol, wiring);
 }
 
 /**
@@ -430,7 +467,7 @@ function ollamaModel(resolved: Resolved, wiring: Wiring): RouteModel {
     block: resolved.block,
     onReplayDegraded: wiring.onReplayDegraded,
   });
-  return new RouteModel({ route, protocol, send: wiring.send, scheduler: wiring.scheduler });
+  return routeModel(route, protocol, wiring);
 }
 
 /**
@@ -462,7 +499,7 @@ async function subscriptionModel(
     subscription: true,
     onReplayDegraded: wiring.onReplayDegraded,
   });
-  return new RouteModel({ route, protocol, send: wiring.send, scheduler: wiring.scheduler });
+  return routeModel(route, protocol, wiring);
 }
 
 /**
@@ -482,6 +519,8 @@ async function subscriptionModel(
  * endpoint. A config `organization`, `project` and `headers` travel with the config key; a saved
  * login's key brings the settings saved with it instead (its header names must equal the recorded
  * ones); an environment key sends none. `signal` and `scheduler` go to every credential read.
+ * With `savedKeys`, a saved API key read before is used again instead of read: a run reads each
+ * once.
  *
  * Throws `RangeError` if `checkModelConfig` rejects the config; `AuthError` if a pinned login
  * changed or was removed, an OpenAI key is missing or changed, or saved header names differ from
@@ -489,9 +528,15 @@ async function subscriptionModel(
  */
 export async function resolveProviderAccess(
   config: Readonly<Record<string, unknown>> | LLMConfig,
-  options: { env?: Env; snapshot?: ConnectionSnapshot; scheduler?: Scheduler; signal?: AbortSignal } = {},
+  options: {
+    env?: Env;
+    snapshot?: ConnectionSnapshot;
+    scheduler?: Scheduler;
+    signal?: AbortSignal;
+    savedKeys?: SavedKeys;
+  } = {},
 ): Promise<Resolved> {
-  const { env = processEnv, snapshot, scheduler, signal } = options;
+  const { env = processEnv, snapshot, scheduler, signal, savedKeys } = options;
   const values = config instanceof LLMConfig
     ? config
     : (fromHost(config, "llm_config") as Record<string, unknown>);
@@ -500,11 +545,12 @@ export async function resolveProviderAccess(
   const provider = validated.provider!;
   const model = validated.model!;
   const block = validated.blockFor(provider);
+  const structuredOutput = validated.structuredOutput ?? "native";
   if (validated.apiKey === null && connection !== null && connection.method === "subscription") {
     const none = { key: null, keyAtBuild: null, baseUrl: null, idHeaders: {}, secretHeaders: {} };
-    return { provider, model, block, subscription: connection, ...none };
+    return { provider, model, block, subscription: connection, ...none, structuredOutput };
   }
-  const read = reader(env, signal, scheduler);
+  const read = reader(env, signal, scheduler, savedKeys);
 
   let key: Secret | null = null;
   let keyAtBuild: string | null = null;
@@ -543,7 +589,18 @@ export async function resolveProviderAccess(
     idHeaders = openaiIdHeaders(validated.organization, validated.project);
     secretHeaders = { ...validated.headers };
   }
-  return { provider, model, block, subscription: null, key, keyAtBuild, baseUrl, idHeaders, secretHeaders };
+  return {
+    provider,
+    model,
+    block,
+    subscription: null,
+    key,
+    keyAtBuild,
+    baseUrl,
+    idHeaders,
+    secretHeaders,
+    structuredOutput,
+  };
 }
 
 /**
@@ -558,7 +615,8 @@ export async function resolveProviderAccess(
  * Responses API. Ollama sends only the credentials written in `OLLAMA_BASE_URL`, never a key.
  *
  * `send` and `scheduler` go to the model's transport (`scheduler` also to the credential store),
- * `signal` to every credential read, and `onReplayDegraded` to the protocol.
+ * `signal` to every credential read, `savedKeys` to `resolveProviderAccess`, and
+ * `onReplayDegraded` to the protocol.
  *
  * Throws what `resolveProviderAccess` throws; `RangeError` if a vendor, Anthropic or Google key is
  * missing, `OLLAMA_BASE_URL` is malformed, or Azure has no credential or no `OPENAI_API_VERSION`;
@@ -572,17 +630,18 @@ export async function chatModelFromConfig(
     send?: Send;
     scheduler?: Scheduler;
     signal?: AbortSignal;
+    savedKeys?: SavedKeys;
     onReplayDegraded?: (reason: ReplayDegradedReason) => void;
     onWarning?: (message: string) => void;
   } = {},
 ): Promise<RouteModel> {
-  const { env = processEnv, snapshot, send, scheduler, signal, onReplayDegraded } = options;
+  const { env = processEnv, snapshot, send, scheduler, signal, savedKeys, onReplayDegraded } = options;
   const onWarning = options.onWarning ?? ((message: string) => warnOnce(WARNED, message));
-  const resolved = await resolveProviderAccess(config, { env, snapshot, scheduler, signal });
+  const resolved = await resolveProviderAccess(config, { env, snapshot, scheduler, signal, savedKeys });
   const { provider, model, subscription } = resolved;
-  const wiring: Wiring = { env, send, scheduler, onReplayDegraded };
+  const wiring: Wiring = { env, send, scheduler, onReplayDegraded, structuredOutput: resolved.structuredOutput };
   if (subscription !== null) {
-    return subscriptionModel(subscription, model, resolved.block, wiring, reader(env, signal, scheduler));
+    return subscriptionModel(subscription, model, resolved.block, wiring, reader(env, signal, scheduler, undefined));
   }
   // After the credential and header reads, so a removed login or
   // mismatched header names raise without a warning, while a missing environment key (outside
@@ -599,6 +658,48 @@ export async function chatModelFromConfig(
   if (provider === "google") return googleModel(resolved, wiring);
   if (provider === "ollama") return ollamaModel(resolved, wiring);
   return vendorModel(provider, resolved, wiring);
+}
+
+/**
+ * Return what `chatModelFromConfig(config)` would build, as structured output reads it
+ * (`structuredTarget`), without reading any credential: the provider and model, the wire protocol
+ * the route speaks, the Anthropic provider block, whether the route is the ChatGPT subscription,
+ * and its `structured_output`.
+ *
+ * A config with its provider, model and connection (a recorded one) reads nothing; otherwise the
+ * gaps come from `snapshot`, else one read from `env`, as `resolveProviderAccess` fills them.
+ *
+ * Throws `RangeError` if `checkModelConfig` rejects the config, or no layer sets the provider or
+ * its model; a `TypeCheckError` for a record that holds a non-yian value.
+ */
+export function chatModelTarget(
+  config: Readonly<Record<string, unknown>> | LLMConfig,
+  options: { env?: Env; snapshot?: ConnectionSnapshot } = {},
+): StructuredTarget {
+  const { env = processEnv, snapshot } = options;
+  const values = config instanceof LLMConfig ? config : (fromHost(config, "llm_config") as Record<string, unknown>);
+  const [validated, connection] = checkModelConfig(resolveModelConfig(values, { env, snapshot }));
+  const provider = validated.provider!;
+  const subscription = validated.apiKey === null && connection !== null && connection.method === "subscription";
+  const protocol = routeProtocol(provider, validated.model!, subscription);
+  // The Gemini route names the model by its id, without a leading `models/`.
+  const model = protocol === GEMINI ? geminiPath(validated.model!)[1] : validated.model!;
+  const block = protocol === ANTHROPIC_MESSAGES ? validated.blockFor(provider) : null;
+  const structuredOutput = validated.structuredOutput ?? "native";
+  return { provider, model, protocol, block, subscription, structuredOutput };
+}
+
+/**
+ * Return the wire protocol `chatModelFromConfig` builds for `provider` and `model`: Responses for
+ * the subscription and the OpenAI API key, each native protocol for its provider, and Chat
+ * Completions for Azure and the vendors unless the model `prefersResponses`.
+ */
+function routeProtocol(provider: string, model: string, subscription: boolean): string {
+  if (subscription || provider === "openai") return OPENAI_RESPONSES;
+  if (provider === "anthropic") return ANTHROPIC_MESSAGES;
+  if (provider === "google") return GEMINI;
+  if (provider === "ollama") return OLLAMA_CHAT;
+  return prefersResponses(model) ? OPENAI_RESPONSES : OPENAI_CHAT;
 }
 
 /**
@@ -688,15 +789,27 @@ export interface ModelAccess {
       onReplayDegraded?: (reason: ReplayDegradedReason) => void;
     },
   ): ChatModel | Promise<ChatModel>;
+  /**
+   * Return what the model `createModel(config)` builds gives structured output to read
+   * (`structuredTarget`), without building it or reading a credential; when absent, a model is
+   * built to read it off. Throws as `createModel` does for a config it refuses.
+   */
+  structuredTarget?(config: Readonly<Record<string, unknown>>): StructuredTarget;
 }
 
 /**
  * Return the model access that builds through `chatModelFromConfig` with `env` (default
- * `processEnv`), passing on `signal` and `onReplayDegraded`.
+ * `processEnv`), passing on `signal` and `onReplayDegraded`, and reads structured targets through
+ * `chatModelTarget`. Its models share one `SavedKeys`, so a run, which makes one model access,
+ * reads each saved API key once: a login replaced or removed meanwhile is caught when the run
+ * resumes, or by the next run.
  */
 export function defaultModelAccess(env: Env = processEnv): ModelAccess {
+  const savedKeys: SavedKeys = new Map();
   return {
     env,
-    createModel: (config, { signal, onReplayDegraded }) => chatModelFromConfig(config, { env, signal, onReplayDegraded }),
+    createModel: (config, { signal, onReplayDegraded }) =>
+      chatModelFromConfig(config, { env, signal, savedKeys, onReplayDegraded }),
+    structuredTarget: (config) => chatModelTarget(config, { env }),
   };
 }

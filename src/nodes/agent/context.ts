@@ -16,6 +16,7 @@ import { reprText } from "../../diagnostics.ts";
 import type { ModelCallPurpose } from "../../events.ts";
 import { ProviderError } from "../../llm/errors.ts";
 import { MediaPart, Message, NamedTool, type Part, Request, Response, Usage } from "../../llm/messages.ts";
+import { isStorageError } from "../../llm_clients/auth/store.ts";
 import type { ModelAccess } from "../../llm_clients/factory.ts";
 import { type Scheduler, syncFolder, warn } from "../../platform.ts";
 import type { Skill } from "../../skills/catalog.ts";
@@ -566,9 +567,18 @@ function usageStep(usage: UsageCounts | null): ValueRecord | null {
   };
 }
 
-/** Return a failed call's recorded error: its kind and message, lone surrogates as `?`. */
+/** The recorded kind of an auth-store fault, whose name is `AuthError` (`StorageError`). */
+export const STORAGE_ERROR_KIND = "StorageError";
+
+/**
+ * Return a failed call's recorded error: its kind (a `ProviderError`'s kind, `StorageError` for an
+ * auth-store fault, else the error's name) and message, lone surrogates as `?`.
+ */
 function errorStep(error: unknown): { kind: string; message: string } {
-  const kind = error instanceof ProviderError ? error.kind : error instanceof Error ? error.name : typeof error;
+  let kind: string;
+  if (error instanceof ProviderError) kind = error.kind;
+  else if (isStorageError(error)) kind = STORAGE_ERROR_KIND;
+  else kind = error instanceof Error ? error.name : typeof error;
   const message = error instanceof Error ? error.message : String(error);
   return { kind: jsonSafeText(kind), message: jsonSafeText(message) };
 }

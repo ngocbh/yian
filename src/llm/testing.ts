@@ -28,6 +28,7 @@ import {
   UsageReport,
   type ChatModel,
   type Event,
+  type StructuredOutput,
 } from "./events.ts";
 import { isPlainObject, put, ReasoningPart, Response, TextPart, ToolCallPart, type Request, typeName } from "./messages.ts";
 
@@ -677,6 +678,8 @@ export class ScriptedModel implements ChatModel {
   readonly provider: string;
   /** The model name. */
   readonly model: string;
+  /** How its structured calls ask for their schema. */
+  readonly structuredOutput: StructuredOutput;
   /** Every request received, in order. */
   readonly requests: Request[] = [];
   /** How many streams returned by `stream` have been closed. */
@@ -686,11 +689,16 @@ export class ScriptedModel implements ChatModel {
   /**
    * @param replies The replies, one per request.
    * @param options `provider` and `model` name the model; both default to `scripted`.
+   *   `structuredOutput` defaults to `native`.
    */
-  constructor(replies: Iterable<ScriptedReply>, options: { provider?: string; model?: string } = {}) {
+  constructor(
+    replies: Iterable<ScriptedReply>,
+    options: { provider?: string; model?: string; structuredOutput?: StructuredOutput } = {},
+  ) {
     this.#replies = Array.from(replies);
     this.provider = options.provider ?? "scripted";
     this.model = options.model ?? "scripted";
+    this.structuredOutput = options.structuredOutput ?? "native";
   }
 
   /**

@@ -24,6 +24,7 @@ import { AsyncResource } from "node:async_hooks";
 import { GrowthRejected } from "../compile/model.ts";
 import { addNote, type Failure, type FailureCode, type OriginRef, reprText } from "../diagnostics.ts";
 import {
+  type ConsoleLine,
   ModelCallFinished,
   ModelCallStarted,
   NodeAttemptResumed,
@@ -75,7 +76,8 @@ import {
   type GrowBuilder,
   isDerivedCommit,
   NodeDataError,
-  type PreparedTransition,
+  PreparedTransition,
+  type RepeatedSend,
   planExpansion,
   prepareExpandedFromPlan,
   prepareExpansionCommit,
@@ -122,6 +124,11 @@ export interface FlowEngineOptions {
   onEvent?: ((event: RunEvent) => unknown) | null;
   /** Sees each transient stream chunk; called as `onEvent` is. */
   onStream?: ((chunk: StreamChunk) => unknown) | null;
+  /**
+   * Takes each line a node's code prints, in place of this process's `console`; called as
+   * `onEvent` is, also for a line printed after its node settled.
+   */
+  onConsole?: ((line: ConsoleLine) => unknown) | null;
   /** The run's tool set, bound to the run id and signal; the global registry when omitted. */
   tools?: ToolSet | null;
   /** The run's memory sessions, passed to nodes declaring `needsMemories`; none when omitted. */
@@ -239,7 +246,7 @@ export function resumedAttemptEvents(state: RunState, record: RunResumedRecord):
  * reader for the idle rule.
  */
 export type DeliveryOp =
-  | { readonly kind: "send"; readonly inbox: string; readonly event: unknown }
+  | { readonly kind: "send"; readonly inbox: string; readonly event: unknown; readonly key?: string | null }
   | { readonly kind: "withdraw"; readonly inbox: string }
   | { readonly kind: "complete"; readonly callId: string; readonly result: CompleteResult }
   | { readonly kind: "close"; readonly inbox: string }
@@ -251,14 +258,14 @@ export type DeliveryOp =
  *
  * @returns null for a no-op (nothing to withdraw, an identical repeat complete, closing a closed
  *   inbox, or an interrupt while the run waits for the inbox's next message or is already
- *   stopping).
+ *   stopping), and the seq of the first send for a repeat of a keyed send.
  * @throws DeliveryRefused when the run refuses it.
  * @throws TypeError when `op` is no delivery.
  */
-export function prepareDelivery(state: RunState, op: DeliveryOp): PreparedTransition | null {
+export function prepareDelivery(state: RunState, op: DeliveryOp): PreparedTransition | RepeatedSend | null {
   switch (op.kind) {
     case "send":
-      return prepareSend(state, op.inbox, op.event);
+      return prepareSend(state, op.inbox, op.event, op.key ?? null);
     case "withdraw":
       return prepareWithdraw(state, op.inbox);
     case "complete":
@@ -335,6 +342,7 @@ export class FlowEngine {
   readonly numWorkers: number;
   readonly onEvent: ((event: RunEvent) => unknown) | null;
   readonly onStream: ((chunk: StreamChunk) => unknown) | null;
+  readonly onConsole: ((line: ConsoleLine) => unknown) | null;
   /** The run's tool set bound to the state's run id and the run signal. */
   readonly tools: ToolSet;
   /** The run's sessions on its memories, which nodes declaring `needsMemories` get; `null` for none. */
@@ -379,7 +387,7 @@ export class FlowEngine {
    *   `nextSequence`.
    */
   constructor(state: RunState, log: RunLog, options: FlowEngineOptions) {
-    const { growBuilder, numWorkers, onEvent = null, onStream = null } = options;
+    const { growBuilder, numWorkers, onEvent = null, onStream = null, onConsole = null } = options;
     const { tools = null, skills = null, models = null, signal = null, scheduler = null, random = null } =
       options;
     const { memories = null } = options;
@@ -392,6 +400,7 @@ export class FlowEngine {
     this.numWorkers = numWorkers;
     this.onEvent = onEvent;
     this.onStream = onStream;
+    this.onConsole = onConsole;
     this.tools = (tools ?? new ToolSet()).forRun(state.runId ?? "", { signal: this.#controller.signal });
     this.memories = memories;
     this.skills = skills;
@@ -424,7 +433,8 @@ export class FlowEngine {
    * ones, and aborts the running ones' interrupt signals. Then nudge the dispatcher and publish
    * the observers.
    *
-   * @returns The appended seq and record (both null for a no-op) and the observers.
+   * @returns The appended seq and record (both null for a no-op; for a repeat of a keyed send,
+   *   the first send's seq and no record) and the observers.
    * @throws DeliveryRefused when the run refuses it; nothing is appended.
    * @throws Error before `run()` was called.
    * @throws The error of an `onEvent` that throws on these observers. The record is durable by
@@ -441,6 +451,7 @@ export class FlowEngine {
         : op;
     const prepared = prepareDelivery(state, delivery);
     if (prepared === null) return { seq: null, events: [], record: null };
+    if (!(prepared instanceof PreparedTransition)) return { seq: prepared.repeatOf, events: [], record: null };
     const seq = prepared.expectedSequence;
     const observers = commitPrepared(log, state, prepared);
     if (state.result instanceof RunCancelled) this.#controller.abort(this.#cancelled);
@@ -970,24 +981,19 @@ export class FlowEngine {
    * signal aborts; the run state changes only through its recorded steps.
    */
   async #evaluate(nodeId: string): Promise<EvaluatedOutcome> {
-    const { state, onEvent, onStream, live } = this;
+    const { state, onEvent, onStream, onConsole, live } = this;
     const node = state.flow.nodes.get(nodeId)!;
-    // A derived node gets an input route from the pool and the producer index (sources are
-    // pool_commit seqs), kept in memory with the outcome and dropped after the commit.
-    const derived = node.derived;
-    const resolver: SourceResolver | null = derived
-      ? (names) => resolveFromPool(names, state.pool, state.producers, state.runId!)
-      : null;
-    // A derived node's commit names each pool name its binding read.
-    let sourceResolver = resolver;
-    if (derived) {
+    // A derived node's commit names each pool name its binding read, with the seq of the
+    // pool_commit that wrote it, kept in memory until the commit.
+    let sourceResolver: SourceResolver | null = null;
+    if (node.derived) {
       const reads = new Map<string, number>();
       this.#reads.set(nodeId, reads);
       sourceResolver = (names) => {
         const { name } = referenceRoot(names, state.flow.startId, (held) => state.producers.has(held));
         const seq = name === null ? undefined : state.producers.get(name);
         if (seq !== undefined) reads.set(name!, seq);
-        return resolver!(names);
+        return resolveFromPool(names, state.pool, state.producers);
       };
     }
     // A per-node controller, linked while the node runs, so the listeners node code leaves on its
@@ -1003,7 +1009,7 @@ export class FlowEngine {
         signal: nodeController.signal,
         emitStream: onStream === null && live === null ? null : (chunk) => this.#stream(chunk),
         emitEvent: onEvent === null && live === null ? null : (event) => this.#event(event),
-        captureBindings: derived,
+        console: onConsole === null ? null : (method, text) => this.#console(onConsole, { runId: state.runId!, node: nodeId, method, text }),
         sourceResolver,
         tools: this.tools,
         memories: this.memories,
@@ -1034,6 +1040,18 @@ export class FlowEngine {
       live.chunk(nodeId, n, index, text);
     }
     if (onStream !== null) this.#emit(onStream, chunk);
+  }
+
+  /**
+   * Pass one line a node's code printed to `onConsole`. A throw stops the run (`#callHost`) and
+   * goes no further: the line comes from a worker's message, not from the node's own code.
+   */
+  #console(onConsole: (line: ConsoleLine) => unknown, line: ConsoleLine): void {
+    try {
+      this.#callHost(onConsole, line);
+    } catch {
+      // `#callHost` has stopped the run with the error.
+    }
   }
 
   /** Pass one in-loop event to the live channel (a model call's start or end) and to `onEvent`. */

@@ -202,16 +202,27 @@ describe("merging", () => {
   });
 
   test("whitespace-only text blocks are dropped from merged and multi-part lists", () => {
-    expect(sent([user("A."), user("  ")])).toEqual([{ role: "user", content: [{ type: "text", text: "A." }] }]);
-    expect(sent([user("A.", "\n")])).toEqual([{ role: "user", content: [{ type: "text", text: "A." }] }]);
+    expect(sent([user("A."), user("  ")])).toEqual([{ role: "user", content: "A." }]);
+    expect(sent([user("A.", "\n", "B.")])).toEqual([
+      { role: "user", content: [{ type: "text", text: "A." }, { type: "text", text: "B." }] },
+    ]);
   });
 
-  test("a lone whitespace or empty user string is kept", () => {
-    expect(sent([user("  ")])).toEqual([{ role: "user", content: "  " }]);
-    expect(sent([user(""), assistant(text("Hi."))])).toEqual([
-      { role: "user", content: "" },
+  test("a whitespace-only or empty user turn is not sent, with a warning shown once", () => {
+    const [body, warnings] = warned([user("  "), assistant(text("Hi.")), user("", "\n"), assistant(text("Ok."))]);
+    expect(body["messages"]).toEqual([
       { role: "assistant", content: "Hi." },
+      { role: "assistant", content: "Ok." },
     ]);
+    expect(warnings).toEqual([["an empty user message was not sent; Anthropic rejects empty content"]]);
+  });
+
+  test("a user turn with a tool result and whitespace text keeps the result", () => {
+    const messages = [user("Hi."), assistant(call("call_1", { value: 3n })), tool(result("call_1", "6")), user("  ")];
+    expect((sent(messages) as JsonObject[]).at(-1)).toEqual({
+      role: "user",
+      content: [{ type: "tool_result", content: "6", tool_use_id: "call_1", is_error: false }],
+    });
   });
 
   test("a system, user or tool message without parts adds nothing", () => {
@@ -438,7 +449,7 @@ describe("author", () => {
   });
 
   test("an authored message with only whitespace text is skipped, with no bare wrapper", () => {
-    expect(sent([user("Hi."), authored("alice", "  \n")])).toEqual([{ role: "user", content: [block("Hi.")] }]);
+    expect(sent([user("Hi."), authored("alice", "  \n")])).toEqual([{ role: "user", content: "Hi." }]);
   });
 
   test("an assistant author is not sent", () => {
@@ -534,8 +545,16 @@ describe("assistant messages", () => {
     expect(nonFinal(text(""), text("A."))).toBe("A.");
   });
 
-  test("a lone whitespace text is kept as a string", () => {
-    expect(nonFinal(text("  "))).toBe("  ");
+  test("a whitespace-only assistant turn is not sent unless it is final", () => {
+    expect(sent([user("Hi."), assistant(text("\n\n")), user("Next.")])).toEqual([
+      { role: "user", content: "Hi." },
+      { role: "user", content: "Next." },
+    ]);
+    expect(final(text("  "))).toBe("");
+  });
+
+  test("whitespace-only texts are dropped before a lone text is taken", () => {
+    expect(nonFinal(text("\n"), text("A."))).toBe("A.");
   });
 
   test("the final assistant string is stripped at the end", () => {

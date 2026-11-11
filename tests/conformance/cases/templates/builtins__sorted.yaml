@@ -1,0 +1,7 @@
+kind: expr
+# sorted is stable both ways, as Python's is: equal qty keep their order with reverse=true.
+template: "${[sorted([3, 1.5, true]), sorted(['b', 'B', 'a']), [t.name for t in sorted(ts, by='qty', reverse=true)]]}"
+values:
+  ts: [{name: a, qty: 1}, {name: b, qty: 2}, {name: c, qty: 2}]
+expect:
+  value: [[true, 1.5, 3], ["B", "a", "b"], ["b", "c", "a"]]

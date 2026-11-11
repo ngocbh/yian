@@ -35,17 +35,11 @@
  * already bound to its node and mints no edge), but it is a `${...}` template and reuses this
  * scanner, so it lives here rather than in `expressions.ts`.
  *
- * With `trace`, `evalTemplate` and `evalBinding` also record the value's `ValueRoute`: a whole
- * single span's route, or an `interpolation` route over each embedded span's route with its
- * half-open span of code points in the rendered text, so feedback on the text can go back to its
- * sources.
- *
  * Knows about: `expressions` (the evaluator, `ResolveMode`, `exprRefs`, `rewriteExprRefs`,
  * `checkCalls`, `valueArgs`, `conversionHint`, `ISINSTANCE`, `resolveInRecord`, `RootResolver`,
- * `ExpressionError`, `EvalOptions`, `TraceOptions`), `lineage` (`ValueRoute`, `TracedValue`),
- * `builtins` (`TEMPLATE_FNS`, `isNonPromptBuiltin`), `grammar` (`parseExpr`, `findSpanEnd`,
- * `rejectNestedSpans`, `iterSubtrees`, `callSuffixOf`, `wholeSpanInterior`, `ExprNode`, `Token`,
- * `Tree`), `typesys` (`writeAsText`) and `diagnostics` (`reprText`, `compareCodeUnits`). Never
+ * `ExpressionError`, `EvalOptions`), `builtins` (`TEMPLATE_FNS`, `isNonPromptBuiltin`), `grammar`
+ * (`parseExpr`, `findSpanEnd`, `rejectNestedSpans`, `iterSubtrees`, `callSuffixOf`,
+ * `wholeSpanInterior`, `ExprNode`, `Token`, `Tree`), `typesys` (`writeAsText`) and `diagnostics` (`reprText`, `compareCodeUnits`). Never
  * imports: `nodes`, `compile`, `compose`, `runtime`, or the pool (pool-agnostic via `resolve`).
  */
 
@@ -71,7 +65,6 @@ import {
   resolveInRecord,
   type RootResolver,
   rewriteExprRefs,
-  type TraceOptions,
   valueArgs,
 } from "./expressions.ts";
 import {
@@ -85,7 +78,6 @@ import {
   Tree,
   wholeSpanInterior,
 } from "./grammar.ts";
-import { type TracedValue, ValueRoute } from "./lineage.ts";
 
 /** A literal run of a template: raw text with `$$` already collapsed to `$`, never parsed. */
 export class Literal {
@@ -198,15 +190,12 @@ export function scanTemplate(text: string | Verbatim): TemplateSegment[] {
  * @param segments The scan from `scanTemplate`.
  * @param resolve Reads a reference's root from its names (see `evalExpr`).
  * @param options.item The MAP-body-local scope for `item` / `item.path`; `null` (the default)
- *   means no item scope. With `trace`, it may be a `ResolvedValue`.
+ *   means no item scope.
  * @param options.mode How a missing reference is treated inside a span (default
  *   `BINDING_NONE`; see `evalExpr`).
  * @param options.types The type table `isinstance(x, T)` and a `T(...)` constructor look `T` up
  *   in; `null` (the default) means no types.
- * @param options.trace Record the value's route, with each embedded span's half-open range of
- *   code points in the rendered text, and return both as a `TracedValue` (default `false`).
- * @returns The typed value of a whole single span; otherwise the rendered text. With `trace`, the
- *   same value with its route.
+ * @returns The typed value of a whole single span; otherwise the rendered text.
  * @throws {RequiredError} When a span's `head :? message` head misses or is `null`.
  * @throws {ExpressionError} On any error `evalExpr` raises for a span, a final `null` in
  *   `STRICT_RAISE` mode, or an embedded value the runtime can't write as text.
@@ -214,78 +203,25 @@ export function scanTemplate(text: string | Verbatim): TemplateSegment[] {
 export function evalTemplate(
   segments: readonly TemplateSegment[],
   resolve: RootResolver,
-  options: TraceOptions & { trace: true },
-): TracedValue;
-export function evalTemplate(
-  segments: readonly TemplateSegment[],
-  resolve: RootResolver,
-  options?: EvalOptions & { trace?: false },
-): Value;
-export function evalTemplate(
-  segments: readonly TemplateSegment[],
-  resolve: RootResolver,
-  options?: TraceOptions,
-): Value | TracedValue;
-export function evalTemplate(
-  segments: readonly TemplateSegment[],
-  resolve: RootResolver,
-  {
-    item,
-    mode = ResolveMode.BINDING_NONE,
-    types = null,
-    trace = false,
-    declared = null,
-    itemType = null,
-  }: TraceOptions = {},
-): Value | TracedValue {
-  const evalSpan = (span: Span): Value | TracedValue => {
-    const result = evalExpr(span.tree, resolve, { item, mode, types, trace, declared, itemType });
-    const value = trace ? (result as TracedValue).value : (result as Value);
+  { item, mode = ResolveMode.BINDING_NONE, types = null, declared = null, itemType = null }: EvalOptions = {},
+): Value {
+  const evalSpan = (span: Span): Value => {
+    const value = evalExpr(span.tree, resolve, { item, mode, types, declared, itemType });
     if (value === null && mode === ResolveMode.STRICT_RAISE) throw strictNullError(span.tree);
-    return result;
+    return value;
   };
 
   if (segments.length === 1 && segments[0] instanceof Span) return evalSpan(segments[0]);
   let text = "";
-  const routes: ValueRoute[] = [];
-  const spans: [number, number][] = [];
-  let expression = "";
-  let offset = 0;
   for (const segment of segments) {
     if (segment instanceof Literal) {
       text += segment.text;
-      if (trace) {
-        expression += segment.text;
-        offset += codePoints(segment.text);
-      }
     } else {
-      const evaluated = evalSpan(segment);
-      const value = trace ? (evaluated as TracedValue).value : (evaluated as Value);
-      const part = value === null ? "" : asText(value);
-      text += part;
-      if (trace) {
-        const route = (evaluated as TracedValue).route;
-        const end = offset + codePoints(part);
-        routes.push(route);
-        spans.push([offset, end]);
-        expression += "${" + route.expression + "}";
-        offset = end;
-      }
+      const value = evalSpan(segment);
+      text += value === null ? "" : asText(value);
     }
   }
-  if (!trace) return text;
-  if (routes.length === 0) return { value: text, route: ValueRoute.literal(text) };
-  // `JSON.stringify`: literal text holding a lone surrogate then fails at
-  // the slot's write check, traced or not, rather than here.
-  const valueJson = JSON.stringify(text);
-  return { value: text, route: new ValueRoute("interpolation", { valueJson, children: routes, expression, spans }) };
-}
-
-/** Count the code points of `text`: interpolation spans are in code points, not UTF-16 units. */
-function codePoints(text: string): number {
-  let n = 0;
-  for (const _ of text) n++;
-  return n;
+  return text;
 }
 
 /**
@@ -314,40 +250,21 @@ function asText(value: Value): string {
  *   reaches here.)
  * @param resolve Reads a reference's root from its names (see `evalExpr`).
  * @param options.item The MAP-body-local scope for `item` / `item.path`; `null` (the default)
- *   means no item scope (a `null` element and no scope coincide). With `trace`, it may be a
- *   `ResolvedValue`.
+ *   means no item scope (a `null` element and no scope coincide).
  * @param options.types The type table `isinstance(x, T)` and a `T(...)` constructor look `T` up
  *   in; `null` (the default) means no types.
- * @param options.trace Record the value's route and return both as a `TracedValue` (default
- *   `false`; see `evalTemplate`).
- * @returns The typed value of a whole single span; otherwise the rendered text. With `trace`, the
- *   same value with its route.
- * @throws {RequiredError} When a `${ref :? message}` head is unbound.
+ * @returns The typed value of a whole single span; otherwise the rendered text.
+ * @throws {RequiredError} When a `${ref:? message}` head is unbound.
  * @throws {ExpressionError} On a malformed span (unbalanced, nested, or not parsing) or any
  *   error a span's evaluation raises.
  */
 export function evalBinding(
   source: string | Verbatim,
   resolve: RootResolver,
-  options: Omit<TraceOptions, "mode"> & { trace: true },
-): TracedValue;
-export function evalBinding(
-  source: string | Verbatim,
-  resolve: RootResolver,
-  options?: Omit<EvalOptions, "mode"> & { trace?: false },
-): Value;
-export function evalBinding(
-  source: string | Verbatim,
-  resolve: RootResolver,
-  options?: Omit<TraceOptions, "mode">,
-): Value | TracedValue;
-export function evalBinding(
-  source: string | Verbatim,
-  resolve: RootResolver,
-  { item, types = null, trace = false, declared = null, itemType = null }: Omit<TraceOptions, "mode"> = {},
-): Value | TracedValue {
+  { item, types = null, declared = null, itemType = null }: Omit<EvalOptions, "mode"> = {},
+): Value {
   const mode = ResolveMode.BINDING_NONE;
-  return evalTemplate(scanTemplate(source), resolve, { item, mode, types, trace, declared, itemType });
+  return evalTemplate(scanTemplate(source), resolve, { item, mode, types, declared, itemType });
 }
 
 /**

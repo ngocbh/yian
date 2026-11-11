@@ -13,6 +13,7 @@
 import { spawn } from "node:child_process";
 import type { EventEmitter } from "node:events";
 
+import { current } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import type { EmbeddingModel } from "../llm/embeddings.ts";
 import { collect } from "../llm/events.ts";
@@ -37,7 +38,7 @@ import {
 import { callCredentials, checkLoginEndpoint, ConnectionSnapshot, embeddingModel } from "../llm_clients/connection.ts";
 import { OPENAI_API_ENDPOINT } from "../llm_clients/endpoints.ts";
 import { chatModelFromConfig, warnOnce } from "../llm_clients/factory.ts";
-import { listModels, MODEL_LIST_TIMEOUT_SECONDS, ModelListError, timeoutMilliseconds } from "../llm_clients/model_list.ts";
+import { listModels, ModelListError, timeoutMilliseconds } from "../llm_clients/model_list.ts";
 import { ValidationError } from "../llm_clients/provider_blocks.ts";
 import { redactKeys } from "../llm_clients/redact.ts";
 import { realScheduler, type Scheduler } from "../platform.ts";
@@ -615,8 +616,8 @@ const WARNED = new Set<string>();
  *
  * The model is built from the given key, endpoint and headers only, over an empty snapshot, so no
  * saved login or default selection takes part. Without a key, vLLM gets the dummy key its client
- * sends to a keyless server, and Ollama sends none. The build and the call get 30 seconds together
- * on `deps.scheduler`.
+ * sends to a keyless server, and Ollama sends none. The build and the call get
+ * `YIAN_MODEL_CHECK_TIMEOUT_SECONDS` (30 by default) together on `deps.scheduler`.
  *
  * @param provider Provider name.
  * @param model Model id, or the Azure deployment name.
@@ -648,9 +649,10 @@ export async function modelAnswers(
   }
   if (endpoint !== null) config["base_url"] = endpoint;
   if (Object.keys(headers).length > 0) config["headers"] = { ...headers };
-  const timedOut = new TimeoutError("The model didn't reply within 30 seconds");
+  const seconds = current().modelCheckTimeoutSeconds;
+  const timedOut = new TimeoutError(`The model didn't reply within ${seconds} seconds`);
   try {
-    await withDeadline(30_000, timedOut, deps.scheduler ?? realScheduler, async (deadline) => {
+    await withDeadline(seconds * 1000, timedOut, deps.scheduler ?? realScheduler, async (deadline) => {
       try {
         const signal = AbortSignal.any([stop, deadline]);
         const chat = await (deps.chatModel ?? chatModelFromConfig)(config, {
@@ -858,7 +860,7 @@ export async function keyModels(
   variable: string,
   io: Pick<CliIo, "env">,
   deps: AuthDeps = {},
-  timeout: number = MODEL_LIST_TIMEOUT_SECONDS,
+  timeout: number = current().modelListTimeoutSeconds,
 ): Promise<readonly string[] | null> {
   if (provider === "azure" || (ELSEWHERE_ENV[provider] ?? []).some((name) => io.env(name))) {
     return null;
@@ -1252,7 +1254,7 @@ export interface LoginModel {
 export async function loginModels(
   io: CliIo,
   deps: AuthDeps = {},
-  timeout: number = MODEL_LIST_TIMEOUT_SECONDS,
+  timeout: number = current().modelListTimeoutSeconds,
 ): Promise<{ models: LoginModel[]; failed: string[] }> {
   const store = new AuthStore(null, { env: io.env });
   const failed: string[] = [];
@@ -1317,7 +1319,7 @@ export async function models(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}
   const authFile = command.options["auth-file"] as string | undefined;
   let provider = command.options["provider"] as string | undefined;
   const baseUrl = command.options["base-url"] as string | undefined;
-  const timeout = (command.options["timeout"] as number | undefined) ?? MODEL_LIST_TIMEOUT_SECONDS;
+  const timeout = (command.options["timeout"] as number | undefined) ?? current().modelListTimeoutSeconds;
   if ((authFile === undefined) === (provider === undefined)) {
     throw new UsageError("Invalid value: Give exactly one of --auth-file and --provider");
   }

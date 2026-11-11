@@ -28,7 +28,7 @@ import type { Node } from "../src/nodes/base.ts";
 import { Parameter, ValueContract } from "../src/nodes/contracts.ts";
 import { StartNode } from "../src/nodes/start/node.ts";
 import { ToolNode } from "../src/nodes/tool/node.ts";
-import { FileLockError, lockFile } from "../src/platform.ts";
+import { FileLockError, lockFile, sqliteErrorCode } from "../src/platform.ts";
 import { LoadError } from "../src/compose/helpers/errors.ts";
 import { loadFlow } from "../src/compose/loader.ts";
 import { DefaultsMismatchError } from "../src/defaults.ts";
@@ -132,6 +132,23 @@ test("advance while another writer holds the lock is RunBusyError with the lock 
   } finally {
     holder.release();
   }
+});
+
+test("send and advance on a log whose lock file holds foreign data throw FileLockError naming it", async () => {
+  const { log, flow } = await waitingChat();
+  const lockPath = `${realpathSync(log)}.lock`;
+  writeFileSync(lockPath, "garbage-not-sqlite-".padEnd(4096, "0"));
+  const before = readFileSync(log);
+  for (const call of [() => send(log, "m", "hi", { env, flow }), () => advance({ log, flow, env })]) {
+    const error = (await rejected(call())) as FileLockError;
+    expect(error).toBeInstanceOf(FileLockError);
+    expect([error.path, error.reason]).toEqual([lockPath, "unsafe"]);
+    expect(error.message).toBe(
+      `lock file ${lockPath} holds data yian didn't write; remove it if nothing holds the lock`,
+    );
+    expect(sqliteErrorCode(error.cause)).toBe(26);
+  }
+  expect(readFileSync(log).equals(before)).toBe(true);
 });
 
 /** Expect `call` to reject with `DeliveryRefused` for `reason` and leave the file at `log` unchanged; return the error. */
@@ -514,6 +531,7 @@ test("codeRoot: an offline call refuses a CODE file outside the recorded root be
 
 const HOLD_SCRIPT = fileURLToPath(new URL("./helpers/yian-host-api-child-hold.ts", import.meta.url));
 const SEND_SCRIPT = fileURLToPath(new URL("./helpers/yian-host-api-child-send.ts", import.meta.url));
+const PROBE_SCRIPT = fileURLToPath(new URL("./helpers/yian-host-api-child-probe.ts", import.meta.url));
 // Without `--no-install`, Bun may try to install the script's imports from the network.
 const FLAGS = process.versions.bun === undefined ? [] : ["--no-install"];
 
@@ -574,6 +592,19 @@ test("a send while another process moves the run is RunBusyError; after it ends,
     });
   } finally {
     reap(proc);
+  }
+}, 30_000);
+
+test("sends to a waiting run never fail busy while other processes probe its lock", async () => {
+  const { log, flow } = await waitingChat();
+  const probes = [child(PROBE_SCRIPT, [log]), child(PROBE_SCRIPT, [log])];
+  try {
+    for (const probe of probes) expect(await firstLine(probe.stdout!)).toBe("probing");
+    for (let i = 0; i < 50; i++) expect(typeof (await send(log, "m", `m${i}`, { env, flow }))).toBe("number");
+    for (const probe of probes) probe.stdin!.end();
+    for (const probe of probes) expect(await exited(probe)).toBe(0);
+  } finally {
+    for (const probe of probes) reap(probe);
   }
 }, 30_000);
 

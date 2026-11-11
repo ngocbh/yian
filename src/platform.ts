@@ -293,8 +293,15 @@ function errnoCode(error: unknown): unknown {
 
 const SQLITE_BUSY = 5;
 const SQLITE_LOCKED = 6;
+const SQLITE_CORRUPT = 11;
 const SQLITE_CANTOPEN = 14;
 const SQLITE_NOTADB = 26;
+
+/**
+ * How long `lockFile` lets SQLite retry before it reports busy. A probe's shared lock lasts
+ * microseconds, so this rides it out; a real holder keeps the lock and is still reported busy.
+ */
+const LOCK_BUSY_WAIT_MS = 50;
 
 /** Return the SQLite primary result code `error` carries, or 255 for any other value. */
 function primaryCode(error: unknown): number {
@@ -302,19 +309,20 @@ function primaryCode(error: unknown): number {
 }
 
 /**
- * Take the exclusive lock on the file at `path` without waiting, creating it empty
- * with mode 0600 when missing.
+ * Take the exclusive lock on the file at `path`, creating it empty with mode 0600
+ * when missing. It waits up to 50 ms for the lock, so a probe (`isLocked`) or another
+ * contender mid-attempt never makes it fail; a holder that keeps the lock past that
+ * is reported busy.
  *
  * The lock is a SQLite exclusive transaction, so the kernel frees it when the
  * process dies; the file stays 0 bytes, no sibling file appears, and the file is
  * never unlinked. Throws `FileLockError` with reason `"busy"` when another holder
  * has it, `"unsafe"` unless `path` is a regular file (and, with `private`, one with
- * exactly one link), `"not-private"` when `private` and the file isn't owned by this
- * user or grants group or other bits, and `"changed"` when `path` names another file
- * (or none) once locked. Busy can also be reported transiently while another
- * contender or a probe is mid-attempt (busy_timeout is 0); `waitForLock` absorbs it.
- * OS errors (`ENOENT` for a missing directory) and SQLite errors (`SQLITE_NOTADB`
- * for a foreign file) propagate unchanged.
+ * exactly one link) or when it holds data SQLite can't read as a database (with the
+ * SQLite error as `cause`), `"not-private"` when `private` and the file isn't owned
+ * by this user or grants group or other bits, and `"changed"` when `path` names
+ * another file (or none) once locked. OS errors (`ENOENT` for a missing directory)
+ * and other SQLite errors propagate unchanged.
  *
  * The "changed" check reads the path, not SQLite's own descriptor. So a FIFO swapped
  * in between the checks and SQLite's open would block that open, and a path deleted
@@ -348,7 +356,7 @@ export function lockFile(path: string, { private: isPrivate = false }: { private
   }
   const db = openSqlite(path);
   try {
-    db.exec("PRAGMA busy_timeout = 0");
+    db.exec(`PRAGMA busy_timeout = ${LOCK_BUSY_WAIT_MS}`);
     // An in-memory rollback journal keeps the lock from ever creating a sibling file;
     // `OFF` is silently ignored by some builds. With a holder present, this pragma
     // (not BEGIN) is usually what fails busy, hence the catch around every step.
@@ -371,6 +379,11 @@ export function lockFile(path: string, { private: isPrivate = false }: { private
     if (code === SQLITE_BUSY || code === SQLITE_LOCKED) {
       throw new FileLockError(path, "busy", "is locked by another holder", { cause: error });
     }
+    if (code === SQLITE_NOTADB || code === SQLITE_CORRUPT) {
+      throw new FileLockError(path, "unsafe", "holds data yian didn't write; remove it if nothing holds the lock", {
+        cause: error,
+      });
+    }
     throw error;
   }
   return { path, release: () => db.close(), [Symbol.dispose]: () => db.close() };
@@ -380,9 +393,9 @@ export function lockFile(path: string, { private: isPrivate = false }: { private
  * Return whether another connection holds the lock on `path`.
  *
  * A missing path or one that isn't a regular file is `false`, and is never opened
- * or created. Otherwise this reads the schema under a shared lock, so two probes
- * never see each other as held; a `lockFile` racing that brief read can still fail
- * busy. A foreign file is `false`. When SQLite can't open the file, a path that has
+ * or created. Otherwise this reads the schema under a shared lock, without waiting,
+ * so two probes never see each other as held; a `lockFile` racing that brief read
+ * waits it out. A foreign file is `false`. When SQLite can't open the file, a path that has
  * since vanished is `false`; any other cause (such as no read permission) rethrows
  * the driver error, so a held lock is never reported free. Other errors propagate.
  */
@@ -697,9 +710,9 @@ const LOCK_POLL_MS = 100;
  * Take the exclusive lock on `path` as `lockFile` does, retrying every 100 ms while
  * another holder has it.
  *
- * Gives up with `FileLockError` (reason `"busy"`) once its sleeps add up to
- * `timeoutMs`; it never reads `scheduler.now()`, so a clock step doesn't change the
- * wait. The default `Infinity` waits for as long as it takes. Each try first checks
+ * Gives up with `FileLockError` (reason `"busy"`) once its sleeps and `lockFile`'s
+ * 50 ms waits add up to `timeoutMs`, after at least one try; it never reads
+ * `scheduler.now()`, so a clock step doesn't change the wait. The default `Infinity` waits for as long as it takes. Each try first checks
  * `signal`, and an abort rejects with its reason. A `NaN` or negative `timeoutMs`
  * rejects with `RangeError`. Every other `lockFile` failure propagates at once.
  */
@@ -722,6 +735,7 @@ export async function waitForLock(
       return lockFile(path, { private: isPrivate });
     } catch (error) {
       if (!(error instanceof FileLockError) || error.reason !== "busy") throw error;
+      remaining -= LOCK_BUSY_WAIT_MS;
       if (remaining <= 0) {
         throw new FileLockError(path, "busy", `timed out after ${timeoutMs} ms waiting for another holder`, {
           cause: error,

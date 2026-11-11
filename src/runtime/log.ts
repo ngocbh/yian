@@ -3040,8 +3040,9 @@ function decodeCompletePrefix(data: Uint8Array, path: string): RecordEnvelope[] 
 }
 
 /**
- * Take the writer's lock on the log at `path`, opened as `fd`, without waiting. The lock is the
- * sibling `<real>.lock` of the log's resolved path, so every symlink to the log shares it.
+ * Take the writer's lock on the log at `path`, opened as `fd`, waiting only `lockFile`'s brief
+ * busy wait. The lock is the sibling `<real>.lock` of the log's resolved path, so every symlink to
+ * the log shares it.
  *
  * @throws Error naming the log and the likely cause when another writer holds it, with the busy
  *   `FileLockError` as `cause`; `run log <path> was replaced while being opened` when the

@@ -9,6 +9,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -254,6 +255,20 @@ describe("resumed runs", () => {
       unwrapped(`resume failed: run log ${log} is locked by another writer (is the run still active?)`),
     );
     expect(result.stderr).not.toContain("    at ");
+  });
+
+  test("a resume whose lock file holds foreign data names the lock file", async () => {
+    const log = await finishedLog("foreign-lock.jsonl", "rivers", "foreign-lock-run");
+    const lockPath = `${realpathSync(log)}.lock`;
+    writeFileSync(lockPath, "garbage-not-sqlite-".padEnd(4096, "0"));
+    const before = readFileSync(log);
+    const { code, stderr } = await runCli(["--resume", log, "--quiet"]);
+    expect(code).toBe(1);
+    expect(unwrapped(stderr)).toContain(
+      unwrapped(`resume failed: lock file ${lockPath} holds data yian didn't write; remove it if nothing holds the lock`),
+    );
+    expect(stderr).not.toContain("    at ");
+    expect(readFileSync(log)).toEqual(before);
   });
 
   test.each([

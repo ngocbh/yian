@@ -315,6 +315,50 @@ test("cancel returns the open host calls and ends the run; later calls are ended
   expect((await advance({ log, flow, tools, env })).status).toBe("cancelled");
 });
 
+/** A copy of `log` at a fresh path: no idle state of this process is the file it left. */
+function freshCopy(log: string, lines: number | null = null): string {
+  const copy = freshLog();
+  if (lines === null) copyFileSync(log, copy);
+  else writeFileSync(copy, readFileSync(log, "utf8").split("\n").slice(0, lines).join("\n") + "\n");
+  return copy;
+}
+
+test("cancel ends a run whose flow no longer loads, from its records alone", async () => {
+  const { dir, flow } = await codeAskFlow();
+  const log = freshLog();
+  const result = await runFlow(flow, {}, { log, env, tools: { ask: pendingAsk() } });
+  expect(result.status).toBe("waiting");
+  unlinkSync(join(dir, "fn.ts"));
+  const copy = freshCopy(log);
+  const open = pendingCalls(copy);
+  expect(open.map((call) => call.callId)).toEqual([`${result.runId}/ask`]);
+  expect(await cancel(copy, { env })).toEqual(open);
+  expect(readRunLog(copy).at(-1)!.record).toBeInstanceOf(RunCancelledRecord);
+  expect(pendingCalls(copy)).toEqual([]);
+  await refusedWith(copy, () => cancel(copy, { env }), "ended");
+});
+
+test("cancel of a run built in code needs no flow", async () => {
+  const { log } = await waitingAsk();
+  const copy = freshCopy(log);
+  expect((await cancel(copy, { env })).map((call) => call.tool)).toEqual(["ask"]);
+  expect(readRunLog(copy).at(-1)!.record).toBeInstanceOf(RunCancelledRecord);
+});
+
+test("cancel of a log cut inside its run start is refused, appending nothing", async () => {
+  const { log } = await waitingAsk();
+  const cut = freshCopy(log, 3);
+  await refusedWith(cut, () => cancel(cut, { env }), "not_started");
+});
+
+test("cancel of an ended run read from its records is refused, appending nothing", async () => {
+  const { log, flow, tools, callId } = await waitingAsk();
+  await complete(log, callId, { output: "yes" }, { env, flow });
+  expect((await advance({ log, flow, tools, env })).status).toBe("succeeded");
+  const copy = freshCopy(log);
+  await refusedWith(copy, () => cancel(copy, { env }), "ended");
+});
+
 test("a node failure while an ask waits leaves pendingCalls empty", async () => {
   const log = freshLog();
   const boom = new ToolNode("boom", { toolId: "boom" });
@@ -557,11 +601,12 @@ test("codeRoot: an offline call refuses a CODE file outside the recorded root be
   const callId = `${result.runId}/ask`;
   const options = { env };
   const before = readFileSync(log);
+  // A cancel reads only the records, so it compiles no CODE file (see "cancel ends a run whose
+  // flow no longer loads").
   for (const call of [
     () => send(log, "m", "hi", options),
     () => complete(log, callId, { output: "yes" }, options),
     () => close(log, "m", options),
-    () => cancel(log, options),
   ]) {
     const error = await rejected(call());
     expect(error).toBeInstanceOf(LoadError);

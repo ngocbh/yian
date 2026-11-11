@@ -213,7 +213,9 @@ ends. See [Agents](/agents/) for the file format.
   `{"k":"v"}`).
 - The banner (the flow's name, version and description) and per-node progress go to stderr. Each
   node shows a spinner, then `✓ node` or `✗ node` with the error below. Each line ends with how
-  long the node has run (`✓ frame [5s]`). Off a terminal, only the finished lines print.
+  long the node has run (`✓ frame [5s]`). Off a terminal, only the finished lines print. When more
+  nodes run than the screen has rows, the last spinner line counts the rest (`… and 17 more
+  running`). A `console` line from a CODE body prints on its own line above the spinners.
 - Warnings print as `warning: <message>` lines on stderr.
 - Colour is used only on a terminal, and never when `NO_COLOR` is set.
 - On a terminal, escape sequences and control characters other than newlines and tabs

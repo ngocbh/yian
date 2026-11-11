@@ -234,6 +234,18 @@ describe("configErrors", () => {
     configErrors(layer);
     expect(layer).toEqual({ provider: "openai", api_key: "k" });
   });
+
+  test("many errors are listed in linear time, each once and in order", () => {
+    const count = 100_000;
+    const ids = Array.from({ length: count }, (_, i) => `s${i}`);
+    const started = performance.now();
+    const errors = configErrors({ provider: "vllm", model: "m", vllm: { stop_token_ids: ids }, a: 1, b: 2 });
+    expect(performance.now() - started).toBeLessThan(3_000);
+    expect(errors).toHaveLength(count + 1);
+    expect(errors[0]).toEqual({ field: "vllm.stop_token_ids.0", message: "Input should be a valid integer" });
+    expect(errors[count - 1]!.field).toBe(`vllm.stop_token_ids.${count - 1}`);
+    expect(errors[count]).toEqual({ field: null, message: EXTRA_FIELD });
+  });
 });
 
 describe("configCheck", () => {

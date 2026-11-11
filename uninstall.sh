@@ -11,6 +11,8 @@
 # run that removes the clone holding this file has already read all of it.
 
 set -eu
+# An exported CDPATH would send a relative cd elsewhere, and make it print the folder.
+unset CDPATH
 
 MARK="yian install.sh"
 # The wrapper's own line that says install.sh wrote it, matched whole.

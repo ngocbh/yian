@@ -17,6 +17,8 @@
 # The body is one function, called on the last line, so a download cut short runs nothing.
 
 set -eu
+# An exported CDPATH would send a relative cd elsewhere, and make it print the folder.
+unset CDPATH
 
 MARK="yian install.sh"
 # The wrapper's own line that says install.sh wrote it, matched whole.
@@ -98,11 +100,15 @@ parse_args() {
 # Sets ROOT to the checkout this script is in, or leaves it empty when the script was piped.
 find_checkout() {
   ROOT=
-  # Run from a file, $0 is that file; piped through `curl | bash`, it's the shell.
-  if [ -f "$0" ]; then
-    here=$(cd "$(dirname "$0")" && pwd -P)
-    if [ -f "$here/src/cli/bin.ts" ]; then ROOT=$here; fi
-  fi
+  # Run as a file, $0 is a path to install.sh. Piped through `curl | bash`, it's the shell's name,
+  # so a current folder holding a file of that name must not pass for a checkout.
+  case $0 in
+    */install.sh) ;;
+    *) return 0 ;;
+  esac
+  [ -f "$0" ] || return 0
+  here=$(cd "$(dirname "$0")" && pwd -P)
+  if [ -f "$here/src/cli/bin.ts" ]; then ROOT=$here; fi
 }
 
 check_prerequisites() {

@@ -230,6 +230,24 @@ describe.if(process.versions.bun !== undefined)("install.sh", () => {
     expect(readFileSync(join(bin, "yian"), "utf8")).toContain("echo mine");
   });
 
+  test("finds the checkout it is in when CDPATH names another folder of the same name", () => {
+    const fx = fixture();
+    const checkout = join(fx.base, "co");
+    mkdirSync(join(checkout, "src", "cli"), { recursive: true });
+    writeFileSync(join(checkout, "src", "cli", "bin.ts"), "");
+    copyFileSync(join(ROOT, "install.sh"), join(checkout, "install.sh"));
+    mkdirSync(join(fx.base, "elsewhere", "co"), { recursive: true });
+    const result = spawnSync("sh", ["co/install.sh", "--repo", fx.remote], {
+      cwd: fx.base,
+      env: { HOME: fx.home, SHELL: "/bin/bash", PATH: `${fx.stubs}:/usr/bin:/bin`, CDPATH: join(fx.base, "elsewhere") },
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    expect(result.stderr).not.toContain("✗");
+    expect(result.stdout).toContain(`Installing yian from the checkout at ${realpathSync(checkout)}`);
+    expect(existsSync(fx.clone)).toBe(false);
+  });
+
   test("refuses a Bun older than 1.4 and names its version", () => {
     const { home, bin } = setup();
     const oldBun = join(home, "old-bun");
@@ -243,15 +261,20 @@ describe.if(process.versions.bun !== undefined)("install.sh", () => {
 });
 
 describe.if(process.versions.bun !== undefined)("install.sh, piped", () => {
-  test("clones the repository into ~/.local/share/yian and installs that clone", () => {
+  test("clones the repository into ~/.local/share/yian and installs that clone, even from a folder that looks like a checkout", () => {
     const fx = fixture();
-    // Started inside this checkout: a piped run still clones, whatever folder it starts in.
-    const result = pipe("install.sh", fx, ["--repo", fx.remote], {}, ROOT);
+    // Piped, $0 is the shell's name, `sh`: a folder holding a file of that name, an install.sh and
+    // the CLI is still not taken for the checkout to install.
+    const decoy = join(fx.base, "decoy");
+    mkdirSync(join(decoy, "src", "cli"), { recursive: true });
+    for (const file of ["sh", "install.sh", "src/cli/bin.ts"]) writeFileSync(join(decoy, file), "");
+    const result = pipe("install.sh", fx, ["--repo", fx.remote], {}, decoy);
     expect(result.stderr).not.toContain("✗");
     expect(result.status).toBe(0);
     expect(git(fx.clone, "rev-parse", "HEAD")).toBe(git(fx.remote, "rev-parse", "HEAD"));
     expect(existsSync(join(fx.clone, ".git", "yian-install"))).toBe(true);
     expect(calls(fx)).toContain(`${realpathSync(fx.clone)} install --frozen-lockfile`);
+    expect(calls(fx)).not.toContain(`${realpathSync(decoy)} install`);
     expect(calls(fx)).not.toContain("curl");
     const cli = join(fx.clone, "src", "cli", "bin.ts");
     const yian = (env: Record<string, string>) =>

@@ -119,6 +119,14 @@ describe("an MCP server in a ToolSet", () => {
     );
   });
 
+  test("a server named like its own tool: the name reaches the tool, and a grant of it the server", async () => {
+    const fetch = new FakeServer("fetch", [serverTool("fetch")]);
+    const tools = new ToolSet({ fetch });
+    expect(tools.resolve(["fetch"])).toEqual([fetch.tools[0]!]);
+    expect(await tools.invoke("fetch", { text: "hi" })).toBe("hi");
+    expect(expandGrants([asToolGrant("fetch")], tools.scopes()).map((each) => each.visible)).toEqual(["fetch_fetch"]);
+  });
+
   test("one server under two keys binds each tool once, under the first key", () => {
     const tools = new ToolSet({ a: server, b: server });
     expect(tools.groups).toEqual(["a", "b"]);

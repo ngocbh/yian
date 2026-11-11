@@ -5,7 +5,18 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { EventEmitter, getEventListeners } from "node:events";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os, { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -38,7 +49,7 @@ import {
 import { Diagnostic, DiagnosticFrame, SourceRange } from "../../src/diagnostics.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { registerTool, TOOL_REGISTRY } from "../../src/tools/registry.ts";
-import { readRunIndex } from "../../src/run.ts";
+import { inspectRun, readRunIndex } from "../../src/run.ts";
 import { JsonlRunLog, NodeStartedRecord, NodeStepRecord, readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 import { FileRef } from "../../src/typesys/values.ts";
 import { compiled, VERSION } from "../../src/platform.ts";
@@ -1214,15 +1225,15 @@ describe("run setup errors", () => {
   });
 
   test("--engine-trace prints the stack box after run failed:", async () => {
-    // A log whose directory is a file: the run can't create it.
-    const log = join(file("taken", ""), "run.jsonl");
+    // A log whose name is longer than a file system takes: the run can't create it.
+    const log = join(tmp, `${"n".repeat(300)}.jsonl`);
     const argv = ["-q", "--engine-trace", "--log", log, "--input", "topic=clouds"];
     const { code, stderr } = await runFlowCli(ECHO_FLOW, argv);
     expect(code).toBe(1);
     const failed = stderr.indexOf("run failed: ");
     expect(failed).toBeGreaterThan(-1);
     expect(stderr.indexOf("─ traceback ")).toBeGreaterThan(failed);
-    expect(stderr).toContain("ENOTDIR");
+    expect(stderr).toContain("ENAMETOOLONG");
     expect(stderr).toContain("    at ");
   });
 });
@@ -1282,14 +1293,16 @@ describe("run's model and tool text with escape sequences", () => {
   });
 
   test("a setup failure's message is stripped on a TTY and kept exactly when piped", async () => {
-    // A log under a file can't be created, and the error names its path.
-    const taken = file("t\x1b]52;c;aGk=\x07", "");
-    const argv = ["-q", "--log", join(taken, "run.jsonl")];
+    // A log whose name is longer than a file system takes can't be created, and the error names
+    // its path.
+    const folder = join(tmp, "t\x1b]52;c;aGk=\x07");
+    mkdirSync(folder);
+    const argv = ["-q", "--log", join(folder, `${"n".repeat(300)}.jsonl`)];
     const tty = await runAt(output, argv, true);
     expect(tty.code).toBe(1);
-    expect(tty.stderr).toMatch(/run failed: ENOTDIR\b.*\/t\/run\.jsonl'\n$/);
+    expect(tty.stderr).toMatch(/run failed: ENAMETOOLONG\b.*\/t\/n+\.jsonl'\n$/);
     const piped = await runAt(output, argv, false);
-    expect(piped.stderr).toMatch(/run failed: ENOTDIR\b.*\/t\x1b\]52;c;aGk=\x07\/run\.jsonl'\n$/);
+    expect(piped.stderr).toMatch(/run failed: ENAMETOOLONG\b.*\/t\x1b\]52;c;aGk=\x07\/n+\.jsonl'\n$/);
   });
 });
 
@@ -1503,6 +1516,17 @@ describe("check", () => {
     expect(diagnostic.code).toBe("compose.load");
     expect(diagnostic.message).toEndWith(`flow 'lib/missing' not found: ${join("lib", "missing.yaml")}`);
     expect(diagnostic.frames.map((f: { note: string }) => f.note)).toEqual(["uses alias 'child'"]);
+  });
+
+  test("a ref written with .yaml gets the same hint with and without --root", async () => {
+    const root = join(tmp, "company");
+    const flow = file("company/main.yaml", parentFlow("./lib/child.yaml"));
+    file("company/lib/child.yaml", FLOW);
+    const hint = "; write a uses: ref without its extension";
+    const { code, flows } = await checkJson([flow]);
+    expect(code).toBe(1);
+    expect(flows[0].diagnostics[0].message).toEndWith(`(looked for './lib/child.yaml.yaml')${hint}`);
+    expect((await rootDiagnostic(root, flow)).message).toEndWith(`not found: lib/child.yaml.yaml${hint}`);
   });
 
   test("--root: a child under a regular file is not found", async () => {
@@ -1738,6 +1762,51 @@ describe("status", () => {
         unreadable: { seq: 0, reason: expect.stringMatching(/^run log .*line 1/) },
       }),
     ]);
+  });
+
+  test("a damaged index is rebuilt from the logs: the runs are listed, with one warning", async () => {
+    expect((await runFlowCli(ECHO_FLOW, ["-q", "--input", "topic=clouds"])).code).toBe(0);
+    const runs = join(tmp, "home", ".yian", "runs");
+    const index = join(runs, "index.sqlite");
+    writeFileSync(index, "garbage");
+    const text = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["status"], text.io)).toBe(0);
+    expect(text.stdout()).toContain("succeeded");
+    expect(text.stderr()).toBe(
+      `warning: run index ${index} was damaged (file is not a database); rebuilt it from the logs\n`,
+    );
+    writeFileSync(index, "garbage");
+    const json = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["status", "--json"], json.io)).toBe(0);
+    expect(JSON.parse(json.stdout()).runs.map((run: { status: string }) => run.status)).toEqual(["succeeded"]);
+    const again = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["status"], again.io)).toBe(0);
+    expect(again.stderr()).toBe("");
+  });
+
+  test("a copied run folder: status LOG names the run id its folder lacks, as the list does", async () => {
+    expect((await runFlowCli(ECHO_FLOW, ["-q", "--input", "topic=clouds"])).code).toBe(0);
+    const runs = join(tmp, "home", ".yian", "runs");
+    const [runId] = readdirSync(runs).filter((name) => name !== "index.sqlite");
+    cpSync(join(runs, runId!), join(runs, `${runId}-backup`), { recursive: true });
+    const listed = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["status", "--json"], listed.io)).toBe(0);
+    const backup = JSON.parse(listed.stdout()).runs.find((run: { run_id: string }) => run.run_id === `${runId}-backup`);
+    const reason = `the log is run '${runId}', not its folder's '${runId}-backup'`;
+    expect(backup.unreadable).toEqual({ seq: 0, reason });
+    const log = join(runs, `${runId}-backup`, "log.jsonl");
+    const json = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["status", log, "--json"], json.io)).toBe(1);
+    const message = `run log ${log}: ${reason}`;
+    expect(json.stderr()).toBe(`${message}\n`);
+    expect(JSON.parse(json.stdout())).toEqual({ format: "yian.cli.v1", error: { code: "run.setup", message } });
+    // The same log outside the runs folder is a plain run log.
+    mkdirSync(join(tmp, "elsewhere-copy"));
+    const elsewhere = join(tmp, "elsewhere-copy", "log.jsonl");
+    cpSync(log, elsewhere);
+    const plain = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["status", elsewhere], plain.io)).toBe(0);
+    expect(plain.stdout()).toBe("status: succeeded\n");
   });
 
   /** Run `ECHO_FLOW` to the end with its log at `tmp/<name>`, and return the log's path. */
@@ -2005,6 +2074,35 @@ describe("the entry's run --json", () => {
     } finally {
       child.kill("SIGKILL"); // no-op once it has exited
     }
+  }, 30_000);
+});
+
+describe("the entry's run --json killed without a stop", () => {
+  test("SIGKILL of the command stops its run, which never runs on and resumes", async () => {
+    const marker = join(tmp, "marker");
+    const write = `(await import('node:fs')).writeFileSync(${JSON.stringify(marker)}, 'ran')`;
+    const wait = "await new Promise((r) => setTimeout(r, 3000))";
+    const code = `|\n      console.log('ready');\n      ${wait};\n      ${write};\n      return 'done';`;
+    const flow = file("flow.yaml", topicFlow(code));
+    const log = join(tmp, "run.jsonl");
+    const args = ["run", flow, "-q", "--json", "--log", log, "--input", "topic=t"];
+    const { child, streams, closed } = spawnEntry(args);
+    for (let i = 0; i < 500 && !streams.err.includes("ready"); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(streams.err).toContain("ready");
+    child.kill("SIGKILL");
+    // The run's process shares the command's stderr, so `close` waits for it too.
+    const timeout = new Promise((resolve) => setTimeout(() => resolve("timed out"), 10_000));
+    expect(await Promise.race([closed, timeout])).toEqual({ code: null, signal: "SIGKILL" });
+    expect(streams.out).toBe("");
+    expect(inspectRun(log).status).toBe("stopped");
+    // Past when the body would have written it.
+    await new Promise((resolve) => setTimeout(resolve, 3500));
+    expect(existsSync(marker)).toBe(false);
+    const resumed = runEntrySync(["run", "--resume", log, "--json"]);
+    expect(resumed.status).toBe(0);
+    expect(JSON.parse(resumed.stdout)).toMatchObject({ status: "succeeded", output: { topic: "done" } });
   }, 30_000);
 });
 

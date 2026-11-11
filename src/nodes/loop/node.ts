@@ -19,13 +19,13 @@
  *
  * The compile-owned injected builder constructs body and driver at the origin callsite
  * (`this.originId`), never `this.id`, so live and durable-replay windows are byte-identical. The
- * node also owns origin traversal for its cached body signature and exposes the baked body
- * through the source-neutral `originChildren` hook.
+ * body flow and its signature are a child flow's (`ChildFlowNode`).
  *
- * Knows about: nodes/base, nodes/contracts, nodes/ids, expr, diagnostics and typesys.
+ * Knows about: nodes/base, nodes/child_flow, nodes/contracts, nodes/ids, expr, diagnostics and
+ * typesys.
  */
 
-import { type FailureCode, type OriginRef, reprText } from "../../diagnostics.ts";
+import { type FailureCode, reprText } from "../../diagnostics.ts";
 import { evaluateWhenRecord, localDeclared } from "../../expr/expressions.ts";
 import {
   isInboxType,
@@ -36,16 +36,9 @@ import {
   type Value,
   type ValueRecord,
 } from "../../typesys/values.ts";
-import { Grow, isWeakKey, Node, NodeKind, Output, parseNamedCondition } from "../base.ts";
-import {
-  isExactly,
-  iterOriginCarrier,
-  type OriginMapper,
-  Parameter,
-  PartialRecordContract,
-  rewriteOriginCarrier,
-  ValueContract,
-} from "../contracts.ts";
+import { Grow, isWeakKey, NodeKind, Output, parseNamedCondition } from "../base.ts";
+import { ChildFlowNode } from "../child_flow.ts";
+import { isExactly, type Parameter, PartialRecordContract, ValueContract } from "../contracts.ts";
 import { mapCallsite, ns } from "../ids.ts";
 
 /**
@@ -72,7 +65,7 @@ const failedPredicates = new WeakSet<object>();
  *
  * Its fields are baked at load by Compose and copied onto every clone by `respawn`.
  */
-export class LoopNode extends Node {
+export class LoopNode extends ChildFlowNode {
   readonly kind = NodeKind.LOOP;
   /** Grows the graph: each continuing iteration resolves to a seed-first `Grow`. */
   override readonly isSpawner: boolean = true;
@@ -82,17 +75,6 @@ export class LoopNode extends Node {
   override readonly derived: boolean = true;
   /** Each body inherits the enclosing call depth without consuming a level. */
   override readonly growDepthDelta: number | null = 0;
-  /** The id of the body flow. */
-  flowId: string;
-  /** A pinned body flow version, if any. */
-  flowVersion: string | null;
-  /** The compiled body flow (`'a -> 'a`) used by the injected growth builder. */
-  child: unknown;
-  /**
-   * The body's canonical parameters (a subset of the carried record); an omitted signature is
-   * stored as an empty list, as CALL and MAP do.
-   */
-  childInputs: readonly Parameter[];
   /** One of `while`, `until` or `times`. */
   predicateKind: "while" | "until" | "times";
   /**
@@ -102,6 +84,11 @@ export class LoopNode extends Node {
   predicate: string | null;
   /** The runaway guard for `while`/`until` (`null` is no limit); for `times`, the count N. */
   maxIters: number | null;
+  /**
+   * What a `while`/`until` loop does when the guard trips: `fail` with `loop.max_exceeded`, or
+   * `output` the carried record as an ordinary stop does.
+   */
+  onMaxExceeded: "fail" | "output";
   /**
    * The carried fields the body returns, in carried order; `null` when the body returns every
    * carried field (a total loop). Each omitted field keeps the previous iteration's value through
@@ -123,6 +110,7 @@ export class LoopNode extends Node {
    * @param options.predicate The `while`/`until` boolean source; `null` for `times`.
    * @param options.times The fixed run count of a `times` loop, kept as `maxIters`.
    * @param options.maxIters The runaway guard, or the `times` count; `null` is no limit.
+   * @param options.onMaxExceeded What the tripped guard does: `fail` (the default) or `output`.
    * @param options.title A display title.
    * @param options.iteration This driver's iteration index; defaults to 0.
    * @param options.originId The origin loop id; omitted, the node's own id.
@@ -141,6 +129,7 @@ export class LoopNode extends Node {
       predicate?: string | null;
       times?: number | null;
       maxIters?: number | null;
+      onMaxExceeded?: "fail" | "output";
       title?: string | null;
       iteration?: number;
       originId?: string | null;
@@ -156,12 +145,13 @@ export class LoopNode extends Node {
       predicate = null,
       times = null,
       maxIters = null,
+      onMaxExceeded = "fail",
       title = null,
       iteration = 0,
       originId = null,
       returnedFields = null,
     } = options;
-    super(nodeId, { title });
+    super(nodeId, { flowId, flowVersion, child, childInputs, title });
     if (times !== null && predicateKind !== "times") {
       throw new RangeError(
         `loop node ${reprText(nodeId)}: times: is the count of a times loop, not of a ${predicateKind} loop`,
@@ -172,13 +162,10 @@ export class LoopNode extends Node {
         `loop node ${reprText(nodeId)}: a times loop's count is times: ${times}, but maxIters is ${maxIters}`,
       );
     }
-    this.flowId = flowId;
-    this.flowVersion = flowVersion;
-    this.child = child;
-    this.childInputs = childInputs ?? [];
     this.predicateKind = predicateKind;
     this.predicate = predicate;
     this.maxIters = times ?? maxIters;
+    this.onMaxExceeded = onMaxExceeded;
     this.returnedFields = returnedFields;
     this.iteration = iteration;
     // The compiled `L` sets originId to its own id (uniform); a clone `L~k` carries the origin.
@@ -188,23 +175,6 @@ export class LoopNode extends Node {
   /** Return the compiled loop origin that receives a stopped driver output. */
   override skippedOutputTarget(): string {
     return this.originId ?? this.id;
-  }
-
-  /** Yield the common origins, then the cached body signature's. */
-  override *iterLocalOrigins(seen: Set<object> = new Set()): Generator<OriginRef> {
-    yield* super.iterLocalOrigins(seen);
-    for (const parameter of this.childInputs) yield* iterOriginCarrier(parameter, seen);
-  }
-
-  /** Rewrite the common and the cached signature's origins on a copied LOOP. */
-  override rewriteLocalOrigins(mapper: OriginMapper, seen: Map<object, object> = new Map()): void {
-    super.rewriteLocalOrigins(mapper, seen);
-    this.childInputs = this.childInputs.map((parameter) => rewriteOriginCarrier(parameter, mapper, seen));
-  }
-
-  /** Return the baked body flow, or no child for an unbaked LOOP. */
-  override originChildren(): readonly unknown[] {
-    return this.child === null ? [] : [this.child];
   }
 
   /**
@@ -218,8 +188,8 @@ export class LoopNode extends Node {
   }
 
   /**
-   * Require the body flow that Compose must bake before execution, a `while`/`until` loop's
-   * predicate and a `times` loop's count.
+   * Require the body flow that Compose must bake before execution (`ChildFlowNode`), a
+   * `while`/`until` loop's predicate and a `times` loop's count.
    *
    * @throws Error when the body flow isn't baked.
    * @throws RangeError when a `while`/`until` loop has no predicate or a `times` loop no count.
@@ -227,7 +197,6 @@ export class LoopNode extends Node {
    */
   override validateExecutionSetup(): void {
     super.validateExecutionSetup();
-    if (this.child === null) throw new Error(`loop node ${reprText(this.id)} was not baked with a body child`);
     if (this.predicateKind === "times") {
       if (this.maxIters === null) throw new RangeError(`loop node ${reprText(this.id)} has no \`times\` count`);
       return;
@@ -305,6 +274,7 @@ export class LoopNode extends Node {
       predicateKind: this.predicateKind,
       predicate: this.predicate,
       maxIters: this.maxIters,
+      onMaxExceeded: this.onMaxExceeded,
       title: this.title,
       iteration: k,
       originId,
@@ -363,24 +333,28 @@ export class LoopNode extends Node {
    *   times: stop when `k >= this.maxIters` (`times N` is baked as `maxIters`).
    * On stop: `Output(carried, commitAs = origin)`, without the fields the body takes as inboxes or
    * memories.
-   * On continue: the runaway guard, only when `max:` is set, then `Grow([carried, k], prune)`,
-   * pruning body_{k-1} and this driver unless it is the origin. The reducer retires each
+   * On continue: the runaway guard, only when `max:` is set, which fails or, with
+   * `onMaxExceeded` `output`, stops as above; then `Grow([carried, k], prune)`, pruning
+   * body_{k-1} and this driver unless it is the origin. The reducer retires each
    * body_{k-1} node with its whole grown subtree once every node in it is settled.
    *
    * @param inputs The carried record, keyed by the loop's input field names.
    * @returns The stopping `Output` or the continuing `Grow`; the seed's iteration is a `bigint`.
-   * @throws LoopMaxExceeded when a `while`/`until` loop would start more than `max` body runs.
+   * @throws LoopMaxExceeded when a `while`/`until` loop would start more than `max` body runs
+   *   and `onMaxExceeded` is `fail`.
    * @throws ExpressionError (unchanged) when the predicate fails to evaluate.
    */
   override forward(inputs: Record<string, unknown>): Output | Grow {
     const origin = this.originId ?? this.id;
     const carried = this.readCarried({ ...inputs } as ValueRecord);
     const k = this.iteration;
-    if (this.shouldStopNow(carried, k)) return new Output(this.withoutCarriedOnly(carried), { commitAs: origin });
+    const stop = () => new Output(this.withoutCarriedOnly(carried), { commitAs: origin });
+    if (this.shouldStopNow(carried, k)) return stop();
     // Guard on `shouldStop(k)`, not `k + 1`: driver@k grows body_k, the (k+1)-th body, which is
     // within budget while `k < maxIters`, so `max: M` permits exactly M body runs. A `times` loop
     // stops above instead.
     if ((this.predicateKind === "while" || this.predicateKind === "until") && this.shouldStop(k)) {
+      if (this.onMaxExceeded === "output") return stop();
       throw new LoopMaxExceeded(`loop ${reprText(origin)} exceeded max (${this.maxIters})`);
     }
     const prune = new Set<string>();

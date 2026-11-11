@@ -24,10 +24,11 @@ import {
   Response,
   TextPart,
   ToolCallPart,
+  ToolResultPart,
 } from "../../src/llm/messages.ts";
 import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
 import { Route } from "../../src/llm/route.ts";
-import { MissingToolCallError, StructuredOutputError } from "../../src/llm/structured.ts";
+import { MissingToolCallError, StructuredOutputError, structuredTarget } from "../../src/llm/structured.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
 import {
   generateStructured,
@@ -48,7 +49,7 @@ beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
 
 const NATIVE = { provider: "openai", model: "gpt-5.5" };
-const PROMPTED = { provider: "vllm", model: "no-structured-sentinel" };
+const PROMPTED = { provider: "vllm", model: "m", structuredOutput: "prompt" as const };
 const INT = Type.scalar(ValueKind.INTEGER);
 const QUESTION = user("question");
 
@@ -261,16 +262,41 @@ test("contract path validation rejects foreign location shapes", () => {
 });
 
 describe("TS-only", () => {
-  test("a corrected request holds the earlier messages and the correction, not the invalid reply", async () => {
+  test("a corrected request holds the earlier messages, the invalid reply and the correction", async () => {
     const model = scripted([text('{"value": "x"}'), text('{"value": 1}')]);
     await generateStructured(model, [QUESTION], INT, { retries: 1 });
     const second = model.requests[1]!.messages;
-    expect(second.map((message) => message.role)).toEqual(["user", "user"]);
+    expect(second.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
     expect(second[0]!.text()).toBe("question");
-    expect(second[1]!.text()).toBe(
+    expect(second[1]!.text()).toBe('{"value": "x"}');
+    expect(second[2]!.text()).toBe(
       'Your previous output was invalid: structured output: "x" does not match declared type int. ' +
         "Respond with valid data matching the schema.",
     );
+  });
+
+  test("an invalid tool call is answered by the correction as its error result", async () => {
+    const bad = new ToolCallPart({ id: "c1", name: "ScalarWrapper", arguments: { value: "x" } });
+    const other = new ToolCallPart({ id: "c2", name: "other", arguments: {} });
+    const good = new ToolCallPart({ id: "c3", name: "ScalarWrapper", arguments: { value: 1n } });
+    const model = new ToolRoute([reply(new TextPart("Trying."), bad, other), reply(good)]);
+    expect(await generateStructured(model, [QUESTION], INT, { retries: 1 })).toBe(1n);
+    const second = model.script.requests[1]!.messages;
+    expect(second.map((message) => message.role)).toEqual(["user", "assistant", "tool", "tool"]);
+    expect(second[1]!.parts).toEqual([new TextPart("Trying."), bad, other]);
+    const correction =
+      'Your previous output was invalid: structured output: "x" does not match declared type int. ' +
+      "Respond with valid data matching the schema.";
+    expect(second.slice(2).map((message) => message.parts[0])).toEqual([
+      new ToolResultPart({ callId: "c1", name: "ScalarWrapper", content: correction, isError: true }),
+      new ToolResultPart({ callId: "c2", name: "other", content: correction, isError: true }),
+    ]);
+  });
+
+  test("an empty invalid reply adds only the correction", async () => {
+    const model = scripted([reply(), text('{"value": 1}')]);
+    await generateStructured(model, [QUESTION], INT, { retries: 1 });
+    expect(model.requests[1]!.messages.map((message) => message.role)).toEqual(["user", "user"]);
   });
 
   test("a stop during the call of an invalid last reply wins over the OutputInvalidError", async () => {
@@ -350,7 +376,7 @@ describe("TS-only", () => {
       const record = (step: ValueRecord) => recorded.push(step);
       const steps = new AgentSteps(new NodeSteps(1, [], record), () => 0, null, (error) => error, "agent");
       await generateStructured(model, [], INT, { retries, steps });
-      const { requests, digestOk } = rebuildStructuredRequests(model, [], INT, recorded);
+      const { requests, digestOk } = rebuildStructuredRequests(structuredTarget(model), [], INT, recorded);
       // Each step's rebuilt request is the one the model received.
       expect(requests.map(({ request }) => requestSha256(request!))).toEqual(model.requests.map(requestSha256));
       return digestOk;
@@ -366,7 +392,7 @@ describe("TS-only", () => {
       await generateStructured(model, [], INT, { retries: 0, steps });
       // The cut keeps the reply received so far, which the node never output.
       const cut = recorded.map((step) => ({ ...step, finish: "interrupted" }));
-      const rebuilt = rebuildStructuredRequests(model, [], INT, cut);
+      const rebuilt = rebuildStructuredRequests(structuredTarget(model), [], INT, cut);
       expect(rebuilt.digestOk).toBe(true);
       expect(rebuilt.requests).toHaveLength(1);
     }
@@ -398,7 +424,8 @@ describe("an agent reply without the schema's tool call", () => {
     const requests = model.script.requests;
     expect(requests).toHaveLength(2);
     const messages = requests[1]!.messages;
-    expect(messages.map((message) => message.role)).toEqual(["system", "user", "user"]);
+    expect(messages.map((message) => message.role)).toEqual(["system", "user", "assistant", "user"]);
+    expect(messages[2]!.text()).toBe("7");
     const correction = messages.at(-1)!.text();
     expect(correction).toContain(missing);
     expect(correction).not.toContain("provider error (");

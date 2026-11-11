@@ -34,6 +34,8 @@ export interface ExchangeOptions {
   firstResponseMs?: number;
   /** Longest wait between body bytes; defaults to `current().modelIdleTimeoutSeconds`. */
   idleMs?: number;
+  /** The most body bytes read; defaults to `current().maxModelResponseBytes`. */
+  maxBytes?: number;
 }
 
 /** An open exchange: the reply's status and headers, and its body. */
@@ -43,7 +45,8 @@ export interface Exchange {
   /**
    * The body's non-empty chunks, each read under the idle timer. Finishing, failing or
    * returning early aborts the request. Returning before the first read doesn't run the
-   * body; call `abort()` to release an exchange whose body you won't read.
+   * body; call `abort()` to release an exchange whose body you won't read. A chunk that takes
+   * the body past `maxBytes` fails it with a `protocol` `ProviderError`, not retryable.
    */
   readonly body: AsyncGenerator<Uint8Array>;
   /**
@@ -273,6 +276,7 @@ export async function openExchange(url: string, init: RequestInit, options: Exch
   const { provider, credentials, signal, scheduler = realScheduler, send } = options;
   const firstResponseMs = options.firstResponseMs ?? current().modelFirstResponseTimeoutSeconds * 1000;
   const idleMs = options.idleMs ?? current().modelIdleTimeoutSeconds * 1000;
+  const maxBytes = options.maxBytes ?? current().maxModelResponseBytes;
   signal?.throwIfAborted();
   const request = requestControl(url, init, { provider, credentials, signal, send });
   let response: Response;
@@ -301,11 +305,15 @@ export async function openExchange(url: string, init: RequestInit, options: Exch
   async function* body(): AsyncGenerator<Uint8Array> {
     try {
       if (first === undefined) return;
-      yield first;
-      for (;;) {
-        const chunk = await timed(nextChunk(reader!), idleMs, scheduler, request.signal, noBytes);
-        if (chunk === undefined) return;
+      let total = 0;
+      for (let chunk: Uint8Array | undefined = first; chunk !== undefined; ) {
+        total += chunk.byteLength;
+        if (total > maxBytes) {
+          const message = `${provider} reply is over the limit of ${maxBytes} bytes (YIAN_MAX_MODEL_RESPONSE_BYTES)`;
+          throw new ProviderError("protocol", message, { provider });
+        }
         yield chunk;
+        chunk = await timed(nextChunk(reader!), idleMs, scheduler, request.signal, noBytes);
       }
     } catch (error) {
       throw request.failure(error);

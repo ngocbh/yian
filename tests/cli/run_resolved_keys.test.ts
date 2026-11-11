@@ -210,6 +210,8 @@ describe("a provider a value may still set is not checked up front", () => {
   for (const [id, text] of cases) {
     test(id, async () => {
       vars["XAI_API_KEY"] = "test-xai-key";
+      // An agent that changes provider drops the flow's model and takes the provider's saved one.
+      await new AuthStore(null, { env }).save("xai", new ApiKeyCredentials("test-xai-key"), "m1", { makeDefault: false });
       const flowLlm = "llm_config: {provider: anthropic, model: claude-x}";
       const { flow, log } = flowFile(text.replace("llm_config: {provider: anthropic}", flowLlm));
       const result = await invoke([flow, "--log", log]);

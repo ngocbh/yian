@@ -1064,6 +1064,11 @@ describe("the view's helpers", () => {
     expect(summary("ok\ninputs:\n  a: int\n  b: str\n\nnext", 60)).toEqual(["ok · inputs: a: int, b: str · next"]);
     expect(summary("x ".repeat(50), 20)).toEqual(["x x x x x x x x x x", "x x x x x x x x x x…"]);
   });
+
+  test("summary shows a JSON record's fields, a null one left out", () => {
+    const written = JSON.stringify({ written: true, path: "a.yaml", reason: null });
+    expect(summary(written, 60)).toEqual(["written: true · path: a.yaml"]);
+  });
 });
 
 /** A reply streamed in `chunks`. */
@@ -1134,7 +1139,7 @@ describe("a session on a terminal", () => {
         "> run hello for Ada",
         "",
         "⏺ check_flow(hello.yaml)",
-        "  ⎿  ok · name: hello · inputs: name: str",
+        `  ⎿  ok: true · name: hello · inputs: [{name: "name", ty…`,
         '⏺ start_flow(hello.yaml, {name: "Ada"})',
         `╭─ Run hello.yaml ${"─".repeat(41)}╮`,
         ...CARD.slice(0, 4).map(row),

@@ -162,6 +162,9 @@ llm_config:
   that sets both the provider and such a model with a block, as if no flow or agent overrides them.
 - A setting one model doesn't accept passes the load check; the provider's error then fails the
   node.
+- The output token limit is `openai.max_output_tokens`, `anthropic.max_tokens`,
+  `google.generationConfig.maxOutputTokens`, `ollama.options.num_predict`, and `max_tokens` in the
+  other blocks. A reply cut off at it fails the agent with `agent.output_truncated`.
 
 ## Connections
 

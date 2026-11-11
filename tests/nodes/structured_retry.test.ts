@@ -34,6 +34,7 @@ import {
   generateStructured,
   isContractPath,
   OutputInvalidError,
+  OutputTruncatedError,
   rebuildStructuredRequests,
 } from "../../src/nodes/agent/structured.ts";
 import { AgentSteps, requestSha256 } from "../../src/nodes/agent/context.ts";
@@ -219,6 +220,32 @@ describe("a reply without the schema's tool call", () => {
     const correction = (model.script.requests[1]!.messages.at(-1)!.parts[0] as ToolResultPart).content;
     expect(correction).toContain('the ScalarWrapper call\'s arguments are not a JSON object: {"value": 4');
     expect(correction).not.toContain("did not call");
+  });
+});
+
+describe("a reply cut off at the token limit", () => {
+  /** A text reply the provider stopped at the token limit. */
+  const cut = (body: string) =>
+    new Response({ message: new Message({ role: "assistant", parts: [new TextPart(body)] }), finishReason: "length" });
+
+  test("is corrected like any invalid reply, and the correction says it was cut off", async () => {
+    const model = scripted([cut('{"value": 4'), text('{"value": 42}')]);
+    expect(await generateStructured(model, [], INT, { retries: 1 })).toBe(42n);
+    expect(model.requests[1]!.messages.at(-1)!.text()).toContain("; the reply was cut off at the token limit");
+  });
+
+  test("fails OutputTruncatedError once retries are spent, naming the setting to raise", async () => {
+    const model = scripted([text("nope"), cut('{"value": 4')]);
+    const error = await rejection(generateStructured(model, [], INT, { retries: 1 }));
+    expect(error).toBeInstanceOf(OutputTruncatedError);
+    expect((error as Error).message).toBe(
+      "the reply was cut off at the output token limit before it finished; raise the limit in the agent's " +
+        "llm_config (openai.max_output_tokens)",
+    );
+    expect((error as Error).cause).toBeInstanceOf(StructuredOutputError);
+    // A last reply that wasn't cut off fails as invalid, whatever came before.
+    const invalid = await rejection(generateStructured(scripted([cut("x"), text("nope")]), [], INT, { retries: 1 }));
+    expect(invalid).toBeInstanceOf(OutputInvalidError);
   });
 });
 

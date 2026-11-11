@@ -12,7 +12,8 @@
  * runs none of them: each call gets the cap's error result (`toolLimitText`), and the model answers
  * once more, reading no steer. That reply is the last: calls it still makes get the same result,
  * and its text is the answer. A host interrupt pending when such a reply arrives skips its calls
- * instead, as it does any reply's.
+ * instead, as it does any reply's. A reply the provider cut off at the token limit with no call
+ * whose arguments parsed is no answer: the node fails with `OutputTruncatedError`.
  *
  * Each model call is written as a `model_call` step before anything acts on its reply, and each
  * tool result as a `tool_result` step as soon as that call finishes, before the next model call
@@ -105,7 +106,7 @@ import {
 } from "./results.ts";
 import { foldSteps, type SteerRender, steerMessages, steerValues } from "./messages.ts";
 import type { StructuredTarget } from "../../llm/structured.ts";
-import { generateStructured, rebuildStructuredRequests, typeToSchema } from "./structured.ts";
+import { generateStructured, OutputTruncatedError, rebuildStructuredRequests, typeToSchema } from "./structured.ts";
 
 /**
  * Run one AGENT invocation.
@@ -116,7 +117,9 @@ import { generateStructured, rebuildStructuredRequests, typeToSchema } from "./s
  * `maxToolIterations`; at the cap the answer stands and the steers stay queued). A reply at the
  * cap that still calls tools runs none: its calls get the cap's error result, and one more model
  * call, with no steer read, gives the answer (its text even when it calls tools again). Sets
- * `ctx.sent` to the built model's route credentials once the model is built. Each reason the
+ * `ctx.sent` to the built model's route credentials once the model is built. A reply cut off at
+ * the token limit (`finishReason` `length`) with no call whose arguments parsed fails the node,
+ * once any late steer it gets was read; a cut reply with a parsed call runs it. Each reason the
  * model gives for leaving out replay state reaches `ctx.emitEvent` once, as `ReplayDegraded`. With
  * `ctx.steps`, each model call and failed attempt is recorded as a `model_call` step and each
  * tool result as a `tool_result` step, a failed attempt's error scrubbed of every credential the
@@ -134,6 +137,7 @@ import { generateStructured, rebuildStructuredRequests, typeToSchema } from "./s
  * @throws RangeError when a grant names no tool of the run (`ToolSet.resolve`).
  * @throws TypeCheckError when a reply repeats a tool call id or its tool call arguments nest too deep.
  * @throws AgentLoopError when a tool returns `pending()` outside a durable run.
+ * @throws OutputTruncatedError when a reply was cut off at the token limit with no runnable call.
  * @throws CapabilityFault when a recorded call doesn't match the rebuilt request
  *   (`AgentSteps.takeRecorded`), or the loop was cut with no pending interrupt.
  * @throws Whatever building or calling the model throws (marked by `markModelFailure`), a stop's
@@ -294,7 +298,12 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
       // once an interrupt is seen (an earlier start's honor included).
       const late = !capped && !interruptRequested(interrupt, steps) && iterations !== ctx.maxToolIterations;
       if (late && queuedSteer(steps, ctx.steerInbox)) continue;
+      if (response.finishReason === "length") throw new OutputTruncatedError(model);
       return await answer();
+    }
+    // The cut arguments would only earn error results; a parsed call still runs.
+    if (response.finishReason === "length" && calls.every((call) => call.arguments === null)) {
+      throw new OutputTruncatedError(model);
     }
 
     const pended = new Map<number, string>();

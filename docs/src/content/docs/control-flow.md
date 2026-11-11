@@ -420,6 +420,9 @@ Exactly one driver decides how often the body runs:
   only by allowing `null` still loads, as in the example below. Any other mismatch is a load error,
   tagged or not.
 - Returning `null` sets the field to `null`; leaving it out keeps its value.
+- A `while:` that may be false at the start runs the body zero times, and the loop then outputs
+  its seeds. So each literal seed of a returned field must fit the body's type for that field,
+  unless `while:` is true on the literal seeds (`cursor: null` under `while: cursor == null`).
 - `input:` lists each carried field. Each seed is checked against the body's input like a `call`
   argument. An empty list seed needs a tag, as `seen: !list(int) []` shows.
 - `${count.output}` is the final record, and `${count.output.n}` one field of it.

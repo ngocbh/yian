@@ -23,6 +23,7 @@ import {
   NodeExpandedRecord,
   NodeStepRecord,
   NodeStartedRecord,
+  PoolCommitRecord,
   readRunLog,
   RecordEnvelope,
   RunLogChangedError,
@@ -32,6 +33,7 @@ import {
   RunStoppedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
+import * as json from "../../src/typesys/json.ts";
 import { folderSyncs } from "../helpers/folder_syncs.ts";
 import { testNode } from "../helpers/test_node.ts";
 
@@ -627,6 +629,75 @@ test.each<[string, unknown, string]>([
   ["a lone surrogate", "\ud800", "Unicode surrogate is not valid canonical JSON"],
 ])("a memory log rejects an invalid run id: %s", (_name, runId, message) => {
   expectError(() => new MemoryRunLog(runId as string), RangeError, message);
+});
+
+describe("decoding a value line", () => {
+  /** A `pool_commit` line of `wire` under node `big`, as a log holds it. */
+  const commitLine = (kind: string, value: string) =>
+    `{"at":"${AT}","kind":"pool_commit","payload":{"key":"big","kind":"${kind}","node_id":"big","value":${value}},"run_id":"run","schema":${SCHEMA_VERSION},"seq":0}`;
+
+  /** Expect every container in `value` to be frozen. */
+  function expectDeepFrozen(value: unknown): void {
+    const stack = [value];
+    while (stack.length > 0) {
+      const item = stack.pop();
+      if (typeof item !== "object" || item === null) continue;
+      expect(Object.isFrozen(item)).toBe(true);
+      stack.push(...Object.values(item));
+    }
+  }
+
+  // The spy reads `parseJson` through its module, which only Bun lets a test replace.
+  test.if(process.versions.bun !== undefined)("a pool_commit or node_step line is parsed once, and its value deep-frozen", () => {
+    const step = `{"at":"${AT}","kind":"node_step","payload":{"n":1,"node_id":"each","step":{"items":[{"a":[1]}],"kind":"test"}},"run_id":"run","schema":${SCHEMA_VERSION},"seq":0}`;
+    for (const line of [commitLine("object", '{"a":[{"b":[1,2]},{"c":"d"}],"e":{"f":null}}'), step]) {
+      const parse = spyOn(json, "parseJson");
+      let envelope: RecordEnvelope;
+      let parses: number;
+      try {
+        envelope = decodeRecord(line);
+        parses = parse.mock.calls.length;
+      } finally {
+        parse.mockRestore();
+      }
+      expect(parses).toBe(1);
+      const record = envelope.record as PoolCommitRecord | NodeStepRecord;
+      expectDeepFrozen("value" in record ? record.value : record.step);
+      expect(encodeRecord(envelope)).toBe(line);
+    }
+  });
+
+  test("a value whose keys a hand edit left out of order decodes with them sorted", () => {
+    const record = decodeRecord(commitLine("object", '{"b":{"y":1,"x":2},"a":1}')).record as PoolCommitRecord;
+    const value = record.value!.value as Record<string, Record<string, unknown>>;
+    expect([Object.keys(value), Object.keys(value["b"]!)]).toEqual([["a", "b"], ["x", "y"]]);
+    expectDeepFrozen(record.value);
+  });
+
+  test("a file value decodes as the copy through the codec gives it", () => {
+    const line = commitLine("file", '{"mime":"text/plain","name":"a.txt","uri":"file:///a.txt"}');
+    const envelope = decodeRecord(line);
+    expect((envelope.record as PoolCommitRecord).value).toEqual({
+      kind: "file",
+      value: { mime: "text/plain", name: "a.txt", uri: "file:///a.txt" },
+    });
+    expect(encodeRecord(envelope)).toBe(line);
+  });
+
+  test("a large list decodes in a small multiple of parsing it and freezing the list once", () => {
+    const line = commitLine("list[int]", JSON.stringify(Array.from({ length: 200_000 }, (_, i) => i)));
+    const best = (run: () => unknown) => {
+      let least = Infinity;
+      for (let i = 0; i < 3; i++) {
+        const started = performance.now();
+        run();
+        least = Math.min(least, performance.now() - started);
+      }
+      return least;
+    };
+    const floor = best(() => Object.freeze((json.parseJson(line, "codec") as { payload: { value: unknown[] } }).payload.value));
+    expect(best(() => decodeRecord(line))).toBeLessThan(1.5 * floor + 10);
+  });
 });
 
 test("readRunLog reads the complete prefix without the lock", () => {

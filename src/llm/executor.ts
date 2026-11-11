@@ -17,7 +17,7 @@ import { scrub } from "./auth.ts";
 import { encodeBody } from "./body.ts";
 import { capDetail, errorFromResponse, MAX_RETRY_AFTER_SECONDS, nonStreamError, ProviderError } from "./errors.ts";
 import { type ChatModel, type Event, EventStream, ReplyAssembler } from "./events.ts";
-import { iterNdjson, iterSse, type SSEEvent, type SseStats } from "./framing.ts";
+import { iterNdjson, iterSse, type NdjsonStats, type SSEEvent, type SseStats } from "./framing.ts";
 import type { Message, Request, Response } from "./messages.ts";
 import type { Route } from "./route.ts";
 import { errorBodyText, type Exchange, MAX_ERROR_BODY_BYTES, openExchange } from "./transport.ts";
@@ -86,11 +86,11 @@ export class RouteModel implements ChatModel {
    * body with `content-type` and `accept` of `application/json`, overridden by the route's
    * headers, then by the auth headers, case-insensitively. A non-2xx reply throws a
    * `ProviderError` built from at most 64 KiB of its body; a 2xx reply's frames go to the
-   * protocol. When an SSE parse ends `incomplete` but the body held text and no SSE line (a JSON
-   * or HTML reply), a non-retryable `protocol` error built from the body's first 64 KiB takes
-   * its place. A `ProviderError` from parsing that names no provider gets the route's;
-   * the status error and the parse error are both scrubbed of the route's credentials, and the
-   * parse error's message is then capped at 2,000 code points.
+   * protocol. When an SSE parse ends `incomplete` but the body held text and no SSE line, or an
+   * NDJSON body's first line is not JSON (a JSON or HTML reply), a non-retryable `protocol` error
+   * built from the body's first 64 KiB takes its place. A `ProviderError` from parsing that names
+   * no provider gets the route's; the status error and the parse error are both scrubbed of the
+   * route's credentials, and the parse error's message is then capped at 2,000 code points.
    * Closing the stream aborts the request.
    *
    * Errors: a `TypeError` for a body that isn't JSON or an invalid header value, before
@@ -125,21 +125,32 @@ export class RouteModel implements ChatModel {
       const text = await readErrorBody(exchange, credentials);
       throw statusError(exchange.status, exchange.headers, text, route.provider, credentials);
     }
-    const stats: SseStats = { sseLines: 0 };
+    const sse: SseStats = { sseLines: 0 };
+    const ndjson: NdjsonStats = { jsonLines: 0, invalid: false };
     const head: Head = { chunks: [], size: 0 };
     try {
       if (protocol.framing === "sse") {
-        yield* protocol.parse(iterSse(keepHead(exchange.body, head, stats), undefined, stats));
+        yield* protocol.parse(iterSse(keepHead(exchange.body, head, () => sse.sseLines === 0), undefined, sse));
       } else {
-        yield* protocol.parse(iterNdjson(exchange.body));
+        // A view that stopping leaves open, so a body that turns out not to be NDJSON is read on.
+        const view = { [Symbol.asyncIterator]: () => ({ next: () => exchange.body.next() }) };
+        const body = keepHead(view, head, () => ndjson.jsonLines === 0);
+        yield* protocol.parse(iterNdjson(body, undefined, ndjson));
       }
     } catch (error) {
       if (!(error instanceof ProviderError)) throw error;
       const credentials = route.auth.credentials();
       let failure = error;
-      // A body with no SSE line was never a stream, so sending it again gets the same reply.
-      if (protocol.framing === "sse" && error.kind === "incomplete" && stats.sseLines === 0) {
-        const text = scrub(errorBodyText(head.chunks, head.size, credentials), credentials);
+      // A body with no SSE line, or whose first line isn't JSON, was never a stream, so sending it
+      // again gets the same reply.
+      const notStream =
+        protocol.framing === "sse"
+          ? error.kind === "incomplete" && sse.sseLines === 0
+          : ndjson.invalid && ndjson.jsonLines === 0;
+      if (notStream) {
+        // The NDJSON read stopped at the first line; the rest may hold the provider's text.
+        const cut = protocol.framing === "ndjson" && !(await readHead(exchange.body, head));
+        const text = scrub(errorBodyText(head.chunks, head.size, credentials, cut), credentials);
         if (/\S/.test(text)) {
           failure = nonStreamError(exchange.status, exchange.headers, text, { provider: route.provider, credentials });
         }
@@ -193,17 +204,42 @@ interface Head {
 
 /**
  * Yield `chunks` unchanged, copying into `head` what arrives while it holds under 64 KiB and
- * `stats` has counted no SSE line.
+ * `unread()` says no line of the stream has been read yet.
  */
-async function* keepHead(chunks: AsyncIterable<Uint8Array>, head: Head, stats: SseStats): AsyncGenerator<Uint8Array> {
+async function* keepHead(
+  chunks: AsyncIterable<Uint8Array>,
+  head: Head,
+  unread: () => boolean,
+): AsyncGenerator<Uint8Array> {
   for await (const chunk of chunks) {
-    if (stats.sseLines === 0 && head.size < MAX_ERROR_BODY_BYTES) {
+    if (unread() && head.size < MAX_ERROR_BODY_BYTES) {
       // Copied, since the source may reuse the chunk's buffer once it moves on.
       const part = chunk.slice(0, MAX_ERROR_BODY_BYTES - head.size);
       head.chunks.push(part);
       head.size += part.byteLength;
     }
     yield chunk;
+  }
+}
+
+/**
+ * Read on from `body` into `head` until it holds 64 KiB or the body ends, and return whether the
+ * reads all succeeded. A `ProviderError` from a read keeps what arrived and returns `false`; any
+ * other error, such as a caller abort, propagates.
+ */
+async function readHead(body: AsyncIterator<Uint8Array>, head: Head): Promise<boolean> {
+  try {
+    while (head.size < MAX_ERROR_BODY_BYTES) {
+      const next = await body.next();
+      if (next.done) break;
+      const part = next.value.slice(0, MAX_ERROR_BODY_BYTES - head.size);
+      head.chunks.push(part);
+      head.size += part.byteLength;
+    }
+    return true;
+  } catch (error) {
+    if (!(error instanceof ProviderError)) throw error;
+    return false;
   }
 }
 

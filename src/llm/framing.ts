@@ -11,8 +11,8 @@
 import { Buffer } from "node:buffer";
 
 import { current } from "../defaults.ts";
-import { ProviderError } from "./errors.ts";
-import { JSONDecodeError, parseJson, type JsonValue } from "../typesys/json.ts";
+import { parseReceivedJson, ProviderError, receivedBound } from "./errors.ts";
+import { JSONDecodeError, type JsonValue } from "../typesys/json.ts";
 
 const LINE_END = /\r\n|\r|\n/g;
 const LF = 0x0a;
@@ -188,7 +188,7 @@ function isBlank(line: Uint8Array): boolean {
   return line.every((byte) => ASCII_SPACE.has(byte));
 }
 
-/** Parse one NDJSON line, throwing a `ProviderError` that does not echo it. */
+/** Parse one NDJSON line within `parseReceivedJson`'s bounds, throwing a `ProviderError` that does not echo it. */
 function jsonLine(line: Uint8Array, number: number): JsonValue {
   let text: string;
   try {
@@ -198,10 +198,11 @@ function jsonLine(line: Uint8Array, number: number): JsonValue {
     throw invalidLine(number);
   }
   try {
-    return parseJson(text, "plain");
+    return parseReceivedJson(text);
   } catch (err) {
     if (!(err instanceof JSONDecodeError)) throw err;
-    throw invalidLine(number);
+    const bound = receivedBound(err);
+    throw bound === null ? invalidLine(number) : new ProviderError("protocol", `NDJSON line ${number} ${bound}`);
   }
 }
 

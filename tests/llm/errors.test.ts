@@ -446,6 +446,14 @@ describe("message", () => {
     );
   });
 
+  test("a JSON error body past the received-JSON depth is read as text", () => {
+    const deep = "[".repeat(600) + "]".repeat(600);
+    const body = `{"error": {"message": "Invalid model", "code": "content_filter"}, "pad": ${deep}}`;
+    const err = reply(400, {}, body);
+    expect(err.kind).toBe("bad_request");
+    expect(err.message).toStartWith('p returned HTTP 400 (bad_request): {"error": {"message": "Invalid model"');
+  });
+
   test("Ollama's string error", () => {
     expect(reply(404, {}, '{"error": "model \'qwen3\' not found"}').message).toBe(
       "p returned HTTP 404 (not_found): model 'qwen3' not found",

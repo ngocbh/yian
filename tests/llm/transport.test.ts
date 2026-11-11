@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 
+import { withEnv } from "../../src/defaults.ts";
 import { RedirectError, type Scheduler, type Send, virtualScheduler } from "../../src/platform.ts";
 import { REDACTED } from "../../src/llm/auth.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
@@ -746,6 +747,30 @@ describe("shortRequest", () => {
     expect(e.provider).toBe("models");
     expect(e.message).toBe("models returned an invalid JSON body");
     expect(e.cause).toBeUndefined();
+  });
+
+  test("json() refuses a body past the received-JSON bounds, naming the bound", async () => {
+    const thrown = (reply: { json(): unknown }) => {
+      try {
+        reply.json();
+      } catch (caught) {
+        return caught as ProviderError;
+      }
+      throw new Error("json() read the body");
+    };
+    const deep = await harness({ steps: [{ at: 0, chunk: `{"data":${"[".repeat(10_000)}${"]".repeat(10_000)}}` }] }).short();
+    const error = thrown(deep);
+    expect(error).toBeInstanceOf(ProviderError);
+    expect([error.kind, error.retryable, error.message]).toEqual([
+      "protocol",
+      false,
+      "models response nests deeper than 512 levels",
+    ]);
+    const wide = await harness({ steps: [{ at: 0, chunk: "[1,2,3]" }] }).short();
+    const few = (name: string) => (name === "YIAN_MAX_RECEIVED_JSON_VALUES" ? "3" : undefined);
+    expect(withEnv(few, () => thrown(wide)).message).toBe(
+      "models response has more than 3 JSON values (YIAN_MAX_RECEIVED_JSON_VALUES)",
+    );
   });
 
   test("a 3xx is a redirect error", async () => {

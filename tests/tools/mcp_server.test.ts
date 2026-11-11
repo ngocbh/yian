@@ -466,6 +466,48 @@ describe("StdioTransport", () => {
     SLOW,
   );
 
+  /** A transport whose server writes `line` to stdout and waits, with what it reports. */
+  const writer = (line: string) => {
+    const script = `process.stdout.write(${JSON.stringify(line + "\n")}); setInterval(() => {}, 2 ** 31 - 1);`;
+    const seen = { messages: [] as unknown[], errors: [] as string[], refused: [] as string[], closed: 0 };
+    const t = tracker.track(
+      new StdioTransport({
+        command: process.execPath,
+        args: ["-e", script],
+        maxMessageBytes: current().maxMcpMessageBytes,
+        defaultEnv: getDefaultEnvironment(),
+        onOverflow: (why) => seen.refused.push(why),
+      }),
+    );
+    t.onmessage = (message) => seen.messages.push(message);
+    t.onerror = (error) => seen.errors.push(error.message);
+    t.onclose = () => (seen.closed += 1);
+    return { t, seen };
+  };
+
+  test(
+    "a line past the received-JSON bounds is refused, not read some other way, and closes the transport",
+    async () => {
+      const deep = "[".repeat(10_000) + "]".repeat(10_000);
+      const { t, seen } = writer(`{"jsonrpc":"2.0","method":"notifications/x","params":{"a":${deep}}}`);
+      await t.start();
+      expect(await waitFor(() => seen.closed === 1, 5000)).toBe(true);
+      expect(seen.messages).toEqual([]);
+      expect(seen.refused).toEqual(["sent a message that nests deeper than 512 levels"]);
+      expect(seen.errors).toEqual(["JSON nests deeper than 512 levels: line 1 column 569 (char 568)"]);
+
+      install({ ...BUILTIN, maxReceivedJsonValues: 4 });
+      const wide = writer('{"jsonrpc":"2.0","method":"notifications/x","params":{"a":[1,2]}}');
+      await wide.t.start();
+      expect(await waitFor(() => wide.seen.closed === 1, 5000)).toBe(true);
+      expect(wide.seen.messages).toEqual([]);
+      expect(wide.seen.refused).toEqual([
+        "sent a message that has more than 4 JSON values (YIAN_MAX_RECEIVED_JSON_VALUES)",
+      ]);
+    },
+    SLOW,
+  );
+
   test(
     "a message under the cap passes",
     async () => {

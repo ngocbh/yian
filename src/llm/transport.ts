@@ -12,8 +12,8 @@
 import { current } from "../defaults.ts";
 import { RedirectError, realScheduler, safeFetch, type Scheduler, type Send } from "../platform.ts";
 import { dropCredentialTail, scrub } from "./auth.ts";
-import { ProviderError } from "./errors.ts";
-import { JSONDecodeError, type JsonValue, parseJson } from "../typesys/json.ts";
+import { parseReceivedJson, ProviderError, receivedBound } from "./errors.ts";
+import { JSONDecodeError, type JsonValue } from "../typesys/json.ts";
 
 /** Options for `openExchange`. */
 export interface ExchangeOptions {
@@ -83,9 +83,10 @@ export interface ShortReply {
   /** The body decoded as UTF-8, invalid bytes replaced. */
   readonly text: string;
   /**
-   * Decode `text` as plain JSON, so yian's `$float` and `$record` tags stay records.
+   * Decode `text` as plain JSON, so yian's `$float` and `$record` tags stay records, within
+   * `parseReceivedJson`'s bounds.
    *
-   * @throws ProviderError Of kind `protocol` when the text isn't JSON.
+   * @throws ProviderError Of kind `protocol` when the text isn't JSON or passes a bound.
    */
   json(): JsonValue;
 }
@@ -392,11 +393,13 @@ export async function shortRequest(url: string, init: RequestInit, options: Shor
     text,
     json() {
       try {
-        return parseJson(text, "plain");
+        return parseReceivedJson(text);
       } catch (error) {
         if (!(error instanceof JSONDecodeError)) throw error;
+        const bound = receivedBound(error);
+        const message = bound === null ? `${name} returned an invalid JSON body` : `${name} response ${bound}`;
         // No `cause`: the decode error's text holds the body.
-        throw new ProviderError("protocol", `${name} returned an invalid JSON body`, { provider: name });
+        throw new ProviderError("protocol", message, { provider: name });
       }
     },
   };

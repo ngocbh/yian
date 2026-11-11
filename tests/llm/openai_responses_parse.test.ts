@@ -1024,7 +1024,8 @@ describe("item errors", () => {
     const data = `{"type":"response.output_item.done","output_index":0,"item":${item}}`;
     const error = await failure([new SSEEvent({ data }), completed()]);
     expect(error.kind).toBe("protocol");
-    expect(error.message).toEndWith("nests deeper than 100 levels");
+    // The event's JSON is refused as it is read, before any tree that deep is built.
+    expect(error.message).toBe("openai stream event nests deeper than 512 levels");
   });
 
   describe.each(ITEM_EVENTS)("%s", (type) => {

@@ -1084,6 +1084,9 @@ const RETRIED: Row[] = [
   ["a stream with no Finish after partial output", true, () => new ScriptedModel([[PARTIAL], OK]), "incomplete"],
 ];
 
+// Arrays 10,000 deep, well past the 512 levels a received JSON text may nest.
+const DEEP = "[".repeat(10_000) + "]".repeat(10_000);
+
 const STOPPED: Row[] = [
   ...rows("400", "bad_request", () => statusError(400)),
   ...rows("400 context length", "context_length", () =>
@@ -1102,6 +1105,21 @@ const STOPPED: Row[] = [
   }),
   routed("an invalid NDJSON line before the first event", false, "protocol", { body: ["{\n"] }, ndjson()),
   routed("an invalid NDJSON line after partial output", true, "protocol", { body: ['{"text": "a"}\n', "{\n"] }, ndjson()),
+  // A text past the received-JSON bounds fails once, so it isn't read again on each attempt.
+  routed(
+    "an SSE event nested past the received-JSON depth before the first event",
+    false,
+    "protocol",
+    { body: [`data: {"type":"response.created","response":{"id":"r","x":${DEEP}}}\n\n`] },
+    new OpenAIResponses({ model: "gpt-5.5", provider: "openai" }),
+  ),
+  routed(
+    "an NDJSON line nested past the received-JSON depth after partial output",
+    true,
+    "protocol",
+    { body: ['{"text": "a"}\n', `{"text": "b", "x": ${DEEP}}\n`] },
+    ndjson(),
+  ),
   ...rows("incomplete for pause_turn", "incomplete", () =>
     new ProviderError("incomplete", "stopped with pause_turn", { retryable: false }),
   ),

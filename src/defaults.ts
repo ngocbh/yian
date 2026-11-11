@@ -389,6 +389,14 @@ export const ENTRIES = Object.freeze([
     group: "input cap",
     minimum: 1,
   }),
+  // Each value read costs tens of bytes, so a text at its byte cap could build a tree many times its
+  // size. The largest real replies (a model listing, a batch of embeddings) hold well under this.
+  entry("MAX_RECEIVED_JSON_VALUES", {
+    default: 1_000_000,
+    description: "Most values in one JSON text from a provider or MCP server: an event, a line, a reply or an MCP message",
+    group: "input cap",
+    minimum: 1,
+  }),
   // Media travel as run-folder file refs, so the cap is on text and structure.
   entry("MAX_EVENT_BYTES", {
     default: MAX_EVENT_BYTES,

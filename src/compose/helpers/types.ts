@@ -48,7 +48,7 @@ import {
   ValueKind,
   valueRepr,
 } from "../../typesys/values.ts";
-import { LoadDiagnostics, LoadError } from "./errors.ts";
+import { LoadDiagnostics, LoadError, rejectReservedName } from "./errors.ts";
 import { type MemoryTypeTable, NO_MEMORY_TYPES } from "./memory.ts";
 import {
   closeTypeName,
@@ -318,6 +318,7 @@ export function readFlowInputs(
   const parameters: Parameter[] = [];
   for (const [name, value] of Object.entries(mapping ?? {})) {
     const sourceRange = ranges?.get(name) ?? null;
+    rejectReservedName("flow input", name, sourceRange, diagnostics);
     try {
       parameters.push(readTypeOnly(name, value, registry, { diagnostics }));
     } catch (error) {
@@ -583,6 +584,12 @@ export function readSourceParameters(
           range: declarationCursor.keyRange ?? declarationCursor.range,
         });
       }
+      rejectReservedName(
+        declarationLabel === "input" ? "flow input" : declarationLabel,
+        name,
+        declarationCursor.keyRange ?? declarationCursor.range,
+        diagnostics,
+      );
       const parameterPath = [...sitePath, fieldName, name];
       const parameterOrigin = catalogBuilder.register(
         [...parameterPath, "parameter"],

@@ -1,8 +1,7 @@
 /** The memory types a load knows, and how a flow input's tag reads one. */
 
-import { reprText, type SourceRange } from "../../diagnostics.ts";
+import { reprText } from "../../diagnostics.ts";
 import { BUILTIN_MEMORY_TOOLS, type MemoryBase } from "../../memory/base.ts";
-import { MEMORY_KEY_PREFIX } from "../../nodes/base.ts";
 import { sameNames } from "../../runtime/memories.ts";
 import { checkVisibleNames, expandGrants, GrantError, type GrantScope, type ToolGrant } from "../../tools/grants.ts";
 import { RESERVED_TOOL_NAMES } from "../../tools/registry.ts";
@@ -195,21 +194,3 @@ export function memoryBinding(input: string): string {
   return `\${input.${input}}`;
 }
 
-/**
- * Refuse a node input named like a memory grant's reserved wiring key (`__memory_<name>`).
- *
- * @param rangeOf The authored range of input `name`, or `null`.
- * @throws LoadError at the first such input.
- */
-export function rejectMemoryKeyInputs(
-  names: Iterable<string>,
-  rangeOf: (name: string) => SourceRange | null,
-  diagnostics: LoadDiagnostics,
-): void {
-  for (const name of names) {
-    if (!name.startsWith(MEMORY_KEY_PREFIX)) continue;
-    throw diagnostics.error(`input ${reprText(name)} is reserved for memory grants; rename the input`, {
-      range: rangeOf(name),
-    });
-  }
-}

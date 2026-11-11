@@ -678,6 +678,31 @@ output: \${go.output}
   );
 });
 
+test("a def named like a node id is refused at its key, as a uses: alias is", async () => {
+  const text = `id: f
+name: f
+defs:
+  a:
+    kind: code
+    code: ./fixtures/compose_codefns.ts:echo
+    input:
+      topic: !str
+    output: str
+nodes:
+  a:
+    kind: call
+    call: a
+    input:
+      topic: x
+output: \${a.output}
+`;
+  const error = await loadErrorAsync(loadConformanceFlow(text));
+  expect(error.message).toBe('defs: name ["a"] collides with a node id');
+  expect(error.diagnostic.frames.at(-1)!.range).toEqual(
+    SourceDocument.parse(text).root.child("defs").keyRangeOf("a")!,
+  );
+});
+
 /** A flow whose node `go` calls the single-node def `d`, written as `kind`. */
 const singleNodeDef = (kind: string) => `id: f
 name: f

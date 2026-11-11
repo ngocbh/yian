@@ -26,6 +26,7 @@ import type { HostConnection } from "../../llm_clients/config.ts";
 import { scrubCallCredentials } from "../../llm_clients/connection.ts";
 import { defaultModelAccess, type ModelAccess } from "../../llm_clients/factory.ts";
 import { MediaPart, Message as ModelMessage, MessageFormatError, TextPart } from "../../llm/messages.ts";
+import { structuredTarget } from "../../llm/structured.ts";
 import { checkSkillName, type Skill, SkillError } from "../../skills/catalog.ts";
 import { LOAD_SKILL, loadSkillTool, systemPromptWithSkills } from "../../skills/tool.ts";
 import { renderRecall } from "../../memory/render.ts";
@@ -1207,16 +1208,20 @@ export class AgentNode extends Node {
     const tools = caps.toolSpecs(grants, rendered.skills.length > 0 ? loadSkillTool() : null, local);
     const contract = this.outputContract;
     const structured = async () => {
-      if (!isExactly(contract, ValueContract) || caps.models === null) return null;
+      const models = caps.models;
+      if (!isExactly(contract, ValueContract) || models === null) return null;
       try {
         const config = this.callConfig(inputs) ?? {};
-        const model = await caps.models.createModel(config, { nodeId: this.id, signal: new AbortController().signal });
-        return { model, typ: contract.type };
+        // Read off the config when the access can, so no credential is needed.
+        const target =
+          models.structuredTarget?.(config) ??
+          structuredTarget(await models.createModel(config, { nodeId: this.id, signal: new AbortController().signal }));
+        return { target, typ: contract.type };
       } catch (error) {
         // A TypeError is a fault in the builder, not a refused build.
         if (!(error instanceof Error) || error instanceof TypeError) throw error;
-        // A model that can't be built now can't give the plan, so its structured requests can't
-        // be checked: `null` fails the digest.
+        // A model whose settings can't be read now can't give the plan, so its structured
+        // requests can't be checked: `null` fails the digest.
         return null;
       }
     };

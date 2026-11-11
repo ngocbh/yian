@@ -41,7 +41,7 @@ import { current } from "../../defaults.ts";
 import { compareCodeUnits } from "../../diagnostics.ts";
 import type { ChatModel } from "../../llm/events.ts";
 import { Message, Request, type Response, TextPart, ToolCallPart, ToolResultPart } from "../../llm/messages.ts";
-import { planStructured, StructuredOutputError, structuredTarget } from "../../llm/structured.ts";
+import { planStructured, StructuredOutputError, type StructuredTarget, structuredTarget } from "../../llm/structured.ts";
 import { type JsonObject, type JsonValue, logJson } from "../../typesys/json.ts";
 import {
   type Bounds,
@@ -482,13 +482,17 @@ interface StructuredConversation {
 }
 
 /**
- * Start the structured conversation (`StructuredConversation`) for `typ` with `model` after
- * `messages`: the schema is sent the way `planStructured` picks for the model, and the prompt
- * strategy appends its instruction as a user message. An invalid reply is kept: the next request
- * has the earlier messages, the reply and the correction.
+ * Start the structured conversation (`StructuredConversation`) for `typ` with the model `target`
+ * describes after `messages`: the schema is sent the way `planStructured` picks for it, and the
+ * prompt strategy appends its instruction as a user message. An invalid reply is kept: the next
+ * request has the earlier messages, the reply and the correction.
  */
-function structuredConversation(model: ChatModel, messages: readonly Message[], typ: Type): StructuredConversation {
-  const plan = planStructured(structuredTarget(model), typeToSchema(typ)!);
+function structuredConversation(
+  target: StructuredTarget,
+  messages: readonly Message[],
+  typ: Type,
+): StructuredConversation {
+  const plan = planStructured(target, typeToSchema(typ)!);
   const prompted = plan.strategy === "prompt";
   let conversation = [...messages, ...(prompted ? [userMessage(plan.instruction())] : [])];
   return {
@@ -546,7 +550,7 @@ export async function generateStructured(
 ): Promise<Value> {
   const { live = null, signal, interrupt, retry, steps } = options;
   const retries = options.retries ?? current().agentRetries;
-  const conversation = structuredConversation(model, messages, typ);
+  const conversation = structuredConversation(structuredTarget(model), messages, typ);
   const digests = new RequestDigest();
   for (let call = 0; ; call++) {
     signal?.throwIfAborted();
@@ -579,17 +583,18 @@ export async function generateStructured(
  * `model_call` steps, in order: an invalid reply adds itself and the correction the next request
  * carries.
  *
+ * @param target What the model reads structured output with: `structuredTarget(model)`.
  * @param steps The structured calls' `model_call` steps.
  * @returns Each step's rebuilt request and whether the step recorded its purpose and digest, index
  *   for index; and whether every step did.
  */
 export function rebuildStructuredRequests(
-  model: ChatModel,
+  target: StructuredTarget,
   messages: readonly Message[],
   typ: Type,
   steps: readonly ValueRecord[],
 ): { requests: RebuiltRequest[]; digestOk: boolean } {
-  const conversation = structuredConversation(model, messages, typ);
+  const conversation = structuredConversation(target, messages, typ);
   const { purpose } = conversation;
   const requests: RebuiltRequest[] = [];
   const digests = new RequestDigest();

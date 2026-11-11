@@ -197,6 +197,27 @@ test("times with max is rejected", () => {
   expect(error.message).toBe("loop node 'chat_loop': max: is redundant with times: (times bounds the count)");
 });
 
+test("on_max_exceeded: output builds onto a while or until loop with max; fail is the default", () => {
+  expect(loopOf(GOOD, goodBody()).onMaxExceeded).toBe("fail");
+  for (const text of [GOOD, UNTIL_GOOD]) {
+    expect(loopOf(swap(text, "    max: 5\n", "    max: 5\n    on_max_exceeded: output\n"), goodBody()).onMaxExceeded).toBe(
+      "output",
+    );
+  }
+  expect(loopOf(swap(GOOD, "    max: 5\n", "    max: 5\n    on_max_exceeded: fail\n"), goodBody()).onMaxExceeded).toBe("fail");
+});
+
+test.each([
+  ["a times loop", swap(TIMES_GOOD, "    times: 3\n", "    times: 3\n    on_max_exceeded: output\n"), "on_max_exceeded: is redundant with times: (a times loop always ends at its count)"],
+  ["no max", swap(NO_MAX, "    while: not exited\n", "    while: not exited\n    on_max_exceeded: output\n"), "on_max_exceeded: needs max: (without it a while loop has no limit to reach)"],
+  ["another word", swap(GOOD, "    max: 5\n", "    max: 5\n    on_max_exceeded: stop\n"), 'on_max_exceeded: must be fail or output (got "stop")'],
+  ["not text", swap(GOOD, "    max: 5\n", "    max: 5\n    on_max_exceeded: true\n"), "on_max_exceeded: must be fail or output (got true)"],
+])("on_max_exceeded is refused on %s", (_name, text, message) => {
+  const error = loadError(() => build(text, goodBody()));
+
+  expect(error.message).toBe(`loop node 'chat_loop': ${message}`);
+});
+
 test.each([
   ["times: 0", "`times:` must be >= 1 (got 0)"],
   ["times: -2", "`times:` must be >= 1 (got -2)"],

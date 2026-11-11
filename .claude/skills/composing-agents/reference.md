@@ -74,7 +74,8 @@ fit.
 
 **call / map / loop** ([Control flow](https://yian.readthedocs.io/control-flow/)): `call` or
 inline `nodes` plus `output`; `input` (the child's arguments, or the loop's seed record); `map`
-adds `over`; `loop` adds one of `while`, `until`, `times`, and optional `max`.
+adds `over`; `loop` adds one of `while`, `until`, `times`, and optional `max` and
+`on_max_exceeded` (`fail` or `output`).
 
 **ask** ([Inboxes and waiting](https://yian.readthedocs.io/inboxes/#ask-a-person)):
 `tool_id: ask`, `input` with one of `prompt` or `questions` (1 to 4, each with `question`, a

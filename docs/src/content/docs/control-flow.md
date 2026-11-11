@@ -412,6 +412,9 @@ Exactly one driver decides how often the body runs:
   or field the record doesn't have is a load error.
 - `max:` is a runaway guard. A loop that would run more than `max` times fails with
   `loop.max_exceeded`. Without `max:`, a loop runs until its condition ends it.
+- `on_max_exceeded: output` makes reaching `max:` end the loop instead, with the record its last
+  run left, as if its condition had ended it. The default is `fail`. It needs `max:`, and is a
+  load error with `times:`.
 - A condition that reads only fields the body never returns can't change, so it is a load error
   unless you give `max:`. So is one that reads no carried field and doesn't end the loop at once
   (`until: 1 > 2`).

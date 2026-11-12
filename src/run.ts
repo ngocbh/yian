@@ -2495,15 +2495,17 @@ export function runLogPath(runsDir: string, runId: string): string {
 }
 
 /** Where a run log stands, as `inspectRun` reads it. */
-export type RunStatus = "running" | "succeeded" | "failed" | "cancelled" | "waiting" | "stopped" | "crashed";
+export type RunStatus = "running" | "succeeded" | "failed" | "cancelled" | "unstarted" | "waiting" | "stopped" | "crashed";
 
 /** What `inspectRun` reads from one run log. */
 export interface RunInspection {
   /**
    * `running` while a writer holds the log's lock; `succeeded`, `failed` or `cancelled` once the
-   * run ended; `waiting` when its last segment ended with every unsettled node waiting (on a take,
-   * a sleep or a host call); `stopped` when the host stopped the last segment; otherwise `crashed`
-   * (the process ended without a stop). A run that isn't running or ended can be advanced.
+   * run ended; `unstarted` when the log ends inside its run start, before its inputs were recorded,
+   * so `advance` refuses it (delete the log and start the run again); `waiting` when its last
+   * segment ended with every unsettled node waiting (on a take, a sleep or a host call); `stopped`
+   * when the host stopped the last segment; otherwise `crashed` (the process ended without a stop).
+   * A `waiting`, `stopped` or `crashed` run can be advanced.
    */
   readonly status: RunStatus;
   /**
@@ -2565,8 +2567,9 @@ export interface RunInspection {
  * In-flight nodes, crashed counts and the waits come from the records. Without `flow`, the status
  * is read from the records too: `cancelled` after a cancel; `failed` after a node failure or a
  * `RunFailed`; with nothing in flight and nothing waiting, `succeeded` after the top-level END
- * succeeded, else `failed` after a route proved END unreachable; then `waiting` when the last
- * segment ended with every node waiting (`RunWaiting`). The records don't hold the ready nodes, so a run whose process ended after END succeeded (or after
+ * succeeded, else `failed` after a route proved END unreachable; then `unstarted` before the START
+ * inputs' commit, and `waiting` when the last segment ended with every node waiting (`RunWaiting`).
+ * The records don't hold the ready nodes, so a run whose process ended after END succeeded (or after
  * that proof) but before a node already ready started reads as finished, though `advance` would
  * still run that node. With `flow`, the log is replayed as `advance` replays it, so the status
  * is exact; pass the flow when you have it. The lock is probed before and after the records are
@@ -2589,7 +2592,7 @@ export interface RunInspection {
  * @throws RunLogChangedError when the log shrank while it was read and no writer holds it.
  * @throws RangeError when a complete line isn't a valid record, the first record isn't
  *   `RunStarted`, the log holds no record and no writer, or, with `flow`, the replay refuses the
- *   log (`replayRunLog`).
+ *   log (`replayRunLog`; a log cut inside its run start isn't refused, but reads `unstarted`).
  * @throws DefaultsError when a `YIAN_<NAME>` variable in `env` holds a value its entry doesn't accept.
  * @throws DefaultsMismatchError with `flow`, when the run recorded `YIAN_*` values that differ
  *   from `env`'s.
@@ -3701,7 +3704,7 @@ function childPath(nodePath: readonly string[], child: StaticChild): readonly st
  * current model defaults. Recorded transitions go through the live reducer and growth builder.
  * A host `apiKey`, and the `headers` sent with it, go to the agents the map marks for it and to
  * the call-time agents. The run result reads its files through the flow's output contract, as
- * `runFlow`'s does.
+ * `runFlow`'s does. `allowUnstarted` as `replayCompiledRunLog`'s.
  *
  * @throws TypeError when `flow` isn't a `ComposedFlow`.
  * @throws RangeError, and the other errors of `replayCompiledRunLog`.
@@ -3713,6 +3716,7 @@ export function replayRunLog(
     apiKey?: string | null;
     headers?: Readonly<Record<string, string>> | null;
     onPrepared?: ((prepared: PreparedTransition, state: RunState) => void) | null;
+    allowUnstarted?: boolean;
   } = {},
 ): RunState {
   if (!(flow instanceof ComposedFlow)) throw new TypeError("replayRunLog expects a ComposedFlow");
@@ -3724,12 +3728,14 @@ export function replayRunLog(
  *
  * `resultContract` is the contract the terminal output is read through to restore its files
  * (`RunState.resultContract`); a finished log produces its terminal during replay, so it is set
- * before any record is folded.
+ * before any record is folded. With `allowUnstarted`, a log that ends inside its run start gives
+ * the state it leaves (`inputsCommitted` false) instead of being refused.
  *
  * @throws RangeError when the log's run id or sequence is malformed or changes while it is read,
  *   the prefix is empty, an envelope isn't in canonical form or breaks the run id or the sequence,
  *   the first record isn't `RunStarted`, the flow fingerprint differs, a record isn't the exact
- *   next transition, or the log ends inside its run start (before the START inputs' commit).
+ *   next transition, or, without `allowUnstarted`, the log ends inside its run start (before the
+ *   START inputs' commit).
  * @throws DefaultsMismatchError when the run recorded `YIAN_*` values that differ from the ones in
  *   effect.
  */
@@ -3741,9 +3747,10 @@ export function replayCompiledRunLog(
     headers?: Readonly<Record<string, string>> | null;
     resultContract?: OutputContract | null;
     onPrepared?: ((prepared: PreparedTransition, state: RunState) => void) | null;
+    allowUnstarted?: boolean;
   } = {},
 ): RunState {
-  const { apiKey = null, headers = null, resultContract = null, onPrepared = null } = options;
+  const { apiKey = null, headers = null, resultContract = null, onPrepared = null, allowUnstarted = false } = options;
   const sourceRunId = log.runId;
   const sourceSequence = log.nextSequence;
   if (typeof sourceRunId !== "string" || sourceRunId === "") {
@@ -3811,8 +3818,11 @@ export function replayCompiledRunLog(
     throw new RangeError("run log changed while its historical prefix was replayed");
   }
   // The run's inputs aren't all in the log yet, so nothing could go on from it.
-  if (!state.inputsCommitted) {
-    throw new RangeError(`run log ${log.path ?? reprText(sourceRunId)} ends inside its run start; start the run again`);
+  if (!state.inputsCommitted && !allowUnstarted) {
+    throw new RangeError(
+      `run log ${log.path ?? reprText(sourceRunId)} ends inside its run start, before its inputs were recorded; ` +
+        "delete it and start the run again",
+    );
   }
   return state;
 }
@@ -3887,7 +3897,8 @@ function scanRunRecords(envelopes: Iterable<RecordEnvelope>): RecordScan {
  * @throws RangeError, and the other errors of `replayRunLog`.
  */
 function replayedScan(flow: ComposedFlow, envelopes: readonly RecordEnvelope[]): RecordScan {
-  const state = replayRunLog(flow, MemoryRunLog.fromRecords(envelopes));
+  // A log cut inside its run start is `unstarted`, which `advance` refuses.
+  const state = replayRunLog(flow, MemoryRunLog.fromRecords(envelopes), { allowUnstarted: true });
   let status: RecordScan["status"];
   if (state.result instanceof RunSucceeded) status = "succeeded";
   else if (state.result instanceof RunFailed) status = "failed";

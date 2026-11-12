@@ -1,0 +1,31 @@
+# Iterating a node a CASE may skip would fail at run time with null, so it is a load error that
+# names the fix.
+kind: load
+flow: |
+  id: p
+  name: p
+  input:
+    s: !str
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: "input.s == 'go'"
+          then: maybe
+      else: other
+    maybe:
+      kind: code
+      output: list(int)
+      code: "return [1]"
+    other:
+      kind: code
+      code: "return 0"
+  output: ${[x for x in maybe.output]}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "output: ${[x for x in maybe.output]} iterates over maybe.output, which is null when node 'maybe' is skipped; give it a default with :-, e.g. (maybe.output :- <default>)"
+      frames:
+      - label: flow.yaml
+        range: [19, 9, 19, 37]

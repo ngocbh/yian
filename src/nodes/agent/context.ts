@@ -22,7 +22,7 @@ import { type Scheduler, syncFolder, warn } from "../../platform.ts";
 import type { Skill } from "../../skills/catalog.ts";
 import type { ToolGrant } from "../../tools/grants.ts";
 import type { ToolSet } from "../../tools/registry.ts";
-import { type JsonObject, logJson } from "../../typesys/json.ts";
+import { eventBytes, type JsonObject, logJson } from "../../typesys/json.ts";
 import { FileRef, jsonSafeText, type Type, type ValueRecord } from "../../typesys/values.ts";
 import { CapabilityFault, type NodeCaps, type SteerInbox } from "../base.ts";
 import type { NodeSteps } from "../contracts.ts";
@@ -158,6 +158,18 @@ export interface ToolResultFields {
    * host interrupt closed.
    */
   readonly closed?: "skipped" | CloserReason;
+}
+
+/** A pending call as its `pending` step records it (`AgentSteps.pending`). */
+export interface PendingFields {
+  readonly callId: string;
+  readonly tool: string;
+  readonly toolCallId: string;
+  readonly reply: number;
+  readonly index: number;
+  readonly deadline: string | null;
+  /** A flow call's arguments; `null` or absent for any other call. */
+  readonly flowArguments?: Readonly<Record<string, unknown>> | null;
 }
 
 /** A tool call's result as an earlier start recorded it. */
@@ -502,15 +514,26 @@ export class AgentSteps {
    * @returns The step's `n`.
    * @throws Whatever `NodeSteps.record` throws.
    */
-  pending(call: {
-    callId: string;
-    tool: string;
-    toolCallId: string;
-    reply: number;
-    index: number;
-    deadline: string | null;
-    flowArguments?: Readonly<Record<string, unknown>> | null;
-  }): number {
+  pending(call: PendingFields): number {
+    const step = this.#pendingStep(call);
+    const n = this.#record(step, { settled: true });
+    if (step["flow"] === true) this.#flowCalls.set(call.tool, (this.#flowCalls.get(call.tool) ?? 0) + 1);
+    return n;
+  }
+
+  /**
+   * Return why `call`'s `pending` step can't be recorded: it is over the run's
+   * `YIAN_MAX_EVENT_BYTES`, as a flow call's large arguments can make it; `null` when it fits.
+   */
+  pendingTooLarge(call: PendingFields): string | null {
+    const max = this.#steps?.maxEventBytes;
+    const size = eventBytes(this.#pendingStep(call));
+    if (max === undefined || size <= max) return null;
+    return `Arguments for ${call.tool} make a call of ${size} bytes, over the run's limit of ${max} (YIAN_MAX_EVENT_BYTES); send less.`;
+  }
+
+  /** The `pending` step `pending` writes for `call`. */
+  #pendingStep(call: PendingFields): ValueRecord {
     const { callId, tool, toolCallId, reply, index, deadline, flowArguments = null } = call;
     const step: ValueRecord = {
       kind: "pending",
@@ -521,14 +544,11 @@ export class AgentSteps {
       index: BigInt(index),
     };
     if (deadline !== null) step["deadline"] = deadline;
-    if (flowArguments === null) return this.#record(step, { settled: true });
-    const k = this.#flowCalls.get(tool) ?? 0;
+    if (flowArguments === null) return step;
     step["flow"] = true;
     step["arguments"] = flowArguments as ValueRecord;
-    step["scope"] = `${this.#nodeId}/${tool}#${k}`;
-    const n = this.#record(step, { settled: true });
-    this.#flowCalls.set(tool, k + 1);
-    return n;
+    step["scope"] = `${this.#nodeId}/${tool}#${this.#flowCalls.get(tool) ?? 0}`;
+    return step;
   }
 
   /**

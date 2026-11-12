@@ -31,6 +31,7 @@ import {
 } from "../typesys/index.ts";
 import type { RootValue } from "../typesys/pool.ts";
 import {
+  codePointCount,
   fieldOf,
   fileFieldType,
   fromHost,
@@ -47,10 +48,12 @@ import {
   floatParts,
   intOverCap,
   isShipped,
+  overTextChars,
   kindName,
   roundQuotient,
   TEMPLATE_FNS,
   type TemplateFn,
+  textOverCap,
   truthy,
 } from "./builtins.ts";
 import {
@@ -548,7 +551,13 @@ function applyStep(op: string, lhs: Value, rhs: Value): Value {
     throw new ExpressionError("text formatting with `%` was removed; use a template");
   }
   if (op === "+") {
-    if (typeof lhs === "string" && typeof rhs === "string") return lhs + rhs;
+    if (typeof lhs === "string" && typeof rhs === "string") {
+      const cap = current().maxTextChars;
+      if (overTextChars(lhs.length + rhs.length, () => codePointCount(lhs) + codePointCount(rhs), cap)) {
+        throw new ExpressionError(`${valueRepr(lhs)} + ${valueRepr(rhs)} ${textOverCap(cap)}`);
+      }
+      return lhs + rhs;
+    }
     if (Array.isArray(lhs) && Array.isArray(rhs)) return [...lhs, ...rhs];
   }
   const x = numeric(lhs);
@@ -1323,8 +1332,13 @@ class EvalExpr {
       if (error instanceof ExpressionError) throw error;
       throw failed(error instanceof Error ? error.message : String(error), { cause: error });
     }
-    const cap = current().maxIntDigits;
-    if (typeof result === "bigint" && overIntDigits(result, cap)) throw failed(`${callee}() ${intOverCap(cap)}`);
+    const { maxIntDigits, maxTextChars } = current();
+    if (typeof result === "bigint" && overIntDigits(result, maxIntDigits)) {
+      throw failed(`${callee}() ${intOverCap(maxIntDigits)}`);
+    }
+    if (typeof result === "string" && overTextChars(result.length, () => codePointCount(result), maxTextChars)) {
+      throw failed(`${callee}() ${textOverCap(maxTextChars)}`);
+    }
     return result;
   }
 

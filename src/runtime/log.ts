@@ -39,11 +39,11 @@ import { formatRecordTime as recordTimeText, RECORD_TIME } from "../typesys/temp
 import { isList, isRecord, jsonPart, requireFields, valueRepr, writeAsText } from "../typesys/values.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 31;
+export const SCHEMA_VERSION = 32;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
 const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([
-  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
 ]);
 
 /** A typed value's wire object `{kind, value}`. */
@@ -1066,17 +1066,32 @@ export class NodeExpandedRecord {
   }
 }
 
-/** Make a run terminal-failed with the captured semantic failure. Frozen. */
+/**
+ * Record a node's failure. Frozen. It makes the run terminal-failed, unless the node is inside the
+ * scope of an AGENT's flow call (`callId`): then the call fails, the scope's other unfinished nodes
+ * end with it, and the run goes on.
+ */
 export class NodeFailedRecord {
   /** The failure, kept through `retainFailure`; its node id is non-empty. */
   readonly failure: Failure;
+  /**
+   * The flow call whose scope holds the failed node (the AGENT itself when the scope couldn't
+   * grow), which takes the failure; `null` when it fails the run.
+   */
+  readonly callId: string | null;
+  /** That call's scope, `<agent>/<flow>#<k>`, whose unfinished nodes end; `null` with no call. */
+  readonly scope: string | null;
 
   /**
    * @throws TypeError when the failure is of another class.
-   * @throws RangeError when the failure has no node id.
+   * @throws RangeError when the failure has no node id, the call id or scope is empty, or just one
+   *   of them is given.
    */
-  constructor(failure: Failure) {
+  constructor(failure: Failure, options: { callId?: string | null; scope?: string | null } = {}) {
     this.failure = retainedFailure(failure, "NodeFailedRecord");
+    this.callId = options.callId == null ? null : requireName(options.callId, "call_id");
+    this.scope = options.scope == null ? null : requireName(options.scope, "scope");
+    if ((this.callId === null) !== (this.scope === null)) throw new RangeError("a flow call's failure names its call and its scope");
     Object.freeze(this);
   }
 }
@@ -2969,10 +2984,14 @@ const RECORD_CODECS: readonly RecordCodec[] = [
   recordCodec({
     cls: NodeFailedRecord,
     kind: "node_failed",
-    encode: (record) => ({ failure: failurePayload(record.failure) }),
+    encode: (record) => ({ call_id: record.callId, failure: failurePayload(record.failure), scope: record.scope }),
     decode: (payload, label) => {
-      requireFields(payload, ["failure"], label);
-      return new NodeFailedRecord(failureFromPayload(payload["failure"], `${label} failure`));
+      requireFields(payload, ["call_id", "failure", "scope"], label);
+      const { call_id: callId, scope } = payload;
+      return new NodeFailedRecord(failureFromPayload(payload["failure"], `${label} failure`), {
+        callId: callId === null ? null : requireName(callId, `${label} call_id`),
+        scope: scope === null ? null : requireName(scope, `${label} scope`),
+      });
     },
     nodeId: (payload, label) =>
       requireName(wireObject(payload["failure"], `${label} failure`)["node_id"], `${label} failure node_id`),

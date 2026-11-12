@@ -158,6 +158,7 @@ holds media fails if `media` is a symlink, another user's, or writable by others
 | Crashed or stopped | Replays the log, then runs the unfinished nodes again |
 | Waiting, with an answer or deadline in | Wakes those nodes and runs on |
 | Waiting, with nothing new | Writes nothing and returns `waiting` again |
+| Unstarted: the log ends before the run's inputs | Throws a `RangeError`; delete the log and start the run again |
 
 `advance` runs the flow the log recorded, not the file on disk, with the log's inputs, run id and
 model settings. Pass again what the log doesn't hold: `tools`, `skills`, `context`, the memories
@@ -347,7 +348,8 @@ const closed = await cancel(log);              // the open host calls it closed
 `interrupt` stops the agents whose `steer_inbox:` is that inbox (see
 [Agents](/agents/#steering-and-interrupts)). Each one's reply is cut: an `Optional(...)` output
 succeeds with `null`, any other fails with `agent.interrupted`. A later `complete` of the open
-calls it closes is refused. An agent that starts reading the inbox
+calls it closes is refused, the calls of the agents' running [flow calls](/agents/#flows-as-tools)
+included, which end with it. An agent that starts reading the inbox
 soon after is stopped too, before its first model call. `interrupt` appends nothing
 (`seq: null`) when the run is waiting for the next message on the inbox, or is already stopping.
 Queued steers stay; `withdraw` takes them back.
@@ -382,7 +384,7 @@ signal's reason, and `advance` runs the stopped nodes again.
 
 | Call | Gives |
 |---|---|
-| `inspectRun(log)` | Where a run stands, without the lock: `status` (`running`, `succeeded`, `failed`, `cancelled`, `waiting`, `stopped`, `crashed`), `inFlight`, `waits`, `ready`, `wakeAt`. Pass `{ flow }` (from `loadRecordedFlow`) for an exact `status` |
+| `inspectRun(log)` | Where a run stands, without the lock: `status` (`running`, `succeeded`, `failed`, `cancelled`, `unstarted`, `waiting`, `stopped`, `crashed`), `inFlight`, `waits`, `ready`, `wakeAt`. Pass `{ flow }` (from `loadRecordedFlow`) for an exact `status` |
 | `loadRecordedFlow(log)` | The flow the log recorded |
 | `iterRunRecords(log)` | The log's records, one by one, while another process may still be writing |
 | `foldRunLog(log)` | Each record with the value it wrote |

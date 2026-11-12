@@ -28,8 +28,10 @@ import { isRecord, type MemoryRef, shownText, TypedValue, valueRepr } from "../t
 import {
   checkMaxLineBytes,
   type FlowSource,
+  hardLinked,
   isRunLogLocked,
   iterRunRecords,
+  InterruptedRecord,
   NodeExpandedRecord,
   NodeFailedRecord,
   NodeRoutedRecord,
@@ -51,7 +53,7 @@ import {
   SCHEMA_VERSION,
 } from "./log.ts";
 import { addCrashedAttempts } from "./state.ts";
-import { applyWaitsRecord, type WaitInfo, WaitsState, wakeableNodes, wakeAt, waitInfos } from "./waits.ts";
+import { applyWaitsRecord, nodeCalls, type WaitInfo, WaitsState, wakeableNodes, wakeAt, waitInfos } from "./waits.ts";
 
 /** The index file's name in the runs folder. */
 const INDEX_FILE = "index.sqlite";
@@ -309,6 +311,10 @@ export function foldRunScan(scan: RunScan, envelope: { readonly seq: number; rea
   const settle = (node: string) => {
     scan.inFlight = scan.inFlight.filter(([id]) => id !== node);
   };
+  // A flow call's scope that ends takes its unfinished nodes with it.
+  const endScope = (scope: string) => {
+    scan.inFlight = scan.inFlight.filter(([id]) => !id.startsWith(`${scope}/`));
+  };
   applyWaitsRecord(scan.waits, envelope);
   if (record instanceof NodeStartedRecord || record instanceof NodeWokenRecord) {
     const entry = scan.inFlight.find(([id]) => id === record.nodeId);
@@ -323,10 +329,21 @@ export function foldRunScan(scan: RunScan, envelope: { readonly seq: number; rea
     settle(record.nodeId);
     if (record.terminalFailure !== null) scan.unreachableSeq ??= seq;
   } else if (record instanceof NodeExpandedRecord) {
-    settle(record.spawnerId);
+    // A flow call's scope leaves its agent in flight.
+    if (record.callId === null) settle(record.spawnerId);
   } else if (record instanceof NodeFailedRecord) {
-    settle(record.failure.nodeId!);
-    scan.nodeFailureSeq ??= seq;
+    if (record.scope !== null) {
+      endScope(record.scope);
+    } else {
+      settle(record.failure.nodeId!);
+      scan.nodeFailureSeq ??= seq;
+    }
+  } else if (record instanceof InterruptedRecord) {
+    for (const nodeId of record.nodes) {
+      for (const call of nodeCalls(scan.waits, nodeId)) {
+        if (call.scope !== null && call.closedReason === "interrupted") endScope(call.scope);
+      }
+    }
   } else if (record instanceof RunStoppedRecord) {
     scan.lastStop = seq;
   } else if (record instanceof RunResumedRecord) {
@@ -428,7 +445,8 @@ function checkedTimeout(timeoutMs: unknown): number {
  * with no complete record yet, has no row; a row whose log is gone is deleted. A log that can't be
  * read (an old schema, a damaged line, a first record that isn't `run_started` of the folder's run,
  * a line over `maxLineBytes`, or a file error such as no permission, or a log that is a symlink
- * or isn't a regular file, `EINVAL: not a regular file, open '<log>'`, which is never opened) raises a
+ * or isn't a regular file, `EINVAL: not a regular file, open '<log>'`, which is never opened, or
+ * has another link, `EINVAL: has more than one link, open '<log>'`) raises a
  * warning through `warn`. A log whose content can't be read gets a row of the records before the
  * one that failed, marked unreadable at it (`RunIndexRow.unreadable`), and is read again only once
  * its size or mtime changed, or with a higher `maxLineBytes` than it was read with. A file error keeps the row
@@ -507,8 +525,10 @@ function updateIndexFile(runsDir: string, path: string, timeoutMs: number, maxLi
         try {
           // lstat, so a symlink at the log is skipped as the readers refuse it, not read as its target.
           const stat = fs.lstatSync(log);
-          // Before `readUpTo`: a FIFO or a device reads as size 0, and is never opened here.
+          // Before `readUpTo`: a FIFO or a device reads as size 0, and is never opened here; a hard
+          // link, which the readers refuse, would otherwise keep a row read through it current.
           if (!stat.isFile()) throw notRegularFile(log);
+          if (stat.nlink > 1) throw hardLinked(log);
           if (saved !== null && readUpTo(saved, stat, maxLineBytes)) {
             kept.add(runId);
             continue;

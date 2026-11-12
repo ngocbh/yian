@@ -62,6 +62,16 @@ export interface Call {
   readonly seq: number;
   /** A host call's `pending` step seq; `null` for a take or sleep. */
   readonly pendingSeq: number | null;
+  /**
+   * Whether it is an AGENT's call of a flow it grants as a tool, which the run answers from the
+   * flow's scope, never a host.
+   */
+  readonly flow: boolean;
+  /**
+   * A flow call's scope, `<node>/<flow>#<k>`, whose END's success answers it; `null` for any
+   * other call.
+   */
+  readonly scope: string | null;
   state: CallStateKind;
   /** The seq of the `tool_result` step that answered it, or `null`. */
   resultSeq: number | null;
@@ -297,6 +307,8 @@ function callFromJson(value: unknown, label: string): Call {
     assigned: seqList(value["assigned"]) ?? undefined,
     closedInbox: typeof value["closedInbox"] === "boolean" ? value["closedInbox"] : undefined,
     closedReason: textOrNull("closedReason"),
+    flow: typeof value["flow"] === "boolean" ? value["flow"] : undefined,
+    scope: textOrNull("scope"),
   };
   if (
     Object.values(call).some((field) => field === undefined) ||
@@ -389,12 +401,21 @@ export function applyWaitsRecord(w: WaitsState, envelope: { readonly seq: number
   else if (record instanceof NodeWokenRecord) applyWoken(w, seq, record);
   else if (record instanceof NodeSucceededRecord) applySuccess(w, record);
   else if (record instanceof NodeRoutedRecord) settle(w, record.nodeId);
-  else if (record instanceof NodeExpandedRecord) settle(w, record.spawnerId);
+  // A flow call's growth leaves its agent in flight.
+  else if (record instanceof NodeExpandedRecord) {
+    if (record.callId === null) settle(w, record.spawnerId);
+  }
   else if (record instanceof NodeFailedRecord) {
-    closeOpenCalls(w, "failed");
-    settle(w, record.failure.nodeId!);
-    // A node failure ends the run.
-    w.stops.clear();
+    if (record.scope !== null) {
+      // A failure inside a flow call's scope fails the call and ends the scope; the run goes on.
+      close(w.calls.get(record.callId!), "failed");
+      endScope(w, record.scope);
+    } else {
+      closeOpenCalls(w, "failed");
+      settle(w, record.failure.nodeId!);
+      // A node failure ends the run.
+      w.stops.clear();
+    }
   } else if (record instanceof RunWaitingRecord) {
     // The reply a Stop targeted is stopped; a Stop that stopped no one yet (a mid-turn ask or sleep) still stands.
     for (const [name, stop] of w.stops) if (stop.stopped) w.stops.delete(name);
@@ -510,6 +531,8 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
       assigned: [],
       closedInbox: false,
       closedReason: null,
+      flow: step["flow"] === true,
+      scope: step["flow"] === true && typeof step["scope"] === "string" ? step["scope"] : null,
     });
     // The interrupt closed the node's calls when it landed; a tool whose group was already
     // running may pend after it, and its call is closed at once.
@@ -535,7 +558,9 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
       return;
     }
     for (const call of w.calls.values()) {
-      if (call.nodeId === record.nodeId && call.resultKey === key && call.state === "open") {
+      // A flow call its scope's END answered takes its agent's result, once.
+      const flowAnswer = call.flow && call.state === "answered" && call.resultSeq === null;
+      if (call.nodeId === record.nodeId && call.resultKey === key && (call.state === "open" || flowAnswer)) {
         call.state = "answered";
         call.resultSeq = seq;
         return;
@@ -550,7 +575,10 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
   }
 }
 
-/** Apply `interrupted`: each named node holds a pending interrupt, and its open calls close `interrupted`. */
+/**
+ * Apply `interrupted`: each named node holds a pending interrupt, and its open calls close
+ * `interrupted`; the scope of each of its open flow calls ends.
+ */
 function applyInterrupted(w: WaitsState, seq: number, record: InterruptedRecord): void {
   // Once it has stopped an agent the Stop stays so: a replayed empty record can't extend its window.
   const stopped = (w.stops.get(record.inbox)?.stopped ?? false) || record.nodes.length > 0;
@@ -558,8 +586,21 @@ function applyInterrupted(w: WaitsState, seq: number, record: InterruptedRecord)
   for (const nodeId of record.nodes) {
     w.interrupts.set(nodeId, seq);
     w._interruptInboxes.set(nodeId, record.inbox);
-    for (const call of nodeCalls(w, nodeId)) close(call, "interrupted");
+    for (const call of nodeCalls(w, nodeId)) {
+      const open = call.state === "open";
+      close(call, "interrupted");
+      if (open && call.scope !== null) endScope(w, call.scope);
+    }
   }
+}
+
+/** End flow call scope `scope`: each node of it, a nested scope's included, settles here. */
+function endScope(w: WaitsState, scope: string): void {
+  const inside = (nodeId: string) => nodeId.startsWith(`${scope}/`);
+  const nodes = new Set([...w.calls.values()].map((call) => call.nodeId).filter(inside));
+  for (const nodeId of w.waiting.keys()) if (inside(nodeId)) nodes.add(nodeId);
+  for (const nodeId of w._pendingTakes.keys()) if (inside(nodeId)) nodes.add(nodeId);
+  for (const nodeId of nodes) settle(w, nodeId);
 }
 
 /** Apply `node_waiting`: register its take or sleep (a take joins its inbox's absorbing takes) and move the node to the waiting set. */
@@ -580,6 +621,8 @@ function applyWaiting(w: WaitsState, seq: number, record: NodeWaitingRecord): vo
       assigned: [],
       closedInbox: false,
       closedReason: null,
+      flow: false,
+      scope: null,
     });
     if (entry.tool === "take") {
       inboxOf(w, entry.inbox!).absorbing.push(entry.callId);
@@ -607,8 +650,18 @@ function applyWoken(w: WaitsState, seq: number, record: NodeWokenRecord): void {
   w._lastWoken.set(record.nodeId, seq);
 }
 
-/** Apply `node_succeeded`: an inline take's events leave `unread`; then the node settles. */
+/**
+ * Apply `node_succeeded`: an inline take's events leave `unread`; then the node settles. The END of
+ * a flow call's scope answers that call; its agent writes the result it reads.
+ */
 function applySuccess(w: WaitsState, record: NodeSucceededRecord): void {
+  if (record.nodeId.endsWith(`/${EndNode.ID}`)) {
+    for (const call of w.calls.values()) {
+      if (call.scope === null || call.state !== "open" || `${call.scope}/${EndNode.ID}` !== record.nodeId) continue;
+      call.state = "answered";
+      break;
+    }
+  }
   const take = w._pendingTakes.get(record.nodeId);
   // A waiting take's events were assigned, never unread; only an inline take's are taken here.
   const waited = nodeCalls(w, record.nodeId).some((call) => call.tool === "take");
@@ -791,12 +844,16 @@ export function wakeAt(w: WaitsState | readonly WaitInfo[]): string | null {
   return earliest;
 }
 
-/** Return the calls of each waiting node, in waiting order, then the order the node names them. */
+/**
+ * Return the calls of each waiting node, in waiting order, then the order the node names them;
+ * a flow call is the run's to answer, so it is left out.
+ */
 export function waitInfos(w: WaitsState): readonly WaitInfo[] {
   const infos: WaitInfo[] = [];
   for (const [node, waiting] of w.waiting) {
     for (const callId of waiting.callIds) {
       const call = w.calls.get(callId);
+      if (call?.flow === true) continue;
       infos.push({
         node,
         callId,

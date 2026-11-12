@@ -2,16 +2,16 @@
 kind: cli
 files:
   run.jsonl: |
-    {"at":"2026-10-21T17:52:48.430Z","kind":"run_started","payload":{"call_time_llm":null,"defaults":{},"effective_llm_by_static_path":{},"flow":null,"flow_fingerprint":"fa51bad8a38bedb69c3b2a72adfe8207098933ee92ea65f8aa4e46bc7576b746","num_workers":2,"parent":null,"skills":{},"start_wiring_override":{},"tool_groups":{},"tools":{},"yian_version":"0.0.0"},"run_id":"dec0b325312242018a72385ba6c51119","schema":30,"seq":0}
-    {"at":"2026-10-21T17:52:48.430Z","kind":"pool_commit","payload":{"key":"system.now","kind":"datetime","node_id":"__start__","value":"2026-10-21T17:52:48.430000+00:00"},"run_id":"dec0b325312242018a72385ba6c51119","schema":30,"seq":1}
-    {"at":"2026-10-21T17:52:48.430Z","kind":"pool_commit","payload":{"key":"system.run_id","kind":"str","node_id":"__start__","value":"dec0b325312242018a72385ba6c51119"},"run_id":"dec0b325312242018a72385ba6c51119","schema":30,"seq":2}
-    {"at":"2026-10-21T17:52:48.430Z","kind":"pool_commit","payload":{"key":"system.today","kind":"date","node_id":"__start__","value":"2026-10-21"},"run_id":"dec0b325312242018a72385ba6c51119","schema":30,"seq":3}
-    {"at":"2026-10-21T17:52:48.430Z","kind":"pool_commit","payload":{"key":"__start__","kind":"object","node_id":"__start__","value":{}},"run_id":"dec0b325312242018a72385ba6c51119","schema":30,"seq":4}
-    {"at":"2026-10-21T17:52:48.430Z","kind":"node_started","payload":{"node_id":"__start__"},"run_id":"dec0b325312242018a72385ba6c51119","schema":30,"seq":5}
-    {"at":"2026-10-21T17:52:48.430Z","kind":"pool_commit","payload":{"key":"__start__","kind":"object","node_id":"__start__","value":{}},"run_id":"dec0b325312242018a72385ba6c51119","schema":30,"seq":6}
-    {"at":"2026-10-21T17:52:48.430Z","kind":"node_succeeded","payload":{"commit":6,"messages":null,"node_id":"__start__"},"run_id":"dec0b325312242018a72385ba6c51119","schema":30,"seq":7}
-    {"at":"2026-10-21T17:52:48.430Z","kind":"node_started","payload":{"node_id":"a"},"run_id":"dec0b325312242018a72385ba6c51119","schema":30,"seq":8}
-    {"at":"2026-10-21T17:52:48.430Z","kind":"node_started","payload":{"node_id":"b"},"run_id":"dec0b325312242018a72385ba6c51119","schema":30,"seq":9}
+    {"at":"2026-10-21T17:52:48.430Z","kind":"run_started","payload":{"call_time_llm":null,"defaults":{},"effective_llm_by_static_path":{},"flow":null,"flow_fingerprint":"fa51bad8a38bedb69c3b2a72adfe8207098933ee92ea65f8aa4e46bc7576b746","num_workers":2,"parent":null,"skills":{},"start_wiring_override":{},"tool_groups":{},"tools":{},"yian_version":"0.0.0"},"run_id":"dec0b325312242018a72385ba6c51119","schema":32,"seq":0}
+    {"at":"2026-10-21T17:52:48.430Z","kind":"pool_commit","payload":{"key":"system.now","kind":"datetime","node_id":"__start__","value":"2026-10-21T17:52:48.430000+00:00"},"run_id":"dec0b325312242018a72385ba6c51119","schema":32,"seq":1}
+    {"at":"2026-10-21T17:52:48.430Z","kind":"pool_commit","payload":{"key":"system.run_id","kind":"str","node_id":"__start__","value":"dec0b325312242018a72385ba6c51119"},"run_id":"dec0b325312242018a72385ba6c51119","schema":32,"seq":2}
+    {"at":"2026-10-21T17:52:48.430Z","kind":"pool_commit","payload":{"key":"system.today","kind":"date","node_id":"__start__","value":"2026-10-21"},"run_id":"dec0b325312242018a72385ba6c51119","schema":32,"seq":3}
+    {"at":"2026-10-21T17:52:48.430Z","kind":"pool_commit","payload":{"key":"__start__","kind":"object","node_id":"__start__","value":{}},"run_id":"dec0b325312242018a72385ba6c51119","schema":32,"seq":4}
+    {"at":"2026-10-21T17:52:48.430Z","kind":"node_started","payload":{"node_id":"__start__"},"run_id":"dec0b325312242018a72385ba6c51119","schema":32,"seq":5}
+    {"at":"2026-10-21T17:52:48.430Z","kind":"pool_commit","payload":{"key":"__start__","kind":"object","node_id":"__start__","value":{}},"run_id":"dec0b325312242018a72385ba6c51119","schema":32,"seq":6}
+    {"at":"2026-10-21T17:52:48.430Z","kind":"node_succeeded","payload":{"commit":6,"messages":null,"node_id":"__start__"},"run_id":"dec0b325312242018a72385ba6c51119","schema":32,"seq":7}
+    {"at":"2026-10-21T17:52:48.430Z","kind":"node_started","payload":{"node_id":"a"},"run_id":"dec0b325312242018a72385ba6c51119","schema":32,"seq":8}
+    {"at":"2026-10-21T17:52:48.430Z","kind":"node_started","payload":{"node_id":"b"},"run_id":"dec0b325312242018a72385ba6c51119","schema":32,"seq":9}
 args: [status, run.jsonl, --json]
 expect:
   exit: 0

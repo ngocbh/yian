@@ -163,7 +163,8 @@ holds media fails if `media` is a symlink, another user's, or writable by others
 `advance` runs the flow the log recorded, not the file on disk, with the log's inputs, run id and
 model settings. Pass again what the log doesn't hold: `tools`, `skills`, `context`, the memories
 (`memory: { lessons: instance }`, for any unfinished run; see [Memory](/memory/#bind-a-memory)),
-and the API key (`apiKey`, `headers`) of a run started with `llmConfig.api_key`.
+and the API key (`apiKey`, `headers`) of a run started with `llmConfig.api_key`. Without that key,
+`advance` of an unfinished run whose agents use it rejects before writing anything.
 
 The log holds the `codeRoot` the flow was loaded under, so `advance` and the host calls below
 confine the recorded flow's CODE files to it without being told. Passing `codeRoot` is optional; one
@@ -281,7 +282,7 @@ A refused call appends nothing and throws `DeliveryRefused`, whose `reason` says
 | `key_reused` | An earlier send used the send's `key` with another inbox or value |
 | `too_large` | The message is over `YIAN_MAX_EVENT_BYTES` (1 MiB by default) |
 | `unknown_call` | No open call has that id |
-| `not_host_call` | The id names a take or a sleep |
+| `not_host_call` | The id names a take, a sleep or an agent's [flow call](/agents/#flows-as-tools), which the run answers itself |
 | `call_settled` | The call already has an answer, timed out or was closed |
 
 ### Pending host calls
@@ -347,7 +348,8 @@ const closed = await cancel(log);              // the open host calls it closed
 `interrupt` stops the agents whose `steer_inbox:` is that inbox (see
 [Agents](/agents/#steering-and-interrupts)). Each one's reply is cut: an `Optional(...)` output
 succeeds with `null`, any other fails with `agent.interrupted`. A later `complete` of the open
-calls it closes is refused. An agent that starts reading the inbox
+calls it closes is refused, the calls of the agents' running [flow calls](/agents/#flows-as-tools)
+included, which end with it. An agent that starts reading the inbox
 soon after is stopped too, before its first model call. `interrupt` appends nothing
 (`seq: null`) when the run is waiting for the next message on the inbox, or is already stopping.
 Queued steers stay; `withdraw` takes them back.

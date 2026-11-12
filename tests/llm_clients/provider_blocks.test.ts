@@ -2,6 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { current } from "../../src/defaults.ts";
 import { compareCodeUnits } from "../../src/diagnostics.ts";
 import { FileRef } from "../../src/typesys/index.ts";
 import {
@@ -54,6 +55,20 @@ function value(of: ObjectSchema, data: unknown): unknown {
 
 const STR: Field = { kind: "str" };
 const INT: Field = { kind: "int" };
+
+/** Return `[[...[1]...]]`: `levels` lists, one inside the next, around `1`. */
+function nested(levels: number): unknown {
+  let value: unknown = 1n;
+  for (let level = 0; level < levels; level++) value = [value];
+  return value;
+}
+
+/** Return `{a: {a: ... 1}}`: `levels` records, one inside the next, around `1`. */
+function nestedRecords(levels: number): unknown {
+  let value: unknown = 1n;
+  for (let level = 0; level < levels; level++) value = { a: value };
+  return value;
+}
 
 describe("value pass", () => {
   test("str takes a string and checks short, long, then pattern, in code points", () => {
@@ -309,6 +324,24 @@ describe("value pass", () => {
       { loc: ["v", "e"], type: "json_type", msg: "Input should be a JSON value" },
       { loc: ["v", "f"], type: "json_type", msg: "Input should be a JSON value" },
     ]);
+  });
+
+  test("a free-form field nests at most YIAN_MAX_VALUE_NESTING levels from its own value, else one issue at it", () => {
+    const limit = current().maxValueNesting;
+    const tooDeep = {
+      type: "too_deep",
+      msg: `Value nests deeper than ${limit} levels, the limit for a yian value (each record and list is a level)`,
+    };
+    const map = schema({ v: { kind: "map", key: STR, value: { kind: "json" } } });
+    const list = schema({ v: { kind: "list", item: { kind: "json" } } });
+    // The field's own record or list is the first level.
+    expect(value(map, { v: { a: nested(limit - 1) } })).toEqual({ v: { a: nested(limit - 1) } });
+    expect(value(list, { v: [nested(limit - 1)] })).toEqual({ v: [nested(limit - 1)] });
+    expect(issues(map, { v: { a: nested(limit) } })).toEqual([{ loc: ["v"], ...tooDeep }]);
+    expect(issues(list, { v: [nested(limit)] })).toEqual([{ loc: ["v"], ...tooDeep }]);
+    // Far past the stack's depth too, and nothing inside the field is reported.
+    expect(issues(map, { v: { a: nested(50_000), b: NaN } })).toEqual([{ loc: ["v"], ...tooDeep }]);
+    expect(issues(map, { v: { a: nestedRecords(50_000) } })).toEqual([{ loc: ["v"], ...tooDeep }]);
   });
 
   test("json record entries holding undefined are skipped and not counted", () => {
@@ -1322,6 +1355,21 @@ describe("Chat Completions blocks", () => {
     ]);
     const content = { allow_fallbacks: false, order: ["anthropic"], nested: { x: [1n, 0.5, null, "y"] } };
     expect(validateBlock(block, { [key]: content }) as unknown).toEqual({ [key]: content });
+  });
+
+  test.each([
+    [OpenRouterChatBlock.title, OpenRouterChatBlock, "provider"],
+    [VLLMChatBlock.title, VLLMChatBlock, "chat_template_kwargs"],
+  ] as const)("%s: a pass-through mapping nested too deeply is one issue at its key", (_title, block, key) => {
+    const limit = current().maxValueNesting;
+    expect(validateBlock(block, { [key]: { a: nested(limit - 1) } }) as unknown).toEqual({
+      [key]: { a: nested(limit - 1) },
+    });
+    for (const levels of [limit, 50_000]) {
+      expect(checkBlock(block, { [key]: { a: nested(levels) } }).issues.map(({ loc, type }) => ({ loc, type }))).toEqual([
+        { loc: [key], type: "too_deep" },
+      ]);
+    }
   });
 });
 

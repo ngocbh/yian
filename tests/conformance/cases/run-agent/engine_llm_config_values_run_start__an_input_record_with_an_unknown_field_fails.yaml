@@ -19,6 +19,6 @@ run:
 expect:
   raises:
     class: LayerFieldError
-    message: 'node ''chat'' llm_config: llm_config has unknown field(s) ["bogus"] (allowed: anthropic, api_key, azure, base_url, deepseek, glm, glm-cn, google, headers, minimax, minimax-cn, model, ollama, openai, openrouter, organization, project, provider, qwen, qwen-cn, structured_output, vllm, xai)'
+    message: 'node ''chat'' llm_config: llm_config has unknown field(s) ["bogus"] (allowed: anthropic, api, api_key, azure, base_url, deepseek, glm, glm-cn, google, headers, minimax, minimax-cn, model, ollama, openai, openrouter, organization, project, provider, qwen, qwen-cn, structured_output, vllm, xai)'
   trace: []
   events: []

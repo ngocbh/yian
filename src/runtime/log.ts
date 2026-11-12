@@ -39,11 +39,11 @@ import { formatRecordTime as recordTimeText, RECORD_TIME } from "../typesys/temp
 import { isList, isRecord, jsonPart, requireFields, valueRepr, writeAsText } from "../typesys/values.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 30;
+export const SCHEMA_VERSION = 32;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
 const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([
-  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
+  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
 ]);
 
 /** A typed value's wire object `{kind, value}`. */
@@ -1033,40 +1033,65 @@ export class NodeRoutedRecord {
 /**
  * Splice one deterministic expansion, checked by its digest. Frozen.
  *
- * The seed isn't recorded: a replay rebuilds it from the spawner's expansion commits' `from`.
+ * A spawner's (CALL, MAP, LOOP) expansion settles it; its seed isn't recorded: a replay rebuilds
+ * it from the spawner's expansion commits' `from`. An AGENT's flow call (`callId`) grows the
+ * called flow's scope while the agent stays in flight; its seed is the call's `pending` step.
  */
 export class NodeExpandedRecord {
-  /** The spawner's non-empty id. */
+  /** The spawner's non-empty id: the CALL, MAP or LOOP node, or the AGENT making a flow call. */
   readonly spawnerId: string;
   /** Node ids the expansion prunes: sorted, unique and non-empty. */
   readonly pruneIds: readonly string[];
   /** The expanded topology's SHA-256 digest, 64 lowercase hex digits. */
   readonly topologyDigest: string;
+  /** The AGENT flow call whose scope this grows; `null` for a spawner's expansion. */
+  readonly callId: string | null;
 
   /**
    * @throws TypeError when an id or the digest isn't a string.
-   * @throws RangeError when the spawner id is empty, the prune ids aren't a sorted array of
-   *   unique non-empty strings, or the digest isn't 64 lowercase hex digits.
+   * @throws RangeError when the spawner id or call id is empty, the prune ids aren't a sorted
+   *   array of unique non-empty strings, or the digest isn't 64 lowercase hex digits.
    */
-  constructor(spawnerId: string, pruneIds: readonly string[], topologyDigest: string) {
+  constructor(
+    spawnerId: string,
+    pruneIds: readonly string[],
+    topologyDigest: string,
+    options: { callId?: string | null } = {},
+  ) {
     this.spawnerId = requireName(spawnerId, "spawner_id");
     this.pruneIds = validatedIdArray(pruneIds, "prune_ids", true);
     this.topologyDigest = requireSha256(topologyDigest, "topology_digest");
+    this.callId = options.callId == null ? null : requireName(options.callId, "call_id");
     Object.freeze(this);
   }
 }
 
-/** Make a run terminal-failed with the captured semantic failure. Frozen. */
+/**
+ * Record a node's failure. Frozen. It makes the run terminal-failed, unless the node is inside the
+ * scope of an AGENT's flow call (`callId`): then the call fails, the scope's other unfinished nodes
+ * end with it, and the run goes on.
+ */
 export class NodeFailedRecord {
   /** The failure, kept through `retainFailure`; its node id is non-empty. */
   readonly failure: Failure;
+  /**
+   * The flow call whose scope holds the failed node (the AGENT itself when the scope couldn't
+   * grow), which takes the failure; `null` when it fails the run.
+   */
+  readonly callId: string | null;
+  /** That call's scope, `<agent>/<flow>#<k>`, whose unfinished nodes end; `null` with no call. */
+  readonly scope: string | null;
 
   /**
    * @throws TypeError when the failure is of another class.
-   * @throws RangeError when the failure has no node id.
+   * @throws RangeError when the failure has no node id, the call id or scope is empty, or just one
+   *   of them is given.
    */
-  constructor(failure: Failure) {
+  constructor(failure: Failure, options: { callId?: string | null; scope?: string | null } = {}) {
     this.failure = retainedFailure(failure, "NodeFailedRecord");
+    this.callId = options.callId == null ? null : requireName(options.callId, "call_id");
+    this.scope = options.scope == null ? null : requireName(options.scope, "scope");
+    if ((this.callId === null) !== (this.scope === null)) throw new RangeError("a flow call's failure names its call and its scope");
     Object.freeze(this);
   }
 }
@@ -1802,7 +1827,8 @@ export class JsonlRunLog implements RunLog {
    * @throws Error the busy message, as `create`; `run log <path> was replaced while being opened`
    *   when `path` stops naming the opened file before the lock is taken.
    * @throws Error (code `EINVAL`, `EINVAL: not a regular file, open '<path>'`) when `path` is a
-   *   symlink, a FIFO or a device; it is never read, and no lock file is created.
+   *   symlink, a FIFO or a device, or (`EINVAL: has more than one link, open '<path>'`) when the
+   *   file has another link; it is never read, and no lock file is created.
    * @throws the `fs` error (`code` `ENOENT` for a missing log, `EISDIR` for a folder, neither of
    *   which creates a lock file) and other `lockFile` errors.
    */
@@ -2062,7 +2088,8 @@ export interface IterRunRecordsOptions {
  *   no record has, or a complete line isn't a valid record, breaks the seq count or names another
  *   run id; the message names `path` and the line (or, after an offset, the byte).
  * @throws Error (code `EINVAL`, `EINVAL: not a regular file, open '<path>'`) when `path` isn't a
- *   regular file (a symlink, a FIFO, a device or a folder); it is never read.
+ *   regular file (a symlink, a FIFO, a device or a folder), or (`EINVAL: has more than one link,
+ *   open '<path>'`) when the file has another link; it is never read.
  * @throws Error (code `ENOENT`) when `path` doesn't exist, and the `fs` error of a failed read.
  */
 export function iterRunRecords(
@@ -2937,16 +2964,19 @@ const RECORD_CODECS: readonly RecordCodec[] = [
     cls: NodeExpandedRecord,
     kind: "node_expanded",
     encode: (record) => ({
+      call_id: record.callId,
       spawner_id: record.spawnerId,
       prune_ids: [...record.pruneIds],
       topology_digest: record.topologyDigest,
     }),
     decode: (payload, label) => {
-      requireFields(payload, ["spawner_id", "prune_ids", "topology_digest"], label);
+      requireFields(payload, ["call_id", "spawner_id", "prune_ids", "topology_digest"], label);
+      const callId = payload["call_id"];
       return new NodeExpandedRecord(
         requireName(payload["spawner_id"], `${label} spawner_id`),
         wireTextArray(payload["prune_ids"], `${label} prune_ids`),
         requireText(payload["topology_digest"], `${label} topology_digest`),
+        { callId: callId === null ? null : requireName(callId, `${label} call_id`) },
       );
     },
     nodeId: (payload, label) => requireName(payload["spawner_id"], `${label} spawner_id`),
@@ -2954,10 +2984,14 @@ const RECORD_CODECS: readonly RecordCodec[] = [
   recordCodec({
     cls: NodeFailedRecord,
     kind: "node_failed",
-    encode: (record) => ({ failure: failurePayload(record.failure) }),
+    encode: (record) => ({ call_id: record.callId, failure: failurePayload(record.failure), scope: record.scope }),
     decode: (payload, label) => {
-      requireFields(payload, ["failure"], label);
-      return new NodeFailedRecord(failureFromPayload(payload["failure"], `${label} failure`));
+      requireFields(payload, ["call_id", "failure", "scope"], label);
+      const { call_id: callId, scope } = payload;
+      return new NodeFailedRecord(failureFromPayload(payload["failure"], `${label} failure`), {
+        callId: callId === null ? null : requireName(callId, `${label} call_id`),
+        scope: scope === null ? null : requireName(scope, `${label} scope`),
+      });
     },
     nodeId: (payload, label) =>
       requireName(wireObject(payload["failure"], `${label} failure`)["node_id"], `${label} failure node_id`),
@@ -3252,11 +3286,24 @@ export function notRegularFile(path: string): NodeJS.ErrnoException {
 }
 
 /**
+ * @internal The `EINVAL` error for a run log at `path` with more than one link (a hard link), shaped
+ * as `notRegularFile`'s: `EINVAL: has more than one link, open '<path>'`.
+ */
+export function hardLinked(path: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(`EINVAL: has more than one link, open '${path}'`), {
+    code: "EINVAL",
+    errno: -os.constants.errno.EINVAL,
+    syscall: "open",
+    path,
+  });
+}
+
+/**
  * Open the run log at `path` with `flags` and return its descriptor. A symlink at `path` itself is
  * never followed; folders on the way to it may be links.
  *
  * @throws Error `notRegularFile(path)` when `path` is a symlink or the file opened isn't a regular
- *   file; it is closed.
+ *   file, and `hardLinked(path)` when it has another link; it is closed.
  * @throws the `fs` error of a failed open.
  */
 function openRegular(path: string, flags: number): number {
@@ -3275,7 +3322,11 @@ function openRegular(path: string, flags: number): number {
   }
   try {
     // The descriptor's type, not the path's, so a file swapped in after a check can't slip by.
-    if (!fs.fstatSync(fd).isFile()) throw notRegularFile(path);
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) throw notRegularFile(path);
+    // A hard link reaches a file elsewhere as a symlink does, which O_NOFOLLOW doesn't stop: a run
+    // must not read or append to it. FileMemory refuses its journal the same way.
+    if (stat.nlink > 1) throw hardLinked(path);
   } catch (error) {
     fs.closeSync(fd);
     throw error;

@@ -45,7 +45,7 @@ import fsp from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 
 import { fieldLabel, findInheritedLlmValue, inheritedValueFix } from "../compile/llm_cascade.ts";
-import type { CompiledFlow } from "../compile/model.ts";
+import { type CompiledFlow, type Flow, nodeChildren } from "../compile/model.ts";
 import { iterFlowOrigins, rebaseFlowOrigins } from "../compile/origins.ts";
 import { current, type Env, processEnv, withEnv } from "../defaults.ts";
 import {
@@ -57,6 +57,7 @@ import {
   reprText,
   type SourceRange,
 } from "../diagnostics.ts";
+import type { Node } from "../nodes/base.ts";
 import { Binding, type ValuePath, ValueTemplate } from "../nodes/contracts.ts";
 import { isSystemError, leavesRoot, readRegularFile, resolvedPath, statOrNull } from "../platform.ts";
 import { readTypedefs, typeFor, typeName, type TypeRegistry, withMemoryTypes } from "../typesys/types.ts";
@@ -250,8 +251,10 @@ export function singleNodeDefCursor(name: string, body: ValueRecord, defCursor: 
 // the file's metadata and typedefs rather than declaring `id`/`name`/`typedefs` themselves.
 // `asserts:` are allowed: the call and map child seam enforces a def's asserts against the child
 // pool (boundary before the child runs, post after it ends). `env:` is the def's own flow-level
-// default for its nodes; a parent's `env:` doesn't reach a called child.
+// default for its nodes; a parent's `env:` doesn't reach a called child. `description:` is what a
+// model reads when an agent grants the def as a tool.
 const DEF_ALLOWED: ReadonlySet<string> = new Set([
+  "description",
   "inputs",
   "nodes",
   "outputs",
@@ -447,6 +450,8 @@ function distinctOrigins(compiled: CompiledFlow): OriginRef[] {
  *   provenance, or a reachable origin lacks a concrete frame.
  */
 function validateExternalChild(alias: string, child: unknown): OriginRef[] {
+  const validated = child instanceof ComposedFlow ? validatedChildren.get(child) : undefined;
+  if (validated !== undefined) return validated;
   if (!(child instanceof ComposedFlow)) {
     throw UNLOCATED_DIAGNOSTICS.error(
       `uses: alias ${reprText(alias)} resolver returned ${jsTypeName(child)}, expected ComposedFlow`,
@@ -494,34 +499,96 @@ function validateExternalChild(alias: string, child: unknown): OriginRef[] {
   for (const origin of origins) {
     checkFrame(
       () => resolve.call(resolver, origin),
-      `uses: alias ${reprText(alias)} child origin resolver`,
-      reprText(origin.key),
+      () => `uses: alias ${reprText(alias)} child origin resolver`,
+      () => reprText(origin.key),
       UNLOCATED_DIAGNOSTICS,
     );
   }
+  validatedChildren.set(child, origins);
   return origins;
 }
+
+/**
+ * The children `validateExternalChild` passed, with their origins: a flow is immutable, so a child
+ * imported under several aliases, or at several levels of a diamond, is walked once.
+ */
+const validatedChildren = new WeakMap<ComposedFlow, OriginRef[]>();
 
 /**
  * Throw unless `resolve` returns a `DiagnosticFrame`.
  *
  * @param resolve Resolves one origin through a resolver.
- * @param subject The resolver, as messages name it.
- * @param target The origin, as messages name it.
+ * @param subject The resolver, as messages name it; built only for a failure, since a load that
+ *   passes checks every origin.
+ * @param target The origin, as messages name it; built only for a failure.
  * @param diagnostics Factory for the load error.
  * @throws LoadError when `resolve` throws or returns anything but a frame.
  */
-function checkFrame(resolve: () => unknown, subject: string, target: string, diagnostics: LoadDiagnostics): void {
+function checkFrame(
+  resolve: () => unknown,
+  subject: () => string,
+  target: () => string,
+  diagnostics: LoadDiagnostics,
+): void {
   let frame: unknown;
   try {
     frame = resolve();
   } catch (error) {
-    throw diagnostics.error(`${subject} failed for ${target}: ${errorText(error)}`, { cause: error });
+    throw diagnostics.error(`${subject()} failed for ${target()}: ${errorText(error)}`, { cause: error });
   }
   if (!(frame instanceof DiagnosticFrame)) {
     const detail = frame === null ? "no frame" : jsTypeName(frame);
-    throw diagnostics.error(`${subject} returned ${detail} for ${target}`);
+    throw diagnostics.error(`${subject()} returned ${detail} for ${target()}`);
   }
+}
+
+/** Each flow's node count with its static children expanded (`expandedNodes`). */
+const expandedCounts = new WeakMap<Flow, number>();
+
+/**
+ * Return how many nodes `flow` expands to: its own nodes and, for each with static children (a
+ * CALL, MAP or LOOP body, an agent's flow tools), their counts, so each call of a def or `uses:`
+ * flow counts as a copy and a MAP or LOOP body, or a flow tool, counts once however many times it
+ * runs. Every CASE branch counts. Cached per flow, so the count is linear in the distinct flows
+ * however large it is.
+ */
+function expandedNodes(flow: Flow): number {
+  let count = expandedCounts.get(flow);
+  if (count === undefined) {
+    count = 0;
+    for (const node of flow.nodes.values()) count += 1 + childNodes(node);
+    expandedCounts.set(flow, count);
+  }
+  return count;
+}
+
+/** The expanded count of `node`'s static children (`expandedNodes`); 0 for none. */
+function childNodes(node: Node): number {
+  return nodeChildren(node).reduce((sum, child) => sum + expandedNodes(child.flow), 0);
+}
+
+/**
+ * Return the first node of `flow`, in node order, at which its expanded count passes `limit`,
+ * looking inside a child that passes it alone; `null` when `flow` stays within it.
+ */
+function nodePastLimit(flow: Flow, limit: number): Node | null {
+  let count = 0;
+  for (const node of flow.nodes.values()) {
+    for (const { flow: child } of nodeChildren(node)) {
+      if (expandedNodes(child) > limit) return nodePastLimit(child, limit) ?? node;
+    }
+    count += 1 + childNodes(node);
+    if (count > limit) return node;
+  }
+  return null;
+}
+
+/** The message for a flow that expands to more than `limit` nodes. */
+function tooManyNodes(limit: number): string {
+  return (
+    `this flow expands to more than ${limit} nodes, counting each call of a def or uses: flow as a ` +
+    `copy; the limit for a flow is ${limit} (YIAN_MAX_FLOW_NODES)`
+  );
 }
 
 /**
@@ -536,6 +603,11 @@ function checkFrame(resolve: () => unknown, subject: string, target: string, dia
 function rebaseExternalChild(alias: string, child: unknown): ComposedFlow {
   const origins = validateExternalChild(alias, child);
   const flow = child as ComposedFlow;
+  // Before the copy, which would cost what the limit bounds.
+  const limit = current().maxFlowNodes;
+  if (expandedNodes(flow.compiled) > limit) {
+    throw UNLOCATED_DIAGNOSTICS.error(`uses: alias ${reprText(alias)}: ${tooManyNodes(limit)}`);
+  }
   let compiled: CompiledFlow;
   let table: ResolverTable;
   try {
@@ -593,7 +665,12 @@ export function finalizeComposedFlow(
       throw diagnostics.error(`reachable origin ${reprText(origin.key)} has multiple resolver routes`);
     }
     const authority = authorities[0]!;
-    checkFrame(() => authority.resolve(origin), "resolver route", `origin ${reprText(origin.key)}`, diagnostics);
+    checkFrame(
+      () => authority.resolve(origin),
+      () => "resolver route",
+      () => `origin ${reprText(origin.key)}`,
+      diagnostics,
+    );
     entries.push([origin, authority, origin]);
   }
   return replaceFlow(staged, { originResolver: ResolverTable.fromEntries(entries) });
@@ -1498,6 +1575,16 @@ export async function loadFlowFile(
     seen: new Set(Object.keys(f.uses).map((alias) => scope.resolve(alias).compiled)),
     codeRoot: ctx.codeRoot,
   };
+  // Before the walks that cost per expanded node: finalizing the origins, the CODE check, and
+  // the root's memory layout.
+  const limit = current().maxFlowNodes;
+  const past = nodePastLimit(staged.compiled, limit);
+  if (past !== null) {
+    const frame = past.origin === null ? null : scope.catalogBuilder.resolveRegistered(past.origin);
+    throw diagnostics.error(`node ${reprText(past.id)}: ${tooManyNodes(limit)}`, {
+      frames: frame === null ? [] : [frame],
+    });
+  }
   await scope.checkDefsCode(code);
   await checkFlowCode(staged.compiled, code);
   // Defs, inline bodies and the root are assembled now, so every slot has read its tags; a
@@ -1763,7 +1850,13 @@ export class CallableScope implements AssemblyScope {
 
   /** Whether `flowId` names a `defs:` callable or a `uses:` alias, which `call(...)` can run. */
   has(flowId: string): boolean {
-    return Object.hasOwn(this.#defsSection, flowId) || Object.hasOwn(this.#uses, flowId);
+    return this.section(flowId) !== null;
+  }
+
+  /** The section declaring `flowId`: `defs` or `uses`; `null` for neither. */
+  section(flowId: string): "defs" | "uses" | null {
+    if (Object.hasOwn(this.#defsSection, flowId)) return "defs";
+    return Object.hasOwn(this.#uses, flowId) ? "uses" : null;
   }
 
   /**
@@ -2063,6 +2156,7 @@ function loadDef(
   }
   if (defEnv !== null) validateEnv(defEnv, `${where}: `, defCursor?.child("env") ?? null, diagnostics);
   checkDefAsserts(name, field("asserts"), defCursor, diagnostics);
+  const description = defDescription(name, field("description"), defCursor, diagnostics);
   // Like a full flow's, a written `input:` must be a mapping, so an empty one is refused.
   const inputs = Object.hasOwn(body, "inputs") ? body["inputs"]! : {};
   if (!isRecord(inputs)) {
@@ -2089,6 +2183,7 @@ function loadDef(
       assertsCursor: sourceChild(defCursor, "asserts"),
       outputsCursor: sourceChild(defCursor, "output"),
       flowId: name,
+      description,
       baseDir: scope.baseDir,
     });
   } catch (error) {
@@ -2100,6 +2195,23 @@ function loadDef(
       cause: error,
     });
   }
+}
+
+/**
+ * Read a `defs:` entry's `description:`: text, or `null` when absent.
+ *
+ * @throws LoadError, located at the value and prefixed `defs entry '<name>': `, when it isn't text.
+ */
+function defDescription(
+  name: string,
+  value: Value,
+  defCursor: SourceCursor | null,
+  diagnostics: LoadDiagnostics,
+): string | null {
+  if (value === null || typeof value === "string") return value;
+  throw diagnostics.error(`defs entry ${reprText(name)}: ` + notTextError("description", value), {
+    range: defCursor?.rangeOf("description") ?? null,
+  });
 }
 
 /**
@@ -2153,6 +2265,9 @@ function loadSingleNodeDef(
   if (!KINDS.has(kind) && !REMOVED_KINDS.has(kind)) {
     throw kindError(`node ${reprText(name)}: unknown kind ${reprText(kind)} (allowed: ${allowed})`);
   }
+  const description = defDescription(name, body["description"] ?? null, defCursor, diagnostics);
+  // The description is the def's, not its node's.
+  const { description: _, ...nodeBody } = body;
   const inputCursor = sourceChild(defCursor, "input");
   const paramTypes = signatureParams(Object.hasOwn(body, "inputs") ? body["inputs"]! : undefined, {
     where,
@@ -2161,7 +2276,7 @@ function loadSingleNodeDef(
     fallbackRange: defCursor?.range ?? null,
     diagnostics,
   });
-  const nodesCursor = singleNodeDefCursor(name, body, defCursor);
+  const nodesCursor = singleNodeDefCursor(name, nodeBody, defCursor);
   try {
     return assemble({
       inputsSection: paramTypes,
@@ -2176,6 +2291,7 @@ function loadSingleNodeDef(
       boundaryFieldRanges: defCursor !== null ? boundaryFieldRanges(defCursor) : null,
       outputsRange: sourceChild(defCursor, "output")?.range ?? null,
       flowId: name,
+      description,
       baseDir: scope.baseDir,
     });
   } catch (error) {

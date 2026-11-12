@@ -340,6 +340,17 @@ describe("NDJSON", () => {
     expect((err as ProviderError).kind).toBe("protocol");
   });
 
+  test("a line past the received-JSON bounds throws a protocol error naming the bound, not the line", async () => {
+    const deep = "[".repeat(10_000) + "]".repeat(10_000);
+    expectOverCap(await rejection(ndjson(`1\n${deep}\n`)), "NDJSON line 2 nests deeper than 512 levels");
+    const few = (name: string) => (name === "YIAN_MAX_RECEIVED_JSON_VALUES" ? "3" : undefined);
+    expect(await withEnv(few, () => ndjson("[1,2]\n"))).toEqual([[1n, 2n]]);
+    expectOverCap(
+      await withEnv(few, () => rejection(ndjson("[1,2,3]\n"))),
+      "NDJSON line 1 has more than 3 JSON values (YIAN_MAX_RECEIVED_JSON_VALUES)",
+    );
+  });
+
   test("invalid UTF-8 throws a protocol error", async () => {
     const err = await rejection(ndjson(concat(utf8('"'), bytes(0xff), utf8('"\n'))));
     expect(err).toBeInstanceOf(ProviderError);

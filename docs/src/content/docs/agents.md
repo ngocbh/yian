@@ -35,6 +35,11 @@ An agent without `tools:` or `skills:` makes one model call, plus one for each r
 corrects. With them, it runs a tool loop: the model calls tools, reads their results, and calls
 again until it gives a final answer.
 
+A reply the provider cut off at the output token limit is no answer: the node fails with
+`agent.output_truncated`, whose message names the setting that raises the limit, such as
+`openai.max_output_tokens`. A cut reply that still holds a tool call whose arguments parsed runs
+it, and the loop goes on.
+
 | Field | What it holds |
 |---|---|
 | `input` | The values the prompts read, as bindings |
@@ -44,7 +49,7 @@ again until it gives a final answer.
 | `output` | The reply's type (default `str`) |
 | `retries` | Extra attempts to correct a reply that doesn't fit `output:` (default 2) |
 | `asserts` | Checks on the result (see [Expressions](/expressions/)) |
-| `tools` | The tools the model may call: tools, tool groups and [memory](/memory/) inputs by name, or `{group: [tool, ...]}` |
+| `tools` | The tools the model may call: tools, tool groups, [flows](#flows-as-tools) and [memory](/memory/) inputs by name, or `{group: [tool, ...]}` |
 | `skills` | Skill names, or `all` |
 | `steer_inbox` | An `Inbox` input whose messages steer the agent while it runs |
 | `llm_config` | Provider, model and request settings (see [Models and providers](/models/)) |
@@ -244,7 +249,8 @@ $ yian run extract.yaml --input text="Ada loved the new release."
   `2026-10-14` or `2026-10-14T10:30:00Z`.
 - A reply that doesn't fit stays in the conversation, followed by a correction naming the
   problem, and the model tries again, up to `retries:` times. Then the node fails with
-  `agent.output_invalid`.
+  `agent.output_invalid`, or with `agent.output_truncated` when the provider cut the last reply
+  off at the output token limit.
 - An `int` takes a whole number the model writes as a float, such as `2.0`.
 - A record reply keeps only the fields its type declares, and drops any other field without a
   correction. A [union](/types/#unions) member is stricter: a field it, or a record inside it,
@@ -290,6 +296,7 @@ server. Each entry grants one of these:
 | `ask_user` | Built in. The model asks the person running the flow a question, with optional answer choices. `yian run` asks in the terminal; a host must pass an `ask` handler in its tools |
 | MCP servers | `yian run` reads them from config files (below). Each server is a tool group named after it |
 | Host tools | A program passes them to the run (below) |
+| Flows | A `defs:` entry or `uses:` alias of the agent's file, granted by its name (below) |
 
 - The calls in one reply run one at a time, except that consecutive calls to tools marked safe to
   run together start together: a host tool's `isConcurrencySafe`, or an MCP server's
@@ -375,6 +382,8 @@ The file uses the `mcpServers` format other MCP clients use:
   doesn't use, so name the server when one is slow to start or does something when it starts.
 - The run's servers start together and stop together when it ends. The config files are read
   only when the flow names a tool yian doesn't already have.
+- If a server dies mid-run, the next call starts it again (over HTTP, opens a new session), once.
+  A call it was running fails with its exit code and last stderr lines, and isn't sent again.
 - MCP needs the optional package `@modelcontextprotocol/client` 2.3.1 installed beside yian.
 
 ### Host tools
@@ -410,6 +419,66 @@ hold tools of one name, but two tools that could show one name, such as a tool `
 group `github`'s `search`, are refused. The `tools` option replaces the run's tools, so pass
 everything the flow names. See
 [Embedding yian](/embedding/) for tool context, pending calls and MCP from a program.
+
+### Flows as tools
+
+An agent can grant a flow its file names, a `defs:` entry or a [`uses:`](/control-flow/#import-a-flow-from-another-file-with-uses)
+alias, as one tool. The model decides when to call it, as for any tool:
+
+<!-- yian-test {"replies": ["The flow said HI!"]} -->
+
+```yaml title="helper.yaml" check=runnable
+id: helper
+name: helper
+defs:
+  shout:
+    description: Shout a text back in capitals.
+    input:
+      text: !str
+    nodes:
+      loud:
+        kind: code
+        input:
+          text: ${input.text}
+        output: str
+        code: return inputs.text.toUpperCase() + "!"
+    output: ${loud.output}
+nodes:
+  helper:
+    kind: agent
+    tools: [shout]
+    prompt: Shout hi, then say what came back.
+    output: str
+output: ${helper.output}
+```
+
+```console
+$ yian run helper.yaml
+The flow said HI!
+```
+
+- The model sees the flow's name, its `description:` and its inputs as the arguments: each input
+  is a property, required unless it has a default or is `Optional`.
+- A call runs the flow inside the run, as a `call` node runs a child: its nodes join the graph
+  under the agent, as `helper/shout#0/loud` for the agent's first call of `shout`, and every step
+  is in the run log. A crash inside it resumes inside it, and a question it asks waits like any
+  other: the host answers its `ask` node's call, not the flow call.
+- The model reads the flow's output: text as itself, any other value as JSON, cut to
+  `YIAN_MAX_FLOW_RESULT_CHARS` characters (20,000 by default). The run log holds the whole value.
+- A reply's flow calls start once its other calls have run, and run together, up to the worker
+  count, as `map` items do. Each counts as one tool call in its turn.
+- A failure inside the flow is the call's error result, and the agent goes on: the model reads
+  `Flow shout failed at node loud (node.execute): <message>`. The flow's other unfinished nodes end
+  with it, its open questions included. A call whose flow would grow the run's graph past
+  `YIAN_MAX_TOTAL_NODES` doesn't start, and the model reads why.
+- A host interrupt of the agent's `steer_inbox` ends its running flow calls where they are, open
+  questions included, and the model reads them as interrupted, as for a pending `ask_user`.
+- A granted flow needs a `description:`, and inputs a model can send: an `Inbox`, memory or `file`
+  input is a load error. So is the group form `{shout: [x]}`, a flow named like a built-in tool or
+  a memory input, and a flow that grants itself, directly or through another flow. A run whose
+  host tools or tool groups have a granted flow's name is refused before it starts.
+- A host never sees a flow call: `pendingCalls` and a run's `waits` leave it out, and `complete`
+  refuses it (`not_host_call`).
 
 ## Skills
 
@@ -484,8 +553,8 @@ output: ${worker.output :- "(stopped)"}
 - **Interrupts.** A host can interrupt every agent reading an inbox. The agent stops at its next
   safe point: before a model call, while it waits for a reply, between streamed chunks, at the end
   of the stream (a reply whose text had all arrived is still cut), or before a tool call. A running
-  tool call finishes. In `yian run`'s chat, Ctrl-C or Esc during a turn
-  does this.
+  tool call finishes, but a running [flow call](#flows-as-tools) ends where it is. In `yian run`'s
+  chat, Ctrl-C or Esc during a turn does this.
 - **The result.** An interrupted agent's output is null. With an `Optional(...)` output it
   succeeds, so the flow can route on null as above. Any other output fails the node with
   `agent.interrupted`.

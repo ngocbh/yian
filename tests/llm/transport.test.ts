@@ -787,6 +787,30 @@ describe("shortRequest", () => {
     expect(e.cause).toBeUndefined();
   });
 
+  test("json() refuses a body past the received-JSON bounds, naming the bound", async () => {
+    const thrown = (reply: { json(): unknown }) => {
+      try {
+        reply.json();
+      } catch (caught) {
+        return caught as ProviderError;
+      }
+      throw new Error("json() read the body");
+    };
+    const deep = await harness({ steps: [{ at: 0, chunk: `{"data":${"[".repeat(10_000)}${"]".repeat(10_000)}}` }] }).short();
+    const error = thrown(deep);
+    expect(error).toBeInstanceOf(ProviderError);
+    expect([error.kind, error.retryable, error.message]).toEqual([
+      "protocol",
+      false,
+      "models response nests deeper than 512 levels",
+    ]);
+    const wide = await harness({ steps: [{ at: 0, chunk: "[1,2,3]" }] }).short();
+    const few = (name: string) => (name === "YIAN_MAX_RECEIVED_JSON_VALUES" ? "3" : undefined);
+    expect(withEnv(few, () => thrown(wide)).message).toBe(
+      "models response has more than 3 JSON values (YIAN_MAX_RECEIVED_JSON_VALUES)",
+    );
+  });
+
   test("a 3xx is a redirect error", async () => {
     const h = harness({ status: 302, headers: { location: "https://elsewhere.test/x?t=1" }, steps: [] });
     const error = (await failure(h.short())) as ProviderError;

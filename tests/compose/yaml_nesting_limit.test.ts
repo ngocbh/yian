@@ -17,8 +17,7 @@ import {
 
 import { parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { SourceSyntaxError } from "../../src/compose/source/common.ts";
-import { SourceDocument } from "../../src/compose/source/document.ts";
-import { parseYamlLiteral } from "../../src/compose/source/literals.ts";
+import { parseYamlLiteral, SourceDocument } from "../../src/compose/source/document.ts";
 import {
   composeFlowDocument,
   FlowLoaderError,

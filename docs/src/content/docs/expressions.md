@@ -149,8 +149,8 @@ Use parentheses to group. Comparisons don't chain: write `0 < x and x < 10`, not
 
 ### Arithmetic
 
-- Two ints give an exact int, however large: `${2 ** 100}` is
-  `1267650600228229401496703205376`.
+- Two ints give an exact int: `${2 ** 100}` is `1267650600228229401496703205376`, up to
+  4,300 digits (see [Limits](#limits)).
 - `/` always gives a float: `${7 / 2}` is `3.5`, and `${4 / 2}` is a float too.
 - Put spaces around `/` between names: `n/2` reads as one name, a load error that shows `n / 2`.
 - `%` takes the sign of the left side: `${-7 % 3}` is `-1`.
@@ -272,8 +272,9 @@ The default after `:-` is an expression, so quote text: `${input.when :- "today"
 | `days_between(a, b)` | The whole days from `a` to `b`, negative when `b` is earlier |
 
 Arguments may be given by the names in the table: `${join(items, sep=", ")}`. A null argument
-fails the call, so give a default: `${upper(name :- "")}`. A `null` for an argument whose default
-is `null` is the same as leaving it out. Calling a builtin with arguments it doesn't take, a name
+fails the call, so give a default: `${upper(name :- "")}`; passing a node a `case` may skip
+without one is a load error. A `null` for an argument whose default is `null` is the same as
+leaving it out. Calling a builtin with arguments it doesn't take, a name
 that isn't a builtin, or an argument whose type the builtin never takes (`upper` of an int) is a
 load error. A flow isn't a function: to run a child flow from a value, use the `call(...)` form
 (see [Control flow](/control-flow/)).
@@ -335,5 +336,16 @@ wants an int, is a load error; others are checked when they run.
 
 An expression nests at most 100 levels: each call, list, comprehension, index, slice,
 conditional, comparison, unary operator, `:-`, `:?` or `|`, and chain of operators is one level.
-A deeper one is a load error; split it across values. See [Reference](/reference/) for every
-limit.
+A deeper one is a load error; split it across values.
+
+These bound the work one expression does, and going over one fails the run with an error that
+names its variable:
+
+| Limit | Variable |
+|---|---|
+| The comprehensions in one expression bind at most 1,000,000 items, counting every `for` clause: `[1 for a in xs for b in xs]` over 1,000 items binds 1,001,000 | `YIAN_MAX_COMPREHENSION_ITEMS` |
+| An int an operator or a builtin gives has at most 4,300 digits, Python's limit for writing an int as text. Reading or comparing a longer int is fine | `YIAN_MAX_INT_DIGITS` |
+| `render_as_json` takes an indent of at most 10 | `YIAN_MAX_JSON_INDENT` |
+| A text an operator or a builtin gives has at most 10,000,000 characters. `replace`, `join`, `str`, `render_as_json` and `+` count the text before they build it. Reading, comparing or slicing a longer text is fine | `YIAN_MAX_TEXT_CHARS` |
+
+See [Reference](/reference/) for every limit.

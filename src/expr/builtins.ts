@@ -24,16 +24,19 @@
  *
  * Knows about: `typesys` (`Value`, `FileRef`, `InboxRef`, `MemoryRef`, `Type`, `ValueKind`,
  * `fromHost`, `isListKind`, `isRecord`, `rejectDeepNesting`, `renderValuePath`, `valueRepr`,
- * `writeAsText`, `writeAsJson`, `parseJson`, `parseDateOrDatetime`), `diagnostics` (`reprText`,
+ * `writeAsText`, `writeAsJson`, `parseJson`, `parseDateOrDatetime`), `defaults`
+ * (`YIAN_MAX_INT_DIGITS`, `YIAN_MAX_JSON_INDENT` and `YIAN_MAX_TEXT_CHARS`), `diagnostics` (`reprText`,
  * `compareCodePoints`) and `grammar` (`uncallableReason`).
  */
 
+import { current } from "../defaults.ts";
 import { compareCodePoints, reprText } from "../diagnostics.ts";
 import { FileRef, InboxRef, MemoryRef, Type, type Value, ValueKind } from "../typesys/index.ts";
 import { JSONDecodeError, parseJson } from "../typesys/json.ts";
 import { type ParsedDate, type ParsedDatetime, parseDateOrDatetime } from "../typesys/temporal.ts";
 import {
   canonicalTypeLabel,
+  codePointCount,
   fromHost,
   isListKind,
   isRecord,
@@ -42,6 +45,7 @@ import {
   valueRepr,
   writeAsJson,
   writeAsText,
+  writtenJsonChars,
 } from "../typesys/values.ts";
 import { uncallableReason } from "./grammar.ts";
 
@@ -146,6 +150,36 @@ export function kindName(value: Value): string {
   return FileRef.isFileRef(value) ? "file" : "record";
 }
 
+/** The end of a message for an int result over `cap` digits (`YIAN_MAX_INT_DIGITS`). */
+export function intOverCap(cap: number): string {
+  return `gives an int over the limit of ${cap} digits (YIAN_MAX_INT_DIGITS)`;
+}
+
+/** The end of a message for a text result over `cap` characters (`YIAN_MAX_TEXT_CHARS`). */
+export function textOverCap(cap: number): string {
+  return `gives a text over the limit of ${cap} characters (YIAN_MAX_TEXT_CHARS)`;
+}
+
+/**
+ * Return whether a text of `units` UTF-16 code units has more than `cap` characters (code
+ * points), counting them with `chars` only when `units` is over, since a character takes one
+ * unit or two.
+ */
+export function overTextChars(units: number, chars: () => number, cap: number): boolean {
+  return units > cap && chars() > cap;
+}
+
+/** Throw when the text builtin `fn` would give, of `units` code units and `chars()` characters, is over `YIAN_MAX_TEXT_CHARS`. */
+function checkTextSize(fn: string, units: number, chars: () => number): void {
+  const cap = current().maxTextChars;
+  if (overTextChars(units, chars, cap)) throw new TypeError(`${fn}() ${textOverCap(cap)}`);
+}
+
+/** The characters `writeAsText(value)` writes, without writing them. */
+function textChars(value: Value): number {
+  return typeof value === "string" ? codePointCount(value) : writtenJsonChars(value);
+}
+
 /**
  * Throw when a builtin argument is null, so it never becomes text like "null". `fallback` is the
  * example default the message suggests.
@@ -189,12 +223,17 @@ function firstInfinite(
 /**
  * Pretty-print `value` as JSON (`writeAsJson`): the headline builtin. A file renders as its
  * mapping `{"uri", "mime", "name"}`. A null `value` is an error; a null nested inside it renders
- * as `null`. An infinite float is an error naming its path, since JSON has no infinity.
+ * as `null`. An infinite float is an error naming its path, since JSON has no infinity. The
+ * indent is at most `YIAN_MAX_JSON_INDENT`.
  */
 function renderAsJson(value: Value, indent: Value): string {
   rejectNull("render_as_json", value);
   if (typeof indent !== "bigint" || indent < 0n) {
     throw new TypeError(`render_as_json() takes an int indent of 0 or more, got ${valueRepr(indent)}`);
+  }
+  const cap = current().maxJsonIndent;
+  if (indent > BigInt(cap)) {
+    throw new TypeError(`render_as_json() takes an indent of at most ${cap} (YIAN_MAX_JSON_INDENT), got ${indent}`);
   }
   const infinite = firstInfinite(value);
   if (infinite !== null) {
@@ -202,19 +241,31 @@ function renderAsJson(value: Value, indent: Value): string {
     const shown = infinite.x > 0 ? "inf" : "-inf";
     throw new TypeError(`render_as_json() can't write ${shown}${where}: JSON has no infinity`);
   }
-  // A huge indent becomes a huge number (or Infinity), and the writer's `repeat` then fails.
+  const chars = writtenJsonChars(value, Number(indent));
+  checkTextSize("render_as_json", chars, () => chars);
   return writeAsJson(value, Number(indent));
 }
 
 /**
  * Join a list's elements, each in the text form, with `sep`. A null list or element is an
- * error, and so is a non-list (a string is not split into characters).
+ * error, and so is a non-list (a string is not split into characters). The text is sized
+ * before it is built.
  */
 function join(value: Value, sep: Value): string {
   rejectNull("join", value, "[]");
   if (!Array.isArray(value)) throw new TypeError(`join() takes a list, got ${kindName(value)}`);
   if (value.includes(null)) throw new TypeError("join() got a null element; drop or default it before joining");
   if (typeof sep !== "string") throw new TypeError(`join() takes str for sep, got ${kindName(sep)}`);
+  // A text item's units, else its exact characters, which are no more than its units.
+  const sizes = value.map((item) => (typeof item === "string" ? item.length : textChars(item)));
+  const gaps = Math.max(value.length - 1, 0);
+  const units = sizes.reduce((a, b) => a + b, 0) + gaps * sep.length;
+  checkTextSize("join", units, () => {
+    const items = value.reduce((total: number, item, index) => {
+      return total + (typeof item === "string" ? codePointCount(item) : sizes[index]!);
+    }, 0);
+    return items + gaps * codePointCount(sep);
+  });
   return value.map(writeAsText).join(sep);
 }
 
@@ -303,14 +354,27 @@ for (const [name, ends] of [["strip", "both"], ["lstrip", "left"], ["rstrip", "r
 
 /**
  * Replace every occurrence of `old` in `s` with `new`. An empty `old` puts `new` before each
- * character (code point) and at the end, as Python's `str.replace` does.
+ * character (code point) and at the end, as Python's `str.replace` does. The text is sized
+ * from the number of replacements before it is built.
  */
 function replace(s: Value, old: Value, replacement: Value): string {
   const text = requireText("replace", s);
   const target = requireText("replace", old, "old");
   const by = requireText("replace", replacement, "new");
-  // `split`/`join`, not `replaceAll`, which reads `$&` and the like in the replacement.
-  if (target === "") return ["", ...text, ""].join(by);
+  if (target === "") {
+    const chars = codePointCount(text);
+    checkTextSize("replace", text.length + (chars + 1) * by.length, () => chars + (chars + 1) * codePointCount(by));
+    // `split`/`join`, not `replaceAll`, which reads `$&` and the like in the replacement.
+    return ["", ...text, ""].join(by);
+  }
+  // Counted as `split` finds them: left to right, without overlap.
+  let found = 0;
+  for (let at = text.indexOf(target); at !== -1; at = text.indexOf(target, at + target.length)) found += 1;
+  checkTextSize(
+    "replace",
+    text.length + found * (by.length - target.length),
+    () => codePointCount(text) + found * (codePointCount(by) - codePointCount(target)),
+  );
   return text.split(target).join(by);
 }
 registerTemplateFn("replace", { params: [{ name: "s" }, { name: "old" }, { name: "new" }], call: replace });
@@ -331,18 +395,23 @@ const FLOAT_TEXT = new RegExp(`^${SPACE}([+-]?)(?:(inf(?:inity)?)|(nan)|(${DECIM
 
 /**
  * Return `value` as text, as `${value}` writes it into text: text as is, anything else as
- * compact JSON.
+ * compact JSON, sized before it is written.
  */
 function str(value: Value): string {
   rejectNull("str", value);
   // `${x}` refuses a memory too: only an AGENT renders one, as its recall.
   if (MemoryRef.isMemoryRef(value)) throw new TypeError("str() can't write a memory as text");
+  if (typeof value !== "string") {
+    const chars = writtenJsonChars(value);
+    checkTextSize("str", chars, () => chars);
+  }
   return writeAsText(value);
 }
 
 /**
  * Return `value` as an int: text in Python's `int()` syntax (ASCII digits only), a float
- * truncated toward zero, a bool as 0 or 1.
+ * truncated toward zero, a bool as 0 or 1. Text with more digits than `YIAN_MAX_INT_DIGITS`,
+ * after leading zeros, is refused before it is read.
  */
 function int(value: Value): bigint {
   rejectNull("int", value, "0");
@@ -355,7 +424,11 @@ function int(value: Value): bigint {
   if (typeof value !== "string") throw new TypeError(`int() takes str, int, float or bool, got ${kindName(value)}`);
   const match = INT_TEXT.exec(value);
   if (match === null) throw new TypeError(`int() can't convert ${valueRepr(value)} to an int`);
-  const digits = BigInt(match[2]!.replaceAll("_", ""));
+  // Reading a long text as a bigint takes time that grows faster than its length.
+  const text = match[2]!.replaceAll("_", "").replace(/^0+(?=.)/, "");
+  const cap = current().maxIntDigits;
+  if (text.length > cap) throw new TypeError(`int() ${intOverCap(cap)}`);
+  const digits = BigInt(text);
   return match[1] === "-" ? -digits : digits;
 }
 

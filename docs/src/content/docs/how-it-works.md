@@ -84,8 +84,9 @@ The graph is fixed in two ways:
 - **Nodes don't edit the graph.** A node gets its inputs and returns a result. It can't add nodes,
   change edges or write another node's value.
 
-The one way a run's graph grows is through `call`, `map` and `loop`. When one of them runs, it
-expands its child flow into the same graph: the child's nodes join the run, with their own START
+The one way a run's graph grows is through `call`, `map`, `loop` and an agent's
+[flow tools](/agents/#flows-as-tools). When one of them runs, it expands its child flow into the
+same graph: the child's nodes join the run, with their own START
 and END. There is no separate child run and no separate log. Expanded nodes get ids that say where
 they came from, so the same run always builds the same ids:
 
@@ -96,6 +97,7 @@ they came from, so the same run always builds the same ids:
 | `each#2/echo` | Node `echo` for item 2 of the `map` node `each` (items count from 0) |
 | `loop#1/step` | Node `step` in turn 1 of the `loop` node `loop` (turns count from 0) |
 | `loop~2` | The check that decides whether `loop` runs turn 2 |
+| `helper/shout#0/loud` | Node `loud` in agent `helper`'s first call of its flow tool `shout` (calls count from 0) |
 
 Each loaded flow also has a fingerprint: a SHA-256 hash of the compiled graph. The run log
 records it, and a resume checks it.
@@ -119,8 +121,9 @@ Each node returns one of these outcomes:
 | A value | `pool_commit` (an agent adds one for its messages), then `node_succeeded` | The value is stored under the node's id; nodes that read it can run |
 | A route (`case`) | `node_routed` | The branches not taken are skipped |
 | An expansion (`call`, `map`, `loop`) | A `pool_commit` for each child START, then `node_expanded` | The child flow's nodes join the graph |
+| An agent's flow calls, as it waits | A `node_expanded` for each, then `node_waiting` | Each called flow's nodes join the graph; its END answers the call |
 | A wait (`take`, `sleep`, `ask`, a host call) | `node_waiting` | The node is set aside until what it waits on arrives. A `take` whose event is already there, or a `sleep` already due, stores its value at once instead |
-| A failure | `node_failed` | The run fails |
+| A failure | `node_failed` | The run fails, unless the node is inside an agent's [flow call](/agents/#flows-as-tools): that call fails, the flow's other nodes end, and the run goes on |
 
 The engine never asks what kind a node is. It reacts only to the outcome, so every node kind runs
 the same way.
@@ -165,12 +168,12 @@ The log is append-only:
 Every line has the same envelope. This is the record that stores `greet`'s value:
 
 ```json
-{"at":"2026-10-27T08:43:00.746Z","kind":"pool_commit","payload":{"key":"greet","kind":"str","node_id":"greet","value":"hi Ada"},"run_id":"281f84a4cdb54f26a59aaa23c0f1b593","schema":30,"seq":9}
+{"at":"2026-10-27T08:43:00.746Z","kind":"pool_commit","payload":{"key":"greet","kind":"str","node_id":"greet","value":"hi Ada"},"run_id":"281f84a4cdb54f26a59aaa23c0f1b593","schema":32,"seq":9}
 ```
 
 | Field | Meaning |
 |---|---|
-| `schema` | The log format version. This yian reads and writes only schema 30 |
+| `schema` | The log format version. This yian reads and writes only schema 32 |
 | `run_id` | The run's id; the same on every line |
 | `seq` | The record's place in the log, from 0 with no gaps |
 | `at` | When the record was written (UTC). Use `seq` for order, since clocks can move |

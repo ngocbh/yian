@@ -870,7 +870,7 @@ function checkHostHeaders(raw: Readonly<AgentConfig>, names: readonly string[]):
     const listed = [...expected.keys()].sort(compareCodeUnits).map((name) => expected.get(name)!);
     throw new AuthError(
       `This run's ${messageText(raw["provider"])} connection headers ${listed.join(", ")} came from the host's ` +
-        "llm_config.headers and are not recorded; pass headers to advance",
+        "llmConfig.headers and are not recorded; pass them to advance as headers, with apiKey",
     );
   }
   throw new AuthError(`llm_config.headers must have the header names this run recorded for the host key: ${diff}`);
@@ -884,8 +884,8 @@ function messageText(value: unknown): string {
 /** Say that this run's host key for `provider` is not recorded, and how to pass it again. */
 function hostKeyMissing(provider: unknown): string {
   return (
-    `This run's ${messageText(provider)} API key came from the host's llm_config.api_key and is not ` +
-    "recorded; pass apiKey to advance"
+    `This run's ${messageText(provider)} API key came from the host's llmConfig.api_key and is not ` +
+    "recorded; pass it to advance as apiKey"
   );
 }
 
@@ -1005,7 +1005,8 @@ export function checkModelConfig(config: Readonly<AgentConfig> | LLMConfig): [LL
   const { provider, model } = validated;
   if (provider !== null) {
     checkProviderBlock(validated, provider, connection);
-    const routed = model === null ? null : responsesBlockError(provider, model, validated.blockFor(provider));
+    const block = validated.blockFor(provider);
+    const routed = model === null ? null : responsesBlockError(provider, model, validated.api, block);
     if (routed !== null) throw new RangeError(routed);
   }
   return [validated, connection];

@@ -9,7 +9,7 @@
  * algorithms.
  */
 
-import { compareCodeUnits, OriginRef, reprText } from "../diagnostics.ts";
+import { compareCodeUnits, type Failure, OriginRef, reprText } from "../diagnostics.ts";
 import {
   buildValueAs,
   canonicalTypeLabel,
@@ -264,14 +264,27 @@ export class ValueTemplate {
     Object.freeze(this);
   }
 
-  /** Return the authored site registered for `path`, or `null`. */
+  /** Return the authored site registered for `path` (the first, when several are), or `null`. */
   originAt(path: ValuePath): OriginRef | null {
-    for (const [entryPath, origin] of this.origins) {
-      if (sameItems(entryPath, path)) return origin;
+    let index = originIndexes.get(this);
+    if (index === undefined) {
+      index = new Map();
+      for (const [entryPath, origin] of this.origins) {
+        const key = JSON.stringify(entryPath);
+        if (!index.has(key)) index.set(key, origin);
+      }
+      originIndexes.set(this, index);
     }
-    return null;
+    return index.get(JSON.stringify(path)) ?? null;
   }
 }
+
+/**
+ * Each template's origins by path, built on the first lookup: validators look up every leaf, so a
+ * scan per lookup would be quadratic in a binding's leaves. `JSON.stringify` keeps the index `0`
+ * and the key `"0"` apart.
+ */
+const originIndexes = new WeakMap<ValueTemplate, Map<string, OriginRef>>();
 
 /** Yield every binding nested in a template tree, each before those in its source. */
 function* treeBindings(node: unknown): Generator<Binding> {
@@ -971,6 +984,10 @@ export interface CallView {
   readonly result: Readonly<JsonObject> | null;
   /** The call's deadline as a UTC record time, or null when it has none. */
   readonly deadline: string | null;
+  /** A flow call's scope, `<agent>/<flow>#<k>`; `null` for any other call. */
+  readonly scope: string | null;
+  /** The failure a flow call took, once it closed `failed`; `null` otherwise. */
+  readonly failure: Failure | null;
 }
 
 /**

@@ -1,0 +1,70 @@
+# The flow `research` holds an agent: its model calls are its own (`c/helper/research#0/inner`),
+# its settings recorded at run start under its static path, and its answer is the flow's output.
+# The granting agent sits in a called def, so the scope nests under the call.
+kind: run
+flow: |
+  id: helping
+  name: helping
+  llm_config: {provider: anthropic, model: claude-test}
+  defs:
+    research:
+      description: Research a question.
+      input:
+        question: !str
+      nodes:
+        inner:
+          kind: agent
+          input:
+            question: ${input.question}
+          system_prompt: Research.
+          prompt: ${question}
+          output: str
+      output: ${inner.output}
+    work:
+      nodes:
+        helper:
+          kind: agent
+          tools: [research]
+          system_prompt: Help.
+          prompt: hi
+          output: str
+      output: ${helper.output}
+  nodes:
+    c:
+      kind: call
+      call: work
+  output: ${c.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  models:
+    c/helper:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: tool_call
+            id: call-a
+            name: research
+            arguments: {question: why?}
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: because
+    c/helper/research#0/inner:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: it rained
+expect:
+  output:
+    status: succeeded
+    output: because
+  trace: [[run_started, null, {effective_llm_by_static_path: {c/helper: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}, c/helper/research/inner: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, c], [pool_commit, c, {from: {}, key: c/__start__}], [node_expanded, c, {prune_ids: []}], [node_started, c/__start__], [node_succeeded, c/__start__, {commit: 9}], [node_started, c/helper], [node_step, c/helper, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {question: why?}, id: call-a, name: research, type: tool_call}], role: assistant}, purpose: chat, request_sha256: decf7157cac14325dcf0c83282eecab3529c366fd8b37308dfb76a1bb2436b9a, response_id: null, usage: null}}], [node_step, c/helper, {n: 2, step: {arguments: {question: why?}, call_id: r1/c/helper/1/0, flow: true, index: 0, kind: pending, reply: 1, scope: c/helper/research#0, tool: research, tool_call_id: call-a}}], [node_expanded, c/helper, {prune_ids: []}], [node_waiting, c/helper, {call_ids: [r1/c/helper/1/0]}], [node_started, c/helper/research#0/__start__], [pool_commit, c/helper/research#0/__start__, {from: {}}], [node_succeeded, c/helper/research#0/__start__, {commit: 19}], [node_started, c/helper/research#0/inner], [node_step, c/helper/research#0/inner, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: it rained, type: text}], role: assistant}, purpose: chat, request_sha256: f5c0ef9fe1492f6a17dfb110de849c4e272e282dd8c5de40ca30ea5c2a72b3fc, response_id: null, usage: null}}], [pool_commit, c/helper/research#0/inner, {value: it rained}], [pool_commit, c/helper/research#0/inner, {key: c/helper/research#0/inner.new_messages, steps: [22]}], [node_succeeded, c/helper/research#0/inner, {commit: 23, messages: 24}], [node_started, c/helper/research#0/__end__], [pool_commit, c/helper/research#0/__end__, {from: {c/helper/research#0/inner: 23}}], [node_succeeded, c/helper/research#0/__end__, {commit: 27}], [node_woken, c/helper], [node_step, c/helper, {n: 3, step: {call_id: call-a, is_error: false, kind: tool_result, output: it rained}}], [node_step, c/helper, {n: 4, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: because, type: text}], role: assistant}, purpose: chat, request_sha256: 06dab88adae1565298953790ff36b4762a3ef1d85e9d677b8638b63e73c49690, response_id: null, usage: null}}], [pool_commit, c/helper, {value: because}], [pool_commit, c/helper, {key: c/helper.new_messages, steps: [14, 30, 31]}], [node_succeeded, c/helper, {commit: 32, messages: 33}], [node_started, c/__end__], [pool_commit, c/__end__, {from: {c/helper: 32}, key: c}], [node_succeeded, c/__end__, {commit: 36}], [node_started, __end__], [pool_commit, __end__, {value: because}], [node_succeeded, __end__, {commit: 39}]]

@@ -63,7 +63,7 @@ import {
   valueConfigSubjects,
 } from "./compile/llm_cascade.ts";
 import { flowFingerprint } from "./compile/manifest.ts";
-import { type CompiledFlow, copyGraph, type Flow } from "./compile/model.ts";
+import { type CompiledFlow, copyGraph, type Flow, nodeChildren, type StaticChild } from "./compile/model.ts";
 import { typeRelation } from "./compile/validation.ts";
 import { ComposedFlow } from "./compose/build/pipeline.ts";
 import { CLOSE_MATCH_CUTOFF } from "./compose/helpers/tags.ts";
@@ -113,6 +113,7 @@ import {
   type StepExchange,
 } from "./nodes/agent/messages.ts";
 import { staticPathOf } from "./nodes/ids.ts";
+import { FLOW_SCOPE_LABEL } from "./nodes/agent/flow_tools.ts";
 import { typeToSchema } from "./nodes/agent/structured.ts";
 import { type CompleteResult, type LocalToolSpec, type Node, NodeKind, type RebuildCaps } from "./nodes/base.ts";
 import { applyDefaults, BindingError, checkInputNames, coerceInputs, copyValue } from "./nodes/binding.ts";
@@ -191,6 +192,7 @@ import {
   type GrantedTool,
   type GrantScope,
   localGroupScope,
+  localToolScope,
   reachedGroups,
   requestToolSpecs,
   type ToolGrant,
@@ -1057,6 +1059,32 @@ function checkHostHeaderNames(
   }
 }
 
+/**
+ * Return the error refusing a resume that wasn't given the host key a run's agents use: it names
+ * the key's providers and the call that passes it again, headers included when the key came with
+ * some.
+ *
+ * @param effective The recorded effective model map, keyed by static agent path.
+ * @param callTime The recorded `RunStarted.call_time_llm`, or `null`.
+ */
+function hostKeyNotGiven(
+  effective: Readonly<Record<string, Readonly<AgentConfig>>>,
+  callTime: Readonly<CallTimeLlm> | null,
+): RangeError {
+  const providers = hostKeyProviders(effective);
+  const host = selectionHost(callTime);
+  if (host !== null) providers.add(String(host["provider"]));
+  const names = Object.values(effective).flatMap((config) =>
+    config[HOST_KEY_MARKER] === true ? ((config[HEADER_NAMES_KEY] as string[] | undefined) ?? []) : [],
+  );
+  if (host?.["header_names"] !== undefined) names.push(...(host["header_names"] as string[]));
+  const given = names.length > 0 ? "apiKey, headers" : "apiKey";
+  return new RangeError(
+    `this run's ${[...providers].sort(compareCodeUnits).join(", ")} API key came from the host's ` +
+      `llmConfig.api_key and is not recorded; pass it again: advance({ log, ${given} })`,
+  );
+}
+
 /** Validate a host key without echoing it in errors. */
 function secretKey(raw: string): string {
   return new LLMConfig({ api_key: raw }).apiKey!;
@@ -1218,6 +1246,7 @@ async function startRun(
     const hostTypes = memoryTypeTools(flow.memoryTypes);
     checkToolGrants(flow.compiled, runTools);
     checkMemoryGrantNames(flow.compiled, runTools, hostTypes);
+    checkFlowGrantNames(flow.compiled, runTools);
     checkToolTypes(flow.compiled, runTools);
 
     // Identity belongs to the authored program, before cascade resolution or any per-run copy can
@@ -1475,8 +1504,8 @@ export interface AdvanceOptions {
   skills?: ReadonlyMap<string, Skill> | null;
   /**
    * The provider key of a run started with `llmConfig.api_key`, for the agents the log marks for it
-   * (and a call-time agent resolving to its provider); never recorded. A log that marks no agent
-   * ignores it.
+   * (and a call-time agent resolving to its provider); never recorded, so an unfinished run that
+   * uses it can't resume without it. A log that marks no agent ignores it.
    */
   apiKey?: string | null;
   /**
@@ -1558,8 +1587,9 @@ export interface AdvanceOptions {
  *   `flow` was passed, or its flow files were recorded and one was, `codeRoot` isn't the recorded
  *   code root, the flow fingerprint differs, the worker count is negative, `apiKey` or `headers`
  *   is refused or their header names aren't the recorded ones (the message never echoes a value),
- *   a recorded agent config has an invalid field, or, for an unfinished run, a tool or skill
- *   check of `runFlow` fails, a granted tool's spec or skill's text differs from the recorded one
+ *   a recorded agent config has an invalid field, or, for an unfinished run, its agents use the
+ *   host key and `apiKey` isn't given (before anything is appended), a tool or skill check of
+ *   `runFlow` fails, a granted tool's spec or skill's text differs from the recorded one
  *   (`resume refused: tools.<name> description differs from the recorded one`), a `tools` server
  *   was opened by another run in progress, or a started call-time agent resolves to another config
  *   than the one it recorded (`node '<path>' llm_config: recorded config differs from the
@@ -1665,6 +1695,10 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       if (options.checkLlmConfigs != null) {
         await options.checkLlmConfigs(legacyConnectionMap(recordedLlm), { callTimeHost: selectionHost(callTime) });
       }
+      // A resume without the key would fail its agent for good, so it is refused before any append.
+      if (apiKey === null && usesHostKey(state.effectiveLlmByStaticPath, callTime)) {
+        throw hostKeyNotGiven(state.effectiveLlmByStaticPath, callTime);
+      }
       // Skills need no server, so a changed one is refused before any server starts.
       checkRecordedSpecs("skills", start.skills, recordedSkills(flow.compiled, skills));
       runServers = await openRunServers(unopened, signal);
@@ -1672,6 +1706,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       const hostTypes = memoryTypeTools(flow.memoryTypes);
       checkToolGrants(flow.compiled, runTools);
       checkMemoryGrantNames(flow.compiled, runTools, hostTypes);
+      checkFlowGrantNames(flow.compiled, runTools);
       checkToolTypes(flow.compiled, runTools);
       checkRecordedSpecs("tools", start.tools, recordedTools(flow.compiled, runTools));
       checkRecordedToolGroups(start.toolGroups, recordedToolGroups(flow.compiled, runTools));
@@ -2281,13 +2316,16 @@ function settledNodeId(record: RunRecord): string | null {
   return null;
 }
 
-/** The open host calls of `waits`, in registration order, with the arguments and question `recorded` reads. */
+/**
+ * The open host calls of `waits`, in registration order, with the arguments and question
+ * `recorded` reads; a flow call is the run's to answer, so it is left out.
+ */
 function openHostCalls(
   waits: WaitsState,
   recorded: (call: Call) => { arguments: JsonObject | null; ask: AskQuestion | null },
 ): PendingCall[] {
   return [...waits.calls.values()]
-    .filter((call) => call.state === "open" && call.pendingSeq !== null && call.tool !== TAKE && call.tool !== SLEEP)
+    .filter((call) => call.state === "open" && call.pendingSeq !== null && call.tool !== TAKE && call.tool !== SLEEP && !call.flow)
     .map((call) => ({
       callId: call.callId,
       node: call.nodeId,
@@ -2951,10 +2989,17 @@ function recordedGrants(state: RunState): Pick<RebuildCaps, "skills" | "toolSpec
     grants: readonly ToolGrant[],
     loadSkill: ToolSpec | null,
     local: ReadonlyMap<string, readonly LocalToolSpec[]> = new Map(),
+    localTools: readonly LocalToolSpec[] = [],
   ) => {
-    // The node's own groups come first, as `ToolSet.withLocalGroups` puts them live.
+    // The node's own groups, then its own tools, come first, as `ToolSet.withLocalGroups` and
+    // `withLocalTools` put them live.
     const names = new Map([...local].map(([group, specs]) => [group, specs.map((spec) => spec.name)]));
-    const scopes = local.size === 0 ? [scope] : [localGroupScope(MEMORY_SCOPE_LABEL, names), scope];
+    const own = new Map(localTools.map((spec) => [spec.name, spec]));
+    const scopes = [
+      ...(local.size === 0 ? [] : [localGroupScope(MEMORY_SCOPE_LABEL, names)]),
+      ...(own.size === 0 ? [] : [localToolScope(FLOW_SCOPE_LABEL, new Set(own.keys()))]),
+      scope,
+    ];
     let granted: GrantedTool[];
     try {
       granted = expandGrants(grants, scopes);
@@ -2964,7 +3009,8 @@ function recordedGrants(state: RunState): Pick<RebuildCaps, "skills" | "toolSpec
     }
     const specOf = (tool: GrantedTool) => {
       if (tool.scope < scopes.length - 1) {
-        const { name, description, parameters } = local.get(tool.group!)!.find((spec) => spec.name === tool.tool)!;
+        const { name, description, parameters } =
+          tool.group === null ? own.get(tool.tool)! : local.get(tool.group)!.find((spec) => spec.name === tool.tool)!;
         return new ToolSpec({ name, description, parameters });
       }
       if (!Object.hasOwn(state.recordedTools, tool.key)) return null;
@@ -3224,6 +3270,27 @@ function checkMemoryGrantNames(
   }
 }
 
+/**
+ * Refuse a flow an agent grants under the name of a host tool or tool group of the run, before any
+ * record is written: the grant would mean two tools. Every static node is checked, child flows'
+ * included.
+ *
+ * @throws RangeError naming the node, the flow and the fix.
+ */
+function checkFlowGrantNames(flow: CompiledFlow, tools: ToolSet): void {
+  const scope = tools.scope();
+  for (const [nodeId, node] of staticNodes(flow)) {
+    for (const name of node.originChildSegments()) {
+      if (name === null) continue;
+      const host = scope.group(name) !== null ? "a tool group" : scope.hasTool(name) ? "a tool" : null;
+      if (host === null) continue;
+      throw new RangeError(
+        `${node.kind.toUpperCase()} node ${reprText(nodeId)}: \`${name}\` is both a flow it grants and ${host} of this run; rename one`,
+      );
+    }
+  }
+}
+
 /** Return each static node of `flow` by its path, with the input types of the flow it is declared in. */
 function nodesWithFlowInputs(flow: Flow): [string, Node, ReadonlyMap<string, Type | undefined>][] {
   const found: [string, Node, ReadonlyMap<string, Type | undefined>][] = [];
@@ -3233,7 +3300,7 @@ function nodesWithFlowInputs(flow: Flow): [string, Node, ReadonlyMap<string, Typ
     for (const [nodeId, node] of graph.nodes) {
       const nodePath = [...path, nodeId];
       found.push([nodePath.join("/"), node, inputs]);
-      for (const child of node.originChildren()) collect(child as Flow, nodePath);
+      for (const child of nodeChildren(node)) collect(child.flow, childPath(nodePath, child));
     }
   };
   collect(flow, []);
@@ -3300,7 +3367,7 @@ function checkTemplates(flow: Flow, path: readonly string[] = []): void {
       checkTemplateSource(binding, subject, reserved.has(key) ? new Map() : node.types);
     }
     node.validatePrompts({ path: nodePath });
-    for (const child of node.originChildren()) checkTemplates(child as Flow, [...path, nodeId]);
+    for (const child of nodeChildren(node)) checkTemplates(child.flow, childPath([...path, nodeId], child));
   }
 }
 
@@ -3557,8 +3624,13 @@ function collectStaticNodes(graph: Flow, path: readonly string[], found: [string
   for (const [nodeId, node] of graph.nodes) {
     const nodePath = [...path, nodeId];
     found.push([nodePath.join("/"), node]);
-    for (const child of node.originChildren()) collectStaticNodes(child as Flow, nodePath, found);
+    for (const child of nodeChildren(node)) collectStaticNodes(child.flow, childPath(nodePath, child), found);
   }
+}
+
+/** The static path of `child`'s nodes, under the node at `nodePath`: its segment after the node's, if any. */
+function childPath(nodePath: readonly string[], child: StaticChild): readonly string[] {
+  return child.segment === null ? nodePath : [...nodePath, child.segment];
 }
 
 /**

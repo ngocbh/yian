@@ -12,7 +12,8 @@
  * runs none of them: each call gets the cap's error result (`toolLimitText`), and the model answers
  * once more, reading no steer. That reply is the last: calls it still makes get the same result,
  * and its text is the answer. A host interrupt pending when such a reply arrives skips its calls
- * instead, as it does any reply's.
+ * instead, as it does any reply's. A reply the provider cut off at the token limit with no call
+ * whose arguments parsed is no answer: the node fails with `OutputTruncatedError`.
  *
  * Each model call is written as a `model_call` step before anything acts on its reply, and each
  * tool result as a `tool_result` step as soon as that call finishes, before the next model call
@@ -82,6 +83,7 @@ import {
   RequestDigest,
   sentCredentials,
 } from "./context.ts";
+import { flowFailureText, isFlowCall } from "./flow_tools.ts";
 import { Interrupted, ReplyInterrupted } from "./interrupts.ts";
 import {
   CAPPED_TOOL_ERROR,
@@ -105,7 +107,7 @@ import {
 } from "./results.ts";
 import { foldSteps, type SteerRender, steerMessages, steerValues } from "./messages.ts";
 import type { StructuredTarget } from "../../llm/structured.ts";
-import { generateStructured, rebuildStructuredRequests, typeToSchema } from "./structured.ts";
+import { generateStructured, OutputTruncatedError, rebuildStructuredRequests, typeToSchema } from "./structured.ts";
 
 /**
  * Run one AGENT invocation.
@@ -116,7 +118,9 @@ import { generateStructured, rebuildStructuredRequests, typeToSchema } from "./s
  * `maxToolIterations`; at the cap the answer stands and the steers stay queued). A reply at the
  * cap that still calls tools runs none: its calls get the cap's error result, and one more model
  * call, with no steer read, gives the answer (its text even when it calls tools again). Sets
- * `ctx.sent` to the built model's route credentials once the model is built. Each reason the
+ * `ctx.sent` to the built model's route credentials once the model is built. A reply cut off at
+ * the token limit (`finishReason` `length`) with no call whose arguments parsed fails the node,
+ * once any late steer it gets was read; a cut reply with a parsed call runs it. Each reason the
  * model gives for leaving out replay state reaches `ctx.emitEvent` once, as `ReplayDegraded`. With
  * `ctx.steps`, each model call and failed attempt is recorded as a `model_call` step and each
  * tool result as a `tool_result` step, a failed attempt's error scrubbed of every credential the
@@ -134,6 +138,7 @@ import { generateStructured, rebuildStructuredRequests, typeToSchema } from "./s
  * @throws RangeError when a grant names no tool of the run (`ToolSet.resolve`).
  * @throws TypeCheckError when a reply repeats a tool call id or its tool call arguments nest too deep.
  * @throws AgentLoopError when a tool returns `pending()` outside a durable run.
+ * @throws OutputTruncatedError when a reply was cut off at the token limit with no runnable call.
  * @throws CapabilityFault when a recorded call doesn't match the rebuilt request
  *   (`AgentSteps.takeRecorded`), or the loop was cut with no pending interrupt.
  * @throws Whatever building or calling the model throws (marked by `markModelFailure`), a stop's
@@ -294,7 +299,12 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
       // once an interrupt is seen (an earlier start's honor included).
       const late = !capped && !interruptRequested(interrupt, steps) && iterations !== ctx.maxToolIterations;
       if (late && queuedSteer(steps, ctx.steerInbox)) continue;
+      if (response.finishReason === "length") throw new OutputTruncatedError(model);
       return await answer();
+    }
+    // The cut arguments would only earn error results; a parsed call still runs.
+    if (response.finishReason === "length" && calls.every((call) => call.arguments === null)) {
+      throw new OutputTruncatedError(model);
     }
 
     const pended = new Map<number, string>();
@@ -682,13 +692,26 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
       turn.pended.set(index, callId);
       continue;
     }
+    // A flow call its scope answered: the agent records the answer the run shaped for it.
+    if (view?.state === "answered" && view.result !== null) {
+      const output = view.result["output"] as string;
+      const isError = view.result["is_error"] === true;
+      const written = steps.toolResult({ callId: call.id, startedAt: null, output, isError });
+      if (laterPending === null) reached = written;
+      pushToolMessage(turn, call, output, isError);
+      continue;
+    }
     if (ran === null && !joins(check.safe) && by !== null && !mayHaveRun(call, by)) return skipFrom(turn, index);
     if (view === undefined && check.planned.resumable) {
       await resendCall(turn, check.planned);
       reached = steps.lastWritten() ?? reached;
       continue;
     }
-    const { output, closed } = closerResult(closerReason(view?.closedReason ?? null));
+    // A flow call that failed: the model reads the failure.
+    const { output, closed } =
+      view?.closedReason === "failed" && view.failure !== null
+        ? { output: flowFailureText(call.name, view.scope, view.failure), closed: "failed" as const }
+        : closerResult(closerReason(view?.closedReason ?? null));
     const closer = steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed });
     // A later start that pended the call reached the next one already.
     if (laterPending === null) reached = closer;
@@ -922,6 +945,24 @@ async function runGroup(
   const settle = (planned: PlannedCall, startedAt: number | null, value: unknown, reported: boolean): ToolOutcome => {
     const { call, index, callId, deadline } = planned;
     try {
+      // A flow call pends without a host: the run grows the flow's scope and answers it, so it
+      // needs no durable log.
+      if (!reported && isFlowCall(value)) {
+        if (callId === undefined || turn.ctx.steps === undefined) {
+          throw new AgentLoopError(`agent node ${reprText(turn.ctx.nodeId)}: flow tool ${reprText(call.name)} runs only in a run`);
+        }
+        if (signal?.aborted) return { pending: callId };
+        const fields = { callId, tool: call.name, toolCallId: call.id, reply: turn.n, index, deadline, flowArguments: value.arguments };
+        // Arguments too large to record are the model's to fix, as its result.
+        const tooLarge = turn.steps.pendingTooLarge(fields);
+        if (tooLarge !== null) {
+          turn.steps.toolResult({ callId: call.id, startedAt, output: tooLarge, isError: true }, { settled: true });
+          return { content: tooLarge, reported: true };
+        }
+        turn.steps.pending(fields);
+        turn.pended.set(index, callId);
+        return { pending: callId };
+      }
       if (!reported && isPending(value)) {
         if (callId === undefined || turn.ctx.steps === undefined || !turn.ctx.steps.durable) {
           throw new AgentLoopError(

@@ -92,7 +92,7 @@ import {
   type NodeDescriptor,
   type OriginPresenter,
 } from "../nodes/base.ts";
-import { normalizeNodeSignatureCursor, parseNodes } from "../parse/nodes.ts";
+import { isIdentifier, normalizeNodeSignatureCursor, parseNodes, rejectNonIdentifierInput } from "../parse/nodes.ts";
 import type { SourceCatalogBuilder, SourceSitePath } from "../source/catalog.ts";
 import { SourceAccessError, type SourceCursor } from "../source/index.ts";
 import { AgentDescriptor, readLlmConfig } from "../nodes/agent.ts";
@@ -166,7 +166,7 @@ import { checkCaseBranches } from "../validate/case_branches.ts";
 import { checkCaseExhaustive, checkCaseWhenValues, exhaustiveCases } from "../validate/case_exhaustive.ts";
 import { checkImpossibleWhens, computeNarrowing, type Narrowing } from "../validate/narrowing.ts";
 import { checkFieldReads } from "../validate/field_reads.ts";
-import { checkSkippedArithmetic, nullSkippedOutputs, type SearchedWhen, SkipModel } from "../validate/skips.ts";
+import { checkSkippedReads, nullSkippedOutputs, type SearchedWhen, SkipModel } from "../validate/skips.ts";
 import type { FlowSource } from "../../runtime/log.ts";
 
 // Name for the single output of a bare whole-string `output:` binding. The value-mode EndNode
@@ -475,6 +475,8 @@ export interface CallableScope extends PrivateRegistrar {
   readonly memoryTypes: MemoryTypeTable;
   /** Whether `flowId` names a `defs:` callable or a `uses:` alias, which `call(...)` can run. */
   has(flowId: string): boolean;
+  /** The section declaring `flowId`: `defs` or `uses`; `null` for neither. */
+  section(flowId: string): "defs" | "uses" | null;
   /** Resolve one named or compiler-owned callable in this file scope. */
   resolve(flowId: string): ComposedFlow;
 }
@@ -1756,10 +1758,25 @@ interface ClosedFlow {
   readonly wiring: Map<string, Map<string, unknown>>;
 }
 
-/** Read the flow's parameters from the authored `input:` mapping or the resolved parameters. */
+/**
+ * Read the flow's parameters from the authored `input:` mapping or the resolved parameters.
+ *
+ * @throws LoadError when an input's name isn't an identifier, or as its reader throws.
+ */
 function readFlowParameters(options: AssembleOptions, ctx: AssembleContext): FlowParameters {
   const { inputsSection = null, inputParameters = null, inputsCursor = null, boundaryFieldRanges = null } = options;
   const { registry, owner, catalogBuilder, diagnostics } = ctx;
+  // Every flow's inputs are read as `${input.<name>}`, an inline body's too: the node's `input:`.
+  const names = inputsSection !== null ? Object.keys(inputsSection) : inputParameters!.map((each) => each.name);
+  const what = inputsSection !== null ? "flow input" : "inline body input";
+  for (const name of names) {
+    if (isIdentifier(name)) continue;
+    const range = locateSourceAccess(
+      diagnostics,
+      () => inputsCursor?.keyRangeOf(name) ?? boundaryFieldRanges?.get(name) ?? null,
+    );
+    rejectNonIdentifierInput(what, name, range, diagnostics);
+  }
   let inputs: Parameter[];
   if (inputsSection !== null) {
     if (inputsCursor !== null) {
@@ -2194,6 +2211,7 @@ function buildNodes(
   const ctxBase = new BuildContext({
     registry,
     resolver: (childId) => scope.resolve(childId),
+    callableSection: (name) => scope.section(name),
     // Inline CODE receives the owning document label only as an opaque traceback file name;
     // authored locations come from semantic origins. Inert for reference-mode CODE.
     sourceFile: diagnostics.label || "<inline-code>",
@@ -2520,8 +2538,9 @@ function finishOutputs(
   // An output that reads only nodes CASE routing may skip would leave END unreachable; the
   // explicit null default makes its END edge optional, so the run returns null.
   outputs = nullSkippedOutputs(outputs, skips);
-  // Arithmetic on such a value would fail at runtime with null; ask for a `:-` default.
-  checkSkippedArithmetic(flowWiring, outputs, skips, buildResults, {
+  // Arithmetic, a builtin, `in` or a comprehension on such a value would fail at runtime with
+  // null; ask for a `:-` default.
+  checkSkippedReads(flowWiring, outputs, skips, buildResults, {
     registry,
     valueMode,
     outputsRange,

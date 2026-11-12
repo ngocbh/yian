@@ -19,6 +19,7 @@ import {
   own,
   removedFormError,
   RETIRED_LLM_CONFIG_KEYS,
+  SUPPORTED_LLM_PROVIDERS,
   validateBaseUrl,
 } from "./config.ts";
 import {
@@ -30,6 +31,7 @@ import {
   validateHeaderNames,
 } from "./connection.ts";
 import { validateOrganization } from "./connection_settings.ts";
+import { blockSchema, checkObject, type Issue, ValidationError } from "./provider_blocks.ts";
 
 const REQUIRED_SELECTION_FIELDS: readonly string[] = ["provider", "model"];
 // Recorded only on agents marked for a host key: the nonsecret settings sent with it.
@@ -154,10 +156,13 @@ export function requireConcreteSelection(
 }
 
 /**
- * Reject unknown fields, retired options, and malformed host metadata before composition.
+ * Reject unknown fields, retired options, malformed host metadata and over-deep provider blocks
+ * before composition.
  *
  * `config` is one authored, host, or defaults layer, of yian values. Throws `RangeError` if the
- * layer sets a host-only or internal field, a retired or unknown key, or a malformed connection.
+ * layer sets a host-only or internal field, a retired or unknown key, or a malformed connection;
+ * `ValidationError` (a `RangeError`) if a provider block's free-form field nests deeper than
+ * `current().maxValueNesting` levels, located as `LLMConfig` locates it.
  */
 export function validateLayer(config: Readonly<AgentConfig>): void {
   const hostOnly = hostOnlyFieldError(config);
@@ -184,6 +189,22 @@ export function validateLayer(config: Readonly<AgentConfig>): void {
   }
   // `null`, not `undefined`, so a layer without a provider isn't checked as an openai one.
   if (has(config, "_connection")) validateConnection(config["_connection"], own(config, "provider") ?? null);
+  rejectDeepBlocks(config);
+}
+
+/**
+ * Refuse each provider block of `config` whose free-form field nests too deeply, before the
+ * layer is copied (the copy recurses). The block's other values are checked once it is merged.
+ */
+function rejectDeepBlocks(config: Readonly<AgentConfig>): void {
+  const issues: Issue[] = [];
+  for (const key of SUPPORTED_LLM_PROVIDERS) {
+    if (!has(config, key)) continue;
+    for (const issue of checkObject(blockSchema(key), config[key]).issues) {
+      if (issue.type === "too_deep") issues.push({ ...issue, loc: [key, ...issue.loc] });
+    }
+  }
+  if (issues.length > 0) throw new ValidationError("LLMConfig", issues);
 }
 
 /** Reject the fields only a resolved, recorded config may hold. */

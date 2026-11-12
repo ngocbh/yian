@@ -3087,7 +3087,8 @@ async function checkInvariants(
     if (kind === "node_succeeded" || kind === "node_routed" || kind === "node_waiting") {
       inFlight.delete(payload["node_id"] as string);
     }
-    if (kind === "node_expanded") inFlight.delete(payload["spawner_id"] as string);
+    // A flow call's growth leaves its agent in flight.
+    if (kind === "node_expanded" && payload["call_id"] === null) inFlight.delete(payload["spawner_id"] as string);
     if (kind === "node_failed") inFlight.delete((payload["failure"] as Readonly<Case>)["node_id"] as string);
     if (inFlight.size > workers) {
       fail(`${inFlight.size} nodes are in flight after record ${seq}, over ${workers}`);
@@ -3346,8 +3347,9 @@ export async function crashSweep(
   const spec = get(case_, "host", {}) as Case;
   // A `same_as` member shares its stub's scripts, so each stub counts once.
   const tools = [...new Map(stubTools(spec).map(({ where, stub }) => [where, stub])).values()];
+  // A `pending: true` stub has no script.
   const entries = tools.flatMap(({ results }) =>
-    (isMapping(results) ? Object.values(results) : [results]).flat(),
+    results === undefined ? [] : (isMapping(results) ? Object.values(results) : [results]).flat(),
   );
   const strong =
     !Object.hasOwn(spec, "human") &&

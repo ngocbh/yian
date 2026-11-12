@@ -22,7 +22,7 @@ import { type Scheduler, syncFolder, warn } from "../../platform.ts";
 import type { Skill } from "../../skills/catalog.ts";
 import type { ToolGrant } from "../../tools/grants.ts";
 import type { ToolSet } from "../../tools/registry.ts";
-import { type JsonObject, logJson } from "../../typesys/json.ts";
+import { eventBytes, type JsonObject, logJson } from "../../typesys/json.ts";
 import { FileRef, jsonSafeText, type Type, type ValueRecord } from "../../typesys/values.ts";
 import { CapabilityFault, type NodeCaps, type SteerInbox } from "../base.ts";
 import type { NodeSteps } from "../contracts.ts";
@@ -160,6 +160,18 @@ export interface ToolResultFields {
   readonly closed?: "skipped" | CloserReason;
 }
 
+/** A pending call as its `pending` step records it (`AgentSteps.pending`). */
+export interface PendingFields {
+  readonly callId: string;
+  readonly tool: string;
+  readonly toolCallId: string;
+  readonly reply: number;
+  readonly index: number;
+  readonly deadline: string | null;
+  /** A flow call's arguments; `null` or absent for any other call. */
+  readonly flowArguments?: Readonly<Record<string, unknown>> | null;
+}
+
 /** A tool call's result as an earlier start recorded it. */
 export interface RecordedResult {
   readonly output: string;
@@ -227,6 +239,8 @@ export class AgentSteps {
   readonly #results: ReadonlyMap<number, StepExchange["results"]>;
   /** The `n` of each recorded `pending` step, by its yian call id. */
   readonly #pending: ReadonlyMap<string, number>;
+  /** How many flow calls the node recorded, by flow: the next one's scope number. */
+  readonly #flowCalls = new Map<string, number>();
   /** The recorded steer steps, by the index in `#calls` of the logical call they preceded. */
   readonly #steers: Map<number, readonly NumberedStep[]>;
   /** The `by` of a recorded `interrupted` step: the interrupt an earlier start honored, else `null`. */
@@ -261,6 +275,11 @@ export class AgentSteps {
         step["kind"] === "pending" ? [[step["call_id"] as string, index + 1] as const] : [],
       ),
     );
+    for (const step of steps?.prior ?? []) {
+      if (step["kind"] !== "pending" || step["flow"] !== true) continue;
+      const tool = step["tool"] as string;
+      this.#flowCalls.set(tool, (this.#flowCalls.get(tool) ?? 0) + 1);
+    }
     this.#steers = new Map(
       [...exchanges, open].flatMap((exchange, index) => (exchange.steers.length > 0 ? [[index, exchange.steers]] : [])),
     );
@@ -489,20 +508,33 @@ export class AgentSteps {
    * Write a call whose handler returned `pending()` as a `pending` step: `call_id` (the yian call
    * id), `tool`, `tool_call_id`, `reply` (the reply's `model_call` step `n`), `index` (the call's
    * place among the reply's tool calls), and `deadline` (a record time) for an `ask_user` with a
-   * timeout.
+   * timeout. A flow tool's call adds `flow: true`, its `arguments`, which its scope starts with,
+   * and that `scope`'s callsite, `<node>/<flow>#<k>`, `k` counting the node's calls of the flow.
    *
    * @returns The step's `n`.
    * @throws Whatever `NodeSteps.record` throws.
    */
-  pending(call: {
-    callId: string;
-    tool: string;
-    toolCallId: string;
-    reply: number;
-    index: number;
-    deadline: string | null;
-  }): number {
-    const { callId, tool, toolCallId, reply, index, deadline } = call;
+  pending(call: PendingFields): number {
+    const step = this.#pendingStep(call);
+    const n = this.#record(step, { settled: true });
+    if (step["flow"] === true) this.#flowCalls.set(call.tool, (this.#flowCalls.get(call.tool) ?? 0) + 1);
+    return n;
+  }
+
+  /**
+   * Return why `call`'s `pending` step can't be recorded: it is over the run's
+   * `YIAN_MAX_EVENT_BYTES`, as a flow call's large arguments can make it; `null` when it fits.
+   */
+  pendingTooLarge(call: PendingFields): string | null {
+    const max = this.#steps?.maxEventBytes;
+    const size = eventBytes(this.#pendingStep(call));
+    if (max === undefined || size <= max) return null;
+    return `Arguments for ${call.tool} make a call of ${size} bytes, over the run's limit of ${max} (YIAN_MAX_EVENT_BYTES); send less.`;
+  }
+
+  /** The `pending` step `pending` writes for `call`. */
+  #pendingStep(call: PendingFields): ValueRecord {
+    const { callId, tool, toolCallId, reply, index, deadline, flowArguments = null } = call;
     const step: ValueRecord = {
       kind: "pending",
       call_id: callId,
@@ -512,7 +544,11 @@ export class AgentSteps {
       index: BigInt(index),
     };
     if (deadline !== null) step["deadline"] = deadline;
-    return this.#record(step, { settled: true });
+    if (flowArguments === null) return step;
+    step["flow"] = true;
+    step["arguments"] = flowArguments as ValueRecord;
+    step["scope"] = `${this.#nodeId}/${tool}#${this.#flowCalls.get(tool) ?? 0}`;
+    return step;
   }
 
   /**

@@ -49,7 +49,7 @@ it, and the loop goes on.
 | `output` | The reply's type (default `str`) |
 | `retries` | Extra attempts to correct a reply that doesn't fit `output:` (default 2) |
 | `asserts` | Checks on the result (see [Expressions](/expressions/)) |
-| `tools` | The tools the model may call: tools, tool groups and [memory](/memory/) inputs by name, or `{group: [tool, ...]}` |
+| `tools` | The tools the model may call: tools, tool groups, [flows](#flows-as-tools) and [memory](/memory/) inputs by name, or `{group: [tool, ...]}` |
 | `skills` | Skill names, or `all` |
 | `steer_inbox` | An `Inbox` input whose messages steer the agent while it runs |
 | `llm_config` | Provider, model and request settings (see [Models and providers](/models/)) |
@@ -296,6 +296,7 @@ server. Each entry grants one of these:
 | `ask_user` | Built in. The model asks the person running the flow a question, with optional answer choices. `yian run` asks in the terminal; a host must pass an `ask` handler in its tools |
 | MCP servers | `yian run` reads them from config files (below). Each server is a tool group named after it |
 | Host tools | A program passes them to the run (below) |
+| Flows | A `defs:` entry or `uses:` alias of the agent's file, granted by its name (below) |
 
 - The calls in one reply run one at a time, except that consecutive calls to tools marked safe to
   run together start together: a host tool's `isConcurrencySafe`, or an MCP server's
@@ -418,6 +419,61 @@ hold tools of one name, but two tools that could show one name, such as a tool `
 group `github`'s `search`, are refused. The `tools` option replaces the run's tools, so pass
 everything the flow names. See
 [Embedding yian](/embedding/) for tool context, pending calls and MCP from a program.
+
+### Flows as tools
+
+An agent can grant a flow its file names, a `defs:` entry or a [`uses:`](/control-flow/#import-a-flow-from-another-file-with-uses)
+alias, as one tool. The model decides when to call it, as for any tool:
+
+<!-- yian-test {"replies": ["The flow said HI!"]} -->
+
+```yaml title="helper.yaml" check=runnable
+id: helper
+name: helper
+defs:
+  shout:
+    description: Shout a text back in capitals.
+    input:
+      text: !str
+    nodes:
+      loud:
+        kind: code
+        input:
+          text: ${input.text}
+        output: str
+        code: return inputs.text.toUpperCase() + "!"
+    output: ${loud.output}
+nodes:
+  helper:
+    kind: agent
+    tools: [shout]
+    prompt: Shout hi, then say what came back.
+    output: str
+output: ${helper.output}
+```
+
+```console
+$ yian run helper.yaml
+The flow said HI!
+```
+
+- The model sees the flow's name, its `description:` and its inputs as the arguments: each input
+  is a property, required unless it has a default or is `Optional`.
+- A call runs the flow inside the run, as a `call` node runs a child: its nodes join the graph
+  under the agent, as `helper/shout#0/loud` for the agent's first call of `shout`, and every step
+  is in the run log. A crash inside it resumes inside it, and a question it asks waits like any
+  other: the host answers its `ask` node's call, not the flow call.
+- The model reads the flow's output: text as itself, any other value as JSON, cut to
+  `YIAN_MAX_FLOW_RESULT_CHARS` characters (20,000 by default). The run log holds the whole value.
+- A reply's flow calls start once its other calls have run, and run together, up to the worker
+  count, as `map` items do. Each counts as one tool call in its turn.
+- A node of the flow that fails fails the run.
+- A granted flow needs a `description:`, and inputs a model can send: an `Inbox`, memory or `file`
+  input is a load error. So is the group form `{shout: [x]}`, a flow named like a built-in tool or
+  a memory input, and a flow that grants itself, directly or through another flow. A run whose
+  host tools or tool groups have a granted flow's name is refused before it starts.
+- A host never sees a flow call: `pendingCalls` and a run's `waits` leave it out, and `complete`
+  refuses it (`not_host_call`).
 
 ## Skills
 

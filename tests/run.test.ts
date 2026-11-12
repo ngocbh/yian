@@ -1576,14 +1576,6 @@ test("staticNodes lists a flow an agent grants as a tool under the agent and the
   ]);
 });
 
-test("a run refuses a flow whose agent grants a flow as a tool, before it writes anything", async () => {
-  const path = join(dir, "flow-tool.jsonl");
-  const error = await run(await load(FLOW_TOOL_FLOW), {}, { log: path, models: scripted([]) }).catch((caught) => caught);
-  expect(error).toBeInstanceOf(RangeError);
-  expect((error as Error).message).toBe("AGENT node 'helper' grants flow 'shout' as a tool; flows as tools don't run yet");
-  expect(existsSync(path)).toBe(false);
-});
-
 test("staticNodes lists the paths a run's effective model map uses", async () => {
   const flow = await load(NESTED_FLOW);
   const path = join(dir, "nested.jsonl");

@@ -387,7 +387,7 @@ abort its `signal` instead: the run records a stop, rejects with the signal's re
 | `iterRunRecords(log)` | The log's records, one by one, while another process may still be writing |
 | `foldRunLog(log)` | Each record with the value it wrote |
 | `agentCalls(log)`, `agentCall(log, { nodeId, n })` | The agents' model calls, and one call's full request and reply |
-| `updateRunIndex(runsDir)`, `readRunIndex(runsDir)` | An `index.sqlite` with one row per run folder, which you can delete and rebuild. An update rebuilds a damaged one with a warning, and a read gives `[]` until then |
+| `updateRunIndex(runsDir)`, `readRunIndex(runsDir)` | An `index.sqlite` with one row per run folder, which you can delete and rebuild. An update rebuilds a damaged one with a warning, and a read gives `[]` until then. An update with nothing new takes no write lock, and one that writes commits every 200 runs; `{ runIds }` updates only those runs, as when one ends. `readRunIndex(runsDir, { result: false })` leaves out each row's `result` |
 
 `inspectRun(log).wakeAt` is the earliest deadline of a waiting run: a host that keeps runs
 waiting calls `advance` then.

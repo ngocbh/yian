@@ -71,6 +71,7 @@ import {
   type LlmConfigsCheck,
   loadRecordedFlow,
   readRunIndex,
+  RunIndexBusyError,
   type RunIndexRow,
   type RunInspection,
   type RunResult,
@@ -672,10 +673,10 @@ export function removeEmptyDir(dir: string): void {
 }
 
 /**
- * @internal Update the run index of `~/.yian/runs` (`updateRunIndex`, waiting at most a second for
- * another update) after the run in `log` ended, when `log` is a run folder's log there; a failed
- * update is a `warning:` line on stderr, and the logs it skips aren't reported (`yian status`
- * reports them).
+ * @internal Update the run index of `~/.yian/runs` with the run in `log` alone (`updateRunIndex` with
+ * its `runIds`, waiting at most a second for another update) after that run ended, when `log` is a
+ * run folder's log there; a failed update is a `warning:` line on stderr, and a log it skips isn't
+ * reported (`yian status` reports it). Other run folders are left to `yian status`.
  */
 export async function indexRun(log: string, io: CliIo): Promise<void> {
   const runsDir = defaultRunsDir(io.env);
@@ -687,10 +688,10 @@ export async function indexRun(log: string, io: CliIo): Promise<void> {
       return null;
     }
   };
-  const folder = real(dirname(dirname(log)));
-  if (folder === null || folder !== real(runsDir)) return;
+  const runFolder = real(dirname(log));
+  if (runFolder === null || dirname(runFolder) !== real(runsDir)) return;
   try {
-    withWarnings(() => {}, () => updateRunIndex(runsDir, { timeoutMs: 1000 }));
+    withWarnings(() => {}, () => updateRunIndex(runsDir, { timeoutMs: 1000, runIds: [basename(runFolder)] }));
   } catch (error) {
     if (!(error instanceof Error)) throw error;
     await printStyled(io, `warning: run index not updated: ${error.message}`, "yellow");
@@ -1650,16 +1651,24 @@ function runFolderMismatch(log: string, runId: string | null, runsDir: string): 
  * run `ready` and `wake_at` (`false` and `null` otherwise), and `unreadable` (`seq` and `reason`,
  * or `null`). A log the update can't read is a `warning:` line on stderr: once until it changes, or
  * on every update for a file error such as no permission, which leaves the run's row as it was; so
- * is a damaged index, which the update rebuilds. An index that can't be updated (another update
- * held it too long, or SQLite can't use it) prints its message on stderr and exits 1 (`run.setup`).
+ * is a damaged index, which the update rebuilds. While another update holds the index too long,
+ * the rows it holds are listed, after the warning `run index is being updated; listing may be
+ * stale`. An index that can't be read or updated otherwise (SQLite can't use it) prints its
+ * message on stderr and exits 1 (`run.setup`). Only `json` reads each row's result.
  */
 async function listRuns({ json }: { json: boolean }, io: CliIo): Promise<number> {
   const runsDir = defaultRunsDir(io.env);
   let rows: RunIndexRow[] = [];
   try {
     if (existsSync(runsDir)) {
-      updateRunIndex(runsDir);
-      rows = readRunIndex(runsDir);
+      try {
+        updateRunIndex(runsDir);
+      } catch (error) {
+        // The index lags the logs but never leads them, so what it holds is safe to list.
+        if (!(error instanceof RunIndexBusyError)) throw error;
+        await printStyled(io, "warning: run index is being updated; listing may be stale", "yellow");
+      }
+      rows = readRunIndex(runsDir, { result: json });
     }
   } catch (error) {
     if (!(error instanceof Error) || error instanceof TypeError) throw error;

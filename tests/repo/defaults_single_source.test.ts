@@ -146,6 +146,7 @@ const ALLOWED: Record<string, string> = {
   "llm_clients/auth/openai.ts: OpenAIAuth.deviceLogin.timeoutMs": "sign-in timeout",
   "llm_clients/auth/store.ts: AuthStore.constructor.lockTimeoutMs": "file lock timeout",
   "runtime/run_index.ts: DEFAULT_TIMEOUT_MS": "run index lock timeout, a host call's timeoutMs",
+  "runtime/run_index.ts: BATCH_RUNS": "runs an index update reads between commits, so readers see its rows as it goes",
   "typesys/event_limit.ts: MAX_EVENT_BYTES":
     "the built-in YIAN_MAX_EVENT_BYTES, its one source: defaults.ts's entry reads it, and builtin-free layers read it here",
   "llm_clients/auth/store.ts: AuthStore.constructor.refreshMarginMs": "time before token expiry to refresh",

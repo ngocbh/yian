@@ -73,6 +73,7 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MAX_COMPREHENSION_ITEMS` | limit | 1,000,000 | 1 or more | Most items the comprehensions of one expression may bind, counting every `for` clause |
 | `YIAN_MAX_INT_DIGITS` | limit | 4,300 | 640 or more | Most decimal digits an int that an operator or a builtin gives may have |
 | `YIAN_MAX_JSON_INDENT` | limit | 10 | 2 or more | Largest indent `render_as_json` takes |
+| `YIAN_MAX_TEXT_CHARS` | limit | 10,000,000 | 1 or more | Most characters a text that an operator or a builtin gives may have |
 | `YIAN_MAX_SHOWN_VALUE_CHARS` | limit | 200 | 2 or more | Longest rendering of a value or key an error message shows |
 | `YIAN_MAX_FAILURE_CHARS` | limit | 10,000 | 1 or more | Longest message or traceback a failure records; a longer one is cut and says how much was cut |
 | `YIAN_AGENT_RETRIES` | setting | 2 | 0 or more | Extra attempts an AGENT gets to correct an invalid structured reply when the node sets none |

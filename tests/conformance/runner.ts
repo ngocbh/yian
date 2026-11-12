@@ -3347,8 +3347,9 @@ export async function crashSweep(
   const spec = get(case_, "host", {}) as Case;
   // A `same_as` member shares its stub's scripts, so each stub counts once.
   const tools = [...new Map(stubTools(spec).map(({ where, stub }) => [where, stub])).values()];
+  // A `pending: true` stub has no script.
   const entries = tools.flatMap(({ results }) =>
-    (isMapping(results) ? Object.values(results) : [results]).flat(),
+    results === undefined ? [] : (isMapping(results) ? Object.values(results) : [results]).flat(),
   );
   const strong =
     !Object.hasOwn(spec, "human") &&

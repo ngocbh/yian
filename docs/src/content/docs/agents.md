@@ -467,7 +467,12 @@ The flow said HI!
   `YIAN_MAX_FLOW_RESULT_CHARS` characters (20,000 by default). The run log holds the whole value.
 - A reply's flow calls start once its other calls have run, and run together, up to the worker
   count, as `map` items do. Each counts as one tool call in its turn.
-- A node of the flow that fails fails the run.
+- A failure inside the flow is the call's error result, and the agent goes on: the model reads
+  `Flow shout failed at node loud (node.execute): <message>`. The flow's other unfinished nodes end
+  with it, its open questions included. A call whose flow would grow the run's graph past
+  `YIAN_MAX_TOTAL_NODES` doesn't start, and the model reads why.
+- A host interrupt of the agent's `steer_inbox` ends its running flow calls where they are, open
+  questions included, and the model reads them as interrupted, as for a pending `ask_user`.
 - A granted flow needs a `description:`, and inputs a model can send: an `Inbox`, memory or `file`
   input is a load error. So is the group form `{shout: [x]}`, a flow named like a built-in tool or
   a memory input, and a flow that grants itself, directly or through another flow. A run whose
@@ -548,8 +553,8 @@ output: ${worker.output :- "(stopped)"}
 - **Interrupts.** A host can interrupt every agent reading an inbox. The agent stops at its next
   safe point: before a model call, while it waits for a reply, between streamed chunks, at the end
   of the stream (a reply whose text had all arrived is still cut), or before a tool call. A running
-  tool call finishes. In `yian run`'s chat, Ctrl-C or Esc during a turn
-  does this.
+  tool call finishes, but a running [flow call](#flows-as-tools) ends where it is. In `yian run`'s
+  chat, Ctrl-C or Esc during a turn does this.
 - **The result.** An interrupted agent's output is null. With an `Optional(...)` output it
   succeeds, so the flow can route on null as above. Any other output fails the node with
   `agent.interrupted`.

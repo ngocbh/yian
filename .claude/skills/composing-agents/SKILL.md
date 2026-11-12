@@ -228,7 +228,8 @@ output:
 - **An agent can grant a flow as a tool**: `tools: [summarize]` naming a `defs:` entry or `uses:`
   alias. The flow needs a `description:` and inputs a model can send (no Inbox, memory or `file`
   input); its inputs are the tool's arguments, and the model reads its output as JSON (text as
-  itself). It runs inside the run, its nodes under `<agent>/<flow>#<k>`. See
+  itself), or its failure as the call's error. It runs inside the run, its nodes under
+  `<agent>/<flow>#<k>`. See
   [Flows as tools](https://yian.readthedocs.io/agents/#flows-as-tools).
 - **An agent a host may interrupt needs an `Optional(...)` output.** An interrupted agent's
   output is null; with `str` or any other type it fails with `agent.interrupted`. This applies

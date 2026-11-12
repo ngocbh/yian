@@ -1,0 +1,28 @@
+# A flow is one tool: the group form doesn't grant it.
+kind: load
+flow: |
+  id: f
+  name: f
+  defs:
+    classify:
+      description: Sort a ticket.
+      input:
+        text: !str
+      nodes:
+        pick: !str bug
+      output: ${pick.output}
+  nodes:
+    helper:
+      kind: agent
+      prompt: Help.
+      output: str
+      tools: [{classify: [pick]}]
+  output: ${helper.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''helper'': `tools:` grants flow `classify` as a group; a flow is one tool, so grant it as `classify`'
+      frames:
+      - label: flow.yaml
+        range: [16, 12, 16, 32]

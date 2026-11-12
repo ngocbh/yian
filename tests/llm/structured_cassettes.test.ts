@@ -126,7 +126,15 @@ const MISSING = {
 const THINKING: JsonObject = { thinking: { type: "adaptive" }, output_config: { effort: "high" } };
 const REFUSED = { error: StructuredOutputError, message: "the model refused: I can't help with that." };
 const INVALID = { error: StructuredOutputError, message: "Invalid json output: not json" };
-const TRUNCATED = { error: StructuredOutputError, message: 'Invalid json output: {"answer": "x", "score": 1' };
+const TRUNCATED = {
+  error: StructuredOutputError,
+  message: 'Invalid json output: {"answer": "x", "score": 1; the reply was cut off at the token limit',
+};
+/** A call of the Record tool whose arguments `raw` are no JSON object. */
+const badArgs = (raw: string) => ({
+  error: StructuredOutputError,
+  message: `the Record call's arguments are not a JSON object: ${raw}`,
+});
 
 /**
  * What `plan.parse` gives, a value or an error's class and message; or the kind of the
@@ -214,10 +222,10 @@ const SCENARIOS: Record<string, Scenario> = {
   // A MiniMax model off MiniMax's route sends no `reasoning_split`.
   qwen_minimax_name: scenario("chat", "qwen", "MiniMax-M2.5", "corpus:Rec", "unforced_tool", { value: REC }),
   // Truncated arguments leave the call unparsed.
-  chat_invalid_args: scenario("chat", "xai", "grok-4", "corpus:Rec", "forced_tool", MISSING),
+  chat_invalid_args: scenario("chat", "xai", "grok-4", "corpus:Rec", "forced_tool", badArgs('{"answer": "x", "score": 1')),
   chat_other_tool_first: scenario("chat", "xai", "grok-4", "corpus:Rec", "forced_tool", { value: REC }),
   // `[1, 2]` is no JSON object.
-  chat_nonobject_args: scenario("chat", "xai", "grok-4", "corpus:Rec", "forced_tool", MISSING),
+  chat_nonobject_args: scenario("chat", "xai", "grok-4", "corpus:Rec", "forced_tool", badArgs("[1, 2]")),
   // The first attempt's stream is cut short; the retry's reply is parsed.
   x_stream_retry: scenario("chat", "xai", "grok-4", "corpus:Rec", "forced_tool", { value: REC }, {
     budget: 1,

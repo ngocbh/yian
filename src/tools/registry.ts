@@ -38,7 +38,7 @@ import {
 import { ASK, ASK_USER, isPending, SLEEP, TAKE, ToolContext, toolCallId } from "./context.ts";
 import { isToolCheckError, ToolCheckError, toolErrorKinds } from "./errors.ts";
 import { FunctionTool, isFunctionTool, type StandardIssue, type StandardResult } from "./function_tools.ts";
-import { GrantError, type GrantScope, localGroupScope, visibleToolName } from "./grants.ts";
+import { GrantError, type GrantScope, localGroupScope, localToolScope, visibleToolName } from "./grants.ts";
 import { isMcpServer, type McpServer } from "./mcp.ts";
 import { inputTypeFromJsonSchema } from "./types.ts";
 
@@ -561,12 +561,17 @@ export class ToolSet {
   // Groups local to one node (`withLocalGroups`), tried before the run's, and their scope's label.
   private localGroups: ReadonlyMap<string, ReadonlyMap<string, FunctionTool>>;
   private localLabel: string;
+  // Top-level tools local to one node (`withLocalTools`), tried before the run's, and their label.
+  private localTools: ReadonlyMap<string, FunctionTool>;
+  private localToolsLabel: string;
 
   constructor(tools?: Readonly<Record<string, ToolEntry>> | null, options?: { context?: unknown }) {
     this.toolMap = null;
     this.groupMap = new Map();
     this.localGroups = new Map();
     this.localLabel = "";
+    this.localTools = new Map();
+    this.localToolsLabel = "";
     this.recordNames = new Map();
     this.boundRunId = "";
     this.boundSignal = undefined;
@@ -701,6 +706,8 @@ export class ToolSet {
       return tool;
     }
     const toolId = typeof ref === "string" ? ref : ref.name;
+    const local = this.localTools.get(toolId);
+    if (local !== undefined) return local;
     if ((toolId === ASK || toolId === ASK_USER) && !this.toolMap?.has(toolId)) {
       throw new RangeError(`no ask handler for this run; ${ASK_HINT}`);
     }
@@ -779,13 +786,38 @@ export class ToolSet {
   }
 
   /**
-   * The scopes this set's grants resolve in, in order: the groups `withLocalGroups` added, when
-   * there are any, then `scope()`.
+   * The scopes this set's grants resolve in, in order: the groups `withLocalGroups` added and the
+   * tools `withLocalTools` added, each when there are any, then `scope()`.
    */
   scopes(): GrantScope[] {
-    if (this.localGroups.size === 0) return [this.scope()];
-    const names = new Map([...this.localGroups].map(([group, members]) => [group, [...members.keys()]]));
-    return [localGroupScope(this.localLabel, names), this.scope()];
+    const scopes: GrantScope[] = [];
+    if (this.localGroups.size > 0) {
+      const names = new Map([...this.localGroups].map(([group, members]) => [group, [...members.keys()]]));
+      scopes.push(localGroupScope(this.localLabel, names));
+    }
+    if (this.localTools.size > 0) scopes.push(localToolScope(this.localToolsLabel, new Set(this.localTools.keys())));
+    return [...scopes, this.scope()];
+  }
+
+  /**
+   * @internal Return a copy that also holds `tools`, top-level tools local to one node such as
+   * the flows it grants. A bare name of one resolves to it before any tool of this set, and
+   * `scopes()` tries them after the local groups. The copy keeps this set's run, signal, context,
+   * tools and local groups.
+   *
+   * @param label What the local tools are, for messages: `this node's flows`.
+   * @throws {RangeError} Two of `tools` share a name.
+   */
+  withLocalTools(tools: readonly FunctionTool[], label: string): this {
+    const local = new Map<string, FunctionTool>();
+    for (const tool of tools) {
+      if (local.has(tool.name)) throw new RangeError(`local tools hold ${reprText(tool.name)} twice`);
+      local.set(tool.name, tool);
+    }
+    const copy = Object.assign(Object.create(Object.getPrototypeOf(this)), this) as this;
+    copy.localTools = local;
+    copy.localToolsLabel = label;
+    return copy;
   }
 
   /**

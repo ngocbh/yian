@@ -203,8 +203,8 @@ matches, so it is a load error: under `log_hold`, `when: buy` on `${decide.outpu
 ## Reuse a flow with `defs` and `call`
 
 `defs:` holds named child flows. Each entry has the same shape as a flow: `input:`, `nodes:` and
-`output:`. A `call` node runs one with arguments in `input:`; a `map` node runs one per item of
-`over:`, with the item as `${item}`:
+`output:`, and an optional `description:`. A `call` node runs one with arguments in `input:`; a
+`map` node runs one per item of `over:`, with the item as `${item}`:
 
 ```yaml title="greet_team.yaml" check=runnable
 id: greet_team
@@ -566,7 +566,8 @@ loud:
 
 - Write exactly one of `call:` and `nodes:`. An inline body needs `output:`; `output:` beside a
   named `call:` is a load error.
-- The node's `input:` becomes the body's inputs, read as `${input.<name>}`.
+- The node's `input:` becomes the body's inputs, read as `${input.<name>}`, so each name is an
+  identifier.
 - The body can't read its parent's inputs, nodes or `${item}`. Pass what it needs through
   `input:`. `${system.today}`, `${system.now}` and `${system.run_id}` work everywhere.
 - Each input's type is inferred from its binding. When it can't be proven, such as for an empty

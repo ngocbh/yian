@@ -153,6 +153,28 @@ export const ENTRIES = Object.freeze([
     group: "limit",
     minimum: 1,
   }),
+  // Chained `for` clauses multiply, so one comprehension could otherwise bind billions of items.
+  entry("MAX_COMPREHENSION_ITEMS", {
+    default: 1_000_000,
+    description: "Most items the comprehensions of one expression may bind, counting every `for` clause",
+    group: "limit",
+    minimum: 1,
+  }),
+  // CPython's default and smallest `sys.set_int_max_str_digits` values. `*` and `**` can double
+  // an int's size per operator, so without a cap one expression could take minutes and gigabytes.
+  entry("MAX_INT_DIGITS", {
+    default: 4300,
+    description: "Most decimal digits an int that an operator or a builtin gives may have",
+    group: "limit",
+    minimum: 640,
+  }),
+  // `render_as_json`'s default indent is 2, so the minimum is 2.
+  entry("MAX_JSON_INDENT", {
+    default: 10,
+    description: "Largest indent `render_as_json` takes",
+    group: "limit",
+    minimum: 2,
+  }),
   // A cut keeps one character less than the cap and adds `…`, so the minimum is 2.
   entry("MAX_SHOWN_VALUE_CHARS", {
     default: 200,
@@ -182,6 +204,13 @@ export const ENTRIES = Object.freeze([
     group: "setting",
     minimum: 1,
     noLimit: -1,
+  }),
+  // As much as a FileMemory read shows; the run log keeps the whole output.
+  entry("MAX_FLOW_RESULT_CHARS", {
+    default: 20_000,
+    description: "Most characters of a flow tool's output an AGENT's model reads; a longer one is cut",
+    group: "setting",
+    minimum: 1,
   }),
   // 0 keeps a TOOL node calling its tool once, since a retried call repeats any side
   // effect the failed attempt already had.
@@ -414,6 +443,14 @@ export const ENTRIES = Object.freeze([
   entry("MAX_EMBEDDING_REPLY_BYTES", {
     default: 32 * 1024 * 1024,
     description: "Largest reply read from an embeddings request",
+    group: "input cap",
+    minimum: 1,
+  }),
+  // Each value read costs tens of bytes, so a text at its byte cap could build a tree many times its
+  // size. The largest real replies (a model listing, a batch of embeddings) hold well under this.
+  entry("MAX_RECEIVED_JSON_VALUES", {
+    default: 1_000_000,
+    description: "Most values in one JSON text from a provider or MCP server: an event, a line, a reply or an MCP message",
     group: "input cap",
     minimum: 1,
   }),

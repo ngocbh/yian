@@ -23,7 +23,7 @@
  */
 
 import { END_ID, START_ID } from "../../compile/model.ts";
-import { compareCodeUnits, reprText } from "../../diagnostics.ts";
+import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
 import { ExpressionError } from "../../expr/expressions.ts";
 import { EXPRESSION_KEYWORDS } from "../../expr/grammar.ts";
 import { scanTemplate, Span } from "../../expr/template.ts";
@@ -89,6 +89,30 @@ export function isIdentifier(name: unknown): boolean {
 export function identifierSuggestion(name: string): string {
   const suggestion = name.replace(NON_IDENTIFIER_CHAR, "_");
   return /^[0-9]/.test(suggestion) ? `_${suggestion}` : suggestion;
+}
+
+/**
+ * Refuse a flow input whose name isn't an identifier, since no `${input.<name>}` can read it. An
+ * empty name is left to the caller's own message.
+ *
+ * @param what What the name is, for the message, such as `flow input`.
+ * @param name The authored name.
+ * @param range Where the error points.
+ * @param diagnostics Factory for located load errors.
+ * @throws LoadError when `name` is a non-empty name that isn't an identifier.
+ */
+export function rejectNonIdentifierInput(
+  what: string,
+  name: string,
+  range: SourceRange | null,
+  diagnostics: LoadDiagnostics,
+): void {
+  if (name === "" || isIdentifier(name)) return;
+  throw diagnostics.error(
+    `${what} ${reprText(name)} must be an identifier (${IDENTIFIER_RULE}) so \${input.${name}} can read it; ` +
+      `try ${reprText(identifierSuggestion(name))}`,
+    { range },
+  );
 }
 
 /** The message for a `nodes:` entry that is neither a node body nor a tagged value. */

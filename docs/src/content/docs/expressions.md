@@ -345,5 +345,6 @@ names its variable:
 | The comprehensions in one expression bind at most 1,000,000 items, counting every `for` clause: `[1 for a in xs for b in xs]` over 1,000 items binds 1,001,000 | `YIAN_MAX_COMPREHENSION_ITEMS` |
 | An int an operator or a builtin gives has at most 4,300 digits, Python's limit for writing an int as text. Reading or comparing a longer int is fine | `YIAN_MAX_INT_DIGITS` |
 | `render_as_json` takes an indent of at most 10 | `YIAN_MAX_JSON_INDENT` |
+| A text an operator or a builtin gives has at most 10,000,000 characters. `replace`, `join`, `str`, `render_as_json` and `+` count the text before they build it. Reading, comparing or slicing a longer text is fine | `YIAN_MAX_TEXT_CHARS` |
 
 See [Reference](/reference/) for every limit.

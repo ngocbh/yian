@@ -27,6 +27,7 @@
 import { type OriginRef, reprText } from "../diagnostics.ts";
 import { type RefRenamed, rewriteConditionRefs, rewriteTemplateRefs } from "../expr/index.ts";
 import { type Node, NodeKind } from "../nodes/base.ts";
+import type { AgentNode } from "../nodes/agent/node.ts";
 import type { CallNode } from "../nodes/call/node.ts";
 import {
   Assertion,
@@ -463,6 +464,35 @@ export function loopContinueSubgraph(
   });
 }
 
+/**
+ * The pure flow-tool builder: the scope an AGENT's call of a flow it grants grows into.
+ *
+ * The flow's clone at `scope` (`<agent>/<grant>#<k>`), its START seeded with the call's arguments
+ * as constants, as a CALL's child is. Its END commits under its own id: the run answers the call
+ * from it, and the agent stays in flight. `originContext` is the agent's failure trace.
+ *
+ * @throws TypeError or RangeError when `child` has malformed growth metadata, or as `cloneChild`.
+ */
+export function flowToolSubgraph(
+  child: Flow,
+  scope: string,
+  args: Readonly<Record<string, unknown>>,
+  options: { originContext?: readonly OriginRef[] } = {},
+): Flow {
+  validateGrowthMetadata(child);
+  return cloneChild(child, scope, args, { originContext: options.originContext ?? [] });
+}
+
+/** Require an AGENT flow call's seed: its flow tool's name, its arguments and its scope. */
+function flowCallSeed(seed: JsonValue): { tool: string; arguments: JsonObject; scope: string } {
+  const record = growthRecord(seed, "flow call");
+  const { tool, arguments: args, scope } = record;
+  if (typeof tool !== "string" || typeof scope !== "string" || !isRecord(args) || Object.keys(record).length !== 3) {
+    reject(new YianTypeError("a flow call's growth seed must be {tool, arguments, scope}"));
+  }
+  return { tool: tool as string, arguments: args as JsonObject, scope: scope as string };
+}
+
 /** Throw `error` wrapped as a growth rejection. */
 function reject(error: Error): never {
   throw new GrowthRejected(error);
@@ -511,12 +541,14 @@ function loopGrowthSeed(seed: JsonValue): [JsonObject, number] {
  * package-root run boundary injects this builder into the kind-blind runtime for both live growth
  * and durable replay.
  *
- * @param spawner The CALL, MAP or LOOP node whose seed is interpreted.
+ * @param spawner The CALL, MAP or LOOP node whose seed is interpreted, or the AGENT making a flow
+ *   call.
  * @param seed The persisted builder input that node produced: a CALL record, a MAP list of
- *   records, or a LOOP `[record, iteration]` pair with a `bigint` iteration.
+ *   records, a LOOP `[record, iteration]` pair with a `bigint` iteration, or an AGENT flow call's
+ *   `{tool, arguments, scope}`.
  * @returns The self-contained fragment the runtime splices into its private live graph.
  * @throws GrowthRejected when a legal spawner kind produced a malformed seed.
- * @throws RangeError when `spawner` isn't a CALL, MAP or LOOP.
+ * @throws RangeError when `spawner` isn't a CALL, MAP, LOOP or AGENT.
  */
 export function buildGrow(spawner: Node, seed: JsonValue): Flow {
   switch (spawner.kind) {
@@ -550,6 +582,12 @@ export function buildGrow(spawner: Node, seed: JsonValue): Flow {
         loop.respawn(iteration + 1, carried as Readonly<Record<string, Value>>),
         { originContext: loop.failureTrace() },
       );
+    }
+    case NodeKind.AGENT: {
+      const { tool, arguments: args, scope } = flowCallSeed(seed);
+      const flowTool = (spawner as AgentNode).flowTools.find((each) => each.name === tool);
+      if (flowTool === undefined) reject(new YianRangeError(`agent node ${reprText(spawner.id)} grants no flow ${reprText(tool)}`));
+      return flowToolSubgraph(flowTool!.child as Flow, scope, { ...args }, { originContext: spawner.failureTrace() });
     }
     default:
       throw new YianRangeError(`node ${reprText(spawner.id)} (${spawner.kind}) cannot build graph growth`);

@@ -158,6 +158,22 @@ export function localGroupScope(label: string, groups: ReadonlyMap<string, reado
   };
 }
 
+/**
+ * Return a scope of tools local to one node, such as the flows it grants: each a top-level tool by
+ * its name. Only a name grant reaches one.
+ */
+export function localToolScope(label: string, names: ReadonlySet<string>): GrantScope {
+  return {
+    label,
+    bareMembers: false,
+    group: () => null,
+    hasTool: (name) => names.has(name),
+    groupsHolding: () => [],
+    groupNames: () => [],
+    identity: (group, tool) => JSON.stringify([group, tool]),
+  };
+}
+
 /** One granted tool: the name the model sees, the tool it names, and that tool's identity. */
 export interface GrantedTool {
   /** The name the model sees: `<group>_<tool>` through a group grant, else the tool's own name. */

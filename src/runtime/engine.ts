@@ -82,6 +82,7 @@ import {
   planExpansion,
   prepareExpandedFromPlan,
   prepareExpansionCommit,
+  prepareFlowExpanded,
   prepareAppliedStop,
   prepareComplete,
   prepareInboxClosed,
@@ -107,6 +108,7 @@ import {
   requireExpansionOutput,
   resolveFromPool,
   stepsWithSteerValues,
+  ungrownFlowCalls,
 } from "./state.ts";
 import { availableUnread, decideWait, dueTimeouts, isWakeable, nodeCalls, wakeAt } from "./waits.ts";
 
@@ -867,6 +869,17 @@ export class FlowEngine {
   #commitPending(nodeId: string, outcome: Pending, steerInbox: string | null): readonly RunEvent[] {
     const { state, log } = this;
     if (outcome.wait === null) {
+      // Each flow call the node waits on grows its flow's scope first, which answers it.
+      for (const callId of ungrownFlowCalls(state, nodeId, outcome.callIds)) {
+        let grown: PreparedTransition;
+        try {
+          grown = prepareFlowExpanded(state, nodeId, callId, this.growBuilder);
+        } catch (error) {
+          if (!(error instanceof GrowthRejected)) throw error;
+          return commitPrepared(log, state, this.#prepareContractFailure(nodeId, "contract.growth", error.original, null));
+        }
+        this.#publish(commitPrepared(log, state, grown), this.#events);
+      }
       return commitPrepared(log, state, prepareNodeWaiting(state, nodeId, { callIds: outcome.callIds, steerInbox }));
     }
     const callId = toolCallId(state.runId!, nodeId);

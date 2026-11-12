@@ -238,6 +238,12 @@ export type WaitRequest =
 /** A host's answer to a pending call. */
 export type CompleteResult = { readonly output: unknown } | { readonly error: string };
 
+/** What shaping a call's answer reads beyond the answer: the run's limits. */
+export interface WaitResultOptions {
+  /** The run's `YIAN_MAX_FLOW_RESULT_CHARS`; the process's when absent. */
+  readonly maxFlowResultChars?: number;
+}
+
 /**
  * "I wait": on host calls the node registered (`callIds`), or on a take or sleep the engine
  * decides when it commits the outcome (`wait`). Exactly one is given. Frozen.
@@ -396,12 +402,14 @@ export interface RebuildCaps {
    * The request's tool list as the run bound it: the specs of the tools `grants` grant, each under
    * the name the model saw, then `loadSkill` when given; `null` when a grant can't be resolved.
    * A grant resolves first in `local`, groups of the node's own (its memories) with their tools'
-   * specs in order, then in the tools the run recorded, as the live loop resolves it.
+   * specs in order, then in `localTools`, top-level tools of its own (the flows it grants), then
+   * in the tools the run recorded, as the live loop resolves it.
    */
   readonly toolSpecs: (
     grants: readonly ToolGrant[],
     loadSkill: ToolSpec | null,
     local?: ReadonlyMap<string, readonly LocalToolSpec[]>,
+    localTools?: readonly LocalToolSpec[],
   ) => readonly ToolSpec[] | null;
   /**
    * Gives the invocation's structured target (`ModelAccess.structuredTarget`), or builds its model
@@ -1285,13 +1293,14 @@ export abstract class Node {
   }
 
   /**
-   * Shape the `tool_result` step for `complete` on one of this node's calls. Pure. The base node
-   * registers no host calls, so it throws; ToolNode overrides it.
+   * Shape the `tool_result` step for `complete` on one of this node's calls, or for the run's own
+   * answer to an AGENT's flow call (cut to `options.maxFlowResultChars`, the run's limit). Pure.
+   * The base node registers no host calls, so it throws; ToolNode and AgentNode override it.
    *
    * @throws TypeError on the base. An override throws TypeCheckError when the output fails the
    *   tool's output type or ask's answer schema.
    */
-  waitResultStep(call: CallView, _result: CompleteResult): JsonObject {
+  waitResultStep(call: CallView, _result: CompleteResult, _options: WaitResultOptions = {}): JsonObject {
     throw new YianTypeError(`node ${reprText(this.id)} registers no host calls; it can't take ${reprText(call.callId)}'s result`);
   }
 

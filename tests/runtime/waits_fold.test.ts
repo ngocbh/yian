@@ -180,6 +180,8 @@ test("a pending step registers a host call; its tool_result answers it", () => {
       assigned: [],
       closedInbox: false,
       closedReason: null,
+      flow: false,
+      scope: null,
     },
   ]);
   applyWaitsRecord(w, { seq: 4, record: new NodeWaitingRecord("ask", ["r/ask/1"]) });

@@ -206,6 +206,13 @@ export const ENTRIES = Object.freeze([
     minimum: 1,
     noLimit: -1,
   }),
+  // As much as a FileMemory read shows; the run log keeps the whole output.
+  entry("MAX_FLOW_RESULT_CHARS", {
+    default: 20_000,
+    description: "Most characters of a flow tool's output an AGENT's model reads; a longer one is cut",
+    group: "setting",
+    minimum: 1,
+  }),
   // 0 keeps a TOOL node calling its tool once, since a retried call repeats any side
   // effect the failed attempt already had.
   entry("TOOL_RETRIES", {

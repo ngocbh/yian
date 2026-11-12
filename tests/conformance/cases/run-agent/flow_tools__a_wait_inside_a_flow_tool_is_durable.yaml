@@ -1,0 +1,49 @@
+# Inside the flow `approve`, a TOOL node calls a host tool that answers later: the run ends
+# waiting with the agent waiting on its flow call and the TOOL node on its host call. The host
+# answers the TOOL node's call by its id; the flow ends, and its output answers the agent.
+kind: run
+flow: |
+  id: helping
+  name: helping
+  llm_config: {provider: anthropic, model: claude-test}
+  defs:
+    approve:
+      description: Ask a person to approve an item.
+      input:
+        item: !str
+      nodes:
+        sign:
+          kind: tool
+          tool_id: sign
+          input:
+            item: ${input.item}
+          output: str
+      output: ${sign.output}
+  nodes:
+    helper:
+      kind: agent
+      tools: [approve]
+      system_prompt: Help.
+      prompt: hi
+      output: str
+  output: ${helper.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    sign:
+      parameters: {type: object, properties: {item: {type: string}}}
+      pending: true
+  sends:
+  - {complete: r1/helper/approve#0/sign, output: signed}
+  models:
+    helper:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: c1, name: approve, arguments: {item: the refund}}
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: it was signed}]}
+expect:
+  output: {status: succeeded, output: it was signed}
+  trace: [[run_started, null, {effective_llm_by_static_path: {helper: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, helper], [node_step, helper, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {item: the refund}, id: c1, name: approve, type: tool_call}], role: assistant}, purpose: chat, request_sha256: 3f91946bc649376812c7d500dbeed3026c2e80c86f3832ddb4d4099bde536851, response_id: null, usage: null}}], [node_step, helper, {n: 2, step: {arguments: {item: the refund}, call_id: r1/helper/1/0, flow: true, index: 0, kind: pending, reply: 1, scope: helper/approve#0, tool: approve, tool_call_id: c1}}], [node_expanded, helper, {prune_ids: []}], [node_waiting, helper, {call_ids: [r1/helper/1/0]}], [node_started, helper/approve#0/__start__], [pool_commit, helper/approve#0/__start__, {from: {}}], [node_succeeded, helper/approve#0/__start__, {commit: 14}], [node_started, helper/approve#0/sign], [node_step, helper/approve#0/sign, {n: 1, step: {arguments: {item: the refund}, call_id: r1/helper/approve#0/sign, kind: pending, tool: sign}}], [node_waiting, helper/approve#0/sign, {call_ids: [r1/helper/approve#0/sign]}], [run_waiting, null, {node_ids: [helper, helper/approve#0/sign]}], [node_step, helper/approve#0/sign, {n: 2, step: {call_id: r1/helper/approve#0/sign, kind: tool_result, output: {kind: str, value: signed}}}], [node_woken, helper/approve#0/sign], [pool_commit, helper/approve#0/sign, {value: signed}], [node_succeeded, helper/approve#0/sign, {commit: 22}], [node_started, helper/approve#0/__end__], [pool_commit, helper/approve#0/__end__, {from: {helper/approve#0/sign: 22}}], [node_succeeded, helper/approve#0/__end__, {commit: 25}], [node_woken, helper], [node_step, helper, {n: 3, step: {call_id: c1, is_error: false, kind: tool_result, output: signed}}], [node_step, helper, {n: 4, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: it was signed, type: text}], role: assistant}, purpose: chat, request_sha256: 4595d08419b3bccbcd6e8b9c09a2a1b2c89c6a637cc7c6c1c2c35c83ba73fdd8, response_id: null, usage: null}}], [pool_commit, helper, {value: it was signed}], [pool_commit, helper, {key: helper.new_messages, steps: [9, 28, 29]}], [node_succeeded, helper, {commit: 30, messages: 31}], [node_started, __end__], [pool_commit, __end__, {value: it was signed}], [node_succeeded, __end__, {commit: 34}]]

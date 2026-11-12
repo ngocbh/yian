@@ -87,6 +87,7 @@ import {
 } from "../contracts.ts";
 import { staticPathOf } from "../ids.ts";
 import { type AgentRunContext, checkStopped, DEFAULT_SYSTEM, sentCredentials } from "./context.ts";
+import { checkedFlowTools, type FlowTool } from "./flow_tools.ts";
 import { Interrupted } from "./interrupts.ts";
 import { modelFailureCode } from "./live.ts";
 import {
@@ -363,13 +364,18 @@ export class AgentNode extends Node {
   prompt: PromptText | readonly PromptItem[];
   /** The system prompt template or `Verbatim` text replacing the default one; `null` keeps the default. */
   systemPrompt: PromptText | null;
-  /** The authored tool grants, which may name host-filled groups and memory inputs. */
+  /** The authored tool grants, which may name host-filled groups, memory inputs and flows. */
   tools: readonly ToolGrant[];
   /**
    * The memory inputs of this agent's flow that `tools` names, each riding the reserved
    * `__memory_<input>` wiring; a grant naming one is a memory grant, never a host one.
    */
   readonly memoryInputs: readonly string[];
+  /**
+   * The flows `tools` grants by name, in grant order, each baked by Compose; a grant naming one is
+   * a flow grant, never a host one.
+   */
+  flowTools: readonly FlowTool[];
   /**
    * The authored source each cascade pass re-resolves: a record, or a template or binding for a
    * layer holding values.
@@ -438,11 +444,12 @@ export class AgentNode extends Node {
    *   defaults to `null`, the default rendering.
    * @param options.memoryInputs The memory inputs of the agent's flow its grants name; defaults
    *   to none.
+   * @param options.flowTools The flows its grants name, baked; defaults to none.
    * @throws TypeError for a bad `prompt` item, `systemPrompt`, `llmConfig`, `variables`,
-   *   `steerInbox`, `steerRender` or `memoryInputs`.
+   *   `steerInbox`, `steerRender`, `memoryInputs` or `flowTools`.
    * @throws RangeError for an empty list prompt or one ending in an assistant message, the retired
-   *   `builtin_tools` grant, a steer render without a steer inbox, or a variable whose name repeats
-   *   or whose default is missing or invalid.
+   *   `builtin_tools` grant, a steer render without a steer inbox, a variable whose name repeats
+   *   or whose default is missing or invalid, a flow tool named twice, or one no name grant names.
    * @throws SkillError for a `load_skill` tool grant or a bad skill grant.
    */
   constructor(
@@ -460,6 +467,7 @@ export class AgentNode extends Node {
       steerInbox?: boolean;
       steerRender?: string | null;
       memoryInputs?: readonly string[] | null;
+      flowTools?: readonly FlowTool[] | null;
     } = {},
   ) {
     const {
@@ -475,6 +483,7 @@ export class AgentNode extends Node {
       steerInbox = false,
       steerRender = null,
       memoryInputs = null,
+      flowTools = null,
     } = options;
     super(nodeId, { title });
     if (isList(prompt)) checkPromptItems(nodeId, prompt);
@@ -489,6 +498,12 @@ export class AgentNode extends Node {
       throw new TypeError(`AGENT node ${reprText(nodeId)}: memoryInputs must be a list of input names`);
     }
     this.memoryInputs = Object.freeze([...(memoryInputs ?? [])]);
+    this.flowTools = checkedFlowTools(nodeId, flowTools ?? []);
+    for (const { name } of this.flowTools) {
+      if (!this.tools.some((grant) => grant.kind === "name" && grant.name === name)) {
+        throw new RangeError(`AGENT node ${reprText(nodeId)}: flow tool ${reprText(name)} isn't granted by name in tools`);
+      }
+    }
     if (this.tools.some((grant) => grant.kind === "name" && grant.name === "builtin_tools")) {
       throw new RangeError(
         "builtin_tools belonged to the removed native Codex integration. " +
@@ -717,7 +732,24 @@ export class AgentNode extends Node {
 
   /** Return the authored `tools:` grants of host tools and groups, which may name host-filled groups. */
   override grantedTools(): readonly ToolGrant[] {
-    return this.tools.filter((grant) => !this.memoryInputs.includes(grantName(grant)));
+    const flows = new Set(this.flowTools.map((tool) => tool.name));
+    return this.tools.filter((grant) => !this.memoryInputs.includes(grantName(grant)) && !flows.has(grantName(grant)));
+  }
+
+  /** Return the flows this agent grants as tools, in grant order. */
+  override originChildren(): readonly unknown[] {
+    return this.flowTools.map((tool) => tool.child);
+  }
+
+  /** Each flow tool's nodes sit under its name: `helper/summarize/line`. */
+  override originChildSegments(): readonly (string | null)[] {
+    return this.flowTools.map((tool) => tool.name);
+  }
+
+  /** Hold the flows given in place of the flow tools' flows, index for index. */
+  override setOriginChildren(children: readonly unknown[]): void {
+    super.setOriginChildren(children);
+    this.flowTools = Object.freeze(this.flowTools.map((tool, index) => Object.freeze({ ...tool, child: children[index] })));
   }
 
   /** Return the authored `tools:` grants of memories, in grant order. */

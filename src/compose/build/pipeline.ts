@@ -475,6 +475,8 @@ export interface CallableScope extends PrivateRegistrar {
   readonly memoryTypes: MemoryTypeTable;
   /** Whether `flowId` names a `defs:` callable or a `uses:` alias, which `call(...)` can run. */
   has(flowId: string): boolean;
+  /** The section declaring `flowId`: `defs` or `uses`; `null` for neither. */
+  section(flowId: string): "defs" | "uses" | null;
   /** Resolve one named or compiler-owned callable in this file scope. */
   resolve(flowId: string): ComposedFlow;
 }
@@ -2209,6 +2211,7 @@ function buildNodes(
   const ctxBase = new BuildContext({
     registry,
     resolver: (childId) => scope.resolve(childId),
+    callableSection: (name) => scope.section(name),
     // Inline CODE receives the owning document label only as an opaque traceback file name;
     // authored locations come from semantic origins. Inert for reference-mode CODE.
     sourceFile: diagnostics.label || "<inline-code>",

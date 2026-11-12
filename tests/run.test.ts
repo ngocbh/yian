@@ -1541,6 +1541,49 @@ test("staticNodes lists every node path of a flow and its child flows, with its 
   expect(staticNodes(flow)[0]![1]).toBe(flow.compiled.nodes.get("call")!);
 });
 
+const FLOW_TOOL_FLOW = `
+id: helping
+name: helping
+defs:
+  shout:
+    description: Shout the text back.
+    input:
+      text: !str
+    nodes:
+      inner:
+        kind: agent
+        input:
+          text: \${input.text}
+        prompt: Shout \${text}.
+    output: \${inner.output}
+nodes:
+  helper:
+    kind: agent
+    prompt: Help.
+    tools: [shout]
+output: \${helper.output}
+`;
+
+test("staticNodes lists a flow an agent grants as a tool under the agent and the grant's name", async () => {
+  const flow = await load(FLOW_TOOL_FLOW);
+  expect(staticNodes(flow).map(([nodePath, node]) => [nodePath, node.kind])).toEqual([
+    ["helper", "agent"],
+    ["helper/shout/inner", "agent"],
+    ["helper/shout/__start__", "start"],
+    ["helper/shout/__end__", "end"],
+    ["__start__", "start"],
+    ["__end__", "end"],
+  ]);
+});
+
+test("a run refuses a flow whose agent grants a flow as a tool, before it writes anything", async () => {
+  const path = join(dir, "flow-tool.jsonl");
+  const error = await run(await load(FLOW_TOOL_FLOW), {}, { log: path, models: scripted([]) }).catch((caught) => caught);
+  expect(error).toBeInstanceOf(RangeError);
+  expect((error as Error).message).toBe("AGENT node 'helper' grants flow 'shout' as a tool; flows as tools don't run yet");
+  expect(existsSync(path)).toBe(false);
+});
+
 test("staticNodes lists the paths a run's effective model map uses", async () => {
   const flow = await load(NESTED_FLOW);
   const path = join(dir, "nested.jsonl");

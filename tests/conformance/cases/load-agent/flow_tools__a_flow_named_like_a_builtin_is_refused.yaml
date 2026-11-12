@@ -1,0 +1,26 @@
+# A flow granted under a built-in tool's name would hide that tool.
+kind: load
+flow: |
+  id: f
+  name: f
+  defs:
+    ask_user:
+      description: Ask.
+      nodes:
+        a: !str hi
+      output: ${a.output}
+  nodes:
+    helper:
+      kind: agent
+      prompt: Help.
+      output: str
+      tools: [ask_user]
+  output: ${helper.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''helper'': flow `ask_user` has the name of a built-in tool; rename the defs entry'
+      frames:
+      - label: flow.yaml
+        range: [14, 12, 14, 22]

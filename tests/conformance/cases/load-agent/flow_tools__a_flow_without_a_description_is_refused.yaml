@@ -1,0 +1,27 @@
+# The model reads a flow tool's description to choose it, so a granted flow needs one.
+kind: load
+flow: |
+  id: f
+  name: f
+  defs:
+    classify:
+      input:
+        text: !str
+      nodes:
+        pick: !str bug
+      output: ${pick.output}
+  nodes:
+    helper:
+      kind: agent
+      prompt: Help.
+      output: str
+      tools: [classify]
+  output: ${helper.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''helper'': flow `classify` is granted as a tool, so it needs a `description:`, which the model reads to choose it; add one to the defs entry'
+      frames:
+      - label: flow.yaml
+        range: [15, 12, 15, 22]

@@ -227,6 +227,8 @@ export class AgentSteps {
   readonly #results: ReadonlyMap<number, StepExchange["results"]>;
   /** The `n` of each recorded `pending` step, by its yian call id. */
   readonly #pending: ReadonlyMap<string, number>;
+  /** How many flow calls the node recorded, by flow: the next one's scope number. */
+  readonly #flowCalls = new Map<string, number>();
   /** The recorded steer steps, by the index in `#calls` of the logical call they preceded. */
   readonly #steers: Map<number, readonly NumberedStep[]>;
   /** The `by` of a recorded `interrupted` step: the interrupt an earlier start honored, else `null`. */
@@ -261,6 +263,11 @@ export class AgentSteps {
         step["kind"] === "pending" ? [[step["call_id"] as string, index + 1] as const] : [],
       ),
     );
+    for (const step of steps?.prior ?? []) {
+      if (step["kind"] !== "pending" || step["flow"] !== true) continue;
+      const tool = step["tool"] as string;
+      this.#flowCalls.set(tool, (this.#flowCalls.get(tool) ?? 0) + 1);
+    }
     this.#steers = new Map(
       [...exchanges, open].flatMap((exchange, index) => (exchange.steers.length > 0 ? [[index, exchange.steers]] : [])),
     );
@@ -489,7 +496,8 @@ export class AgentSteps {
    * Write a call whose handler returned `pending()` as a `pending` step: `call_id` (the yian call
    * id), `tool`, `tool_call_id`, `reply` (the reply's `model_call` step `n`), `index` (the call's
    * place among the reply's tool calls), and `deadline` (a record time) for an `ask_user` with a
-   * timeout.
+   * timeout. A flow tool's call adds `flow: true`, its `arguments`, which its scope starts with,
+   * and that `scope`'s callsite, `<node>/<flow>#<k>`, `k` counting the node's calls of the flow.
    *
    * @returns The step's `n`.
    * @throws Whatever `NodeSteps.record` throws.
@@ -501,8 +509,9 @@ export class AgentSteps {
     reply: number;
     index: number;
     deadline: string | null;
+    flowArguments?: Readonly<Record<string, unknown>> | null;
   }): number {
-    const { callId, tool, toolCallId, reply, index, deadline } = call;
+    const { callId, tool, toolCallId, reply, index, deadline, flowArguments = null } = call;
     const step: ValueRecord = {
       kind: "pending",
       call_id: callId,
@@ -512,7 +521,14 @@ export class AgentSteps {
       index: BigInt(index),
     };
     if (deadline !== null) step["deadline"] = deadline;
-    return this.#record(step, { settled: true });
+    if (flowArguments === null) return this.#record(step, { settled: true });
+    const k = this.#flowCalls.get(tool) ?? 0;
+    step["flow"] = true;
+    step["arguments"] = flowArguments as ValueRecord;
+    step["scope"] = `${this.#nodeId}/${tool}#${k}`;
+    const n = this.#record(step, { settled: true });
+    this.#flowCalls.set(tool, k + 1);
+    return n;
   }
 
   /**

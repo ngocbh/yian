@@ -1541,6 +1541,41 @@ test("staticNodes lists every node path of a flow and its child flows, with its 
   expect(staticNodes(flow)[0]![1]).toBe(flow.compiled.nodes.get("call")!);
 });
 
+const FLOW_TOOL_FLOW = `
+id: helping
+name: helping
+defs:
+  shout:
+    description: Shout the text back.
+    input:
+      text: !str
+    nodes:
+      inner:
+        kind: agent
+        input:
+          text: \${input.text}
+        prompt: Shout \${text}.
+    output: \${inner.output}
+nodes:
+  helper:
+    kind: agent
+    prompt: Help.
+    tools: [shout]
+output: \${helper.output}
+`;
+
+test("staticNodes lists a flow an agent grants as a tool under the agent and the grant's name", async () => {
+  const flow = await load(FLOW_TOOL_FLOW);
+  expect(staticNodes(flow).map(([nodePath, node]) => [nodePath, node.kind])).toEqual([
+    ["helper", "agent"],
+    ["helper/shout/inner", "agent"],
+    ["helper/shout/__start__", "start"],
+    ["helper/shout/__end__", "end"],
+    ["__start__", "start"],
+    ["__end__", "end"],
+  ]);
+});
+
 test("staticNodes lists the paths a run's effective model map uses", async () => {
   const flow = await load(NESTED_FLOW);
   const path = join(dir, "nested.jsonl");

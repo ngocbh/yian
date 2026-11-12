@@ -1,0 +1,48 @@
+# An agent grants a `defs:` entry, a single-node def and a `uses:` alias as tools.
+kind: load
+flow: |
+  id: f
+  name: f
+  uses:
+    summarize: summarize
+  defs:
+    classify:
+      description: Sort a ticket into billing, bug or other.
+      input:
+        text: !str
+      nodes:
+        pick:
+          kind: code
+          input:
+            text: ${input.text}
+          output: str
+          code: return "bug"
+      output: ${pick.output}
+    shout:
+      description: Shout the text back.
+      kind: code
+      input:
+        text: !str
+      output: str
+      code: return inputs.text.toUpperCase()
+  nodes:
+    helper:
+      kind: agent
+      prompt: Help.
+      output: str
+      tools: [summarize, classify, shout]
+  output: ${helper.output}
+files:
+  summarize.yaml: |
+    id: summarize
+    name: summarize
+    description: Summarize a text in one sentence.
+    input:
+      text: !str
+      words: !int 20
+      note: !Optional(str)
+    nodes:
+      line: !str ${input.text}
+    output: ${line.output}
+expect:
+  load: ok

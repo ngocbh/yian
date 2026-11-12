@@ -1093,7 +1093,7 @@ export function configErrors(layer: Readonly<Record<string, unknown>>): ConfigPr
   // The model is a value, which this check's messages never show.
   const blockError =
     provider !== null && model !== null
-      ? responsesBlockError(provider, model, config.blockFor(provider), "the layer's model")
+      ? responsesBlockError(provider, model, config.api, config.blockFor(provider), "the layer's model")
       : null;
   return blockError === null ? [] : [{ field: provider, message: blockError }];
 }

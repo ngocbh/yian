@@ -107,6 +107,7 @@ const ALLOWED: Record<string, string> = {
   "run.ts: LITERAL_LABEL_WIDTH": "width of a literal shown in a type label",
   "llm_clients/redact.ts: MIN_VISIBLE": "key characters a masked echo must show to count",
   "llm/errors.ts: MAX_DETAIL_CHARS": "length of provider error text kept in a message",
+  "llm/structured.ts: SHOWN_ARGUMENTS_CHARS": "length of a call's arguments shown in a structured-output error",
   "llm/testing.ts: MAX_DIFFS": "differences listed in a cassette mismatch message",
   "tools/mcp.ts: STDERR_LINES": "MCP server stderr lines shown when it fails to start or ends during a call",
   "tools/mcp.ts: STDERR_KEEP_CHARS": "MCP server stderr kept for a start error or a call it ends",

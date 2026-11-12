@@ -1,0 +1,6 @@
+kind: expr
+expr: render_as_json([1], 11)
+expect:
+  raises:
+    class: ExpressionError
+    message: "expression function 'render_as_json' failed: render_as_json() takes an indent of at most 10 (YIAN_MAX_JSON_INDENT), got 11"

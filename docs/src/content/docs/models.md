@@ -157,13 +157,19 @@ llm_config:
   yian then sends the system prompt as `instructions`, asks for `reasoning.encrypted_content`,
   and replays the model's reasoning from that encrypted content, which the run log records. A
   resumed run sends the same requests. Without `store`, OpenAI's default stores responses.
-- On Azure and the Chat Completions providers, a model whose name starts with `gpt-5-pro`,
-  `gpt-5.2-pro`, `gpt-5.4-pro`, `gpt-5.5-pro` or `gpt-5.6-sol`, or contains `codex`, is called
-  through the Responses API; its block must then be empty. A block there fails at load, or before
-  the agent runs when the provider or model is set elsewhere. `yian config check` refuses a layer
-  that sets both the provider and such a model with a block, as if no flow or agent overrides them.
+- On Azure and the Chat Completions providers, `api: responses` or `api: chat` in `llm_config:`
+  picks the API a call goes to. Unset, a model whose name starts with `gpt-5-pro`, `gpt-5.2-pro`,
+  `gpt-5.4-pro`, `gpt-5.5-pro` or `gpt-5.6-sol`, or contains `codex`, goes to the Responses API,
+  and any other to Chat Completions. Other providers refuse `api`.
+- On these providers the block mirrors Chat Completions, so a call to the Responses API takes an
+  empty one. A block there fails at load, or before the agent runs when the provider, model or
+  `api` is set elsewhere. `yian config check` refuses a layer that sets the provider and such a
+  model with a block, as if no flow or agent overrides them.
 - A setting one model doesn't accept passes the load check; the provider's error then fails the
   node.
+- The output token limit is `openai.max_output_tokens`, `anthropic.max_tokens`,
+  `google.generationConfig.maxOutputTokens`, `ollama.options.num_predict`, and `max_tokens` in the
+  other blocks. A reply cut off at it fails the agent with `agent.output_truncated`.
 
 ## Connections
 
@@ -186,7 +192,9 @@ in an error is replaced with `[REDACTED]`. Each save replaces these settings, so
 `yian auth PROVIDER` without them saves a login with none.
 
 **Azure.** `model` is the deployment name and `base_url` the resource endpoint. Both may go in
-a flow. `OPENAI_API_VERSION` must hold the API version, for runs and for `yian auth azure`:
+a flow. A deployment's name is yours, so set `api: responses` for one served only through the
+Responses API, such as `gpt-5-pro`. `OPENAI_API_VERSION` must hold the API version, for runs and
+for `yian auth azure`:
 
 ```yaml check=fragment
 llm_config:

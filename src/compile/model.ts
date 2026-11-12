@@ -444,10 +444,10 @@ export class CompiledFlow extends Flow {
  *
  * A flow copy gets fresh `nodes`, `edges` and `wiring` containers (the inner wiring maps are
  * read-only and stay shared) and, for a `CompiledFlow`, an adjacency index rebuilt from its
- * `edges`. A node copy is shallow, except that each own field holding a `Flow` (the static child
- * of CALL, MAP and LOOP) holds that flow's copy. Each flow and node is copied once per call, so
- * sharing and cycles carry over to the copy. Carriers, payloads, `env`, type tables and labels
- * stay shared: change a copy only by reassigning a field.
+ * `edges`. A node copy is shallow, except that its static children (`Node.originChildren`: the
+ * child of CALL, MAP and LOOP, an AGENT's flow tools) are their flows' copies. Each flow and node
+ * is copied once per call, so sharing and cycles carry over to the copy. Carriers, payloads,
+ * `env`, type tables and labels stay shared: change a copy only by reassigning a field.
  */
 export function copyGraph<T extends Flow | Node>(value: T): T {
   return copyOnce(value, new Map());
@@ -471,9 +471,9 @@ function copyOnce<T extends Flow | Node>(value: T, memo: Map<Flow | Node, Flow |
       indexEdges(copy.edges, copy.incomingEdges, copy.outgoingEdges);
     }
   } else {
-    const fields = copy as unknown as Record<string, unknown>;
-    for (const [key, field] of Object.entries(fields)) {
-      if (field instanceof Flow) fields[key] = copyOnce(field, memo);
+    const children = copy.originChildren();
+    if (children.length > 0) {
+      copy.setOriginChildren(children.map((child) => (child instanceof Flow ? copyOnce(child, memo) : child)));
     }
   }
   return copy;
@@ -493,36 +493,47 @@ export type GraphWalkError = (
 /** Throw the plain `TypeError` or `RangeError` and drop the origin. */
 const plainWalkError: GraphWalkError = (kind, message) => new kind(message);
 
+/** One static child of a node: the path segment its nodes sit under, and its flow. */
+export interface StaticChild {
+  /** `null` when the child's nodes sit right under the node, as a CALL's do; else a name. */
+  readonly segment: string | null;
+  readonly flow: Flow;
+}
+
 /**
- * Return the node's single exact static child, if present, from its `originChildren` hook.
+ * Return the node's exact static children, each with its path segment, from its
+ * `originChildren` and `originChildSegments` hooks.
  *
  * @param fail Builds each error, naming the node's origin; plain errors by default.
- * @throws What `fail` builds: for children that aren't an exact array or an exact Flow
- *   (TypeError), or more than one child (RangeError).
+ * @throws What `fail` builds (TypeError): for children that aren't an exact array of exact Flows,
+ *   or segments that aren't a name or `null` for each child.
  */
-export function nodeChild(node: Node, fail: GraphWalkError = plainWalkError): Flow | null {
+export function nodeChildren(node: Node, fail: GraphWalkError = plainWalkError): StaticChild[] {
   const children: unknown = node.originChildren();
   if (!isList(children)) {
     throw fail(TypeError, `node ${reprText(node.id)} static children must be an exact array`, node.origin);
   }
-  if (children.length > 1) {
-    throw fail(RangeError, `node ${reprText(node.id)} exposes more than one static child`, node.origin);
+  const segments: unknown = node.originChildSegments();
+  if (!isList(segments) || segments.length !== children.length) {
+    throw fail(TypeError, `node ${reprText(node.id)} must give one path segment per static child`, node.origin);
   }
-  if (children.length === 0) return null;
-  const child: unknown = children[0];
-  if (!isExactly(child, Flow) && !isExactly(child, CompiledFlow)) {
-    throw fail(TypeError, `node ${reprText(node.id)} static child must be an exact Flow`, node.origin);
-  }
-  return child;
+  return children.map((child: unknown, index) => {
+    if (!isExactly(child, Flow) && !isExactly(child, CompiledFlow)) {
+      throw fail(TypeError, `node ${reprText(node.id)} static child must be an exact Flow`, node.origin);
+    }
+    const segment: unknown = segments[index];
+    if (segment !== null && (typeof segment !== "string" || segment === "")) {
+      throw fail(TypeError, `node ${reprText(node.id)} static child segment must be a name or null`, node.origin);
+    }
+    return { segment, flow: child };
+  });
 }
 
 /**
- * Replace the static child flow of a node that has one (CALL, MAP, LOOP) with `child`.
+ * Give `node` the flows `children` in place of its static children, index for index.
  *
- * @throws What `nodeChild` throws, or a RangeError when the node has no static child.
+ * @throws RangeError when the count differs from the node's static children.
  */
-export function setNodeChild(node: Node, child: Flow): void {
-  if (nodeChild(node) === null) throw new RangeError(`node ${reprText(node.id)} has no static child to replace`);
-  // Every kind with a static child keeps it in its `child` field, which `originChildren` returns.
-  (node as Node & { child: Flow }).child = child;
+export function setNodeChildren(node: Node, children: readonly Flow[]): void {
+  node.setOriginChildren(children);
 }

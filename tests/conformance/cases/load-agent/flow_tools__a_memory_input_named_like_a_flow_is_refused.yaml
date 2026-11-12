@@ -1,0 +1,28 @@
+# A grant naming both a memory input and a flow can't tell which it means.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    notes: !FileMemory
+  defs:
+    notes:
+      description: Take notes.
+      nodes:
+        a: !str hi
+      output: ${a.output}
+  nodes:
+    helper:
+      kind: agent
+      prompt: Help.
+      output: str
+      tools: [notes]
+  output: ${helper.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''helper'': `notes` is both a memory input and a flow; rename one'
+      frames:
+      - label: flow.yaml
+        range: [16, 12, 16, 19]

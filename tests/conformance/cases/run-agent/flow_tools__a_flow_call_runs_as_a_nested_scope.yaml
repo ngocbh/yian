@@ -1,0 +1,98 @@
+# The model calls the flow `shout`, granted as a tool: its scope grows under the agent
+# (`helper/shout#0/...`), runs in the same log, and its `str` output is the text the model reads.
+kind: run
+flow: |
+  id: helping
+  name: helping
+  llm_config: {provider: anthropic, model: claude-test}
+  defs:
+    shout:
+      description: Shout the text back.
+      input:
+        text: !str
+        mark: !str "!"
+      nodes:
+        loud:
+          kind: code
+          input:
+            text: ${input.text}
+            mark: ${input.mark}
+          output: str
+          code: return inputs.text.toUpperCase() + inputs.mark
+      output: ${loud.output}
+  nodes:
+    helper:
+      kind: agent
+      tools: [shout]
+      system_prompt: Help.
+      prompt: hi
+      output: str
+  output: ${helper.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  models:
+    helper:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: tool_call
+            id: call-a
+            name: shout
+            arguments:
+              text: hey ${you}
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: done
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: Help.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: hi
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - type: tool_call
+              id: call-a
+              name: shout
+              arguments:
+                text: hey ${you}
+          - format: yian.message.v1
+            role: tool
+            parts:
+            - type: tool_result
+              call_id: call-a
+              name: shout
+              content: HEY ${YOU}!
+          tools:
+          - name: shout
+            description: Shout the text back.
+            parameters:
+              additionalProperties: false
+              properties:
+                text:
+                  title: Text
+                  type: string
+                mark:
+                  title: Mark
+                  type: string
+              required: [text]
+              type: object
+expect:
+  output:
+    status: succeeded
+    output: done
+  trace: [[run_started, null, {effective_llm_by_static_path: {helper: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, helper], [node_step, helper, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {text: 'hey ${you}'}, id: call-a, name: shout, type: tool_call}], role: assistant}, purpose: chat, request_sha256: 5aa4c20eedf9a772604a8f4a29addf19eabfbeb0f696cb258d420c5efb37dee3, response_id: null, usage: null}}], [node_step, helper, {n: 2, step: {arguments: {text: 'hey ${you}'}, call_id: r1/helper/1/0, flow: true, index: 0, kind: pending, reply: 1, tool: shout, tool_call_id: call-a, scope: helper/shout#0}}], [node_expanded, helper, {prune_ids: []}], [node_waiting, helper, {call_ids: [r1/helper/1/0]}], [node_started, helper/shout#0/__start__], [pool_commit, helper/shout#0/__start__, {from: {}}], [node_succeeded, helper/shout#0/__start__, {commit: 14}], [node_started, helper/shout#0/loud], [pool_commit, helper/shout#0/loud, {value: 'HEY ${YOU}!'}], [node_succeeded, helper/shout#0/loud, {commit: 17}], [node_started, helper/shout#0/__end__], [pool_commit, helper/shout#0/__end__, {from: {helper/shout#0/loud: 17}}], [node_succeeded, helper/shout#0/__end__, {commit: 20}], [node_woken, helper], [node_step, helper, {n: 3, step: {call_id: call-a, is_error: false, kind: tool_result, output: 'HEY ${YOU}!'}}], [node_step, helper, {n: 4, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: done, type: text}], role: assistant}, purpose: chat, request_sha256: 261c9c910b9604d0f39ee0a26e38e3ec70533c32aad5c127cc11f4d34ed87378, response_id: null, usage: null}}], [pool_commit, helper, {value: done}], [pool_commit, helper, {key: helper.new_messages, steps: [9, 23, 24]}], [node_succeeded, helper, {commit: 25, messages: 26}], [node_started, __end__], [pool_commit, __end__, {value: done}], [node_succeeded, __end__, {commit: 29}]]

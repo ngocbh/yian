@@ -253,7 +253,7 @@ test.each([
   const marked = { provider, model, _host_key: true };
   const built = await rejection(build(marked));
   expect(built).toBeInstanceOf(AuthError);
-  expect((built as AuthError).message).toMatch(/llm_config\.api_key/);
+  expect((built as AuthError).message).toMatch(/llmConfig\.api_key/);
   let error: unknown;
   try {
     splitModelConfig(marked);
@@ -261,7 +261,7 @@ test.each([
     error = caught;
   }
   expect(error).toBeInstanceOf(AuthError);
-  expect((error as AuthError).message).toMatch(/llm_config\.api_key/);
+  expect((error as AuthError).message).toMatch(/llmConfig\.api_key/);
   const [validated] = splitModelConfig({ ...marked, api_key: SENTINEL });
   expect(validated.apiKey).toBe(SENTINEL);
   expect(() => splitModelConfig({ ...marked, _host_key: "yes", api_key: SENTINEL })).toThrow(/marker/);
@@ -414,6 +414,17 @@ describe("redact", () => {
     // Only the head begins the key: the tail stays, so up to two key characters may survive it.
     expect(redactKey("x sk-sen...file_v2 y", key)).toBe("x [REDACTED]file_v2 y");
     expect(redactKey("x sk-sen****xw y", key)).toBe("x [REDACTED]xw y");
+  });
+
+  test("a masked echo in another letter case is redacted, as the key itself is", () => {
+    const key = "sk-sentinel-scrub-zqxw";
+    for (const echo of ["SK-SENTI****ZQXW", "Sk-SeNtI...ZqXw", "***ZQXW", "SK-SEN…"]) {
+      expect(redactKey(`provided: ${echo}.`, key)).toBe("provided: [REDACTED].");
+    }
+    // A key's non-ASCII letters match in either case too.
+    expect(redactKey("provided: ÉCLAT-****.", "éclat-sentinel-zqxw")).toBe("provided: [REDACTED].");
+    // Other masked text in any case is still left alone.
+    expect(redactKey("token AB****YZ and **BOLD**", key)).toBe("token AB****YZ and **BOLD**");
   });
 
   test("masked echoes of a key with other characters are redacted whole", () => {

@@ -10,6 +10,7 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import fs, {
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -582,6 +583,32 @@ console.log(JSON.stringify({ warnings, runs: readRunIndex(${JSON.stringify(runs)
     withWarnings((message) => warnings.push(message), () => updateRunIndex(runs));
     expect(warnings).toEqual([`run index skipped ${link}: EINVAL: not a regular file, open '${link}'`]);
     expect(readRunIndex(runs).map((row) => row.runId)).toEqual(["good"]);
+  });
+
+  test.skipIf(process.platform === "win32")("a hard-linked log is skipped with a warning: a new run gets no row, an indexed one keeps its row", () => {
+    const runs = freshRuns();
+    writeRun(runs, "good", succeededRun);
+    writeRun(runs, "indexed", stoppedRun);
+    updateRunIndex(runs);
+    const indexed = readRunIndex(runs).find((row) => row.runId === "indexed");
+    const elsewhere = freshRuns();
+    writeRun(elsewhere, "linked", failedRun);
+    mkdirSync(join(runs, "linked"));
+    const linked = join(runs, "linked", "log.jsonl");
+    linkSync(join(elsewhere, "linked", "log.jsonl"), linked);
+    // The indexed run's log, unchanged since, gets a second name too.
+    const log = join(runs, "indexed", "log.jsonl");
+    linkSync(log, join(elsewhere, "other.jsonl"));
+    const warnings: string[] = [];
+    withWarnings((message) => warnings.push(message), () => updateRunIndex(runs));
+    expect(warnings.sort()).toEqual(
+      [
+        `run index skipped ${linked}: EINVAL: has more than one link, open '${linked}'`,
+        `run index skipped ${log}: EINVAL: has more than one link, open '${log}'`,
+      ].sort(),
+    );
+    expect(readRunIndex(runs).map((row) => row.runId).sort()).toEqual(["good", "indexed"]);
+    expect(readRunIndex(runs).find((row) => row.runId === "indexed")).toEqual(indexed);
   });
 
   test.skipIf(process.platform === "win32")("a log replaced by a FIFO keeps the row it had, and the scan never opens it", () => {

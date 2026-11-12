@@ -1,9 +1,7 @@
-# A resume without the host key fails the agent at its model call with `provider.auth` instead of reading the
-# environment's key; no model is called on resume.
+# A resume without the host key is refused before anything is appended, instead of failing the agent at
+# its model call; no model is called, and a resume given the key can still run it.
 # env: VLLM_API_KEY is set, as in the test, to show the resume doesn't fall back to it.
 # Record 8 is agent's node_started: its first model call runs, its result is refused.
-# events left out: a resume also publishes NodeAttemptResumed for each restarted node (decision 20); the
-# trace still pins the resume.
 kind: resume
 flow: |
   id: keyed
@@ -32,15 +30,9 @@ host:
             text: ok
   crash_after_record: 8
 expect:
-  output:
-    status: failed
-    failure:
-      code: provider.auth
-      message: This run's vllm API key came from the host's llm_config.api_key and is not recorded; pass apiKey to advance
-      frames:
-      - label: flow.yaml
-        range: [4, 3, 4, 8]
-      node: agent
+  raises:
+    class: RangeError
+    message: 'this run''s vllm API key came from the host''s llmConfig.api_key and is not recorded; pass it again: advance({ log, apiKey })'
   trace:
   - - run_started
     - null
@@ -70,18 +62,5 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, agent]
-  - - run_resumed
-    - null
-    - num_workers: 0
-      retry_node_ids: [agent]
-  - [node_started, agent]
-  - - node_failed
-    - agent
-    - failure:
-        code: provider.auth
-        message: This run's vllm API key came from the host's llm_config.api_key and is not recorded; pass apiKey to advance
-        frames:
-        - label: flow.yaml
-          range: [4, 3, 4, 8]
-        node: agent
+  events: []
 resume: {}

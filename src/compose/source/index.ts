@@ -13,11 +13,11 @@
  * key table. Later Compose phases populate the catalog builder, which this index doesn't
  * export; a builder lookup may resolve an already-registered site for a load failure without
  * copying or freezing the table. The loader alone consumes the final frozen snapshot, and
- * parser objects stay private. Isolated location-free literals may be parsed separately
- * without creating a document, and one plain scalar's text may be read on its own without
- * parsing YAML structure. Documents and isolated literals parse under eemeli/yaml's failsafe
- * schema and read plain scalars with yian's one shared table: YAML 1.2 core-schema rules plus
- * unquoted timestamps and `<<` merge keys. A parse given the text of each `!include` path
+ * parser objects stay private. An isolated location-free literal is read by a document's own
+ * pass, with a non-text or repeated key and an `!include` refused, and one plain scalar's text
+ * may be read on its own without parsing YAML structure. Documents and isolated literals parse
+ * under eemeli/yaml's failsafe schema and read plain scalars with yian's one shared table: YAML
+ * 1.2 core-schema rules plus unquoted timestamps and `<<` merge keys. A parse given the text of each `!include` path
  * reads the value as that text, marked so a type position can refuse it; a path it wasn't given
  * is listed for the loader to read. An `!include(T)` reads the text exactly for `T` `str`, else
  * the value a plain YAML document holds (`SourceDocument.parseData`), tagged `T`, its strings
@@ -31,5 +31,5 @@ export type { OccurrencePath, ScalarSource, TaggedNode, TypedInclude } from "./c
 export { SourceAccessError, SourceSyntaxError } from "./common.ts";
 export { SourceCursor } from "./cursor.ts";
 export type { IncludedValues, NonTextKey, RepeatedKey } from "./document.ts";
-export { includeExample, includeTag, SourceDocument } from "./document.ts";
-export { parseYamlLiteral, readPlainScalar } from "./literals.ts";
+export { includeExample, includeTag, parseYamlLiteral, SourceDocument } from "./document.ts";
+export { readPlainScalar } from "./literals.ts";

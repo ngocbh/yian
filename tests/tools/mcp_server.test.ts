@@ -605,6 +605,58 @@ describe("StdioTransport", () => {
     SLOW,
   );
 
+  /** A transport running `script` under `sh`, closed in `afterEach`. */
+  const shell = (script: string): StdioTransport =>
+    tracker.track(
+      new StdioTransport({
+        command: "sh",
+        args: ["-c", script],
+        maxMessageBytes: 1024,
+        defaultEnv: getDefaultEnvironment(),
+      }),
+    );
+
+  test(
+    "onclose comes once the exit code is known, which exitText gives with the stderr tail",
+    async () => {
+      const t = shell("echo oops >&2; exit 4");
+      let seen: string | undefined;
+      t.onclose = () => (seen = t.exitText());
+      await t.start();
+      expect(await waitFor(() => seen !== undefined, 3000)).toBe(true);
+      expect(seen).toBe("exited (code 4)");
+      expect(t.stderrTail()).toBe("\nserver stderr:\noops");
+    },
+    SLOW,
+  );
+
+  test(
+    "a server that closes its stdout and keeps running closed its stdout, even once close kills it",
+    async () => {
+      const t = shell("exec >&-; sleep 30");
+      let closed = false;
+      t.onclose = () => (closed = true);
+      await t.start();
+      expect(await waitFor(() => closed, 3000)).toBe(true);
+      expect(t.exitText()).toBe("closed its stdout");
+      await t.close();
+      expect(t.exitText()).toBe("closed its stdout");
+    },
+    SLOW,
+  );
+
+  test(
+    "a server that close ends tells nothing of how it ended",
+    async () => {
+      const t = shell("sleep 30");
+      await t.start();
+      expect(t.exitText()).toBe("");
+      await t.close();
+      expect(t.exitText()).toBe("");
+    },
+    SLOW,
+  );
+
   test("start rejects with the spawn error", async () => {
     const t = tracker.track(
       new StdioTransport({

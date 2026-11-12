@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "chat_nonobject_args: the only Record call has array arguments [1, 2]: an invalid call counts as none. xai/grok-4 on openai_chat. Schema Rec (corpus:Rec), name Record. Strategy forced_tool. Request: tools [Record the function-tool parameters of Rec]; tool_choice {type: \"function\", function: {name: \"Record\"}}; parallel_tool_calls false. Expected: plan.parse(response) throws MissingToolCallError(\"the reply did not call the Record tool; call it with the answer\").",
+  "description": "chat_nonobject_args: the only Record call has array arguments [1, 2], which the error names. xai/grok-4 on openai_chat. Schema Rec (corpus:Rec), name Record. Strategy forced_tool. Request: tools [Record the function-tool parameters of Rec]; tool_choice {type: \"function\", function: {name: \"Record\"}}; parallel_tool_calls false. Expected: plan.parse(response) throws StructuredOutputError(\"the Record call's arguments are not a JSON object: [1, 2]\").",
   "interactions": [
     {
       "request": {

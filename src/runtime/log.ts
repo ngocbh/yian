@@ -39,11 +39,11 @@ import { formatRecordTime as recordTimeText, RECORD_TIME } from "../typesys/temp
 import { isList, isRecord, jsonPart, requireFields, valueRepr, writeAsText } from "../typesys/values.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 30;
+export const SCHEMA_VERSION = 31;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
 const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([
-  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
+  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
 ]);
 
 /** A typed value's wire object `{kind, value}`. */
@@ -1033,25 +1033,35 @@ export class NodeRoutedRecord {
 /**
  * Splice one deterministic expansion, checked by its digest. Frozen.
  *
- * The seed isn't recorded: a replay rebuilds it from the spawner's expansion commits' `from`.
+ * A spawner's (CALL, MAP, LOOP) expansion settles it; its seed isn't recorded: a replay rebuilds
+ * it from the spawner's expansion commits' `from`. An AGENT's flow call (`callId`) grows the
+ * called flow's scope while the agent stays in flight; its seed is the call's `pending` step.
  */
 export class NodeExpandedRecord {
-  /** The spawner's non-empty id. */
+  /** The spawner's non-empty id: the CALL, MAP or LOOP node, or the AGENT making a flow call. */
   readonly spawnerId: string;
   /** Node ids the expansion prunes: sorted, unique and non-empty. */
   readonly pruneIds: readonly string[];
   /** The expanded topology's SHA-256 digest, 64 lowercase hex digits. */
   readonly topologyDigest: string;
+  /** The AGENT flow call whose scope this grows; `null` for a spawner's expansion. */
+  readonly callId: string | null;
 
   /**
    * @throws TypeError when an id or the digest isn't a string.
-   * @throws RangeError when the spawner id is empty, the prune ids aren't a sorted array of
-   *   unique non-empty strings, or the digest isn't 64 lowercase hex digits.
+   * @throws RangeError when the spawner id or call id is empty, the prune ids aren't a sorted
+   *   array of unique non-empty strings, or the digest isn't 64 lowercase hex digits.
    */
-  constructor(spawnerId: string, pruneIds: readonly string[], topologyDigest: string) {
+  constructor(
+    spawnerId: string,
+    pruneIds: readonly string[],
+    topologyDigest: string,
+    options: { callId?: string | null } = {},
+  ) {
     this.spawnerId = requireName(spawnerId, "spawner_id");
     this.pruneIds = validatedIdArray(pruneIds, "prune_ids", true);
     this.topologyDigest = requireSha256(topologyDigest, "topology_digest");
+    this.callId = options.callId == null ? null : requireName(options.callId, "call_id");
     Object.freeze(this);
   }
 }
@@ -2939,16 +2949,19 @@ const RECORD_CODECS: readonly RecordCodec[] = [
     cls: NodeExpandedRecord,
     kind: "node_expanded",
     encode: (record) => ({
+      call_id: record.callId,
       spawner_id: record.spawnerId,
       prune_ids: [...record.pruneIds],
       topology_digest: record.topologyDigest,
     }),
     decode: (payload, label) => {
-      requireFields(payload, ["spawner_id", "prune_ids", "topology_digest"], label);
+      requireFields(payload, ["call_id", "spawner_id", "prune_ids", "topology_digest"], label);
+      const callId = payload["call_id"];
       return new NodeExpandedRecord(
         requireName(payload["spawner_id"], `${label} spawner_id`),
         wireTextArray(payload["prune_ids"], `${label} prune_ids`),
         requireText(payload["topology_digest"], `${label} topology_digest`),
+        { callId: callId === null ? null : requireName(callId, `${label} call_id`) },
       );
     },
     nodeId: (payload, label) => requireName(payload["spawner_id"], `${label} spawner_id`),

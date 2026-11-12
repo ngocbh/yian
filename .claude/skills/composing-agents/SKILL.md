@@ -227,6 +227,11 @@ output:
 - **A group's tools show to the model as `<group>_<tool>`.** A bare tool name finds a group's tool
   only when one group has it; when two do, grant `{github: [search]}`. A tool in two granted
   groups is offered once, under the first grant's name.
+- **An agent can grant a flow as a tool**: `tools: [summarize]` naming a `defs:` entry or `uses:`
+  alias. The flow needs a `description:` and inputs a model can send (no Inbox, memory or `file`
+  input); its inputs are the tool's arguments, and the model reads its output as JSON (text as
+  itself). It runs inside the run, its nodes under `<agent>/<flow>#<k>`. See
+  [Flows as tools](https://yian.readthedocs.io/agents/#flows-as-tools).
 - **An agent a host may interrupt needs an `Optional(...)` output.** An interrupted agent's
   output is null; with `str` or any other type it fails with `agent.interrupted`. This applies
   to every agent with `steer_inbox:`.

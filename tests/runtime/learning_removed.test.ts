@@ -112,13 +112,13 @@ test.each([
   "memory_commit_succeeded",
   "memory_commit_failed",
 ])("a %s record is an unknown kind", (kind) => {
-  const line = JSON.stringify({ at: "2026-11-06T00:00:00.000Z", kind, payload: {}, run_id: "r", schema: 30, seq: 1 });
-  expect(() => decodeRecord(line)).toThrow(`run-record kind '${kind}' is unsupported in schema 30`);
+  const line = JSON.stringify({ at: "2026-11-06T00:00:00.000Z", kind, payload: {}, run_id: "r", schema: 31, seq: 1 });
+  expect(() => decodeRecord(line)).toThrow(`run-record kind '${kind}' is unsupported in schema 31`);
 });
 
 test("a schema-26 log is refused by name", () => {
   const line26 = JSON.stringify({ at: "2026-11-06T00:00:00.000Z", kind: "node_started", payload: {}, run_id: "r", schema: 26, seq: 1 });
-  expect(() => decodeRecord(line26)).toThrow("run log schema 26 predates schema 30 and is not supported");
+  expect(() => decodeRecord(line26)).toThrow("run log schema 26 predates schema 31 and is not supported");
 });
 
 test.each([Node, AgentNode, EndNode, StartNode, LoopNode, CaseNode].map((cls) => [cls.name, cls] as const))(

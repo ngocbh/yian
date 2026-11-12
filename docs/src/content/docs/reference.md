@@ -77,6 +77,7 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MAX_FAILURE_CHARS` | limit | 10,000 | 1 or more | Longest message or traceback a failure records; a longer one is cut and says how much was cut |
 | `YIAN_AGENT_RETRIES` | setting | 2 | 0 or more | Extra attempts an AGENT gets to correct an invalid structured reply when the node sets none |
 | `YIAN_AGENT_MAX_TOOL_ITERATIONS` | setting | 50 | 1 or more, or -1 for no cap | AGENT tool-call turns when the node sets none; -1 is no cap |
+| `YIAN_MAX_FLOW_RESULT_CHARS` | setting | 20,000 | 1 or more | Most characters of a flow tool's output an AGENT's model reads; a longer one is cut |
 | `YIAN_TOOL_RETRIES` | setting | 0 | 0 or more | Extra attempts a TOOL node gets after a failed tool call when the node sets none |
 | `YIAN_TOOL_RETRY_DELAY_SECONDS` | setting | 1 | 0 or more | Base wait in seconds before a TOOL node's first retry; each later wait doubles, up to the cap |
 | `YIAN_TOOL_RETRY_MAX_DELAY_SECONDS` | setting | 30 | 0 or more | Longest wait in seconds before a TOOL node retries a failed tool call |
@@ -194,6 +195,7 @@ log prints the same failure, so "retry" below means a new run.
 | `loop.max_exceeded` | A `while:` or `until:` LOOP with `max: M` would start its body run M+1 | Raise `max:`, or set `on_max_exceeded: output` to end the loop with its last record |
 | `agent.output_invalid` | An AGENT's structured reply still breaks its `output:` type after its `retries:` | Loosen the type, or improve the prompt |
 | `agent.interrupted` | An AGENT was interrupted and its output type doesn't allow null | Declare `output: Optional(...)` and route on null |
+| `agent.output_truncated` | The provider cut an AGENT's reply off at the output token limit: an answer with no call whose arguments parsed, or the last invalid structured reply | Raise the limit the message names, or ask for a shorter answer |
 | `tool.timeout` | An `ask` timed out with no answer and its output type doesn't allow null | Declare `output: Optional(...)`, or give it longer |
 | `provider.auth` | The provider refused the agent's credentials, or yian couldn't supply them | Fix the login (`yian auth <provider>`) or the key |
 | `provider.auth_storage` | The saved-login file, its folder or its lock can't be used (its mode, owner or contents) | Fix the file the message names; logging in again reads the same file |
@@ -234,12 +236,12 @@ A run log is a JSON Lines file: one record per line, appended and never rewritte
 compact JSON with its keys sorted:
 
 ```json
-{"at":"2026-10-27T08:47:40.404Z","kind":"node_started","payload":{"node_id":"greet"},"run_id":"31fc75ac4c0640de867d47f59f928ea3","schema":30,"seq":8}
+{"at":"2026-10-27T08:47:40.404Z","kind":"node_started","payload":{"node_id":"greet"},"run_id":"31fc75ac4c0640de867d47f59f928ea3","schema":31,"seq":8}
 ```
 
 | Key | What it holds |
 |---|---|
-| `schema` | The record format, `30`. yian reads only this one. A log of schema 10 to 29 reads as `run log schema N predates schema 30 and is not supported`, any other as `unsupported run-record schema: N` |
+| `schema` | The record format, `31`. yian reads only this one. A log of schema 10 to 30 reads as `run log schema N predates schema 31 and is not supported`, any other as `unsupported run-record schema: N` |
 | `run_id` | The run's id |
 | `seq` | The record's place in the log, from 0 |
 | `at` | When the record was appended, in UTC with milliseconds. Use `seq`, not `at`, for order |
@@ -261,7 +263,7 @@ compact JSON with its keys sorted:
 | `pool_commit` | A value written to the run: an input, a node's output, or a message an inbox received |
 | `node_succeeded` | A node succeeded, naming the `pool_commit` that holds its output |
 | `node_routed` | A node, such as a CASE, chose a route |
-| `node_expanded` | A CALL, MAP or LOOP added its child nodes to the graph |
+| `node_expanded` | A CALL, MAP or LOOP added its child nodes to the graph, or an AGENT's flow call (`call_id`) its flow's |
 | `node_failed` | A node failed, with its failure. The run is over |
 | `inbox_closed` | An inbox was closed; it takes no more messages |
 | `inbox_withdrawn` | Messages nobody had read yet were taken back from an inbox |

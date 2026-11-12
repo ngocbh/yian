@@ -1,0 +1,35 @@
+# A def whose agent grants the def itself is recursive, as a def calling itself is.
+kind: load
+flow: |
+  id: f
+  name: f
+  defs:
+    again:
+      description: Ask again.
+      input:
+        text: !str
+      nodes:
+        helper:
+          kind: agent
+          prompt: Help.
+          output: str
+          tools: [again]
+      output: ${helper.output}
+  nodes:
+    top:
+      kind: call
+      call: again
+      input:
+        text: go
+  output: ${top.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs entry ''again'': recursive defs reference: callable ''again'' is defined in terms of itself (the baked call graph must be finite)'
+      frames:
+      - label: flow.yaml
+        range: [5, 5, 15, 1]
+        note: definition 'again'
+      - label: flow.yaml
+        range: [5, 5, 15, 1]

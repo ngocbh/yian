@@ -34,7 +34,7 @@ import {
   type RunFlowOptions,
   runFlow,
 } from "../src/run.ts";
-import { type FlowSource, PoolCommitRecord, readRunLog, RunStartedRecord } from "../src/runtime/log.ts";
+import { type FlowSource, NodeStartedRecord, PoolCommitRecord, readRunLog, RunStartedRecord } from "../src/runtime/log.ts";
 import { Skill } from "../src/skills/catalog.ts";
 import { type FunctionTool, tool } from "../src/tools/function_tools.ts";
 import { mcpServer } from "../src/tools/mcp.ts";
@@ -672,6 +672,41 @@ test("a symlinked child's CODE node resolves beside the link's target on resume 
 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(resumed.output).toBe("up:x");
+});
+
+/** A root whose CODE nodes `one`, then `two`, each run `../fn.ts:who`. */
+const TWO_WHO =
+  "id: root\nname: root\nnodes:\n" +
+  "  one:\n    kind: code\n    code: ../fn.ts:who\n    input: {k: 1}\n    output: str\n" +
+  "  two:\n    kind: code\n    code: ../fn.ts:who\n    input: {k: 2, prev: '${one.output}'}\n    output: str\n" +
+  "output: ${one.output} then ${two.output}\n";
+/** A CODE file whose `who` returns `name`. */
+const who = (name: string) => `export function who(): string {\n  return ${JSON.stringify(name)};\n}\n`;
+
+test("a root reached through a symlinked folder runs the CODE files beside its real folder, fresh, resumed or from its source", async () => {
+  const dir = freshDir("resume-root-link");
+  writeTree(dir, { "real/proj/flow.yaml": TWO_WHO, "fn.ts": who("link"), "real/fn.ts": who("real") });
+  symlinkSync(join(dir, "real", "proj"), join(dir, "link"));
+  const link = join(dir, "link");
+  const flow = await loadRoot(link);
+  const whole = freshLog();
+  const fresh = await runFlow(flow, {}, { log: whole, env: hostEnv(logs) });
+  // Cut just before node two starts, so node one ran before the cut and node two runs after it.
+  const twoStarts = readRunLog(whole).findIndex(
+    ({ record }) => record instanceof NodeStartedRecord && record.nodeId === "two",
+  );
+  const log = freshLog();
+  await crashAfter(twoStarts, () => runFlow(flow, {}, { log, env: hostEnv(logs) }));
+
+  const resumed = await advance({ log, env: hostEnv(logs) });
+  const fromSource = await runFlow(await loadFlowSource(flow.source!), {}, { env: hostEnv(logs) });
+  const hosted = await loadFlow(TWO_WHO, { baseDir: link, sourceLabel: "flow.yaml" });
+  const host = await runFlow(hosted, {}, { env: hostEnv(logs) });
+
+  for (const result of [fresh, resumed, fromSource, host]) {
+    expect(result.status, result.failure?.message).toBe("succeeded");
+    expect(result.output).toBe("real then real");
+  }
 });
 
 test("a resume runs the included text the run started with, whatever the file holds now", async () => {

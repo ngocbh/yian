@@ -78,7 +78,7 @@ console.log(result.status, result.output); // succeeded total: 7.5
 targets are found, in order, then the flow's `system.paths` joined onto the first entry; put the
 flow's own folder first),
 `sourceLabel` (the name errors show), `baseDir` (where `./file.ts:fn` references and
-[`!include`](/agents/#prompts-in-files) paths resolve), `codeRoot` (a folder every CODE file and
+[`!include`](/agents/#prompts-in-files) paths resolve, symlinks followed), `codeRoot` (a folder every CODE file and
 included file must stay inside), `env`, and `memoryTypes` (your own
 [memory types](/memory/#your-own-memory-types)). A broken flow rejects with
 `LoadError`, whose `diagnostic` points into the source. A CODE reference or `!include` outside

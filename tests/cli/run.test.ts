@@ -1620,6 +1620,17 @@ describe("check", () => {
     );
   });
 
+  test("--root: an absolute uses: ref outside the root fails, even with a decoy at the joined path", async () => {
+    const root = join(tmp, "company");
+    file("evil.yaml", FLOW);
+    // A flow could ship this copy to pass the check while `yian run` loads the file outside.
+    file(join("company", tmp, "evil.yaml"), FLOW);
+    const flow = file("company/main.yaml", parentFlow(join(tmp, "evil")));
+    const diagnostic = await rootDiagnostic(root, flow);
+    expect(diagnostic.code).toBe("compose.outside_root");
+    expect(diagnostic.message).toBe(`${join("..", "evil.yaml")} is outside the root`);
+  });
+
   test("a CODE reference resolves against its own file's directory, not the cwd", async () => {
     const node = "  a:\n    kind: code\n    code: ./m.ts:f\n    output: str\n";
     const fn = "export function f() { return 'x'; }\n";
@@ -1640,6 +1651,82 @@ describe("check", () => {
       const { code, flows } = await checkJson(argv);
       expect([code, flows[0].ok]).toEqual([0, true]);
     }
+  });
+});
+
+/** A CODE file whose `who` returns `name`. */
+const whoFile = (name: string) => `export function who() { return ${JSON.stringify(name)}; }\n`;
+
+/**
+ * The flows reached through a symlink, each written under a fresh folder of `tmp`: its CODE
+ * files and its `uses: ../child` child both beside the link's target and beside the link. Each
+ * gives the folder, the flow's path through the link, and the real folder `check --root` vets.
+ */
+const LINKED_FLOWS: [string, (dir: string) => { flow: string; real: string }][] = [
+  [
+    "a symlinked flow file",
+    (dir) => {
+      file("s/sub/flow.yaml", codeOnlyFlow("./helper.ts:who"));
+      file("s/sub/helper.ts", whoFile("real"));
+      file("s/helper.ts", whoFile("link"));
+      symlinkSync(join(dir, "sub", "flow.yaml"), join(dir, "flow.yaml"));
+      return { flow: join(dir, "flow.yaml"), real: join(dir, "sub") };
+    },
+  ],
+  [
+    "a symlinked folder",
+    (dir) => {
+      const child = codeOnlyFlow("./c.ts:who").replace("id: c\nname: c", "id: child\nname: child");
+      file("s/real/proj/flow.yaml", `${codeOnlyFlow("../helper.ts:who", "child")}uses:\n  child: ../child\n`);
+      file("s/real/helper.ts", whoFile("real"));
+      file("s/real/child.yaml", child);
+      file("s/real/c.ts", whoFile("real child"));
+      file("s/helper.ts", whoFile("link"));
+      file("s/child.yaml", child);
+      file("s/c.ts", whoFile("link child"));
+      symlinkSync(join(dir, "real", "proj"), join(dir, "link"));
+      return { flow: join(dir, "link", "flow.yaml"), real: join(dir, "real") };
+    },
+  ],
+];
+
+/** A flow whose CODE node `a` runs `ref`, and, given `alias`, whose CALL node `b` runs that `uses:` alias. */
+function codeOnlyFlow(ref: string, alias?: string): string {
+  const call = alias === undefined ? "" : `  b:\n    kind: call\n    call: ${alias}\n`;
+  const output = alias === undefined ? "${a.output}" : '"${a.output} | ${b.output}"';
+  return `id: c\nname: c\nnodes:\n  a:\n    kind: code\n    code: ${ref}\n    output: str\n${call}output: ${output}\n`;
+}
+
+/** Run `yian run -q flow` under a home in `tmp`, returning the exit code and the streams. */
+async function runQuiet(flow: string) {
+  mkdirSync(join(tmp, "home"), { recursive: true });
+  const { io, stdout, stderr } = testIo({ HOME: join(tmp, "home") });
+  const code = await main(["run", "-q", flow], io);
+  return { code, stdout: stdout(), stderr: stderr() };
+}
+
+describe("a flow reached through a symlink", () => {
+  test.each(LINKED_FLOWS)("%s runs the files beside its real folder, which check --root vets", async (name, write) => {
+    const { flow, real } = write(join(tmp, "s"));
+    const ran = await runQuiet(flow);
+    expect(ran.code, ran.stderr).toBe(0);
+    expect(ran.stdout).toBe(name === "a symlinked folder" ? "real | real child\n" : "real\n");
+    expect((await checkJson(["--root", real, flow])).code).toBe(0);
+  });
+
+  test.each(LINKED_FLOWS)("%s: check, check --root and run agree a CODE file only beside the link is missing", async (_name, write) => {
+    const dir = join(tmp, "s");
+    const { flow, real } = write(dir);
+    rmSync(join(real, "helper.ts"));
+    for (const argv of [[flow], ["--root", dir, flow]]) {
+      const { code, flows } = await checkJson(argv);
+      expect(code).toBe(1);
+      expect(flows[0].diagnostics[0].message).toContain("helper.ts");
+    }
+    const ran = await runQuiet(flow);
+    expect(ran.code).toBe(1);
+    expect(ran.stdout).toBe("");
+    expect(ran.stderr).toContain("helper.ts");
   });
 });
 

@@ -492,7 +492,7 @@ test("openai resume sends the key to the recorded azure url", async () => {
   const moved = envWith({ OPENAI_BASE_URL: ELSEWHERE });
   const models = recording(moved, responsesText("ok"));
   const flow = await loadFlow(FLOW, { env: moved });
-  expect((await advance({ log: keyless, models, env: moved })).status).toBe("failed");
+  expect(await rejected(advance({ log: keyless, models, env: moved }))).toBeInstanceOf(RangeError);
   expect(models.requests).toEqual([]);
   const result = await advance({ log: path, apiKey: SENTINEL, models, env: moved });
   expect(result.status, result.failure?.message).toBe("succeeded");

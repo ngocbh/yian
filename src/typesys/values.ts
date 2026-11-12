@@ -445,6 +445,8 @@ export function renderValuePath(path: readonly (string | number)[]): string {
  * @param where Names the boundary for the message, e.g. `"output"`.
  * @param options.enclosingLevels Levels counted around the value (default 0); -1 lets the
  *   value itself go one level over, as for a START's input record.
+ * @param options.limit The limit, such as the one a run recorded (default
+ *   `current().maxValueNesting`).
  * @throws TypeCheckError at the first container past the limit, reading `<where>[ at <path>]:
  *   value nests deeper than <limit> levels, the limit for a yian value (each record and list
  *   is a level)`.
@@ -452,9 +454,8 @@ export function renderValuePath(path: readonly (string | number)[]): string {
 export function rejectDeepNesting(
   value: unknown,
   where: string,
-  { enclosingLevels = 0 }: { enclosingLevels?: number } = {},
+  { enclosingLevels = 0, limit = current().maxValueNesting }: { enclosingLevels?: number; limit?: number } = {},
 ): void {
-  const limit = current().maxValueNesting;
   if (1 + enclosingLevels > limit && isNestingLevel(unwrapTyped(value))) {
     throw tooDeep(where, [], limit);
   }

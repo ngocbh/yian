@@ -1208,6 +1208,9 @@ export function prepareInitialCommit(state: RunState, key: string, value: unknow
   return prepareRecord(state, new PoolCommitRecord(state.flow.startId, key, wire));
 }
 
+/** The levels a take's output adds around an event it read: its record and its `events` list. */
+const TAKE_ENVELOPE_LEVELS = 2;
+
 /**
  * Prepare a host's send of `event` to the top-level inbox `inbox`: a commit by the START under
  * `<START>.<inbox>`, applied at once to the inbox store, never to the pool.
@@ -1226,7 +1229,9 @@ export function prepareInitialCommit(state: RunState, key: string, value: unknow
  * @throws DeliveryRefused, in this order: `ended` once the run has a terminal result;
  *   `not_started` before its run start is complete; `unknown_inbox` when the START declares no
  *   such inbox; `inbox_closed` once it is closed (unless `key` repeats a send); `invalid_value`
- *   when `event` isn't a host value or fails `T` (the `TypeCheckError` is the cause); `key_reused`
+ *   when `event` isn't a host value, nests deeper than two levels under the run's
+ *   `MAX_VALUE_NESTING` (a take reads it inside `{events: [...]}`), or fails `T` (the
+ *   `TypeCheckError` is the cause); `key_reused`
  *   when an earlier send holds `key` with another inbox or value; `too_large` when its run-log
  *   JSON is over the run's `MAX_EVENT_BYTES`.
  */
@@ -1254,6 +1259,22 @@ export function prepareSend(
   } catch (error) {
     if (!(error instanceof TypeCheckError)) throw error;
     throw new DeliveryRefused("invalid_value", `inbox ${reprText(inbox)} refuses ${error.message}`, { cause: error });
+  }
+  // Against the run's recorded limit, with room for the take's `{events: [...]}`: an event any
+  // take can read whole never fails the run on its depth later.
+  const limit = state.runDefaults.maxValueNesting;
+  try {
+    rejectDeepNesting(value, "the event", { enclosingLevels: TAKE_ENVELOPE_LEVELS, limit });
+  } catch (error) {
+    if (!(error instanceof TypeCheckError)) throw error;
+    const at = error.path.length > 0 ? ` at ${renderValuePath(error.path)}` : "";
+    throw new DeliveryRefused(
+      "invalid_value",
+      `inbox ${reprText(inbox)} refuses the event${at}: it nests deeper than ${limit - TAKE_ENVELOPE_LEVELS} ` +
+        `levels; a take hands it to the flow inside {events: [...]}, two levels under the limit of ${limit} ` +
+        "for a yian value (YIAN_MAX_VALUE_NESTING)",
+      { cause: error },
+    );
   }
   let wire: TypedWire;
   try {

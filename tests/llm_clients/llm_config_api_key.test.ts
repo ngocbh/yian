@@ -416,6 +416,17 @@ describe("redact", () => {
     expect(redactKey("x sk-sen****xw y", key)).toBe("x [REDACTED]xw y");
   });
 
+  test("a masked echo in another letter case is redacted, as the key itself is", () => {
+    const key = "sk-sentinel-scrub-zqxw";
+    for (const echo of ["SK-SENTI****ZQXW", "Sk-SeNtI...ZqXw", "***ZQXW", "SK-SEN…"]) {
+      expect(redactKey(`provided: ${echo}.`, key)).toBe("provided: [REDACTED].");
+    }
+    // A key's non-ASCII letters match in either case too.
+    expect(redactKey("provided: ÉCLAT-****.", "éclat-sentinel-zqxw")).toBe("provided: [REDACTED].");
+    // Other masked text in any case is still left alone.
+    expect(redactKey("token AB****YZ and **BOLD**", key)).toBe("token AB****YZ and **BOLD**");
+  });
+
   test("masked echoes of a key with other characters are redacted whole", () => {
     const key = "sk.sentinel+scrub/zq.w";
     for (const echo of [`${key.slice(0, 8)}****${key.slice(-4)}`, `${key.slice(0, 9)}...`, `***${key.slice(-5)}`]) {

@@ -1802,7 +1802,8 @@ export class JsonlRunLog implements RunLog {
    * @throws Error the busy message, as `create`; `run log <path> was replaced while being opened`
    *   when `path` stops naming the opened file before the lock is taken.
    * @throws Error (code `EINVAL`, `EINVAL: not a regular file, open '<path>'`) when `path` is a
-   *   symlink, a FIFO or a device; it is never read, and no lock file is created.
+   *   symlink, a FIFO or a device, or (`EINVAL: has more than one link, open '<path>'`) when the
+   *   file has another link; it is never read, and no lock file is created.
    * @throws the `fs` error (`code` `ENOENT` for a missing log, `EISDIR` for a folder, neither of
    *   which creates a lock file) and other `lockFile` errors.
    */
@@ -2062,7 +2063,8 @@ export interface IterRunRecordsOptions {
  *   no record has, or a complete line isn't a valid record, breaks the seq count or names another
  *   run id; the message names `path` and the line (or, after an offset, the byte).
  * @throws Error (code `EINVAL`, `EINVAL: not a regular file, open '<path>'`) when `path` isn't a
- *   regular file (a symlink, a FIFO, a device or a folder); it is never read.
+ *   regular file (a symlink, a FIFO, a device or a folder), or (`EINVAL: has more than one link,
+ *   open '<path>'`) when the file has another link; it is never read.
  * @throws Error (code `ENOENT`) when `path` doesn't exist, and the `fs` error of a failed read.
  */
 export function iterRunRecords(
@@ -3252,11 +3254,24 @@ export function notRegularFile(path: string): NodeJS.ErrnoException {
 }
 
 /**
+ * @internal The `EINVAL` error for a run log at `path` with more than one link (a hard link), shaped
+ * as `notRegularFile`'s: `EINVAL: has more than one link, open '<path>'`.
+ */
+export function hardLinked(path: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(`EINVAL: has more than one link, open '${path}'`), {
+    code: "EINVAL",
+    errno: -os.constants.errno.EINVAL,
+    syscall: "open",
+    path,
+  });
+}
+
+/**
  * Open the run log at `path` with `flags` and return its descriptor. A symlink at `path` itself is
  * never followed; folders on the way to it may be links.
  *
  * @throws Error `notRegularFile(path)` when `path` is a symlink or the file opened isn't a regular
- *   file; it is closed.
+ *   file, and `hardLinked(path)` when it has another link; it is closed.
  * @throws the `fs` error of a failed open.
  */
 function openRegular(path: string, flags: number): number {
@@ -3275,7 +3290,11 @@ function openRegular(path: string, flags: number): number {
   }
   try {
     // The descriptor's type, not the path's, so a file swapped in after a check can't slip by.
-    if (!fs.fstatSync(fd).isFile()) throw notRegularFile(path);
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) throw notRegularFile(path);
+    // A hard link reaches a file elsewhere as a symlink does, which O_NOFOLLOW doesn't stop: a run
+    // must not read or append to it. FileMemory refuses its journal the same way.
+    if (stat.nlink > 1) throw hardLinked(path);
   } catch (error) {
     fs.closeSync(fd);
     throw error;

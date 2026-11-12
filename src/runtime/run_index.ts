@@ -22,6 +22,7 @@ import { END_ID, START_ID } from "../compile/model.ts";
 import { SourceDocument } from "../compose/source/document.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { openSqlite, type Sqlite, type SqliteRow, sqliteErrorCode, warn } from "../platform.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import { logJson } from "../typesys/json.ts";
 import { parseType, type TypeExpr } from "../typesys/types.ts";
 import { isRecord, type MemoryRef, shownText, TypedValue, valueRepr } from "../typesys/values.ts";
@@ -31,6 +32,7 @@ import {
   hardLinked,
   isRunLogLocked,
   iterRunRecords,
+  InterruptedRecord,
   NodeExpandedRecord,
   NodeFailedRecord,
   NodeRoutedRecord,
@@ -52,7 +54,7 @@ import {
   SCHEMA_VERSION,
 } from "./log.ts";
 import { addCrashedAttempts } from "./state.ts";
-import { applyWaitsRecord, type WaitInfo, WaitsState, wakeableNodes, wakeAt, waitInfos } from "./waits.ts";
+import { applyWaitsRecord, nodeCalls, type WaitInfo, WaitsState, wakeableNodes, wakeAt, waitInfos } from "./waits.ts";
 
 /** The index file's name in the runs folder. */
 const INDEX_FILE = "index.sqlite";
@@ -126,6 +128,9 @@ const COLUMNS = [
 /** The `runs` table's column names, in order, as `PRAGMA table_info` gives them. */
 const COLUMN_NAMES = COLUMNS.map((column) => column.replaceAll('"', ""));
 
+/** Every column but `result`, for a check or a listing that needs no result. */
+const CHECKED_COLUMNS = COLUMNS.filter((column) => column !== "result").join(", ");
+
 const SQLITE_BUSY = 5;
 const SQLITE_CORRUPT = 11;
 const SQLITE_NOTADB = 26;
@@ -150,10 +155,11 @@ export interface RunIndexRow {
   /** The path of the flow file the run started from, or `null` for a flow built in code. */
   readonly flow: string | null;
   /**
-   * `succeeded`, `failed` or `cancelled` once the records show the run ended; `waiting` when it
-   * ended its last segment with every unsettled node waiting; `stopped` when the host stopped the
-   * last segment; `crashed` otherwise. `running` replaces `waiting`, `stopped` or `crashed` while a
-   * writer holds the log's lock.
+   * `succeeded`, `failed` or `cancelled` once the records show the run ended; `unstarted` when the
+   * log ends inside its run start, before the START inputs' commit; `waiting` when it ended its last
+   * segment with every unsettled node waiting; `stopped` when the host stopped the last segment;
+   * `crashed` otherwise. `running` replaces any but an ended status while a writer holds the log's
+   * lock.
    */
   readonly status: RunIndexStatus;
   /** The time of the run's `run_started` record, or `null` when that record can't be read. */
@@ -170,8 +176,8 @@ export interface RunIndexRow {
   /** The seq of the last record the index read, or `null` when it read none (see `unreadable`). */
   readonly lastSeq: number | null;
   /**
-   * The run's result as a run-log line (`logJson`): the value of the `pool_commit` the top-level
-   * END's success names; `null` until the END succeeded.
+   * For a `succeeded` run, its result as a run-log line (`logJson`): the value of the `pool_commit`
+   * the top-level END's success names; `null` for any other status, though END may have succeeded.
    */
   readonly result: string | null;
   /** The sum of every `model_call` step's `input_tokens`, failed attempts included. */
@@ -263,10 +269,10 @@ export function runScanFromJson(text: string): RunScan {
   try {
     raw = JSON.parse(text);
   } catch (error) {
-    throw new RangeError(`run scan isn't JSON: ${(error as Error).message}`, { cause: error });
+    throw new YianRangeError(`run scan isn't JSON: ${(error as Error).message}`, { cause: error });
   }
-  const bad = (field: string, what: string) => new RangeError(`run scan ${field} must be ${what}`);
-  if (!isRecord(raw)) throw new RangeError("run scan must be an object");
+  const bad = (field: string, what: string) => new YianRangeError(`run scan ${field} must be ${what}`);
+  if (!isRecord(raw)) throw new YianRangeError("run scan must be an object");
   const seqOrNull = (field: string): number | null => {
     const value = raw[field];
     if (value !== null && !Number.isSafeInteger(value)) throw bad(field, "an integer or null");
@@ -309,6 +315,10 @@ export function foldRunScan(scan: RunScan, envelope: { readonly seq: number; rea
   const settle = (node: string) => {
     scan.inFlight = scan.inFlight.filter(([id]) => id !== node);
   };
+  // A flow call's scope that ends takes its unfinished nodes with it.
+  const endScope = (scope: string) => {
+    scan.inFlight = scan.inFlight.filter(([id]) => !id.startsWith(`${scope}/`));
+  };
   applyWaitsRecord(scan.waits, envelope);
   if (record instanceof NodeStartedRecord || record instanceof NodeWokenRecord) {
     const entry = scan.inFlight.find(([id]) => id === record.nodeId);
@@ -323,10 +333,21 @@ export function foldRunScan(scan: RunScan, envelope: { readonly seq: number; rea
     settle(record.nodeId);
     if (record.terminalFailure !== null) scan.unreachableSeq ??= seq;
   } else if (record instanceof NodeExpandedRecord) {
-    settle(record.spawnerId);
+    // A flow call's scope leaves its agent in flight.
+    if (record.callId === null) settle(record.spawnerId);
   } else if (record instanceof NodeFailedRecord) {
-    settle(record.failure.nodeId!);
-    scan.nodeFailureSeq ??= seq;
+    if (record.scope !== null) {
+      endScope(record.scope);
+    } else {
+      settle(record.failure.nodeId!);
+      scan.nodeFailureSeq ??= seq;
+    }
+  } else if (record instanceof InterruptedRecord) {
+    for (const nodeId of record.nodes) {
+      for (const call of nodeCalls(scan.waits, nodeId)) {
+        if (call.scope !== null && call.closedReason === "interrupted") endScope(call.scope);
+      }
+    }
   } else if (record instanceof RunStoppedRecord) {
     scan.lastStop = seq;
   } else if (record instanceof RunResumedRecord) {
@@ -362,25 +383,25 @@ export function scanStatus(scan: RunScan): "succeeded" | "failed" | "cancelled" 
 }
 
 /**
- * Return where an unfinished run stands: `waiting` when its last frontier record is `run_waiting`
- * (every unsettled node waits, and no worker runs), `stopped` when the host stopped the last
- * segment (`lastStop`, the seq of the last `RunStopped` since the last `RunResumed`), else
+ * Return where an unfinished run stands: `unstarted` when its log ends inside its run start, before
+ * the START inputs' commit, so no resume can go on from it; `waiting` when its last frontier record
+ * is `run_waiting` (every unsettled node waits, and no worker runs); `stopped` when the host stopped
+ * the last segment (`lastStop`, the seq of the last `RunStopped` since the last `RunResumed`); else
  * `crashed`.
  */
-export function unfinishedStatus(waits: WaitsState, lastStop: number | null): "waiting" | "stopped" | "crashed" {
+export function unfinishedStatus(
+  waits: WaitsState,
+  lastStop: number | null,
+): "unstarted" | "waiting" | "stopped" | "crashed" {
+  if (!waits._inputsCommitted) return "unstarted";
   if (waits.lastFrontier === "run_waiting") return "waiting";
   return lastStop === null ? "crashed" : "stopped";
 }
 
-/**
- * Where a log stops being readable (`RunIndexRow.unreadable`), and the log's size and mtime and the
- * `maxLineBytes` it was read with.
- */
+/** Where a log stops being readable (`RunIndexRow.unreadable`), and the `maxLineBytes` it was read with. */
 interface Unreadable {
   seq: number;
   reason: string;
-  size: number;
-  mtimeMs: number;
   maxLineBytes: number | null;
 }
 
@@ -393,6 +414,7 @@ interface StoredRow {
   parentRunId: string | null;
   memories: RunIndexMemory[];
   lastSeq: number | null;
+  /** The value END's success names, whatever the status; `null` until END succeeded. */
   result: string | null;
   inputTokens: number;
   outputTokens: number;
@@ -400,6 +422,12 @@ interface StoredRow {
   cacheCreationTokens: number;
   reasoningTokens: number;
   offset: number;
+  /**
+   * The log's size and mtime when it was last read, `null` for a row an older yian stored: a log
+   * still of that size and mtime has nothing more to read, an unterminated last line included.
+   */
+  logSize: number | null;
+  logMtime: number | null;
   scan: RunScan;
   unreadable: Unreadable | null;
 }
@@ -407,174 +435,305 @@ interface StoredRow {
 /** Return `timeoutMs` when it is a non-negative safe integer. */
 function checkedTimeout(timeoutMs: unknown): number {
   if (typeof timeoutMs !== "number" || !Number.isSafeInteger(timeoutMs) || timeoutMs < 0) {
-    throw new RangeError(`timeoutMs must be a non-negative integer, got ${valueRepr(timeoutMs)}`);
+    throw new YianRangeError(`timeoutMs must be a non-negative integer, got ${valueRepr(timeoutMs)}`);
   }
   return timeoutMs;
 }
 
 /**
  * Bring `<runsDir>/index.sqlite` up to date with every run log `<runsDir>/<run_id>/log.jsonl`,
- * creating the index (mode 0600) when it is missing.
+ * creating the index (mode 0600) when it is missing; with `runIds`, with those runs' logs only.
  *
  * Each log is read on from the byte offset its row reached (`iterRunRecords` with `afterOffset`,
- * `runId` and `afterSeq`); a log that hasn't grown isn't opened. A log that was truncated or
- * replaced (`RunLogChangedError`) is read again from the start. A run folder with no log, or a log
- * with no complete record yet, has no row; a row whose log is gone is deleted. A log that can't be
- * read (an old schema, a damaged line, a first record that isn't `run_started` of the folder's run,
- * a line over `maxLineBytes`, or a file error such as no permission, or a log that is a symlink
- * or isn't a regular file, `EINVAL: not a regular file, open '<log>'`, which is never opened, or
- * has another link, `EINVAL: has more than one link, open '<log>'`) raises a
- * warning through `warn`. A log whose content can't be read gets a row of the records before the
- * one that failed, marked unreadable at it (`RunIndexRow.unreadable`), and is read again only once
- * its size or mtime changed, or with a higher `maxLineBytes` than it was read with. A file error keeps the row
- * as it was, and the next update tries again. A row whose stored scan can't be read is built
- * again from the start of its log. An index of another layout version or run-log schema, or whose
- * `runs` table has other columns, is dropped and built again.
+ * `runId` and `afterSeq`); a log whose size and mtime are as its row last read them, or that hasn't
+ * grown, isn't opened. A log that was truncated or replaced (`RunLogChangedError`) is read again
+ * from the start. A run folder with no log, or a log with no complete record yet, has no row; a
+ * row whose log is gone is deleted. A log that can't be read (an old schema, a damaged line, a
+ * first record that isn't `run_started` of the folder's run, a line over `maxLineBytes`, or a file
+ * error such as no permission, or a log that is a symlink or isn't a regular file, `EINVAL: not a
+ * regular file, open '<log>'`, which is never opened, or has another link, `EINVAL: has more than
+ * one link, open '<log>'`) raises a warning through `warn`. A log whose
+ * content can't be read gets a row of the records before the one that failed, marked unreadable
+ * at it (`RunIndexRow.unreadable`), and is read again only once its size or mtime changed, or with
+ * a higher `maxLineBytes` than it was read with. A file error keeps the row as it was, and the next
+ * update tries again. A row whose stored scan can't be read is built again from the start of its
+ * log. An index of another layout version or run-log schema, or whose `runs` table has other
+ * columns, is dropped and built again.
  *
  * An index that is damaged or isn't a database (SQLite's CORRUPT or NOTADB) is deleted, with its
  * journal, and built again from the logs, with a warning.
  *
- * The update is one SQLite transaction (`BEGIN IMMEDIATE`), so builders in any process take turns.
- * It waits at most `timeoutMs` for another builder's lock, then throws. Synchronous: it blocks its
- * thread while it waits and reads.
+ * The rows are first checked in a read: an update with nothing to read or delete writes nothing
+ * and takes no write lock. Otherwise it writes in SQLite transactions (`BEGIN IMMEDIATE`) of at
+ * most 200 runs each, so builders in any process take turns and a reader sees each batch as it is
+ * committed. It waits at most `timeoutMs` for another builder's lock, then throws. Synchronous: it
+ * blocks its thread while it waits and reads.
  *
  * @param runsDir The runs folder.
  * @param options.timeoutMs How long to wait for the index's lock, in milliseconds; 5000 by default.
  * @param options.maxLineBytes The most bytes a log line may hold, as `iterRunRecords` takes it;
  *   no limit by default.
+ * @param options.runIds Run folder names to read alone, as a host does when a run ends: no other
+ *   folder is listed or read, and no other row is deleted. A listed run whose log is gone loses
+ *   its row. Every run folder by default.
  * @throws RunIndexBusyError when another update holds the lock longer than `timeoutMs`.
- * @throws RangeError when `timeoutMs` isn't a non-negative integer, or `maxLineBytes` isn't a
- *   positive integer.
+ * @throws RangeError when `timeoutMs` isn't a non-negative integer, `maxLineBytes` isn't a
+ *   positive integer, or `runIds` isn't a list of run folder names.
  * @throws Error (code `ENOENT`) when `runsDir` doesn't exist, and SQLite's other errors, such as
  *   an index rebuilt after damage that is still damaged.
  */
 export function updateRunIndex(
   runsDir: string,
-  options: { timeoutMs?: number; maxLineBytes?: number | null } = {},
+  options: { timeoutMs?: number; maxLineBytes?: number | null; runIds?: readonly string[] | null } = {},
 ): void {
   const timeoutMs = checkedTimeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const maxLineBytes = options.maxLineBytes ?? null;
   // Checked here: a log's read errors become warnings, and a bad option must not.
   checkMaxLineBytes(maxLineBytes);
+  const runIds = options.runIds == null ? null : checkedRunIds(options.runIds);
   const path = join(runsDir, INDEX_FILE);
+  const update = { runsDir, path, timeoutMs, maxLineBytes, runIds };
   try {
-    updateIndexFile(runsDir, path, timeoutMs, maxLineBytes);
+    updateIndexFile(update);
   } catch (error) {
     if (!damaged(error)) throw error;
     // The index is a cache of the logs: build it again, as deleting it by hand would. Its journal
     // goes too, so SQLite can't play a stale one into the new file.
     warn(`run index ${path} was damaged (${(error as Error).message}); rebuilt it from the logs`);
     for (const file of [path, `${path}-journal`]) fs.rmSync(file, { force: true });
-    updateIndexFile(runsDir, path, timeoutMs, maxLineBytes);
+    updateIndexFile(update);
   }
 }
 
-/** Run `updateRunIndex`'s transaction on the index file `path`, creating the file (0600) when missing. */
-function updateIndexFile(runsDir: string, path: string, timeoutMs: number, maxLineBytes: number | null): void {
-  createPrivate(path);
-  const db = openSqlite(path);
+/** How many runs an update reads between commits. */
+const BATCH_RUNS = 200;
+
+/** What one `updateRunIndex` call updates, and how. */
+interface IndexUpdate {
+  readonly runsDir: string;
+  readonly path: string;
+  readonly timeoutMs: number;
+  readonly maxLineBytes: number | null;
+  /** The run folders to read alone, or `null` for every folder. */
+  readonly runIds: readonly string[] | null;
+}
+
+/** Return `runIds`, each once, when it is a list of run folder names. */
+function checkedRunIds(runIds: unknown): string[] {
+  const named = (id: unknown) => typeof id === "string" && id !== "" && id !== "." && id !== ".." && !/[/\\\0]/.test(id);
+  if (!Array.isArray(runIds) || !runIds.every(named)) {
+    throw new YianRangeError(`runIds must be a list of run folder names, got ${valueRepr(runIds)}`);
+  }
+  return [...new Set(runIds as string[])];
+}
+
+/** Return the run folder names in `runsDir`, sorted. */
+function runFolders(runsDir: string): string[] {
+  return fs.readdirSync(runsDir).sort(compareCodeUnits);
+}
+
+/**
+ * Run `updateRunIndex` on the index file `update.path`, creating the file (0600) when missing: read
+ * which runs need reading or deleting, then, when any do, write them in batches.
+ */
+function updateIndexFile(update: IndexUpdate): void {
+  createPrivate(update.path);
+  const db = openSqlite(update.path);
   try {
-    db.exec(`PRAGMA busy_timeout = ${timeoutMs}`);
-    try {
-      db.exec("BEGIN IMMEDIATE");
-    } catch (error) {
-      throw busyOr(error, path, timeoutMs);
-    }
-    try {
-      prepareSchema(db);
-      const select = db.prepare("SELECT * FROM runs WHERE run_id = ?");
-      const upsert = db.prepare(
-        `INSERT OR REPLACE INTO runs (${COLUMNS.join(", ")}) VALUES (${COLUMNS.map(() => "?").join(", ")})`,
-      );
-      const kept = new Set<string>();
-      // Listed under the lock, so a run another builder indexed since is never dropped as gone.
-      for (const runId of fs.readdirSync(runsDir).sort(compareCodeUnits)) {
-        const log = join(runsDir, runId, "log.jsonl");
-        const stored = select.get(runId);
-        let saved: StoredRow | null = null;
-        try {
-          saved = stored === undefined ? null : fromColumns(stored);
-        } catch (error) {
-          // A row this version can't read is built again from the log.
-          if (!(error instanceof RangeError)) throw error;
-        }
-        let built: StoredRow | null;
-        try {
-          // lstat, so a symlink at the log is skipped as the readers refuse it, not read as its target.
-          const stat = fs.lstatSync(log);
-          // Before `readUpTo`: a FIFO or a device reads as size 0, and is never opened here; a hard
-          // link, which the readers refuse, would otherwise keep a row read through it current.
-          if (!stat.isFile()) throw notRegularFile(log);
-          if (stat.nlink > 1) throw hardLinked(log);
-          if (saved !== null && readUpTo(saved, stat, maxLineBytes)) {
-            kept.add(runId);
-            continue;
-          }
-          try {
-            built = readRun(log, runId, saved, stat, maxLineBytes);
-          } catch (error) {
-            if (!(error instanceof RunLogChangedError) || saved === null) throw error;
-            built = readRun(log, runId, null, stat, maxLineBytes);
-          }
-        } catch (error) {
-          const code = (error as NodeJS.ErrnoException | null)?.code;
-          // No log: a file such as the index, a folder whose run hasn't started, or a run removed since.
-          if (code === "ENOENT" || code === "ENOTDIR") continue;
-          if (typeof code !== "string") throw error;
-          // One log yian can't read as a file must not stop the others; its row stays as it was, and
-          // the next update tries again.
-          warn(`run index skipped ${log}: ${(error as Error).message}`);
-          if (saved !== null) kept.add(runId);
-          continue;
-        }
-        // A log with no complete record (one emptied since its last update included) has no row.
-        if (built === null) continue;
-        if (built.unreadable !== null) warn(`run index skipped ${log}: ${built.unreadable.reason}`);
-        kept.add(runId);
-        upsert.run(...toColumns(built));
-      }
-      const remove = db.prepare("DELETE FROM runs WHERE run_id = ?");
-      for (const row of db.prepare("SELECT run_id FROM runs").all()) {
-        if (!kept.has(row["run_id"] as string)) remove.run(row["run_id"] as string);
-      }
-      db.exec("COMMIT");
-    } catch (error) {
-      try {
-        db.exec("ROLLBACK");
-      } catch {
-        // A failed COMMIT may have rolled back already; the first error is the one to report.
-      }
-      throw busyOr(error, path, timeoutMs);
-    }
+    db.exec(`PRAGMA busy_timeout = ${update.timeoutMs}`);
+    const work = pendingRuns(db, update);
+    if (work !== null) writeRuns(db, update, work);
   } finally {
     db.close();
   }
 }
 
 /**
+ * Return the runs an update must read or delete, and whether rows of folders now gone must go,
+ * from one read of the rows; `null` when there are none, so the update need not take the write
+ * lock. A log yian may not open, that isn't a regular file or that has another link is read again
+ * each time, so it warns.
+ */
+function pendingRuns(db: Sqlite, update: IndexUpdate): { runIds: string[]; dropGone: boolean } | null {
+  const { runsDir, maxLineBytes } = update;
+  const stored = new Map<string, StoredRow | null>();
+  let current: boolean;
+  try {
+    db.exec("BEGIN");
+    try {
+      current = currentLayout(db);
+      // The result isn't needed to check a row, and may be most of its bytes.
+      if (current) {
+        for (const columns of db.prepare(`SELECT ${CHECKED_COLUMNS} FROM runs`).all()) {
+          let saved: StoredRow | null = null;
+          try {
+            saved = fromColumns(columns);
+          } catch (error) {
+            if (!(error instanceof RangeError)) throw error;
+          }
+          stored.set(columns["run_id"] as string, saved);
+        }
+      }
+    } finally {
+      db.exec("COMMIT");
+    }
+  } catch (error) {
+    throw busyOr(error, update.path, update.timeoutMs);
+  }
+  const names = update.runIds ?? runFolders(runsDir);
+  if (!current) return { runIds: [...names], dropGone: update.runIds === null };
+  const runIds = names.filter((runId) => {
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(join(runsDir, runId, "log.jsonl"));
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | null)?.code;
+      if (code === "ENOENT" || code === "ENOTDIR") return stored.has(runId);
+      return true;
+    }
+    const saved = stored.get(runId);
+    return !stat.isFile() || stat.nlink > 1 || saved == null || !readUpTo(saved, stat, maxLineBytes);
+  });
+  const listed = new Set(names);
+  const dropGone = update.runIds === null && [...stored.keys()].some((runId) => !listed.has(runId));
+  return runIds.length === 0 && !dropGone ? null : { runIds, dropGone };
+}
+
+/**
+ * Read each of `work.runIds` into its row, committing every `BATCH_RUNS` runs, then, with
+ * `work.dropGone`, delete the rows whose log is gone.
+ */
+function writeRuns(db: Sqlite, update: IndexUpdate, work: { runIds: string[]; dropGone: boolean }): void {
+  const { runsDir, path, timeoutMs, maxLineBytes } = update;
+  const begin = () => {
+    try {
+      db.exec("BEGIN IMMEDIATE");
+    } catch (error) {
+      throw busyOr(error, path, timeoutMs);
+    }
+  };
+  begin();
+  try {
+    prepareSchema(db);
+    const select = db.prepare("SELECT * FROM runs WHERE run_id = ?");
+    const upsert = db.prepare(
+      `INSERT OR REPLACE INTO runs (${COLUMNS.join(", ")}) VALUES (${COLUMNS.map(() => "?").join(", ")})`,
+    );
+    const remove = db.prepare("DELETE FROM runs WHERE run_id = ?");
+    let batch = 0;
+    for (const runId of work.runIds) {
+      if (batch === BATCH_RUNS) {
+        db.exec("COMMIT");
+        batch = 0;
+        begin();
+      }
+      batch += 1;
+      const log = join(runsDir, runId, "log.jsonl");
+      const stored = select.get(runId);
+      let saved: StoredRow | null = null;
+      try {
+        saved = stored === undefined ? null : fromColumns(stored);
+      } catch (error) {
+        // A row this version can't read is built again from the log.
+        if (!(error instanceof RangeError)) throw error;
+      }
+      let built: StoredRow | null;
+      try {
+        // lstat, so a symlink at the log is skipped as the readers refuse it, not read as its target.
+        const stat = fs.lstatSync(log);
+        // Before `readUpTo`: a FIFO or a device reads as size 0, and is never opened here; a hard
+        // link, which the readers refuse, would otherwise keep a row read through it current.
+        if (!stat.isFile()) throw notRegularFile(log);
+        if (stat.nlink > 1) throw hardLinked(log);
+        // Another builder may have read it since the check.
+        if (saved !== null && readUpTo(saved, stat, maxLineBytes)) continue;
+        try {
+          built = readRun(log, runId, saved, stat, maxLineBytes);
+        } catch (error) {
+          if (!(error instanceof RunLogChangedError) || saved === null) throw error;
+          built = readRun(log, runId, null, stat, maxLineBytes);
+        }
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException | null)?.code;
+        // No log: a file such as the index, a folder whose run hasn't started, or a run removed since.
+        if (code === "ENOENT" || code === "ENOTDIR") {
+          if (stored !== undefined) remove.run(runId);
+          continue;
+        }
+        if (typeof code !== "string") throw error;
+        // One log yian can't read as a file must not stop the others; its row stays as it was, and
+        // the next update tries again.
+        warn(`run index skipped ${log}: ${(error as Error).message}`);
+        continue;
+      }
+      // A log with no complete record (one emptied since its last update included) has no row.
+      if (built === null) {
+        if (stored !== undefined) remove.run(runId);
+        continue;
+      }
+      if (built.unreadable !== null) warn(`run index skipped ${log}: ${built.unreadable.reason}`);
+      upsert.run(...toColumns(built));
+    }
+    if (work.dropGone) {
+      // Checked under the lock, so a run another builder indexed since is never dropped as gone.
+      for (const row of db.prepare("SELECT run_id FROM runs").all()) {
+        const runId = row["run_id"] as string;
+        if (!hasLog(join(runsDir, runId, "log.jsonl"))) remove.run(runId);
+      }
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      // A failed COMMIT may have rolled back already; the first error is the one to report.
+    }
+    throw busyOr(error, path, timeoutMs);
+  }
+}
+
+/** Return whether something is at `log`: a missing log or folder gives `false`. */
+function hasLog(log: string): boolean {
+  try {
+    fs.lstatSync(log);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    if (code === "ENOENT" || code === "ENOTDIR") return false;
+    throw error;
+  }
+}
+
+/**
  * Return the rows of `<runsDir>/index.sqlite`, by start time then run id (a row with no start time
- * first), as the last update left them, with `running` put on top of a `waiting`, `stopped` or `crashed` run whose log a writer holds now
- * (`isRunLogLocked`, probed on every read unless `lockProbe` is `false`; a lock that can't be
- * probed counts as free). A missing
- * index, or one of another layout, has no rows; so has a damaged one, with a warning through `warn`
- * (the next update rebuilds it). A row whose stored scan can't be read is
- * left out with a warning through `warn`; the next update builds it again. A `waiting` row's
- * `waits`, `ready` and `wakeAt` are read from its scan's waits fold, as `inspectRun` reads them.
- * Reading doesn't update the index; it reads while a builder works, and waits only while one
- * commits.
+ * first), as the last update left them, with `running` put on top of a run that hasn't ended whose
+ * log a writer holds now (`isRunLogLocked`, probed on every read unless `lockProbe` is `false`; a
+ * lock that can't be probed counts as free). A missing index, or one of another layout, has no
+ * rows; so has a damaged one, with a warning through `warn` (the next update rebuilds it). A row
+ * whose stored scan can't be read is left out with a warning through `warn`; the next update builds
+ * it again. A `waiting` row's `waits`, `ready` and `wakeAt` are read from its scan's waits fold, as
+ * `inspectRun` reads them, and only a `succeeded` row has a `result`. Reading doesn't update the
+ * index; it reads while a builder works, and waits only while one commits.
  *
  * @param runsDir The runs folder.
  * @param options.timeoutMs How long to wait while a builder commits, in milliseconds; 5000 by default.
  * @param options.lockProbe `false` skips the lock probes, which cost a file open per such row, so
  *   each row has the status its records show and none is `running`; `true` by default.
- * @throws RangeError when `timeoutMs` isn't a non-negative integer, or `lockProbe` isn't a boolean.
+ * @param options.result `false` leaves out each row's result, which may be most of the index's
+ *   bytes, so a listing that shows none reads only the rest (`result` is `null`); `true` by default.
+ * @throws RangeError when `timeoutMs` isn't a non-negative integer, or `lockProbe` or `result`
+ *   isn't a boolean.
  * @throws SQLite's error when the index file stays locked past `timeoutMs`, or can't be read for
  *   another reason than damage.
  */
-export function readRunIndex(runsDir: string, options: { timeoutMs?: number; lockProbe?: boolean } = {}): RunIndexRow[] {
+export function readRunIndex(
+  runsDir: string,
+  options: { timeoutMs?: number; lockProbe?: boolean; result?: boolean } = {},
+): RunIndexRow[] {
   const timeoutMs = checkedTimeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-  const lockProbe = options.lockProbe ?? true;
-  if (typeof lockProbe !== "boolean") throw new RangeError(`lockProbe must be a boolean, got ${valueRepr(lockProbe)}`);
+  const { lockProbe = true, result = true } = options;
+  if (typeof lockProbe !== "boolean") throw new YianRangeError(`lockProbe must be a boolean, got ${valueRepr(lockProbe)}`);
+  if (typeof result !== "boolean") throw new YianRangeError(`result must be a boolean, got ${valueRepr(result)}`);
   const path = join(runsDir, INDEX_FILE);
   if (!fs.existsSync(path)) return [];
   let db: Sqlite | undefined;
@@ -582,7 +741,7 @@ export function readRunIndex(runsDir: string, options: { timeoutMs?: number; loc
   try {
     db = openSqlite(path, { readonly: true });
     db.exec(`PRAGMA busy_timeout = ${timeoutMs}`);
-    rows = indexRows(db);
+    rows = indexRows(db, { result });
   } catch (error) {
     if (!damaged(error)) throw error;
     warn(`run index ${path} is damaged (${(error as Error).message}); the next update rebuilds it`);
@@ -600,20 +759,17 @@ export function readRunIndex(runsDir: string, options: { timeoutMs?: number; loc
       warn(`run index skipped ${columns["run_id"] as string}: ${error.message}`);
       return [];
     }
-    const { scan, unreadable, ...row } = stored;
+    const { scan, unreadable, logSize: _size, logMtime: _mtime, ...row } = stored;
     let status: RunIndexStatus = scanStatus(scan);
-    if (
-      lockProbe &&
-      (status === "waiting" || status === "stopped" || status === "crashed") &&
-      locked(join(runsDir, row.runId, "log.jsonl"))
-    ) {
-      status = "running";
-    }
+    const ended = status === "succeeded" || status === "failed" || status === "cancelled";
+    if (lockProbe && !ended && locked(join(runsDir, row.runId, "log.jsonl"))) status = "running";
     const waiting = status === "waiting";
     return [
       {
         ...row,
         status,
+        // The stored row keeps END's value, so a run that succeeds later needn't read it again.
+        result: status === "succeeded" ? row.result : null,
         waits: waiting ? waitInfos(scan.waits) : [],
         ready: waiting && wakeableNodes(scan.waits).length > 0,
         wakeAt: waiting ? wakeAt(scan.waits) : null,
@@ -624,15 +780,17 @@ export function readRunIndex(runsDir: string, options: { timeoutMs?: number; loc
 }
 
 /**
- * @internal Return the index's rows in run order, or `[]` for an index of another layout.
- * One read transaction holds the layout check and the rows, so a rebuild by another yian version
- * between the two can't hand back rows of its layout.
+ * @internal Return the index's rows in run order, or `[]` for an index of another layout; with
+ * `result: false`, without the `result` column (`null`). One read transaction holds the layout
+ * check and the rows, so a rebuild by another yian version between the two can't hand back rows of
+ * its layout.
  */
-export function indexRows(db: Sqlite): SqliteRow[] {
+export function indexRows(db: Sqlite, { result = true }: { result?: boolean } = {}): SqliteRow[] {
   db.exec("BEGIN");
   try {
     if (!currentLayout(db)) return [];
-    return db.prepare("SELECT * FROM runs ORDER BY started_at, run_id").all();
+    const columns = result ? "*" : `${CHECKED_COLUMNS}, NULL AS result`;
+    return db.prepare(`SELECT ${columns} FROM runs ORDER BY started_at, run_id`).all();
   } finally {
     db.exec("COMMIT");
   }
@@ -693,21 +851,23 @@ function prepareSchema(db: Sqlite): void {
 /** Return a busy SQLite `error` as a `RunIndexBusyError`, and any other error as it is. */
 function busyOr(error: unknown, path: string, timeoutMs: number): unknown {
   if (((sqliteErrorCode(error) ?? -1) & 0xff) !== SQLITE_BUSY) return error;
-  return new RunIndexBusyError(`run index ${path} is locked by another update; gave up after ${timeoutMs} ms`, {
+  return new RunIndexBusyError(`run index ${path} is locked; gave up after ${timeoutMs} ms`, {
     cause: error,
   });
 }
 
 /**
- * Return whether `saved` holds all an update can read of the log `stat` describes: every byte, or,
- * for a log marked unreadable, the same size and mtime read with a `maxLineBytes` at least as high.
+ * Return whether `saved` holds all an update can read of the log `stat` describes: every byte, or
+ * the log as it was last read, its size and mtime unchanged (so an unterminated last line isn't
+ * read again), and for a log marked unreadable, read with a `maxLineBytes` at least as high.
  */
 function readUpTo(saved: StoredRow, stat: fs.Stats, maxLineBytes: number | null): boolean {
-  if (saved.unreadable === null) return saved.offset === stat.size;
-  const { size, mtimeMs, maxLineBytes: readWith } = saved.unreadable;
+  const unchanged = saved.logSize === stat.size && saved.logMtime === stat.mtimeMs;
+  if (saved.unreadable === null) return saved.offset === stat.size || unchanged;
+  const readWith = saved.unreadable.maxLineBytes;
   // A higher limit may read the line that was too long.
   const higher = readWith !== null && (maxLineBytes === null || maxLineBytes > readWith);
-  return size === stat.size && mtimeMs === stat.mtimeMs && !higher;
+  return unchanged && !higher;
 }
 
 /**
@@ -716,9 +876,9 @@ function readUpTo(saved: StoredRow, stat: fs.Stats, maxLineBytes: number | null)
  * new row; return the row (`saved` unchanged when nothing new was read), or `null` for a log with
  * no complete record. Lines are read with `maxLineBytes`.
  *
- * A log whose content can't be read past some record (a `RangeError`) gives the row of the records
- * before it, marked `unreadable` at it with `stat`, the log as it was before the read, and the
- * error's message cut by `shownText`.
+ * The row holds `stat`'s size and mtime, the log as it was before the read. A log whose content
+ * can't be read past some record (a `RangeError`) gives the row of the records before it, marked
+ * `unreadable` at it with the error's message cut by `shownText`.
  *
  * @throws RunLogChangedError when the log no longer continues `saved`.
  * @throws Error (a file error, such as `ENOENT` or `EACCES`) when the log can't be read as a file.
@@ -738,9 +898,9 @@ function readRun(log: string, runId: string, saved: StoredRow | null, stat: fs.S
     for (const entry of iterRunRecords(log, options)) {
       const record = entry.envelope.record;
       if (row === null) {
-        if (!(record instanceof RunStartedRecord)) throw new RangeError("the first run log record must be RunStarted");
+        if (!(record instanceof RunStartedRecord)) throw new YianRangeError("the first run log record must be RunStarted");
         const mismatch = folderMismatch(entry.runId, runId);
-        if (mismatch !== null) throw new RangeError(mismatch);
+        if (mismatch !== null) throw new YianRangeError(mismatch);
         row = emptyRow(runId);
         row.flow = record.flow === null ? null : join(record.flow.dir, record.flow.root);
         declared = declaredMemories(record.flow);
@@ -775,7 +935,12 @@ function readRun(log: string, runId: string, saved: StoredRow | null, stat: fs.S
     row ??= emptyRow(runId);
     const seq = row.lastSeq === null ? 0 : row.lastSeq + 1;
     // The message quotes the line's fields, which may be of any length.
-    row.unreadable = { seq, reason: shownText(error.message), size: stat.size, mtimeMs: stat.mtimeMs, maxLineBytes };
+    row.unreadable = { seq, reason: shownText(error.message), maxLineBytes };
+  }
+  if (row !== null) {
+    // The log as it was before the read, so a write during it reads again next time.
+    row.logSize = stat.size;
+    row.logMtime = stat.mtimeMs;
   }
   if (row !== null && lastAt !== null) {
     const status = scanStatus(row.scan);
@@ -872,7 +1037,7 @@ function memoriesFromJson(text: unknown): RunIndexMemory[] {
       (each) =>
         isRecord(each) && ["input", "identity", "type"].every((field) => typeof each[field] === "string"),
     );
-  if (!valid) throw new RangeError("the stored memories aren't a list of memory inputs");
+  if (!valid) throw new YianRangeError("the stored memories aren't a list of memory inputs");
   return (parsed as RunIndexMemory[]).map(({ input, identity, type }) => ({ input, identity, type }));
 }
 
@@ -893,6 +1058,8 @@ function emptyRow(runId: string): StoredRow {
     cacheCreationTokens: 0,
     reasoningTokens: 0,
     offset: 0,
+    logSize: null,
+    logMtime: null,
     scan: emptyRunScan(),
     unreadable: null,
   };
@@ -923,13 +1090,13 @@ function addUsage(row: StoredRow, step: Readonly<Record<string, unknown>>): void
  */
 function committedValue(log: string, seq: number, maxLineBytes: number | null): string | null {
   const offset = runRecordOffsets(log, { maxLineBytes })[seq];
-  if (offset === undefined) throw new RangeError(`the log has no record at seq ${seq}`);
+  if (offset === undefined) throw new YianRangeError(`the log has no record at seq ${seq}`);
   for (const entry of iterRunRecords(log, { afterOffset: offset, maxLineBytes })) {
     const record = entry.envelope.record;
-    if (!(record instanceof PoolCommitRecord)) throw new RangeError(`the record at seq ${seq} isn't a pool_commit`);
+    if (!(record instanceof PoolCommitRecord)) throw new YianRangeError(`the record at seq ${seq} isn't a pool_commit`);
     return record.value === null ? null : logJson(record.value.value);
   }
-  throw new RangeError(`the log has no record at seq ${seq}`);
+  throw new YianRangeError(`the log has no record at seq ${seq}`);
 }
 
 /** Return a row's column values, in `COLUMNS` order. */
@@ -952,8 +1119,8 @@ function toColumns(row: StoredRow): (string | number | null)[] {
     JSON.stringify(row.scan),
     row.unreadable?.seq ?? null,
     row.unreadable?.reason ?? null,
-    row.unreadable?.size ?? null,
-    row.unreadable?.mtimeMs ?? null,
+    row.logSize,
+    row.logMtime,
     row.unreadable?.maxLineBytes ?? null,
     JSON.stringify(row.memories),
   ];
@@ -976,6 +1143,8 @@ function fromColumns(columns: SqliteRow): StoredRow {
     cacheCreationTokens: columns["cache_creation_tokens"] as number,
     reasoningTokens: columns["reasoning_tokens"] as number,
     offset: columns["offset"] as number,
+    logSize: columns["log_size"] as number | null,
+    logMtime: columns["log_mtime"] as number | null,
     scan: runScanFromJson(columns["scan"] as string),
     unreadable:
       columns["unreadable_seq"] === null
@@ -983,8 +1152,6 @@ function fromColumns(columns: SqliteRow): StoredRow {
         : {
             seq: columns["unreadable_seq"] as number,
             reason: columns["unreadable_reason"] as string,
-            size: columns["log_size"] as number,
-            mtimeMs: columns["log_mtime"] as number,
             maxLineBytes: columns["max_line_bytes"] as number | null,
           },
   };

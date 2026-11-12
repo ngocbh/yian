@@ -30,6 +30,7 @@ const ALLOWED: Record<string, string> = {
   // Format versions and fixed codes.
   "runtime/log.ts: SCHEMA_VERSION": "run-record schema version",
   "runtime/log.ts: RETIRED_SCHEMAS": "schema versions this version refuses by name",
+  "runtime/state.ts: TAKE_ENVELOPE_LEVELS": "levels a take's output adds around an event: its record and events list",
   "runtime/run_index.ts: INDEX_VERSION": "run index layout version",
   "runtime/run_index.ts: STORED_VERSION": "run index layout and run-log schema versions, as user_version holds them",
   "memory/vectordb.ts: SEARCH_CHUNK_ROWS": "rows a VectorDBMemory search reads at once, so its memory use stays bounded",
@@ -107,6 +108,7 @@ const ALLOWED: Record<string, string> = {
   "run.ts: LITERAL_LABEL_WIDTH": "width of a literal shown in a type label",
   "llm_clients/redact.ts: MIN_VISIBLE": "key characters a masked echo must show to count",
   "llm/errors.ts: MAX_DETAIL_CHARS": "length of provider error text kept in a message",
+  "llm/structured.ts: SHOWN_ARGUMENTS_CHARS": "length of a call's arguments shown in a structured-output error",
   "llm/testing.ts: MAX_DIFFS": "differences listed in a cassette mismatch message",
   "tools/mcp.ts: STDERR_LINES": "MCP server stderr lines shown when it fails to start or ends during a call",
   "tools/mcp.ts: STDERR_KEEP_CHARS": "MCP server stderr kept for a start error or a call it ends",
@@ -114,6 +116,7 @@ const ALLOWED: Record<string, string> = {
   // Internal sizes that no user input reaches.
   "cli/diff.ts: MAX_TABLE": "line pairs a diff compares before showing the whole change, internal",
   "llm/transport.ts: MAX_ERROR_BODY_BYTES": "bytes of an error response read, internal",
+  "llm/errors.ts: RECEIVED_JSON_DEPTH": "nesting read from a provider's or MCP server's JSON, above any value kept",
   "runtime/log.ts: READ_CHUNK_BYTES": "bytes of a run log read at a time, internal",
   "runtime/log.ts: HEADER_DEPTH": "containers a long line's header scan tracks, fixed by the paths it reads",
   "runtime/log.ts: HEADER_TOKEN_BYTES": "bytes a long line's header scan keeps of a key or number, internal",
@@ -143,6 +146,7 @@ const ALLOWED: Record<string, string> = {
   "llm_clients/auth/openai.ts: OpenAIAuth.deviceLogin.timeoutMs": "sign-in timeout",
   "llm_clients/auth/store.ts: AuthStore.constructor.lockTimeoutMs": "file lock timeout",
   "runtime/run_index.ts: DEFAULT_TIMEOUT_MS": "run index lock timeout, a host call's timeoutMs",
+  "runtime/run_index.ts: BATCH_RUNS": "runs an index update reads between commits, so readers see its rows as it goes",
   "typesys/event_limit.ts: MAX_EVENT_BYTES":
     "the built-in YIAN_MAX_EVENT_BYTES, its one source: defaults.ts's entry reads it, and builtin-free layers read it here",
   "llm_clients/auth/store.ts: AuthStore.constructor.refreshMarginMs": "time before token expiry to refresh",

@@ -44,6 +44,7 @@ import {
   parsedNodes,
   runCase,
 } from "../helpers/declarations.ts";
+import { YianRangeError } from "../../src/typesys/errors.ts";
 
 /** Each mapping pair of `cursor`: its key's built value, key range, value range and value. */
 function mappingSnapshot(cursor: SourceCursor): (Value | SourceRange | null)[][] {
@@ -758,7 +759,7 @@ test.each([
     });
 
   const error = thrownBy(run) as Error;
-  expect(error.constructor).toBe(RangeError);
+  expect(error.constructor).toBe(YianRangeError);
   expect(error.message).toBe(message);
   expect(message).not.toContain(body.flowId);
   expect(message).not.toContain(INLINE_FLOW_PREFIX);
@@ -774,7 +775,7 @@ test("registerInlineBodies checks every body before the first registration", () 
   const run = () => registerInlineBodies(broken, bodies, { registrar, buildChild: () => handChild({ output: null }) });
 
   const error = thrownBy(run) as Error;
-  expect(error.constructor).toBe(RangeError);
+  expect(error.constructor).toBe(YianRangeError);
   expect(error.message).toBe("inline body of node 'loop_node': no matching composite node descriptor");
   expect(registrar.registrations).toEqual([]);
 });

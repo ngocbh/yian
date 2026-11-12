@@ -27,7 +27,7 @@ import {
   providers,
 } from "../../src/cli/auth.ts";
 import { type CliIo, type OptionValue, type ParsedArgs, UsageError, type Writer } from "../../src/cli/utils.ts";
-import { withEnv } from "../../src/defaults.ts";
+import { current, withEnv } from "../../src/defaults.ts";
 import { PROVIDER_API_KEY_ENV } from "../../src/llm_clients/api_key_env.ts";
 import {
   ApiKeyCredentials,
@@ -160,6 +160,18 @@ describe("providers", () => {
   });
 });
 
+/** Return `{a: {a: ... 1}}`: `levels` records, one inside the next. */
+function deepRecords(levels: number): unknown {
+  let value: unknown = 1;
+  for (let level = 0; level < levels; level++) value = { a: value };
+  return value;
+}
+
+/** The message for a free-form value nested deeper than `limit` levels. */
+function tooDeep(limit: number): string {
+  return `Value nests deeper than ${limit} levels, the limit for a yian value (each record and list is a level)`;
+}
+
 describe("configErrors", () => {
   test("a valid layer has none", () => {
     expect(configErrors({ provider: "openai", model: "gpt-5.5", api_key: "k" })).toEqual([]);
@@ -235,6 +247,32 @@ describe("configErrors", () => {
     configErrors(layer);
     expect(layer).toEqual({ provider: "openai", api_key: "k" });
   });
+
+  test.each([
+    ["vllm", "chat_template_kwargs"],
+    ["openrouter", "provider"],
+  ])("a free-form %s.%s nested too deeply is one error at the field, at any depth", (provider, key) => {
+    const limit = current().maxValueNesting;
+    const field = `${provider}.${key}`;
+    expect(configErrors({ provider, model: "m1", [provider]: { [key]: { a: deepRecords(limit - 1) } } })).toEqual([]);
+    for (const levels of [limit, 50_000]) {
+      expect(configErrors({ provider, model: "m1", [provider]: { [key]: { a: deepRecords(levels) } } })).toEqual([
+        { field, message: tooDeep(limit) },
+      ]);
+    }
+  });
+
+  test("many errors are listed in linear time, each once and in order", () => {
+    const count = 100_000;
+    const ids = Array.from({ length: count }, (_, i) => `s${i}`);
+    const started = performance.now();
+    const errors = configErrors({ provider: "vllm", model: "m", vllm: { stop_token_ids: ids }, a: 1, b: 2 });
+    expect(performance.now() - started).toBeLessThan(3_000);
+    expect(errors).toHaveLength(count + 1);
+    expect(errors[0]).toEqual({ field: "vllm.stop_token_ids.0", message: "Input should be a valid integer" });
+    expect(errors[count - 1]!.field).toBe(`vllm.stop_token_ids.${count - 1}`);
+    expect(errors[count]).toEqual({ field: null, message: EXTRA_FIELD });
+  });
 });
 
 describe("configCheck", () => {
@@ -292,7 +330,21 @@ describe("configCheck", () => {
       out: "",
       err:
         "deepseek: The 'deepseek' block mirrors the Chat Completions request, but the layer's model is routed " +
-        "to the Responses API; remove the block or use a model served through Chat Completions.\n",
+        "to the Responses API by its name; remove the block, or set api: chat if the model is served through " +
+        "Chat Completions.\n",
+    });
+  });
+
+  test("a layer nested far past the stack's depth gets the located error", async () => {
+    const levels = 40_000;
+    const deep = `${'{"a":'.repeat(levels)}1${"}".repeat(levels)}`;
+    const stdin = `{"provider":"vllm","model":"m1","vllm":{"chat_template_kwargs":${deep}}}`;
+    const result = await run(configCheck, jsonArgs(true), fakeIo({ stdin }));
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.out)).toEqual({
+      format: "yian.cli.v1",
+      ok: false,
+      errors: [{ field: "vllm.chat_template_kwargs", message: tooDeep(current().maxValueNesting) }],
     });
   });
 
@@ -316,7 +368,7 @@ describe("configCheck", () => {
 function responsesBlock(provider: string): string {
   return (
     `The '${provider}' block mirrors the Chat Completions request, but the layer's model is routed to the ` +
-    "Responses API; remove the block or use a model served through Chat Completions."
+    "Responses API by its name; remove the block, or set api: chat if the model is served through Chat Completions."
   );
 }
 

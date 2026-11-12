@@ -12,8 +12,8 @@
  * Knows about: the MCP SDK client (`@modelcontextprotocol/client`, imported when a server opens),
  * `defaults`, `platform` (the version, and `safeFetch` for every HTTP request), `tools/context`,
  * `tools/errors`, `tools/function_tools`, `tools/types` (the output schema check), `llm/body`
- * (exact JSON writes), `llm/errors` and `llm/auth` (scrubbing the server's secrets from errors),
- * typesys and diagnostics.
+ * (exact JSON writes), `llm/errors` (scrubbing the server's secrets from errors, and reading its
+ * stdio lines within the received-JSON bounds), `llm/auth`, typesys and diagnostics.
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
@@ -25,9 +25,10 @@ import { current } from "../defaults.ts";
 import { reprText } from "../diagnostics.ts";
 import { scrub } from "../llm/auth.ts";
 import { encodeBody } from "../llm/body.ts";
-import { scrubError } from "../llm/errors.ts";
+import { parseReceivedJson, receivedBound, scrubError } from "../llm/errors.ts";
 import { LOOPBACK_HOSTS, RedirectError, safeFetch, VERSION } from "../platform.ts";
-import { type JsonObject, parseJson } from "../typesys/json.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
+import type { JsonObject } from "../typesys/json.ts";
 import {
   buildValueAs,
   fromHost,
@@ -162,7 +163,8 @@ export class McpTransportError extends McpError {
 
 /**
  * The MCP server is gone: yian closed it, its process, connection or session ended, or it sent a
- * message over `YIAN_MAX_MCP_MESSAGE_BYTES`, which the message then names.
+ * message over `YIAN_MAX_MCP_MESSAGE_BYTES` or, on stdio, past the received-JSON bounds, which the
+ * message then names.
  *
  * For a stdio server that ended on its own, the message says how: its exit code or signal. A call
  * in flight then also names its tool and ends with the last lines the server wrote to stderr,
@@ -287,23 +289,23 @@ export function mcpServer(options: McpServerOptions): McpServer {
   const label = absent(options.label);
   const concurrencySafe = absent(options.concurrencySafe);
   if ((command === undefined) === (url === undefined)) {
-    throw new RangeError("mcpServer needs exactly one of command or url");
+    throw new YianRangeError("mcpServer needs exactly one of command or url");
   }
   if (command !== undefined) {
     if (typeof command !== "string") {
-      throw new TypeError(`mcpServer command must be a string, got ${jsTypeName(command)}`);
+      throw new YianTypeError(`mcpServer command must be a string, got ${jsTypeName(command)}`);
     }
-    if (command === "") throw new RangeError("mcpServer command must not be empty");
+    if (command === "") throw new YianRangeError("mcpServer command must not be empty");
     if (headers !== undefined) {
-      throw new RangeError("mcpServer headers needs url; a command server takes env instead");
+      throw new YianRangeError("mcpServer headers needs url; a command server takes env instead");
     }
   } else {
-    if (typeof url !== "string") throw new TypeError(`mcpServer url must be a string, got ${jsTypeName(url)}`);
+    if (typeof url !== "string") throw new YianTypeError(`mcpServer url must be a string, got ${jsTypeName(url)}`);
     const host = urlHost(url);
-    if (host === "") throw new RangeError("mcpServer url must be an http or https URL with a host");
+    if (host === "") throw new YianRangeError("mcpServer url must be an http or https URL with a host");
     // As base_url's rule: headers and URL tokens never cross the network in cleartext.
     if (/^http:/i.test(url) && !LOOPBACK_HOSTS.includes(host.replace(/^\[(.*)\]$/, "$1"))) {
-      throw new RangeError("mcpServer url must use https; http is allowed only for localhost, 127.0.0.1, and ::1");
+      throw new YianRangeError("mcpServer url must use https; http is allowed only for localhost, 127.0.0.1, and ::1");
     }
     // An empty args array or string counts as not given.
     const argsGiven = args !== undefined && (args as unknown) !== "" && !(Array.isArray(args) && args.length === 0);
@@ -312,20 +314,20 @@ export function mcpServer(options: McpServerOptions): McpServer {
       ["env", env !== undefined],
       ["cwd", cwd !== undefined],
     ] as const) {
-      if (given) throw new RangeError(`mcpServer ${name} needs command; a url server takes headers instead`);
+      if (given) throw new YianRangeError(`mcpServer ${name} needs command; a url server takes headers instead`);
     }
   }
   const checkedArgs = checkArgs(args);
   const checkedEnv = checkStringRecord("env", env);
   const checkedHeaders = checkStringRecord("headers", headers);
   if (cwd !== undefined && typeof cwd !== "string") {
-    throw new TypeError(`mcpServer cwd must be a string, got ${jsTypeName(cwd)}`);
+    throw new YianTypeError(`mcpServer cwd must be a string, got ${jsTypeName(cwd)}`);
   }
   checkSeconds("timeout", timeout);
   checkSeconds("connectTimeout", connectTimeout);
   if (label !== undefined) {
-    if (typeof label !== "string") throw new TypeError(`mcpServer label must be a string, got ${jsTypeName(label)}`);
-    if (label === "") throw new RangeError("mcpServer label must not be empty");
+    if (typeof label !== "string") throw new YianTypeError(`mcpServer label must be a string, got ${jsTypeName(label)}`);
+    if (label === "") throw new YianRangeError("mcpServer label must not be empty");
   }
   return new McpServer({
     command,
@@ -358,13 +360,13 @@ function urlHost(url: string): string {
 function checkArgs(args: unknown): readonly string[] {
   if (args === undefined) return Object.freeze([]);
   if (!Array.isArray(args)) {
-    throw new TypeError("mcpServer args must be an array of strings, not a single string");
+    throw new YianTypeError("mcpServer args must be an array of strings, not a single string");
   }
   const copy: string[] = [];
   // Index every slot, so a hole reads as `undefined` and fails.
   for (let i = 0; i < args.length; i++) {
     const arg: unknown = args[i];
-    if (typeof arg !== "string") throw new TypeError("mcpServer args must hold only strings");
+    if (typeof arg !== "string") throw new YianTypeError("mcpServer args must hold only strings");
     copy.push(arg);
   }
   return Object.freeze(copy);
@@ -373,11 +375,11 @@ function checkArgs(args: unknown): readonly string[] {
 /** Return a frozen copy of `value`, or throw `TypeError` unless it is a record of strings to strings. */
 function checkStringRecord(name: string, value: unknown): Readonly<Record<string, string>> | undefined {
   if (value === undefined) return undefined;
-  if (!isRecord(value)) throw new TypeError(`mcpServer ${name} must be a record of strings to strings`);
+  if (!isRecord(value)) throw new YianTypeError(`mcpServer ${name} must be a record of strings to strings`);
   const entries = Object.entries(value);
   for (const [key, item] of entries) {
     if (typeof item !== "string") {
-      throw new TypeError(`mcpServer ${name} must map strings to strings; ${reprText(key)} doesn't`);
+      throw new YianTypeError(`mcpServer ${name} must map strings to strings; ${reprText(key)} doesn't`);
     }
   }
   return Object.freeze(Object.fromEntries(entries) as Record<string, string>);
@@ -387,10 +389,10 @@ function checkStringRecord(name: string, value: unknown): Readonly<Record<string
 function checkSeconds(name: string, value: unknown): void {
   if (value === undefined) return;
   if (typeof value !== "number") {
-    throw new TypeError(`mcpServer ${name} must be a number of seconds, got ${jsTypeName(value)}`);
+    throw new YianTypeError(`mcpServer ${name} must be a number of seconds, got ${jsTypeName(value)}`);
   }
   if (!(value > 0 && value < Infinity)) {
-    throw new RangeError(`mcpServer ${name} must be positive and finite, got ${value}`);
+    throw new YianRangeError(`mcpServer ${name} must be positive and finite, got ${value}`);
   }
 }
 
@@ -399,11 +401,11 @@ function checkConcurrencySafe(value: unknown): boolean | readonly string[] {
   const message = "mcpServer concurrencySafe must be a boolean or an array of tool names";
   if (value === undefined) return false;
   if (typeof value === "boolean") return value;
-  if (!Array.isArray(value)) throw new TypeError(message);
+  if (!Array.isArray(value)) throw new YianTypeError(message);
   const names: string[] = [];
   for (let i = 0; i < value.length; i++) {
     const name: unknown = value[i];
-    if (typeof name !== "string") throw new TypeError(message);
+    if (typeof name !== "string") throw new YianTypeError(message);
     names.push(name);
   }
   return Object.freeze(names);
@@ -527,8 +529,8 @@ interface Generation {
   closed: boolean;
   /** Whether the server is known gone: its transport closed. */
   gone: boolean;
-  /** The cap in bytes a message from the server passed, which closed the connection. */
-  overflow: number | undefined;
+  /** What a message from the server passed, which closed the connection: `sent a message over ...`. */
+  overflow: string | undefined;
   /** The calls in flight, which `close()` aborts. */
   readonly calls: Set<AbortController>;
   /** The shutdown, once started. */
@@ -772,9 +774,9 @@ export class McpServer {
       generation.sdk = sdk;
       // As the stdio transport does on a line past the cap: the call in flight then fails as
       // closed, naming the cap, rather than waiting out its timeout.
-      const overflow = (max: number) => {
+      const overflow = (why: string) => {
         if (generation.overflow !== undefined) return;
-        generation.overflow = max;
+        generation.overflow = why;
         generation.gone = true;
         void generation.transport?.close();
       };
@@ -824,7 +826,7 @@ export class McpServer {
       if (timedOut) throw new McpConnectError(late);
       if (generation.closed) throw new McpConnectError(`MCP server '${label}' was closed while starting`);
       if (generation.overflow !== undefined) {
-        throw new McpConnectError(`MCP server '${label}' didn't start: it ${overflowText(generation.overflow)}`);
+        throw new McpConnectError(`MCP server '${label}' didn't start: it ${generation.overflow}`);
       }
       if (signal?.aborted) throw signal.reason;
       if (!started || error instanceof McpConnectError) throw error;
@@ -848,14 +850,14 @@ export class McpServer {
   /**
    * Return the transport for this server: yian's stdio transport, or the SDK's streamable HTTP
    * transport sending every request through `safeFetch`, which follows no redirect, and reading
-   * every reply through `capResponse`. Either calls `onOverflow` with `maxMessageBytes` when a
-   * message passes it.
+   * every reply through `capResponse`. Either calls `onOverflow` with what a message passed when
+   * one passes `maxMessageBytes` (or, on stdio, the received-JSON bounds).
    */
   private createTransport(
     sdk: typeof Sdk,
     defaultEnv: Readonly<Record<string, string>>,
     maxMessageBytes: number,
-    onOverflow: (max: number) => void,
+    onOverflow: (why: string) => void,
   ): StdioTransport | Sdk.StreamableHTTPClientTransport {
     const { command, args, env, cwd, url, headers } = this.spec;
     if (command !== undefined) {
@@ -864,7 +866,7 @@ export class McpServer {
     return new sdk.StreamableHTTPClientTransport(new URL(url!), {
       fetch: async (input, init) => {
         const response = await safeFetch(input, init).catch((error: unknown) => remember(error, init));
-        return capResponse(response, maxMessageBytes, () => onOverflow(maxMessageBytes));
+        return capResponse(response, maxMessageBytes, () => onOverflow(overflowText(maxMessageBytes)));
       },
       requestInit: { headers },
     });
@@ -1115,7 +1117,7 @@ export class McpServer {
     const current = generation ?? this.generation;
     const label = `MCP server '${this.label}'`;
     let text = `${label} is closed`;
-    if (current?.overflow !== undefined) return new McpServerClosed(`${text}: it ${overflowText(current.overflow)}`);
+    if (current?.overflow !== undefined) return new McpServerClosed(`${text}: it ${current.overflow}`);
     if (current === undefined || this.closeRequested || current.closed) return new McpServerClosed(text);
     const transport = current.transport;
     if (transport instanceof StdioTransport && transport.exitText() !== "") {
@@ -1609,8 +1611,11 @@ export interface StdioTransportOptions {
   cwd?: string;
   /** The longest line read from the server, in bytes. */
   maxMessageBytes: number;
-  /** Called with `maxMessageBytes` when a line passes it, before the transport closes. */
-  onOverflow?: (max: number) => void;
+  /**
+   * Called with what a line passed, before the transport closes: `maxMessageBytes`
+   * (`overflowText`), or the received-JSON bounds.
+   */
+  onOverflow?: (why: string) => void;
   /** The MCP SDK's `getDefaultEnvironment()`, the base of the server's environment. */
   defaultEnv: Readonly<Record<string, string>>;
 }
@@ -1853,10 +1858,15 @@ export class StdioTransport {
 
   /** Report a line longer than `max` bytes and close. */
   private overflow(max: number): void {
+    this.refuse(new Error(`MCP server sent a message over ${max} bytes`), overflowText(max));
+  }
+
+  /** Report `error`, a line refused for passing a cap (`why` says which), and close. */
+  private refuse(error: Error, why: string): void {
     this.pending = [];
     this.pendingBytes = 0;
-    this.report(new Error(`MCP server sent a message over ${max} bytes`));
-    this.options.onOverflow?.(max);
+    this.report(error);
+    this.options.onOverflow?.(why);
     void this.close();
   }
 
@@ -1867,8 +1877,11 @@ export class StdioTransport {
     if (text === "") return;
     let message: unknown;
     try {
-      message = parseJson(text, "plain");
+      message = parseReceivedJson(text);
     } catch (error) {
+      // `JSON.parse` would build the tree the bounds keep out, so a line past them is refused.
+      const bound = receivedBound(error);
+      if (bound !== null) return this.refuse(error as Error, `sent a message that ${bound}`);
       // The strict reader refuses duplicate keys and lone surrogates, which the SDK would read.
       try {
         message = JSON.parse(text);

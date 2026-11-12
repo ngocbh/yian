@@ -24,16 +24,20 @@
  *
  * Knows about: `typesys` (`Value`, `FileRef`, `InboxRef`, `MemoryRef`, `Type`, `ValueKind`,
  * `fromHost`, `isListKind`, `isRecord`, `rejectDeepNesting`, `renderValuePath`, `valueRepr`,
- * `writeAsText`, `writeAsJson`, `parseJson`, `parseDateOrDatetime`), `diagnostics` (`reprText`,
+ * `writeAsText`, `writeAsJson`, `parseJson`, `parseDateOrDatetime`), `defaults`
+ * (`YIAN_MAX_INT_DIGITS`, `YIAN_MAX_JSON_INDENT` and `YIAN_MAX_TEXT_CHARS`), `diagnostics` (`reprText`,
  * `compareCodePoints`) and `grammar` (`uncallableReason`).
  */
 
+import { current } from "../defaults.ts";
 import { compareCodePoints, reprText } from "../diagnostics.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { FileRef, InboxRef, MemoryRef, Type, type Value, ValueKind } from "../typesys/index.ts";
 import { JSONDecodeError, parseJson } from "../typesys/json.ts";
 import { type ParsedDate, type ParsedDatetime, parseDateOrDatetime } from "../typesys/temporal.ts";
 import {
   canonicalTypeLabel,
+  codePointCount,
   fromHost,
   isListKind,
   isRecord,
@@ -42,6 +46,7 @@ import {
   valueRepr,
   writeAsJson,
   writeAsText,
+  writtenJsonChars,
 } from "../typesys/values.ts";
 import { uncallableReason } from "./grammar.ts";
 
@@ -77,7 +82,7 @@ export const TEMPLATE_FNS = new Map<string, TemplateFn>();
  */
 export function registerTemplateFn(name: string, fn: TemplateFn): void {
   const uncallable = uncallableReason(name);
-  if (uncallable !== null) throw new RangeError(`expression function ${reprText(name)} can never be called: ${uncallable}`);
+  if (uncallable !== null) throw new YianRangeError(`expression function ${reprText(name)} can never be called: ${uncallable}`);
   const params = fn.params.map((p) => {
     if (!Object.hasOwn(p, "default")) return { name: p.name };
     const where = `expression function ${reprText(name)}, default of ${reprText(p.name)}`;
@@ -146,19 +151,49 @@ export function kindName(value: Value): string {
   return FileRef.isFileRef(value) ? "file" : "record";
 }
 
+/** The end of a message for an int result over `cap` digits (`YIAN_MAX_INT_DIGITS`). */
+export function intOverCap(cap: number): string {
+  return `gives an int over the limit of ${cap} digits (YIAN_MAX_INT_DIGITS)`;
+}
+
+/** The end of a message for a text result over `cap` characters (`YIAN_MAX_TEXT_CHARS`). */
+export function textOverCap(cap: number): string {
+  return `gives a text over the limit of ${cap} characters (YIAN_MAX_TEXT_CHARS)`;
+}
+
+/**
+ * Return whether a text of `units` UTF-16 code units has more than `cap` characters (code
+ * points), counting them with `chars` only when `units` is over, since a character takes one
+ * unit or two.
+ */
+export function overTextChars(units: number, chars: () => number, cap: number): boolean {
+  return units > cap && chars() > cap;
+}
+
+/** Throw when the text builtin `fn` would give, of `units` code units and `chars()` characters, is over `YIAN_MAX_TEXT_CHARS`. */
+function checkTextSize(fn: string, units: number, chars: () => number): void {
+  const cap = current().maxTextChars;
+  if (overTextChars(units, chars, cap)) throw new YianTypeError(`${fn}() ${textOverCap(cap)}`);
+}
+
+/** The characters `writeAsText(value)` writes, without writing them. */
+function textChars(value: Value): number {
+  return typeof value === "string" ? codePointCount(value) : writtenJsonChars(value);
+}
+
 /**
  * Throw when a builtin argument is null, so it never becomes text like "null". `fallback` is the
  * example default the message suggests.
  */
 function rejectNull(fn: string, value: Value, fallback = '""'): void {
-  if (value === null) throw new TypeError(`${fn}() got null; give a default, e.g. \`${fn}(x :- ${fallback})\``);
+  if (value === null) throw new YianTypeError(`${fn}() got null; give a default, e.g. \`${fn}(x :- ${fallback})\``);
 }
 
 /** Return `value` if it is text; throw on null or any other kind, naming parameter `param` after the first. */
 function requireText(fn: string, value: Value, param: string | null = null): string {
   if (param === null) rejectNull(fn, value);
   if (typeof value !== "string") {
-    throw new TypeError(`${fn}() takes str${param ? ` for ${param}` : ""}, got ${kindName(value)}`);
+    throw new YianTypeError(`${fn}() takes str${param ? ` for ${param}` : ""}, got ${kindName(value)}`);
   }
   return value;
 }
@@ -189,32 +224,49 @@ function firstInfinite(
 /**
  * Pretty-print `value` as JSON (`writeAsJson`): the headline builtin. A file renders as its
  * mapping `{"uri", "mime", "name"}`. A null `value` is an error; a null nested inside it renders
- * as `null`. An infinite float is an error naming its path, since JSON has no infinity.
+ * as `null`. An infinite float is an error naming its path, since JSON has no infinity. The
+ * indent is at most `YIAN_MAX_JSON_INDENT`.
  */
 function renderAsJson(value: Value, indent: Value): string {
   rejectNull("render_as_json", value);
   if (typeof indent !== "bigint" || indent < 0n) {
-    throw new TypeError(`render_as_json() takes an int indent of 0 or more, got ${valueRepr(indent)}`);
+    throw new YianTypeError(`render_as_json() takes an int indent of 0 or more, got ${valueRepr(indent)}`);
+  }
+  const cap = current().maxJsonIndent;
+  if (indent > BigInt(cap)) {
+    throw new YianTypeError(`render_as_json() takes an indent of at most ${cap} (YIAN_MAX_JSON_INDENT), got ${indent}`);
   }
   const infinite = firstInfinite(value);
   if (infinite !== null) {
     const where = infinite.path.length === 0 ? "" : ` at ${renderValuePath(infinite.path)}`;
     const shown = infinite.x > 0 ? "inf" : "-inf";
-    throw new TypeError(`render_as_json() can't write ${shown}${where}: JSON has no infinity`);
+    throw new YianTypeError(`render_as_json() can't write ${shown}${where}: JSON has no infinity`);
   }
-  // A huge indent becomes a huge number (or Infinity), and the writer's `repeat` then fails.
+  const chars = writtenJsonChars(value, Number(indent));
+  checkTextSize("render_as_json", chars, () => chars);
   return writeAsJson(value, Number(indent));
 }
 
 /**
  * Join a list's elements, each in the text form, with `sep`. A null list or element is an
- * error, and so is a non-list (a string is not split into characters).
+ * error, and so is a non-list (a string is not split into characters). The text is sized
+ * before it is built.
  */
 function join(value: Value, sep: Value): string {
   rejectNull("join", value, "[]");
-  if (!Array.isArray(value)) throw new TypeError(`join() takes a list, got ${kindName(value)}`);
-  if (value.includes(null)) throw new TypeError("join() got a null element; drop or default it before joining");
-  if (typeof sep !== "string") throw new TypeError(`join() takes str for sep, got ${kindName(sep)}`);
+  if (!Array.isArray(value)) throw new YianTypeError(`join() takes a list, got ${kindName(value)}`);
+  if (value.includes(null)) throw new YianTypeError("join() got a null element; drop or default it before joining");
+  if (typeof sep !== "string") throw new YianTypeError(`join() takes str for sep, got ${kindName(sep)}`);
+  // A text item's units, else its exact characters, which are no more than its units.
+  const sizes = value.map((item) => (typeof item === "string" ? item.length : textChars(item)));
+  const gaps = Math.max(value.length - 1, 0);
+  const units = sizes.reduce((a, b) => a + b, 0) + gaps * sep.length;
+  checkTextSize("join", units, () => {
+    const items = value.reduce((total: number, item, index) => {
+      return total + (typeof item === "string" ? codePointCount(item) : sizes[index]!);
+    }, 0);
+    return items + gaps * codePointCount(sep);
+  });
   return value.map(writeAsText).join(sep);
 }
 
@@ -262,7 +314,7 @@ function split(s: Value, sep: Value): string[] {
   const separator = optionalText("split", sep, "sep");
   // Well-formed text and separator: a code unit match never starts or ends inside a surrogate pair.
   if (separator !== null) {
-    if (separator === "") throw new TypeError("split() got an empty sep; omit it to split on whitespace");
+    if (separator === "") throw new YianTypeError("split() got an empty sep; omit it to split on whitespace");
     return text.split(separator);
   }
   const parts: string[] = [];
@@ -303,14 +355,27 @@ for (const [name, ends] of [["strip", "both"], ["lstrip", "left"], ["rstrip", "r
 
 /**
  * Replace every occurrence of `old` in `s` with `new`. An empty `old` puts `new` before each
- * character (code point) and at the end, as Python's `str.replace` does.
+ * character (code point) and at the end, as Python's `str.replace` does. The text is sized
+ * from the number of replacements before it is built.
  */
 function replace(s: Value, old: Value, replacement: Value): string {
   const text = requireText("replace", s);
   const target = requireText("replace", old, "old");
   const by = requireText("replace", replacement, "new");
-  // `split`/`join`, not `replaceAll`, which reads `$&` and the like in the replacement.
-  if (target === "") return ["", ...text, ""].join(by);
+  if (target === "") {
+    const chars = codePointCount(text);
+    checkTextSize("replace", text.length + (chars + 1) * by.length, () => chars + (chars + 1) * codePointCount(by));
+    // `split`/`join`, not `replaceAll`, which reads `$&` and the like in the replacement.
+    return ["", ...text, ""].join(by);
+  }
+  // Counted as `split` finds them: left to right, without overlap.
+  let found = 0;
+  for (let at = text.indexOf(target); at !== -1; at = text.indexOf(target, at + target.length)) found += 1;
+  checkTextSize(
+    "replace",
+    text.length + found * (by.length - target.length),
+    () => codePointCount(text) + found * (codePointCount(by) - codePointCount(target)),
+  );
   return text.split(target).join(by);
 }
 registerTemplateFn("replace", { params: [{ name: "s" }, { name: "old" }, { name: "new" }], call: replace });
@@ -331,31 +396,40 @@ const FLOAT_TEXT = new RegExp(`^${SPACE}([+-]?)(?:(inf(?:inity)?)|(nan)|(${DECIM
 
 /**
  * Return `value` as text, as `${value}` writes it into text: text as is, anything else as
- * compact JSON.
+ * compact JSON, sized before it is written.
  */
 function str(value: Value): string {
   rejectNull("str", value);
   // `${x}` refuses a memory too: only an AGENT renders one, as its recall.
-  if (MemoryRef.isMemoryRef(value)) throw new TypeError("str() can't write a memory as text");
+  if (MemoryRef.isMemoryRef(value)) throw new YianTypeError("str() can't write a memory as text");
+  if (typeof value !== "string") {
+    const chars = writtenJsonChars(value);
+    checkTextSize("str", chars, () => chars);
+  }
   return writeAsText(value);
 }
 
 /**
  * Return `value` as an int: text in Python's `int()` syntax (ASCII digits only), a float
- * truncated toward zero, a bool as 0 or 1.
+ * truncated toward zero, a bool as 0 or 1. Text with more digits than `YIAN_MAX_INT_DIGITS`,
+ * after leading zeros, is refused before it is read.
  */
 function int(value: Value): bigint {
   rejectNull("int", value, "0");
   if (typeof value === "bigint") return value;
   if (typeof value === "boolean") return value ? 1n : 0n;
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new TypeError(`int() can't convert ${valueRepr(value)} to an int`);
+    if (!Number.isFinite(value)) throw new YianTypeError(`int() can't convert ${valueRepr(value)} to an int`);
     return BigInt(Math.trunc(value));
   }
-  if (typeof value !== "string") throw new TypeError(`int() takes str, int, float or bool, got ${kindName(value)}`);
+  if (typeof value !== "string") throw new YianTypeError(`int() takes str, int, float or bool, got ${kindName(value)}`);
   const match = INT_TEXT.exec(value);
-  if (match === null) throw new TypeError(`int() can't convert ${valueRepr(value)} to an int`);
-  const digits = BigInt(match[2]!.replaceAll("_", ""));
+  if (match === null) throw new YianTypeError(`int() can't convert ${valueRepr(value)} to an int`);
+  // Reading a long text as a bigint takes time that grows faster than its length.
+  const text = match[2]!.replaceAll("_", "").replace(/^0+(?=.)/, "");
+  const cap = current().maxIntDigits;
+  if (text.length > cap) throw new YianTypeError(`int() ${intOverCap(cap)}`);
+  const digits = BigInt(text);
   return match[1] === "-" ? -digits : digits;
 }
 
@@ -370,13 +444,13 @@ function float(value: Value): number {
   if (typeof value === "bigint") {
     // `Number` rounds a bigint to the nearest float, ties to even, as Python does.
     const rounded = Number(value);
-    if (!Number.isFinite(rounded)) throw new TypeError("float() got an int too large for a float");
+    if (!Number.isFinite(rounded)) throw new YianTypeError("float() got an int too large for a float");
     return rounded;
   }
-  if (typeof value !== "string") throw new TypeError(`float() takes str, int, float or bool, got ${kindName(value)}`);
+  if (typeof value !== "string") throw new YianTypeError(`float() takes str, int, float or bool, got ${kindName(value)}`);
   const match = FLOAT_TEXT.exec(value);
-  if (match === null) throw new TypeError(`float() can't convert ${valueRepr(value)} to a float`);
-  if (match[3] !== undefined) throw new TypeError(`float() can't convert ${valueRepr(value)}: yian has no NaN`);
+  if (match === null) throw new YianTypeError(`float() can't convert ${valueRepr(value)} to a float`);
+  if (match[3] !== undefined) throw new YianTypeError(`float() can't convert ${valueRepr(value)}: yian has no NaN`);
   const sign = match[1] === "-" ? -1 : 1;
   if (match[2] !== undefined) return sign * Infinity;
   // The syntax is checked, so `Number` reads only digits, a point and an exponent, and rounds to
@@ -400,13 +474,13 @@ function parseJsonText(s: Value): Value {
     value = parseJson(text, "plain") as Value;
   } catch (error) {
     if (!(error instanceof JSONDecodeError)) throw error;
-    throw new TypeError(`parse_json() got text that isn't JSON: ${error.message}`);
+    throw new YianTypeError(`parse_json() got text that isn't JSON: ${error.message}`);
   }
   try {
     rejectDeepNesting(value, "parse_json() result");
   } catch (error) {
     if (!(error instanceof Error)) throw error;
-    throw new TypeError(error.message);
+    throw new YianTypeError(error.message);
   }
   return value;
 }
@@ -478,7 +552,7 @@ function roundFloat(x: number, n: bigint): number {
   else den <<= BigInt(-e);
   const q = divideHalfEven(num, den);
   const rounded = n < 0n ? roundQuotient(q * scale, 1n) : roundQuotient(q, scale);
-  if (rounded === Infinity) throw new TypeError(`round() of ${valueRepr(x)} is too large for a float`);
+  if (rounded === Infinity) throw new YianTypeError(`round() of ${valueRepr(x)} is too large for a float`);
   return x < 0 ? -rounded : rounded;
 }
 
@@ -511,15 +585,15 @@ function round(x: Value, n: Value): bigint | number {
   rejectNull("round", x, "0");
   const value = typeof x === "boolean" ? BigInt(x) : x;
   if (typeof value !== "bigint" && typeof value !== "number") {
-    throw new TypeError(`round() takes a number, got ${kindName(x)}`);
+    throw new YianTypeError(`round() takes a number, got ${kindName(x)}`);
   }
   if (n === null) {
     if (typeof value === "bigint") return value;
-    if (!Number.isFinite(value)) throw new TypeError(`round() can't round ${valueRepr(value)} to an int`);
+    if (!Number.isFinite(value)) throw new YianTypeError(`round() can't round ${valueRepr(value)} to an int`);
     return BigInt(roundToEven(value));
   }
   const places = typeof n === "boolean" ? BigInt(n) : n;
-  if (typeof places !== "bigint") throw new TypeError(`round() takes int for n, got ${kindName(n)}`);
+  if (typeof places !== "bigint") throw new YianTypeError(`round() takes int for n, got ${kindName(n)}`);
   return typeof value === "bigint" ? roundInt(value, places) : roundFloat(value, places);
 }
 registerTemplateFn("round", { params: [{ name: "x" }, { name: "n", default: null }], call: round });
@@ -537,7 +611,7 @@ export function truthy(value: Value): boolean {
 /** Return `xs` if it is a list; throw on null or any other kind. */
 function requireList(fn: string, xs: Value): Value[] {
   rejectNull(fn, xs, "[]");
-  if (!Array.isArray(xs)) throw new TypeError(`${fn}() takes a list, got ${kindName(xs)}`);
+  if (!Array.isArray(xs)) throw new YianTypeError(`${fn}() takes a list, got ${kindName(xs)}`);
   return xs;
 }
 
@@ -556,17 +630,17 @@ registerTemplateFn("all", { params: [{ name: "xs" }], call: (xs) => requireList(
  */
 function extreme(fn: "min" | "max", xs: Value): Value {
   const items = requireList(fn, xs);
-  if (items.length === 0) throw new TypeError(`${fn}() got an empty list`);
+  if (items.length === 0) throw new YianTypeError(`${fn}() got an empty list`);
   const kindOf = (item: Value): "number" | "text" => {
-    if (item === null) throw new TypeError(`${fn}() got a null item`);
+    if (item === null) throw new YianTypeError(`${fn}() got a null item`);
     if (typeof item === "string") return "text";
     if (numberOf(item) !== null) return "number";
-    throw new TypeError(`${fn}() takes a list of numbers or texts, got a ${kindName(item)} item`);
+    throw new YianTypeError(`${fn}() takes a list of numbers or texts, got a ${kindName(item)} item`);
   };
   let best: Value = items[0]!;
   const kind = kindOf(best);
   for (const item of items.slice(1)) {
-    if (kindOf(item) !== kind) throw new TypeError(`${fn}() can't compare ${kindName(best)} and ${kindName(item)}`);
+    if (kindOf(item) !== kind) throw new YianTypeError(`${fn}() can't compare ${kindName(best)} and ${kindName(item)}`);
     let order: number;
     if (kind === "text") {
       order = compareCodePoints(item as string, best as string);
@@ -591,27 +665,27 @@ registerTemplateFn("max", { params: [{ name: "xs" }], call: (xs) => extreme("max
 function sorted(xs: Value, by: Value, reverse: Value): Value[] {
   const items = requireList("sorted", xs);
   const field = optionalText("sorted", by, "by");
-  if (typeof reverse !== "boolean") throw new TypeError(`sorted() takes bool for reverse, got ${kindName(reverse)}`);
+  if (typeof reverse !== "boolean") throw new YianTypeError(`sorted() takes bool for reverse, got ${kindName(reverse)}`);
   const fn = field === null ? "sorted()" : `sorted() by ${reprText(field)}`;
   const keys = items.map((item): Value => {
     if (field === null) {
-      if (item === null) throw new TypeError("sorted() got a null item");
+      if (item === null) throw new YianTypeError("sorted() got a null item");
       return item;
     }
-    if (!isRecord(item)) throw new TypeError(`${fn} takes a list of records, got a ${kindName(item)} item`);
-    if (!Object.hasOwn(item, field)) throw new TypeError(`${fn} got an item with no ${reprText(field)}`);
-    if (item[field] === null) throw new TypeError(`${fn} got a null ${reprText(field)}`);
+    if (!isRecord(item)) throw new YianTypeError(`${fn} takes a list of records, got a ${kindName(item)} item`);
+    if (!Object.hasOwn(item, field)) throw new YianTypeError(`${fn} got an item with no ${reprText(field)}`);
+    if (item[field] === null) throw new YianTypeError(`${fn} got a null ${reprText(field)}`);
     return item[field]!;
   });
   const kindOf = (key: Value): "number" | "text" => {
     if (typeof key === "string") return "text";
     if (numberOf(key) !== null) return "number";
-    if (field === null) throw new TypeError(`sorted() takes a list of numbers or texts, got a ${kindName(key)} item`);
-    throw new TypeError(`${fn} takes numbers or texts, got a ${kindName(key)} ${reprText(field)}`);
+    if (field === null) throw new YianTypeError(`sorted() takes a list of numbers or texts, got a ${kindName(key)} item`);
+    throw new YianTypeError(`${fn} takes numbers or texts, got a ${kindName(key)} ${reprText(field)}`);
   };
   const kind = keys.length === 0 ? "number" : kindOf(keys[0]!);
   for (const key of keys) {
-    if (kindOf(key) !== kind) throw new TypeError(`${fn} can't compare ${kindName(keys[0]!)} and ${kindName(key)}`);
+    if (kindOf(key) !== kind) throw new YianTypeError(`${fn} can't compare ${kindName(keys[0]!)} and ${kindName(key)}`);
   }
   const order = (a: Value, b: Value): number => {
     if (kind === "text") return compareCodePoints(a as string, b as string);
@@ -641,8 +715,8 @@ function fits64(n: bigint): boolean {
 function addNumbers(a: bigint | number, b: bigint | number): bigint | number {
   if (typeof a === "bigint" && typeof b === "bigint") return a + b;
   const [x, y] = [Number(a), Number(b)];
-  if (!Number.isFinite(x) && typeof a === "bigint") throw new TypeError("sum() got an int too large for a float");
-  if (!Number.isFinite(y) && typeof b === "bigint") throw new TypeError("sum() got an int too large for a float");
+  if (!Number.isFinite(x) && typeof a === "bigint") throw new YianTypeError("sum() got an int too large for a float");
+  if (!Number.isFinite(y) && typeof b === "bigint") throw new YianTypeError("sum() got an int too large for a float");
   return x + y;
 }
 
@@ -654,7 +728,7 @@ function addNumbers(a: bigint | number, b: bigint | number): bigint | number {
 function sum(xs: Value): bigint | number {
   const items = requireList("sum", xs).map((item) => {
     const n = numberOf(item);
-    if (n === null) throw new TypeError(`sum() takes a list of numbers, got a ${kindName(item)} item`);
+    if (n === null) throw new YianTypeError(`sum() takes a list of numbers, got a ${kindName(item)} item`);
     return n;
   });
   let i = 0;
@@ -690,7 +764,7 @@ function sum(xs: Value): bigint | number {
   }
   // Past a large int, everything is added plainly.
   for (; i < items.length; i++) result = addNumbers(result, items[i]!);
-  if (Number.isNaN(result)) throw new TypeError("sum() has no numeric result: it adds inf and -inf");
+  if (Number.isNaN(result)) throw new YianTypeError("sum() has no numeric result: it adds inf and -inf");
   return result;
 }
 registerTemplateFn("sum", { params: [{ name: "xs" }], call: sum });
@@ -699,7 +773,7 @@ registerTemplateFn("sum", { params: [{ name: "xs" }], call: sum });
 function abs(x: Value): bigint | number {
   rejectNull("abs", x, "0");
   const n = numberOf(x);
-  if (n === null) throw new TypeError(`abs() takes a number, got ${kindName(x)}`);
+  if (n === null) throw new YianTypeError(`abs() takes a number, got ${kindName(x)}`);
   if (typeof n === "number") return Math.abs(n);
   return n < 0n ? -n : n;
 }
@@ -710,7 +784,7 @@ function len(value: Value): bigint {
   rejectNull("len", value, "[]");
   if (typeof value === "string") return BigInt([...value].length);
   if (Array.isArray(value)) return BigInt(value.length);
-  throw new TypeError(`len() takes str or list, got ${kindName(value)}`);
+  throw new YianTypeError(`len() takes str or list, got ${kindName(value)}`);
 }
 registerTemplateFn("len", { params: [{ name: "obj" }], call: len });
 
@@ -725,16 +799,16 @@ function requireTemporal(fn: string, value: Value, param: string | null = null):
   if (value === null) {
     const example =
       param === null ? "x :- system.today" : param === "a" ? "a :- system.today, b" : "a, b :- system.today";
-    throw new TypeError(`${fn}() got null${forParam}; give a default, e.g. \`${fn}(${example})\``);
+    throw new YianTypeError(`${fn}() got null${forParam}; give a default, e.g. \`${fn}(${example})\``);
   }
   if (typeof value !== "string") {
-    throw new TypeError(`${fn}() takes a date or datetime${forParam}, got ${kindName(value)}`);
+    throw new YianTypeError(`${fn}() takes a date or datetime${forParam}, got ${kindName(value)}`);
   }
   try {
     return parseDateOrDatetime(value);
   } catch (error) {
     if (!(error instanceof RangeError)) throw error;
-    throw new TypeError(`${fn}() takes a date or datetime${forParam}, got ${valueRepr(value)}: ${error.message}`);
+    throw new YianTypeError(`${fn}() takes a date or datetime${forParam}, got ${valueRepr(value)}: ${error.message}`);
   }
 }
 
@@ -747,15 +821,15 @@ const DAYS_IN_RANGE = 3_652_059n;
  */
 function addDays(d: Value, n: Value): string {
   const parsed = requireTemporal("add_days", d);
-  if (typeof n !== "bigint") throw new TypeError(`add_days() takes int for n, got ${kindName(n)}`);
+  if (typeof n !== "bigint") throw new YianTypeError(`add_days() takes int for n, got ${kindName(n)}`);
   const days = n > DAYS_IN_RANGE ? DAYS_IN_RANGE : n < -DAYS_IN_RANGE ? -DAYS_IN_RANGE : n;
   // `setUTCFullYear` takes years 0 to 99 as written (`Date.UTC` would add 1900), and rolls a day
   // past the month's end into the next.
   const date = new Date(0);
   date.setUTCFullYear(parsed.year, parsed.month - 1, parsed.day + Number(days));
   const year = date.getUTCFullYear();
-  if (year > 9999) throw new TypeError("add_days() gives a date past the year 9999");
-  if (year < 1) throw new TypeError("add_days() gives a date before the year 1");
+  if (year > 9999) throw new YianTypeError("add_days() gives a date past the year 9999");
+  if (year < 1) throw new YianTypeError("add_days() gives a date before the year 1");
   const pad = (part: number, width: number) => String(part).padStart(width, "0");
   const text = `${pad(year, 4)}-${pad(date.getUTCMonth() + 1, 2)}-${pad(date.getUTCDate(), 2)}`;
   // The date is the text's first ten characters in both forms.
@@ -795,9 +869,9 @@ registerTemplateFn("days_between", { params: [{ name: "a" }, { name: "b" }], cal
 /** Return the record `r`'s fields as `[key, value]` pairs, sorted by key (code point). */
 function fieldsOf(fn: string, r: Value): [string, Value][] {
   if (r === null) {
-    throw new TypeError(`${fn}() got null; read it only when it isn't, e.g. \`${fn}(r) if r != null else []\``);
+    throw new YianTypeError(`${fn}() got null; read it only when it isn't, e.g. \`${fn}(r) if r != null else []\``);
   }
-  if (!isRecord(r)) throw new TypeError(`${fn}() takes a record, got ${kindName(r)}`);
+  if (!isRecord(r)) throw new YianTypeError(`${fn}() takes a record, got ${kindName(r)}`);
   return Object.keys(r)
     .sort(compareCodePoints)
     .map((key) => [key, r[key]!]);

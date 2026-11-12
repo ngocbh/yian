@@ -44,6 +44,7 @@
  */
 
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
+import { YianTypeError } from "../typesys/errors.ts";
 import type { Value, ValueRecord } from "../typesys/index.ts";
 import { MemoryRef, writeAsText } from "../typesys/values.ts";
 import { isNonPromptBuiltin, TEMPLATE_FNS } from "./builtins.ts";
@@ -231,7 +232,7 @@ export function evalTemplate(
  *   template is read, so one here was never rendered and its JSON form must not be shown.
  */
 function asText(value: Value): string {
-  if (MemoryRef.isMemoryRef(value)) throw new TypeError("a memory value renders only as an AGENT prompt's input");
+  if (MemoryRef.isMemoryRef(value)) throw new YianTypeError("a memory value renders only as an AGENT prompt's input");
   try {
     return writeAsText(value);
   } catch (error) {

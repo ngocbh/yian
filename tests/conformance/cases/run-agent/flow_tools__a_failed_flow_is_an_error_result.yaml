@@ -1,0 +1,81 @@
+# A node of the flow `shout` fails: the failure stays inside the flow call, the model reads it as
+# the call's error result (the node, the code and the message), and the agent and the run go on.
+kind: run
+flow: |
+  id: helping
+  name: helping
+  llm_config: {provider: anthropic, model: claude-test}
+  defs:
+    shout:
+      description: Shout the text back.
+      input:
+        text: !str
+      nodes:
+        loud:
+          kind: code
+          input:
+            text: ${input.text}
+          output: str
+          code: throw new Error("no voice left")
+      output: ${loud.output}
+  nodes:
+    helper:
+      kind: agent
+      tools: [shout]
+      system_prompt: Help.
+      prompt: hi
+      output: str
+  output: ${helper.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  models:
+    helper:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: call-a, name: shout, arguments: {text: hey}}
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: text, text: it failed}
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - {type: text, text: Help.}
+          - format: yian.message.v1
+            role: user
+            parts:
+            - {type: text, text: hi}
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - {type: tool_call, id: call-a, name: shout, arguments: {text: hey}}
+          - format: yian.message.v1
+            role: tool
+            parts:
+            - type: tool_result
+              call_id: call-a
+              name: shout
+              content: 'Flow shout failed at node loud (node.execute): Error: no voice left'
+              is_error: true
+          tools:
+          - name: shout
+            description: Shout the text back.
+            parameters:
+              additionalProperties: false
+              properties:
+                text: {title: Text, type: string}
+              required: [text]
+              type: object
+expect:
+  output:
+    status: succeeded
+    output: it failed
+  trace: [[run_started, null, {effective_llm_by_static_path: {helper: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, helper], [node_step, helper, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {text: hey}, id: call-a, name: shout, type: tool_call}], role: assistant}, purpose: chat, request_sha256: b3b17246f934999cbeb3857f564944b6516be233dad3af2fba95e15d9254e09a, response_id: null, usage: null}}], [node_step, helper, {n: 2, step: {arguments: {text: hey}, call_id: r1/helper/1/0, flow: true, index: 0, kind: pending, reply: 1, scope: helper/shout#0, tool: shout, tool_call_id: call-a}}], [node_expanded, helper, {prune_ids: []}], [node_waiting, helper, {call_ids: [r1/helper/1/0]}], [node_started, helper/shout#0/__start__], [pool_commit, helper/shout#0/__start__, {from: {}}], [node_succeeded, helper/shout#0/__start__, {commit: 14}], [node_started, helper/shout#0/loud], [node_failed, helper/shout#0/loud, {failure: {code: node.execute, message: 'Error: no voice left', frames: [{label: flow.yaml, range: [18, 3, 18, 9]}, {label: flow.yaml, range: [15, 15, 15, 47]}], node: helper/shout#0/loud}}], [node_woken, helper], [node_step, helper, {n: 3, step: {call_id: call-a, closed: failed, is_error: true, kind: tool_result, output: 'Flow shout failed at node loud (node.execute): Error: no voice left'}}], [node_step, helper, {n: 4, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: it failed, type: text}], role: assistant}, purpose: chat, request_sha256: a57fd4c74f784991ae93ccf2a6a59936d0d9ff6ed9f217628bb19ff45e9c1f3f, response_id: null, usage: null}}], [pool_commit, helper, {value: it failed}], [pool_commit, helper, {key: helper.new_messages, steps: [9, 19, 20]}], [node_succeeded, helper, {commit: 21, messages: 22}], [node_started, __end__], [pool_commit, __end__, {value: it failed}], [node_succeeded, __end__, {commit: 25}]]

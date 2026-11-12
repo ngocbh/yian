@@ -7,6 +7,7 @@ import { current } from "../../defaults.ts";
 import { compareCodeUnits } from "../../diagnostics.ts";
 import { ProviderError } from "../../llm/errors.ts";
 import { realScheduler, type Scheduler, USER_AGENT } from "../../platform.ts";
+import { YianRangeError } from "../../typesys/errors.ts";
 import { isRecord } from "../../typesys/index.ts";
 import { stripTrailingSlashes, validateBaseUrl } from "../config.ts";
 import { openaiIdHeaders, validateHeaders } from "../connection_settings.ts";
@@ -268,7 +269,7 @@ export class OpenAIAuth {
   ) {
     const { requestTimeoutMs = 30_000 } = options;
     if (typeof requestTimeoutMs !== "number" || !Number.isFinite(requestTimeoutMs) || requestTimeoutMs <= 0) {
-      throw new RangeError("Invalid authentication request timeout");
+      throw new YianRangeError("Invalid authentication request timeout");
     }
     this.#scheduler = options.scheduler ?? realScheduler;
     this.#signal = options.signal ?? new AbortController().signal;
@@ -280,7 +281,7 @@ export class OpenAIAuth {
   /** Run `flow` on a signal that also aborts with `AuthError(message)` after `timeoutMs`. */
   async #withDeadline<T>(timeoutMs: number, message: string, flow: (signal: AbortSignal) => Promise<T>): Promise<T> {
     if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-      throw new RangeError("Invalid authentication timeout");
+      throw new YianRangeError("Invalid authentication timeout");
     }
     this.#signal.throwIfAborted();
     const deadline = new AbortController();
@@ -583,7 +584,7 @@ export class OpenAIAuth {
     options: { clientVersion?: unknown } = {},
   ): Promise<readonly string[]> {
     const { clientVersion = "0.155.1" } = options;
-    if (!isVisibleText(clientVersion)) throw new RangeError("Invalid model catalog client version");
+    if (!isVisibleText(clientVersion)) throw new YianRangeError("Invalid model catalog client version");
     const headers: Record<string, string> = {
       Authorization: "Bearer " + credentials.accessToken,
       "ChatGPT-Account-Id": credentials.accountId,

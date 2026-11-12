@@ -29,6 +29,7 @@ import {
   ValueContract,
 } from "../../nodes/contracts.ts";
 import { EndNode } from "../../nodes/end/node.ts";
+import { YianTypeError } from "../../typesys/errors.ts";
 import { BUILTIN_TYPE_NAMES } from "../../typesys/types.ts";
 import { jsTypeName, type Type } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
@@ -63,6 +64,8 @@ export interface ResolvedChild {
   readonly compiled: CompiledFlow;
   /** The child's canonical parameters (its START params). */
   readonly input: readonly Parameter[];
+  /** The child's `description:`, which a flow tool shows the model; `null` or absent for none. */
+  readonly description?: string | null;
 }
 
 /**
@@ -92,14 +95,14 @@ interface NestingFlow {
 export function childSignature(loaded: ResolvedChild): ChildSignature {
   const end = loaded.compiled.nodes.get(EndNode.ID);
   if (!(end instanceof EndNode)) {
-    throw new TypeError(`child END must be an EndNode, got ${end === undefined ? "null" : jsTypeName(end)}`);
+    throw new YianTypeError(`child END must be an EndNode, got ${end === undefined ? "null" : jsTypeName(end)}`);
   }
   const producers = new Map<string, OutputContract>();
   for (const [nodeId, node] of loaded.compiled.nodes) {
     const contract = node.outputContract;
     if (contract === null) continue;
     if (!isOutputContract(contract)) {
-      throw new TypeError(
+      throw new YianTypeError(
         "child output producer contracts must be ValueContract, PartialRecordContract, or null values, " +
           `got ${jsTypeName(contract)} for ${reprText(nodeId)}`,
       );

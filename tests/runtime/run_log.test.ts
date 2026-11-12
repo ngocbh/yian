@@ -36,14 +36,16 @@ import {
 import * as json from "../../src/typesys/json.ts";
 import { folderSyncs } from "../helpers/folder_syncs.ts";
 import { testNode } from "../helpers/test_node.ts";
+import { YianRangeError, YianTypeError } from "../../src/typesys/errors.ts";
+import { thrownClass } from "../helpers/own_errors.ts";
 
 const DIGEST = "d".repeat(64);
 /** A record time, as a log writes one, and a clock that always reads it. */
 const AT = "2026-10-20T14:02:11.123Z";
 const CLOCK = () => Date.UTC(2026, 9, 20, 14, 2, 11, 123);
 /** The error text for the retired TS schema `schema`. */
-const retired = (schema: number) => `run log schema ${schema} predates schema 30 and is not supported`;
-const RETIRED_SCHEMA = retired(29);
+const retired = (schema: number) => `run log schema ${schema} predates schema 32 and is not supported`;
+const RETIRED_SCHEMA = retired(31);
 const NOT_CONTIGUOUS = "reopened prefix must have one run and contiguous sequences";
 
 /** Assert `fn` throws an error of exactly class `cls` with exactly `message`, and return it. */
@@ -54,7 +56,7 @@ function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, me
   } catch (error) {
     caught = error;
   }
-  expect((caught as Error | undefined)?.constructor).toBe(cls);
+  expect((caught as Error | undefined)?.constructor).toBe(thrownClass(cls));
   expect((caught as Error).message).toBe(message);
   return caught as Error;
 }
@@ -155,8 +157,8 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("the schema version is 30", () => {
-  expect(SCHEMA_VERSION).toBe(30);
+test("the schema version is 32", () => {
+  expect(SCHEMA_VERSION).toBe(32);
 });
 
 test.each([7, 8, 9])("retired schema %d record is rejected by name", (schema) => {
@@ -223,9 +225,23 @@ test("a schema 28 record, from before a memory input's value was a value kind, i
 
 test("a schema 29 record, from before a send recorded its key, is retired", () => {
   const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":29,"seq":0}`;
-  const error = expectError(() => decodeRecord(line), RunLogSchemaError, RETIRED_SCHEMA) as RunLogSchemaError;
+  const error = expectError(() => decodeRecord(line), RunLogSchemaError, retired(29)) as RunLogSchemaError;
   expect(error.schema).toBe(29);
-  expectError(() => new RecordEnvelope(29, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, RETIRED_SCHEMA);
+  expectError(() => new RecordEnvelope(29, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, retired(29));
+});
+
+test("a schema 30 record, from before a flow call's growth named its call, is retired", () => {
+  const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":30,"seq":0}`;
+  const error = expectError(() => decodeRecord(line), RunLogSchemaError, retired(30)) as RunLogSchemaError;
+  expect(error.schema).toBe(30);
+  expectError(() => new RecordEnvelope(30, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, retired(30));
+});
+
+test("a schema 31 record, from before a node failure named the flow call taking it, is retired", () => {
+  const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":31,"seq":0}`;
+  const error = expectError(() => decodeRecord(line), RunLogSchemaError, RETIRED_SCHEMA) as RunLogSchemaError;
+  expect(error.schema).toBe(31);
+  expectError(() => new RecordEnvelope(31, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, RETIRED_SCHEMA);
 });
 
 test.each<[number, string]>([
@@ -251,7 +267,9 @@ test.each<[number, string]>([
   [26, retired(26)],
   [27, retired(27)],
   [28, retired(28)],
-  [29, RETIRED_SCHEMA],
+  [29, retired(29)],
+  [30, retired(30)],
+  [31, RETIRED_SCHEMA],
 ])("a retired schema %d log is rejected on resume", (schema, message) => {
   const file = path.join(dir, "retired.jsonl");
   const bytes = `${wireLine({ schema: String(schema) })}\n`;
@@ -266,10 +284,10 @@ test.each<[string, unknown, string]>([
   ["6", 6, "6"],
   ["7", 7, "7"],
   ["8", 8, "8"],
-  ["31", 31, "31"],
+  ["33", 33, "33"],
   ["true", true, "true"],
   ["false", false, "false"],
-  ["30.0", undefined, "30.0"],
+  ["32.0", undefined, "32.0"],
 ])("the schema check doesn't weaken validation: %s", (token, value, shown) => {
   const message = `unsupported run-record schema: ${shown}`;
   if (value !== undefined) {
@@ -313,7 +331,7 @@ test.each<[string, (wire: any) => void, new (...args: never[]) => Error, string]
       wire.kind = "unsupported";
     },
     RangeError,
-    "run-record kind 'unsupported' is unsupported in schema 30",
+    "run-record kind 'unsupported' is unsupported in schema 32",
   ],
 ])("the schema check doesn't weaken payload validation: %s", (_name, corrupt, cls, message) => {
   const wire = JSON.parse(wireLine());
@@ -829,7 +847,7 @@ test.each<[string, string, string, (new (...args: never[]) => Error) | null]>([
   fs.writeFileSync(file, `${wireLine()}\n${line}\n`);
   const error = expectError(() => readRunLog(file), RangeError, `run log ${file} line 2 (seq 1): ${message}`);
   if (causeClass === null) expect(error.cause).toBeUndefined();
-  else expect((error.cause as Error).constructor).toBe(causeClass);
+  else expect((error.cause as Error).constructor).toBe(thrownClass(causeClass));
 });
 
 test("readRunLog reads a line that isn't UTF-8 as invalid record JSON", () => {
@@ -1113,13 +1131,13 @@ test("iterRunRecords with payloads: false reads the envelope and node id without
     RangeError,
     `run log ${file} line 1 (seq 0): invalid node_started payload fields; missing=[], extra=["extra"]`,
   );
-  expect((error.cause as Error).constructor).toBe(RangeError);
+  expect((error.cause as Error).constructor).toBe(YianRangeError);
 });
 
 test.each<[string, string, new (...args: never[]) => Error, string]>([
   ["an empty node id", kindLine("node_started", '{"node_id":""}'), RangeError, "node_started payload node_id must be a non-empty string"],
   ["a missing node id", kindLine("node_step", "{}"), TypeError, "node_step payload node_id must be a non-empty string"],
-  ["an unknown kind", kindLine("node_paused", "{}"), RangeError, "run-record kind 'node_paused' is unsupported in schema 30"],
+  ["an unknown kind", kindLine("node_paused", "{}"), RangeError, "run-record kind 'node_paused' is unsupported in schema 32"],
   ["invalid JSON", "{", RangeError, "invalid run-record JSON"],
 ])("iterRunRecords with payloads: false still refuses %s", (_name, line, causeClass, message) => {
   const file = path.join(dir, "run.jsonl");
@@ -1129,7 +1147,7 @@ test.each<[string, string, new (...args: never[]) => Error, string]>([
     RangeError,
     `run log ${file} line 1 (seq 0): ${message}`,
   );
-  expect((error.cause as Error).constructor).toBe(causeClass);
+  expect((error.cause as Error).constructor).toBe(thrownClass(causeClass));
 });
 
 test("iterRunRecords yields only the kinds asked for, still checking every line's envelope and seq", () => {
@@ -1178,8 +1196,10 @@ test.each<[string, string, number]>([
   ["26", retired(26), 26],
   ["27", retired(27), 27],
   ["28", retired(28), 28],
-  ["29", RETIRED_SCHEMA, 29],
-  ["31", "unsupported run-record schema: 31", 31],
+  ["29", retired(29), 29],
+  ["30", retired(30), 30],
+  ["31", RETIRED_SCHEMA, 31],
+  ["33", "unsupported run-record schema: 33", 33],
 ])("iterRunRecords refuses schema %s with a RunLogSchemaError naming the line", (schema, message, value) => {
   const file = path.join(dir, "run.jsonl");
   fs.writeFileSync(file, `${wireLine({ schema })}\n`);
@@ -1754,7 +1774,7 @@ test.each<[string, string, string]>([
   [
     "kind",
     wireLine({ seq: 2 }).replace("node_started", "xnode_started"),
-    "run-record kind 'xnode_started' is unsupported in schema 30",
+    "run-record kind 'xnode_started' is unsupported in schema 32",
   ],
   ["sequence", wireLine({ seq: 5 }), "run-log sequence mismatch: expected 2, found 5"],
   ["run id", wireLine({ seq: 2, runId: "other" }), "run-log run_id mismatch: expected 'run', found 'other'"],
@@ -1909,6 +1929,30 @@ test("isRunLogLocked reports whether a writer holds the log", () => {
   }
   expect(isRunLogLocked(file)).toBe(false);
   expect(fs.existsSync(`${file}.lock`)).toBe(true);
+});
+
+test.skipIf(process.platform === "win32")("isRunLogLocked resolves a path only when the log itself is a symlink", () => {
+  const file = path.join(dir, "probe", "run.jsonl");
+  fs.mkdirSync(path.dirname(file));
+  const linkedLog = path.join(dir, "probe-log-link.jsonl");
+  const linkedFolder = path.join(dir, "probe-folder-link");
+  fs.symlinkSync(file, linkedLog);
+  fs.symlinkSync(path.dirname(file), linkedFolder);
+  fs.symlinkSync(path.join(dir, "nowhere.jsonl"), path.join(dir, "dangling.jsonl"));
+  const log = baselineLog(file);
+  const resolves = spyOn(fs, "realpathSync");
+  try {
+    expect(isRunLogLocked(file)).toBe(true);
+    expect(isRunLogLocked(path.join(linkedFolder, "run.jsonl"))).toBe(true);
+    expect(resolves).not.toHaveBeenCalled();
+    expect(isRunLogLocked(linkedLog)).toBe(true);
+    expect(resolves).toHaveBeenCalledTimes(1);
+  } finally {
+    resolves.mockRestore();
+    log.close();
+  }
+  expect(isRunLogLocked(path.join(dir, "probe", "missing.jsonl"))).toBe(false);
+  expect(isRunLogLocked(path.join(dir, "dangling.jsonl"))).toBe(false);
 });
 
 test.skipIf(process.platform === "win32")("a log reached through a linked folder shares the real log's lock", () => {
@@ -2069,7 +2113,7 @@ test("an invalid append retains the prior complete prefix and doesn't poison the
   const log = baselineLog(file);
   try {
     const error = expectAppendFailure(log, file, () => log.append({ nodeId: "x" } as never));
-    expect((error as Error).constructor).toBe(TypeError);
+    expect((error as Error).constructor).toBe(YianTypeError);
     expect((error as Error).message).toBe("unsupported run record: Object");
     expect(log.append(new NodeStartedRecord("second")).seq).toBe(1);
   } finally {

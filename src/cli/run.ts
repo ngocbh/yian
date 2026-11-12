@@ -38,6 +38,7 @@ import { compareCodeUnits, Diagnostic, reprText, shellQuote } from "../diagnosti
 import type { RunEvent } from "../events.ts";
 import { type Skill, SkillError } from "../skills/catalog.ts";
 import { LOAD_SKILL } from "../skills/tool.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { JSONDecodeError, type JsonValue, parseJson } from "../typesys/json.ts";
 import {
   canonicalTypeLabel,
@@ -70,6 +71,7 @@ import {
   type LlmConfigsCheck,
   loadRecordedFlow,
   readRunIndex,
+  RunIndexBusyError,
   type RunIndexRow,
   type RunInspection,
   type RunResult,
@@ -674,10 +676,10 @@ export function removeEmptyDir(dir: string): void {
 }
 
 /**
- * @internal Update the run index of `~/.yian/runs` (`updateRunIndex`, waiting at most a second for
- * another update) after the run in `log` ended, when `log` is a run folder's log there; a failed
- * update is a `warning:` line on stderr, and the logs it skips aren't reported (`yian status`
- * reports them).
+ * @internal Update the run index of `~/.yian/runs` with the run in `log` alone (`updateRunIndex` with
+ * its `runIds`, waiting at most a second for another update) after that run ended, when `log` is a
+ * run folder's log there; a failed update is a `warning:` line on stderr, and a log it skips isn't
+ * reported (`yian status` reports it). Other run folders are left to `yian status`.
  */
 export async function indexRun(log: string, io: CliIo): Promise<void> {
   const runsDir = defaultRunsDir(io.env);
@@ -689,10 +691,10 @@ export async function indexRun(log: string, io: CliIo): Promise<void> {
       return null;
     }
   };
-  const folder = real(dirname(dirname(log)));
-  if (folder === null || folder !== real(runsDir)) return;
+  const runFolder = real(dirname(log));
+  if (runFolder === null || dirname(runFolder) !== real(runsDir)) return;
   try {
-    withWarnings(() => {}, () => updateRunIndex(runsDir, { timeoutMs: 1000 }));
+    withWarnings(() => {}, () => updateRunIndex(runsDir, { timeoutMs: 1000, runIds: [basename(runFolder)] }));
   } catch (error) {
     if (!(error instanceof Error)) throw error;
     await printStyled(io, `warning: run index not updated: ${error.message}`, "yellow");
@@ -729,14 +731,16 @@ export interface RunOptions {
 
 /**
  * @internal Whether `error` is a host failure `run` reports as `run failed:` (`resume failed:`) rather than
- * with its stack: a bad value (a damaged or empty log or a defaults mismatch included), an
- * unreadable file, a run log another writer holds, an MCP server that didn't start, the missing MCP
- * SDK.
+ * with its stack: a bad value yian refused (`YianTypeError`, `YianRangeError`: a damaged or empty
+ * log or a defaults mismatch included), an unreadable file, a run log another writer holds, an MCP
+ * server that didn't start, the missing MCP SDK. Any other error, a built-in `TypeError` or
+ * `RangeError` among them, is a bug.
  */
 export function isSetupError(error: unknown): error is Error {
   return (
-    error instanceof TypeError ||
-    error instanceof RangeError ||
+    // yian's own: a built-in TypeError or RangeError is a bug, which keeps its stack.
+    error instanceof YianTypeError ||
+    error instanceof YianRangeError ||
     error instanceof AuthError ||
     error instanceof McpConnectError ||
     // A lock file that is unsafe, not private or changed; a locked log is a plain `Error` over
@@ -1264,13 +1268,13 @@ async function startRun(
     }
     if (recorded === null) {
       return setupFailed(
-        new RangeError("this run's flow was built in code; resume it with advance({log, flow})"),
+        new YianRangeError("this run's flow was built in code; resume it with advance({log, flow})"),
       );
     }
     // A chat's run needs the chat to type into it and to host its tools.
     if (recorded.compiled.flowId === CHAT_FLOW_ID && recorded.source?.root === CHAT_FLOW_FILE) {
       const message = "this run is a yian chat's; yian run --resume can't continue it";
-      return setupFailed(new RangeError(message));
+      return setupFailed(new YianRangeError(message));
     }
     flow = recorded;
   } else {
@@ -1594,7 +1598,7 @@ export async function status(log: string | undefined, { json }: { json: boolean 
     inspection = inspectRun(log);
     // The run index lists such a log as unreadable, so this says why too.
     const mismatch = runFolderMismatch(log, inspection.runId, defaultRunsDir(io.env));
-    if (mismatch !== null) throw new RangeError(`run log ${log}: ${mismatch}`);
+    if (mismatch !== null) throw new YianRangeError(`run log ${log}: ${mismatch}`);
   } catch (error) {
     let message: string;
     if (error instanceof RangeError) message = error.message;
@@ -1653,16 +1657,24 @@ function runFolderMismatch(log: string, runId: string | null, runsDir: string): 
  * run `ready` and `wake_at` (`false` and `null` otherwise), and `unreadable` (`seq` and `reason`,
  * or `null`). A log the update can't read is a `warning:` line on stderr: once until it changes, or
  * on every update for a file error such as no permission, which leaves the run's row as it was; so
- * is a damaged index, which the update rebuilds. An index that can't be updated (another update
- * held it too long, or SQLite can't use it) prints its message on stderr and exits 1 (`run.setup`).
+ * is a damaged index, which the update rebuilds. While another update holds the index too long,
+ * the rows it holds are listed, after the warning `run index is being updated; listing may be
+ * stale`. An index that can't be read or updated otherwise (SQLite can't use it) prints its
+ * message on stderr and exits 1 (`run.setup`). Only `json` reads each row's result.
  */
 async function listRuns({ json }: { json: boolean }, io: CliIo): Promise<number> {
   const runsDir = defaultRunsDir(io.env);
   let rows: RunIndexRow[] = [];
   try {
     if (existsSync(runsDir)) {
-      updateRunIndex(runsDir);
-      rows = readRunIndex(runsDir);
+      try {
+        updateRunIndex(runsDir);
+      } catch (error) {
+        // The index lags the logs but never leads them, so what it holds is safe to list.
+        if (!(error instanceof RunIndexBusyError)) throw error;
+        await printStyled(io, "warning: run index is being updated; listing may be stale", "yellow");
+      }
+      rows = readRunIndex(runsDir, { result: json });
     }
   } catch (error) {
     if (!(error instanceof Error) || error instanceof TypeError) throw error;

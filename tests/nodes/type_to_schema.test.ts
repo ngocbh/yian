@@ -29,6 +29,7 @@ import {
   checkReply,
   generateStructured,
   OutputInvalidError,
+  argumentsSchema,
   typeToSchema,
 } from "../../src/nodes/agent/structured.ts";
 import { questionListType } from "../../src/nodes/tool/questions.ts";
@@ -1437,5 +1438,33 @@ describe("a tagged union reply, through checkReply", () => {
     });
     expect(checkReply({ items: replies }, list)).toEqual(replies);
     expect(gets.count).toBeLessThan(items * 12 + size * size);
+  });
+});
+
+describe("argumentsSchema", () => {
+  test("an argument left out of required stays optional without taking null", () => {
+    const schema = argumentsSchema([
+      { name: "n", type: Type.scalar(ValueKind.INTEGER), required: true },
+      { name: "limit", type: Type.scalar(ValueKind.INTEGER), required: false },
+      { name: "note", type: new Type({ kind: ValueKind.STRING, nullable: true }), required: false },
+    ]);
+    expect(schema).toEqual({
+      additionalProperties: false,
+      properties: {
+        n: { title: "N", type: "integer" },
+        limit: { title: "Limit", type: "integer" },
+        note: { anyOf: [{ type: "string" }, { type: "null" }], title: "Note" },
+      },
+      required: ["n"],
+      type: "object",
+    });
+  });
+
+  test("no arguments is an empty closed object", () => {
+    expect(argumentsSchema([])).toEqual({ additionalProperties: false, properties: {}, type: "object" });
+  });
+
+  test("a file argument has no schema", () => {
+    expect(() => argumentsSchema([{ name: "doc", type: Type.scalar(ValueKind.FILE), required: true }])).toThrow(RangeError);
   });
 });

@@ -18,6 +18,7 @@ import {
   type MemorySession,
   type Recall,
 } from "../memory/base.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { type JsonObject, logJson } from "../typesys/json.ts";
 import { MemoryRef } from "../typesys/values.ts";
 
@@ -225,7 +226,7 @@ async function openSessions(
       checkSession(input, contractOf(instance), session);
       const other = opened.find((each) => each.session !== session && each.session.info.identity === session.info.identity);
       if (other !== undefined) {
-        throw new RangeError(
+        throw new YianRangeError(
           `\`${input}\` and \`${other.inputs[0]}\` are two memories with identity ` +
             `\`${session.info.identity}\`; bind one instance`,
         );
@@ -249,7 +250,7 @@ function checkSharedItemTypes(bindings: readonly MemoryBinding[]): void {
     const first = bindings.find((each) => each.instance === binding.instance)!;
     // By value, keys sorted, so one schema written in another key order is the same type.
     if (first === binding || logJson(first.itemType) === logJson(binding.itemType)) continue;
-    throw new RangeError(
+    throw new YianRangeError(
       `memory inputs \`${first.input}\` and \`${binding.input}\` share one instance but declare different item types`,
     );
   }
@@ -273,18 +274,18 @@ function checkInstance(binding: MemoryBinding, hostTypes: ReadonlyMap<string, re
     checkContract(instance);
   } catch (error) {
     if (!(error instanceof TypeError)) throw error;
-    throw new TypeError(`memory \`${input}\`: ${error.message}`, { cause: error });
+    throw new YianTypeError(`memory \`${input}\`: ${error.message}`, { cause: error });
   }
   const contract = contractOf(instance);
   if (contract.type !== type) {
-    throw new RangeError(`\`${input}\` is \`${type}\`, but its instance is \`${contract.type}\``);
+    throw new YianRangeError(`\`${input}\` is \`${type}\`, but its instance is \`${contract.type}\``);
   }
   const loaded = hostTypes.get(type);
   if (loaded === undefined || Object.hasOwn(BUILTIN_MEMORY_TOOLS, type)) return;
   const names = contract.tools.map((tool) => tool.name);
   if (!sameNames(names, loaded)) {
     const cls = (instance.constructor as { name: string }).name;
-    throw new TypeError(
+    throw new YianTypeError(
       `memory \`${input}\`: ${cls}'s tools (${names.join(", ")}) aren't those of the \`${type}\` the flow was ` +
         `loaded with (${loaded.join(", ")})`,
     );
@@ -304,14 +305,14 @@ export function sameNames(a: readonly string[], b: readonly string[]): boolean {
 function checkSession(input: string, contract: MemoryContract, session: MemorySession): void {
   const { info } = session;
   if (info.type !== contract.type) {
-    throw new TypeError(
+    throw new YianTypeError(
       `memory \`${input}\`: its session is a \`${info.type}\`, not the \`${contract.type}\` its class declares`,
     );
   }
   const names = info.tools.map((tool) => tool.name);
   const declared = contract.tools.map((tool) => tool.name);
   if (!sameNames(names, declared)) {
-    throw new TypeError(
+    throw new YianTypeError(
       `memory \`${input}\`: its session's tools (${names.join(", ")}) aren't its contract's (${declared.join(", ")})`,
     );
   }
@@ -343,7 +344,7 @@ async function sessionStep<T>(
       });
     }
     const message = `memory \`${input}\`: ${errorText(error)}`;
-    if (!isSystemError(error)) throw new RangeError(message, { cause: error });
+    if (!isSystemError(error)) throw new YianRangeError(message, { cause: error });
     // Its code, so a host reads it as the OS error it is; not its `path`, which holds a location.
     const { code, syscall, errno } = error;
     throw Object.assign(new Error(message, { cause: error }), { code, syscall, errno });
@@ -353,7 +354,7 @@ async function sessionStep<T>(
 /** The refusal of a memory input whose memory isn't bound, or isn't at its instance's location. */
 function missingMemory(input: string, identity: string | null, cause?: unknown): RangeError {
   const which = identity === null ? "" : ` (\`${identity}\`)`;
-  return new RangeError(`memory \`${input}\`${which} isn't at its location; bind it with --memory`, { cause });
+  return new YianRangeError(`memory \`${input}\`${which} isn't at its location; bind it with --memory`, { cause });
 }
 
 /**
@@ -365,18 +366,18 @@ function missingMemory(input: string, identity: string | null, cause?: unknown):
 function checkRecorded(input: string, session: MemorySession, recorded: MemoryRef): void {
   const { identity, type } = session.info;
   if (identity !== recorded.identity) {
-    throw new RangeError(`resume refused: memory ${input} is \`${identity}\`, not the recorded \`${recorded.identity}\``);
+    throw new YianRangeError(`resume refused: memory ${input} is \`${identity}\`, not the recorded \`${recorded.identity}\``);
   }
   if (type !== recorded.type) {
-    throw new RangeError(`resume refused: memory ${input} is a \`${type}\`, not the recorded \`${recorded.type}\``);
+    throw new YianRangeError(`resume refused: memory ${input} is a \`${type}\`, not the recorded \`${recorded.type}\``);
   }
   // Built as the run built the recorded one, so both are in the form the run log reads back.
   const live = memoryValue(input, session, { version: recorded.version, recall: recorded.recall });
   if (logJson(live.settings) !== logJson(recorded.settings)) {
-    throw new RangeError(`resume refused: memory ${input} settings differ from the recorded ones`);
+    throw new YianRangeError(`resume refused: memory ${input} settings differ from the recorded ones`);
   }
   if (logJson(live.tools) !== logJson(recorded.tools)) {
-    throw new RangeError(`resume refused: memory ${input} tools differ from the recorded ones`);
+    throw new YianRangeError(`resume refused: memory ${input} tools differ from the recorded ones`);
   }
 }
 
@@ -412,7 +413,7 @@ function memoryValue(
     });
   } catch (error) {
     if (!(error instanceof RangeError)) throw error;
-    throw new TypeError(`memory \`${input}\`: ${error.message}`, { cause: error });
+    throw new YianTypeError(`memory \`${input}\`: ${error.message}`, { cause: error });
   }
 }
 

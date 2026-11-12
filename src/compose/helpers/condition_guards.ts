@@ -43,6 +43,7 @@ import { isinstanceSubject, isinstanceTypeNames } from "../../expr/index.ts";
 import { ISINSTANCE, referencePath, splitReference, valueArgs } from "../../expr/expressions.ts";
 import { callSuffixOf, compVarKey, type ExprNode, Token, Tree } from "../../expr/grammar.ts";
 import { directReferenceParts } from "../../compile/output_contracts.ts";
+import { YianTypeError } from "../../typesys/errors.ts";
 
 /** An `isinstance(<base>, <typeName>)` check on a plain reference; frozen. */
 export class IsinstanceCheck {
@@ -106,7 +107,7 @@ export type Check = IsinstanceCheck | TagCheck | NotNullCheck;
  * @returns The error, naming the check's class.
  */
 export function unknownCheck(check: object): TypeError {
-  return new TypeError(`unhandled check kind ${check.constructor.name}`);
+  return new YianTypeError(`unhandled check kind ${check.constructor.name}`);
 }
 
 /** Return whether two checks are the same check (the same kind and fields). */

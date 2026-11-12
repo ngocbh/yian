@@ -19,6 +19,7 @@ import {
   waitForLock,
 } from "../platform.ts";
 import { ReportedToolError } from "../tools/errors.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { type Applied, type Author, MemoryBusyError } from "./base.ts";
 
@@ -194,7 +195,7 @@ export function capOption(
 ): number {
   if (value === undefined) return fallback;
   if (!Number.isSafeInteger(value) || value < minimum) {
-    throw new RangeError(`${type} ${name} must be an integer of at least ${minimum}, not ${String(value)}`);
+    throw new YianRangeError(`${type} ${name} must be an integer of at least ${minimum}, not ${String(value)}`);
   }
   return value;
 }
@@ -328,7 +329,7 @@ export function stringArg(type: string, args: JsonObject, name: string, required
 export function stringArg(type: string, args: JsonObject, name: string, required: boolean): string | undefined {
   const value = Object.hasOwn(args, name) ? args[name] : undefined;
   if (value === undefined && !required) return undefined;
-  if (typeof value !== "string") throw new TypeError(`${type} ${name} must be a string`);
+  if (typeof value !== "string") throw new YianTypeError(`${type} ${name} must be a string`);
   return value;
 }
 
@@ -357,7 +358,7 @@ export function authorOf(author: Author): Author {
 export function checkAuthor(author: Author): Author {
   const checked = asAuthor(author);
   if (checked === null) {
-    throw new TypeError("a change's author must be {kind, name, run?, node?}, its kind agent, tool, user or host");
+    throw new YianTypeError("a change's author must be {kind, name, run?, node?}, its kind agent, tool, user or host");
   }
   return checked;
 }

@@ -347,7 +347,7 @@ test("a pool_commit for a node that isn't running is refused on replay", async (
   expect(replay).toThrow("pool_commit node 'count' is not in flight");
 });
 
-test("a log cut inside its run start can't be resumed, and stays as it is", async () => {
+test("a log cut inside its run start can't be resumed, stays as it is, and reads unstarted", async () => {
   const flow = await load(CALL_IN_LOOP);
   for (const k of [1, 2, 3, 4]) {
     const log = freshLog();
@@ -355,12 +355,23 @@ test("a log cut inside its run start can't be resumed, and stays as it is", asyn
     const before = readFileSync(log);
     const error = await rejected(advance({ log, env: NO_ENV }));
     expect(error).toBeInstanceOf(RangeError);
-    expect((error as Error).message).toBe(`run log ${log} ends inside its run start; start the run again`);
+    expect((error as Error).message).toBe(
+      `run log ${log} ends inside its run start, before its inputs were recorded; delete it and start the run again`,
+    );
     expect(readFileSync(log).equals(before)).toBe(true);
-    // `inspectRun` replays the log too, and refuses it the same way.
-    expect(() => inspectRun(log, { flow, env: NO_ENV })).toThrow(RangeError);
-    expect(() => inspectRun(log, { flow, env: NO_ENV })).toThrow("ends inside its run start; start the run again");
+    // Read from the records or replayed with the flow, it is a run no resume can move.
+    for (const inspection of [inspectRun(log), inspectRun(log, { flow, env: NO_ENV })]) {
+      expect(inspection).toMatchObject({ status: "unstarted", inFlight: [], endedAt: null, failure: null, lastSeq: k - 1 });
+      expect(inspection.crashedAttempts.size).toBe(0);
+    }
   }
+  // Cut right after the START inputs' commit, the run has started: it crashed, and resumes.
+  const log = freshLog();
+  await crashAfter(5, () => run(flow, log));
+  expect(readRunLog(log).at(-1)!.payload["key"]).toBe(StartNode.ID);
+  expect(inspectRun(log).status).toBe("crashed");
+  expect(inspectRun(log, { flow, env: NO_ENV }).status).toBe("crashed");
+  expect((await advance({ log, env: NO_ENV })).status).toBe("succeeded");
 });
 
 test("runRecordOffsets maps each seq to its line's byte offset, without the writer's lock", async () => {
@@ -464,7 +475,7 @@ test.if(process.versions.bun !== undefined)("on Bun the run entry is the source 
 const WRITTEN_LINE =
   '{"at":"2026-10-23T20:22:41.126Z","kind":"pool_commit","payload":{"key":"make","kind":"object","node_id":"make",' +
   '"value":{"big":1208925819614629174706176,"esc":{"$record":{"$record":{"a":1}}},"inf":{"$float":"inf"},' +
-  '"ninf":{"$float":"-inf"},"whole":2.0}},"run_id":"r1","schema":30,"seq":9}';
+  '"ninf":{"$float":"-inf"},"whole":2.0}},"run_id":"r1","schema":32,"seq":9}';
 
 test("a fixed pool_commit line with a big int, infinities and an escaped record round-trips through the public JSON form", () => {
   expect(roundTrip(WRITTEN_LINE)).toBe(WRITTEN_LINE);

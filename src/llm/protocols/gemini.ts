@@ -27,6 +27,7 @@
  * credentials and then caps.
  */
 
+import { YianTypeError } from "../../typesys/errors.ts";
 import { encodeBody, escapeAuthorTagsInJson, mergeRequestBody, withAuthorWrapper } from "../body.ts";
 import { JSONDecodeError, type JsonObject, type JsonValue, parseJson } from "../../typesys/json.ts";
 import { ProviderError } from "../errors.ts";
@@ -368,7 +369,7 @@ export class Gemini implements SseProtocol {
   /** Return the `systemInstruction` parts and the `contents`. */
   #contents(messages: readonly Message[]): [JsonObject[], JsonObject[]] {
     if (messages.some((message) => message.parts.some((part) => part instanceof MediaPart))) {
-      throw new TypeError(NO_MEDIA);
+      throw new YianTypeError(NO_MEDIA);
     }
     const system: JsonObject[] = [];
     const contents: JsonObject[] = [];
@@ -461,7 +462,7 @@ export class Gemini implements SseProtocol {
     let reason: ReplayDegradedReason | null = null;
     for (const part of message.parts) {
       // Refused here so a bad message never fires onReplayDegraded first.
-      if (part instanceof ToolResultPart) throw new TypeError(wrongPart(PROTOCOL, part, message.role));
+      if (part instanceof ToolResultPart) throw new YianTypeError(wrongPart(PROTOCOL, part, message.role));
       if (!(part instanceof TextPart || part instanceof ToolCallPart) || part.providerPayload === null) {
         signatures.push(null);
         continue;
@@ -507,7 +508,7 @@ function thoughtSignature(
 function textParts(message: Message): JsonObject[] {
   const parts: JsonObject[] = [];
   for (const part of message.parts) {
-    if (!(part instanceof TextPart)) throw new TypeError(wrongPart(PROTOCOL, part, message.role));
+    if (!(part instanceof TextPart)) throw new YianTypeError(wrongPart(PROTOCOL, part, message.role));
     if (part.text !== "") parts.push({ text: part.text });
   }
   return parts;
@@ -520,7 +521,7 @@ function textParts(message: Message): JsonObject[] {
  * @throws {TypeError} If the part is not a tool result.
  */
 function functionResponse(part: Part): JsonObject {
-  if (!(part instanceof ToolResultPart)) throw new TypeError(wrongPart(PROTOCOL, part, "tool"));
+  if (!(part instanceof ToolResultPart)) throw new YianTypeError(wrongPart(PROTOCOL, part, "tool"));
   return { functionResponse: { id: part.callId, name: part.name, response: toolResponse(part.content) } };
 }
 

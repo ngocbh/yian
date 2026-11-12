@@ -39,6 +39,7 @@ import {
   resolveReference,
 } from "../expr/index.ts";
 import { Verbatim } from "../expr/template.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import {
   buildValueAs,
   isRecord,
@@ -94,7 +95,7 @@ export type ErrorLabel = string | ((path: ValuePath) => string);
  * violating its input contract (`contract.input`). `origin` is the most precise available
  * authored operation and feeds the canonical failure trace.
  */
-export class BindingError extends RangeError {
+export class BindingError extends YianRangeError {
   override name = "BindingError";
   /** The semantic stage that failed. */
   readonly failureCode: BindingFailureCode;
@@ -114,7 +115,7 @@ export class BindingError extends RangeError {
     const { failureCode, origin = null, cause } = options;
     super(message, cause === undefined ? undefined : { cause });
     if (!(BINDING_FAILURE_CODES as readonly string[]).includes(failureCode)) {
-      throw new RangeError(`invalid binding failure code ${reprText(String(failureCode))}`);
+      throw new YianRangeError(`invalid binding failure code ${reprText(String(failureCode))}`);
     }
     validateOptionalOrigin(origin, "binding failure origin");
     this.failureCode = failureCode;
@@ -156,11 +157,11 @@ export function rejectInvalidBinding(value: unknown, where: string, origin: Orig
  */
 export function validateParameters(params: readonly Parameter[], subject = "node"): void {
   if (!isList(params)) {
-    throw new TypeError(`${subject} params must be an exact list, got ${jsTypeName(params)}`);
+    throw new YianTypeError(`${subject} params must be an exact list, got ${jsTypeName(params)}`);
   }
   for (const parameter of params) {
     if (!isExactly(parameter, Parameter)) {
-      throw new TypeError(`${subject} params must contain Parameter values, got ${jsTypeName(parameter)}`);
+      throw new YianTypeError(`${subject} params must contain Parameter values, got ${jsTypeName(parameter)}`);
     }
   }
 }
@@ -203,7 +204,7 @@ function intFromText(text: string): bigint {
  */
 export function coerceParam(parameter: Parameter, value: unknown): unknown {
   if (!isExactly(parameter, Parameter)) {
-    throw new TypeError(`parameter must be an exact Parameter, got ${jsTypeName(parameter)}`);
+    throw new YianTypeError(`parameter must be an exact Parameter, got ${jsTypeName(parameter)}`);
   }
   if (typeof value !== "string" || !parameter.coerceStrings || parameter.contract === null) {
     return value;
@@ -242,7 +243,7 @@ export function coerceParam(parameter: Parameter, value: unknown): unknown {
  */
 export function checkInputNames(params: readonly Parameter[], raw: unknown): void {
   if (!isRecord(raw)) {
-    throw new TypeError(`inputs must be a mapping of input names to values, got ${jsTypeName(raw)}`);
+    throw new YianTypeError(`inputs must be a mapping of input names to values, got ${jsTypeName(raw)}`);
   }
   const declared = params.map((parameter) => parameter.name);
   const unknown = Object.keys(raw)
@@ -251,7 +252,7 @@ export function checkInputNames(params: readonly Parameter[], raw: unknown): voi
   if (unknown.length > 0) {
     const noun = unknown.length === 1 ? "input" : "inputs";
     const shown = shownText(unknown.map((name) => JSON.stringify(name)).join(", "));
-    throw new RangeError(`unknown ${noun} ${shown}; declared inputs: ${declared.join(", ") || "(none)"}`);
+    throw new YianRangeError(`unknown ${noun} ${shown}; declared inputs: ${declared.join(", ") || "(none)"}`);
   }
 }
 

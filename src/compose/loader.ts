@@ -45,7 +45,7 @@ import fsp from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 
 import { fieldLabel, findInheritedLlmValue, inheritedValueFix } from "../compile/llm_cascade.ts";
-import { type CompiledFlow, type Flow, nodeChild } from "../compile/model.ts";
+import { type CompiledFlow, type Flow, nodeChildren } from "../compile/model.ts";
 import { iterFlowOrigins, rebaseFlowOrigins } from "../compile/origins.ts";
 import { current, type Env, processEnv, withEnv } from "../defaults.ts";
 import {
@@ -60,6 +60,7 @@ import {
 import type { Node } from "../nodes/base.ts";
 import { Binding, type ValuePath, ValueTemplate } from "../nodes/contracts.ts";
 import { isSystemError, leavesRoot, readRegularFile, resolvedPath, statOrNull } from "../platform.ts";
+import { YianTypeError } from "../typesys/errors.ts";
 import { readTypedefs, typeFor, typeName, type TypeRegistry, withMemoryTypes } from "../typesys/types.ts";
 import {
   isList,
@@ -251,8 +252,10 @@ export function singleNodeDefCursor(name: string, body: ValueRecord, defCursor: 
 // the file's metadata and typedefs rather than declaring `id`/`name`/`typedefs` themselves.
 // `asserts:` are allowed: the call and map child seam enforces a def's asserts against the child
 // pool (boundary before the child runs, post after it ends). `env:` is the def's own flow-level
-// default for its nodes; a parent's `env:` doesn't reach a called child.
+// default for its nodes; a parent's `env:` doesn't reach a called child. `description:` is what a
+// model reads when an agent grants the def as a tool.
 const DEF_ALLOWED: ReadonlySet<string> = new Set([
+  "description",
   "inputs",
   "nodes",
   "outputs",
@@ -544,22 +547,25 @@ function checkFrame(
 const expandedCounts = new WeakMap<Flow, number>();
 
 /**
- * Return how many nodes `flow` expands to: its own nodes and, for each with a static child (a
- * CALL, MAP or LOOP body), that child's count, so each call of a def or `uses:` flow counts as a
- * copy and a MAP or LOOP body counts once however many items it runs. Every CASE branch counts.
- * Cached per flow, so the count is linear in the distinct flows however large it is.
+ * Return how many nodes `flow` expands to: its own nodes and, for each with static children (a
+ * CALL, MAP or LOOP body, an agent's flow tools), their counts, so each call of a def or `uses:`
+ * flow counts as a copy and a MAP or LOOP body, or a flow tool, counts once however many times it
+ * runs. Every CASE branch counts. Cached per flow, so the count is linear in the distinct flows
+ * however large it is.
  */
 function expandedNodes(flow: Flow): number {
   let count = expandedCounts.get(flow);
   if (count === undefined) {
     count = 0;
-    for (const node of flow.nodes.values()) {
-      const child = nodeChild(node);
-      count += 1 + (child === null ? 0 : expandedNodes(child));
-    }
+    for (const node of flow.nodes.values()) count += 1 + childNodes(node);
     expandedCounts.set(flow, count);
   }
   return count;
+}
+
+/** The expanded count of `node`'s static children (`expandedNodes`); 0 for none. */
+function childNodes(node: Node): number {
+  return nodeChildren(node).reduce((sum, child) => sum + expandedNodes(child.flow), 0);
 }
 
 /**
@@ -569,10 +575,10 @@ function expandedNodes(flow: Flow): number {
 function nodePastLimit(flow: Flow, limit: number): Node | null {
   let count = 0;
   for (const node of flow.nodes.values()) {
-    const child = nodeChild(node);
-    const size = child === null ? 0 : expandedNodes(child);
-    if (child !== null && size > limit) return nodePastLimit(child, limit) ?? node;
-    count += 1 + size;
+    for (const { flow: child } of nodeChildren(node)) {
+      if (expandedNodes(child) > limit) return nodePastLimit(child, limit) ?? node;
+    }
+    count += 1 + childNodes(node);
     if (count > limit) return node;
   }
   return null;
@@ -832,7 +838,7 @@ export async function loadFlow(text: string, options: LoadOptions = {}): Promise
 async function loadText(text: string, options: Omit<LoadOptions, "env">): Promise<ComposedFlow> {
   const { childResolver = null, searchPaths = null, sourceLabel = "<flow>", baseDir = null, codeRoot = null } = options;
   const { memoryTypes = [] } = options;
-  if (typeof sourceLabel !== "string") throw new TypeError("source_label must be a string");
+  if (typeof sourceLabel !== "string") throw new YianTypeError("source_label must be a string");
   const memoryTools = memoryTypeTools(memoryTypes);
   // Absolute, so a CODE reference doesn't depend on the cwd when the node runs.
   const ownDir = resolvePath(baseDir ?? searchPaths?.[0] ?? process.cwd());
@@ -1845,7 +1851,13 @@ export class CallableScope implements AssemblyScope {
 
   /** Whether `flowId` names a `defs:` callable or a `uses:` alias, which `call(...)` can run. */
   has(flowId: string): boolean {
-    return Object.hasOwn(this.#defsSection, flowId) || Object.hasOwn(this.#uses, flowId);
+    return this.section(flowId) !== null;
+  }
+
+  /** The section declaring `flowId`: `defs` or `uses`; `null` for neither. */
+  section(flowId: string): "defs" | "uses" | null {
+    if (Object.hasOwn(this.#defsSection, flowId)) return "defs";
+    return Object.hasOwn(this.#uses, flowId) ? "uses" : null;
   }
 
   /**
@@ -2145,6 +2157,7 @@ function loadDef(
   }
   if (defEnv !== null) validateEnv(defEnv, `${where}: `, defCursor?.child("env") ?? null, diagnostics);
   checkDefAsserts(name, field("asserts"), defCursor, diagnostics);
+  const description = defDescription(name, field("description"), defCursor, diagnostics);
   // Like a full flow's, a written `input:` must be a mapping, so an empty one is refused.
   const inputs = Object.hasOwn(body, "inputs") ? body["inputs"]! : {};
   if (!isRecord(inputs)) {
@@ -2171,6 +2184,7 @@ function loadDef(
       assertsCursor: sourceChild(defCursor, "asserts"),
       outputsCursor: sourceChild(defCursor, "output"),
       flowId: name,
+      description,
       baseDir: scope.baseDir,
     });
   } catch (error) {
@@ -2182,6 +2196,23 @@ function loadDef(
       cause: error,
     });
   }
+}
+
+/**
+ * Read a `defs:` entry's `description:`: text, or `null` when absent.
+ *
+ * @throws LoadError, located at the value and prefixed `defs entry '<name>': `, when it isn't text.
+ */
+function defDescription(
+  name: string,
+  value: Value,
+  defCursor: SourceCursor | null,
+  diagnostics: LoadDiagnostics,
+): string | null {
+  if (value === null || typeof value === "string") return value;
+  throw diagnostics.error(`defs entry ${reprText(name)}: ` + notTextError("description", value), {
+    range: defCursor?.rangeOf("description") ?? null,
+  });
 }
 
 /**
@@ -2235,6 +2266,9 @@ function loadSingleNodeDef(
   if (!KINDS.has(kind) && !REMOVED_KINDS.has(kind)) {
     throw kindError(`node ${reprText(name)}: unknown kind ${reprText(kind)} (allowed: ${allowed})`);
   }
+  const description = defDescription(name, body["description"] ?? null, defCursor, diagnostics);
+  // The description is the def's, not its node's.
+  const { description: _, ...nodeBody } = body;
   const inputCursor = sourceChild(defCursor, "input");
   const paramTypes = signatureParams(Object.hasOwn(body, "inputs") ? body["inputs"]! : undefined, {
     where,
@@ -2243,7 +2277,7 @@ function loadSingleNodeDef(
     fallbackRange: defCursor?.range ?? null,
     diagnostics,
   });
-  const nodesCursor = singleNodeDefCursor(name, body, defCursor);
+  const nodesCursor = singleNodeDefCursor(name, nodeBody, defCursor);
   try {
     return assemble({
       inputsSection: paramTypes,
@@ -2258,6 +2292,7 @@ function loadSingleNodeDef(
       boundaryFieldRanges: defCursor !== null ? boundaryFieldRanges(defCursor) : null,
       outputsRange: sourceChild(defCursor, "output")?.range ?? null,
       flowId: name,
+      description,
       baseDir: scope.baseDir,
     });
   } catch (error) {

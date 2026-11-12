@@ -11,6 +11,7 @@
  * text, so only the adapter can write it.
  */
 
+import { YianTypeError } from "../typesys/errors.ts";
 import type { JsonObject, JsonValue } from "../typesys/json.ts";
 import { copyJson, isPlainObject, Message, type Part, put, TextPart, ToolResultPart, typeName } from "./messages.ts";
 
@@ -70,7 +71,7 @@ type Task =
  *   array, a symbol key, or a cycle.
  */
 export function encodeBody(value: unknown, what = "request body"): string {
-  const notJson = (problem: string) => new TypeError(`${what} is not JSON: ${problem}`);
+  const notJson = (problem: string) => new YianTypeError(`${what} is not JSON: ${problem}`);
   let out = "";
   // Ancestors only, so a shared value writes twice and only a cycle is refused.
   const active = new Set<object>();
@@ -149,7 +150,7 @@ function quote(text: string, at: number, what: string): string {
   }
   // The escaped prefix, less its closing quote, ends where the surrogate would be written.
   const position = at + JSON.stringify(text.slice(0, i)).length - 1;
-  throw new TypeError(`${what} has an unpaired surrogate at position ${position}`);
+  throw new YianTypeError(`${what} has an unpaired surrogate at position ${position}`);
 }
 
 /** The tag name of the wrapper that carries a user message's author. */

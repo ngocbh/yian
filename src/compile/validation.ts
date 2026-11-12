@@ -20,6 +20,7 @@
 
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { slashedNameHint } from "../expr/grammar.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import { messagesKey, NEW_MESSAGES } from "../typesys/pool.ts";
 import {
   type Bound,
@@ -53,7 +54,7 @@ export const SYSTEM_AMBIENTS: ReadonlyMap<string, ValueKind> = new Map([
  * Thrown by the graph/reference checkers and caught by the compose loader, which rethrows it as
  * a located `LoadError`.
  */
-export class FlowValidationError extends RangeError {
+export class FlowValidationError extends YianRangeError {
   override name = "FlowValidationError";
   /**
    * All accumulated located problems. The reference-wiring pass collects every problem it

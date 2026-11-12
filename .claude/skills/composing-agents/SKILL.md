@@ -118,8 +118,9 @@ output:
 
 ### Wiring and prompts
 
-- **Node ids are identifiers**: `fetch_data`, not `fetch-data`. `input`, `output`, `system`,
-  `item` and the expression keywords are taken. No node id, input, output or variable name may
+- **Node ids and flow input names are identifiers**: `fetch_data`, not `fetch-data`; and
+  `first_name`, not `first-name`, for an input of a flow, a def or an inline body. `input`,
+  `output`, `system`, `item` and the expression keywords are taken as node ids. No node id, input, output or variable name may
   start with `__`: yian generates those.
 - **A node's `input:` is a mapping of names.** `input: ${other.output}` is a load error; bind
   each name: `n: ${other.output.n}`.
@@ -178,7 +179,9 @@ output:
 - **`on:` holds a reference** (`on: ${input.kind}`), and each `when:` is a literal value of its
   type, never a `${...}`. Without `on:`, each `when:` is a condition and the first true one wins.
 - **Skipped branches spread.** A node that reads a skipped node whole is skipped too; inside
-  text the value is empty; with `:-` it runs on the default; a flow output reads null. See
+  text the value is empty; with `:-` it runs on the default; a flow output reads null. Reading a
+  node a `case` may skip where null fails (arithmetic, `len(a.output)`, `x in a.output`,
+  `[y for y in a.output]`) is a load error: write `(a.output :- [])`. See
   [When a node is skipped](https://yian.readthedocs.io/flows/#when-a-node-is-skipped).
 
 ### Child flows: `call`, `map`, `loop`
@@ -224,6 +227,12 @@ output:
 - **A group's tools show to the model as `<group>_<tool>`.** A bare tool name finds a group's tool
   only when one group has it; when two do, grant `{github: [search]}`. A tool in two granted
   groups is offered once, under the first grant's name.
+- **An agent can grant a flow as a tool**: `tools: [summarize]` naming a `defs:` entry or `uses:`
+  alias. The flow needs a `description:` and inputs a model can send (no Inbox, memory or `file`
+  input); its inputs are the tool's arguments, and the model reads its output as JSON (text as
+  itself), or its failure as the call's error. It runs inside the run, its nodes under
+  `<agent>/<flow>#<k>`. See
+  [Flows as tools](https://yian.readthedocs.io/agents/#flows-as-tools).
 - **An agent a host may interrupt needs an `Optional(...)` output.** An interrupted agent's
   output is null; with `str` or any other type it fails with `agent.interrupted`. This applies
   to every agent with `steer_inbox:`.

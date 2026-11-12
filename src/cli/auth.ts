@@ -1068,12 +1068,17 @@ export function configErrors(layer: Readonly<Record<string, unknown>>): ConfigPr
   } catch (error) {
     if (error instanceof ValidationError) {
       const errors: ConfigProblem[] = [];
+      const seen = new Set<string>();
       for (const issue of error.issues) {
         const entry =
           issue.type === "extra_forbidden" && issue.loc.length === 1
             ? { field: null, message: EXTRA_FIELD }
             : { field: issue.loc.join(".") || null, message: issue.msg.replace(/^Value error, /, "") };
-        if (!errors.some((seen) => seen.field === entry.field && seen.message === entry.message)) errors.push(entry);
+        const key = JSON.stringify([entry.field, entry.message]);
+        if (!seen.has(key)) {
+          seen.add(key);
+          errors.push(entry);
+        }
       }
       return errors;
     }
@@ -1085,7 +1090,7 @@ export function configErrors(layer: Readonly<Record<string, unknown>>): ConfigPr
   // The model is a value, which this check's messages never show.
   const blockError =
     provider !== null && model !== null
-      ? responsesBlockError(provider, model, config.blockFor(provider), "the layer's model")
+      ? responsesBlockError(provider, model, config.api, config.blockFor(provider), "the layer's model")
       : null;
   return blockError === null ? [] : [{ field: provider, message: blockError }];
 }

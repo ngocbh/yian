@@ -45,6 +45,7 @@ import { realScheduler, type Scheduler } from "../platform.ts";
 import { isRecord } from "../typesys/index.ts";
 import { parseJson } from "../typesys/json.ts";
 import { Terminal } from "./terminal.ts";
+import { showForTerminal } from "./sanitize.ts";
 import { type CliIo, forTerminal, type ParsedArgs, printJson, stopOnSignals, UsageError, type Writer } from "./utils.ts";
 
 const KINDS: Readonly<Record<string, string>> = { api_key: "api-key", subscription: "subscription", none: "none" };
@@ -1125,7 +1126,9 @@ export async function configCheck(command: ParsedArgs, io: CliIo): Promise<numbe
   } else if (errors.length === 0) {
     await io.stdout.write("ok\n");
   } else {
-    await io.stderr.write(errors.map(({ field, message }) => `${field ? `${field}: ${message}` : message}\n`).join(""));
+    // A field and its message can quote a layer's key: on a terminal each control character in it shows.
+    const line = ({ field, message }: ConfigProblem) => showForTerminal(field ? `${field}: ${message}` : message, io.stderr);
+    await io.stderr.write(errors.map((error) => `${line(error)}\n`).join(""));
   }
   return errors.length === 0 ? 0 : 1;
 }

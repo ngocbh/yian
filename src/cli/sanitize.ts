@@ -69,6 +69,21 @@ export function sanitize(text: string, options: SanitizeOptions = {}): string {
   return safe;
 }
 
+/**
+ * Return `text`, which a flow file, a file name or a run log supplies (a line of a flow's source,
+ * a path, an id, a flow's name), as it may be written to `out`: on a TTY with each control
+ * character shown (`^[` for ESC, `^J` for a newline; tabs kept) and each BIDI control or invisible
+ * character as its code point, as `sanitize` shows them, so the user sees what the text holds and
+ * the terminal acts on none of it; as is otherwise.
+ */
+export function showForTerminal(text: string, out: { readonly isTTY?: boolean | undefined }): string {
+  if (!out.isTTY) return text;
+  return text
+    .split("\n")
+    .map((line) => sanitize(line, { sequences: "show" }))
+    .join("^J");
+}
+
 /** The `[start, end)` spans of the whole escape sequences in `text` that `sanitize` drops. */
 export function sequenceSpans(text: string): [number, number][] {
   return [...text.matchAll(SEQUENCE)].map((match) => [match.index, match.index + match[0].length]);

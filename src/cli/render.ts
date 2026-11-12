@@ -11,6 +11,7 @@
 import type { Env } from "../defaults.ts";
 import type { Diagnostic, SourceRange } from "../diagnostics.ts";
 import { cells, charCells, clip, columnsOf, fit, wrapLine } from "./cells.ts";
+import { showForTerminal } from "./sanitize.ts";
 import { type CliIo, forTerminal, type Writer } from "./utils.ts";
 
 const SGR = { bold: 1, dim: 2, italic: 3, red: 31, green: 32, yellow: 33, cyan: 36 } as const;
@@ -158,7 +159,8 @@ function clipCode(code: string, width: number, focus: number | null): string {
  * line flagged `❱`, and is titled `title:line` or `title:first-last`. A span of more than 10 lines
  * shows its first 4 and last 4 lines around a dim `⋮ N lines` row. The box is at most as wide as
  * `out` on a terminal, else 200 cells: longer lines are cut with `…`, the error's own line around
- * its start column.
+ * its start column. On a TTY the lines and the title show their control characters
+ * (`showForTerminal`), split into lines first so the numbers stay right, before they are measured.
  */
 function renderFrameBox(text: string, range: SourceRange, title: string, out: Writer, env: Env): string | null {
   const lines = splitLines(text);
@@ -175,7 +177,10 @@ function renderFrameBox(text: string, range: SourceRange, title: string, out: Wr
   const push = (line: number) => {
     const marked = first <= line && line <= last;
     const gutter = `${marked ? "❱" : " "} ${String(line).padStart(numberWidth)} `;
-    const code = clipCode(lines[line - 1]!, codeWidth, line === range.startLine ? range.startCol - 1 : null);
+    const raw = lines[line - 1]!;
+    // Shown character by character, so the start column's place is where its prefix ends.
+    const focus = line === range.startLine ? showForTerminal(raw.slice(0, range.startCol - 1), out).length : null;
+    const code = clipCode(showForTerminal(raw, out), codeWidth, focus);
     rows.push([gutter + code, paint(gutter, marked ? "red bold" : "dim", out, env) + code]);
   };
   const elided = last - first + 1 > SPAN_WHOLE;
@@ -188,7 +193,8 @@ function renderFrameBox(text: string, range: SourceRange, title: string, out: Wr
     }
     push(line);
   }
-  return box(rows, "red", out, env, `${title}:${first === last ? first : `${first}-${last}`}`, 0, maxWidth);
+  const shownTitle = showForTerminal(title, out);
+  return box(rows, "red", out, env, `${shownTitle}:${first === last ? first : `${first}-${last}`}`, 0, maxWidth);
 }
 
 /**
@@ -196,15 +202,16 @@ function renderFrameBox(text: string, range: SourceRange, title: string, out: Wr
  *
  * A frame is boxed around the lines its range covers (`SourceRange.coveredLines`), or shown as
  * its label when none is in its text; its note follows it. Several frames are headed `source
- * locations:`. A diagnostic without frames prints only its message. On a TTY the message and notes,
- * which can carry provider or tool text, go through `forTerminal`.
+ * locations:`. A diagnostic without frames prints only its message. On a TTY a frame's source and
+ * label, which a flow file or its name supplies, show their control characters; the message and
+ * notes, which can carry provider or tool text, go through `forTerminal`.
  */
 export async function renderDiagnostic(diag: Diagnostic, out: Writer, env: Env): Promise<void> {
   const parts: string[] = [];
   if (diag.frames.length > 1) parts.push(paint("source locations:", "red bold", out, env));
   for (const frame of diag.frames) {
     const framed = renderFrameBox(frame.text, frame.range, frame.label, out, env);
-    parts.push(framed ?? paint(frame.label, "red bold", out, env));
+    parts.push(framed ?? paint(showForTerminal(frame.label, out), "red bold", out, env));
     if (frame.note !== null) parts.push(paint(`  ↳ ${forTerminal(frame.note, out)}`, "yellow", out, env));
   }
   parts.push(paint(forTerminal(diag.message, out), "red", out, env));

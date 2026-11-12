@@ -220,8 +220,12 @@ servers in file order until one lists it, and stops them when the run ends. See
 - Warnings print as `warning: <message>` lines on stderr.
 - Colour is used only on a terminal, and never when `NO_COLOR` is set.
 - On a terminal, escape sequences and control characters other than newlines and tabs
-  are dropped from what prints, and BIDI embeddings, overrides and isolates show as their code
-  points (`\u{202e}`). Piped or redirected output keeps every byte.
+  are dropped from model, tool and run output, and BIDI embeddings, overrides and isolates show as
+  their code points (`\u{202e}`). In text from a flow file, a file name or a run log (the banner, a
+  flow's source in an error, paths, run and node ids, `yian config check` lines) control
+  characters show instead (`^[` for ESC, `^G` for BEL), and BIDI and other invisible characters
+  as their code points. A CODE body's `console` output prints as it is. Piped or redirected output
+  keeps every byte.
 
 A load error shows where the flow broke: the lines around it, the line marked `❱`, and the message
 below. A span of more than 10 lines shows its first and last 4 lines around a `⋮ N lines` row, and

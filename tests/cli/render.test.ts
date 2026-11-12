@@ -237,6 +237,55 @@ describe("provider text with escape sequences", () => {
   });
 });
 
+describe("flow text with escape sequences in a frame", () => {
+  const source = "id: f\nname: f\n# note \x1b]52;c;RlJBTUU=\x07 \x1b[2J\nnodes: {}\n";
+  const label = "y\x1b]0;TITLE\x07.yaml";
+  const framed = new Diagnostic({
+    code: "compose.load",
+    message: "invalid YAML",
+    frames: [new DiagnosticFrame({ label, text: source, range: new SourceRange(3, 1, 3, 5) })],
+  });
+  // A range past the text has no line to box, so the frame prints its label.
+  const unboxed = new Diagnostic({
+    code: "compose.load",
+    message: "invalid YAML",
+    frames: [new DiagnosticFrame({ label, text: source, range: new SourceRange(9, 1, 9, 2) })],
+  });
+  const noColor: Env = (name) => (name === "NO_COLOR" ? "1" : undefined);
+
+  test("shows its control characters in the source and the title on a TTY, the box in line", async () => {
+    const out = await render(framed, { isTTY: true, env: noColor });
+    expect(out).not.toContain("\x1b");
+    expect(out).not.toContain("\x07");
+    expect(out).toContain("# note ^[]52;c;RlJBTUU=^G ^[[2J");
+    expect(out).toContain("y^[]0;TITLE^G.yaml:3");
+    const rows = out.split("\n").filter((line) => /^[╭│╰]/.test(line));
+    expect(new Set(rows.map((row) => [...row].length)).size).toBe(1);
+    expect(await render(unboxed, { isTTY: true, env: noColor })).toBe("y^[]0;TITLE^G.yaml\ninvalid YAML\n");
+  });
+
+  test("a long line cut around the error keeps the error's place once its controls show", async () => {
+    // Each `\x07` shows as two cells, so the raw column would land well left of the error.
+    const line = `${"\x07".repeat(60)}id: ERROR_HERE ${"x".repeat(100)}`;
+    const at = line.indexOf("ERROR_HERE");
+    const diag = new Diagnostic({
+      code: "compose.load",
+      message: "bad",
+      frames: [new DiagnosticFrame({ label: "f.yaml", text: `${line}\n`, range: new SourceRange(1, at + 1, 1, at + 11) })],
+    });
+    const out = await render(diag, { isTTY: true, env: noColor });
+    expect(out).toContain("ERROR_HERE");
+    expect(out).not.toContain("\x07");
+  });
+
+  test("is written exactly off a TTY", async () => {
+    const out = await render(framed);
+    expect(out).toContain("# note \x1b]52;c;RlJBTUU=\x07 \x1b[2J");
+    expect(out).toContain(`${label}:3`);
+    expect(await render(unboxed)).toBe(`${label}\ninvalid YAML\n`);
+  });
+});
+
 describe("box and wrapSpans", () => {
   const noColor: Env = (name) => (name === "NO_COLOR" ? "1" : undefined);
 

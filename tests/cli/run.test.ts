@@ -298,6 +298,26 @@ describe("flowBanner", () => {
     );
   });
 
+  test("shows the control characters of the name, version and description on a terminal, the box in line", () => {
+    const flow = {
+      name: "report\x1b]52;c;ZWNobyBwd25lZA==\x07",
+      description: "Weekly \x1b]8;;https://evil.example\x1b\\docs\x1b]8;;\x1b\\ \x1b[2J",
+      version: "1\x1b]0;pwned-title\x07",
+    };
+    const noColor = (name: string) => (name === "NO_COLOR" ? "1" : undefined);
+    expect(banner(120, flow, true, noColor)).toBe(
+      lines(
+        "╭────────────────────────────────────────────────────────────────────────────────╮",
+        "│ Running flow: report^[]52;c;ZWNobyBwd25lZA==^G  (version: 1^[]0;pwned-title^G) │",
+        "│ Description: Weekly ^[]8;;https://evil.example^[\\docs^[]8;;^[\\ ^[[2J           │",
+        "╰────────────────────────────────────────────────────────────────────────────────╯",
+      ),
+    );
+    // Piped, the banner keeps every byte.
+    expect(banner(120, flow)).toContain(flow.name);
+    expect(banner(120, flow)).toContain("\x1b[2J");
+  });
+
   test("is 80 columns wide off a terminal", () => {
     expect(banner(undefined, { name: "human_approval", description: approval })).toBe(
       lines(
@@ -418,6 +438,15 @@ function testIo(env: Record<string, string> = {}) {
   return { io, stdout: out.text, stderr: err.text };
 }
 
+/** Return `testIo(env)` with its stdout and stderr terminals. */
+function ttyIo(env: Record<string, string> = {}) {
+  const out = sink();
+  const err = sink();
+  const { io } = testIo(env);
+  const tty: CliIo = { ...io, stdout: { ...out.out, isTTY: true }, stderr: { ...err.out, isTTY: true } };
+  return { io: tty, stdout: out.text, stderr: err.text };
+}
+
 /** Write a skill directory at `tmp/skills/<name>` holding `skillMd`, and return its path. */
 function skillDir(name: string, skillMd: string): string {
   const dir = join(tmp, "skills", name);
@@ -441,6 +470,17 @@ describe("skillsCheck", () => {
     expect(await skillsCheck([good, missing], { json: false }, failed.io)).toBe(1);
     expect(failed.stdout()).toBe(`${good}: ok (good)\n`);
     expect(failed.stderr()).toBe(`${missing}: missing SKILL.md\n`);
+  });
+
+  test("text on a terminal: a path's control characters show", async () => {
+    const good = join(tmp, "s\x1b]0;T\x07kills", "good");
+    mkdirSync(good, { recursive: true });
+    writeFileSync(join(good, "SKILL.md"), GOOD_SKILL);
+    const missing = join(tmp, "skills", "m\x1b[2Jissing");
+    const { io, stdout, stderr } = ttyIo();
+    expect(await skillsCheck([good, missing], { json: false }, io)).toBe(1);
+    expect(stdout()).toBe(`${join(tmp, "s^[]0;T^Gkills", "good")}: ok (good)\n`);
+    expect(stderr()).toBe(`${join(tmp, "skills", "m^[[2Jissing")}: missing SKILL.md\n`);
   });
 
   test("json: a missing and a bad SKILL.md are skill.invalid, each path as given", async () => {
@@ -511,6 +551,19 @@ describe("main", () => {
       expect(await main(argv, io)).toBe(2);
       expect(stdout()).toBe("");
       expect(stderr()).toContain(`Error: ${message}\n`);
+    }
+  });
+
+  test("an unknown command or option shows its control characters on a terminal", async () => {
+    for (const [argv, message] of [
+      [["n\x1b]0;T\x07ope"], "No such command 'n^[]0;T^Gope'."],
+      [["--n\x1b[2Jope"], "No such option: --n^[[2Jope"],
+      [["skills", "n\x07ope"], "No such command 'n^Gope'."],
+    ] as const) {
+      const { io, stderr } = ttyIo();
+      expect(await main(argv, io)).toBe(2);
+      expect(stderr()).toContain(`Error: ${message}\n`);
+      expect(stderr()).not.toMatch(/[\x07\x1b]/);
     }
   });
 
@@ -1411,6 +1464,20 @@ describe("check", () => {
     expect(stderr()).toBe("");
   });
 
+  test("text on a terminal: a file name's control characters show in its ok line and a failure's path", async () => {
+    const flow = file("x\x1b]52;c;ZmlsZQ==\x07.yaml", FLOW);
+    const bad = file("y\x1b]0;TITLE\x07.yaml", "id: [f\n");
+    const { io, stdout, stderr } = ttyIo({ NO_COLOR: "1" });
+    expect(await main(["check", flow, bad], io)).toBe(1);
+    expect(stdout()).toBe(`${join(tmp, "x^[]52;c;ZmlsZQ==^G.yaml")}: ok\n`);
+    expect(stderr()).toStartWith(`${join(tmp, "y^[]0;TITLE^G.yaml")}:\n╭─ y^[]0;TITLE^G.yaml:`);
+    expect(stderr()).not.toContain("\x1b");
+    // Piped, each path keeps its bytes.
+    const piped = testIo();
+    expect(await main(["check", flow], piped.io)).toBe(0);
+    expect(piped.stdout()).toBe(`${flow}: ok\n`);
+  });
+
   test("the ok document: canonical type labels, a typedef expanded", async () => {
     const flow = file(
       "profile.yaml",
@@ -1852,6 +1919,57 @@ describe("status", () => {
         unreadable: { seq: 0, reason: expect.stringMatching(/^run log .*line 1/) },
       }),
     ]);
+  });
+
+  test("on a terminal, a run's id, flow path and node ids show their control characters, the columns in line", async () => {
+    const runs = join(tmp, "home", ".yian", "runs");
+    const flowName = "evil\x1b]0;PWNED\x07\x1b[31mred.yaml";
+    const flow = file(flowName, ECHO_FLOW);
+    mkdirSync(join(tmp, "home"), { recursive: true });
+    expect((await main(["run", "-q", flow, "--input", "topic=clouds"], testIo({ HOME: join(tmp, "home") }).io))).toBe(0);
+    const [row] = readRunIndex(runs);
+    // A shared or hand-edited run folder can hold escapes in its ids too.
+    const heldId = "h\x1b[2Jeld";
+    mkdirSync(join(runs, heldId));
+    const node = "evil\x1b]52;c;cHduZWQ=\x07node";
+    const held = JsonlRunLog.create(join(runs, heldId, "log.jsonl"), heldId, {
+      clock: () => Date.parse("2999-01-01T00:00:00.000Z"),
+    });
+    held.append(
+      new RunStartedRecord({ flowFingerprint: "a".repeat(64), startWiringOverride: {}, effectiveLlmByStaticPath: {}, numWorkers: 0 }),
+    );
+    held.append(new NodeStartedRecord(node));
+    held.close();
+
+    const listed = ttyIo({ HOME: join(tmp, "home") });
+    expect(await main(["status"], listed.io)).toBe(0);
+    const width = row!.runId.length;
+    const line = (id: string, status: string, started: string, shown: string) =>
+      `${id.padEnd(width)}  ${status.padEnd(9)}  ${started.padEnd(24)}  ${shown}\n`;
+    expect(listed.stdout()).toBe(
+      line("run id", "status", "started", "flow") +
+        line(row!.runId, "succeeded", row!.startedAt!, join(realpathSync(tmp), "evil^[]0;PWNED^G^[[31mred.yaml")) +
+        // Its log stops inside the run start, so it reads unstarted.
+        line("h^[[2Jeld", "unstarted", "2999-01-01T00:00:00.000Z", "-"),
+    );
+
+    const inspected = ttyIo();
+    expect(await main(["status", join(runs, heldId, "log.jsonl")], inspected.io)).toBe(0);
+    expect(inspected.stdout()).toBe(
+      "status: unstarted\nin flight: evil^[]52;c;cHduZWQ=^Gnode\n",
+    );
+    // Piped, the ids keep their bytes.
+    const piped = testIo();
+    expect(await main(["status", join(runs, heldId, "log.jsonl")], piped.io)).toBe(0);
+    expect(piped.stdout()).toContain(`in flight: ${node}\n`);
+    // A crashed run's attempts name the node too.
+    const crashed = await crashedLog();
+    writeFileSync(crashed, readFileSync(crashed, "utf8").replaceAll('"node_id":"echo"', `"node_id":${JSON.stringify(node)}`));
+    const attempts = ttyIo();
+    expect(await main(["status", crashed], attempts.io)).toBe(0);
+    expect(attempts.stdout()).toBe(
+      "status: crashed\nin flight: evil^[]52;c;cHduZWQ=^Gnode\ncrashed attempts: evil^[]52;c;cHduZWQ=^Gnode=1\n",
+    );
   });
 
   test("yian run indexes only its own run; the next status reads the rest", async () => {

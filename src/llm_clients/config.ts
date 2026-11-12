@@ -18,7 +18,7 @@ import type { StructuredOutput } from "../llm/events.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { fromHost as hostValue } from "../typesys/values.ts";
 import { validateHeaderName, validateHeaders, validateOrganization } from "./connection_settings.ts";
-import { PROVIDER_BASE_URL, prefersResponses } from "./endpoints.ts";
+import { CHAT_APIS, type ChatApi, PROVIDER_BASE_URL, sendsToResponses, takesApi } from "./endpoints.ts";
 import { blockSchema, checkBlock, choices, type Issue, PROVIDER_BLOCKS, ValidationError } from "./provider_blocks.ts";
 
 /**
@@ -53,29 +53,31 @@ export const AZURE_NEEDS_BASE_URL =
   "provider: azure. AZURE_OPENAI_ENDPOINT is not read";
 
 /**
- * Return why `provider`'s `block` can't be sent with `model`, or `null`.
+ * Return why `provider`'s `block` can't be sent with `model` and `api`, or `null`.
  *
- * A Chat Completions vendor (any OpenAI-compatible provider but `openai`) or Azure sends a model
- * that `prefersResponses` to the Responses API, while its block mirrors the Chat Completions
- * request, so such a model needs the block empty; a field set to `null` counts as unset. A block
- * that is not a record is left to the block's own check. The message names `model`, or calls it
- * `modelLabel` when one is given.
+ * A Chat Completions vendor (any OpenAI-compatible provider but `openai`) or Azure sends a call to
+ * the Responses API when `api` is `responses`, or, with `api` unset, when the model
+ * `prefersResponses`; its block mirrors the Chat Completions request, so such a call needs the
+ * block empty. A field set to `null` counts as unset. A block that is not a record is left to the
+ * block's own check. The message names `model`, or calls it `modelLabel` when one is given.
  */
 export function responsesBlockError(
   provider: string,
   model: string,
+  api: ChatApi | null,
   block: unknown,
   modelLabel?: string,
 ): string | null {
-  const chat = provider === "azure" || Object.hasOwn(PROVIDER_BASE_URL, provider);
-  if (!chat || !prefersResponses(model) || !isRecord(block)) return null;
+  if (!takesApi(provider) || !sendsToResponses(api, model) || !isRecord(block)) return null;
   // A null field is unset, as `LLMConfig` reads it, so a block of only nulls is empty.
   if (!Object.values(block).some((value) => value !== null && value !== undefined)) return null;
-  return (
-    `The ${reprText(provider)} block mirrors the Chat Completions request, but ` +
-    `${modelLabel ?? `model ${reprText(model)}`} is routed to the Responses API; remove the block or use ` +
-    "a model served through Chat Completions."
-  );
+  const named = modelLabel ?? `model ${reprText(model)}`;
+  const routed =
+    api === null
+      ? `${named} is routed to the Responses API by its name; remove the block, or set api: chat if the ` +
+        "model is served through Chat Completions."
+      : `api: responses sends ${named} to the Responses API; remove the block or set api: chat.`;
+  return `The ${reprText(provider)} block mirrors the Chat Completions request, but ${routed}`;
 }
 
 const CODEX_REMOVED =
@@ -103,6 +105,7 @@ export const LLM_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "project",
   "headers",
   "structured_output",
+  "api",
   ...SUPPORTED_LLM_PROVIDERS,
 ]);
 
@@ -304,6 +307,26 @@ export function removedFormError(data: Data): string | null {
 }
 
 /**
+ * Return `value` read as `api`, appending its issue to `issues`: a value other than `"responses"`
+ * or `"chat"` is `literal_error`, and a set `api` beside a `provider` that doesn't `takesApi` a
+ * value error. Unset (`null` or `undefined`) is `null`.
+ */
+function readApi(value: unknown, provider: LLMProvider | null, issues: Issue[]): ChatApi | null {
+  if (value === null || value === undefined) return null;
+  if (!(CHAT_APIS as readonly unknown[]).includes(value)) {
+    issues.push({ loc: ["api"], type: "literal_error", msg: `Input should be ${choices(CHAT_APIS)}` });
+    return null;
+  }
+  if (provider !== null && !takesApi(provider)) {
+    const vendors = Object.keys(PROVIDER_BASE_URL).join(", ");
+    const message = `api applies only to provider azure and the Chat Completions providers (${vendors})`;
+    issues.push(valueError(["api"], message));
+    return null;
+  }
+  return value as ChatApi;
+}
+
+/**
  * Return `value` read as connection headers, appending its issues to `issues`.
  *
  * A non-record is `dict_type` and a non-string value `string_type`; an empty record is `null`;
@@ -437,6 +460,9 @@ function bindConnectionToKey(connection: Connection): void {
  *   structured output, a tool or a JSON-schema format; unset means this) or `"prompt"` (the schema
  *   as an instruction in the prompt, for a model that can't call tools). It appears in `dump()`
  *   when set.
+ * - `api`: the API a call of Azure or a Chat Completions vendor goes to, `"responses"` or `"chat"`;
+ *   unset, a model whose name `prefersResponses` goes to Responses and any other to Chat
+ *   Completions. Any other provider refuses it. It appears in `dump()` when set.
  * - `<provider>`: one block per provider in `SUPPORTED_LLM_PROVIDERS` (`openai`, `qwen-cn`,
  *   `anthropic`, ...), named after it: request-body fields for the API that provider's calls
  *   reach, checked by its block in `PROVIDER_BLOCKS`. Every block is checked, but only the one
@@ -454,6 +480,7 @@ export class LLMConfig {
   readonly organization: string | null;
   readonly project: string | null;
   readonly structuredOutput: StructuredOutput | null;
+  readonly api: ChatApi | null;
   // Secrets and blocks are private, so JSON.stringify, inspect and spreads never show them.
   readonly #apiKey: string | null;
   readonly #headers: Readonly<Record<string, string>> | null;
@@ -506,6 +533,7 @@ export class LLMConfig {
     if (structured !== null && structured !== undefined && structuredOutput === null) {
       issues.push({ loc: ["structured_output"], type: "literal_error", msg: "Input should be 'native' or 'prompt'" });
     }
+    const api = readApi(own(data, "api"), provider, issues);
     const blocks = new Map<string, JsonObject>();
     for (const key of SUPPORTED_LLM_PROVIDERS) {
       const value = own(data, key);
@@ -533,6 +561,7 @@ export class LLMConfig {
     this.organization = organization;
     this.project = project;
     this.structuredOutput = structuredOutput;
+    this.api = api;
     this.#apiKey = apiKey;
     this.#headers = headers;
     this.#blocks = blocks;
@@ -577,8 +606,8 @@ export class LLMConfig {
   /**
    * Return the config as a fresh record.
    *
-   * `provider` and `model` are always there (`null` when unset); `base_url`, `organization` and
-   * `project` only when set; then each set block by its authored name, in
+   * `provider` and `model` are always there (`null` when unset); `base_url`, `organization`,
+   * `project`, `structured_output` and `api` only when set; then each set block by its authored name, in
    * `SUPPORTED_LLM_PROVIDERS` order. `api_key` and `headers` are never there.
    */
   dump(): JsonObject {
@@ -587,6 +616,7 @@ export class LLMConfig {
     if (this.organization !== null) dumped["organization"] = this.organization;
     if (this.project !== null) dumped["project"] = this.project;
     if (this.structuredOutput !== null) dumped["structured_output"] = this.structuredOutput;
+    if (this.api !== null) dumped["api"] = this.api;
     for (const [key, block] of this.#blocks) dumped[key] = structuredClone(block);
     return dumped;
   }

@@ -31,7 +31,8 @@
  * keeps the declared type's shape (an open record drops unknown fields, an absent
  * optional field reads `null`, records follow the declared field order). An invalid reply is
  * corrected under `retries:`; once they are spent the node fails with `OutputInvalidError`, whose
- * `path` locates the last error inside the output when it can.
+ * `path` locates the last error inside the output when it can, or with `OutputTruncatedError` when
+ * the provider cut the last reply off at the token limit.
  *
  * Knows about: defaults, diagnostics, llm, nodes/base (types), nodes/contracts, typesys, peer
  *              AGENT modules.
@@ -41,6 +42,7 @@ import { current } from "../../defaults.ts";
 import { compareCodeUnits } from "../../diagnostics.ts";
 import type { ChatModel } from "../../llm/events.ts";
 import { Message, Request, type Response, TextPart, ToolCallPart, ToolResultPart } from "../../llm/messages.ts";
+import { PROTOCOL as RESPONSES_PROTOCOL } from "../../llm/protocols/openai_responses.ts";
 import { planStructured, StructuredOutputError, type StructuredTarget, structuredTarget } from "../../llm/structured.ts";
 import { YianRangeError } from "../../typesys/errors.ts";
 import { type JsonObject, type JsonValue, logJson } from "../../typesys/json.ts";
@@ -437,6 +439,36 @@ export class OutputInvalidError extends Error {
 }
 
 /**
+ * The model's reply was cut off at the output token limit: an answer with no runnable call, or the
+ * last invalid structured reply. The message names the setting that raises the limit when the
+ * model's route takes one (`outputLimitSetting`).
+ */
+export class OutputTruncatedError extends Error {
+  override name = "OutputTruncatedError";
+
+  constructor(model: ChatModel, options: { cause?: unknown } = {}) {
+    const setting = outputLimitSetting(model);
+    const raise = setting === null ? "" : `; raise the limit in the agent's llm_config (${setting})`;
+    super(`the reply was cut off at the output token limit before it finished${raise}`, options);
+  }
+}
+
+/**
+ * Return the `llm_config` setting that raises `model`'s output token limit, or `null` when its
+ * route takes none: the ChatGPT subscription refuses it, and Azure or a Chat Completions vendor
+ * sends a call to the Responses API with an empty block.
+ */
+export function outputLimitSetting(model: ChatModel): string | null {
+  const { provider, protocol, subscription } = structuredTarget(model);
+  if (subscription) return null;
+  if (provider === "openai") return "openai.max_output_tokens";
+  if (provider === "anthropic") return "anthropic.max_tokens";
+  if (provider === "google") return "google.generationConfig.maxOutputTokens";
+  if (provider === "ollama") return "ollama.options.num_predict";
+  return protocol === RESPONSES_PROTOCOL ? null : `${provider}.max_tokens`;
+}
+
+/**
  * A reply's value failed the value check; its `path` is relative to the output type. Distinct from
  * the nesting check's `TypeCheckError`, so `outputPath` locates only value-check errors.
  */
@@ -531,7 +563,8 @@ function structuredConversation(
  *   recorded in `steps` does; `retry` is each call's retry settings; with `steps`, each call is
  *   written as a `model_call` step (`callModel`) with its request's digest (`RequestDigest`).
  * @returns The checked value, unwrapped.
- * @throws OutputInvalidError once `retries + 1` replies were invalid.
+ * @throws OutputInvalidError once `retries + 1` replies were invalid; `OutputTruncatedError` when
+ *   the last of them was cut off at the token limit.
  * @throws ReplyInterrupted when a host interrupt cut a call, or was set or recorded honored before
  *   one (an empty reply).
  * @throws Whatever a model call throws (a provider error, a stop's reason), unchanged.
@@ -574,6 +607,7 @@ export async function generateStructured(
     if ("value" in checked) return checked.value;
     if (call >= retries) {
       const error = checked.invalid;
+      if (response.finishReason === "length") throw new OutputTruncatedError(model, { cause: error });
       throw new OutputInvalidError(error.message, { cause: error, path: outputPath(error, typ) });
     }
   }

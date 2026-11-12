@@ -50,6 +50,7 @@ const EXPECTED_FAILURE_CODES: readonly FailureCode[] = [
   "condition.evaluate",
   "tool.timeout",
   "agent.interrupted",
+  "agent.output_truncated",
 ];
 
 /** Return what `fn` throws; fail the test if it returns. */

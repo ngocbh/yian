@@ -319,7 +319,8 @@ describe("configCheck", () => {
       out: "",
       err:
         "deepseek: The 'deepseek' block mirrors the Chat Completions request, but the layer's model is routed " +
-        "to the Responses API; remove the block or use a model served through Chat Completions.\n",
+        "to the Responses API by its name; remove the block, or set api: chat if the model is served through " +
+        "Chat Completions.\n",
     });
   });
 
@@ -356,7 +357,7 @@ describe("configCheck", () => {
 function responsesBlock(provider: string): string {
   return (
     `The '${provider}' block mirrors the Chat Completions request, but the layer's model is routed to the ` +
-    "Responses API; remove the block or use a model served through Chat Completions."
+    "Responses API by its name; remove the block, or set api: chat if the model is served through Chat Completions."
   );
 }
 

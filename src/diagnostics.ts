@@ -467,6 +467,7 @@ const CODES = [
   "condition.evaluate",
   "tool.timeout",
   "agent.interrupted",
+  "agent.output_truncated",
 ] as const;
 
 /**

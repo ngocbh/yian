@@ -1006,7 +1006,8 @@ export function checkModelConfig(config: Readonly<AgentConfig> | LLMConfig): [LL
   const { provider, model } = validated;
   if (provider !== null) {
     checkProviderBlock(validated, provider, connection);
-    const routed = model === null ? null : responsesBlockError(provider, model, validated.blockFor(provider));
+    const block = validated.blockFor(provider);
+    const routed = model === null ? null : responsesBlockError(provider, model, validated.api, block);
     if (routed !== null) throw new YianRangeError(routed);
   }
   return [validated, connection];

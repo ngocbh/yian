@@ -114,7 +114,8 @@ test.each(["false", "${input.i}"])("inherit at flow level still fails: %p", asyn
 
 const RESPONSES_BLOCK =
   "The 'openrouter' block mirrors the Chat Completions request, but model 'openai/gpt-5-codex' is routed to " +
-  "the Responses API; remove the block or use a model served through Chat Completions.";
+  "the Responses API by its name; remove the block, or set api: chat if the model is served through Chat " +
+  "Completions.";
 
 test.each([
   ["literal", "{temperature: 0.5}"],
@@ -137,6 +138,21 @@ test("a block beside a model from a value loads, to be checked when the model is
   agentOf(flow("    llm_config: {provider: openrouter, model: openai/gpt-5-codex}\n"));
   // A null field is unset, so the block is empty.
   agentOf(flow("    llm_config: {provider: openrouter, model: openai/gpt-5-codex, openrouter: {temperature: null}}\n"));
+});
+
+test("api picks the route a load checks a block against, and one from a value is checked when known", async () => {
+  agentOf(flow("    llm_config: {provider: openrouter, model: openai/gpt-5-codex, api: chat, openrouter: {top_k: 5}}\n"));
+  agentOf(flow("    llm_config: {provider: openrouter, model: openai/gpt-5-codex, api: '${input.u}', openrouter: {top_k: 5}}\n"));
+  const text = flowLayer("llm_config: {provider: deepseek, model: deepseek-chat, api: responses, deepseek: {top_p: 0.5}}\n");
+  expect((await loadFailsAsync(text)).diagnostic.message).toBe(
+    "flow: llm_config: The 'deepseek' block mirrors the Chat Completions request, but api: responses sends " +
+      "model 'deepseek-chat' to the Responses API; remove the block or set api: chat.",
+  );
+  expect(loadFails(flow("    llm_config: {provider: anthropic, api: chat}\n")).diagnostic.message).toBe(
+    "node 'a': llm_config: 1 validation error for LLMConfig\napi\n" +
+      "  Value error, api applies only to provider azure and the Chat Completions providers (xai, deepseek, " +
+      "qwen, qwen-cn, glm, glm-cn, minimax, minimax-cn, openrouter, vllm)",
+  );
 });
 
 test("a literal flow layer is still a plain dict", async () => {

@@ -293,14 +293,25 @@ test("an inherited property name is an unsupported provider", () => {
   }
 });
 
-test("an OpenAI endpoint must spell its scheme and host as urlsplit reads them", () => {
-  for (const endpoint of ["https:api.example", "https:///x", "ftp://api.example/v1", "https://u:p@api.example/v1"]) {
+test("an OpenAI endpoint must be https, or http on loopback, of a host without credentials", () => {
+  const refused = [
+    "https:api.example",
+    "https:///x",
+    "ftp://api.example/v1",
+    "https://u:p@api.example/v1",
+    "http://api.example/v1",
+    "HTTP://api.example/v1",
+  ];
+  for (const endpoint of refused) {
     expect(rangeError(() => validateConnection({ ...OPENAI_STORE, endpoint })).message).toBe(
-      "Connection endpoint must be an HTTP URL without credentials, query, or fragment",
+      "Connection endpoint must be an https URL (http only for localhost, 127.0.0.1 and ::1) " +
+        "without credentials, query, or fragment",
     );
   }
-  const upper = { ...OPENAI_STORE, endpoint: "HTTPS://API.example/v1" };
-  expect(validateConnection(upper)).toEqual(upper);
+  for (const endpoint of ["HTTPS://API.example/v1", "http://localhost:8000/v1", "HTTP://[::1]/v1"]) {
+    const connection = { ...OPENAI_STORE, endpoint };
+    expect(validateConnection(connection)).toEqual(connection);
+  }
 });
 
 test("split and layer accept non-OpenAI metadata", () => {
@@ -688,7 +699,7 @@ describe("snapshot rejects impossible saved logins", () => {
   // `save` refuses these logins, so each is written to the store file as another writer could.
   const rows: [string, string, object | null, string | null][] = [
     ["openai", "none", null, null],
-    ["openai", "api_key", key, "https://api.example/v1"],
+    ["openai", "api_key", key, "http://api.example/v1"],
     ["anthropic", "subscription", oauth, null],
     ["google", "api_key", key, "https://example.com/"],
     ["azure", "api_key", key, null],

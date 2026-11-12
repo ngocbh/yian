@@ -183,6 +183,10 @@ and `headers` in a flow's `llm_config:` fail at load, and so does `base_url` out
 | Extra headers, such as a gateway token | `yian auth PROVIDER --header NAME=VARIABLE` (the value is read from that variable) |
 | Another endpoint | `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `VLLM_BASE_URL` or `OLLAMA_BASE_URL`, or a host's `base_url` beside its key |
 
+`OPENAI_BASE_URL` must use `https`; plain `http` works only for `localhost`, `127.0.0.1` and
+`[::1]`, so a key never crosses the network in cleartext. A saved OpenAI key is sent only to the
+endpoint it was saved with (see [yian auth](/cli/#yian-auth)).
+
 Header values are secrets: run logs record only the header names, and a value a provider echoes
 in an error is replaced with `[REDACTED]`. Each save replaces these settings, so
 `yian auth PROVIDER` without them saves a login with none.

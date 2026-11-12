@@ -22,6 +22,7 @@ import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import { isRecord } from "../../typesys/index.ts";
 import { parseJson } from "../../typesys/json.ts";
 import { SUPPORTED_LLM_PROVIDERS } from "../config.ts";
+import { OPENAI_API_ENDPOINT } from "../endpoints.ts";
 import {
   ApiKeyCredentials,
   AuthError,
@@ -647,8 +648,9 @@ export class AuthStore {
    * The new login replaces the old one with its settings: settings not given here are not kept.
    * `credentials` is the validated credential (an API key's headers are saved with it), or `null`
    * for a provider that needs none; `endpoint` is the provider's base URL, such as an Azure
-   * resource; `organization` and `project` are OpenAI ids, for an `openai` API key only;
-   * `makeDefault` (default `true`) makes the provider the default.
+   * resource, or the endpoint an `openai` API key is for (default OpenAI's API); `organization`
+   * and `project` are OpenAI ids, for an `openai` API key only; `makeDefault` (default `true`)
+   * makes the provider the default.
    *
    * A login saved again unchanged keeps its credential id, so runs pinned to it go on: same method,
    * key, header names and values, endpoint, organization and project, whatever the model. Any
@@ -668,7 +670,9 @@ export class AuthStore {
       makeDefault?: boolean;
     } = {},
   ): Promise<ProviderSelection> {
-    const { endpoint = null, organization = null, project = null, makeDefault = true } = options;
+    const { organization = null, project = null, makeDefault = true } = options;
+    const openaiKey = provider === "openai" && credentials instanceof ApiKeyCredentials;
+    const endpoint = options.endpoint === undefined ? (openaiKey ? OPENAI_API_ENDPOINT : null) : options.endpoint;
     // Exactly these classes, not subclasses: a subclass could change what is stored.
     if (
       credentials !== null &&

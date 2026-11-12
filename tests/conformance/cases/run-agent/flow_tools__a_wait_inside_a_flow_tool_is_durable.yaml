@@ -17,7 +17,7 @@ flow: |
           tool_id: sign
           input:
             item: ${input.item}
-          output: str
+          output: !str
       output: ${sign.output}
   nodes:
     helper:
@@ -25,7 +25,7 @@ flow: |
       tools: [approve]
       system_prompt: Help.
       prompt: hi
-      output: str
+      output: !str
   output: ${helper.output}
 run: {run_id: r1, num_workers: 0}
 host:

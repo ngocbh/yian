@@ -19,7 +19,7 @@ flow: |
       tools: [shout]
       system_prompt: Help.
       prompt: hi
-      output: str
+      output: !str
   output: ${helper.output}
 env:
   YIAN_MAX_TOTAL_NODES: '5'

@@ -440,7 +440,7 @@ defs:
         kind: code
         input:
           text: ${input.text}
-        output: str
+        output: !str
         code: return inputs.text.toUpperCase() + "!"
     output: ${loud.output}
 nodes:
@@ -448,7 +448,7 @@ nodes:
     kind: agent
     tools: [shout]
     prompt: Shout hi, then say what came back.
-    output: str
+    output: !str
 output: ${helper.output}
 ```
 

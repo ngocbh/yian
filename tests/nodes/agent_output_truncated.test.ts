@@ -134,7 +134,7 @@ test("a flow sees the cut reply as agent.output_truncated", async () => {
   const model = new ScriptedModel([cut(new TextPart("A li"))], CONFIG);
   const text =
     "id: f\nname: f\nllm_config: {provider: openai, model: gpt-5.5}\n" +
-    "nodes:\n  w: {kind: agent, prompt: Write a line., output: str}\noutput: ${w.output}\n";
+    "nodes:\n  w: {kind: agent, prompt: Write a line., output: !str}\noutput: ${w.output}\n";
   const result = await runFlow(await loadFlow(text, { env }), {}, { env, models: serving(model, env) });
   expect(result.status).toBe("failed");
   expect(result.failure?.code).toBe("agent.output_truncated");

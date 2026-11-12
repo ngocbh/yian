@@ -15,7 +15,7 @@ flow: |
     helper:
       kind: agent
       prompt: Help.
-      output: str
+      output: !str
       tools: [notes]
   output: ${helper.output}
 expect:

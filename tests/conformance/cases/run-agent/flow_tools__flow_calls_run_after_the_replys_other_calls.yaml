@@ -16,7 +16,7 @@ flow: |
           kind: code
           input:
             text: ${input.text}
-          output: str
+          output: !str
           code: return inputs.text.toUpperCase()
       output: ${loud.output}
   nodes:
@@ -25,7 +25,7 @@ flow: |
       tools: [shout, lookup]
       system_prompt: Help.
       prompt: hi
-      output: str
+      output: !str
   output: ${helper.output}
 run:
   run_id: r1

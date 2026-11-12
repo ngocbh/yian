@@ -50,13 +50,13 @@ defs:
     kind: code
     input:
       text: !str
-    output: str
+    output: !str
     code: return inputs.text.toUpperCase()
 nodes:
   helper:
     kind: agent
     prompt: Help.
-    output: str
+    output: !str
     tools: [search, summarize, classify, shout]
 output: \${helper.output}
 `;

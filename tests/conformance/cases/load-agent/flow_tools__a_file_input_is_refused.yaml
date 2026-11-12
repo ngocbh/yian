@@ -16,7 +16,7 @@ flow: |
     helper:
       kind: agent
       prompt: Help.
-      output: str
+      output: !str
       tools: [classify]
   output: ${helper.output}
 expect:

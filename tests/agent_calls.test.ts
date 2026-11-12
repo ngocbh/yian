@@ -947,7 +947,7 @@ nodes:
     tools: [shout, lookup]
     system_prompt: Help.
     prompt: hi
-    output: str
+    output: !str
 output: \${helper.output}
 `;
 

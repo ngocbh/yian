@@ -15,7 +15,7 @@ flow: |
           kind: code
           input:
             text: ${input.text}
-          output: str
+          output: !str
           code: throw new Error("no voice left")
       output: ${loud.output}
   nodes:
@@ -24,7 +24,7 @@ flow: |
       tools: [shout]
       system_prompt: Help.
       prompt: hi
-      output: str
+      output: !str
   output: ${helper.output}
 run:
   run_id: r1

@@ -506,7 +506,7 @@ nodes:
     input:
       notes: \${got.output.events}
     prompt: Summarise \${notes}.
-    output: str
+    output: !str
 output: \${hello.output}
 `;
 

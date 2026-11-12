@@ -1761,7 +1761,7 @@ const LINKED_FLOWS: [string, (dir: string) => { flow: string; real: string }][] 
 function codeOnlyFlow(ref: string, alias?: string): string {
   const call = alias === undefined ? "" : `  b:\n    kind: call\n    call: ${alias}\n`;
   const output = alias === undefined ? "${a.output}" : '"${a.output} | ${b.output}"';
-  return `id: c\nname: c\nnodes:\n  a:\n    kind: code\n    code: ${ref}\n    output: str\n${call}output: ${output}\n`;
+  return `id: c\nname: c\nnodes:\n  a:\n    kind: code\n    code: ${ref}\n    output: !str\n${call}output: ${output}\n`;
 }
 
 /** Run `yian run -q flow` under a home in `tmp`, returning the exit code and the streams. */
@@ -2137,7 +2137,7 @@ describe("status", () => {
 
   test("with no log, a failed or waiting run whose END succeeded lists no result", async () => {
     const failAfter =
-      "id: failafter\nname: failafter\nnodes:\n  boom:\n    kind: code\n    output: str\n    code: |\n" +
+      "id: failafter\nname: failafter\nnodes:\n  boom:\n    kind: code\n    output: !str\n    code: |\n" +
       '      await new Promise((r) => setTimeout(r, 300));\n      throw new Error("boom");\noutput: done\n';
     const nap = "id: nap\nname: nap\nnodes:\n  nap:\n    kind: tool\n    tool_id: sleep\n    input:\n      for: 1h\noutput: done\n";
     expect((await runFlowCli(failAfter, ["-q"])).code).toBe(1);

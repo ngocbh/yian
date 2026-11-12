@@ -677,8 +677,8 @@ test("a symlinked child's CODE node resolves beside the link's target on resume 
 /** A root whose CODE nodes `one`, then `two`, each run `../fn.ts:who`. */
 const TWO_WHO =
   "id: root\nname: root\nnodes:\n" +
-  "  one:\n    kind: code\n    code: ../fn.ts:who\n    input: {k: 1}\n    output: str\n" +
-  "  two:\n    kind: code\n    code: ../fn.ts:who\n    input: {k: 2, prev: '${one.output}'}\n    output: str\n" +
+  "  one:\n    kind: code\n    code: ../fn.ts:who\n    input: {k: 1}\n    output: !str\n" +
+  "  two:\n    kind: code\n    code: ../fn.ts:who\n    input: {k: 2, prev: '${one.output}'}\n    output: !str\n" +
   "output: ${one.output} then ${two.output}\n";
 /** A CODE file whose `who` returns `name`. */
 const who = (name: string) => `export function who(): string {\n  return ${JSON.stringify(name)};\n}\n`;

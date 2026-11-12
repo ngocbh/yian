@@ -482,13 +482,13 @@ defs:
         kind: code
         input:
           s: \${input.s}
-        output: int
+        output: !int
         code: return inputs.s.a
     output: \${n.output}
 nodes:
   mk:
     kind: code
-    output: ${kind === "call" ? "Made" : "list(Made)"}
+    output: ${kind === "call" ? "!Made" : "!list(Made)"}
     code: ${kind === "call" ? '"return {a: 1}"' : '"return [{a: 1}, {a: 2}]"'}
   c:
     kind: ${kind}
@@ -532,7 +532,7 @@ defs:
         kind: code
         input:
           b: \${input.b}
-        output: str
+        output: !str
         code: return inputs.b
     output:
       b: \${n.output}
@@ -568,7 +568,7 @@ defs:
         input:
           s: \${input.s}
         output:
-          s: Small
+          s: !Small
         code: "return {s: inputs.s}"
     output: \${bump.output}
 nodes:

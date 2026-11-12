@@ -1,21 +1,21 @@
 /**
  * Plain scalars read with YAML 1.2 core rules, keeping timestamps and merge keys.
  *
- * Dates stay text, checked with yian's date grammar. A literal's mapping keys must be text, local
- * and unknown tags are refused, and `! 5` is the text `"5"`. A document keeps such a key as written
- * and reports it as `nonTextKey`. Both entry points, `SourceDocument.parse` and `parseYamlLiteral`,
- * read the shared rows, explicit core tags included, and treat lone CRs as line breaks.
+ * Dates stay text, checked with yian's date grammar. A document keeps a key YAML reads as non-text
+ * as written and reports it as `nonTextKey`; a literal, read by the same pass, refuses it and a
+ * repeated key. Both entry points, `SourceDocument.parse` and `parseYamlLiteral`, read the shared
+ * rows, explicit core tags included, treat lone CRs as line breaks, read a local tag's scalar
+ * untagged, and refuse a bare `!` and a non-printable character.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { SourceSyntaxError } from "../../src/compose/source/common.ts";
-import { SourceDocument } from "../../src/compose/source/document.ts";
-import { parseYamlLiteral, readPlainScalar } from "../../src/compose/source/literals.ts";
+import { parseYamlLiteral, SourceDocument } from "../../src/compose/source/document.ts";
+import { readPlainScalar } from "../../src/compose/source/literals.ts";
 import {
   BOOL_TAG,
-  composeFlowDocument,
   constructScalar,
   FLOAT_TAG,
   FlowLoaderError,
@@ -274,6 +274,21 @@ describe.each(READERS)("both entry points: %s", (name, read) => {
     expect(read("a: x\r  y\r")).toEqual({ a: "x y" });
   });
 
+  test("a local tag's scalar reads untagged", () => {
+    expect(read("value: !int 3\n")).toEqual({ value: 3n });
+    expect(read("value: !Size [a]\n")).toEqual({ value: ["a"] });
+  });
+
+  test.each(["value: ! 3\n", "{! <<: {a: 1}}"])("a bare tag is refused: %p", (text) => {
+    expect(thrown(SourceSyntaxError, () => read(text)).message).toBe("a tag names a type, e.g. `!int`");
+  });
+
+  test("a non-printable character is refused", () => {
+    expect(thrown(SourceSyntaxError, () => read("a: \x07\n")).message).toBe(
+      "unacceptable character #x0007: special characters are not allowed",
+    );
+  });
+
   test.each<[string, ScalarValue]>([
     ["!!int 017", 17n],
     ["!!float 1", 1],
@@ -482,12 +497,7 @@ describe("parseYamlLiteral", () => {
     const noConstructor = (tag: string) =>
       "could not determine a constructor for the tag " + reprText(tag);
 
-    expect(literalError("value: !int 5\n")).toBe(noConstructor("!int"));
     expect(literalError("value: !!binary aGk=\n")).toBe(noConstructor("tag:yaml.org,2002:binary"));
-    // YAML 1.2: the bare tag keeps the scalar as text.
-    expect(parseYamlLiteral("value: ! 5\n")).toEqual({ value: "5" });
-    // The bare tag keeps "<<" as a text key too.
-    expect(parseYamlLiteral("{! <<: {a: 1}}")).toEqual({ "<<": { a: 1n } });
     expect(literalError("value: !!seq {a: 1}\n")).toBe(
       "expected a sequence node, but found mapping",
     );
@@ -518,12 +528,27 @@ describe("parseYamlLiteral", () => {
     expect(literalError("[*nope]")).toBe("found undefined alias 'nope'");
   });
 
-  test("a repeated key keeps the last value at its first position", () => {
-    expect(parseYamlLiteral("{a: 1, a: 2}")).toEqual({ a: 2n });
-    expect(Object.entries(parseYamlLiteral("{a: 1, b: 0, a: 2}") ?? {})).toEqual([
-      ["a", 2n],
-      ["b", 0n],
-    ]);
+  test("a repeated key is refused", () => {
+    const fix = "a YAML mapping's keys must be unique, so remove or rename one";
+    expect(literalError("{a: 1, a: 2}")).toBe(`duplicate key 'a'; ${fix}`);
+    expect(literalError("name: x\nb: 0\nname: y\n")).toBe(`duplicate key 'name'; ${fix}`);
+    expect(literalError("{note: see (below, b, b}")).toBe(
+      "duplicate key 'b'; this `{...}` mapping's comma split the value that starts `see (below`, " +
+        "so quote that value or use block style",
+    );
+  });
+
+  test("a non-text key is refused before a repeated one", () => {
+    expect(literalError("{a: 1, a: 2, 1: 3}")).toBe(
+      "the key `1` was read by YAML as an integer, but mapping keys must be text; quote it",
+    );
+  });
+
+  test.each([
+    ["value: !include notes.md\n", "`!include`"],
+    ["value: !include(str) notes.md\n", "`!include(str)`"],
+  ])("an include is refused: %p", (text, tag) => {
+    expect(literalError(text)).toBe(`${tag} reads a file only in a flow file; write the value here`);
   });
 
   test("a __proto__ key stays data", () => {
@@ -608,16 +633,20 @@ describe("parseYamlLiteral", () => {
     expect(parseYamlLiteral("{!!merge x: {a: 1}}")).toEqual({ a: 1n });
   });
 
-  test.each(["value: [1, 2\n", "a\n---\nb\n"])(
-    "YAML errors are SourceSyntaxErrors without a range: %p",
+  test.each(["value: [1, 2\n", "a\n---\nb\n", "a: 1\na: 2\n"])(
+    "errors are SourceSyntaxErrors without a range: %p",
     (text) => {
-      const library = thrown(Error, () => composeFlowDocument(text));
       const error = thrown(SourceSyntaxError, () => parseYamlLiteral(text));
 
       expect(error.range).toBeNull();
-      expect(error.message).toBe(library.message);
     },
   );
+
+  test.each(["value: [1, 2\n", "a\n---\nb\n"])("YAML errors read as in a document: %p", (text) => {
+    const document = thrown(SourceSyntaxError, () => SourceDocument.parse(text));
+
+    expect(literalError(text)).toBe(document.message);
+  });
 });
 
 test.each([

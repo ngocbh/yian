@@ -2,6 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { cells } from "../../src/cli/cells.ts";
 import { box, renderDiagnostic, wrapSpans } from "../../src/cli/render.ts";
 import type { Writer } from "../../src/cli/utils.ts";
 import type { Env } from "../../src/defaults.ts";
@@ -24,9 +25,16 @@ output:
 const noEnv: Env = () => undefined;
 
 /** Render `diag` to a non-TTY writer (or a TTY one) and return the text written. */
-async function render(diag: Diagnostic, options: { isTTY?: boolean; env?: Env } = {}): Promise<string> {
+async function render(
+  diag: Diagnostic,
+  options: { isTTY?: boolean; env?: Env; columns?: number } = {},
+): Promise<string> {
   const chunks: string[] = [];
-  const out: Writer = { write: async (text) => void chunks.push(text), isTTY: options.isTTY ?? false };
+  const out: Writer = {
+    write: async (text) => void chunks.push(text),
+    isTTY: options.isTTY ?? false,
+    ...(options.columns === undefined ? {} : { columns: options.columns }),
+  };
   await renderDiagnostic(diag, out, options.env ?? noEnv);
   return chunks.join("");
 }
@@ -77,7 +85,95 @@ describe("renderDiagnostic", () => {
     // 10 is excluded and 4-9 are not.
     const out = await render(oneFrame("bad node", new SourceRange(4, 3, 10, 1)));
     expect(marked(out)).toEqual([4, 5, 6, 7, 8, 9]);
-    expect(out).toContain("flow.yaml:4,5,6,7,8,9");
+    expect(out).toContain("flow.yaml:4-9");
+  });
+
+  test("a long span shows its first and last lines around a count of the rest", async () => {
+    const text = Array.from({ length: 5005 }, (_, i) => `line${i + 1}: x`).join("\n");
+    const diag = new Diagnostic({
+      code: "compose.load",
+      message: "missing name",
+      frames: [new DiagnosticFrame({ label: "big.yaml", text, range: new SourceRange(1, 1, 5001, 1) })],
+    });
+    const out = await render(diag);
+    expect(out.length).toBeLessThan(4096);
+    expect(out).toContain("big.yaml:1-5000");
+    expect(out).toContain("⋮ 4992 lines");
+    expect(marked(out)).toEqual([1, 2, 3, 4, 4997, 4998, 4999, 5000]);
+    // The five lines below the span are still shown.
+    expect(out).toContain("line5005: x");
+    expect(out).not.toContain("line5: x");
+  });
+
+  test("a span of ten lines is shown whole", async () => {
+    const text = Array.from({ length: 12 }, (_, i) => `line${i + 1}: x`).join("\n");
+    const diag = new Diagnostic({
+      code: "compose.load",
+      message: "bad",
+      frames: [new DiagnosticFrame({ label: "f.yaml", text, range: new SourceRange(1, 1, 11, 1) })],
+    });
+    const out = await render(diag);
+    expect(marked(out)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(out).not.toContain("⋮");
+  });
+
+  test("a long marked line is cut to the terminal around the error's column", async () => {
+    const line = `v: ${"a, ".repeat(3000)}TARGET${", b".repeat(1000)}`;
+    const text = `id: m\nname: m\n${line}\nother: ${"z".repeat(500)}\n`;
+    const at = line.indexOf("TARGET") + 1;
+    const diag = new Diagnostic({
+      code: "compose.load",
+      message: "bad value",
+      frames: [new DiagnosticFrame({ label: "m.yaml", text, range: new SourceRange(3, at, 3, at + 6) })],
+    });
+    const out = await render(diag, { isTTY: true, columns: 80, env: () => "1" });
+    const lines = out.trimEnd().split("\n");
+    for (const row of lines) expect(cells(row)).toBeLessThanOrEqual(80);
+    const row = lines.find((text) => text.includes("❱"))!;
+    expect(row).toContain("TARGET");
+    expect(row.match(/…/g)?.length).toBe(2);
+    expect(lines.find((text) => text.includes("other:"))).toMatch(/z… │$/);
+  });
+
+  test("a cut never splits a wide character", async () => {
+    const line = `v: ${"漢".repeat(150)}X${"字".repeat(150)}`;
+    const at = line.indexOf("X") + 1;
+    const diag = new Diagnostic({
+      code: "compose.load",
+      message: "bad value",
+      frames: [new DiagnosticFrame({ label: "w.yaml", text: `${line}\n`, range: new SourceRange(1, at, 1, at + 1) })],
+    });
+    const out = await render(diag, { isTTY: true, columns: 41, env: () => "1" });
+    const lines = out.trimEnd().split("\n");
+    for (const row of lines) expect(cells(row)).toBeLessThanOrEqual(41);
+    expect(lines.find((row) => row.includes("❱"))).toMatch(/│ ❱ 1 …[漢]+X[字]+…/);
+  });
+
+  test("off a terminal a long line is cut at 200 cells and ordinary lines stay whole", async () => {
+    const ordinary = `prompt: ${"w".repeat(140)}`;
+    const text = `id: m\nname: m\n${ordinary}\nv: ${"y".repeat(10_000)}\n`;
+    const diag = new Diagnostic({
+      code: "compose.load",
+      message: "bad value",
+      frames: [new DiagnosticFrame({ label: "m.yaml", text, range: new SourceRange(4, 1, 4, 3) })],
+    });
+    const out = await render(diag);
+    const lines = out.trimEnd().split("\n");
+    for (const row of lines) expect(cells(row)).toBeLessThanOrEqual(200);
+    expect(out).toContain(ordinary);
+    expect(lines.find((row) => row.includes("❱"))).toContain("y…");
+  });
+
+  test("a long label is cut to the box", async () => {
+    const label = `${"dir/".repeat(100)}flow.yaml`;
+    const diag = new Diagnostic({
+      code: "compose.load",
+      message: "bad",
+      frames: [new DiagnosticFrame({ label, text: SOURCE, range: new SourceRange(5, 5, 5, 15) })],
+    });
+    const out = await render(diag, { isTTY: true, columns: 80, env: () => "1" });
+    for (const row of out.trimEnd().split("\n")) expect(cells(row)).toBeLessThanOrEqual(80);
+    expect(out).toContain("…");
   });
 
   test("renders ordered frames and context notes", async () => {
@@ -168,6 +264,20 @@ describe("flow text with escape sequences in a frame", () => {
     expect(await render(unboxed, { isTTY: true, env: noColor })).toBe("y^[]0;TITLE^G.yaml\ninvalid YAML\n");
   });
 
+  test("a long line cut around the error keeps the error's place once its controls show", async () => {
+    // Each `\x07` shows as two cells, so the raw column would land well left of the error.
+    const line = `${"\x07".repeat(60)}id: ERROR_HERE ${"x".repeat(100)}`;
+    const at = line.indexOf("ERROR_HERE");
+    const diag = new Diagnostic({
+      code: "compose.load",
+      message: "bad",
+      frames: [new DiagnosticFrame({ label: "f.yaml", text: `${line}\n`, range: new SourceRange(1, at + 1, 1, at + 11) })],
+    });
+    const out = await render(diag, { isTTY: true, env: noColor });
+    expect(out).toContain("ERROR_HERE");
+    expect(out).not.toContain("\x07");
+  });
+
   test("is written exactly off a TTY", async () => {
     const out = await render(framed);
     expect(out).toContain("# note \x1b]52;c;RlJBTUU=\x07 \x1b[2J");
@@ -203,6 +313,18 @@ describe("box and wrapSpans", () => {
       expect(out.text.includes("\x1b[")).toBe(env === noEnv);
     });
   }
+
+  test("a box with a maxWidth cuts its title and rows to it", () => {
+    const out = tty();
+    const rows = [["x".repeat(30), "x".repeat(30)] as const, ["ok", "ok"] as const];
+    const drawn = box(rows, "cyan", out, noColor, "a long title for this box", 0, 16);
+    expect(drawn.split("\n")).toEqual([
+      "╭─ a long tit… ╮",
+      "│ xxxxxxxxxxx… │",
+      "│ ok           │",
+      "╰──────────────╯",
+    ]);
+  });
 
   test("wrapSpans wraps the plain text and keeps each piece's style", () => {
     const out = tty();

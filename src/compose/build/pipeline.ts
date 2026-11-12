@@ -92,7 +92,7 @@ import {
   type NodeDescriptor,
   type OriginPresenter,
 } from "../nodes/base.ts";
-import { normalizeNodeSignatureCursor, parseNodes } from "../parse/nodes.ts";
+import { isIdentifier, normalizeNodeSignatureCursor, parseNodes, rejectNonIdentifierInput } from "../parse/nodes.ts";
 import type { SourceCatalogBuilder, SourceSitePath } from "../source/catalog.ts";
 import { SourceAccessError, type SourceCursor } from "../source/index.ts";
 import { AgentDescriptor, readLlmConfig } from "../nodes/agent.ts";
@@ -1756,10 +1756,25 @@ interface ClosedFlow {
   readonly wiring: Map<string, Map<string, unknown>>;
 }
 
-/** Read the flow's parameters from the authored `input:` mapping or the resolved parameters. */
+/**
+ * Read the flow's parameters from the authored `input:` mapping or the resolved parameters.
+ *
+ * @throws LoadError when an input's name isn't an identifier, or as its reader throws.
+ */
 function readFlowParameters(options: AssembleOptions, ctx: AssembleContext): FlowParameters {
   const { inputsSection = null, inputParameters = null, inputsCursor = null, boundaryFieldRanges = null } = options;
   const { registry, owner, catalogBuilder, diagnostics } = ctx;
+  // Every flow's inputs are read as `${input.<name>}`, an inline body's too: the node's `input:`.
+  const names = inputsSection !== null ? Object.keys(inputsSection) : inputParameters!.map((each) => each.name);
+  const what = inputsSection !== null ? "flow input" : "inline body input";
+  for (const name of names) {
+    if (isIdentifier(name)) continue;
+    const range = locateSourceAccess(
+      diagnostics,
+      () => inputsCursor?.keyRangeOf(name) ?? boundaryFieldRanges?.get(name) ?? null,
+    );
+    rejectNonIdentifierInput(what, name, range, diagnostics);
+  }
   let inputs: Parameter[];
   if (inputsSection !== null) {
     if (inputsCursor !== null) {

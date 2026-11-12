@@ -2,7 +2,14 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { canonicalJson, JSONDecodeError, logJson, parseJson, type JsonValue } from "../../src/typesys/json.ts";
+import {
+  canonicalJson,
+  JSONBoundError,
+  JSONDecodeError,
+  logJson,
+  parseJson,
+  type JsonValue,
+} from "../../src/typesys/json.ts";
 
 /** Return the `JSONDecodeError` that parsing `text` throws, or fail. */
 function decodeError(text: string): JSONDecodeError {
@@ -239,6 +246,57 @@ describe("parseJson", () => {
     }
     expect(levels).toBe(n / 2);
     expect(node).toEqual({ a: 1n });
+  });
+});
+
+describe("parseJson bounds", () => {
+  /** Return the `JSONBoundError` that parsing `text` within `bounds` throws, or fail. */
+  function boundError(text: string, bounds: { maxValues?: number; maxDepth?: number }): JSONBoundError {
+    try {
+      parseJson(text, "plain", bounds);
+    } catch (error) {
+      if (error instanceof JSONBoundError) return error;
+      throw error;
+    }
+    throw new Error(`parsed within the bounds: ${JSON.stringify(text)}`);
+  }
+
+  test("a text nested deeper than maxDepth is refused where the level past it opens", () => {
+    const deep = "[".repeat(1000) + "]".repeat(1000);
+    const error = boundError(deep, { maxDepth: 300 });
+    expect(error).toBeInstanceOf(JSONDecodeError);
+    expect([error.reason, error.position, error.bound, error.limit]).toEqual(["JSON nests deeper than 300 levels", 300, "depth", 300]);
+    // An empty container is a level too, and an object's nesting counts the same way.
+    expect(boundError("[[[]]]", { maxDepth: 2 }).position).toBe(2);
+    expect(boundError('{"a":{"b":{}}}', { maxDepth: 2 }).position).toBe(10);
+  });
+
+  test("a text at the depth bound reads", () => {
+    const value = parseJson("[".repeat(300) + "]".repeat(300), "plain", { maxDepth: 300 });
+    expect(depth(value)).toBe(300);
+    expect(parseJson('{"a":{"b":{}}}', "plain", { maxDepth: 3 })).toEqual({ a: { b: {} } });
+  });
+
+  test("a text with more than maxValues values is refused at the first value past it", () => {
+    // Each scalar, array and object is one value; keys are not.
+    expect(parseJson("[1,2]", "plain", { maxValues: 3 })).toEqual([1n, 2n]);
+    expect(parseJson('{"a":1,"b":[]}', "plain", { maxValues: 3 })).toEqual({ a: 1n, b: [] });
+    const error = boundError("[1,2,3]", { maxValues: 3 });
+    expect([error.reason, error.position, error.bound, error.limit]).toEqual(["JSON has more than 3 values", 5, "values", 3]);
+    expect(boundError('{"a":1,"b":[[]]}', { maxValues: 3 }).position).toBe(12);
+    expect(boundError("[[],[],[],[]]", { maxValues: 4 }).reason).toBe("JSON has more than 4 values");
+  });
+
+  test("a bound error is refused before the rest of the text is read", () => {
+    // The text breaks off past the bound, so only an early stop gives the bound error.
+    expect(boundError("[1,2,3,", { maxValues: 2 }).reason).toBe("JSON has more than 2 values");
+    expect(boundError("[[[[ broken", { maxDepth: 3 }).reason).toBe("JSON nests deeper than 3 levels");
+  });
+
+  test("with no bounds, any depth and any count still read", () => {
+    const n = 100_000;
+    expect(depth(parseJson("[".repeat(n) + "]".repeat(n), "plain"))).toBe(n);
+    expect(parseJson(`[${"1,".repeat(n)}1]`, "plain", {})).toHaveLength(n + 1);
   });
 });
 

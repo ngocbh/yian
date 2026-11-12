@@ -110,6 +110,7 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MAX_MODEL_EVENT_BYTES` | input cap | 16,777,216 | 1 or more | Largest event read from a model's reply stream: an SSE event's data or one NDJSON line |
 | `YIAN_MAX_MODEL_RESPONSE_BYTES` | input cap | 67,108,864 | 1 or more | Largest reply body read from one model call |
 | `YIAN_MAX_EMBEDDING_REPLY_BYTES` | input cap | 33,554,432 | 1 or more | Largest reply read from an embeddings request |
+| `YIAN_MAX_RECEIVED_JSON_VALUES` | input cap | 1,000,000 | 1 or more | Most values in one JSON text from a provider or MCP server: an event, a line, a reply or an MCP message |
 | `YIAN_MAX_EVENT_BYTES` | input cap | 1,048,576 | 1 or more | Largest event sent to a run's inbox, host call's pending step or completed answer, in run-log JSON bytes |
 | `YIAN_MAX_BASE_URL_CHARS` | input cap | 2,048 | 1 or more | Longest provider base URL accepted |
 | `YIAN_MAX_CONNECTION_HEADERS` | input cap | 32 | 1 or more | Most extra request headers a provider connection may send |
@@ -127,6 +128,9 @@ An entry whose valid values say "can only be lowered" has its default as its max
 - TOOL retries wait `YIAN_TOOL_RETRY_DELAY_SECONDS`, then twice that, and so on, up to
   `YIAN_TOOL_RETRY_MAX_DELAY_SECONDS`. Each wait is picked at random between half and all of its
   step.
+- A JSON text from a provider or MCP server past `YIAN_MAX_RECEIVED_JSON_VALUES`, or nested more
+  than 512 levels, is refused as it is read. A model call then fails with a `protocol` error and is
+  not retried; an MCP server over stdio is closed, and its call fails naming the bound.
 
 ## Environment variables
 

@@ -103,9 +103,10 @@ test("a coalesce of two branches reads the one that ran", async () => {
 });
 
 test("a call on a skipped branch in a later case is not evaluated", async () => {
+  // `upper` of the int default would fail; passing `pro.output` bare is a load error.
   const out = await run([
     [`"input.score < 0.5"`, "hot"],
-    [`'(upper(pro.output) :- con.output) == "con: ACME"'`, "cold"],
+    [`'upper(pro.output :- 1) == "CON: ACME"'`, "cold"],
   ]);
   expect(out.status).toBe("succeeded");
   expect(out.output).toBe(HOT);

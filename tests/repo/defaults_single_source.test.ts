@@ -30,6 +30,7 @@ const ALLOWED: Record<string, string> = {
   // Format versions and fixed codes.
   "runtime/log.ts: SCHEMA_VERSION": "run-record schema version",
   "runtime/log.ts: RETIRED_SCHEMAS": "schema versions this version refuses by name",
+  "runtime/state.ts: TAKE_ENVELOPE_LEVELS": "levels a take's output adds around an event: its record and events list",
   "runtime/run_index.ts: INDEX_VERSION": "run index layout version",
   "runtime/run_index.ts: STORED_VERSION": "run index layout and run-log schema versions, as user_version holds them",
   "memory/vectordb.ts: SEARCH_CHUNK_ROWS": "rows a VectorDBMemory search reads at once, so its memory use stays bounded",
@@ -145,6 +146,7 @@ const ALLOWED: Record<string, string> = {
   "llm_clients/auth/openai.ts: OpenAIAuth.deviceLogin.timeoutMs": "sign-in timeout",
   "llm_clients/auth/store.ts: AuthStore.constructor.lockTimeoutMs": "file lock timeout",
   "runtime/run_index.ts: DEFAULT_TIMEOUT_MS": "run index lock timeout, a host call's timeoutMs",
+  "runtime/run_index.ts: BATCH_RUNS": "runs an index update reads between commits, so readers see its rows as it goes",
   "typesys/event_limit.ts: MAX_EVENT_BYTES":
     "the built-in YIAN_MAX_EVENT_BYTES, its one source: defaults.ts's entry reads it, and builtin-free layers read it here",
   "llm_clients/auth/store.ts: AuthStore.constructor.refreshMarginMs": "time before token expiry to refresh",

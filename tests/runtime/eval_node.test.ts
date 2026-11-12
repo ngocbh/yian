@@ -43,6 +43,7 @@ import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, type Value, ValueKind } from "../../src/typesys/values.ts";
 import { drive, engine, FuncNode, graph, NO_ENV, nodeFlow, rejected, thrownBy as thrown } from "../helpers/run_state_fixtures.ts";
+import { YianRangeError, YianTypeError } from "../../src/typesys/errors.ts";
 
 /** Return the failure `drive` resolves to, or fail when it resolves to anything else. */
 async function driveFailure(
@@ -275,7 +276,7 @@ test("malformed parameter carrier is an ir fault", async () => {
   const node = new FuncNode("n", (inputs) => inputs);
   node.params = { 0: new Parameter("x"), length: 1 } as unknown as Parameter[];
 
-  expect(await rejected(drive(node))).toEqual(new TypeError("node params must be an exact list, got Object"));
+  expect(await rejected(drive(node))).toEqual(new YianTypeError("node params must be an exact list, got Object"));
 });
 
 for (const [label, make, field, value] of [
@@ -320,7 +321,7 @@ test("a reserved binding failure after an earlier start recorded steps is a host
   const steps = new NodeSteps(2, [{ step: 1n }], () => 1);
 
   expect(await rejected(drive(node, { steps }))).toEqual(
-    new RangeError(
+    new YianRangeError(
       "node 'n' reserved key failed; an earlier start of this node resolved it, so resume the run with the " +
         "flow and yian version that started it",
     ),

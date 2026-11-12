@@ -24,6 +24,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import process from "node:process";
 
+import { YianRangeError } from "./typesys/errors.ts";
 import { MAX_EVENT_BYTES } from "./typesys/event_limit.ts";
 
 /** The kind of an entry: a language safety limit, a setting's default, or an input cap. */
@@ -174,6 +175,15 @@ export const ENTRIES = Object.freeze([
     description: "Largest indent `render_as_json` takes",
     group: "limit",
     minimum: 2,
+  }),
+  // `replace`, `join`, `render_as_json` and text `+` can each multiply a text's size, so nesting
+  // them could build gigabytes in one expression. Ten million characters is past any model's
+  // context window.
+  entry("MAX_TEXT_CHARS", {
+    default: 10_000_000,
+    description: "Most characters a text that an operator or a builtin gives may have",
+    group: "limit",
+    minimum: 1,
   }),
   // A cut keeps one character less than the cap and adds `…`, so the minimum is 2.
   entry("MAX_SHOWN_VALUE_CHARS", {
@@ -607,12 +617,12 @@ function unknownNames(recorded: Readonly<Record<string, bigint | number>>): stri
 }
 
 /** An environment variable holds a value its entry does not accept. */
-export class DefaultsError extends RangeError {
+export class DefaultsError extends YianRangeError {
   override name = "DefaultsError";
 }
 
 /** A run started with values that differ from the ones in effect now. */
-export class DefaultsMismatchError extends RangeError {
+export class DefaultsMismatchError extends YianRangeError {
   override name = "DefaultsMismatchError";
 }
 

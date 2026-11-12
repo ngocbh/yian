@@ -15,6 +15,7 @@
  * uncapped; `RouteModel` scrubs it of the route's credentials and then caps it.
  */
 
+import { YianTypeError } from "../../typesys/errors.ts";
 import type { JsonObject, JsonValue } from "../../typesys/json.ts";
 import { encodeBody, mergeRequestBody, withAuthorWrapper } from "../body.ts";
 import { ProviderError } from "../errors.ts";
@@ -457,8 +458,8 @@ export class OpenAIResponses implements SseProtocol {
         this.#assistant(message, items, callIds);
       } else {
         for (const part of message.parts) {
-          if (part instanceof MediaPart) throw new TypeError(NO_MEDIA);
-          if (!(part instanceof ToolResultPart)) throw new TypeError(wrongPart(PROTOCOL, part, message.role));
+          if (part instanceof MediaPart) throw new YianTypeError(NO_MEDIA);
+          if (!(part instanceof ToolResultPart)) throw new YianTypeError(wrongPart(PROTOCOL, part, message.role));
           // Responses has no error flag; the error text is the output.
           items.push({ type: "function_call_output", call_id: part.callId, output: part.content });
         }
@@ -522,8 +523,8 @@ export class OpenAIResponses implements SseProtocol {
     // stateless) no encrypted content.
     let unpaired = false;
     for (const part of message.parts) {
-      if (part instanceof MediaPart) throw new TypeError(NO_MEDIA);
-      if (part instanceof ToolResultPart) throw new TypeError(wrongPart(PROTOCOL, part, message.role));
+      if (part instanceof MediaPart) throw new YianTypeError(NO_MEDIA);
+      if (part instanceof ToolResultPart) throw new YianTypeError(wrongPart(PROTOCOL, part, message.role));
       if (part.providerPayload === null) {
         if (part instanceof ReasoningPart) unpaired = true;
         records.push(null);
@@ -854,8 +855,8 @@ function dropNulls<T extends JsonValue>(value: T): T {
 function inputMessage(message: Message): JsonObject | null {
   const texts: string[] = [];
   for (const part of message.parts) {
-    if (part instanceof MediaPart) throw new TypeError(NO_MEDIA);
-    if (!(part instanceof TextPart)) throw new TypeError(wrongPart(PROTOCOL, part, message.role));
+    if (part instanceof MediaPart) throw new YianTypeError(NO_MEDIA);
+    if (!(part instanceof TextPart)) throw new YianTypeError(wrongPart(PROTOCOL, part, message.role));
     texts.push(part.text);
   }
   if (texts.length === 0) return null;
@@ -874,11 +875,11 @@ function inputMessage(message: Message): JsonObject | null {
  * @throws {TypeError} If the message holds a media part or another part that isn't text.
  */
 function instructionText(message: Message, subscription: boolean): string {
-  if (message.parts.some((part) => part instanceof MediaPart)) throw new TypeError(NO_MEDIA);
+  if (message.parts.some((part) => part instanceof MediaPart)) throw new YianTypeError(NO_MEDIA);
   const texts: string[] = [];
   for (const part of message.parts) {
     if (part instanceof TextPart) texts.push(part.text);
-    else throw new TypeError(subscription ? SUBSCRIPTION_TEXT_ONLY : wrongPart(PROTOCOL, part, message.role));
+    else throw new YianTypeError(subscription ? SUBSCRIPTION_TEXT_ONLY : wrongPart(PROTOCOL, part, message.role));
   }
   return texts.join("");
 }

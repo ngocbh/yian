@@ -17,6 +17,7 @@
 
 import { type FailureCode, type OriginRef, reprText } from "../../diagnostics.ts";
 import { evaluateWhenRecord, localDeclared } from "../../expr/expressions.ts";
+import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import type { ValueRecord } from "../../typesys/values.ts";
 import { ELSE_HANDLE, isWeakKey, Node, type NodeCaps, NodeKind, parseNamedCondition, Route } from "../base.ts";
 import { mapOrigin, type OriginMapper, validateOptionalOrigin } from "../contracts.ts";
@@ -45,7 +46,7 @@ export class Case {
     const { when = null, origin = null } = options;
     validateOptionalOrigin(origin, "CASE predicate origin");
     if (handle === ELSE_HANDLE) {
-      throw new RangeError(
+      throw new YianRangeError(
         `CASE handle ${reprText(handle)} is reserved for the else route; name the branch by its target node id`,
       );
     }
@@ -100,16 +101,16 @@ export class CaseNode extends Node {
     for (const branch of this.cases) {
       validateOptionalOrigin(branch.origin, "CASE predicate origin");
       if (branch.handle === ELSE_HANDLE) {
-        throw new RangeError(
+        throw new YianRangeError(
           `node ${reprText(this.id)} case handle ${reprText(branch.handle)} is reserved for the ` +
             "else route; name the branch by its target node id",
         );
       }
       if (branch.when === null) {
-        throw new RangeError(`node ${reprText(this.id)} case ${reprText(branch.handle)} has no \`when\` expression`);
+        throw new YianRangeError(`node ${reprText(this.id)} case ${reprText(branch.handle)} has no \`when\` expression`);
       }
       if (typeof branch.when !== "string") {
-        throw new TypeError(`node ${reprText(this.id)} case ${reprText(branch.handle)} \`when\` must be a string`);
+        throw new YianTypeError(`node ${reprText(this.id)} case ${reprText(branch.handle)} \`when\` must be a string`);
       }
     }
   }

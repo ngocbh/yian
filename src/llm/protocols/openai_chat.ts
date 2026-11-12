@@ -20,6 +20,7 @@
  * credentials and then caps it.
  */
 
+import { YianTypeError } from "../../typesys/errors.ts";
 import type { JsonObject, JsonValue } from "../../typesys/json.ts";
 import { encodeBody, mergeRequestBody, withAuthorWrapper } from "../body.ts";
 import { modelProfile } from "../capabilities.ts";
@@ -457,8 +458,8 @@ export class OpenAIChat implements SseProtocol {
         rendered.push(this.#assistant(shown, requireReasoning));
       } else {
         for (const part of shown.parts) {
-          if (part instanceof MediaPart) throw new TypeError(NO_MEDIA);
-          if (!(part instanceof ToolResultPart)) throw new TypeError(wrongPart(PROTOCOL, part, message.role));
+          if (part instanceof MediaPart) throw new YianTypeError(NO_MEDIA);
+          if (!(part instanceof ToolResultPart)) throw new YianTypeError(wrongPart(PROTOCOL, part, message.role));
           // Chat Completions has no error flag; the error text is the content.
           rendered.push({ role: "tool", tool_call_id: part.callId, content: part.content });
         }
@@ -482,8 +483,8 @@ export class OpenAIChat implements SseProtocol {
     const reasoning: string[] = [];
     let reason: ReplayDegradedReason | null = null;
     for (const part of message.parts) {
-      if (part instanceof MediaPart) throw new TypeError(NO_MEDIA);
-      if (part instanceof ToolResultPart) throw new TypeError(wrongPart(PROTOCOL, part, message.role));
+      if (part instanceof MediaPart) throw new YianTypeError(NO_MEDIA);
+      if (part instanceof ToolResultPart) throw new YianTypeError(wrongPart(PROTOCOL, part, message.role));
       if (part instanceof TextPart) {
         texts.push(part.text);
       } else if (part instanceof ToolCallPart) {
@@ -708,8 +709,8 @@ function toolCall(part: ToolCallPart, args: string): JsonObject {
 function inputMessage(message: Message): JsonObject | null {
   const texts: string[] = [];
   for (const part of message.parts) {
-    if (part instanceof MediaPart) throw new TypeError(NO_MEDIA);
-    if (!(part instanceof TextPart)) throw new TypeError(wrongPart(PROTOCOL, part, message.role));
+    if (part instanceof MediaPart) throw new YianTypeError(NO_MEDIA);
+    if (!(part instanceof TextPart)) throw new YianTypeError(wrongPart(PROTOCOL, part, message.role));
     texts.push(part.text);
   }
   if (texts.length === 0) return null;

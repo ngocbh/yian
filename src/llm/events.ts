@@ -8,6 +8,7 @@
  * returns, which owns and closes the underlying connection.
  */
 
+import { YianTypeError } from "../typesys/errors.ts";
 import { JSONDecodeError, parseJson, type JsonObject } from "../typesys/json.ts";
 import { ProviderError } from "./errors.ts";
 import {
@@ -238,7 +239,7 @@ export class ReplyAssembler {
         value instanceof Finish
       )
     ) {
-      throw new TypeError(`not a stream event: ${typeName(value)}`);
+      throw new YianTypeError(`not a stream event: ${typeName(value)}`);
     }
     if (this.#finish !== null) throw new Error("event after finish");
     this.#added = true;

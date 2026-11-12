@@ -3,7 +3,7 @@ import { BUILTIN } from "../../src/defaults.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
 
 const record = () => 1;
-const view = { callId: "r/n", tool: "ask", resultKey: "r/n", state: "answered", closedReason: null, result: { kind: "tool_result" }, deadline: null } as const;
+const view = { callId: "r/n", tool: "ask", resultKey: "r/n", state: "answered", closedReason: null, result: { kind: "tool_result" }, deadline: null, scope: null, failure: null } as const;
 
 test("NodeSteps carries the node's calls and the run's event limit", () => {
   const plain = new NodeSteps(1, [], record);

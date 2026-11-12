@@ -1,0 +1,47 @@
+# A flow call whose scope would grow the run's graph past YIAN_MAX_TOTAL_NODES doesn't start: the
+# model reads why as the call's error result, and the run goes on.
+kind: run
+flow: |
+  id: helping
+  name: helping
+  llm_config: {provider: anthropic, model: claude-test}
+  defs:
+    shout:
+      description: Shout the text back.
+      input:
+        text: !str
+      nodes:
+        loud: !str ${input.text}!
+      output: ${loud.output}
+  nodes:
+    helper:
+      kind: agent
+      tools: [shout]
+      system_prompt: Help.
+      prompt: hi
+      output: str
+  output: ${helper.output}
+env:
+  YIAN_MAX_TOTAL_NODES: '5'
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  models:
+    helper:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: call-a, name: shout, arguments: {text: hey}}
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: text, text: it didn't start}
+expect:
+  output:
+    status: succeeded
+    output: it didn't start
+  trace: [[run_started, null, {defaults: {MAX_TOTAL_NODES: 5}, effective_llm_by_static_path: {helper: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, helper], [node_step, helper, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {text: hey}, id: call-a, name: shout, type: tool_call}], role: assistant}, purpose: chat, request_sha256: b3b17246f934999cbeb3857f564944b6516be233dad3af2fba95e15d9254e09a, response_id: null, usage: null}}], [node_step, helper, {n: 2, step: {arguments: {text: hey}, call_id: r1/helper/1/0, flow: true, index: 0, kind: pending, reply: 1, scope: helper/shout#0, tool: shout, tool_call_id: call-a}}], [node_failed, helper, {failure: {code: contract.growth, message: expansion exceeded node budget (5) at spawner 'helper', frames: [{label: flow.yaml, range: [13, 3, 13, 9]}], node: helper}}], [node_waiting, helper, {call_ids: [r1/helper/1/0]}], [node_woken, helper], [node_step, helper, {n: 3, step: {call_id: call-a, closed: failed, is_error: true, kind: tool_result, output: "Flow shout didn't start (contract.growth): expansion exceeded node budget (5) at spawner 'helper'"}}], [node_step, helper, {n: 4, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: it didn't start, type: text}], role: assistant}, purpose: chat, request_sha256: f0a3c755d1832a54fdd505b60198506007c07ec1e33c007c87a50af1b5f08ac0, response_id: null, usage: null}}], [pool_commit, helper, {value: it didn't start}], [pool_commit, helper, {key: helper.new_messages, steps: [9, 14, 15]}], [node_succeeded, helper, {commit: 16, messages: 17}], [node_started, __end__], [pool_commit, __end__, {value: it didn't start}], [node_succeeded, __end__, {commit: 20}]]

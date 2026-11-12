@@ -23,6 +23,7 @@ import fs from "node:fs";
 import { dirname, join } from "node:path";
 
 import { isSystemError, syncFolder } from "../platform.ts";
+import { YianTypeError } from "../typesys/errors.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import type { Applied, Author } from "./base.ts";
 import { asAuthor, authorOf, charCount, isObject, openRegular } from "./common.ts";
@@ -561,7 +562,7 @@ export class Journal {
     const text = JSON.stringify(record);
     // Never write a line the next read would refuse.
     const parsed = parseLine(text);
-    if (parsed === null) throw new TypeError(`not a journal line: ${text}`);
+    if (parsed === null) throw new YianTypeError(`not a journal line: ${text}`);
     // Checked against an empty journal's first entry line when there is none yet.
     this.#checkOrder(parsed, this.#generation === null ? 2 : this.#lines + 1);
     if (this.#generation === null) this.#create();

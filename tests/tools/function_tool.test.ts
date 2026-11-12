@@ -31,6 +31,7 @@ import { toolTypes } from "../../src/tools/types.ts";
 import { type JsonObject, parseJson } from "../../src/typesys/json.ts";
 import { canonicalTypeLabel, Type, TypeCheckError, typeEquals, ValueKind } from "../../src/typesys/values.ts";
 import { testNode } from "../helpers/test_node.ts";
+import { thrownClass } from "../helpers/own_errors.ts";
 
 const ECHO_SCHEMA: JsonObject = {
   type: "object",
@@ -64,7 +65,7 @@ async function rejection(promise: Promise<unknown>, kind: abstract new (...args:
   try {
     await promise;
   } catch (error) {
-    expect((error as Error).constructor).toBe(kind);
+    expect((error as Error).constructor).toBe(thrownClass(kind));
     return error as Error;
   }
   throw new Error("expected a rejection");
@@ -813,7 +814,7 @@ describe("tool()", () => {
     try {
       build();
     } catch (error) {
-      expect((error as Error).constructor).toBe(kind);
+      expect((error as Error).constructor).toBe(thrownClass(kind));
       return error as Error;
     }
     throw new Error("expected a throw");

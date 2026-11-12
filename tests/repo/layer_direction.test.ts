@@ -150,23 +150,23 @@ const RULES: Rule[] = [
   {
     name: "defaults.ts imports only node builtins and the event cap's value",
     files: only("defaults.ts"),
-    allow: ["typesys/event_limit"],
-    why: "defaults must stay a leaf: node: builtins, and typesys/event_limit, which imports nothing",
+    allow: ["typesys/event_limit", "typesys/errors"],
+    why: "defaults must stay a leaf: node: builtins, typesys/event_limit and typesys/errors, which import nothing",
     samples: {
       file: "defaults.ts",
       bad: ["diagnostics", "typesys", "typesys/json", "index"],
-      good: ["typesys/event_limit"],
+      good: ["typesys/event_limit", "typesys/errors"],
     },
   },
   {
-    name: "llm imports only defaults, platform, typesys/json and llm",
+    name: "llm imports only defaults, platform, typesys/json, typesys/errors and llm",
     files: below("llm"),
-    allow: ["defaults", "platform", "typesys/json", "llm"],
-    why: "llm may import only node: builtins, defaults, platform, typesys/json and llm",
+    allow: ["defaults", "platform", "typesys/json", "typesys/errors", "llm"],
+    why: "llm may import only node: builtins, defaults, platform, typesys/json, typesys/errors and llm",
     samples: {
       file: "llm/client.ts",
       bad: ["llm_clients", "nodes", "runtime", "index", "typesys", "typesys/other", "diagnostics"],
-      good: ["defaults", "platform", "typesys/json", "llm/errors", "llm/index"],
+      good: ["defaults", "platform", "typesys/json", "typesys/errors", "llm/errors", "llm/index"],
     },
   },
 ];

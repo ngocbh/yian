@@ -5,6 +5,7 @@ import { BUILTIN_MEMORY_TOOLS, type MemoryBase } from "../../memory/base.ts";
 import { sameNames } from "../../runtime/memories.ts";
 import { checkVisibleNames, expandGrants, GrantError, type GrantScope, type ToolGrant } from "../../tools/grants.ts";
 import { RESERVED_TOOL_NAMES } from "../../tools/registry.ts";
+import { YianTypeError } from "../../typesys/errors.ts";
 import { parseType, type TypeExpr, type TypeRegistry, withMemoryTypes } from "../../typesys/types.ts";
 import { isMemoryType, type Type, TypeCheckError } from "../../typesys/values.ts";
 import type { SourceCursor } from "../source/index.ts";
@@ -42,35 +43,35 @@ export const NO_MEMORY_TYPES: MemoryTypeTable = Object.freeze({
  *   different tools.
  */
 export function memoryTypeTools(memoryTypes: unknown): ReadonlyMap<string, readonly string[]> {
-  if (!Array.isArray(memoryTypes)) throw new TypeError("memoryTypes must be a list of memory classes");
+  if (!Array.isArray(memoryTypes)) throw new YianTypeError("memoryTypes must be a list of memory classes");
   const tools = new Map<string, readonly string[]>();
   for (const cls of memoryTypes) {
-    if (typeof cls !== "function") throw new TypeError("memoryTypes must hold memory classes");
+    if (typeof cls !== "function") throw new YianTypeError("memoryTypes must hold memory classes");
     const contract: unknown = (cls as Partial<MemoryClass>).contract;
     const name = (cls as { name?: unknown }).name;
     if (typeof contract !== "object" || contract === null) {
-      throw new TypeError(`${String(name)} declares no memory contract; give it a static contract`);
+      throw new YianTypeError(`${String(name)} declares no memory contract; give it a static contract`);
     }
     const { type, tools: specs } = contract as { type?: unknown; tools?: unknown };
     if (typeof type !== "string" || !Array.isArray(specs)) {
-      throw new TypeError(`${String(name)}'s contract needs a type and a list of tools`);
+      throw new YianTypeError(`${String(name)}'s contract needs a type and a list of tools`);
     }
     const names = specs.map((spec: unknown) => (spec as { name?: unknown } | null)?.name);
     if (!names.every((tool): tool is string => typeof tool === "string" && tool !== "")) {
-      throw new TypeError(`${String(name)}'s contract tools need names`);
+      throw new YianTypeError(`${String(name)}'s contract tools need names`);
     }
     const twice = names.find((tool, i) => names.indexOf(tool) !== i);
-    if (twice !== undefined) throw new TypeError(`${String(name)}'s contract lists the tool ${twice} twice`);
+    if (twice !== undefined) throw new YianTypeError(`${String(name)}'s contract lists the tool ${twice} twice`);
     if (Object.hasOwn(BUILTIN_MEMORY_TOOLS, type)) continue;
     try {
       withMemoryTypes(new Map(), [type]);
     } catch (error) {
       if (!(error instanceof TypeCheckError)) throw error;
-      throw new TypeError(`${String(name)}: ${error.message}`, { cause: error });
+      throw new YianTypeError(`${String(name)}: ${error.message}`, { cause: error });
     }
     const known = tools.get(type);
     if (known !== undefined && !sameNames(known, names)) {
-      throw new TypeError(`memoryTypes lists two classes for ${reprText(type)} with different tools`);
+      throw new YianTypeError(`memoryTypes lists two classes for ${reprText(type)} with different tools`);
     }
     tools.set(type, Object.freeze(names));
   }

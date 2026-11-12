@@ -33,6 +33,7 @@ import { parentPort, workerData } from "node:worker_threads";
 
 import { current, type Defaults, install } from "../../defaults.ts";
 import { reprText } from "../../diagnostics.ts";
+import { YianTypeError } from "../../typesys/errors.ts";
 import {
   FileRef,
   fromHost,
@@ -246,7 +247,7 @@ async function importReference(reference: string, baseDir: string | null): Promi
     return { ok: false, as: "code", thrown: thrownOf(error) };
   }
   const fn = module[name];
-  if (typeof fn !== "function") throw new TypeError(`${reprText(path)} exports no function ${reprText(name)}`);
+  if (typeof fn !== "function") throw new YianTypeError(`${reprText(path)} exports no function ${reprText(name)}`);
   return fn as CodeBody;
 }
 

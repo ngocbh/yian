@@ -9,6 +9,7 @@
  */
 
 import { compareCodeUnits, reprText } from "../../diagnostics.ts";
+import { YianTypeError } from "../../typesys/errors.ts";
 import { writeAsText } from "../../typesys/values.ts";
 import type { BuildResult } from "../nodes/base.ts";
 
@@ -33,7 +34,7 @@ export function checkWiringParity(
     if (actual.size !== expected.size || [...actual].some((key) => !expected.has(key))) {
       const sortedActual = [...actual].sort(compareCodeUnits);
       const sortedExpected = [...expected].sort(compareCodeUnits);
-      throw new TypeError(
+      throw new YianTypeError(
         `yian bug: node ${reprText(nodeId)} has wiring keys ${writeAsText(sortedActual)}, but its params and ` +
           `reserved keys are ${writeAsText(sortedExpected)}`,
       );

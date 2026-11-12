@@ -22,11 +22,12 @@
  *
  * `nullSkippedOutputs` gives a flow output that reads only nodes that may all be skipped the
  * explicit null default, so it returns null instead of leaving END unreachable.
- * `checkSkippedArithmetic` rejects arithmetic over a value that may be null because its producers
- * were skipped while the reading node (or END) still runs.
+ * `checkSkippedReads` rejects a value that may be null because its producers were skipped, where
+ * null fails (arithmetic, a shipped builtin's argument, the right side of `in`, a comprehension's
+ * list), while the reading node (or END) still runs.
  *
  * Knows about: compiled edges and their topological order, flow outputs, node wiring, binding
- * producers, and expression trees.
+ * producers, expression trees, and the shipped builtins' parameters.
  */
 
 import { type Edge, FlowOutput } from "../../compile/model.ts";
@@ -42,7 +43,8 @@ import {
   referenceText,
   scanTemplate,
 } from "../../expr/index.ts";
-import { type ExprNode, iterSubtreesTopdown, Token, Tree } from "../../expr/grammar.ts";
+import { bindArguments, isShipped, TEMPLATE_FNS } from "../../expr/builtins.ts";
+import { callSuffixOf, type ExprNode, iterSubtreesTopdown, Token, Tree } from "../../expr/grammar.ts";
 import { Span } from "../../expr/template.ts";
 import {
   asBinding,
@@ -542,15 +544,18 @@ export function nullSkippedOutputs(flowOutputs: readonly FlowOutput[], model: Sk
 }
 
 /**
- * Reject arithmetic over a value that may be null because CASE routing skipped it.
+ * Reject a value that may be null because CASE routing skipped it, where null fails.
  *
- * An operand of `+ - * / % **` or unary `-` is null from a skip when it is a reference to a node's
- * output, or a `|` / `:-` group of them, and every producer of one of its null alternatives is
- * skipped. That is an error when some routing skips them while the binding's node still runs; a
- * flow output's END always runs. Any other operand (a call, a nested operator, a literal) is never
- * null from a skip here. Each string nested in a value template is checked on its own and located
- * at its own site. A searched CASE's authored `when:` is checked the same way with the CASE as the
- * reader, since a reference under `:-`, `|` or `:?` there does not skip the CASE with its producer.
+ * Null fails as an operand of `+ - * / % **` or unary `-`, as an argument of a shipped builtin
+ * (one for a parameter whose default is null takes null as left out, and a host function may take
+ * null), as the right side of `in` or `not in`, and as a comprehension's list. Such an operand is
+ * null from a skip when it is a reference to a node's output, or a `|` / `:-` group of them, and
+ * every producer of one of its null alternatives is skipped. That is an error when some routing
+ * skips them while the binding's node still runs; a flow output's END always runs. Any other
+ * operand (a call, a nested operator, a literal) is never null from a skip here. Each string
+ * nested in a value template is checked on its own and located at its own site. A searched CASE's
+ * authored `when:` is checked the same way with the CASE as the reader, since a reference under
+ * `:-`, `|` or `:?` there does not skip the CASE with its producer.
  *
  * @param flowWiring Each node's `param -> source` wiring, a CASE's `on:` and `when:` sources
  *   included.
@@ -571,10 +576,10 @@ export function nullSkippedOutputs(flowOutputs: readonly FlowOutput[], model: Sk
  *   origin, range]` per case: the origin is the preferred location, the range the fallback. A
  *   `when:` is checked like a binding: arithmetic behind a guard that proves its root not null
  *   (`a.output?.n != null and a.output.n + 1 > 1`) loads.
- * @throws LoadError at the first such binding or `when:`, naming it, the operand and its producers,
- *   and asking for a `:-` default.
+ * @throws LoadError at the first such binding or `when:`, naming it, what it does with the operand,
+ *   the operand and its producers, and asking for a `:-` default.
  */
-export function checkSkippedArithmetic(
+export function checkSkippedReads(
   flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
   flowOutputs: readonly FlowOutput[],
   model: SkipModel,
@@ -597,10 +602,10 @@ export function checkSkippedArithmetic(
     for (const [param, binding] of wiring) {
       const found = skippedOperand(binding, model, nodeId, known, registry);
       if (found === null) continue;
-      const [site, operand, producers] = found;
+      const [site, ...operand] = found;
       const [where, fallback] = bindingSite(nodeId, param, result);
       throw locatedError(
-        `${where}: ${arithmeticMessage(site, operand, producers)}`,
+        `${where}: ${skippedReadText(String(bindingSource(site)), ...operand)}`,
         site,
         fallback,
         resolveOrigin,
@@ -616,7 +621,7 @@ export function checkSkippedArithmetic(
       const found = skippedOperandIn(tree, model, nodeId, known, registry);
       if (found === null) continue;
       throw locatedError(
-        `node ${reprText(nodeId)} cases[${index}].when: ${arithmeticText(String(when).trim(), ...found)}`,
+        `node ${reprText(nodeId)} cases[${index}].when: ${skippedReadText(String(when).trim(), ...found)}`,
         new Binding(when, { origin }),
         whenRange,
         resolveOrigin,
@@ -627,10 +632,10 @@ export function checkSkippedArithmetic(
   for (const output of flowOutputs) {
     const found = skippedOperand(output.binding, model, null, known, registry);
     if (found === null) continue;
-    const [site, operand, producers] = found;
+    const [site, ...operand] = found;
     const label = valueMode ? "output" : `output ${reprText(output.name)}`;
     throw locatedError(
-      `${label}: ${arithmeticMessage(site, operand, producers)}`,
+      `${label}: ${skippedReadText(String(bindingSource(site)), ...operand)}`,
       site,
       outputsRange,
       resolveOrigin,
@@ -678,20 +683,72 @@ export function stringSites(binding: unknown): Binding[] {
   });
 }
 
-/** An arithmetic operand that may be null from a skip, and the producers whose skip makes it null. */
-type SkippedOperand = [operand: ExprNode, producers: string[]];
+/**
+ * What a read that fails on null does with its value: arithmetic, an argument of the shipped
+ * builtin `callee`, the right side of `in` or `not in`, or a comprehension's list.
+ */
+type NullUse =
+  | { readonly kind: "arithmetic" }
+  | { readonly kind: "argument"; readonly callee: string }
+  | { readonly kind: "container"; readonly op: "in" | "not in" }
+  | { readonly kind: "iterable" };
+
+const ARITHMETIC_USE: NullUse = Object.freeze({ kind: "arithmetic" });
+const ITERABLE_USE: NullUse = Object.freeze({ kind: "iterable" });
+
+/** An operand that fails on null and may be null from a skip, its use, and the producers whose skip makes it null. */
+type SkippedOperand = [operand: ExprNode, use: NullUse, producers: string[]];
 
 /**
- * Return the first arithmetic operand of `binding` that may be null from a skip.
+ * Return the operands of `tree` that fail on null, each with what it does: every operand of
+ * arithmetic, each argument of a shipped builtin for a parameter whose default isn't null, the
+ * right side of `in` and `not in`, and each `for` clause's list. A conditional operand gives
+ * each of its branches.
+ */
+function nullFailingOperands(tree: Tree): [ExprNode, NullUse][] {
+  const each = (operands: readonly ExprNode[], use: NullUse): [ExprNode, NullUse][] =>
+    operands.flatMap(branchesOf).map((operand) => [operand, use]);
+  if (ARITHMETIC.has(tree.data)) return each(tree.children, ARITHMETIC_USE);
+  if (tree.data === "compare_in" || tree.data === "compare_notin") {
+    return each([tree.children.at(-1)!], { kind: "container", op: tree.data === "compare_in" ? "in" : "not in" });
+  }
+  if (tree.data === "list_comp") {
+    const clauses = (tree.children.slice(1) as Tree[]).filter((clause) => clause.data === "comp_for");
+    // A `comp_for`'s list is its second child.
+    return each(clauses.map((clause) => clause.children[1]!), ITERABLE_USE);
+  }
+  const callSuffix = tree.data === "refcall" ? callSuffixOf(tree) : undefined;
+  const callee = String(tree.children[0]);
+  const fn = callSuffix === undefined ? undefined : TEMPLATE_FNS.get(callee);
+  // A host function may take null; `isinstance` and a constructor are no builtin.
+  if (fn === undefined || !isShipped(fn)) return [];
+  const args = callSuffix!.children as Tree[];
+  const positional = args.filter((arg) => arg.children.length === 1).map((arg) => arg.children[0]!);
+  const keywords = new Map(
+    args.filter((arg) => arg.children.length === 2).map((arg) => [String(arg.children[0]), arg.children[1]!]),
+  );
+  // A call that doesn't bind is reported by `checkCalls`.
+  const bound = bindArguments(fn, positional, keywords);
+  if (typeof bound === "string") return [];
+  // A default is a value, not a tree; a null for a parameter whose default is null leaves it out.
+  const failing = bound.filter(
+    (arg, index): arg is ExprNode =>
+      (arg instanceof Tree || arg instanceof Token) && fn.params[index]!.default !== null,
+  );
+  return each(failing, { kind: "argument", callee });
+}
+
+/**
+ * Return the first operand of `binding` that fails on null and may be null from a skip.
  *
  * @param binding A wiring or output binding; each of its template strings is scanned.
  * @param model The level's skip model.
  * @param consumer The node that evaluates the binding, or `null` for END.
  * @param known The level's node ids.
  * @param registry The flow's typedefs, for an `isinstance` guard's type name.
- * @returns The string that does the arithmetic (as a binding located at its own site), the
- *   operand, and the producers whose skip makes it null (in source order), or `null` when no
- *   operand may be null while `consumer` runs.
+ * @returns The string that reads the operand (as a binding located at its own site), the operand,
+ *   what it does, and the producers whose skip makes it null (in source order), or `null` when no
+ *   such operand may be null while `consumer` runs.
  */
 function skippedOperand(
   binding: unknown,
@@ -719,15 +776,15 @@ function skippedOperand(
 }
 
 /**
- * Return the first arithmetic operand of a parsed expression that may be null from a skip.
+ * Return the first operand of a parsed expression that fails on null and may be null from a skip.
  *
  * @param expression A parsed expression.
  * @param model The level's skip model.
  * @param consumer The node that evaluates the expression, or `null` for END.
  * @param known The level's node ids.
  * @param registry The flow's typedefs, for an `isinstance` guard's type name.
- * @returns The operand and the producers whose skip makes it null (in source order), or `null`
- *   when no operand may be null while `consumer` runs.
+ * @returns The operand, what it does, and the producers whose skip makes it null (in source
+ *   order), or `null` when no such operand may be null while `consumer` runs.
  */
 function skippedOperandIn(
   expression: ExprNode,
@@ -741,14 +798,14 @@ function skippedOperandIn(
   // Matched by node, not by position: an operand that is no plain read has no guard here.
   const reads = guardedReads(expression);
   for (const tree of iterSubtreesTopdown(expression)) {
-    if (!ARITHMETIC.has(tree.data)) continue;
-    for (const operand of tree.children.flatMap(branchesOf)) {
+    for (const [operand, use] of nullFailingOperands(tree)) {
       const guard = reads.find((read) => read.node === operand)?.guard ?? NOTHING;
       if (operand instanceof Tree && provesNotNull(guard, referencePath(operand), registry)) continue;
       for (const group of nullGroups(operand, known)) {
         if (group.size > 0 && model.maySkipWhileRunning(group, consumer)) {
           const producers = new Set(exprRefs(operand).map(refProducer));
-          return [operand, [...producers].filter((producer): producer is string => producer !== null && group.has(producer))];
+          const skipped = [...producers].filter((producer): producer is string => producer !== null && group.has(producer));
+          return [operand, use, skipped];
         }
       }
     }
@@ -786,8 +843,8 @@ function excludesNull(typeName: string, registry: TypeRegistry): boolean {
 }
 
 /**
- * Return an arithmetic operand as the operands it may evaluate to: each branch of a conditional,
- * whose value is the branch's, else the operand itself.
+ * Return an operand as the operands it may evaluate to: each branch of a conditional, whose value
+ * is the branch's, else the operand itself.
  */
 function branchesOf(operand: ExprNode): ExprNode[] {
   if (!(operand instanceof Tree) || operand.data !== "if_expr") return [operand];
@@ -797,7 +854,7 @@ function branchesOf(operand: ExprNode): ExprNode[] {
 /**
  * Return the producer sets whose joint skip makes `operand` null.
  *
- * @param operand One parsed operand of an arithmetic tree.
+ * @param operand One parsed operand that fails on null.
  * @param known The level's node ids; a reference to anything else (an input, `item`, `system`) is
  *   never skipped.
  * @returns The operand is null when every producer of one set is skipped. A `null` literal gives
@@ -846,26 +903,15 @@ function referenceGroups(path: string, known: ReadonlySet<string>): Set<string>[
 }
 
 /**
- * Return the error text for arithmetic on an operand that may be null from a skip.
+ * Return the error text for `source`, which uses an operand that may be null where null fails.
  *
- * @param binding The binding whose source does the arithmetic.
+ * @param source The authored text that reads the operand, shown as written.
  * @param operand The operand that may be null.
- * @param producers The nodes whose skip makes it null.
- * @returns The message, without the binding's name.
- */
-function arithmeticMessage(binding: unknown, operand: ExprNode, producers: readonly string[]): string {
-  return arithmeticText(String(bindingSource(binding)), operand, producers);
-}
-
-/**
- * Return the error text for arithmetic in `source` on an operand that may be null.
- *
- * @param source The authored text that does the arithmetic, shown as written.
- * @param operand The operand that may be null.
+ * @param use What `source` does with it.
  * @param producers The nodes whose skip makes it null.
  * @returns The message, without the reader's name.
  */
-function arithmeticText(source: string, operand: ExprNode, producers: readonly string[]): string {
+function skippedReadText(source: string, operand: ExprNode, use: NullUse, producers: readonly string[]): string {
   const text = operandText(operand);
   const hint = defaultHint(operand);
   const quoted = producers.map(reprText);
@@ -873,7 +919,12 @@ function arithmeticText(source: string, operand: ExprNode, producers: readonly s
     quoted.length === 1
       ? `node ${quoted[0]} is`
       : `nodes ${quoted.slice(0, -1).join(", ")} and ${quoted.at(-1)} are`;
-  return `${source} does arithmetic on ${text}, which is null when ${who} skipped; give it a default with :-, e.g. ${hint}`;
+  let doing: string;
+  if (use.kind === "arithmetic") doing = `does arithmetic on ${text}`;
+  else if (use.kind === "argument") doing = `passes ${text} to ${use.callee}()`;
+  else if (use.kind === "container") doing = `uses ${text} as the right side of \`${use.op}\``;
+  else doing = `iterates over ${text}`;
+  return `${source} ${doing}, which is null when ${who} skipped; give it a default with :-, e.g. ${hint}`;
 }
 
 /**

@@ -20,6 +20,7 @@ import { pending } from "../../src/tools/context.ts";
 import type { AskRequest } from "../../src/tools/registry.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import { rejected, serving, textReply } from "../helpers/run_state_fixtures.ts";
+import { YianRangeError } from "../../src/typesys/errors.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-ask-tool-run-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -70,7 +71,7 @@ test("an ask input the host didn't declare is refused before the log exists", as
   const error = await rejected(run(flow, { log: path, tools: { ask: () => "yes" } }));
 
   expect(error).toEqual(
-    new RangeError(
+    new YianRangeError(
       `TOOL node 'gate' input 'to': tool 'ask' takes no such input; it takes ["__questions","prompt","questions","timeout"]`,
     ),
   );
@@ -95,7 +96,7 @@ test("an ask with no handler is refused before the log exists", async () => {
   const error = await rejected(run(gateFlow("ask", '      prompt: "?"'), { log: path, tools: {} }));
 
   expect(error).toEqual(
-    new RangeError(
+    new YianRangeError(
       "TOOL node 'gate' names 'ask': no ask handler for this run; pass tools: {...registeredTools(), ask: handler} to runFlow or advance",
     ),
   );

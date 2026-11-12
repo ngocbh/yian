@@ -16,6 +16,7 @@
 
 import { current } from "../defaults.ts";
 import { compareCodeUnits, getCloseMatches, reprText } from "../diagnostics.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import {
   BUILTIN_TYPE_NAMES,
   buildValueAs,
@@ -31,6 +32,7 @@ import {
 } from "../typesys/index.ts";
 import type { RootValue } from "../typesys/pool.ts";
 import {
+  codePointCount,
   fieldOf,
   fileFieldType,
   fromHost,
@@ -47,10 +49,12 @@ import {
   floatParts,
   intOverCap,
   isShipped,
+  overTextChars,
   kindName,
   roundQuotient,
   TEMPLATE_FNS,
   type TemplateFn,
+  textOverCap,
   truthy,
 } from "./builtins.ts";
 import {
@@ -548,7 +552,13 @@ function applyStep(op: string, lhs: Value, rhs: Value): Value {
     throw new ExpressionError("text formatting with `%` was removed; use a template");
   }
   if (op === "+") {
-    if (typeof lhs === "string" && typeof rhs === "string") return lhs + rhs;
+    if (typeof lhs === "string" && typeof rhs === "string") {
+      const cap = current().maxTextChars;
+      if (overTextChars(lhs.length + rhs.length, () => codePointCount(lhs) + codePointCount(rhs), cap)) {
+        throw new ExpressionError(`${valueRepr(lhs)} + ${valueRepr(rhs)} ${textOverCap(cap)}`);
+      }
+      return lhs + rhs;
+    }
     if (Array.isArray(lhs) && Array.isArray(rhs)) return [...lhs, ...rhs];
   }
   const x = numeric(lhs);
@@ -1323,8 +1333,13 @@ class EvalExpr {
       if (error instanceof ExpressionError) throw error;
       throw failed(error instanceof Error ? error.message : String(error), { cause: error });
     }
-    const cap = current().maxIntDigits;
-    if (typeof result === "bigint" && overIntDigits(result, cap)) throw failed(`${callee}() ${intOverCap(cap)}`);
+    const { maxIntDigits, maxTextChars } = current();
+    if (typeof result === "bigint" && overIntDigits(result, maxIntDigits)) {
+      throw failed(`${callee}() ${intOverCap(maxIntDigits)}`);
+    }
+    if (typeof result === "string" && overTextChars(result.length, () => codePointCount(result), maxTextChars)) {
+      throw failed(`${callee}() ${textOverCap(maxTextChars)}`);
+    }
     return result;
   }
 
@@ -1982,7 +1997,7 @@ export type RefRename = (path: string) => RefRenamed | null;
  */
 export function namesEnd(node: Tree, used: number): number {
   const names = 1 + splitReference(node).steps.length;
-  if (!Number.isInteger(used) || used < 1 || used > names) throw new RangeError(`a rename used ${used} of ${names} names`);
+  if (!Number.isInteger(used) || used < 1 || used > names) throw new YianRangeError(`a rename used ${used} of ${names} names`);
   const last = node.children[used - 1]!;
   return last instanceof Tree ? (last.children[0] as Token).endPos : (last as Token).endPos;
 }

@@ -14,6 +14,7 @@
  * `T(a=..., b=...)` checks (or builds and checks) a value of that type.
  */
 
+import { current } from "../defaults.ts";
 import { compareCodeUnits, getCloseMatches, reprText } from "../diagnostics.ts";
 import {
   BUILTIN_TYPE_NAMES,
@@ -44,6 +45,7 @@ import {
   bindArguments,
   builtinResultType,
   floatParts,
+  intOverCap,
   isShipped,
   kindName,
   roundQuotient,
@@ -537,8 +539,9 @@ type Walked = Value | typeof MISSING;
  * @param lhs The left value: the running value of a left fold, or an operand.
  * @param rhs The right value.
  * @throws {ExpressionError} For text on the left of `%`, operand kinds `op` doesn't take, a zero
- *   divisor or `0 ** negative`, a float result that would be NaN, or an int result the runtime
- *   can't hold; the message shows the operands as given.
+ *   divisor or `0 ** negative`, a float result that would be NaN, an int result over
+ *   `YIAN_MAX_INT_DIGITS` digits, or one the runtime can't hold; the message shows the operands as
+ *   given.
  */
 function applyStep(op: string, lhs: Value, rhs: Value): Value {
   if (op === "%" && typeof lhs === "string") {
@@ -553,35 +556,21 @@ function applyStep(op: string, lhs: Value, rhs: Value): Value {
   if (x === null || y === null) throw operandKindsError(op, lhs, rhs);
   const divisionByZero = () => new ExpressionError(`division by zero: ${valueRepr(lhs)} ${op} ${valueRepr(rhs)}`);
   if (typeof x === "bigint" && typeof y === "bigint" && !(op === "**" && y < 0n)) {
+    if ((op === "/" || op === "%") && y === 0n) throw divisionByZero();
+    if (op === "/") return trueDivide(x, y);
+    const cap = current().maxIntDigits;
+    const tooLarge = () => new ExpressionError(`${valueRepr(lhs)} ${op} ${valueRepr(rhs)} ${intOverCap(cap)}`);
+    if (surelyOverIntDigits(op, x, y, cap)) throw tooLarge();
+    let result: bigint;
     try {
-      switch (op) {
-        case "+":
-          return x + y;
-        case "-":
-          return x - y;
-        case "*":
-          return x * y;
-        case "/":
-          if (y === 0n) throw divisionByZero();
-          return trueDivide(x, y);
-        case "%":
-          if (y === 0n) throw divisionByZero();
-          return x % y;
-        case "**":
-          // These bases have an exact power at any exponent, which `x ** y` may refuse to build.
-          if (x === 0n) return y === 0n ? 1n : 0n;
-          if (x === 1n) return 1n;
-          if (x === -1n) return y % 2n === 0n ? 1n : -1n;
-          return x ** y;
-      }
+      result = intStep(op, x, y);
     } catch (error) {
-      // The runtime refuses a bigint too large with a RangeError; yian's own errors are
-      // RangeErrors too and keep their messages.
-      if (error instanceof RangeError && !(error instanceof ExpressionError)) {
-        throw new ExpressionError("integer result is too large for this runtime");
-      }
+      // The runtime refuses a bigint too large with a RangeError.
+      if (error instanceof RangeError) throw new ExpressionError("integer result is too large for this runtime");
       throw error;
     }
+    if (overIntDigits(result, cap)) throw tooLarge();
+    return result;
   }
   const a = Number(x);
   const b = Number(y);
@@ -620,6 +609,55 @@ function applyStep(op: string, lhs: Value, rhs: Value): Value {
   return result;
 }
 
+/** Return `x op y` for two ints and `op` one of `+ - * % **`: a non-zero `y` for `%`, a non-negative one for `**`. */
+function intStep(op: string, x: bigint, y: bigint): bigint {
+  switch (op) {
+    case "+":
+      return x + y;
+    case "-":
+      return x - y;
+    case "*":
+      return x * y;
+    case "%":
+      return x % y;
+  }
+  // These bases have an exact power at any exponent, which `x ** y` may refuse to build.
+  if (x === 0n) return y === 0n ? 1n : 0n;
+  if (x === 1n) return 1n;
+  if (x === -1n) return y % 2n === 0n ? 1n : -1n;
+  return x ** y;
+}
+
+const LOG10_2 = Math.LN2 / Math.LN10;
+
+/** A lower bound of `log10(|n|)` for a non-zero `n`, from its length in hex digits (4 bits each). */
+function log10Below(n: bigint): number {
+  return ((n < 0n ? -n : n).toString(16).length - 1) * 4 * LOG10_2;
+}
+
+/**
+ * Return whether the int `n` has more than `cap` decimal digits. It writes `n` out in decimal
+ * only when its hex length leaves it within a digit or so of the cap.
+ */
+function overIntDigits(n: bigint, cap: number): boolean {
+  if (n === 0n) return false;
+  const low = log10Below(n);
+  if (low > cap + 1) return true;
+  if (low + 4 * LOG10_2 < cap - 1) return false;
+  return (n < 0n ? -n : n).toString().length > cap;
+}
+
+/**
+ * Return whether `x * y` or `x ** y` (a non-negative `y`) surely has more than `cap` digits, from
+ * the operands' sizes alone: building such a product or power can take minutes.
+ */
+function surelyOverIntDigits(op: string, x: bigint, y: bigint, cap: number): boolean {
+  if (op === "*") return x !== 0n && y !== 0n && log10Below(x) + log10Below(y) > cap + 1;
+  if (op !== "**" || x === 0n || x === 1n || x === -1n) return false;
+  // `|x| >= 2`, so `|x| ** y >= 2 ** y`; a `y` past the float range is `Infinity` here.
+  return Number(y) * Math.max(log10Below(x), LOG10_2) > cap + 1;
+}
+
 const EXACT_LIMIT = 2n ** 53n;
 
 /** Return the float nearest `x / y` (ties to even); `0n / -5n` is `-0`. */
@@ -652,7 +690,7 @@ function floatPow(x: number, n: number): number {
 /**
  * Return `-value`: an int (a bool as 0 or 1) as a `bigint`, a float as a float.
  *
- * @throws {ExpressionError} If `value` is not a number.
+ * @throws {ExpressionError} If `value` is not a number, or is an int over `YIAN_MAX_INT_DIGITS` digits.
  */
 function minus(value: Value): Value {
   const x = numeric(value);
@@ -660,6 +698,10 @@ function minus(value: Value): Value {
     throw new ExpressionError(
       `unary minus on non-number ${valueRepr(value)}: unsupported operand kind for \`-\`: \`${kindName(value)}\``,
     );
+  }
+  const cap = current().maxIntDigits;
+  if (typeof x === "bigint" && overIntDigits(x, cap)) {
+    throw new ExpressionError(`unary minus on ${valueRepr(value)} ${intOverCap(cap)}`);
   }
   return -x;
 }
@@ -740,6 +782,8 @@ class EvalExpr {
   // Comprehension variables in scope: name -> its item and its declared type (the element type of
   // its un-narrowed iterable).
   readonly #vars = new Map<string, { value: Value; type: Type | null }>();
+  // The items every comprehension of this evaluation has bound so far, for YIAN_MAX_COMPREHENSION_ITEMS.
+  #bound = 0;
 
   constructor(
     resolve: RootResolver,
@@ -1031,13 +1075,17 @@ class EvalExpr {
    * A list comprehension, as nested loops: the first iterable in the enclosing scope,
    * each later clause once per binding of the clauses before it, an `if` keeping a binding when
    * its condition is truthy, and the elem appended after the last clause. The clauses run depth
-   * first without recursion, so a long comprehension can't overflow the stack.
+   * first without recursion, so a long comprehension can't overflow the stack. The items every
+   * comprehension of one evaluation binds, in all its `for` clauses, count toward
+   * `YIAN_MAX_COMPREHENSION_ITEMS`.
    *
-   * @throws {ExpressionError} If an iterable is null, misses, or is not a list.
+   * @throws {ExpressionError} If an iterable is null, misses, or is not a list, or a binding goes
+   *   over `YIAN_MAX_COMPREHENSION_ITEMS`.
    */
   listComp(node: Tree): Value[] {
     const [elem, ...clauses] = node.children as [ExprNode, ...Tree[]];
     const out: Value[] = [];
+    const cap = current().maxComprehensionItems;
     // One entry per active `for`: its clause index, its items, the next index, and its items' type.
     const loops: { at: number; items: Value[]; k: number; type: Type | null }[] = [];
     // Move to the next binding of the innermost loop that has one; return the next clause index, or -1.
@@ -1046,6 +1094,13 @@ class EvalExpr {
         const loop = loops.at(-1)!;
         const name = String(clauses[loop.at]!.children[0]);
         if (loop.k < loop.items.length) {
+          if (++this.#bound > cap) {
+            const [, , source] = clauses[loop.at]!.children as [Token, ExprNode, Token];
+            throw new ExpressionError(
+              `comprehension \`for ${name} in ${source}\` goes over the limit of ${cap} items bound in one ` +
+                "expression (YIAN_MAX_COMPREHENSION_ITEMS)",
+            );
+          }
           this.#vars.set(name, { value: loop.items[loop.k++]!, type: loop.type });
           return loop.at + 1;
         }
@@ -1241,9 +1296,9 @@ class EvalExpr {
    * value: a top-level `undefined` is `null`, anything else goes through `fromHost`.
    *
    * @throws {ExpressionError} If `callee` is no builtin, or the call fails: arguments that don't
-   *   bind, an error the builtin throws, or a result that is no yian value
-   *   (`expression function 'f' failed: <message>`). An `ExpressionError` the builtin throws
-   *   passes through unchanged.
+   *   bind, an error the builtin throws, a result that is no yian value, or an int result over
+   *   `YIAN_MAX_INT_DIGITS` digits (`expression function 'f' failed: <message>`). An
+   *   `ExpressionError` the builtin throws passes through unchanged.
    */
   callBuiltin(callee: string, callSuffix: Tree): Value {
     const fn = TEMPLATE_FNS.get(callee);
@@ -1259,14 +1314,18 @@ class EvalExpr {
       new ExpressionError(`expression function ${reprText(callee)} failed: ${message}`, options);
     const bound = bindArguments(fn, positional, keywords);
     if (typeof bound === "string") throw failed(bound);
+    let result: Value;
     try {
-      const result = fn.call(...bound);
-      if (isShipped(fn)) return result as Value;
-      return result === undefined ? null : fromHost(result, "result");
+      const returned = fn.call(...bound);
+      if (isShipped(fn)) result = returned as Value;
+      else result = returned === undefined ? null : fromHost(returned, "result");
     } catch (error) {
       if (error instanceof ExpressionError) throw error;
       throw failed(error instanceof Error ? error.message : String(error), { cause: error });
     }
+    const cap = current().maxIntDigits;
+    if (typeof result === "bigint" && overIntDigits(result, cap)) throw failed(`${callee}() ${intOverCap(cap)}`);
+    return result;
   }
 
   // --- coalesce / default / required (short-circuit) --- //
@@ -1454,10 +1513,11 @@ export interface EvalOptions {
  * @throws {ExpressionError} On a field read the step table rejects, an unsupported node, a call to
  *   an unknown function or one that fails, an `isinstance` type absent from `types`, arithmetic or
  *   ordering over operand kinds the operator doesn't take (`null` included), a zero divisor, a NaN
- *   result, an int too large for the runtime, a subscript of anything but a list or a text, or
- *   with an index or bound that is null or not an int, an index out of range outside `|`, `:-`
- *   and `:?`, a comprehension over anything but a list (`null` or a miss included), or a
- *   strict-mode miss.
+ *   result, an int an operator or a builtin gives over `YIAN_MAX_INT_DIGITS` digits or too large
+ *   for the runtime, more comprehension items than `YIAN_MAX_COMPREHENSION_ITEMS`, a subscript of
+ *   anything but a list or a text, or with an index or bound that is null or not an int, an index
+ *   out of range outside `|`, `:-` and `:?`, a comprehension over anything but a list (`null` or a
+ *   miss included), or a strict-mode miss.
  */
 export function evalExpr(
   tree: ExprNode,

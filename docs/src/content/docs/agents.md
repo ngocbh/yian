@@ -35,6 +35,11 @@ An agent without `tools:` or `skills:` makes one model call, plus one for each r
 corrects. With them, it runs a tool loop: the model calls tools, reads their results, and calls
 again until it gives a final answer.
 
+A reply the provider cut off at the output token limit is no answer: the node fails with
+`agent.output_truncated`, whose message names the setting that raises the limit, such as
+`openai.max_output_tokens`. A cut reply that still holds a tool call whose arguments parsed runs
+it, and the loop goes on.
+
 | Field | What it holds |
 |---|---|
 | `input` | The values the prompts read, as bindings |
@@ -244,7 +249,8 @@ $ yian run extract.yaml --input text="Ada loved the new release."
   `2026-10-14` or `2026-10-14T10:30:00Z`.
 - A reply that doesn't fit stays in the conversation, followed by a correction naming the
   problem, and the model tries again, up to `retries:` times. Then the node fails with
-  `agent.output_invalid`.
+  `agent.output_invalid`, or with `agent.output_truncated` when the provider cut the last reply
+  off at the output token limit.
 - An `int` takes a whole number the model writes as a float, such as `2.0`.
 - A record reply keeps only the fields its type declares, and drops any other field without a
   correction. A [union](/types/#unions) member is stricter: a field it, or a record inside it,

@@ -11,6 +11,7 @@
 
 import { current } from "../../defaults.ts";
 import { compareCodeUnits } from "../../diagnostics.ts";
+import { YianRangeError } from "../../typesys/errors.ts";
 import { typeName } from "../../typesys/types.ts";
 import { isList, isRecord, Type, ValueKind, valueRepr, writeAsText } from "../../typesys/values.ts";
 
@@ -40,7 +41,7 @@ export interface QuestionSpec {
 }
 
 /** Thrown when a raw question list violates the authoring constraints. */
-export class QuestionSpecError extends RangeError {
+export class QuestionSpecError extends YianRangeError {
   override name = "QuestionSpecError";
 }
 

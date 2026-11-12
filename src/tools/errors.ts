@@ -12,6 +12,7 @@
  * stop retries, since a retried call repeats any side effect the failed attempt already had.
  */
 
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { jsTypeName } from "../typesys/values.ts";
 
 /** The brand every tool error carries: the list of kinds it belongs to. */
@@ -74,7 +75,7 @@ export class ReportedToolError extends Error {
   constructor(message?: string, options?: ErrorOptions & { permanent?: boolean }) {
     const permanent: unknown = options?.permanent;
     if (permanent !== undefined && typeof permanent !== "boolean") {
-      throw new TypeError(`permanent must be a boolean, not ${jsTypeName(permanent)}`);
+      throw new YianTypeError(`permanent must be a boolean, not ${jsTypeName(permanent)}`);
     }
     super(message, options);
     this[TOOL_ERROR] = permanent === true ? REPORTED_PERMANENT : REPORTED;
@@ -110,10 +111,10 @@ export class TransientToolError extends Error {
     const retryAfter: unknown = options?.retryAfter ?? null;
     if (retryAfter !== null) {
       if (typeof retryAfter !== "number") {
-        throw new TypeError(`retryAfter must be a number of seconds or null, not ${jsTypeName(retryAfter)}`);
+        throw new YianTypeError(`retryAfter must be a number of seconds or null, not ${jsTypeName(retryAfter)}`);
       }
-      if (!Number.isFinite(retryAfter)) throw new RangeError(`retryAfter must be finite, not ${retryAfter}`);
-      if (retryAfter < 0) throw new RangeError(`retryAfter must be at least 0, not ${retryAfter}`);
+      if (!Number.isFinite(retryAfter)) throw new YianRangeError(`retryAfter must be finite, not ${retryAfter}`);
+      if (retryAfter < 0) throw new YianRangeError(`retryAfter must be at least 0, not ${retryAfter}`);
     }
     super(message, options);
     this.retryAfter = retryAfter;
@@ -121,7 +122,7 @@ export class TransientToolError extends Error {
 }
 
 /** A check yian runs on a tool call's arguments or result failed; TOOL retries never retry it. */
-export class ToolCheckError extends TypeError {
+export class ToolCheckError extends YianTypeError {
   override name = "ToolCheckError";
   readonly [TOOL_ERROR]: readonly ToolErrorKind[] = CHECK;
 }

@@ -68,6 +68,7 @@ import {
   type ValuePath,
   ValueTemplate,
 } from "../../nodes/contracts.ts";
+import { YianTypeError } from "../../typesys/errors.ts";
 import { BUILTIN_TYPE_NAMES } from "../../typesys/types.ts";
 import { isRecord, jsTypeName, type Value } from "../../typesys/values.ts";
 import { CALL_HEAD, InlineCall, matchCallDirective, spanCallFlowId, splitCallsAware } from "../helpers/directives.ts";
@@ -778,7 +779,7 @@ function desugarAsserts(
         origin: assertionOriginAt === null ? null : assertionOriginAt(index),
       });
     } else {
-      throw new TypeError(`flow assertions must be strings or Assertion carriers, got ${jsTypeName(value)}`);
+      throw new YianTypeError(`flow assertions must be strings or Assertion carriers, got ${jsTypeName(value)}`);
     }
     const before = calls.length;
     const expression = desugarValue(assertion.expression, mint, calls, "assert", {

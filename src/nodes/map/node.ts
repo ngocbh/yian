@@ -21,6 +21,7 @@
  */
 
 import { reprText } from "../../diagnostics.ts";
+import { YianTypeError } from "../../typesys/errors.ts";
 import type { VariablePool } from "../../typesys/pool.ts";
 import { isList, type Value, valueRepr } from "../../typesys/values.ts";
 import { Grow, type NodeCaps, NodeKind } from "../base.ts";
@@ -129,7 +130,7 @@ export class MapNode extends ChildFlowNode {
   override forward(inputs: Record<string, unknown>, caps: NodeCaps): Grow {
     const { bindItem } = caps;
     if (bindItem === undefined) {
-      throw new TypeError(`MAP node ${reprText(this.id)} was run without the bindItem capability`);
+      throw new YianTypeError(`MAP node ${reprText(this.id)} was run without the bindItem capability`);
     }
     // Per-element call-args go raw: the spliced child START fills omitted inputs from its params'
     // defaults. The seed is the builder's only durable input; the compile-owned builder constructs

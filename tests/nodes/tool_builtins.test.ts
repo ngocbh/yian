@@ -316,6 +316,22 @@ describe("host calls", () => {
       output: { kind: "int", value: 5n },
     });
   });
+
+  test("waitResultStep refuses an answer nested past the value limit, however deep", () => {
+    const nest = (levels: number) => {
+      let value: unknown = 1;
+      for (let i = 0; i < levels; i++) value = [value];
+      return value;
+    };
+    const free = new ToolNode("send", { toolId: "codex_send" });
+    const view = heldCall();
+    expect(free.waitResultStep(view, { output: nest(100) })).toMatchObject({ kind: "tool_result" });
+    for (const levels of [101, 200_000]) {
+      expect(() => free.waitResultStep(view, { output: nest(levels) })).toThrow(
+        `complete('r1/send') output at ${"[0]".repeat(100)}: value nests deeper than 100 levels`,
+      );
+    }
+  });
 });
 
 describe("ask", () => {

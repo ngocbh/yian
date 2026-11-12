@@ -12,6 +12,7 @@
 
 import { current } from "../defaults.ts";
 import { redirectDetail } from "../platform.ts";
+import { YianTypeError } from "../typesys/errors.ts";
 import { scrub } from "./auth.ts";
 import { JSONBoundError, type JsonValue, parseJson } from "../typesys/json.ts";
 
@@ -133,7 +134,7 @@ export class ProviderError extends Error {
 
   constructor(kind: ErrorKind, message: string, options: ProviderErrorOptions = {}) {
     // An unknown kind is refused.
-    if (!ERROR_KINDS.includes(kind)) throw new TypeError(`unknown provider error kind: ${String(kind)}`);
+    if (!ERROR_KINDS.includes(kind)) throw new YianTypeError(`unknown provider error kind: ${String(kind)}`);
     super(message);
     this.kind = kind;
     this.status = options.status ?? null;

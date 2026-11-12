@@ -14,6 +14,7 @@ import { McpServer, McpServerClosed, type McpServerSpec, mcpServer } from "../..
 import { asToolGrant, expandGrants } from "../../src/tools/grants.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { killMarkers, stdioOptions, strayProcesses } from "../helpers/mcp_helpers.ts";
+import { thrownClass } from "../helpers/own_errors.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-mcp-toolset-"));
 const marker = join(dir, "marker");
@@ -75,7 +76,7 @@ function thrown(fn: () => unknown, kind: typeof TypeError | typeof RangeError): 
   try {
     fn();
   } catch (error) {
-    expect((error as Error).constructor).toBe(kind);
+    expect((error as Error).constructor).toBe(thrownClass(kind));
     return (error as Error).message;
   }
   throw new Error("expected an error");

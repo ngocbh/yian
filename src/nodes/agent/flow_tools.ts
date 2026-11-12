@@ -12,6 +12,7 @@
 
 import { type Failure, reprText } from "../../diagnostics.ts";
 import { FunctionTool } from "../../tools/function_tools.ts";
+import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import type { JsonObject } from "../../typesys/json.ts";
 import { cutText, isRecord } from "../../typesys/values.ts";
 import { toolText } from "./results.ts";
@@ -102,12 +103,12 @@ export function checkedFlowTools(nodeId: string, tools: readonly FlowTool[]): re
   const checked = tools.map((tool) => {
     const { name, description, parameters, child } = isRecord(tool) ? tool : ({} as Partial<FlowTool>);
     if (typeof name !== "string" || name === "" || typeof description !== "string" || description === "") {
-      throw new TypeError(`AGENT node ${reprText(nodeId)}: a flow tool needs a name and a description`);
+      throw new YianTypeError(`AGENT node ${reprText(nodeId)}: a flow tool needs a name and a description`);
     }
     if (!isRecord(parameters) || child === undefined || child === null) {
-      throw new TypeError(`AGENT node ${reprText(nodeId)}: flow tool ${reprText(name)} needs its parameters and flow`);
+      throw new YianTypeError(`AGENT node ${reprText(nodeId)}: flow tool ${reprText(name)} needs its parameters and flow`);
     }
-    if (names.has(name)) throw new RangeError(`AGENT node ${reprText(nodeId)} grants flow ${reprText(name)} twice`);
+    if (names.has(name)) throw new YianRangeError(`AGENT node ${reprText(nodeId)} grants flow ${reprText(name)} twice`);
     names.add(name);
     return Object.freeze({ name, description, parameters, child });
   });

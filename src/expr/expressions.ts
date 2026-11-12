@@ -16,6 +16,7 @@
 
 import { current } from "../defaults.ts";
 import { compareCodeUnits, getCloseMatches, reprText } from "../diagnostics.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import {
   BUILTIN_TYPE_NAMES,
   buildValueAs,
@@ -1996,7 +1997,7 @@ export type RefRename = (path: string) => RefRenamed | null;
  */
 export function namesEnd(node: Tree, used: number): number {
   const names = 1 + splitReference(node).steps.length;
-  if (!Number.isInteger(used) || used < 1 || used > names) throw new RangeError(`a rename used ${used} of ${names} names`);
+  if (!Number.isInteger(used) || used < 1 || used > names) throw new YianRangeError(`a rename used ${used} of ${names} names`);
   const last = node.children[used - 1]!;
   return last instanceof Tree ? (last.children[0] as Token).endPos : (last as Token).endPos;
 }

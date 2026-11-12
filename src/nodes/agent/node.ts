@@ -34,6 +34,7 @@ import { grantedMemorySpecs, MEMORY_SCOPE_LABEL, memoryTools } from "../../memor
 import type { FunctionTool } from "../../tools/function_tools.ts";
 import { asToolGrant, type MemoryGrant, type ToolGrant, visibleToolName } from "../../tools/grants.ts";
 import { ToolSet } from "../../tools/registry.ts";
+import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import { type JsonObject, logJson } from "../../typesys/json.ts";
 import type { VariablePool } from "../../typesys/pool.ts";
 import {
@@ -127,7 +128,7 @@ const CONFIG_STEP_KIND = "llm_config";
  * @throws CapabilityFault carrying a TypeError when the evaluator gave no steer inbox.
  */
 function openSteerInbox(caps: NodeCaps, inbox: string): SteerInbox {
-  if (caps.openSteerInbox === undefined) throw new CapabilityFault(new TypeError("the evaluator gave no steer inbox"));
+  if (caps.openSteerInbox === undefined) throw new CapabilityFault(new YianTypeError("the evaluator gave no steer inbox"));
   return caps.openSteerInbox(inbox);
 }
 
@@ -176,7 +177,7 @@ export function authoredPrompt(
  */
 function checkPromptItems(nodeId: string, items: readonly unknown[]): void {
   const where = `AGENT node ${reprText(nodeId)}`;
-  if (items.length === 0) throw new RangeError(`${where}: a list prompt must hold at least one item`);
+  if (items.length === 0) throw new YianRangeError(`${where}: a list prompt must hold at least one item`);
   items.forEach((item, index) => {
     const fields: Readonly<Record<string, unknown>> = isRecord(item) ? item : {};
     const keys = Object.keys(fields).sort(compareCodeUnits).join(",");
@@ -186,11 +187,11 @@ function checkPromptItems(nodeId: string, items: readonly unknown[]): void {
       (typeof fields.text === "string" || fields.text instanceof Verbatim);
     const splice = keys === "splice" && typeof fields.splice === "string";
     if (!message && !splice) {
-      throw new TypeError(`${where}: prompt[${index}] must be {role: user or assistant, text} or {splice: <name>}`);
+      throw new YianTypeError(`${where}: prompt[${index}] must be {role: user or assistant, text} or {splice: <name>}`);
     }
   });
   if ((items.at(-1) as Readonly<Record<string, unknown>>).role === "assistant") {
-    throw new RangeError(`${where}: the last message of a list prompt must be from the user`);
+    throw new YianRangeError(`${where}: the last message of a list prompt must be from the user`);
   }
 }
 
@@ -491,22 +492,22 @@ export class AgentNode extends Node {
     this.prompt = prompt ?? "";
     const systemText = systemPrompt instanceof Verbatim ? systemPrompt.text : systemPrompt;
     if (systemText !== null && (typeof systemText !== "string" || systemText === "")) {
-      throw new TypeError(`AGENT node ${reprText(nodeId)}: system_prompt must be a non-empty string or null`);
+      throw new YianTypeError(`AGENT node ${reprText(nodeId)}: system_prompt must be a non-empty string or null`);
     }
     this.systemPrompt = systemPrompt;
     this.tools = (tools ?? []).map(asToolGrant);
     if (memoryInputs !== null && !(isList(memoryInputs) && memoryInputs.every((input) => typeof input === "string"))) {
-      throw new TypeError(`AGENT node ${reprText(nodeId)}: memoryInputs must be a list of input names`);
+      throw new YianTypeError(`AGENT node ${reprText(nodeId)}: memoryInputs must be a list of input names`);
     }
     this.memoryInputs = Object.freeze([...(memoryInputs ?? [])]);
     this.flowTools = checkedFlowTools(nodeId, flowTools ?? []);
     for (const { name } of this.flowTools) {
       if (!this.tools.some((grant) => grant.kind === "name" && grant.name === name)) {
-        throw new RangeError(`AGENT node ${reprText(nodeId)}: flow tool ${reprText(name)} isn't granted by name in tools`);
+        throw new YianRangeError(`AGENT node ${reprText(nodeId)}: flow tool ${reprText(name)} isn't granted by name in tools`);
       }
     }
     if (this.tools.some((grant) => grant.kind === "name" && grant.name === "builtin_tools")) {
-      throw new RangeError(
+      throw new YianRangeError(
         "builtin_tools belonged to the removed native Codex integration. " +
           "Remove it and grant registered Yian tools explicitly.",
       );
@@ -520,7 +521,7 @@ export class AgentNode extends Node {
       this.ownLlmConfig = { ...llmConfig };
       this.llmConfig = llmConfig;
     } else {
-      throw new TypeError(
+      throw new YianTypeError(
         `AGENT node ${reprText(nodeId)}: llm_config must be a record, a ValueTemplate, a Binding or null`,
       );
     }
@@ -531,15 +532,15 @@ export class AgentNode extends Node {
     this.validateSkills();
     this.validateVariables();
     if (typeof steerInbox !== "boolean") {
-      throw new TypeError(`AGENT node ${reprText(nodeId)}: steerInbox must be a bool`);
+      throw new YianTypeError(`AGENT node ${reprText(nodeId)}: steerInbox must be a bool`);
     }
     this.steerInbox = steerInbox;
     this.readsSteerInbox = steerInbox;
     if (steerRender !== null && (typeof steerRender !== "string" || steerRender === "")) {
-      throw new TypeError(`AGENT node ${reprText(nodeId)}: steer render must be non-empty text or null`);
+      throw new YianTypeError(`AGENT node ${reprText(nodeId)}: steer render must be non-empty text or null`);
     }
     if (steerRender !== null && !steerInbox) {
-      throw new RangeError(`AGENT node ${reprText(nodeId)}: a steer render needs a steer inbox`);
+      throw new YianRangeError(`AGENT node ${reprText(nodeId)}: a steer render needs a steer inbox`);
     }
     this.steerRender = steerRender;
     this.llmConfigLabel = null;
@@ -808,20 +809,20 @@ export class AgentNode extends Node {
 
   /** Require canonical, uniquely named declarations with valid typed defaults. */
   private validateVariables(): void {
-    if (!isList(this.variables)) throw new TypeError("agent variables must be a list of Parameter values");
+    if (!isList(this.variables)) throw new YianTypeError("agent variables must be a list of Parameter values");
     const names = new Set<string>();
     for (const variable of this.variables) {
-      if (!isExactly(variable, Parameter)) throw new TypeError("agent variables must contain exact Parameter values");
+      if (!isExactly(variable, Parameter)) throw new YianTypeError("agent variables must contain exact Parameter values");
       if (typeof variable.name !== "string" || variable.name === "") {
-        throw new TypeError("variable names must be non-empty strings");
+        throw new YianTypeError("variable names must be non-empty strings");
       }
-      if (names.has(variable.name)) throw new RangeError(`duplicate variable name ${reprText(variable.name)}`);
+      if (names.has(variable.name)) throw new YianRangeError(`duplicate variable name ${reprText(variable.name)}`);
       names.add(variable.name);
       if (!isExactly(variable.contract, ValueContract)) {
-        throw new TypeError(`variable ${reprText(variable.name)} requires an exact ValueContract`);
+        throw new YianTypeError(`variable ${reprText(variable.name)} requires an exact ValueContract`);
       }
       if (variable.hasDefault !== true || variable.required !== false) {
-        throw new RangeError(`variable ${reprText(variable.name)} requires a default and required=false`);
+        throw new YianRangeError(`variable ${reprText(variable.name)} requires a default and required=false`);
       }
       variable.contract.type.validateShape();
       buildValueAs(variable.contract.type, variable.default);
@@ -860,7 +861,7 @@ export class AgentNode extends Node {
     if (!Object.hasOwn(this.env, "max_tool_iterations")) return current().agentMaxToolIterations;
     const raw = this.env.max_tool_iterations;
     if (!isMaxToolIterations(raw)) {
-      throw new RangeError(
+      throw new YianRangeError(
         `AGENT node ${reprText(this.id)}: env max_tool_iterations must be a positive int ` +
           `or -1 (no cap), got ${valueRepr(raw)}`,
       );
@@ -1015,7 +1016,7 @@ export class AgentNode extends Node {
       let text: string;
       if (MemoryRef.isMemoryRef(value)) text = renderRecall(value.recall, this.hintTool(value, inputs));
       else if (declared && value === null) text = renderRecall(null, null);
-      else if (declared) throw new TypeError(`AGENT node ${reprText(this.id)}: memory input ${reprText(name)} holds no memory`);
+      else if (declared) throw new YianTypeError(`AGENT node ${reprText(this.id)}: memory input ${reprText(name)} holds no memory`);
       else continue;
       setField(record, name, text);
       types.set(name, Type.scalar(ValueKind.STRING));
@@ -1144,7 +1145,7 @@ export class AgentNode extends Node {
     // By value: a recorded config comes back from the run log as a new record.
     if (recorded !== null && logJson(recorded) !== logJson(config)) {
       throw new CapabilityFault(
-        new RangeError(
+        new YianRangeError(
           `node ${reprText(this.callTime!.path)} llm_config: recorded config differs from the ` +
             "recomputed one; resume the run with the flow and yian version that started it",
         ),
@@ -1191,7 +1192,7 @@ export class AgentNode extends Node {
   ): AgentPrompt {
     const { signal, localTypes = null } = options;
     const colliding = collidingVariable(this, inputs);
-    if (colliding !== null) throw new RangeError(`variable ${reprText(colliding)} collides with an input name`);
+    if (colliding !== null) throw new YianRangeError(`variable ${reprText(colliding)} collides with an input name`);
     const variables = this.resolveVariables();
     const record = { ...inputs, ...variables } as ValueRecord;
     // The inputs' declared types, and each variable's contract.

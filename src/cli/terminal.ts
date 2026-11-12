@@ -11,6 +11,7 @@ import type { Parameter } from "../nodes/contracts.ts";
 import type { QuestionSpec } from "../nodes/tool/questions.ts";
 import type { ToolContext } from "../tools/context.ts";
 import type { AskUserRequest } from "../tools/registry.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { type JsonValue, JSONDecodeError, parseJson } from "../typesys/json.ts";
 import {
   buildValueAs,
@@ -1579,9 +1580,9 @@ export class Terminal {
     options: { initial?: string; signal?: AbortSignal; cancellable?: boolean } = {},
   ): Promise<string | null> {
     // questionary's select refuses both too.
-    if (choices.length === 0) throw new RangeError("askChoice needs at least one choice");
+    if (choices.length === 0) throw new YianRangeError("askChoice needs at least one choice");
     if (options.initial !== undefined && !choices.includes(options.initial)) {
-      throw new RangeError(`askChoice's initial ${JSON.stringify(options.initial)} is not one of the choices`);
+      throw new YianRangeError(`askChoice's initial ${JSON.stringify(options.initial)} is not one of the choices`);
     }
     const initial = options.initial === undefined ? 0 : choices.indexOf(options.initial);
     const escapes = options.cancellable === true;
@@ -1605,7 +1606,7 @@ export class Terminal {
     choices: readonly PickChoice[],
     options: { initial?: number; signal?: AbortSignal } = {},
   ): Promise<number | null> {
-    if (choices.length === 0) throw new RangeError("askPick needs at least one choice");
+    if (choices.length === 0) throw new YianRangeError("askPick needs at least one choice");
     const shown = choices.map((choice) => ({
       title: visible(choice.title),
       ...(choice.detail === undefined ? {} : { detail: visible(choice.detail) }),
@@ -1692,7 +1693,7 @@ export class Terminal {
    */
   async approve(request: ApproveRequest): Promise<string | null> {
     const { choices, signal } = request;
-    if (choices.length === 0) throw new RangeError("approve needs at least one choice");
+    if (choices.length === 0) throw new YianRangeError("approve needs at least one choice");
     // Only a person at a terminal can approve: piped input could approve on their behalf.
     if (this.#plain || this.#input.isTTY !== true || signal?.aborted) return null;
     // A sequence is shown, not dropped: what the user approves must not hide anything it holds.
@@ -1711,7 +1712,7 @@ export class Terminal {
     const titles = choices.map(shown);
     if (request.preselect !== undefined && !choices.includes(request.preselect)) {
       const named = JSON.stringify(request.preselect);
-      throw new RangeError(`approve's preselect ${named} is not one of the choices`);
+      throw new YianRangeError(`approve's preselect ${named} is not one of the choices`);
     }
     const initial = request.preselect === undefined ? 0 : choices.indexOf(request.preselect);
     let ended: { value: number } | { stop: StopReason };
@@ -2313,7 +2314,7 @@ export function inputLabel(decl: Parameter): string {
 }
 
 /** A user mistake in a list/object editor answer, shown in the editor for correction. */
-class StructuredInputError extends RangeError {
+class StructuredInputError extends YianRangeError {
   override name = "StructuredInputError";
 }
 
@@ -2346,7 +2347,7 @@ export function parseStructuredInput(raw: string, type: Type, name: string): Jso
       throw new StructuredInputError("Expected a JSON object");
     }
   } else {
-    throw new TypeError("structured prompt type must be a list or object");
+    throw new YianTypeError("structured prompt type must be a list or object");
   }
   try {
     buildValueAs(type, parsed);

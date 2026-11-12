@@ -39,6 +39,7 @@ import {
   type ValuePath,
   ValueTemplate,
 } from "../nodes/contracts.ts";
+import { YianTypeError } from "../typesys/errors.ts";
 import {
   buildValue,
   isList,
@@ -81,7 +82,7 @@ export function projectOutputContract(contract: OutputContract, fields: readonly
     return projectOutputContract(entry[1], remaining);
   }
   if (!isExactly(contract, ValueContract)) {
-    throw new TypeError(
+    throw new YianTypeError(
       `output contract must be an exact ValueContract or PartialRecordContract, got ${jsTypeName(contract)}`,
     );
   }
@@ -136,7 +137,7 @@ export function assertExactContracts(
 /** @throws TypeError when `contract` is not an exact `ValueContract` or `PartialRecordContract`. */
 function checkProducerContract(name: string, contract: unknown): void {
   if (!isExactly(contract, ValueContract) && !isExactly(contract, PartialRecordContract)) {
-    throw new TypeError(
+    throw new YianTypeError(
       "output producer contracts must be ValueContract or PartialRecordContract values, " +
         `got ${jsTypeName(contract)} for ${reprText(name)}`,
     );
@@ -146,7 +147,7 @@ function checkProducerContract(name: string, contract: unknown): void {
 /** @throws TypeError when `contract` is not an exact `ValueContract`. */
 function checkFlowInputContract(name: string, contract: unknown): void {
   if (!isExactly(contract, ValueContract)) {
-    throw new TypeError(
+    throw new YianTypeError(
       `flow input contracts must be exact ValueContract values, got ${jsTypeName(contract)} for ${reprText(name)}`,
     );
   }
@@ -613,7 +614,7 @@ function isDirectReference(expression: ExprNode): expression is Tree {
 export function combineOutputContracts(fields: ReadonlyMap<string, OutputContract | null>): OutputContract {
   for (const [name, contract] of fields) {
     if (contract !== null && !isExactly(contract, ValueContract) && !isExactly(contract, PartialRecordContract)) {
-      throw new TypeError(
+      throw new YianTypeError(
         "output fields must contain ValueContract, PartialRecordContract, " +
           `or null values, got ${jsTypeName(contract)} for ${reprText(name)}`,
       );

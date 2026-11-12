@@ -24,6 +24,7 @@
 
 import { reprText } from "../../diagnostics.ts";
 import { type OutputContract, type ValueContract, type ValuePath, ValueTemplate } from "../../nodes/contracts.ts";
+import { YianRangeError } from "../../typesys/errors.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import { isList, isRecord, type Type, ValueKind } from "../../typesys/values.ts";
 import type { LoadDiagnostics } from "../helpers/errors.ts";
@@ -76,7 +77,7 @@ export class ValueEntryDescriptor extends CodeDescriptor {
       env: Object.keys(this.env).length,
     };
     for (const [name, count] of Object.entries(carried)) {
-      if (count > 0) throw new RangeError(`value entry ${reprText(this.id)} can't carry ${reprText(name)}`);
+      if (count > 0) throw new YianRangeError(`value entry ${reprText(this.id)} can't carry ${reprText(name)}`);
     }
   }
 

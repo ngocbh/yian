@@ -16,6 +16,7 @@ import { reprText, shellQuote } from "../diagnostics.ts";
 import { homeDir, isSystemError, warn as platformWarn } from "../platform.ts";
 import { type McpServer, mcpServer } from "../tools/mcp.ts";
 import { RESERVED_TOOL_NAMES } from "../tools/registry.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import { JSONDecodeError, type JsonObject, type JsonValue, parseJson } from "../typesys/json.ts";
 import { type Value, writeAsJson, writeAsText } from "../typesys/values.ts";
 import { osReason } from "./utils.ts";
@@ -38,7 +39,7 @@ const TYPES: readonly string[] = ["stdio", "http", "streamable-http"];
 const REFERENCE = /\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}$]*))?\}|\$\{/g;
 
 /** An MCP config file can't be read; the message names the file and server (and field). */
-export class McpConfigError extends RangeError {
+export class McpConfigError extends YianRangeError {
   override name = "McpConfigError";
 }
 

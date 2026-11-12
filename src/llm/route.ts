@@ -1,5 +1,6 @@
 /** Routes: where a model call goes and how it authenticates. */
 
+import { YianTypeError } from "../typesys/errors.ts";
 import { type Auth, checkConnectionHeaderValue } from "./auth.ts";
 
 // An RFC 7230 token.
@@ -52,7 +53,7 @@ export class Route {
     // and host header values may be secrets.
     for (const [name, value] of Object.entries(this.headers)) {
       if (!HEADER_NAME.test(name)) {
-        throw new TypeError(`route header name ${JSON.stringify(name)} is not a valid HTTP header name`);
+        throw new YianTypeError(`route header name ${JSON.stringify(name)} is not a valid HTTP header name`);
       }
       checkConnectionHeaderValue(name, value);
     }

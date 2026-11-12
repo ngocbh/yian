@@ -55,6 +55,7 @@ import { wakeAt } from "../runtime/waits.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { pending, TAKE } from "../tools/context.ts";
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import { builtinType } from "../typesys/types.ts";
 import { isInboxType, typeEquals, type Value, writeAsText } from "../typesys/values.ts";
 import {
@@ -599,7 +600,7 @@ export class ChildRuns {
   /** @throws {RangeError} When no child has the id. */
   #child(id: string): Child {
     const child = this.#children.get(id);
-    if (child === undefined) throw new RangeError(`no run '${id}' in this chat`);
+    if (child === undefined) throw new YianRangeError(`no run '${id}' in this chat`);
     return child;
   }
 

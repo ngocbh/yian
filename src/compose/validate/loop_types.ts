@@ -24,6 +24,7 @@ import {
   ValueTemplate,
 } from "../../nodes/contracts.ts";
 import { LoopNode } from "../../nodes/loop/node.ts";
+import { YianTypeError } from "../../typesys/errors.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import {
   buildValueAs,
@@ -121,7 +122,7 @@ export function checkLoopTypeContract(
       !isExactly(loopContract, ValueContract) &&
       !isExactly(loopContract, PartialRecordContract)
     ) {
-      throw new TypeError(
+      throw new YianTypeError(
         `node ${reprText(nodeId)} output_contract must be an exact ValueContract, PartialRecordContract, ` +
           `or null, got ${jsTypeName(loopContract)}`,
       );
@@ -150,7 +151,7 @@ export function checkLoopTypeContract(
       if (sourceContract === null) continue; // coalesce or opaque seed source, or a literal never output: lenient
       if (isExactly(sourceContract, PartialRecordContract)) continue; // no exact type to compare
       if (!isExactly(sourceContract, ValueContract)) {
-        throw new TypeError(
+        throw new YianTypeError(
           "resolved loop source contract must be ValueContract, PartialRecordContract, or null",
         );
       }

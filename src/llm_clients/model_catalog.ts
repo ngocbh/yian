@@ -3,6 +3,7 @@
  */
 
 import { compareCodeUnits } from "../diagnostics.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import { table } from "./provider_blocks.ts";
 
 /** A model choice: the label shown in a picker and the model id it selects. */
@@ -187,7 +188,7 @@ export function getModelOptions(provider: string, mode: string): readonly ModelO
   const key = provider.toLowerCase();
   const modes = Object.hasOwn(MODEL_OPTIONS, key) ? MODEL_OPTIONS[key]! : undefined;
   if (modes === undefined || !Object.hasOwn(modes, mode)) {
-    throw new RangeError(`unknown model options: ${key}/${mode}`);
+    throw new YianRangeError(`unknown model options: ${key}/${mode}`);
   }
   return modes[mode]!;
 }

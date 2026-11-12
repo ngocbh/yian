@@ -495,8 +495,8 @@ const CASES: Case[] = [
     expect: {
       error: AuthError,
       message:
-        "This run's openai API key came from the host's llm_config.api_key and is not recorded; " +
-        "pass apiKey to advance",
+        "This run's openai API key came from the host's llmConfig.api_key and is not recorded; " +
+        "pass it to advance as apiKey",
       at: "build",
     },
   },

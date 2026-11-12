@@ -142,7 +142,7 @@ test("resume sends the key passed again and records none of it", async () => {
   expectHidden(path, [events, result], [SENTINEL]);
 });
 
-describe("resume without the key fails instead of reading the environment", () => {
+describe("resume without the key is refused instead of reading the environment", () => {
   test.each([
     ["VLLM_API_KEY", VLLM],
     ["ANTHROPIC_API_KEY", { provider: "anthropic", model: "claude-sonnet-4-5", api_key: SENTINEL }],
@@ -150,13 +150,17 @@ describe("resume without the key fails instead of reading the environment", () =
   ])("%s", async (name, llmConfig) => {
     const path = join(fresh(), "run.jsonl");
     await interruptedRun(path, llmConfig);
+    const before = readFileSync(path);
     const keyed = envWith({ [name]: "sk-environment-key" });
     const models = recording(keyed, chatText("ok"));
-    const result = await advance({ log: path, models, env: keyed });
-    expect(result.status).toBe("failed");
-    expect(result.failure!.message).toContain("api_key");
+    const error = await advance({ log: path, models, env: keyed }).then(
+      () => null,
+      (reason: unknown) => reason,
+    );
+    expect(error).toBeInstanceOf(RangeError);
+    expect((error as Error).message).toContain("advance({ log, apiKey })");
     expect(models.requests).toEqual([]);
-    expect(readFileSync(path, "utf8")).not.toContain(SENTINEL);
+    expect(readFileSync(path).equals(before)).toBe(true);
   });
 });
 

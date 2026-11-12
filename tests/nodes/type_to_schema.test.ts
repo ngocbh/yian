@@ -1373,7 +1373,7 @@ nodes:
   a:
     kind: agent
     prompt: say anything
-    output: Any
+    output: !Any
 output: \${a.output}
 `;
 

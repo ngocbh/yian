@@ -16,7 +16,7 @@ flow: |
   nodes:
     worker:
       kind: code
-      output: object
+      output: !object
       code: "return {...inputs}"
       input:
         qty: ${input.qty}

@@ -18,17 +18,17 @@ flow: |
       kind: code
       code: |
         return "one"
-      output: str
+      output: !str
     two:
       kind: code
       code: |
         return "two"
-      output: str
+      output: !str
     other:
       kind: code
       code: |
         return "other"
-      output: str
+      output: !str
   output: ${one.output | two.output | other.output}
 inputs:
   n: 2

@@ -185,7 +185,7 @@ test("an ask nobody answers by its deadline gives null for Optional(T), else fai
       const failure = (next.state.result as RunFailed).failure;
       expect(failure.code).toBe("tool.timeout");
       expect(failure.message).toBe(
-        "TOOL node 'lead' (ask): nobody answered by 2026-10-23T01:00:00.000Z; declare output: Optional(...) to route on a timeout",
+        "TOOL node 'lead' (ask): nobody answered by 2026-10-23T01:00:00.000Z; declare `output: !Optional(...)` to route on a timeout",
       );
     }
   }

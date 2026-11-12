@@ -356,7 +356,7 @@ nodes:
   pick:
     kind: agent
     prompt: Pick.
-    output: str
+    output: !str
     llm_config: {model: pick-model}
   c:
     kind: call

@@ -56,7 +56,7 @@ id: hello
 name: hello
 input:
   name: !str
-output: str
+output: !str
 kind: agent
 prompt: Write a one-sentence greeting for ${name}.
 ```

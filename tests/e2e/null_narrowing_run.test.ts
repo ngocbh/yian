@@ -32,7 +32,7 @@ nodes:
     code: ${ECHO}
     input:
       topic: \${input.s}
-    output: Optional(str)
+    output: !Optional(str)
   gate:
     kind: case
     cases:
@@ -45,7 +45,7 @@ nodes:
     code: ${ECHO}
     input:
       topic: skipped
-    output: str
+    output: !str
 output: \${use.output :- skip.output}
 defs:
   take:
@@ -57,7 +57,7 @@ defs:
         code: ${ECHO}
         input:
           topic: \${input.v}
-        output: str
+        output: !str
     output: \${d.output}
   take_each:
     input:
@@ -69,7 +69,7 @@ defs:
         code: ${ECHO}
         input:
           topic: \${input.v}
-        output: str
+        output: !str
     output: \${d.output}
 `;
 
@@ -105,7 +105,7 @@ defs:
         code: ${ECHO}
         input:
           topic: \${input.item.qty}
-        output: int
+        output: !int
     output: \${d.output}
 nodes:
   gate:
@@ -124,7 +124,7 @@ nodes:
     code: ${ECHO}
     input:
       topic: 0
-    output: int
+    output: !int
 output: \${use.output :- skip.output}
 `;
 

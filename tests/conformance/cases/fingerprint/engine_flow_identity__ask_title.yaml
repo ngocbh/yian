@@ -10,7 +10,7 @@ flow: |
       node_name: First title
       input:
         prompt: answer
-      output: str
+      output: !str
   output: ${node.output}
 other: |
   id: human
@@ -22,7 +22,7 @@ other: |
       node_name: Second title
       input:
         prompt: answer
-      output: str
+      output: !str
   output: ${node.output}
 expect:
   fingerprint: different

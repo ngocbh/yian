@@ -8,13 +8,13 @@ flow: |
       kind: tool
       tool_id: size
       output:
-        qty: int
+        qty: !int
     use:
       kind: tool
       tool_id: use
       input:
         qty: ${size.output.qty}
-      output: int
+      output: !int
   output: ${use.output}
 other: |
   id: typed
@@ -24,13 +24,13 @@ other: |
       kind: tool
       tool_id: size
       output:
-        qty: int
+        qty: !int
     use:
       kind: tool
       tool_id: use
       input:
         qty: !int ${size.output.qty}
-      output: int
+      output: !int
   output: ${use.output}
 expect:
   fingerprint: different

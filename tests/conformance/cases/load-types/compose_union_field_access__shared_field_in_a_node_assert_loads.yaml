@@ -17,7 +17,7 @@ flow: |
       kind: code
       input:
         x: ${input.s}
-      output: Decision
+      output: !Decision
       code: "return null"
       asserts:
         - output.note != ''

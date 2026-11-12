@@ -35,7 +35,7 @@ nodes:
     kind: code
     input:
       text: ${input.text}
-    output: int
+    output: !int
     code: |
       const words: string[] = inputs.text.split(/\s+/).filter(Boolean);
       return words.length;
@@ -64,7 +64,7 @@ count:
   kind: code
   input:
     text: ${input.text}
-  output: int
+  output: !int
   code: ./text.ts:countWords
 ```
 
@@ -139,8 +139,8 @@ quote:
   input:
     symbol: ${input.symbol}
   output:
-    symbol: str
-    price: float
+    symbol: !str
+    price: !float
 ```
 
 | Field | Required | What it holds |

@@ -11,7 +11,7 @@ flow: |
       kind: code         # ERROR: missing `code:`
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
   output: ${calc.output}
 expect:
   load:

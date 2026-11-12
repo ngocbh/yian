@@ -44,7 +44,7 @@ nodes:
     tools: [lookup]
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
     prompt: "research \${topic}"
 output: \${writer.output}
 `;
@@ -61,14 +61,14 @@ nodes:
     tools: [lookup]
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
     prompt: "left \${topic}"
   right:
     kind: agent
     tools: [lookup]
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
     prompt: "right \${topic}"
 output:
   left: \${left.output}

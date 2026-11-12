@@ -33,6 +33,7 @@ import {
   parametersFromYaml,
   runCase,
 } from "../helpers/declarations.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 const DECISION_TYPEDEFS = {
   Buy: { action: "Literal(buy)", qty: "int" },
@@ -267,11 +268,11 @@ test("a non-exhaustive on over the tag names the missing member", () => {
     "  Decision: Union(Buy, Hold, Sell)\n" +
     "input:\n  s: !str\n" +
     "nodes:\n" +
-    "  d:\n    kind: code\n    input:\n      x: ${input.s}\n    output: Decision\n    code: return None\n" +
+    "  d:\n    kind: code\n    input:\n      x: ${input.s}\n    output: !Decision\n    code: return None\n" +
     "  route:\n    kind: case\n    on: ${d.output.action}\n    cases:\n" +
     "      - when: buy\n        then: sink\n" +
     "      - when: sell\n        then: sink\n" +
-    "  sink:\n    kind: code\n    input:\n      x: ${input.s}\n    output: str\n    code: return 'x'\n" +
+    "  sink:\n    kind: code\n    input:\n      x: ${input.s}\n    output: !str\n    code: return 'x'\n" +
     "output: ${sink.output}\n";
 
   expect(loadError(() => assembleText(text)).message).toContain('enum tag(s) ["hold"] not covered');
@@ -295,7 +296,7 @@ test("a loop carrying a union keeps the non-record error", () => {
     "      step:\n" +
     "        kind: code\n" +
     "        input:\n          action: ${input.action}\n" +
-    "        output: Decision\n" +
+    "        output: !Decision\n" +
     "        code: return null\n" +
     "    output: ${step.output}\n" +
     "output: ${drive.output}\n";
@@ -357,14 +358,14 @@ const flow = (rest: string, output = "Decision", typedefs = FLOW_TYPEDEFS) =>
   "id: p\nname: p\n" +
   typedefs +
   "input:\n  s: !str\nnodes:\n" +
-  `  d:\n    kind: code\n    input:\n      x: \${input.s}\n    output: ${output}\n    code: return None\n` +
+  `  d:\n    kind: code\n    input:\n      x: \${input.s}\n    output: ${outputTag(output)}\n    code: return None\n` +
   rest;
 
 /** Return the message of the `LoadError` loading `text` with `children` as its defs raises. */
 const failure = (text: string, children: ChildFlows = {}) =>
   loadError(() => assembleText(text, "flow.yaml", { children })).message;
 
-const SINK = "  sink:\n    kind: code\n    input:\n      x: ${input.s}\n    output: str\n    code: return 'x'\n";
+const SINK = "  sink:\n    kind: code\n    input:\n      x: ${input.s}\n    output: !str\n    code: return 'x'\n";
 
 test("a member-only field of a tagged union is a load error", () => {
   expect(failure(flow("output:\n  q: ${d.output.qty}\n"))).toContain(`flow output from: ${TAGGED_QTY}`);
@@ -410,7 +411,7 @@ test("a member-only field of a typed flow input is a load error", () => {
     "id: p\nname: p\n" +
     FLOW_TYPEDEFS +
     "input:\n  d: !Decision\nnodes:\n" +
-    "  step:\n    kind: code\n    input:\n      v: ${input.d.qty}\n    output: str\n    code: return 'x'\n" +
+    "  step:\n    kind: code\n    input:\n      v: ${input.d.qty}\n    output: !str\n    code: return 'x'\n" +
     "output: ${step.output}\n";
   expect(failure(text)).toContain(
     "node 'step' input 'v' from: reference ${input.d.qty} reads field 'qty', which only " +
@@ -460,7 +461,7 @@ const inlineChild = (field: string) =>
   flow(
     "  c:\n    kind: call\n    input:\n      v: ${d.output}\n    nodes:\n" +
       `      inner:\n        kind: code\n        input:\n          w: \${input.v.${field}}\n` +
-      "        output: str\n        code: return 'x'\n" +
+      "        output: !str\n        code: return 'x'\n" +
       "    output: ${inner.output}\noutput: ${c.output}\n",
   );
 

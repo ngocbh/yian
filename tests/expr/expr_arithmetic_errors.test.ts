@@ -29,7 +29,7 @@ nodes:
     kind: code
     input:
       v: ${value}
-    output: str
+    output: !str
     code: return String(inputs.v)
 output: \${n.output}
 `;
@@ -89,7 +89,7 @@ nodes:
     kind: code
     input:
       y: ${binding}
-    output: str
+    output: !str
     code: return String(inputs.y)
 output: \${c.output}
 `;

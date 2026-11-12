@@ -11,7 +11,7 @@ flow: |
         run:
           kind: tool
           tool_id: run
-          output: str
+          output: !str
       output: ${run.output}
   nodes:
     b:
@@ -29,7 +29,7 @@ other: |
         run:
           kind: tool
           tool_id: run
-          output: str
+          output: !str
       output: ${run.output}
   nodes:
     b:

@@ -52,7 +52,7 @@ id: f
 name: f
 input: {v: !str }
 nodes:
-  x: {kind: code, code: "return inputs['n']", input: {n: '<n>'}, output: str}
+  x: {kind: code, code: "return inputs['n']", input: {n: '<n>'}, output: !str}
 output: <out>
 `;
 
@@ -66,7 +66,7 @@ nodes:
     code: "return inputs['n']"
     input:
       n: !str <n>
-    output: str
+    output: !str
 output: \${x.output}
 `;
 
@@ -75,7 +75,7 @@ id: f
 name: f
 input: {v: !str }
 nodes:
-  t: {kind: tool, tool_id: echo, input: {n: '<n>'}, output: str}
+  t: {kind: tool, tool_id: echo, input: {n: '<n>'}, output: !str}
 output: \${t.output}
 `;
 
@@ -87,7 +87,7 @@ defs:
   body:
     input: {w: !str }
     nodes:
-      s: {kind: code, code: "return inputs['n']", input: {n: '<inner>'}, output: str}
+      s: {kind: code, code: "return inputs['n']", input: {n: '<inner>'}, output: !str}
     output: \${s.output}
 nodes:
   c: {kind: call, call: body, input: {w: '<w>'}}
@@ -102,13 +102,13 @@ defs:
   body:
     input: {w: !str }
     nodes:
-      s: {kind: code, code: "return inputs['n']", input: {n: '\${input.w}'}, output: str}
+      s: {kind: code, code: "return inputs['n']", input: {n: '\${input.w}'}, output: !str}
     output: \${s.output}
 nodes:
   x:
     kind: code
     code: "return inputs['n']"
-    output: str
+    output: !str
     input:
       n: call(body, w=<w>)
 output: \${x.output}
@@ -122,7 +122,7 @@ defs:
   body:
     input: {item: !str }
     nodes:
-      s: {kind: code, code: "return inputs['n']", input: {n: '\${input.item}'}, output: str}
+      s: {kind: code, code: "return inputs['n']", input: {n: '\${input.item}'}, output: !str}
     output: \${s.output}
 nodes:
   m: {kind: map, over: '<over>', call: body, input: {item: '<item>'}}
@@ -137,7 +137,7 @@ defs:
   step:
     input: {n: !str }
     nodes:
-      s: {kind: code, code: "return {'n': inputs['n']}", input: {n: '\${input.n}'}, output: {n: str}}
+      s: {kind: code, code: "return {'n': inputs['n']}", input: {n: '\${input.n}'}, output: {n: !str}}
     output: \${s.output}
 nodes:
   r: {kind: loop, call: step, input: {n: '<n>'}, until: "true", max: 2}
@@ -169,8 +169,8 @@ nodes:
       - when: "'A'"
         then: hot
     else: cold
-  hot: {kind: code, code: "return 'hot'", output: str}
-  cold: {kind: code, code: "return 'cold'", output: str}
+  hot: {kind: code, code: "return 'hot'", output: !str}
+  cold: {kind: code, code: "return 'cold'", output: !str}
 output: \${hot.output | cold.output}
 `;
 
@@ -188,7 +188,7 @@ id: f
 name: f
 input: {v: !str }
 nodes:
-  a: {kind: agent, input: {t: '\${input.v}'}, output: str, prompt: '<prompt>', system_prompt: '<system>'}
+  a: {kind: agent, input: {t: '\${input.v}'}, output: !str, prompt: '<prompt>', system_prompt: '<system>'}
 output: \${a.output}
 `;
 
@@ -430,13 +430,13 @@ nodes:
     code: "return inputs['n'] * 2"
     input:
       n: \${input.v}
-    output: int
+    output: !int
   b:
     kind: code
     code: "return inputs['n'] * 2"
     input:
       n: \${a.output}
-    output: int
+    output: !int
 output: \${b.output}
 `;
 

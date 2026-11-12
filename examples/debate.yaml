@@ -28,21 +28,21 @@ nodes:
     kind: agent
     input:
       question: ${input.question}
-    output: str
+    output: !str
     prompt: "Restate the decision in '${question}' and list the 2-3 criteria that should drive it."
 
   for_case:
     kind: agent
     input:
       brief: ${frame.output}            # edge: frame -> for_case
-    output: str
+    output: !str
     prompt: "Make the strongest good-faith case FOR, judged against these criteria: ${brief}"
 
   against_case:
     kind: agent
     input:
       brief: ${frame.output}            # edge: frame -> against_case (parallel with for_case)
-    output: str
+    output: !str
     prompt: "Make the strongest good-faith case AGAINST, judged against these criteria: ${brief}"
 
   verdict:
@@ -50,7 +50,7 @@ nodes:
     input:
       for_case: ${for_case.output}      # fan-in: verdict waits for BOTH sides
       against_case: ${against_case.output}
-    output: str
+    output: !str
     prompt: |-
       Weigh both sides and give a clear recommendation in 2-3 sentences, with the
       single most important reason.

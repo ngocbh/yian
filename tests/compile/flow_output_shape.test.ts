@@ -27,7 +27,7 @@ const INT = Type.scalar(ValueKind.INTEGER);
 const STEP = `
   step:
     kind: code
-    output: str
+    output: !str
     code: |
       return "filled"
 `;
@@ -38,7 +38,7 @@ const shapeFlow = (section: string) => `id: shape\nname: shape\nnodes:${STEP}${s
 /** A parent whose def `child` has the `output:` lines `defOutput`. */
 const parent = (defOutput: string, nodes: string, output: string) =>
   "id: parent\nname: parent\ndefs:\n" +
-  '  child:\n    nodes:\n      step:\n        kind: code\n        output: str\n        code: |\n          return "filled"\n' +
+  '  child:\n    nodes:\n      step:\n        kind: code\n        output: !str\n        code: |\n          return "filled"\n' +
   defOutput +
   "nodes:\n" +
   nodes +
@@ -132,7 +132,7 @@ nodes:
     nodes:
       bump:
         kind: code
-        output: int
+        output: !int
         code: |
           return 1
     output: {}
@@ -153,7 +153,7 @@ defs:
     nodes:
       step:
         kind: code
-        output: int
+        output: !int
         code: |
           return 1
     output: {}
@@ -240,7 +240,7 @@ nodes:
         kind: code
         input:
           n: \${input.count}
-        output: int
+        output: !int
         code: |
           return inputs["n"] + 1
     output:
@@ -292,7 +292,7 @@ defs:
     nodes:
       step:
         kind: code
-        output: str
+        output: !str
         code: |
           return "filled"
     output:
@@ -316,7 +316,7 @@ test("a case then call over a one-field record def returns the record", async ()
   const nodes = `  fallback:
     kind: code
     output:
-      order: str
+      order: !str
     code: |
       return {"order": "never"}
   route:

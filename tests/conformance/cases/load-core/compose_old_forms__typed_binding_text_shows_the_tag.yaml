@@ -13,13 +13,13 @@ flow: |
       code: "return {'qty': inputs['n']}"
       input:
         n: ${input.n}
-      output: {qty: int}
+      output: {qty: !int}
     use:
       kind: code
       code: return inputs['n']
       input:
         n: int = 5
-      output: str
+      output: !str
   output: ${use.output}
 expect:
   load:

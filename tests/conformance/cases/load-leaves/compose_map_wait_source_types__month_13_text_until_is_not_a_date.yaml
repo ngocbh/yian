@@ -9,7 +9,7 @@ flow: |
       nodes:
         c:
           kind: code
-          output: list(str)
+          output: !list(str)
           code: |
             return ["a", "b"]
       output: ${c.output}
@@ -22,7 +22,7 @@ flow: |
     after:
       kind: code
       depends_on: [w]
-      output: int
+      output: !int
       code: |
         return 1
   output: ${after.output}

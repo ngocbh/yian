@@ -10,7 +10,7 @@ flow: |
   nodes:
     make:
       kind: code
-      output: list(Leg)
+      output: !list(Leg)
       code: |
         return [{to: "a", mode: "train"}, {to: "b", mode: "boat"}];
   output: ${make.output}
@@ -23,5 +23,5 @@ expect:
       message: 'output at [1].mode: "boat" is not one of Literal(car, train)'
       frames:
       - label: flow.yaml
-        range: [10, 13, 10, 22]
+        range: [10, 13, 10, 23]
       node: make

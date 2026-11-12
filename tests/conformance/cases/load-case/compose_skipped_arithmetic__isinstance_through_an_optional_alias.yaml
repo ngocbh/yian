@@ -15,11 +15,11 @@ flow: |
       else: b
     a:
       kind: code
-      output: int
+      output: !int
       code: "return 2"
     b:
       kind: code
-      output: str
+      output: !str
       code: "return 'no'"
     gate2:
       kind: case
@@ -29,11 +29,11 @@ flow: |
       else: cold
     hot:
       kind: code
-      output: str
+      output: !str
       code: "return 'hot'"
     cold:
       kind: code
-      output: str
+      output: !str
       code: "return 'cold'"
   output:
     v: ${hot.output | cold.output}

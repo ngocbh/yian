@@ -23,7 +23,7 @@ input:
 nodes:
   probe:
     kind: code
-    output: str
+    output: !str
     code: |
       return "SECRET"
   echo:
@@ -35,7 +35,7 @@ nodes:
         kind: code
         input:
           text: \${input.text}
-        output: str
+        output: !str
         code: |
           return inputs["text"]
     output: \${inner.output}
@@ -66,12 +66,12 @@ name: seed_map
 nodes:
   probe:
     kind: code
-    output: str
+    output: !str
     code: |
       return "SECRET"
   mk:
     kind: code
-    output: list(str)
+    output: !list(str)
     code: |
       return ["a \${probe.output}", "\${probe.output}", "plain"]
   each:
@@ -84,7 +84,7 @@ nodes:
         kind: code
         input:
           text: \${input.text}
-        output: str
+        output: !str
         code: |
           return inputs["text"]
     output: \${inner.output}
@@ -104,12 +104,12 @@ name: seed_loop
 nodes:
   probe:
     kind: code
-    output: str
+    output: !str
     code: |
       return "SECRET"
   mk:
     kind: code
-    output: str
+    output: !str
     code: |
       return "a \${probe.output}"
   lp:
@@ -122,7 +122,7 @@ nodes:
         kind: code
         input:
           text: \${input.text}
-        output: str
+        output: !str
         code: |
           return inputs["text"]
     output:
@@ -149,7 +149,7 @@ nodes:
     input:
       text: \${input.text}
       other: \${input.other}
-    output: str
+    output: !str
     code: |
       return inputs["text"]
 output: \${inner.output}

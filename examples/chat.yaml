@@ -46,7 +46,7 @@ defs:
           history: ${input.history}
           said: ${input.said}
         steer_inbox: ${input.owner_messages}
-        output: Optional(str)            # text; null only after an interrupt
+        output: !Optional(str)           # text; null only after an interrupt
         system_prompt: |-
           You are a helpful conversational assistant.
 

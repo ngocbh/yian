@@ -377,7 +377,7 @@ defs:
 nodes:
   a:
     kind: code
-    output: list(file)
+    output: !list(file)
     code: |
       return [${F}, ${F}]
   m:
@@ -408,15 +408,15 @@ defs:
           f: \${input.f}
           n: \${input.n}
         output:
-          f: file
-          n: int
+          f: !file
+          n: !int
         code: |
           return { f: inputs['f'], n: inputs['n'] + 1 }
     output: \${c.output}
 nodes:
   a:
     kind: code
-    output: file
+    output: !file
     code: |
       return ${F}
   l:
@@ -451,7 +451,7 @@ defs:
 nodes:
   a:
     kind: code
-    output: list(file)
+    output: !list(file)
     code: |
       return [${F}]
   k:
@@ -475,7 +475,7 @@ defs:
       c:
         kind: code
         output:
-          f: file
+          f: !file
         code: |
           return { f: ${F} }
     output: \${c.output}
@@ -617,7 +617,7 @@ defs:
 nodes:
   a:
     kind: code
-    output: list(file)
+    output: !list(file)
     code: |
       return [${F}, ${F}]
   m:
@@ -653,7 +653,7 @@ defs:
 nodes:
   a:
     kind: code
-    output: list(file)
+    output: !list(file)
     code: |
       return [${F}]
   k:
@@ -679,7 +679,7 @@ defs:
       c:
         kind: code
         output:
-          f: file
+          f: !file
         code: |
           return { f: ${F} }
     output: \${c.output}
@@ -751,15 +751,15 @@ defs:
           f: \${input.f}
           n: \${input.n}
         output:
-          f: file
-          n: int
+          f: !file
+          n: !int
         code: |
           return { f: inputs['f'], n: inputs['n'] + 1 }
     output: \${c.output}
 nodes:
   a:
     kind: code
-    output: file
+    output: !file
     code: |
       return ${F}
   l:
@@ -838,15 +838,15 @@ defs:
           f: \${input.f}
           n: \${input.n}
         output:
-          g: file
-          n: int
+          g: !file
+          n: !int
         code: |
           return { g: inputs['f'], n: inputs['n'] + 1 }
     output: ${BODY_OUTPUTS[bodyOutput]}
 nodes:
   a:
     kind: code
-    output: file
+    output: !file
     code: |
       return ${F}
   l:
@@ -885,15 +885,15 @@ defs:
         input:
           n: \${input.n}
         output:
-          g: file
-          n: int
+          g: !file
+          n: !int
         code: |
           return { g: ${F}, n: inputs['n'] + 1 }
     output: ${BODY_OUTPUTS[bodyOutput]}
 nodes:
   a:
     kind: code
-    output: file
+    output: !file
     code: |
       return ${F}
   u:
@@ -937,7 +937,7 @@ defs:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: |
           return inputs['n'] + 1
     output:
@@ -947,7 +947,7 @@ nodes:
   r:
     kind: code
     output:
-      x: file
+      x: !file
     code: |
       return { x: ${F} }
   l:
@@ -982,7 +982,7 @@ typedefs:
 nodes:
   a:
     kind: code
-    output: U
+    output: !U
     code: |
       return { kind: 'file', x: ${F} }
 output: \${a.output}
@@ -996,7 +996,7 @@ const RECORD_PRODUCER = `\
   a:
     kind: code
     output:
-      f: file
+      f: !file
     code: |
       return { f: ${F} }
 `;
@@ -1045,7 +1045,7 @@ name: p
 nodes:
   i:
     kind: code
-    output: int
+    output: !int
     code: |
       return 2n ** 60n
   b:
@@ -1078,12 +1078,12 @@ const NAMED_F = `new (await import(${JSON.stringify(VALUES_URL)})).FileRef({ uri
 const PRODUCERS = `\
   a:
     kind: code
-    output: file
+    output: !file
     code: |
       return ${F}
   n:
     kind: code
-    output: file
+    output: !file
     code: |
       return ${NAMED_F}
 `;
@@ -1112,7 +1112,7 @@ test("a template binding reads the uri of a file", async () => {
 
 test("a prompt reads the name of a file", async () => {
   const text = fileFlow(
-    '  b:\n    kind: tool\n    tool_id: ask\n    input:\n      prompt: "u=${n.output.uri} k=${n.output.name}"\n    output: str\n',
+    '  b:\n    kind: tool\n    tool_id: ask\n    input:\n      prompt: "u=${n.output.uri} k=${n.output.name}"\n    output: !str\n',
   );
   const output = await okRun(text, { tools: { ask: (request: { question: string }) => request.question } });
   expect(output).toBe("u=f k=a.txt");
@@ -1123,8 +1123,8 @@ const CASE_NODES = (cases: string) => `\
     kind: case
 ${cases}
     else: other
-  b: {kind: code, code: "return 'hit'", output: str}
-  other: {kind: code, code: "return 'else'", output: str}
+  b: {kind: code, code: "return 'hit'", output: !str}
+  other: {kind: code, code: "return 'else'", output: !str}
 `;
 
 test.each([
@@ -1136,7 +1136,7 @@ test.each([
 
 test("a flow assert reads the uri of a file", async () => {
   const text = fileFlow(
-    "  b: {kind: code, code: \"return 'ok'\", output: str}\n",
+    "  b: {kind: code, code: \"return 'ok'\", output: !str}\n",
     undefined,
     "asserts:\n  - \"a.output.uri == 'f' and n.output.name == 'a.txt'\"\n",
   );
@@ -1146,7 +1146,7 @@ test("a flow assert reads the uri of a file", async () => {
 test("a node pre-assert reads the uri of a file", async () => {
   const text = fileFlow(
     "  b:\n    kind: code\n    input:\n      f: ${a.output}\n" +
-      "    code: |\n      return 'ok'\n    output: str\n" +
+      "    code: |\n      return 'ok'\n    output: !str\n" +
       "    asserts:\n      - \"f.uri == 'f'\"\n",
   );
   expect(await okRun(text)).toBe("ok");
@@ -1154,7 +1154,7 @@ test("a node pre-assert reads the uri of a file", async () => {
 
 test("a node post-assert reads the uri of a file in its output", async () => {
   const text = fileFlow(
-    "  b:\n    kind: code\n    output:\n      f: file\n      n: int\n" +
+    "  b:\n    kind: code\n    output:\n      f: !file\n      n: !int\n" +
       `    code: |\n      return { f: ${F}, n: 1 }\n` +
       "    asserts:\n      - \"output.f.uri == 'f'\"\n",
     "${b.output.n}",
@@ -1176,7 +1176,7 @@ async function missingOutcome(producer: string, path: string): Promise<[string, 
 const OBJECT_PRODUCER = `\
   a:
     kind: code
-    output: object
+    output: !object
     code: |
       return { uri: 'f' }
 `;
@@ -1207,7 +1207,7 @@ test("render_as_json writes a file as its mapping", async () => {
 test("a run reads the fields of a file", async () => {
   const output = await okRun(
     `id: p\nname: p\nnodes:\n${UNTYPED_FILE_PRODUCER}` +
-      "  n:\n    kind: code\n    output: file\n" +
+      "  n:\n    kind: code\n    output: !file\n" +
       `    code: |\n      return ${NAMED_F}\n` +
       "  b:\n    kind: code\n    input:\n" +
       "      u: ${a.output.uri}\n      k: ${n.output.name}\n      m: ${a.output.mime}\n      t: ${a.output}\n" +
@@ -1226,14 +1226,14 @@ name: p
 nodes:
   a:
     kind: code
-    output: list(file)
+    output: !list(file)
     code: |
       return [${F}, ${F}]
   r:
     kind: code
     output:
-      f: file
-      n: int
+      f: !file
+      n: !int
     code: |
       return { f: ${F}, n: 1 }
   b:
@@ -1315,7 +1315,7 @@ name: p
 nodes:
   a:
     kind: code
-    output: list(file)
+    output: !list(file)
     code: |
       return [${F}, ${F}]
   b:
@@ -1400,7 +1400,7 @@ name: p
 nodes:
   a:
     kind: code
-    output: list(file)
+    output: !list(file)
     code: |
       return [${F}, ${F}]
 output:
@@ -1430,7 +1430,7 @@ name: p
 nodes:
   a:
     kind: code
-    output: list(file)
+    output: !list(file)
     code: |
       return [${F}, ${F}]
   ask:
@@ -1522,14 +1522,14 @@ defs:
         input:
           n: \${input.n}
         output:
-          n: int
+          n: !int
         code: |
           return { n: inputs['n'] + 1 }
     output: \${c.output}
 nodes:
   a:
     kind: code
-    output: file
+    output: !file
     code: |
       return ${F}
   l:

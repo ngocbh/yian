@@ -16,7 +16,7 @@ flow: |2
             n: ${input.n}
             exited: ${input.exited}
           output:
-            n: int
+            n: !int
       output: ${step.output}
   nodes:
     first:

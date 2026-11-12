@@ -78,7 +78,7 @@ typedefs:
 nodes:
   d:
     kind: code
-    output: object
+    output: !object
     code: |
       return {"conviction": 0.5}
   use:
@@ -110,7 +110,7 @@ nodes:
     input:
       count: !int \${src.output}
     prompt: "Count \${count}"
-    output: str
+    output: !str
 output: \${ask.output}
 `;
 
@@ -195,7 +195,7 @@ defs:
         kind: code
         input:
           x: \${input.x}
-        output: int
+        output: !int
         code: |
           return inputs["x"] * 2
     output: \${twice.output}
@@ -208,7 +208,7 @@ name: tagged_call
 ${CHILD}nodes:
   maybe:
     kind: code
-    output: Optional(int)
+    output: !Optional(int)
     code: |
       return ${returned}
   run:
@@ -275,7 +275,7 @@ nodes:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: |
           return inputs["n"] + 1
     output:
@@ -355,7 +355,7 @@ nodes:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: |
           return inputs["n"] * 2
     output: \${twice.output}

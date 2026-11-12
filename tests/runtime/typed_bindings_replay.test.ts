@@ -40,20 +40,20 @@ defs:
         code: return inputs["rounds"] + 1
         input:
           rounds: \${input.rounds}
-        output: int
+        output: !int
     output:
       rounds: \${step.output}
 nodes:
   p:
     kind: code
     code: return 4
-    output: int
+    output: !int
   use:
     kind: code
     code: return inputs["qty"] * 10
     input:
       qty: !int \${p.output}
-    output: int
+    output: !int
   loop:
     kind: loop
     call: bump

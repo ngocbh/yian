@@ -36,9 +36,9 @@ nodes:
       return {"profile": {"age": "bad", "name": "Ada"}, "ok": true}
     output:
       profile:
-        age: int
-        name: str
-      ok: bool
+        age: !int
+        name: !str
+      ok: !bool
 output: \${emit.output}
 `;
 
@@ -114,7 +114,7 @@ nodes:
     kind: code
     code: |-
       return (
-    output: DefinitelyNotAType
+    output: !DefinitelyNotAType
 output: \${broken.output}
 `;
   const document = SourceDocument.parse(text, "precedence.yaml");
@@ -155,7 +155,7 @@ code: |-
   return {"profile": {"age": 7}}
 output:
   profile:
-    age: int
+    age: !int
 `;
   const { contract, builder } = contractOf(text, "compact_output_contract", "compact.yaml");
 
@@ -201,9 +201,9 @@ nodes:
     output:
       profile:
         # Nested fields move independently too.
-        age: int
-        name: str
-      ok: bool
+        age: !int
+        name: !str
+      ok: !bool
 output: \${emit.output}
 `;
   const outputOf = (text: string) =>
@@ -239,7 +239,7 @@ nodes:
           return {"profile": {"age": 7}}
         output:
           profile:
-            age: int
+            age: !int
     output: \${emit.output}
 output: \${invoke.output}
 `;
@@ -270,7 +270,7 @@ defs:
           return {"profile": {"age": 7}}
         output:
           profile:
-            age: int
+            age: !int
     output: \${emit.output}
 nodes:
   invoke:
@@ -301,7 +301,7 @@ defs:
       return {"profile": {"age": 7}}
     output:
       profile:
-        age: int
+        age: !int
 nodes:
   invoke:
     kind: call
@@ -326,7 +326,7 @@ nodes:
       return {"profile": {"age": 7}}
     output:
       profile:
-        age: int
+        age: !int
 output: \${emit.output}
 `;
   const childDocument = SourceDocument.parse(childText, "child.yaml");
@@ -378,7 +378,7 @@ nodes:
     kind: code
     code: |-
       return {"not": "an integer"}
-    output: int
+    output: !int
 output: \${emit.output}
 `,
   ],
@@ -395,7 +395,7 @@ nodes:
     kind: code
     code: |-
       return [{"age": "bad"}]
-    output: list(Profile)
+    output: !list(Profile)
 output: \${emit.output}
 `,
   ],
@@ -422,7 +422,7 @@ nodes:
     code: 'return {"profile": {}}'
     output:
       profile:
-        7: int
+        7: !int
 output: \${emit.output}
 `;
   const document = SourceDocument.parse(text, "invalid-key.yaml");
@@ -443,17 +443,17 @@ nodes:
   agent_leaf:
     kind: agent
     prompt: hi
-    output: str
+    output: !str
   code_leaf:
     kind: code
     code: return "ok"
-    output: str
+    output: !str
   ask_leaf:
     kind: tool
     tool_id: ask
     input:
       prompt: continue?
-    output: str
+    output: !str
 output: \${code_leaf.output}
 `;
   const nodes = SourceDocument.parse(text, "leaves.yaml").root.child("nodes");
@@ -480,7 +480,7 @@ nodes:
       model: gpt-4o
     output:
       profile:
-        age: int
+        age: !int
 output: \${writer.output}
 `;
   const { flow, builder } = assembleText(text, "agent-output.yaml");

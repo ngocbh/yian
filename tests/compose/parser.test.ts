@@ -3,7 +3,8 @@
 import { afterEach, expect, test } from "bun:test";
 
 import { LoadError } from "../../src/compose/helpers/errors.ts";
-import { ComposeFile, parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
+import { ComposeFile, flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
+import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { forget } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import {
@@ -26,7 +27,7 @@ nodes:
     kind: agent
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
     prompt: "Write a note on \${topic}."
 output: \${note.output}
 `;
@@ -159,13 +160,16 @@ test("seed 00 parses its sections", () => {
 test("seed 11 loads its anchors", () => {
   // The document expands &anchor / *alias / <<: merge before the strict schema; the
   // x-agent-defaults anchor holder is stripped as an x-* key.
-  const f = parseFile(caseDocument("load-core/seed_11_reuse_anchors").document);
+  const { document } = caseDocument("load-core/seed_11_reuse_anchors");
+  const f = parseFile(document);
+  // The merged `output: !str` tag is read from the source, as the loader reads it.
+  const descriptors = parseNodes(flowNodesCursor(document, f.nodes));
 
   expect(f.id).toBe("reuse-anchors");
   for (const nid of ["pro", "con", "judge"]) {
     const node = f.nodes[nid] as Record<string, unknown>;
     expect(node["kind"]).toBe("agent"); // merged in from the anchor
-    expect(node["outputs"]).toBe("str");
+    expect(descriptors.get(nid)!.outputs).toBe("str");
     expect((node["llm_config"] as Record<string, unknown>)["provider"]).toBe("anthropic");
   }
 });

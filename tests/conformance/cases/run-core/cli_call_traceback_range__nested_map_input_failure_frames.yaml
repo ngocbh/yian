@@ -12,7 +12,7 @@ flow: |
           input:
             okay: literal
             bad: ${input.maybe:?"missing mapped value"}
-          output: str
+          output: !str
           code: ./fixtures/compose_codefns.ts:echo
       output: ${leaf.output}
   nodes:

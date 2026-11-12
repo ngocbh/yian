@@ -45,7 +45,7 @@ flow: |
       kind: code
       input:
         ans: ${ask.output}             # the delivered {Framework, Notes} record
-      output: str
+      output: !str
       code: ./fixtures/seeds.ts:chosen_framework
 
   output: ${pick.output}

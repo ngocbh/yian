@@ -37,26 +37,26 @@ nodes:
     code: ./fixtures/compose_codefns.ts:pick_pro
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
   con:
     kind: code
     code: ./fixtures/compose_codefns.ts:pick_con
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
   pro_detail:
     kind: code
     code: ./fixtures/compose_codefns.ts:detail_of
     input:
       base: \${pro.output}
-    output: str
+    output: !str
   assemble:
     kind: code
     code: ./fixtures/compose_codefns.ts:assemble_join
     input:
       claim: \${pro.output | con.output}
       detail: \${pro_detail.output:-null}
-    output: str
+    output: !str
 output: \${assemble.output}
 `;
 

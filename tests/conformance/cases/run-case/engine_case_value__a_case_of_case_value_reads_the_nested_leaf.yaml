@@ -24,19 +24,19 @@ flow: |2
       code: ./fixtures/compose_codefns.ts:echo
       input:
         topic: "HI"
-      output: str
+      output: !str
     lo:
       kind: code
       code: ./fixtures/compose_codefns.ts:echo
       input:
         topic: "LO"
-      output: str
+      output: !str
     x:
       kind: code
       code: ./fixtures/compose_codefns.ts:echo
       input:
         topic: "X"
-      output: str
+      output: !str
   output: ${outer.output}
 inputs:
   a: 0.9

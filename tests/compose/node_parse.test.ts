@@ -35,7 +35,7 @@ function nodes(yamlText: string, kinds: readonly DescriptorClass[] = []) {
 
 /** An `agent` node body under `id`, as written. */
 function agentAt(id: string): string {
-  return `\n${id}:\n  kind: agent\n  prompt: hi\n  output: str\n`;
+  return `\n${id}:\n  kind: agent\n  prompt: hi\n  output: !str\n`;
 }
 
 describe("reserved boundary ids", () => {
@@ -167,7 +167,7 @@ defs:
   my-def:
     kind: code
     code: "return 1"
-    output: int
+    output: !int
 nodes:
   a:
     kind: call
@@ -205,7 +205,7 @@ output: \${a.output}
 describe("agent", () => {
   test("agent minimal parses", () => {
     const node = nodes(
-      "\nnote:\n  kind: agent\n  input:\n    topic: ${input.topic}\n  output: str\n  prompt: Write a note on ${topic}.\n",
+      "\nnote:\n  kind: agent\n  input:\n    topic: ${input.topic}\n  output: !str\n  prompt: Write a note on ${topic}.\n",
     ).get("note") as AgentDescriptor;
 
     expect(node).toBeInstanceOf(AgentDescriptor);
@@ -253,7 +253,7 @@ describe("tool", () => {
   test("model kind is removed and points at tool", () => {
     // ML inference is a host capability: `kind: model` names `kind: tool` as the replacement,
     // not the generic "unknown kind".
-    const text = "\npredict:\n  kind: model\n  model_id: x\n  output: float\n";
+    const text = "\npredict:\n  kind: model\n  model_id: x\n  output: !float\n";
     const error = loadError(() => nodes(text));
 
     expect(error.message).toContain("kind 'model' was removed");
@@ -385,7 +385,7 @@ x:
   code: m:f
   input:
     n: \${input.v}
-  output: int
+  output: !int
   asserts:
     - "output >= 0"
 `;
@@ -395,7 +395,7 @@ x:
   });
 
   test("node asserts must be list of str", () => {
-    const text = "\nx:\n  kind: code\n  code: m:f\n  output: int\n  asserts: not-a-list\n";
+    const text = "\nx:\n  kind: code\n  code: m:f\n  output: !int\n  asserts: not-a-list\n";
     const error = loadError(() => nodes(text));
 
     expect(error.message).toBe("node 'x' (kind=code): `asserts:` must be a list of strings");
@@ -453,7 +453,7 @@ fetch:
   input:
     topic: \${input.topic}
   output:
-    values: list(float)
+    values: !list(float)
   code: tests.seeds.fns:fetch_facts
 `,
     ).get("fetch")!;
@@ -466,7 +466,7 @@ fetch:
 
   test("depends on and runs after default empty", () => {
     const node = nodes(
-      "\nnote:\n  kind: agent\n  input:\n    topic: ${input.topic}\n  output: str\n  prompt: hi\n",
+      "\nnote:\n  kind: agent\n  input:\n    topic: ${input.topic}\n  output: !str\n  prompt: hi\n",
     ).get("note")!;
 
     expect(node.dependsOn).toEqual([]);
@@ -484,21 +484,21 @@ fetch:
   });
 
   test("tool id illegal on agent is loud", () => {
-    const text = "\nn:\n  kind: agent\n  tool_id: get_facts\n  output: str\n  prompt: hi\n";
+    const text = "\nn:\n  kind: agent\n  tool_id: get_facts\n  output: !str\n  prompt: hi\n";
     const error = loadError(() => nodes(text));
 
     expect(error.message).toContain("tool_id");
   });
 
   test("unknown kind is loud", () => {
-    const error = loadError(() => nodes("\nn:\n  kind: wizard\n  output: str\n"));
+    const error = loadError(() => nodes("\nn:\n  kind: wizard\n  output: !str\n"));
 
     expect(error.message).toContain("wizard");
     expect(error.diagnostic.frames.at(-1)!.range).not.toBeNull();
   });
 
   test("missing kind is loud", () => {
-    const text = "\nn:\n  input:\n    topic: ${input.topic}\n  output: str\n";
+    const text = "\nn:\n  input:\n    topic: ${input.topic}\n  output: !str\n";
     const error = loadError(() => nodes(text));
 
     expect(error.message).toBe(
@@ -513,7 +513,7 @@ fetch:
       (value) => {
         // A non-list, or a list of non-strings, is a located load error at parse time, not a
         // silent iteration over a string's characters or a mapping's keys.
-        const text = `use:\n  kind: code\n  ${key}: ${value}\n  output: str\n  code: m:f\n`;
+        const text = `use:\n  kind: code\n  ${key}: ${value}\n  output: !str\n  code: m:f\n`;
         const error = loadError(() => nodes(text));
 
         expect(error.message).toContain(`\`${key}:\` must be a list of node ids`);
@@ -523,7 +523,7 @@ fetch:
 
     test("ordering field bare string suggests list", () => {
       // `depends_on: fetch` is the natural slip; the error names the list spelling to write.
-      const text = `use:\n  kind: code\n  ${key}: fetch\n  output: str\n  code: m:f\n`;
+      const text = `use:\n  kind: code\n  ${key}: fetch\n  output: !str\n  code: m:f\n`;
 
       expect(loadError(() => nodes(text)).message).toContain(
         `write \`${key}: [fetch]\``,

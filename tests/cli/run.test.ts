@@ -735,7 +735,7 @@ describe("run", () => {
 function topicFlow(body: string): string {
   return (
     "id: cli_echo\nname: cli_echo\ninput:\n  topic: !str\nnodes:\n  echo:\n    kind: code\n" +
-    `    input:\n      topic: \${input.topic}\n    output: str\n    code: ${body}\n` +
+    `    input:\n      topic: \${input.topic}\n    output: !str\n    code: ${body}\n` +
     "output:\n  topic: ${echo.output}\n"
   );
 }
@@ -759,7 +759,7 @@ nodes:
       limit: \${input.limit}
       labels: \${input.labels}
       note: \${input.note}
-    output: object
+    output: !object
     code: return inputs
 output: \${show.output}
 `;
@@ -773,7 +773,7 @@ nodes:
     kind: code
     input:
       items: \${input.items}
-    output: object
+    output: !object
     code: 'return { items: inputs.items, is_none: inputs.items === null }'
 output: \${inspect.output}
 `;
@@ -980,7 +980,7 @@ nodes:
       first: \${input.first}
       optional: \${input.optional}
       second: \${input.second}
-    output: object
+    output: !object
     code: return inputs
 output: \${show.output}
 `;
@@ -1090,7 +1090,7 @@ nodes:
       items: \${input.items}
       mode: \${input.mode}
       flag: \${input.flag}
-    output: object
+    output: !object
 output: \${show.output}
 `;
 
@@ -1126,12 +1126,12 @@ describe("run's input prompts on a TTY", () => {
 
 const ASK_FLOW =
   "id: ask\nname: ask\nnodes:\n  ok:\n    kind: tool\n    tool_id: ask\n" +
-  '    input:\n      prompt: "Proceed?"\n    output: str\noutput: ${ok.output}\n';
+  '    input:\n      prompt: "Proceed?"\n    output: !str\noutput: ${ok.output}\n';
 
 // A CODE node that runs until the run is stopped (or 30 s pass), after a node whose progress line
 // says the run is going.
 const PAUSE_FLOW =
-  "id: pause\nname: pause\nnodes:\n  first: {kind: code, output: str, code: return 'x'}\n" +
+  "id: pause\nname: pause\nnodes:\n  first: {kind: code, output: !str, code: return 'x'}\n" +
   "  settle:\n    kind: code\n    depends_on: [first]\n    code: |\n" +
   "      await new Promise((resolve) => setTimeout(resolve, 30_000));\n      return null;\n" +
   "output: ${first.output}\n";
@@ -1241,8 +1241,8 @@ describe("run's stops", () => {
 
 // Two nodes that start together, so a TTY shows two spinner lines.
 const PARALLEL_FLOW =
-  "id: par\nname: par\nnodes:\n  a: {kind: code, output: str, code: return 'a'}\n" +
-  "  b: {kind: code, output: str, code: return 'b'}\noutput:\n  a: ${a.output}\n  b: ${b.output}\n";
+  "id: par\nname: par\nnodes:\n  a: {kind: code, output: !str, code: return 'a'}\n" +
+  "  b: {kind: code, output: !str, code: return 'b'}\noutput:\n  a: ${a.output}\n  b: ${b.output}\n";
 
 describe("run setup errors", () => {
   test("on a TTY the run failed: line comes after the spinners are erased", async () => {
@@ -1320,7 +1320,7 @@ async function runAt(body: string, argv: readonly string[], isTTY: boolean) {
 }
 
 describe("run's model and tool text with escape sequences", () => {
-  const output = `id: f\nname: f\nnodes:\n  a: {kind: code, output: str, code: 'return ${ESCAPED_JS}'}\noutput: \${a.output}\n`;
+  const output = `id: f\nname: f\nnodes:\n  a: {kind: code, output: !str, code: 'return ${ESCAPED_JS}'}\noutput: \${a.output}\n`;
   const failing = output.replace("return ", "throw new Error(").replace("'}", ")'}");
 
   test("the output is stripped on a TTY and kept exactly when piped", async () => {
@@ -1699,7 +1699,7 @@ describe("check", () => {
   });
 
   test("a CODE reference resolves against its own file's directory, not the cwd", async () => {
-    const node = "  a:\n    kind: code\n    code: ./m.ts:f\n    output: str\n";
+    const node = "  a:\n    kind: code\n    code: ./m.ts:f\n    output: !str\n";
     const fn = "export function f() { return 'x'; }\n";
     const alone = file("alone/flow.yaml", `id: alone\nname: alone\nnodes:\n${node}output: \${a.output}\n`);
     file("alone/m.ts", fn);
@@ -1761,7 +1761,7 @@ const LINKED_FLOWS: [string, (dir: string) => { flow: string; real: string }][] 
 function codeOnlyFlow(ref: string, alias?: string): string {
   const call = alias === undefined ? "" : `  b:\n    kind: call\n    call: ${alias}\n`;
   const output = alias === undefined ? "${a.output}" : '"${a.output} | ${b.output}"';
-  return `id: c\nname: c\nnodes:\n  a:\n    kind: code\n    code: ${ref}\n    output: str\n${call}output: ${output}\n`;
+  return `id: c\nname: c\nnodes:\n  a:\n    kind: code\n    code: ${ref}\n    output: !str\n${call}output: ${output}\n`;
 }
 
 /** Run `yian run -q flow` under a home in `tmp`, returning the exit code and the streams. */
@@ -2137,7 +2137,7 @@ describe("status", () => {
 
   test("with no log, a failed or waiting run whose END succeeded lists no result", async () => {
     const failAfter =
-      "id: failafter\nname: failafter\nnodes:\n  boom:\n    kind: code\n    output: str\n    code: |\n" +
+      "id: failafter\nname: failafter\nnodes:\n  boom:\n    kind: code\n    output: !str\n    code: |\n" +
       '      await new Promise((r) => setTimeout(r, 300));\n      throw new Error("boom");\noutput: done\n';
     const nap = "id: nap\nname: nap\nnodes:\n  nap:\n    kind: tool\n    tool_id: sleep\n    input:\n      for: 1h\noutput: done\n";
     expect((await runFlowCli(failAfter, ["-q"])).code).toBe(1);

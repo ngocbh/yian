@@ -102,7 +102,7 @@ input: {proj: !str }
 nodes:
   up:
     kind: code
-    output: int
+    output: !int
     code: "return 1"
   ask:
     kind: tool
@@ -191,7 +191,7 @@ nodes:
     kind: agent
     input:
 ${inputs}    prompt: "Q \${cfg} \${ls} \${n}"
-    output: str
+    output: !str
 output: \${a.output}
 `;
   expect(assembleText(agentFlow).flow.compiled.nodes.has("a")).toBe(true);
@@ -212,7 +212,7 @@ nodes:
         then: order
   order:
     kind: code
-    output: {qty: int}
+    output: {qty: !int}
     code: |
       return {"qty": 1}
   ask:
@@ -355,7 +355,7 @@ test("a composer read outside the cycle still names only the gate", () => {
     kind: code
     input:
       q: \${ask__compose.output}
-    output: int
+    output: !int
     code: return inputs["q"].length
 output:
   a: \${ask.output}

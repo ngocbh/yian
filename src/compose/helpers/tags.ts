@@ -3,12 +3,12 @@
  *
  * A slot's type is a local YAML tag on its value (`qty: !int ${size.output.qty}`). A tag ends
  * at the first space and, in strict YAML 1.2, can't contain `,`, `[`, `]`, `{` or `}`, so a
- * type with several arguments is named in `typedefs:` and tagged by its name. `readTagType`
- * turns tag text into a `Type` and explains each way a tag goes wrong; `suggestTag` spells a
- * tagged slot for error messages; `readTaggedValue` reads one slot's authored value, with tags
- * inside it, into a binding source or a literal, and records each tag it reads in the load's
- * ledger. `rejectUnreadTags` then rejects every tag no slot read (on `kind:`, a typedef, a
- * mapping key, ...), and `rejectTaggedOutput` a tag on a node's `output:` type declaration.
+ * tag separates a type's arguments with `;` (`!Literal(a;b)`). `readTagType` turns tag text
+ * into a `Type` and explains each way a tag goes wrong; `suggestTag` spells a tagged slot for
+ * error messages; `readTaggedValue` reads one slot's authored value, with tags inside it, into a
+ * binding source or a literal, and `readOutputDeclaration` a node's `output:` declaration into
+ * its type; both record each tag they read in the load's ledger. `rejectUnreadTags` then rejects
+ * every tag no reader read (on `kind:`, a typedef, a mapping key, ...).
  *
  * A tag only checks a value and declares its type: it never adds or changes a field.
  */
@@ -37,6 +37,7 @@ import {
   legacyRespelling,
   parseType,
   type TypeRegistry,
+  tagSpelling,
   typeFor,
 } from "../../typesys/types.ts";
 import {
@@ -80,7 +81,6 @@ const FLOW_INDICATORS = /[[\]{}]/;
 // The characters YAML reads into a tag, minus YAML 1.2's flow indicators, `!`, and the `%`
 // that starts an escape: text made only of these reads back as one tag.
 const TAG_CHARACTERS = /^[A-Za-z0-9\-;/?:@&=+$_.~*'()]+$/;
-const TYPEDEF_EXAMPLE = "(e.g. `Decision: Union(Buy, Sell)`) and tag with its name (`!Decision`)";
 /**
  * YAML scalar styles that make a value text, never a `call(...)` directive. Typed to take a
  * cursor's `scalarStyle` as is: `null` (not a scalar) is not in it.
@@ -113,7 +113,8 @@ export function includeFile(path: string, type: string | null = null): string {
  * @returns The type the tag names.
  * @throws LoadError when the tag holds a bracket or brace (the message shows the
  *   parenthesized spelling), is cut short by a space (it ends in `,` or has an unclosed `(`),
- *   holds a `,`, or does not name a type (the message offers a close match).
+ *   holds a `,` (the message shows the `;` spelling), or does not name a type (the message
+ *   offers a close match).
  */
 export function readTagType(
   tag: string,
@@ -128,8 +129,8 @@ export function readTagType(
       `${reprText(label)}: a tag can't contain \`[\`, \`]\`, \`{\` or \`}\` (strict YAML 1.2)`;
     const spelled = respelled(tag, registry);
     if (spelled !== null) {
-      message += writableAsTag(spelled)
-        ? `; write \`!${spelled}\``
+      message += writableAsTag(tagSpelling(spelled))
+        ? `; write \`!${tagSpelling(spelled)}\``
         : `; name \`${spelled}\` in \`typedefs:\` and tag with its name`;
     }
     throw diagnostics.error(message, { range });
@@ -147,17 +148,18 @@ export function readTagType(
   if (tag.endsWith(",") || (resolved instanceof TypeCheckError && unclosed)) {
     throw diagnostics.error(
       `${reprText(label)}: ${shown} is not a complete type: a YAML tag ends at the first ` +
-        "space and can't contain `,`; name a type with several arguments in " +
-        `\`typedefs:\` ${TYPEDEF_EXAMPLE}`,
+        "space and can't contain `,`; separate a type's arguments with `;`, with no space, as " +
+        "in `!Union(Buy;Sell)`",
       { range },
     );
   }
   if (tag.includes(",")) {
-    throw diagnostics.error(
-      `${reprText(label)}: ${shown}: a tag can't contain \`,\`; name it in \`typedefs:\` ` +
-        TYPEDEF_EXAMPLE,
-      { range },
-    );
+    const mended = tagSpelling(tag);
+    const fix =
+      writableAsTag(mended) && resolves(mended, registry)
+        ? `write \`!${mended}\``
+        : "separate a type's arguments with `;`";
+    throw diagnostics.error(`${reprText(label)}: ${shown}: a tag can't contain \`,\`; ${fix}`, { range });
   }
   if (resolved instanceof TypeCheckError) {
     let message = `${reprText(label)}: ${shown} is not a type (${resolved.message})`;
@@ -450,17 +452,17 @@ export function anySourceHint(
  * @param typ The type, or `null` when its text names no type.
  * @param options.registry The flow's typedefs; a typedef that resolves to `typ` (or to its
  *   list element or non-null form) is spelled by its name.
- * @param options.typeText The authored spelling of `typ`, used as written when a tag can
- *   write it.
- * @returns Such as `"list(int)"` or `"Reply"`, or `null` for a type a tag can't spell (an
- *   unnamed record or union, or anything needing a `,` or quotes).
+ * @param options.typeText The authored spelling of `typ`, used with `;` between arguments when
+ *   a tag can write it so.
+ * @returns Such as `"list(int)"`, `"Literal(a;b)"` or `"Reply"`, or `null` for a type a tag
+ *   can't spell (an unnamed record or union, or anything needing a space or `"` quotes).
  */
 export function tagText(
   typ: Type | null,
   options: { registry?: TypeRegistry | null; typeText?: string | null } = {},
 ): string | null {
   const { registry, typeText = null } = options;
-  if (typeText !== null && writableAsTag(typeText)) return typeText;
+  if (typeText !== null && writableAsTag(tagSpelling(typeText))) return tagSpelling(typeText);
   if (typ === null) return null;
   return tagTextOf(typ, registry ?? new Map());
 }
@@ -469,12 +471,17 @@ export function tagText(
  * Spell `typ` as tag text, or return `null` when no tag can spell it.
  *
  * The type is spelled directly where a tag can; a typedef name stands in only where it can't
- * (a record, a union, a multi-value `Literal`, anything needing a comma or quotes).
+ * (a record, a union, anything needing a space or `"` quotes), and a union of named records
+ * is spelled from its members' names.
  */
 function tagTextOf(typ: Type, registry: TypeRegistry): string | null {
   const direct = directTagText(typ, registry);
   if (direct !== null) return direct;
-  const named = typedefName(typ.replace({ nullable: false }), registry);
+  let named = typedefName(typ.replace({ nullable: false }), registry);
+  if (named === null && typ.members !== undefined) {
+    const members = typ.members.map((member) => typedefName(member, registry));
+    if (members.every((member) => member !== null)) named = `Union(${members.join(";")})`;
+  }
   if (named === null) return null;
   const text = typ.nullable ? `Optional(${named})` : named;
   return writableAsTag(text) ? text : null;
@@ -489,8 +496,7 @@ function directTagText(typ: Type, registry: TypeRegistry): string | null {
   if (typ.members !== undefined || typ.fields !== undefined || isInboxType(typ) || isMemoryType(typ)) return null;
   let text: string;
   if (typ.tags !== undefined) {
-    if (typ.tags.size !== 1) return null;
-    text = formatTypeExpr({ kind: "enum", tags: [...typ.tags] });
+    text = tagSpelling(formatTypeExpr({ kind: "enum", tags: [...typ.tags] }));
   } else if (isListKind(typ.kind) && typ.element !== undefined) {
     const element = tagTextOf(typ.element, registry);
     if (element === null) return null;
@@ -1039,48 +1045,113 @@ function includedLine(include: TypedInclude, path: ValuePath): number | null {
 }
 
 /**
- * Reject a tag or text `!include` read on a node's `output:` type declaration or inside it.
+ * Read a node's `output:` declaration into the type text the build compiles.
  *
- * An `output:` declaration is a type, so a tag there would type nothing.
+ * A type is a tag with nothing after it (`output: !Optional(str)`), and a record an untagged
+ * mapping whose fields are declared the same way (`output: {n: !int}`). An absent or empty
+ * `output:` declares nothing. Each tag read is recorded in `ledger`. Whether a tag names a
+ * type is left to the build, which compiles the result at the node's position.
  *
  * @param cursor The node's `output:` value.
- * @param diagnostics Factory for located load errors.
- * @throws LoadError at the first tag or `!include` on or inside the declaration.
+ * @param options.registry The flow's typedefs, which a suggested tag resolves against.
+ * @param options.diagnostics Factory for located load errors.
+ * @param options.ledger The load's consumed-tag ledger.
+ * @returns The tag text for a type, a mapping of field names to declarations for a record, or
+ *   `null` when nothing is declared.
+ * @throws LoadError at the first untagged type, value after a tag, YAML list, or `!include`.
  */
-export function rejectTaggedOutput(cursor: SourceCursor, diagnostics: LoadDiagnostics): void {
-  // Each entry: a cursor, the key it sits under, and whether it is a list item.
-  const stack: [SourceCursor, string, boolean][] = [[cursor, "output", false]];
+export function readOutputDeclaration(
+  cursor: SourceCursor,
+  options: { registry: TypeRegistry; diagnostics: LoadDiagnostics; ledger: Set<number> },
+): Value {
+  const { registry, diagnostics, ledger } = options;
+  if (cursor.tag === null && cursor.value === null && !cursor.included && cursor.typedInclude === null) return null;
+  const root: { output?: Value } = {};
+  // Each entry: a cursor, the key it sits under as written, and where its declaration goes.
+  const stack: [SourceCursor, string, Record<string, Value>, string][] = [[cursor, "output", root, "output"]];
   while (stack.length > 0) {
-    const [current, key, isItem] = stack.pop()!;
-    const tag = current.tag;
+    const [current, key, parent, slot] = stack.pop()!;
     const value = current.value;
     if (current.included || current.typedInclude !== null) {
       const type = current.typedInclude?.type ?? null;
-      throw diagnostics.error(`\`output:\` declares a type, which ${includeTag(type)} can't give; write the type`, {
+      throw diagnostics.error(
+        `\`output:\` declares a type, which ${includeTag(type)} can't give; write it as a tag, e.g. \`${key}: !str\``,
+        { range: current.range },
+      );
+    }
+    if (current.tag !== null) {
+      if (current.hasValue) throw diagnostics.error(taggedValueMessage(current, key, registry), { range: current.range });
+      const definitionId = current.tagDefinitionId;
+      if (definitionId !== null) ledger.add(definitionId);
+      setField(parent, slot, current.tag);
+    } else if (isRecord(value)) {
+      const fields: Record<string, Value> = {};
+      setField(parent, slot, fields);
+      const names = Object.keys(value);
+      for (const name of names.reverse()) {
+        const child = current.child(name);
+        stack.push([child, authoredKey(child), fields, name]);
+      }
+    } else if (Array.isArray(value)) {
+      throw diagnostics.error(
+        "`output:` declares a type, which can't be a YAML list: write a record as a mapping of " +
+          "tagged fields, as in `{a: !int, b: !str}`, and a list type as `!list(T)`",
+        { range: current.range },
+      );
+    } else {
+      throw diagnostics.error(`\`output:\` declares a type as a tag: ${plainTypeFix(key, value, registry)}`, {
         range: current.range,
       });
     }
-    if (tag !== null) {
-      let message: string;
-      if (isItem) {
-        message =
-          `\`output:\` declares a type; an item of \`${key}:\` is tagged \`!${tag}\`; ` +
-          "write the type without a tag";
-      } else {
-        const written = current.hasValue && typeof value === "string" ? value : tag;
-        message = `\`output:\` declares a type; write \`${key}: ${written}\`, without a tag`;
-      }
-      throw diagnostics.error(message, { range: current.range });
-    }
-    if (isRecord(value)) {
-      const children = Object.keys(value).map((name) => current.child(name));
-      for (const child of children.reverse()) stack.push([child, authoredKey(child), false]);
-    } else if (Array.isArray(value)) {
-      for (let index = value.length - 1; index >= 0; index--) {
-        stack.push([current.child(index), key, true]);
-      }
+  }
+  return root.output!;
+}
+
+/** Set `record[key]` as data, so a `__proto__` field stays a field. */
+function setField(record: Record<string, Value>, key: string, value: Value): void {
+  Object.defineProperty(record, key, { value, enumerable: true, writable: true, configurable: true });
+}
+
+/**
+ * Return a node's `output:` declaration with each tag that has nothing after it read as its
+ * type text, and everything else as written; `readOutputDeclaration` checks it.
+ */
+export function outputDeclarationText(cursor: SourceCursor): Value {
+  const tag = cursor.tag;
+  if (tag !== null && !cursor.hasValue) return tag;
+  const value = cursor.value;
+  if (tag !== null || !isRecord(value)) return value;
+  return Object.fromEntries(Object.keys(value).map((name) => [name, outputDeclarationText(cursor.child(name))]));
+}
+
+/** Explain a value written after a tag in an `output:` declaration. */
+function taggedValueMessage(cursor: SourceCursor, key: string, registry: TypeRegistry): string {
+  const tag = cursor.tag!;
+  const value = cursor.value;
+  // A space cut a type's arguments off the tag: `!Literal(a; b)`.
+  if (cursor.scalarStyle === "plain" && typeof value === "string" && tag.split("(").length > tag.split(")").length) {
+    const joined = tagSpelling(tag + value.replace(/\s+/g, ""));
+    if (writableAsTag(joined) && resolves(joined, registry)) {
+      return `a YAML tag ends at the first space; write \`${key}: !${joined}\` without spaces`;
     }
   }
+  return `\`output:\` declares a type, so nothing follows its tag: write \`${key}: !${tag}\``;
+}
+
+/** Spell the tagged form of an untagged `output:` declaration `value` under `key`. */
+function plainTypeFix(key: string, value: Value, registry: TypeRegistry): string {
+  const text = typeof value === "string" ? value.trim() : "";
+  let spelled = text === "" ? null : spellTypeText(text);
+  if (spelled === null) return `write \`${key}: !<type>\`, e.g. \`${key}: !str\``;
+  let resolved = resolveTypeText(spelled, registry);
+  if (resolved === null) {
+    // A leading name close to a type name is spelled as that name: `strr` gives `!str`.
+    const close = closeTypeName(spelled, registry);
+    if (close !== null) spelled = close + spelled.slice(HEAD_IDENTIFIER.exec(spelled)![0].length);
+    resolved = resolveTypeText(spelled, registry);
+  }
+  const suggestion = suggestTag(key, resolved?.[0] ?? null, null, { registry, typeText: spelled });
+  return suggestion.startsWith("`") ? `write ${suggestion}` : suggestion;
 }
 
 /** Spell the mapping key selecting `cursor` as written. */
@@ -1091,9 +1162,9 @@ function authoredKey(cursor: SourceCursor): string {
 /**
  * Reject the first tag in `document` that no slot reader consumed.
  *
- * A tag types a flow input, a binding, a flow output, an agent variable, an `llm_config` value
- * (the whole record or a field), a value entry in `nodes:`, or a value inside one; anywhere
- * else it would be silently ignored. Tags reached only through top-level `x-*` keys are exempt.
+ * A tag types a flow input, a binding, a node's `output:` declaration, a flow output, an agent
+ * variable, an `llm_config` value (the whole record or a field), a value entry in `nodes:`, or a
+ * value inside one; anywhere else it would be silently ignored. Tags reached only through top-level `x-*` keys are exempt.
  * Tags under `typedefs:` and on mapping keys get their own messages. Keys are spelled as
  * written, so `on:` stays `on:`. The text an `!include(T)` of a text `T` reads is a text value
  * anywhere `!include` gives one, so no slot need read it; with `options.registry`, its `T` must
@@ -1156,8 +1227,8 @@ export function rejectUnreadTags(
       );
     }
     throw diagnostics.error(
-      "a tag types a value — a flow input, a binding, a flow output, an agent variable, an " +
-        "`llm_config` value, a value entry in `nodes:`, or a value inside one; " +
+      "a tag types a value — a flow input, a binding, a node or flow output, an agent variable, " +
+        "an `llm_config` value, a value entry in `nodes:`, or a value inside one; " +
         `${where} is not one`,
       { range: node.range },
     );

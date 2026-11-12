@@ -228,14 +228,14 @@ nodes:
     kind: code
     input:
       x: \${input.x}
-    output: int
+    output: !int
     code: |
       return inputs["x"] + 1n
   second:
     kind: code
     input:
       y: \${first.output}
-    output: int
+    output: !int
     code: |
       return inputs["y"] * 2n
 output: \${second.output}
@@ -251,7 +251,7 @@ nodes:
     kind: code
     input:
       x: \${input.x}
-    output: int
+    output: !int
     code: |
       return inputs["x"] + 1n
 output: \${inner.output}

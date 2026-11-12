@@ -462,7 +462,7 @@ async function streamedRun(
 }
 
 test("chunks carry their model_call step's n and a dense index from 0", async () => {
-  const flow = PLAIN_FLOW.replace("    output: str", "    tools: [lookup]\n    output: str");
+  const flow = PLAIN_FLOW.replace("    output: !str", "    tools: [lookup]\n    output: !str");
   const chat = model(streamedCalls("let me check", [["acme", "call-1"]]), streamed("acme", " is", " fine"));
   const { log, result, chunks, events } = await streamedRun(chat, { tools: { lookup: lookupTool() }, flow });
   expect(result.status, result.failure?.message).toBe("succeeded");

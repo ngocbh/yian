@@ -1,0 +1,22 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    n:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        qty: 1
+      output:
+        qty:
+          - !int
+  output: ${n.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '`output:` declares a type, which can''t be a YAML list: write a record as a mapping of tagged fields, as in `{a: !int, b: !str}`, and a list type as `!list(T)`'
+      frames:
+      - label: flow.yaml
+        range: [11, 9, 12, 1]

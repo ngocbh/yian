@@ -20,7 +20,7 @@ nodes:
     kind: agent
     input:
       topic: ${input.topic}
-    output: str
+    output: !str
     prompt: "Draft a short announcement about ${topic}."
 
   review:
@@ -33,14 +33,14 @@ nodes:
         ${draft.output}
 
         Approve as-is or revise? (approve / revise)
-    output: Decision               # the typed answer
+    output: !Decision              # the typed answer
 
   finalize:
     kind: agent
     input:
       draft: ${draft.output}
       decision: ${review.output}
-    output: str
+    output: !str
     prompt: |-
       The reviewer said: ${decision}.
       If "approve", return the draft unchanged. If "revise", improve it.

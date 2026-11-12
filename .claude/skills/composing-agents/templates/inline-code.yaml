@@ -20,7 +20,7 @@ nodes:
     input:
       rating: ${input.rating}
       label:  ${input.label}
-    output: str
+    output: !str
     code: |
       const lean = inputs.rating >= 0 ? "positive" : "negative";
       const sign = inputs.rating >= 0 ? "+" : "";

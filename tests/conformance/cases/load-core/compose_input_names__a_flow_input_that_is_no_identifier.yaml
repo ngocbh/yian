@@ -7,7 +7,7 @@ flow: |
   input:
     first-name: !str
   nodes:
-    a: {kind: code, code: ./fixtures/compose_codefns.ts:echo, input: {topic: x}, output: str}
+    a: {kind: code, code: ./fixtures/compose_codefns.ts:echo, input: {topic: x}, output: !str}
   output: ${a.output}
 expect:
   load:

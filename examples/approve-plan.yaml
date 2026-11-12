@@ -12,7 +12,7 @@
 # against that declaration and passes it through in the request.
 #
 # The flow output is the lead's answer, else the manager's, else null when neither answered
-# in time. With strict outputs (`output: Approval`), a timeout fails the node with
+# in time. With strict outputs (`output: !Approval`), a timeout fails the node with
 # `tool.timeout` instead.
 #
 # Exercises: `ask` with `timeout:` and a host extension, an Optional answer, a routing-only
@@ -37,7 +37,7 @@ nodes:
 
         ${input.plan}
       timeout: 24h
-    output: Optional(Approval)           # null: the lead didn't answer in time
+    output: !Optional(Approval)          # null: the lead didn't answer in time
   escalate:
     kind: case
     cases:
@@ -53,5 +53,5 @@ nodes:
 
         ${input.plan}
       timeout: 48h
-    output: Optional(Approval)
+    output: !Optional(Approval)
 output: !Optional(Approval) ${lead.output | manager.output}

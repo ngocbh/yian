@@ -31,18 +31,18 @@ nodes:
   a:
     kind: agent
     prompt: Say a.
-    output: str
+    output: !str
   b:
     kind: agent
     prompt: Say b.
-    output: str
+    output: !str
     llm_config:
       anthropic:
         max_tokens: 512
   c:
     kind: agent
     prompt: Say c.
-    output: str
+    output: !str
     llm_config:
       provider: openai
       model: gpt-5.5

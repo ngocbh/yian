@@ -16,7 +16,7 @@ flow: |
           tool_id: ask
           input:
             prompt: nested map input
-          output: str
+          output: !str
       output: ${ask.output}
   nodes:
     invoke:

@@ -141,10 +141,10 @@ function steerFlow(options: { tools?: readonly string[]; after?: boolean } = {})
     "id: steer\nname: steer\nllm_config: {provider: anthropic, model: claude-test}\n" +
     "input:\n  notes: !Inbox(str)\nnodes:\n" +
     "  chat:\n    kind: agent\n    steer_inbox: ${input.notes}\n" +
-    `    tools: [${tools.join(", ")}]\n    prompt: Help the user.\n    output: str\n` +
+    `    tools: [${tools.join(", ")}]\n    prompt: Help the user.\n    output: !str\n` +
     (after
       ? '  after:\n    kind: agent\n    input: {draft: "${chat.output}"}\n    prompt: "summarize: ${draft}"\n' +
-        "    output: str\noutput: ${after.output}\n"
+        "    output: !str\noutput: ${after.output}\n"
       : "output: ${chat.output}\n")
   );
 }

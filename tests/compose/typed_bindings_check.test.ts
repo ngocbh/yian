@@ -32,6 +32,7 @@ import {
   loadError,
   runCase,
 } from "../helpers/declarations.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-typed-bindings-check-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -60,7 +61,7 @@ output: \${use.output}
 
 /** Return a CODE node `nodeId` returning `value`, declaring `output` when given. */
 function producer(nodeId: string, value: string, output: string | null): string {
-  const declared = output !== null ? `    output: ${output}\n` : "";
+  const declared = output !== null ? `    output: ${outputTag(output)}\n` : "";
   return `  ${nodeId}:\n    kind: code\n    code: |\n      return ${value}\n${declared}`;
 }
 
@@ -105,7 +106,7 @@ nodes:
     kind: code
     code: |
       return "hi"
-    output: str
+    output: !str
 output:
   x: !int \${note.output}
 `;
@@ -124,7 +125,7 @@ nodes:
     kind: code
     code: |
       return "hi"
-    output: str
+    output: !str
 output: !int \${note.output}
 `;
   const error = loadErrorOf(text);
@@ -142,7 +143,7 @@ nodes:
     kind: code
     code: |
       return "hi"
-    output: str
+    output: !str
 output:
   result: !int \${note.output}
 `;
@@ -264,7 +265,7 @@ defs:
         kind: code
         input:
           y: \${input.y}
-        output: str
+        output: !str
         code: |
           return inputs["y"].toUpperCase()
     output: \${up.output}
@@ -279,7 +280,7 @@ defs:
     nodes:
       note:
         kind: code
-        output: str
+        output: !str
         code: |
           return "hi"
       use:
@@ -308,7 +309,7 @@ name: checked
 nodes:
   note:
     kind: code
-    output: str
+    output: !str
     code: |
       return "hi"
   wrap:
@@ -320,7 +321,7 @@ nodes:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: |
           return inputs["n"] * 2n
     output: \${twice.output}
@@ -346,7 +347,7 @@ defs:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: |
           return inputs["n"] + 1n
     output:
@@ -354,7 +355,7 @@ defs:
 nodes:
   note:
     kind: code
-    output: str
+    output: !str
     code: |
       return "hi"
   loop:
@@ -383,7 +384,7 @@ name: checked
 ${STR_CHILD}nodes:
   a:
     kind: code
-    output: str
+    output: !str
     code: |
       return "hi"
   run:

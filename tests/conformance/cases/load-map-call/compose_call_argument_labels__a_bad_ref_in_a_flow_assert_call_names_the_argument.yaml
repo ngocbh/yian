@@ -13,10 +13,10 @@ flow: |2
           code: "return true"
           input:
             y: ${input.y}
-          output: bool
+          output: !bool
       output: ${x.output}
   nodes:
-    n: {kind: code, code: "return 'a'", output: str}
+    n: {kind: code, code: "return 'a'", output: !str}
   output: ${n.output}
   asserts:
     - call(check, y=${nosuch.output})

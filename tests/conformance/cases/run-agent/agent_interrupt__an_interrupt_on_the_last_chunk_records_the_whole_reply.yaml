@@ -16,7 +16,7 @@ flow: |
       tools: [lookup]
       system_prompt: Help.
       prompt: Help the user.
-      output: Optional(str)
+      output: !Optional(str)
   output: ${chat.output}
 run:
   run_id: r1

@@ -11,7 +11,7 @@ flow: |
       tool_id: take
       input:
         from: ${input.m}
-      output: str
+      output: !str
   output: null
 expect:
   load:
@@ -20,4 +20,4 @@ expect:
       message: "node 'heard' (tool_id: take): take's output is inferred ({events: list(T), closed: bool}); remove `output:`"
       frames:
       - label: flow.yaml
-        range: [11, 13, 11, 16]
+        range: [11, 13, 11, 17]

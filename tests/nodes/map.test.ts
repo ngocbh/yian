@@ -31,7 +31,7 @@ nodes:
     kind: code
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
     code: ./fixtures/compose_codefns.ts:echo
 output: \${emit.output}
 `;
@@ -46,7 +46,7 @@ nodes:
     kind: code
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
     code: ./fixtures/compose_codefns.ts:boom
 output: \${emit.output}
 `;

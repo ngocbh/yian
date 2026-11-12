@@ -16,7 +16,7 @@ flow: |2
         f: ${input.f}
       code: |
         return [inputs["n"], inputs["m"], inputs["f"]]
-      output: list(float)
+      output: !list(float)
   output: ${echo.output}
 inputs:
   n: -1

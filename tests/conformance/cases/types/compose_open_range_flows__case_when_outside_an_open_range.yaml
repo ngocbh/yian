@@ -16,12 +16,12 @@ flow: |
       kind: code
       code: |
         return "hit"
-      output: str
+      output: !str
     miss:
       kind: code
       code: |
         return "miss"
-      output: str
+      output: !str
   output: ${route.output}
 expect:
   load:

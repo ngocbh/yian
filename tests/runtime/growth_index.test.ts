@@ -36,7 +36,7 @@ defs:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: |
           return inputs["n"]
     output: \${step.output}
@@ -48,14 +48,14 @@ defs:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: |
           return inputs["n"] + 1
       slow:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: |
           await new Promise((resolve) => setTimeout(resolve, 50))
           return inputs["n"]
@@ -69,7 +69,7 @@ defs:
         input:
           n: \${note.output}
           m: \${bump.output}
-        output: int
+        output: !int
         code: |
           return inputs["n"] + inputs["m"]
     output:
@@ -110,7 +110,7 @@ nodes:
               a:
                 kind: code
                 input: {n: "\${input.n}"}
-                output: int
+                output: !int
                 code: |
                   return inputs["n"] + 1
             output: \${a.output}

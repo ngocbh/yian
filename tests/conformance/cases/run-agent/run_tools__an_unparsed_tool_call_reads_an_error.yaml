@@ -12,7 +12,7 @@ flow: |
       tools: [lookup]
       system_prompt: Help.
       prompt: go
-      output: str
+      output: !str
   output: ${agent.output}
 run:
   run_id: r1

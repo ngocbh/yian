@@ -4,6 +4,7 @@ import { expect, test } from "bun:test";
 import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 /** Return an ask flow whose node `q` declares `output` and waits `timeout`. */
 const askFlow = (output: string, timeout = "24h") => `id: f
@@ -15,7 +16,7 @@ nodes:
     input:
       prompt: Ship it?
       timeout: ${timeout}
-    output: ${output}
+    output: ${outputTag(output)}
 output: \${q.output}
 `;
 

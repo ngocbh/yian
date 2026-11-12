@@ -136,15 +136,15 @@ output: \${c.output}
 
 test.each<[string, string, string, Value]>([
   ["untyped", "10n ** 4999n", "", POWER],
-  ["int", "10n ** 4999n", "    output: int", POWER],
+  ["int", "10n ** 4999n", "    output: !int", POWER],
   ["record-untyped", '{"v": [10n ** 4999n]}', "", { v: [POWER] }],
-  ["record-typed", '{"v": [10n ** 4999n]}', "    output: {v: list(int)}", { v: [POWER] }],
+  ["record-typed", '{"v": [10n ** 4999n]}', "    output: {v: !list(int)}", { v: [POWER] }],
 ])("a long int node output fails the node (%s)", async (_id, value, outputLine, output) => {
   assertSucceeds(await run(codeOutputFlow(value, outputLine)), output);
 });
 
 test("a long int node output fails the node (str)", async () => {
-  const result = await run(codeOutputFlow("10n ** 4999n", "    output: str"));
+  const result = await run(codeOutputFlow("10n ** 4999n", "    output: !str"));
 
   assertFails(result, "contract.output", "c", `${SHOWN(POWER)} does not match declared type str`);
 });

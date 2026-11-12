@@ -7,7 +7,7 @@ flow: |
       "\uD800": int
   input:
     r: !R
-  output: str
+  output: !str
   kind: code
   code: |
     return 1

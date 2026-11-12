@@ -9,7 +9,7 @@ flow: |
       kind: code
       input:
         x: ${input.s}
-      output: str
+      output: !str
       code: "return null"
     settle:
       kind: tool

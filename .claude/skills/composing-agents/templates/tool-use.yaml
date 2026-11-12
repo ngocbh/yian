@@ -38,14 +38,14 @@ nodes:
     input:                         # each value is a ${...} ref or a literal
       query: ${input.subject}
       limit: 5
-    output: list(Fact)
+    output: !list(Fact)
 
   summary:
     kind: agent
     input:
       subject: ${input.subject}
       facts: ${facts.output}
-    output: str
+    output: !str
     prompt: |-
       Using these facts, write a 3-sentence brief on ${subject}.
 

@@ -21,7 +21,7 @@ nodes:
     kind: agent
     input:
       review: ${input.review}
-    output: str
+    output: !str
     prompt: Summarize this review in one sentence. ${review}
 output: ${summary.output}
 ```
@@ -76,7 +76,7 @@ nodes:
       tone: !str plain
     system_prompt: You write short briefs for busy readers.
     prompt: Write ${sentences} ${tone} sentences about ${topic}.
-    output: str
+    output: !str
 output: ${writer.output}
 ```
 
@@ -110,7 +110,7 @@ nodes:
       tone: !str plain
     system_prompt: You write short briefs for busy readers.
     prompt: !include prompts/writer.md
-    output: str
+    output: !str
 output: ${writer.output}
 ```
 
@@ -118,7 +118,7 @@ output: ${writer.output}
   load, and its final newline is kept. Its line endings read as LF. The text isn't YAML, so an
   included file can't include another.
 - `!include` works on any text value. It fails at load on a key, a list or a mapping, and where
-  a type goes: `input:` and `variables:` declarations, a node's `output:` type and `typedefs:`.
+  a type goes: `input:` and `variables:` declarations, a node's `output:` and `typedefs:`.
 - The file must be UTF-8 text of at most `YIAN_MAX_INCLUDE_BYTES` (see
   [Reference](/reference/#all-defaults-and-limits)), and a load with a root folder, such as
   `yian check --root`, refuses one outside it. A missing or unreadable file fails at load, at the
@@ -154,7 +154,7 @@ nodes:
       examples: !include(list(str)) examples.json
     system_prompt: !include(str) prompts/tutor.md
     prompt: "Examples:\n${join(examples, '\n')}\n\nQ: ${question}"
-    output: str
+    output: !str
 output: ${tutor.output}
 ```
 
@@ -205,7 +205,7 @@ nodes:
     input:
       history: ${input.history}
       message: ${input.message}
-    output: str
+    output: !str
     prompt:
       - ${history}
       - user: ${message}
@@ -219,9 +219,9 @@ to its history, and a `case` can route on them.
 
 ## Structured output
 
-An `output:` of `str` or `Optional(str)` keeps the reply as free text. Any other type, such as a
-record, a list, a number or a `Literal(...)`, asks the model for a value of that type and checks
-the reply against it.
+An `output:` of `!str` or `!Optional(str)` keeps the reply as free text. Any other type, such as
+a record (`{name: !str, score: !int}`), a list, a number or a `Literal(...)`, asks the model for a
+value of that type and checks the reply against it.
 
 <!-- yian-test {"replies": ["{\"name\": \"Ada\", \"score\": 9}"]} -->
 
@@ -231,8 +231,8 @@ name: extract
 input:
   text: !str
 output:
-  name: str
-  score: int(0..10)
+  name: !str
+  score: !int(0..10)
 kind: agent
 prompt: Give the person's name and a 0-10 score for how happy they sound. ${text}
 ```
@@ -272,7 +272,7 @@ researcher:
   env:
     max_tool_iterations: 20
   prompt: Answer ${question}. Ask the user only if a detail is missing.
-  output: str
+  output: !str
 ```
 
 `tools:` is always a list. A **tool group** holds several tools, such as all the tools of one MCP
@@ -440,7 +440,7 @@ defs:
         kind: code
         input:
           text: ${input.text}
-        output: str
+        output: !str
         code: return inputs.text.toUpperCase() + "!"
     output: ${loud.output}
 nodes:
@@ -448,7 +448,7 @@ nodes:
     kind: agent
     tools: [shout]
     prompt: Shout hi, then say what came back.
-    output: str
+    output: !str
 output: ${helper.output}
 ```
 
@@ -493,7 +493,7 @@ reviewer:
   input:
     diff: ${input.diff}
   prompt: Review this change. ${diff}
-  output: str
+  output: !str
 ```
 
 The model sees only each skill's name and description. When it needs one, it calls the built-in
@@ -540,7 +540,7 @@ nodes:
       question: ${input.question}
     steer_inbox: ${input.notes}
     prompt: Research ${question} and answer it.
-    output: Optional(str)
+    output: !Optional(str)
 output: ${worker.output :- "(stopped)"}
 ```
 

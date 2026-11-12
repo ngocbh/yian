@@ -15,7 +15,7 @@ flow: |
         after:
           kind: code
           depends_on: [w]
-          output: int
+          output: !int
           code: |
             return 1
       output: ${after.output}

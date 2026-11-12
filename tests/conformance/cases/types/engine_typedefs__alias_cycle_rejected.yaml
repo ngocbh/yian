@@ -7,7 +7,7 @@ flow: |
     B: A
   input:
     n: !int
-  output: 'int'
+  output: !int
   kind: code
   code: |
     return 1

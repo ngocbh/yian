@@ -48,7 +48,7 @@ nodes:
   agent:
     kind: agent
     prompt: hi
-    output: str
+    output: !str
     ${field}: retired
 output: \${agent.output}
 `;

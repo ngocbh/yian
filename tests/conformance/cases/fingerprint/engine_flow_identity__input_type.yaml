@@ -11,7 +11,7 @@ flow: |
       tool_id: step
       input:
         x: ${input.x}
-      output: int
+      output: !int
   output: ${step.output}
 other: |
   id: stable
@@ -24,7 +24,7 @@ other: |
       tool_id: step
       input:
         x: ${input.x}
-      output: int
+      output: !int
   output: ${step.output}
 expect:
   fingerprint: different

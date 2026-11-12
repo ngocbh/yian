@@ -8,7 +8,7 @@ flow: |2
       kind: code
       code: |
         return "hi"
-      output: str
+      output: !str
   output: !int ${note.output}
 expect:
   load:

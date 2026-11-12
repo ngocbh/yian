@@ -12,6 +12,7 @@ import { PassThrough } from "node:stream";
 import { main } from "../../src/cli/index.ts";
 import type { CliIo } from "../../src/cli/utils.ts";
 import { ApiKeyCredentials, AuthStore } from "../../src/llm_clients/auth/index.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 const KEY = "sk-cli-401-echo-wvbn";
 const FRAGMENTS = [KEY, KEY.slice(0, 8), `*${KEY.slice(-4)}`];
@@ -155,7 +156,7 @@ function callTimeFlow(chatLlm: string, { pick = "str", value = "'m1'", typedefs 
   return `id: picked
 name: picked
 ${typedefs}nodes:
-  pick: {kind: code, output: ${pick}, code: "return ${value}"}
+  pick: {kind: code, output: ${outputTag(pick)}, code: "return ${value}"}
   chat:
     kind: agent
     prompt: hi

@@ -430,7 +430,7 @@ nodes:
 ${steerInbox ? "    steer_inbox: ${input.notes}\n" : ""}    tools: [lookup]
     system_prompt: Help.
     prompt: Help the user.
-    output: str
+    output: !str
 ${take ? "  heard:\n    kind: tool\n    tool_id: take\n    input:\n      from: ${input.notes}\n    depends_on: [chat]\n" : ""}output: \${chat.output}
 `;
 }

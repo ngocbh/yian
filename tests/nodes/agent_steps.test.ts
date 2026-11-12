@@ -51,6 +51,7 @@ import { pending, type ToolContext } from "../../src/tools/context.ts";
 import { type JsonObject, logJson } from "../../src/typesys/json.ts";
 import type { ValueRecord } from "../../src/typesys/values.ts";
 import { crashAfter, NO_ENV, rejected, serving, textReply, thrownBy } from "../helpers/run_state_fixtures.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 const root = mkdtempSync(join(tmpdir(), "yian-agent-steps-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -72,7 +73,7 @@ ${steerInbox ? "input:\n  notes: !Inbox(str)\n" : ""}nodes:
     kind: agent
     tools: [${tools.join(", ")}]
 ${steerInbox ? "    steer_inbox: ${input.notes}\n" : ""}    prompt: hi
-    output: ${steerInbox ? "Optional(str)" : "str"}
+    output: ${outputTag(steerInbox ? "Optional(str)" : "str")}
 output: \${writer.output}
 `;
 }

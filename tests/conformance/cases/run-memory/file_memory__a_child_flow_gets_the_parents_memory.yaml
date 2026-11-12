@@ -24,7 +24,7 @@ flow: |
             ${notes}
             </memory>
             Add a note.
-          output: str
+          output: !str
       output: ${write.output}
   nodes:
     c:

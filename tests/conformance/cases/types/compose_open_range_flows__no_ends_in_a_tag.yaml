@@ -9,7 +9,7 @@ flow: |
         x: !int(..) 1
       code: |
         return inputs["x"]
-      output: int
+      output: !int
   output: ${use.output}
 expect:
   load:

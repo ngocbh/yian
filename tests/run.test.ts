@@ -112,8 +112,8 @@ nodes:
     input:
       topic: \${input.topic}
     output:
-      rating: str
-      score: float
+      rating: !str
+      score: !float
 output:
   rating: \${plan.output.rating}
   score: \${plan.output.score}
@@ -133,7 +133,7 @@ nodes:
     code: ./compose_codefns.ts:score
     input:
       seed: \${input.seed}
-    output: float
+    output: !float
   gate:
     kind: case
     cases:
@@ -145,13 +145,13 @@ nodes:
     code: ./compose_codefns.ts:positive
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
   cautious:
     kind: code
     code: ./compose_codefns.ts:cautious
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
 output: \${positive.output | cautious.output}
 `;
 
@@ -170,8 +170,8 @@ nodes:
     input:
       topic: \${input.topic}
     output:
-      rating: str
-      score: float
+      rating: !str
+      score: !float
 output:
   rating: \${plan.output.rating}
   score: \${plan.output.score}
@@ -206,7 +206,7 @@ nodes:
     code: ./compose_codefns.ts:echo_rid
     input:
       rid: \${system.run_id}
-    output: str
+    output: !str
 output: \${echo.output}
 `;
 
@@ -738,7 +738,7 @@ nodes:
     tool_id: place_order
     input:
       qty: 5
-    output: int
+    output: !int
 output: \${place.output}
 `);
   const placeText = tool({
@@ -798,7 +798,7 @@ id: f
 name: f
 input: {v: !str }
 nodes:
-  x: {kind: code, code: "return inputs['n']", input: {n: '\${input.v}'}, output: str}
+  x: {kind: code, code: "return inputs['n']", input: {n: '\${input.v}'}, output: !str}
 output: \${x.output}
 `;
 
@@ -1005,7 +1005,7 @@ const PICKING = `
 id: f
 name: f
 nodes:
-  pick: {kind: code, output: float, code: "return 1e308"}
+  pick: {kind: code, output: !float, code: "return 1e308"}
   chat:
     kind: agent
     prompt: Go.
@@ -1031,7 +1031,7 @@ nodes:
   work:
     kind: code
     code: return "done"
-    output: str
+    output: !str
 output: \${work.output}
 `;
 
@@ -1052,7 +1052,7 @@ nodes:
   fail:
     kind: code
     code: ./compose_codefns.ts:boom
-    output: str
+    output: !str
   waiter:
     kind: tool
     tool_id: waiter
@@ -1070,7 +1070,7 @@ nodes:
   side:
     kind: code
     code: return "side"
-    output: str
+    output: !str
 output: \${input.x}
 `;
 
@@ -1115,7 +1115,7 @@ test("inspectRun reads a succeeded and a failed run, with and without the flow",
 
   const failed = join(dir, "failed.jsonl");
   const boom = await load(
-    "id: f\nname: f\nnodes:\n  fail: {kind: code, code: ./compose_codefns.ts:boom, output: str}\n" +
+    "id: f\nname: f\nnodes:\n  fail: {kind: code, code: ./compose_codefns.ts:boom, output: !str}\n" +
       "output: ${fail.output}\n",
   );
   await run(boom, {}, { log: failed });
@@ -1265,7 +1265,7 @@ nodes:
   selected:
     kind: code
     code: return "selected"
-    output: str
+    output: !str
 output: \${selected.output}
 `;
 
@@ -1313,7 +1313,7 @@ defs:
           llm_config: {provider: openai, model: '\${input.m}'}
     output: \${ask.output}
 nodes:
-  pick: {kind: code, output: str, code: "return 'gpt-picked'"}
+  pick: {kind: code, output: !str, code: "return 'gpt-picked'"}
   each:
     kind: map
     call: item
@@ -1380,7 +1380,7 @@ test("inspectRun reads the run id, schema, fingerprint and last seq, with and wi
 test("inspectRun reads the failure of a failed run, with and without the flow", async () => {
   const failed = join(dir, "failed.jsonl");
   const boom = await load(
-    "id: f\nname: f\nnodes:\n  fail: {kind: code, code: ./compose_codefns.ts:boom, output: str}\n" +
+    "id: f\nname: f\nnodes:\n  fail: {kind: code, code: ./compose_codefns.ts:boom, output: !str}\n" +
       "output: ${fail.output}\n",
   );
   const result = await run(boom, {}, { log: failed });
@@ -1503,7 +1503,7 @@ defs:
         kind: agent
         input:
           topic: \${input.topic}
-        output: str
+        output: !str
         prompt: Write about \${topic}.
     output: \${write.output}
 nodes:
@@ -1605,8 +1605,8 @@ defs:
           n: \${input.n}
           exited: \${input.exited}
         output:
-          n: int
-          exited: bool
+          n: !int
+          exited: !bool
     output: \${bump.output}
 nodes:
   node:
@@ -1752,7 +1752,7 @@ nodes:
     kind: code
     input:
       word: \${input.word}
-    output: str
+    output: !str
     code: |
       console.log("said", inputs.word);
       console.warn("warned", inputs.word);
@@ -1768,7 +1768,7 @@ nodes:
     kind: code
     input:
       heard: \${heard.output.events}
-    output: str
+    output: !str
     code: |
       console.info("heard", inputs.heard.join());
       return "done";

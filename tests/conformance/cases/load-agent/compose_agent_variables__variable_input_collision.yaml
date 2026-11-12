@@ -10,7 +10,7 @@ flow: |
       variables:
         topic: !str fallback
       prompt: ${topic}
-      output: str
+      output: !str
   output: ${writer.output}
 expect:
   load:

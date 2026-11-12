@@ -6,7 +6,7 @@ flow: |
   nodes:
     mint:
       kind: code
-      output: Inbox(str)
+      output: !Inbox(str)
       code: return null
   output: null
 expect:
@@ -16,4 +16,4 @@ expect:
       message: 'an output can''t be an inbox (`Inbox(...)` declares a flow input)'
       frames:
       - label: flow.yaml
-        range: [6, 13, 6, 23]
+        range: [6, 13, 6, 24]

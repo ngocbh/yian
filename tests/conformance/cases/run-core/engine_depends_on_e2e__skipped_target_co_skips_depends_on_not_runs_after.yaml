@@ -17,21 +17,21 @@ flow: |2
       code: ./fixtures/compose_codefns.ts:pick_pro
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
     dep_fetch:
       kind: code
       depends_on: [warm]
       code: ./fixtures/compose_codefns.ts:positive
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
     after_fetch:
       kind: code
       runs_after: [warm]
       code: ./fixtures/compose_codefns.ts:cautious
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
   output: ${dep_fetch.output | after_fetch.output}
 inputs:
   score: 0.2

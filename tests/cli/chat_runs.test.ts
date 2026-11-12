@@ -95,7 +95,7 @@ nodes:
     kind: code
     input:
       who: \${input.who}
-    output: str
+    output: !str
     code: |
       return "hi " + inputs["who"];
 output: \${hi.output}
@@ -146,7 +146,7 @@ nodes:
     tool_id: shout
     input:
       text: hi
-    output: str
+    output: !str
 output: \${loud.output}
 `);
     const tools = {
@@ -240,7 +240,7 @@ nodes:
     kind: code
     input:
       slept: \${nap.output}
-    output: str
+    output: !str
     code: |
       return "rested";
 output: \${done.output}
@@ -252,7 +252,7 @@ output: \${done.output}
  */
 const BUSY_NODE = `  busy:
     kind: code
-    output: str
+    output: !str
     code: |
       const fs = await import("node:fs");
       const cap = Date.now() + 5000;
@@ -321,7 +321,7 @@ nodes:
     tool_id: ask
     input:
       prompt: "Proceed?"
-    output: str
+    output: !str
 output: \${sure.output}
 `;
 
@@ -347,7 +347,7 @@ defs:
         kind: code
         input:
           events: \${heard.output.events}
-        output: str
+        output: !str
         code: |
           return "echo: " + inputs["events"].join(" | ");
     output:
@@ -371,7 +371,7 @@ name: boom
 nodes:
   boom:
     kind: code
-    output: str
+    output: !str
     code: |
       throw new Error("kaboom");
 output: \${boom.output}
@@ -611,7 +611,7 @@ name: chatty
 nodes:
   talk:
     kind: code
-    output: str
+    output: !str
     code: |
       console.log("x");
       console.error("y");
@@ -666,7 +666,7 @@ describe("console", () => {
 });
 
 /** BUSY_NODE, run once `node` has succeeded. */
-const after = (node: string) => BUSY_NODE.replace("    output: str\n", `    input:\n      after: \${${node}.output}\n    output: str\n`);
+const after = (node: string) => BUSY_NODE.replace("    output: !str\n", `    input:\n      after: \${${node}.output}\n    output: !str\n`);
 
 /** Sleep a minute, then keep busy. */
 const NAP_THEN_BUSY = `id: nap_busy

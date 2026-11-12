@@ -23,7 +23,7 @@ nodes:
     kind: code
     input:
       v: \${input.x}
-    output: str
+    output: !str
     code: tests.engine._fakes:passthrough
 output:
   result: \${n.output}
@@ -106,7 +106,7 @@ nodes:
       x: \${input.x}
     ${second}:
       y: \${input.x}
-    output: int
+    output: !int
     code: return inputs["x"]
 output: \${n.output}
 `;
@@ -128,7 +128,7 @@ defs:
         kind: code
         input:
           x: \${input.x}
-        output: int
+        output: !int
         code: return inputs["x"]
     output: \${n.output}
 nodes:

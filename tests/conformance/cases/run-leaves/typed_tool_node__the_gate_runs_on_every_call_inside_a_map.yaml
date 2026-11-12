@@ -15,7 +15,7 @@ flow: |
           tool_id: place_order
           input:
             x: ${input.x}
-          output: int
+          output: !int
       output: ${place.output}
   output: ${each.output}
 run:
@@ -43,7 +43,7 @@ expect:
       - label: flow.yaml
         range: [4, 3, 4, 7]
       - label: flow.yaml
-        range: [15, 17, 15, 20]
+        range: [15, 17, 15, 21]
       node: each#1/place
   trace:
   - - run_started
@@ -113,7 +113,7 @@ expect:
         - label: flow.yaml
           range: [4, 3, 4, 7]
         - label: flow.yaml
-          range: [15, 17, 15, 20]
+          range: [15, 17, 15, 21]
         node: each#1/place
   events:
   - [RunStarted]
@@ -168,7 +168,7 @@ expect:
         - label: flow.yaml
           range: [4, 3, 4, 7]
         - label: flow.yaml
-          range: [15, 17, 15, 20]
+          range: [15, 17, 15, 21]
         node: each#1/place
   - - RunFailed
     - failure:
@@ -178,7 +178,7 @@ expect:
         - label: flow.yaml
           range: [4, 3, 4, 7]
         - label: flow.yaml
-          range: [15, 17, 15, 20]
+          range: [15, 17, 15, 21]
         node: each#1/place
   tool_calls:
     place_order:

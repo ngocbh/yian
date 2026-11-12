@@ -46,14 +46,14 @@ defs:
         input:
           topic: \${input.topic}
         output:
-          report: str
-          n: int
+          report: !str
+          n: !int
       summary:
         kind: code
         code: ./fixtures/compose_codefns.ts:echo
         input:
           topic: \${data.output.report}
-        output: str
+        output: !str
     output: \${summary.output}
 nodes:
   research:
@@ -120,7 +120,7 @@ defs:
         kind: code
         code: ./fixtures/compose_codefns.ts:echo
         input: {value: first}
-        output: str
+        output: !str
     output: \${one.output}
   second:
     nodes:
@@ -128,14 +128,14 @@ defs:
         kind: code
         code: ./fixtures/compose_codefns.ts:echo
         input: {value: second}
-        output: str
+        output: !str
     output: \${two.output}
 nodes:
   root:
     kind: code
     code: ./fixtures/compose_codefns.ts:echo
     input: {value: root}
-    output: str
+    output: !str
 output: \${root.output}
 `);
     expect(parse).toHaveBeenCalledTimes(1);
@@ -228,7 +228,7 @@ defs:
     kind: code
     code: ./fixtures/compose_codefns.ts:echo
     input: { topic: !str }
-    output: str
+    output: !str
 nodes:
   go:
     kind: call
@@ -265,7 +265,7 @@ test("a single-node def's generated output keeps the contract origin", async () 
   const resolver = loaded.originResolver!;
 
   expect(origin).not.toBeNull();
-  expect(resolver.resolve(origin!)!.range).toEqual(new SourceRange(11, 13, 11, 16));
+  expect(resolver.resolve(origin!)!.range).toEqual(new SourceRange(11, 13, 11, 17));
 });
 
 test("a single-node def's call is type-checked across flows", async () => {
@@ -281,7 +281,7 @@ defs:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: !int
-    output: str
+    output: !str
 nodes:
   go:
     kind: call
@@ -309,7 +309,7 @@ defs:
         code: ./fixtures/compose_codefns.ts:echo
         input:
           topic: \${input.topic}
-        output: str
+        output: !str
     output: \${x.output}
 nodes:
   go:
@@ -362,7 +362,7 @@ defs:
       c:
         kind: code
         code: return 1
-        output: int
+        output: !int
     output: \${c.output}
 nodes:
   x:
@@ -383,7 +383,7 @@ defs:
     input: ${value}
     kind: code
     code: return 1
-    output: int
+    output: !int
 nodes:
   x:
     kind: call
@@ -410,7 +410,7 @@ defs:
         code: ./fixtures/compose_codefns.ts:echo
         input:
           topic: \${nonexistent.output}
-        output: str
+        output: !str
     output: \${x.output}
 nodes:
   go:
@@ -462,7 +462,7 @@ defs:
         code: ./fixtures/compose_codefns.ts:echo
         input:
           topic: \${input.topic}
-        output: str
+        output: !str
     output: \${x.output}
     bogus: 1
 nodes:
@@ -494,7 +494,7 @@ defs:
         code: ./fixtures/compose_codefns.ts:echo
         input:
           topic: \${input.topic}
-        output: str
+        output: !str
     output: \${x.output}
   unused_broken:
     input:
@@ -505,7 +505,7 @@ defs:
         code: ./fixtures/compose_codefns.ts:echo
         input:
           topic: \${nonexistent.output}
-        output: str
+        output: !str
     output: \${y.output}
 nodes:
   go:
@@ -534,7 +534,7 @@ defs:
       return inputs["mode"]
     input:
       mode: !Mode
-    output: str
+    output: !str
 nodes:
   go:
     kind: call
@@ -562,7 +562,7 @@ defs:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: !str "fallback"
-    output: str
+    output: !str
 nodes:
   go:
     kind: call
@@ -588,7 +588,7 @@ defs:
       return inputs["items"]
     input:
       items: !list(int)
-    output: list(int)
+    output: !list(int)
 nodes:
   go:
     kind: call
@@ -612,7 +612,7 @@ defs:
       return inputs["maybe"]
     input:
       maybe: !Optional(int) null
-    output: Optional(int)
+    output: !Optional(int)
 nodes:
   go:
     kind: call
@@ -639,7 +639,7 @@ defs:
       return inputs["value"]
     input:
       value: !int null
-    output: int
+    output: !int
 nodes:
   go:
     kind: call
@@ -660,7 +660,7 @@ defs:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       inf: !str
-    output: str
+    output: !str
 nodes:
   go:
     kind: call
@@ -687,7 +687,7 @@ defs:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: !str
-    output: str
+    output: !str
 nodes:
   a:
     kind: call
@@ -780,7 +780,7 @@ const badCode = (id: string) => `      ${id}:
         code: "return ("
         input:
           x: \${input.x}
-        output: str
+        output: !str
 `;
 
 /** A CALL node `id` of `call`. */
@@ -803,7 +803,7 @@ ${defs}nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       x: \${input.x}
-    output: str
+    output: !str
 output: \${r.output}
 `;
 
@@ -880,8 +880,8 @@ defs:
         input:
           topic: \${input.topic}
         output:
-          report: str
-          n: int
+          report: !str
+          n: !int
     output: \${x.output.report}
 nodes:
   call_shared:
@@ -902,7 +902,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
 output: \${x.output}
 `;
   // The in-file def (make_report) wins, not the external echo ("ACME").
@@ -931,7 +931,7 @@ defs:
         code: ./fixtures/compose_codefns.ts:echo
         input:
           topic: \${input.topic}
-        output: str
+        output: !str
     output: \${x.output}
     asserts:
       - x.output != ""
@@ -961,7 +961,7 @@ defs:
       return inputs["mode"]
     input:
       mode: !Mode
-    output: str
+    output: !str
 nodes:
   go:
     kind: call
@@ -998,7 +998,7 @@ defs:
       return inputs["mode"]
     input:
       mode: !Mode
-    output: str
+    output: !str
 nodes:
   route:
     kind: case
@@ -1032,7 +1032,7 @@ defs:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: !str
-    output: str
+    output: !str
 nodes:
   go:
     kind: call
@@ -1053,7 +1053,7 @@ x-def-base: &def_base
       kind: code
       code: |
         return "old"
-      output: str
+      output: str  # overridden below, so never read
   output: \${old.output}
 defs:
   target:
@@ -1063,7 +1063,7 @@ defs:
         kind: code
         code: |
           return "new"
-        output: str
+        output: !str
     output: \${new.output}
 nodes:
   invoke:

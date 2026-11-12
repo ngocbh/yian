@@ -6,7 +6,7 @@ flow: |
     Book: dict(str, Pricee)
   input:
     m: !Book
-  output: object
+  output: !object
   kind: code
   code: |
     return inputs["m"]

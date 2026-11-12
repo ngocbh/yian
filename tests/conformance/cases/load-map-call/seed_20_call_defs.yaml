@@ -28,13 +28,13 @@ flow: |
           input:
             topic: ${input.topic}
           output:               # the callee's intermediate record
-            values: list(float)
-            news: list(str)
+            values: !list(float)
+            news: !list(str)
         summarize:
           kind: agent
           input:
             news: ${fetch.output.news}    # dot into the fetch record
-          output: str
+          output: !str
           prompt: |-
             Summarize these headlines in one neutral sentence (no recommendations):
             ${news}

@@ -5,12 +5,12 @@ flow: |
   nodes:
     n:
       kind: code
-      output: str
+      output: !str
       code: |
         return "hi"
     score:
       kind: code
-      output: float
+      output: !float
       code: |
         return 0.75
     c:

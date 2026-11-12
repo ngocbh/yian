@@ -39,7 +39,7 @@ flow: |
       kind: agent
       input:
         briefs: ${research_each.output}        # the list of {report, asof} records — fan-in
-      output: str
+      output: !str
       prompt: |-
         You are a neutral editor given a list of research briefs (one per company):
         ${briefs}
@@ -76,8 +76,8 @@ files:
           topic: ${input.topic}
           as_of:  ${input.as_of}
         output:                    # an object: values + recent headlines
-          values: list(float)
-          news:   list(str)
+          values: !list(float)
+          news:   !list(str)
         code: ./fixtures/seeds.ts:fetch_facts   # deterministic data pull
 
       synth:
@@ -87,7 +87,7 @@ files:
           asof:   ${input.as_of}
           values: ${fetch.output.values}          # dot into fetch's object output
           news:   ${fetch.output.news}
-        output: str
+        output: !str
         prompt: |-
           Write a neutral research brief for ${topic} as of ${asof}.
           Recent closes: ${values}. Headlines: ${news}.

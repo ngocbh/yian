@@ -12,8 +12,8 @@ flow: |
     calc:
       kind: code
       output:
-        claim: str                                        # L12 — fine
-        score: int                                        # L13 — the field that fails
+        claim: !str                                       # L12 — fine
+        score: !int                                       # L13 — the field that fails
       code: |
         return {"claim": "ok", "score": "not-an-int"}
   output: ${calc.output.claim}
@@ -27,7 +27,7 @@ expect:
       message: 'output at score: "not-an-int" does not match declared type int'
       node: calc
       # The declared type `int` of `score` on line 13.
-      frames: [{label: flow.yaml, range: [13, 14, 13, 17]}]
+      frames: [{label: flow.yaml, range: [13, 14, 13, 18]}]
   trace:
     - [run_started, null, {num_workers: 0}]
     - [pool_commit, __start__, {key: system.now}]
@@ -44,4 +44,4 @@ expect:
           code: contract.output
           message: 'output at score: "not-an-int" does not match declared type int'
           node: calc
-          frames: [{label: flow.yaml, range: [13, 14, 13, 17]}]
+          frames: [{label: flow.yaml, range: [13, 14, 13, 18]}]

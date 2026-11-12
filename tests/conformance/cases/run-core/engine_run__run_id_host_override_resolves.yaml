@@ -11,7 +11,7 @@ flow: |2
       code: ./fixtures/compose_codefns.ts:echo_rid
       input:
         rid: ${system.run_id}
-      output: str
+      output: !str
   output: ${echo.output}
 inputs:
   topic: ACME

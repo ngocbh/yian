@@ -10,7 +10,7 @@ flow: |2
       kind: code
       code: ./fixtures/compose_codefns.ts:echo
       input: { topic: !str }
-      output: str
+      output: !str
   nodes:
     go:
       kind: call

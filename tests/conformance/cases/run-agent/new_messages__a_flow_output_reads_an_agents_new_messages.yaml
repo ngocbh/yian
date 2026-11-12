@@ -12,7 +12,7 @@ flow: |
       kind: agent
       system_prompt: Help.
       prompt: hi
-      output: str
+      output: !str
   output:
     answer: ${writer.output}
     history: ${writer.new_messages}

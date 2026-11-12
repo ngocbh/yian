@@ -11,7 +11,7 @@ flow: |
       kind: code
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       code: ./fixtures/seeds.ts:fail_always
   output: ${boom.output}
 inputs: {topic: X}

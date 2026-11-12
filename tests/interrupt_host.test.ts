@@ -31,6 +31,7 @@ import { pending } from "../src/tools/context.ts";
 import { tool } from "../src/tools/function_tools.ts";
 import { hostEnv } from "./helpers/mcp_helpers.ts";
 import { callReply, crashAfter, rejected, serving, textReply, userText } from "./helpers/run_state_fixtures.ts";
+import { outputTag } from "./helpers/output_tags.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-interrupt-host-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -54,7 +55,7 @@ nodes:
     kind: agent
     prompt: go
     tools: [hold, lookup]
-${steerInbox ? "    steer_inbox: \${input.m}\n" : ""}${output === null ? "" : `    output: ${output}\n`}${steerInbox ? "" : HEARD}output: \${reply.output}
+${steerInbox ? "    steer_inbox: \${input.m}\n" : ""}${output === null ? "" : `    output: ${outputTag(output)}\n`}${steerInbox ? "" : HEARD}output: \${reply.output}
 `;
 
 /** A take from `m`, so a flow whose agent reads no steer inbox still reads its inbox. */
@@ -282,7 +283,7 @@ ${gate}
     input:
       got: \${heard.output.events}
       gated: \${gate.output}
-    output: Optional(str)
+    output: !Optional(str)
 output: \${reply.output}
 `;
 
@@ -437,7 +438,7 @@ nodes:
     steer_inbox: \${input.m}
     input:
       got: \${heard.output.events}
-    output: Optional(str)
+    output: !Optional(str)
   approve:
     kind: tool
     tool_id: ask
@@ -449,7 +450,7 @@ nodes:
     steer_inbox: \${input.m}
     input:
       ok: \${approve.output}
-    output: Optional(str)
+    output: !Optional(str)
 output: \${reply2.output}
 `;
 
@@ -627,7 +628,7 @@ nodes:
     prompt: go
     tools: [slow]
     steer_inbox: \${input.m}
-    output: Optional(str)
+    output: !Optional(str)
   gate:
     kind: tool
     tool_id: open
@@ -697,13 +698,13 @@ nodes:
     prompt: note
     tools: [slow]
     steer_inbox: \${input.b}
-    output: Optional(str)
+    output: !Optional(str)
   reply:
     kind: agent
     prompt: answer
     steer_inbox: \${input.a}
     depends_on: [noter]
-    output: Optional(str)
+    output: !Optional(str)
 output: \${reply.output}
 `;
 

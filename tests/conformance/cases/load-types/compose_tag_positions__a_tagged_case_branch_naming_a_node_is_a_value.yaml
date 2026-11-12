@@ -15,11 +15,11 @@ flow: |
     hot:
       kind: code
       code: 'return "hot"'
-      output: str
+      output: !str
     cold:
       kind: code
       code: 'return "cold"'
-      output: str
+      output: !str
   output: ${hot.output | cold.output}
 expect:
   load:

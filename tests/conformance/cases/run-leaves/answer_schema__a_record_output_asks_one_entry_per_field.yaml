@@ -10,7 +10,7 @@ flow: |
       tool_id: ask
       input:
         prompt: "Rate the release"
-      output: {rating: float, note: Optional(str)}
+      output: {rating: !float, note: !Optional(str)}
   output: ${rate.output}
 run:
   run_id: r1

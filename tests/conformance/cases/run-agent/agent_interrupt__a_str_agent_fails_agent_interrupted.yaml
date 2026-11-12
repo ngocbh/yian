@@ -14,7 +14,7 @@ flow: |
       steer_inbox: ${input.notes}
       system_prompt: Help.
       prompt: Help the user.
-      output: str
+      output: !str
   output: ${chat.output}
 run:
   run_id: r1
@@ -34,7 +34,7 @@ expect:
     status: failed
     failure:
       code: agent.interrupted
-      message: "agent node 'chat' was interrupted and its output doesn't allow null; declare output: Optional(...) to route on an interrupt"
+      message: "agent node 'chat' was interrupted and its output doesn't allow null; declare `output: !Optional(...)` to route on an interrupt"
       node: chat
       frames: [{label: flow.yaml, range: [7, 3, 7, 7]}]
   trace:
@@ -95,7 +95,7 @@ expect:
     - chat
     - failure:
         code: agent.interrupted
-        message: "agent node 'chat' was interrupted and its output doesn't allow null; declare output: Optional(...) to route on an interrupt"
+        message: "agent node 'chat' was interrupted and its output doesn't allow null; declare `output: !Optional(...)` to route on an interrupt"
         frames:
         - label: flow.yaml
           range: [7, 3, 7, 7]
@@ -118,7 +118,7 @@ expect:
   - - NodeFailed
     - failure:
         code: agent.interrupted
-        message: "agent node 'chat' was interrupted and its output doesn't allow null; declare output: Optional(...) to route on an interrupt"
+        message: "agent node 'chat' was interrupted and its output doesn't allow null; declare `output: !Optional(...)` to route on an interrupt"
         frames:
         - label: flow.yaml
           range: [7, 3, 7, 7]
@@ -126,7 +126,7 @@ expect:
   - - RunFailed
     - failure:
         code: agent.interrupted
-        message: "agent node 'chat' was interrupted and its output doesn't allow null; declare output: Optional(...) to route on an interrupt"
+        message: "agent node 'chat' was interrupted and its output doesn't allow null; declare `output: !Optional(...)` to route on an interrupt"
         frames:
         - label: flow.yaml
           range: [7, 3, 7, 7]

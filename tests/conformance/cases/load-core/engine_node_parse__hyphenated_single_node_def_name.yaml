@@ -8,7 +8,7 @@ flow: |2
     my-def:
       kind: code
       code: "return 1"
-      output: int
+      output: !int
   nodes:
     a:
       kind: call

@@ -88,7 +88,7 @@ name: greet
 input:
   name: !str
   times: !int
-output: str
+output: !str
 kind: agent
 prompt: Greet ${name} ${times} times, in one line.
 ```

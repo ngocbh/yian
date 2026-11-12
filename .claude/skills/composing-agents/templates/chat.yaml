@@ -9,7 +9,7 @@
 # `answered` calls `respond` with the summary, the kept turns flattened by a comprehension in
 # the CALL's binding, what was said and the inbox; the reply's system prompt renders the
 # summary. The reply reads the inbox as its `steer_inbox:`, so messages sent while it runs
-# steer it; a host `interrupt` cuts it, and `output: Optional(str)` lets it succeed with null
+# steer it; a host `interrupt` cuts it, and `output: !Optional(str)` lets it succeed with null
 # (a `str` output would fail `agent.interrupted`). Closing the inbox (`close`) ends the loop
 # once the queued messages are answered: `closed` comes from the take, and a closed take with
 # no events skips `answered` (the routing-only CASE matches nothing), so
@@ -52,7 +52,7 @@ defs:
           history: ${input.history}
           said: ${input.said}
         steer_inbox: ${input.owner_messages}
-        output: Optional(str)            # text; null only after an interrupt
+        output: !Optional(str)           # text; null only after an interrupt
         system_prompt: |-
           You are a helpful conversational assistant.
 

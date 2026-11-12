@@ -14,7 +14,7 @@ flow: |
         n_def_node:
           kind: code
           code: return 1
-          output: int
+          output: !int
       output: 1
   input:
     q: !str
@@ -27,23 +27,23 @@ flow: |
         v: ${input.q}
         n_node_input: x
         w: {n_record: a}
-      output: str
+      output: !str
     b:
       kind: call
       nodes:
         inner:
           kind: code
           code: return 1
-          output: int
+          output: !int
         n_inline_node:
           kind: code
           code: return 2
-          output: int
+          output: !int
       output: ${inner.output}
     yes:
       kind: code
       code: return 3
-      output: int
+      output: !int
   output:
     r: ${a.output}
     n_flow_output: ${a.output}

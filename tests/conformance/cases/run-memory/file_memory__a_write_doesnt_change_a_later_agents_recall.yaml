@@ -16,7 +16,7 @@ flow: |
       tools: [{lessons: [append]}]
       system_prompt: Help.
       prompt: "<memory>${lessons}</memory> Add a lesson."
-      output: str
+      output: !str
     second:
       kind: agent
       input:
@@ -25,7 +25,7 @@ flow: |
       tools: []
       system_prompt: Help.
       prompt: "<memory>${lessons}</memory> ${noted}"
-      output: str
+      output: !str
   output: ${second.output}
 run: {run_id: r1, num_workers: 0}
 host:

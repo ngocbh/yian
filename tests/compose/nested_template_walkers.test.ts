@@ -90,7 +90,7 @@ test("dangling nested output reference fails at its own line", () => {
 test("nested reference field is checked", () => {
   const text =
     "typedefs:\n  Rec: {a: str}\n" +
-    codeFlow("{a: '${p.output.zz}'}").replace("  p:\n    kind: code\n", "  p:\n    kind: code\n    output: Rec\n");
+    codeFlow("{a: '${p.output.zz}'}").replace("  p:\n    kind: code\n", "  p:\n    kind: code\n    output: !Rec\n");
 
   const error = loadError(() => assembleText(text));
 
@@ -313,8 +313,8 @@ defs:
               - \${input.n}
         code: return inputs["x"]
         output:
-          n: int
-          seen: list(int)
+          n: !int
+          seen: !list(int)
     output:
       n: \${pack.output.n}
 nodes:

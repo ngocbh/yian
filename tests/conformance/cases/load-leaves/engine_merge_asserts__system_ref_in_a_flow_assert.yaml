@@ -11,7 +11,7 @@ flow: |2
       kind: code
       input:
         age: ${input.age}
-      output: int
+      output: !int
       code: |
         return inputs["age"]
   output: ${echo.output}

@@ -16,13 +16,13 @@ flow: |2
       input:
         decision: ${input.decision}
       code: return inputs['decision']
-      output: Decision
+      output: !Decision
     place:
       kind: code
       input:
         buy: !Buy ${decide.output}
       code: "return 'buy ' + String(inputs['buy']['qty'])"
-      output: str
+      output: !str
   output: ${place.output}
 inputs:
   decision:

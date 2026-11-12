@@ -10,7 +10,7 @@ flow: |
       variables:
         count: !int(1..12) 4
         tone: !str brief
-      output: str
+      output: !str
   output: ${ask.output}
 other: |
   id: agent
@@ -22,7 +22,7 @@ other: |
       variables:
         tone: !str brief
         count: !int(1..12) 4
-      output: str
+      output: !str
   output: ${ask.output}
 expect:
   fingerprint: different

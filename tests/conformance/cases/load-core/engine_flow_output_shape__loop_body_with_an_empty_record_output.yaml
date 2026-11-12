@@ -13,7 +13,7 @@ flow: |2
       nodes:
         bump:
           kind: code
-          output: int
+          output: !int
           code: |
             return 1
       output: {}

@@ -1041,7 +1041,7 @@ describe("run", () => {
     "kind: run\nflow: |\n  id: steer\n  name: steer\n" +
     "  llm_config: {provider: openai, model: gpt-5.5}\n  input:\n    notes: !Inbox(str)\n" +
     "  nodes:\n    chat:\n      kind: agent\n      steer_inbox: ${input.notes}\n      tools: []\n" +
-    "      system_prompt: Help.\n      prompt: Go.\n      output: Optional(str)\n" +
+    "      system_prompt: Help.\n      prompt: Go.\n      output: !Optional(str)\n" +
     "  output: ${chat.output}\n" +
     "run: {num_workers: 0}\n" +
     "host:\n  tools: {}\n" +
@@ -1057,7 +1057,7 @@ describe("run", () => {
     "kind: run\nflow: |\n  id: f\n  name: f\n  input:\n    plan: !str\n  nodes:\n    n:\n" +
     "      kind: tool\n      tool_id: ask\n      input:\n        prompt: Ship?\n" +
     inputs +
-    "      output: str\n  output: ${n.output}\n" +
+    "      output: !str\n  output: ${n.output}\n" +
     "inputs: {plan: p1}\nrun: {run_id: r1, num_workers: 0}\nhost: {human: {n: [yes]}}\n" +
     `expect:\n  output: {status: succeeded, output: "yes"}\n  tool_calls: ${toolCalls}\n`;
 
@@ -1070,7 +1070,7 @@ describe("run", () => {
     // entry; the resume sends the call again, and the stub answers it from what it gave first.
     const text =
       "kind: resume\nflow: |\n  id: f\n  name: f\n  nodes:\n    research:\n      kind: agent\n" +
-      "      tools: [save]\n      output: str\n      llm_config: {provider: openai, model: gpt-5.5}\n" +
+      "      tools: [save]\n      output: !str\n      llm_config: {provider: openai, model: gpt-5.5}\n" +
       "      prompt: Save x.\n  output: ${research.output}\n" +
       'env: {OPENAI_API_KEY: "<key:1>"}\nrun: {run_id: r1, num_workers: 0}\nhost:\n  tools:\n' +
       "    save: {parameters: {type: object, properties: {q: {type: string}}}, resumable: true, results: [{return: S1}]}\n" +
@@ -1126,7 +1126,7 @@ describe("run", () => {
    */
   const PENDING_CASE = (sends: string, output: string) =>
     "kind: run\nflow: |\n  id: f\n  name: f\n  llm_config: {provider: anthropic, model: claude-test}\n" +
-    "  nodes:\n    agent:\n      kind: agent\n      tools: [hold]\n      prompt: hi\n      output: str\n" +
+    "  nodes:\n    agent:\n      kind: agent\n      tools: [hold]\n      prompt: hi\n      output: !str\n" +
     "  output: ${agent.output}\nrun: {run_id: r1, num_workers: 0}\n" +
     "host:\n  tools:\n    hold: {parameters: {type: object, properties: {}}, pending: true}\n" +
     "  models:\n    agent:\n      agent:\n" +
@@ -1172,7 +1172,7 @@ describe("run", () => {
   test("an interrupt item without `after` is delivered while the run waits", async () => {
     const text = PENDING_CASE("[{interrupt: notes}]", "null")
       .replace("  nodes:\n", "  input:\n    notes: !Inbox(str)\n  nodes:\n")
-      .replace("      output: str\n", "      steer_inbox: ${input.notes}\n      output: Optional(str)\n")
+      .replace("      output: !str\n", "      steer_inbox: ${input.notes}\n      output: !Optional(str)\n")
       // The woken agent honors the interrupt instead of calling the model again.
       .replace(/ {6}- reply: \{[^\n]*text: done\}\]\}\n/, "");
     await runCase(text);
@@ -1234,7 +1234,7 @@ describe("run", () => {
       "export function leak(): string {\n  return join(dirname(fileURLToPath(import.meta.url)), 'memory', 'lessons');\n}\n";
     const text = MEMORY_CASE.replace(
       "  output: ${add.output.path}\n",
-      "    where:\n      kind: code\n      code: ./leak.ts:leak\n      output: str\n" +
+      "    where:\n      kind: code\n      code: ./leak.ts:leak\n      output: !str\n" +
         "  output: ${add.output.path + where.output}\n",
     ).replace("run: {", `files: {leak.ts: ${JSON.stringify(leak)}}\nrun: {`);
     await expect(runCase(text)).rejects.toThrow("memory `lessons`'s folder appears in the run log");
@@ -1292,7 +1292,7 @@ expect:
       "  return join(dirname(fileURLToPath(import.meta.url)), 'memory', 'cases');\n}\n";
     const text = VECTOR_CASE.replace(
       "  output: \${found.output}\n",
-      "    where:\n      kind: code\n      code: ./leak.ts:leak\n      output: str\n  output: \${where.output}\n",
+      "    where:\n      kind: code\n      code: ./leak.ts:leak\n      output: !str\n  output: \${where.output}\n",
     )
       .replace("run: {", `files: {leak.ts: ${JSON.stringify(leak)}}\nrun: {`)
       .replace(/  output:\n {4}status: succeeded\n {4}output: .*\n/, "  output: {status: succeeded, output: x}\n");
@@ -1616,8 +1616,8 @@ describe("main", () => {
     "    input:",
     "      x: !str",
     "    nodes:",
-    '      a: {kind: agent, input: {x: "${b.output}"}, output: str, prompt: "Echo ${x}."}',
-    '      b: {kind: agent, input: {x: "${a.output}"}, output: str, prompt: "Echo ${x}."}',
+    '      a: {kind: agent, input: {x: "${b.output}"}, output: !str, prompt: "Echo ${x}."}',
+    '      b: {kind: agent, input: {x: "${a.output}"}, output: !str, prompt: "Echo ${x}."}',
     "    output: ${a.output}",
     "input:",
     "  s: !str",
@@ -1848,7 +1848,7 @@ flow: |
   name: forms
   input: {n: !int, big: !int}
   nodes:
-    one: {kind: code, output: int, code: return 1}
+    one: {kind: code, output: !int, code: return 1}
   output: {id: "\${system.run_id}", f: "\${input.n / 2}", big: "\${input.big}"}
 inputs: {n: 4, big: 9007199254740993}
 run: {num_workers: 0}
@@ -1881,8 +1881,8 @@ flow: |
   id: two
   name: two
   nodes:
-    a: {kind: code, code: return "x", output: str}
-    b: {kind: code, code: return inputs.v + "y", input: {v: "\${a.output}"}, output: str}
+    a: {kind: code, code: return "x", output: !str}
+    b: {kind: code, code: return inputs.v + "y", input: {v: "\${a.output}"}, output: !str}
   output: \${b.output}
 run: {run_id: r1, num_workers: 0}
 expect:
@@ -2025,7 +2025,7 @@ flow: |
     research:
       kind: agent
       tools: [lookup]
-      output: str
+      output: !str
       llm_config: {provider: openai, model: gpt-5.5}
       prompt: "Look up x."
   output: \${research.output}
@@ -2074,7 +2074,7 @@ flow: |
     research:
       kind: agent
       tools: [lookup]
-      output: str
+      output: !str
       llm_config: {provider: openai, model: gpt-5.5}
       system_prompt: Help.
       prompt: "Look up x."
@@ -2637,7 +2637,7 @@ nodes:
     kind: code
     input:
       name: \${input.name}
-    output: str
+    output: !str
     code: |
       return "hi " + inputs.name
 output: \${greet.output}

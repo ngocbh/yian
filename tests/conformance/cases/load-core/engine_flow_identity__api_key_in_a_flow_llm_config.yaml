@@ -10,7 +10,7 @@ flow: |2
     ask:
       kind: agent
       prompt: Answer briefly.
-      output: str
+      output: !str
   output: ${ask.output}
 expect:
   load:

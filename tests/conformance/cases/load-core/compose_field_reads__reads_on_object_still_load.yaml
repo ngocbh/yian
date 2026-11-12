@@ -9,7 +9,7 @@ flow: |
       kind: code
       input:
         x: ${input.s}
-      output: object
+      output: !object
       code: "return null"
   output:
     o: ${step.output.anything.deeper}

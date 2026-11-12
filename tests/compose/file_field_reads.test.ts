@@ -89,7 +89,7 @@ const URII = "reads field 'urii' on a file, which has only uri, mime, and name";
  */
 const PRODUCER =
   "  a:\n    kind: code\n    output:\n" +
-  "      f: file\n      g: Optional(file)\n      r: {opt: Optional(str), s: str}\n      o: object\n      y: Any\n" +
+  "      f: !file\n      g: !Optional(file)\n      r: {opt: !Optional(str), s: !str}\n      o: !object\n      y: !Any\n" +
   `    code: |\n      return {f: ${NAMED_F}, g: null, r: {opt: null, s: 'x'}, o: {k: 1}, y: 1}\n`;
 
 /** A flow whose nodes are the producer `a`, then `nodes`, after `head` and before `tail`. */
@@ -122,7 +122,7 @@ function expectLocated(text: string, message: string, marker: string, children: 
 /** A CASE `gate` holding `cases`, routing to `b` or else `c`. */
 const caseGate = (cases: string) =>
   `  gate:\n    kind: case\n${cases}\n    else: c\n` +
-  '  b: {kind: code, code: "return 1", output: int}\n  c: {kind: code, code: "return 2", output: int}\n';
+  '  b: {kind: code, code: "return 1", output: !int}\n  c: {kind: code, code: "return 2", output: !int}\n';
 
 test.each([
   ["input", reader("${a.output.f.urii}"), "${b.output}", "x: ${a.output.f.urii}"],
@@ -151,7 +151,7 @@ test("another field of a file is a located load error: flow-assert", () => {
 
 test("another field of a top-level file output is a load error", () => {
   const text =
-    `id: p\nname: p\nnodes:\n  a:\n    kind: code\n    output: file\n    code: |\n      return ${F}\n` +
+    `id: p\nname: p\nnodes:\n  a:\n    kind: code\n    output: !file\n    code: |\n      return ${F}\n` +
     reader("${a.output.urii}") +
     "output: ${b.output}\n";
   expectLocated(text, URII, "x: ${a.output.urii}");
@@ -159,7 +159,7 @@ test("another field of a top-level file output is a load error", () => {
 
 /** A flow whose CODE node `a` has `output: file` and a post-assert `check`. */
 const fileOutputAssert = (check: string) =>
-  `id: p\nname: p\nnodes:\n  a:\n    kind: code\n    output: file\n    code: |\n      return ${F}\n` +
+  `id: p\nname: p\nnodes:\n  a:\n    kind: code\n    output: !file\n    code: |\n      return ${F}\n` +
   `    asserts:\n      - "${check}"\noutput: \${a.output.uri}\n`;
 
 test("a node assert reads the uri of its file output", async () => {
@@ -194,7 +194,7 @@ const carriedFile = (until: string) =>
     `  repeat:\n    kind: loop\n    until: "${until}"\n    max: 3\n` +
       "    input:\n      f: ${a.output.f}\n" +
       "    nodes:\n      bump:\n        kind: code\n        input:\n          f: ${input.f}\n" +
-      "        output:\n          f: file\n        code: \"return {'f': inputs['f']}\"\n" +
+      "        output:\n          f: !file\n        code: \"return {'f': inputs['f']}\"\n" +
       "    output: ${bump.output}\n",
     "${repeat.output.f.uri}",
   );
@@ -248,7 +248,7 @@ test("the uri of a file item in a named map feeds a str input", async () => {
 });
 
 const UNION_HEAD = "typedefs:\n  A: {f: file, k: int}\n  B: {f: file, j: str}\n  AB: Union(A, B)\n";
-const UNION_PRODUCER = `  u:\n    kind: code\n    output: AB\n    code: |\n      return {'f': ${F}, 'k': 1}\n`;
+const UNION_PRODUCER = `  u:\n    kind: code\n    output: !AB\n    code: |\n      return {'f': ${F}, 'k': 1}\n`;
 
 test("the uri of a file every union member has loads and reads", async () => {
   expect(await ok(flow(UNION_PRODUCER + reader("${u.output.f.uri}"), "${b.output}", UNION_HEAD))).toBe("f");
@@ -403,7 +403,7 @@ test("an inline call body input from a file uri is typed str", async () => {
   const text = flow(
     "  b:\n    kind: call\n    input:\n      s: ${a.output.f.uri}\n    nodes:\n" +
       '      k:\n        kind: code\n        input: {s: "${input.s}"}\n' +
-      "        code: \"return inputs['s']\"\n        output: str\n" +
+      "        code: \"return inputs['s']\"\n        output: !str\n" +
       "    output: ${k.output}\n",
   );
 
@@ -417,13 +417,13 @@ const CHILD_DEFS = `defs:
     input:
       s: !str
     nodes:
-      k: {kind: code, input: {s: "\${input.s}"}, code: "return inputs['s']", output: str}
+      k: {kind: code, input: {s: "\${input.s}"}, code: "return inputs['s']", output: !str}
     output: \${k.output}
   child_int:
     input:
       s: !int
     nodes:
-      k: {kind: code, input: {s: "\${input.s}"}, code: "return 1", output: int}
+      k: {kind: code, input: {s: "\${input.s}"}, code: "return 1", output: !int}
     output: \${k.output}
 `;
 

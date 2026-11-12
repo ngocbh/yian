@@ -23,7 +23,7 @@ nodes:
   worker:
     kind: code
     code: return 1
-    output: int
+    output: !int
 output: \${worker.output}
 `;
 
@@ -108,12 +108,12 @@ defs:
   unused:
     kind: code
     code: return 2
-    output: int
+    output: !int
 nodes:
   worker:
     kind: code
     code: return 1
-    output: int
+    output: !int
 output: \${worker.output}
 asserts:
   - input.n >= 0

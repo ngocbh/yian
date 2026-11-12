@@ -32,7 +32,7 @@ flow: |
       input:
         topic: ${input.topic}                      # L29 — the HOST's topic (VALID)
         news: call(enrich, topic=${nope.output})   # L30 — the SYNTH's topic (THE ERROR)
-      output: str
+      output: !str
       prompt: "Summarize ${news} for ${topic}."
   defs:
     enrich:
@@ -45,8 +45,8 @@ flow: |
           input:
             topic: ${input.topic}
           output:
-            values: list(float)
-            news: list(str)
+            values: !list(float)
+            news: !list(str)
       output: ${fetch.output.news}
   output: ${summary.output}
 expect:

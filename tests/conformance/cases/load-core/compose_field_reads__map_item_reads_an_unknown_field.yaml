@@ -15,7 +15,7 @@ flow: |
           kind: code
           input:
             v: ${input.v}
-          output: str
+          output: !str
           code: return 'x'
       output: ${inner.output}
   nodes:

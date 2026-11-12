@@ -16,7 +16,7 @@ flow: |
       tools: [{lessons: [edit]}]
       system_prompt: Help.
       prompt: Fix the note.
-      output: str
+      output: !str
   output: ${answer.output}
 run: {run_id: r1, num_workers: 0}
 host:

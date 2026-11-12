@@ -18,13 +18,13 @@ flow: |
       kind: code
       input:
         s: ${input.s}
-      output: str
+      output: !str
       code: return 'hit'
     miss:
       kind: code
       input:
         s: ${input.s}
-      output: str
+      output: !str
       code: return 'miss'
   output: ${hit.output | miss.output}
 inputs:

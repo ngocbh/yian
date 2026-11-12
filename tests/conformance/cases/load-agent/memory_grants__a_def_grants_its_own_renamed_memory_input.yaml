@@ -12,7 +12,7 @@ flow: |
       nodes:
         a:
           kind: agent
-          output: str
+          output: !str
           prompt: hi
           tools: [notes]
       output: ${a.output}

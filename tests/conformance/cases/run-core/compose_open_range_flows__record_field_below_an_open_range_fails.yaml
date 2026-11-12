@@ -20,7 +20,7 @@ flow: |2
       code: |
         const extra = inputs["counts"].reduce((a, b) => a + b, 0) + (inputs["maybe"] ?? 0)
         return {"qty": 0, "price": 1.0 + Number(extra)}
-      output: Order
+      output: !Order
   output: ${order.output}
 run:
   num_workers: 0
@@ -31,7 +31,7 @@ expect:
       code: contract.output
       frames:
       - label: flow.yaml
-        range: [21, 13, 21, 18]
+        range: [21, 13, 21, 19]
       message: 'output at qty: 0 is below the inclusive int minimum 1'
       node: order
   trace:
@@ -66,7 +66,7 @@ expect:
         code: contract.output
         frames:
         - label: flow.yaml
-          range: [21, 13, 21, 18]
+          range: [21, 13, 21, 19]
         message: 'output at qty: 0 is below the inclusive int minimum 1'
         node: order
   events:
@@ -86,7 +86,7 @@ expect:
         code: contract.output
         frames:
         - label: flow.yaml
-          range: [21, 13, 21, 18]
+          range: [21, 13, 21, 19]
         message: 'output at qty: 0 is below the inclusive int minimum 1'
         node: order
   - - RunFailed
@@ -94,6 +94,6 @@ expect:
         code: contract.output
         frames:
         - label: flow.yaml
-          range: [21, 13, 21, 18]
+          range: [21, 13, 21, 19]
         message: 'output at qty: 0 is below the inclusive int minimum 1'
         node: order

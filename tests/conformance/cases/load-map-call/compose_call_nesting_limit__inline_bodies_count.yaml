@@ -25,7 +25,7 @@ flow: |
                   code: return inputs["x"]
                   input:
                     x: ${input.x}
-                  output: str
+                  output: !str
               output: ${step.output}
           output: ${step.output}
       output: ${step.output}

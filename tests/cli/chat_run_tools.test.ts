@@ -107,7 +107,7 @@ nodes:
     kind: code
     input:
       who: \${input.who}
-    output: str
+    output: !str
     code: |
       return "hi " + inputs["who"];
 output: \${hi.output}
@@ -134,7 +134,7 @@ nodes:
     tool_id: ask
     input:
       prompt: "Which region?"
-    output: str
+    output: !str
 output: \${sure.output}
 `;
 
@@ -158,7 +158,7 @@ defs:
         kind: code
         input:
           events: \${heard.output.events}
-        output: str
+        output: !str
         code: |
           return "echo: " + inputs["events"].join(" | ");
     output:
@@ -371,7 +371,7 @@ output: done
       writeFileSync(
         join(root, "main.yaml"),
         "id: main\nname: main\nnodes:\n  work:\n    kind: call\n    call: child\n    input:\n      who: x\n" +
-          "  lib:\n    kind: code\n    output: str\n    code: ./lib.ts:run\noutput: ${work.output}\nuses:\n  child: ./child\n",
+          "  lib:\n    kind: code\n    output: !str\n    code: ./lib.ts:run\noutput: ${work.output}\nuses:\n  child: ./child\n",
       );
       const { requests, json } = runTools("Approve this flow for this chat");
       const start = () => json("start_flow", { path: "main.yaml", inputs: {} });
@@ -831,7 +831,7 @@ nodes:
     kind: code
     input:
       who: \${input.who}
-    output: str
+    output: !str
     code: |
       return "hi " + inputs["who"];
 output: \${hi.output}
@@ -922,7 +922,7 @@ nodes:
     tool_id: ask
     input:
       prompt: "Which region?"
-    output: str
+    output: !str
 output: \${sure.output}
 `;
 

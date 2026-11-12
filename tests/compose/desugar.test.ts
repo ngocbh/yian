@@ -52,7 +52,7 @@ test("desugar inline calls locate at their binding site", () => {
   const text =
     "id: f\nname: f\nnodes:\n" +
     "  writer:\n    kind: code\n    code: m:f\n" +
-    "    input:\n      x: call(helper, n=3)\n    output: str\n" +
+    "    input:\n      x: call(helper, n=3)\n    output: !str\n" +
     "output: ${writer.output}\n";
   const descriptors = parseNodes(nodesReader(text));
   const host = descriptors.get("writer")!;
@@ -70,7 +70,7 @@ test("inline call error uses binding range", () => {
   const text =
     "id: f\nname: f\nnodes:\n" +
     "  writer:\n    kind: code\n    code: m:f\n" +
-    "    input:\n      x: ${helper(topic=input.topic)}\n    output: str\n";
+    "    input:\n      x: ${helper(topic=input.topic)}\n    output: !str\n";
   const nodesCursor = nodesReader(text);
   const descriptors = parseNodes(nodesCursor);
   const bindingRange = descriptors.get("writer")!.fieldRanges.get(siteKey("input", "x"))!;

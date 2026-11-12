@@ -14,7 +14,7 @@ flow: |
         worker:
           kind: code
           depends_on: [pause]
-          output: int
+          output: !int
           code: |
             return 1
       output: ${worker.output}

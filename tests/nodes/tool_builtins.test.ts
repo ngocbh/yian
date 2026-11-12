@@ -432,7 +432,7 @@ describe("ask", () => {
     const error = await rejection(strict.forward({ prompt: "?" }, capsWith([held], tools).caps));
     expect(error).toBeInstanceOf(ToolTimeoutError);
     expect((error as Error).message).toBe(
-      "TOOL node 'lead' (ask): nobody answered by 2026-10-24T00:00:00.000Z; declare output: Optional(...) to route on a timeout",
+      "TOOL node 'lead' (ask): nobody answered by 2026-10-24T00:00:00.000Z; declare `output: !Optional(...)` to route on a timeout",
     );
     expect(strict.exceptionCode(error)).toBe("tool.timeout");
 

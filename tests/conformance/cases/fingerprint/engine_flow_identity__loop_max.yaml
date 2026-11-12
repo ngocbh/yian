@@ -17,7 +17,7 @@ flow: |
           input:
             n: ${input.n}
           output:
-            n: int
+            n: !int
       output: ${bump.output}
   output: ${loop.output.n}
 other: |
@@ -36,7 +36,7 @@ other: |
           input:
             n: ${input.n}
           output:
-            n: int
+            n: !int
       output: ${bump.output}
   output: ${loop.output.n}
 expect:

@@ -7,7 +7,7 @@ flow: |
     bump_body:
       input: {n: !int}
       nodes:
-        bump: {kind: code, input: {n: "${input.n}"}, output: {n: int}, code: "return {n: inputs.n + 1}"}
+        bump: {kind: code, input: {n: "${input.n}"}, output: {n: !int}, code: "return {n: inputs.n + 1}"}
       output: {n: "${bump.output.n}"}
     outer_body:
       input: {n: !int}

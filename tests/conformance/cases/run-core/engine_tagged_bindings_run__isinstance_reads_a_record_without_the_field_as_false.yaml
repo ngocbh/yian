@@ -10,7 +10,7 @@ flow: |2
   nodes:
     d:
       kind: code
-      output: object
+      output: !object
       code: |
         return {"conviction": 0.5}
     check:

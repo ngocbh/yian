@@ -14,7 +14,7 @@ flow: |
       tools: []
       system_prompt: Help.
       prompt: What should we note?
-      output: str
+      output: !str
     add:
       kind: tool
       tool_id: {lessons: append}

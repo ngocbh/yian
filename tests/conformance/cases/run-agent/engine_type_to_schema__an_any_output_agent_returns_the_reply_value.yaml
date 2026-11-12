@@ -8,7 +8,7 @@ flow: |2
     a:
       kind: agent
       prompt: say anything
-      output: Any
+      output: !Any
   output: ${a.output}
 env:
   YIAN_DEFAULT_MODEL: gpt-5.5

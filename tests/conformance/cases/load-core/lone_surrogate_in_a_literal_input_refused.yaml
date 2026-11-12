@@ -10,7 +10,7 @@ flow: |
       code: ./fixtures/compose_codefns.ts:echo
       input:
         topic: "a\ud800b"
-      output: str
+      output: !str
   output: ${use.output}
 expect:
   load:

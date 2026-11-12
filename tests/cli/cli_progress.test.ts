@@ -333,7 +333,7 @@ test("a spinner block taller than the screen keeps to one row less, its last row
 
 // ---------- the flags of `yian run` ----------
 
-const FLOW = "id: f\nname: f\nnodes:\n  a: {kind: code, output: str, code: return 'hello'}\noutput: ${a.output}\n";
+const FLOW = "id: f\nname: f\nnodes:\n  a: {kind: code, output: !str, code: return 'hello'}\noutput: ${a.output}\n";
 
 let tmp: string;
 
@@ -401,7 +401,7 @@ test("on a TTY a CODE body's console line prints above the spinners, and console
   const flow = join(tmp, "conlog.yaml");
   const wait = "await new Promise((r) => setTimeout(r, 200))";
   const code = `|\n      ${wait};\n      console.log('hello from code');\n      return 'ok';`;
-  writeFileSync(flow, `id: c\nname: c\nnodes:\n  c:\n    kind: code\n    output: str\n    code: ${code}\noutput: \${c.output}\n`);
+  writeFileSync(flow, `id: c\nname: c\nnodes:\n  c:\n    kind: code\n    output: !str\n    code: ${code}\noutput: \${c.output}\n`);
   const seen: string[] = [];
   const io: CliIo = {
     stdout: { write: async (text) => void seen.push(`out ${text}`) },

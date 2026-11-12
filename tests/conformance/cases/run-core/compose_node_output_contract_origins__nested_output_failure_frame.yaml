@@ -9,9 +9,9 @@ flow: |
         return {"profile": {"age": "bad", "name": "Ada"}, "ok": true}
       output:
         profile:
-          age: int
-          name: str
-        ok: bool
+          age: !int
+          name: !str
+        ok: !bool
   output: ${emit.output}
 run:
   num_workers: 0
@@ -22,7 +22,7 @@ expect:
       code: contract.output
       frames:
       - label: flow.yaml
-        range: [10, 14, 10, 17]
+        range: [10, 14, 10, 18]
       message: 'output at profile.age: "bad" does not match declared type int'
       node: emit
   trace:
@@ -55,7 +55,7 @@ expect:
         code: contract.output
         frames:
         - label: flow.yaml
-          range: [10, 14, 10, 17]
+          range: [10, 14, 10, 18]
         message: 'output at profile.age: "bad" does not match declared type int'
         node: emit
   events:
@@ -73,7 +73,7 @@ expect:
         code: contract.output
         frames:
         - label: flow.yaml
-          range: [10, 14, 10, 17]
+          range: [10, 14, 10, 18]
         message: 'output at profile.age: "bad" does not match declared type int'
         node: emit
   - - RunFailed
@@ -81,6 +81,6 @@ expect:
         code: contract.output
         frames:
         - label: flow.yaml
-          range: [10, 14, 10, 17]
+          range: [10, 14, 10, 18]
         message: 'output at profile.age: "bad" does not match declared type int'
         node: emit

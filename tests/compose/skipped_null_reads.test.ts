@@ -85,7 +85,7 @@ test("a reader skipped with its producer loads", () => {
     "  gate:\n    kind: case\n    cases:\n      - when: ${input.go}\n        then: tags\n" +
     "  tags: !list(str) \"${['a', 'b']}\"\n" +
     "  n:\n    kind: code\n    input:\n      all: ${tags.output}\n      count: ${len(tags.output)}\n" +
-    "    output: int\n    code: return inputs.count\n" +
+    "    output: !int\n    code: return inputs.count\n" +
     "output: ${n.output}\n";
   assembleText(text);
 });

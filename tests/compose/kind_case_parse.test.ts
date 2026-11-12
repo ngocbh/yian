@@ -42,7 +42,7 @@ nodes:
   zero:
     kind: code
     code: "return 0"
-    output: int
+    output: !int
   gate:
     kind: case
     cases:
@@ -56,19 +56,19 @@ nodes:
   positive:
     kind: code
     code: 'return "positive"'
-    output: str
+    output: !str
   broken:
     kind: code
     code: 'return "broken"'
-    output: str
+    output: !str
   duplicate:
     kind: code
     code: 'return "duplicate"'
-    output: str
+    output: !str
   negative:
     kind: code
     code: 'return "negative"'
-    output: str
+    output: !str
 output: \${positive.output | broken.output | duplicate.output | negative.output}
 `;
 
@@ -78,7 +78,7 @@ nodes:
   label:
     kind: code
     code: 'return "high"'
-    output: str
+    output: !str
   route:
     kind: case
     on: \${label.output}
@@ -91,11 +91,11 @@ nodes:
   hot:
     kind: code
     code: 'return "hot"'
-    output: str
+    output: !str
   cold:
     kind: code
     code: 'return "cold"'
-    output: str
+    output: !str
 output: \${hot.output | cold.output}
 `;
 
@@ -225,7 +225,7 @@ nodes:
   s:
     kind: code
     code: 'return "a"'
-    output: str
+    output: !str
   route:
     kind: case
     true: \${s.output}
@@ -380,7 +380,7 @@ test("a call target's then range is its own line", () => {
 });
 
 const SHAPE_HEAD = "id: f\nname: f\ninput:\n  n: !int\nnodes:\n  gate:\n    kind: case\n";
-const SHAPE_TAIL = "  done:\n    kind: code\n    code: return 1\n    output: int\noutput: ${done.output}\n";
+const SHAPE_TAIL = "  done:\n    kind: code\n    code: return 1\n    output: !int\noutput: ${done.output}\n";
 
 /** The `cases:` value's range in node `gate`. */
 const casesValue = (gate: SourceCursor) => gate.rangeOf("cases");
@@ -630,7 +630,7 @@ const CASE_CHILD_BODY = `nodes:
   zero:
     kind: code
     code: "return 0"
-    output: int
+    output: !int
   gate:
     kind: case
     cases:
@@ -642,15 +642,15 @@ const CASE_CHILD_BODY = `nodes:
   positive:
     kind: code
     code: 'return "positive"'
-    output: str
+    output: !str
   broken:
     kind: code
     code: 'return "broken"'
-    output: str
+    output: !str
   negative:
     kind: code
     code: 'return "negative"'
-    output: str
+    output: !str
 output: \${positive.output | broken.output | negative.output}
 `;
 

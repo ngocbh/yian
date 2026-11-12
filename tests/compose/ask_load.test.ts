@@ -9,6 +9,7 @@ import { bindingSource, outputContractType } from "../../src/nodes/contracts.ts"
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { canonicalTypeLabel } from "../../src/typesys/values.ts";
 import { assembleText, loadError } from "../helpers/declarations.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 /** Return a flow with one TOOL node `q` of tool id `toolId` and `body` lines. */
 const askFlow = (body: string, toolId = "ask") => `id: f
@@ -107,7 +108,7 @@ nodes:
       to: lead
       prompt: "Approve this plan?\\n\\n\${input.plan}"
       timeout: 24h
-    output: Optional(Approval)
+    output: !Optional(Approval)
   escalate:
     kind: case
     cases:
@@ -120,7 +121,7 @@ nodes:
       to: manager
       prompt: "No answer from the lead in 24h. Approve this plan?\\n\\n\${input.plan}"
       timeout: 48h
-    output: Optional(Approval)
+    output: !Optional(Approval)
 output: !Optional(Approval) \${lead.output | manager.output}
 `;
 
@@ -184,7 +185,7 @@ test.each([
   ["Optional(str)", [{ name: "answer", type: "str", required: true }]],
   ["Optional(Literal(yes, no))", [{ name: "answer", type: "str", required: true, enum: ["no", "yes"] }]],
 ])("the answer schema of output %s is its non-null type", (output, schema) => {
-  const text = askWith("      prompt: Ship?\n      timeout: 1h\n", `    output: ${output}\n`);
+  const text = askWith("      prompt: Ship?\n      timeout: 1h\n", `    output: ${outputTag(output)}\n`);
   const node = assembleText(text).flow.compiled.nodes.get("q") as ToolNode;
   expect(node.answerSchema).toEqual(schema);
 });

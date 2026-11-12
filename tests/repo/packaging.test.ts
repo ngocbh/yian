@@ -674,14 +674,14 @@ nodes:
   double:
     kind: code
     input: {n: "\${input.n}"}
-    output: int
+    output: !int
     code: |
       const two: number = 2
       return inputs.n * two
   triple:
     kind: code
     input: {n: "\${double.output}"}
-    output: int
+    output: !int
     code: ./helpers.ts:triple
 output: \${triple.output}
 `;
@@ -691,7 +691,7 @@ name: blocked
 nodes:
   spin:
     kind: code
-    output: int
+    output: !int
     code: |
       console.log("ready")
       while (true) {}

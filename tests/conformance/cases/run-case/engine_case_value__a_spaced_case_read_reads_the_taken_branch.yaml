@@ -11,8 +11,8 @@ flow: |
         - when: input.big
           then: slow
       else: fast
-    slow: {kind: code, output: {k: str}, code: "return {k: 'b'}"}
-    fast: {kind: code, output: {k: str}, code: "return {k: 'a'}"}
+    slow: {kind: code, output: {k: !str}, code: "return {k: 'b'}"}
+    fast: {kind: code, output: {k: !str}, code: "return {k: 'a'}"}
   output:
     whole: ${gate . output}
     field: ${gate.output . k}

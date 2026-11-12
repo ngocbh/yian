@@ -8,7 +8,7 @@ flow: |
       code: ./fixtures/compose_codefns.ts:echo
       input:
         qty: !int
-      output: !int
+      output: int
   nodes:
     n:
       kind: call
@@ -20,10 +20,10 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'defs entry ''echo'': `output:` declares a type; write `output: int`, without a tag'
+      message: 'defs entry ''echo'': `output:` declares a type as a tag: write `output: !int`'
       frames:
       - label: flow.yaml
         range: [5, 5, 10, 1]
         note: definition 'echo'
       - label: flow.yaml
-        range: [9, 13, 9, 17]
+        range: [9, 13, 9, 16]

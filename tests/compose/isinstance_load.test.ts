@@ -204,7 +204,7 @@ nodes:
     kind: code
     input:
       order: \${input.order}
-    output: Order
+    output: !Order
     code: |
       return inputs["order"]
 `;
@@ -316,8 +316,8 @@ const LOOP_FLOW =
           const n = inputs["n"] + 1;
           return {"n": n, "status": n >= 4 ? "done" : "running"};
         output:
-          n: int
-          status: str
+          n: !int
+          status: !str
     output: \${step.output}
 nodes:
   loop:
@@ -437,8 +437,8 @@ defs:
         code: |
           return {"n": inputs["n"] + 1, "buy": inputs["buy"]}
         output:
-          n: int
-          buy: bool
+          n: !int
+          buy: !bool
     output: \${step.output}
 nodes:
   loop:
@@ -914,7 +914,7 @@ nodes:
     input:
       order: \${input.order}
     prompt: "Is it a buy? \${isinstance(order, Buy)}"
-    output: str
+    output: !str
 output: \${ask.output}
 `;
 

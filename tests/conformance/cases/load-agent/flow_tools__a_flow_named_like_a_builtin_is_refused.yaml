@@ -13,7 +13,7 @@ flow: |
     helper:
       kind: agent
       prompt: Help.
-      output: str
+      output: !str
       tools: [ask_user]
   output: ${helper.output}
 expect:

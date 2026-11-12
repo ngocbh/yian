@@ -44,8 +44,8 @@ defs:
           n: \${input.n}
           exited: \${input.exited}
         output:
-          n: int
-          exited: bool
+          n: !int
+          exited: !bool
     output: \${step.output}
 nodes:
   loop:
@@ -135,7 +135,7 @@ defs:
         input:
           n: \${input.n}
         output:
-          n: int
+          n: !int
     output: \${step.output}
   runaway:
     nodes:
@@ -183,7 +183,7 @@ defs:
         tool_id: ask
         input:
           prompt: "your message"
-        output: str
+        output: !str
       fold:
         kind: code
         code: |
@@ -192,8 +192,8 @@ defs:
           messages: \${input.messages}
           msg: \${ask.output}
         output:
-          messages: list(str)
-          exited: bool
+          messages: !list(str)
+          exited: !bool
     output: \${fold.output}
 nodes:
   loop:
@@ -232,7 +232,7 @@ defs:
         tool_id: ask
         input:
           prompt: "your message"
-        output: str
+        output: !str
     output:
       messages: \${input.messages}
       exited: \${ask.output == "/exit"}
@@ -452,7 +452,7 @@ defs:
         input:
           n: \${input.n}
         output:
-          n: int
+          n: !int
     output: \${step.output}
 nodes:
   loop:
@@ -488,7 +488,7 @@ defs:
         input:
           n: \${input.n}
         output:
-          n: int
+          n: !int
     output: \${step.output}
 nodes:
   loop:
@@ -530,7 +530,7 @@ defs:
         input:
           n: \${input.n}
         output:
-          n: int
+          n: !int
     output: \${step.output}
 nodes:
   loop:
@@ -557,7 +557,7 @@ defs:
         input:
           n: \${input.n}
         output:
-          n: int
+          n: !int
     output: \${step.output}
 nodes:
   loop:
@@ -586,7 +586,7 @@ defs:
         input:
           n: \${input.n}
         output:
-          n: int
+          n: !int
     output: \${step.output}
 nodes:
   loop:
@@ -664,8 +664,8 @@ defs:
           talking_to: \${input.talking_to}
           n: \${input.n}
         output:
-          n: int
-          done: bool
+          n: !int
+          done: !bool
     output: \${step.output}
 nodes:
   loop:
@@ -698,7 +698,7 @@ nodes:
         kind: code
         input:
           n: \${input.count}
-        output: int
+        output: !int
         code: |
           return inputs["n"] + 1
     output:
@@ -731,8 +731,8 @@ defs:
         input:
           n: \${input.n}
         output:
-          n: int
-          note: Optional(str)
+          n: !int
+          note: !Optional(str)
     output: \${step.output}
   bump_only:
     input:
@@ -745,7 +745,7 @@ defs:
         input:
           n: \${input.n}
         output:
-          n: int
+          n: !int
     output: \${step.output}
 nodes:
   loop:
@@ -836,7 +836,7 @@ const ONE = `
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: |
           return inputs["n"] + 1
     output: \${step.output}
@@ -895,7 +895,7 @@ defs:` +
         kind: code
         input:
           xs: \${m.output}
-        output: int
+        output: !int
         code: |
           return inputs["xs"][0]
     output:
@@ -949,7 +949,7 @@ defs:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: |
           return inputs["n"] + 1
     output: \${step.output}
@@ -961,7 +961,7 @@ defs:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: |
           return inputs["n"] + 2
     output: \${step.output}
@@ -1058,35 +1058,35 @@ defs:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: |
           return inputs["n"] + 1
       side:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: |
           return inputs["n"] * 2
       side2:
         kind: code
         input:
           n: \${side.output}
-        output: int
+        output: !int
         code: |
           return inputs["n"] * 2
       side3:
         kind: code
         input:
           n: \${side2.output}
-        output: int
+        output: !int
         code: |
           return inputs["n"] * 2
       side4:
         kind: code
         input:
           n: \${side3.output}
-        output: int
+        output: !int
         code: |
           return inputs["n"] * 2
     output: \${step.output}
@@ -1144,14 +1144,14 @@ defs:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: |
           return inputs["n"] + 1
       side:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: |
           await new Promise((resolve) => setTimeout(resolve, SLEEP))
           return inputs["n"]
@@ -1160,7 +1160,7 @@ defs:
         input:
           n: \${side.output}
           m: \${bump.output}
-        output: int
+        output: !int
         code: |
           return inputs["n"] + inputs["m"]
     output:
@@ -1215,7 +1215,7 @@ defs:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: |
           return inputs["n"]
     output: \${step.output}
@@ -1227,14 +1227,14 @@ defs:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: |
           return inputs["n"] + 1
       slow:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: |
           await new Promise((resolve) => setTimeout(resolve, 200))
           return inputs["n"]

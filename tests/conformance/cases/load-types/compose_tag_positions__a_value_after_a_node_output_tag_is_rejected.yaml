@@ -8,15 +8,13 @@ flow: |
       code: ./fixtures/compose_codefns.ts:echo
       input:
         qty: 1
-      output:
-        qty:
-          - !int
+      output: !Optional(int) Optional(int)
   output: ${n.output}
 expect:
   load:
     diagnostics:
     - code: compose.load
-      message: '`output:` declares a type; an item of `qty:` is tagged `!int`; write the type without a tag'
+      message: '`output:` declares a type, so nothing follows its tag: write `output: !Optional(int)`'
       frames:
       - label: flow.yaml
-        range: [11, 11, 11, 15]
+        range: [9, 13, 9, 41]

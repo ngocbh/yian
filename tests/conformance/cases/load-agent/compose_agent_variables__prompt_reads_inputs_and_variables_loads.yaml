@@ -13,7 +13,7 @@ flow: |
         tone: !Tone concise
         instruction: !str ${missing.output}
       prompt: "${topic}: ${tone}, ${instruction}"
-      output: str
+      output: !str
   output: ${writer.output}
 expect:
   load: ok

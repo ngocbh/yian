@@ -28,8 +28,8 @@ flow: |
       input:
         topic: ${input.topic}
       output:                     # structured agent output (one object)
-        claim: str
-        confidence: float
+        claim: !str
+        confidence: !float
       prompt: |-
         Research ${topic} with the available tools. If a key fact is ambiguous, ask
         the user. Return a neutral {claim, confidence in [0, 1]}. No recommendations.

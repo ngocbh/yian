@@ -41,6 +41,7 @@ import {
   parametersFromYaml,
   runCase,
 } from "../helpers/declarations.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-value-entries-load-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -60,7 +61,7 @@ const F_DEF =
   "        kind: code\n" +
   "        input:\n" +
   "          x: ${input.x}\n" +
-  "        output: str\n" +
+  "        output: !str\n" +
   "        code: |\n" +
   "          return inputs['x'].toUpperCase()\n" +
   "    output: ${up.output}\n";
@@ -73,7 +74,7 @@ const G_DEF =
   "    nodes:\n" +
   "      v:\n" +
   "        kind: code\n" +
-  "        output: {q: int}\n" +
+  "        output: {q: !int}\n" +
   "        code: |\n" +
   "          return {'q': 1}\n" +
   "    output: ${v.output}\n";
@@ -90,7 +91,7 @@ function flow(entries: string, options: { output?: string; head?: string } = {})
     "nodes:\n" +
     "  s:\n" +
     "    kind: code\n" +
-    "    output: float\n" +
+    "    output: !float\n" +
     "    code: |\n" +
     "      return 0.5\n" +
     entries +
@@ -157,8 +158,8 @@ test("a named type entry reads a float producer", () => {
 
 test("a named type entry rejects a disjoint producer at the entry", () => {
   const text = flow("  x: !Buy\n    action: buy\n    conviction: ${s.output}\n", { head: BUY }).replace(
-    "output: float",
-    "output: str",
+    "output: !float",
+    "output: !str",
   );
 
   const error = loadErrorOf(text);
@@ -348,7 +349,7 @@ describe("the record a written-out object keeps", () => {
     const entries =
       "  x:\n" +
       "    kind: code\n" +
-      "    output: {q: int}\n" +
+      "    output: {q: !int}\n" +
       "    code: |\n" +
       "      return {'q': 1}\n" +
       "  o: !object ${x.output}\n";
@@ -402,7 +403,7 @@ describe("the build-cache reader", () => {
 
   /** A CODE node `p` returning text, declaring `output` unless it is empty. */
   const producer = (output: string) =>
-    `  p:\n    kind: code\n${output ? `    output: ${output}\n` : ""}    code: |\n      return 'hi'\n`;
+    `  p:\n    kind: code\n${output ? `    output: ${outputTag(output)}\n` : ""}    code: |\n      return 'hi'\n`;
   const SPAN_RECORD = "  r: !object\n    a: ${p.output}\n    b: 1\n";
 
   test("a span field takes its producer type", () => {

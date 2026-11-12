@@ -10,7 +10,7 @@ flow: |2
       kind: code
       code: "return inputs['n']"
       input: {n: '${input.n}'}
-      output: int
+      output: !int
       asserts:
         - ${output} < 0
   output: ${n.output}

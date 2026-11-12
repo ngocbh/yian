@@ -2,9 +2,11 @@ kind: load
 flow: |
   id: t
   name: t
+  typedefs:
+    T: 'Optional[list[str]]'
   input:
     n: !int
-  output: 'Optional[list[str]]'
+  output: !T
   kind: code
   code: |
     return 1
@@ -12,7 +14,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'bad type expression ''Optional[list[str]]'': types use parentheses: `Optional(list(str))`'
+      message: "bad typedefs: typedef 'T': types use parentheses: `Optional(list(str))`"
       frames:
       - label: flow.yaml
-        range: [5, 9, 5, 30]
+        range: [4, 3, 4, 4]

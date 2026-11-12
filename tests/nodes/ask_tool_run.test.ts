@@ -161,7 +161,7 @@ nodes:
     node_name: Plan approval
     input:
       prompt: "Approve \${input.plan}?"
-    output: Literal(approve, revise)
+    output: !Literal(approve;revise)
 output: \${approve.output}
 `;
   const result = await runFlow(await loadFlow(flow), { plan: "release" }, {
@@ -362,7 +362,7 @@ test("an ask with no output: that nobody answers by its deadline fails tool.time
   expect(result.status).toBe("failed");
   expect(result.failure?.code).toBe("tool.timeout");
   expect(result.failure?.message).toBe(
-    "TOOL node 'gate' (ask): nobody answered by 2026-10-23T01:00:00.000Z; declare output: Optional(...) to route on a timeout",
+    "TOOL node 'gate' (ask): nobody answered by 2026-10-23T01:00:00.000Z; declare `output: !Optional(...)` to route on a timeout",
   );
 });
 

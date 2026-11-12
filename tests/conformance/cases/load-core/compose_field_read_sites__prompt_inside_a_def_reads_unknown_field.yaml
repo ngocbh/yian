@@ -27,7 +27,7 @@ flow: |
       kind: code
       input:
         x: ${input.s}
-      output: Rec
+      output: !Rec
       code: "return ({a: \"x\"})"
     c:
       kind: call

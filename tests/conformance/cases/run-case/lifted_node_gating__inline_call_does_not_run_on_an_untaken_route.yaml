@@ -16,7 +16,7 @@ flow: |
           code: ./fixtures/compose_codefns.ts:record
           input:
             tag: ${input.tag}
-          output: str
+          output: !str
       output: ${fx.output}
   nodes:
     gate:
@@ -29,11 +29,11 @@ flow: |
       kind: code
       input:
         draft: call(side, tag="publish")
-      output: str
+      output: !str
       code: return "published " + inputs["draft"]
     skip_it:
       kind: code
-      output: str
+      output: !str
       code: return "skipped"
   output:
     r: ${gate.output}

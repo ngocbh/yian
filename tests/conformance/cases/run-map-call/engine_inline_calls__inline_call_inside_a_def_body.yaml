@@ -15,7 +15,7 @@ flow: |2
           code: ./fixtures/compose_codefns.ts:echo
           input:
             topic: ${input.topic}
-          output: str
+          output: !str
       output: ${x.output}
     enrich:
       input:
@@ -26,7 +26,7 @@ flow: |2
           code: ./fixtures/compose_codefns.ts:echo
           input:
             topic: call(helper, topic=${input.topic})
-          output: str
+          output: !str
       output: ${y.output}
   nodes:
     go:

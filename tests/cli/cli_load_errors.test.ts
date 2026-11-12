@@ -159,7 +159,7 @@ async function checkCli(text: string, args: string[] = []): Promise<{ code: numb
 }
 
 test.each([
-  ["an unclosed quote", 'id: t\nname: t\nkind: agent\nprompt: "unclosed\noutput: str\n', 4, [4, 9, 4, 10]],
+  ["an unclosed quote", 'id: t\nname: t\nkind: agent\nprompt: "unclosed\noutput: !str\n', 4, [4, 9, 4, 10]],
   ["an unclosed flow list", "id: x\nname: x\noutput: x\nnodes:\n  a: !str [1, 2\n", 5, [5, 11, 5, 12]],
 ])("cli check boxes %s at its opener", async (_id, text, line, range) => {
   const { code, err } = await checkCli(text);

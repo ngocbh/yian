@@ -11,7 +11,7 @@ flow: |
       code: return 1
       input:
         inf: ${input.x}
-      output: int
+      output: !int
   output: ${a.output}
 expect:
   load:

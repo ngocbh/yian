@@ -32,6 +32,7 @@ import {
 } from "../../src/typesys/values.ts";
 import { assembled, assembleText, loadError, loadErrorAsync, runCase } from "../helpers/declarations.ts";
 import { typeCheckError } from "../helpers/type_errors.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 const ANY = Type.scalar(ValueKind.ANY);
 const OPTIONAL_ANY = new Type({ kind: ValueKind.ANY, nullable: true });
@@ -406,7 +407,7 @@ describe("field reads on Any", () => {
         "    kind: code\n" +
         "    input:\n" +
         "      x: ${input.s}\n" +
-        "    output: Any\n" +
+        "    output: !Any\n" +
         "    code: return null\n" +
         "    asserts:\n" +
         "      - output.a.b == 1\n" +
@@ -660,7 +661,7 @@ describe("loading flows that wire Any", () => {
     options: { stepOutput?: string | null; over?: boolean } = {},
   ): string {
     const { stepOutput = "Any", over = false } = options;
-    const output = stepOutput === null ? "" : `    output: ${stepOutput}\n`;
+    const output = stepOutput === null ? "" : `    output: ${outputTag(stepOutput)}\n`;
     const node = over ? "    kind: map\n    over: ${step.output}\n" : "    kind: call\n";
     return (
       "id: p\nname: p\n" +
@@ -668,7 +669,7 @@ describe("loading flows that wire Any", () => {
       "defs:\n  child:\n" +
       `    input:\n      t: !${childType}\n` +
       "    nodes:\n      n:\n        kind: code\n        input:\n          t: ${input.t}\n" +
-      "        output: str\n        code: return JSON.stringify(inputs['t'])\n" +
+      "        output: !str\n        code: return JSON.stringify(inputs['t'])\n" +
       "    output: ${n.output}\n" +
       `nodes:\n  step:\n    kind: code\n${output}    code: return 'hello'\n` +
       `  c:\n${node}    call: child\n    input:\n      t: ${binding}\n` +
@@ -688,9 +689,9 @@ describe("loading flows that wire Any", () => {
       "id: p\nname: p\n" +
         "typedefs:\n  F:\n    f: file\n  N:\n    n: int\n  U: Union(F, N)\n" +
         "nodes:\n" +
-        "  step:\n    kind: code\n    output: Any\n    code: \"return {n: 1n}\"\n" +
+        "  step:\n    kind: code\n    output: !Any\n    code: \"return {n: 1n}\"\n" +
         "  use:\n    kind: code\n    input:\n      x: !U ${step.output}\n" +
-        "    output: str\n    code: return 'ok'\n" +
+        "    output: !str\n    code: return 'ok'\n" +
         "output: ${use.output}\n",
     );
   });
@@ -751,14 +752,14 @@ defs:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: return inputs["n"] + 1n
     output:
       n: \${step.output}
 nodes:
   seed:
     kind: code
-    output: Any
+    output: !Any
     code: return 1n
   loop:
     kind: loop

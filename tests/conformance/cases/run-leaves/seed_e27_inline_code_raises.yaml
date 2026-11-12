@@ -15,7 +15,7 @@ flow: |
       kind: code
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       code: |
         if (inputs.topic)
             throw new Error("intentional inline failure")

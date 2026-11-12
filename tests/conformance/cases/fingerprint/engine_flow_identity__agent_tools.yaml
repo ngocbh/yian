@@ -8,7 +8,7 @@ flow: |
       kind: agent
       prompt: p
       tools: [first]
-      output: str
+      output: !str
   output: ${ask.output}
 other: |
   id: agent
@@ -18,7 +18,7 @@ other: |
       kind: agent
       prompt: p
       tools: [second]
-      output: str
+      output: !str
   output: ${ask.output}
 expect:
   fingerprint: different

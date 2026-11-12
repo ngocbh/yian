@@ -14,8 +14,8 @@ flow: |
             s: ${input.s}
             n: ${input.n}
           output:
-            s: str
-            n: int
+            s: !str
+            n: !int
           code: "return {s: inputs.s, n: inputs.n + 1}"
       output: ${echo.output}
   nodes:

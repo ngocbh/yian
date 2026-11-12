@@ -16,7 +16,7 @@ flow: |
           code: ./fixtures/compose_codefns.ts:echo_x
           input:
             x: ${item}
-          output: str
+          output: !str
       output: ${leak.output}
   output: ${each.output}
 expect:

@@ -13,7 +13,7 @@ flow: |
     ask:
       kind: agent
       prompt: Answer briefly.
-      output: str
+      output: !str
   output: ${ask.output}
 other: |
   id: blocks
@@ -28,7 +28,7 @@ other: |
     ask:
       kind: agent
       prompt: Answer briefly.
-      output: str
+      output: !str
   output: ${ask.output}
 expect:
   fingerprint: different

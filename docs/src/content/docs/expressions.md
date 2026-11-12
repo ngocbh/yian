@@ -76,7 +76,7 @@ nodes:
     input:
       name: ${input.person}
       language: ${input.language}
-    output: str
+    output: !str
     prompt: Greet ${name} in ${language :- "English"}.
 output: ${greet.output}
 ```

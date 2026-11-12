@@ -13,6 +13,7 @@ import { type TypeRegistry, typeFor } from "../../src/typesys/types.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import { assembled, assembleText, type CaseRow, loadConformanceFlow, loadError, runCase } from "../helpers/declarations.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-field-reads-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -32,7 +33,7 @@ function flow(stepOutput: string, rest: string, preamble = ""): string {
     "    kind: code\n" +
     "    input:\n" +
     "      x: ${input.s}\n" +
-    `    output: ${stepOutput}\n` +
+    `    output: ${outputTag(stepOutput)}\n` +
     "    code: return None\n" +
     rest
   );
@@ -60,12 +61,12 @@ test("case when on a missing optional record input is falsy", async () => {
     "  hit:\n" +
     "    kind: code\n" +
     "    input:\n      s: ${input.s}\n" +
-    "    output: str\n" +
+    "    output: !str\n" +
     "    code: return 'hit'\n" +
     "  miss:\n" +
     "    kind: code\n" +
     "    input:\n      s: ${input.s}\n" +
-    "    output: str\n" +
+    "    output: !str\n" +
     "    code: return 'miss'\n" +
     "output: ${hit.output | miss.output}\n";
   const loaded = await loadConformanceFlow(text);
@@ -97,7 +98,7 @@ test("a field on str in a node binding is a load error", () => {
     "    kind: code\n" +
     "    input:\n" +
     "      v: ${step.output.order}\n" +
-    "    output: str\n" +
+    "    output: !str\n" +
     "    code: return 'x'\n" +
     "output: ${sink.output}\n";
   expect(failure(flow("str", rest))).toContain(
@@ -105,7 +106,7 @@ test("a field on str in a node binding is a load error", () => {
   );
 });
 
-const SINK = "  a:\n    kind: code\n    input:\n      v: ${input.s}\n    output: str\n    code: return 'x'\n";
+const SINK = "  a:\n    kind: code\n    input:\n      v: ${input.s}\n    output: !str\n    code: return 'x'\n";
 
 test("a field on str in a case when is a load error", () => {
   const rest =
@@ -168,7 +169,7 @@ const EACH_DEFS =
   "      inner:\n" +
   "        kind: code\n" +
   "        input:\n          v: ${input.v}\n" +
-  "        output: str\n" +
+  "        output: !str\n" +
   "        code: return 'x'\n" +
   "    output: ${inner.output}\n";
 
@@ -208,7 +209,7 @@ const BARE_CHILD =
   "      step:\n" +
   "        kind: code\n" +
   "        input:\n          v: ${input.s}\n" +
-  "        output: str\n" +
+  "        output: !str\n" +
   "        code: return 'x'\n" +
   "    output: ${step.output}\n";
 
@@ -257,7 +258,7 @@ const PARTIAL_CHILD =
   "      typed:\n" +
   "        kind: code\n" +
   "        input:\n          v: ${input.s}\n" +
-  "        output: str\n" +
+  "        output: !str\n" +
   "        code: return 'x'\n" +
   "      untyped:\n" +
   "        kind: code\n" +
@@ -335,7 +336,7 @@ function inputFlow(ref: string): string {
     "    kind: code\n" +
     "    input:\n" +
     `      v: ${ref}\n` +
-    "    output: str\n" +
+    "    output: !str\n" +
     "    code: return 'x'\n" +
     "output: ${step.output}\n"
   );
@@ -368,7 +369,7 @@ test("defs body input field reads are checked", () => {
     "      step:\n" +
     "        kind: code\n" +
     "        input:\n          v: ${input.s.first}\n" +
-    "        output: str\n" +
+    "        output: !str\n" +
     "        code: return 'x'\n" +
     "    output: ${step.output}\n" +
     "nodes:\n" +
@@ -391,7 +392,7 @@ test("inline body input field reads are checked", () => {
     "      inner:\n" +
     "        kind: code\n" +
     "        input:\n          w: ${input.v.z}\n" +
-    "        output: str\n" +
+    "        output: !str\n" +
     "        code: return 'x'\n" +
     "    output: ${inner.output}\n" +
     "output: ${c.output}\n";
@@ -463,7 +464,7 @@ const FLOW_WITH_A =
   "input:\n  go: !bool\n" +
   "nodes:\n" +
   "  gate:\n    kind: case\n    cases:\n      - when: ${input.go}\n        then: a\n" +
-  "  a:\n    kind: code\n    output: Rec\n    code: \"return {'k': 'v'}\"\n" +
+  "  a:\n    kind: code\n    output: !Rec\n    code: \"return {'k': 'v'}\"\n" +
   "  use:\n    kind: code\n    input:\n      v: ${a.output.k}\n    code: \"return inputs['v']\"\n" +
   "output: ${use.output}\n";
 
@@ -630,7 +631,7 @@ test("an untyped value narrowed by isinstance needs ?. for a field T doesn't req
   const r = roots(Rec);
   expect(nullableReadErrors(parseCondition("isinstance(u, T) and u.f == 'a'"), r, types)[0]).toBe(
     "${u.f} reads field 'f', which T doesn't require, of u, which is untyped and only narrowed to T; " +
-      "write u?.f, or type u as T where it is bound (`output: T` or `!T`)",
+      "write u?.f, or type u as T where it is bound (`!T`)",
   );
   expect(nullableReadErrors(parseCondition("isinstance(u, T) and u?.f == 'a'"), r, types)).toEqual([]);
   expect(nullableReadErrors(parseCondition("isinstance(u, T) and u.g == 'a'"), r, types)).toEqual([]);
@@ -757,14 +758,14 @@ nodes:
     kind: code
     input:
       s: \${input.s}
-    output: Optional(Rec)
+    output: !Optional(Rec)
     code: |
       return None
   w:
     kind: code
     input:
       s: \${input.s}
-    output: W
+    output: !W
     code: |
       return {"payload": None}
 NODES
@@ -781,7 +782,7 @@ const codeNode = (id: string, value: string, assert = "") =>
     kind: code
     input:
       v: ${value}
-    output: Any${assert === "" ? "" : `\n    asserts:\n      - ${assert}`}
+    output: !Any${assert === "" ? "" : `\n    asserts:\n      - ${assert}`}
     code: |
       return 1`;
 
@@ -845,19 +846,19 @@ nodes:
     else: con
   pro:
     kind: code
-    output: Rec
+    output: !Rec
     code: |
       return {"opt": None}
   con:
     kind: code
-    output: Rec
+    output: !Rec
     code: |
       return {"opt": None}
   use:
     kind: code
     input:
       v: \${gate.output.opt.x}
-    output: Any
+    output: !Any
     code: |
       return 1
 output: \${use.output}
@@ -902,7 +903,7 @@ nodes:
     nodes:
       mk:
         kind: code
-        output: Rec
+        output: !Rec
         code: |
           return {"k": None}
     output: \${mk.output.k.x}
@@ -942,7 +943,7 @@ function variableFlow(binding: string): string {
     "    input:\n" +
     `      v: ${binding}\n` +
     "      after: ${mk.output}\n" +
-    "    output: Any\n" +
+    "    output: !Any\n" +
     "    code: return 1\n" +
     "output: ${use.output}\n"
   );
@@ -987,7 +988,7 @@ test.each([
 ])("a narrowed untyped variable names the list to type: %s", (binding, fix) => {
   const text = variableFlow(binding)
     .replace("  T: {f: Optional(str)}\n", "  T: {f: Optional(str)}\n  W: {items: list(Any), lists: list(list(Any))}\n")
-    .replace("  use:\n", "  w:\n    kind: code\n    code: return {}\n    output: W\n  use:\n");
+    .replace("  use:\n", "  w:\n    kind: code\n    code: return {}\n    output: !W\n  use:\n");
   expect(loadError(() => load(text)).message).toContain(`write p?.f, or ${fix}`);
 });
 
@@ -1013,7 +1014,7 @@ defs:
         input:
           ms: \${input.ms}
         output:
-          ms: list(Msg)
+          ms: !list(Msg)
         code: "return ({ms: inputs['ms']})"
     output: \${keep.output}
 input:
@@ -1046,9 +1047,9 @@ function untypedFlow(binding: string): string {
     "typedefs:\n  T: {f: Optional(str), g: str}\n  T2: {f: str}\n  T3: {h: str}\n  W: {u: Any}\n" +
     "input:\n  s: !str\n" +
     "nodes:\n" +
-    "  u:\n    kind: code\n    input:\n      s: ${input.s}\n    output: Any\n    code: return 1\n" +
-    "  mk:\n    kind: code\n    input:\n      s: ${input.s}\n    output: Optional(W)\n    code: return None\n" +
-    `  use:\n    kind: code\n    input:\n      v: ${binding}\n    output: Any\n    code: return 1\n` +
+    "  u:\n    kind: code\n    input:\n      s: ${input.s}\n    output: !Any\n    code: return 1\n" +
+    "  mk:\n    kind: code\n    input:\n      s: ${input.s}\n    output: !Optional(W)\n    code: return None\n" +
+    `  use:\n    kind: code\n    input:\n      v: ${binding}\n    output: !Any\n    code: return 1\n` +
     "output: ${use.output}\n"
   );
 }

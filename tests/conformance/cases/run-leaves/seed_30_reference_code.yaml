@@ -23,7 +23,7 @@ flow: |
       input:
         rating: ${input.rating}
         label:  ${input.label}
-      output: str
+      output: !str
       code: ./fixtures/seeds.ts:verdict_line   # file:function — imported and called in-process
 
   output: ${verdict.output}

@@ -10,7 +10,7 @@ flow: |
       code: return 1
       input:
         v: !object {1: 2}
-      output: int
+      output: !int
   output: ${a.output}
 expect:
   load:

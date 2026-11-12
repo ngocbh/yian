@@ -8,7 +8,7 @@ flow: |
     Ticker: str
   input:
     n: !int
-  output: 'Union(Buy, Ticker)'
+  output: !Union(Buy;Ticker)
   kind: code
   code: |
     return 1
@@ -16,7 +16,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'bad type expression ''Union(Buy, Ticker)'': Union(Buy, Ticker): member ''Ticker'' is not a record'
+      message: "bad type expression 'Union(Buy;Ticker)': Union(Buy, Ticker): member 'Ticker' is not a record"
       frames:
       - label: flow.yaml
-        range: [9, 9, 9, 29]
+        range: [9, 9, 9, 27]

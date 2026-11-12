@@ -15,7 +15,7 @@ flow: |
           tool_id: ask
           input:
             prompt: "next turn"
-          output: str
+          output: !str
       output:
         count: ${input.count + 1}
         last: ${ask.output}

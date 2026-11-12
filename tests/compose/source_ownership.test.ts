@@ -163,7 +163,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       value: hello
-    output: str
+    output: !str
 output: \${echo.output}
 `;
 
@@ -178,7 +178,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo
         input:
           value: hello
-        output: str
+        output: !str
     output: \${echo.output}
 output: \${wrapper.output}
 `;
@@ -195,7 +195,7 @@ defs:
         code: ./fixtures/compose_codefns.ts:echo
         input:
           value: \${input.value}
-        output: str
+        output: !str
     output: \${echo.output}
 nodes:
   invoke:
@@ -279,7 +279,7 @@ nodes:
     kind: code
     code: ./fixtures/compose_codefns.ts:echo
     input: {value: hello}
-    output: str
+    output: !str
 output: \${echo.output}
 `;
 

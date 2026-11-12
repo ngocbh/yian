@@ -34,7 +34,7 @@ flow: |
       input:
         brief: ${research.output.report}     # dot into the call node's object value
         asof:  ${research.output.asof}
-      output: str
+      output: !str
       prompt: |-
         Given this research brief (as of ${asof}), add ONE neutral one-line
         observation (no recommendations, no value target):
@@ -67,8 +67,8 @@ files:
           topic: ${input.topic}
           as_of:  ${input.as_of}
         output:                    # an object: values + recent headlines
-          values: list(float)
-          news:   list(str)
+          values: !list(float)
+          news:   !list(str)
         code: ./fixtures/seeds.ts:fetch_facts   # deterministic data pull
 
       synth:
@@ -78,7 +78,7 @@ files:
           asof:   ${input.as_of}
           values: ${fetch.output.values}          # dot into fetch's object output
           news:   ${fetch.output.news}
-        output: str
+        output: !str
         prompt: |-
           Write a neutral research brief for ${topic} as of ${asof}.
           Recent closes: ${values}. Headlines: ${news}.

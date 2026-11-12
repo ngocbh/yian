@@ -5,7 +5,7 @@ flow: |
   name: invalid_compact_output
   kind: code
   code: return 7
-  output: list(
+  output: !list(
 expect:
   load:
     diagnostics:
@@ -13,4 +13,4 @@ expect:
       message: 'bad type expression ''list('': malformed type expression ''list('': unbalanced parentheses — if this type sits inside a `{...}` mapping, its comma split it; quote it or use block style'
       frames:
       - label: flow.yaml
-        range: [5, 9, 5, 14]
+        range: [5, 9, 5, 15]

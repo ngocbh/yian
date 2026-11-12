@@ -17,8 +17,8 @@ flow: |
       input:
         topic: ${input.topic}
       output:                    # an object type with exactly two fields
-        rating: float
-        rationale: str
+        rating: !float
+        rationale: !str
       prompt: "Score ${topic} as {rating, rationale}."
 
   output: ${score.output.confidence}   # <-- no `confidence` field on score's output

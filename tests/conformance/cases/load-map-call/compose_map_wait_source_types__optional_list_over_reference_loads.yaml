@@ -20,14 +20,14 @@ flow: |
       nodes:
         c:
           kind: code
-          output: str
+          output: !str
           code: |
             return "a"
       output: ${c.output}
   nodes:
     c:
       kind: code
-      output: int
+      output: !int
       code: |
         return 1
     u:

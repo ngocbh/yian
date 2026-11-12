@@ -5,7 +5,7 @@ flow: |
   nodes:
     s:
       kind: code
-      output: int
+      output: !int
       code: "return {'output': 1}"
     gate:
       kind: case
@@ -24,7 +24,7 @@ flow: |
           code: "return {'output': 1}"
           input:
             x: ${input.x}
-          output: int
+          output: !int
       output: ${h.output}
 expect:
   load:

@@ -11,7 +11,7 @@ flow: |
           tool_id: ask
           input:
             prompt: "q"
-          output: str
+          output: !str
       output: ${ask.output}
   nodes:
     c1:

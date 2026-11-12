@@ -19,19 +19,19 @@ flow: |2
       code: ./fixtures/compose_codefns.ts:pick_pro
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
     con:
       kind: code
       code: ./fixtures/compose_codefns.ts:pick_con
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
     note:
       kind: code
       code: ./fixtures/compose_codefns.ts:cautious
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
   output:
     pick: "${pro.output | con.output}"
     note: ${note.output}

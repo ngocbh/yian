@@ -18,7 +18,7 @@ flow: |
             question: ${input.question}
           system_prompt: Research.
           prompt: ${question}
-          output: str
+          output: !str
       output: ${inner.output}
     work:
       nodes:
@@ -27,7 +27,7 @@ flow: |
           tools: [research]
           system_prompt: Help.
           prompt: hi
-          output: str
+          output: !str
       output: ${helper.output}
   nodes:
     c:

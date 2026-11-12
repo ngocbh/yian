@@ -59,7 +59,7 @@ test("a def's input that isn't an identifier is refused at its key", async () =>
 test("a single-node def's input that isn't an identifier is refused at its key", async () => {
   const text =
     "id: f\nname: f\ndefs:\n  d:\n    kind: code\n    code: ./fixtures/compose_codefns.ts:echo\n" +
-    '    input:\n      "my-in": !str\n    output: str\n' +
+    '    input:\n      "my-in": !str\n    output: !str\n' +
     "nodes:\n  go: {kind: call, call: d, input: {my-in: x}}\noutput: ${go.output}\n";
   const def = SourceDocument.parse(text).root.child("defs").child("d");
   await expectRefused(
@@ -72,7 +72,7 @@ test("a single-node def's input that isn't an identifier is refused at its key",
 test("a compact flow's input that isn't an identifier is refused at its key", async () => {
   const text =
     "id: f\nname: f\nkind: code\ncode: ./fixtures/compose_codefns.ts:echo\n" +
-    'input:\n  "first-name": !str\noutput: str\n';
+    'input:\n  "first-name": !str\noutput: !str\n';
   const root = SourceDocument.parse(text).root;
   await expectRefused(
     text,

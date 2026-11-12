@@ -11,7 +11,7 @@ flow: |
       tools: [{docs: [search]}]
       system_prompt: Help.
       prompt: Find retries.
-      output: str
+      output: !str
   output: ${chat.output}
 run:
   run_id: r1

@@ -33,7 +33,7 @@ nodes:
     tools: [read_flow, read_docs]
     env:
       max_tool_iterations: 8
-    output: Review
+    output: !Review
     system_prompt: |-
       You review flows written in yian, a YAML language for flows of agent, code, tool, case,
       call, map and loop nodes. You report problems; you never change the flow.
@@ -68,7 +68,7 @@ nodes:
     kind: code
     input:
       findings: ${review.output.findings}
-    output: list(Finding)
+    output: !list(Finding)
     code: |
       const rank: Record<string, number> = { high: 0, medium: 1, low: 2 };
       // Array sort is stable, so findings of one severity keep the reviewer's order.

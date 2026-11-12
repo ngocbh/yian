@@ -31,7 +31,7 @@ nodes:
     kind: code
     input:
       v: \${input.x}
-    output: str
+    output: !str
     code: |
       return inputs["v"]
 output: \${n.output}
@@ -61,8 +61,8 @@ nodes:
     input:
       v: \${input.x}
     output:
-      tag: str
-      val: int
+      tag: !str
+      val: !int
     code: |
       return {tag: "pos", val: inputs["v"]}
   neg:
@@ -70,8 +70,8 @@ nodes:
     input:
       v: \${input.x}
     output:
-      tag: str
-      val: int
+      tag: !str
+      val: !int
     code: |
       return {tag: "neg", val: inputs["v"]}
 output: \${gate.output.tag}

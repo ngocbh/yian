@@ -38,7 +38,7 @@ ${REC}input:
 nodes:
   a:
     kind: code
-    output: Rec
+    output: !Rec
     code: |
       return {k: "x"}
   b:
@@ -48,7 +48,7 @@ nodes:
   chat:
     kind: agent
     prompt: Help.
-    output: str
+    output: !str
 output:
   x: \${a.output.k}
   y: \${b.output}
@@ -113,12 +113,12 @@ input:
 nodes:
   a:
     kind: code
-    output: Rec
+    output: !Rec
     code: |
       return {k: "x"}
   use:
     kind: code
-    output: Rec
+    output: !Rec
     input:
       r: \${a.output :- null}
       t: !Rec \${a.output}
@@ -146,7 +146,7 @@ nodes:
       from: \${input.notes}
       render: "\${event.text}"
     prompt: Help.
-    output: str
+    output: !str
   each:
     kind: map
     over: \${input.xs}

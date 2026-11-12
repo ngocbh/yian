@@ -15,7 +15,7 @@ flow: |
       kind: agent
       tools: [lookup]
       prompt: hi
-      output: str
+      output: !str
   output: ${helper.output}
 host:
   tools:

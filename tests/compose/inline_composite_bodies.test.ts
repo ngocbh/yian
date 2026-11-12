@@ -87,7 +87,7 @@ test("an unchanged inline projection preserves alias sharing", () => {
     "    code: ./fixtures/compose_codefns.ts:echo_x",
     "    input:",
     "      x: &payload [one, two, three]",
-    "    output: str",
+    "    output: !str",
   ];
   for (let index = 0; index < aliases; index++) lines.push(`  alias_${index}: *shared`);
   const document = SourceDocument.parse(`${lines.join("\n")}\n`);
@@ -117,7 +117,7 @@ test("an inline alias projection keeps the shared payload and lightweight source
     "        code: ./fixtures/compose_codefns.ts:echo_x",
     "        input:",
     "          x: ${input.payload}",
-    "        output: str",
+    "        output: !str",
     "    output: ${echo.output}",
   ];
   for (let index = 0; index < aliases; index++) lines.push(`  alias_${index}: *inline`);
@@ -147,7 +147,7 @@ const ASSOCIATION_FLOW = `nodes:
         run: ./fixtures/compose_codefns.ts:echo
         input:
           value: hello
-        output: str
+        output: !str
     output: \${echo.output}
   map_node:
     kind: map
@@ -158,7 +158,7 @@ const ASSOCIATION_FLOW = `nodes:
         run: ./fixtures/compose_codefns.ts:echo
         input:
           value: hello
-        output: str
+        output: !str
     output: \${echo.output}
   loop_node:
     kind: loop
@@ -171,7 +171,7 @@ const ASSOCIATION_FLOW = `nodes:
         run: ./fixtures/compose_codefns.ts:echo
         input:
           value: hello
-        output: str
+        output: !str
     output: \${echo.output}
 `;
 
@@ -203,7 +203,7 @@ test("extracting one inline body masks only the occurrence and retains locations
         run: ./fixtures/compose_codefns.ts:echo
         input:
           value: \${input.text}
-        output: str
+        output: !str
     output: \${echo.output}
 `);
   const originalNodes = document.root.child("nodes");
@@ -250,7 +250,7 @@ test("an inline projection leaves the original cursor and document unchanged", (
         run: ./fixtures/compose_codefns.ts:echo
         input:
           value: hello
-        output: str
+        output: !str
     output: \${echo.output}
 `);
   const originalNodes = document.root.child("nodes");
@@ -280,7 +280,7 @@ body: &body
       run: ./fixtures/compose_codefns.ts:echo
       input:
         value: \${input.text}
-      output: str
+      output: !str
   output: \${echo.output}
 nodes:
   first: *body
@@ -333,7 +333,7 @@ body: &body
       run: ./fixtures/compose_codefns.ts:echo
       input:
         value: hello
-      output: str
+      output: !str
   output: \${echo.output}
 nodes:
   merged:
@@ -376,7 +376,7 @@ body: &body
       run: ./fixtures/compose_codefns.ts:echo
       input:
         value: anchored
-      output: str
+      output: !str
   output: \${anchored.output}
 nodes:
   merged:
@@ -387,7 +387,7 @@ nodes:
         run: ./fixtures/compose_codefns.ts:echo
         input:
           value: local
-        output: str
+        output: !str
     output: \${local.output}
 `);
   const anchor = document.root.child("body");
@@ -485,7 +485,7 @@ test.each([
         run: ./fixtures/compose_codefns.ts:echo
         input:
           value: hello
-        output: str
+        output: !str
     output: \${echo.output}
 `;
   const [first, second] = attackerFirst ? [attacker, victim] : [victim, attacker];
@@ -556,7 +556,7 @@ const INLINE_CHILD = `nodes:
         run: ./fixtures/compose_codefns.ts:echo
         input:
           value: hello
-        output: str
+        output: !str
 `;
 
 /**
@@ -671,7 +671,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo_x
         input:
           x: safe
-        output: str
+        output: !str
     output: \${echo.output}
   attacker:
     kind: call
@@ -911,7 +911,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo
         input:
           topic: inline-ok
-        output: str
+        output: !str
     output: \${constant.output}
 output: \${wrapper.output}
 `;
@@ -953,7 +953,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo_x
         input:
           x: \${input.value}
-        output: Optional(int)
+        output: !Optional(int)
     output: \${echo.output}
 output: \${wrapper.output}
 `;
@@ -990,9 +990,9 @@ nodes:
           marker: \${input.marker}
         output:
           payload:
-            a: int
-            z: str
-          marker: str
+            a: !int
+            z: !str
+          marker: !str
     output: \${echo.output}
 output: \${wrapper.output}
 `;
@@ -1036,14 +1036,14 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo_x
         input:
           x: \${input.value}
-        output: str
+        output: !str
     output: \${echo.output}
   producer:
     kind: code
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: forward-value
-    output: str
+    output: !str
 output: \${consumer.output}
 `;
 
@@ -1094,13 +1094,13 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo_x
         input:
           x: \${input.value}
-        output: "None"
+        output: !None
     output: \${echo.output}
   producer:
     kind: code
     code: |
       return null
-    output: "None"
+    output: !None
 output: \${consumer.output}
 `;
 
@@ -1128,7 +1128,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo_x
         input:
           x: \${input.value}
-        output: str
+        output: !str
     output: \${echo.output}
 output: \${first.output}
 `;
@@ -1153,7 +1153,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo_x
         input:
           x: \${input.from_right}
-        output: str
+        output: !str
     output: \${echo_left.output}
   right:
     kind: call
@@ -1165,7 +1165,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo_x
         input:
           x: \${input.from_left}
-        output: str
+        output: !str
     output: \${echo_right.output}
 output: \${left.output}
 `;
@@ -1193,7 +1193,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo_x
         input:
           x: \${input.value}
-        output: str
+        output: !str
     output: \${echo.output}
 ${extra}output: \${consumer.output}
 `;
@@ -1233,7 +1233,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo_x
         input:
           x: \${input.x}
-        output: str
+        output: !str
     output: \${echo.output}
   second: *body
   merged:
@@ -1267,7 +1267,7 @@ nodes:
     kind: code
     code: |
       return "resolved"
-    output: str
+    output: !str
   wrapper:
     kind: call
     input:
@@ -1286,10 +1286,10 @@ nodes:
         input:
           payload: \${input.payload}
         output:
-          producer: str
-          parent: str
-          dollars: str
-          deep: list(str)
+          producer: !str
+          parent: !str
+          dollars: !str
+          deep: !list(str)
     output: \${echo.output}
 output: \${wrapper.output}
 `;
@@ -1334,8 +1334,8 @@ nodes:
           root_value: \${input.root_value}
           nested_value: \${input.nested_value}
         output:
-          root: Optional(str)
-          nested: Optional(str)
+          root: !Optional(str)
+          nested: !Optional(str)
     output: \${collect.output}
 output: \${wrapper.output}
 `;
@@ -1393,7 +1393,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo_x
         input:
           x: \${input.value}
-        output: int
+        output: !int
     output: \${echo.output}
 output: \${wrapper.output}
 `,
@@ -1435,7 +1435,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo_x
         input:
           x: \${input.value}
-        output: int
+        output: !int
     output: \${echo.output}
 output: \${wrapper.output}
 `);
@@ -1450,7 +1450,7 @@ test("an inline multi-node body matches the named def's signature", async () => 
         code: ./fixtures/compose_codefns.ts:echo_x
         input:
           x: \${input.x}
-        output: int
+        output: !int
       pack:
         kind: code
         code: |
@@ -1458,7 +1458,7 @@ test("an inline multi-node body matches the named def's signature", async () => 
         input:
           value: \${echo.output}
         output:
-          value: int
+          value: !int
     output: \${pack.output}
 `;
   const loaded = await loadConformanceFlow(`id: inline-named-equivalence
@@ -1514,7 +1514,7 @@ defs:
             code: ./fixtures/compose_codefns.ts:echo
             input:
               topic: inline-ok
-            output: str
+            output: !str
         output: \${constant.output}
     output: \${wrapper.output}
 nodes:
@@ -1595,7 +1595,7 @@ nodes:
           return inputs["value"]
         input:
           value: \${input.value}
-        output: int
+        output: !int
     output: \${echo.output}
 output: \${each.output}
 `);
@@ -1640,11 +1640,11 @@ nodes:
           template: \${input.template}
           literal: \${input.literal}
         output:
-          constant: str
-          parent: str
-          template: str
+          constant: !str
+          parent: !str
+          template: !str
           literal:
-            nested: str
+            nested: !str
     output: \${collect.output}
 output: \${each.output}
 `;
@@ -1694,7 +1694,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo_x
         input:
           x: \${input.row}
-        output: str
+        output: !str
     output: \${echo.output}
 output: \${each.output}
 `;
@@ -1727,7 +1727,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo_x
         input:
           x: \${input.row}
-        output: str
+        output: !str
     output: \${echo.output}
 output: \${each.output}
 `;
@@ -1766,7 +1766,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo_x
         input:
           x: \${input.name}
-        output: str
+        output: !str
     output: \${echo.output}
 output: \${each.output}
 `;
@@ -1798,7 +1798,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo_x
         input:
           x: \${input.constant}
-        output: str
+        output: !str
     output: \${echo.output}
 output: \${each.output}
 `);
@@ -1831,7 +1831,7 @@ nodes:
       return inputs["rows"]
     input:
       rows: \${input.rows}
-    output: list(Row)
+    output: !list(Row)
   each:
     kind: map
     parallel: true
@@ -1848,8 +1848,8 @@ nodes:
           row: \${input.row}
           name: \${input.name}
         output:
-          row: Row
-          name: str
+          row: !Row
+          name: !str
     output: \${render.output}
 output: \${each.output}
 `);
@@ -1877,7 +1877,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo_x
         input:
           x: \${input.day}
-        output: date
+        output: !date
     output: \${echo.output}
 output: \${each.output}
 `;
@@ -1912,7 +1912,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo_x
         input:
           x: \${input.value}
-        output: str
+        output: !str
     output: \${echo.output}
 output: \${each.output}
 `;
@@ -1953,8 +1953,8 @@ nodes:
           row: \${input.row}
           name: \${input.name}
         output:
-          row: Optional(Row)
-          name: Optional(str)
+          row: !Optional(Row)
+          name: !Optional(str)
     output: \${collect.output}
 output: \${each.output}
 `);
@@ -1983,7 +1983,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo
         input:
           topic: ready
-        output: str
+        output: !str
     output: \${inner.output}
 output: \${wrapper.output}
 `);
@@ -2005,8 +2005,8 @@ const LOOP_BODY = `    input:
           n: \${input.n}
           exited: \${input.exited}
         output:
-          n: int
-          exited: bool
+          n: !int
+          exited: !bool
     output: \${bump.output}
 output: \${repeat.output}
 `;
@@ -2099,7 +2099,7 @@ nodes:
             code: ./fixtures/compose_codefns.ts:echo_x
             input:
               x: \${input.value}
-            output: int
+            output: !int
         output: \${echo.output}
     output: \${inner.output}
   outer_loop:
@@ -2122,8 +2122,8 @@ nodes:
               n: \${input.n}
               exited: \${input.exited}
             output:
-              n: int
-              exited: bool
+              n: !int
+              exited: !bool
         output: \${bump.output}
     output: \${inner.output}
 output:
@@ -2199,7 +2199,7 @@ defs:
                 code: ./fixtures/compose_codefns.ts:echo
                 input:
                   topic: nested-inline-ok
-                output: str
+                output: !str
             output: \${constant.output}
         output: \${inner_call.output}
     output: \${outer_call.output}
@@ -2242,7 +2242,7 @@ test.each([
         kind: code
         code: ./fixtures/compose_codefns.ts:echo
         input: {topic: ready}
-        output: str
+        output: !str
     output: \${inner.output}
 `,
   ],
@@ -2257,7 +2257,7 @@ test.each([
         kind: code
         code: ./fixtures/compose_codefns.ts:echo
         input: {topic: ready}
-        output: str
+        output: !str
     output: \${inner.output}
 `,
   ],
@@ -2276,7 +2276,7 @@ test.each([
         input:
           n: \${input.n}
         output:
-          n: int
+          n: !int
     output: \${inner.output}
 `,
   ],
@@ -2306,7 +2306,7 @@ test.each([
         kind: code
         code: |
           return 1
-        output: int
+        output: !int
     output: \${inner.output}
 `,
   ],
@@ -2327,8 +2327,8 @@ test.each([
           n: \${input.n}
           exited: \${input.exited}
         output:
-          n: int
-          exited: bool
+          n: !int
+          exited: !bool
     output: \${inner.output}
 `,
   ],
@@ -2356,7 +2356,7 @@ test.each([
         code: ./fixtures/compose_codefns.ts:echo_x
         input:
           x: \${input.n}
-        output: int
+        output: !int
 `,
     "body inline body of node 'repeat' must return a record with at least one carried field (a subset of the " +
       'carried record ["n"]); write `output: {field: ...}` or a whole reference to a node with a record output',
@@ -2370,7 +2370,7 @@ test.each([
         input:
           n: \${input.n}
         output:
-          value: int
+          value: !int
 `,
     'body output field(s) ["value"] are not carried record fields ["n"] (a body returns a subset of the ' +
       "carried record)",
@@ -2384,7 +2384,7 @@ test.each([
         input:
           n: \${input.n}
         output:
-          n: str
+          n: !str
 `,
     "carried field 'n' — body output is 'str', carried source is 'int' (a returned field must keep its carried type)",
   ],
@@ -2427,7 +2427,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo_x
         input:
           x: \${input.value}
-        output: str
+        output: !str
     output: \${echo.output}
 output: \${wrapper.output}
 `.replace(`\${input.${badInput}}`, "${missing.output}");
@@ -2458,7 +2458,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo
         input:
           topic: inline-ok
-        output: str
+        output: !str
     output:
 output: \${each.output}
 `),
@@ -2490,7 +2490,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo_x
         input:
           x: \${input.value}
-        output: str
+        output: !str
     output: \${echo.output}
 output: \${each.output}
 `),
@@ -2509,7 +2509,7 @@ output: \${each.output}
 test.each([
   [
     "parent-node",
-    "  parent:\n    kind: code\n    code: |\n      return 'parent'\n    output: str\n",
+    "  parent:\n    kind: code\n    code: |\n      return 'parent'\n    output: !str\n",
     "${parent.output}",
     "parent",
   ],
@@ -2528,7 +2528,7 @@ test.each([
     "        code: ./fixtures/compose_codefns.ts:echo_x\n" +
     "        input:\n" +
     `          x: ${badRef}\n` +
-    "        output: str\n" +
+    "        output: !str\n" +
     "    output: ${leak.output}\n" +
     "output: ${wrapper.output}\n";
   const expected = SourceDocument.parse(source)
@@ -2563,7 +2563,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo_x
         input:
           x: \${item}
-        output: str
+        output: !str
     output: \${leak.output}
 output: \${each.output}
 `;
@@ -2594,14 +2594,14 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo
         input:
           topic: ready
-        output: str
+        output: !str
     output: \${constant.output}
   broken:
     kind: code
     code: ./fixtures/compose_codefns.ts:echo_x
     input:
       x: \${missing.output}
-    output: str
+    output: !str
 output: \${broken.output}
 `;
 
@@ -2623,7 +2623,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo
         input:
           topic: ready
-        output: str
+        output: !str
     output: \${missing.output}
 output: \${wrapper.output}
 `;
@@ -2649,7 +2649,7 @@ defs:
             code: ./fixtures/compose_codefns.ts:echo
             input:
               topic: ready
-            output: str
+            output: !str
         output: \${missing.output}
     output: \${wrapper.output}
 nodes:
@@ -2694,7 +2694,7 @@ nodes:
         code: ./fixtures/compose_codefns.ts:echo
         input:
           topic: ready
-        output: str
+        output: !str
     output: \${constant.output}
 output: \${wrapper.output}
 `),
@@ -2908,7 +2908,7 @@ nodes:
         code: return inputs["v"]
         input:
           v: \${input.v}
-        output: Optional(str)
+        output: !Optional(str)
     output: \${collect.output}
 output: \${wrapper.output}
 `);

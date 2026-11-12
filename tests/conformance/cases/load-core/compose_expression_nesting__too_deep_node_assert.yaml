@@ -10,7 +10,7 @@ flow: |
       kind: code
       input:
         topic: ${input.s}
-      output: str
+      output: !str
       asserts:
         - not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not not true
       code: |

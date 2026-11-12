@@ -91,7 +91,7 @@ answer:
     \${${name}}
     </memory>
     \${question}
-  output: str
+  output: !str
 `;
 }
 
@@ -151,7 +151,7 @@ test("the memory tools follow the grant order among the host tools, before load_
     execute: () => "x",
   });
   const skills = new Map([["style", new Skill({ name: "style", description: "Style.", instructions: "Be brief." })]]);
-  const withSkills = (tools: string) => answer(tools).replace("  output: str", "  skills: [style]\n  output: str");
+  const withSkills = (tools: string) => answer(tools).replace("  output: !str", "  skills: [style]\n  output: !str");
   for (const [tools, names] of [
     ["[lookup, {lessons: [read, append]}]", ["lookup", "lessons_read", "lessons_append", "load_skill"]],
     ["[{lessons: [read]}, lookup]", ["lessons_read", "lookup", "load_skill"]],
@@ -233,14 +233,14 @@ write:
     lessons: \${input.lessons}
   tools: [{lessons: [append]}]
   prompt: "<memory>\${lessons}</memory> write"
-  output: str
+  output: !str
 answer:
   kind: agent
   input:
     lessons: \${input.lessons}
     prior: \${write.output}
   prompt: "<memory>\${lessons}</memory> \${prior}"
-  output: str
+  output: !str
 `;
   const { result, model } = await run(flow("lessons: !FileMemory", nodes), { lessons }, [
     callReply(["lessons_append", { path: "MEMORY.md", text: "v2" }, "c1"]),
@@ -263,7 +263,7 @@ answer:
     lessons: \${input.lessons}
   tools: [{notes: [append]}]
   prompt: "\${lessons}"
-  output: str
+  output: !str
 `,
   );
   const { result } = await run(text, { lessons: memory, notes: memory }, [

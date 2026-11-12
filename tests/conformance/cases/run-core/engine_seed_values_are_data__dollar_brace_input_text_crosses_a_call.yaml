@@ -8,7 +8,7 @@ flow: |2
   nodes:
     probe:
       kind: code
-      output: str
+      output: !str
       code: |
         return "SECRET"
     echo:
@@ -20,7 +20,7 @@ flow: |2
           kind: code
           input:
             text: ${input.text}
-          output: str
+          output: !str
           code: |
             return inputs["text"]
       output: ${inner.output}

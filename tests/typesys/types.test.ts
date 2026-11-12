@@ -748,6 +748,29 @@ describe("parseType", () => {
   });
 });
 
+describe("parseType: `;` separates arguments as `,` does", () => {
+  test.each([
+    ["Literal(positive;neutral;negative)", literal("positive", "neutral", "negative")],
+    ["Union(Buy;Sell)", union(ref("Buy"), ref("Sell"))],
+    ["dict(str;int)", dict(scalar("str"), scalar("int"))],
+    ["Optional(Literal(a; b))", optional(literal("a", "b"))],
+    ["Literal(a;b, c)", literal("a", "b", "c")],
+    ['Literal("a;b";c)', literal("a;b", "c")],
+  ])("%p", (text, parsed) => {
+    expect(parseType(text)).toEqual(parsed);
+  });
+
+  test.each([
+    ["Literal(a;)", malformed("Literal(a;)", "remove the trailing `;` in Literal(...)")],
+    ["Union(A;)", malformed("Union(A;)", "remove the trailing `;` in Union(...)")],
+    ["int(1;5)", malformed("int(1;5)", "write a range: int(1..5)")],
+    ["int(1..5;6)", malformed("int(1..5;6)", "a range takes one lo..hi, e.g. int(1..12)")],
+    ["dict(str;int;float)", malformed("dict(str;int;float)", "dict(...) takes 2 types")],
+  ])("errors: %p", (text, message) => {
+    expect(parseError(text)).toBe(message);
+  });
+});
+
 describe("parseType: quoted Literal members", () => {
   test.each([
     [String.raw`Literal("a\tb", 'it\'s', "é")`, ["a\tb", "it's", "é"]],
@@ -1448,6 +1471,9 @@ test.each<{ id: string; path: string[] }>([
   { id: "types/engine_typedefs__alias_cycle_rejected", path: ["A"] },
   { id: "types/engine_typedefs__non_pascalcase_rejected", path: ["rating"] },
   { id: "types/engine_union_typedefs__load_flow_locates_bad_union_at_its_typedef", path: ["Mood"] },
+  { id: `${TYPE_NAME_CHECKS}surrogate_literal_member_in_a_typedef`, path: ["T"] },
+  { id: "types/engine_types__type_text_brackets_hint", path: ["T"] },
+  { id: "types/engine_union_typedefs__bar_operator_hints_union", path: ["Order"] },
 ])("readTypedefs: $id", ({ id, path }) => {
   const { case_, document } = caseDocument(id);
   const root = document.root;

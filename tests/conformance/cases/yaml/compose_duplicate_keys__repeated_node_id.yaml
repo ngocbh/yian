@@ -6,11 +6,11 @@ flow: |
     a:
       kind: code
       code: return 1
-      output: int
+      output: !int
     a:
       kind: code
       code: return 2
-      output: int
+      output: !int
   output: ${a.output}
 expect:
   load:

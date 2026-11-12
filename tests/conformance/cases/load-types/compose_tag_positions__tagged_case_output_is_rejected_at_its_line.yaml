@@ -17,7 +17,7 @@ flow: |
       kind: code
       code: |
         return 1
-      output: int
+      output: !int
   output: ${route.output}
 expect:
   load:

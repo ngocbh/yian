@@ -14,7 +14,7 @@ flow: |2
       input:
         count: !int ${src.output}
       prompt: "Count ${count}"
-      output: str
+      output: !str
   output: ${ask.output}
 env:
   YIAN_DEFAULT_MODEL: gpt-5.5

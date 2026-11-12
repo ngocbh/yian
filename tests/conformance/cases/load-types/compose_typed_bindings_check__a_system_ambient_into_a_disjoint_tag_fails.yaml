@@ -7,7 +7,7 @@ flow: |
       kind: code
       input:
         n: !int ${system.today}
-      output: int
+      output: !int
       code: return 1
   output: ${e.output}
 expect:

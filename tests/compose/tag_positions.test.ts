@@ -1,9 +1,10 @@
 /**
  * Tags outside typed slots.
  *
- * A tag types a flow input, a binding, a flow output, an agent variable, or a value inside one. A
- * tag anywhere else (on `kind:`, a node's `output:` declaration, a typedef, a mapping key, ...)
- * would be silently ignored, so it is a located load error. Tags under top-level `x-*` keys are
+ * A tag types a flow input, a binding, a node's `output:` declaration, a flow output, an agent
+ * variable, or a value inside one. A tag anywhere else (on `kind:`, a typedef, a mapping key, ...)
+ * would be silently ignored, so it is a located load error. A node's `output:` without a tag is
+ * one too, which shows the tag to write. Tags under top-level `x-*` keys are
  * exempt unless used in a slot. A tag on a CASE branch makes the branch a value, even a word naming
  * a node, so its error shows the value entry to write; a tagged case `output:` is rejected at the
  * `output:`, like an untagged one.
@@ -34,7 +35,7 @@ afterEach(() => forget());
 
 /** Return the message for a tag at `key:`, which is not a typed slot. */
 const generic = (key: string) =>
-  "a tag types a value — a flow input, a binding, a flow output, an agent variable, an " +
+  "a tag types a value — a flow input, a binding, a node or flow output, an agent variable, an " +
   `\`llm_config\` value, a value entry in \`nodes:\`, or a value inside one; \`${key}:\` is not one`;
 
 const TYPEDEF = "typedef 'Buy': a type definition is written as a type, without a tag";
@@ -64,7 +65,7 @@ nodes:
     code: ${ECHO}
     input:
       qty: 1
-    output: int
+    output: !int
 output: \${n.output}
 `;
 
@@ -76,7 +77,7 @@ kind: code
 code: ${ECHO}
 input:
   qty: !int
-output: int
+output: !int
 `;
 
 const SINGLE_NODE_DEF = `id: f
@@ -87,7 +88,7 @@ defs:
     code: ${ECHO}
     input:
       qty: !int
-    output: int
+    output: !int
 nodes:
   n:
     kind: call
@@ -106,7 +107,7 @@ nodes:
       tone: !str concise
       extra: !object {depth: !int 2}
     prompt: "\${tone}"
-    output: str
+    output: !str
 output: \${writer.output}
 `;
 
@@ -136,7 +137,7 @@ nodes:
   writer:
     kind: agent
     prompt: !str write
-    output: str
+    output: !str
 output: \${writer.output}
 `;
   await expectLoadError(text, generic("prompt"), "    prompt: !str write");
@@ -169,11 +170,11 @@ nodes:
   hot:
     kind: code
     code: 'return "hot"'
-    output: str
+    output: !str
   cold:
     kind: code
     code: 'return "cold"'
-    output: str
+    output: !str
 output: \${hot.output | cold.output}
 `;
   // The tag makes the branch the text `hot`, as in a value entry, not the node.
@@ -200,7 +201,7 @@ nodes:
         code: ${ECHO}
         input:
           value: \${input.x}
-        output: int
+        output: !int
     output: \${echo.output}
 output: \${each.output}
 `;
@@ -236,12 +237,12 @@ nodes:
     kind: code
     code: |
       return 1
-    output: int
+    output: !int
   two:
     kind: code
     code: |
       return 2
-    output: int
+    output: !int
 output: \${route.output}
 `;
 
@@ -293,38 +294,39 @@ test.each([
 
 test.each([
   [
-    "a tagged node output declaration is rejected at its line",
-    "    output: !int",
-    "`output:` declares a type; write `output: int`, without a tag",
-    "    output: !int",
+    "an untagged node output declaration is rejected at its line",
+    "    output: int",
+    "`output:` declares a type as a tag: write `output: !int`",
+    "    output: int",
   ],
   [
-    "a tagged node output with a type after the tag spells the type",
+    "a node output with a value after its tag is rejected at its line",
     "    output: !Optional(int) Optional(int)",
-    "`output:` declares a type; write `output: Optional(int)`, without a tag",
+    "`output:` declares a type, so nothing follows its tag: write `output: !Optional(int)`",
     "    output: !Optional(int) Optional(int)",
   ],
   [
-    "a tagged node output field is rejected at its line",
-    "    output:\n      qty: !int",
-    "`output:` declares a type; write `qty: int`, without a tag",
-    "      qty: !int",
+    "an untagged node output field is rejected at its line",
+    "    output:\n      qty: int",
+    "`output:` declares a type as a tag: write `qty: !int`",
+    "      qty: int",
   ],
   [
-    "a tagged list item in a node output says the item is tagged",
+    "a list in a node output is rejected at its line",
     "    output:\n      qty:\n        - !int",
-    "`output:` declares a type; an item of `qty:` is tagged `!int`; write the type without a tag",
+    "`output:` declares a type, which can't be a YAML list: write a record as a mapping of tagged " +
+      "fields, as in `{a: !int, b: !str}`, and a list type as `!list(T)`",
     "        - !int",
   ],
 ])("%s", async (_label, output, message, line) => {
-  await expectLoadError(CODE.replace("    output: int", output), message, line);
+  await expectLoadError(CODE.replace("    output: !int", output), message, line);
 });
 
-test("a tagged compact output is rejected at its line", async () => {
+test("an untagged compact output is rejected at its line", async () => {
   await expectLoadError(
-    COMPACT.replace("output: int", "output: !int"),
-    "`output:` declares a type; write `output: int`, without a tag",
-    "output: !int",
+    COMPACT.replace("output: !int", "output: int"),
+    "`output:` declares a type as a tag: write `output: !int`",
+    "output: int",
   );
 });
 
@@ -346,7 +348,7 @@ nodes:
     kind: code
     code: |
       return 1
-    output: int
+    output: !int
 output: \${route.output}
 `;
   expectError(
@@ -360,19 +362,19 @@ output: \${route.output}
 test.each([
   ["agent", "    kind: agent\n    prompt: write\n"],
   ["tool", "    kind: tool\n    tool_id: place_order\n"],
-])("a tagged %s output is rejected at its line", async (_kind, head) => {
+])("an untagged %s output is rejected at its line", async (_kind, head) => {
   await expectLoadError(
-    `id: f\nname: f\nnodes:\n  n:\n${head}    output: !str\noutput: \${n.output}\n`,
-    "`output:` declares a type; write `output: str`, without a tag",
-    "    output: !str",
+    `id: f\nname: f\nnodes:\n  n:\n${head}    output: str\noutput: \${n.output}\n`,
+    "`output:` declares a type as a tag: write `output: !str`",
+    "    output: str",
   );
 });
 
-test("a tagged single-node def output is rejected at its line", async () => {
+test("an untagged single-node def output is rejected at its line", async () => {
   await expectLoadError(
-    SINGLE_NODE_DEF.replace("    output: int", "    output: !int"),
-    "`output:` declares a type; write `output: int`, without a tag",
-    "    output: !int",
+    SINGLE_NODE_DEF.replace("    output: !int", "    output: int"),
+    "`output:` declares a type as a tag: write `output: !int`",
+    "    output: int",
   );
 });
 
@@ -390,7 +392,7 @@ defs:
         code: ${ECHO}
         input:
           value: !int \${input.x}
-        output: int
+        output: !int
     output: \${echo.output}
 nodes:
   n:
@@ -415,7 +417,7 @@ nodes:
         code: ${ECHO}
         input:
           value: !int \${input.x}
-        output: int
+        output: !int
     output: !int \${echo.output}
 output: \${each.output}
 `;
@@ -447,7 +449,7 @@ nodes:
     code: ${ECHO}
     input:
       value: !int \${input.x}
-    output: int
+    output: !int
 output: \${echo.output}
 `;
 
@@ -497,7 +499,7 @@ nodes:
     code: ${ECHO}
     input:
       qty: *d
-    output: int
+    output: !int
 output: \${n.output}
 `;
   const loaded = await loadConformanceFlow(text);
@@ -515,7 +517,7 @@ nodes:
     code: ${ECHO}
     input:
       <<: *d
-    output: int
+    output: !int
 output: \${n.output}
 `;
   await loadConformanceFlow(text);

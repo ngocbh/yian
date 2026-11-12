@@ -151,7 +151,7 @@ nodes:
     code: ./compose_codefns.ts:double
     input:
       n: \${input.n}
-    output: int
+    output: !int
 output: \${twice.output}
 `;
 
@@ -160,7 +160,7 @@ id: lifecycle_nullable_list
 name: lifecycle_nullable_list
 input:
   items: !list(Optional(int))
-output: list(Optional(int))
+output: !list(Optional(int))
 kind: code
 code: |
   return inputs["items"]
@@ -173,7 +173,7 @@ nodes:
   fail:
     kind: code
     code: ./compose_codefns.ts:boom
-    output: str
+    output: !str
 output: \${fail.output}
 `;
 
@@ -193,7 +193,7 @@ nodes:
     code: ./compose_codefns.ts:positive
     input:
       topic: selected
-    output: str
+    output: !str
 output: \${selected.output}
 `;
 
@@ -204,7 +204,7 @@ nodes:
   work:
     kind: code
     code: return "done"
-    output: str
+    output: !str
 output: \${work.output}
 `;
 
@@ -219,19 +219,19 @@ nodes:
     code: ./compose_codefns.ts:echo_x
     input:
       x: \${input.n}
-    output: int
+    output: !int
   b:
     kind: code
     code: ./compose_codefns.ts:echo_x
     input:
       x: \${input.n}
-    output: int
+    output: !int
   c:
     kind: code
     code: ./compose_codefns.ts:echo_x
     input:
       x: \${input.n}
-    output: int
+    output: !int
 output:
   a: \${a.output}
   b: \${b.output}
@@ -249,7 +249,7 @@ nodes:
     input:
       topic: \${input.topic}
     prompt: Answer \${topic}
-    output: str
+    output: !str
 output: \${answer.output}
 `;
 
@@ -280,7 +280,7 @@ nodes:
     tool_id: ask
     input:
       prompt: "Approve?"
-    output: str
+    output: !str
 output:
   trigger: \${trigger.output}
   human: \${human.output}
@@ -1041,7 +1041,7 @@ nodes:
     code: |
       ${SLOW}
       return inputs.n + 1
-    output: int
+    output: !int
   b:
     kind: code
     input:
@@ -1049,7 +1049,7 @@ nodes:
     code: |
       ${SLOW}
       return inputs.n * 2
-    output: int
+    output: !int
   c:
     kind: code
     input:
@@ -1057,7 +1057,7 @@ nodes:
     code: |
       ${SLOW}
       return "n=" + inputs.n
-    output: str
+    output: !str
 output: \${c.output}
 `,
     inputs: { n: 4 },
@@ -1077,7 +1077,7 @@ nodes:
     code: |
       ${SLOW}
       return inputs.seed * 2
-    output: float
+    output: !float
   gate:
     kind: case
     cases:
@@ -1091,7 +1091,7 @@ nodes:
     code: |
       ${SLOW}
       return "positive " + inputs.score
-    output: str
+    output: !str
   cautious:
     kind: code
     input:
@@ -1099,7 +1099,7 @@ nodes:
     code: |
       ${SLOW}
       return "cautious " + inputs.score
-    output: str
+    output: !str
 output: \${positive.output | cautious.output}
 `,
     inputs: { seed: 0.75 },
@@ -1119,7 +1119,7 @@ nodes:
     code: |
       ${SLOW}
       return "left " + inputs.topic
-    output: str
+    output: !str
   right:
     kind: code
     input:
@@ -1127,7 +1127,7 @@ nodes:
     code: |
       ${SLOW}
       return "right " + inputs.topic
-    output: str
+    output: !str
   both:
     kind: code
     input:
@@ -1136,7 +1136,7 @@ nodes:
     code: |
       ${SLOW}
       return inputs.l + " & " + inputs.r
-    output: str
+    output: !str
 output: \${both.output}
 `,
     inputs: { topic: "reefs" },

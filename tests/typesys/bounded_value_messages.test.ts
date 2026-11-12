@@ -29,6 +29,7 @@ import {
   valueRepr,
   writeAsText,
 } from "../../src/typesys/values.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 const CAP = 200;
 const MESSAGE_BOUND = 1200;
@@ -352,7 +353,7 @@ function bounded(fn: string, output: string | null = null): string {
     "id: bounded\nname: bounded\nnodes:\n  b:\n    kind: code\n" +
     `    code: ${JSON.stringify(FNS[fn])}\n` +
     "    input:\n      topic: x\n" +
-    (output === null ? "" : `    output: ${output}\n`) +
+    (output === null ? "" : `    output: ${outputTag(output)}\n`) +
     "output: ${b.output}\n"
   );
 }

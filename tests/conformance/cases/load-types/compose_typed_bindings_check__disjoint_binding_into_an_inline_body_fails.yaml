@@ -6,7 +6,7 @@ flow: |2
   nodes:
     note:
       kind: code
-      output: str
+      output: !str
       code: |
         return "hi"
     wrap:
@@ -18,7 +18,7 @@ flow: |2
           kind: code
           input:
             n: ${input.n}
-          output: int
+          output: !int
           code: |
             return inputs["n"] * 2
       output: ${twice.output}

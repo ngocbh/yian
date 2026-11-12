@@ -21,7 +21,7 @@ nodes:
         code: |
           throw new Error("inline child boom");
           return "unreachable";
-        output: str
+        output: !str
     output: \${boom.output}
 output: \${wrapper.output}
 `;

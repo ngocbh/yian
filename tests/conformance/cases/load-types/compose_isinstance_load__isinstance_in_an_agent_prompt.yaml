@@ -15,7 +15,7 @@ flow: |
       input:
         order: ${input.order}
       prompt: "Is it a buy? ${isinstance(order, Buy)}"
-      output: str
+      output: !str
   output: ${ask.output}
 expect:
   load:

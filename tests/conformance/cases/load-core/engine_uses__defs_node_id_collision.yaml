@@ -14,7 +14,7 @@ flow: |
       code: ./fixtures/compose_codefns.ts:echo
       input:
         x: !str
-      output: str
+      output: !str
 expect:
   load:
     diagnostics:

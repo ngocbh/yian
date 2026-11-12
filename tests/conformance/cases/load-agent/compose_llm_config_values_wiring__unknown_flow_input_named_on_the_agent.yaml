@@ -7,7 +7,7 @@ flow: |
     pick:
       kind: agent
       prompt: Pick a model.
-      output: str
+      output: !str
       llm_config: {model: m0}
     open:
       kind: agent

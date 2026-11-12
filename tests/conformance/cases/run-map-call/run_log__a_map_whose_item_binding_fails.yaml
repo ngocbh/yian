@@ -8,7 +8,7 @@ flow: |
     label:
       input: {line: !str, x: !str}
       nodes:
-        echo: {kind: code, input: {line: "${input.line}"}, output: str, code: "return inputs['line']"}
+        echo: {kind: code, input: {line: "${input.line}"}, output: !str, code: "return inputs['line']"}
       output: ${echo.output}
   nodes:
     each: {kind: map, over: "${input.xs}", call: label, input: {line: "Item ${item}.", x: '${item :? "no item"}'}}

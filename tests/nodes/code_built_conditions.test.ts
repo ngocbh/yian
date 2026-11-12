@@ -119,7 +119,7 @@ nodes:
     code: ./compose_codefns.ts:double
     input:
       n: \${input.v}
-    output: int
+    output: !int
   gate:
     kind: case
     cases:
@@ -131,13 +131,13 @@ nodes:
     code: ./compose_codefns.ts:double
     input:
       n: \${a.output}
-    output: int
+    output: !int
   neg:
     kind: code
     code: ./compose_codefns.ts:double
     input:
       n: \${a.output}
-    output: int
+    output: !int
 output: \${pos.output}
 `;
 
@@ -157,8 +157,8 @@ defs:
           n: \${input.n}
           exited: \${input.exited}
         output:
-          n: int
-          exited: bool
+          n: !int
+          exited: !bool
     output: \${step.output}
 nodes:
   loop:

@@ -29,6 +29,7 @@ import {
   loadErrorAsync,
   runCase,
 } from "../helpers/declarations.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-constructor-load-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -67,7 +68,7 @@ nodes:
     kind: code
     input:
       order: \${input.order}
-    output: object
+    output: !object
     code: |
       return inputs["order"]
 `;
@@ -700,7 +701,7 @@ nodes:
     input:
       order: \${input.order}
     prompt: "Is it a buy? \${Buy(order)}"
-    output: str
+    output: !str
 output: \${ask.output}
 `;
 
@@ -716,7 +717,7 @@ output: \${ask.output}
 // ---------- static types ----------
 
 /** Like `HEAD`, with `d` declaring `dOutput`. */
-const typedHead = (dOutput: string) => HEAD.replace("    output: object\n", `    output: ${dOutput}\n`);
+const typedHead = (dOutput: string) => HEAD.replace("    output: !object\n", `    output: ${outputTag(dOutput)}\n`);
 
 test("a field read on a constructor result type checks", () => {
   loadedNodes(consumer("${Buy(d.output).conviction}"));

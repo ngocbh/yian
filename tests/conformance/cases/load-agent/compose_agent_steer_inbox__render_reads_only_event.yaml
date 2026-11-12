@@ -14,7 +14,7 @@ flow: |
         from: ${input.notes}
         render: |-
           About ${input.topic}: ${event}
-      output: str
+      output: !str
   output: ${chat.output}
 expect:
   load:

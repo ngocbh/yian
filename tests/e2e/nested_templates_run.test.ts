@@ -22,7 +22,7 @@ const env = hostEnv(dir);
 
 const PRODUCER = `  n:
     kind: code
-    output: str
+    output: !str
     code: |
       return "hi"
 `;
@@ -111,7 +111,7 @@ const BUY_TYPEDEFS = `typedefs:
 
 const SCORE = `  score:
     kind: code
-    output: float
+    output: !float
     code: |
       return 0.75
 `;

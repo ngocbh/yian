@@ -211,7 +211,7 @@ describe("EventQueue", () => {
         onStatus: (published) => queue.push(published),
       });
       try {
-        const text = 'id: ask\nname: ask\nnodes:\n  sure: {kind: tool, tool_id: ask, input: {prompt: "Proceed?"}, output: str}\noutput: ${sure.output}\n';
+        const text = 'id: ask\nname: ask\nnodes:\n  sure: {kind: tool, tool_id: ask, input: {prompt: "Proceed?"}, output: !str}\noutput: ${sure.output}\n';
         await runs.start(await loadConfinedText(tmp, join(tmp, "ask.yaml"), text, NO_ENV), {});
         while (queue.size === 0) await runs.next("r1");
         expect(queue.takeAll().map((event) => event.text)).toEqual(['run r1 asks (call chat-1-r1/sure): "Proceed?"']);
@@ -317,7 +317,7 @@ defs:
         tool_id: echo
         input:
           events: \${heard.output.events}
-        output: str
+        output: !str
     output:
       closed: \${heard.output.closed}
       said: \${reply.output}

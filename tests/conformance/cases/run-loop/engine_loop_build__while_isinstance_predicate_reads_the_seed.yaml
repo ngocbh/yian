@@ -16,8 +16,8 @@ flow: |2
           input:
             n: ${input.n}
           output:
-            n: int
-            r: Done
+            n: !int
+            r: !Done
           code: |
             return {"n": inputs["n"] + 1, "r": {"answer": "ok"}}
       output: ${step.output}

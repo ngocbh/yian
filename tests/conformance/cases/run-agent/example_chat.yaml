@@ -59,7 +59,7 @@ flow: |
             said: ${input.said}
           steer_inbox: ${input.owner_messages}
           tools: [hold]
-          output: Optional(str)            # text; null only after an interrupt
+          output: !Optional(str)           # text; null only after an interrupt
           system_prompt: |-
             You are a helpful conversational assistant.
 
@@ -143,7 +143,7 @@ files:
           summarize:          # never `reply`: `yian run`'s chat prints any node named `reply`
             kind: agent
             input: {summary: "${input.summary}", older: "${input.older}"}
-            output: str
+            output: !str
             system_prompt: |-
               You keep a running summary of a conversation between a user and an assistant, so the
               assistant can continue it without the older messages.

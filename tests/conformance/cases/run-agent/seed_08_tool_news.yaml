@@ -33,7 +33,7 @@ flow: |
       input:
         topic:   ${input.topic}
         articles: ${news.output}  # whole-string ${...} -> the tool's typed value (a list)
-      output: str
+      output: !str
       prompt: |-
         Summarize the key themes across these ${topic} news items in three neutral
         bullet points; cite item indices. No recommendations.

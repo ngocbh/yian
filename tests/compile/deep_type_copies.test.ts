@@ -27,8 +27,8 @@ const TIMEOUT = 60_000;
 
 const DEEP_TREE = "./fixtures/compose_codefns.ts:deep_tree";
 
-/** Return a `{tree: {a: ... "str"}}` record type nesting `levels` records in total. */
-const treeRecord = (levels: number) => "{tree: " + "{a: ".repeat(levels - 1) + '"str"' + "}".repeat(levels);
+/** Return a `{tree: {a: ... !str}}` record type nesting `levels` records in total. */
+const treeRecord = (levels: number) => "{tree: " + "{a: ".repeat(levels - 1) + "!str" + "}".repeat(levels);
 
 /** Return the value `deep_tree` makes for `n = levels - 1`, matching `treeRecord`. */
 function treeValue(levels: number): Record<string, unknown> {
@@ -161,7 +161,7 @@ test(
         "    kind: code",
         "    input:",
         "      n: ${input.n}",
-        "    output: T99",
+        "    output: !T99",
         "    code: |",
         "      let v = {'k': 's'}",
         "      for (let i = 0; i < inputs['n']; i++)",

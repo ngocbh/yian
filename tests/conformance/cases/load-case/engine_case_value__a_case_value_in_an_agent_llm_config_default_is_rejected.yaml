@@ -13,8 +13,8 @@ flow: |
         - when: input.big
           then: slow
       else: fast
-    slow: {kind: code, output: str, code: "return 'model-big'"}
-    fast: {kind: code, output: str, code: "return 'model-small'"}
+    slow: {kind: code, output: !str, code: "return 'model-big'"}
+    fast: {kind: code, output: !str, code: "return 'model-small'"}
     chat:
       kind: agent
       prompt: Go.

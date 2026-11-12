@@ -13,12 +13,12 @@ flow: |
       input: {name: "${input.name}", title: "${input.title}", message: "${input.message}"}
       system_prompt: "You are ${name}, ${title}. Speak as ${name} in the first person."
       prompt: ${message}
-      output: str
+      output: !str
     after:
       kind: agent
       input: {draft: "${reply.output}"}
       prompt: "polish: ${draft}"
-      output: str
+      output: !str
   output: ${after.output}
 inputs:
   name: Ada

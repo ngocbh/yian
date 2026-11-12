@@ -18,9 +18,9 @@ function flow(cmdType: string, caseTail: string): string {
     "      - when: yes\n        then: agree\n" +
     caseTail +
     "  agree:\n    kind: code\n    code: ./fixtures/compose_codefns.ts:echo\n" +
-    "    input:\n      topic: agreed\n    output: str\n" +
+    "    input:\n      topic: agreed\n    output: !str\n" +
     "  refuse:\n    kind: code\n    code: ./fixtures/compose_codefns.ts:echo\n" +
-    "    input:\n      topic: refused\n    output: str\n" +
+    "    input:\n      topic: refused\n    output: !str\n" +
     "output: ${agree.output | refuse.output}\n"
   );
 }

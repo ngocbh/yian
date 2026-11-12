@@ -20,8 +20,8 @@ flow: |2
           input:
             n: ${input.n}
           output:
-            n: int
-            r: Step
+            n: !int
+            r: !Step
           code: |
             const n = inputs["n"] + 1
             return {"n": n, "r": n >= 3 ? {"answer": "ok"} : {"hint": "again"}}

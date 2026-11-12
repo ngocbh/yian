@@ -15,19 +15,19 @@ flow: |
     order:
       kind: code
       output:
-        qty: int
+        qty: !int
       code: |
         return {"qty": 2}
     rejected:
       kind: code
-      output: str
+      output: !str
       code: |
         return "no"
     use:
       kind: code
       input:
         v: '${order.output?.qty} items'
-      output: str
+      output: !str
       code: |
         return "x"
   output: ${use.output}

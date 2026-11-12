@@ -12,7 +12,7 @@ flow: |
       code: return inputs["x"]
       input:
         x: ${input.x}
-      output: str
+      output: !str
   output: ${step.output}
 files:
   u0.yaml: |
@@ -28,7 +28,7 @@ files:
         code: return inputs["x"]
         input:
           x: ${input.x}
-        output: str
+        output: !str
     output: ${step.output}
   u1.yaml: |
     id: u1
@@ -55,7 +55,7 @@ files:
             code: return inputs["x"]
             input:
               x: ${input.x}
-            output: str
+            output: !str
         output: ${step.output}
     nodes:
       top:

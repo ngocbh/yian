@@ -24,7 +24,7 @@ nodes:
     input:
       price: ${input.price}
       rate: ${input.rate}
-    output: float
+    output: !float
     code: |
       return inputs.price * (1 + inputs.rate);
   summary: !str "Total with tax: ${total.output}"
@@ -184,7 +184,7 @@ nodes:
       heading: "Notes on ${input.topic}"    # text
       limit: 3                              # a literal
       options: {tone: plain, tags: ["${input.topic}", draft]}
-    output: str
+    output: !str
     code: |
       return `${inputs.heading} (${inputs.limit})`;
 output: ${brief.output}
@@ -243,7 +243,7 @@ id: hello
 name: hello
 input:
   name: !str
-output: str
+output: !str
 kind: agent
 prompt: Write a short, warm greeting for ${name}.
 ```
@@ -255,7 +255,8 @@ Hello, Ada! Lovely to meet you.
 
 - The flow `id:` also names the node, so it must be an identifier.
 - Each flow input is passed to the node under its own name, so the prompt reads `${name}`.
-- `output:` is the node's output type, and the flow returns the node's result.
+- `output:` is the node's output type, a tag as on any node (`output: !str`), and the flow
+  returns the node's result.
 - `case`, `call`, `map` and `loop` need the full `nodes:` form, and so do `uses:` and `defs:`.
 
 ## Dependencies and ordering
@@ -299,7 +300,7 @@ nodes:
   after:
     kind: code
     runs_after: [a]
-    output: str
+    output: !str
     code: |
       return "after ran";
 output:
@@ -338,7 +339,7 @@ nodes:
     kind: code
     input:
       n: ${input.qty}
-    output: int
+    output: !int
     code: |
       return inputs.n * 2;
     asserts:

@@ -29,7 +29,7 @@ nodes:
         kind: code
         input:
           n: \${input.rounds}
-        output: int
+        output: !int
         code: |
           return inputs["n"] + 1
     output:
@@ -65,7 +65,7 @@ defs:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: |
           return inputs["n"] + 1
     output:
@@ -120,7 +120,7 @@ defs:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: |
           return inputs["n"] + 1
     output:

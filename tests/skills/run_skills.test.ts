@@ -48,7 +48,7 @@ nodes:
       change: \${input.change}
     prompt: "Review \${change}"
     skills: [code-review, release-notes]
-    output: str
+    output: !str
 output: \${review.output}
 `;
 
@@ -63,7 +63,7 @@ defs:
         kind: agent
         prompt: hi
         skills: [code-review]
-        output: str
+        output: !str
     output: \${inner.output}
 nodes:
   outer:

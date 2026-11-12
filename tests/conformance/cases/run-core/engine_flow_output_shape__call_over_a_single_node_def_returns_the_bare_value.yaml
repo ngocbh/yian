@@ -6,7 +6,7 @@ flow: |2
   defs:
     greet:
       kind: code
-      output: str
+      output: !str
       code: |
         return "hi"
   nodes:

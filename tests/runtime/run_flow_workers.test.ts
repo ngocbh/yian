@@ -27,20 +27,20 @@ nodes:
     kind: code
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
     code: ./compose_codefns.ts:positive
   con:
     kind: code
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
     code: ./compose_codefns.ts:cautious
   merge:
     kind: code
     input:
       pro: \${pro.output}
       con: \${con.output}
-    output: str
+    output: !str
     code: |
       return inputs.pro + " | " + inputs.con
 output: \${merge.output}
@@ -106,7 +106,7 @@ nodes:
         input:
           n: \${input.n}
         output:
-          n: int
+          n: !int
         code: |
           return {"n": inputs["n"] + 1}
     output: \${bump.output}

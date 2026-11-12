@@ -108,7 +108,7 @@ defs:
         code: return inputs["x"] + 1n
         input:
           x: \${input.x}
-        output: int
+        output: !int
     output:
       x: \${inc.output}
 nodes:

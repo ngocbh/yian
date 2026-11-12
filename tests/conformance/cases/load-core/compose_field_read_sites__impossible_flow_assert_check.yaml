@@ -16,7 +16,7 @@ flow: |
       kind: code
       input:
         x: ${input.s}
-      output: Rec
+      output: !Rec
       code: "return ({a: \"x\"})"
     route:
       kind: case
@@ -28,7 +28,7 @@ flow: |
       kind: code
       input:
         s: ${input.s}
-      output: Order
+      output: !Order
       code: "return null"
     e:
       kind: code

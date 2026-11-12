@@ -43,7 +43,7 @@ defs:
         kind: code
         input:
           text: \${input.text}
-        output: str
+        output: !str
         code: ${body}
     output: \${loud.output}
 nodes:
@@ -127,7 +127,7 @@ defs:
       sign:
         kind: tool
         tool_id: sign
-        output: str
+        output: !str
     output: \${sign.output}
 nodes:
   helper:
@@ -177,13 +177,13 @@ defs:
     nodes:
       slow:
         kind: code
-        output: str
+        output: !str
         code: |
           await new Promise((resolve) => setTimeout(resolve, 20000));
           return "late";
       boom:
         kind: code
-        output: str
+        output: !str
         code: |
           await new Promise((resolve) => setTimeout(resolve, 100));
           throw new Error("boom");
@@ -220,7 +220,7 @@ defs:
     nodes:
       boom:
         kind: code
-        output: str
+        output: !str
         code: throw new Error("inner boom")
     output: \${boom.output}
   outer:

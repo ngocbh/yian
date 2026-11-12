@@ -11,7 +11,7 @@ flow: |
     T5: {a: T4}
   input:
     n: !int
-  output: 'int'
+  output: !int
   kind: code
   code: |
     return 1

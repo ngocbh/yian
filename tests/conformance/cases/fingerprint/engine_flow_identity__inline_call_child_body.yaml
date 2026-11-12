@@ -9,7 +9,7 @@ flow: |
       nodes:
         step:
           kind: code
-          output: str
+          output: !str
           code: |
             return "ok"
       output: ${step.output}
@@ -23,7 +23,7 @@ other: |
       nodes:
         step:
           kind: code
-          output: str
+          output: !str
           code: |
             return "no"
       output: ${step.output}

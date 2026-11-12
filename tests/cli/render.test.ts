@@ -16,7 +16,7 @@ nodes:
     kind: code
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
     code: tests.seeds.fns:echo_value
 output:
   topic: \${echo.output}

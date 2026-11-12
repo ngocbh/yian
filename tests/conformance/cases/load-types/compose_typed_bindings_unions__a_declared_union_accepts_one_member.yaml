@@ -17,7 +17,7 @@ flow: |
       input:
         decision: ${input.decision}
       code: return inputs['decision']
-      output: Decision
+      output: !Decision
     b:
       kind: code
       input:
@@ -25,7 +25,7 @@ flow: |
       code: return 1
     use:
       kind: code
-      output: Buy
+      output: !Buy
       input:
         d: !Decision ${b.output}
       code: return 1

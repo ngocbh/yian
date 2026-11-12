@@ -21,6 +21,7 @@ import {
   parametersFromYaml,
   runCase,
 } from "../helpers/declarations.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 /** A def over the one input `name: !<type>` whose node `x` returns `output`, built by hand. */
 const def = (name: string, type: string, output: string): ComposedFlow =>
@@ -46,7 +47,7 @@ defs:
         code: "return inputs['y']"
         input:
           y: \${input.y}
-        output: ${yType}
+        output: ${outputTag(yType)}
     output: \${x.output}
 `;
 }
@@ -65,7 +66,7 @@ nodes:
     code: "return inputs['a']"
     input:
       a: ${binding}
-    output: ${yType}
+    output: ${outputTag(yType)}
 output: \${n.output}
 `;
 }
@@ -113,7 +114,7 @@ nodes:
       - when: "input.s == 'a'"
         then: ${then}
     else: ${elseTarget}
-  a: {kind: code, code: "return 'a'", output: str}
+  a: {kind: code, code: "return 'a'", output: !str}
 output: \${g.output}
 `;
 }
@@ -133,7 +134,7 @@ id: f
 name: f
 ${childDef()}
 nodes:
-  n: {kind: code, code: "return 'a'", output: str}
+  n: {kind: code, code: "return 'a'", output: !str}
 output: ${output}
 `;
 }
@@ -163,7 +164,7 @@ defs:
         code: "return [inputs['n']]"
         input:
           n: \${input.n}
-        output: list(str)
+        output: !list(str)
     output: \${x.output}
   one:
     input:
@@ -174,7 +175,7 @@ defs:
         code: "return inputs['topic']"
         input:
           topic: \${input.topic}
-        output: str
+        output: !str
     output: \${x.output}
 nodes:
   m:
@@ -205,10 +206,10 @@ defs:
         code: "return True"
         input:
           y: \${input.y}
-        output: bool
+        output: !bool
     output: \${x.output}
 nodes:
-  n: {kind: code, code: "return 'a'", output: str}
+  n: {kind: code, code: "return 'a'", output: !str}
 output: \${n.output}
 asserts:
   - call(check, y=${BAD_REF})
@@ -232,7 +233,7 @@ test("a nested call shares its enclosing binding site", () => {
         code: "return inputs['z']"
         input:
           z: \${input.z}
-        output: str
+        output: !str
     output: \${x.output}
 `,
   );
@@ -328,7 +329,7 @@ nodes:
     code: "return inputs['a']"
     input:
       a: call(child, y=\${n.output})
-    output: str
+    output: !str
 output: \${n.output}
 `;
   const { diagnostic } = loadError(() => assembleText(text, "flow.yaml", { children: child() }));

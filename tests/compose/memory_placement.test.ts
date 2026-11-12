@@ -56,14 +56,14 @@ const USE =
   "is a memory; use it whole as an agent input, in prompt text, as a child's memory input of the same type, " +
   "or name it in `tools:`/`tool_id:`";
 const agent = (input: string, prompt = "hi") =>
-  `  a:\n    kind: agent\n    output: str\n    prompt: ${JSON.stringify(prompt)}\n    input:\n${input}`;
+  `  a:\n    kind: agent\n    output: !str\n    prompt: ${JSON.stringify(prompt)}\n    input:\n${input}`;
 const code = (input: string) => `  c:\n    kind: code\n    code: return 1\n    input:\n${input}`;
 
 test("an agent takes a memory whole and renders it in its prompt and system prompt", () => {
   load(agent("      lessons: ${input.lessons}\n", "<memory name=\"lessons\">\n${lessons}\n</memory> Answer."));
   load(`${agent("      lessons: ${input.lessons}\n")}    system_prompt: "Notes: \${lessons}"\n`);
   load(agent("      maybe: ${input.maybe}\n", "${maybe}"));
-  load(`  a:\n    kind: agent\n    output: str\n    input:\n      lessons: \${input.lessons}\n    prompt:\n      - user: "\${lessons}"\n      - user: hi\n`);
+  load(`  a:\n    kind: agent\n    output: !str\n    input:\n      lessons: \${input.lessons}\n    prompt:\n      - user: "\${lessons}"\n      - user: hi\n`);
 });
 
 test("a memory may stay unread", () => {
@@ -113,7 +113,7 @@ test.each([
 });
 
 test("a prompt can't splice a memory", () => {
-  const nodes = `  a:\n    kind: agent\n    output: str\n    input:\n      lessons: \${input.lessons}\n    prompt:\n      - \${lessons}\n`;
+  const nodes = `  a:\n    kind: agent\n    output: !str\n    input:\n      lessons: \${input.lessons}\n    prompt:\n      - \${lessons}\n`;
   expect(refused(nodes)).toContain(`\${lessons} ${USE} (not as a prompt splice)`);
 });
 
@@ -161,7 +161,7 @@ test.each([
   [
     "an llm_config value",
     "",
-    "  a:\n    kind: agent\n    output: str\n    prompt: hi\n    llm_config:\n      model: ${input.lessons}\n",
+    "  a:\n    kind: agent\n    output: !str\n    prompt: hi\n    llm_config:\n      model: ${input.lessons}\n",
     `node 'a' llm_config: \${input.lessons} ${USE}`,
   ],
 ])("refuses %s", (_label, top, nodes, message) => {
@@ -186,7 +186,7 @@ test("a host memory type has no constructor", async () => {
 });
 
 test("an inline loop body takes a memory from its seed, keeping the memory type", () => {
-  const nodes = `  l:\n    kind: loop\n    input:\n      m: \${input.lessons}\n      done: false\n    nodes:\n      a:\n        kind: agent\n        output: bool\n        prompt: hi\n        input:\n          m: \${input.m}\n    output:\n      done: \${a.output}\n    while: not done\n`;
+  const nodes = `  l:\n    kind: loop\n    input:\n      m: \${input.lessons}\n      done: false\n    nodes:\n      a:\n        kind: agent\n        output: !bool\n        prompt: hi\n        input:\n          m: \${input.m}\n    output:\n      done: \${a.output}\n    while: not done\n`;
   const loop = load(nodes).flow.compiled.nodes.get("l") as unknown as { childInputs: readonly Parameter[] };
   expect(loop.childInputs.find((input) => input.name === "m")!.contract!.type.memory).toBe("FileMemory");
 });

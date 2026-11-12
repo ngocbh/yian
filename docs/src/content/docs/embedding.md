@@ -44,7 +44,7 @@ nodes:
     kind: code
     input:
       total: ${quote.output}
-    output: str
+    output: !str
     code: |
       return `total: ${inputs.total}`;
 output: ${label.output}
@@ -304,7 +304,7 @@ nodes:
     input:
       prompt: Approve ${input.item}?
       timeout: 2d
-    output: Optional(str)
+    output: !Optional(str)
 output: ${answer.output :- "no answer"}
 ```
 
@@ -476,7 +476,7 @@ nodes:
     input:
       name: ${input.name}
     prompt: Greet ${name} in one short sentence.
-    output: str
+    output: !str
 output: ${hello.output}
 ```
 

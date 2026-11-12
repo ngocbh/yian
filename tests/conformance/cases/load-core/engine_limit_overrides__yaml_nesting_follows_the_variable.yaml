@@ -9,7 +9,7 @@ flow: |
       code: ./fixtures/compose_codefns.ts:echo
       input:
         topic: [[1]]
-      output: str
+      output: !str
   output: ${use.output}
 env:
   YIAN_MAX_VALUE_NESTING: '4'

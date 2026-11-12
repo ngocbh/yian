@@ -305,7 +305,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:score
     input:
       seed: \${input.seed}
-    output: float
+    output: !float
   gate:
     kind: case
     cases:
@@ -317,13 +317,13 @@ nodes:
     code: ./fixtures/compose_codefns.ts:positive
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
   caut:
     kind: code
     code: ./fixtures/compose_codefns.ts:cautious
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
 output: \${gate.output}
 `;
 
@@ -354,7 +354,7 @@ test("node consuming case value loads with data edges from both branches", () =>
   const text = CASE_VALUE_FLOW.replace(
     "output: ${gate.output}\n",
     "  summary:\n    kind: code\n    code: ./fixtures/compose_codefns.ts:echo\n" +
-      "    input:\n      topic: ${gate.output}\n    output: str\noutput: ${summary.output}\n",
+      "    input:\n      topic: ${gate.output}\n    output: !str\noutput: ${summary.output}\n",
   );
   const edges = load(text).edges.map((edge) => `${edge.from}->${edge.to}`);
   expect(edges).toContain("pro->summary");
@@ -402,19 +402,19 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: "HI"
-    output: str
+    output: !str
   lo:
     kind: code
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: "LO"
-    output: str
+    output: !str
   x:
     kind: code
     code: ./fixtures/compose_codefns.ts:echo
     input:
       topic: "X"
-    output: str
+    output: !str
 output: \${outer.output}
 `;
 
@@ -435,7 +435,7 @@ test("case value in inline call arg expands", () => {
   const text = CASE_VALUE_FLOW.replace(
     "output: ${gate.output}\n",
     "  wrap:\n    kind: code\n    code: ./fixtures/compose_codefns.ts:echo\n" +
-      "    input:\n      topic: call(passthru, v=${gate.output})\n    output: str\noutput: ${wrap.output}\n",
+      "    input:\n      topic: call(passthru, v=${gate.output})\n    output: !str\noutput: ${wrap.output}\n",
   );
   const passthru = handChild({
     inputs: parametersFromYaml("input:\n  v: !str\n", new Map()),

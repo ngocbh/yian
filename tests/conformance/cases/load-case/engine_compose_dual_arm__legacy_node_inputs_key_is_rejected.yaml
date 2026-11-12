@@ -9,7 +9,7 @@ flow: |
       kind: code
       inputs:
         x: ${input.x}
-      output: int
+      output: !int
       code: return inputs["x"]
   output: ${n.output}
 expect:

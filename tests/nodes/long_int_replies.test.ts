@@ -19,6 +19,7 @@ import type { JsonObject } from "../../src/typesys/json.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import { PLAIN_FLOW, serving } from "../helpers/run_state_fixtures.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-long-int-replies-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -55,8 +56,8 @@ function generate(model: ScriptedModel, typ: Type, retries = 2): Promise<unknown
 function structuredFlow(output: string, options: { native: boolean; retries?: number }): string {
   const config = options.native ? "{provider: openai, model: gpt-4o}" : "{provider: vllm, model: m, structured_output: prompt}";
   let flow = PLAIN_FLOW.replace("{provider: openai, model: test-model}", config).replace(
-    "    output: str",
-    `    output: ${output}`,
+    "    output: !str",
+    `    output: ${outputTag(output)}`,
   );
   if (options.retries !== undefined) flow = flow.replace("    output:", `    retries: ${options.retries}\n    output:`);
   return flow;

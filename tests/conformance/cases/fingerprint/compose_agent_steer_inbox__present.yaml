@@ -9,7 +9,7 @@ flow: |
     chat:
       kind: agent
       prompt: Help the user.
-      output: str
+      output: !str
     keep:
       kind: tool
       tool_id: take
@@ -26,7 +26,7 @@ other: |
       kind: agent
       prompt: Help the user.
       steer_inbox: ${input.notes}
-      output: str
+      output: !str
     keep:
       kind: tool
       tool_id: take

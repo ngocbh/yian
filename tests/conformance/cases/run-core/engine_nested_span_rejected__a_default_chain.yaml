@@ -12,7 +12,7 @@ flow: |2
       code: "return inputs['v']"
       input:
         v: ${input.a :- (input.b :- "lit")}
-      output: Optional(str)
+      output: !Optional(str)
   output: ${n.output}
 run:
   num_workers: 0

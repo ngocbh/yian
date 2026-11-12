@@ -14,7 +14,7 @@ flow: |
       steer_inbox: ${input.notes}
       system_prompt: Help.
       prompt: Help the user.
-      output: str
+      output: !str
       env:
         max_tool_iterations: 1
   output: ${chat.output}

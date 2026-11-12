@@ -6,12 +6,12 @@ flow: |
   code: ./fixtures/compose_codefns.ts:echo
   input:
     qty: !int
-  output: !int
+  output: int
 expect:
   load:
     diagnostics:
     - code: compose.load
-      message: '`output:` declares a type; write `output: int`, without a tag'
+      message: '`output:` declares a type as a tag: write `output: !int`'
       frames:
       - label: flow.yaml
-        range: [7, 9, 7, 13]
+        range: [7, 9, 7, 12]

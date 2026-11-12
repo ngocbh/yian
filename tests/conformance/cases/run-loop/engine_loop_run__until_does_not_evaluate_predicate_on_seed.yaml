@@ -14,8 +14,8 @@ flow: |2
           input:
             n: ${input.n}
           output:
-            seen: Optional(list(str))
-            n: int
+            seen: !Optional(list(str))
+            n: !int
           code: |
             return {"seen": ["a", "b"].slice(0, inputs["n"] + 1), "n": inputs["n"] + 1}
       output: ${bump.output}

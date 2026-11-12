@@ -13,7 +13,7 @@ flow: |
           kind: code
           input:
             s: ${input.s}
-          output: str
+          output: !str
           code: return inputs.s
       output: ${echo.output}
     maybe:
@@ -24,7 +24,7 @@ flow: |
           kind: code
           input:
             s: ${input.s}
-          output: Optional(str)
+          output: !Optional(str)
           code: return inputs.s
       output: ${echo.output}
     stamp:

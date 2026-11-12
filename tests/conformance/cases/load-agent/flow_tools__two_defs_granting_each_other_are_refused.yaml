@@ -10,7 +10,7 @@ flow: |
         a:
           kind: agent
           prompt: Ping.
-          output: str
+          output: !str
           tools: [pong]
       output: ${a.output}
     pong:
@@ -19,14 +19,14 @@ flow: |
         b:
           kind: agent
           prompt: Pong.
-          output: str
+          output: !str
           tools: [ping]
       output: ${b.output}
   nodes:
     helper:
       kind: agent
       prompt: Help.
-      output: str
+      output: !str
       tools: [ping]
   output: ${helper.output}
 expect:

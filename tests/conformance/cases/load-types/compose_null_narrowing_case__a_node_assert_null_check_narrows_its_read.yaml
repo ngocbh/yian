@@ -13,7 +13,7 @@ flow: |
       code: ./fixtures/compose_codefns.ts:echo
       input:
         topic: ${input.s}
-      output: Optional(Item)
+      output: !Optional(Item)
       asserts:
         - "output != null and output.nosuch > 0"
   output: ${x.output}

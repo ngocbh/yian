@@ -16,7 +16,7 @@ flow: |
           code: ./fixtures/compose_codefns.ts:record
           input:
             tag: ${input.tag}
-          output: str
+          output: !str
       output: ${fx.output}
     wrap:
       input:
@@ -26,7 +26,7 @@ flow: |
           kind: code
           input:
             x: ${input.x}
-          output: str
+          output: !str
           code: return "wrapped " + inputs["x"]
       output: ${w.output}
   nodes:
@@ -38,7 +38,7 @@ flow: |
       else: b
     b:
       kind: code
-      output: str
+      output: !str
       code: return "B"
   output:
     r: ${gate.output}

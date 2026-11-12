@@ -16,7 +16,7 @@ flow: |
       kind: agent
       input:
         topic: ${input.topic}
-      output: float
+      output: !float
       prompt: "Rate ${topic} in [-1, 1]; output only the number."
 
   output: ${scor.output}     # <-- typo: no node named `scor` (it's `score`)

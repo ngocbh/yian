@@ -21,6 +21,7 @@ import { runFlow } from "../../src/run.ts";
 import { canonicalTypeLabel, type Type } from "../../src/typesys/values.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import { loadConformanceFlow, loadErrorAsync } from "../helpers/declarations.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-nested-template-types-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -49,7 +50,7 @@ name: nested_types
 nodes:
   p:
     kind: code
-    output: ${pOutput}
+    output: ${outputTag(pOutput)}
     code: |
       return "hi"
   c:
@@ -145,7 +146,7 @@ defs:
 nodes:
   n:
     kind: code
-    output: ${nOutput}
+    output: ${outputTag(nOutput)}
     code: |
       return "hi"
   c:
@@ -217,7 +218,7 @@ defs:
     nodes:
       n:
         kind: code
-        output: str
+        output: !str
         code: |
           return "hi"
     output:
@@ -265,7 +266,7 @@ defs:
             then: n
       n:
         kind: code
-        output: str
+        output: !str
         code: |
           return "hi"
     output:
@@ -309,7 +310,7 @@ defs:
         input:
           n: \${input.n}
         output:
-          n: int
+          n: !int
         code: |
           return {"n": inputs["n"] + 1}
     output: \${bump.output}
@@ -361,7 +362,7 @@ output: \${repeat.output}
 test("inline loop template seed generates its parameter", async () => {
   const text =
     "typedefs:\n  State:\n    n: int\n" +
-    inlineLoop("{n: '${input.start}'}").replace("STATE_TYPE", "\n          state: State");
+    inlineLoop("{n: '${input.start}'}").replace("STATE_TYPE", "\n          state: !State");
 
   const result = await runFlow(await loadConformanceFlow(text), { start: 1 }, { env });
 
@@ -373,7 +374,7 @@ test("inline loop template seed generates its parameter", async () => {
 test("inline loop template seed mismatch suggests a tag", async () => {
   const text =
     "typedefs:\n  State:\n    n: float\n" +
-    inlineLoop("{n: '${input.start}'}").replace("STATE_TYPE", "\n          state: State");
+    inlineLoop("{n: '${input.start}'}").replace("STATE_TYPE", "\n          state: !State");
 
   const error = await loadErrorOf(text);
 
@@ -471,7 +472,7 @@ defs:
     nodes:
       bump:
         kind: code
-        output: int
+        output: !int
         code: |
           return 7
     output:
@@ -497,7 +498,7 @@ test("loop seed differing from the body only in a literal runs", async () => {
 // ---------- partial templates ----------
 
 /** Drop `p`'s declared output type and make it return an int. */
-const untypedP = (text: string) => text.replace("    output: str\n", "").replace('return "hi"', "return 5");
+const untypedP = (text: string) => text.replace("    output: !str\n", "").replace('return "hi"', "return 5");
 
 test("partial template under a tag is checked at runtime", async () => {
   const flow = await loadConformanceFlow(untypedP(codeFlow("!Rec {a: '${p.output}', n: 1}")));
@@ -510,7 +511,7 @@ test("partial template under a tag is checked at runtime", async () => {
 
 test("partial template into a child param is checked at runtime", async () => {
   const text = callFlow("{a: '${n.output}', n: 1}", "!Rec")
-    .replace("    output: str\n", "")
+    .replace("    output: !str\n", "")
     .replace('return "hi"', "return 5");
 
   const result = await runFlow(await loadConformanceFlow(text), {}, { env });

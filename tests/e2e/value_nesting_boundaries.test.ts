@@ -262,7 +262,7 @@ nodes:
   w:
     kind: agent
     prompt: go
-    output: {t: object}
+    output: {t: !object}
 output: \${w.output}
 `;
 
@@ -297,7 +297,7 @@ nodes:
     kind: agent
     prompt: go
     tools: [lookup]
-    output: str
+    output: !str
 output: \${w.output}
 `);
   const rawArguments = `{"q": ${deepText(levels)}}`;
@@ -374,7 +374,7 @@ nodes:
     variables:
       t: !object ${flowLiteral(101)}
     prompt: go
-    output: str
+    output: !str
 output: \${writer.output}
 `;
 
@@ -446,7 +446,7 @@ function nestList(levels: number, leaf: Value = "leaf"): Value {
   return value;
 }
 
-const TREE_OUTPUT = "    output: {tree: object}";
+const TREE_OUTPUT = "    output: {tree: !object}";
 
 /** Load `text` with the conformance fixtures and run it on `inputs` in `hostEnv`, with `options`. */
 async function run(text: string, inputs: Record<string, unknown> = {}, options: Parameters<typeof runFlow>[2] = {}) {
@@ -526,7 +526,7 @@ test("a CODE result too deep to copy back fails its output before its post-asser
   expectTooDeep(deep, "deep");
   // The worker's refusal reads as the commit's: same message and trace, the trace located at the
   // output field the too-deep value sits in.
-  const field = { outputLine: "    output: {s: Any}" };
+  const field = { outputLine: "    output: {s: !Any}" };
   const wrapped = (levels: number) => listBody(levels).replace("return v", "return { s: v }");
   const deepField = await run(codeFlow(wrapped(10_000), field));
   const committed = await run(codeFlow(wrapped(150), field));

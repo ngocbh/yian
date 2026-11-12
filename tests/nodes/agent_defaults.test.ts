@@ -32,7 +32,7 @@ nodes:
     prompt: \${question}
     input:
       question: \${input.question}
-    output: {score: float}
+    output: {score: !float}
 output: \${agent.output}
 `;
 
@@ -100,7 +100,7 @@ nodes:
     prompt: \${question}
     input:
       question: \${input.question}
-    output: str
+    output: !str
 output: \${agent.output}
 `;
 

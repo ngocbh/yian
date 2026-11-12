@@ -17,7 +17,7 @@ afterEach(() => {
 const FLOW = `id: two
 name: two
 nodes:
-  a: {kind: code, code: return "x", output: str}
+  a: {kind: code, code: return "x", output: !str}
 output: \${a.output}
 `;
 

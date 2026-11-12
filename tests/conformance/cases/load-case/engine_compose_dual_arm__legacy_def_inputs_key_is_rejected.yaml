@@ -13,7 +13,7 @@ flow: |
           kind: code
           input:
             x: ${input.x}
-          output: int
+          output: !int
           code: return inputs["x"]
       output: ${n.output}
   nodes:

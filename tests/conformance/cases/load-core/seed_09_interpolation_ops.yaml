@@ -25,7 +25,7 @@ flow: |
         # coalesce chain: as_of, else fallback_date, else the host clock (first-present)
         as_of:  ${input.as_of | input.fallback_date | system.today}
         run_id: ${system.run_id}     # host-ambient namespace (run id / clock / tenant)
-      output: str
+      output: !str
       prompt: |-
         Write a neutral one-paragraph brief on ${topic} as of ${as_of}.
         All figures are in US dollars ($$).   # $$ -> a literal $ (not interpolated)

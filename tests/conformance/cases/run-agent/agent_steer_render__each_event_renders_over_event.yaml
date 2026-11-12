@@ -18,7 +18,7 @@ flow: |
           From the owner: ${event}
       system_prompt: Help.
       prompt: Help the user.
-      output: str
+      output: !str
   output: ${chat.output}
 run:
   run_id: r1

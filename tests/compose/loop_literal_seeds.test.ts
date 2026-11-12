@@ -9,6 +9,7 @@ import { expect, test } from "bun:test";
 
 import { runFlow } from "../../src/run.ts";
 import { assembled, assembleText, type CaseRow, loadConformanceFlow, loadError, runCase } from "../helpers/declarations.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 /**
  * A flow whose LOOP `pages` calls the `defs:` body `step`, carrying `cursor` and `n`.
@@ -37,8 +38,8 @@ defs:
         input:
           n: \${input.n}
         output:
-          cursor: ${out}
-          n: int
+          cursor: ${outputTag(out)}
+          n: !int
         code: |
           return {"cursor": "page", "n": inputs.n + 1}
     output: \${next.output}

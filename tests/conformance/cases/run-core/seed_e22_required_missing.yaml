@@ -11,7 +11,7 @@ flow: |
       kind: code
       input:
         as_of: ${input.as_of:?"as_of is required"}   # null when omitted -> required error at run
-      output: str
+      output: !str
       code: ./fixtures/seeds.ts:echo_value
   output: ${use.output}
 inputs: {}

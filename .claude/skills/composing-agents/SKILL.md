@@ -51,7 +51,7 @@ nodes:
     kind: agent
     input:
       ticket: ${input.ticket}         # bind first; the prompt reads the local name
-    output: Severity                  # a non-str type asks for structured output
+    output: !Severity                 # a non-str type asks for structured output
     prompt: Classify this ticket's severity as low or high. ${ticket}
   route:
     kind: case
@@ -66,13 +66,13 @@ nodes:
     kind: agent
     input:
       ticket: ${input.ticket}
-    output: str
+    output: !str
     prompt: Write a short, friendly reply to this ticket. ${ticket}
   words:
     kind: code
     input:
       text: ${route.output}           # the output of whichever branch ran
-    output: int
+    output: !int
     code: |
       return inputs.text.split(/\s+/).filter(Boolean).length;
 output:
@@ -94,15 +94,15 @@ output:
 
 ### Types and tags
 
-- **Slots take a tag; type definitions don't.** A slot holds a value: a flow input
-  (`qty: !int`), a binding (`n: !int ${x.output}`), a value entry, a flow output
-  (`output: !Order ${x.output}`). A type definition is plain text: a `typedefs:` entry and the
-  `output:` of an `agent`, `code` or `tool` node. Mixing them up is a load error.
+- **A `!` marks every type except under `typedefs:`.** A flow input (`qty: !int`), a binding
+  (`n: !int ${x.output}`), a value entry, a flow output (`output: !Order ${x.output}`), and the
+  `output:` of an `agent`, `code` or `tool` node, compact flows included: `output: !str`, or a
+  record as an untagged mapping of tags, `output: {n: !int, note: !Optional(str)}`. Only a
+  `typedefs:` entry is plain text. Mixing them up is a load error.
 - **Every flow input has a tag**, with an optional default: `lookback: !int 30`,
   `note: !Optional(str)` (omitted is null).
-- **A tag ends at the first space and holds no `,`.** Name a type with several arguments in
-  `typedefs:` and tag with the name: `Order: Union(Buy, Sell)`, then `!Order`. One-argument
-  types work inline: `!Optional(list(str))`.
+- **A tag ends at the first space and holds no `,`,** so `;` separates a type's arguments:
+  `!Literal(buy;sell)`, `!Union(Buy;Sell)`, `!Optional(list(str))`.
 - **Quote a type with a `,` inside `{...}`.** YAML splits a flow mapping at each comma, so
   write `Msg: {role: "Literal(user, assistant)", text: str}` or the record in block style.
 - **Spellings:** parentheses, not brackets (`Optional(str)`, `int(1..12)`); `Any`, not `any`;
@@ -131,7 +131,7 @@ output:
 - **A long prompt can live in its own file**: `prompt: !include prompts/answer.md` reads a UTF-8
   file, its path relative to the flow's folder, as if its text were written there quoted (its
   `${...}` checked at load). It works on any text value, never on a key, list or mapping or where
-  a type goes (`input:` and `variables:` declarations, a node's `output:` type, `typedefs:`).
+  a type goes (`input:` and `variables:` declarations, a node's `output:`, `typedefs:`).
   `!include(str) file.md` sends the text exactly as written, never as a template (`$$`, `${...}`
   and CRLF stay); so does any `T` whose values are text (`Optional(str)`, a typedef naming `str`).
   It works on any text value but a condition, `asserts:`, `over:`, `times:`/`max:`, `steer_inbox:`
@@ -218,7 +218,7 @@ output:
 
 ### Agents
 
-- **`output:` defaults to `str`.** Any other type (a record, `Literal`, list, number) asks the
+- **`output:` defaults to `!str`.** Any other type (a record, `Literal`, list, number) asks the
   model for that type and checks the reply, retrying up to `retries:` (default 2). It can't
   hold `file` or `None`.
 - **`tools:` is always a list** of tool or group names, such as an MCP server's name, or

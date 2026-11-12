@@ -32,7 +32,7 @@ const CHILD_EXPECTS = "call node 'use': binding 'v' — child expects 'str', sou
 
 /** A CODE node `nodeId` that outputs `0`, for a branch that passes nothing on. */
 function skip(nodeId: string): string {
-  return `  ${nodeId}:\n    kind: code\n    code: ${ECHO}\n    input:\n      topic: 0\n    output: int\n`;
+  return `  ${nodeId}:\n    kind: code\n    code: ${ECHO}\n    input:\n      topic: 0\n    output: !int\n`;
 }
 
 /** The `use` node: a CALL of `take`, or a MAP of `take_each`, passing `${x.output}`. */
@@ -56,22 +56,22 @@ function producerFlow(cases: readonly (readonly [string, string])[], target: "ca
     "input:\n  s: !Optional(str)\n  items: !list(int)\n  y: !bool\n" +
     "nodes:\n" +
     `  x:\n    kind: code\n    code: ${ECHO}\n` +
-    "    input:\n      topic: ${input.s}\n    output: Optional(str)\n" +
+    "    input:\n      topic: ${input.s}\n    output: !Optional(str)\n" +
     "  gate:\n    kind: case\n    cases:\n" +
     whens +
     "    else: skip\n" +
     sink(target) +
     `  skip:\n    kind: code\n    code: ${ECHO}\n` +
-    "    input:\n      topic: skipped\n    output: str\n" +
+    "    input:\n      topic: skipped\n    output: !str\n" +
     "output: ${use.output :- skip.output}\n" +
     "defs:\n" +
     "  take:\n    input:\n      v: !str\n    nodes:\n" +
     `      d:\n        kind: code\n        code: ${ECHO}\n` +
-    "        input:\n          topic: ${input.v}\n        output: str\n" +
+    "        input:\n          topic: ${input.v}\n        output: !str\n" +
     "    output: ${d.output}\n" +
     "  take_each:\n    input:\n      i: !int\n      v: !str\n    nodes:\n" +
     `      d:\n        kind: code\n        code: ${ECHO}\n` +
-    "        input:\n          topic: ${input.v}\n        output: str\n" +
+    "        input:\n          topic: ${input.v}\n        output: !str\n" +
     "    output: ${d.output}\n"
   );
 }
@@ -102,7 +102,7 @@ function inputFlow(when: string, xType: string, sinkType = "Item", source = "${i
     "defs:\n" +
     `  take:\n    input:\n      v: !${sinkType}\n    nodes:\n` +
     `      d:\n        kind: code\n        code: ${ECHO}\n` +
-    "        input:\n          topic: ${input.v}\n        output: Any\n" +
+    "        input:\n          topic: ${input.v}\n        output: !Any\n" +
     "    output: ${d.output}\n"
   );
 }
@@ -126,7 +126,7 @@ function crossNodeFlow(outer: string, inner: string, xType: string): string {
     "defs:\n" +
     "  take:\n    input:\n      v: !Item\n    nodes:\n" +
     `      d:\n        kind: code\n        code: ${ECHO}\n` +
-    "        input:\n          topic: ${input.v.qty}\n        output: int\n" +
+    "        input:\n          topic: ${input.v.qty}\n        output: !int\n" +
     "    output: ${d.output}\n"
   );
 }
@@ -227,7 +227,7 @@ function onFlow(sinkType: string): string {
     "defs:\n" +
     `  take:\n    input:\n      v: !${sinkType}\n    nodes:\n` +
     `      d:\n        kind: code\n        code: ${ECHO}\n` +
-    "        input:\n          topic: 1\n        output: int\n" +
+    "        input:\n          topic: 1\n        output: !int\n" +
     "    output: ${d.output}\n"
   );
 }
@@ -354,7 +354,7 @@ test("a node assert read after a null check names the non-null type", () => {
     "input:\n  s: !Optional(str)\n" +
     "nodes:\n" +
     `  x:\n    kind: code\n    code: ${ECHO}\n` +
-    "    input:\n      topic: ${input.s}\n    output: Optional(Item)\n" +
+    "    input:\n      topic: ${input.s}\n    output: !Optional(Item)\n" +
     '    asserts:\n      - "output != null and output.nosuch > 0"\n' +
     "output: ${x.output}\n";
   expect(loadMessage(text)).toBe(
@@ -375,9 +375,9 @@ test("a flow assert null check narrows a skippable producer of a non-null type",
     "      - when: \"input.s == 'go'\"\n        then: d\n" +
     "    else: e\n" +
     `  d:\n    kind: code\n    code: ${ECHO}\n` +
-    "    input:\n      topic: ${input.s}\n    output: Item\n" +
+    "    input:\n      topic: ${input.s}\n    output: !Item\n" +
     `  e:\n    kind: code\n    code: ${ECHO}\n` +
-    "    input:\n      topic: ${input.s}\n    output: str\n" +
+    "    input:\n      topic: ${input.s}\n    output: !str\n" +
     "output: ${input.s}\n" +
     'asserts:\n  - "d.output != null and d.output.nosuch > 0"\n';
   expect(loadMessage(text)).toBe(
@@ -398,9 +398,9 @@ test("a flow assert on a skippable producer needs a null check", () => {
     "      - when: \"input.s == 'go'\"\n        then: d\n" +
     "    else: e\n" +
     `  d:\n    kind: code\n    code: ${ECHO}\n` +
-    "    input:\n      topic: ${input.s}\n    output: Item\n" +
+    "    input:\n      topic: ${input.s}\n    output: !Item\n" +
     `  e:\n    kind: code\n    code: ${ECHO}\n` +
-    "    input:\n      topic: ${input.s}\n    output: str\n" +
+    "    input:\n      topic: ${input.s}\n    output: !str\n" +
     "output: ${input.s}\n" +
     'asserts:\n  - "d.output.qty > 0"\n';
   expect(loadMessage(text)).toBe(

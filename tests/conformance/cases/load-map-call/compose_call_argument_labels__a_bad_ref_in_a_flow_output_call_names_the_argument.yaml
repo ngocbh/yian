@@ -14,11 +14,11 @@ flow: |2
           code: "return inputs['y']"
           input:
             y: ${input.y}
-          output: str
+          output: !str
       output: ${x.output}
 
   nodes:
-    n: {kind: code, code: "return 'a'", output: str}
+    n: {kind: code, code: "return 'a'", output: !str}
   output: call(child, y=${nosuch.output})
 expect:
   load:

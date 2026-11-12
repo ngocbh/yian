@@ -25,8 +25,8 @@ flow: |
             row: ${input.row}
             name: ${input.name}
           output:
-            row: Optional(Row)
-            name: Optional(str)
+            row: !Optional(Row)
+            name: !Optional(str)
       output: ${collect.output}
   output: ${each.output}
 inputs:

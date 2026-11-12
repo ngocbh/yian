@@ -7,7 +7,7 @@ flow: |
     step:
       kind: tool
       tool_id: step
-      output: str
+      output: !str
   output:
     step: ${step.output}
     password: hunter2
@@ -18,7 +18,7 @@ other: |
     step:
       kind: tool
       tool_id: step
-      output: str
+      output: !str
   output:
     step: ${step.output}
     password: hunter3

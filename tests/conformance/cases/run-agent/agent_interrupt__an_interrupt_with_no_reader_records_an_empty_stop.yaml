@@ -13,7 +13,7 @@ flow: |
       kind: agent
       system_prompt: Help.
       prompt: Help the user.
-      output: str
+      output: !str
     heard:
       kind: tool
       tool_id: take

@@ -8,7 +8,7 @@ flow: |
       code: ./fixtures/compose_codefns.ts:echo
       input:
         topic: 0000-01-01
-      output: str
+      output: !str
   output: ${use.output}
 expect:
   load:

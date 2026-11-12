@@ -23,6 +23,7 @@ import { NodeSkipped, NodeStarted } from "../../src/events.ts";
 import { type RunResult, advance, runFlow } from "../../src/run.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import { rejected } from "../helpers/run_state_fixtures.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-value-entries-run-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -79,12 +80,12 @@ const flow = (entries: string, { output = "${x.output}", head = "" } = {}) =>
   "nodes:\n" +
   "  a:\n" +
   "    kind: code\n" +
-  "    output: int\n" +
+  "    output: !int\n" +
   "    code: |\n" +
   "      return 2\n" +
   "  b:\n" +
   "    kind: code\n" +
-  "    output: int\n" +
+  "    output: !int\n" +
   "    code: |\n" +
   "      return 3\n" +
   entries +
@@ -142,7 +143,7 @@ const F_DEF =
   "        kind: code\n" +
   "        input:\n" +
   "          x: ${input.x}\n" +
-  "        output: str\n" +
+  "        output: !str\n" +
   "        code: |\n" +
   "          return inputs['x'].toUpperCase()\n" +
   "    output: ${up.output}\n";
@@ -194,7 +195,7 @@ test("a merge key inside a value entry", async () => {
 
 /** Return a CODE node `p` returning text, declaring `output` unless it is empty. */
 const producer = (output: string) => {
-  const declared = output ? `    output: ${output}\n` : "";
+  const declared = output ? `    output: ${outputTag(output)}\n` : "";
   return `  p:\n    kind: code\n${declared}    code: |\n      return 'hi'\n`;
 };
 
@@ -209,7 +210,7 @@ const RECORD_ROWS: [string, string, unknown][] = [
   ["  r: !object {}\n", "${r.output}", {}],
   ['  r: !object {a: "$${input.name}"}\n', "${r.output}", { a: "${input.name}" }],
   [
-    "  x:\n    kind: code\n    output: {q: int}\n    code: |\n      return {'q': 1}\n  r: !object ${x.output}\n",
+    "  x:\n    kind: code\n    output: {q: !int}\n    code: |\n      return {'q': 1}\n  r: !object ${x.output}\n",
     "${r.output}",
     { q: 1n },
   ],
@@ -271,7 +272,7 @@ nodes:
         then: maybe
   maybe:
     kind: code
-    output: str
+    output: !str
     code: |
       return 'm'
   whole: !object
@@ -316,7 +317,7 @@ const unionFlow = ({ buy, other }: { buy: string; other: string }) =>
   '      if (inputs["kind"] === "buy")\n' +
   '        return {"action": "buy", "qty": 3}\n' +
   '      return {"action": "sell", "price": 1.5}\n' +
-  "    output: Union(Buy, Sell)\n" +
+  "    output: !Union(Buy;Sell)\n" +
   "  route:\n" +
   "    kind: case\n" +
   "    on: ${d.output.action}\n" +

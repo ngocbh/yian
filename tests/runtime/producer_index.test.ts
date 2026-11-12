@@ -51,7 +51,7 @@ defs:
   add1:
     input: {x: !int}
     nodes:
-      inc: {kind: code, input: {x: "\${input.x}"}, output: {y: int}, code: "return {y: inputs.x + 1}"}
+      inc: {kind: code, input: {x: "\${input.x}"}, output: {y: !int}, code: "return {y: inputs.x + 1}"}
     output: {y: "\${inc.output.y}"}
   body:
     input: {x: !int}
@@ -72,7 +72,7 @@ defs:
   double:
     input: {x: !int}
     nodes:
-      times2: {kind: code, input: {x: "\${input.x}"}, output: {y: int}, code: "return {y: inputs.x * 2}"}
+      times2: {kind: code, input: {x: "\${input.x}"}, output: {y: !int}, code: "return {y: inputs.x * 2}"}
     output: \${times2.output.y}
 nodes:
   each: {kind: map, over: "\${input.xs}", call: double, input: {x: "\${item}"}}
@@ -88,10 +88,10 @@ defs:
   one:
     input: {x: !int}
     nodes:
-      c: {kind: code, input: {x: "\${input.x}"}, output: int, code: "return inputs.x"}
+      c: {kind: code, input: {x: "\${input.x}"}, output: !int, code: "return inputs.x"}
     output: {x: "\${c.output}"}
 nodes:
-  ask: {kind: tool, tool_id: ask, input: {prompt: "q?"}, output: str}
+  ask: {kind: tool, tool_id: ask, input: {prompt: "q?"}, output: !str}
   route:
     kind: case
     cases:
@@ -99,8 +99,8 @@ nodes:
         then: yes
     else: no
   yes: {kind: agent, prompt: hi}
-  no: {kind: tool, tool_id: echo, input: {n: "x"}, output: str}
-  code: {kind: code, code: "return 1", output: int}
+  no: {kind: tool, tool_id: echo, input: {n: "x"}, output: !str}
+  code: {kind: code, code: "return 1", output: !int}
   one_call: {kind: call, call: one, input: {x: 1}}
   each: {kind: map, over: "\${input.xs}", call: one, input: {x: "\${item}"}}
   again: {kind: loop, call: one, input: {x: 0}, times: 2}
@@ -268,7 +268,7 @@ defs:
   bump:
     input: {x: !int}
     nodes:
-      inc: {kind: code, input: {x: "\${input.x}"}, output: int, code: "return inputs.x + 1"}
+      inc: {kind: code, input: {x: "\${input.x}"}, output: !int, code: "return inputs.x + 1"}
     output: {x: "\${inc.output}"}
 nodes:
   count: {kind: loop, call: bump, input: {x: 0}, times: ${times}}
@@ -295,7 +295,7 @@ defs:
   bump_body:
     input: {n: !int}
     nodes:
-      bump: {kind: code, input: {n: "\${input.n}"}, output: {n: int}, code: "return {n: inputs.n + 1}"}
+      bump: {kind: code, input: {n: "\${input.n}"}, output: {n: !int}, code: "return {n: inputs.n + 1}"}
     output: {n: "\${bump.output.n}"}
   outer_body:
     input: {n: !int}
@@ -317,8 +317,8 @@ defs:
   turn:
     input: {history: !list(Msg), log: !str}
     nodes:
-      ask: {kind: code, input: {log: "\${input.log}"}, output: str, code: "return 'q'"}
-      reply: {kind: code, input: {history: "\${input.history}", message: "\${ask.output}"}, output: str, code: "return 'a'"}
+      ask: {kind: code, input: {log: "\${input.log}"}, output: !str, code: "return 'q'"}
+      reply: {kind: code, input: {history: "\${input.history}", message: "\${ask.output}"}, output: !str, code: "return 'a'"}
     output:
       history: \${input.history + [Msg(role="user", text=ask.output), Msg(role="assistant", text=reply.output)]}
       log: "\${input.log}\\nUser: \${ask.output}\\nAssistant: \${reply.output}"
@@ -378,7 +378,7 @@ name: sys
 defs:
   inner:
     nodes:
-      c: {kind: code, code: "return 1", output: int}
+      c: {kind: code, code: "return 1", output: !int}
     output: {n: "\${c.output}", rid: "\${system.run_id}"}
 nodes:
   call_it: {kind: call, call: inner}

@@ -325,7 +325,7 @@ nodes:
       x: \${input.x}
       request: {headers: {Authorization: "Bearer $\${input.token}"}, items: [1, "a"]}
       password: "\${input.token}"
-    output: int
+    output: !int
     code: |
       return inputs["x"] + 1
 output: \${step.output}

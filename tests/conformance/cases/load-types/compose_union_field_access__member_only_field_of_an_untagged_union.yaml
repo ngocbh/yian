@@ -17,7 +17,7 @@ flow: |
       kind: code
       input:
         x: ${input.s}
-      output: Reply
+      output: !Reply
       code: "return null"
   output:
     t: ${d.output.text}

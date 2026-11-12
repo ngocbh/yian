@@ -7,7 +7,7 @@ flow: |
   nodes:
     cls:
       kind: code
-      output: Optional(Literal(a, b))
+      output: !Optional(Literal(a;b))
       code: |
         return null
     route:
@@ -20,12 +20,12 @@ flow: |
           then: nb
     na:
       kind: code
-      output: str
+      output: !str
       code: |
         return "A"
     nb:
       kind: code
-      output: str
+      output: !str
       code: |
         return "B"
   output:

@@ -11,7 +11,7 @@ flow: |
           kind: code
           input:
             x: ${input.x}
-          output: str
+          output: !str
           code: |
             return inputs['x'].toUpperCase()
       output: ${up.output}
@@ -20,7 +20,7 @@ flow: |
   nodes:
     s:
       kind: code
-      output: float
+      output: !float
       code: |
         return 0.5
     x: !str ${ f(input.t) }

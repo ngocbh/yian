@@ -8,7 +8,7 @@ flow: |
       kind: agent
       long_term_memory: reflective
       prompt: answer
-      output: str
+      output: !str
   output: ${answer.output}
 expect:
   load:

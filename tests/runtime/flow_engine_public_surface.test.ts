@@ -283,7 +283,7 @@ nodes:
     code: return inputs["topic"]
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
 output: \${echo.output}
 `;
 
@@ -339,8 +339,8 @@ defs:
           n: \${input.n}
           exited: \${input.exited}
         output:
-          n: int
-          exited: bool
+          n: !int
+          exited: !bool
     output: \${step.output}
 nodes:
   repeat:

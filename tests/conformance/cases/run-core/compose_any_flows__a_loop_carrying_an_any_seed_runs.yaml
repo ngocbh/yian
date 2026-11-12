@@ -13,7 +13,7 @@ flow: |
           kind: code
           input:
             acc: ${input.acc}
-          output: Any
+          output: !Any
           code: |
             return [inputs['acc']]
       output:

@@ -11,6 +11,7 @@ import type { ValueContract } from "../../src/nodes/contracts.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { TypeCheckError, typeLevels } from "../../src/typesys/values.ts";
 import { loadConformanceFlow, loadErrorAsync } from "../helpers/declarations.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
 beforeEach(() => install(BUILTIN));
@@ -63,7 +64,7 @@ function flow(typedefs: Record<string, string>, output: string): string {
   return (
     `id: f\nname: f\ntypedefs:\n${lines}nodes:\n  use:\n    kind: code\n` +
     `    code: ./fixtures/compose_codefns.ts:echo\n    input:\n      topic: x\n` +
-    `    output: ${output}\noutput: \${use.output}\n`
+    `    output: ${outputTag(output)}\noutput: \${use.output}\n`
   );
 }
 
@@ -422,7 +423,7 @@ describe("typeFor nesting", () => {
   });
 
   test.each([
-    ["output", (typedefs: Record<string, string>, t: string) => flow(typedefs, `'${t}'`), "    output: 'list("],
+    ["output", (typedefs: Record<string, string>, t: string) => flow(typedefs, t), "    output: !list("],
     ["node-input-tag", nodeInputTagFlow, "      topic: !list("],
     ["flow-input-tag", flowInputTagFlow, "  t: !list("],
   ] as const)("a flow wrapping a deep typedef is a located load error: %s", async (_id, build, needle) => {

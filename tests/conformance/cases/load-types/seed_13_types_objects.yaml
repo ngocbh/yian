@@ -40,11 +40,11 @@ flow: |
         weights: ${input.weights}
         config:  ${input.config}    # bind the whole nested object
       output:                       # a nested object output
-        items: list(str)
+        items: !list(str)
         summary:
-          count: int
-          total: float
-          meta: { as_of: date, dry_run: bool }   # nested inline object
+          count: !int
+          total: !float
+          meta: { as_of: !date, dry_run: !bool }   # nested inline object
       code: ./fixtures/seeds.ts:build_outline
 
   output:

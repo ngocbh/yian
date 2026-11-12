@@ -79,7 +79,7 @@ const ROOT = caller("root", "child", "lib/child");
 /** A flow `id` taking `q` whose CODE node runs `ref`. */
 const codeFlow = (id: string, ref: string) =>
   `id: ${id}\nname: ${id}\ninput:\n  q: !str\nnodes:\n  up:\n    kind: code\n    code: ${ref}\n` +
-  "    input:\n      q: ${input.q}\n    output: str\noutput: ${up.output}\n";
+  "    input:\n      q: ${input.q}\n    output: !str\noutput: ${up.output}\n";
 /** A child flow whose CODE node runs `./fn.ts:up`, a file beside the child. */
 const CODE_CHILD = codeFlow("child", "./fn.ts:up");
 const UP = "export function up(inputs: Record<string, any>): string {\n  return `up:${inputs.q}`;\n}\n";
@@ -677,8 +677,8 @@ test("a symlinked child's CODE node resolves beside the link's target on resume 
 /** A root whose CODE nodes `one`, then `two`, each run `../fn.ts:who`. */
 const TWO_WHO =
   "id: root\nname: root\nnodes:\n" +
-  "  one:\n    kind: code\n    code: ../fn.ts:who\n    input: {k: 1}\n    output: str\n" +
-  "  two:\n    kind: code\n    code: ../fn.ts:who\n    input: {k: 2, prev: '${one.output}'}\n    output: str\n" +
+  "  one:\n    kind: code\n    code: ../fn.ts:who\n    input: {k: 1}\n    output: !str\n" +
+  "  two:\n    kind: code\n    code: ../fn.ts:who\n    input: {k: 2, prev: '${one.output}'}\n    output: !str\n" +
   "output: ${one.output} then ${two.output}\n";
 /** A CODE file whose `who` returns `name`. */
 const who = (name: string) => `export function who(): string {\n  return ${JSON.stringify(name)};\n}\n`;

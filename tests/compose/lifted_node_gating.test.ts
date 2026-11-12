@@ -43,7 +43,7 @@ defs:
         input:
           x: \${input.x}
           y: \${input.y}
-        output: str
+        output: !str
         code: return inputs["x"] + inputs["y"]
     output: \${j.output}
   meet:
@@ -57,7 +57,7 @@ defs:
           return inputs["tag"]
         input:
           tag: \${input.tag}
-        output: str
+        output: !str
     output: \${fx.output}
   side:
     input:
@@ -68,7 +68,7 @@ defs:
         code: ./fixtures/compose_codefns.ts:record
         input:
           tag: \${input.tag}
-        output: str
+        output: !str
     output: \${fx.output}
   wrap:
     input:
@@ -78,7 +78,7 @@ defs:
         kind: code
         input:
           x: \${input.x}
-        output: str
+        output: !str
         code: return "wrapped " + inputs["x"]
     output: \${w.output}
   items:
@@ -90,12 +90,12 @@ defs:
         code: ./fixtures/compose_codefns.ts:record
         input:
           tag: \${input.tag}
-        output: str
+        output: !str
       ls:
         kind: code
         input:
           t: \${fx.output}
-        output: list(str)
+        output: !list(str)
         code: return [inputs["t"]]
     output: \${ls.output}
   echo:
@@ -106,7 +106,7 @@ defs:
         kind: code
         input:
           v: \${input.item}
-        output: str
+        output: !str
         code: return inputs["v"]
     output: \${e.output}
 `;
@@ -120,7 +120,7 @@ const PREP = `
     code: ./fixtures/compose_codefns.ts:record
     input:
       tag: prep
-    output: str
+    output: !str
 `;
 const MAYBE = `
   pick:
@@ -130,7 +130,7 @@ const MAYBE = `
         then: maybe
   maybe:
     kind: code
-    output: str
+    output: !str
     code: return "m"
 `;
 
@@ -196,13 +196,13 @@ const PUBLISH = `
     kind: code
     input:
       draft: call(side, tag="publish")
-    output: str
+    output: !str
     code: return "published " + inputs["draft"]
 `;
 const SKIP_IT = `
   skip_it:
     kind: code
-    output: str
+    output: !str
     code: return "skipped"
 `;
 const GATE = `
@@ -330,7 +330,7 @@ test("loop seed call does not run on an untaken route", async () => {
         input:
           s: \${input.s}
         output:
-          s: str
+          s: !str
         code: |
           return {"s": inputs["s"]}
     output: \${k.output}
@@ -356,11 +356,11 @@ const CHILD_DEF = `
         kind: code
         input:
           draft: call(side, tag="child")
-        output: str
+        output: !str
         code: return inputs["draft"]
       skip_it:
         kind: code
-        output: str
+        output: !str
         code: return "skipped"
     output: \${gate.output}
 `;
@@ -413,7 +413,7 @@ const PLACE_DEF = `
         code: ./fixtures/compose_codefns.ts:record
         input:
           tag: \${input.order.action}
-        output: str
+        output: !str
     output: \${p.output}
 `;
 
@@ -427,7 +427,7 @@ test.each([
     kind: code
     input:
       a: \${input.action}
-    output: Decision
+    output: !Decision
     code: |
       return inputs["a"] == "buy" ? {"action": inputs["a"], "qty": 2} : {"action": "hold"}
   route:
@@ -441,11 +441,11 @@ test.each([
     kind: code
     input:
       r: call(place, order=\${d.output})
-    output: str
+    output: !str
     code: return inputs["r"]
   e:
     kind: code
-    output: str
+    output: !str
     code: return "held"
 `;
   const text =
@@ -476,7 +476,7 @@ const NESTED = `
     else: b
   b:
     kind: code
-    output: str
+    output: !str
     code: return "B"
 `;
 
@@ -538,7 +538,7 @@ const ADAPTIVE = `
       prompt: "Design one question for: \${ctx}"
   done:
     kind: code
-    output: str
+    output: !str
     code: return "done"
 `;
 
@@ -627,7 +627,7 @@ test("reading a lifted node in the hosts runs after is a cycle", async () => {
     kind: code
     input:
       q: \${ask__compose.output}
-    output: int
+    output: !int
     code: return inputs["q"].length
 `;
   const error = await loadErrorAsync(loadConformanceFlow(flow(nodes, "  r: ${router.output}\n"), { env }));
@@ -646,7 +646,7 @@ const PUBLISH_NOTES = `
     input:
       draft: call(side, tag="draft")
       notes: \${maybe.output}
-    output: str
+    output: !str
     code: return inputs["draft"] + inputs["notes"]
 `;
 const PUBLISH_OUT = "  r: ${publish.output}\n";
@@ -709,7 +709,7 @@ const PUBLISH_TWO = `
       a: call(meet, tag="a")
       b: call(meet, tag="b")
       notes: \${maybe.output}
-    output: str
+    output: !str
     code: return inputs["a"] + inputs["b"] + inputs["notes"]
 `;
 
@@ -737,7 +737,7 @@ const PUBLISH_NESTED = `
     kind: code
     input:
       draft: call(pair, x=call(side, tag="inner"), y=\${maybe.output})
-    output: str
+    output: !str
     code: return inputs["draft"]
 `;
 
@@ -760,7 +760,7 @@ const NESTED_PAIR = `
     else: b
   b:
     kind: code
-    output: str
+    output: !str
     code: return "B"
 `;
 
@@ -797,14 +797,14 @@ test("reading a lifted node from a host input is a cycle", async () => {
     kind: code
     input:
       v: \${__call_0.output}
-    output: str
+    output: !str
     code: return inputs["v"]
   publish:
     kind: code
     input:
       draft: call(side, tag="d")
       notes: \${spy.output}
-    output: str
+    output: !str
     code: return inputs["draft"] + inputs["notes"]
 `;
   const error = await loadErrorAsync(loadConformanceFlow(flow(nodes, PUBLISH_OUT), { env }));

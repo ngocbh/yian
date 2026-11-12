@@ -11,14 +11,14 @@ flow: |
         v: ${input.v}
       code: |
         return inputs["v"]
-      output: int(..-1)
+      output: !int(..-1)
     use:
       kind: code
       input:
         x: !int(0..) ${a.output}
       code: |
         return inputs["x"]
-      output: int
+      output: !int
   output: ${use.output}
 expect:
   load:

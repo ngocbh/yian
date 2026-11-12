@@ -14,7 +14,7 @@ flow: |2
         return inputs["mode"]
       input:
         mode: !Mode
-      output: str
+      output: !str
   nodes:
     go:
       kind: call

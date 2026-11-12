@@ -9,11 +9,12 @@ import { forget } from "../../src/defaults.ts";
 import { AgentNode, STEER_INBOX_KEY } from "../../src/nodes/agent/node.ts";
 import { Binding, ValueContract } from "../../src/nodes/contracts.ts";
 import { assembled, assembleText, type CaseRow, loadError, parsedNodes, runCase } from "../helpers/declarations.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 afterEach(() => forget());
 
 /** A one-agent flow reading inbox `notes`, with `steerLine` on line 9 and `output` after it. */
-function steerFlow(steerLine: string, output = "    output: str", input = "  notes: !Inbox(str)"): string {
+function steerFlow(steerLine: string, output = "    output: !str", input = "  notes: !Inbox(str)"): string {
   return `\
 id: steer
 name: steer
@@ -47,7 +48,7 @@ test("an agent with a steer inbox and no declared output is text", () => {
 });
 
 test("an agent with a steer inbox may declare an Optional(str) output", () => {
-  const chat = chatOf(steerFlow("    steer_inbox: ${input.notes}", "    output: Optional(str)"));
+  const chat = chatOf(steerFlow("    steer_inbox: ${input.notes}", "    output: !Optional(str)"));
   expect(chat.steerInbox).toBe(true);
   expect(chat.outputContract).toBeInstanceOf(ValueContract);
   expect((chat.outputContract as ValueContract).type.nullable).toBe(true);
@@ -56,11 +57,11 @@ test("an agent with a steer inbox may declare an Optional(str) output", () => {
 test.each([
   [
     "    steerable: true",
-    "    output: str",
+    "    output: !str",
     "node field `steerable:` was replaced by `steer_inbox:`: declare an `Inbox(...)` input and write " +
       "`steer_inbox: ${input.<name>}`; the host sends steers with `send`",
   ],
-  ["    steer_inbox: 3", "    output: str", "`steer_inbox:` must be `${input.<name>}` naming an Inbox input"],
+  ["    steer_inbox: 3", "    output: !str", "`steer_inbox:` must be `${input.<name>}` naming an Inbox input"],
 ])("a bad steer inbox points at its line: %p %p", (line, output, message) => {
   const error = loadError(() => assembleText(steerFlow(line, output)));
 
@@ -95,7 +96,7 @@ test.each([
 
 /** A steer flow whose `steer_inbox:` reads `notes` with render `render`, under `input`. */
 const renderFlow = (render: string, input = "  notes: !Inbox(str)") =>
-  steerFlow(`    steer_inbox:\n      from: \${input.notes}\n      render: |-\n        ${render}`, "    output: str", input);
+  steerFlow(`    steer_inbox:\n      from: \${input.notes}\n      render: |-\n        ${render}`, "    output: !str", input);
 
 test.each([
   ["an input", "${input.x}", "node 'chat' steer_inbox render: `${input.x}` names `input`; a steer render reads only `${event}`"],
@@ -124,7 +125,7 @@ test("a render over an Inbox(Message) reads its fields", () => {
 });
 
 test.each(["int", "{answer: str}"])("a steer inbox loads with any output, here %p", (output) => {
-  expect(() => assembleText(steerFlow("    steer_inbox: ${input.notes}", `    output: ${output}`))).not.toThrow();
+  expect(() => assembleText(steerFlow("    steer_inbox: ${input.notes}", `    output: ${outputTag(output)}`))).not.toThrow();
 });
 
 test("an input named __steer_inbox is reserved", () => {
@@ -156,7 +157,7 @@ test.each([
   ["text", '    steer_inbox: "${input.notes} x"', "  notes: !Inbox(str)", "not inside text"],
   ["a field read", "    steer_inbox: ${input.notes.x}", "  notes: !Inbox(str)", "has no fields"],
 ])("steer_inbox refuses %s", (_label, line, input, message) => {
-  const flow = steerFlow(line, "    output: str", input).replace(
+  const flow = steerFlow(line, "    output: !str", input).replace(
     "output: ${chat.output}",
     "  other:\n    kind: code\n    code: return 1\n  keep:\n    kind: tool\n    tool_id: take\n    input:\n" +
       "      from: ${input.notes}\noutput: ${chat.output}",
@@ -181,7 +182,7 @@ nodes:
     kind: agent
     prompt: Help the owner.
     steer_inbox: \${input.owner_messages}
-    output: str
+    output: !str
 output:
   done: true
 `;

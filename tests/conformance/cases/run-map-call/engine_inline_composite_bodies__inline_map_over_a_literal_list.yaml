@@ -15,7 +15,7 @@ flow: |
             return inputs["value"]
           input:
             value: ${input.value}
-          output: int
+          output: !int
       output: ${echo.output}
   output: ${each.output}
 run:

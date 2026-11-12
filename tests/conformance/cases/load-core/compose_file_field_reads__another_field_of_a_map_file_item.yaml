@@ -7,13 +7,13 @@ flow: |
       input:
         s: !str
       nodes:
-        k: {kind: code, input: {s: "${input.s}"}, code: "return inputs['s']", output: str}
+        k: {kind: code, input: {s: "${input.s}"}, code: "return inputs['s']", output: !str}
       output: ${k.output}
     child_int:
       input:
         s: !int
       nodes:
-        k: {kind: code, input: {s: "${input.s}"}, code: "return 1", output: int}
+        k: {kind: code, input: {s: "${input.s}"}, code: "return 1", output: !int}
       output: ${k.output}
   input:
     fs: !list(file)

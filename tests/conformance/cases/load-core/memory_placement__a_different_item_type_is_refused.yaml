@@ -15,7 +15,7 @@ flow: |
       nodes:
         g:
           kind: code
-          output: str
+          output: !str
           code: return "x"
       output: ${g.output}
   nodes:

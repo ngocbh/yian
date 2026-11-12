@@ -13,7 +13,7 @@ flow: |
       tool_id: place_order
       input:
         qty: 5
-      output: OrderResult
+      output: !OrderResult
     route:
       kind: case
       on: ${place.output.type}
@@ -48,7 +48,7 @@ expect:
       message: 'output at type: "rejected" is not a tag of the union (expected one of ["filled","interrupted"])'
       frames:
       - label: flow.yaml
-        range: [13, 13, 13, 24]
+        range: [13, 13, 13, 25]
       node: place
   trace:
   - - run_started
@@ -81,7 +81,7 @@ expect:
         message: 'output at type: "rejected" is not a tag of the union (expected one of ["filled","interrupted"])'
         frames:
         - label: flow.yaml
-          range: [13, 13, 13, 24]
+          range: [13, 13, 13, 25]
         node: place
   events:
   - [RunStarted]
@@ -99,7 +99,7 @@ expect:
         message: 'output at type: "rejected" is not a tag of the union (expected one of ["filled","interrupted"])'
         frames:
         - label: flow.yaml
-          range: [13, 13, 13, 24]
+          range: [13, 13, 13, 25]
         node: place
   - - RunFailed
     - failure:
@@ -107,7 +107,7 @@ expect:
         message: 'output at type: "rejected" is not a tag of the union (expected one of ["filled","interrupted"])'
         frames:
         - label: flow.yaml
-          range: [13, 13, 13, 24]
+          range: [13, 13, 13, 25]
         node: place
   tool_calls:
     place_order:

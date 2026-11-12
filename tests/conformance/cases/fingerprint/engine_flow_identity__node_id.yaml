@@ -7,7 +7,7 @@ flow: |
     body:
       kind: tool
       tool_id: t
-      output: int
+      output: !int
   output: ${body.output}
 other: |
   id: common
@@ -16,7 +16,7 @@ other: |
     renamed:
       kind: tool
       tool_id: t
-      output: int
+      output: !int
   output: ${renamed.output}
 expect:
   fingerprint: different

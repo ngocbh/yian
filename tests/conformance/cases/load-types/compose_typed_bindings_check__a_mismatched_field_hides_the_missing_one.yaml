@@ -14,7 +14,7 @@ flow: |2
       kind: code
       code: |
         return {"conviction": "x"}
-      output: Conv
+      output: !Conv
     use:
       kind: code
       code: ./fixtures/compose_codefns.ts:echo_x

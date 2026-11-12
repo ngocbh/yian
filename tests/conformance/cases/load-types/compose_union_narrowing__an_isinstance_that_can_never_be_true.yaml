@@ -15,7 +15,7 @@ flow: |
       kind: code
       input:
         s: ${input.s}
-      output: Decision
+      output: !Decision
       code: return 1
     route:
       kind: case

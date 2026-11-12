@@ -27,8 +27,8 @@ nodes:
     input:
       text: ${input.text}
     output:                       # a record shape -> structured generation
-      name: str
-      score: int
+      name: !str
+      score: !int
     prompt: |-
       Extract the person's name and their 0-10 score from the text below.
       Text: ${text}

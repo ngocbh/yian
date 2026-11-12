@@ -14,7 +14,7 @@ flow: |
           kind: code
           input:
             x: ${input.value}
-          output: int
+          output: !int
           code: ./fixtures/compose_codefns.ts:echo_x
       output: ${echo.output}
     bump_once:
@@ -28,8 +28,8 @@ flow: |
             n: ${input.n}
             exited: ${input.exited}
           output:
-            n: int
-            exited: bool
+            n: !int
+            exited: !bool
           code: ./fixtures/compose_codefns.ts:loop_bump
       output: ${bump.output}
     composite:

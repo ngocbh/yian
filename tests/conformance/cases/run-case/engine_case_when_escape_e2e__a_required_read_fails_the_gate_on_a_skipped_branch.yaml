@@ -20,13 +20,13 @@ flow: |2
       code: ./fixtures/compose_codefns.ts:pick_pro
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
     con:
       kind: code
       code: ./fixtures/compose_codefns.ts:pick_con
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
     gate2:
       kind: case
       cases:
@@ -38,13 +38,13 @@ flow: |2
       code: ./fixtures/compose_codefns.ts:positive
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
     cold:
       kind: code
       code: ./fixtures/compose_codefns.ts:cautious
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
   output: ${gate2.output}
 inputs:
   score: 0.2

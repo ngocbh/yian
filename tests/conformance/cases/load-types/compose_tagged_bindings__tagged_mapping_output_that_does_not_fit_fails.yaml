@@ -16,7 +16,7 @@ flow: |2
         return {"qty": 1}
     note:
       kind: code
-      output: str
+      output: !str
       code: |
         return "hi"
   output: !T {a: x}

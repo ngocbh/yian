@@ -7,7 +7,7 @@ flow: |
       kids: list(Tree)
   input:
     n: !int
-  output: int
+  output: !int
   kind: code
   code: |
     return inputs["n"]

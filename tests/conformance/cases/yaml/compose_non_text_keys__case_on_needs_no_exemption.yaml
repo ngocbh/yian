@@ -15,7 +15,7 @@ flow: |
     done:
       kind: code
       code: return 1
-      output: int
+      output: !int
   output: ${done.output}
 expect:
   load: ok

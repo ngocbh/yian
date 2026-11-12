@@ -13,7 +13,7 @@ flow: |
       input: {question: "${input.question}"}
       system_prompt: !include(str) prompts/system.md
       prompt: "${question}"
-      output: str
+      output: !str
   output: ${tutor.output}
 files:
   prompts/system.md: "Write math as $$x^2$$.\r\nShell paths start at ${HOME}.\r\n"

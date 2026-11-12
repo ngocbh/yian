@@ -12,7 +12,7 @@ flow: |
           input:
             n: ${input.n}
           output:
-            n: int
+            n: !int
           prompt: Count from ${n}.
       output: ${step.output}
   nodes:

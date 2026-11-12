@@ -9,7 +9,7 @@ flow: |
       kind: agent
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       prompt: Write about ${upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(topic)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))}.
   output: ${note.output}
 expect:

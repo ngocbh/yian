@@ -6,7 +6,7 @@ flow: |
     a:
       kind: agent
       prompt: Go.
-      output: Decision
+      output: !Decision
   output: ${a.output}
   typedefs:
     Buy:

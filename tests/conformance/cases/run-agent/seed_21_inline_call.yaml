@@ -30,8 +30,8 @@ flow: |
           input:
             topic: ${input.topic}
           output:
-            values: list(float)
-            news: list(str)
+            values: !list(float)
+            news: !list(str)
       output: ${fetch.output.news}     # the callee's codomain (the headlines)
 
   nodes:
@@ -42,7 +42,7 @@ flow: |
         # (list(str) of headlines) this input then binds — equivalent to declaring a
         # separate `kind: call` node and referencing ${<that node>.output}.
         news: call(enrich, topic=${input.topic})
-      output: str
+      output: !str
       prompt: |-
         Summarize these headlines in one neutral sentence (no recommendations):
         ${news}

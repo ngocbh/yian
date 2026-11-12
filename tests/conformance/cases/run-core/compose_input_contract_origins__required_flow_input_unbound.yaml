@@ -24,7 +24,7 @@ flow: |
       code: ./fixtures/compose_codefns.ts:echo_x
       input:
         x: ${input.topic}
-      output: str
+      output: !str
   output: ${echo.output}
 inputs:
   payload:

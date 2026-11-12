@@ -59,8 +59,8 @@ function gateFlow(
   const { inputs = "  x: !str\n", output = "${gate.output}", extraNodes = "", typedefs = "" } = options;
   return (
     `id: f\nname: f\n${typedefs}input:\n${inputs}nodes:\n  gate:\n    kind: case\n${gate}` +
-    '  pa:\n    kind: code\n    code: |\n      return "A"\n    output: str\n' +
-    '  pb:\n    kind: code\n    code: |\n      return "B"\n    output: str\n' +
+    '  pa:\n    kind: code\n    code: |\n      return "A"\n    output: !str\n' +
+    '  pb:\n    kind: code\n    code: |\n      return "B"\n    output: !str\n' +
     `${extraNodes}output: ${output}\n`
   );
 }
@@ -92,7 +92,7 @@ test("read searched case without else is rejected", () => {
 
 const PICK =
   "  pick:\n    kind: code\n    input:\n      x: ${input.x}\n" +
-  '    code: |\n      return inputs["x"]\n    output: Literal(a, b)\n';
+  '    code: |\n      return inputs["x"]\n    output: !Literal(a;b)\n';
 
 test("read case over a Literal node output listing every tag runs", async () => {
   const loaded = await loadFlow(gateFlow("    on: ${pick.output}\n" + routes("a", "b"), { extraNodes: PICK }));
@@ -193,7 +193,7 @@ function narrowedFlow(innerTag: string): string {
     "  d:\n    kind: code\n    input:\n      kind: ${input.kind}\n    code: |\n" +
     '      if (inputs["kind"] === "buy")\n        return {action: "buy", qty: 3}\n' +
     '      return {action: "sell", price: 1.5}\n' +
-    "    output: Union(Buy, Sell)\n" +
+    "    output: !Union(Buy;Sell)\n" +
     "  route:\n    kind: case\n    on: ${d.output.action}\n    cases:\n" +
     "      - when: buy\n        then: inner\n    else: sold\n" +
     "  inner:\n    kind: case\n    on: ${d.output.action}\n    cases:\n" +
@@ -229,9 +229,9 @@ test("unquoted yes routes to a node named yes", async () => {
       "  route:\n    kind: case\n    on: ${input.cmd}\n    cases:\n" +
       "      - when: a\n        then: reply\n    else: yes\n" +
       "  reply:\n    kind: code\n    code: ./fixtures/compose_codefns.ts:echo\n" +
-      "    input:\n      topic: replied\n    output: str\n" +
+      "    input:\n      topic: replied\n    output: !str\n" +
       "  yes:\n    kind: code\n    code: ./fixtures/compose_codefns.ts:echo\n" +
-      "    input:\n      topic: agreed\n    output: str\n" +
+      "    input:\n      topic: agreed\n    output: !str\n" +
       "output: ${route.output}\n",
   );
 

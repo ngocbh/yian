@@ -67,7 +67,7 @@ nodes:
 ${body}      d:
         kind: code
         output:
-          done: bool
+          done: !bool
         code: |
           return {"done": true}
     output: \${d.output}

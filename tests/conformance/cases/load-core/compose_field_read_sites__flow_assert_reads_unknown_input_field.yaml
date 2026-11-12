@@ -16,7 +16,7 @@ flow: |
       kind: code
       input:
         x: ${input.s}
-      output: Rec
+      output: !Rec
       code: "return ({a: \"x\"})"
   output: ${step.output}
   asserts:

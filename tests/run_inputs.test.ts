@@ -22,7 +22,7 @@ nodes:
     kind: code
     input:
       t: \${input.topic}
-    output: str
+    output: !str
     code: |
       return "hello " + inputs["t"]
 output: \${greet.output}

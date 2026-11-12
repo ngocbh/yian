@@ -11,7 +11,7 @@ flow: |
       nodes:
         one:
           kind: code
-          output: {v: int}
+          output: {v: !int}
           code: "return {'v': 1}"
       output: ${one.output}
   nodes:

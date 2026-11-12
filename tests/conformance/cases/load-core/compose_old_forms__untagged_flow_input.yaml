@@ -9,7 +9,7 @@ flow: |
     qty: int
   kind: code
   code: return 1
-  output: int
+  output: !int
 expect:
   load:
     diagnostics:

@@ -29,7 +29,7 @@ flow: |
       tools: [web_search, nope_tool]     # `nope_tool` is unregistered — not caught at load
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       prompt: "Rate ${topic}."
   output: ${note.output}
 # The provider is set so the case pins only the tool-grant check, whatever order run start

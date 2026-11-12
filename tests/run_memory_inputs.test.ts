@@ -38,7 +38,7 @@ nodes:
     input:
       question: \${input.question}
     prompt: \${question}
-    output: str
+    output: !str
 output: \${answer.output}
 `;
 
@@ -349,7 +349,7 @@ nodes:
       cases: \${input.cases}
     tools: [{cases: [search, add]}]
     prompt: "<memory>\${cases}</memory> keep this case"
-    output: str
+    output: !str
 output: \${keep.output}
 `;
   const path = storePath();

@@ -16,13 +16,13 @@ flow: |
       kind: code
       input:
         x: ${input.s}
-      output: Rec
+      output: !Rec
       code: "return ({a: \"x\"})"
     c:
       kind: code
       input:
         s: ${input.s}
-      output: Order
+      output: !Order
       code: "return ({action: \"sell\"})"
       asserts:
         - "not isinstance(output, Order)"

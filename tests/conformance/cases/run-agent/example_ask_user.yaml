@@ -36,7 +36,7 @@ flow: |
       tools: [ask_user]                    # explicitly grant the blocking ask_user tool
       input:
         request: ${input.request}
-      output: str
+      output: !str
       prompt: |-
         The user asks: ${request}
 

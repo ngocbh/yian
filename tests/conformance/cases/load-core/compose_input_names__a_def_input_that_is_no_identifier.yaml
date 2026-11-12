@@ -8,7 +8,7 @@ flow: |
       input:
         my-in: !str
       nodes:
-        b: {kind: code, code: ./fixtures/compose_codefns.ts:echo, input: {topic: x}, output: str}
+        b: {kind: code, code: ./fixtures/compose_codefns.ts:echo, input: {topic: x}, output: !str}
       output: ${b.output}
   nodes:
     go: {kind: call, call: d, input: {my-in: x}}

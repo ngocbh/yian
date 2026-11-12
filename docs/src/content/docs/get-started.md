@@ -90,7 +90,7 @@ name: hello
 description: Greet someone with a short, friendly one-liner.
 input:
   name: !str
-output: str
+output: !str
 kind: agent
 prompt: |-
   Write a short, warm one-sentence greeting addressed to ${name}.

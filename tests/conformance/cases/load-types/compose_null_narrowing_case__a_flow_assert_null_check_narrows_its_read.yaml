@@ -19,13 +19,13 @@ flow: |
       code: ./fixtures/compose_codefns.ts:echo
       input:
         topic: ${input.s}
-      output: Item
+      output: !Item
     e:
       kind: code
       code: ./fixtures/compose_codefns.ts:echo
       input:
         topic: ${input.s}
-      output: str
+      output: !str
   output: ${input.s}
   asserts:
     - "d.output != null and d.output.nosuch > 0"

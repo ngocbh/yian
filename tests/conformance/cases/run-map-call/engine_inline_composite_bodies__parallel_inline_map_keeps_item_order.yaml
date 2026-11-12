@@ -15,7 +15,7 @@ flow: |
         return inputs["rows"]
       input:
         rows: ${input.rows}
-      output: list(Row)
+      output: !list(Row)
     each:
       kind: map
       parallel: true
@@ -32,8 +32,8 @@ flow: |
             row: ${input.row}
             name: ${input.name}
           output:
-            row: Row
-            name: str
+            row: !Row
+            name: !str
       output: ${render.output}
   output: ${each.output}
 inputs:

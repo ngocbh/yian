@@ -20,7 +20,7 @@ flow: |
           input:
             page: ${input.page}
           output:
-            page: Optional(Strict)
+            page: !Optional(Strict)
           code: "return {page: null}"
       output: ${get.output}
   nodes:

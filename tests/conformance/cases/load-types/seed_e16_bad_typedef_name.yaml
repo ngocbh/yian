@@ -13,7 +13,7 @@ flow: |
       kind: agent
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       prompt: "Rate ${topic}."
   output: ${note.output}
 expect:

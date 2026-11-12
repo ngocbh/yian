@@ -11,7 +11,7 @@ flow: |
       kind: agent
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       prompt: "Rate ${rating}."    # ERROR: `rating` is not a declared input of this node
   output: ${note.output}
 expect:

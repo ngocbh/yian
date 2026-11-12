@@ -15,7 +15,7 @@ flow: |
           code: 'return inputs["x"] + 1'
           input:
             x: ${input.x}
-          output: int
+          output: !int
       output:
         x: ${inc.output}
   nodes:

@@ -6,7 +6,7 @@ flow: |
   variables:
     count: !int(1..12) 13
   prompt: ${count}
-  output: str
+  output: !str
 expect:
   load:
     diagnostics:

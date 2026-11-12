@@ -19,7 +19,7 @@ flow: |
       kind: agent
       input:                   # sink binding -> infers the edge inputs -> note
         topic: ${input.topic}
-      output: str              # source: a type — this node returns ONE string
+      output: !str             # source: a type — this node returns ONE string
       prompt: |-                # `prompt` is a flat kind-field on the node
         Write a single neutral paragraph on ${topic}.   # bare ${topic} = this node's input
         Describe what the company does and one recent fact. No recommendations.

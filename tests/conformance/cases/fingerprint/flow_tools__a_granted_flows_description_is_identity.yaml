@@ -15,7 +15,7 @@ flow: |
     helper:
       kind: agent
       prompt: Help.
-      output: str
+      output: !str
       tools: [shout]
   output: ${helper.output}
 other: |
@@ -33,7 +33,7 @@ other: |
     helper:
       kind: agent
       prompt: Help.
-      output: str
+      output: !str
       tools: [shout]
   output: ${helper.output}
 expect:

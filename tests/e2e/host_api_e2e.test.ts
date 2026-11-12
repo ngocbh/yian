@@ -18,6 +18,7 @@ import { handClock } from "../helpers/inbox_fixtures.ts";
 import { rejected } from "../helpers/run_state_fixtures.ts";
 import { processChatFlow, processEnv as env } from "../helpers/yian-host-api-child-hold.ts";
 import { YianRangeError } from "../../src/typesys/errors.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 const ROOT = mkdtempSync(join(tmpdir(), "host-api-e2e-"));
 afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
@@ -158,7 +159,7 @@ defs:
         kind: code
         input:
           events: \${heard.output.events}
-        output: list(str)
+        output: !list(str)
         code: |
           return inputs.events.map((e: string) => "re: " + e)
     output:
@@ -203,7 +204,7 @@ nodes:
     input:
       prompt: Approve?
       timeout: 1s
-    output: ${output}
+    output: ${outputTag(output)}
 output: \${lead.output}
 `;
 

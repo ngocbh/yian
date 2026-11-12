@@ -10,7 +10,7 @@ flow: |
       kind: code
       input:
         topic: ${input.s}
-      output: str
+      output: !str
       code: |
         return String(inputs['topic'])
   output: ${use.output}

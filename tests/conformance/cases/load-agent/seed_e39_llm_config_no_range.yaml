@@ -32,7 +32,7 @@ flow: |
           temperature: 0.3
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       prompt: "Rate ${topic}."
   output: ${note.output}
 expect:

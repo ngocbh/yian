@@ -16,12 +16,12 @@ flow: |
           code: ./fixtures/compose_codefns.ts:record
           input:
             tag: ${input.tag}
-          output: str
+          output: !str
         ls:
           kind: code
           input:
             t: ${fx.output}
-          output: list(str)
+          output: !list(str)
           code: return [inputs["t"]]
       output: ${ls.output}
     echo:
@@ -32,7 +32,7 @@ flow: |
           kind: code
           input:
             v: ${input.item}
-          output: str
+          output: !str
           code: return inputs["v"]
       output: ${e.output}
   nodes:
@@ -50,7 +50,7 @@ flow: |
         item: ${item}
     skip_it:
       kind: code
-      output: str
+      output: !str
       code: return "skipped"
   output:
     r: ${gate.output}

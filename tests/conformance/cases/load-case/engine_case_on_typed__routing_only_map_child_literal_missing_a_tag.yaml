@@ -23,7 +23,7 @@ flow: |
           kind: code
           code: |
             return "one"
-          output: str
+          output: !str
       output: ${one.output}
   output: ${each.output}
 expect:

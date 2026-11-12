@@ -195,9 +195,9 @@ log prints the same failure, so "retry" below means a new run.
 | `graph.terminal_unreachable` | A route skipped every path to the flow's output | Fix the graph |
 | `loop.max_exceeded` | A `while:` or `until:` LOOP with `max: M` would start its body run M+1 | Raise `max:`, or set `on_max_exceeded: output` to end the loop with its last record |
 | `agent.output_invalid` | An AGENT's structured reply still breaks its `output:` type after its `retries:` | Loosen the type, or improve the prompt |
-| `agent.interrupted` | An AGENT was interrupted and its output type doesn't allow null | Declare `output: Optional(...)` and route on null |
+| `agent.interrupted` | An AGENT was interrupted and its output type doesn't allow null | Declare `output: !Optional(...)` and route on null |
 | `agent.output_truncated` | The provider cut an AGENT's reply off at the output token limit: an answer with no call whose arguments parsed, or the last invalid structured reply | Raise the limit the message names, or ask for a shorter answer |
-| `tool.timeout` | An `ask` timed out with no answer and its output type doesn't allow null | Declare `output: Optional(...)`, or give it longer |
+| `tool.timeout` | An `ask` timed out with no answer and its output type doesn't allow null | Declare `output: !Optional(...)`, or give it longer |
 | `provider.auth` | The provider refused the agent's credentials, or yian couldn't supply them | Fix the login (`yian auth <provider>`) or the key |
 | `provider.auth_storage` | The saved-login file, its folder or its lock can't be used (its mode, owner or contents) | Fix the file the message names; logging in again reads the same file |
 | `provider.rate_limit` | The provider's rate limit (HTTP 429) outlasted yian's model-call retries | Retry later, or run fewer calls at once |

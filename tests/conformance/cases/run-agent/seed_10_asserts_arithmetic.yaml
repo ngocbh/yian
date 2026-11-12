@@ -28,7 +28,7 @@ flow: |
       input:
         topic:   ${input.topic}
         window: ${input.window}
-      output: float
+      output: !float
       prompt: "Rate ${topic}'s ${window}-day relevance in [-1, 1]. Output only the number."
       asserts:                       # node-level (per-node contract): bare `name` = a declared
         - "window >= 1"            #   input (PRE — checked before the node runs)
@@ -46,14 +46,14 @@ flow: |
       kind: agent
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       prompt: "Write a neutral two-sentence position rationale for ${topic}. No advice."
 
     skip:
       kind: agent
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       prompt: "Write a neutral two-sentence note on why ${topic} is passed for now. No advice."
 
   output:

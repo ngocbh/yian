@@ -137,7 +137,7 @@ nodes:
     kind: code
     input:
       topic: \${input.topic}
-    output: str
+    output: !str
     code: return inputs.topic
 output: \${echo.output}
 `;

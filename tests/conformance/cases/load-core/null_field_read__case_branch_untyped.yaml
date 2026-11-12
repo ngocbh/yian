@@ -13,7 +13,7 @@ flow: |
       kind: code
       input:
         s: ${input.s}
-      output: Any
+      output: !Any
       code: |
         return {"g": "a"}
     route:
@@ -26,12 +26,12 @@ flow: |
       kind: code
       input:
         v: ${mk.output.f}
-      output: str
+      output: !str
       code: |
         return "go"
     other:
       kind: code
-      output: str
+      output: !str
       code: |
         return "other"
   output: ${go.output | other.output}
@@ -39,7 +39,7 @@ expect:
   load:
     diagnostics:
       - code: expr.nullable_field_read
-        message: "node 'go' input 'v': ${mk.output.f} reads field 'f', which T doesn't require, of mk.output, which is untyped and only narrowed to T; write mk.output?.f, or type mk.output as T where it is bound (`output: T` or `!T`)"
+        message: "node 'go' input 'v': ${mk.output.f} reads field 'f', which T doesn't require, of mk.output, which is untyped and only narrowed to T; write mk.output?.f, or type mk.output as T where it is bound (`!T`)"
         frames:
           - label: flow.yaml
             range: [24, 10, 24, 24]

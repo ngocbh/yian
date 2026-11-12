@@ -9,7 +9,7 @@ flow: |
     pick:
       kind: agent
       prompt: Pick a model.
-      output: str
+      output: !str
       llm_config: {model: '${input.n}'}
     chat:
       kind: agent

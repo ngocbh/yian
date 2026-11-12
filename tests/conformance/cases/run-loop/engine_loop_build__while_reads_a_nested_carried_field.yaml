@@ -16,7 +16,7 @@ flow: |2
             s: ${input.state}
           output:
             state:
-              count: int
+              count: !int
           code: |
             return {"state": {"count": inputs["s"]["count"] + 1}}
       output: ${bump.output}

@@ -39,7 +39,7 @@ flow: |
       code: return 1
       input:
         topic: *a29
-      output: str
+      output: !str
   output: ${use.output}
 expect:
   load:

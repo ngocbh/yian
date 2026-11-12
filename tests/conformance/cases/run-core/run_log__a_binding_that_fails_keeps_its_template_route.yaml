@@ -15,7 +15,7 @@ flow: |
         nick: '${input.nick :? "no nick"}'
       code: |
         return inputs["line"]
-      output: str
+      output: !str
   output: ${shout.output}
 inputs:
   name: Ann

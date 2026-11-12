@@ -6,7 +6,7 @@ flow: |
   nodes:
     leaf:
       kind: code
-      output: str
+      output: !str
       code: |
         return "ok"
   output: ${leaf.output}
@@ -16,7 +16,7 @@ other: |
   nodes:
     leaf:
       kind: code
-      output: str
+      output: !str
       code: |
         return "no"
   output: ${leaf.output}

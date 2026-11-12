@@ -151,7 +151,7 @@ defs:
         input:
           n: \${input.n}
         output:
-          n: int
+          n: !int
         code: |
           return {"n": inputs["n"] + 1}
     output: \${b.output}
@@ -161,7 +161,7 @@ nodes:
     input:
       z: \${input.z}
     output:
-      n: int
+      n: !int
     code: |
       return {"n": inputs["z"]}
 ${node}
@@ -201,7 +201,7 @@ defs:
         input:
           n: \${input.n}
         output:
-          n: int
+          n: !int
         code: |
           return {"n": inputs["n"] + 1}
       c:
@@ -236,7 +236,7 @@ nodes:
     input:
       z: \${input.z}
     output:
-      n: int
+      n: !int
     code: |
       return {"n": inputs["z"]}
   repeat:
@@ -249,7 +249,7 @@ nodes:
         input:
           n: \${input.n}
         output:
-          n: int
+          n: !int
         code: |
           return {"n": inputs["n"] + 1n}
     output: \${b.output}

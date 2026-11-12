@@ -14,7 +14,7 @@ flow: |2
           input:
             n: ${input.n}
           output:
-            n: int
+            n: !int
       output: ${step.output}
     runaway:
       nodes:

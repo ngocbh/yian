@@ -253,7 +253,7 @@ nodes:
     kind: code
     input:
       x: \${input.x}
-    output: str
+    output: !str
     code: ./compose_codefns.ts:echo_x
 output: \${n.output}
 `;
@@ -265,12 +265,12 @@ nodes:
   first:
     kind: code
     input: {topic: first}
-    output: str
+    output: !str
     code: ./compose_codefns.ts:cautious
   second:
     kind: code
     input: {topic: second}
-    output: str
+    output: !str
     code: ./compose_codefns.ts:cautious
 output:
   first: \${first.output}

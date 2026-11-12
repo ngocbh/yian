@@ -38,8 +38,8 @@ const refuse = (text: string) =>
 test.each([
   ["a default", "input:\n  m: !Inbox(str) x\nnodes:\n" + KEEP + "output: null\n", "an inbox input takes no default"],
   ["Optional", "input:\n  m: !Optional(Inbox(str))\nnodes: {}\noutput: null\n", "an inbox is never optional"],
-  ["a node output", "nodes:\n  t:\n    kind: tool\n    tool_id: f\n    output: Inbox(str)\noutput: null\n", "an output can't be an inbox"],
-  ["a node output's record field", "nodes:\n  t:\n    kind: tool\n    tool_id: f\n    output:\n      a: Inbox(str)\noutput: null\n", "an output can't be an inbox"],
+  ["a node output", "nodes:\n  t:\n    kind: tool\n    tool_id: f\n    output: !Inbox(str)\noutput: null\n", "an output can't be an inbox"],
+  ["a node output's record field", "nodes:\n  t:\n    kind: tool\n    tool_id: f\n    output:\n      a: !Inbox(str)\noutput: null\n", "an output can't be an inbox"],
   ["a typed binding", "input:\n  a: !str\nnodes:\n  t:\n    kind: tool\n    tool_id: f\n    input:\n      x: !Inbox(str) ${input.a}\noutput: null\n", "only a flow input can be"],
   ["a nested tag in a default", "input:\n  a: !object\n    x: !Inbox(str) y\nnodes: {}\noutput: null\n", "only a flow input can be"],
   ["a flow output", "nodes: {}\noutput: !Inbox(str) null\n", "only a flow input can be"],

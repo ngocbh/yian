@@ -72,7 +72,7 @@ async function outputOf(flow: ComposedFlow): Promise<unknown> {
 const agentFlow = (prompts: string) =>
   "id: f\nname: f\nllm_config: {provider: openai, model: gpt-test}\ninput:\n  question: !str\n" +
   "nodes:\n  answer:\n    kind: agent\n    input:\n      question: ${input.question}\n" +
-  `${prompts}    output: str\noutput: \${answer.output}\n`;
+  `${prompts}    output: !str\noutput: \${answer.output}\n`;
 
 /** The message, and the last frame's file and first line, of the `LoadError` `promise` rejects with. */
 async function failure(promise: Promise<unknown>): Promise<{ message: string; label: string; line: number }> {
@@ -174,7 +174,7 @@ test.each([
   ],
   [
     "a single-node def input",
-    "defs:\n  d:\n    kind: code\n    code: return 1\n    input:\n      q: !include a.txt\n    output: int\n" +
+    "defs:\n  d:\n    kind: code\n    code: return 1\n    input:\n      q: !include a.txt\n    output: !int\n" +
       "nodes: {}\noutput: done\n",
     8,
     "flow input 'q'",
@@ -435,7 +435,7 @@ test.each([
   [
     "a node input",
     (tag: string) =>
-      `id: f\nname: f\nnodes:\n  c:\n    kind: code\n    input:\n      x: ${tag}\n    output: str\n` +
+      `id: f\nname: f\nnodes:\n  c:\n    kind: code\n    input:\n      x: ${tag}\n    output: !str\n` +
       "    code: return inputs.x\noutput: ${c.output}\n",
   ],
   ["a flow input's default", (tag: string) => `id: f\nname: f\ninput:\n  x: ${tag}\nnodes: {}\noutput: \${input.x}\n`],
@@ -731,7 +731,7 @@ test("a compact flow's agent sends its !include(str) prompt as written", async (
   write({ "ask.md": "Say $$ for ${question}." });
   const flow = await load(
     "id: answer\nname: answer\nkind: agent\nllm_config: {provider: openai, model: gpt-test}\ninput:\n  question: !str\n" +
-      "prompt: !include(str) ask.md\noutput: str\n",
+      "prompt: !include(str) ask.md\noutput: !str\n",
   );
   expect((await sentMessages(flow)).at(-1)).toEqual(["user", "Say $$ for ${question}."]);
 });
@@ -760,7 +760,7 @@ test("a steer render !include(str) reads fails at the tag: a render is a templat
   const flow =
     "id: f\nname: f\nllm_config: {provider: openai, model: gpt-test}\ninput:\n  s: !Inbox(str)\nnodes:\n  a:\n" +
     "    kind: agent\n    steer_inbox:\n      from: ${input.s}\n      render: !include(str) render.md\n    prompt: hi\n" +
-    "    output: str\noutput: ${a.output}\n";
+    "    output: !str\noutput: ${a.output}\n";
   const { message, line } = await failure(load(flow));
   expect(message).toBe(
     "`!include(str)` file 'render.md': `render:` holds a template over each steer event, written in the flow; a file can't give it",
@@ -772,7 +772,7 @@ test("an llm_config value !include(str) reads is its text as written", async () 
   write({ "model.txt": "gpt-$$x" });
   const flow = await load(
     "id: f\nname: f\nnodes:\n  a:\n    kind: agent\n    llm_config: {provider: openai, model: !include(str) model.txt}\n" +
-      "    prompt: hi\n    output: str\noutput: ${a.output}\n",
+      "    prompt: hi\n    output: !str\noutput: ${a.output}\n",
   );
   expect((flow.compiled.nodes.get("a") as AgentNode).llmConfig).toEqual({ provider: "openai", model: "gpt-$$x" });
 });
@@ -820,7 +820,7 @@ test("text fields take the exact text a text !include(T) reads, as they take !in
   write({ "code.ts": 'return inputs.x + "$$" + `${inputs.x}`;\r\n', "d.md": "About ${x}\n", "n.txt": "Step $$1" });
   const flow = await load(
     "id: f\nname: f\ndescription: !include(str) d.md\ntypedefs:\n  Text: str\nnodes:\n  c:\n    kind: code\n" +
-      "    node_name: !include(Text) n.txt\n    input:\n      x: hi\n    output: str\n    code: !include(str) code.ts\n" +
+      "    node_name: !include(Text) n.txt\n    input:\n      x: hi\n    output: !str\n    code: !include(str) code.ts\n" +
       "output: ${c.output}\n",
   );
   expect(await outputOf(flow)).toBe("hi$$hi");
@@ -847,7 +847,7 @@ test.each([
   ["a case's when:", "input:\n  x: !int\nnodes:\n  g:\n    kind: case\n    cases:\n      - when: !include(str) c.txt\n        then: a\n    else: a\n  a: !str done\noutput: ${a.output}\n", 9, "`when:` holds a condition"],
   ["a case's on:", "input:\n  x: !str\nnodes:\n  g:\n    kind: case\n    on: !include(str) c.txt\n    cases:\n      - when: a\n        then: a\n    else: a\n  a: !str done\noutput: ${a.output}\n", 8, "`on:` holds the value a case matches"],
   ["a case's cases:", "nodes:\n  g:\n    kind: case\n    cases: !include(list(object)) c.yaml\n    else: a\n  a: !str done\noutput: ${a.output}\n", 6, "`cases:` holds `when:`, a condition"],
-  ["a node's asserts:", "nodes:\n  c:\n    kind: code\n    code: return 1\n    output: int\n    asserts:\n      - !include(str) c.txt\noutput: ${c.output}\n", 9, "`asserts:` holds assertions"],
+  ["a node's asserts:", "nodes:\n  c:\n    kind: code\n    code: return 1\n    output: !int\n    asserts:\n      - !include(str) c.txt\noutput: ${c.output}\n", 9, "`asserts:` holds assertions"],
   ["a flow's asserts:", "nodes: {}\noutput: done\nasserts:\n  - !include(str) c.txt\n", 6, "`asserts:` holds assertions"],
 ])("an !include(T) in %s, written in the flow, fails first, at the tag", async (_, yaml, line, words) => {
   write({ "c.txt": "${HOME} > 1", "c.yaml": "[{when: '${HOME}', then: a}]" });
@@ -888,7 +888,7 @@ test.each([
   write({ "s.txt": "${input.s}", "s.yaml": "{from: '${input.s}'}" });
   const flow =
     "id: f\nname: f\nllm_config: {provider: openai, model: gpt-test}\ninput:\n  s: !Inbox(str)\nnodes:\n  a:\n" +
-    `    kind: agent\n    ${steer}\n    prompt: hi\n    output: str\noutput: \${a.output}\n`;
+    `    kind: agent\n    ${steer}\n    prompt: hi\n    output: !str\noutput: \${a.output}\n`;
   expect((await failure(load(flow))).message).toContain(`${words}, written in the flow; a file can't give it`);
 });
 

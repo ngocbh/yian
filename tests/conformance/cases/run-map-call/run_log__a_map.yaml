@@ -8,7 +8,7 @@ flow: |
     double:
       input: {x: !int}
       nodes:
-        times2: {kind: code, input: {x: "${input.x}"}, output: {y: int}, code: "return {y: inputs.x * 2}"}
+        times2: {kind: code, input: {x: "${input.x}"}, output: {y: !int}, code: "return {y: inputs.x * 2}"}
       output: ${times2.output.y}
   nodes:
     each: {kind: map, over: "${input.xs}", call: double, input: {x: "${item}"}}

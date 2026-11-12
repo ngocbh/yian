@@ -203,14 +203,14 @@ nodes:
     kind: code
     code: |
       return "thirty"
-    output: str
+    output: !str
   consume:
     kind: code
     code: |
       return inputs["qty"]
     input:
       qty: \${produce.output}
-    output: str
+    output: !str
 output: \${consume.output}
 `;
 
@@ -253,7 +253,7 @@ nodes:
           return inputs["value"]
         input:
           value: \${input.value}
-        output: str
+        output: !str
     output: \${work.output}
 output: \${outer.output}
 `;

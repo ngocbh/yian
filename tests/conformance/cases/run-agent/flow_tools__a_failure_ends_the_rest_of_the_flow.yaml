@@ -17,12 +17,12 @@ flow: |
           tool_id: sign
           input:
             item: ${input.item}
-          output: str
+          output: !str
         check:
           kind: code
           input:
             item: ${input.item}
-          output: str
+          output: !str
           code: throw new Error("not allowed")
       output:
         signed: ${sign.output}
@@ -33,7 +33,7 @@ flow: |
       tools: [approve]
       system_prompt: Help.
       prompt: hi
-      output: str
+      output: !str
   output: ${helper.output}
 run:
   run_id: r1

@@ -15,8 +15,8 @@ flow: |2
           input:
             n: ${input.n}
           output:
-            n: int
-            exited: bool
+            n: !int
+            exited: !bool
       output: ${s.output}
   nodes:
     repeat:

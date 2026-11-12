@@ -14,7 +14,7 @@ flow: |
       code: ./fixtures/compose_codefns.ts:echo
       input:
         topic: ${input.n}
-      output: int
+      output: !int
   output: ${use.output}
 expect:
   load:

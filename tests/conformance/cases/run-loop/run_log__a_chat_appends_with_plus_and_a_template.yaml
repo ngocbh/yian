@@ -28,7 +28,7 @@ flow: |
           input:
             history: ${input.history}
             message: ${join(heard.output.events)}
-          output: str
+          output: !str
           prompt: |-
             Conversation so far: ${history}
             User: ${message}

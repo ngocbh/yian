@@ -15,7 +15,7 @@ flow: |
           kind: code
           input:
             text: ${input.text}
-          output: {words: int, first: str}
+          output: {words: !int, first: !str}
           code: |
             const words = inputs.text.split(" ");
             return { words: words.length, first: words[0] };
@@ -26,7 +26,7 @@ flow: |
       tools: [count]
       system_prompt: Help.
       prompt: hi
-      output: str
+      output: !str
   output: ${helper.output}
 run:
   run_id: r1

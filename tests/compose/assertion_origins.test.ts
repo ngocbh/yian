@@ -48,12 +48,12 @@ defs:
   truthy:
     kind: code
     code: return true
-    output: bool
+    output: !bool
 nodes:
   worker:
     kind: code
     code: return 1
-    output: int
+    output: !int
 output: \${worker.output}
 asserts:
   - input.n >= 0
@@ -95,7 +95,7 @@ nodes:
   first: &shared_node
     kind: code
     code: return 1
-    output: int
+    output: !int
     asserts:
       - output >= 0
   second: *shared_node
@@ -143,21 +143,21 @@ defs:
       worker:
         kind: code
         code: return 2
-        output: int
+        output: !int
         asserts:
           - ${assertionText}
     output: \${worker.output}
   flat:
     kind: code
     code: return 3
-    output: int
+    output: !int
     asserts:
       - ${assertionText}
 nodes:
   worker:
     kind: code
     code: return 1
-    output: int
+    output: !int
     asserts:
       - ${assertionText}
   named_call:
@@ -172,7 +172,7 @@ nodes:
       worker:
         kind: code
         code: return 4
-        output: int
+        output: !int
         asserts:
           - ${assertionText}
     output: \${worker.output}
@@ -217,7 +217,7 @@ test("compact root node assertion uses its projected physical item", async () =>
 name: compact_assertion_origin
 kind: code
 code: return 1
-output: int
+output: !int
 asserts:
   - output >= 0
 `;
@@ -254,8 +254,8 @@ nodes:
           n: \${input.n}
           exited: \${input.exited}
         output:
-          n: int
-          exited: bool
+          n: !int
+          exited: !bool
     output: \${bump.output}
 output: \${drive.output}
 `;
@@ -293,7 +293,7 @@ defs:
         code: ./fixtures/compose_codefns.ts:double
         input:
           n: \${input.n}
-        output: int
+        output: !int
     output: \${worker.output}
     asserts:
       - input.n >= 0

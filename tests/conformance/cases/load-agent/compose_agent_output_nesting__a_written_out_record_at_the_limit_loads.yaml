@@ -6,7 +6,7 @@ flow: |
     a:
       kind: agent
       prompt: hi
-      output: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: int}}}}}}}}}}}}}}}}
+      output: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: {k: !int}}}}}}}}}}}}}}}}
   output: ${a.output}
 expect:
   load: ok

@@ -330,7 +330,7 @@ nodes:
           n: \${input.n}
           exited: \${input.exited}
         output:
-          n: int
+          n: !int
     output: \${bump.output}
 output: \${repeat.output}
 `;
@@ -539,7 +539,7 @@ ${CHAT.split("\n").slice(2).join("\n")}  sink:
     code: ./fixtures/compose_codefns.ts:echo_x
     input:
       x: \${chat.output.person.missing}
-    output: str
+    output: !str
 output: \${sink.output}
 `;
 
@@ -667,7 +667,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:echo_x
     input:
       x: \${loop.output.missing}
-    output: str
+    output: !str
 output: \${sink.output}
 `;
 
@@ -989,7 +989,7 @@ nodes:
           s: \${input.state}
         output:
           state:
-            count: int
+            count: !int
         code: |
           return {"state": {"count": inputs["s"]["count"] + 1}}
     output: \${bump.output}
@@ -1061,7 +1061,7 @@ nodes:
         kind: code
         input:
           n: \${input.n}
-        output: int
+        output: !int
         code: |
           return inputs["n"] + 1n
     output:
@@ -1105,8 +1105,8 @@ nodes:
         input:
           n: \${input.n}
         output:
-          n: int
-          r: Step
+          n: !int
+          r: !Step
         code: |
           const n = inputs["n"] + 1
           return {"n": n, "r": n >= 3 ? {"answer": "ok"} : {"hint": "again"}}
@@ -1130,15 +1130,15 @@ const TAGGED_STATE = (
 // The same loop carrying a `Done` record rather than the union.
 const DONE_STATE = swap(
   swap(UNION_STATE, 'r: !Step {"hint":"start"}', 'r: !Done {"answer":"x"}'),
-  "          r: Step\n",
-  "          r: Done\n",
+  "          r: !Step\n",
+  "          r: !Done\n",
 );
 
 // The same loop carrying an `object`.
 const OBJECT_STATE = swap(
   swap(UNION_STATE, 'r: !Step {"hint":"start"}', 'r: !object {"hint":"start"}'),
-  "          r: Step\n",
-  "          r: object\n",
+  "          r: !Step\n",
+  "          r: !object\n",
 );
 
 // `Step` and `Finished` share `Done` and `Skip`; `Finished` also has `Other`, which no `Step`
@@ -1336,8 +1336,8 @@ defs:
         input:
           n: \${input.n}
         output:
-          n: int
-          r: Done
+          n: !int
+          r: !Done
         code: |
           return {"n": inputs["n"] + 1, "r": {"answer": "ok"}}
     output: \${step.output}
@@ -1538,7 +1538,7 @@ const seededDef = (nType: string) => `  body:
           n: \${input.n}
           k: \${input.k}
         output:
-          k: int
+          k: !int
         code: 'return {k: inputs["k"] + 1}'
     output: \${step.output}
 `;
@@ -1629,7 +1629,7 @@ nodes:
         input:
           n: \${input.n}
         output:
-          n: str
+          n: !str
         code: 'return {n: inputs["n"]}'
     output: \${step.output}
 output: \${loop.output}
@@ -1757,7 +1757,7 @@ nodes:
         input:
           n: \${input.n}
         output:
-          n: Optional(int)
+          n: !Optional(int)
         code: 'return {n: inputs["n"]}'
     output: \${step.output}
 output: \${loop.output}
@@ -1821,8 +1821,8 @@ test("while null check lets an optional seed fill a strict body input", async ()
           cursor: !str \${input.cursor}
           seen: \${input.seen}
         output:
-          cursor: Optional(str)
-          seen: int
+          cursor: !Optional(str)
+          seen: !int
         code: 'return {cursor: null, seen: inputs["seen"] + 1}'
     output: \${step.output}
 `;
@@ -1855,7 +1855,7 @@ nodes:
     kind: code
     input:
       s: \${input.s}
-    output: Union(Buy, Hold)
+    output: !Union(Buy;Hold)
     code: 'return inputs["s"] === "b" ? {kind: "buy", qty: 2n} : {kind: "hold", note: "n"}'
   route:
     kind: case
@@ -1907,7 +1907,7 @@ test("loop seed reads the case narrowed type", async () => {
           order: \${input.order}
           k: \${input.k}
         output:
-          k: int
+          k: !int
         code: 'return {k: inputs["k"] + inputs["order"]["qty"]}'
     output: \${step.output}
 `;

@@ -21,7 +21,7 @@ async function expectRefused(text: string, message: string, range: SourceRange |
   expect(error.diagnostic.frames.at(-1)!.range).toEqual(range!);
 }
 
-const ECHO = "kind: code, code: ./fixtures/compose_codefns.ts:echo, output: str";
+const ECHO = "kind: code, code: ./fixtures/compose_codefns.ts:echo, output: !str";
 
 test("a node id starting with __ is refused at its node", async () => {
   const text = `id: f\nname: f\nnodes:\n  __a: {${ECHO}, input: {topic: x}}\noutput: \${__a.output}\n`;
@@ -51,7 +51,7 @@ test("a flow input starting with __ is refused at its key", async () => {
 test("a compact flow input starting with __ is refused at its key", async () => {
   const text =
     "id: f\nname: f\nkind: code\ncode: ./fixtures/compose_codefns.ts:echo\n" +
-    "input:\n  __x: !str\noutput: str\n";
+    "input:\n  __x: !str\noutput: !str\n";
   const root = SourceDocument.parse(text).root;
   await expectRefused(
     text,
@@ -68,7 +68,7 @@ test("a node input starting with __ is refused at its key", async () => {
 
 test("an agent variable starting with __ is refused at its key", async () => {
   const text =
-    "id: f\nname: f\nnodes:\n  a:\n    kind: agent\n    prompt: hi\n    output: str\n" +
+    "id: f\nname: f\nnodes:\n  a:\n    kind: agent\n    prompt: hi\n    output: !str\n" +
     "    variables:\n      __v: !str hello\noutput: ${a.output}\n";
   const variables = SourceDocument.parse(text).root.child("nodes").child("a").child("variables");
   await expectRefused(text, reserved("variable", "__v"), variables.keyRangeOf("__v"));
@@ -90,7 +90,7 @@ test("the names yian generates still load", async () => {
     "id: f\nname: f\ninput:\n  cmd: !str\n  lessons: !FileMemory\nnodes:\n" +
     "  route:\n    kind: case\n    on: ${input.cmd}\n    cases:\n      - when: a\n        then: ask\n" +
     "    else: ask\n" +
-    "  ask:\n    kind: agent\n    prompt: hi\n    output: str\n    tools: [lessons]\n" +
+    "  ask:\n    kind: agent\n    prompt: hi\n    output: !str\n    tools: [lessons]\n" +
     `  echo: {${ECHO}, input: {topic: "\${upper(input.cmd)}"}}\n` +
     "asserts:\n  - ${ask.output != ''}\n" +
     "output:\n  a: ${ask.output}\n  e: ${echo.output}\n";

@@ -6,7 +6,7 @@ flow: |
     pick:
       kind: agent
       prompt: Pick a model.
-      output: str
+      output: !str
     chat:
       kind: agent
       prompt: Go.

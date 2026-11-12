@@ -13,7 +13,7 @@ flow: |
               code: ./fixtures/compose_codefns.ts:echo
               input:
                 topic: inline-ok
-              output: str
+              output: !str
           output: ${constant.output}
       output: ${wrapper.output}
   nodes:

@@ -13,7 +13,7 @@ flow: |
       node_name: Plan approval
       input:
         prompt: "Approve ${input.plan}?"
-      output: Literal(approve, revise)
+      output: !Literal(approve;revise)
   output: ${approval.output}
 inputs:
   plan: release

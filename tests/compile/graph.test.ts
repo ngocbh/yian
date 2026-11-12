@@ -131,19 +131,19 @@ nodes:
     code: ./fixtures/compose_codefns.ts:score
     input:
       seed: \${input.seed}
-    output: float
+    output: !float
   hard:
     kind: code
     code: ./fixtures/compose_codefns.ts:cautious
     input:
       v: \${a.output}
-    output: str
+    output: !str
   soft:
     kind: code
     code: ./fixtures/compose_codefns.ts:cautious
     input:
       v: \${a.output:-null}
-    output: str
+    output: !str
 output: \${hard.output}
 `;
 
@@ -186,7 +186,7 @@ nodes:
     code: ./fixtures/compose_codefns.ts:score
     input:
       seed: \${input.seed}
-    output: float
+    output: !float
   gate:
     kind: case
 <gate>
@@ -196,13 +196,13 @@ nodes:
     code: ./fixtures/compose_codefns.ts:cautious
     input:
       seed: \${input.seed}
-    output: str
+    output: !str
   cold:
     kind: code
     code: ./fixtures/compose_codefns.ts:cautious
     input:
       seed: \${input.seed}
-    output: str
+    output: !str
 output: \${gate.output}
 `;
 
@@ -278,7 +278,7 @@ nodes:
     kind: code
     input:
       s: \${input.s}
-    output: Decision
+    output: !Decision
     code: return null
   router:
     kind: case
@@ -291,7 +291,7 @@ nodes:
     kind: code
     input:
       s: \${input.s}
-    output: int
+    output: !int
     code: return 1
   e:
     kind: code
@@ -397,31 +397,31 @@ nodes:
     code: ./fixtures/compose_codefns.ts:score
     input:
       seed: \${input.seed}
-    output: float
+    output: !float
   bare:
     kind: code
     code: ./fixtures/compose_codefns.ts:cautious
     input:
       v: \${a.output}
-    output: str
+    output: !str
   ref_default:
     kind: code
     code: ./fixtures/compose_codefns.ts:cautious
     input:
       v: \${a.output:-a.output}
-    output: str
+    output: !str
   lit_default:
     kind: code
     code: ./fixtures/compose_codefns.ts:cautious
     input:
       v: \${a.output:-"fallback"}
-    output: str
+    output: !str
   required:
     kind: code
     code: ./fixtures/compose_codefns.ts:cautious
     input:
       v: \${a.output:?"required"}
-    output: str
+    output: !str
 output: \${bare.output}
 `;
 

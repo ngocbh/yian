@@ -19,7 +19,7 @@ flow: |
           input:
             n: ${input.n}
           output:
-            value: int
+            value: !int
       output: ${step.output}
   output: ${repeat.output}
 expect:

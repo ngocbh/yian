@@ -41,7 +41,7 @@ function flow(nodes: string): string {
     "    kind: code\n" +
     "    input:\n      decision: ${input.decision}\n" +
     "    code: return inputs['decision']\n" +
-    "    output: Decision\n" +
+    "    output: !Decision\n" +
     nodes +
     "output: ${decide.output.action}\n"
   );
@@ -75,7 +75,7 @@ test("a member over the union loads", () => {
 
 test("a declared union accepts one member", () => {
   assembleText(
-    flow(consumer("b", "buy: !Buy ${decide.output}") + consumer("use", "d: !Decision ${b.output}", { output: "Buy" })),
+    flow(consumer("b", "buy: !Buy ${decide.output}") + consumer("use", "d: !Decision ${b.output}", { output: "!Buy" })),
   );
 });
 
@@ -141,7 +141,7 @@ test("a flow output narrows to a member and a call parent sees it", async () => 
     "        kind: code\n" +
     "        input:\n          decision: ${input.decision}\n" +
     "        code: return inputs['decision']\n" +
-    "        output: Decision\n" +
+    "        output: !Decision\n" +
     "    output: !Buy ${decide.output}\n" +
     "nodes:\n" +
     "  use:\n    kind: call\n    call: pick\n" +

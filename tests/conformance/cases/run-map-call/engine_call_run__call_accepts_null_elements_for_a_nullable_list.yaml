@@ -13,7 +13,7 @@ flow: |
       kind: code
       code: |
         return [null]
-      output: list(None)
+      output: !list(None)
     invoke:
       kind: call
       call: echo

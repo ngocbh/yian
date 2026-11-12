@@ -9,7 +9,7 @@ flow: |2
     brief:
       kind: agent
       input: {name: '${input.name}'}
-      output: str
+      output: !str
       prompt: "Hello ${upper(${name})}"
   output: ${brief.output}
 expect:

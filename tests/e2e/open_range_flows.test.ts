@@ -18,6 +18,7 @@ import { runFlow, type RunFlowOptions } from "../../src/run.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import { NO_ENV } from "../helpers/run_state_fixtures.ts";
 import { loadConformanceFlow, loadErrorAsync } from "../helpers/declarations.ts";
+import { outputTag } from "../helpers/output_tags.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-open-range-flows-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -66,7 +67,7 @@ nodes:
       f: \${input.f}
     code: |
       return [inputs["n"], inputs["m"], inputs["f"]]
-    output: list(float)
+    output: !list(float)
 output: \${echo.output}
 `;
 
@@ -91,7 +92,7 @@ nodes:
       x: !${tag} ${value}
     code: |
       return inputs["x"]
-    output: int
+    output: !int
 output: \${use.output}
 `;
 
@@ -115,14 +116,14 @@ nodes:
       v: \${input.v}
     code: |
       return inputs["v"]
-    output: ${producerOutput}
+    output: ${outputTag(producerOutput)}
   use:
     kind: code
     input:
       x: !${tag} \${a.output}
     code: |
       return inputs["x"]
-    output: int
+    output: !int
 output: \${use.output}
 `;
 
@@ -162,7 +163,7 @@ nodes:
     code: |
       const extra = inputs["counts"].reduce((a, b) => a + b, 0) + (inputs["maybe"] ?? 0)
       return {"qty": ${qty}, "price": 1.0 + Number(extra)}
-    output: Order
+    output: !Order
 output: \${order.output}
 `;
 
@@ -200,7 +201,7 @@ defs:
           t: \${input.t}
         code: |
           return inputs["t"]
-        output: int
+        output: !int
     output: \${echo.output}
 nodes:
   a:
@@ -209,7 +210,7 @@ nodes:
       v: \${input.v}
     code: |
       return inputs["v"]
-    output: ${sourceOutput}
+    output: ${outputTag(sourceOutput)}
   c:
     kind: call
     call: child
@@ -255,12 +256,12 @@ nodes:
     kind: code
     code: |
       return "hit"
-    output: str
+    output: !str
   miss:
     kind: code
     code: |
       return "miss"
-    output: str
+    output: !str
 output: \${route.output}
 `;
 
@@ -281,7 +282,7 @@ nodes:
     kind: code
     code: |
       return 1
-    output: Whole
+    output: !Whole
 output: \${use.output}
 `;
   expect(await loadErrorMessage(text)).toContain("write int");
@@ -304,7 +305,7 @@ nodes:
     llm_config:
       provider: openai
       model: gpt-4o
-    output: Order
+    output: !Order
 output: \${writer.output}
 `;
 

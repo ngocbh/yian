@@ -15,7 +15,7 @@ flow: |
         examples: !include(list(str)) examples.yaml
       system_prompt: Answer briefly.
       prompt: "Examples:\n${join(examples, '\n')}\n\nQ: ${question}"
-      output: str
+      output: !str
   output: ${tutor.output}
 files:
   examples.yaml: |

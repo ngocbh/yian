@@ -7,7 +7,7 @@ flow: |
   nodes:
     write:
       kind: agent
-      output: str
+      output: !str
       llm_config: {provider: openai, model: gpt-5.5}
       prompt: "Write a line."
   output: ${write.output}

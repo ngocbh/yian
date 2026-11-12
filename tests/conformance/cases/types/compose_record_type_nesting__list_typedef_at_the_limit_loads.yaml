@@ -10,7 +10,7 @@ flow: |
       code: ./fixtures/compose_codefns.ts:echo
       input:
         topic: x
-      output: {k: "T"}
+      output: {k: !T}
   output: ${use.output}
 expect:
   load: ok

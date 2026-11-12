@@ -1,0 +1,7 @@
+kind: value
+# `;` separates a type's arguments as `,` does, so a YAML tag can hold one.
+type: Optional(Literal(a;b, c))
+value: b
+expect:
+  value: b
+  kind: str

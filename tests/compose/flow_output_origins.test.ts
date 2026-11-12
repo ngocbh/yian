@@ -47,7 +47,7 @@ nodes:
   worker:
     kind: code
     code: return 1
-    output: int
+    output: !int
 output: \${worker.output}
 `;
   const document = SourceDocument.parse(text);
@@ -66,13 +66,13 @@ defs:
       worker:
         kind: code
         code: return 2
-        output: int
+        output: !int
     output: \${worker.output}
 nodes:
   worker:
     kind: code
     code: return 1
-    output: int
+    output: !int
   named_call:
     kind: call
     call: named
@@ -82,7 +82,7 @@ nodes:
       worker:
         kind: code
         code: return 3
-        output: int
+        output: !int
     output: \${worker.output}
 output:
   root: \${worker.output}
@@ -131,7 +131,7 @@ nodes:
   worker:
     kind: code
     code: return 1
-    output: int
+    output: !int
 output:
   <<: *shared
   alias: *value
@@ -160,13 +160,13 @@ defs:
       value:
         kind: code
         code: return 7
-        output: int
+        output: !int
     output: \${value.output}
 nodes:
   score:
     kind: code
     code: return 1
-    output: int
+    output: !int
   gate:
     kind: case
     cases:
@@ -176,11 +176,11 @@ nodes:
   positive:
     kind: code
     code: return 1
-    output: int
+    output: !int
   negative:
     kind: code
     code: return 0
-    output: int
+    output: !int
 output:
   via_call: call(helper)
   via_case: \${gate.output}
@@ -211,7 +211,7 @@ test("a compact root's generated re-export has no origin", async () => {
 name: compact_root
 kind: code
 code: return 1
-output: int
+output: !int
 `);
 
   const found = output(loaded.compiled, "result");
@@ -227,7 +227,7 @@ defs:
   compact:
     kind: code
     code: return 1
-    output: int
+    output: !int
 nodes:
   invoke:
     kind: call

@@ -2238,7 +2238,7 @@ nodes:
     kind: code
     input:
       x: \${input.x}
-    output: int
+    output: !int
     code: |
       return inputs["x"] + 1n
     asserts:
@@ -2263,7 +2263,7 @@ nodes:
     kind: code
     input:
       x: \${input.x}
-    output: int
+    output: !int
     code: |
       return inputs["x"] + 1n
     asserts:
@@ -2304,7 +2304,7 @@ nodes:
         kind: code
         input:
           value: \${input.value}
-        output: int
+        output: !int
         code: |
           return inputs["value"] + 1n
     output: \${step.output}
@@ -2365,7 +2365,7 @@ nodes:
           return inputs["row"]
         input:
           row: \${input.row}
-        output: Row
+        output: !Row
     output: \${echo.output}
 output: \${wrapper.output}
 `);
@@ -2389,7 +2389,7 @@ name: Ref
 nodes:
   leaf:
     kind: code
-    output: str
+    output: !str
     code: ./identity_refmod.ts:fn
 output: \${leaf.output}
 `;
@@ -2424,7 +2424,7 @@ nodes:
   ask:
     kind: agent
     prompt: Answer briefly.
-    output: str
+    output: !str
 output: \${ask.output}
 `);
   } catch (error) {
@@ -2549,7 +2549,7 @@ name: pin
 nodes:
   step:
     kind: code
-    output: str
+    output: !str
     code: |
       return "filled"
 ${outputSection}`;
@@ -2560,7 +2560,7 @@ name: pdef
 defs:
   greet:
     kind: code
-    output: str
+    output: !str
     code: |
       return "hi"
 nodes:
@@ -2632,7 +2632,7 @@ nodes:
         input:
           n: \${input.n}
         output:
-          n: int
+          n: !int
         code: |
           return {"n": inputs["n"] + 1n}
     output: \${bump.output}

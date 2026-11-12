@@ -59,7 +59,7 @@ const NODE_HEADER = "id: old_forms\nname: old_forms\ninput:\n  n: !int\n";
 test("a bracket typedef shows the parenthesized spelling", async () => {
   const text =
     "id: f\nname: f\ntypedefs:\n  Buy:\n    action: Literal[buy]\n" +
-    "input:\n  b: !Buy\nkind: code\ncode: return inputs['b']\noutput: Buy\n";
+    "input:\n  b: !Buy\nkind: code\ncode: return inputs['b']\noutput: !Buy\n";
   await loadErrorAt(text, "types use parentheses: `Literal(buy)`", "    action: Literal[buy]");
 });
 
@@ -67,12 +67,12 @@ test.each([
   ["Optional[str]", "Optional(str)"],
   ["int[1, 12]", "int(1..12)"],
   ["dict[str, int]", "object"],
-])("a bracket node output %p shows the parenthesized spelling", async (declared, spelled) => {
+])("a bracket node output %p shows the tag in the parenthesized spelling", async (declared, spelled) => {
   const text =
     NODE_HEADER +
     "nodes:\n  step:\n    kind: code\n    code: return null\n" +
     `    output: ${declared}\noutput: \${step.output}\n`;
-  await loadErrorAt(text, `types use parentheses: \`${spelled}\``, `    output: ${declared}`);
+  await loadErrorAt(text, `\`output:\` declares a type as a tag: write \`output: !${spelled}\``, `    output: ${declared}`);
 });
 
 // ---------- `name: T = value` bindings ----------
@@ -92,13 +92,13 @@ nodes:
     code: "return {'qty': inputs['n']}"
     input:
       n: \${input.n}
-    output: {qty: int}
+    output: {qty: !int}
   use:
     kind: code
     code: return inputs['${name}']
     input:
       ${name}: ${value}
-    output: str
+    output: !str
 output: \${use.output}
 `;
 
@@ -108,7 +108,7 @@ const quoteHint = (name: string, text: string) => `. If you meant the text, quot
 test.each([
   ["qty", "int = ${size.output.qty}", "`qty: !int ${size.output.qty}`"],
   ["q", "Optional[int] = ${size.output.qty}", "`q: !Optional(int) ${size.output.qty}`"],
-  ["d", "Union[Buy, Sell] = ${size.output}", "name `Union(Buy, Sell)` in `typedefs:` and tag with its name"],
+  ["d", "Union[Buy, Sell] = ${size.output}", "`d: !Union(Buy;Sell) ${size.output}`"],
   ["s", 'str = "30"', '`s: !str "30"`'],
   ["s", "str = 30", '`s: !str "30"`'],
   ["b", "bool = yes", "`b: !bool true` (`yes` is text; write `true`)"],
@@ -156,7 +156,7 @@ describe("text without a type on the left is plain text", () => {
 test("an untagged input in a definition shows the tag", async () => {
   const text =
     "id: f\nname: f\ndefs:\n  child:\n    input:\n      qty: int\n" +
-    "    kind: code\n    code: return 1\n    output: int\n" +
+    "    kind: code\n    code: return 1\n    output: !int\n" +
     "nodes:\n  c:\n    kind: call\n    call: child\n    input:\n      qty: 1\n" +
     "output: ${c.output}\n";
   await loadErrorAt(text, "flow input 'qty': write the type as a tag: `qty: !int`", "      qty: int");
@@ -233,8 +233,7 @@ describe("untagged declarations", () => {
     ["x: Optional(Foo)", "flow input 'x': write the type as a tag: `x: !Optional(Foo)`"],
     [
       "u: Union[A, B]",
-      "flow input 'u': write the type as a tag: " +
-        "name `Union(A, B)` in `typedefs:` and tag with its name",
+      "flow input 'u': write the type as a tag: `u: !Union(A;B)`",
     ],
     ["s: str = 30", "flow input 's': write the type as a tag: `s: !str \"30\"`"],
     [

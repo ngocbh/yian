@@ -16,7 +16,7 @@ flow: |
       input:
         history: ${input.history}
         message: ${input.message}
-      output: str
+      output: !str
       system_prompt: You are a helpful conversational assistant.
       prompt: []
   output: ${reply.output}

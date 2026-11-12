@@ -17,7 +17,7 @@ flow: |
       kind: code
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       code: ./helpers.ts
   output: ${oops.output}
 expect:

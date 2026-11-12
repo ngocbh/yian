@@ -6,7 +6,7 @@ flow: |
     name: !str
     title: !str
     message: !str
-  output: str
+  output: !str
   kind: agent
   system_prompt: "You are ${name}, ${title}. Speak as ${name} in the first person."
   prompt: ${message}

@@ -30,7 +30,7 @@ flow: |
     score:
       kind: code
       code: ./fixtures/seeds.ts:const_one
-      output: int
+      output: !int
     gate:                                    # L31 — the node header (not the caret site)
       kind: case
       cases:                                 # L33 — the `cases:` block
@@ -42,7 +42,7 @@ flow: |
     positive:
       kind: code
       code: ./fixtures/seeds.ts:const_one
-      output: int
+      output: !int
   output: ${positive.output}
 expect:
   load:

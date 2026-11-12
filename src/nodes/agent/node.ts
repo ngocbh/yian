@@ -1127,7 +1127,7 @@ export class AgentNode extends Node {
     if (typ !== null && acceptsNull(typ)) return new Output(null);
     throw new AgentInterruptedError(
       `agent node ${reprText(this.id)} was interrupted and its output doesn't allow null; ` +
-        "declare output: Optional(...) to route on an interrupt",
+        "declare `output: !Optional(...)` to route on an interrupt",
     );
   }
 

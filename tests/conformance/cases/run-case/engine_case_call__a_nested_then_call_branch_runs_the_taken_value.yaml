@@ -16,7 +16,7 @@ flow: |2
           code: ./fixtures/compose_codefns.ts:took
           input:
             stance: ${input.stance}
-          output: str
+          output: !str
       output: ${x.output}
 
   nodes:

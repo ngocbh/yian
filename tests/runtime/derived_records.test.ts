@@ -64,11 +64,11 @@ defs:
   turn:
     input: {history: !list(Msg), log: !str}
     nodes:
-      ask: {kind: tool, tool_id: ask, input: {prompt: "You:"}, output: str}
+      ask: {kind: tool, tool_id: ask, input: {prompt: "You:"}, output: !str}
       reply:
         kind: agent
         input: {history: "\${input.history}", message: "\${ask.output}"}
-        output: str
+        output: !str
         prompt: |-
           Conversation so far: \${history}
           User: \${message}
@@ -269,7 +269,7 @@ defs:
   add1:
     input: {x: !int}
     nodes:
-      inc: {kind: code, input: {x: "\${input.x}"}, output: {y: int}, code: "return {y: inputs.x + 1}"}
+      inc: {kind: code, input: {x: "\${input.x}"}, output: {y: !int}, code: "return {y: inputs.x + 1}"}
     output: {y: "\${inc.output.y}"}
   body:
     input: {x: !int}
@@ -290,7 +290,7 @@ defs:
   double:
     input: {x: !int}
     nodes:
-      times2: {kind: code, input: {x: "\${input.x}"}, output: {y: int}, code: "return {y: inputs.x * 2}"}
+      times2: {kind: code, input: {x: "\${input.x}"}, output: {y: !int}, code: "return {y: inputs.x * 2}"}
     output: {y: "\${times2.output.y}", run: "\${system.run_id}"}
 nodes:
   each: {kind: map, over: "\${input.xs}", call: double, input: {x: "\${item}"}}
@@ -624,7 +624,7 @@ defs:
     nodes:
       a:
         kind: code
-        output: Rec
+        output: !Rec
         code: |
           return {k: "x"}
     output: \${a.output.opt :- "d"}

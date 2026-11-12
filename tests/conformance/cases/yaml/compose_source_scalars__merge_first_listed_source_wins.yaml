@@ -3,7 +3,7 @@ flow: |
   id: f
   name: f
   x-good: &good
-    output: int
+    output: !int
   x-bad: &bad
     output: nope
   nodes:

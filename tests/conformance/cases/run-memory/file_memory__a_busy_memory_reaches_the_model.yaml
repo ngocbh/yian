@@ -16,7 +16,7 @@ flow: |
       tools: [{lessons: [append]}]
       system_prompt: Help.
       prompt: Note that sums need checking.
-      output: str
+      output: !str
   output: ${answer.output}
 env:
   YIAN_MEMORY_LOCK_TIMEOUT_SECONDS: "0"

@@ -16,7 +16,7 @@ flow: |
     ask:
       kind: agent
       prompt: Answer briefly.
-      output: str
+      output: !str
       llm_config:
         anthropic:
           max_tokens: 512
@@ -40,7 +40,7 @@ other: |
     ask:
       kind: agent
       prompt: Answer briefly.
-      output: str
+      output: !str
       llm_config:
         anthropic:
           max_tokens: 512

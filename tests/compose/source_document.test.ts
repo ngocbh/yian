@@ -96,8 +96,8 @@ describe("a syntax error at the end of the text", () => {
   // The YAML reader reports these past the last character; each points at what is still open.
   const PROMPT = "id: t\nname: t\nkind: agent\nprompt: ";
   test.each([
-    ["an unclosed double quote", `${PROMPT}"unclosed\noutput: str\n`, 'Missing closing "quote', [4, 9]],
-    ["an unclosed single quote", `${PROMPT}'it is\noutput: str\n`, "Missing closing 'quote", [4, 9]],
+    ["an unclosed double quote", `${PROMPT}"unclosed\noutput: !str\n`, 'Missing closing "quote', [4, 9]],
+    ["an unclosed single quote", `${PROMPT}'it is\noutput: !str\n`, "Missing closing 'quote", [4, 9]],
     ["no final line break", `${PROMPT}"unclosed\noutput: str`, 'Missing closing "quote', [4, 9]],
     ["blank lines after it", `${PROMPT}"unclosed\n\n\n`, 'Missing closing "quote', [4, 9]],
     ["an unclosed flow list", "nodes:\n  a: !str [1, 2\n", "end with a ]", [2, 11]],
@@ -574,12 +574,25 @@ describe("bare and unknown tags", () => {
 });
 
 describe("the tag hint", () => {
-  test.each(["d: !Union(Buy, Sell) x\n", "d: !dict(str,int)\n", "d: !list[str] x\n"])(
+  // No tag can spell these: a bracket, a type cut short, a quoted member holding a comma.
+  test.each(["d: !list[str] x\n", "d: !Union(Buy,\n", "d: !Literal('a,b', c)\n"])(
     "follows an error at a character glued to a tag: %p",
     (text) => {
       expect(refusal(text).message.endsWith("\n" + TAG_HINT)).toBe(true);
     },
   );
+
+  test.each([
+    ["d: !Union(Buy, Sell) x\n", "Union(Buy;Sell)"],
+    ["d: !dict(str,int)\n", "dict(str;int)"],
+    ["  d: !Literal(positive, neutral, negative)  # a comment\n", "Literal(positive;neutral;negative)"],
+    ["d: !Literal('a.b', c)\n", "Literal('a.b';c)"],
+    ["d: !Optional(Literal(a, b))\n", "Optional(Literal(a;b))"],
+  ])("a tag cut at a comma is shown with `;`: %p", (text, spelled) => {
+    expect(refusal(text).message.split("\n").at(-1)).toBe(
+      `hint: a YAML tag ends at \`,\`; separate a type's arguments with \`;\`: write \`!${spelled}\``,
+    );
+  });
 
   // An anchor glued to `,` and a tag glued to `"` get eemeli's MISSING_CHAR too.
   test.each(["m: {a: 1, b: c: d}\n", "{a: !int, b: c: d}\n", "a: &x, b\n", 'a: !x"q"\n'])(

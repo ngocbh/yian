@@ -17,7 +17,7 @@ flow: |2
       code: ./fixtures/compose_codefns.ts:double
       input:
         n: ${input.v}
-      output: int
+      output: !int
       asserts:
         - "output > 1000000"
     lo:
@@ -25,7 +25,7 @@ flow: |2
       code: ./fixtures/compose_codefns.ts:double
       input:
         n: ${input.v}
-      output: int
+      output: !int
   output: ${gate.output}
 inputs:
   v: 5

@@ -203,7 +203,7 @@ name: plain
 nodes:
   step:
     kind: code
-    output: str
+    output: !str
     code: |
       return "ok"
 output: \${step.output}
@@ -425,7 +425,7 @@ defs:
         input:
           text: \${input.text}
         output:
-          text: str
+          text: !str
         prompt: \${text}
     output: \${inner.output}
 nodes:

@@ -38,8 +38,8 @@ flow: |
             headroom: ${1.0 - input.score}       # arithmetic in a binding (expr tie-in)
             label:    ${upper("draft")}          # a pure builtin in a binding
           output:                                # structured record == carried shape
-            draft: str
-            score: float
+            draft: !str
+            score: !float
           prompt: |-
             Improve the ${label} (headroom ${headroom}) and rate the result 0..1.
             Draft:

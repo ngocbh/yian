@@ -55,7 +55,7 @@ flow: |
 
         as_of:      ${input.as_of | system.today}                          # coalesce onto the host clock
         run_id:     ${system.run_id}                                       # host-ambient namespace
-      output: str
+      output: !str
       prompt: |-
         ${heading}   (${slug})
         As of ${as_of}, run ${run_id}.

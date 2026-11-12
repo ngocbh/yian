@@ -38,7 +38,7 @@ const CHILD = `defs:
           m: \${input.m}
         tools: [m]
         prompt: "\${m}"
-        output: str
+        output: !str
     output: \${a.output}
 `;
 const FLOW = (node: string) => `id: f

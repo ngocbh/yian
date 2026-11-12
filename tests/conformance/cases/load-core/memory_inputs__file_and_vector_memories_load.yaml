@@ -13,7 +13,7 @@ flow: |
   nodes:
     greet:
       kind: code
-      output: str
+      output: !str
       code: return "hi"
   output: ${greet.output}
 expect:

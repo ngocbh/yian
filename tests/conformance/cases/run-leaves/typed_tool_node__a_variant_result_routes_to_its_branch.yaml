@@ -14,7 +14,7 @@ flow: |
       tool_id: place_order
       input:
         qty: 5
-      output: OrderResult
+      output: !OrderResult
     route:
       kind: case
       on: ${place.output.type}

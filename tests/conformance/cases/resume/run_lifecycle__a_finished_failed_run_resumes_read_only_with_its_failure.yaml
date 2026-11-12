@@ -12,7 +12,7 @@ flow: |
       code: ./fixtures/compose_codefns.ts:echo_x
       input:
         x: ${input.window}
-      output: int
+      output: !int
   output: ${echo.output}
 inputs:
   window: soon

@@ -28,7 +28,7 @@ defs:
         code: ./fixtures/compose_codefns.ts:double
         input:
           n: \${input.n}
-        output: int
+        output: !int
     output: \${x.output}
     asserts:
       - "input.n >= 0"

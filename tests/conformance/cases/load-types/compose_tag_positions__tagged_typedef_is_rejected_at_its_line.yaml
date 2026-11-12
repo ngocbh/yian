@@ -11,7 +11,7 @@ flow: |
       code: ./fixtures/compose_codefns.ts:echo
       input:
         qty: 1
-      output: int
+      output: !int
   output: ${n.output}
 expect:
   load:

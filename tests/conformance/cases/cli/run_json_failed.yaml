@@ -5,7 +5,7 @@ flow: |
   nodes:
     bad:
       kind: code
-      output: str
+      output: !str
       code: |
         return 1;
   output: ${bad.output}
@@ -18,4 +18,4 @@ expect:
     failure:
       code: contract.output
       node: bad
-      frames: [{label: flow.yaml, range: [6, 13, 6, 16]}]
+      frames: [{label: flow.yaml, range: [6, 13, 6, 17]}]

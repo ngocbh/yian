@@ -16,7 +16,7 @@ flow: |
           input:
             n: ${input.n}
           output:
-            n: int
+            n: !int
       output: ${inner.output}
   output: ${composite.output}
 expect:

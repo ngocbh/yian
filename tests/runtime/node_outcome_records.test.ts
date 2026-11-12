@@ -35,8 +35,8 @@ nodes:
     input:
       topic: \${input.topic}
     output:
-      rating: str
-      score: float
+      rating: !str
+      score: !float
   gate:
     kind: case
     cases:
@@ -45,7 +45,7 @@ nodes:
     else: zero
   zero:
     kind: code
-    output: int
+    output: !int
     code: |
       return 0
   each:

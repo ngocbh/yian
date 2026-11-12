@@ -397,8 +397,8 @@ nodes:
         - question: Why?
           header: why
     output:
-      plan: str
-      why: str
+      plan: !str
+      why: !str
 output: \${pick.output}
 `);
   const log = freshLog();
@@ -539,7 +539,7 @@ async function codeAskFlow(confined = false): Promise<{ dir: string; flow: Compo
     "    code: ./fn.ts:up",
     "    input:",
     "      q: hi",
-    "    output: str",
+    "    output: !str",
     "  ask:",
     "    kind: tool",
     "    tool_id: ask",
@@ -914,7 +914,7 @@ async function codeTakeFlow(confined = false): Promise<{ dir: string; flow: Comp
     "  up:",
     "    kind: code",
     "    code: ./fn.ts:up",
-    "    output: str",
+    "    output: !str",
     "  heard:",
     "    kind: tool",
     "    tool_id: take",
@@ -1095,7 +1095,7 @@ nodes:
       lessons: \${input.lessons}
     tools: [{lessons: [append]}]
     prompt: "\${lessons} go"
-    output: str
+    output: !str
 output: \${answer.output}
 `);
   const model = new ScriptedModel(
@@ -1129,7 +1129,7 @@ nodes:
       cases: \${input.cases}
     tools: [{cases: [add]}]
     prompt: "\${cases} keep it"
-    output: str
+    output: !str
   found:
     kind: tool
     depends_on: [keep]

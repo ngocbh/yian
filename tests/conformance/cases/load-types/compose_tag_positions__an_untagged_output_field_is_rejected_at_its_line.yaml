@@ -1,0 +1,23 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    n:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        qty: 1
+      output:
+        qty: !int
+        note:
+          text: str
+  output: ${n.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '`output:` declares a type as a tag: write `text: !str`'
+      frames:
+      - label: flow.yaml
+        range: [12, 15, 12, 18]

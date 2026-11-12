@@ -36,7 +36,7 @@ function synthOf(descriptors: ReadonlyMap<string, NodeDescriptor>): Map<string, 
 }
 
 test("authored descriptors have no host", () => {
-  const descriptors = descriptorsOf("  a:\n    kind: code\n    code: m:f\n    output: str\n");
+  const descriptors = descriptorsOf("  a:\n    kind: code\n    code: m:f\n    output: !str\n");
   expect(descriptors.get("a")!.host).toBeNull();
 });
 
@@ -49,7 +49,7 @@ nodes:
     kind: code
     code: "return 1"
     host: b
-    output: int
+    output: !int
 output: \${a.output}
 `;
   expect(loadError(() => assembleText(text)).message).toBe(
@@ -61,7 +61,7 @@ output: \${a.output}
 test("inline calls in a node input record the node as host", () => {
   const descriptors = descriptorsOf(
     "  publish:\n    kind: code\n    code: m:f\n" +
-      "    input:\n      draft: call(f, x=call(g, y=1))\n    output: str\n",
+      "    input:\n      draft: call(f, x=call(g, y=1))\n    output: !str\n",
   );
   const [newDescriptors] = desugarInlineCalls(descriptors, null, { nextId: synthIdGen() });
   const synth = synthOf(newDescriptors);
@@ -82,7 +82,7 @@ test("inline calls in map over and loop seed record their node", () => {
 });
 
 test("inline calls in flow output and asserts have no host", () => {
-  const descriptors = descriptorsOf("  a:\n    kind: code\n    code: m:f\n    output: int\n");
+  const descriptors = descriptorsOf("  a:\n    kind: code\n    code: m:f\n    output: !int\n");
   const [newDescriptors] = desugarInlineCalls(descriptors, { r: "call(f)" }, {
     assertsSection: ["call(g)"],
     nextId: synthIdGen(),

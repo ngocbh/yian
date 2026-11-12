@@ -15,7 +15,7 @@ flow: |
       kind: code
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
       code: |
         const summary = inputs.topic.toUpperCase()
   output: ${silent.output}

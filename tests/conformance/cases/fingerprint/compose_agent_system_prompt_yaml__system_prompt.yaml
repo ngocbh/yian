@@ -11,7 +11,7 @@ flow: |
       kind: agent
       input: {name: "${input.name}", message: "${input.message}"}
       prompt: ${message}
-      output: str
+      output: !str
   output: ${reply.output}
 other: |
   id: chat
@@ -25,7 +25,7 @@ other: |
       input: {name: "${input.name}", message: "${input.message}"}
       system_prompt: "You are ${name}."
       prompt: ${message}
-      output: str
+      output: !str
   output: ${reply.output}
 expect:
   fingerprint: different

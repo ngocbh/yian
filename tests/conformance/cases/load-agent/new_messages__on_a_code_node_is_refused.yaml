@@ -7,12 +7,12 @@ flow: |
     count:
       kind: code
       code: return 1
-      output: int
+      output: !int
     reader:
       kind: code
       input:
         history: ${count.new_messages}
-      output: int
+      output: !int
       code: return 1
   output: ${reader.output}
 expect:

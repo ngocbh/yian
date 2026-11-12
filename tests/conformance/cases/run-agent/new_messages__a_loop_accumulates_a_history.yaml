@@ -20,7 +20,7 @@ flow: |
           prompt:
             - ${history}
             - user: "turn ${n}"
-          output: str
+          output: !str
       output:
         history: ${input.history + reply.new_messages}
         n: ${input.n + 1}

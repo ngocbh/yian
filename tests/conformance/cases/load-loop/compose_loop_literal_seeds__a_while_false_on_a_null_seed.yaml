@@ -12,7 +12,7 @@ flow: |
         next:
           kind: code
           output:
-            cursor: str
+            cursor: !str
           code: |
             return {"cursor": "page"}
       output: ${next.output}

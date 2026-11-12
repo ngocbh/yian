@@ -14,12 +14,12 @@ flow: |
       else: no
     yes:
       kind: code
-      output: str
+      output: !str
       code: |
         return 'yes'
     no:
       kind: code
-      output: str
+      output: !str
       code: |
         return 'no'
   output: ${yes.output | no.output}

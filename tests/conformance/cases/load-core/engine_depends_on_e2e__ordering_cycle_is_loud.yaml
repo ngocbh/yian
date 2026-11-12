@@ -13,14 +13,14 @@ flow: |2
       code: ./fixtures/compose_codefns.ts:pick_pro
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
     b:
       kind: code
       runs_after: [a]
       code: ./fixtures/compose_codefns.ts:pick_con
       input:
         topic: ${input.topic}
-      output: str
+      output: !str
   output: ${a.output}
 expect:
   load:

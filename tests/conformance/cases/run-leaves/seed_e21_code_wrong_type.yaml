@@ -12,7 +12,7 @@ flow: |
       kind: code
       input:
         topic: ${input.topic}
-      output: int                       # declares int...
+      output: !int                      # declares int...
       code: ./fixtures/seeds.ts:wrong_type  # ...returns "not-an-int"
   output: ${calc.output}
 inputs: {topic: X}
@@ -25,7 +25,7 @@ expect:
       message: '"not-an-int" does not match declared type int'
       node: calc
       # The declared type `int` on line 12.
-      frames: [{label: flow.yaml, range: [12, 13, 12, 16]}]
+      frames: [{label: flow.yaml, range: [12, 13, 12, 17]}]
   trace:
     - [run_started, null, {num_workers: 0}]
     - [pool_commit, __start__, {key: system.now}]
@@ -42,4 +42,4 @@ expect:
           code: contract.output
           message: '"not-an-int" does not match declared type int'
           node: calc
-          frames: [{label: flow.yaml, range: [12, 13, 12, 16]}]
+          frames: [{label: flow.yaml, range: [12, 13, 12, 17]}]

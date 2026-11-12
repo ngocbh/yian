@@ -135,7 +135,7 @@ nodes:
             - label: "2"
             - label: "5"
       timeout: 24h
-    output: Optional(Trip)      # null: nobody answered in time
+    output: !Optional(Trip)     # null: nobody answered in time
 output: ${plan.output}
 ```
 

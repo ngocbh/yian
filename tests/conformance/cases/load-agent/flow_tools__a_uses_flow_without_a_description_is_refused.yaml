@@ -1,0 +1,31 @@
+# A `uses:` flow granted as a tool needs a top-level `description:` in its file.
+kind: load
+flow: |
+  id: f
+  name: f
+  uses:
+    summarize: summarize
+  nodes:
+    helper:
+      kind: agent
+      prompt: Help.
+      output: str
+      tools: [summarize]
+  output: ${helper.output}
+files:
+  summarize.yaml: |
+    id: summarize
+    name: summarize
+    input:
+      text: !str
+    nodes:
+      line: !str ${input.text}
+    output: ${line.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''helper'': flow `summarize` is granted as a tool, so it needs a `description:`, which the model reads to choose it; add one to its file'
+      frames:
+      - label: flow.yaml
+        range: [10, 12, 10, 23]

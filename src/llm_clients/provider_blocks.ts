@@ -4,13 +4,15 @@
  * Each block mirrors the request body of one provider API with the same names, nesting and
  * allowed values. A block is described by plain field specs (`Field`, `ObjectSchema`), and
  * the value pass checks a value against them strictly: no coercion (`"5"` is not an integer), no non-finite numbers, unknown keys
- * refused, unset (`null`) fields left out of the result at every level, and errors that
+ * refused, unset (`null`) fields left out of the result at every level, a free-form field (JSON, or a
+ * list or map of it) nested at most `current().maxValueNesting` levels, and errors that
  * never echo values. Each issue carries a location `loc`, an error `type` and a message `msg`. Before the value pass,
  * the key walk refuses the paths yian builds itself (`reserved`) and unknown keys, naming each.
  * `locatedBlockProblems` checks a block whose leaves may be values resolved later, and
  * `blockFieldAnnotation` gives the simple type a value for one field must have.
  */
 
+import { current } from "../defaults.ts";
 import { compareCodeUnits } from "../diagnostics.ts";
 import { isList, isRecord } from "../typesys/index.ts";
 import type { JsonObject, JsonValue } from "../typesys/json.ts";
@@ -18,6 +20,22 @@ import { valueRepr } from "../typesys/values.ts";
 
 /** A path into a value: keys, list indices, union labels and variant tags. */
 type Loc = readonly (string | number)[];
+
+/**
+ * The path the value pass is at, innermost part first, `null` at its start. An issue builds its
+ * `Loc` from it, so a walk never copies the path at each level.
+ */
+type At = { readonly up: At; readonly part: string | number } | null;
+
+/** Return the path `at` extended by `part`. */
+const down = (at: At, part: string | number): At => ({ up: at, part });
+
+/** Return the `Loc` that `at` names, outermost part first. */
+function locOf(at: At): Loc {
+  const loc: (string | number)[] = [];
+  for (let node = at; node !== null; node = node.up) loc.push(node.part);
+  return loc.reverse();
+}
 
 /** What a value of one block field must be. */
 export type Field =
@@ -102,83 +120,112 @@ const tagged = (variants: Readonly<Record<string, ObjectSchema>>): Field =>
   Object.freeze({ kind: "tagged", variants: table(variants) });
 const json = (): Field => Object.freeze({ kind: "json" });
 
-// A JSON array or record is checked as a list or map of JSON values.
-const JSON_LIST: Extract<Field, { kind: "list" }> = Object.freeze({ kind: "list", item: json() });
-const JSON_MAP: Extract<Field, { kind: "map" }> = Object.freeze({ kind: "map", key: str(), value: json() });
-
 const ok = (value: JsonValue): Checked => ({ value, issues: [] });
-const fail = (loc: Loc, type: string, msg: string): Checked => ({ value: null, issues: [{ loc, type, msg }] });
+const fail = (at: At, type: string, msg: string): Checked => ({
+  value: null,
+  issues: [{ loc: locOf(at), type, msg }],
+});
 
 /** The value pass of one object: validate it and drop unset fields, without the key walk. */
 export function checkObject(schema: ObjectSchema, data: unknown): { value: JsonObject | null; issues: Issue[] } {
-  const { value, issues } = checkFields(schema, data, []);
+  const { value, issues } = checkFields(schema, data, null);
   return issues.length > 0 ? { value: null, issues } : { value: value as JsonObject, issues };
 }
 
-/** Check `value` at `loc` against `field`, returning a fresh copy of it. */
-function checkField(field: Field, value: unknown, loc: Loc): Checked {
+/** Check `value` at `at` against `field`, returning a fresh copy of it. */
+function checkField(field: Field, value: unknown, at: At): Checked {
+  // The schema bounds how deep a block nests everywhere but in free-form JSON, so a field that
+  // holds it is measured whole first, and nothing deeper than a yian value is walked.
+  if (holdsJson(field) && nestsTooDeep(value)) {
+    const limit = current().maxValueNesting;
+    const msg = `Value nests deeper than ${limit} levels, the limit for a yian value (each record and list is a level)`;
+    return fail(at, "too_deep", msg);
+  }
   switch (field.kind) {
     case "str":
-      return checkStr(field, value, loc);
+      return checkStr(field, value, at);
     case "int":
-      if (typeof value === "bigint") return checkBounds(field, value, loc);
-      return fail(loc, "int_type", "Input should be a valid integer");
+      if (typeof value === "bigint") return checkBounds(field, value, at);
+      return fail(at, "int_type", "Input should be a valid integer");
     case "float":
       if (typeof value === "number") {
-        if (Number.isFinite(value)) return checkBounds(field, value, loc);
-        return fail(loc, "finite_number", "Input should be a finite number");
+        if (Number.isFinite(value)) return checkBounds(field, value, at);
+        return fail(at, "finite_number", "Input should be a finite number");
       }
       // A whole number in a float slot stays an int, unless a double can't hold it.
-      if (typeof value === "bigint" && Number.isFinite(Number(value))) return checkBounds(field, value, loc);
-      return fail(loc, "float_type", "Input should be a valid number");
+      if (typeof value === "bigint" && Number.isFinite(Number(value))) return checkBounds(field, value, at);
+      return fail(at, "float_type", "Input should be a valid number");
     case "bool":
-      return typeof value === "boolean" ? ok(value) : fail(loc, "bool_type", "Input should be a valid boolean");
+      return typeof value === "boolean" ? ok(value) : fail(at, "bool_type", "Input should be a valid boolean");
     case "literal":
       return typeof value === "string" && field.values.includes(value)
         ? ok(value)
-        : fail(loc, "literal_error", `Input should be ${choices(field.values)}`);
+        : fail(at, "literal_error", `Input should be ${choices(field.values)}`);
     case "list":
-      return checkList(field, value, loc);
+      return checkList(field, value, at);
     case "map":
-      return checkMap(field, value, loc);
+      return checkMap(field, value, at);
     case "object":
-      return checkFields(field.schema, value, loc);
+      return checkFields(field.schema, value, at);
     case "union":
-      return checkUnion(field.members, value, loc);
+      return checkUnion(field.members, value, at);
     case "tagged":
-      return checkTagged(field.variants, value, loc);
+      return checkTagged(field.variants, value, at);
     case "json":
-      return checkJson(value, loc);
+      return checkJson(value, at);
   }
 }
 
+/** Whether `field` holds free-form JSON: it is JSON, or a list or map of JSON values. */
+function holdsJson(field: Field): boolean {
+  if (field.kind === "list") return field.item.kind === "json";
+  if (field.kind === "map") return field.value.kind === "json";
+  return field.kind === "json";
+}
+
+/**
+ * Whether `value` nests deeper than `current().maxValueNesting` levels, each list and record a
+ * level and `value` itself the first. The walk keeps its own stack and stops past the limit.
+ */
+function nestsTooDeep(value: unknown): boolean {
+  const limit = current().maxValueNesting;
+  const stack: [unknown, number][] = [[value, 1]];
+  while (stack.length > 0) {
+    const [item, level] = stack.pop()!;
+    if (!isList(item) && !isRecord(item)) continue;
+    if (level > limit) return true;
+    for (const child of isList(item) ? item : Object.values(item)) stack.push([child, level + 1]);
+  }
+  return false;
+}
+
 /** Check a string's length in code points, then its pattern; only the first failure counts. */
-function checkStr(field: Extract<Field, { kind: "str" }>, value: unknown, loc: Loc): Checked {
-  if (typeof value !== "string") return fail(loc, "string_type", "Input should be a valid string");
+function checkStr(field: Extract<Field, { kind: "str" }>, value: unknown, at: At): Checked {
+  if (typeof value !== "string") return fail(at, "string_type", "Input should be a valid string");
   const length = [...value].length;
   if (field.minLength !== undefined && length < field.minLength) {
-    return fail(loc, "string_too_short", `String should have at least ${field.minLength} characters`);
+    return fail(at, "string_too_short", `String should have at least ${field.minLength} characters`);
   }
   if (field.maxLength !== undefined && length > field.maxLength) {
-    return fail(loc, "string_too_long", `String should have at most ${field.maxLength} characters`);
+    return fail(at, "string_too_long", `String should have at most ${field.maxLength} characters`);
   }
   if (field.pattern !== undefined && !new RegExp(field.pattern, "u").test(value)) {
-    return fail(loc, "string_pattern_mismatch", `String should match pattern '${field.pattern}'`);
+    return fail(at, "string_pattern_mismatch", `String should match pattern '${field.pattern}'`);
   }
   return ok(value);
 }
 
 /** Check a number against its field's bounds; only the first failure counts. */
-function checkBounds(bounds: Options<"int"> | Options<"float">, value: bigint | number, loc: Loc): Checked {
+function checkBounds(bounds: Options<"int"> | Options<"float">, value: bigint | number, at: At): Checked {
   const { ge, gt, le, lt } = bounds;
   if (ge !== undefined && value < ge) {
-    return fail(loc, "greater_than_equal", `Input should be greater than or equal to ${String(ge)}`);
+    return fail(at, "greater_than_equal", `Input should be greater than or equal to ${String(ge)}`);
   }
-  if (gt !== undefined && value <= gt) return fail(loc, "greater_than", `Input should be greater than ${String(gt)}`);
+  if (gt !== undefined && value <= gt) return fail(at, "greater_than", `Input should be greater than ${String(gt)}`);
   if (le !== undefined && value > le) {
-    return fail(loc, "less_than_equal", `Input should be less than or equal to ${String(le)}`);
+    return fail(at, "less_than_equal", `Input should be less than or equal to ${String(le)}`);
   }
-  if (lt !== undefined && value >= lt) return fail(loc, "less_than", `Input should be less than ${String(lt)}`);
+  if (lt !== undefined && value >= lt) return fail(at, "less_than", `Input should be less than ${String(lt)}`);
   return ok(value);
 }
 
@@ -189,17 +236,17 @@ export function choices(values: readonly string[]): string {
 }
 
 /** Check a list's length, then each item at its index. */
-function checkList(field: Extract<Field, { kind: "list" }>, value: unknown, loc: Loc): Checked {
-  if (!isList(value)) return fail(loc, "list_type", "Input should be a valid list");
+function checkList(field: Extract<Field, { kind: "list" }>, value: unknown, at: At): Checked {
+  if (!isList(value)) return fail(at, "list_type", "Input should be a valid list");
   // An over-long list is refused before its items are checked.
   if (field.maxLength !== undefined && value.length > field.maxLength) {
     const msg = `List should have at most ${field.maxLength} items after validation, not ${value.length}`;
-    return fail(loc, "too_long", msg);
+    return fail(at, "too_long", msg);
   }
   const items: JsonValue[] = [];
   const issues: Issue[] = [];
   for (let i = 0; i < value.length; i++) {
-    const checked = checkField(field.item, value[i], [...loc, i]);
+    const checked = checkItem(field.item, value[i], down(at, i));
     items.push(checked.value);
     issues.push(...checked.issues);
   }
@@ -207,14 +254,14 @@ function checkList(field: Extract<Field, { kind: "list" }>, value: unknown, loc:
 }
 
 /** Check each entry's key and value, then the mapping's length. */
-function checkMap(field: Extract<Field, { kind: "map" }>, value: unknown, loc: Loc): Checked {
-  if (!isRecord(value)) return fail(loc, "dict_type", "Input should be a valid dictionary");
+function checkMap(field: Extract<Field, { kind: "map" }>, value: unknown, at: At): Checked {
+  if (!isRecord(value)) return fail(at, "dict_type", "Input should be a valid dictionary");
   const entries: [string, JsonValue][] = [];
   const issues: Issue[] = [];
   for (const [key, item] of Object.entries(value)) {
     if (item === undefined) continue;
-    issues.push(...checkField(field.key, key, [...loc, key, "[key]"]).issues);
-    const checked = checkField(field.value, item, [...loc, key]);
+    issues.push(...checkField(field.key, key, down(down(at, key), "[key]")).issues);
+    const checked = checkItem(field.value, item, down(at, key));
     issues.push(...checked.issues);
     entries.push([key, checked.value]);
   }
@@ -222,41 +269,46 @@ function checkMap(field: Extract<Field, { kind: "map" }>, value: unknown, loc: L
   // A mapping's length is checked only once its keys and values pass.
   if (field.maxLength !== undefined && entries.length > field.maxLength) {
     const msg = `Dictionary should have at most ${field.maxLength} items after validation, not ${entries.length}`;
-    return fail(loc, "too_long", msg);
+    return fail(at, "too_long", msg);
   }
   return ok(Object.fromEntries(entries));
 }
 
+/** Check an item of a list or map against `field`; a JSON item was measured with its list or map. */
+function checkItem(field: Field, value: unknown, at: At): Checked {
+  return field.kind === "json" ? checkJson(value, at) : checkField(field, value, at);
+}
+
 /** Check an object's fields in declaration order, then refuse its other keys in written order. */
-function checkFields(schema: ObjectSchema, value: unknown, loc: Loc): Checked {
-  if (!isRecord(value)) return fail(loc, "model_type", "Input should be a valid dictionary");
+function checkFields(schema: ObjectSchema, value: unknown, at: At): Checked {
+  if (!isRecord(value)) return fail(at, "model_type", "Input should be a valid dictionary");
   const entries: [string, JsonValue][] = [];
   const issues: Issue[] = [];
   for (const [name, field] of Object.entries(schema.fields)) {
     const given = Object.hasOwn(value, name) ? value[name] : undefined;
     const required = schema.required.includes(name);
     if (given === undefined) {
-      if (required) issues.push({ loc: [...loc, name], type: "missing", msg: "Field required" });
+      if (required) issues.push(...fail(down(at, name), "missing", "Field required").issues);
       continue;
     }
     if (given === null && !required) continue;
-    const checked = checkField(field, given, [...loc, name]);
+    const checked = checkField(field, given, down(at, name));
     issues.push(...checked.issues);
     entries.push([name, checked.value]);
   }
   for (const [key, item] of Object.entries(value)) {
     if (item !== undefined && !Object.hasOwn(schema.fields, key)) {
-      issues.push({ loc: [...loc, key], type: "extra_forbidden", msg: "Extra inputs are not permitted" });
+      issues.push(...fail(down(at, key), "extra_forbidden", "Extra inputs are not permitted").issues);
     }
   }
   return { value: Object.fromEntries(entries), issues };
 }
 
 /** Return the first member that takes `value`, else every member's issues under its label. */
-function checkUnion(members: readonly Field[], value: unknown, loc: Loc): Checked {
+function checkUnion(members: readonly Field[], value: unknown, at: At): Checked {
   const issues: Issue[] = [];
   for (const member of members) {
-    const checked = checkField(member, value, [...loc, label(member)]);
+    const checked = checkField(member, value, down(at, label(member)));
     if (checked.issues.length === 0) return checked;
     issues.push(...checked.issues);
   }
@@ -276,27 +328,39 @@ function label(field: Field): string {
 }
 
 /** Check a record against the variant its `type` names, under that tag. */
-function checkTagged(variants: Readonly<Record<string, ObjectSchema>>, value: unknown, loc: Loc): Checked {
+function checkTagged(variants: Readonly<Record<string, ObjectSchema>>, value: unknown, at: At): Checked {
   const tag = isRecord(value) && Object.hasOwn(value, "type") ? value["type"] : undefined;
   if (typeof tag !== "string" || !Object.hasOwn(variants, tag)) {
     // The message lists the tags and never echoes the value.
     const tags = Object.keys(variants).sort(compareCodeUnits).join(", ");
-    return fail(loc, "unknown_type", `\`type\` must be one of: ${tags}`);
+    return fail(at, "unknown_type", `\`type\` must be one of: ${tags}`);
   }
-  return checkFields(variants[tag]!, value, [...loc, tag]);
+  return checkFields(variants[tag]!, value, down(at, tag));
 }
 
-/** Check a JSON value at any depth, refusing non-finite numbers and anything that isn't JSON. */
-function checkJson(value: unknown, loc: Loc): Checked {
+/**
+ * Check a JSON value its field measured (`nestsTooDeep`), refusing non-finite numbers and anything
+ * that isn't JSON. Its lists and records are walked here, not measured again.
+ */
+function checkJson(value: unknown, at: At): Checked {
   if (value === null || typeof value === "boolean" || typeof value === "string" || typeof value === "bigint") {
     return ok(value);
   }
   if (typeof value === "number") {
-    return Number.isFinite(value) ? ok(value) : fail(loc, "finite_number", "Input should be a finite number");
+    return Number.isFinite(value) ? ok(value) : fail(at, "finite_number", "Input should be a finite number");
   }
-  if (isList(value)) return checkList(JSON_LIST, value, loc);
-  if (isRecord(value)) return checkMap(JSON_MAP, value, loc);
-  return fail(loc, "json_type", "Input should be a JSON value");
+  if (!isList(value) && !isRecord(value)) return fail(at, "json_type", "Input should be a JSON value");
+  const issues: Issue[] = [];
+  const entries: [string | number, JsonValue][] = [];
+  for (const [key, item] of isList(value) ? value.entries() : Object.entries(value)) {
+    // A record entry holding undefined is absent; a list's is refused below.
+    if (item === undefined && !isList(value)) continue;
+    const checked = checkJson(item, down(at, key));
+    issues.push(...checked.issues);
+    entries.push([key, checked.value]);
+  }
+  if (issues.length > 0) return { value: null, issues };
+  return ok(isList(value) ? entries.map(([, item]) => item) : Object.fromEntries(entries));
 }
 
 // --------------------------------------------------------------------------------------- //
@@ -1403,7 +1467,7 @@ function checkLiteral(
   }
   // An optional field given null is unset, as in the object pass.
   if (value === null && !model.required.includes(name)) return;
-  for (const issue of checkField(model.fields[name]!, value, []).issues) {
+  for (const issue of checkField(model.fields[name]!, value, null).issues) {
     const [written, parts] = writtenPath(path, keys, value, issue.loc);
     add(parts, `\`${top.name}.${written}\`: ${issue.msg}`);
   }

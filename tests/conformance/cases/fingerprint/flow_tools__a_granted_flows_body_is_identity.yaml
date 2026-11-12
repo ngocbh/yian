@@ -1,0 +1,40 @@
+# A flow an agent grants as a tool is part of the agent: changing its body changes the fingerprint.
+kind: fingerprint
+flow: |
+  id: f
+  name: f
+  defs:
+    shout:
+      description: Shout the text back.
+      input:
+        text: !str
+      nodes:
+        loud: !str ${input.text}!
+      output: ${loud.output}
+  nodes:
+    helper:
+      kind: agent
+      prompt: Help.
+      output: str
+      tools: [shout]
+  output: ${helper.output}
+other: |
+  id: f
+  name: f
+  defs:
+    shout:
+      description: Shout the text back.
+      input:
+        text: !str
+      nodes:
+        loud: !str ${input.text}!!
+      output: ${loud.output}
+  nodes:
+    helper:
+      kind: agent
+      prompt: Help.
+      output: str
+      tools: [shout]
+  output: ${helper.output}
+expect:
+  fingerprint: different

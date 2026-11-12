@@ -52,7 +52,7 @@ import { BindingError, bindParams, copyValue } from "../nodes/binding.ts";
 import { Binding, type Parameter, type ValuePath, ValueTemplate } from "../nodes/contracts.ts";
 import { isRecord, type Type, TypeCheckError, type Value, type ValueRecord, VariablePool } from "../typesys/index.ts";
 import { setField, writeAsText } from "../typesys/values.ts";
-import { copyGraph, type Flow, nodeChild, setNodeChild } from "./model.ts";
+import { copyGraph, nodeChildren, setNodeChildren, type StaticChild } from "./model.ts";
 
 /**
  * A flow as the cascade reads it: its nodes, wiring and START id and, for a composed flow, its own
@@ -238,8 +238,11 @@ class RunInputs {
   }
 }
 
-/** A CALL, MAP or LOOP node, the only kinds with a static child flow, which each name by `flowId`. */
-type Callsite = Node & { readonly flowId: string };
+/**
+ * Where a static child flow is called: a CALL, MAP or LOOP node, which names it by `flowId`, or an
+ * AGENT's flow tool, named by its grant.
+ */
+type Callsite = { readonly flowId: string; readonly origin: OriginRef | null };
 
 /**
  * An `llm_config` value in an enclosing flow's layer that a child flow's agent inherits. Frozen.
@@ -251,7 +254,7 @@ type Callsite = Node & { readonly flowId: string };
 export class InheritedValue {
   /** The static path of the callsite whose flow holds the layer; empty for the run's flow. */
   readonly owner: readonly string[];
-  /** The CALL, MAP or LOOP node at `owner`; `null` for the run's flow. */
+  /** The callsite at `owner` (a CALL, MAP or LOOP node, or a flow tool); `null` for the run's flow. */
   readonly callsite: Callsite | null;
   /** The value's field path in its layer; empty for a whole record. */
   readonly field: ValuePath;
@@ -363,9 +366,8 @@ function findInherited(
       const found = inheritedBy(node, own, enclosing, nodePath);
       if (found !== null) return found;
     }
-    const child = nodeChild(node);
-    if (child !== null) {
-      const found = findInherited(child, nodePath, node as Callsite, [...enclosing, own], walk);
+    for (const child of nodeChildren(node)) {
+      const found = findInherited(child.flow, childPath(nodePath, child), callsiteOf(node, child), [...enclosing, own], walk);
       if (found !== null) return found;
     }
   }
@@ -517,34 +519,31 @@ function resolveFlow(
         // Its own layers resolve when it runs; only the layers below them are known now.
         setField(scope.callTime as ValueRecord, key, (node.llmInherit ? copied(parentConfig) : {}) as Value);
         node.llmConfig = null;
-        continue;
-      }
-      let authored: Config;
-      if (carried === null) {
-        const own = literalLayer(node.ownLlmConfig, inputs);
-        validateLayer(own);
-        authored = mergeLlmConfig(own, node.llmInherit ? flowLayer : {});
       } else {
-        authored = resolveCarried(carried, node, parentConfig, { path: key, label, inputs });
+        let authored: Config;
+        if (carried === null) {
+          const own = literalLayer(node.ownLlmConfig, inputs);
+          validateLayer(own);
+          authored = mergeLlmConfig(own, node.llmInherit ? flowLayer : {});
+        } else {
+          authored = resolveCarried(carried, node, parentConfig, { path: key, label, inputs });
+        }
+        const config = resolveAgentConfig(authored, {
+          defaults: scope.defaults,
+          providerModels: scope.providerModels,
+          strayModel: scope.strayModel,
+          path: key,
+          label,
+        });
+        node.llmConfig = copied(config);
+        setField(scope.effective as ValueRecord, key, copied(config) as Value);
       }
-      const config = resolveAgentConfig(authored, {
-        defaults: scope.defaults,
-        providerModels: scope.providerModels,
-        strayModel: scope.strayModel,
-        path: key,
-        label,
-      });
-      node.llmConfig = copied(config);
-      setField(scope.effective as ValueRecord, key, copied(config) as Value);
     }
 
-    const child = nodeChild(node);
-    if (child !== null) {
-      // Copy at EACH callsite. A copy of only the root preserves shared descendant aliases and lets
-      // differently configured parents interfere.
-      const copy = setChild(node, child);
-      resolveFlow(copy, flowLayer, { ...scope, path: nodePath });
-    }
+    // Copy at EACH callsite. A copy of only the root preserves shared descendant aliases and lets
+    // differently configured parents interfere.
+    const children = setChildren(node);
+    for (const child of children) resolveFlow(child.flow, flowLayer, { ...scope, path: childPath(nodePath, child) });
   }
 }
 
@@ -808,8 +807,7 @@ function staticAgents(flow: CascadeFlow, path: readonly string[] = []): [string,
   for (const [nodeId, node] of flow.nodes) {
     const nodePath = [...path, nodeId];
     if (node instanceof AgentNode) agents.push([pathKey(nodePath), node, flow]);
-    const child = nodeChild(node);
-    if (child !== null) agents.push(...staticAgents(child, nodePath));
+    for (const child of nodeChildren(node)) agents.push(...staticAgents(child.flow, childPath(nodePath, child)));
   }
   return agents;
 }
@@ -869,8 +867,7 @@ function applyFlow(
       }
     }
 
-    const child = nodeChild(node);
-    if (child !== null) applyFlow(setChild(node, child), effective, callTime, selection, nodePath);
+    for (const child of setChildren(node)) applyFlow(child.flow, effective, callTime, selection, childPath(nodePath, child));
   }
 }
 
@@ -905,8 +902,7 @@ export function bindHostCredentials(
       if (given !== null) config["headers"] = { ...given };
       node.llmConfig = config;
     }
-    const child = nodeChild(node);
-    if (child !== null) bindHostCredentials(child, apiKey, headers);
+    for (const child of nodeChildren(node)) bindHostCredentials(child.flow, apiKey, headers);
   }
 }
 
@@ -924,11 +920,23 @@ function pathKey(path: readonly string[]): string {
   return path.join("/");
 }
 
-/** Give `node` a private copy of its static child flow, and return the copy. */
-function setChild(node: Node, child: Flow): Flow {
-  const copy = copyGraph(child);
-  setNodeChild(node, copy);
-  return copy;
+/** Give `node` a private copy of each static child flow, and return the copies with their segments. */
+function setChildren(node: Node): StaticChild[] {
+  const children = nodeChildren(node);
+  if (children.length === 0) return children;
+  const copies = children.map(({ segment, flow }) => ({ segment, flow: copyGraph(flow) }));
+  setNodeChildren(node, copies.map((child) => child.flow));
+  return copies;
+}
+
+/** The static path of `child`'s nodes, under the node at `nodePath`: its segment after the node's, if any. */
+function childPath(nodePath: readonly string[], child: StaticChild): readonly string[] {
+  return child.segment === null ? nodePath : [...nodePath, child.segment];
+}
+
+/** Where `node` calls `child`: the node itself (a CALL, MAP or LOOP), or a flow tool by its grant. */
+function callsiteOf(node: Node, child: StaticChild): Callsite {
+  return child.segment === null ? (node as Node & Callsite) : { flowId: child.segment, origin: node.origin };
 }
 
 /** Return an independent deep copy of a config record. */

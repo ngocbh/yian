@@ -1,0 +1,26 @@
+# A child flow's input is read as `${input.<name>}` too.
+kind: load
+flow: |
+  id: f
+  name: f
+  defs:
+    d:
+      input:
+        my-in: !str
+      nodes:
+        b: {kind: code, code: ./fixtures/compose_codefns.ts:echo, input: {topic: x}, output: str}
+      output: ${b.output}
+  nodes:
+    go: {kind: call, call: d, input: {my-in: x}}
+  output: ${go.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "defs entry 'd': flow input 'my-in' must be an identifier (ASCII letters, digits, and _, not starting with a digit) so ${input.my-in} can read it; try 'my_in'"
+      frames:
+      - label: flow.yaml
+        range: [5, 5, 10, 1]
+        note: definition 'd'
+      - label: flow.yaml
+        range: [6, 7, 6, 12]

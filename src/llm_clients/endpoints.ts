@@ -62,9 +62,28 @@ const RESPONSES_PREFIXES = ["gpt-5-pro", "gpt-5.2-pro", "gpt-5.4-pro", "gpt-5.5-
 
 /**
  * Whether an OpenAI-compatible or Azure `model` is served through the Responses API rather than
- * Chat Completions: it starts with `gpt-5-pro`, `gpt-5.2-pro`, `gpt-5.4-pro`, `gpt-5.5-pro` or
- * `gpt-5.6-sol`, or contains `codex`.
+ * Chat Completions by its name: it starts with `gpt-5-pro`, `gpt-5.2-pro`, `gpt-5.4-pro`,
+ * `gpt-5.5-pro` or `gpt-5.6-sol`, or contains `codex`.
  */
 export function prefersResponses(model: string): boolean {
   return RESPONSES_PREFIXES.some((prefix) => model.startsWith(prefix)) || model.includes("codex");
+}
+
+/** What `llm_config.api` names: the Responses API or Chat Completions. */
+export type ChatApi = "responses" | "chat";
+
+/** The values `llm_config.api` takes. */
+export const CHAT_APIS: readonly ChatApi[] = Object.freeze(["responses", "chat"]);
+
+/** Whether `provider` serves both APIs, so `llm_config.api` picks one: Azure and the Chat Completions vendors. */
+export function takesApi(provider: string): boolean {
+  return provider === "azure" || Object.hasOwn(PROVIDER_BASE_URL, provider);
+}
+
+/**
+ * Whether a call of `takesApi` provider goes to the Responses API: `api` when set, else
+ * `prefersResponses(model)`.
+ */
+export function sendsToResponses(api: ChatApi | null, model: string): boolean {
+  return api === null ? prefersResponses(model) : api === "responses";
 }

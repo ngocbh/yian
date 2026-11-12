@@ -174,8 +174,8 @@ function thrown(run: () => unknown): Error {
 }
 
 /** Return a reply whose assistant message holds `parts`. */
-function reply(parts: Part[]): Response {
-  return new Response({ message: new Message({ role: "assistant", parts }) });
+function reply(parts: Part[], finishReason: string | null = null): Response {
+  return new Response({ message: new Message({ role: "assistant", parts }), finishReason });
 }
 
 /** Return a plan's fields as plain JSON-like values, the tool choice's name under `named`. */
@@ -763,7 +763,6 @@ describe("StructuredPlan: parse a tool reply", () => {
   const missing: [string, Part[]][] = [
     ["text only", [new TextPart('{"answer": "x", "score": 1}')]],
     ["only another tool's call", [call("search", { q: "x" })]],
-    ["only an invalid call", [call("Record", null)]],
   ];
   for (const [strategy, plan] of toolPlans) {
     test.each(missing)(`${strategy}: %s is a missing tool call`, (_label, parts) => {
@@ -772,6 +771,36 @@ describe("StructuredPlan: parse a tool reply", () => {
       expect(error.message).toBe("the reply did not call the Record tool; call it with the answer");
     });
   }
+
+  test.each(toolPlans)("%s: a call whose arguments don't parse names them, not a missing call", (_strategy, plan) => {
+    const raw = (text: string) => new ToolCallPart({ id: "c1", name: "Record", arguments: null, rawArguments: text });
+    const cases: [Part[], string][] = [
+      [[raw('{"value": "positive"')], 'the Record call\'s arguments are not a JSON object: {"value": "positive"'],
+      [[raw("[1, 2]"), raw("nope")], "the Record call's arguments are not a JSON object: [1, 2]"],
+      [[call("search", { q: "x" }), raw("nope")], "the Record call's arguments are not a JSON object: nope"],
+    ];
+    for (const [parts, message] of cases) {
+      const error = thrown(() => plan.parse(reply(parts)));
+      expect(error.constructor).toBe(StructuredOutputError);
+      expect(error.message).toBe(message);
+    }
+    // Long arguments are cut to 200 characters.
+    const long = `{"answer": "${"é".repeat(300)}`;
+    expect(thrown(() => plan.parse(reply([raw(long)]))).message).toBe(
+      `the Record call's arguments are not a JSON object: ${Array.from(long).slice(0, 200).join("")}…`,
+    );
+  });
+
+  test.each(toolPlans)("%s: a reply cut off at the token limit says so", (_strategy, plan) => {
+    const cut = new ToolCallPart({ id: "c1", name: "Record", arguments: null, rawArguments: '{"answer": "Ada, the fi' });
+    expect(thrown(() => plan.parse(reply([cut], "length"))).message).toBe(
+      'the Record call\'s arguments are not a JSON object: {"answer": "Ada, the fi; the reply was cut off at ' +
+        "the token limit",
+    );
+    const error = thrown(() => plan.parse(reply([new TextPart("I will call")], "length")));
+    expect(error).toBeInstanceOf(MissingToolCallError);
+    expect(error.message).toBe("the reply did not call the Record tool; call it with the answer");
+  });
 });
 
 describe("StructuredPlan: parse a text reply", () => {
@@ -851,6 +880,11 @@ describe("StructuredPlan: parse a text reply", () => {
 
   test.each(invalid)("parseObjectReply reads no object from %s", (_label, text) => {
     expect(parseObjectReply(text)).toBeNull();
+  });
+
+  test.each(textPlans)("%s: a reply cut off at the token limit says so", (_strategy, plan) => {
+    const error = thrown(() => plan.parse(reply([new TextPart('{"answer": "x", "sco')], "length")));
+    expect(error.message).toBe('Invalid json output: {"answer": "x", "sco; the reply was cut off at the token limit');
   });
 
   test.each(textPlans)("%s: the error trims only whitespace from the text", (_strategy, plan) => {

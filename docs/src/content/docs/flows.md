@@ -87,7 +87,9 @@ a node, a flow output or an agent variable can't start with `__`.
 ## Inputs
 
 Each input is a name and a [YAML tag](/types/#yaml-tags) that gives its type, with an optional
-default after it:
+default after it. The name is an identifier, as a [node id](#node-ids) is: ASCII letters, digits
+and `_`, not starting with a digit, so `${input.<name>}` can read it. Write `first_name`, not
+`first-name`; any other name is a load error, in a child flow too.
 
 ```yaml
 id: inputs-demo

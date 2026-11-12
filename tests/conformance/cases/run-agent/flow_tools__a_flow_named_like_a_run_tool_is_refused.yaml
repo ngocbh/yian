@@ -1,0 +1,29 @@
+# A flow granted under the name of one of the run's tools would make the grant mean two tools.
+kind: run
+flow: |
+  id: helping
+  name: helping
+  llm_config: {provider: anthropic, model: claude-test}
+  defs:
+    lookup:
+      description: Look it up.
+      nodes:
+        v: !str x
+      output: ${v.output}
+  nodes:
+    helper:
+      kind: agent
+      tools: [lookup]
+      prompt: hi
+      output: str
+  output: ${helper.output}
+host:
+  tools:
+    lookup:
+      parameters: {type: object}
+      results: []
+expect:
+  raises:
+    class: RangeError
+    message: "AGENT node 'helper': `lookup` is both a flow it grants and a tool of this run; rename one"
+  trace: []

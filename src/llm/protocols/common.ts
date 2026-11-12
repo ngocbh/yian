@@ -1,8 +1,8 @@
 /** Helpers the protocol adapters share. */
 
-import { JSONDecodeError, type JsonValue, parseJson } from "../../typesys/json.ts";
+import { JSONDecodeError, type JsonValue } from "../../typesys/json.ts";
 import { encodeBody } from "../body.ts";
-import { type ErrorKind, kindForStatus, ProviderError } from "../errors.ts";
+import { type ErrorKind, kindForStatus, parseReceivedJson, ProviderError, receivedBound } from "../errors.ts";
 import { MessageFormatError, type Part, Usage } from "../messages.ts";
 
 const BAD_REQUEST_CODES = [
@@ -35,13 +35,18 @@ export const OPENAI_STREAM_ERROR_KINDS: ReadonlyMap<string, ErrorKind> = new Map
   ["usage_not_included", "quota"],
 ]);
 
-/** Parse one event's JSON, throwing a `ProviderError` that does not echo it. */
+/**
+ * Parse one event's JSON within `parseReceivedJson`'s bounds, throwing a `protocol`
+ * `ProviderError` that does not echo it.
+ */
 export function eventData(data: string, provider: string): JsonValue {
   try {
-    return parseJson(data, "plain");
+    return parseReceivedJson(data);
   } catch (error) {
-    if (error instanceof JSONDecodeError) throw new ProviderError("protocol", `invalid JSON in ${provider} stream event`);
-    throw error;
+    if (!(error instanceof JSONDecodeError)) throw error;
+    const bound = receivedBound(error);
+    const message = bound === null ? `invalid JSON in ${provider} stream event` : `${provider} stream event ${bound}`;
+    throw new ProviderError("protocol", message);
   }
 }
 

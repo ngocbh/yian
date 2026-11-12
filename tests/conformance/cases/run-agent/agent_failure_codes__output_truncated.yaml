@@ -1,0 +1,71 @@
+# The AGENT's reply streams some text, then the provider stops it at the token limit (finish
+# `length`). A cut reply is no answer: the recorded model_call step keeps `finish: length`, and
+# the node fails agent.output_truncated, naming the setting that raises the limit.
+kind: run
+flow: |
+  id: agent-failure-truncated
+  name: agent_failure_truncated
+  nodes:
+    write:
+      kind: agent
+      output: str
+      llm_config: {provider: openai, model: gpt-5.5}
+      prompt: "Write a line."
+  output: ${write.output}
+env: {OPENAI_API_KEY: "<key:1>", YIAN_MODEL_RETRIES: '0'}
+run: {run_id: r1, num_workers: 0}
+host:
+  models:
+    write:
+      agent:
+        - chunks:
+            - text: "The three steps are: first, open the valve; second,"
+            - finish: length
+expect:
+  output:
+    status: failed
+    failure:
+      code: agent.output_truncated
+      message: the reply was cut off at the output token limit before it finished; raise the limit in the agent's llm_config (openai.max_output_tokens)
+      node: write
+      frames: [{label: flow.yaml, range: [4, 3, 4, 8]}]
+  trace:
+    - - run_started
+      - null
+      - num_workers: 0
+        defaults: {MODEL_RETRIES: 0}
+        effective_llm_by_static_path:
+          write:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {}}]
+    - [node_started, __start__]
+    - [pool_commit, __start__, {value: {}}]
+    - [node_succeeded, __start__, {commit: 6}]
+    - [node_started, write]
+    - - node_step
+      - write
+      - n: 1
+        step:
+          finish: length
+          kind: model_call
+          model: gpt-5.5
+          output:
+            format: yian.message.v1
+            parts: [{text: "The three steps are: first, open the valve; second,", type: text}]
+            role: assistant
+          purpose: chat
+          request_sha256: 61d71014ca3090c0a6f8753602c207b5143734596ea410b26a367279a943b9f2
+          response_id: null
+          usage: null
+    - - node_failed
+      - write
+      - failure:
+          code: agent.output_truncated
+          message: the reply was cut off at the output token limit before it finished; raise the limit in the agent's llm_config (openai.max_output_tokens)
+          frames: [{label: flow.yaml, range: [4, 3, 4, 8]}]
+          node: write

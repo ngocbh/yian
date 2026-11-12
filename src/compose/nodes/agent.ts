@@ -369,15 +369,19 @@ export function checkLlmConfigValue(
       });
     }
   }
-  checkResponsesBlock(literal["provider"], literal["model"], tree, prefix, diagnostics, at);
+  // An `api` from a value is known only when it resolves, as is the route it picks.
+  if (!(Object.hasOwn(tree, "api") && holdsValue(tree["api"]))) {
+    checkResponsesBlock(literal["provider"], literal["model"], literal["api"], tree, prefix, diagnostics, at);
+  }
   return [cfg, inherit];
 }
 
 /**
- * Refuse a layer whose literal `provider` and `model` send the call to the Responses API while it
- * writes that provider's block (`responsesBlockError`); a provider or model from a value is
- * checked when it resolves.
+ * Refuse a layer whose literal `provider`, `model` and `api` send the call to the Responses API
+ * while it writes that provider's block (`responsesBlockError`); a provider or model from a value
+ * is checked when it resolves.
  *
+ * @param api The literal `api`, which `LLMConfig` checked.
  * @param tree The layer as written; the block may hold values.
  * @param at The location of a top-level field by its key.
  * @throws LoadError at the block.
@@ -385,13 +389,15 @@ export function checkLlmConfigValue(
 function checkResponsesBlock(
   provider: unknown,
   model: unknown,
+  api: unknown,
   tree: Readonly<Record<string, unknown>>,
   prefix: string,
   diagnostics: LoadDiagnostics,
   at: (key: string) => SourceRange | null,
 ): void {
   if (typeof provider !== "string" || typeof model !== "string") return;
-  const message = responsesBlockError(provider, model, Object.hasOwn(tree, provider) ? tree[provider] : null);
+  const block = Object.hasOwn(tree, provider) ? tree[provider] : null;
+  const message = responsesBlockError(provider, model, api === "responses" || api === "chat" ? api : null, block);
   if (message !== null) throw diagnostics.error(`${prefix}: ${message}`, { range: at(provider) });
 }
 
@@ -474,7 +480,7 @@ export function validateLlmConfig(
   const hostOnly = hostOnlyFieldError(rest);
   if (hostOnly !== null) throw diagnostics.error(hostOnlyMessage(prefix, hostOnly[1]), { range: at(hostOnly[0]) });
   checkLiteralFields(rest, prefix, sourceRange, diagnostics, at);
-  checkResponsesBlock(rest["provider"], rest["model"], rest, prefix, diagnostics, at);
+  checkResponsesBlock(rest["provider"], rest["model"], rest["api"], rest, prefix, diagnostics, at);
   return [rest, inherit];
 }
 

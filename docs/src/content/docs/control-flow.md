@@ -566,7 +566,8 @@ loud:
 
 - Write exactly one of `call:` and `nodes:`. An inline body needs `output:`; `output:` beside a
   named `call:` is a load error.
-- The node's `input:` becomes the body's inputs, read as `${input.<name>}`.
+- The node's `input:` becomes the body's inputs, read as `${input.<name>}`, so each name is an
+  identifier.
 - The body can't read its parent's inputs, nodes or `${item}`. Pass what it needs through
   `input:`. `${system.today}`, `${system.now}` and `${system.run_id}` work everywhere.
 - Each input's type is inferred from its binding. When it can't be proven, such as for an empty

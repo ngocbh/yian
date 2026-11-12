@@ -118,8 +118,9 @@ output:
 
 ### Wiring and prompts
 
-- **Node ids are identifiers**: `fetch_data`, not `fetch-data`. `input`, `output`, `system`,
-  `item` and the expression keywords are taken. No node id, input, output or variable name may
+- **Node ids and flow input names are identifiers**: `fetch_data`, not `fetch-data`; and
+  `first_name`, not `first-name`, for an input of a flow, a def or an inline body. `input`,
+  `output`, `system`, `item` and the expression keywords are taken as node ids. No node id, input, output or variable name may
   start with `__`: yian generates those.
 - **A node's `input:` is a mapping of names.** `input: ${other.output}` is a load error; bind
   each name: `n: ${other.output.n}`.

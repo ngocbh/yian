@@ -919,6 +919,21 @@ for (const llmConfig of ["x", 5, [1]]) {
   });
 }
 
+test("a host llm_config with a free-form field nested too deeply is refused at the field before the log exists", async () => {
+  const limit = current().maxValueNesting;
+  for (const levels of [limit, 20_000]) {
+    let deep: unknown = 1;
+    for (let level = 0; level < levels; level++) deep = { a: deep };
+    const llmConfig = { provider: "vllm", model: "m1", vllm: { chat_template_kwargs: { a: deep } } };
+    const error = await runStartError(await load(KEYED_FLOW), { models: forbidden, llmConfig });
+    expect(error).toBeInstanceOf(RangeError);
+    expect(error.message).toBe(
+      "1 validation error for LLMConfig\nvllm.chat_template_kwargs\n" +
+        `  Value nests deeper than ${limit} levels, the limit for a yian value (each record and list is a level)`,
+    );
+  }
+});
+
 test("a key that marks no agent is dropped", async () => {
   const other = await load(
     "id: other\nname: other\nnodes:\n  agent:\n    kind: agent\n    prompt: hi\n" +

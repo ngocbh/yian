@@ -407,6 +407,7 @@ crashed attempts: draft=1
 | `waiting` | Every unfinished node waits on a take, a sleep or a host call |
 | `stopped` | A signal or the host stopped the run; `--resume` continues it |
 | `crashed` | The process ended mid-run; `--resume` continues it |
+| `unstarted` | The process ended before the run's inputs were recorded; `--resume` refuses it, so delete the log and start the run again |
 
 With `--json`, the document also has `ready` and `wake_at`. `ready` is `true` when a waiting node
 can wake now: every call it waits on is settled, or an interrupt stops it. `wake_at` is the
@@ -416,8 +417,8 @@ on too, though `ready` stays `false`. A log it can't read exits 1.
 `yian status` with no `LOG` lists the runs in `~/.yian/runs`, oldest first: run id, status, start
 time and flow file. It first updates the run index, `~/.yian/runs/index.sqlite`, which is rebuilt
 from the logs and safe to delete; a damaged one is rebuilt with a warning. With `--json`, each run
-also has its end time, result, token counts and `memories`, each memory it was bound to by input,
-identity and type.
+also has its end time, result (`null` unless it succeeded), token counts and `memories`, each
+memory it was bound to by input, identity and type.
 
 A run whose log yian can't read from record N on shows `unreadable at seq N`; `yian status LOG`
 says what is wrong. So does a run folder named for another run, such as a copy of one. With

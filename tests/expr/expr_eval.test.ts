@@ -411,7 +411,7 @@ describe("the shipped builtins' TS-era rules", () => {
   });
 
   test("an indent too large for the runtime fails the same on every engine", () => {
-    install({ ...BUILTIN, maxJsonIndent: Number.MAX_SAFE_INTEGER });
+    install({ ...BUILTIN, maxJsonIndent: Number.MAX_SAFE_INTEGER, maxTextChars: Number.MAX_SAFE_INTEGER });
     try {
       // V8 and JavaScriptCore both throw a RangeError from `repeat`, with different text.
       expectMessage(

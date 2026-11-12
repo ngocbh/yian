@@ -73,6 +73,7 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MAX_COMPREHENSION_ITEMS` | limit | 1,000,000 | 1 or more | Most items the comprehensions of one expression may bind, counting every `for` clause |
 | `YIAN_MAX_INT_DIGITS` | limit | 4,300 | 640 or more | Most decimal digits an int that an operator or a builtin gives may have |
 | `YIAN_MAX_JSON_INDENT` | limit | 10 | 2 or more | Largest indent `render_as_json` takes |
+| `YIAN_MAX_TEXT_CHARS` | limit | 10,000,000 | 1 or more | Most characters a text that an operator or a builtin gives may have |
 | `YIAN_MAX_SHOWN_VALUE_CHARS` | limit | 200 | 2 or more | Longest rendering of a value or key an error message shows |
 | `YIAN_MAX_FAILURE_CHARS` | limit | 10,000 | 1 or more | Longest message or traceback a failure records; a longer one is cut and says how much was cut |
 | `YIAN_AGENT_RETRIES` | setting | 2 | 0 or more | Extra attempts an AGENT gets to correct an invalid structured reply when the node sets none |
@@ -236,12 +237,12 @@ A run log is a JSON Lines file: one record per line, appended and never rewritte
 compact JSON with its keys sorted:
 
 ```json
-{"at":"2026-10-27T08:47:40.404Z","kind":"node_started","payload":{"node_id":"greet"},"run_id":"31fc75ac4c0640de867d47f59f928ea3","schema":31,"seq":8}
+{"at":"2026-10-27T08:47:40.404Z","kind":"node_started","payload":{"node_id":"greet"},"run_id":"31fc75ac4c0640de867d47f59f928ea3","schema":32,"seq":8}
 ```
 
 | Key | What it holds |
 |---|---|
-| `schema` | The record format, `31`. yian reads only this one. A log of schema 10 to 30 reads as `run log schema N predates schema 31 and is not supported`, any other as `unsupported run-record schema: N` |
+| `schema` | The record format, `32`. yian reads only this one. A log of schema 10 to 31 reads as `run log schema N predates schema 32 and is not supported`, any other as `unsupported run-record schema: N` |
 | `run_id` | The run's id |
 | `seq` | The record's place in the log, from 0 |
 | `at` | When the record was appended, in UTC with milliseconds. Use `seq`, not `at`, for order |
@@ -264,7 +265,7 @@ compact JSON with its keys sorted:
 | `node_succeeded` | A node succeeded, naming the `pool_commit` that holds its output |
 | `node_routed` | A node, such as a CASE, chose a route |
 | `node_expanded` | A CALL, MAP or LOOP added its child nodes to the graph, or an AGENT's flow call (`call_id`) its flow's |
-| `node_failed` | A node failed, with its failure. The run is over |
+| `node_failed` | A node failed, with its failure. The run is over, unless the node is inside an AGENT's flow call (`call_id`, `scope`): that call fails and its scope's other nodes end |
 | `inbox_closed` | An inbox was closed; it takes no more messages |
 | `inbox_withdrawn` | Messages nobody had read yet were taken back from an inbox |
 | `interrupted` | The agents reading an inbox were interrupted |

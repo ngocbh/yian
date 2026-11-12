@@ -176,6 +176,15 @@ export const ENTRIES = Object.freeze([
     group: "limit",
     minimum: 2,
   }),
+  // `replace`, `join`, `render_as_json` and text `+` can each multiply a text's size, so nesting
+  // them could build gigabytes in one expression. Ten million characters is past any model's
+  // context window.
+  entry("MAX_TEXT_CHARS", {
+    default: 10_000_000,
+    description: "Most characters a text that an operator or a builtin gives may have",
+    group: "limit",
+    minimum: 1,
+  }),
   // A cut keeps one character less than the cap and adds `…`, so the minimum is 2.
   entry("MAX_SHOWN_VALUE_CHARS", {
     default: 200,

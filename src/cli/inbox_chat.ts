@@ -320,8 +320,8 @@ function valueText(value: unknown, message: boolean): string {
 
 /**
  * Return the flow the run at `log` recorded, for `--resume`; or print why it can't go on and
- * return `null`: the run has ended, its log can't be read, or its flow was built in code or no
- * longer loads (located, with its stack under `engineTrace`).
+ * return `null`: the run has ended or never started, its log can't be read, or its flow was built
+ * in code or no longer loads (located, with its stack under `engineTrace`).
  *
  * @throws What `inspectRun` and `loadRecordedFlow` throw that isn't a load or setup error.
  */
@@ -335,6 +335,13 @@ async function recordedFlow(log: string, engineTrace: boolean, io: CliIo): Promi
     const { status } = inspectRun(log);
     if (status === "succeeded" || status === "failed" || status === "cancelled") {
       return await failed(new YianRangeError(`the run in ${log} has already ended (${status}); start a new chat`));
+    }
+    if (status === "unstarted") {
+      return await failed(
+        new YianRangeError(
+          `the run in ${log} ended inside its run start, before its inputs were recorded; delete its log and start a new chat`,
+        ),
+      );
     }
     const flow = await loadRecordedFlow(log, { env: io.env });
     if (flow !== null) return flow;
@@ -1229,7 +1236,7 @@ export async function inboxChat(
  *
  * With `resume`, the chat a stop left in that log goes on (`inboxChat` with `resume`) under the
  * same conditions, judged on the flow the log recorded, and when no fresh-run flag is given;
- * a run that has ended, or a log that can't be read, goes to `run` to report.
+ * a run that has ended or never started, or a log that can't be read, goes to `run` to report.
  *
  * The chat's start-up comes before `run` sets anything up, so the two never share the terminal,
  * the signals or stderr.
@@ -1257,8 +1264,8 @@ export async function runOrChat(
 
 /**
  * Whether `runOrChat` goes on with the chat recorded at `options.resume`: on a TTY, not under
- * `json`, with no FLOW or fresh-run flag, for a run that hasn't ended whose recorded flow
- * the chat could take. Writes nothing.
+ * `json`, with no FLOW or fresh-run flag, for a run that started and hasn't ended whose recorded
+ * flow the chat could take. Writes nothing.
  */
 async function chatsOnResume(flowPath: string | undefined, options: RunOrChatOptions, io: CliIo): Promise<boolean> {
   if (flowPath !== undefined || options.json || !atTerminal(io)) return false;
@@ -1267,7 +1274,7 @@ async function chatsOnResume(flowPath: string | undefined, options: RunOrChatOpt
   let flow: ComposedFlow | null;
   try {
     const { status } = inspectRun(options.resume!);
-    if (status === "succeeded" || status === "failed" || status === "cancelled") return false;
+    if (status === "succeeded" || status === "failed" || status === "cancelled" || status === "unstarted") return false;
     flow = await loadRecordedFlow(options.resume!, { env: io.env });
   } catch {
     return false;

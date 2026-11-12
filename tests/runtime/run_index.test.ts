@@ -387,12 +387,82 @@ describe("updateRunIndex and readRunIndex", () => {
     for (const row of Object.values(rows)) {
       expect(inspectRun(join(runs, row.runId, "log.jsonl")).status).toBe(row.status);
     }
+    // END's value is the run's result only once the run succeeded.
+    expect(rows["end-early"]!.result).toBeNull();
     // The side node finishes in a later update: the END's earlier success now finishes the run.
     const log = JsonlRunLog.resume(join(runs, "end-early", "log.jsonl"));
     succeed(log, "side", { kind: "str", value: "x" });
     log.close();
     updateRunIndex(runs);
     expect(byId(readRunIndex(runs))["end-early"]).toMatchObject({ status: "succeeded", result: '"done"' });
+  });
+
+  test("a failed or waiting run whose END succeeded lists no result; the waiting one lists it once it succeeds", () => {
+    const runs = freshRuns();
+    const endEarly = (log: JsonlRunLog) => {
+      start(log);
+      log.append(new NodeStartedRecord(END_ID));
+      succeed(log, END_ID, { kind: "str", value: "done" });
+    };
+    writeRun(runs, "failed", (log) => {
+      endEarly(log);
+      log.append(new NodeStartedRecord("boom"));
+      log.append(new NodeFailedRecord(new Failure({ code: "node.execute", message: "boom", nodeId: "boom" })));
+    });
+    writeRun(runs, "waiting", (log) => {
+      endEarly(log);
+      log.append(new NodeStartedRecord("nap"));
+      log.append(sleepWait("nap"));
+      log.append(new RunWaitingRecord(["nap"]));
+    });
+    updateRunIndex(runs);
+    const rows = byId(readRunIndex(runs));
+    expect(rows["failed"]).toMatchObject({ status: "failed", result: null });
+    expect(rows["waiting"]).toMatchObject({ status: "waiting", result: null });
+    // A resume wakes the nap once it is due, and its success finishes the run.
+    const log = JsonlRunLog.resume(join(runs, "waiting", "log.jsonl"));
+    log.append(new RunResumedRecord([], 0));
+    log.append(new NodeWokenRecord("nap", ["r/nap"]));
+    succeed(log, "nap", { kind: "str", value: "rested" });
+    log.close();
+    updateRunIndex(runs);
+    expect(byId(readRunIndex(runs))["waiting"]).toMatchObject({ status: "succeeded", result: '"done"' });
+  });
+
+  test("a log cut inside its run start lists unstarted, or running while a writer holds it", () => {
+    const runs = freshRuns();
+    const records = [
+      runStarted(),
+      new PoolCommitRecord(START_ID, "system.now", { kind: "datetime", value: "2026-10-23T00:00:00.000000+00:00" }),
+      new PoolCommitRecord(START_ID, "system.run_id", { kind: "str", value: "run-1" }),
+      new PoolCommitRecord(START_ID, "system.today", { kind: "date", value: "2026-10-23" }),
+      new PoolCommitRecord(START_ID, START_ID, { kind: "object", value: { topic: "clouds" } }),
+    ];
+    for (let k = 1; k <= 4; k++) {
+      writeRun(runs, `cut-${k}`, (log) => {
+        for (const record of records.slice(0, k)) log.append(record);
+      });
+    }
+    // Cut right after the START inputs' commit, the run has started.
+    writeRun(runs, "started", (log) => {
+      for (const record of records) log.append(record);
+    });
+    const held = writeRun(runs, "held", (log) => log.append(records[0]!), { keep: true });
+    try {
+      updateRunIndex(runs);
+      const rows = byId(readRunIndex(runs));
+      for (let k = 1; k <= 4; k++) {
+        expect(rows[`cut-${k}`]).toMatchObject({ status: "unstarted", lastSeq: k - 1, endedAt: null, result: null, waits: [] });
+      }
+      expect(rows["started"]!.status).toBe("crashed");
+      expect(rows["held"]!.status).toBe("running");
+      for (const row of Object.values(rows)) {
+        expect(inspectRun(join(runs, row.runId, "log.jsonl")).status).toBe(row.status);
+      }
+    } finally {
+      held.close();
+    }
+    expect(byId(readRunIndex(runs))["held"]!.status).toBe("unstarted");
   });
 
   test("a resumed run shows running while its writer holds the lock, and stopped once it lets go", () => {

@@ -9,7 +9,7 @@
  * algorithms.
  */
 
-import { compareCodeUnits, OriginRef, reprText } from "../diagnostics.ts";
+import { compareCodeUnits, type Failure, OriginRef, reprText } from "../diagnostics.ts";
 import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import {
   buildValueAs,
@@ -985,6 +985,10 @@ export interface CallView {
   readonly result: Readonly<JsonObject> | null;
   /** The call's deadline as a UTC record time, or null when it has none. */
   readonly deadline: string | null;
+  /** A flow call's scope, `<agent>/<flow>#<k>`; `null` for any other call. */
+  readonly scope: string | null;
+  /** The failure a flow call took, once it closed `failed`; `null` otherwise. */
+  readonly failure: Failure | null;
 }
 
 /**

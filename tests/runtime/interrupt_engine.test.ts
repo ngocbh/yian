@@ -258,7 +258,7 @@ class CallReader extends Node {
 }
 
 test("NodeSteps.currentCalls is calls outside a run", () => {
-  const call: CallView = { callId: "c", tool: "ask", resultKey: "c", state: "open", closedReason: null, result: null, deadline: null };
+  const call: CallView = { callId: "c", tool: "ask", resultKey: "c", state: "open", closedReason: null, result: null, deadline: null, scope: null, failure: null };
   const steps = new NodeSteps(1, [], () => 1, [call]);
   expect(steps.currentCalls()).toBe(steps.calls);
 });

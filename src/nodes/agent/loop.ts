@@ -84,7 +84,7 @@ import {
   RequestDigest,
   sentCredentials,
 } from "./context.ts";
-import { isFlowCall } from "./flow_tools.ts";
+import { flowFailureText, isFlowCall } from "./flow_tools.ts";
 import { Interrupted, ReplyInterrupted } from "./interrupts.ts";
 import {
   CAPPED_TOOL_ERROR,
@@ -708,7 +708,11 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
       reached = steps.lastWritten() ?? reached;
       continue;
     }
-    const { output, closed } = closerResult(closerReason(view?.closedReason ?? null));
+    // A flow call that failed: the model reads the failure.
+    const { output, closed } =
+      view?.closedReason === "failed" && view.failure !== null
+        ? { output: flowFailureText(call.name, view.scope, view.failure), closed: "failed" as const }
+        : closerResult(closerReason(view?.closedReason ?? null));
     const closer = steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed });
     // A later start that pended the call reached the next one already.
     if (laterPending === null) reached = closer;
@@ -948,11 +952,16 @@ async function runGroup(
         if (callId === undefined || turn.ctx.steps === undefined) {
           throw new AgentLoopError(`agent node ${reprText(turn.ctx.nodeId)}: flow tool ${reprText(call.name)} runs only in a run`);
         }
-        if (!signal?.aborted) {
-          const flowArguments = value.arguments;
-          turn.steps.pending({ callId, tool: call.name, toolCallId: call.id, reply: turn.n, index, deadline, flowArguments });
-          turn.pended.set(index, callId);
+        if (signal?.aborted) return { pending: callId };
+        const fields = { callId, tool: call.name, toolCallId: call.id, reply: turn.n, index, deadline, flowArguments: value.arguments };
+        // Arguments too large to record are the model's to fix, as its result.
+        const tooLarge = turn.steps.pendingTooLarge(fields);
+        if (tooLarge !== null) {
+          turn.steps.toolResult({ callId: call.id, startedAt, output: tooLarge, isError: true }, { settled: true });
+          return { content: tooLarge, reported: true };
         }
+        turn.steps.pending(fields);
+        turn.pended.set(index, callId);
         return { pending: callId };
       }
       if (!reported && isPending(value)) {

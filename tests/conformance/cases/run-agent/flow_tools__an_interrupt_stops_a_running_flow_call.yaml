@@ -1,0 +1,55 @@
+# The agent waits on its call of `approve`, whose `sign` node waits on a person. An interrupt of
+# the agent's steer inbox stops the flow where it is (its waiting node and call go with it), the
+# flow call closes `interrupted`, and the Optional(str) agent succeeds null.
+kind: run
+flow: |
+  id: helping
+  name: helping
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    notes: !Inbox(str)
+  defs:
+    approve:
+      description: Ask for approval.
+      input:
+        item: !str
+      nodes:
+        sign:
+          kind: tool
+          tool_id: sign
+          input:
+            item: ${input.item}
+          output: str
+      output: ${sign.output}
+  nodes:
+    helper:
+      kind: agent
+      steer_inbox: ${input.notes}
+      tools: [approve]
+      system_prompt: Help.
+      prompt: hi
+      output: Optional(str)
+  output: ${helper.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  sends:
+  - {interrupt: notes}
+  tools:
+    sign:
+      parameters: {type: object, properties: {item: {type: string}}}
+      pending: true
+  models:
+    helper:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: call-a, name: approve, arguments: {item: the refund}}
+expect:
+  output:
+    status: succeeded
+    output: null
+  trace: [[run_started, null, {effective_llm_by_static_path: {helper: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {notes: {inbox: notes}}}], [node_succeeded, __start__, {commit: 6}], [node_started, helper], [node_step, helper, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {item: the refund}, id: call-a, name: approve, type: tool_call}], role: assistant}, purpose: chat, request_sha256: 1391cc667005f328f47f55c0ad7efb75359b79d41f4189015064db48ee19514c, response_id: null, usage: null}}], [node_step, helper, {n: 2, step: {arguments: {item: the refund}, call_id: r1/helper/1/0, flow: true, index: 0, kind: pending, reply: 1, scope: helper/approve#0, tool: approve, tool_call_id: call-a}}], [node_expanded, helper, {prune_ids: []}], [node_waiting, helper, {call_ids: [r1/helper/1/0], steer_inbox: notes}], [node_started, helper/approve#0/__start__], [pool_commit, helper/approve#0/__start__, {from: {}}], [node_succeeded, helper/approve#0/__start__, {commit: 14}], [node_started, helper/approve#0/sign], [node_step, helper/approve#0/sign, {n: 1, step: {arguments: {item: the refund}, call_id: r1/helper/approve#0/sign, kind: pending, tool: sign}}], [node_waiting, helper/approve#0/sign, {call_ids: [r1/helper/approve#0/sign]}], [run_waiting, null, {node_ids: [helper, helper/approve#0/sign]}], [interrupted, null, {inbox: notes, nodes: [helper]}], [node_woken, helper], [node_step, helper, {n: 3, step: {call_id: call-a, closed: interrupted, is_error: true, kind: tool_result, output: The user interrupted this tool call; its outcome is unknown. Check its effect before retrying.}}], [node_step, helper, {n: 4, step: {by: 20, kind: interrupted}}], [pool_commit, helper], [pool_commit, helper, {key: helper.new_messages, steps: [9, 22, 23]}], [node_succeeded, helper, {commit: 24, messages: 25}], [node_started, __end__], [pool_commit, __end__], [node_succeeded, __end__, {commit: 28}]]

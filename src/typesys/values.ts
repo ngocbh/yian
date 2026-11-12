@@ -341,6 +341,71 @@ function jsonText(value: Value, indent: number | null, level: number): string {
 }
 
 /**
+ * Return how many characters (code points) `writeAsJson(value, indent)` writes, without writing
+ * them, so a caller can refuse a text too long to build. A part the value holds more than once
+ * is counted once per nesting level it sits at, so a value that shares its parts is counted in
+ * time linear in its distinct parts, however long its text.
+ */
+export function writtenJsonChars(value: Value, indent: number | null = null): number {
+  return jsonChars(value, indent, 0, new Map());
+}
+
+/** Count `value` at nesting `level` as `jsonText` writes it; `seen` holds each container's count by level. */
+function jsonChars(value: Value, indent: number | null, level: number, seen: Map<object, Map<number, number>>): number {
+  if (value === null || typeof value === "boolean" || typeof value === "number") return String(value).length;
+  if (typeof value === "bigint") return value.toString().length;
+  if (typeof value === "string") return quotedChars(value);
+  if (MemoryRef.isMemoryRef(value)) return jsonChars(memoryForm(value), indent, level, seen);
+  // A compact text doesn't depend on the level.
+  const at = indent === null ? 0 : level;
+  const known = seen.get(value)?.get(at);
+  if (known !== undefined) return known;
+  let total = 0;
+  let count: number;
+  if (Array.isArray(value)) {
+    for (const item of value) total += jsonChars(item, indent, level + 1, seen);
+    count = value.length;
+  } else {
+    const record = value as ValueRecord;
+    const keys = FileRef.isFileRef(value)
+      ? FILE_FIELDS
+      : InboxRef.isInboxRef(value)
+        ? INBOX_FIELDS
+        : Object.keys(record);
+    const colon = indent === null ? 1 : 2;
+    for (const key of keys) total += quotedChars(key) + colon + jsonChars(record[key] as Value, indent, level + 1, seen);
+    count = keys.length;
+  }
+  // The brackets and the commas, and with an indent each item's line and the closing line.
+  let chars = count === 0 ? 2 : 2 + total + (count - 1);
+  if (count > 0 && indent !== null) chars += count * (1 + indent * (level + 1)) + 1 + indent * level;
+  if (!seen.has(value)) seen.set(value, new Map());
+  seen.get(value)!.set(at, chars);
+  return chars;
+}
+
+/** Count the characters `JSON.stringify(text)` writes: the quotes, two for a short escape, six for `\u` ones. */
+function quotedChars(text: string): number {
+  let chars = 2;
+  for (let index = 0; index < text.length; index++) {
+    const unit = text.charCodeAt(index);
+    if (unit === 0x22 || unit === 0x5c || unit === 0x08 || unit === 0x09 || unit === 0x0a || unit === 0x0c || unit === 0x0d) {
+      chars += 2;
+    } else if (unit < 0x20) {
+      chars += 6;
+    } else if (unit >= 0xd800 && unit <= 0xdbff && (text.charCodeAt(index + 1) & 0xfc00) === 0xdc00) {
+      // A surrogate pair is one character.
+      chars += 1;
+      index += 1;
+    } else {
+      // A lone surrogate is escaped as `\uXXXX`.
+      chars += unit >= 0xd800 && unit <= 0xdfff ? 6 : 1;
+    }
+  }
+  return chars;
+}
+
+/**
  * Render a value path as `a[1].b`, quoting a key that isn't an identifier as `["my key"]`.
  *
  * Each key is cut with `shownText`, and a rendering longer than four times the shown-value

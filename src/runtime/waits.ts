@@ -407,10 +407,16 @@ export function applyWaitsRecord(w: WaitsState, envelope: { readonly seq: number
     if (record.callId === null) settle(w, record.spawnerId);
   }
   else if (record instanceof NodeFailedRecord) {
-    closeOpenCalls(w, "failed");
-    settle(w, record.failure.nodeId!);
-    // A node failure ends the run.
-    w.stops.clear();
+    if (record.scope !== null) {
+      // A failure inside a flow call's scope fails the call and ends the scope; the run goes on.
+      close(w.calls.get(record.callId!), "failed");
+      endScope(w, record.scope);
+    } else {
+      closeOpenCalls(w, "failed");
+      settle(w, record.failure.nodeId!);
+      // A node failure ends the run.
+      w.stops.clear();
+    }
   } else if (record instanceof RunWaitingRecord) {
     // The reply a Stop targeted is stopped; a Stop that stopped no one yet (a mid-turn ask or sleep) still stands.
     for (const [name, stop] of w.stops) if (stop.stopped) w.stops.delete(name);
@@ -570,7 +576,10 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
   }
 }
 
-/** Apply `interrupted`: each named node holds a pending interrupt, and its open calls close `interrupted`. */
+/**
+ * Apply `interrupted`: each named node holds a pending interrupt, and its open calls close
+ * `interrupted`; the scope of each of its open flow calls ends.
+ */
 function applyInterrupted(w: WaitsState, seq: number, record: InterruptedRecord): void {
   // Once it has stopped an agent the Stop stays so: a replayed empty record can't extend its window.
   const stopped = (w.stops.get(record.inbox)?.stopped ?? false) || record.nodes.length > 0;
@@ -578,8 +587,21 @@ function applyInterrupted(w: WaitsState, seq: number, record: InterruptedRecord)
   for (const nodeId of record.nodes) {
     w.interrupts.set(nodeId, seq);
     w._interruptInboxes.set(nodeId, record.inbox);
-    for (const call of nodeCalls(w, nodeId)) close(call, "interrupted");
+    for (const call of nodeCalls(w, nodeId)) {
+      const open = call.state === "open";
+      close(call, "interrupted");
+      if (open && call.scope !== null) endScope(w, call.scope);
+    }
   }
+}
+
+/** End flow call scope `scope`: each node of it, a nested scope's included, settles here. */
+function endScope(w: WaitsState, scope: string): void {
+  const inside = (nodeId: string) => nodeId.startsWith(`${scope}/`);
+  const nodes = new Set([...w.calls.values()].map((call) => call.nodeId).filter(inside));
+  for (const nodeId of w.waiting.keys()) if (inside(nodeId)) nodes.add(nodeId);
+  for (const nodeId of w._pendingTakes.keys()) if (inside(nodeId)) nodes.add(nodeId);
+  for (const nodeId of nodes) settle(w, nodeId);
 }
 
 /** Apply `node_waiting`: register its take or sleep (a take joins its inbox's absorbing takes) and move the node to the waiting set. */

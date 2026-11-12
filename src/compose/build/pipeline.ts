@@ -167,7 +167,7 @@ import { checkCaseBranches } from "../validate/case_branches.ts";
 import { checkCaseExhaustive, checkCaseWhenValues, exhaustiveCases } from "../validate/case_exhaustive.ts";
 import { checkImpossibleWhens, computeNarrowing, type Narrowing } from "../validate/narrowing.ts";
 import { checkFieldReads } from "../validate/field_reads.ts";
-import { checkSkippedArithmetic, nullSkippedOutputs, type SearchedWhen, SkipModel } from "../validate/skips.ts";
+import { checkSkippedReads, nullSkippedOutputs, type SearchedWhen, SkipModel } from "../validate/skips.ts";
 import type { FlowSource } from "../../runtime/log.ts";
 
 // Name for the single output of a bare whole-string `output:` binding. The value-mode EndNode
@@ -2539,8 +2539,9 @@ function finishOutputs(
   // An output that reads only nodes CASE routing may skip would leave END unreachable; the
   // explicit null default makes its END edge optional, so the run returns null.
   outputs = nullSkippedOutputs(outputs, skips);
-  // Arithmetic on such a value would fail at runtime with null; ask for a `:-` default.
-  checkSkippedArithmetic(flowWiring, outputs, skips, buildResults, {
+  // Arithmetic, a builtin, `in` or a comprehension on such a value would fail at runtime with
+  // null; ask for a `:-` default.
+  checkSkippedReads(flowWiring, outputs, skips, buildResults, {
     registry,
     valueMode,
     outputsRange,

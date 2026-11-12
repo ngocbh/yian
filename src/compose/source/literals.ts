@@ -1,26 +1,16 @@
-/** Parse isolated YAML literals outside source-document ownership. */
+/**
+ * Reading one plain scalar on its own, and the merge and collection-tag rules a document's build
+ * pass follows as SafeLoader does.
+ */
 
-import {
-  type Alias,
-  isAlias,
-  isMap,
-  isScalar,
-  isSeq,
-  type Pair,
-  type ParsedNode,
-  Scalar,
-  type YAMLMap,
-  type YAMLSeq,
-  YAMLError,
-} from "yaml";
+import { isMap, isScalar, isSeq, type Pair, type ParsedNode, Scalar, type YAMLMap, type YAMLSeq } from "yaml";
 
 import { reprText } from "../../diagnostics.ts";
-import type { Value, ValueRecord } from "../../typesys/index.ts";
-import { setRecordKey, SourceSyntaxError } from "./common.ts";
+import type { Value } from "../../typesys/index.ts";
+import { SourceSyntaxError } from "./common.ts";
 import {
   type AnchoredNode,
   BOOL_TAG,
-  composeFlowDocument,
   constructScalar,
   FLOAT_TAG,
   FlowLoaderError,
@@ -50,32 +40,6 @@ const SCALAR_TAGS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Safely parse one location-free YAML literal.
- *
- * Plain scalars read with the flow loader's scalar rules, the same as in a source document,
- * but no document graph is retained: input defaults need a value, not a graph. Mapping keys
- * must be text. An alias shares its target's value, so a recursive alias builds a recursive
- * list or record. A `<<` key merges a mapping, or a list of mappings, into its own mapping,
- * whose own keys win.
- *
- * Example: `parseYamlLiteral("{a: 017, b: yes}")` is `{a: 17n, b: "yes"}`.
- *
- * @throws SourceSyntaxError, with no range, when the text is not valid YAML for the flow
- *   loader.
- */
-export function parseYamlLiteral(text: string): Value {
-  try {
-    const { document, aliasTargets } = composeFlowDocument(text);
-    return construct(document.contents, aliasTargets);
-  } catch (error) {
-    if (error instanceof YAMLError || error instanceof FlowLoaderError) {
-      throw new SourceSyntaxError(error.message);
-    }
-    throw error;
-  }
-}
-
-/**
  * Read one plain scalar's text with the flow loader's scalar rules.
  *
  * The text is one stripped, single-line plain scalar, never YAML structure: the flow
@@ -98,133 +62,6 @@ export function readPlainScalar(text: string): ScalarValue {
     if (error instanceof ScalarValueError) throw new SourceSyntaxError(error.reason);
     if (error instanceof FlowLoaderError) throw new SourceSyntaxError(error.message);
     throw error;
-  }
-}
-
-/**
- * Build the value of a composed document's root, as SafeLoader constructs a document.
- *
- * A list or mapping is allocated when first reached and filled later, first-in first-out,
- * so a container's scalars are built (and their errors raised) before the containers nested
- * in it, and an alias to a container still being filled shares it.
- *
- * @throws FlowLoaderError when a node can't be built.
- */
-function construct(root: ParsedNode | null, aliasTargets: ReadonlyMap<Alias, AnchoredNode>): Value {
-  const values = new Map<ParsedNode, Value>();
-  const fills: (() => void)[] = [];
-  const target = (written: ParsedNode | null): AnchoredNode | null => {
-    if (written === null) return null; // a missing key or value
-    return isAlias(written) ? aliasTargets.get(written)! : written;
-  };
-  const valueOf = (written: ParsedNode | null): Value => {
-    const node = target(written);
-    if (node === null) return null;
-    const built = values.get(node);
-    if (built !== undefined) return built;
-    // The tag picks the constructor: `!!seq` builds a list and `!!map` a record
-    // whatever the node's kind.
-    if (isScalar(node) && node.tag !== SEQ_TAG && node.tag !== MAP_TAG) {
-      const value = scalarValue(node);
-      values.set(node, value);
-      return value;
-    }
-    if (!isScalar(node)) {
-      const message = collectionTagError(node.tag, node);
-      if (message !== null) throw new FlowLoaderError(message, node);
-    }
-    // SafeLoader's `construct_yaml_seq` and `construct_yaml_map` yield an empty container and
-    // check the node's kind only when filling it, so a mismatch comes after sibling scalars.
-    if (node.tag === SEQ_TAG || (node.tag !== MAP_TAG && isSeq(node))) {
-      const list: Value[] = [];
-      values.set(node, list);
-      fills.push(() => {
-        if (!isSeq(node)) {
-          throw new FlowLoaderError(`expected a sequence node, but found ${nodeId(node)}`, node);
-        }
-        for (const item of node.items) list.push(valueOf(item));
-      });
-      return list;
-    }
-    const record: ValueRecord = {};
-    values.set(node, record);
-    fills.push(() => {
-      if (!isMap(node)) {
-        throw new FlowLoaderError(`expected a mapping node, but found ${nodeId(node)}`, node);
-      }
-      for (const pair of flatten(node)) {
-        const key = valueOf(pair.key);
-        if (typeof key !== "string") throw nonTextKey(key, target(pair.key));
-        const value = valueOf(pair.value);
-        // A repeated key keeps its first position and takes the last value, as in
-        // SafeLoader.
-        setRecordKey(record, key, value);
-      }
-    });
-    return record;
-  };
-  const flattened = new Map<YAMLMap.Parsed, MapPair[]>();
-  /**
-   * Return the pairs SafeLoader's `flatten_mapping` leaves in `root`: each merge source's
-   * flattened pairs, in the order of the merge keys, then the mapping's own other pairs.
-   *
-   * The walk is post-order over merge sources on an explicit stack, since a raised
-   * `YIAN_MAX_YAML_NODES` admits merge chains deep enough to exhaust a recursive one. A
-   * source still being flattened (a merge cycle) contributes its own other pairs.
-   */
-  const flatten = (root: YAMLMap.Parsed): MapPair[] => {
-    const done = flattened.get(root);
-    if (done !== undefined) return done;
-    let pairs: MapPair[] = [];
-    const stack: [YAMLMap.Parsed, Generator<YAMLMap.Parsed, YAMLMap.Parsed[]>][] = [];
-    const merging = new Set<YAMLMap.Parsed>();
-    const enter = (node: YAMLMap.Parsed): void => {
-      merging.add(node);
-      stack.push([node, mergeSources(node, target)]);
-    };
-    enter(root);
-    for (let frame = stack.at(-1); frame !== undefined; frame = stack.at(-1)) {
-      const [node, sources] = frame;
-      const next = sources.next();
-      if (!next.done) {
-        if (!flattened.has(next.value) && !merging.has(next.value)) enter(next.value);
-        continue;
-      }
-      stack.pop();
-      merging.delete(node);
-      pairs = next.value.flatMap((source) => flattened.get(source) ?? ownPairs(source, target));
-      // A loop, not `push(...)`: spreading a document-sized array into call arguments
-      // overflows the stack.
-      for (const pair of ownPairs(node, target)) pairs.push(pair);
-      flattened.set(node, pairs);
-    }
-    return pairs; // the root's: it leaves the stack last
-  };
-  const value = valueOf(root);
-  // The loop also reaches the fills pushed while it runs: an array iterator rereads the
-  // length at each step.
-  for (const fill of fills) fill();
-  return value;
-}
-
-/**
- * Build a scalar's value: an untagged plain scalar by the table, an untagged quoted or block
- * scalar, or one with the bare `!` tag, as its text, and a tagged one by its tag.
- */
-function scalarValue(node: Scalar.Parsed): ScalarValue {
-  const text = node.source;
-  const plain = node.type === Scalar.PLAIN;
-  switch (node.tag) {
-    case undefined: {
-      if (!plain) return text;
-      const tag = resolvePlain(text);
-      // `<<` merges only as a mapping key, which never reaches here; as a value it is text.
-      return tag === MERGE_TAG ? text : constructScalar(tag, text, true);
-    }
-    case "!":
-      return text; // YAML 1.2: the bare tag keeps a scalar as text
-    default:
-      return constructScalar(node.tag, text, plain);
   }
 }
 
@@ -326,21 +163,12 @@ export function nodeId(node: AnchoredNode | null): string {
   return isSeq(node) ? "sequence" : isMap(node) ? "mapping" : "scalar";
 }
 
-/** Return the error for a mapping key that YAML read as `key`, not text, from `node`. */
-function nonTextKey(key: Exclude<Value, string>, node: AnchoredNode | null): FlowLoaderError {
-  if (typeof key === "object" && key !== null) {
-    return new FlowLoaderError(
-      "a list or mapping can't be a mapping key; mapping keys must be text",
-      node,
-    );
-  }
-  const written = isScalar(node) ? node.source : "";
-  if (key === null && written === "") {
-    return new FlowLoaderError(
-      "an empty key was read by YAML as null, but mapping keys must be text",
-      node,
-    );
-  }
+/**
+ * Return why a mapping key that YAML read as `key`, not text, was refused; `written` is the key
+ * as written, empty for an empty key.
+ */
+export function nonTextKeyMessage(key: Exclude<Value, string>, written: string): string {
+  if (key === null && written === "") return "an empty key was read by YAML as null, but mapping keys must be text";
   const readAs =
     key === null
       ? "null"
@@ -349,9 +177,5 @@ function nonTextKey(key: Exclude<Value, string>, node: AnchoredNode | null): Flo
         : typeof key === "number"
           ? "a float"
           : "a boolean";
-  return new FlowLoaderError(
-    `the key \`${written}\` was read by YAML as ${readAs}, but mapping keys must be text; ` +
-      "quote it",
-    node,
-  );
+  return `the key \`${written}\` was read by YAML as ${readAs}, but mapping keys must be text; quote it`;
 }

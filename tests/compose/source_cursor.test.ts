@@ -1,6 +1,6 @@
 /** Immutable, occurrence-aware YAML source cursors. */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 
 import { extractInlineBodies } from "../../src/compose/desugar/inline_bodies.ts";
 import { singleNodeDefCursor } from "../../src/compose/loader.ts";
@@ -1047,6 +1047,23 @@ describe("projections", () => {
       source.child("sequence").child(0).child("field").range,
       null,
     ]);
+  });
+
+  test("a projection's child is built once: repeated reads return the same cursor", () => {
+    const keys = Array.from({ length: 2000 }, (_, i) => `a${i}`);
+    const text = `node:\n  inputs:\n${keys.map((key) => `    ${key}: x\n`).join("")}`;
+    const node = SourceDocument.parse(text).root.child("node").withValue({ inputs: Object.fromEntries(keys.map((key) => [key, "x"])) });
+
+    expect(node.child("inputs")).toBe(node.child("inputs"));
+    expect(node.children()[0]).toBe(node.child("inputs"));
+    const snapshots = spyOn(SourceCursor.prototype, "_withSnapshot");
+    try {
+      for (const key of keys) node.child("inputs").child(key);
+      // Each binding's cursor is built once, and the shared `inputs` projection is not rebuilt.
+      expect(snapshots.mock.calls.length).toBeLessThanOrEqual(keys.length + 1);
+    } finally {
+      snapshots.mockRestore();
+    }
   });
 
   test("withValue after a placeholder round keeps the retained item and field sources", () => {

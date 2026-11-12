@@ -28,6 +28,7 @@ import { isRecord, type MemoryRef, shownText, TypedValue, valueRepr } from "../t
 import {
   checkMaxLineBytes,
   type FlowSource,
+  hardLinked,
   isRunLogLocked,
   iterRunRecords,
   NodeExpandedRecord,
@@ -426,7 +427,8 @@ function checkedTimeout(timeoutMs: unknown): number {
  * row whose log is gone is deleted. A log that can't be read (an old schema, a damaged line, a
  * first record that isn't `run_started` of the folder's run, a line over `maxLineBytes`, or a file
  * error such as no permission, or a log that is a symlink or isn't a regular file, `EINVAL: not a
- * regular file, open '<log>'`, which is never opened) raises a warning through `warn`. A log whose
+ * regular file, open '<log>'`, which is never opened, or has another link, `EINVAL: has more than
+ * one link, open '<log>'`) raises a warning through `warn`. A log whose
  * content can't be read gets a row of the records before the one that failed, marked unreadable
  * at it (`RunIndexRow.unreadable`), and is read again only once its size or mtime changed, or with
  * a higher `maxLineBytes` than it was read with. A file error keeps the row as it was, and the next
@@ -525,7 +527,8 @@ function updateIndexFile(update: IndexUpdate): void {
 /**
  * Return the runs an update must read or delete, and whether rows of folders now gone must go,
  * from one read of the rows; `null` when there are none, so the update need not take the write
- * lock. A log yian may not open, or that isn't a regular file, is read again each time, so it warns.
+ * lock. A log yian may not open, that isn't a regular file or that has another link is read again
+ * each time, so it warns.
  */
 function pendingRuns(db: Sqlite, update: IndexUpdate): { runIds: string[]; dropGone: boolean } | null {
   const { runsDir, maxLineBytes } = update;
@@ -565,7 +568,7 @@ function pendingRuns(db: Sqlite, update: IndexUpdate): { runIds: string[]; dropG
       return true;
     }
     const saved = stored.get(runId);
-    return !stat.isFile() || saved == null || !readUpTo(saved, stat, maxLineBytes);
+    return !stat.isFile() || stat.nlink > 1 || saved == null || !readUpTo(saved, stat, maxLineBytes);
   });
   const listed = new Set(names);
   const dropGone = update.runIds === null && [...stored.keys()].some((runId) => !listed.has(runId));
@@ -614,8 +617,10 @@ function writeRuns(db: Sqlite, update: IndexUpdate, work: { runIds: string[]; dr
       try {
         // lstat, so a symlink at the log is skipped as the readers refuse it, not read as its target.
         const stat = fs.lstatSync(log);
-        // Before `readUpTo`: a FIFO or a device reads as size 0, and is never opened here.
+        // Before `readUpTo`: a FIFO or a device reads as size 0, and is never opened here; a hard
+        // link, which the readers refuse, would otherwise keep a row read through it current.
         if (!stat.isFile()) throw notRegularFile(log);
+        if (stat.nlink > 1) throw hardLinked(log);
         // Another builder may have read it since the check.
         if (saved !== null && readUpTo(saved, stat, maxLineBytes)) continue;
         try {

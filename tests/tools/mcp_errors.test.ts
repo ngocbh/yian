@@ -32,7 +32,16 @@ import {
   REDIRECT_LOCATION,
   startHttpServer,
 } from "../fixtures/mcp/fake_server.ts";
-import { hostEnv, killMarkers, stdioOptions, strayProcesses, trackServers } from "../helpers/mcp_helpers.ts";
+import {
+  childAlive,
+  hostEnv,
+  killMarkers,
+  pids,
+  stdioOptions,
+  strayProcesses,
+  trackServers,
+  waitFor,
+} from "../helpers/mcp_helpers.ts";
 
 // Process and HTTP tests get 15 s; the `< N s` assertions are the real check.
 const SLOW = 15_000;
@@ -45,6 +54,11 @@ function fake(flags: string[] = [], options: Omit<McpServerOptions, "command" | 
   const file = join(dir, `marker-${markers.length + 1}`);
   markers.push(file);
   return tracker.track(mcpServer({ ...stdioOptions(...flags, "--marker", file), ...options }));
+}
+
+/** The marker file of the last server `fake` built, which lists the pid of each of its starts. */
+function lastMarker(): string {
+  return markers.at(-1)!;
 }
 
 /** A `ToolSet` of `server`'s tools. */
@@ -206,7 +220,7 @@ describe("errors that end a call", () => {
   );
 
   test(
-    "a server that exits is closed and later calls fail at once",
+    "a server that exits fails the call in flight, and the next call starts it again",
     async () => {
       const server = await fake([], { label: "quitter" }).open();
       const set = tools(server);
@@ -214,12 +228,138 @@ describe("errors that end a call", () => {
       expect(error).toBeInstanceOf(McpServerClosed);
       expect(isPermanentToolError(error)).toBe(true);
       expect(isReportedToolError(error)).toBe(false);
-      expect(error.message).toBe("MCP server 'quitter' is closed");
+      expect(error.message).toBe("MCP server 'quitter' exited (code 3) during tool 'exit_now'");
       expect(server.isClosed).toBe(true);
       expect(server.isOpen).toBe(true);
+      expect(await set.invoke("echo", { text: "x" })).toBe("x");
+      expect(server.isClosed).toBe(false);
+      expect(server.isOpen).toBe(true);
+      // Two starts: the call in flight wasn't sent again, or it would have ended the second.
+      const [first, second] = pids(lastMarker());
+      expect(pids(lastMarker())).toHaveLength(2);
+      expect(childAlive(first!)).toBe(false);
+      expect(String(await set.invoke("pid", {}))).toBe(String(second));
+    },
+    SLOW,
+  );
+
+  test(
+    "a server that exits during a call names its exit code and its last stderr lines",
+    async () => {
+      const server = await fake([], { label: "loud" }).open();
+      const error = await rejection(tools(server).invoke("exit_loudly", {}));
+      expect(error).toBeInstanceOf(McpServerClosed);
+      expect(error.message).toBe(
+        "MCP server 'loud' exited (code 3) during tool 'exit_loudly'\n" +
+          "server stderr:\nFATAL: database file /data/x.db is locked",
+      );
+    },
+    SLOW,
+  );
+
+  test(
+    "calls that find the server gone share one restart",
+    async () => {
+      const server = await fake([], { label: "shared" }).open();
+      const set = tools(server);
+      await rejection(set.invoke("exit_now", {}));
+      const texts = ["a", "b", "c", "d"];
+      expect(await Promise.all(texts.map((text) => set.invoke("echo", { text })))).toEqual(texts);
+      expect(pids(lastMarker())).toHaveLength(2);
+    },
+    SLOW,
+  );
+
+  test(
+    "a failed restart fails the calls that waited on it, and later calls at once with the exit code only",
+    async () => {
+      const server = await fake(["--restart", "fail"], { label: "once" }).open();
+      const set = tools(server);
+      await rejection(set.invoke("exit_now", {}));
+      const waited = await rejection(set.invoke("echo", { text: "x" }));
+      expect(waited).toBeInstanceOf(McpServerClosed);
+      expect(waited.message).toStartWith("MCP server 'once' exited (code 3); reconnecting failed: it didn't start: ");
+      expect(waited.message).toEndWith("\nserver stderr:\nFATAL: can't start again");
+      // No second attempt, and the restart's stderr isn't copied into every later error.
       const { error: later, ended } = await timed(set.invoke("echo", { text: "x" }));
       expect(later).toBeInstanceOf(McpServerClosed);
+      expect(later!.message).toBe("MCP server 'once' exited (code 3); reconnecting failed");
       expect(ended).toBeLessThan(0.5);
+      expect(pids(lastMarker())).toHaveLength(2);
+      expect(server.isClosed).toBe(true);
+    },
+    SLOW,
+  );
+
+  test(
+    "a close during a restart ends the new server and fails the waiting call as closed",
+    async () => {
+      const server = await fake(["--restart", "hang"], { label: "hung" }).open();
+      const set = tools(server);
+      await rejection(set.invoke("exit_now", {}));
+      const waiting = rejection(set.invoke("echo", { text: "x" }));
+      expect(await waitFor(() => pids(lastMarker()).length === 2, 5000)).toBe(true);
+      await server.close();
+      const error = await waiting;
+      expect(error).toBeInstanceOf(McpServerClosed);
+      expect(error.message).toBe("MCP server 'hung' is closed");
+      expect(server.isOpen).toBe(false);
+      expect(childAlive(pids(lastMarker())[1]!)).toBe(false);
+    },
+    SLOW,
+  );
+
+  test(
+    "a stop ends a call waiting on a restart",
+    async () => {
+      const server = await fake(["--restart", "hang"], { label: "hung" }).open();
+      await rejection(tools(server).invoke("exit_now", {}));
+      const stop = new AbortController();
+      const waiting = timed(tools(server).forRun("r", { signal: stop.signal }).invoke("echo", { text: "x" }));
+      expect(await waitFor(() => pids(lastMarker()).length === 2, 5000)).toBe(true);
+      stop.abort();
+      const { error, ended } = await waiting;
+      expect(error).toBeInstanceOf(McpCallCancelled);
+      expect(ended).toBeLessThan(5);
+    },
+    SLOW,
+  );
+
+  test(
+    "a call sent after the server exited but before yian saw it close starts it again",
+    async () => {
+      // The answer comes 50 ms after the exit, and a `sh` holds stdout 2 s more, so the next call
+      // goes out before the transport closes, which it does 200 ms after the exit.
+      const server = await fake([], { label: "parting" }).open();
+      const set = tools(server);
+      expect(await set.invoke("answer_then_exit", { hold: 2 })).toBe("bye");
+      expect(await set.invoke("echo", { text: "x" })).toBe("x");
+      expect(pids(lastMarker())).toHaveLength(2);
+    },
+    SLOW,
+  );
+
+  test(
+    "a server killed during a call names the signal",
+    async () => {
+      const server = await fake([], { label: "killed" }).open();
+      const error = await rejection(tools(server).invoke("kill_self", {}));
+      expect(error).toBeInstanceOf(McpServerClosed);
+      expect(error.message).toBe("MCP server 'killed' was killed by SIGKILL during tool 'kill_self'");
+    },
+    SLOW,
+  );
+
+  test(
+    "every call in flight when the server exits names the tool it was running",
+    async () => {
+      const server = await fake([], { label: "busy" }).open();
+      const set = tools(server);
+      const waiting = rejection(set.invoke("slow", { seconds: 30 }));
+      await sleep(0.3);
+      const exited = await rejection(set.invoke("exit_now", {}));
+      expect(exited.message).toBe("MCP server 'busy' exited (code 3) during tool 'exit_now'");
+      expect((await waiting).message).toBe("MCP server 'busy' exited (code 3) during tool 'slow'");
     },
     SLOW,
   );
@@ -245,9 +385,12 @@ describe("errors that end a call", () => {
       const closing = server.close();
       const { error, ended } = await outcome;
       expect(error).toBeInstanceOf(McpServerClosed);
+      expect(error!.message).toBe("MCP server 'closing' is closed");
       expect(ended).toBeLessThan(0.3 + 3);
       await closing;
-      expect(await rejection(set.invoke("echo", { text: "x" }))).toBeInstanceOf(McpServerClosed);
+      const later = await rejection(set.invoke("echo", { text: "x" }));
+      expect(later).toBeInstanceOf(McpServerClosed);
+      expect(later.message).toBe("MCP server 'closing' is closed");
     },
     SLOW,
   );
@@ -282,6 +425,10 @@ describe("errors that end a call", () => {
       expect(error).toBeInstanceOf(McpServerClosed);
       expect(error.message).toMatch(/ is closed: it sent a message over 1024 bytes \(YIAN_MAX_MCP_MESSAGE_BYTES\)$/);
       expect(server.isClosed).toBe(true);
+      // yian closed it, so the next call doesn't start it again.
+      const later = await rejection(tools(server).invoke("echo", { text: "x" }));
+      expect(later.message).toBe(error.message);
+      expect(pids(lastMarker())).toHaveLength(1);
     },
     SLOW,
   );
@@ -315,6 +462,18 @@ describe("scrubbing the server's secrets", () => {
       expect(error).toBeInstanceOf(McpToolError);
       expect(error.message).toBe("secret: [REDACTED]");
       expect(error.cause).toBeUndefined();
+      expect(error.stack ?? "").not.toContain(secret);
+    },
+    SLOW,
+  );
+
+  test(
+    "an env value is scrubbed from the stderr of a server that exits during a call",
+    async () => {
+      const server = await fake([], { env: { SECRET_TOKEN: secret }, label: "leaky" }).open();
+      const error = await rejection(tools(server).invoke("exit_loudly", {}));
+      expect(error).toBeInstanceOf(McpServerClosed);
+      expect(error.message).toEndWith("\nserver stderr:\nFATAL: database file /data/x.db is locked (token [REDACTED])");
       expect(error.stack ?? "").not.toContain(secret);
     },
     SLOW,
@@ -476,7 +635,7 @@ describe("errors over HTTP", () => {
   }, SLOW);
 
   test(
-    "a restarted session http server is closed",
+    "a call a restarted session http server refuses tries one new session",
     async () => {
       const http = await serveHttp({ stateful: true });
       const server = await httpServer({ url: http.url, label: "restarted" }, "legacy").open();
@@ -485,17 +644,20 @@ describe("errors over HTTP", () => {
       await http.stop();
       await serveHttp({ port: http.port, stateful: true });
       // Another client initializes the restarted server, which then answers the old session 404.
+      // The fake keeps one session, that client's, so it refuses the new one too.
       await httpServer({ url: http.url }, "legacy").open();
       const error = await rejection(set.invoke("echo", { text: "lost session" }));
       expect(error).toBeInstanceOf(McpServerClosed);
-      expect(error.message).toBe("MCP server 'restarted' is closed");
+      expect(error.message).toBe(
+        "MCP server 'restarted' is closed; reconnecting failed: it didn't start: SdkHttpError (HTTP 400)",
+      );
       expect(server.isClosed).toBe(true);
     },
     SLOW,
   );
 
   test(
-    "a restarted session server no client initialized yet is closed too",
+    "a restarted session server no client initialized yet gets a new session too",
     async () => {
       const http = await serveHttp({ stateful: true });
       const server = await httpServer({ url: http.url, label: "restarted" }, "legacy").open();
@@ -504,10 +666,8 @@ describe("errors over HTTP", () => {
       await http.stop();
       await serveHttp({ port: http.port, stateful: true });
       // The new server answers 400 "Server not initialized" until a client initializes it.
-      const error = await rejection(set.invoke("echo", { text: "lost session" }));
-      expect(error).toBeInstanceOf(McpServerClosed);
-      expect(error.message).toBe("MCP server 'restarted' is closed");
-      expect(server.isClosed).toBe(true);
+      expect(await set.invoke("echo", { text: "lost session" })).toBe("lost session");
+      expect(server.isClosed).toBe(false);
     },
     SLOW,
   );

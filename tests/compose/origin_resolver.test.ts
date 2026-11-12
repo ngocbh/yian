@@ -1,6 +1,6 @@
 /** Installing the complete origin resolver at the Compose boundary. */
 
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 
 import { type CompiledFlow, copyGraph } from "../../src/compile/model.ts";
 import { flowFingerprint } from "../../src/compile/manifest.ts";
@@ -9,8 +9,10 @@ import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { LoadError } from "../../src/compose/helpers/errors.ts";
 import { finalizeComposedFlow, loadFlow } from "../../src/compose/loader.ts";
 import { SourceCatalog } from "../../src/compose/source/index.ts";
+import * as diagnostics from "../../src/diagnostics.ts";
 import { type DiagnosticFrame, OriginRef, type OriginResolver, ResolverTable } from "../../src/diagnostics.ts";
 import { Node, NodeKind } from "../../src/nodes/base.ts";
+import { runtime } from "../../src/platform.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 
 import { loadErrorAsync } from "../helpers/declarations.ts";
@@ -164,6 +166,41 @@ test("two aliases rebase the canonical child without changing it", async () => {
     expect(loaded.originResolver!.resolve(origin)!.text).toBe(CHILD);
   }
   for (const key of parentKeys) expect(loaded.originResolver!.resolve(new OriginRef(key))!.text).toBe(PARENT);
+});
+
+test("a child imported under two aliases is validated once", async () => {
+  const resolves = spyOn(ResolverTable.prototype, "resolve");
+  let size = 0;
+  /** How often loading `text` over a fresh child resolves one of the child's own origins. */
+  const reads = async (text: string): Promise<number> => {
+    const child = await loadFlow(CHILD);
+    const canonical = new Set([...iterFlowOrigins(child.compiled)].map((origin) => origin.key));
+    size = canonical.size;
+    resolves.mockClear();
+    await loadFlow(text, { childResolver: () => child });
+    return resolves.mock.calls.filter(([origin]) => canonical.has(origin.key)).length;
+  };
+  try {
+    const one = await reads(ONE_ALIAS_PARENT);
+    // The second alias reads each origin once more, finalizing its own copy, and validates nothing.
+    expect((await reads(PARENT)) - one).toBe(size);
+  } finally {
+    resolves.mockRestore();
+  }
+});
+
+// Spies on a module export, which only Bun allows (Node's ESM namespaces are frozen).
+test.skipIf(runtime !== "bun")("a uses: load that passes formats no origin key", async () => {
+  const child = await loadFlow(CHILD);
+  const formatted = spyOn(diagnostics, "reprText");
+  try {
+    const loaded = await loadFlow(PARENT, { childResolver: () => child });
+    const origins = [...iterFlowOrigins(child.compiled), ...iterFlowOrigins(loaded.compiled)];
+    const keys = new Set(origins.map((origin) => origin.key));
+    expect(formatted.mock.calls.filter(([text]) => keys.has(text as string))).toEqual([]);
+  } finally {
+    formatted.mockRestore();
+  }
 });
 
 test("a delimiter-heavy alias rebases opaque child origins", async () => {

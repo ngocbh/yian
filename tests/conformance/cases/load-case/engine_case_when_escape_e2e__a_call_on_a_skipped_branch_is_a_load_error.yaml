@@ -1,0 +1,56 @@
+# A CASE `when:` passing a skipped branch's output to `upper` would fail the gate with null, so
+# it is a load error; the `:-` after the call covers only the call's result.
+kind: load
+flow: |2
+
+  id: when_escape
+  name: when_escape
+  input:
+    score: !float
+    topic: !str
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: "input.score >= 0.5"
+          then: pro
+      else: con
+    pro:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:pick_pro
+      input:
+        topic: ${input.topic}
+      output: str
+    con:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:pick_con
+      input:
+        topic: ${input.topic}
+      output: str
+    gate2:
+      kind: case
+      cases:
+        - when: '(upper(pro.output) :- con.output) == "con: ACME"'
+          then: hot
+      else: cold
+    hot:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:positive
+      input:
+        topic: ${input.topic}
+      output: str
+    cold:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:cautious
+      input:
+        topic: ${input.topic}
+      output: str
+  output: ${gate2.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "node 'gate2' cases[0].when: (upper(pro.output) :- con.output) == \"con: ACME\" passes pro.output to upper(), which is null when node 'pro' is skipped; give it a default with :-, e.g. (pro.output :- <default>)"
+      frames:
+      - label: flow.yaml
+        range: [29, 15, 29, 65]

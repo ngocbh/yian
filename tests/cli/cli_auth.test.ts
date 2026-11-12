@@ -1143,7 +1143,9 @@ describe("auth list, default and remove", () => {
     const result = await runAuth(setup);
     expect(result.code).toBe(0);
     const lines = loginLines(result.out);
-    expect(lines["openai"]).toBe("  openai: api-key, model gpt-test, organization org-1, project proj-1, headers X-G");
+    expect(lines["openai"]).toBe(
+      "  openai: api-key, model gpt-test, endpoint https://api.openai.com/v1, organization org-1, project proj-1, headers X-G",
+    );
     expect(lines["anthropic"]).toBe("  anthropic: api-key, model claude-test, headers X-A, X-B (default)");
     expect(result.output).not.toContain("private-");
   });
@@ -1710,6 +1712,8 @@ describe("auth OpenAI setup", () => {
     expect(recorded.sent[0]!.headers).toMatchObject({ Authorization: "Bearer private-key", "X-G": "private-gw" });
     expect(recorded.sent.some((request) => request.url.includes("api.openai.com"))).toBe(false);
     expect(setup.store.selection("openai")?.model).toBe("gateway-model");
+    // Saved with the key, so a run at another endpoint is refused.
+    expect(setup.store.selection("openai")?.endpoint).toBe("https://gateway.example.com/v1/");
     expect(result.output).not.toContain("private-");
   });
 
@@ -1741,6 +1745,7 @@ describe("auth OpenAI setup", () => {
     );
     expect(result.code).toBe(0);
     expect(recorded.sent.map((request) => request.url)).toEqual(["https://api.openai.com/v1/models"]);
+    expect(setup.store.selection("openai")?.endpoint).toBe("https://api.openai.com/v1");
   });
 
   test.each<[string, (string | null)[], string]>([
@@ -2655,5 +2660,28 @@ describe("loginModels", () => {
     expect(keys).toHaveLength(2);
     expect(keys).toContainEqual(["anthropic", "private-key"]);
     expect(keys).toContainEqual(["ollama", null]);
+  });
+
+  test("an OpenAI key is listed only at the endpoint its login was made for", async () => {
+    const setup = setupAuth();
+    const gateway = "https://gateway.example.com/v1";
+    await setup.store.save("openai", new ApiKeyCredentials("private-gw-key"), "gw-model", { endpoint: gateway });
+    const listed: (string | null | undefined)[] = [];
+    const listing = async (_provider: unknown, options: ListModelsOptions = {}) => {
+      listed.push(options.baseUrl);
+      return ["gw-model", "gpt-other"];
+    };
+    const { OPENAI_BASE_URL: _, ...env } = setup.env;
+    for (const [base, offered, failed] of [
+      [undefined, ["openai/gw-model"], ["openai"]],
+      ["https://other.example.com/v1", ["openai/gw-model"], ["openai"]],
+      [`${gateway}/`, ["openai/gw-model", "openai/gpt-other"], []],
+    ] as const) {
+      const { io } = fakeIo({ env: base === undefined ? env : { ...env, OPENAI_BASE_URL: base } });
+      const result = await loginModels(io, { ...setup.deps, listModels: listing });
+      expect(result.models.map((each) => `${each.provider}/${each.model}`)).toEqual([...offered]);
+      expect(result.failed).toEqual([...failed]);
+    }
+    expect(listed).toEqual([`${gateway}/`]);
   });
 });

@@ -225,6 +225,18 @@ export function validateBaseUrl(value: unknown): string {
   return value;
 }
 
+/**
+ * Return `value` unchanged if it is an allowed endpoint for an OpenAI key from a saved login or
+ * the environment, such as `OPENAI_BASE_URL`: `validateBaseUrl`'s rule, the scheme read in any
+ * case as a URL reads it, so a key goes over plain `http` only to `localhost`, `127.0.0.1` or
+ * `::1`. Throws `RangeError` as `validateBaseUrl` does; messages never echo the value.
+ */
+export function validateEndpoint(value: unknown): string {
+  if (typeof value !== "string") return validateBaseUrl(value);
+  validateBaseUrl(value.replace(/^[A-Za-z]+(?=:\/\/)/, (scheme) => scheme.toLowerCase()));
+  return value;
+}
+
 // LangChain's test for a value that already names its scheme; anything else holding a ":" gets
 // "http://" prefixed, as `parse_url_with_auth` does.
 const HAS_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;

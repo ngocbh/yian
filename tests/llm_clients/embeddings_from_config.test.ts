@@ -79,6 +79,7 @@ test("openai uses the saved API-key login's key, endpoint and settings", async (
   vars.set("OPENAI_BASE_URL", "https://gateway.example/v1");
   vars.set("OPENAI_API_KEY", "sk-env-unused");
   await authStore().save("openai", new ApiKeyCredentials("sk-saved-4b1f", { "X-Gateway": "gw-7c2e91" }), "gpt-x", {
+    endpoint: "https://gateway.example/v1",
     organization: "org-saved",
   });
   const { requests, send } = recorder();

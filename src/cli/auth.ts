@@ -35,7 +35,8 @@ import {
   validateHeaderValue,
   validateOrganization,
 } from "../llm_clients/connection_settings.ts";
-import { callCredentials, ConnectionSnapshot, embeddingModel } from "../llm_clients/connection.ts";
+import { callCredentials, checkLoginEndpoint, ConnectionSnapshot, embeddingModel } from "../llm_clients/connection.ts";
+import { OPENAI_API_ENDPOINT } from "../llm_clients/endpoints.ts";
 import { chatModelFromConfig, warnOnce } from "../llm_clients/factory.ts";
 import { listModels, ModelListError, timeoutMilliseconds } from "../llm_clients/model_list.ts";
 import { ValidationError } from "../llm_clients/provider_blocks.ts";
@@ -516,6 +517,8 @@ async function setupOpenai(
   let credentials: OAuthCredentials | ApiKeyCredentials;
   let models: readonly string[];
   let choices: readonly string[];
+  // Where an API key's calls go, saved with it so a run elsewhere is refused.
+  let endpoint: string | null = null;
   if (method === "subscription") {
     login ??= await choose(
       "Subscription sign-in:",
@@ -550,8 +553,9 @@ async function setupOpenai(
     credentials = apiCredentials;
     try {
       // Runs with this login go to OPENAI_BASE_URL when it is set, so the key must go there too.
-      const endpoint = ctx.io.env("OPENAI_BASE_URL") || undefined;
-      models = await service.apiModels(apiCredentials, { organization, project, endpoint });
+      const set = ctx.io.env("OPENAI_BASE_URL") || undefined;
+      models = await service.apiModels(apiCredentials, { organization, project, endpoint: set });
+      endpoint = set ?? OPENAI_API_ENDPOINT;
     } catch (error) {
       // The messages are fixed today; scrubbed so no sent secret can reach output.
       if (!(error instanceof AuthError)) throw error;
@@ -566,7 +570,7 @@ async function setupOpenai(
     model = await pickModel(choices, ctx);
   }
   if (!models.includes(model)) throw new AuthError("The selected model is not available for this connection");
-  await store.save("openai", credentials, model, { organization, project, makeDefault });
+  await store.save("openai", credentials, model, { endpoint, organization, project, makeDefault });
   await ctx.io.stdout.write(`Saved OpenAI ${method} authentication with model ${model}\n`);
   return model;
 }
@@ -1272,6 +1276,10 @@ export async function loginModels(
         } else if (provider !== "azure") {
           const variable = provider === "openai" ? "OPENAI_BASE_URL" : BASE_URL_ENV[provider];
           const baseUrl = (variable && io.env(variable)) || null;
+          // The key is listed only where its runs may send it.
+          if (provider === "openai" && selection.method === "api_key") {
+            checkLoginEndpoint(selection, baseUrl ?? OPENAI_API_ENDPOINT);
+          }
           const credentials =
             selection.method === "api_key"
               ? await store.credentials(provider, selection.credentialId)

@@ -1559,8 +1559,10 @@ describe("AuthStore", () => {
     expect([plain.organization, plain.project, plain.headerNames]).toEqual([null, null, []]);
     expect(((await store.credentials("openai", plain.credentialId)) as ApiKeyCredentials).headers).toEqual([]);
     entry = JSON.parse(fs.readFileSync(file, "utf8"))["providers"]["openai"];
-    expect(Object.keys(entry)).toEqual(["credential_id", "credentials", "method", "model"]);
+    expect(Object.keys(entry)).toEqual(["credential_id", "credentials", "endpoint", "method", "model"]);
     expect(entry.credentials).toEqual({ api_key: "sk-open" });
+    // An OpenAI key is saved for the endpoint its calls go to, OpenAI's API unless given.
+    expect(entry.endpoint).toBe("https://api.openai.com/v1");
   });
 
   test("save refuses a login its provider can't use and leaves the store unchanged", async () => {
@@ -1569,6 +1571,8 @@ describe("AuthStore", () => {
     const before = fs.readFileSync(file, "utf8");
     const cases: [string, ApiKeyCredentials | OAuthCredentials | null, { endpoint?: string }][] = [
       ["anthropic", new ApiKeyCredentials("k"), { endpoint: "https://r.openai.azure.com/" }],
+      ["openai", new ApiKeyCredentials("k"), { endpoint: "http://gateway.example.com/v1" }],
+      ["openai", oauth("access", "refresh", 900), { endpoint: "https://gateway.example.com/v1" }],
       ["azure", new ApiKeyCredentials("k"), {}],
       ["azure", new ApiKeyCredentials("k"), { endpoint: "http://r.openai.azure.com/" }],
       ["ollama", new ApiKeyCredentials("k"), {}],

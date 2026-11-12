@@ -9,7 +9,7 @@ import { ProviderError } from "../../llm/errors.ts";
 import { realScheduler, type Scheduler, USER_AGENT } from "../../platform.ts";
 import { YianRangeError } from "../../typesys/errors.ts";
 import { isRecord } from "../../typesys/index.ts";
-import { stripTrailingSlashes, validateBaseUrl } from "../config.ts";
+import { stripTrailingSlashes, validateEndpoint } from "../config.ts";
 import { openaiIdHeaders, validateHeaders } from "../connection_settings.ts";
 import { OPENAI_API_ENDPOINT, SUBSCRIPTION_ENDPOINT } from "../endpoints.ts";
 import { type ApiKeyCredentials, AuthError, HttpResponse, isVisibleText, OAuthCredentials } from "./common.ts";
@@ -550,8 +550,8 @@ export class OpenAIAuth {
     const { endpoint = OPENAI_API_ENDPOINT } = options;
     let base: string;
     try {
-      // The key goes to this host, so hold it to the rules for a config base_url.
-      base = stripTrailingSlashes(validateBaseUrl(endpoint));
+      // The key goes to this host, so hold it to the rule runs hold the endpoint to.
+      base = stripTrailingSlashes(validateEndpoint(endpoint));
     } catch (error) {
       if (error instanceof RangeError) throw new AuthError(`Invalid OPENAI_BASE_URL: ${error.message}`);
       throw error;

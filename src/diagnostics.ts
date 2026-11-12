@@ -2,7 +2,8 @@
  * Source-neutral values for semantic failures and diagnostic presentation, plus the
  * text helpers yian's messages need.
  *
- * This dependency-free leaf separates semantic code from any authoring front end.
+ * This leaf, which imports only yian's own error classes (`typesys/errors`), separates semantic
+ * code from any authoring front end.
  * `Failure` carries stable meaning plus opaque `OriginRef` instances; a front end
  * implements `OriginResolver` to turn those references into concrete presentation
  * frames. `ResolverTable` composes those namespaces through exact immutable routes.
@@ -13,6 +14,8 @@
  * `addNote`, `errorTypeName` and `noteCleanup` help report a thrown error.
  */
 
+
+import { YianRangeError, YianTypeError } from "./typesys/errors.ts";
 /**
  * Compare two strings by UTF-16 code units: the one string order for sorting in yian.
  * Sorting by code point would differ only for astral characters
@@ -383,9 +386,9 @@ export function getCloseMatches(
   n = 3,
   cutoff = 0.6,
 ): string[] {
-  if (!(n > 0)) throw new RangeError(`n must be > 0: ${n}`);
+  if (!(n > 0)) throw new YianRangeError(`n must be > 0: ${n}`);
   if (!(0.0 <= cutoff && cutoff <= 1.0)) {
-    throw new RangeError(`cutoff must be in [0.0, 1.0]: ${cutoff}`);
+    throw new YianRangeError(`cutoff must be in [0.0, 1.0]: ${cutoff}`);
   }
   const result: [number, string][] = [];
   const s = new SequenceMatcher();
@@ -552,7 +555,7 @@ export class OriginRef {
   /** Create an origin, rejecting keys that cannot serve as stable opaque identities. */
   constructor(key: string) {
     if (typeof key !== "string" || key === "") {
-      throw new RangeError("origin key must be a non-empty string");
+      throw new YianRangeError("origin key must be a non-empty string");
     }
     this.key = key;
   }
@@ -597,23 +600,23 @@ export class Failure {
     traceback?: string | null;
   }) {
     const { code, message, nodeId, trace = [], causeType = null, traceback = null } = options;
-    if (typeof code !== "string") throw new TypeError("failure code must be a string");
-    if (!FAILURE_CODES.has(code)) throw new RangeError(`unknown failure code ${reprText(code)}`);
-    if (typeof message !== "string") throw new TypeError("failure message must be a string");
+    if (typeof code !== "string") throw new YianTypeError("failure code must be a string");
+    if (!FAILURE_CODES.has(code)) throw new YianRangeError(`unknown failure code ${reprText(code)}`);
+    if (typeof message !== "string") throw new YianTypeError("failure message must be a string");
     if (nodeId !== null && typeof nodeId !== "string") {
-      throw new TypeError("failure node_id must be a string or null");
+      throw new YianTypeError("failure node_id must be a string or null");
     }
-    if (!Array.isArray(trace)) throw new TypeError("failure trace must be an array");
+    if (!Array.isArray(trace)) throw new YianTypeError("failure trace must be an array");
     for (const origin of trace) {
       if (!(origin instanceof OriginRef)) {
-        throw new TypeError("failure trace item must be an OriginRef");
+        throw new YianTypeError("failure trace item must be an OriginRef");
       }
     }
     if (causeType !== null && typeof causeType !== "string") {
-      throw new TypeError("failure cause_type must be a string or null");
+      throw new YianTypeError("failure cause_type must be a string or null");
     }
     if (traceback !== null && typeof traceback !== "string") {
-      throw new TypeError("failure traceback must be a string or null");
+      throw new YianTypeError("failure traceback must be a string or null");
     }
     this.code = code;
     this.message = message.toWellFormed();
@@ -764,20 +767,20 @@ export class ResolverTable {
     const targets = new Map<string, { resolver: OriginResolver; origin: OriginRef }>();
     for (const entry of entries) {
       if (!Array.isArray(entry) || entry.length !== 3) {
-        throw new TypeError("resolver table entry must be a three-item tuple");
+        throw new YianTypeError("resolver table entry must be a three-item tuple");
       }
       const [newOrigin, delegate, oldOrigin] = entry;
       if (!(newOrigin instanceof OriginRef)) {
-        throw new TypeError("resolver table new origin must be an OriginRef");
+        throw new YianTypeError("resolver table new origin must be an OriginRef");
       }
       if (typeof delegate?.resolve !== "function") {
-        throw new TypeError("resolver table delegate must implement resolve");
+        throw new YianTypeError("resolver table delegate must implement resolve");
       }
       if (!(oldOrigin instanceof OriginRef)) {
-        throw new TypeError("resolver table old origin must be an OriginRef");
+        throw new YianTypeError("resolver table old origin must be an OriginRef");
       }
       if (targets.has(newOrigin.key)) {
-        throw new RangeError(`duplicate resolver table origin ${reprText(newOrigin.key)}`);
+        throw new YianRangeError(`duplicate resolver table origin ${reprText(newOrigin.key)}`);
       }
       targets.set(newOrigin.key, { resolver: delegate, origin: oldOrigin });
     }
@@ -804,13 +807,13 @@ export class ResolverTable {
    */
   resolve(origin: OriginRef): DiagnosticFrame | null {
     if (!(origin instanceof OriginRef)) {
-      throw new TypeError("resolver table resolve requires an OriginRef");
+      throw new YianTypeError("resolver table resolve requires an OriginRef");
     }
     const target = this.#targets.get(origin.key);
     if (target === undefined) return null;
     const frame = target.resolver.resolve(target.origin);
     if (frame !== null && !(frame instanceof DiagnosticFrame)) {
-      throw new TypeError("resolver table delegate must return a DiagnosticFrame or null");
+      throw new YianTypeError("resolver table delegate must return a DiagnosticFrame or null");
     }
     return frame;
   }

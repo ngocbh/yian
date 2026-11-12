@@ -170,6 +170,24 @@ describe("sends", () => {
     expect(invalid.cause).toBeInstanceOf(TypeCheckError);
   });
 
+  test("an event nests at most two levels under the run's value limit: a take reads it inside its envelope", () => {
+    const anys = new Parameter("anys", { contract: new ValueContract(typeFor("Inbox(Any)", new Map())) });
+    const run = started(paramFlow([MSGS, anys], tool("heard", "take")), { defaults: { MAX_VALUE_NESTING: 5n } });
+    const nest = (levels: number) => {
+      let value: unknown = 1;
+      for (let i = 0; i < levels; i++) value = [value];
+      return value;
+    };
+    send(run.log, run.state, nest(3), "anys");
+    const deep = refused(run.state, run.log, () => prepareSend(run.state, "anys", nest(4)));
+    expect([deep.reason, deep.cause instanceof TypeCheckError]).toEqual(["invalid_value", true]);
+    expect(deep.message).toBe(
+      "inbox 'anys' refuses the event at [0][0][0]: it nests deeper than 3 levels; a take hands it to " +
+        "the flow inside {events: [...]}, two levels under the limit of 5 for a yian value (YIAN_MAX_VALUE_NESTING)",
+    );
+    expect(refused(run.state, run.log, () => prepareSend(run.state, "anys", nest(200_000))).reason).toBe("invalid_value");
+  });
+
   test("a refused event names where inside it the check failed", () => {
     const lists = new Parameter("lists", {
       contract: new ValueContract(inboxType(Type.scalar(ValueKind.LIST_INTEGER))),

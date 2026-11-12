@@ -22,6 +22,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
 import { type Env, processEnv } from "./defaults.ts";
+import { YianRangeError, YianTypeError } from "./typesys/errors.ts";
 
 /** The JavaScript runtime yian is running on, detected once at load. */
 export const runtime: "bun" | "node" = typeof Bun !== "undefined" ? "bun" : "node";
@@ -183,7 +184,7 @@ function numberIfSafe(value: number | bigint): number | bigint {
 function safeNumber(value: number | bigint, what: string): number {
   const result = numberIfSafe(value);
   if (typeof result === "bigint") {
-    throw new RangeError(`SQLite integer ${result} in ${what} is outside the safe integer range`);
+    throw new YianRangeError(`SQLite integer ${result} in ${what} is outside the safe integer range`);
   }
   return result;
 }
@@ -632,7 +633,7 @@ export const SLEEP_CHUNK_MS = 3_600_000;
 function mustWait(ms: number, signal: AbortSignal | undefined): boolean {
   signal?.throwIfAborted();
   if (ms <= 0) return false;
-  if (!Number.isFinite(ms)) throw new RangeError(`sleep needs a finite number of milliseconds, got ${ms}`);
+  if (!Number.isFinite(ms)) throw new YianRangeError(`sleep needs a finite number of milliseconds, got ${ms}`);
   return true;
 }
 
@@ -756,7 +757,7 @@ export async function waitForLock(
   }: { timeoutMs?: number; signal?: AbortSignal; scheduler?: Scheduler; private?: boolean } = {},
 ): Promise<FileLock> {
   if (Number.isNaN(timeoutMs) || timeoutMs < 0) {
-    throw new RangeError(`waitForLock needs a timeout of 0 or more milliseconds, got ${timeoutMs}`);
+    throw new YianRangeError(`waitForLock needs a timeout of 0 or more milliseconds, got ${timeoutMs}`);
   }
   let remaining = timeoutMs;
   for (;;) {
@@ -1012,18 +1013,18 @@ export async function safeFetch(
   try {
     url = new URL(input);
   } catch {
-    throw new TypeError("request URL is not a valid http(s) URL");
+    throw new YianTypeError("request URL is not a valid http(s) URL");
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new TypeError("request URL is not a valid http(s) URL");
+    throw new YianTypeError("request URL is not a valid http(s) URL");
   }
-  if (url.username || url.password) throw new TypeError("request URL must not contain user info");
+  if (url.username || url.password) throw new YianTypeError("request URL must not contain user info");
   // Both runtimes echo an invalid header value, which may be a credential.
   let headers: Headers;
   try {
     headers = new Headers(init.headers);
   } catch {
-    throw new TypeError("request headers are not valid HTTP header text");
+    throw new YianTypeError("request headers are not valid HTTP header text");
   }
   if (!headers.has("user-agent")) headers.set("user-agent", USER_AGENT);
   const sent: RequestInit & { timeout: false } = { ...init, headers, redirect: "manual", timeout: false };

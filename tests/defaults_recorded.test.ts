@@ -37,6 +37,7 @@ import {
   SCHEMA_VERSION,
 } from "../src/runtime/log.ts";
 import { type JsonObject, logJson, parseJson } from "../src/typesys/json.ts";
+import { thrownClass } from "./helpers/own_errors.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
 beforeEach(() => install(BUILTIN));
@@ -53,7 +54,7 @@ function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, me
   } catch (error) {
     caught = error;
   }
-  expect((caught as Error | undefined)?.constructor).toBe(cls);
+  expect((caught as Error | undefined)?.constructor).toBe(thrownClass(cls));
   expect((caught as Error).message).toBe(message);
 }
 

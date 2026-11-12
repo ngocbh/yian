@@ -63,6 +63,8 @@ import type { JsonObject } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
 import { drive, engine, graph, NO_ENV, noGrowth, rejected, runWith, serving, textReply } from "../helpers/run_state_fixtures.ts";
+import { thrownClass } from "../helpers/own_errors.ts";
+import { YianRangeError } from "../../src/typesys/errors.ts";
 
 test("ReplyInterrupted carries the partial reply and the usage so far", () => {
   const reply = new Message({ role: "assistant", parts: [new TextPart("partial")] });
@@ -164,7 +166,7 @@ test.each([
   ],
 ] as const)("direct agent rejects invalid variable declarations: %s", (_label, variables, errorClass) => {
   const error = thrown(() => new AgentNode("writer", { variables: variables() }));
-  expect((error as Error).constructor).toBe(errorClass);
+  expect((error as Error).constructor).toBe(thrownClass(errorClass));
 });
 
 test("direct agent rejects duplicate variables and preserves valid default payloads", () => {
@@ -1038,7 +1040,7 @@ describe("forward", () => {
     const error = await rejected(callTimeAgent().run({ [LLM_CONFIG_KEY]: { ...BOUND } }, { steps, models }));
     expect(error).toBeInstanceOf(CapabilityFault);
     expect((error as CapabilityFault).original).toEqual(
-      new RangeError(
+      new YianRangeError(
         "node 'chat' llm_config: recorded config differs from the recomputed one; resume the run with the flow " +
           "and yian version that started it",
       ),

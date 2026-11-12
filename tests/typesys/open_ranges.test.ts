@@ -21,6 +21,7 @@ import {
   typesOverlap,
   ValueKind,
 } from "../../src/typesys/values.ts";
+import { thrownClass } from "../helpers/own_errors.ts";
 
 const INT = ValueKind.INTEGER;
 const NUM = ValueKind.NUMBER;
@@ -30,7 +31,7 @@ function shapeError(typ: Type, cls: typeof TypeError | typeof RangeError): Error
   try {
     typ.validateShape();
   } catch (error) {
-    expect((error as Error).constructor).toBe(cls);
+    expect((error as Error).constructor).toBe(thrownClass(cls));
     return error as Error;
   }
   throw new Error("validateShape() did not throw");

@@ -23,6 +23,7 @@ import {
   ToolCallPart,
   ToolResultPart,
 } from "../../llm/messages.ts";
+import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import type { JsonObject } from "../../typesys/json.ts";
 import { builtinType, newMessagesType } from "../../typesys/types.ts";
 import {
@@ -97,12 +98,12 @@ export function toModelMessage(value: Message): ModelMessage {
  * @throws TypeError for a system message, or a media part given inline or by URL rather than as a run-folder file.
  */
 export function fromModelMessage(message: ModelMessage): Message {
-  if (message.role === "system") throw new TypeError("a Message can't be a system message");
+  if (message.role === "system") throw new YianTypeError("a Message can't be a system message");
   const { format: _format, ...data } = message.toJSON();
   const parts = message.parts.map((part, index) => {
     const json = part.toJSON();
     if (!(part instanceof MediaPart)) return json;
-    if (part.file === null) throw new TypeError(`parts[${index}]: a Message holds media only as a run-folder file`);
+    if (part.file === null) throw new YianTypeError(`parts[${index}]: a Message holds media only as a run-folder file`);
     return { ...json, file: new FileRef(part.file) };
   });
   return checkMessage({ ...data, parts });
@@ -144,7 +145,7 @@ function steerParts(message: Message, onDrop: (part: number) => void): TextPart[
  */
 export function steerValues(step: Readonly<Record<string, unknown>>): readonly unknown[] {
   const values = step["values"];
-  if (!Array.isArray(values)) throw new RangeError("a steer step without its values, which only the engine's copy of the step carries");
+  if (!Array.isArray(values)) throw new YianRangeError("a steer step without its values, which only the engine's copy of the step carries");
   return values;
 }
 
@@ -215,7 +216,7 @@ export function steerMessages(values: readonly unknown[], options: SteerMessageO
 }
 
 /** A conversation no model route can send: the message at `index` and why. */
-export class ConversationError extends RangeError {
+export class ConversationError extends YianRangeError {
   override name = "ConversationError";
   /** The index of the offending message in the list checked. */
   readonly index: number;
@@ -479,7 +480,7 @@ export function rebuildMessages(
       reply = null;
       if (isStructured(step["purpose"])) {
         // The final value as the flow reads it, not the lowered reply that produced it.
-        if (output === null) throw new RangeError("the accepted structured call of an AGENT needs its output value");
+        if (output === null) throw new YianRangeError("the accepted structured call of an AGENT needs its output value");
         const text = new TextPart(writeAsJson(output.toObject()));
         messages.push(fromModelMessage(new ModelMessage({ role: "assistant", parts: [text] })));
       } else {

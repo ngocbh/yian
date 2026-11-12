@@ -27,6 +27,7 @@ import { ASK, BUILTIN_TOOL_IDS, type BuiltinToolId, isPending, SLEEP, TAKE, tool
 import { isPermanentToolError, isToolCheckError, isTransientToolError, ToolCheckError } from "../../tools/errors.ts";
 import { type MemoryGrant, visibleToolName } from "../../tools/grants.ts";
 import { type ToolRef, ToolSet } from "../../tools/registry.ts";
+import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import { eventBytes, type JsonObject } from "../../typesys/json.ts";
 import type { VariablePool } from "../../typesys/pool.ts";
 import { deadlineUtc, formatRecordTime, parseDuration } from "../../typesys/temporal.ts";
@@ -39,6 +40,7 @@ import {
   MemoryRef,
   jsonSafeText,
   jsTypeName,
+  rejectDeepNesting,
   renderValuePath,
   shownText,
   type Type,
@@ -330,13 +332,13 @@ export class ToolNode extends Node {
     super(nodeId, { title });
     if (retries !== null) {
       const message = `node ${reprText(nodeId)}: retries must be a non-negative int, got ${valueRepr(retries)}`;
-      if (!Number.isSafeInteger(retries)) throw new TypeError(message);
-      if (retries < 0) throw new RangeError(message);
+      if (!Number.isSafeInteger(retries)) throw new YianTypeError(message);
+      if (retries < 0) throw new YianRangeError(message);
     }
     const ref = typeof toolId === "string" ? { group: null, name: toolId } : { ...toolId };
     this.toolRef = Object.freeze(ref);
     if (memoryTool && ref.group === null) {
-      throw new RangeError(`node ${reprText(nodeId)}: a memory's tool is named \`{<memory>: <tool>}\``);
+      throw new YianRangeError(`node ${reprText(nodeId)}: a memory's tool is named \`{<memory>: <tool>}\``);
     }
     this.memoryTool = memoryTool;
     this.toolId = visibleToolName(this.toolRef.group, this.toolRef.name);
@@ -458,7 +460,7 @@ export class ToolNode extends Node {
     const [grant] = this.memoryGrants();
     const { input } = grant!;
     const value = inputs[memoryKey(input)];
-    if (!MemoryRef.isMemoryRef(value)) throw new TypeError(`TOOL node ${reprText(this.id)}: \`${input}\` holds no memory`);
+    if (!MemoryRef.isMemoryRef(value)) throw new YianTypeError(`TOOL node ${reprText(this.id)}: \`${input}\` holds no memory`);
     const session = memorySession(caps, value.identity);
     const local = memoryTools(value, session, grant!, { kind: "tool", name: staticPathOf(this.id) });
     return tools.withLocalGroups(new Map([[input, local]]), MEMORY_SCOPE_LABEL);
@@ -588,8 +590,9 @@ export class ToolNode extends Node {
    * Shape the `tool_result` step for a host's `complete` on this node's call: the value checked
    * against the declared output (for `ask`, the answer type without null), or the error.
    *
-   * @throws TypeCheckError when the output isn't a yian value or fails that type, or is null for
-   *   an `ask` (null means nobody answered in time).
+   * @throws TypeCheckError when the output isn't a yian value, nests deeper than
+   *   `MAX_VALUE_NESTING`, or fails that type, or is null for an `ask` (null means nobody answered
+   *   in time).
    */
   override waitResultStep(call: CallView, result: CompleteResult): JsonObject {
     if (Object.hasOwn(result, "error")) {
@@ -601,6 +604,8 @@ export class ToolNode extends Node {
     const typ = declared !== null && this.builtin === ASK ? declared.replace({ nullable: false }) : declared;
     const where = `complete(${reprText(call.callId)}) output`;
     const output = fromHost((result as { output: unknown }).output, where);
+    // Here, not at the next advance, which would fail the node's output contract on it.
+    rejectDeepNesting(output, where);
     if (this.builtin === ASK && output === null) {
       throw new TypeCheckError(`${where}: an ask's answer can't be null; null means nobody answered in time`);
     }

@@ -10,6 +10,7 @@
  */
 
 import { compareCodeUnits, type Failure, OriginRef, reprText } from "../diagnostics.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import {
   buildValueAs,
   canonicalTypeLabel,
@@ -49,7 +50,7 @@ export type OriginMapper = (origin: OriginRef) => OriginRef;
  */
 export function validateOptionalOrigin(origin: unknown, fieldName: string): asserts origin is OriginRef | null {
   if (origin !== null && !(origin instanceof OriginRef)) {
-    throw new TypeError(`${fieldName} must be an OriginRef or null`);
+    throw new YianTypeError(`${fieldName} must be an OriginRef or null`);
   }
 }
 
@@ -62,16 +63,16 @@ export function validateOptionalOrigin(origin: unknown, fieldName: string): asse
 export function mapOrigin(origin: OriginRef | null, mapper: OriginMapper): OriginRef | null {
   if (origin === null) return null;
   const mapped: unknown = mapper(origin);
-  if (!(mapped instanceof OriginRef)) throw new TypeError("origin mapper must return an OriginRef");
+  if (!(mapped instanceof OriginRef)) throw new YianTypeError("origin mapper must return an OriginRef");
   return mapped;
 }
 
 /** Validate one value path made of exact string and integer segments. */
 function validatePath(path: unknown, fieldName: string): asserts path is ValuePath {
-  if (!Array.isArray(path)) throw new TypeError(`${fieldName} path must be an array`);
+  if (!Array.isArray(path)) throw new YianTypeError(`${fieldName} path must be an array`);
   for (const segment of path as unknown[]) {
     if (typeof segment !== "string" && !(typeof segment === "number" && Number.isInteger(segment))) {
-      throw new TypeError(`${fieldName} path segment must be an exact str or int, got ${jsTypeName(segment)}`);
+      throw new YianTypeError(`${fieldName} path segment must be an exact str or int, got ${jsTypeName(segment)}`);
     }
   }
 }
@@ -145,19 +146,19 @@ export class SeedConnection {
   constructor(childStartId: string, inputName: string, seedPath: readonly (string | number)[]) {
     for (const name of [childStartId, inputName]) {
       if (typeof name !== "string" || !name) {
-        throw new RangeError("seed connection identifiers must be non-empty strings");
+        throw new YianRangeError("seed connection identifiers must be non-empty strings");
       }
     }
     if (!Array.isArray(seedPath) || (seedPath.length !== 1 && seedPath.length !== 2)) {
-      throw new RangeError("seed_path must be a name or an index/name tuple");
+      throw new YianRangeError("seed_path must be a name or an index/name tuple");
     }
     const name: unknown = seedPath[seedPath.length - 1];
     if (typeof name !== "string" || !name) {
-      throw new RangeError("seed_path must end in a non-empty parameter name");
+      throw new YianRangeError("seed_path must end in a non-empty parameter name");
     }
     const index: unknown = seedPath[0];
     if (seedPath.length === 2 && (typeof index !== "number" || !Number.isInteger(index) || index < 0)) {
-      throw new RangeError("seed_path item index must be a non-negative integer");
+      throw new YianRangeError("seed_path item index must be a non-negative integer");
     }
     this.childStartId = childStartId;
     this.inputName = inputName;
@@ -178,9 +179,9 @@ export class ChildFlowBoundary {
    */
   constructor(startId: string, endId: string) {
     if ([startId, endId].some((name) => typeof name !== "string" || !name)) {
-      throw new RangeError("child boundary identifiers must be non-empty strings");
+      throw new YianRangeError("child boundary identifiers must be non-empty strings");
     }
-    if (startId === endId) throw new RangeError("child START and END must be distinct");
+    if (startId === endId) throw new YianRangeError("child START and END must be distinct");
     this.startId = startId;
     this.endId = endId;
     Object.freeze(this);
@@ -211,7 +212,7 @@ export class Binding {
     const { origin = null, contract = null } = options;
     validateOptionalOrigin(origin, "binding origin");
     if (contract !== null && !isExactly(contract, ValueContract)) {
-      throw new TypeError("binding contract must be a ValueContract or null");
+      throw new YianTypeError("binding contract must be a ValueContract or null");
     }
     this.source = source;
     this.origin = origin;
@@ -248,16 +249,16 @@ export class ValueTemplate {
    */
   constructor(value: TemplateTree, origins: readonly (readonly [ValuePath, OriginRef])[] = []) {
     if (!isRecord(value) && !Array.isArray(value)) {
-      throw new TypeError(`value template must hold a record or array, got ${jsTypeName(value)}`);
+      throw new YianTypeError(`value template must hold a record or array, got ${jsTypeName(value)}`);
     }
-    if (!Array.isArray(origins)) throw new TypeError("value template origins must be an array");
+    if (!Array.isArray(origins)) throw new YianTypeError("value template origins must be an array");
     for (const entry of origins as unknown[]) {
       if (!Array.isArray(entry) || entry.length !== 2) {
-        throw new TypeError("each value template origin must be a (path, origin) tuple");
+        throw new YianTypeError("each value template origin must be a (path, origin) tuple");
       }
       const [path, origin] = entry as unknown[];
       validatePath(path, "value template origin");
-      if (!(origin instanceof OriginRef)) throw new TypeError("value template origin must be an OriginRef");
+      if (!(origin instanceof OriginRef)) throw new YianTypeError("value template origin must be an OriginRef");
     }
     this.value = value;
     this.origins = freezeEntries(origins);
@@ -446,27 +447,27 @@ export class ContractOrigins {
   ) {
     const { default: fallback = null, entries = [] } = options;
     validateOptionalOrigin(fallback, "contract default origin");
-    if (!Array.isArray(entries)) throw new TypeError("contract origin entries must be an array");
+    if (!Array.isArray(entries)) throw new YianTypeError("contract origin entries must be an array");
 
     const paths: ValuePath[] = [];
     for (const entry of entries as unknown[]) {
       if (!Array.isArray(entry) || entry.length !== 2) {
-        throw new TypeError("each contract origin entry must be a (path, origin) tuple");
+        throw new YianTypeError("each contract origin entry must be a (path, origin) tuple");
       }
       const [path, origin] = entry as unknown[];
       validatePath(path, "contract origin entry");
       if (path.length === 0) {
-        throw new RangeError("contract origin entry path cannot be empty; use default for the root");
+        throw new YianRangeError("contract origin entry path cannot be empty; use default for the root");
       }
-      if (!(origin instanceof OriginRef)) throw new TypeError("contract origin entry value must be an OriginRef");
+      if (!(origin instanceof OriginRef)) throw new YianTypeError("contract origin entry value must be an OriginRef");
       if (paths.some((seen) => sameItems(seen, path))) {
-        throw new RangeError(`duplicate contract origin path: ${valueRepr(path)}`);
+        throw new YianRangeError(`duplicate contract origin path: ${valueRepr(path)}`);
       }
       paths.push(path);
     }
 
     if (paths.some((path, i) => i > 0 && comparePaths(paths[i - 1]!, path) > 0)) {
-      throw new RangeError("contract origin entries must be sorted canonically");
+      throw new YianRangeError("contract origin entries must be sorted canonically");
     }
     this.default = fallback;
     this.entries = freezeEntries(entries);
@@ -509,8 +510,8 @@ export class ValueContract {
    * @throws TypeError when `type` isn't a `Type` or `origins` isn't a `ContractOrigins`.
    */
   constructor(type: Type, origins: ContractOrigins = new ContractOrigins()) {
-    if (!(type instanceof Type)) throw new TypeError("value contract type must be a Type");
-    if (!(origins instanceof ContractOrigins)) throw new TypeError("value contract origins must be ContractOrigins");
+    if (!(type instanceof Type)) throw new YianTypeError("value contract type must be a Type");
+    if (!(origins instanceof ContractOrigins)) throw new YianTypeError("value contract origins must be ContractOrigins");
     this.type = type;
     this.origins = origins;
     Object.freeze(this);
@@ -549,30 +550,30 @@ export class PartialRecordContract {
    * @throws RangeError for no field, a duplicate name, or no opaque field.
    */
   validateShape(): void {
-    if (!Array.isArray(this.fields)) throw new TypeError("partial record fields must be an array");
-    if (this.fields.length === 0) throw new RangeError("partial record contract must declare at least one field");
+    if (!Array.isArray(this.fields)) throw new YianTypeError("partial record fields must be an array");
+    if (this.fields.length === 0) throw new YianRangeError("partial record contract must declare at least one field");
     const names = new Set<string>();
     let hasOpaqueField = false;
     for (const entry of this.fields as unknown[]) {
       if (!Array.isArray(entry) || entry.length !== 2) {
-        throw new TypeError("partial record fields must be (name, optional contract) tuples");
+        throw new YianTypeError("partial record fields must be (name, optional contract) tuples");
       }
       const [name, contract] = entry as unknown[];
       if (typeof name !== "string" || !name) {
-        throw new TypeError("partial record field names must be non-empty strings");
+        throw new YianTypeError("partial record field names must be non-empty strings");
       }
-      if (names.has(name)) throw new RangeError(`duplicate partial record field ${reprText(name)}`);
+      if (names.has(name)) throw new YianRangeError(`duplicate partial record field ${reprText(name)}`);
       names.add(name);
       if (contract === null) {
         hasOpaqueField = true;
       } else if (!isExactly(contract, ValueContract)) {
-        throw new TypeError(
+        throw new YianTypeError(
           "partial record field contracts must be exact ValueContract " +
             `values or null, got ${jsTypeName(contract)} for ${reprText(name)}`,
         );
       }
     }
-    if (!hasOpaqueField) throw new RangeError("a fully typed record must use one exact ValueContract");
+    if (!hasOpaqueField) throw new YianRangeError("a fully typed record must use one exact ValueContract");
   }
 
   /** The closed field-name sequence in declaration order. */
@@ -625,7 +626,7 @@ export function sameOutputContract(a: OutputContract | null, b: OutputContract |
 export function outputContractType(contract: OutputContract | null): Type | null {
   if (contract === null) return null;
   if (isExactly(contract, ValueContract)) {
-    if (!(contract.type instanceof Type)) throw new TypeError("value contract type must be a Type");
+    if (!(contract.type instanceof Type)) throw new YianTypeError("value contract type must be a Type");
     contract.type.validateShape();
     return contract.type;
   }
@@ -633,12 +634,12 @@ export function outputContractType(contract: OutputContract | null): Type | null
     contract.validateShape();
     for (const [, fieldContract] of contract.fields) {
       if (fieldContract === null) continue;
-      if (!(fieldContract.type instanceof Type)) throw new TypeError("value contract type must be a Type");
+      if (!(fieldContract.type instanceof Type)) throw new YianTypeError("value contract type must be a Type");
       fieldContract.type.validateShape();
     }
     return null;
   }
-  throw new TypeError(
+  throw new YianTypeError(
     "output contract must be an exact ValueContract, " +
       "PartialRecordContract, or null, " +
       `got ${jsTypeName(contract)}`,
@@ -798,7 +799,7 @@ export function outputContractFieldError(
     unionRoot = null,
   } = options;
   if (!Array.isArray(fields) || (fields as unknown[]).some((field) => typeof field !== "string" || !field)) {
-    throw new TypeError("output contract fields must be non-empty strings");
+    throw new YianTypeError("output contract fields must be non-empty strings");
   }
   if (isExactly(contract, PartialRecordContract)) {
     contract.validateShape();
@@ -1101,21 +1102,21 @@ export class NodeSteps {
     resumesSince: ((n: number) => number) | null = null,
     seqOf: ((n: number) => number) | null = null,
   ) {
-    if (typeof starts !== "number" || !Number.isSafeInteger(starts)) throw new TypeError("starts must be an int");
-    if (starts < 1) throw new RangeError("starts must be at least 1");
+    if (typeof starts !== "number" || !Number.isSafeInteger(starts)) throw new YianTypeError("starts must be an int");
+    if (starts < 1) throw new YianRangeError("starts must be at least 1");
     if (!Array.isArray(prior) || !prior.every((step: unknown) => isRecord(step))) {
-      throw new TypeError("prior must be an array of records");
+      throw new YianTypeError("prior must be an array of records");
     }
-    if (typeof record !== "function") throw new TypeError("record must be callable");
-    if (!Array.isArray(calls)) throw new TypeError("calls must be an array");
-    if (currentCalls !== null && typeof currentCalls !== "function") throw new TypeError("currentCalls must be callable or null");
-    if (nextStep !== null && typeof nextStep !== "function") throw new TypeError("nextStep must be callable or null");
+    if (typeof record !== "function") throw new YianTypeError("record must be callable");
+    if (!Array.isArray(calls)) throw new YianTypeError("calls must be an array");
+    if (currentCalls !== null && typeof currentCalls !== "function") throw new YianTypeError("currentCalls must be callable or null");
+    if (nextStep !== null && typeof nextStep !== "function") throw new YianTypeError("nextStep must be callable or null");
     if (resumesSince !== null && typeof resumesSince !== "function") {
-      throw new TypeError("resumesSince must be callable or null");
+      throw new YianTypeError("resumesSince must be callable or null");
     }
-    if (seqOf !== null && typeof seqOf !== "function") throw new TypeError("seqOf must be callable or null");
+    if (seqOf !== null && typeof seqOf !== "function") throw new YianTypeError("seqOf must be callable or null");
     if (typeof maxEventBytes !== "number" || !Number.isSafeInteger(maxEventBytes) || maxEventBytes < 1) {
-      throw new RangeError("maxEventBytes must be a positive int");
+      throw new YianRangeError("maxEventBytes must be a positive int");
     }
     this.starts = starts;
     this.prior = Object.freeze([...prior]);
@@ -1126,7 +1127,7 @@ export class NodeSteps {
     this.seqOf =
       seqOf ??
       ((n) => {
-        throw new RangeError(`step ${String(n)} has no seq outside a run`);
+        throw new YianRangeError(`step ${String(n)} has no seq outside a run`);
       });
     this.#next = prior.length + 1;
     this.#current = currentCalls;
@@ -1228,14 +1229,14 @@ export class Parameter {
       defaultOrigin = null,
     } = options;
     if (contract !== null && !(contract instanceof ValueContract)) {
-      throw new TypeError("parameter contract must be a ValueContract or null");
+      throw new YianTypeError("parameter contract must be a ValueContract or null");
     }
     validateOptionalOrigin(origin, "parameter origin");
     validateOptionalOrigin(defaultOrigin, "parameter default origin");
-    if (required && hasDefault) throw new RangeError("a required parameter cannot have a default");
-    if (!hasDefault && fallback !== null) throw new RangeError("parameter default requires has_default=true");
+    if (required && hasDefault) throw new YianRangeError("a required parameter cannot have a default");
+    if (!hasDefault && fallback !== null) throw new YianRangeError("parameter default requires has_default=true");
     if (!hasDefault && defaultOrigin !== null) {
-      throw new RangeError("parameter default_origin requires has_default=true");
+      throw new YianRangeError("parameter default_origin requires has_default=true");
     }
     this.name = name;
     this.contract = contract;
@@ -1322,7 +1323,7 @@ export function* iterOriginCarrier(carrier: OriginCarrier, seen: Set<object>): G
     if (carrier.defaultOrigin !== null) yield carrier.defaultOrigin;
     return;
   }
-  throw new TypeError(`unsupported origin carrier: ${jsTypeName(carrier)}`);
+  throw new YianTypeError(`unsupported origin carrier: ${jsTypeName(carrier)}`);
 }
 
 /**
@@ -1379,7 +1380,7 @@ export function rewriteOriginCarrier<C extends OriginCarrier>(
       defaultOrigin: mapOrigin(carrier.defaultOrigin, mapper),
     });
   } else {
-    throw new TypeError(`unsupported origin carrier: ${jsTypeName(carrier)}`);
+    throw new YianTypeError(`unsupported origin carrier: ${jsTypeName(carrier)}`);
   }
   seen.set(carrier, rebuilt);
   return rebuilt as C;

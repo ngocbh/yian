@@ -30,6 +30,7 @@ const ALLOWED: Record<string, string> = {
   // Format versions and fixed codes.
   "runtime/log.ts: SCHEMA_VERSION": "run-record schema version",
   "runtime/log.ts: RETIRED_SCHEMAS": "schema versions this version refuses by name",
+  "runtime/state.ts: TAKE_ENVELOPE_LEVELS": "levels a take's output adds around an event: its record and events list",
   "runtime/run_index.ts: INDEX_VERSION": "run index layout version",
   "runtime/run_index.ts: STORED_VERSION": "run index layout and run-log schema versions, as user_version holds them",
   "memory/vectordb.ts: SEARCH_CHUNK_ROWS": "rows a VectorDBMemory search reads at once, so its memory use stays bounded",

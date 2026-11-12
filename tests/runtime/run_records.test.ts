@@ -59,6 +59,7 @@ import {
 } from "../../src/typesys/index.ts";
 import { JSONDecodeError, type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
 import { flow, fragmentBuilder, pool, startData, stateSnapshot, untimed } from "../helpers/run_state_fixtures.ts";
+import { thrownClass } from "../helpers/own_errors.ts";
 
 /** Assert `fn` throws a `TypeCheckError` with exactly `message` at `path`. */
 function expectTypeCheck(fn: () => unknown, message: string, path: readonly (string | number)[]): void {
@@ -81,7 +82,7 @@ function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, me
   } catch (error) {
     caught = error;
   }
-  expect((caught as Error | undefined)?.constructor).toBe(cls);
+  expect((caught as Error | undefined)?.constructor).toBe(thrownClass(cls));
   expect((caught as Error).message).toBe(message);
   return caught as Error;
 }
@@ -1538,6 +1539,7 @@ test("a line that isn't UTF-8 is invalid record JSON", () => {
   );
   bytes[bytes.indexOf(0x78)] = 0xff;
   // Only the class is checked: the decoder's message differs between Bun and Node.
+  // The decoder's own TypeError.
   expect(invalidJsonCause(bytes).constructor).toBe(TypeError);
 });
 

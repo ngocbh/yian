@@ -36,6 +36,8 @@ import {
 import * as json from "../../src/typesys/json.ts";
 import { folderSyncs } from "../helpers/folder_syncs.ts";
 import { testNode } from "../helpers/test_node.ts";
+import { YianRangeError, YianTypeError } from "../../src/typesys/errors.ts";
+import { thrownClass } from "../helpers/own_errors.ts";
 
 const DIGEST = "d".repeat(64);
 /** A record time, as a log writes one, and a clock that always reads it. */
@@ -54,7 +56,7 @@ function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, me
   } catch (error) {
     caught = error;
   }
-  expect((caught as Error | undefined)?.constructor).toBe(cls);
+  expect((caught as Error | undefined)?.constructor).toBe(thrownClass(cls));
   expect((caught as Error).message).toBe(message);
   return caught as Error;
 }
@@ -845,7 +847,7 @@ test.each<[string, string, string, (new (...args: never[]) => Error) | null]>([
   fs.writeFileSync(file, `${wireLine()}\n${line}\n`);
   const error = expectError(() => readRunLog(file), RangeError, `run log ${file} line 2 (seq 1): ${message}`);
   if (causeClass === null) expect(error.cause).toBeUndefined();
-  else expect((error.cause as Error).constructor).toBe(causeClass);
+  else expect((error.cause as Error).constructor).toBe(thrownClass(causeClass));
 });
 
 test("readRunLog reads a line that isn't UTF-8 as invalid record JSON", () => {
@@ -1129,7 +1131,7 @@ test("iterRunRecords with payloads: false reads the envelope and node id without
     RangeError,
     `run log ${file} line 1 (seq 0): invalid node_started payload fields; missing=[], extra=["extra"]`,
   );
-  expect((error.cause as Error).constructor).toBe(RangeError);
+  expect((error.cause as Error).constructor).toBe(YianRangeError);
 });
 
 test.each<[string, string, new (...args: never[]) => Error, string]>([
@@ -1145,7 +1147,7 @@ test.each<[string, string, new (...args: never[]) => Error, string]>([
     RangeError,
     `run log ${file} line 1 (seq 0): ${message}`,
   );
-  expect((error.cause as Error).constructor).toBe(causeClass);
+  expect((error.cause as Error).constructor).toBe(thrownClass(causeClass));
 });
 
 test("iterRunRecords yields only the kinds asked for, still checking every line's envelope and seq", () => {
@@ -2111,7 +2113,7 @@ test("an invalid append retains the prior complete prefix and doesn't poison the
   const log = baselineLog(file);
   try {
     const error = expectAppendFailure(log, file, () => log.append({ nodeId: "x" } as never));
-    expect((error as Error).constructor).toBe(TypeError);
+    expect((error as Error).constructor).toBe(YianTypeError);
     expect((error as Error).message).toBe("unsupported run record: Object");
     expect(log.append(new NodeStartedRecord("second")).seq).toBe(1);
   } finally {

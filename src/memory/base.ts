@@ -10,6 +10,7 @@
  * It imports only `typesys`.
  */
 
+import { YianTypeError } from "../typesys/errors.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import type { Recall } from "../typesys/memory.ts";
 
@@ -235,18 +236,18 @@ export function checkContract(instance: MemoryBase): void {
   const cls = instance.constructor as typeof MemoryBase;
   const contract = cls.contract as MemoryContract | undefined;
   if (contract === undefined) {
-    throw new TypeError(`${cls.name} declares no memory contract; give it a static contract`);
+    throw new YianTypeError(`${cls.name} declares no memory contract; give it a static contract`);
   }
   const names = contract.tools.map((tool) => tool.name);
   const twice = names.find((name, i) => names.indexOf(name) !== i);
-  if (twice !== undefined) throw new TypeError(`${cls.name}'s contract lists the tool ${twice} twice`);
+  if (twice !== undefined) throw new YianTypeError(`${cls.name}'s contract lists the tool ${twice} twice`);
   if (!Object.hasOwn(BUILTIN_MEMORY_TOOLS, contract.type)) return;
   const expected = BUILTIN_MEMORY_TOOLS[contract.type as keyof typeof BUILTIN_MEMORY_TOOLS];
   const declares = `${cls.name} declares ${contract.type}`;
   const missing = expected.filter((name) => !names.includes(name));
-  if (missing.length > 0) throw new TypeError(`${declares} but lacks its tools: ${missing.join(", ")}`);
+  if (missing.length > 0) throw new YianTypeError(`${declares} but lacks its tools: ${missing.join(", ")}`);
   const added = names.filter((name) => !expected.includes(name));
   if (added.length > 0) {
-    throw new TypeError(`${declares} but adds tools ${contract.type} doesn't have: ${added.join(", ")}`);
+    throw new YianTypeError(`${declares} but adds tools ${contract.type} doesn't have: ${added.join(", ")}`);
   }
 }

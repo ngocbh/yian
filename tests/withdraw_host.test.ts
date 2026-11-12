@@ -169,3 +169,28 @@ test("two hosts racing: two live withdraws in one tick give the sends once and [
   expect(done.status, done.failure?.message).toBe("succeeded");
   expect(both).toEqual([[{ seq: sent, value: "more" }], []]);
 });
+
+test("a send nested past the value limit is refused, appending nothing, and withdraw then takes back nothing", async () => {
+  const log = freshLog();
+  const flow = await loadFlow(
+    "id: notes\nname: notes\ninput:\n  notes: !Inbox(Any)\nnodes:\n  heard:\n    kind: tool\n    tool_id: take\n" +
+      "    input: {from: \"${input.notes}\", take: all}\noutput: ${heard.output.events}\n",
+  );
+  expect((await runFlow(flow, {}, { env, log, runId: "r" })).status).toBe("waiting");
+  const nest = (levels: number) => {
+    let value: unknown = 1;
+    for (let i = 0; i < levels; i++) value = [value];
+    return value;
+  };
+  const before = readFileSync(log);
+  for (const levels of [99, 200_000]) {
+    const error = (await rejected(send(log, "notes", nest(levels), { env }))) as DeliveryRefused;
+    expect([error instanceof DeliveryRefused, error.reason]).toEqual([true, "invalid_value"]);
+  }
+  expect(readFileSync(log).equals(before)).toBe(true);
+  expect(await withdraw(log, "notes", { env })).toEqual([]);
+  // At the limit less the take's two levels, the send lands and the run reads it.
+  await send(log, "notes", nest(98), { env });
+  await close(log, "notes", { env });
+  expect((await advance({ log, env })).status).toBe("succeeded");
+});

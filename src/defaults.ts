@@ -24,6 +24,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import process from "node:process";
 
+import { YianRangeError } from "./typesys/errors.ts";
 import { MAX_EVENT_BYTES } from "./typesys/event_limit.ts";
 
 /** The kind of an entry: a language safety limit, a setting's default, or an input cap. */
@@ -616,12 +617,12 @@ function unknownNames(recorded: Readonly<Record<string, bigint | number>>): stri
 }
 
 /** An environment variable holds a value its entry does not accept. */
-export class DefaultsError extends RangeError {
+export class DefaultsError extends YianRangeError {
   override name = "DefaultsError";
 }
 
 /** A run started with values that differ from the ones in effect now. */
-export class DefaultsMismatchError extends RangeError {
+export class DefaultsMismatchError extends YianRangeError {
   override name = "DefaultsMismatchError";
 }
 

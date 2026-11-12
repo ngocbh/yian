@@ -36,6 +36,7 @@ import { type DeclaredTypes, evaluateWhenRecord, localDeclared } from "../expr/e
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import type { Request, ToolSpec } from "../llm/messages.ts";
 import type { MemorySession } from "../memory/base.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import type { RecordedMemoryTool } from "../typesys/memory.ts";
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
@@ -263,16 +264,16 @@ export class Pending {
    */
   constructor(callIds: Iterable<string>, options: { wait?: WaitRequest | null } = {}) {
     // A string is an Iterable<string>, so it would typecheck and wait on its characters.
-    if (typeof callIds === "string") throw new TypeError("pending call ids must be a collection of ids, not one string");
+    if (typeof callIds === "string") throw new YianTypeError("pending call ids must be a collection of ids, not one string");
     const ids = [...callIds];
     for (const id of ids) {
-      if (typeof id !== "string") throw new TypeError(`pending call ids must be strings, got ${jsTypeName(id)}`);
-      if (id === "") throw new RangeError("pending call ids must be non-empty");
+      if (typeof id !== "string") throw new YianTypeError(`pending call ids must be strings, got ${jsTypeName(id)}`);
+      if (id === "") throw new YianRangeError("pending call ids must be non-empty");
     }
-    if (new Set(ids).size !== ids.length) throw new RangeError("pending call ids must be unique");
+    if (new Set(ids).size !== ids.length) throw new YianRangeError("pending call ids must be unique");
     const wait = options.wait ?? null;
     if (wait !== null) checkWaitRequest(wait);
-    if ((ids.length > 0) === (wait !== null)) throw new RangeError("Pending takes call ids or a wait, exactly one");
+    if ((ids.length > 0) === (wait !== null)) throw new YianRangeError("Pending takes call ids or a wait, exactly one");
     this.callIds = Object.freeze(ids);
     this.wait = wait === null ? null : Object.freeze({ ...wait });
     Object.freeze(this);
@@ -284,22 +285,22 @@ function checkWaitRequest(wait: WaitRequest): void {
   const tool: unknown = isRecord(wait) ? wait.tool : undefined;
   if (tool === "take") {
     const take = wait as Extract<WaitRequest, { tool: "take" }>;
-    if (typeof take.inbox !== "string" || take.inbox === "") throw new RangeError("a take's inbox must be a non-empty string");
-    if (take.mode !== "one" && take.mode !== "all") throw new RangeError(`a take's mode must be "one" or "all", got ${reprText(String(take.mode))}`);
+    if (typeof take.inbox !== "string" || take.inbox === "") throw new YianRangeError("a take's inbox must be a non-empty string");
+    if (take.mode !== "one" && take.mode !== "all") throw new YianRangeError(`a take's mode must be "one" or "all", got ${reprText(String(take.mode))}`);
     if (take.timeoutSeconds !== null && !isFiniteNumber(take.timeoutSeconds)) {
-      throw new RangeError("a take's timeoutSeconds must be null or a finite number");
+      throw new YianRangeError("a take's timeoutSeconds must be null or a finite number");
     }
   } else if (tool === "sleep") {
     const sleep = wait as Extract<WaitRequest, { tool: "sleep" }>;
     const hasUntil = sleep.until !== null;
     const hasFor = sleep.forSeconds !== null;
-    if (hasUntil === hasFor) throw new RangeError("a sleep takes until or forSeconds, exactly one");
+    if (hasUntil === hasFor) throw new YianRangeError("a sleep takes until or forSeconds, exactly one");
     if (hasUntil && (typeof sleep.until !== "string" || sleep.until === "")) {
-      throw new RangeError("a sleep's until must be a non-empty string");
+      throw new YianRangeError("a sleep's until must be a non-empty string");
     }
-    if (hasFor && !isFiniteNumber(sleep.forSeconds)) throw new RangeError("a sleep's forSeconds must be a finite number");
+    if (hasFor && !isFiniteNumber(sleep.forSeconds)) throw new YianRangeError("a sleep's forSeconds must be a finite number");
   } else {
-    throw new TypeError(`a wait's tool must be "take" or "sleep", got ${isRecord(wait) ? reprText(String(tool)) : jsTypeName(wait)}`);
+    throw new YianTypeError(`a wait's tool must be "take" or "sleep", got ${isRecord(wait) ? reprText(String(tool)) : jsTypeName(wait)}`);
   }
 }
 
@@ -638,7 +639,7 @@ export interface NodeMemories {
  *   that memory: the run didn't bind a memory its nodes were bound to.
  */
 export function memorySession(caps: NodeCaps, identity: string): MemorySession {
-  if (caps.memories === undefined) throw new CapabilityFault(new TypeError("the evaluator gave no memory sessions"));
+  if (caps.memories === undefined) throw new CapabilityFault(new YianTypeError("the evaluator gave no memory sessions"));
   try {
     return caps.memories.session(identity);
   } catch (error) {
@@ -903,7 +904,7 @@ export abstract class Node {
       !isExactly(outputContract, ValueContract) &&
       !isExactly(outputContract, PartialRecordContract)
     ) {
-      throw new TypeError(
+      throw new YianTypeError(
         "output_contract must be an exact ValueContract, PartialRecordContract, or null, " +
           `got ${jsTypeName(outputContract)}`,
       );
@@ -927,9 +928,9 @@ export abstract class Node {
    * @throws RangeError for an `OriginRef` whose key bypassed the constructor's check.
    */
   failureTrace(operationOrigin: OriginRef | null = null): readonly OriginRef[] {
-    if (!Array.isArray(this.originContext)) throw new TypeError("node origin_context must be an array");
+    if (!Array.isArray(this.originContext)) throw new YianTypeError("node origin_context must be an array");
     for (const origin of this.originContext) {
-      if (!(origin instanceof OriginRef)) throw new TypeError("node origin_context item must be an OriginRef");
+      if (!(origin instanceof OriginRef)) throw new YianTypeError("node origin_context item must be an OriginRef");
       // Rebuilding checks the key, which an object made without the constructor never had checked.
       new OriginRef(origin.key);
     }
@@ -1010,7 +1011,7 @@ export abstract class Node {
   setOriginChildren(children: readonly unknown[]): void {
     const count = this.originChildren().length;
     if (children.length !== count) {
-      throw new RangeError(`node ${reprText(this.id)} has ${count} static children, not ${children.length}`);
+      throw new YianRangeError(`node ${reprText(this.id)} has ${count} static children, not ${children.length}`);
     }
   }
 
@@ -1055,7 +1056,7 @@ export abstract class Node {
    * @throws TypeError for a node that doesn't produce messages.
    */
   messageSteps(_steps: readonly Readonly<JsonObject>[]): number[] {
-    throw new TypeError(`node ${reprText(this.id)} produces no messages`);
+    throw new YianTypeError(`node ${reprText(this.id)} produces no messages`);
   }
 
   /**
@@ -1071,7 +1072,7 @@ export abstract class Node {
     _output: TypedValue | null,
     _localTypes: ReadonlyMap<string, Type | null> | null = null,
   ): TypedValue {
-    throw new TypeError(`node ${reprText(this.id)} produces no messages`);
+    throw new YianTypeError(`node ${reprText(this.id)} produces no messages`);
   }
 
   /**
@@ -1300,7 +1301,7 @@ export abstract class Node {
    *   tool's output type or ask's answer schema.
    */
   waitResultStep(call: CallView, _result: CompleteResult, _options: WaitResultOptions = {}): JsonObject {
-    throw new TypeError(`node ${reprText(this.id)} registers no host calls; it can't take ${reprText(call.callId)}'s result`);
+    throw new YianTypeError(`node ${reprText(this.id)} registers no host calls; it can't take ${reprText(call.callId)}'s result`);
   }
 
   /**

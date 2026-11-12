@@ -52,6 +52,7 @@ import { realScheduler, type Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { toolCallId } from "../tools/context.ts";
 import { ToolSet } from "../tools/registry.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { referenceRoot } from "../typesys/pool.ts";
 import {
   type EvaluatedOutcome,
@@ -291,7 +292,7 @@ export function prepareDelivery(state: RunState, op: DeliveryOp): PreparedTransi
     default: {
       const unknown: never = op;
       const kind = (unknown as { readonly kind: unknown }).kind;
-      throw new TypeError(`a delivery's kind must be send, withdraw, complete, close, interrupt or cancel, got ${reprText(String(kind))}`);
+      throw new YianTypeError(`a delivery's kind must be send, withdraw, complete, close, interrupt or cancel, got ${reprText(String(kind))}`);
     }
   }
 }
@@ -408,8 +409,8 @@ export class FlowEngine {
       options;
     const { memories = null } = options;
     const { runDir = null, live = null } = options;
-    if (!isExactly(state, RunState)) throw new TypeError("FlowEngine expects a RunState");
-    if (!isRunLog(log)) throw new TypeError("FlowEngine expects a RunLog");
+    if (!isExactly(state, RunState)) throw new YianTypeError("FlowEngine expects a RunState");
+    if (!isRunLog(log)) throw new YianTypeError("FlowEngine expects a RunLog");
     this.state = state;
     this.log = log;
     this.growBuilder = growBuilder;
@@ -521,7 +522,7 @@ export class FlowEngine {
     this.#validateAuthority();
     if (this.state.result !== null) return [];
     if (this.state.inFlight.size > 0) {
-      throw new RangeError("FlowEngine requires unfinished starts to be requeued with RunResumed before execution");
+      throw new YianRangeError("FlowEngine requires unfinished starts to be requeued with RunResumed before execution");
     }
     const onHostAbort = (): void => this.#stop("signal", host!.reason);
     host?.addEventListener("abort", onHostAbort, { once: true });
@@ -733,7 +734,7 @@ export class FlowEngine {
     const calls = callViews(state, nodeId);
     const stepSeq = (n: number): number => {
       const seq = state.nodeStepSeqs.get(nodeId)?.[n - 1];
-      if (seq === undefined) throw new RangeError(`node ${reprText(nodeId)} has no step ${String(n)}`);
+      if (seq === undefined) throw new YianRangeError(`node ${reprText(nodeId)} has no step ${String(n)}`);
       return seq;
     };
     return new NodeSteps(
@@ -770,7 +771,7 @@ export class FlowEngine {
     if (state.flow.nodes.get(nodeId)!.readsSteerInbox !== true) return null;
     return (inbox) => {
       if (typeof inbox !== "string" || inboxElementType(state, inbox) === null) {
-        throw new CapabilityFault(new RangeError(`steer inbox ${reprText(String(inbox))} is no inbox the START declares`));
+        throw new CapabilityFault(new YianRangeError(`steer inbox ${reprText(String(inbox))} is no inbox the START declares`));
       }
       this.#applyStop(nodeId, inbox);
       const controller = new AbortController();
@@ -1205,16 +1206,16 @@ export class FlowEngine {
   #validateAuthority(): void {
     const { state, log } = this;
     if (typeof state.runId !== "string" || !state.runId) {
-      throw new RangeError("FlowEngine requires an initialized RunState");
+      throw new YianRangeError("FlowEngine requires an initialized RunState");
     }
     if (state.runId !== log.runId) {
-      throw new RangeError(`run-state/log run_id mismatch: state ${reprText(state.runId)}, log ${reprText(log.runId)}`);
+      throw new YianRangeError(`run-state/log run_id mismatch: state ${reprText(state.runId)}, log ${reprText(log.runId)}`);
     }
     if (state.nextSequence !== log.nextSequence) {
-      throw new RangeError(`run-state/log sequence mismatch: state ${state.nextSequence}, log ${log.nextSequence}`);
+      throw new YianRangeError(`run-state/log sequence mismatch: state ${state.nextSequence}, log ${log.nextSequence}`);
     }
     if (state.numWorkers !== this.numWorkers) {
-      throw new RangeError(`run-state/engine worker mismatch: state ${state.numWorkers}, engine ${this.numWorkers}`);
+      throw new YianRangeError(`run-state/engine worker mismatch: state ${state.numWorkers}, engine ${this.numWorkers}`);
     }
   }
 }

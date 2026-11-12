@@ -68,6 +68,7 @@ import {
 } from "../../nodes/contracts.ts";
 import { ToolNode } from "../../nodes/tool/node.ts";
 import { TAKE } from "../../tools/context.ts";
+import { YianTypeError } from "../../typesys/errors.ts";
 import { messagesKey, NEW_MESSAGES, poolRootLength } from "../../typesys/pool.ts";
 import { builtinType, type TypeRegistry } from "../../typesys/types.ts";
 import {
@@ -414,7 +415,7 @@ export function validateReferences(
   // paths without inventing a Type for opaque fields.
   for (const [nodeId, contract] of producers) {
     if (!isExactly(contract, ValueContract) && !isExactly(contract, PartialRecordContract)) {
-      throw new TypeError(
+      throw new YianTypeError(
         "producer contracts must be ValueContract or PartialRecordContract values, " +
           `got ${jsTypeName(contract)} for ${reprText(nodeId)}`,
       );

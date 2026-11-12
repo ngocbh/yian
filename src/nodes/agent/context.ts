@@ -22,6 +22,7 @@ import { type Scheduler, syncFolder, warn } from "../../platform.ts";
 import type { Skill } from "../../skills/catalog.ts";
 import type { ToolGrant } from "../../tools/grants.ts";
 import type { ToolSet } from "../../tools/registry.ts";
+import { YianRangeError } from "../../typesys/errors.ts";
 import { eventBytes, type JsonObject, logJson } from "../../typesys/json.ts";
 import { FileRef, jsonSafeText, type Type, type ValueRecord } from "../../typesys/values.ts";
 import { CapabilityFault, type NodeCaps, type SteerInbox } from "../base.ts";
@@ -302,7 +303,7 @@ export class AgentSteps {
         return { n, values: steerValues(step) };
       } catch (error) {
         const message = `node ${reprText(this.#nodeId)} step ${n}: ${(error as RangeError).message}; resume through the engine`;
-        throw new CapabilityFault(new RangeError(message, { cause: error }));
+        throw new CapabilityFault(new YianRangeError(message, { cause: error }));
       }
     });
   }
@@ -400,7 +401,7 @@ export class AgentSteps {
         const recorded = step[field];
         if (recorded === rebuilt) continue;
         throw new CapabilityFault(
-          new RangeError(
+          new YianRangeError(
             `node ${reprText(this.#nodeId)} step ${n}: recorded ${field} ${String(recorded)}, rebuilt ${rebuilt}; ` +
               "resume with the host that started the run",
           ),
@@ -807,7 +808,7 @@ export function writeRunFile(dir: string, bytes: Uint8Array, mime: string): File
 function base64Bytes(data: string, mime: string): Buffer {
   const bytes = Buffer.from(data, "base64");
   if (bytes.toString("base64").replace(/=+$/, "") !== data.replace(/=+$/, "")) {
-    throw new RangeError(`${mime} media data isn't base64`);
+    throw new YianRangeError(`${mime} media data isn't base64`);
   }
   return bytes;
 }
@@ -880,7 +881,7 @@ export async function fileToInline(request: Request, runDir: string): Promise<Re
       }
       const uri = part.file!.uri;
       const path = resolve(runDir, uri);
-      const outside = new RangeError(`media file ${uri} is not inside the run's media folder`);
+      const outside = new YianRangeError(`media file ${uri} is not inside the run's media folder`);
       // Checked on the path as written first, so an escaping uri is refused whether or not it exists.
       if (!path.startsWith(resolve(runDir, "media") + sep)) throw outside;
       let bytes: Buffer;

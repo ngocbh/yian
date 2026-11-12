@@ -69,6 +69,8 @@ import {
   snapshot,
   Spawner,
 } from "../helpers/run_state_fixtures.ts";
+import { YianRangeError } from "../../src/typesys/errors.ts";
+import { thrownClass } from "../helpers/own_errors.ts";
 
 /** A `Parameter` subclass, near-canonical, proving growth requires the exact carrier. */
 class ParameterSubclass extends Parameter {}
@@ -148,7 +150,7 @@ function caught(fn: () => unknown): unknown {
 /** Assert `fn` throws an error of exactly class `cls` whose message matches `message`. */
 function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, message: RegExp): void {
   const error = caught(fn) as Error;
-  expect(error.constructor).toBe(cls);
+  expect(error.constructor).toBe(thrownClass(cls));
   expect(error.message).toMatch(message);
 }
 
@@ -159,7 +161,7 @@ function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, me
 function expectRejected(fn: () => unknown, cls: new (...args: never[]) => Error, message: RegExp | string): Error {
   const error = caught(fn) as GrowthRejected;
   expect(error.constructor).toBe(GrowthRejected);
-  expect(error.original.constructor).toBe(cls);
+  expect(error.original.constructor).toBe(thrownClass(cls));
   if (typeof message === "string") expect(error.original.message).toBe(message);
   else expect(error.original.message).toMatch(message);
   expect(error.cause).toBe(error.original);
@@ -518,7 +520,7 @@ test("growth replay unwraps a fragment rejection to its original", () => {
     error = caught(() => prepareRecord(replay, prepared.record, { growBuilder: cyclicBuilder }));
   });
 
-  expect((error as Error).constructor).toBe(RangeError);
+  expect((error as Error).constructor).toBe(YianRangeError);
   expect((error as Error).message).toBe(
     'growth fragment creates a cycle involving ["spawn/child/end","spawn/child/start"]',
   );
@@ -1381,7 +1383,7 @@ test.each([
 
   const error = caught(() => prepareExpanded(state, "spawn", new Grow({}, [oldId]), fragmentBuilder)) as Error;
 
-  expect(error.constructor).toBe(RangeError);
+  expect(error.constructor).toBe(YianRangeError);
   expect(error.message).toMatch(message);
   expect(error.cause).toBeInstanceOf(ExpressionError);
 });

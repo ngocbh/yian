@@ -21,6 +21,7 @@
 import { current } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { LOAD_SKILL } from "../skills/tool.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { type JsonObject, parseJson } from "../typesys/json.ts";
 import { defaultRunId } from "../typesys/seeding.ts";
 import {
@@ -236,23 +237,23 @@ export function registerTool(
   options?: { descriptionOverride?: string },
 ): FunctionTool {
   if (RESERVED_TOOL_NAMES.has(toolId)) {
-    throw new RangeError(`tool name ${reprText(toolId)} is reserved by yian: ${reservedReason(toolId)}`);
+    throw new YianRangeError(`tool name ${reprText(toolId)} is reserved by yian: ${reservedReason(toolId)}`);
   }
-  if (TOOL_REGISTRY.has(toolId)) throw new RangeError(`Duplicate tool id '${toolId}'`);
+  if (TOOL_REGISTRY.has(toolId)) throw new YianRangeError(`Duplicate tool id '${toolId}'`);
   if (!isFunctionTool(tool)) {
-    throw new TypeError(
+    throw new YianTypeError(
       `registerTool(${reprText(toolId)}) got a ${jsTypeName(tool)}; it accepts a FunctionTool. ` +
         "Pass anything else in the run's tools mapping instead",
     );
   }
   if (tool.name !== toolId) {
-    throw new RangeError(
+    throw new YianRangeError(
       `tool id ${reprText(toolId)} names a FunctionTool named ${reprText(tool.name)}; its name must match its id`,
     );
   }
   const description: unknown = options?.descriptionOverride;
   if (description !== undefined && description !== null && typeof description !== "string") {
-    throw new TypeError(`registerTool(${reprText(toolId)}) descriptionOverride must be a string`);
+    throw new YianTypeError(`registerTool(${reprText(toolId)}) descriptionOverride must be a string`);
   }
   TOOL_REGISTRY.set(
     toolId,
@@ -300,7 +301,7 @@ export function resolveTools(ids: readonly string[]): FunctionTool[] {
   return ids.map((id) => {
     const tool = TOOL_REGISTRY.get(id);
     if (tool === undefined) {
-      throw new RangeError(`Unknown tool id '${id}'. Known tools: ${writeAsText(sortedIds(TOOL_REGISTRY))}`);
+      throw new YianRangeError(`Unknown tool id '${id}'. Known tools: ${writeAsText(sortedIds(TOOL_REGISTRY))}`);
     }
     return tool;
   });
@@ -441,21 +442,21 @@ function askToolOf(key: string, entry: unknown): AskTool {
     !isRecord(record.inputs) ||
     !(required === undefined || (Array.isArray(required) && required.every((name) => typeof name === "string")))
   ) {
-    throw new TypeError(
+    throw new YianTypeError(
       `${where} must be a handler function or {handler, inputs, required?}; yian supplies the base schema`,
     );
   }
   const inputs = record.inputs as JsonObject;
   for (const name of Object.keys(inputs)) {
     if (Object.hasOwn(ASK_BASE_PROPERTIES, name) || Object.hasOwn(ASK_TRUSTED_PROPERTIES, name)) {
-      throw new RangeError(
+      throw new YianRangeError(
         `${where} input ${reprText(name)} is part of yian's ask surface; name the extra input differently`,
       );
     }
   }
   for (const name of (required ?? []) as string[]) {
     if (!Object.hasOwn(inputs, name)) {
-      throw new RangeError(`${where} requires ${reprText(name)}, which isn't one of its inputs`);
+      throw new YianRangeError(`${where} requires ${reprText(name)}, which isn't one of its inputs`);
     }
   }
   return { handler: record.handler as AskHandler, inputs, required: (required ?? []) as string[] };
@@ -468,9 +469,9 @@ function groupTools(group: string, items: readonly unknown[]): FunctionTool[] {
     const item = items[index];
     const where = `tools[${JSON.stringify(group)}][${index}]`;
     if (isMcpServer(item)) {
-      throw new TypeError(`${where} is an MCP server; pass it as its own tools entry, which becomes its group`);
+      throw new YianTypeError(`${where} is an MCP server; pass it as its own tools entry, which becomes its group`);
     }
-    if (!isFunctionTool(item)) throw new TypeError(`${where} must be a FunctionTool, got ${jsTypeName(item)}`);
+    if (!isFunctionTool(item)) throw new YianTypeError(`${where} must be a FunctionTool, got ${jsTypeName(item)}`);
     tools.push(item);
   }
   return tools;
@@ -484,12 +485,12 @@ function groupTools(group: string, items: readonly unknown[]): FunctionTool[] {
  */
 function serverTools(key: string, server: McpServer): readonly FunctionTool[] {
   if (!server.isOpen) {
-    throw new TypeError(
+    throw new YianTypeError(
       `tools[${JSON.stringify(key)}] is an MCP server that isn't open; open it with "await server.open()" ` +
         "or pass it to runFlow/advance, which open it",
     );
   }
-  if (server.isClosed) throw new RangeError(`tools[${JSON.stringify(key)}]: MCP server '${server.label}' is closed`);
+  if (server.isClosed) throw new YianRangeError(`tools[${JSON.stringify(key)}]: MCP server '${server.label}' is closed`);
   return groupTools(key, server.tools);
 }
 
@@ -578,16 +579,16 @@ export class ToolSet {
     this.hostContext = options?.context;
     this.trustedSchemas = new Map();
     if (tools === undefined || tools === null) return;
-    if (!isRecord(tools)) throw new TypeError("tools must be a record of tool id to tool, or null");
+    if (!isRecord(tools)) throw new YianTypeError("tools must be a record of tool id to tool, or null");
     const keys = Object.keys(tools);
     if (Object.hasOwn(tools, ASK) && Object.hasOwn(tools, ASK_USER)) {
-      throw new TypeError('pass the ask handler once, as tools["ask"] (tools["ask_user"] is its old name)');
+      throw new YianTypeError('pass the ask handler once, as tools["ask"] (tools["ask_user"] is its old name)');
     }
     const built = new Map<string, FunctionTool>();
     const groupItems = new Map<string, readonly FunctionTool[]>();
     const trusted = new Map<string, JsonObject>();
     for (const key of keys) {
-      if (key === "") throw new TypeError("tool ids in tools must be non-empty strings");
+      if (key === "") throw new YianTypeError("tool ids in tools must be non-empty strings");
       const entry: unknown = tools[key];
       if (key === ASK || key === ASK_USER) {
         const spec = askToolOf(key, entry);
@@ -599,10 +600,10 @@ export class ToolSet {
         const userProperties = { ...(ASK_USER_PARAMETERS.properties as JsonObject), ...ASK_USER_TRUSTED_PROPERTIES };
         trusted.set(ASK_USER, { ...ASK_USER_PARAMETERS, properties: userProperties });
       } else if (RESERVED_TOOL_NAMES.has(key)) {
-        throw new RangeError(`tools[${JSON.stringify(key)}]: the name is reserved by yian: ${reservedReason(key)}`);
+        throw new YianRangeError(`tools[${JSON.stringify(key)}]: the name is reserved by yian: ${reservedReason(key)}`);
       } else if (isFunctionTool(entry)) {
         if (entry.name !== key) {
-          throw new RangeError(
+          throw new YianRangeError(
             `tool ${reprText(key)} is a FunctionTool named ${reprText(entry.name)}; its name must match its key`,
           );
         }
@@ -612,7 +613,7 @@ export class ToolSet {
       } else if (Array.isArray(entry)) {
         groupItems.set(key, groupTools(key, entry));
       } else {
-        throw new TypeError(
+        throw new YianTypeError(
           `tools[${JSON.stringify(key)}] must be a FunctionTool, an MCP server, or an array of FunctionTools, ` +
             `got ${jsTypeName(entry)}`,
         );
@@ -629,21 +630,21 @@ export class ToolSet {
       for (const item of items) {
         const name = item.name;
         if (RESERVED_TOOL_NAMES.has(name)) {
-          throw new RangeError(
+          throw new YianRangeError(
             `group ${reprText(group)} has a tool named ${reprText(name)}, a reserved name; ${reservedReason(name)}`,
           );
         }
         // A group may hold a tool of its own name, as MCP servers often do (`fetch`); a tool named
         // like another key would make the bare name mean two things.
         if (name !== group && topLevel.has(name)) {
-          throw new RangeError(
+          throw new YianRangeError(
             `tool ${reprText(name)} in group ${reprText(group)} clashes with tools[${JSON.stringify(name)}]`,
           );
         }
         const had = members.get(name);
         if (had !== undefined && had !== item) {
           const where = `appears twice in group ${reprText(group)}`;
-          throw new RangeError(`tool ${reprText(name)} ${where} as different tools`);
+          throw new YianRangeError(`tool ${reprText(name)} ${where} as different tools`);
         }
         if (had !== undefined) continue;
         members.set(name, item);
@@ -653,13 +654,13 @@ export class ToolSet {
         const visible = visibleToolName(group, name);
         const text = `${group}'s ${reprText(name)}`;
         if (RESERVED_TOOL_NAMES.has(visible)) {
-          throw new RangeError(
+          throw new YianRangeError(
             `${text} could show as ${reprText(visible)}, a reserved name; rename one`,
           );
         }
         const other = shown.get(visible);
         if (other !== undefined && other.item !== item) {
-          throw new RangeError(
+          throw new YianRangeError(
             `${other.text} and ${text} could both show as ${reprText(visible)}; rename one`,
           );
         }
@@ -691,17 +692,17 @@ export class ToolSet {
         const tool = local.get(ref.name);
         if (tool !== undefined) return tool;
         const has = local.size === 0 ? "no tools" : [...local.keys()].join(", ");
-        throw new RangeError(`\`${ref.group}\` has no tool \`${ref.name}\`; it has ${has}`);
+        throw new YianRangeError(`\`${ref.group}\` has no tool \`${ref.name}\`; it has ${has}`);
       }
       const members = this.groupMap.get(ref.group);
       if (members === undefined) {
         const known = `tool groups in this run: [${this.groups.join(", ")}]`;
-        throw new RangeError(`unknown tool group ${reprText(ref.group)}; ${known}`);
+        throw new YianRangeError(`unknown tool group ${reprText(ref.group)}; ${known}`);
       }
       const tool = members.get(ref.name);
       if (tool === undefined) {
         const has = members.size === 0 ? "no tools" : [...members.keys()].join(", ");
-        throw new RangeError(`\`${ref.group}\` has no tool \`${ref.name}\`; it has ${has}`);
+        throw new YianRangeError(`\`${ref.group}\` has no tool \`${ref.name}\`; it has ${has}`);
       }
       return tool;
     }
@@ -709,10 +710,10 @@ export class ToolSet {
     const local = this.localTools.get(toolId);
     if (local !== undefined) return local;
     if ((toolId === ASK || toolId === ASK_USER) && !this.toolMap?.has(toolId)) {
-      throw new RangeError(`no ask handler for this run; ${ASK_HINT}`);
+      throw new YianRangeError(`no ask handler for this run; ${ASK_HINT}`);
     }
     if (toolId === TAKE || toolId === SLEEP) {
-      throw new RangeError(
+      throw new YianRangeError(
         `${reprText(toolId)} is an engine built-in, not a tool; reach it with a TOOL node's tool_id: ${toolId}`,
       );
     }
@@ -724,7 +725,7 @@ export class ToolSet {
       const [first] = group.keys();
       const one = `; name one of its tools, as \`{${toolId}: ${first}}\``;
       const what = first === undefined ? ", and it has no tools" : one;
-      throw new RangeError(`${reprText(toolId)} is a tool group, not a tool${what}`);
+      throw new YianRangeError(`${reprText(toolId)} is a tool group, not a tool${what}`);
     }
     const tool = (this.toolMap ?? TOOL_REGISTRY).get(toolId);
     if (tool !== undefined) return tool;
@@ -737,7 +738,7 @@ export class ToolSet {
     }
     if (holders.length === 1) return holders[0]!.tool;
     const known = writeAsText([...this.toolIds]);
-    throw new RangeError(`unknown tool id ${reprText(toolId)}; known tools: ${known}`);
+    throw new YianRangeError(`unknown tool id ${reprText(toolId)}; known tools: ${known}`);
   }
 
   /** The group tools named `name`, one per distinct tool, each under the first group holding it. */
@@ -811,7 +812,7 @@ export class ToolSet {
   withLocalTools(tools: readonly FunctionTool[], label: string): this {
     const local = new Map<string, FunctionTool>();
     for (const tool of tools) {
-      if (local.has(tool.name)) throw new RangeError(`local tools hold ${reprText(tool.name)} twice`);
+      if (local.has(tool.name)) throw new YianRangeError(`local tools hold ${reprText(tool.name)} twice`);
       local.set(tool.name, tool);
     }
     const copy = Object.assign(Object.create(Object.getPrototypeOf(this)), this) as this;
@@ -834,7 +835,7 @@ export class ToolSet {
     for (const [group, tools] of groups) {
       const members = new Map<string, FunctionTool>();
       for (const tool of tools) {
-        if (members.has(tool.name)) throw new RangeError(`local group ${reprText(group)} holds ${reprText(tool.name)} twice`);
+        if (members.has(tool.name)) throw new YianRangeError(`local group ${reprText(group)} holds ${reprText(tool.name)} twice`);
         members.set(tool.name, tool);
       }
       local.set(group, members);
@@ -1016,7 +1017,7 @@ export class ToolSet {
       return await this.invoke(await this.validate(target, inputs, { signal: options?.signal }), options);
     }
     const entry = CALLS.get(target);
-    if (entry === undefined) throw new TypeError("invoke takes a tool id or a CheckedCall from validate");
+    if (entry === undefined) throw new YianTypeError("invoke takes a tool id or a CheckedCall from validate");
     return await this.call(entry.tool, target.toolId, entry.args(), inputsOrOptions as InvokeOptions | undefined);
   }
 
@@ -1098,7 +1099,7 @@ export class ToolSet {
       const returned: unknown = await validator["~standard"].validate(toHost(payload));
       // The validator may be slow; a run that stopped meanwhile doesn't call the tool.
       signal?.throwIfAborted();
-      const result = standardResult(returned, `tool ${reprText(toolId)} arguments: the validator`, TypeError);
+      const result = standardResult(returned, `tool ${reprText(toolId)} arguments: the validator`, YianTypeError);
       if (result.issues !== undefined) {
         throw new ToolCheckError(
           validatorFailure(`tool ${reprText(toolId)} arguments failed its validator`, result.issues),
@@ -1128,7 +1129,7 @@ export class ToolSet {
     const toolId = typeof ref === "string" ? ref : ref.name;
     const where = `tool ${reprText(toolId)} arguments`;
     const payload = fromHost(inputs, where);
-    if (!isRecord(payload)) throw new TypeError(`${where} must be a record, got ${jsTypeName(inputs)}`);
+    if (!isRecord(payload)) throw new YianTypeError(`${where} must be a record, got ${jsTypeName(inputs)}`);
     if (toolId === ASK_USER && Object.hasOwn(payload, "options")) payload.options = normalizeOptions(payload.options);
     const schema = trusted ? (this.trustedSchemas.get(toolId) ?? tool.parametersJsonSchema) : tool.parametersJsonSchema;
     const scope = toolId === ASK || toolId === ASK_USER ? (trusted ? "trusted" : "public") : null;
@@ -1315,7 +1316,7 @@ function checkArguments(
   if (unsupported.length > 0 && extra !== true && extraSchema === undefined) {
     const path = scope === null ? "" : ` on its ${scope} invocation path`;
     const allowed = Object.keys(properties).sort(compareCodeUnits);
-    throw new RangeError(
+    throw new YianRangeError(
       `tool ${name} received unsupported argument(s) ${writeAsText(unsupported)}${path}; ` +
         `allowed: ${writeAsText(allowed)}`,
     );
@@ -1324,7 +1325,7 @@ function checkArguments(
   const missing = (Array.isArray(required) ? required : []).filter(
     (key): key is string => typeof key === "string" && !Object.hasOwn(payload, key),
   );
-  if (missing.length > 0) throw new RangeError(`tool ${name} is missing required argument(s) ${writeAsText(missing)}`);
+  if (missing.length > 0) throw new YianRangeError(`tool ${name} is missing required argument(s) ${writeAsText(missing)}`);
   for (const [key, value] of Object.entries(payload)) {
     const prop = Object.hasOwn(properties, key) ? properties[key] : extraSchema;
     if (prop === undefined) continue;

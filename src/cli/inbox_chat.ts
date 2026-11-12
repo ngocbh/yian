@@ -47,6 +47,7 @@ import { type InboxClosedRecord, iterRunRecords, recordTimeMs } from "../runtime
 import { wakeAt } from "../runtime/waits.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import { builtinType } from "../typesys/types.ts";
 import { canonicalTypeLabel, isInboxType, typeEquals, type Value, writeAsText } from "../typesys/values.ts";
 import type { ChildEvent } from "./chat_events.ts";
@@ -333,18 +334,18 @@ async function recordedFlow(log: string, engineTrace: boolean, io: CliIo): Promi
   try {
     const { status } = inspectRun(log);
     if (status === "succeeded" || status === "failed" || status === "cancelled") {
-      return await failed(new RangeError(`the run in ${log} has already ended (${status}); start a new chat`));
+      return await failed(new YianRangeError(`the run in ${log} has already ended (${status}); start a new chat`));
     }
     if (status === "unstarted") {
       return await failed(
-        new RangeError(
+        new YianRangeError(
           `the run in ${log} ended inside its run start, before its inputs were recorded; delete its log and start a new chat`,
         ),
       );
     }
     const flow = await loadRecordedFlow(log, { env: io.env });
     if (flow !== null) return flow;
-    return await failed(new RangeError("this run's flow was built in code; resume it with advance({log, flow})"));
+    return await failed(new YianRangeError("this run's flow was built in code; resume it with advance({log, flow})"));
   } catch (error) {
     if (error instanceof LoadError) {
       await renderDiagnostic(error.diagnostic, io.stderr, io.env);

@@ -10,6 +10,7 @@
 
 import { current } from "../defaults.ts";
 import { checkConnectionHeaderValue } from "../llm/auth.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import { isRecord } from "../typesys/index.ts";
 
 const CREDENTIAL = "yian sends the credential itself";
@@ -69,16 +70,16 @@ function codePoints(text: string): number {
 export function validateHeaderName(name: unknown, provider: string | null): string {
   const limit = current().maxHeaderValueChars;
   if (typeof name === "string" && codePoints(name) > limit) {
-    throw new RangeError(`header names must be at most ${limit} characters`);
+    throw new YianRangeError(`header names must be at most ${limit} characters`);
   }
   if (typeof name !== "string" || !TOKEN.test(name)) {
-    throw new RangeError("header names must be HTTP tokens: letters, digits and !#$%&'*+-.^_`|~");
+    throw new YianRangeError("header names must be HTTP tokens: letters, digits and !#$%&'*+-.^_`|~");
   }
   const lower = name.toLowerCase();
   // Both tables have a null prototype, so a name such as `constructor` finds no entry.
   const reason =
     REFUSED_HEADER_NAMES[lower] ?? (provider === "openai" ? OPENAI_REFUSED_HEADER_NAMES[lower] : undefined);
-  if (reason !== undefined) throw new RangeError(`header ${name} is refused: ${reason}`);
+  if (reason !== undefined) throw new YianRangeError(`header ${name} is refused: ${reason}`);
   return name;
 }
 
@@ -92,7 +93,7 @@ export function validateHeaderValue(name: string, value: unknown): string {
   try {
     return checkConnectionHeaderValue(name, value);
   } catch (error) {
-    throw new RangeError((error as Error).message);
+    throw new YianRangeError((error as Error).message);
   }
 }
 
@@ -105,16 +106,16 @@ export function validateHeaderValue(name: string, value: unknown): string {
  * or value refused by `validateHeaderName` or `validateHeaderValue`.
  */
 export function validateHeaders(headers: unknown, provider: string | null): Record<string, string> {
-  if (!isRecord(headers)) throw new RangeError("headers must be a mapping of header name to value");
+  if (!isRecord(headers)) throw new YianRangeError("headers must be a mapping of header name to value");
   const entries = Object.entries(headers).filter(([, value]) => value !== undefined);
   const limit = current().maxConnectionHeaders;
-  if (entries.length > limit) throw new RangeError(`headers must have at most ${limit} headers`);
+  if (entries.length > limit) throw new YianRangeError(`headers must have at most ${limit} headers`);
   const seen = new Set<string>();
   const checked: [string, string][] = [];
   for (const [name, value] of entries) {
     validateHeaderName(name, provider);
     const lower = name.toLowerCase();
-    if (seen.has(lower)) throw new RangeError(`header ${name} is given more than once (names ignore case)`);
+    if (seen.has(lower)) throw new YianRangeError(`header ${name} is given more than once (names ignore case)`);
     seen.add(lower);
     checked.push([name, validateHeaderValue(name, value)]);
   }
@@ -130,10 +131,10 @@ export function validateHeaders(headers: unknown, provider: string | null): Reco
  * ASCII.
  */
 export function validateOrganization(value: unknown, field: string): string {
-  if (typeof value !== "string") throw new RangeError(`${field} must be a string`);
+  if (typeof value !== "string") throw new YianRangeError(`${field} must be a string`);
   const limit = current().maxOrganizationChars;
-  if (codePoints(value) > limit) throw new RangeError(`${field} must be at most ${limit} characters`);
-  if (!VISIBLE_ASCII.test(value)) throw new RangeError(`${field} must be non-empty visible ASCII, without spaces`);
+  if (codePoints(value) > limit) throw new YianRangeError(`${field} must be at most ${limit} characters`);
+  if (!VISIBLE_ASCII.test(value)) throw new YianRangeError(`${field} must be non-empty visible ASCII, without spaces`);
   return value;
 }
 

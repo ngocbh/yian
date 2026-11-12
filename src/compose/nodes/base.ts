@@ -38,6 +38,7 @@ import {
   validateOptionalOrigin,
   ValueContract,
 } from "../../nodes/contracts.ts";
+import { YianTypeError } from "../../typesys/errors.ts";
 import { typeName, type TypeRegistry } from "../../typesys/types.ts";
 import { isList, isRecord, type Type, valueRepr, type ValueRecord } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
@@ -895,7 +896,7 @@ export class NodeDescriptor {
         const contract = ctx.outputContractReader(this.id, this.outputs);
         if (contract !== null) {
           if (!isExactly(contract, ValueContract)) {
-            throw new TypeError("output contract reader must return an exact ValueContract or null");
+            throw new YianTypeError("output contract reader must return an exact ValueContract or null");
           }
           return contract;
         }

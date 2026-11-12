@@ -70,6 +70,7 @@ import {
   requestToolSpecs,
 } from "../../tools/grants.ts";
 import { type CheckedCall, ToolSet } from "../../tools/registry.ts";
+import { YianRangeError } from "../../typesys/errors.ts";
 import { formatRecordTime, parseDuration } from "../../typesys/temporal.ts";
 import { rejectDeepNesting, type Type, TypeCheckError, type ValueRecord } from "../../typesys/values.ts";
 import { CapabilityFault, Output, Pending, type RebuiltRequest, type RebuiltRequests, type SteerInbox } from "../base.ts";
@@ -215,7 +216,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
     granted = expandGrants(ctx.tools.map(asToolGrant), toolset.scopes());
   } catch (error) {
     if (!(error instanceof GrantError)) throw error;
-    throw new RangeError(`agent node ${reprText(ctx.nodeId)} ${error.message}`, { cause: error });
+    throw new YianRangeError(`agent node ${reprText(ctx.nodeId)} ${error.message}`, { cause: error });
   }
   if (granted.length === 0 && ctx.skills.length === 0 && schema !== null) {
     // One structured request: steers join it as they would a loop's first call, and an interrupt
@@ -349,7 +350,7 @@ function honor(ctx: AgentRunContext, steps: AgentSteps): Interrupted {
   const recorded = steps.honored();
   const by = recorded ?? ctx.steerInbox?.interruptedBy() ?? null;
   if (by === null) {
-    throw new CapabilityFault(new RangeError(`node ${reprText(ctx.nodeId)} was cut with no pending interrupt`));
+    throw new CapabilityFault(new YianRangeError(`node ${reprText(ctx.nodeId)} was cut with no pending interrupt`));
   }
   if (recorded === null) steps.interrupted(by);
   return new Interrupted(by);

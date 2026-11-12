@@ -271,11 +271,15 @@ export class ExtraHeadersAuth implements Auth {
 /** The marker `scrub` puts in place of a credential. */
 export const REDACTED = "[REDACTED]";
 
-/** One form a secret may take in text: its name, its text, and whether to compare it case-insensitively. */
+/**
+ * One form a secret may take in text: its name, its text, whether to compare it
+ * case-insensitively, and whether it may be wrapped across line breaks, as base64 is.
+ */
 export interface SecretForm {
   form: string;
   text: string;
   ignoreCase?: boolean;
+  wraps?: boolean;
 }
 
 /** Percent-encode `value`: every character but `A-Za-z0-9_.-~`. */
@@ -297,7 +301,7 @@ function unicodeEscape(value: string): string {
  * Return `text` lowercased, as long as it is: a character whose lowercase is longer (such as
  * "İ") stays as it is, so an index into the result is the same index into `text`.
  */
-function foldCase(text: string): string {
+export function foldCase(text: string): string {
   if (/^[\x00-\x7f]*$/.test(text)) return text.toLowerCase();
   let out = "";
   for (const char of text) {
@@ -353,7 +357,8 @@ const MIN_BASE64_FRAGMENT = 8;
  * Return the base64 forms of `secret`: for each of the three byte alignments, the characters of
  * its standard and URL-safe encoding that only the secret's bits decide, when there are
  * `MIN_BASE64_FRAGMENT` or more. They match in their own letter case only: base64 is
- * case-sensitive. A `Basic` credential holds one, whatever the user name before the secret.
+ * case-sensitive. A `Basic` credential holds one, whatever the user name before the secret. Each
+ * `wraps`: MIME and PEM bodies break base64 into lines.
  */
 export function base64Forms(secret: string): SecretForm[] {
   const bytes = Buffer.from(secret, "utf8");
@@ -365,8 +370,8 @@ export function base64Forms(secret: string): SecretForm[] {
     const end = Math.floor((8 * (pad + bytes.length)) / 6);
     const fragment = encoded.slice(start, end);
     if (fragment.length < MIN_BASE64_FRAGMENT) continue;
-    forms.push({ form: "base64", text: fragment });
-    forms.push({ form: "URL-safe base64", text: fragment.replaceAll("+", "-").replaceAll("/", "_") });
+    forms.push({ form: "base64", text: fragment, wraps: true });
+    forms.push({ form: "URL-safe base64", text: fragment.replaceAll("+", "-").replaceAll("/", "_"), wraps: true });
   }
   return forms;
 }
@@ -419,13 +424,51 @@ export function dropCredentialTail(text: string, credentials: Iterable<string>):
   return text.slice(0, cut).trimEnd();
 }
 
+// A character of either base64 alphabet, padding aside.
+const BASE64_CHAR = /^[A-Za-z0-9+/_-]$/;
+
+/**
+ * Return `text` with each single line break (`\n` or `\r\n`) between two base64 characters taken
+ * out, and a function from an index into it to the index of the same character in `text`.
+ */
+function unwrapBase64(text: string): { text: string; source: (index: number) => number } {
+  // Where in the result each break was taken out, and how many characters were taken out so far.
+  const cuts: number[] = [];
+  const shifts: number[] = [];
+  let out = "";
+  let kept = 0;
+  for (let at = text.indexOf("\n"); at !== -1; at = text.indexOf("\n", at + 1)) {
+    const start = text[at - 1] === "\r" ? at - 1 : at;
+    if (!BASE64_CHAR.test(text[start - 1] ?? "") || !BASE64_CHAR.test(text[at + 1] ?? "")) continue;
+    out += text.slice(kept, start);
+    kept = at + 1;
+    cuts.push(out.length);
+    shifts.push((shifts.at(-1) ?? 0) + at + 1 - start);
+  }
+  if (cuts.length === 0) return { text, source: (index) => index };
+  out += text.slice(kept);
+  const source = (index: number) => {
+    // The number of cuts at or before `index`.
+    let low = 0;
+    let high = cuts.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (cuts[middle]! <= index) low = middle + 1;
+      else high = middle;
+    }
+    return index + (low === 0 ? 0 : shifts[low - 1]!);
+  };
+  return { text: out, source };
+}
+
 /**
  * Replace each match of `forms` in `text` with `marker`.
  *
- * Every match is found in `text` as given, an `ignoreCase` form's in any letter case; matches
- * that overlap are replaced as one, so a form inside a longer one goes with it, while matches
- * that only touch get a marker each. A plain search, not a regular expression, so a form of any
- * length can be looked for.
+ * Every match is found in `text` as given, an `ignoreCase` form's in any letter case and a
+ * `wraps` form's across each single line break (`\n` or `\r\n`) between two base64 characters,
+ * as MIME and PEM bodies wrap base64; matches that overlap are replaced as one, so a form inside a
+ * longer one goes with it, while matches that only touch get a marker each. A plain search, not a
+ * regular expression, so a form of any length can be looked for.
  *
  * @param text The text to scrub.
  * @param forms The forms to replace; empty texts are ignored.
@@ -435,8 +478,17 @@ export function dropCredentialTail(text: string, credentials: Iterable<string>):
 export function replaceForms(text: string, forms: Iterable<SecretForm>, marker: string = REDACTED): string {
   const matches: [number, number][] = [];
   let folded: string | null = null;
+  let unwrapped: ReturnType<typeof unwrapBase64> | null = null;
   for (const form of forms) {
     if (!form.text) continue;
+    if (form.wraps) {
+      // A match is in `text` unwrapped; its last character's index there marks its end.
+      const { text: within, source } = (unwrapped ??= unwrapBase64(text));
+      for (let at = within.indexOf(form.text); at !== -1; at = within.indexOf(form.text, at + 1)) {
+        matches.push([source(at), source(at + form.text.length - 1) + 1]);
+      }
+      continue;
+    }
     const within = form.ignoreCase ? (folded ??= foldCase(text)) : text;
     const needle = form.ignoreCase ? foldCase(form.text) : form.text;
     for (let at = within.indexOf(needle); at !== -1; at = within.indexOf(needle, at + 1)) {
@@ -464,8 +516,8 @@ export function replaceForms(text: string, forms: Iterable<SecretForm>, marker: 
 /**
  * Replace each form of each credential in `text` with `marker`.
  *
- * The forms are `secretForms`', in any letter case, and `base64Forms`'; overlapping matches are
- * replaced as one, so a credential that contains a shorter one is replaced whole. Empty
+ * The forms are `secretForms`', in any letter case, and `base64Forms`', across a line break too;
+ * overlapping matches are replaced as one, so a credential that contains a shorter one is replaced whole. Empty
  * credentials are ignored.
  *
  * @param text The text to scrub.

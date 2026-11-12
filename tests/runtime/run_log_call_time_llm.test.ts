@@ -18,6 +18,7 @@ import { commitPrepared, type PreparedTransition, prepareRunStarted, RunState } 
 import { TypeCheckError } from "../../src/typesys/index.ts";
 import { type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
 import { flow } from "../helpers/run_state_fixtures.ts";
+import { thrownClass } from "../helpers/own_errors.ts";
 
 /** Assert `fn` throws an error of exactly class `cls` with exactly `message`, and return it. */
 function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, message: string): Error {
@@ -27,7 +28,7 @@ function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, me
   } catch (error) {
     caught = error;
   }
-  expect((caught as Error | undefined)?.constructor).toBe(cls);
+  expect((caught as Error | undefined)?.constructor).toBe(thrownClass(cls));
   expect((caught as Error).message).toBe(message);
   return caught as Error;
 }
@@ -77,11 +78,11 @@ const GOLDEN =
   '"start_wiring_override":{"name":"${input.name}"},"tool_groups":{},"tools":{},"yian_version":"' +
   VERSION +
   '"},"run_id":"r1",' +
-  '"schema":31,"seq":0}';
+  '"schema":32,"seq":0}';
 
-test("the schema is thirty-one", () => {
-  expect(SCHEMA_VERSION).toBe(31);
-  expect((parseJson(encode(record(CALL_TIME)), "codec") as JsonObject)["schema"]).toBe(31n);
+test("the schema is thirty-two", () => {
+  expect(SCHEMA_VERSION).toBe(32);
+  expect((parseJson(encode(record(CALL_TIME)), "codec") as JsonObject)["schema"]).toBe(32n);
 });
 
 test("call_time_llm round trips", () => {

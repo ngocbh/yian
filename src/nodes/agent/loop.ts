@@ -70,6 +70,7 @@ import {
   requestToolSpecs,
 } from "../../tools/grants.ts";
 import { type CheckedCall, ToolSet } from "../../tools/registry.ts";
+import { YianRangeError } from "../../typesys/errors.ts";
 import { formatRecordTime, parseDuration } from "../../typesys/temporal.ts";
 import { rejectDeepNesting, type Type, TypeCheckError, type ValueRecord } from "../../typesys/values.ts";
 import { CapabilityFault, Output, Pending, type RebuiltRequest, type RebuiltRequests, type SteerInbox } from "../base.ts";
@@ -83,7 +84,7 @@ import {
   RequestDigest,
   sentCredentials,
 } from "./context.ts";
-import { isFlowCall } from "./flow_tools.ts";
+import { flowFailureText, isFlowCall } from "./flow_tools.ts";
 import { Interrupted, ReplyInterrupted } from "./interrupts.ts";
 import {
   CAPPED_TOOL_ERROR,
@@ -215,7 +216,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
     granted = expandGrants(ctx.tools.map(asToolGrant), toolset.scopes());
   } catch (error) {
     if (!(error instanceof GrantError)) throw error;
-    throw new RangeError(`agent node ${reprText(ctx.nodeId)} ${error.message}`, { cause: error });
+    throw new YianRangeError(`agent node ${reprText(ctx.nodeId)} ${error.message}`, { cause: error });
   }
   if (granted.length === 0 && ctx.skills.length === 0 && schema !== null) {
     // One structured request: steers join it as they would a loop's first call, and an interrupt
@@ -349,7 +350,7 @@ function honor(ctx: AgentRunContext, steps: AgentSteps): Interrupted {
   const recorded = steps.honored();
   const by = recorded ?? ctx.steerInbox?.interruptedBy() ?? null;
   if (by === null) {
-    throw new CapabilityFault(new RangeError(`node ${reprText(ctx.nodeId)} was cut with no pending interrupt`));
+    throw new CapabilityFault(new YianRangeError(`node ${reprText(ctx.nodeId)} was cut with no pending interrupt`));
   }
   if (recorded === null) steps.interrupted(by);
   return new Interrupted(by);
@@ -707,7 +708,11 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
       reached = steps.lastWritten() ?? reached;
       continue;
     }
-    const { output, closed } = closerResult(closerReason(view?.closedReason ?? null));
+    // A flow call that failed: the model reads the failure.
+    const { output, closed } =
+      view?.closedReason === "failed" && view.failure !== null
+        ? { output: flowFailureText(call.name, view.scope, view.failure), closed: "failed" as const }
+        : closerResult(closerReason(view?.closedReason ?? null));
     const closer = steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed });
     // A later start that pended the call reached the next one already.
     if (laterPending === null) reached = closer;
@@ -947,11 +952,16 @@ async function runGroup(
         if (callId === undefined || turn.ctx.steps === undefined) {
           throw new AgentLoopError(`agent node ${reprText(turn.ctx.nodeId)}: flow tool ${reprText(call.name)} runs only in a run`);
         }
-        if (!signal?.aborted) {
-          const flowArguments = value.arguments;
-          turn.steps.pending({ callId, tool: call.name, toolCallId: call.id, reply: turn.n, index, deadline, flowArguments });
-          turn.pended.set(index, callId);
+        if (signal?.aborted) return { pending: callId };
+        const fields = { callId, tool: call.name, toolCallId: call.id, reply: turn.n, index, deadline, flowArguments: value.arguments };
+        // Arguments too large to record are the model's to fix, as its result.
+        const tooLarge = turn.steps.pendingTooLarge(fields);
+        if (tooLarge !== null) {
+          turn.steps.toolResult({ callId: call.id, startedAt, output: tooLarge, isError: true }, { settled: true });
+          return { content: tooLarge, reported: true };
         }
+        turn.steps.pending(fields);
+        turn.pended.set(index, callId);
         return { pending: callId };
       }
       if (!reported && isPending(value)) {

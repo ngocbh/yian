@@ -125,9 +125,10 @@
 
 import { current } from "../defaults.ts";
 import { reprText } from "../diagnostics.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 
 /** An expression could not be parsed or evaluated. */
-export class ExpressionError extends RangeError {
+export class ExpressionError extends YianRangeError {
   override name = "ExpressionError";
 }
 

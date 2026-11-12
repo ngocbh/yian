@@ -2,6 +2,7 @@
 
 import { current } from "../../defaults.ts";
 import { compareCodeUnits } from "../../diagnostics.ts";
+import { YianRangeError } from "../../typesys/errors.ts";
 import { isRecord } from "../../typesys/index.ts";
 import { OPTIONAL_API_KEY_PROVIDERS, PROVIDER_API_KEY_ENV } from "../api_key_env.ts";
 import { validateBaseUrl, validateEndpoint } from "../config.ts";
@@ -292,10 +293,10 @@ export class ProviderSelection {
       checkedProject = project === null ? null : validateOrganization(project, "project");
       names = headerNames.map((name: unknown) => validateHeaderName(name, provider));
       if (new Set(names.map((name) => name.toLowerCase())).size !== names.length) {
-        throw new RangeError("a header name is given more than once (names ignore case)");
+        throw new YianRangeError("a header name is given more than once (names ignore case)");
       }
       const limit = current().maxConnectionHeaders;
-      if (names.length > limit) throw new RangeError(`headers must have at most ${limit} headers`);
+      if (names.length > limit) throw new YianRangeError(`headers must have at most ${limit} headers`);
     } catch (error) {
       if (error instanceof RangeError) throw new AuthError(`Invalid provider selection: ${error.message}`);
       throw error;

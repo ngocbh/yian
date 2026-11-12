@@ -25,6 +25,7 @@ import {
 import { asToolGrant, expandGrants } from "../../src/tools/grants.ts";
 import { toolTypes } from "../../src/tools/types.ts";
 import { canonicalTypeLabel, TypeCheckError } from "../../src/typesys/values.ts";
+import { thrownClass } from "../helpers/own_errors.ts";
 
 let saved: [string, FunctionTool][] = [];
 
@@ -66,7 +67,7 @@ function thrown(fn: () => unknown, kind: typeof TypeError | typeof RangeError): 
   try {
     fn();
   } catch (error) {
-    expect((error as Error).constructor).toBe(kind);
+    expect((error as Error).constructor).toBe(thrownClass(kind));
     return (error as Error).message;
   }
   throw new Error("expected an error");
@@ -77,7 +78,7 @@ async function rejected(promise: Promise<unknown>, kind: typeof TypeError | type
   try {
     await promise;
   } catch (error) {
-    expect((error as Error).constructor).toBe(kind);
+    expect((error as Error).constructor).toBe(thrownClass(kind));
     return (error as Error).message;
   }
   throw new Error("expected a rejection");

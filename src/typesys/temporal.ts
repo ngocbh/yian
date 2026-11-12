@@ -5,6 +5,8 @@
  * set differs between runtimes, so a string parses the same way everywhere.
  */
 
+
+import { YianRangeError, YianTypeError } from "./errors.ts";
 const DATE_FORMAT = "2026-05-21";
 const DATETIME_FORMAT = "2026-05-21T14:30[:00][Z|+07:00]";
 
@@ -48,7 +50,7 @@ export interface ParsedDatetime {
  */
 export function parseDate(text: string): ParsedDate {
   const match = DATE_RE.exec(text);
-  if (match === null) throw new RangeError(`date must look like ${DATE_FORMAT}`);
+  if (match === null) throw new YianRangeError(`date must look like ${DATE_FORMAT}`);
   return dateFrom(match);
 }
 
@@ -68,7 +70,7 @@ export function parseDate(text: string): ParsedDate {
  */
 export function parseDatetime(text: string): ParsedDatetime {
   const match = DATETIME_RE.exec(text);
-  if (match === null) throw new RangeError(`datetime must look like ${DATETIME_FORMAT}`);
+  if (match === null) throw new YianRangeError(`datetime must look like ${DATETIME_FORMAT}`);
   return datetimeFrom(match);
 }
 
@@ -85,7 +87,7 @@ export function parseDateOrDatetime(text: string): ParsedDate | ParsedDatetime {
   if (dateMatch !== null) return dateFrom(dateMatch);
   const datetimeMatch = DATETIME_RE.exec(text);
   if (datetimeMatch !== null) return datetimeFrom(datetimeMatch);
-  throw new RangeError(`must be a date (${DATE_FORMAT}) or datetime (${DATETIME_FORMAT})`);
+  throw new YianRangeError(`must be a date (${DATE_FORMAT}) or datetime (${DATETIME_FORMAT})`);
 }
 
 /** The duration forms, as messages show them. */
@@ -103,7 +105,7 @@ const UNIT_SECONDS: Readonly<Record<string, number>> = { s: 1, m: 60, h: 3600, d
  */
 export function parseDuration(text: string): number {
   if (typeof text !== "string") {
-    throw new TypeError(`a duration is text: a positive integer and a unit (${DURATION_FORMAT})`);
+    throw new YianTypeError(`a duration is text: a positive integer and a unit (${DURATION_FORMAT})`);
   }
   const match = DURATION_RE.exec(text);
   const seconds = match === null ? 0 : Number(match[1]) * UNIT_SECONDS[match[2]!]!;
@@ -112,7 +114,7 @@ export function parseDuration(text: string): number {
     // a number too large to parse in seconds.
     const plain = /^[0-9]+$/.test(text) ? Number(text) : 0;
     const hint = plain > 0 && Number.isSafeInteger(plain) ? `; write ${text}s` : "";
-    throw new RangeError(`a duration is a positive integer and a unit (${DURATION_FORMAT})${hint}`);
+    throw new YianRangeError(`a duration is a positive integer and a unit (${DURATION_FORMAT})${hint}`);
   }
   return seconds;
 }
@@ -135,7 +137,7 @@ export function deadlineUtc(text: string): number {
   }
   // A JS Date holds years 0 and 10000; yian's dates run from year 1 to 9999.
   const year = instant.getUTCFullYear();
-  if (year < 1 || year > 9999) throw new RangeError("date value out of range");
+  if (year < 1 || year > 9999) throw new YianRangeError("date value out of range");
   return instant.getTime();
 }
 
@@ -151,7 +153,7 @@ export const RECORD_TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\
 export function formatRecordTime(ms: number): string {
   const date = new Date(ms);
   const text = Number.isNaN(date.getTime()) ? "" : date.toISOString();
-  if (!RECORD_TIME.test(text)) throw new RangeError(`run-log clock time ${ms} is outside the years 0000 to 9999`);
+  if (!RECORD_TIME.test(text)) throw new YianRangeError(`run-log clock time ${ms} is outside the years 0000 to 9999`);
   return text;
 }
 
@@ -164,7 +166,7 @@ function dateFrom(match: RegExpExecArray): ParsedDate {
     day: Number(day),
   };
   const reason = dateProblem(parsed.year, parsed.month, parsed.day);
-  if (reason !== null) throw new RangeError(`not a valid date: ${reason}`);
+  if (reason !== null) throw new YianRangeError(`not a valid date: ${reason}`);
   return parsed;
 }
 
@@ -177,10 +179,10 @@ function datetimeFrom(match: RegExpExecArray): ParsedDatetime {
     const offHours = Number(offset.slice(1, 3));
     const offMinutes = Number(offset.slice(4, 6));
     if (offHours >= 24) {
-      throw new RangeError("not a valid datetime: UTC offset must be under 24:00");
+      throw new YianRangeError("not a valid datetime: UTC offset must be under 24:00");
     }
     if (offMinutes >= 60) {
-      throw new RangeError("not a valid datetime: UTC offset minutes must be under 60");
+      throw new YianRangeError("not a valid datetime: UTC offset minutes must be under 60");
     }
     const magnitude = offHours * 60 + offMinutes;
     // `-00:00` is UTC; `- 0` would give `-0`.
@@ -200,7 +202,7 @@ function datetimeFrom(match: RegExpExecArray): ParsedDatetime {
   const reason =
     dateProblem(parsed.year, parsed.month, parsed.day) ??
     timeProblem(parsed.hour, parsed.minute, parsed.second);
-  if (reason !== null) throw new RangeError(`not a valid datetime: ${reason}`);
+  if (reason !== null) throw new YianRangeError(`not a valid datetime: ${reason}`);
   return parsed;
 }
 

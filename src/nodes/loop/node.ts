@@ -27,6 +27,7 @@
 
 import { type FailureCode, reprText } from "../../diagnostics.ts";
 import { evaluateWhenRecord, localDeclared } from "../../expr/expressions.ts";
+import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import {
   isInboxType,
   isMemoryType,
@@ -153,12 +154,12 @@ export class LoopNode extends ChildFlowNode {
     } = options;
     super(nodeId, { flowId, flowVersion, child, childInputs, title });
     if (times !== null && predicateKind !== "times") {
-      throw new RangeError(
+      throw new YianRangeError(
         `loop node ${reprText(nodeId)}: times: is the count of a times loop, not of a ${predicateKind} loop`,
       );
     }
     if (times !== null && maxIters !== null && maxIters !== times) {
-      throw new RangeError(
+      throw new YianRangeError(
         `loop node ${reprText(nodeId)}: a times loop's count is times: ${times}, but maxIters is ${maxIters}`,
       );
     }
@@ -198,14 +199,14 @@ export class LoopNode extends ChildFlowNode {
   override validateExecutionSetup(): void {
     super.validateExecutionSetup();
     if (this.predicateKind === "times") {
-      if (this.maxIters === null) throw new RangeError(`loop node ${reprText(this.id)} has no \`times\` count`);
+      if (this.maxIters === null) throw new YianRangeError(`loop node ${reprText(this.id)} has no \`times\` count`);
       return;
     }
     if (this.predicate === null) {
-      throw new RangeError(`loop node ${reprText(this.id)} has no \`${this.predicateKind}\` expression`);
+      throw new YianRangeError(`loop node ${reprText(this.id)} has no \`${this.predicateKind}\` expression`);
     }
     if (typeof this.predicate !== "string") {
-      throw new TypeError(`loop node ${reprText(this.id)} \`${this.predicateKind}\` must be a string`);
+      throw new YianTypeError(`loop node ${reprText(this.id)} \`${this.predicateKind}\` must be a string`);
     }
   }
 
@@ -262,7 +263,7 @@ export class LoopNode extends ChildFlowNode {
   respawn(k: number, carried: Readonly<Record<string, Value>> | null = null): LoopNode {
     const originId = this.originId ?? this.id;
     if (this.returnedFields !== null && carried === null) {
-      throw new RangeError(
+      throw new YianRangeError(
         `loop ${reprText(originId)} returns a subset of its record; respawn needs the carried record`,
       );
     }

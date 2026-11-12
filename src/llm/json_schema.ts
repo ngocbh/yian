@@ -9,6 +9,7 @@
  * its source.
  */
 
+import { YianTypeError } from "../typesys/errors.ts";
 import { type JsonObject, type JsonValue, logJson } from "../typesys/json.ts";
 import { encodeBody } from "./body.ts";
 import { copyJson, isPlainObject, put, ToolSpec } from "./messages.ts";
@@ -119,7 +120,7 @@ function dereferenceMembers(object: JsonObject, root: JsonObject, active: Set<Js
 function resolveRef(ref: JsonValue, root: JsonObject): JsonValue {
   const components = typeof ref === "string" ? ref.split("/") : [];
   if (components[0] !== "#") {
-    throw new TypeError("ref paths are expected to be URI fragments, meaning they should start with #.");
+    throw new YianTypeError("ref paths are expected to be URI fragments, meaning they should start with #.");
   }
   let node: JsonValue = root;
   for (const component of components.slice(1)) {
@@ -128,7 +129,7 @@ function resolveRef(ref: JsonValue, root: JsonObject): JsonValue {
     } else if (Array.isArray(node) && /^\d+$/.test(component) && Number(component) < node.length) {
       node = node[Number(component)]!;
     } else {
-      throw new TypeError(`Reference '${String(ref)}' not found.`);
+      throw new YianTypeError(`Reference '${String(ref)}' not found.`);
     }
   }
   return node;
@@ -268,12 +269,12 @@ function makeStrict(node: JsonValue, path: string, root: JsonObject): JsonObject
 /** Return the object a `#/a/b` ref names in `root`. */
 function strictRefTarget(ref: JsonValue, root: JsonObject): JsonObject {
   if (typeof ref !== "string" || !ref.startsWith("#/")) {
-    throw new TypeError(`Unexpected $ref format ${encodeBody(ref)}; Does not start with #/`);
+    throw new YianTypeError(`Unexpected $ref format ${encodeBody(ref)}; Does not start with #/`);
   }
   let node: JsonObject = root;
   for (const key of ref.slice(2).split("/")) {
     const next = Object.hasOwn(node, key) ? node[key] : undefined;
-    if (!isPlainObject(next)) throw new TypeError(`Reference '${ref}' not found.`);
+    if (!isPlainObject(next)) throw new YianTypeError(`Reference '${ref}' not found.`);
     node = next;
   }
   return node;
@@ -285,7 +286,7 @@ function strictRefTarget(ref: JsonValue, root: JsonObject): JsonObject {
  * @throws {TypeError} `expected a JSON Schema object at <path>` otherwise.
  */
 function expectSchema(value: JsonValue, path: string): JsonObject {
-  if (!isPlainObject(value)) throw new TypeError(`expected a JSON Schema object at ${path}`);
+  if (!isPlainObject(value)) throw new YianTypeError(`expected a JSON Schema object at ${path}`);
   return value;
 }
 
@@ -430,7 +431,7 @@ function anthropicSchema(schema: JsonValue, path: string): JsonObject {
   if (Array.isArray(anyOf)) out["anyOf"] = members(anyOf, "anyOf");
   else if (Array.isArray(oneOf)) out["anyOf"] = members(oneOf, "oneOf");
   else if (Array.isArray(allOf)) out["allOf"] = members(allOf, "allOf");
-  else if (type === null) throw new TypeError("Schema must have a 'type', 'anyOf', 'oneOf', or 'allOf' field.");
+  else if (type === null) throw new YianTypeError("Schema must have a 'type', 'anyOf', 'oneOf', or 'allOf' field.");
   else out["type"] = type;
   const enumValues = take("enum");
   if (Array.isArray(enumValues)) out["enum"] = enumValues;
@@ -475,7 +476,7 @@ function anthropicSchema(schema: JsonValue, path: string): JsonObject {
     case "null":
       break;
     default:
-      throw new TypeError(`unsupported JSON Schema type ${encodeBody(type)}`);
+      throw new YianTypeError(`unsupported JSON Schema type ${encodeBody(type)}`);
   }
   if (Object.keys(src).length > 0) {
     const prefix = typeof description === "string" ? `${description}\n\n` : "";

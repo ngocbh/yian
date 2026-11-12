@@ -27,6 +27,7 @@ import type { Parameter } from "../nodes/contracts.ts";
 import { isSystemError, leavesRoot } from "../platform.ts";
 import type { MemoryDrift } from "../run.ts";
 import { iterRunRecords, type PoolCommitRecord } from "../runtime/log.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { isMemoryType, isRecord, type MemoryRef, TypedValue } from "../typesys/values.ts";
 import { resolveFlowPath } from "./confined_load.ts";
@@ -86,7 +87,7 @@ export function defaultIdentity(
   if (flowId == null || flowId.length > PLAIN_ID_CHARS || !PLAIN_ID.test(flowId)) {
     const instead = memoryFlag ? `or bind \`${input}\` with --memory` : `so \`${input}\` gets a default memory`;
     const plain = "a plain `id:` of at most 100 characters (letters, digits, `.`, `_`, `-`)";
-    throw new RangeError(`give the flow ${plain} ${instead}`);
+    throw new YianRangeError(`give the flow ${plain} ${instead}`);
   }
   return `${projectKey(dir)}/${flowId}/${input}`;
 }
@@ -119,7 +120,7 @@ export function checkDefaultLocation(home: string, path: string): string {
   const root = memoryRoot(home);
   const location = join(root, path);
   const rel = relative(root, location);
-  if (rel === "" || leavesRoot(rel)) throw new RangeError(`memory location \`${path}\` leaves ~/.yian/memory`);
+  if (rel === "" || leavesRoot(rel)) throw new YianRangeError(`memory location \`${path}\` leaves ~/.yian/memory`);
   const parts = rel.split(sep);
   let at = root;
   for (const [i, part] of parts.entries()) {
@@ -129,13 +130,13 @@ export function checkDefaultLocation(home: string, path: string): string {
     // Written from `~`, as a host may show the message to a model.
     const shown = `~/.yian/memory/${parts.slice(0, i + 1).join("/")}`;
     if (stats.isSymbolicLink()) {
-      throw new RangeError(`${shown} is a symlink; a default memory stays inside ~/.yian/memory`);
+      throw new YianRangeError(`${shown} is a symlink; a default memory stays inside ~/.yian/memory`);
     }
-    if (i < parts.length - 1 && !stats.isDirectory()) throw new RangeError(`${shown} isn't a folder`);
+    if (i < parts.length - 1 && !stats.isDirectory()) throw new YianRangeError(`${shown} isn't a folder`);
   }
   // On the real paths too, as `confined_load.ts` confines flow files.
   if (leavesRoot(relative(resolveFlowPath(root), resolveFlowPath(location)))) {
-    throw new RangeError(`memory location \`${path}\` leaves ~/.yian/memory`);
+    throw new YianRangeError(`memory location \`${path}\` leaves ~/.yian/memory`);
   }
   return location;
 }
@@ -175,9 +176,9 @@ export function accountHome(): string | null {
 export function checkMemoryFolder(path: string, home: string, account: string | null): void {
   const real = realOr(resolve(path));
   const holds = (dir: string) => !leavesRoot(relative(real, realOr(join(dir, ".yian"))));
-  const refuse = (why: string) => new RangeError(`\`${path}\` can't be a memory: ${why}`);
-  if (real === "/") throw new RangeError("`/` can't be a memory: it holds the whole file system");
-  if (real === realOr(home)) throw new RangeError("`~` can't be a memory: it holds your home's files");
+  const refuse = (why: string) => new YianRangeError(`\`${path}\` can't be a memory: ${why}`);
+  if (real === "/") throw new YianRangeError("`/` can't be a memory: it holds the whole file system");
+  if (real === realOr(home)) throw new YianRangeError("`~` can't be a memory: it holds your home's files");
   if (account !== null && real === realOr(account)) throw refuse("it holds your home's files");
   if (holds(home)) throw refuse("it holds ~/.yian");
   if (account !== null && holds(account)) throw refuse(`it holds ${join(account, ".yian")}`);
@@ -348,7 +349,7 @@ async function openChecked(
 ): Promise<MemorySession> {
   const { location, noun } = where;
   if (confined !== null && resolveFlowPath(checkDefaultLocation(confined.home, confined.path)) !== location) {
-    throw new RangeError(`~/.yian/memory/${confined.path} changed after it was checked; run again`);
+    throw new YianRangeError(`~/.yian/memory/${confined.path} changed after it was checked; run again`);
   }
   let session: MemorySession;
   try {
@@ -360,7 +361,7 @@ async function openChecked(
     const gone = lstatOrNull(location) === null ? `its ${noun} is gone` : "it isn't a memory any more";
     const reason =
       confined === null ? `the ${noun} given with --memory isn't a memory` : `${gone}, so the run can't continue`;
-    throw new RangeError(reason, { cause: error });
+    throw new YianRangeError(reason, { cause: error });
   }
   if (session.created) memory.note({ inputs: [...memory.inputs], identity: session.info.identity, location });
   return session;
@@ -507,7 +508,7 @@ function bindFresh(
     if (options.project === null) {
       const refusal = "a flow with no file has no default memories";
       const instead = memoryFlag ? `; bind \`${input}\`` : `, so \`${input}\` can't be bound`;
-      throw new RangeError(`${refusal}${instead}`);
+      throw new YianRangeError(`${refusal}${instead}`);
     }
     const identity = defaultIdentity(options.project, flow.compiled.flowId, input, memoryFlag);
     return defaultInstance(input, identity, type, options, "fresh");
@@ -633,7 +634,7 @@ function bindEach(
     }
     // Nothing is opened yet, so refusing here leaves no trace.
     if (typ.memory !== "FileMemory" && typ.memory !== "VectorDBMemory" && (path !== undefined || !typ.nullable)) {
-      throw new RangeError(
+      throw new YianRangeError(
         `\`${param.name}\` is a ${typ.memory}; the command line binds only FileMemory and VectorDBMemory inputs`,
       );
     }
@@ -683,7 +684,7 @@ function storeOptions(input: string, path: string, options: BindOptions, mode: B
       options.memoryFlag === false
         ? "run `yian config embedding provider/model`"
         : "pass --embedding provider/model or run `yian config embedding provider/model`";
-    throw new RangeError(`\`${input}\` needs an embedding model: ${set}`);
+    throw new YianRangeError(`\`${input}\` needs an embedding model: ${set}`);
   }
   store.embedding = embedding;
   return store;

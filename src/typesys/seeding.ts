@@ -2,6 +2,7 @@
 
 import { randomUUID } from "node:crypto";
 
+import { YianRangeError } from "./errors.ts";
 import type { VariablePool } from "./pool.ts";
 import { buildValueAs, ValueKind } from "./values.ts";
 
@@ -15,7 +16,7 @@ import { buildValueAs, ValueKind } from "./values.ts";
  */
 export function nowUtc(epochMs: number = Date.now()): string {
   const refusal = `clock time must be within years 1 to 9999, got ${epochMs}`;
-  if (!Number.isFinite(epochMs)) throw new RangeError(refusal);
+  if (!Number.isFinite(epochMs)) throw new YianRangeError(refusal);
   // Whole milliseconds and microseconds apart: `epochMs * 1000` passes 2^53 after mid-2255,
   // so a product would lose microseconds far from 1970.
   const whole = Math.floor(epochMs);
@@ -23,7 +24,7 @@ export function nowUtc(epochMs: number = Date.now()): string {
   const date = new Date(whole + (sub === 1000 ? 1 : 0));
   const year = date.getUTCFullYear();
   // Written so a NaN year (a finite time past the Date range) is refused too.
-  if (!(year >= 1 && year <= 9999)) throw new RangeError(refusal);
+  if (!(year >= 1 && year <= 9999)) throw new YianRangeError(refusal);
   const fraction = date.getUTCMilliseconds() * 1000 + (sub % 1000);
   const micros = fraction ? "." + String(fraction).padStart(6, "0") : "";
   return date.toISOString().slice(0, 19) + micros + "+00:00";

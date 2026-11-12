@@ -7,6 +7,7 @@
  */
 
 import { Diagnostic, DiagnosticFrame, type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
+import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import { type Value, valueRepr, writeAsJson } from "../../typesys/values.ts";
 import type { SourceCursor, SourceDocument } from "../source/index.ts";
 import { oneLineSlice } from "./source.ts";
@@ -43,7 +44,7 @@ export class LoadDiagnostics {
    */
   constructor(label: string | null = null, text: string | null = null) {
     if ((label === null) !== (text === null)) {
-      throw new RangeError("load diagnostic source requires both label and text");
+      throw new YianRangeError("load diagnostic source requires both label and text");
     }
     this.label = label;
     this.text = text;
@@ -84,7 +85,7 @@ export class LoadDiagnostics {
     const { range = null, frames = [], notes = [], code = "compose.load" } = options;
     let ownedFrames = [...frames];
     if (range !== null && ownedFrames.length > 0) {
-      throw new RangeError("load diagnostic accepts a range or frames, not both");
+      throw new YianRangeError("load diagnostic accepts a range or frames, not both");
     }
     if (range !== null) {
       const frame = this.frame(range);
@@ -126,7 +127,7 @@ export class LoadDiagnostics {
   ): LoadError {
     const { range, message = null, note = null, cause } = options;
     if (!(error instanceof LoadError)) {
-      throw new TypeError("load diagnostic context requires a LoadError");
+      throw new YianTypeError("load diagnostic context requires a LoadError");
     }
     const inner = error.diagnostic;
     const outer = this.frame(range, { note });
@@ -149,7 +150,7 @@ export function sourceText(diagnostics: LoadDiagnostics, range: SourceRange | nu
 }
 
 /** A Compose flow cannot be loaded, expressed as one canonical diagnostic. */
-export class LoadError extends RangeError {
+export class LoadError extends YianRangeError {
   override name = "LoadError";
   /** The immutable, presentation-ready failure payload. */
   readonly diagnostic: Diagnostic;
@@ -162,7 +163,7 @@ export class LoadError extends RangeError {
    */
   constructor(diagnostic: Diagnostic, options: { cause?: unknown } = {}) {
     if (!(diagnostic instanceof Diagnostic)) {
-      throw new TypeError("LoadError requires a Diagnostic");
+      throw new YianTypeError("LoadError requires a Diagnostic");
     }
     const { cause } = options;
     // `{ cause: undefined }` would still install an own `cause` property.

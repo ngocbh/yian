@@ -353,7 +353,7 @@
       }
     },
     "status_document": {
-      "description": "`yian status LOG --json` (TS only): where the run in the log stands, read without appending or taking the writer's lock. status is running while a writer holds the log's lock; succeeded, failed or cancelled once the run ended; waiting when its last segment ended with every unsettled node waiting (on a take, a sleep or a host call); stopped when the host stopped its last segment; else crashed (the process ended mid-run). in_flight lists the nodes started (or woken) and neither settled nor waiting, in start order (empty for an ended run). crashed_attempts maps a node id to the attempts a resume retried, or would retry, after a crash.",
+      "description": "`yian status LOG --json` (TS only): where the run in the log stands, read without appending or taking the writer's lock. status is running while a writer holds the log's lock; succeeded, failed or cancelled once the run ended; unstarted when the log ends inside its run start, before its inputs were recorded, so no resume can go on from it (delete the log and start the run again); waiting when its last segment ended with every unsettled node waiting (on a take, a sleep or a host call); stopped when the host stopped its last segment; else crashed (the process ended mid-run). in_flight lists the nodes started (or woken) and neither settled nor waiting, in start order (empty for an ended run). crashed_attempts maps a node id to the attempts a resume retried, or would retry, after a crash.",
       "type": "object",
       "required": ["format", "status", "in_flight", "crashed_attempts", "ready", "wake_at"],
       "properties": {
@@ -370,7 +370,7 @@
     },
     "run_status": {
       "description": "Where a run stands, as `yian status` reads it.",
-      "enum": ["running", "stopped", "crashed", "succeeded", "failed", "waiting", "cancelled"]
+      "enum": ["running", "stopped", "crashed", "succeeded", "failed", "waiting", "cancelled", "unstarted"]
     },
     "runs_document": {
       "description": "`yian status --json` with no LOG (TS only): the runs in ~/.yian/runs from the run index, oldest first. Each run's status, ready and wake_at read as `yian status LOG` reads them.",

@@ -168,7 +168,8 @@ test("an observer failure wins over the prompt it cancels", async () => {
   const stderr: Writer = {
     isTTY: true,
     write: (text) => {
-      if (text.includes("✓ done")) throw new TypeError("stderr broke");
+      // An OS write error, as a closed or full stream gives.
+      if (text.includes("✓ done")) throw Object.assign(new Error("stderr broke"), { code: "EPIPE", syscall: "write" });
       chunks.push(text);
       return Promise.resolve();
     },

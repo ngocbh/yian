@@ -10,6 +10,7 @@
  */
 
 import { current } from "../defaults.ts";
+import { YianTypeError } from "../typesys/errors.ts";
 
 /** A key, or a function that returns it on each request. */
 export type Secret = string | (() => string | Promise<string>);
@@ -46,7 +47,7 @@ export interface Auth {
  */
 export function checkHeaderValue(name: string, value: unknown): string {
   if (typeof value !== "string" || !/^[\x21-\x7e](?:[\x20-\x7e]*[\x21-\x7e])?$/.test(value)) {
-    throw new TypeError(`${name} must be non-empty HTTP header text`);
+    throw new YianTypeError(`${name} must be non-empty HTTP header text`);
   }
   return value;
 }
@@ -68,12 +69,12 @@ const FIELD_VALUE = /^[\x21-\x7e]+(?:[ \t]+[\x21-\x7e]+)*$/;
  *   characters, or is not non-empty visible ASCII with spaces or tabs only between characters.
  */
 export function checkConnectionHeaderValue(name: string, value: unknown): string {
-  if (typeof value !== "string") throw new TypeError(`header ${name} value must be a string`);
+  if (typeof value !== "string") throw new YianTypeError(`header ${name} value must be a string`);
   const limit = current().maxHeaderValueChars;
   // Spread counts code points, not UTF-16 units.
-  if ([...value].length > limit) throw new TypeError(`header ${name} value must be at most ${limit} characters`);
+  if ([...value].length > limit) throw new YianTypeError(`header ${name} value must be at most ${limit} characters`);
   if (!FIELD_VALUE.test(value)) {
-    throw new TypeError(
+    throw new YianTypeError(
       `header ${name} value must be non-empty visible ASCII, with spaces or tabs only between characters`,
     );
   }

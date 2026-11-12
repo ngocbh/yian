@@ -10,8 +10,9 @@
  * `results`.
  */
 
-import { reprText } from "../../diagnostics.ts";
+import { type Failure, reprText } from "../../diagnostics.ts";
 import { FunctionTool } from "../../tools/function_tools.ts";
+import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import type { JsonObject } from "../../typesys/json.ts";
 import { cutText, isRecord } from "../../typesys/values.ts";
 import { toolText } from "./results.ts";
@@ -52,6 +53,20 @@ export function flowToolFunctions(tools: readonly FlowTool[]): FunctionTool[] {
 }
 
 /**
+ * Return the error text the model reads for flow tool `name`'s call that failed: the node of the
+ * flow that failed (its id inside the call's `scope`), the failure's code and message; for a
+ * call whose scope couldn't grow, why it didn't start.
+ */
+export function flowFailureText(name: string, scope: string | null, failure: Failure): string {
+  const prefix = scope === null ? null : `${scope}/`;
+  const node = failure.nodeId;
+  if (prefix === null || node === null || !node.startsWith(prefix)) {
+    return `Flow ${name} didn't start (${failure.code}): ${failure.message}`;
+  }
+  return `Flow ${name} failed at node ${node.slice(prefix.length)} (${failure.code}): ${failure.message}`;
+}
+
+/**
  * Return the text the model reads for flow tool `name`'s output: text as itself, any other value
  * as its JSON (`toolText`), cut to its first `maxChars` characters (`cutText`) with a note that the
  * run log holds all of it.
@@ -88,12 +103,12 @@ export function checkedFlowTools(nodeId: string, tools: readonly FlowTool[]): re
   const checked = tools.map((tool) => {
     const { name, description, parameters, child } = isRecord(tool) ? tool : ({} as Partial<FlowTool>);
     if (typeof name !== "string" || name === "" || typeof description !== "string" || description === "") {
-      throw new TypeError(`AGENT node ${reprText(nodeId)}: a flow tool needs a name and a description`);
+      throw new YianTypeError(`AGENT node ${reprText(nodeId)}: a flow tool needs a name and a description`);
     }
     if (!isRecord(parameters) || child === undefined || child === null) {
-      throw new TypeError(`AGENT node ${reprText(nodeId)}: flow tool ${reprText(name)} needs its parameters and flow`);
+      throw new YianTypeError(`AGENT node ${reprText(nodeId)}: flow tool ${reprText(name)} needs its parameters and flow`);
     }
-    if (names.has(name)) throw new RangeError(`AGENT node ${reprText(nodeId)} grants flow ${reprText(name)} twice`);
+    if (names.has(name)) throw new YianRangeError(`AGENT node ${reprText(nodeId)} grants flow ${reprText(name)} twice`);
     names.add(name);
     return Object.freeze({ name, description, parameters, child });
   });

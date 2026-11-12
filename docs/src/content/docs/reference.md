@@ -70,6 +70,9 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MAX_FLOW_NODES` | limit | 100,000 | 1 or more | Most nodes a loaded flow may expand to, counting each call of a def or uses: flow as a copy |
 | `YIAN_MAX_TOTAL_NODES` | limit | 10,000 | 1 or more | Most live nodes a run's graph may grow to |
 | `YIAN_MAX_SKIP_WORLDS` | limit | 10,000 | 1 or more | Most branch combinations the skip check explores before giving up |
+| `YIAN_MAX_COMPREHENSION_ITEMS` | limit | 1,000,000 | 1 or more | Most items the comprehensions of one expression may bind, counting every `for` clause |
+| `YIAN_MAX_INT_DIGITS` | limit | 4,300 | 640 or more | Most decimal digits an int that an operator or a builtin gives may have |
+| `YIAN_MAX_JSON_INDENT` | limit | 10 | 2 or more | Largest indent `render_as_json` takes |
 | `YIAN_MAX_SHOWN_VALUE_CHARS` | limit | 200 | 2 or more | Longest rendering of a value or key an error message shows |
 | `YIAN_MAX_FAILURE_CHARS` | limit | 10,000 | 1 or more | Longest message or traceback a failure records; a longer one is cut and says how much was cut |
 | `YIAN_AGENT_RETRIES` | setting | 2 | 0 or more | Extra attempts an AGENT gets to correct an invalid structured reply when the node sets none |
@@ -191,6 +194,7 @@ log prints the same failure, so "retry" below means a new run.
 | `loop.max_exceeded` | A `while:` or `until:` LOOP with `max: M` would start its body run M+1 | Raise `max:`, or set `on_max_exceeded: output` to end the loop with its last record |
 | `agent.output_invalid` | An AGENT's structured reply still breaks its `output:` type after its `retries:` | Loosen the type, or improve the prompt |
 | `agent.interrupted` | An AGENT was interrupted and its output type doesn't allow null | Declare `output: Optional(...)` and route on null |
+| `agent.output_truncated` | The provider cut an AGENT's reply off at the output token limit: an answer with no call whose arguments parsed, or the last invalid structured reply | Raise the limit the message names, or ask for a shorter answer |
 | `tool.timeout` | An `ask` timed out with no answer and its output type doesn't allow null | Declare `output: Optional(...)`, or give it longer |
 | `provider.auth` | The provider refused the agent's credentials, or yian couldn't supply them | Fix the login (`yian auth <provider>`) or the key |
 | `provider.auth_storage` | The saved-login file, its folder or its lock can't be used (its mode, owner or contents) | Fix the file the message names; logging in again reads the same file |

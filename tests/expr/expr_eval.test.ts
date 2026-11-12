@@ -16,6 +16,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 
+import { BUILTIN, install } from "../../src/defaults.ts";
 import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
 import {
   declaredAt,
@@ -410,11 +411,16 @@ describe("the shipped builtins' TS-era rules", () => {
   });
 
   test("an indent too large for the runtime fails the same on every engine", () => {
-    // V8 and JavaScriptCore both throw a RangeError from `repeat`, with different text.
-    expectMessage(
-      "render_as_json([1], 2 ** 40)",
-      "expression function 'render_as_json' failed: text is too long for this runtime",
-    );
+    install({ ...BUILTIN, maxJsonIndent: Number.MAX_SAFE_INTEGER });
+    try {
+      // V8 and JavaScriptCore both throw a RangeError from `repeat`, with different text.
+      expectMessage(
+        "render_as_json([1], 2 ** 40)",
+        "expression function 'render_as_json' failed: text is too long for this runtime",
+      );
+    } finally {
+      install(BUILTIN);
+    }
   });
 
   test("join takes only text for sep", () => {
@@ -991,7 +997,12 @@ describe("removed operators", () => {
 });
 
 test("an integer result the runtime refuses", () => {
-  expectMessage("2 ** (2 ** 40)", "integer result is too large for this runtime");
+  install({ ...BUILTIN, maxIntDigits: Number.MAX_SAFE_INTEGER });
+  try {
+    expectMessage("2 ** (2 ** 40)", "integer result is too large for this runtime");
+  } finally {
+    install(BUILTIN);
+  }
 });
 
 describe("comparisons", () => {

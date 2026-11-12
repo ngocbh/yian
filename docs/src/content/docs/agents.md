@@ -375,6 +375,8 @@ The file uses the `mcpServers` format other MCP clients use:
   doesn't use, so name the server when one is slow to start or does something when it starts.
 - The run's servers start together and stop together when it ends. The config files are read
   only when the flow names a tool yian doesn't already have.
+- If a server dies mid-run, the next call starts it again (over HTTP, opens a new session), once.
+  A call it was running fails with its exit code and last stderr lines, and isn't sent again.
 - MCP needs the optional package `@modelcontextprotocol/client` 2.3.1 installed beside yian.
 
 ### Host tools

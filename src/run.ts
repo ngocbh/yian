@@ -1058,6 +1058,32 @@ function checkHostHeaderNames(
   }
 }
 
+/**
+ * Return the error refusing a resume that wasn't given the host key a run's agents use: it names
+ * the key's providers and the call that passes it again, headers included when the key came with
+ * some.
+ *
+ * @param effective The recorded effective model map, keyed by static agent path.
+ * @param callTime The recorded `RunStarted.call_time_llm`, or `null`.
+ */
+function hostKeyNotGiven(
+  effective: Readonly<Record<string, Readonly<AgentConfig>>>,
+  callTime: Readonly<CallTimeLlm> | null,
+): RangeError {
+  const providers = hostKeyProviders(effective);
+  const host = selectionHost(callTime);
+  if (host !== null) providers.add(String(host["provider"]));
+  const names = Object.values(effective).flatMap((config) =>
+    config[HOST_KEY_MARKER] === true ? ((config[HEADER_NAMES_KEY] as string[] | undefined) ?? []) : [],
+  );
+  if (host?.["header_names"] !== undefined) names.push(...(host["header_names"] as string[]));
+  const given = names.length > 0 ? "apiKey, headers" : "apiKey";
+  return new RangeError(
+    `this run's ${[...providers].sort(compareCodeUnits).join(", ")} API key came from the host's ` +
+      `llmConfig.api_key and is not recorded; pass it again: advance({ log, ${given} })`,
+  );
+}
+
 /** Validate a host key without echoing it in errors. */
 function secretKey(raw: string): string {
   return new LLMConfig({ api_key: raw }).apiKey!;
@@ -1476,8 +1502,8 @@ export interface AdvanceOptions {
   skills?: ReadonlyMap<string, Skill> | null;
   /**
    * The provider key of a run started with `llmConfig.api_key`, for the agents the log marks for it
-   * (and a call-time agent resolving to its provider); never recorded. A log that marks no agent
-   * ignores it.
+   * (and a call-time agent resolving to its provider); never recorded, so an unfinished run that
+   * uses it can't resume without it. A log that marks no agent ignores it.
    */
   apiKey?: string | null;
   /**
@@ -1559,8 +1585,9 @@ export interface AdvanceOptions {
  *   `flow` was passed, or its flow files were recorded and one was, `codeRoot` isn't the recorded
  *   code root, the flow fingerprint differs, the worker count is negative, `apiKey` or `headers`
  *   is refused or their header names aren't the recorded ones (the message never echoes a value),
- *   a recorded agent config has an invalid field, or, for an unfinished run, a tool or skill
- *   check of `runFlow` fails, a granted tool's spec or skill's text differs from the recorded one
+ *   a recorded agent config has an invalid field, or, for an unfinished run, its agents use the
+ *   host key and `apiKey` isn't given (before anything is appended), a tool or skill check of
+ *   `runFlow` fails, a granted tool's spec or skill's text differs from the recorded one
  *   (`resume refused: tools.<name> description differs from the recorded one`), a `tools` server
  *   was opened by another run in progress, or a started call-time agent resolves to another config
  *   than the one it recorded (`node '<path>' llm_config: recorded config differs from the
@@ -1665,6 +1692,10 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       );
       if (options.checkLlmConfigs != null) {
         await options.checkLlmConfigs(legacyConnectionMap(recordedLlm), { callTimeHost: selectionHost(callTime) });
+      }
+      // A resume without the key would fail its agent for good, so it is refused before any append.
+      if (apiKey === null && usesHostKey(state.effectiveLlmByStaticPath, callTime)) {
+        throw hostKeyNotGiven(state.effectiveLlmByStaticPath, callTime);
       }
       // Skills need no server, so a changed one is refused before any server starts.
       checkRecordedSpecs("skills", start.skills, recordedSkills(flow.compiled, skills));

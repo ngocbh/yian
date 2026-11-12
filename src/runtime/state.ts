@@ -361,6 +361,8 @@ export class RunState {
    * (`<agent>/<grant>#<k>`). Log history: kept after the call settles.
    */
   flowScopes = new Map<string, string>();
+  /** Each AGENT flow call that failed, by call id: the failure its agent reads. Log history. */
+  flowFailures = new Map<string, Failure>();
   /** Per-run wiring by node id, beginning with START's narrowed inputs. */
   wiringOverrides = new Map<string, JsonObject>();
   /** The durable identity once `RunStarted` is applied. */
@@ -810,6 +812,8 @@ interface InterruptedDelta {
   readonly kind: "interrupted";
   readonly nodeIds: readonly string[];
   readonly closedCalls: readonly string[];
+  /** The scopes of the interrupted nodes' open flow calls, which end with it. */
+  readonly scopes: readonly string[];
 }
 
 /**
@@ -916,6 +920,20 @@ interface FailurePlan extends PlanAnchors {
 }
 
 /**
+ * A failure a flow call takes: `failure` fails call `callId`, and scope `scope` ends (`retires`,
+ * unless the failure is of the agent whose scope couldn't grow). `closedCalls` are the scope's
+ * host calls it closes.
+ */
+interface FlowFailurePlan extends PlanAnchors {
+  readonly kind: "flowFailure";
+  readonly failure: Failure;
+  readonly callId: string;
+  readonly scope: string;
+  readonly retires: boolean;
+  readonly closedCalls: readonly string[];
+}
+
+/**
  * A run ending with no completing node: a cancel, or a failure at quiescence with nodes waiting
  * (`failure` set). `closedCalls` are the open host calls it closes.
  */
@@ -974,6 +992,7 @@ type PreparedPlan =
   | SuccessPlan
   | RoutePlan
   | FailurePlan
+  | FlowFailurePlan
   | EndingPlan
   | GrowthPlan;
 
@@ -1532,6 +1551,8 @@ function callView(state: RunState, call: Call): CallView {
     closedReason: call.closedReason,
     result: callResultStep(state, call.callId),
     deadline: call.deadline,
+    scope: call.scope,
+    failure: state.flowFailures.get(call.callId) ?? null,
   });
 }
 
@@ -1562,6 +1583,8 @@ function flowAnswerStep(state: RunState, call: Call): Readonly<JsonObject> {
     closedReason: call.closedReason,
     result: null,
     deadline: call.deadline,
+    scope: call.scope,
+    failure: null,
   });
   const node = state.flow.nodes.get(call.nodeId)!;
   return node.waitResultStep(view, { output }, { maxFlowResultChars: state.runDefaults.maxFlowResultChars });
@@ -1781,9 +1804,97 @@ export function prepareNodeRouted(state: RunState, nodeId: string, handle: strin
 export function prepareNodeFailed(state: RunState, failure: Failure): PreparedTransition {
   if (!isExactly(state, RunState)) throw new TypeError("prepareNodeFailed expects a RunState");
   if (!isExactly(failure, Failure)) throw new TypeError("prepareNodeFailed expects a Failure");
-  const record = new NodeFailedRecord(failure);
   requireInitializedNonterminal(state);
+  // A node inside a flow call's scope fails the innermost such call, not the run.
+  const caught = typeof failure.nodeId === "string" ? enclosingFlowCall(state, failure.nodeId) : null;
+  const record = new NodeFailedRecord(failure, caught ?? {});
   return prepareFailureTransition(state, record);
+}
+
+/**
+ * Prepare the failure of AGENT `nodeId`'s flow call `callId` whose scope can't grow (`failure`,
+ * the growth's): the call fails and the agent goes on.
+ *
+ * @throws RangeError when `callId` isn't an open flow call of `nodeId` whose scope hasn't grown.
+ */
+export function prepareFlowCallFailed(state: RunState, nodeId: string, callId: string, failure: Failure): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareFlowCallFailed expects a RunState");
+  requireInitializedNonterminal(state);
+  const call = state.waits.calls.get(callId);
+  if (call?.nodeId !== nodeId || !call.flow || call.state !== "open" || state.flowScopes.has(callId)) {
+    throw new RangeError(`call ${reprText(callId)} is no open flow call of node ${reprText(nodeId)} waiting to grow`);
+  }
+  return prepareFailureTransition(state, new NodeFailedRecord(failure, { callId, scope: call.scope! }));
+}
+
+/**
+ * The innermost grown flow call scope holding node `nodeId`, with its call; `null` for a node in
+ * no such scope.
+ */
+function enclosingFlowCall(state: RunState, nodeId: string): { callId: string; scope: string } | null {
+  let found: { callId: string; scope: string } | null = null;
+  for (const [callId, scope] of state.flowScopes) {
+    if (!nodeId.startsWith(`${scope}/`) || !state.flow.nodes.has(`${scope}/${START_ID}`)) continue;
+    if (found === null || scope.length > found.scope.length) found = { callId, scope };
+  }
+  return found;
+}
+
+/** The ids of the registered calls whose nodes are in flow call scope `scope`. */
+function scopeCalls(state: RunState, scope: string): string[] {
+  return [...state.waits.calls.values()].filter((call) => call.nodeId.startsWith(`${scope}/`)).map((call) => call.callId);
+}
+
+/**
+ * End flow call scope `scope` in place: every live node of it, a nested scope's included, leaves
+ * the graph with its edges, values, starts, steps and pending commits. A scope's nodes read nothing
+ * outside it and nothing outside reads them, so no other node's edges change; the waits fold ends
+ * its waits and calls.
+ */
+function retireScope(state: RunState, scope: string): void {
+  const prefix = `${scope}/`;
+  const flow = state.flow;
+  const retired = new Set([...flow.nodes.keys()].filter((nodeId) => nodeId.startsWith(prefix)));
+  if (retired.size === 0) return;
+  const index = state.growthIndex;
+  for (const nodeId of retired) {
+    if (index === null) break;
+    for (const name of index.names.get(nodeId) ?? []) index.referrers.get(name)?.delete(nodeId);
+    index.names.delete(nodeId);
+    const owner = state.growthOwner.get(nodeId);
+    if (owner !== undefined) index.grown.get(owner)?.delete(nodeId);
+    index.grown.delete(nodeId);
+    index.referrers.delete(nodeId);
+  }
+  flow.edges = flow.edges.filter((edge) => {
+    if (!retired.has(edge.from) && !retired.has(edge.to)) return true;
+    state.edgeState.delete(edge.id);
+    return false;
+  });
+  const ready = state.ready.filter((nodeId) => !retired.has(nodeId));
+  state.ready.splice(0, state.ready.length, ...ready);
+  for (const nodeId of retired) {
+    flow.nodes.delete(nodeId);
+    flow.wiring.delete(nodeId);
+    flow.incomingEdges.delete(nodeId);
+    flow.outgoingEdges.delete(nodeId);
+    state.nodeState.delete(nodeId);
+    state.unknownIncoming.delete(nodeId);
+    state.pool.store.delete(nodeId);
+    state.producers.delete(nodeId);
+    state.pool.store.delete(messagesKey(nodeId));
+    state.producers.delete(messagesKey(nodeId));
+    state.depth.delete(nodeId);
+    state.wiringOverrides.delete(nodeId);
+    state.growthOwner.delete(nodeId);
+    state.inFlight.delete(nodeId);
+    state.acceptedStarts.delete(nodeId);
+    deletePendingCommit(state, nodeId);
+    state.pendingMessages.delete(nodeId);
+    if (state.nodeStarts.has(nodeId)) forgetNodeSteps(state, nodeId);
+    state.touched.add(nodeId);
+  }
+  state.deferredPrune = new Set([...state.deferredPrune].filter((nodeId) => !retired.has(nodeId)));
 }
 
 /**
@@ -2018,10 +2129,16 @@ export function prepareRecord(
   } else if (isExactly(canonical, InterruptedRecord)) {
     // Before the close: an interrupt has every field a close has, so the close's guard would narrow it away.
     validateInterrupted(state, canonical);
-    const open = canonical.nodes.flatMap((nodeId) =>
-      nodeCalls(state.waits, nodeId).filter((call) => call.state === "open").map((call) => call.callId),
-    );
-    delta = { kind: "interrupted", nodeIds: canonical.nodes, closedCalls: hostCalls(state, open) };
+    const open = canonical.nodes.flatMap((nodeId) => nodeCalls(state.waits, nodeId).filter((call) => call.state === "open"));
+    const scopes = open.flatMap((call) => (call.scope === null ? [] : [call.scope]));
+    // The host calls of the ended scopes close with the interrupted ones.
+    const ended = scopes.flatMap((scope) => scopeCalls(state, scope));
+    delta = {
+      kind: "interrupted",
+      nodeIds: canonical.nodes,
+      closedCalls: hostCalls(state, [...open.map((call) => call.callId), ...ended]),
+      scopes,
+    };
   } else if (isExactly(canonical, InboxClosedRecord)) {
     validateInboxClosed(state, canonical);
     delta = { kind: "inboxClosed", inbox: canonical.inbox };
@@ -2221,6 +2338,7 @@ function prepareRouteTransition(
 /** Freeze one validated terminal failure and its canonical public record. */
 function prepareFailureTransition(state: RunState, record: NodeFailedRecord): PreparedTransition {
   validateFailureRecord(state, record);
+  if (record.callId !== null) return prepareFlowFailureTransition(state, record);
   // The record already holds its failure through `retainFailure`, which rebuilds each origin as a
   // plain `OriginRef`: the wire's single-key identity shape.
   const { envelopeJson, envelope, canonical } = canonicalEnvelope(state, record, [NodeFailedRecord], "node-failure");
@@ -2710,6 +2828,7 @@ const PLAN_KINDS: ReadonlySet<string> = new Set([
   "success",
   "route",
   "failure",
+  "flowFailure",
   "ending",
   "growth",
 ]);
@@ -2754,6 +2873,9 @@ export function commitPrepared(log: RunLog, state: RunState, prepared: PreparedT
       break;
     case "failure":
       observers = commitFailure(log, state, prepared);
+      break;
+    case "flowFailure":
+      observers = commitFlowFailure(log, state, prepared);
       break;
     case "ending":
       observers = commitEnding(log, state, prepared);
@@ -3039,9 +3161,11 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       // Withdrawn sends get no reply; nothing reads their values again.
       for (const seq of delta.events) state.inboxEvents.delete(seq);
       break;
+    case "interrupted":
+      for (const scope of delta.scopes) retireScope(state, scope);
+      break;
     case "runWaiting":
     case "inboxClosed":
-    case "interrupted":
       break;
   }
   state.nextSequence = prepared.expectedSequence + 1;
@@ -3161,6 +3285,56 @@ function commitFailure(log: RunLog, state: RunState, prepared: PreparedTransitio
   state.result = apply.result;
   state.nextSequence = prepared.expectedSequence + 1;
   return apply.observers;
+}
+
+/**
+ * Freeze a failure a flow call takes, checked against the state: a node of the innermost live
+ * scope holding it, or the agent of a call whose scope hasn't grown.
+ */
+function prepareFlowFailureTransition(state: RunState, record: NodeFailedRecord): PreparedTransition {
+  const { envelopeJson, envelope, canonical } = canonicalEnvelope(state, record, [NodeFailedRecord], "node-failure");
+  const failure = canonical.failure;
+  const callId = canonical.callId!;
+  const scope = canonical.scope!;
+  const nodeId = failure.nodeId!;
+  const enclosing = enclosingFlowCall(state, nodeId);
+  const call = state.waits.calls.get(callId);
+  const ungrown = call?.nodeId === nodeId && call.flow && call.state === "open" && !state.flowScopes.has(callId);
+  const retires = enclosing !== null && enclosing.callId === callId && enclosing.scope === scope;
+  if (!retires && !(ungrown && call!.scope === scope)) {
+    throw new RangeError(`NodeFailed of ${reprText(nodeId)} names flow call ${reprText(callId)}, which doesn't hold it`);
+  }
+  const closedCalls = retires ? hostCalls(state, scopeCalls(state, scope)) : [];
+  const plan: FlowFailurePlan = Object.freeze({
+    kind: "flowFailure",
+    ...planAnchors(state, envelopeJson),
+    failure,
+    callId,
+    scope,
+    retires,
+    closedCalls,
+  });
+  const observers = [new NodeFailed({ failure }), ...closedCalls.map((id) => new CallClosed({ callId: id, reason: "failed" }))];
+  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, observers);
+}
+
+/** Validate, append and install a failure a flow call takes: its scope ends and the run goes on. */
+function commitFlowFailure(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
+  const plan = prepared._plan;
+  if (plan.kind !== "flowFailure") throw new TypeError("flow failure commit requires a flow failure plan");
+  const record = prepared.record;
+  if (!isExactly(record, NodeFailedRecord)) throw new TypeError("flow failure plan requires a NodeFailedRecord");
+  requirePreparedOrigin(state, plan);
+  requireInitializedNonterminal(state);
+  requireAuthorityCoordinates(log, state, prepared, true);
+  requireUnchangedRecord(prepared, plan.envelopeJson);
+  if (record.failure !== plan.failure) throw new RangeError("failure record and prevalidated authority disagree");
+
+  appendAndVerify(log, prepared);
+  if (plan.retires) retireScope(state, plan.scope);
+  state.flowFailures.set(plan.callId, plan.failure);
+  state.nextSequence = prepared.expectedSequence + 1;
+  return prepared.observers;
 }
 
 /** Validate, append and install one ending record: the run's terminal result. */
@@ -3335,6 +3509,7 @@ function hasReducerContainers(state: RunState): boolean {
     isExactly(state.growthOwner, Map) &&
     isExactly(state.deferredPrune, Set) &&
     isExactly(state.flowScopes, Map) &&
+    isExactly(state.flowFailures, Map) &&
     isExactly(state.wiringOverrides, Map) &&
     isExactly(state.waits, WaitsState) &&
     isExactly(state.inboxEvents, Map) &&
@@ -3667,9 +3842,11 @@ function validateNodeWaiting(state: RunState, record: NodeWaitingRecord): void {
       );
     }
     // An interrupt can land between an agent's `Pending` and the engine's `node_waiting`; the node
-    // is wakeable at once and honors it.
+    // is wakeable at once and honors it. So is a flow call whose scope couldn't grow, which fails
+    // as the node is about to wait.
     const interrupted = call.closedReason === "interrupted" && w.interrupts.has(nodeId);
-    if (call.state === "closed" && !interrupted) {
+    const ungrown = call.flow && call.closedReason === "failed" && !state.flowScopes.has(callId);
+    if (call.state === "closed" && !interrupted && !ungrown) {
       throw new RangeError(`NodeWaiting call ${reprText(callId)} was closed (${call.closedReason})`);
     }
   }

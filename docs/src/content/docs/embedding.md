@@ -347,7 +347,8 @@ const closed = await cancel(log);              // the open host calls it closed
 `interrupt` stops the agents whose `steer_inbox:` is that inbox (see
 [Agents](/agents/#steering-and-interrupts)). Each one's reply is cut: an `Optional(...)` output
 succeeds with `null`, any other fails with `agent.interrupted`. A later `complete` of the open
-calls it closes is refused. An agent that starts reading the inbox
+calls it closes is refused, the calls of the agents' running [flow calls](/agents/#flows-as-tools)
+included, which end with it. An agent that starts reading the inbox
 soon after is stopped too, before its first model call. `interrupt` appends nothing
 (`seq: null`) when the run is waiting for the next message on the inbox, or is already stopping.
 Queued steers stay; `withdraw` takes them back.

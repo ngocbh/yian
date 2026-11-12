@@ -81,6 +81,7 @@ import {
   planExpansion,
   prepareExpandedFromPlan,
   prepareExpansionCommit,
+  prepareFlowCallFailed,
   prepareFlowExpanded,
   prepareAppliedStop,
   prepareComplete,
@@ -110,6 +111,15 @@ import {
   ungrownFlowCalls,
 } from "./state.ts";
 import { availableUnread, decideWait, dueTimeouts, isWakeable, nodeCalls, wakeAt } from "./waits.ts";
+
+/** Why a node's evaluation stops: its flow call's scope ended (a failure inside it, an interrupt). */
+class ScopeEnded extends Error {
+  override name = "ScopeEnded";
+
+  constructor(nodeId: string) {
+    super(`node ${reprText(nodeId)} stopped: its flow call ended`);
+  }
+}
 
 /** The dependencies and host callbacks of one `FlowEngine`. */
 export interface FlowEngineOptions {
@@ -298,6 +308,8 @@ function callViews(state: RunState, nodeId: string): CallView[] {
       closedReason: call.closedReason,
       result: answer === null ? null : structuredClone(answer),
       deadline: call.deadline,
+      scope: call.scope,
+      failure: state.flowFailures.get(call.callId) ?? null,
     };
   });
 }
@@ -373,6 +385,8 @@ export class FlowEngine {
   #ran = false;
   /** Whether a loop is driving the run; a delivery made after it ended publishes without it. */
   #looping = false;
+  /** Each running evaluation's own controller, by node, so a scope that ends stops its nodes. */
+  readonly #controllers = new Map<string, AbortController>();
   /** The run's post-durable observers so far, in order. */
   readonly #events: RunEvent[] = [];
   /** The pooled dispatcher's queue while it runs, so a delivery can wake it. */
@@ -460,6 +474,8 @@ export class FlowEngine {
     // In the same synchronous section as the record, so a running reader sees both at once.
     if (prepared.record instanceof InterruptedRecord) {
       for (const nodeId of prepared.record.nodes) this.#steerInboxes.get(nodeId)?.controller.abort();
+      // The interrupt ended its agents' running flow calls.
+      this.#stopRetired();
     }
     this.#queue?.nudge();
     if (this.#looping) {
@@ -542,7 +558,9 @@ export class FlowEngine {
         signal.throwIfAborted();
         const evaluated = await this.#startEvaluation(nodeId);
         signal.throwIfAborted();
+        if (this.#retired(nodeId)) continue;
         const settled = this.#commitOutcome(nodeId, evaluated);
+        this.#stopRetired();
         // The commit may have set the result, which the loop condition narrowed to `null`.
         if ((state.result as RunState["result"]) instanceof RunFailed) this.#controller.abort();
         this.#publish(settled, events);
@@ -621,8 +639,10 @@ export class FlowEngine {
         wakes.delete(completion.nodeId);
         // An entry taken after the abort is discarded; the abort's error is the run's.
         signal.throwIfAborted();
+        if (this.#retired(completion.nodeId)) continue;
         if ("error" in completion) throw completion.error;
         const settled = this.#commitOutcome(completion.nodeId, completion.outcome);
+        this.#stopRetired();
         if ((state.result as RunState["result"]) instanceof RunFailed) {
           this.#controller.abort();
           this.#publish(settled, events);
@@ -690,6 +710,8 @@ export class FlowEngine {
     // change, each steer step's with the values it consumed.
     const prior = stepsWithSteerValues(state, nodeId);
     const record: NodeSteps["record"] = (step, options) => {
+      // A node whose flow call's scope ended has left the graph: it records nothing more.
+      if (!state.flow.nodes.has(nodeId)) throw signal.reason;
       // A stopping run takes only a settled call's step, until it has a result; the stop is
       // control flow, not a host fault.
       if (signal.aborted && !(options?.settled === true && state.result === null)) throw signal.reason;
@@ -875,7 +897,10 @@ export class FlowEngine {
           grown = prepareFlowExpanded(state, nodeId, callId, this.growBuilder);
         } catch (error) {
           if (!(error instanceof GrowthRejected)) throw error;
-          return commitPrepared(log, state, this.#prepareContractFailure(nodeId, "contract.growth", error.original, null));
+          // A scope that can't grow fails its call, and the agent wakes to read why.
+          const node = state.flow.nodes.get(nodeId)!;
+          const failure = evaluationFailure(node, "contract.growth", error.original, null).failure;
+          grown = prepareFlowCallFailed(state, nodeId, callId, failure);
         }
         this.#publish(commitPrepared(log, state, grown), this.#events);
       }
@@ -1016,6 +1041,7 @@ export class FlowEngine {
     // Both callers check the run signal right before, so it is not aborted yet.
     const relay = (): void => nodeController.abort(runSignal.reason);
     runSignal.addEventListener("abort", relay, { once: true });
+    this.#controllers.set(nodeId, nodeController);
     try {
       return await evalNode(node, state.flow, state.pool, {
         wiringOverride: state.wiringOverrides.get(nodeId) ?? null,
@@ -1040,8 +1066,27 @@ export class FlowEngine {
       });
     } finally {
       runSignal.removeEventListener("abort", relay);
+      this.#controllers.delete(nodeId);
       live?.settle(nodeId);
     }
+  }
+
+  /**
+   * Stop each running evaluation whose node left the graph: an ended flow call scope's (a failure
+   * inside it, or an interrupt of its agent). Its late outcome is dropped (`#retired`).
+   */
+  #stopRetired(): void {
+    for (const [nodeId, controller] of this.#controllers) {
+      if (!this.state.inFlight.has(nodeId)) controller.abort(new ScopeEnded(nodeId));
+    }
+  }
+
+  /** Whether `nodeId`'s evaluation ended after its flow call's scope did, so its outcome is dropped. */
+  #retired(nodeId: string): boolean {
+    if (this.state.flow.nodes.has(nodeId)) return false;
+    this.#steerInboxes.delete(nodeId);
+    this.#reads.delete(nodeId);
+    return true;
   }
 
   /** Pass one stream chunk to the live channel (an AGENT's text) and to `onStream`. */

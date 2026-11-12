@@ -10,7 +10,7 @@
  * `results`.
  */
 
-import { reprText } from "../../diagnostics.ts";
+import { type Failure, reprText } from "../../diagnostics.ts";
 import { FunctionTool } from "../../tools/function_tools.ts";
 import type { JsonObject } from "../../typesys/json.ts";
 import { cutText, isRecord } from "../../typesys/values.ts";
@@ -49,6 +49,20 @@ export function flowToolFunctions(tools: readonly FlowTool[]): FunctionTool[] {
         resumable: true,
       }),
   );
+}
+
+/**
+ * Return the error text the model reads for flow tool `name`'s call that failed: the node of the
+ * flow that failed (its id inside the call's `scope`), the failure's code and message; for a
+ * call whose scope couldn't grow, why it didn't start.
+ */
+export function flowFailureText(name: string, scope: string | null, failure: Failure): string {
+  const prefix = scope === null ? null : `${scope}/`;
+  const node = failure.nodeId;
+  if (prefix === null || node === null || !node.startsWith(prefix)) {
+    return `Flow ${name} didn't start (${failure.code}): ${failure.message}`;
+  }
+  return `Flow ${name} failed at node ${node.slice(prefix.length)} (${failure.code}): ${failure.message}`;
 }
 
 /**

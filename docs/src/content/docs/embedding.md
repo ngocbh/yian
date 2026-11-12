@@ -355,9 +355,11 @@ soon after is stopped too, before its first model call. `interrupt` appends noth
 Queued steers stay; `withdraw` takes them back.
 
 `cancel` ends the run with no output, and closes its open calls. If your process
-is running the run, its running nodes are stopped at once. To stop a run you may want to resume,
-abort its `signal` instead: the run records a stop, rejects with the signal's reason, and
-`advance` runs the stopped nodes again.
+is running the run, its running nodes are stopped at once. Otherwise `cancel` reads only the
+log's records, so it ends a run whose flow no longer loads (a CODE file it ran is gone) and
+needs no `flow`; a log that ends inside its run start is refused with `not_started`. To stop a
+run you may want to resume, abort its `signal` instead: the run records a stop, rejects with the
+signal's reason, and `advance` runs the stopped nodes again.
 
 ## Tools and skills
 

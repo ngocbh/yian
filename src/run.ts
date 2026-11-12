@@ -150,6 +150,7 @@ import {
   type RecordEnvelope,
   type RunLog,
   type RunLogEntry,
+  RunCancelledRecord,
   RunFailedRecord,
   type RunRecord,
   RunResumedRecord,
@@ -1945,21 +1946,30 @@ export interface SendOptions extends DeliveryOptions {
 }
 
 /**
+ * What a delivery appended: the record and its seq (both `null` for a no-op; for a repeat of a
+ * keyed send, the first send's seq and no record), and its observers.
+ */
+interface Delivered {
+  readonly seq: number | null;
+  readonly events: readonly RunEvent[];
+  readonly record: RunRecord | null;
+}
+
+/**
  * Deliver `op` to the run at `log`: through this process's engine when it is moving the run,
  * else under the log's lock, which is taken without blocking and released before this returns.
  * Offline, a waiting run's registry entry is reused while the log is the file it left; otherwise
- * the recorded flow is compiled and the log replayed, as `advance` does. A refused delivery keeps
- * the entry. `before` sees the state just before the delivery, synchronously.
- *
- * @returns The appended record and its seq (both `null` for a no-op; for a repeat of a keyed
- *   send, the first send's seq and no record), and its observers.
+ * `fromRecords`, when given, delivers from the opened log alone, else the recorded flow is
+ * compiled and the log replayed, as `advance` does. A refused delivery keeps the entry. `before`
+ * sees the state just before the delivery, synchronously, when there is one.
  */
 async function deliverTo(
   log: string,
   op: DeliveryOp,
   options: DeliveryOptions,
   before: (state: RunState) => void = () => {},
-): Promise<{ readonly seq: number | null; readonly events: readonly RunEvent[]; readonly record: RunRecord | null }> {
+  fromRecords: ((authority: JsonlRunLog) => Delivered) | null = null,
+): Promise<Delivered> {
   const env = options.env ?? processEnv;
   return withEnv(env, async () => {
     current();
@@ -1993,6 +2003,11 @@ async function deliverTo(
       checkRecorded(start.defaults);
       const want = given === null ? { hostFlow } : { hostFlow, credentials: given };
       const kept = reusable(runHold.idle, authority, key, want);
+      if (kept === null && fromRecords !== null) {
+        const delivered = fromRecords(opened);
+        appended = delivered.record !== null;
+        return delivered;
+      }
       const flow = kept?.flow ?? (await resumedFlow(log, start, hostFlow));
       const state = kept?.state ?? replayRunLog(flow, authority, given ?? {});
       // Set before preparing: a refused delivery changes nothing, so the state stays reusable.
@@ -2160,21 +2175,53 @@ export async function withdraw(log: string, inbox: string, options: DeliveryOpti
 /**
  * Cancel the run at `log`: `run_cancelled` ends it, closing its open calls, with no output. A live
  * engine aborts its running nodes and publishes `CallClosed {reason: "cancelled"}` for each open
- * host call. Delivered as `send` is.
+ * host call. Delivered as `send` is, except that offline, with no state of this process to reuse,
+ * the log's records alone decide it: the flow isn't compiled, so a run whose flow no longer loads
+ * (a CODE file gone) can still be ended, and `options.flow` isn't needed.
  *
  * @param log The run's JSONL log.
- * @param options See `DeliveryOptions`.
+ * @param options See `DeliveryOptions`; `flow` is read only by a live or reused run.
  * @returns The open host calls the cancel closed, as `pendingCalls` listed them.
  * @throws TypeError when `options.flow` isn't a `ComposedFlow` or `null`.
  * @throws DeliveryRefused (nothing appended) with reason `ended` once the run has a terminal
- *   result (a second cancel among them).
- * @throws RunBusyError, RangeError, LoadError, DefaultsMismatchError and `ENOENT`, as `send`.
+ *   result (a second cancel among them), as `inspectRun` reads it from the records offline, or
+ *   `not_started` when the log ends inside its run start.
+ * @throws RunBusyError, DefaultsMismatchError and `ENOENT`, as `send`; RangeError when the log is
+ *   empty or doesn't start with `RunStarted`, `options.codeRoot` isn't the recorded code root, or
+ *   `options.apiKey` or `options.headers` is refused.
  */
 export async function cancel(log: string, options: DeliveryOptions = {}): Promise<readonly PendingCall[]> {
   let open: readonly PendingCall[] = [];
-  await deliverTo(log, { kind: "cancel" }, options, (state) => {
-    open = openHostCalls(state.waits, (call) => stateArguments(state, call));
-  });
+  const fromRecords = (authority: JsonlRunLog): Delivered => {
+    const scan = emptyRunScan();
+    const calls = callArguments(scan.waits);
+    for (const envelope of authority) {
+      foldRunScan(scan, envelope);
+      calls.fold(envelope.record);
+    }
+    const status = scanStatus(scan);
+    if (status === "succeeded" || status === "failed" || status === "cancelled") {
+      throw new DeliveryRefused("ended", "the run has ended");
+    }
+    if (!scan.waits._inputsCommitted) throw new DeliveryRefused("not_started", "the run hasn't started");
+    open = openHostCalls(scan.waits, calls.of);
+    // The calls the record closes: every open one but takes and sleeps, answered or not.
+    const closed = [...scan.waits.calls.values()].filter(
+      (call) => call.state === "open" && call.tool !== TAKE && call.tool !== SLEEP,
+    );
+    const envelope = authority.append(new RunCancelledRecord());
+    const events = [new RunCancelled(), ...closed.map((call) => new CallClosed({ callId: call.callId, reason: "cancelled" }))];
+    return { seq: envelope.seq, events, record: envelope.record };
+  };
+  await deliverTo(
+    log,
+    { kind: "cancel" },
+    options,
+    (state) => {
+      open = openHostCalls(state.waits, (call) => stateArguments(state, call));
+    },
+    fromRecords,
+  );
   return open;
 }
 
@@ -2269,12 +2316,7 @@ export type AskQuestion = Pick<AskRequest, "question" | "questions" | "answerSch
  */
 export function pendingCalls(log: string, options: { maxLineBytes?: number | null } = {}): readonly PendingCall[] {
   const waits = new WaitsState();
-  // Each unsettled call's recorded arguments and question; a settled node's calls leave the fold,
-  // so theirs go.
-  const args = new Map<string, { arguments: JsonObject | null; ask: AskQuestion | null }>();
-  // Each running node's step count and latest `model_call` step with its number: an agent call's
-  // `reply` must name that step, so the earlier ones needn't be kept.
-  const nodes = new Map<string, { count: number; replyN: number; reply: Readonly<JsonObject> | undefined }>();
+  const calls = callArguments(waits);
   let first = true;
   for (const { envelope } of iterRunRecords(log, { maxLineBytes: options.maxLineBytes ?? null })) {
     if (first && !(envelope.record instanceof RunStartedRecord)) {
@@ -2282,28 +2324,49 @@ export function pendingCalls(log: string, options: { maxLineBytes?: number | nul
     }
     first = false;
     applyWaitsRecord(waits, envelope);
-    const record = envelope.record;
-    if (record instanceof NodeStepRecord) {
-      const node = nodes.get(record.nodeId) ?? { count: 0, replyN: 0, reply: undefined };
-      nodes.set(record.nodeId, node);
-      node.count += 1;
-      const step = record.step;
-      if (step["kind"] === "model_call") {
-        node.replyN = node.count;
-        node.reply = step;
-      } else if (step["kind"] === "pending") {
-        const replyAt = (n: number) => (n === node.replyN ? node.reply : undefined);
-        args.set(String(step["call_id"]), { arguments: pendingArguments(replyAt, step), ask: askQuestion(step) });
-      }
-    } else {
-      const settled = settledNodeId(record);
-      if (settled === null) continue;
-      nodes.delete(settled);
-      for (const callId of args.keys()) if (!waits.calls.has(callId)) args.delete(callId);
-    }
+    calls.fold(envelope.record);
   }
   if (first) throw new YianRangeError(`cannot read an empty run log: ${log}`);
-  return openHostCalls(waits, (call) => args.get(call.callId) ?? { arguments: null, ask: null });
+  return openHostCalls(waits, calls.of);
+}
+
+/**
+ * A fold of each unsettled call's recorded arguments and question, beside the waits fold `waits`:
+ * `fold` takes each record after `waits` has, and `of` reads a call's.
+ */
+function callArguments(waits: WaitsState): {
+  fold(record: RunRecord): void;
+  of(call: Call): { arguments: JsonObject | null; ask: AskQuestion | null };
+} {
+  // Each unsettled call's recorded arguments and question; a settled node's calls leave the fold,
+  // so theirs go.
+  const args = new Map<string, { arguments: JsonObject | null; ask: AskQuestion | null }>();
+  // Each running node's step count and latest `model_call` step with its number: an agent call's
+  // `reply` must name that step, so the earlier ones needn't be kept.
+  const nodes = new Map<string, { count: number; replyN: number; reply: Readonly<JsonObject> | undefined }>();
+  return {
+    fold(record) {
+      if (record instanceof NodeStepRecord) {
+        const node = nodes.get(record.nodeId) ?? { count: 0, replyN: 0, reply: undefined };
+        nodes.set(record.nodeId, node);
+        node.count += 1;
+        const step = record.step;
+        if (step["kind"] === "model_call") {
+          node.replyN = node.count;
+          node.reply = step;
+        } else if (step["kind"] === "pending") {
+          const replyAt = (n: number) => (n === node.replyN ? node.reply : undefined);
+          args.set(String(step["call_id"]), { arguments: pendingArguments(replyAt, step), ask: askQuestion(step) });
+        }
+        return;
+      }
+      const settled = settledNodeId(record);
+      if (settled === null) return;
+      nodes.delete(settled);
+      for (const callId of args.keys()) if (!waits.calls.has(callId)) args.delete(callId);
+    },
+    of: (call) => args.get(call.callId) ?? { arguments: null, ask: null },
+  };
 }
 
 /**

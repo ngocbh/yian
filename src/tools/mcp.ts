@@ -12,8 +12,8 @@
  * Knows about: the MCP SDK client (`@modelcontextprotocol/client`, imported when a server opens),
  * `defaults`, `platform` (the version, and `safeFetch` for every HTTP request), `tools/context`,
  * `tools/errors`, `tools/function_tools`, `tools/types` (the output schema check), `llm/body`
- * (exact JSON writes), `llm/errors` and `llm/auth` (scrubbing the server's secrets from errors),
- * typesys and diagnostics.
+ * (exact JSON writes), `llm/errors` (scrubbing the server's secrets from errors, and reading its
+ * stdio lines within the received-JSON bounds), `llm/auth`, typesys and diagnostics.
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
@@ -25,9 +25,10 @@ import { current } from "../defaults.ts";
 import { reprText } from "../diagnostics.ts";
 import { scrub } from "../llm/auth.ts";
 import { encodeBody } from "../llm/body.ts";
-import { scrubError } from "../llm/errors.ts";
+import { parseReceivedJson, receivedBound, scrubError } from "../llm/errors.ts";
 import { LOOPBACK_HOSTS, RedirectError, safeFetch, VERSION } from "../platform.ts";
-import { type JsonObject, parseJson } from "../typesys/json.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
+import type { JsonObject } from "../typesys/json.ts";
 import {
   buildValueAs,
   fromHost,
@@ -162,9 +163,14 @@ export class McpTransportError extends McpError {
 
 /**
  * The MCP server is gone: yian closed it, its process, connection or session ended, or it sent a
- * message over `YIAN_MAX_MCP_MESSAGE_BYTES`, which the message then names.
+ * message over `YIAN_MAX_MCP_MESSAGE_BYTES` or, on stdio, past the received-JSON bounds, which the
+ * message then names.
  *
- * Later calls to the same server throw it at once; the host still closes it.
+ * For a stdio server that ended on its own, the message says how: its exit code or signal. A call
+ * in flight then also names its tool and ends with the last lines the server wrote to stderr,
+ * with the server's secrets scrubbed. A later call reconnects such a server once (see
+ * `McpServer`); when that fails, the calls that waited on it get the reason, and later calls,
+ * like calls to a server yian closed, throw it at once. The host still closes the server.
  */
 export class McpServerClosed extends McpError {
   override name = "McpServerClosed";
@@ -283,23 +289,23 @@ export function mcpServer(options: McpServerOptions): McpServer {
   const label = absent(options.label);
   const concurrencySafe = absent(options.concurrencySafe);
   if ((command === undefined) === (url === undefined)) {
-    throw new RangeError("mcpServer needs exactly one of command or url");
+    throw new YianRangeError("mcpServer needs exactly one of command or url");
   }
   if (command !== undefined) {
     if (typeof command !== "string") {
-      throw new TypeError(`mcpServer command must be a string, got ${jsTypeName(command)}`);
+      throw new YianTypeError(`mcpServer command must be a string, got ${jsTypeName(command)}`);
     }
-    if (command === "") throw new RangeError("mcpServer command must not be empty");
+    if (command === "") throw new YianRangeError("mcpServer command must not be empty");
     if (headers !== undefined) {
-      throw new RangeError("mcpServer headers needs url; a command server takes env instead");
+      throw new YianRangeError("mcpServer headers needs url; a command server takes env instead");
     }
   } else {
-    if (typeof url !== "string") throw new TypeError(`mcpServer url must be a string, got ${jsTypeName(url)}`);
+    if (typeof url !== "string") throw new YianTypeError(`mcpServer url must be a string, got ${jsTypeName(url)}`);
     const host = urlHost(url);
-    if (host === "") throw new RangeError("mcpServer url must be an http or https URL with a host");
+    if (host === "") throw new YianRangeError("mcpServer url must be an http or https URL with a host");
     // As base_url's rule: headers and URL tokens never cross the network in cleartext.
     if (/^http:/i.test(url) && !LOOPBACK_HOSTS.includes(host.replace(/^\[(.*)\]$/, "$1"))) {
-      throw new RangeError("mcpServer url must use https; http is allowed only for localhost, 127.0.0.1, and ::1");
+      throw new YianRangeError("mcpServer url must use https; http is allowed only for localhost, 127.0.0.1, and ::1");
     }
     // An empty args array or string counts as not given.
     const argsGiven = args !== undefined && (args as unknown) !== "" && !(Array.isArray(args) && args.length === 0);
@@ -308,20 +314,20 @@ export function mcpServer(options: McpServerOptions): McpServer {
       ["env", env !== undefined],
       ["cwd", cwd !== undefined],
     ] as const) {
-      if (given) throw new RangeError(`mcpServer ${name} needs command; a url server takes headers instead`);
+      if (given) throw new YianRangeError(`mcpServer ${name} needs command; a url server takes headers instead`);
     }
   }
   const checkedArgs = checkArgs(args);
   const checkedEnv = checkStringRecord("env", env);
   const checkedHeaders = checkStringRecord("headers", headers);
   if (cwd !== undefined && typeof cwd !== "string") {
-    throw new TypeError(`mcpServer cwd must be a string, got ${jsTypeName(cwd)}`);
+    throw new YianTypeError(`mcpServer cwd must be a string, got ${jsTypeName(cwd)}`);
   }
   checkSeconds("timeout", timeout);
   checkSeconds("connectTimeout", connectTimeout);
   if (label !== undefined) {
-    if (typeof label !== "string") throw new TypeError(`mcpServer label must be a string, got ${jsTypeName(label)}`);
-    if (label === "") throw new RangeError("mcpServer label must not be empty");
+    if (typeof label !== "string") throw new YianTypeError(`mcpServer label must be a string, got ${jsTypeName(label)}`);
+    if (label === "") throw new YianRangeError("mcpServer label must not be empty");
   }
   return new McpServer({
     command,
@@ -354,13 +360,13 @@ function urlHost(url: string): string {
 function checkArgs(args: unknown): readonly string[] {
   if (args === undefined) return Object.freeze([]);
   if (!Array.isArray(args)) {
-    throw new TypeError("mcpServer args must be an array of strings, not a single string");
+    throw new YianTypeError("mcpServer args must be an array of strings, not a single string");
   }
   const copy: string[] = [];
   // Index every slot, so a hole reads as `undefined` and fails.
   for (let i = 0; i < args.length; i++) {
     const arg: unknown = args[i];
-    if (typeof arg !== "string") throw new TypeError("mcpServer args must hold only strings");
+    if (typeof arg !== "string") throw new YianTypeError("mcpServer args must hold only strings");
     copy.push(arg);
   }
   return Object.freeze(copy);
@@ -369,11 +375,11 @@ function checkArgs(args: unknown): readonly string[] {
 /** Return a frozen copy of `value`, or throw `TypeError` unless it is a record of strings to strings. */
 function checkStringRecord(name: string, value: unknown): Readonly<Record<string, string>> | undefined {
   if (value === undefined) return undefined;
-  if (!isRecord(value)) throw new TypeError(`mcpServer ${name} must be a record of strings to strings`);
+  if (!isRecord(value)) throw new YianTypeError(`mcpServer ${name} must be a record of strings to strings`);
   const entries = Object.entries(value);
   for (const [key, item] of entries) {
     if (typeof item !== "string") {
-      throw new TypeError(`mcpServer ${name} must map strings to strings; ${reprText(key)} doesn't`);
+      throw new YianTypeError(`mcpServer ${name} must map strings to strings; ${reprText(key)} doesn't`);
     }
   }
   return Object.freeze(Object.fromEntries(entries) as Record<string, string>);
@@ -383,10 +389,10 @@ function checkStringRecord(name: string, value: unknown): Readonly<Record<string
 function checkSeconds(name: string, value: unknown): void {
   if (value === undefined) return;
   if (typeof value !== "number") {
-    throw new TypeError(`mcpServer ${name} must be a number of seconds, got ${jsTypeName(value)}`);
+    throw new YianTypeError(`mcpServer ${name} must be a number of seconds, got ${jsTypeName(value)}`);
   }
   if (!(value > 0 && value < Infinity)) {
-    throw new RangeError(`mcpServer ${name} must be positive and finite, got ${value}`);
+    throw new YianRangeError(`mcpServer ${name} must be positive and finite, got ${value}`);
   }
 }
 
@@ -395,11 +401,11 @@ function checkConcurrencySafe(value: unknown): boolean | readonly string[] {
   const message = "mcpServer concurrencySafe must be a boolean or an array of tool names";
   if (value === undefined) return false;
   if (typeof value === "boolean") return value;
-  if (!Array.isArray(value)) throw new TypeError(message);
+  if (!Array.isArray(value)) throw new YianTypeError(message);
   const names: string[] = [];
   for (let i = 0; i < value.length; i++) {
     const name: unknown = value[i];
-    if (typeof name !== "string") throw new TypeError(message);
+    if (typeof name !== "string") throw new YianTypeError(message);
     names.push(name);
   }
   return Object.freeze(names);
@@ -442,6 +448,12 @@ function remember(error: unknown, init: RequestInit | undefined): never {
   }
   throw error;
 }
+
+/**
+ * The errors a stdio send waiting on a full pipe failed with: the server may have read some or
+ * all of its line, so the call counts as sent.
+ */
+const partlyWritten = new WeakSet<object>();
 
 const CR = 0x0d;
 const LF = 0x0a;
@@ -517,12 +529,43 @@ interface Generation {
   closed: boolean;
   /** Whether the server is known gone: its transport closed. */
   gone: boolean;
-  /** The cap in bytes a message from the server passed, which closed the connection. */
-  overflow: number | undefined;
+  /** What a message from the server passed, which closed the connection: `sent a message over ...`. */
+  overflow: string | undefined;
   /** The calls in flight, which `close()` aborts. */
   readonly calls: Set<AbortController>;
   /** The shutdown, once started. */
   closing: Promise<void> | undefined;
+  /**
+   * The one attempt to reconnect, once a call found the server gone: the new connection, or
+   * `undefined` when the attempt failed or `close()` ran.
+   */
+  reconnecting: Promise<Generation | undefined> | undefined;
+  /** The connection the reconnect is opening, which `close()` closes too. */
+  next: Generation | undefined;
+  /** Why the reconnect failed. */
+  reconnectError: Error | undefined;
+}
+
+/** A new connection, not yet started. */
+function newGeneration(): Generation {
+  return {
+    stop: new AbortController(),
+    sdk: undefined,
+    client: undefined,
+    transport: undefined,
+    owner: undefined,
+    tools: undefined,
+    outputTypes: new Map(),
+    callTimeout: 0,
+    closed: false,
+    gone: false,
+    overflow: undefined,
+    calls: new Set(),
+    closing: undefined,
+    reconnecting: undefined,
+    next: undefined,
+    reconnectError: undefined,
+  };
 }
 
 /**
@@ -531,6 +574,11 @@ interface Generation {
  * Build one with `mcpServer`. While open, `tools` holds the tools the server listed when it
  * opened; a later change to the server's tool list is ignored. A server opened with `open()`
  * belongs to the host, which closes it; `await using` does both.
+ *
+ * When an open server ends on its own (its process exits, or an HTTP server forgets the session),
+ * the next call reconnects it once, with the same tools: it starts the command again or opens a
+ * new session, then sends the call. Concurrent calls share that one attempt. A call the server may
+ * have been running is never sent again; it fails with `McpServerClosed`.
  *
  * @example
  * await using files = await mcpServer({ command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "."] }).open();
@@ -568,7 +616,10 @@ export class McpServer {
     return this.generation?.owner !== undefined;
   }
 
-  /** Whether an open server has gone away, so its calls fail at once until it is reopened. */
+  /**
+   * Whether an open server has gone away. The next call reconnects it once when it ended on its
+   * own; otherwise calls fail at once until it is reopened.
+   */
   get isClosed(): boolean {
     const generation = this.generation;
     return generation?.owner !== undefined && generation.gone;
@@ -624,8 +675,9 @@ export class McpServer {
 
   /**
    * Stop the server and its client: end the calls in flight, then the client and the server's
-   * process group. Never rejects; closing twice, or before `open()`, does nothing more. A close
-   * that is still running when the server is opened again leaves the new connection alone.
+   * process group, and a reconnect's new server too. Never rejects; closing twice, or before
+   * `open()`, does nothing more. A close that is still running when the server is opened again
+   * leaves the new connection alone.
    */
   close(): Promise<void> {
     this.closeRequested = true;
@@ -634,7 +686,10 @@ export class McpServer {
     generation.closed = true;
     // Detached at once, so an `open()` right after starts a connection this close leaves alone.
     this.generation = undefined;
-    return this.shutdown(generation);
+    const next = generation.next;
+    if (next === undefined) return this.shutdown(generation);
+    next.closed = true;
+    return Promise.all([this.shutdown(generation), this.shutdown(next)]).then(() => {});
   }
 
   /** Close the server, for `await using`. */
@@ -647,21 +702,7 @@ export class McpServer {
     // Checked and set before the first `await`, so two racing opens can't both start.
     if (this.generation !== undefined) throw new AlreadyOpenError(`MCP server '${this.label}' is already open`);
     this.closeRequested = false;
-    const generation: Generation = {
-      stop: new AbortController(),
-      sdk: undefined,
-      client: undefined,
-      transport: undefined,
-      owner: undefined,
-      tools: undefined,
-      outputTypes: new Map(),
-      callTimeout: 0,
-      closed: false,
-      gone: false,
-      overflow: undefined,
-      calls: new Set(),
-      closing: undefined,
-    };
+    const generation = newGeneration();
     this.generation = generation;
     try {
       await this.connect(generation, owner, signal);
@@ -685,9 +726,15 @@ export class McpServer {
 
   /**
    * Load the SDK, start the server, connect and list its tools within one connect deadline, and
-   * record `owner`; throw the error `open()` reports.
+   * record `owner`; throw the error `open()` reports. A reconnect passes the connection it
+   * replaces as `kept`, whose tools it keeps without listing them again.
    */
-  private async connect(generation: Generation, owner: string, signal: AbortSignal | undefined): Promise<void> {
+  private async connect(
+    generation: Generation,
+    owner: string,
+    signal: AbortSignal | undefined,
+    kept?: Generation,
+  ): Promise<void> {
     const label = this.label;
     const http = this.spec.url !== undefined;
     const settings = current();
@@ -727,9 +774,9 @@ export class McpServer {
       generation.sdk = sdk;
       // As the stdio transport does on a line past the cap: the call in flight then fails as
       // closed, naming the cap, rather than waiting out its timeout.
-      const overflow = (max: number) => {
+      const overflow = (why: string) => {
         if (generation.overflow !== undefined) return;
-        generation.overflow = max;
+        generation.overflow = why;
         generation.gone = true;
         void generation.transport?.close();
       };
@@ -750,21 +797,27 @@ export class McpServer {
       started = true;
       await client.connect(transport, request());
       check();
-      const listed = await listAll(
-        {
-          listTools: (params, options) => client.listTools(params, options),
-          getServerCapabilities: () => client.getServerCapabilities(),
-        },
-        {
-          label,
-          concurrencySafe: this.spec.concurrencySafe,
-          call: (tool, args, ctx) => this.callTool(tool, args, ctx),
-          ...request(),
-        },
-      );
-      check();
-      generation.tools = listed.tools;
-      generation.outputTypes = listed.outputTypes;
+      if (kept === undefined) {
+        const listed = await listAll(
+          {
+            listTools: (params, options) => client.listTools(params, options),
+            getServerCapabilities: () => client.getServerCapabilities(),
+          },
+          {
+            label,
+            concurrencySafe: this.spec.concurrencySafe,
+            call: (tool, args, ctx) => this.callTool(tool, args, ctx),
+            ...request(),
+          },
+        );
+        check();
+        generation.tools = listed.tools;
+        generation.outputTypes = listed.outputTypes;
+      } else {
+        // The run already holds these tools, and a later change to the server's list is ignored.
+        generation.tools = kept.tools;
+        generation.outputTypes = kept.outputTypes;
+      }
       generation.owner = owner;
     } catch (error) {
       const transport = generation.transport;
@@ -773,7 +826,7 @@ export class McpServer {
       if (timedOut) throw new McpConnectError(late);
       if (generation.closed) throw new McpConnectError(`MCP server '${label}' was closed while starting`);
       if (generation.overflow !== undefined) {
-        throw new McpConnectError(`MCP server '${label}' didn't start: it ${overflowText(generation.overflow)}`);
+        throw new McpConnectError(`MCP server '${label}' didn't start: it ${generation.overflow}`);
       }
       if (signal?.aborted) throw signal.reason;
       if (!started || error instanceof McpConnectError) throw error;
@@ -797,14 +850,14 @@ export class McpServer {
   /**
    * Return the transport for this server: yian's stdio transport, or the SDK's streamable HTTP
    * transport sending every request through `safeFetch`, which follows no redirect, and reading
-   * every reply through `capResponse`. Either calls `onOverflow` with `maxMessageBytes` when a
-   * message passes it.
+   * every reply through `capResponse`. Either calls `onOverflow` with what a message passed when
+   * one passes `maxMessageBytes` (or, on stdio, the received-JSON bounds).
    */
   private createTransport(
     sdk: typeof Sdk,
     defaultEnv: Readonly<Record<string, string>>,
     maxMessageBytes: number,
-    onOverflow: (max: number) => void,
+    onOverflow: (why: string) => void,
   ): StdioTransport | Sdk.StreamableHTTPClientTransport {
     const { command, args, env, cwd, url, headers } = this.spec;
     if (command !== undefined) {
@@ -813,7 +866,7 @@ export class McpServer {
     return new sdk.StreamableHTTPClientTransport(new URL(url!), {
       fetch: async (input, init) => {
         const response = await safeFetch(input, init).catch((error: unknown) => remember(error, init));
-        return capResponse(response, maxMessageBytes, () => onOverflow(maxMessageBytes));
+        return capResponse(response, maxMessageBytes, () => onOverflow(overflowText(maxMessageBytes)));
       },
       requestInit: { headers },
     });
@@ -866,22 +919,58 @@ export class McpServer {
     }
   }
 
-  /** The body of `callTool`, before scrubbing. */
+  /**
+   * The body of `callTool`, before scrubbing. A call that finds the server ended on its own, or
+   * that the server refused unsent because it ended or forgot the session, reconnects it once and
+   * is sent then. A call the server may have been running is never sent again.
+   */
   private async sendCall(tool: ListedTool, args: Record<string, unknown>, ctx: ToolContext<unknown>): Promise<unknown> {
-    const { name, inputSchema } = tool;
+    const { name } = tool;
     const http = this.spec.url !== undefined;
     const refused = unsendable(args, http);
     if (refused !== null) {
       throw new ToolCheckError(`tool call '${name}' arguments at ${renderValuePath(refused.path)}: ${refused.reason}`);
     }
     const sent = http ? (numbersForBigints(args) as Record<string, unknown>) : args;
-    // The connection this call goes to; a later open replaces it.
-    const generation = this.generation;
-    if (this.closeRequested || generation?.gone) throw this.closedError();
-    if (generation?.owner === undefined || generation.client === undefined) {
-      throw new Error(`MCP server '${this.label}' is not open`);
+    // Whether this call waited on a reconnect, and whether the server refused it unread once: after
+    // either it is sent at most once more.
+    let reconnected = false;
+    let unread = false;
+    for (;;) {
+      // The connection this call goes to; a later open or a reconnect replaces it.
+      let generation = this.generation;
+      if (this.closeRequested) throw this.closedError();
+      if (generation?.gone) {
+        if (reconnected || !this.mayReconnect(generation)) throw this.closedError(generation);
+        if (ctx.signal.aborted) throw cancelledError(name);
+        generation = await this.reconnect(generation, name, ctx.signal);
+        reconnected = true;
+      }
+      if (generation?.owner === undefined || generation.client === undefined) {
+        throw new Error(`MCP server '${this.label}' is not open`);
+      }
+      if (ctx.signal.aborted) throw cancelledError(name);
+      const result = await this.sendOnce(generation, tool, sent, ctx, !reconnected && !unread);
+      if (result !== RESEND) return result;
+      // The server ended or forgot the session before it read the call: reconnect, then send it.
+      unread = true;
+      generation.gone = true;
     }
-    if (ctx.signal.aborted) throw cancelledError(name);
+  }
+
+  /**
+   * Send one call on `generation` and return its result as a yian value, or, when `resend` and
+   * the server refused the call unread in a way a reconnect may fix, `RESEND`.
+   */
+  private async sendOnce(
+    generation: Generation,
+    tool: ListedTool,
+    sent: Record<string, unknown>,
+    ctx: ToolContext<unknown>,
+    resend: boolean,
+  ): Promise<unknown> {
+    const { name, inputSchema } = tool;
+    const client = generation.client!;
     const call = new AbortController();
     // A listener removed when the call settles, not `AbortSignal.any`, which would keep a
     // long-lived run signal holding every call it ever saw.
@@ -892,7 +981,7 @@ export class McpServer {
     const ms = Math.min(generation.callTimeout * 1000, MAX_TIMER_MS);
     let result: unknown;
     try {
-      result = await generation.client.callTool(
+      result = await client.callTool(
         { name, arguments: sent, _meta: { "yian/call_id": ctx.callId, "yian/attempt": ctx.attempt } },
         // No `outputSchema`, so the SDK never validates the output itself; yian checks it below.
         {
@@ -903,6 +992,7 @@ export class McpServer {
         },
       );
     } catch (error) {
+      if (resend && refusedUnread(generation, error) && this.mayReconnect(generation)) return RESEND;
       throw this.callError(generation, name, error, ctx.signal);
     } finally {
       ctx.signal.removeEventListener("abort", onAbort);
@@ -919,21 +1009,23 @@ export class McpServer {
    */
   private callError(generation: Generation, name: string, error: unknown, signal: AbortSignal): Error {
     const label = this.label;
-    if (generation.closed || generation.gone) return this.closedError(generation);
-    if (signal.aborted) return cancelledError(name);
     const sdk = generation.sdk!;
     const code = error instanceof sdk.SdkError ? error.code : undefined;
+    // The tool is named only for a call the server may have been running.
+    const tool = neverSent(error, sdk) ? undefined : name;
+    if (generation.closed || generation.gone) return this.closedError(generation, tool);
+    if (signal.aborted) return cancelledError(name);
     if (code === sdk.SdkErrorCode.RequestTimeout) {
       return new McpTimeoutError(
         `MCP server '${label}' tool '${name}' timed out after ${secondsText(generation.callTimeout)} s`,
       );
     }
     if (code === sdk.SdkErrorCode.ConnectionClosed || code === sdk.SdkErrorCode.NotConnected) {
-      return this.closedError(generation);
+      return this.closedError(generation, tool);
     }
     if (code === undefined && error instanceof Error && error.message === "Not connected") {
-      // The SDK's own error for a request sent after the transport closed.
-      return this.closedError(generation);
+      // The SDK's own error for a request sent after the transport closed, or the transport's.
+      return this.closedError(generation, tool);
     }
     const failure = httpFailure(error, sdk);
     if (failure instanceof RedirectError) {
@@ -943,15 +1035,7 @@ export class McpServer {
       );
     }
     if (failure instanceof sdk.SdkHttpError) {
-      const transport = generation.transport;
-      const session = !(transport instanceof StdioTransport) && transport?.sessionId !== undefined;
-      // The server forgot the session (a restart), so this client can't reach it again.
-      if (
-        (failure.status === 404 && session) ||
-        (failure.status === 400 && failure.message.includes("Server not initialized"))
-      ) {
-        return this.closedError(generation);
-      }
+      if (sessionLost(generation, failure)) return this.closedError(generation);
       return new McpTransportError(`MCP server '${label}' transport error (HTTP ${failure.status})`);
     }
     if (failure !== undefined) {
@@ -967,14 +1051,88 @@ export class McpServer {
   }
 
   /**
-   * Mark `generation` gone, when given, and return the `McpServerClosed` a call throws; it names
-   * the message cap when a message past it closed the connection.
+   * Whether a call may reconnect `generation`, which is gone: it was open, and neither `close()`
+   * nor a message over the cap ended it.
    */
-  private closedError(generation?: Generation): McpServerClosed {
+  private mayReconnect(generation: Generation): boolean {
+    return (
+      !this.closeRequested && !generation.closed && generation.overflow === undefined && generation.tools !== undefined
+    );
+  }
+
+  /**
+   * Wait for the one reconnect of `old`, which the first call to find it gone starts, and return
+   * the new connection.
+   *
+   * @throws {McpCallCancelled} `signal` aborted first; the reconnect carries on for other calls.
+   * @throws {McpServerClosed} The reconnect failed, or `close()` ran.
+   */
+  private async reconnect(old: Generation, name: string, signal: AbortSignal): Promise<Generation> {
+    // A call that comes once the attempt has failed gets no copy of its error, which may hold stderr.
+    const late = old.reconnectError !== undefined;
+    const next = await orCancelled((old.reconnecting ??= this.reopen(old)), signal, name);
+    if (next === undefined) throw this.closedError(old, undefined, !late);
+    return next;
+  }
+
+  /**
+   * End what is left of `old`, then open a new connection for its owner with its tools and make it
+   * the server's. Never rejects.
+   *
+   * @returns The new connection; `undefined` when it didn't open, with the error kept in
+   *   `old.reconnectError`, or when `close()` ran meanwhile.
+   */
+  private async reopen(old: Generation): Promise<Generation | undefined> {
+    // First, so nothing the old server left running holds a lock or a port the new one needs.
+    await this.shutdown(old);
+    if (this.generation !== old) return undefined;
+    const next = newGeneration();
+    old.next = next;
+    try {
+      await this.connect(next, old.owner!, undefined, old);
+    } catch (error) {
+      await this.shutdown(next);
+      if (!next.closed) old.reconnectError = error instanceof Error ? error : new Error(String(error));
+      return undefined;
+    } finally {
+      old.next = undefined;
+    }
+    if (this.generation !== old) {
+      await this.shutdown(next);
+      return undefined;
+    }
+    this.generation = next;
+    return next;
+  }
+
+  /**
+   * Mark `generation` gone, when given, and return the `McpServerClosed` a call throws. It names
+   * the message cap when a message past it closed the connection. For a stdio server that ended
+   * on its own it says how; for `tool`, a call the server may have been running then, it also
+   * names the tool and adds the server's stderr tail. It says when reconnecting failed, and with
+   * `detail` why.
+   */
+  private closedError(generation?: Generation, tool?: string, detail = false): McpServerClosed {
     if (generation !== undefined) generation.gone = true;
-    const overflow = (generation ?? this.generation)?.overflow;
-    const reason = overflow === undefined ? "" : `: it ${overflowText(overflow)}`;
-    return new McpServerClosed(`MCP server '${this.label}' is closed${reason}`);
+    const current = generation ?? this.generation;
+    const label = `MCP server '${this.label}'`;
+    let text = `${label} is closed`;
+    if (current?.overflow !== undefined) return new McpServerClosed(`${text}: it ${current.overflow}`);
+    if (current === undefined || this.closeRequested || current.closed) return new McpServerClosed(text);
+    const transport = current.transport;
+    if (transport instanceof StdioTransport && transport.exitText() !== "") {
+      text = `${label} ${transport.exitText()}`;
+      // Only the calls in flight get the stderr tail, so later calls don't copy it into every error.
+      if (tool !== undefined) text += ` during tool '${tool}'` + transport.stderrTail();
+    }
+    const failure = current.reconnectError;
+    if (failure === undefined) return new McpServerClosed(text);
+    if (!detail) return new McpServerClosed(`${text}; reconnecting failed`);
+    // The failure is an `open()` error, which names the server first.
+    const reason = failure.message.startsWith(`${label} `)
+      ? `it ${failure.message.slice(label.length + 1)}`
+      : describeError(failure);
+    return new McpServerClosed(`${text}; reconnecting failed: ${reason}`, { cause: failure });
   }
 
   /**
@@ -1006,6 +1164,41 @@ export class McpServer {
 /** The `McpCallCancelled` for a call to `name`. */
 function cancelledError(name: string): McpCallCancelled {
   return new McpCallCancelled(`MCP call to '${name}' cancelled by a run stop`);
+}
+
+/** What `sendOnce` returns for a call to send again on a new connection. */
+const RESEND = Symbol("resend");
+
+/** Resolve as `promise` does, or reject with the `McpCallCancelled` for `name` once `signal` aborts. */
+function orCancelled<T>(promise: Promise<T>, signal: AbortSignal, name: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(cancelledError(name));
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+
+/**
+ * Whether the server behind `generation` refused a call with `error` without reading it: none of
+ * the call was written, or an HTTP server answered that it doesn't know the session.
+ */
+function refusedUnread(generation: Generation, error: unknown): boolean {
+  const sdk = generation.sdk!;
+  return neverSent(error, sdk) || sessionLost(generation, httpFailure(error, sdk));
+}
+
+/**
+ * Whether `failure` is an HTTP server's answer that it doesn't know the session of `generation`: it
+ * restarted, so this client can't reach it again.
+ */
+function sessionLost(generation: Generation, failure: unknown): boolean {
+  if (!(failure instanceof generation.sdk!.SdkHttpError)) return false;
+  const transport = generation.transport;
+  const session = !(transport instanceof StdioTransport) && transport?.sessionId !== undefined;
+  return (
+    (failure.status === 404 && session) ||
+    (failure.status === 400 && failure.message.includes("Server not initialized"))
+  );
 }
 
 /** Why a server's connection closed when one of its messages passed the `max` bytes cap. */
@@ -1187,6 +1380,15 @@ function httpFailure(error: unknown, sdk: typeof Sdk): unknown {
   if (error instanceof RedirectError || error instanceof sdk.SdkHttpError) return error;
   if (typeof error === "object" && error !== null && transportFailures.has(error)) return error;
   return undefined;
+}
+
+/**
+ * Whether `error` failed a call before any of it was written: the SDK found no transport, or the
+ * stdio transport had already ended.
+ */
+function neverSent(error: unknown, sdk: typeof Sdk): boolean {
+  if (error instanceof sdk.SdkError) return error.code === sdk.SdkErrorCode.NotConnected;
+  return error instanceof Error && error.message === "Not connected" && !partlyWritten.has(error);
 }
 
 /** `<Name>: <message>` for an error. */
@@ -1390,7 +1592,10 @@ function oneDecimal(bytes: number, unit: number): string {
   return `${Math.floor(tenths / 10)}.${tenths % 10}`;
 }
 
-/** How much of a stdio server's stderr yian keeps, and how many of its last lines an error shows. */
+/**
+ * How much of a stdio server's stderr yian keeps, and how many of its last lines a start error, or
+ * the error of a call in flight when the server ends, shows.
+ */
 const STDERR_KEEP_CHARS = 16 * 1024;
 const STDERR_LINES = 20;
 
@@ -1406,8 +1611,11 @@ export interface StdioTransportOptions {
   cwd?: string;
   /** The longest line read from the server, in bytes. */
   maxMessageBytes: number;
-  /** Called with `maxMessageBytes` when a line passes it, before the transport closes. */
-  onOverflow?: (max: number) => void;
+  /**
+   * Called with what a line passed, before the transport closes: `maxMessageBytes`
+   * (`overflowText`), or the received-JSON bounds.
+   */
+  onOverflow?: (why: string) => void;
   /** The MCP SDK's `getDefaultEnvironment()`, the base of the server's environment. */
   defaultEnv: Readonly<Record<string, string>>;
 }
@@ -1434,8 +1642,15 @@ export class StdioTransport {
   private stdoutEnded = false;
   private stderrEnded = false;
   private exited = false;
+  /** The server's exit code, or the signal that killed it, once it exited before `close()`. */
+  private exitCode: number | null = null;
+  private exitSignal: NodeJS.Signals | null = null;
   private closed = false;
   private ended = false;
+  /** Whether the server ended before `close()` ran: it exited or closed its stdout by itself. */
+  private endedAlone = false;
+  /** Fires `onclose` when the server ended but a pipe or the exit is still missing. */
+  private endTimer: ReturnType<typeof setTimeout> | undefined;
   private closeFired = false;
   private closing: Promise<void> | undefined;
   /** Settles on stdin's next `drain` or `close`; every send waiting on a full pipe shares it. */
@@ -1452,6 +1667,17 @@ export class StdioTransport {
   /** The server's process id, or `null` before it started. */
   get pid(): number | null {
     return this.child?.pid ?? null;
+  }
+
+  /**
+   * How the server ended by itself: `exited (code N)`, `was killed by SIGNAL` or `closed its
+   * stdout`; `""` while it runs, or when `close()` ended it.
+   */
+  exitText(): string {
+    if (!this.endedAlone) return "";
+    if (this.exitSignal !== null) return `was killed by ${this.exitSignal}`;
+    if (this.exitCode !== null) return `exited (code ${this.exitCode})`;
+    return "closed its stdout";
   }
 
   /** The last lines the server wrote to stderr, as an error message suffix, or `""`. */
@@ -1497,8 +1723,13 @@ export class StdioTransport {
           reject(error);
         }
       });
-      child.once("exit", () => {
+      child.once("exit", (code, signal) => {
         this.exited = true;
+        // An exit `close()` caused, for a server that had closed its stdout, isn't how it ended.
+        if (!this.closed) {
+          this.exitCode = code;
+          this.exitSignal = signal;
+        }
         this.end();
       });
       child.stdin!.on("error", (error) => this.report(error));
@@ -1513,7 +1744,10 @@ export class StdioTransport {
       child.stderr!.on("data", (text: string) => {
         this.stderrText = (this.stderrText + text).slice(-STDERR_KEEP_CHARS);
       });
-      child.stderr!.once("close", () => (this.stderrEnded = true));
+      child.stderr!.once("close", () => {
+        this.stderrEnded = true;
+        this.checkEnded();
+      });
     });
   }
 
@@ -1547,7 +1781,11 @@ export class StdioTransport {
         else resolve();
       };
       const onDrain = () => done();
-      const onClose = () => done(new Error("Not connected"));
+      const onClose = () => {
+        const error = new Error("Not connected");
+        partlyWritten.add(error);
+        done(error);
+      };
       stdin.once("drain", onDrain);
       stdin.once("close", onClose);
     }));
@@ -1620,10 +1858,15 @@ export class StdioTransport {
 
   /** Report a line longer than `max` bytes and close. */
   private overflow(max: number): void {
+    this.refuse(new Error(`MCP server sent a message over ${max} bytes`), overflowText(max));
+  }
+
+  /** Report `error`, a line refused for passing a cap (`why` says which), and close. */
+  private refuse(error: Error, why: string): void {
     this.pending = [];
     this.pendingBytes = 0;
-    this.report(new Error(`MCP server sent a message over ${max} bytes`));
-    this.options.onOverflow?.(max);
+    this.report(error);
+    this.options.onOverflow?.(why);
     void this.close();
   }
 
@@ -1634,8 +1877,11 @@ export class StdioTransport {
     if (text === "") return;
     let message: unknown;
     try {
-      message = parseJson(text, "plain");
+      message = parseReceivedJson(text);
     } catch (error) {
+      // `JSON.parse` would build the tree the bounds keep out, so a line past them is refused.
+      const bound = receivedBound(error);
+      if (bound !== null) return this.refuse(error as Error, `sent a message that ${bound}`);
       // The strict reader refuses duplicate keys and lone surrogates, which the SDK would read.
       try {
         message = JSON.parse(text);
@@ -1662,28 +1908,32 @@ export class StdioTransport {
   }
 
   /**
-   * Fire `onclose` once the process exited or stdout ended, after both stdout and stderr ended or
-   * 200 ms, so a grandchild holding a pipe open can't delay it longer.
+   * Fire `onclose` once the process exited or stdout ended, after the exit and both stdout and
+   * stderr ended or 200 ms, so a grandchild holding a pipe open can't delay it longer.
    */
   private end(): void {
-    if (this.ended) return;
-    this.ended = true;
-    // `exit` may come before the pipes end: the server's last answer must reach `onmessage` first.
-    const timer = setTimeout(() => this.fireClose(), 200);
-    const check = () => {
-      if (!this.stdoutEnded || !this.stderrEnded) return;
-      clearTimeout(timer);
-      this.fireClose();
-    };
-    this.child?.stdout?.once("end", check);
-    this.child?.stderr?.once("close", check);
-    check();
+    if (!this.ended) {
+      this.ended = true;
+      this.endedAlone = !this.closed;
+      this.endTimer = setTimeout(() => this.fireClose(), 200);
+    }
+    this.checkEnded();
+  }
+
+  /**
+   * Fire `onclose` when the server ended and its exit and both pipes' ends came: `exit` may come
+   * before the pipes end, and the server's last answer must reach `onmessage` first; the pipes
+   * may end before `exit`, and the calls `onclose` fails must read the exit code.
+   */
+  private checkEnded(): void {
+    if (this.ended && this.exited && this.stdoutEnded && this.stderrEnded) this.fireClose();
   }
 
   /** Call `onclose`, once. */
   private fireClose(): void {
     if (this.closeFired) return;
     this.closeFired = true;
+    clearTimeout(this.endTimer);
     this.settle();
     try {
       this.onclose?.();

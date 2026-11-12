@@ -64,6 +64,12 @@ export abstract class ChildFlowNode extends Node {
     return this.child === null ? [] : [this.child];
   }
 
+  /** Hold the baked child given. */
+  override setOriginChildren(children: readonly unknown[]): void {
+    super.setOriginChildren(children);
+    if (children.length > 0) this.child = children[0];
+  }
+
   /**
    * Require the child flow that Compose must bake before execution.
    *

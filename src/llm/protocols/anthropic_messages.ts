@@ -21,6 +21,7 @@
 
 import { createHash } from "node:crypto";
 
+import { YianTypeError } from "../../typesys/errors.ts";
 import type { JsonObject, JsonValue } from "../../typesys/json.ts";
 import { encodeBody, mergeRequestBody, withAuthorWrapper } from "../body.ts";
 import { modelProfile } from "../capabilities.ts";
@@ -391,7 +392,7 @@ export class AnthropicMessages implements SseProtocol {
   /** Return the `system` field (or `null`) and the rendered turns, as LangChain formats them. */
   #messages(messages: readonly Message[]): [JsonValue | null, JsonObject[]] {
     if (messages.some((message) => message.parts.some((part) => part instanceof MediaPart))) {
-      throw new TypeError(NO_MEDIA);
+      throw new YianTypeError(NO_MEDIA);
     }
     const turns = merge(messages);
     // A user turn with nothing to send is left out, so an assistant turn before it is final.
@@ -450,7 +451,7 @@ export class AnthropicMessages implements SseProtocol {
     let unsigned = false;
     for (const part of message.parts) {
       // Refused here so a bad message never fires onReplayDegraded first.
-      if (part instanceof ToolResultPart) throw new TypeError(wrongPart(PROTOCOL, part, message.role));
+      if (part instanceof ToolResultPart) throw new YianTypeError(wrongPart(PROTOCOL, part, message.role));
       if (!(part instanceof ReasoningPart)) {
         blocks.push(null);
         continue;
@@ -479,7 +480,7 @@ export class AnthropicMessages implements SseProtocol {
 
   /** Return `content` as the new `system` field, warning the first time that it was moved there. */
   #hoist(system: JsonValue | null, content: JsonValue): JsonValue {
-    if (system !== null) throw new TypeError("Received multiple non-consecutive system messages.");
+    if (system !== null) throw new YianTypeError("Received multiple non-consecutive system messages.");
     if (this.#hoistWarned) return content;
     this.#hoistWarned = true;
     // LangChain's text, with the model in single quotes (model ids hold no quote or escape).
@@ -522,14 +523,14 @@ function merge(messages: readonly Message[]): Turn[] {
 /** Return a system or user message's texts. */
 function textsOf(message: Message): string[] {
   return message.parts.map((part) => {
-    if (!(part instanceof TextPart)) throw new TypeError(wrongPart(PROTOCOL, part, message.role));
+    if (!(part instanceof TextPart)) throw new YianTypeError(wrongPart(PROTOCOL, part, message.role));
     return part.text;
   });
 }
 
 /** Render a tool message's part as a `tool_result` block; `is_error` is always sent. */
 function toolResult(part: Part): JsonObject {
-  if (!(part instanceof ToolResultPart)) throw new TypeError(wrongPart(PROTOCOL, part, "tool"));
+  if (!(part instanceof ToolResultPart)) throw new YianTypeError(wrongPart(PROTOCOL, part, "tool"));
   return { type: "tool_result", content: part.content, tool_use_id: toolId(part.callId), is_error: part.isError };
 }
 
@@ -729,7 +730,7 @@ function tool(spec: ToolSpec): JsonObject {
   const combinators = ["oneOf", "anyOf"].filter((key) => Object.hasOwn(spec.parameters, key));
   if (combinators.length > 0) {
     // The tool name in single quotes (tool names the API accepts hold no quote or escape).
-    throw new TypeError(
+    throw new YianTypeError(
       `tool '${spec.name}' has a top-level ${combinators.join("/")} in its parameters, which the Anthropic API ` +
         "does not support",
     );

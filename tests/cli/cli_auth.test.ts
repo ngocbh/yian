@@ -27,7 +27,7 @@ import {
   providers,
 } from "../../src/cli/auth.ts";
 import { type CliIo, type OptionValue, type ParsedArgs, UsageError, type Writer } from "../../src/cli/utils.ts";
-import { withEnv } from "../../src/defaults.ts";
+import { current, withEnv } from "../../src/defaults.ts";
 import { PROVIDER_API_KEY_ENV } from "../../src/llm_clients/api_key_env.ts";
 import {
   ApiKeyCredentials,
@@ -160,6 +160,18 @@ describe("providers", () => {
   });
 });
 
+/** Return `{a: {a: ... 1}}`: `levels` records, one inside the next. */
+function deepRecords(levels: number): unknown {
+  let value: unknown = 1;
+  for (let level = 0; level < levels; level++) value = { a: value };
+  return value;
+}
+
+/** The message for a free-form value nested deeper than `limit` levels. */
+function tooDeep(limit: number): string {
+  return `Value nests deeper than ${limit} levels, the limit for a yian value (each record and list is a level)`;
+}
+
 describe("configErrors", () => {
   test("a valid layer has none", () => {
     expect(configErrors({ provider: "openai", model: "gpt-5.5", api_key: "k" })).toEqual([]);
@@ -235,6 +247,32 @@ describe("configErrors", () => {
     configErrors(layer);
     expect(layer).toEqual({ provider: "openai", api_key: "k" });
   });
+
+  test.each([
+    ["vllm", "chat_template_kwargs"],
+    ["openrouter", "provider"],
+  ])("a free-form %s.%s nested too deeply is one error at the field, at any depth", (provider, key) => {
+    const limit = current().maxValueNesting;
+    const field = `${provider}.${key}`;
+    expect(configErrors({ provider, model: "m1", [provider]: { [key]: { a: deepRecords(limit - 1) } } })).toEqual([]);
+    for (const levels of [limit, 50_000]) {
+      expect(configErrors({ provider, model: "m1", [provider]: { [key]: { a: deepRecords(levels) } } })).toEqual([
+        { field, message: tooDeep(limit) },
+      ]);
+    }
+  });
+
+  test("many errors are listed in linear time, each once and in order", () => {
+    const count = 100_000;
+    const ids = Array.from({ length: count }, (_, i) => `s${i}`);
+    const started = performance.now();
+    const errors = configErrors({ provider: "vllm", model: "m", vllm: { stop_token_ids: ids }, a: 1, b: 2 });
+    expect(performance.now() - started).toBeLessThan(3_000);
+    expect(errors).toHaveLength(count + 1);
+    expect(errors[0]).toEqual({ field: "vllm.stop_token_ids.0", message: "Input should be a valid integer" });
+    expect(errors[count - 1]!.field).toBe(`vllm.stop_token_ids.${count - 1}`);
+    expect(errors[count]).toEqual({ field: null, message: EXTRA_FIELD });
+  });
 });
 
 describe("configCheck", () => {
@@ -267,6 +305,17 @@ describe("configCheck", () => {
     });
   });
 
+  test("text on a terminal shows an error line's control characters; piped, it keeps them", async () => {
+    const key = "\u001b]0;PWNEDTITLE\u0007\u001b[2J\u001b[41mXX";
+    const stdin = JSON.stringify({ provider: "openai", openai: { [key]: 1 } });
+    const tty = await run(configCheck, jsonArgs(false), fakeIo({ stdin, outTty: true }));
+    expect(tty.code).toBe(1);
+    expect(tty.err).not.toContain("\x1b");
+    expect(tty.err).toContain("^[]0;PWNEDTITLE^G^[[2J^[[41mXX");
+    const piped = await run(configCheck, jsonArgs(false), fakeIo({ stdin }));
+    expect(piped.err).toContain(key);
+  });
+
   test("text writes every error line at once", async () => {
     const io = fakeIo({ stdin: '{"provider": "openai", "openai": {"temperature": "hot"}, "x": 1}' });
     const result = await run(configCheck, jsonArgs(false), io);
@@ -281,7 +330,21 @@ describe("configCheck", () => {
       out: "",
       err:
         "deepseek: The 'deepseek' block mirrors the Chat Completions request, but the layer's model is routed " +
-        "to the Responses API; remove the block or use a model served through Chat Completions.\n",
+        "to the Responses API by its name; remove the block, or set api: chat if the model is served through " +
+        "Chat Completions.\n",
+    });
+  });
+
+  test("a layer nested far past the stack's depth gets the located error", async () => {
+    const levels = 40_000;
+    const deep = `${'{"a":'.repeat(levels)}1${"}".repeat(levels)}`;
+    const stdin = `{"provider":"vllm","model":"m1","vllm":{"chat_template_kwargs":${deep}}}`;
+    const result = await run(configCheck, jsonArgs(true), fakeIo({ stdin }));
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.out)).toEqual({
+      format: "yian.cli.v1",
+      ok: false,
+      errors: [{ field: "vllm.chat_template_kwargs", message: tooDeep(current().maxValueNesting) }],
     });
   });
 
@@ -305,7 +368,7 @@ describe("configCheck", () => {
 function responsesBlock(provider: string): string {
   return (
     `The '${provider}' block mirrors the Chat Completions request, but the layer's model is routed to the ` +
-    "Responses API; remove the block or use a model served through Chat Completions."
+    "Responses API by its name; remove the block, or set api: chat if the model is served through Chat Completions."
   );
 }
 
@@ -1080,7 +1143,9 @@ describe("auth list, default and remove", () => {
     const result = await runAuth(setup);
     expect(result.code).toBe(0);
     const lines = loginLines(result.out);
-    expect(lines["openai"]).toBe("  openai: api-key, model gpt-test, organization org-1, project proj-1, headers X-G");
+    expect(lines["openai"]).toBe(
+      "  openai: api-key, model gpt-test, endpoint https://api.openai.com/v1, organization org-1, project proj-1, headers X-G",
+    );
     expect(lines["anthropic"]).toBe("  anthropic: api-key, model claude-test, headers X-A, X-B (default)");
     expect(result.output).not.toContain("private-");
   });
@@ -1647,6 +1712,8 @@ describe("auth OpenAI setup", () => {
     expect(recorded.sent[0]!.headers).toMatchObject({ Authorization: "Bearer private-key", "X-G": "private-gw" });
     expect(recorded.sent.some((request) => request.url.includes("api.openai.com"))).toBe(false);
     expect(setup.store.selection("openai")?.model).toBe("gateway-model");
+    // Saved with the key, so a run at another endpoint is refused.
+    expect(setup.store.selection("openai")?.endpoint).toBe("https://gateway.example.com/v1/");
     expect(result.output).not.toContain("private-");
   });
 
@@ -1678,6 +1745,7 @@ describe("auth OpenAI setup", () => {
     );
     expect(result.code).toBe(0);
     expect(recorded.sent.map((request) => request.url)).toEqual(["https://api.openai.com/v1/models"]);
+    expect(setup.store.selection("openai")?.endpoint).toBe("https://api.openai.com/v1");
   });
 
   test.each<[string, (string | null)[], string]>([
@@ -2592,5 +2660,28 @@ describe("loginModels", () => {
     expect(keys).toHaveLength(2);
     expect(keys).toContainEqual(["anthropic", "private-key"]);
     expect(keys).toContainEqual(["ollama", null]);
+  });
+
+  test("an OpenAI key is listed only at the endpoint its login was made for", async () => {
+    const setup = setupAuth();
+    const gateway = "https://gateway.example.com/v1";
+    await setup.store.save("openai", new ApiKeyCredentials("private-gw-key"), "gw-model", { endpoint: gateway });
+    const listed: (string | null | undefined)[] = [];
+    const listing = async (_provider: unknown, options: ListModelsOptions = {}) => {
+      listed.push(options.baseUrl);
+      return ["gw-model", "gpt-other"];
+    };
+    const { OPENAI_BASE_URL: _, ...env } = setup.env;
+    for (const [base, offered, failed] of [
+      [undefined, ["openai/gw-model"], ["openai"]],
+      ["https://other.example.com/v1", ["openai/gw-model"], ["openai"]],
+      [`${gateway}/`, ["openai/gw-model", "openai/gpt-other"], []],
+    ] as const) {
+      const { io } = fakeIo({ env: base === undefined ? env : { ...env, OPENAI_BASE_URL: base } });
+      const result = await loginModels(io, { ...setup.deps, listModels: listing });
+      expect(result.models.map((each) => `${each.provider}/${each.model}`)).toEqual([...offered]);
+      expect(result.failed).toEqual([...failed]);
+    }
+    expect(listed).toEqual([`${gateway}/`]);
   });
 });

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:
 import { EventEmitter, getEventListeners } from "node:events";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
+  copyFileSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -52,7 +53,7 @@ import { registerTool, TOOL_REGISTRY } from "../../src/tools/registry.ts";
 import { inspectRun, readRunIndex } from "../../src/run.ts";
 import { JsonlRunLog, NodeStartedRecord, NodeStepRecord, readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 import { FileRef } from "../../src/typesys/values.ts";
-import { compiled, VERSION } from "../../src/platform.ts";
+import { compiled, openSqlite, VERSION } from "../../src/platform.ts";
 import { NO_ENV } from "../helpers/run_state_fixtures.ts";
 import { FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
 import { parseJson } from "../../src/typesys/json.ts";
@@ -297,6 +298,26 @@ describe("flowBanner", () => {
     );
   });
 
+  test("shows the control characters of the name, version and description on a terminal, the box in line", () => {
+    const flow = {
+      name: "report\x1b]52;c;ZWNobyBwd25lZA==\x07",
+      description: "Weekly \x1b]8;;https://evil.example\x1b\\docs\x1b]8;;\x1b\\ \x1b[2J",
+      version: "1\x1b]0;pwned-title\x07",
+    };
+    const noColor = (name: string) => (name === "NO_COLOR" ? "1" : undefined);
+    expect(banner(120, flow, true, noColor)).toBe(
+      lines(
+        "╭────────────────────────────────────────────────────────────────────────────────╮",
+        "│ Running flow: report^[]52;c;ZWNobyBwd25lZA==^G  (version: 1^[]0;pwned-title^G) │",
+        "│ Description: Weekly ^[]8;;https://evil.example^[\\docs^[]8;;^[\\ ^[[2J           │",
+        "╰────────────────────────────────────────────────────────────────────────────────╯",
+      ),
+    );
+    // Piped, the banner keeps every byte.
+    expect(banner(120, flow)).toContain(flow.name);
+    expect(banner(120, flow)).toContain("\x1b[2J");
+  });
+
   test("is 80 columns wide off a terminal", () => {
     expect(banner(undefined, { name: "human_approval", description: approval })).toBe(
       lines(
@@ -417,6 +438,15 @@ function testIo(env: Record<string, string> = {}) {
   return { io, stdout: out.text, stderr: err.text };
 }
 
+/** Return `testIo(env)` with its stdout and stderr terminals. */
+function ttyIo(env: Record<string, string> = {}) {
+  const out = sink();
+  const err = sink();
+  const { io } = testIo(env);
+  const tty: CliIo = { ...io, stdout: { ...out.out, isTTY: true }, stderr: { ...err.out, isTTY: true } };
+  return { io: tty, stdout: out.text, stderr: err.text };
+}
+
 /** Write a skill directory at `tmp/skills/<name>` holding `skillMd`, and return its path. */
 function skillDir(name: string, skillMd: string): string {
   const dir = join(tmp, "skills", name);
@@ -440,6 +470,17 @@ describe("skillsCheck", () => {
     expect(await skillsCheck([good, missing], { json: false }, failed.io)).toBe(1);
     expect(failed.stdout()).toBe(`${good}: ok (good)\n`);
     expect(failed.stderr()).toBe(`${missing}: missing SKILL.md\n`);
+  });
+
+  test("text on a terminal: a path's control characters show", async () => {
+    const good = join(tmp, "s\x1b]0;T\x07kills", "good");
+    mkdirSync(good, { recursive: true });
+    writeFileSync(join(good, "SKILL.md"), GOOD_SKILL);
+    const missing = join(tmp, "skills", "m\x1b[2Jissing");
+    const { io, stdout, stderr } = ttyIo();
+    expect(await skillsCheck([good, missing], { json: false }, io)).toBe(1);
+    expect(stdout()).toBe(`${join(tmp, "s^[]0;T^Gkills", "good")}: ok (good)\n`);
+    expect(stderr()).toBe(`${join(tmp, "skills", "m^[[2Jissing")}: missing SKILL.md\n`);
   });
 
   test("json: a missing and a bad SKILL.md are skill.invalid, each path as given", async () => {
@@ -510,6 +551,19 @@ describe("main", () => {
       expect(await main(argv, io)).toBe(2);
       expect(stdout()).toBe("");
       expect(stderr()).toContain(`Error: ${message}\n`);
+    }
+  });
+
+  test("an unknown command or option shows its control characters on a terminal", async () => {
+    for (const [argv, message] of [
+      [["n\x1b]0;T\x07ope"], "No such command 'n^[]0;T^Gope'."],
+      [["--n\x1b[2Jope"], "No such option: --n^[[2Jope"],
+      [["skills", "n\x07ope"], "No such command 'n^Gope'."],
+    ] as const) {
+      const { io, stderr } = ttyIo();
+      expect(await main(argv, io)).toBe(2);
+      expect(stderr()).toContain(`Error: ${message}\n`);
+      expect(stderr()).not.toMatch(/[\x07\x1b]/);
     }
   });
 
@@ -1202,7 +1256,8 @@ describe("run setup errors", () => {
       write: (text) => {
         if (!broke && text.includes("⠋ b")) {
           broke = true;
-          throw new TypeError("stderr broke");
+          // An OS write error, as a closed or full stream gives.
+          throw Object.assign(new Error("stderr broke"), { code: "EPIPE", syscall: "write" });
         }
         chunks.push(text);
         return Promise.resolve();
@@ -1407,6 +1462,20 @@ describe("check", () => {
     expect(await main(["check", flow], io)).toBe(0);
     expect(stdout()).toBe(`${flow}: ok\n`);
     expect(stderr()).toBe("");
+  });
+
+  test("text on a terminal: a file name's control characters show in its ok line and a failure's path", async () => {
+    const flow = file("x\x1b]52;c;ZmlsZQ==\x07.yaml", FLOW);
+    const bad = file("y\x1b]0;TITLE\x07.yaml", "id: [f\n");
+    const { io, stdout, stderr } = ttyIo({ NO_COLOR: "1" });
+    expect(await main(["check", flow, bad], io)).toBe(1);
+    expect(stdout()).toBe(`${join(tmp, "x^[]52;c;ZmlsZQ==^G.yaml")}: ok\n`);
+    expect(stderr()).toStartWith(`${join(tmp, "y^[]0;TITLE^G.yaml")}:\n╭─ y^[]0;TITLE^G.yaml:`);
+    expect(stderr()).not.toContain("\x1b");
+    // Piped, each path keeps its bytes.
+    const piped = testIo();
+    expect(await main(["check", flow], piped.io)).toBe(0);
+    expect(piped.stdout()).toBe(`${flow}: ok\n`);
   });
 
   test("the ok document: canonical type labels, a typedef expanded", async () => {
@@ -1618,6 +1687,17 @@ describe("check", () => {
     );
   });
 
+  test("--root: an absolute uses: ref outside the root fails, even with a decoy at the joined path", async () => {
+    const root = join(tmp, "company");
+    file("evil.yaml", FLOW);
+    // A flow could ship this copy to pass the check while `yian run` loads the file outside.
+    file(join("company", tmp, "evil.yaml"), FLOW);
+    const flow = file("company/main.yaml", parentFlow(join(tmp, "evil")));
+    const diagnostic = await rootDiagnostic(root, flow);
+    expect(diagnostic.code).toBe("compose.outside_root");
+    expect(diagnostic.message).toBe(`${join("..", "evil.yaml")} is outside the root`);
+  });
+
   test("a CODE reference resolves against its own file's directory, not the cwd", async () => {
     const node = "  a:\n    kind: code\n    code: ./m.ts:f\n    output: !str\n";
     const fn = "export function f() { return 'x'; }\n";
@@ -1638,6 +1718,82 @@ describe("check", () => {
       const { code, flows } = await checkJson(argv);
       expect([code, flows[0].ok]).toEqual([0, true]);
     }
+  });
+});
+
+/** A CODE file whose `who` returns `name`. */
+const whoFile = (name: string) => `export function who() { return ${JSON.stringify(name)}; }\n`;
+
+/**
+ * The flows reached through a symlink, each written under a fresh folder of `tmp`: its CODE
+ * files and its `uses: ../child` child both beside the link's target and beside the link. Each
+ * gives the folder, the flow's path through the link, and the real folder `check --root` vets.
+ */
+const LINKED_FLOWS: [string, (dir: string) => { flow: string; real: string }][] = [
+  [
+    "a symlinked flow file",
+    (dir) => {
+      file("s/sub/flow.yaml", codeOnlyFlow("./helper.ts:who"));
+      file("s/sub/helper.ts", whoFile("real"));
+      file("s/helper.ts", whoFile("link"));
+      symlinkSync(join(dir, "sub", "flow.yaml"), join(dir, "flow.yaml"));
+      return { flow: join(dir, "flow.yaml"), real: join(dir, "sub") };
+    },
+  ],
+  [
+    "a symlinked folder",
+    (dir) => {
+      const child = codeOnlyFlow("./c.ts:who").replace("id: c\nname: c", "id: child\nname: child");
+      file("s/real/proj/flow.yaml", `${codeOnlyFlow("../helper.ts:who", "child")}uses:\n  child: ../child\n`);
+      file("s/real/helper.ts", whoFile("real"));
+      file("s/real/child.yaml", child);
+      file("s/real/c.ts", whoFile("real child"));
+      file("s/helper.ts", whoFile("link"));
+      file("s/child.yaml", child);
+      file("s/c.ts", whoFile("link child"));
+      symlinkSync(join(dir, "real", "proj"), join(dir, "link"));
+      return { flow: join(dir, "link", "flow.yaml"), real: join(dir, "real") };
+    },
+  ],
+];
+
+/** A flow whose CODE node `a` runs `ref`, and, given `alias`, whose CALL node `b` runs that `uses:` alias. */
+function codeOnlyFlow(ref: string, alias?: string): string {
+  const call = alias === undefined ? "" : `  b:\n    kind: call\n    call: ${alias}\n`;
+  const output = alias === undefined ? "${a.output}" : '"${a.output} | ${b.output}"';
+  return `id: c\nname: c\nnodes:\n  a:\n    kind: code\n    code: ${ref}\n    output: str\n${call}output: ${output}\n`;
+}
+
+/** Run `yian run -q flow` under a home in `tmp`, returning the exit code and the streams. */
+async function runQuiet(flow: string) {
+  mkdirSync(join(tmp, "home"), { recursive: true });
+  const { io, stdout, stderr } = testIo({ HOME: join(tmp, "home") });
+  const code = await main(["run", "-q", flow], io);
+  return { code, stdout: stdout(), stderr: stderr() };
+}
+
+describe("a flow reached through a symlink", () => {
+  test.each(LINKED_FLOWS)("%s runs the files beside its real folder, which check --root vets", async (name, write) => {
+    const { flow, real } = write(join(tmp, "s"));
+    const ran = await runQuiet(flow);
+    expect(ran.code, ran.stderr).toBe(0);
+    expect(ran.stdout).toBe(name === "a symlinked folder" ? "real | real child\n" : "real\n");
+    expect((await checkJson(["--root", real, flow])).code).toBe(0);
+  });
+
+  test.each(LINKED_FLOWS)("%s: check, check --root and run agree a CODE file only beside the link is missing", async (_name, write) => {
+    const dir = join(tmp, "s");
+    const { flow, real } = write(dir);
+    rmSync(join(real, "helper.ts"));
+    for (const argv of [[flow], ["--root", dir, flow]]) {
+      const { code, flows } = await checkJson(argv);
+      expect(code).toBe(1);
+      expect(flows[0].diagnostics[0].message).toContain("helper.ts");
+    }
+    const ran = await runQuiet(flow);
+    expect(ran.code).toBe(1);
+    expect(ran.stdout).toBe("");
+    expect(ran.stderr).toContain("helper.ts");
   });
 });
 
@@ -1754,15 +1910,103 @@ describe("status", () => {
     const runsDocument = (schema["$defs"] as Record<string, Schema>)["runs_document"]!;
     expect(validate(schema, runsDocument, parseJson(again.stdout(), "plain"))).toEqual([]);
     expect(JSON.parse(again.stdout()).runs).toEqual([
+      // No record could be read, so not even the run's start.
       expect.objectContaining({
         run_id: "damaged",
-        status: "crashed",
+        status: "unstarted",
         started_at: null,
         last_seq: null,
         unreadable: { seq: 0, reason: expect.stringMatching(/^run log .*line 1/) },
       }),
     ]);
   });
+
+  test("on a terminal, a run's id, flow path and node ids show their control characters, the columns in line", async () => {
+    const runs = join(tmp, "home", ".yian", "runs");
+    const flowName = "evil\x1b]0;PWNED\x07\x1b[31mred.yaml";
+    const flow = file(flowName, ECHO_FLOW);
+    mkdirSync(join(tmp, "home"), { recursive: true });
+    expect((await main(["run", "-q", flow, "--input", "topic=clouds"], testIo({ HOME: join(tmp, "home") }).io))).toBe(0);
+    const [row] = readRunIndex(runs);
+    // A shared or hand-edited run folder can hold escapes in its ids too.
+    const heldId = "h\x1b[2Jeld";
+    mkdirSync(join(runs, heldId));
+    const node = "evil\x1b]52;c;cHduZWQ=\x07node";
+    const held = JsonlRunLog.create(join(runs, heldId, "log.jsonl"), heldId, {
+      clock: () => Date.parse("2999-01-01T00:00:00.000Z"),
+    });
+    held.append(
+      new RunStartedRecord({ flowFingerprint: "a".repeat(64), startWiringOverride: {}, effectiveLlmByStaticPath: {}, numWorkers: 0 }),
+    );
+    held.append(new NodeStartedRecord(node));
+    held.close();
+
+    const listed = ttyIo({ HOME: join(tmp, "home") });
+    expect(await main(["status"], listed.io)).toBe(0);
+    const width = row!.runId.length;
+    const line = (id: string, status: string, started: string, shown: string) =>
+      `${id.padEnd(width)}  ${status.padEnd(9)}  ${started.padEnd(24)}  ${shown}\n`;
+    expect(listed.stdout()).toBe(
+      line("run id", "status", "started", "flow") +
+        line(row!.runId, "succeeded", row!.startedAt!, join(realpathSync(tmp), "evil^[]0;PWNED^G^[[31mred.yaml")) +
+        // Its log stops inside the run start, so it reads unstarted.
+        line("h^[[2Jeld", "unstarted", "2999-01-01T00:00:00.000Z", "-"),
+    );
+
+    const inspected = ttyIo();
+    expect(await main(["status", join(runs, heldId, "log.jsonl")], inspected.io)).toBe(0);
+    expect(inspected.stdout()).toBe(
+      "status: unstarted\nin flight: evil^[]52;c;cHduZWQ=^Gnode\n",
+    );
+    // Piped, the ids keep their bytes.
+    const piped = testIo();
+    expect(await main(["status", join(runs, heldId, "log.jsonl")], piped.io)).toBe(0);
+    expect(piped.stdout()).toContain(`in flight: ${node}\n`);
+    // A crashed run's attempts name the node too.
+    const crashed = await crashedLog();
+    writeFileSync(crashed, readFileSync(crashed, "utf8").replaceAll('"node_id":"echo"', `"node_id":${JSON.stringify(node)}`));
+    const attempts = ttyIo();
+    expect(await main(["status", crashed], attempts.io)).toBe(0);
+    expect(attempts.stdout()).toBe(
+      "status: crashed\nin flight: evil^[]52;c;cHduZWQ=^Gnode\ncrashed attempts: evil^[]52;c;cHduZWQ=^Gnode=1\n",
+    );
+  });
+
+  test("yian run indexes only its own run; the next status reads the rest", async () => {
+    const runs = join(tmp, "home", ".yian", "runs");
+    const damaged = join(runs, "damaged");
+    mkdirSync(damaged, { recursive: true });
+    writeFileSync(join(damaged, "log.jsonl"), "not a run log\n");
+    const ran = await runFlowCli(ECHO_FLOW, ["-q", "--input", "topic=clouds"]);
+    expect(ran.code).toBe(0);
+    expect(ran.stderr).not.toContain("warning");
+    expect(readRunIndex(runs).map((row) => row.status)).toEqual(["succeeded"]);
+    const listed = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["status"], listed.io)).toBe(0);
+    expect(listed.stderr()).toStartWith(`warning: run index skipped ${join(damaged, "log.jsonl")}: run log `);
+    expect(readRunIndex(runs).map((row) => row.runId)[0]).toBe("damaged");
+  });
+
+  test("while another update holds the index, status lists what it holds, with a warning", async () => {
+    expect((await runFlowCli(ECHO_FLOW, ["-q", "--input", "topic=clouds"])).code).toBe(0);
+    const runs = join(tmp, "home", ".yian", "runs");
+    // A new run, so the update has to write.
+    expect((await runFlowCli(FAIL_FLOW, ["-q", "--input", "topic=rain", "--log", join(tmp, "elsewhere.jsonl")])).code).toBe(1);
+    mkdirSync(join(runs, "copied"));
+    copyFileSync(join(tmp, "elsewhere.jsonl"), join(runs, "copied", "log.jsonl"));
+    const holder = openSqlite(join(runs, "index.sqlite"));
+    try {
+      holder.exec("BEGIN IMMEDIATE");
+      const text = testIo({ HOME: join(tmp, "home") });
+      const listing = main(["status"], text.io);
+      expect(await listing).toBe(0);
+      expect(text.stderr()).toBe("warning: run index is being updated; listing may be stale\n");
+      expect(text.stdout()).toContain("succeeded");
+      expect(text.stdout()).not.toContain("copied");
+    } finally {
+      holder.close();
+    }
+  }, 30_000);
 
   test("a damaged index is rebuilt from the logs: the runs are listed, with one warning", async () => {
     expect((await runFlowCli(ECHO_FLOW, ["-q", "--input", "topic=clouds"])).code).toBe(0);
@@ -1861,6 +2105,50 @@ describe("status", () => {
     expect(crashed.stdout()).toBe(
       "status: crashed\nin flight: echo\ncrashed attempts: echo=1\n",
     );
+  });
+
+  test("a log cut inside its run start is unstarted, in the list too, and a resume says to delete it", async () => {
+    const runs = join(tmp, "home", ".yian", "runs");
+    expect((await runFlowCli(ECHO_FLOW, ["-q", "--input", "topic=clouds"])).code).toBe(0);
+    const [runId] = readRunIndex(runs).map((row) => row.runId);
+    const log = join(runs, runId!, "log.jsonl");
+    // `run_started` and two of the system values' commits.
+    writeFileSync(log, `${readFileSync(log, "utf8").split("\n").slice(0, 3).join("\n")}\n`);
+    const text = testIo();
+    expect(await main(["status", log], text.io)).toBe(0);
+    expect(text.stdout()).toBe("status: unstarted\n");
+    const json = testIo();
+    expect(await main(["status", log, "--json"], json.io)).toBe(0);
+    expect(json.stdout()).toBe(
+      '{"format":"yian.cli.v1","crashed_attempts":{},"in_flight":[],"ready":false,"status":"unstarted","wake_at":null}\n',
+    );
+    const schema = JSON.parse(readFileSync(fileURLToPath(new URL("../conformance/schema/cli.schema.json", import.meta.url)), "utf8")) as Schema;
+    const statusDocument = (schema["$defs"] as Record<string, Schema>)["status_document"]!;
+    expect(validate(schema, statusDocument, parseJson(json.stdout(), "plain"))).toEqual([]);
+    const listed = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["status", "--json"], listed.io)).toBe(0);
+    expect(JSON.parse(listed.stdout()).runs).toEqual([expect.objectContaining({ run_id: runId, status: "unstarted", result: null })]);
+    const resumed = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["run", "-q", "--resume", log], resumed.io)).toBe(1);
+    expect(resumed.stderr()).toContain(
+      `run log ${log} ends inside its run start, before its inputs were recorded; delete it and start the run again`,
+    );
+  });
+
+  test("with no log, a failed or waiting run whose END succeeded lists no result", async () => {
+    const failAfter =
+      "id: failafter\nname: failafter\nnodes:\n  boom:\n    kind: code\n    output: str\n    code: |\n" +
+      '      await new Promise((r) => setTimeout(r, 300));\n      throw new Error("boom");\noutput: done\n';
+    const nap = "id: nap\nname: nap\nnodes:\n  nap:\n    kind: tool\n    tool_id: sleep\n    input:\n      for: 1h\noutput: done\n";
+    expect((await runFlowCli(failAfter, ["-q"])).code).toBe(1);
+    expect((await runFlowCli(nap, ["-q"])).code).toBe(0);
+    const json = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["status", "--json"], json.io)).toBe(0);
+    const listed = JSON.parse(json.stdout()).runs.map((run: { status: string; result: unknown }) => [run.status, run.result]);
+    expect(listed.sort()).toEqual([
+      ["failed", null],
+      ["waiting", null],
+    ]);
   });
 
   test("a log a writer holds is running", async () => {

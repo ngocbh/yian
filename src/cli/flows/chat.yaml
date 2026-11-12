@@ -252,7 +252,8 @@ defs:
         kind: call
         call: name
         input:
-          texts: ${[p.text for t in answered.output for m in t for p in m.parts
+          # `unnamed` routes here only after an answered turn, which the load check can't see.
+          texts: ${[p.text for t in (answered.output :- []) for m in t for p in m.parts
             if p.type == "text"]}
           model: ${sorted.output.model}
     output: !State

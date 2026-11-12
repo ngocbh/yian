@@ -35,6 +35,7 @@ import { advance, runFlow } from "../../src/run.ts";
 import { FileRef } from "../../src/typesys/values.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import { crashAfter, serving, textReply } from "../helpers/run_state_fixtures.ts";
+import { YianRangeError } from "../../src/typesys/errors.ts";
 
 const root = mkdtempSync(join(tmpdir(), "yian-agent-media-files-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -321,7 +322,7 @@ test.each([
   const part = new MediaPart({ mime: "image/png", file: { uri: uri(fixture) } });
   const request = new Request({ messages: [new Message({ role: "user", parts: [part] })] });
   const error = await rejection(fileToInline(request, runDir(fixture)));
-  expect(error).toEqual(new RangeError(`media file ${uri(fixture)} is not inside the run's media folder`));
+  expect(error).toEqual(new YianRangeError(`media file ${uri(fixture)} is not inside the run's media folder`));
 });
 
 // --- the run folder reaches the AGENT --- //

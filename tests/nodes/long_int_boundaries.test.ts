@@ -30,7 +30,8 @@ import {
 
 const dir = mkdtempSync(join(tmpdir(), "yian-long-int-boundaries-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
-const env = hostEnv(dir);
+// A 5000-digit int is over the default YIAN_MAX_INT_DIGITS.
+const env = hostEnv(dir, { YIAN_MAX_INT_DIGITS: "5000" });
 
 const BIG = 10n ** 4999n + 12345n; // 5000 digits
 const POWER = 10n ** 4999n; // `10 ** input.n` with `n = 4999`

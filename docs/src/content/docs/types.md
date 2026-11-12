@@ -257,11 +257,13 @@ the input's type:
 | `Buy` record | `object` | Yes |
 | `Literal(small)` | `Literal(small, large)` | Yes |
 | `int(1..10)` | `int(0..100)` | Yes |
+| `date` | `str` | Yes |
 | `str` | `Literal(small, large)` | No |
 | `Optional(str)` | `str` | No |
 | `int(0..)` | `int(0..100)` | No |
 | `object` or `Any` | `int` or a record | No |
 | `Order` (a union) | `Buy` (a member) | No |
+| `{a: int, b: Optional(int)}` | `{a: int}` | No: records are closed |
 
 To pass a wider value anyway, tag the binding, which checks it when it runs (`size: !Size
 ${input.s}`), or narrow it first. A tagged loop seed relaxes only the `Optional` row: under

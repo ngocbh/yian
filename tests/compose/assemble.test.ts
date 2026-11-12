@@ -60,6 +60,7 @@ import {
   runTextCase,
 } from "../helpers/declarations.ts";
 import { StandInCode, withKinds } from "../helpers/stand_ins.ts";
+import { YianRangeError } from "../../src/typesys/errors.ts";
 
 afterEach(() => forget());
 
@@ -281,14 +282,14 @@ describe("assertionCursors", () => {
   test("a sequence of another length doesn't align, a compiler bug", () => {
     const cursor = SourceDocument.parse("asserts: [a, b]\n", "flow.yaml").root.child("asserts");
     const error = thrown(() => assertionCursors(["a"], cursor, diagnostics));
-    expect(error.constructor).toBe(RangeError);
+    expect(error.constructor).toBe(YianRangeError);
     expect(error.message).toBe("retained assertion cursor does not align with semantic assertions");
   });
 
   test("a non-sequence has no items to align, a compiler bug", () => {
     const cursor = SourceDocument.parse("asserts: a\n").root.child("asserts");
     const error = thrown(() => assertionCursors(["a"], cursor, diagnostics));
-    expect(error.constructor).toBe(RangeError);
+    expect(error.constructor).toBe(YianRangeError);
     expect(error.message).toBe("retained assertion cursor does not align with semantic assertions");
   });
 });
@@ -523,7 +524,7 @@ describe("attachInputContracts", () => {
     const run = () => attachInputContracts(descriptors, new Map([["use", new Map()]]));
     const error = thrown(run);
     expect(error.message).toBe("node 'use': typed input 'qty' has no wiring binding");
-    expect(error.constructor).toBe(RangeError);
+    expect(error.constructor).toBe(YianRangeError);
   });
 });
 
@@ -593,7 +594,7 @@ describe("stampFlowOutputOrigins", () => {
     ] as const) {
       const error = thrown(run);
       expect(error.message).toBe(message);
-      expect(error.constructor).toBe(RangeError);
+      expect(error.constructor).toBe(YianRangeError);
     }
   });
 
@@ -700,6 +701,7 @@ function fakeScope(catalogBuilder = new SourceCatalogBuilder()): CallableScope &
     memoryTypes: NO_MEMORY_TYPES,
     resolved,
     has: () => true,
+    section: () => "defs",
     resolve(flowId: string): ComposedFlow {
       resolved.push(flowId);
       return new ComposedFlow(new CompiledFlow(new Map(), []));

@@ -19,6 +19,7 @@ import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { Type, ValueKind } from "../../src/typesys/index.ts";
 import type { JsonObject, JsonValue } from "../../src/typesys/json.ts";
+import { thrownClass } from "../helpers/own_errors.ts";
 
 const INTEGER = Type.scalar(ValueKind.INTEGER);
 const STRING = Type.scalar(ValueKind.STRING);
@@ -33,7 +34,7 @@ function expectError(fn: () => unknown, cls: typeof Error, message: string): voi
     caught = error;
   }
   expect(caught).toBeInstanceOf(cls);
-  expect((caught as Error).constructor).toBe(cls);
+  expect((caught as Error).constructor).toBe(thrownClass(cls));
   expect((caught as Error).message).toBe(message);
 }
 

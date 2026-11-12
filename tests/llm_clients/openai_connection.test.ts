@@ -18,8 +18,14 @@ import type { Env } from "../../src/defaults.ts";
 import { collect } from "../../src/llm/events.ts";
 import { Message, Request, TextPart } from "../../src/llm/messages.ts";
 import { planStructured, structuredTarget } from "../../src/llm/structured.ts";
-import { ApiKeyCredentials, AuthError, OAuthCredentials, type ProviderSelection } from "../../src/llm_clients/auth/common.ts";
-import { OpenAIAuth } from "../../src/llm_clients/auth/openai.ts";
+import {
+  ApiKeyCredentials,
+  AuthError,
+  HttpResponse,
+  OAuthCredentials,
+  type ProviderSelection,
+} from "../../src/llm_clients/auth/common.ts";
+import { type AuthRequest, OpenAIAuth } from "../../src/llm_clients/auth/openai.ts";
 import { AuthStore } from "../../src/llm_clients/auth/store.ts";
 import { LLMConfig } from "../../src/llm_clients/config.ts";
 import {
@@ -261,6 +267,117 @@ test("saved api key ignores incidental environment", async () => {
   await collect((await build({}, send)).stream(HI));
   expect(new URL(requests[0]!.url).host).toBe("api.openai.com");
   expect(requests[0]!.headers.get("authorization")).toBe("Bearer saved-key");
+});
+
+const GATEWAY = "https://gateway.example.com/v1";
+const OTHER_ENDPOINT =
+  "The saved OpenAI API-key login was made for another endpoint than this run's OPENAI_BASE_URL " +
+  "(unset is OpenAI's API); set OPENAI_BASE_URL to the endpoint 'yian auth' lists for it, or run " +
+  "'yian auth openai' again, and start a new run";
+
+test("a run after a gateway login, without OPENAI_BASE_URL, sends nothing to api.openai.com", async () => {
+  await authStore().save("openai", new ApiKeyCredentials("gateway-key"), "gpt-5.5", { endpoint: GATEWAY });
+  const { requests, send } = recorder(TEXT_REPLY);
+
+  const error = await rejected(build({}, send));
+  expect(error).toBeInstanceOf(AuthError);
+  expect(error.message).toBe(OTHER_ENDPOINT);
+  const flow = await loadFlow(SLOW_THEN_AGENT.replace("{extra}", ""));
+  const models = { env, createModel: (config: Record<string, unknown>) => build(config, send) };
+  const result = await runFlow(flow, { topic: "x" }, { env, models });
+  expect(result.status).toBe("failed");
+  expect(result.failure?.message).toContain(OTHER_ENDPOINT);
+  expect(requests).toEqual([]);
+});
+
+test("a gateway login runs at its endpoint when OPENAI_BASE_URL names it, a trailing slash or not", async () => {
+  await authStore().save("openai", new ApiKeyCredentials("gateway-key"), "gpt-5.5", { endpoint: `${GATEWAY}/` });
+  vars.set("OPENAI_BASE_URL", GATEWAY);
+  const { requests, send } = recorder(TEXT_REPLY);
+  await collect((await build({}, send)).stream(HI));
+  expect(requests[0]!.url).toBe(`${GATEWAY}/responses`);
+  expect(requests[0]!.headers.get("authorization")).toBe("Bearer gateway-key");
+  // An OpenAI login doesn't run at a gateway either.
+  vars.set("OPENAI_BASE_URL", "https://other.example.com/v1");
+  expect((await rejected(build({}, send))).message).toBe(OTHER_ENDPOINT);
+  expect(requests).toHaveLength(1);
+});
+
+test("an OpenAI API-key login saved without its endpoint is refused until it is saved again", async () => {
+  // As logins were saved before they recorded their endpoint.
+  await authStore().save("openai", new ApiKeyCredentials("old-key"), "gpt-5.5", { endpoint: null });
+  const { requests, send } = recorder(TEXT_REPLY);
+  const error = await rejected(build({}, send));
+  expect(error).toBeInstanceOf(AuthError);
+  expect(error.message).toBe(
+    "The saved OpenAI API-key login doesn't record its endpoint; run 'yian auth openai' again and start a new run",
+  );
+  expect(requests).toEqual([]);
+});
+
+test("a pinned record whose endpoint isn't its login's is refused, as on a resume", async () => {
+  const saved = await authStore().save("openai", new ApiKeyCredentials("gateway-key"), "gpt-5.5", {
+    endpoint: GATEWAY,
+  });
+  // A run started before the login recorded its endpoint pinned OpenAI's API.
+  const pinned: Connection = {
+    method: "api_key",
+    source: "store",
+    credential_id: saved.credentialId,
+    endpoint: "https://api.openai.com/v1",
+    store_path: authStore().path,
+  };
+  const error = await rejected(connectionCredentials(pinned, "openai", { env }));
+  expect(error.message).toBe(OTHER_ENDPOINT);
+  const { requests, send } = recorder(TEXT_REPLY);
+  const config = { provider: "openai", model: "gpt-5.5", _connection: pinned };
+  expect((await rejected(build(config, send))).message).toBe(OTHER_ENDPOINT);
+  expect(requests).toEqual([]);
+  const credentials = await connectionCredentials({ ...pinned, endpoint: GATEWAY }, "openai", { env });
+  expect((credentials as ApiKeyCredentials).apiKey).toBe("gateway-key");
+});
+
+describe("OpenAI login and runs accept and refuse the same endpoints", () => {
+  const listing: AuthRequest = async () => new HttpResponse(200, { data: [{ id: "gpt-5.5" }] });
+  /** Whether a login lists models at `endpoint`. */
+  const loginAccepts = (endpoint: string) =>
+    new OpenAIAuth({ request: listing })
+      .apiModels(new ApiKeyCredentials("k"), { endpoint })
+      .then(() => true, (error) => {
+        if (!(error instanceof AuthError)) throw error;
+        return false;
+      });
+  /** Whether a run takes `endpoint` from OPENAI_BASE_URL. */
+  const runAccepts = (endpoint: string) => {
+    vars.set("OPENAI_BASE_URL", endpoint);
+    try {
+      connectionSnapshot({ env });
+      return true;
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      return false;
+    }
+  };
+  test.each([
+    ["https://gateway.example.com/v1", true],
+    ["HTTPS://gateway.example.com/v1", true],
+    ["Https://gateway.example.com:8443/v1/", true],
+    ["http://localhost:8000/v1", true],
+    ["HTTP://LOCALHOST:8000/v1", true],
+    ["http://127.0.0.1:8000/v1", true],
+    ["http://[::1]:8000/v1", true],
+    ["http://gateway.example.com/v1", false],
+    ["HTTP://gateway.example.com/v1", false],
+    ["http://192.168.1.5:8000/v1", false],
+    ["http://host.docker.internal:8000/v1", false],
+    ["http://localhost.evil.example/v1", false],
+    ["http://127.0.0.2/v1", false],
+    ["https://user:pw@gateway.example.com/v1", false],
+    ["https://gateway.example.com/v1?key=x", false],
+    ["ftp://gateway.example.com/v1", false],
+  ])("%s", async (endpoint, accepted) => {
+    expect([await loginAccepts(endpoint), runAccepts(endpoint)]).toEqual([accepted, accepted]);
+  });
 });
 
 test("subscription needs no api key", async () => {

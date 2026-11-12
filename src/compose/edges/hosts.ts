@@ -43,6 +43,7 @@
 
 import { Edge } from "../../compile/model.ts";
 import { reprText } from "../../diagnostics.ts";
+import { YianRangeError } from "../../typesys/errors.ts";
 import type { NodeDescriptor } from "../nodes/base.ts";
 
 /** One inherited edge before it gets a target and an id. */
@@ -103,7 +104,7 @@ export function hostControlEdges(descriptors: ReadonlyMap<string, NodeDescriptor
   /** `host`, checked to be a node of this level. */
   const checkedHost = (nodeId: string, host: string): string => {
     if (!descriptors.has(host)) {
-      throw new RangeError(`lifted node ${reprText(nodeId)} names host ${reprText(host)}, which is not a node`);
+      throw new YianRangeError(`lifted node ${reprText(nodeId)} names host ${reprText(host)}, which is not a node`);
     }
     return host;
   };
@@ -115,7 +116,7 @@ export function hostControlEdges(descriptors: ReadonlyMap<string, NodeDescriptor
     const known = memo.get(nodeId);
     if (known !== undefined) return known;
     if (chain.includes(nodeId)) {
-      throw new RangeError(`lifted-node hosts form a cycle: ${[...chain, nodeId].join(" -> ")}`);
+      throw new YianRangeError(`lifted-node hosts form a cycle: ${[...chain, nodeId].join(" -> ")}`);
     }
     const desc = descriptors.get(nodeId)!;
     const gates: Gate[] = (routesInto.get(nodeId) ?? []).map((edge) => ({
@@ -155,7 +156,7 @@ export function hostControlEdges(descriptors: ReadonlyMap<string, NodeDescriptor
     while ((host = descriptors.get(current)!.host) !== null) {
       host = checkedHost(current, host);
       if (host === nodeId || found.includes(host)) {
-        throw new RangeError(`lifted-node hosts form a cycle: ${[nodeId, ...found, host].join(" -> ")}`);
+        throw new YianRangeError(`lifted-node hosts form a cycle: ${[nodeId, ...found, host].join(" -> ")}`);
       }
       found.push(host);
       current = host;
@@ -227,7 +228,7 @@ export function hostControlEdges(descriptors: ReadonlyMap<string, NodeDescriptor
     // Control edges join by OR, so an own route would loosen the inherited gate, and own ordering
     // fields would get ids from `inferOrderingEdges` that may collide with these.
     if ((routesInto.get(nodeId) ?? []).length > 0 || desc.dependsOn.length > 0 || desc.runsAfter.length > 0) {
-      throw new RangeError(
+      throw new YianRangeError(
         `lifted node ${reprText(nodeId)} has its own route or ordering edges; it may only inherit its host's`,
       );
     }

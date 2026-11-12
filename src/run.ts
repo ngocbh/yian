@@ -63,7 +63,7 @@ import {
   valueConfigSubjects,
 } from "./compile/llm_cascade.ts";
 import { flowFingerprint } from "./compile/manifest.ts";
-import { type CompiledFlow, copyGraph, type Flow } from "./compile/model.ts";
+import { type CompiledFlow, copyGraph, type Flow, nodeChildren, type StaticChild } from "./compile/model.ts";
 import { typeRelation } from "./compile/validation.ts";
 import { ComposedFlow } from "./compose/build/pipeline.ts";
 import { CLOSE_MATCH_CUTOFF } from "./compose/helpers/tags.ts";
@@ -113,6 +113,7 @@ import {
   type StepExchange,
 } from "./nodes/agent/messages.ts";
 import { staticPathOf } from "./nodes/ids.ts";
+import { FLOW_SCOPE_LABEL } from "./nodes/agent/flow_tools.ts";
 import { typeToSchema } from "./nodes/agent/structured.ts";
 import { type CompleteResult, type LocalToolSpec, type Node, NodeKind, type RebuildCaps } from "./nodes/base.ts";
 import { applyDefaults, BindingError, checkInputNames, coerceInputs, copyValue } from "./nodes/binding.ts";
@@ -149,6 +150,7 @@ import {
   type RecordEnvelope,
   type RunLog,
   type RunLogEntry,
+  RunCancelledRecord,
   RunFailedRecord,
   type RunRecord,
   RunResumedRecord,
@@ -191,6 +193,7 @@ import {
   type GrantedTool,
   type GrantScope,
   localGroupScope,
+  localToolScope,
   reachedGroups,
   requestToolSpecs,
   type ToolGrant,
@@ -198,6 +201,7 @@ import {
 } from "./tools/grants.ts";
 import { type AskRequest, RESERVED_TOOL_NAMES, type ToolEntry, type ToolRef, ToolSet } from "./tools/registry.ts";
 import { toolTypes } from "./tools/types.ts";
+import { YianRangeError, YianTypeError } from "./typesys/errors.ts";
 import { type JsonObject, logJson } from "./typesys/json.ts";
 import { VariablePool } from "./typesys/pool.ts";
 import { defaultRunId, seedSystemClock } from "./typesys/seeding.ts";
@@ -787,7 +791,7 @@ export async function runFlow(
   const env = options.env ?? processEnv;
   return withEnv(env, async () => {
     const runDefaults = current();
-    if (!(flow instanceof ComposedFlow)) throw new TypeError("runFlow expects a ComposedFlow");
+    if (!(flow instanceof ComposedFlow)) throw new YianTypeError("runFlow expects a ComposedFlow");
     const unopened = checkDriveOptions(options);
     const skills = checkFlowBeforeServers(flow.compiled, options.skills ?? null);
     return await startRun(flow, inputs, { ...options, skills }, unopened, runDefaults, env);
@@ -808,10 +812,10 @@ type DriveOptions = Pick<
  */
 function refuseRemovedOptions(options: object, takesMemory = false): void {
   if (Object.hasOwn(options, "learnable")) {
-    throw new RangeError("learnable was removed: yian no longer learns from runs; drop the option");
+    throw new YianRangeError("learnable was removed: yian no longer learns from runs; drop the option");
   }
   if (!takesMemory && Object.hasOwn(options, "memory")) {
-    throw new RangeError("the memory option was removed: pass each memory as a flow input");
+    throw new YianRangeError("the memory option was removed: pass each memory as a flow input");
   }
 }
 
@@ -831,18 +835,18 @@ function checkDriveOptions(options: DriveOptions, takesMemory = false): [string,
   refuseRemovedOptions(options, takesMemory);
   const { tools = null, context, signal = null, live = null, onEvent = null, onStream = null, onConsole = null } = options;
   const { scheduler = null, random = null, models = null } = options;
-  if (signal !== null && !(signal instanceof AbortSignal)) throw new TypeError("signal must be an AbortSignal or null");
-  if (live !== null && !(live instanceof LiveChannel)) throw new TypeError("live must be a LiveChannel or null");
-  if (onEvent !== null && typeof onEvent !== "function") throw new TypeError("onEvent must be a function or null");
-  if (onStream !== null && typeof onStream !== "function") throw new TypeError("onStream must be a function or null");
-  if (onConsole !== null && typeof onConsole !== "function") throw new TypeError("onConsole must be a function or null");
+  if (signal !== null && !(signal instanceof AbortSignal)) throw new YianTypeError("signal must be an AbortSignal or null");
+  if (live !== null && !(live instanceof LiveChannel)) throw new YianTypeError("live must be a LiveChannel or null");
+  if (onEvent !== null && typeof onEvent !== "function") throw new YianTypeError("onEvent must be a function or null");
+  if (onStream !== null && typeof onStream !== "function") throw new YianTypeError("onStream must be a function or null");
+  if (onConsole !== null && typeof onConsole !== "function") throw new YianTypeError("onConsole must be a function or null");
   if (
     scheduler !== null &&
     (typeof scheduler !== "object" || typeof scheduler.now !== "function" || typeof scheduler.sleep !== "function")
   ) {
-    throw new TypeError("scheduler must be a Scheduler or null");
+    throw new YianTypeError("scheduler must be a Scheduler or null");
   }
-  if (random !== null && typeof random !== "function") throw new TypeError("random must be a function or null");
+  if (random !== null && typeof random !== "function") throw new YianTypeError("random must be a function or null");
   requireModels(models);
   signal?.throwIfAborted();
   const [otherTools, unopened] = splitRunServers(tools);
@@ -859,7 +863,7 @@ function checkDriveOptions(options: DriveOptions, takesMemory = false): [string,
 function requireModels(models: unknown): void {
   const access = models as Partial<ModelAccess> | null | undefined;
   if (models !== null && !(typeof access?.env === "function" && typeof access.createModel === "function")) {
-    throw new TypeError("models must provide env(name) and createModel(config, options), or be null");
+    throw new YianTypeError("models must provide env(name) and createModel(config, options), or be null");
   }
 }
 
@@ -890,13 +894,13 @@ function checkFlowBeforeServers(
  */
 export function hostInputs(params: readonly Parameter[], inputs: unknown): Record<string, Value> {
   // Checked first: reading a Proxy's prototype or keys would run its traps.
-  if (types.isProxy(inputs)) throw new TypeError("inputs must be a mapping of input names to values, got Proxy");
+  if (types.isProxy(inputs)) throw new YianTypeError("inputs must be a mapping of input names to values, got Proxy");
   checkInputNames(params, inputs);
   const record = inputs as Readonly<Record<string, unknown>>;
   const memories = new Set<string>();
   for (const param of params) {
     if (isInboxType(param.contract?.type) && Object.hasOwn(record, param.name)) {
-      throw new RangeError(`inbox \`${param.name}\` receives events through send(); it takes no run input`);
+      throw new YianRangeError(`inbox \`${param.name}\` receives events through send(); it takes no run input`);
     }
     const typ = param.contract?.type;
     if (!isMemoryType(typ) || !Object.hasOwn(record, param.name)) continue;
@@ -904,7 +908,7 @@ export function hostInputs(params: readonly Parameter[], inputs: unknown): Recor
     // An Optional memory given null is left out of the START inputs, as one left out is: never
     // recorded as null.
     if (!isMemory(value) && !(value === null && typ.nullable)) {
-      throw new RangeError(`memory \`${param.name}\` is bound to a MemoryBase instance, not a value`);
+      throw new YianRangeError(`memory \`${param.name}\` is bound to a MemoryBase instance, not a value`);
     }
     memories.add(param.name);
   }
@@ -976,16 +980,16 @@ function resumeBindings(
 ): MemoryBinding[] {
   if (memory === null) return [];
   if (!isRecord(memory) || types.isProxy(memory)) {
-    throw new TypeError("memory must be a record of memory input names to MemoryBase instances");
+    throw new YianTypeError("memory must be a record of memory input names to MemoryBase instances");
   }
   for (const name of Object.keys(memory)) {
     const param = params.find((each) => each.name === name);
     const typ = param?.contract?.type;
-    if (!isMemoryType(typ)) throw new RangeError(`memory \`${name}\` isn't a memory input of this run's flow`);
+    if (!isMemoryType(typ)) throw new YianRangeError(`memory \`${name}\` isn't a memory input of this run's flow`);
     const value = suppliedValue(memory, name);
     if (value === null && typ.nullable) continue;
-    if (!isMemory(value)) throw new TypeError(`memory \`${name}\` takes a MemoryBase instance`);
-    if (!recorded.has(name)) throw new RangeError(`memory \`${name}\` was null when the run started; drop it`);
+    if (!isMemory(value)) throw new YianTypeError(`memory \`${name}\` takes a MemoryBase instance`);
+    if (!recorded.has(name)) throw new YianRangeError(`memory \`${name}\` was null when the run started; drop it`);
   }
   return memoryBindings(params, memory);
 }
@@ -1053,8 +1057,34 @@ function checkHostHeaderNames(
   if (host !== null) expected.push(...((host["header_names"] as string[] | undefined) ?? []));
   const diff = headerNameDiff(expected, Object.keys(headers ?? {}));
   if (diff !== null) {
-    throw new RangeError(`headers must have the header names this run recorded for its host key: ${diff}`);
+    throw new YianRangeError(`headers must have the header names this run recorded for its host key: ${diff}`);
   }
+}
+
+/**
+ * Return the error refusing a resume that wasn't given the host key a run's agents use: it names
+ * the key's providers and the call that passes it again, headers included when the key came with
+ * some.
+ *
+ * @param effective The recorded effective model map, keyed by static agent path.
+ * @param callTime The recorded `RunStarted.call_time_llm`, or `null`.
+ */
+function hostKeyNotGiven(
+  effective: Readonly<Record<string, Readonly<AgentConfig>>>,
+  callTime: Readonly<CallTimeLlm> | null,
+): RangeError {
+  const providers = hostKeyProviders(effective);
+  const host = selectionHost(callTime);
+  if (host !== null) providers.add(String(host["provider"]));
+  const names = Object.values(effective).flatMap((config) =>
+    config[HOST_KEY_MARKER] === true ? ((config[HEADER_NAMES_KEY] as string[] | undefined) ?? []) : [],
+  );
+  if (host?.["header_names"] !== undefined) names.push(...(host["header_names"] as string[]));
+  const given = names.length > 0 ? "apiKey, headers" : "apiKey";
+  return new YianRangeError(
+    `this run's ${[...providers].sort(compareCodeUnits).join(", ")} API key came from the host's ` +
+      `llmConfig.api_key and is not recorded; pass it again: advance({ log, ${given} })`,
+  );
 }
 
 /** Validate a host key without echoing it in errors. */
@@ -1109,10 +1139,10 @@ function checkEffectiveLlm(
       if (!(error instanceof RangeError)) throw error;
       const subject = located?.get(path);
       if (subject !== undefined) {
-        throw new RangeError(blockProblem(subject, refusedBlock(probe).slice(1), error.message), { cause: error });
+        throw new YianRangeError(blockProblem(subject, refusedBlock(probe).slice(1), error.message), { cause: error });
       }
       const where = labels.get(path) ?? `Agent ${reprText(path)}`;
-      throw new RangeError(`${where}: ${error.message}`, { cause: error });
+      throw new YianRangeError(`${where}: ${error.message}`, { cause: error });
     }
   }
 }
@@ -1218,6 +1248,7 @@ async function startRun(
     const hostTypes = memoryTypeTools(flow.memoryTypes);
     checkToolGrants(flow.compiled, runTools);
     checkMemoryGrantNames(flow.compiled, runTools, hostTypes);
+    checkFlowGrantNames(flow.compiled, runTools);
     checkToolTypes(flow.compiled, runTools);
 
     // Identity belongs to the authored program, before cascade resolution or any per-run copy can
@@ -1235,7 +1266,7 @@ async function startRun(
     // settings stay out too, so no authored layer can pair the key with another. Host intake makes
     // the copy they are taken from, with an integral number as an int.
     const runLlmConfig = fromHost(options.llmConfig ?? {}, "llm_config");
-    if (!isRecord(runLlmConfig)) throw new TypeError("llmConfig must be a record or null");
+    if (!isRecord(runLlmConfig)) throw new YianTypeError("llmConfig must be a record or null");
     const host = popHostCredentials(runLlmConfig);
     let apiKey = host.apiKey;
     let headers = host.headers;
@@ -1475,8 +1506,8 @@ export interface AdvanceOptions {
   skills?: ReadonlyMap<string, Skill> | null;
   /**
    * The provider key of a run started with `llmConfig.api_key`, for the agents the log marks for it
-   * (and a call-time agent resolving to its provider); never recorded. A log that marks no agent
-   * ignores it.
+   * (and a call-time agent resolving to its provider); never recorded, so an unfinished run that
+   * uses it can't resume without it. A log that marks no agent ignores it.
    */
   apiKey?: string | null;
   /**
@@ -1558,8 +1589,9 @@ export interface AdvanceOptions {
  *   `flow` was passed, or its flow files were recorded and one was, `codeRoot` isn't the recorded
  *   code root, the flow fingerprint differs, the worker count is negative, `apiKey` or `headers`
  *   is refused or their header names aren't the recorded ones (the message never echoes a value),
- *   a recorded agent config has an invalid field, or, for an unfinished run, a tool or skill
- *   check of `runFlow` fails, a granted tool's spec or skill's text differs from the recorded one
+ *   a recorded agent config has an invalid field, or, for an unfinished run, its agents use the
+ *   host key and `apiKey` isn't given (before anything is appended), a tool or skill check of
+ *   `runFlow` fails, a granted tool's spec or skill's text differs from the recorded one
  *   (`resume refused: tools.<name> description differs from the recorded one`), a `tools` server
  *   was opened by another run in progress, or a started call-time agent resolves to another config
  *   than the one it recorded (`node '<path>' llm_config: recorded config differs from the
@@ -1590,7 +1622,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
     current();
     const { log, tools = null, context, signal = null, flow: hostFlow = null } = options;
     if (hostFlow !== null && !(hostFlow instanceof ComposedFlow)) {
-      throw new TypeError("advance's flow must be a ComposedFlow or null");
+      throw new YianTypeError("advance's flow must be a ComposedFlow or null");
     }
     const unopened = checkDriveOptions(options, true);
     let { apiKey, headers } = hostCredentials(options.apiKey, options.headers);
@@ -1665,6 +1697,10 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       if (options.checkLlmConfigs != null) {
         await options.checkLlmConfigs(legacyConnectionMap(recordedLlm), { callTimeHost: selectionHost(callTime) });
       }
+      // A resume without the key would fail its agent for good, so it is refused before any append.
+      if (apiKey === null && usesHostKey(state.effectiveLlmByStaticPath, callTime)) {
+        throw hostKeyNotGiven(state.effectiveLlmByStaticPath, callTime);
+      }
       // Skills need no server, so a changed one is refused before any server starts.
       checkRecordedSpecs("skills", start.skills, recordedSkills(flow.compiled, skills));
       runServers = await openRunServers(unopened, signal);
@@ -1672,6 +1708,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       const hostTypes = memoryTypeTools(flow.memoryTypes);
       checkToolGrants(flow.compiled, runTools);
       checkMemoryGrantNames(flow.compiled, runTools, hostTypes);
+      checkFlowGrantNames(flow.compiled, runTools);
       checkToolTypes(flow.compiled, runTools);
       checkRecordedSpecs("tools", start.tools, recordedTools(flow.compiled, runTools));
       checkRecordedToolGroups(start.toolGroups, recordedToolGroups(flow.compiled, runTools));
@@ -1717,8 +1754,8 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
  * @throws RangeError when there is none, or it is another kind.
  */
 function startRecord(first: RecordEnvelope | undefined): RunStartedRecord {
-  if (first === undefined) throw new RangeError("cannot replay an empty run log");
-  if (!(first.record instanceof RunStartedRecord)) throw new RangeError("the first run log record must be RunStarted");
+  if (first === undefined) throw new YianRangeError("cannot replay an empty run log");
+  if (!(first.record instanceof RunStartedRecord)) throw new YianRangeError("the first run log record must be RunStarted");
   return first.record;
 }
 
@@ -1734,12 +1771,12 @@ function startRecord(first: RecordEnvelope | undefined): RunStartedRecord {
 async function resumedFlow(log: string, start: RunStartedRecord, hostFlow: ComposedFlow | null): Promise<ComposedFlow> {
   if (start.flow === null) {
     if (hostFlow === null) {
-      throw new RangeError(`run log ${log}: this run's flow was built in code; resume it with advance({log, flow})`);
+      throw new YianRangeError(`run log ${log}: this run's flow was built in code; resume it with advance({log, flow})`);
     }
     return hostFlow;
   }
   if (hostFlow !== null) {
-    throw new RangeError(`run log ${log} holds its flow files, which resume compiles; leave out flow`);
+    throw new YianRangeError(`run log ${log} holds its flow files, which resume compiles; leave out flow`);
   }
   return loadFlowSource(start.flow);
 }
@@ -1767,7 +1804,7 @@ function checkCodeRoot(log: string, start: RunStartedRecord, root: string | null
   }
   if (real === recorded) return;
   const was = recorded === null ? "the run recorded none" : `the run recorded ${reprText(recorded)}`;
-  throw new RangeError(
+  throw new YianRangeError(
     `run log ${log}: codeRoot ${reprText(real)} isn't the run's code root (${was}); leave out codeRoot`,
   );
 }
@@ -1820,7 +1857,7 @@ function readStart(log: string, maxLineBytes: number | null): RunStartedRecord {
   } finally {
     records.return();
   }
-  if (first === undefined) throw new RangeError(`cannot resume an empty run log: ${log}`);
+  if (first === undefined) throw new YianRangeError(`cannot resume an empty run log: ${log}`);
   return startRecord(first);
 }
 
@@ -1838,13 +1875,13 @@ function checkRecordedSpecs(
   const names = [...new Set([...Object.keys(recorded), ...Object.keys(current)])].sort(compareCodeUnits);
   for (const name of names) {
     const subject = `resume refused: ${kind}.${name}`;
-    if (!Object.hasOwn(current, name)) throw new RangeError(`${subject} is recorded, but this run's ${kind} lack it`);
-    if (!Object.hasOwn(recorded, name)) throw new RangeError(`${subject} isn't recorded; the run started without it`);
+    if (!Object.hasOwn(current, name)) throw new YianRangeError(`${subject} is recorded, but this run's ${kind} lack it`);
+    if (!Object.hasOwn(recorded, name)) throw new YianRangeError(`${subject} isn't recorded; the run started without it`);
     const was = recorded[name]!;
     const now = current[name]!;
     for (const field of Object.keys(was)) {
       if (logJson(was[field]) !== logJson(now[field])) {
-        throw new RangeError(`${subject} ${field} differs from the recorded one`);
+        throw new YianRangeError(`${subject} ${field} differs from the recorded one`);
       }
     }
   }
@@ -1865,7 +1902,7 @@ function checkRecordedToolGroups(
     Object.hasOwn(groups, name) ? logJson([...groups[name]!]) : null;
   for (const name of names) {
     if (members(recorded, name) !== members(current, name)) {
-      throw new RangeError(`resume refused: tool_groups.${name} differs from the recorded one`);
+      throw new YianRangeError(`resume refused: tool_groups.${name} differs from the recorded one`);
     }
   }
 }
@@ -1909,27 +1946,36 @@ export interface SendOptions extends DeliveryOptions {
 }
 
 /**
+ * What a delivery appended: the record and its seq (both `null` for a no-op; for a repeat of a
+ * keyed send, the first send's seq and no record), and its observers.
+ */
+interface Delivered {
+  readonly seq: number | null;
+  readonly events: readonly RunEvent[];
+  readonly record: RunRecord | null;
+}
+
+/**
  * Deliver `op` to the run at `log`: through this process's engine when it is moving the run,
  * else under the log's lock, which is taken without blocking and released before this returns.
  * Offline, a waiting run's registry entry is reused while the log is the file it left; otherwise
- * the recorded flow is compiled and the log replayed, as `advance` does. A refused delivery keeps
- * the entry. `before` sees the state just before the delivery, synchronously.
- *
- * @returns The appended record and its seq (both `null` for a no-op; for a repeat of a keyed
- *   send, the first send's seq and no record), and its observers.
+ * `fromRecords`, when given, delivers from the opened log alone, else the recorded flow is
+ * compiled and the log replayed, as `advance` does. A refused delivery keeps the entry. `before`
+ * sees the state just before the delivery, synchronously, when there is one.
  */
 async function deliverTo(
   log: string,
   op: DeliveryOp,
   options: DeliveryOptions,
   before: (state: RunState) => void = () => {},
-): Promise<{ readonly seq: number | null; readonly events: readonly RunEvent[]; readonly record: RunRecord | null }> {
+  fromRecords: ((authority: JsonlRunLog) => Delivered) | null = null,
+): Promise<Delivered> {
   const env = options.env ?? processEnv;
   return withEnv(env, async () => {
     current();
     const { flow: hostFlow = null, apiKey = null, headers = null } = options;
     if (hostFlow !== null && !(hostFlow instanceof ComposedFlow)) {
-      throw new TypeError("a host call's flow must be a ComposedFlow or null");
+      throw new YianTypeError("a host call's flow must be a ComposedFlow or null");
     }
     const given = apiKey === null && headers === null ? null : hostCredentials(apiKey, headers);
     // The absolute path is taken once, so a later directory change can't move the log.
@@ -1957,6 +2003,11 @@ async function deliverTo(
       checkRecorded(start.defaults);
       const want = given === null ? { hostFlow } : { hostFlow, credentials: given };
       const kept = reusable(runHold.idle, authority, key, want);
+      if (kept === null && fromRecords !== null) {
+        const delivered = fromRecords(opened);
+        appended = delivered.record !== null;
+        return delivered;
+      }
       const flow = kept?.flow ?? (await resumedFlow(log, start, hostFlow));
       const state = kept?.state ?? replayRunLog(flow, authority, given ?? {});
       // Set before preparing: a refused delivery changes nothing, so the state stays reusable.
@@ -2021,10 +2072,10 @@ async function deliverTo(
  *   never sends it twice.
  */
 export async function send(log: string, inbox: string, event: unknown, options: SendOptions = {}): Promise<number> {
-  if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
+  if (typeof inbox !== "string") throw new YianTypeError("inbox must be a string");
   const key = options.key ?? null;
-  if (key !== null && typeof key !== "string") throw new TypeError("a send's key must be a string or null");
-  if (key === "") throw new RangeError("a send's key must be a non-empty string");
+  if (key !== null && typeof key !== "string") throw new YianTypeError("a send's key must be a string or null");
+  if (key === "") throw new YianRangeError("a send's key must be a non-empty string");
   return (await deliverTo(log, { kind: "send", inbox, event, key }, options)).seq!;
 }
 
@@ -2054,14 +2105,14 @@ export async function complete(
   result: CompleteResult,
   options: DeliveryOptions = {},
 ): Promise<number | null> {
-  if (typeof callId !== "string") throw new TypeError("callId must be a string");
+  if (typeof callId !== "string") throw new YianTypeError("callId must be a string");
   const fields: Record<string, unknown> | null = isRecord(result) ? result : null;
   const shaped =
     fields !== null &&
     Object.keys(fields).length === 1 &&
     ((Object.hasOwn(fields, "output") && fields.output !== undefined) ||
       (Object.hasOwn(fields, "error") && typeof fields.error === "string"));
-  if (!shaped) throw new TypeError("a complete's result must be {output} or {error: string}");
+  if (!shaped) throw new YianTypeError("a complete's result must be {output} or {error: string}");
   return (await deliverTo(log, { kind: "complete", callId, result }, options)).seq;
 }
 
@@ -2080,7 +2131,7 @@ export async function complete(
  * @throws RunBusyError, RangeError, LoadError, DefaultsMismatchError and `ENOENT`, as `send`.
  */
 export async function close(log: string, inbox: string, options: DeliveryOptions = {}): Promise<number | null> {
-  if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
+  if (typeof inbox !== "string") throw new YianTypeError("inbox must be a string");
   return (await deliverTo(log, { kind: "close", inbox }, options)).seq;
 }
 
@@ -2109,7 +2160,7 @@ export interface WithdrawnEvent {
  * @throws RunBusyError, RangeError, LoadError, DefaultsMismatchError and `ENOENT`, as `send`.
  */
 export async function withdraw(log: string, inbox: string, options: DeliveryOptions = {}): Promise<readonly WithdrawnEvent[]> {
-  if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
+  if (typeof inbox !== "string") throw new YianTypeError("inbox must be a string");
   let taken: WithdrawnEvent[] = [];
   const { seq } = await deliverTo(log, { kind: "withdraw", inbox }, options, (state) => {
     // Read before the record drops the values, in the delivery's synchronous section.
@@ -2124,21 +2175,53 @@ export async function withdraw(log: string, inbox: string, options: DeliveryOpti
 /**
  * Cancel the run at `log`: `run_cancelled` ends it, closing its open calls, with no output. A live
  * engine aborts its running nodes and publishes `CallClosed {reason: "cancelled"}` for each open
- * host call. Delivered as `send` is.
+ * host call. Delivered as `send` is, except that offline, with no state of this process to reuse,
+ * the log's records alone decide it: the flow isn't compiled, so a run whose flow no longer loads
+ * (a CODE file gone) can still be ended, and `options.flow` isn't needed.
  *
  * @param log The run's JSONL log.
- * @param options See `DeliveryOptions`.
+ * @param options See `DeliveryOptions`; `flow` is read only by a live or reused run.
  * @returns The open host calls the cancel closed, as `pendingCalls` listed them.
  * @throws TypeError when `options.flow` isn't a `ComposedFlow` or `null`.
  * @throws DeliveryRefused (nothing appended) with reason `ended` once the run has a terminal
- *   result (a second cancel among them).
- * @throws RunBusyError, RangeError, LoadError, DefaultsMismatchError and `ENOENT`, as `send`.
+ *   result (a second cancel among them), as `inspectRun` reads it from the records offline, or
+ *   `not_started` when the log ends inside its run start.
+ * @throws RunBusyError, DefaultsMismatchError and `ENOENT`, as `send`; RangeError when the log is
+ *   empty or doesn't start with `RunStarted`, `options.codeRoot` isn't the recorded code root, or
+ *   `options.apiKey` or `options.headers` is refused.
  */
 export async function cancel(log: string, options: DeliveryOptions = {}): Promise<readonly PendingCall[]> {
   let open: readonly PendingCall[] = [];
-  await deliverTo(log, { kind: "cancel" }, options, (state) => {
-    open = openHostCalls(state.waits, (call) => stateArguments(state, call));
-  });
+  const fromRecords = (authority: JsonlRunLog): Delivered => {
+    const scan = emptyRunScan();
+    const calls = callArguments(scan.waits);
+    for (const envelope of authority) {
+      foldRunScan(scan, envelope);
+      calls.fold(envelope.record);
+    }
+    const status = scanStatus(scan);
+    if (status === "succeeded" || status === "failed" || status === "cancelled") {
+      throw new DeliveryRefused("ended", "the run has ended");
+    }
+    if (!scan.waits._inputsCommitted) throw new DeliveryRefused("not_started", "the run hasn't started");
+    open = openHostCalls(scan.waits, calls.of);
+    // The calls the record closes: every open one but takes and sleeps, answered or not.
+    const closed = [...scan.waits.calls.values()].filter(
+      (call) => call.state === "open" && call.tool !== TAKE && call.tool !== SLEEP,
+    );
+    const envelope = authority.append(new RunCancelledRecord());
+    const events = [new RunCancelled(), ...closed.map((call) => new CallClosed({ callId: call.callId, reason: "cancelled" }))];
+    return { seq: envelope.seq, events, record: envelope.record };
+  };
+  await deliverTo(
+    log,
+    { kind: "cancel" },
+    options,
+    (state) => {
+      open = openHostCalls(state.waits, (call) => stateArguments(state, call));
+    },
+    fromRecords,
+  );
   return open;
 }
 
@@ -2182,7 +2265,7 @@ export interface InterruptResult {
  * @throws RunBusyError, RangeError, LoadError, DefaultsMismatchError and `ENOENT`, as `send`.
  */
 export async function interrupt(log: string, inbox: string, options: DeliveryOptions = {}): Promise<InterruptResult> {
-  if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
+  if (typeof inbox !== "string") throw new YianTypeError("inbox must be a string");
   let open: readonly PendingCall[] = [];
   const { seq, events, record } = await deliverTo(log, { kind: "interrupt", inbox }, options, (state) => {
     open = openHostCalls(state.waits, (call) => stateArguments(state, call));
@@ -2233,41 +2316,57 @@ export type AskQuestion = Pick<AskRequest, "question" | "questions" | "answerSch
  */
 export function pendingCalls(log: string, options: { maxLineBytes?: number | null } = {}): readonly PendingCall[] {
   const waits = new WaitsState();
+  const calls = callArguments(waits);
+  let first = true;
+  for (const { envelope } of iterRunRecords(log, { maxLineBytes: options.maxLineBytes ?? null })) {
+    if (first && !(envelope.record instanceof RunStartedRecord)) {
+      throw new YianRangeError(`run log ${log} doesn't start with run_started`);
+    }
+    first = false;
+    applyWaitsRecord(waits, envelope);
+    calls.fold(envelope.record);
+  }
+  if (first) throw new YianRangeError(`cannot read an empty run log: ${log}`);
+  return openHostCalls(waits, calls.of);
+}
+
+/**
+ * A fold of each unsettled call's recorded arguments and question, beside the waits fold `waits`:
+ * `fold` takes each record after `waits` has, and `of` reads a call's.
+ */
+function callArguments(waits: WaitsState): {
+  fold(record: RunRecord): void;
+  of(call: Call): { arguments: JsonObject | null; ask: AskQuestion | null };
+} {
   // Each unsettled call's recorded arguments and question; a settled node's calls leave the fold,
   // so theirs go.
   const args = new Map<string, { arguments: JsonObject | null; ask: AskQuestion | null }>();
   // Each running node's step count and latest `model_call` step with its number: an agent call's
   // `reply` must name that step, so the earlier ones needn't be kept.
   const nodes = new Map<string, { count: number; replyN: number; reply: Readonly<JsonObject> | undefined }>();
-  let first = true;
-  for (const { envelope } of iterRunRecords(log, { maxLineBytes: options.maxLineBytes ?? null })) {
-    if (first && !(envelope.record instanceof RunStartedRecord)) {
-      throw new RangeError(`run log ${log} doesn't start with run_started`);
-    }
-    first = false;
-    applyWaitsRecord(waits, envelope);
-    const record = envelope.record;
-    if (record instanceof NodeStepRecord) {
-      const node = nodes.get(record.nodeId) ?? { count: 0, replyN: 0, reply: undefined };
-      nodes.set(record.nodeId, node);
-      node.count += 1;
-      const step = record.step;
-      if (step["kind"] === "model_call") {
-        node.replyN = node.count;
-        node.reply = step;
-      } else if (step["kind"] === "pending") {
-        const replyAt = (n: number) => (n === node.replyN ? node.reply : undefined);
-        args.set(String(step["call_id"]), { arguments: pendingArguments(replyAt, step), ask: askQuestion(step) });
+  return {
+    fold(record) {
+      if (record instanceof NodeStepRecord) {
+        const node = nodes.get(record.nodeId) ?? { count: 0, replyN: 0, reply: undefined };
+        nodes.set(record.nodeId, node);
+        node.count += 1;
+        const step = record.step;
+        if (step["kind"] === "model_call") {
+          node.replyN = node.count;
+          node.reply = step;
+        } else if (step["kind"] === "pending") {
+          const replyAt = (n: number) => (n === node.replyN ? node.reply : undefined);
+          args.set(String(step["call_id"]), { arguments: pendingArguments(replyAt, step), ask: askQuestion(step) });
+        }
+        return;
       }
-    } else {
       const settled = settledNodeId(record);
-      if (settled === null) continue;
+      if (settled === null) return;
       nodes.delete(settled);
       for (const callId of args.keys()) if (!waits.calls.has(callId)) args.delete(callId);
-    }
-  }
-  if (first) throw new RangeError(`cannot read an empty run log: ${log}`);
-  return openHostCalls(waits, (call) => args.get(call.callId) ?? { arguments: null, ask: null });
+    },
+    of: (call) => args.get(call.callId) ?? { arguments: null, ask: null },
+  };
 }
 
 /**
@@ -2281,13 +2380,16 @@ function settledNodeId(record: RunRecord): string | null {
   return null;
 }
 
-/** The open host calls of `waits`, in registration order, with the arguments and question `recorded` reads. */
+/**
+ * The open host calls of `waits`, in registration order, with the arguments and question
+ * `recorded` reads; a flow call is the run's to answer, so it is left out.
+ */
 function openHostCalls(
   waits: WaitsState,
   recorded: (call: Call) => { arguments: JsonObject | null; ask: AskQuestion | null },
 ): PendingCall[] {
   return [...waits.calls.values()]
-    .filter((call) => call.state === "open" && call.pendingSeq !== null && call.tool !== TAKE && call.tool !== SLEEP)
+    .filter((call) => call.state === "open" && call.pendingSeq !== null && call.tool !== TAKE && call.tool !== SLEEP && !call.flow)
     .map((call) => ({
       callId: call.callId,
       node: call.nodeId,
@@ -2366,7 +2468,7 @@ function agentCallArguments(reply: Readonly<JsonObject> | undefined, index: numb
  */
 export function runLogPath(runsDir: string, runId: string): string {
   if (runId === "" || runId === "." || runId === ".." || /[/\\\0]/.test(runId)) {
-    throw new RangeError(`run id is not one folder name: ${reprText(runId)}`);
+    throw new YianRangeError(`run id is not one folder name: ${reprText(runId)}`);
   }
   // Resolved, so the first folder `mkdirSync` reports making is `runsDir` or above it.
   const absoluteRunsDir = resolve(runsDir);
@@ -2394,15 +2496,17 @@ export function runLogPath(runsDir: string, runId: string): string {
 }
 
 /** Where a run log stands, as `inspectRun` reads it. */
-export type RunStatus = "running" | "succeeded" | "failed" | "cancelled" | "waiting" | "stopped" | "crashed";
+export type RunStatus = "running" | "succeeded" | "failed" | "cancelled" | "unstarted" | "waiting" | "stopped" | "crashed";
 
 /** What `inspectRun` reads from one run log. */
 export interface RunInspection {
   /**
    * `running` while a writer holds the log's lock; `succeeded`, `failed` or `cancelled` once the
-   * run ended; `waiting` when its last segment ended with every unsettled node waiting (on a take,
-   * a sleep or a host call); `stopped` when the host stopped the last segment; otherwise `crashed`
-   * (the process ended without a stop). A run that isn't running or ended can be advanced.
+   * run ended; `unstarted` when the log ends inside its run start, before its inputs were recorded,
+   * so `advance` refuses it (delete the log and start the run again); `waiting` when its last
+   * segment ended with every unsettled node waiting (on a take, a sleep or a host call); `stopped`
+   * when the host stopped the last segment; otherwise `crashed` (the process ended without a stop).
+   * A `waiting`, `stopped` or `crashed` run can be advanced.
    */
   readonly status: RunStatus;
   /**
@@ -2464,8 +2568,9 @@ export interface RunInspection {
  * In-flight nodes, crashed counts and the waits come from the records. Without `flow`, the status
  * is read from the records too: `cancelled` after a cancel; `failed` after a node failure or a
  * `RunFailed`; with nothing in flight and nothing waiting, `succeeded` after the top-level END
- * succeeded, else `failed` after a route proved END unreachable; then `waiting` when the last
- * segment ended with every node waiting (`RunWaiting`). The records don't hold the ready nodes, so a run whose process ended after END succeeded (or after
+ * succeeded, else `failed` after a route proved END unreachable; then `unstarted` before the START
+ * inputs' commit, and `waiting` when the last segment ended with every node waiting (`RunWaiting`).
+ * The records don't hold the ready nodes, so a run whose process ended after END succeeded (or after
  * that proof) but before a node already ready started reads as finished, though `advance` would
  * still run that node. With `flow`, the log is replayed as `advance` replays it, so the status
  * is exact; pass the flow when you have it. The lock is probed before and after the records are
@@ -2488,7 +2593,7 @@ export interface RunInspection {
  * @throws RunLogChangedError when the log shrank while it was read and no writer holds it.
  * @throws RangeError when a complete line isn't a valid record, the first record isn't
  *   `RunStarted`, the log holds no record and no writer, or, with `flow`, the replay refuses the
- *   log (`replayRunLog`).
+ *   log (`replayRunLog`; a log cut inside its run start isn't refused, but reads `unstarted`).
  * @throws DefaultsError when a `YIAN_<NAME>` variable in `env` holds a value its entry doesn't accept.
  * @throws DefaultsMismatchError with `flow`, when the run recorded `YIAN_*` values that differ
  *   from `env`'s.
@@ -2517,7 +2622,7 @@ export function inspectRun(
   const { envelopes, scan } = records;
   // A writer that took or released the lock while the records were read is caught by one probe.
   const running = isRunLogLocked(log) || lockedBefore;
-  if (scan.started === null && !running) throw new RangeError(`cannot inspect an empty run log: ${log}`);
+  if (scan.started === null && !running) throw new YianRangeError(`cannot inspect an empty run log: ${log}`);
   // A running log's status needs no replay.
   const source =
     running || envelopes === null
@@ -2847,7 +2952,7 @@ export async function agentCall(
 ): Promise<AgentCallView> {
   refuseRemovedOptions(options);
   const { nodeId, n } = call;
-  const missing = () => new RangeError(`run log ${log} has no model call ${n} of node ${reprText(nodeId)}`);
+  const missing = () => new YianRangeError(`run log ${log} has no model call ${n} of node ${reprText(nodeId)}`);
   const { apiKey, headers } = hostCredentials(options.apiKey, options.headers);
   const env = options.env ?? processEnv;
   const root = resolvedRoot(options.codeRoot);
@@ -2879,7 +2984,7 @@ export async function agentCall(
           // A node that failed at binding in the run has no steps, so it never gets here: the
           // binding finished then and fails now (an edited log, or a yian that binds differently).
           if (!(error instanceof BindingError)) throw error;
-          throw new RangeError(
+          throw new YianRangeError(
             `run log ${log}: node ${reprText(nodeId)}'s binding no longer finishes, so no request is rebuilt`,
             { cause: error },
           );
@@ -2948,10 +3053,17 @@ function recordedGrants(state: RunState): Pick<RebuildCaps, "skills" | "toolSpec
     grants: readonly ToolGrant[],
     loadSkill: ToolSpec | null,
     local: ReadonlyMap<string, readonly LocalToolSpec[]> = new Map(),
+    localTools: readonly LocalToolSpec[] = [],
   ) => {
-    // The node's own groups come first, as `ToolSet.withLocalGroups` puts them live.
+    // The node's own groups, then its own tools, come first, as `ToolSet.withLocalGroups` and
+    // `withLocalTools` put them live.
     const names = new Map([...local].map(([group, specs]) => [group, specs.map((spec) => spec.name)]));
-    const scopes = local.size === 0 ? [scope] : [localGroupScope(MEMORY_SCOPE_LABEL, names), scope];
+    const own = new Map(localTools.map((spec) => [spec.name, spec]));
+    const scopes = [
+      ...(local.size === 0 ? [] : [localGroupScope(MEMORY_SCOPE_LABEL, names)]),
+      ...(own.size === 0 ? [] : [localToolScope(FLOW_SCOPE_LABEL, new Set(own.keys()))]),
+      scope,
+    ];
     let granted: GrantedTool[];
     try {
       granted = expandGrants(grants, scopes);
@@ -2961,7 +3073,8 @@ function recordedGrants(state: RunState): Pick<RebuildCaps, "skills" | "toolSpec
     }
     const specOf = (tool: GrantedTool) => {
       if (tool.scope < scopes.length - 1) {
-        const { name, description, parameters } = local.get(tool.group!)!.find((spec) => spec.name === tool.tool)!;
+        const { name, description, parameters } =
+          tool.group === null ? own.get(tool.tool)! : local.get(tool.group)!.find((spec) => spec.name === tool.tool)!;
         return new ToolSpec({ name, description, parameters });
       }
       if (!Object.hasOwn(state.recordedTools, tool.key)) return null;
@@ -3120,14 +3233,14 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
           toolId === ASK
             ? "grant ask_user; ask is a TOOL-node built-in in this version"
             : `an engine built-in a TOOL node reaches with tool_id: ${toolId}`;
-        throw new RangeError(`AGENT node ${reprText(nodeId)} grants ${reprText(toolId)}: ${reason}`);
+        throw new YianRangeError(`AGENT node ${reprText(nodeId)} grants ${reprText(toolId)}: ${reason}`);
       }
       if (toolId !== ASK_USER) continue;
       try {
         tools.resolve([ASK_USER]);
       } catch (error) {
         if (!(error instanceof RangeError)) throw error;
-        throw new RangeError(`AGENT node ${reprText(nodeId)} grants 'ask_user': ${error.message}`);
+        throw new YianRangeError(`AGENT node ${reprText(nodeId)} grants 'ask_user': ${error.message}`);
       }
     }
     try {
@@ -3138,7 +3251,7 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
       // A grant naming another flow's memory input is a host grant here.
       const named = grants.some((grant) => memories.has(grant.kind === "name" ? grant.name : grant.group));
       const hint = named ? "; memory grants name the node's own flow inputs" : "";
-      throw new RangeError(`AGENT node ${reprText(nodeId)} ${error.message}${hint}`);
+      throw new YianRangeError(`AGENT node ${reprText(nodeId)} ${error.message}${hint}`);
     }
     const call = node.hostToolCall();
     if (call === null || (call.group === null && isEngineBuiltin(call.toolId))) continue;
@@ -3176,7 +3289,7 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
         const [close] = getCloseMatches(call.toolId, [...candidates.keys()], 1, CLOSE_MATCH_CUTOFF);
         if (close !== undefined) reason += `; did you mean ${candidates.get(close)!}?`;
       }
-      throw new RangeError(`TOOL node ${reprText(nodeId)} names ${reason}`);
+      throw new YianRangeError(`TOOL node ${reprText(nodeId)} names ${reason}`);
     }
   }
 }
@@ -3205,7 +3318,7 @@ function checkMemoryGrantNames(
     for (const { input, tools: listed } of grants) {
       const host = scope.group(input) !== null ? "a tool group" : scope.hasTool(input) ? "a tool" : null;
       if (host !== null) {
-        throw new RangeError(`${where}: \`${input}\` is both a memory input and ${host} of this run; rename one`);
+        throw new YianRangeError(`${where}: \`${input}\` is both a memory input and ${host} of this run; rename one`);
       }
       const typ = inputs.get(input);
       const names = listed ?? (isMemoryType(typ) ? memoryToolNames(typ, table) : null) ?? [];
@@ -3213,10 +3326,31 @@ function checkMemoryGrantNames(
       for (const name of names) {
         const visible = visibleToolName(input, name);
         if (!hostNames.has(visible)) continue;
-        throw new RangeError(
+        throw new YianRangeError(
           `${where}: the memory tool \`${visible}\` of \`${shown}\` has the name of a host tool it grants; rename one`,
         );
       }
+    }
+  }
+}
+
+/**
+ * Refuse a flow an agent grants under the name of a host tool or tool group of the run, before any
+ * record is written: the grant would mean two tools. Every static node is checked, child flows'
+ * included.
+ *
+ * @throws RangeError naming the node, the flow and the fix.
+ */
+function checkFlowGrantNames(flow: CompiledFlow, tools: ToolSet): void {
+  const scope = tools.scope();
+  for (const [nodeId, node] of staticNodes(flow)) {
+    for (const name of node.originChildSegments()) {
+      if (name === null) continue;
+      const host = scope.group(name) !== null ? "a tool group" : scope.hasTool(name) ? "a tool" : null;
+      if (host === null) continue;
+      throw new YianRangeError(
+        `${node.kind.toUpperCase()} node ${reprText(nodeId)}: \`${name}\` is both a flow it grants and ${host} of this run; rename one`,
+      );
     }
   }
 }
@@ -3230,7 +3364,7 @@ function nodesWithFlowInputs(flow: Flow): [string, Node, ReadonlyMap<string, Typ
     for (const [nodeId, node] of graph.nodes) {
       const nodePath = [...path, nodeId];
       found.push([nodePath.join("/"), node, inputs]);
-      for (const child of node.originChildren()) collect(child as Flow, nodePath);
+      for (const child of nodeChildren(node)) collect(child.flow, childPath(nodePath, child));
     }
   };
   collect(flow, []);
@@ -3297,7 +3431,7 @@ function checkTemplates(flow: Flow, path: readonly string[] = []): void {
       checkTemplateSource(binding, subject, reserved.has(key) ? new Map() : node.types);
     }
     node.validatePrompts({ path: nodePath });
-    for (const child of node.originChildren()) checkTemplates(child as Flow, [...path, nodeId]);
+    for (const child of nodeChildren(node)) checkTemplates(child.flow, childPath([...path, nodeId], child));
   }
 }
 
@@ -3360,7 +3494,7 @@ function checkToolInputs(
   for (const name of call.inputs) {
     if (!inputs.has(name) && extra === undefined) {
       const taken = [...inputs.keys()].sort(compareCodeUnits);
-      throw new RangeError(
+      throw new YianRangeError(
         `TOOL node ${reprText(nodeId)} input ${reprText(name)}: tool ${tool} takes no such ` +
           `input; it takes ${writeAsText(taken)}`,
       );
@@ -3369,7 +3503,7 @@ function checkToolInputs(
   const missing = [...required].filter((name) => !call.inputs.includes(name)).sort(compareCodeUnits);
   if (missing.length > 0) {
     const named = missing.length === 1 ? `input ${reprText(missing[0]!)}` : `inputs ${writeAsText(missing)}`;
-    throw new RangeError(
+    throw new YianRangeError(
       `TOOL node ${reprText(nodeId)} is missing ${named} that tool ${tool} requires`,
     );
   }
@@ -3378,7 +3512,7 @@ function checkToolInputs(
     // Disjoint is yian's non-coercing relation, so a binding a tool's validator would coerce (a
     // string of digits into an int) is rejected too.
     if (expected !== null && typeRelation(inferred, expected) === "disjoint") {
-      throw new RangeError(
+      throw new YianRangeError(
         `TOOL node ${reprText(nodeId)} input ${reprText(name)}: tool ${tool} takes ` +
           `${canonicalTypeLabel(expected)}, but the binding is ${bindingLabel(inferred)}`,
       );
@@ -3395,7 +3529,7 @@ function checkToolInputs(
 function checkToolOutput(nodeId: string, call: HostToolCall, declaredOutput: Type): void {
   if (call.outputType === null) return;
   if (typeRelation(declaredOutput, call.outputType) === "disjoint") {
-    throw new RangeError(
+    throw new YianRangeError(
       `TOOL node ${reprText(nodeId)} output: declared ${canonicalTypeLabel(call.outputType)}, ` +
         `but tool ${reprText(visibleToolName(call.group, call.toolId))} returns ` +
         canonicalTypeLabel(declaredOutput),
@@ -3456,7 +3590,7 @@ export function checkRecordedLlmFields(
     } catch (error) {
       if (!(error instanceof RangeError)) throw error;
       const where = labels.get(staticPaths.get(path) ?? path) ?? `Agent ${reprText(path)}`;
-      throw new RangeError(`${where}: ${error.message}`, { cause: error });
+      throw new YianRangeError(`${where}: ${error.message}`, { cause: error });
     }
   }
 }
@@ -3475,25 +3609,25 @@ export function checkRecordedLlmFields(
 function checkSkills(flow: CompiledFlow, skills: ReadonlyMap<string, Skill> | null): Map<string, Skill> | null {
   let copied: Map<string, Skill> | null = null;
   if (skills !== null) {
-    if (!(skills instanceof Map)) throw new TypeError("skills must be a Map of name to Skill, or null");
+    if (!(skills instanceof Map)) throw new YianTypeError("skills must be a Map of name to Skill, or null");
     for (const [name, skill] of skills as ReadonlyMap<unknown, unknown>) {
       if (!isExactly(skill, Skill) || skill.name !== name) {
         const shown = reprText(String(name));
-        throw new TypeError(`skills[${shown}] must be a Skill named ${shown}`);
+        throw new YianTypeError(`skills[${shown}] must be a Skill named ${shown}`);
       }
     }
     copied = new Map(skills);
   }
   for (const [nodeId, grants] of skillGrants(flow)) {
     if (copied === null) {
-      throw new RangeError(
+      throw new YianRangeError(
         `AGENT node ${reprText(nodeId)} grants skills, but no skills= mapping was passed; ` +
           "pass the run's skills (or an empty Map for none)",
       );
     }
     const missing = grants === "all" ? [] : grants.filter((name) => !copied.has(name));
     if (missing.length > 0) {
-      throw new RangeError(
+      throw new YianRangeError(
         `AGENT node ${reprText(nodeId)} grants skills not supplied to this run: ${writeAsText(missing)}`,
       );
     }
@@ -3554,8 +3688,13 @@ function collectStaticNodes(graph: Flow, path: readonly string[], found: [string
   for (const [nodeId, node] of graph.nodes) {
     const nodePath = [...path, nodeId];
     found.push([nodePath.join("/"), node]);
-    for (const child of node.originChildren()) collectStaticNodes(child as Flow, nodePath, found);
+    for (const child of nodeChildren(node)) collectStaticNodes(child.flow, childPath(nodePath, child), found);
   }
+}
+
+/** The static path of `child`'s nodes, under the node at `nodePath`: its segment after the node's, if any. */
+function childPath(nodePath: readonly string[], child: StaticChild): readonly string[] {
+  return child.segment === null ? nodePath : [...nodePath, child.segment];
 }
 
 /**
@@ -3566,7 +3705,7 @@ function collectStaticNodes(graph: Flow, path: readonly string[], found: [string
  * current model defaults. Recorded transitions go through the live reducer and growth builder.
  * A host `apiKey`, and the `headers` sent with it, go to the agents the map marks for it and to
  * the call-time agents. The run result reads its files through the flow's output contract, as
- * `runFlow`'s does.
+ * `runFlow`'s does. `allowUnstarted` as `replayCompiledRunLog`'s.
  *
  * @throws TypeError when `flow` isn't a `ComposedFlow`.
  * @throws RangeError, and the other errors of `replayCompiledRunLog`.
@@ -3578,9 +3717,10 @@ export function replayRunLog(
     apiKey?: string | null;
     headers?: Readonly<Record<string, string>> | null;
     onPrepared?: ((prepared: PreparedTransition, state: RunState) => void) | null;
+    allowUnstarted?: boolean;
   } = {},
 ): RunState {
-  if (!(flow instanceof ComposedFlow)) throw new TypeError("replayRunLog expects a ComposedFlow");
+  if (!(flow instanceof ComposedFlow)) throw new YianTypeError("replayRunLog expects a ComposedFlow");
   return replayCompiledRunLog(flow.compiled, log, { ...options, resultContract: childSignature(flow).output });
 }
 
@@ -3589,12 +3729,14 @@ export function replayRunLog(
  *
  * `resultContract` is the contract the terminal output is read through to restore its files
  * (`RunState.resultContract`); a finished log produces its terminal during replay, so it is set
- * before any record is folded.
+ * before any record is folded. With `allowUnstarted`, a log that ends inside its run start gives
+ * the state it leaves (`inputsCommitted` false) instead of being refused.
  *
  * @throws RangeError when the log's run id or sequence is malformed or changes while it is read,
  *   the prefix is empty, an envelope isn't in canonical form or breaks the run id or the sequence,
  *   the first record isn't `RunStarted`, the flow fingerprint differs, a record isn't the exact
- *   next transition, or the log ends inside its run start (before the START inputs' commit).
+ *   next transition, or, without `allowUnstarted`, the log ends inside its run start (before the
+ *   START inputs' commit).
  * @throws DefaultsMismatchError when the run recorded `YIAN_*` values that differ from the ones in
  *   effect.
  */
@@ -3606,28 +3748,29 @@ export function replayCompiledRunLog(
     headers?: Readonly<Record<string, string>> | null;
     resultContract?: OutputContract | null;
     onPrepared?: ((prepared: PreparedTransition, state: RunState) => void) | null;
+    allowUnstarted?: boolean;
   } = {},
 ): RunState {
-  const { apiKey = null, headers = null, resultContract = null, onPrepared = null } = options;
+  const { apiKey = null, headers = null, resultContract = null, onPrepared = null, allowUnstarted = false } = options;
   const sourceRunId = log.runId;
   const sourceSequence = log.nextSequence;
   if (typeof sourceRunId !== "string" || sourceRunId === "") {
-    throw new RangeError("run log run_id must be a non-empty string");
+    throw new YianRangeError("run log run_id must be a non-empty string");
   }
   if (!Number.isSafeInteger(sourceSequence) || sourceSequence < 0) {
-    throw new RangeError("run log next_sequence must be a non-negative integer");
+    throw new YianRangeError("run log next_sequence must be a non-negative integer");
   }
 
   const supplied = [...log];
   if (log.runId !== sourceRunId || log.nextSequence !== sourceSequence) {
-    throw new RangeError("run log changed while its historical prefix was read");
+    throw new YianRangeError("run log changed while its historical prefix was read");
   }
   if (sourceSequence !== supplied.length) {
-    throw new RangeError(
+    throw new YianRangeError(
       `run log sequence mismatch: next_sequence is ${sourceSequence}, prefix length is ${supplied.length}`,
     );
   }
-  if (supplied.length === 0) throw new RangeError("cannot replay an empty run log");
+  if (supplied.length === 0) throw new YianRangeError("cannot replay an empty run log");
 
   const canonical: RecordEnvelope[] = [];
   for (const [expectedSequence, suppliedEnvelope] of supplied.entries()) {
@@ -3635,13 +3778,13 @@ export function replayCompiledRunLog(
     const envelope = decodeRecord(line);
     // Envelopes are frozen and compared by their canonical lines.
     if (encodeRecord(envelope) !== line) {
-      throw new RangeError(`run log envelope ${expectedSequence} is not in canonical wire form`);
+      throw new YianRangeError(`run log envelope ${expectedSequence} is not in canonical wire form`);
     }
     if (envelope.seq !== expectedSequence) {
-      throw new RangeError(`run log sequence mismatch: expected ${expectedSequence}, found ${envelope.seq}`);
+      throw new YianRangeError(`run log sequence mismatch: expected ${expectedSequence}, found ${envelope.seq}`);
     }
     if (envelope.runId !== sourceRunId) {
-      throw new RangeError(
+      throw new YianRangeError(
         `run log run_id mismatch: expected ${reprText(sourceRunId)}, found ${reprText(envelope.runId)}`,
       );
     }
@@ -3649,13 +3792,13 @@ export function replayCompiledRunLog(
   }
 
   const first = canonical[0]!.record;
-  if (!(first instanceof RunStartedRecord)) throw new RangeError("the first run log record must be RunStarted");
+  if (!(first instanceof RunStartedRecord)) throw new YianRangeError("the first run log record must be RunStarted");
   // Values like AGENT_RETRIES change the loaded flow, so a mismatch checked after the fingerprint
   // would surface as a fingerprint error instead of naming them.
   checkRecorded(first.defaults);
   const actualFingerprint = flowFingerprint(flow);
   if (actualFingerprint !== first.flowFingerprint) {
-    throw new RangeError(
+    throw new YianRangeError(
       `flow fingerprint mismatch: recorded ${reprText(first.flowFingerprint)}, supplied ${reprText(actualFingerprint)}`,
     );
   }
@@ -3673,11 +3816,14 @@ export function replayCompiledRunLog(
     onPrepared,
   });
   if (log.runId !== sourceRunId || log.nextSequence !== sourceSequence) {
-    throw new RangeError("run log changed while its historical prefix was replayed");
+    throw new YianRangeError("run log changed while its historical prefix was replayed");
   }
   // The run's inputs aren't all in the log yet, so nothing could go on from it.
-  if (!state.inputsCommitted) {
-    throw new RangeError(`run log ${log.path ?? reprText(sourceRunId)} ends inside its run start; start the run again`);
+  if (!state.inputsCommitted && !allowUnstarted) {
+    throw new YianRangeError(
+      `run log ${log.path ?? reprText(sourceRunId)} ends inside its run start, before its inputs were recorded; ` +
+        "delete it and start the run again",
+    );
   }
   return state;
 }
@@ -3720,7 +3866,7 @@ function scanRunRecords(envelopes: Iterable<RecordEnvelope>): RecordScan {
     const { seq, record } = envelope;
     lastAt = envelope.at;
     if (seq === 0) {
-      if (!(record instanceof RunStartedRecord)) throw new RangeError("the first run log record must be RunStarted");
+      if (!(record instanceof RunStartedRecord)) throw new YianRangeError("the first run log record must be RunStarted");
       started = envelope;
     }
     lastSeq = seq;
@@ -3752,7 +3898,8 @@ function scanRunRecords(envelopes: Iterable<RecordEnvelope>): RecordScan {
  * @throws RangeError, and the other errors of `replayRunLog`.
  */
 function replayedScan(flow: ComposedFlow, envelopes: readonly RecordEnvelope[]): RecordScan {
-  const state = replayRunLog(flow, MemoryRunLog.fromRecords(envelopes));
+  // A log cut inside its run start is `unstarted`, which `advance` refuses.
+  const state = replayRunLog(flow, MemoryRunLog.fromRecords(envelopes), { allowUnstarted: true });
   let status: RecordScan["status"];
   if (state.result instanceof RunSucceeded) status = "succeeded";
   else if (state.result instanceof RunFailed) status = "failed";
@@ -3887,7 +4034,7 @@ function resultFromState(
  */
 function requiredStateRunId(state: RunState): string {
   if (typeof state.runId !== "string" || state.runId === "") {
-    throw new RangeError("terminal run state has no valid run_id");
+    throw new YianRangeError("terminal run state has no valid run_id");
   }
   return state.runId;
 }
@@ -3903,7 +4050,7 @@ function errorMessage(error: unknown): string {
 
 /** Return the error for the server under `key`, which another run has open or is opening. */
 function otherRunError(key: string, options?: ErrorOptions): RangeError {
-  return new RangeError(
+  return new YianRangeError(
     `tools[${JSON.stringify(key)}]: this MCP server was opened by another run; ` +
       'open it with "await server.open()" to share it between runs',
     options,

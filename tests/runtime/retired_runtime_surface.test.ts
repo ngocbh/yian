@@ -6,7 +6,7 @@
 import { expect, test } from "bun:test";
 
 import { buildGrow } from "../../src/compile/expand.ts";
-import { CompiledFlow } from "../../src/compile/model.ts";
+import { CompiledFlow, GrowthRejected } from "../../src/compile/model.ts";
 import { FlowValidationError } from "../../src/compile/validation.ts";
 import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { LoadError } from "../../src/compose/helpers/errors.ts";
@@ -56,10 +56,9 @@ output: \${agent.output}
   expect(loadError(() => assembleText(text)).message).toContain(`field '${field}' is not allowed`);
 });
 
-test("buildGrow refuses an AGENT: agent continuations are gone", () => {
-  expect(() => buildGrow(new AgentNode("agent"), {})).toThrow(
-    new RangeError("node 'agent' (agent) cannot build graph growth"),
-  );
+test("buildGrow grows an AGENT only for a flow call: agent continuations are gone", () => {
+  expect(() => buildGrow(new AgentNode("agent"), {})).toThrow(GrowthRejected);
+  expect(() => buildGrow(new AgentNode("agent"), { tool: "f", arguments: {}, scope: "agent/f#0" })).toThrow(GrowthRejected);
 });
 
 test("only the final log-only runtime and run API remain", () => {

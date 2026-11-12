@@ -189,8 +189,9 @@ A host program moves messages and answers into a run through its log:
 | `close` | Closes an inbox: later sends are refused, and takes still read what is queued |
 | `complete` | Answers a call a host's tool handler held, such as an `ask` |
 
-None of these moves the run; the host then calls `advance`. [Embedding yian](/embedding/) covers
-the calls in full.
+None of these moves the run; the host then calls `advance`. A message may nest two levels less than
+`YIAN_MAX_VALUE_NESTING` (98 by default), since a take reads it inside `{events: [...]}`; `send`
+refuses a deeper one. [Embedding yian](/embedding/) covers the calls in full.
 
 On a terminal, `yian run` does this for you. It runs a flow with one `Inbox(str)` or
 `Inbox(Message)` input (pick one with `--inbox NAME` when there are several), sends each line you

@@ -4,6 +4,7 @@
  */
 
 import type { SourceRange } from "../../diagnostics.ts";
+import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import { isList, isRecord, jsTypeName, type Value, type ValueRecord } from "../../typesys/index.ts";
 // Type-only: `document.ts` imports this module at runtime.
 import type { SourceDocument } from "./document.ts";
@@ -12,7 +13,7 @@ import type { SourceDocument } from "./document.ts";
  * A source cursor can't satisfy a requested navigation or typed access. `range` is the
  * closest concrete source location, else `null` for a virtual or otherwise unlocated value.
  */
-export class SourceAccessError extends RangeError {
+export class SourceAccessError extends YianRangeError {
   override name = "SourceAccessError";
   readonly range: SourceRange | null;
 
@@ -26,7 +27,7 @@ export class SourceAccessError extends RangeError {
  * A YAML source can't be composed or constructed safely. `range` locates the problem when
  * known, else `null`.
  */
-export class SourceSyntaxError extends RangeError {
+export class SourceSyntaxError extends YianRangeError {
   override name = "SourceSyntaxError";
   readonly range: SourceRange | null;
 
@@ -237,7 +238,7 @@ export function snapshotValue(value: unknown): Value {
       copies.set(current, record);
       for (const key of Object.keys(record)) pending.push(record[key]);
     } else {
-      throw new TypeError(
+      throw new YianTypeError(
         "source cursors accept only YAML values (text, numbers, booleans, null, lists and " +
           `records); got ${jsTypeName(current)}`,
       );

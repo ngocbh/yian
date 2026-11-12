@@ -30,6 +30,7 @@ import { current } from "../defaults.ts";
 import type { Embed, EmbeddingModel } from "../llm/embeddings.ts";
 import { openSqlite, realScheduler, type Scheduler, type Sqlite, sqliteErrorCode, syncFolder } from "../platform.ts";
 import { inputTypeFromJsonSchema } from "../tools/types.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
 import { buildValueAs, TypeCheckError } from "../typesys/values.ts";
 import {
@@ -280,7 +281,7 @@ function isLine(value: unknown): value is string {
  */
 function checkEmbedding(value: unknown): EmbeddingModel {
   if (!isObject(value) || !isLine(value.provider) || !isLine(value.model)) {
-    throw new TypeError("VectorDBMemory embedding must be {provider, model}, each a non-empty string on one line");
+    throw new YianTypeError("VectorDBMemory embedding must be {provider, model}, each a non-empty string on one line");
   }
   return Object.freeze({ provider: value.provider, model: value.model });
 }
@@ -617,7 +618,7 @@ function intArg(args: JsonObject, name: string, required: boolean): number | und
   if (value === undefined && !required) return undefined;
   const number = typeof value === "bigint" ? Number(value) : value;
   if (typeof number !== "number" || !Number.isSafeInteger(number) || number < 1) {
-    throw new TypeError(`VectorDBMemory ${name} must be an integer of at least 1`);
+    throw new YianTypeError(`VectorDBMemory ${name} must be an integer of at least 1`);
   }
   return number;
 }
@@ -786,7 +787,7 @@ const CHANGE_FIELDS: Readonly<Record<Change["op"], readonly string[]>> = Object.
  * @throws {TypeError} If it isn't an object, or doesn't fit, naming where.
  */
 function checkFields(op: string, fields: unknown, schema: JsonObject): JsonObject {
-  if (!isObject(fields)) throw new TypeError(`a VectorDBMemory ${op}'s fields must be an object`);
+  if (!isObject(fields)) throw new YianTypeError(`a VectorDBMemory ${op}'s fields must be an object`);
   // The check a tool call's arguments get; a schema too deep to translate isn't checked.
   const type = inputTypeFromJsonSchema(schema);
   if (type === null) return fields;
@@ -794,7 +795,7 @@ function checkFields(op: string, fields: unknown, schema: JsonObject): JsonObjec
     return buildValueAs(type, fields).value as JsonObject;
   } catch (error) {
     if (!(error instanceof TypeCheckError)) throw error;
-    throw new TypeError(`a VectorDBMemory ${op}'s fields don't fit the item type: ${error.message}`);
+    throw new YianTypeError(`a VectorDBMemory ${op}'s fields don't fit the item type: ${error.message}`);
   }
 }
 
@@ -844,16 +845,16 @@ function checkChange(change: JsonObject, schema: JsonObject | null): Change {
   const op: unknown = isObject(change) ? change.op : undefined;
   if (typeof op !== "string" || !Object.hasOwn(CHANGE_FIELDS, op)) {
     const ops = Object.keys(CHANGE_FIELDS).join(", ");
-    throw new TypeError(`VectorDBMemory has no change ${String(op)}; its changes are ${ops}`);
+    throw new YianTypeError(`VectorDBMemory has no change ${String(op)}; its changes are ${ops}`);
   }
   const allowed = CHANGE_FIELDS[op as Change["op"]];
   const extra = Object.keys(change).filter((key) => key !== "op" && !allowed.includes(key));
-  if (extra.length > 0) throw new TypeError(`a VectorDBMemory ${op} takes ${listed(allowed)}, not ${listed(extra)}`);
+  if (extra.length > 0) throw new YianTypeError(`a VectorDBMemory ${op} takes ${listed(allowed)}, not ${listed(extra)}`);
   const has = (key: string) => change[key] !== undefined;
   const text = (key: string): string => {
     const value = change[key];
     if (typeof value !== "string" || !value.isWellFormed()) {
-      throw new TypeError(`a VectorDBMemory ${op} needs ${key} as a string`);
+      throw new YianTypeError(`a VectorDBMemory ${op} needs ${key} as a string`);
     }
     return value;
   };
@@ -861,20 +862,20 @@ function checkChange(change: JsonObject, schema: JsonObject | null): Change {
     const value = change[key];
     const number = typeof value === "bigint" ? Number(value) : value;
     if (typeof number !== "number" || !Number.isSafeInteger(number) || number < 1) {
-      throw new TypeError(`a VectorDBMemory ${op} needs ${key} as an integer of at least 1`);
+      throw new YianTypeError(`a VectorDBMemory ${op} needs ${key} as an integer of at least 1`);
     }
     return number;
   };
   const fields = (): JsonObject | undefined => {
     if (!has("fields")) return undefined;
-    if (schema === null) throw new TypeError(`this memory's items are text only; an ${op} takes no fields`);
+    if (schema === null) throw new YianTypeError(`this memory's items are text only; an ${op} takes no fields`);
     return checkFields(op, change.fields, schema);
   };
   switch (op as Change["op"]) {
     case "add": {
       const checked = { op: "add" as const, text: text("text"), fields: fields() ?? null };
       if (checked.fields === null && schema !== null) {
-        throw new TypeError("an add to this memory needs fields, since its items are typed");
+        throw new YianTypeError("an add to this memory needs fields, since its items are typed");
       }
       return checked;
     }
@@ -887,7 +888,7 @@ function checkChange(change: JsonObject, schema: JsonObject | null): Change {
         fields: fields(),
       };
       if (checked.text === undefined && checked.fields === undefined) {
-        throw new TypeError("an edit needs text, fields or both");
+        throw new YianTypeError("an edit needs text, fields or both");
       }
       return checked;
     }
@@ -1075,13 +1076,13 @@ function parseState(text: string): ItemState {
 
 /** What `item` is under `target` for an erase: the item id. */
 function checkEraseTarget(target: JsonObject): number {
-  if (!isObject(target)) throw new TypeError("an erase needs item as an integer of at least 1");
+  if (!isObject(target)) throw new YianTypeError("an erase needs item as an integer of at least 1");
   const extra = Object.keys(target).filter((key) => key !== "item");
-  if (extra.length > 0) throw new TypeError(`an erase takes item, not ${listed(extra)}`);
+  if (extra.length > 0) throw new YianTypeError(`an erase takes item, not ${listed(extra)}`);
   const value = target.item;
   const item = typeof value === "bigint" ? Number(value) : value;
   if (typeof item !== "number" || !Number.isSafeInteger(item) || item < 1) {
-    throw new TypeError("an erase needs item as an integer of at least 1");
+    throw new YianTypeError("an erase needs item as an integer of at least 1");
   }
   return item;
 }
@@ -1150,14 +1151,14 @@ export class VectorDBMemory extends MemoryBase {
     super();
     const { path, id } = options;
     if (typeof path !== "string" || path === "" || path.includes("\0")) {
-      throw new TypeError("VectorDBMemory path must be a file path");
+      throw new YianTypeError("VectorDBMemory path must be a file path");
     }
     if (id !== undefined && !isLine(id)) {
-      throw new TypeError("VectorDBMemory id must be a non-empty string on one line");
+      throw new YianTypeError("VectorDBMemory id must be a non-empty string on one line");
     }
     const embedding = options.embedding === undefined ? undefined : checkEmbedding(options.embedding);
     if (options.embed !== undefined && typeof options.embed !== "function") {
-      throw new TypeError("VectorDBMemory embed must be a function");
+      throw new YianTypeError("VectorDBMemory embed must be a function");
     }
     const defaults = current();
     const cap = (name: string, value: number | undefined, fallback: number, minimum: number) =>
@@ -1174,7 +1175,7 @@ export class VectorDBMemory extends MemoryBase {
     const defaultTimeoutMs = defaults.memoryLockTimeoutSeconds * 1000;
     const timeoutMs = options.lockTimeoutMs ?? defaultTimeoutMs;
     if (typeof timeoutMs !== "number" || Number.isNaN(timeoutMs) || timeoutMs < 0) {
-      throw new RangeError(`VectorDBMemory lockTimeoutMs must be 0 or more milliseconds, not ${String(timeoutMs)}`);
+      throw new YianRangeError(`VectorDBMemory lockTimeoutMs must be 0 or more milliseconds, not ${String(timeoutMs)}`);
     }
     // Resolved now, so a later chdir or a swapped symlink doesn't move the memory.
     const real = realPath(path);
@@ -1221,7 +1222,7 @@ export class VectorDBMemory extends MemoryBase {
     o.signal.throwIfAborted();
     const { itemType } = o;
     if (itemType !== null && !isObject(itemType)) {
-      throw new TypeError("a VectorDBMemory's item type must be a JSON Schema object, or null for text only");
+      throw new YianTypeError("a VectorDBMemory's item type must be a JSON Schema object, or null for text only");
     }
     const { path, embedding } = this.#store;
     // Checked before anything is made, so a refused open leaves no folder or file behind.
@@ -1318,7 +1319,7 @@ export class VectorDBMemory extends MemoryBase {
   async reembed(o: { embedding: EmbeddingModel; embed: Embed; signal: AbortSignal }): Promise<void> {
     o.signal.throwIfAborted();
     const embedding = checkEmbedding(o.embedding);
-    if (typeof o.embed !== "function") throw new TypeError("reembed needs embed as a function");
+    if (typeof o.embed !== "function") throw new YianTypeError("reembed needs embed as a function");
     const { path } = this.#store;
     if (lstatOrNull(path) === null) throw new Error(`${shown(path)} isn't a memory yet`);
     checkBeforeLock(path);
@@ -1422,9 +1423,9 @@ export class VectorDBMemory extends MemoryBase {
     o.signal.throwIfAborted();
     const after = o.after ?? 0;
     if (!Number.isSafeInteger(after) || after < 0) {
-      throw new RangeError("items needs an id of at least 0 to read after");
+      throw new YianRangeError("items needs an id of at least 0 to read after");
     }
-    if (!Number.isSafeInteger(o.limit) || o.limit < 1) throw new RangeError("items needs a limit of at least 1");
+    if (!Number.isSafeInteger(o.limit) || o.limit < 1) throw new YianRangeError("items needs a limit of at least 1");
     const { path } = this.#store;
     if (lstatOrNull(path) === null) throw new Error(`${shown(path)} isn't a memory yet`);
     checkBeforeLock(path);
@@ -1561,10 +1562,10 @@ class VectorDBSession implements MemorySession {
     const spec = this.info.tools.find((each) => each.name === tool);
     if (spec === undefined) {
       const names = this.info.tools.map((each) => each.name).join(", ");
-      throw new TypeError(`VectorDBMemory has no tool ${tool}; it has ${names}`);
+      throw new YianTypeError(`VectorDBMemory has no tool ${tool}; it has ${names}`);
     }
-    if (spec.write) throw new TypeError(`${tool} is a write tool: apply it as a change`);
-    if (!isObject(args)) throw new TypeError(`VectorDBMemory ${tool} takes its arguments as an object`);
+    if (spec.write) throw new YianTypeError(`${tool} is a write tool: apply it as a change`);
+    if (!isObject(args)) throw new YianTypeError(`VectorDBMemory ${tool} takes its arguments as an object`);
     if (tool === "search") return this.#pending.track(this.#search(args, o.signal));
     if (tool === "read") {
       const id = intArg(args, "id", true);
@@ -1605,7 +1606,7 @@ class VectorDBSession implements MemorySession {
   async apply(c: { id: string; change: JsonObject; author: Author; signal: AbortSignal }): Promise<Applied> {
     this.#checkOpen();
     c.signal.throwIfAborted();
-    if (typeof c.id !== "string" || c.id === "") throw new TypeError("a change id must be a non-empty string");
+    if (typeof c.id !== "string" || c.id === "") throw new YianTypeError("a change id must be a non-empty string");
     const author = checkAuthor(c.author);
     const change = checkChange(c.change, this.#stored.item_schema);
     const writing: Writing = { id: c.id, digest: changeDigest(change), author };
@@ -1626,8 +1627,8 @@ class VectorDBSession implements MemorySession {
   async undo(o: { id: string; changeId: string; author: Author; signal: AbortSignal }): Promise<Applied> {
     this.#checkOpen();
     o.signal.throwIfAborted();
-    if (typeof o.id !== "string" || o.id === "") throw new TypeError("a change id must be a non-empty string");
-    if (typeof o.changeId !== "string") throw new TypeError("undo needs the change id to undo as a string");
+    if (typeof o.id !== "string" || o.id === "") throw new YianTypeError("a change id must be a non-empty string");
+    if (typeof o.changeId !== "string") throw new YianTypeError("undo needs the change id to undo as a string");
     const author = checkAuthor(o.author);
     const writing: Writing = { id: o.id, digest: sha256(logJson({ op: "undo", change: o.changeId })), author };
     return this.#pending.track(this.#undo(writing, o.changeId, o.signal));
@@ -1648,7 +1649,7 @@ class VectorDBSession implements MemorySession {
   async erase(o: { id: string; target: JsonObject; author: Author; signal: AbortSignal }): Promise<Erased> {
     this.#checkOpen();
     o.signal.throwIfAborted();
-    if (typeof o.id !== "string" || o.id === "") throw new TypeError("a change id must be a non-empty string");
+    if (typeof o.id !== "string" || o.id === "") throw new YianTypeError("a change id must be a non-empty string");
     const author = checkAuthor(o.author);
     const item = checkEraseTarget(o.target);
     const writing: Writing = { id: o.id, digest: sha256(logJson({ op: "erase", item: BigInt(item) })), author };
@@ -1685,7 +1686,7 @@ class VectorDBSession implements MemorySession {
   async history(o: { limit: number }): Promise<ChangeEntry[]> {
     this.#checkOpen();
     if (!Number.isSafeInteger(o.limit) || o.limit < 0) {
-      throw new RangeError(`history needs a limit of 0 or more changes, not ${String(o.limit)}`);
+      throw new YianRangeError(`history needs a limit of 0 or more changes, not ${String(o.limit)}`);
     }
     return this.#locked(undefined, (db) =>
       db
@@ -1938,12 +1939,12 @@ class VectorDBSession implements MemorySession {
     const { limits } = this.#store;
     const query = stringArg("VectorDBMemory", args, "query", true);
     // A lone surrogate has no UTF-8 form, so no embedder could take it.
-    if (!query.isWellFormed()) throw new TypeError("VectorDBMemory query must be a string");
+    if (!query.isWellFormed()) throw new YianTypeError("VectorDBMemory query must be a string");
     const k = intArg(args, "k", true);
     const filter = Object.hasOwn(args, "filter") ? args.filter : undefined;
-    if (filter !== undefined && !isObject(filter)) throw new TypeError("VectorDBMemory filter must be an object");
+    if (filter !== undefined && !isObject(filter)) throw new YianTypeError("VectorDBMemory filter must be an object");
     if (filter !== undefined && this.#stored.item_schema === null) {
-      throw new TypeError("this memory's items are text only; they have no fields to filter");
+      throw new YianTypeError("this memory's items are text only; they have no fields to filter");
     }
     if (k > limits.maxK) throw refusal(`k is ${k}; search returns at most ${limits.maxK} items`);
     if (query === "") throw refusal("query is empty");

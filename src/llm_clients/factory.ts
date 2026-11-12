@@ -36,6 +36,7 @@ import { OpenAIResponses, PROTOCOL as OPENAI_RESPONSES } from "../llm/protocols/
 import { Route } from "../llm/route.ts";
 import type { StructuredTarget } from "../llm/structured.ts";
 import { type Scheduler, type Send, warn } from "../platform.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { fromHost } from "../typesys/values.ts";
 import { apiKeyEnvNames, getApiKeyEnv, OPTIONAL_API_KEY_PROVIDERS } from "./api_key_env.ts";
@@ -53,6 +54,7 @@ import {
   connectionCredentials,
   type ConnectionSnapshot,
   keyIdentity,
+  openaiEndpoint,
   resolveModelConfig,
 } from "./connection.ts";
 import { openaiIdHeaders } from "./connection_settings.ts";
@@ -61,9 +63,9 @@ import {
   ANTHROPIC_VERSION,
   GOOGLE_ENDPOINT,
   OLLAMA_ENDPOINT,
-  OPENAI_API_ENDPOINT,
-  prefersResponses,
+  type ChatApi,
   PROVIDER_BASE_URL,
+  sendsToResponses,
 } from "./endpoints.ts";
 import { isKnownModel } from "./model_catalog.ts";
 
@@ -142,6 +144,8 @@ export interface Resolved {
   provider: string;
   model: string;
   block: JsonObject;
+  /** The API `llm_config.api` names for Azure or a Chat Completions vendor, or `null` when unset. */
+  api: ChatApi | null;
   /**
    * The pinned ChatGPT subscription connection when calls go to the subscription endpoint, else
    * `null`. With a subscription nothing else is resolved: the key, key at build and base URL are
@@ -221,19 +225,20 @@ function withHeaders(auth: Auth, headers: Record<string, string>): Auth {
 
 /** The error for `provider` with no key, naming every environment variable that could hold it. */
 function missingKey(provider: string, variables: readonly string[]): RangeError {
-  return new RangeError(
+  return new YianRangeError(
     `API key for provider '${provider}' is not set. Please set the ${variables.join(" or ")} environment ` +
       `variable (e.g. add ${variables[0]}=your_key to your .env file).`,
   );
 }
 
 /**
- * Return the endpoint an OpenAI API-key call goes to: the resolved one, else a non-empty
- * `OPENAI_BASE_URL`, else `OPENAI_API_ENDPOINT`.
+ * Return the endpoint an OpenAI API-key call goes to: the resolved one, else `openaiEndpoint`'s.
+ *
+ * @throws {RangeError} `OPENAI_BASE_URL` is read and isn't an allowed endpoint.
  */
 function openaiBaseUrl(resolved: Resolved, env: Env): string {
   // Only a host key on a pinned subscription connection has no endpoint.
-  return resolved.baseUrl ?? (env("OPENAI_BASE_URL") || OPENAI_API_ENDPOINT);
+  return resolved.baseUrl ?? openaiEndpoint(env);
 }
 
 /**
@@ -278,7 +283,7 @@ function openaiModel(resolved: Resolved, wiring: Wiring): RouteModel {
 
 /**
  * Build a Chat Completions vendor's route (xAI, DeepSeek, Qwen, GLM, MiniMax, OpenRouter, vLLM):
- * `chat/completions`, or `responses` for a name-routed model, with a bearer key.
+ * `chat/completions`, or `responses` for a call `sendsToResponses`, with a bearer key.
  *
  * The key and base URL come from `vendorAccess`, which throws `RangeError` naming the key
  * variable if no key is found; a keyless vLLM sends `"EMPTY"`.
@@ -286,8 +291,8 @@ function openaiModel(resolved: Resolved, wiring: Wiring): RouteModel {
 function vendorModel(provider: string, resolved: Resolved, wiring: Wiring): RouteModel {
   const { model, block } = resolved;
   const { key, baseUrl } = vendorAccess(provider, resolved, wiring.env);
-  // `checkModelConfig` refused a block on a name-routed model.
-  const responses = prefersResponses(model);
+  // `checkModelConfig` refused a block on a call to the Responses API.
+  const responses = sendsToResponses(resolved.api, model);
   const route = new Route({
     provider,
     baseUrl,
@@ -323,7 +328,7 @@ function azureAuth(key: string | null, endpoint: string, env: Env): [Auth, strin
   if (adToken) return [new BearerAuth(adToken), accountHash(endpoint)];
   const envKey = env("AZURE_OPENAI_API_KEY");
   if (envKey) return [new HeaderKeyAuth("api-key", envKey), accountHash(envKey)];
-  throw new RangeError(
+  throw new YianRangeError(
     "provider azure has no credential; set llm_config.api_key with llm_config.base_url, run " +
       "'yian auth azure', or set AZURE_OPENAI_API_KEY or AZURE_OPENAI_AD_TOKEN",
   );
@@ -331,7 +336,7 @@ function azureAuth(key: string | null, endpoint: string, env: Env): [Auth, strin
 
 /**
  * Build the Azure OpenAI route: the deployment's `chat/completions` at the resource endpoint, or
- * `openai/responses` for a name-routed deployment, with `api-version` from `OPENAI_API_VERSION`.
+ * `openai/responses` for a call `sendsToResponses`, with `api-version` from `OPENAI_API_VERSION`.
  *
  * Auth comes from `azureAuth`. Throws `RangeError` if it finds no credential, then if
  * `OPENAI_API_VERSION` is unset or empty.
@@ -344,13 +349,13 @@ function azureModel(resolved: Resolved, wiring: Wiring): RouteModel {
   const [auth, account] = azureAuth(resolved.keyAtBuild, endpoint, env);
   const version = env("OPENAI_API_VERSION");
   if (!version) {
-    throw new RangeError(
+    throw new YianRangeError(
       "provider azure needs OPENAI_API_VERSION, the Azure OpenAI API version (for example " +
         "2025-03-01-preview)",
     );
   }
-  // `checkModelConfig` refused a block on a name-routed deployment.
-  const responses = prefersResponses(model);
+  // `checkModelConfig` refused a block on a call to the Responses API.
+  const responses = sendsToResponses(resolved.api, model);
   const route = new Route({
     provider: "azure",
     baseUrl: endpoint,
@@ -545,9 +550,10 @@ export async function resolveProviderAccess(
   const model = validated.model!;
   const block = validated.blockFor(provider);
   const structuredOutput = validated.structuredOutput ?? "native";
+  const { api } = validated;
   if (validated.apiKey === null && connection !== null && connection.method === "subscription") {
     const none = { key: null, keyAtBuild: null, baseUrl: null, idHeaders: {}, secretHeaders: {} };
-    return { provider, model, block, subscription: connection, ...none, structuredOutput };
+    return { provider, model, block, api, subscription: connection, ...none, structuredOutput };
   }
   const read = reader(env, signal, scheduler, savedKeys);
 
@@ -592,6 +598,7 @@ export async function resolveProviderAccess(
     provider,
     model,
     block,
+    api,
     subscription: null,
     key,
     keyAtBuild,
@@ -610,8 +617,9 @@ export async function resolveProviderAccess(
  * are read once at build and again on every request. A model outside the provider's known list
  * gets `onWarning("Model '<model>' is not in the known model list for provider '<p>'. Continuing
  * anyway.")` (default: `warn`, once per text per process); the subscription never warns. A
- * Chat Completions vendor's or Azure deployment's model that `prefersResponses` goes to the
- * Responses API. Ollama sends only the credentials written in `OLLAMA_BASE_URL`, never a key.
+ * Chat Completions vendor's or Azure deployment's call goes to the Responses API when its `api` is
+ * `responses`, or, unset, when the model `prefersResponses`. Ollama sends only the credentials
+ * written in `OLLAMA_BASE_URL`, never a key.
  *
  * `send` and `scheduler` go to the model's transport (`scheduler` also to the credential store),
  * `signal` to every credential read, `savedKeys` to `resolveProviderAccess`, and
@@ -680,7 +688,7 @@ export function chatModelTarget(
   const [validated, connection] = checkModelConfig(resolveModelConfig(values, { env, snapshot }));
   const provider = validated.provider!;
   const subscription = validated.apiKey === null && connection !== null && connection.method === "subscription";
-  const protocol = routeProtocol(provider, validated.model!, subscription);
+  const protocol = routeProtocol(provider, validated.model!, validated.api, subscription);
   // The Gemini route names the model by its id, without a leading `models/`.
   const model = protocol === GEMINI ? geminiPath(validated.model!)[1] : validated.model!;
   const block = protocol === ANTHROPIC_MESSAGES ? validated.blockFor(provider) : null;
@@ -691,14 +699,14 @@ export function chatModelTarget(
 /**
  * Return the wire protocol `chatModelFromConfig` builds for `provider` and `model`: Responses for
  * the subscription and the OpenAI API key, each native protocol for its provider, and Chat
- * Completions for Azure and the vendors unless the model `prefersResponses`.
+ * Completions for Azure and the vendors unless the call `sendsToResponses`.
  */
-function routeProtocol(provider: string, model: string, subscription: boolean): string {
+function routeProtocol(provider: string, model: string, api: ChatApi | null, subscription: boolean): string {
   if (subscription || provider === "openai") return OPENAI_RESPONSES;
   if (provider === "anthropic") return ANTHROPIC_MESSAGES;
   if (provider === "google") return GEMINI;
   if (provider === "ollama") return OLLAMA_CHAT;
-  return prefersResponses(model) ? OPENAI_RESPONSES : OPENAI_CHAT;
+  return sendsToResponses(api, model) ? OPENAI_RESPONSES : OPENAI_CHAT;
 }
 
 /**
@@ -727,7 +735,7 @@ export async function embedderFromConfig(
 ): Promise<Embedder> {
   const { provider, model } = config;
   checkEmbeddingProvider(provider);
-  if (typeof model !== "string" || model === "") throw new RangeError("an embedding model needs a model name");
+  if (typeof model !== "string" || model === "") throw new YianRangeError("an embedding model needs a model name");
   const { env = processEnv, send, scheduler } = options;
   const resolved = await resolveProviderAccess({ provider, model }, options);
   if (resolved.subscription !== null) {

@@ -2,7 +2,20 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { sanitize } from "../../src/cli/sanitize.ts";
+import { sanitize, showForTerminal } from "../../src/cli/sanitize.ts";
+
+describe("showForTerminal", () => {
+  const raw = "x\x1b]52;c;ZmlsZQ==\x07.yaml\tin\nlines\r\n‮end";
+
+  test("shows each control, a newline too, and each BIDI control on a TTY, keeping tabs", () => {
+    expect(showForTerminal(raw, { isTTY: true })).toBe("x^[]52;c;ZmlsZQ==^G.yaml\tin^Jlines^M^J\\u{202e}end");
+  });
+
+  test("keeps the text exactly off a TTY", () => {
+    expect(showForTerminal(raw, { isTTY: false })).toBe(raw);
+    expect(showForTerminal(raw, {})).toBe(raw);
+  });
+});
 
 describe("sanitize", () => {
   test("drops CSI sequences, 7-bit and 8-bit", () => {

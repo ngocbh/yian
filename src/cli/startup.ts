@@ -8,7 +8,7 @@
  * logins, run ids, the platform's home and folder helpers, the CLI's rendering and key prompt.
  */
 
-import { chmodSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
@@ -51,7 +51,7 @@ export async function loadFlowFile(
     return new Diagnostic({ code: "compose.load", message });
   }
   try {
-    return await loadFlow(text, { searchPaths: [dirname(path)], sourceLabel: basename(path), env: io.env });
+    return await loadFlowAt(path, text, io.env);
   } catch (error) {
     if (!(error instanceof LoadError)) throw error;
     // Where in the `.yaml` the flow broke, not the engine's internals, unless asked for.
@@ -59,6 +59,18 @@ export async function loadFlowFile(
     await writeEngineTrace(error, engineTrace, io);
     return error.diagnostic;
   }
+}
+
+/**
+ * Load `text`, the flow file at `path`, as `yian run` and `yian check` load it: labelled with its
+ * file name, its `uses:` refs and `system.paths` resolved from the file's real folder, symlinks
+ * followed, as a child flow's and `yian check --root`'s are.
+ *
+ * @throws {LoadError} For a flow that doesn't load.
+ * @throws {Error} A system error when `path` can't be resolved.
+ */
+export async function loadFlowAt(path: string, text: string, env: Env): Promise<ComposedFlow> {
+  return loadFlow(text, { searchPaths: [dirname(realpathSync(path))], sourceLabel: basename(path), env });
 }
 
 /**

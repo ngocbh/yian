@@ -6,12 +6,41 @@
  * body) and whose `retryable` flag follows the openai SDK's `_should_retry`.
  * `parseRetryAfter` reads the server's requested delay the way that SDK does.
  * `scrubError` rewrites an error, its causes and its group members with a text redactor,
- * so a credential a provider echoed never reaches a log or a trace.
+ * so a credential a provider echoed never reaches a log or a trace. `parseReceivedJson` reads the
+ * JSON a provider or MCP server sends within bounds, and `receivedBound` says which one a text passed.
  */
 
+import { current } from "../defaults.ts";
 import { redirectDetail } from "../platform.ts";
+import { YianTypeError } from "../typesys/errors.ts";
 import { scrub } from "./auth.ts";
-import { parseJson } from "../typesys/json.ts";
+import { JSONBoundError, type JsonValue, parseJson } from "../typesys/json.ts";
+
+// Five times the deepest value yian keeps, so no value it accepts is refused.
+const RECEIVED_JSON_DEPTH = 512;
+
+/**
+ * Parse JSON text a provider or MCP server sent, in plain mode, holding at most
+ * `YIAN_MAX_RECEIVED_JSON_VALUES` values nested at most 512 levels: a text inside its byte cap
+ * would otherwise build a tree many times its size.
+ *
+ * @throws {JSONDecodeError} The text isn't JSON yian reads; a `JSONBoundError` past a bound.
+ */
+export function parseReceivedJson(text: string): JsonValue {
+  return parseJson(text, "plain", { maxValues: current().maxReceivedJsonValues, maxDepth: RECEIVED_JSON_DEPTH });
+}
+
+/**
+ * Return what a text `parseReceivedJson` refused for passing a bound did, naming the setting
+ * that raises the value bound: `has more than 1000000 JSON values (YIAN_MAX_RECEIVED_JSON_VALUES)`
+ * or `nests deeper than 512 levels`; `null` when `error` is not such a refusal.
+ */
+export function receivedBound(error: unknown): string | null {
+  if (!(error instanceof JSONBoundError)) return null;
+  return error.bound === "values"
+    ? `has more than ${error.limit} JSON values (YIAN_MAX_RECEIVED_JSON_VALUES)`
+    : `nests deeper than ${error.limit} levels`;
+}
 
 /** What went wrong with a model call, independent of the provider. */
 export const ERROR_KINDS = Object.freeze([
@@ -105,7 +134,7 @@ export class ProviderError extends Error {
 
   constructor(kind: ErrorKind, message: string, options: ProviderErrorOptions = {}) {
     // An unknown kind is refused.
-    if (!ERROR_KINDS.includes(kind)) throw new TypeError(`unknown provider error kind: ${String(kind)}`);
+    if (!ERROR_KINDS.includes(kind)) throw new YianTypeError(`unknown provider error kind: ${String(kind)}`);
     super(message);
     this.kind = kind;
     this.status = options.status ?? null;
@@ -226,7 +255,7 @@ export function kindForStatus(status: number, body: string): ErrorKind {
 function isContentFilter(body: string): boolean {
   let data;
   try {
-    data = parseJson(body, "plain");
+    data = parseReceivedJson(body);
   } catch {
     return false;
   }
@@ -335,7 +364,7 @@ function unescapeJson(text: string): string {
 function jsonDetail(body: string): string | null {
   let data;
   try {
-    data = parseJson(body, "plain");
+    data = parseReceivedJson(body);
   } catch {
     return null;
   }

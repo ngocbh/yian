@@ -31,6 +31,7 @@ import {
 } from "../nodes/contracts.ts";
 import { EndNode } from "../nodes/end/node.ts";
 import { StartNode } from "../nodes/start/node.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import type { Type } from "../typesys/index.ts";
 import { isList, jsTypeName } from "../typesys/values.ts";
 
@@ -57,7 +58,7 @@ export class GrowthRejected extends Error {
    * @throws TypeError when `original` isn't an `Error`.
    */
   constructor(original: Error) {
-    if (!(original instanceof Error)) throw new TypeError("GrowthRejected original must be an Error");
+    if (!(original instanceof Error)) throw new YianTypeError("GrowthRejected original must be an Error");
     super(String(original.message), { cause: original });
     this.original = original;
   }
@@ -146,12 +147,12 @@ function normalizeWiring(wiring: WiringInput): Map<string, ReadonlyMap<string, B
   if (wiring === null) return normalized;
   for (const [nodeId, nodeWiring] of wiring) {
     if (typeof nodeId !== "string") {
-      throw new TypeError(`flow wiring node id must be a string, got ${jsTypeName(nodeId)}`);
+      throw new YianTypeError(`flow wiring node id must be a string, got ${jsTypeName(nodeId)}`);
     }
     const normalizedNode = new Map<string, Binding>();
     for (const [parameter, source] of nodeWiring) {
       if (typeof parameter !== "string") {
-        throw new TypeError(
+        throw new YianTypeError(
           `flow wiring parameter name for node ${reprText(nodeId)} must be a string, ` +
             `got ${jsTypeName(parameter)}`,
         );
@@ -251,7 +252,7 @@ export function validateGrowthMetadata(flow: Flow): void {
   ];
   for (const [name, values, carrier] of recipes) {
     if (!Array.isArray(values) || values.some((value) => !isExactly(value, carrier))) {
-      throw new TypeError(`${name} must be an array of exact ${carrier.name} values`);
+      throw new YianTypeError(`${name} must be an array of exact ${carrier.name} values`);
     }
   }
   const starts = new Set<string>();
@@ -261,11 +262,11 @@ export function validateGrowthMetadata(flow: Flow): void {
     new ChildFlowBoundary(boundary.startId, boundary.endId);
     for (const nodeId of [boundary.startId, boundary.endId]) {
       if (!flow.nodes.has(nodeId) || endpoints.has(nodeId)) {
-        throw new RangeError("child boundaries must name distinct fragment nodes");
+        throw new YianRangeError("child boundaries must name distinct fragment nodes");
       }
       endpoints.add(nodeId);
       const node: unknown = flow.nodes.get(nodeId);
-      if (!(node instanceof Node)) throw new TypeError("child boundaries must name Node values");
+      if (!(node instanceof Node)) throw new YianTypeError("child boundaries must name Node values");
     }
     starts.add(boundary.startId);
   }
@@ -275,24 +276,24 @@ export function validateGrowthMetadata(flow: Flow): void {
     // Rebuilding checks a connection that may have bypassed the constructor.
     new SeedConnection(connection.childStartId, connection.inputName, connection.seedPath);
     const target = JSON.stringify([connection.childStartId, connection.inputName]);
-    if (!flow.nodes.has(connection.childStartId)) throw new RangeError("seed connections must name fragment nodes");
-    if (targets.has(target)) throw new RangeError("seed connections must name unique target inputs");
+    if (!flow.nodes.has(connection.childStartId)) throw new YianRangeError("seed connections must name fragment nodes");
+    if (targets.has(target)) throw new YianRangeError("seed connections must name unique target inputs");
     targets.add(target);
     const node: unknown = flow.nodes.get(connection.childStartId);
-    if (!(node instanceof Node)) throw new TypeError("seed connection targets must be Node values");
+    if (!(node instanceof Node)) throw new YianTypeError("seed connection targets must be Node values");
     const params: unknown = node.params ?? [];
     if (!Array.isArray(params) || !params.every((param) => isExactly(param, Parameter))) {
-      throw new TypeError("seed connection target parameters must be Parameter values");
+      throw new YianTypeError("seed connection target parameters must be Parameter values");
     }
     const declared = new Map(params.map((param) => [param.name, param]));
     const parameter = declared.get(connection.inputName);
-    if (parameter === undefined) throw new RangeError("seed connection target input must be declared");
+    if (parameter === undefined) throw new YianRangeError("seed connection target input must be declared");
     const wired = flow.wiring.get(connection.childStartId)?.has(connection.inputName) ?? false;
     if (starts.has(connection.childStartId)) {
-      if (!wired) throw new RangeError("seed connection child START input must be wired");
+      if (!wired) throw new YianRangeError("seed connection child START input must be wired");
     } else {
-      if (!parameter.hasDefault) throw new RangeError("seed connection non-START input must declare a default");
-      if (wired) throw new RangeError("seed connection non-START input must not be wired");
+      if (!parameter.hasDefault) throw new YianRangeError("seed connection non-START input must declare a default");
+      if (wired) throw new YianRangeError("seed connection non-START input must not be wired");
     }
   }
 }
@@ -364,8 +365,8 @@ export class CompiledFlow extends Flow {
     this.flowLlmConfig = flowLlmConfig ?? {};
     this.flowLlmValueTypes = [];
     if (flowId !== null) {
-      if (typeof flowId !== "string") throw new TypeError("flow_id must be an exact string or null");
-      if (!flowId) throw new RangeError("flow_id must be non-empty");
+      if (typeof flowId !== "string") throw new YianTypeError("flow_id must be an exact string or null");
+      if (!flowId) throw new YianRangeError("flow_id must be non-empty");
     }
     this.flowId = flowId;
     this.incomingEdges = new Map();
@@ -444,10 +445,10 @@ export class CompiledFlow extends Flow {
  *
  * A flow copy gets fresh `nodes`, `edges` and `wiring` containers (the inner wiring maps are
  * read-only and stay shared) and, for a `CompiledFlow`, an adjacency index rebuilt from its
- * `edges`. A node copy is shallow, except that each own field holding a `Flow` (the static child
- * of CALL, MAP and LOOP) holds that flow's copy. Each flow and node is copied once per call, so
- * sharing and cycles carry over to the copy. Carriers, payloads, `env`, type tables and labels
- * stay shared: change a copy only by reassigning a field.
+ * `edges`. A node copy is shallow, except that its static children (`Node.originChildren`: the
+ * child of CALL, MAP and LOOP, an AGENT's flow tools) are their flows' copies. Each flow and node
+ * is copied once per call, so sharing and cycles carry over to the copy. Carriers, payloads,
+ * `env`, type tables and labels stay shared: change a copy only by reassigning a field.
  */
 export function copyGraph<T extends Flow | Node>(value: T): T {
   return copyOnce(value, new Map());
@@ -471,9 +472,9 @@ function copyOnce<T extends Flow | Node>(value: T, memo: Map<Flow | Node, Flow |
       indexEdges(copy.edges, copy.incomingEdges, copy.outgoingEdges);
     }
   } else {
-    const fields = copy as unknown as Record<string, unknown>;
-    for (const [key, field] of Object.entries(fields)) {
-      if (field instanceof Flow) fields[key] = copyOnce(field, memo);
+    const children = copy.originChildren();
+    if (children.length > 0) {
+      copy.setOriginChildren(children.map((child) => (child instanceof Flow ? copyOnce(child, memo) : child)));
     }
   }
   return copy;
@@ -490,39 +491,51 @@ export type GraphWalkError = (
   origin: OriginRef | null,
 ) => Error;
 
-/** Throw the plain `TypeError` or `RangeError` and drop the origin. */
-const plainWalkError: GraphWalkError = (kind, message) => new kind(message);
+/** Throw yian's own `TypeError` or `RangeError` of `kind` and drop the origin. */
+const plainWalkError: GraphWalkError = (kind, message) =>
+  kind === TypeError ? new YianTypeError(message) : new YianRangeError(message);
+
+/** One static child of a node: the path segment its nodes sit under, and its flow. */
+export interface StaticChild {
+  /** `null` when the child's nodes sit right under the node, as a CALL's do; else a name. */
+  readonly segment: string | null;
+  readonly flow: Flow;
+}
 
 /**
- * Return the node's single exact static child, if present, from its `originChildren` hook.
+ * Return the node's exact static children, each with its path segment, from its
+ * `originChildren` and `originChildSegments` hooks.
  *
  * @param fail Builds each error, naming the node's origin; plain errors by default.
- * @throws What `fail` builds: for children that aren't an exact array or an exact Flow
- *   (TypeError), or more than one child (RangeError).
+ * @throws What `fail` builds (TypeError): for children that aren't an exact array of exact Flows,
+ *   or segments that aren't a name or `null` for each child.
  */
-export function nodeChild(node: Node, fail: GraphWalkError = plainWalkError): Flow | null {
+export function nodeChildren(node: Node, fail: GraphWalkError = plainWalkError): StaticChild[] {
   const children: unknown = node.originChildren();
   if (!isList(children)) {
     throw fail(TypeError, `node ${reprText(node.id)} static children must be an exact array`, node.origin);
   }
-  if (children.length > 1) {
-    throw fail(RangeError, `node ${reprText(node.id)} exposes more than one static child`, node.origin);
+  const segments: unknown = node.originChildSegments();
+  if (!isList(segments) || segments.length !== children.length) {
+    throw fail(TypeError, `node ${reprText(node.id)} must give one path segment per static child`, node.origin);
   }
-  if (children.length === 0) return null;
-  const child: unknown = children[0];
-  if (!isExactly(child, Flow) && !isExactly(child, CompiledFlow)) {
-    throw fail(TypeError, `node ${reprText(node.id)} static child must be an exact Flow`, node.origin);
-  }
-  return child;
+  return children.map((child: unknown, index) => {
+    if (!isExactly(child, Flow) && !isExactly(child, CompiledFlow)) {
+      throw fail(TypeError, `node ${reprText(node.id)} static child must be an exact Flow`, node.origin);
+    }
+    const segment: unknown = segments[index];
+    if (segment !== null && (typeof segment !== "string" || segment === "")) {
+      throw fail(TypeError, `node ${reprText(node.id)} static child segment must be a name or null`, node.origin);
+    }
+    return { segment, flow: child };
+  });
 }
 
 /**
- * Replace the static child flow of a node that has one (CALL, MAP, LOOP) with `child`.
+ * Give `node` the flows `children` in place of its static children, index for index.
  *
- * @throws What `nodeChild` throws, or a RangeError when the node has no static child.
+ * @throws RangeError when the count differs from the node's static children.
  */
-export function setNodeChild(node: Node, child: Flow): void {
-  if (nodeChild(node) === null) throw new RangeError(`node ${reprText(node.id)} has no static child to replace`);
-  // Every kind with a static child keeps it in its `child` field, which `originChildren` returns.
-  (node as Node & { child: Flow }).child = child;
+export function setNodeChildren(node: Node, children: readonly Flow[]): void {
+  node.setOriginChildren(children);
 }

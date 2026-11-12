@@ -1,0 +1,29 @@
+# A flow tool's inputs come from the model, which can't send a memory.
+kind: load
+flow: |
+  id: f
+  name: f
+  defs:
+    classify:
+      description: Sort a ticket.
+      input:
+        text: !str
+        notes: !FileMemory
+      nodes:
+        pick: !str ${input.text}
+      output: ${pick.output}
+  nodes:
+    helper:
+      kind: agent
+      prompt: Help.
+      output: str
+      tools: [classify]
+  output: ${helper.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''helper'': flow `classify` can''t be a tool: its input `notes` is a memory, which a model can''t send'
+      frames:
+      - label: flow.yaml
+        range: [17, 12, 17, 22]

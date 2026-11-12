@@ -3,7 +3,8 @@
  * number as a `number`, and errors carry a reason and its position.
  * It refuses what yian refuses on top of that: the NaN and Infinity tokens, a float token
  * that overflows, a duplicate object key and a lone surrogate. A float token that is zero
- * reads as `0`, never `-0`. It reads with an explicit stack, so any depth reads.
+ * reads as `0`, never `-0`. It reads with an explicit stack, so any depth reads, unless the caller
+ * bounds it: text from outside yian can be read within a count of values and a depth.
  *
  * Its encoders write what the reader reads back: `canonicalJson` writes RFC 8785 (JCS) text for
  * fingerprints and `logJson` the same layout for run-log lines, with ints of any size and floats
@@ -15,6 +16,8 @@
  * It imports nothing from yian, so the `llm/` leaf can use it.
  */
 
+
+import { YianTypeError } from "./errors.ts";
 /** A JSON value as yian reads it: an int token is a `bigint`, any other number a `number`. */
 export type JsonValue = null | boolean | bigint | number | string | JsonValue[] | JsonObject;
 
@@ -51,6 +54,30 @@ export class JSONDecodeError extends Error {
     this.position = position;
     this.line = line;
     this.column = column;
+  }
+}
+
+/** The most `parseJson` builds from one text; an unset bound is no bound. */
+export interface JsonBounds {
+  /** Most values the text may hold: each scalar, array and object is one, a key none. */
+  readonly maxValues?: number;
+  /** Deepest nesting the text may have: each array and object is one level, an empty one included. */
+  readonly maxDepth?: number;
+}
+
+/** A JSON text past one of its `JsonBounds`, refused where the value past the bound starts. */
+export class JSONBoundError extends JSONDecodeError {
+  override name = "JSONBoundError";
+  /** Which bound the text passed. */
+  readonly bound: "values" | "depth";
+  /** That bound's value. */
+  readonly limit: number;
+
+  constructor(bound: "values" | "depth", limit: number, text: string, position: number) {
+    const reason = bound === "values" ? `JSON has more than ${limit} values` : `JSON nests deeper than ${limit} levels`;
+    super(reason, text, position);
+    this.bound = bound;
+    this.limit = limit;
   }
 }
 
@@ -269,20 +296,27 @@ function decodeCodec(object: JsonObject, recordRaw: JsonValue | undefined): Json
  * In `codec` mode each object is decoded as it closes: exactly `{"$float": "inf"}` or
  * `{"$float": "-inf"}` reads as `±Infinity`, and `{"$record": X}` with `X` an object reads as the
  * record `X` (its members decoded, `X` itself not).
+ *
+ * @param bounds Bounds what the text may build; past one, a `JSONBoundError` is thrown before
+ *   anything after that value is read.
  */
-export function parseJson(text: string, mode: JsonMode): JsonValue {
+export function parseJson(text: string, mode: JsonMode, bounds: JsonBounds = {}): JsonValue {
+  const { maxValues = Infinity, maxDepth = Infinity } = bounds;
   if (text.charCodeAt(0) === 0xfeff) {
     throw new JSONDecodeError("Unexpected UTF-8 BOM (decode using utf-8-sig)", text, 0);
   }
   const stack: Frame[] = [];
   let pos = skipSpace(text, 0);
+  let values = 0;
   for (;;) {
     // Read the value at `pos`, or open a container and go on to its first value. `value` is
     // the decoded form a parent's slot holds; `raw` is the value as built.
     let value: JsonValue;
     let raw: JsonValue;
+    if (++values > maxValues) throw new JSONBoundError("values", maxValues, text, pos);
     const c = text.charAt(pos);
     if (c === "[" || c === "{") {
+      if (stack.length >= maxDepth) throw new JSONBoundError("depth", maxDepth, text, pos);
       const frame: Frame = { container: c === "[" ? [] : {} };
       pos = skipSpace(text, pos + 1);
       if (text.charAt(pos) === (c === "[" ? "]" : "}")) {
@@ -358,7 +392,7 @@ const byCodeUnits = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 
 
 /** Return `text` as a JSON string; for well-formed text `JSON.stringify` is RFC 8785's form. */
 function quote(text: string): string {
-  if (!text.isWellFormed()) throw new TypeError("Unicode surrogate is not valid canonical JSON");
+  if (!text.isWellFormed()) throw new YianTypeError("Unicode surrogate is not valid canonical JSON");
   return JSON.stringify(text);
 }
 
@@ -366,7 +400,7 @@ function quote(text: string): string {
 function jcsNumber(n: number | bigint): string {
   if (typeof n === "bigint" && -MAX_SAFE <= n && n <= MAX_SAFE) return n.toString();
   if (typeof n === "number" && Number.isSafeInteger(n)) return String(n);
-  throw new TypeError("JCS numbers are ints within ±(2^53-1)");
+  throw new YianTypeError("JCS numbers are ints within ±(2^53-1)");
 }
 
 /** Return `n` as a log number: a `bigint`'s digits, a float with `.0` when it has no `.` or exponent. */
@@ -377,7 +411,7 @@ function logNumber(n: number | bigint): string {
     } catch (error) {
       // A runtime may refuse to stringify a huge bigint (JavaScriptCore reports running out of
       // memory as a RangeError); every boundary turns that into a defined error.
-      if (error instanceof RangeError) throw new TypeError("integer is too large for this runtime");
+      if (error instanceof RangeError) throw new YianTypeError("integer is too large for this runtime");
       throw error;
     }
   }
@@ -407,15 +441,15 @@ function write(root: unknown, number: (n: number | bigint) => string): string {
     } else if (typeof value === "bigint") {
       out += number(value);
     } else if (typeof value === "number") {
-      if (Number.isNaN(value)) throw new TypeError("NaN is not valid canonical JSON");
-      if (Object.is(value, -0)) throw new TypeError("negative zero is not valid canonical JSON");
+      if (Number.isNaN(value)) throw new YianTypeError("NaN is not valid canonical JSON");
+      if (Object.is(value, -0)) throw new YianTypeError("negative zero is not valid canonical JSON");
       if (value === Infinity) out += '{"$float":"inf"}';
       else if (value === -Infinity) out += '{"$float":"-inf"}';
       else out += number(value);
     } else if (typeof value !== "object") {
-      throw new TypeError(`${typeof value} is not a canonical JSON value`);
+      throw new YianTypeError(`${typeof value} is not a canonical JSON value`);
     } else if (Array.isArray(value)) {
-      if (active.has(value)) throw new TypeError("cyclic container cannot be canonicalized");
+      if (active.has(value)) throw new YianTypeError("cyclic container cannot be canonicalized");
       active.add(value);
       stack.push({ array: value, index: 0 });
       out += "[";
@@ -424,12 +458,12 @@ function write(root: unknown, number: (n: number | bigint) => string): string {
       if (proto !== Object.prototype && proto !== null) {
         const name: unknown = (value as { constructor?: { name?: unknown } }).constructor?.name;
         const kind = typeof name === "string" && name !== "" ? name : "object";
-        throw new TypeError(`${kind} is not a canonical JSON value`);
+        throw new YianTypeError(`${kind} is not a canonical JSON value`);
       }
       if (Object.getOwnPropertySymbols(value).length > 0) {
-        throw new TypeError("canonical JSON object keys must be strings");
+        throw new YianTypeError("canonical JSON object keys must be strings");
       }
-      if (active.has(value)) throw new TypeError("cyclic container cannot be canonicalized");
+      if (active.has(value)) throw new YianTypeError("cyclic container cannot be canonicalized");
       active.add(value);
       const record = value as Record<string, unknown>;
       const keys = Object.keys(record).sort(byCodeUnits);

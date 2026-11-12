@@ -50,9 +50,10 @@ import { AgentNode } from "../nodes/agent/node.ts";
 import type { Node } from "../nodes/base.ts";
 import { BindingError, bindParams, copyValue } from "../nodes/binding.ts";
 import { Binding, type Parameter, type ValuePath, ValueTemplate } from "../nodes/contracts.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { isRecord, type Type, TypeCheckError, type Value, type ValueRecord, VariablePool } from "../typesys/index.ts";
 import { setField, writeAsText } from "../typesys/values.ts";
-import { copyGraph, type Flow, nodeChild, setNodeChild } from "./model.ts";
+import { copyGraph, nodeChildren, setNodeChildren, type StaticChild } from "./model.ts";
 
 /**
  * A flow as the cascade reads it: its nodes, wiring and START id and, for a composed flow, its own
@@ -140,7 +141,7 @@ export function resolveRunLlm(
         ? "the run's flow"
         : `the flow node ${reprText(pathKey(inherited.owner))} calls`;
     const agent = inherited.gate || `node ${reprText(pathKey(inherited.agent))}`;
-    throw new RangeError(
+    throw new YianRangeError(
       `${agent} would inherit ${fieldLabel(inherited.field)} from ${where}, a value read only when that flow ` +
         `runs; ${inheritedValueFix(inherited.field)}`,
     );
@@ -217,10 +218,10 @@ class RunInputs {
   /** Bind one input as START binds it, and return its value. */
   private check(name: string, where: string): unknown {
     const parameter = this.params.get(name);
-    if (parameter === undefined) throw new RangeError(`${where}: input ${reprText(name)} is not declared`);
+    if (parameter === undefined) throw new YianRangeError(`${where}: input ${reprText(name)} is not declared`);
     const present = this.supplied.has(name);
     if (!present && parameter.required) {
-      throw new RangeError(`${where}: input ${reprText(name)} is required and was not given`);
+      throw new YianRangeError(`${where}: input ${reprText(name)} is required and was not given`);
     }
     const wiring = new Map<string, unknown>(present ? [[name, `\${input.${name}}`]] : []);
     let record: ValueRecord;
@@ -230,16 +231,19 @@ class RunInputs {
       pool.set(this.startId, present ? { [name]: this.supplied.get(name) } : {});
       record = bindParams([parameter], wiring, pool);
     } catch (error) {
-      if (error instanceof BindingError) throw new RangeError(`${where}: ${error.message}`);
-      if (error instanceof TypeCheckError) throw new RangeError(`${where}: input ${reprText(name)}: ${error.message}`);
+      if (error instanceof BindingError) throw new YianRangeError(`${where}: ${error.message}`);
+      if (error instanceof TypeCheckError) throw new YianRangeError(`${where}: input ${reprText(name)}: ${error.message}`);
       throw error;
     }
     return Object.hasOwn(record, name) ? record[name] : null;
   }
 }
 
-/** A CALL, MAP or LOOP node, the only kinds with a static child flow, which each name by `flowId`. */
-type Callsite = Node & { readonly flowId: string };
+/**
+ * Where a static child flow is called: a CALL, MAP or LOOP node, which names it by `flowId`, or an
+ * AGENT's flow tool, named by its grant.
+ */
+type Callsite = { readonly flowId: string; readonly origin: OriginRef | null };
 
 /**
  * An `llm_config` value in an enclosing flow's layer that a child flow's agent inherits. Frozen.
@@ -251,7 +255,7 @@ type Callsite = Node & { readonly flowId: string };
 export class InheritedValue {
   /** The static path of the callsite whose flow holds the layer; empty for the run's flow. */
   readonly owner: readonly string[];
-  /** The CALL, MAP or LOOP node at `owner`; `null` for the run's flow. */
+  /** The callsite at `owner` (a CALL, MAP or LOOP node, or a flow tool); `null` for the run's flow. */
   readonly callsite: Callsite | null;
   /** The value's field path in its layer; empty for a whole record. */
   readonly field: ValuePath;
@@ -363,9 +367,8 @@ function findInherited(
       const found = inheritedBy(node, own, enclosing, nodePath);
       if (found !== null) return found;
     }
-    const child = nodeChild(node);
-    if (child !== null) {
-      const found = findInherited(child, nodePath, node as Callsite, [...enclosing, own], walk);
+    for (const child of nodeChildren(node)) {
+      const found = findInherited(child.flow, childPath(nodePath, child), callsiteOf(node, child), [...enclosing, own], walk);
       if (found !== null) return found;
     }
   }
@@ -431,18 +434,18 @@ function valueOrigin(layer: unknown, field: ValuePath, leaf: unknown): OriginRef
  * @throws {TypeError} If a map or one of its entries is not a record.
  */
 export function applyEffectiveLlmMap(flow: CascadeFlow, effective: unknown, callTime: unknown = null): void {
-  if (!isRecord(effective)) throw new TypeError("effective LLM map must be a dict keyed by static agent path");
+  if (!isRecord(effective)) throw new YianTypeError("effective LLM map must be a dict keyed by static agent path");
   let selection: ConnectionSelection | null = null;
   let agents: Record<string, unknown> = {};
   if (callTime !== null && callTime !== undefined) {
-    if (!isRecord(callTime)) throw new TypeError("call-time LLM record must be a dict of selection and agents");
+    if (!isRecord(callTime)) throw new YianTypeError("call-time LLM record must be a dict of selection and agents");
     const keys = Object.keys(callTime);
     if (keys.length !== 2 || !keys.includes("selection") || !keys.includes("agents")) {
-      throw new RangeError("call-time LLM record must hold exactly selection and agents");
+      throw new YianRangeError("call-time LLM record must hold exactly selection and agents");
     }
     selection = restoreSelection(callTime["selection"]);
     if (!isRecord(callTime["agents"])) {
-      throw new TypeError("call-time LLM agents must be a dict keyed by static agent path");
+      throw new YianTypeError("call-time LLM agents must be a dict keyed by static agent path");
     }
     agents = callTime["agents"];
   }
@@ -460,14 +463,14 @@ export function applyEffectiveLlmMap(flow: CascadeFlow, effective: unknown, call
     if (missing.length > 0) details.push(`missing paths: ${writeAsText(missing)}`);
     if (extra.length > 0) details.push(`extra paths: ${writeAsText(extra)}`);
     if (both.length > 0) details.push(`paths in both maps: ${writeAsText(both)}`);
-    throw new RangeError("effective LLM map path mismatch; " + details.join("; "));
+    throw new YianRangeError("effective LLM map path mismatch; " + details.join("; "));
   }
 
   const labels = agentLabels(statics);
   for (const path of Object.keys(effective).sort(compareCodeUnits)) {
     const config = effective[path];
     if (!isRecord(config)) {
-      throw new TypeError(`effective LLM config for ${labels.get(path) || reprText(path)} must be a dict`);
+      throw new YianTypeError(`effective LLM config for ${labels.get(path) || reprText(path)} must be a dict`);
     }
     requireConcreteSelection(config, { path, label: labels.get(path) ?? null });
   }
@@ -475,15 +478,15 @@ export function applyEffectiveLlmMap(flow: CascadeFlow, effective: unknown, call
   for (const path of Object.keys(agents).sort(compareCodeUnits)) {
     const subject = labels.get(path) || reprText(path);
     if (!carrying.has(path)) {
-      throw new RangeError(`call-time LLM base for ${subject}: the agent has no llm_config value`);
+      throw new YianRangeError(`call-time LLM base for ${subject}: the agent has no llm_config value`);
     }
     const base = agents[path];
-    if (!isRecord(base)) throw new TypeError(`call-time LLM base for ${subject} must be a dict`);
+    if (!isRecord(base)) throw new YianTypeError(`call-time LLM base for ${subject} must be a dict`);
     try {
       validateLayer(base);
     } catch (error) {
       if (!(error instanceof RangeError)) throw error;
-      throw new RangeError(`call-time LLM base for ${subject}: ${error.message}`);
+      throw new YianRangeError(`call-time LLM base for ${subject}: ${error.message}`);
     }
   }
 
@@ -517,34 +520,31 @@ function resolveFlow(
         // Its own layers resolve when it runs; only the layers below them are known now.
         setField(scope.callTime as ValueRecord, key, (node.llmInherit ? copied(parentConfig) : {}) as Value);
         node.llmConfig = null;
-        continue;
-      }
-      let authored: Config;
-      if (carried === null) {
-        const own = literalLayer(node.ownLlmConfig, inputs);
-        validateLayer(own);
-        authored = mergeLlmConfig(own, node.llmInherit ? flowLayer : {});
       } else {
-        authored = resolveCarried(carried, node, parentConfig, { path: key, label, inputs });
+        let authored: Config;
+        if (carried === null) {
+          const own = literalLayer(node.ownLlmConfig, inputs);
+          validateLayer(own);
+          authored = mergeLlmConfig(own, node.llmInherit ? flowLayer : {});
+        } else {
+          authored = resolveCarried(carried, node, parentConfig, { path: key, label, inputs });
+        }
+        const config = resolveAgentConfig(authored, {
+          defaults: scope.defaults,
+          providerModels: scope.providerModels,
+          strayModel: scope.strayModel,
+          path: key,
+          label,
+        });
+        node.llmConfig = copied(config);
+        setField(scope.effective as ValueRecord, key, copied(config) as Value);
       }
-      const config = resolveAgentConfig(authored, {
-        defaults: scope.defaults,
-        providerModels: scope.providerModels,
-        strayModel: scope.strayModel,
-        path: key,
-        label,
-      });
-      node.llmConfig = copied(config);
-      setField(scope.effective as ValueRecord, key, copied(config) as Value);
     }
 
-    const child = nodeChild(node);
-    if (child !== null) {
-      // Copy at EACH callsite. A copy of only the root preserves shared descendant aliases and lets
-      // differently configured parents interfere.
-      const copy = setChild(node, child);
-      resolveFlow(copy, flowLayer, { ...scope, path: nodePath });
-    }
+    // Copy at EACH callsite. A copy of only the root preserves shared descendant aliases and lets
+    // differently configured parents interfere.
+    const children = setChildren(node);
+    for (const child of children) resolveFlow(child.flow, flowLayer, { ...scope, path: childPath(nodePath, child) });
   }
 }
 
@@ -798,7 +798,7 @@ function resolved<T>(resolve: () => T): T {
     return resolve();
   } catch (error) {
     if (!(error instanceof BindingError)) throw error;
-    throw new RangeError(error.message);
+    throw new YianRangeError(error.message);
   }
 }
 
@@ -808,8 +808,7 @@ function staticAgents(flow: CascadeFlow, path: readonly string[] = []): [string,
   for (const [nodeId, node] of flow.nodes) {
     const nodePath = [...path, nodeId];
     if (node instanceof AgentNode) agents.push([pathKey(nodePath), node, flow]);
-    const child = nodeChild(node);
-    if (child !== null) agents.push(...staticAgents(child, nodePath));
+    for (const child of nodeChildren(node)) agents.push(...staticAgents(child.flow, childPath(nodePath, child)));
   }
   return agents;
 }
@@ -869,8 +868,7 @@ function applyFlow(
       }
     }
 
-    const child = nodeChild(node);
-    if (child !== null) applyFlow(setChild(node, child), effective, callTime, selection, nodePath);
+    for (const child of setChildren(node)) applyFlow(child.flow, effective, callTime, selection, childPath(nodePath, child));
   }
 }
 
@@ -905,8 +903,7 @@ export function bindHostCredentials(
       if (given !== null) config["headers"] = { ...given };
       node.llmConfig = config;
     }
-    const child = nodeChild(node);
-    if (child !== null) bindHostCredentials(child, apiKey, headers);
+    for (const child of nodeChildren(node)) bindHostCredentials(child.flow, apiKey, headers);
   }
 }
 
@@ -924,11 +921,23 @@ function pathKey(path: readonly string[]): string {
   return path.join("/");
 }
 
-/** Give `node` a private copy of its static child flow, and return the copy. */
-function setChild(node: Node, child: Flow): Flow {
-  const copy = copyGraph(child);
-  setNodeChild(node, copy);
-  return copy;
+/** Give `node` a private copy of each static child flow, and return the copies with their segments. */
+function setChildren(node: Node): StaticChild[] {
+  const children = nodeChildren(node);
+  if (children.length === 0) return children;
+  const copies = children.map(({ segment, flow }) => ({ segment, flow: copyGraph(flow) }));
+  setNodeChildren(node, copies.map((child) => child.flow));
+  return copies;
+}
+
+/** The static path of `child`'s nodes, under the node at `nodePath`: its segment after the node's, if any. */
+function childPath(nodePath: readonly string[], child: StaticChild): readonly string[] {
+  return child.segment === null ? nodePath : [...nodePath, child.segment];
+}
+
+/** Where `node` calls `child`: the node itself (a CALL, MAP or LOOP), or a flow tool by its grant. */
+function callsiteOf(node: Node, child: StaticChild): Callsite {
+  return child.segment === null ? (node as Node & Callsite) : { flowId: child.segment, origin: node.origin };
 }
 
 /** Return an independent deep copy of a config record. */

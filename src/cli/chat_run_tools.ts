@@ -25,6 +25,7 @@ import type { Skill } from "../skills/catalog.ts";
 import { ReportedToolError } from "../tools/errors.ts";
 import { type FunctionTool, tool } from "../tools/function_tools.ts";
 import { grantText, visibleToolName } from "../tools/grants.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import {
   buildValueAs,
   isInboxType,
@@ -224,14 +225,14 @@ function checkStartInputs(flow: ComposedFlow, inputs: unknown): void {
     const given = typeof inputs === "object" && inputs !== null ? inputs : {};
     const memory = flow.input.find((param) => isMemoryType(param.contract?.type) && Object.hasOwn(given, param.name));
     if (memory !== undefined) {
-      throw new RangeError(`\`${memory.name}\` is a memory; leave it out, and the run gets its default`);
+      throw new YianRangeError(`\`${memory.name}\` is a memory; leave it out, and the run gets its default`);
     }
     const coerced = coerceInputs(flow.input, hostInputs(flow.input, inputs));
     for (const param of flow.input) {
       if (isInboxType(param.contract?.type ?? null) || isMemoryType(param.contract?.type)) continue;
       if (!Object.hasOwn(coerced, param.name)) {
         if (!param.required || param.hasDefault) continue;
-        throw new RangeError(`required input ${reprText(param.name)} is missing`);
+        throw new YianRangeError(`required input ${reprText(param.name)} is missing`);
       }
       if (param.contract === null) continue;
       try {
@@ -240,7 +241,7 @@ function checkStartInputs(flow: ComposedFlow, inputs: unknown): void {
         if (!(error instanceof Error)) throw error;
         // Name where in the value it failed, as the start's own check does.
         const at = error instanceof TypeCheckError && error.path.length > 0 ? ` at ${renderValuePath(error.path)}` : "";
-        throw new TypeError(`input ${reprText(param.name)}${at}: ${error.message}`);
+        throw new YianTypeError(`input ${reprText(param.name)}${at}: ${error.message}`);
       }
     }
   } catch (error) {

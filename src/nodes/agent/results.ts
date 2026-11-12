@@ -42,14 +42,21 @@ export function toolLimitText(cap: number): string {
   return `Tool-call limit reached (${turns}). No more tool calls will run; give your final answer now.`;
 }
 
-/** Why a call was closed without its result, as an agent's closer records it. */
-export type CloserReason = "crashed" | "timed_out" | "interrupted";
+/**
+ * Why a call was closed without its result, as an agent's closer records it; `failed` is a flow
+ * call's, whose text names its failure (`flowFailureText`).
+ */
+export type CloserReason = "crashed" | "timed_out" | "interrupted" | "failed";
+
+/** The result the model reads for a flow call that failed, when its failure isn't known. */
+export const FLOW_FAILED_RESULT = "The flow failed.";
 
 /** The text the model reads for a call closed for each reason. */
 const CLOSER_TEXT: Readonly<Record<CloserReason, string>> = {
   crashed: TOOL_OUTCOME_UNKNOWN,
   timed_out: ASK_TIMED_OUT_RESULT,
   interrupted: TOOL_INTERRUPTED_OUTCOME,
+  failed: FLOW_FAILED_RESULT,
 };
 
 /** Return the closer an agent writes for a call closed for `reason`: the text the model reads and the `closed` word. */

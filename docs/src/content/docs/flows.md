@@ -65,6 +65,10 @@ Any other key is a load error, so a typo such as `nodez:` fails loudly. Keys tha
 `x-` are the exception: yian ignores them, so use them for notes or to hold YAML anchors.
 Run `yian check flow.yaml` to see a flow's load errors without running it.
 
+The paths a flow file names (`uses:` refs, `system.paths`, CODE files and `!include` files)
+resolve from the file's real folder, symlinks followed: a flow run through a symlink, or from a
+symlinked folder, uses the files beside its target, not beside the link.
+
 ```yaml
 id: weekly-report
 name: Weekly report
@@ -83,7 +87,9 @@ a node, a flow output or an agent variable can't start with `__`.
 ## Inputs
 
 Each input is a name and a [YAML tag](/types/#yaml-tags) that gives its type, with an optional
-default after it:
+default after it. The name is an identifier, as a [node id](#node-ids) is: ASCII letters, digits
+and `_`, not starting with a digit, so `${input.<name>}` can read it. Write `first_name`, not
+`first-name`; any other name is a load error, in a child flow too.
 
 ```yaml
 id: inputs-demo
@@ -271,6 +277,7 @@ node that reads a skipped one depends on how it reads it:
 | Reads it as a whole value, `${a.output}` | Skipped too |
 | Reads it inside text, `"got ${a.output}"` | Runs; the skipped value is empty text |
 | Reads it with a default, `${a.output :- "none"}` | Runs with the default |
+| Reads it where null fails, without a default: arithmetic, a builtin's argument, the right side of `in`, a comprehension's list (`${len(a.output)}`) | Load error |
 | Lists it in `depends_on:` | Skipped too |
 | Lists it in `runs_after:` | Runs |
 | Is the flow's `output:` | Reads null |

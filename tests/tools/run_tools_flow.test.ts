@@ -25,6 +25,7 @@ import { type FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { type AskRequest, registerTool, TOOL_REGISTRY, type ToolEntry } from "../../src/tools/registry.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import { barrier, NO_ENV, rejected, textReply } from "../helpers/run_state_fixtures.ts";
+import { YianRangeError, YianTypeError } from "../../src/typesys/errors.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-run-tools-flow-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -239,7 +240,7 @@ for (const [name, tools, message] of [
 
     const error = await rejected(run(GREETING_FLOW, {}, { log: path, tools: tools as never }));
 
-    expect(error).toEqual(new TypeError(message));
+    expect(error).toEqual(new YianTypeError(message));
     expect(existsSync(path)).toBe(false);
   });
 }
@@ -250,7 +251,7 @@ test("an ask without a run handler fails at run start", async () => {
   const error = await rejected(run(LOOP_ASK_FLOW, {}, { log: path }));
 
   expect(error).toEqual(
-    new RangeError(
+    new YianRangeError(
       "TOOL node 'loop/ask' names 'ask': no ask handler for this run; pass tools: {...registeredTools(), ask: handler} to runFlow or advance",
     ),
   );
@@ -668,7 +669,7 @@ for (const [tool, message] of [
 
     const error = await rejected(run(grantFlow(tool), {}, { log: path, tools: { ask: answerWithQuestion }, models: chats }));
 
-    expect(error).toEqual(new RangeError(message));
+    expect(error).toEqual(new YianRangeError(message));
     expect(existsSync(path)).toBe(false);
   });
 }

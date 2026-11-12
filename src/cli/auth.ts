@@ -35,7 +35,8 @@ import {
   validateHeaderValue,
   validateOrganization,
 } from "../llm_clients/connection_settings.ts";
-import { callCredentials, ConnectionSnapshot, embeddingModel } from "../llm_clients/connection.ts";
+import { callCredentials, checkLoginEndpoint, ConnectionSnapshot, embeddingModel } from "../llm_clients/connection.ts";
+import { OPENAI_API_ENDPOINT } from "../llm_clients/endpoints.ts";
 import { chatModelFromConfig, warnOnce } from "../llm_clients/factory.ts";
 import { listModels, ModelListError, timeoutMilliseconds } from "../llm_clients/model_list.ts";
 import { ValidationError } from "../llm_clients/provider_blocks.ts";
@@ -44,6 +45,7 @@ import { realScheduler, type Scheduler } from "../platform.ts";
 import { isRecord } from "../typesys/index.ts";
 import { parseJson } from "../typesys/json.ts";
 import { Terminal } from "./terminal.ts";
+import { showForTerminal } from "./sanitize.ts";
 import { type CliIo, forTerminal, type ParsedArgs, printJson, stopOnSignals, UsageError, type Writer } from "./utils.ts";
 
 const KINDS: Readonly<Record<string, string>> = { api_key: "api-key", subscription: "subscription", none: "none" };
@@ -515,6 +517,8 @@ async function setupOpenai(
   let credentials: OAuthCredentials | ApiKeyCredentials;
   let models: readonly string[];
   let choices: readonly string[];
+  // Where an API key's calls go, saved with it so a run elsewhere is refused.
+  let endpoint: string | null = null;
   if (method === "subscription") {
     login ??= await choose(
       "Subscription sign-in:",
@@ -549,8 +553,9 @@ async function setupOpenai(
     credentials = apiCredentials;
     try {
       // Runs with this login go to OPENAI_BASE_URL when it is set, so the key must go there too.
-      const endpoint = ctx.io.env("OPENAI_BASE_URL") || undefined;
-      models = await service.apiModels(apiCredentials, { organization, project, endpoint });
+      const set = ctx.io.env("OPENAI_BASE_URL") || undefined;
+      models = await service.apiModels(apiCredentials, { organization, project, endpoint: set });
+      endpoint = set ?? OPENAI_API_ENDPOINT;
     } catch (error) {
       // The messages are fixed today; scrubbed so no sent secret can reach output.
       if (!(error instanceof AuthError)) throw error;
@@ -565,7 +570,7 @@ async function setupOpenai(
     model = await pickModel(choices, ctx);
   }
   if (!models.includes(model)) throw new AuthError("The selected model is not available for this connection");
-  await store.save("openai", credentials, model, { organization, project, makeDefault });
+  await store.save("openai", credentials, model, { endpoint, organization, project, makeDefault });
   await ctx.io.stdout.write(`Saved OpenAI ${method} authentication with model ${model}\n`);
   return model;
 }
@@ -1067,12 +1072,17 @@ export function configErrors(layer: Readonly<Record<string, unknown>>): ConfigPr
   } catch (error) {
     if (error instanceof ValidationError) {
       const errors: ConfigProblem[] = [];
+      const seen = new Set<string>();
       for (const issue of error.issues) {
         const entry =
           issue.type === "extra_forbidden" && issue.loc.length === 1
             ? { field: null, message: EXTRA_FIELD }
             : { field: issue.loc.join(".") || null, message: issue.msg.replace(/^Value error, /, "") };
-        if (!errors.some((seen) => seen.field === entry.field && seen.message === entry.message)) errors.push(entry);
+        const key = JSON.stringify([entry.field, entry.message]);
+        if (!seen.has(key)) {
+          seen.add(key);
+          errors.push(entry);
+        }
       }
       return errors;
     }
@@ -1084,7 +1094,7 @@ export function configErrors(layer: Readonly<Record<string, unknown>>): ConfigPr
   // The model is a value, which this check's messages never show.
   const blockError =
     provider !== null && model !== null
-      ? responsesBlockError(provider, model, config.blockFor(provider), "the layer's model")
+      ? responsesBlockError(provider, model, config.api, config.blockFor(provider), "the layer's model")
       : null;
   return blockError === null ? [] : [{ field: provider, message: blockError }];
 }
@@ -1116,7 +1126,9 @@ export async function configCheck(command: ParsedArgs, io: CliIo): Promise<numbe
   } else if (errors.length === 0) {
     await io.stdout.write("ok\n");
   } else {
-    await io.stderr.write(errors.map(({ field, message }) => `${field ? `${field}: ${message}` : message}\n`).join(""));
+    // A field and its message can quote a layer's key: on a terminal each control character in it shows.
+    const line = ({ field, message }: ConfigProblem) => showForTerminal(field ? `${field}: ${message}` : message, io.stderr);
+    await io.stderr.write(errors.map((error) => `${line(error)}\n`).join(""));
   }
   return errors.length === 0 ? 0 : 1;
 }
@@ -1264,6 +1276,10 @@ export async function loginModels(
         } else if (provider !== "azure") {
           const variable = provider === "openai" ? "OPENAI_BASE_URL" : BASE_URL_ENV[provider];
           const baseUrl = (variable && io.env(variable)) || null;
+          // The key is listed only where its runs may send it.
+          if (provider === "openai" && selection.method === "api_key") {
+            checkLoginEndpoint(selection, baseUrl ?? OPENAI_API_ENDPOINT);
+          }
           const credentials =
             selection.method === "api_key"
               ? await store.credentials(provider, selection.credentialId)

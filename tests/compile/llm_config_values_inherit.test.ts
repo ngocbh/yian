@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { resolveRunLlm } from "../../src/compile/llm_cascade.ts";
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
+import { type Env, processEnv } from "../../src/defaults.ts";
 import { ValueTemplate } from "../../src/nodes/contracts.ts";
 
 import { loadErrorAsync } from "../helpers/declarations.ts";
@@ -30,7 +31,7 @@ nodes:
   pick:
     kind: agent
     prompt: Pick a model.
-    output: !str
+    output: str
     llm_config: {model: m0}
   c:
     kind: call
@@ -47,7 +48,10 @@ function defCall(options: { rootModel?: string; childLlm?: string } = {}): strin
 }
 
 /** Return the `LoadError` loading `text` as `f.yaml` rejects with. */
-function error(text: string, options: { searchPaths?: string[]; sourceLabel?: string } = {}): Promise<LoadError> {
+function error(
+  text: string,
+  options: { searchPaths?: string[]; sourceLabel?: string; env?: Env } = {},
+): Promise<LoadError> {
   return loadErrorAsync(loadFlow(text, { sourceLabel: "f.yaml", ...options }));
 }
 
@@ -78,7 +82,7 @@ nodes:
   pick:
     kind: agent
     prompt: Pick.
-    output: !str
+    output: str
     llm_config: {model: m0}
   c:
     kind: call
@@ -232,13 +236,13 @@ nodes:
   pick:
     kind: agent
     prompt: Pick a model.
-    output: !str
+    output: str
     llm_config: {model: m0}
   c:
     kind: call
     input: {}
     nodes:
-      a: {kind: agent, prompt: Go., output: !str}
+      a: {kind: agent, prompt: Go., output: str}
     output: \${a.output}
     depends_on: [pick]
 output: \${c.output}
@@ -256,7 +260,7 @@ nodes:
   pick:
     kind: agent
     prompt: Pick a model.
-    output: !str
+    output: str
     llm_config: {model: m0}
   repeat:
     kind: loop
@@ -267,7 +271,7 @@ nodes:
         kind: agent
         input: {t: '\${input.t}'}
         prompt: Go \${t}.
-        output: !str
+        output: str
     output: {t: '\${a.output}'}
     depends_on: [pick]
 output: \${repeat.output}
@@ -307,7 +311,7 @@ nodes:
   pick:
     kind: agent
     prompt: Pick a model.
-    output: !str
+    output: str
     llm_config: {model: m0}
   c:
     kind: call
@@ -342,21 +346,27 @@ function diamond(depth: number, leaf: string, rootLlm = ""): string {
   return text + calls("d1", "");
 }
 
+/**
+ * The environment the deep diamonds load under: 2^24 static paths expand past the flow node
+ * limit, which is raised so the cascade's own walk is what these tests time.
+ */
+const UNBOUNDED: Env = (name) => (name === "YIAN_MAX_FLOW_NODES" ? String(2 ** 40) : processEnv(name));
+
 test("a deep diamond of defs walks each def once", async () => {
   // Walking every static path would take 2^24 steps.
   const start = performance.now();
-  await loadFlow(diamond(24, "{kind: agent, prompt: Go., output: !str}"), { sourceLabel: "f.yaml" });
+  await loadFlow(diamond(24, "{kind: agent, prompt: Go., output: !str}"), { sourceLabel: "f.yaml", env: UNBOUNDED });
   expect(performance.now() - start).toBeLessThan(2000);
 });
 
 test("a deep diamond reports the first path that inherits a run-time value", async () => {
   const rootLlm = "llm_config: {model: '${pick.output}'}\n";
-  const text = diamond(24, "{kind: agent, prompt: Go., output: !str}", rootLlm).replace(
+  const text = diamond(24, "{kind: agent, prompt: Go., output: str}", rootLlm).replace(
     "nodes:\n  k0:",
-    "nodes:\n  pick: {kind: agent, prompt: Pick., output: !str, llm_config: {model: m0}}\n  k0:",
+    "nodes:\n  pick: {kind: agent, prompt: Pick., output: str, llm_config: {model: m0}}\n  k0:",
   );
   const start = performance.now();
-  const message = (await error(text)).diagnostic.message;
+  const message = (await error(text, { env: UNBOUNDED })).diagnostic.message;
   expect(performance.now() - start).toBeLessThan(2000);
   expect(message).toContain(`agent '${["k0", ...Array(22).fill("k0"), "a"].join("/")}'`);
 });

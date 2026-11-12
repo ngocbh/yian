@@ -78,7 +78,7 @@ console.log(result.status, result.output); // succeeded total: 7.5
 targets are found, in order, then the flow's `system.paths` joined onto the first entry; put the
 flow's own folder first),
 `sourceLabel` (the name errors show), `baseDir` (where `./file.ts:fn` references and
-[`!include`](/agents/#prompts-in-files) paths resolve), `codeRoot` (a folder every CODE file and
+[`!include`](/agents/#prompts-in-files) paths resolve, symlinks followed), `codeRoot` (a folder every CODE file and
 included file must stay inside), `env`, and `memoryTypes` (your own
 [memory types](/memory/#your-own-memory-types)). A broken flow rejects with
 `LoadError`, whose `diagnostic` points into the source. A CODE reference or `!include` outside
@@ -158,11 +158,13 @@ holds media fails if `media` is a symlink, another user's, or writable by others
 | Crashed or stopped | Replays the log, then runs the unfinished nodes again |
 | Waiting, with an answer or deadline in | Wakes those nodes and runs on |
 | Waiting, with nothing new | Writes nothing and returns `waiting` again |
+| Unstarted: the log ends before the run's inputs | Throws a `RangeError`; delete the log and start the run again |
 
 `advance` runs the flow the log recorded, not the file on disk, with the log's inputs, run id and
 model settings. Pass again what the log doesn't hold: `tools`, `skills`, `context`, the memories
 (`memory: { lessons: instance }`, for any unfinished run; see [Memory](/memory/#bind-a-memory)),
-and the API key (`apiKey`, `headers`) of a run started with `llmConfig.api_key`.
+and the API key (`apiKey`, `headers`) of a run started with `llmConfig.api_key`. Without that key,
+`advance` of an unfinished run whose agents use it rejects before writing anything.
 
 The log holds the `codeRoot` the flow was loaded under, so `advance` and the host calls below
 confine the recorded flow's CODE files to it without being told. Passing `codeRoot` is optional; one
@@ -276,11 +278,11 @@ A refused call appends nothing and throws `DeliveryRefused`, whose `reason` says
 | `not_started` | The run hasn't started yet |
 | `unknown_inbox` | The flow has no such inbox input |
 | `inbox_closed` | The inbox is closed |
-| `invalid_value` | The value doesn't fit the inbox's type or the call's output type |
+| `invalid_value` | The value doesn't fit the inbox's type or the call's output type, or nests deeper than `YIAN_MAX_VALUE_NESTING` (a message two levels less, since a take reads it inside `{events: [...]}`) |
 | `key_reused` | An earlier send used the send's `key` with another inbox or value |
 | `too_large` | The message is over `YIAN_MAX_EVENT_BYTES` (1 MiB by default) |
 | `unknown_call` | No open call has that id |
-| `not_host_call` | The id names a take or a sleep |
+| `not_host_call` | The id names a take, a sleep or an agent's [flow call](/agents/#flows-as-tools), which the run answers itself |
 | `call_settled` | The call already has an answer, timed out or was closed |
 
 ### Pending host calls
@@ -346,15 +348,18 @@ const closed = await cancel(log);              // the open host calls it closed
 `interrupt` stops the agents whose `steer_inbox:` is that inbox (see
 [Agents](/agents/#steering-and-interrupts)). Each one's reply is cut: an `Optional(...)` output
 succeeds with `null`, any other fails with `agent.interrupted`. A later `complete` of the open
-calls it closes is refused. An agent that starts reading the inbox
+calls it closes is refused, the calls of the agents' running [flow calls](/agents/#flows-as-tools)
+included, which end with it. An agent that starts reading the inbox
 soon after is stopped too, before its first model call. `interrupt` appends nothing
 (`seq: null`) when the run is waiting for the next message on the inbox, or is already stopping.
 Queued steers stay; `withdraw` takes them back.
 
 `cancel` ends the run with no output, and closes its open calls. If your process
-is running the run, its running nodes are stopped at once. To stop a run you may want to resume,
-abort its `signal` instead: the run records a stop, rejects with the signal's reason, and
-`advance` runs the stopped nodes again.
+is running the run, its running nodes are stopped at once. Otherwise `cancel` reads only the
+log's records, so it ends a run whose flow no longer loads (a CODE file it ran is gone) and
+needs no `flow`; a log that ends inside its run start is refused with `not_started`. To stop a
+run you may want to resume, abort its `signal` instead: the run records a stop, rejects with the
+signal's reason, and `advance` runs the stopped nodes again.
 
 ## Tools and skills
 
@@ -379,12 +384,12 @@ abort its `signal` instead: the run records a stop, rejects with the signal's re
 
 | Call | Gives |
 |---|---|
-| `inspectRun(log)` | Where a run stands, without the lock: `status` (`running`, `succeeded`, `failed`, `cancelled`, `waiting`, `stopped`, `crashed`), `inFlight`, `waits`, `ready`, `wakeAt`. Pass `{ flow }` (from `loadRecordedFlow`) for an exact `status` |
+| `inspectRun(log)` | Where a run stands, without the lock: `status` (`running`, `succeeded`, `failed`, `cancelled`, `unstarted`, `waiting`, `stopped`, `crashed`), `inFlight`, `waits`, `ready`, `wakeAt`. Pass `{ flow }` (from `loadRecordedFlow`) for an exact `status` |
 | `loadRecordedFlow(log)` | The flow the log recorded |
 | `iterRunRecords(log)` | The log's records, one by one, while another process may still be writing |
 | `foldRunLog(log)` | Each record with the value it wrote |
 | `agentCalls(log)`, `agentCall(log, { nodeId, n })` | The agents' model calls, and one call's full request and reply |
-| `updateRunIndex(runsDir)`, `readRunIndex(runsDir)` | An `index.sqlite` with one row per run folder, which you can delete and rebuild. An update rebuilds a damaged one with a warning, and a read gives `[]` until then |
+| `updateRunIndex(runsDir)`, `readRunIndex(runsDir)` | An `index.sqlite` with one row per run folder, which you can delete and rebuild. An update rebuilds a damaged one with a warning, and a read gives `[]` until then. An update with nothing new takes no write lock, and one that writes commits every 200 runs; `{ runIds }` updates only those runs, as when one ends. `readRunIndex(runsDir, { result: false })` leaves out each row's `result` |
 
 `inspectRun(log).wakeAt` is the earliest deadline of a waiting run: a host that keeps runs
 waiting calls `advance` then.

@@ -30,6 +30,7 @@ import { BasicAuth } from "../llm/auth.ts";
 import type { EmbeddingModel } from "../llm/embeddings.ts";
 import { scrubError } from "../llm/errors.ts";
 import type { Scheduler } from "../platform.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import { isList, isRecord, valueRepr } from "../typesys/values.ts";
 import { apiKeyEnvNames } from "./api_key_env.ts";
 import {
@@ -53,6 +54,7 @@ import {
   splitOllamaBaseUrl,
   SUPPORTED_LLM_PROVIDERS,
   validateBaseUrl,
+  validateEndpoint,
 } from "./config.ts";
 import { validateHeaderName, validateOrganization } from "./connection_settings.ts";
 import { OPENAI_API_ENDPOINT, OPENAI_COMPATIBLE, SUBSCRIPTION_ENDPOINT } from "./endpoints.ts";
@@ -416,7 +418,7 @@ export function restoreSelection(record: unknown): ConnectionSelection {
     return restore(record);
   } catch (error) {
     if (error instanceof RangeError) {
-      throw new RangeError(`Invalid recorded connection selection: ${error.message}`);
+      throw new YianRangeError(`Invalid recorded connection selection: ${error.message}`);
     }
     throw error;
   }
@@ -424,30 +426,30 @@ export function restoreSelection(record: unknown): ConnectionSelection {
 
 /** Validate and restore a selection record; `restoreSelection` prefixes errors. */
 function restore(record: unknown): ConnectionSelection {
-  if (!isRecord(record) || !hasExactKeys(record, SELECTION_FIELDS)) throw new RangeError("fields");
+  if (!isRecord(record) || !hasExactKeys(record, SELECTION_FIELDS)) throw new YianRangeError("fields");
   const defaults = record["defaults"];
   if (
     !isRecord(defaults) ||
     !Object.keys(defaults).every((key) => key === "provider" || key === "model") ||
     (Object.hasOwn(defaults, "model") && !Object.hasOwn(defaults, "provider"))
   ) {
-    throw new RangeError("defaults");
+    throw new YianRangeError("defaults");
   }
   for (const value of Object.values(defaults)) nonempty(value, "defaults");
   if (Object.hasOwn(defaults, "provider")) supported(defaults["provider"], "defaults");
   const models = record["provider_models"];
-  if (!isRecord(models)) throw new RangeError("provider_models");
+  if (!isRecord(models)) throw new YianRangeError("provider_models");
   for (const [name, model] of Object.entries(models)) {
     supported(name, "provider_models");
     nonempty(model, "provider_models");
   }
   const connections = record["connections"];
-  if (!isRecord(connections)) throw new RangeError("connections");
+  if (!isRecord(connections)) throw new YianRangeError("connections");
   for (const [name, connection] of Object.entries(connections)) {
     supported(name, "connections");
     validateConnection(connection, name);
   }
-  if (typeof record["stray_model"] !== "boolean") throw new RangeError("stray_model");
+  if (typeof record["stray_model"] !== "boolean") throw new YianRangeError("stray_model");
   const apiEndpoint = nonempty(record["api_endpoint"], "api_endpoint");
   const snapshot = new ConnectionSnapshot({
     defaults: defaults as Defaults,
@@ -467,7 +469,7 @@ function restore(record: unknown): ConnectionSelection {
     !Object.hasOwn(host, "provider") ||
     !Object.keys(host).every((key) => HOST_RECORD_FIELDS.has(key))
   ) {
-    throw new RangeError("host fields");
+    throw new YianRangeError("host fields");
   }
   const provider = supported(host["provider"], "host provider");
   const baseUrl = Object.hasOwn(host, "base_url") ? host["base_url"] : null;
@@ -475,12 +477,12 @@ function restore(record: unknown): ConnectionSelection {
     validateBaseUrl(baseUrl);
   } else if (provider === "azure") {
     // An Azure key names no resource of its own; the host always gives its endpoint.
-    throw new RangeError("an azure host key needs its base_url");
+    throw new YianRangeError("an azure host key needs its base_url");
   }
   const settings: Record<string, unknown> = {};
   for (const name of ["organization", "project"]) {
     if (Object.hasOwn(host, name)) {
-      if (provider !== "openai") throw new RangeError(`host ${name} applies only to provider openai`);
+      if (provider !== "openai") throw new YianRangeError(`host ${name} applies only to provider openai`);
       settings[name] = validateOrganization(host[name], name);
     }
   }
@@ -503,14 +505,14 @@ function hasExactKeys(value: object, keys: ReadonlySet<string>): boolean {
 
 /** Return `value` if it is a non-empty string; otherwise throw `RangeError` naming `where`. */
 function nonempty(value: unknown, where: string): string {
-  if (typeof value !== "string" || !value) throw new RangeError(where);
+  if (typeof value !== "string" || !value) throw new YianRangeError(where);
   return value;
 }
 
 /** Return `value` if it names a supported provider; otherwise throw `RangeError` naming `where`. */
 function supported(value: unknown, where: string): string {
   if (!isProvider(value)) {
-    throw new RangeError(`${where} names an unsupported provider`);
+    throw new YianRangeError(`${where} names an unsupported provider`);
   }
   return value;
 }
@@ -524,7 +526,7 @@ function supported(value: unknown, where: string): string {
 export function checkEmbeddingProvider(provider: string): void {
   if (OPENAI_COMPATIBLE.includes(provider)) return;
   const others = OPENAI_COMPATIBLE.filter((name) => name !== "openai").join(", ");
-  throw new RangeError(
+  throw new YianRangeError(
     `provider \`${provider}\` has no embeddings API yian supports; use openai or an OpenAI-compatible ` +
       `provider (${others})`,
   );
@@ -538,11 +540,11 @@ export function checkEmbeddingProvider(provider: string): void {
  */
 export function embeddingModel(text: string): EmbeddingModel {
   // A store records the model, and messages and `yian memory` print it.
-  if (/[\u0000-\u001f\u007f-\u009f]/.test(text)) throw new RangeError("provider/model can't hold control characters");
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(text)) throw new YianRangeError("provider/model can't hold control characters");
   const at = text.indexOf("/");
   const provider = text.slice(0, at).trim();
   const model = text.slice(at + 1).trim();
-  if (at === -1 || provider === "" || model === "") throw new RangeError("give it as provider/model");
+  if (at === -1 || provider === "" || model === "") throw new YianRangeError("give it as provider/model");
   checkEmbeddingProvider(provider);
   return { provider, model };
 }
@@ -567,13 +569,31 @@ export function defaultEmbedding(options: { env?: Env; store?: AuthStore } = {})
     const named =
       set === null ? `The saved default embedding model ${reprText(text)}` : `YIAN_DEFAULT_EMBEDDING=${reprText(text)}`;
     const fix = set === null ? "; run `yian config embedding provider/model`" : "";
-    throw new RangeError(`${named} is invalid: ${error.message}${fix}`);
+    throw new YianRangeError(`${named} is invalid: ${error.message}${fix}`);
   }
 }
 
 /** Return the nonsecret SHA-256 identity recorded for an environment API key. */
 export function keyIdentity(key: string): string {
   return createHash("sha256").update(key, "utf8").digest("hex");
+}
+
+/**
+ * Return the endpoint OpenAI API-key calls go to: a non-empty `OPENAI_BASE_URL`, else
+ * `OPENAI_API_ENDPOINT`.
+ *
+ * @throws {RangeError} `OPENAI_BASE_URL` isn't an allowed endpoint (`validateEndpoint`); the
+ *   message names the variable, never its value.
+ */
+export function openaiEndpoint(env: Env = processEnv): string {
+  const value = env("OPENAI_BASE_URL");
+  if (!value) return OPENAI_API_ENDPOINT;
+  try {
+    return validateEndpoint(value);
+  } catch (error) {
+    if (error instanceof RangeError) throw new YianRangeError(`Invalid OPENAI_BASE_URL: ${error.message}`);
+    throw error;
+  }
 }
 
 /**
@@ -596,10 +616,10 @@ export function connectionSnapshot(options: { env?: Env; store?: AuthStore } = {
   const store = options.store ?? new AuthStore(null, { env });
   const state = store.read();
   const envProvider = env("YIAN_DEFAULT_PROVIDER") || null;
-  const apiEndpoint = env("OPENAI_BASE_URL") || OPENAI_API_ENDPOINT;
+  const apiEndpoint = openaiEndpoint(env);
   const provider = (envProvider || state.defaultProvider || "").toLowerCase() || null;
   if (envProvider !== null && !isProvider(provider)) {
-    throw new RangeError(
+    throw new YianRangeError(
       `YIAN_DEFAULT_PROVIDER=${reprText(envProvider)} is not a supported provider; ` +
         `set it to one of: ${SUPPORTED_LLM_PROVIDERS.join(", ")}`,
     );
@@ -609,7 +629,7 @@ export function connectionSnapshot(options: { env?: Env; store?: AuthStore } = {
   for (const selection of state.selections) {
     if (!isProvider(selection.provider)) {
       if (envProvider === null && selection.provider === state.defaultProvider) {
-        throw new RangeError(
+        throw new YianRangeError(
           `The saved default provider ${reprText(selection.provider)} is not supported; ` +
             `run 'yian auth ${selection.provider} --remove'`,
         );
@@ -619,7 +639,7 @@ export function connectionSnapshot(options: { env?: Env; store?: AuthStore } = {
     }
     if (!isUsableLogin(selection)) {
       const name = selection.provider;
-      throw new RangeError(`The saved ${name} login is invalid; run 'yian auth ${name}' again`);
+      throw new YianRangeError(`The saved ${name} login is invalid; run 'yian auth ${name}' again`);
     }
     models[selection.provider] = selection.model;
     if (selection.provider === "openai") {
@@ -705,14 +725,14 @@ function selectionSettings(selection: ProviderSelection): Partial<Connection> {
 export function validateConnection(value: unknown, provider: unknown = "openai"): Connection {
   if (typeof provider !== "string" || !KEYED.has(provider)) {
     const name = isProvider(provider) ? `provider ${provider}` : "an unsupported provider";
-    throw new RangeError(`Internal connection metadata is not used for ${name}`);
+    throw new YianRangeError(`Internal connection metadata is not used for ${name}`);
   }
   if (
     !isRecord(value) ||
     ![...FIELDS].every((field) => Object.hasOwn(value, field)) ||
     !Object.keys(value).every((key) => FIELDS.has(key) || SETTINGS_FIELDS.has(key))
   ) {
-    throw new RangeError("Invalid internal connection metadata fields");
+    throw new YianRangeError("Invalid internal connection metadata fields");
   }
   checkConnectionSettings(value, provider);
   if (provider !== "openai") return validateKeyedConnection(value, provider);
@@ -721,47 +741,35 @@ export function validateConnection(value: unknown, provider: unknown = "openai")
     !["api_key", "subscription"].includes(method as string) ||
     !["store", "environment", "missing", "legacy_environment", "host"].includes(source as string)
   ) {
-    throw new RangeError("Invalid internal connection method or source");
+    throw new YianRangeError("Invalid internal connection method or source");
   }
-  if (typeof value["endpoint"] !== "string") throw new RangeError("Invalid internal connection endpoint");
-  if (!isHttpEndpoint(value["endpoint"])) {
-    throw new RangeError("Connection endpoint must be an HTTP URL without credentials, query, or fragment");
+  if (typeof value["endpoint"] !== "string") throw new YianRangeError("Invalid internal connection endpoint");
+  try {
+    validateEndpoint(value["endpoint"]);
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    throw new YianRangeError(
+      "Connection endpoint must be an https URL (http only for localhost, 127.0.0.1 and ::1) " +
+        "without credentials, query, or fragment",
+    );
   }
   const identity = value["credential_id"];
   const path = value["store_path"];
   if (source === "store") {
     if (typeof identity !== "string" || !identity || typeof path !== "string" || !isAbsolute(path)) {
-      throw new RangeError("Invalid stored connection identity");
+      throw new YianRangeError("Invalid stored connection identity");
     }
   } else if (
     path !== null ||
     (source === "environment" && (typeof identity !== "string" || [...identity].length !== 64)) ||
     (source !== "environment" && identity !== null)
   ) {
-    throw new RangeError("Invalid environment connection identity");
+    throw new YianRangeError("Invalid environment connection identity");
   }
   if (method === "subscription" && (source !== "store" || value["endpoint"] !== SUBSCRIPTION_ENDPOINT)) {
-    throw new RangeError("Invalid subscription connection routing");
+    throw new YianRangeError("Invalid subscription connection routing");
   }
   return structuredClone(value) as unknown as Connection;
-}
-
-/**
- * Whether `text` is an `http`/`https` URL of a host, without credentials, a query or a fragment.
- *
- * The scheme, `//` and a non-empty network location are checked on the text first, as
- * `urlsplit` reads them: `new URL` would also accept `https:host` and `https:///x`, which name no
- * host there.
- */
-function isHttpEndpoint(text: string): boolean {
-  if (!/^https?:\/\/[^/?#]/i.test(text)) return false;
-  let url: URL;
-  try {
-    url = new URL(text);
-  } catch {
-    return false;
-  }
-  return url.hostname !== "" && url.username === "" && url.password === "" && url.search === "" && url.hash === "";
 }
 
 /**
@@ -775,11 +783,11 @@ function isHttpEndpoint(text: string): boolean {
 function checkConnectionSettings(value: Readonly<Record<string, unknown>>, provider: string): void {
   if (!Object.keys(value).some((key) => SETTINGS_FIELDS.has(key))) return;
   if (value["source"] !== "store" || value["method"] !== "api_key") {
-    throw new RangeError("Internal connection settings are only for a saved API-key login");
+    throw new YianRangeError("Internal connection settings are only for a saved API-key login");
   }
   for (const field of ["organization", "project"]) {
     if (!Object.hasOwn(value, field)) continue;
-    if (provider !== "openai") throw new RangeError(`Internal connection ${field} is only for provider openai`);
+    if (provider !== "openai") throw new YianRangeError(`Internal connection ${field} is only for provider openai`);
     rethrowRange(() => validateOrganization(value[field], field), `Invalid internal connection ${field}`);
   }
   if (Object.hasOwn(value, "header_names")) {
@@ -792,7 +800,7 @@ function rethrowRange(check: () => unknown, message: string): void {
   try {
     check();
   } catch (error) {
-    if (error instanceof RangeError) throw new RangeError(message);
+    if (error instanceof RangeError) throw new YianRangeError(message);
     throw error;
   }
 }
@@ -804,24 +812,24 @@ function rethrowRange(check: () => unknown, message: string): void {
  */
 function validateKeyedConnection(value: Readonly<Record<string, unknown>>, provider: string): Connection {
   if (value["method"] !== "api_key" || (value["source"] !== "store" && value["source"] !== "environment")) {
-    throw new RangeError("Invalid internal connection method or source");
+    throw new YianRangeError("Invalid internal connection method or source");
   }
   const identity = value["credential_id"];
   const path = value["store_path"];
   const endpoint = value["endpoint"];
   if (value["source"] === "environment") {
     if (identity !== null || path !== null || endpoint !== null) {
-      throw new RangeError("Invalid environment connection identity");
+      throw new YianRangeError("Invalid environment connection identity");
     }
     return structuredClone(value) as unknown as Connection;
   }
   if (typeof identity !== "string" || !identity || typeof path !== "string" || !isAbsolute(path)) {
-    throw new RangeError("Invalid stored connection identity");
+    throw new YianRangeError("Invalid stored connection identity");
   }
   if (provider === "azure") {
     rethrowRange(() => validateBaseUrl(endpoint), "Invalid stored Azure connection endpoint");
   } else if (endpoint !== null) {
-    throw new RangeError("Invalid stored connection endpoint");
+    throw new YianRangeError("Invalid stored connection endpoint");
   }
   return structuredClone(value) as unknown as Connection;
 }
@@ -834,7 +842,7 @@ function validateKeyedConnection(value: Readonly<Record<string, unknown>>, provi
  * names that `provider` may be sent; errors name only the key.
  */
 export function validateHeaderNames(value: unknown, provider: unknown): string[] {
-  const invalid = new RangeError(`Invalid internal ${HEADER_NAMES_KEY}`);
+  const invalid = new YianRangeError(`Invalid internal ${HEADER_NAMES_KEY}`);
   if (!isList(value) || value.length === 0) throw invalid;
   // `for...of` visits a hole as `undefined`, so a sparse list fails too.
   for (const name of value) if (typeof name !== "string") throw invalid;
@@ -870,7 +878,7 @@ function checkHostHeaders(raw: Readonly<AgentConfig>, names: readonly string[]):
     const listed = [...expected.keys()].sort(compareCodeUnits).map((name) => expected.get(name)!);
     throw new AuthError(
       `This run's ${messageText(raw["provider"])} connection headers ${listed.join(", ")} came from the host's ` +
-        "llm_config.headers and are not recorded; pass headers to advance",
+        "llmConfig.headers and are not recorded; pass them to advance as headers, with apiKey",
     );
   }
   throw new AuthError(`llm_config.headers must have the header names this run recorded for the host key: ${diff}`);
@@ -884,8 +892,8 @@ function messageText(value: unknown): string {
 /** Say that this run's host key for `provider` is not recorded, and how to pass it again. */
 function hostKeyMissing(provider: unknown): string {
   return (
-    `This run's ${messageText(provider)} API key came from the host's llm_config.api_key and is not ` +
-    "recorded; pass apiKey to advance"
+    `This run's ${messageText(provider)} API key came from the host's llmConfig.api_key and is not ` +
+    "recorded; pass it to advance as apiKey"
   );
 }
 
@@ -955,11 +963,11 @@ export function splitModelConfig(config: Readonly<AgentConfig> | LLMConfig): [LL
   const headerNames = recordedNames === null ? null : validateHeaderNames(recordedNames, raw["provider"]);
   const marker = pop(raw, HOST_KEY_MARKER);
   if (marker !== undefined) {
-    if (marker !== true) throw new RangeError("Invalid internal host key marker");
+    if (marker !== true) throw new YianRangeError("Invalid internal host key marker");
     if (raw["api_key"] === undefined || raw["api_key"] === null) throw new AuthError(hostKeyMissing(raw["provider"]));
     checkHostHeaders(raw, headerNames ?? []);
   } else if (headerNames !== null) {
-    throw new RangeError(`Internal ${HEADER_NAMES_KEY} needs the host key marker`);
+    throw new YianRangeError(`Internal ${HEADER_NAMES_KEY} needs the host key marker`);
   }
   const metadata = pop(raw, "_connection") ?? null;
   const validated = new LLMConfig(raw);
@@ -973,7 +981,7 @@ export function splitModelConfig(config: Readonly<AgentConfig> | LLMConfig): [LL
     azureResourceEndpoint(validated.baseUrl) !== azureResourceEndpoint(connection.endpoint as string)
   ) {
     // The saved key belongs to one resource; never send it to another.
-    throw new RangeError("llm_config.base_url names another Azure resource than its saved login");
+    throw new YianRangeError("llm_config.base_url names another Azure resource than its saved login");
   }
   if (
     validated.provider === "openai" &&
@@ -981,7 +989,7 @@ export function splitModelConfig(config: Readonly<AgentConfig> | LLMConfig): [LL
     (connection.source !== "host" || connection.endpoint !== validated.baseUrl)
   ) {
     // A base_url serves only the host key; it must match the pinned route.
-    throw new RangeError("llm_config.base_url must match its host connection endpoint");
+    throw new YianRangeError("llm_config.base_url must match its host connection endpoint");
   }
   return [validated, connection];
 }
@@ -1001,12 +1009,13 @@ export function splitModelConfig(config: Readonly<AgentConfig> | LLMConfig): [LL
  */
 export function checkModelConfig(config: Readonly<AgentConfig> | LLMConfig): [LLMConfig, Connection | null] {
   const [validated, connection] = splitModelConfig(config);
-  if (validated.provider === "azure" && validated.baseUrl === null) throw new RangeError(AZURE_NEEDS_BASE_URL);
+  if (validated.provider === "azure" && validated.baseUrl === null) throw new YianRangeError(AZURE_NEEDS_BASE_URL);
   const { provider, model } = validated;
   if (provider !== null) {
     checkProviderBlock(validated, provider, connection);
-    const routed = model === null ? null : responsesBlockError(provider, model, validated.blockFor(provider));
-    if (routed !== null) throw new RangeError(routed);
+    const block = validated.blockFor(provider);
+    const routed = model === null ? null : responsesBlockError(provider, model, validated.api, block);
+    if (routed !== null) throw new YianRangeError(routed);
   }
   return [validated, connection];
 }
@@ -1061,7 +1070,7 @@ export function blockProblem(where: string, block: string, message: string, call
 function checkProviderBlock(validated: LLMConfig, provider: string, connection: Connection | null): void {
   const schema = blockSchema(provider, connection, validated.apiKey);
   const { issues } = checkBlock(schema, validated.blockFor(provider));
-  if (issues.length > 0) throw new RangeError(issues.map((issue) => blockErrorText(provider, issue)).join("; "));
+  if (issues.length > 0) throw new YianRangeError(issues.map((issue) => blockErrorText(provider, issue)).join("; "));
 }
 
 /** Return one block validation issue as text naming its key path, without the input. */
@@ -1108,7 +1117,7 @@ export function resolveModelConfig(
   const saved = provider !== null && Object.hasOwn(snapshot.providerModels, provider) ? snapshot.providerModels[provider] : null;
   const model = validated.model || saved || null;
   if (provider === null || model === null) {
-    throw new RangeError(missingModelMessage(null, provider, { strayModel: snapshot.strayModel }));
+    throw new YianRangeError(missingModelMessage(null, provider, { strayModel: snapshot.strayModel }));
   }
   raw["provider"] = provider;
   raw["model"] = model;
@@ -1168,19 +1177,53 @@ export function legacyConnectionMap(
 }
 
 /**
+ * Check that the saved OpenAI API-key login `selection` was made for `endpoint`, where a call with
+ * its key goes, so a key checked against a gateway is never sent to OpenAI's API, or the reverse.
+ * Endpoints compare by scheme, host, port and path, trailing slashes aside.
+ *
+ * @throws {AuthError} The login was made for another endpoint, or doesn't record one (it was
+ *   saved before logins did).
+ */
+export function checkLoginEndpoint(selection: ProviderSelection, endpoint: string): void {
+  if (selection.endpoint === null) {
+    throw new AuthError(
+      "The saved OpenAI API-key login doesn't record its endpoint; run 'yian auth openai' again and start a new run",
+    );
+  }
+  const key = (url: string) => {
+    try {
+      const { origin, pathname } = new URL(url);
+      return origin + pathname.replace(/\/+$/, "");
+    } catch {
+      return null;
+    }
+  };
+  const saved = key(selection.endpoint);
+  if (saved === null || saved !== key(endpoint)) {
+    throw new AuthError(
+      "The saved OpenAI API-key login was made for another endpoint than this run's OPENAI_BASE_URL " +
+        "(unset is OpenAI's API); set OPENAI_BASE_URL to the endpoint 'yian auth' lists for it, or run " +
+        "'yian auth openai' again, and start a new run",
+    );
+  }
+}
+
+/**
  * Resolve fresh credentials while enforcing the recorded connection identity.
  *
  * A `store` connection resolves the saved login it was pinned to, so a later login or removal
- * fails instead of switching accounts; an API key comes with the header values saved beside it.
+ * fails instead of switching accounts; an API key comes with the header values saved beside it,
+ * and an OpenAI one only for the endpoint its login was made for (`checkLoginEndpoint`).
  * `refresh` renews an expiring OpenAI subscription and defaults to `OpenAIAuth`'s; other providers
  * get none. OpenAI also resolves its environment key, checking that it is the recorded one. Another
  * provider's `environment` connection resolves nothing here: its client reads the key variable
  * itself. `provider` is the provider of the config that carries `connection`; `signal` and
  * `scheduler` go to the store and the default refresh.
  *
- * Rejects with `AuthError` if the pinned login changed, was removed, or cannot be read, or an
- * OpenAI key is missing or changed; with `RangeError` if the metadata is invalid for `provider`,
- * or it is a non-OpenAI `environment` connection.
+ * Rejects with `AuthError` if the pinned login changed, was removed, or cannot be read, a saved
+ * OpenAI key's login was made for another endpoint, or an OpenAI key is missing or changed; with
+ * `RangeError` if the metadata is invalid for `provider`, or it is a non-OpenAI `environment`
+ * connection.
  */
 export async function connectionCredentials(
   connection: unknown,
@@ -1196,6 +1239,7 @@ export async function connectionCredentials(
   const checked = validateConnection(connection, provider);
   if (checked.source === "store") {
     let credentials: Credentials;
+    let login: ProviderSelection | null = null;
     try {
       // `validateConnection` requires a saved login's credential id and absolute store path.
       const store = new AuthStore(checked.store_path, { env, signal, scheduler });
@@ -1205,6 +1249,11 @@ export async function connectionCredentials(
             ? (refresh ?? ((current) => new OpenAIAuth({ signal, scheduler }).refresh(current)))
             : undefined,
       });
+      if (provider === "openai" && checked.method === "api_key") {
+        // The pinned login's endpoint never changes; a login saved since is another one.
+        login = store.selection(provider);
+        if (login?.credentialId !== checked.credential_id) throw new AuthError("The saved connection changed");
+      }
     } catch (error) {
       // A storage error names the file and its fix; logging in again would read the same file.
       if (error instanceof AuthError && !(error instanceof StorageError)) {
@@ -1218,9 +1267,11 @@ export async function connectionCredentials(
     if (credentials.method !== checked.method) {
       throw new AuthError(`The saved connection method changed; run 'yian auth ${provider}' and start a new run`);
     }
+    // `validateConnection` requires an OpenAI connection's endpoint.
+    if (login !== null) checkLoginEndpoint(login, checked.endpoint!);
     return credentials;
   }
-  if (provider !== "openai") throw new RangeError(`An environment connection for ${provider} is read by its client`);
+  if (provider !== "openai") throw new YianRangeError(`An environment connection for ${provider} is read by its client`);
   if (checked.source === "host") throw new AuthError(hostKeyMissing("openai"));
   if (checked.source === "missing") {
     throw new AuthError(

@@ -38,6 +38,7 @@ import { loadConformanceFlow } from "../helpers/declarations.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import { drive, engine, graph, rejected } from "../helpers/run_state_fixtures.ts";
 import { testNode } from "../helpers/test_node.ts";
+import { YianRangeError, YianTypeError } from "../../src/typesys/errors.ts";
 
 /** Run a CODE node `n` with `code` on the bound `inputs` and return its result's value. */
 async function run(code: string, inputs: Record<string, unknown> = {}): Promise<unknown> {
@@ -377,7 +378,7 @@ test("a reference returning undefined rejects with the no-value error", async ()
 test("a missing export rejects with a TypeError, not a CodeError", async () => {
   const error = await rejected(new CodeNode("m", { code: "./compose_codefns.ts:nope", baseDir: FIXTURES }).run({}));
 
-  expect((error as Error).constructor).toBe(TypeError);
+  expect((error as Error).constructor).toBe(YianTypeError);
   expect((error as Error).message).toBe("'./compose_codefns.ts' exports no function 'nope'");
 });
 
@@ -1009,7 +1010,7 @@ test("the load check refuses a module:function reference", async () => {
   for (const code of ["pkg.mod:fn", "mymod:myfunc"]) {
     const error = await rejected(new CodeNode("p", { code }).check());
 
-    expect((error as Error).constructor).toBe(RangeError);
+    expect((error as Error).constructor).toBe(YianRangeError);
     expect((error as Error).message).toBe(
       `\`code:\` value '${code}' looks like a Python \`module:function\` reference; use \`./file.ts:fn\``,
     );
@@ -1020,7 +1021,7 @@ test("the load check refuses a value that looks like a file reference but breaks
   for (const code of ["./h.mts:fn", "./h x.ts:fn", "/abs/h.ts:fn", "h.ts:fn", "lib/h.py:fn"]) {
     const error = await rejected(new CodeNode("p", { code }).check());
 
-    expect((error as Error).constructor).toBe(RangeError);
+    expect((error as Error).constructor).toBe(YianRangeError);
     expect((error as Error).message).toBe(
       `\`code:\` value '${code}' looks like a file reference, but a reference is a relative \`./\` or \`../\` ` +
         "path to a `.ts`, `.js` or `.mjs` file, with no whitespace, then `:` and an export name, like `./file.ts:fn`",
@@ -1044,7 +1045,7 @@ test("the load check still builds a body that ends like a reference", async () =
 test("the load check refuses a reference to a missing file", async () => {
   const error = await rejected(new CodeNode("m", { code: "./missing.ts:fn", baseDir: helpers }).check());
 
-  expect((error as Error).constructor).toBe(RangeError);
+  expect((error as Error).constructor).toBe(YianRangeError);
   expect((error as Error).message).toBe(`\`code:\` file './missing.ts' does not exist in '${helpers}'`);
 });
 
@@ -1080,7 +1081,7 @@ test("the load check refuses a ../ reference outside codeRoot", async () => {
 
   const error = await rejected(node.check({ codeRoot }));
 
-  expect((error as Error).constructor).toBe(RangeError);
+  expect((error as Error).constructor).toBe(YianRangeError);
   expect((error as Error).message).toBe("`code:` reference '../out/h.ts:fn' is outside the code root");
 });
 
@@ -1090,7 +1091,7 @@ test("the load check refuses a missing file outside codeRoot as outside, the sam
 
   const error = await rejected(node.check({ codeRoot }));
 
-  expect((error as Error).constructor).toBe(RangeError);
+  expect((error as Error).constructor).toBe(YianRangeError);
   expect((error as Error).message).toBe("`code:` reference '../out/missing.ts:fn' is outside the code root");
   const under = new CodeNode("r", { code: "../nowhere/deep/h.ts:fn", baseDir: join(confined, "root") });
   expect((await rejected(under.check({ codeRoot })) as Error).message).toBe(
@@ -1127,7 +1128,7 @@ test("the load check under codeRoot refuses a symlink loop outside it as outside
 
   const error = await rejected(node.check({ codeRoot }));
 
-  expect((error as Error).constructor).toBe(RangeError);
+  expect((error as Error).constructor).toBe(YianRangeError);
   expect((error as Error).message).toBe("`code:` reference '../out/loop.ts:fn' is outside the code root");
 });
 
@@ -1137,7 +1138,7 @@ test("the load check under codeRoot says a symlink loop inside it can't be resol
 
   const error = await rejected(node.check({ codeRoot }));
 
-  expect((error as Error).constructor).toBe(RangeError);
+  expect((error as Error).constructor).toBe(YianRangeError);
   expect((error as Error).message).toBe("`code:` reference './loop.ts:fn' can't be resolved");
 });
 
@@ -1147,7 +1148,7 @@ test("the load check refuses a symlink pointing outside codeRoot", async () => {
 
   const error = await rejected(link.check({ codeRoot }));
 
-  expect((error as Error).constructor).toBe(RangeError);
+  expect((error as Error).constructor).toBe(YianRangeError);
   expect((error as Error).message).toBe("`code:` reference './link.ts:fn' is outside the code root");
   const dir = new CodeNode("r", { code: "./lib/h.ts:fn", baseDir: join(confined, "root") });
   expect((await rejected(dir.check({ codeRoot })) as Error).message).toBe(

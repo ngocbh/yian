@@ -67,12 +67,18 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MAX_YAML_NESTING` | limit | 200 | 1 to 200 (can only be lowered) | Deepest nesting of a YAML document yian reads |
 | `YIAN_MAX_YAML_NODES` | limit | 100,000 | 1 or more | Most nodes a YAML document yian reads may expand to, counting each alias as a copy |
 | `YIAN_MAX_CALL_NESTING` | limit | 50 | 1 to 50 (can only be lowered) | Deepest chain of call, map, and loop bodies a flow may nest, and of uses: files it may import |
+| `YIAN_MAX_FLOW_NODES` | limit | 100,000 | 1 or more | Most nodes a loaded flow may expand to, counting each call of a def or uses: flow as a copy |
 | `YIAN_MAX_TOTAL_NODES` | limit | 10,000 | 1 or more | Most live nodes a run's graph may grow to |
 | `YIAN_MAX_SKIP_WORLDS` | limit | 10,000 | 1 or more | Most branch combinations the skip check explores before giving up |
+| `YIAN_MAX_COMPREHENSION_ITEMS` | limit | 1,000,000 | 1 or more | Most items the comprehensions of one expression may bind, counting every `for` clause |
+| `YIAN_MAX_INT_DIGITS` | limit | 4,300 | 640 or more | Most decimal digits an int that an operator or a builtin gives may have |
+| `YIAN_MAX_JSON_INDENT` | limit | 10 | 2 or more | Largest indent `render_as_json` takes |
+| `YIAN_MAX_TEXT_CHARS` | limit | 10,000,000 | 1 or more | Most characters a text that an operator or a builtin gives may have |
 | `YIAN_MAX_SHOWN_VALUE_CHARS` | limit | 200 | 2 or more | Longest rendering of a value or key an error message shows |
 | `YIAN_MAX_FAILURE_CHARS` | limit | 10,000 | 1 or more | Longest message or traceback a failure records; a longer one is cut and says how much was cut |
 | `YIAN_AGENT_RETRIES` | setting | 2 | 0 or more | Extra attempts an AGENT gets to correct an invalid structured reply when the node sets none |
 | `YIAN_AGENT_MAX_TOOL_ITERATIONS` | setting | 50 | 1 or more, or -1 for no cap | AGENT tool-call turns when the node sets none; -1 is no cap |
+| `YIAN_MAX_FLOW_RESULT_CHARS` | setting | 20,000 | 1 or more | Most characters of a flow tool's output an AGENT's model reads; a longer one is cut |
 | `YIAN_TOOL_RETRIES` | setting | 0 | 0 or more | Extra attempts a TOOL node gets after a failed tool call when the node sets none |
 | `YIAN_TOOL_RETRY_DELAY_SECONDS` | setting | 1 | 0 or more | Base wait in seconds before a TOOL node's first retry; each later wait doubles, up to the cap |
 | `YIAN_TOOL_RETRY_MAX_DELAY_SECONDS` | setting | 30 | 0 or more | Longest wait in seconds before a TOOL node retries a failed tool call |
@@ -109,6 +115,7 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MAX_MODEL_EVENT_BYTES` | input cap | 16,777,216 | 1 or more | Largest event read from a model's reply stream: an SSE event's data or one NDJSON line |
 | `YIAN_MAX_MODEL_RESPONSE_BYTES` | input cap | 67,108,864 | 1 or more | Largest reply body read from one model call |
 | `YIAN_MAX_EMBEDDING_REPLY_BYTES` | input cap | 33,554,432 | 1 or more | Largest reply read from an embeddings request |
+| `YIAN_MAX_RECEIVED_JSON_VALUES` | input cap | 1,000,000 | 1 or more | Most values in one JSON text from a provider or MCP server: an event, a line, a reply or an MCP message |
 | `YIAN_MAX_EVENT_BYTES` | input cap | 1,048,576 | 1 or more | Largest event sent to a run's inbox, host call's pending step or completed answer, in run-log JSON bytes |
 | `YIAN_MAX_BASE_URL_CHARS` | input cap | 2,048 | 1 or more | Longest provider base URL accepted |
 | `YIAN_MAX_CONNECTION_HEADERS` | input cap | 32 | 1 or more | Most extra request headers a provider connection may send |
@@ -126,6 +133,9 @@ An entry whose valid values say "can only be lowered" has its default as its max
 - TOOL retries wait `YIAN_TOOL_RETRY_DELAY_SECONDS`, then twice that, and so on, up to
   `YIAN_TOOL_RETRY_MAX_DELAY_SECONDS`. Each wait is picked at random between half and all of its
   step.
+- A JSON text from a provider or MCP server past `YIAN_MAX_RECEIVED_JSON_VALUES`, or nested more
+  than 512 levels, is refused as it is read. A model call then fails with a `protocol` error and is
+  not retried; an MCP server over stdio is closed, and its call fails naming the bound.
 
 ## Environment variables
 
@@ -186,6 +196,7 @@ log prints the same failure, so "retry" below means a new run.
 | `loop.max_exceeded` | A `while:` or `until:` LOOP with `max: M` would start its body run M+1 | Raise `max:`, or set `on_max_exceeded: output` to end the loop with its last record |
 | `agent.output_invalid` | An AGENT's structured reply still breaks its `output:` type after its `retries:` | Loosen the type, or improve the prompt |
 | `agent.interrupted` | An AGENT was interrupted and its output type doesn't allow null | Declare `output: !Optional(...)` and route on null |
+| `agent.output_truncated` | The provider cut an AGENT's reply off at the output token limit: an answer with no call whose arguments parsed, or the last invalid structured reply | Raise the limit the message names, or ask for a shorter answer |
 | `tool.timeout` | An `ask` timed out with no answer and its output type doesn't allow null | Declare `output: !Optional(...)`, or give it longer |
 | `provider.auth` | The provider refused the agent's credentials, or yian couldn't supply them | Fix the login (`yian auth <provider>`) or the key |
 | `provider.auth_storage` | The saved-login file, its folder or its lock can't be used (its mode, owner or contents) | Fix the file the message names; logging in again reads the same file |
@@ -226,12 +237,12 @@ A run log is a JSON Lines file: one record per line, appended and never rewritte
 compact JSON with its keys sorted:
 
 ```json
-{"at":"2026-10-27T08:47:40.404Z","kind":"node_started","payload":{"node_id":"greet"},"run_id":"31fc75ac4c0640de867d47f59f928ea3","schema":30,"seq":8}
+{"at":"2026-10-27T08:47:40.404Z","kind":"node_started","payload":{"node_id":"greet"},"run_id":"31fc75ac4c0640de867d47f59f928ea3","schema":32,"seq":8}
 ```
 
 | Key | What it holds |
 |---|---|
-| `schema` | The record format, `30`. yian reads only this one. A log of schema 10 to 29 reads as `run log schema N predates schema 30 and is not supported`, any other as `unsupported run-record schema: N` |
+| `schema` | The record format, `32`. yian reads only this one. A log of schema 10 to 31 reads as `run log schema N predates schema 32 and is not supported`, any other as `unsupported run-record schema: N` |
 | `run_id` | The run's id |
 | `seq` | The record's place in the log, from 0 |
 | `at` | When the record was appended, in UTC with milliseconds. Use `seq`, not `at`, for order |
@@ -253,8 +264,8 @@ compact JSON with its keys sorted:
 | `pool_commit` | A value written to the run: an input, a node's output, or a message an inbox received |
 | `node_succeeded` | A node succeeded, naming the `pool_commit` that holds its output |
 | `node_routed` | A node, such as a CASE, chose a route |
-| `node_expanded` | A CALL, MAP or LOOP added its child nodes to the graph |
-| `node_failed` | A node failed, with its failure. The run is over |
+| `node_expanded` | A CALL, MAP or LOOP added its child nodes to the graph, or an AGENT's flow call (`call_id`) its flow's |
+| `node_failed` | A node failed, with its failure. The run is over, unless the node is inside an AGENT's flow call (`call_id`, `scope`): that call fails and its scope's other nodes end |
 | `inbox_closed` | An inbox was closed; it takes no more messages |
 | `inbox_withdrawn` | Messages nobody had read yet were taken back from an inbox |
 | `interrupted` | The agents reading an inbox were interrupted |

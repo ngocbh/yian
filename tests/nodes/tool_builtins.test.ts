@@ -167,6 +167,8 @@ describe("take and sleep", () => {
       closedReason: null,
       result: null,
       deadline: null,
+      scope: null,
+      failure: null,
     };
     const { caps } = capsWith([held]);
     expect(await take.forward({ from: new InboxRef("m") }, caps)).toEqual(
@@ -188,7 +190,7 @@ function sendTool(ids: string[], answer: () => unknown = () => pending()): Funct
 /** One held call of node `send` (or `node`), open unless `fields` says otherwise. */
 function heldCall(fields: Partial<CallView> = {}): CallView {
   const callId = fields.callId ?? "r1/send";
-  return { callId, tool: "codex_send", resultKey: callId, state: "open", closedReason: null, result: null, deadline: null, ...fields };
+  return { callId, tool: "codex_send", resultKey: callId, state: "open", closedReason: null, result: null, deadline: null, scope: null, failure: null, ...fields };
 }
 
 const APPROVAL = new Type({
@@ -313,6 +315,22 @@ describe("host calls", () => {
       call_id: "r1/send",
       output: { kind: "int", value: 5n },
     });
+  });
+
+  test("waitResultStep refuses an answer nested past the value limit, however deep", () => {
+    const nest = (levels: number) => {
+      let value: unknown = 1;
+      for (let i = 0; i < levels; i++) value = [value];
+      return value;
+    };
+    const free = new ToolNode("send", { toolId: "codex_send" });
+    const view = heldCall();
+    expect(free.waitResultStep(view, { output: nest(100) })).toMatchObject({ kind: "tool_result" });
+    for (const levels of [101, 200_000]) {
+      expect(() => free.waitResultStep(view, { output: nest(levels) })).toThrow(
+        `complete('r1/send') output at ${"[0]".repeat(100)}: value nests deeper than 100 levels`,
+      );
+    }
   });
 });
 

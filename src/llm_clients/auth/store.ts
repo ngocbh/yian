@@ -18,9 +18,11 @@ import {
   sqliteErrorCode,
   waitForLock,
 } from "../../platform.ts";
+import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import { isRecord } from "../../typesys/index.ts";
 import { parseJson } from "../../typesys/json.ts";
 import { SUPPORTED_LLM_PROVIDERS } from "../config.ts";
+import { OPENAI_API_ENDPOINT } from "../endpoints.ts";
 import {
   ApiKeyCredentials,
   AuthError,
@@ -269,13 +271,13 @@ function checkPrivate(fd: number, path: string, part: "file" | "folder"): fs.Big
  */
 function loadCredentials(method: unknown, value: unknown): Credentials | null {
   if (method === "none") {
-    if (value !== null) throw new TypeError("credentials");
+    if (value !== null) throw new YianTypeError("credentials");
     return null;
   }
-  if (!isRecord(value)) throw new TypeError("credentials");
+  if (!isRecord(value)) throw new YianTypeError("credentials");
   if (method !== "api_key") {
     const optional = Object.hasOwn(value, "residency") ? ["residency"] : [];
-    if (!hasKeys(value, [...OAUTH_KEYS, ...optional])) throw new TypeError("credentials");
+    if (!hasKeys(value, [...OAUTH_KEYS, ...optional])) throw new YianTypeError("credentials");
     const expiresAt = value["expires_at"];
     return new OAuthCredentials({
       accessToken: value["access_token"],
@@ -286,10 +288,10 @@ function loadCredentials(method: unknown, value: unknown): Credentials | null {
     });
   }
   const hasHeaders = Object.hasOwn(value, "headers");
-  if (!hasKeys(value, hasHeaders ? ["api_key", "headers"] : ["api_key"])) throw new TypeError("credentials");
+  if (!hasKeys(value, hasHeaders ? ["api_key", "headers"] : ["api_key"])) throw new YianTypeError("credentials");
   const headers = hasHeaders ? value["headers"] : {};
   // The writer omits empty headers, so a stored empty mapping is not canonical.
-  if (!isRecord(headers) || (hasHeaders && Object.keys(headers).length === 0)) throw new TypeError("headers");
+  if (!isRecord(headers) || (hasHeaders && Object.keys(headers).length === 0)) throw new YianTypeError("headers");
   return new ApiKeyCredentials(value["api_key"], headers);
 }
 
@@ -332,22 +334,22 @@ function spacedJson(value: unknown): string {
 /** Return the provider choice, saved logins and embedding model `text` holds; throw if it is not a v1 store. */
 function parseStore(text: string): Saved {
   const value = parseJson(text, "plain");
-  if (!isRecord(value)) throw new TypeError("store");
+  if (!isRecord(value)) throw new YianTypeError("store");
   const embedding = value[EMBEDDING_KEY];
   if (!hasKeys(value, embedding === undefined ? STORE_KEYS : [...STORE_KEYS, EMBEDDING_KEY])) {
-    throw new TypeError("store");
+    throw new YianTypeError("store");
   }
-  if (embedding !== undefined && typeof embedding !== "string") throw new TypeError(EMBEDDING_KEY);
+  if (embedding !== undefined && typeof embedding !== "string") throw new YianTypeError(EMBEDDING_KEY);
   const providerEntries = value["providers"];
-  if (value["version"] !== 1n || !isRecord(providerEntries)) throw new TypeError("store");
+  if (value["version"] !== 1n || !isRecord(providerEntries)) throw new YianTypeError("store");
   const providers: Providers = new Map();
   for (const [provider, entry] of Object.entries(providerEntries)) {
-    if (!isRecord(entry)) throw new TypeError("entry");
+    if (!isRecord(entry)) throw new YianTypeError("entry");
     const optional = Object.keys(entry).filter((key) => OPTIONAL_ENTRY_KEYS.has(key));
-    if (!hasKeys(entry, [...ENTRY_KEYS, ...optional])) throw new TypeError("entry");
+    if (!hasKeys(entry, [...ENTRY_KEYS, ...optional])) throw new YianTypeError("entry");
     // The writer omits unset ids, so a stored null is not canonical. A null endpoint stays
     // readable, as stores before these ids allowed it.
-    if (entry["organization"] === null || entry["project"] === null) throw new TypeError("entry");
+    if (entry["organization"] === null || entry["project"] === null) throw new YianTypeError("entry");
     const credentials = loadCredentials(entry["method"], entry["credentials"]);
     const selection = new ProviderSelection({
       provider,
@@ -363,7 +365,7 @@ function parseStore(text: string): Saved {
   }
   const fallback = value["default_provider"];
   if (fallback !== null && (typeof fallback !== "string" || !providers.has(fallback))) {
-    throw new TypeError("default_provider");
+    throw new YianTypeError("default_provider");
   }
   return [fallback, providers, embedding ?? null];
 }
@@ -419,7 +421,7 @@ export class AuthStore {
       typeof refreshMarginMs !== "number" ||
       !(refreshMarginMs >= 0 && refreshMarginMs <= Number.MAX_VALUE)
     ) {
-      throw new RangeError("Invalid credential-store timing");
+      throw new YianRangeError("Invalid credential-store timing");
     }
   }
 
@@ -646,8 +648,9 @@ export class AuthStore {
    * The new login replaces the old one with its settings: settings not given here are not kept.
    * `credentials` is the validated credential (an API key's headers are saved with it), or `null`
    * for a provider that needs none; `endpoint` is the provider's base URL, such as an Azure
-   * resource; `organization` and `project` are OpenAI ids, for an `openai` API key only;
-   * `makeDefault` (default `true`) makes the provider the default.
+   * resource, or the endpoint an `openai` API key is for (default OpenAI's API); `organization`
+   * and `project` are OpenAI ids, for an `openai` API key only; `makeDefault` (default `true`)
+   * makes the provider the default.
    *
    * A login saved again unchanged keeps its credential id, so runs pinned to it go on: same method,
    * key, header names and values, endpoint, organization and project, whatever the model. Any
@@ -667,7 +670,9 @@ export class AuthStore {
       makeDefault?: boolean;
     } = {},
   ): Promise<ProviderSelection> {
-    const { endpoint = null, organization = null, project = null, makeDefault = true } = options;
+    const { organization = null, project = null, makeDefault = true } = options;
+    const openaiKey = provider === "openai" && credentials instanceof ApiKeyCredentials;
+    const endpoint = options.endpoint === undefined ? (openaiKey ? OPENAI_API_ENDPOINT : null) : options.endpoint;
     // Exactly these classes, not subclasses: a subclass could change what is stored.
     if (
       credentials !== null &&

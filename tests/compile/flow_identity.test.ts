@@ -40,6 +40,7 @@ import { advance, runFlow } from "../../src/run.ts";
 import { FileRef, Type, typeFor, ValueKind } from "../../src/typesys/index.ts";
 import { canonicalJson, type JsonObject, type JsonValue } from "../../src/typesys/json.ts";
 import { editRecordedFlow } from "../helpers/run_state_fixtures.ts";
+import { thrownClass } from "../helpers/own_errors.ts";
 
 const HEX = /^[0-9a-f]{64}$/;
 
@@ -190,7 +191,7 @@ function expectError(fn: () => unknown, cls: typeof Error, message: string): voi
     caught = error;
   }
   expect(caught).toBeInstanceOf(cls);
-  expect((caught as Error).constructor).toBe(cls);
+  expect((caught as Error).constructor).toBe(thrownClass(cls));
   expect((caught as Error).message).toBe(message);
 }
 

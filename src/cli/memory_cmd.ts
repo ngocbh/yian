@@ -33,6 +33,7 @@ import { VectorDBMemory } from "../memory/vectordb.ts";
 import { homeDir, isSystemError, withWarnings } from "../platform.ts";
 import { readRunIndex, type RunIndexRow, updateRunIndex } from "../run.ts";
 import { isReportedToolError } from "../tools/errors.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import { type JsonObject, logJson, parseJson } from "../typesys/json.ts";
 import { isRecord } from "../typesys/index.ts";
 import { isMemoryType } from "../typesys/values.ts";
@@ -555,7 +556,7 @@ const EDITOR_SIGNALS = ["SIGINT", "SIGQUIT"] as const;
  */
 async function runEditor(env: Env, path: string, json: boolean): Promise<void> {
   const editor = env("EDITOR");
-  if (!editor) throw new RangeError("set $EDITOR to the editor to use");
+  if (!editor) throw new YianRangeError("set $EDITOR to the editor to use");
   const ignore = (): void => {};
   for (const signal of EDITOR_SIGNALS) process.on(signal, ignore);
   try {
@@ -563,10 +564,10 @@ async function runEditor(env: Env, path: string, json: boolean): Promise<void> {
       const command = ["-c", `${editor} "$1"`, "editor", path];
       const stdio = ["inherit", json ? 2 : "inherit", "inherit"] as const;
       const child = spawn("/bin/sh", command, { stdio: [...stdio], env: childEnv(env) });
-      child.on("error", (error) => reject(new RangeError(`the editor didn't start: ${error.message}`)));
+      child.on("error", (error) => reject(new YianRangeError(`the editor didn't start: ${error.message}`)));
       child.on("exit", (code, signal) => {
         if (code === 0) resolve();
-        else reject(new RangeError(`the editor exited with ${signal ?? `code ${code}`}; nothing was changed`));
+        else reject(new YianRangeError(`the editor exited with ${signal ?? `code ${code}`}; nothing was changed`));
       });
     });
   } finally {

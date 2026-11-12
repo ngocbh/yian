@@ -12,12 +12,13 @@ import { isIPv6 } from "node:net";
 import { current } from "../defaults.ts";
 import { reprText } from "../diagnostics.ts";
 import { LOOPBACK_HOSTS } from "../platform.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import { isRecord } from "../typesys/index.ts";
 import type { StructuredOutput } from "../llm/events.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { fromHost as hostValue } from "../typesys/values.ts";
 import { validateHeaderName, validateHeaders, validateOrganization } from "./connection_settings.ts";
-import { PROVIDER_BASE_URL, prefersResponses } from "./endpoints.ts";
+import { CHAT_APIS, type ChatApi, PROVIDER_BASE_URL, sendsToResponses, takesApi } from "./endpoints.ts";
 import { blockSchema, checkBlock, choices, type Issue, PROVIDER_BLOCKS, ValidationError } from "./provider_blocks.ts";
 
 /**
@@ -52,29 +53,31 @@ export const AZURE_NEEDS_BASE_URL =
   "provider: azure. AZURE_OPENAI_ENDPOINT is not read";
 
 /**
- * Return why `provider`'s `block` can't be sent with `model`, or `null`.
+ * Return why `provider`'s `block` can't be sent with `model` and `api`, or `null`.
  *
- * A Chat Completions vendor (any OpenAI-compatible provider but `openai`) or Azure sends a model
- * that `prefersResponses` to the Responses API, while its block mirrors the Chat Completions
- * request, so such a model needs the block empty; a field set to `null` counts as unset. A block
- * that is not a record is left to the block's own check. The message names `model`, or calls it
- * `modelLabel` when one is given.
+ * A Chat Completions vendor (any OpenAI-compatible provider but `openai`) or Azure sends a call to
+ * the Responses API when `api` is `responses`, or, with `api` unset, when the model
+ * `prefersResponses`; its block mirrors the Chat Completions request, so such a call needs the
+ * block empty. A field set to `null` counts as unset. A block that is not a record is left to the
+ * block's own check. The message names `model`, or calls it `modelLabel` when one is given.
  */
 export function responsesBlockError(
   provider: string,
   model: string,
+  api: ChatApi | null,
   block: unknown,
   modelLabel?: string,
 ): string | null {
-  const chat = provider === "azure" || Object.hasOwn(PROVIDER_BASE_URL, provider);
-  if (!chat || !prefersResponses(model) || !isRecord(block)) return null;
+  if (!takesApi(provider) || !sendsToResponses(api, model) || !isRecord(block)) return null;
   // A null field is unset, as `LLMConfig` reads it, so a block of only nulls is empty.
   if (!Object.values(block).some((value) => value !== null && value !== undefined)) return null;
-  return (
-    `The ${reprText(provider)} block mirrors the Chat Completions request, but ` +
-    `${modelLabel ?? `model ${reprText(model)}`} is routed to the Responses API; remove the block or use ` +
-    "a model served through Chat Completions."
-  );
+  const named = modelLabel ?? `model ${reprText(model)}`;
+  const routed =
+    api === null
+      ? `${named} is routed to the Responses API by its name; remove the block, or set api: chat if the ` +
+        "model is served through Chat Completions."
+      : `api: responses sends ${named} to the Responses API; remove the block or set api: chat.`;
+  return `The ${reprText(provider)} block mirrors the Chat Completions request, but ${routed}`;
 }
 
 const CODEX_REMOVED =
@@ -102,6 +105,7 @@ export const LLM_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "project",
   "headers",
   "structured_output",
+  "api",
   ...SUPPORTED_LLM_PROVIDERS,
 ]);
 
@@ -190,11 +194,11 @@ export function retiredKeyError(config: unknown): string | null {
  * `RangeError` if `value` is not an allowed URL; messages never echo the value.
  */
 export function validateBaseUrl(value: unknown): string {
-  if (typeof value !== "string") throw new RangeError("base_url must be a string");
+  if (typeof value !== "string") throw new YianRangeError("base_url must be a string");
   const limit = current().maxBaseUrlChars;
-  if ([...value].length > limit) throw new RangeError(`base_url must be at most ${limit} characters`);
+  if ([...value].length > limit) throw new YianRangeError(`base_url must be at most ${limit} characters`);
   if (!URL_CHARACTERS.test(value)) {
-    throw new RangeError(
+    throw new YianRangeError(
       "base_url may contain only ASCII URL characters, with no whitespace or control characters; " +
         "write an internationalised host in its xn-- form",
     );
@@ -206,18 +210,30 @@ export function validateBaseUrl(value: unknown): string {
     if (!isIPv6(host)) host = undefined;
   }
   if (groups === undefined || !host) {
-    throw new RangeError(
+    throw new YianRangeError(
       "base_url must be a lowercase https:// or http:// URL of a host, an optional port, and a path, " +
         "without credentials, query, or fragment",
     );
   }
   const port = groups["port"];
   if (port !== undefined && !(Number(port) >= 1 && Number(port) <= 65535)) {
-    throw new RangeError("base_url port must be a number from 1 to 65535");
+    throw new YianRangeError("base_url port must be a number from 1 to 65535");
   }
   if (groups["scheme"] !== "https" && !LOOPBACK_HOSTS.includes(host)) {
-    throw new RangeError("base_url must use https; http is allowed only for localhost, 127.0.0.1, and ::1");
+    throw new YianRangeError("base_url must use https; http is allowed only for localhost, 127.0.0.1, and ::1");
   }
+  return value;
+}
+
+/**
+ * Return `value` unchanged if it is an allowed endpoint for an OpenAI key from a saved login or
+ * the environment, such as `OPENAI_BASE_URL`: `validateBaseUrl`'s rule, the scheme read in any
+ * case as a URL reads it, so a key goes over plain `http` only to `localhost`, `127.0.0.1` or
+ * `::1`. Throws `RangeError` as `validateBaseUrl` does; messages never echo the value.
+ */
+export function validateEndpoint(value: unknown): string {
+  if (typeof value !== "string") return validateBaseUrl(value);
+  validateBaseUrl(value.replace(/^[A-Za-z]+(?=:\/\/)/, (scheme) => scheme.toLowerCase()));
   return value;
 }
 
@@ -256,14 +272,14 @@ function unquote(text: string): string {
  * such a URL; messages never echo the value, which may hold a password.
  */
 export function splitOllamaBaseUrl(value: unknown): [baseUrl: string, credentials: [string, string] | null] {
-  if (typeof value !== "string") throw new RangeError(OLLAMA_SHAPE);
+  if (typeof value !== "string") throw new YianRangeError(OLLAMA_SHAPE);
   const text = !HAS_SCHEME.test(value) && value.includes(":") ? `http://${value}` : value;
   const groups = OLLAMA_URL.exec(text)?.groups;
-  if (groups === undefined) throw new RangeError(OLLAMA_SHAPE);
+  if (groups === undefined) throw new YianRangeError(OLLAMA_SHAPE);
   // The pattern always matches `scheme` and `host`; the defaults only satisfy the group types.
   const { scheme = "", userinfo, host = "", port, path = "" } = groups;
   if (port && !(Number(port) >= 1 && Number(port) <= 65535)) {
-    throw new RangeError("OLLAMA_BASE_URL port must be a number from 1 to 65535");
+    throw new YianRangeError("OLLAMA_BASE_URL port must be a number from 1 to 65535");
   }
   let credentials: [string, string] | null = null;
   if (userinfo !== undefined) {
@@ -300,6 +316,26 @@ export function removedFormError(data: Data): string | null {
   const provider = own(data, "provider");
   const codex = typeof provider === "string" && provider.toLowerCase() === "codex";
   return codex || has(data, "sandbox") || has(data, "cwd") ? CODEX_REMOVED : null;
+}
+
+/**
+ * Return `value` read as `api`, appending its issue to `issues`: a value other than `"responses"`
+ * or `"chat"` is `literal_error`, and a set `api` beside a `provider` that doesn't `takesApi` a
+ * value error. Unset (`null` or `undefined`) is `null`.
+ */
+function readApi(value: unknown, provider: LLMProvider | null, issues: Issue[]): ChatApi | null {
+  if (value === null || value === undefined) return null;
+  if (!(CHAT_APIS as readonly unknown[]).includes(value)) {
+    issues.push({ loc: ["api"], type: "literal_error", msg: `Input should be ${choices(CHAT_APIS)}` });
+    return null;
+  }
+  if (provider !== null && !takesApi(provider)) {
+    const vendors = Object.keys(PROVIDER_BASE_URL).join(", ");
+    const message = `api applies only to provider azure and the Chat Completions providers (${vendors})`;
+    issues.push(valueError(["api"], message));
+    return null;
+  }
+  return value as ChatApi;
 }
 
 /**
@@ -353,31 +389,31 @@ interface Connection {
 function bindConnectionToKey(connection: Connection): void {
   if (connection.baseUrl !== null && connection.provider !== "azure") {
     if (connection.apiKey === null || connection.provider === null) {
-      throw new RangeError(
+      throw new YianRangeError(
         "llm_config.base_url needs llm_config.api_key and llm_config.provider in the same config, " +
           "since it decides where that key is sent",
       );
     }
     // The native Ollama client sends no key, so it cannot take a host base_url.
     if (connection.provider === "ollama") {
-      throw new RangeError(
+      throw new YianRangeError(
         "provider ollama does not take llm_config.base_url; it sends no api_key, so set OLLAMA_BASE_URL instead",
       );
     }
   }
   if (connection.provider !== null) {
     if ((connection.organization !== null || connection.project !== null) && connection.provider !== "openai") {
-      throw new RangeError("llm_config.organization and llm_config.project apply only to provider openai");
+      throw new YianRangeError("llm_config.organization and llm_config.project apply only to provider openai");
     }
     if (connection.headers !== null && connection.provider === "ollama") {
-      throw new RangeError("provider ollama does not take llm_config.headers; it sends no api_key");
+      throw new YianRangeError("provider ollama does not take llm_config.headers; it sends no api_key");
     }
     // The field check could not see the provider; openai refuses more names.
     for (const name of Object.keys(connection.headers ?? {})) validateHeaderName(name, connection.provider);
   }
   for (const field of ["organization", "project", "headers"] as const) {
     if (connection[field] !== null && (connection.apiKey === null || connection.provider === null)) {
-      throw new RangeError(
+      throw new YianRangeError(
         `llm_config.${field} needs llm_config.api_key and llm_config.provider in the same config, ` +
           "since it goes wherever that key is sent",
       );
@@ -436,6 +472,9 @@ function bindConnectionToKey(connection: Connection): void {
  *   structured output, a tool or a JSON-schema format; unset means this) or `"prompt"` (the schema
  *   as an instruction in the prompt, for a model that can't call tools). It appears in `dump()`
  *   when set.
+ * - `api`: the API a call of Azure or a Chat Completions vendor goes to, `"responses"` or `"chat"`;
+ *   unset, a model whose name `prefersResponses` goes to Responses and any other to Chat
+ *   Completions. Any other provider refuses it. It appears in `dump()` when set.
  * - `<provider>`: one block per provider in `SUPPORTED_LLM_PROVIDERS` (`openai`, `qwen-cn`,
  *   `anthropic`, ...), named after it: request-body fields for the API that provider's calls
  *   reach, checked by its block in `PROVIDER_BLOCKS`. Every block is checked, but only the one
@@ -453,6 +492,7 @@ export class LLMConfig {
   readonly organization: string | null;
   readonly project: string | null;
   readonly structuredOutput: StructuredOutput | null;
+  readonly api: ChatApi | null;
   // Secrets and blocks are private, so JSON.stringify, inspect and spreads never show them.
   readonly #apiKey: string | null;
   readonly #headers: Readonly<Record<string, string>> | null;
@@ -491,9 +531,9 @@ export class LLMConfig {
     const model = text("model");
     const apiKey = text("api_key", (value) => {
       // Some clients would replace an empty key with an environment variable.
-      if (value === "") throw new RangeError("api_key must not be empty");
+      if (value === "") throw new YianRangeError("api_key must not be empty");
       // A pasted key often carries a newline; sent as a header it fails late or splits the header.
-      if (/[\x00-\x1f\x7f]/.test(value)) throw new RangeError("api_key must not contain a control character");
+      if (/[\x00-\x1f\x7f]/.test(value)) throw new YianRangeError("api_key must not contain a control character");
       return value;
     });
     const baseUrl = text("base_url", validateBaseUrl);
@@ -505,6 +545,7 @@ export class LLMConfig {
     if (structured !== null && structured !== undefined && structuredOutput === null) {
       issues.push({ loc: ["structured_output"], type: "literal_error", msg: "Input should be 'native' or 'prompt'" });
     }
+    const api = readApi(own(data, "api"), provider, issues);
     const blocks = new Map<string, JsonObject>();
     for (const key of SUPPORTED_LLM_PROVIDERS) {
       const value = own(data, key);
@@ -532,6 +573,7 @@ export class LLMConfig {
     this.organization = organization;
     this.project = project;
     this.structuredOutput = structuredOutput;
+    this.api = api;
     this.#apiKey = apiKey;
     this.#headers = headers;
     this.#blocks = blocks;
@@ -576,8 +618,8 @@ export class LLMConfig {
   /**
    * Return the config as a fresh record.
    *
-   * `provider` and `model` are always there (`null` when unset); `base_url`, `organization` and
-   * `project` only when set; then each set block by its authored name, in
+   * `provider` and `model` are always there (`null` when unset); `base_url`, `organization`,
+   * `project`, `structured_output` and `api` only when set; then each set block by its authored name, in
    * `SUPPORTED_LLM_PROVIDERS` order. `api_key` and `headers` are never there.
    */
   dump(): JsonObject {
@@ -586,6 +628,7 @@ export class LLMConfig {
     if (this.organization !== null) dumped["organization"] = this.organization;
     if (this.project !== null) dumped["project"] = this.project;
     if (this.structuredOutput !== null) dumped["structured_output"] = this.structuredOutput;
+    if (this.api !== null) dumped["api"] = this.api;
     for (const [key, block] of this.#blocks) dumped[key] = structuredClone(block);
     return dumped;
   }
@@ -675,7 +718,7 @@ export function popApiKey(config: Record<string, unknown>): string | null {
   if (raw === null || raw === undefined) return null;
   const provider = own(config, "provider");
   if (provider === null || provider === undefined) {
-    throw new RangeError("llm_config.api_key needs llm_config.provider, so the key goes only to that provider");
+    throw new YianRangeError("llm_config.api_key needs llm_config.provider, so the key goes only to that provider");
   }
   return new LLMConfig({ provider, api_key: raw }).apiKey;
 }
@@ -763,7 +806,7 @@ export function popHostCredentials(config: Record<string, unknown>): HostConnect
   }
   const noBaseUrl = baseUrl === null || baseUrl === undefined;
   if (noBaseUrl && apiKey !== null && provider === "azure") {
-    throw new RangeError(
+    throw new YianRangeError(
       "llm_config.api_key for provider azure needs llm_config.base_url in the same config, " +
         "since it decides where that key is sent",
     );

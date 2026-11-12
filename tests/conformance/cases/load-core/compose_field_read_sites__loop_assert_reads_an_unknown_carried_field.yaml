@@ -22,7 +22,7 @@ flow: |
       kind: loop
       times: 1
       input:
-        st: ${step.output}
+        st: !Rec3 ${step.output}
       asserts:
         - "st.zz == 'x'"
       nodes:

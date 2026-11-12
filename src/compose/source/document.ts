@@ -46,6 +46,7 @@ import {
   mergeSources,
   mergeValueError,
   nodeId,
+  nonTextKeyMessage,
   ownPairs,
 } from "./literals.ts";
 import {
@@ -523,6 +524,44 @@ export class SourceDocument {
       typedIncludes,
     );
   }
+}
+
+/**
+ * Parse one location-free YAML literal, such as an input default or skill frontmatter, by the
+ * rules a flow file follows: a document's own build pass reads it, so a local tag's scalar reads
+ * untagged, and a bare `!` tag or a non-printable character is refused. A key YAML reads as
+ * non-text, a repeated key and an `!include` are refused too, since nothing would report them. An
+ * alias shares its target's value, so a recursive alias builds a recursive list or record. The
+ * value is deep-frozen.
+ *
+ * Example: `parseYamlLiteral("{a: 017, b: yes}")` is `{a: 17n, b: "yes"}`.
+ *
+ * @throws SourceSyntaxError, with no range, when the text is not valid YAML for the flow
+ *   loader or holds one of the refused keys or tags.
+ */
+export function parseYamlLiteral(text: string): Value {
+  let document: SourceDocument;
+  try {
+    document = SourceDocument.parse(text, "<literal>");
+  } catch (error) {
+    // A range would count lines of the literal, not of the file it came from.
+    if (error instanceof SourceSyntaxError) throw new SourceSyntaxError(error.message);
+    throw error;
+  }
+  const { nonTextKey, repeatedKey, includes } = document;
+  if (nonTextKey !== null) throw new SourceSyntaxError(nonTextKeyMessage(nonTextKey.key, nonTextKey.text));
+  if (repeatedKey !== null) {
+    const fix =
+      repeatedKey.cutValue === undefined
+        ? "a YAML mapping's keys must be unique, so remove or rename one"
+        : `this \`{...}\` mapping's comma split the value that starts \`${repeatedKey.cutValue}\`, so ` +
+          "quote that value or use block style";
+    throw new SourceSyntaxError(`duplicate key ${reprText(repeatedKey.key)}; ${fix}`);
+  }
+  if (includes.length > 0) {
+    throw new SourceSyntaxError(`${includeTag(includes[0]!.type)} reads a file only in a flow file; write the value here`);
+  }
+  return document._value;
 }
 
 /** What one pass over a composed document builds. */

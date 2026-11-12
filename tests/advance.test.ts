@@ -21,10 +21,11 @@ import { ComposedFlow } from "../src/compose/build/pipeline.ts";
 import { LoadError } from "../src/compose/helpers/errors.ts";
 import { loadFlow } from "../src/compose/loader.ts";
 import { NodeStarted, type RunEvent, RunStarted } from "../src/events.ts";
+import { ScriptedModel } from "../src/llm/testing.ts";
 import { Parameter } from "../src/nodes/contracts.ts";
 import { ToolNode } from "../src/nodes/tool/node.ts";
 import { lockFile, withWarnings } from "../src/platform.ts";
-import { advance, replayRunLog, runFlow } from "../src/run.ts";
+import { advance, close, replayRunLog, runFlow, send } from "../src/run.ts";
 import {
   isRunLogLocked,
   JsonlRunLog,
@@ -38,7 +39,8 @@ import { commitPrepared, prepareRunCancelled } from "../src/runtime/state.ts";
 import { pending } from "../src/tools/context.ts";
 import { FunctionTool } from "../src/tools/function_tools.ts";
 import { completeByHand, gateTool, handClock } from "./helpers/inbox_fixtures.ts";
-import { crashAfter, graph, NO_ENV, rejected } from "./helpers/run_state_fixtures.ts";
+import { crashAfter, graph, NO_ENV, rejected, serving, textReply } from "./helpers/run_state_fixtures.ts";
+import { YianTypeError } from "../src/typesys/errors.ts";
 
 const ROOT = mkdtempSync(join(tmpdir(), "advance-"));
 afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
@@ -152,7 +154,7 @@ test.each([
   const before = readFileSync(log);
   // Another worker count would write run_resumed.
   const options = { log, flow, tools, env: NO_ENV, numWorkers: 2, ...option } as never;
-  expect(await rejected(advance(options))).toEqual(new TypeError(message));
+  expect(await rejected(advance(options))).toEqual(new YianTypeError(message));
   expect(readFileSync(log).equals(before)).toBe(true);
 });
 
@@ -485,4 +487,74 @@ test("advancing a waiting host call never calls its handler again", async () => 
   completeByHand(log, flow, `${first.runId}/ask`, { output: "yes" });
   const done = await advance({ log, flow, tools, env: NO_ENV });
   expect([done.status, calls]).toEqual(["succeeded", 1]);
+});
+
+/** A flow whose agent summarises the notes its take reads from the `Inbox(str)` input `notes`. */
+const NOTES_AGENT = `id: notes
+name: notes
+input:
+  notes: !Inbox(str)
+nodes:
+  got:
+    kind: tool
+    tool_id: take
+    input:
+      from: \${input.notes}
+      take: all
+  hello:
+    kind: agent
+    input:
+      notes: \${got.output.events}
+    prompt: Summarise \${notes}.
+    output: str
+output: \${hello.output}
+`;
+
+/** A run of `NOTES_AGENT` started with a host key (and `headers`), whose inbox got a note and closed. */
+async function keyedNotes(headers: Record<string, string> | null = null) {
+  const flow = await loadFlow(NOTES_AGENT, { sourceLabel: "notes.yaml" });
+  const log = freshLog();
+  const llmConfig = { provider: "openai", model: "gpt-test", api_key: "sk-test", ...(headers === null ? {} : { headers }) };
+  const first = await runFlow(flow, {}, { log, env: NO_ENV, llmConfig, models: serving(new ScriptedModel([])) });
+  expect(first.status).toBe("waiting");
+  await send(log, "notes", "buy milk", { env: NO_ENV });
+  await close(log, "notes", { env: NO_ENV });
+  return log;
+}
+
+test("advance without the run's host key is refused before anything is appended; with it the agent runs", async () => {
+  const log = await keyedNotes();
+  const before = readFileSync(log);
+  const model = new ScriptedModel([textReply("milk")]);
+  const error = await rejected(advance({ log, env: NO_ENV, models: serving(model) }));
+  expect(error).toBeInstanceOf(RangeError);
+  expect((error as Error).message).toBe(
+    "this run's openai API key came from the host's llmConfig.api_key and is not recorded; pass it " +
+      "again: advance({ log, apiKey })",
+  );
+  expect(readFileSync(log).equals(before)).toBe(true);
+  expect(model.requests).toEqual([]);
+  const resumed = await advance({ log, env: NO_ENV, apiKey: "sk-test", models: serving(model) });
+  expect([resumed.status, resumed.output]).toEqual(["succeeded", "milk"]);
+});
+
+test("advance without the host key of a run whose key came with headers names both", async () => {
+  const log = await keyedNotes({ "X-Team": "a" });
+  const before = readFileSync(log);
+  const error = await rejected(advance({ log, env: NO_ENV, headers: { "X-Team": "a" }, models: serving(new ScriptedModel([])) }));
+  expect((error as Error).message).toEndWith("pass it again: advance({ log, apiKey, headers })");
+  expect(readFileSync(log).equals(before)).toBe(true);
+});
+
+test("a crashed run resumed without its host key is refused before anything is appended", async () => {
+  const flow = await loadFlow("id: k\nname: k\nnodes:\n  agent: {kind: agent, prompt: hi}\noutput: ${agent.output}\n");
+  const log = freshLog();
+  const llmConfig = { provider: "openai", model: "gpt-test", api_key: "sk-test" };
+  // Records 0..8 are kept: the agent has started.
+  await crashAfter(9, () => runFlow(flow, {}, { log, env: NO_ENV, llmConfig, numWorkers: 0, models: serving(new ScriptedModel([textReply("ok")])) }));
+  const before = readFileSync(log);
+  expect(await rejected(advance({ log, env: NO_ENV, models: serving(new ScriptedModel([])) }))).toBeInstanceOf(RangeError);
+  expect(readFileSync(log).equals(before)).toBe(true);
+  const resumed = await advance({ log, env: NO_ENV, apiKey: "sk-test", models: serving(new ScriptedModel([textReply("ok")])) });
+  expect([resumed.status, resumed.output]).toEqual(["succeeded", "ok"]);
 });

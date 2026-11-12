@@ -86,6 +86,7 @@ import {
   textReply,
   thrownBy,
 } from "./helpers/run_state_fixtures.ts";
+import { YianTypeError } from "../src/typesys/errors.ts";
 
 const FIXTURES = fileURLToPath(new URL("./conformance/fixtures", import.meta.url));
 
@@ -918,6 +919,21 @@ for (const llmConfig of ["x", 5, [1]]) {
   });
 }
 
+test("a host llm_config with a free-form field nested too deeply is refused at the field before the log exists", async () => {
+  const limit = current().maxValueNesting;
+  for (const levels of [limit, 20_000]) {
+    let deep: unknown = 1;
+    for (let level = 0; level < levels; level++) deep = { a: deep };
+    const llmConfig = { provider: "vllm", model: "m1", vllm: { chat_template_kwargs: { a: deep } } };
+    const error = await runStartError(await load(KEYED_FLOW), { models: forbidden, llmConfig });
+    expect(error).toBeInstanceOf(RangeError);
+    expect(error.message).toBe(
+      "1 validation error for LLMConfig\nvllm.chat_template_kwargs\n" +
+        `  Value nests deeper than ${limit} levels, the limit for a yian value (each record and list is a level)`,
+    );
+  }
+});
+
 test("a key that marks no agent is dropped", async () => {
   const other = await load(
     "id: other\nname: other\nnodes:\n  agent:\n    kind: agent\n    prompt: hi\n" +
@@ -1526,6 +1542,41 @@ test("staticNodes lists every node path of a flow and its child flows, with its 
   expect(staticNodes(flow)[0]![1]).toBe(flow.compiled.nodes.get("call")!);
 });
 
+const FLOW_TOOL_FLOW = `
+id: helping
+name: helping
+defs:
+  shout:
+    description: Shout the text back.
+    input:
+      text: !str
+    nodes:
+      inner:
+        kind: agent
+        input:
+          text: \${input.text}
+        prompt: Shout \${text}.
+    output: \${inner.output}
+nodes:
+  helper:
+    kind: agent
+    prompt: Help.
+    tools: [shout]
+output: \${helper.output}
+`;
+
+test("staticNodes lists a flow an agent grants as a tool under the agent and the grant's name", async () => {
+  const flow = await load(FLOW_TOOL_FLOW);
+  expect(staticNodes(flow).map(([nodePath, node]) => [nodePath, node.kind])).toEqual([
+    ["helper", "agent"],
+    ["helper/shout/inner", "agent"],
+    ["helper/shout/__start__", "start"],
+    ["helper/shout/__end__", "end"],
+    ["__start__", "start"],
+    ["__end__", "end"],
+  ]);
+});
+
 test("staticNodes lists the paths a run's effective model map uses", async () => {
   const flow = await load(NESTED_FLOW);
   const path = join(dir, "nested.jsonl");
@@ -1775,6 +1826,6 @@ test("an onConsole that throws stops the run with its error; one that isn't a fu
   expect(error).toBe(thrown);
   expect(readRunLog(join(dir, "stop.jsonl")).at(-1)!.record).toBeInstanceOf(RunStoppedRecord);
   expect(await rejected(run(flow, { word: "a" }, { onConsole: "no" as never }))).toEqual(
-    new TypeError("onConsole must be a function or null"),
+    new YianTypeError("onConsole must be a function or null"),
   );
 });

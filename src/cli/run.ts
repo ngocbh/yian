@@ -31,13 +31,13 @@ import { isDeepStrictEqual } from "node:util";
 import { END_ID, START_ID } from "../compile/model.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
-import { loadFlow } from "../compose/loader.ts";
 import { defaultSkillRoots, loadSkillDir, loadSkills } from "../compose/skills.ts";
 import { current, type Env } from "../defaults.ts";
 import { compareCodeUnits, Diagnostic, reprText, shellQuote } from "../diagnostics.ts";
 import type { RunEvent } from "../events.ts";
 import { type Skill, SkillError } from "../skills/catalog.ts";
 import { LOAD_SKILL } from "../skills/tool.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { JSONDecodeError, type JsonValue, parseJson } from "../typesys/json.ts";
 import {
   canonicalTypeLabel,
@@ -70,6 +70,7 @@ import {
   type LlmConfigsCheck,
   loadRecordedFlow,
   readRunIndex,
+  RunIndexBusyError,
   type RunIndexRow,
   type RunInspection,
   type RunResult,
@@ -115,12 +116,14 @@ import {
   defaultRunsDir,
   ensureProviderKeys,
   freshLog,
+  loadFlowAt,
   loadFlowFile,
   NotUtf8Error,
   preflightKeys,
   readFlowText,
 } from "./startup.ts";
 import { cells, columnsOf, rowsOf } from "./cells.ts";
+import { showForTerminal } from "./sanitize.ts";
 import { Terminal, TerminalStopped } from "./terminal.ts";
 import {
   atTerminal,
@@ -196,7 +199,8 @@ function expandTabs(spans: readonly [string, Style | null][]): [string, Style | 
 /**
  * Return the box printed when a run starts: `Running flow: <name>  (version: v)` and
  * `Description: …`, wrapped inside a box no wider than the terminal's columns (80 when unknown),
- * ending in a newline; `null` when the flow has no name, description or version.
+ * ending in a newline; `null` when the flow has no name, description or version. On a terminal
+ * each field shows its control characters (`showForTerminal`), each description line apart.
  */
 export function flowBanner(
   flow: { name: string | null; description: string | null; version: string | null },
@@ -205,14 +209,15 @@ export function flowBanner(
 ): string | null {
   const { name, description, version } = flow;
   if (!(name || description || version)) return null;
+  const shown = (text: string) => showForTerminal(text, out);
   // Each logical line is a list of [text, style] spans, wrapped as one plain text.
-  const head: [string, Style | null][] = [["Running flow: ", "bold"], [name || "(unnamed)", null]];
-  if (version) head.push([`  (version: ${version})`, "dim"]);
+  const head: [string, Style | null][] = [["Running flow: ", "bold"], [name ? shown(name) : "(unnamed)", null]];
+  if (version) head.push([`  (version: ${shown(version)})`, "dim"]);
   const lines = [head];
   if (description) {
     const label = "Description: ";
     splitLines(label + description).forEach((line, i) => {
-      lines.push(i === 0 ? [[label, "bold"], [line.slice(label.length), null]] : [[line, null]]);
+      lines.push(i === 0 ? [[label, "bold"], [shown(line.slice(label.length)), null]] : [[shown(line), null]]);
     });
   }
   // Rich measures the box before it expands tabs, counting a tab as no cells.
@@ -671,10 +676,10 @@ export function removeEmptyDir(dir: string): void {
 }
 
 /**
- * @internal Update the run index of `~/.yian/runs` (`updateRunIndex`, waiting at most a second for
- * another update) after the run in `log` ended, when `log` is a run folder's log there; a failed
- * update is a `warning:` line on stderr, and the logs it skips aren't reported (`yian status`
- * reports them).
+ * @internal Update the run index of `~/.yian/runs` with the run in `log` alone (`updateRunIndex` with
+ * its `runIds`, waiting at most a second for another update) after that run ended, when `log` is a
+ * run folder's log there; a failed update is a `warning:` line on stderr, and a log it skips isn't
+ * reported (`yian status` reports it). Other run folders are left to `yian status`.
  */
 export async function indexRun(log: string, io: CliIo): Promise<void> {
   const runsDir = defaultRunsDir(io.env);
@@ -686,19 +691,19 @@ export async function indexRun(log: string, io: CliIo): Promise<void> {
       return null;
     }
   };
-  const folder = real(dirname(dirname(log)));
-  if (folder === null || folder !== real(runsDir)) return;
+  const runFolder = real(dirname(log));
+  if (runFolder === null || dirname(runFolder) !== real(runsDir)) return;
   try {
-    withWarnings(() => {}, () => updateRunIndex(runsDir, { timeoutMs: 1000 }));
+    withWarnings(() => {}, () => updateRunIndex(runsDir, { timeoutMs: 1000, runIds: [basename(runFolder)] }));
   } catch (error) {
     if (!(error instanceof Error)) throw error;
     await printStyled(io, `warning: run index not updated: ${error.message}`, "yellow");
   }
 }
 
-/** Write the run's log path to `out`, even when progress is quiet. */
+/** Write the run's log path to `out`, even when progress is quiet, showing its control characters on a terminal. */
 export async function reportRunLog(path: string, out: Writer, env: Env): Promise<void> {
-  await out.write(`${paint(`Run log: ${path}`, "dim", out, env)}\n`);
+  await out.write(`${paint(`Run log: ${showForTerminal(path, out)}`, "dim", out, env)}\n`);
 }
 
 /**
@@ -726,14 +731,16 @@ export interface RunOptions {
 
 /**
  * @internal Whether `error` is a host failure `run` reports as `run failed:` (`resume failed:`) rather than
- * with its stack: a bad value (a damaged or empty log or a defaults mismatch included), an
- * unreadable file, a run log another writer holds, an MCP server that didn't start, the missing MCP
- * SDK.
+ * with its stack: a bad value yian refused (`YianTypeError`, `YianRangeError`: a damaged or empty
+ * log or a defaults mismatch included), an unreadable file, a run log another writer holds, an MCP
+ * server that didn't start, the missing MCP SDK. Any other error, a built-in `TypeError` or
+ * `RangeError` among them, is a bug.
  */
 export function isSetupError(error: unknown): error is Error {
   return (
-    error instanceof TypeError ||
-    error instanceof RangeError ||
+    // yian's own: a built-in TypeError or RangeError is a bug, which keeps its stack.
+    error instanceof YianTypeError ||
+    error instanceof YianRangeError ||
     error instanceof AuthError ||
     error instanceof McpConnectError ||
     // A lock file that is unsafe, not private or changed; a locked log is a plain `Error` over
@@ -1261,13 +1268,13 @@ async function startRun(
     }
     if (recorded === null) {
       return setupFailed(
-        new RangeError("this run's flow was built in code; resume it with advance({log, flow})"),
+        new YianRangeError("this run's flow was built in code; resume it with advance({log, flow})"),
       );
     }
     // A chat's run needs the chat to type into it and to host its tools.
     if (recorded.compiled.flowId === CHAT_FLOW_ID && recorded.source?.root === CHAT_FLOW_FILE) {
       const message = "this run is a yian chat's; yian run --resume can't continue it";
-      return setupFailed(new RangeError(message));
+      return setupFailed(new YianRangeError(message));
     }
     flow = recorded;
   } else {
@@ -1511,8 +1518,7 @@ async function checkFlow(path: string, root: string | undefined, env: Env): Prom
   let flow: ComposedFlow;
   try {
     if (root === undefined) {
-      const text = readFlowText(path);
-      flow = await loadFlow(text, { searchPaths: [dirname(path)], sourceLabel: basename(path), env });
+      flow = await loadFlowAt(path, readFlowText(path), env);
     } else {
       flow = await loadConfined(root, path, new Set(), env);
     }
@@ -1543,8 +1549,8 @@ async function checkFlow(path: string, root: string | undefined, env: Env): Prom
  * With `root`, each flow, its `uses:` imports and its CODE references must be inside that
  * directory, a flow may not set `system.paths`, and its diagnostics are labelled with its path
  * relative to the root. As text, a loaded flow is a `<path>: ok` line on stdout and a failure its
- * `<path>:` line and diagnostic on stderr; with `json`, one document lists every result, each
- * path as given.
+ * `<path>:` line and diagnostic on stderr, each path showing its control characters on a terminal;
+ * with `json`, one document lists every result, each path as given.
  */
 export async function check(
   flows: readonly string[],
@@ -1562,9 +1568,9 @@ export async function check(
   } else {
     for (const result of results) {
       if (result.ok) {
-        await io.stdout.write(`${result.path}: ok\n`);
+        await io.stdout.write(`${showForTerminal(result.path, io.stdout)}: ok\n`);
       } else {
-        await printStyled(io, `${result.path}:`, "red");
+        await printStyled(io, `${showForTerminal(result.path, io.stderr)}:`, "red");
         await renderDiagnostic(result.diagnostic, io.stderr, io.env);
       }
     }
@@ -1577,7 +1583,8 @@ export async function check(
  * it or taking its lock; returns the exit code. Without `log`, list the runs instead (`listRuns`).
  *
  * As text, a `status: <status>` line on stdout, then `in flight: <ids>` and `crashed attempts:
- * <id>=<n>` lines when there are any; with `json`, one document with `status`, `in_flight` (in
+ * <id>=<n>` lines when there are any, each id showing its control characters on a terminal; with
+ * `json`, one document with `status`, `in_flight` (in
  * start order), `crashed_attempts`, and for a waiting run `ready` and `wake_at` (`false` and
  * `null` otherwise). A log that isn't a readable run log (empty, damaged,
  * not a run log, unreadable), or the log of a `~/.yian/runs` folder named for another run (which
@@ -1590,7 +1597,7 @@ export async function status(log: string | undefined, { json }: { json: boolean 
     inspection = inspectRun(log);
     // The run index lists such a log as unreadable, so this says why too.
     const mismatch = runFolderMismatch(log, inspection.runId, defaultRunsDir(io.env));
-    if (mismatch !== null) throw new RangeError(`run log ${log}: ${mismatch}`);
+    if (mismatch !== null) throw new YianRangeError(`run log ${log}: ${mismatch}`);
   } catch (error) {
     let message: string;
     if (error instanceof RangeError) message = error.message;
@@ -1613,10 +1620,11 @@ export async function status(log: string | undefined, { json }: { json: boolean 
     );
     return 0;
   }
+  const shown = (node: string) => showForTerminal(node, io.stdout);
   let text = `status: ${runStatus}\n`;
-  if (inFlight.length > 0) text += `in flight: ${inFlight.join(", ")}\n`;
+  if (inFlight.length > 0) text += `in flight: ${inFlight.map(shown).join(", ")}\n`;
   if (crashedAttempts.size > 0) {
-    const counts = [...crashedAttempts].map(([node, n]) => `${node}=${n}`);
+    const counts = [...crashedAttempts].map(([node, n]) => `${shown(node)}=${n}`);
     text += `crashed attempts: ${counts.join(", ")}\n`;
   }
   await io.stdout.write(text);
@@ -1640,23 +1648,32 @@ function runFolderMismatch(log: string, runId: string | null, runsDir: string): 
  *
  * As text, a header and one line per run on stdout, in aligned columns: run id, status
  * (`unreadable at seq N` for a log yian can't read from seq N), start time and flow file (`-` for
- * none, or a flow built in code); nothing when there are no runs. With `json`, one document whose
+ * none, or a flow built in code), each cell showing its control characters on a terminal; nothing
+ * when there are no runs. With `json`, one document whose
  * `runs` holds each row: `run_id`, `flow`, `status`, `started_at`, `ended_at`, `parent_run_id`,
  * `memories` (each memory input's `input`, `identity` and `type`, never its location), `last_seq`,
  * `result` (the run's output, `null` until it succeeded), the token sums, for a waiting
  * run `ready` and `wake_at` (`false` and `null` otherwise), and `unreadable` (`seq` and `reason`,
  * or `null`). A log the update can't read is a `warning:` line on stderr: once until it changes, or
  * on every update for a file error such as no permission, which leaves the run's row as it was; so
- * is a damaged index, which the update rebuilds. An index that can't be updated (another update
- * held it too long, or SQLite can't use it) prints its message on stderr and exits 1 (`run.setup`).
+ * is a damaged index, which the update rebuilds. While another update holds the index too long,
+ * the rows it holds are listed, after the warning `run index is being updated; listing may be
+ * stale`. An index that can't be read or updated otherwise (SQLite can't use it) prints its
+ * message on stderr and exits 1 (`run.setup`). Only `json` reads each row's result.
  */
 async function listRuns({ json }: { json: boolean }, io: CliIo): Promise<number> {
   const runsDir = defaultRunsDir(io.env);
   let rows: RunIndexRow[] = [];
   try {
     if (existsSync(runsDir)) {
-      updateRunIndex(runsDir);
-      rows = readRunIndex(runsDir);
+      try {
+        updateRunIndex(runsDir);
+      } catch (error) {
+        // The index lags the logs but never leads them, so what it holds is safe to list.
+        if (!(error instanceof RunIndexBusyError)) throw error;
+        await printStyled(io, "warning: run index is being updated; listing may be stale", "yellow");
+      }
+      rows = readRunIndex(runsDir, { result: json });
     }
   } catch (error) {
     if (!(error instanceof Error) || error instanceof TypeError) throw error;
@@ -1694,15 +1711,19 @@ async function listRuns({ json }: { json: boolean }, io: CliIo): Promise<number>
   if (rows.length === 0) return 0;
   const table = [
     ["run id", "status", "started", "flow"],
-    ...rows.map((row) => [
-      row.runId,
-      row.unreadable === null ? row.status : `unreadable at seq ${row.unreadable.seq}`,
-      row.startedAt ?? "-",
-      row.flow ?? "-",
-    ]),
+    ...rows.map((row) =>
+      [
+        row.runId,
+        row.unreadable === null ? row.status : `unreadable at seq ${row.unreadable.seq}`,
+        row.startedAt ?? "-",
+        row.flow ?? "-",
+      ].map((cell) => showForTerminal(cell, io.stdout)),
+    ),
   ];
-  const widths = [0, 1, 2].map((column) => Math.max(...table.map((cells) => cells[column]!.length)));
-  const lines = table.map((cells) => cells.map((cell, column) => (column < 3 ? cell.padEnd(widths[column]!) : cell)).join("  "));
+  // Measured as printed, so the columns line up however wide a cell's characters are.
+  const widths = [0, 1, 2].map((column) => Math.max(...table.map((row) => cells(row[column]!))));
+  const pad = (cell: string, column: number) => cell + " ".repeat(widths[column]! - cells(cell));
+  const lines = table.map((row) => row.map((cell, column) => (column < 3 ? pad(cell, column) : cell)).join("  "));
   await io.stdout.write(`${lines.join("\n")}\n`);
   return 0;
 }
@@ -1732,7 +1753,7 @@ type SkillResult =
  * 1 when any fails.
  *
  * As text, each loaded skill is a `<path>: ok (<name>)` line on stdout and each failure its message
- * on stderr; with `json`, one document lists every result, each path as given. Two directories
+ * on stderr, showing their control characters on a terminal; with `json`, one document lists every result, each path as given. Two directories
  * with one skill name are not reported; that is the caller's concern.
  */
 export async function skillsCheck(dirs: readonly string[], { json }: { json: boolean }, io: CliIo): Promise<number> {
@@ -1750,8 +1771,8 @@ export async function skillsCheck(dirs: readonly string[], { json }: { json: boo
   } else {
     for (const result of results) {
       // The message already names the path.
-      if (result.ok) await io.stdout.write(`${result.path}: ok (${result.name})\n`);
-      else await io.stderr.write(`${result.error.message}\n`);
+      if (result.ok) await io.stdout.write(`${showForTerminal(`${result.path}: ok (${result.name})`, io.stdout)}\n`);
+      else await io.stderr.write(`${showForTerminal(result.error.message, io.stderr)}\n`);
     }
   }
   return results.every((result) => result.ok) ? 0 : 1;

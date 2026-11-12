@@ -17,6 +17,8 @@ import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import type { JsonObject, JsonValue } from "../../src/typesys/json.ts";
 import { childFlow, FuncNode, parentWithSpawner } from "../helpers/run_state_fixtures.ts";
+import { YianRangeError } from "../../src/typesys/errors.ts";
+import { thrownClass } from "../helpers/own_errors.ts";
 
 /** One live seed-producing spawner of every legal grow kind, with the `Grow` its `run` gives. */
 async function growthProducers(): Promise<[[CallNode, Grow], [MapNode, Grow], [LoopNode, Grow]]> {
@@ -206,7 +208,7 @@ test.each([
 
   expect((error as Error).constructor).toBe(GrowthRejected);
   const original = (error as GrowthRejected).original;
-  expect(original.constructor).toBe(cls);
+  expect(original.constructor).toBe(thrownClass(cls));
   expect(original.message).toBe(message);
   expect((error as Error).cause).toBe(original);
 });
@@ -223,7 +225,7 @@ test("compile builder keeps an unsupported kind outside growth rejection", () =>
     error = caught;
   }
 
-  expect((error as Error).constructor).toBe(RangeError);
+  expect((error as Error).constructor).toBe(YianRangeError);
   expect((error as Error).message).toBe("node 'unsupported' (code) cannot build graph growth");
 });
 

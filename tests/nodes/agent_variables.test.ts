@@ -28,6 +28,7 @@ import { Type, TypeCheckError, ValueKind, type ValueRecord } from "../../src/typ
 import { parametersFromYaml } from "../helpers/declarations.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import { engine, NO_ENV, rejected, textReply } from "../helpers/run_state_fixtures.ts";
+import { YianRangeError } from "../../src/typesys/errors.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -248,7 +249,7 @@ test.each([
 
   const error = await rejected(node.forward({ ...inputs }, { models }));
 
-  expect(error).toEqual(new RangeError("variable 'tone' collides with an input name"));
+  expect(error).toEqual(new YianRangeError("variable 'tone' collides with an input name"));
   expect(resolved).toEqual([]);
   expect(models.prompts).toEqual([]);
 });

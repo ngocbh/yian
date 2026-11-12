@@ -30,6 +30,7 @@ import {
   type ValuePath,
   ValueTemplate,
 } from "../../nodes/contracts.ts";
+import { YianTypeError } from "../../typesys/errors.ts";
 import {
   BUILTIN_TYPE_NAMES,
   formatTypeExpr,
@@ -404,7 +405,7 @@ export function suggestTag(
   const text = tagText(typ, { registry: options.registry, typeText });
   if (text === null) {
     if (typeText === null) {
-      if (typ === null) throw new TypeError("suggestTag needs a type or its text");
+      if (typ === null) throw new YianTypeError("suggestTag needs a type or its text");
       typeText = canonicalTypeLabel(typ);
     }
     return `name \`${typeText}\` in \`typedefs:\` and tag with its name`;

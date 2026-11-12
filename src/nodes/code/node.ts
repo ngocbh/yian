@@ -66,6 +66,7 @@ import { SHARE_ENV, Worker } from "node:worker_threads";
 import { current } from "../../defaults.ts";
 import { OriginRef, reprText } from "../../diagnostics.ts";
 import { leavesRoot, stripTypes } from "../../platform.ts";
+import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import {
   fromHost,
   isRecord,
@@ -225,7 +226,7 @@ function validateCode(code: unknown): string | BuiltinCode {
   if (typeof code === "string") return code;
   if (!isRecord(code)) {
     const got = code === null ? "null" : jsTypeName(code);
-    throw new TypeError(`CODE code must be text or a built-in operation, got ${got}`);
+    throw new YianTypeError(`CODE code must be text or a built-in operation, got ${got}`);
   }
   const keys = Object.keys(code);
   if (
@@ -235,9 +236,9 @@ function validateCode(code: unknown): string | BuiltinCode {
     code.builtin !== "identity" ||
     typeof code.field !== "string"
   ) {
-    throw new TypeError('CODE built-in must be {builtin: "identity", field: <input name>}');
+    throw new YianTypeError('CODE built-in must be {builtin: "identity", field: <input name>}');
   }
-  if (code.field === "") throw new RangeError("CODE built-in field must be non-empty");
+  if (code.field === "") throw new YianRangeError("CODE built-in field must be non-empty");
   return Object.freeze({ builtin: "identity", field: code.field });
 }
 
@@ -250,9 +251,9 @@ function validateCode(code: unknown): string | BuiltinCode {
 export function validateCodeOrigins(codeOrigin: unknown, codeLineOrigins: unknown, nodeOrigin: unknown = null): void {
   validateOptionalOrigin(codeOrigin, "CODE source origin");
   validateOptionalOrigin(nodeOrigin, "node origin");
-  if (!Array.isArray(codeLineOrigins)) throw new TypeError("CODE line origins must be an array");
+  if (!Array.isArray(codeLineOrigins)) throw new YianTypeError("CODE line origins must be an array");
   for (const origin of codeLineOrigins) {
-    if (!(origin instanceof OriginRef)) throw new TypeError("CODE line origins must contain only OriginRef values");
+    if (!(origin instanceof OriginRef)) throw new YianTypeError("CODE line origins must contain only OriginRef values");
   }
 }
 
@@ -366,13 +367,22 @@ const ERROR_CLASSES: Readonly<Record<string, ErrorConstructor>> = {
   URIError,
 };
 
+/** The classes of the errors the worker itself throws, by name: yian's own, not the built-ins. */
+const OWN_CLASSES: Readonly<Record<string, new (message: string) => Error>> = {
+  RangeError: YianRangeError,
+  TypeError: YianTypeError,
+};
+
 /**
- * Rebuild an error a worker sent: a standard class by name, else an `Error` carrying the name.
+ * Rebuild an error a worker sent: a standard class by name (yian's own `TypeError` or `RangeError`
+ * when `own`, an error the worker threw rather than the body), else an `Error` carrying the name.
  * The worker's stack is kept, so its body frames still map to authored lines.
  */
-function rebuildError(fields: ThrownError): Error {
+function rebuildError(fields: ThrownError, own = false): Error {
   let error: Error;
-  if (Object.hasOwn(ERROR_CLASSES, fields.name)) {
+  if (own && Object.hasOwn(OWN_CLASSES, fields.name)) {
+    error = new OWN_CLASSES[fields.name]!(fields.message);
+  } else if (Object.hasOwn(ERROR_CLASSES, fields.name)) {
     error = new ERROR_CLASSES[fields.name]!(fields.message);
   } else {
     error = new Error(fields.message);
@@ -390,7 +400,11 @@ function replyError(reply: Exclude<CodeReply, { ok: true }>): Error {
   }
   const { thrown } = reply;
   const original =
-    thrown.kind === "error" ? rebuildError(thrown) : thrown.kind === "value" ? unpackFiles(thrown.value) : thrown.text;
+    thrown.kind === "error"
+      ? rebuildError(thrown, reply.as === "plain")
+      : thrown.kind === "value"
+        ? unpackFiles(thrown.value)
+        : thrown.text;
   return reply.as === "plain" && original instanceof Error ? original : new CodeError(original);
 }
 
@@ -683,27 +697,27 @@ export class CodeNode extends Node {
       // Checked before the file's existence, and worded without absolute paths, so a confined
       // load tells a flow's author nothing about the host's folders or what exists outside the root.
       if (codeRoot !== null) {
-        const outside = new RangeError(`\`code:\` reference ${reprText(code)} is outside the code root`);
+        const outside = new YianRangeError(`\`code:\` reference ${reprText(code)} is outside the code root`);
         let real: string;
         try {
           real = realPathOf(file);
         } catch {
           // A symlink loop or an unreadable folder: the system error's message holds absolute paths.
           if (leavesRoot(relative(codeRoot, nearestRealPath(file)))) throw outside;
-          throw new RangeError(`\`code:\` reference ${reprText(code)} can't be resolved`);
+          throw new YianRangeError(`\`code:\` reference ${reprText(code)} can't be resolved`);
         }
         if (leavesRoot(relative(codeRoot, real))) throw outside;
       }
       if (statSync(file, { throwIfNoEntry: false })?.isFile() !== true) {
         const where = codeRoot === null ? ` in ${reprText(dir)}` : "";
-        throw new RangeError(`\`code:\` file ${reprText(path)} does not exist${where}`);
+        throw new YianRangeError(`\`code:\` file ${reprText(path)} does not exist${where}`);
       }
       return;
     }
     const meantAsReference = looksLikeReference(code);
     // `h.ts:fn` has the module shape too, but its own message fits it better.
     if (MODULE_REFERENCE_RE.test(code) && !meantAsReference) {
-      throw new RangeError(
+      throw new YianRangeError(
         `\`code:\` value ${reprText(code)} looks like a Python \`module:function\` reference; use \`./file.ts:fn\``,
       );
     }
@@ -711,7 +725,7 @@ export class CodeNode extends Node {
       buildBody(this.id, await this.strippedBody(code));
     } catch (error) {
       if (!meantAsReference) throw error;
-      throw new RangeError(
+      throw new YianRangeError(
         `\`code:\` value ${reprText(code)} looks like a file reference, but a reference is a relative ` +
           "`./` or `../` path to a `.ts`, `.js` or `.mjs` file, with no whitespace, then `:` and an export " +
           "name, like `./file.ts:fn`",

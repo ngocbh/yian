@@ -253,7 +253,8 @@ function blockOnResponses(provider: string, model: string): Failed {
     error: RangeError,
     message:
       `The '${provider}' block mirrors the Chat Completions request, but model '${model}' is routed to ` +
-      "the Responses API; remove the block or use a model served through Chat Completions.",
+      "the Responses API by its name; remove the block, or set api: chat if the model is served through " +
+      "Chat Completions.",
     at: "build",
   };
 }
@@ -494,8 +495,8 @@ const CASES: Case[] = [
     expect: {
       error: AuthError,
       message:
-        "This run's openai API key came from the host's llm_config.api_key and is not recorded; " +
-        "pass apiKey to advance",
+        "This run's openai API key came from the host's llmConfig.api_key and is not recorded; " +
+        "pass it to advance as apiKey",
       at: "build",
     },
   },

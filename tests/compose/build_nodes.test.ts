@@ -13,7 +13,7 @@ import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { type SourceDocument, SourceCursor } from "../../src/compose/source/index.ts";
-import { forget } from "../../src/defaults.ts";
+import { current, forget } from "../../src/defaults.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
@@ -104,6 +104,19 @@ test("an invalid llm_config uses the config field's range", () => {
       "provider\n" +
       '  Input should be "openai", "xai", "deepseek", "qwen", "qwen-cn", "glm", "glm-cn", "minimax", ' +
       '"minimax-cn", "openrouter", "vllm", "ollama", "anthropic", "google" or "azure"',
+  );
+});
+
+test("a provider block's free-form field nested too deeply is a ranged load error at the field", () => {
+  const limit = current().maxValueNesting;
+  const deep = (levels: number) => `${"{a: ".repeat(levels)}1${"}".repeat(levels)}`;
+  const flow = (levels: number) => badConfigFlow(` {provider: vllm, vllm: {chat_template_kwargs: ${deep(levels)}}}`);
+  build(nodesOfDocument(parseSourceDocument(flow(limit), "flow.yaml")).get("note")!);
+  llmConfigErrorAt(
+    flow(limit + 1),
+    "node 'note': llm_config: 1 validation error for LLMConfig\n" +
+      "vllm.chat_template_kwargs\n" +
+      `  Value nests deeper than ${limit} levels, the limit for a yian value (each record and list is a level)`,
   );
 });
 

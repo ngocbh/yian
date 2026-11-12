@@ -52,6 +52,7 @@ test("llm config keys are spelled as authored", () => {
       "project",
       "headers",
       "structured_output",
+      "api",
       ...SUPPORTED_LLM_PROVIDERS,
     ]),
   );
@@ -385,7 +386,7 @@ describe("edge cases", () => {
     expect(config.apiKey).toBe(SENTINEL);
   });
 
-  test("JSON.stringify shows exactly the six public fields", () => {
+  test("JSON.stringify shows exactly the seven public fields", () => {
     const config = new LLMConfig({
       provider: "openai",
       model: "gpt-5.4",
@@ -399,6 +400,7 @@ describe("edge cases", () => {
       organization: null,
       project: null,
       structuredOutput: null,
+      api: null,
     });
     expect(JSON.stringify(config)).not.toContain(SENTINEL);
   });

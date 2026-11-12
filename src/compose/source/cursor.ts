@@ -1,6 +1,7 @@
 /** Immutable cursors over physical and virtual YAML source values. */
 
 import { reprText, type SourceRange } from "../../diagnostics.ts";
+import { YianTypeError } from "../../typesys/errors.ts";
 import {
   isList,
   isRecord,
@@ -34,6 +35,13 @@ interface ProjectedEntry {
   readonly key: string;
   readonly source: SourceCursor | null;
 }
+
+/**
+ * Each projection's child cursors, by entry, built on first read: a cursor is immutable, so one
+ * child serves every read, and a projection read key by key (a node's thousands of `input:`
+ * bindings) builds each child once instead of once per read.
+ */
+const projectedChildren = new WeakMap<SourceCursor, Map<ProjectedEntry, SourceCursor>>();
 
 /** @internal The fields a cursor is built from. */
 interface CursorFields {
@@ -627,7 +635,7 @@ export class SourceCursor {
     const sources = new Map<string, SourceCursor | null>();
     for (const [key, [value, source]] of entries) {
       if (source !== null && !(source instanceof SourceCursor)) {
-        throw new TypeError("projected entry source must be a SourceCursor or null");
+        throw new YianTypeError("projected entry source must be a SourceCursor or null");
       }
       setRecordKey(displayed, key, value);
       sources.set(key, source);
@@ -822,8 +830,18 @@ export class SourceCursor {
 
   /** @internal Return a projected value's cursor, with its entry's source when it has one. */
   _projectedChild(entry: ProjectedEntry): SourceCursor {
-    const value = (this._value as ValueRecord)[entry.key]!;
-    return entry.source === null ? SourceCursor._adopt(value) : entry.source._withSnapshot(value);
+    let built = projectedChildren.get(this);
+    if (built === undefined) {
+      built = new Map();
+      projectedChildren.set(this, built);
+    }
+    let child = built.get(entry);
+    if (child === undefined) {
+      const value = (this._value as ValueRecord)[entry.key]!;
+      child = entry.source === null ? SourceCursor._adopt(value) : entry.source._withSnapshot(value);
+      built.set(entry, child);
+    }
+    return child;
   }
 
   /**

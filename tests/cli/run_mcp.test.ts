@@ -16,6 +16,7 @@ import { openMcpServers } from "../../src/cli/run.ts";
 import type { CliIo } from "../../src/cli/utils.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { loadSkills } from "../../src/compose/skills.ts";
+import { YianRangeError, YianTypeError } from "../../src/typesys/errors.ts";
 import { runFlow } from "../../src/run.ts";
 import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { McpSdkMissingError, McpServer, mcpServer } from "../../src/tools/mcp.ts";
@@ -825,6 +826,39 @@ test("a later file disables a user server", async () => {
   expect(result.code).toBe(1);
   expect(flat(result.output)).toContain("tool 'echo', which isn't in this run's tools");
   expect(existsSync(pid)).toBe(false);
+});
+
+test("a TypeError or RangeError yian didn't throw is a bug, with its stack", async () => {
+  const cfg = config(join(tmp, "cfg.json"), { fake: stdio() });
+  const flow = toolFlow();
+  const open = McpServer.prototype.open;
+  const outcomes = [];
+  try {
+    for (const error of [
+      new TypeError("Cannot read properties of undefined (reading 'x')"),
+      new RangeError("Maximum call stack size exceeded"),
+      new YianTypeError("a bad value"),
+      new YianRangeError("a value out of range"),
+    ]) {
+      McpServer.prototype.open = async () => {
+        throw error;
+      };
+      outcomes.push(await run([flow, "--mcp-config", cfg]));
+    }
+  } finally {
+    McpServer.prototype.open = open;
+  }
+  const [typeBug, rangeBug, typeSetup, rangeSetup] = outcomes;
+
+  for (const bug of [typeBug!, rangeBug!]) {
+    expect(bug.code).toBe(70);
+    expect(bug.stderr).toContain("\n    at ");
+    expect(bug.stderr).not.toContain("run failed:");
+  }
+  expect(typeBug!.stderr).toContain("TypeError: Cannot read properties of undefined (reading 'x')\n    at ");
+  expect([typeSetup!.code, rangeSetup!.code]).toEqual([1, 1]);
+  expect(typeSetup!.output).toContain("run failed: a bad value");
+  expect(rangeSetup!.output).toContain("run failed: a value out of range");
 });
 
 test("only the missing mcp sdk import error is a host error", async () => {

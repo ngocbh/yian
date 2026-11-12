@@ -64,11 +64,12 @@ import {
   thrownBy,
   prepareGrowth,
 } from "../helpers/run_state_fixtures.ts";
+import { thrownClass } from "../helpers/own_errors.ts";
 
 /** Assert `fn` throws an error of exactly class `cls` whose message is `message`. */
 function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, message: string): void {
   const caught = thrownBy(fn);
-  expect((caught as Error | undefined)?.constructor).toBe(cls);
+  expect((caught as Error | undefined)?.constructor).toBe(thrownClass(cls));
   expect((caught as Error).message).toBe(message);
 }
 

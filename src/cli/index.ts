@@ -22,6 +22,7 @@ import { constants } from "node:os";
 
 import { DefaultsError, read, withEnv } from "../defaults.ts";
 import { compiled, onPipeEnd, VERSION, withWarnings } from "../platform.ts";
+import { showForTerminal } from "./sanitize.ts";
 import {
   type CliIo,
   type CommandSpec,
@@ -657,7 +658,9 @@ export async function main(argv: readonly string[], io: CliIo = processIo()): Pr
   }
   const fail = async (group: string | undefined, message: string) => {
     const name = group === undefined ? "yian" : `yian ${group}`;
-    await io.stderr.write(`${groupUsage(group)}\nTry '${name} --help' for help.\n\nError: ${message}\n`);
+    // The message quotes what was typed.
+    const shown = showForTerminal(message, io.stderr);
+    await io.stderr.write(`${groupUsage(group)}\nTry '${name} --help' for help.\n\nError: ${shown}\n`);
     return 2;
   };
   if (first.startsWith("-")) return fail(undefined, `No such option: ${first}`);

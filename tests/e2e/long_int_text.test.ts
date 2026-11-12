@@ -19,7 +19,8 @@ import { serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-long-int-text-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
-const env = hostEnv(dir);
+// A 5000-digit int is over the default YIAN_MAX_INT_DIGITS.
+const env = hostEnv(dir, { YIAN_MAX_INT_DIGITS: "5000" });
 
 const POWER = 10n ** 4999n; // `10 ** input.n` with `n = 4999`
 const DIGITS = String(POWER);

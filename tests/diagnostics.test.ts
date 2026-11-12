@@ -50,6 +50,7 @@ const EXPECTED_FAILURE_CODES: readonly FailureCode[] = [
   "condition.evaluate",
   "tool.timeout",
   "agent.interrupted",
+  "agent.output_truncated",
 ];
 
 /** Return what `fn` throws; fail the test if it returns. */
@@ -725,10 +726,13 @@ describe("noteCleanup", () => {
 });
 
 describe("the diagnostics module", () => {
-  test("imports nothing", () => {
+  test("imports only yian's own error classes, which import nothing", () => {
     // The diagnostic value spine must stay below every other module.
     const path = fileURLToPath(new URL("../src/diagnostics.ts", import.meta.url));
-    expect(importStatements(readFileSync(path, "utf8"))).toEqual([]);
+    const targets = importStatements(readFileSync(path, "utf8")).map((statement) => statement.specifier);
+    expect(targets).toEqual(["./typesys/errors.ts"]);
+    const errors = fileURLToPath(new URL("../src/typesys/errors.ts", import.meta.url));
+    expect(importStatements(readFileSync(errors, "utf8"))).toEqual([]);
   });
 });
 

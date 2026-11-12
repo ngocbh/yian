@@ -366,11 +366,14 @@ function namedLoop(assertion: string): string {
   return flow(nodes, "${drive.output}", { defs: LOOP_NAMED_BODY });
 }
 
-/** A one-turn inline LOOP carrying `Rec3`, seeded with `step`'s `Rec`. */
+/**
+ * A one-turn inline LOOP carrying `Rec3`, seeded with `step`'s `Rec` tagged `Rec3`: records are
+ * closed, so an untagged `Rec` seed would type the carried field `Rec`, which `Rec3` doesn't fit.
+ */
 function inlineLoop(assertion: string): string {
   const nodes =
     "  drive:\n    kind: loop\n    times: 1\n" +
-    "    input:\n      st: ${step.output}\n" +
+    "    input:\n      st: !Rec3 ${step.output}\n" +
     `    asserts:\n      - "${assertion}"\n` +
     "    nodes:\n" +
     "      bump:\n" +

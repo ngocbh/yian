@@ -8,7 +8,7 @@
  * - `rejectCycles`: a cycle check over a bare edge list + node-id set, through that order.
  * - `classifyPath`: head-resolution for one dotted `${...}` ref. Field reads are checked by the
  *   shared output-contract walk in `nodes/contracts.ts`.
- * - `typesCompatible`: whether every value of a source type fits a sink type.
+ * - `typesCompatible`: whether every value of a source type fits a sink type (`typeRelation` fits).
  * - `typeRelation`: how an inferred type relates to a declared one: it fits, is narrower (only
  *   some values fit), or is disjoint (no value fits).
  *
@@ -20,6 +20,7 @@
 
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { slashedNameHint } from "../expr/grammar.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import { messagesKey, NEW_MESSAGES } from "../typesys/pool.ts";
 import {
   type Bound,
@@ -53,7 +54,7 @@ export const SYSTEM_AMBIENTS: ReadonlyMap<string, ValueKind> = new Map([
  * Thrown by the graph/reference checkers and caught by the compose loader, which rethrows it as
  * a located `LoadError`.
  */
-export class FlowValidationError extends RangeError {
+export class FlowValidationError extends YianRangeError {
   override name = "FlowValidationError";
   /**
    * All accumulated located problems. The reference-wiring pass collects every problem it
@@ -157,83 +158,15 @@ function intervalWithin(source: Type, sink: Type): boolean {
 }
 
 /**
- * Return structural compatibility of a source value type with a sink slot.
- *
- * Same `kind` (with int->number widening, mirroring `coerceScalar`, and a date or datetime
- * fitting `str`, since each is stored as an ISO string, as `typeRelation` counts it); the singleton `None`
- * source may fill any nullable sink; records match structurally (every field the sink REQUIRES
- * is present + compatible); enums by tag-subset (source tags within the sink's accepted tags,
- * so an untagged source cannot fill an enum sink); list elements recurse, treating a bare
- * specialized list as its non-null scalar element contract and an unproven
- * `list(Optional(Any))` as `Optional(Any)` items; a nullable source cannot fill a non-nullable
- * sink.
- * A bounded numeric sink (either end may be open) requires a source interval contained within
- * it.
- * A source union fits a sink union when each of its members fits some sink member; a record
- * fits a union when it fits some member; a union fits `object` but never a record, and `object`
- * never fits a union.
- * Every non-null type without a `file` in it fits `Any`; `Any` fits only `Any` (and
- * `Optional(Any)`), since load can't tell which JSON value it holds.
- * `Inbox(T)` relates to `Inbox(U)` as `T` to `U`, and to nothing else, `Any` and `object`
- * included. A memory fits only the same memory type with an equal item record.
+ * Return whether every value of a source type fits a sink slot: `typeRelation(source, sink)` is
+ * `"fits"`, so records are closed, as the write boundary checks them.
  *
  * @param source - Type guaranteed by the producer.
  * @param sink - Type required by the consumer slot.
  * @returns Whether every value admitted by `source` is admitted by `sink`.
  */
 export function typesCompatible(source: Type, sink: Type): boolean {
-  if (source.kind === ValueKind.NONE) return sink.kind === ValueKind.NONE || sink.nullable;
-  if (source.nullable && !sink.nullable) return false;
-  if (source.kind === ValueKind.INBOX || sink.kind === ValueKind.INBOX) {
-    return source.kind === sink.kind && typesCompatible(source.element!, sink.element!);
-  }
-  if (source.kind === ValueKind.MEMORY || sink.kind === ValueKind.MEMORY) return sameMemory(source, sink);
-  if (sink.kind === ValueKind.ANY) return !hasFile(source);
-  if (source.kind === ValueKind.ANY) return false;
-  const sourceIsList = isListKind(source.kind);
-  const sinkIsList = isListKind(sink.kind);
-  if (sourceIsList || sinkIsList) {
-    if (!(sourceIsList && sinkIsList)) return false;
-    return typesCompatible(listElement(source), listElement(sink));
-  }
-  if (
-    source.kind !== sink.kind &&
-    !(sink.kind === ValueKind.NUMBER && source.kind === ValueKind.INTEGER) &&
-    !(sink.kind === ValueKind.STRING && STRING_STORED.has(source.kind))
-  ) {
-    return false;
-  }
-  if (sink.bounds !== undefined && !intervalWithin(source, sink)) return false;
-  if (sink.members !== undefined) {
-    let members: readonly Type[];
-    if (source.members !== undefined) {
-      members = source.members;
-    } else if (source.fields !== undefined) {
-      // Members are non-nullable; the union's own nullability was checked above.
-      members = [source.replace({ nullable: false })];
-    } else {
-      return false;
-    }
-    const options = sink.members;
-    return members.every((member) => options.some((option) => typesCompatible(member, option)));
-  }
-  if (sink.fields !== undefined) {
-    // A union may hold a member other than this record, and load can't tell which.
-    if (source.members !== undefined) return false;
-    const sourceFields = source.fields;
-    if (sourceFields === undefined) return false;
-    for (const fname of sink.required ?? []) {
-      if (!sourceFields.has(fname)) return false;
-    }
-    for (const [fname, ftyp] of sink.fields) {
-      const sourceField = sourceFields.get(fname);
-      if (sourceField !== undefined && !typesCompatible(sourceField, ftyp)) return false;
-    }
-  }
-  if (sink.tags !== undefined && (source.tags === undefined || !isSubset(source.tags, sink.tags))) {
-    return false;
-  }
-  return true;
+  return typeRelation(source, sink) === "fits";
 }
 
 /** How an inferred type relates to a declared one (see `typeRelation`). */
@@ -260,11 +193,9 @@ const STRING_STORED: ReadonlySet<ValueKind> = new Set([ValueKind.DATE, ValueKind
  *   differing field both sides may omit (or may both hold `None`) still shares non-null record
  *   values, so it is narrower, not disjoint.
  *
- * This mirrors `typesCompatible` for `"fits"` but is stricter in one place: records are treated
- * as closed, as the write-boundary check treats them (unknown fields are rejected), so a record
- * fits only when its fields are a subset of the declared fields at every level. It is also more
- * permissive in one place: `date` and `datetime` fit `str`, since they are stored as strings. A
- * `Literal` meets `date` or `datetime` only through tags that are valid ISO strings of that
+ * Records are treated as closed, as the write-boundary check treats them (unknown fields are
+ * rejected), so a record fits only when its fields are a subset of the declared fields at every
+ * level. `date` and `datetime` fit `str`, since they are stored as strings. A `Literal` meets `date` or `datetime` only through tags that are valid ISO strings of that
  * kind. Unions are compared member-wise: each inferred member takes its best relation against
  * the declared members, so a union member over the union is narrower and a record matching no
  * member is disjoint. A type without a `file` in it fits `Any` (narrower when nullable); one

@@ -47,6 +47,7 @@ import {
   routeInFlight,
   prepareGrowth,
 } from "../helpers/run_state_fixtures.ts";
+import { thrownClass } from "../helpers/own_errors.ts";
 
 /** Assert `fn` throws an error of exactly class `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, message: string): unknown {
@@ -56,7 +57,7 @@ function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, me
   } catch (error) {
     caught = error;
   }
-  expect((caught as Error | undefined)?.constructor).toBe(cls);
+  expect((caught as Error | undefined)?.constructor).toBe(thrownClass(cls));
   expect((caught as Error).message).toBe(message);
   return caught;
 }
@@ -88,14 +89,14 @@ test("a node step round trips under its wire kind", () => {
   expect(encodeRecord(decoded)).toBe(encoded);
   const wire = parseJson(encoded, "codec") as Record<string, unknown>;
   expect(wire["kind"]).toBe("node_step");
-  expect(wire["schema"]).toBe(30n);
+  expect(wire["schema"]).toBe(32n);
   expect(wire["payload"]).toEqual({ node_id: "a", n: 1n, step: FAILED });
 });
 
 test("a wire step keeps yian's infinity tag", () => {
   const text =
     '{"kind":"node_step","payload":{"n":1,"node_id":"a","step":{"high":{"$float":"inf"},"kind":"x"}},' +
-    '"run_id":"run-1","schema":30,"seq":0}';
+    '"run_id":"run-1","schema":32,"seq":0}';
   const record = decodeRecord(text).record as NodeStepRecord;
   expect(record.step).toEqual({ high: Infinity, kind: "x" });
   expect(record.n).toBe(1);
@@ -124,7 +125,7 @@ test.each<[string, unknown, new (...args: never[]) => Error, string]>([
 
 test("a node step wire payload rejects non-finite numbers", () => {
   const text =
-    '{"schema":30,"run_id":"run-1","seq":0,"kind":"node_step","payload":{"node_id":"a","n":1,"step":{"retry_in":NaN}}}';
+    '{"schema":32,"run_id":"run-1","seq":0,"kind":"node_step","payload":{"node_id":"a","n":1,"step":{"retry_in":NaN}}}';
   const caught = expectError(() => decodeRecord(text), RangeError, "invalid run-record JSON") as Error;
   expect((caught.cause as Error).constructor).toBe(JSONDecodeError);
   expect((caught.cause as Error).message).toStartWith("NaN is not JSON");

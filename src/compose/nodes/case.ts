@@ -52,6 +52,7 @@ import {
   Parameter,
   validateOptionalOrigin,
 } from "../../nodes/contracts.ts";
+import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import { NEW_MESSAGES, poolRootLength } from "../../typesys/pool.ts";
 import { typeName } from "../../typesys/types.ts";
 import { isRecord, shownText, valueRepr } from "../../typesys/values.ts";
@@ -189,13 +190,13 @@ export class CaseDescriptor extends NodeDescriptor {
     this.thenIncludes = fields.thenIncludes ?? [];
     this.elseInclude = fields.elseInclude ?? null;
     const whenOrigins: unknown = fields.whenOrigins ?? [];
-    if (!Array.isArray(whenOrigins)) throw new TypeError("CASE predicate origins must be an array");
+    if (!Array.isArray(whenOrigins)) throw new YianTypeError("CASE predicate origins must be an array");
     // A frozen copy, so the origins can't change after the alignment check.
     this.whenOrigins = Object.freeze([...whenOrigins]);
     this._validateOriginAlignment();
     for (const origin of this.whenOrigins) {
       if (origin !== null && !(origin instanceof OriginRef)) {
-        throw new TypeError("CASE predicate origin must be an OriginRef or null");
+        throw new YianTypeError("CASE predicate origin must be an OriginRef or null");
       }
     }
     this.onOrigin = fields.onOrigin ?? null;
@@ -210,7 +211,7 @@ export class CaseDescriptor extends NodeDescriptor {
   _validateOriginAlignment(): void {
     if (this.whenOrigins.length === 0) return;
     if (!Array.isArray(this.cases) || this.cases.length !== this.whenOrigins.length) {
-      throw new RangeError("CASE predicate origins must align with cases");
+      throw new YianRangeError("CASE predicate origins must align with cases");
     }
   }
 

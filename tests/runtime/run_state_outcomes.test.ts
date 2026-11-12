@@ -67,6 +67,7 @@ import {
   terminalSkipRouteFlow,
   prepareGrowth,
 } from "../helpers/run_state_fixtures.ts";
+import { thrownClass } from "../helpers/own_errors.ts";
 
 /** Assert `fn` throws an error of exactly class `cls` with exactly `message`; return it. */
 function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, message: string): Error {
@@ -76,7 +77,7 @@ function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, me
   } catch (error) {
     caught = error;
   }
-  expect((caught as Error | undefined)?.constructor).toBe(cls);
+  expect((caught as Error | undefined)?.constructor).toBe(thrownClass(cls));
   expect((caught as Error).message).toBe(message);
   return caught as Error;
 }
@@ -84,7 +85,7 @@ function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, me
 /** Assert `fn` throws a `NodeDataError` whose `original` is exactly of class `cls` with `message`. */
 function expectNodeData(fn: () => unknown, cls: new (...args: never[]) => Error, message: string): NodeDataError {
   const caught = expectError(fn, NodeDataError, message) as NodeDataError;
-  expect((caught.original as Error).constructor).toBe(cls);
+  expect((caught.original as Error).constructor).toBe(thrownClass(cls));
   expect((caught.original as Error).message).toBe(message);
   expect(caught.cause).toBe(caught.original);
   return caught;

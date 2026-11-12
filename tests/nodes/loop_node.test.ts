@@ -21,6 +21,7 @@ import { LoopMaxExceeded, LoopNode } from "../../src/nodes/loop/node.ts";
 import type { JsonValue } from "../../src/typesys/json.ts";
 import { FileRef, Type, ValueKind } from "../../src/typesys/values.ts";
 import { childFlow, engine, graph, rejected } from "../helpers/run_state_fixtures.ts";
+import { YianRangeError } from "../../src/typesys/errors.ts";
 
 /** Assert that `fn` throws exactly `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeError, message: string): void {
@@ -387,7 +388,7 @@ test.each([["while"], ["until"]] as const)("a %s loop with no predicate fails it
   const message = `loop node 'lp' has no \`${kind}\` expression`;
 
   expectError(() => node.validateExecutionSetup(), RangeError, message);
-  expect(await rejected(node.run({ x: 1n }))).toEqual(new RangeError(message));
+  expect(await rejected(node.run({ x: 1n }))).toEqual(new YianRangeError(message));
 });
 
 test("a times loop with no count fails its setup check", () => {

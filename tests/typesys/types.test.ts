@@ -49,6 +49,7 @@ import {
 import { caseDocument, parametersFromYaml } from "../helpers/declarations.ts";
 import type { Case } from "../conformance/runner.ts";
 import { typeCheckError } from "../helpers/type_errors.ts";
+import { thrownClass } from "../helpers/own_errors.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
 beforeEach(() => install(BUILTIN));
@@ -63,7 +64,7 @@ function shapeError(typ: Type, cls: typeof TypeError | typeof RangeError): Error
   try {
     typ.validateShape();
   } catch (error) {
-    expect((error as Error).constructor).toBe(cls);
+    expect((error as Error).constructor).toBe(thrownClass(cls));
     return error as Error;
   }
   throw new Error("validateShape() did not throw");

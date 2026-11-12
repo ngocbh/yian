@@ -1,0 +1,11 @@
+# 2 bindings of a, then 2 of b for each: the 6th binding goes over a cap of 5.
+kind: expr
+expr: '[a for a in xs for b in xs]'
+values:
+  xs: [1, 2]
+env:
+  YIAN_MAX_COMPREHENSION_ITEMS: '5'
+expect:
+  raises:
+    class: ExpressionError
+    message: comprehension `for b in xs` goes over the limit of 5 items bound in one expression (YIAN_MAX_COMPREHENSION_ITEMS)

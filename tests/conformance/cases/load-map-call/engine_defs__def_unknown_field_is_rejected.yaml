@@ -30,7 +30,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'defs entry ''d'': unknown field(s) ["bogus"] (allowed: asserts, env, input, llm_config, nodes, output)'
+      message: 'defs entry ''d'': unknown field(s) ["bogus"] (allowed: asserts, description, env, input, llm_config, nodes, output)'
       frames:
       - label: flow.yaml
         range: [18, 5, 18, 10]

@@ -15,7 +15,8 @@ import { hostEnv } from "../helpers/mcp_helpers.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-expr-arithmetic-errors-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
-const env = hostEnv(dir);
+// A 5000-digit int is over the default YIAN_MAX_INT_DIGITS.
+const env = hostEnv(dir, { YIAN_MAX_INT_DIGITS: "5000" });
 
 /** Return a flow whose CODE node `n` binds `v: <value>` over flow inputs `decl` and outputs it as text. */
 const flow = (decl: string, value: string) => `
@@ -64,7 +65,7 @@ test("an int too large for float division fails the run", async () => {
 });
 
 test("a type error on a huge int fails the run", async () => {
-  const failure = await failed("n: !int", '${10 ** input.n + "a"}', { n: 5000n });
+  const failure = await failed("n: !int", '${10 ** input.n + "a"}', { n: 4999n });
   expect(failure.message).toContain("type error");
 });
 

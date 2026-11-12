@@ -7,10 +7,11 @@
  * of a fixed table, and the request fields it needs. The resulting `StructuredPlan` `apply`s
  * those fields to a request, gives the prompt strategy's `instruction` and the retry
  * `correction` texts, and `parse`s the reply's JSON object; `parse` throws
- * `StructuredOutputError`, or its subclass `MissingToolCallError` for a tool strategy. The caller
- * validates replies against the schema it passed.
+ * `StructuredOutputError`, or its subclass `MissingToolCallError` for a tool strategy's reply with
+ * no call of the schema's tool. The caller validates replies against the schema it passed.
  */
 
+import { YianTypeError } from "../typesys/errors.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { encodeBody } from "./body.ts";
 import { modelProfile } from "./capabilities.ts";
@@ -40,8 +41,8 @@ import { AnthropicMessages } from "./protocols/anthropic_messages.ts";
 import { OpenAIResponses } from "./protocols/openai_responses.ts";
 
 /**
- * A structured reply that holds no valid answer: no JSON object, a refusal, or
- * (`MissingToolCallError`) no call of the schema's tool.
+ * A structured reply that holds no valid answer: no JSON object, a call of the schema's tool whose
+ * arguments are not one, a refusal, or (`MissingToolCallError`) no call of the schema's tool.
  */
 export class StructuredOutputError extends Error {
   override name = "StructuredOutputError";
@@ -142,7 +143,7 @@ export class StructuredPlan {
    */
   apply(request: Request): Request {
     if (request.tools.length > 0 || request.outputFormat !== null) {
-      throw new TypeError("a structured request carries only the schema's tool");
+      throw new YianTypeError("a structured request carries only the schema's tool");
     }
     if (this.strategy === "prompt") return request;
     return new Request({
@@ -179,22 +180,32 @@ export class StructuredPlan {
    *
    * The tool strategies read the first call of the schema's tool whose arguments parsed, or else
    * whose raw arguments text is a JSON object. The text strategies read the message's text with
-   * `parseObjectReply`.
+   * `parseObjectReply`. A reply the provider cut off at the token limit (`finishReason` `length`)
+   * says so after its invalid arguments or text.
    *
-   * @throws {MissingToolCallError} A tool strategy's reply has no valid call of the schema's tool.
-   * @throws {StructuredOutputError} A text strategy's reply holds no JSON object; the message
-   *   names the model's refusal, if any, else the text.
+   * @throws {MissingToolCallError} A tool strategy's reply has no call of the schema's tool.
+   * @throws {StructuredOutputError} A tool strategy's calls of the schema's tool have no JSON
+   *   object for arguments; the message gives the first one's raw text, cut to 200 characters. A
+   *   text strategy's reply holds no JSON object; the message names the model's refusal, if any,
+   *   else the text.
    */
   parse(response: Response): JsonObject {
     const parts = response.message.parts;
+    const cutOff = response.finishReason === "length" ? "; the reply was cut off at the token limit" : "";
     if (this.strategy === "forced_tool" || this.strategy === "unforced_tool") {
+      let unparsed: string | null = null;
       for (const part of parts) {
         if (!(part instanceof ToolCallPart) || part.name !== this.name) continue;
         // The adapter's parse refuses arguments nesting past the limit and keeps their raw text.
         const args = part.arguments ?? (part.rawArguments === null ? null : parseObject(part.rawArguments));
         if (args !== null) return args;
+        unparsed ??= part.rawArguments ?? "";
       }
-      throw new MissingToolCallError(`the reply did not call the ${this.name} tool; call it with the answer`);
+      if (unparsed === null) {
+        throw new MissingToolCallError(`the reply did not call the ${this.name} tool; call it with the answer`);
+      }
+      const shown = cutText(unparsed, SHOWN_ARGUMENTS_CHARS);
+      throw new StructuredOutputError(`the ${this.name} call's arguments are not a JSON object: ${shown}${cutOff}`);
     }
     const text = response.message.text();
     const value = parseObjectReply(text);
@@ -203,8 +214,17 @@ export class StructuredPlan {
     if (refusals.length > 0) {
       throw new StructuredOutputError(`the model refused: ${refusals.map((part) => part.text).join("\n")}`);
     }
-    throw new StructuredOutputError(`Invalid json output: ${text.trim()}`);
+    throw new StructuredOutputError(`Invalid json output: ${text.trim()}${cutOff}`);
   }
+}
+
+// Enough of a call's arguments to see where they went wrong, without echoing a whole answer.
+const SHOWN_ARGUMENTS_CHARS = 200;
+
+/** Return `text` cut to its first `limit` code points, with `…` when it was longer. */
+function cutText(text: string, limit: number): string {
+  const points = Array.from(text);
+  return points.length > limit ? points.slice(0, limit).join("") + "…" : text;
 }
 
 const FENCE = "```";
@@ -283,7 +303,7 @@ function parseObject(text: string): JsonObject | null {
 export function planStructured(target: StructuredTarget, schema: JsonObject): StructuredPlan {
   const name = schema["title"];
   if (typeof name !== "string" || name === "") {
-    throw new TypeError("a structured output schema needs a title, its name");
+    throw new YianTypeError("a structured output schema needs a title, its name");
   }
   const plan = (strategy: Strategy, fields: PlanFields = {}) =>
     new StructuredPlan({ ...fields, strategy, name, schema });

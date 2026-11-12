@@ -17,6 +17,7 @@ import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { handClock } from "../helpers/inbox_fixtures.ts";
 import { rejected } from "../helpers/run_state_fixtures.ts";
 import { processChatFlow, processEnv as env } from "../helpers/yian-host-api-child-hold.ts";
+import { YianRangeError } from "../../src/typesys/errors.ts";
 import { outputTag } from "../helpers/output_tags.ts";
 
 const ROOT = mkdtempSync(join(tmpdir(), "host-api-e2e-"));
@@ -61,7 +62,7 @@ test("an inbox input: START holds its handle, the run-start commit omits it; sen
 
 test("a run input for an inbox is refused", async () => {
   const error = await rejected(runFlow(processChatFlow(), { m: ["hi"] }, { log: freshLog(), env, tools }));
-  expect(error).toEqual(new RangeError("inbox `m` receives events through send(); it takes no run input"));
+  expect(error).toEqual(new YianRangeError("inbox `m` receives events through send(); it takes no run input"));
 });
 
 const CHAT = `id: chat
@@ -96,7 +97,7 @@ test("YAML: an inbox input waits on its take; send, close and advance end it", a
   const advanced = await advance({ log, env });
   expect([advanced.status, advanced.output]).toEqual(["succeeded", { events: ["hi"], closed: true }]);
   const error = await rejected(runFlow(flow, { m: ["hi"] }, { log: freshLog(), env }));
-  expect(error).toEqual(new RangeError("inbox `m` receives events through send(); it takes no run input"));
+  expect(error).toEqual(new YianRangeError("inbox `m` receives events through send(); it takes no run input"));
 });
 
 const CALLED = `id: called

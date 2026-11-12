@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "az_truncated: truncated content with finish length: the Response comes back and the parse fails. azure/my-deploy on openai_chat. Schema Rec (corpus:Rec), name Record. Strategy json_schema. Request: response_format {type: \"json_schema\", json_schema: {name: \"Record\", schema: the strict schema of Rec, strict: true}}. Expected: plan.parse(response) throws StructuredOutputError(\"Invalid json output: {\\\"answer\\\": \\\"x\\\", \\\"score\\\": 1\").",
+  "description": "az_truncated: truncated content with finish length: the Response comes back and the parse fails. azure/my-deploy on openai_chat. Schema Rec (corpus:Rec), name Record. Strategy json_schema. Request: response_format {type: \"json_schema\", json_schema: {name: \"Record\", schema: the strict schema of Rec, strict: true}}. Expected: plan.parse(response) throws StructuredOutputError(\"Invalid json output: {\\\"answer\\\": \\\"x\\\", \\\"score\\\": 1; the reply was cut off at the token limit\").",
   "interactions": [
     {
       "request": {

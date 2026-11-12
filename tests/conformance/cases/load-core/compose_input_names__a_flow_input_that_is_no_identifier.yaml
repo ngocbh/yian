@@ -1,0 +1,19 @@
+# No `${input.<name>}` can read `first-name` (it reads as `input.first - name`), so the input is
+# refused at its key instead of failing every run at the start.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    first-name: !str
+  nodes:
+    a: {kind: code, code: ./fixtures/compose_codefns.ts:echo, input: {topic: x}, output: str}
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "flow input 'first-name' must be an identifier (ASCII letters, digits, and _, not starting with a digit) so ${input.first-name} can read it; try 'first_name'"
+      frames:
+      - label: flow.yaml
+        range: [4, 3, 4, 13]

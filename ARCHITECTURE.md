@@ -20,7 +20,7 @@ flowchart LR
    checks types, expressions and wiring. Any error is a `LoadError`, and nothing runs.
 2. **Compile.** `compile/` turns the result into a `CompiledFlow`: the graph, the output
    contracts, the LLM config cascade and a fingerprint. It also builds the
-   fragments `call`, `map` and `loop` grow into at run time.
+   fragments `call`, `map`, `loop` and an agent's flow tools grow into at run time.
 3. **Run.** `runFlow` and `advance` (`run.ts`) start or continue a run. `FlowEngine`
    (`runtime/engine.ts`) picks ready nodes, evaluates them (`runtime/eval_node.ts`), and turns
    each outcome into records through `RunState` (`runtime/state.ts`).
@@ -64,7 +64,8 @@ tests (`tests/runtime/run_recovery_*.test.ts`) and the conformance runner's `--c
 this.
 
 **The author fixes the graph.** A running flow never rewrites itself and a model never chooses the
-graph. Growth only instantiates child flows the author wrote, through `call`, `map` and `loop`.
+graph. Growth only instantiates child flows the author wrote, through `call`, `map` and `loop`, or
+a flow an agent grants as a tool, whose calls the model chooses among the flows granted.
 
 **Nodes are pure at the graph boundary.** A node gets its bound inputs and returns one of
 `Output`, `Route`, `Grow` or `Pending` (`nodes/base.ts`). It never writes the variable pool; the

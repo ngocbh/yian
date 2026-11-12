@@ -326,7 +326,8 @@ export function foldRunScan(scan: RunScan, envelope: { readonly seq: number; rea
     settle(record.nodeId);
     if (record.terminalFailure !== null) scan.unreachableSeq ??= seq;
   } else if (record instanceof NodeExpandedRecord) {
-    settle(record.spawnerId);
+    // A flow call's scope leaves its agent in flight.
+    if (record.callId === null) settle(record.spawnerId);
   } else if (record instanceof NodeFailedRecord) {
     settle(record.failure.nodeId!);
     scan.nodeFailureSeq ??= seq;

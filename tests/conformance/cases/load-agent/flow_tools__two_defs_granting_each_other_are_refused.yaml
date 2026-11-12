@@ -1,0 +1,45 @@
+# Two defs whose agents grant each other are recursive.
+kind: load
+flow: |
+  id: f
+  name: f
+  defs:
+    ping:
+      description: Ping.
+      nodes:
+        a:
+          kind: agent
+          prompt: Ping.
+          output: str
+          tools: [pong]
+      output: ${a.output}
+    pong:
+      description: Pong.
+      nodes:
+        b:
+          kind: agent
+          prompt: Pong.
+          output: str
+          tools: [ping]
+      output: ${b.output}
+  nodes:
+    helper:
+      kind: agent
+      prompt: Help.
+      output: str
+      tools: [ping]
+  output: ${helper.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs entry ''ping'': defs entry ''pong'': recursive defs reference: callable ''ping'' is defined in terms of itself (the baked call graph must be finite)'
+      frames:
+      - label: flow.yaml
+        range: [5, 5, 13, 3]
+        note: definition 'ping'
+      - label: flow.yaml
+        range: [14, 5, 22, 1]
+        note: definition 'pong'
+      - label: flow.yaml
+        range: [5, 5, 13, 3]

@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test";
 
 import { resolveRunLlm } from "../../src/compile/llm_cascade.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
+import { current } from "../../src/defaults.ts";
 import { HOST_KEY_MARKER, missingModelMessage } from "../../src/llm_clients/connection.ts";
 import { requireConcreteSelection, resolveAgentConfig, validateLayer } from "../../src/llm_clients/layers.ts";
 
@@ -146,6 +147,20 @@ describe("edge cases", () => {
     expect(rangeError(() => validateLayer({ _header_names: [] }))).toBe(
       "llm_config._header_names is internal to recorded runs",
     );
+  });
+
+  test("a block's free-form field nested too deeply is refused at the field; its other values wait for the merge", () => {
+    const limit = current().maxValueNesting;
+    let deep: unknown = 1n;
+    for (let level = 0; level < 20_000; level++) deep = [deep];
+    const layer = { openrouter: { provider: { a: deep }, top_k: "x" }, vllm: { chat_template_kwargs: { a: deep } } };
+    expect(rangeError(() => validateLayer(layer))).toBe(
+      "2 validation errors for LLMConfig\nopenrouter.provider\n" +
+        `  Value nests deeper than ${limit} levels, the limit for a yian value (each record and list is a level)\n` +
+        "vllm.chat_template_kwargs\n" +
+        `  Value nests deeper than ${limit} levels, the limit for a yian value (each record and list is a level)`,
+    );
+    validateLayer({ openrouter: { provider: { a: [[1n]] }, top_k: "x" }, vllm: null });
   });
 
   test("undefined values are absent", () => {

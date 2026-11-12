@@ -3,7 +3,8 @@
  * number as a `number`, and errors carry a reason and its position.
  * It refuses what yian refuses on top of that: the NaN and Infinity tokens, a float token
  * that overflows, a duplicate object key and a lone surrogate. A float token that is zero
- * reads as `0`, never `-0`. It reads with an explicit stack, so any depth reads.
+ * reads as `0`, never `-0`. It reads with an explicit stack, so any depth reads, unless the caller
+ * bounds it: text from outside yian can be read within a count of values and a depth.
  *
  * Its encoders write what the reader reads back: `canonicalJson` writes RFC 8785 (JCS) text for
  * fingerprints and `logJson` the same layout for run-log lines, with ints of any size and floats
@@ -51,6 +52,30 @@ export class JSONDecodeError extends Error {
     this.position = position;
     this.line = line;
     this.column = column;
+  }
+}
+
+/** The most `parseJson` builds from one text; an unset bound is no bound. */
+export interface JsonBounds {
+  /** Most values the text may hold: each scalar, array and object is one, a key none. */
+  readonly maxValues?: number;
+  /** Deepest nesting the text may have: each array and object is one level, an empty one included. */
+  readonly maxDepth?: number;
+}
+
+/** A JSON text past one of its `JsonBounds`, refused where the value past the bound starts. */
+export class JSONBoundError extends JSONDecodeError {
+  override name = "JSONBoundError";
+  /** Which bound the text passed. */
+  readonly bound: "values" | "depth";
+  /** That bound's value. */
+  readonly limit: number;
+
+  constructor(bound: "values" | "depth", limit: number, text: string, position: number) {
+    const reason = bound === "values" ? `JSON has more than ${limit} values` : `JSON nests deeper than ${limit} levels`;
+    super(reason, text, position);
+    this.bound = bound;
+    this.limit = limit;
   }
 }
 
@@ -269,20 +294,27 @@ function decodeCodec(object: JsonObject, recordRaw: JsonValue | undefined): Json
  * In `codec` mode each object is decoded as it closes: exactly `{"$float": "inf"}` or
  * `{"$float": "-inf"}` reads as `±Infinity`, and `{"$record": X}` with `X` an object reads as the
  * record `X` (its members decoded, `X` itself not).
+ *
+ * @param bounds Bounds what the text may build; past one, a `JSONBoundError` is thrown before
+ *   anything after that value is read.
  */
-export function parseJson(text: string, mode: JsonMode): JsonValue {
+export function parseJson(text: string, mode: JsonMode, bounds: JsonBounds = {}): JsonValue {
+  const { maxValues = Infinity, maxDepth = Infinity } = bounds;
   if (text.charCodeAt(0) === 0xfeff) {
     throw new JSONDecodeError("Unexpected UTF-8 BOM (decode using utf-8-sig)", text, 0);
   }
   const stack: Frame[] = [];
   let pos = skipSpace(text, 0);
+  let values = 0;
   for (;;) {
     // Read the value at `pos`, or open a container and go on to its first value. `value` is
     // the decoded form a parent's slot holds; `raw` is the value as built.
     let value: JsonValue;
     let raw: JsonValue;
+    if (++values > maxValues) throw new JSONBoundError("values", maxValues, text, pos);
     const c = text.charAt(pos);
     if (c === "[" || c === "{") {
+      if (stack.length >= maxDepth) throw new JSONBoundError("depth", maxDepth, text, pos);
       const frame: Frame = { container: c === "[" ? [] : {} };
       pos = skipSpace(text, pos + 1);
       if (text.charAt(pos) === (c === "[" ? "]" : "}")) {

@@ -32,6 +32,7 @@ import {
   validateOutputContract,
   ValueContract,
   type ValuePath,
+  ValueTemplate,
 } from "../../src/nodes/contracts.ts";
 import { FileRef, Type, TypeCheckError, TypedValue, ValueKind } from "../../src/typesys/index.ts";
 
@@ -624,4 +625,20 @@ test("sameOutputContract compares partial records field by field, and null only 
   expect(sameOutputContract(null, int)).toBe(false);
   expect(sameOutputContract(int, null)).toBe(false);
   expect(sameOutputContract(partial([["a", null]]), null)).toBe(false);
+});
+
+test("a value template's origin lookup keeps the first entry per path, and [0] apart from ['0']", () => {
+  const template = new ValueTemplate({ a: ["x", "y"], "0": "z" }, [
+    [["a", 0], origin("first")],
+    [["a", 0], origin("second")],
+    [["0"], origin("text key")],
+    [["a", 1], origin("item")],
+  ]);
+
+  expect(template.originAt(["a", 0])?.key).toBe("first");
+  expect(template.originAt(["0"])?.key).toBe("text key");
+  expect(template.originAt([0])).toBeNull();
+  expect(template.originAt(["a", "1"])).toBeNull();
+  expect(template.originAt(["a", 1])?.key).toBe("item");
+  expect(template.originAt(["b"])).toBeNull();
 });

@@ -579,3 +579,8 @@ loud:
 Each `call`, `map` or `loop` body is one level, however it is written. Bodies nest at most 50
 levels; `YIAN_MAX_CALL_NESTING` can lower the limit (see [Reference](/reference/)). A deeper
 flow fails to load.
+
+A loaded flow may also expand to at most 100,000 nodes (`YIAN_MAX_FLOW_NODES`), counting each call
+of a def or `uses:` flow as a copy of its body and a `map` or `loop` body once. Defs or imports
+that each call the next twice double at every level, so such a chain fails to load at the call or
+alias that passes the limit.

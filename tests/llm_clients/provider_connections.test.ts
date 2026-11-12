@@ -371,7 +371,7 @@ test("split model config needs the recorded headers", () => {
   expect(error).toBeInstanceOf(AuthError);
   expect(error.message).toContain("X-Gateway");
   expect(error.message).toContain("X-Trace");
-  expect(error.message).toContain("pass headers to advance");
+  expect(error.message).toContain("pass them to advance as headers, with apiKey");
   error = thrown(() =>
     splitModelConfig({
       ...MARKED,

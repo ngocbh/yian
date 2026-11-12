@@ -47,7 +47,8 @@ const REGISTRY = readTypedefs({
   B: { kind: "Literal(b)", s: "str" },
   AB: "Union(A, B)",
   Item: { name: "str", qty: "int" },
-  Wide: { name: "str" },
+  // Records are closed, so `Item` fits `Wide` only because `Wide` declares `qty` too.
+  Wide: { name: "str", qty: "Optional(int)" },
   Other: { flag: "bool" },
   MaybeA: "Optional(A)",
   MaybeItem: "Optional(Item)",

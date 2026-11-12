@@ -12,7 +12,6 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import type { Env } from "../../src/defaults.ts";
 import { NodeStarted, type RunEvent } from "../../src/events.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { AuthError } from "../../src/llm_clients/auth/common.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Node } from "../../src/nodes/base.ts";
 import { BindingError } from "../../src/nodes/binding.ts";
@@ -331,16 +330,15 @@ test("only an agent with the key reserves it", async () => {
   expect(Object.getPrototypeOf(map).rebuildRequests).toBe(Node.prototype.rebuildRequests);
 });
 
-test("resume without the host key raises before a call time agent calls", async () => {
+test("resume without the host key a call time agent may use is refused before anything is appended", async () => {
   const log = fresh("run.jsonl");
   await stoppedBeforeChat(log, PICKED, { llmConfig: { provider: "openai", api_key: "sk-host-secret" } });
   const before = records(log).length;
   const { models } = fakeModel();
-  expect(await rejected(resume(PICKED, log, { models }))).toBeInstanceOf(AuthError);
-  const failed = records(log)
-    .slice(before)
-    .filter((record) => record.kind === "node_failed" && record.payload["node_id"] === "chat");
-  expect(failed).toEqual([]);
+  const error = await rejected(resume(PICKED, log, { models }));
+  expect(error).toBeInstanceOf(RangeError);
+  expect((error as Error).message).toContain("openai API key came from the host's llmConfig.api_key");
+  expect(records(log).length).toBe(before);
   expect(models.configs).toEqual([]);
 });
 

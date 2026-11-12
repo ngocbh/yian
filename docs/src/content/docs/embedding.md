@@ -162,7 +162,8 @@ holds media fails if `media` is a symlink, another user's, or writable by others
 `advance` runs the flow the log recorded, not the file on disk, with the log's inputs, run id and
 model settings. Pass again what the log doesn't hold: `tools`, `skills`, `context`, the memories
 (`memory: { lessons: instance }`, for any unfinished run; see [Memory](/memory/#bind-a-memory)),
-and the API key (`apiKey`, `headers`) of a run started with `llmConfig.api_key`.
+and the API key (`apiKey`, `headers`) of a run started with `llmConfig.api_key`. Without that key,
+`advance` of an unfinished run whose agents use it rejects before writing anything.
 
 The log holds the `codeRoot` the flow was loaded under, so `advance` and the host calls below
 confine the recorded flow's CODE files to it without being told. Passing `codeRoot` is optional; one

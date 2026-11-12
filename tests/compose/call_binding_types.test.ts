@@ -460,3 +460,127 @@ test.each<CaseRow>([
     call: assembledWith({ child: def("t", "int(0..100)", "echo", "int") }),
   },
 ])("assembledWith: $id", runCase);
+
+/**
+ * A flow whose code node `mk` makes a `Made` record, passed whole to the `child` def's `s: !Small`
+ * input through `kind` (a `call`, or a `map` over two of them, read as `${item}`).
+ */
+function recordFlow(made: string, kind: "call" | "map" = "call"): string {
+  const source = kind === "call" ? "${mk.output}" : "${item}";
+  return `id: rec
+name: rec
+typedefs:
+  Made: {${made}}
+  Small:
+    a: int
+defs:
+  child:
+    input:
+      s: !Small
+    nodes:
+      n:
+        kind: code
+        input:
+          s: \${input.s}
+        output: int
+        code: return inputs.s.a
+    output: \${n.output}
+nodes:
+  mk:
+    kind: code
+    output: ${kind === "call" ? "Made" : "list(Made)"}
+    code: ${kind === "call" ? '"return {a: 1}"' : '"return [{a: 1}, {a: 2}]"'}
+  c:
+    kind: ${kind}
+    ${kind === "map" ? "over: ${mk.output}" : ""}
+    call: child
+    input:
+      s: ${source}
+output: \${c.output}
+`;
+}
+
+test.each<[string, "call" | "map"]>([
+  ["a: int, b: int", "call"],
+  ["a: int, b: Optional(int)", "call"],
+  ["a: int, b: int", "map"],
+  ["a: Optional(int)", "call"],
+])("a record that may not fit the child's closed record is a load error: {%s} by %s", async (made, kind) => {
+  const error = loadError(() => assembleText(recordFlow(made, kind), "flow.yaml"));
+
+  expect(error.message).toContain(`${kind} node 'c': binding 's' — child expects '{"a":int}', source is`);
+});
+
+test("a record with the child's fields loads and runs", async () => {
+  const result = await runFlow(await loadConformanceFlow(recordFlow("a: int")), {}, { env });
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toBe(1n);
+});
+
+test("a date passed to a str input loads and runs as its ISO text", async () => {
+  const text = `id: dt
+name: dt
+input:
+  d: !date
+defs:
+  child:
+    input:
+      b: !str
+    nodes:
+      n:
+        kind: code
+        input:
+          b: \${input.b}
+        output: str
+        code: return inputs.b
+    output:
+      b: \${n.output}
+nodes:
+  c:
+    kind: call
+    call: child
+    input:
+      b: \${input.d}
+output: \${c.output}
+`;
+  const result = await runFlow(await loadConformanceFlow(text), { d: "2026-01-02" }, { env });
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toEqual({ b: "2026-01-02" });
+});
+
+test("a loop seed record with a field the body's input lacks is a load error", () => {
+  const text = `id: lp
+name: lp
+typedefs:
+  Big: {a: int, b: Optional(int)}
+  Small: {a: int}
+input:
+  z: !Big
+defs:
+  step:
+    input:
+      s: !Small
+    nodes:
+      bump:
+        kind: code
+        input:
+          s: \${input.s}
+        output:
+          s: Small
+        code: "return {s: inputs.s}"
+    output: \${bump.output}
+nodes:
+  drive:
+    kind: loop
+    call: step
+    times: 2
+    input:
+      s: \${input.z}
+output: \${drive.output}
+`;
+  const error = loadError(() => assembleText(text, "flow.yaml"));
+
+  expect(error.message).toContain(`loop node 'drive': binding 's' — child expects '{"a":int}', source is`);
+});

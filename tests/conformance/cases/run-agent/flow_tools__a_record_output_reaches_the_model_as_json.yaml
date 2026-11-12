@@ -1,0 +1,91 @@
+# A flow tool whose output is a record: the model reads it as JSON, and the full value is the
+# scope END's commit in the log.
+kind: run
+flow: |
+  id: helping
+  name: helping
+  llm_config: {provider: anthropic, model: claude-test}
+  defs:
+    count:
+      description: Count the words of a text.
+      input:
+        text: !str
+      nodes:
+        n:
+          kind: code
+          input:
+            text: ${input.text}
+          output: {words: int, first: str}
+          code: |
+            const words = inputs.text.split(" ");
+            return { words: words.length, first: words[0] };
+      output: ${n.output}
+  nodes:
+    helper:
+      kind: agent
+      tools: [count]
+      system_prompt: Help.
+      prompt: hi
+      output: str
+  output: ${helper.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  models:
+    helper:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: tool_call
+            id: call-a
+            name: count
+            arguments: {text: one two three}
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: three words
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: Help.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: hi
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - type: tool_call
+              id: call-a
+              name: count
+              arguments: {text: one two three}
+          - format: yian.message.v1
+            role: tool
+            parts:
+            - type: tool_result
+              call_id: call-a
+              name: count
+              content: '{"first":"one","words":3}'
+          tools:
+          - name: count
+            description: Count the words of a text.
+            parameters:
+              additionalProperties: false
+              properties:
+                text: {title: Text, type: string}
+              required: [text]
+              type: object
+expect:
+  output:
+    status: succeeded
+    output: three words
+  trace: [[run_started, null, {effective_llm_by_static_path: {helper: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, helper], [node_step, helper, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {text: one two three}, id: call-a, name: count, type: tool_call}], role: assistant}, purpose: chat, request_sha256: 7e8493798e63a1922c4228f3ac72f4bd2e109a755615c7d1e2aff5fba8b61623, response_id: null, usage: null}}], [node_step, helper, {n: 2, step: {arguments: {text: one two three}, call_id: r1/helper/1/0, flow: true, index: 0, kind: pending, reply: 1, scope: helper/count#0, tool: count, tool_call_id: call-a}}], [node_expanded, helper, {prune_ids: []}], [node_waiting, helper, {call_ids: [r1/helper/1/0]}], [node_started, helper/count#0/__start__], [pool_commit, helper/count#0/__start__, {from: {}}], [node_succeeded, helper/count#0/__start__, {commit: 14}], [node_started, helper/count#0/n], [pool_commit, helper/count#0/n, {value: {first: one, words: 3}}], [node_succeeded, helper/count#0/n, {commit: 17}], [node_started, helper/count#0/__end__], [pool_commit, helper/count#0/__end__, {from: {helper/count#0/n: 17}}], [node_succeeded, helper/count#0/__end__, {commit: 20}], [node_woken, helper], [node_step, helper, {n: 3, step: {call_id: call-a, is_error: false, kind: tool_result, output: '{"first":"one","words":3}'}}], [node_step, helper, {n: 4, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: three words, type: text}], role: assistant}, purpose: chat, request_sha256: e0294cd889b78627dfcd18c078294b84fb9c9f95ecbb3c2bc1c517ad532aa0bb, response_id: null, usage: null}}], [pool_commit, helper, {value: three words}], [pool_commit, helper, {key: helper.new_messages, steps: [9, 23, 24]}], [node_succeeded, helper, {commit: 25, messages: 26}], [node_started, __end__], [pool_commit, __end__, {value: three words}], [node_succeeded, __end__, {commit: 29}]]

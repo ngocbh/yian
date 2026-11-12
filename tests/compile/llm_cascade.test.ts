@@ -554,3 +554,78 @@ output: \${chat.output}
   expect(error).toBeInstanceOf(RangeError);
   expect(error.message).toBe("node 'chat' llm_config.openai.temperature: input 't': NaN is not a yian value");
 });
+
+test("the cascade reaches the agents of a flow an agent grants as a tool, under the grant's name", async () => {
+  const flow = await compiled(`
+id: f
+name: f
+llm_config: {provider: anthropic}
+defs:
+  shared:
+    description: Share the work.
+    nodes:
+      inner: {kind: agent, prompt: hi}
+    output: \${inner.output}
+nodes:
+  left: {kind: agent, prompt: go, tools: [shared], llm_config: {provider: openai}}
+  right: {kind: agent, prompt: go, tools: [shared]}
+  c: {kind: call, call: shared}
+output: \${c.output}
+`);
+  const tool = (nodeId: string) => (flow.nodes.get(nodeId) as AgentNode).flowTools[0]!.child as CompiledFlow;
+  expect(tool("left")).toBe(tool("right"));
+
+  const effective = cascade(flow, { model: "m" });
+
+  // The child flow inherits the granting agent's flow's layer, as a called one does.
+  expect(effective["left/shared/inner"]).toEqual({ provider: "anthropic", model: "m" });
+  expect(effective["right/shared/inner"]).toEqual({ provider: "anthropic", model: "m" });
+  expect(effective["c/inner"]).toEqual({ provider: "anthropic", model: "m" });
+  // Each agent holds its own copy of the flow, as each callsite does.
+  expect(tool("left")).not.toBe(tool("right"));
+  expect((tool("left").nodes.get("inner") as AgentNode).llmConfig).toEqual({ provider: "anthropic", model: "m" });
+});
+
+test("a call-time agent's flow tools still get their agents' configs", async () => {
+  const flow = await compiled(`
+id: f
+name: f
+input:
+  model: !str
+defs:
+  sub:
+    description: Do the sub-task.
+    nodes:
+      inner: {kind: agent, prompt: hi, llm_config: {provider: anthropic, model: inner-model}}
+    output: \${inner.output}
+nodes:
+  pick: !str \${input.model}
+  helper: {kind: agent, prompt: go, tools: [sub], llm_config: {provider: anthropic, model: "\${pick.output}"}}
+output: \${helper.output}
+`);
+  const { effective, callTime } = resolveRunLlm(flow, {}, { defaults: DEFAULTS, providerModels: PROVIDER_MODELS });
+  expect(Object.keys(callTime)).toEqual(["helper"]);
+  expect(effective["helper/sub/inner"]).toEqual({ provider: "anthropic", model: "inner-model" });
+});
+
+test("a graph copy gives an agent private copies of its flow tools' flows", async () => {
+  const flow = await compiled(`
+id: f
+name: f
+defs:
+  sub:
+    description: Do the sub-task.
+    nodes:
+      v: !str x
+    output: \${v.output}
+nodes:
+  helper: {kind: agent, prompt: go, tools: [sub]}
+output: \${helper.output}
+`);
+  const copy = copyGraph(flow);
+  const original = (flow.nodes.get("helper") as AgentNode).flowTools[0]!;
+  const copied = (copy.nodes.get("helper") as AgentNode).flowTools[0]!;
+  expect(copied.child).not.toBe(original.child);
+  expect([...(copied.child as CompiledFlow).nodes.keys()]).toEqual([...(original.child as CompiledFlow).nodes.keys()]);
+  expect(copied.parameters).toBe(original.parameters);
+});

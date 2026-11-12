@@ -16,7 +16,7 @@
 
 import { localTypes } from "../compile/declared_types.ts";
 import { expansionDigest } from "../compile/manifest.ts";
-import { CompiledFlow, copyGraph, Edge, Flow, GrowthRejected, validateGrowthMetadata } from "../compile/model.ts";
+import { CompiledFlow, copyGraph, Edge, END_ID, Flow, GrowthRejected, START_ID, validateGrowthMetadata } from "../compile/model.ts";
 import { classifyPath } from "../compile/validation.ts";
 import { BUILTIN, type Defaults, fromRecorded } from "../defaults.ts";
 import { compareCodeUnits, Failure, type OriginRef, reprText, sameFailure } from "../diagnostics.ts";
@@ -356,6 +356,11 @@ export class RunState {
    * later growth retires those that have settled.
    */
   deferredPrune: ReadonlySet<string> = new Set();
+  /**
+   * Each AGENT flow call whose scope has grown, by call id: the scope's callsite
+   * (`<agent>/<grant>#<k>`). Log history: kept after the call settles.
+   */
+  flowScopes = new Map<string, string>();
   /** Per-run wiring by node id, beginning with START's narrowed inputs. */
   wiringOverrides = new Map<string, JsonObject>();
   /** The durable identity once `RunStarted` is applied. */
@@ -923,6 +928,8 @@ interface EndingPlan extends PlanAnchors {
 /** The scalar authority of one flat deterministic expansion. */
 interface GrowthDelta {
   readonly spawnerId: string;
+  /** The AGENT flow call this growth is the scope of; `null` for a spawner's expansion. */
+  readonly callId: string | null;
   /** The spawner's expansion commits, admitted: each now waits on its child START's success. */
   readonly admitted: readonly PendingCommit[];
   readonly pruneIds: readonly string[];
@@ -1493,6 +1500,9 @@ export function prepareComplete(state: RunState, callId: string, result: Complet
   if (call.tool === TAKE || call.tool === SLEEP) {
     throw new DeliveryRefused("not_host_call", `call ${reprText(callId)} is a ${call.tool}, which the run settles itself`);
   }
+  if (call.flow) {
+    throw new DeliveryRefused("not_host_call", `call ${reprText(callId)} is a call of flow ${reprText(call.tool)}, which the run answers itself`);
+  }
   const node = state.flow.nodes.get(call.nodeId)!;
   const view = callView(state, call);
   if (call.state !== "open") {
@@ -1553,9 +1563,29 @@ function callView(state: RunState, call: Call): CallView {
  */
 export function callResultStep(state: RunState, callId: string): Readonly<JsonObject> | null {
   const call = state.waits.calls.get(callId);
-  if (call === undefined || call.state !== "answered" || call.resultSeq === null) return null;
+  if (call === undefined || call.state !== "answered") return null;
+  if (call.resultSeq === null) return call.flow ? flowAnswerStep(state, call) : null;
   // The waits fold recorded the answering step's seq.
   return state.nodeSteps.get(call.nodeId)?.[stepIndexAt(state, call.nodeId, call.resultSeq)] ?? null;
+}
+
+/**
+ * The `tool_result` step a flow call's agent writes for the output its scope's END committed
+ * (`Node.waitResultStep`, cut to the run's `YIAN_MAX_FLOW_RESULT_CHARS`).
+ */
+function flowAnswerStep(state: RunState, call: Call): Readonly<JsonObject> {
+  const output = state.pool.store.get(`${call.scope!}/${END_ID}`)!.toObject();
+  const view: CallView = Object.freeze({
+    callId: call.callId,
+    tool: call.tool,
+    resultKey: call.resultKey,
+    state: call.state,
+    closedReason: call.closedReason,
+    result: null,
+    deadline: call.deadline,
+  });
+  const node = state.flow.nodes.get(call.nodeId)!;
+  return node.waitResultStep(view, { output }, { maxFlowResultChars: state.runDefaults.maxFlowResultChars });
 }
 
 /**
@@ -2286,6 +2316,84 @@ export function prepareExpanded(state: RunState, nodeId: string, grow: Grow, gro
 }
 
 /**
+ * Return the calls of `callIds` that are open AGENT flow calls of `nodeId` whose scope hasn't
+ * grown yet, in order: what the engine grows before the node waits.
+ */
+export function ungrownFlowCalls(state: RunState, nodeId: string, callIds: readonly string[]): string[] {
+  return callIds.filter((callId) => {
+    const call = state.waits.calls.get(callId);
+    return call?.nodeId === nodeId && call.flow && call.state === "open" && !state.flowScopes.has(callId);
+  });
+}
+
+/**
+ * Prepare the growth of AGENT `nodeId`'s flow call `callId`: the called flow's clone at its scope
+ * `<agent>/<grant>#<k>`, its START seeded with the call's arguments (`flowToolSubgraph`), the agent
+ * staying in flight. The record is a `NodeExpandedRecord` naming the call; its seed is the call's
+ * `pending` step, so it writes no expansion commit.
+ *
+ * @throws GrowthRejected when the scope can't grow: a malformed fragment, or one past the run's
+ *   node budget.
+ * @throws RangeError when `callId` isn't an open flow call of the in-flight `nodeId` whose scope
+ *   hasn't grown.
+ */
+export function prepareFlowExpanded(
+  state: RunState,
+  nodeId: string,
+  callId: string,
+  growBuilder: GrowBuilder,
+): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareFlowExpanded expects a RunState");
+  requireInitializedNonterminal(state);
+  const { seed, fragment } = flowCallGrowth(state, nodeId, callId, growBuilder);
+  const validatedFragment = validateGrowthFragment(state, fragment);
+  const digest = expansionDigest(fragment);
+  const record = new NodeExpandedRecord(nodeId, [], digest, { callId });
+  return prepareGrowthTransition(state, record, fragment, {
+    actualDigest: digest,
+    validatedFragment,
+    grown: null,
+    seed,
+    commits: [],
+  });
+}
+
+/**
+ * Validate AGENT flow call `callId` of `nodeId` for its scope's growth and build that scope from
+ * the call's `pending` step: its seed `{tool, arguments, scope}` and its fragment.
+ *
+ * @throws RangeError when the node isn't in flight, or the call isn't its open flow call, or its
+ *   scope has grown.
+ * @throws GrowthRejected as the builder rejects the seed.
+ */
+function flowCallGrowth(
+  state: RunState,
+  nodeId: string,
+  callId: string,
+  growBuilder: GrowBuilder,
+): { seed: JsonValue; fragment: Flow } {
+  if (!state.inFlight.has(nodeId) || state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
+    throw new RangeError(`a flow call's scope grows only from its in-flight node, not ${reprText(nodeId)}`);
+  }
+  requireNoPendingCommit(state, nodeId, "NodeExpanded");
+  const call = state.waits.calls.get(callId);
+  if (call === undefined || call.nodeId !== nodeId || !call.flow) {
+    throw new RangeError(`call ${reprText(callId)} is no flow call of node ${reprText(nodeId)}`);
+  }
+  if (call.state !== "open") throw new RangeError(`flow call ${reprText(callId)} is already ${settledText(call)}`);
+  if (state.flowScopes.has(callId)) throw new RangeError(`flow call ${reprText(callId)}'s scope has grown already`);
+  const step = pendingStepOf(state, call)!;
+  const seed: JsonValue = { tool: call.tool, arguments: step["arguments"] as JsonObject, scope: call.scope! };
+  const [, builderSeed] = canonicalSeed(seed);
+  return { seed, fragment: buildGrowthFragment(state.flow.nodes.get(nodeId)!, builderSeed, growBuilder) };
+}
+
+/** The scope a flow call's growth spliced: its START's callsite. */
+function flowScopeOf(delta: GrowthDelta): string {
+  return delta.fragmentStartId.slice(0, -`/${START_ID}`.length);
+}
+
+/**
  * Prepare a planned expansion (`planExpansion`) once its expansion commits are written: the growth
  * must equal the one its commits' `from` rebuilds.
  *
@@ -2523,6 +2631,7 @@ function prepareGrowthRecord(
   record: NodeExpandedRecord,
   growBuilder: GrowBuilder,
 ): PreparedTransition {
+  if (record.callId !== null) return prepareFlowGrowthRecord(state, record, growBuilder);
   validateGrowthRecord(state, record);
   try {
     // The seed is rebuilt from the expansion commits' shared `from` (checked when they're
@@ -2550,6 +2659,27 @@ function prepareGrowthRecord(
       seed: seedWire,
       commits: null,
     });
+  } catch (error) {
+    // A historical record is not a live node outcome: its rejection is a plain corrupt-log error.
+    if (error instanceof GrowthRejected) throw error.original;
+    throw error;
+  }
+}
+
+/** Rebuild and verify one historical flow call's scope from its call's `pending` step. */
+function prepareFlowGrowthRecord(state: RunState, record: NodeExpandedRecord, growBuilder: GrowBuilder): PreparedTransition {
+  if (record.pruneIds.length > 0) throw new RangeError("a flow call's NodeExpandedRecord prunes nothing");
+  try {
+    const { seed, fragment } = flowCallGrowth(state, record.spawnerId, record.callId!, growBuilder);
+    const validatedFragment = validateGrowthFragment(state, fragment);
+    const actualDigest = expansionDigest(fragment);
+    if (actualDigest !== record.topologyDigest) {
+      throw new RangeError(
+        "NodeExpandedRecord topology digest mismatch: " +
+          `recorded ${reprText(record.topologyDigest)}, rebuilt ${reprText(actualDigest)}`,
+      );
+    }
+    return prepareGrowthTransition(state, record, fragment, { actualDigest, validatedFragment, grown: null, seed, commits: [] });
   } catch (error) {
     // A historical record is not a live node outcome: its rejection is a plain corrupt-log error.
     if (error instanceof GrowthRejected) throw error.original;
@@ -3091,6 +3221,7 @@ function commitGrowth(log: RunLog, state: RunState, prepared: PreparedTransition
   if (
     !(
       record.spawnerId === delta.spawnerId &&
+      record.callId === delta.callId &&
       sameItems(record.pruneIds, delta.pruneIds) &&
       record.topologyDigest === delta.topologyDigest
     )
@@ -3224,6 +3355,7 @@ function hasReducerContainers(state: RunState): boolean {
     isExactly(state.depth, Map) &&
     isExactly(state.growthOwner, Map) &&
     isExactly(state.deferredPrune, Set) &&
+    isExactly(state.flowScopes, Map) &&
     isExactly(state.wiringOverrides, Map) &&
     isExactly(state.waits, WaitsState) &&
     isExactly(state.inboxEvents, Map) &&
@@ -3435,13 +3567,14 @@ function validateRunResumed(state: RunState, record: RunResumedRecord): void {
  * The open calls a resume closes, in registration order: those of retried (in-flight) nodes that
  * make no direct host tool call, the agents'. A TOOL node's re-run reuses its call instead. An
  * agent's call registered before its last wake and still open (a timeout wake left it open) is
- * still pending at the host, not an unknown outcome: the replay waits on it again.
+ * still pending at the host, not an unknown outcome: the replay waits on it again. So is a flow
+ * call, which the run answers: the replay grows its scope if the cut came first.
  */
 function retriedAgentCalls(state: RunState): string[] {
   const w = state.waits;
   return [...w.calls.values()]
     .filter((call) => {
-      if (call.state !== "open" || !state.inFlight.has(call.nodeId)) return false;
+      if (call.state !== "open" || call.flow || !state.inFlight.has(call.nodeId)) return false;
       if (state.flow.nodes.get(call.nodeId)?.kind !== NodeKind.AGENT) return false;
       const lastWoken = w._lastWoken.get(call.nodeId);
       return lastWoken === undefined || call.seq > lastWoken;
@@ -3472,11 +3605,11 @@ function validateRunStopped(state: RunState, record: RunStoppedRecord): void {
   }
 }
 
-/** The host calls among `callIds`: the registered calls whose tool is neither take nor sleep, in order. */
+/** The host calls among `callIds`: the registered calls that are neither a take, a sleep nor a flow call, in order. */
 function hostCalls(state: RunState, callIds: Iterable<string>): string[] {
   return [...callIds].filter((callId) => {
-    const tool = state.waits.calls.get(callId)?.tool;
-    return tool !== undefined && tool !== TAKE && tool !== SLEEP;
+    const call = state.waits.calls.get(callId);
+    return call !== undefined && call.tool !== TAKE && call.tool !== SLEEP && !call.flow;
   });
 }
 
@@ -3795,7 +3928,7 @@ function validateSteerStep(state: RunState, nodeId: string, step: Readonly<JsonO
 }
 
 /** The steps' fields only an AGENT's `pending` step holds. */
-const AGENT_PENDING_FIELDS = ["tool_call_id", "reply", "index"] as const;
+const AGENT_PENDING_FIELDS = ["tool_call_id", "reply", "index", "flow"] as const;
 
 /**
  * Return the name a node's host tool call shows in its steps and waits: the tool id, or
@@ -3847,9 +3980,10 @@ function validatePendingStep(state: RunState, nodeId: string, step: Readonly<Jso
  * Require an AGENT's `pending` step to register a call of its latest reply: `tool` a granted
  * tool's name, neither take nor sleep; `tool_call_id` the provider's id; `reply` the `n` of the
  * node's latest `model_call` step and `index` the call's place among its tool calls, which
- * `call_id` (`<run>/<node>/<reply>/<index>`) names; no `arguments` (they are in the reply); a
- * `deadline` only on `ask_user`, as a record time; not yet registered, and within the run's
- * `MAX_EVENT_BYTES`.
+ * `call_id` (`<run>/<node>/<reply>/<index>`) names; no `arguments` (they are in the reply) but on
+ * a call of a flow the node grants, which says `flow: true` and holds its `arguments` as an
+ * object; a `deadline` only on `ask_user`, as a record time; not yet registered, and within the
+ * run's `MAX_EVENT_BYTES`.
  */
 function validateAgentPendingStep(state: RunState, nodeId: string, step: Readonly<JsonObject>): void {
   const { call_id: callId, tool, tool_call_id: toolCallIdOf } = step;
@@ -3873,8 +4007,22 @@ function validateAgentPendingStep(state: RunState, nodeId: string, step: Readonl
     const which = `call ${index} of node ${reprText(nodeId)}'s reply ${reply}`;
     throw new RangeError(`pending call_id ${writeAsText(callId ?? null)} isn't ${which}`);
   }
-  if (Object.hasOwn(step, "arguments")) {
-    throw new RangeError("an agent's pending step holds no arguments; they are in its reply");
+  if (Object.hasOwn(step, "flow")) {
+    const flows = state.flow.nodes.get(nodeId)!.originChildSegments();
+    if (step["flow"] !== true || !flows.includes(tool)) {
+      throw new RangeError(`an agent's pending step says flow: true only for a flow it grants, not ${reprText(tool)}`);
+    }
+    if (!isRecord(step["arguments"])) throw new RangeError("a flow call's pending step holds its arguments as an object");
+    // The node's earlier calls of the flow number its scopes from 0.
+    const earlier = (state.nodeSteps.get(nodeId) ?? []).filter(
+      (other) => other["kind"] === "pending" && other["flow"] === true && other["tool"] === tool,
+    ).length;
+    const scope = `${nodeId}/${tool}#${earlier}`;
+    if (step["scope"] !== scope) {
+      throw new RangeError(`flow call ${writeAsText(callId ?? null)}'s scope must be ${reprText(scope)}, got ${writeAsText(step["scope"] ?? null)}`);
+    }
+  } else if (Object.hasOwn(step, "arguments") || Object.hasOwn(step, "scope")) {
+    throw new RangeError("an agent's pending step holds no arguments or scope; they are in its reply");
   }
   if (Object.hasOwn(step, "deadline")) {
     if (tool !== ASK_USER) throw new RangeError(`an agent's pending ${reprText(tool)} call has no deadline; only ask_user times out`);
@@ -3922,7 +4070,8 @@ function latestReply(state: RunState, nodeId: string): number | null {
  * An AGENT's result refers to a registered call only when that call is its own node's and of its
  * latest reply (`resultCall`), since provider ids repeat across replies and nodes. A call closed
  * by record takes one more result on a running AGENT, its closer: `closed` equal to the call's
- * reason, once. No other result carries `closed` for a registered call.
+ * reason, once. No other result carries `closed` for a registered call. A flow call its scope's
+ * END answered takes one result on its running agent: exactly the answer that output gives.
  */
 function validateToolResultStep(state: RunState, nodeId: string, step: Readonly<JsonObject>, waiting: boolean): void {
   const key = typeof step["tool_call_id"] === "string" ? step["tool_call_id"] : step["call_id"];
@@ -3946,6 +4095,11 @@ function validateToolResultStep(state: RunState, nodeId: string, step: Readonly<
   }
   if (agent && !waiting && call.state === "closed" && closed === call.closedReason) {
     if (call.resultSeq !== null) throw new RangeError(`call ${reprText(call.callId)} already has its closer`);
+  } else if (agent && !waiting && call.flow && call.state === "answered" && call.resultSeq === null) {
+    // Its scope's END answered it; the agent records the answer it reads, exactly.
+    if (!sameStep(step, flowAnswerStep(state, call))) {
+      throw new RangeError(`tool_result for flow call ${reprText(call.callId)} isn't the output its scope committed`);
+    }
   } else if (call.state !== "open") {
     throw new RangeError(`tool_result for call ${reprText(call.callId)}, which is already ${settledText(call)}`);
   }
@@ -4310,6 +4464,7 @@ function prepareGrowthTopology(
 
   const delta = Object.freeze({
     spawnerId: record.spawnerId,
+    callId: record.callId,
     pruneIds: record.pruneIds,
     retiredIds: Object.freeze(sortedRetiredIds),
     topologyDigest: record.topologyDigest,
@@ -6176,6 +6331,7 @@ function materializeGrowth(plan: GrowthPlan): GrowthApply {
   if (
     !(
       record.spawnerId === plan.delta.spawnerId &&
+      record.callId === plan.delta.callId &&
       sameItems(record.pruneIds, plan.delta.pruneIds) &&
       record.topologyDigest === plan.delta.topologyDigest
     )
@@ -6292,14 +6448,18 @@ function applyGrowth(
     state.nodeState.set(nodeId, NodeState.UNKNOWN);
   }
   state.touched.add(delta.spawnerId);
-  if (!retired.has(delta.spawnerId)) state.nodeState.set(delta.spawnerId, NodeState.EXPANDED);
+  // A flow call's scope leaves its agent in flight, about to wait on the call.
+  if (delta.callId !== null) state.flowScopes.set(delta.callId, flowScopeOf(delta));
+  else if (!retired.has(delta.spawnerId)) state.nodeState.set(delta.spawnerId, NodeState.EXPANDED);
   for (const edgeId of delta.newEdgeIds) state.edgeState.set(edgeId, NodeState.UNKNOWN);
   // `topology.edges` are the edges of `newEdgeIds`, which the delta carries as ids only.
   for (const edge of topology.edges) addUnknownIncoming(state, edge.to);
   for (const commit of delta.admitted) setPendingCommit(state, commit.key, commit);
-  state.inFlight.delete(delta.spawnerId);
-  state.acceptedStarts.delete(delta.spawnerId);
-  forgetNodeSteps(state, delta.spawnerId);
+  if (delta.callId === null) {
+    state.inFlight.delete(delta.spawnerId);
+    state.acceptedStarts.delete(delta.spawnerId);
+    forgetNodeSteps(state, delta.spawnerId);
+  }
   state.ready.push(delta.fragmentStartId);
   for (const [nodeId, depth] of topology.depth) state.depth.set(nodeId, depth);
   state.deferredPrune = topology.deferredPrune;

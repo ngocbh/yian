@@ -56,9 +56,10 @@ Fields every node takes: `kind`, `input` (not on `case`), `asserts` (not on `cas
 list of messages; `!include <file>` reads a template from a file, `!include(str) <file>` text sent
 as written), `system_prompt` (replaces the default instruction), `variables` (tagged values the
 prompts read, such as `tone: !str plain`, or `examples: !include(list(str)) examples.json`),
-`output`, `retries`, `tools` (tool, group and memory input names, or `{group: [tool, ...]}`; a
-group's tools show as `<group>_<tool>`), `skills` (names or `all`), `steer_inbox`, `llm_config`,
-`env` (`max_tool_iterations`).
+`output`, `retries`, `tools` (tool, group, flow and memory input names, or `{group: [tool, ...]}`;
+a group's tools show as `<group>_<tool>`; a `defs:` entry or `uses:` alias is a flow tool, which
+needs a `description:`), `skills` (names or `all`), `steer_inbox`, `llm_config`, `env`
+(`max_tool_iterations`).
 
 **code** ([Code and tools](https://yian.readthedocs.io/code-and-tools/)): `code` (an inline body
 or `./file.ts:fn`), `input`, `output`. The body reads `inputs.<name>` and returns a value.
@@ -199,6 +200,8 @@ an input.
 
 `structured_output: prompt` sends an agent's `output:` schema as an instruction in the prompt,
 for a model that can't call tools; the default, `native`, uses the provider's structured output.
+`api: responses` or `api: chat` picks the API of an Azure or Chat Completions provider's calls;
+unset, the model's name picks it (a `codex` or `gpt-5-pro` model goes to Responses).
 
 ## Chat pattern
 

@@ -108,6 +108,7 @@ const ALLOWED: Record<string, string> = {
   "run.ts: LITERAL_LABEL_WIDTH": "width of a literal shown in a type label",
   "llm_clients/redact.ts: MIN_VISIBLE": "key characters a masked echo must show to count",
   "llm/errors.ts: MAX_DETAIL_CHARS": "length of provider error text kept in a message",
+  "llm/structured.ts: SHOWN_ARGUMENTS_CHARS": "length of a call's arguments shown in a structured-output error",
   "llm/testing.ts: MAX_DIFFS": "differences listed in a cassette mismatch message",
   "tools/mcp.ts: STDERR_LINES": "MCP server stderr lines shown when it fails to start or ends during a call",
   "tools/mcp.ts: STDERR_KEEP_CHARS": "MCP server stderr kept for a start error or a call it ends",
@@ -115,6 +116,7 @@ const ALLOWED: Record<string, string> = {
   // Internal sizes that no user input reaches.
   "cli/diff.ts: MAX_TABLE": "line pairs a diff compares before showing the whole change, internal",
   "llm/transport.ts: MAX_ERROR_BODY_BYTES": "bytes of an error response read, internal",
+  "llm/errors.ts: RECEIVED_JSON_DEPTH": "nesting read from a provider's or MCP server's JSON, above any value kept",
   "runtime/log.ts: READ_CHUNK_BYTES": "bytes of a run log read at a time, internal",
   "runtime/log.ts: HEADER_DEPTH": "containers a long line's header scan tracks, fixed by the paths it reads",
   "runtime/log.ts: HEADER_TOKEN_BYTES": "bytes a long line's header scan keeps of a key or number, internal",

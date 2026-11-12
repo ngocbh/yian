@@ -281,7 +281,7 @@ A refused call appends nothing and throws `DeliveryRefused`, whose `reason` says
 | `key_reused` | An earlier send used the send's `key` with another inbox or value |
 | `too_large` | The message is over `YIAN_MAX_EVENT_BYTES` (1 MiB by default) |
 | `unknown_call` | No open call has that id |
-| `not_host_call` | The id names a take or a sleep |
+| `not_host_call` | The id names a take, a sleep or an agent's [flow call](/agents/#flows-as-tools), which the run answers itself |
 | `call_settled` | The call already has an answer, timed out or was closed |
 
 ### Pending host calls

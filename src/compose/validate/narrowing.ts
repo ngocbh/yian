@@ -34,6 +34,7 @@ import type { ExprNode, Tree } from "../../expr/grammar.ts";
 import { ExpressionError, parseCondition } from "../../expr/index.ts";
 import { ELSE_HANDLE } from "../../nodes/base.ts";
 import { isExactly, type OutputContract, PartialRecordContract, ValueContract } from "../../nodes/contracts.ts";
+import { YianTypeError } from "../../typesys/errors.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import { jsTypeName, type Type, typeEquals, unionTagFields, ValueKind } from "../../typesys/values.ts";
 import { guardChecks, guardedReads, proves } from "../helpers/condition_guards.ts";
@@ -176,7 +177,7 @@ export function narrowContractAt(contract: OutputContract, path: readonly string
     return new ValueContract(narrowed, contract.origins);
   }
   if (!isExactly(contract, PartialRecordContract)) {
-    throw new TypeError(
+    throw new YianTypeError(
       `output contract must be an exact ValueContract or PartialRecordContract, got ${jsTypeName(contract)}`,
     );
   }

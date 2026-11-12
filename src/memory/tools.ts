@@ -17,6 +17,7 @@ import { ProviderError } from "../llm/errors.ts";
 import type { ToolContext } from "../tools/context.ts";
 import { PermanentToolError, ReportedToolError } from "../tools/errors.ts";
 import { FunctionTool } from "../tools/function_tools.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import type { RecordedMemoryTool } from "../typesys/memory.ts";
 import { fromHost, type MemoryRef, writeAsText } from "../typesys/values.ts";
@@ -58,7 +59,7 @@ export function grantedMemorySpecs(
   const missing = tools?.find((name) => !value.tools.some((tool) => tool.name === name));
   if (missing !== undefined) {
     const has = value.tools.map((tool) => tool.name).join(", ");
-    throw new RangeError(`\`${input}\` has no tool \`${missing}\`; it has ${has}`);
+    throw new YianRangeError(`\`${input}\` has no tool \`${missing}\`; it has ${has}`);
   }
   return tools === null ? value.tools : value.tools.filter((tool) => tools.includes(tool.name));
 }

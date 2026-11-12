@@ -59,6 +59,7 @@ import { Type, ValueKind } from "../../src/typesys/index.ts";
 import { typeEquals } from "../../src/typesys/values.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { assembleText, handChild, loadError } from "../helpers/declarations.ts";
+import { thrownClass } from "../helpers/own_errors.ts";
 
 /** A minimal concrete node; the base fields are the subject. */
 class BareNode extends Node {
@@ -281,7 +282,7 @@ function expectError(fn: () => unknown, cls: typeof Error, message: string): voi
     caught = error;
   }
   expect(caught).toBeInstanceOf(cls);
-  expect((caught as Error).constructor).toBe(cls);
+  expect((caught as Error).constructor).toBe(thrownClass(cls));
   expect((caught as Error).message).toBe(message);
 }
 

@@ -59,6 +59,7 @@ import {
   sameItems,
   validateOutputContract,
 } from "../nodes/contracts.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { eventBytes, type JsonObject, type JsonValue, logJson } from "../typesys/json.ts";
 import { messagesKey, NEW_MESSAGES, referenceRoot, type RootValue, VariablePool } from "../typesys/pool.ts";
 import { newMessagesType } from "../typesys/types.ts";
@@ -214,7 +215,7 @@ export type DeliveryRefusal =
   | "not_host_call";
 
 /** A send, withdraw, complete, close, interrupt or cancel the run refuses; nothing was appended. */
-export class DeliveryRefused extends RangeError {
+export class DeliveryRefused extends YianRangeError {
   override name = "DeliveryRefused";
   /** Why the delivery was refused. */
   readonly reason: DeliveryRefusal;
@@ -244,8 +245,8 @@ function requireDeliverable(state: RunState): void {
 
 /** Require a dispatcher worker count: a non-negative safe integer. */
 function requireWorkerCount(numWorkers: number): void {
-  if (!Number.isSafeInteger(numWorkers)) throw new TypeError("num_workers must be a non-negative integer");
-  if (numWorkers < 0) throw new RangeError("num_workers must be a non-negative integer");
+  if (!Number.isSafeInteger(numWorkers)) throw new YianTypeError("num_workers must be a non-negative integer");
+  if (numWorkers < 0) throw new YianRangeError("num_workers must be a non-negative integer");
 }
 
 /** Mark one explicit live node-produced growth rejection. */
@@ -447,7 +448,7 @@ export class RunState {
    * @throws TypeError when `flow` isn't a `CompiledFlow`.
    */
   constructor(flow: CompiledFlow, options: { resultContract?: OutputContract | null } = {}) {
-    if (!(flow instanceof CompiledFlow)) throw new TypeError("RunState expects a CompiledFlow");
+    if (!(flow instanceof CompiledFlow)) throw new YianTypeError("RunState expects a CompiledFlow");
     this.flow = flow;
     this.resultContract = options.resultContract ?? null;
     this.pool = new VariablePool(flow.startId);
@@ -512,7 +513,7 @@ export function resolveFromPool(
   if (!read.present) return read;
   const { name } = referenceRoot(names, pool.startId, (held) => pool.store.has(held));
   if (!producers.has(name!)) {
-    throw new RangeError(`pool name ${reprText(name!)} has no pool_commit in the producer index`);
+    throw new YianRangeError(`pool name ${reprText(name!)} has no pool_commit in the producer index`);
   }
   return read;
 }
@@ -531,13 +532,13 @@ export function poolResolver(state: RunState): (name: string, seq: number) => Ty
   return (name, seq) => {
     const producer = state.producers.get(name);
     if (producer !== seq) {
-      throw new RangeError(
+      throw new YianRangeError(
         `from names ${reprText(name)} at seq ${seq}, but its pool_commit is ${producer === undefined ? "(none)" : `seq ${producer}`}`,
       );
     }
     const value = name.startsWith(SYSTEM_PREFIX) ? state.pool.system.get(name.slice(SYSTEM_PREFIX.length)) : state.pool.store.get(name);
     // The producer index names exactly the pool's names.
-    if (value === undefined) throw new RangeError(`pool name ${reprText(name)} has no value`);
+    if (value === undefined) throw new YianRangeError(`pool name ${reprText(name)} has no value`);
     return value;
   };
 }
@@ -573,11 +574,11 @@ export function rebuildCommit(
   const node = state.flow.nodes.get(nodeId)!;
   const outcome = rebuildDerivedRecord(state, nodeId, from);
   if (!(outcome instanceof Output)) {
-    throw new RangeError(`the derived commit of ${reprText(nodeId)} rebuilds to a growth, not a value`);
+    throw new YianRangeError(`the derived commit of ${reprText(nodeId)} rebuilds to a growth, not a value`);
   }
   const target = outcome.commitAs ?? node.commitAs ?? nodeId;
   if (target !== key) {
-    throw new RangeError(`the derived commit of ${reprText(nodeId)} is under ${reprText(key)}, but rebuilds under ${reprText(target)}`);
+    throw new YianRangeError(`the derived commit of ${reprText(nodeId)} is under ${reprText(key)}, but rebuilds under ${reprText(target)}`);
   }
   return committedText(state, key, outcome.value);
 }
@@ -611,7 +612,7 @@ export function rebuildGrowth(
   from: ReadonlyMap<string, number> | null,
 ): { seed: JsonValue; pruneIds: readonly string[] } {
   const outcome = rebuildDerivedRecord(state, spawnerId, from);
-  if (!(outcome instanceof Grow)) throw new RangeError(`spawner ${reprText(spawnerId)} rebuilds to a value, not a growth`);
+  if (!(outcome instanceof Grow)) throw new YianRangeError(`spawner ${reprText(spawnerId)} rebuilds to a value, not a growth`);
   return { seed: canonicalSeed(outcome.seed)[0], pruneIds: [...outcome.prune].sort(compareCodeUnits) };
 }
 
@@ -670,7 +671,7 @@ export function isDerivedCommit(state: RunState, nodeId: string): boolean {
  */
 export function requireExpansionOutput(state: RunState, nodeId: string, output: unknown): void {
   const pending = state.pendingCommits.get(nodeId);
-  if (pending === undefined || !pending.admitted) throw new RangeError(`node ${reprText(nodeId)} has no expansion commit`);
+  if (pending === undefined || !pending.admitted) throw new YianRangeError(`node ${reprText(nodeId)} has no expansion commit`);
   requireEvaluated(state, `child START ${reprText(nodeId)}`, pending, pending.valueJson!, output);
 }
 
@@ -682,7 +683,7 @@ export function requireExpansionOutput(state: RunState, nodeId: string, output: 
  */
 function requireEvaluated(state: RunState, what: string, pending: PendingCommit, valueJson: string, output: unknown): void {
   if (committedText(state, pending.key, output) !== valueJson) {
-    throw new RangeError(`${what} evaluated to another value than its commit at seq ${pending.seq} holds`);
+    throw new YianRangeError(`${what} evaluated to another value than its commit at seq ${pending.seq} holds`);
   }
 }
 
@@ -1088,13 +1089,13 @@ export class HistoricalLogCursor implements RunLog {
   append(record: RunRecord): RecordEnvelope {
     const sequence = this.nextSequence;
     if (sequence >= this.#envelopeJsons.length) {
-      throw new RangeError("replay attempted to append beyond the historical prefix");
+      throw new YianRangeError("replay attempted to append beyond the historical prefix");
     }
     const expected = this.#envelopeJsons[sequence]!;
     const envelope = decodeRecord(expected);
     // The historical time is kept: replay compares records, not when they were appended.
     const candidate = encodeRecord(new RecordEnvelope(envelope.schema, this.runId, sequence, record, envelope.at));
-    if (candidate !== expected) throw new RangeError("prepared transition does not match the historical run record");
+    if (candidate !== expected) throw new YianRangeError("prepared transition does not match the historical run record");
     this.#consumed.push(envelope);
     return envelope;
   }
@@ -1119,10 +1120,10 @@ export class HistoricalLogCursor implements RunLog {
  *   public run-record wire contract.
  */
 export function prepareRunStarted(state: RunState, data: RunStartData): PreparedTransition {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareRunStarted expects a RunState");
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareRunStarted expects a RunState");
   requirePristine(state);
   const startId = state.flow.startId;
-  if (!state.flow.nodes.has(startId)) throw new RangeError(`flow START node ${reprText(startId)} is missing`);
+  if (!state.flow.nodes.has(startId)) throw new YianRangeError(`flow START node ${reprText(startId)} is missing`);
   requireWorkerCount(data.numWorkers);
 
   const candidate = new RunStartedRecord({
@@ -1155,8 +1156,8 @@ export function prepareRunStarted(state: RunState, data: RunStartData): Prepared
  *   one unknown, non-in-flight ready head.
  */
 export function prepareNodeStarted(state: RunState, nodeId: string): PreparedTransition {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareNodeStarted expects a RunState");
-  if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareNodeStarted expects a RunState");
+  if (typeof nodeId !== "string") throw new YianTypeError("node_id must be a string");
   return prepareRecord(state, new NodeStartedRecord(nodeId));
 }
 
@@ -1174,9 +1175,9 @@ export function prepareNodeStarted(state: RunState, nodeId: string): PreparedTra
  * @throws TypeCheckError when `step` isn't a JSON value.
  */
 export function prepareNodeStep(state: RunState, nodeId: string, step: unknown): PreparedTransition {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareNodeStep expects a RunState");
-  if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
-  if (!isRecord(step)) throw new TypeError("node step must be a JSON object");
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareNodeStep expects a RunState");
+  if (typeof nodeId !== "string") throw new YianTypeError("node_id must be a string");
+  if (!isRecord(step)) throw new YianTypeError("node step must be a JSON object");
   // No nesting limit: a step is node detail, not a yian value, and an AGENT's model call step holds
   // a reply whose tool call arguments may themselves sit at the limit.
   // Steps outlive a resume, so `n` keeps counting across the node's starts.
@@ -1201,8 +1202,8 @@ export function prepareNodeStep(state: RunState, nodeId: string, step: unknown):
  * @throws TypeCheckError when `value` isn't a yian value.
  */
 export function prepareInitialCommit(state: RunState, key: string, value: unknown): PreparedTransition {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareInitialCommit expects a RunState");
-  if (typeof key !== "string") throw new TypeError("key must be a string");
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareInitialCommit expects a RunState");
+  if (typeof key !== "string") throw new YianTypeError("key must be a string");
   const [wire] = canonicalTyped(value, null);
   return prepareRecord(state, new PoolCommitRecord(state.flow.startId, key, wire));
 }
@@ -1237,9 +1238,9 @@ export function prepareSend(
   event: unknown,
   key: string | null = null,
 ): PreparedTransition | RepeatedSend {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareSend expects a RunState");
-  if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
-  if (key !== null && typeof key !== "string") throw new TypeError("a send's key must be a string or null");
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareSend expects a RunState");
+  if (typeof inbox !== "string") throw new YianTypeError("inbox must be a string");
+  if (key !== null && typeof key !== "string") throw new YianTypeError("a send's key must be a string or null");
   requireDeliverable(state);
   const element = requireDeclaredInbox(state, inbox);
   const sent = key === null ? undefined : state.sendKeys.get(key);
@@ -1320,8 +1321,8 @@ export function inboxElementType(state: RunState, name: string): Type | null {
  *   such inbox.
  */
 export function prepareInboxClosed(state: RunState, inbox: string): PreparedTransition | null {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareInboxClosed expects a RunState");
-  if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareInboxClosed expects a RunState");
+  if (typeof inbox !== "string") throw new YianTypeError("inbox must be a string");
   requireDeliverable(state);
   requireDeclaredInbox(state, inbox);
   if (state.waits.inboxes.get(inbox)?.closed === true) return null;
@@ -1343,8 +1344,8 @@ export function prepareInboxClosed(state: RunState, inbox: string): PreparedTran
  *   such inbox.
  */
 export function prepareWithdraw(state: RunState, inbox: string): PreparedTransition | null {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareWithdraw expects a RunState");
-  if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareWithdraw expects a RunState");
+  if (typeof inbox !== "string") throw new YianTypeError("inbox must be a string");
   requireDeliverable(state);
   requireDeclaredInbox(state, inbox);
   const events = withdrawableEvents(state.waits, inbox);
@@ -1364,7 +1365,7 @@ export function prepareWithdraw(state: RunState, inbox: string): PreparedTransit
  *   then `not_started` before its run start is complete.
  */
 export function prepareRunCancelled(state: RunState): PreparedTransition {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareRunCancelled expects a RunState");
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareRunCancelled expects a RunState");
   requireDeliverable(state);
   return prepareRecord(state, new RunCancelledRecord());
 }
@@ -1395,10 +1396,10 @@ export function prepareRunCancelled(state: RunState): PreparedTransition {
  * @throws RangeError when a running node can't be interrupted (see `validateInterrupted`).
  */
 export function prepareInterrupt(state: RunState, inbox: string, running: readonly string[] | null = null): PreparedTransition | null {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareInterrupt expects a RunState");
-  if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareInterrupt expects a RunState");
+  if (typeof inbox !== "string") throw new YianTypeError("inbox must be a string");
   if (running !== null && (!Array.isArray(running) || running.some((nodeId) => typeof nodeId !== "string"))) {
-    throw new TypeError("running must be null or an array of node ids");
+    throw new YianTypeError("running must be null or an array of node ids");
   }
   requireDeliverable(state);
   requireDeclaredInbox(state, inbox);
@@ -1438,9 +1439,9 @@ export function prepareInterrupt(state: RunState, inbox: string, running: readon
  * @throws RangeError when the node can't be interrupted (see `validateInterrupted`).
  */
 export function prepareAppliedStop(state: RunState, inbox: string, nodeId: string): PreparedTransition {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareAppliedStop expects a RunState");
-  if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
-  if (typeof nodeId !== "string") throw new TypeError("nodeId must be a string");
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareAppliedStop expects a RunState");
+  if (typeof inbox !== "string") throw new YianTypeError("inbox must be a string");
+  if (typeof nodeId !== "string") throw new YianTypeError("nodeId must be a string");
   requireDeliverable(state);
   requireDeclaredInbox(state, inbox);
   const waiting = waitingReaders(state, inbox).filter((id) => id !== nodeId && !state.waits.interrupts.has(id));
@@ -1464,10 +1465,10 @@ function waitingReaders(state: RunState, inbox: string): string[] {
  *   waiting and none wakeable.
  */
 export function prepareRunFailed(state: RunState): PreparedTransition {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareRunFailed expects a RunState");
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareRunFailed expects a RunState");
   requireInitializedNonterminal(state);
   const failure = state.terminalUnreachableFailure;
-  if (failure === null) throw new RangeError("RunFailed requires a route that proved END unreachable");
+  if (failure === null) throw new YianRangeError("RunFailed requires a route that proved END unreachable");
   return prepareRecord(state, new RunFailedRecord(failure));
 }
 
@@ -1490,8 +1491,8 @@ export function prepareRunFailed(state: RunState): PreparedTransition {
  *   `MAX_EVENT_BYTES`.
  */
 export function prepareComplete(state: RunState, callId: string, result: CompleteResult): PreparedTransition | null {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareComplete expects a RunState");
-  if (typeof callId !== "string") throw new TypeError("call_id must be a string");
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareComplete expects a RunState");
+  if (typeof callId !== "string") throw new YianTypeError("call_id must be a string");
   requireDeliverable(state);
   const call = state.waits.calls.get(callId);
   if (call === undefined) throw new DeliveryRefused("unknown_call", `the run has no pending call ${reprText(callId)}`);
@@ -1603,7 +1604,7 @@ function flowAnswerStep(state: RunState, call: Call): Readonly<JsonObject> {
 export function commitInitialPool(log: RunLog, state: RunState, pool: VariablePool): void {
   const startId = state.flow.startId;
   if (pool.startId !== startId || [...pool.store.keys()].some((key) => key !== startId)) {
-    throw new RangeError(`the initial pool must store only the START inputs, under ${reprText(startId)}`);
+    throw new YianRangeError(`the initial pool must store only the START inputs, under ${reprText(startId)}`);
   }
   for (const name of [...pool.system.keys()].sort(compareCodeUnits)) {
     commitPrepared(log, state, prepareInitialCommit(state, `${SYSTEM_PREFIX}${name}`, pool.system.get(name)));
@@ -1638,13 +1639,13 @@ export function preparePoolCommit(
   output: unknown,
   options: { commitAs?: string | null; from?: ReadonlyMap<string, number> | null } = {},
 ): PreparedTransition {
-  if (!isExactly(state, RunState)) throw new TypeError("preparePoolCommit expects a RunState");
-  if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
+  if (!isExactly(state, RunState)) throw new YianTypeError("preparePoolCommit expects a RunState");
+  if (typeof nodeId !== "string") throw new YianTypeError("node_id must be a string");
   const commitAs: unknown = options.commitAs ?? null;
   if (commitAs !== null && typeof commitAs !== "string") {
-    throw new NodeDataError(new TypeError("commit_as must be a string or null"));
+    throw new NodeDataError(new YianTypeError("commit_as must be a string or null"));
   }
-  if (commitAs === "") throw new NodeDataError(new RangeError("commit_as must be non-empty when supplied"));
+  if (commitAs === "") throw new NodeDataError(new YianRangeError("commit_as must be non-empty when supplied"));
   requireInitializedNonterminal(state);
   requireCommittingNode(state, nodeId);
   requireValueCommitNode(state, nodeId);
@@ -1654,12 +1655,12 @@ export function preparePoolCommit(
   const node = state.flow.nodes.get(nodeId)!;
   const nodeTarget: unknown = node.commitAs;
   if (nodeTarget !== null && (typeof nodeTarget !== "string" || !nodeTarget)) {
-    throw new RangeError(`node ${reprText(nodeId)} has an invalid baked commit target`);
+    throw new YianRangeError(`node ${reprText(nodeId)} has an invalid baked commit target`);
   }
   const target = commitAs ?? nodeTarget ?? nodeId;
   const targetNode = state.flow.nodes.get(target);
   if (targetNode === undefined) {
-    const error = new RangeError(`success commit target ${reprText(target)} does not exist in the flow`);
+    const error = new YianRangeError(`success commit target ${reprText(target)} does not exist in the flow`);
     throw commitAs !== null ? new NodeDataError(error) : error;
   }
   const declaredType = nodeOutputType(targetNode);
@@ -1703,11 +1704,11 @@ export function preparePoolCommit(
  *   call or the inbox allows (see `validateTakeCommit`).
  */
 export function prepareTakeCommit(state: RunState, nodeId: string, commit: TakeCommit): PreparedTransition {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareTakeCommit expects a RunState");
-  if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareTakeCommit expects a RunState");
+  if (typeof nodeId !== "string") throw new YianTypeError("node_id must be a string");
   requireInitializedNonterminal(state);
   const node = state.flow.nodes.get(nodeId);
-  if (node === undefined) throw new RangeError(`take node ${reprText(nodeId)} does not exist in the flow`);
+  if (node === undefined) throw new YianRangeError(`take node ${reprText(nodeId)} does not exist in the flow`);
   return prepareRecord(state, new PoolCommitRecord(nodeId, node.commitAs ?? nodeId, null, { take: commit }));
 }
 
@@ -1729,14 +1730,14 @@ export function prepareNodeSucceeded(
   nodeId: string,
   options: { output?: unknown } = {},
 ): PreparedTransition {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareNodeSucceeded expects a RunState");
-  if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareNodeSucceeded expects a RunState");
+  if (typeof nodeId !== "string") throw new YianTypeError("node_id must be a string");
   requireInitializedNonterminal(state);
   requireOutcomeNode(state, nodeId, "NodeSucceeded");
   const pending = state.pendingCommits.get(nodeId);
-  if (pending === undefined) throw new RangeError(`NodeSucceeded node ${reprText(nodeId)} has no pending pool_commit`);
+  if (pending === undefined) throw new YianRangeError(`NodeSucceeded node ${reprText(nodeId)} has no pending pool_commit`);
   if (pending.valueJson === null && pending.take === null && !Object.hasOwn(options, "output")) {
-    throw new TypeError(`NodeSucceeded of derived node ${reprText(nodeId)} needs the value it evaluated to (output)`);
+    throw new YianTypeError(`NodeSucceeded of derived node ${reprText(nodeId)} needs the value it evaluated to (output)`);
   }
   return prepareSuccessTransition(
     state,
@@ -1760,11 +1761,11 @@ export function prepareNodeSucceeded(
  * @throws RangeError as `validateMessagesCommit`.
  */
 export function prepareMessagesCommit(state: RunState, nodeId: string): PreparedTransition {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareMessagesCommit expects a RunState");
-  if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareMessagesCommit expects a RunState");
+  if (typeof nodeId !== "string") throw new YianTypeError("node_id must be a string");
   requireInitializedNonterminal(state);
   if (state.flow.nodes.get(nodeId)?.producesMessages !== true) {
-    throw new RangeError(`a messages commit by node ${reprText(nodeId)}, which produces no messages`);
+    throw new YianRangeError(`a messages commit by node ${reprText(nodeId)}, which produces no messages`);
   }
   return prepareRecord(state, new PoolCommitRecord(nodeId, messagesKey(nodeId), null, { steps: messageStepSeqs(state, nodeId) }));
 }
@@ -1782,11 +1783,11 @@ export function prepareMessagesCommit(state: RunState, nodeId: string): Prepared
  *   `original` holds the `TypeError` or `RangeError`.
  */
 export function prepareNodeRouted(state: RunState, nodeId: string, handle: string): PreparedTransition {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareNodeRouted expects a RunState");
-  if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
-  if (!nodeId) throw new RangeError("node_id must be non-empty");
-  if (typeof handle !== "string") throw new NodeDataError(new TypeError("handle must be a string"));
-  if (!handle) throw new NodeDataError(new RangeError("handle must be non-empty"));
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareNodeRouted expects a RunState");
+  if (typeof nodeId !== "string") throw new YianTypeError("node_id must be a string");
+  if (!nodeId) throw new YianRangeError("node_id must be non-empty");
+  if (typeof handle !== "string") throw new NodeDataError(new YianTypeError("handle must be a string"));
+  if (!handle) throw new NodeDataError(new YianRangeError("handle must be non-empty"));
   requireInitializedNonterminal(state);
   return prepareRouteTransition(state, new NodeRoutedRecord(nodeId, handle), true);
 }
@@ -1802,8 +1803,8 @@ export function prepareNodeRouted(state: RunState, nodeId: string, handle: strin
  *   eligible to fail.
  */
 export function prepareNodeFailed(state: RunState, failure: Failure): PreparedTransition {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareNodeFailed expects a RunState");
-  if (!isExactly(failure, Failure)) throw new TypeError("prepareNodeFailed expects a Failure");
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareNodeFailed expects a RunState");
+  if (!isExactly(failure, Failure)) throw new YianTypeError("prepareNodeFailed expects a Failure");
   requireInitializedNonterminal(state);
   // A node inside a flow call's scope fails the innermost such call, not the run.
   const caught = typeof failure.nodeId === "string" ? enclosingFlowCall(state, failure.nodeId) : null;
@@ -1818,11 +1819,11 @@ export function prepareNodeFailed(state: RunState, failure: Failure): PreparedTr
  * @throws RangeError when `callId` isn't an open flow call of `nodeId` whose scope hasn't grown.
  */
 export function prepareFlowCallFailed(state: RunState, nodeId: string, callId: string, failure: Failure): PreparedTransition {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareFlowCallFailed expects a RunState");
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareFlowCallFailed expects a RunState");
   requireInitializedNonterminal(state);
   const call = state.waits.calls.get(callId);
   if (call?.nodeId !== nodeId || !call.flow || call.state !== "open" || state.flowScopes.has(callId)) {
-    throw new RangeError(`call ${reprText(callId)} is no open flow call of node ${reprText(nodeId)} waiting to grow`);
+    throw new YianRangeError(`call ${reprText(callId)} is no open flow call of node ${reprText(nodeId)} waiting to grow`);
   }
   return prepareFailureTransition(state, new NodeFailedRecord(failure, { callId, scope: call.scope! }));
 }
@@ -1912,7 +1913,7 @@ function retireScope(state: RunState, scope: string): void {
  * @throws RangeError when the worker count is negative, or the state is uninitialized or terminal.
  */
 export function prepareRunResumed(state: RunState, options: { numWorkers: number }): PreparedTransition {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareRunResumed expects a RunState");
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareRunResumed expects a RunState");
   const { numWorkers } = options;
   requireWorkerCount(numWorkers);
   requireInitializedNonterminal(state);
@@ -1933,7 +1934,7 @@ export function prepareRunResumed(state: RunState, options: { numWorkers: number
  * @throws RangeError when the state is uninitialized or terminal, or `reason` is unknown.
  */
 export function prepareRunStopped(state: RunState, reason: RunStopReason, message: string): PreparedTransition {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareRunStopped expects a RunState");
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareRunStopped expects a RunState");
   requireInitializedNonterminal(state);
   return prepareRecord(state, new RunStoppedRecord(reason, message, [...state.inFlight]));
 }
@@ -1958,8 +1959,8 @@ export function prepareNodeWaiting(
   nodeId: string,
   options: { callIds: readonly string[]; waits?: readonly WaitEntry[]; steerInbox?: string | null },
 ): PreparedTransition {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareNodeWaiting expects a RunState");
-  if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareNodeWaiting expects a RunState");
+  if (typeof nodeId !== "string") throw new YianTypeError("node_id must be a string");
   const record = new NodeWaitingRecord(nodeId, options.callIds, {
     waits: options.waits ?? [],
     steerInbox: options.steerInbox ?? null,
@@ -1981,8 +1982,8 @@ export function prepareNodeWaiting(
  *   deadline, or, with no `timedOut` and no interrupt, it still waits on an open call.
  */
 export function prepareNodeWoken(state: RunState, nodeId: string, timedOut: readonly string[] = []): PreparedTransition {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareNodeWoken expects a RunState");
-  if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareNodeWoken expects a RunState");
+  if (typeof nodeId !== "string") throw new YianTypeError("node_id must be a string");
   return prepareRecord(state, new NodeWokenRecord(nodeId, timedOut));
 }
 
@@ -1997,7 +1998,7 @@ export function prepareNodeWoken(state: RunState, nodeId: string, timedOut: read
  *   frontier record is already a `run_waiting`.
  */
 export function prepareRunWaiting(state: RunState): PreparedTransition {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareRunWaiting expects a RunState");
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareRunWaiting expects a RunState");
   requireInitializedNonterminal(state);
   requireWaitingQuiescence(state, "RunWaiting");
   return prepareRecord(state, new RunWaitingRecord([...state.waits.waiting.keys()]));
@@ -2036,7 +2037,7 @@ export function prepareRecord(
   record: RunRecord,
   options: { growBuilder?: GrowBuilder | null } = {},
 ): PreparedTransition {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareRecord expects a RunState");
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareRecord expects a RunState");
   requireInitializedNonterminal(state);
 
   if (isExactly(record, PoolCommitRecord)) {
@@ -2056,7 +2057,7 @@ export function prepareRecord(
       validateSend(state, record);
       return prepareCommitTransition(state, record, "send");
     }
-    if (record.sendKey !== null) throw new RangeError("only a send holds a send key");
+    if (record.sendKey !== null) throw new YianRangeError("only a send holds a send key");
     // A key the flow doesn't hold yet is a child START the spawner's expansion is about to add.
     const expansion = !state.flow.nodes.has(record.key) && state.flow.nodes.get(record.nodeId)?.isSpawner === true;
     if (expansion) validateExpansionCommit(state, record);
@@ -2064,7 +2065,7 @@ export function prepareRecord(
     return prepareCommitTransition(state, record, expansion ? "expansion" : "node");
   }
   if (!state.inputsCommitted) {
-    throw new RangeError("the run start is incomplete: only its pool_commit records may follow RunStarted");
+    throw new YianRangeError("the run start is incomplete: only its pool_commit records may follow RunStarted");
   }
   if (isExactly(record, RunCancelledRecord) || isExactly(record, RunFailedRecord)) {
     return prepareEndingTransition(state, record);
@@ -2078,14 +2079,14 @@ export function prepareRecord(
   }
   if (isExactly(record, NodeExpandedRecord)) {
     if (typeof options.growBuilder !== "function") {
-      throw new TypeError("NodeExpandedRecord replay requires a callable grow_builder");
+      throw new YianTypeError("NodeExpandedRecord replay requires a callable grow_builder");
     }
     return prepareGrowthRecord(state, record, options.growBuilder);
   }
   if (isExactly(record, NodeFailedRecord)) return prepareFailureTransition(state, record);
   if (!FRONTIER_RECORDS.some((cls) => isExactly<RunRecord>(record, cls))) {
     const name = (record as { constructor?: { name?: unknown } } | null)?.constructor?.name;
-    throw new TypeError(`unsupported run record for state preparation: ${String(name)}`);
+    throw new YianTypeError(`unsupported run record for state preparation: ${String(name)}`);
   }
 
   const { envelopeJson, envelope, canonical } = canonicalEnvelope(state, record, FRONTIER_RECORDS, "frontier");
@@ -2144,7 +2145,7 @@ export function prepareRecord(
     delta = { kind: "inboxClosed", inbox: canonical.inbox };
   } else {
     // `canonicalEnvelope` refused every other class.
-    throw new TypeError("frontier envelope decoded to a different record kind");
+    throw new YianTypeError("frontier envelope decoded to a different record kind");
   }
 
   const plan: FrontierPlan = Object.freeze({
@@ -2207,12 +2208,12 @@ function canonicalEnvelope<C extends abstract new (...args: never[]) => RunRecor
   runId: string | null = state.runId,
 ): { envelopeJson: string; envelope: RecordEnvelope; canonical: InstanceType<C> } {
   // Established by the initialized-state check, or by `prepareRunStarted`'s data.
-  if (typeof runId !== "string") throw new RangeError("run state is not initialized");
+  if (typeof runId !== "string") throw new YianRangeError("run state is not initialized");
   const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, state.nextSequence, record));
   const envelope = decodeRecord(envelopeJson);
   // An exhaustive codec invariant.
   if (!classes.some((cls) => isExactly(envelope.record, cls))) {
-    throw new TypeError(`${what} envelope decoded to a different record kind`);
+    throw new YianTypeError(`${what} envelope decoded to a different record kind`);
   }
   return { envelopeJson, envelope, canonical: envelope.record as InstanceType<C> };
 }
@@ -2261,7 +2262,7 @@ function prepareSuccessTransition(
 ): PreparedTransition {
   requireFlowNode(state, record.nodeId);
   if (state.flow.nodes.get(record.nodeId)!.producesMessages && !state.pendingMessages.has(record.nodeId)) {
-    throw new RangeError(`node_succeeded of ${reprText(record.nodeId)} has no messages commit to accept`);
+    throw new YianRangeError(`node_succeeded of ${reprText(record.nodeId)} has no messages commit to accept`);
   }
   // The caller checked that the record names the node's pending commit.
   let pending = state.pendingCommits.get(record.nodeId)!;
@@ -2316,7 +2317,7 @@ function prepareRouteTransition(
   const recordForWire = new NodeRoutedRecord(record.nodeId, record.handle, { terminalFailure: causalFailure });
   const { envelopeJson, envelope, canonical } = canonicalEnvelope(state, recordForWire, [NodeRoutedRecord], "node-route");
   if (causalFailure !== null) {
-    if (canonical.terminalFailure === null) throw new RangeError("causal route lost its terminal failure");
+    if (canonical.terminalFailure === null) throw new YianRangeError("causal route lost its terminal failure");
     delta = Object.freeze({ ...delta, terminalUnreachableFailure: canonical.terminalFailure });
   }
   const terminal = prepareTerminalDelta(state, {
@@ -2440,7 +2441,7 @@ export function prepareFlowExpanded(
   callId: string,
   growBuilder: GrowBuilder,
 ): PreparedTransition {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareFlowExpanded expects a RunState");
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareFlowExpanded expects a RunState");
   requireInitializedNonterminal(state);
   const { seed, fragment } = flowCallGrowth(state, nodeId, callId, growBuilder);
   const validatedFragment = validateGrowthFragment(state, fragment);
@@ -2470,15 +2471,15 @@ function flowCallGrowth(
   growBuilder: GrowBuilder,
 ): { seed: JsonValue; fragment: Flow } {
   if (!state.inFlight.has(nodeId) || state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
-    throw new RangeError(`a flow call's scope grows only from its in-flight node, not ${reprText(nodeId)}`);
+    throw new YianRangeError(`a flow call's scope grows only from its in-flight node, not ${reprText(nodeId)}`);
   }
   requireNoPendingCommit(state, nodeId, "NodeExpanded");
   const call = state.waits.calls.get(callId);
   if (call === undefined || call.nodeId !== nodeId || !call.flow) {
-    throw new RangeError(`call ${reprText(callId)} is no flow call of node ${reprText(nodeId)}`);
+    throw new YianRangeError(`call ${reprText(callId)} is no flow call of node ${reprText(nodeId)}`);
   }
-  if (call.state !== "open") throw new RangeError(`flow call ${reprText(callId)} is already ${settledText(call)}`);
-  if (state.flowScopes.has(callId)) throw new RangeError(`flow call ${reprText(callId)}'s scope has grown already`);
+  if (call.state !== "open") throw new YianRangeError(`flow call ${reprText(callId)} is already ${settledText(call)}`);
+  if (state.flowScopes.has(callId)) throw new YianRangeError(`flow call ${reprText(callId)}'s scope has grown already`);
   const step = pendingStepOf(state, call)!;
   const seed: JsonValue = { tool: call.tool, arguments: step["arguments"] as JsonObject, scope: call.scope! };
   const [, builderSeed] = canonicalSeed(seed);
@@ -2502,12 +2503,12 @@ function flowScopeOf(delta: GrowthDelta): string {
  */
 export function prepareExpandedFromPlan(state: RunState, planned: PlannedExpansion): PreparedTransition {
   if (state !== planned.state || state.flow !== planned.flow) {
-    throw new RangeError(`the planned expansion of ${reprText(planned.spawnerId)} belongs to another run state`);
+    throw new YianRangeError(`the planned expansion of ${reprText(planned.spawnerId)} belongs to another run state`);
   }
   // Only its expansion commits may follow the plan, so the spawner and the topology it checked
   // still hold: they change neither.
   if (state.nextSequence !== planned.sequence + planned.commits.length) {
-    throw new RangeError(`the planned expansion of ${reprText(planned.spawnerId)} is stale`);
+    throw new YianRangeError(`the planned expansion of ${reprText(planned.spawnerId)} is stale`);
   }
   requireFlowNode(state, planned.spawnerId);
   requireRebuiltGrowth(state, planned);
@@ -2586,7 +2587,7 @@ function requireRebuiltGrowth(state: RunState, planned: PlannedExpansion): void 
   const { spawnerId } = planned;
   const { seed, pruneIds } = rebuildGrowth(state, spawnerId, pendingExpansion(state, spawnerId)[0]?.from ?? null);
   if (logJson(seed) !== logJson(planned.seed) || !sameItems(pruneIds, planned.pruneIds)) {
-    throw new RangeError(`spawner ${reprText(spawnerId)} grew another seed than its expansion commits' from rebuilds`);
+    throw new YianRangeError(`spawner ${reprText(spawnerId)} grew another seed than its expansion commits' from rebuilds`);
   }
 }
 
@@ -2616,17 +2617,17 @@ function liveGrowth(
   grow: Grow,
   growBuilder: GrowBuilder,
 ): { seedWire: JsonValue; fragment: Flow; validatedFragment: ValidatedFragment } {
-  if (!isExactly(state, RunState)) throw new TypeError("prepareExpanded expects a RunState");
-  if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
-  if (!nodeId) throw new RangeError("node_id must be non-empty");
-  if (!isExactly(grow, Grow)) throw new TypeError("grow must be a Grow");
-  if (typeof growBuilder !== "function") throw new TypeError("grow_builder must be callable");
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareExpanded expects a RunState");
+  if (typeof nodeId !== "string") throw new YianTypeError("node_id must be a string");
+  if (!nodeId) throw new YianRangeError("node_id must be non-empty");
+  if (!isExactly(grow, Grow)) throw new YianTypeError("grow must be a Grow");
+  if (typeof growBuilder !== "function") throw new YianTypeError("grow_builder must be callable");
   // `Grow` always copies `prune` into a new `Set`, so only its items need checking.
   for (const pruneId of grow.prune as ReadonlySet<unknown>) {
-    if (typeof pruneId !== "string") raiseGrowthRejected(new TypeError("Grow.prune must contain only strings"));
+    if (typeof pruneId !== "string") raiseGrowthRejected(new YianTypeError("Grow.prune must contain only strings"));
   }
   for (const pruneId of grow.prune) {
-    if (!pruneId) raiseGrowthRejected(new RangeError("Grow.prune node IDs must be non-empty"));
+    if (!pruneId) raiseGrowthRejected(new YianRangeError("Grow.prune node IDs must be non-empty"));
   }
   requireInitializedNonterminal(state);
   requireExpandingNode(state, nodeId);
@@ -2649,7 +2650,7 @@ function liveGrowth(
 
 /** Refuse a lookup: a child START binds only its constant wiring. */
 function noSources(name: string): TypedValue {
-  throw new RangeError(`a child START binds only its constant wiring, not ${reprText(name)}`);
+  throw new YianRangeError(`a child START binds only its constant wiring, not ${reprText(name)}`);
 }
 
 /**
@@ -2698,7 +2699,7 @@ function admitExpansion(
   const pending = pendingExpansion(state, spawnerId);
   const keys = pending.map((commit) => commit.key);
   if (!sameItems(keys, expected.map(([key]) => key))) {
-    throw new RangeError(
+    throw new YianRangeError(
       `NodeExpanded of ${reprText(spawnerId)} needs expansion commits for ${writeAsText(expected.map(([key]) => key))}, ` +
         `found ${writeAsText(keys)}`,
     );
@@ -2707,7 +2708,7 @@ function admitExpansion(
   return Object.freeze(
     pending.map((commit, index) => {
       if (fromText(commit.from) !== from) {
-        throw new RangeError(`the expansion commits of ${reprText(spawnerId)} must hold the same from`);
+        throw new YianRangeError(`the expansion commits of ${reprText(spawnerId)} must hold the same from`);
       }
       return Object.freeze({ ...commit, valueJson: logJson(expected[index]![1]), admitted: true });
     }),
@@ -2737,14 +2738,14 @@ function prepareGrowthRecord(
     const { seed: seedWire, pruneIds } = rebuildGrowth(state, record.spawnerId, from);
     const fragment = buildGrowthFragment(state.flow.nodes.get(record.spawnerId)!, canonicalSeed(seedWire)[1], growBuilder);
     if (!sameItems(pruneIds, record.pruneIds)) {
-      throw new RangeError(
+      throw new YianRangeError(
         `NodeExpandedRecord prune ids ${writeAsText([...record.pruneIds])} differ from the rebuilt ${writeAsText([...pruneIds])}`,
       );
     }
     const validatedFragment = validateGrowthFragment(state, fragment);
     const actualDigest = expansionDigest(fragment);
     if (actualDigest !== record.topologyDigest) {
-      throw new RangeError(
+      throw new YianRangeError(
         "NodeExpandedRecord topology digest mismatch: " +
           `recorded ${reprText(record.topologyDigest)}, rebuilt ${reprText(actualDigest)}`,
       );
@@ -2765,13 +2766,13 @@ function prepareGrowthRecord(
 
 /** Rebuild and verify one historical flow call's scope from its call's `pending` step. */
 function prepareFlowGrowthRecord(state: RunState, record: NodeExpandedRecord, growBuilder: GrowBuilder): PreparedTransition {
-  if (record.pruneIds.length > 0) throw new RangeError("a flow call's NodeExpandedRecord prunes nothing");
+  if (record.pruneIds.length > 0) throw new YianRangeError("a flow call's NodeExpandedRecord prunes nothing");
   try {
     const { seed, fragment } = flowCallGrowth(state, record.spawnerId, record.callId!, growBuilder);
     const validatedFragment = validateGrowthFragment(state, fragment);
     const actualDigest = expansionDigest(fragment);
     if (actualDigest !== record.topologyDigest) {
-      throw new RangeError(
+      throw new YianRangeError(
         "NodeExpandedRecord topology digest mismatch: " +
           `recorded ${reprText(record.topologyDigest)}, rebuilt ${reprText(actualDigest)}`,
       );
@@ -2804,7 +2805,7 @@ function prepareGrowthTransition(
 ): PreparedTransition {
   const { actualDigest: digest, validatedFragment: validated, seed, commits } = options;
   if (digest !== record.topologyDigest) {
-    throw new RangeError("NodeExpandedRecord topology digest disagrees with its fragment");
+    throw new YianRangeError("NodeExpandedRecord topology digest disagrees with its fragment");
   }
   const { delta: grown, topology } = options.grown ?? prepareGrowthTopology(state, record, fragment, validated);
   const delta: GrowthDelta = Object.freeze({ ...grown, admitted: admitExpansion(state, record.spawnerId, fragment, commits) });
@@ -2850,10 +2851,10 @@ const PLAN_KINDS: ReadonlySet<string> = new Set([
  * @throws the log's append error, unchanged, before any state change.
  */
 export function commitPrepared(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
-  if (!isExactly(state, RunState)) throw new TypeError("commitPrepared expects a RunState");
-  if (!isExactly(prepared, PreparedTransition)) throw new TypeError("commitPrepared expects a PreparedTransition");
+  if (!isExactly(state, RunState)) throw new YianTypeError("commitPrepared expects a RunState");
+  if (!isExactly(prepared, PreparedTransition)) throw new YianTypeError("commitPrepared expects a PreparedTransition");
   const kind = (prepared._plan as { kind?: unknown } | null)?.kind;
-  if (typeof kind !== "string" || !PLAN_KINDS.has(kind)) throw new TypeError("unsupported prepared transition plan");
+  if (typeof kind !== "string" || !PLAN_KINDS.has(kind)) throw new YianTypeError("unsupported prepared transition plan");
   let observers: readonly RunEvent[];
   switch (prepared._plan.kind) {
     case "runStarted":
@@ -2884,7 +2885,7 @@ export function commitPrepared(log: RunLog, state: RunState, prepared: PreparedT
       observers = commitGrowth(log, state, prepared);
       break;
     default:
-      throw new TypeError("unsupported prepared transition plan");
+      throw new YianTypeError("unsupported prepared transition plan");
   }
   applyWaitsRecord(state.waits, { seq: prepared.expectedSequence, record: prepared.record });
   return observers;
@@ -2913,14 +2914,14 @@ export function replayRecords(
   envelopes: readonly RecordEnvelope[],
   options: { growBuilder: GrowBuilder; onPrepared?: ((prepared: PreparedTransition, state: RunState) => void) | null },
 ): RunState {
-  if (!isExactly(state, RunState)) throw new TypeError("replayRecords expects a RunState");
+  if (!isExactly(state, RunState)) throw new YianTypeError("replayRecords expects a RunState");
   if (!Array.isArray(envelopes) || !envelopes.every((envelope) => envelope instanceof RecordEnvelope)) {
-    throw new TypeError("replay envelopes must be an array of RecordEnvelope values");
+    throw new YianTypeError("replay envelopes must be an array of RecordEnvelope values");
   }
   const growBuilder = options.growBuilder;
-  if (typeof growBuilder !== "function") throw new TypeError("grow_builder must be callable");
+  if (typeof growBuilder !== "function") throw new YianTypeError("grow_builder must be callable");
   requirePristine(state);
-  if (envelopes.length === 0) throw new RangeError("cannot replay an empty run-record prefix");
+  if (envelopes.length === 0) throw new YianRangeError("cannot replay an empty run-record prefix");
 
   const canonical: string[] = [];
   let runId: string | null = null;
@@ -2928,19 +2929,19 @@ export function replayRecords(
     const encoded = encodeRecord(supplied);
     const envelope = decodeRecord(encoded);
     if (envelope.seq !== expectedSequence) {
-      throw new RangeError(`replay sequence mismatch: expected ${expectedSequence}, found ${envelope.seq}`);
+      throw new YianRangeError(`replay sequence mismatch: expected ${expectedSequence}, found ${envelope.seq}`);
     }
     if (runId === null) {
       runId = envelope.runId;
     } else if (envelope.runId !== runId) {
-      throw new RangeError(`replay run_id mismatch: expected ${reprText(runId)}, found ${reprText(envelope.runId)}`);
+      throw new YianRangeError(`replay run_id mismatch: expected ${reprText(runId)}, found ${reprText(envelope.runId)}`);
     }
     canonical.push(encoded);
   }
 
   const first = decodeRecord(canonical[0]!);
   const start = first.record;
-  if (!(start instanceof RunStartedRecord)) throw new RangeError("the first historical run record must be RunStarted");
+  if (!(start instanceof RunStartedRecord)) throw new YianRangeError("the first historical run record must be RunStarted");
   const cursor = new HistoricalLogCursor(canonical);
   const prepared = prepareRunStarted(state, {
     runId: first.runId,
@@ -2974,7 +2975,7 @@ export function replayRecords(
   }
 
   if (cursor.nextSequence !== canonical.length) {
-    throw new RangeError("replay did not consume the complete historical prefix");
+    throw new YianRangeError("replay did not consume the complete historical prefix");
   }
   requireInventories(state);
   return state;
@@ -2983,8 +2984,8 @@ export function replayRecords(
 /** Validate, append and install one initialization transition. */
 function commitRunStarted(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
   const plan = prepared._plan;
-  if (plan.kind !== "runStarted") throw new TypeError("RunStarted commit requires a RunStarted plan");
-  if (!isExactly(prepared.record, RunStartedRecord)) throw new TypeError("RunStarted plan requires a RunStartedRecord");
+  if (plan.kind !== "runStarted") throw new YianTypeError("RunStarted commit requires a RunStarted plan");
+  if (!isExactly(prepared.record, RunStartedRecord)) throw new YianTypeError("RunStarted plan requires a RunStartedRecord");
   requirePreparedOrigin(state, plan);
   requirePristine(state);
   requireAuthorityCoordinates(log, state, prepared, false);
@@ -3003,14 +3004,14 @@ function commitRunStarted(log: RunLog, state: RunState, prepared: PreparedTransi
  */
 function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
   const plan = prepared._plan;
-  if (plan.kind !== "commit") throw new TypeError("pool-commit commit requires a commit plan");
-  if (!isExactly(prepared.record, PoolCommitRecord)) throw new TypeError("commit plan requires a PoolCommitRecord");
+  if (plan.kind !== "commit") throw new YianTypeError("pool-commit commit requires a commit plan");
+  if (!isExactly(prepared.record, PoolCommitRecord)) throw new YianTypeError("commit plan requires a PoolCommitRecord");
   requirePreparedOrigin(state, plan);
   requireInitializedNonterminal(state);
   requireAuthorityCoordinates(log, state, prepared, true);
   requireUnchangedRecord(prepared, plan.envelopeJson);
   const initial = plan.commitKind === "initial";
-  if (initial === state.inputsCommitted) throw new RangeError("pool-commit plan disagrees with the run start");
+  if (initial === state.inputsCommitted) throw new YianRangeError("pool-commit plan disagrees with the run start");
   // A run-start commit always holds its value.
   const startInputs = initial && plan.key === plan.startId;
   let value = initial ? decodeTyped(plan.valueJson!) : null;
@@ -3059,7 +3060,7 @@ function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransi
 /** Validate, append and apply one sparse dispatch, recovery, step, stop, wait, wake, run-wait or close delta. */
 function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
   const plan = prepared._plan;
-  if (plan.kind !== "frontier") throw new TypeError("frontier commit requires a frontier plan");
+  if (plan.kind !== "frontier") throw new YianTypeError("frontier commit requires a frontier plan");
   const record = prepared.record;
   requirePreparedOrigin(state, plan);
   requireInitializedNonterminal(state);
@@ -3067,39 +3068,39 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
   requireUnchangedRecord(prepared, plan.envelopeJson);
   const delta = plan.delta;
   if (isExactly(record, NodeStartedRecord) && delta.kind === "started") {
-    if (delta.nodeId !== record.nodeId) throw new RangeError("frontier start delta disagrees with its record");
+    if (delta.nodeId !== record.nodeId) throw new YianRangeError("frontier start delta disagrees with its record");
   } else if (isExactly(record, RunResumedRecord) && delta.kind === "resumed") {
     if (
       !sameItems(delta.retryNodeIds, record.retryNodeIds) ||
       !Number.isSafeInteger(delta.numWorkers) ||
       delta.numWorkers !== record.numWorkers
     ) {
-      throw new RangeError("frontier resume delta disagrees with its record");
+      throw new YianRangeError("frontier resume delta disagrees with its record");
     }
   } else if (isExactly(record, NodeStepRecord) && delta.kind === "step") {
     if (delta.nodeId !== record.nodeId || logJson(delta.step) !== logJson(record.step)) {
-      throw new RangeError("frontier step delta disagrees with its record");
+      throw new YianRangeError("frontier step delta disagrees with its record");
     }
   } else if (isExactly(record, RunStoppedRecord) && delta.kind === "stopped") {
     if (!sameItems(delta.nodeIds, record.nodeIds)) {
-      throw new RangeError("frontier stop delta disagrees with its record");
+      throw new YianRangeError("frontier stop delta disagrees with its record");
     }
   } else if (isExactly(record, NodeWaitingRecord) && delta.kind === "waiting") {
-    if (delta.nodeId !== record.nodeId) throw new RangeError("frontier wait delta disagrees with its record");
+    if (delta.nodeId !== record.nodeId) throw new YianRangeError("frontier wait delta disagrees with its record");
   } else if (isExactly(record, NodeWokenRecord) && delta.kind === "woken") {
-    if (delta.nodeId !== record.nodeId) throw new RangeError("frontier wake delta disagrees with its record");
+    if (delta.nodeId !== record.nodeId) throw new YianRangeError("frontier wake delta disagrees with its record");
   } else if (isExactly(record, RunWaitingRecord) && delta.kind === "runWaiting") {
-    if (!sameItems(delta.nodeIds, record.nodeIds)) throw new RangeError("frontier run-wait delta disagrees with its record");
+    if (!sameItems(delta.nodeIds, record.nodeIds)) throw new YianRangeError("frontier run-wait delta disagrees with its record");
   } else if (isExactly(record, InboxClosedRecord) && delta.kind === "inboxClosed") {
-    if (delta.inbox !== record.inbox) throw new RangeError("frontier close delta disagrees with its record");
+    if (delta.inbox !== record.inbox) throw new YianRangeError("frontier close delta disagrees with its record");
   } else if (isExactly(record, InboxWithdrawnRecord) && delta.kind === "withdrawn") {
     if (delta.inbox !== record.inbox || !sameItems(delta.events, record.events)) {
-      throw new RangeError("frontier withdraw delta disagrees with its record");
+      throw new YianRangeError("frontier withdraw delta disagrees with its record");
     }
   } else if (isExactly(record, InterruptedRecord) && delta.kind === "interrupted") {
-    if (!sameItems(delta.nodeIds, record.nodes)) throw new RangeError("frontier interrupt delta disagrees with its record");
+    if (!sameItems(delta.nodeIds, record.nodes)) throw new YianRangeError("frontier interrupt delta disagrees with its record");
   } else {
-    throw new TypeError("frontier record and prevalidated delta disagree");
+    throw new YianTypeError("frontier record and prevalidated delta disagree");
   }
   const observers = frontierObservers(record, delta);
 
@@ -3175,9 +3176,9 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
 /** Validate, append and install one successful outcome. */
 function commitSuccess(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
   const plan = prepared._plan;
-  if (plan.kind !== "success") throw new TypeError("success commit requires a success plan");
+  if (plan.kind !== "success") throw new YianTypeError("success commit requires a success plan");
   const record = prepared.record;
-  if (!isExactly(record, NodeSucceededRecord)) throw new TypeError("success plan requires a NodeSucceededRecord");
+  if (!isExactly(record, NodeSucceededRecord)) throw new YianTypeError("success plan requires a NodeSucceededRecord");
   requirePreparedOrigin(state, plan);
   requireInitializedNonterminal(state);
   requireAuthorityCoordinates(log, state, prepared, true);
@@ -3189,7 +3190,7 @@ function commitSuccess(log: RunLog, state: RunState, prepared: PreparedTransitio
     (state.pendingMessages.get(record.nodeId)?.seq ?? null) !== record.messages ||
     (delta.messages?.seq ?? null) !== record.messages
   ) {
-    throw new RangeError("success record and prevalidated delta disagree");
+    throw new YianRangeError("success record and prevalidated delta disagree");
   }
   const apply = materializeSuccess(plan);
 
@@ -3219,23 +3220,23 @@ function commitSuccess(log: RunLog, state: RunState, prepared: PreparedTransitio
 /** Validate, append and install one route and its derived skip closure. */
 function commitRoute(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
   const plan = prepared._plan;
-  if (plan.kind !== "route") throw new TypeError("route commit requires a route plan");
+  if (plan.kind !== "route") throw new YianTypeError("route commit requires a route plan");
   const record = prepared.record;
-  if (!isExactly(record, NodeRoutedRecord)) throw new TypeError("route plan requires a NodeRoutedRecord");
+  if (!isExactly(record, NodeRoutedRecord)) throw new YianTypeError("route plan requires a NodeRoutedRecord");
   requirePreparedOrigin(state, plan);
   requireInitializedNonterminal(state);
   requireAuthorityCoordinates(log, state, prepared, true);
   requireUnchangedRecord(prepared, plan.envelopeJson);
   const delta = plan.delta;
   if (!(record.nodeId === delta.nodeId && record.handle === delta.handle)) {
-    throw new RangeError("route record and prevalidated delta disagree");
+    throw new YianRangeError("route record and prevalidated delta disagree");
   }
   if (record.terminalFailure !== null) {
     if (delta.terminalUnreachableFailure !== record.terminalFailure) {
-      throw new RangeError("route record and terminal-failure delta disagree");
+      throw new YianRangeError("route record and terminal-failure delta disagree");
     }
   } else if (delta.terminalUnreachableFailure !== state.terminalUnreachableFailure) {
-    throw new RangeError("noncausal route changed terminal-failure authority");
+    throw new YianRangeError("noncausal route changed terminal-failure authority");
   }
   const apply = materializeRoute(plan);
 
@@ -3263,16 +3264,16 @@ function commitRoute(log: RunLog, state: RunState, prepared: PreparedTransition)
 /** Validate, append and install one immediately terminal node failure. */
 function commitFailure(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
   const plan = prepared._plan;
-  if (plan.kind !== "failure") throw new TypeError("failure commit requires a failure plan");
+  if (plan.kind !== "failure") throw new YianTypeError("failure commit requires a failure plan");
   const record = prepared.record;
-  if (!isExactly(record, NodeFailedRecord)) throw new TypeError("failure plan requires a NodeFailedRecord");
+  if (!isExactly(record, NodeFailedRecord)) throw new YianTypeError("failure plan requires a NodeFailedRecord");
   requirePreparedOrigin(state, plan);
   requireInitializedNonterminal(state);
   requireAuthorityCoordinates(log, state, prepared, true);
   requireUnchangedRecord(prepared, plan.envelopeJson);
-  if (record.failure !== plan.failure) throw new RangeError("failure record and prevalidated authority disagree");
+  if (record.failure !== plan.failure) throw new YianRangeError("failure record and prevalidated authority disagree");
   const nodeId: unknown = plan.failure.nodeId;
-  if (typeof nodeId !== "string" || !nodeId) throw new RangeError("failure plan has no executing node");
+  if (typeof nodeId !== "string" || !nodeId) throw new YianRangeError("failure plan has no executing node");
   const apply = materializeFailure(plan.failure, plan.closedCalls);
 
   appendAndVerify(log, prepared);
@@ -3302,7 +3303,7 @@ function prepareFlowFailureTransition(state: RunState, record: NodeFailedRecord)
   const ungrown = call?.nodeId === nodeId && call.flow && call.state === "open" && !state.flowScopes.has(callId);
   const retires = enclosing !== null && enclosing.callId === callId && enclosing.scope === scope;
   if (!retires && !(ungrown && call!.scope === scope)) {
-    throw new RangeError(`NodeFailed of ${reprText(nodeId)} names flow call ${reprText(callId)}, which doesn't hold it`);
+    throw new YianRangeError(`NodeFailed of ${reprText(nodeId)} names flow call ${reprText(callId)}, which doesn't hold it`);
   }
   const closedCalls = retires ? hostCalls(state, scopeCalls(state, scope)) : [];
   const plan: FlowFailurePlan = Object.freeze({
@@ -3321,14 +3322,14 @@ function prepareFlowFailureTransition(state: RunState, record: NodeFailedRecord)
 /** Validate, append and install a failure a flow call takes: its scope ends and the run goes on. */
 function commitFlowFailure(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
   const plan = prepared._plan;
-  if (plan.kind !== "flowFailure") throw new TypeError("flow failure commit requires a flow failure plan");
+  if (plan.kind !== "flowFailure") throw new YianTypeError("flow failure commit requires a flow failure plan");
   const record = prepared.record;
-  if (!isExactly(record, NodeFailedRecord)) throw new TypeError("flow failure plan requires a NodeFailedRecord");
+  if (!isExactly(record, NodeFailedRecord)) throw new YianTypeError("flow failure plan requires a NodeFailedRecord");
   requirePreparedOrigin(state, plan);
   requireInitializedNonterminal(state);
   requireAuthorityCoordinates(log, state, prepared, true);
   requireUnchangedRecord(prepared, plan.envelopeJson);
-  if (record.failure !== plan.failure) throw new RangeError("failure record and prevalidated authority disagree");
+  if (record.failure !== plan.failure) throw new YianRangeError("failure record and prevalidated authority disagree");
 
   appendAndVerify(log, prepared);
   if (plan.retires) retireScope(state, plan.scope);
@@ -3340,17 +3341,17 @@ function commitFlowFailure(log: RunLog, state: RunState, prepared: PreparedTrans
 /** Validate, append and install one ending record: the run's terminal result. */
 function commitEnding(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
   const plan = prepared._plan;
-  if (plan.kind !== "ending") throw new TypeError("ending commit requires an ending plan");
+  if (plan.kind !== "ending") throw new YianTypeError("ending commit requires an ending plan");
   const record = prepared.record;
   if (!isExactly(record, RunCancelledRecord) && !isExactly(record, RunFailedRecord)) {
-    throw new TypeError("ending plan requires a RunCancelledRecord or RunFailedRecord");
+    throw new YianTypeError("ending plan requires a RunCancelledRecord or RunFailedRecord");
   }
   requirePreparedOrigin(state, plan);
   requireInitializedNonterminal(state);
   requireAuthorityCoordinates(log, state, prepared, true);
   requireUnchangedRecord(prepared, plan.envelopeJson);
   if ((isExactly(record, RunFailedRecord) ? record.failure : null) !== plan.failure) {
-    throw new RangeError("ending record and prevalidated failure disagree");
+    throw new YianRangeError("ending record and prevalidated failure disagree");
   }
   const apply = materializeEnding(plan);
 
@@ -3363,9 +3364,9 @@ function commitEnding(log: RunLog, state: RunState, prepared: PreparedTransition
 /** Validate, append and install one fully materialized flat expansion. */
 function commitGrowth(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
   const plan = prepared._plan;
-  if (plan.kind !== "growth") throw new TypeError("growth commit requires a growth plan");
+  if (plan.kind !== "growth") throw new YianTypeError("growth commit requires a growth plan");
   const record = prepared.record;
-  if (!isExactly(record, NodeExpandedRecord)) throw new TypeError("growth plan requires a NodeExpandedRecord");
+  if (!isExactly(record, NodeExpandedRecord)) throw new YianTypeError("growth plan requires a NodeExpandedRecord");
   requirePreparedOrigin(state, plan);
   requireInitializedNonterminal(state);
   requireAuthorityCoordinates(log, state, prepared, true);
@@ -3379,7 +3380,7 @@ function commitGrowth(log: RunLog, state: RunState, prepared: PreparedTransition
       record.topologyDigest === delta.topologyDigest
     )
   ) {
-    throw new RangeError("growth record and prevalidated delta disagree");
+    throw new YianRangeError("growth record and prevalidated delta disagree");
   }
   const apply = materializeGrowth(plan);
 
@@ -3392,7 +3393,7 @@ function commitGrowth(log: RunLog, state: RunState, prepared: PreparedTransition
 /** Require the exact state, adopted flow and boundary nodes of the preparation. */
 function requirePreparedOrigin(state: RunState, plan: PreparedPlan): void {
   if (state !== plan.originatingState) {
-    throw new RangeError("prepared transition belongs to a different originating RunState");
+    throw new YianRangeError("prepared transition belongs to a different originating RunState");
   }
   requireOriginatingFlow(state, plan);
 }
@@ -3405,25 +3406,25 @@ function requireAuthorityCoordinates(
   initialized: boolean,
 ): void {
   if (prepared.expectedSequence !== state.nextSequence) {
-    throw new RangeError(
+    throw new YianRangeError(
       `run-state sequence mismatch: prepared ${prepared.expectedSequence}, state ${state.nextSequence}`,
     );
   }
   if (prepared.expectedSequence !== log.nextSequence) {
-    throw new RangeError(`run-log sequence mismatch: prepared ${prepared.expectedSequence}, log ${log.nextSequence}`);
+    throw new YianRangeError(`run-log sequence mismatch: prepared ${prepared.expectedSequence}, log ${log.nextSequence}`);
   }
   if (prepared.expectedRunId !== log.runId) {
-    throw new RangeError(
+    throw new YianRangeError(
       `run-log run_id mismatch: prepared ${reprText(prepared.expectedRunId)}, log ${reprText(log.runId)}`,
     );
   }
   if (initialized) {
     if (state.runId !== prepared.expectedRunId) {
       const found = state.runId === null ? writeAsText(null) : reprText(state.runId);
-      throw new RangeError(`run-state run_id mismatch: prepared ${reprText(prepared.expectedRunId)}, state ${found}`);
+      throw new YianRangeError(`run-state run_id mismatch: prepared ${reprText(prepared.expectedRunId)}, state ${found}`);
     }
   } else if (state.runId !== null) {
-    throw new RangeError("RunStarted requires state.run_id to be null");
+    throw new YianRangeError("RunStarted requires state.run_id to be null");
   }
 }
 
@@ -3456,12 +3457,12 @@ export function addCrashedAttempts(
 export function requireUnchangedRecord(prepared: PreparedTransition, envelopeJson: string): void {
   const frozen = decodeRecord(envelopeJson);
   if (frozen.runId !== prepared.expectedRunId || frozen.seq !== prepared.expectedSequence) {
-    throw new RangeError("prepared coordinates changed after validation");
+    throw new YianRangeError("prepared coordinates changed after validation");
   }
   const current = encodeRecord(
     new RecordEnvelope(frozen.schema, prepared.expectedRunId, prepared.expectedSequence, prepared.record, frozen.at),
   );
-  if (current !== envelopeJson) throw new RangeError("prepared record changed after validation");
+  if (current !== envelopeJson) throw new YianRangeError("prepared record changed after validation");
 }
 
 /**
@@ -3482,7 +3483,7 @@ function appendAndVerify(log: RunLog, prepared: PreparedTransition): void {
     encodeRecord(new RecordEnvelope(envelope.schema, envelope.runId, envelope.seq, envelope.record)) !==
       prepared._plan.envelopeJson
   ) {
-    throw new RangeError("run-log append result does not match prepared transition");
+    throw new YianRangeError("run-log append result does not match prepared transition");
   }
 }
 
@@ -3526,39 +3527,39 @@ function hasReducerContainers(state: RunState): boolean {
  * transition pays it.
  */
 function requireInitialized(state: RunState): void {
-  if (!hasReducerContainers(state)) throw new RangeError("transition requires initialized reducer containers");
-  if (typeof state.runId !== "string" || !state.runId) throw new RangeError("run state is not initialized");
+  if (!hasReducerContainers(state)) throw new YianRangeError("transition requires initialized reducer containers");
+  if (typeof state.runId !== "string" || !state.runId) throw new YianRangeError("run state is not initialized");
   if (typeof state.flowFingerprint !== "string" || !state.flowFingerprint) {
-    throw new RangeError("run state is not initialized with a flow fingerprint");
+    throw new YianRangeError("run state is not initialized with a flow fingerprint");
   }
   if (!Number.isSafeInteger(state.nextSequence) || state.nextSequence < 1) {
-    throw new RangeError("run state is not initialized with a valid sequence");
+    throw new YianRangeError("run state is not initialized with a valid sequence");
   }
   const lastStop = state.lastStopSequence;
   if (lastStop !== null && !(Number.isSafeInteger(lastStop) && 1 <= lastStop && lastStop < state.nextSequence)) {
-    throw new RangeError("last stop sequence must be null or an earlier accepted sequence");
+    throw new YianRangeError("last stop sequence must be null or an earlier accepted sequence");
   }
   if (!Number.isSafeInteger(state.numWorkers) || state.numWorkers < 0) {
-    throw new RangeError("run state has an invalid worker count");
+    throw new YianRangeError("run state has an invalid worker count");
   }
   const failure = state.terminalUnreachableFailure;
   if (failure !== null) {
-    if (!isExactly(failure, Failure)) throw new TypeError("terminal-unreachable latch must be a Failure or null");
+    if (!isExactly(failure, Failure)) throw new YianTypeError("terminal-unreachable latch must be a Failure or null");
     if (failure.code !== "graph.terminal_unreachable") {
-      throw new RangeError("terminal-unreachable latch has the wrong failure code");
+      throw new YianRangeError("terminal-unreachable latch has the wrong failure code");
     }
     if (typeof failure.nodeId !== "string" || !failure.nodeId) {
-      throw new RangeError("terminal-unreachable latch requires a causal node ID");
+      throw new YianRangeError("terminal-unreachable latch requires a causal node ID");
     }
   }
   if (!state.flow.nodes.has(state.flow.startId)) {
-    throw new RangeError("initialized run state is missing its START boundary");
+    throw new YianRangeError("initialized run state is missing its START boundary");
   }
   if (state.pool.startId !== state.flow.startId) {
-    throw new RangeError("initialized pool START must match the adopted flow");
+    throw new YianRangeError("initialized pool START must match the adopted flow");
   }
   if (!state.initialStaticIds.has(state.flow.startId)) {
-    throw new RangeError("initialized run state START is not an initial static node");
+    throw new YianRangeError("initialized run state START is not an initial static node");
   }
   requireTouchedInventories(state);
 }
@@ -3620,14 +3621,14 @@ function inventoryFault(state: RunState, nodeId: string): string | null {
  */
 function requireTouchedInventories(state: RunState): void {
   if (state.acceptedStarts.size !== state.inFlight.size) {
-    throw new RangeError("accepted starts must match the unfinished invocation inventory");
+    throw new YianRangeError("accepted starts must match the unfinished invocation inventory");
   }
   if (state.nodeStepSeqs.size !== state.nodeSteps.size || state.nodeStartSeqs.size !== state.nodeStarts.size) {
-    throw new RangeError("node starts, steps and pending commits must match the unsettled invocations");
+    throw new YianRangeError("node starts, steps and pending commits must match the unsettled invocations");
   }
   for (const nodeId of state.touched) {
     const fault = inventoryFault(state, nodeId);
-    if (fault !== null) throw new RangeError(fault);
+    if (fault !== null) throw new YianRangeError(fault);
   }
   state.touched.clear();
 }
@@ -3642,7 +3643,7 @@ function requireTouchedInventories(state: RunState): void {
 function requireInventories(state: RunState): void {
   const sequences = [...state.acceptedStarts.values()];
   if (new Set(sequences).size !== sequences.length) {
-    throw new RangeError("accepted starts must match the unfinished invocation inventory");
+    throw new YianRangeError("accepted starts must match the unfinished invocation inventory");
   }
   const nodeIds = new Set<string>([
     ...state.inFlight,
@@ -3659,31 +3660,31 @@ function requireInventories(state: RunState): void {
   ]);
   for (const nodeId of nodeIds) {
     const fault = inventoryFault(state, nodeId);
-    if (fault !== null) throw new RangeError(fault);
+    if (fault !== null) throw new YianRangeError(fault);
   }
 }
 
 /** Require an initialized graph state before its primary terminal outcome. */
 function requireInitializedNonterminal(state: RunState): void {
   requireInitialized(state);
-  if (state.result !== null) throw new RangeError("terminal run state cannot prepare another graph transition");
+  if (state.result !== null) throw new YianRangeError("terminal run state cannot prepare another graph transition");
 }
 
 /** Require `record` to dispatch exactly one eligible ready-head node. */
 function validateNodeStarted(state: RunState, record: NodeStartedRecord): void {
   const nodeId: unknown = record.nodeId;
-  if (typeof nodeId !== "string") throw new TypeError("NodeStartedRecord node_id must be a string");
+  if (typeof nodeId !== "string") throw new YianTypeError("NodeStartedRecord node_id must be a string");
   if (state.ready.length === 0 || state.ready[0] !== nodeId) {
     const found = state.ready.length === 0 ? writeAsText(null) : reprText(state.ready[0]!);
-    throw new RangeError(`NodeStarted requires ready head ${reprText(nodeId)}, found ${found}`);
+    throw new YianRangeError(`NodeStarted requires ready head ${reprText(nodeId)}, found ${found}`);
   }
   if (!state.flow.nodes.has(nodeId)) {
-    throw new RangeError(`NodeStarted node ${reprText(nodeId)} does not exist in the flow`);
+    throw new YianRangeError(`NodeStarted node ${reprText(nodeId)} does not exist in the flow`);
   }
   if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
-    throw new RangeError(`NodeStarted node ${reprText(nodeId)} must have UNKNOWN disposition`);
+    throw new YianRangeError(`NodeStarted node ${reprText(nodeId)} must have UNKNOWN disposition`);
   }
-  if (state.inFlight.has(nodeId)) throw new RangeError(`NodeStarted node ${reprText(nodeId)} is already in-flight`);
+  if (state.inFlight.has(nodeId)) throw new YianRangeError(`NodeStarted node ${reprText(nodeId)} is already in-flight`);
 }
 
 /** Require a resume record to name the exact ordered unfinished frontier. */
@@ -3691,26 +3692,26 @@ function validateRunResumed(state: RunState, record: RunResumedRecord): void {
   requireWorkerCount(record.numWorkers);
   const retries: unknown = record.retryNodeIds;
   if (!Array.isArray(retries) || retries.some((nodeId) => typeof nodeId !== "string")) {
-    throw new TypeError("RunResumedRecord retry_node_ids must be an array of strings");
+    throw new YianTypeError("RunResumedRecord retry_node_ids must be an array of strings");
   }
   const expected = [...state.inFlight];
   if (!sameItems(record.retryNodeIds, expected)) {
-    throw new RangeError(
+    throw new YianRangeError(
       "RunResumedRecord retry_node_ids must exactly equal ordered in-flight nodes: " +
         `expected ${writeAsText(expected)}, found ${writeAsText([...record.retryNodeIds])}`,
     );
   }
   for (const nodeId of record.retryNodeIds) {
     if (!state.flow.nodes.has(nodeId)) {
-      throw new RangeError(`RunResumed retry node ${reprText(nodeId)} does not exist in the flow`);
+      throw new YianRangeError(`RunResumed retry node ${reprText(nodeId)} does not exist in the flow`);
     }
     if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
-      throw new RangeError(`RunResumed retry node ${reprText(nodeId)} must have UNKNOWN disposition`);
+      throw new YianRangeError(`RunResumed retry node ${reprText(nodeId)} must have UNKNOWN disposition`);
     }
   }
   const closedCalls = retriedAgentCalls(state);
   if (!sameItems(record.closedCalls, closedCalls)) {
-    throw new RangeError(
+    throw new YianRangeError(
       "RunResumedRecord closed_calls must exactly equal the retried nodes' open calls: " +
         `expected ${writeAsText(closedCalls)}, found ${writeAsText([...record.closedCalls])}`,
     );
@@ -3740,21 +3741,21 @@ function retriedAgentCalls(state: RunState): string[] {
 function validateRunStopped(state: RunState, record: RunStoppedRecord): void {
   const nodeIds: unknown = record.nodeIds;
   if (!Array.isArray(nodeIds) || nodeIds.some((nodeId) => typeof nodeId !== "string")) {
-    throw new TypeError("RunStoppedRecord node_ids must be an array of strings");
+    throw new YianTypeError("RunStoppedRecord node_ids must be an array of strings");
   }
   const expected = [...state.inFlight];
   if (!sameItems(record.nodeIds, expected)) {
-    throw new RangeError(
+    throw new YianRangeError(
       "RunStoppedRecord node_ids must exactly equal ordered in-flight nodes: " +
         `expected ${writeAsText(expected)}, found ${writeAsText([...record.nodeIds])}`,
     );
   }
   for (const nodeId of record.nodeIds) {
     if (!state.flow.nodes.has(nodeId)) {
-      throw new RangeError(`RunStopped node ${reprText(nodeId)} does not exist in the flow`);
+      throw new YianRangeError(`RunStopped node ${reprText(nodeId)} does not exist in the flow`);
     }
     if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
-      throw new RangeError(`RunStopped node ${reprText(nodeId)} must have UNKNOWN disposition`);
+      throw new YianRangeError(`RunStopped node ${reprText(nodeId)} must have UNKNOWN disposition`);
     }
   }
 }
@@ -3777,44 +3778,44 @@ function hostCalls(state: RunState, callIds: Iterable<string>): string[] {
 function validateNodeWaiting(state: RunState, record: NodeWaitingRecord): void {
   const { nodeId } = record;
   const node = state.flow.nodes.get(nodeId);
-  if (node === undefined) throw new RangeError(`NodeWaiting node ${reprText(nodeId)} does not exist in the flow`);
+  if (node === undefined) throw new YianRangeError(`NodeWaiting node ${reprText(nodeId)} does not exist in the flow`);
   if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
-    throw new RangeError(`NodeWaiting node ${reprText(nodeId)} must have UNKNOWN disposition`);
+    throw new YianRangeError(`NodeWaiting node ${reprText(nodeId)} must have UNKNOWN disposition`);
   }
-  if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeWaiting node ${reprText(nodeId)} is not in-flight`);
+  if (!state.inFlight.has(nodeId)) throw new YianRangeError(`NodeWaiting node ${reprText(nodeId)} is not in-flight`);
   requireNoPendingCommit(state, nodeId, "NodeWaiting");
   if (record.steerInbox !== null) {
     if (!node.readsSteerInbox) {
-      throw new RangeError(`NodeWaiting steer_inbox on node ${reprText(nodeId)}, which reads no steer inbox`);
+      throw new YianRangeError(`NodeWaiting steer_inbox on node ${reprText(nodeId)}, which reads no steer inbox`);
     }
     if (inboxElementType(state, record.steerInbox) === null) {
-      throw new RangeError(`NodeWaiting steer_inbox ${reprText(record.steerInbox)} is no inbox the START declares`);
+      throw new YianRangeError(`NodeWaiting steer_inbox ${reprText(record.steerInbox)} is no inbox the START declares`);
     }
   }
   const w = state.waits;
   const toolId = hostToolName(node);
   for (const entry of record.waits) {
     if (toolId !== TAKE && toolId !== SLEEP) {
-      throw new RangeError(`NodeWaiting node ${reprText(nodeId)} registers a wait but is neither a take nor a sleep`);
+      throw new YianRangeError(`NodeWaiting node ${reprText(nodeId)} registers a wait but is neither a take nor a sleep`);
     }
     if (entry.tool !== toolId) {
-      throw new RangeError(`NodeWaiting wait entry tool ${reprText(entry.tool)} isn't the node's tool ${reprText(toolId)}`);
+      throw new YianRangeError(`NodeWaiting wait entry tool ${reprText(entry.tool)} isn't the node's tool ${reprText(toolId)}`);
     }
     if (entry.callId !== toolCallId(state.runId!, nodeId)) {
-      throw new RangeError(`NodeWaiting wait entry call_id ${reprText(entry.callId)} isn't the node's call id`);
+      throw new YianRangeError(`NodeWaiting wait entry call_id ${reprText(entry.callId)} isn't the node's call id`);
     }
     if (w.calls.has(entry.callId)) {
-      throw new RangeError(`call ${reprText(entry.callId)} is already registered; it belongs to its node until the node settles`);
+      throw new YianRangeError(`call ${reprText(entry.callId)} is already registered; it belongs to its node until the node settles`);
     }
     if (entry.inbox !== null) {
       if (inboxElementType(state, entry.inbox) === null) {
-        throw new RangeError(`NodeWaiting wait entry inbox ${reprText(entry.inbox)} is no inbox the START declares`);
+        throw new YianRangeError(`NodeWaiting wait entry inbox ${reprText(entry.inbox)} is no inbox the START declares`);
       }
       if (w.inboxes.get(entry.inbox)?.closed === true) {
-        throw new RangeError(`a take can't wait on closed inbox ${reprText(entry.inbox)}`);
+        throw new YianRangeError(`a take can't wait on closed inbox ${reprText(entry.inbox)}`);
       }
       if (availableUnread(w, entry.inbox).length > 0) {
-        throw new RangeError(`a take can't wait while inbox ${reprText(entry.inbox)} holds unread events it may read`);
+        throw new YianRangeError(`a take can't wait while inbox ${reprText(entry.inbox)} holds unread events it may read`);
       }
     }
   }
@@ -3823,9 +3824,9 @@ function validateNodeWaiting(state: RunState, record: NodeWaitingRecord): void {
   for (const callId of record.callIds) {
     if (registering.has(callId)) continue;
     const call = w.calls.get(callId);
-    if (call === undefined) throw new RangeError(`NodeWaiting call ${reprText(callId)} is not registered`);
+    if (call === undefined) throw new YianRangeError(`NodeWaiting call ${reprText(callId)} is not registered`);
     if (call.nodeId !== nodeId) {
-      throw new RangeError(`NodeWaiting call ${reprText(callId)} belongs to node ${reprText(call.nodeId)}`);
+      throw new YianRangeError(`NodeWaiting call ${reprText(callId)} belongs to node ${reprText(call.nodeId)}`);
     }
     // A call registered before the last wake may be waited on again only if it was still open at
     // that wake (a timeout wake leaves the node's other calls open): open now, or answered by a
@@ -3837,7 +3838,7 @@ function validateNodeWaiting(state: RunState, record: NodeWaitingRecord): void {
       call.state !== "closed" &&
       !(call.state === "answered" && call.resultSeq !== null && call.resultSeq > lastWoken);
     if (settledByWake) {
-      throw new RangeError(
+      throw new YianRangeError(
         `NodeWaiting call ${reprText(callId)} was registered before the node's last node_woken and had settled by then`,
       );
     }
@@ -3847,12 +3848,12 @@ function validateNodeWaiting(state: RunState, record: NodeWaitingRecord): void {
     const interrupted = call.closedReason === "interrupted" && w.interrupts.has(nodeId);
     const ungrown = call.flow && call.closedReason === "failed" && !state.flowScopes.has(callId);
     if (call.state === "closed" && !interrupted && !ungrown) {
-      throw new RangeError(`NodeWaiting call ${reprText(callId)} was closed (${call.closedReason})`);
+      throw new YianRangeError(`NodeWaiting call ${reprText(callId)} was closed (${call.closedReason})`);
     }
   }
   for (const call of nodeCalls(w, nodeId)) {
     if (call.state === "open" && !record.callIds.includes(call.callId)) {
-      throw new RangeError(`NodeWaiting must name the node's open call ${reprText(call.callId)}`);
+      throw new YianRangeError(`NodeWaiting must name the node's open call ${reprText(call.callId)}`);
     }
   }
 }
@@ -3867,27 +3868,27 @@ function validateNodeWoken(state: RunState, record: NodeWokenRecord): void {
   const { nodeId } = record;
   const w = state.waits;
   const waiting = w.waiting.get(nodeId);
-  if (waiting === undefined) throw new RangeError(`NodeWoken node ${reprText(nodeId)} is not waiting`);
+  if (waiting === undefined) throw new YianRangeError(`NodeWoken node ${reprText(nodeId)} is not waiting`);
   for (const callId of record.timedOut) {
     const call = w.calls.get(callId);
     if (call === undefined || call.nodeId !== nodeId || call.state !== "open" || call.deadline === null) {
-      throw new RangeError(`NodeWoken timed_out ${reprText(callId)} isn't an open call of the node with a deadline`);
+      throw new YianRangeError(`NodeWoken timed_out ${reprText(callId)} isn't an open call of the node with a deadline`);
     }
   }
   // A wake by answers needs every call settled; a timeout wake may leave the node's other calls open.
   const open = waiting.callIds.find((callId) => w.calls.get(callId)?.state === "open");
   if (record.timedOut.length === 0 && open !== undefined && !w.interrupts.has(nodeId)) {
-    throw new RangeError(`NodeWoken node ${reprText(nodeId)} still waits on open call ${reprText(open)}`);
+    throw new YianRangeError(`NodeWoken node ${reprText(nodeId)} still waits on open call ${reprText(open)}`);
   }
 }
 
 /** Require a close record to name an open inbox the START declares. */
 function validateInboxClosed(state: RunState, record: InboxClosedRecord): void {
   if (inboxElementType(state, record.inbox) === null) {
-    throw new RangeError(`InboxClosed inbox ${reprText(record.inbox)} is no inbox the START declares`);
+    throw new YianRangeError(`InboxClosed inbox ${reprText(record.inbox)} is no inbox the START declares`);
   }
   if (state.waits.inboxes.get(record.inbox)?.closed === true) {
-    throw new RangeError(`InboxClosed inbox ${reprText(record.inbox)} is already closed`);
+    throw new YianRangeError(`InboxClosed inbox ${reprText(record.inbox)} is already closed`);
   }
 }
 
@@ -3897,11 +3898,11 @@ function validateInboxClosed(state: RunState, record: InboxClosedRecord): void {
  */
 function validateInboxWithdrawn(state: RunState, record: InboxWithdrawnRecord): void {
   if (inboxElementType(state, record.inbox) === null) {
-    throw new RangeError(`InboxWithdrawn inbox ${reprText(record.inbox)} is no inbox the START declares`);
+    throw new YianRangeError(`InboxWithdrawn inbox ${reprText(record.inbox)} is no inbox the START declares`);
   }
   const unread = withdrawableEvents(state.waits, record.inbox);
   if (!sameItems(record.events, unread)) {
-    throw new RangeError(
+    throw new YianRangeError(
       `InboxWithdrawn must name the whole unread set [${unread.join(", ")}] of inbox ${reprText(record.inbox)}, found [${record.events.join(", ")}]`,
     );
   }
@@ -3918,28 +3919,28 @@ function validateInboxWithdrawn(state: RunState, record: InboxWithdrawnRecord): 
 function validateInterrupted(state: RunState, record: InterruptedRecord): void {
   const { inbox, nodes } = record;
   if (inboxElementType(state, inbox) === null) {
-    throw new RangeError(`Interrupted inbox ${reprText(inbox)} is no inbox the START declares`);
+    throw new YianRangeError(`Interrupted inbox ${reprText(inbox)} is no inbox the START declares`);
   }
-  if (new Set(nodes).size !== nodes.length) throw new RangeError("Interrupted names each node once");
+  if (new Set(nodes).size !== nodes.length) throw new YianRangeError("Interrupted names each node once");
   const w = state.waits;
   for (const nodeId of nodes) {
     const node = state.flow.nodes.get(nodeId);
-    if (node === undefined) throw new RangeError(`Interrupted node ${reprText(nodeId)} does not exist in the flow`);
+    if (node === undefined) throw new YianRangeError(`Interrupted node ${reprText(nodeId)} does not exist in the flow`);
     const waiting = w.waiting.get(nodeId);
     if (waiting !== undefined) {
       if (waiting.steerInbox !== inbox) {
-        throw new RangeError(`Interrupted node ${reprText(nodeId)} waits without reading steer inbox ${reprText(inbox)}`);
+        throw new YianRangeError(`Interrupted node ${reprText(nodeId)} waits without reading steer inbox ${reprText(inbox)}`);
       }
     } else if (!state.inFlight.has(nodeId)) {
-      throw new RangeError(`Interrupted node ${reprText(nodeId)} is neither in flight nor waiting`);
+      throw new YianRangeError(`Interrupted node ${reprText(nodeId)} is neither in flight nor waiting`);
     } else if (!node.readsSteerInbox) {
-      throw new RangeError(`Interrupted node ${reprText(nodeId)} reads no steer inbox`);
+      throw new YianRangeError(`Interrupted node ${reprText(nodeId)} reads no steer inbox`);
     }
-    if (w.interrupts.has(nodeId)) throw new RangeError(`Interrupted node ${reprText(nodeId)} already holds a pending interrupt`);
+    if (w.interrupts.has(nodeId)) throw new YianRangeError(`Interrupted node ${reprText(nodeId)} already holds a pending interrupt`);
   }
   for (const [nodeId, waiting] of w.waiting) {
     if (waiting.steerInbox === inbox && !w.interrupts.has(nodeId) && !nodes.includes(nodeId)) {
-      throw new RangeError(`Interrupted must name waiting node ${reprText(nodeId)}, which reads steer inbox ${reprText(inbox)}`);
+      throw new YianRangeError(`Interrupted must name waiting node ${reprText(nodeId)}, which reads steer inbox ${reprText(inbox)}`);
     }
   }
 }
@@ -3951,18 +3952,18 @@ function validateInterrupted(state: RunState, record: InterruptedRecord): void {
 function validateRunFailed(state: RunState, record: RunFailedRecord): void {
   requireWaitingQuiescence(state, "RunFailed");
   const latch = state.terminalUnreachableFailure;
-  if (latch === null) throw new RangeError("RunFailed requires a route that proved END unreachable");
+  if (latch === null) throw new YianRangeError("RunFailed requires a route that proved END unreachable");
   if (!sameFailure(record.failure, latch)) {
-    throw new RangeError("RunFailedRecord failure must be the failure of the route that proved END unreachable");
+    throw new YianRangeError("RunFailedRecord failure must be the failure of the route that proved END unreachable");
   }
 }
 
 /** Require quiescence with nodes waiting: none in flight or ready, at least one waiting, none wakeable. */
 function requireWaitingQuiescence(state: RunState, kind: string): void {
-  if (state.inFlight.size > 0 || state.ready.length > 0) throw new RangeError(`${kind} requires no node in flight or ready`);
-  if (state.waits.waiting.size === 0) throw new RangeError(`${kind} requires a waiting node`);
+  if (state.inFlight.size > 0 || state.ready.length > 0) throw new YianRangeError(`${kind} requires no node in flight or ready`);
+  if (state.waits.waiting.size === 0) throw new YianRangeError(`${kind} requires a waiting node`);
   const wakeable = wakeableNodes(state.waits);
-  if (wakeable.length > 0) throw new RangeError(`${kind} while node ${reprText(wakeable[0]!)} is wakeable`);
+  if (wakeable.length > 0) throw new YianRangeError(`${kind} while node ${reprText(wakeable[0]!)} is wakeable`);
 }
 
 /**
@@ -3975,12 +3976,12 @@ function validateRunWaiting(state: RunState, record: RunWaitingRecord): void {
   requireWaitingQuiescence(state, "RunWaiting");
   const expected = [...w.waiting.keys()];
   if (!sameItems(record.nodeIds, expected)) {
-    throw new RangeError(
+    throw new YianRangeError(
       "RunWaitingRecord node_ids must exactly equal the waiting nodes in order: " +
         `expected ${writeAsText(expected)}, found ${writeAsText([...record.nodeIds])}`,
     );
   }
-  if (w.lastFrontier === "run_waiting") throw new RangeError("RunWaiting follows a RunWaiting with nothing changed");
+  if (w.lastFrontier === "run_waiting") throw new YianRangeError("RunWaiting follows a RunWaiting with nothing changed");
 }
 
 /**
@@ -3990,24 +3991,24 @@ function validateRunWaiting(state: RunState, record: RunWaitingRecord): void {
  */
 function validateNodeStep(state: RunState, record: NodeStepRecord): void {
   const nodeId: unknown = record.nodeId;
-  if (typeof nodeId !== "string") throw new TypeError("NodeStepRecord node_id must be a string");
+  if (typeof nodeId !== "string") throw new YianTypeError("NodeStepRecord node_id must be a string");
   if (!state.flow.nodes.has(nodeId)) {
-    throw new RangeError(`NodeStep node ${reprText(nodeId)} does not exist in the flow`);
+    throw new YianRangeError(`NodeStep node ${reprText(nodeId)} does not exist in the flow`);
   }
   if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
-    throw new RangeError(`NodeStep node ${reprText(nodeId)} must have UNKNOWN disposition`);
+    throw new YianRangeError(`NodeStep node ${reprText(nodeId)} must have UNKNOWN disposition`);
   }
   const waiting = state.waits.waiting.has(nodeId);
-  if (!state.inFlight.has(nodeId) && !waiting) throw new RangeError(`NodeStep node ${reprText(nodeId)} is not in-flight`);
+  if (!state.inFlight.has(nodeId) && !waiting) throw new YianRangeError(`NodeStep node ${reprText(nodeId)} is not in-flight`);
   const expected = (state.nodeSteps.get(nodeId)?.length ?? 0) + 1;
   if (record.n !== expected) {
-    throw new RangeError(`node step n is not dense: node ${reprText(nodeId)} step ${record.n}, expected ${expected}`);
+    throw new YianRangeError(`node step n is not dense: node ${reprText(nodeId)} step ${record.n}, expected ${expected}`);
   }
   const step = record.step;
   if (step["kind"] === "tool_result") {
     validateToolResultStep(state, nodeId, step, waiting);
   } else if (waiting) {
-    throw new RangeError(`waiting node ${reprText(nodeId)} records only a tool_result answering one of its open calls`);
+    throw new YianRangeError(`waiting node ${reprText(nodeId)} records only a tool_result answering one of its open calls`);
   } else if (step["kind"] === "pending") {
     validatePendingStep(state, nodeId, step);
   } else if (step["kind"] === "steer") {
@@ -4023,13 +4024,13 @@ function validateNodeStep(state: RunState, record: NodeStepRecord): void {
  */
 function validateInterruptedStep(state: RunState, nodeId: string, step: Readonly<JsonObject>): void {
   const keys = Object.keys(step);
-  if (keys.length !== 2 || !Object.hasOwn(step, "by")) throw new RangeError("an interrupted step holds only kind and by");
+  if (keys.length !== 2 || !Object.hasOwn(step, "by")) throw new YianRangeError("an interrupted step holds only kind and by");
   const pending = state.waits.interrupts.get(nodeId);
-  if (pending === undefined) throw new RangeError(`an interrupted step on node ${reprText(nodeId)}, which holds no pending interrupt`);
+  if (pending === undefined) throw new YianRangeError(`an interrupted step on node ${reprText(nodeId)}, which holds no pending interrupt`);
   // An int, so the log writes it as an int.
   const by = typeof step["by"] === "bigint" ? stepInt(step["by"]) : null;
   if (by !== pending) {
-    throw new RangeError(`node ${reprText(nodeId)}'s interrupted step must name its pending interrupt ${pending}, got ${writeAsText(step["by"] ?? null)}`);
+    throw new YianRangeError(`node ${reprText(nodeId)}'s interrupted step must name its pending interrupt ${pending}, got ${writeAsText(step["by"] ?? null)}`);
   }
 }
 
@@ -4054,30 +4055,30 @@ const STEER_STEP_KEYS = ["kind", "inbox", "from"] as const;
  */
 function validateSteerStep(state: RunState, nodeId: string, step: Readonly<JsonObject>): void {
   if (!state.flow.nodes.get(nodeId)!.readsSteerInbox) {
-    throw new RangeError(`a steer step on node ${reprText(nodeId)}, which reads no steer inbox`);
+    throw new YianRangeError(`a steer step on node ${reprText(nodeId)}, which reads no steer inbox`);
   }
   const keys = Object.keys(step);
   if (keys.length !== STEER_STEP_KEYS.length || !STEER_STEP_KEYS.every((key) => Object.hasOwn(step, key))) {
-    throw new RangeError("a steer step holds only kind, inbox and from");
+    throw new YianRangeError("a steer step holds only kind, inbox and from");
   }
   const inbox = step["inbox"];
   if (typeof inbox !== "string" || inboxElementType(state, inbox) === null) {
-    throw new RangeError(`steer inbox ${typeof inbox === "string" ? reprText(inbox) : writeAsText(inbox ?? null)} is no inbox the START declares`);
+    throw new YianRangeError(`steer inbox ${typeof inbox === "string" ? reprText(inbox) : writeAsText(inbox ?? null)} is no inbox the START declares`);
   }
   const earlier = (state.nodeSteps.get(nodeId) ?? []).find((prior) => prior["kind"] === "steer");
   if (earlier !== undefined && earlier["inbox"] !== inbox) {
-    throw new RangeError(
+    throw new YianRangeError(
       `node ${reprText(nodeId)} reads steer inbox ${reprText(String(earlier["inbox"]))}, not ${reprText(inbox)}`,
     );
   }
   // Ints, so the log writes them as ints.
   const raw = step["from"];
   const from = Array.isArray(raw) && raw.every((seq) => typeof seq === "bigint") ? seqList(raw) : null;
-  if (from === null) throw new RangeError("a steer step's from must be a list of send seqs (ints)");
-  if (from.length === 0) throw new RangeError("a steer step consumes at least one event");
+  if (from === null) throw new YianRangeError("a steer step's from must be a list of send seqs (ints)");
+  if (from.length === 0) throw new YianRangeError("a steer step consumes at least one event");
   const queue = availableUnread(state.waits, inbox);
   if (from.length !== queue.length || from.some((seq, index) => seq !== queue[index])) {
-    throw new RangeError(
+    throw new YianRangeError(
       `a steer step must consume the whole unread queue [${queue.join(", ")}], found [${from.join(", ")}]`,
     );
   }
@@ -4109,25 +4110,25 @@ function validatePendingStep(state: RunState, nodeId: string, step: Readonly<Jso
     return;
   }
   const toolId = hostToolName(node);
-  if (toolId === null) throw new RangeError(`a pending step on node ${reprText(nodeId)}, which calls no host tool`);
+  if (toolId === null) throw new YianRangeError(`a pending step on node ${reprText(nodeId)}, which calls no host tool`);
   if (toolId === TAKE || toolId === SLEEP) {
-    throw new RangeError(`a pending step on node ${reprText(nodeId)}, whose ${toolId} the engine decides`);
+    throw new YianRangeError(`a pending step on node ${reprText(nodeId)}, whose ${toolId} the engine decides`);
   }
   const { call_id: callId, tool } = step;
-  if (tool !== toolId) throw new RangeError(`pending tool ${writeAsText(tool ?? null)} isn't node ${reprText(nodeId)}'s tool ${reprText(toolId)}`);
+  if (tool !== toolId) throw new YianRangeError(`pending tool ${writeAsText(tool ?? null)} isn't node ${reprText(nodeId)}'s tool ${reprText(toolId)}`);
   if (callId !== toolCallId(state.runId!, nodeId)) {
-    throw new RangeError(`pending call_id ${writeAsText(callId ?? null)} isn't node ${reprText(nodeId)}'s call id`);
+    throw new YianRangeError(`pending call_id ${writeAsText(callId ?? null)} isn't node ${reprText(nodeId)}'s call id`);
   }
   for (const field of AGENT_PENDING_FIELDS) {
-    if (Object.hasOwn(step, field)) throw new RangeError(`a TOOL node's pending step holds no ${field}`);
+    if (Object.hasOwn(step, field)) throw new YianRangeError(`a TOOL node's pending step holds no ${field}`);
   }
   if (Object.hasOwn(step, "deadline")) {
-    if (tool !== ASK) throw new RangeError(`a pending ${reprText(tool)} call has no deadline; only ask times out`);
+    if (tool !== ASK) throw new YianRangeError(`a pending ${reprText(tool)} call has no deadline; only ask times out`);
     requirePendingDeadline(step);
   }
-  if (!isRecord(step["arguments"])) throw new RangeError("pending arguments must be an object");
+  if (!isRecord(step["arguments"])) throw new YianRangeError("pending arguments must be an object");
   if (Object.hasOwn(step, "request") && (tool !== ASK || !isRecord(step["request"]))) {
-    throw new RangeError("only an ask's pending step holds a request, its question as an object");
+    throw new YianRangeError("only an ask's pending step holds a request, its question as an object");
   }
   requireNewPendingCall(state, callId, step);
 }
@@ -4144,44 +4145,44 @@ function validatePendingStep(state: RunState, nodeId: string, step: Readonly<Jso
 function validateAgentPendingStep(state: RunState, nodeId: string, step: Readonly<JsonObject>): void {
   const { call_id: callId, tool, tool_call_id: toolCallIdOf } = step;
   if (typeof tool !== "string" || tool === "" || tool === TAKE || tool === SLEEP) {
-    throw new RangeError(`an agent's pending tool must name a host tool, got ${writeAsText(tool ?? null)}`);
+    throw new YianRangeError(`an agent's pending tool must name a host tool, got ${writeAsText(tool ?? null)}`);
   }
   if (typeof toolCallIdOf !== "string" || toolCallIdOf === "") {
-    throw new RangeError("an agent's pending tool_call_id must be a non-empty string");
+    throw new YianRangeError("an agent's pending tool_call_id must be a non-empty string");
   }
   const index = stepInt(step["index"]);
-  if (index === null || index < 0) throw new RangeError("an agent's pending index must be an int of at least 0");
+  if (index === null || index < 0) throw new YianRangeError("an agent's pending index must be an int of at least 0");
   const reply = stepInt(step["reply"]);
   const latest = latestReply(state, nodeId);
   if (reply === null || reply !== latest) {
-    throw new RangeError(
+    throw new YianRangeError(
       `an agent's pending reply must be node ${reprText(nodeId)}'s latest model_call step ${latest ?? "(none)"}, ` +
         `got ${writeAsText(step["reply"] ?? null)}`,
     );
   }
   if (callId !== `${state.runId}/${nodeId}/${reply}/${index}`) {
     const which = `call ${index} of node ${reprText(nodeId)}'s reply ${reply}`;
-    throw new RangeError(`pending call_id ${writeAsText(callId ?? null)} isn't ${which}`);
+    throw new YianRangeError(`pending call_id ${writeAsText(callId ?? null)} isn't ${which}`);
   }
   if (Object.hasOwn(step, "flow")) {
     const flows = state.flow.nodes.get(nodeId)!.originChildSegments();
     if (step["flow"] !== true || !flows.includes(tool)) {
-      throw new RangeError(`an agent's pending step says flow: true only for a flow it grants, not ${reprText(tool)}`);
+      throw new YianRangeError(`an agent's pending step says flow: true only for a flow it grants, not ${reprText(tool)}`);
     }
-    if (!isRecord(step["arguments"])) throw new RangeError("a flow call's pending step holds its arguments as an object");
+    if (!isRecord(step["arguments"])) throw new YianRangeError("a flow call's pending step holds its arguments as an object");
     // The node's earlier calls of the flow number its scopes from 0.
     const earlier = (state.nodeSteps.get(nodeId) ?? []).filter(
       (other) => other["kind"] === "pending" && other["flow"] === true && other["tool"] === tool,
     ).length;
     const scope = `${nodeId}/${tool}#${earlier}`;
     if (step["scope"] !== scope) {
-      throw new RangeError(`flow call ${writeAsText(callId ?? null)}'s scope must be ${reprText(scope)}, got ${writeAsText(step["scope"] ?? null)}`);
+      throw new YianRangeError(`flow call ${writeAsText(callId ?? null)}'s scope must be ${reprText(scope)}, got ${writeAsText(step["scope"] ?? null)}`);
     }
   } else if (Object.hasOwn(step, "arguments") || Object.hasOwn(step, "scope")) {
-    throw new RangeError("an agent's pending step holds no arguments or scope; they are in its reply");
+    throw new YianRangeError("an agent's pending step holds no arguments or scope; they are in its reply");
   }
   if (Object.hasOwn(step, "deadline")) {
-    if (tool !== ASK_USER) throw new RangeError(`an agent's pending ${reprText(tool)} call has no deadline; only ask_user times out`);
+    if (tool !== ASK_USER) throw new YianRangeError(`an agent's pending ${reprText(tool)} call has no deadline; only ask_user times out`);
     requirePendingDeadline(step);
   }
   requireNewPendingCall(state, callId, step);
@@ -4190,16 +4191,16 @@ function validateAgentPendingStep(state: RunState, nodeId: string, step: Readonl
 /** Require a `pending` step's `deadline` to be a record time. */
 function requirePendingDeadline(step: Readonly<JsonObject>): void {
   const deadline = step["deadline"];
-  if (typeof deadline !== "string") throw new RangeError("pending deadline must be a record time");
+  if (typeof deadline !== "string") throw new YianRangeError("pending deadline must be a record time");
   requireRecordTime(deadline, "pending deadline");
 }
 
 /** Require a `pending` step within the run's `MAX_EVENT_BYTES` whose call isn't registered yet. */
 function requireNewPendingCall(state: RunState, callId: string, step: Readonly<JsonObject>): void {
   const size = eventBytes(step);
-  if (size > state.runDefaults.maxEventBytes) throw new RangeError(eventTooLarge(`the pending step of ${reprText(callId)}`, size, state));
+  if (size > state.runDefaults.maxEventBytes) throw new YianRangeError(eventTooLarge(`the pending step of ${reprText(callId)}`, size, state));
   if (state.waits.calls.has(callId)) {
-    throw new RangeError(`call ${reprText(callId)} is already registered; it belongs to its node until the node settles`);
+    throw new YianRangeError(`call ${reprText(callId)} is already registered; it belongs to its node until the node settles`);
   }
 }
 
@@ -4234,33 +4235,33 @@ function validateToolResultStep(state: RunState, nodeId: string, step: Readonly<
   const call = resultCall(state, nodeId, key);
   if (call === undefined) {
     if (waiting) {
-      throw new RangeError(`waiting node ${reprText(nodeId)} records only a tool_result answering one of its open calls`);
+      throw new YianRangeError(`waiting node ${reprText(nodeId)} records only a tool_result answering one of its open calls`);
     }
     return;
   }
   if (call.nodeId !== nodeId) {
-    throw new RangeError(`tool_result for call ${reprText(call.callId)} of node ${reprText(call.nodeId)}, not ${reprText(nodeId)}`);
+    throw new YianRangeError(`tool_result for call ${reprText(call.callId)} of node ${reprText(call.nodeId)}, not ${reprText(nodeId)}`);
   }
   if (call.tool === TAKE || call.tool === SLEEP) {
-    throw new RangeError(`tool_result for call ${reprText(call.callId)}, a ${call.tool}, which the run settles itself`);
+    throw new YianRangeError(`tool_result for call ${reprText(call.callId)}, a ${call.tool}, which the run settles itself`);
   }
   const agent = state.flow.nodes.get(nodeId)!.kind === NodeKind.AGENT;
   const closed = step["closed"];
   if (closed !== undefined && call.state === "open") {
-    throw new RangeError(`tool_result for open call ${reprText(call.callId)} can't be a closer; only a record closes a call`);
+    throw new YianRangeError(`tool_result for open call ${reprText(call.callId)} can't be a closer; only a record closes a call`);
   }
   if (agent && !waiting && call.state === "closed" && closed === call.closedReason) {
-    if (call.resultSeq !== null) throw new RangeError(`call ${reprText(call.callId)} already has its closer`);
+    if (call.resultSeq !== null) throw new YianRangeError(`call ${reprText(call.callId)} already has its closer`);
   } else if (agent && !waiting && call.flow && call.state === "answered" && call.resultSeq === null) {
     // Its scope's END answered it; the agent records the answer it reads, exactly.
     if (!sameStep(step, flowAnswerStep(state, call))) {
-      throw new RangeError(`tool_result for flow call ${reprText(call.callId)} isn't the output its scope committed`);
+      throw new YianRangeError(`tool_result for flow call ${reprText(call.callId)} isn't the output its scope committed`);
     }
   } else if (call.state !== "open") {
-    throw new RangeError(`tool_result for call ${reprText(call.callId)}, which is already ${settledText(call)}`);
+    throw new YianRangeError(`tool_result for call ${reprText(call.callId)}, which is already ${settledText(call)}`);
   }
   const size = eventBytes(step);
-  if (size > state.runDefaults.maxEventBytes) throw new RangeError(eventTooLarge(`the answer to ${reprText(call.callId)}`, size, state));
+  if (size > state.runDefaults.maxEventBytes) throw new YianRangeError(eventTooLarge(`the answer to ${reprText(call.callId)}`, size, state));
 }
 
 /**
@@ -4281,7 +4282,7 @@ function resultCall(state: RunState, nodeId: string, key: unknown): Call | undef
   );
   if (calls.length > 1) {
     const ids = writeAsText(calls.map((each) => each.callId));
-    throw new RangeError(`calls ${ids} of one reply share the tool call id ${reprText(String(key))}`);
+    throw new YianRangeError(`calls ${ids} of one reply share the tool call id ${reprText(String(key))}`);
   }
   return calls[0];
 }
@@ -4352,7 +4353,7 @@ function appendTo<T>(lists: Map<string, readonly T[]>, key: string, item: T): vo
  */
 function forgetNodeSteps(state: RunState, nodeId: string): void {
   state.touched.add(nodeId);
-  if (!state.nodeStarts.delete(nodeId)) throw new RangeError(`node ${reprText(nodeId)} has no start count`);
+  if (!state.nodeStarts.delete(nodeId)) throw new YianRangeError(`node ${reprText(nodeId)} has no start count`);
   state.nodeStartSeqs.delete(nodeId);
   for (const step of state.nodeSteps.get(nodeId) ?? []) {
     if (step["kind"] === "steer") for (const seq of seqList(step["from"]) ?? []) state.inboxEvents.delete(seq);
@@ -4379,7 +4380,7 @@ function stepWithSteerValues(state: RunState, nodeId: string, step: Readonly<Jso
   copy["values"] = (seqList(step["from"]) ?? []).map((seq) => {
     const value = state.inboxEvents.get(seq);
     if (value === undefined) {
-      throw new RangeError(`node ${reprText(nodeId)}'s steer step names send ${seq}, which the run doesn't hold`);
+      throw new YianRangeError(`node ${reprText(nodeId)}'s steer step names send ${seq}, which the run doesn't hold`);
     }
     return copyValue(value.toObject());
   });
@@ -4389,22 +4390,22 @@ function stepWithSteerValues(state: RunState, nodeId: string, step: Readonly<Jso
 /** Require an existing unknown node in the in-flight frontier, with no pending commit. */
 function requireCommittingNode(state: RunState, nodeId: string): void {
   if (!state.flow.nodes.has(nodeId) || state.nodeState.get(nodeId) !== NodeState.UNKNOWN || !state.inFlight.has(nodeId)) {
-    throw new RangeError(`pool_commit node ${reprText(nodeId)} is not in flight`);
+    throw new YianRangeError(`pool_commit node ${reprText(nodeId)} is not in flight`);
   }
   const pending = state.pendingCommits.get(nodeId);
   if (pending !== undefined) {
-    throw new RangeError(`pool_commit node ${reprText(nodeId)} already has a pending commit at seq ${pending.seq}`);
+    throw new YianRangeError(`pool_commit node ${reprText(nodeId)} already has a pending commit at seq ${pending.seq}`);
   }
   const expansion = pendingExpansion(state, nodeId);
   if (expansion.length > 0) {
-    throw new RangeError(`pool_commit node ${reprText(nodeId)} has pending expansion commits only its expansion admits`);
+    throw new YianRangeError(`pool_commit node ${reprText(nodeId)} has pending expansion commits only its expansion admits`);
   }
 }
 
 /** Refuse a value commit by a take node, which commits the events it took (a take commit). */
 function requireValueCommitNode(state: RunState, nodeId: string): void {
   if (hostToolName(state.flow.nodes.get(nodeId)!) === TAKE) {
-    throw new RangeError(`take node ${reprText(nodeId)} commits the events it took, not a value`);
+    throw new YianRangeError(`take node ${reprText(nodeId)} commits the events it took, not a value`);
   }
 }
 
@@ -4425,14 +4426,14 @@ function validateTakeCommit(state: RunState, record: PoolCommitRecord): void {
   requireCommittingNode(state, nodeId);
   const node = state.flow.nodes.get(nodeId)!;
   if (hostToolName(node) !== TAKE) {
-    throw new RangeError(`a take commit by node ${reprText(nodeId)}, which is no take`);
+    throw new YianRangeError(`a take commit by node ${reprText(nodeId)}, which is no take`);
   }
   const target = node.commitAs ?? nodeId;
   if (record.key !== target) {
-    throw new RangeError(`the take commit of ${reprText(nodeId)} is under ${reprText(record.key)}, not ${reprText(target)}`);
+    throw new YianRangeError(`the take commit of ${reprText(nodeId)} is under ${reprText(record.key)}, not ${reprText(target)}`);
   }
   if (inboxElementType(state, take.inbox) === null) {
-    throw new RangeError(`the take commit of ${reprText(nodeId)} reads ${reprText(take.inbox)}, no inbox the START declares`);
+    throw new YianRangeError(`the take commit of ${reprText(nodeId)} reads ${reprText(take.inbox)}, no inbox the START declares`);
   }
   const w = state.waits;
   const closed = w.inboxes.get(take.inbox)?.closed ?? false;
@@ -4441,10 +4442,10 @@ function validateTakeCommit(state: RunState, record: PoolCommitRecord): void {
   let expectedClosed: boolean;
   if (held !== undefined) {
     if (held.inbox !== take.inbox) {
-      throw new RangeError(`the take commit of ${reprText(nodeId)} reads ${reprText(take.inbox)}, but its call reads ${writeAsText(held.inbox)}`);
+      throw new YianRangeError(`the take commit of ${reprText(nodeId)} reads ${reprText(take.inbox)}, but its call reads ${writeAsText(held.inbox)}`);
     }
     if (held.state === "open" || held.state === "closed") {
-      throw new RangeError(`take node ${reprText(nodeId)} commits from its call, which is ${held.state}`);
+      throw new YianRangeError(`take node ${reprText(nodeId)} commits from its call, which is ${held.state}`);
     }
     events = held.state === "timed_out" ? [] : held.assigned;
     expectedClosed = held.state === "answered" && closed && availableUnread(w, take.inbox).length === 0;
@@ -4456,13 +4457,13 @@ function validateTakeCommit(state: RunState, record: PoolCommitRecord): void {
     expectedClosed = closed && k === available.length;
   }
   if (take.events.length !== events.length || take.events.some((seq, index) => seq !== events[index])) {
-    throw new RangeError(
+    throw new YianRangeError(
       `the take commit of ${reprText(nodeId)} must consume ${writeAsText([...events])}` +
         `${held === undefined ? " (the oldest event a take may read, or all of them)" : ""}, found ${writeAsText([...take.events])}`,
     );
   }
   if (take.closed !== expectedClosed) {
-    throw new RangeError(`the take commit of ${reprText(nodeId)} must hold closed ${expectedClosed}`);
+    throw new YianRangeError(`the take commit of ${reprText(nodeId)} must hold closed ${expectedClosed}`);
   }
 }
 
@@ -4477,14 +4478,14 @@ function takeValueJson(state: RunState, pending: PendingCommit): string {
   const take = pending.take!;
   const events = take.events.map((seq) => {
     const value = state.inboxEvents.get(seq);
-    if (value === undefined) throw new RangeError(`the take commit at seq ${pending.seq} names send ${seq}, which the run doesn't hold`);
+    if (value === undefined) throw new YianRangeError(`the take commit at seq ${pending.seq} names send ${seq}, which the run doesn't hold`);
     return value.toObject();
   });
   try {
     return committedText(state, pending.key, { events, closed: take.closed });
   } catch (error) {
     if (!(error instanceof TypeCheckError)) throw error;
-    throw new RangeError(`the take commit at seq ${pending.seq} rebuilds to a value its target refuses: ${error.message}`, {
+    throw new YianRangeError(`the take commit at seq ${pending.seq} rebuilds to a value its target refuses: ${error.message}`, {
       cause: error,
     });
   }
@@ -4501,10 +4502,10 @@ function pendingExpansion(state: RunState, spawnerId: string): PendingCommit[] {
 function requireNoPendingCommit(state: RunState, nodeId: string, kind: string): void {
   // A child START that fails drops its expansion commit: no success will name it.
   if (state.pendingCommits.has(nodeId) && !(kind === "NodeFailed" && state.pendingCommits.get(nodeId)!.admitted)) {
-    throw new RangeError(`${kind} node ${reprText(nodeId)} has a pending pool_commit only its success accepts`);
+    throw new YianRangeError(`${kind} node ${reprText(nodeId)} has a pending pool_commit only its success accepts`);
   }
   if (kind !== "NodeExpanded" && pendingExpansion(state, nodeId).length > 0) {
-    throw new RangeError(`${kind} node ${reprText(nodeId)} has pending expansion commits only its expansion admits`);
+    throw new YianRangeError(`${kind} node ${reprText(nodeId)} has pending expansion commits only its expansion admits`);
   }
 }
 
@@ -4515,20 +4516,20 @@ function requireNoPendingCommit(state: RunState, nodeId: string, kind: string): 
  * @returns The node.
  */
 function requireOutcomeNode(state: RunState, nodeId: string, kind: string): Node {
-  if (!nodeId) throw new RangeError(`${kind} node_id must be non-empty`);
+  if (!nodeId) throw new YianRangeError(`${kind} node_id must be non-empty`);
   const node = state.flow.nodes.get(nodeId);
-  if (node === undefined) throw new RangeError(`${kind} node ${reprText(nodeId)} does not exist in the flow`);
+  if (node === undefined) throw new YianRangeError(`${kind} node ${reprText(nodeId)} does not exist in the flow`);
   if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
-    throw new RangeError(`${kind} node ${reprText(nodeId)} must have UNKNOWN disposition`);
+    throw new YianRangeError(`${kind} node ${reprText(nodeId)} must have UNKNOWN disposition`);
   }
-  if (!state.inFlight.has(nodeId)) throw new RangeError(`${kind} node ${reprText(nodeId)} is not in-flight`);
+  if (!state.inFlight.has(nodeId)) throw new YianRangeError(`${kind} node ${reprText(nodeId)} is not in-flight`);
   return node;
 }
 
 /** Require an existing unknown spawner in the in-flight frontier, with no commit pending. */
 function requireExpandingNode(state: RunState, nodeId: string): void {
   const node = requireOutcomeNode(state, nodeId, "NodeExpanded");
-  if (node.isSpawner !== true) throw new RangeError(`NodeExpanded node ${reprText(nodeId)} is not a graph spawner`);
+  if (node.isSpawner !== true) throw new YianRangeError(`NodeExpanded node ${reprText(nodeId)} is not a graph spawner`);
   requireNoPendingCommit(state, nodeId, "NodeExpanded");
 }
 
@@ -4537,19 +4538,19 @@ function validateGrowthRecord(state: RunState, record: NodeExpandedRecord): void
   const spawnerId: unknown = record.spawnerId;
   const pruneIds: unknown = record.pruneIds;
   const digest: unknown = record.topologyDigest;
-  if (typeof spawnerId !== "string") throw new TypeError("NodeExpandedRecord spawner_id must be a string");
-  if (!spawnerId) throw new RangeError("NodeExpandedRecord spawner_id must be non-empty");
+  if (typeof spawnerId !== "string") throw new YianTypeError("NodeExpandedRecord spawner_id must be a string");
+  if (!spawnerId) throw new YianRangeError("NodeExpandedRecord spawner_id must be non-empty");
   if (!Array.isArray(pruneIds) || pruneIds.some((nodeId) => typeof nodeId !== "string")) {
-    throw new TypeError("NodeExpandedRecord prune_ids must be an array of strings");
+    throw new YianTypeError("NodeExpandedRecord prune_ids must be an array of strings");
   }
   const ids = pruneIds as string[];
-  if (ids.some((nodeId) => !nodeId)) throw new RangeError("NodeExpandedRecord prune IDs must be non-empty");
+  if (ids.some((nodeId) => !nodeId)) throw new YianRangeError("NodeExpandedRecord prune IDs must be non-empty");
   if (!sameItems(ids, [...new Set(ids)].sort(compareCodeUnits))) {
-    throw new RangeError("NodeExpandedRecord prune IDs must be sorted and unique");
+    throw new YianRangeError("NodeExpandedRecord prune IDs must be sorted and unique");
   }
-  if (typeof digest !== "string") throw new TypeError("NodeExpandedRecord topology_digest must be a string");
+  if (typeof digest !== "string") throw new YianTypeError("NodeExpandedRecord topology_digest must be a string");
   if (!/^[0-9a-f]{64}$/.test(digest)) {
-    throw new RangeError("NodeExpandedRecord topology_digest must be lowercase SHA-256");
+    throw new YianRangeError("NodeExpandedRecord topology_digest must be lowercase SHA-256");
   }
   requireExpandingNode(state, spawnerId);
   requireFlowNode(state, spawnerId);
@@ -4558,7 +4559,7 @@ function validateGrowthRecord(state: RunState, record: NodeExpandedRecord): void
 /** Call the injected builder with a copy of the spawner and return a copy of its fragment. */
 function buildGrowthFragment(spawner: Node, builderSeed: JsonValue, growBuilder: GrowBuilder): Flow {
   const built: unknown = growBuilder(copyGraph(spawner), builderSeed);
-  if (!(built instanceof Flow)) throw new TypeError("grow_builder must return a Flow");
+  if (!(built instanceof Flow)) throw new YianTypeError("grow_builder must return a Flow");
   return copyGraph(built);
 }
 
@@ -4576,7 +4577,7 @@ function prepareGrowthTopology(
   const budget = state.runDefaults.maxTotalNodes;
   if (state.flow.nodes.size + newNodeIds.length > budget) {
     raiseGrowthRejected(
-      new RangeError(`expansion exceeded node budget (${budget}) at spawner ${reprText(record.spawnerId)}`),
+      new YianRangeError(`expansion exceeded node budget (${budget}) at spawner ${reprText(record.spawnerId)}`),
     );
   }
   const derivedDepth = validatedGrowthDepth(state, record.spawnerId);
@@ -4655,44 +4656,44 @@ function prepareGrowthTopology(
  * contract stays a host invariant error outside `GrowthRejected`.
  */
 function validateGrowthFragment(state: RunState, fragment: Flow): ValidatedFragment {
-  if (!isExactly(fragment.nodes, Map)) raiseGrowthRejected(new TypeError("growth fragment nodes must be a Map"));
-  if (!Array.isArray(fragment.edges)) raiseGrowthRejected(new TypeError("growth fragment edges must be an array"));
-  if (!isExactly(fragment.wiring, Map)) raiseGrowthRejected(new TypeError("growth fragment wiring must be a Map"));
+  if (!isExactly(fragment.nodes, Map)) raiseGrowthRejected(new YianTypeError("growth fragment nodes must be a Map"));
+  if (!Array.isArray(fragment.edges)) raiseGrowthRejected(new YianTypeError("growth fragment edges must be an array"));
+  if (!isExactly(fragment.wiring, Map)) raiseGrowthRejected(new YianTypeError("growth fragment wiring must be a Map"));
   const fragmentStartId: unknown = fragment.startId;
   const fragmentEndId: unknown = fragment.endId;
   if (typeof fragmentStartId !== "string" || !fragmentStartId) {
-    raiseGrowthRejected(new RangeError("growth fragment start_id must be a non-empty string"));
+    raiseGrowthRejected(new YianRangeError("growth fragment start_id must be a non-empty string"));
   }
   if (typeof fragmentEndId !== "string" || !fragmentEndId) {
-    raiseGrowthRejected(new RangeError("growth fragment end_id must be a non-empty string"));
+    raiseGrowthRejected(new YianRangeError("growth fragment end_id must be a non-empty string"));
   }
   if (!fragment.nodes.has(fragmentStartId)) {
-    raiseGrowthRejected(new RangeError("growth fragment start_id is missing from its nodes"));
+    raiseGrowthRejected(new YianRangeError("growth fragment start_id is missing from its nodes"));
   }
   if (!fragment.nodes.has(fragmentEndId)) {
-    raiseGrowthRejected(new RangeError("growth fragment end_id is missing from its nodes"));
+    raiseGrowthRejected(new YianRangeError("growth fragment end_id is missing from its nodes"));
   }
 
   const newNodeIds: string[] = [];
   for (const [nodeId, node] of fragment.nodes as Map<unknown, unknown>) {
-    if (typeof nodeId !== "string") raiseGrowthRejected(new TypeError("growth fragment node IDs must be strings"));
-    if (!nodeId) raiseGrowthRejected(new RangeError("growth fragment node IDs must be non-empty"));
+    if (typeof nodeId !== "string") raiseGrowthRejected(new YianTypeError("growth fragment node IDs must be strings"));
+    if (!nodeId) raiseGrowthRejected(new YianRangeError("growth fragment node IDs must be non-empty"));
     if (!(node instanceof Node)) {
-      raiseGrowthRejected(new TypeError(`growth fragment node ${reprText(nodeId)} must be a Node`));
+      raiseGrowthRejected(new YianTypeError(`growth fragment node ${reprText(nodeId)} must be a Node`));
     }
     if (node.id !== nodeId) {
       raiseGrowthRejected(
-        new RangeError(`growth fragment node key ${reprText(nodeId)} does not equal node.id ${reprValue(node.id)}`),
+        new YianRangeError(`growth fragment node key ${reprText(nodeId)} does not equal node.id ${reprValue(node.id)}`),
       );
     }
     if (state.flow.nodes.has(nodeId)) {
-      raiseGrowthRejected(new RangeError(`growth fragment node ${reprText(nodeId)} collides with live topology`));
+      raiseGrowthRejected(new YianRangeError(`growth fragment node ${reprText(nodeId)} collides with live topology`));
     }
     newNodeIds.push(nodeId);
   }
 
   if (!sameIds(fragment.nodes, fragment.wiring.keys())) {
-    raiseGrowthRejected(new RangeError("growth fragment wiring keys must exactly equal fragment nodes"));
+    raiseGrowthRejected(new YianRangeError("growth fragment wiring keys must exactly equal fragment nodes"));
   }
   try {
     validateGrowthMetadata(fragment);
@@ -4746,15 +4747,15 @@ function validateGrowthFragment(state: RunState, fragment: Flow): ValidatedFragm
     ] as [string, unknown][]) {
       if (target !== null && typeof target !== "string") {
         raiseGrowthRejected(
-          new TypeError(`growth fragment node ${reprText(nodeId)} ${attribute} must be a string or null`),
+          new YianTypeError(`growth fragment node ${reprText(nodeId)} ${attribute} must be a string or null`),
         );
       }
       if (target === "") {
-        raiseGrowthRejected(new RangeError(`growth fragment node ${reprText(nodeId)} ${attribute} must be non-empty`));
+        raiseGrowthRejected(new YianRangeError(`growth fragment node ${reprText(nodeId)} ${attribute} must be non-empty`));
       }
       if (target !== null && !combinedNodeIds.has(target)) {
         raiseGrowthRejected(
-          new RangeError(
+          new YianRangeError(
             `growth fragment node ${reprText(nodeId)} ${attribute} target ${reprText(target)} does not exist`,
           ),
         );
@@ -4769,35 +4770,35 @@ function validateGrowthFragment(state: RunState, fragment: Flow): ValidatedFragm
     }
     const wiring: unknown = fragment.wiring.get(nodeId);
     if (!isExactly(wiring, Map) || [...wiring.keys()].some((key) => typeof key !== "string")) {
-      raiseGrowthRejected(new TypeError(`growth fragment wiring for ${reprText(nodeId)} must be a string-keyed Map`));
+      raiseGrowthRejected(new YianTypeError(`growth fragment wiring for ${reprText(nodeId)} must be a string-keyed Map`));
     }
     const params: unknown = node.params ?? [];
     if (!Array.isArray(params)) {
-      raiseGrowthRejected(new TypeError(`growth fragment node ${reprText(nodeId)} params must be an array`));
+      raiseGrowthRejected(new YianTypeError(`growth fragment node ${reprText(nodeId)} params must be an array`));
     }
     const declared = new Map<string, boolean>();
     for (const param of params as unknown[]) {
       if (!isExactly(param, Parameter)) {
         raiseGrowthRejected(
-          new TypeError(
+          new YianTypeError(
             `growth fragment node ${reprText(nodeId)} params must contain Parameter values, got ${jsTypeName(param)}`,
           ),
         );
       }
       const name: unknown = param.name;
       if (typeof name !== "string" || !name) {
-        raiseGrowthRejected(new RangeError(`growth fragment node ${reprText(nodeId)} has an invalid param name`));
+        raiseGrowthRejected(new YianRangeError(`growth fragment node ${reprText(nodeId)} has an invalid param name`));
       }
       if (declared.has(name)) {
         raiseGrowthRejected(
-          new RangeError(`growth fragment node ${reprText(nodeId)} has duplicate param ${reprText(name)}`),
+          new YianRangeError(`growth fragment node ${reprText(nodeId)} has duplicate param ${reprText(name)}`),
         );
       }
       declared.set(name, Boolean(param.required));
     }
     const reserved: unknown = node.reservedWiringKeys();
     if (!isExactly(reserved, Set) || [...reserved].some((key) => typeof key !== "string" || !key)) {
-      raiseGrowthRejected(new TypeError(`growth fragment node ${reprText(nodeId)} reserved wiring keys are invalid`));
+      raiseGrowthRejected(new YianTypeError(`growth fragment node ${reprText(nodeId)} reserved wiring keys are invalid`));
     }
     const reservedKeys = reserved as Set<string>;
     const actual = new Set((wiring as Map<string, unknown>).keys());
@@ -4808,7 +4809,7 @@ function validateGrowthFragment(state: RunState, fragment: Flow): ValidatedFragm
       .map(([name]) => name);
     if (extras.length > 0 || missingReserved.length > 0 || missingRequired.length > 0) {
       raiseGrowthRejected(
-        new RangeError(
+        new YianRangeError(
           `growth fragment node ${reprText(nodeId)} wiring parity failed: ` +
             `extra=${writeAsText(extras.sort(compareCodeUnits))}, ` +
             `missing_reserved=${writeAsText(missingReserved.sort(compareCodeUnits))}, ` +
@@ -4831,17 +4832,17 @@ function validateGrowthFragment(state: RunState, fragment: Flow): ValidatedFragm
   const seenEdgeIds = new Set<string>();
   for (const edge of fragment.edges as unknown[]) {
     if (!isExactly(edge, Edge)) {
-      raiseGrowthRejected(new TypeError("growth fragment edges must contain only Edge values"));
+      raiseGrowthRejected(new YianTypeError("growth fragment edges must contain only Edge values"));
     }
     const edgeId: unknown = edge.id;
     if (typeof edgeId !== "string" || !edgeId) {
-      raiseGrowthRejected(new RangeError("growth fragment edge IDs must be non-empty strings"));
+      raiseGrowthRejected(new YianRangeError("growth fragment edge IDs must be non-empty strings"));
     }
     if (seenEdgeIds.has(edgeId)) {
-      raiseGrowthRejected(new RangeError(`growth fragment edge ID ${reprText(edgeId)} is duplicated`));
+      raiseGrowthRejected(new YianRangeError(`growth fragment edge ID ${reprText(edgeId)} is duplicated`));
     }
     if (state.edgeState.has(edgeId)) {
-      raiseGrowthRejected(new RangeError(`growth fragment edge ${reprText(edgeId)} collides with live topology`));
+      raiseGrowthRejected(new YianRangeError(`growth fragment edge ${reprText(edgeId)} collides with live topology`));
     }
     for (const [attribute, value] of [
       ["source_handle", edge.sourceHandle],
@@ -4849,11 +4850,11 @@ function validateGrowthFragment(state: RunState, fragment: Flow): ValidatedFragm
     ] as [string, unknown][]) {
       if (value !== null && typeof value !== "string") {
         raiseGrowthRejected(
-          new TypeError(`growth fragment edge ${reprText(edgeId)} ${attribute} must be a string or null`),
+          new YianTypeError(`growth fragment edge ${reprText(edgeId)} ${attribute} must be a string or null`),
         );
       }
       if (value === "") {
-        raiseGrowthRejected(new RangeError(`growth fragment edge ${reprText(edgeId)} ${attribute} must be non-empty`));
+        raiseGrowthRejected(new YianRangeError(`growth fragment edge ${reprText(edgeId)} ${attribute} must be non-empty`));
       }
     }
     for (const [attribute, value] of [
@@ -4861,19 +4862,19 @@ function validateGrowthFragment(state: RunState, fragment: Flow): ValidatedFragm
       ["ordering", edge.ordering],
     ] as [string, unknown][]) {
       if (typeof value !== "boolean") {
-        raiseGrowthRejected(new TypeError(`growth fragment edge ${reprText(edgeId)} ${attribute} must be a bool`));
+        raiseGrowthRejected(new YianTypeError(`growth fragment edge ${reprText(edgeId)} ${attribute} must be a bool`));
       }
     }
     const from: unknown = edge.from;
     const to: unknown = edge.to;
     if (typeof from !== "string" || !combinedNodeIds.has(from)) {
       raiseGrowthRejected(
-        new RangeError(`growth fragment edge ${reprText(edgeId)} has unknown source ${reprValue(from)}`),
+        new YianRangeError(`growth fragment edge ${reprText(edgeId)} has unknown source ${reprValue(from)}`),
       );
     }
     if (typeof to !== "string" || !fragment.nodes.has(to)) {
       raiseGrowthRejected(
-        new RangeError(`growth fragment edge ${reprText(edgeId)} must target a fragment node, found ${reprValue(to)}`),
+        new YianRangeError(`growth fragment edge ${reprText(edgeId)} must target a fragment node, found ${reprValue(to)}`),
       );
     }
     seenEdgeIds.add(edgeId);
@@ -4907,7 +4908,7 @@ function validateGrowthReachability(fragment: Flow): void {
   const unreachable = [...fragment.nodes.keys()].filter((nodeId) => !reachable.has(nodeId)).sort(compareCodeUnits);
   if (unreachable.length > 0) {
     raiseGrowthRejected(
-      new RangeError(`growth fragment nodes are unreachable from its start: ${writeAsText(unreachable)}`),
+      new YianRangeError(`growth fragment nodes are unreachable from its start: ${writeAsText(unreachable)}`),
     );
   }
 }
@@ -4931,7 +4932,7 @@ function validateGrowthWiringRefs(
     } catch (error) {
       if (!(error instanceof ExpressionError)) throw error;
       raiseGrowthRejected(
-        new RangeError(
+        new YianRangeError(
           `growth fragment node ${reprText(nodeId)} wiring ${reprText(param)} is invalid: ${error.message}`,
           { cause: error },
         ),
@@ -4951,7 +4952,7 @@ function validateGrowthWiringRefs(
       }
       if (error !== null) {
         raiseGrowthRejected(
-          new RangeError(`growth fragment node ${reprText(nodeId)} wiring ${reprText(param)}: ${error}`),
+          new YianRangeError(`growth fragment node ${reprText(nodeId)} wiring ${reprText(param)}: ${error}`),
         );
       }
     }
@@ -4964,7 +4965,7 @@ function rejectGrowthCycle(nodeIds: ReadonlySet<string>, edges: readonly Edge[])
   const inDegree = new Map<string, number>([...nodeIds].map((nodeId) => [nodeId, 0]));
   for (const edge of edges) {
     if (!nodeIds.has(edge.from) || !nodeIds.has(edge.to)) {
-      throw new RangeError(`growth edge ${reprText(edge.id)} has an unknown endpoint`);
+      throw new YianRangeError(`growth edge ${reprText(edge.id)} has an unknown endpoint`);
     }
     adjacency.get(edge.from)!.push(edge.to);
     inDegree.set(edge.to, inDegree.get(edge.to)! + 1);
@@ -4982,7 +4983,7 @@ function rejectGrowthCycle(nodeIds: ReadonlySet<string>, edges: readonly Edge[])
   }
   if (visited !== nodeIds.size) {
     const stuck = [...inDegree].filter(([, degree]) => degree !== 0).map(([nodeId]) => nodeId).sort(compareCodeUnits);
-    raiseGrowthRejected(new RangeError(`growth fragment creates a cycle involving ${writeAsText(stuck)}`));
+    raiseGrowthRejected(new YianRangeError(`growth fragment creates a cycle involving ${writeAsText(stuck)}`));
   }
 }
 
@@ -4991,11 +4992,11 @@ function validatedGrowthDepth(state: RunState, spawnerId: string): number | null
   const delta: unknown = state.flow.nodes.get(spawnerId)!.growDepthDelta;
   if (delta === null) return null;
   if (typeof delta !== "number" || !Number.isSafeInteger(delta) || delta < 0) {
-    throw new RangeError(`spawner ${reprText(spawnerId)} grow_depth_delta must be null, 0, or a positive integer`);
+    throw new YianRangeError(`spawner ${reprText(spawnerId)} grow_depth_delta must be null, 0, or a positive integer`);
   }
   const parentDepth: unknown = state.depth.has(spawnerId) ? state.depth.get(spawnerId) : 0;
   if (typeof parentDepth !== "number" || !Number.isSafeInteger(parentDepth) || parentDepth < 0) {
-    throw new RangeError(`spawner ${reprText(spawnerId)} has an invalid parent depth`);
+    throw new YianRangeError(`spawner ${reprText(spawnerId)} has an invalid parent depth`);
   }
   return parentDepth + delta;
 }
@@ -5011,7 +5012,7 @@ function nodeNames(nodeId: string, node: Node, wiring: ReadonlyMap<string, unkno
       for (const path of sourceRefs(source)) names.add(refHead(path));
     } catch (error) {
       if (!(error instanceof ExpressionError)) throw error;
-      throw new RangeError(`node ${reprText(nodeId)} has invalid wiring: ${error.message}`, { cause: error });
+      throw new YianRangeError(`node ${reprText(nodeId)} has invalid wiring: ${error.message}`, { cause: error });
     }
   }
   return Object.freeze([...names]);
@@ -5172,13 +5173,13 @@ function validateGrowthPrune(
   const spawner = state.flow.nodes.get(spawnerId)!;
   for (const nodeId of pruneIds) {
     if (!state.flow.nodes.has(nodeId)) {
-      raiseGrowthRejected(new RangeError(`growth prune node ${reprText(nodeId)} does not exist`));
+      raiseGrowthRejected(new YianRangeError(`growth prune node ${reprText(nodeId)} does not exist`));
     }
     if (nodeId === state.flow.startId || nodeId === state.flow.endId) {
-      raiseGrowthRejected(new RangeError(`growth cannot prune top-level boundary ${reprText(nodeId)}`));
+      raiseGrowthRejected(new YianRangeError(`growth cannot prune top-level boundary ${reprText(nodeId)}`));
     }
     if (state.initialStaticIds.has(nodeId)) {
-      raiseGrowthRejected(new RangeError(`growth cannot prune initial static node ${reprText(nodeId)}`));
+      raiseGrowthRejected(new YianRangeError(`growth cannot prune initial static node ${reprText(nodeId)}`));
     }
     if (nodeId === spawnerId) {
       const originId: unknown = spawner.originId;
@@ -5192,7 +5193,7 @@ function validateGrowthPrune(
           !pruneIds.includes(originId)
         )
       ) {
-        raiseGrowthRejected(new RangeError(`growth spawner ${reprText(spawnerId)} is not a self-prunable LOOP clone`));
+        raiseGrowthRejected(new YianRangeError(`growth spawner ${reprText(spawnerId)} is not a self-prunable LOOP clone`));
       }
     }
   }
@@ -5231,7 +5232,7 @@ function validatePruneDependencies(
   for (const edge of prunedEdges) {
     if (dependents.has(edge.to)) {
       raiseGrowthRejected(
-        new RangeError(`surviving node ${reprText(edge.to)} depends on pruned edge source ${reprText(edge.from)}`),
+        new YianRangeError(`surviving node ${reprText(edge.to)} depends on pruned edge source ${reprText(edge.from)}`),
       );
     }
   }
@@ -5239,12 +5240,12 @@ function validatePruneDependencies(
     const node = combinedNode(nodeId);
     if (node.commitAs !== null && pruneIds.has(node.commitAs)) {
       raiseGrowthRejected(
-        new RangeError(`surviving node ${reprText(nodeId)} commits to pruned node ${reprText(node.commitAs)}`),
+        new YianRangeError(`surviving node ${reprText(nodeId)} commits to pruned node ${reprText(node.commitAs)}`),
       );
     }
     if (node.originId !== null && pruneIds.has(node.originId)) {
       raiseGrowthRejected(
-        new RangeError(`surviving node ${reprText(nodeId)} has pruned origin ${reprText(node.originId)}`),
+        new YianRangeError(`surviving node ${reprText(nodeId)} has pruned origin ${reprText(node.originId)}`),
       );
     }
     const target: unknown = node.skippedOutputTarget();
@@ -5257,7 +5258,7 @@ function validatePruneDependencies(
     }
     if (pruneIds.has(skippedTarget)) {
       raiseGrowthRejected(
-        new RangeError(
+        new YianRangeError(
           `surviving node ${reprText(nodeId)} has pruned skipped output target ${reprText(skippedTarget)}`,
         ),
       );
@@ -5269,12 +5270,12 @@ function validatePruneDependencies(
         paths = [...sourceRefs(source)];
       } catch (error) {
         if (!(error instanceof ExpressionError)) throw error;
-        throw new RangeError(`surviving node ${reprText(nodeId)} has invalid wiring: ${error.message}`, {
+        throw new YianRangeError(`surviving node ${reprText(nodeId)} has invalid wiring: ${error.message}`, {
           cause: error,
         });
       }
       if (paths.some((path) => pruneIds.has(refHead(path)))) {
-        raiseGrowthRejected(new RangeError(`surviving node ${reprText(nodeId)} wiring depends on pruned node`));
+        raiseGrowthRejected(new YianRangeError(`surviving node ${reprText(nodeId)} wiring depends on pruned node`));
       }
     }
   }
@@ -5284,12 +5285,12 @@ function validatePruneDependencies(
 function validateRouteRecord(state: RunState, record: NodeRoutedRecord): void {
   const nodeId: unknown = record.nodeId;
   const handle: unknown = record.handle;
-  if (typeof nodeId !== "string") throw new TypeError("NodeRoutedRecord node_id must be a string");
-  if (!nodeId) throw new RangeError("NodeRoutedRecord node_id must be non-empty");
-  if (typeof handle !== "string") throw new TypeError("NodeRoutedRecord handle must be a string");
-  if (!handle) throw new RangeError("NodeRoutedRecord handle must be non-empty");
+  if (typeof nodeId !== "string") throw new YianTypeError("NodeRoutedRecord node_id must be a string");
+  if (!nodeId) throw new YianRangeError("NodeRoutedRecord node_id must be non-empty");
+  if (typeof handle !== "string") throw new YianTypeError("NodeRoutedRecord handle must be a string");
+  if (!handle) throw new YianRangeError("NodeRoutedRecord handle must be non-empty");
   if (record.terminalFailure !== null && !isExactly(record.terminalFailure, Failure)) {
-    throw new TypeError("NodeRoutedRecord terminal failure must be a Failure or null");
+    throw new YianTypeError("NodeRoutedRecord terminal failure must be a Failure or null");
   }
   requireOutcomeNode(state, nodeId, "NodeRouted");
   requireNoPendingCommit(state, nodeId, "NodeRouted");
@@ -5303,18 +5304,18 @@ function sameIds(a: { readonly size: number; has(id: string): boolean }, b: Iter
 
 /** Require `nodeId` to name a node of the flow. */
 function requireFlowNode(state: RunState, nodeId: string): void {
-  if (!state.flow.nodes.has(nodeId)) throw new RangeError(`node ${reprText(nodeId)} does not exist in the flow`);
+  if (!state.flow.nodes.has(nodeId)) throw new YianRangeError(`node ${reprText(nodeId)} does not exist in the flow`);
 }
 
 /** Validate a failure's exact diagnostic carriers and its executing node. */
 function validateFailureRecord(state: RunState, record: NodeFailedRecord): void {
-  if (!isExactly(record.failure, Failure)) throw new TypeError("NodeFailedRecord failure must be a Failure");
+  if (!isExactly(record.failure, Failure)) throw new YianTypeError("NodeFailedRecord failure must be a Failure");
   if (record.failure.code === "graph.terminal_unreachable") {
-    throw new RangeError("graph.terminal_unreachable must be derived from a route record");
+    throw new YianRangeError("graph.terminal_unreachable must be derived from a route record");
   }
   const nodeId: unknown = record.failure.nodeId;
-  if (typeof nodeId !== "string") throw new TypeError("NodeFailedRecord failure node_id must be a string");
-  if (!nodeId) throw new RangeError("NodeFailedRecord failure node_id must be non-empty");
+  if (typeof nodeId !== "string") throw new YianTypeError("NodeFailedRecord failure node_id must be a string");
+  if (!nodeId) throw new YianRangeError("NodeFailedRecord failure node_id must be non-empty");
   requireOutcomeNode(state, nodeId, "NodeFailed");
   requireNoPendingCommit(state, nodeId, "NodeFailed");
   requireFlowNode(state, nodeId);
@@ -5331,25 +5332,25 @@ function validateInitialCommit(state: RunState, record: PoolCommitRecord): void 
   const startId = state.flow.startId;
   const { key } = record;
   if (record.nodeId !== startId) {
-    throw new RangeError(`a run-start pool_commit must name the START ${reprText(startId)}, not ${reprText(record.nodeId)}`);
+    throw new YianRangeError(`a run-start pool_commit must name the START ${reprText(startId)}, not ${reprText(record.nodeId)}`);
   }
-  if (record.value === null) throw new RangeError("a run-start pool_commit holds its value, not from");
+  if (record.value === null) throw new YianRangeError("a run-start pool_commit holds its value, not from");
   const value = TypedValue.fromWire(record.value).toObject();
   if (key === startId) {
     if (state.pool.readRoot(["system", "run_id"]).value !== state.runId) {
-      throw new RangeError("the run start commits system.run_id, equal to the run id, before the START inputs");
+      throw new YianRangeError("the run start commits system.run_id, equal to the run id, before the START inputs");
     }
-    if (!isRecord(value)) throw new RangeError("the START inputs' pool_commit must hold a record");
+    if (!isRecord(value)) throw new YianRangeError("the START inputs' pool_commit must hold a record");
     return;
   }
   const name = key.startsWith(SYSTEM_PREFIX) ? key.slice(SYSTEM_PREFIX.length) : "";
   if (!name) {
-    throw new RangeError(
+    throw new YianRangeError(
       `a run-start pool_commit key must be system.<name> or the START ${reprText(startId)}, got ${reprText(key)}`,
     );
   }
-  if (state.pool.system.has(name)) throw new RangeError(`the run start commits ${reprText(key)} twice`);
-  if (name === "run_id" && value !== state.runId) throw new RangeError("system.run_id must equal the run id");
+  if (state.pool.system.has(name)) throw new YianRangeError(`the run start commits ${reprText(key)} twice`);
+  if (name === "run_id" && value !== state.runId) throw new YianRangeError("system.run_id must equal the run id");
 }
 
 /**
@@ -5364,7 +5365,7 @@ function validateNodeCommit(state: RunState, record: PoolCommitRecord): void {
   requireValueCommitNode(state, record.nodeId);
   const targetNode = state.flow.nodes.get(record.key);
   if (targetNode === undefined) {
-    throw new RangeError(`success commit target ${reprText(record.key)} does not exist in the flow`);
+    throw new YianRangeError(`success commit target ${reprText(record.key)} does not exist in the flow`);
   }
   requireCommitFrom(state, record.nodeId, record.from);
   // A derived commit's value is rebuilt, and checked, when its success accepts it.
@@ -5372,7 +5373,7 @@ function validateNodeCommit(state: RunState, record: PoolCommitRecord): void {
   const typed = TypedValue.fromWire(record.value);
   const [wire] = canonicalOutputValue(typed, targetNode.outputContract, nodeOutputType(targetNode));
   if (logJson(wire) !== logJson(record.value)) {
-    throw new RangeError("PoolCommitRecord value is not canonical for its target");
+    throw new YianRangeError("PoolCommitRecord value is not canonical for its target");
   }
 }
 
@@ -5384,10 +5385,10 @@ function validateNodeCommit(state: RunState, record: PoolCommitRecord): void {
 function requireCommitFrom(state: RunState, nodeId: string, from: ReadonlyMap<string, number> | null): void {
   const derived = isDerivedCommit(state, nodeId);
   if (derived && from === null) {
-    throw new RangeError(`pool_commit of ${reprText(nodeId)} must hold from: its node is derived`);
+    throw new YianRangeError(`pool_commit of ${reprText(nodeId)} must hold from: its node is derived`);
   }
   if (!derived && from !== null) {
-    throw new RangeError(`pool_commit of ${reprText(nodeId)} holds from, but its node isn't derived`);
+    throw new YianRangeError(`pool_commit of ${reprText(nodeId)} holds from, but its node isn't derived`);
   }
 }
 
@@ -5401,7 +5402,7 @@ function messageStepNumbers(state: RunState, nodeId: string): number[] {
   const steps = state.nodeSteps.get(nodeId) ?? [];
   return state.flow.nodes.get(nodeId)!.messageSteps(steps).map((n) => {
     if (!(Number.isSafeInteger(n) && 1 <= n && n <= steps.length)) {
-      throw new RangeError(`node ${reprText(nodeId)} picked step ${n}, which it didn't record`);
+      throw new YianRangeError(`node ${reprText(nodeId)} picked step ${n}, which it didn't record`);
     }
     return n;
   });
@@ -5426,29 +5427,29 @@ function validateMessagesCommit(state: RunState, record: PoolCommitRecord): stri
   const { nodeId } = record;
   const node = state.flow.nodes.get(nodeId);
   if (node?.producesMessages !== true) {
-    throw new RangeError(`a messages commit by node ${reprText(nodeId)}, which produces no messages`);
+    throw new YianRangeError(`a messages commit by node ${reprText(nodeId)}, which produces no messages`);
   }
   if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN || !state.inFlight.has(nodeId)) {
-    throw new RangeError(`pool_commit node ${reprText(nodeId)} is not in flight`);
+    throw new YianRangeError(`pool_commit node ${reprText(nodeId)} is not in flight`);
   }
   if (record.key !== messagesKey(nodeId)) {
-    throw new RangeError(
+    throw new YianRangeError(
       `the messages commit of ${reprText(nodeId)} is under ${reprText(record.key)}, not ${reprText(messagesKey(nodeId))}`,
     );
   }
   const output = state.pendingCommits.get(nodeId);
   if (output === undefined || output.spawner !== null || output.take !== null || output.valueJson === null) {
-    throw new RangeError(`the messages commit of ${reprText(nodeId)} must follow its output commit`);
+    throw new YianRangeError(`the messages commit of ${reprText(nodeId)} must follow its output commit`);
   }
   const pending = state.pendingMessages.get(nodeId);
   if (pending !== undefined) {
-    throw new RangeError(`node ${reprText(nodeId)} already has a pending messages commit at seq ${pending.seq}`);
+    throw new YianRangeError(`node ${reprText(nodeId)} already has a pending messages commit at seq ${pending.seq}`);
   }
   const numbers = messageStepNumbers(state, nodeId);
   const seqs = state.nodeStepSeqs.get(nodeId) ?? [];
   const expected = numbers.map((n) => seqs[n - 1]!);
   if (!sameItems(record.steps!, expected)) {
-    throw new RangeError(
+    throw new YianRangeError(
       `the messages commit of ${reprText(nodeId)} must name steps [${expected.join(", ")}], found [${record.steps!.join(", ")}]`,
     );
   }
@@ -5461,7 +5462,7 @@ function validateMessagesCommit(state: RunState, record: PoolCommitRecord): stri
     return logJson(wire);
   } catch (error) {
     if (!(error instanceof TypeCheckError)) throw error;
-    throw new RangeError(`the messages of ${reprText(nodeId)} rebuild to a value list(Message) refuses: ${error.message}`, {
+    throw new YianRangeError(`the messages of ${reprText(nodeId)} rebuild to a value list(Message) refuses: ${error.message}`, {
       cause: error,
     });
   }
@@ -5477,15 +5478,15 @@ function validateMessagesCommit(state: RunState, record: PoolCommitRecord): stri
 function validateExpansionCommit(state: RunState, record: PoolCommitRecord): void {
   const spawnerId = record.nodeId;
   if (state.nodeState.get(spawnerId) !== NodeState.UNKNOWN || !state.inFlight.has(spawnerId)) {
-    throw new RangeError(`pool_commit node ${reprText(spawnerId)} is not in flight`);
+    throw new YianRangeError(`pool_commit node ${reprText(spawnerId)} is not in flight`);
   }
   if (state.pendingCommits.has(spawnerId)) {
-    throw new RangeError(`pool_commit node ${reprText(spawnerId)} already has a pending commit`);
+    throw new YianRangeError(`pool_commit node ${reprText(spawnerId)} already has a pending commit`);
   }
   if (state.pendingCommits.has(record.key)) {
-    throw new RangeError(`child START ${reprText(record.key)} already has a pending expansion commit`);
+    throw new YianRangeError(`child START ${reprText(record.key)} already has a pending expansion commit`);
   }
-  if (record.from === null) throw new RangeError(`the expansion commit for ${reprText(record.key)} holds no from`);
+  if (record.from === null) throw new YianRangeError(`the expansion commit for ${reprText(record.key)} holds no from`);
 }
 
 /**
@@ -5497,20 +5498,20 @@ function validateExpansionCommit(state: RunState, record: PoolCommitRecord): voi
 function validateSend(state: RunState, record: PoolCommitRecord): void {
   const name = record.key.slice(sendKey(state, "").length);
   if (record.nodeId !== state.flow.startId) {
-    throw new RangeError(`a send to ${reprText(record.key)} must name the START, not ${reprText(record.nodeId)}`);
+    throw new YianRangeError(`a send to ${reprText(record.key)} must name the START, not ${reprText(record.nodeId)}`);
   }
   const element = inboxElementType(state, name);
-  if (element === null) throw new RangeError(`send key ${reprText(record.key)} names no inbox the START declares`);
-  if (record.value === null) throw new RangeError(`a send to ${reprText(name)} holds its value`);
-  if (state.waits.inboxes.get(name)?.closed === true) throw new RangeError(`inbox ${reprText(name)} is closed`);
+  if (element === null) throw new YianRangeError(`send key ${reprText(record.key)} names no inbox the START declares`);
+  if (record.value === null) throw new YianRangeError(`a send to ${reprText(name)} holds its value`);
+  if (state.waits.inboxes.get(name)?.closed === true) throw new YianRangeError(`inbox ${reprText(name)} is closed`);
   const [wire] = canonicalTyped(TypedValue.fromWire(record.value), element);
   if (logJson(wire) !== logJson(record.value)) {
-    throw new RangeError(`the send to ${reprText(name)} isn't canonical for the inbox's type`);
+    throw new YianRangeError(`the send to ${reprText(name)} isn't canonical for the inbox's type`);
   }
   const size = eventBytes(record.value.value);
-  if (size > state.runDefaults.maxEventBytes) throw new RangeError(eventTooLarge(`the send to ${reprText(name)}`, size, state));
+  if (size > state.runDefaults.maxEventBytes) throw new YianRangeError(eventTooLarge(`the send to ${reprText(name)}`, size, state));
   const held = record.sendKey === null ? undefined : state.sendKeys.get(record.sendKey);
-  if (held !== undefined) throw new RangeError(`send key ${reprText(record.sendKey!)} is already held by send ${held.seq}`);
+  if (held !== undefined) throw new YianRangeError(`send key ${reprText(record.sendKey!)} is already held by send ${held.seq}`);
 }
 
 /**
@@ -5523,14 +5524,14 @@ function validateSuccessCommit(state: RunState, record: NodeSucceededRecord): vo
   requireOutcomeNode(state, record.nodeId, "NodeSucceeded");
   const pending = state.pendingCommits.get(record.nodeId);
   if (pending?.seq !== record.commit) {
-    throw new RangeError(
+    throw new YianRangeError(
       `node_succeeded of ${reprText(record.nodeId)} names commit ${record.commit}, ` +
         `not its pending pool_commit ${pending === undefined ? "(none)" : pending.seq}`,
     );
   }
   const messages = state.pendingMessages.get(record.nodeId)?.seq ?? null;
   if (record.messages !== messages) {
-    throw new RangeError(
+    throw new YianRangeError(
       `node_succeeded of ${reprText(record.nodeId)} names messages ${record.messages ?? "(none)"}, ` +
         `not its pending messages commit ${messages ?? "(none)"}`,
     );
@@ -5539,7 +5540,7 @@ function validateSuccessCommit(state: RunState, record: NodeSucceededRecord): vo
 
 /** Validate the touched topology and freeze one sparse successful-output delta. */
 function prepareSuccessDelta(state: RunState, record: NodeSucceededRecord, pending: PendingCommit): SuccessDelta {
-  if (!isExactly(state.pool.store, Map)) throw new RangeError("success requires an exact variable-pool store");
+  if (!isExactly(state.pool.store, Map)) throw new YianRangeError("success requires an exact variable-pool store");
   const target = pending.key;
   const outgoingEdgeIds: string[] = [];
   const edgeHeads: string[] = [];
@@ -5551,21 +5552,21 @@ function prepareSuccessDelta(state: RunState, record: NodeSucceededRecord, pendi
 
   for (const edge of outgoing) {
     if (!(edge instanceof Edge) || edge.from !== target) {
-      throw new RangeError(`success target ${reprText(target)} has an invalid outgoing adjacency`);
+      throw new YianRangeError(`success target ${reprText(target)} has an invalid outgoing adjacency`);
     }
     const edgeId: unknown = edge.id;
-    if (typeof edgeId !== "string" || !edgeId) throw new RangeError("success target has an invalid outgoing edge ID");
+    if (typeof edgeId !== "string" || !edgeId) throw new YianRangeError("success target has an invalid outgoing edge ID");
     if (seenOutgoingEdgeIds.has(edgeId)) {
-      throw new RangeError(`success target outgoing edge ${reprText(edgeId)} is duplicated`);
+      throw new YianRangeError(`success target outgoing edge ${reprText(edgeId)} is duplicated`);
     }
     if (!state.edgeState.has(edgeId)) {
-      throw new RangeError(`success target outgoing edge ${reprText(edgeId)} has no disposition`);
+      throw new YianRangeError(`success target outgoing edge ${reprText(edgeId)} has no disposition`);
     }
     if (state.edgeState.get(edgeId) !== NodeState.UNKNOWN) {
-      throw new RangeError(`success target outgoing edge ${reprText(edgeId)} must be UNKNOWN`);
+      throw new YianRangeError(`success target outgoing edge ${reprText(edgeId)} must be UNKNOWN`);
     }
     if (!state.flow.nodes.has(edge.to) || !state.nodeState.has(edge.to)) {
-      throw new RangeError(
+      throw new YianRangeError(
         `success target outgoing edge ${reprText(edgeId)} has unknown successor ${reprText(edge.to)}`,
       );
     }
@@ -5590,7 +5591,7 @@ function prepareSuccessDelta(state: RunState, record: NodeSucceededRecord, pendi
     for (const edgeId of settling) settleJoinEdge(scratch, edgeId, NodeState.TAKEN, successor);
     if (classifyJoin(scratch) !== "ready") continue;
     if (state.nodeState.get(successor) !== NodeState.UNKNOWN) {
-      throw new RangeError(`newly-ready successor ${reprText(successor)} must have UNKNOWN disposition`);
+      throw new YianRangeError(`newly-ready successor ${reprText(successor)} must have UNKNOWN disposition`);
     }
     newlyReadyIds.push(successor);
   }
@@ -5643,7 +5644,7 @@ function prepareTerminalDelta(
   const files = outputContractFileType(state.resultContract);
   if (outcome.pendingCommitTarget === endId) {
     if (typeof outcome.pendingValueJson !== "string") {
-      throw new RangeError("pending END output must be canonical typed text");
+      throw new YianRangeError("pending END output must be canonical typed text");
     }
     return Object.freeze({ succeeded: true, outputJson: outcome.pendingValueJson, failure: null, files });
   }
@@ -5652,7 +5653,7 @@ function prepareTerminalDelta(
     return Object.freeze({ succeeded: true, outputJson: logJson(stored.toWire()), failure: null, files });
   }
   if (outcome.terminalUnreachableFailure === null) {
-    throw new RangeError("run quiesced without END output or a causal terminal failure");
+    throw new YianRangeError("run quiesced without END output or a causal terminal failure");
   }
   return Object.freeze({
     succeeded: false,
@@ -5714,7 +5715,7 @@ function prepareRouteDelta(
   // node-produced data.
   if (!rootEdges.some((edge) => edge.sourceHandle === record.handle) && record.handle !== ELSE_HANDLE) {
     throw new NodeDataError(
-      new RangeError(
+      new YianRangeError(
         `NodeRouted handle ${reprText(record.handle)} matches no outgoing edge of ${reprText(record.nodeId)}`,
       ),
     );
@@ -5743,13 +5744,13 @@ function prepareRouteDelta(
     const head = edge.to;
     const headDisposition = state.nodeState.get(head);
     if (headDisposition !== NodeState.UNKNOWN && headDisposition !== NodeState.SKIPPED) {
-      throw new RangeError(`route successor ${reprText(head)} must have UNKNOWN or SKIPPED disposition`);
+      throw new YianRangeError(`route successor ${reprText(head)} must have UNKNOWN or SKIPPED disposition`);
     }
     if (skippedNodes.has(head) || headDisposition === NodeState.SKIPPED) continue;
     const joinDisposition = classifyJoin(scratch);
     if (joinDisposition === "wait") continue;
     if (joinDisposition === "ready") {
-      if (newlyReady.has(head)) throw new RangeError(`route successor ${reprText(head)} became ready more than once`);
+      if (newlyReady.has(head)) throw new YianRangeError(`route successor ${reprText(head)} became ready more than once`);
       newlyReady.add(head);
       newlyReadyIds.push(head);
       continue;
@@ -5781,7 +5782,7 @@ function prepareRouteDelta(
   if (terminalUnreachableFailure === null && skippedNodes.has(state.flow.endId)) {
     if (deriveTerminalFailure) {
       if (record.terminalFailure !== null) {
-        throw new RangeError("live route preparation cannot supply a terminal failure");
+        throw new YianRangeError("live route preparation cannot supply a terminal failure");
       }
       causalFailure = makeTerminalUnreachableFailure(state, record.nodeId, edgeUpdates);
     } else {
@@ -5789,7 +5790,7 @@ function prepareRouteDelta(
     }
     terminalUnreachableFailure = causalFailure;
   } else if (record.terminalFailure !== null) {
-    throw new RangeError("NodeRoutedRecord terminal failure is present on a noncausal route");
+    throw new YianRangeError("NodeRoutedRecord terminal failure is present on a noncausal route");
   }
 
   const delta: RouteDelta = Object.freeze({
@@ -5825,16 +5826,16 @@ function validateRecordedTerminalFailure(
   edgeUpdates: ReadonlyMap<string, NodeState>,
 ): Failure {
   const failure = record.terminalFailure;
-  if (failure === null) throw new RangeError("causal NodeRoutedRecord requires a persisted terminal failure");
-  if (!isExactly(failure, Failure)) throw new TypeError("NodeRoutedRecord terminal failure must be a Failure");
+  if (failure === null) throw new YianRangeError("causal NodeRoutedRecord requires a persisted terminal failure");
+  if (!isExactly(failure, Failure)) throw new YianTypeError("NodeRoutedRecord terminal failure must be a Failure");
   const expectedMessage = terminalUnreachableMessage(state, edgeUpdates);
   if (failure.code !== "graph.terminal_unreachable") {
-    throw new RangeError("route terminal failure has the wrong failure code");
+    throw new YianRangeError("route terminal failure has the wrong failure code");
   }
-  if (failure.nodeId !== record.nodeId) throw new RangeError("route terminal failure has the wrong causal node ID");
-  if (failure.message !== expectedMessage) throw new RangeError("route terminal failure has the wrong message");
+  if (failure.nodeId !== record.nodeId) throw new YianRangeError("route terminal failure has the wrong causal node ID");
+  if (failure.message !== expectedMessage) throw new YianRangeError("route terminal failure has the wrong message");
   if (failure.causeType !== null || failure.traceback !== null) {
-    throw new RangeError("route terminal failure cannot carry exception diagnostics");
+    throw new YianRangeError("route terminal failure cannot carry exception diagnostics");
   }
   return failure;
 }
@@ -5881,11 +5882,11 @@ function skippedOutputTarget(state: RunState, nodeId: string): string {
 /** Validate one hook result against an exact topology node lookup. */
 function validateSkippedOutputTarget(nodes: { has(id: string): boolean }, nodeId: string, target: unknown): string {
   if (typeof target !== "string") {
-    throw new TypeError(`node ${reprText(nodeId)} skipped output target must be a string`);
+    throw new YianTypeError(`node ${reprText(nodeId)} skipped output target must be a string`);
   }
-  if (!target) throw new RangeError(`node ${reprText(nodeId)} skipped output target must be non-empty`);
+  if (!target) throw new YianRangeError(`node ${reprText(nodeId)} skipped output target must be non-empty`);
   if (!nodes.has(target)) {
-    throw new RangeError(`node ${reprText(nodeId)} skipped output target ${reprText(target)} does not exist`);
+    throw new YianRangeError(`node ${reprText(nodeId)} skipped output target ${reprText(target)} does not exist`);
   }
   return target;
 }
@@ -5970,7 +5971,7 @@ function validateGrowthRedirects(
       if (retiredEdgeIds.has(edge.id)) continue;
       if (state.edgeState.get(edge.id) !== NodeState.UNKNOWN) {
         raiseGrowthRejected(
-          new RangeError(`logical output target ${reprText(target)} has a settled outgoing edge ${reprText(edge.id)}`),
+          new YianRangeError(`logical output target ${reprText(target)} has a settled outgoing edge ${reprText(edge.id)}`),
         );
       }
     }
@@ -6015,23 +6016,23 @@ function requireUnambiguousRedirect(options: {
 }): void {
   const { ownerId, target, owners, hasCommittedValue, disposition, isExecutable, hasIncoming } = options;
   if (owners.length !== 1 || owners[0] !== ownerId) {
-    throw new RangeError(
+    throw new YianRangeError(
       `logical output target ${reprText(target)} has multiple skipped output owners: ${writeAsText([...owners])}`,
     );
   }
   if (hasCommittedValue) {
-    throw new RangeError(`logical output target ${reprText(target)} already has a committed value`);
+    throw new YianRangeError(`logical output target ${reprText(target)} already has a committed value`);
   }
   if (!NODE_STATES.has(disposition)) {
-    throw new RangeError(`logical output target ${reprText(target)} has an invalid disposition`);
+    throw new YianRangeError(`logical output target ${reprText(target)} has an invalid disposition`);
   }
-  if (isExecutable) throw new RangeError(`logical output target ${reprText(target)} is also executable`);
+  if (isExecutable) throw new YianRangeError(`logical output target ${reprText(target)} is also executable`);
   if (disposition === NodeState.UNKNOWN) {
-    if (hasIncoming) throw new RangeError(`logical output target ${reprText(target)} is also executable`);
+    if (hasIncoming) throw new YianRangeError(`logical output target ${reprText(target)} is also executable`);
     return;
   }
   if (disposition !== NodeState.EXPANDED) {
-    throw new RangeError(
+    throw new YianRangeError(
       `logical output target ${reprText(target)} must be an expanded spawner or inert placeholder`,
     );
   }
@@ -6045,25 +6046,25 @@ function requireUnambiguousRedirect(options: {
  */
 function routeOutgoing(state: RunState, nodeId: string, edgeUpdates: ReadonlyMap<string, NodeState>): readonly Edge[] {
   const outgoing: unknown = state.flow.outgoing(nodeId);
-  if (!Array.isArray(outgoing)) throw new TypeError("compiled flow adjacency must be lists");
+  if (!Array.isArray(outgoing)) throw new YianTypeError("compiled flow adjacency must be lists");
   const seen = new Set<string>();
   for (const edge of outgoing as unknown[]) {
     if (!(edge instanceof Edge) || edge.from !== nodeId) {
-      throw new RangeError(`route node ${reprText(nodeId)} has an invalid outgoing adjacency`);
+      throw new YianRangeError(`route node ${reprText(nodeId)} has an invalid outgoing adjacency`);
     }
     const sourceHandle: unknown = edge.sourceHandle;
     if (sourceHandle !== null && typeof sourceHandle !== "string") {
-      throw new TypeError(`route edge ${reprText(edge.id)} source_handle must be a string or null`);
+      throw new YianTypeError(`route edge ${reprText(edge.id)} source_handle must be a string or null`);
     }
-    if (sourceHandle === "") throw new RangeError(`route edge ${reprText(edge.id)} source_handle must be non-empty`);
+    if (sourceHandle === "") throw new YianRangeError(`route edge ${reprText(edge.id)} source_handle must be non-empty`);
     const edgeId: unknown = edge.id;
     if (typeof edgeId !== "string" || !edgeId || seen.has(edgeId)) {
-      throw new RangeError(`route node ${reprText(nodeId)} has invalid outgoing edge IDs`);
+      throw new YianRangeError(`route node ${reprText(nodeId)} has invalid outgoing edge IDs`);
     }
     seen.add(edgeId);
     requireRouteEdge(state, edge, edgeUpdates);
     if (!state.flow.nodes.has(edge.to) || !state.nodeState.has(edge.to)) {
-      throw new RangeError(`route edge ${reprText(edgeId)} has unknown successor ${reprText(edge.to)}`);
+      throw new YianRangeError(`route edge ${reprText(edgeId)} has unknown successor ${reprText(edge.to)}`);
     }
   }
   return outgoing as readonly Edge[];
@@ -6071,10 +6072,10 @@ function routeOutgoing(state: RunState, nodeId: string, edgeUpdates: ReadonlyMap
 
 /** Recheck a queued edge without scanning any adjacency or the global frontier. */
 function requireRouteEdge(state: RunState, edge: Edge, edgeUpdates: ReadonlyMap<string, NodeState>): void {
-  if (edgeUpdates.has(edge.id)) throw new RangeError(`route edge ${reprText(edge.id)} is reached more than once`);
-  if (!state.edgeState.has(edge.id)) throw new RangeError(`route edge ${reprText(edge.id)} has no disposition`);
+  if (edgeUpdates.has(edge.id)) throw new YianRangeError(`route edge ${reprText(edge.id)} is reached more than once`);
+  if (!state.edgeState.has(edge.id)) throw new YianRangeError(`route edge ${reprText(edge.id)} has no disposition`);
   if (state.edgeState.get(edge.id) !== NodeState.UNKNOWN) {
-    throw new RangeError(`route edge ${reprText(edge.id)} must be UNKNOWN`);
+    throw new YianRangeError(`route edge ${reprText(edge.id)} must be UNKNOWN`);
   }
 }
 
@@ -6084,7 +6085,7 @@ function requireRouteEdge(state: RunState, edge: Edge, edgeUpdates: ReadonlyMap<
  */
 function scanJoin(state: RunState, nodeId: string): JoinScratch {
   const incoming = state.flow.incoming(nodeId);
-  if (incoming.length === 0) throw new RangeError(`successor ${reprText(nodeId)} has no incoming adjacency`);
+  if (incoming.length === 0) throw new YianRangeError(`successor ${reprText(nodeId)} has no incoming adjacency`);
   const scratch: JoinScratch = {
     states: new Map(),
     classes: new Map(),
@@ -6097,18 +6098,18 @@ function scanJoin(state: RunState, nodeId: string): JoinScratch {
   };
   for (const edge of incoming) {
     if (!(edge instanceof Edge) || edge.to !== nodeId) {
-      throw new RangeError(`successor ${reprText(nodeId)} has invalid incoming adjacency`);
+      throw new YianRangeError(`successor ${reprText(nodeId)} has invalid incoming adjacency`);
     }
     const edgeId: unknown = edge.id;
     if (typeof edgeId !== "string" || !edgeId || scratch.states.has(edgeId)) {
-      throw new RangeError(`successor ${reprText(nodeId)} has invalid incoming edge IDs`);
+      throw new YianRangeError(`successor ${reprText(nodeId)} has invalid incoming edge IDs`);
     }
     if (!state.edgeState.has(edgeId)) {
-      throw new RangeError(`incoming edge ${reprText(edgeId)} has no disposition`);
+      throw new YianRangeError(`incoming edge ${reprText(edgeId)} has no disposition`);
     }
     const disposition = state.edgeState.get(edgeId)!;
     if (!NODE_STATES.has(disposition)) {
-      throw new RangeError(`incoming edge ${reprText(edgeId)} has invalid disposition`);
+      throw new YianRangeError(`incoming edge ${reprText(edgeId)} has invalid disposition`);
     }
     scratch.states.set(edgeId, disposition);
     if (disposition === NodeState.UNKNOWN) scratch.unknown += 1;
@@ -6140,12 +6141,12 @@ function scanJoin(state: RunState, nodeId: string): JoinScratch {
 /** Apply one UNKNOWN-to-settled update to a cached join in constant time. */
 function settleJoinEdge(scratch: JoinScratch, edgeId: string, disposition: NodeState, nodeId: string): void {
   if (!scratch.states.has(edgeId)) {
-    throw new RangeError(
+    throw new YianRangeError(
       `edge ${reprText(edgeId)} is absent from successor ${reprText(nodeId)} incoming adjacency`,
     );
   }
   if (scratch.states.get(edgeId) !== NodeState.UNKNOWN) {
-    throw new RangeError(`edge ${reprText(edgeId)} must be UNKNOWN in its incoming join`);
+    throw new YianRangeError(`edge ${reprText(edgeId)} must be UNKNOWN in its incoming join`);
   }
   scratch.states.set(edgeId, disposition);
   scratch.unknown -= 1;
@@ -6185,7 +6186,7 @@ function dropUnknownIncoming(state: RunState, nodeId: string): void {
 
 /** Reject any state that no longer has its constructor-created empty frontier. */
 function requirePristine(state: RunState): void {
-  if (!hasReducerContainers(state)) throw new RangeError("RunStarted requires pristine reducer container types");
+  if (!hasReducerContainers(state)) throw new YianRangeError("RunStarted requires pristine reducer container types");
   const flow = state.flow;
   const pristine =
     state.pool.startId === flow.startId &&
@@ -6233,7 +6234,7 @@ function requirePristine(state: RunState): void {
     Object.keys(state.effectiveLlmByStaticPath).length === 0 &&
     state.callTimeLlm === null &&
     sameIds(state.initialStaticIds, flow.nodes.keys());
-  if (!pristine) throw new RangeError("RunStarted requires a pristine RunState at sequence 0");
+  if (!pristine) throw new YianRangeError("RunStarted requires a pristine RunState at sequence 0");
 }
 
 /**
@@ -6255,7 +6256,7 @@ function requireOriginatingFlow(state: RunState, plan: PreparedPlan): void {
       (flow.nodes.get(plan.endId) ?? null) === plan.endNode
     )
   ) {
-    throw new RangeError("transition requires its originating flow and boundary identities");
+    throw new YianRangeError("transition requires its originating flow and boundary identities");
   }
 }
 
@@ -6294,14 +6295,14 @@ function materializeRunStarted(state: RunState, prepared: PreparedTransition, pl
       isExactly(record, RunStartedRecord)
     )
   ) {
-    throw new RangeError("immutable RunStarted plan does not match its transition");
+    throw new YianRangeError("immutable RunStarted plan does not match its transition");
   }
 
   const startId = plan.startId;
   const wiring = canonicalSeed(record.startWiringOverride)[1];
   const effective = canonicalSeed(record.effectiveLlmByStaticPath)[1];
-  if (!isRecord(wiring)) throw new TypeError("canonical START wiring is not a dict");
-  if (!isRecord(effective)) throw new TypeError("canonical effective LLM map is not a dict");
+  if (!isRecord(wiring)) throw new YianTypeError("canonical START wiring is not a dict");
+  if (!isRecord(effective)) throw new YianTypeError("canonical effective LLM map is not a dict");
 
   return {
     nodeState: new Map(state.nodeState),
@@ -6408,13 +6409,13 @@ function materializeRoute(plan: RoutePlan): RouteApply {
 function terminalObserver(delta: TerminalDelta): RunSucceeded | RunFailed {
   if (delta.succeeded) {
     if (typeof delta.outputJson !== "string") {
-      throw new RangeError("successful terminal delta requires typed output text");
+      throw new YianRangeError("successful terminal delta requires typed output text");
     }
-    if (delta.failure !== null) throw new RangeError("successful terminal delta cannot carry a failure");
+    if (delta.failure !== null) throw new YianRangeError("successful terminal delta cannot carry a failure");
     return new RunSucceeded({ output: normalizeTypedFiles(delta.files, decodeTyped(delta.outputJson)).toObject() });
   }
-  if (delta.outputJson !== null) throw new RangeError("failed terminal delta cannot carry output text");
-  if (!isExactly(delta.failure, Failure)) throw new RangeError("failed terminal delta requires one Failure");
+  if (delta.outputJson !== null) throw new YianRangeError("failed terminal delta cannot carry output text");
+  if (!isExactly(delta.failure, Failure)) throw new YianRangeError("failed terminal delta requires one Failure");
   return new RunFailed({ failure: delta.failure });
 }
 
@@ -6482,7 +6483,7 @@ interface GrowthApply {
 function materializeGrowth(plan: GrowthPlan): GrowthApply {
   const record = decodeRecord(plan.envelopeJson).record;
   if (!isExactly(record, NodeExpandedRecord)) {
-    throw new TypeError("immutable growth plan does not contain a NodeExpandedRecord");
+    throw new YianTypeError("immutable growth plan does not contain a NodeExpandedRecord");
   }
   if (
     !(
@@ -6492,7 +6493,7 @@ function materializeGrowth(plan: GrowthPlan): GrowthApply {
       record.topologyDigest === plan.delta.topologyDigest
     )
   ) {
-    throw new RangeError("immutable growth plan record and delta disagree");
+    throw new YianRangeError("immutable growth plan record and delta disagree");
   }
   return {
     wiring: new Map(plan.topology.wiring.map(([nodeId, wiring]) => [nodeId, new Map(wiring)])),

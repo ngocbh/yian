@@ -1202,7 +1202,8 @@ describe("run setup errors", () => {
       write: (text) => {
         if (!broke && text.includes("⠋ b")) {
           broke = true;
-          throw new TypeError("stderr broke");
+          // An OS write error, as a closed or full stream gives.
+          throw Object.assign(new Error("stderr broke"), { code: "EPIPE", syscall: "write" });
         }
         chunks.push(text);
         return Promise.resolve();

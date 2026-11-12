@@ -42,6 +42,7 @@ import {
 
 import { current, ENTRIES } from "../../defaults.ts";
 import { reprText } from "../../diagnostics.ts";
+import { YianRangeError } from "../../typesys/errors.ts";
 import { parseDate, parseDatetime } from "../../typesys/temporal.ts";
 
 export const STR_TAG = "tag:yaml.org,2002:str";
@@ -112,7 +113,7 @@ const IMPLICIT: readonly (readonly [RegExp, string])[] = [
  * A YAML node the flow loader refuses; `node` is the node at fault, or `null` when the
  * caller knows it.
  */
-export class FlowLoaderError extends RangeError {
+export class FlowLoaderError extends YianRangeError {
   override name = "FlowLoaderError";
   readonly node: Node | null;
 

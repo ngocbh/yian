@@ -27,6 +27,7 @@ import { ASK, BUILTIN_TOOL_IDS, type BuiltinToolId, isPending, SLEEP, TAKE, tool
 import { isPermanentToolError, isToolCheckError, isTransientToolError, ToolCheckError } from "../../tools/errors.ts";
 import { type MemoryGrant, visibleToolName } from "../../tools/grants.ts";
 import { type ToolRef, ToolSet } from "../../tools/registry.ts";
+import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import { eventBytes, type JsonObject } from "../../typesys/json.ts";
 import type { VariablePool } from "../../typesys/pool.ts";
 import { deadlineUtc, formatRecordTime, parseDuration } from "../../typesys/temporal.ts";
@@ -330,13 +331,13 @@ export class ToolNode extends Node {
     super(nodeId, { title });
     if (retries !== null) {
       const message = `node ${reprText(nodeId)}: retries must be a non-negative int, got ${valueRepr(retries)}`;
-      if (!Number.isSafeInteger(retries)) throw new TypeError(message);
-      if (retries < 0) throw new RangeError(message);
+      if (!Number.isSafeInteger(retries)) throw new YianTypeError(message);
+      if (retries < 0) throw new YianRangeError(message);
     }
     const ref = typeof toolId === "string" ? { group: null, name: toolId } : { ...toolId };
     this.toolRef = Object.freeze(ref);
     if (memoryTool && ref.group === null) {
-      throw new RangeError(`node ${reprText(nodeId)}: a memory's tool is named \`{<memory>: <tool>}\``);
+      throw new YianRangeError(`node ${reprText(nodeId)}: a memory's tool is named \`{<memory>: <tool>}\``);
     }
     this.memoryTool = memoryTool;
     this.toolId = visibleToolName(this.toolRef.group, this.toolRef.name);
@@ -458,7 +459,7 @@ export class ToolNode extends Node {
     const [grant] = this.memoryGrants();
     const { input } = grant!;
     const value = inputs[memoryKey(input)];
-    if (!MemoryRef.isMemoryRef(value)) throw new TypeError(`TOOL node ${reprText(this.id)}: \`${input}\` holds no memory`);
+    if (!MemoryRef.isMemoryRef(value)) throw new YianTypeError(`TOOL node ${reprText(this.id)}: \`${input}\` holds no memory`);
     const session = memorySession(caps, value.identity);
     const local = memoryTools(value, session, grant!, { kind: "tool", name: staticPathOf(this.id) });
     return tools.withLocalGroups(new Map([[input, local]]), MEMORY_SCOPE_LABEL);

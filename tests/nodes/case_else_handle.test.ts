@@ -19,6 +19,7 @@ import { commitPrepared, NodeDataError, prepareNodeRouted } from "../../src/runt
 import { loadErrorAsync } from "../helpers/declarations.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import { callRedirectFlow, rejected, routeInFlight } from "../helpers/run_state_fixtures.ts";
+import { YianRangeError } from "../../src/typesys/errors.ts";
 
 const runDir = mkdtempSync(join(tmpdir(), "yian-case-else-runs-"));
 afterAll(() => rmSync(runDir, { recursive: true, force: true }));
@@ -156,7 +157,7 @@ test("a route to an unknown handle named default is rejected", () => {
 
   expect(caught).toBeInstanceOf(NodeDataError);
   const original = (caught as NodeDataError).original;
-  expect((original as Error).constructor).toBe(RangeError);
+  expect((original as Error).constructor).toBe(YianRangeError);
   expect((original as Error).message).toBe("NodeRouted handle 'default' matches no outgoing edge of 'router'");
 });
 
@@ -202,7 +203,7 @@ test("a log routed to the old default handle does not resume", async () => {
     writeFileSync(path, `${lines.join("\n")}\n`);
 
     const caught = await rejected(advance({ log: path, env }));
-    expect((caught as Error).constructor).toBe(RangeError);
+    expect((caught as Error).constructor).toBe(YianRangeError);
     expect((caught as Error).message).toBe("NodeRouted handle 'default' matches no outgoing edge of 'gate'");
   } finally {
     rmSync(dir, { recursive: true, force: true });

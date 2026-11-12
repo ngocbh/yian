@@ -18,6 +18,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { Diagnostic, Failure, OriginRef } from "../../src/diagnostics.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { RunResult, runFlow } from "../../src/run.ts";
+import { YianRangeError } from "../../src/typesys/errors.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
 import { caseText, linkConformanceFixtures, loadConformanceFlow } from "../helpers/declarations.ts";
@@ -62,9 +63,9 @@ test("parse structured input does not hide validator faults", () => {
     captured = error;
   }
 
-  // A plain RangeError, not the StructuredInputError (a RangeError subclass) a verdict would be.
+  // yian's own RangeError, not the StructuredInputError (a subclass of it) a verdict would be.
   expect(captured).toBeInstanceOf(RangeError);
-  expect((captured as RangeError).constructor).toBe(RangeError);
+  expect((captured as RangeError).constructor).toBe(YianRangeError);
   expect((captured as RangeError).name).toBe("RangeError");
   expect((captured as RangeError).message).toBe("type bounds must be ordered from minimum to maximum");
 });

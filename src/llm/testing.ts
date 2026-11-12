@@ -15,6 +15,7 @@ import { readFileSync } from "node:fs";
 
 import type { Env } from "../defaults.ts";
 import type { Send } from "../platform.ts";
+import { YianTypeError } from "../typesys/errors.ts";
 import { JSONDecodeError, type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
 import { base64Forms, replaceForms, secretForms } from "./auth.ts";
 import { encodeBody } from "./body.ts";
@@ -153,20 +154,20 @@ function checkKeys(
   required: readonly string[],
   allowed: readonly string[],
 ): asserts data is Record<string, unknown> {
-  if (!isPlainObject(data)) throw new TypeError(`${where}: expected an object, got ${typeName(data)}`);
+  if (!isPlainObject(data)) throw new YianTypeError(`${where}: expected an object, got ${typeName(data)}`);
   for (const key of required) {
-    if (!Object.hasOwn(data, key)) throw new TypeError(`${where}: missing '${key}'`);
+    if (!Object.hasOwn(data, key)) throw new YianTypeError(`${where}: missing '${key}'`);
   }
   const unknown = Object.keys(data)
     .filter((key) => !allowed.includes(key))
     .sort(byCodeUnits);
-  if (unknown.length > 0) throw new TypeError(`${where}: unknown keys ${JSON.stringify(unknown)}`);
+  if (unknown.length > 0) throw new YianTypeError(`${where}: unknown keys ${JSON.stringify(unknown)}`);
 }
 
 /** Throw unless `headers` maps strings to strings. */
 function checkHeaders(headers: unknown, where: string): void {
   if (!isPlainObject(headers) || !Object.values(headers).every((value) => typeof value === "string")) {
-    throw new TypeError(`${where}.headers: expected an object of strings`);
+    throw new YianTypeError(`${where}.headers: expected an object of strings`);
   }
 }
 
@@ -185,34 +186,34 @@ function get(data: Record<string, unknown>, key: string, fallback: unknown): unk
 export function checkCassette(data: unknown): Cassette {
   // The format is checked first, so a file of another kind is named as such.
   if (!isPlainObject(data) || data["format"] !== CASSETTE_FORMAT) {
-    throw new TypeError(`cassette: format must be '${CASSETTE_FORMAT}'`);
+    throw new YianTypeError(`cassette: format must be '${CASSETTE_FORMAT}'`);
   }
   checkKeys(data, "cassette", CASSETTE_KEYS, CASSETTE_KEYS);
-  if (!SOURCES.includes(data["source"] as string)) throw new TypeError("cassette: source must be 'synthetic' or 'recorded'");
-  if (typeof data["description"] !== "string") throw new TypeError("cassette: description must be a string");
+  if (!SOURCES.includes(data["source"] as string)) throw new YianTypeError("cassette: source must be 'synthetic' or 'recorded'");
+  if (typeof data["description"] !== "string") throw new YianTypeError("cassette: description must be a string");
   const interactions = data["interactions"];
-  if (!Array.isArray(interactions)) throw new TypeError("cassette: interactions must be a list");
+  if (!Array.isArray(interactions)) throw new YianTypeError("cassette: interactions must be a list");
   interactions.forEach((interaction: unknown, number) => {
     const where = `interactions[${number}]`;
     checkKeys(interaction, where, INTERACTION_KEYS, INTERACTION_KEYS);
     const { request, response } = interaction;
     checkKeys(request, `${where}.request`, ["method", "url"], REQUEST_KEYS);
     if (typeof request["method"] !== "string" || typeof request["url"] !== "string") {
-      throw new TypeError(`${where}.request: method and url must be strings`);
+      throw new YianTypeError(`${where}.request: method and url must be strings`);
     }
     checkHeaders(get(request, "headers", {}), `${where}.request`);
     checkKeys(response, `${where}.response`, ["status"], RESPONSE_KEYS);
     const status = response["status"];
-    if (typeof status !== "bigint" && !Number.isInteger(status)) throw new TypeError(`${where}.response: status must be an int`);
+    if (typeof status !== "bigint" && !Number.isInteger(status)) throw new YianTypeError(`${where}.response: status must be an int`);
     checkHeaders(get(response, "headers", {}), `${where}.response`);
     if (BODY_KEYS.filter((key) => Object.hasOwn(response, key)).length !== 1) {
-      throw new TypeError(`${where}.response: needs exactly one of chunks, json, text`);
+      throw new YianTypeError(`${where}.response: needs exactly one of chunks, json, text`);
     }
     const chunks = get(response, "chunks", []);
     if (!Array.isArray(chunks) || !chunks.every((chunk) => typeof chunk === "string")) {
-      throw new TypeError(`${where}.response: chunks must be a list of strings`);
+      throw new YianTypeError(`${where}.response: chunks must be a list of strings`);
     }
-    if (typeof get(response, "text", "") !== "string") throw new TypeError(`${where}.response: text must be a string`);
+    if (typeof get(response, "text", "") !== "string") throw new YianTypeError(`${where}.response: text must be a string`);
   });
   return data as unknown as Cassette;
 }
@@ -231,7 +232,7 @@ export function loadCassette(path: string): Cassette {
     data = parseJson(readFileSync(path, "utf8"), "plain");
   } catch (error) {
     if (!(error instanceof JSONDecodeError)) throw error;
-    throw new TypeError(`cassette ${path} is not JSON: ${error.message}`);
+    throw new YianTypeError(`cassette ${path} is not JSON: ${error.message}`);
   }
   return checkCassette(data);
 }

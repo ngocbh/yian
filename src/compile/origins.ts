@@ -18,6 +18,7 @@ import {
   rewriteOriginCarrier,
   ValueTemplate,
 } from "../nodes/contracts.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { jsTypeName } from "../typesys/values.ts";
 import { CompiledFlow, copyGraph, Flow, FlowOutput } from "./model.ts";
 
@@ -36,7 +37,7 @@ import { CompiledFlow, copyGraph, Flow, FlowOutput } from "./model.ts";
  *   child isn't a compiled graph value.
  */
 export function iterFlowOrigins(flow: Flow): Generator<OriginRef> {
-  if (!(flow instanceof Flow)) throw new TypeError(`flow must be a Flow, got ${jsTypeName(flow)}`);
+  if (!(flow instanceof Flow)) throw new YianTypeError(`flow must be a Flow, got ${jsTypeName(flow)}`);
   return walkFlowOrigins(flow, new Set(), new Set(), new Set());
 }
 
@@ -63,7 +64,7 @@ function* walkFlowOrigins(
   if (flow instanceof CompiledFlow) {
     for (const output of flow.outputs) {
       if (!(output instanceof FlowOutput)) {
-        throw new TypeError(`compiled flow outputs must contain FlowOutput values, got ${jsTypeName(output)}`);
+        throw new YianTypeError(`compiled flow outputs must contain FlowOutput values, got ${jsTypeName(output)}`);
       }
       yield* iterOriginCarrier(output.binding, seenCarriers);
     }
@@ -71,14 +72,14 @@ function* walkFlowOrigins(
 
   for (const node of flow.nodes.values()) {
     if (!(node instanceof Node)) {
-      throw new TypeError(`flow nodes must contain Node values, got ${jsTypeName(node)}`);
+      throw new YianTypeError(`flow nodes must contain Node values, got ${jsTypeName(node)}`);
     }
     if (seenNodes.has(node)) continue;
     seenNodes.add(node);
     yield* node.iterLocalOrigins(seenCarriers);
     for (const child of node.originChildren()) {
       if (!(child instanceof Flow)) {
-        throw new TypeError(`node ${reprText(node.id)} origin child must be a Flow, got ${jsTypeName(child)}`);
+        throw new YianTypeError(`node ${reprText(node.id)} origin child must be a Flow, got ${jsTypeName(child)}`);
       }
       yield* walkFlowOrigins(child, seenFlows, seenNodes, seenCarriers);
     }
@@ -102,9 +103,9 @@ function* walkFlowOrigins(
  *   `OriginRef`, or the static graph shape is invalid.
  */
 export function rewriteFlowOrigins<F extends Flow>(flow: F, mapper: OriginMapper): F {
-  if (!(flow instanceof Flow)) throw new TypeError(`flow must be a Flow, got ${jsTypeName(flow)}`);
+  if (!(flow instanceof Flow)) throw new YianTypeError(`flow must be a Flow, got ${jsTypeName(flow)}`);
   if (typeof mapper !== "function") {
-    throw new TypeError(`origin mapper must be callable, got ${jsTypeName(mapper)}`);
+    throw new YianTypeError(`origin mapper must be callable, got ${jsTypeName(mapper)}`);
   }
 
   // Validate static shape before copying, so a structural error wins before any mapper call.
@@ -141,12 +142,12 @@ export function rebaseFlowOrigins<F extends Flow>(
   mapper: OriginMapper,
   { resolver }: { resolver: OriginResolver | null },
 ): [F, ResolverTable] {
-  if (!(flow instanceof Flow)) throw new TypeError(`flow must be a Flow, got ${jsTypeName(flow)}`);
+  if (!(flow instanceof Flow)) throw new YianTypeError(`flow must be a Flow, got ${jsTypeName(flow)}`);
   if (typeof mapper !== "function") {
-    throw new TypeError(`origin mapper must be callable, got ${jsTypeName(mapper)}`);
+    throw new YianTypeError(`origin mapper must be callable, got ${jsTypeName(mapper)}`);
   }
   if (resolver !== null && typeof resolver?.resolve !== "function") {
-    throw new TypeError("origin resolver must implement resolve");
+    throw new YianTypeError("origin resolver must implement resolve");
   }
 
   // Materializing validates the entire static graph before a user mapper can have side effects.
@@ -159,10 +160,10 @@ export function rebaseFlowOrigins<F extends Flow>(
   }
   const oldOrigins = [...oldByKey.values()];
   if (oldOrigins.length > 0 && resolver === null) {
-    throw new RangeError("originful flow requires an origin resolver");
+    throw new YianRangeError("originful flow requires an origin resolver");
   }
   if (oldOrigins.length === 0 && resolver !== null) {
-    throw new RangeError("source-free flow cannot have an origin resolver");
+    throw new YianRangeError("source-free flow cannot have an origin resolver");
   }
 
   const mappedByOldKey = new Map<string, OriginRef>();
@@ -170,11 +171,11 @@ export function rebaseFlowOrigins<F extends Flow>(
   for (const oldOrigin of oldOrigins) {
     const mappedOrigin: unknown = mapper(oldOrigin);
     if (!(mappedOrigin instanceof OriginRef)) {
-      throw new TypeError(`origin mapper must return an OriginRef, got ${jsTypeName(mappedOrigin)}`);
+      throw new YianTypeError(`origin mapper must return an OriginRef, got ${jsTypeName(mappedOrigin)}`);
     }
     const newOrigin = new OriginRef(mappedOrigin.key);
     if (mappedKeys.has(newOrigin.key)) {
-      throw new RangeError(`mapped origin collision ${reprText(newOrigin.key)}`);
+      throw new YianRangeError(`mapped origin collision ${reprText(newOrigin.key)}`);
     }
     mappedByOldKey.set(oldOrigin.key, newOrigin);
     mappedKeys.add(newOrigin.key);

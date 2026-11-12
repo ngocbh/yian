@@ -36,6 +36,7 @@ import { WaitsState } from "../../src/runtime/waits.ts";
 import { eventBytes, logJson } from "../../src/typesys/json.ts";
 import { commitStartSuccess, flow, initializedAndStarted, startData } from "../helpers/run_state_fixtures.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
+import { thrownClass } from "../helpers/own_errors.ts";
 
 const DEADLINE = "2026-10-24T09:00:00.000Z";
 const take = { callId: "r/heard", tool: "take", inbox: "msgs", mode: "one", deadline: null } as const;
@@ -50,7 +51,7 @@ function expectError(build: () => unknown, cls: typeof TypeError | typeof RangeE
   } catch (error) {
     caught = error;
   }
-  expect((caught as Error | undefined)?.constructor).toBe(cls);
+  expect((caught as Error | undefined)?.constructor).toBe(thrownClass(cls));
   expect((caught as Error).message).toBe(message);
 }
 

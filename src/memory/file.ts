@@ -18,6 +18,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { current } from "../defaults.ts";
 import { compareCodeUnits } from "../diagnostics.ts";
 import { isSystemError, realScheduler, type Scheduler, syncFolder } from "../platform.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { canonicalJson, type JsonObject } from "../typesys/json.ts";
 import {
   type Applied,
@@ -455,7 +456,7 @@ function countArg(args: JsonObject, name: string): number | undefined {
   if (value === undefined) return undefined;
   const number = typeof value === "bigint" ? Number(value) : value;
   if (typeof number !== "number" || !Number.isSafeInteger(number) || number < 1) {
-    throw new TypeError(`FileMemory ${name} must be an integer of at least 1`);
+    throw new YianTypeError(`FileMemory ${name} must be an integer of at least 1`);
   }
   return number;
 }
@@ -486,15 +487,15 @@ function checkChange(change: JsonObject): Change {
   const op: unknown = isObject(change) ? change.op : undefined;
   if (typeof op !== "string" || !Object.hasOwn(CHANGE_FIELDS, op)) {
     const ops = Object.keys(CHANGE_FIELDS).join(", ");
-    throw new TypeError(`FileMemory has no change ${String(op)}; its changes are ${ops}`);
+    throw new YianTypeError(`FileMemory has no change ${String(op)}; its changes are ${ops}`);
   }
   const fields = CHANGE_FIELDS[op as Change["op"]];
   const extra = Object.keys(change).filter((key) => key !== "op" && !fields.includes(key));
-  if (extra.length > 0) throw new TypeError(`a FileMemory ${op} takes ${listed(fields)}, not ${listed(extra)}`);
+  if (extra.length > 0) throw new YianTypeError(`a FileMemory ${op} takes ${listed(fields)}, not ${listed(extra)}`);
   for (const field of fields) {
     const value = change[field];
-    if (typeof value !== "string") throw new TypeError(`a FileMemory ${op} needs ${field} as a string`);
-    if (!value.isWellFormed()) throw new TypeError(`a FileMemory ${op}'s ${field} holds a lone surrogate`);
+    if (typeof value !== "string") throw new YianTypeError(`a FileMemory ${op} needs ${field} as a string`);
+    if (!value.isWellFormed()) throw new YianTypeError(`a FileMemory ${op}'s ${field} holds a lone surrogate`);
   }
   return change as unknown as Change;
 }
@@ -560,10 +561,10 @@ export class FileMemory extends MemoryBase {
     super();
     const { root, id, index = "MEMORY.md" } = options;
     if (typeof root !== "string" || root === "" || root.includes("\0")) {
-      throw new TypeError("FileMemory root must be a folder path");
+      throw new YianTypeError("FileMemory root must be a folder path");
     }
     if (id !== undefined && (typeof id !== "string" || id === "" || !id.isWellFormed() || /[\r\n\0]/.test(id))) {
-      throw new TypeError("FileMemory id must be a non-empty string on one line");
+      throw new YianTypeError("FileMemory id must be a non-empty string on one line");
     }
     const defaults = current();
     const cap = (name: string, value: number | undefined, fallback: number, minimum: number) =>
@@ -582,11 +583,11 @@ export class FileMemory extends MemoryBase {
       maxHistoryChars: cap("maxHistoryChars", options.maxHistoryChars, maxTotalChars, 0),
     });
     const why = typeof index === "string" ? pathProblem(index, limits.maxDepth) : "not a string";
-    if (why !== null) throw new TypeError(`FileMemory index ${shown(String(index))} isn't a member path: ${why}`);
+    if (why !== null) throw new YianTypeError(`FileMemory index ${shown(String(index))} isn't a member path: ${why}`);
     const defaultTimeoutMs = defaults.memoryLockTimeoutSeconds * 1000;
     const timeoutMs = options.lockTimeoutMs ?? defaultTimeoutMs;
     if (typeof timeoutMs !== "number" || Number.isNaN(timeoutMs) || timeoutMs < 0) {
-      throw new RangeError(`FileMemory lockTimeoutMs must be 0 or more milliseconds, not ${String(timeoutMs)}`);
+      throw new YianRangeError(`FileMemory lockTimeoutMs must be 0 or more milliseconds, not ${String(timeoutMs)}`);
     }
     // Resolved now, so a later chdir or a swapped symlink doesn't move the memory.
     const real = realPath(root);
@@ -630,7 +631,7 @@ export class FileMemory extends MemoryBase {
   }): Promise<MemorySession> {
     o.signal.throwIfAborted();
     if (o.itemType !== null) {
-      throw new TypeError("a FileMemory holds files, not typed items; give its input no item type");
+      throw new YianTypeError("a FileMemory holds files, not typed items; give its input no item type");
     }
     const { root } = this;
     const stats = lstatOrNull(root);
@@ -824,13 +825,13 @@ function resultOf(entry: JournalEntry, version: string): JsonObject {
  * @throws {TypeError} If it isn't `{path, text?}`, with a string path and a non-empty text.
  */
 function checkEraseTarget(target: JsonObject): { path: string; text?: string } {
-  if (!isObject(target) || typeof target.path !== "string") throw new TypeError("an erase needs path as a string");
+  if (!isObject(target) || typeof target.path !== "string") throw new YianTypeError("an erase needs path as a string");
   const extra = Object.keys(target).filter((key) => key !== "path" && key !== "text");
-  if (extra.length > 0) throw new TypeError(`an erase takes path and text, not ${listed(extra)}`);
+  if (extra.length > 0) throw new YianTypeError(`an erase takes path and text, not ${listed(extra)}`);
   const { path, text } = target;
   if (text === undefined) return { path };
   if (typeof text !== "string" || text === "" || !text.isWellFormed()) {
-    throw new TypeError("an erase's text must be a non-empty string");
+    throw new YianTypeError("an erase's text must be a non-empty string");
   }
   return { path, text };
 }
@@ -948,9 +949,9 @@ class FileMemorySession implements MemorySession {
     o.signal.throwIfAborted();
     const spec = TOOLS.find((each) => each.name === tool);
     if (spec === undefined) {
-      throw new TypeError(`FileMemory has no tool ${tool}; it has ${TOOLS.map((each) => each.name).join(", ")}`);
+      throw new YianTypeError(`FileMemory has no tool ${tool}; it has ${TOOLS.map((each) => each.name).join(", ")}`);
     }
-    if (spec.write) throw new TypeError(`${tool} is a write tool: apply it as a change`);
+    if (spec.write) throw new YianTypeError(`${tool} is a write tool: apply it as a change`);
     try {
       if (tool === "list") return this.#list(stringArg("FileMemory", args, "dir", false));
       if (tool === "read") {
@@ -977,7 +978,7 @@ class FileMemorySession implements MemorySession {
   async apply(c: { id: string; change: JsonObject; author: Author; signal: AbortSignal }): Promise<Applied> {
     this.#checkOpen();
     c.signal.throwIfAborted();
-    if (typeof c.id !== "string" || c.id === "") throw new TypeError("a change id must be a non-empty string");
+    if (typeof c.id !== "string" || c.id === "") throw new YianTypeError("a change id must be a non-empty string");
     const author = checkAuthor(c.author);
     const change = checkChange(c.change);
     const digest = sha256(canonicalJson(c.change));
@@ -1005,8 +1006,8 @@ class FileMemorySession implements MemorySession {
   async undo(o: { id: string; changeId: string; author: Author; signal: AbortSignal }): Promise<Applied> {
     this.#checkOpen();
     o.signal.throwIfAborted();
-    if (typeof o.id !== "string" || o.id === "") throw new TypeError("a change id must be a non-empty string");
-    if (typeof o.changeId !== "string") throw new TypeError("undo needs the change id to undo as a string");
+    if (typeof o.id !== "string" || o.id === "") throw new YianTypeError("a change id must be a non-empty string");
+    if (typeof o.changeId !== "string") throw new YianTypeError("undo needs the change id to undo as a string");
     const author = checkAuthor(o.author);
     const digest = sha256(canonicalJson({ op: "undo", change: o.changeId }));
     return this.#locked(o.signal, () => {
@@ -1031,7 +1032,7 @@ class FileMemorySession implements MemorySession {
   async history(o: { limit: number }): Promise<ChangeEntry[]> {
     this.#checkOpen();
     if (!Number.isSafeInteger(o.limit) || o.limit < 0) {
-      throw new RangeError(`history needs a limit of 0 or more changes, not ${String(o.limit)}`);
+      throw new YianRangeError(`history needs a limit of 0 or more changes, not ${String(o.limit)}`);
     }
     return this.#locked(undefined, () => {
       this.#recover();
@@ -1073,7 +1074,7 @@ class FileMemorySession implements MemorySession {
   async erase(o: { id: string; target: JsonObject; author: Author; signal: AbortSignal }): Promise<Erased> {
     this.#checkOpen();
     o.signal.throwIfAborted();
-    if (typeof o.id !== "string" || o.id === "") throw new TypeError("a change id must be a non-empty string");
+    if (typeof o.id !== "string" || o.id === "") throw new YianTypeError("a change id must be a non-empty string");
     const author = checkAuthor(o.author);
     const target = checkEraseTarget(o.target);
     const digest = sha256(canonicalJson({ op: "erase", ...target }));

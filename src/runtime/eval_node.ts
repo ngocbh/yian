@@ -56,6 +56,7 @@ import { NodeSteps } from "../nodes/contracts.ts";
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { ToolSet } from "../tools/registry.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { VariablePool } from "../typesys/pool.ts";
 import { jsTypeName, setField, type TypedValue, type Value, type ValueRecord } from "../typesys/values.ts";
@@ -366,7 +367,7 @@ async function evaluateNode(
           if (error instanceof BindingError && steps !== null && node.needsSteps === true && steps.prior.length > 0) {
             // A start records steps only after binding, and resume restores the pool, so the code
             // that resolves these keys changed since then.
-            throw new RangeError(
+            throw new YianRangeError(
               `${error.message}; an earlier start of this node resolved it, so resume the run with the flow and ` +
                 "yian version that started it",
             );
@@ -638,11 +639,11 @@ export function rebuildDerived(
   resolve: (name: string, seq: number) => TypedValue,
   wiringOverride: JsonObject | null,
 ): Output | Grow {
-  if (node.derived !== true) throw new TypeError(`node ${reprText(node.id)} is not derived`);
+  if (node.derived !== true) throw new YianTypeError(`node ${reprText(node.id)} is not derived`);
   const { inputs, caps } = bindFrom(node, flow, from, resolve, wiringOverride);
   const outcome: unknown = node.forward(inputs, caps);
   if (!(outcome instanceof Output || outcome instanceof Grow)) {
-    throw new TypeError(`derived node ${reprText(node.id)} forward returned ${jsTypeName(outcome)}, not an Output or Grow`);
+    throw new YianTypeError(`derived node ${reprText(node.id)} forward returned ${jsTypeName(outcome)}, not an Output or Grow`);
   }
   return outcome;
 }

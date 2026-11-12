@@ -38,6 +38,7 @@ import { compareCodeUnits, Diagnostic, reprText, shellQuote } from "../diagnosti
 import type { RunEvent } from "../events.ts";
 import { type Skill, SkillError } from "../skills/catalog.ts";
 import { LOAD_SKILL } from "../skills/tool.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { JSONDecodeError, type JsonValue, parseJson } from "../typesys/json.ts";
 import {
   canonicalTypeLabel,
@@ -726,14 +727,16 @@ export interface RunOptions {
 
 /**
  * @internal Whether `error` is a host failure `run` reports as `run failed:` (`resume failed:`) rather than
- * with its stack: a bad value (a damaged or empty log or a defaults mismatch included), an
- * unreadable file, a run log another writer holds, an MCP server that didn't start, the missing MCP
- * SDK.
+ * with its stack: a bad value yian refused (`YianTypeError`, `YianRangeError`: a damaged or empty
+ * log or a defaults mismatch included), an unreadable file, a run log another writer holds, an MCP
+ * server that didn't start, the missing MCP SDK. Any other error, a built-in `TypeError` or
+ * `RangeError` among them, is a bug.
  */
 export function isSetupError(error: unknown): error is Error {
   return (
-    error instanceof TypeError ||
-    error instanceof RangeError ||
+    // yian's own: a built-in TypeError or RangeError is a bug, which keeps its stack.
+    error instanceof YianTypeError ||
+    error instanceof YianRangeError ||
     error instanceof AuthError ||
     error instanceof McpConnectError ||
     // A lock file that is unsafe, not private or changed; a locked log is a plain `Error` over
@@ -1261,13 +1264,13 @@ async function startRun(
     }
     if (recorded === null) {
       return setupFailed(
-        new RangeError("this run's flow was built in code; resume it with advance({log, flow})"),
+        new YianRangeError("this run's flow was built in code; resume it with advance({log, flow})"),
       );
     }
     // A chat's run needs the chat to type into it and to host its tools.
     if (recorded.compiled.flowId === CHAT_FLOW_ID && recorded.source?.root === CHAT_FLOW_FILE) {
       const message = "this run is a yian chat's; yian run --resume can't continue it";
-      return setupFailed(new RangeError(message));
+      return setupFailed(new YianRangeError(message));
     }
     flow = recorded;
   } else {
@@ -1590,7 +1593,7 @@ export async function status(log: string | undefined, { json }: { json: boolean 
     inspection = inspectRun(log);
     // The run index lists such a log as unreadable, so this says why too.
     const mismatch = runFolderMismatch(log, inspection.runId, defaultRunsDir(io.env));
-    if (mismatch !== null) throw new RangeError(`run log ${log}: ${mismatch}`);
+    if (mismatch !== null) throw new YianRangeError(`run log ${log}: ${mismatch}`);
   } catch (error) {
     let message: string;
     if (error instanceof RangeError) message = error.message;

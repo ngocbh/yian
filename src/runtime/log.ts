@@ -19,6 +19,7 @@ import { compareCodeUnits, Failure, OriginRef, reprText } from "../diagnostics.t
 import { retainFailure } from "../nodes/base.ts";
 import { type FileLock, FileLockError, isLocked, lockFile, syncFolder, VERSION } from "../platform.ts";
 import { isExactly } from "../nodes/contracts.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import {
   freezeIfCanonical,
   freezeParsed,
@@ -288,13 +289,13 @@ export class RunStartedRecord {
     } = fields;
     this.flowFingerprint = requireSha256(fields.flowFingerprint, "flow_fingerprint");
     const wiring = canonicalCopy(jsonPart(fields.startWiringOverride, [], "mapping"));
-    if (!isRecord(wiring)) throw new TypeError("start_wiring_override must be a mapping");
+    if (!isRecord(wiring)) throw new YianTypeError("start_wiring_override must be a mapping");
     this.startWiringOverride = freezeParsed(wiring);
     const llm = canonicalCopy(jsonPart(fields.effectiveLlmByStaticPath, [], "mapping"));
-    if (!isRecord(llm)) throw new TypeError("effective_llm_by_static_path must be a mapping");
+    if (!isRecord(llm)) throw new YianTypeError("effective_llm_by_static_path must be a mapping");
     for (const [path, config] of Object.entries(llm)) {
       if (!isRecord(config)) {
-        throw new TypeError(`effective_llm_by_static_path value for ${reprText(path)} must be a mapping`);
+        throw new YianTypeError(`effective_llm_by_static_path value for ${reprText(path)} must be a mapping`);
       }
     }
     this.effectiveLlmByStaticPath = freezeParsed(llm) as Readonly<Record<string, Readonly<JsonObject>>>;
@@ -307,7 +308,7 @@ export class RunStartedRecord {
       instructions: requireText(skill["instructions"], `${label} instructions`),
     }));
     this.tools = validatedEntries(tools, "tools", (tool, label) => {
-      if (!isRecord(tool["parameters"])) throw new TypeError(`${label} parameters must be an object`);
+      if (!isRecord(tool["parameters"])) throw new YianTypeError(`${label} parameters must be an object`);
       return {
         name: requireName(tool["name"], `${label} name`),
         description: requireText(tool["description"], `${label} description`),
@@ -328,7 +329,7 @@ export class RunStartedRecord {
  * @throws TypeError otherwise.
  */
 function requireText(value: unknown, label: string): string {
-  if (typeof value !== "string") throw new TypeError(`${label} must be a string`);
+  if (typeof value !== "string") throw new YianTypeError(`${label} must be a string`);
   return value;
 }
 
@@ -339,8 +340,8 @@ function requireText(value: unknown, label: string): string {
  * @throws RangeError when it is empty.
  */
 function requireName(value: unknown, label: string): string {
-  if (typeof value !== "string") throw new TypeError(`${label} must be a non-empty string`);
-  if (value === "") throw new RangeError(`${label} must be a non-empty string`);
+  if (typeof value !== "string") throw new YianTypeError(`${label} must be a non-empty string`);
+  if (value === "") throw new YianRangeError(`${label} must be a non-empty string`);
   return value;
 }
 
@@ -355,14 +356,14 @@ function validatedToolGroups(
   groups: unknown,
   tools: Readonly<Record<string, RecordedTool>>,
 ): Readonly<Record<string, readonly string[]>> {
-  if (!isRecord(groups)) throw new TypeError("RunStarted tool_groups must be an object");
+  if (!isRecord(groups)) throw new YianTypeError("RunStarted tool_groups must be an object");
   const entries = Object.entries(groups).map(([name, members]): [string, readonly string[]] => {
     const label = `RunStarted tool_groups[${reprText(name)}]`;
-    if (!name) throw new RangeError("RunStarted tool_groups names must be non-empty strings");
-    if (!Array.isArray(members)) throw new TypeError(`${label} must be an array of tool names`);
+    if (!name) throw new YianRangeError("RunStarted tool_groups names must be non-empty strings");
+    if (!Array.isArray(members)) throw new YianTypeError(`${label} must be an array of tool names`);
     const names = members.map((member, index) => requireName(member, `${label}[${index}]`));
     for (const member of names) {
-      if (!Object.hasOwn(tools, member)) throw new RangeError(`${label} names ${reprText(member)}, which tools doesn't hold`);
+      if (!Object.hasOwn(tools, member)) throw new YianRangeError(`${label} names ${reprText(member)}, which tools doesn't hold`);
     }
     return [name, Object.freeze(names)];
   });
@@ -378,23 +379,23 @@ function validatedToolGroups(
  *   or a file a ref names.
  */
 function validatedFlowSource(flow: FlowSource): FlowSource {
-  if (!isRecord(flow)) throw new TypeError("RunStarted flow must be an object or null");
+  if (!isRecord(flow)) throw new YianTypeError("RunStarted flow must be an object or null");
   const root = requireName(flow.root, "RunStarted flow root");
   const dir = requireName(flow.dir, "RunStarted flow dir");
   const codeRoot = flow.codeRoot === null ? null : requireName(flow.codeRoot, "RunStarted flow codeRoot");
   const files = validatedEntries(flow.files, "flow files", (file, label) => {
     const refs = file["refs"];
-    if (!isRecord(refs)) throw new TypeError(`${label} refs must be an object`);
+    if (!isRecord(refs)) throw new YianTypeError(`${label} refs must be an object`);
     for (const [path, target] of Object.entries(refs)) {
       const key = requireText(target, `${label} refs[${reprText(path)}]`);
       if (!Object.hasOwn(flow.files, key)) {
-        throw new RangeError(`${label} refs[${reprText(path)}] names no recorded file: ${reprText(key)}`);
+        throw new YianRangeError(`${label} refs[${reprText(path)}] names no recorded file: ${reprText(key)}`);
       }
     }
     const text = requireText(file["text"], `${label} text`);
     return { text, refs: freezeParsed(canonicalCopy(refs)) as Record<string, string> };
   });
-  if (!Object.hasOwn(files, root)) throw new RangeError(`RunStarted flow files must hold the root ${reprText(root)}`);
+  if (!Object.hasOwn(files, root)) throw new YianRangeError(`RunStarted flow files must hold the root ${reprText(root)}`);
   return Object.freeze({ root, dir, codeRoot, files });
 }
 
@@ -409,11 +410,11 @@ function validatedEntries<T>(
   field: string,
   entry: (item: Readonly<Record<string, unknown>>, label: string) => T,
 ): Readonly<Record<string, T>> {
-  if (!isRecord(value)) throw new TypeError(`RunStarted ${field} must be an object`);
+  if (!isRecord(value)) throw new YianTypeError(`RunStarted ${field} must be an object`);
   const entries = Object.entries(value).map(([name, item]): [string, T] => {
     const label = `RunStarted ${field}[${reprText(name)}]`;
-    if (!name) throw new RangeError(`RunStarted ${field} names must be non-empty strings`);
-    if (!isRecord(item)) throw new TypeError(`${label} must be an object`);
+    if (!name) throw new YianRangeError(`RunStarted ${field} names must be non-empty strings`);
+    if (!isRecord(item)) throw new YianTypeError(`${label} must be an object`);
     return [name, Object.freeze(entry(item, label))];
   });
   // `Object.fromEntries` defines own data properties, so a `__proto__` name stays a key.
@@ -427,7 +428,7 @@ function validatedEntries<T>(
  * @throws RangeError when the run id or the node is empty.
  */
 function validatedParent(parent: RunParent): RunParent {
-  if (!isRecord(parent)) throw new TypeError("RunStarted parent must be an object or null");
+  if (!isRecord(parent)) throw new YianTypeError("RunStarted parent must be an object or null");
   const runId = requireName(parent.runId, "RunStarted parent run_id");
   const node = parent.node === null ? null : requireName(parent.node, "RunStarted parent node");
   return Object.freeze({ runId, node });
@@ -443,24 +444,24 @@ function validatedParent(parent: RunParent): RunParent {
  *   or a value isn't JSON (NaN, a `FileRef`, ...).
  */
 function validatedCallTimeLlm(value: unknown): Readonly<JsonObject> {
-  if (!isRecord(value)) throw new TypeError("RunStarted call_time_llm must be a dict");
+  if (!isRecord(value)) throw new YianTypeError("RunStarted call_time_llm must be a dict");
   const keys = Object.keys(value);
   if (keys.length !== 2 || !Object.hasOwn(value, "selection") || !Object.hasOwn(value, "agents")) {
-    throw new RangeError("RunStarted call_time_llm must have exactly selection and agents");
+    throw new YianRangeError("RunStarted call_time_llm must have exactly selection and agents");
   }
-  if (!isRecord(value["selection"])) throw new TypeError("RunStarted call_time_llm selection must be a dict");
+  if (!isRecord(value["selection"])) throw new YianTypeError("RunStarted call_time_llm selection must be a dict");
   const agents = value["agents"];
-  if (!isRecord(agents)) throw new TypeError("RunStarted call_time_llm agents must be a dict");
-  if (Object.keys(agents).length === 0) throw new RangeError("RunStarted call_time_llm agents must not be empty");
+  if (!isRecord(agents)) throw new YianTypeError("RunStarted call_time_llm agents must be a dict");
+  if (Object.keys(agents).length === 0) throw new YianRangeError("RunStarted call_time_llm agents must not be empty");
   for (const [path, base] of Object.entries(agents)) {
-    if (!path) throw new RangeError("RunStarted call_time_llm agent paths must be non-empty strings");
-    if (!isRecord(base)) throw new TypeError(`RunStarted call_time_llm base for ${reprText(path)} must be a dict`);
+    if (!path) throw new YianRangeError("RunStarted call_time_llm agent paths must be non-empty strings");
+    if (!isRecord(base)) throw new YianTypeError(`RunStarted call_time_llm base for ${reprText(path)} must be a dict`);
   }
   let copy: JsonObject;
   try {
     copy = canonicalCopy(jsonPart(value, [], "refuse")) as JsonObject;
   } catch (error) {
-    throw new RangeError(`RunStarted call_time_llm: ${(error as Error).message}`, { cause: error });
+    throw new YianRangeError(`RunStarted call_time_llm: ${(error as Error).message}`, { cause: error });
   }
   return freezeParsed(copy);
 }
@@ -472,12 +473,12 @@ function validatedCallTimeLlm(value: unknown): Readonly<JsonObject> {
  * @throws RangeError when a name is empty.
  */
 function validatedDefaults(recorded: unknown): Readonly<Record<string, bigint>> {
-  if (!isRecord(recorded)) throw new TypeError("RunStarted defaults must be a mapping");
+  if (!isRecord(recorded)) throw new YianTypeError("RunStarted defaults must be a mapping");
   const entries = Object.entries(recorded);
   for (const [name, value] of entries) {
-    if (!name) throw new RangeError("RunStarted defaults names must be non-empty strings");
+    if (!name) throw new YianRangeError("RunStarted defaults names must be non-empty strings");
     if (typeof value !== "bigint") {
-      throw new TypeError(`RunStarted defaults value for ${reprText(name)} must be an int`);
+      throw new YianTypeError(`RunStarted defaults value for ${reprText(name)} must be an int`);
     }
   }
   // `Object.fromEntries` defines own data properties, so a `__proto__` name stays a key.
@@ -524,11 +525,11 @@ export class RunStoppedRecord {
    *   non-empty strings.
    */
   constructor(reason: RunStopReason, message: string, nodeIds: readonly string[]) {
-    if (typeof reason !== "string") throw new TypeError("reason must be a string");
+    if (typeof reason !== "string") throw new YianTypeError("reason must be a string");
     if (!(RUN_STOP_REASONS as readonly string[]).includes(reason)) {
-      throw new RangeError(`reason must be one of ${writeAsText([...RUN_STOP_REASONS])}, got ${reprText(reason)}`);
+      throw new YianRangeError(`reason must be one of ${writeAsText([...RUN_STOP_REASONS])}, got ${reprText(reason)}`);
     }
-    if (typeof message !== "string") throw new TypeError("message must be a string");
+    if (typeof message !== "string") throw new YianTypeError("message must be a string");
     this.reason = reason;
     // The text often comes from a host's error, which may hold a lone surrogate the log can't write.
     this.message = message.toWellFormed();
@@ -565,17 +566,17 @@ export interface WaitEntry {
  *   don't fit the tool, or the deadline isn't a record time.
  */
 function validatedWaitEntry(entry: unknown): WaitEntry {
-  if (!isRecord(entry)) throw new TypeError("wait entry must be an object");
+  if (!isRecord(entry)) throw new YianTypeError("wait entry must be an object");
   const callId = requireName(entry["callId"], "wait entry call_id");
   const { tool, inbox, mode, deadline } = entry;
-  if (typeof tool !== "string" || !WAIT_TOOLS.includes(tool)) throw new RangeError("wait entry tool must be take or sleep");
+  if (typeof tool !== "string" || !WAIT_TOOLS.includes(tool)) throw new YianRangeError("wait entry tool must be take or sleep");
   if (tool === "take") {
-    if (inbox == null || mode == null) throw new RangeError("a take wait entry needs inbox and mode");
+    if (inbox == null || mode == null) throw new YianRangeError("a take wait entry needs inbox and mode");
     requireName(inbox, "wait entry inbox");
-    if (typeof mode !== "string" || !TAKE_MODES.includes(mode)) throw new RangeError("wait entry mode must be one or all");
+    if (typeof mode !== "string" || !TAKE_MODES.includes(mode)) throw new YianRangeError("wait entry mode must be one or all");
   } else {
-    if (inbox != null || mode != null) throw new RangeError("a sleep wait entry takes no inbox or mode");
-    if (deadline == null) throw new RangeError("a sleep wait entry needs a deadline");
+    if (inbox != null || mode != null) throw new YianRangeError("a sleep wait entry takes no inbox or mode");
+    if (deadline == null) throw new YianRangeError("a sleep wait entry needs a deadline");
   }
   return Object.freeze({
     callId,
@@ -618,12 +619,12 @@ export class NodeWaitingRecord {
   ) {
     this.nodeId = requireName(nodeId, "node_id");
     this.callIds = validatedIdArray(callIds, "call_ids");
-    if (this.callIds.length === 0) throw new RangeError("call_ids must be non-empty");
+    if (this.callIds.length === 0) throw new YianRangeError("call_ids must be non-empty");
     const waits = (options.waits ?? []).map(validatedWaitEntry);
-    if (waits.length > 1) throw new RangeError("waits holds at most one entry");
+    if (waits.length > 1) throw new YianRangeError("waits holds at most one entry");
     for (const entry of waits) {
       if (!this.callIds.includes(entry.callId)) {
-        throw new RangeError(`wait entry call_id ${reprText(entry.callId)} is not in call_ids`);
+        throw new YianRangeError(`wait entry call_id ${reprText(entry.callId)} is not in call_ids`);
       }
     }
     this.waits = Object.freeze(waits);
@@ -658,7 +659,7 @@ export class RunWaitingRecord {
   /** @throws RangeError when `nodeIds` is empty or isn't an array of unique non-empty strings. */
   constructor(nodeIds: readonly string[]) {
     this.nodeIds = validatedIdArray(nodeIds, "node_ids");
-    if (this.nodeIds.length === 0) throw new RangeError("node_ids must be non-empty");
+    if (this.nodeIds.length === 0) throw new YianRangeError("node_ids must be non-empty");
     Object.freeze(this);
   }
 }
@@ -696,7 +697,7 @@ export class InboxWithdrawnRecord {
   constructor(inbox: string, events: readonly number[]) {
     this.inbox = requireName(inbox, "inbox");
     const seqs = validatedEventSeqs(events, "events");
-    if (seqs.length === 0) throw new RangeError("events must be non-empty");
+    if (seqs.length === 0) throw new YianRangeError("events must be non-empty");
     this.events = Object.freeze(seqs);
     Object.freeze(this);
   }
@@ -795,15 +796,15 @@ export class NodeStepRecord {
    */
   constructor(nodeId: string, n: number, step: Readonly<Record<string, unknown>>) {
     this.nodeId = requireName(nodeId, "node_id");
-    if (typeof n !== "number" || !Number.isSafeInteger(n)) throw new TypeError("node step n must be an int");
-    if (n < 1) throw new RangeError("node step n must be at least 1");
+    if (typeof n !== "number" || !Number.isSafeInteger(n)) throw new YianTypeError("node step n must be an int");
+    if (n < 1) throw new YianRangeError("node step n must be at least 1");
     this.n = n;
-    if (!isRecord(step)) throw new TypeError("node step must be a JSON object");
+    if (!isRecord(step)) throw new YianTypeError("node step must be a JSON object");
     // A parsed step holds only JSON, which `jsonPart` takes unchanged.
     this.step =
       freshCanonical(step as JsonObject) ?? freezeParsed(canonicalCopy(jsonPart(step, [], "refuse")) as JsonObject);
     const kind = this.step["kind"];
-    if (typeof kind !== "string" || kind === "") throw new TypeError("node step kind must be a non-empty string");
+    if (typeof kind !== "string" || kind === "") throw new YianTypeError("node step kind must be a non-empty string");
     Object.freeze(this);
   }
 }
@@ -872,11 +873,11 @@ export class PoolCommitRecord {
     this.take = options.take == null ? null : validatedTake(options.take);
     this.steps = options.steps == null ? null : validatedSteps(options.steps);
     if ([this.value, this.from, this.take, this.steps].filter((form) => form !== null).length !== 1) {
-      throw new RangeError("a pool_commit holds exactly one of value, from, take and steps");
+      throw new YianRangeError("a pool_commit holds exactly one of value, from, take and steps");
     }
     this.sendKey = options.sendKey == null ? null : requireName(options.sendKey, "send_key");
     if (this.sendKey !== null && this.value === null) {
-      throw new RangeError("only a pool_commit that holds a value holds a send key");
+      throw new YianRangeError("only a pool_commit that holds a value holds a send key");
     }
     Object.freeze(this);
   }
@@ -920,10 +921,10 @@ export interface TakeCommit {
  *   positive safe integers.
  */
 function validatedTake(take: unknown): TakeCommit {
-  if (!isRecord(take)) throw new TypeError("take must be an object");
+  if (!isRecord(take)) throw new YianTypeError("take must be an object");
   const inbox = requireName(take["inbox"], "take inbox");
   const seqs = validatedEventSeqs(take["events"], "take events");
-  if (typeof take["closed"] !== "boolean") throw new TypeError("take closed must be a boolean");
+  if (typeof take["closed"] !== "boolean") throw new YianTypeError("take closed must be a boolean");
   return Object.freeze({ inbox, events: Object.freeze(seqs), closed: take["closed"] });
 }
 
@@ -935,11 +936,11 @@ function validatedTake(take: unknown): TakeCommit {
  */
 function validatedEventSeqs(events: unknown, label: string): number[] {
   if (!isList(events) || ![...events].every((seq) => typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 1)) {
-    throw new RangeError(`${label} must be positive integers`);
+    throw new YianRangeError(`${label} must be positive integers`);
   }
   const seqs = [...events] as number[];
   if (seqs.some((seq, index) => index > 0 && seqs[index - 1]! >= seq)) {
-    throw new RangeError(`${label} must be strictly increasing`);
+    throw new YianRangeError(`${label} must be strictly increasing`);
   }
   return seqs;
 }
@@ -961,13 +962,13 @@ function validatedSteps(steps: unknown): readonly number[] {
  */
 function validatedFrom(from: unknown): ReadonlyMap<string, number> | null {
   if (from === null) return null;
-  if (!(from instanceof Map)) throw new TypeError("from must be a Map or null");
+  if (!(from instanceof Map)) throw new YianTypeError("from must be a Map or null");
   const entries: [string, number][] = [];
   for (const [name, seq] of from as Map<unknown, unknown>) {
-    if (typeof name !== "string") throw new TypeError("from names must be strings");
-    if (!name) throw new RangeError("from names must be non-empty");
+    if (typeof name !== "string") throw new YianTypeError("from names must be strings");
+    if (!name) throw new YianRangeError("from names must be non-empty");
     if (typeof seq !== "number" || !Number.isSafeInteger(seq) || seq < 1) {
-      throw new RangeError(`from seq of ${reprText(name)} must be a positive integer`);
+      throw new YianRangeError(`from seq of ${reprText(name)} must be a positive integer`);
     }
     entries.push([name, seq]);
   }
@@ -996,10 +997,10 @@ export class NodeSucceededRecord {
   constructor(nodeId: string, commit: number, options: { messages?: number | null } = {}) {
     const { messages = null } = options;
     this.nodeId = requireName(nodeId, "node_id");
-    if (!Number.isSafeInteger(commit) || commit < 1) throw new RangeError("commit must be a positive integer");
+    if (!Number.isSafeInteger(commit) || commit < 1) throw new YianRangeError("commit must be a positive integer");
     this.commit = commit;
     if (messages !== null && (!Number.isSafeInteger(messages) || messages < 1)) {
-      throw new RangeError("messages must be a positive integer");
+      throw new YianRangeError("messages must be a positive integer");
     }
     this.messages = messages;
     Object.freeze(this);
@@ -1091,7 +1092,7 @@ export class NodeFailedRecord {
     this.failure = retainedFailure(failure, "NodeFailedRecord");
     this.callId = options.callId == null ? null : requireName(options.callId, "call_id");
     this.scope = options.scope == null ? null : requireName(options.scope, "scope");
-    if ((this.callId === null) !== (this.scope === null)) throw new RangeError("a flow call's failure names its call and its scope");
+    if ((this.callId === null) !== (this.scope === null)) throw new YianRangeError("a flow call's failure names its call and its scope");
     Object.freeze(this);
   }
 }
@@ -1127,8 +1128,8 @@ type RunRecordClass = new (...args: never[]) => RunRecord;
  * @throws RangeError when it isn't such a digest.
  */
 function requireSha256(value: unknown, name: string): string {
-  if (typeof value !== "string") throw new TypeError(`${name} must be a string`);
-  if (!/^[0-9a-f]{64}$/.test(value)) throw new RangeError(`${name} must be 64 lowercase hex digits`);
+  if (typeof value !== "string") throw new YianTypeError(`${name} must be a string`);
+  if (!/^[0-9a-f]{64}$/.test(value)) throw new YianRangeError(`${name} must be 64 lowercase hex digits`);
   return value;
 }
 
@@ -1139,8 +1140,8 @@ function requireSha256(value: unknown, name: string): string {
  * @throws RangeError when it is negative.
  */
 function validatedCount(value: unknown, name: string): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value)) throw new TypeError(`${name} must be an integer`);
-  if (value < 0) throw new RangeError(`${name} must be non-negative`);
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) throw new YianTypeError(`${name} must be an integer`);
+  if (value < 0) throw new YianRangeError(`${name} must be non-negative`);
   return value;
 }
 
@@ -1151,9 +1152,9 @@ function validatedCount(value: unknown, name: string): number {
  * @throws RangeError when its fields break the failure contract, or its node id is null or empty.
  */
 function retainedFailure(failure: unknown, carrier: string): Failure {
-  if (!isExactly(failure, Failure)) throw new TypeError(`${carrier} failure must be a Failure`);
+  if (!isExactly(failure, Failure)) throw new YianTypeError(`${carrier} failure must be a Failure`);
   const retained = retainFailure(failure);
-  if (!retained.nodeId) throw new RangeError(`${carrier} failure node_id must be a non-empty string`);
+  if (!retained.nodeId) throw new YianRangeError(`${carrier} failure node_id must be a non-empty string`);
   return retained;
 }
 
@@ -1164,15 +1165,15 @@ function retainedFailure(failure: unknown, carrier: string): Failure {
  * @throws RangeError when `value` isn't such an array.
  */
 function validatedIdArray(value: unknown, label: string, requireSorted = false): readonly string[] {
-  if (!isList(value)) throw new RangeError(`${label} must be an array of strings`);
+  if (!isList(value)) throw new YianRangeError(`${label} must be an array of strings`);
   // Spread, so a hole of a sparse array reads as `undefined` and is refused.
   const ids = [...value];
   if (!ids.every((id): id is string => typeof id === "string" && id !== "")) {
-    throw new RangeError(`${label} must contain only non-empty strings`);
+    throw new YianRangeError(`${label} must contain only non-empty strings`);
   }
-  if (new Set(ids).size !== ids.length) throw new RangeError(`${label} must contain unique IDs`);
+  if (new Set(ids).size !== ids.length) throw new YianRangeError(`${label} must contain unique IDs`);
   if (requireSorted && ids.some((id, index) => index > 0 && compareCodeUnits(ids[index - 1]!, id) > 0)) {
-    throw new RangeError(`${label} must be sorted`);
+    throw new YianRangeError(`${label} must be sorted`);
   }
   return Object.freeze(ids);
 }
@@ -1181,7 +1182,7 @@ function validatedIdArray(value: unknown, label: string, requireSorted = false):
  * A run record names a schema this version can't read. Hosts tell it apart from a damaged log by
  * its class (`name` `RunLogSchemaError`); a `RangeError`, so code that catches those catches it.
  */
-export class RunLogSchemaError extends RangeError {
+export class RunLogSchemaError extends YianRangeError {
   override name = "RunLogSchemaError";
   /** The schema number the record names, or `null` when its schema isn't an integer. */
   readonly schema: number | null;
@@ -1198,7 +1199,7 @@ export class RunLogSchemaError extends RangeError {
  * was truncated (a writer rolls back a failed append) or replaced; read it again from the start.
  * A `RangeError`.
  */
-export class RunLogChangedError extends RangeError {
+export class RunLogChangedError extends YianRangeError {
   override name = "RunLogChangedError";
 }
 
@@ -1207,7 +1208,7 @@ export class RunLogChangedError extends RangeError {
  * names where the line sits and what a bounded scan of its bytes read of its envelope, so a host
  * can index the record and read on from `end`. A `RangeError`.
  */
-export class RunLogLineTooLongError extends RangeError {
+export class RunLogLineTooLongError extends YianRangeError {
   override name = "RunLogLineTooLongError";
   /** The byte offset where the line starts. */
   readonly offset: number;
@@ -1264,7 +1265,7 @@ function retiredSchema(schema: number): RunLogSchemaError {
  */
 export function formatRecordTime(ms: unknown): string {
   if (typeof ms !== "number" || !Number.isFinite(ms)) {
-    throw new RangeError(`run-log clock must return finite epoch milliseconds, got ${valueRepr(ms)}`);
+    throw new YianRangeError(`run-log clock must return finite epoch milliseconds, got ${valueRepr(ms)}`);
   }
   return recordTimeText(ms);
 }
@@ -1289,7 +1290,7 @@ export function requireRecordTime(at: unknown, label = "run-record envelope at")
  * @throws RangeError when it isn't a record time.
  */
 export function recordTimeMs(at: unknown, label = "run-record envelope at"): number {
-  if (typeof at !== "string") throw new TypeError(`${label} must be a string`);
+  if (typeof at !== "string") throw new YianTypeError(`${label} must be a string`);
   const parts = RECORD_TIME.exec(at)?.slice(1).map(Number);
   // Built field by field (`Date.parse` differs between engines); an out-of-range field rolls
   // over, so the time doesn't write back as `at`.
@@ -1300,7 +1301,7 @@ export function recordTimeMs(at: unknown, label = "run-record envelope at"): num
     date.setUTCHours(hours, minutes, seconds, ms);
   }
   if (parts === undefined || date.toISOString() !== at) {
-    throw new RangeError(`${label} must be a UTC time such as 2026-10-20T14:02:11.123Z, found ${reprText(at)}`);
+    throw new YianRangeError(`${label} must be a UTC time such as 2026-10-20T14:02:11.123Z, found ${reprText(at)}`);
   }
   return date.getTime();
 }
@@ -1347,7 +1348,7 @@ function codecForRecord(record: unknown): RecordCodec {
     if (codec !== undefined) return codec;
   }
   const name = record === null || record === undefined ? String(record) : Object(record).constructor?.name;
-  throw new TypeError(`unsupported run record: ${name}`);
+  throw new YianTypeError(`unsupported run record: ${name}`);
 }
 
 /**
@@ -1387,7 +1388,7 @@ export class RecordEnvelope {
     requireSchema(schema);
     validatedRunId(runId);
     if (!Number.isSafeInteger(seq) || seq < 0) {
-      throw new RangeError("run-record envelope seq must be a non-negative integer");
+      throw new YianRangeError("run-record envelope seq must be a non-negative integer");
     }
     codecForRecord(record);
     this.schema = schema;
@@ -1425,7 +1426,7 @@ let lastAppended: { readonly envelope: RecordEnvelope; readonly line: string } |
  * @throws TypeError when `envelope` isn't exactly a `RecordEnvelope`.
  */
 export function encodeRecord(envelope: RecordEnvelope): string {
-  if (!isExactly(envelope, RecordEnvelope)) throw new TypeError("encodeRecord expects a RecordEnvelope");
+  if (!isExactly(envelope, RecordEnvelope)) throw new YianTypeError("encodeRecord expects a RecordEnvelope");
   if (envelope === lastAppended?.envelope) return lastAppended.line;
   const codec = codecForRecord(envelope.record);
   return logJson({
@@ -1496,16 +1497,16 @@ function decodeWire(data: string | Uint8Array, requireAt: boolean): WireEnvelope
       // The BOM is kept, so the reader refuses it.
       text = UTF8.decode(data);
     } catch (error) {
-      throw new RangeError("invalid run-record JSON", { cause: error });
+      throw new YianRangeError("invalid run-record JSON", { cause: error });
     }
   } else {
-    throw new TypeError("decodeRecord expects a string or a Uint8Array");
+    throw new YianTypeError("decodeRecord expects a string or a Uint8Array");
   }
   let raw: JsonValue;
   try {
     raw = parseJson(text, "codec");
   } catch (error) {
-    if (error instanceof JSONDecodeError) throw new RangeError("invalid run-record JSON", { cause: error });
+    if (error instanceof JSONDecodeError) throw new YianRangeError("invalid run-record JSON", { cause: error });
     throw error;
   }
   const envelope = wireObject(raw, "run-record envelope");
@@ -1517,7 +1518,7 @@ function decodeWire(data: string | Uint8Array, requireAt: boolean): WireEnvelope
   const at = timed ? requireRecordTime(envelope["at"]) : null;
   const kind = requireText(envelope["kind"], "run-record envelope kind");
   if (!CODEC_BY_KIND.has(kind)) {
-    throw new RangeError(`run-record kind ${reprText(kind)} is unsupported in schema ${SCHEMA_VERSION}`);
+    throw new YianRangeError(`run-record kind ${reprText(kind)} is unsupported in schema ${SCHEMA_VERSION}`);
   }
   const payload = wireObject(envelope["payload"], "run-record envelope payload");
   return { runId, seq, at, kind, payload };
@@ -1614,7 +1615,7 @@ export interface RunLogOptions {
  */
 function logClock(options: RunLogOptions): () => number {
   const clock = options.clock ?? Date.now;
-  if (typeof clock !== "function") throw new TypeError("run log clock must be a function or null");
+  if (typeof clock !== "function") throw new YianTypeError("run log clock must be a function or null");
   return clock;
 }
 
@@ -1656,16 +1657,16 @@ export class MemoryRunLog implements RunLog {
    */
   static fromRecords(records: readonly RecordEnvelope[], options: RunLogOptions = {}): MemoryRunLog {
     if (!Array.isArray(records) || records.length === 0) {
-      throw new RangeError("reopening requires a nonempty record array");
+      throw new YianRangeError("reopening requires a nonempty record array");
     }
     if (!records.every((envelope) => isExactly(envelope, RecordEnvelope))) {
-      throw new TypeError("reopening requires exact RecordEnvelope values");
+      throw new YianTypeError("reopening requires exact RecordEnvelope values");
     }
     // Every record a log holds was stamped when a log appended it.
     const canonical = records.map((envelope) => decodeLine(encodeRecord(envelope), true));
     const runId = canonical[0]!.runId;
     if (canonical.some((envelope, sequence) => envelope.runId !== runId || envelope.seq !== sequence)) {
-      throw new RangeError("reopened prefix must have one run and contiguous sequences");
+      throw new YianRangeError("reopened prefix must have one run and contiguous sequences");
     }
     const log = new MemoryRunLog(runId, options);
     log.#records = canonical;
@@ -1852,7 +1853,7 @@ export class JsonlRunLog implements RunLog {
       const data = fs.readFileSync(fd);
       const completeEnd = data.lastIndexOf(0x0a) + 1;
       const records = decodeCompletePrefix(data.subarray(0, completeEnd), path);
-      if (records.length === 0) throw new RangeError(`cannot resume an empty run log: ${path}`);
+      if (records.length === 0) throw new YianRangeError(`cannot resume an empty run log: ${path}`);
       if (completeEnd !== data.length) {
         fs.ftruncateSync(fd, completeEnd);
         fs.fsyncSync(fd);
@@ -1897,12 +1898,12 @@ export class JsonlRunLog implements RunLog {
     const data = Buffer.alloc(unread.size);
     for (let at = 0; at < unread.size; ) {
       const count = fs.readSync(this.#fd, data, at, unread.size - at, at);
-      if (count === 0) throw new RangeError(`run log ${this.path} is shorter than its known ${unread.size} bytes`);
+      if (count === 0) throw new YianRangeError(`run log ${this.path} is shorter than its known ${unread.size} bytes`);
       at += count;
     }
     const prefix = decodeCompletePrefix(data, this.path);
     if (prefix.length !== unread.count || prefix[0]!.runId !== this.runId) {
-      throw new RangeError(`run log ${this.path} doesn't hold the ${unread.count} records it was known to`);
+      throw new YianRangeError(`run log ${this.path} doesn't hold the ${unread.count} records it was known to`);
     }
     this.#records = [...prefix, ...this.#records];
     this.#unread = null;
@@ -2117,24 +2118,24 @@ export function* iterRunRecords(
     maxLineBytes = null,
   } = options;
   if (!Number.isSafeInteger(afterOffset) || afterOffset < 0) {
-    throw new RangeError(`afterOffset must be a non-negative integer, got ${valueRepr(afterOffset)}`);
+    throw new YianRangeError(`afterOffset must be a non-negative integer, got ${valueRepr(afterOffset)}`);
   }
   if (afterSeq !== null && (!Number.isSafeInteger(afterSeq) || afterSeq < 0)) {
-    throw new RangeError(`afterSeq must be a non-negative integer, got ${valueRepr(afterSeq)}`);
+    throw new YianRangeError(`afterSeq must be a non-negative integer, got ${valueRepr(afterSeq)}`);
   }
   if (afterRunId !== null && (typeof afterRunId !== "string" || afterRunId === "")) {
     const shown = typeof afterRunId === "string" ? reprText(afterRunId) : valueRepr(afterRunId);
-    throw new RangeError(`runId must be a non-empty string, got ${shown}`);
+    throw new YianRangeError(`runId must be a non-empty string, got ${shown}`);
   }
   checkMaxLineBytes(maxLineBytes);
   const continuing = afterRunId !== null || afterSeq !== null;
   if (continuing && afterOffset === 0) {
-    throw new RangeError("runId and afterSeq describe the record before afterOffset, so they need one");
+    throw new YianRangeError("runId and afterSeq describe the record before afterOffset, so they need one");
   }
   const wanted = kinds === null ? null : new Set(kinds);
   const unknown = wanted === null ? [] : [...wanted].filter((kind) => !CODEC_BY_KIND.has(kind));
   if (unknown.length > 0) {
-    throw new RangeError(`unknown run-record kinds: ${writeAsText(unknown.sort(compareCodeUnits))}`);
+    throw new YianRangeError(`unknown run-record kinds: ${writeAsText(unknown.sort(compareCodeUnits))}`);
   }
   const fd = openRegular(path, fs.constants.O_RDONLY);
   try {
@@ -2151,7 +2152,7 @@ export function* iterRunRecords(
       if (fs.readSync(fd, before, 0, 1, afterOffset - 1) === 0) throw shrank(fs.fstatSync(fd).size, afterOffset);
       if (before[0] !== 0x0a) {
         if (continuing) throw discontinued("it isn't the end of a line");
-        throw new RangeError(`afterOffset ${afterOffset} isn't the end of a line in run log ${path}`);
+        throw new YianRangeError(`afterOffset ${afterOffset} isn't the end of a line in run log ${path}`);
       }
     }
     // `lineStart` is the end of the last complete line; `parts` hold the bytes read past it, and
@@ -2476,7 +2477,7 @@ class LineHeaderScanner {
  */
 export function checkMaxLineBytes(maxLineBytes: unknown): void {
   if (maxLineBytes !== null && (typeof maxLineBytes !== "number" || !Number.isSafeInteger(maxLineBytes) || maxLineBytes <= 0)) {
-    throw new RangeError(`maxLineBytes must be a positive integer, got ${valueRepr(maxLineBytes)}`);
+    throw new YianRangeError(`maxLineBytes must be a positive integer, got ${valueRepr(maxLineBytes)}`);
   }
 }
 
@@ -2499,10 +2500,10 @@ function checkedLine(
   runId: string | null,
 ): string {
   if (expected !== null && record.seq !== expected) {
-    throw new RangeError(`${where}: run-log sequence mismatch: expected ${expected}, found ${record.seq}`);
+    throw new YianRangeError(`${where}: run-log sequence mismatch: expected ${expected}, found ${record.seq}`);
   }
   if (runId !== null && record.runId !== runId) {
-    throw new RangeError(`${where}: run-log run_id mismatch: expected ${reprText(runId)}, found ${reprText(record.runId)}`);
+    throw new YianRangeError(`${where}: run-log run_id mismatch: expected ${reprText(runId)}, found ${reprText(record.runId)}`);
   }
   return record.runId;
 }
@@ -2517,7 +2518,7 @@ function locatedError(where: string, error: unknown): unknown {
     return new RunLogSchemaError(`${where}: ${error.message}`, error.schema, { cause: error });
   }
   if (error instanceof JSONDecodeError || error instanceof TypeError || error instanceof RangeError) {
-    return new RangeError(`${where}: ${error.message}`, { cause: error });
+    return new YianRangeError(`${where}: ${error.message}`, { cause: error });
   }
   return error;
 }
@@ -3018,7 +3019,7 @@ export const RUN_RECORD_TYPES: readonly RunRecordClass[] = Object.freeze(RECORD_
  */
 function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
   const codec = CODEC_BY_KIND.get(kind);
-  if (codec === undefined) throw new RangeError(`unknown run-record kind: ${reprText(kind)}`);
+  if (codec === undefined) throw new YianRangeError(`unknown run-record kind: ${reprText(kind)}`);
   return codec.decode(payload, `${kind} payload`);
 }
 
@@ -3029,7 +3030,7 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
  * @throws RangeError when it has missing or extra fields.
  */
 function wireObject(value: unknown, label: string, fields?: readonly string[]): JsonObject {
-  if (!isRecord(value)) throw new TypeError(`${label} must be an object`);
+  if (!isRecord(value)) throw new YianTypeError(`${label} must be an object`);
   if (fields !== undefined) requireFields(value, fields, label);
   return value as JsonObject;
 }
@@ -3040,7 +3041,7 @@ function wireObject(value: unknown, label: string, fields?: readonly string[]): 
  * @throws TypeError otherwise.
  */
 function wireArray(value: unknown, label: string): JsonValue[] {
-  if (!isList(value)) throw new TypeError(`${label} must be an array`);
+  if (!isList(value)) throw new YianTypeError(`${label} must be an array`);
   return value as JsonValue[];
 }
 
@@ -3051,7 +3052,7 @@ function wireArray(value: unknown, label: string): JsonValue[] {
  */
 function wireTextArray(value: unknown, label: string): string[] {
   if (!isList(value) || !value.every((item) => typeof item === "string")) {
-    throw new TypeError(`${label} must be an array of strings`);
+    throw new YianTypeError(`${label} must be an array of strings`);
   }
   return value as string[];
 }
@@ -3071,7 +3072,7 @@ function wireItems<T>(value: unknown, label: string, decode: (item: unknown, lab
  * @throws TypeError otherwise.
  */
 function wireBool(value: unknown, label: string): boolean {
-  if (typeof value !== "boolean") throw new TypeError(`${label} must be a boolean`);
+  if (typeof value !== "boolean") throw new YianTypeError(`${label} must be a boolean`);
   return value;
 }
 
@@ -3081,7 +3082,7 @@ function wireBool(value: unknown, label: string): boolean {
  * @throws TypeError otherwise.
  */
 function wireNullableText(value: unknown, label: string): string | null {
-  if (value !== null && typeof value !== "string") throw new TypeError(`${label} must be a string or null`);
+  if (value !== null && typeof value !== "string") throw new YianTypeError(`${label} must be a string or null`);
   return value;
 }
 
@@ -3101,9 +3102,9 @@ function wireNullableInt(value: unknown, label: string): number | null {
  * @throws RangeError when it is beyond ±(2^53 - 1).
  */
 function wireInt(value: unknown, label: string): number {
-  if (typeof value !== "bigint") throw new TypeError(`${label} must be an integer`);
+  if (typeof value !== "bigint") throw new YianTypeError(`${label} must be an integer`);
   const number = Number(value);
-  if (!Number.isSafeInteger(number)) throw new RangeError(`${label} must be a safe integer`);
+  if (!Number.isSafeInteger(number)) throw new YianRangeError(`${label} must be a safe integer`);
   return number;
 }
 
@@ -3163,8 +3164,8 @@ function waitEntryFromPayload(value: unknown, label: string): WaitEntry {
  * @throws RangeError when it isn't a non-empty string or holds a lone surrogate.
  */
 function validatedRunId(runId: unknown): string {
-  if (typeof runId !== "string" || !runId) throw new RangeError("run log run_id must be a non-empty string");
-  if (!runId.isWellFormed()) throw new RangeError("Unicode surrogate is not valid canonical JSON");
+  if (typeof runId !== "string" || !runId) throw new YianRangeError("run log run_id must be a non-empty string");
+  if (!runId.isWellFormed()) throw new YianRangeError("Unicode surrogate is not valid canonical JSON");
   return runId;
 }
 
@@ -3180,7 +3181,7 @@ function validatedRunId(runId: unknown): string {
 function decodeCompletePrefix(data: Uint8Array, path: string): RecordEnvelope[] {
   if (data.length === 0) return [];
   // Callers pass bytes up to the last newline; the loop below relies on it.
-  if (data[data.length - 1] !== 0x0a) throw new RangeError(`run log ${path} is not newline terminated`);
+  if (data[data.length - 1] !== 0x0a) throw new YianRangeError(`run log ${path} is not newline terminated`);
   const records: RecordEnvelope[] = [];
   let runId: string | null = null;
   for (let start = 0, sequence = 0; start < data.length; sequence++) {

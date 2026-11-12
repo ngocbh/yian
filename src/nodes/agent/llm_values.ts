@@ -31,6 +31,7 @@ import {
 } from "../../llm_clients/connection.ts";
 import { requireConcreteSelection, resolveAgentConfig, validateLayer } from "../../llm_clients/layers.ts";
 import { locatedBlockProblems, PROVIDER_BLOCKS, ValidationError } from "../../llm_clients/provider_blocks.ts";
+import { YianRangeError } from "../../typesys/errors.ts";
 import {
   isRecord,
   typeName,
@@ -404,7 +405,7 @@ export function refusedResolvedField(
 }
 
 /** A layer resolved from values, refused at one of its fields. */
-export class LayerFieldError extends RangeError {
+export class LayerFieldError extends YianRangeError {
   override name = "LayerFieldError";
   /**
    * The field at fault; empty for the layer as a whole. A provider block's problem names the

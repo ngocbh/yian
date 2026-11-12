@@ -11,8 +11,8 @@ import { isAlias, isMap, isNode, isSeq, type Node, type YAMLSeq } from "yaml";
 
 import { parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { SourceSyntaxError } from "../../src/compose/source/common.ts";
-import { SourceDocument } from "../../src/compose/source/document.ts";
-import { parseYamlLiteral, readPlainScalar } from "../../src/compose/source/literals.ts";
+import { parseYamlLiteral, SourceDocument } from "../../src/compose/source/document.ts";
+import { readPlainScalar } from "../../src/compose/source/literals.ts";
 import { composeFlowDocument, FlowLoaderError } from "../../src/compose/source/scalars.ts";
 import { BUILTIN, install } from "../../src/defaults.ts";
 import { isRecord } from "../../src/typesys/index.ts";

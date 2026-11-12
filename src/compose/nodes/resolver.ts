@@ -64,6 +64,8 @@ export interface ResolvedChild {
   readonly compiled: CompiledFlow;
   /** The child's canonical parameters (its START params). */
   readonly input: readonly Parameter[];
+  /** The child's `description:`, which a flow tool shows the model; `null` or absent for none. */
+  readonly description?: string | null;
 }
 
 /**

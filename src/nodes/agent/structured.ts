@@ -381,6 +381,31 @@ export function typeToSchema(typ: Type): JsonObject | null {
 }
 
 /**
+ * Return the JSON Schema of a tool's arguments: a closed object with one property per argument, in
+ * order, required as `required` says. An argument's schema is its type's, as a structured reply's
+ * field is, records inside closed; one left out of `required` is simply optional, so it doesn't
+ * accept null unless its type does.
+ *
+ * @throws RangeError when a type holds a kind with no structured mapping (`file`, `None`) or a
+ *   scalar with malformed bounds.
+ */
+export function argumentsSchema(
+  args: readonly { readonly name: string; readonly type: Type; readonly required: boolean }[],
+): JsonObject {
+  const defs: Defs = [];
+  const properties: JsonObject = {};
+  const required: string[] = [];
+  for (const { name, type, required: needed } of args) {
+    setField(properties, name, titled(schemaFor(type, defs, name, true), name, type));
+    if (needed) required.push(name);
+  }
+  const schema: JsonObject = { additionalProperties: false, properties, type: "object" };
+  if (required.length > 0) schema.required = required;
+  if (defs.length > 0) schema.$defs = definitions(defs);
+  return sortKeys(schema);
+}
+
+/**
  * Return a copy of `schema` with its keys in code-unit order at every level but a `properties`
  * map, which keeps its order. Entries are written with `setField`, so a `__proto__` name stays
  * data.

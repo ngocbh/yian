@@ -117,6 +117,7 @@ const KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
     "variables",
     "skills",
     "steerRender",
+    "flowTools",
   ],
   [NodeKind.CODE]: ["code"],
   [NodeKind.TOOL]: ["toolRef", "retries", "answerSchema"],
@@ -758,6 +759,15 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
       const grants = (tools as readonly ToolGrant[]).map(authoredGrant);
       manifest.tools = canonicalSequence(grants, ctx, `${path}.tools`);
       manifest.own_llm_config = llmLayerManifest(agent.ownLlmConfig, ctx, `${path}.ownLlmConfig`);
+      // Left out when empty so flows granting no flow keep their identity. The parameters follow
+      // from the child's inputs.
+      if (agent.flowTools.length > 0) {
+        manifest.flow_tools = agent.flowTools.map((tool, index) => ({
+          name: tool.name,
+          description: tool.description,
+          child: flowManifestOf(tool.child, ctx, `${path}.flowTools[${index}].child`, topologyOnly),
+        }));
+      }
       break;
     }
     case NodeKind.CODE:

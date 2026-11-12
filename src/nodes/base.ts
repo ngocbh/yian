@@ -986,6 +986,28 @@ export abstract class Node {
   }
 
   /**
+   * Return the path segment each static child's nodes sit under, index for index with
+   * `originChildren()`: `null` when they sit right under this node (`fetch/parse` for CALL, MAP
+   * and LOOP), a name when the node has several (an AGENT's flow tools: `helper/summarize/line`).
+   */
+  originChildSegments(): readonly (string | null)[] {
+    return this.originChildren().map(() => null);
+  }
+
+  /**
+   * Hold `children` in place of the static child flows, index for index with `originChildren()`.
+   * Only a copy that gets private children calls it: a graph copy, an LLM cascade callsite.
+   *
+   * @throws RangeError when the count differs from `originChildren()`'s.
+   */
+  setOriginChildren(children: readonly unknown[]): void {
+    const count = this.originChildren().length;
+    if (children.length !== count) {
+      throw new YianRangeError(`node ${reprText(this.id)} has ${count} static children, not ${children.length}`);
+    }
+  }
+
+  /**
    * Return the authored operation origin for one node-body error. The base returns the output
    * contract's origin at the error's path for a `HostOutputError` and the node's `origin` (`null`
    * for a source-free node) otherwise; a kind with finer source-neutral mapping overrides this and

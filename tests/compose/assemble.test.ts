@@ -701,6 +701,7 @@ function fakeScope(catalogBuilder = new SourceCatalogBuilder()): CallableScope &
     memoryTypes: NO_MEMORY_TYPES,
     resolved,
     has: () => true,
+    section: () => "defs",
     resolve(flowId: string): ComposedFlow {
       resolved.push(flowId);
       return new ComposedFlow(new CompiledFlow(new Map(), []));

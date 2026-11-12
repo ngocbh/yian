@@ -203,8 +203,8 @@ matches, so it is a load error: under `log_hold`, `when: buy` on `${decide.outpu
 ## Reuse a flow with `defs` and `call`
 
 `defs:` holds named child flows. Each entry has the same shape as a flow: `input:`, `nodes:` and
-`output:`. A `call` node runs one with arguments in `input:`; a `map` node runs one per item of
-`over:`, with the item as `${item}`:
+`output:`, and an optional `description:`. A `call` node runs one with arguments in `input:`; a
+`map` node runs one per item of `over:`, with the item as `${item}`:
 
 ```yaml title="greet_team.yaml" check=runnable
 id: greet_team

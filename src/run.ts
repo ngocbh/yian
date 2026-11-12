@@ -63,7 +63,7 @@ import {
   valueConfigSubjects,
 } from "./compile/llm_cascade.ts";
 import { flowFingerprint } from "./compile/manifest.ts";
-import { type CompiledFlow, copyGraph, type Flow } from "./compile/model.ts";
+import { type CompiledFlow, copyGraph, type Flow, nodeChildren, type StaticChild } from "./compile/model.ts";
 import { typeRelation } from "./compile/validation.ts";
 import { ComposedFlow } from "./compose/build/pipeline.ts";
 import { CLOSE_MATCH_CUTOFF } from "./compose/helpers/tags.ts";
@@ -1243,6 +1243,7 @@ async function startRun(
     runServers = await openRunServers(unopened, signal);
     const runTools = new ToolSet(tools, { context });
     const hostTypes = memoryTypeTools(flow.memoryTypes);
+    refuseFlowTools(flow.compiled);
     checkToolGrants(flow.compiled, runTools);
     checkMemoryGrantNames(flow.compiled, runTools, hostTypes);
     checkToolTypes(flow.compiled, runTools);
@@ -3253,6 +3254,21 @@ function checkMemoryGrantNames(
   }
 }
 
+/**
+ * Refuse a flow whose agents grant flows as tools, which this yian loads but doesn't run yet.
+ *
+ * @throws RangeError naming the first such node and flow.
+ */
+function refuseFlowTools(flow: CompiledFlow): void {
+  for (const [path, node] of staticNodes(flow)) {
+    const [granted] = node.originChildSegments().filter((segment) => segment !== null);
+    if (granted === undefined) continue;
+    throw new YianRangeError(
+      `${node.kind.toUpperCase()} node ${reprText(path)} grants flow ${reprText(granted)} as a tool; flows as tools don't run yet`,
+    );
+  }
+}
+
 /** Return each static node of `flow` by its path, with the input types of the flow it is declared in. */
 function nodesWithFlowInputs(flow: Flow): [string, Node, ReadonlyMap<string, Type | undefined>][] {
   const found: [string, Node, ReadonlyMap<string, Type | undefined>][] = [];
@@ -3262,7 +3278,7 @@ function nodesWithFlowInputs(flow: Flow): [string, Node, ReadonlyMap<string, Typ
     for (const [nodeId, node] of graph.nodes) {
       const nodePath = [...path, nodeId];
       found.push([nodePath.join("/"), node, inputs]);
-      for (const child of node.originChildren()) collect(child as Flow, nodePath);
+      for (const child of nodeChildren(node)) collect(child.flow, childPath(nodePath, child));
     }
   };
   collect(flow, []);
@@ -3329,7 +3345,7 @@ function checkTemplates(flow: Flow, path: readonly string[] = []): void {
       checkTemplateSource(binding, subject, reserved.has(key) ? new Map() : node.types);
     }
     node.validatePrompts({ path: nodePath });
-    for (const child of node.originChildren()) checkTemplates(child as Flow, [...path, nodeId]);
+    for (const child of nodeChildren(node)) checkTemplates(child.flow, childPath([...path, nodeId], child));
   }
 }
 
@@ -3586,8 +3602,13 @@ function collectStaticNodes(graph: Flow, path: readonly string[], found: [string
   for (const [nodeId, node] of graph.nodes) {
     const nodePath = [...path, nodeId];
     found.push([nodePath.join("/"), node]);
-    for (const child of node.originChildren()) collectStaticNodes(child as Flow, nodePath, found);
+    for (const child of nodeChildren(node)) collectStaticNodes(child.flow, childPath(nodePath, child), found);
   }
+}
+
+/** The static path of `child`'s nodes, under the node at `nodePath`: its segment after the node's, if any. */
+function childPath(nodePath: readonly string[], child: StaticChild): readonly string[] {
+  return child.segment === null ? nodePath : [...nodePath, child.segment];
 }
 
 /**

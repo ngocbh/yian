@@ -395,8 +395,13 @@ export type BindingContractReader = (
 export class BuildContext {
   /** The flow's named types, for reading declared types. */
   readonly registry: TypeRegistry;
-  /** Resolves a callable by id for call, map and loop; `null` for leaves. */
+  /** Resolves a callable by id for call, map, loop and an agent's flow tools; `null` for leaves. */
   readonly resolver: CallableResolver | null;
+  /**
+   * The section of the file declaring a name, `defs` or `uses`, which an agent may grant as a
+   * tool; `null` for neither.
+   */
+  readonly callableSection: (name: string) => "defs" | "uses" | null;
   /** The opaque file name an inline CODE body reports in its errors. */
   readonly sourceFile: string;
   /** The directory a CODE reference resolves against; `null` when not known. */
@@ -421,12 +426,13 @@ export class BuildContext {
 
   /**
    * Create a context. Only `registry` is required; the readers, `resolver` and `baseDir` default
-   * to `null`, `sourceFile` to `"<inline-code>"`, `diagnostics` to an unlocated context,
-   * `flowInputs` to none and `memoryTypes` to the built-ins only.
+   * to `null`, `callableSection` to no name, `sourceFile` to `"<inline-code>"`, `diagnostics` to an
+   * unlocated context, `flowInputs` to none and `memoryTypes` to the built-ins only.
    */
   constructor(options: {
     registry: TypeRegistry;
     resolver?: CallableResolver | null;
+    callableSection?: (name: string) => "defs" | "uses" | null;
     sourceFile?: string;
     baseDir?: string | null;
     resolveOrigin?: OriginPresenter | null;
@@ -440,6 +446,7 @@ export class BuildContext {
     const {
       registry,
       resolver = null,
+      callableSection = () => null,
       sourceFile = "<inline-code>",
       baseDir = null,
       resolveOrigin = null,
@@ -452,6 +459,7 @@ export class BuildContext {
     } = options;
     this.registry = registry;
     this.resolver = resolver;
+    this.callableSection = callableSection;
     this.sourceFile = sourceFile;
     this.baseDir = baseDir;
     this.resolveOrigin = resolveOrigin;

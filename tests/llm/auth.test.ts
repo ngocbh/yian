@@ -329,6 +329,49 @@ describe("scrub", () => {
     expect(scrub(swapped, [key])).toBe(swapped);
   });
 
+  test("replaces the base64 of a credential wrapped across a line break, as MIME and PEM bodies wrap it", () => {
+    const key = "sk-sectest-~~~~~~-05d503c7";
+    const encoded = Buffer.from(`user:${key}`).toString("base64");
+    for (const width of [4, 13, 19, 76]) {
+      for (const lineBreak of ["\n", "\r\n"]) {
+        const wrapped = encoded.match(new RegExp(`.{1,${width}}`, "g"))!.join(lineBreak);
+        const text = scrub(`Authorization: Basic\n${wrapped}\nrejected`, [key]);
+        expect(text).toContain(REDACTED);
+        expect(text).toEndWith("\nrejected");
+        // No line holds a run of the key's base64 that MIN_BASE64_FRAGMENT would match.
+        const joined = text.replace(/\r?\n/g, "");
+        for (const form of base64Forms(key)) expect(joined).not.toContain(form.text);
+      }
+    }
+  });
+
+  test("joins only a single line break inside a base64 run", () => {
+    const key = "sk-sectest-~~~~~~-05d503c7";
+    const [form] = base64Forms(key);
+    const half = Math.floor(form!.text.length / 2);
+    const [head, tail] = [form!.text.slice(0, half), form!.text.slice(half)];
+    // A blank line, a space, an indent or a lone CR between the halves is not a wrap.
+    for (const gap of ["\n\n", "\r\n\r\n", " ", "\n ", " \n", "\r", "\t"]) {
+      const text = `${head}${gap}${tail}`;
+      expect(scrub(text, [key])).toBe(text);
+    }
+    // Two lines of other text that only join into the form with their break removed elsewhere stay.
+    expect(scrub(`${head}.\n${tail}`, [key])).toBe(`${head}.\n${tail}`);
+    // Ordinary prose across lines is left alone.
+    const prose = "The request was\nrejected by the\nserver at 12:00";
+    expect(scrub(prose, [key])).toBe(prose);
+  });
+
+  test("a base64 run wrapped at every character is replaced, and many line breaks scrub in linear time", () => {
+    const key = "sk-sectest-~~~~~~-05d503c7";
+    const encoded = Buffer.from(key).toString("base64url");
+    expect(scrub([...encoded].join("\n"), [key])).toContain(REDACTED);
+    const lines = "ab\n".repeat(500_000);
+    const started = performance.now();
+    expect(scrub(lines, [key])).toBe(lines);
+    expect(performance.now() - started).toBeLessThan(2000);
+  });
+
   test("replaces overlapping matches as one, and matches next to each other one by one", () => {
     expect(scrub("aaaa1aaa1", ["aaa1"])).toBe(`a${REDACTED}${REDACTED}`);
     expect(scrub("x abcabca y", ["abca"])).toBe(`x ${REDACTED} y`);

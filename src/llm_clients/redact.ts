@@ -8,7 +8,7 @@
  */
 
 import { compareCodeUnits } from "../diagnostics.ts";
-import { REDACTED, scrub } from "../llm/auth.ts";
+import { foldCase, REDACTED, scrub } from "../llm/auth.ts";
 
 export { REDACTED } from "../llm/auth.ts";
 
@@ -27,7 +27,8 @@ function maskedPattern(extra: string): RegExp {
   // In `u` mode escaping anything but a syntax character (or `-` in a class) is a SyntaxError;
   // these are the ones a class needs.
   const visible = `[${WORD}${extra.replace(/[\\\]\[^-]/g, "\\$&")}]`;
-  return new RegExp(`(?<!${visible})${visible}*(?:${MARK.source})${visible}*`, "gu");
+  // Case-blind, as the echo may raise or lower the key's letters.
+  return new RegExp(`(?<!${visible})${visible}*(?:${MARK.source})${visible}*`, "giu");
 }
 
 /** Return the UTF-16 index of each code-point boundary in `text`, from 0 to `text.length`. */
@@ -38,28 +39,30 @@ function boundaries(text: string): number[] {
 }
 
 /**
- * Return where the longest suffix of `head` that begins `key` starts, if it has at least
- * `MIN_VISIBLE` code points; `keySize` is the key's length in code points.
+ * Return where the longest suffix of `head` that begins `folded`, a key as `foldCase` folds it,
+ * starts in any letter case, if it has at least `MIN_VISIBLE` code points; `keySize` is the key's
+ * length in code points.
  */
-function prefixStart(head: string, key: string, keySize: number): number | null {
+function prefixStart(head: string, folded: string, keySize: number): number | null {
   const bounds = boundaries(head);
   const count = bounds.length - 1;
   for (let size = Math.min(count, keySize); size >= MIN_VISIBLE; size--) {
     const start = bounds[count - size]!;
-    if (key.startsWith(head.slice(start))) return start;
+    if (folded.startsWith(foldCase(head.slice(start)))) return start;
   }
   return null;
 }
 
 /**
- * Return where the longest prefix of `tail` that ends `key` stops, if it has at least
- * `MIN_VISIBLE` code points; `keySize` is the key's length in code points.
+ * Return where the longest prefix of `tail` that ends `folded`, a key as `foldCase` folds it,
+ * stops in any letter case, if it has at least `MIN_VISIBLE` code points; `keySize` is the key's
+ * length in code points.
  */
-function suffixStop(tail: string, key: string, keySize: number): number | null {
+function suffixStop(tail: string, folded: string, keySize: number): number | null {
   const bounds = boundaries(tail);
   for (let size = Math.min(bounds.length - 1, keySize); size >= MIN_VISIBLE; size--) {
     const stop = bounds[size]!;
-    if (key.endsWith(tail.slice(0, stop))) return stop;
+    if (folded.endsWith(foldCase(tail.slice(0, stop)))) return stop;
   }
   return null;
 }
@@ -69,7 +72,8 @@ function suffixStop(tail: string, key: string, keySize: number): number | null {
  *
  * The encoded forms are `llm/auth.ts`'s `secretForms`. A masked echo is visible text around
  * `**`, `...` or `…`. It counts when at least three visible characters before the mask begin
- * the key or at least three after it end the key; the matching text and the mask are replaced,
+ * the key or at least three after it end the key, in any letter case, as the key itself is
+ * matched; the matching text and the mask are replaced,
  * and other masked text is left alone. Visible characters are letters, digits, `_`, `-`, and
  * any other character in the key, except a mask character; counts are in code points. A key
  * that contains `..` or `**` can leave fragments.
@@ -87,6 +91,7 @@ export function redactKey(text: string, key: string | null | undefined): string 
   }
   const extra = [...others].sort(compareCodeUnits).join("");
   const keySize = [...key].length;
+  const folded = foldCase(key);
 
   return text.replace(maskedPattern(extra), (token) => {
     // `matchAll` scans a copy of `MARK`, so the shared regex's `lastIndex` stays 0.
@@ -94,8 +99,8 @@ export function redactKey(text: string, key: string | null | undefined): string 
     const last = marks.at(-1)!;
     const head = token.slice(0, marks[0]!.index);
     const tail = token.slice(last.index + last[0].length);
-    const start = prefixStart(head, key, keySize);
-    const stop = suffixStop(tail, key, keySize);
+    const start = prefixStart(head, folded, keySize);
+    const stop = suffixStop(tail, folded, keySize);
     if (start === null && stop === null) return token;
     // When only the tail matches, the whole head goes too, which over-redacts (a short key
     // prefix included). When only the head matches, the tail is kept, so up to two key

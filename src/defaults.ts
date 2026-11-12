@@ -134,6 +134,14 @@ export const ENTRIES = Object.freeze([
     minimum: 1,
     maximum: 50,
   }),
+  // Each `uses:` alias and each call holds its own copy of the flow it calls, so imports and
+  // defs that call one another twice per level grow as 2^depth before any node runs.
+  entry("MAX_FLOW_NODES", {
+    default: 100_000,
+    description: "Most nodes a loaded flow may expand to, counting each call of a def or uses: flow as a copy",
+    group: "limit",
+    minimum: 1,
+  }),
   entry("MAX_TOTAL_NODES", {
     default: 10_000,
     description: "Most live nodes a run's graph may grow to",

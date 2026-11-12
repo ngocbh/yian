@@ -36,6 +36,13 @@ interface ProjectedEntry {
   readonly source: SourceCursor | null;
 }
 
+/**
+ * Each projection's child cursors, by entry, built on first read: a cursor is immutable, so one
+ * child serves every read, and a projection read key by key (a node's thousands of `input:`
+ * bindings) builds each child once instead of once per read.
+ */
+const projectedChildren = new WeakMap<SourceCursor, Map<ProjectedEntry, SourceCursor>>();
+
 /** @internal The fields a cursor is built from. */
 interface CursorFields {
   readonly document: SourceDocument | null;
@@ -823,8 +830,18 @@ export class SourceCursor {
 
   /** @internal Return a projected value's cursor, with its entry's source when it has one. */
   _projectedChild(entry: ProjectedEntry): SourceCursor {
-    const value = (this._value as ValueRecord)[entry.key]!;
-    return entry.source === null ? SourceCursor._adopt(value) : entry.source._withSnapshot(value);
+    let built = projectedChildren.get(this);
+    if (built === undefined) {
+      built = new Map();
+      projectedChildren.set(this, built);
+    }
+    let child = built.get(entry);
+    if (child === undefined) {
+      const value = (this._value as ValueRecord)[entry.key]!;
+      child = entry.source === null ? SourceCursor._adopt(value) : entry.source._withSnapshot(value);
+      built.set(entry, child);
+    }
+    return child;
   }
 
   /**

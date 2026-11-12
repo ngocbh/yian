@@ -119,6 +119,7 @@ describe("bad skill files name the file", () => {
     ["---\nname: a\ndescription: d\ndate: 2026-13-45\n---\nbody\n", "not a valid date"],
     // The literal reader's refusals, and frontmatter or a name YAML reads as a non-text value.
     ["---\n1: x\n---\nbody\n", "mapping keys must be text"],
+    ["---\nname: a\ndescription: d\nname: b\n---\nbody\n", "duplicate key 'name'"],
     ["---\na: !!binary aGk=\n---\nbody\n", "could not determine a constructor"],
     ["---\nfalse\n---\nbody\n", "frontmatter must be a mapping"],
     ["---\nname: ~\ndescription: d\n---\nbody\n", "invalid skill name null"],

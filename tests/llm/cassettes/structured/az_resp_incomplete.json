@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "az_resp_incomplete: response.incomplete for max_output_tokens with truncated text: finish length, the parse fails. azure/gpt-5-codex on openai_responses. Schema Rec (corpus:Rec), name Record. Strategy json_schema. Request: text {format: {type: \"json_schema\", name: \"Record\", schema: the strict schema of Rec, strict: true}}. Expected: plan.parse(response) throws StructuredOutputError(\"Invalid json output: {\\\"answer\\\": \\\"x\\\", \\\"score\\\": 1\").",
+  "description": "az_resp_incomplete: response.incomplete for max_output_tokens with truncated text: finish length, the parse fails. azure/gpt-5-codex on openai_responses. Schema Rec (corpus:Rec), name Record. Strategy json_schema. Request: text {format: {type: \"json_schema\", name: \"Record\", schema: the strict schema of Rec, strict: true}}. Expected: plan.parse(response) throws StructuredOutputError(\"Invalid json output: {\\\"answer\\\": \\\"x\\\", \\\"score\\\": 1; the reply was cut off at the token limit\").",
   "interactions": [
     {
       "request": {

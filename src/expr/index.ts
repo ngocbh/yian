@@ -23,7 +23,8 @@
  *
  * Knows about: `typesys` (the pool and value types, in `expressions`; `writeAsText`, in
  * `builtins` and `template`; `writeAsJson`, `Type` and `ValueKind`, in `builtins`), `defaults`
- * (the value nesting bound, in `grammar`) and `diagnostics`.
+ * (the value nesting bound, in `grammar`; the comprehension, int and indent caps, in `expressions`
+ * and `builtins`) and `diagnostics`.
  */
 
 export {

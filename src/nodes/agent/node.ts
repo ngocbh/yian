@@ -110,7 +110,7 @@ import {
   type SteerRender,
   toModelMessage,
 } from "./messages.ts";
-import { OutputInvalidError } from "./structured.ts";
+import { OutputInvalidError, OutputTruncatedError } from "./structured.ts";
 
 /** The reserved wiring key an agent's `steer_inbox:` rides; it binds to the inbox's name. */
 export const STEER_INBOX_KEY = "__steer_inbox";
@@ -1032,17 +1032,20 @@ export class AgentNode extends Node {
   }
 
   /**
-   * Classify an interrupt the output can't take, an exhausted structured reply and the agent's own
-   * model failures; defer the rest.
+   * Classify an interrupt the output can't take, an exhausted structured reply, a reply cut off at
+   * the token limit and the agent's own model failures; defer the rest.
    *
-   * An interrupted agent whose output doesn't allow null is `agent.interrupted`, and a structured
-   * reply still invalid once `retries:` are spent is `agent.output_invalid`. An error the agent's
-   * own model build or model call marked takes `modelFailureCode`'s code (`provider.auth` for
-   * refused credentials, a `provider.*` code by provider error kind, else `node.execute`).
+   * An interrupted agent whose output doesn't allow null is `agent.interrupted`, a structured
+   * reply still invalid once `retries:` are spent is `agent.output_invalid`, and a reply cut off at
+   * the token limit with no runnable call, or as the last invalid one, is `agent.output_truncated`.
+   * An error the agent's own model build or model call marked takes `modelFailureCode`'s code
+   * (`provider.auth` for refused credentials, a `provider.*` code by provider error kind, else
+   * `node.execute`).
    */
   override exceptionCode(error: unknown): FailureCode {
     if (error instanceof AgentInterruptedError) return "agent.interrupted";
     if (error instanceof OutputInvalidError) return "agent.output_invalid";
+    if (error instanceof OutputTruncatedError) return "agent.output_truncated";
     return modelFailureCode(error) ?? super.exceptionCode(error);
   }
 

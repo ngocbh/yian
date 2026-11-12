@@ -15,7 +15,8 @@ import { rejected, thrownBy } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-long-int-literals-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
-const env = hostEnv(dir);
+// `D + 1` gives a 5000-digit int, over the default YIAN_MAX_INT_DIGITS.
+const env = hostEnv(dir, { YIAN_MAX_INT_DIGITS: "5000" });
 
 const D = "1".repeat(5000);
 const ONES = BigInt(D);

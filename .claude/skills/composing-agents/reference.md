@@ -199,6 +199,8 @@ an input.
 
 `structured_output: prompt` sends an agent's `output:` schema as an instruction in the prompt,
 for a model that can't call tools; the default, `native`, uses the provider's structured output.
+`api: responses` or `api: chat` picks the API of an Azure or Chat Completions provider's calls;
+unset, the model's name picks it (a `codex` or `gpt-5-pro` model goes to Responses).
 
 ## Chat pattern
 

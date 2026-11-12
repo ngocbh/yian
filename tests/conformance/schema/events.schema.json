@@ -66,7 +66,8 @@
             "provider.refused",
             "condition.evaluate",
             "tool.timeout",
-            "agent.interrupted"
+            "agent.interrupted",
+            "agent.output_truncated"
           ]
         },
         "message": {"type": "string", "description": "Human-readable detail; it may be empty."},

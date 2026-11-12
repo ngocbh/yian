@@ -378,6 +378,102 @@ test.each([null, "https://gateway.example/v1"])(
   },
 );
 
+// --- api: Responses or Chat Completions --- //
+
+describe("llm_config.api", () => {
+  const AZURE = "https://res.openai.azure.com/";
+
+  /**
+   * Build `config` with keys for vLLM, DeepSeek and Azure, returning its route's URL and protocol;
+   * the structured target read off the config, unbuilt, names the same protocol.
+   */
+  async function routed(config: Record<string, unknown>): Promise<[string, string]> {
+    vars.set("DEEPSEEK_API_KEY", "k");
+    vars.set("AZURE_OPENAI_API_KEY", "k");
+    vars.set("OPENAI_API_VERSION", "2025-03-01-preview");
+    const model = await build(config);
+    expect(chatModelTarget(config, { env }).protocol).toBe(model.protocol.name);
+    return [model.route.url(), model.protocol.constructor.name];
+  }
+
+  test("unset, the model's name picks the API", async () => {
+    expect(await routed({ provider: "vllm", model: "gpt-5-codex" })).toEqual([
+      "http://localhost:8000/v1/responses",
+      "OpenAIResponses",
+    ]);
+    expect(await routed({ provider: "azure", model: "pro-east", base_url: AZURE })).toEqual([
+      "https://res.openai.azure.com/openai/deployments/pro-east/chat/completions?api-version=2025-03-01-preview",
+      "OpenAIChat",
+    ]);
+  });
+
+  test("set, it picks the API whatever the model's name", async () => {
+    expect(await routed({ provider: "vllm", model: "gpt-5-codex", api: "chat" })).toEqual([
+      "http://localhost:8000/v1/chat/completions",
+      "OpenAIChat",
+    ]);
+    expect(await routed({ provider: "deepseek", model: "deepseek-chat", api: "responses" })).toEqual([
+      "https://api.deepseek.com/responses",
+      "OpenAIResponses",
+    ]);
+    expect(await routed({ provider: "azure", model: "pro-east", base_url: AZURE, api: "responses" })).toEqual([
+      "https://res.openai.azure.com/openai/responses?api-version=2025-03-01-preview",
+      "OpenAIResponses",
+    ]);
+    expect(await routed({ provider: "azure", model: "my-codex", base_url: AZURE, api: "chat" })).toEqual([
+      "https://res.openai.azure.com/openai/deployments/my-codex/chat/completions?api-version=2025-03-01-preview",
+      "OpenAIChat",
+    ]);
+  });
+
+  test("a block reaches a model the name would send to Responses when api is chat", async () => {
+    const config = { provider: "vllm", model: "gpt-5-codex", api: "chat", vllm: { top_k: 5n } };
+    const model = await build(config);
+    expect(model.protocol).toBeInstanceOf(OpenAIChat);
+  });
+
+  test("is responses or chat, kept in the dump when set", () => {
+    expect(new LLMConfig({ provider: "vllm", api: "chat" }).api).toBe("chat");
+    expect(new LLMConfig({ provider: "azure", api: "responses" }).dump()).toEqual({
+      provider: "azure",
+      model: null,
+      api: "responses",
+    });
+    expect(new LLMConfig({ api: null }).api).toBeNull();
+    expect(new LLMConfig({}).dump()).toEqual({ provider: null, model: null });
+    for (const api of ["Chat", "completions", 1n]) {
+      const error = (() => {
+        try {
+          new LLMConfig({ api });
+        } catch (thrown) {
+          return thrown as ValidationError;
+        }
+        throw new Error("accepted");
+      })();
+      expect(error.issues.map(({ loc, msg }) => ({ loc, msg }))).toEqual([
+        { loc: ["api"], msg: 'Input should be "responses" or "chat"' },
+      ]);
+    }
+  });
+
+  test.each(["openai", "anthropic", "google", "ollama"])("is refused beside provider %s", (provider) => {
+    let error: ValidationError | null = null;
+    try {
+      new LLMConfig({ provider, api: "responses" });
+    } catch (thrown) {
+      error = thrown as ValidationError;
+    }
+    expect(error!.issues.map(({ loc, error }) => ({ loc, error }))).toEqual([
+      {
+        loc: ["api"],
+        error:
+          "api applies only to provider azure and the Chat Completions providers " +
+          "(xai, deepseek, qwen, qwen-cn, glm, glm-cn, minimax, minimax-cn, openrouter, vllm)",
+      },
+    ]);
+  });
+});
+
 const ROOT = join(import.meta.dirname, "..", "..");
 const BUILT = join(ROOT, "dist/src/llm_clients/index.js");
 /**

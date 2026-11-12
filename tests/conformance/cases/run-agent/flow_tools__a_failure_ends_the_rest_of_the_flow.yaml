@@ -1,0 +1,63 @@
+# Inside the flow, `sign` waits on its host call while `check` fails. The failure ends the flow:
+# its waiting node and its call go with it, so the run doesn't wait on them, and the agent reads
+# the error and answers.
+kind: run
+flow: |
+  id: helping
+  name: helping
+  llm_config: {provider: anthropic, model: claude-test}
+  defs:
+    approve:
+      description: Check an item, then ask for approval.
+      input:
+        item: !str
+      nodes:
+        sign:
+          kind: tool
+          tool_id: sign
+          input:
+            item: ${input.item}
+          output: str
+        check:
+          kind: code
+          input:
+            item: ${input.item}
+          output: str
+          code: throw new Error("not allowed")
+      output:
+        signed: ${sign.output}
+        checked: ${check.output}
+  nodes:
+    helper:
+      kind: agent
+      tools: [approve]
+      system_prompt: Help.
+      prompt: hi
+      output: str
+  output: ${helper.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    sign:
+      parameters: {type: object, properties: {item: {type: string}}}
+      pending: true
+  models:
+    helper:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: call-a, name: approve, arguments: {item: the refund}}
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: text, text: not approved}
+expect:
+  output:
+    status: succeeded
+    output: not approved
+  trace: [[run_started, null, {effective_llm_by_static_path: {helper: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, helper], [node_step, helper, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {item: the refund}, id: call-a, name: approve, type: tool_call}], role: assistant}, purpose: chat, request_sha256: c54ee8f1aed67111542ebb26c90ab50714f10bac1941ad0f4b11800a8d8f2a89, response_id: null, usage: null}}], [node_step, helper, {n: 2, step: {arguments: {item: the refund}, call_id: r1/helper/1/0, flow: true, index: 0, kind: pending, reply: 1, scope: helper/approve#0, tool: approve, tool_call_id: call-a}}], [node_expanded, helper, {prune_ids: []}], [node_waiting, helper, {call_ids: [r1/helper/1/0]}], [node_started, helper/approve#0/__start__], [pool_commit, helper/approve#0/__start__, {from: {}}], [node_succeeded, helper/approve#0/__start__, {commit: 14}], [node_started, helper/approve#0/sign], [node_step, helper/approve#0/sign, {n: 1, step: {arguments: {item: the refund}, call_id: r1/helper/approve#0/sign, kind: pending, tool: sign}}], [node_waiting, helper/approve#0/sign, {call_ids: [r1/helper/approve#0/sign]}], [node_started, helper/approve#0/check], [node_failed, helper/approve#0/check, {failure: {code: node.execute, message: 'Error: not allowed', frames: [{label: flow.yaml, range: [26, 3, 26, 9]}, {label: flow.yaml, range: [21, 15, 21, 45]}], node: helper/approve#0/check}}], [node_woken, helper], [node_step, helper, {n: 3, step: {call_id: call-a, closed: failed, is_error: true, kind: tool_result, output: 'Flow approve failed at node check (node.execute): Error: not allowed'}}], [node_step, helper, {n: 4, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: not approved, type: text}], role: assistant}, purpose: chat, request_sha256: 0f0a5a2cb31e1fa792ce56e60fd88f67cc58a3eb05db7302d63f036bdf89c30a, response_id: null, usage: null}}], [pool_commit, helper, {value: not approved}], [pool_commit, helper, {key: helper.new_messages, steps: [9, 22, 23]}], [node_succeeded, helper, {commit: 24, messages: 25}], [node_started, __end__], [pool_commit, __end__, {value: not approved}], [node_succeeded, __end__, {commit: 28}]]

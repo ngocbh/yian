@@ -123,7 +123,7 @@ Each node returns one of these outcomes:
 | An expansion (`call`, `map`, `loop`) | A `pool_commit` for each child START, then `node_expanded` | The child flow's nodes join the graph |
 | An agent's flow calls, as it waits | A `node_expanded` for each, then `node_waiting` | Each called flow's nodes join the graph; its END answers the call |
 | A wait (`take`, `sleep`, `ask`, a host call) | `node_waiting` | The node is set aside until what it waits on arrives. A `take` whose event is already there, or a `sleep` already due, stores its value at once instead |
-| A failure | `node_failed` | The run fails |
+| A failure | `node_failed` | The run fails, unless the node is inside an agent's [flow call](/agents/#flows-as-tools): that call fails, the flow's other nodes end, and the run goes on |
 
 The engine never asks what kind a node is. It reacts only to the outcome, so every node kind runs
 the same way.
@@ -168,12 +168,12 @@ The log is append-only:
 Every line has the same envelope. This is the record that stores `greet`'s value:
 
 ```json
-{"at":"2026-10-27T08:43:00.746Z","kind":"pool_commit","payload":{"key":"greet","kind":"str","node_id":"greet","value":"hi Ada"},"run_id":"281f84a4cdb54f26a59aaa23c0f1b593","schema":31,"seq":9}
+{"at":"2026-10-27T08:43:00.746Z","kind":"pool_commit","payload":{"key":"greet","kind":"str","node_id":"greet","value":"hi Ada"},"run_id":"281f84a4cdb54f26a59aaa23c0f1b593","schema":32,"seq":9}
 ```
 
 | Field | Meaning |
 |---|---|
-| `schema` | The log format version. This yian reads and writes only schema 31 |
+| `schema` | The log format version. This yian reads and writes only schema 32 |
 | `run_id` | The run's id; the same on every line |
 | `seq` | The record's place in the log, from 0 with no gaps |
 | `at` | When the record was written (UTC). Use `seq` for order, since clocks can move |
@@ -283,6 +283,7 @@ A resume does this:
 | `waiting` | Every unfinished node is waiting | Wakes the nodes whose answer or deadline has arrived; if none has and `--num-workers` is unchanged, writes nothing and returns `waiting` |
 | `stopped` | The host stopped the run (`run_stopped`) | Runs the stopped nodes again |
 | `crashed` | The process ended without a stop | Runs the unfinished nodes again, each counted as a crashed attempt |
+| `unstarted` | The process ended before the run's inputs were recorded | Refuses; delete the log and start the run again |
 | `running` | Another process holds the lock | Refuses |
 
 ### What comes from the log, and what you give again

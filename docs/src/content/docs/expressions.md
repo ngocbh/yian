@@ -272,8 +272,9 @@ The default after `:-` is an expression, so quote text: `${input.when :- "today"
 | `days_between(a, b)` | The whole days from `a` to `b`, negative when `b` is earlier |
 
 Arguments may be given by the names in the table: `${join(items, sep=", ")}`. A null argument
-fails the call, so give a default: `${upper(name :- "")}`. A `null` for an argument whose default
-is `null` is the same as leaving it out. Calling a builtin with arguments it doesn't take, a name
+fails the call, so give a default: `${upper(name :- "")}`; passing a node a `case` may skip
+without one is a load error. A `null` for an argument whose default is `null` is the same as
+leaving it out. Calling a builtin with arguments it doesn't take, a name
 that isn't a builtin, or an argument whose type the builtin never takes (`upper` of an int) is a
 load error. A flow isn't a function: to run a child flow from a value, use the `call(...)` form
 (see [Control flow](/control-flow/)).
@@ -345,5 +346,6 @@ names its variable:
 | The comprehensions in one expression bind at most 1,000,000 items, counting every `for` clause: `[1 for a in xs for b in xs]` over 1,000 items binds 1,001,000 | `YIAN_MAX_COMPREHENSION_ITEMS` |
 | An int an operator or a builtin gives has at most 4,300 digits, Python's limit for writing an int as text. Reading or comparing a longer int is fine | `YIAN_MAX_INT_DIGITS` |
 | `render_as_json` takes an indent of at most 10 | `YIAN_MAX_JSON_INDENT` |
+| A text an operator or a builtin gives has at most 10,000,000 characters. `replace`, `join`, `str`, `render_as_json` and `+` count the text before they build it. Reading, comparing or slicing a longer text is fine | `YIAN_MAX_TEXT_CHARS` |
 
 See [Reference](/reference/) for every limit.

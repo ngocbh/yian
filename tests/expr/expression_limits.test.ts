@@ -1,8 +1,9 @@
 /**
  * The caps that bound one expression's work: the items its comprehensions bind
  * (`YIAN_MAX_COMPREHENSION_ITEMS`), the digits of an int an operator or a builtin gives
- * (`YIAN_MAX_INT_DIGITS`), and the indent `render_as_json` takes (`YIAN_MAX_JSON_INDENT`). Going
- * over one is an `ExpressionError` that names it, raised before the work it would take.
+ * (`YIAN_MAX_INT_DIGITS`), the indent `render_as_json` takes (`YIAN_MAX_JSON_INDENT`), and the
+ * characters of a text an operator or a builtin gives (`YIAN_MAX_TEXT_CHARS`). Going over one is an
+ * `ExpressionError` that names it, raised before the work it would take.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -173,5 +174,94 @@ describe("YIAN_MAX_JSON_INDENT", () => {
 
   test("a raised cap takes a wider indent", () => {
     expect(evaluate("render_as_json([1], 12)", {}, { maxJsonIndent: 12 })).toBe(`[\n${" ".repeat(12)}1\n]`);
+  });
+});
+
+describe("YIAN_MAX_TEXT_CHARS", () => {
+  const over = (cap: number) => `gives a text over the limit of ${cap} characters (YIAN_MAX_TEXT_CHARS)`;
+  const TEN = { maxTextChars: 10 };
+
+  test("text + may give the cap's characters, and not one more", () => {
+    expect(evaluate('"abcde" + "fghij"', {}, TEN)).toBe("abcdefghij");
+    expect(messageOf('"abcde" + "fghij" + "k"', {}, TEN)).toBe(`"abcdefghij" + "k" ${over(10)}`);
+    // Characters are code points: ten emoji fit, though they take twenty UTF-16 units.
+    expect(evaluate(`"${"😀".repeat(6)}" + "${"😀".repeat(4)}"`, {}, TEN)).toBe("😀".repeat(10));
+  });
+
+  test("text that doubles through comprehension variables stops at the cap", () => {
+    // Each level binds one item and doubles its text: 2^24 copies of "ab" at the top.
+    let expr = "x";
+    for (let i = 0; i < 24; i++) expr = `[y${i} + y${i} for y${i} in [${expr}]][0]`;
+    const started = performance.now();
+    expect(messageOf(expr, { x: "ab" })).toEndWith(over(10_000_000));
+    expect(performance.now() - started).toBeLessThan(5_000);
+  });
+
+  test("replace is sized from its operands before it builds its text", () => {
+    expect(evaluate('replace("aaaa", "a", "bb")', {}, { maxTextChars: 8 })).toBe("bbbbbbbb");
+    expect(messageOf('replace("aaaa", "a", "bb")', {}, { maxTextChars: 7 })).toBe(
+      `expression function 'replace' failed: replace() ${over(7)}`,
+    );
+    // An empty `old` puts `new` before each character and at the end.
+    expect(evaluate('replace("ab", "", "xy")', {}, { maxTextChars: 8 })).toBe("xyaxybxy");
+    expect(messageOf('replace("ab", "", "xy")', {}, { maxTextChars: 7 })).toEndWith(over(7));
+    expect(evaluate('replace("😀😀", "😀", "é")', {}, { maxTextChars: 2 })).toBe("éé");
+    const s = "a".repeat(700);
+    const started = performance.now();
+    expect(messageOf('replace(replace(s, "", s), "", s)', { s })).toBe(
+      `expression function 'replace' failed: replace() ${over(10_000_000)}`,
+    );
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  test("join is sized from its items and sep before it builds its text", () => {
+    expect(evaluate('join(["ab", "cd"], "--")', {}, { maxTextChars: 6 })).toBe("ab--cd");
+    expect(messageOf('join(["ab", "cd"], "--")', {}, { maxTextChars: 5 })).toBe(
+      `expression function 'join' failed: join() ${over(5)}`,
+    );
+    // A list item is written as compact JSON.
+    expect(evaluate('join([[1, 2]], "")', {}, { maxTextChars: 5 })).toBe("[1,2]");
+    expect(messageOf('join([[1, 2]], "")', {}, { maxTextChars: 4 })).toEndWith(over(4));
+    const xs = Array.from({ length: 1000 }, () => "x");
+    expect(messageOf("join(xs, sep)", { xs, sep: "-".repeat(20_000) })).toEndWith(over(10_000_000));
+  });
+
+  test("str and render_as_json are sized before they write, so nested escaping can't double past the cap", () => {
+    expect(evaluate("render_as_json([1, 2])", {}, { maxTextChars: 12 })).toBe("[\n  1,\n  2\n]");
+    expect(messageOf("render_as_json([1, 2])", {}, { maxTextChars: 11 })).toBe(
+      `expression function 'render_as_json' failed: render_as_json() ${over(11)}`,
+    );
+    // `a\` is written `["a\\"]`: seven characters.
+    expect(evaluate("str([s])", { s: "a\\" }, { maxTextChars: 7 })).toBe('["a\\\\"]');
+    expect(messageOf("str([s])", { s: "a\\" }, { maxTextChars: 6 })).toBe(
+      `expression function 'str' failed: str() ${over(6)}`,
+    );
+    // Each level writes the one below as a quoted text, doubling its backslashes.
+    let expr = "s";
+    for (let i = 0; i < 40; i++) expr = `render_as_json([${expr}], 0)`;
+    const started = performance.now();
+    expect(messageOf(expr, { s: "\\" })).toEndWith(over(10_000_000));
+    expect(performance.now() - started).toBeLessThan(5_000);
+  });
+
+  test("any builtin's text result is held to the cap", () => {
+    // Upper-casing ß gives SS, so the text grows.
+    expect(messageOf(`upper("${"ß".repeat(6)}")`, {}, TEN)).toBe(`expression function 'upper' failed: upper() ${over(10)}`);
+    const saved = TEMPLATE_FNS.get("long_text");
+    registerTemplateFn("long_text", { params: [], call: () => "x".repeat(11) });
+    try {
+      expect(messageOf("long_text()", {}, TEN)).toBe(`expression function 'long_text' failed: long_text() ${over(10)}`);
+    } finally {
+      if (saved === undefined) TEMPLATE_FNS.delete("long_text");
+      else TEMPLATE_FNS.set("long_text", saved);
+    }
+  });
+
+  test("reading, comparing or measuring a longer text is fine", () => {
+    const long = { x: "y".repeat(20) };
+    expect(evaluate("x", long, TEN)).toBe("y".repeat(20));
+    expect(evaluate('x == "y"', long, TEN)).toBe(false);
+    expect(evaluate("len(x)", long, TEN)).toBe(20n);
+    expect(evaluate("x[0:5]", long, TEN)).toBe("yyyyy");
   });
 });

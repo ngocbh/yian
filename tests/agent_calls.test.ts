@@ -927,3 +927,45 @@ test("a granted Optional memory left out rebuilds with none of its tools and an 
   expect(requestOf(view).messages[0]).toEqual({ role: "user", parts: [{ type: "text", text: "<memory></memory> write" }] });
   expect(requestOf(view)).toMatchObject(sentView(model.requests[0]!));
 });
+
+const FLOW_TOOL = `
+id: helping
+name: helping
+llm_config: {provider: anthropic, model: claude-test}
+defs:
+  shout:
+    description: Shout the text back.
+    input:
+      text: !str
+    nodes:
+      loud: !str \${input.text}!
+    output: \${loud.output}
+nodes:
+  helper:
+    kind: agent
+    tools: [shout, lookup]
+    system_prompt: Help.
+    prompt: hi
+    output: str
+output: \${helper.output}
+`;
+
+test("an agent with a flow tool: its request lists the flow, and the flow's answer is a tool result", async () => {
+  const model = new ScriptedModel([callReply(["shout", { text: "hey" }, "call-a"]), textReply("done")], {
+    provider: "anthropic",
+    model: "claude-test",
+  });
+  const { log, result } = await run(FLOW_TOOL, model, {}, { tools: { lookup: topicTool("lookup") } });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+
+  const first = await agentCall(log, { nodeId: "helper", n: 1 }, { env: NO_ENV });
+  expect(first.digestMismatch).toBe(false);
+  expect(requestOf(first)).toMatchObject(sentView(model.requests[0]!));
+  expect(requestOf(first).tools.map((tool) => tool.name)).toEqual(["shout", "lookup"]);
+  expect(first.toolResults).toEqual([
+    { callId: "call-a", name: "shout", arguments: { text: "hey" }, output: "hey!", isError: false, closed: null, startedAt: null },
+  ]);
+  const second = await agentCall(log, { nodeId: "helper", n: 4 }, { env: NO_ENV });
+  expect(second.digestMismatch).toBe(false);
+  expect(requestOf(second)).toMatchObject(sentView(model.requests[1]!));
+});

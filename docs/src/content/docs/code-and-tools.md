@@ -57,7 +57,7 @@ $ yian run word_count.yaml --input text="the quick brown fox"
 
 Move a body into a file once it grows, or when several flows share it. A `code:` value of the
 form `./path.ts:name` (or `../`, and `.js` or `.mjs`) calls the named export of that file. The
-path resolves against the flow file's directory.
+path resolves against the flow file's real folder, symlinks followed.
 
 ```yaml check=fragment
 count:

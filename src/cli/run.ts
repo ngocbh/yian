@@ -31,7 +31,6 @@ import { isDeepStrictEqual } from "node:util";
 import { END_ID, START_ID } from "../compile/model.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
-import { loadFlow } from "../compose/loader.ts";
 import { defaultSkillRoots, loadSkillDir, loadSkills } from "../compose/skills.ts";
 import { current, type Env } from "../defaults.ts";
 import { compareCodeUnits, Diagnostic, reprText, shellQuote } from "../diagnostics.ts";
@@ -117,6 +116,7 @@ import {
   defaultRunsDir,
   ensureProviderKeys,
   freshLog,
+  loadFlowAt,
   loadFlowFile,
   NotUtf8Error,
   preflightKeys,
@@ -1515,8 +1515,7 @@ async function checkFlow(path: string, root: string | undefined, env: Env): Prom
   let flow: ComposedFlow;
   try {
     if (root === undefined) {
-      const text = readFlowText(path);
-      flow = await loadFlow(text, { searchPaths: [dirname(path)], sourceLabel: basename(path), env });
+      flow = await loadFlowAt(path, readFlowText(path), env);
     } else {
       flow = await loadConfined(root, path, new Set(), env);
     }

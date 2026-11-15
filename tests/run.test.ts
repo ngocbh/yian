@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 
 import { flowFingerprint } from "../src/compile/manifest.ts";
 import { END_ID, START_ID } from "../src/compile/model.ts";
-import type { ComposedFlow } from "../src/compose/build/pipeline.ts";
+import { ComposedFlow } from "../src/compose/build/pipeline.ts";
 import { loadFlow } from "../src/compose/loader.ts";
 import { current, DefaultsError, DefaultsMismatchError, type Env } from "../src/defaults.ts";
 import { NodeSucceeded, type RunEvent, RunStarted } from "../src/events.ts";
@@ -615,6 +615,18 @@ async function runStartError(flow: ComposedFlow, options: RunFlowOptions = {}, i
   expect(existsSync(path)).toBe(false);
   return error as Error;
 }
+
+test("runFlow refuses a library before anything runs, naming its file", async () => {
+  const text = "id: billing\nname: billing\ndefs:\n  quote: {kind: code, code: return 1, output: !int}\n";
+  const message = "billing.yaml is a library (defs: and no nodes:); import it with uses: and call a def";
+  const library = await loadFlow(text, { sourceLabel: "billing.yaml" });
+  const error = await runStartError(library);
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.message).toBe(message);
+  // One built in code, with no source, is named by its id.
+  const built = new ComposedFlow(library.compiled, { library: library.library });
+  expect((await runStartError(built)).message).toBe(message.replace("billing.yaml", "flow 'billing'"));
+});
 
 test("an unknown tool id with a close match fails at run start", async () => {
   const flow = await load(toolFlow("      qty: 5\n      sym: X", "place_ordr"));

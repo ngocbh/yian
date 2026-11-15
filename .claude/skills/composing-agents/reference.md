@@ -46,7 +46,8 @@ files](https://yian.readthedocs.io/flows/#library-files)): defs for other flows 
 `asserts`, `env` or `llm_config` (set them on each def), and `yian run` refuses it. A flow calls
 a def with `call: {billing: quote}` on a `call`, `map` or `loop` node, or with
 `call(billing.quote, qty=3)` in a binding ([Call a library's
-def](https://yian.readthedocs.io/control-flow/#call-a-librarys-def)).
+def](https://yian.readthedocs.io/control-flow/#call-a-librarys-def)); an agent grants its defs
+with `tools: [billing]` or `{billing: [quote]}`.
 
 | Flow `output:` | Returns |
 |---|---|
@@ -68,7 +69,8 @@ as written), `system_prompt` (replaces the default instruction), `variables` (ta
 prompts read, such as `tone: !str plain`, or `examples: !include(list(str)) examples.json`),
 `output`, `retries`, `tools` (tool, group, flow and memory input names, or `{group: [tool, ...]}`;
 a group's tools show as `<group>_<tool>`; a `defs:` entry or `uses:` alias is a flow tool, which
-needs a `description:`), `skills` (names or `all`), `steer_inbox`, `llm_config`, `env`
+needs a `description:`; a library alias grants its defs, `billing` or `{billing: [quote]}`, shown
+as `billing_<def>`), `skills` (names or `all`), `steer_inbox`, `llm_config`, `env`
 (`max_tool_iterations`).
 
 **code** ([Code and tools](https://yian.readthedocs.io/code-and-tools/)): `code` (an inline body

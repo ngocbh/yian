@@ -234,7 +234,8 @@ output:
   alias. The flow needs a `description:` and inputs a model can send (no Inbox, memory or `file`
   input); its inputs are the tool's arguments, and the model reads its output as JSON (text as
   itself), or its failure as the call's error. It runs inside the run, its nodes under
-  `<agent>/<flow>#<k>`. See
+  `<agent>/<flow>#<k>`. A library alias grants its defs: `billing` every def, `{billing: [quote]}`
+  the listed ones, each shown as `billing_<def>` and needing a `description:`. See
   [Flows as tools](https://yian.readthedocs.io/agents/#flows-as-tools).
 - **An agent a host may interrupt needs an `Optional(...)` output.** An interrupted agent's
   output is null; with `str` or any other type it fails with `agent.interrupted`. This applies

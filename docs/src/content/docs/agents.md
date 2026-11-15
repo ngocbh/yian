@@ -296,7 +296,7 @@ server. Each entry grants one of these:
 | `ask_user` | Built in. The model asks the person running the flow a question, with optional answer choices. `yian run` asks in the terminal; a host must pass an `ask` handler in its tools |
 | MCP servers | `yian run` reads them from config files (below). Each server is a tool group named after it |
 | Host tools | A program passes them to the run (below) |
-| Flows | A `defs:` entry or `uses:` alias of the agent's file, granted by its name (below) |
+| Flows | A `defs:` entry or `uses:` alias of the agent's file, granted by its name, or a library's defs (below) |
 
 - The calls in one reply run one at a time, except that consecutive calls to tools marked safe to
   run together start together: a host tool's `isConcurrencySafe`, or an MCP server's
@@ -474,11 +474,28 @@ The flow said HI!
 - A host interrupt of the agent's `steer_inbox` ends its running flow calls where they are, open
   questions included, and the model reads them as interrupted, as for a pending `ask_user`.
 - A granted flow needs a `description:`, and inputs a model can send: an `Inbox`, memory or `file`
-  input is a load error. So is the group form `{shout: [x]}`, a flow named like a built-in tool or
-  a memory input, and a flow that grants itself, directly or through another flow. A run whose
-  host tools or tool groups have a granted flow's name is refused before it starts.
+  input is a load error. So is the group form `{shout: [x]}`, a flow or library named like a
+  built-in tool or a memory input, and a flow that grants itself, directly or through another
+  flow.
+- A run is refused before it starts when a granted flow or library has the name of one of its host
+  tools or tool groups, or when a granted flow and a granted host tool would show one name. This
+  holds for every agent of the flow, even one that never runs.
 - A host never sees a flow call: `pendingCalls` and a run's `waits` leave it out, and `complete`
   refuses it (`not_host_call`).
+
+A [library](/flows/#library-files) alias grants its defs, each shown as `<alias>_<def>`:
+
+| Entry | Grants | The model sees |
+|---|---|---|
+| `billing` | Every def of the library | `billing_quote`, `billing_refund`, ... |
+| `{billing: [quote]}` | The listed defs | `billing_quote` |
+
+- Each def runs as a granted flow does, under its shown name: `helper/billing_quote#0/...`.
+- A def granted twice, as in `[billing, {billing: [quote]}]`, is offered once.
+- Each granted def needs a `description:`. When a whole grant includes a def without one, the load
+  error names the def.
+- A bare `quote` never names a library's def. A flow's own `defs:` are private, so
+  `{clean: [trim]}` on a flow alias is a load error.
 
 ## Skills
 

@@ -17,13 +17,17 @@
  * thread retires the worker. While a job runs the port doesn't keep the thread alive, so a body
  * awaiting a promise nothing can resolve ends the thread instead of hanging it.
  *
+ * With `workerData.yianToolModule` set instead, the thread is a tool module's: it runs
+ * `serveToolModule` (`tools/module_worker`), which this module imports statically so a bundle of
+ * this entry holds it.
+ *
  * Hosts that bundle yian import this module as `@ngocbh/yian/code-worker` for a bundle entry, so
- * every effect must stay behind the `yianCodeWorker` check.
+ * every effect must stay behind the `yianCodeWorker` and `yianToolModule` checks.
  *
  * Values cross by structured clone, which drops a `FileRef`'s class, so a `FileRef` crosses as a
  * `Map` of its fields (no yian value holds a `Map`).
  *
- * Knows about: typesys/values, diagnostics, defaults and `node:*`.
+ * Knows about: typesys/values, diagnostics, defaults, tools/module_worker and `node:*`.
  */
 
 import { resolve } from "node:path";
@@ -33,6 +37,7 @@ import { parentPort, workerData } from "node:worker_threads";
 
 import { current, type Defaults, install } from "../../defaults.ts";
 import { reprText } from "../../diagnostics.ts";
+import { serveToolModule, type ToolModuleData } from "../../tools/module_worker.ts";
 import { YianTypeError } from "../../typesys/errors.ts";
 import {
   FileRef,
@@ -302,7 +307,10 @@ async function runJob(job: CodeJob): Promise<CodeReply> {
 }
 
 const port = parentPort;
-if ((workerData as { yianCodeWorker?: boolean } | null)?.yianCodeWorker === true && port !== null) {
+const data = workerData as { yianCodeWorker?: boolean; yianToolModule?: ToolModuleData } | null;
+if (data?.yianToolModule !== undefined && port !== null) {
+  serveToolModule(port, data.yianToolModule);
+} else if (data?.yianCodeWorker === true && port !== null) {
   /** The id of the job running now, else `null`. */
   let running: number | null = null;
   // Building or posting a reply can throw (a getter on a thrown error, a value the clone

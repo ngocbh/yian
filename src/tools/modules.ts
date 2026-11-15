@@ -143,19 +143,31 @@ export function moduleScope(
       throw new YianRangeError(`tool module ${reprText(alias)} (${ref}) wasn't started for this run`);
     }
     const { key, thread, listing } = started;
-    const identity = (listed: ListedTool) => JSON.stringify({ module: path, export: listed.name });
     const { exportName } = splitModuleRef(ref);
     if (exportName === null) {
       const shown = (listed: ListedTool) => visibleToolName(alias, listed.name);
       groups.set(alias, listing.tools.map((listed) => standIn(thread, listed, listed.name, shown(listed), host)));
-      for (const listed of listing.tools) identities.set(JSON.stringify([alias, listed.name]), identity(listed));
+      for (const listed of listing.tools) bindExport(identities, [alias, listed.name], path, listed.name);
     } else {
       const listed = listedExport(key, listing, exportName);
       single.push(standIn(thread, listed, alias, alias, host));
-      identities.set(JSON.stringify([null, alias]), identity(listed));
+      bindExport(identities, [null, alias], path, listed.name);
     }
   }
   return { groups, tools: single, identities };
+}
+
+/**
+ * Give the node scope entry `entry`, its group (`null` for a top-level tool) and name, the identity
+ * of export `exportName` of the module at `path`, so every entry of one export binds it once.
+ */
+function bindExport(
+  identities: Map<string, string>,
+  entry: readonly [string | null, string],
+  path: string,
+  exportName: string,
+): void {
+  identities.set(JSON.stringify(entry), JSON.stringify({ module: path, export: exportName }));
 }
 
 /**
@@ -219,17 +231,16 @@ export function recordedModuleScope<T extends { readonly name: string }>(
   for (const { alias, ref, path } of refs) {
     const tools = recorded(path);
     if (tools === null) continue;
-    const identity = (name: string) => JSON.stringify({ module: path, export: name });
     const { exportName } = splitModuleRef(ref);
     if (exportName === null) {
       groups.set(alias, [...tools]);
-      for (const { name } of tools) identities.set(JSON.stringify([alias, name]), identity(name));
+      for (const { name } of tools) bindExport(identities, [alias, name], path, name);
       continue;
     }
     const tool = tools.find(({ name }) => name === exportName);
     if (tool === undefined) continue;
     single.push({ ...tool, name: alias });
-    identities.set(JSON.stringify([null, alias]), identity(exportName));
+    bindExport(identities, [null, alias], path, exportName);
   }
   return { groups, tools: single, identities };
 }

@@ -48,6 +48,7 @@ import { pending, type ToolContext } from "./context.ts";
 import { isPermanentToolError, isToolCheckError, TOOL_ERROR, ToolCheckError, ToolModuleError } from "./errors.ts";
 import type { StandardResult } from "./function_tools.ts";
 import type {
+  ListedTool,
   ToolModuleConsole,
   ToolModuleData,
   ToolModuleListing,
@@ -429,10 +430,22 @@ function listingOf(label: string, reply: ToolModuleReply): ToolModuleListing {
   throw replyError(label, reply);
 }
 
+/** The `tool()` option each listed field comes from, as messages name it. */
+const LISTED_OPTIONS: Readonly<Record<keyof ListedTool, string>> = {
+  name: "name",
+  description: "description",
+  parametersJsonSchema: "parameters",
+  hasParametersValidator: "parameters",
+  outputJsonSchema: "output",
+  hasOutputValidator: "output",
+  resumable: "resumable",
+  hasIsConcurrencySafe: "isConcurrencySafe",
+};
+
 /**
  * Return how `fresh` lists the module's exports otherwise than `first` did: a tool, in name order,
- * that is gone, is new or holds another value in a field, or other exports that changed; `null`
- * when they agree in every field.
+ * that is gone, is new or holds another value in a field (named by its option), or other exports
+ * that changed; `null` when they agree in every field.
  */
 function listingChange(first: ToolModuleListing, fresh: ToolModuleListing): string | null {
   const was = new Map(first.tools.map((tool) => [tool.name, tool]));
@@ -446,7 +459,7 @@ function listingChange(first: ToolModuleListing, fresh: ToolModuleListing): stri
     const field = (Object.keys(before) as (keyof typeof before)[]).find(
       (key) => canonicalJson(before[key]) !== canonicalJson(after[key]),
     );
-    if (field !== undefined) return `${head} ${field} changed`;
+    if (field !== undefined) return `${head} changed its \`${LISTED_OPTIONS[field]}\``;
   }
   const others = (listing: ToolModuleListing) => canonicalJson({ refused: listing.refused, others: listing.others });
   return others(first) === others(fresh) ? null : "the exports that aren't tools changed";

@@ -575,7 +575,9 @@ const restarting = (description = "d") =>
 test.each([
   ["its import throws", 'throw new Error("boom");\n', "crm.ts failed to import: Error: boom"],
   ["it outlasts the start timeout", "await new Promise(() => {});\n", "crm.ts didn't import within 1 s (YIAN_TOOL_MODULE_START_TIMEOUT_SECONDS)"],
-  ["a tool's description changed", restarting("changed"), "export 'ok' description changed since the module was first imported"],
+  ["a tool's description changed", restarting("changed"), "export 'ok' changed its `description` since the module was first imported"],
+  ["a tool's parameters changed", restarting().replace('type: "object"', 'type: "object", required: ["id"]'), "export 'exit' changed its `parameters` since the module was first imported"],
+  ["a tool gained isConcurrencySafe", restarting().replace('execute: () => "ok"', 'isConcurrencySafe: () => true, execute: () => "ok"'), "export 'ok' changed its `isConcurrencySafe` since the module was first imported"],
   ["a tool is new", restarting() + calling("extra", "execute: () => 1"), "export 'extra' is a new tool since the module was first imported"],
   ["a tool is gone", calling("exit", "execute: () => process.exit(2)"), "export 'ok' is no longer a tool since the module was first imported"],
 ])("a fresh thread fails the request for good, and every later one, when %s", async (_name, source, why) => {

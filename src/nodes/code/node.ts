@@ -66,6 +66,7 @@ import { SHARE_ENV, Worker } from "node:worker_threads";
 import { current } from "../../defaults.ts";
 import { OriginRef, reprText } from "../../diagnostics.ts";
 import { leavesRoot, stripTypes } from "../../platform.ts";
+import { packFiles, type ThrownError, unpackFiles } from "../../typesys/crossing.ts";
 import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import {
   fromHost,
@@ -84,12 +85,9 @@ import {
   type CodeJob,
   type CodeMessage,
   type CodeReply,
-  packFiles,
   splitReference,
   STRICT_PROLOGUE,
-  type ThrownError,
   undeclaredInput,
-  unpackFiles,
 } from "./worker.ts";
 
 // A reference is a relative path to a TS or JS file, one colon and an ASCII identifier export

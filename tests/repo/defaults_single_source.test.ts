@@ -121,7 +121,7 @@ const ALLOWED: Record<string, string> = {
   "runtime/log.ts: HEADER_DEPTH": "containers a long line's header scan tracks, fixed by the paths it reads",
   "runtime/log.ts: HEADER_TOKEN_BYTES": "bytes a long line's header scan keeps of a key or number, internal",
   "llm/auth.ts: MIN_BASE64_FRAGMENT": "shortest base64 fragment the scrub and the cassette check match, internal",
-  "nodes/code/worker.ts: COPY_DEPTH": "depth a CODE result is copied back from its worker, above any value limit",
+  "typesys/crossing.ts: COPY_DEPTH": "depth a value is copied back from a worker thread, above any value limit",
   "compose/source/scalars.ts: PARSER_DEPTH_STOP":
     "open nodes past which the YAML parser stops reading, above any YAML nesting limit",
   // Math, language and host constants.

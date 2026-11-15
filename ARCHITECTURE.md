@@ -38,7 +38,7 @@ flowchart LR
 | `nodes/` | One folder per node kind (`agent`, `call`, `case`, `code`, `end`, `loop`, `map`, `start`, `tool`) and the node base contract (`base.ts`) |
 | `runtime/` | The engine, run state and its reducer, the record vocabulary and codec (`log.ts`), waits, the run index, and a run's sessions on its memories (`memories.ts`) |
 | `expr/` | The `${...}` expression engine, templates and built-in functions |
-| `typesys/` | Typed values, the type language, the variable pool, the JSON codec, and the plain shapes a memory value records (`memory.ts`) |
+| `typesys/` | Typed values, the type language, the variable pool, the JSON codec, the plain shapes a memory value records (`memory.ts`), and how values and throws cross a worker thread (`crossing.ts`) |
 | `diagnostics.ts` | Failures, diagnostics and the closed list of failure codes (`FAILURE_CODES`) |
 | `events.ts` | The observer events a run emits |
 | `defaults.ts` | Every default and limit, each overridable by a `YIAN_*` variable; an internal wait no one needs to tune, such as the 1 s the CLI waits for the run index's lock, stays in its module |

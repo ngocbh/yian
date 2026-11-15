@@ -254,7 +254,7 @@ compact JSON with its keys sorted:
 
 | Kind | What it records |
 |---|---|
-| `run_started` | The run begins: its flow files and code root, settings, model choices, granted tools and skills, and the `YIAN_*` values that differ from the built-in ones |
+| `run_started` | The run begins: its flow files and code root, settings, model choices, granted tools and skills, the tools agents reach in tool modules (`tool_modules`, by file), and the `YIAN_*` values that differ from the built-in ones |
 | `run_resumed` | A resume begins: the unfinished nodes it retries, and its worker count |
 | `run_stopped` | The host stopped the run while nodes were running. The run can be resumed |
 | `run_waiting` | Every unfinished node waits, and the run holds no worker |

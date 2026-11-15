@@ -1,0 +1,25 @@
+# A group alias reaches every export of its file, so one export the thread refuses, here a tool
+# named otherwise than its export, refuses the run before anything is recorded.
+kind: run
+flow: |
+  id: crm
+  name: crm
+  uses:
+    crm: ./crm.ts
+  nodes:
+    found:
+      kind: tool
+      tool_id: {crm: lookup}
+      input: {id: "7"}
+  output: ${found.output}
+files:
+  crm.ts: |
+    const tool = (name) => ({ name, description: "Find.", parameters: { type: "object" }, execute: () => 1 });
+    export const lookup = tool("lookup");
+    export const find = tool("lookup");
+run:
+  run_id: r1
+  num_workers: 0
+expect:
+  raises: {class: RangeError, message: "crm.ts export 'find' holds a tool named 'lookup'; rename one"}
+  trace: []

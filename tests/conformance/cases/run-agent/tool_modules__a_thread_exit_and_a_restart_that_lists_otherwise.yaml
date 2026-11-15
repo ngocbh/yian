@@ -1,0 +1,80 @@
+# The model reads `tool.module_exited` when `crm_exit`'s call exits the module's thread. Its next
+# call, `crm_ok`, starts a fresh thread, whose import finds the `exited` file `exit` wrote, so it
+# describes `ok` otherwise: that call fails the AGENT with `tool.module_restart`. Pooled
+# (`num_workers: 1`), so the crash sweep doesn't cut it: a resume starts its own thread and has no
+# exited one to take over from.
+kind: run
+flow: |
+  id: crm
+  name: crm
+  llm_config: {provider: openai, model: gpt-5.5}
+  uses:
+    crm: ./crm.ts
+  nodes:
+    clerk:
+      kind: agent
+      tools: [crm]
+      system_prompt: Help.
+      prompt: Go.
+      output: !str
+  output: ${clerk.output}
+files:
+  crm.ts: |
+    import { existsSync, writeFileSync } from "node:fs";
+    const exited = new URL("./exited", import.meta.url);
+    const none = { type: "object" };
+    export const exit = {
+      name: "exit",
+      description: "Exit the thread.",
+      parameters: none,
+      execute: () => {
+        writeFileSync(exited, "");
+        process.exit(3);
+      },
+    };
+    export const ok = {
+      name: "ok",
+      description: existsSync(exited) ? "Changed." : "Answer ok.",
+      parameters: none,
+      execute: () => "ok",
+    };
+run:
+  run_id: r1
+  num_workers: 1
+host:
+  models:
+    clerk:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts: [{type: tool_call, id: c1, name: crm_exit, arguments: {}}]
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts: [{type: tool_call, id: c2, name: crm_ok, arguments: {}}]
+        request:
+          messages:
+          - {format: yian.message.v1, role: system, parts: [{type: text, text: Help.}]}
+          - {format: yian.message.v1, role: user, parts: [{type: text, text: Go.}]}
+          - format: yian.message.v1
+            role: assistant
+            parts: [{type: tool_call, id: c1, name: crm_exit, arguments: {}}]
+          - format: yian.message.v1
+            role: tool
+            parts:
+            - {type: tool_result, call_id: c1, name: crm_exit, is_error: true, content: "crm.ts's thread exited (code 3); the call's outcome is unknown"}
+          tools:
+          - {name: crm_exit, description: Exit the thread., parameters: {type: object}}
+          - {name: crm_ok, description: Answer ok., parameters: {type: object}}
+expect:
+  output:
+    status: failed
+    failure:
+      code: tool.module_restart
+      message: "crm.ts's thread exited (code 3); a fresh thread can't take over: export 'ok' changed its `description` since the module was first imported"
+      frames:
+      - label: flow.yaml
+        range: [7, 3, 7, 8]
+      node: clerk
+  trace: [[run_started, null, {effective_llm_by_static_path: {clerk: {model: gpt-5.5, provider: openai, _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}}}, num_workers: 1}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__], [node_started, clerk], [node_step, clerk, {n: 1, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{arguments: {}, id: c1, name: crm_exit, type: tool_call}], role: assistant}, purpose: chat, request_sha256: 773563caead8f22d5fcc3adb6478d484753a4df60d27608224351aa23248a1ef, response_id: null, usage: null}}], [node_step, clerk, {n: 2, step: {call_id: c1, is_error: true, kind: tool_result, output: crm.ts's thread exited (code 3); the call's outcome is unknown}}], [node_step, clerk, {n: 3, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{arguments: {}, id: c2, name: crm_ok, type: tool_call}], role: assistant}, purpose: chat, request_sha256: 77edef73712ef4d838eec9be3a47e6643c6d6ee55df2f052e58ec48bcd4a3d0a, response_id: null, usage: null}}], [node_failed, clerk, {failure: {code: tool.module_restart, message: "crm.ts's thread exited (code 3); a fresh thread can't take over: export 'ok' changed its `description` since the module was first imported", frames: [{label: flow.yaml, range: [7, 3, 7, 8]}], node: clerk}}]]

@@ -37,8 +37,9 @@ folder, so copy those too.
 
 Top-level keys ([Flows and nodes](https://yian.readthedocs.io/flows/#the-file-shape)): `id` and
 `name` (required), `description`, `version`, `typedefs`, `input`, `nodes` (required), `output`,
-`asserts`, `defs`, `uses`, `system` (`paths:` for `uses:`), `llm_config`, `env`. Any other key is
-a load error, except `x-` keys, which yian ignores.
+`asserts`, `defs`, `uses` (flows, libraries and `./file.ts` tool modules), `system` (`paths:` for
+`uses:`), `llm_config`, `env`. Any other key is a load error, except `x-` keys, which yian
+ignores.
 
 A file with `defs:` and no `nodes:` is a library ([Library
 files](https://yian.readthedocs.io/flows/#library-files)): defs for other flows to import with
@@ -70,14 +71,16 @@ prompts read, such as `tone: !str plain`, or `examples: !include(list(str)) exam
 `output`, `retries`, `tools` (tool, group, flow and memory input names, or `{group: [tool, ...]}`;
 a group's tools show as `<group>_<tool>`; a `defs:` entry or `uses:` alias is a flow tool, which
 needs a `description:`; a library alias grants its defs, `billing` or `{billing: [quote]}`, shown
-as `billing_<def>`), `skills` (names or `all`), `steer_inbox`, `llm_config`, `env`
+as `billing_<def>`; a tool module alias grants its tools, `crm` or `{crm: [lookup]}`, shown as
+`crm_<tool>`), `skills` (names or `all`), `steer_inbox`, `llm_config`, `env`
 (`max_tool_iterations`).
 
 **code** ([Code and tools](https://yian.readthedocs.io/code-and-tools/)): `code` (an inline body
 or `./file.ts:fn`), `input`, `output`. The body reads `inputs.<name>` and returns a value.
 
 **tool** ([Code and tools](https://yian.readthedocs.io/code-and-tools/#tool-nodes)): `tool_id`
-(a tool name or `{group: tool}`), `input` (the tool's own argument names), `output`, `retries`
+(a tool name or `{group: tool}`; a [tool module](https://yian.readthedocs.io/code-and-tools/#tool-modules)'s
+tool as `{crm: lookup}`, or `quote` for a one-export alias), `input` (the tool's own argument names), `output`, `retries`
 (default 0). The run fails before it starts when the tool is missing or an argument can never
 fit.
 

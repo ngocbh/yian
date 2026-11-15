@@ -1,0 +1,36 @@
+# A tool module's tool that returns the pending marker, `pending()`, fails its call: this run's
+# host doesn't pass `completesCalls: true`, so nothing would answer it.
+kind: run
+flow: |
+  id: crm
+  name: crm
+  uses:
+    crm: ./crm.ts
+  nodes:
+    later:
+      kind: tool
+      tool_id: {crm: later}
+      retries: 1
+  output: ${later.output}
+files:
+  crm.ts: |
+    export const later = {
+      name: "later",
+      description: "Answer later.",
+      parameters: { type: "object" },
+      execute: () => ({ [Symbol.for("yian.pending")]: true }),
+    };
+run:
+  run_id: r1
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      message: tool 'crm_later' returned pending(), but this run's host doesn't complete calls
+      frames:
+      - label: flow.yaml
+        range: [6, 3, 6, 8]
+      node: later
+  trace: [[run_started, null, {num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, later], [node_failed, later, {failure: {code: node.execute, message: "tool 'crm_later' returned pending(), but this run's host doesn't complete calls", frames: [{label: flow.yaml, range: [6, 3, 6, 8]}], node: later}}]]

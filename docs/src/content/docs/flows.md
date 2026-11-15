@@ -56,7 +56,7 @@ A flow file is a mapping of these top-level keys:
 | `asserts` | no | Conditions on inputs and results (see [Asserts](#asserts)) |
 | `typedefs` | no | Named types (see [Types](/types/)) |
 | `defs` | no | Child flows defined in this file (see [Control flow](/control-flow/)) |
-| `uses` | no | Child flows from other files, by alias (see [Import a flow](/control-flow/#import-a-flow-from-another-file-with-uses)) |
+| `uses` | no | Child flows, libraries and [tool modules](/code-and-tools/#tool-modules) from other files, by alias (see [Import a flow](/control-flow/#import-a-flow-from-another-file-with-uses)) |
 | `system` | no | `paths:`, a list of folders, relative to this file, where `uses:` also looks after this file's folder |
 | `llm_config` | no | Model defaults for every agent (see [Models and providers](/models/)) |
 | `env` | no | Settings for every node in this flow, such as an agent's `max_tool_iterations`; a child flow doesn't inherit them (see [Agents](/agents/)) |
@@ -65,7 +65,7 @@ Any other key is a load error, so a typo such as `nodez:` fails loudly. Keys tha
 `x-` are the exception: yian ignores them, so use them for notes or to hold YAML anchors.
 Run `yian check flow.yaml` to see a flow's load errors without running it.
 
-The paths a flow file names (`uses:` refs, `system.paths`, CODE files and `!include` files)
+The paths a flow file names (`uses:` refs, `system.paths`, CODE files, tool modules and `!include` files)
 resolve from the file's real folder, symlinks followed: a flow run through a symlink, or from a
 symlinked folder, uses the files beside its target, not beside the link.
 

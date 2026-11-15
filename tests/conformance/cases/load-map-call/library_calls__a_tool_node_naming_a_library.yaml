@@ -1,0 +1,34 @@
+# `tool_id:` naming a library is refused: a call node runs its defs, and the error shows the
+# `call:` to write.
+kind: load
+flow: |
+  id: orders
+  name: orders
+  uses:
+    billing: lib/billing
+  nodes:
+    price:
+      kind: tool
+      tool_id: {billing: quote}
+      input:
+        qty: 2
+  output: ${price.output}
+files:
+  lib/billing.yaml: |
+    id: billing
+    name: billing
+    defs:
+      quote:
+        input:
+          qty: !int
+        kind: code
+        code: return inputs.qty * 3
+        output: !int
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''price'': `billing` is a library; call its def with `kind: call`: `call: {billing: quote}`'
+      frames:
+      - label: flow.yaml
+        range: [8, 14, 8, 30]

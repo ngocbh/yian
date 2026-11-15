@@ -1,0 +1,75 @@
+# An AGENT grants the tool module alias `crm`, a group the model sees as `crm_<export>` in export
+# order, and the one-export alias `quote`, the tool `quote`. Each call runs on its module's thread.
+# `run_started` records both modules' tools under `tool_modules` (the golden log), every tool of
+# the group's file. The tools are resumable, so under `--crash-sweep` a resume sends a call a cut
+# cut off again.
+kind: run
+flow: |
+  id: crm
+  name: crm
+  llm_config: {provider: openai, model: gpt-5.5}
+  uses:
+    crm: ./crm.ts
+    quote: ./tools.ts:quote
+  nodes:
+    clerk:
+      kind: agent
+      tools: [crm, quote]
+      system_prompt: Help.
+      prompt: Price 3 for customer 7.
+      output: !str
+  output: ${clerk.output}
+files:
+  crm.ts: |
+    const id = { type: "object", properties: { id: { type: "string" } }, required: ["id"] };
+    export const lookup = {
+      name: "lookup",
+      description: "Find a customer by id.",
+      parameters: id,
+      resumable: true,
+      execute: (args) => ({ id: args.id, name: "Ada" }),
+    };
+    export const create = {
+      name: "create",
+      description: "Create a customer.",
+      parameters: id,
+      resumable: true,
+      execute: () => null,
+    };
+  tools.ts: |
+    export const quote = {
+      name: "quote",
+      description: "Price an order.",
+      parameters: { type: "object", properties: { qty: { type: "integer" } }, required: ["qty"] },
+      resumable: true,
+      execute: (args) => args.qty * 2,
+    };
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  models:
+    clerk:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: c1, name: crm_lookup, arguments: {id: "7"}}
+          - {type: tool_call, id: c2, name: quote, arguments: {qty: 3}}
+        request:
+          messages:
+          - {format: yian.message.v1, role: system, parts: [{type: text, text: Help.}]}
+          - {format: yian.message.v1, role: user, parts: [{type: text, text: Price 3 for customer 7.}]}
+          tools:
+          - name: crm_create
+            description: Create a customer.
+            parameters: &id {type: object, properties: {id: {type: string}}, required: [id]}
+          - {name: crm_lookup, description: Find a customer by id., parameters: *id}
+          - name: quote
+            description: Price an order.
+            parameters: {type: object, properties: {qty: {type: integer}}, required: [qty]}
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: Ada owes 6.}]}
+expect:
+  output: {status: succeeded, output: Ada owes 6.}
+  trace: [[run_started, null, {effective_llm_by_static_path: {clerk: {model: gpt-5.5, provider: openai, _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}}}, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, clerk], [node_step, clerk, {n: 1, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{arguments: {id: '7'}, id: c1, name: crm_lookup, type: tool_call}, {arguments: {qty: 3}, id: c2, name: quote, type: tool_call}], role: assistant}, purpose: chat, request_sha256: 7e82933a0b668b4a5d3b586c0e81a4729a227f38d89ef9952f559007c5b7b036, response_id: null, usage: null}}], [node_step, clerk, {n: 2, step: {call_id: c1, is_error: false, kind: tool_result, output: '{"id":"7","name":"Ada"}'}}], [node_step, clerk, {n: 3, step: {call_id: c2, is_error: false, kind: tool_result, output: '6'}}], [node_step, clerk, {n: 4, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{text: Ada owes 6., type: text}], role: assistant}, purpose: chat, request_sha256: 2da2bcd244e1c38a068688acf73c71fb2e0f5fb344de6a4f8fa0a6eac83d6a57, response_id: null, usage: null}}], [pool_commit, clerk, {value: Ada owes 6.}], [pool_commit, clerk, {key: clerk.new_messages, steps: [9, 10, 11, 12]}], [node_succeeded, clerk, {commit: 13, messages: 14}], [node_started, __end__], [pool_commit, __end__, {value: Ada owes 6.}], [node_succeeded, __end__, {commit: 17}]]

@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
-import { loadFlow, withUnfinishedToolModules } from "../src/compose/loader.ts";
+import { loadFlow } from "../src/compose/loader.ts";
 import { ToolResultPart } from "../src/llm/messages.ts";
 import { ScriptedModel } from "../src/llm/testing.ts";
 import { advance, agentCall, agentCalls, complete, pendingCalls, runFlow, type RunFlowOptions } from "../src/run.ts";
@@ -73,11 +73,9 @@ function app(uses: Record<string, string>, nodes: string[], head = ""): string {
   return `id: app\nname: app\nllm_config: {provider: openai, model: test-model}\n${head}uses:\n${refs}nodes:\n${body}`;
 }
 
-/** Load `text` from `dir` and run it, tool modules allowed. */
-function run(text: string, options: RunFlowOptions = {}, inputs: Record<string, unknown> = {}) {
-  return withUnfinishedToolModules(async () =>
-    runFlow(await loadFlow(text, { searchPaths: [dir] }), inputs, { env: hostEnv(dir), ...options }),
-  );
+/** Load `text` from `dir` and run it. */
+async function run(text: string, options: RunFlowOptions = {}, inputs: Record<string, unknown> = {}) {
+  return runFlow(await loadFlow(text, { searchPaths: [dir] }), inputs, { env: hostEnv(dir), ...options });
 }
 
 const hold = tool({ name: "hold", description: "Hold.", parameters: { type: "object" }, execute: () => pending() });
@@ -97,7 +95,7 @@ test("each segment starts one thread per module its nodes reach and ends them as
   expect([await ended("crm"), await ended("quote")]).toEqual([true, true]);
 
   await complete(log, "r1/h", { output: "go" });
-  const done = await withUnfinishedToolModules(() => advance({ log, models: serving(model), env: hostEnv(dir), tools: { hold } }));
+  const done = await advance({ log, models: serving(model), env: hostEnv(dir), tools: { hold } });
   expect(done.status).toBe("succeeded");
   expect(imports()).toEqual(["crm", "crm", "quote", "quote"]);
   // `find` and `crm`'s `lookup` are one export, bound once, at its first grant.
@@ -247,9 +245,7 @@ test.each([
   expect(waiting.status).toBe("waiting");
   const [call] = pendingCalls(log);
   await complete(log, call!.callId, { output: "held" });
-  const advanced = await withUnfinishedToolModules(() =>
-    advance({ log, models: serving(new ScriptedModel([textReply("done")])), env: hostEnv(dir) }),
-  );
+  const advanced = await advance({ log, models: serving(new ScriptedModel([textReply("done")])), env: hostEnv(dir) });
   expect([advanced.status, advanced.output]).toEqual(["succeeded", node.startsWith("t:") ? "held" : "done"]);
 
   const failed = await run(text, { models: serving(model()) });
@@ -333,7 +329,7 @@ test("a fresh thread that lists its module otherwise fails the agent with tool.m
 
   const failed = await run(text, { models: serving(model) });
 
-  const why = "a fresh thread can't take over: export 'ok' description changed since the module was first imported";
+  const why = "a fresh thread can't take over: export 'ok' changed its `description` since the module was first imported";
   expect([failed.failure?.code, failed.failure?.message]).toEqual([
     "tool.module_restart",
     expect.stringContaining(`crm.ts's thread exited (code 6); ${why}`),
@@ -458,7 +454,7 @@ test.each([
   writeFileSync(join(dir, "crm.ts"), source);
   const before = readFileSync(log, "utf8");
 
-  const refused = withUnfinishedToolModules(() => advance({ log, env: hostEnv(dir), tools: { hold } }));
+  const refused = advance({ log, env: hostEnv(dir), tools: { hold } });
 
   await expect(refused).rejects.toThrow(new RangeError(`resume refused: tool_modules.crm.ts.${message}`));
   expect(readFileSync(log, "utf8")).toBe(before);
@@ -476,7 +472,7 @@ test("the agent-call view rebuilds the request of an agent granting module tools
   writeFileSync(join(dir, "crm.ts"), tools(["create", "lookup"]).replace('"lookup."', '"Find."'));
 
   const view = (call: { nodeId: string; n: number }) => agentCall(log, call, { env: hostEnv(dir) });
-  const views = await withUnfinishedToolModules(() => Promise.all(agentCalls(log).map(view)));
+  const views = await Promise.all(agentCalls(log).map(view));
 
   const specs = (tools: readonly { name: string; description: string }[] | undefined) =>
     tools?.map(({ name, description }) => [name, description]);

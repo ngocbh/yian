@@ -1,7 +1,7 @@
 /**
  * Tool module refs in `uses:`: classified before a scheme is read, held to the path rules a CODE
- * reference follows, refused outside `withUnfinishedToolModules`, and baked onto the AGENT and
- * TOOL nodes that grant or call them. A load never imports a module.
+ * reference follows, and baked onto the AGENT and TOOL nodes that grant or call them. A load
+ * never imports a module, from a run's record either.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -11,7 +11,7 @@ import { join } from "node:path";
 
 import { flowFingerprint } from "../../src/compile/manifest.ts";
 import type { CompiledFlow } from "../../src/compile/model.ts";
-import { loadFlow, loadFlowSource, withUnfinishedToolModules } from "../../src/compose/loader.ts";
+import { loadFlow, loadFlowSource } from "../../src/compose/loader.ts";
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import type { ToolNode } from "../../src/nodes/tool/node.ts";
@@ -43,24 +43,23 @@ function app(uses: Record<string, string>, nodes: string[], head = ""): string {
   return `id: app\nname: app\n${head}uses:\n${refs.join("")}nodes:\n${nodes.map((node) => `  ${node}\n`).join("")}`;
 }
 
-/** Load `text` from `tmp`, tool modules allowed. */
+/** Load `text` from `tmp`. */
 function load(text: string, options: Parameters<typeof loadFlow>[1] = {}) {
-  return withUnfinishedToolModules(() => loadFlow(text, { searchPaths: [tmp], ...options }));
+  return loadFlow(text, { searchPaths: [tmp], ...options });
 }
 
-/** Return the message loading `text` from `tmp` fails with, tool modules allowed. */
+/** Return the message loading `text` from `tmp` fails with. */
 async function refusal(text: string, options: Parameters<typeof loadFlow>[1] = {}): Promise<string> {
   return (await loadErrorAsync(load(text, options))).message;
 }
 
-test("a module ref is refused until tool modules are finished, from a run's record too", async () => {
-  const text = app({ crm: "./crm.ts" }, [AGENT]);
-  const error = await loadErrorAsync(loadFlow(text, { searchPaths: [tmp] }));
+test("a module ref loads without importing the module, from a run's record too", async () => {
+  const flow = await load(app({ crm: "./crm.ts" }, [AGENT]));
+  const again = await loadFlowSource(flow.source!);
 
-  expect(error.message).toBe("uses: alias 'crm': tool modules aren't supported yet");
-  expect(error.diagnostic.frames.at(-1)!.range!.startLine).toBe(4);
-  const flow = await load(text);
-  expect((await loadErrorAsync(loadFlowSource(flow.source!))).message).toBe(error.message);
+  expect((again.compiled.nodes.get("a") as AgentNode).moduleTools.map(({ alias, path }) => [alias, path])).toEqual([
+    ["crm", join(tmp, "crm.ts")],
+  ]);
 });
 
 test.each([
@@ -71,8 +70,8 @@ test.each([
   ["./tools.ts:quote@2", "a module has no version; write `./tools.ts:quote`"],
   ["./tools.ts:bad-name", "`bad-name` isn't an export name; write `./tools.ts:<name>`, or `./tools.ts` for every tool"],
   ["./tools.ts:default", "a default export is never a tool; export it by name"],
-])("uses: %s is a module ref, refused before the gate: %s", async (ref, problem) => {
-  const error = await loadErrorAsync(loadFlow(app({ crm: ref }, [AGENT]), { searchPaths: [tmp] }));
+])("uses: %s is a module ref, refused: %s", async (ref, problem) => {
+  const error = await loadErrorAsync(load(app({ crm: ref }, [AGENT])));
   expect(error.message).toBe(`uses: alias 'crm': ${problem}`);
 });
 

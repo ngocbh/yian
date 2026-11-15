@@ -203,9 +203,10 @@ The `run_started` record holds everything the run needs to be rebuilt later:
 |---|---|
 | The flow's fingerprint, the text of every flow file it loaded, and its code root | API keys and header values |
 | Each agent's resolved model settings | The host's own objects (a tool's `ctx.context`) |
-| The worker count | |
+| The worker count | A tool module's code |
 | The `YIAN_*` settings that differ from the defaults | |
 | The descriptions of the tools and skills agents use | |
+| The tools agents reach in tool modules (`tool_modules`, by file) | |
 | The yian version | |
 
 A [memory](/memory/) input's value, in START's inputs, holds the memory's identity, settings,
@@ -298,6 +299,7 @@ You give these again, since the log doesn't hold them:
 |---|---|
 | API keys, in the environment | Keys are never recorded |
 | The same MCP servers and skills | Agents' tools and skills must match the recorded descriptions, and tools their recorded `resumable` flags |
+| The same tool modules, at the same paths | A resume imports each module again; agents' module tools must match the recorded ones, and a module granted whole must export the same tools |
 | The same `YIAN_*` settings | A resume refuses settings that differ from the recorded ones |
 | The same memories: the same `--memory` flags, or the same instances to a host's `advance` | A resume opens each again, and refuses one that is missing or differs from the recorded one. Agents keep the recall the run started with |
 

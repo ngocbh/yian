@@ -124,3 +124,12 @@ test("a def named under a compiler-private callable is refused, as a call of one
       "inline child flows",
   );
 });
+
+test.each([
+  ["billing", "quote"],
+  ["{billing: requote}", "requote"],
+])("tool_id: %s naming a library points to a call node", async (toolId, def) => {
+  expect(await loadMessage(`  price: {kind: tool, tool_id: ${toolId}}\n`)).toBe(
+    `node 'price': \`billing\` is a library; call its def with \`kind: call\`: \`call: {billing: ${def}}\``,
+  );
+});

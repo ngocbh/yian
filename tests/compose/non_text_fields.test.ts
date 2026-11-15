@@ -330,9 +330,7 @@ describe("parseFile", () => {
   });
 
   test("a missing nodes section names it", () => {
-    expect(fileError("id: f\nname: f\noutput: x\n").message).toBe(
-      "missing required top-level key 'nodes'",
-    );
+    expect(fileError("id: f\nname: f\noutput: x\n").message).toBe("a flow needs nodes:, or defs: to be a library");
   });
 
   test.each([

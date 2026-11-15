@@ -220,7 +220,7 @@ A `--json` command that fails without its own result prints an error document wh
 | `expr.nullable_field_read` | The flow doesn't load because it reads a field of a value that may be null. The message names the fix |
 | `compose.outside_root` | `yian check --root`: a flow or a `uses:` import is outside the root |
 | `defaults.invalid` | A `YIAN_*` variable holds a value it doesn't take (any command) |
-| `run.setup` | The run couldn't start or resume: skills or MCP setup, a missing or changed provider key, the run log (missing, damaged, locked), or an input that fails its check. Also a log or index `yian status` can't read |
+| `run.setup` | The run couldn't start or resume: a library file, skills or MCP setup, a missing or changed provider key, the run log (missing, damaged, locked), or an input that fails its check. Also a log or index `yian status` can't read |
 | `run.cancelled` | You cancelled the run at a prompt, input ended there, or the host cancelled the run |
 | `auth.failed` | `yian auth` failed: options that don't go together, an unusable file, a login that isn't saved, or a failed sign-in or model check |
 | `models.failed` | `yian models` couldn't list the models. `error.status` is the HTTP status, or `null` |

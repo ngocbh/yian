@@ -40,6 +40,11 @@ Top-level keys ([Flows and nodes](https://yian.readthedocs.io/flows/#the-file-sh
 `asserts`, `defs`, `uses`, `system` (`paths:` for `uses:`), `llm_config`, `env`. Any other key is
 a load error, except `x-` keys, which yian ignores.
 
+A file with `defs:` and no `nodes:` is a library ([Library
+files](https://yian.readthedocs.io/flows/#library-files)): defs for other flows to import with
+`uses:`, each seeing its `typedefs:`, `uses:` and sibling defs. It can't set `input`, `output`,
+`asserts`, `env` or `llm_config` (set them on each def), and `yian run` refuses it.
+
 | Flow `output:` | Returns |
 |---|---|
 | `${total.output}` | That value |

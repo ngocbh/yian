@@ -138,6 +138,7 @@ function replaceFlow(
     importDepth?: number;
     source?: FlowSource | null;
     memoryTypes?: readonly MemoryClass[];
+    library?: ReadonlyMap<string, ComposedFlow> | null;
   },
 ): ComposedFlow {
   return new ComposedFlow(changes.compiled ?? flow.compiled, {
@@ -148,7 +149,34 @@ function replaceFlow(
     importDepth: changes.importDepth === undefined ? flow.importDepth : changes.importDepth,
     source: changes.source === undefined ? flow.source : changes.source,
     memoryTypes: changes.memoryTypes ?? flow.memoryTypes,
+    library: changes.library === undefined ? flow.library : changes.library,
   });
+}
+
+/** Return the compiled graphs `flow` holds: its own and, for a library, each def's. */
+function graphsOf(flow: ComposedFlow): CompiledFlow[] {
+  return [flow.compiled, ...[...(flow.library?.values() ?? [])].map((def) => def.compiled)];
+}
+
+/** Say whether `graph` has any origin. */
+function hasOrigins(graph: CompiledFlow): boolean {
+  return !iterFlowOrigins(graph).next().done;
+}
+
+/**
+ * Return `flow` with `resolver` installed, on each library def too: one table routes every def's
+ * origins, and a def with no origins gets none.
+ */
+function withResolver(flow: ComposedFlow, resolver: OriginResolver | null): ComposedFlow {
+  const library = mapLibrary(flow, (def) =>
+    replaceFlow(def, { originResolver: hasOrigins(def.compiled) ? resolver : null }),
+  );
+  return replaceFlow(flow, { originResolver: resolver, library });
+}
+
+/** Return `flow`'s library with `change` applied to each def, or `null` for a flow. */
+function mapLibrary(flow: ComposedFlow, change: (def: ComposedFlow) => ComposedFlow): Map<string, ComposedFlow> | null {
+  return flow.library === null ? null : new Map([...flow.library].map(([name, def]) => [name, change(def)]));
 }
 
 /**
@@ -427,16 +455,18 @@ function checkVersion(child: ComposedFlow, path: string, version: string | null)
 }
 
 /**
- * Return the distinct reachable origins of `compiled`, the first exact origin object reached for
+ * Return the distinct reachable origins of `graphs`, the first exact origin object reached for
  * each opaque key, in structural visit order.
  *
  * @throws TypeError or RangeError for a malformed graph or origin key.
  */
-function distinctOrigins(compiled: CompiledFlow): OriginRef[] {
+function distinctOrigins(graphs: readonly CompiledFlow[]): OriginRef[] {
   const byKey = new Map<string, OriginRef>();
-  for (const origin of iterFlowOrigins(compiled)) {
-    const canonical = new OriginRef(origin.key);
-    if (!byKey.has(canonical.key)) byKey.set(canonical.key, origin);
+  for (const graph of graphs) {
+    for (const origin of iterFlowOrigins(graph)) {
+      const canonical = new OriginRef(origin.key);
+      if (!byKey.has(canonical.key)) byKey.set(canonical.key, origin);
+    }
   }
   return [...byKey.values()];
 }
@@ -446,9 +476,10 @@ function distinctOrigins(compiled: CompiledFlow): OriginRef[] {
  *
  * @param alias The authored `uses:` alias selecting the child.
  * @param child The value the external child resolver returned.
- * @returns The first exact reachable child origin for each distinct opaque key.
- * @throws LoadError when the value isn't a `ComposedFlow`, resolver presence doesn't match
- *   provenance, or a reachable origin lacks a concrete frame.
+ * @returns The first exact reachable child origin for each distinct opaque key, a library's defs
+ *   included.
+ * @throws LoadError when the value isn't a `ComposedFlow`, a library's def isn't one, resolver
+ *   presence doesn't match provenance, or a reachable origin lacks a concrete frame.
  */
 function validateExternalChild(alias: string, child: unknown): OriginRef[] {
   const validated = child instanceof ComposedFlow ? validatedChildren.get(child) : undefined;
@@ -458,9 +489,16 @@ function validateExternalChild(alias: string, child: unknown): OriginRef[] {
       `uses: alias ${reprText(alias)} resolver returned ${jsTypeName(child)}, expected ComposedFlow`,
     );
   }
+  const library: unknown = child.library;
+  const allFlows = (defs: Map<unknown, unknown>) => [...defs.values()].every((def) => def instanceof ComposedFlow);
+  if (library !== null && !(library instanceof Map && allFlows(library))) {
+    throw UNLOCATED_DIAGNOSTICS.error(
+      `uses: alias ${reprText(alias)} resolver returned a library whose defs aren't each a ComposedFlow`,
+    );
+  }
   let origins: OriginRef[];
   try {
-    origins = distinctOrigins(child.compiled);
+    origins = distinctOrigins(graphsOf(child));
   } catch (error) {
     throw UNLOCATED_DIAGNOSTICS.error(
       `uses: alias ${reprText(alias)} returned an invalid compiled origin graph: ${errorText(error)}`,
@@ -598,7 +636,7 @@ function tooManyNodes(limit: number): string {
  * @param alias The authored `uses:` alias owning the returned view.
  * @param child The canonical `ComposedFlow` the host resolver returned.
  * @returns An independent alias-scoped child with an exact route table, or `originResolver` null
- *   when its compiled graph is source-free.
+ *   when its compiled graph is source-free; a library's defs are rebased too, under one table.
  * @throws LoadError when validating or rebasing the child fails.
  */
 function rebaseExternalChild(alias: string, child: unknown): ComposedFlow {
@@ -606,28 +644,30 @@ function rebaseExternalChild(alias: string, child: unknown): ComposedFlow {
   const flow = child as ComposedFlow;
   // Before the copy, which would cost what the limit bounds.
   const limit = current().maxFlowNodes;
-  if (expandedNodes(flow.compiled) > limit) {
+  if (graphsOf(flow).some((graph) => expandedNodes(graph) > limit)) {
     throw UNLOCATED_DIAGNOSTICS.error(`uses: alias ${reprText(alias)}: ${tooManyNodes(limit)}`);
   }
-  let compiled: CompiledFlow;
-  let table: ResolverTable;
-  try {
-    [compiled, table] = rebaseFlowOrigins(flow.compiled, (origin) => scopeOrigin(alias, origin), {
-      resolver: flow.originResolver,
-    });
-  } catch (error) {
-    throw UNLOCATED_DIAGNOSTICS.error(`uses: alias ${reprText(alias)} could not rebase child: ${errorText(error)}`, {
-      cause: error,
-    });
-  }
-  if (table.size !== origins.length) {
-    throw UNLOCATED_DIAGNOSTICS.error(`uses: alias ${reprText(alias)} produced an incomplete rebased origin table`);
-  }
-  return replaceFlow(flow, { compiled, originResolver: origins.length > 0 ? table : null });
+  const scope = (origin: OriginRef) => scopeOrigin(alias, origin);
+  const resolver = flow.originResolver;
+  // A library's graphs are rebased one by one, and one table routes all their origins.
+  const rebase = (graph: CompiledFlow): CompiledFlow => {
+    try {
+      return rebaseFlowOrigins(graph, scope, { resolver: hasOrigins(graph) ? resolver : null })[0];
+    } catch (error) {
+      throw UNLOCATED_DIAGNOSTICS.error(`uses: alias ${reprText(alias)} could not rebase child: ${errorText(error)}`, {
+        cause: error,
+      });
+    }
+  };
+  const library = mapLibrary(flow, (def) => replaceFlow(def, { compiled: rebase(def.compiled) }));
+  const routes = origins.map((origin) => [scope(origin), resolver!, origin] as const);
+  const table = origins.length === 0 ? null : ResolverTable.fromEntries(routes);
+  return withResolver(replaceFlow(flow, { compiled: rebase(flow.compiled), library }), table);
 }
 
 /**
- * Install one exact resolver over a fully assembled physical file.
+ * Install one exact resolver over a fully assembled physical file: its root and, for a library,
+ * every def.
  *
  * @param staged The root assembly, its graph complete and its resolver still unset.
  * @param localCatalog The frozen authority for this document's sites.
@@ -647,12 +687,12 @@ export function finalizeComposedFlow(
 ): ComposedFlow {
   let origins: OriginRef[];
   try {
-    origins = distinctOrigins(staged.compiled);
+    origins = distinctOrigins(graphsOf(staged));
   } catch (error) {
     if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
     throw diagnostics.error(`invalid compiled origin graph: ${error.message}`, { cause: error });
   }
-  if (origins.length === 0) return replaceFlow(staged, { originResolver: null });
+  if (origins.length === 0) return withResolver(staged, null);
 
   const entries: [OriginRef, OriginResolver, OriginRef][] = [];
   for (const origin of origins) {
@@ -674,7 +714,7 @@ export function finalizeComposedFlow(
     );
     entries.push([origin, authority, origin]);
   }
-  return replaceFlow(staged, { originResolver: ResolverTable.fromEntries(entries) });
+  return withResolver(staged, ResolverTable.fromEntries(entries));
 }
 
 /**
@@ -868,9 +908,10 @@ async function loadText(text: string, options: Omit<LoadOptions, "env">): Promis
 }
 
 /**
- * Check each CODE reference of every flow a host resolver returned, its own children included,
- * against `codeRoot`: the host may have loaded it under no root, and a run records the root for
- * all of the flow's files, so the loaded flow and a load from its recorded source agree.
+ * Check each CODE reference of every flow a host resolver returned, its own children and a
+ * library's defs included, against `codeRoot`: the host may have loaded it under no root, and a
+ * run records the root for all of the flow's files, so the loaded flow and a load from its
+ * recorded source agree.
  *
  * @throws LoadError at the first CODE node whose file resolves outside `codeRoot`, or can't be read.
  */
@@ -885,7 +926,7 @@ async function checkHostedCode(
     if (!(child instanceof ComposedFlow)) continue;
     const resolver = child.originResolver;
     const resolveOrigin = resolver === null ? null : (origin: OriginRef) => resolver.resolve(origin);
-    await checkFlowCode(child.compiled, { diagnostics, resolveOrigin, seen, codeRoot });
+    for (const graph of graphsOf(child)) await checkFlowCode(graph, { diagnostics, resolveOrigin, seen, codeRoot });
   }
 }
 
@@ -1574,14 +1615,17 @@ export async function loadFlowFile(
     resolveOrigin: (origin) => scope.catalogBuilder.resolveRegistered(origin),
     // Shared so the root skips the defs its calls bake in, already checked. A `uses:` child was
     // checked in its own load, so its flow starts out seen.
-    seen: new Set(Object.keys(f.uses).map((alias) => scope.resolve(alias).compiled)),
+    seen: new Set(Object.keys(f.uses).flatMap((alias) => graphsOf(scope.resolve(alias)))),
     codeRoot: ctx.codeRoot,
   };
   // Before the walks that cost per expanded node: finalizing the origins, the CODE check, and
   // the root's memory layout.
   const limit = current().maxFlowNodes;
-  const past = nodePastLimit(staged.compiled, limit);
-  if (past !== null) {
+  // A library's defs are what its importers run, so each is held to the limit as a root is.
+  const graphs = f.library ? Object.keys(f.defs).map((name) => scope.resolve(name).compiled) : [staged.compiled];
+  for (const graph of graphs) {
+    const past = nodePastLimit(graph, limit);
+    if (past === null) continue;
     const frame = past.origin === null ? null : scope.catalogBuilder.resolveRegistered(past.origin);
     throw diagnostics.error(`node ${reprText(past.id)}: ${tooManyNodes(limit)}`, {
       frames: frame === null ? [] : [frame],
@@ -1592,7 +1636,7 @@ export async function loadFlowFile(
   // Defs, inline bodies and the root are assembled now, so every slot has read its tags; a
   // `uses:` child checks its own document in its own load.
   rejectUnreadTags(document, scope.catalogBuilder.consumedTags, diagnostics, { registry });
-  return replaceFlow(scope.finalize(staged), { importDepth: scope.importDepth });
+  return replaceFlow(scope.finalize(staged, f.library), { importDepth: scope.importDepth });
 }
 
 /**
@@ -1768,11 +1812,12 @@ export class CallableScope implements AssemblyScope {
    * Install the exact resolver for one completed physical-file root.
    *
    * @param staged The root graph assembled with its resolver unset.
+   * @param library Whether the file is a library, whose result holds its defs, in written order.
    * @returns The final public and cached value, with exact reachable routes.
    * @throws LoadError when an alias is missing its rebased table, or the final reachable-origin
    *   ownership is incomplete or ambiguous.
    */
-  finalize(staged: ComposedFlow): ComposedFlow {
+  finalize(staged: ComposedFlow, library = false): ComposedFlow {
     const tables: ResolverTable[] = [];
     for (const alias of Object.keys(this.#uses)) {
       const child = this.#built.get(alias);
@@ -1790,7 +1835,9 @@ export class CallableScope implements AssemblyScope {
       }
       tables.push(resolver);
     }
-    return finalizeComposedFlow(staged, this.#catalogBuilder.freeze(), tables, this.#diagnostics);
+    const defs = library ? new Map(Object.keys(this.#defsSection).map((name) => [name, this.resolve(name)])) : null;
+    const flow = replaceFlow(staged, { library: defs });
+    return finalizeComposedFlow(flow, this.#catalogBuilder.freeze(), tables, this.#diagnostics);
   }
 
   /** Build callable `flowId`, marked in progress while it builds, and cache it. */

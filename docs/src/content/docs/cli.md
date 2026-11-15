@@ -377,6 +377,7 @@ review.yaml: ok
 | `--json` | | Print one JSON document |
 
 A flow that doesn't load prints its path and the located error on stderr, and the command exits 1.
+A [library](/flows/#library-files) is ok when every def loads.
 
 With `--root DIR`, each flow and each `uses:` import must be inside `DIR` (`compose.outside_root`
 otherwise), a `uses:` ref loads only from the importing file's folder, resolved as `yian run`

@@ -66,6 +66,8 @@ export interface ResolvedChild {
   readonly input: readonly Parameter[];
   /** The child's `description:`, which a flow tool shows the model; `null` or absent for none. */
   readonly description?: string | null;
+  /** A library's defs, which make it no flow to call; `null` or absent for a flow. */
+  readonly library?: ReadonlyMap<string, unknown> | null;
 }
 
 /**
@@ -216,8 +218,8 @@ export function callNesting(flow: NestingFlow): number {
  * @param options.kind The calling node's kind (`call`, `map` or `loop`), named in messages;
  *   `call` when not given.
  * @returns The resolved child flow.
- * @throws {LoadError} When the callable can't be resolved, or the call nests bodies deeper than
- *   `current().maxCallNesting` levels.
+ * @throws {LoadError} When the callable can't be resolved or is a library, or the call nests
+ *   bodies deeper than `current().maxCallNesting` levels.
  */
 export function resolveChild(
   nodeId: string,
@@ -252,6 +254,9 @@ export function resolveChild(
     child = resolver(flowId);
   } finally {
     activeCalls = depth;
+  }
+  if (child.library != null) {
+    throw diagnostics.error(`${subject}: ${display} is a library (defs: and no nodes:), not a flow`, { range });
   }
   // A callee built earlier (a cached def, an imported file) never ran on this count.
   const levels = depth + 1 + callNesting(child.compiled);

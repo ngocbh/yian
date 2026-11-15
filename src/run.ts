@@ -753,7 +753,8 @@ export interface RunFlowOptions {
  *   Proxy included), `llmConfig` is a primitive or an array, a `tools` entry is malformed, `skills`
  *   isn't a `Map` of `Skill`s each keyed by its name, `scheduler` lacks `now` or `sleep`, `random`
  *   isn't a function, or `models` lacks `env` or `createModel`.
- * @throws RangeError when `learnable` or `memory`, a removed option, is given.
+ * @throws RangeError when `learnable` or `memory`, a removed option, is given, or `flow` is a
+ *   library (`libraryRunMessage`).
  * @throws ExpressionError when a condition, binding or prompt set in code can't run.
  * @throws TypeCheckError when an input holds an accessor, NaN, a lone surrogate, a cycle or
  *   another non-yian value, nests deeper than `YIAN_MAX_VALUE_NESTING` levels, or has text that
@@ -790,10 +791,21 @@ export async function runFlow(
   return withEnv(env, async () => {
     const runDefaults = current();
     if (!(flow instanceof ComposedFlow)) throw new YianTypeError("runFlow expects a ComposedFlow");
+    if (flow.library !== null) throw new YianRangeError(libraryRunMessage(flow));
     const unopened = checkDriveOptions(options);
     const skills = checkFlowBeforeServers(flow.compiled, options.skills ?? null);
     return await startRun(flow, inputs, { ...options, skills }, unopened, runDefaults, env);
   });
+}
+
+/**
+ * @internal Return why the library `flow` can't run, naming its root file, or its id when it has
+ * no source.
+ */
+export function libraryRunMessage(flow: ComposedFlow): string {
+  const id = flow.compiled.flowId;
+  const name = flow.source?.root ?? (id === null ? "this flow" : `flow ${reprText(id)}`);
+  return `${name} is a library (defs: and no nodes:); import it with uses: and call a def`;
 }
 
 /** The options `runFlow` and `advance` share, which drive the engine. */

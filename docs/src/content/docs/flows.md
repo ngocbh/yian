@@ -51,7 +51,7 @@ A flow file is a mapping of these top-level keys:
 | `description` | no | One line on what the flow does |
 | `version` | no | Any version text, such as `v2` |
 | `input` | no | The flow's inputs, each with a type (see [Inputs](#inputs)) |
-| `nodes` | yes | The body: nodes and values, keyed by id (see [Nodes](#nodes)) |
+| `nodes` | yes, except in a [library](#library-files) | The body: nodes and values, keyed by id (see [Nodes](#nodes)) |
 | `output` | no | What the flow returns (see [Outputs](#outputs)) |
 | `asserts` | no | Conditions on inputs and results (see [Asserts](#asserts)) |
 | `typedefs` | no | Named types (see [Types](/types/)) |
@@ -258,6 +258,35 @@ Hello, Ada! Lovely to meet you.
 - `output:` is the node's output type, a tag as on any node (`output: !str`), and the flow
   returns the node's result.
 - `case`, `call`, `map` and `loop` need the full `nodes:` form, and so do `uses:` and `defs:`.
+
+## Library files
+
+A file with `defs:` and no `nodes:` is a library: child flows for other flows to import with
+[`uses:`](/control-flow/#import-a-flow-from-another-file-with-uses). Each def sees the library's
+`typedefs:`, its `uses:` and the other defs.
+
+```yaml title="billing.yaml"
+id: billing
+name: billing
+version: "2"
+typedefs:
+  Quote: {total: float, currency: str}
+defs:
+  quote:
+    description: Price an order.
+    input:
+      qty: !int
+    kind: code
+    code: 'return {total: inputs.qty * 2.5, currency: "EUR"}'
+    output: !Quote
+```
+
+- A library takes `id` and `name`, and optionally `description`, `version`, `typedefs`, `uses`
+  and `system`.
+- `input`, `output`, `asserts`, `env` and `llm_config` are load errors there: a def doesn't
+  inherit them, so set them on each def.
+- `yian check billing.yaml` loads every def. `yian run billing.yaml` fails before anything runs.
+- A file with neither `nodes:` nor `defs:` doesn't load.
 
 ## Dependencies and ordering
 

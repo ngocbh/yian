@@ -116,7 +116,7 @@ test("a missing schema field falls back to the root range", () => {
   const document = parseSourceDocument("id: x\nname: x\n", "flow.yaml");
   const error = loadError(() => parseFile(document));
 
-  expect(error.message).toBe("missing required top-level key 'nodes'");
+  expect(error.message).toBe("a flow needs nodes:, or defs: to be a library");
   expect(lastRange(error)).toEqual(document.root.range);
 });
 

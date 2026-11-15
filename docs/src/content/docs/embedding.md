@@ -88,6 +88,9 @@ absolute path, so you can show it to the flow's author. A run records the flow's
 every later call on its log holds the CODE and included files to it
 ([Keep runs on disk](#keep-runs-on-disk)).
 
+A [library](/flows/#library-files) loads as a `ComposedFlow` whose `library` holds its defs by
+name, each a `ComposedFlow`; `library` is `null` for a flow. `runFlow` rejects a library.
+
 yian follows local `uses:` refs and the flow's `system.paths` as written, so an absolute path,
 `..` or a symlink can load any file your process can read; `codeRoot` confines only CODE files
 and the files `!include` reads.

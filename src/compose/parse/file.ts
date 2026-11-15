@@ -17,7 +17,8 @@
  *   as a boolean, number or null fails at the key first.
  *
  * A compact flow (a top-level node `kind:` and no `nodes:`) is desugared into the one-node form
- * first. `nodes` stays a raw mapping here; `compose/parse/nodes.ts` builds the descriptors.
+ * first. A library (`defs:` and no `nodes:`) has no nodes and refuses the keys its defs don't
+ * inherit. `nodes` stays a raw mapping here; `compose/parse/nodes.ts` builds the descriptors.
  *
  * Knows about: diagnostics, compose source, helpers and node kinds, typesys values.
  */
@@ -96,6 +97,9 @@ const NON_COMPACT_KINDS: readonly string[] = [...KINDS.keys()].filter((kind) => 
 /** The flow-level keys a compact flow can't hold, which would otherwise read as node fields. */
 const NON_COMPACT_FLOW_KEYS: readonly string[] = ["uses", "defs"];
 
+/** The top-level keys a library refuses: each belongs to a flow, and a def never inherits it. */
+const LIBRARY_REFUSED_KEYS: readonly string[] = ["input", "output", "asserts", "env", "llm_config"];
+
 /** The fields of a `ComposeFile`; an absent optional field takes its default. */
 interface ComposeFileFields {
   id: string;
@@ -112,6 +116,7 @@ interface ComposeFileFields {
   system?: ValueRecord;
   llmConfig?: Value;
   env?: ValueRecord;
+  library?: boolean;
 }
 
 /**
@@ -147,6 +152,8 @@ export class ComposeFile {
    * flow; a called child flow doesn't inherit it.
    */
   readonly env: ValueRecord;
+  /** Whether the file is a library: `defs:` and no `nodes:`, so `nodes` is empty. */
+  readonly library: boolean;
 
   /** Create a flow from `fields`, defaulting the absent optional ones. */
   constructor(fields: ComposeFileFields) {
@@ -165,6 +172,7 @@ export class ComposeFile {
     // An authored `llm_config: null` stays null; only an absent one defaults.
     this.llmConfig = fields.llmConfig === undefined ? {} : fields.llmConfig;
     this.env = fields.env ?? {};
+    this.library = fields.library ?? false;
   }
 }
 
@@ -439,6 +447,7 @@ function readComposeFile(
   body: ValueRecord,
   root: SourceCursor,
   diagnostics: LoadDiagnostics,
+  library: boolean,
 ): ComposeFile {
   const fields = backMapToPlural(body) as ValueRecord;
   const fail = (message: string, path: readonly (string | number)[]) =>
@@ -483,7 +492,7 @@ function readComposeFile(
   const description = optionalText("description");
   const version = optionalText("version");
   const inputs = mapping("inputs", "input");
-  const nodes = mapping("nodes", "nodes", true);
+  const nodes = library ? {} : mapping("nodes", "nodes", true);
   const outputs = get("outputs");
   const asserts = get("asserts");
   if (asserts !== undefined) {
@@ -499,7 +508,14 @@ function readComposeFile(
   const system = mapping("system");
   const llmConfig = get("llm_config");
   const env = mapping("env");
-  if (missing !== null) throw fail(`missing required top-level key ${reprText(missing)}`, []);
+  if (missing !== null) {
+    // Without `nodes:`, `defs:` would have made the file a library.
+    const message =
+      missing === "nodes"
+        ? "a flow needs nodes:, or defs: to be a library"
+        : `missing required top-level key ${reprText(missing)}`;
+    throw fail(message, []);
+  }
 
   return new ComposeFile({
     id: id!,
@@ -516,6 +532,7 @@ function readComposeFile(
     system,
     llmConfig,
     env,
+    library,
   });
 }
 
@@ -642,7 +659,8 @@ export function flowNodesCursor(document: SourceDocument, nodesSection: ValueRec
  *
  * @throws LoadError for malformed YAML, a non-mapping document, a retired `inputs:`/`outputs:`
  *   key, a removed `long_term_memory:`/`memory_policy:` key, a bad compact flow, an unknown
- *   top-level key (after stripping `x-*`), or a schema violation. A text field YAML read as
+ *   top-level key (after stripping `x-*`), a library's `input:`, `output:`, `asserts:`, `env:` or
+ *   `llm_config:`, a file with neither `nodes:` nor `defs:`, or a schema violation. A text field YAML read as
  *   non-text (flow `id:`/`name:`/`description:`/`version:`, a `uses:` ref, a flow `asserts:` item)
  *   names the field.
  */
@@ -684,5 +702,13 @@ export function parseFile(source: string | SourceDocument): ComposeFile {
       );
     }
   }
-  return readComposeFile(body, root, diagnostics);
+  const library = !Object.hasOwn(body, "nodes") && Object.hasOwn(body, "defs");
+  const refused = library ? LIBRARY_REFUSED_KEYS.find((key) => Object.hasOwn(body, key)) : undefined;
+  if (refused !== undefined) {
+    throw diagnostics.error(
+      `a library (defs: and no nodes:) can't set \`${refused}:\`, which its defs don't inherit; set it on each def`,
+      { range: root.keyRangeOf(refused) },
+    );
+  }
+  return readComposeFile(body, root, diagnostics, library);
 }

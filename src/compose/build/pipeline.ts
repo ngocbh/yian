@@ -361,10 +361,16 @@ export class ComposedFlow {
    * for a flow loaded again from its recorded source.
    */
   readonly memoryTypes: readonly MemoryClass[];
+  /**
+   * A library's defs by name, in written order, each the flow its `defs:` entry builds; `null`
+   * for a flow. A library (a file with `defs:` and no `nodes:`) has the empty flow as `compiled`,
+   * an `originResolver` for every def's origins, and doesn't run.
+   */
+  readonly library: ReadonlyMap<string, ComposedFlow> | null;
 
   /**
-   * Wrap `compiled`; the metadata, resolver and source default to `null`, `importDepth` to 0,
-   * and `memoryTypes` to none.
+   * Wrap `compiled`; the metadata, resolver, source and library default to `null`, `importDepth`
+   * to 0, and `memoryTypes` to none.
    */
   constructor(
     compiled: CompiledFlow,
@@ -376,6 +382,7 @@ export class ComposedFlow {
       importDepth?: number;
       source?: FlowSource | null;
       memoryTypes?: readonly MemoryClass[];
+      library?: ReadonlyMap<string, ComposedFlow> | null;
     } = {},
   ) {
     const {
@@ -386,6 +393,7 @@ export class ComposedFlow {
       importDepth = 0,
       source = null,
       memoryTypes = [],
+      library = null,
     } = options;
     this.compiled = compiled;
     this.version = version;
@@ -395,6 +403,7 @@ export class ComposedFlow {
     this.importDepth = importDepth;
     this.source = source;
     this.memoryTypes = memoryTypes;
+    this.library = library;
     Object.freeze(this);
   }
 

@@ -4,9 +4,11 @@
  * (`quote: ./tools.ts:quote`), one tool. A load never imports a module; each segment of a run
  * starts the modules its nodes reach, and a node's scope holds a stand-in for each tool it reaches.
  *
- * Knows about: tools/errors, tools/function_tools, the types of tools/grants, tools/module_thread,
- * tools/module_worker and tools/registry, diagnostics and typesys.
+ * Knows about: tools/errors, tools/function_tools, tools/registry, the types of tools/grants,
+ * tools/module_thread and tools/module_worker, diagnostics, typesys and `node:path`.
  */
+
+import { relative } from "node:path";
 
 import { getCloseMatches, reprText } from "../diagnostics.ts";
 import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
@@ -16,7 +18,7 @@ import { FunctionTool } from "./function_tools.ts";
 import type { NodeScope } from "./grants.ts";
 import type { ToolModuleThread } from "./module_thread.ts";
 import type { ListedTool, ToolModuleListing } from "./module_worker.ts";
-import type { ToolSet } from "./registry.ts";
+import { RESERVED_TOOL_NAMES, type ToolSet } from "./registry.ts";
 
 /** A tool module an AGENT grants or a TOOL node calls, as the loader resolved its `uses:` alias. Frozen. */
 export interface ToolModuleRef {
@@ -60,6 +62,38 @@ export interface StartedToolModule {
   readonly key: string;
   readonly thread: ToolModuleThread;
   readonly listing: ToolModuleListing;
+}
+
+/**
+ * Return a module's key: its real `path` relative to `dir`, the real folder of the run's root
+ * flow, or `path` itself for a flow with no folder.
+ */
+export function moduleKey(path: string, dir: string | null): string {
+  return dir === null ? path : relative(dir, path);
+}
+
+/**
+ * Refuse a module's listing for what reaches it: each export a one-export alias names must be a
+ * tool; with `group`, an alias names every tool it exports, so none may be refused or take a name
+ * yian reserves, and there must be one.
+ *
+ * @param key How messages name the file.
+ * @throws RangeError naming the file and the export.
+ */
+export function checkModuleListing(
+  key: string,
+  listing: ToolModuleListing,
+  reach: { readonly group: boolean; readonly exports: readonly string[] },
+): void {
+  for (const name of reach.exports) listedExport(key, listing, name);
+  if (!reach.group) return;
+  const [refused] = listing.refused;
+  if (refused !== undefined) throw new YianRangeError(refused.message);
+  if (listing.tools.length === 0) throw new YianRangeError(`${key} exports no tools`);
+  const reserved = listing.tools.find(({ name }) => RESERVED_TOOL_NAMES.has(name));
+  if (reserved !== undefined) {
+    throw new YianRangeError(`${key} export ${reprText(reserved.name)} takes a name yian reserves; rename it`);
+  }
 }
 
 /**

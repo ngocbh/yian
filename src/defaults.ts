@@ -346,6 +346,13 @@ export const ENTRIES = Object.freeze([
     group: "setting",
     minimum: 1,
   }),
+  // A module whose import hangs would otherwise stall the run's start, as a hung MCP server does.
+  entry("TOOL_MODULE_START_TIMEOUT_SECONDS", {
+    default: 30,
+    description: "Longest wait in seconds for a tool module's thread to import it and list its tools",
+    group: "setting",
+    minimum: 1,
+  }),
   entry("MODEL_RETRIES", {
     default: 6,
     description: "Extra attempts a model call gets after a transport failure (a network error, 5xx, 429 or timeout)",

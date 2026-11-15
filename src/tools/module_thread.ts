@@ -6,13 +6,15 @@
  * its own values. The thread lives until it exits or is terminated, but its handle here is
  * referenced only while a request is open, so an idle thread never keeps this process alive.
  *
- * Knows about: tools/module_worker, defaults and `node:*`.
+ * Knows about: tools/module_worker, defaults, platform, typesys and `node:*`.
  */
 
 import { basename } from "node:path";
 import { SHARE_ENV, Worker } from "node:worker_threads";
 
 import { current } from "../defaults.ts";
+import { realScheduler } from "../platform.ts";
+import { YianRangeError } from "../typesys/errors.ts";
 import type { ToolModuleData, ToolModuleListing, ToolModuleReply, ToolModuleRequest } from "./module_worker.ts";
 
 // As `nodes/code/node.ts` finds the entry: `bun build --compile` bundles it at
@@ -106,5 +108,45 @@ export class ToolModuleThread {
       this.#settled(id);
       request.reject(this.#ended);
     }
+  }
+}
+
+/**
+ * Start the thread of the module at `path` and list its tools, within
+ * `YIAN_TOOL_MODULE_START_TIMEOUT_SECONDS`. A thread whose listing fails, takes too long or is
+ * stopped is terminated.
+ *
+ * @param label How messages name the file.
+ * @param signal Stops the start.
+ * @returns The thread, still running, and its listing.
+ * @throws RangeError naming the file when the import throws or outlasts the timeout, or the thread
+ *   fails or exits first.
+ * @throws The signal's reason when it aborts first.
+ */
+export async function startToolModule(
+  path: string,
+  label: string,
+  signal: AbortSignal,
+): Promise<{ readonly thread: ToolModuleThread; readonly listing: ToolModuleListing }> {
+  signal.throwIfAborted();
+  const seconds = current().toolModuleStartTimeoutSeconds;
+  const thread = new ToolModuleThread(path, label);
+  // Ends the timer once the listing settles.
+  const settled = new AbortController();
+  try {
+    const listing = await Promise.race([
+      thread.list().catch((error: Error) => {
+        throw new YianRangeError(error.message, { cause: error });
+      }),
+      realScheduler.sleep(seconds * 1000, AbortSignal.any([signal, settled.signal])).then(() => {
+        throw new YianRangeError(`${label} didn't import within ${seconds} s (YIAN_TOOL_MODULE_START_TIMEOUT_SECONDS)`);
+      }),
+    ]);
+    return { thread, listing };
+  } catch (error) {
+    await thread.terminate();
+    throw error;
+  } finally {
+    settled.abort();
   }
 }

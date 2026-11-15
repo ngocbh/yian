@@ -1,6 +1,7 @@
 /**
- * A started tool module's node scope: the stand-ins a node's scope holds for its tools, each keyed
- * by its file and export so two aliases of one file bind a tool once.
+ * A started tool module's checks and node scope: what a run refuses in a listing for the aliases
+ * that reach it, and the stand-ins a node's scope holds for its tools, each keyed by its file and
+ * export so two aliases of one file bind a tool once.
  */
 
 import { expect, test } from "bun:test";
@@ -8,7 +9,7 @@ import { expect, test } from "bun:test";
 import { nodeScope, expandGrants, parseToolGrants } from "../../src/tools/grants.ts";
 import type { ToolModuleThread } from "../../src/tools/module_thread.ts";
 import type { ListedTool, ToolModuleListing } from "../../src/tools/module_worker.ts";
-import { moduleScope, type StartedToolModule } from "../../src/tools/modules.ts";
+import { checkModuleListing, moduleKey, moduleScope, type StartedToolModule } from "../../src/tools/modules.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 
 /** A listed tool `name` with an `id` parameter. */
@@ -31,6 +32,30 @@ const LISTING: ToolModuleListing = {
   refused: [{ name: "find", message: "crm.ts export 'find' holds a tool named 'lookup'; rename one" }],
   others: ["LIMIT", "default"],
 };
+
+test.each<[ToolModuleListing, { group: boolean; exports: string[] }, string | null]>([
+  [LISTING, { group: false, exports: ["lookup", "create"] }, null],
+  [LISTING, { group: false, exports: ["lookp"] }, "crm.ts has no export 'lookp'; did you mean 'lookup'?"],
+  [LISTING, { group: false, exports: ["LIMIT"] }, "crm.ts export 'LIMIT' isn't a tool: export an object with name, description, parameters and execute"],
+  [LISTING, { group: false, exports: ["find"] }, "crm.ts export 'find' holds a tool named 'lookup'; rename one"],
+  [LISTING, { group: true, exports: [] }, "crm.ts export 'find' holds a tool named 'lookup'; rename one"],
+  [{ ...LISTING, refused: [] }, { group: true, exports: [] }, null],
+  [{ tools: [], refused: [], others: ["LIMIT"] }, { group: true, exports: [] }, "crm.ts exports no tools"],
+  [{ ...LISTING, refused: [], tools: [listed("ask")] }, { group: true, exports: [] }, "crm.ts export 'ask' takes a name yian reserves; rename it"],
+  [{ ...LISTING, refused: [], tools: [listed("ask")] }, { group: false, exports: ["ask"] }, null],
+])("a listing checked for what reaches it: %#", (listing, reach, message) => {
+  const check = () => checkModuleListing("crm.ts", listing, reach);
+  if (message === null) expect(check).not.toThrow();
+  else expect(check).toThrow(new RangeError(message));
+});
+
+test("a module's key is its path relative to the root flow's folder, or its path with none", () => {
+  expect([moduleKey("/w/flows/tools/crm.ts", "/w/flows"), moduleKey("/w/crm.ts", "/w/flows"), moduleKey("/w/crm.ts", null)]).toEqual([
+    "tools/crm.ts",
+    "../crm.ts",
+    "/w/crm.ts",
+  ]);
+});
 
 const started: StartedToolModule = { path: "/w/crm.ts", key: "crm.ts", thread: {} as ToolModuleThread, listing: LISTING };
 const tools = new ToolSet({}).withModules([started]);

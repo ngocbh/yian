@@ -1,0 +1,36 @@
+# A flow imported with `uses:` is no library: its defs can't be called from outside.
+kind: load
+flow: |
+  id: orders
+  name: orders
+  uses:
+    clean: lib/clean
+  nodes:
+    tidy:
+      kind: call
+      call: {clean: trim}
+      input:
+        text: draft
+  output: ${tidy.output}
+files:
+  lib/clean.yaml: |
+    id: clean
+    name: clean
+    input:
+      text: !str
+    defs:
+      trim:
+        input: {text: !str}
+        nodes: {t: !str "${input.text}"}
+        output: ${t.output}
+    nodes:
+      tidy: {kind: call, call: trim, input: {text: "${input.text}"}}
+    output: ${tidy.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'call node ''tidy'': callable ''clean'' is a flow, not a library; its defs are private'
+      frames:
+      - label: flow.yaml
+        range: [8, 11, 8, 24]

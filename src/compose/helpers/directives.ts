@@ -13,8 +13,9 @@ import { scanTemplate, Span } from "../../expr/template.ts";
 import type { ValueRecord } from "../../typesys/index.ts";
 
 /**
- * One desugared inline call: the synth node `id`, the `callee` name and its keyword `args` (name
- * to a YAML-scalar literal value or a `${...}` binding text).
+ * One desugared inline call: the synth node `id`, the `callee` name as written (`billing.quote`
+ * for a library's def) and its keyword `args` (name to a YAML-scalar literal value or a `${...}`
+ * binding text).
  */
 export class InlineCall {
   readonly id: string;
@@ -129,15 +130,17 @@ export function splitCallsAware(text: string, sep: string): string[] {
 
 /** An unquoted value whose trimmed text starts with this is a `call(...)` directive. */
 export const CALL_HEAD = /^call\s*\(/;
-const FLOW_ID = /^[A-Za-z_][A-Za-z0-9_-]*$/;
+// A flow id, or a library alias and one of its defs: `billing.quote`.
+const FLOW_ID = /^[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)?$/;
 
 /**
  * Recognize a whole-value `call(...)` directive.
  *
  * A value whose trimmed text starts with `call(` must be exactly one directive: its parentheses
  * balance, nothing follows the closing `)`, and the first argument is a bare flow id (an
- * identifier, hyphens allowed). A positional argument after the flow id is kept in the remaining
- * text, so the keyword-argument parser rejects it with its own message.
+ * identifier, hyphens allowed), or a library alias and one of its defs (`billing.quote`). A
+ * positional argument after the flow id is kept in the remaining text, so the keyword-argument
+ * parser rejects it with its own message.
  *
  * Example: `matchCallDirective("call(f, x=1)")` is `["f", " x=1"]`;
  * `matchCallDirective("pre call(x)")` is `null`.
@@ -167,7 +170,8 @@ export function matchCallDirective(value: string): [flowId: string, remaining: s
   const first = splitCallsAware(argsStr, ",")[0]!.trim();
   if (!FLOW_ID.test(first)) {
     throw new ExpressionError(
-      `a call(...) must start with a flow id (a bare name) and a comma, got ${reprText(first)}`,
+      `a call(...) must start with a flow id (a bare name, or alias.def for a library's def) and a comma, ` +
+        `got ${reprText(first)}`,
     );
   }
   // Everything after the first comma is the remaining (keyword) args; the parser over this text

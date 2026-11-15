@@ -1,0 +1,33 @@
+# `call:` text naming a library is refused, showing the def form to write.
+kind: load
+flow: |
+  id: orders
+  name: orders
+  uses:
+    billing: lib/billing
+  nodes:
+    price:
+      kind: call
+      call: billing
+      input:
+        qty: 2
+  output: ${price.output}
+files:
+  lib/billing.yaml: |
+    id: billing
+    name: billing
+    defs:
+      quote:
+        input:
+          qty: !int
+        kind: code
+        code: return inputs.qty * 3
+        output: !int
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'call node ''price'': callable ''billing'' is a library; name a def: `call: {billing: quote}`'
+      frames:
+      - label: flow.yaml
+        range: [8, 11, 8, 18]

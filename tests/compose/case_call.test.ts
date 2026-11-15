@@ -262,7 +262,8 @@ test.each(
       ['call(take, stance="a") tail', "text follows the closing `)`: 'tail'; a call(...) must be the whole value"],
       [
         'call(take stance="a")',
-        "a call(...) must start with a flow id (a bare name) and a comma, got 'take stance=\"a\"'",
+        "a call(...) must start with a flow id (a bare name, or alias.def for a library's def) and a comma, " +
+          "got 'take stance=\"a\"'",
       ],
     ].map(([target, problem]) => [label, target!, problem!]),
   ),

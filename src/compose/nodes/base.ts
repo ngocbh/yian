@@ -257,6 +257,41 @@ export function rejectNonText(
 }
 
 /**
+ * Read a CALL's, MAP's or LOOP's `call:` in `fields`: text names a callable, and a one-key
+ * mapping `{billing: quote}` a def of the library `billing`, read into `call` and `def`.
+ *
+ * @throws LoadError at `call:` for any other value, `null` included.
+ */
+export function readCallTarget(
+  kind: string,
+  nodeId: string,
+  fields: Record<string, unknown>,
+  range: SourceRange | null,
+  diagnostics: LoadDiagnostics,
+): void {
+  const raw = fields["call"] ?? null;
+  const fail = (problem: string) => diagnostics.error(`node ${reprText(nodeId)} (kind=${kind}): ${problem}`, { range });
+  if (typeof raw === "string") return;
+  if (!isRecord(raw)) {
+    const fix = raw === null ? "write a callable name" : "put it in quotes";
+    throw fail(valueTypeError("call", "a callable name or `{library: def}`", raw, fix));
+  }
+  const keys = Object.keys(raw);
+  if (keys.length !== 1 || keys[0] === "") {
+    throw fail("`call:` names one library def, such as `call: {billing: quote}`");
+  }
+  const alias = keys[0]!;
+  const def = raw[alias];
+  if (typeof def !== "string" || def === "") {
+    const first = Array.isArray(def) ? def[0] : undefined;
+    const example = typeof first === "string" && first !== "" ? first : "quote";
+    throw fail(`\`call: {${alias}: ...}\` names one def; write \`call: {${alias}: ${example}}\``);
+  }
+  fields["call"] = alias;
+  fields["def"] = def;
+}
+
+/**
  * Return the range of the value at `path` under `cursor`, or `null` when it has none.
  *
  * `null` also covers a path the cursor can't walk (such as past a recursive alias cut), so the

@@ -103,7 +103,8 @@ export class LoopNode extends ChildFlowNode {
    * Build a LOOP driver.
    *
    * @param nodeId The node's unique id.
-   * @param options.flowId The id of the body flow.
+   * @param options.flowId The id of the body flow, or of the library that holds it.
+   * @param options.def The def of library `flowId` that is the body; omitted, `null`.
    * @param options.flowVersion A pinned body flow version, if any.
    * @param options.child The compiled body flow; `null` until Compose bakes it.
    * @param options.childInputs The body's canonical parameters; omitted, none.
@@ -123,6 +124,7 @@ export class LoopNode extends ChildFlowNode {
     nodeId: string,
     options: {
       flowId: string;
+      def?: string | null;
       flowVersion?: string | null;
       child?: unknown;
       childInputs?: readonly Parameter[] | null;
@@ -139,6 +141,7 @@ export class LoopNode extends ChildFlowNode {
   ) {
     const {
       flowId,
+      def = null,
       flowVersion = null,
       child = null,
       childInputs = null,
@@ -152,7 +155,7 @@ export class LoopNode extends ChildFlowNode {
       originId = null,
       returnedFields = null,
     } = options;
-    super(nodeId, { flowId, flowVersion, child, childInputs, title });
+    super(nodeId, { flowId, def, flowVersion, child, childInputs, title });
     if (times !== null && predicateKind !== "times") {
       throw new YianRangeError(
         `loop node ${reprText(nodeId)}: times: is the count of a times loop, not of a ${predicateKind} loop`,
@@ -269,6 +272,7 @@ export class LoopNode extends ChildFlowNode {
     }
     const clone = new LoopNode(`${originId}~${k}`, {
       flowId: this.flowId,
+      def: this.def,
       flowVersion: this.flowVersion,
       child: this.child,
       childInputs: this.childInputs,

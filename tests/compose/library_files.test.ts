@@ -174,11 +174,9 @@ test("a library's defs must be flows", async () => {
   expect(error.message).toContain("resolver returned a library whose defs aren't each a ComposedFlow");
 });
 
-test.each([
-  ["a call", "echo: {kind: call, call: billing, input: {}}", "call node 'echo'"],
-  ["a grant", "echo: {kind: agent, prompt: hi, tools: [billing]}", "agent node 'echo'"],
-])("%s of a library alias is a load error", async (_, node, subject) => {
+test("a grant of a library alias is a load error", async () => {
   const library = await loadFlow(LIBRARY);
+  const node = "echo: {kind: agent, prompt: hi, tools: [billing]}";
   const error = await loadErrorAsync(loadFlow(importer("lib", node), { childResolver: () => library }));
-  expect(error.message).toBe(`${subject}: callable 'billing' is a library (defs: and no nodes:), not a flow`);
+  expect(error.message).toBe("agent node 'echo': callable 'billing' is a library (defs: and no nodes:), not a flow");
 });

@@ -25,7 +25,7 @@ import {
   type BuildResult,
   NodeDescriptor,
   type NodeDescriptorFields,
-  rejectNonText,
+  readCallTarget,
   siteKey,
 } from "./base.ts";
 import { callableDisplay, type ChildSignature, childSignature, resolveChild } from "./resolver.ts";
@@ -33,6 +33,7 @@ import { callableDisplay, type ChildSignature, childSignature, resolveChild } fr
 /** The fields `CallDescriptor`'s constructor takes: the common ones and the CALL's own. */
 export interface CallDescriptorFields extends NodeDescriptorFields {
   call: string;
+  def?: string | null;
   childLabel?: string | null;
   callSite?: readonly (string | number | null)[] | null;
   over?: unknown;
@@ -44,9 +45,11 @@ export interface CallDescriptorFields extends NodeDescriptorFields {
  * kind=call|map: apply a callable (`call:`) to the call-argument bindings in `input:`.
  *
  * `call` names the callable: a `defs:` entry or a `uses:` alias (the loader composes that
- * resolution; any other name is a load error). `kind: call` is a single application; `kind: map`
- * with `over: ${list}` (`MapDescriptor`) applies it to each element, with `${item}` in element
- * scope. `parallel:` is kept but inert: run-level workers control concurrency.
+ * resolution; any other name is a load error). `def` names a def of the library `call` names,
+ * from `call: {billing: quote}` or `call(billing.quote, ...)`, and is `null` for a flow.
+ * `kind: call` is a single application; `kind: map` with `over: ${list}` (`MapDescriptor`)
+ * applies it to each element, with `${item}` in element scope. `parallel:` is kept but inert:
+ * run-level workers control concurrency.
  *
  * `allowed` adds `call`, `inputs` and `asserts` to the commons, and `call` is required.
  * `bindingFields` is `inputs` and `over`: the call-argument bindings and the map's iteration
@@ -70,6 +73,8 @@ export class CallDescriptor extends NodeDescriptor {
 
   /** The callable's name: a `defs:` entry or a `uses:` alias. */
   readonly call: string;
+  /** The def of the library `call` names; `null` when `call` names a flow. */
+  readonly def: string | null;
   /** The diagnostic label of an anonymous inline child; `null` on an authored node. */
   readonly childLabel: string | null;
   /** The address of the binding a lifted `call(...)` was written in; `null` on an authored node. */
@@ -92,6 +97,7 @@ export class CallDescriptor extends NodeDescriptor {
   constructor(fields: CallDescriptorFields) {
     super(fields);
     this.call = fields.call;
+    this.def = fields.def ?? null;
     this.childLabel = fields.childLabel ?? null;
     this.callSite = fields.callSite ?? null;
     this.over = fields.over ?? null;
@@ -101,7 +107,7 @@ export class CallDescriptor extends NodeDescriptor {
   }
 
   /**
-   * Reject a `call:` YAML read as non-text (including `null`), then run the base checks.
+   * Read `call:` (`readCallTarget`), then run the base checks.
    *
    * @throws LoadError at `call:` (else at the node).
    */
@@ -113,15 +119,7 @@ export class CallDescriptor extends NodeDescriptor {
     diagnostics: LoadDiagnostics,
     cursor: SourceCursor,
   ): void {
-    rejectNonText(
-      this.kind,
-      nodeId,
-      "call",
-      fields["call"] ?? null,
-      ranges.get(siteKey("field", "call")) ?? ownRange,
-      diagnostics,
-      { required: true },
-    );
+    readCallTarget(this.kind, nodeId, fields, ranges.get(siteKey("field", "call")) ?? ownRange, diagnostics);
     super._validateFields(nodeId, fields, ranges, ownRange, diagnostics, cursor);
   }
 
@@ -157,7 +155,12 @@ export class CallDescriptor extends NodeDescriptor {
       diagnostics: ctx.diagnostics,
       range: this.fieldRanges.get(siteKey("field", "call")) ?? this.range,
       kind: this.kind,
+      def: this.def,
+      // A lifted `call(...)` names its site, and its fix is written as a directive.
+      label: this.fieldLabels.get("call") ?? null,
+      directive: this.callSite !== null,
     });
+    const display = callableDisplay(this.call, this.childLabel, this.def);
     const sig = childSignature(child);
     const errors: string[] = [];
     let node: CallNode | MapNode;
@@ -165,6 +168,7 @@ export class CallDescriptor extends NodeDescriptor {
     if (isMap) {
       node = new MapNode(this.id, {
         flowId: this.call,
+        def: this.def,
         child: child.compiled,
         childInputs: sig.inputs,
         // Inert: only an authored `true` reads as parallel.
@@ -178,13 +182,13 @@ export class CallDescriptor extends NodeDescriptor {
       for (const input of sig.inputs) {
         if (!isInboxType(input.contract?.type)) continue;
         errors.push(
-          `map node ${reprText(this.id)}: ${callableDisplay(this.call, this.childLabel)} declares inbox input ` +
+          `map node ${reprText(this.id)}: ${display} declares inbox input ` +
             `${reprText(input.name)}; a map body can't read an inbox (per-instance inboxes aren't supported yet)`,
         );
       }
       if (sig.outputNames.length === 0) {
         errors.push(
-          `map node ${reprText(this.id)}: ${callableDisplay(this.call, this.childLabel)} must declare a ` +
+          `map node ${reprText(this.id)}: ${display} must declare a ` +
             "non-empty `output:`; a mapped call (over:) returns a list of the child's results",
         );
       } else if (isExactly(sig.output, ValueContract)) {
@@ -196,6 +200,7 @@ export class CallDescriptor extends NodeDescriptor {
     } else {
       node = new CallNode(this.id, {
         flowId: this.call,
+        def: this.def,
         child: child.compiled,
         childInputs: sig.inputs,
         title: this.nodeName,
@@ -204,7 +209,7 @@ export class CallDescriptor extends NodeDescriptor {
       node.outputContract = sig.output;
     }
     node.params = this.sinkParams();
-    checkChildBindings(this.kind, this.id, this.call, node.params, sig, errors, this.childLabel, this.fieldLabels);
+    checkChildBindings(this.kind, this.id, display, node.params, sig, errors, this.fieldLabels);
     if (errors.length > 0) throw ctx.diagnostics.error(errors.join("\n  "), { range: this.range });
     return this._finish(node, wiring);
   }
@@ -221,17 +226,17 @@ function listOf(element: Type): Type {
  * child input or a memory input left unbound. The binding types are checked later, over the flow's wiring.
  *
  * @param kind The node's kind (`call` or `map`), named in messages.
+ * @param display How messages name the callable (`callableDisplay`).
  * @param labels The descriptor's `fieldLabels`: an inline call's `input '<p>'` entry names its
  *   argument and its `call` entry names the call, in place of the generated node.
  */
 function checkChildBindings(
   kind: string,
   nodeId: string,
-  flowId: string,
+  display: string,
   params: readonly Parameter[],
   sig: ChildSignature,
   errors: string[],
-  childLabel: string | null,
   labels: ReadonlyMap<string, string>,
 ): void {
   const declared = new Set(sig.inputs.map((input) => input.name));
@@ -242,7 +247,7 @@ function checkChildBindings(
       const subject =
         labels.get(`input ${reprText(param.name)}`) ||
         `${kind} node ${reprText(nodeId)}: binding ${reprText(param.name)}`;
-      errors.push(`${subject} is not a declared input of ${callableDisplay(flowId, childLabel)}`);
+      errors.push(`${subject} is not a declared input of ${display}`);
     }
   }
   const callLabel = labels.get("call") || `${kind} node ${reprText(nodeId)}`;

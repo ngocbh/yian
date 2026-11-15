@@ -1,15 +1,16 @@
 /**
  * Child resolution and signature: the load-time callable seam shared by `call`, `map` and `loop`.
  *
- * A `call`/`map`/`loop` node names a callable (a `defs:` entry or an external flow). The callable
- * resolver is the load-time seam, `flowId -> ResolvedChild`; the loader composes the defs-first
- * resolution. From the resolved child the kind builder derives its `ChildSignature`
- * (canonical parameters and the exact-or-partial codomain contract) to stamp a CALL's
- * `outputContract` (a LOOP's, or the returned fields of its merged carried contract) and to check
- * the bindings' names, arity and types. Each kind's own `build` bakes the resolved child's
- * compiled flow onto its node; this module supplies the shared resolution, the call nesting limit
- * it enforces, and the signature derivation. Output-binding contract inference lives below
- * compose, in `compile/output_contracts.ts`.
+ * A `call`/`map`/`loop` node names a callable (a `defs:` entry or an external flow), or a def of
+ * an imported library. The callable resolver is the load-time seam, `flowId -> ResolvedChild`;
+ * the loader composes the defs-first resolution, and `resolveChild` picks a library's def. From
+ * the resolved child the kind builder derives its `ChildSignature` (canonical parameters and the
+ * exact-or-partial codomain contract) to stamp a CALL's `outputContract` (a LOOP's, or the
+ * returned fields of its merged carried contract) and to check the bindings' names, arity and
+ * types. Each kind's own `build` bakes the resolved child's compiled flow onto its node; this
+ * module supplies the shared resolution, the call nesting limit it enforces, and the signature
+ * derivation. Output-binding contract inference lives below compose, in
+ * `compile/output_contracts.ts`.
  *
  * Like `base.ts` this is a leaf of the nodes package: it imports `compile/output_contracts.ts`,
  * `helpers/errors.ts`, the node contracts (`nodes/contracts.ts`), the END node class
@@ -20,7 +21,7 @@
 
 import type { CompiledFlow } from "../../compile/model.ts";
 import { current } from "../../defaults.ts";
-import { reprText, type SourceRange } from "../../diagnostics.ts";
+import { getCloseMatches, reprText, type SourceRange } from "../../diagnostics.ts";
 import {
   isExactly,
   type OutputContract,
@@ -66,8 +67,8 @@ export interface ResolvedChild {
   readonly input: readonly Parameter[];
   /** The child's `description:`, which a flow tool shows the model; `null` or absent for none. */
   readonly description?: string | null;
-  /** A library's defs, which make it no flow to call; `null` or absent for a flow. */
-  readonly library?: ReadonlyMap<string, unknown> | null;
+  /** A library's defs by name, which a call names one of; `null` or absent for a flow. */
+  readonly library?: ReadonlyMap<string, ResolvedChild> | null;
 }
 
 /**
@@ -133,9 +134,50 @@ export function childSignature(loaded: ResolvedChild): ChildSignature {
   });
 }
 
-/** Return how messages name a callable: `childLabel` when given, else `callable '<flowId>'`. */
-export function callableDisplay(flowId: string, childLabel: string | null = null): string {
-  return childLabel || `callable ${reprText(flowId)}`;
+/**
+ * Return how messages name a callable: `childLabel` when given, else `def '<def>' of '<flowId>'`
+ * for a library's def, else `callable '<flowId>'`.
+ */
+export function callableDisplay(flowId: string, childLabel: string | null = null, def: string | null = null): string {
+  if (childLabel) return childLabel;
+  return def === null ? `callable ${reprText(flowId)}` : `def ${reprText(def)} of ${reprText(flowId)}`;
+}
+
+/**
+ * Return the flow a call of `flowId` runs: `child` itself, or def `def` of the library `child`.
+ *
+ * @param subject The calling site, named first in messages.
+ * @param def The def the call names; `null` for none.
+ * @param directive Whether the call is a `call(...)` directive, whose fix is written as one.
+ * @throws LoadError when `child` is a library and `def` is `null`, a flow and `def` isn't, or a
+ *   library without def `def`; that message names a close match, else the library's defs.
+ */
+function pickDef(
+  subject: string,
+  flowId: string,
+  child: ResolvedChild,
+  def: string | null,
+  directive: boolean,
+  raise: (message: string) => LoadError,
+): ResolvedChild {
+  const library = child.library ?? null;
+  const display = callableDisplay(flowId);
+  if (library === null) {
+    if (def === null) return child;
+    throw raise(`${subject}: ${display} is a flow, not a library; its defs are private`);
+  }
+  if (def === null) {
+    const example = library.keys().next().value ?? "<def>";
+    const fix = directive ? `call(${flowId}.${example}, ...)` : `call: {${flowId}: ${example}}`;
+    throw raise(`${subject}: ${display} is a library; name a def: \`${fix}\``);
+  }
+  const found = library.get(def);
+  if (found !== undefined) return found;
+  const [close] = getCloseMatches(def, library.keys(), 1);
+  const names = [...library.keys()].map(reprText).join(", ");
+  let hint = names ? ` (its defs: ${names})` : " (it has none)";
+  if (close !== undefined) hint = `; did you mean ${reprText(close)}?`;
+  throw raise(`${subject}: library ${reprText(flowId)} has no def ${reprText(def)}${hint}`);
 }
 
 // Calls being resolved around the current one in the file being loaded. A module-level number
@@ -217,21 +259,34 @@ export function callNesting(flow: NestingFlow): number {
  * @param options.range Location of the call in the owning document.
  * @param options.kind The calling node's kind (`call`, `map` or `loop`), named in messages;
  *   `call` when not given.
- * @returns The resolved child flow.
- * @throws {LoadError} When the callable can't be resolved or is a library, or the call nests
- *   bodies deeper than `current().maxCallNesting` levels.
+ * @param options.def The def of the library `flowId` names, or `null` for a flow. Absent for a
+ *   caller that takes no library, which refuses one.
+ * @param options.label The calling site's name in messages, in place of `<kind> node '<id>'`.
+ * @param options.directive Whether the call is a `call(...)` directive, which a library's fix
+ *   is written as.
+ * @returns The resolved child flow: a library's def when `def` names one.
+ * @throws {LoadError} When the callable can't be resolved, is a library without a def, a flow
+ *   with one or a library without that def, or the call nests bodies deeper than
+ *   `current().maxCallNesting` levels.
  */
 export function resolveChild(
   nodeId: string,
   flowId: string,
   resolver: CallableResolver | null,
   childLabel: string | null = null,
-  options: { diagnostics?: LoadDiagnostics | null; range?: SourceRange | null; kind?: string } = {},
+  options: {
+    diagnostics?: LoadDiagnostics | null;
+    range?: SourceRange | null;
+    kind?: string;
+    def?: string | null;
+    label?: string | null;
+    directive?: boolean;
+  } = {},
 ): ResolvedChild {
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
   const range = options.range ?? null;
-  const subject = `${options.kind ?? "call"} node ${reprText(nodeId)}`;
-  const display = callableDisplay(flowId, childLabel);
+  const subject = options.label || `${options.kind ?? "call"} node ${reprText(nodeId)}`;
+  const display = callableDisplay(flowId, childLabel, options.def ?? null);
   const limit = current().maxCallNesting;
 
   const tooDeep = (levels: string): LoadError =>
@@ -255,8 +310,11 @@ export function resolveChild(
   } finally {
     activeCalls = depth;
   }
-  if (child.library != null) {
-    throw diagnostics.error(`${subject}: ${display} is a library (defs: and no nodes:), not a flow`, { range });
+  const raise = (message: string) => diagnostics.error(message, { range });
+  if (options.def !== undefined) {
+    child = pickDef(subject, flowId, child, options.def, options.directive ?? false, raise);
+  } else if (child.library != null) {
+    throw raise(`${subject}: ${display} is a library (defs: and no nodes:), not a flow`);
   }
   // A callee built earlier (a cached def, an imported file) never ran on this count.
   const levels = depth + 1 + callNesting(child.compiled);

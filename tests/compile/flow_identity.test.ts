@@ -1910,6 +1910,11 @@ test.each([
     () => new CallNode("node", { flowId: "second", child: fragment() }),
   ],
   [
+    "call-def",
+    () => new CallNode("node", { flowId: "child", child: fragment() }),
+    () => new CallNode("node", { flowId: "child", def: "quote", child: fragment() }),
+  ],
+  [
     "call-flow-version",
     () => new CallNode("node", { flowId: "child", flowVersion: "1", child: fragment() }),
     () => new CallNode("node", { flowId: "child", flowVersion: "2", child: fragment() }),
@@ -1925,6 +1930,11 @@ test.each([
     () => new MapNode("node", { flowId: "second", child: fragment() }),
   ],
   [
+    "map-def",
+    () => new MapNode("node", { flowId: "child", def: "quote", child: fragment() }),
+    () => new MapNode("node", { flowId: "child", def: "refund", child: fragment() }),
+  ],
+  [
     "map-flow-version",
     () => new MapNode("node", { flowId: "child", flowVersion: "1", child: fragment() }),
     () => new MapNode("node", { flowId: "child", flowVersion: "2", child: fragment() }),
@@ -1935,6 +1945,7 @@ test.each([
     () => new MapNode("node", { flowId: "child", child: replaceBody(fragment()) }),
   ],
   ["loop-flow-id", () => loopNode({ flowId: "first" }), () => loopNode({ flowId: "second" })],
+  ["loop-def", () => loopNode(), () => loopNode({ def: "requote" })],
   ["loop-flow-version", () => loopNode({ flowVersion: "1" }), () => loopNode({ flowVersion: "2" })],
   ["loop-child", () => loopNode(), () => loopNode({ child: replaceBody(fragment()) })],
   ["loop-predicate-kind", () => loopNode({ predicateKind: "while" }), () => loopNode({ predicateKind: "until" })],

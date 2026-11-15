@@ -122,10 +122,11 @@ const KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
   [NodeKind.CODE]: ["code"],
   [NodeKind.TOOL]: ["toolRef", "retries", "answerSchema"],
   [NodeKind.CASE]: ["cases"],
-  [NodeKind.CALL]: ["flowId", "flowVersion", "child"],
-  [NodeKind.MAP]: ["flowId", "flowVersion", "child"],
+  [NodeKind.CALL]: ["flowId", "def", "flowVersion", "child"],
+  [NodeKind.MAP]: ["flowId", "def", "flowVersion", "child"],
   [NodeKind.LOOP]: [
     "flowId",
+    "def",
     "flowVersion",
     "child",
     "predicateKind",
@@ -804,6 +805,8 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
       const spawner = node as ChildFlowNode;
       manifest.child = flowManifestOf(spawner.child, ctx, `${path}.child`, topologyOnly);
       manifest.flow_id = spawner.flowId;
+      // Left out for a flow, so flows that call no library def keep their identity.
+      if (spawner.def !== null) manifest.def = spawner.def;
       manifest.flow_version = canonicalValue(spawner.flowVersion, ctx, `${path}.flowVersion`);
       if (spawner instanceof LoopNode) {
         manifest.iteration = count(spawner.iteration, `${path}.iteration`, false);

@@ -192,7 +192,8 @@ function rejectAuthoredPrivateCallTargets(nodesCursor: SourceCursor): void {
     const kind = rawBody["kind"];
     // A non-text kind is left for node dispatch, which reports it at the value.
     if (!(typeof kind === "string" && INLINE_COMPOSITE_KINDS.has(kind))) continue;
-    const callTarget = rawBody["call"];
+    // `call: {alias: def}` names its callable by its key.
+    const callTarget = isRecord(rawBody["call"]) ? Object.keys(rawBody["call"])[0] : rawBody["call"];
     if (typeof callTarget !== "string" || !callTarget.startsWith(INLINE_FLOW_PREFIX)) continue;
     throw diagnostics.error(
       `node ${reprText(nodeId)} (kind=${kind}): call targets beginning with ` +

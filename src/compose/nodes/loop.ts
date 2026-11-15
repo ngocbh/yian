@@ -55,7 +55,7 @@ import {
   type BuildResult,
   NodeDescriptor,
   type NodeDescriptorFields,
-  rejectNonText,
+  readCallTarget,
   siteKey,
 } from "./base.ts";
 import { callableDisplay, childSignature, resolveChild } from "./resolver.ts";
@@ -69,6 +69,7 @@ const PREDICATE_EXAMPLES: readonly (readonly [string, string])[] = [
 /** The fields `LoopDescriptor`'s constructor takes: the common ones and the LOOP's own. */
 export interface LoopDescriptorFields extends NodeDescriptorFields {
   call: string;
+  def?: string | null;
   childLabel?: string | null;
   while_?: string | null;
   until_?: string | null;
@@ -81,7 +82,8 @@ export interface LoopDescriptorFields extends NodeDescriptorFields {
 /**
  * kind=loop: a `('a -> 'a) -> 'a -> 'a` driver over a carried record.
  *
- * `call` names the body child flow, resolved as a `call`'s is. The authored `input:` mapping
+ * `call` names the body child flow, resolved as a `call`'s is, and `def` a def of the library
+ * `call` names (`null` for a flow). The authored `input:` mapping
  * seeds the carried record at turn 0. The body returns a subset of the carried record; each
  * omitted field keeps its previous value. Exactly one of `while_`, `until_` and `times` drives
  * the loop; `max` optionally limits a `while:` or `until:` loop's iterations, and
@@ -125,6 +127,8 @@ export class LoopDescriptor extends NodeDescriptor {
 
   /** The body child flow's name: a `defs:` entry or an external flow id. */
   readonly call: string;
+  /** The def of the library `call` names; `null` when `call` names a flow. */
+  readonly def: string | null;
   /** The diagnostic label of an anonymous inline child; `null` on an authored node. */
   readonly childLabel: string | null;
   /** The `while:` predicate text; `null` when absent. */
@@ -148,6 +152,7 @@ export class LoopDescriptor extends NodeDescriptor {
   constructor(fields: LoopDescriptorFields) {
     super(fields);
     this.call = fields.call;
+    this.def = fields.def ?? null;
     this.childLabel = fields.childLabel ?? null;
     this.while_ = fields.while_ ?? null;
     this.until_ = fields.until_ ?? null;
@@ -158,8 +163,8 @@ export class LoopDescriptor extends NodeDescriptor {
   }
 
   /**
-   * Reject a `call:` YAML read as non-text (including `null`), a `while:` or `until:` that is
-   * neither `null` nor text, and predicate text holding a lone surrogate, then run the base checks.
+   * Read `call:` (`readCallTarget`), reject a `while:` or `until:` that is neither `null` nor
+   * text, and predicate text holding a lone surrogate, then run the base checks.
    *
    * A YAML bool, number or list predicate would otherwise crash the predicate check, or, when
    * falsy (`while: false`), skip it and fail only at run time.
@@ -174,15 +179,7 @@ export class LoopDescriptor extends NodeDescriptor {
     diagnostics: LoadDiagnostics,
     cursor: SourceCursor,
   ): void {
-    rejectNonText(
-      this.kind,
-      nodeId,
-      "call",
-      fields["call"] ?? null,
-      ranges.get(siteKey("field", "call")) ?? ownRange,
-      diagnostics,
-      { required: true },
-    );
+    readCallTarget(this.kind, nodeId, fields, ranges.get(siteKey("field", "call")) ?? ownRange, diagnostics);
     for (const [key, example] of PREDICATE_EXAMPLES) {
       const value = fields[this.keywordRemap.get(key)!] ?? null;
       if (value !== null && typeof value !== "string") {
@@ -243,6 +240,7 @@ export class LoopDescriptor extends NodeDescriptor {
       diagnostics: ctx.diagnostics,
       range: this.fieldRanges.get(siteKey("field", "call")) ?? this.range,
       kind: this.kind,
+      def: this.def,
     });
     const sig = childSignature(child);
     const subject = `loop node ${reprText(this.id)}`;
@@ -250,6 +248,7 @@ export class LoopDescriptor extends NodeDescriptor {
     // body keeps.
     const node = new LoopNode(this.id, {
       flowId: this.call,
+      def: this.def,
       flowVersion: null,
       child: child.compiled,
       childInputs: sig.inputs,
@@ -312,7 +311,7 @@ export class LoopDescriptor extends NodeDescriptor {
     const outNames = contractFieldNames(sig.output);
     if (outNames === null || outNames.size === 0) {
       errors.push(
-        `${subject}: body ${callableDisplay(this.call, this.childLabel)} must return a record with at ` +
+        `${subject}: body ${callableDisplay(this.call, this.childLabel, this.def)} must return a record with at ` +
           `least one carried field (a subset of the carried record ${carriedText}); ` +
           "write `output: {field: ...}` or a whole reference to a node with a record output",
       );

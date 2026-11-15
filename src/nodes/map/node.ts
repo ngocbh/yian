@@ -57,7 +57,8 @@ export class MapNode extends ChildFlowNode {
    * Build a MAP driver.
    *
    * @param nodeId The node's unique id.
-   * @param options.flowId The id of the child flow to map.
+   * @param options.flowId The id of the child flow to map, or of the library that holds it.
+   * @param options.def The def of library `flowId` that is the child; omitted, `null`.
    * @param options.parallel Inert; defaults to `false`.
    * @param options.flowVersion A pinned child flow version, if any.
    * @param options.child The baked child flow; `null` until Compose bakes it.
@@ -68,6 +69,7 @@ export class MapNode extends ChildFlowNode {
     nodeId: string,
     options: {
       flowId: string;
+      def?: string | null;
       parallel?: boolean;
       flowVersion?: string | null;
       child?: unknown;

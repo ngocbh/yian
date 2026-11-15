@@ -103,7 +103,6 @@ import { validateHeaders } from "./llm_clients/connection_settings.ts";
 import { defaultModelAccess, type ModelAccess } from "./llm_clients/factory.ts";
 import { Message, NamedTool, type Request, ToolCallPart, ToolSpec } from "./llm/messages.ts";
 import { isMemory, type MemoryBase } from "./memory/base.ts";
-import { MEMORY_SCOPE_LABEL } from "./memory/tools.ts";
 import {
   type FoldedSteps,
   foldSteps,
@@ -113,7 +112,6 @@ import {
   type StepExchange,
 } from "./nodes/agent/messages.ts";
 import { staticPathOf } from "./nodes/ids.ts";
-import { FLOW_SCOPE_LABEL } from "./nodes/agent/flow_tools.ts";
 import { typeToSchema } from "./nodes/agent/structured.ts";
 import { type CompleteResult, type LocalToolSpec, type Node, NodeKind, type RebuildCaps } from "./nodes/base.ts";
 import { applyDefaults, BindingError, checkInputNames, coerceInputs, copyValue } from "./nodes/binding.ts";
@@ -192,8 +190,8 @@ import {
   GrantError,
   type GrantedTool,
   type GrantScope,
-  localGroupScope,
-  localToolScope,
+  type NodeScope,
+  nodeScope,
   reachedGroups,
   requestToolSpecs,
   type ToolGrant,
@@ -3038,8 +3036,8 @@ export async function agentCall(
 /**
  * Return what the run recorded of its grants, as a `RebuildCaps` reads them: the skills by name,
  * and a request's tool list for some grants, expanded as the live loop expands them but over the
- * node's own groups (its memories' recorded tools) and the groups and tools the run recorded
- * (`null` when a grant names no recorded tool).
+ * node scope's specs (its memories' recorded tools and the flows it grants) and the groups and
+ * tools the run recorded (`null` when a grant names no recorded tool).
  */
 function recordedGrants(state: RunState): Pick<RebuildCaps, "skills" | "toolSpecs"> {
   const skills = new Map(
@@ -3052,18 +3050,10 @@ function recordedGrants(state: RunState): Pick<RebuildCaps, "skills" | "toolSpec
   const toolSpecs = (
     grants: readonly ToolGrant[],
     loadSkill: ToolSpec | null,
-    local: ReadonlyMap<string, readonly LocalToolSpec[]> = new Map(),
-    localTools: readonly LocalToolSpec[] = [],
+    own: NodeScope<LocalToolSpec> = { groups: new Map(), tools: [] },
   ) => {
-    // The node's own groups, then its own tools, come first, as `ToolSet.withLocalGroups` and
-    // `withLocalTools` put them live.
-    const names = new Map([...local].map(([group, specs]) => [group, specs.map((spec) => spec.name)]));
-    const own = new Map(localTools.map((spec) => [spec.name, spec]));
-    const scopes = [
-      ...(local.size === 0 ? [] : [localGroupScope(MEMORY_SCOPE_LABEL, names)]),
-      ...(own.size === 0 ? [] : [localToolScope(FLOW_SCOPE_LABEL, new Set(own.keys()))]),
-      scope,
-    ];
+    // The node scope comes first, as `ToolSet.withNodeScope` puts it live.
+    const scopes = own.groups.size === 0 && own.tools.length === 0 ? [scope] : [nodeScope(own), scope];
     let granted: GrantedTool[];
     try {
       granted = expandGrants(grants, scopes);
@@ -3073,8 +3063,8 @@ function recordedGrants(state: RunState): Pick<RebuildCaps, "skills" | "toolSpec
     }
     const specOf = (tool: GrantedTool) => {
       if (tool.scope < scopes.length - 1) {
-        const { name, description, parameters } =
-          tool.group === null ? own.get(tool.tool)! : local.get(tool.group)!.find((spec) => spec.name === tool.tool)!;
+        const specs = tool.group === null ? own.tools : own.groups.get(tool.group)!;
+        const { name, description, parameters } = specs.find((spec) => spec.name === tool.tool)!;
         return new ToolSpec({ name, description, parameters });
       }
       if (!Object.hasOwn(state.recordedTools, tool.key)) return null;

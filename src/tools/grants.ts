@@ -142,34 +142,31 @@ export interface GrantScope {
 }
 
 /**
- * Return a scope of groups local to one node, such as its memories: each group's tool names, in
- * order. Only a grant naming a group reaches one; a bare name never does. A tool's identity is its
- * group and name, so two groups' tools that would show one name stay two tools.
+ * One node's own tools, tried before the run's: its groups by name, each its tools in order, and
+ * its top-level tools, each named by its `name`. Live they are `FunctionTool`s; a rebuilt request
+ * reads their recorded specs. One file names them all (memory inputs, `defs:` and `uses:` keys), so
+ * no name is both a group and a top-level tool.
  */
-export function localGroupScope(label: string, groups: ReadonlyMap<string, readonly string[]>): GrantScope {
-  return {
-    label,
-    bareMembers: false,
-    group: (name) => groups.get(name) ?? null,
-    hasTool: () => false,
-    groupsHolding: () => [],
-    groupNames: () => [...groups.keys()],
-    identity: (group, tool) => JSON.stringify([group, tool]),
-  };
+export interface NodeScope<T extends { readonly name: string } = { readonly name: string }> {
+  readonly groups: ReadonlyMap<string, readonly T[]>;
+  readonly tools: readonly T[];
 }
 
 /**
- * Return a scope of tools local to one node, such as the flows it grants: each a top-level tool by
- * its name. Only a name grant reaches one.
+ * Return the grant scope of one node's own tools (`NodeScope`). Only a grant naming a group
+ * reaches a group's tool, and only a name grant a top-level tool. A tool's identity is its group
+ * and name, so two groups' tools that would show one name stay two tools.
  */
-export function localToolScope(label: string, names: ReadonlySet<string>): GrantScope {
+export function nodeScope(own: NodeScope): GrantScope {
+  const groups = new Map([...own.groups].map(([group, tools]) => [group, tools.map((tool) => tool.name)]));
+  const tools = new Set(own.tools.map((tool) => tool.name));
   return {
-    label,
+    label: "this node",
     bareMembers: false,
-    group: () => null,
-    hasTool: (name) => names.has(name),
+    group: (name) => groups.get(name) ?? null,
+    hasTool: (name) => tools.has(name),
     groupsHolding: () => [],
-    groupNames: () => [],
+    groupNames: () => [...groups.keys()],
     identity: (group, tool) => JSON.stringify([group, tool]),
   };
 }

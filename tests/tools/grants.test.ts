@@ -7,6 +7,7 @@ import {
   type GrantedTool,
   type GrantScope,
   grantText,
+  nodeScope,
   parseToolGrants,
   reachedGroups,
   requestToolSpecs,
@@ -181,4 +182,36 @@ test("the groups grants reach: whole, in group form, or through a bare name, onc
     { scope: 0, group: "lessons" },
     { scope: 1, group: "docs" },
   ]);
+});
+
+// A node's memory `lessons` and the flow `quote` it grants, in one scope tried before the run's.
+const own = nodeScope({ groups: new Map([["lessons", [{ name: "list" }, { name: "read" }]]]), tools: [{ name: "quote" }] });
+
+test("a node scope holds its groups and its top-level tools; a tool's identity is its group and name", () => {
+  const granted = expandGrants(parseToolGrants(["quote", "lessons", { lessons: ["read"] }, "lookup"], "n"), [own, run]);
+  expect(granted.map((each) => [each.visible, each.scope, each.key])).toEqual([
+    ["quote", 0, JSON.stringify([null, "quote"])],
+    ["lessons_list", 0, JSON.stringify(["lessons", "list"])],
+    ["lessons_read", 0, JSON.stringify(["lessons", "read"])],
+    ["lookup", 1, "lookup"],
+  ]);
+  expect(own.label).toBe("this node");
+  expect(own.groupNames()).toEqual(["lessons"]);
+  expect(reachedGroups(parseToolGrants(["quote", "lessons"], "n"), [own, run])).toEqual([{ scope: 0, group: "lessons" }]);
+});
+
+test("a node scope comes before the run's: its group and its tool win over the run's of one name", () => {
+  const shadow = nodeScope({ groups: new Map([["github", [{ name: "read" }]]]), tools: [{ name: "lookup" }] });
+  const granted = expandGrants(parseToolGrants(["github", "lookup"], "n"), [shadow, run]);
+  expect(granted.map((each) => [each.visible, each.scope])).toEqual([
+    ["github_read", 0],
+    ["lookup", 0],
+  ]);
+});
+
+test.each([
+  [["read"], "grants unknown tool or group 'read'; tool groups in this node: [lessons]"],
+  [[{ quote: ["x"] }], "grants unknown tool group 'quote'; tool groups in this node: [lessons]"],
+])("a bare name never reaches a node group's tool, nor a group grant its top-level tool: %j", (raw, message) => {
+  expect(() => expandGrants(parseToolGrants(raw, "n"), [own])).toThrow(message);
 });

@@ -972,20 +972,20 @@ describe("function tool types", () => {
   }
 });
 
-describe("withLocalGroups", () => {
+describe("withNodeScope", () => {
   const tool = (name: string) =>
     new FunctionTool({ name, description: name, parametersJsonSchema: { type: "object" }, execute: () => `local ${name}` });
 
-  test("a local group's tools resolve by group, before a run group of that name, and its scope comes first", async () => {
+  test("a node group's tools resolve by group, before a run group of that name, and its scope comes first", async () => {
     const runRead = tool("read");
     const run = new ToolSet({ lessons: [runRead], lookup: tool("lookup") }).forRun("r");
     const read = tool("read");
-    const local = run.withLocalGroups(new Map([["lessons", [read, tool("append")]]]), "this node's memories");
+    const local = run.withNodeScope({ groups: new Map([["lessons", [read, tool("append")]]]), tools: [] });
     expect(local.resolve([{ group: "lessons", name: "read" }])).toEqual([read]);
     expect(run.resolve([{ group: "lessons", name: "read" }])).toEqual([runRead]);
     expect(local.runId).toBe("r");
     const [scope, runScope] = local.scopes();
-    expect(scope!.label).toBe("this node's memories");
+    expect(scope!.label).toBe("this node");
     expect(scope!.group("lessons")).toEqual(["read", "append"]);
     expect(scope!.bareMembers).toBe(false);
     expect(runScope!.label).toBe("this run");
@@ -998,8 +998,44 @@ describe("withLocalGroups", () => {
     expect(() => local.resolve([{ group: "lessons", name: "edit" }])).toThrow("`lessons` has no tool `edit`; it has read, append");
   });
 
-  test("a bare name never reaches a local group's tool", () => {
-    const local = new ToolSet({}).withLocalGroups(new Map([["lessons", [tool("read")]]]), "this node's memories");
+  test("a node's groups and top-level tools are one scope; a top-level tool resolves by name before a run tool", async () => {
+    const runLookup = tool("lookup");
+    const run = new ToolSet({ lookup: runLookup, search: tool("search") }).forRun("r");
+    const quote = tool("quote");
+    const lookup = tool("lookup");
+    const local = run.withNodeScope({ groups: new Map([["lessons", [tool("read")]]]), tools: [quote, lookup] });
+    expect(local.resolve(["quote", "lookup", "search"])).toEqual([quote, lookup, run.resolve(["search"])[0]!]);
+    expect(local.resolve([{ group: null, name: "lookup" }])).toEqual([lookup]);
+    expect(run.resolve(["lookup"])).toEqual([runLookup]);
+    expect(local.scopes()).toHaveLength(2);
+    const grants = ["quote", "lessons", "search"].map(asToolGrant);
+    expect(expandGrants(grants, local.scopes()).map((each) => [each.visible, each.scope])).toEqual([
+      ["quote", 0],
+      ["lessons_read", 0],
+      ["search", 1],
+    ]);
+    expect(await local.invoke("quote", {})).toBe("local quote");
+  });
+
+  test("a bare name never reaches a node group's tool", () => {
+    const local = new ToolSet({}).withNodeScope({ groups: new Map([["lessons", [tool("read")]]]), tools: [] });
     expect(() => expandGrants([asToolGrant("read")], local.scopes())).toThrow("grants unknown tool or group 'read'");
+  });
+
+  test("an empty node scope adds no scope, and a new one replaces the last", () => {
+    const run = new ToolSet({ lookup: tool("lookup") });
+    expect(run.withNodeScope({ groups: new Map(), tools: [] }).scopes().map((scope) => scope.label)).toEqual(["this run"]);
+    const first = run.withNodeScope({ groups: new Map(), tools: [tool("quote")] });
+    const second = first.withNodeScope({ groups: new Map([["lessons", [tool("read")]]]), tools: [] });
+    expect(second.scopes()[0]!.hasTool("quote")).toBe(false);
+    expect(() => second.resolve(["quote"])).toThrow("unknown tool id 'quote'");
+  });
+
+  test.each<[string, Map<string, FunctionTool[]>, FunctionTool[], string]>([
+    ["a group holds one name twice", new Map([["lessons", [tool("read"), tool("read")]]]), [], "this node's group 'lessons' holds 'read' twice"],
+    ["two tools share a name", new Map(), [tool("quote"), tool("quote")], "this node's tools hold 'quote' twice"],
+    ["a name is a group and a tool", new Map([["quote", [tool("read")]]]), [tool("quote")], "this node holds 'quote' as a group and a tool"],
+  ])("a node scope is refused when %s", (_, groups, tools, message) => {
+    expect(() => new ToolSet({}).withNodeScope({ groups, tools })).toThrow(message);
   });
 });

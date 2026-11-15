@@ -1,5 +1,5 @@
-# A library granted under the name of one of the run's tool groups, here an MCP server's, would
-# make the grant mean two groups.
+# A library granted under the name of one of the run's tool groups, a host group or an MCP server,
+# would make the grant mean two groups.
 kind: run
 flow: |
   id: pricing

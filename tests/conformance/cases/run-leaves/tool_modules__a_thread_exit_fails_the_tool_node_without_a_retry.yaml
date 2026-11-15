@@ -1,0 +1,36 @@
+# A tool module's thread that exits during a call fails the call with `tool.module_exited`. The
+# call's outcome is unknown, so `retries: 2` doesn't call it again.
+kind: run
+flow: |
+  id: crm
+  name: crm
+  uses:
+    crm: ./crm.ts
+  nodes:
+    gone:
+      kind: tool
+      tool_id: {crm: exit}
+      retries: 2
+  output: ${gone.output}
+files:
+  crm.ts: |
+    export const exit = {
+      name: "exit",
+      description: "Exit the thread.",
+      parameters: { type: "object" },
+      execute: () => process.exit(3),
+    };
+run:
+  run_id: r1
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: tool.module_exited
+      message: crm.ts's thread exited (code 3); the call's outcome is unknown
+      frames:
+      - label: flow.yaml
+        range: [6, 3, 6, 7]
+      node: gone
+  trace: [[run_started, null, {num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, gone], [node_failed, gone, {failure: {code: tool.module_exited, message: crm.ts's thread exited (code 3); the call's outcome is unknown, frames: [{label: flow.yaml, range: [6, 3, 6, 7]}], node: gone}}]]

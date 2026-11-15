@@ -1,0 +1,53 @@
+# A TOOL node calls a tool module's tool through its group alias, `{crm: lookup}`, and through a
+# one-export alias by its name, `quote`. `lookup` marks its first attempt's error transient
+# without importing yian, so `retries: 1` calls it again at once (`retryAfter: 0`). The run
+# records no `tool_modules`: no agent reaches them.
+kind: run
+flow: |
+  id: crm
+  name: crm
+  uses:
+    crm: ./crm.ts
+    quote: ./tools.ts:quote
+  nodes:
+    found:
+      kind: tool
+      tool_id: {crm: lookup}
+      retries: 1
+      input: {id: "7"}
+      output: {id: !str, name: !str}
+    priced:
+      kind: tool
+      tool_id: quote
+      input: {qty: 3}
+      output: !int
+  output:
+    name: ${found.output.name}
+    total: ${priced.output}
+files:
+  crm.ts: |
+    const TOOL_ERROR = Symbol.for("yian.tool_error");
+    export const lookup = {
+      name: "lookup",
+      description: "Find a customer by id.",
+      parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+      execute(args, ctx) {
+        if (ctx.attempt === 1) throw Object.assign(new Error("busy"), { [TOOL_ERROR]: ["transient"], retryAfter: 0 });
+        return { id: args.id, name: "Ada" };
+      },
+    };
+  tools.ts: |
+    export const quote = {
+      name: "quote",
+      description: "Price an order.",
+      parameters: { type: "object", properties: { qty: { type: "integer" } }, required: ["qty"] },
+      execute: (args) => args.qty * 2,
+    };
+run:
+  run_id: r1
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: {name: Ada, total: 6}
+  trace: [[run_started, null, {num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, found], [node_step, found, {n: 1, step: {attempt: 1, error: {message: busy, type: Error}, event: failed, kind: tool_attempt, retry_in: 0.0}}], [node_step, found, {n: 2, step: {attempt: 2, event: started, kind: tool_attempt}}], [pool_commit, found, {value: {id: '7', name: Ada}}], [node_succeeded, found, {commit: 11}], [node_started, priced], [pool_commit, priced, {value: 6}], [node_succeeded, priced, {commit: 14}], [node_started, __end__], [pool_commit, __end__, {value: {name: Ada, total: 6}}], [node_succeeded, __end__, {commit: 17}]]

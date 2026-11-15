@@ -198,7 +198,15 @@ import {
   visibleToolName,
 } from "./tools/grants.ts";
 import { startToolModule } from "./tools/module_thread.ts";
-import { checkModuleListing, moduleKey, moduleScope, splitModuleRef, type StartedToolModule } from "./tools/modules.ts";
+import {
+  checkModuleListing,
+  moduleKey,
+  moduleScope,
+  recordedModuleScope,
+  splitModuleRef,
+  type StartedToolModule,
+  type ToolModuleRef,
+} from "./tools/modules.ts";
 import { type AskRequest, RESERVED_TOOL_NAMES, type ToolEntry, type ToolRef, ToolSet } from "./tools/registry.ts";
 import { toolTypes } from "./tools/types.ts";
 import { YianRangeError, YianTypeError } from "./typesys/errors.ts";
@@ -1351,6 +1359,7 @@ async function startRun(
       skills: recordedSkills(flow.compiled, skills),
       tools: recordedTools(flow.compiled, runTools),
       toolGroups: recordedToolGroups(flow.compiled, runTools),
+      toolModules: recordedToolModules(flow.compiled, runTools),
       yianVersion: VERSION,
       parent: options.parent == null ? null : { runId: options.parent.runId, node: options.parent.node ?? null },
     });
@@ -1455,6 +1464,33 @@ function recordedToolGroups(flow: CompiledFlow, tools: ToolSet): Record<string, 
     }
   }
   return Object.fromEntries(recorded);
+}
+
+/**
+ * Return, by module key, the tools of each tool module an AGENT of `flow` grants, as its thread
+ * listed them, in export-name order: every tool of a module an alias grants whole, and each export
+ * a one-export alias names. A TOOL node's module isn't recorded, as a host tool a TOOL node calls
+ * isn't: no request is rebuilt from it.
+ */
+function recordedToolModules(flow: CompiledFlow, tools: ToolSet): Record<string, RecordedTool[]> {
+  const recorded = new Map<string, Map<string, RecordedTool>>();
+  for (const [, node] of staticNodes(flow)) {
+    const granted = new Set(node.moduleGrants().map((grant) => (grant.kind === "name" ? grant.name : grant.group)));
+    for (const { alias, ref, path } of node.toolModules()) {
+      if (!granted.has(alias)) continue;
+      const { key, listing } = tools.toolModule(path)!;
+      const { exportName } = splitModuleRef(ref);
+      const module = recorded.get(key) ?? new Map<string, RecordedTool>();
+      recorded.set(key, module);
+      for (const { name, description, parametersJsonSchema, resumable } of listing.tools) {
+        if (exportName !== null && name !== exportName) continue;
+        module.set(name, { name, description, parameters: parametersJsonSchema, resumable });
+      }
+    }
+  }
+  const sorted = (module: Map<string, RecordedTool>) =>
+    [...module.keys()].sort(compareCodeUnits).map((name) => module.get(name)!);
+  return Object.fromEntries([...recorded].map(([key, module]) => [key, sorted(module)]));
 }
 
 /** Return each skill an AGENT of `flow` grants from `skills`, by name. */
@@ -1618,8 +1654,9 @@ export interface AdvanceOptions {
  *   is refused or their header names aren't the recorded ones (the message never echoes a value),
  *   a recorded agent config has an invalid field, or, for an unfinished run, its agents use the
  *   host key and `apiKey` isn't given (before anything is appended), a tool or skill check of
- *   `runFlow` fails, a granted tool's spec or skill's text differs from the recorded one
- *   (`resume refused: tools.<name> description differs from the recorded one`), a `tools` server
+ *   `runFlow` fails, a granted tool's spec, a granted tool module's tool's spec or a skill's text
+ *   differs from the recorded one (`resume refused: tools.<name> description differs from the
+ *   recorded one`, `resume refused: tool_modules.<key>.<name> ...`), a `tools` server
  *   was opened by another run in progress, or a started call-time agent resolves to another config
  *   than the one it recorded (`node '<path>' llm_config: recorded config differs from the
  *   recomputed one; ...`), before its model call. Also when `learnable`, a removed option, is
@@ -1743,6 +1780,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       checkToolTypes(flow.compiled, runTools);
       checkRecordedSpecs("tools", start.tools, recordedTools(flow.compiled, runTools));
       checkRecordedToolGroups(start.toolGroups, recordedToolGroups(flow.compiled, runTools));
+      checkRecordedToolModules(start.toolModules, recordedToolModules(flow.compiled, runTools));
       const reopened = await RunMemories.reopen(
         memoryBound,
         recordedMemories,
@@ -1902,19 +1940,22 @@ function readStart(log: string, maxLineBytes: number | null): RunStartedRecord {
 }
 
 /**
- * Check the host's specs of the granted tools or skills (`kind`) against the ones the run recorded.
+ * Check the host's specs of the granted tools or skills (`kind`), or of one tool module's tools,
+ * against the ones the run recorded. `prefix` comes before each name in messages: a module's key
+ * and a dot.
  *
  * @throws RangeError naming the first one, by name, that is missing, added, or has a field that
  *   differs.
  */
 function checkRecordedSpecs(
-  kind: "tools" | "skills",
+  kind: "tools" | "skills" | "tool_modules",
   recorded: Readonly<Record<string, Readonly<Record<string, unknown>>>>,
   current: Readonly<Record<string, Readonly<Record<string, unknown>>>>,
+  prefix = "",
 ): void {
   const names = [...new Set([...Object.keys(recorded), ...Object.keys(current)])].sort(compareCodeUnits);
   for (const name of names) {
-    const subject = `resume refused: ${kind}.${name}`;
+    const subject = `resume refused: ${kind}.${prefix}${name}`;
     if (!Object.hasOwn(current, name)) throw new YianRangeError(`${subject} is recorded, but this run's ${kind} lack it`);
     if (!Object.hasOwn(recorded, name)) throw new YianRangeError(`${subject} isn't recorded; the run started without it`);
     const was = recorded[name]!;
@@ -1924,6 +1965,24 @@ function checkRecordedSpecs(
         throw new YianRangeError(`${subject} ${field} differs from the recorded one`);
       }
     }
+  }
+}
+
+/**
+ * Check the tools of the tool modules the agents grant against the ones the run recorded, module by
+ * module in key order, so a module that gained or lost a tool is refused too.
+ *
+ * @throws RangeError naming the first tool, as `tool_modules.<key>.<name>`, that is missing, added,
+ *   or has a field that differs.
+ */
+function checkRecordedToolModules(
+  recorded: Readonly<Record<string, readonly RecordedTool[]>>,
+  current: Readonly<Record<string, readonly RecordedTool[]>>,
+): void {
+  const byName = (modules: Readonly<Record<string, readonly RecordedTool[]>>, key: string) =>
+    Object.fromEntries((Object.hasOwn(modules, key) ? modules[key]! : []).map((tool) => [tool.name, tool]));
+  for (const key of [...new Set([...Object.keys(recorded), ...Object.keys(current)])].sort(compareCodeUnits)) {
+    checkRecordedSpecs("tool_modules", byName(recorded, key), byName(current, key), `${key}.`);
   }
 }
 
@@ -3048,7 +3107,7 @@ export async function agentCall(
   );
 
   const caps: RebuildCaps = {
-    ...recordedGrants(state),
+    ...recordedGrants(state, flow.source?.dir ?? null),
     models: options.models ?? defaultModelAccess(env),
     localTypes: localTypes(state.flow, agent),
   };
@@ -3077,12 +3136,17 @@ export async function agentCall(
 }
 
 /**
- * Return what the run recorded of its grants, as a `RebuildCaps` reads them: the skills by name,
- * and a request's tool list for some grants, expanded as the live loop expands them but over the
- * node scope's specs (its memories' recorded tools and the flows it grants) and the groups and
- * tools the run recorded (`null` when a grant names no recorded tool).
+ * Return what the run recorded of its grants, as a `RebuildCaps` reads them: the skills by name;
+ * a request's tool list for some grants, expanded as the live loop expands them but over the node
+ * scope's specs (its memories' recorded tools, the flows it grants and its tool modules' recorded
+ * tools) and the groups and tools the run recorded (`null` when a grant names no recorded tool);
+ * and the node scope of some tool modules, their recorded tools found by their key relative to
+ * `dir`, the root flow's folder (`null` for none).
  */
-function recordedGrants(state: RunState): Pick<RebuildCaps, "skills" | "toolSpecs"> {
+function recordedGrants(
+  state: RunState,
+  dir: string | null,
+): Pick<RebuildCaps, "skills" | "toolSpecs" | "moduleSpecs"> {
   const skills = new Map(
     Object.entries(state.recordedSkills).map(([name, { description, instructions }]) => [
       name,
@@ -3116,7 +3180,13 @@ function recordedGrants(state: RunState): Pick<RebuildCaps, "skills" | "toolSpec
     };
     return requestToolSpecs(granted, specOf, loadSkill);
   };
-  return { skills, toolSpecs };
+  const modules = state.recordedToolModules;
+  const moduleSpecs = (refs: readonly ToolModuleRef[]) =>
+    recordedModuleScope(refs, (path) => {
+      const key = moduleKey(path, dir);
+      return Object.hasOwn(modules, key) ? modules[key]! : null;
+    });
+  return { skills, toolSpecs, moduleSpecs };
 }
 
 /**

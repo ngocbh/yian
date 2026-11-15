@@ -12,7 +12,13 @@ import { PermanentToolError } from "../../src/tools/errors.ts";
 import { nodeScope, expandGrants, parseToolGrants } from "../../src/tools/grants.ts";
 import type { ToolModuleThread } from "../../src/tools/module_thread.ts";
 import type { ListedTool, ToolModuleListing } from "../../src/tools/module_worker.ts";
-import { checkModuleListing, moduleKey, moduleScope, type StartedToolModule } from "../../src/tools/modules.ts";
+import {
+  checkModuleListing,
+  moduleKey,
+  moduleScope,
+  recordedModuleScope,
+  type StartedToolModule,
+} from "../../src/tools/modules.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 
 /** A listed tool `name` with an `id` parameter. */
@@ -50,6 +56,23 @@ test.each<[ToolModuleListing, { group: boolean; exports: string[] }, string | nu
   const check = () => checkModuleListing("crm.ts", listing, reach);
   if (message === null) expect(check).not.toThrow();
   else expect(check).toThrow(new RangeError(message));
+});
+
+test("a node scope of recorded tools holds what moduleScope would, and nothing the run didn't record", () => {
+  const recorded = new Map([["/w/crm.ts", [{ name: "create" }, { name: "lookup" }]]]);
+  const refs = [
+    { alias: "crm", ref: "./crm.ts", path: "/w/crm.ts" },
+    { alias: "find", ref: "./crm.ts:lookup", path: "/w/crm.ts" },
+    { alias: "gone", ref: "./crm.ts:gone", path: "/w/crm.ts" },
+    { alias: "x", ref: "./x.ts", path: "/w/x.ts" },
+  ];
+
+  const scope = recordedModuleScope(refs, (path) => recorded.get(path) ?? null);
+
+  expect([[...scope.groups], scope.tools]).toEqual([[["crm", [{ name: "create" }, { name: "lookup" }]]], [{ name: "find" }]]);
+  // `find` and `crm`'s `lookup` are one export, bound once.
+  const visible = expandGrants(parseToolGrants(["find", "crm"], "n"), [nodeScope(scope)]).map((each) => each.visible);
+  expect(visible).toEqual(["find", "crm_create"]);
 });
 
 test("a module's key is its path relative to the root flow's folder, or its path with none", () => {

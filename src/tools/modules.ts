@@ -169,3 +169,35 @@ function standIn(key: string, thread: ToolModuleThread, listed: ListedTool, name
     },
   });
 }
+
+/**
+ * Return the node scope `refs` reach in the tools a run recorded of its modules, by alias, as
+ * `moduleScope` builds it from their listings: a group alias's recorded tools as a group under the
+ * alias, and a one-export alias's tool under the alias, each entry's identity its file and export.
+ * `recorded` gives a module's recorded tools by its real path, or `null` for none; a ref whose
+ * module or export the run didn't record reaches nothing.
+ */
+export function recordedModuleScope<T extends { readonly name: string }>(
+  refs: readonly ToolModuleRef[],
+  recorded: (path: string) => readonly T[] | null,
+): NodeScope<T> {
+  const groups = new Map<string, T[]>();
+  const single: T[] = [];
+  const identities = new Map<string, string>();
+  for (const { alias, ref, path } of refs) {
+    const tools = recorded(path);
+    if (tools === null) continue;
+    const identity = (name: string) => JSON.stringify({ module: path, export: name });
+    const { exportName } = splitModuleRef(ref);
+    if (exportName === null) {
+      groups.set(alias, [...tools]);
+      for (const { name } of tools) identities.set(JSON.stringify([alias, name]), identity(name));
+      continue;
+    }
+    const tool = tools.find(({ name }) => name === exportName);
+    if (tool === undefined) continue;
+    single.push({ ...tool, name: alias });
+    identities.set(JSON.stringify([null, alias]), identity(exportName));
+  }
+  return { groups, tools: single, identities };
+}

@@ -12,7 +12,7 @@
  * requests with.
  */
 
-import { afterAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,7 +21,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { loadFlow, withUnfinishedToolModules } from "../src/compose/loader.ts";
 import { ToolResultPart } from "../src/llm/messages.ts";
 import { ScriptedModel } from "../src/llm/testing.ts";
-import { advance, agentCall, agentCalls, complete, runFlow, type RunFlowOptions } from "../src/run.ts";
+import { advance, agentCall, agentCalls, complete, pendingCalls, runFlow, type RunFlowOptions } from "../src/run.ts";
 import { pending } from "../src/tools/context.ts";
 import { FunctionTool, tool } from "../src/tools/function_tools.ts";
 import { mcpServer } from "../src/tools/mcp.ts";
@@ -231,6 +231,54 @@ export const meet = {
 /** The source of a tool `name` taking any arguments, whose `execute` is `body`, after `more` fields. */
 const plain = (name: string, body: string, more = "") =>
   `export const ${name} = { name: "${name}", description: "${name}.", parameters: { type: "object" }, ${more}execute: ${body} };\n`;
+
+test.each([
+  ["a tool node", "t: {kind: tool, tool_id: {crm: hold}, input: {}, retries: 2}", "${t.output}"],
+  ["an agent", "a: {kind: agent, prompt: go, tools: [crm]}", "${a.output}"],
+])("a module tool's pending() makes %s wait for complete() when the host completes calls, else fails its call", async (_name, node, output) => {
+  const calls = join(dir, "calls");
+  const hold = `() => { appendFileSync(${JSON.stringify(calls)}, "."); return { [Symbol.for("yian.pending")]: true }; }`;
+  writeFileSync(join(dir, "crm.ts"), `import { appendFileSync } from "node:fs";\n${plain("hold", hold)}`);
+  const text = app({ crm: "./crm.ts" }, [node], `output: ${output}\n`);
+  const model = () => new ScriptedModel([callReply(["crm_hold", {}, "c1"]), textReply("done")]);
+  const log = join(dir, "log.jsonl");
+
+  const waiting = await run(text, { log, models: serving(model()), completesCalls: true });
+  expect(waiting.status).toBe("waiting");
+  const [call] = pendingCalls(log);
+  await complete(log, call!.callId, { output: "held" });
+  const advanced = await withUnfinishedToolModules(() =>
+    advance({ log, models: serving(new ScriptedModel([textReply("done")])), env: hostEnv(dir) }),
+  );
+  expect([advanced.status, advanced.output]).toEqual(["succeeded", node.startsWith("t:") ? "held" : "done"]);
+
+  const failed = await run(text, { models: serving(model()) });
+  const message = "tool 'crm_hold' returned pending(), but this run's host doesn't complete calls";
+  expect([failed.failure?.code, failed.failure?.message]).toEqual(["node.execute", expect.stringContaining(message)]);
+  // One call each run: the refused one isn't tried again.
+  expect(readFileSync(calls, "utf8")).toBe("..");
+  await expect(run(text, { completesCalls: "yes" as never })).rejects.toThrow(new TypeError("completesCalls must be a boolean"));
+});
+
+test("what a module tool prints goes to onConsole under the calling node, and what its import prints to this process's console", async () => {
+  writeFileSync(join(dir, "crm.ts"), 'console.log("importing");\n' + plain("talk", '(_args, ctx) => { console.info("serving", ctx.node); return 1; }'));
+  const text = app({ crm: "./crm.ts" }, ["t: {kind: tool, tool_id: {crm: talk}, input: {}}", "a: {kind: agent, input: {go: '${t.output}'}, prompt: '${go}', tools: [crm]}"]);
+  const model = new ScriptedModel([callReply(["crm_talk", {}, "c1"]), textReply("done")]);
+  const lines: unknown[] = [];
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    const done = await run(text, { runId: "r1", models: serving(model), onConsole: (line) => void lines.push(line) });
+
+    expect(done.status).toBe("succeeded");
+    expect(lines).toEqual([
+      { runId: "r1", node: "t", method: "info", text: "serving t" },
+      { runId: "r1", node: "a", method: "info", text: "serving a" },
+    ]);
+    expect(log.mock.calls).toEqual([["importing"]]);
+  } finally {
+    log.mockRestore();
+  }
+});
 
 test("a thread exit fails an agent's calls in flight as errors its model reads, and its next call runs on a fresh thread", async () => {
   const safe = "isConcurrencySafe: () => true, ";

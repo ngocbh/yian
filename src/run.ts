@@ -689,8 +689,9 @@ export interface RunFlowOptions {
   onStream?: StreamHook | null;
   /**
    * Takes each line the run's CODE nodes print (`{runId, node, method, text}`) in place of this
-   * process's `console`, a line printed after its node settled too; called as `onEvent` is.
-   * Without it the lines go to `console`.
+   * process's `console`, a line printed after its node settled too, and each line a tool module
+   * prints while a node's call of its tool is open, under that node; called as `onEvent` is.
+   * Without it the lines go to `console`, as do the lines a tool module prints otherwise.
    */
   onConsole?: ConsoleHook | null;
   /**
@@ -717,6 +718,12 @@ export interface RunFlowOptions {
   skills?: ReadonlyMap<string, Skill> | null;
   /** The host's app object a tool receives as `ctx.context`; never recorded. */
   context?: unknown;
+  /**
+   * Whether this host answers the run's pending calls (`pendingCalls`, then `complete`); `false`
+   * by default. Without it, a tool module's tool that returns `pending()` fails its call, never
+   * retried; a host tool's call pends either way. Never recorded.
+   */
+  completesCalls?: boolean;
   /**
    * The host's stop: aborting it stops the run, which rejects with its reason. An already-aborted
    * signal rejects before anything is created.
@@ -763,8 +770,8 @@ export interface RunFlowOptions {
  * @throws TypeError when `flow` isn't a `ComposedFlow`, `signal` isn't an `AbortSignal`, `live`
  *   isn't a `LiveChannel`, `onEvent`, `onStream` or `onConsole` isn't a function, `inputs` isn't a record (a
  *   Proxy included), `llmConfig` is a primitive or an array, a `tools` entry is malformed, `skills`
- *   isn't a `Map` of `Skill`s each keyed by its name, `scheduler` lacks `now` or `sleep`, `random`
- *   isn't a function, or `models` lacks `env` or `createModel`.
+ *   isn't a `Map` of `Skill`s each keyed by its name, `completesCalls` isn't a boolean, `scheduler`
+ *   lacks `now` or `sleep`, `random` isn't a function, or `models` lacks `env` or `createModel`.
  * @throws RangeError when `learnable` or `memory`, a removed option, is given, or `flow` is a
  *   library (`libraryRunMessage`).
  * @throws ExpressionError when a condition, binding or prompt set in code can't run.
@@ -825,7 +832,8 @@ export function libraryRunMessage(flow: ComposedFlow): string {
 /** The options `runFlow` and `advance` share, which drive the engine. */
 type DriveOptions = Pick<
   RunFlowOptions,
-  "tools" | "context" | "signal" | "live" | "onEvent" | "onStream" | "onConsole" | "scheduler" | "random" | "models"
+  | "tools" | "context" | "completesCalls" | "signal" | "live" | "onEvent" | "onStream" | "onConsole"
+  | "scheduler" | "random" | "models"
 >;
 
 /**
@@ -849,8 +857,9 @@ function refuseRemovedOptions(options: object, takesMemory = false): void {
  *
  * @returns The unopened `tools` servers, as `splitRunServers` returns them.
  * @throws TypeError when `signal` isn't an `AbortSignal`, `live` isn't a `LiveChannel`, `onEvent`,
- *   `onStream` or `onConsole` isn't a function, `scheduler` lacks `now` or `sleep`, `random` isn't a
- *   function, `models` lacks `env` or `createModel`, or a `tools` entry is malformed.
+ *   `onStream` or `onConsole` isn't a function, `completesCalls` isn't a boolean, `scheduler` lacks
+ *   `now` or `sleep`, `random` isn't a function, `models` lacks `env` or `createModel`, or a
+ *   `tools` entry is malformed.
  * @throws RangeError when a `tools` key is reserved, or a server was opened by another run in
  *   progress, or a removed option is given (`memory` unless `takesMemory`).
  * @throws The signal's reason when it has aborted.
@@ -864,6 +873,8 @@ function checkDriveOptions(options: DriveOptions, takesMemory = false): [string,
   if (onEvent !== null && typeof onEvent !== "function") throw new YianTypeError("onEvent must be a function or null");
   if (onStream !== null && typeof onStream !== "function") throw new YianTypeError("onStream must be a function or null");
   if (onConsole !== null && typeof onConsole !== "function") throw new YianTypeError("onConsole must be a function or null");
+  const { completesCalls = false } = options;
+  if (typeof completesCalls !== "boolean") throw new YianTypeError("completesCalls must be a boolean");
   if (
     scheduler !== null &&
     (typeof scheduler !== "object" || typeof scheduler.now !== "function" || typeof scheduler.sleep !== "function")
@@ -1257,7 +1268,7 @@ async function startRun(
 ): Promise<RunResult> {
   const { log = null, runId = null, numWorkers = 8 } = options;
   const live = options.live ?? null;
-  const { tools = null, skills = null, context, signal = null } = options;
+  const { tools = null, skills = null, context, completesCalls = false, signal = null } = options;
   const scheduler = options.scheduler ?? realScheduler;
   const models = options.models ?? defaultModelAccess(env);
   let runServers: McpServer[] = [];
@@ -1270,7 +1281,7 @@ async function startRun(
   try {
     runServers = await openRunServers(unopened, signal);
     runModules = await openRunModules(reachedModules(flow), signal);
-    const runTools = new ToolSet(tools, { context }).withModules(runModules);
+    const runTools = new ToolSet(tools, { context }).withModules(runModules, { completesCalls });
     const hostTypes = memoryTypeTools(flow.memoryTypes);
     checkToolGrants(flow.compiled, runTools);
     checkMemoryGrantNames(flow.compiled, runTools, hostTypes);
@@ -1547,7 +1558,7 @@ export interface AdvanceOptions {
   onEvent?: EventHook | null;
   /** Sees each new transient stream chunk; chunks are never replayed. */
   onStream?: StreamHook | null;
-  /** Takes each line this segment's CODE nodes print, as `runFlow`'s does. */
+  /** Takes each line this segment's CODE nodes and tool modules print, as `runFlow`'s does. */
   onConsole?: ConsoleHook | null;
   /**
    * The live channel of this segment, as `runFlow`'s: it gets the records this call appends and
@@ -1581,6 +1592,8 @@ export interface AdvanceOptions {
   headers?: Readonly<Record<string, string>> | null;
   /** The host's app object a tool receives as `ctx.context`; the log doesn't hold it. */
   context?: unknown;
+  /** As `runFlow`'s, for this segment's calls; the log doesn't hold it. */
+  completesCalls?: boolean;
   /**
    * The instance of each memory input the run started with, by input name: the same memories,
    * bound again. An unfinished run opens each with `create: false` and needs every one it
@@ -1644,9 +1657,9 @@ export interface AdvanceOptions {
  *   its post-durable observers; a waiting run that couldn't move returns `waiting` with none.
  * @throws TypeError when `flow` isn't a `ComposedFlow` or `null`, `signal` isn't an `AbortSignal`,
  *   `live` isn't a `LiveChannel`, `onEvent`, `onStream` or `onConsole` isn't a function, a `tools` entry is
- *   malformed, `skills`, `scheduler`, `random` or `models` is malformed, a worker count isn't an
- *   integer, a recorded carrier has the wrong type, or `memory` isn't a record of `MemoryBase`
- *   instances (or `null`, for an Optional memory).
+ *   malformed, `completesCalls` isn't a boolean, `skills`, `scheduler`, `random` or `models` is
+ *   malformed, a worker count isn't an integer, a recorded carrier has the wrong type, or `memory`
+ *   isn't a record of `MemoryBase` instances (or `null`, for an Optional memory).
  * @throws ExpressionError as `runFlow`, for an unfinished run.
  * @throws RangeError when the log's prefix is invalid, the run's flow was built in code and no
  *   `flow` was passed, or its flow files were recorded and one was, `codeRoot` isn't the recorded
@@ -1686,7 +1699,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
   const env = options.env ?? processEnv;
   return withEnv(env, async () => {
     current();
-    const { log, tools = null, context, signal = null, flow: hostFlow = null } = options;
+    const { log, tools = null, context, completesCalls = false, signal = null, flow: hostFlow = null } = options;
     if (hostFlow !== null && !(hostFlow instanceof ComposedFlow)) {
       throw new YianTypeError("advance's flow must be a ComposedFlow or null");
     }
@@ -1772,7 +1785,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       checkRecordedSpecs("skills", start.skills, recordedSkills(flow.compiled, skills));
       runServers = await openRunServers(unopened, signal);
       runModules = await openRunModules(reachedModules(flow), signal);
-      const runTools = new ToolSet(tools, { context }).withModules(runModules);
+      const runTools = new ToolSet(tools, { context }).withModules(runModules, { completesCalls });
       const hostTypes = memoryTypeTools(flow.memoryTypes);
       checkToolGrants(flow.compiled, runTools);
       checkMemoryGrantNames(flow.compiled, runTools, hostTypes);

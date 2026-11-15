@@ -564,12 +564,15 @@ export class ToolSet {
   private ownTools: NodeScope<FunctionTool> | null;
   // The tool modules the run's segment started (`withModules`), by real path.
   private startedModules: ReadonlyMap<string, StartedToolModule>;
+  // Whether the segment's host answers pending calls, so a module tool may pend (`withModules`).
+  private hostCompletesCalls: boolean;
 
   constructor(tools?: Readonly<Record<string, ToolEntry>> | null, options?: { context?: unknown }) {
     this.toolMap = null;
     this.groupMap = new Map();
     this.ownTools = null;
     this.startedModules = new Map();
+    this.hostCompletesCalls = false;
     this.recordNames = new Map();
     this.boundRunId = "";
     this.boundSignal = undefined;
@@ -826,13 +829,20 @@ export class ToolSet {
 
   /**
    * @internal Return a copy that holds the tool modules one segment of a run started, by real path,
-   * in place of any this set held; a node builds its scope's module tools from them. The copy keeps
-   * this set's run, signal, context, tools and node scope.
+   * in place of any this set held, and whether the segment's host completes calls (default
+   * `false`), which a module tool needs to pend; a node builds its scope's module tools from them.
+   * The copy keeps this set's run, signal, context, tools and node scope.
    */
-  withModules(modules: readonly StartedToolModule[]): this {
+  withModules(modules: readonly StartedToolModule[], options: { completesCalls?: boolean } = {}): this {
     const copy = Object.assign(Object.create(Object.getPrototypeOf(this)), this) as this;
     copy.startedModules = new Map(modules.map((module) => [module.path, module]));
+    copy.hostCompletesCalls = options.completesCalls ?? false;
     return copy;
+  }
+
+  /** @internal Whether the segment's host completes calls (`withModules`). */
+  get completesCalls(): boolean {
+    return this.hostCompletesCalls;
   }
 
   /** @internal Return the started tool module at real path `path` (`withModules`), or `null`. */

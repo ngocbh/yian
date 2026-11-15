@@ -136,8 +136,9 @@ only a warning: the call still resolves, so your program doesn't repeat it.
 | `skills` | none | A `Map` of skills by name, from `loadSkills` |
 | `llmConfig` | none | The outermost `llm_config` layer (see [Models and providers](/models/)). Its `api_key` and header values are never recorded; its `base_url`, `organization`, `project` and header names are, on the agents that use the key |
 | `context` | `undefined` | Your app object; tools read it as `ctx.context`. Never recorded |
+| `completesCalls` | `false` | Set it when your host answers pending calls (see [Pending host calls](#pending-host-calls)); a tool module's tool can pend only then. `advance` takes it too. Never recorded |
 | `onEvent`, `onStream` | none | Event callbacks (see [Events](#events)) |
-| `onConsole` | none | Takes each line the run's CODE nodes print, as `{ runId, node, method, text }`, instead of `console`; `advance` takes it too |
+| `onConsole` | none | Takes each line the run's CODE nodes print, and what a tool module prints during a node's call, as `{ runId, node, method, text }`, instead of `console`; `advance` takes it too |
 | `live` | none | A `LiveChannel` a viewer follows |
 | `signal` | none | An `AbortSignal` that stops the run |
 | `env` | `process.env` | A function `(name) => string \| undefined` that yian reads instead of `process.env` |
@@ -164,10 +165,11 @@ holds media fails if `media` is a symlink, another user's, or writable by others
 | Unstarted: the log ends before the run's inputs | Throws a `RangeError`; delete the log and start the run again |
 
 `advance` runs the flow the log recorded, not the file on disk, with the log's inputs, run id and
-model settings. Pass again what the log doesn't hold: `tools`, `skills`, `context`, the memories
-(`memory: { lessons: instance }`, for any unfinished run; see [Memory](/memory/#bind-a-memory)),
-and the API key (`apiKey`, `headers`) of a run started with `llmConfig.api_key`. Without that key,
-`advance` of an unfinished run whose agents use it rejects before writing anything.
+model settings. Pass again what the log doesn't hold: `tools`, `skills`, `context`,
+`completesCalls`, the memories (`memory: { lessons: instance }`, for any unfinished run; see
+[Memory](/memory/#bind-a-memory)), and the API key (`apiKey`, `headers`) of a run started with
+`llmConfig.api_key`. Without that key, `advance` of an unfinished run whose agents use it rejects
+before writing anything.
 
 The log holds the `codeRoot` the flow was loaded under, so `advance` and the host calls below
 confine the recorded flow's CODE files to it without being told. Passing `codeRoot` is optional; one
@@ -340,6 +342,9 @@ console.log(done.status, done.output); // succeeded yes
   else the node fails with `tool.timeout`. yian doesn't wake the run itself; call `advance` after
   the earliest `deadline`.
 - An agent's `ask_user` tool goes to the same `ask` handler.
+- A tool module's tool may return `pending()` (`{ [Symbol.for("yian.pending")]: true }`) only
+  when the host passes `completesCalls: true` to `runFlow` and `advance`. Otherwise the call fails
+  for good: nothing would answer it. Neither `yian run` nor `yian chat` passes it.
 
 ### Interrupt and cancel
 

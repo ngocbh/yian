@@ -14,7 +14,12 @@
  * failures come back as the registry's own, so they act as a host tool's do.
  *
  * A call's error is rebuilt here with the name, message, stack and tool error kinds it had on the
- * thread, so it steers an AGENT and TOOL retries as a host tool's error does.
+ * thread, so it steers an AGENT and TOOL retries as a host tool's error does, and a pending marker
+ * comes back as `pending()`.
+ *
+ * What the module prints while a request is open, from its promises and timers too, goes to the
+ * console that request was given; anything else, the import's lines among them, to this process's
+ * `console`.
  *
  * A thread that exits (through `process.exit`, or an uncaught error such as one thrown after a
  * call returned) fails each request in flight with a `ToolModuleError`, `tool.module_exited`.
@@ -24,7 +29,8 @@
  * one fail with `tool.module_restart`.
  *
  * Knows about: tools/context, tools/errors, tools/function_tools' types, tools/module_worker,
- * tools/registry (a validator's message), defaults, diagnostics, platform, typesys and `node:*`.
+ * tools/registry (a validator's message), events' types, defaults, diagnostics, platform, typesys
+ * and `node:*`.
  */
 
 import { basename } from "node:path";
@@ -32,15 +38,22 @@ import { SHARE_ENV, Worker } from "node:worker_threads";
 
 import { current } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
+import type { ConsoleMethod } from "../events.ts";
 import { realScheduler } from "../platform.ts";
 import { packFiles, unpackFiles } from "../typesys/crossing.ts";
 import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { canonicalJson } from "../typesys/json.ts";
 import { TypeCheckError, toHost, type Value } from "../typesys/values.ts";
-import type { ToolContext } from "./context.ts";
+import { pending, type ToolContext } from "./context.ts";
 import { isPermanentToolError, isToolCheckError, TOOL_ERROR, ToolCheckError, ToolModuleError } from "./errors.ts";
 import type { StandardResult } from "./function_tools.ts";
-import type { ToolModuleData, ToolModuleListing, ToolModuleReply, ToolModuleRequest } from "./module_worker.ts";
+import type {
+  ToolModuleConsole,
+  ToolModuleData,
+  ToolModuleListing,
+  ToolModuleReply,
+  ToolModuleRequest,
+} from "./module_worker.ts";
 import { validatorFailure } from "./registry.ts";
 
 // As `nodes/code/node.ts` finds the entry: `bun build --compile` bundles it at
@@ -54,6 +67,9 @@ const WORKER_URL = import.meta.url.endsWith(".ts")
 /** The request for the module's listing. */
 const LIST = (id: number): ToolModuleRequest => ({ kind: "list", id, defaults: current() });
 
+/** Takes one line a module's code printed: the `console` method it called and its text. */
+export type ConsoleSink = (method: ConsoleMethod, text: string) => void;
+
 /** An open request: how it settles, and what to undo once it has. */
 interface OpenRequest {
   resolve(reply: ToolModuleReply): void;
@@ -61,6 +77,8 @@ interface OpenRequest {
   release(): void;
   /** Whether it is a call, whose outcome an exit leaves unknown. */
   readonly call: boolean;
+  /** Takes what the module prints while it is open; `null` leaves that to this process's `console`. */
+  readonly console: ConsoleSink | null;
 }
 
 /**
@@ -146,15 +164,24 @@ export class ToolModuleThread {
    * the call.
    *
    * @param name The tool's name in the registry, which messages name it by.
+   * @param sink Takes what the module prints meanwhile.
    * @returns The validator's issues, each path as text and numbers, or the checked arguments.
    * @throws TypeError, as the registry's, when the validator returns no Standard Schema result.
    * @throws What the validator threw, rebuilt as `call` rebuilds a tool's throw.
    * @throws ToolModuleError when the thread fails or exits first, or can't be started again.
    */
-  async check(tool: string, name: string, args: unknown): Promise<StandardResult<CheckedArgs>> {
+  async check(
+    tool: string,
+    name: string,
+    args: unknown,
+    sink: ConsoleSink | null = null,
+  ): Promise<StandardResult<CheckedArgs>> {
     const packed = packFiles(args);
     const where = `tool ${reprText(name)} arguments`;
-    const reply = await this.#request((id) => ({ kind: "check", id, defaults: current(), tool, value: packed, where }));
+    const reply = await this.#request(
+      (id) => ({ kind: "check", id, defaults: current(), tool, value: packed, where }),
+      { sink },
+    );
     if (reply.as === "issues") return { issues: reply.issues };
     if (reply.as === "nonstandard") throw new YianTypeError(reply.message);
     if (reply.as !== "checked") throw replyError(this.label, reply);
@@ -168,16 +195,25 @@ export class ToolModuleThread {
    * thread, as the registry checks a host tool's result.
    *
    * @param name The tool's name in the registry, which messages name it by.
+   * @param sink Takes what the module prints meanwhile.
    * @returns The validator's issues, each path as text and numbers, or its output as a host value.
    * @throws ToolCheckError, as the registry's, when the validator returns no Standard Schema
    *   result, or an output that isn't a yian value.
    * @throws What the validator threw, rebuilt as `call` rebuilds a tool's throw.
    * @throws ToolModuleError when the thread fails or exits first, or can't be started again.
    */
-  async checkOutput(tool: string, name: string, value: unknown): Promise<StandardResult<unknown>> {
+  async checkOutput(
+    tool: string,
+    name: string,
+    value: unknown,
+    sink: ConsoleSink | null = null,
+  ): Promise<StandardResult<unknown>> {
     const packed = packFiles(value);
     const where = `tool ${reprText(name)} result`;
-    const reply = await this.#request((id) => ({ kind: "output", id, defaults: current(), tool, value: packed, where }));
+    const reply = await this.#request(
+      (id) => ({ kind: "output", id, defaults: current(), tool, value: packed, where }),
+      { sink },
+    );
     if (reply.as === "issues") return { issues: reply.issues };
     if (reply.as === "nonstandard") throw new ToolCheckError(reply.message);
     if (reply.as === "result") return { value: toHost(unpackFiles(reply.value) as Value) };
@@ -186,22 +222,24 @@ export class ToolModuleThread {
 
   /**
    * Call the module's tool exported as `tool` on the thread with the arguments `check` returned,
-   * and return its result as a host value. `execute` gets the validator's output the thread kept,
-   * else a fresh copy of the arguments; on a fresh thread the arguments are checked again first.
-   * Its context there holds `ctx`'s call id, attempt, run id and node, the export name as its tool
-   * name, and no host object; a stop of `ctx.signal` aborts its signal there, and the call settles
-   * as the tool does. Once it settles, the thread releases the kept output, unless a TOOL node may
-   * try the call again: its error is neither permanent nor a failed check, and no stop ended it.
+   * and return its result as a host value, or `pending()` when it returned a pending marker.
+   * `execute` gets the validator's output the thread kept, else a fresh copy of the arguments; on a
+   * fresh thread the arguments are checked again first. Its context there holds `ctx`'s call id,
+   * attempt, run id and node, the export name as its tool name, and no host object; a stop of
+   * `ctx.signal` aborts its signal there, and the call settles as the tool does. Once it settles,
+   * the thread releases the kept output, unless a TOOL node may try the call again: its error is
+   * neither permanent nor a failed check, and no stop ended it.
    *
+   * @param sink Takes what the module prints meanwhile.
    * @throws TypeError when `checked` isn't what `check` returned.
    * @throws What the tool threw, rebuilt as an `Error` with its name, message and stack, its tool
    *   error kinds and, when transient, its `retryAfter`; a thrown non-`Error` is an `Error` with
    *   the value's text, and the value as its `cause` when it is a yian value.
-   * @throws ToolCheckError when the result isn't a yian value, or is `pending()`; or, reported
-   *   too, when a fresh thread's check of the arguments finds issues.
+   * @throws ToolCheckError when the result isn't a yian value; or, reported too, when a fresh
+   *   thread's check of the arguments finds issues.
    * @throws ToolModuleError when the thread fails or exits first, or can't be started again.
    */
-  async call(tool: string, checked: unknown, ctx: ToolContext): Promise<unknown> {
+  async call(tool: string, checked: unknown, ctx: ToolContext, sink: ConsoleSink | null = null): Promise<unknown> {
     if (!(checked instanceof CheckedArgs)) {
       throw new YianTypeError(`${this.label} export ${reprText(tool)} takes the arguments its check returned`);
     }
@@ -212,9 +250,10 @@ export class ToolModuleThread {
     try {
       const reply = await this.#request(
         (id) => ({ kind: "call", id, defaults: current(), tool, args, check, where, callId, attempt, runId, node }),
-        signal,
+        { signal, sink },
       );
       if (reply.as === "result") return toHost(unpackFiles(reply.value) as Value);
+      if (reply.as === "pending") return pending();
       // A fresh thread's check failed: as at the call's own check, the model reads its issues.
       if (reply.as === "issues") throw reportedCheck(validatorFailure(`${where} failed its validator`, reply.issues));
       if (reply.as === "nonstandard") throw new ToolCheckError(reply.message);
@@ -239,8 +278,15 @@ export class ToolModuleThread {
     // `SHARE_ENV`: the module reads and writes the host's live environment, as a CODE body does.
     const worker = new Worker(WORKER_URL, { env: SHARE_ENV, workerData: { yianToolModule: data } });
     worker.unref();
-    // Ids are never reused, so a reply from a thread that ended finds no request.
-    worker.on("message", (reply: ToolModuleReply) => {
+    // Ids are never reused, so a reply or a line from a thread that ended finds no request.
+    worker.on("message", (reply: ToolModuleReply | ToolModuleConsole) => {
+      if ("console" in reply) {
+        const { console: method, text, id } = reply;
+        const sink = id === null ? null : (this.#open.get(id)?.console ?? null);
+        if (sink === null) console[method](text);
+        else sink(method, text);
+        return;
+      }
       const request = this.#open.get(reply.id);
       if (request === undefined) return;
       this.#settled(reply.id);
@@ -264,28 +310,30 @@ export class ToolModuleThread {
   }
 
   /**
-   * Return the reply to the request `make` builds with a fresh id. After the thread exited, a fresh
-   * thread takes over first, unless the module never listed or the thread was terminated; a stop of
-   * `signal` while it starts rejects with the signal's reason.
+   * Return the reply to the request `make` builds with a fresh id, what the module prints while it is
+   * open going to `sink`. After the thread exited, a fresh thread takes over first, unless the module
+   * never listed or the thread was terminated; a stop of `signal` while it starts rejects with the
+   * signal's reason.
    *
    * @throws ToolModuleError when the thread fails or exits first, or a fresh one can't take over.
    * @throws Error when the request can't be posted.
    */
-  async #request(make: (id: number) => ToolModuleRequest, signal?: AbortSignal): Promise<ToolModuleReply> {
+  async #request(make: (id: number) => ToolModuleRequest, options: RequestOptions = {}): Promise<ToolModuleReply> {
     if (this.#broken !== null) throw this.#broken;
     if (this.#ended !== null && this.#listing !== null && !this.#terminated) this.#restarting ??= this.#restart();
-    if (this.#restarting !== null) await untilStopped(this.#restarting, signal);
-    return await this.#send(make, signal);
+    if (this.#restarting !== null) await untilStopped(this.#restarting, options.signal);
+    return await this.#send(make, options);
   }
 
   /**
    * Post the request `make` builds with a fresh id to the thread and return its reply. While it is
-   * open, a stop of `signal` is posted as its abort.
+   * open, a stop of `signal` is posted as its abort, and what the module prints goes to `sink`.
    *
    * @throws ToolModuleError when the thread failed or exits first.
    * @throws Error when the request can't be posted.
    */
-  #send(make: (id: number) => ToolModuleRequest, signal?: AbortSignal): Promise<ToolModuleReply> {
+  #send(make: (id: number) => ToolModuleRequest, options: RequestOptions = {}): Promise<ToolModuleReply> {
+    const { signal, sink = null } = options;
     if (this.#ended !== null) return Promise.reject(this.#ended);
     const id = ++this.#lastId;
     const worker = this.#worker;
@@ -294,7 +342,7 @@ export class ToolModuleThread {
       const request = make(id);
       if (this.#open.size === 0) worker.ref();
       const release = () => signal?.removeEventListener("abort", abort);
-      this.#open.set(id, { resolve, reject, release, call: request.kind === "call" });
+      this.#open.set(id, { resolve, reject, release, call: request.kind === "call", console: sink });
       try {
         worker.postMessage(request);
       } catch (error) {
@@ -367,6 +415,12 @@ export class ToolModuleThread {
       request.reject(request.call ? new ToolModuleError("tool.module_exited", unknown, { cause }) : this.#ended);
     }
   }
+}
+
+/** How a request is sent: the stop that aborts it, and what takes the lines the module prints while it is open. */
+interface RequestOptions {
+  readonly signal?: AbortSignal;
+  readonly sink?: ConsoleSink | null;
 }
 
 /** Return the listing `reply` holds, else throw why the listing failed. `label` names the file. */

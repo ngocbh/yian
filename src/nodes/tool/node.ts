@@ -473,7 +473,8 @@ export class ToolNode extends Node {
     if (this.memoryTool) return await this.callTool(this.toolArguments(inputs), caps, this.memoryToolSet(inputs, caps, tools), callId);
     if (this.module !== null) {
       // A module's tool is a stand-in in this node's scope, so `toolRef` never reaches a run tool.
-      return await this.callTool(inputs, caps, tools.withNodeScope(moduleScope([this.module], tools)), callId);
+      const scope = moduleScope([this.module], tools, caps.console ?? null);
+      return await this.callTool(inputs, caps, tools.withNodeScope(scope), callId);
     }
     return await this.callTool(inputs, caps, tools, callId);
   }

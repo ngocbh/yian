@@ -10,7 +10,7 @@
  * checked before the exit, or fails it for good when it lists the module otherwise.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,9 +22,9 @@ import vm from "node:vm";
 
 import { withEnv } from "../../src/defaults.ts";
 import { runtime } from "../../src/platform.ts";
-import { ToolContext } from "../../src/tools/context.ts";
+import { pending, ToolContext } from "../../src/tools/context.ts";
 import { isToolCheckError, isTransientToolError, ToolModuleError, toolErrorKinds } from "../../src/tools/errors.ts";
-import { type CheckedArgs, startToolModule, ToolModuleThread } from "../../src/tools/module_thread.ts";
+import { type CheckedArgs, type ConsoleSink, startToolModule, ToolModuleThread } from "../../src/tools/module_thread.ts";
 import { listToolModule } from "../../src/tools/module_worker.ts";
 import { FileRef } from "../../src/typesys/values.ts";
 
@@ -204,15 +204,26 @@ function context(signal = new AbortController().signal, attempt = 2): ToolContex
 }
 
 /** Check `args` for `tool` on `thread`, as the registry does, and return the checked arguments. */
-async function checked(thread: ToolModuleThread, tool: string, args: Record<string, unknown>): Promise<CheckedArgs> {
-  const result = await thread.check(tool, tool, args);
+async function checked(
+  thread: ToolModuleThread,
+  tool: string,
+  args: Record<string, unknown>,
+  sink: ConsoleSink | null = null,
+): Promise<CheckedArgs> {
+  const result = await thread.check(tool, tool, args, sink);
   if (result.issues !== undefined) throw new Error(`issues: ${JSON.stringify(result.issues)}`);
   return result.value;
 }
 
-/** Check `args` for `tool` on `thread` and call it with them, as the registry does. */
-async function called(thread: ToolModuleThread, tool: string, args: Record<string, unknown>, ctx = context()): Promise<unknown> {
-  return await thread.call(tool, await checked(thread, tool, args), ctx);
+/** Check `args` for `tool` on `thread` and call it with them, as the registry does, the lines both print going to `sink`. */
+async function called(
+  thread: ToolModuleThread,
+  tool: string,
+  args: Record<string, unknown>,
+  ctx = context(),
+  sink: ConsoleSink | null = null,
+): Promise<unknown> {
+  return await thread.call(tool, await checked(thread, tool, args, sink), ctx, sink);
 }
 
 /** The source of a plain-object tool `name` whose `execute` is `body`. */
@@ -277,7 +288,7 @@ ${calling(
   expect([record?.message, record?.cause]).toEqual(["[object Object]", { code: 7 }]);
 });
 
-test("a result that isn't a yian value, or that pends, fails the call's check, naming the export", async () => {
+test("a result that isn't a yian value fails the call's check, naming the export, and pending() comes back as the engine's", async () => {
   const thread = started(
     calling(
       "bad",
@@ -296,8 +307,44 @@ test("a result that isn't a yian value, or that pends, fails the call's check, n
   const map = await refused("map");
   expect([map?.message, (map?.cause as { path?: unknown }).path]).toEqual(["crm.ts export 'bad' result at a[0]: Map is not a yian value", ["a", 0]]);
   expect((await refused("deep"))?.message).toMatch(/^crm\.ts export 'bad' result at (\[0\])+: value nests deeper than 100 levels/);
-  const pends = await refused("pending");
-  expect([isToolCheckError(pends), pends?.message]).toEqual([true, "crm.ts export 'bad' returned pending(), which a tool module can't do yet"]);
+  expect(await called(thread, "bad", { how: "pending" })).toBe(pending());
+});
+
+test("what a module prints while a request is open goes to that request's console, timers included; anything else to this process's", async () => {
+  const thread = started(`console.log("importing");
+const checker = { "~standard": { version: 1, vendor: "t", validate: (value) => { console.debug("checking", value.id); return { value }; }, jsonSchema: { input: () => ({ type: "object" }) } } };
+export const talk = {
+  name: "talk",
+  description: "d",
+  parameters: checker,
+  async execute({ id }) {
+    console.info("calling", id);
+    await new Promise((resolve) => setTimeout(() => { console.warn("timer", id); resolve(); }, 20 * id));
+    setTimeout(() => console.error("after", id), 20);
+    return id;
+  },
+};
+`);
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const lines: Record<string, [string, string][]> = { a: [], b: [] };
+    const sink = (name: string): ConsoleSink => (method, text) => void lines[name]!.push([method, text]);
+
+    // The first check imports the module.
+    const both = await Promise.all([called(thread, "talk", { id: 2 }, context(), sink("a")), called(thread, "talk", { id: 1 }, context(), sink("b"))]);
+    for (let waited = 0; waited < 2000 && error.mock.calls.length < 2; waited += 10) await sleep(10);
+
+    expect(both).toEqual([2, 1]);
+    expect(lines).toEqual({
+      a: [["debug", "checking 2"], ["info", "calling 2"], ["warn", "timer 2"]],
+      b: [["debug", "checking 1"], ["info", "calling 1"], ["warn", "timer 1"]],
+    });
+    expect([log.mock.calls, error.mock.calls.sort()]).toEqual([[["importing"]], [["after 1"], ["after 2"]]]);
+  } finally {
+    log.mockRestore();
+    error.mockRestore();
+  }
 });
 
 test("a stop aborts the tool's own signal on the thread, and other calls go on meanwhile", async () => {

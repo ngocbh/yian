@@ -970,7 +970,8 @@ export class AgentNode extends Node {
    * authored grant in its order, but none of a memory left out (an Optional one, null), and the
    * run's tools with this node's own as its node scope: each bound memory's granted tools as a
    * group over its run session, each granted library's defs as a group, the other granted flows
-   * as top-level tools, and each granted tool module's tools (`moduleScope`).
+   * as top-level tools, and each granted tool module's tools (`moduleScope`), whose modules print
+   * to `caps.console`.
    *
    * @throws CapabilityFault carrying the error when a memory is bound but the evaluator gave no
    *   memory sessions, or none on that memory.
@@ -991,7 +992,7 @@ export class AgentNode extends Node {
     if (groups.size > 0 || this.flowTools.length > 0 || this.moduleTools.length > 0) {
       const run = toolset ?? new ToolSet();
       const flows = flowToolScope(this.flowTools, flowToolFunction);
-      const modules = moduleScope(this.moduleTools, run);
+      const modules = moduleScope(this.moduleTools, run, caps.console ?? null);
       toolset = run.withNodeScope({
         groups: new Map([...groups, ...flows.groups, ...modules.groups]),
         tools: [...flows.tools, ...modules.tools],

@@ -35,6 +35,7 @@ import {
   ValueContract,
 } from "../../src/nodes/contracts.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
+import { ToolModuleError, toolErrorKinds } from "../../src/tools/errors.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
 import { BranchNode, drive, FailNode, FuncNode as FakeFuncNode, StreamNode } from "../helpers/run_state_fixtures.ts";
@@ -329,6 +330,23 @@ describe("a host output error is a contract.output failure", () => {
     expect(node.exceptionCode(mistyped)).toBe("node.execute");
     expect(node.exceptionOrigin(mistyped)).toBe(nodeOrigin);
   });
+});
+
+test("a tool module error's code is the code of an error it caused, through any chain of causes", () => {
+  const node = new FuncNode("n");
+  const exited = new ToolModuleError("tool.module_exited", "crm.ts's thread exited (code 1)");
+  const looped = new Error("a", { cause: new Error("b") });
+  (looped.cause as Error).cause = looped;
+  const trap = new Proxy({}, { getPrototypeOf: () => { throw new Error("trap"); } });
+
+  expect(node.exceptionCode(exited)).toBe("tool.module_exited");
+  expect(node.exceptionCode(new Error("t", { cause: new Error("u", { cause: exited }) }))).toBe("tool.module_exited");
+  expect(node.exceptionCode(new ToolModuleError("tool.module_restart", "x", { cause: exited }))).toBe("tool.module_restart");
+  expect([node.exceptionCode(looped), node.exceptionCode(new Error("c", { cause: trap }))]).toEqual(["node.execute", "node.execute"]);
+  expect([toolErrorKinds(exited), toolErrorKinds(new ToolModuleError("tool.module_restart", "x"))]).toEqual([
+    ["reported", "permanent"],
+    ["permanent"],
+  ]);
 });
 
 describe("evaluation through drive", () => {

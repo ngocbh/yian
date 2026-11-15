@@ -51,6 +51,8 @@ const EXPECTED_FAILURE_CODES: readonly FailureCode[] = [
   "tool.timeout",
   "agent.interrupted",
   "agent.output_truncated",
+  "tool.module_exited",
+  "tool.module_restart",
 ];
 
 /** Return what `fn` throws; fail the test if it returns. */

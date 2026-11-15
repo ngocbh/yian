@@ -199,6 +199,8 @@ log prints the same failure, so "retry" below means a new run.
 | `agent.interrupted` | An AGENT was interrupted and its output type doesn't allow null | Declare `output: !Optional(...)` and route on null |
 | `agent.output_truncated` | The provider cut an AGENT's reply off at the output token limit: an answer with no call whose arguments parsed, or the last invalid structured reply | Raise the limit the message names, or ask for a shorter answer |
 | `tool.timeout` | An `ask` timed out with no answer and its output type doesn't allow null | Declare `output: !Optional(...)`, or give it longer |
+| `tool.module_exited` | A tool module's thread exited (`process.exit` or an uncaught error) during a call. A TOOL node never retries it, since its outcome is unknown; an AGENT's model reads the error, unless the thread exited while checking the result | Fix the module; the next call starts a fresh thread |
+| `tool.module_restart` | After a tool module's thread exited, a fresh thread couldn't take over: the import failed or outlasted `YIAN_TOOL_MODULE_START_TIMEOUT_SECONDS`, or the module's tools changed since the run imported it | Fix the module, and leave its tools as they are while a run uses them |
 | `provider.auth` | The provider refused the agent's credentials, or yian couldn't supply them | Fix the login (`yian auth <provider>`) or the key |
 | `provider.auth_storage` | The saved-login file, its folder or its lock can't be used (its mode, owner or contents) | Fix the file the message names; logging in again reads the same file |
 | `provider.rate_limit` | The provider's rate limit (HTTP 429) outlasted yian's model-call retries | Retry later, or run fewer calls at once |

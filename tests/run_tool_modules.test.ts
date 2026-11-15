@@ -5,8 +5,11 @@
  * flow's folder) and export. Each node's scope holds its modules' tools for the run-start checks
  * and its model's request, and a call runs on the module's thread: its checks, its result and its
  * errors act as a host tool's do, for an AGENT's model and for TOOL retries, and an AGENT runs the
- * calls its `isConcurrencySafe` says are safe together. `run_started` records the tools agents'
- * grants reach, which a resume checks again and the agent-call view rebuilds requests with.
+ * calls its `isConcurrencySafe` says are safe together. A thread that exits fails its calls in
+ * flight with `tool.module_exited`, which an AGENT's model reads and TOOL retries stop at, and a
+ * fresh thread serves the next call, or fails it with `tool.module_restart`. `run_started` records
+ * the tools agents' grants reach, which a resume checks again and the agent-call view rebuilds
+ * requests with.
  */
 
 import { afterAll, beforeEach, expect, test } from "bun:test";
@@ -223,6 +226,70 @@ export const meet = {
 
   expect(await met(true)).toEqual(["2", "2"]);
   expect(await met(false)).toEqual(["1", "1"]);
+});
+
+/** The source of a tool `name` taking any arguments, whose `execute` is `body`, after `more` fields. */
+const plain = (name: string, body: string, more = "") =>
+  `export const ${name} = { name: "${name}", description: "${name}.", parameters: { type: "object" }, ${more}execute: ${body} };\n`;
+
+test("a thread exit fails an agent's calls in flight as errors its model reads, and its next call runs on a fresh thread", async () => {
+  const safe = "isConcurrencySafe: () => true, ";
+  writeFileSync(
+    join(dir, "crm.ts"),
+    plain("wait", '(_args, ctx) => new Promise((resolve) => ctx.signal.addEventListener("abort", resolve))', safe) +
+      plain("exit", "() => new Promise(() => setTimeout(() => process.exit(3), 50))", safe) +
+      plain("ok", '() => "ok"'),
+  );
+  const text = app({ crm: "./crm.ts" }, ["a: {kind: agent, prompt: go, tools: [crm]}"], "output: ${a.output}\n");
+  const model = new ScriptedModel([
+    callReply(["crm_wait", {}, "c1"], ["crm_exit", {}, "c2"]),
+    callReply(["crm_ok", {}, "c3"]),
+    textReply("done"),
+  ]);
+
+  const done = await run(text, { models: serving(model) });
+
+  expect([done.status, done.output]).toEqual(["succeeded", "done"]);
+  const exited = "crm.ts's thread exited (code 3); the call's outcome is unknown";
+  expect(resultContents(model)).toEqual([exited, exited, "ok"]);
+});
+
+test.each([
+  ["its output validator", "audited", "tool 'audited' result: the output validator threw: crm.ts's thread exited (code 4)"],
+  ["a retry after a transient error", "flaky", "crm.ts's thread exited (code 5); the call's outcome is unknown"],
+])("a thread exit in %s fails a tool node with tool.module_exited, and no attempt follows", async (_name, tool, message) => {
+  writeFileSync(
+    join(dir, "crm.ts"),
+    `const TOOL_ERROR = Symbol.for("yian.tool_error");
+const exits = { version: 1, vendor: "t", validate: () => process.exit(4), jsonSchema: { input: () => ({ type: "object" }) } };
+const once = () => Object.assign(new Error("not yet"), { [TOOL_ERROR]: ["transient"], retryAfter: 0 });
+${plain("audited", "() => ({ total: 1 })", 'output: { "~standard": exits }, ')}${plain("flaky", "(_args, ctx) => { if (ctx.attempt === 1) throw once(); process.exit(5); }")}`,
+  );
+  const node = `t: {kind: tool, tool_id: {crm: ${tool}}, input: {}, retries: 2}`;
+
+  const failed = await run(app({ crm: "./crm.ts" }, [node], "output: ${t.output}\n"));
+
+  expect([failed.failure?.code, failed.failure?.message]).toEqual(["tool.module_exited", expect.stringContaining(message)]);
+  expect(failed.failure?.message).not.toContain("attempt 2 ");
+});
+
+test("a fresh thread that lists its module otherwise fails the agent with tool.module_restart", async () => {
+  const path = join(dir, "crm.ts");
+  // Its `exit` writes the module again, `ok` described otherwise, before it exits.
+  const exit = `() => { copyFileSync(${JSON.stringify(join(dir, "changed.txt"))}, ${JSON.stringify(path)}); process.exit(6); }`;
+  const source = `import { copyFileSync } from "node:fs";\n${plain("exit", exit)}${plain("ok", '() => "ok"')}`;
+  writeFileSync(join(dir, "changed.txt"), source.replace('"ok."', '"Changed."'));
+  writeFileSync(path, source);
+  const text = app({ crm: "./crm.ts" }, ["a: {kind: agent, prompt: go, tools: [crm]}"]);
+  const model = new ScriptedModel([callReply(["crm_exit", {}, "c1"]), callReply(["crm_ok", {}, "c2"])]);
+
+  const failed = await run(text, { models: serving(model) });
+
+  const why = "a fresh thread can't take over: export 'ok' description changed since the module was first imported";
+  expect([failed.failure?.code, failed.failure?.message]).toEqual([
+    "tool.module_restart",
+    expect.stringContaining(`crm.ts's thread exited (code 6); ${why}`),
+  ]);
 });
 
 test.each([

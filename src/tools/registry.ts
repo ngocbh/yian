@@ -1262,11 +1262,11 @@ function standardResult(
 }
 
 /**
- * Return the message for a validator's issues: `head` (for example `tool 'x' arguments failed its
- * validator`), then each issue as `<path>: <message>`, or `<message>` when it has no path, joined
- * by `"; "`.
+ * @internal Return the message for a validator's issues: `head` (for example `tool 'x' arguments
+ * failed its validator`), then each issue as `<path>: <message>`, or `<message>` when it has no
+ * path, joined by `"; "`.
  */
-function validatorFailure(head: string, issues: ReadonlyArray<StandardIssue>): string {
+export function validatorFailure(head: string, issues: ReadonlyArray<StandardIssue>): string {
   const shown = issues.map((issue) => {
     // `Array.from`, not `.map`: a library's path may be an Array subclass whose species
     // constructor builds a different array (ArkType's empty path maps to `[0]`).

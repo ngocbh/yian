@@ -67,7 +67,9 @@
             "condition.evaluate",
             "tool.timeout",
             "agent.interrupted",
-            "agent.output_truncated"
+            "agent.output_truncated",
+            "tool.module_exited",
+            "tool.module_restart"
           ]
         },
         "message": {"type": "string", "description": "Human-readable detail; it may be empty."},

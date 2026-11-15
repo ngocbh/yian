@@ -943,6 +943,9 @@ export function validateOutputContract(contract: OutputContract | null, value: u
   return checked;
 }
 
+/** A tool module's `uses:` alias, its value as written, and its file's real path. */
+type ModuleOfCall = { readonly alias: string; readonly ref: string; readonly path: string };
+
 /** One direct tool call a node makes, as the run boundary checks it. Frozen. */
 export class HostToolCall {
   /** The id of the tool the node invokes: its own name, in its group when `group` is set. */
@@ -955,6 +958,11 @@ export class HostToolCall {
   readonly inputTypes: ReadonlyMap<string, Type>;
   /** The node's declared whole-value output type, or `null` when it has none. */
   readonly outputType: Type | null;
+  /**
+   * The tool module the tool is in, as the loader resolved its `uses:` alias (a `ToolModuleRef`,
+   * which this module can't import), or `null` for a run's tool.
+   */
+  readonly module: ModuleOfCall | null;
 
   /** Describe one tool call; `inputs` is copied and `inputTypes` retained. */
   constructor(
@@ -963,12 +971,14 @@ export class HostToolCall {
     inputs: readonly string[],
     inputTypes: ReadonlyMap<string, Type>,
     outputType: Type | null,
+    module: ModuleOfCall | null = null,
   ) {
     this.toolId = toolId;
     this.group = group;
     this.inputs = Object.freeze([...inputs]);
     this.inputTypes = inputTypes;
     this.outputType = outputType;
+    this.module = module;
     Object.freeze(this);
   }
 }

@@ -197,6 +197,8 @@ import {
   type ToolGrant,
   visibleToolName,
 } from "./tools/grants.ts";
+import { startToolModule } from "./tools/module_thread.ts";
+import { checkModuleListing, moduleKey, moduleScope, splitModuleRef, type StartedToolModule } from "./tools/modules.ts";
 import { type AskRequest, RESERVED_TOOL_NAMES, type ToolEntry, type ToolRef, ToolSet } from "./tools/registry.ts";
 import { toolTypes } from "./tools/types.ts";
 import { YianRangeError, YianTypeError } from "./typesys/errors.ts";
@@ -593,9 +595,9 @@ function idleRun(
 /**
  * Close what a run call opened and hand the run on, whatever fails.
  *
- * 1. Servers close, then memory sessions. Neither rejects (`closeRunServers`, `RunMemories.close`):
- *    a memory's close error is noted on `primary`, else warned. Only log close errors are noted
- *    below.
+ * 1. Servers close, then tool module threads, then memory sessions. None rejects
+ *    (`closeRunServers`, `closeRunModules`, `RunMemories.close`): a memory's close error is noted on
+ *    `primary`, else warned. Only log close errors are noted below.
  * 2. Then, in one synchronous step: the next idle entry is built (after every await, so it holds
  *    every record appended under this hold), the log closes, and the hold is released.
  *
@@ -606,6 +608,7 @@ function idleRun(
  */
 async function closeAndRelease(parts: {
   servers: readonly McpServer[];
+  modules: readonly StartedToolModule[];
   memories: RunMemories | null;
   authority: RunLog | null;
   primary: { error: unknown } | null;
@@ -621,6 +624,7 @@ async function closeAndRelease(parts: {
     else noteCleanup(pending.error, error, `${operation} also raised`);
   };
   await closeRunServers(parts.servers);
+  await closeRunModules(parts.modules);
   // A memory that fails to close can't change what the run recorded: it is noted on the call's
   // error, or else warned, as a host's other failed cleanups are, and never thrown.
   for (const { identity, error } of (await parts.memories?.close()) ?? []) {
@@ -770,6 +774,8 @@ export interface RunFlowOptions {
  *   count or prepared start state breaks its contract; or a `tools` server was opened by
  *   another run in progress. A message never echoes the key.
  * @throws McpConnectError when a `tools` server doesn't start or doesn't list its tools.
+ * @throws RangeError when a tool module a node reaches fails to start: its import throws or
+ *   outlasts `YIAN_TOOL_MODULE_START_TIMEOUT_SECONDS`, or an export it is used by is refused.
  * @throws AuthError when the credential store can't be read.
  * @throws DefaultsError when a `YIAN_<NAME>` variable in `env` holds a value its entry doesn't accept.
  * @throws MemoryBusyError when a memory's lock stays held past its timeout as it is opened.
@@ -1230,8 +1236,8 @@ export function runStartLlm(
 }
 
 /**
- * Open the run's MCP servers, check the tools, then record and drive a fresh run. What this opened
- * closes before the run is released, whatever fails.
+ * Open the run's MCP servers and start its tool modules, check the tools, then record and drive a
+ * fresh run. What this opened closes before the run is released, whatever fails.
  */
 async function startRun(
   flow: ComposedFlow,
@@ -1247,6 +1253,7 @@ async function startRun(
   const scheduler = options.scheduler ?? realScheduler;
   const models = options.models ?? defaultModelAccess(env);
   let runServers: McpServer[] = [];
+  let runModules: StartedToolModule[] = [];
   let memories: RunMemories | null = null;
   let authority: RunLog | null = null;
   let primary: { error: unknown } | null = null;
@@ -1254,7 +1261,8 @@ async function startRun(
   let keep: () => IdleRun | null = () => null;
   try {
     runServers = await openRunServers(unopened, signal);
-    const runTools = new ToolSet(tools, { context });
+    runModules = await openRunModules(reachedModules(flow), signal);
+    const runTools = new ToolSet(tools, { context }).withModules(runModules);
     const hostTypes = memoryTypeTools(flow.memoryTypes);
     checkToolGrants(flow.compiled, runTools);
     checkMemoryGrantNames(flow.compiled, runTools, hostTypes);
@@ -1391,7 +1399,16 @@ async function startRun(
     throw error;
   } finally {
     // A run that returned its result has every record in the log.
-    await closeAndRelease({ servers: runServers, memories, authority, primary, hold: runHold, keep, landed: () => true });
+    await closeAndRelease({
+      servers: runServers,
+      modules: runModules,
+      memories,
+      authority,
+      primary,
+      hold: runHold,
+      keep,
+      landed: () => true,
+    });
   }
 }
 
@@ -1613,6 +1630,8 @@ export interface AdvanceOptions {
  *   `apiKey` (or a recorded header) wasn't given, before its model call, or the credential store
  *   can't be read.
  * @throws McpConnectError when a `tools` server doesn't start or doesn't list its tools.
+ * @throws RangeError when a tool module a node reaches fails to start: its import throws or
+ *   outlasts `YIAN_TOOL_MODULE_START_TIMEOUT_SECONDS`, or an export it is used by is refused.
  * @throws DefaultsError when a `YIAN_<NAME>` variable in `env` holds a value its entry doesn't accept.
  * @throws DefaultsMismatchError when the run recorded `YIAN_*` values that differ from `env`'s.
  * @throws LoadError when the recorded flow files no longer load (a CODE reference's file gone, or
@@ -1647,6 +1666,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
     const runHold = await holdForAdvance(key, locator);
     let authority: JsonlRunLog | null = null;
     let runServers: McpServer[] = [];
+    let runModules: StartedToolModule[] = [];
     let memories: RunMemories | null = null;
     let primary: { error: unknown } | null = null;
     let keep: () => IdleRun | null = () => null;
@@ -1714,7 +1734,8 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       // Skills need no server, so a changed one is refused before any server starts.
       checkRecordedSpecs("skills", start.skills, recordedSkills(flow.compiled, skills));
       runServers = await openRunServers(unopened, signal);
-      const runTools = new ToolSet(tools, { context });
+      runModules = await openRunModules(reachedModules(flow), signal);
+      const runTools = new ToolSet(tools, { context }).withModules(runModules);
       const hostTypes = memoryTypeTools(flow.memoryTypes);
       checkToolGrants(flow.compiled, runTools);
       checkMemoryGrantNames(flow.compiled, runTools, hostTypes);
@@ -1753,7 +1774,16 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       throw error;
     } finally {
       // A segment that returned its result has every record in the log.
-      await closeAndRelease({ servers: runServers, memories, authority, primary, hold: runHold, keep, landed: () => true });
+      await closeAndRelease({
+        servers: runServers,
+        modules: runModules,
+        memories,
+        authority,
+        primary,
+        hold: runHold,
+        keep,
+        landed: () => true,
+      });
     }
   });
 }
@@ -2036,6 +2066,7 @@ async function deliverTo(
     } finally {
       await closeAndRelease({
         servers: [],
+        modules: [],
         memories: null,
         authority,
         primary,
@@ -3210,13 +3241,13 @@ function* streamedEnvelopes(log: string, maxLineBytes: number | null): Generator
 /**
  * Prove every static AGENT grant and TOOL `tool_id` names a tool this run supplies.
  *
- * An AGENT's grants expand as its request will, its own flows first: a group gives its tools, a
- * group grant the tools it lists, and a bare name a top-level tool or the one group tool by that
- * name. So a flow or library def that would show under a granted host tool's name is refused. A
- * TOOL node names one tool, bare or as `{group: tool}`. `take` and `sleep` TOOL nodes need no
- * tool: the engine runs them. Every static node is checked, including nodes that may never run, so
- * an unresolvable id rejects the run before any record is written instead of failing its node when
- * the node starts.
+ * An AGENT's grants expand as its request will, its own flows and tool modules first: a group
+ * gives its tools, a group grant the tools it lists, and a bare name a top-level tool or the one
+ * group tool by that name. So a flow, library def or module tool that would show under a granted
+ * host tool's name is refused. A TOOL node names one tool, bare or as `{group: tool}`, a module's
+ * tool among its own. `take` and `sleep` TOOL nodes need no tool: the engine runs them. Every
+ * static node is checked, including nodes that may never run, so an unresolvable id rejects the
+ * run before any record is written instead of failing its node when the node starts.
  *
  * @throws RangeError when an AGENT grants a built-in (`take`, `sleep`, `ask`), a tool or group
  *   this run lacks, a tool of two groups by its bare name, a tool its group lacks, two tools that
@@ -3246,11 +3277,10 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
         throw new YianRangeError(`AGENT node ${reprText(nodeId)} grants 'ask_user': ${error.message}`);
       }
     }
-    const flows = node.flowGrants();
-    const own = flows.scope.groups.size === 0 && flows.scope.tools.length === 0 ? [] : [nodeScope(flows.scope)];
+    const own = ownGrants(node, tools);
     try {
       // A provider refuses a name it can't call only at the first request; refuse it here.
-      checkVisibleNames(expandGrants([...grants, ...flows.grants], [...own, ...tools.scopes()]));
+      checkVisibleNames(expandGrants([...grants, ...own.grants], [...own.scopes, ...tools.scopes()]));
     } catch (error) {
       if (!(error instanceof GrantError)) throw error;
       // A grant naming another flow's memory input is a host grant here.
@@ -3261,7 +3291,7 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
     const call = node.hostToolCall();
     if (call === null || (call.group === null && isEngineBuiltin(call.toolId))) continue;
     try {
-      tools.resolve([callRef(call)]);
+      callTools(call, tools).resolve([callRef(call)]);
     } catch (error) {
       if (!(error instanceof RangeError)) throw error;
       let reason: string;
@@ -3300,10 +3330,10 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
 }
 
 /**
- * Refuse a memory grant this run's host tools clash with, before any record is written: one whose
+ * Refuse a memory grant this run's tools clash with, before any record is written: one whose
  * memory input is also a host tool or tool group of the run, and one whose tool would show to a
- * model under the name of a host tool the same node grants. Every static node is checked, child
- * flows' included, each against its own flow's inputs.
+ * model under the name of a host tool, flow or module tool the same node grants. Every static
+ * node is checked, child flows' included, each against its own flow's inputs.
  *
  * @param hostTypes The tool names of the host memory types the flow was loaded with, by type.
  * @throws RangeError naming the node, the input and the fix.
@@ -3319,7 +3349,12 @@ function checkMemoryGrantNames(
     const grants = node.memoryGrants();
     if (grants.length === 0) continue;
     const where = `${node.kind.toUpperCase()} node ${reprText(nodeId)}`;
-    const hostNames = new Set(expandGrants(node.grantedTools(), tools.scopes()).map((tool) => tool.visible));
+    const own = ownGrants(node, tools);
+    const granted = expandGrants([...node.grantedTools(), ...own.grants], [...own.scopes, ...tools.scopes()]);
+    // What each other granted tool is, by the name it shows: the node's own, or the run's.
+    const shown = new Map(
+      granted.map((tool) => [tool.visible, tool.scope < own.scopes.length ? "another tool" : "a host tool"]),
+    );
     for (const { input, tools: listed } of grants) {
       const host = scope.group(input) !== null ? "a tool group" : scope.hasTool(input) ? "a tool" : null;
       if (host !== null) {
@@ -3327,12 +3362,13 @@ function checkMemoryGrantNames(
       }
       const typ = inputs.get(input);
       const names = listed ?? (isMemoryType(typ) ? memoryToolNames(typ, table) : null) ?? [];
-      const shown = listed === null ? input : `{${input}: [${listed.join(", ")}]}`;
+      const grant = listed === null ? input : `{${input}: [${listed.join(", ")}]}`;
       for (const name of names) {
         const visible = visibleToolName(input, name);
-        if (!hostNames.has(visible)) continue;
+        const other = shown.get(visible);
+        if (other === undefined) continue;
         throw new YianRangeError(
-          `${where}: the memory tool \`${visible}\` of \`${shown}\` has the name of a host tool it grants; rename one`,
+          `${where}: the memory tool \`${visible}\` of \`${grant}\` has the name of ${other} it grants; rename one`,
         );
       }
     }
@@ -3340,25 +3376,28 @@ function checkMemoryGrantNames(
 }
 
 /**
- * Refuse a flow or library an agent grants under the name of a host tool or tool group of the run,
- * before any record is written: the grant would mean two tools. Every static node is checked,
- * child flows' included.
+ * Refuse a flow, library or tool module a node grants or calls under the name of a host tool or
+ * tool group of the run, before any record is written: the name would mean two tools. Every
+ * static node is checked, child flows' included.
  *
- * @throws RangeError naming the node, the flow or library, and the fix.
+ * @throws RangeError naming the node, the flow, library or module, and the fix.
  */
 function checkFlowGrantNames(flow: CompiledFlow, tools: ToolSet): void {
   const scope = tools.scope();
   for (const [nodeId, node] of staticNodes(flow)) {
     const own = node.flowGrants().scope;
+    // A TOOL node calls the module its `tool_id:` names; an AGENT grants its modules.
+    const module = node.hostToolCall() === null ? "a tool module it grants" : "a tool module it calls";
     const names: [string, string][] = [
-      ...[...own.groups.keys()].map((name): [string, string] => [name, "a library"]),
-      ...own.tools.map(({ name }): [string, string] => [name, "a flow"]),
+      ...[...own.groups.keys()].map((name): [string, string] => [name, "a library it grants"]),
+      ...own.tools.map(({ name }): [string, string] => [name, "a flow it grants"]),
+      ...node.toolModules().map(({ alias }): [string, string] => [alias, module]),
     ];
     for (const [name, what] of names) {
       const host = scope.group(name) !== null ? "a tool group" : scope.hasTool(name) ? "a tool" : null;
       if (host === null) continue;
       throw new YianRangeError(
-        `${node.kind.toUpperCase()} node ${reprText(nodeId)}: \`${name}\` is both ${what} it grants and ${host} of this run; rename one`,
+        `${node.kind.toUpperCase()} node ${reprText(nodeId)}: \`${name}\` is both ${what} and ${host} of this run; rename one`,
       );
     }
   }
@@ -3388,6 +3427,30 @@ function isEngineBuiltin(toolId: string): boolean {
 /** Return the tool a TOOL node's call names: its bare id, or its group's tool. */
 function callRef(call: HostToolCall): string | ToolRef {
   return call.group === null ? call.toolId : { group: call.group, name: call.toolId };
+}
+
+/** Return the tools a TOOL node's call resolves in: the run's, with its module's as its node scope. */
+function callTools(call: HostToolCall, tools: ToolSet): ToolSet {
+  return call.module === null ? tools : tools.withNodeScope(moduleScope([call.module], tools));
+}
+
+/**
+ * Return the grants of a node's own tools, as authored, and the scope they resolve in before the
+ * run's (none when it is empty): its flow grants', and its tool modules' with stand-ins for the
+ * tools the run's modules listed.
+ *
+ * @throws RangeError as `moduleScope` throws.
+ */
+function ownGrants(node: Node, tools: ToolSet): { grants: ToolGrant[]; scopes: GrantScope[] } {
+  const flows = node.flowGrants();
+  const modules = moduleScope(node.toolModules(), tools);
+  const scope: NodeScope = {
+    groups: new Map([...flows.scope.groups, ...modules.groups]),
+    tools: [...flows.scope.tools, ...modules.tools],
+    identities: modules.identities,
+  };
+  const empty = scope.groups.size === 0 && scope.tools.length === 0;
+  return { grants: [...flows.grants, ...node.moduleGrants()], scopes: empty ? [] : [nodeScope(scope)] };
 }
 
 /**
@@ -3474,7 +3537,7 @@ function checkToolTypes(flow: CompiledFlow, tools: ToolSet): void {
   for (const [nodeId, node] of staticNodes(flow)) {
     const call = node.hostToolCall();
     if (call === null || (call.group === null && isEngineBuiltin(call.toolId))) continue;
-    const declared = toolTypes(tools.resolve([callRef(call)])[0]!);
+    const declared = toolTypes(callTools(call, tools).resolve([callRef(call)])[0]!);
     if (declared.inputs !== null) checkToolInputs(nodeId, call, declared.inputs, declared.required, declared.extra);
     if (declared.output !== null) checkToolOutput(nodeId, call, declared.output);
   }
@@ -4151,4 +4214,93 @@ async function openRunServers(
  */
 async function closeRunServers(servers: readonly McpServer[]): Promise<void> {
   await Promise.all(servers.map((server) => server.close()));
+}
+
+/** A tool module the static nodes of a flow reach, and how: as a group, and by which exports. */
+interface ReachedModule {
+  /** The module file's real path. */
+  readonly path: string;
+  /** How messages name the file (`moduleKey`). */
+  readonly key: string;
+  /** Whether an alias names every tool the module exports. */
+  readonly group: boolean;
+  /** The exports one-export aliases name, once each. */
+  readonly exports: readonly string[];
+}
+
+/**
+ * Return each tool module the static nodes of `flow` reach (library defs and flow tools
+ * included), in the order they are first reached, keyed relative to the root flow's folder. An
+ * alias nothing grants or calls reaches nothing.
+ */
+function reachedModules(flow: ComposedFlow): ReachedModule[] {
+  const dir = flow.source?.dir ?? null;
+  const reached = new Map<string, { path: string; key: string; group: boolean; exports: string[] }>();
+  for (const [, node] of staticNodes(flow)) {
+    for (const { ref, path } of node.toolModules()) {
+      const module = reached.get(path) ?? { path, key: moduleKey(path, dir), group: false, exports: [] };
+      reached.set(path, module);
+      const { exportName } = splitModuleRef(ref);
+      if (exportName === null) module.group = true;
+      else if (!module.exports.includes(exportName)) module.exports.push(exportName);
+    }
+  }
+  return [...reached.values()];
+}
+
+/**
+ * Start a segment's tool modules together, each on its own thread (`startToolModule`), and check
+ * each listing against what reaches it (`checkModuleListing`); if one fails, the ones after it
+ * stop, the ones that started terminate, and the first failure in order is thrown.
+ *
+ * Once `signal` aborts, the modules still starting stop: the started ones terminate and the run
+ * rejects with its reason, before anything is recorded.
+ *
+ * @throws RangeError naming the file, and the export, when an import throws or outlasts
+ *   `YIAN_TOOL_MODULE_START_TIMEOUT_SECONDS`, or a listing is refused.
+ * @throws The signal's reason when it aborts before every module is started.
+ */
+async function openRunModules(
+  modules: readonly ReachedModule[],
+  signal: AbortSignal | null,
+): Promise<StartedToolModule[]> {
+  signal?.throwIfAborted();
+  const stops = modules.map(() => new AbortController());
+  const outcomes = await Promise.allSettled(
+    modules.map(async ({ path, key, group, exports }, index) => {
+      const stop = stops[index]!.signal;
+      try {
+        const both = signal === null ? stop : AbortSignal.any([signal, stop]);
+        const { thread, listing } = await startToolModule(path, key, both);
+        const started = { path, key, thread, listing };
+        try {
+          checkModuleListing(key, listing, { group, exports });
+        } catch (error) {
+          await closeRunModules([started]);
+          throw error;
+        }
+        return started;
+      } catch (error) {
+        // Started one at a time, the modules after a failed one would never have started.
+        for (const later of stops.slice(index + 1)) later.abort(error);
+        throw error;
+      }
+    }),
+  );
+  const started = outcomes.flatMap((outcome) => (outcome.status === "fulfilled" ? [outcome.value] : []));
+  try {
+    const failed = outcomes.find((outcome) => outcome.status === "rejected");
+    if (failed !== undefined) throw failed.reason;
+    // A stop after the last module started.
+    signal?.throwIfAborted();
+  } catch (error) {
+    await closeRunModules(started);
+    throw error;
+  }
+  return started;
+}
+
+/** Terminate the run's tool module threads together; never rejects. */
+async function closeRunModules(modules: readonly StartedToolModule[]): Promise<void> {
+  await Promise.allSettled(modules.map(({ thread }) => thread.terminate()));
 }

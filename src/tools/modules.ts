@@ -1,13 +1,24 @@
 /**
  * Tool modules: TypeScript or JavaScript files a flow imports through `uses:`, whose exports are
  * tools. An alias names every tool a module exports (`crm: ./crm.ts`), a group, or one export
- * (`quote: ./tools.ts:quote`), one tool. A load never imports a module.
+ * (`quote: ./tools.ts:quote`), one tool. A load never imports a module; each segment of a run
+ * starts the modules its nodes reach, and a node's scope holds a stand-in for each tool it reaches.
  *
- * Knows about: typesys.
+ * Knows about: tools/errors, tools/function_tools, tools/registry, the types of tools/grants,
+ * tools/module_thread and tools/module_worker, diagnostics, typesys and `node:path`.
  */
 
-import { YianTypeError } from "../typesys/errors.ts";
+import { relative } from "node:path";
+
+import { getCloseMatches, reprText } from "../diagnostics.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { isRecord } from "../typesys/values.ts";
+import { PermanentToolError } from "./errors.ts";
+import { FunctionTool } from "./function_tools.ts";
+import type { NodeScope } from "./grants.ts";
+import type { ToolModuleThread } from "./module_thread.ts";
+import type { ListedTool, ToolModuleListing } from "./module_worker.ts";
+import { RESERVED_TOOL_NAMES, type ToolSet } from "./registry.ts";
 
 /** A tool module an AGENT grants or a TOOL node calls, as the loader resolved its `uses:` alias. Frozen. */
 export interface ToolModuleRef {
@@ -41,4 +52,113 @@ export function checkedToolModule(where: string, module: ToolModuleRef): ToolMod
     throw new YianTypeError(`${where}: a tool module needs a non-empty alias, ref and path`);
   }
   return Object.freeze({ alias: alias!, ref: ref!, path: path! });
+}
+
+/** A tool module one segment of a run started: its file, its thread, and the tools it listed. */
+export interface StartedToolModule {
+  /** The module file's real path, which the run holds it by. */
+  readonly path: string;
+  /** How messages name the file: its path relative to the root flow's folder. */
+  readonly key: string;
+  readonly thread: ToolModuleThread;
+  readonly listing: ToolModuleListing;
+}
+
+/**
+ * Return a module's key: its real `path` relative to `dir`, the real folder of the run's root
+ * flow, or `path` itself for a flow with no folder.
+ */
+export function moduleKey(path: string, dir: string | null): string {
+  return dir === null ? path : relative(dir, path);
+}
+
+/**
+ * Refuse a module's listing for what reaches it: each export a one-export alias names must be a
+ * tool; with `group`, an alias names every tool it exports, so none may be refused or take a name
+ * yian reserves, and there must be one.
+ *
+ * @param key How messages name the file.
+ * @throws RangeError naming the file and the export.
+ */
+export function checkModuleListing(
+  key: string,
+  listing: ToolModuleListing,
+  reach: { readonly group: boolean; readonly exports: readonly string[] },
+): void {
+  for (const name of reach.exports) listedExport(key, listing, name);
+  if (!reach.group) return;
+  const [refused] = listing.refused;
+  if (refused !== undefined) throw new YianRangeError(refused.message);
+  if (listing.tools.length === 0) throw new YianRangeError(`${key} exports no tools`);
+  const reserved = listing.tools.find(({ name }) => RESERVED_TOOL_NAMES.has(name));
+  if (reserved !== undefined) {
+    throw new YianRangeError(`${key} export ${reprText(reserved.name)} takes a name yian reserves; rename it`);
+  }
+}
+
+/**
+ * Return export `name` of a module's listing, as a tool.
+ *
+ * @throws RangeError naming the file and the export when it is refused, isn't a tool, or is missing.
+ */
+function listedExport(key: string, listing: ToolModuleListing, name: string): ListedTool {
+  const found = listing.tools.find((tool) => tool.name === name);
+  if (found !== undefined) return found;
+  const refused = listing.refused.find((each) => each.name === name);
+  if (refused !== undefined) throw new YianRangeError(refused.message);
+  const head = `${key} export ${reprText(name)}`;
+  if (listing.others.includes(name)) {
+    throw new YianRangeError(`${head} isn't a tool: export an object with name, description, parameters and execute`);
+  }
+  const [close] = getCloseMatches(name, listing.tools.map((tool) => tool.name), 1);
+  const hint = close === undefined ? "" : `; did you mean ${reprText(close)}?`;
+  throw new YianRangeError(`${key} has no export ${reprText(name)}${hint}`);
+}
+
+/**
+ * Return the node scope `refs` reach in the modules `tools` started: a group alias's tools as a
+ * group under the alias, each by its export name, and a one-export alias's tool under the alias,
+ * each a stand-in with its listed spec. Every entry's identity is its file and export, so two
+ * aliases of one file bind a tool once.
+ *
+ * @throws RangeError when a ref's module wasn't started, or its export is refused, isn't a tool or
+ *   is missing.
+ */
+export function moduleScope(refs: readonly ToolModuleRef[], tools: ToolSet): NodeScope<FunctionTool> {
+  const groups = new Map<string, FunctionTool[]>();
+  const single: FunctionTool[] = [];
+  const identities = new Map<string, string>();
+  for (const { alias, ref, path } of refs) {
+    const started = tools.toolModule(path);
+    if (started === null) {
+      throw new YianRangeError(`tool module ${reprText(alias)} (${ref}) wasn't started for this run`);
+    }
+    const { key, listing } = started;
+    const identity = (listed: ListedTool) => JSON.stringify({ module: path, export: listed.name });
+    const { exportName } = splitModuleRef(ref);
+    if (exportName === null) {
+      groups.set(alias, listing.tools.map((listed) => standIn(key, listed, listed.name)));
+      for (const listed of listing.tools) identities.set(JSON.stringify([alias, listed.name]), identity(listed));
+    } else {
+      const listed = listedExport(key, listing, exportName);
+      single.push(standIn(key, listed, alias));
+      identities.set(JSON.stringify([null, alias]), identity(listed));
+    }
+  }
+  return { groups, tools: single, identities };
+}
+
+/** Return the engine's stand-in for a module's listed tool, named `name`, with its listed spec. */
+function standIn(key: string, listed: ListedTool, name: string): FunctionTool {
+  return new FunctionTool({
+    name,
+    description: listed.description,
+    parametersJsonSchema: listed.parametersJsonSchema,
+    outputJsonSchema: listed.outputJsonSchema,
+    resumable: listed.resumable,
+    execute: () => {
+      const message = `${key} export ${reprText(listed.name)}: calls to tool modules aren't supported yet`;
+      throw new PermanentToolError(message);
+    },
+  });
 }

@@ -7,7 +7,7 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -15,7 +15,7 @@ import { pathToFileURL } from "node:url";
 
 import { withEnv } from "../../src/defaults.ts";
 import { runtime } from "../../src/platform.ts";
-import { ToolModuleThread } from "../../src/tools/module_thread.ts";
+import { startToolModule, ToolModuleThread } from "../../src/tools/module_thread.ts";
 import { listToolModule } from "../../src/tools/module_worker.ts";
 
 const SOURCE = join(import.meta.dirname, "..", "..", "src");
@@ -146,3 +146,34 @@ console.log(listing.tools.map((tool) => tool.name).join());
   },
   60_000,
 );
+
+/** A module that appends to `beat` every 20 ms once its import starts, and never finishes importing. */
+function beating(beat: string): string {
+  return `import { appendFileSync } from "node:fs";
+setInterval(() => appendFileSync(${JSON.stringify(beat)}, "."), 20);
+await new Promise(() => {});
+`;
+}
+
+/** Whether `beat` was written and then stopped growing: its size 100 ms on and 200 ms later agree. */
+async function stopped(beat: string): Promise<boolean> {
+  await sleep(100);
+  const before = statSync(beat).size;
+  await sleep(200);
+  return before > 0 && statSync(beat).size === before;
+}
+
+test("an import that throws, or outlasts YIAN_TOOL_MODULE_START_TIMEOUT_SECONDS, is refused naming the file, and its thread ends", async () => {
+  const beat = join(tmp, "beat");
+  writeFileSync(join(tmp, "slow.ts"), beating(beat));
+  writeFileSync(join(tmp, "bad.ts"), 'throw new Error("boom");\n');
+  const short = (name: string) => (name === "YIAN_TOOL_MODULE_START_TIMEOUT_SECONDS" ? "1" : undefined);
+  const start = (file: string) => withEnv(short, () => startToolModule(join(tmp, file), file, new AbortController().signal));
+
+  const failed = await start("bad.ts").catch((error) => error);
+  expect([failed, failed.message]).toEqual([expect.any(RangeError), "bad.ts failed to import: Error: boom"]);
+  await expect(start("slow.ts")).rejects.toThrow(
+    new RangeError("slow.ts didn't import within 1 s (YIAN_TOOL_MODULE_START_TIMEOUT_SECONDS)"),
+  );
+  expect(await stopped(beat)).toBe(true);
+});

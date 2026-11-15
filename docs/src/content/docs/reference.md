@@ -98,6 +98,7 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_VECTOR_MEMORY_MAX_RECALL_CHARS` | setting | 4,000 | 1 or more | Most characters of a VectorDBMemory's recall |
 | `YIAN_MCP_CONNECT_TIMEOUT_SECONDS` | setting | 30 | 1 or more | Longest wait in seconds for an MCP server to start and list its tools |
 | `YIAN_MCP_CALL_TIMEOUT_SECONDS` | setting | 300 | 1 or more | Longest wait in seconds for one MCP tool call |
+| `YIAN_TOOL_MODULE_START_TIMEOUT_SECONDS` | setting | 30 | 1 or more | Longest wait in seconds for a tool module's thread to import it and list its tools |
 | `YIAN_MODEL_RETRIES` | setting | 6 | 0 or more | Extra attempts a model call gets after a transport failure (a network error, 5xx, 429 or timeout) |
 | `YIAN_MODEL_FIRST_RESPONSE_TIMEOUT_SECONDS` | setting | 240 | 1 or more | Longest wait in seconds from sending a model request to the first bytes of its response |
 | `YIAN_MODEL_IDLE_TIMEOUT_SECONDS` | setting | 240 | 1 or more | Longest wait in seconds between bytes of a streamed model response |

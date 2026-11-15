@@ -14,8 +14,8 @@
  * `new ToolSet({ ask: handler, ... })`.
  *
  * Knows about: `tools/context`, `tools/errors`, `tools/function_tools`, `tools/grants`,
- * `tools/mcp`, `tools/types`, `skills/tool` (the reserved `load_skill` name), `defaults`, typesys
- * and diagnostics.
+ * `tools/mcp`, `tools/modules` (a started module's type), `tools/types`, `skills/tool` (the
+ * reserved `load_skill` name), `defaults`, typesys and diagnostics.
  */
 
 import { current } from "../defaults.ts";
@@ -41,6 +41,7 @@ import { isToolCheckError, ToolCheckError, toolErrorKinds } from "./errors.ts";
 import { FunctionTool, isFunctionTool, type StandardIssue, type StandardResult } from "./function_tools.ts";
 import { GrantError, type GrantScope, type NodeScope, nodeScope, visibleToolName } from "./grants.ts";
 import { isMcpServer, type McpServer } from "./mcp.ts";
+import type { StartedToolModule } from "./modules.ts";
 import { inputTypeFromJsonSchema } from "./types.ts";
 
 export { ASK, ASK_USER };
@@ -561,11 +562,14 @@ export class ToolSet {
   private trustedSchemas: ReadonlyMap<string, JsonObject>;
   // One node's own tools (`withNodeScope`), tried before the run's; `null` when it has none.
   private ownTools: NodeScope<FunctionTool> | null;
+  // The tool modules the run's segment started (`withModules`), by real path.
+  private startedModules: ReadonlyMap<string, StartedToolModule>;
 
   constructor(tools?: Readonly<Record<string, ToolEntry>> | null, options?: { context?: unknown }) {
     this.toolMap = null;
     this.groupMap = new Map();
     this.ownTools = null;
+    this.startedModules = new Map();
     this.recordNames = new Map();
     this.boundRunId = "";
     this.boundSignal = undefined;
@@ -789,10 +793,11 @@ export class ToolSet {
 
   /**
    * @internal Return a copy that also holds one node's own tools (`NodeScope`), such as its
-   * memories' groups and the flows it grants, in place of any this set held. A ref `{group, name}`
-   * to a group of them, and a bare name of a top-level one, resolve to it before any tool of this
-   * set; a bare name never reaches a group's tool. `scopes()` tries them first. The copy keeps this
-   * set's run, signal, context and tools.
+   * memories' groups, the flows it grants and its tool modules' stand-ins, with their identities,
+   * in place of any this set held. A ref `{group, name}` to a group of them, and a bare name of a
+   * top-level one, resolve to it before any tool of this set; a bare name never reaches a group's
+   * tool. `scopes()` tries them first. The copy keeps this set's run, signal, context, tools and
+   * modules.
    *
    * @throws {RangeError} A group holds two tools of one name, two top-level tools share a name, or a
    *   name is both a group and a top-level tool.
@@ -814,8 +819,25 @@ export class ToolSet {
       names.add(name);
     }
     const copy = Object.assign(Object.create(Object.getPrototypeOf(this)), this) as this;
-    copy.ownTools = groups.size === 0 && names.size === 0 ? null : { groups, tools: [...scope.tools] };
+    const own = { groups, tools: [...scope.tools], identities: scope.identities };
+    copy.ownTools = groups.size === 0 && names.size === 0 ? null : own;
     return copy;
+  }
+
+  /**
+   * @internal Return a copy that holds the tool modules one segment of a run started, by real path,
+   * in place of any this set held; a node builds its scope's module tools from them. The copy keeps
+   * this set's run, signal, context, tools and node scope.
+   */
+  withModules(modules: readonly StartedToolModule[]): this {
+    const copy = Object.assign(Object.create(Object.getPrototypeOf(this)), this) as this;
+    copy.startedModules = new Map(modules.map((module) => [module.path, module]));
+    return copy;
+  }
+
+  /** @internal Return the started tool module at real path `path` (`withModules`), or `null`. */
+  toolModule(path: string): StartedToolModule | null {
+    return this.startedModules.get(path) ?? null;
   }
 
   /**

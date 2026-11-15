@@ -38,6 +38,7 @@ import {
   validateOptionalOrigin,
   ValueContract,
 } from "../../nodes/contracts.ts";
+import type { ToolModuleRef } from "../../tools/modules.ts";
 import { YianTypeError } from "../../typesys/errors.ts";
 import { typeName, type TypeRegistry } from "../../typesys/types.ts";
 import { isList, isRecord, type Type, valueRepr, type ValueRecord } from "../../typesys/values.ts";
@@ -437,6 +438,8 @@ export class BuildContext {
    * tool; `null` for neither.
    */
   readonly callableSection: (name: string) => "defs" | "uses" | null;
+  /** The tool module a `uses:` alias of the file imports, by alias; `null` for any other name. */
+  readonly toolModule: (name: string) => ToolModuleRef | null;
   /** The opaque file name an inline CODE body reports in its errors. */
   readonly sourceFile: string;
   /** The directory a CODE reference resolves against; `null` when not known. */
@@ -461,13 +464,15 @@ export class BuildContext {
 
   /**
    * Create a context. Only `registry` is required; the readers, `resolver` and `baseDir` default
-   * to `null`, `callableSection` to no name, `sourceFile` to `"<inline-code>"`, `diagnostics` to an
-   * unlocated context, `flowInputs` to none and `memoryTypes` to the built-ins only.
+   * to `null`, `callableSection` and `toolModule` to no name, `sourceFile` to `"<inline-code>"`,
+   * `diagnostics` to an unlocated context, `flowInputs` to none and `memoryTypes` to the built-ins
+   * only.
    */
   constructor(options: {
     registry: TypeRegistry;
     resolver?: CallableResolver | null;
     callableSection?: (name: string) => "defs" | "uses" | null;
+    toolModule?: (name: string) => ToolModuleRef | null;
     sourceFile?: string;
     baseDir?: string | null;
     resolveOrigin?: OriginPresenter | null;
@@ -482,6 +487,7 @@ export class BuildContext {
       registry,
       resolver = null,
       callableSection = () => null,
+      toolModule = () => null,
       sourceFile = "<inline-code>",
       baseDir = null,
       resolveOrigin = null,
@@ -495,6 +501,7 @@ export class BuildContext {
     this.registry = registry;
     this.resolver = resolver;
     this.callableSection = callableSection;
+    this.toolModule = toolModule;
     this.sourceFile = sourceFile;
     this.baseDir = baseDir;
     this.resolveOrigin = resolveOrigin;

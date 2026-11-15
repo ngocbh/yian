@@ -1,5 +1,6 @@
 /**
- * Pure parsing of a `uses:` ref string into `UsesRef(scheme, path, version)`.
+ * Pure parsing of a `uses:` ref string into `UsesRef(scheme, path, version)`, or into the parts of
+ * a tool module ref (`moduleRefParts`), which is read first.
  *
  * Grammar: `[<scheme>:]<path>[@<version>]`.
  *
@@ -61,15 +62,44 @@ export function parseUsesRef(
     rest = raw.slice(match[0].length);
   }
 
-  // An `@` in a directory (an npm-style `@scope/`) is part of the path, not a version.
-  const last = rest.lastIndexOf("@");
-  const at = last > rest.lastIndexOf("/") ? last : -1;
-  const path = at === -1 ? rest : rest.slice(0, at);
-  const version = at === -1 ? null : rest.slice(at + 1);
-
+  const [path, version] = splitVersion(rest);
   if (!path) throw diagnostics.error(`uses: ref ${reprText(value)} has no flow path`);
   if (version === "") {
     throw diagnostics.error(`uses: ref ${reprText(value)} has an empty version (trailing '@')`);
   }
   return new UsesRef(scheme, path, version);
+}
+
+/** Split `ref` at its `@<version>`: the last `@` of its last path segment. */
+function splitVersion(ref: string): [string, string | null] {
+  // An `@` in a directory (an npm-style `@scope/`) is part of the path, not a version.
+  const last = ref.lastIndexOf("@");
+  const at = last > ref.lastIndexOf("/") ? last : -1;
+  return at === -1 ? [ref, null] : [ref.slice(0, at), ref.slice(at + 1)];
+}
+
+// A path with no whitespace or colon, as a CODE reference's, ending in a JS or TS extension; then
+// an optional `:` and an export name.
+const MODULE_REF = /^([^\s:]+\.(?:ts|js|mjs))(?::(.*))?$/;
+
+/** The parts of a `uses:` value that names a tool module: `./tools.ts:quote@2`. */
+export interface ModuleRefParts {
+  /** The module's path, as written: `./tools.ts`. */
+  readonly path: string;
+  /** The export after the path's `:`, as written; `null` for none, which names every export. */
+  readonly exportName: string | null;
+  /** The `@<version>`, which a module can't have; `null` for none. */
+  readonly version: string | null;
+}
+
+/**
+ * Read `value` as a tool module ref, a path ending in `.ts`, `.js` or `.mjs` and an optional
+ * `:<export>`, once any `@<version>` is set aside; `null` when it isn't one. Read before
+ * `parseUsesRef`, which would take `tools.ts:` in `tools.ts:quote` for a scheme.
+ */
+export function moduleRefParts(value: string): ModuleRefParts | null {
+  const [rest, version] = splitVersion(value.trim());
+  const match = MODULE_REF.exec(rest);
+  if (match === null) return null;
+  return Object.freeze({ path: match[1]!, exportName: match[2] ?? null, version });
 }

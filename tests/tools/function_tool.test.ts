@@ -1,9 +1,10 @@
 /**
- * `FunctionTool` construction, `tool()`, the types `toolTypes` reads from a tool's JSON Schemas,
- * and a `FunctionTool` in a `ToolSet` and the registry. The library matrix builds one `place` tool
- * with zod, valibot (with a JSON Schema beside it, and through its Standard JSON Schema interface),
- * ArkType and a raw JSON Schema. With `YIAN_TEST_NODE` set to a Node binary, the built tools code
- * runs on Node, beside a second copy of its leaves, and a zod `tool()` there.
+ * `FunctionTool` construction, `tool()` and its `ToolOptions`, the types `toolTypes` reads from a
+ * tool's JSON Schemas, and a `FunctionTool` in a `ToolSet` and the registry. The library matrix
+ * builds one `place` tool with zod, valibot (with a JSON Schema beside it, and through its Standard
+ * JSON Schema interface), ArkType and a raw JSON Schema. With `YIAN_TEST_NODE` set to a Node
+ * binary, the built tools code runs on Node, beside a second copy of its leaves, and a zod `tool()`
+ * there.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -26,6 +27,7 @@ import {
   tool,
   withExecute,
 } from "../../src/tools/function_tools.ts";
+import type { JsonObject as EntryJsonObject, ToolOptions } from "../../src/tools/index.ts";
 import { registeredTools, registerTool, TOOL_REGISTRY, ToolSet } from "../../src/tools/registry.ts";
 import { toolTypes } from "../../src/tools/types.ts";
 import { type JsonObject, parseJson } from "../../src/typesys/json.ts";
@@ -1088,6 +1090,49 @@ describe("tool()", () => {
     expect(counted.isConcurrencySafe!({ n: 1 })).toBe(true);
     // @ts-expect-error a string is not the output type.
     tool({ name: "bad", description: "", parameters: ECHO_SCHEMA, output: z.number(), execute: () => "no" });
+  });
+});
+
+describe("ToolOptions", () => {
+  test("types a tool's options as plain objects tool() takes, schemas typing the call", async () => {
+    // A JSON Schema gives a plain record of arguments, and `ctx` is typed.
+    const lookup = {
+      name: "lookup",
+      description: "Find a customer by id.",
+      parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+      isConcurrencySafe: () => true,
+      execute: async (args, ctx) => `${String(args.id)}:${ctx.callId}`,
+    } satisfies ToolOptions;
+    const Create = z.object({ name: z.string(), tier: z.number().int() });
+    const create = {
+      name: "create",
+      description: "Create a customer.",
+      parameters: Create,
+      execute: (args) => {
+        // @ts-expect-error `nope` is not a parameter.
+        void args.nope;
+        return `${args.name}:${args.tier + 1}`;
+      },
+    } satisfies ToolOptions<typeof Create>;
+    const Out = z.object({ total: z.number() });
+    const quote = {
+      name: "quote",
+      description: "Price an order.",
+      parameters: { type: "object" },
+      output: Out,
+      execute: () => ({ total: 2 }),
+    } satisfies ToolOptions<EntryJsonObject, typeof Out>;
+    // @ts-expect-error a misspelt option is refused.
+    void ({ name: "x", description: "", parameters: {}, resumeable: true, execute: () => 1 } satisfies ToolOptions);
+    // @ts-expect-error a result that doesn't fit the output validator is refused.
+    void ({ name: "x", description: "", parameters: {}, output: Out, execute: () => ({ total: "x" }) } satisfies ToolOptions<EntryJsonObject, typeof Out>);
+
+    const signal = new AbortController().signal;
+    const fields = { attempt: 1, toolName: "lookup", runId: "r", node: "n", context: null, signal };
+    const ctx = new ToolContext({ callId: "r/n", ...fields });
+    expect(await tool(lookup).execute({ id: "c1" }, ctx)).toBe("c1:r/n");
+    expect(tool(create).execute({ name: "a", tier: 1 }, ctx)).toBe("a:2");
+    expect(tool(quote).outputValidator).toBe(Out);
   });
 });
 

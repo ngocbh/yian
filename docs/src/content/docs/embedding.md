@@ -373,7 +373,9 @@ signal's reason, and `advance` runs the stopped nodes again.
   on the first try, higher on a TOOL node's retry or when a resume makes the call again), `runId`,
   `node`, `context` (your app object) and `signal` (aborted when the call must end).
   Tool groups may hold same-named tools, which a model sees as `<group>_<tool>`; two tools that
-  could show one name are refused.
+  could show one name are refused. `ToolOptions` (from `@ngocbh/yian/tools`) is the type of
+  `tool()`'s options, so an options object written on its own
+  (`{ ... } satisfies ToolOptions<typeof Params>`) is typed as `tool()` types it.
 - **MCP servers.** `mcpServer({ command, args })` or `mcpServer({ url, headers })` describes a
   server (an `https` url; `http` only on `localhost`, `127.0.0.1` or `[::1]`); pass it as a
   `tools` entry and its tools become one group. `concurrencySafe: true` (or a list of tool names)

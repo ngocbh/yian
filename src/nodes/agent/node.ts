@@ -33,6 +33,7 @@ import { renderRecall } from "../../memory/render.ts";
 import { grantedMemorySpecs, memoryTools } from "../../memory/tools.ts";
 import type { FunctionTool } from "../../tools/function_tools.ts";
 import { asToolGrant, type MemoryGrant, type ToolGrant, visibleToolName } from "../../tools/grants.ts";
+import { checkedToolModule, type ToolModuleRef } from "../../tools/modules.ts";
 import { ToolSet } from "../../tools/registry.ts";
 import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import { type JsonObject, logJson } from "../../typesys/json.ts";
@@ -379,6 +380,11 @@ export class AgentNode extends Node {
    */
   flowTools: readonly FlowTool[];
   /**
+   * The tool modules `tools` grants, by `uses:` alias, once each in grant order; a grant naming one
+   * is never a host one.
+   */
+  readonly moduleTools: readonly ToolModuleRef[];
+  /**
    * The authored source each cascade pass re-resolves: a record, or a template or binding for a
    * layer holding values.
    */
@@ -447,11 +453,13 @@ export class AgentNode extends Node {
    * @param options.memoryInputs The memory inputs of the agent's flow its grants name; defaults
    *   to none.
    * @param options.flowTools The flows its grants name, baked; defaults to none.
+   * @param options.moduleTools The tool modules its grants name; defaults to none.
    * @throws TypeError for a bad `prompt` item, `systemPrompt`, `llmConfig`, `variables`,
-   *   `steerInbox`, `steerRender`, `memoryInputs` or `flowTools`.
+   *   `steerInbox`, `steerRender`, `memoryInputs`, `flowTools` or `moduleTools`.
    * @throws RangeError for an empty list prompt or one ending in an assistant message, the retired
    *   `builtin_tools` grant, a steer render without a steer inbox, a variable whose name repeats
-   *   or whose default is missing or invalid, a flow tool named twice, or one no name grant names.
+   *   or whose default is missing or invalid, a flow tool named twice, or one no name grant names,
+   *   or a tool module listed twice, or one no grant names.
    * @throws SkillError for a `load_skill` tool grant or a bad skill grant.
    */
   constructor(
@@ -470,6 +478,7 @@ export class AgentNode extends Node {
       steerRender?: string | null;
       memoryInputs?: readonly string[] | null;
       flowTools?: readonly FlowTool[] | null;
+      moduleTools?: readonly ToolModuleRef[] | null;
     } = {},
   ) {
     const {
@@ -486,6 +495,7 @@ export class AgentNode extends Node {
       steerRender = null,
       memoryInputs = null,
       flowTools = null,
+      moduleTools = null,
     } = options;
     super(nodeId, { title });
     if (isList(prompt)) checkPromptItems(nodeId, prompt);
@@ -506,6 +516,16 @@ export class AgentNode extends Node {
         throw new YianRangeError(`AGENT node ${reprText(nodeId)}: flow tool ${reprText(name)} isn't granted by name in tools`);
       }
     }
+    const where = `AGENT node ${reprText(nodeId)}`;
+    this.moduleTools = Object.freeze((moduleTools ?? []).map((module) => checkedToolModule(where, module)));
+    this.moduleTools.forEach(({ alias }, index) => {
+      if (this.moduleTools.findIndex((module) => module.alias === alias) !== index) {
+        throw new YianRangeError(`${where} lists tool module ${reprText(alias)} twice`);
+      }
+      if (!this.tools.some((grant) => grantName(grant) === alias)) {
+        throw new YianRangeError(`${where}: tool module ${reprText(alias)} isn't granted in tools`);
+      }
+    });
     if (this.tools.some((grant) => grant.kind === "name" && grant.name === "builtin_tools")) {
       throw new YianRangeError(
         "builtin_tools belonged to the removed native Codex integration. " +
@@ -734,8 +754,13 @@ export class AgentNode extends Node {
 
   /** Return the authored `tools:` grants of host tools and groups, which may name host-filled groups. */
   override grantedTools(): readonly ToolGrant[] {
-    const flows = new Set(this.flowTools.map((tool) => tool.name));
-    return this.tools.filter((grant) => !this.memoryInputs.includes(grantName(grant)) && !flows.has(grantName(grant)));
+    const local = new Set([...this.flowTools.map((tool) => tool.name), ...this.moduleTools.map(({ alias }) => alias)]);
+    return this.tools.filter((grant) => !this.memoryInputs.includes(grantName(grant)) && !local.has(grantName(grant)));
+  }
+
+  /** Return the tool modules this agent grants, in grant order. */
+  override toolModules(): readonly ToolModuleRef[] {
+    return this.moduleTools;
   }
 
   /** Return the flows this agent grants as tools, in grant order. */

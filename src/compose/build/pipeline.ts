@@ -66,6 +66,7 @@ import {
   type ValueTemplate,
 } from "../../nodes/contracts.ts";
 import { ASK } from "../../tools/context.ts";
+import type { ToolModuleRef } from "../../tools/modules.ts";
 import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import { messagesKey, NEW_MESSAGES } from "../../typesys/pool.ts";
 import { newMessagesType, type TypeRegistry } from "../../typesys/types.ts";
@@ -487,6 +488,8 @@ export interface CallableScope extends PrivateRegistrar {
   has(flowId: string): boolean;
   /** The section declaring `flowId`: `defs` or `uses`; `null` for neither. */
   section(flowId: string): "defs" | "uses" | null;
+  /** The tool module a `uses:` alias imports, by alias; `null` for any other name. */
+  toolModule(name: string): ToolModuleRef | null;
   /** Resolve one named or compiler-owned callable in this file scope. */
   resolve(flowId: string): ComposedFlow;
 }
@@ -2224,6 +2227,7 @@ function buildNodes(
     registry,
     resolver: (childId) => scope.resolve(childId),
     callableSection: (name) => scope.section(name),
+    toolModule: (name) => scope.toolModule(name),
     // Inline CODE receives the owning document label only as an opaque traceback file name;
     // authored locations come from semantic origins. Inert for reference-mode CODE.
     sourceFile: diagnostics.label || "<inline-code>",

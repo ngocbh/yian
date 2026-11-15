@@ -7,11 +7,15 @@
  * literal lines without keeping YAML objects, and builds the runtime `CodeNode`. Nothing is
  * compiled at build: the node takes the body as text, or a value entry's built-in identity
  * form. The awaited load step runs after assembly: `checkFlowCode` checks every CODE node of a
- * composed flow and its child flows, and `checkCodeNode` turns a failed check into a located
- * `LoadError`. Registered in `KINDS` and `BINDING_FIELDS` by `compose/nodes/index.ts`.
+ * composed flow and its child flows, and the tool modules every node names, and `checkCodeNode`
+ * turns a failed check into a located `LoadError`. Registered in `KINDS` and `BINDING_FIELDS` by
+ * `compose/nodes/index.ts`.
  *
- * Knows about: diagnostics, platform, compose source and helpers, and nodes (base, code).
+ * Knows about: diagnostics, platform, compose source and helpers, nodes (base, code) and tools
+ * (modules).
  */
+
+import { relative } from "node:path";
 
 import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
 import type { Node } from "../../nodes/base.ts";
@@ -22,7 +26,8 @@ import {
   selectInlineCodeOrigin,
   validateCodeOrigins,
 } from "../../nodes/code/node.ts";
-import { TypeStripError } from "../../platform.ts";
+import { leavesRoot, TypeStripError } from "../../platform.ts";
+import { splitModuleRef } from "../../tools/modules.ts";
 import type { LoadDiagnostics } from "../helpers/errors.ts";
 import type { SourceCatalogBuilder } from "../source/catalog.ts";
 import type { SourceCursor } from "../source/index.ts";
@@ -236,7 +241,25 @@ export interface CheckedFlow {
 }
 
 /**
- * Check every CODE node of a composed flow and of its child flows, in node order.
+ * Refuse a tool module `node` names whose file resolved outside `options.codeRoot`, located at the
+ * node: a host may have loaded the flow under no root, as for a CODE reference.
+ *
+ * @throws LoadError for the first such module.
+ */
+function checkModuleRoots(node: Node, options: CodeCheckOptions): void {
+  const { diagnostics, resolveOrigin, codeRoot = null } = options;
+  if (codeRoot === null) return;
+  for (const module of node.toolModules()) {
+    if (!leavesRoot(relative(codeRoot, module.path))) continue;
+    const frame = resolveOrigin !== null && node.origin !== null ? resolveOrigin(node.origin) : null;
+    const message = `tool module ${reprText(splitModuleRef(module.ref).path)} is outside the code root`;
+    throw diagnostics.error(`node ${reprText(node.id)}: ${message}`, { frames: frame === null ? [] : [frame] });
+  }
+}
+
+/**
+ * Check every CODE node of a composed flow and of its child flows, in node order, and that each
+ * node's tool modules resolved inside `options.codeRoot`.
  *
  * A node's child flows (`originChildren()`) are checked right after it; a flow reached twice is
  * checked once. A flow in `options.seen` was checked already and is skipped. Each child flow goes
@@ -253,6 +276,7 @@ export async function checkFlowCode(flow: CheckedFlow, options: CodeCheckOptions
     seen.add(current);
     for (const node of current.nodes.values()) {
       if (node instanceof CodeNode) await checkCodeNode(node, options);
+      checkModuleRoots(node, options);
       for (const child of node.originChildren()) await visitChild(child as CheckedFlow, visit);
     }
   };

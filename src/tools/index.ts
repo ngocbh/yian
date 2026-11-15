@@ -11,7 +11,8 @@
  * the answer comes later. `tools/function_tools` holds `FunctionTool` (a
  * tool given as a name, description, JSON Schema and `execute`, with optional Standard Schema
  * validators and an output JSON Schema) and `tool()`, which builds one from a Standard Schema
- * validator or a raw JSON Schema. `tools/errors` holds
+ * validator or a raw JSON Schema, and `ToolOptions`, the type of `tool()`'s options, beside the
+ * `JsonObject` type its schemas take. `tools/errors` holds
  * `ReportedToolError`, which a tool throws for a failure an AGENT's model reads as the call's
  * result, `PermanentToolError` and `TransientToolError`, which a tool throws to stop or steer a
  * TOOL node's retries, and `ToolCheckError`, thrown when a check yian runs on a call fails; yian
@@ -45,8 +46,10 @@ export {
   type StandardResult,
   type StandardSchemaV1,
   tool,
+  type ToolOptions,
 } from "./function_tools.ts";
 export { type GrantScope } from "./grants.ts";
+export type { JsonObject } from "../typesys/json.ts";
 export {
   isMcpError,
   McpCallCancelled,

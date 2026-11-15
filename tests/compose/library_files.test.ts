@@ -131,7 +131,7 @@ test("an imported library's defs are rebased under the alias, and its pin applie
   writeFileSync(join(tmp, "billing.yaml"), LIBRARY);
   const canonical = await loadFlow(LIBRARY, { sourceLabel: "billing.yaml" });
   const scope = new CallableScope({}, readTypedefs(null), () => canonical, { billing: "./billing@2" });
-  const imported = await scope.resolveAlias("billing");
+  const imported = (await scope.resolveAlias("billing")) as ComposedFlow;
 
   expect([...imported.library!.keys()]).toEqual(["quote", "requote"]);
   for (const [name, def] of imported.library!) {

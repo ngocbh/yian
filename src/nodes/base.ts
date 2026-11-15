@@ -41,6 +41,7 @@ import type { RecordedMemoryTool } from "../typesys/memory.ts";
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
 import type { MemoryGrant, NodeScope, ToolGrant } from "../tools/grants.ts";
+import type { ToolModuleRef } from "../tools/modules.ts";
 import type { ToolSet } from "../tools/registry.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import type { VariablePool } from "../typesys/pool.ts";
@@ -1279,6 +1280,14 @@ export abstract class Node {
    * the run-start tool checks never see one. The base grants none.
    */
   memoryGrants(): readonly MemoryGrant[] {
+    return [];
+  }
+
+  /**
+   * Return the tool modules whose tools this node grants a model or calls itself, each a `uses:`
+   * alias of its file. The base has none.
+   */
+  toolModules(): readonly ToolModuleRef[] {
     return [];
   }
 

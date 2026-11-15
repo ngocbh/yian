@@ -1,17 +1,21 @@
 /**
  * A started tool module's checks and node scope: what a run refuses in a listing for the aliases
  * that reach it, and the stand-ins a node's scope holds for its tools, each keyed by its file and
- * export so two aliases of one file bind a tool once, and each calling its export on the module's
- * thread.
+ * export so two aliases of one file bind a tool once, and each checking and calling its export on
+ * the module's thread, where its checks act as a host tool's do.
  */
 
 import { expect, test } from "bun:test";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { ToolContext } from "../../src/tools/context.ts";
-import { PermanentToolError } from "../../src/tools/errors.ts";
+import { toolErrorKinds } from "../../src/tools/errors.ts";
 import { nodeScope, expandGrants, parseToolGrants } from "../../src/tools/grants.ts";
-import type { ToolModuleThread } from "../../src/tools/module_thread.ts";
-import type { ListedTool, ToolModuleListing } from "../../src/tools/module_worker.ts";
+import { ToolModuleThread } from "../../src/tools/module_thread.ts";
+import { listToolModule, type ListedTool, type ToolModuleListing } from "../../src/tools/module_worker.ts";
 import {
   checkModuleListing,
   moduleKey,
@@ -83,9 +87,13 @@ test("a module's key is its path relative to the root flow's folder, or its path
   ]);
 });
 
-/** A thread that answers each call with what it was given: the export, the arguments and the node. */
-const thread = { call: async (tool: string, args: unknown, ctx: ToolContext) => [tool, args, ctx.node] } as unknown as ToolModuleThread;
-const checked = { ...listed("place"), hasParametersValidator: true };
+/** A thread that answers each request with what it was given; only `lookup`'s calls are safe. */
+const thread = {
+  check: async (tool: string, name: string, args: unknown) => ({ value: { safe: tool === "lookup", given: [tool, name, args] } }),
+  call: async (tool: string, checked: unknown, ctx: ToolContext) => [tool, checked, ctx.node],
+  checkOutput: async (tool: string, name: string, value: unknown) => ({ value: [tool, name, value] }),
+} as unknown as ToolModuleThread;
+const checked = { ...listed("place"), hasParametersValidator: true, hasOutputValidator: true };
 const started: StartedToolModule = { path: "/w/crm.ts", key: "crm.ts", thread, listing: { ...LISTING, tools: [...LISTING.tools, checked] } };
 const tools = new ToolSet({}).withModules([started]);
 const ctx = new ToolContext({ callId: "c", attempt: 1, toolName: "find", runId: "r", node: "a", context: undefined, signal: new AbortController().signal });
@@ -107,14 +115,102 @@ test("a node scope holds a group alias's tools by export name and a one-export a
   ]);
   const visible = expandGrants(parseToolGrants(["find", "crm"], "n"), [nodeScope(scope)]).map((each) => each.visible);
   expect(visible).toEqual(["find", "crm_create", "crm_place"]);
-  // Each stand-in calls its export on the module's thread.
-  expect(await find!.execute({ id: "1" }, ctx)).toEqual(["lookup", { id: "1" }, "a"]);
+  // Each stand-in checks its export's arguments on the module's thread, which says whether the call
+  // is safe, and calls the export with what the check returned.
+  const handle = await find!.parametersValidator!["~standard"].validate({ id: "1" });
+  expect(handle).toEqual({ value: { safe: true, given: ["lookup", "find", { id: "1" }] } });
+  const { value } = handle as { value: Record<string, unknown> };
+  expect([find!.isConcurrencySafe!(value), await find!.execute(value, ctx)]).toEqual([true, ["lookup", value, "a"]]);
+  // Only a tool with an output validator has one, which runs on the thread.
   const place = scope.groups.get("crm")!.at(-1)!;
-  expect(() => place.execute({}, ctx)).toThrow(new PermanentToolError("crm.ts export 'place': a tool module's validators aren't supported yet"));
+  expect(find!.outputValidator).toBeNull();
+  expect(await place.outputValidator!["~standard"].validate({ total: 1 })).toEqual({ value: ["place", "place", { total: 1 }] });
   expect(() => moduleScope([{ alias: "x", ref: "./x.ts", path: "/w/x.ts" }], tools)).toThrow(
     new RangeError("tool module 'x' (./x.ts) wasn't started for this run"),
   );
   expect(() => moduleScope([{ alias: "f", ref: "./crm.ts:find", path: "/w/crm.ts" }], tools)).toThrow(
     new RangeError(LISTING.refused[0]!.message),
   );
+});
+
+/**
+ * A tool whose validator and output validator act as `how` says: `issues`, `number` (not a
+ * Standard Schema result) and `throw` for the arguments, `out-*` for the result; any other value
+ * passes as a class instance, which `isConcurrencySafe` takes as safe for `safe`.
+ */
+const CHECKED = `const parameters = { type: "object", properties: { how: { type: "string" } }, required: ["how"] };
+class Checked {
+  constructor(how) { this.how = how; }
+}
+const validator = (validate) => ({ "~standard": { version: 1, vendor: "t", validate, jsonSchema: { input: () => ({ type: "object" }) } } });
+const checker = validator(({ how }) => {
+  if (how === "issues") return { issues: [{ message: "too short", path: ["a", 0, { key: "b" }, Symbol("s")] }, { message: "no path" }] };
+  if (how === "number") return 5;
+  if (how === "throw") throw new TypeError("the validator broke");
+  return { value: new Checked(how) };
+});
+const output = validator((result) => {
+  if (result.how === "out-issues") return { issues: [{ message: "wrong", path: ["total"] }] };
+  if (result.how === "out-number") return 5;
+  if (result.how === "out-throw") throw new RangeError("the output validator broke");
+  if (result.how === "out-date") return { value: new Date(0) };
+  return { value: { ...result, total: 2.5 } };
+});
+export const lookup = {
+  name: "lookup",
+  description: "d",
+  parameters: checker,
+  parametersJsonSchema: parameters,
+  output,
+  isConcurrencySafe: (args) => args instanceof Checked && args.how === "safe",
+  execute: (args) => ({ how: args.how, checked: args instanceof Checked }),
+};
+`;
+
+test("a module tool's argument and result checks act as the same tool's do on the host", async () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "yian-modules-")));
+  const path = join(dir, "crm.ts");
+  writeFileSync(path, CHECKED);
+  const real = new ToolModuleThread(path, "crm.ts");
+  try {
+    const started: StartedToolModule = { path, key: "crm.ts", thread: real, listing: await real.list() };
+    const ref = { alias: "lookup", ref: "./crm.ts:lookup", path };
+    const module = new ToolSet({}).withModules([started]);
+    const viaModule = module.withNodeScope(moduleScope([ref], module));
+    const host = listToolModule(await import(pathToFileURL(path).href), "crm.ts").tools.get("lookup")!;
+    const viaHost = new ToolSet({ lookup: host });
+    /** What one call does: its error's name, message, kinds and cause's message, or whether it is safe and its result. */
+    const outcome = async (tools: ToolSet, inputs: Record<string, unknown>) => {
+      try {
+        const call = await tools.validate("lookup", inputs);
+        return { safe: tools.isConcurrencySafe(call), result: await tools.invoke(call) };
+      } catch (error) {
+        const { name, message, cause } = error as Error;
+        return { error: [name, message, toolErrorKinds(error), (cause as Error | undefined)?.message ?? null] };
+      }
+    };
+    const cases = [{}, ...["ok", "safe", "issues", "number", "throw", "out-issues", "out-number", "out-throw", "out-date"].map((how) => ({ how }))];
+
+    const outcomes = [];
+    for (const inputs of cases) outcomes.push(await outcome(viaModule, inputs));
+
+    const expected = [];
+    for (const inputs of cases) expected.push(await outcome(viaHost, inputs));
+    expect(outcomes).toEqual(expected);
+    expect(outcomes).toEqual([
+      { error: ["RangeError", 'tool \'lookup\' is missing required argument(s) ["how"]', [], null] },
+      { safe: false, result: { how: "ok", checked: true, total: 2.5 } },
+      { safe: true, result: { how: "safe", checked: true, total: 2.5 } },
+      { error: ["ToolCheckError", "tool 'lookup' arguments failed its validator: a[0].b[\"Symbol(s)\"]: too short; no path", ["check"], null] },
+      { error: ["TypeError", "tool 'lookup' arguments: the validator returned number, not a Standard Schema result", [], null] },
+      { error: ["TypeError", "the validator broke", [], null] },
+      { error: ["ToolCheckError", "tool 'lookup' result failed its output validator: total: wrong", ["check"], null] },
+      { error: ["ToolCheckError", "tool 'lookup' result: the output validator returned number, not a Standard Schema result", ["check"], null] },
+      { error: ["ToolCheckError", "tool 'lookup' result: the output validator threw: the output validator broke", ["check"], "the output validator broke"] },
+      { error: ["ToolCheckError", "tool 'lookup' result: Date is not a yian value", ["check"], "tool 'lookup' result: Date is not a yian value"] },
+    ]);
+  } finally {
+    await real.terminate();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

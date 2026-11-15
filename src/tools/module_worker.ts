@@ -14,10 +14,15 @@
  * behind a throwing getter) are refused, naming the export. Anything else is ignored. Only ES
  * modules: Node and Bun list a CommonJS file's exports differently.
  *
- * A call runs its tool's `execute` with a context of the call's fields, whose `signal` the host
- * aborts by message, and calls interleave. The reply is the result, taken in by host intake (so a
- * class instance is refused here, before the copy flattens it), or the throw with its tool error
- * kinds, which the host rebuilds. Values cross as `typesys/crossing` packs them.
+ * A check runs a tool's validator, if any, then its `isConcurrencySafe` on what `execute` will get,
+ * and keeps the validator's output here, by the check's id, until the host releases it: an output
+ * may be any value, which the copy would flatten. A call runs its tool's `execute` on that output,
+ * else on the call's own copy of the arguments, with a context of the call's fields, whose `signal`
+ * the host aborts by message, and calls interleave. The output validator runs on a result the host
+ * checked. Each validator's return is read as the registry reads it; values the host takes are
+ * taken in by host intake here (so a class instance is refused before the copy flattens it), and a
+ * throw crosses with its tool error kinds, which the host rebuilds. Values cross as
+ * `typesys/crossing` packs them.
  *
  * Knows about: tools/context, tools/errors, tools/function_tools, defaults, diagnostics, typesys
  * and `node:*`.
@@ -33,7 +38,7 @@ import type { JsonObject } from "../typesys/json.ts";
 import { fromHost, jsTypeName, rejectDeepNesting, TypeCheckError } from "../typesys/values.ts";
 import { isPending, ToolContext } from "./context.ts";
 import { type ToolErrorKind, toolErrorKinds } from "./errors.ts";
-import { FunctionTool, isFunctionTool, tool, type ToolOptions } from "./function_tools.ts";
+import { FunctionTool, isFunctionTool, type StandardIssue, tool, type ToolOptions } from "./function_tools.ts";
 
 /** What a tool module's thread starts with, as `workerData.yianToolModule`. */
 export interface ToolModuleData {
@@ -43,12 +48,27 @@ export interface ToolModuleData {
   readonly label: string;
 }
 
+/**
+ * One check of a module tool's arguments by its validator, or of its result by its output
+ * validator, as the host posts it.
+ */
+export interface ToolModuleCheck {
+  /** The tool's export name. */
+  readonly tool: string;
+  /** The arguments or the result, a host value packed by `packFiles`. */
+  readonly value: unknown;
+  /** How the registry names what is checked, for messages: `tool 'lookup' arguments`. */
+  readonly where: string;
+}
+
 /** One call of a module's tool, as the host posts it. */
 export interface ToolModuleCall {
   /** The tool's export name. */
   readonly tool: string;
   /** The checked arguments, a host value packed by `packFiles`. */
   readonly args: unknown;
+  /** The id of the check whose kept output `execute` gets, or `null` when it kept none. */
+  readonly check: number | null;
   readonly callId: string;
   readonly attempt: number;
   readonly runId: string;
@@ -56,24 +76,40 @@ export interface ToolModuleCall {
 }
 
 /**
- * A message the host posts: a request for the module's listing or a call of one of its tools,
- * each with its id and the caller's `current()`, or the stop of the open call `id`.
+ * A message the host posts: a request for the module's listing, a check of a tool's arguments or
+ * its result, or a call of one of its tools, each with its id and the caller's `current()`; the
+ * stop of the open call `id`; or the release of the output check `id` kept.
  */
 export type ToolModuleRequest =
   | { readonly kind: "list"; readonly id: number; readonly defaults: Defaults }
+  | ({ readonly kind: "check"; readonly id: number; readonly defaults: Defaults } & ToolModuleCheck)
+  | ({ readonly kind: "output"; readonly id: number; readonly defaults: Defaults } & ToolModuleCheck)
   | ({ readonly kind: "call"; readonly id: number; readonly defaults: Defaults } & ToolModuleCall)
-  | { readonly kind: "abort"; readonly id: number };
+  | { readonly kind: "abort"; readonly id: number }
+  | { readonly kind: "release"; readonly id: number };
 
 /**
- * A thread's reply to a request: the listing; a call's result, a packed yian value; what its tool
- * threw, with its tool error kinds and, when transient, its `retryAfter`; why its result was
- * refused; or why the request failed (the import threw).
+ * A thread's reply to a request: the listing; a passed check of the arguments, saying whether the
+ * call is safe to run beside others and whether the validator's output was kept; a validator's
+ * issues, or why its return isn't a Standard Schema result; a call's result or the output
+ * validator's, a packed yian value; what a tool or a validator threw, with its tool error kinds
+ * and, when transient, its `retryAfter`; why a result was refused; or why the request failed (the
+ * import threw).
  */
 export type ToolModuleReply = { readonly id: number } & ReplyBody;
+
+/** One validator issue as it crosses: its message, and its path as text and numbers. */
+export interface CrossedIssue {
+  readonly message: string;
+  readonly path: readonly (string | number)[];
+}
 
 /** A reply without its id. */
 type ReplyBody =
   | { readonly as: "listing"; readonly listing: ToolModuleListing }
+  | { readonly as: "checked"; readonly safe: boolean; readonly kept: boolean }
+  | { readonly as: "issues"; readonly issues: readonly CrossedIssue[] }
+  | { readonly as: "nonstandard"; readonly message: string }
   | { readonly as: "result"; readonly value: unknown }
   | {
       readonly as: "thrown";
@@ -241,24 +277,128 @@ export function listToolModule(
 }
 
 /**
- * Return the reply to a call of `tool` (`undefined` when the module has no such tool): its result
- * taken in, as a yian value, or why it was refused, or what `execute` threw.
+ * A validator's return as the registry reads it: its output, or the reply for its issues or for a
+ * return that isn't a Standard Schema result.
+ */
+type StandardRead =
+  | { readonly as: "value"; readonly value: unknown }
+  | Extract<ReplyBody, { as: "issues" | "nonstandard" }>;
+
+/**
+ * Read a validator's return as the registry does: an object whose `issues` is an array holds
+ * issues, which cross with each path segment as a number or as text; one whose `issues` is absent
+ * and which holds `value` holds the output; anything else isn't a Standard Schema result.
+ *
+ * @param head The validator, as messages name it: `tool 'lookup' arguments: the validator`.
+ */
+function standardRead(result: unknown, head: string): StandardRead {
+  if (typeof result === "object" && result !== null) {
+    const issues: unknown = (result as { issues?: unknown }).issues;
+    if (Array.isArray(issues)) {
+      const crossed = Array.from(issues, (issue: StandardIssue) => ({
+        message: `${issue.message}`,
+        path: Array.from(issue.path ?? [], (segment) => {
+          const key = typeof segment === "object" && segment !== null ? segment.key : segment;
+          return typeof key === "number" ? key : String(key);
+        }),
+      }));
+      return { as: "issues", issues: crossed };
+    }
+    if (issues === undefined && "value" in result) return { as: "value", value: (result as { value: unknown }).value };
+  }
+  return { as: "nonstandard", message: `${head} returned ${jsTypeName(result)}, not a Standard Schema result` };
+}
+
+/**
+ * Return whether `tool`'s `isConcurrencySafe` says a call with `args` may run beside others, as
+ * the registry reads it: only exactly `true` is safe, and no function, a Promise or a throw isn't.
+ */
+function concurrencySafe(tool: FunctionTool, args: unknown): boolean {
+  try {
+    const check = tool.isConcurrencySafe;
+    if (check === null) return false;
+    const safe: unknown = check(args as Record<string, unknown>);
+    if (typeof (safe as { then?: unknown } | null)?.then === "function") {
+      // A Promise isn't `true`; handle its rejection so it can't crash the thread.
+      Promise.resolve(safe).catch(() => {});
+      return false;
+    }
+    return safe === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Return the reply to a check of `tool`'s arguments: what its validator threw, its issues, or why
+ * its return isn't a Standard Schema result; else whether `isConcurrencySafe` says the call is
+ * safe, on what `execute` will get, after `keep` took the validator's output.
+ */
+async function checkReply(
+  tool: FunctionTool,
+  check: ToolModuleCheck & { readonly defaults: Defaults },
+  keep: (output: unknown) => void,
+): Promise<ReplyBody> {
+  let args = unpackFiles(check.value);
+  const validator = tool.parametersValidator;
+  if (validator !== null) {
+    let read: StandardRead;
+    try {
+      const returned: unknown = await validator["~standard"].validate(args);
+      read = standardRead(returned, `${check.where}: the validator`);
+    } catch (error) {
+      return thrownReply(error);
+    }
+    if (read.as !== "value") return read;
+    args = read.value;
+    keep(args);
+  }
+  // Another request may have installed its values while the validator ran.
+  install(check.defaults);
+  return { as: "checked", safe: concurrencySafe(tool, args), kept: validator !== null };
+}
+
+/**
+ * Return the reply to a check of `tool`'s result by its output validator: what the validator
+ * threw, its issues, or why its return isn't a Standard Schema result; else its output taken in.
+ */
+async function outputReply(
+  tool: FunctionTool,
+  check: ToolModuleCheck & { readonly defaults: Defaults },
+): Promise<ReplyBody> {
+  const validator = tool.outputValidator;
+  if (validator === null) return { as: "failed", message: `${check.where}: the tool has no output validator` };
+  let read: StandardRead;
+  try {
+    const returned: unknown = await validator["~standard"].validate(unpackFiles(check.value));
+    read = standardRead(returned, `${check.where}: the output validator`);
+  } catch (error) {
+    return thrownReply(error);
+  }
+  if (read.as !== "value") return read;
+  install(check.defaults);
+  return takenIn(read.value, check.where);
+}
+
+/**
+ * Return the reply to a call of `tool` with `args`: its result taken in, as a yian value, or why
+ * it was refused, or what `execute` threw.
  *
  * @param head The export, as messages name it.
  */
 async function callReply(
   head: string,
-  tool: FunctionTool | undefined,
+  tool: FunctionTool,
+  args: unknown,
   call: ToolModuleCall & { readonly defaults: Defaults },
   signal: AbortSignal,
 ): Promise<ReplyBody> {
-  if (tool === undefined) return { as: "failed", message: `${head} isn't a tool` };
   const { callId, attempt, runId, node } = call;
   // The host's app object can't cross a thread.
   const ctx = new ToolContext({ callId, attempt, toolName: call.tool, runId, node, context: undefined, signal });
   let result: unknown;
   try {
-    result = await tool.execute(unpackFiles(call.args) as Record<string, unknown>, ctx);
+    result = await tool.execute(args as Record<string, unknown>, ctx);
   } catch (error) {
     return thrownReply(error);
   }
@@ -267,12 +407,16 @@ async function callReply(
   if (isPending(result)) {
     return { as: "refused", message: `${head} returned pending(), which a tool module can't do yet`, path: [] };
   }
-  const where = `${head} result`;
+  return takenIn(result === undefined ? null : result, `${head} result`);
+}
+
+/** Return the reply holding `value` taken in as a yian value, or why intake refused it, naming it as `where`. */
+function takenIn(value: unknown, where: string): ReplyBody {
   try {
     // Intake runs here, not after the copy: the clone would flatten a class instance or an accessor.
-    const value = fromHost(result === undefined ? null : result, where);
-    if (tooDeepToCopy(value)) rejectDeepNesting(value, where);
-    return { as: "result", value: packFiles(value) };
+    const taken = fromHost(value, where);
+    if (tooDeepToCopy(taken)) rejectDeepNesting(taken, where);
+    return { as: "result", value: packFiles(taken) };
   } catch (error) {
     if (!(error instanceof TypeCheckError)) throw error;
     return { as: "refused", message: error.message, path: [...error.path] };
@@ -302,6 +446,8 @@ export function serveToolModule(port: MessagePort, data: ToolModuleData): void {
   let tools: ReadonlyMap<string, FunctionTool> | null = null;
   /** Each open call's stop, by request id. */
   const calls = new Map<number, AbortController>();
+  /** Each validator's output a check kept for its calls, by the check's request id, until the host releases it. */
+  const kept = new Map<number, unknown>();
   // Building or posting a reply can throw (a getter on a thrown error, a value the clone
   // refuses); the host must still hear back.
   const reply = (id: number, make: () => ReplyBody): void => {
@@ -315,6 +461,10 @@ export function serveToolModule(port: MessagePort, data: ToolModuleData): void {
   port.on("message", (request: ToolModuleRequest) => {
     if (request.kind === "abort") {
       calls.get(request.id)?.abort();
+      return;
+    }
+    if (request.kind === "release") {
+      kept.delete(request.id);
       return;
     }
     const { id, defaults } = request;
@@ -335,7 +485,18 @@ export function serveToolModule(port: MessagePort, data: ToolModuleData): void {
           }
           tools ??= listToolModule(namespace, data.label).tools;
           const head = `${data.label} export ${reprText(request.tool)}`;
-          return await callReply(head, tools.get(request.tool), request, stop!.signal);
+          const tool = tools.get(request.tool);
+          if (tool === undefined) return { as: "failed", message: `${head} isn't a tool` };
+          if (request.kind === "check") return await checkReply(tool, request, (output) => kept.set(id, output));
+          if (request.kind === "output") return await outputReply(tool, request);
+          const { check } = request;
+          // Released, or checked on an earlier thread: this thread never ran the validator.
+          if (check !== null && !kept.has(check)) {
+            return { as: "failed", message: `${head}: its checked arguments aren't kept on this thread` };
+          }
+          // A call gets the output its check kept, else its own copy of the arguments, as on the host.
+          const args = check === null ? unpackFiles(request.args) : kept.get(check);
+          return await callReply(head, tool, args, request, stop!.signal);
         },
         (error: unknown): ReplyBody => ({
           as: "failed",

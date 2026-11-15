@@ -7,23 +7,31 @@
  * here is referenced only while a request is open, so an idle thread never keeps this process
  * alive.
  *
+ * A tool's checks run there as its stand-in's validators: a check of a call's arguments runs the
+ * module's validator and `isConcurrencySafe` and returns a handle to the validator's output, which
+ * stays on the thread for every attempt of the call; it is released once the call settles, unless
+ * a TOOL node may retry its error, or once the handle is collected. Each check's issues and
+ * failures come back as the registry's own, so they act as a host tool's do.
+ *
  * A call's error is rebuilt here with the name, message, stack and tool error kinds it had on the
  * thread, so it steers an AGENT and TOOL retries as a host tool's error does.
  *
- * Knows about: tools/context, tools/errors, tools/module_worker, defaults, platform, typesys and
- * `node:*`.
+ * Knows about: tools/context, tools/errors, tools/function_tools' types, tools/module_worker,
+ * defaults, diagnostics, platform, typesys and `node:*`.
  */
 
 import { basename } from "node:path";
 import { SHARE_ENV, Worker } from "node:worker_threads";
 
 import { current } from "../defaults.ts";
+import { reprText } from "../diagnostics.ts";
 import { realScheduler } from "../platform.ts";
 import { packFiles, unpackFiles } from "../typesys/crossing.ts";
-import { YianRangeError } from "../typesys/errors.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { TypeCheckError, toHost, type Value } from "../typesys/values.ts";
 import type { ToolContext } from "./context.ts";
-import { TOOL_ERROR, ToolCheckError } from "./errors.ts";
+import { isPermanentToolError, isToolCheckError, TOOL_ERROR, ToolCheckError } from "./errors.ts";
+import type { StandardResult } from "./function_tools.ts";
 import type { ToolModuleData, ToolModuleListing, ToolModuleReply, ToolModuleRequest } from "./module_worker.ts";
 
 // As `nodes/code/node.ts` finds the entry: `bun build --compile` bundles it at
@@ -41,8 +49,34 @@ interface OpenRequest {
   release(): void;
 }
 
+/**
+ * A module tool's arguments, checked on its thread: what its stand-in's validator returns, which
+ * the registry hands its `isConcurrencySafe` and `execute`. Frozen.
+ */
+export class CheckedArgs {
+  /** The check's id, by which the thread keeps the validator's output; `null` when it kept none. */
+  readonly check: number | null;
+  /** Whether the module's `isConcurrencySafe` says the call may run beside other calls. */
+  readonly safe: boolean;
+  /** The arguments as they were checked, packed; each call carries them. */
+  readonly args: unknown;
+
+  constructor(check: number | null, safe: boolean, args: unknown) {
+    this.check = check;
+    this.safe = safe;
+    this.args = args;
+    Object.freeze(this);
+  }
+}
+
 /** A tool module's thread, started when this is made. */
 export class ToolModuleThread {
+  // A handle dropped before its call settled (a call that never ran, or a TOOL node out of
+  // retries) releases its output once it is collected.
+  static readonly #dropped = new FinalizationRegistry<{ thread: ToolModuleThread; check: number }>(
+    ({ thread, check }) => thread.#post({ kind: "release", id: check }),
+  );
+
   /** The module file's real path. */
   readonly path: string;
   /** How messages name the file. */
@@ -102,26 +136,86 @@ export class ToolModuleThread {
   }
 
   /**
-   * Call the module's tool exported as `tool` with `args` on the thread, and return its result as
-   * a host value. Its context there holds `ctx`'s call id, attempt, run id and node, the export
-   * name as its tool name, and no host object; a stop of `ctx.signal` aborts its signal there, and
-   * the call settles as the tool does.
+   * Check `args` for the module's tool exported as `tool` on the thread, as the registry checks a
+   * host tool's arguments with its validator: run the module's validator, if any, then its
+   * `isConcurrencySafe` on what `execute` will get. The thread keeps the validator's output for
+   * the call.
    *
+   * @param name The tool's name in the registry, which messages name it by.
+   * @returns The validator's issues, each path as text and numbers, or the checked arguments.
+   * @throws TypeError, as the registry's, when the validator returns no Standard Schema result.
+   * @throws What the validator threw, rebuilt as `call` rebuilds a tool's throw.
+   * @throws Error naming the file when the thread fails or exits first.
+   */
+  async check(tool: string, name: string, args: unknown): Promise<StandardResult<CheckedArgs>> {
+    const packed = packFiles(args);
+    const where = `tool ${reprText(name)} arguments`;
+    const reply = await this.#request((id) => ({ kind: "check", id, defaults: current(), tool, value: packed, where }));
+    if (reply.as === "issues") return { issues: reply.issues };
+    if (reply.as === "nonstandard") throw new YianTypeError(reply.message);
+    if (reply.as !== "checked") throw replyError(this.label, reply);
+    const checked = new CheckedArgs(reply.kept ? reply.id : null, reply.safe, packed);
+    if (reply.kept) ToolModuleThread.#dropped.register(checked, { thread: this, check: reply.id }, checked);
+    return { value: checked };
+  }
+
+  /**
+   * Check the module's tool exported as `tool`'s result `value` with its output validator on the
+   * thread, as the registry checks a host tool's result.
+   *
+   * @param name The tool's name in the registry, which messages name it by.
+   * @returns The validator's issues, each path as text and numbers, or its output as a host value.
+   * @throws ToolCheckError, as the registry's, when the validator returns no Standard Schema
+   *   result, or an output that isn't a yian value.
+   * @throws What the validator threw, rebuilt as `call` rebuilds a tool's throw.
+   * @throws Error naming the file when the thread fails or exits first.
+   */
+  async checkOutput(tool: string, name: string, value: unknown): Promise<StandardResult<unknown>> {
+    const packed = packFiles(value);
+    const where = `tool ${reprText(name)} result`;
+    const reply = await this.#request((id) => ({ kind: "output", id, defaults: current(), tool, value: packed, where }));
+    if (reply.as === "issues") return { issues: reply.issues };
+    if (reply.as === "nonstandard") throw new ToolCheckError(reply.message);
+    if (reply.as === "result") return { value: toHost(unpackFiles(reply.value) as Value) };
+    throw replyError(this.label, reply);
+  }
+
+  /**
+   * Call the module's tool exported as `tool` on the thread with the arguments `check` returned,
+   * and return its result as a host value. `execute` gets the validator's output the thread kept,
+   * else a fresh copy of the arguments. Its context there holds `ctx`'s call id, attempt, run id
+   * and node, the export name as its tool name, and no host object; a stop of `ctx.signal` aborts
+   * its signal there, and the call settles as the tool does. Once it settles, the thread releases
+   * the kept output, unless a TOOL node may try the call again: its error is neither permanent nor
+   * a failed check, and no stop ended it.
+   *
+   * @throws TypeError when `checked` isn't what `check` returned.
    * @throws What the tool threw, rebuilt as an `Error` with its name, message and stack, its tool
    *   error kinds and, when transient, its `retryAfter`; a thrown non-`Error` is an `Error` with
    *   the value's text, and the value as its `cause` when it is a yian value.
    * @throws ToolCheckError when the result isn't a yian value, or is `pending()`.
    * @throws Error naming the file when the thread fails or exits first.
    */
-  async call(tool: string, args: Record<string, unknown>, ctx: ToolContext): Promise<unknown> {
+  async call(tool: string, checked: unknown, ctx: ToolContext): Promise<unknown> {
+    if (!(checked instanceof CheckedArgs)) {
+      throw new YianTypeError(`${this.label} export ${reprText(tool)} takes the arguments its check returned`);
+    }
     const { callId, attempt, runId, node, signal } = ctx;
-    const packed = packFiles(args);
-    const reply = await this.#request(
-      (id) => ({ kind: "call", id, defaults: current(), tool, args: packed, callId, attempt, runId, node }),
-      signal,
-    );
-    if (reply.as === "result") return toHost(unpackFiles(reply.value) as Value);
-    throw replyError(this.label, reply);
+    const { check, args } = checked;
+    let settled = true;
+    try {
+      const reply = await this.#request(
+        (id) => ({ kind: "call", id, defaults: current(), tool, args, check, callId, attempt, runId, node }),
+        signal,
+      );
+      if (reply.as === "result") return toHost(unpackFiles(reply.value) as Value);
+      throw replyError(this.label, reply);
+    } catch (error) {
+      settled = signal.aborted || isPermanentToolError(error) || isToolCheckError(error);
+      throw error;
+    } finally {
+      if (settled) this.#release(checked);
+    }
   }
 
   /** Stop the thread; open requests reject as for an exit. */
@@ -153,6 +247,20 @@ export class ToolModuleThread {
       if (signal?.aborted) abort();
       else signal?.addEventListener("abort", abort, { once: true });
     });
+  }
+
+  /** Have the thread drop the output `checked` kept, unless it kept none or was released. */
+  #release(checked: CheckedArgs): void {
+    if (checked.check === null || !ToolModuleThread.#dropped.unregister(checked)) return;
+    this.#post({ kind: "release", id: checked.check });
+  }
+
+  /** Post `message`, which has no reply, unless the thread ended: an ended thread holds nothing it names. */
+  #post(message: ToolModuleRequest): void {
+    if (this.#ended !== null) return;
+    try {
+      this.#worker.postMessage(message);
+    } catch {}
   }
 
   /** Forget the request `id`; with none left open, the handle no longer keeps this process alive. */

@@ -2,8 +2,10 @@
  * A tool module's thread: started on the CODE worker entry, it imports its module once, lists its
  * tools with the caller's `current()`, keeps its port referenced while it waits, and rejects a
  * listing, naming the file, when the import throws or the thread exits. An idle thread never keeps
- * this process alive. A call runs its tool there with the call's context; its throw comes back
- * with its tool error kinds, and a result that isn't a yian value as a failed check.
+ * this process alive. A check runs the tool's validator and `isConcurrencySafe` there and keeps the
+ * validator's output for the call, until the call settles or its handle here is collected. A call
+ * runs its tool there with the call's context; its throw comes back with its tool error kinds, and a
+ * result that isn't a yian value as a failed check.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -13,12 +15,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import v8 from "node:v8";
+import vm from "node:vm";
 
 import { withEnv } from "../../src/defaults.ts";
 import { runtime } from "../../src/platform.ts";
 import { ToolContext } from "../../src/tools/context.ts";
 import { isToolCheckError, isTransientToolError, toolErrorKinds } from "../../src/tools/errors.ts";
-import { startToolModule, ToolModuleThread } from "../../src/tools/module_thread.ts";
+import { type CheckedArgs, startToolModule, ToolModuleThread } from "../../src/tools/module_thread.ts";
 import { listToolModule } from "../../src/tools/module_worker.ts";
 import { FileRef } from "../../src/typesys/values.ts";
 
@@ -183,8 +187,20 @@ test("an import that throws, or outlasts YIAN_TOOL_MODULE_START_TIMEOUT_SECONDS,
 });
 
 /** A call's context from run `r1`'s node `a`, stopped by `signal`. */
-function context(signal = new AbortController().signal): ToolContext {
-  return new ToolContext({ callId: "r1/a/1/0", attempt: 2, toolName: "find", runId: "r1", node: "a", context: { app: 1 }, signal });
+function context(signal = new AbortController().signal, attempt = 2): ToolContext {
+  return new ToolContext({ callId: "r1/a/1/0", attempt, toolName: "find", runId: "r1", node: "a", context: { app: 1 }, signal });
+}
+
+/** Check `args` for `tool` on `thread`, as the registry does, and return the checked arguments. */
+async function checked(thread: ToolModuleThread, tool: string, args: Record<string, unknown>): Promise<CheckedArgs> {
+  const result = await thread.check(tool, tool, args);
+  if (result.issues !== undefined) throw new Error(`issues: ${JSON.stringify(result.issues)}`);
+  return result.value;
+}
+
+/** Check `args` for `tool` on `thread` and call it with them, as the registry does. */
+async function called(thread: ToolModuleThread, tool: string, args: Record<string, unknown>, ctx = context()): Promise<unknown> {
+  return await thread.call(tool, await checked(thread, tool, args), ctx);
 }
 
 /** The source of a plain-object tool `name` whose `execute` is `body`. */
@@ -205,7 +221,7 @@ test("a call runs its tool on the thread, bound to its object, with the call's c
   const file = new FileRef({ uri: "file:///w/a.txt", mime: "text/plain", name: "a.txt" });
   const args = { file, big: 2n ** 60n, list: [file, 1.5] };
 
-  const echoed = await thread.call("echo", args, context());
+  const echoed = await called(thread, "echo", args);
 
   expect(echoed).toEqual({
     self: true,
@@ -213,7 +229,7 @@ test("a call runs its tool on the thread, bound to its object, with the call's c
     args,
   });
   expect(FileRef.isFileRef((echoed as { args: { file: unknown } }).args.file)).toBe(true);
-  expect(await thread.call("nothing", {}, context())).toBeNull();
+  expect(await called(thread, "nothing", {})).toBeNull();
 });
 
 test("a tool's throw comes back with its name, message, stack and tool error kinds; any other value as an Error", async () => {
@@ -232,7 +248,7 @@ ${calling(
     throw { code: 7 };
   }`,
 )}`);
-  const thrown = (how: string) => thread.call("fail", { how }, context()).then(() => null, (error: Error) => error);
+  const thrown = (how: string) => called(thread, "fail", { how }).then(() => null, (error: Error) => error);
 
   for (const kinds of [["reported"], ["reported", "permanent"], ["permanent"], ["check"]] as const) {
     const error = await thrown(kinds.join(" "));
@@ -261,7 +277,7 @@ test("a result that isn't a yian value, or that pends, fails the call's check, n
   }`,
     ),
   );
-  const refused = (how: string) => thread.call("bad", { how }, context()).then(() => null, (error: Error) => error);
+  const refused = (how: string) => called(thread, "bad", { how }).then(() => null, (error: Error) => error);
 
   const date = await refused("date");
   expect([isToolCheckError(date), date?.name, date?.message]).toEqual([true, "ToolCheckError", "crm.ts export 'bad' result: Date is not a yian value"]);
@@ -279,9 +295,116 @@ test("a stop aborts the tool's own signal on the thread, and other calls go on m
   );
   const stop = new AbortController();
 
-  const waiting = thread.call("wait", {}, context(stop.signal));
-  expect(await thread.call("quick", {}, context())).toBe("quick");
+  const waiting = called(thread, "wait", {}, context(stop.signal));
+  expect(await called(thread, "quick", {})).toBe("quick");
   stop.abort();
 
   expect(await waiting).toBe("stopped");
+});
+
+/** Source of a full garbage collection on the running thread: `Bun.gc` on Bun; on Node, V8's `gc`, exposed for the call. */
+const COLLECT = `import v8 from "node:v8";
+import vm from "node:vm";
+const collect = () => {
+  if (typeof Bun !== "undefined") return Bun.gc(true);
+  v8.setFlagsFromString("--expose-gc");
+  vm.runInNewContext("gc")();
+};
+`;
+
+/** A full garbage collection on this thread, as `COLLECT` runs one. */
+function collectGarbage(): void {
+  if (typeof Bun !== "undefined") {
+    Bun.gc(true);
+    return;
+  }
+  v8.setFlagsFromString("--expose-gc");
+  (vm.runInNewContext("gc") as () => void)();
+}
+
+/**
+ * A module whose `kept` validator numbers each output it makes, from 1; its call records each
+ * attempt in that output and fails its first attempt with the tool error kind `fail`, if any.
+ * `collected` lists the outputs the thread collected.
+ */
+const KEPT = `${COLLECT}const TOOL_ERROR = Symbol.for("yian.tool_error");
+const parameters = { type: "object", properties: { fail: { type: "string" } } };
+let made = 0;
+const collected = [];
+const outputs = new FinalizationRegistry((n) => collected.push(n));
+const checker = {
+  "~standard": {
+    version: 1,
+    vendor: "t",
+    jsonSchema: { input: () => parameters },
+    validate(value) {
+      const output = { ...value, n: ++made, attempts: [] };
+      outputs.register(output, made);
+      return { value: output };
+    },
+  },
+};
+export const kept = {
+  name: "kept",
+  description: "d",
+  parameters: checker,
+  isConcurrencySafe: (args) => args.n === 1,
+  execute(args, ctx) {
+    args.attempts.push(ctx.attempt);
+    if (args.fail !== undefined && ctx.attempt === 1) throw Object.assign(new Error(args.fail), { [TOOL_ERROR]: [args.fail] });
+    return { n: args.n, attempts: args.attempts };
+  },
+};
+${calling("gone", "async execute() { collect(); await new Promise((resolve) => setTimeout(resolve, 10)); return collected.sort(); }")}`;
+
+test("a check runs the validator and isConcurrencySafe on the thread, and each attempt's call gets its one output until one settles", async () => {
+  const thread = started(KEPT);
+
+  const first = await checked(thread, "kept", { fail: "transient" });
+  const second = await checked(thread, "kept", {});
+  expect([first.safe, second.safe]).toEqual([true, false]);
+
+  // Not `rejects`: Bun's waits for a pending call in a way that stalls the next one.
+  const message = (call: Promise<unknown>) => call.then(() => null, (error: Error) => error.message);
+  expect(await message(thread.call("kept", first, context(undefined, 1)))).toBe("transient");
+  expect(await thread.call("kept", first, context(undefined, 2))).toEqual({ n: 1, attempts: [1, 2] });
+  expect(await message(thread.call("kept", first, context(undefined, 3)))).toBe(
+    "crm.ts export 'kept': its checked arguments aren't kept on this thread",
+  );
+});
+
+test("a call's output is released once it settles, unless a TOOL node may retry it, and once its handle is collected", async () => {
+  const thread = started(KEPT);
+  /** Check and call `kept`, failing with `fail`, and drop the handle. */
+  const dropped = async (fail: string) => {
+    await thread.call("kept", await checked(thread, "kept", { fail }), context(undefined, 1)).catch(() => null);
+  };
+  /** The outputs the thread collected, once it collected `want` (or after 5 s). */
+  const gone = async (want: number[]) => {
+    let seen: unknown = null;
+    for (let tries = 0; tries < 100; tries++) {
+      collectGarbage();
+      await sleep(20);
+      seen = await called(thread, "gone", {});
+      if (JSON.stringify(seen) === JSON.stringify(want)) break;
+    }
+    return seen;
+  };
+
+  const settled = await checked(thread, "kept", {});
+  await thread.call("kept", settled, context());
+  const permanent = await checked(thread, "kept", { fail: "permanent" });
+  await thread.call("kept", permanent, context(undefined, 1)).catch(() => null);
+  const transient = await checked(thread, "kept", { fail: "transient" });
+  await thread.call("kept", transient, context(undefined, 1)).catch(() => null);
+  await dropped("transient");
+  const stop = new AbortController();
+  stop.abort();
+  const stopped = await checked(thread, "kept", { fail: "transient" });
+  await thread.call("kept", stopped, context(stop.signal, 1)).catch(() => null);
+
+  expect(await gone([1, 2, 4, 5])).toEqual([1, 2, 4, 5]);
+  // The handle still held keeps its output on the thread for the next attempt.
+  expect(await thread.call("kept", transient, context())).toEqual({ n: 3, attempts: [1, 2] });
+  expect([settled.safe, permanent.safe, stopped.safe]).toEqual([true, false, false]);
 });

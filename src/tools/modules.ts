@@ -5,7 +5,7 @@
  * starts the modules its nodes reach, and a node's scope holds a stand-in for each tool it reaches,
  * which the registry checks and calls as a host tool, and whose call runs on the module's thread.
  *
- * Knows about: tools/errors, tools/function_tools, tools/registry, the types of tools/grants,
+ * Knows about: tools/function_tools, tools/registry, the types of tools/grants,
  * tools/module_thread and tools/module_worker, diagnostics, typesys and `node:path`.
  */
 
@@ -14,8 +14,7 @@ import { relative } from "node:path";
 import { getCloseMatches, reprText } from "../diagnostics.ts";
 import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { isRecord } from "../typesys/values.ts";
-import { PermanentToolError } from "./errors.ts";
-import { FunctionTool } from "./function_tools.ts";
+import { FunctionTool, type StandardSchemaV1 } from "./function_tools.ts";
 import type { NodeScope } from "./grants.ts";
 import type { ToolModuleThread } from "./module_thread.ts";
 import type { ListedTool, ToolModuleListing } from "./module_worker.ts";
@@ -138,11 +137,11 @@ export function moduleScope(refs: readonly ToolModuleRef[], tools: ToolSet): Nod
     const identity = (listed: ListedTool) => JSON.stringify({ module: path, export: listed.name });
     const { exportName } = splitModuleRef(ref);
     if (exportName === null) {
-      groups.set(alias, listing.tools.map((listed) => standIn(key, thread, listed, listed.name)));
+      groups.set(alias, listing.tools.map((listed) => standIn(thread, listed, listed.name)));
       for (const listed of listing.tools) identities.set(JSON.stringify([alias, listed.name]), identity(listed));
     } else {
       const listed = listedExport(key, listing, exportName);
-      single.push(standIn(key, thread, listed, alias));
+      single.push(standIn(thread, listed, alias));
       identities.set(JSON.stringify([null, alias]), identity(listed));
     }
   }
@@ -150,23 +149,28 @@ export function moduleScope(refs: readonly ToolModuleRef[], tools: ToolSet): Nod
 }
 
 /**
- * Return the engine's stand-in for a module's listed tool, named `name`, with its listed spec. Its
- * `execute` runs the tool on the module's thread; a tool with a validator is refused for now.
+ * Return the engine's stand-in for a module's listed tool, named `name`, with its listed spec.
+ * The registry runs its checks as a host tool's, and each of the module's functions runs on the
+ * module's thread: its validator checks a call's arguments there (with the module's validator, if
+ * any, and `isConcurrencySafe`), returning a handle to them that `isConcurrencySafe` reads and
+ * `execute` calls the tool with; a tool with an output validator gets one that runs the module's.
  */
-function standIn(key: string, thread: ToolModuleThread, listed: ListedTool, name: string): FunctionTool {
+function standIn(thread: ToolModuleThread, listed: ListedTool, name: string): FunctionTool {
+  const validator = (validate: StandardSchemaV1["~standard"]["validate"]): StandardSchemaV1 => ({
+    "~standard": { version: 1, vendor: "yian", validate },
+  });
   return new FunctionTool({
     name,
     description: listed.description,
     parametersJsonSchema: listed.parametersJsonSchema,
     outputJsonSchema: listed.outputJsonSchema,
     resumable: listed.resumable,
-    execute: (args, ctx) => {
-      if (listed.hasParametersValidator || listed.hasOutputValidator) {
-        const message = `${key} export ${reprText(listed.name)}: a tool module's validators aren't supported yet`;
-        throw new PermanentToolError(message);
-      }
-      return thread.call(listed.name, args, ctx);
-    },
+    parametersValidator: validator((args) => thread.check(listed.name, name, args)),
+    isConcurrencySafe: (checked) => checked.safe === true,
+    execute: (checked, ctx) => thread.call(listed.name, checked, ctx),
+    outputValidator: listed.hasOutputValidator
+      ? validator((value) => thread.checkOutput(listed.name, name, value))
+      : null,
   });
 }
 

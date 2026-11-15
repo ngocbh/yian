@@ -971,6 +971,30 @@ test("an agent with a flow tool: its request lists the flow, and the flow's answ
   expect(requestOf(second)).toMatchObject(sentView(model.requests[1]!));
 });
 
+test("an agent granting a library: its defs are a group of its node scope, live and in the rebuilt requests", async () => {
+  const folder = mkdtempSync(join(root, "library-"));
+  const def = (name: string) =>
+    `  ${name}:\n    description: ${name}.\n    input: {item: !str}\n    nodes:\n      v: !str ${name} \${input.item}\n    output: \${v.output}\n`;
+  writeFileSync(join(folder, "billing.yaml"), `id: billing\nname: billing\ndefs:\n${def("quote")}${def("refund")}`);
+  const flow = FLOW_TOOL.replace("defs:", "uses:\n  billing: ./billing\ndefs:").replace("[shout, lookup]", "[shout, billing, lookup]");
+  const model = new ScriptedModel([callReply(["billing_refund", { item: "tea" }, "call-a"]), textReply("done")], {
+    provider: "anthropic",
+    model: "claude-test",
+  });
+  const log = runLog();
+  const options = { models: serving(model), env: NO_ENV, log, tools: { lookup: topicTool("lookup") } };
+  const result = await runFlow(await loadFlow(flow, { searchPaths: [folder] }), {}, options);
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  for (const [index, { n }] of agentCalls(log).entries()) {
+    const view = await agentCall(log, { nodeId: "helper", n }, { env: NO_ENV });
+    expect(view.digestMismatch).toBe(false);
+    expect(requestOf(view).tools.map((tool) => tool.name)).toEqual(["shout", "billing_quote", "billing_refund", "lookup"]);
+    expect(requestOf(view)).toMatchObject(sentView(model.requests[index]!));
+  }
+  const first = await agentCall(log, { nodeId: "helper", n: 1 }, { env: NO_ENV });
+  expect(first.toolResults.map(({ name, output }) => [name, output])).toEqual([["billing_refund", "refund tea"]]);
+});
+
 test("an agent granting a memory and a flow: both are its node scope, live and in the rebuilt requests", async () => {
   const folder = mkdtempSync(join(root, "memory-"));
   writeFileSync(join(folder, "b.md"), "B.");

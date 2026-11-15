@@ -12,6 +12,7 @@ import { iterFlowOrigins } from "../../src/compile/origins.ts";
 import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { CallableScope, loadFlow } from "../../src/compose/loader.ts";
 import { parseFile } from "../../src/compose/parse/file.ts";
+import type { AgentNode } from "../../src/nodes/agent/node.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import { runFlow } from "../../src/run.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
@@ -174,9 +175,10 @@ test("a library's defs must be flows", async () => {
   expect(error.message).toContain("resolver returned a library whose defs aren't each a ComposedFlow");
 });
 
-test("a grant of a library alias is a load error", async () => {
+test("a grant of a library alias bakes its defs as the agent's tools", async () => {
   const library = await loadFlow(LIBRARY);
   const node = "echo: {kind: agent, prompt: hi, tools: [billing]}";
-  const error = await loadErrorAsync(loadFlow(importer("lib", node), { childResolver: () => library }));
-  expect(error.message).toBe("agent node 'echo': callable 'billing' is a library (defs: and no nodes:), not a flow");
+  const flow = await loadFlow(importer("lib", node), { childResolver: () => library });
+  const agent = flow.compiled.nodes.get("echo") as AgentNode;
+  expect(agent.flowTools.map((tool) => tool.name)).toEqual(["billing_quote", "billing_requote"]);
 });

@@ -1,0 +1,35 @@
+# A library's def shows as `billing_quote`, so granting it beside a host tool of that name would
+# give the model two tools of one name; run start refuses it, before any record is written.
+kind: run
+flow: |
+  id: pricing
+  name: pricing
+  llm_config: {provider: openai, model: gpt-5.5}
+  uses:
+    billing: lib/billing
+  nodes:
+    helper:
+      kind: agent
+      tools: [billing, billing_quote]
+      prompt: Price tea.
+      output: !str
+  output: ${helper.output}
+files:
+  lib/billing.yaml: |
+    id: billing
+    name: billing
+    defs:
+      quote: {description: Price an item., nodes: {v: !str x}, output: "${v.output}"}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    billing_quote:
+      parameters: {type: object}
+      results: []
+expect:
+  raises:
+    class: RangeError
+    message: "AGENT node 'helper' grants billing: tools 'billing_quote' (tool billing_quote) and 'billing_quote' (billing's quote) have one name; grant one"
+  trace: []

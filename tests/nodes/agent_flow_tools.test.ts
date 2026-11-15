@@ -5,7 +5,7 @@
  */
 
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -94,6 +94,21 @@ test("a flow call's pending step holds its arguments and scope; the agent record
     tool_call_id: "c1",
   });
   expect(answer).toEqual({ call_id: "c1", is_error: false, kind: "tool_result", output: "HI", started_at: null });
+});
+
+test("a library's def granted as a tool is a flow call shown as `<alias>_<def>`, its scope under that name", async () => {
+  const library = "id: billing\nname: billing\ndefs:\n  quote:\n    description: Price an item.\n    input: {item: !str}\n" +
+    "    kind: code\n    code: return inputs.item + ' costs 3'\n    output: !str\n";
+  writeFileSync(join(dir, "billing.yaml"), library);
+  const text = "id: pricing\nname: pricing\nllm_config: {provider: openai, model: test-model}\nuses:\n  billing: ./billing\n" +
+    "nodes:\n  helper: {kind: agent, prompt: go, tools: [{billing: [quote]}]}\noutput: ${helper.output}\n";
+  const log = freshLog();
+  const model = new ScriptedModel([callReply(["billing_quote", { item: "tea" }, "c1"]), textReply("done")]);
+  const result = await runFlow(await loadFlow(text, { searchPaths: [dir] }), {}, { log, models: serving(model), env: hostEnv(dir) });
+  expect(result.status).toBe("succeeded");
+  expect(model.requests[0]!.tools.map((tool) => tool.name)).toEqual(["billing_quote"]);
+  expect(sentResults(model, 1)).toEqual([["c1", "tea costs 3", false]]);
+  expect(helperSteps(log)[1]).toMatchObject({ kind: "pending", tool: "billing_quote", scope: "helper/billing_quote#0" });
 });
 
 test("a long output is cut to YIAN_MAX_FLOW_RESULT_CHARS, and the run log keeps it whole", async () => {

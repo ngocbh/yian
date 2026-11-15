@@ -3210,12 +3210,13 @@ function* streamedEnvelopes(log: string, maxLineBytes: number | null): Generator
 /**
  * Prove every static AGENT grant and TOOL `tool_id` names a tool this run supplies.
  *
- * An AGENT's grants expand as its request will: a group gives its tools, a group grant the tools it
- * lists, and a bare name a top-level tool or the one group tool by that name. A TOOL node names
- * one tool, bare or as `{group: tool}`. `take` and `sleep` TOOL nodes need no tool: the engine
- * runs them. Every static node is checked, including nodes that may never run, so an unresolvable
- * id rejects the run before any record is written instead of failing its node when the node
- * starts.
+ * An AGENT's grants expand as its request will, its own flows first: a group gives its tools, a
+ * group grant the tools it lists, and a bare name a top-level tool or the one group tool by that
+ * name. So a flow or library def that would show under a granted host tool's name is refused. A
+ * TOOL node names one tool, bare or as `{group: tool}`. `take` and `sleep` TOOL nodes need no
+ * tool: the engine runs them. Every static node is checked, including nodes that may never run, so
+ * an unresolvable id rejects the run before any record is written instead of failing its node when
+ * the node starts.
  *
  * @throws RangeError when an AGENT grants a built-in (`take`, `sleep`, `ask`), a tool or group
  *   this run lacks, a tool of two groups by its bare name, a tool its group lacks, two tools that
@@ -3245,9 +3246,11 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
         throw new YianRangeError(`AGENT node ${reprText(nodeId)} grants 'ask_user': ${error.message}`);
       }
     }
+    const flows = node.flowGrants();
+    const own = flows.scope.groups.size === 0 && flows.scope.tools.length === 0 ? [] : [nodeScope(flows.scope)];
     try {
       // A provider refuses a name it can't call only at the first request; refuse it here.
-      checkVisibleNames(expandGrants(grants, tools.scopes()));
+      checkVisibleNames(expandGrants([...grants, ...flows.grants], [...own, ...tools.scopes()]));
     } catch (error) {
       if (!(error instanceof GrantError)) throw error;
       // A grant naming another flow's memory input is a host grant here.
@@ -3337,21 +3340,25 @@ function checkMemoryGrantNames(
 }
 
 /**
- * Refuse a flow an agent grants under the name of a host tool or tool group of the run, before any
- * record is written: the grant would mean two tools. Every static node is checked, child flows'
- * included.
+ * Refuse a flow or library an agent grants under the name of a host tool or tool group of the run,
+ * before any record is written: the grant would mean two tools. Every static node is checked,
+ * child flows' included.
  *
- * @throws RangeError naming the node, the flow and the fix.
+ * @throws RangeError naming the node, the flow or library, and the fix.
  */
 function checkFlowGrantNames(flow: CompiledFlow, tools: ToolSet): void {
   const scope = tools.scope();
   for (const [nodeId, node] of staticNodes(flow)) {
-    for (const name of node.originChildSegments()) {
-      if (name === null) continue;
+    const own = node.flowGrants().scope;
+    const names: [string, string][] = [
+      ...[...own.groups.keys()].map((name): [string, string] => [name, "a library"]),
+      ...own.tools.map(({ name }): [string, string] => [name, "a flow"]),
+    ];
+    for (const [name, what] of names) {
       const host = scope.group(name) !== null ? "a tool group" : scope.hasTool(name) ? "a tool" : null;
       if (host === null) continue;
       throw new YianRangeError(
-        `${node.kind.toUpperCase()} node ${reprText(nodeId)}: \`${name}\` is both a flow it grants and ${host} of this run; rename one`,
+        `${node.kind.toUpperCase()} node ${reprText(nodeId)}: \`${name}\` is both ${what} it grants and ${host} of this run; rename one`,
       );
     }
   }

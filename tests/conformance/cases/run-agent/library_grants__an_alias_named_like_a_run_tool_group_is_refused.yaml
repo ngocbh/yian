@@ -1,0 +1,37 @@
+# A library granted under the name of one of the run's tool groups, here an MCP server's, would
+# make the grant mean two groups.
+kind: run
+flow: |
+  id: pricing
+  name: pricing
+  llm_config: {provider: openai, model: gpt-5.5}
+  uses:
+    billing: lib/billing
+  nodes:
+    helper:
+      kind: agent
+      tools: [billing]
+      prompt: Price tea.
+      output: !str
+  output: ${helper.output}
+files:
+  lib/billing.yaml: |
+    id: billing
+    name: billing
+    defs:
+      quote: {description: Price an item., nodes: {v: !str x}, output: "${v.output}"}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    billing:
+      group:
+        refund:
+          parameters: {type: object}
+          results: []
+expect:
+  raises:
+    class: RangeError
+    message: "AGENT node 'helper': `billing` is both a library it grants and a tool group of this run; rename one"
+  trace: []

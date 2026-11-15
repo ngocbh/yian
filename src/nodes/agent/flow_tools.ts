@@ -1,17 +1,18 @@
 /**
- * Flow tools: the `defs:` entries and `uses:` aliases an AGENT grants as tools.
+ * Flow tools: the `defs:` entries, `uses:` aliases and library defs an AGENT grants as tools.
  *
  * Compose bakes each granted flow onto the agent, with the description and argument schema the
  * model sees for it, as a CALL bakes its child. In the tool loop each is a local tool whose call
  * records a `pending` step holding its arguments (`flowCall`), so the run grows the flow's scope
  * and answers the call with the flow's output (`flowResultText`).
  *
- * Knows about: diagnostics, tools (the function tool), typesys, and the peer AGENT module
- * `results`.
+ * Knows about: diagnostics, tools (the function tool, the node scope), typesys, and the peer AGENT
+ * module `results`.
  */
 
 import { type Failure, reprText } from "../../diagnostics.ts";
 import { FunctionTool } from "../../tools/function_tools.ts";
+import { type NodeScope, visibleToolName } from "../../tools/grants.ts";
 import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import type { JsonObject } from "../../typesys/json.ts";
 import { cutText, isRecord } from "../../typesys/values.ts";
@@ -32,21 +33,40 @@ export function isFlowCall(value: unknown): value is FlowCall {
 }
 
 /**
- * Return the local tools of `tools`: each takes the flow's name, description and schema, and a
- * call returns its arguments as a `FlowCall`. A call does nothing but record them, so a resume
- * that finds it cut off sends it again (`resumable`).
+ * Return flow tool `tool` as a local tool named `name`: it takes the flow's description and schema,
+ * and a call returns its arguments as a `FlowCall`. A call does nothing but record them, so a
+ * resume that finds it cut off sends it again (`resumable`).
  */
-export function flowToolFunctions(tools: readonly FlowTool[]): FunctionTool[] {
-  return tools.map(
-    ({ name, description, parameters }) =>
-      new FunctionTool({
-        name,
-        description,
-        parametersJsonSchema: parameters,
-        execute: (args): FlowCall => Object.freeze({ [FLOW_CALL]: true as const, arguments: args }),
-        resumable: true,
-      }),
-  );
+export function flowToolFunction({ description, parameters }: FlowTool, name: string): FunctionTool {
+  return new FunctionTool({
+    name,
+    description,
+    parametersJsonSchema: parameters,
+    execute: (args): FlowCall => Object.freeze({ [FLOW_CALL]: true as const, arguments: args }),
+    resumable: true,
+  });
+}
+
+/**
+ * Return `tools` as a node scope holds them, each entry built by `make` under the name the scope
+ * knows it by: a library's defs as a group under its alias, each by its def's name, so the model
+ * sees `<alias>_<def>`; every other flow as a top-level tool by its name.
+ */
+export function flowToolScope<T extends { readonly name: string }>(
+  tools: readonly FlowTool[],
+  make: (tool: FlowTool, name: string) => T,
+): NodeScope<T> {
+  const groups = new Map<string, T[]>();
+  const top: T[] = [];
+  for (const tool of tools) {
+    if (tool.library === null) {
+      top.push(make(tool, tool.name));
+      continue;
+    }
+    const { alias, def } = tool.library;
+    groups.set(alias, [...(groups.get(alias) ?? []), make(tool, def)]);
+  }
+  return { groups, tools: top };
 }
 
 /**
@@ -78,7 +98,10 @@ export function flowResultText(name: string, output: unknown, maxChars: number):
 
 /** One flow an AGENT grants as a tool. Frozen. */
 export interface FlowTool {
-  /** The grant: the `defs:` entry or `uses:` alias, which is the name the model sees. */
+  /**
+   * The name the model sees: the `defs:` entry or `uses:` alias granted, or `<alias>_<def>` for a
+   * library's def.
+   */
   readonly name: string;
   /** The flow's `description:`, which the model reads to choose the tool. */
   readonly description: string;
@@ -86,28 +109,38 @@ export interface FlowTool {
   readonly parameters: JsonObject;
   /** The baked compiled flow, as a CALL's `child` holds one. */
   readonly child: unknown;
+  /** The library def this tool runs, granted through the library's alias; `null` for a flow. */
+  readonly library: { readonly alias: string; readonly def: string } | null;
 }
 
 /**
  * Return a frozen copy of `tools`, checked.
  *
  * @throws TypeError when an entry isn't a record with a non-empty `name`, a non-empty
- *   `description`, an object `parameters` and a `child`.
+ *   `description`, an object `parameters`, a `child` and a `library` that is `null` or a non-empty
+ *   `alias` and `def` the tool is named `<alias>_<def>` by.
  * @throws RangeError when two entries share a name.
  */
 export function checkedFlowTools(nodeId: string, tools: readonly FlowTool[]): readonly FlowTool[] {
   const names = new Set<string>();
   const checked = tools.map((tool) => {
-    const { name, description, parameters, child } = isRecord(tool) ? tool : ({} as Partial<FlowTool>);
+    const { name, description, parameters, child, library = null } = isRecord(tool) ? tool : ({} as Partial<FlowTool>);
     if (typeof name !== "string" || name === "" || typeof description !== "string" || description === "") {
       throw new YianTypeError(`AGENT node ${reprText(nodeId)}: a flow tool needs a name and a description`);
     }
     if (!isRecord(parameters) || child === undefined || child === null) {
       throw new YianTypeError(`AGENT node ${reprText(nodeId)}: flow tool ${reprText(name)} needs its parameters and flow`);
     }
+    if (library !== null) {
+      const { alias, def } = isRecord(library) ? library : ({} as Record<string, unknown>);
+      if (typeof alias !== "string" || alias === "" || typeof def !== "string" || def === "" || name !== visibleToolName(alias, def)) {
+        throw new YianTypeError(`AGENT node ${reprText(nodeId)}: flow tool ${reprText(name)} needs a library alias and def it is named by`);
+      }
+    }
     if (names.has(name)) throw new YianRangeError(`AGENT node ${reprText(nodeId)} grants flow ${reprText(name)} twice`);
     names.add(name);
-    return Object.freeze({ name, description, parameters, child });
+    const def = library === null ? null : Object.freeze({ alias: library.alias, def: library.def });
+    return Object.freeze({ name, description, parameters, child, library: def });
   });
   return Object.freeze(checked);
 }

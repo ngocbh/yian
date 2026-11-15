@@ -1,0 +1,30 @@
+# Granting a library whole grants every def, so each needs a description; the error names the def,
+# and both fixes: describe it, or list the described defs.
+kind: load
+flow: |
+  id: f
+  name: f
+  uses:
+    billing: lib/billing
+  nodes:
+    helper:
+      kind: agent
+      prompt: Help.
+      output: !str
+      tools: [billing]
+  output: ${helper.output}
+files:
+  lib/billing.yaml: |
+    id: billing
+    name: billing
+    defs:
+      quote: {description: Price an item., nodes: {v: !str x}, output: "${v.output}"}
+      audit: {nodes: {v: !str x}, output: "${v.output}"}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''helper'': def `audit` of `billing` is granted as a tool, so it needs a `description:`, which the model reads to choose it; add one to the def, or grant only the described defs: `{billing: [quote]}`'
+      frames:
+      - label: flow.yaml
+        range: [10, 12, 10, 21]

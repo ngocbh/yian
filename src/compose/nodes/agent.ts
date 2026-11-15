@@ -37,7 +37,7 @@ import {
   type PromptText,
   STEER_INBOX_KEY,
 } from "../../nodes/agent/node.ts";
-import type { FlowTool } from "../../nodes/agent/flow_tools.ts";
+import { type FlowTool, flowToolScope } from "../../nodes/agent/flow_tools.ts";
 import { memoryKey } from "../../nodes/base.ts";
 import { argumentsSchema, typeToSchema } from "../../nodes/agent/structured.ts";
 import {
@@ -49,7 +49,15 @@ import {
   ValueTemplate,
 } from "../../nodes/contracts.ts";
 import { SkillError } from "../../skills/index.ts";
-import { checkVisibleNames, GrantError, parseToolGrants, type ToolGrant } from "../../tools/grants.ts";
+import {
+  checkVisibleNames,
+  expandGrants,
+  GrantError,
+  nodeScope,
+  parseToolGrants,
+  type ToolGrant,
+  visibleToolName,
+} from "../../tools/grants.ts";
 import { splitModuleRef, type ToolModuleRef } from "../../tools/modules.ts";
 import { RESERVED_TOOL_NAMES } from "../../tools/registry.ts";
 import { YianTypeError } from "../../typesys/errors.ts";
@@ -86,7 +94,7 @@ import {
   siteKey,
   wholeRefName,
 } from "./base.ts";
-import { resolveChild } from "./resolver.ts";
+import { type ResolvedChild, resolveChild } from "./resolver.ts";
 
 /** Shared by the AGENT and `adaptive_questions:` errors for the removed `mode:` key. */
 export const MODE_REMOVED_FIX =
@@ -1049,69 +1057,119 @@ export class AgentDescriptor extends NodeDescriptor {
   }
 
   /**
-   * Bake each flow `tools:` grants by name, a `defs:` entry or `uses:` alias of the file, with the
-   * description and argument schema the model sees for it. The flow resolves as a `call:` does,
-   * under the same nesting limit and recursion check.
+   * Bake each flow `tools:` grants, with the description and argument schema the model sees for
+   * it: a `defs:` entry or `uses:` alias by name, and each def of a library alias, every one
+   * (`billing`) or the listed ones (`{billing: [quote]}`), once, shown as `billing_quote`. Each
+   * resolves as a `call:` does, under the same nesting limit and recursion check.
    *
-   * @throws LoadError, at `tools:`, when a grant names both a memory input and a flow, grants a
-   *   flow in the group form, names one by a built-in tool's name or a name a model can't call,
-   *   or names one with no `description:` or with an input a model can't send (an inbox, a
-   *   memory, a file); or as `resolveChild` throws.
+   * @throws LoadError, at `tools:`, when a grant names both a memory input and a flow or library,
+   *   grants a flow in the group form, a library with no defs or a def it lacks, names one by a
+   *   built-in tool's name or a name a model can't call, grants two tools that would show one
+   *   name, or a flow or def with no `description:` or with an input a model can't send (an inbox,
+   *   a memory, a file); or as `resolveChild` throws.
    */
   private readFlowTools(ctx: BuildContext, memoryInputs: readonly string[], range: SourceRange | null): FlowTool[] {
     const fail = (message: string, cause: unknown = null) =>
       ctx.diagnostics.error(`node ${reprText(this.id)}: ${message}`, cause === null ? { range } : { range, cause });
-    const tools: FlowTool[] = [];
-    for (const grant of this.tools) {
-      const name = grant.kind === "name" ? grant.name : grant.group;
-      const section = ctx.callableSection(name);
-      if (section === null || ctx.toolModule(name) !== null) continue;
-      const entry = section === "defs" ? "the defs entry" : "the uses: alias";
-      if (memoryInputs.includes(name)) throw fail(`\`${name}\` is both a memory input and a flow; rename one`);
-      if (grant.kind === "group") {
-        throw fail(`\`tools:\` grants flow \`${name}\` as a group; a flow is one tool, so grant it as \`${name}\``);
-      }
-      if (RESERVED_TOOL_NAMES.has(name)) throw fail(`flow \`${name}\` has the name of a built-in tool; rename ${entry}`);
+    const checkNames = (run: () => unknown) => {
       try {
-        checkVisibleNames([{ visible: name, group: null, tool: name, scope: 0, key: name }]);
+        run();
       } catch (error) {
         if (!(error instanceof GrantError)) throw error;
         throw fail(error.message, error);
       }
-      const child = resolveChild(this.id, name, ctx.resolver, null, { diagnostics: ctx.diagnostics, range, kind: this.kind });
-      const description = child.description ?? null;
-      if (description === null || description.trim() === "") {
-        const where = section === "defs" ? "the defs entry" : "its file";
-        throw fail(
-          `flow \`${name}\` is granted as a tool, so it needs a \`description:\`, which the model reads to choose it; ` +
-            `add one to ${where}`,
-        );
-      }
-      const args: { name: string; type: Type; required: boolean }[] = [];
-      for (const input of child.input) {
-        const type = input.contract?.type ?? null;
-        const what = isInboxType(type)
-          ? "an inbox"
-          : isMemoryType(type)
-            ? "a memory"
-            : type !== null && type.kind === ValueKind.FILE
-              ? "a file"
-              : null;
-        if (what !== null) {
-          throw fail(`flow \`${name}\` can't be a tool: its input \`${input.name}\` is ${what}, which a model can't send`);
+    };
+    const tools: FlowTool[] = [];
+    const grants: ToolGrant[] = [];
+    for (const grant of this.tools) {
+      const name = grant.kind === "name" ? grant.name : grant.group;
+      const section = ctx.callableSection(name);
+      if (section === null || ctx.toolModule(name) !== null) continue;
+      grants.push(grant);
+      const resolve = (def?: string) =>
+        resolveChild(this.id, name, ctx.resolver, null, {
+          diagnostics: ctx.diagnostics,
+          range,
+          kind: this.kind,
+          ...(def === undefined ? {} : { def }),
+        });
+      const child = resolve();
+      const library = child.library ?? null;
+      const what = library === null ? "flow" : "library";
+      const entry = section === "defs" ? "the defs entry" : "the uses: alias";
+      if (memoryInputs.includes(name)) throw fail(`\`${name}\` is both a memory input and a ${what}; rename one`);
+      if (RESERVED_TOOL_NAMES.has(name)) throw fail(`${what} \`${name}\` has the name of a built-in tool; rename ${entry}`);
+      if (library === null) {
+        if (grant.kind === "group") {
+          const why =
+            section === "defs" ? "a flow is one tool" : `\`${name}\` is a flow, not a library, and its defs are private`;
+          throw fail(`\`tools:\` grants flow \`${name}\` as a group; ${why}, so grant it as \`${name}\``);
         }
-        if (type !== null) args.push({ name: input.name, type, required: input.required });
+        checkNames(() => checkVisibleNames([{ visible: name, group: null, tool: name, scope: 0, key: name }]));
+        const fix = `add one to ${section === "defs" ? "the defs entry" : "its file"}`;
+        tools.push(this.flowTool(fail, name, `flow \`${name}\``, child, null, fix));
+        continue;
       }
-      let parameters;
-      try {
-        parameters = argumentsSchema(args);
-      } catch (error) {
-        if (!(error instanceof RangeError)) throw error;
-        throw fail(`flow \`${name}\` can't be a tool: ${error.message}`, error);
+      const defs = grant.kind === "name" ? [...library.keys()] : grant.tools;
+      if (defs.length === 0) throw fail(`library \`${name}\` has no defs to grant`);
+      // A whole grant's fix may also be to list the defs that have a description.
+      const described = grant.kind === "group" ? [] : [...library].filter(([, each]) => each.description?.trim());
+      let fix = "add one to the def";
+      if (described.length > 0) fix += `, or grant only the described defs: \`{${name}: [${described.map(([def]) => def).join(", ")}]}\``;
+      for (const def of defs) {
+        if (tools.some((tool) => tool.library?.alias === name && tool.library.def === def)) continue;
+        const found = resolve(def);
+        const shown = visibleToolName(name, def);
+        checkNames(() => checkVisibleNames([{ visible: shown, group: name, tool: def, scope: 0, key: shown }]));
+        tools.push(this.flowTool(fail, shown, `def \`${def}\` of \`${name}\``, found, { alias: name, def }, fix));
       }
-      tools.push({ name, description, parameters, child: child.compiled });
     }
+    // Two flows a model would see under one name, such as a def `billing_quote` and `billing`'s
+    // `quote`.
+    checkNames(() => expandGrants(grants, [nodeScope(flowToolScope(tools, (_, name) => ({ name })))]));
     return tools;
+  }
+
+  /**
+   * Return `child` as flow tool `name`, with its description and the JSON Schema of its inputs.
+   *
+   * @param label How messages name the flow: ``flow `shout` `` or ``def `quote` of `billing` ``.
+   * @param fix Where to add a missing description, for its message.
+   * @throws LoadError when the flow has no `description:`, or an input a model can't send.
+   */
+  private flowTool(
+    fail: (message: string, cause?: unknown) => LoadError,
+    name: string,
+    label: string,
+    child: ResolvedChild,
+    library: FlowTool["library"],
+    fix: string,
+  ): FlowTool {
+    const description = child.description ?? null;
+    if (description === null || description.trim() === "") {
+      throw fail(`${label} is granted as a tool, so it needs a \`description:\`, which the model reads to choose it; ${fix}`);
+    }
+    const args: { name: string; type: Type; required: boolean }[] = [];
+    for (const input of child.input) {
+      const type = input.contract?.type ?? null;
+      const what = isInboxType(type)
+        ? "an inbox"
+        : isMemoryType(type)
+          ? "a memory"
+          : type !== null && type.kind === ValueKind.FILE
+            ? "a file"
+            : null;
+      if (what !== null) throw fail(`${label} can't be a tool: its input \`${input.name}\` is ${what}, which a model can't send`);
+      if (type !== null) args.push({ name: input.name, type, required: input.required });
+    }
+    let parameters;
+    try {
+      parameters = argumentsSchema(args);
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      throw fail(`${label} can't be a tool: ${error.message}`, error);
+    }
+    return { name, description, parameters, child: child.compiled, library };
   }
 
   /**

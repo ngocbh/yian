@@ -8,13 +8,19 @@
  *
  * Named exports are read in code-unit order; `default` is never a tool. A tool is a `tool()` value
  * from any yian copy, whose fields are copied, or a plain object (prototype `Object.prototype` or
- * `null`) with an `execute` function, which this copy's `tool()` builds; its `name` must be its
- * export's. A plain object missing a field, holding a mistyped one or a key `tool()` doesn't take,
- * and an export that can't be read (in its TDZ, behind a throwing getter) are refused, naming the
- * export. Anything else is ignored. Only ES modules: Node and Bun list a CommonJS file's exports
- * differently.
+ * `null`) with an `execute` function, which this copy's `tool()` builds, its functions called with
+ * the object as `this`; its `name` must be its export's. A plain object missing a field, holding a
+ * mistyped one or a key `tool()` doesn't take, and an export that can't be read (in its TDZ,
+ * behind a throwing getter) are refused, naming the export. Anything else is ignored. Only ES
+ * modules: Node and Bun list a CommonJS file's exports differently.
  *
- * Knows about: tools/function_tools, defaults, diagnostics, typesys and `node:*`.
+ * A call runs its tool's `execute` with a context of the call's fields, whose `signal` the host
+ * aborts by message, and calls interleave. The reply is the result, taken in by host intake (so a
+ * class instance is refused here, before the copy flattens it), or the throw with its tool error
+ * kinds, which the host rebuilds. Values cross as `typesys/crossing` packs them.
+ *
+ * Knows about: tools/context, tools/errors, tools/function_tools, defaults, diagnostics, typesys
+ * and `node:*`.
  */
 
 import { pathToFileURL } from "node:url";
@@ -22,8 +28,11 @@ import type { MessagePort } from "node:worker_threads";
 
 import { type Defaults, install } from "../defaults.ts";
 import { compareCodeUnits, getCloseMatches, reprText } from "../diagnostics.ts";
+import { packFiles, type Thrown, thrownOf, tooDeepToCopy, unpackFiles } from "../typesys/crossing.ts";
 import type { JsonObject } from "../typesys/json.ts";
-import { jsTypeName } from "../typesys/values.ts";
+import { fromHost, jsTypeName, rejectDeepNesting, TypeCheckError } from "../typesys/values.ts";
+import { isPending, ToolContext } from "./context.ts";
+import { type ToolErrorKind, toolErrorKinds } from "./errors.ts";
 import { FunctionTool, isFunctionTool, tool, type ToolOptions } from "./function_tools.ts";
 
 /** What a tool module's thread starts with, as `workerData.yianToolModule`. */
@@ -34,17 +43,46 @@ export interface ToolModuleData {
   readonly label: string;
 }
 
-/** A request for a module's listing, as the host posts it: its id and the caller's `current()`. */
-export interface ToolModuleRequest {
-  readonly id: number;
-  readonly defaults: Defaults;
+/** One call of a module's tool, as the host posts it. */
+export interface ToolModuleCall {
+  /** The tool's export name. */
+  readonly tool: string;
+  /** The checked arguments, a host value packed by `packFiles`. */
+  readonly args: unknown;
+  readonly callId: string;
+  readonly attempt: number;
+  readonly runId: string;
+  readonly node: string;
 }
 
-/** A thread's reply to a request: the listing, or why the module has none. */
-export type ToolModuleReply = { readonly id: number } & (
-  | { readonly ok: true; readonly listing: ToolModuleListing }
-  | { readonly ok: false; readonly message: string }
-);
+/**
+ * A message the host posts: a request for the module's listing or a call of one of its tools,
+ * each with its id and the caller's `current()`, or the stop of the open call `id`.
+ */
+export type ToolModuleRequest =
+  | { readonly kind: "list"; readonly id: number; readonly defaults: Defaults }
+  | ({ readonly kind: "call"; readonly id: number; readonly defaults: Defaults } & ToolModuleCall)
+  | { readonly kind: "abort"; readonly id: number };
+
+/**
+ * A thread's reply to a request: the listing; a call's result, a packed yian value; what its tool
+ * threw, with its tool error kinds and, when transient, its `retryAfter`; why its result was
+ * refused; or why the request failed (the import threw).
+ */
+export type ToolModuleReply = { readonly id: number } & ReplyBody;
+
+/** A reply without its id. */
+type ReplyBody =
+  | { readonly as: "listing"; readonly listing: ToolModuleListing }
+  | { readonly as: "result"; readonly value: unknown }
+  | {
+      readonly as: "thrown";
+      readonly thrown: Thrown;
+      readonly kinds: readonly ToolErrorKind[];
+      readonly retryAfter: number | null;
+    }
+  | { readonly as: "refused"; readonly message: string; readonly path: readonly (string | number)[] }
+  | { readonly as: "failed"; readonly message: string };
 
 /** One tool a module exports, as its thread lists it; its name is its export's. */
 export interface ListedTool {
@@ -106,6 +144,11 @@ function thrownText(error: unknown, named = true): string {
   }
 }
 
+/** Return `fn` called with `owner` as `this`, or `fn` itself when it isn't a function. */
+function boundTo(owner: object, fn: unknown): unknown {
+  return typeof fn === "function" ? (...args: unknown[]) => Reflect.apply(fn, owner, args) : fn;
+}
+
 /**
  * Return what export `name` holding `value` is: a tool this copy built, why it is refused, or
  * `null` when it isn't a tool. Each of a plain object's fields is read once.
@@ -136,6 +179,9 @@ function exportOutcome(head: string, name: string, value: unknown): FunctionTool
     const missing = REQUIRED_KEYS.find((key) => options[key] === undefined);
     if (missing !== undefined) return { refused: `${head} has no ${reprText(missing)}` };
     shown = options.name;
+    // Called as the object's methods, so one that reads `this` reads the object.
+    options.execute = boundTo(value, execute);
+    options.isConcurrencySafe = boundTo(value, options.isConcurrencySafe);
     build = () => tool(options as unknown as ToolOptions);
   }
   if (typeof shown !== "string") return { refused: `${head} name must be a string, got ${jsTypeName(shown)}` };
@@ -194,21 +240,112 @@ export function listToolModule(
   return { listing: { tools: listed, refused, others }, tools };
 }
 
+/**
+ * Return the reply to a call of `tool` (`undefined` when the module has no such tool): its result
+ * taken in, as a yian value, or why it was refused, or what `execute` threw.
+ *
+ * @param head The export, as messages name it.
+ */
+async function callReply(
+  head: string,
+  tool: FunctionTool | undefined,
+  call: ToolModuleCall & { readonly defaults: Defaults },
+  signal: AbortSignal,
+): Promise<ReplyBody> {
+  if (tool === undefined) return { as: "failed", message: `${head} isn't a tool` };
+  const { callId, attempt, runId, node } = call;
+  // The host's app object can't cross a thread.
+  const ctx = new ToolContext({ callId, attempt, toolName: call.tool, runId, node, context: undefined, signal });
+  let result: unknown;
+  try {
+    result = await tool.execute(unpackFiles(call.args) as Record<string, unknown>, ctx);
+  } catch (error) {
+    return thrownReply(error);
+  }
+  // Another call may have installed its values while this one ran.
+  install(call.defaults);
+  if (isPending(result)) {
+    return { as: "refused", message: `${head} returned pending(), which a tool module can't do yet`, path: [] };
+  }
+  const where = `${head} result`;
+  try {
+    // Intake runs here, not after the copy: the clone would flatten a class instance or an accessor.
+    const value = fromHost(result === undefined ? null : result, where);
+    if (tooDeepToCopy(value)) rejectDeepNesting(value, where);
+    return { as: "result", value: packFiles(value) };
+  } catch (error) {
+    if (!(error instanceof TypeCheckError)) throw error;
+    return { as: "refused", message: error.message, path: [...error.path] };
+  }
+}
+
+/**
+ * Return how a tool's throw crosses: as `thrownOf` reads it, with its tool error kinds and, when
+ * transient, its `retryAfter`.
+ */
+function thrownReply(error: unknown): ReplyBody {
+  const kinds = toolErrorKinds(error);
+  let retryAfter: unknown = null;
+  if (kinds.includes("transient")) {
+    try {
+      retryAfter = (error as { retryAfter?: unknown }).retryAfter;
+    } catch {}
+  }
+  const after = typeof retryAfter === "number" ? retryAfter : null;
+  return { as: "thrown", thrown: thrownOf(error), kinds, retryAfter: after };
+}
+
 /** Serve a tool module's thread on `port`: import the module once and answer each request. */
 export function serveToolModule(port: MessagePort, data: ToolModuleData): void {
   let imported: Promise<object> | null = null;
-  const reply = (message: ToolModuleReply): void => port.postMessage(message);
+  /** The tools of the first listing, by export name, which calls run. */
+  let tools: ReadonlyMap<string, FunctionTool> | null = null;
+  /** Each open call's stop, by request id. */
+  const calls = new Map<number, AbortController>();
+  // Building or posting a reply can throw (a getter on a thrown error, a value the clone
+  // refuses); the host must still hear back.
+  const reply = (id: number, make: () => ReplyBody): void => {
+    try {
+      port.postMessage({ id, ...make() } satisfies ToolModuleReply);
+    } catch (error) {
+      port.postMessage({ id, ...thrownReply(error) } satisfies ToolModuleReply);
+    }
+  };
   // The listener keeps the port referenced for the thread's life, unlike a CODE thread's.
-  port.on("message", ({ id, defaults }: ToolModuleRequest) => {
+  port.on("message", (request: ToolModuleRequest) => {
+    if (request.kind === "abort") {
+      calls.get(request.id)?.abort();
+      return;
+    }
+    const { id, defaults } = request;
+    // Made now, so a stop that arrives before the import ends still reaches the call.
+    const stop = request.kind === "call" ? new AbortController() : null;
+    if (stop !== null) calls.set(id, stop);
     install(defaults);
     imported ??= import(pathToFileURL(data.path).href) as Promise<object>;
-    imported.then(
-      (namespace) => {
-        // Another request may have installed its values while this one waited.
-        install(defaults);
-        reply({ id, ok: true, listing: listToolModule(namespace, data.label).listing });
-      },
-      (error: unknown) => reply({ id, ok: false, message: `${data.label} failed to import: ${thrownText(error)}` }),
-    );
+    imported
+      .then(
+        async (namespace): Promise<ReplyBody> => {
+          // Another request may have installed its values while this one waited.
+          install(defaults);
+          if (request.kind === "list") {
+            const listed = listToolModule(namespace, data.label);
+            tools ??= listed.tools;
+            return { as: "listing", listing: listed.listing };
+          }
+          tools ??= listToolModule(namespace, data.label).tools;
+          const head = `${data.label} export ${reprText(request.tool)}`;
+          return await callReply(head, tools.get(request.tool), request, stop!.signal);
+        },
+        (error: unknown): ReplyBody => ({
+          as: "failed",
+          message: `${data.label} failed to import: ${thrownText(error)}`,
+        }),
+      )
+      .then(
+        (body) => reply(id, () => body),
+        (error: unknown) => reply(id, () => thrownReply(error)),
+      )
+      .finally(() => calls.delete(id));
   });
 }

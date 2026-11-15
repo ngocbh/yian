@@ -1,12 +1,17 @@
 /**
  * A tool module's thread, from the host's side: one worker thread per module, which imports it
- * once and lists its tools (`tools/module_worker`). It runs the CODE worker entry, so no build
- * lists another entry, and like a CODE thread it shares this process's live environment and
- * isn't a sandbox. Each request carries the caller's `current()`, so a run under `withEnv` keeps
- * its own values. The thread lives until it exits or is terminated, but its handle here is
- * referenced only while a request is open, so an idle thread never keeps this process alive.
+ * once, lists its tools and runs their calls (`tools/module_worker`). It runs the CODE worker
+ * entry, so no build lists another entry, and like a CODE thread it shares this process's live
+ * environment and isn't a sandbox. Each request carries the caller's `current()`, so a run under
+ * `withEnv` keeps its own values. The thread lives until it exits or is terminated, but its handle
+ * here is referenced only while a request is open, so an idle thread never keeps this process
+ * alive.
  *
- * Knows about: tools/module_worker, defaults, platform, typesys and `node:*`.
+ * A call's error is rebuilt here with the name, message, stack and tool error kinds it had on the
+ * thread, so it steers an AGENT and TOOL retries as a host tool's error does.
+ *
+ * Knows about: tools/context, tools/errors, tools/module_worker, defaults, platform, typesys and
+ * `node:*`.
  */
 
 import { basename } from "node:path";
@@ -14,7 +19,11 @@ import { SHARE_ENV, Worker } from "node:worker_threads";
 
 import { current } from "../defaults.ts";
 import { realScheduler } from "../platform.ts";
+import { packFiles, unpackFiles } from "../typesys/crossing.ts";
 import { YianRangeError } from "../typesys/errors.ts";
+import { TypeCheckError, toHost, type Value } from "../typesys/values.ts";
+import type { ToolContext } from "./context.ts";
+import { TOOL_ERROR, ToolCheckError } from "./errors.ts";
 import type { ToolModuleData, ToolModuleListing, ToolModuleReply, ToolModuleRequest } from "./module_worker.ts";
 
 // As `nodes/code/node.ts` finds the entry: `bun build --compile` bundles it at
@@ -25,6 +34,13 @@ const WORKER_URL = import.meta.url.endsWith(".ts")
     ? new URL("../nodes/code/worker.js", import.meta.url)
     : new URL("./nodes/code/worker.js", import.meta.url);
 
+/** An open request: how it settles, and what to undo once it has. */
+interface OpenRequest {
+  resolve(reply: ToolModuleReply): void;
+  reject(error: Error): void;
+  release(): void;
+}
+
 /** A tool module's thread, started when this is made. */
 export class ToolModuleThread {
   /** The module file's real path. */
@@ -32,8 +48,8 @@ export class ToolModuleThread {
   /** How messages name the file. */
   readonly label: string;
   readonly #worker: Worker;
-  /** How each open request settles, by id. */
-  readonly #open = new Map<number, { resolve(listing: ToolModuleListing): void; reject(error: Error): void }>();
+  /** Each open request, by id. */
+  readonly #open = new Map<number, OpenRequest>();
   #lastId = 0;
   /** Why every later request fails, once the thread failed or exited. */
   #ended: Error | null = null;
@@ -55,8 +71,7 @@ export class ToolModuleThread {
       const request = this.#open.get(reply.id);
       if (request === undefined) return;
       this.#settled(reply.id);
-      if (reply.ok) request.resolve(reply.listing);
-      else request.reject(new Error(reply.message));
+      request.resolve(reply);
     });
     const failed = (error: unknown): void => {
       const text = error instanceof Error ? error.message : String(error);
@@ -80,14 +95,33 @@ export class ToolModuleThread {
    *
    * @throws Error naming the file when the import throws, or the thread fails or exits first.
    */
-  list(): Promise<ToolModuleListing> {
-    if (this.#ended !== null) return Promise.reject(this.#ended);
-    return new Promise((resolve, reject) => {
-      const id = ++this.#lastId;
-      if (this.#open.size === 0) this.#worker.ref();
-      this.#open.set(id, { resolve, reject });
-      this.#worker.postMessage({ id, defaults: current() } satisfies ToolModuleRequest);
-    });
+  async list(): Promise<ToolModuleListing> {
+    const reply = await this.#request((id) => ({ kind: "list", id, defaults: current() }));
+    if (reply.as === "listing") return reply.listing;
+    throw replyError(this.label, reply);
+  }
+
+  /**
+   * Call the module's tool exported as `tool` with `args` on the thread, and return its result as
+   * a host value. Its context there holds `ctx`'s call id, attempt, run id and node, the export
+   * name as its tool name, and no host object; a stop of `ctx.signal` aborts its signal there, and
+   * the call settles as the tool does.
+   *
+   * @throws What the tool threw, rebuilt as an `Error` with its name, message and stack, its tool
+   *   error kinds and, when transient, its `retryAfter`; a thrown non-`Error` is an `Error` with
+   *   the value's text, and the value as its `cause` when it is a yian value.
+   * @throws ToolCheckError when the result isn't a yian value, or is `pending()`.
+   * @throws Error naming the file when the thread fails or exits first.
+   */
+  async call(tool: string, args: Record<string, unknown>, ctx: ToolContext): Promise<unknown> {
+    const { callId, attempt, runId, node, signal } = ctx;
+    const packed = packFiles(args);
+    const reply = await this.#request(
+      (id) => ({ kind: "call", id, defaults: current(), tool, args: packed, callId, attempt, runId, node }),
+      signal,
+    );
+    if (reply.as === "result") return toHost(unpackFiles(reply.value) as Value);
+    throw replyError(this.label, reply);
   }
 
   /** Stop the thread; open requests reject as for an exit. */
@@ -95,8 +129,35 @@ export class ToolModuleThread {
     await this.#worker.terminate();
   }
 
+  /**
+   * Post the request `make` builds with a fresh id and return its reply. While it is open, a stop
+   * of `signal` is posted as its abort.
+   *
+   * @throws Error naming the file when the thread fails or exits first, or the request can't be
+   *   posted.
+   */
+  #request(make: (id: number) => ToolModuleRequest, signal?: AbortSignal): Promise<ToolModuleReply> {
+    if (this.#ended !== null) return Promise.reject(this.#ended);
+    const id = ++this.#lastId;
+    const abort = (): void => this.#worker.postMessage({ kind: "abort", id } satisfies ToolModuleRequest);
+    return new Promise((resolve, reject) => {
+      if (this.#open.size === 0) this.#worker.ref();
+      this.#open.set(id, { resolve, reject, release: () => signal?.removeEventListener("abort", abort) });
+      try {
+        this.#worker.postMessage(make(id));
+      } catch (error) {
+        this.#settled(id);
+        reject(error);
+        return;
+      }
+      if (signal?.aborted) abort();
+      else signal?.addEventListener("abort", abort, { once: true });
+    });
+  }
+
   /** Forget the request `id`; with none left open, the handle no longer keeps this process alive. */
   #settled(id: number): void {
+    this.#open.get(id)?.release();
     this.#open.delete(id);
     if (this.#open.size === 0) this.#worker.unref();
   }
@@ -109,6 +170,47 @@ export class ToolModuleThread {
       request.reject(this.#ended);
     }
   }
+}
+
+/**
+ * Return the error a reply rejects its request with: what the call's tool threw, a refused result
+ * as a failed check, or why the request failed. `label` names the file.
+ */
+function replyError(label: string, reply: ToolModuleReply): Error {
+  switch (reply.as) {
+    case "thrown":
+      return rebuiltError(reply);
+    case "refused":
+      return new ToolCheckError(reply.message, { cause: new TypeCheckError(reply.message, { path: reply.path }) });
+    case "failed":
+      return new Error(reply.message);
+    default:
+      return new Error(`${label}'s thread sent a ${reply.as} reply out of turn`);
+  }
+}
+
+/**
+ * Return a call's error as the thread read it: an `Error` with the thrown one's name, message and
+ * stack, else with the thrown value's text (and the value as its `cause` when it is a yian value,
+ * as a host tool's thrown value is wrapped); branded with its tool error kinds, and holding its
+ * `retryAfter` when transient.
+ */
+function rebuiltError(reply: Extract<ToolModuleReply, { as: "thrown" }>): Error {
+  const { thrown, kinds, retryAfter } = reply;
+  let error: Error;
+  if (thrown.kind === "error") {
+    error = new Error(thrown.message);
+    error.name = thrown.name;
+    if (thrown.stack !== undefined) error.stack = thrown.stack;
+  } else if (thrown.kind === "value") {
+    const value = unpackFiles(thrown.value);
+    error = new Error(String(value), { cause: value });
+  } else {
+    error = new Error(thrown.text);
+  }
+  if (kinds.length > 0) Object.defineProperty(error, TOOL_ERROR, { value: Object.freeze([...kinds]) });
+  if (kinds.includes("transient")) Object.defineProperty(error, "retryAfter", { value: retryAfter });
+  return error;
 }
 
 /**

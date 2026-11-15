@@ -2,7 +2,8 @@
  * A tool module's thread: started on the CODE worker entry, it imports its module once, lists its
  * tools with the caller's `current()`, keeps its port referenced while it waits, and rejects a
  * listing, naming the file, when the import throws or the thread exits. An idle thread never keeps
- * this process alive.
+ * this process alive. A call runs its tool there with the call's context; its throw comes back
+ * with its tool error kinds, and a result that isn't a yian value as a failed check.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -15,8 +16,11 @@ import { pathToFileURL } from "node:url";
 
 import { withEnv } from "../../src/defaults.ts";
 import { runtime } from "../../src/platform.ts";
+import { ToolContext } from "../../src/tools/context.ts";
+import { isToolCheckError, isTransientToolError, toolErrorKinds } from "../../src/tools/errors.ts";
 import { startToolModule, ToolModuleThread } from "../../src/tools/module_thread.ts";
 import { listToolModule } from "../../src/tools/module_worker.ts";
+import { FileRef } from "../../src/typesys/values.ts";
 
 const SOURCE = join(import.meta.dirname, "..", "..", "src");
 const OK = 'export const ok = { name: "ok", description: "d", parameters: { type: "object" }, execute: () => 1 };\n';
@@ -176,4 +180,108 @@ test("an import that throws, or outlasts YIAN_TOOL_MODULE_START_TIMEOUT_SECONDS,
     new RangeError("slow.ts didn't import within 1 s (YIAN_TOOL_MODULE_START_TIMEOUT_SECONDS)"),
   );
   expect(await stopped(beat)).toBe(true);
+});
+
+/** A call's context from run `r1`'s node `a`, stopped by `signal`. */
+function context(signal = new AbortController().signal): ToolContext {
+  return new ToolContext({ callId: "r1/a/1/0", attempt: 2, toolName: "find", runId: "r1", node: "a", context: { app: 1 }, signal });
+}
+
+/** The source of a plain-object tool `name` whose `execute` is `body`. */
+function calling(name: string, body: string): string {
+  return `export const ${name} = { name: "${name}", description: "d", parameters: { type: "object" }, ${body} };\n`;
+}
+
+test("a call runs its tool on the thread, bound to its object, with the call's context and files crossing both ways", async () => {
+  const thread = started(
+    calling(
+      "echo",
+      `execute(args, ctx) {
+    const { callId, attempt, toolName, runId, node, context, signal } = ctx;
+    return { self: this === echo, ctx: { callId, attempt, toolName, runId, node, context: context ?? null, aborted: signal.aborted }, args };
+  }`,
+    ) + calling("nothing", "execute: () => undefined"),
+  );
+  const file = new FileRef({ uri: "file:///w/a.txt", mime: "text/plain", name: "a.txt" });
+  const args = { file, big: 2n ** 60n, list: [file, 1.5] };
+
+  const echoed = await thread.call("echo", args, context());
+
+  expect(echoed).toEqual({
+    self: true,
+    ctx: { callId: "r1/a/1/0", attempt: 2, toolName: "echo", runId: "r1", node: "a", context: null, aborted: false },
+    args,
+  });
+  expect(FileRef.isFileRef((echoed as { args: { file: unknown } }).args.file)).toBe(true);
+  expect(await thread.call("nothing", {}, context())).toBeNull();
+});
+
+test("a tool's throw comes back with its name, message, stack and tool error kinds; any other value as an Error", async () => {
+  const thread = started(`const TOOL_ERROR = Symbol.for("yian.tool_error");
+${calling(
+  "fail",
+  `execute({ how }) {
+    const marked = (kinds, extra = {}) => Object.assign(new Error(how), { [TOOL_ERROR]: kinds }, extra);
+    if (how === "reported") throw marked(["reported"]);
+    if (how === "reported permanent") throw marked(["reported", "permanent"]);
+    if (how === "permanent") throw marked(["permanent"]);
+    if (how === "check") throw marked(["check", "unknown"]);
+    if (how === "transient") throw marked(["transient"], { retryAfter: 5 });
+    if (how === "type") throw new TypeError("bad id");
+    if (how === "text") throw "boom";
+    throw { code: 7 };
+  }`,
+)}`);
+  const thrown = (how: string) => thread.call("fail", { how }, context()).then(() => null, (error: Error) => error);
+
+  for (const kinds of [["reported"], ["reported", "permanent"], ["permanent"], ["check"]] as const) {
+    const error = await thrown(kinds.join(" "));
+    expect([error?.message, toolErrorKinds(error)]).toEqual([kinds.join(" "), kinds]);
+  }
+  const transient = (await thrown("transient")) as Error & { retryAfter?: unknown };
+  expect([isTransientToolError(transient), transient.retryAfter]).toEqual([true, 5]);
+  const typed = await thrown("type");
+  expect([typed instanceof Error, typed?.name, typed?.message, toolErrorKinds(typed)]).toEqual([true, "TypeError", "bad id", []]);
+  expect(typed?.stack).toContain("crm.ts");
+  const text = await thrown("text");
+  expect([text instanceof Error, text?.message, text?.cause]).toEqual([true, "boom", "boom"]);
+  const record = await thrown("record");
+  expect([record?.message, record?.cause]).toEqual(["[object Object]", { code: 7 }]);
+});
+
+test("a result that isn't a yian value, or that pends, fails the call's check, naming the export", async () => {
+  const thread = started(
+    calling(
+      "bad",
+      `execute({ how }) {
+    if (how === "date") return new Date(0);
+    if (how === "map") return { a: [new Map()] };
+    if (how === "deep") { let value = 1; for (let i = 0; i < 1500; i++) value = [value]; return value; }
+    return { [Symbol.for("yian.pending")]: true };
+  }`,
+    ),
+  );
+  const refused = (how: string) => thread.call("bad", { how }, context()).then(() => null, (error: Error) => error);
+
+  const date = await refused("date");
+  expect([isToolCheckError(date), date?.name, date?.message]).toEqual([true, "ToolCheckError", "crm.ts export 'bad' result: Date is not a yian value"]);
+  const map = await refused("map");
+  expect([map?.message, (map?.cause as { path?: unknown }).path]).toEqual(["crm.ts export 'bad' result at a[0]: Map is not a yian value", ["a", 0]]);
+  expect((await refused("deep"))?.message).toMatch(/^crm\.ts export 'bad' result at (\[0\])+: value nests deeper than 100 levels/);
+  const pends = await refused("pending");
+  expect([isToolCheckError(pends), pends?.message]).toEqual([true, "crm.ts export 'bad' returned pending(), which a tool module can't do yet"]);
+});
+
+test("a stop aborts the tool's own signal on the thread, and other calls go on meanwhile", async () => {
+  const thread = started(
+    calling("wait", 'execute: (_args, ctx) => new Promise((resolve) => ctx.signal.addEventListener("abort", () => resolve("stopped")))') +
+      calling("quick", 'execute: () => "quick"'),
+  );
+  const stop = new AbortController();
+
+  const waiting = thread.call("wait", {}, context(stop.signal));
+  expect(await thread.call("quick", {}, context())).toBe("quick");
+  stop.abort();
+
+  expect(await waiting).toBe("stopped");
 });

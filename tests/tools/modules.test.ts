@@ -1,11 +1,14 @@
 /**
  * A started tool module's checks and node scope: what a run refuses in a listing for the aliases
  * that reach it, and the stand-ins a node's scope holds for its tools, each keyed by its file and
- * export so two aliases of one file bind a tool once.
+ * export so two aliases of one file bind a tool once, and each calling its export on the module's
+ * thread.
  */
 
 import { expect, test } from "bun:test";
 
+import { ToolContext } from "../../src/tools/context.ts";
+import { PermanentToolError } from "../../src/tools/errors.ts";
 import { nodeScope, expandGrants, parseToolGrants } from "../../src/tools/grants.ts";
 import type { ToolModuleThread } from "../../src/tools/module_thread.ts";
 import type { ListedTool, ToolModuleListing } from "../../src/tools/module_worker.ts";
@@ -57,17 +60,21 @@ test("a module's key is its path relative to the root flow's folder, or its path
   ]);
 });
 
-const started: StartedToolModule = { path: "/w/crm.ts", key: "crm.ts", thread: {} as ToolModuleThread, listing: LISTING };
+/** A thread that answers each call with what it was given: the export, the arguments and the node. */
+const thread = { call: async (tool: string, args: unknown, ctx: ToolContext) => [tool, args, ctx.node] } as unknown as ToolModuleThread;
+const checked = { ...listed("place"), hasParametersValidator: true };
+const started: StartedToolModule = { path: "/w/crm.ts", key: "crm.ts", thread, listing: { ...LISTING, tools: [...LISTING.tools, checked] } };
 const tools = new ToolSet({}).withModules([started]);
+const ctx = new ToolContext({ callId: "c", attempt: 1, toolName: "find", runId: "r", node: "a", context: undefined, signal: new AbortController().signal });
 
-test("a node scope holds a group alias's tools by export name and a one-export alias's tool by the alias", () => {
+test("a node scope holds a group alias's tools by export name and a one-export alias's tool by the alias", async () => {
   const refs = [
     { alias: "crm", ref: "./crm.ts", path: "/w/crm.ts" },
     { alias: "find", ref: "./crm.ts:lookup", path: "/w/crm.ts" },
   ];
   const scope = moduleScope(refs, tools);
 
-  expect([...scope.groups].map(([group, each]) => [group, each.map((tool) => tool.name)])).toEqual([["crm", ["create", "lookup"]]]);
+  expect([...scope.groups].map(([group, each]) => [group, each.map((tool) => tool.name)])).toEqual([["crm", ["create", "lookup", "place"]]]);
   const [find] = scope.tools;
   expect([find!.name, find!.description, find!.resumable, find!.parametersJsonSchema]).toEqual([
     "find",
@@ -76,8 +83,11 @@ test("a node scope holds a group alias's tools by export name and a one-export a
     listed("lookup").parametersJsonSchema,
   ]);
   const visible = expandGrants(parseToolGrants(["find", "crm"], "n"), [nodeScope(scope)]).map((each) => each.visible);
-  expect(visible).toEqual(["find", "crm_create"]);
-  expect(() => find!.execute({}, {} as never)).toThrow("crm.ts export 'lookup': calls to tool modules aren't supported yet");
+  expect(visible).toEqual(["find", "crm_create", "crm_place"]);
+  // Each stand-in calls its export on the module's thread.
+  expect(await find!.execute({ id: "1" }, ctx)).toEqual(["lookup", { id: "1" }, "a"]);
+  const place = scope.groups.get("crm")!.at(-1)!;
+  expect(() => place.execute({}, ctx)).toThrow(new PermanentToolError("crm.ts export 'place': a tool module's validators aren't supported yet"));
   expect(() => moduleScope([{ alias: "x", ref: "./x.ts", path: "/w/x.ts" }], tools)).toThrow(
     new RangeError("tool module 'x' (./x.ts) wasn't started for this run"),
   );

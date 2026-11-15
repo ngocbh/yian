@@ -11,7 +11,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import type { FunctionTool } from "../../src/tools/function_tools.ts";
 import { listToolModule, type ToolModuleListing } from "../../src/tools/module_worker.ts";
 
 const SOURCE = join(import.meta.dirname, "..", "..", "src");
@@ -100,8 +99,22 @@ export const place = { name: "place", description: "Place it.", parameters: chec
       hasIsConcurrencySafe: false,
     },
   ]);
-  // This copy's `tool()` built each one around the module's own functions.
-  expect(tools.get("lookup")!.execute).toBe((namespace as { lookup: FunctionTool }).lookup.execute);
+  expect([...tools.keys()]).toEqual(["lookup", "place"]);
+});
+
+test("a plain object's execute and isConcurrencySafe run with the module's own object as this", async () => {
+  const namespace = await imported(`export const lookup = {
+  name: "lookup",
+  description: "d",
+  ${PARAMS},
+  isConcurrencySafe(args) { return this === lookup && args.id === "1"; },
+  execute(args) { return this === lookup ? [this.name, args.id] : "unbound"; },
+};
+`);
+
+  const lookup = listToolModule(namespace, "crm.ts").tools.get("lookup")!;
+
+  expect([lookup.execute({ id: "1" }, {} as never), lookup.isConcurrencySafe!({ id: "1" })]).toEqual([["lookup", "1"], true]);
 });
 
 test("a tool() value from any yian copy is copied, a field an older copy lacks read as absent", async () => {

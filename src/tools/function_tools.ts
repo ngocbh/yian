@@ -50,6 +50,26 @@ type ArgsOf<P> = P extends StandardSchemaV1<any, infer O> ? O : Record<string, u
 type ResultOf<O> = O extends StandardSchemaV1<infer I, any> ? I : unknown;
 
 /**
+ * The options `tool()` takes, generic in the `parameters` and `output` schemas, which type what
+ * `execute` gets and returns: an options object written on its own, as
+ * `{...} satisfies ToolOptions<typeof Params>`, is typed as `tool()` types it.
+ */
+export interface ToolOptions<
+  P extends StandardSchemaV1 | JsonObject = JsonObject,
+  O extends StandardSchemaV1 | JsonObject | undefined = undefined,
+> {
+  name: string;
+  description: string;
+  parameters: P;
+  parametersJsonSchema?: JsonObject;
+  output?: O;
+  outputJsonSchema?: JsonObject;
+  execute: (args: ArgsOf<P>, ctx: ToolContext<any>) => ResultOf<O> | Promise<ResultOf<O>>;
+  isConcurrencySafe?: ((args: ArgsOf<P>) => boolean) | null;
+  resumable?: boolean;
+}
+
+/**
  * A host tool given by its name, description, argument JSON Schema and call.
  *
  * A tool set checks each call's arguments against `parametersJsonSchema` before calling
@@ -245,17 +265,7 @@ export function isFunctionTool(value: unknown): value is FunctionTool {
 export function tool<
   P extends StandardSchemaV1 | JsonObject,
   O extends StandardSchemaV1 | JsonObject | undefined = undefined,
->(options: {
-  name: string;
-  description: string;
-  parameters: P;
-  parametersJsonSchema?: JsonObject;
-  output?: O;
-  outputJsonSchema?: JsonObject;
-  execute: (args: ArgsOf<P>, ctx: ToolContext<any>) => ResultOf<O> | Promise<ResultOf<O>>;
-  isConcurrencySafe?: ((args: ArgsOf<P>) => boolean) | null;
-  resumable?: boolean;
-}): FunctionTool {
+>(options: ToolOptions<P, O>): FunctionTool {
   const { name, description, execute, isConcurrencySafe, resumable } = options;
   // `String`: the prefix must not throw on a non-string name; `FunctionTool` reports a bad name
   // when nothing fails first.

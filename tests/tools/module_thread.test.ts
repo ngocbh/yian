@@ -5,7 +5,9 @@
  * this process alive. A check runs the tool's validator and `isConcurrencySafe` there and keeps the
  * validator's output for the call, until the call settles or its handle here is collected. A call
  * runs its tool there with the call's context; its throw comes back with its tool error kinds, and a
- * result that isn't a yian value as a failed check.
+ * result that isn't a yian value as a failed check. A thread that exits fails the requests in flight
+ * for good, and the next request imports the module on a fresh thread, which checks again a call
+ * checked before the exit, or fails it for good when it lists the module otherwise.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -21,7 +23,7 @@ import vm from "node:vm";
 import { withEnv } from "../../src/defaults.ts";
 import { runtime } from "../../src/platform.ts";
 import { ToolContext } from "../../src/tools/context.ts";
-import { isToolCheckError, isTransientToolError, toolErrorKinds } from "../../src/tools/errors.ts";
+import { isToolCheckError, isTransientToolError, ToolModuleError, toolErrorKinds } from "../../src/tools/errors.ts";
 import { type CheckedArgs, startToolModule, ToolModuleThread } from "../../src/tools/module_thread.ts";
 import { listToolModule } from "../../src/tools/module_worker.ts";
 import { FileRef } from "../../src/typesys/values.ts";
@@ -185,6 +187,16 @@ test("an import that throws, or outlasts YIAN_TOOL_MODULE_START_TIMEOUT_SECONDS,
   );
   expect(await stopped(beat)).toBe(true);
 });
+
+// Under Bun 1.4, `await expect(promise).rejects` (or `.resolves`) on a promise that a thread's
+// message settles hangs this whole process once an earlier `await` here resumed on such a message:
+// the matcher waits in a nested event loop that never delivers the port's next message. A plain
+// `Worker` or `MessageChannel` does it too, so it isn't this thread's handle; read the rejection with
+// `failure` instead.
+/** What `promise` rejects with, or `null` when it resolves. */
+function failure(promise: Promise<unknown>): Promise<Error | null> {
+  return promise.then(() => null, (error: Error) => error);
+}
 
 /** A call's context from run `r1`'s node `a`, stopped by `signal`. */
 function context(signal = new AbortController().signal, attempt = 2): ToolContext {
@@ -364,8 +376,7 @@ test("a check runs the validator and isConcurrencySafe on the thread, and each a
   const second = await checked(thread, "kept", {});
   expect([first.safe, second.safe]).toEqual([true, false]);
 
-  // Not `rejects`: Bun's waits for a pending call in a way that stalls the next one.
-  const message = (call: Promise<unknown>) => call.then(() => null, (error: Error) => error.message);
+  const message = async (call: Promise<unknown>) => (await failure(call))?.message;
   expect(await message(thread.call("kept", first, context(undefined, 1)))).toBe("transient");
   expect(await thread.call("kept", first, context(undefined, 2))).toEqual({ n: 1, attempts: [1, 2] });
   expect(await message(thread.call("kept", first, context(undefined, 3)))).toBe(
@@ -407,4 +418,148 @@ test("a call's output is released once it settles, unless a TOOL node may retry 
   // The handle still held keeps its output on the thread for the next attempt.
   expect(await thread.call("kept", transient, context())).toEqual({ n: 3, attempts: [1, 2] });
   expect([settled.safe, permanent.safe, stopped.safe]).toEqual([true, false, false]);
+});
+
+/**
+ * A module whose `wait` waits for its stop, `exit` exits the thread with `code`, `late` throws
+ * after it returned, and `ok` returns "ok".
+ */
+const EXITING = [
+  calling("wait", 'execute: (_args, ctx) => new Promise((resolve) => ctx.signal.addEventListener("abort", resolve))'),
+  calling("exit", "execute: ({ code }) => process.exit(code)"),
+  calling("late", 'execute() { setTimeout(() => { throw new Error("late"); }, 20); return "returned"; }'),
+  calling("ok", 'execute: () => "ok"'),
+].join("");
+
+/** A module tool `hang` whose validator never returns. */
+const HANGING = `const never = { version: 1, vendor: "t", jsonSchema: { input: () => ({ type: "object" }) }, validate: () => new Promise(() => {}) };
+export const hang = { name: "hang", description: "d", parameters: { "~standard": never }, execute: () => 1 };
+`;
+
+test("a thread exit fails each request in flight for good, and the next request imports the module on a fresh thread", async () => {
+  const log = join(tmp, "imports.log");
+  const thread = started(`import { appendFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(log)}, "imported\\n");
+${EXITING}${HANGING}`);
+  await thread.list();
+  const [wait, exit] = [await checked(thread, "wait", {}), await checked(thread, "exit", { code: 3 })];
+
+  const waiting = failure(thread.call("wait", wait, context()));
+  const checking = failure(thread.check("hang", "hang", {}));
+  const exited = await failure(thread.call("exit", exit, context()));
+
+  for (const error of [exited, await waiting]) {
+    expect([error, error?.message, toolErrorKinds(error), (error as ToolModuleError).code]).toEqual([
+      expect.any(ToolModuleError),
+      "crm.ts's thread exited (code 3); the call's outcome is unknown",
+      ["reported", "permanent"],
+      "tool.module_exited",
+    ]);
+  }
+  expect([(await checking)?.message, thread.exitCode]).toEqual(["crm.ts's thread exited (code 3)", 3]);
+  expect(await called(thread, "ok", {})).toBe("ok");
+  expect([thread.exitCode, readFileSync(log, "utf8")]).toEqual([null, "imported\nimported\n"]);
+  // A terminated thread never starts again.
+  await thread.terminate();
+  expect((await failure(called(thread, "ok", {})))?.message).toMatch(/^crm\.ts's thread exited \(code \d+\)$/);
+  expect(readFileSync(log, "utf8")).toBe("imported\nimported\n");
+});
+
+test("an error the module throws after a call returned ends its thread as an exit does", async () => {
+  const thread = started(EXITING);
+  await thread.list();
+  const waiting = failure(thread.call("wait", await checked(thread, "wait", {}), context()));
+
+  expect(await called(thread, "late", {})).toBe("returned");
+
+  const error = await waiting;
+  expect([error?.message, (error as ToolModuleError).code]).toEqual([
+    "crm.ts's thread failed: late; the call's outcome is unknown",
+    "tool.module_exited",
+  ]);
+  expect(await called(thread, "ok", {})).toBe("ok");
+});
+
+test("a call checked on a thread that exited is checked again on the fresh one, apart from the checks made there", async () => {
+  const flag = join(tmp, "refuse");
+  const thread = started(`import { existsSync } from "node:fs";
+const TOOL_ERROR = Symbol.for("yian.tool_error");
+const parameters = { type: "object", properties: { who: { type: "string" } } };
+let made = 0;
+const validate = (value) =>
+  existsSync(${JSON.stringify(flag)}) && value.who === "refused"
+    ? { issues: [{ message: "refused", path: ["who"] }] }
+    : { value: { ...value, n: ++made, attempts: [] } };
+export const kept = {
+  name: "kept",
+  description: "d",
+  parameters: { "~standard": { version: 1, vendor: "t", jsonSchema: { input: () => parameters }, validate } },
+  execute(args, ctx) {
+    args.attempts.push(ctx.attempt);
+    if (ctx.attempt < 3) throw Object.assign(new Error("again"), { [TOOL_ERROR]: ["transient"] });
+    return { who: args.who, n: args.n, attempts: args.attempts };
+  },
+};
+${calling("exit", "execute: () => process.exit(1)")}`);
+  await thread.list();
+  const a = await checked(thread, "kept", { who: "a" });
+  const refused = await checked(thread, "kept", { who: "refused" });
+  expect((await failure(thread.call("kept", a, context(undefined, 1))))?.message).toBe("again");
+
+  await failure(called(thread, "exit", {}));
+  writeFileSync(flag, "");
+  // Its id is one no earlier thread gave, so `a`'s call can't take its output.
+  const b = await checked(thread, "kept", { who: "b" });
+
+  expect((await failure(thread.call("kept", a, context(undefined, 2))))?.message).toBe("again");
+  expect(await thread.call("kept", a, context(undefined, 3))).toEqual({ who: "a", n: 2, attempts: [2, 3] });
+  expect(await thread.call("kept", b, context(undefined, 3))).toEqual({ who: "b", n: 1, attempts: [3] });
+  const issues = await failure(thread.call("kept", refused, context(undefined, 2)));
+  expect([issues?.message, toolErrorKinds(issues)]).toEqual([
+    "tool 'find' arguments failed its validator: who: refused",
+    ["check", "reported"],
+  ]);
+});
+
+/** A module whose `exit` exits the thread with code 2, beside `ok` described as `description`. */
+const restarting = (description = "d") =>
+  calling("exit", "execute: () => process.exit(2)") + calling("ok", 'execute: () => "ok"').replace('"d"', `"${description}"`);
+
+test.each([
+  ["its import throws", 'throw new Error("boom");\n', "crm.ts failed to import: Error: boom"],
+  ["it outlasts the start timeout", "await new Promise(() => {});\n", "crm.ts didn't import within 1 s (YIAN_TOOL_MODULE_START_TIMEOUT_SECONDS)"],
+  ["a tool's description changed", restarting("changed"), "export 'ok' description changed since the module was first imported"],
+  ["a tool is new", restarting() + calling("extra", "execute: () => 1"), "export 'extra' is a new tool since the module was first imported"],
+  ["a tool is gone", calling("exit", "execute: () => process.exit(2)"), "export 'ok' is no longer a tool since the module was first imported"],
+])("a fresh thread fails the request for good, and every later one, when %s", async (_name, source, why) => {
+  const thread = started(restarting());
+  await thread.list();
+  await failure(called(thread, "exit", {}));
+  writeFileSync(thread.path, source);
+  const short = (name: string) => (name === "YIAN_TOOL_MODULE_START_TIMEOUT_SECONDS" ? "1" : undefined);
+
+  const error = await withEnv(short, () => failure(thread.check("ok", "ok", {})));
+
+  expect([error, error?.message, toolErrorKinds(error), (error as ToolModuleError).code]).toEqual([
+    expect.any(ToolModuleError),
+    `crm.ts's thread exited (code 2); a fresh thread can't take over: ${why}`,
+    ["permanent"],
+    "tool.module_restart",
+  ]);
+  expect(await failure(thread.list())).toBe(error);
+});
+
+test("a stop while a fresh thread starts ends the call with the stop's reason", async () => {
+  const thread = started(restarting());
+  await thread.list();
+  const ok = await checked(thread, "ok", {});
+  await failure(called(thread, "exit", {}));
+  writeFileSync(thread.path, "await new Promise(() => {});\n");
+  const stop = new AbortController();
+
+  const stopped = failure(thread.call("ok", ok, context(stop.signal)));
+  await sleep(100);
+  stop.abort(new Error("stopped"));
+
+  expect((await stopped)?.message).toBe("stopped");
 });

@@ -16,23 +16,32 @@
  * A call's error is rebuilt here with the name, message, stack and tool error kinds it had on the
  * thread, so it steers an AGENT and TOOL retries as a host tool's error does.
  *
+ * A thread that exits (through `process.exit`, or an uncaught error such as one thrown after a
+ * call returned) fails each request in flight with a `ToolModuleError`, `tool.module_exited`.
+ * Once the module has listed, the next request starts a fresh thread, which imports the module
+ * again and must list it as the first one did, in every field; a call checked on a thread that
+ * exited is checked again there. When a fresh thread can't take over, that request and every later
+ * one fail with `tool.module_restart`.
+ *
  * Knows about: tools/context, tools/errors, tools/function_tools' types, tools/module_worker,
- * defaults, diagnostics, platform, typesys and `node:*`.
+ * tools/registry (a validator's message), defaults, diagnostics, platform, typesys and `node:*`.
  */
 
 import { basename } from "node:path";
 import { SHARE_ENV, Worker } from "node:worker_threads";
 
 import { current } from "../defaults.ts";
-import { reprText } from "../diagnostics.ts";
+import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { realScheduler } from "../platform.ts";
 import { packFiles, unpackFiles } from "../typesys/crossing.ts";
 import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
+import { canonicalJson } from "../typesys/json.ts";
 import { TypeCheckError, toHost, type Value } from "../typesys/values.ts";
 import type { ToolContext } from "./context.ts";
-import { isPermanentToolError, isToolCheckError, TOOL_ERROR, ToolCheckError } from "./errors.ts";
+import { isPermanentToolError, isToolCheckError, TOOL_ERROR, ToolCheckError, ToolModuleError } from "./errors.ts";
 import type { StandardResult } from "./function_tools.ts";
 import type { ToolModuleData, ToolModuleListing, ToolModuleReply, ToolModuleRequest } from "./module_worker.ts";
+import { validatorFailure } from "./registry.ts";
 
 // As `nodes/code/node.ts` finds the entry: `bun build --compile` bundles it at
 // `nodes/code/worker.js` beside the bundle's entry, whose URL this module then has.
@@ -42,11 +51,16 @@ const WORKER_URL = import.meta.url.endsWith(".ts")
     ? new URL("../nodes/code/worker.js", import.meta.url)
     : new URL("./nodes/code/worker.js", import.meta.url);
 
+/** The request for the module's listing. */
+const LIST = (id: number): ToolModuleRequest => ({ kind: "list", id, defaults: current() });
+
 /** An open request: how it settles, and what to undo once it has. */
 interface OpenRequest {
   resolve(reply: ToolModuleReply): void;
   reject(error: Error): void;
   release(): void;
+  /** Whether it is a call, whose outcome an exit leaves unknown. */
+  readonly call: boolean;
 }
 
 /**
@@ -69,7 +83,7 @@ export class CheckedArgs {
   }
 }
 
-/** A tool module's thread, started when this is made. */
+/** A tool module's thread, started when this is made, and started again after it exits. */
 export class ToolModuleThread {
   // A handle dropped before its call settled (a call that never ran, or a TOOL node out of
   // retries) releases its output once it is collected.
@@ -81,13 +95,22 @@ export class ToolModuleThread {
   readonly path: string;
   /** How messages name the file. */
   readonly label: string;
-  readonly #worker: Worker;
+  /** The thread serving requests: the first one, or the fresh one that took over after an exit. */
+  #worker: Worker;
   /** Each open request, by id. */
   readonly #open = new Map<number, OpenRequest>();
+  // Ids run on across threads, so a fresh thread never takes a check id an earlier one kept.
   #lastId = 0;
-  /** Why every later request fails, once the thread failed or exited. */
-  #ended: Error | null = null;
+  /** Why the thread's requests fail, once it failed or exited. */
+  #ended: ToolModuleError | null = null;
   #exitCode: number | null = null;
+  /** The module's first listing, which a fresh thread must match; `null` until it listed. */
+  #listing: ToolModuleListing | null = null;
+  /** A fresh thread's start, until it has listed. */
+  #restarting: Promise<void> | null = null;
+  /** Why every later request fails, once a fresh thread couldn't take over. */
+  #broken: ToolModuleError | null = null;
+  #terminated = false;
 
   /**
    * Start the thread of the module at `path`.
@@ -97,29 +120,10 @@ export class ToolModuleThread {
   constructor(path: string, label: string = basename(path)) {
     this.path = path;
     this.label = label;
-    const data: ToolModuleData = { path, label };
-    // `SHARE_ENV`: the module reads and writes the host's live environment, as a CODE body does.
-    this.#worker = new Worker(WORKER_URL, { env: SHARE_ENV, workerData: { yianToolModule: data } });
-    this.#worker.unref();
-    this.#worker.on("message", (reply: ToolModuleReply) => {
-      const request = this.#open.get(reply.id);
-      if (request === undefined) return;
-      this.#settled(reply.id);
-      request.resolve(reply);
-    });
-    const failed = (error: unknown): void => {
-      const text = error instanceof Error ? error.message : String(error);
-      this.#end(new Error(`${label}'s thread failed: ${text}`, { cause: error }));
-    };
-    this.#worker.on("error", failed);
-    this.#worker.on("messageerror", failed);
-    this.#worker.on("exit", (code: number) => {
-      this.#exitCode = code;
-      this.#end(new Error(`${label}'s thread exited (code ${code})`));
-    });
+    this.#worker = this.#spawn();
   }
 
-  /** The code the thread exited with, or `null` while it runs. */
+  /** The code the thread exited with, or `null` while it, or a fresh one in its place, runs. */
   get exitCode(): number | null {
     return this.#exitCode;
   }
@@ -130,9 +134,9 @@ export class ToolModuleThread {
    * @throws Error naming the file when the import throws, or the thread fails or exits first.
    */
   async list(): Promise<ToolModuleListing> {
-    const reply = await this.#request((id) => ({ kind: "list", id, defaults: current() }));
-    if (reply.as === "listing") return reply.listing;
-    throw replyError(this.label, reply);
+    const listing = listingOf(this.label, await this.#request(LIST));
+    this.#listing ??= listing;
+    return listing;
   }
 
   /**
@@ -145,7 +149,7 @@ export class ToolModuleThread {
    * @returns The validator's issues, each path as text and numbers, or the checked arguments.
    * @throws TypeError, as the registry's, when the validator returns no Standard Schema result.
    * @throws What the validator threw, rebuilt as `call` rebuilds a tool's throw.
-   * @throws Error naming the file when the thread fails or exits first.
+   * @throws ToolModuleError when the thread fails or exits first, or can't be started again.
    */
   async check(tool: string, name: string, args: unknown): Promise<StandardResult<CheckedArgs>> {
     const packed = packFiles(args);
@@ -168,7 +172,7 @@ export class ToolModuleThread {
    * @throws ToolCheckError, as the registry's, when the validator returns no Standard Schema
    *   result, or an output that isn't a yian value.
    * @throws What the validator threw, rebuilt as `call` rebuilds a tool's throw.
-   * @throws Error naming the file when the thread fails or exits first.
+   * @throws ToolModuleError when the thread fails or exits first, or can't be started again.
    */
   async checkOutput(tool: string, name: string, value: unknown): Promise<StandardResult<unknown>> {
     const packed = packFiles(value);
@@ -183,18 +187,19 @@ export class ToolModuleThread {
   /**
    * Call the module's tool exported as `tool` on the thread with the arguments `check` returned,
    * and return its result as a host value. `execute` gets the validator's output the thread kept,
-   * else a fresh copy of the arguments. Its context there holds `ctx`'s call id, attempt, run id
-   * and node, the export name as its tool name, and no host object; a stop of `ctx.signal` aborts
-   * its signal there, and the call settles as the tool does. Once it settles, the thread releases
-   * the kept output, unless a TOOL node may try the call again: its error is neither permanent nor
-   * a failed check, and no stop ended it.
+   * else a fresh copy of the arguments; on a fresh thread the arguments are checked again first.
+   * Its context there holds `ctx`'s call id, attempt, run id and node, the export name as its tool
+   * name, and no host object; a stop of `ctx.signal` aborts its signal there, and the call settles
+   * as the tool does. Once it settles, the thread releases the kept output, unless a TOOL node may
+   * try the call again: its error is neither permanent nor a failed check, and no stop ended it.
    *
    * @throws TypeError when `checked` isn't what `check` returned.
    * @throws What the tool threw, rebuilt as an `Error` with its name, message and stack, its tool
    *   error kinds and, when transient, its `retryAfter`; a thrown non-`Error` is an `Error` with
    *   the value's text, and the value as its `cause` when it is a yian value.
-   * @throws ToolCheckError when the result isn't a yian value, or is `pending()`.
-   * @throws Error naming the file when the thread fails or exits first.
+   * @throws ToolCheckError when the result isn't a yian value, or is `pending()`; or, reported
+   *   too, when a fresh thread's check of the arguments finds issues.
+   * @throws ToolModuleError when the thread fails or exits first, or can't be started again.
    */
   async call(tool: string, checked: unknown, ctx: ToolContext): Promise<unknown> {
     if (!(checked instanceof CheckedArgs)) {
@@ -202,13 +207,17 @@ export class ToolModuleThread {
     }
     const { callId, attempt, runId, node, signal } = ctx;
     const { check, args } = checked;
+    const where = `tool ${reprText(ctx.toolName)} arguments`;
     let settled = true;
     try {
       const reply = await this.#request(
-        (id) => ({ kind: "call", id, defaults: current(), tool, args, check, callId, attempt, runId, node }),
+        (id) => ({ kind: "call", id, defaults: current(), tool, args, check, where, callId, attempt, runId, node }),
         signal,
       );
       if (reply.as === "result") return toHost(unpackFiles(reply.value) as Value);
+      // A fresh thread's check failed: as at the call's own check, the model reads its issues.
+      if (reply.as === "issues") throw reportedCheck(validatorFailure(`${where} failed its validator`, reply.issues));
+      if (reply.as === "nonstandard") throw new ToolCheckError(reply.message);
       throw replyError(this.label, reply);
     } catch (error) {
       settled = signal.aborted || isPermanentToolError(error) || isToolCheckError(error);
@@ -218,27 +227,76 @@ export class ToolModuleThread {
     }
   }
 
-  /** Stop the thread; open requests reject as for an exit. */
+  /** Stop the thread for good; open requests reject as for an exit, and no fresh thread starts. */
   async terminate(): Promise<void> {
+    this.#terminated = true;
     await this.#worker.terminate();
   }
 
+  /** Start a thread on the module, whose ends end this one's requests while it serves them. */
+  #spawn(): Worker {
+    const data: ToolModuleData = { path: this.path, label: this.label };
+    // `SHARE_ENV`: the module reads and writes the host's live environment, as a CODE body does.
+    const worker = new Worker(WORKER_URL, { env: SHARE_ENV, workerData: { yianToolModule: data } });
+    worker.unref();
+    // Ids are never reused, so a reply from a thread that ended finds no request.
+    worker.on("message", (reply: ToolModuleReply) => {
+      const request = this.#open.get(reply.id);
+      if (request === undefined) return;
+      this.#settled(reply.id);
+      request.resolve(reply);
+    });
+    const failed = (error: unknown): void => {
+      if (worker !== this.#worker) return;
+      const text = error instanceof Error ? error.message : String(error);
+      this.#end(new ToolModuleError("tool.module_exited", `${this.label}'s thread failed: ${text}`, { cause: error }));
+      // A thread that couldn't read a message runs on; it must not run beside a fresh one.
+      void worker.terminate();
+    };
+    worker.on("error", failed);
+    worker.on("messageerror", failed);
+    worker.on("exit", (code: number) => {
+      if (worker !== this.#worker) return;
+      this.#exitCode = code;
+      this.#end(new ToolModuleError("tool.module_exited", `${this.label}'s thread exited (code ${code})`));
+    });
+    return worker;
+  }
+
   /**
-   * Post the request `make` builds with a fresh id and return its reply. While it is open, a stop
-   * of `signal` is posted as its abort.
+   * Return the reply to the request `make` builds with a fresh id. After the thread exited, a fresh
+   * thread takes over first, unless the module never listed or the thread was terminated; a stop of
+   * `signal` while it starts rejects with the signal's reason.
    *
-   * @throws Error naming the file when the thread fails or exits first, or the request can't be
-   *   posted.
+   * @throws ToolModuleError when the thread fails or exits first, or a fresh one can't take over.
+   * @throws Error when the request can't be posted.
    */
-  #request(make: (id: number) => ToolModuleRequest, signal?: AbortSignal): Promise<ToolModuleReply> {
+  async #request(make: (id: number) => ToolModuleRequest, signal?: AbortSignal): Promise<ToolModuleReply> {
+    if (this.#broken !== null) throw this.#broken;
+    if (this.#ended !== null && this.#listing !== null && !this.#terminated) this.#restarting ??= this.#restart();
+    if (this.#restarting !== null) await untilStopped(this.#restarting, signal);
+    return await this.#send(make, signal);
+  }
+
+  /**
+   * Post the request `make` builds with a fresh id to the thread and return its reply. While it is
+   * open, a stop of `signal` is posted as its abort.
+   *
+   * @throws ToolModuleError when the thread failed or exits first.
+   * @throws Error when the request can't be posted.
+   */
+  #send(make: (id: number) => ToolModuleRequest, signal?: AbortSignal): Promise<ToolModuleReply> {
     if (this.#ended !== null) return Promise.reject(this.#ended);
     const id = ++this.#lastId;
-    const abort = (): void => this.#worker.postMessage({ kind: "abort", id } satisfies ToolModuleRequest);
+    const worker = this.#worker;
+    const abort = (): void => worker.postMessage({ kind: "abort", id } satisfies ToolModuleRequest);
     return new Promise((resolve, reject) => {
-      if (this.#open.size === 0) this.#worker.ref();
-      this.#open.set(id, { resolve, reject, release: () => signal?.removeEventListener("abort", abort) });
+      const request = make(id);
+      if (this.#open.size === 0) worker.ref();
+      const release = () => signal?.removeEventListener("abort", abort);
+      this.#open.set(id, { resolve, reject, release, call: request.kind === "call" });
       try {
-        this.#worker.postMessage(make(id));
+        worker.postMessage(request);
       } catch (error) {
         this.#settled(id);
         reject(error);
@@ -247,6 +305,32 @@ export class ToolModuleThread {
       if (signal?.aborted) abort();
       else signal?.addEventListener("abort", abort, { once: true });
     });
+  }
+
+  /**
+   * Start a fresh thread in place of the one that ended, and have it list the module within
+   * `YIAN_TOOL_MODULE_START_TIMEOUT_SECONDS`, as the first one listed it.
+   *
+   * @throws ToolModuleError, `tool.module_restart`, which every later request rejects with too,
+   *   when its import throws or outlasts the timeout, it ends first, or its listing differs.
+   */
+  async #restart(): Promise<void> {
+    const ended = this.#ended!;
+    this.#worker = this.#spawn();
+    this.#ended = null;
+    this.#exitCode = null;
+    try {
+      const listed = this.#send(LIST).then((reply) => listingOf(this.label, reply));
+      const change = listingChange(this.#listing!, await listedInTime(this.label, listed));
+      if (change !== null) throw new Error(`${change} since the module was first imported`);
+    } catch (error) {
+      const why = `a fresh thread can't take over: ${error instanceof Error ? error.message : String(error)}`;
+      this.#broken = new ToolModuleError("tool.module_restart", `${ended.message}; ${why}`, { cause: error });
+      void this.#worker.terminate();
+      throw this.#broken;
+    } finally {
+      this.#restarting = null;
+    }
   }
 
   /** Have the thread drop the output `checked` kept, unless it kept none or was released. */
@@ -270,14 +354,97 @@ export class ToolModuleThread {
     if (this.#open.size === 0) this.#worker.unref();
   }
 
-  /** Fail every open request and every later one with `error`, unless an earlier end did. */
-  #end(error: Error): void {
-    this.#ended ??= error;
+  /**
+   * Fail every open request with `ended`, unless an earlier end did, and every later one until a
+   * fresh thread takes over; a call's error says its outcome is unknown.
+   */
+  #end(ended: ToolModuleError): void {
+    this.#ended ??= ended;
+    const { message, cause } = this.#ended;
     for (const [id, request] of this.#open) {
       this.#settled(id);
-      request.reject(this.#ended);
+      const unknown = `${message}; the call's outcome is unknown`;
+      request.reject(request.call ? new ToolModuleError("tool.module_exited", unknown, { cause }) : this.#ended);
     }
   }
+}
+
+/** Return the listing `reply` holds, else throw why the listing failed. `label` names the file. */
+function listingOf(label: string, reply: ToolModuleReply): ToolModuleListing {
+  if (reply.as === "listing") return reply.listing;
+  throw replyError(label, reply);
+}
+
+/**
+ * Return how `fresh` lists the module's exports otherwise than `first` did: a tool, in name order,
+ * that is gone, is new or holds another value in a field, or other exports that changed; `null`
+ * when they agree in every field.
+ */
+function listingChange(first: ToolModuleListing, fresh: ToolModuleListing): string | null {
+  const was = new Map(first.tools.map((tool) => [tool.name, tool]));
+  const now = new Map(fresh.tools.map((tool) => [tool.name, tool]));
+  for (const name of [...new Set([...was.keys(), ...now.keys()])].sort(compareCodeUnits)) {
+    const before = was.get(name);
+    const after = now.get(name);
+    const head = `export ${reprText(name)}`;
+    if (after === undefined) return `${head} is no longer a tool`;
+    if (before === undefined) return `${head} is a new tool`;
+    const field = (Object.keys(before) as (keyof typeof before)[]).find(
+      (key) => canonicalJson(before[key]) !== canonicalJson(after[key]),
+    );
+    if (field !== undefined) return `${head} ${field} changed`;
+  }
+  const others = (listing: ToolModuleListing) => canonicalJson({ refused: listing.refused, others: listing.others });
+  return others(first) === others(fresh) ? null : "the exports that aren't tools changed";
+}
+
+/**
+ * Return `listing` once it lists within `YIAN_TOOL_MODULE_START_TIMEOUT_SECONDS`.
+ *
+ * @param label How messages name the file.
+ * @param signal Stops the wait.
+ * @throws RangeError naming the file when the listing fails or outlasts the timeout.
+ * @throws The signal's reason when it aborts first.
+ */
+async function listedInTime(
+  label: string,
+  listing: Promise<ToolModuleListing>,
+  signal?: AbortSignal,
+): Promise<ToolModuleListing> {
+  const seconds = current().toolModuleStartTimeoutSeconds;
+  // Ends the timer once the listing settles.
+  const settled = new AbortController();
+  const stops = signal === undefined ? [settled.signal] : [signal, settled.signal];
+  try {
+    return await Promise.race([
+      listing.catch((error: Error) => {
+        throw new YianRangeError(error.message, { cause: error });
+      }),
+      realScheduler.sleep(seconds * 1000, AbortSignal.any(stops)).then(() => {
+        throw new YianRangeError(`${label} didn't import within ${seconds} s (YIAN_TOOL_MODULE_START_TIMEOUT_SECONDS)`);
+      }),
+    ]);
+  } finally {
+    settled.abort();
+  }
+}
+
+/** Return what `promise` settles with, or reject with `signal`'s reason once it aborts first. */
+function untilStopped<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (signal === undefined) return promise;
+  return new Promise((resolve, reject) => {
+    const stop = (): void => reject(signal.reason);
+    if (signal.aborted) stop();
+    signal.addEventListener("abort", stop, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", stop));
+  });
+}
+
+/** Return a failed check, as `ToolCheckError` with `message`, that an AGENT's model reads. */
+function reportedCheck(message: string): ToolCheckError {
+  const error = new ToolCheckError(message);
+  Object.defineProperty(error, TOOL_ERROR, { value: Object.freeze(["check", "reported"]) });
+  return error;
 }
 
 /**
@@ -339,24 +506,11 @@ export async function startToolModule(
   signal: AbortSignal,
 ): Promise<{ readonly thread: ToolModuleThread; readonly listing: ToolModuleListing }> {
   signal.throwIfAborted();
-  const seconds = current().toolModuleStartTimeoutSeconds;
   const thread = new ToolModuleThread(path, label);
-  // Ends the timer once the listing settles.
-  const settled = new AbortController();
   try {
-    const listing = await Promise.race([
-      thread.list().catch((error: Error) => {
-        throw new YianRangeError(error.message, { cause: error });
-      }),
-      realScheduler.sleep(seconds * 1000, AbortSignal.any([signal, settled.signal])).then(() => {
-        throw new YianRangeError(`${label} didn't import within ${seconds} s (YIAN_TOOL_MODULE_START_TIMEOUT_SECONDS)`);
-      }),
-    ]);
-    return { thread, listing };
+    return { thread, listing: await listedInTime(label, thread.list(), signal) };
   } catch (error) {
     await thread.terminate();
     throw error;
-  } finally {
-    settled.abort();
   }
 }

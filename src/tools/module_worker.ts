@@ -18,8 +18,9 @@
  * and keeps the validator's output here, by the check's id, until the host releases it: an output
  * may be any value, which the copy would flatten. A call runs its tool's `execute` on that output,
  * else on the call's own copy of the arguments, with a context of the call's fields, whose `signal`
- * the host aborts by message, and calls interleave. The output validator runs on a result the host
- * checked. Each validator's return is read as the registry reads it; values the host takes are
+ * the host aborts by message, and calls interleave. A call checked on an earlier thread of the
+ * module, which exited, is checked again here, and its output kept as its check's. The output
+ * validator runs on a result the host checked. Each validator's return is read as the registry reads it; values the host takes are
  * taken in by host intake here (so a class instance is refused before the copy flattens it), and a
  * throw crosses with its tool error kinds, which the host rebuilds. Values cross as
  * `typesys/crossing` packs them.
@@ -69,6 +70,8 @@ export interface ToolModuleCall {
   readonly args: unknown;
   /** The id of the check whose kept output `execute` gets, or `null` when it kept none. */
   readonly check: number | null;
+  /** How the registry names the arguments, for messages of a check made again here. */
+  readonly where: string;
   readonly callId: string;
   readonly attempt: number;
   readonly runId: string;
@@ -94,7 +97,8 @@ export type ToolModuleRequest =
  * issues, or why its return isn't a Standard Schema result; a call's result or the output
  * validator's, a packed yian value; what a tool or a validator threw, with its tool error kinds
  * and, when transient, its `retryAfter`; why a result was refused; or why the request failed (the
- * import threw).
+ * import threw). A call whose check ran on an earlier thread is checked again first, so its reply
+ * may be a check's.
  */
 export type ToolModuleReply = { readonly id: number } & ReplyBody;
 
@@ -339,23 +343,35 @@ async function checkReply(
   check: ToolModuleCheck & { readonly defaults: Defaults },
   keep: (output: unknown) => void,
 ): Promise<ReplyBody> {
-  let args = unpackFiles(check.value);
+  const read = await validated(tool, check, keep);
+  if (read.as !== "value") return read;
+  return { as: "checked", safe: concurrencySafe(tool, read.value), kept: tool.parametersValidator !== null };
+}
+
+/**
+ * Return what `tool`'s validator makes of `check`'s arguments, once `keep` took its output, or the
+ * arguments when it has none; else the reply for what it threw, its issues, or a return that
+ * isn't a Standard Schema result.
+ */
+async function validated(
+  tool: FunctionTool,
+  check: ToolModuleCheck & { readonly defaults: Defaults },
+  keep: (output: unknown) => void,
+): Promise<StandardRead | ReplyBody> {
+  const args = unpackFiles(check.value);
   const validator = tool.parametersValidator;
-  if (validator !== null) {
-    let read: StandardRead;
-    try {
-      const returned: unknown = await validator["~standard"].validate(args);
-      read = standardRead(returned, `${check.where}: the validator`);
-    } catch (error) {
-      return thrownReply(error);
-    }
-    if (read.as !== "value") return read;
-    args = read.value;
-    keep(args);
+  if (validator === null) return { as: "value", value: args };
+  let read: StandardRead;
+  try {
+    const returned: unknown = await validator["~standard"].validate(args);
+    read = standardRead(returned, `${check.where}: the validator`);
+  } catch (error) {
+    return thrownReply(error);
   }
   // Another request may have installed its values while the validator ran.
   install(check.defaults);
-  return { as: "checked", safe: concurrencySafe(tool, args), kept: validator !== null };
+  if (read.as === "value") keep(read.value);
+  return read;
 }
 
 /**
@@ -442,6 +458,11 @@ function thrownReply(error: unknown): ReplyBody {
 /** Serve a tool module's thread on `port`: import the module once and answer each request. */
 export function serveToolModule(port: MessagePort, data: ToolModuleData): void {
   let imported: Promise<object> | null = null;
+  /**
+   * The id of the first request this thread got: the host numbers requests across the module's
+   * threads, so a check below it ran on an earlier thread.
+   */
+  let first: number | null = null;
   /** The tools of the first listing, by export name, which calls run. */
   let tools: ReadonlyMap<string, FunctionTool> | null = null;
   /** Each open call's stop, by request id. */
@@ -468,6 +489,7 @@ export function serveToolModule(port: MessagePort, data: ToolModuleData): void {
       return;
     }
     const { id, defaults } = request;
+    first ??= id;
     // Made now, so a stop that arrives before the import ends still reaches the call.
     const stop = request.kind === "call" ? new AbortController() : null;
     if (stop !== null) calls.set(id, stop);
@@ -490,12 +512,18 @@ export function serveToolModule(port: MessagePort, data: ToolModuleData): void {
           if (request.kind === "check") return await checkReply(tool, request, (output) => kept.set(id, output));
           if (request.kind === "output") return await outputReply(tool, request);
           const { check } = request;
-          // Released, or checked on an earlier thread: this thread never ran the validator.
-          if (check !== null && !kept.has(check)) {
-            return { as: "failed", message: `${head}: its checked arguments aren't kept on this thread` };
-          }
           // A call gets the output its check kept, else its own copy of the arguments, as on the host.
-          const args = check === null ? unpackFiles(request.args) : kept.get(check);
+          let args = check === null ? unpackFiles(request.args) : kept.get(check);
+          if (check !== null && !kept.has(check)) {
+            if (check >= first!) {
+              return { as: "failed", message: `${head}: its checked arguments aren't kept on this thread` };
+            }
+            // Checked on a thread that exited: check again, keeping the output for later attempts.
+            const keep = (output: unknown) => kept.set(check, output);
+            const read = await validated(tool, { ...request, value: request.args }, keep);
+            if (read.as !== "value") return read;
+            args = read.value;
+          }
           return await callReply(head, tool, args, request, stop!.signal);
         },
         (error: unknown): ReplyBody => ({

@@ -3,7 +3,8 @@
  * thread per module its nodes reach, beside the MCP servers, and ends them when it ends. A module
  * that fails to start refuses the run before any record, naming its file (relative to the root
  * flow's folder) and export. Each node's scope holds its modules' tools for the run-start checks
- * and its model's request; calling one is refused for now.
+ * and its model's request, and a call runs on the module's thread: its result and its errors act
+ * as a host tool's do, for an AGENT's model and for TOOL retries.
  */
 
 import { afterAll, beforeEach, expect, test } from "bun:test";
@@ -13,6 +14,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { loadFlow, withUnfinishedToolModules } from "../src/compose/loader.ts";
+import { ToolResultPart } from "../src/llm/messages.ts";
 import { ScriptedModel } from "../src/llm/testing.ts";
 import { advance, complete, runFlow, type RunFlowOptions } from "../src/run.ts";
 import { pending } from "../src/tools/context.ts";
@@ -102,15 +104,78 @@ test("each segment starts one thread per module its nodes reach and ends them as
   expect(await ended("crm")).toBe(true);
 });
 
-test("an agent's call of a module tool, and a tool node's, are refused until calls are supported", async () => {
-  writeFileSync(join(dir, "crm.ts"), tools(["lookup"]));
-  const refused = "crm.ts export 'lookup': calls to tool modules aren't supported yet";
-  const model = new ScriptedModel([callReply(["crm_lookup", { id: "1" }, "c1"])]);
-  const agent = await run(app({ crm: "./crm.ts" }, ["a: {kind: agent, prompt: go, tools: [crm]}"]), { models: serving(model) });
-  expect(agent.failure?.message).toContain(refused);
-  const node = "t: {kind: tool, tool_id: {crm: lookup}, input: {id: x}, retries: 2}";
-  const called = await run(app({ crm: "./crm.ts" }, [node]));
-  expect([called.failure?.code, called.failure?.message]).toEqual(["node.execute", expect.stringContaining(refused)]);
+/** A module whose `lookup` finds a customer by id, failing for `none` (reported) and `boom`. */
+const CRM = `const TOOL_ERROR = Symbol.for("yian.tool_error");
+export const lookup = {
+  name: "lookup",
+  description: "lookup.",
+  parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+  execute(args, ctx) {
+    if (args.id === "none") throw Object.assign(new Error("no such customer"), { [TOOL_ERROR]: ["reported"] });
+    if (args.id === "boom") throw new Error("boom");
+    return { id: args.id, node: ctx.node, tool: ctx.toolName };
+  },
+};
+`;
+
+/** The tool results' contents in `model`'s last request. */
+function resultContents(model: ScriptedModel): string[] {
+  return model.requests.at(-1)!.messages.flatMap((message) =>
+    message.parts.filter((part) => part instanceof ToolResultPart).map((part) => part.content),
+  );
+}
+
+test("an agent's model reads a module tool's result and its reported error; any other error fails the node", async () => {
+  writeFileSync(join(dir, "crm.ts"), CRM);
+  writeFileSync(join(dir, "quote.ts"), tools(["quote"]));
+  const text = app({ crm: "./crm.ts", price: "./quote.ts:quote" }, ["a: {kind: agent, prompt: go, tools: [crm, price]}"], "output: ${a.output}\n");
+  const calls = callReply(["crm_lookup", { id: "1" }, "c1"], ["crm_lookup", { id: "none" }, "c2"], ["price", { id: "1" }, "c3"]);
+  const model = new ScriptedModel([calls, textReply("done")]);
+
+  const done = await run(text, { models: serving(model) });
+
+  expect([done.status, done.output]).toEqual(["succeeded", "done"]);
+  expect(resultContents(model)).toEqual(['{"id":"1","node":"a","tool":"lookup"}', "no such customer", "1"]);
+  const failing = new ScriptedModel([callReply(["crm_lookup", { id: "boom" }, "c1"])]);
+  const failed = await run(text, { models: serving(failing) });
+  expect([failed.failure?.code, failed.failure?.message]).toEqual(["node.execute", expect.stringContaining("boom")]);
+});
+
+test.each([
+  ["transient", null],
+  ["permanent", "attempt 1 failed"],
+  ["check", "attempt 1 failed"],
+  ["date", "crm.ts export 'flaky' result: Date is not a yian value"],
+  ["checked", "crm.ts export 'checked': a tool module's validators aren't supported yet"],
+])("a tool node's retries: 2 retry a module tool's %s error only when another attempt may help", async (how, message) => {
+  writeFileSync(
+    join(dir, "crm.ts"),
+    `const TOOL_ERROR = Symbol.for("yian.tool_error");
+let calls = 0;
+const parameters = { type: "object", properties: { how: { type: "string" } } };
+export const flaky = {
+  name: "flaky",
+  description: "flaky.",
+  parameters,
+  execute({ how }, ctx) {
+    calls += 1;
+    if (how === "date") return new Date(0);
+    if (ctx.attempt < 3) throw Object.assign(new Error(\`attempt \${ctx.attempt} failed\`), { [TOOL_ERROR]: [how], retryAfter: 0 });
+    return { attempt: ctx.attempt, calls };
+  },
+};
+const checker = { "~standard": { version: 1, vendor: "t", validate: (value) => ({ value }), jsonSchema: { input: () => parameters } } };
+export const checked = { name: "checked", description: "checked.", parameters: checker, execute: () => 1 };
+`,
+  );
+  const tool = how === "checked" ? "checked" : "flaky";
+  const node = `t: {kind: tool, tool_id: {crm: ${tool}}, input: {how: ${how}}, retries: 2}`;
+
+  const result = await run(app({ crm: "./crm.ts" }, [node], "output: ${t.output}\n"));
+
+  if (message === null) expect([result.status, result.output]).toEqual(["succeeded", { attempt: 3n, calls: 3n }]);
+  else expect([result.failure?.code, result.failure?.message]).toEqual(["node.execute", expect.stringContaining(message)]);
+  if (message !== null) expect(result.failure?.message).not.toContain("attempt 2");
 });
 
 test.each([

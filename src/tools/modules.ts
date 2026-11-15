@@ -2,7 +2,8 @@
  * Tool modules: TypeScript or JavaScript files a flow imports through `uses:`, whose exports are
  * tools. An alias names every tool a module exports (`crm: ./crm.ts`), a group, or one export
  * (`quote: ./tools.ts:quote`), one tool. A load never imports a module; each segment of a run
- * starts the modules its nodes reach, and a node's scope holds a stand-in for each tool it reaches.
+ * starts the modules its nodes reach, and a node's scope holds a stand-in for each tool it reaches,
+ * which the registry checks and calls as a host tool, and whose call runs on the module's thread.
  *
  * Knows about: tools/errors, tools/function_tools, tools/registry, the types of tools/grants,
  * tools/module_thread and tools/module_worker, diagnostics, typesys and `node:path`.
@@ -118,8 +119,8 @@ function listedExport(key: string, listing: ToolModuleListing, name: string): Li
 /**
  * Return the node scope `refs` reach in the modules `tools` started: a group alias's tools as a
  * group under the alias, each by its export name, and a one-export alias's tool under the alias,
- * each a stand-in with its listed spec. Every entry's identity is its file and export, so two
- * aliases of one file bind a tool once.
+ * each a stand-in with its listed spec that calls its tool on the module's thread. Every entry's
+ * identity is its file and export, so two aliases of one file bind a tool once.
  *
  * @throws RangeError when a ref's module wasn't started, or its export is refused, isn't a tool or
  *   is missing.
@@ -133,32 +134,38 @@ export function moduleScope(refs: readonly ToolModuleRef[], tools: ToolSet): Nod
     if (started === null) {
       throw new YianRangeError(`tool module ${reprText(alias)} (${ref}) wasn't started for this run`);
     }
-    const { key, listing } = started;
+    const { key, thread, listing } = started;
     const identity = (listed: ListedTool) => JSON.stringify({ module: path, export: listed.name });
     const { exportName } = splitModuleRef(ref);
     if (exportName === null) {
-      groups.set(alias, listing.tools.map((listed) => standIn(key, listed, listed.name)));
+      groups.set(alias, listing.tools.map((listed) => standIn(key, thread, listed, listed.name)));
       for (const listed of listing.tools) identities.set(JSON.stringify([alias, listed.name]), identity(listed));
     } else {
       const listed = listedExport(key, listing, exportName);
-      single.push(standIn(key, listed, alias));
+      single.push(standIn(key, thread, listed, alias));
       identities.set(JSON.stringify([null, alias]), identity(listed));
     }
   }
   return { groups, tools: single, identities };
 }
 
-/** Return the engine's stand-in for a module's listed tool, named `name`, with its listed spec. */
-function standIn(key: string, listed: ListedTool, name: string): FunctionTool {
+/**
+ * Return the engine's stand-in for a module's listed tool, named `name`, with its listed spec. Its
+ * `execute` runs the tool on the module's thread; a tool with a validator is refused for now.
+ */
+function standIn(key: string, thread: ToolModuleThread, listed: ListedTool, name: string): FunctionTool {
   return new FunctionTool({
     name,
     description: listed.description,
     parametersJsonSchema: listed.parametersJsonSchema,
     outputJsonSchema: listed.outputJsonSchema,
     resumable: listed.resumable,
-    execute: () => {
-      const message = `${key} export ${reprText(listed.name)}: calls to tool modules aren't supported yet`;
-      throw new PermanentToolError(message);
+    execute: (args, ctx) => {
+      if (listed.hasParametersValidator || listed.hasOutputValidator) {
+        const message = `${key} export ${reprText(listed.name)}: a tool module's validators aren't supported yet`;
+        throw new PermanentToolError(message);
+      }
+      return thread.call(listed.name, args, ctx);
     },
   });
 }

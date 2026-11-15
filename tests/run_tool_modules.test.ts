@@ -3,9 +3,10 @@
  * thread per module its nodes reach, beside the MCP servers, and ends them when it ends. A module
  * that fails to start refuses the run before any record, naming its file (relative to the root
  * flow's folder) and export. Each node's scope holds its modules' tools for the run-start checks
- * and its model's request, and a call runs on the module's thread: its result and its errors act
- * as a host tool's do, for an AGENT's model and for TOOL retries. `run_started` records the tools
- * agents' grants reach, which a resume checks again and the agent-call view rebuilds requests with.
+ * and its model's request, and a call runs on the module's thread: its checks, its result and its
+ * errors act as a host tool's do, for an AGENT's model and for TOOL retries, and an AGENT runs the
+ * calls its `isConcurrencySafe` says are safe together. `run_started` records the tools agents'
+ * grants reach, which a resume checks again and the agent-call view rebuilds requests with.
  */
 
 import { afterAll, beforeEach, expect, test } from "bun:test";
@@ -147,7 +148,8 @@ test.each([
   ["permanent", "attempt 1 failed"],
   ["check", "attempt 1 failed"],
   ["date", "crm.ts export 'flaky' result: Date is not a yian value"],
-  ["checked", "crm.ts export 'checked': a tool module's validators aren't supported yet"],
+  ["checked", null],
+  ["audited", "tool 'audited' result failed its output validator: total: too low"],
 ])("a tool node's retries: 2 retry a module tool's %s error only when another attempt may help", async (how, message) => {
   writeFileSync(
     join(dir, "crm.ts"),
@@ -165,11 +167,23 @@ export const flaky = {
     return { attempt: ctx.attempt, calls };
   },
 };
-const checker = { "~standard": { version: 1, vendor: "t", validate: (value) => ({ value }), jsonSchema: { input: () => parameters } } };
-export const checked = { name: "checked", description: "checked.", parameters: checker, execute: () => 1 };
+// Its validator's output is checked once and kept on the thread, so every attempt adds to its one list.
+const checker = { "~standard": { version: 1, vendor: "t", validate: (value) => ({ value: { ...value, seen: [] } }), jsonSchema: { input: () => parameters } } };
+export const checked = {
+  name: "checked",
+  description: "checked.",
+  parameters: checker,
+  execute({ seen }, ctx) {
+    seen.push(ctx.attempt);
+    if (ctx.attempt < 3) throw Object.assign(new Error("not yet"), { [TOOL_ERROR]: ["transient"], retryAfter: 0 });
+    return { attempt: ctx.attempt, calls: seen.length };
+  },
+};
+const audit = { "~standard": { version: 1, vendor: "t", validate: () => ({ issues: [{ message: "too low", path: ["total"] }] }), jsonSchema: { input: () => ({ type: "object" }) } } };
+export const audited = { name: "audited", description: "audited.", parameters, output: audit, execute: () => ({ total: 1 }) };
 `,
   );
-  const tool = how === "checked" ? "checked" : "flaky";
+  const tool = how === "checked" || how === "audited" ? how : "flaky";
   const node = `t: {kind: tool, tool_id: {crm: ${tool}}, input: {how: ${how}}, retries: 2}`;
 
   const result = await run(app({ crm: "./crm.ts" }, [node], "output: ${t.output}\n"));
@@ -177,6 +191,38 @@ export const checked = { name: "checked", description: "checked.", parameters: c
   if (message === null) expect([result.status, result.output]).toEqual(["succeeded", { attempt: 3n, calls: 3n }]);
   else expect([result.failure?.code, result.failure?.message]).toEqual(["node.execute", expect.stringContaining(message)]);
   if (message !== null) expect(result.failure?.message).not.toContain("attempt 2");
+});
+
+test("an agent runs a reply's module tool calls together when isConcurrencySafe says they are safe, else one at a time", async () => {
+  writeFileSync(
+    join(dir, "crm.ts"),
+    `let running = 0;
+export const meet = {
+  name: "meet",
+  description: "meet.",
+  parameters: { type: "object", properties: { safe: { type: "boolean" } }, required: ["safe"] },
+  isConcurrencySafe: ({ safe }) => safe,
+  async execute({ safe }) {
+    running += 1;
+    // Waits for a second call to start beside it: a safe one long enough for one to, under load.
+    for (let waited = 0; running < 2 && waited < (safe ? 5000 : 100); waited += 5) await new Promise((resolve) => setTimeout(resolve, 5));
+    const met = running;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    running -= 1;
+    return met;
+  },
+};
+`,
+  );
+  const text = app({ meet: "./crm.ts:meet" }, ["a: {kind: agent, prompt: go, tools: [meet]}"]);
+  const met = async (safe: boolean) => {
+    const model = new ScriptedModel([callReply(["meet", { safe }, "c1"], ["meet", { safe }, "c2"]), textReply("done")]);
+    expect((await run(text, { models: serving(model) })).status).toBe("succeeded");
+    return resultContents(model);
+  };
+
+  expect(await met(true)).toEqual(["2", "2"]);
+  expect(await met(false)).toEqual(["1", "1"]);
 });
 
 test.each([

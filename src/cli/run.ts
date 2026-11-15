@@ -762,16 +762,19 @@ const selectionNotes = new WeakMap<Error, readonly string[]>();
 /**
  * Return the bare tool ids `flow`'s static TOOL nodes call, which name single tools, and the names
  * its static nodes grant, which name tools or tool groups: an AGENT's grants (a group grant's
- * group) and the group of a TOOL node's `{group: tool}`.
+ * group) and the group of a TOOL node's `{group: tool}`. A TOOL node calling a tool module's tool
+ * names neither.
  */
 function mcpNeededNames(flow: ComposedFlow): [Set<string>, Set<string>] {
   const toolIds = new Set<string>();
   const grants = new Set<string>();
   for (const [, node] of staticNodes(flow.compiled)) {
     const call = node.hostToolCall();
-    // A group names its server, as an AGENT's group grant does.
-    if (call?.group != null) grants.add(call.group);
-    else if (call !== null) toolIds.add(call.toolId);
+    if (call !== null && call.module === null) {
+      // A group names its server, as an AGENT's group grant does.
+      if (call.group !== null) grants.add(call.group);
+      else toolIds.add(call.toolId);
+    }
     for (const grant of node.grantedTools()) {
       grants.add(grant.kind === "group" ? grant.group : grant.name);
     }

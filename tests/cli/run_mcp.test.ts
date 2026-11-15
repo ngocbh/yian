@@ -735,6 +735,25 @@ test("a flow that needs no mcp tool reads no config", async () => {
   expect(withFlag.code, withFlag.output).toBe(0);
 });
 
+test.each([
+  ["{crm: lookup}", "./crm.ts"],
+  ["find", "./crm.ts:lookup"],
+])("a flow whose TOOL node calls tool module tool %s reads no config", async (toolId, ref) => {
+  writeFileSync(
+    join(tmp, "crm.ts"),
+    'export const lookup = { name: "lookup", description: "Find.", parameters: { type: "object" }, execute: () => "Ada" };\n',
+  );
+  const uses = `uses:\n  ${ref === "./crm.ts" ? "crm" : "find"}: ${ref}\n`;
+  const flow = flowFile(`id: crm\nname: crm\n${uses}nodes:\n  call: {kind: tool, tool_id: ${toolId}}\noutput: \${call.output}\n`);
+  mkdirSync(join(home, ".yian"));
+  writeFileSync(join(home, ".yian", "mcp.json"), "{not json");
+
+  const result = await run([flow]);
+
+  expect(result.code, result.output).toBe(0);
+  expect(lastLine(result.stdout)).toBe("Ada");
+});
+
 test(
   "config warnings print as warning lines",
   async () => {

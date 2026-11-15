@@ -15,7 +15,7 @@ import { FunctionTool } from "../../tools/function_tools.ts";
 import { type NodeScope, visibleToolName } from "../../tools/grants.ts";
 import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import type { JsonObject } from "../../typesys/json.ts";
-import { cutText, isRecord } from "../../typesys/values.ts";
+import { cutText, fromHost, isRecord, type ValueRecord } from "../../typesys/values.ts";
 import { toolText } from "./results.ts";
 
 /** The brand a flow call's marker carries. */
@@ -24,7 +24,8 @@ const FLOW_CALL: unique symbol = Symbol("yian.flowCall") as never;
 /** What a flow tool's call returns to its loop: the checked arguments the flow's scope starts with. */
 export interface FlowCall {
   readonly [FLOW_CALL]: true;
-  readonly arguments: Readonly<Record<string, unknown>>;
+  /** The arguments as yian values, as a flow's own inputs are taken: a whole number is an int. */
+  readonly arguments: ValueRecord;
 }
 
 /** Whether `value` is a flow call's marker. */
@@ -42,7 +43,12 @@ export function flowToolFunction({ description, parameters }: FlowTool, name: st
     name,
     description,
     parametersJsonSchema: parameters,
-    execute: (args): FlowCall => Object.freeze({ [FLOW_CALL]: true as const, arguments: args }),
+    // A tool gets its arguments in host form, where an int is a JS number; taken back as yian
+    // values, the model's whole number fits an `int` input, as it does for a flow's own inputs.
+    execute: (args): FlowCall => {
+      const values = fromHost(args, `flow ${reprText(name)} arguments`) as ValueRecord;
+      return Object.freeze({ [FLOW_CALL]: true as const, arguments: values });
+    },
     resumable: true,
   });
 }

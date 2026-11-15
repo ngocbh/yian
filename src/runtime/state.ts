@@ -423,6 +423,8 @@ export class RunState {
   recordedTools: Readonly<Record<string, RecordedTool>> = {};
   /** The tool groups `RunStarted` recorded, by name, which the request rebuild expands grants with. */
   recordedToolGroups: Readonly<Record<string, readonly string[]>> = {};
+  /** The tools of the tool modules `RunStarted` recorded, by module key, which the request rebuild sends. */
+  recordedToolModules: Readonly<Record<string, readonly RecordedTool[]>> = {};
   /**
    * The `yian.defaults` values `RunStarted` recorded, the built-in values overlaid with the
    * recorded ones; the reducer reads its limits here, never from the process.
@@ -720,6 +722,8 @@ export interface RunStartData {
   tools?: Readonly<Record<string, RecordedTool>>;
   /** Each tool group an AGENT grants, by name: its tools' names; defaults to `{}`. */
   toolGroups?: Readonly<Record<string, readonly string[]>>;
+  /** The tools of each tool module an AGENT grants, by module key; defaults to `{}`. */
+  toolModules?: Readonly<Record<string, readonly RecordedTool[]>>;
   /** The yian version that starts the run; defaults to this one's. */
   yianVersion?: string;
   /** The run that started this one; `null` (the default) when none did. */
@@ -1137,6 +1141,7 @@ export function prepareRunStarted(state: RunState, data: RunStartData): Prepared
     skills: data.skills ?? {},
     tools: data.tools ?? {},
     toolGroups: data.toolGroups ?? {},
+    toolModules: data.toolModules ?? {},
     yianVersion: data.yianVersion,
     parent: data.parent ?? null,
   });
@@ -2976,6 +2981,7 @@ export function replayRecords(
     skills: start.skills,
     tools: start.tools,
     toolGroups: start.toolGroups,
+    toolModules: start.toolModules,
     yianVersion: start.yianVersion,
     parent: start.parent,
   });
@@ -6301,6 +6307,7 @@ interface RunStartedApply {
   recordedSkills: Readonly<Record<string, RecordedSkill>>;
   recordedTools: Readonly<Record<string, RecordedTool>>;
   recordedToolGroups: Readonly<Record<string, readonly string[]>>;
+  recordedToolModules: Readonly<Record<string, readonly RecordedTool[]>>;
   runDefaults: Defaults;
   observers: readonly RunEvent[];
 }
@@ -6345,6 +6352,7 @@ function materializeRunStarted(state: RunState, prepared: PreparedTransition, pl
     recordedSkills: record.skills,
     recordedTools: record.tools,
     recordedToolGroups: record.toolGroups,
+    recordedToolModules: record.toolModules,
     runDefaults: fromRecorded(record.defaults),
     observers: [new RunStarted()],
   };
@@ -6372,6 +6380,7 @@ function applyRunStarted(state: RunState, apply: RunStartedApply): void {
   state.recordedSkills = apply.recordedSkills;
   state.recordedTools = apply.recordedTools;
   state.recordedToolGroups = apply.recordedToolGroups;
+  state.recordedToolModules = apply.recordedToolModules;
   state.runDefaults = apply.runDefaults;
   state.nextSequence = apply.nextSequence;
 }

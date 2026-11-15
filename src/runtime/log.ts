@@ -40,11 +40,11 @@ import { formatRecordTime as recordTimeText, RECORD_TIME } from "../typesys/temp
 import { isList, isRecord, jsonPart, requireFields, valueRepr, writeAsText } from "../typesys/values.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 32;
+export const SCHEMA_VERSION = 33;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
 const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([
-  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
 ]);
 
 /** A typed value's wire object `{kind, value}`. */
@@ -158,9 +158,10 @@ export interface FlowSource {
 }
 
 /**
- * A tool an AGENT of the run grants, or a tool of a group one grants, as the model is told about
- * it. The run keys it by its record name: a top-level tool's name, or `<group>_<tool>` under the
- * first group holding it. A type, not an interface, so it is a `JsonObject` as recorded.
+ * A tool an AGENT of the run grants, or a tool of a group or tool module one grants, as the model
+ * is told about it. The run keys a host tool by its record name: a top-level tool's name, or
+ * `<group>_<tool>` under the first group holding it; and lists a module's tools under the module's
+ * key, each by its export name. A type, not an interface, so it is a `JsonObject` as recorded.
  */
 export type RecordedTool = {
   /** The tool's own name. */
@@ -221,6 +222,11 @@ export interface RunStartedFields {
    * to `{}`.
    */
   toolGroups?: Readonly<Record<string, readonly string[]>>;
+  /**
+   * The tools of each tool module an AGENT grants, by module key, in export-name order: every tool
+   * of a module an alias grants whole, else the exports one-export aliases name; defaults to `{}`.
+   */
+  toolModules?: Readonly<Record<string, readonly RecordedTool[]>>;
   /** The yian version that started the run; defaults to this one's `VERSION`. */
   yianVersion?: string;
   /** The run that started this one; `null` (the default) for a run the host started on its own. */
@@ -255,6 +261,8 @@ export class RunStartedRecord {
    * order.
    */
   readonly toolGroups: Readonly<Record<string, readonly string[]>>;
+  /** The deep-frozen tools of the tool modules the AGENTs grant, by module key, in export-name order. */
+  readonly toolModules: Readonly<Record<string, readonly RecordedTool[]>>;
   /** The yian version that started the run. */
   readonly yianVersion: string;
   /** The frozen parent run, or `null`. */
@@ -266,13 +274,14 @@ export class RunStartedRecord {
    * @throws TypeError when the fingerprint isn't a string, the wiring override, the agent
    *   configuration or one agent's configuration isn't a JSON object, `numWorkers` isn't a safe
    *   integer, `defaults` isn't a plain object of `bigint`s, `callTimeLlm` or one of its parts
-   *   isn't a plain object, or a part of `flow`, `skills`, `tools`, `yianVersion` or `parent` has
-   *   the wrong type.
+   *   isn't a plain object, or a part of `flow`, `skills`, `tools`, `toolModules`, `yianVersion` or
+   *   `parent` has the wrong type.
    * @throws RangeError when the fingerprint isn't 64 lowercase hex digits, `numWorkers` is
    *   negative, a defaults name is empty, `callTimeLlm` has
    *   missing or extra fields, no agent, an empty agent path or a non-JSON value, `flow.files`
    *   lacks `flow.root` or a file its refs name, a name, the flow's root or folder or the version
-   *   is empty, a tool's parameters aren't JSON, or a tool group names a tool `tools` lacks.
+   *   is empty, a tool's parameters aren't JSON, a tool group names a tool `tools` lacks, or a tool
+   *   module lists a tool twice.
    * @throws TypeCheckError at the bad part's path when the wiring override or the agent
    *   configuration holds NaN or another non-JSON value (see `jsonPart`).
    */
@@ -284,6 +293,7 @@ export class RunStartedRecord {
       skills = {},
       tools = {},
       toolGroups = {},
+      toolModules = {},
       yianVersion = VERSION,
       parent = null,
     } = fields;
@@ -307,16 +317,9 @@ export class RunStartedRecord {
       description: requireText(skill["description"], `${label} description`),
       instructions: requireText(skill["instructions"], `${label} instructions`),
     }));
-    this.tools = validatedEntries(tools, "tools", (tool, label) => {
-      if (!isRecord(tool["parameters"])) throw new YianTypeError(`${label} parameters must be an object`);
-      return {
-        name: requireName(tool["name"], `${label} name`),
-        description: requireText(tool["description"], `${label} description`),
-        parameters: freezeParsed(canonicalCopy(jsonPart(tool["parameters"], [], "refuse")) as JsonObject),
-        resumable: wireBool(tool["resumable"], `${label} resumable`),
-      };
-    });
+    this.tools = validatedEntries(tools, "tools", validatedTool);
     this.toolGroups = validatedToolGroups(toolGroups, this.tools);
+    this.toolModules = validatedToolModules(toolModules);
     this.yianVersion = requireName(yianVersion, "RunStarted yian_version");
     this.parent = parent === null ? null : validatedParent(parent);
     Object.freeze(this);
@@ -368,6 +371,51 @@ function validatedToolGroups(
     return [name, Object.freeze(names)];
   });
   // `Object.fromEntries` defines own data properties, so a `__proto__` name stays a key.
+  return Object.freeze(Object.fromEntries(entries));
+}
+
+/**
+ * Return a copy of a recorded tool, its parameters deep-frozen; `label` names it in errors.
+ *
+ * @throws TypeError when a field has the wrong type.
+ * @throws RangeError when the name is empty, or the parameters aren't JSON.
+ */
+function validatedTool(tool: Readonly<Record<string, unknown>>, label: string): RecordedTool {
+  if (!isRecord(tool["parameters"])) throw new YianTypeError(`${label} parameters must be an object`);
+  return {
+    name: requireName(tool["name"], `${label} name`),
+    description: requireText(tool["description"], `${label} description`),
+    parameters: freezeParsed(canonicalCopy(jsonPart(tool["parameters"], [], "refuse")) as JsonObject),
+    resumable: wireBool(tool["resumable"], `${label} resumable`),
+  };
+}
+
+/**
+ * Return a frozen copy of `RunStarted.tool_modules`: each module's tools as a frozen list of frozen
+ * tools, by module key.
+ *
+ * @throws TypeError when `modules` isn't a plain object, a module's tools aren't an array, or a
+ *   tool has the wrong type.
+ * @throws RangeError when a key or tool name is empty, a module lists a tool twice, or a tool's
+ *   parameters aren't JSON.
+ */
+function validatedToolModules(modules: unknown): Readonly<Record<string, readonly RecordedTool[]>> {
+  if (!isRecord(modules)) throw new YianTypeError("RunStarted tool_modules must be an object");
+  const entries = Object.entries(modules).map(([key, tools]): [string, readonly RecordedTool[]] => {
+    const label = `RunStarted tool_modules[${reprText(key)}]`;
+    if (!key) throw new YianRangeError("RunStarted tool_modules keys must be non-empty strings");
+    if (!Array.isArray(tools)) throw new YianTypeError(`${label} must be an array of tools`);
+    const names = new Set<string>();
+    const copies = tools.map((tool: unknown, index) => {
+      if (!isRecord(tool)) throw new YianTypeError(`${label}[${index}] must be an object`);
+      const copy = Object.freeze(validatedTool(tool, `${label}[${index}]`));
+      if (names.has(copy.name)) throw new YianRangeError(`${label} lists ${reprText(copy.name)} twice`);
+      names.add(copy.name);
+      return copy;
+    });
+    return [key, Object.freeze(copies)];
+  });
+  // `Object.fromEntries` defines own data properties, so a `__proto__` key stays a key.
   return Object.freeze(Object.fromEntries(entries));
 }
 
@@ -2618,7 +2666,34 @@ function parentFromPayload(value: unknown, label: string): RunParent {
   return { runId: requireText(wire["run_id"], `${label} run_id`), node: wireNullableText(wire["node"], `${label} node`) };
 }
 
-/** The fields of a `run_started` payload; every `run_started` payload holds each one. */
+/** Encode a `run_started` record's tool modules. */
+function toolModulesPayload(modules: Readonly<Record<string, readonly RecordedTool[]>>): JsonObject {
+  return Object.fromEntries(Object.entries(modules).map(([key, tools]) => [key, [...tools]]));
+}
+
+/** The fields of a recorded tool's wire object. */
+const RECORDED_TOOL_FIELDS = ["name", "description", "parameters", "resumable"];
+
+/**
+ * Decode a `run_started` payload's tool modules; `label` names them in errors. Only the fields are
+ * checked here: the record's constructor checks each tool's values.
+ *
+ * @throws RangeError for a tool's missing or extra fields.
+ * @throws TypeError when `value` isn't an object, a module's tools aren't an array, or a tool isn't
+ *   an object.
+ */
+function toolModulesFromPayload(value: unknown, label: string): Record<string, RecordedTool[]> {
+  const wire = wireObject(value, label);
+  for (const [key, tools] of Object.entries(wire)) {
+    wireItems(tools, `${label}[${reprText(key)}]`, (tool, item) => wireObject(tool, item, RECORDED_TOOL_FIELDS));
+  }
+  return wire as Record<string, RecordedTool[]>;
+}
+
+/**
+ * The fields of a `run_started` payload; every `run_started` payload holds each one, and
+ * `tool_modules` too when the run's agents grant a tool module.
+ */
 const RUN_STARTED_FIELDS = [
   "flow_fingerprint",
   "start_wiring_override",
@@ -2692,11 +2767,14 @@ const RECORD_CODECS: readonly RecordCodec[] = [
       skills: record.skills,
       tools: record.tools,
       tool_groups: Object.fromEntries(Object.entries(record.toolGroups).map(([name, members]) => [name, [...members]])),
+      // Left out when empty, so a run without tool modules records what it did before them.
+      ...(Object.keys(record.toolModules).length === 0 ? {} : { tool_modules: toolModulesPayload(record.toolModules) }),
       yian_version: record.yianVersion,
       parent: record.parent === null ? null : { run_id: record.parent.runId, node: record.parent.node },
     }),
     decode: (payload, label) => {
-      requireFields(payload, RUN_STARTED_FIELDS, label);
+      const modules = Object.hasOwn(payload, "tool_modules");
+      requireFields(payload, modules ? [...RUN_STARTED_FIELDS, "tool_modules"] : RUN_STARTED_FIELDS, label);
       // The record's constructor checks the fields cast here (the pool, the agents' configs, the
       // defaults and the call-time agents), so a bad value is named by its entry.
       return new RunStartedRecord({
@@ -2711,13 +2789,9 @@ const RECORD_CODECS: readonly RecordCodec[] = [
         callTimeLlm: payload["call_time_llm"] as JsonObject | null,
         flow: payload["flow"] === null ? null : flowFromPayload(payload["flow"], `${label} flow`),
         skills: wireEntries<RecordedSkill>(payload["skills"], `${label} skills`, ["description", "instructions"]),
-        tools: wireEntries<RecordedTool>(payload["tools"], `${label} tools`, [
-          "name",
-          "description",
-          "parameters",
-          "resumable",
-        ]),
+        tools: wireEntries<RecordedTool>(payload["tools"], `${label} tools`, RECORDED_TOOL_FIELDS),
         toolGroups: wireObject(payload["tool_groups"], `${label} tool_groups`) as Record<string, string[]>,
+        toolModules: modules ? toolModulesFromPayload(payload["tool_modules"], `${label} tool_modules`) : {},
         yianVersion: requireText(payload["yian_version"], `${label} yian_version`),
         parent: payload["parent"] === null ? null : parentFromPayload(payload["parent"], `${label} parent`),
       });

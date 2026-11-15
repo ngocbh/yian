@@ -196,7 +196,9 @@ test("a stop while a module imports refuses the run and ends the threads that st
   const text = app({ crm: "./crm.ts", slow: "./slow.ts" }, ["a: {kind: agent, prompt: go, tools: [crm, slow]}"]);
   const stop = new AbortController();
   const stopped = run(text, { signal: stop.signal });
-  for (let tries = 0; tries < 250 && !existsSync(join(dir, "slow.beat")); tries++) await sleep(20);
+  // Both threads must be importing before the stop; under load one may start well after the other.
+  const importing = () => ["crm", "slow"].every((name) => existsSync(join(dir, `${name}.beat`)));
+  for (let tries = 0; tries < 250 && !importing(); tries++) await sleep(20);
   stop.abort(new Error("stopped"));
   await expect(stopped).rejects.toThrow("stopped");
   expect([await ended("crm"), await ended("slow")]).toEqual([true, true]);

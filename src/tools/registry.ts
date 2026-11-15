@@ -39,7 +39,7 @@ import {
 import { ASK, ASK_USER, isPending, SLEEP, TAKE, ToolContext, toolCallId } from "./context.ts";
 import { isToolCheckError, ToolCheckError, toolErrorKinds } from "./errors.ts";
 import { FunctionTool, isFunctionTool, type StandardIssue, type StandardResult } from "./function_tools.ts";
-import { GrantError, type GrantScope, localGroupScope, localToolScope, visibleToolName } from "./grants.ts";
+import { GrantError, type GrantScope, type NodeScope, nodeScope, visibleToolName } from "./grants.ts";
 import { isMcpServer, type McpServer } from "./mcp.ts";
 import { inputTypeFromJsonSchema } from "./types.ts";
 
@@ -559,20 +559,13 @@ export class ToolSet {
   private hostContext: unknown;
   // The full schemas the trusted path checks the ask tools against; any other tool uses its own.
   private trustedSchemas: ReadonlyMap<string, JsonObject>;
-  // Groups local to one node (`withLocalGroups`), tried before the run's, and their scope's label.
-  private localGroups: ReadonlyMap<string, ReadonlyMap<string, FunctionTool>>;
-  private localLabel: string;
-  // Top-level tools local to one node (`withLocalTools`), tried before the run's, and their label.
-  private localTools: ReadonlyMap<string, FunctionTool>;
-  private localToolsLabel: string;
+  // One node's own tools (`withNodeScope`), tried before the run's; `null` when it has none.
+  private ownTools: NodeScope<FunctionTool> | null;
 
   constructor(tools?: Readonly<Record<string, ToolEntry>> | null, options?: { context?: unknown }) {
     this.toolMap = null;
     this.groupMap = new Map();
-    this.localGroups = new Map();
-    this.localLabel = "";
-    this.localTools = new Map();
-    this.localToolsLabel = "";
+    this.ownTools = null;
     this.recordNames = new Map();
     this.boundRunId = "";
     this.boundSignal = undefined;
@@ -687,11 +680,11 @@ export class ToolSet {
    */
   private lookup(ref: string | ToolRef): FunctionTool {
     if (typeof ref !== "string" && ref.group !== null) {
-      const local = this.localGroups.get(ref.group);
-      if (local !== undefined) {
-        const tool = local.get(ref.name);
+      const nodeGroup = this.ownTools?.groups.get(ref.group);
+      if (nodeGroup !== undefined) {
+        const tool = nodeGroup.find((each) => each.name === ref.name);
         if (tool !== undefined) return tool;
-        const has = local.size === 0 ? "no tools" : [...local.keys()].join(", ");
+        const has = nodeGroup.length === 0 ? "no tools" : nodeGroup.map((each) => each.name).join(", ");
         throw new YianRangeError(`\`${ref.group}\` has no tool \`${ref.name}\`; it has ${has}`);
       }
       const members = this.groupMap.get(ref.group);
@@ -707,8 +700,8 @@ export class ToolSet {
       return tool;
     }
     const toolId = typeof ref === "string" ? ref : ref.name;
-    const local = this.localTools.get(toolId);
-    if (local !== undefined) return local;
+    const nodeTool = this.ownTools?.tools.find((each) => each.name === toolId);
+    if (nodeTool !== undefined) return nodeTool;
     if ((toolId === ASK || toolId === ASK_USER) && !this.toolMap?.has(toolId)) {
       throw new YianRangeError(`no ask handler for this run; ${ASK_HINT}`);
     }
@@ -787,62 +780,41 @@ export class ToolSet {
   }
 
   /**
-   * The scopes this set's grants resolve in, in order: the groups `withLocalGroups` added and the
-   * tools `withLocalTools` added, each when there are any, then `scope()`.
+   * The scopes this set's grants resolve in, in order: its node scope (`withNodeScope`) when it has
+   * one, then `scope()`.
    */
   scopes(): GrantScope[] {
-    const scopes: GrantScope[] = [];
-    if (this.localGroups.size > 0) {
-      const names = new Map([...this.localGroups].map(([group, members]) => [group, [...members.keys()]]));
-      scopes.push(localGroupScope(this.localLabel, names));
-    }
-    if (this.localTools.size > 0) scopes.push(localToolScope(this.localToolsLabel, new Set(this.localTools.keys())));
-    return [...scopes, this.scope()];
+    return this.ownTools === null ? [this.scope()] : [nodeScope(this.ownTools), this.scope()];
   }
 
   /**
-   * @internal Return a copy that also holds `tools`, top-level tools local to one node such as
-   * the flows it grants. A bare name of one resolves to it before any tool of this set, and
-   * `scopes()` tries them after the local groups. The copy keeps this set's run, signal, context,
-   * tools and local groups.
+   * @internal Return a copy that also holds one node's own tools (`NodeScope`), such as its
+   * memories' groups and the flows it grants, in place of any this set held. A ref `{group, name}`
+   * to a group of them, and a bare name of a top-level one, resolve to it before any tool of this
+   * set; a bare name never reaches a group's tool. `scopes()` tries them first. The copy keeps this
+   * set's run, signal, context and tools.
    *
-   * @param label What the local tools are, for messages: `this node's flows`.
-   * @throws {RangeError} Two of `tools` share a name.
+   * @throws {RangeError} A group holds two tools of one name, two top-level tools share a name, or a
+   *   name is both a group and a top-level tool.
    */
-  withLocalTools(tools: readonly FunctionTool[], label: string): this {
-    const local = new Map<string, FunctionTool>();
-    for (const tool of tools) {
-      if (local.has(tool.name)) throw new YianRangeError(`local tools hold ${reprText(tool.name)} twice`);
-      local.set(tool.name, tool);
-    }
-    const copy = Object.assign(Object.create(Object.getPrototypeOf(this)), this) as this;
-    copy.localTools = local;
-    copy.localToolsLabel = label;
-    return copy;
-  }
-
-  /**
-   * @internal Return a copy that also holds `groups`, tools local to one node such as its
-   * memories, each group's tools in order. A ref `{group, name}` to one of them resolves to it,
-   * before any group of this set by that name, and `scopes()` tries them first; a bare name never
-   * reaches them. The copy keeps this set's run, signal, context and tools.
-   *
-   * @param label What the local groups are, for messages: `this node's memories`.
-   * @throws {RangeError} A group holds two tools with one name.
-   */
-  withLocalGroups(groups: ReadonlyMap<string, readonly FunctionTool[]>, label: string): this {
-    const local = new Map<string, ReadonlyMap<string, FunctionTool>>();
-    for (const [group, tools] of groups) {
-      const members = new Map<string, FunctionTool>();
-      for (const tool of tools) {
-        if (members.has(tool.name)) throw new YianRangeError(`local group ${reprText(group)} holds ${reprText(tool.name)} twice`);
-        members.set(tool.name, tool);
+  withNodeScope(scope: NodeScope<FunctionTool>): this {
+    const groups = new Map<string, readonly FunctionTool[]>();
+    for (const [group, tools] of scope.groups) {
+      const names = new Set<string>();
+      for (const { name } of tools) {
+        if (names.has(name)) throw new YianRangeError(`this node's group ${reprText(group)} holds ${reprText(name)} twice`);
+        names.add(name);
       }
-      local.set(group, members);
+      groups.set(group, [...tools]);
+    }
+    const names = new Set<string>();
+    for (const { name } of scope.tools) {
+      if (names.has(name)) throw new YianRangeError(`this node's tools hold ${reprText(name)} twice`);
+      if (groups.has(name)) throw new YianRangeError(`this node holds ${reprText(name)} as a group and a tool`);
+      names.add(name);
     }
     const copy = Object.assign(Object.create(Object.getPrototypeOf(this)), this) as this;
-    copy.localGroups = local;
-    copy.localLabel = label;
+    copy.ownTools = groups.size === 0 && names.size === 0 ? null : { groups, tools: [...scope.tools] };
     return copy;
   }
 

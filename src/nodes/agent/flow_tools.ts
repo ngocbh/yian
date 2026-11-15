@@ -17,9 +17,6 @@ import type { JsonObject } from "../../typesys/json.ts";
 import { cutText, isRecord } from "../../typesys/values.ts";
 import { toolText } from "./results.ts";
 
-/** What the local scope of an agent's flow tools is called in messages. */
-export const FLOW_SCOPE_LABEL = "this node's flows";
-
 /** The brand a flow call's marker carries. */
 const FLOW_CALL: unique symbol = Symbol("yian.flowCall") as never;
 

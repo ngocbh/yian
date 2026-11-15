@@ -40,7 +40,7 @@ import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import type { RecordedMemoryTool } from "../typesys/memory.ts";
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
-import type { MemoryGrant, ToolGrant } from "../tools/grants.ts";
+import type { MemoryGrant, NodeScope, ToolGrant } from "../tools/grants.ts";
 import type { ToolSet } from "../tools/registry.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import type { VariablePool } from "../typesys/pool.ts";
@@ -401,15 +401,13 @@ export interface RebuildCaps {
   /**
    * The request's tool list as the run bound it: the specs of the tools `grants` grant, each under
    * the name the model saw, then `loadSkill` when given; `null` when a grant can't be resolved.
-   * A grant resolves first in `local`, groups of the node's own (its memories) with their tools'
-   * specs in order, then in `localTools`, top-level tools of its own (the flows it grants), then
-   * in the tools the run recorded, as the live loop resolves it.
+   * A grant resolves first in `own`, the node scope as specs (its memories' groups, the flows it
+   * grants), then in the tools the run recorded, as the live loop resolves it.
    */
   readonly toolSpecs: (
     grants: readonly ToolGrant[],
     loadSkill: ToolSpec | null,
-    local?: ReadonlyMap<string, readonly LocalToolSpec[]>,
-    localTools?: readonly LocalToolSpec[],
+    own?: NodeScope<LocalToolSpec>,
   ) => readonly ToolSpec[] | null;
   /**
    * Gives the invocation's structured target (`ModelAccess.structuredTarget`), or builds its model
@@ -617,8 +615,8 @@ export class AssertionStageError extends Error {
 }
 
 /**
- * @internal A tool of a node's own group as a rebuilt request lists it: a recorded memory tool's
- * spec.
+ * @internal A tool of a node's scope as a rebuilt request lists it: a recorded memory tool's spec,
+ * or a granted flow's.
  */
 export type LocalToolSpec = Omit<RecordedMemoryTool, "write">;
 

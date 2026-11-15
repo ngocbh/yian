@@ -30,7 +30,7 @@ import { structuredTarget } from "../../llm/structured.ts";
 import { checkSkillName, type Skill, SkillError } from "../../skills/catalog.ts";
 import { LOAD_SKILL, loadSkillTool, systemPromptWithSkills } from "../../skills/tool.ts";
 import { renderRecall } from "../../memory/render.ts";
-import { grantedMemorySpecs, MEMORY_SCOPE_LABEL, memoryTools } from "../../memory/tools.ts";
+import { grantedMemorySpecs, memoryTools } from "../../memory/tools.ts";
 import type { FunctionTool } from "../../tools/function_tools.ts";
 import { asToolGrant, type MemoryGrant, type ToolGrant, visibleToolName } from "../../tools/grants.ts";
 import { ToolSet } from "../../tools/registry.ts";
@@ -89,7 +89,7 @@ import {
 } from "../contracts.ts";
 import { staticPathOf } from "../ids.ts";
 import { type AgentRunContext, checkStopped, DEFAULT_SYSTEM, sentCredentials } from "./context.ts";
-import { checkedFlowTools, FLOW_SCOPE_LABEL, type FlowTool, flowResultText, flowToolFunctions } from "./flow_tools.ts";
+import { checkedFlowTools, type FlowTool, flowResultText, flowToolFunctions } from "./flow_tools.ts";
 import { Interrupted } from "./interrupts.ts";
 import { modelFailureCode } from "./live.ts";
 import {
@@ -918,8 +918,8 @@ export class AgentNode extends Node {
   /**
    * Return the grants one invocation's model is given and the tool set they resolve in: every
    * authored grant in its order, but none of a memory left out (an Optional one, null), and the
-   * run's tools with each bound memory's granted tools as a local group over its run session, and
-   * the granted flows as local tools.
+   * run's tools with this node's own as its node scope: each bound memory's granted tools as a
+   * group over its run session, and the granted flows as top-level tools.
    *
    * @throws CapabilityFault carrying the error when a memory is bound but the evaluator gave no
    *   memory sessions, or none on that memory.
@@ -936,9 +936,8 @@ export class AgentNode extends Node {
       groups.set(input, memoryTools(value, session, { input, tools: this.grantedMemoryTools(input) }, author));
     }
     let toolset = caps.tools ?? null;
-    if (groups.size > 0) toolset = (toolset ?? new ToolSet()).withLocalGroups(groups, MEMORY_SCOPE_LABEL);
-    if (this.flowTools.length > 0) {
-      toolset = (toolset ?? new ToolSet()).withLocalTools(flowToolFunctions(this.flowTools), FLOW_SCOPE_LABEL);
+    if (groups.size > 0 || this.flowTools.length > 0) {
+      toolset = (toolset ?? new ToolSet()).withNodeScope({ groups, tools: flowToolFunctions(this.flowTools) });
     }
     return { tools, toolset };
   }
@@ -1246,13 +1245,14 @@ export class AgentNode extends Node {
       return { ...none, digestOk: false };
     }
     const system = new ModelMessage({ role: "system", parts: [new TextPart(rendered.systemPrompt)] });
-    // The memories' tools as the live loop built them, from the values the run recorded.
+    // This node's own tools as the live loop built them: its memories' from the values the run
+    // recorded, and the flows it grants.
     const { tools: grants, memories } = this.memoryPlan(inputs);
-    const local = new Map(
+    const groups = new Map(
       [...memories].map(([input, value]) => [input, grantedMemorySpecs(value, { input, tools: this.grantedMemoryTools(input) })]),
     );
     const flows = this.flowTools.map(({ name, description, parameters }) => ({ name, description, parameters }));
-    const tools = caps.toolSpecs(grants, rendered.skills.length > 0 ? loadSkillTool() : null, local, flows);
+    const tools = caps.toolSpecs(grants, rendered.skills.length > 0 ? loadSkillTool() : null, { groups, tools: flows });
     const contract = this.outputContract;
     const structured = async () => {
       const models = caps.models;

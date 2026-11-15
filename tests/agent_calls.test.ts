@@ -970,3 +970,27 @@ test("an agent with a flow tool: its request lists the flow, and the flow's answ
   expect(second.digestMismatch).toBe(false);
   expect(requestOf(second)).toMatchObject(sentView(model.requests[1]!));
 });
+
+test("an agent granting a memory and a flow: both are its node scope, live and in the rebuilt requests", async () => {
+  const folder = mkdtempSync(join(root, "memory-"));
+  writeFileSync(join(folder, "b.md"), "B.");
+  const lessons = new FileMemory({ root: folder, id: "t/lessons" });
+  const flow = FLOW_TOOL.replace("defs:", "input:\n  lessons: !FileMemory\ndefs:")
+    .replace("    tools: [shout, lookup]", "    input:\n      lessons: ${input.lessons}\n    tools: [shout, {lessons: [read]}, lookup]");
+  const model = new ScriptedModel(
+    [callReply(["lessons_read", { path: "b.md" }, "call-1"]), callReply(["shout", { text: "hey" }, "call-2"]), textReply("done")],
+    { provider: "anthropic", model: "claude-test" },
+  );
+  const { log, result } = await run(flow, model, { lessons }, { tools: { lookup: topicTool("lookup") } });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const calls = agentCalls(log);
+  expect(calls).toHaveLength(3);
+  for (const [index, { n }] of calls.entries()) {
+    const view = await agentCall(log, { nodeId: "helper", n }, { env: NO_ENV });
+    expect(view.digestMismatch).toBe(false);
+    expect(requestOf(view).tools.map((tool) => tool.name)).toEqual(["shout", "lessons_read", "lookup"]);
+    expect(requestOf(view)).toMatchObject(sentView(model.requests[index]!));
+  }
+  const second = await agentCall(log, { nodeId: "helper", n: calls[1]!.n }, { env: NO_ENV });
+  expect(second.toolResults.map(({ name, output }) => [name, output])).toEqual([["shout", "hey!"]]);
+});

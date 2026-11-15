@@ -21,7 +21,7 @@
 
 import { current } from "../../defaults.ts";
 import { type FailureCode, reprText } from "../../diagnostics.ts";
-import { MEMORY_SCOPE_LABEL, memoryTools } from "../../memory/tools.ts";
+import { memoryTools } from "../../memory/tools.ts";
 import { realScheduler } from "../../platform.ts";
 import { ASK, BUILTIN_TOOL_IDS, type BuiltinToolId, isPending, SLEEP, TAKE, toolCallId } from "../../tools/context.ts";
 import { isPermanentToolError, isToolCheckError, isTransientToolError, ToolCheckError } from "../../tools/errors.ts";
@@ -449,8 +449,9 @@ export class ToolNode extends Node {
   }
 
   /**
-   * Return `tools` with the memory tool this node calls as a local group, over the run's session on
-   * the memory its input is bound to, so `toolRef` reaches it and never a run group by that name.
+   * Return `tools` with the memory tool this node calls as a group of its node scope, over the run's
+   * session on the memory its input is bound to, so `toolRef` reaches it and never a run group by
+   * that name.
    *
    * @throws CapabilityFault carrying the error when the evaluator gave no memory sessions, or none
    *   on that memory.
@@ -463,7 +464,7 @@ export class ToolNode extends Node {
     if (!MemoryRef.isMemoryRef(value)) throw new YianTypeError(`TOOL node ${reprText(this.id)}: \`${input}\` holds no memory`);
     const session = memorySession(caps, value.identity);
     const local = memoryTools(value, session, grant!, { kind: "tool", name: staticPathOf(this.id) });
-    return tools.withLocalGroups(new Map([[input, local]]), MEMORY_SCOPE_LABEL);
+    return tools.withNodeScope({ groups: new Map([[input, local]]), tools: [] });
   }
 
   /** Return the inputs a memory tool takes: the bound record without its reserved memory key. */

@@ -23,9 +23,6 @@ import type { RecordedMemoryTool } from "../typesys/memory.ts";
 import { fromHost, type MemoryRef, writeAsText } from "../typesys/values.ts";
 import { type Applied, type Author, memoryErrorKind, type MemorySession } from "./base.ts";
 
-/** @internal What a node's memory tools are, as a grant scope's messages name them. */
-export const MEMORY_SCOPE_LABEL = "this node's memories";
-
 /**
  * @internal Return a FunctionTool per tool `grant` grants of the memory `value`, in the value's
  * spec order, each over `session` and built from its recorded spec.

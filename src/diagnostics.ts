@@ -468,6 +468,8 @@ const CODES = [
   "tool.timeout",
   "agent.interrupted",
   "agent.output_truncated",
+  "tool.module_exited",
+  "tool.module_restart",
 ] as const;
 
 /**

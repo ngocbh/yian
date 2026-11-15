@@ -40,6 +40,7 @@ import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import type { RecordedMemoryTool } from "../typesys/memory.ts";
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
+import { toolModuleCode } from "../tools/errors.ts";
 import type { MemoryGrant, NodeScope, ToolGrant } from "../tools/grants.ts";
 import type { ToolModuleRef } from "../tools/modules.ts";
 import type { ToolSet } from "../tools/registry.ts";
@@ -1043,12 +1044,14 @@ export abstract class Node {
 
   /**
    * Return the failure code for one node-body error. The base returns `contract.output` for a
-   * `HostOutputError` and `node.execute` otherwise; a kind with a finer source-neutral
-   * classification overrides this and falls back to `super` for a `HostOutputError`.
+   * `HostOutputError`, the code of the first `ToolModuleError` on the error's chain of causes (a
+   * tool module's thread failed a call, perhaps under TOOL retries or a failed result check), and
+   * `node.execute` otherwise; a kind with a finer source-neutral classification overrides this and
+   * falls back to `super` for a `HostOutputError`.
    */
   exceptionCode(error: unknown): FailureCode {
     if (error instanceof HostOutputError) return "contract.output";
-    return "node.execute";
+    return toolModuleCode(error) ?? "node.execute";
   }
 
   /**

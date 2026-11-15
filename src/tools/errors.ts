@@ -1,5 +1,6 @@
 /**
- * Errors a host tool throws to report a failure or steer retries, and yian's own check error.
+ * Errors a host tool throws to report a failure or steer retries, yian's own check error, and the
+ * error a call fails with when its tool module's thread does.
  *
  * A tool throws `ReportedToolError` for a failure an AGENT's model should read and act on; in a
  * TOOL node it fails the node like any other error. A TOOL node with `retries:` retries a failed
@@ -12,6 +13,7 @@
  * stop retries, since a retried call repeats any side effect the failed attempt already had.
  */
 
+import type { FailureCode } from "../diagnostics.ts";
 import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { jsTypeName } from "../typesys/values.ts";
 
@@ -125,6 +127,45 @@ export class TransientToolError extends Error {
 export class ToolCheckError extends YianTypeError {
   override name = "ToolCheckError";
   readonly [TOOL_ERROR]: readonly ToolErrorKind[] = CHECK;
+}
+
+/** The failure codes a tool module's thread gives the calls it fails. */
+export type ToolModuleCode = Extract<FailureCode, "tool.module_exited" | "tool.module_restart">;
+
+/**
+ * @internal A call of a tool module's tool failed with the module's thread: the thread exited
+ * under it (`tool.module_exited`), reported so an AGENT's model reads it, since one thread serves
+ * many nodes, and permanent, since a retry could repeat what the call did; or after an exit a
+ * fresh thread couldn't take over (`tool.module_restart`), permanent. A node that fails with it,
+ * or with an error it caused, fails with its `code`.
+ */
+export class ToolModuleError extends Error {
+  override name = "ToolModuleError";
+  readonly [TOOL_ERROR]: readonly ToolErrorKind[];
+  readonly code: ToolModuleCode;
+
+  constructor(code: ToolModuleCode, message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.code = code;
+    this[TOOL_ERROR] = code === "tool.module_exited" ? REPORTED_PERMANENT : PERMANENT;
+  }
+}
+
+/**
+ * Return the code of the first `ToolModuleError` on `error`'s chain of causes, `error` first, or
+ * `null` when there is none. Never throws, and stops at a cause seen before.
+ */
+export function toolModuleCode(error: unknown): ToolModuleCode | null {
+  const seen = new Set<unknown>();
+  try {
+    for (let at = error; typeof at === "object" && at !== null && !seen.has(at); at = (at as Error).cause) {
+      if (at instanceof ToolModuleError) return at.code;
+      seen.add(at);
+    }
+  } catch {
+    // A hostile cause (a throwing getter or proxy trap) ends the chain.
+  }
+  return null;
 }
 
 /**

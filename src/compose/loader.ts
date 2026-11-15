@@ -16,8 +16,7 @@
  * the scope's memo. A recursive or mutually recursive def is refused. The loader derives the
  * callable's signature and bakes its compiled flow onto the built `CallNode` so `run` drives the
  * embedded child. A `uses:` ref to a `.ts`, `.js` or `.mjs` file is a tool module instead, read
- * before any scheme and checked on disk as a CODE reference is, never imported; outside
- * `withUnfinishedToolModules` every one is refused.
+ * before any scheme and checked on disk as a CODE reference is, never imported.
  *
  * Source resolution follows two cache boundaries. A physical-file cache entry is canonical and
  * complete. `CallableScope` validates it, copies and rebases its compiled origins once per lexical
@@ -435,17 +434,6 @@ async function newLoadCtx(
 // it, so a custom `childResolver` that calls `loadFlow` is bounded too. Each import runs in its
 // own store (`run`, never `enterWith`), so concurrent loads keep separate counts.
 const ACTIVE_IMPORTS = new AsyncLocalStorage<number>();
-
-// Set only inside `withUnfinishedToolModules`, which no package entry exports.
-const UNFINISHED_TOOL_MODULES = new AsyncLocalStorage<true>();
-
-/**
- * @internal Run `fn` with tool module refs allowed in `uses:`. Outside it, a load refuses every one:
- * modules can't run yet, and a load from a run's record (a resume, `advance`) is a load too.
- */
-export function withUnfinishedToolModules<T>(fn: () => T): T {
-  return UNFINISHED_TOOL_MODULES.run(true, fn);
-}
 
 /**
  * Return the real path of the tool module file at `path`, resolved against `dir`. It must resolve
@@ -2115,8 +2103,7 @@ export class CallableScope implements AssemblyScope {
    * `system: paths`, as a CODE reference's does.
    *
    * @throws LoadError when the ref has a version, names a default export or a name that isn't an
-   *   identifier, isn't relative, the alias is a name yian reserves, tool modules aren't allowed
-   *   yet (outside `withUnfinishedToolModules`), or as `moduleFile` throws.
+   *   identifier, isn't relative, the alias is a name yian reserves, or as `moduleFile` throws.
    */
   async #resolveModule(alias: string, authored: string, parts: ModuleRefParts): Promise<ToolModuleRef> {
     const fail = (problem: string) => this.#diagnostics.error(`uses: alias ${reprText(alias)}: ${problem}`);
@@ -2133,7 +2120,6 @@ export class CallableScope implements AssemblyScope {
       throw fail(`a tool module ref is a relative path: write \`./${shown}\``);
     }
     if (RESERVED_TOOL_NAMES.has(alias)) throw fail(`\`${alias}\` is a name yian reserves; rename the alias`);
-    if (UNFINISHED_TOOL_MODULES.getStore() !== true) throw fail("tool modules aren't supported yet");
     const real = await moduleFile(this.#baseDir ?? process.cwd(), path, this.#codeRoot, fail);
     return Object.freeze({ alias, ref: authored, path: real });
   }

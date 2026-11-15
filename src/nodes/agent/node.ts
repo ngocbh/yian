@@ -33,7 +33,7 @@ import { renderRecall } from "../../memory/render.ts";
 import { grantedMemorySpecs, memoryTools } from "../../memory/tools.ts";
 import type { FunctionTool } from "../../tools/function_tools.ts";
 import { asToolGrant, type MemoryGrant, type ToolGrant, visibleToolName } from "../../tools/grants.ts";
-import { checkedToolModule, type ToolModuleRef } from "../../tools/modules.ts";
+import { checkedToolModule, moduleScope, type ToolModuleRef } from "../../tools/modules.ts";
 import { ToolSet } from "../../tools/registry.ts";
 import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import { type JsonObject, logJson } from "../../typesys/json.ts";
@@ -777,6 +777,12 @@ export class AgentNode extends Node {
     return new Set(this.flowTools.map(({ name, library }) => library?.alias ?? name));
   }
 
+  /** Return the authored grants of tool modules, by alias. */
+  override moduleGrants(): readonly ToolGrant[] {
+    const aliases = new Set(this.moduleTools.map(({ alias }) => alias));
+    return this.tools.filter((grant) => aliases.has(grantName(grant)));
+  }
+
   /** Return the tool modules this agent grants, in grant order. */
   override toolModules(): readonly ToolModuleRef[] {
     return this.moduleTools;
@@ -963,11 +969,12 @@ export class AgentNode extends Node {
    * Return the grants one invocation's model is given and the tool set they resolve in: every
    * authored grant in its order, but none of a memory left out (an Optional one, null), and the
    * run's tools with this node's own as its node scope: each bound memory's granted tools as a
-   * group over its run session, each granted library's defs as a group, and the other granted
-   * flows as top-level tools.
+   * group over its run session, each granted library's defs as a group, the other granted flows
+   * as top-level tools, and each granted tool module's tools (`moduleScope`).
    *
    * @throws CapabilityFault carrying the error when a memory is bound but the evaluator gave no
    *   memory sessions, or none on that memory.
+   * @throws RangeError when a granted tool module wasn't started for the run.
    */
   private invocationTools(
     inputs: Readonly<Record<string, unknown>>,
@@ -981,9 +988,15 @@ export class AgentNode extends Node {
       groups.set(input, memoryTools(value, session, { input, tools: this.grantedMemoryTools(input) }, author));
     }
     let toolset = caps.tools ?? null;
-    if (groups.size > 0 || this.flowTools.length > 0) {
+    if (groups.size > 0 || this.flowTools.length > 0 || this.moduleTools.length > 0) {
+      const run = toolset ?? new ToolSet();
       const flows = flowToolScope(this.flowTools, flowToolFunction);
-      toolset = (toolset ?? new ToolSet()).withNodeScope({ groups: new Map([...groups, ...flows.groups]), tools: flows.tools });
+      const modules = moduleScope(this.moduleTools, run);
+      toolset = run.withNodeScope({
+        groups: new Map([...groups, ...flows.groups, ...modules.groups]),
+        tools: [...flows.tools, ...modules.tools],
+        identities: modules.identities,
+      });
     }
     return { tools, toolset };
   }

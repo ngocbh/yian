@@ -197,6 +197,7 @@ import {
   type ToolGrant,
   visibleToolName,
 } from "./tools/grants.ts";
+import { moduleScope } from "./tools/modules.ts";
 import { type AskRequest, RESERVED_TOOL_NAMES, type ToolEntry, type ToolRef, ToolSet } from "./tools/registry.ts";
 import { toolTypes } from "./tools/types.ts";
 import { YianRangeError, YianTypeError } from "./typesys/errors.ts";
@@ -3210,13 +3211,13 @@ function* streamedEnvelopes(log: string, maxLineBytes: number | null): Generator
 /**
  * Prove every static AGENT grant and TOOL `tool_id` names a tool this run supplies.
  *
- * An AGENT's grants expand as its request will, its own flows first: a group gives its tools, a
- * group grant the tools it lists, and a bare name a top-level tool or the one group tool by that
- * name. So a flow or library def that would show under a granted host tool's name is refused. A
- * TOOL node names one tool, bare or as `{group: tool}`. `take` and `sleep` TOOL nodes need no
- * tool: the engine runs them. Every static node is checked, including nodes that may never run, so
- * an unresolvable id rejects the run before any record is written instead of failing its node when
- * the node starts.
+ * An AGENT's grants expand as its request will, its own flows and tool modules first: a group
+ * gives its tools, a group grant the tools it lists, and a bare name a top-level tool or the one
+ * group tool by that name. So a flow, library def or module tool that would show under a granted
+ * host tool's name is refused. A TOOL node names one tool, bare or as `{group: tool}`, a module's
+ * tool among its own. `take` and `sleep` TOOL nodes need no tool: the engine runs them. Every
+ * static node is checked, including nodes that may never run, so an unresolvable id rejects the
+ * run before any record is written instead of failing its node when the node starts.
  *
  * @throws RangeError when an AGENT grants a built-in (`take`, `sleep`, `ask`), a tool or group
  *   this run lacks, a tool of two groups by its bare name, a tool its group lacks, two tools that
@@ -3246,11 +3247,10 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
         throw new YianRangeError(`AGENT node ${reprText(nodeId)} grants 'ask_user': ${error.message}`);
       }
     }
-    const flows = node.flowGrants();
-    const own = flows.scope.groups.size === 0 && flows.scope.tools.length === 0 ? [] : [nodeScope(flows.scope)];
+    const own = ownGrants(node, tools);
     try {
       // A provider refuses a name it can't call only at the first request; refuse it here.
-      checkVisibleNames(expandGrants([...grants, ...flows.grants], [...own, ...tools.scopes()]));
+      checkVisibleNames(expandGrants([...grants, ...own.grants], [...own.scopes, ...tools.scopes()]));
     } catch (error) {
       if (!(error instanceof GrantError)) throw error;
       // A grant naming another flow's memory input is a host grant here.
@@ -3261,7 +3261,7 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
     const call = node.hostToolCall();
     if (call === null || (call.group === null && isEngineBuiltin(call.toolId))) continue;
     try {
-      tools.resolve([callRef(call)]);
+      callTools(call, tools).resolve([callRef(call)]);
     } catch (error) {
       if (!(error instanceof RangeError)) throw error;
       let reason: string;
@@ -3300,10 +3300,10 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
 }
 
 /**
- * Refuse a memory grant this run's host tools clash with, before any record is written: one whose
+ * Refuse a memory grant this run's tools clash with, before any record is written: one whose
  * memory input is also a host tool or tool group of the run, and one whose tool would show to a
- * model under the name of a host tool the same node grants. Every static node is checked, child
- * flows' included, each against its own flow's inputs.
+ * model under the name of a host tool, flow or module tool the same node grants. Every static
+ * node is checked, child flows' included, each against its own flow's inputs.
  *
  * @param hostTypes The tool names of the host memory types the flow was loaded with, by type.
  * @throws RangeError naming the node, the input and the fix.
@@ -3319,7 +3319,12 @@ function checkMemoryGrantNames(
     const grants = node.memoryGrants();
     if (grants.length === 0) continue;
     const where = `${node.kind.toUpperCase()} node ${reprText(nodeId)}`;
-    const hostNames = new Set(expandGrants(node.grantedTools(), tools.scopes()).map((tool) => tool.visible));
+    const own = ownGrants(node, tools);
+    const granted = expandGrants([...node.grantedTools(), ...own.grants], [...own.scopes, ...tools.scopes()]);
+    // What each other granted tool is, by the name it shows: the node's own, or the run's.
+    const shown = new Map(
+      granted.map((tool) => [tool.visible, tool.scope < own.scopes.length ? "another tool" : "a host tool"]),
+    );
     for (const { input, tools: listed } of grants) {
       const host = scope.group(input) !== null ? "a tool group" : scope.hasTool(input) ? "a tool" : null;
       if (host !== null) {
@@ -3327,12 +3332,13 @@ function checkMemoryGrantNames(
       }
       const typ = inputs.get(input);
       const names = listed ?? (isMemoryType(typ) ? memoryToolNames(typ, table) : null) ?? [];
-      const shown = listed === null ? input : `{${input}: [${listed.join(", ")}]}`;
+      const grant = listed === null ? input : `{${input}: [${listed.join(", ")}]}`;
       for (const name of names) {
         const visible = visibleToolName(input, name);
-        if (!hostNames.has(visible)) continue;
+        const other = shown.get(visible);
+        if (other === undefined) continue;
         throw new YianRangeError(
-          `${where}: the memory tool \`${visible}\` of \`${shown}\` has the name of a host tool it grants; rename one`,
+          `${where}: the memory tool \`${visible}\` of \`${grant}\` has the name of ${other} it grants; rename one`,
         );
       }
     }
@@ -3340,25 +3346,28 @@ function checkMemoryGrantNames(
 }
 
 /**
- * Refuse a flow or library an agent grants under the name of a host tool or tool group of the run,
- * before any record is written: the grant would mean two tools. Every static node is checked,
- * child flows' included.
+ * Refuse a flow, library or tool module a node grants or calls under the name of a host tool or
+ * tool group of the run, before any record is written: the name would mean two tools. Every
+ * static node is checked, child flows' included.
  *
- * @throws RangeError naming the node, the flow or library, and the fix.
+ * @throws RangeError naming the node, the flow, library or module, and the fix.
  */
 function checkFlowGrantNames(flow: CompiledFlow, tools: ToolSet): void {
   const scope = tools.scope();
   for (const [nodeId, node] of staticNodes(flow)) {
     const own = node.flowGrants().scope;
+    // A TOOL node calls the module its `tool_id:` names; an AGENT grants its modules.
+    const module = node.hostToolCall() === null ? "a tool module it grants" : "a tool module it calls";
     const names: [string, string][] = [
-      ...[...own.groups.keys()].map((name): [string, string] => [name, "a library"]),
-      ...own.tools.map(({ name }): [string, string] => [name, "a flow"]),
+      ...[...own.groups.keys()].map((name): [string, string] => [name, "a library it grants"]),
+      ...own.tools.map(({ name }): [string, string] => [name, "a flow it grants"]),
+      ...node.toolModules().map(({ alias }): [string, string] => [alias, module]),
     ];
     for (const [name, what] of names) {
       const host = scope.group(name) !== null ? "a tool group" : scope.hasTool(name) ? "a tool" : null;
       if (host === null) continue;
       throw new YianRangeError(
-        `${node.kind.toUpperCase()} node ${reprText(nodeId)}: \`${name}\` is both ${what} it grants and ${host} of this run; rename one`,
+        `${node.kind.toUpperCase()} node ${reprText(nodeId)}: \`${name}\` is both ${what} and ${host} of this run; rename one`,
       );
     }
   }
@@ -3388,6 +3397,30 @@ function isEngineBuiltin(toolId: string): boolean {
 /** Return the tool a TOOL node's call names: its bare id, or its group's tool. */
 function callRef(call: HostToolCall): string | ToolRef {
   return call.group === null ? call.toolId : { group: call.group, name: call.toolId };
+}
+
+/** Return the tools a TOOL node's call resolves in: the run's, with its module's as its node scope. */
+function callTools(call: HostToolCall, tools: ToolSet): ToolSet {
+  return call.module === null ? tools : tools.withNodeScope(moduleScope([call.module], tools));
+}
+
+/**
+ * Return the grants of a node's own tools, as authored, and the scope they resolve in before the
+ * run's (none when it is empty): its flow grants', and its tool modules' with stand-ins for the
+ * tools the run's modules listed.
+ *
+ * @throws RangeError as `moduleScope` throws.
+ */
+function ownGrants(node: Node, tools: ToolSet): { grants: ToolGrant[]; scopes: GrantScope[] } {
+  const flows = node.flowGrants();
+  const modules = moduleScope(node.toolModules(), tools);
+  const scope: NodeScope = {
+    groups: new Map([...flows.scope.groups, ...modules.groups]),
+    tools: [...flows.scope.tools, ...modules.tools],
+    identities: modules.identities,
+  };
+  const empty = scope.groups.size === 0 && scope.tools.length === 0;
+  return { grants: [...flows.grants, ...node.moduleGrants()], scopes: empty ? [] : [nodeScope(scope)] };
 }
 
 /**
@@ -3474,7 +3507,7 @@ function checkToolTypes(flow: CompiledFlow, tools: ToolSet): void {
   for (const [nodeId, node] of staticNodes(flow)) {
     const call = node.hostToolCall();
     if (call === null || (call.group === null && isEngineBuiltin(call.toolId))) continue;
-    const declared = toolTypes(tools.resolve([callRef(call)])[0]!);
+    const declared = toolTypes(callTools(call, tools).resolve([callRef(call)])[0]!);
     if (declared.inputs !== null) checkToolInputs(nodeId, call, declared.inputs, declared.required, declared.extra);
     if (declared.output !== null) checkToolOutput(nodeId, call, declared.output);
   }
@@ -4152,3 +4185,4 @@ async function openRunServers(
 async function closeRunServers(servers: readonly McpServer[]): Promise<void> {
   await Promise.all(servers.map((server) => server.close()));
 }
+

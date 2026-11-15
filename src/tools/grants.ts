@@ -150,12 +150,19 @@ export interface GrantScope {
 export interface NodeScope<T extends { readonly name: string } = { readonly name: string }> {
   readonly groups: ReadonlyMap<string, readonly T[]>;
   readonly tools: readonly T[];
+  /**
+   * The identity of each entry that has its own, by `JSON.stringify([group, name])` (`group` is
+   * `null` for a top-level tool): a module tool's file and export, which two aliases of one file
+   * share. Every other entry's identity is its group and name.
+   */
+  readonly identities?: ReadonlyMap<string, string>;
 }
 
 /**
  * Return the grant scope of one node's own tools (`NodeScope`). Only a grant naming a group
  * reaches a group's tool, and only a name grant a top-level tool. A tool's identity is its group
- * and name, so two groups' tools that would show one name stay two tools.
+ * and name, unless the scope gives it its own, so two groups' tools that would show one name stay
+ * two tools.
  */
 export function nodeScope(own: NodeScope): GrantScope {
   const groups = new Map([...own.groups].map(([group, tools]) => [group, tools.map((tool) => tool.name)]));
@@ -167,7 +174,10 @@ export function nodeScope(own: NodeScope): GrantScope {
     hasTool: (name) => tools.has(name),
     groupsHolding: () => [],
     groupNames: () => [...groups.keys()],
-    identity: (group, tool) => JSON.stringify([group, tool]),
+    identity: (group, tool) => {
+      const named = JSON.stringify([group, tool]);
+      return own.identities?.get(named) ?? named;
+    },
   };
 }
 

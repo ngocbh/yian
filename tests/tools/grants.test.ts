@@ -215,3 +215,16 @@ test.each([
 ])("a bare name never reaches a node group's tool, nor a group grant its top-level tool: %j", (raw, message) => {
   expect(() => expandGrants(parseToolGrants(raw, "n"), [own])).toThrow(message);
 });
+
+test("an entry with its own identity binds once however two names reach it: a module's export by alias and in its group", () => {
+  const export_ = JSON.stringify({ module: "/t.ts", export: "x" });
+  const modules = nodeScope({
+    groups: new Map([["b", [{ name: "x" }, { name: "y" }]]]),
+    tools: [{ name: "a" }],
+    identities: new Map([[JSON.stringify([null, "a"]), export_], [JSON.stringify(["b", "x"]), export_]]),
+  });
+  const visible = (raw: unknown[]) => expandGrants(parseToolGrants(raw, "n"), [modules]).map((each) => each.visible);
+  expect(visible(["a", "b"])).toEqual(["a", "b_y"]);
+  expect(visible(["b", "a"])).toEqual(["b_x", "b_y"]);
+  expect(modules.identity("b", "y")).toBe(JSON.stringify(["b", "y"]));
+});

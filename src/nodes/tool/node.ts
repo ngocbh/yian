@@ -13,7 +13,9 @@
  * node steps in the run log, so a resumed run continues the attempt count.
  *
  * A memory's tool (`tool_id: {lessons: read}`) is looked up in the memory the node's flow binds to
- * that input instead, and called on the run's session on it.
+ * that input instead, and called on the run's session on it. A tool module's tool
+ * (`tool_id: {crm: lookup}`, or a one-export alias) is looked up among the node's own stand-ins
+ * for the tools the run's segment listed from that module.
  *
  * Knows about: nodes/base, nodes/binding, nodes/contracts, nodes/ids, nodes/tool/questions,
  *              defaults, diagnostics, memory (memory tools), platform, tools and typesys.
@@ -26,7 +28,7 @@ import { realScheduler } from "../../platform.ts";
 import { ASK, BUILTIN_TOOL_IDS, type BuiltinToolId, isPending, SLEEP, TAKE, toolCallId } from "../../tools/context.ts";
 import { isPermanentToolError, isToolCheckError, isTransientToolError, ToolCheckError } from "../../tools/errors.ts";
 import { type MemoryGrant, visibleToolName } from "../../tools/grants.ts";
-import { checkedToolModule, splitModuleRef, type ToolModuleRef } from "../../tools/modules.ts";
+import { checkedToolModule, moduleScope, splitModuleRef, type ToolModuleRef } from "../../tools/modules.ts";
 import { type ToolRef, ToolSet } from "../../tools/registry.ts";
 import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import { eventBytes, type JsonObject } from "../../typesys/json.ts";
@@ -374,8 +376,8 @@ export class ToolNode extends Node {
   }
 
   /**
-   * Return this node's tool id and group, input names, proven input types, and output type; `null`
-   * for a memory's tool, which the run's tools never hold.
+   * Return this node's tool id and group, input names, proven input types, output type and tool
+   * module; `null` for a memory's tool, which the run's tools never hold.
    */
   override hostToolCall(): HostToolCall | null {
     if (this.memoryTool) return null;
@@ -385,6 +387,7 @@ export class ToolNode extends Node {
       (this.params ?? []).map((parameter) => parameter.name),
       this.inputTypes,
       outputContractType(this.outputContract),
+      this.module,
     );
   }
 
@@ -468,6 +471,10 @@ export class ToolNode extends Node {
     if (held !== undefined) return this.fromHeldCall(held);
     if (this.builtin === ASK) return await this.ask(inputs, caps, tools, callId);
     if (this.memoryTool) return await this.callTool(this.toolArguments(inputs), caps, this.memoryToolSet(inputs, caps, tools), callId);
+    if (this.module !== null) {
+      // A module's tool is a stand-in in this node's scope, so `toolRef` never reaches a run tool.
+      return await this.callTool(inputs, caps, tools.withNodeScope(moduleScope([this.module], tools)), callId);
+    }
     return await this.callTool(inputs, caps, tools, callId);
   }
 

@@ -1302,6 +1302,14 @@ export abstract class Node {
   }
 
   /**
+   * Return the grants of tool modules a model inside this node may call, as authored, by their
+   * `uses:` aliases. Never among `grantedTools()`. The base grants none.
+   */
+  moduleGrants(): readonly ToolGrant[] {
+    return [];
+  }
+
+  /**
    * Return the tool modules whose tools this node grants a model or calls itself, each a `uses:`
    * alias of its file. The base has none.
    */

@@ -23,16 +23,16 @@ import { AuthError } from "../llm_clients/auth/index.ts";
 import { type Connection, connectionCredentials, connectionSnapshot } from "../llm_clients/connection.ts";
 import { coerceInputs } from "../nodes/binding.ts";
 import { homeDir, syncFolder } from "../platform.ts";
-import { hostInputs, runLogPath, runStartLlm } from "../run.ts";
+import { hostInputs, libraryRunMessage, runLogPath, runStartLlm } from "../run.ts";
 import { defaultRunId } from "../typesys/seeding.ts";
 import { printStyled, renderDiagnostic, writeEngineTrace } from "./render.ts";
 import { type CliIo, ensureEnvKey, MissingKeyError, type PromptContext } from "./utils.ts";
 
 /**
- * Read the flow file at `path` and load it, returning the flow; or, for a file that isn't UTF-8
- * or a flow that doesn't load, write why to `io.stderr` and return its `Diagnostic` (the command
- * then exits 1). A load error is its located diagnostic; with `engineTrace`, the error's stack
- * follows it, boxed.
+ * Read the flow file at `path` and load it to run it, returning the flow; or, for a file that
+ * isn't UTF-8, a flow that doesn't load or a library, write why to `io.stderr` and return its
+ * `Diagnostic` (the command then exits 1). A load error is its located diagnostic; with
+ * `engineTrace`, the error's stack follows it, boxed. A library is `run.setup`.
  *
  * @throws {Error} A system error when the file can't be read.
  */
@@ -50,8 +50,9 @@ export async function loadFlowFile(
     await printStyled(io, message, "red");
     return new Diagnostic({ code: "compose.load", message });
   }
+  let flow: ComposedFlow;
   try {
-    return await loadFlowAt(path, text, io.env);
+    flow = await loadFlowAt(path, text, io.env);
   } catch (error) {
     if (!(error instanceof LoadError)) throw error;
     // Where in the `.yaml` the flow broke, not the engine's internals, unless asked for.
@@ -59,6 +60,11 @@ export async function loadFlowFile(
     await writeEngineTrace(error, engineTrace, io);
     return error.diagnostic;
   }
+  if (flow.library === null) return flow;
+  // `runFlow` refuses it too, but only after the command has printed its banner and log.
+  const message = libraryRunMessage(flow);
+  await printStyled(io, message, "red");
+  return new Diagnostic({ code: "run.setup", message });
 }
 
 /**

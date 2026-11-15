@@ -331,6 +331,19 @@ output: done
   );
 
   test(
+    "a library isn't started, and no approval is asked",
+    async () => {
+      writeFileSync(join(root, "lib.yaml"), "id: lib\nname: lib\ndefs:\n  one: {kind: code, code: return 1, output: !int}\n");
+      const { requests, invoke } = runTools();
+      expect(await invoke("start_flow", { path: "lib.yaml", inputs: {} })).toBe(
+        "not started: lib.yaml is a library (defs: and no nodes:); import it with uses: and call a def",
+      );
+      expect(requests).toEqual([]);
+    },
+    TIMEOUT,
+  );
+
+  test(
     "a rejected or unanswered start starts nothing",
     async () => {
       writeFileSync(join(root, "greet.yaml"), GREET);

@@ -20,7 +20,7 @@ import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { coerceInputs } from "../nodes/binding.ts";
 import { splitReference } from "../nodes/code/worker.ts";
 import { isSystemError, realScheduler, type Scheduler } from "../platform.ts";
-import { hostInputs, skillGrants, staticNodes } from "../run.ts";
+import { hostInputs, libraryRunMessage, skillGrants, staticNodes } from "../run.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { ReportedToolError } from "../tools/errors.ts";
 import { type FunctionTool, tool } from "../tools/function_tools.ts";
@@ -665,8 +665,8 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
 
   /**
    * Start the flow at `path`, or the draft `content` as that file, with `inputs` once the user
-   * approves it, as `start_flow` describes, showing it through `through`. Every outcome once the
-   * user is asked is returned.
+   * approves it, as `start_flow` describes, showing it through `through`. A library is returned
+   * as not started, without asking, and so is every outcome once the user is asked.
    */
   async function startFlow(
     through: View,
@@ -676,6 +676,7 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
     signal: AbortSignal,
   ): Promise<string | Record<string, unknown>> {
     const { real, shown: file, text, flow } = await loadForStart(host, path, content);
+    if (flow.library !== null) return `not started: ${libraryRunMessage(flow)}`;
     checkStartInputs(flow, inputs);
     const files = codeFiles(flow);
     const root = resolveRoot(host.root);

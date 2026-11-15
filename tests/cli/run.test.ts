@@ -729,7 +729,23 @@ describe("run", () => {
     });
   });
 
+  test("a library exits 1 before the run, with a run.setup document under --json", async () => {
+    const flow = file("billing.yaml", LIBRARY);
+    const message = "billing.yaml is a library (defs: and no nodes:); import it with uses: and call a def";
+    mkdirSync(join(tmp, "home"));
+    const text = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["run", flow], text.io)).toBe(1);
+    expect(text.stdout()).toBe("");
+    expect(text.stderr()).toBe(`${message}\n`);
+    expect(readdirSync(join(tmp, "home"))).toEqual([]);
+
+    const json = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["run", flow, "--json"], json.io)).toBe(1);
+    expect(JSON.parse(json.stdout())).toEqual({ format: "yian.cli.v1", error: { code: "run.setup", message } });
+  });
 });
+
+const LIBRARY = "id: billing\nname: billing\ndefs:\n  quote: {kind: code, code: return 1, output: !int}\n";
 
 /** A flow with one `topic` input whose CODE node `body` makes the output's `topic`. */
 function topicFlow(body: string): string {
@@ -1454,6 +1470,15 @@ describe("check", () => {
     expect(await main(["check", missing], io)).toBe(1);
     expect(stdout()).toBe("");
     expect(stderr()).toBe(`${missing}:\ncan't read ${missing}: No such file or directory\n`);
+  });
+
+  test("a library is ok when every def loads", async () => {
+    const library = file("billing.yaml", LIBRARY);
+    const broken = file("broken.yaml", `${LIBRARY}  refund: {kind: code, code: return 1, output: !nope}\n`);
+    const { code, flows } = await checkJson([library, broken]);
+    expect(code).toBe(1);
+    expect(flows[0]).toEqual({ path: library, ok: true, id: "billing", name: "billing", description: null, inputs: [] });
+    expect(flows[1].diagnostics[0].message).toStartWith("defs entry 'refund': ");
   });
 
   test("text: a flow that loads is an ok line on stdout", async () => {

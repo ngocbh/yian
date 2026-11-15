@@ -88,6 +88,7 @@ test("only the final log-only runtime and run API remain", () => {
     tools: true,
     skills: true,
     context: true,
+    completesCalls: true,
     signal: true,
     env: true,
     scheduler: true,
@@ -95,7 +96,7 @@ test("only the final log-only runtime and run API remain", () => {
     models: true,
     parent: true,
   };
-  expect(Object.keys(options)).toHaveLength(17);
+  expect(Object.keys(options)).toHaveLength(18);
   expect(run.runFlow.length).toBe(2);
   const advanceOptions: Record<keyof run.AdvanceOptions, true> = {
     log: true,
@@ -111,6 +112,7 @@ test("only the final log-only runtime and run API remain", () => {
     apiKey: true,
     headers: true,
     context: true,
+    completesCalls: true,
     memory: true,
     signal: true,
     env: true,
@@ -119,7 +121,7 @@ test("only the final log-only runtime and run API remain", () => {
     models: true,
     checkLlmConfigs: true,
   };
-  expect(Object.keys(advanceOptions)).toHaveLength(20);
+  expect(Object.keys(advanceOptions)).toHaveLength(21);
   expect(run.advance.length).toBe(1);
 
   const result = new run.RunResult({ input: {}, status: "succeeded", runId: "r1", log: null });

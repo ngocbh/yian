@@ -22,18 +22,25 @@
  * module, which exited, is checked again here, and its output kept as its check's. The output
  * validator runs on a result the host checked. Each validator's return is read as the registry reads it; values the host takes are
  * taken in by host intake here (so a class instance is refused before the copy flattens it), and a
- * throw crosses with its tool error kinds, which the host rebuilds. Values cross as
- * `typesys/crossing` packs them.
+ * throw crosses with its tool error kinds, which the host rebuilds. A result that is a pending
+ * marker crosses as one. Values cross as `typesys/crossing` packs them.
  *
- * Knows about: tools/context, tools/errors, tools/function_tools, defaults, diagnostics, typesys
- * and `node:*`.
+ * Each `console.log/info/warn/error/debug` call is posted as one formatted text, tagged with the
+ * request the code that made it runs for (an `AsyncLocalStorage` store, which promises and timers
+ * keep), or with none during the import.
+ *
+ * Knows about: tools/context, tools/errors, tools/function_tools, events' types, defaults,
+ * diagnostics, typesys and `node:*`.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { pathToFileURL } from "node:url";
+import { format } from "node:util";
 import type { MessagePort } from "node:worker_threads";
 
 import { type Defaults, install } from "../defaults.ts";
 import { compareCodeUnits, getCloseMatches, reprText } from "../diagnostics.ts";
+import type { ConsoleMethod } from "../events.ts";
 import { packFiles, type Thrown, thrownOf, tooDeepToCopy, unpackFiles } from "../typesys/crossing.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { fromHost, jsTypeName, rejectDeepNesting, TypeCheckError } from "../typesys/values.ts";
@@ -95,12 +102,22 @@ export type ToolModuleRequest =
  * A thread's reply to a request: the listing; a passed check of the arguments, saying whether the
  * call is safe to run beside others and whether the validator's output was kept; a validator's
  * issues, or why its return isn't a Standard Schema result; a call's result or the output
- * validator's, a packed yian value; what a tool or a validator threw, with its tool error kinds
- * and, when transient, its `retryAfter`; why a result was refused; or why the request failed (the
- * import threw). A call whose check ran on an earlier thread is checked again first, so its reply
- * may be a check's.
+ * validator's, a packed yian value; a call's pending marker; what a tool or a validator threw, with
+ * its tool error kinds and, when transient, its `retryAfter`; why a result was refused; or why the
+ * request failed (the import threw). A call whose check ran on an earlier thread is checked again
+ * first, so its reply may be a check's.
  */
 export type ToolModuleReply = { readonly id: number } & ReplyBody;
+
+/**
+ * One `console` call of the module's code, as the thread posts it: its method, its arguments as
+ * one formatted text, and the id of the request the code ran for, or `null` for none (the import).
+ */
+export interface ToolModuleConsole {
+  readonly console: ConsoleMethod;
+  readonly text: string;
+  readonly id: number | null;
+}
 
 /** One validator issue as it crosses: its message, and its path as text and numbers. */
 export interface CrossedIssue {
@@ -115,6 +132,7 @@ type ReplyBody =
   | { readonly as: "issues"; readonly issues: readonly CrossedIssue[] }
   | { readonly as: "nonstandard"; readonly message: string }
   | { readonly as: "result"; readonly value: unknown }
+  | { readonly as: "pending" }
   | {
       readonly as: "thrown";
       readonly thrown: Thrown;
@@ -398,7 +416,7 @@ async function outputReply(
 
 /**
  * Return the reply to a call of `tool` with `args`: its result taken in, as a yian value, or why
- * it was refused, or what `execute` threw.
+ * it was refused; that it returned a pending marker; or what `execute` threw.
  *
  * @param head The export, as messages name it.
  */
@@ -420,9 +438,7 @@ async function callReply(
   }
   // Another call may have installed its values while this one ran.
   install(call.defaults);
-  if (isPending(result)) {
-    return { as: "refused", message: `${head} returned pending(), which a tool module can't do yet`, path: [] };
-  }
+  if (isPending(result)) return { as: "pending" };
   return takenIn(result === undefined ? null : result, `${head} result`);
 }
 
@@ -455,9 +471,23 @@ function thrownReply(error: unknown): ReplyBody {
   return { as: "thrown", thrown: thrownOf(error), kinds, retryAfter: after };
 }
 
-/** Serve a tool module's thread on `port`: import the module once and answer each request. */
+/** The console methods a thread forwards. */
+const CONSOLE_METHODS: readonly ConsoleMethod[] = ["log", "info", "warn", "error", "debug"];
+
+/**
+ * Serve a tool module's thread on `port`: import the module once, answer each request, and post
+ * each line the module prints.
+ */
 export function serveToolModule(port: MessagePort, data: ToolModuleData): void {
   let imported: Promise<object> | null = null;
+  /** The id of the request the running code serves, kept across its promises and timers. */
+  const serving = new AsyncLocalStorage<number>();
+  for (const method of CONSOLE_METHODS) {
+    console[method] = (...args: unknown[]) => {
+      const id = serving.getStore() ?? null;
+      port.postMessage({ console: method, text: format(...args), id } satisfies ToolModuleConsole);
+    };
+  }
   /**
    * The id of the first request this thread got: the host numbers requests across the module's
    * threads, so a check below it ran on an earlier thread.
@@ -494,47 +524,52 @@ export function serveToolModule(port: MessagePort, data: ToolModuleData): void {
     const stop = request.kind === "call" ? new AbortController() : null;
     if (stop !== null) calls.set(id, stop);
     install(defaults);
+    // Started outside every request's store, so no request takes what the import prints.
     imported ??= import(pathToFileURL(data.path).href) as Promise<object>;
-    imported
-      .then(
-        async (namespace): Promise<ReplyBody> => {
-          // Another request may have installed its values while this one waited.
-          install(defaults);
-          if (request.kind === "list") {
-            const listed = listToolModule(namespace, data.label);
-            tools ??= listed.tools;
-            return { as: "listing", listing: listed.listing };
-          }
-          tools ??= listToolModule(namespace, data.label).tools;
-          const head = `${data.label} export ${reprText(request.tool)}`;
-          const tool = tools.get(request.tool);
-          if (tool === undefined) return { as: "failed", message: `${head} isn't a tool` };
-          if (request.kind === "check") return await checkReply(tool, request, (output) => kept.set(id, output));
-          if (request.kind === "output") return await outputReply(tool, request);
-          const { check } = request;
-          // A call gets the output its check kept, else its own copy of the arguments, as on the host.
-          let args = check === null ? unpackFiles(request.args) : kept.get(check);
-          if (check !== null && !kept.has(check)) {
-            if (check >= first!) {
-              return { as: "failed", message: `${head}: its checked arguments aren't kept on this thread` };
+    const loading = imported;
+    // What the module prints while it serves this request, from its promises and timers too.
+    serving.run(id, () =>
+      loading
+        .then(
+          async (namespace): Promise<ReplyBody> => {
+            // Another request may have installed its values while this one waited.
+            install(defaults);
+            if (request.kind === "list") {
+              const listed = listToolModule(namespace, data.label);
+              tools ??= listed.tools;
+              return { as: "listing", listing: listed.listing };
             }
-            // Checked on a thread that exited: check again, keeping the output for later attempts.
-            const keep = (output: unknown) => kept.set(check, output);
-            const read = await validated(tool, { ...request, value: request.args }, keep);
-            if (read.as !== "value") return read;
-            args = read.value;
-          }
-          return await callReply(head, tool, args, request, stop!.signal);
-        },
-        (error: unknown): ReplyBody => ({
-          as: "failed",
-          message: `${data.label} failed to import: ${thrownText(error)}`,
-        }),
-      )
-      .then(
-        (body) => reply(id, () => body),
-        (error: unknown) => reply(id, () => thrownReply(error)),
-      )
-      .finally(() => calls.delete(id));
+            tools ??= listToolModule(namespace, data.label).tools;
+            const head = `${data.label} export ${reprText(request.tool)}`;
+            const tool = tools.get(request.tool);
+            if (tool === undefined) return { as: "failed", message: `${head} isn't a tool` };
+            if (request.kind === "check") return await checkReply(tool, request, (output) => kept.set(id, output));
+            if (request.kind === "output") return await outputReply(tool, request);
+            const { check } = request;
+            // A call gets the output its check kept, else its own copy of the arguments, as on the host.
+            let args = check === null ? unpackFiles(request.args) : kept.get(check);
+            if (check !== null && !kept.has(check)) {
+              if (check >= first!) {
+                return { as: "failed", message: `${head}: its checked arguments aren't kept on this thread` };
+              }
+              // Checked on a thread that exited: check again, keeping the output for later attempts.
+              const keep = (output: unknown) => kept.set(check, output);
+              const read = await validated(tool, { ...request, value: request.args }, keep);
+              if (read.as !== "value") return read;
+              args = read.value;
+            }
+            return await callReply(head, tool, args, request, stop!.signal);
+          },
+          (error: unknown): ReplyBody => ({
+            as: "failed",
+            message: `${data.label} failed to import: ${thrownText(error)}`,
+          }),
+        )
+        .then(
+          (body) => reply(id, () => body),
+          (error: unknown) => reply(id, () => thrownReply(error)),
+        )
+        .finally(() => calls.delete(id)),
+    );
   });
 }

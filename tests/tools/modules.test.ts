@@ -11,8 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { ToolContext } from "../../src/tools/context.ts";
-import { toolErrorKinds } from "../../src/tools/errors.ts";
+import { pending, ToolContext } from "../../src/tools/context.ts";
+import { isToolCheckError, toolErrorKinds } from "../../src/tools/errors.ts";
 import { nodeScope, expandGrants, parseToolGrants } from "../../src/tools/grants.ts";
 import { ToolModuleThread } from "../../src/tools/module_thread.ts";
 import { listToolModule, type ListedTool, type ToolModuleListing } from "../../src/tools/module_worker.ts";
@@ -131,6 +131,38 @@ test("a node scope holds a group alias's tools by export name and a one-export a
   expect(() => moduleScope([{ alias: "f", ref: "./crm.ts:find", path: "/w/crm.ts" }], tools)).toThrow(
     new RangeError(LISTING.refused[0]!.message),
   );
+});
+
+test("a stand-in sends its node's console with each request, and returns pending() only when the run's host completes calls", async () => {
+  const sinks: unknown[] = [];
+  const pends = {
+    check: async (_tool: string, _name: string, args: unknown, sink: unknown) => {
+      sinks.push(sink);
+      return { value: { safe: false, args } };
+    },
+    call: async (_tool: string, _checked: unknown, _ctx: ToolContext, sink: unknown) => {
+      sinks.push(sink);
+      return pending();
+    },
+  } as unknown as ToolModuleThread;
+  const module: StartedToolModule = { path: "/w/crm.ts", key: "crm.ts", thread: pends, listing: LISTING };
+  const refs = [
+    { alias: "crm", ref: "./crm.ts", path: "/w/crm.ts" },
+    { alias: "find", ref: "./crm.ts:lookup", path: "/w/crm.ts" },
+  ];
+  const lines = () => {};
+  /** What calling `ref` with `tools`' stand-ins returns, or throws. */
+  const outcome = (tools: ToolSet, ref: string | { group: string; name: string }) =>
+    tools.withNodeScope(moduleScope(refs, tools, lines)).invoke(ref, { id: "1" }).catch((error: Error) => error);
+
+  expect(await outcome(new ToolSet({}).withModules([module], { completesCalls: true }), "find")).toBe(pending());
+  expect(sinks).toEqual([lines, lines]);
+  const refused = new ToolSet({}).withModules([module]);
+  const why = "returned pending(), but this run's host doesn't complete calls";
+  for (const [ref, shown] of [["find", "find"], [{ group: "crm", name: "lookup" }, "crm_lookup"]] as const) {
+    const error = await outcome(refused, ref);
+    expect([isToolCheckError(error), (error as Error).message]).toEqual([true, `tool '${shown}' ${why}`]);
+  }
 });
 
 /**

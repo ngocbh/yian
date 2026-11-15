@@ -5,8 +5,8 @@
  * starts the modules its nodes reach, and a node's scope holds a stand-in for each tool it reaches,
  * which the registry checks and calls as a host tool, and whose call runs on the module's thread.
  *
- * Knows about: tools/function_tools, tools/registry, the types of tools/grants,
- * tools/module_thread and tools/module_worker, diagnostics, typesys and `node:path`.
+ * Knows about: tools/context, tools/errors, tools/function_tools, tools/grants, tools/registry,
+ * the types of tools/module_thread and tools/module_worker, diagnostics, typesys and `node:path`.
  */
 
 import { relative } from "node:path";
@@ -14,9 +14,11 @@ import { relative } from "node:path";
 import { getCloseMatches, reprText } from "../diagnostics.ts";
 import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { isRecord } from "../typesys/values.ts";
+import { isPending } from "./context.ts";
+import { ToolCheckError } from "./errors.ts";
 import { FunctionTool, type StandardSchemaV1 } from "./function_tools.ts";
-import type { NodeScope } from "./grants.ts";
-import type { ToolModuleThread } from "./module_thread.ts";
+import { type NodeScope, visibleToolName } from "./grants.ts";
+import type { ConsoleSink, ToolModuleThread } from "./module_thread.ts";
 import type { ListedTool, ToolModuleListing } from "./module_worker.ts";
 import { RESERVED_TOOL_NAMES, type ToolSet } from "./registry.ts";
 
@@ -121,10 +123,17 @@ function listedExport(key: string, listing: ToolModuleListing, name: string): Li
  * each a stand-in with its listed spec that calls its tool on the module's thread. Every entry's
  * identity is its file and export, so two aliases of one file bind a tool once.
  *
+ * @param sink Takes what a module prints while it serves a stand-in; `null` leaves that to this
+ *   process's `console`.
  * @throws RangeError when a ref's module wasn't started, or its export is refused, isn't a tool or
  *   is missing.
  */
-export function moduleScope(refs: readonly ToolModuleRef[], tools: ToolSet): NodeScope<FunctionTool> {
+export function moduleScope(
+  refs: readonly ToolModuleRef[],
+  tools: ToolSet,
+  sink: ConsoleSink | null = null,
+): NodeScope<FunctionTool> {
+  const host = { sink, completesCalls: tools.completesCalls };
   const groups = new Map<string, FunctionTool[]>();
   const single: FunctionTool[] = [];
   const identities = new Map<string, string>();
@@ -137,11 +146,12 @@ export function moduleScope(refs: readonly ToolModuleRef[], tools: ToolSet): Nod
     const identity = (listed: ListedTool) => JSON.stringify({ module: path, export: listed.name });
     const { exportName } = splitModuleRef(ref);
     if (exportName === null) {
-      groups.set(alias, listing.tools.map((listed) => standIn(thread, listed, listed.name)));
+      const shown = (listed: ListedTool) => visibleToolName(alias, listed.name);
+      groups.set(alias, listing.tools.map((listed) => standIn(thread, listed, listed.name, shown(listed), host)));
       for (const listed of listing.tools) identities.set(JSON.stringify([alias, listed.name]), identity(listed));
     } else {
       const listed = listedExport(key, listing, exportName);
-      single.push(standIn(thread, listed, alias));
+      single.push(standIn(thread, listed, alias, alias, host));
       identities.set(JSON.stringify([null, alias]), identity(listed));
     }
   }
@@ -154,8 +164,18 @@ export function moduleScope(refs: readonly ToolModuleRef[], tools: ToolSet): Nod
  * module's thread: its validator checks a call's arguments there (with the module's validator, if
  * any, and `isConcurrencySafe`), returning a handle to them that `isConcurrencySafe` reads and
  * `execute` calls the tool with; a tool with an output validator gets one that runs the module's.
+ * What the module prints meanwhile goes to `host.sink`. A call that returns `pending()` pends only
+ * when the run's host completes calls; else it fails with a `ToolCheckError`, naming the tool as
+ * `shown`.
  */
-function standIn(thread: ToolModuleThread, listed: ListedTool, name: string): FunctionTool {
+function standIn(
+  thread: ToolModuleThread,
+  listed: ListedTool,
+  name: string,
+  shown: string,
+  host: { readonly sink: ConsoleSink | null; readonly completesCalls: boolean },
+): FunctionTool {
+  const { sink } = host;
   const validator = (validate: StandardSchemaV1["~standard"]["validate"]): StandardSchemaV1 => ({
     "~standard": { version: 1, vendor: "yian", validate },
   });
@@ -165,11 +185,19 @@ function standIn(thread: ToolModuleThread, listed: ListedTool, name: string): Fu
     parametersJsonSchema: listed.parametersJsonSchema,
     outputJsonSchema: listed.outputJsonSchema,
     resumable: listed.resumable,
-    parametersValidator: validator((args) => thread.check(listed.name, name, args)),
+    parametersValidator: validator((args) => thread.check(listed.name, name, args, sink)),
     isConcurrencySafe: (checked) => checked.safe === true,
-    execute: (checked, ctx) => thread.call(listed.name, checked, ctx),
+    execute: async (checked, ctx) => {
+      const result = await thread.call(listed.name, checked, ctx, sink);
+      // Only a host that answers pending calls can end the wait; a module's author can't know the host.
+      if (isPending(result) && !host.completesCalls) {
+        const why = "returned pending(), but this run's host doesn't complete calls";
+        throw new ToolCheckError(`tool ${reprText(shown)} ${why}`);
+      }
+      return result;
+    },
     outputValidator: listed.hasOutputValidator
-      ? validator((value) => thread.checkOutput(listed.name, name, value))
+      ? validator((value) => thread.checkOutput(listed.name, name, value, sink))
       : null,
   });
 }

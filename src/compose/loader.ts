@@ -15,7 +15,9 @@
  * any def or the root assembles, so assembly itself stays synchronous and reads each import from
  * the scope's memo. A recursive or mutually recursive def is refused. The loader derives the
  * callable's signature and bakes its compiled flow onto the built `CallNode` so `run` drives the
- * embedded child.
+ * embedded child. A `uses:` ref to a `.ts`, `.js` or `.mjs` file is a tool module instead, read
+ * before any scheme and checked on disk as a CODE reference is, never imported; outside
+ * `withUnfinishedToolModules` every one is refused.
  *
  * Source resolution follows two cache boundaries. A physical-file cache entry is canonical and
  * complete. `CallableScope` validates it, copies and rebases its compiled origins once per lexical
@@ -36,8 +38,8 @@
  * nesting limit, counted apart from call depth; each loaded flow records its own `importDepth`.
  *
  * Imports flow down only: this module composes the compose package's own components plus
- * `compile`, `defaults`, `diagnostics`, `llm_clients`, `nodes`, `platform` and `typesys`, and the
- * `FlowSource` type of `runtime/log`; nothing in the engine imports it back.
+ * `compile`, `defaults`, `diagnostics`, `llm_clients`, `nodes`, `platform`, `tools` and `typesys`,
+ * and the `FlowSource` type of `runtime/log`; nothing in the engine imports it back.
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -74,13 +76,15 @@ import {
   writeAsText,
 } from "../typesys/values.ts";
 import type { FlowSource } from "../runtime/log.ts";
+import type { ToolModuleRef } from "../tools/modules.ts";
+import { RESERVED_TOOL_NAMES } from "../tools/registry.ts";
 import { assemble, type AssembleOptions, type CallableScope as AssemblyScope, ComposedFlow } from "./build/pipeline.ts";
 import { INLINE_FLOW_PREFIX } from "./desugar/inline_bodies.ts";
 import { LoadDiagnostics, LoadError, rejectRemovedMemoryKey } from "./helpers/errors.ts";
 import { type MemoryClass, type MemoryTypeTable, memoryTypeTools, NO_MEMORY_TYPES } from "./helpers/memory.ts";
 import { boundaryFieldRanges, pathText } from "./helpers/source.ts";
 import { includeFile, rejectUnreadTags } from "./helpers/tags.ts";
-import { parseUsesRef } from "./helpers/uses.ts";
+import { type ModuleRefParts, moduleRefParts, parseUsesRef } from "./helpers/uses.ts";
 import { checkEnvValues } from "./helpers/value_nesting.ts";
 import { maxToolIterationsError, readLlmConfig, validateLlmConfig } from "./nodes/agent.ts";
 import { notTextError, valueTypeError } from "./nodes/base.ts";
@@ -431,6 +435,47 @@ async function newLoadCtx(
 // it, so a custom `childResolver` that calls `loadFlow` is bounded too. Each import runs in its
 // own store (`run`, never `enterWith`), so concurrent loads keep separate counts.
 const ACTIVE_IMPORTS = new AsyncLocalStorage<number>();
+
+// Set only inside `withUnfinishedToolModules`, which no package entry exports.
+const UNFINISHED_TOOL_MODULES = new AsyncLocalStorage<true>();
+
+/**
+ * @internal Run `fn` with tool module refs allowed in `uses:`. Outside it, a load refuses every one:
+ * modules can't run yet, and a load from a run's record (a resume, `advance`) is a load too.
+ */
+export function withUnfinishedToolModules<T>(fn: () => T): T {
+  return UNFINISHED_TOOL_MODULES.run(true, fn);
+}
+
+/**
+ * Return the real path of the tool module file at `path`, resolved against `dir`. It must resolve
+ * inside `codeRoot` when one is given, checked first and worded without absolute paths, as a CODE
+ * reference's file must, and be a regular file. The file is never read.
+ *
+ * @param fail Makes the error, at the alias, for a file it refuses.
+ */
+async function moduleFile(
+  dir: string,
+  path: string,
+  codeRoot: string | null,
+  fail: (problem: string) => LoadError,
+): Promise<string> {
+  const target = resolvePath(dir, path);
+  const outside = () => fail(`tool module ${reprText(path)} is outside the code root`);
+  let real: string;
+  try {
+    real = await fsp.realpath(target);
+  } catch (error) {
+    if (codeRoot !== null && leavesRoot(relative(codeRoot, resolvedPath(target)))) throw outside();
+    // A system error's message holds absolute paths.
+    if (!isMissingPath(error)) throw fail(`tool module ${reprText(path)} can't be resolved`);
+    const where = codeRoot === null ? ` in ${reprText(dir)}` : "";
+    throw fail(`tool module ${reprText(path)} does not exist${where}`);
+  }
+  if (codeRoot !== null && leavesRoot(relative(codeRoot, real))) throw outside();
+  if (!(await fsp.stat(real)).isFile()) throw fail(`tool module ${reprText(path)} is not a file`);
+  return real;
+}
 
 /** Return a `system.paths` entry: a relative one joined onto the file's own directory. */
 function joinPath(base: string, path: string): string {
@@ -1574,6 +1619,7 @@ export async function loadFlowFile(
     memoryTypes,
     diagnostics,
     baseDir,
+    codeRoot: ctx.codeRoot,
   });
   // Read after the typedefs, which its tags resolve against.
   const flowLlmConfig = readAuthoredLlmConfig(f.llmConfig, "flow", {
@@ -1597,6 +1643,8 @@ export async function loadFlowFile(
   }
   // Imports load before anything assembles, so assembly reads every alias from the memo.
   for (const alias of Object.keys(f.uses)) await scope.resolveAlias(alias);
+  // A tool module alias is no flow: assembly never resolves it as one.
+  const flowAliases = Object.keys(f.uses).filter((alias) => scope.toolModule(alias) === null);
 
   const staged = callNestingScope(() => {
     scope.eagerLoadDefs();
@@ -1604,7 +1652,7 @@ export async function loadFlowFile(
       rootAssembleOptions(document, f, {
         registry,
         scope,
-        usesAliases: Object.keys(f.uses),
+        usesAliases: flowAliases,
         flowLlmConfig,
         baseDir,
       }),
@@ -1615,7 +1663,7 @@ export async function loadFlowFile(
     resolveOrigin: (origin) => scope.catalogBuilder.resolveRegistered(origin),
     // Shared so the root skips the defs its calls bake in, already checked. A `uses:` child was
     // checked in its own load, so its flow starts out seen.
-    seen: new Set(Object.keys(f.uses).flatMap((alias) => graphsOf(scope.resolve(alias)))),
+    seen: new Set(flowAliases.flatMap((alias) => graphsOf(scope.resolve(alias)))),
     codeRoot: ctx.codeRoot,
   };
   // Before the walks that cost per expanded node: finalizing the origins, the CODE check, and
@@ -1714,9 +1762,11 @@ export class CallableScope implements AssemblyScope {
   readonly #diagnostics: LoadDiagnostics;
   readonly #catalogBuilder: SourceCatalogBuilder;
   readonly #baseDir: string | null;
+  readonly #codeRoot: string | null;
   readonly #memoryTypes: MemoryTypeTable;
   readonly #private = new Map<string, PrivateCallable>();
   readonly #built = new Map<string, ComposedFlow>();
+  readonly #modules = new Map<string, ToolModuleRef>();
   readonly #inProgress = new Set<string>();
   #importDepth = 0;
 
@@ -1734,8 +1784,10 @@ export class CallableScope implements AssemblyScope {
    *   bodies (default: a new one).
    * @param options.diagnostics The document's load-diagnostic authority (default: from the first
    *   retained declaration cursor, or source-free).
-   * @param options.baseDir The directory the file's CODE references resolve against (default
-   *   `null`, the current directory).
+   * @param options.baseDir The directory the file's CODE references and tool modules resolve
+   *   against (default `null`, the current directory).
+   * @param options.codeRoot The real path every tool module's file must resolve inside (default
+   *   `null`, which confines nothing).
    * @param options.memoryTypes How the file's flow inputs read memory types beyond the
    *   built-ins (default: none).
    * @throws LoadError when a name is declared in both `defs:` and `uses:`.
@@ -1751,10 +1803,12 @@ export class CallableScope implements AssemblyScope {
       catalogBuilder?: SourceCatalogBuilder | null;
       diagnostics?: LoadDiagnostics | null;
       baseDir?: string | null;
+      codeRoot?: string | null;
       memoryTypes?: MemoryTypeTable;
     } = {},
   ) {
     const { defsCursor = null, usesCursor = null, catalogBuilder = null, diagnostics = null, baseDir = null } = options;
+    this.#codeRoot = options.codeRoot ?? null;
     this.#memoryTypes = options.memoryTypes ?? NO_MEMORY_TYPES;
     const ownedDiagnostics = diagnostics ?? LoadDiagnostics.fromCursor(defsCursor ?? usesCursor);
     const both = Object.keys(defsSection)
@@ -1820,6 +1874,7 @@ export class CallableScope implements AssemblyScope {
   finalize(staged: ComposedFlow, library = false): ComposedFlow {
     const tables: ResolverTable[] = [];
     for (const alias of Object.keys(this.#uses)) {
+      if (this.#modules.has(alias)) continue;
       const child = this.#built.get(alias);
       if (child === undefined) {
         throw this.#diagnostics.error(`uses: alias ${reprText(alias)} was not resolved before finalization`, {
@@ -1902,6 +1957,11 @@ export class CallableScope implements AssemblyScope {
     return this.section(flowId) !== null;
   }
 
+  /** The tool module `uses:` alias `name` imports, once resolved; `null` for any other name. */
+  toolModule(name: string): ToolModuleRef | null {
+    return this.#modules.get(name) ?? null;
+  }
+
   /** The section declaring `flowId`: `defs` or `uses`; `null` for neither. */
   section(flowId: string): "defs" | "uses" | null {
     if (Object.hasOwn(this.#defsSection, flowId)) return "defs";
@@ -1947,6 +2007,9 @@ export class CallableScope implements AssemblyScope {
         loadDef(flowId, this.#defsSection[flowId]!, this.#registry, this, defCursor),
       );
     }
+    if (this.#modules.has(flowId)) {
+      throw this.#diagnostics.error(`\`${flowId}\` is a tool module; call its tools from a tool node`);
+    }
     if (Object.hasOwn(this.#uses, flowId)) {
       throw this.#diagnostics.error(`uses: alias ${reprText(flowId)} was not resolved before assembly`, {
         range: this.#aliasRange(flowId),
@@ -1966,7 +2029,8 @@ export class CallableScope implements AssemblyScope {
   }
 
   /**
-   * Resolve one `uses:` alias once through the external resolver.
+   * Resolve one `uses:` alias once through the external resolver, or, for a tool module ref
+   * (read before any scheme), on disk as `#resolveModule` does.
    *
    * An alias whose import would make the chain of `uses:` files deeper than
    * `current().maxCallNesting` is refused: before loading when the files already being imported
@@ -1974,19 +2038,26 @@ export class CallableScope implements AssemblyScope {
    * or memoized file is held to the same rule.
    *
    * @param alias A declared `uses:` alias.
-   * @returns The alias's rebased child, cached for later calls.
+   * @returns The alias's rebased child, or its tool module, cached for later calls.
    * @throws LoadError (as a rejection), located at the alias, when its ref is malformed or has a
    *   scheme, no resolver was given, the resolver fails or returns a bad flow, the flow declares
-   *   another `version` than the ref pins, or the import chain is past the limit.
+   *   another `version` than the ref pins, the import chain is past the limit, or as
+   *   `#resolveModule` throws.
    */
-  async resolveAlias(alias: string): Promise<ComposedFlow> {
-    const built = this.#built.get(alias);
+  async resolveAlias(alias: string): Promise<ComposedFlow | ToolModuleRef> {
+    const built = this.#built.get(alias) ?? this.#modules.get(alias);
     if (built !== undefined) return built;
     if (!Object.hasOwn(this.#uses, alias)) throw new Error(`${reprText(alias)} is not a uses: alias`);
     const authored = this.#uses[alias]!;
     const where = `callable ${reprText(alias)} (uses: ${reprText(authored)})`;
     let loaded: ComposedFlow;
     try {
+      const parts = moduleRefParts(authored);
+      if (parts !== null) {
+        const module = await this.#resolveModule(alias, authored, parts);
+        this.#modules.set(alias, module);
+        return module;
+      }
       const ref = parseUsesRef(authored, { diagnostics: this.#diagnostics });
       if (ref.scheme === "hub") {
         throw this.#diagnostics.error(`${where}: marketplace not supported yet (hub: scheme)`);
@@ -2036,6 +2107,35 @@ export class CallableScope implements AssemblyScope {
     }
     this.#built.set(alias, loaded);
     return loaded;
+  }
+
+  /**
+   * Resolve tool module alias `alias`, whose ref `authored` has `parts`, without importing it: the
+   * path is relative (`./` or `../`) and resolves against this file's folder, never on
+   * `system: paths`, as a CODE reference's does.
+   *
+   * @throws LoadError when the ref has a version, names a default export or a name that isn't an
+   *   identifier, isn't relative, the alias is a name yian reserves, tool modules aren't allowed
+   *   yet (outside `withUnfinishedToolModules`), or as `moduleFile` throws.
+   */
+  async #resolveModule(alias: string, authored: string, parts: ModuleRefParts): Promise<ToolModuleRef> {
+    const fail = (problem: string) => this.#diagnostics.error(`uses: alias ${reprText(alias)}: ${problem}`);
+    const { path, exportName, version } = parts;
+    const shown = exportName === null ? path : `${path}:${exportName}`;
+    if (version !== null) throw fail(`a module has no version; write \`${shown}\``);
+    if (exportName === "default") throw fail("a default export is never a tool; export it by name");
+    if (exportName !== null && !/^[A-Za-z_$][\w$]*$/.test(exportName)) {
+      const what = exportName === "" ? "no export name follows `:`" : `\`${exportName}\` isn't an export name`;
+      throw fail(`${what}; write \`${path}:<name>\`, or \`${path}\` for every tool`);
+    }
+    if (!/^\.\.?\//.test(path)) {
+      if (path.startsWith("/")) throw fail("a tool module ref is a relative path, starting with ./ or ../");
+      throw fail(`a tool module ref is a relative path: write \`./${shown}\``);
+    }
+    if (RESERVED_TOOL_NAMES.has(alias)) throw fail(`\`${alias}\` is a name yian reserves; rename the alias`);
+    if (UNFINISHED_TOOL_MODULES.getStore() !== true) throw fail("tool modules aren't supported yet");
+    const real = await moduleFile(this.#baseDir ?? process.cwd(), path, this.#codeRoot, fail);
+    return Object.freeze({ alias, ref: authored, path: real });
   }
 
   /** Return the error for alias `alias`, whose import makes the chain `levels` deep. */

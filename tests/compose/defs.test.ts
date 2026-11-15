@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { afterAll, expect, mock, spyOn, test } from "bun:test";
 
 import type { CompiledFlow } from "../../src/compile/model.ts";
+import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { CallableScope } from "../../src/compose/loader.ts";
 import { parseFile } from "../../src/compose/parse/file.ts";
@@ -92,7 +93,7 @@ test("the callable scope eagerly builds defs and memoizes resolution", async () 
   expect(local.compiled.flowId).toBe("local");
   expect(scope.resolve("local")).toBe(local);
 
-  const first = await scope.resolveAlias("remote");
+  const first = (await scope.resolveAlias("remote")) as ComposedFlow;
   const second = scope.resolve("remote");
   expect(seen).toEqual([["library/child", "declared-v1"]]);
   expect(first).not.toBe(externalChild);

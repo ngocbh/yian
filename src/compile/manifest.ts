@@ -42,6 +42,7 @@ import { MapNode } from "../nodes/map/node.ts";
 import { StartNode } from "../nodes/start/node.ts";
 import { ToolNode } from "../nodes/tool/node.ts";
 import { authoredGrant, type ToolGrant } from "../tools/grants.ts";
+import type { ToolModuleRef } from "../tools/modules.ts";
 import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { canonicalJson, type JsonObject, type JsonValue } from "../typesys/json.ts";
 import {
@@ -118,9 +119,10 @@ const KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
     "skills",
     "steerRender",
     "flowTools",
+    "moduleTools",
   ],
   [NodeKind.CODE]: ["code"],
-  [NodeKind.TOOL]: ["toolRef", "retries", "answerSchema"],
+  [NodeKind.TOOL]: ["toolRef", "retries", "answerSchema", "module"],
   [NodeKind.CASE]: ["cases"],
   [NodeKind.CALL]: ["flowId", "def", "flowVersion", "child"],
   [NodeKind.MAP]: ["flowId", "def", "flowVersion", "child"],
@@ -769,6 +771,8 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
           child: flowManifestOf(tool.child, ctx, `${path}.flowTools[${index}].child`, topologyOnly),
         }));
       }
+      // Left out when empty, as above.
+      if (agent.moduleTools.length > 0) manifest.module_tools = agent.moduleTools.map(moduleManifest);
       break;
     }
     case NodeKind.CODE:
@@ -791,6 +795,8 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
       if (tool.builtin === "ask" && tool.title !== null) {
         manifest.title = canonicalValue(tool.title, ctx, `${path}.title`);
       }
+      // Left out when unset, as for every tool not a module's.
+      if (tool.module !== null) manifest.module = moduleManifest(tool.module);
       break;
     }
     case NodeKind.CASE: {
@@ -829,6 +835,14 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
       throw new YianRangeError(`${path}: unsupported node kind ${reprText(node.kind)}`);
   }
   return manifest;
+}
+
+/**
+ * A tool module's alias and ref as written. Its `path` is where the ref resolved, not what it names,
+ * as for a CODE node's `baseDir`.
+ */
+function moduleManifest(module: ToolModuleRef): JsonObject {
+  return { alias: module.alias, ref: module.ref };
 }
 
 /** Canonicalize one edge; callers preserve the flow's semantic edge order. */

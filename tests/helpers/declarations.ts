@@ -284,6 +284,7 @@ function resolveFrom(scope: CallableScope, children: ChildFlows = {}): AssemblyS
     registerPrivate: (flowId, owner, label, build) => scope.registerPrivate(flowId, owner, label, build),
     has: (flowId) => Object.hasOwn(children, flowId) || scope.has(flowId),
     section: (flowId) => (Object.hasOwn(children, flowId) ? "defs" : scope.section(flowId)),
+    toolModule: (name) => scope.toolModule(name),
     resolve: (flowId) => (Object.hasOwn(children, flowId) ? children[flowId]! : scope.resolve(flowId)),
   };
 }

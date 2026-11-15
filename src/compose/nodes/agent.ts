@@ -12,8 +12,8 @@
  *
  * Knows about: diagnostics, compose source and helpers, expr (span reading and the binder),
  *              llm_clients (config and provider blocks), nodes (agent and contracts), skills,
- *              tools (grants and reserved names), typesys, defaults, and the callable resolver
- *              (`resolver.ts`), which bakes the flows an agent grants as tools.
+ *              tools (grants, reserved names and modules), typesys, defaults, and the callable
+ *              resolver (`resolver.ts`), which bakes the flows an agent grants as tools.
  */
 
 import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
@@ -50,6 +50,7 @@ import {
 } from "../../nodes/contracts.ts";
 import { SkillError } from "../../skills/index.ts";
 import { checkVisibleNames, GrantError, parseToolGrants, type ToolGrant } from "../../tools/grants.ts";
+import { splitModuleRef, type ToolModuleRef } from "../../tools/modules.ts";
 import { RESERVED_TOOL_NAMES } from "../../tools/registry.ts";
 import { YianTypeError } from "../../typesys/errors.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
@@ -948,6 +949,7 @@ export class AgentDescriptor extends NodeDescriptor {
     ];
     const toolsRange = this.fieldRanges.get(siteKey("field", "tools")) ?? this.range;
     const flowTools = this.readFlowTools(ctx, memoryInputs, toolsRange);
+    const moduleTools = this.readModuleTools(ctx, memoryInputs, toolsRange);
     try {
       checkMemoryGrants(
         this.tools.filter((grant) => memoryInputs.includes(grant.kind === "name" ? grant.name : grant.group)),
@@ -977,6 +979,7 @@ export class AgentDescriptor extends NodeDescriptor {
         steerRender: this.steerRender,
         memoryInputs,
         flowTools,
+        moduleTools,
       });
     } catch (error) {
       // AgentNode checks skill grants and tool names; a refusal is the loader's one error type.
@@ -1062,7 +1065,7 @@ export class AgentDescriptor extends NodeDescriptor {
     for (const grant of this.tools) {
       const name = grant.kind === "name" ? grant.name : grant.group;
       const section = ctx.callableSection(name);
-      if (section === null) continue;
+      if (section === null || ctx.toolModule(name) !== null) continue;
       const entry = section === "defs" ? "the defs entry" : "the uses: alias";
       if (memoryInputs.includes(name)) throw fail(`\`${name}\` is both a memory input and a flow; rename one`);
       if (grant.kind === "group") {
@@ -1109,6 +1112,33 @@ export class AgentDescriptor extends NodeDescriptor {
       tools.push({ name, description, parameters, child: child.compiled });
     }
     return tools;
+  }
+
+  /**
+   * Return the tool modules `tools:` grants by `uses:` alias, once each, in grant order: a module's
+   * group by name or as a group grant, and a one-export alias by name.
+   *
+   * @throws LoadError, at `tools:`, when a grant names both a memory input and a tool module, or
+   *   grants a one-export alias as a group.
+   */
+  private readModuleTools(
+    ctx: BuildContext,
+    memoryInputs: readonly string[],
+    range: SourceRange | null,
+  ): ToolModuleRef[] {
+    const fail = (message: string) => ctx.diagnostics.error(`node ${reprText(this.id)}: ${message}`, { range });
+    const modules: ToolModuleRef[] = [];
+    for (const grant of this.tools) {
+      const name = grant.kind === "name" ? grant.name : grant.group;
+      const module = ctx.toolModule(name);
+      if (module === null) continue;
+      if (memoryInputs.includes(name)) throw fail(`\`${name}\` is both a memory input and a tool module; rename one`);
+      if (grant.kind === "group" && splitModuleRef(module.ref).exportName !== null) {
+        throw fail(`\`${name}\` is one tool, ${module.ref}; grant it as \`${name}\``);
+      }
+      if (!modules.includes(module)) modules.push(module);
+    }
+    return modules;
   }
 
   /**

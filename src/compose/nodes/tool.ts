@@ -22,6 +22,7 @@ import { ToolNode } from "../../nodes/tool/node.ts";
 import { LOAD_SKILL } from "../../skills/tool.ts";
 import { ASK, ASK_USER, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "../../tools/context.ts";
 import { GrantError, visibleToolName } from "../../tools/grants.ts";
+import { splitModuleRef, type ToolModuleRef } from "../../tools/modules.ts";
 import { RESERVED_TOOL_NAMES, type ToolRef } from "../../tools/registry.ts";
 import { parseDateOrDatetime, parseDuration } from "../../typesys/temporal.ts";
 import {
@@ -309,13 +310,18 @@ export class ToolDescriptor extends NodeDescriptor {
    *
    * A `tool_id: {<memory>: <tool>}` naming a memory input of the node's own flow calls that
    * memory's tool, routed through the reserved `__memory_<input>` wiring, never the run's tools.
+   * One naming a `uses:` alias of a tool module, `{<alias>: <tool>}` for a group and `<alias>` for
+   * one export, calls that module's tool.
    *
    * @throws LoadError when `output:` isn't a valid type expression, a built-in's input is unknown,
-   *   missing or of the wrong type (at the input), or a memory's tool names an Optional memory or a tool its type lacks.
+   *   missing or of the wrong type (at the input), a memory's tool names an Optional memory or a
+   *   tool its type lacks, or as `checkModuleRef` throws.
    */
   override build(ctx: BuildContext): BuildResult {
     const { group, name } = this.toolRef;
     const memory = group === null ? undefined : ctx.flowInputs.get(group);
+    const module = ctx.toolModule(group ?? name);
+    if (module !== null) this.checkModuleRef(ctx, module, isMemoryType(memory));
     if (isMemoryType(memory)) return this.buildMemoryTool(ctx, memory);
     // A group's tool shows as `<group>_<tool>`, which is never a built-in's name.
     if (group !== null && RESERVED_TOOL_NAMES.has(this.toolId)) {
@@ -328,7 +334,7 @@ export class ToolDescriptor extends NodeDescriptor {
     const builtin = BUILTIN_TOOL_IDS.has(this.toolId as BuiltinToolId);
     // A built-in is never retried by the node: take and sleep make no call, and the host owns an ask.
     const retries = builtin ? 0 : this.retries;
-    const node = new ToolNode(this.id, { toolId: this.toolRef, title: this.nodeName, retries });
+    const node = new ToolNode(this.id, { toolId: this.toolRef, title: this.nodeName, retries, module });
     const wiring = this.sinkWiring();
     if (this.toolId === TAKE) {
       node.outputContract = this.buildTake(ctx);
@@ -354,6 +360,28 @@ export class ToolDescriptor extends NodeDescriptor {
     }
     node.params = this.sinkParams();
     return this._finish(node, wiring);
+  }
+
+  /**
+   * Check that `tool_id:` names one tool of `module`, whose alias it names: `{<alias>: <tool>}` for
+   * a module's group, `<alias>` for one export.
+   *
+   * @param memory Whether the group `tool_id:` names is a memory input too.
+   * @throws LoadError, at `tool_id:`, when the alias is a memory input too, or the form doesn't
+   *   fit the alias.
+   */
+  private checkModuleRef(ctx: BuildContext, module: ToolModuleRef, memory: boolean): void {
+    const { group, name } = this.toolRef;
+    const fail = (message: string) =>
+      ctx.diagnostics.error(`node ${reprText(this.id)}: ${message}`, {
+        range: this.fieldRanges.get(siteKey("field", "tool_id")) ?? this.range,
+      });
+    const single = splitModuleRef(module.ref).exportName !== null;
+    if (memory) throw fail(`\`${group}\` is both a memory input and a tool module; rename one`);
+    if (group === null && !single) {
+      throw fail(`\`${name}\` is a tool module; name one of its tools: \`tool_id: {${name}: <tool>}\``);
+    }
+    if (group !== null && single) throw fail(`\`${group}\` is one tool, ${module.ref}; write \`tool_id: ${group}\``);
   }
 
   /**

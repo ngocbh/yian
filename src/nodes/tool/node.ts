@@ -26,6 +26,7 @@ import { realScheduler } from "../../platform.ts";
 import { ASK, BUILTIN_TOOL_IDS, type BuiltinToolId, isPending, SLEEP, TAKE, toolCallId } from "../../tools/context.ts";
 import { isPermanentToolError, isToolCheckError, isTransientToolError, ToolCheckError } from "../../tools/errors.ts";
 import { type MemoryGrant, visibleToolName } from "../../tools/grants.ts";
+import { checkedToolModule, splitModuleRef, type ToolModuleRef } from "../../tools/modules.ts";
 import { type ToolRef, ToolSet } from "../../tools/registry.ts";
 import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import { eventBytes, type JsonObject } from "../../typesys/json.ts";
@@ -296,6 +297,11 @@ export class ToolNode extends Node {
    * `__memory_<input>` wiring instead of the run's `ToolSet`.
    */
   readonly memoryTool: boolean;
+  /**
+   * The tool module `toolRef` names by its `uses:` alias, `{<alias>: <tool>}` for a module's group
+   * and `<alias>` for one export; `null` for any other tool.
+   */
+  readonly module: ToolModuleRef | null;
   /** How many times a failed tool call may be retried, at least 0. */
   retries: number;
   /** The proven type of each input's binding; an input whose type is not proven is absent. */
@@ -315,8 +321,10 @@ export class ToolNode extends Node {
    * @param options.answerSchema For `ask`, the answer schema; `null` or omitted means `[]`.
    * @param options.memoryTool Whether `toolId` names a memory's tool by its input; defaults to
    *   `false`.
-   * @throws TypeError when `retries` isn't a safe-integer number or `null`.
-   * @throws RangeError when `retries` is negative, or a memory's tool names no memory input.
+   * @param options.module The tool module `toolId` names; defaults to `null`.
+   * @throws TypeError when `retries` isn't a safe-integer number or `null`, or `module` is malformed.
+   * @throws RangeError when `retries` is negative, a memory's tool names no memory input, or
+   *   `toolId` doesn't name `module` by its alias.
    */
   constructor(
     nodeId: string,
@@ -326,9 +334,10 @@ export class ToolNode extends Node {
       retries?: number | null;
       answerSchema?: readonly Readonly<Record<string, unknown>>[] | null;
       memoryTool?: boolean;
+      module?: ToolModuleRef | null;
     },
   ) {
-    const { toolId, title = null, retries = null, answerSchema = null, memoryTool = false } = options;
+    const { toolId, title = null, retries = null, answerSchema = null, memoryTool = false, module = null } = options;
     super(nodeId, { title });
     if (retries !== null) {
       const message = `node ${reprText(nodeId)}: retries must be a non-negative int, got ${valueRepr(retries)}`;
@@ -341,6 +350,15 @@ export class ToolNode extends Node {
       throw new YianRangeError(`node ${reprText(nodeId)}: a memory's tool is named \`{<memory>: <tool>}\``);
     }
     this.memoryTool = memoryTool;
+    this.module = module === null ? null : checkedToolModule(`node ${reprText(nodeId)}`, module);
+    if (this.module !== null) {
+      const { alias, ref: moduleRef } = this.module;
+      // A group alias names a module's tool as `{<alias>: <tool>}`; a one-export alias is that tool.
+      const group = splitModuleRef(moduleRef).exportName === null;
+      if (memoryTool || (group ? ref.group !== alias : ref.group !== null || ref.name !== alias)) {
+        throw new YianRangeError(`node ${reprText(nodeId)}: tool_id doesn't name tool module ${reprText(alias)}`);
+      }
+    }
     this.toolId = visibleToolName(this.toolRef.group, this.toolRef.name);
     this.retries = retries ?? current().toolRetries;
     this.inputTypes = new Map();
@@ -368,6 +386,11 @@ export class ToolNode extends Node {
       this.inputTypes,
       outputContractType(this.outputContract),
     );
+  }
+
+  /** Return the tool module this node calls a tool of, if it names one. */
+  override toolModules(): readonly ToolModuleRef[] {
+    return this.module === null ? [] : [this.module];
   }
 
   /** Return the grant of the memory tool this node calls, if it names one. */

@@ -43,7 +43,10 @@ a load error, except `x-` keys, which yian ignores.
 A file with `defs:` and no `nodes:` is a library ([Library
 files](https://yian.readthedocs.io/flows/#library-files)): defs for other flows to import with
 `uses:`, each seeing its `typedefs:`, `uses:` and sibling defs. It can't set `input`, `output`,
-`asserts`, `env` or `llm_config` (set them on each def), and `yian run` refuses it.
+`asserts`, `env` or `llm_config` (set them on each def), and `yian run` refuses it. A flow calls
+a def with `call: {billing: quote}` on a `call`, `map` or `loop` node, or with
+`call(billing.quote, qty=3)` in a binding ([Call a library's
+def](https://yian.readthedocs.io/control-flow/#call-a-librarys-def)).
 
 | Flow `output:` | Returns |
 |---|---|

@@ -376,7 +376,8 @@ signal's reason, and `advance` runs the stopped nodes again.
   sends a call to it that a crash or a stop cut off again. A handler gets `(args, ctx)`. `ctx` holds
   `callId` (the same on every retry and resume, so use it as an idempotency key), `attempt` (1
   on the first try, higher on a TOOL node's retry or when a resume makes the call again), `runId`,
-  `node`, `context` (your app object) and `signal` (aborted when the call must end).
+  `node`, `context` (your app object; `undefined` for a [tool module](/code-and-tools/#tool-modules)'s
+  tool, which runs on its own thread) and `signal` (aborted when the call must end).
   Tool groups may hold same-named tools, which a model sees as `<group>_<tool>`; two tools that
   could show one name are refused. `ToolOptions` (from `@ngocbh/yian/tools`) is the type of
   `tool()`'s options, so an options object written on its own
@@ -462,8 +463,9 @@ Otherwise every CODE call fails with `CODE worker failed: Cannot find module ...
 $ bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig src/main.ts src/nodes/code/worker.ts --outfile out/host
 ```
 
-A `./file.ts:fn` CODE file is read from disk when the run needs it, so it can't see packages
-bundled into the binary.
+A `./file.ts:fn` CODE file and a [tool module](/code-and-tools/#tool-modules) are read from disk
+when the run needs them, so they can't see packages bundled into the binary. A tool module needs
+no yian import, so it runs under the binary as it does beside an installed yian.
 
 ## Testing without a model
 

@@ -192,7 +192,7 @@ output:
   the child's quoted `version:` text (`clean: ../common/clean@1`).
 - **A library's def is `call: {billing: quote}`** (or `call(billing.quote, k=v)` in a binding),
   on `call`, `map` and `loop`. `call: billing` alone is a load error, and a flow's own `defs:`
-  can't be called from outside.
+  can't be called from outside. `tool_id: billing` is a load error too.
 - **Write exactly one of `call:` and an inline body** (`nodes:` plus `output:`). An inline body
   can't see its parent's inputs, nodes or `${item}`: pass them through the node's `input:`, and
   read them inside as `${input.<name>}`.
@@ -218,6 +218,15 @@ output:
   `module:function` without `./`, or a reference that breaks these rules, fails at load.
 - **Only erasable TypeScript**: annotations, `as`, interfaces and type aliases; `enum` and
   `namespace` fail at load. A body runs on a worker thread and is not a sandbox.
+- **A tool module is a `uses:` ref to a `.ts`, `.js` or `.mjs` file** whose named exports are
+  tools: plain objects of `tool()`'s options (`name` equal to the export's, `description`,
+  `parameters`, `execute`), with no runtime import of yian (`import type { ToolOptions } from
+  "@ngocbh/yian/tools"`, the whole statement). `crm: ./crm.ts` is a group (`tool_id: {crm:
+  lookup}`, `tools: [crm]` shows `crm_lookup`); `quote: ./tools.ts:quote` is one tool (`tool_id:
+  quote`). Load and `yian check` never import it; each run start and resume does, on its own
+  thread. An error the model should read carries `{[Symbol.for("yian.tool_error")]:
+  ["reported"]}`, and `ctx.context` is `undefined`. See
+  [Tool modules](https://yian.readthedocs.io/code-and-tools/#tool-modules).
 
 ### Agents
 
@@ -236,7 +245,8 @@ output:
   itself), or its failure as the call's error. It runs inside the run, its nodes under
   `<agent>/<flow>#<k>`. A library alias grants its defs: `billing` every def, `{billing: [quote]}`
   the listed ones, each shown as `billing_<def>` and needing a `description:`. See
-  [Flows as tools](https://yian.readthedocs.io/agents/#flows-as-tools).
+  [Flows as tools](https://yian.readthedocs.io/agents/#flows-as-tools). A tool module's alias
+  grants its tools the same way (`crm`, `{crm: [lookup]}`), or one export by its alias.
 - **An agent a host may interrupt needs an `Optional(...)` output.** An interrupted agent's
   output is null; with `str` or any other type it fails with `agent.interrupted`. This applies
   to every agent with `steer_inbox:`.

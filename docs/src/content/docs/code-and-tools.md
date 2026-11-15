@@ -1,11 +1,12 @@
 ---
 title: "Code and tools"
-description: "CODE and TOOL nodes: inline TypeScript bodies, ./file.ts:fn references, the worker, and tool calls."
+description: "CODE and TOOL nodes: inline TypeScript bodies, ./file.ts:fn references, the worker, tool calls, and tool modules."
 ---
 
 This page explains the two nodes that run without a model: a `code` node runs your own
-TypeScript or JavaScript, and a `tool` node calls one tool your host supplies. Both are
-deterministic steps: same inputs, same work, no model in the loop.
+TypeScript or JavaScript, and a `tool` node calls one tool your host or a
+[tool module](#tool-modules) supplies. Both are deterministic steps: same inputs, same work, no
+model in the loop.
 
 ## CODE nodes
 
@@ -145,7 +146,7 @@ quote:
 
 | Field | Required | What it holds |
 |---|---|---|
-| `tool_id` | yes | A tool name, `{group: tool}` (a group's or a [memory](/memory/)'s tool), or a built-in: `take`, `sleep` or `ask` |
+| `tool_id` | yes | A tool name, `{group: tool}` (a group's, a [memory](/memory/)'s or a [tool module](#tool-modules)'s tool), or a built-in: `take`, `sleep` or `ask` |
 | `input` | no | The tool's arguments, by the tool's own parameter names |
 | `output` | no | The type the result must have; without it any JSON value or file passes |
 | `retries` | no | Extra attempts after a failed call (default 0); not for `take`, `sleep`, `ask` |
@@ -188,3 +189,146 @@ The default is 0, so a tool runs once unless you opt in: a retried call repeats 
 the failed attempt already had. `YIAN_TOOL_RETRIES` changes the default;
 `YIAN_TOOL_RETRY_DELAY_SECONDS` (1) and `YIAN_TOOL_RETRY_MAX_DELAY_SECONDS` (30) change the waits.
 When every attempt fails, the error lists each attempt.
+
+## Tool modules
+
+A tool module is a TypeScript or JavaScript file whose exports are tools. A flow imports it with
+`uses:`, and its tools work as [host tools](/agents/#host-tools) do: a `tool` node calls one, and
+an agent grants them. A module needs no runtime import of yian, so it runs wherever the flow
+runs, under a compiled `yian` too.
+
+```ts title="crm.ts"
+import type { ToolOptions } from "@ngocbh/yian/tools";
+
+const TOOL_ERROR = Symbol.for("yian.tool_error");
+const customers: Record<string, string> = { "7": "Ada" };
+
+export const lookup = {
+  name: "lookup",
+  description: "Find a customer by id.",
+  parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+  execute: async (args) => {
+    const name = customers[String(args.id)];
+    if (name === undefined) throw Object.assign(new Error("no such customer"), { [TOOL_ERROR]: ["reported"] });
+    return { id: args.id, name };
+  },
+} satisfies ToolOptions;
+
+export const LIMIT = 10; // not a tool
+```
+
+```yaml title="lookup.yaml" check=runnable
+id: lookup
+name: lookup
+input:
+  id: !str
+uses:
+  crm: ./crm.ts
+nodes:
+  found:
+    kind: tool
+    tool_id: {crm: lookup}
+    input:
+      id: ${input.id}
+    output: {id: !str, name: !str}
+output: ${found.output.name}
+```
+
+```console
+$ yian run lookup.yaml --input id=7
+Ada
+```
+
+### Exports and aliases
+
+A named export is a tool when it is a `tool()` value, or a plain object with an `execute`
+function: `tool()`'s options (`name`, `description`, `parameters`, `execute`, and optionally
+`output`, `isConcurrencySafe` and `resumable`; see [Host tools](/agents/#host-tools)). Every
+other export, and `default`, is ignored.
+
+- A tool's `name` must equal its export's name.
+- A plain object missing a field, holding a mistyped one or a key `tool()` doesn't take (such as
+  `resumeable`), and an export that can't be read, are refused.
+- A plain object's `execute` and `isConcurrencySafe` run with the object as `this`.
+- For the types, write `import type { ToolOptions }` as the whole statement. Node keeps
+  `import { type ToolOptions }` as an import, which fails where yian isn't installed.
+- Write an ES module: Node and Bun read a CommonJS file's exports differently.
+
+| `uses:` entry | Imports | A `tool` node calls | An agent's model sees |
+|---|---|---|---|
+| `crm: ./crm.ts` | Every tool the file exports, as a group | `tool_id: {crm: lookup}` | `crm_lookup`, `crm_create`, ... |
+| `quote: ./tools.ts:quote` | One export, as one tool | `tool_id: quote` | `quote` |
+
+- An agent grants a group whole (`tools: [crm]`) or in part (`{crm: [lookup]}`), and a
+  one-export alias by its name. A tool that two aliases of one file reach is offered once.
+- A ref is a relative path, `./` or `../`, to a `.ts`, `.js` or `.mjs` file, resolved from the
+  importing file's real folder, never from `system.paths`. It takes no `@version`, and under a
+  `codeRoot` or `yian check --root` it must stay inside, as a CODE file must.
+- `call:` on a module's alias is a load error; call its tools from a `tool` node.
+
+### When a module runs
+
+Loading a flow and `yian check` never import a module; they check that its file exists. Each run
+start and each resume (each `advance`, for a host) imports the modules the flow's nodes reach,
+each once, on a thread of its own, and lists their tools. The threads end when the run ends,
+stops or waits.
+
+- A module's top-level code runs at every start and resume, so keep it cheap and free of side
+  effects.
+- One thread serves every call to its module, interleaved; a call that blocks the thread stalls
+  only that module's calls.
+- The thread is **not a sandbox**, as CODE's worker isn't.
+- The run refuses to start, naming the file (from the root flow's folder) and the export, when
+  an import throws or outlasts `YIAN_TOOL_MODULE_START_TIMEOUT_SECONDS` (30), a one-export alias
+  names an export that is missing or isn't a tool, or a group's file has no tools, a refused
+  export or a tool named like a built-in:
+
+```text
+crm.ts export 'find' holds a tool named 'lookup'; rename one
+```
+
+A run records the tools of the modules its agents grant, and a resume refuses a module whose tools
+changed. A changed `execute` runs as written.
+
+### Calls
+
+A module's tool is checked, called and retried as a host tool is, and its validators,
+`isConcurrencySafe` and `execute` run on the module's thread.
+
+- `ctx` holds `callId`, `attempt`, `runId`, `node`, `toolName` (the export's name) and `signal`.
+  `ctx.context` is `undefined`: the host's app object can't reach the thread.
+- What `console` prints during a call goes where the calling node's console goes: printed, or to
+  a host's [`onConsole`](/embedding/#runflow-options). Lines printed at import, or after the call
+  ended, go to the process's `console`.
+- An error marked `reported` is a result an agent's model reads; any other error fails the agent.
+  A `tool` node retries as [Retries](#retries) says. Mark a kind without importing yian through
+  the `Symbol.for("yian.tool_error")` key, which yian's own error classes carry too;
+  `["reported", "permanent"]` is both.
+
+```ts check=fragment
+const TOOL_ERROR = Symbol.for("yian.tool_error");
+throw Object.assign(new Error("no such customer"), { [TOOL_ERROR]: ["reported"] });            // the model reads it
+throw Object.assign(new Error("quantity must be positive"), { [TOOL_ERROR]: ["permanent"] });  // TOOL retries stop
+throw Object.assign(new Error("rate limited"), { [TOOL_ERROR]: ["transient"], retryAfter: 5 }); // retried after 5 s
+```
+
+- A result must be a yian value, as a CODE node's must. A `Date`, a class instance or a function
+  in it fails the node with `node.execute`, never retried, even for a tool without `output` (a
+  host tool's such result fails a TOOL node with `contract.output`).
+- A tool may return `{ [Symbol.for("yian.pending")]: true }`, which is `pending()`, to answer the
+  call later. That works only under a host that passes
+  [`completesCalls: true`](/embedding/#pending-host-calls); elsewhere, `yian run` and `yian chat`
+  included, the call fails: `tool 'crm_lookup' returned pending(), but this run's host doesn't
+  complete calls`.
+
+### Exits and restarts
+
+When a module's thread exits (`process.exit`, or an error nothing catches, such as one a timer
+throws), every call it was running fails with `tool.module_exited`:
+`crm.ts's thread exited (code 3); the call's outcome is unknown`. An agent's model reads it, unless
+the thread exited while checking the result; a `tool` node fails without a retry, since the call
+may have run.
+
+The next call starts a fresh thread, which imports the module again. When that import fails or
+outlasts the timeout, or the module's tools differ from the ones the run started with, the call
+and every later one fail with `tool.module_restart`, until the run is resumed.

@@ -297,9 +297,10 @@ server. Each entry grants one of these:
 | MCP servers | `yian run` reads them from config files (below). Each server is a tool group named after it |
 | Host tools | A program passes them to the run (below) |
 | Flows | A `defs:` entry or `uses:` alias of the agent's file, granted by its name, or a library's defs (below) |
+| [Tool modules](/code-and-tools/#tool-modules) | A `uses:` alias of a `.ts`, `.js` or `.mjs` file: `crm: ./crm.ts` grants its tools as a group (`crm_lookup`, ...), and `quote: ./tools.ts:quote` one export as the tool `quote` |
 
 - The calls in one reply run one at a time, except that consecutive calls to tools marked safe to
-  run together start together: a host tool's `isConcurrencySafe`, or an MCP server's
+  run together start together: a host or module tool's `isConcurrencySafe`, or an MCP server's
   `concurrencySafe`. Results reach the model in call order.
 - A tool that throws `ReportedToolError` doesn't fail the node: the model reads the message as
   the call's result and carries on. MCP tool errors work this way. Any other error fails the node.
@@ -477,9 +478,9 @@ The flow said HI!
   input is a load error. So is the group form `{shout: [x]}`, a flow or library named like a
   built-in tool or a memory input, and a flow that grants itself, directly or through another
   flow.
-- A run is refused before it starts when a granted flow or library has the name of one of its host
-  tools or tool groups, or when a granted flow and a granted host tool would show one name. This
-  holds for every agent of the flow, even one that never runs.
+- A run is refused before it starts when a granted flow, library or tool module has the name of
+  one of its host tools or tool groups, or when a granted flow or module tool and a granted host
+  tool would show one name. This holds for every agent of the flow, even one that never runs.
 - A host never sees a flow call: `pendingCalls` and a run's `waits` leave it out, and `complete`
   refuses it (`not_host_call`).
 

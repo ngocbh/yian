@@ -1,0 +1,33 @@
+# Only a library's defs can be listed: a flow imported with `uses:` is one tool, and its own defs
+# are private.
+kind: load
+flow: |
+  id: f
+  name: f
+  uses:
+    clean: lib/clean
+  nodes:
+    helper:
+      kind: agent
+      prompt: Help.
+      output: !str
+      tools: [{clean: [trim]}]
+  output: ${helper.output}
+files:
+  lib/clean.yaml: |
+    id: clean
+    name: clean
+    description: Clean a text.
+    defs:
+      trim: {nodes: {v: !str x}, output: "${v.output}"}
+    nodes:
+      t: !str x
+    output: ${t.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''helper'': `tools:` grants flow `clean` as a group; `clean` is a flow, not a library, and its defs are private, so grant it as `clean`'
+      frames:
+      - label: flow.yaml
+        range: [10, 12, 10, 29]

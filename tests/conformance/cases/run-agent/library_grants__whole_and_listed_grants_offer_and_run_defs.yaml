@@ -1,0 +1,76 @@
+# `billing` grants every def of the library `billing`, once even beside `{billing: [quote]}`, and
+# `{billing: [quote]}` alone only `quote`. Each def shows as `billing_<def>`, and a call grows its
+# scope under that name (`whole/billing_refund#0/...`).
+kind: run
+flow: |
+  id: pricing
+  name: pricing
+  llm_config: {provider: openai, model: gpt-5.5}
+  uses:
+    billing: lib/billing
+  nodes:
+    whole:
+      kind: agent
+      tools: [billing, {billing: [quote]}]
+      system_prompt: Help.
+      prompt: Refund tea.
+      output: !str
+    listed:
+      kind: agent
+      tools: [{billing: [quote]}]
+      system_prompt: Help.
+      prompt: Price tea.
+      output: !str
+  output:
+    whole: ${whole.output}
+    listed: ${listed.output}
+files:
+  lib/billing.yaml: |
+    id: billing
+    name: billing
+    defs:
+      quote: {description: Price an item., input: {item: !str}, nodes: {v: !str "${input.item} costs 3"}, output: "${v.output}"}
+      refund: {description: Refund an item., input: {item: !str}, nodes: {v: !str "${input.item} refunded"}, output: "${v.output}"}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  models:
+    whole:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts: [{type: tool_call, id: c1, name: billing_refund, arguments: {item: tea}}]
+        request:
+          messages:
+          - {format: yian.message.v1, role: system, parts: [{type: text, text: Help.}]}
+          - {format: yian.message.v1, role: user, parts: [{type: text, text: Refund tea.}]}
+          tools:
+          - name: billing_quote
+            description: Price an item.
+            parameters: &item
+              additionalProperties: false
+              properties: {item: {title: Item, type: string}}
+              required: [item]
+              type: object
+          - {name: billing_refund, description: Refund an item., parameters: *item}
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: done}]}
+    listed:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts: [{type: tool_call, id: c2, name: billing_quote, arguments: {item: tea}}]
+        request:
+          messages:
+          - {format: yian.message.v1, role: system, parts: [{type: text, text: Help.}]}
+          - {format: yian.message.v1, role: user, parts: [{type: text, text: Price tea.}]}
+          tools:
+          - {name: billing_quote, description: Price an item., parameters: *item}
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: done}]}
+expect:
+  output:
+    status: succeeded
+    output: {whole: done, listed: done}
+  trace: [[run_started, null, {effective_llm_by_static_path: {listed: {model: gpt-5.5, provider: openai, _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}}, whole: {model: gpt-5.5, provider: openai, _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}}}, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, listed], [node_step, listed, {n: 1, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{arguments: {item: tea}, id: c2, name: billing_quote, type: tool_call}], role: assistant}, purpose: chat, request_sha256: db2f657bbebd0ad005a8ca7235c24cc09a11a4affb57afcf7b0670acfb964d32, response_id: null, usage: null}}], [node_step, listed, {n: 2, step: {arguments: {item: tea}, call_id: r1/listed/1/0, flow: true, index: 0, kind: pending, reply: 1, scope: listed/billing_quote#0, tool: billing_quote, tool_call_id: c2}}], [node_expanded, listed, {prune_ids: []}], [node_waiting, listed, {call_ids: [r1/listed/1/0]}], [node_started, whole], [node_step, whole, {n: 1, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{arguments: {item: tea}, id: c1, name: billing_refund, type: tool_call}], role: assistant}, purpose: chat, request_sha256: 7e1aa57fc8fbc64c7aa1f66aaf991195589bf941fa47822bb9deceb783c5e39f, response_id: null, usage: null}}], [node_step, whole, {n: 2, step: {arguments: {item: tea}, call_id: r1/whole/1/0, flow: true, index: 0, kind: pending, reply: 1, scope: whole/billing_refund#0, tool: billing_refund, tool_call_id: c1}}], [node_expanded, whole, {prune_ids: []}], [node_waiting, whole, {call_ids: [r1/whole/1/0]}], [node_started, listed/billing_quote#0/__start__], [pool_commit, listed/billing_quote#0/__start__, {from: {}}], [node_succeeded, listed/billing_quote#0/__start__, {commit: 19}], [node_started, whole/billing_refund#0/__start__], [pool_commit, whole/billing_refund#0/__start__, {from: {}}], [node_succeeded, whole/billing_refund#0/__start__, {commit: 22}], [node_started, listed/billing_quote#0/v], [pool_commit, listed/billing_quote#0/v, {value: tea costs 3}], [node_succeeded, listed/billing_quote#0/v, {commit: 25}], [node_started, whole/billing_refund#0/v], [pool_commit, whole/billing_refund#0/v, {value: tea refunded}], [node_succeeded, whole/billing_refund#0/v, {commit: 28}], [node_started, listed/billing_quote#0/__end__], [pool_commit, listed/billing_quote#0/__end__, {from: {listed/billing_quote#0/v: 25}}], [node_succeeded, listed/billing_quote#0/__end__, {commit: 31}], [node_woken, listed], [node_step, listed, {n: 3, step: {call_id: c2, is_error: false, kind: tool_result, output: tea costs 3}}], [node_step, listed, {n: 4, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{text: done, type: text}], role: assistant}, purpose: chat, request_sha256: b7701ca654271394363c5b29215ddc784d5d63d1473ea64075ffbbb82ba31d88, response_id: null, usage: null}}], [pool_commit, listed, {value: done}], [pool_commit, listed, {key: listed.new_messages, steps: [9, 34, 35]}], [node_succeeded, listed, {commit: 36, messages: 37}], [node_started, whole/billing_refund#0/__end__], [pool_commit, whole/billing_refund#0/__end__, {from: {whole/billing_refund#0/v: 28}}], [node_succeeded, whole/billing_refund#0/__end__, {commit: 40}], [node_woken, whole], [node_step, whole, {n: 3, step: {call_id: c1, is_error: false, kind: tool_result, output: tea refunded}}], [node_step, whole, {n: 4, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{text: done, type: text}], role: assistant}, purpose: chat, request_sha256: f7238ee4420929586df13d58066a8b70aed837c9af8f5a19d06ef9f887f06790, response_id: null, usage: null}}], [pool_commit, whole, {value: done}], [pool_commit, whole, {key: whole.new_messages, steps: [14, 43, 44]}], [node_succeeded, whole, {commit: 45, messages: 46}], [node_started, __end__], [pool_commit, __end__, {value: {listed: done, whole: done}}], [node_succeeded, __end__, {commit: 49}]]

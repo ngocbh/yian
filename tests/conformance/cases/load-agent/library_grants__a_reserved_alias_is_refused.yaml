@@ -1,0 +1,29 @@
+# A library alias named like a built-in tool is refused when granted: `ask` with a def `user` would
+# show as `ask_user`.
+kind: load
+flow: |
+  id: f
+  name: f
+  uses:
+    ask: lib/ask
+  nodes:
+    helper:
+      kind: agent
+      prompt: Help.
+      output: !str
+      tools: [ask]
+  output: ${helper.output}
+files:
+  lib/ask.yaml: |
+    id: ask
+    name: ask
+    defs:
+      user: {description: Ask someone., nodes: {v: !str x}, output: "${v.output}"}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''helper'': library `ask` has the name of a built-in tool; rename the uses: alias'
+      frames:
+      - label: flow.yaml
+        range: [10, 12, 10, 17]

@@ -260,13 +260,14 @@ export function callNesting(flow: NestingFlow): number {
  * @param options.kind The calling node's kind (`call`, `map` or `loop`), named in messages;
  *   `call` when not given.
  * @param options.def The def of the library `flowId` names, or `null` for a flow. Absent for a
- *   caller that takes no library, which refuses one.
+ *   caller that takes a library whole (an AGENT's grant), which gets either back.
  * @param options.label The calling site's name in messages, in place of `<kind> node '<id>'`.
  * @param options.directive Whether the call is a `call(...)` directive, which a library's fix
  *   is written as.
- * @returns The resolved child flow: a library's def when `def` names one.
- * @throws {LoadError} When the callable can't be resolved, is a library without a def, a flow
- *   with one or a library without that def, or the call nests bodies deeper than
+ * @returns The resolved child flow: a library's def when `def` names one, or the library itself
+ *   when `def` is absent.
+ * @throws {LoadError} When the callable can't be resolved, is a library with a `null` def, a flow
+ *   with a def or a library without that def, or the call nests bodies deeper than
  *   `current().maxCallNesting` levels.
  */
 export function resolveChild(
@@ -310,11 +311,9 @@ export function resolveChild(
   } finally {
     activeCalls = depth;
   }
-  const raise = (message: string) => diagnostics.error(message, { range });
   if (options.def !== undefined) {
+    const raise = (message: string) => diagnostics.error(message, { range });
     child = pickDef(subject, flowId, child, options.def, options.directive ?? false, raise);
-  } else if (child.library != null) {
-    throw raise(`${subject}: ${display} is a library (defs: and no nodes:), not a flow`);
   }
   // A callee built earlier (a cached def, an imported file) never ran on this count.
   const levels = depth + 1 + callNesting(child.compiled);

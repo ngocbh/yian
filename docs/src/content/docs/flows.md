@@ -286,7 +286,8 @@ defs:
 - `input`, `output`, `asserts`, `env` and `llm_config` are load errors there: a def doesn't
   inherit them, so set them on each def.
 - A flow calls a def with `call: {billing: quote}`, or `call(billing.quote, ...)` in a binding (see
-  [Call a library's def](/control-flow/#call-a-librarys-def)).
+  [Call a library's def](/control-flow/#call-a-librarys-def)). An agent grants defs as tools with
+  `tools: [billing]` or `{billing: [quote]}` (see [Flows as tools](/agents/#flows-as-tools)).
 - `yian check billing.yaml` loads every def. `yian run billing.yaml` fails before anything runs.
 - A file with neither `nodes:` nor `defs:` doesn't load.
 

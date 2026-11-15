@@ -616,6 +616,16 @@ export class AssertionStageError extends Error {
 }
 
 /**
+ * The flows a node grants a model as tools (`Node.flowGrants`): the grants naming them, and the
+ * node scope they resolve in, by name: each granted library's defs as a group under its alias, and
+ * every other flow as a top-level tool.
+ */
+export interface FlowGrants {
+  readonly grants: readonly ToolGrant[];
+  readonly scope: NodeScope;
+}
+
+/**
  * @internal A tool of a node's scope as a rebuilt request lists it: a recorded memory tool's spec,
  * or a granted flow's.
  */
@@ -1272,6 +1282,14 @@ export abstract class Node {
    */
   grantedTools(): readonly ToolGrant[] {
     return [];
+  }
+
+  /**
+   * Return the grants of flows a model inside this node may call, as authored, and the node scope
+   * they resolve in. Never among `grantedTools()`. The base grants none.
+   */
+  flowGrants(): FlowGrants {
+    return { grants: [], scope: { groups: new Map(), tools: [] } };
   }
 
   /**

@@ -59,6 +59,7 @@ import {
   CapabilityFault,
   checkNamedPrompt,
   type CompleteResult,
+  type FlowGrants,
   MEMORY_KEY_PREFIX,
   memoryKey,
   memorySession,
@@ -90,7 +91,7 @@ import {
 } from "../contracts.ts";
 import { staticPathOf } from "../ids.ts";
 import { type AgentRunContext, checkStopped, DEFAULT_SYSTEM, sentCredentials } from "./context.ts";
-import { checkedFlowTools, type FlowTool, flowResultText, flowToolFunctions } from "./flow_tools.ts";
+import { checkedFlowTools, type FlowTool, flowResultText, flowToolFunction, flowToolScope } from "./flow_tools.ts";
 import { Interrupted } from "./interrupts.ts";
 import { modelFailureCode } from "./live.ts";
 import {
@@ -375,8 +376,8 @@ export class AgentNode extends Node {
    */
   readonly memoryInputs: readonly string[];
   /**
-   * The flows `tools` grants by name, in grant order, each baked by Compose; a grant naming one is
-   * a flow grant, never a host one.
+   * The flows `tools` grants, in grant order, each baked by Compose: a flow by name, and each def
+   * a library's alias grants, once; a grant naming one is a flow grant, never a host one.
    */
   flowTools: readonly FlowTool[];
   /**
@@ -459,7 +460,8 @@ export class AgentNode extends Node {
    * @throws RangeError for an empty list prompt or one ending in an assistant message, the retired
    *   `builtin_tools` grant, a steer render without a steer inbox, a variable whose name repeats
    *   or whose default is missing or invalid, a flow tool named twice, or one no name grant names,
-   *   or a tool module listed twice, or one no grant names.
+   *   or a library def no grant of its alias names, or a tool module listed twice, or one no grant
+   *   names.
    * @throws SkillError for a `load_skill` tool grant or a bad skill grant.
    */
   constructor(
@@ -511,10 +513,13 @@ export class AgentNode extends Node {
     }
     this.memoryInputs = Object.freeze([...(memoryInputs ?? [])]);
     this.flowTools = checkedFlowTools(nodeId, flowTools ?? []);
-    for (const { name } of this.flowTools) {
-      if (!this.tools.some((grant) => grant.kind === "name" && grant.name === name)) {
-        throw new YianRangeError(`AGENT node ${reprText(nodeId)}: flow tool ${reprText(name)} isn't granted by name in tools`);
-      }
+    for (const { name, library } of this.flowTools) {
+      const granted = this.tools.some((grant) =>
+        library === null
+          ? grant.kind === "name" && grant.name === name
+          : grantName(grant) === library.alias && (grant.kind === "name" || grant.tools.includes(library.def)),
+      );
+      if (!granted) throw new YianRangeError(`AGENT node ${reprText(nodeId)}: flow tool ${reprText(name)} isn't granted in tools`);
     }
     const where = `AGENT node ${reprText(nodeId)}`;
     this.moduleTools = Object.freeze((moduleTools ?? []).map((module) => checkedToolModule(where, module)));
@@ -754,8 +759,22 @@ export class AgentNode extends Node {
 
   /** Return the authored `tools:` grants of host tools and groups, which may name host-filled groups. */
   override grantedTools(): readonly ToolGrant[] {
-    const local = new Set([...this.flowTools.map((tool) => tool.name), ...this.moduleTools.map(({ alias }) => alias)]);
+    const local = new Set([...this.flowGrantNames(), ...this.moduleTools.map(({ alias }) => alias)]);
     return this.tools.filter((grant) => !this.memoryInputs.includes(grantName(grant)) && !local.has(grantName(grant)));
+  }
+
+  /** Return the authored grants of flows and libraries, and their node scope by name. */
+  override flowGrants(): FlowGrants {
+    const names = this.flowGrantNames();
+    return {
+      grants: this.tools.filter((grant) => names.has(grantName(grant))),
+      scope: flowToolScope(this.flowTools, (_, name) => ({ name })),
+    };
+  }
+
+  /** The names this agent's flow grants name: each flow's, and each library's alias. */
+  private flowGrantNames(): Set<string> {
+    return new Set(this.flowTools.map(({ name, library }) => library?.alias ?? name));
   }
 
   /** Return the tool modules this agent grants, in grant order. */
@@ -944,7 +963,8 @@ export class AgentNode extends Node {
    * Return the grants one invocation's model is given and the tool set they resolve in: every
    * authored grant in its order, but none of a memory left out (an Optional one, null), and the
    * run's tools with this node's own as its node scope: each bound memory's granted tools as a
-   * group over its run session, and the granted flows as top-level tools.
+   * group over its run session, each granted library's defs as a group, and the other granted
+   * flows as top-level tools.
    *
    * @throws CapabilityFault carrying the error when a memory is bound but the evaluator gave no
    *   memory sessions, or none on that memory.
@@ -962,7 +982,8 @@ export class AgentNode extends Node {
     }
     let toolset = caps.tools ?? null;
     if (groups.size > 0 || this.flowTools.length > 0) {
-      toolset = (toolset ?? new ToolSet()).withNodeScope({ groups, tools: flowToolFunctions(this.flowTools) });
+      const flows = flowToolScope(this.flowTools, flowToolFunction);
+      toolset = (toolset ?? new ToolSet()).withNodeScope({ groups: new Map([...groups, ...flows.groups]), tools: flows.tools });
     }
     return { tools, toolset };
   }
@@ -1276,8 +1297,9 @@ export class AgentNode extends Node {
     const groups = new Map(
       [...memories].map(([input, value]) => [input, grantedMemorySpecs(value, { input, tools: this.grantedMemoryTools(input) })]),
     );
-    const flows = this.flowTools.map(({ name, description, parameters }) => ({ name, description, parameters }));
-    const tools = caps.toolSpecs(grants, rendered.skills.length > 0 ? loadSkillTool() : null, { groups, tools: flows });
+    const flows = flowToolScope(this.flowTools, ({ description, parameters }, name) => ({ name, description, parameters }));
+    const own = { groups: new Map([...groups, ...flows.groups]), tools: flows.tools };
+    const tools = caps.toolSpecs(grants, rendered.skills.length > 0 ? loadSkillTool() : null, own);
     const contract = this.outputContract;
     const structured = async () => {
       const models = caps.models;

@@ -170,7 +170,7 @@ export interface PendingFields {
   readonly index: number;
   readonly deadline: string | null;
   /** A flow call's arguments; `null` or absent for any other call. */
-  readonly flowArguments?: Readonly<Record<string, unknown>> | null;
+  readonly flowArguments?: ValueRecord | null;
 }
 
 /** A tool call's result as an earlier start recorded it. */
@@ -547,7 +547,7 @@ export class AgentSteps {
     if (deadline !== null) step["deadline"] = deadline;
     if (flowArguments === null) return step;
     step["flow"] = true;
-    step["arguments"] = flowArguments as ValueRecord;
+    step["arguments"] = flowArguments;
     step["scope"] = `${this.#nodeId}/${tool}#${this.#flowCalls.get(tool) ?? 0}`;
     return step;
   }

@@ -1,0 +1,84 @@
+# A flow tool with an int input: the model's whole number reaches the flow as an int, as a
+# flow's own input does, and the call's pending step records it as one.
+kind: run
+flow: |
+  id: doubling
+  name: doubling
+  llm_config: {provider: anthropic, model: claude-test}
+  defs:
+    double:
+      description: Double a number.
+      input:
+        qty: !int
+      nodes:
+        d: !int ${input.qty * 2}
+      output: ${d.output}
+  nodes:
+    helper:
+      kind: agent
+      tools: [double]
+      system_prompt: Help.
+      prompt: Double 2.
+      output: !str
+  output: ${helper.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  models:
+    helper:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: tool_call
+            id: call-a
+            name: double
+            arguments: {qty: 2}
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: it is 4
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: Help.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: Double 2.
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - type: tool_call
+              id: call-a
+              name: double
+              arguments: {qty: 2}
+          - format: yian.message.v1
+            role: tool
+            parts:
+            - type: tool_result
+              call_id: call-a
+              name: double
+              content: '4'
+          tools:
+          - name: double
+            description: Double a number.
+            parameters:
+              additionalProperties: false
+              properties:
+                qty: {title: Qty, type: integer}
+              required: [qty]
+              type: object
+expect:
+  output:
+    status: succeeded
+    output: it is 4
+  trace: [[run_started, null, {effective_llm_by_static_path: {helper: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, helper], [node_step, helper, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {qty: 2}, id: call-a, name: double, type: tool_call}], role: assistant}, purpose: chat, request_sha256: 05ad9830b8c7a3f22c5db3d835f2c70303ee86877b18aabd6dd52b3b680a8034, response_id: null, usage: null}}], [node_step, helper, {n: 2, step: {arguments: {qty: 2}, call_id: r1/helper/1/0, flow: true, index: 0, kind: pending, reply: 1, scope: helper/double#0, tool: double, tool_call_id: call-a}}], [node_expanded, helper, {prune_ids: []}], [node_waiting, helper, {call_ids: [r1/helper/1/0]}], [node_started, helper/double#0/__start__], [pool_commit, helper/double#0/__start__, {from: {}}], [node_succeeded, helper/double#0/__start__, {commit: 14}], [node_started, helper/double#0/d], [pool_commit, helper/double#0/d, {value: 4}], [node_succeeded, helper/double#0/d, {commit: 17}], [node_started, helper/double#0/__end__], [pool_commit, helper/double#0/__end__, {from: {helper/double#0/d: 17}}], [node_succeeded, helper/double#0/__end__, {commit: 20}], [node_woken, helper], [node_step, helper, {n: 3, step: {call_id: call-a, is_error: false, kind: tool_result, output: '4'}}], [node_step, helper, {n: 4, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: it is 4, type: text}], role: assistant}, purpose: chat, request_sha256: 380300a70f84d5c0f610a28d192edb141f84c5961bf32c96cf0403ba429112eb, response_id: null, usage: null}}], [pool_commit, helper, {value: it is 4}], [pool_commit, helper, {key: helper.new_messages, steps: [9, 23, 24]}], [node_succeeded, helper, {commit: 25, messages: 26}], [node_started, __end__], [pool_commit, __end__, {value: it is 4}], [node_succeeded, __end__, {commit: 29}]]

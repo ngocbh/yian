@@ -96,18 +96,92 @@ test("a flow call's pending step holds its arguments and scope; the agent record
   expect(answer).toEqual({ call_id: "c1", is_error: false, kind: "tool_result", output: "HI", started_at: null });
 });
 
+test("an int input takes the model's whole number, and the pending step records it as an int", async () => {
+  const log = freshLog();
+  const flow = await loadFlow(`
+id: doubling
+name: doubling
+llm_config: {provider: openai, model: test-model}
+defs:
+  double:
+    description: Double a number.
+    input:
+      qty: !int
+    nodes:
+      d: !int \${input.qty * 2}
+    output: \${d.output}
+nodes:
+  helper:
+    kind: agent
+    prompt: Double 2.
+    tools: [double]
+output: \${helper.output}
+`);
+  const model = new ScriptedModel([callReply(["double", { qty: 2n }, "c1"]), textReply("done")]);
+  const result = await runFlow(flow, {}, { log, models: serving(model), env: hostEnv(dir) });
+  expect(result.status).toBe("succeeded");
+  expect(sentResults(model, 1)).toEqual([["c1", "4", false]]);
+  expect(helperSteps(log)[1]).toMatchObject({ kind: "pending", arguments: { qty: 2n } });
+});
+
+test("each input type takes the model's JSON as a flow's own inputs do: floats, Optional, records, lists, big ints", async () => {
+  const log = freshLog();
+  const flow = await loadFlow(`
+id: echoing
+name: echoing
+llm_config: {provider: openai, model: test-model}
+typedefs:
+  Pair: {a: int, b: float}
+defs:
+  echo:
+    description: Echo the inputs.
+    input:
+      f: !float
+      whole: !float
+      some: !Optional(int)
+      none: !Optional(int)
+      pair: !Pair
+      nums: !list(int)
+      big: !int
+    nodes:
+      all: !object
+        f: \${input.f}
+        whole: \${input.whole}
+        some: \${input.some}
+        none: \${input.none}
+        pair: \${input.pair}
+        nums: \${input.nums}
+        big: \${input.big}
+    output: \${all.output}
+nodes:
+  helper:
+    kind: agent
+    prompt: Echo.
+    tools: [echo]
+output: \${helper.output}
+`);
+  const args = { f: 2.5, whole: 2n, some: 3n, none: null, pair: { a: 1n, b: 4n }, nums: [1n, 2n], big: 2n ** 70n };
+  const model = new ScriptedModel([callReply(["echo", args, "c1"]), textReply("done")]);
+  const result = await runFlow(flow, {}, { log, models: serving(model), env: hostEnv(dir) });
+  expect(result.status).toBe("succeeded");
+  expect(sentResults(model, 1)).toEqual([
+    ["c1", '{"big":1180591620717411303424,"f":2.5,"none":null,"nums":[1,2],"pair":{"a":1,"b":4},"some":3,"whole":2}', false],
+  ]);
+  expect(helperSteps(log)[1]).toMatchObject({ kind: "pending", arguments: args });
+});
+
 test("a library's def granted as a tool is a flow call shown as `<alias>_<def>`, its scope under that name", async () => {
-  const library = "id: billing\nname: billing\ndefs:\n  quote:\n    description: Price an item.\n    input: {item: !str}\n" +
-    "    kind: code\n    code: return inputs.item + ' costs 3'\n    output: !str\n";
+  const library = "id: billing\nname: billing\ndefs:\n  quote:\n    description: Price an order.\n    input: {qty: !int}\n" +
+    "    kind: code\n    code: return inputs.qty * 3\n    output: !int\n";
   writeFileSync(join(dir, "billing.yaml"), library);
   const text = "id: pricing\nname: pricing\nllm_config: {provider: openai, model: test-model}\nuses:\n  billing: ./billing\n" +
     "nodes:\n  helper: {kind: agent, prompt: go, tools: [{billing: [quote]}]}\noutput: ${helper.output}\n";
   const log = freshLog();
-  const model = new ScriptedModel([callReply(["billing_quote", { item: "tea" }, "c1"]), textReply("done")]);
+  const model = new ScriptedModel([callReply(["billing_quote", { qty: 2n }, "c1"]), textReply("done")]);
   const result = await runFlow(await loadFlow(text, { searchPaths: [dir] }), {}, { log, models: serving(model), env: hostEnv(dir) });
   expect(result.status).toBe("succeeded");
   expect(model.requests[0]!.tools.map((tool) => tool.name)).toEqual(["billing_quote"]);
-  expect(sentResults(model, 1)).toEqual([["c1", "tea costs 3", false]]);
+  expect(sentResults(model, 1)).toEqual([["c1", "6", false]]);
   expect(helperSteps(log)[1]).toMatchObject({ kind: "pending", tool: "billing_quote", scope: "helper/billing_quote#0" });
 });
 

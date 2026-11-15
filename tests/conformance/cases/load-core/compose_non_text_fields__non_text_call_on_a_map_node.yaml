@@ -25,7 +25,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'node ''a'' (kind=map): `call:` must be text, but YAML read it as a mapping; put it in quotes'
+      message: 'node ''a'' (kind=map): `call: {x: ...}` names one def; write `call: {x: quote}`'
       frames:
       - label: flow.yaml
         range: [19, 11, 19, 17]

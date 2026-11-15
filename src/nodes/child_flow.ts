@@ -14,8 +14,10 @@ import { iterOriginCarrier, type OriginMapper, type Parameter, rewriteOriginCarr
 
 /** A node that runs a child flow: its id, pinned version, baked compiled flow and signature. */
 export abstract class ChildFlowNode extends Node {
-  /** The id of the child flow. */
+  /** The id of the child flow, or of the library that holds it. */
   flowId: string;
+  /** The def of library `flowId` that is the child; `null` when `flowId` names a flow. */
+  def: string | null;
   /** A pinned child flow version, if any. */
   flowVersion: string | null;
   /** The baked child flow (stamped at load); a `null` child rejects at run time. */
@@ -26,6 +28,7 @@ export abstract class ChildFlowNode extends Node {
   /**
    * Build the node with its child flow.
    *
+   * @param options.def The def of library `flowId` that is the child; omitted, `null`.
    * @param options.child The baked child flow; `null` until Compose bakes it.
    * @param options.childInputs The child's canonical parameters; omitted, none.
    */
@@ -33,15 +36,17 @@ export abstract class ChildFlowNode extends Node {
     nodeId: string,
     options: {
       flowId: string;
+      def?: string | null;
       flowVersion?: string | null;
       child?: unknown;
       childInputs?: readonly Parameter[] | null;
       title?: string | null;
     },
   ) {
-    const { flowId, flowVersion = null, child = null, childInputs = null, title = null } = options;
+    const { flowId, def = null, flowVersion = null, child = null, childInputs = null, title = null } = options;
     super(nodeId, { title });
     this.flowId = flowId;
+    this.def = def;
     this.flowVersion = flowVersion;
     this.child = child;
     this.childInputs = childInputs ?? [];

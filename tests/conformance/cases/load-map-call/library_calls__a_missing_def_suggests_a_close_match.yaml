@@ -1,0 +1,33 @@
+# A call of a def the library doesn't hold names the closest def it does.
+kind: load
+flow: |
+  id: orders
+  name: orders
+  uses:
+    billing: lib/billing
+  nodes:
+    price:
+      kind: call
+      call: {billing: quot}
+      input:
+        qty: 2
+  output: ${price.output}
+files:
+  lib/billing.yaml: |
+    id: billing
+    name: billing
+    defs:
+      quote:
+        input:
+          qty: !int
+        kind: code
+        code: return inputs.qty * 3
+        output: !int
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'call node ''price'': library ''billing'' has no def ''quot''; did you mean ''quote''?'
+      frames:
+      - label: flow.yaml
+        range: [8, 11, 8, 26]

@@ -862,9 +862,12 @@ export function toCallDescriptor(
       fieldLabels.set(`input ${reprText(name)}`, `${site} call(${call.callee}) argument ${reprText(name)}`);
     }
   }
+  // `billing.quote` names def `quote` of library `billing`; a flow id has no dot.
+  const dot = call.callee.indexOf(".");
   return new CallDescriptor({
     id: call.id,
-    call: call.callee,
+    call: dot === -1 ? call.callee : call.callee.slice(0, dot),
+    def: dot === -1 ? null : call.callee.slice(dot + 1),
     inputs: { ...call.args },
     over: null,
     host: hostId,

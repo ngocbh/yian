@@ -1,0 +1,119 @@
+# `call: {billing: quote}` on a call, map and loop node, and `call(billing.quote, ...)`, each run
+# a def of the library `billing`, which grows under the calling node as a `defs:` call does.
+kind: run
+flow: |
+  id: orders
+  name: orders
+  input:
+    qtys: !list(int)
+  uses:
+    billing: lib/billing
+  nodes:
+    one:
+      kind: call
+      call: {billing: quote}
+      input:
+        qty: 2
+    each:
+      kind: map
+      over: ${input.qtys}
+      call: {billing: quote}
+      input:
+        qty: ${item}
+    count:
+      kind: loop
+      call: {billing: step}
+      input:
+        n: 0
+      times: 1
+  output:
+    one: ${one.output}
+    each: ${each.output}
+    count: ${count.output.n}
+    inline: call(billing.quote, qty=5)
+files:
+  lib/billing.yaml: |
+    id: billing
+    name: billing
+    defs:
+      quote:
+        input:
+          qty: !int
+        kind: code
+        code: return inputs.qty * 3
+        output: !int
+      step:
+        input:
+          n: !int
+        kind: code
+        code: "return {n: inputs.n + 1}"
+        output: {n: !int}
+inputs: {qtys: [4]}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output: {status: succeeded, output: {one: 6, each: [12], count: 1, inline: 15}}
+  trace:
+    - [run_started, null, {num_workers: 0}]
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {qtys: [4]}}]
+    - [node_started, __start__]
+    - [pool_commit, __start__, {value: {qtys: [4]}}]
+    - [node_succeeded, __start__, {commit: 6}]
+    - [node_started, each]
+    - [pool_commit, each, {from: {__start__: 6}, key: each/__start__}]
+    - [pool_commit, each, {from: {__start__: 6}, key: each#0/__start__}]
+    - [node_expanded, each, {prune_ids: []}]
+    - [node_started, __call_0]
+    - [pool_commit, __call_0, {from: {}, key: __call_0/__start__}]
+    - [node_expanded, __call_0, {prune_ids: []}]
+    - [node_started, count]
+    - [pool_commit, count, {from: {}, key: count#0/__start__}]
+    - [node_expanded, count, {prune_ids: []}]
+    - [node_started, one]
+    - [pool_commit, one, {from: {}, key: one/__start__}]
+    - [node_expanded, one, {prune_ids: []}]
+    - [node_started, each/__start__]
+    - [node_succeeded, each/__start__, {commit: 9}]
+    - [node_started, __call_0/__start__]
+    - [node_succeeded, __call_0/__start__, {commit: 13}]
+    - [node_started, count#0/__start__]
+    - [node_succeeded, count#0/__start__, {commit: 16}]
+    - [node_started, one/__start__]
+    - [node_succeeded, one/__start__, {commit: 19}]
+    - [node_started, each#0/__start__]
+    - [node_succeeded, each#0/__start__, {commit: 10}]
+    - [node_started, __call_0/quote]
+    - [pool_commit, __call_0/quote, {value: 15}]
+    - [node_succeeded, __call_0/quote, {commit: 32}]
+    - [node_started, count#0/step]
+    - [pool_commit, count#0/step, {value: {n: 1}}]
+    - [node_succeeded, count#0/step, {commit: 35}]
+    - [node_started, one/quote]
+    - [pool_commit, one/quote, {value: 6}]
+    - [node_succeeded, one/quote, {commit: 38}]
+    - [node_started, each#0/quote]
+    - [pool_commit, each#0/quote, {value: 12}]
+    - [node_succeeded, each#0/quote, {commit: 41}]
+    - [node_started, __call_0/__end__]
+    - [pool_commit, __call_0/__end__, {from: {__call_0/quote: 32}, key: __call_0}]
+    - [node_succeeded, __call_0/__end__, {commit: 44}]
+    - [node_started, count#0/__end__]
+    - [pool_commit, count#0/__end__, {from: {count#0/step: 35}}]
+    - [node_succeeded, count#0/__end__, {commit: 47}]
+    - [node_started, one/__end__]
+    - [pool_commit, one/__end__, {from: {one/quote: 38}, key: one}]
+    - [node_succeeded, one/__end__, {commit: 50}]
+    - [node_started, each#0/__end__]
+    - [pool_commit, each#0/__end__, {from: {each#0/quote: 41}}]
+    - [node_succeeded, each#0/__end__, {commit: 53}]
+    - [node_started, count~1]
+    - [pool_commit, count~1, {from: {count#0/__end__: 47}, key: count}]
+    - [node_succeeded, count~1, {commit: 56}]
+    - [node_started, each/__end__]
+    - [pool_commit, each/__end__, {from: {each#0/__end__: 53}, key: each}]
+    - [node_succeeded, each/__end__, {commit: 59}]
+    - [node_started, __end__]
+    - [pool_commit, __end__, {value: {count: 1, each: [12], inline: 15, one: 6}}]
+    - [node_succeeded, __end__, {commit: 62}]

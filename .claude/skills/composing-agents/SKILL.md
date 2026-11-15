@@ -190,6 +190,9 @@ output:
   child-summarize}` loads `child-summarize.yaml` beside the flow). A ref is a path relative to the
   importing file, without the extension (only `.yaml` files are found); `@<version>` must equal
   the child's quoted `version:` text (`clean: ../common/clean@1`).
+- **A library's def is `call: {billing: quote}`** (or `call(billing.quote, k=v)` in a binding),
+  on `call`, `map` and `loop`. `call: billing` alone is a load error, and a flow's own `defs:`
+  can't be called from outside.
 - **Write exactly one of `call:` and an inline body** (`nodes:` plus `output:`). An inline body
   can't see its parent's inputs, nodes or `${item}`: pass them through the node's `input:`, and
   read them inside as `${input.<name>}`.

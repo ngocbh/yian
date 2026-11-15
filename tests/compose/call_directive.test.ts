@@ -49,6 +49,7 @@ test.each([
   ["call(f)", ["f", ""]],
   ["  call (f, x=1)  ", ["f", " x=1"]],
   ["call(my-flow, a=1)", ["my-flow", " a=1"]],
+  ["call(billing.quote, qty=3)", ["billing.quote", " qty=3"]],
   ["call(f, 30)", ["f", " 30"]],
 ] as const)("a whole-value directive %p is recognized", (value, expected) => {
   expect(matchCallDirective(value)).toEqual([...expected]);
@@ -80,7 +81,7 @@ function expectThrows(value: string, message: string): void {
 
 const NEVER_CLOSED = "`call(` is never closed (check its parentheses and quotes)";
 const notFirst = (first: string) =>
-  `a call(...) must start with a flow id (a bare name) and a comma, got ${first}`;
+  `a call(...) must start with a flow id (a bare name, or alias.def for a library's def) and a comma, got ${first}`;
 
 test.each([
   ["call(f) tail", "text follows the closing `)`: 'tail'; a call(...) must be the whole value"],
@@ -88,7 +89,7 @@ test.each([
   ['call(f, x="a)', NEVER_CLOSED],
   ["call(f, x=${g)", NEVER_CLOSED],
   ["call(f x=1)", notFirst("'f x=1'")],
-  ["call(f.g)", notFirst("'f.g'")],
+  ["call(f.g.h)", notFirst("'f.g.h'")],
   ["call()", notFirst("''")],
   [
     "call(f) and more",
@@ -209,7 +210,7 @@ test.each([
   ["call(f, x=1", NEVER_CLOSED, '`"call(f, x=1"`'],
   ['call(f, x="a)', NEVER_CLOSED, "`'call(f, x=\"a)'`"],
   ["call(f x=1)", notFirst("'f x=1'"), '`"call(f x=1)"`'],
-  ["call(f.g)", notFirst("'f.g'"), '`"call(f.g)"`'],
+  ["call(f.g.h)", notFirst("'f.g.h'"), '`"call(f.g.h)"`'],
   ["call()", notFirst("''"), '`"call()"`'],
   ["call(f, 30)", POSITIONAL("f", "30"), '`"call(f, 30)"`'],
   [
@@ -282,6 +283,16 @@ test("bare id with hyphen recognized", () => {
   );
   expect(descriptors.get("use")!.inputs["topic"]).toBe("${__call_0.output}");
   expect(synthOf(descriptors, "__call_0").call).toBe("my-flow");
+});
+
+test("an alias.def directive lifts to a call of the library's def", () => {
+  const [descriptors] = desugarInlineCalls(nodes(code("use", { topic: "call(billing.quote, qty=3)" })), null, {
+    nextId: synthIdGen(),
+  });
+  const synth = synthOf(descriptors, "__call_0");
+  expect([synth.call, synth.def]).toEqual(["billing", "quote"]);
+  expect(synth.fieldLabels.get("call")).toBe("node 'use' input 'topic' call(billing.quote)");
+  expect(synth.inputs).toEqual({ qty: 3n });
 });
 
 test("positional arg after flow id is loud", () => {

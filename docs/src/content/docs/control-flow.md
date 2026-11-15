@@ -13,7 +13,7 @@ This page explains how a flow branches, repeats and reuses work. Four node kinds
 | `loop` | Runs a child flow again and again, passing a record from one run to the next | The final record |
 
 A child flow is a `defs:` entry, a flow imported with [`uses:`](#import-a-flow-from-another-file-with-uses),
-or a body written inline on the node.
+a [library's def](#call-a-librarys-def), or a body written inline on the node.
 
 ## Branch with `case`
 
@@ -255,6 +255,7 @@ $ yian run greet_team.yaml --input lead=Ada --input team="Bo, Cy"
 
 - `call:` names a `defs:` entry first, then a [`uses:`](#import-a-flow-from-another-file-with-uses)
   alias. Any other name is a load error, and so is a `defs:` name or alias that is also a node id.
+  `call: {billing: quote}` names a [library's def](#call-a-librarys-def).
 - `input:` lists the child's arguments, one per name. A whole `${...}` record there is a load
   error.
 - Each argument must fit the child's input type, checked at load. Nothing is converted: a `str`
@@ -347,6 +348,55 @@ output: ${tidy.output}
 uses: ref pinned ../common/clean@2 but the resolved file declares version: "1" (file-per-version: name a file that declares "2")
 ```
 
+### Call a library's def
+
+A [library](/flows/#library-files) imported with `uses:` holds defs, not one flow. A `call`, `map`
+or `loop` node names one of its defs with a one-key mapping, `call: {<alias>: <def>}`:
+
+```yaml title="common/billing.yaml"
+id: billing
+name: billing
+defs:
+  quote:
+    input:
+      qty: !int
+    kind: code
+    code: return inputs.qty * 3
+    output: !int
+```
+
+```yaml title="app/order.yaml" check=runnable
+id: order
+name: order
+input:
+  qty: !int
+uses:
+  billing: ../common/billing
+nodes:
+  price:
+    kind: call
+    call: {billing: quote}
+    input:
+      qty: ${input.qty}
+output: ${price.output}
+```
+
+```console
+$ yian run app/order.yaml --input qty=2
+6
+```
+
+- The def runs as a `defs:` entry does, under the same nesting limit.
+- In a binding, write `call(billing.quote, qty=2)`.
+- `call: billing` is a load error that shows the def form to write. So is a def the library
+  doesn't have, and the error names the closest one:
+
+```text
+call node 'price': library 'billing' has no def 'quot'; did you mean 'quote'?
+```
+
+- A flow's own `defs:` are private: `call: {clean: trim}` on a flow alias is a load error.
+
 ### Call a flow inside a binding
 
 To call a child once without writing a `call` node, write `call(...)` as a binding's whole value.
@@ -363,6 +413,7 @@ brief:
 
 - Arguments are keywords only: `call(f, x=1, note=${a.output})`. Calls may nest:
   `call(outer, x=call(inner, y=1))`.
+- `call(billing.quote, qty=2)` calls a [library's def](#call-a-librarys-def).
 - The call runs only when the node it is written in can run: on that node's `case` branches,
   after its `runs_after:` nodes, and once its other inputs are ready.
 - A quoted value is text, never a call: `note: "call(f)"` is the text `call(f)`.

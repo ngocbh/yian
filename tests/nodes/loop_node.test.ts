@@ -72,6 +72,12 @@ test("compiled loop origin is self", () => {
   expect(node.iteration).toBe(0);
 });
 
+test("respawn keeps the library def the body is", () => {
+  const node = new LoopNode("lp", { flowId: "billing", def: "requote", child: {}, predicate: "${x}", maxIters: 3 });
+
+  expect([node.respawn(1).flowId, node.respawn(1).def]).toEqual(["billing", "requote"]);
+});
+
 test("respawn preserves assertion carriers", () => {
   const node = whileLoop();
   const origin = new OriginRef("nodes/loop/asserts/0");

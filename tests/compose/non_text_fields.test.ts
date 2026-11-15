@@ -410,14 +410,31 @@ describe("parseNodes", () => {
   });
 
   describe.each([...CALL_HEADS.keys()])("%s", (kind) => {
-    test.each(NON_TEXT)("non-text call is a load error: %s", (value, phrase) => {
+    // A mapping names a library's def, so its errors are about that shape.
+    test.each(NON_TEXT.filter(([value]) => !value.startsWith("{")))(
+      "non-text call is a load error: %s",
+      (value, phrase) => {
+        const text = callFlow(kind, value);
+
+        const error = loadError(() => nodesOf(text));
+
+        expect(error.message).toContain(
+          `node 'a' (kind=${kind}): \`call:\` must be a callable name or \`{library: def}\`, but YAML read it as ` +
+            `${phrase}; put it in quotes`,
+        );
+        expect(startLine(error)).toBe(lineOf(text, "call: "));
+      },
+    );
+
+    test.each([
+      ["{x: 1}", "`call: {x: ...}` names one def; write `call: {x: quote}`"],
+      ["{}", "`call:` names one library def, such as `call: {billing: quote}`"],
+    ])("a call mapping that names no one def is a load error: %s", (value, problem) => {
       const text = callFlow(kind, value);
 
       const error = loadError(() => nodesOf(text));
 
-      expect(error.message).toContain(
-        `node 'a' (kind=${kind}): \`call:\` must be text, but YAML read it as ${phrase}; put it in quotes`,
-      );
+      expect(error.message).toContain(`node 'a' (kind=${kind}): ${problem}`);
       expect(startLine(error)).toBe(lineOf(text, "call: "));
     });
 
@@ -427,7 +444,8 @@ describe("parseNodes", () => {
       const error = loadError(() => nodesOf(text));
 
       expect(error.message).toContain(
-        `node 'a' (kind=${kind}): \`call:\` must be text, but it is empty; write the text`,
+        `node 'a' (kind=${kind}): \`call:\` must be a callable name or \`{library: def}\`, but it is empty; ` +
+          "write a callable name",
       );
       expect(startLine(error)).toBe(lineOf(text, "call: "));
     });

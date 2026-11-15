@@ -331,4 +331,4 @@ may have run.
 
 The next call starts a fresh thread, which imports the module again. When that import fails or
 outlasts the timeout, or the module's tools differ from the ones the run started with, the call
-and every later one fail with `tool.module_restart`, until the run is resumed.
+and every later one fail their nodes with `tool.module_restart`, until the run is resumed.

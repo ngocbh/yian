@@ -827,7 +827,12 @@ test("agentCall refuses the memory option and its view has no memorySections", a
 
 test("an agent's rebuildRequests returns each request and whether all digests matched", async () => {
   const node = new AgentNode("writer", { prompt: "hi" });
-  const caps = { skills: new Map(), toolSpecs: () => [], models: null };
+  const caps = {
+    skills: new Map(),
+    toolSpecs: () => [],
+    moduleSpecs: () => ({ groups: new Map(), tools: [] }),
+    models: null,
+  };
   const material = await node.rebuildRequests({}, [], caps);
   expect(Object.keys(material!).sort()).toEqual(["digestOk", "requests"]);
 });

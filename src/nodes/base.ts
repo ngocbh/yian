@@ -403,13 +403,19 @@ export interface RebuildCaps {
    * The request's tool list as the run bound it: the specs of the tools `grants` grant, each under
    * the name the model saw, then `loadSkill` when given; `null` when a grant can't be resolved.
    * A grant resolves first in `own`, the node scope as specs (its memories' groups, the flows it
-   * grants), then in the tools the run recorded, as the live loop resolves it.
+   * grants, its tool modules' tools), then in the tools the run recorded, as the live loop resolves
+   * it.
    */
   readonly toolSpecs: (
     grants: readonly ToolGrant[],
     loadSkill: ToolSpec | null,
     own?: NodeScope<LocalToolSpec>,
   ) => readonly ToolSpec[] | null;
+  /**
+   * The node scope the tool modules `refs` reach, as specs of the tools the run recorded of them,
+   * by alias (`recordedModuleScope`).
+   */
+  readonly moduleSpecs: (refs: readonly ToolModuleRef[]) => NodeScope<LocalToolSpec>;
   /**
    * Gives the invocation's structured target (`ModelAccess.structuredTarget`), or builds its model
    * to read it off; the model is never called.
@@ -627,7 +633,7 @@ export interface FlowGrants {
 
 /**
  * @internal A tool of a node's scope as a rebuilt request lists it: a recorded memory tool's spec,
- * or a granted flow's.
+ * a granted flow's, or a recorded tool module tool's.
  */
 export type LocalToolSpec = Omit<RecordedMemoryTool, "write">;
 

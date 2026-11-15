@@ -227,7 +227,12 @@ test("nullable variable defaults follow the existing strict prompt rules", async
 });
 
 /** What `agentCall` gives `rebuildRequests`: no skills or tools, and no model. */
-const REBUILD_CAPS: RebuildCaps = { skills: new Map(), toolSpecs: () => [], models: null };
+const REBUILD_CAPS: RebuildCaps = {
+  skills: new Map(),
+  toolSpecs: () => [],
+  moduleSpecs: () => ({ groups: new Map(), tools: [] }),
+  models: null,
+};
 
 test("a variable colliding with an input refuses the request rebuild", async () => {
   const node = new AgentNode("writer", { prompt: "${tone}", variables: variables("tone: !str concise\n") });

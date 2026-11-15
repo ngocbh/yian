@@ -1305,13 +1305,18 @@ export class AgentNode extends Node {
     }
     const system = new ModelMessage({ role: "system", parts: [new TextPart(rendered.systemPrompt)] });
     // This node's own tools as the live loop built them: its memories' from the values the run
-    // recorded, and the flows it grants.
+    // recorded, the flows it grants, and its tool modules' tools as the run recorded them.
     const { tools: grants, memories } = this.memoryPlan(inputs);
     const groups = new Map(
       [...memories].map(([input, value]) => [input, grantedMemorySpecs(value, { input, tools: this.grantedMemoryTools(input) })]),
     );
     const flows = flowToolScope(this.flowTools, ({ description, parameters }, name) => ({ name, description, parameters }));
-    const own = { groups: new Map([...groups, ...flows.groups]), tools: flows.tools };
+    const modules = caps.moduleSpecs(this.moduleTools);
+    const own = {
+      groups: new Map([...groups, ...flows.groups, ...modules.groups]),
+      tools: [...flows.tools, ...modules.tools],
+      identities: modules.identities,
+    };
     const tools = caps.toolSpecs(grants, rendered.skills.length > 0 ? loadSkillTool() : null, own);
     const contract = this.outputContract;
     const structured = async () => {

@@ -4,7 +4,8 @@
  * that fails to start refuses the run before any record, naming its file (relative to the root
  * flow's folder) and export. Each node's scope holds its modules' tools for the run-start checks
  * and its model's request, and a call runs on the module's thread: its result and its errors act
- * as a host tool's do, for an AGENT's model and for TOOL retries.
+ * as a host tool's do, for an AGENT's model and for TOOL retries. `run_started` records the tools
+ * agents' grants reach, which a resume checks again and the agent-call view rebuilds requests with.
  */
 
 import { afterAll, beforeEach, expect, test } from "bun:test";
@@ -16,7 +17,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { loadFlow, withUnfinishedToolModules } from "../src/compose/loader.ts";
 import { ToolResultPart } from "../src/llm/messages.ts";
 import { ScriptedModel } from "../src/llm/testing.ts";
-import { advance, complete, runFlow, type RunFlowOptions } from "../src/run.ts";
+import { advance, agentCall, agentCalls, complete, runFlow, type RunFlowOptions } from "../src/run.ts";
 import { pending } from "../src/tools/context.ts";
 import { FunctionTool, tool } from "../src/tools/function_tools.ts";
 import { mcpServer } from "../src/tools/mcp.ts";
@@ -239,4 +240,87 @@ test.each([
   const host: Record<string, FunctionTool> = message.includes("a tool of this run") ? { quote } : {};
   const text = app(uses, [node], "input:\n  notes: !FileMemory\n");
   await expect(run(text, { tools: host }, { notes: new FakeMemory() })).rejects.toThrow(new RangeError(message));
+});
+
+/** The payload of the `run_started` record of the log at `log`. */
+function started(log: string): Record<string, unknown> {
+  return JSON.parse(readFileSync(log, "utf8").split("\n")[0]!).payload;
+}
+
+/** A tool of `tools(...)` as `run_started` records it. */
+const recorded = (name: string) => ({
+  name,
+  description: `${name}.`,
+  parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+  resumable: false,
+});
+
+test("run_started records, by module key, the tools agent grants reach, and no tool node's module", async () => {
+  mkdirSync(join(dir, "tools"));
+  writeFileSync(join(dir, "tools", "crm.ts"), tools(["lookup", "create"]));
+  writeFileSync(join(dir, "quote.ts"), tools(["quote", "rate"]));
+  writeFileSync(join(dir, "solo.ts"), tools(["solo"]));
+  const call = "t: {kind: tool, tool_id: {solo: solo}, input: {id: x}}";
+  const uses = { crm: "./tools/crm.ts", price: "./quote.ts:quote", solo: "./solo.ts" };
+  const text = app(uses, ["a: {kind: agent, prompt: go, tools: [{crm: [lookup]}, price]}", call]);
+  const log = join(dir, "log.jsonl");
+
+  const done = await run(text, { log, models: serving(new ScriptedModel([textReply("done")])) });
+
+  expect(done.status).toBe("succeeded");
+  // A group lists every tool, in export-name order, so a resume sees one gained or lost.
+  expect(started(log)["tool_modules"]).toEqual({
+    "tools/crm.ts": [recorded("create"), recorded("lookup")],
+    "quote.ts": [recorded("quote")],
+  });
+  const only = join(dir, "only.jsonl");
+  expect((await run(app({ solo: "./solo.ts" }, [call]), { log: only })).status).toBe("succeeded");
+  expect(Object.hasOwn(started(only), "tool_modules")).toBe(false);
+});
+
+/** A module whose `lookup` takes any arguments, beside `others` as `tools` writes them. */
+const looseLookup = (others: string[]) =>
+  `${tools(others)}export const lookup = { name: "lookup", description: "lookup.", parameters: { type: "object" }, execute: () => 1 };\n`;
+
+test.each([
+  ["description", tools(["create", "lookup"]).replace('"lookup."', '"Find."'), "lookup description differs from the recorded one"],
+  ["parameters", looseLookup(["create"]), "lookup parameters differs from the recorded one"],
+  ["gained tool", tools(["create", "extra", "lookup"]), "extra isn't recorded; the run started without it"],
+  ["lost tool", tools(["lookup"]), "create is recorded, but this run's tool_modules lack it"],
+])("a resume imports each module again and refuses a group whose tools differ from the recorded ones: %s", async (_name, source, message) => {
+  writeFileSync(join(dir, "crm.ts"), tools(["create", "lookup"]));
+  const agent = "a: {kind: agent, input: {go: '${h.output}'}, prompt: '${go}', tools: [crm]}";
+  const text = app({ crm: "./crm.ts" }, ["h: {kind: tool, tool_id: hold}", agent]);
+  const log = join(dir, "log.jsonl");
+  expect((await run(text, { log, runId: "r1", tools: { hold } })).status).toBe("waiting");
+  await complete(log, "r1/h", { output: "go" });
+  writeFileSync(join(dir, "crm.ts"), source);
+  const before = readFileSync(log, "utf8");
+
+  const refused = withUnfinishedToolModules(() => advance({ log, env: hostEnv(dir), tools: { hold } }));
+
+  await expect(refused).rejects.toThrow(new RangeError(`resume refused: tool_modules.crm.ts.${message}`));
+  expect(readFileSync(log, "utf8")).toBe(before);
+});
+
+test("the agent-call view rebuilds the request of an agent granting module tools from the recorded ones", async () => {
+  writeFileSync(join(dir, "crm.ts"), tools(["create", "lookup"]));
+  writeFileSync(join(dir, "quote.ts"), tools(["quote"]));
+  const uses = { crm: "./crm.ts", find: "./crm.ts:lookup", price: "./quote.ts:quote" };
+  const text = app(uses, ["a: {kind: agent, prompt: go, tools: [find, crm, price]}"]);
+  const log = join(dir, "log.jsonl");
+  const model = new ScriptedModel([callReply(["crm_create", { id: "1" }, "c1"]), textReply("done")]);
+  expect((await run(text, { log, models: serving(model) })).status).toBe("succeeded");
+  // The view reads the recorded specs, never the module.
+  writeFileSync(join(dir, "crm.ts"), tools(["create", "lookup"]).replace('"lookup."', '"Find."'));
+
+  const view = (call: { nodeId: string; n: number }) => agentCall(log, call, { env: hostEnv(dir) });
+  const views = await withUnfinishedToolModules(() => Promise.all(agentCalls(log).map(view)));
+
+  const specs = (tools: readonly { name: string; description: string }[] | undefined) =>
+    tools?.map(({ name, description }) => [name, description]);
+  expect(views.map((each) => [each.digestMismatch, specs(each.request?.tools)])).toEqual(
+    model.requests.map((request) => [false, specs(request.tools)]),
+  );
+  expect(views[0]!.request!.tools.map(({ name }) => name)).toEqual(["find", "crm_create", "price"]);
 });

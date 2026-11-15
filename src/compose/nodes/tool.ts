@@ -315,13 +315,14 @@ export class ToolDescriptor extends NodeDescriptor {
    *
    * @throws LoadError when `output:` isn't a valid type expression, a built-in's input is unknown,
    *   missing or of the wrong type (at the input), a memory's tool names an Optional memory or a
-   *   tool its type lacks, or as `checkModuleRef` throws.
+   *   tool its type lacks, or as `checkModuleRef` and `checkNotLibrary` throw.
    */
   override build(ctx: BuildContext): BuildResult {
     const { group, name } = this.toolRef;
     const memory = group === null ? undefined : ctx.flowInputs.get(group);
     const module = ctx.toolModule(group ?? name);
     if (module !== null) this.checkModuleRef(ctx, module, isMemoryType(memory));
+    else this.checkNotLibrary(ctx);
     if (isMemoryType(memory)) return this.buildMemoryTool(ctx, memory);
     // A group's tool shows as `<group>_<tool>`, which is never a built-in's name.
     if (group !== null && RESERVED_TOOL_NAMES.has(this.toolId)) {
@@ -382,6 +383,25 @@ export class ToolDescriptor extends NodeDescriptor {
       throw fail(`\`${name}\` is a tool module; name one of its tools: \`tool_id: {${name}: <tool>}\``);
     }
     if (group !== null && single) throw fail(`\`${group}\` is one tool, ${module.ref}; write \`tool_id: ${group}\``);
+  }
+
+  /**
+   * Refuse a `tool_id:` naming a `uses:` alias of a library: a CALL node runs its defs.
+   *
+   * @throws LoadError, at `tool_id:`, showing the `call:` that runs the def.
+   */
+  private checkNotLibrary(ctx: BuildContext): void {
+    const { group, name } = this.toolRef;
+    const alias = group ?? name;
+    if (ctx.resolver === null || ctx.callableSection(alias) !== "uses") return;
+    const library = ctx.resolver(alias).library ?? null;
+    if (library === null) return;
+    const def = group === null ? (library.keys().next().value ?? "<def>") : name;
+    throw ctx.diagnostics.error(
+      `node ${reprText(this.id)}: \`${alias}\` is a library; call its def with \`kind: call\`: ` +
+        `\`call: {${alias}: ${def}}\``,
+      { range: this.fieldRanges.get(siteKey("field", "tool_id")) ?? this.range },
+    );
   }
 
   /**

@@ -162,7 +162,12 @@ import {
 } from "../validate/constructors.ts";
 import { rejectCycles } from "../validate/cycles.ts";
 import { checkCaseHandles } from "../validate/handles.ts";
-import { MEMORY_USE, validateReferences } from "../validate/references.ts";
+import {
+  kindMemoryTail,
+  memoryReadProblem,
+  UNRESOLVED_REFERENCES,
+  validateReferences,
+} from "../validate/references.ts";
 import { checkReservedSources } from "../validate/reserved_sources.ts";
 import { stampToolInputTypes } from "../validate/tool_inputs.ts";
 import { checkWrittenValues } from "../validate/value_nesting.ts";
@@ -2337,11 +2342,10 @@ function buildNodes(
         });
       }
       if (body.tool !== null && key !== body.memory && isMemoryType(canonical)) {
-        throw diagnostics.error(
-          `node ${reprText(descriptor.id)} input ${reprText(argument)} from: ${String(bindingSource(value))} ` +
-            `${MEMORY_USE} (a tool node can't take a memory)`,
-          { range: bindingRange },
-        );
+        // As the reference checks word it for a `call` node naming the tool.
+        const where = `node ${reprText(descriptor.id)} input ${reprText(argument)} from`;
+        const problem = memoryReadProblem(where, String(bindingSource(value)), kindMemoryTail(NodeKind.TOOL));
+        throw diagnostics.error(`${UNRESOLVED_REFERENCES}:\n  ${problem}`, { range: bindingRange });
       }
       childInputs.push(
         new Parameter(key, {

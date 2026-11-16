@@ -225,12 +225,11 @@ test("a memory's tool reads the memory through the body, never as an argument", 
   expect((result.output as { text: string }[]).map((each) => each.text)).toEqual(["one", "two"]);
 });
 
-test("a memory bound to a tool's argument is refused in the author's words, at their binding", async () => {
-  expect(await failure(mapApp("search", "    input:\n      q: ${input.lessons}\n"))).toEqual([
-    "node 'fetch' input 'q' from: ${input.lessons} is a memory; use it whole as an agent input, in prompt text, as " +
-      "a child's memory input of the same type, or name it in `tools:`/`tool_id:` (a tool node can't take a memory)",
-    "${input.lessons}",
-  ]);
+test("a memory bound to a tool's argument is refused as a call node refuses it, at the author's binding", async () => {
+  const args = "    input:\n      q: ${input.lessons}\n";
+  const onMap = await failure(mapApp("search", args));
+  expect(onMap).toEqual(await failure(app(`  fetch:\n    kind: call\n    call: search\n${args}`)));
+  expect(onMap[1]).toBe("${input.lessons}");
 });
 
 test("an argument that isn't an identifier, or is named over, reaches the tool as written", async () => {

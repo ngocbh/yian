@@ -404,6 +404,14 @@ export function getCloseMatches(
   return result.slice(0, n).map(([, x]) => x);
 }
 
+/** How alike `other` is to `word`, from 0 to 1, as `getCloseMatches` scores it. */
+export function closeness(word: string, other: string): number {
+  const s = new SequenceMatcher();
+  s.setSeq2(word);
+  s.setSeq1(other);
+  return s.ratio();
+}
+
 /**
  * Append the note `text()` to `error`'s own `notes` array, creating it when absent.
  * A failure, such as a frozen error, a non-array `notes`, a primitive or a throwing

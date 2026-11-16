@@ -955,6 +955,8 @@ export interface CallableHint {
   readonly what: "def" | "alias" | "library def" | "module tool";
   /** The name as the node would write it: `greet`, `{billing: quote}`, or `billing.quote` in a `call(...)`. */
   readonly name: string;
+  /** How close it is to the tool the node names (`closeness`), to weigh against a run's tool. */
+  readonly score: number;
 }
 
 /** One direct tool call a node makes, as the run boundary checks it. Frozen. */

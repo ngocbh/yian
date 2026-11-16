@@ -374,25 +374,35 @@ test("the hint is diagnostic-only: the fingerprint is the same with and without 
   expect(flowFingerprint(hinted.compiled)).toBe(flowFingerprint(plain.compiled));
 });
 
-/** The message the flow `text` fails to start with, given the host tool `search`, which needs `q`. */
-async function startError(text: string): Promise<string> {
+/**
+ * The message the flow `text` fails to start with, given the host tool `search`, which needs `q`,
+ * and a tool for each of `others`.
+ */
+async function startError(text: string, others: readonly string[] = []): Promise<string> {
   const search = tool({
     name: "search",
     description: "A host tool.",
     parameters: { type: "object", properties: { q: { type: "string" } }, required: ["q"], additionalProperties: false },
     execute: () => "found",
   });
-  const run = runFlow(await load(text), {}, { env: hostEnv(tmp), tools: { search } });
+  const tools = { search, ...Object.fromEntries(others.map((name) => [name, hostTool(name)])) };
+  const run = runFlow(await load(text), {}, { env: hostEnv(tmp), tools });
   return ((await run.catch((caught: unknown) => caught)) as Error).message;
 }
 
 const UNKNOWN = "names tool 'serch', which isn't in this run's tools; known tools: [\"search\"]";
 
-test("run start offers the name the file defines before the run's tools", async () => {
+// Each row: the def, the `call:` that misspells it, the run's other tools, and what run start offers.
+test.each<[string, string, string[], string]>([
+  ["greet", "gret", [], "the def `greet`"],
+  // As close as the run's `search`: the file's name comes first.
+  ["serch2", "serch", [], "the def `serch2` or the tool `search`"],
+  ["fetch_all", "fetch_ur", ["fetch_url"], "the tool `fetch_url` or the def `fetch_all`"],
+])("run start offers the def %s for call: %s, and a run's tool as close or closer", async (def, call, others, offer) => {
   const text =
-    'id: r\nname: r\ndefs:\n  serch2: {kind: code, code: "return 1", output: !int}\n' +
-    "nodes:\n  n: {kind: call, call: serch}\n";
-  expect(await startError(text)).toBe(`TOOL node 'n' ${UNKNOWN}; did you mean the def \`serch2\`?`);
+    `id: r\nname: r\ndefs:\n  ${def}: {kind: code, code: "return 1", output: !int}\n` +
+    `nodes:\n  n: {kind: call, call: ${call}}\n`;
+  expect(await startError(text, others)).toEndWith(`; did you mean ${offer}?`);
 });
 
 /**

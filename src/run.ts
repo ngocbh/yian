@@ -71,7 +71,7 @@ import { memoryToolNames, memoryTypeTools } from "./compose/helpers/memory.ts";
 import { loadFlowSource } from "./compose/loader.ts";
 import { childSignature } from "./compose/nodes/resolver.ts";
 import { checkRecorded, current, type Defaults, type Env, nonDefaults, processEnv, withEnv } from "./defaults.ts";
-import { compareCodeUnits, type Failure, getCloseMatches, noteCleanup, reprText } from "./diagnostics.ts";
+import { closeness, compareCodeUnits, type Failure, getCloseMatches, noteCleanup, reprText } from "./diagnostics.ts";
 import {
   CallClosed,
   type ConsoleLine,
@@ -116,6 +116,7 @@ import { typeToSchema } from "./nodes/agent/structured.ts";
 import { type CompleteResult, type LocalToolSpec, type Node, NodeKind, type RebuildCaps } from "./nodes/base.ts";
 import { applyDefaults, BindingError, checkInputNames, coerceInputs, copyValue } from "./nodes/binding.ts";
 import {
+  type CallableHint,
   type HostToolCall,
   isExactly,
   iterSourceStrings,
@@ -3393,8 +3394,8 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
       callTools(call, tools).resolve([callRef(call)]);
     } catch (error) {
       if (!(error instanceof RangeError)) throw error;
-      // The closest name the file defines comes first: a mistyped def or alias is a tool name.
-      const hint = call.hint === null ? null : `; did you mean the ${call.hint.what} \`${call.hint.name}\`?`;
+      // A mistyped def or alias is a tool name, so the closest name the file defines is offered.
+      const hint = call.hint === null ? null : `; did you mean ${hintText(call.hint, { quoted: true })}?`;
       let reason: string;
       if (call.group !== null) {
         reason = `{${call.group}: ${call.toolId}}: ${error.message}${hint ?? ""}`;
@@ -3419,16 +3420,28 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
             shown.set(`{${group}: ${name}}`, visibleToolName(group, name));
           }
         }
-        const candidates = new Map(
-          known.map((id) => [shown.get(id) ?? id, shown.has(id) ? `\`${id}\`` : reprText(id)]),
-        );
+        const candidates = new Map(known.map((id) => [shown.get(id) ?? id, id]));
         const [close] = getCloseMatches(call.toolId, [...candidates.keys()], 1, CLOSE_MATCH_CUTOFF);
-        if (hint !== null) reason += hint;
-        else if (close !== undefined) reason += `; did you mean ${candidates.get(close)!}?`;
+        const id = close === undefined ? null : candidates.get(close)!;
+        if (call.hint === null) {
+          if (id !== null) reason += `; did you mean ${shown.has(id) ? `\`${id}\`` : reprText(id)}?`;
+        } else if (id === null) {
+          reason += hint;
+        } else {
+          // Both are close: the closer comes first, the file's name on a tie.
+          const [own, run] = [hintText(call.hint, { quoted: true }), `the tool \`${id}\``];
+          const runFirst = closeness(call.toolId, close!) > call.hint.score;
+          reason += `; did you mean ${runFirst ? `${run} or ${own}` : `${own} or ${run}`}?`;
+        }
       }
       throw new YianRangeError(`${toolNodeName(nodeId, call)} names ${reason}`);
     }
   }
+}
+
+/** `the def greet`, the hint's name in backticks when `quoted`. */
+export function hintText(hint: Pick<CallableHint, "what" | "name">, { quoted }: { quoted: boolean }): string {
+  return `the ${hint.what} ${quoted ? `\`${hint.name}\`` : hint.name}`;
 }
 
 /**
@@ -3479,7 +3492,7 @@ export function runStartTools(flow: ComposedFlow | Flow): RunStartTool[] {
       site: call.site,
       label: call.site === null ? `node ${reprText(nodePath)}` : toolNodeName(nodePath, call),
       name: call.group === null ? call.toolId : `{${call.group}: ${call.toolId}}`,
-      hint: call.hint === null ? null : `did you mean the ${call.hint.what} ${call.hint.name}?`,
+      hint: call.hint === null ? null : `did you mean ${hintText(call.hint, { quoted: false })}?`,
     });
   }
   return found;

@@ -14,7 +14,7 @@
 
 import { typeRelation } from "../../compile/validation.ts";
 import { current } from "../../defaults.ts";
-import { compareCodeUnits, getCloseMatches, reprText, type SourceRange } from "../../diagnostics.ts";
+import { closeness, compareCodeUnits, getCloseMatches, reprText, type SourceRange } from "../../diagnostics.ts";
 import {
   bindingSource,
   type CallableHint,
@@ -157,7 +157,7 @@ class ToolWording {
  */
 function closeCallable(ctx: BuildContext, ref: ToolRef, wording: ToolWording): CallableHint | null {
   const { group, name } = ref;
-  const candidates = new Map<string, CallableHint>();
+  const candidates = new Map<string, Omit<CallableHint, "score">>();
   const offer = (key: string, what: CallableHint["what"], written: string) => {
     if (!candidates.has(key)) candidates.set(key, { what, name: written });
   };
@@ -184,7 +184,7 @@ function closeCallable(ctx: BuildContext, ref: ToolRef, wording: ToolWording): C
     }
   }
   const [close] = getCloseMatches(group ?? name, [...candidates.keys()], 1, CLOSE_MATCH_CUTOFF);
-  return close === undefined ? null : candidates.get(close)!;
+  return close === undefined ? null : { ...candidates.get(close)!, score: closeness(group ?? name, close) };
 }
 
 /** The field a TOOL body in `cursor` names its tool in: `call` under `kind: call`, else `tool_id`. */

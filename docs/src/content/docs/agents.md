@@ -478,6 +478,9 @@ The flow said HI!
   input is a load error. So is the group form `{shout: [x]}`, a flow or library named like a
   built-in tool or a memory input, and a flow that grants itself, directly or through another
   flow.
+- A granted library def or module tool that would show under a built-in's name, such as `load`'s
+  `skill` as `load_skill`, is refused: at load, or at run start for a whole module grant, whose
+  tools are listed then.
 - A run is refused before it starts when a granted flow, library or tool module has the name of
   one of its host tools or tool groups, or when a granted flow or module tool and a granted host
   tool would show one name. This holds for every agent of the flow, even one that never runs.

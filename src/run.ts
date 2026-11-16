@@ -207,7 +207,14 @@ import {
   type StartedToolModule,
   type ToolModuleRef,
 } from "./tools/modules.ts";
-import { type AskRequest, RESERVED_TOOL_NAMES, type ToolEntry, type ToolRef, ToolSet } from "./tools/registry.ts";
+import {
+  type AskRequest,
+  RESERVED_TOOL_NAMES,
+  reservedShownName,
+  type ToolEntry,
+  type ToolRef,
+  ToolSet,
+} from "./tools/registry.ts";
 import { toolTypes } from "./tools/types.ts";
 import { YianRangeError, YianTypeError } from "./typesys/errors.ts";
 import { type JsonObject, logJson } from "./typesys/json.ts";
@@ -3334,7 +3341,8 @@ function* streamedEnvelopes(log: string, maxLineBytes: number | null): Generator
  *
  * @throws RangeError when an AGENT grants a built-in (`take`, `sleep`, `ask`), a tool or group
  *   this run lacks, a tool of two groups by its bare name, a tool its group lacks, two tools that
- *   would show one name, or `ask_user` with no handler; or a TOOL node names a tool or group this
+ *   would show one name, a module tool that would show under a built-in's name, or `ask_user` with
+ *   no handler; or a TOOL node names a tool or group this
  *   run lacks, a tool of two groups by its bare name, a tool group, or `ask` or `ask_user` with no
  *   handler.
  */
@@ -3361,15 +3369,24 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
       }
     }
     const own = ownGrants(node, tools);
+    let granted: GrantedTool[];
     try {
+      granted = expandGrants([...grants, ...own.grants], [...own.scopes, ...tools.scopes()]);
       // A provider refuses a name it can't call only at the first request; refuse it here.
-      checkVisibleNames(expandGrants([...grants, ...own.grants], [...own.scopes, ...tools.scopes()]));
+      checkVisibleNames(granted);
     } catch (error) {
       if (!(error instanceof GrantError)) throw error;
       // A grant naming another flow's memory input is a host grant here.
       const named = grants.some((grant) => memories.has(grant.kind === "name" ? grant.name : grant.group));
       const hint = named ? "; memory grants name the node's own flow inputs" : "";
       throw new YianRangeError(`AGENT node ${reprText(nodeId)} ${error.message}${hint}`);
+    }
+    // A whole module grant lists its tools only now; one shown under a built-in's name would lose
+    // its calls to the built-in.
+    for (const tool of granted) {
+      if (tool.scope >= own.scopes.length || tool.group === null) continue;
+      const reserved = reservedShownName("tool", tool.group, tool.tool);
+      if (reserved !== null) throw new YianRangeError(`AGENT node ${reprText(nodeId)}: ${reserved}`);
     }
     const call = node.hostToolCall();
     if (call === null || (call.group === null && isEngineBuiltin(call.toolId))) continue;

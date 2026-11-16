@@ -80,6 +80,13 @@ test("a module alias can't take a name yian reserves", async () => {
   expect(await refusal(text)).toBe("uses: alias 'ask': `ask` is a name yian reserves; rename the alias");
 });
 
+test("a listed module tool that would show under a built-in's name is refused at load", async () => {
+  const text = app({ load: "./crm.ts" }, ["a: {kind: agent, prompt: hi, tools: [{load: [skill]}]}"]);
+  expect(await refusal(text)).toBe(
+    "node 'a': tool `skill` of `load` would show as `load_skill`, a name yian reserves; rename the alias or the tool",
+  );
+});
+
 test("a module resolves in the importing file's folder, never on system: paths", async () => {
   mkdirSync(join(tmp, "sub"));
   writeFileSync(join(tmp, "sub", "own.ts"), MODULE);

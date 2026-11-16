@@ -59,6 +59,7 @@ import {
   visibleToolName,
 } from "../../tools/grants.ts";
 import { splitModuleRef, type ToolModuleRef } from "../../tools/modules.ts";
+import { reservedShownName } from "../../tools/registry.ts";
 import { YianTypeError } from "../../typesys/errors.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import {
@@ -1063,9 +1064,9 @@ export class AgentDescriptor extends NodeDescriptor {
    *
    * @throws LoadError, at `tools:`, when a grant names both a memory input and a flow or library,
    *   grants a flow in the group form, a library with no defs or a def it lacks, names one by a
-   *   name a model can't call, grants two tools that would show one name, or a flow or def with no
-   *   `description:` or with an input a model can't send (an inbox, a memory, a file); or as
-   *   `resolveChild` throws.
+   *   name a model can't call, grants a def that would show under a built-in's name or two tools
+   *   that would show one name, or a flow or def with no `description:` or with an input a model
+   *   can't send (an inbox, a memory, a file); or as `resolveChild` throws.
    */
   private readFlowTools(ctx: BuildContext, memoryInputs: readonly string[], range: SourceRange | null): FlowTool[] {
     const fail = (message: string, cause: unknown = null) =>
@@ -1116,6 +1117,8 @@ export class AgentDescriptor extends NodeDescriptor {
       for (const def of defs) {
         if (tools.some((tool) => tool.library?.alias === name && tool.library.def === def)) continue;
         const found = resolve(def);
+        const reserved = reservedShownName("def", name, def);
+        if (reserved !== null) throw fail(reserved);
         const shown = visibleToolName(name, def);
         checkNames(() => checkVisibleNames([{ visible: shown, group: name, tool: def, scope: 0, key: shown }]));
         tools.push(this.flowTool(fail, shown, `def \`${def}\` of \`${name}\``, found, { alias: name, def }, fix));
@@ -1173,8 +1176,8 @@ export class AgentDescriptor extends NodeDescriptor {
    * Return the tool modules `tools:` grants by `uses:` alias, once each, in grant order: a module's
    * group by name or as a group grant, and a one-export alias by name.
    *
-   * @throws LoadError, at `tools:`, when a grant names both a memory input and a tool module, or
-   *   grants a one-export alias as a group.
+   * @throws LoadError, at `tools:`, when a grant names both a memory input and a tool module, grants
+   *   a one-export alias as a group, or lists a tool that would show under a built-in's name.
    */
   private readModuleTools(
     ctx: BuildContext,
@@ -1190,6 +1193,11 @@ export class AgentDescriptor extends NodeDescriptor {
       if (memoryInputs.includes(name)) throw fail(`\`${name}\` is both a memory input and a tool module; rename one`);
       if (grant.kind === "group" && splitModuleRef(module.ref).exportName !== null) {
         throw fail(`\`${name}\` is one tool, ${module.ref}; grant it as \`${name}\``);
+      }
+      // A whole group's tools are listed only at run start, which checks their shown names.
+      for (const tool of grant.kind === "group" ? grant.tools : []) {
+        const reserved = reservedShownName("tool", name, tool);
+        if (reserved !== null) throw fail(reserved);
       }
       if (!modules.includes(module)) modules.push(module);
     }

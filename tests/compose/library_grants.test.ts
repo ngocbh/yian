@@ -107,3 +107,13 @@ test("a def that would show under a granted flow's name is refused", async () =>
       "have one name; grant one",
   );
 });
+
+test("a granted def that would show under a built-in's name is refused, whole or listed", async () => {
+  const lib = await loadFlow(LIBRARY.replace("  quote:", "  skill:"), { sourceLabel: "load.yaml" });
+  for (const tools of ["[load]", "[{load: [skill]}]"]) {
+    const text = `id: app\nname: app\nuses:\n  load: ./load\nnodes:\n  a: {kind: agent, prompt: hi, tools: ${tools}}\n`;
+    expect((await loadErrorAsync(loadFlow(text, { childResolver: () => lib }))).message).toBe(
+      "node 'a': def `skill` of `load` would show as `load_skill`, a name yian reserves; rename the alias or the def",
+    );
+  }
+});

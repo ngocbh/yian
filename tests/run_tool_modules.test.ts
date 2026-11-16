@@ -388,10 +388,12 @@ test.each([
   ["t: {kind: tool, tool_id: {crm: find}, input: {id: x}}", "TOOL node 't' names {crm: find}: `crm` has no tool `find`; it has lookup"],
   ["a: {kind: agent, prompt: go, tools: [quote]}", "AGENT node 'a': `quote` is both a tool module it grants and a tool of this run; rename one"],
   ["a: {kind: agent, prompt: go, tools: [notes, notes_read]}", "AGENT node 'a': the memory tool `notes_read` of `notes` has the name of another tool it grants; rename one"],
+  ["a: {kind: agent, prompt: go, tools: [load]}", "AGENT node 'a': tool `skill` of `load` would show as `load_skill`, a name yian reserves; rename the alias or the tool"],
 ])("run start checks each node's module tools: %s", async (node, message) => {
   writeFileSync(join(dir, "crm.ts"), tools(["lookup"]));
   writeFileSync(join(dir, "quote.ts"), tools(["quote"], 'output: { type: "integer" }, '));
-  const uses = { crm: "./crm.ts", quote: "./quote.ts:quote", notes_read: "./crm.ts:lookup" };
+  writeFileSync(join(dir, "skill.ts"), tools(["skill"]));
+  const uses = { crm: "./crm.ts", quote: "./quote.ts:quote", notes_read: "./crm.ts:lookup", load: "./skill.ts" };
   const quote = new FunctionTool({ name: "quote", description: "d", parametersJsonSchema: { type: "object" }, execute: () => 1 });
   const host: Record<string, FunctionTool> = message.includes("a tool of this run") ? { quote } : {};
   const text = app(uses, [node], "input:\n  notes: !FileMemory\n");

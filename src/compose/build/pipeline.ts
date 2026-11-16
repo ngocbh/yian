@@ -49,6 +49,7 @@ import {
   Diagnostic,
   DiagnosticFrame,
   Failure,
+  getCloseMatches,
   type OriginRef,
   type OriginResolver,
   reprText,
@@ -66,6 +67,7 @@ import {
   type ValuePath,
   type ValueTemplate,
 } from "../../nodes/contracts.ts";
+import { LOAD_SKILL } from "../../skills/tool.ts";
 import { ASK } from "../../tools/context.ts";
 import type { ToolModuleRef } from "../../tools/modules.ts";
 import { RESERVED_TOOL_NAMES } from "../../tools/registry.ts";
@@ -85,6 +87,7 @@ import { LoadDiagnostics, LoadError, rejectReservedName } from "../helpers/error
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
 import { assertExactContracts, resolveOutputBindingContract, type TypeFn } from "../../compile/output_contracts.ts";
 import {
+  CLOSE_MATCH_CUTOFF,
   oldFormSuggestion,
   oldTypedText,
   QUOTED_STYLES,
@@ -500,6 +503,8 @@ export interface CallableScope extends PrivateRegistrar {
   section(flowId: string): "defs" | "uses" | null;
   /** The tool module a `uses:` alias imports, by alias; `null` for any other name. */
   toolModule(name: string): ToolModuleRef | null;
+  /** The file's `defs:` entries and `uses:` aliases, in written order. */
+  names(): readonly string[];
   /** Resolve one named or compiler-owned callable in this file scope. */
   resolve(flowId: string): ComposedFlow;
 }
@@ -1841,52 +1846,72 @@ function readFlowParameters(options: AssembleOptions, ctx: AssembleContext): Flo
  * - Any other value is left to the CALL node, whose `call:` check reports its shape.
  *
  * The CALL node refuses a library named bare, and the TOOL node a built-in in a group, `load_skill`
- * and a module alias in the wrong form.
+ * and a module alias in the wrong form. A map or loop runs only flows for now, so there the rule
+ * refuses every tool, saying why the name is one, and `load_skill`.
  *
  * @param memories The flow's memory inputs.
  * @returns The rule, which throws a LoadError at `call:` for a bare memory input, a group that is
- *   a memory input and a def or alias too, a group that is a def or a flow alias, or a tool on a
- *   `map` or `loop` other than a module's, which the loader refuses.
+ *   a memory input and a def or alias too, a group that is a def or a flow alias, or a tool or
+ *   `load_skill` on a `map` or `loop`.
  */
 function callsToolRule(scope: CallableScope, memories: ReadonlySet<string>, diagnostics: LoadDiagnostics): CallsTool {
   const isLibrary = (name: string) =>
     scope.section(name) === "uses" && scope.toolModule(name) === null && scope.resolve(name).library !== null;
   return (nodeId, call, range, { site = null, kind = "call" } = {}) => {
-    const fail = (message: string) => diagnostics.error(`${site ?? `node ${reprText(nodeId)}`}: ${message}`, { range });
-    /** A tool, written `written`, which a map or loop can't run yet. */
-    const tool = (written: string): true => {
-      if (kind === "call") return true;
+    const onCall = kind === "call";
+    const subject = site ?? `${onCall ? "node" : `${kind} node`} ${reprText(nodeId)}`;
+    const fail = (message: string) => diagnostics.error(`${subject}: ${message}`, { range });
+    /** A tool, `why` saying why the name is one, which a map or loop can't run yet. */
+    const tool = (why: string, hint = ""): true => {
+      if (onCall) return true;
       throw fail(
-        `\`${written}\` is a tool; a \`${kind}\` runs only flows for now; call it from a \`call\` node, ` +
-          "or wrap it in a def",
+        `${why}, and a \`${kind}\` runs only flows for now; call it from a \`call\` node, or wrap it in a ` +
+          `def${hint}`,
       );
     };
+    /** Built-in `name`; a map or loop refuses `load_skill` as the TOOL node does. */
+    const builtin = (name: string): true => {
+      if (name === LOAD_SKILL && !onCall) throw fail(`tool id \`${LOAD_SKILL}\` is reserved by yian`);
+      return tool(`\`${name}\` is a built-in tool`);
+    };
+    /** `name`, which the file doesn't define, so `what` (`it`, or the group's tool) is a tool. */
+    const undefinedName = (name: string, what: string): true => {
+      if (onCall) return true;
+      const [close] = getCloseMatches(name, scope.names(), 1, CLOSE_MATCH_CUTOFF);
+      const hint = close === undefined ? "" : `; did you mean \`${close}\`?`;
+      return tool(`\`${name}\` names no def or alias in this file, so ${what} is a tool`, hint);
+    };
     if (typeof call === "string") {
-      if (RESERVED_TOOL_NAMES.has(call)) return tool(call);
+      if (RESERVED_TOOL_NAMES.has(call)) return builtin(call);
       if (call.startsWith(INLINE_FLOW_PREFIX)) return false;
-      if (scope.section(call) !== null) return scope.toolModule(call) !== null;
+      if (scope.section(call) !== null) return scope.toolModule(call) !== null && tool(`\`${call}\` is a tool module`);
       if (memories.has(call)) {
+        if (!onCall) {
+          throw fail(`\`${call}\` is a memory input, not a flow; call one of its tools from a \`call\` node`);
+        }
         const fix = site === null ? `call: {${call}: <tool>}` : `call(${call}.<tool>, ...)`;
         throw fail(`\`${call}\` is a memory input; name one of its tools: \`${fix}\``);
       }
-      return tool(call);
+      return undefinedName(call, "it");
     }
     if (!isRecord(call)) return false;
     const entries = Object.entries(call);
     if (entries.length !== 1 || entries[0]![0] === "") return false;
     const [group, name] = entries[0]!;
-    const written = `{${group}: ${String(name)}}`;
-    if (typeof name === "string" && RESERVED_TOOL_NAMES.has(name)) return tool(written);
+    const written = `\`{${group}: ${String(name)}}\``;
+    if (typeof name === "string" && RESERVED_TOOL_NAMES.has(name)) return builtin(name);
     const section = scope.section(group);
     const module = scope.toolModule(group);
     if (memories.has(group)) {
-      if (section === null) return tool(written);
+      if (section === null) return tool(`\`${group}\` is a memory input, so ${written} is a tool`);
       const what = module !== null ? "tool module" : isLibrary(group) ? "library" : "flow";
       throw fail(`\`${group}\` is both a memory input and a ${what}; rename one`);
     }
-    if (section === null) return tool(written);
-    if (module !== null) return true;
+    if (section === null) return undefinedName(group, written);
+    if (module !== null) return tool(`\`${group}\` is a tool module, so ${written} is a tool`);
     if (isLibrary(group)) return false;
+    // Renaming the def would reach a tool group, which a map or loop can't run either.
+    if (!onCall) throw fail(`\`${group}\` is a flow, not a library`);
     const named = section === "defs" ? "def" : "alias";
     throw fail(
       `\`${group}\` is a flow, not a library; a tool group named \`${group}\` is shadowed in this file, ` +

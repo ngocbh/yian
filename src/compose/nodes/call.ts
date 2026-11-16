@@ -35,7 +35,7 @@ import { callableDisplay, type ChildSignature, childSignature, resolveChild } fr
  * node, or a flow; the flow file's rule, given the node's id and where its `call:` is. A lifted
  * `call(...)` gives its `site` (`node 'n' input 'x' call(lessons)`), which a message names in
  * place of the node, writing its fix as a directive. A `map` or `loop` gives its `kind`: it runs
- * only flows, so a tool there is refused, except a module's, which the loader refuses.
+ * only flows for now, so a tool there is refused.
  *
  * @throws LoadError at `range` for a name no `call:` may take, or a tool on a `map` or `loop`.
  */
@@ -43,8 +43,11 @@ export type CallsTool = (
   nodeId: string,
   call: unknown,
   range: SourceRange | null,
-  where?: { site?: string | null; kind?: string },
+  where?: { site?: string | null; kind?: CallingKind },
 ) => boolean;
+
+/** The kinds whose `call:` names what they run. */
+export type CallingKind = "call" | "map" | "loop";
 
 /** The fields `CallDescriptor`'s constructor takes: the common ones and the CALL's own. */
 export interface CallDescriptorFields extends NodeDescriptorFields {

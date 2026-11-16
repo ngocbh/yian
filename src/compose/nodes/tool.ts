@@ -93,6 +93,11 @@ class ToolWording {
     return this.labels.get("call") ?? null;
   }
 
+  /** What an input is called: `argument` in a lifted `call(...)`, else `input`. */
+  get inputNoun(): string {
+    return this.site === null ? "input" : "argument";
+  }
+
   /** The node: `node 'f'`. */
   node(): string {
     return this.site ?? `node ${reprText(this.nodeId)}`;
@@ -418,10 +423,12 @@ export class ToolDescriptor extends NodeDescriptor {
     const auto = fields["adaptiveQuestions"] ?? null;
     const autoRange = ranges.get(siteKey("field", "adaptive_questions")) ?? ownRange;
     if ((inputs["prompt"] ?? null) === null && !hasQuestions && auto === null) {
-      throw diagnostics.error(
-        `${wording.nodeTool(ASK)}: ask needs input prompt:, input questions:, or adaptive_questions:`,
-        { range: ownRange },
-      );
+      // A lifted `call(...)` can't write `adaptive_questions:`.
+      const needs =
+        wording.inputNoun === "argument"
+          ? "argument prompt or questions"
+          : "input prompt:, input questions:, or adaptive_questions:";
+      throw diagnostics.error(`${wording.nodeTool(ASK)}: ask needs ${needs}`, { range: ownRange });
     }
     if (hasQuestions && auto !== null) {
       throw diagnostics.error(
@@ -836,9 +843,10 @@ function reservesQuestions(desc: ToolDescriptor): boolean {
 
 /** The error for an `ask` whose author bound `QUESTIONS_INPUT`, at `range`. */
 function questionsReserved(wording: ToolWording, range: SourceRange | null, diagnostics: LoadDiagnostics): LoadError {
-  return diagnostics.error(`${wording.nodeTool(ASK)}: input '${QUESTIONS_INPUT}' is reserved for adaptive_questions`, {
-    range,
-  });
+  return diagnostics.error(
+    `${wording.nodeTool(ASK)}: ${wording.inputNoun} '${QUESTIONS_INPUT}' is reserved for adaptive_questions`,
+    { range },
+  );
 }
 
 /** The inputs a `take` reads. */

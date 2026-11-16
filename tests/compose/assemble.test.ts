@@ -703,6 +703,7 @@ function fakeScope(catalogBuilder = new SourceCatalogBuilder()): CallableScope &
     has: () => true,
     section: () => "defs",
     toolModule: () => null,
+    names: () => [],
     resolve(flowId: string): ComposedFlow {
       resolved.push(flowId);
       return new ComposedFlow(new CompiledFlow(new Map(), []));

@@ -151,7 +151,8 @@ test.each([
 
 test("a map naming a module alias is a load error that points to a call node", async () => {
   expect(await refusal(app(USES, ["a: {kind: map, over: [1], call: crm}"]))).toBe(
-    "`crm` is a tool module; call its tools from a `call` node",
+    "map node 'a': `crm` is a tool module, and a `map` runs only flows for now; call it from a `call` node, or " +
+      "wrap it in a def",
   );
 });
 

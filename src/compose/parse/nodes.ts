@@ -47,7 +47,7 @@ import { oneLineText } from "../helpers/source.ts";
 import { QUOTED_STYLES, suggestTag, yamlQuoted } from "../helpers/tags.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import { type NodeDescriptor, notTextError, rejectInfinityName, siteKey } from "../nodes/base.ts";
-import type { CallsTool } from "../nodes/call.ts";
+import type { CallingKind, CallsTool } from "../nodes/call.ts";
 import { type DescriptorClass, KINDS, REMOVED_KINDS } from "../nodes/index.ts";
 import { ToolDescriptor } from "../nodes/tool.ts";
 import type { ScalarStyle } from "../source/common.ts";
@@ -68,7 +68,7 @@ const INPUT_OUTPUT_REMAP: ReadonlyMap<string, string> = new Map([
 // A `call` node naming a tool is read as a TOOL node, whose tool is in `tool_id:`.
 const CALL_AS_TOOL: ReadonlyMap<string, string> = new Map([["call", "tool_id"]]);
 // The kinds whose `call:` the file's call rule reads.
-const CALLING_KINDS: ReadonlySet<string> = new Set(["call", "map", "loop"]);
+const CALLING_KINDS: ReadonlySet<string> = new Set<CallingKind>(["call", "map", "loop"]);
 
 // Explicit ASCII classes, matching the expression `NAME` terminal: `${...}` can't reference a
 // non-ASCII letter (`café`).
@@ -230,8 +230,8 @@ function parseNode(
     );
   }
   const desc =
-    CALLING_KINDS.has(kind) && callsTool !== undefined
-      ? parseCallBody(nodeId, cls, normalized, callsTool, diagnostics)
+    isCallingKind(kind) && callsTool !== undefined
+      ? parseCallBody(nodeId, kind, cls, normalized, callsTool, diagnostics)
       : cls.parse(nodeId, normalized);
   // Compose-only enrichments, read from the normalized cursor (`input:` is `inputs` there):
   // each `input:` binding's own range, keyed apart from a like-named field, and each `asserts:`
@@ -273,16 +273,17 @@ function parseNode(
  */
 function parseCallBody(
   nodeId: string,
+  kind: CallingKind,
   cls: DescriptorClass,
   normalized: SourceCursor,
   callsTool: CallsTool,
   diagnostics: LoadDiagnostics,
 ): NodeDescriptor {
   if (!normalized.has("call") || normalized.has("tool_id")) return cls.parse(nodeId, normalized);
-  if (cls.kind !== "call") {
+  if (kind !== "call") {
     // The parse reports a malformed `call:` first, so the rule's refusal shows a well-formed one.
     const desc = cls.parse(nodeId, normalized);
-    callsTool(nodeId, normalized.get("call"), normalized.rangeOf("call"), { kind: cls.kind });
+    callsTool(nodeId, normalized.get("call"), normalized.rangeOf("call"), { kind });
     return desc;
   }
   if (callsTool(nodeId, normalized.get("call"), normalized.rangeOf("call"))) {
@@ -301,6 +302,11 @@ function parseCallBody(
     });
   }
   return cls.parse(nodeId, normalized);
+}
+
+/** Whether `kind` is one whose `call:` the file's call rule reads. */
+function isCallingKind(kind: string): kind is CallingKind {
+  return CALLING_KINDS.has(kind);
 }
 
 /** The registered kind names, sorted and comma-joined, for a bad-kind message. */

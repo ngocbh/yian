@@ -460,7 +460,7 @@ brief:
 - The call runs only when the node it is written in can run: on that node's `case` branches,
   after its `runs_after:` nodes, and once its other inputs are ready.
 - A quoted value is text, never a call: `note: "call(f)"` is the text `call(f)`.
-- A flow call inside `${...}` is a load error, and in the middle of other text `call(...)` is
+- A `call(...)` inside `${...}` is a load error, and in the middle of other text `call(...)` is
   plain text. Give the call its own node and read that node's output.
 
 ## Repeat with `loop`

@@ -601,13 +601,25 @@ export class ToolDescriptor extends NodeDescriptor {
    * returns the whole carried record, the body's inputs but its memories and inboxes, which the
    * engine checks each turn's result against (`null` for no such input); any other's is `null`.
    *
-   * @throws LoadError as `outputContract` throws.
+   * @throws LoadError as `outputContract` throws, or, at its seed, for a carried field typed None,
+   *   as an untagged `null` seed types it, which the tool could then only return null for.
    */
   private resultContract(ctx: BuildContext): OutputContract | null {
     const declared = this.outputContract(ctx);
     if (declared !== null || this.writtenKind !== "loop") return declared;
     const carried = [...ctx.flowInputs].filter(([, typ]) => !isMemoryType(typ) && !isInboxType(typ));
     if (carried.length === 0) return null;
+    const none = carried.find(([, typ]) => typ.kind === ValueKind.NONE);
+    if (none !== undefined) {
+      const [name] = none;
+      const { group, name: tool } = this.toolRef;
+      throw ctx.diagnostics.error(
+        `${ctx.bodyOf?.label ?? this.wording.node()}: carried field ${reprText(name)} is typed None from its ` +
+          `seed, and tool \`${group === null ? tool : this.wording.ref(group, tool)}\` returns every carried ` +
+          `field, so it could only return null there; declare the seed's type, e.g. \`${name}: !Optional(str) null\``,
+        { range: this.inputRange(name) },
+      );
+    }
     const fields = new Map(carried);
     return new ValueContract(new Type({ kind: ValueKind.OBJECT, fields, required: new Set(fields.keys()) }));
   }

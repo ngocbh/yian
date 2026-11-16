@@ -688,6 +688,8 @@ poll:
 - Without `output:`, the tool returns the whole carried record, checked each turn: a result that
   leaves out a field or adds one fails the turn. To return only the fields that change, declare
   them with `output:`, as above; `job` keeps its value.
+- Without `output:`, each field keeps its seed's type, so tag a seed the tool changes: an untagged
+  `cursor: null` is a load error; write `cursor: !Optional(str) null`.
 - `retries:`, `output:` and `adaptive_questions:` apply to each turn's call. The loop keeps
   `asserts:`, which check its final record.
 - `call: sleep` and `call: take` are load errors, since neither returns a record of carried

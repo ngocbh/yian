@@ -89,6 +89,18 @@ test("retries: and output: move to the body's node; the loop keeps asserts: and 
   expect(loop.postAsserts.map((assertion) => assertion.display)).toEqual(["output.done"]);
 });
 
+test("with no output:, an untagged null seed is refused at the seed; a tagged one loads", async () => {
+  const lines = (seed: string) => `    input:\n      job: \${input.job}\n      cursor: ${seed}\n    times: 2\n`;
+  expect(await failure(loopApp("status", lines("null")))).toEqual([
+    "loop node 'poll': carried field 'cursor' is typed None from its seed, and tool `status` returns every " +
+      "carried field, so it could only return null there; declare the seed's type, e.g. " +
+      "`cursor: !Optional(str) null`",
+    "null",
+  ]);
+  const node = (await nodeAt(loopApp("status", lines("!Optional(str) null")), "poll/poll")) as ToolNode;
+  expect(canonicalTypeLabel(outputContractType(node.outputContract)!)).toBe('{"cursor":Optional(str),"job":str}');
+});
+
 // Each row: the loop's `call:` and other lines, the load error, and the text it points at.
 test.each([
   ["status", `${POLL}    retries: -1\n`, "node 'poll' (kind=loop): `retries:` must be a non-negative integer, got -1", "-1"],

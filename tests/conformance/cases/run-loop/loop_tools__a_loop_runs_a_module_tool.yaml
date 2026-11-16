@@ -1,0 +1,45 @@
+# A loop runs a tool module's tool each turn: a group alias's tool, `{jobs: status}`, which returns
+# the whole carried record, and a one-export alias, `bump`, which returns only `n`.
+kind: run
+flow: |
+  id: f
+  name: f
+  uses:
+    jobs: ./jobs.ts
+    bump: ./tools.ts:bump
+  nodes:
+    polled: {kind: loop, call: {jobs: status}, input: {job: j1, tries: 0, done: false}, while: not done, max: 5}
+    counted: {kind: loop, call: bump, input: {n: 0, step: 2}, times: 3, output: {n: !int}}
+  output:
+    polled: ${polled.output}
+    counted: ${counted.output}
+files:
+  jobs.ts: |
+    export const status = {
+      name: "status",
+      description: "Check a job.",
+      parameters: {
+        type: "object",
+        properties: { job: { type: "string" }, tries: { type: "integer" }, done: { type: "boolean" } },
+        required: ["job", "tries", "done"],
+      },
+      execute: (args) => ({ job: args.job, tries: args.tries + 1, done: args.tries + 1 >= 2 }),
+    };
+  tools.ts: |
+    export const bump = {
+      name: "bump",
+      description: "Add step to n.",
+      parameters: {
+        type: "object",
+        properties: { n: { type: "integer" }, step: { type: "integer" } },
+        required: ["n", "step"],
+      },
+      execute: (args) => ({ n: args.n + args.step }),
+    };
+run: {run_id: r1, num_workers: 0}
+expect:
+  output:
+    status: succeeded
+    output:
+      polled: {job: j1, tries: 2, done: true}
+      counted: {n: 6, step: 2}

@@ -1,0 +1,31 @@
+# A loop calls a memory's tool each turn: the loop carries the memory to its generated body, whose
+# node reads it, never as an argument, and passes the carried `path`. Without `output:` the result
+# must be the whole carried record, and `read` also returns `hash` and `text`, so the turn fails.
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    lessons: !FileMemory
+  nodes:
+    found: {kind: loop, call: {lessons: read}, input: {path: a.md}, times: 1}
+  output: ${found.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons:
+      type: FileMemory
+      id: t/lessons
+      files: {a.md: one}
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.output
+      message: 'output at hash: record has unknown fields: ["hash","text"]'
+      frames:
+      - label: flow.yaml
+        range: [6, 3, 6, 8]
+      - label: flow.yaml
+        range: [6, 3, 6, 8]
+      node: found#0/found

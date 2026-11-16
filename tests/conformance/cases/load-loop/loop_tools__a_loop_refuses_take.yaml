@@ -1,0 +1,19 @@
+# A loop passes `take` its carried inbox, but `take` returns `events` and `closed`, which aren't
+# carried fields: a load error at the loop.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    notes: !Inbox(str)
+  nodes:
+    w: {kind: loop, call: take, input: {from: "${input.notes}"}, times: 2}
+  output: ${w.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "loop node 'w': tool `take` returns {\"closed\":bool,\"events\":list(str)}, but `closed` and `events` aren't carried fields [\"from\"] (a loop's tool returns the carried fields that change)"
+      frames:
+      - label: flow.yaml
+        range: [6, 3, 6, 4]

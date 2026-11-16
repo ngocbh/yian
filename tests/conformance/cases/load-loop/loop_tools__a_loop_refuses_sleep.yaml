@@ -1,0 +1,17 @@
+# A loop's tool returns the carried fields that change, and `sleep` returns None: a load error at
+# the loop.
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    w: {kind: loop, call: sleep, input: {for: 1s}, times: 2}
+  output: ${w.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "loop node 'w': tool `sleep` returns None, not a record of carried fields (a loop's tool returns the carried fields that change)"
+      frames:
+      - label: flow.yaml
+        range: [4, 3, 4, 4]

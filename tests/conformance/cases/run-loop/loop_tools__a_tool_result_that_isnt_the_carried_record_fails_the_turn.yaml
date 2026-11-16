@@ -1,0 +1,31 @@
+# Without `output:`, a loop's tool returns the whole carried record, which the engine checks each
+# turn: a result that leaves out the carried `job` fails that turn's call.
+kind: run
+flow: |
+  id: f
+  name: f
+  nodes:
+    polled: {kind: loop, call: status, input: {job: j1, done: false}, while: not done, max: 3}
+  output: ${polled.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    status:
+      parameters:
+        type: object
+        properties: {job: {type: string}, done: {type: boolean}}
+        required: [job, done]
+      results:
+        polled#0/polled: [{return: {done: true}}]
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.output
+      message: 'output at job: record missing required fields: ["job"]'
+      frames:
+      - label: flow.yaml
+        range: [4, 3, 4, 9]
+      - label: flow.yaml
+        range: [4, 3, 4, 9]
+      node: polled#0/polled

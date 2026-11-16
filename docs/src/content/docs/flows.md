@@ -381,6 +381,7 @@ nodes:
 output: ${double.output}
 ```
 
-- A `map` node can't have asserts; put them in its child flow.
+- A `map` node over a flow can't have asserts; put them in its child flow. On a
+  [map over a tool](/control-flow/#map-over-a-tool), they check each item's call.
 - A flow's asserts can't read `system.today` or other `system` values; check those in a node.
 - A flow assert that reads a node a `case` skipped sees null.

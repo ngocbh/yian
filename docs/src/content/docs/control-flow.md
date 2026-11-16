@@ -460,6 +460,8 @@ fetch:
 
 - `retries:`, `output:`, `asserts:` and `adaptive_questions:` apply to each item's call. Without
   `output:`, each result is any JSON value.
+- An `asserts:` item or an adaptive `prompt:` reads the call's own arguments, so read the item
+  through the argument it's bound to: `id != ''`, not `item != ''`.
 - `call: ask` asks each item its own question. `call: take` is a load error: a map can't give each
   item its own inbox, so take before the map.
 - yian runs each call in a one-node body of its own, so each item writes about 8 records to the

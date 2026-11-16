@@ -211,8 +211,8 @@ output:
   know is set to check it at run time: `n: !int ${input.n}`.
 - **`map`** runs the child per item of `over:` (a list), with the item as `${item}`, and returns
   a list in order. A `map` over a flow can't have `asserts:`. A `map` over a tool calls it per
-  item, and its `retries:`, `output:` and `asserts:` apply to each call; `call: take` is a load
-  error (take before the map). See
+  item, and its `retries:`, `output:` and `asserts:` apply to each call (an assert reads the
+  call's arguments, `id != ''`, not `item`); `call: take` is a load error (take before the map). See
   [Map over a tool](https://yian.readthedocs.io/control-flow/#map-over-a-tool).
 - **`loop`** takes exactly one driver: `while:` (checked before each run), `until:` (after each
   run) or `times: N`. `max:` guards `while:` and `until:`, and is a load error with `times:`.

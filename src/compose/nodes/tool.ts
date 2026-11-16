@@ -66,11 +66,11 @@ export interface ToolDescriptorFields extends NodeDescriptorFields {
  * How a TOOL node's load messages name the node and the field its tool is written in, so each
  * message reads in the author's own words.
  */
-export class ToolWording {
+class ToolWording {
   /** The node's own id. */
   readonly nodeId: string;
   /** The node kind the author wrote. */
-  readonly kind = "tool";
+  readonly kind: string = ToolDescriptor.kind;
   /** The field the author named the tool in. */
   readonly field = "tool_id";
 

@@ -3446,8 +3446,8 @@ function checkMemoryGrantNames(
   const scope = tools.scope();
   const table = { tools: hostTypes, opaque: false, clashes: new Set<string>() };
   for (const [nodeId, node, inputs] of nodesWithFlowInputs(flow)) {
-    // A TOOL node calls its memory's tool before any run tool, so a host tool of that name is only
-    // shadowed there.
+    // A TOOL node calls its memory's tool before any run tool, so a host tool or group of that name
+    // is shadowed there, not ambiguous.
     if (node.kind === NodeKind.TOOL) continue;
     const grants = node.memoryGrants();
     if (grants.length === 0) continue;
@@ -3488,8 +3488,8 @@ function checkMemoryGrantNames(
 function checkFlowGrantNames(flow: CompiledFlow, tools: ToolSet): void {
   const scope = tools.scope();
   for (const [nodeId, node] of staticNodes(flow)) {
-    // A TOOL node calls its module's tool before any run tool, so a host tool of that name is only
-    // shadowed there.
+    // A TOOL node calls its module's tool before any run tool, so a host tool or group of that name
+    // is shadowed there, not ambiguous.
     if (node.kind === NodeKind.TOOL) continue;
     const own = node.flowGrants().scope;
     const names: [string, string][] = [

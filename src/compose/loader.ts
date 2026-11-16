@@ -336,17 +336,20 @@ function validateSystem(system: ValueRecord, cursor: SourceCursor | null = null)
  * @throws LoadError when a `defs:` name or `uses:` alias starts with `INLINE_FLOW_PREFIX` or is a
  *   built-in's name.
  */
-function rejectReservedCallableNames(root: SourceCursor, defs: ValueRecord, uses: Record<string, string>): void {
-  const diagnostics = LoadDiagnostics.fromCursor(root);
-  for (const [section, declarations] of [
-    ["defs", defs],
-    ["uses", uses],
+function rejectReservedCallableNames(
+  root: SourceCursor,
+  defs: ValueRecord,
+  uses: Record<string, string>,
+  diagnostics: LoadDiagnostics,
+): void {
+  for (const [section, declarations, noun, subject, entry] of [
+    ["defs", defs, "callable names", "defs entry", "def"],
+    ["uses", uses, "aliases", "uses: alias", "alias"],
   ] as const) {
     const names = Object.keys(declarations);
     const keyRange = (name: string) => (root.has(section) ? root.child(section).keyRangeOf(name) : null);
     const offender = names.find((name) => name.startsWith(INLINE_FLOW_PREFIX));
     if (offender !== undefined) {
-      const noun = section === "defs" ? "callable names" : "aliases";
       throw diagnostics.error(
         `${section}: ${noun} with prefix ${reprText(INLINE_FLOW_PREFIX)} are reserved ` +
           "for compiler-generated inline child flows",
@@ -355,7 +358,6 @@ function rejectReservedCallableNames(root: SourceCursor, defs: ValueRecord, uses
     }
     const builtin = names.find((name) => RESERVED_TOOL_NAMES.has(name));
     if (builtin !== undefined) {
-      const [subject, entry] = section === "defs" ? ["defs entry", "def"] : ["uses: alias", "alias"];
       throw diagnostics.error(
         `${subject} ${reprText(builtin)}: \`${builtin}\` is a name yian reserves; rename the ${entry}`,
         { range: keyRange(builtin) },
@@ -1578,7 +1580,7 @@ export async function loadFlowFile(
   const root = document.root;
   const diagnostics = LoadDiagnostics.fromDocument(document);
   const f = parseFile(document);
-  rejectReservedCallableNames(root, f.defs, f.uses);
+  rejectReservedCallableNames(root, f.defs, f.uses, diagnostics);
   validateEnv(f.env, "flow ", root.has("env") ? root.child("env") : null, diagnostics);
   validateSystem(f.system, root.has("system") ? root.child("system") : null);
 

@@ -1,4 +1,4 @@
-# A library alias named like a built-in tool is refused at its key: granted, `ask` with a def `user`
+# A library alias named like a built-in is refused at its key; granted, `ask` with a def `user`
 # would show as `ask_user`.
 kind: load
 flow: |

@@ -76,9 +76,9 @@ tool.
 | `{lessons: [read, append]}` | Those tools, in the order written | `lessons_read`, `lessons_append` |
 
 - A bare tool name, such as `tools: [read]`, never reaches a memory.
-- Naming a tool the memory type doesn't have is a load error. A memory input named like a host
-  tool or group of the run fails the run before it starts, and so does a memory tool that would
-  show under the name of a host tool the agent holds.
+- Naming a tool the memory type doesn't have is a load error. A memory input an agent grants,
+  named like a host tool or group of the run, fails the run before it starts, and so does a memory
+  tool that would show under the name of a host tool the agent holds.
 - One agent can't be granted two inputs bound to one memory; it fails with `contract.input`.
 - Reads run beside other calls; writes run one at a time, in call order.
 - Grant only the tools an agent needs: a write changes what every later run reads.

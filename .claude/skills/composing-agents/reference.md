@@ -91,8 +91,9 @@ fit.
 **call / map / loop** ([Control flow](https://yian.readthedocs.io/control-flow/)): `call` or
 inline `nodes` plus `output`; `input` (the child's arguments, or the loop's seed record); `map`
 adds `over`; `loop` adds one of `while`, `until`, `times`, and optional `max` and
-`on_max_exceeded` (`fail` or `output`). A `call` node whose `call` names a tool (any name the
-file doesn't define) takes the **tool** fields instead, with `call` in place of `tool_id`.
+`on_max_exceeded` (`fail` or `output`). A `call` node whose `call` names a tool (a built-in, a
+module's or memory's tool, or a name the file doesn't define) takes the **tool** fields instead,
+with `call` in place of `tool_id`.
 
 **ask** ([Inboxes and waiting](https://yian.readthedocs.io/inboxes/#ask-a-person)):
 `tool_id: ask`, `input` with one of `prompt` or `questions` (1 to 4, each with `question`, a

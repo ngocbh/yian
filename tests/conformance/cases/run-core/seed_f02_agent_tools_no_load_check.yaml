@@ -6,9 +6,9 @@ flow: |
   # f02 — an unknown AGENT `tools:` entry is NOT checked at load: this flow LOADS CLEAN.
   # The load-side check does not exist, so this remains a future negative fixture.
   #
-  # NOT a duplicate of e23: that pins a TOOL node's `tool_id:`. This is an AGENT node's `tools:`
+  # NOT a duplicate of e23: that pins a TOOL node's `call:`. This is an AGENT node's `tools:`
   # list. Both survive compile and fail at run start: before any log exists, `run_flow` checks
-  # every static AGENT grant and TOOL `tool_id:` against the run's tools and raises `RangeError`
+  # every static AGENT grant and TOOL node's `call:` against the run's tools and raises `RangeError`
   # naming the node and the unknown id. That is the run-start shape in `errors/`, which e23 uses.
   # This seed stays here because what it asks for is a load-time check, which does not exist.
   #

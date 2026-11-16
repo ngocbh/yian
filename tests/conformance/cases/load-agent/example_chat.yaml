@@ -78,7 +78,7 @@ flow: |
           input: {summary: "${input.summary}", history: "${input.history}"}
         heard:
           kind: call
-          call: take                    # waits until a message arrives or the inbox closes
+          call: take                       # waits until a message arrives or the inbox closes
           input:
             from: ${input.owner_messages}
             take: all

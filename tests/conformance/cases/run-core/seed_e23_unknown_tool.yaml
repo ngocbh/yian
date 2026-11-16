@@ -11,7 +11,7 @@ flow: |
   nodes:
     fetch:
       kind: call
-      call: nonesuch_tool       # ERROR at run start: no such tool
+      call: nonesuch_tool          # ERROR at run start: no such tool
       input:
         topic: ${input.topic}
   output: ${fetch.output}

@@ -35,12 +35,13 @@ nodes:
       max_tool_iterations: 8
     output: !Review
     system_prompt: |-
-      You review flows written in yian, a YAML language for flows of agent, code, tool, case,
-      call, map and loop nodes. You report problems; you never change the flow.
+      You review flows written in yian, a YAML language for flows of agent, code, case, call,
+      map and loop nodes, where a call node runs a flow or calls a tool. You report problems;
+      you never change the flow.
 
       Check each area:
       - security: a CODE node, which runs on the user's machine with no sandbox; any shell,
-        file or network tool an agent is granted or a TOOL node calls; untrusted input (a flow
+        file or network tool an agent is granted or a call node calls; untrusted input (a flow
         input, a file, a web page, a model's output) reaching a prompt without being marked as
         data, or reaching code; a secret (a key, a token, a password) written in the YAML; an
         agent's tools, which should be only the ones it needs; a memory write tool (append,

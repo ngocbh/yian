@@ -155,7 +155,7 @@ test("a map naming a module alias alone names one of its tools", async () => {
   );
 });
 
-test.each(["tools: [crm]", "tool_id: {crm: lookup}"])("%s naming a memory input too is a load error", async (field) => {
+test.each(["tools: [crm]", "call: {crm: lookup}"])("%s naming a memory input too is a load error", async (field) => {
   const text = app(USES, [`a: {kind: ${KINDS[field.split(":")[0]!]}, ${field}}`], "input:\n  crm: !FileMemory\n");
   expect(await refusal(text)).toBe("node 'a': `crm` is both a memory input and a tool module; rename one");
 });

@@ -469,6 +469,11 @@ test.each([
     "node 'n' input 'x' call(search) argument 'k': tool 'search' takes no such input; it takes [\"q\"]",
   ],
   [
+    "an argument the tool can't take",
+    "nodes:\n  n:\n    kind: code\n    code: return 1\n    output: !int\n    input:\n      x: call(search, q=1)\n",
+    "node 'n' input 'x' call(search) argument 'q': tool 'search' takes str, but the binding is 1 (int)",
+  ],
+  [
     "an argument the tool needs",
     "nodes:\n  n: {kind: code, code: return 1, output: !int, input: {x: call(search)}}\n",
     "node 'n' input 'x' call(search) is missing argument 'q' that tool 'search' requires",

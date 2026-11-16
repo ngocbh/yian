@@ -21,6 +21,7 @@ import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
+import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { Binding, ValueContract } from "../../src/nodes/contracts.ts";
 import { runFlow } from "../../src/run.ts";
 import { readTypedefs, type TypeRegistry, typeFor } from "../../src/typesys/types.ts";
@@ -32,7 +33,6 @@ import {
   handChild,
   loadConformanceFlow,
   loadError,
-  loadErrorAsync,
   parametersFromYaml,
   runCase,
 } from "../helpers/declarations.ts";
@@ -468,7 +468,7 @@ output: \${go.output}
   expect(callees(enrich)).toEqual({ __call_0: "helper" });
 });
 
-test("inline call unknown callee is loud", async () => {
+test("an inline call of a name the file doesn't define calls a tool", async () => {
   const text = `
 id: ic_unk
 name: ic_unk
@@ -483,11 +483,8 @@ nodes:
     output: !str
 output: \${use.output}
 `;
-  const error = await loadErrorAsync(loadConformanceFlow(text));
-  expect(error.message).toBe(
-    "callable 'nope' is neither an in-file defs: callable nor a uses: alias — external flows are reachable " +
-      "only through a uses: alias (declare `uses: {nope: <ref>}`)",
-  );
+  const { compiled } = await loadConformanceFlow(text);
+  expect((compiled.nodes.get("__call_0") as ToolNode).toolId).toBe("nope");
 });
 
 // ---------- guards: `${item}` capture, the reserved synth-id prefix, a malformed call ----------
@@ -552,7 +549,7 @@ output: \${use.output}
 `;
   const error = loadError(() => assembleText(text));
   expect(error.message).toBe(
-    "use: call(enrich, ...) passes a positional argument '30'; every argument after the flow id must be a " +
+    "use: call(enrich, ...) passes a positional argument '30'; every argument after the name it calls must be a " +
       'keyword (name=value). If you meant the text, quote the whole value: `"call(enrich, 30)"`',
   );
   expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(11);
@@ -598,8 +595,8 @@ output: call(enrich, 30)
 `;
   const error = loadError(() => assembleText(text));
   expect(error.message).toBe(
-    "flow outputs: call(enrich, ...) passes a positional argument '30'; every argument after the flow id must " +
-      'be a keyword (name=value). If you meant the text, quote the whole value: `"call(enrich, 30)"`',
+    "flow outputs: call(enrich, ...) passes a positional argument '30'; every argument after the name it calls " +
+      'must be a keyword (name=value). If you meant the text, quote the whole value: `"call(enrich, 30)"`',
   );
   expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(13);
 });

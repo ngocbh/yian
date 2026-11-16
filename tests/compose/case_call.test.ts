@@ -256,14 +256,14 @@ test.each(
       [
         "call(pick, 30)",
         "call(pick, ...) passes a positional argument '30'; every argument after the " +
-          "flow id must be a keyword (name=value)",
+          "name it calls must be a keyword (name=value)",
       ],
       ["call(pick", "`call(` is never closed (check its parentheses and quotes)"],
       ['call(pick, stance="a") tail', "text follows the closing `)`: 'tail'; a call(...) must be the whole value"],
       [
         'call(pick stance="a")',
-        "a call(...) must start with a flow id (a bare name, or alias.def for a library's def) and a comma, " +
-          "got 'pick stance=\"a\"'",
+        "a call(...) must start with the name it calls (a bare name, or alias.name for a library's def or " +
+          "a group's tool) and a comma, got 'pick stance=\"a\"'",
       ],
     ].map(([target, problem]) => [label, target!, problem!]),
   ),

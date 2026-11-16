@@ -67,6 +67,8 @@ const INPUT_OUTPUT_REMAP: ReadonlyMap<string, string> = new Map([
 
 // A `call` node naming a tool is read as a TOOL node, whose tool is in `tool_id:`.
 const CALL_AS_TOOL: ReadonlyMap<string, string> = new Map([["call", "tool_id"]]);
+// The kinds whose `call:` the file's call rule reads.
+const CALLING_KINDS: ReadonlySet<string> = new Set(["call", "map", "loop"]);
 
 // Explicit ASCII classes, matching the expression `NAME` terminal: `${...}` can't reference a
 // non-ASCII letter (`café`).
@@ -228,7 +230,7 @@ function parseNode(
     );
   }
   const desc =
-    kind === "call" && callsTool !== undefined
+    CALLING_KINDS.has(kind) && callsTool !== undefined
       ? parseCallBody(nodeId, cls, normalized, callsTool, diagnostics)
       : cls.parse(nodeId, normalized);
   // Compose-only enrichments, read from the normalized cursor (`input:` is `inputs` there):
@@ -260,9 +262,11 @@ function parseNode(
 }
 
 /**
- * Parse a `kind: call` body: as a TOOL body, its `call:` read as `tool_id:`, when `callsTool` says
- * its `call:` names a tool; else with `cls`, refusing `retries:` and `adaptive_questions:`, which
- * only a tool call takes. A body that also writes `tool_id:` is left to `cls`, which refuses it.
+ * Parse a `call`, `map` or `loop` body. A `kind: call` body parses as a TOOL body, its `call:` read
+ * as `tool_id:`, when `callsTool` says its `call:` names a tool; else with `cls`, refusing
+ * `retries:` and `adaptive_questions:`, which only a tool call takes. A map or loop runs only
+ * flows, so its body parses with `cls`, after `callsTool` has refused a name no `call:` may take.
+ * A body that also writes `tool_id:` is left to `cls`, which refuses it.
  *
  * @throws LoadError at the field for `retries:` or `adaptive_questions:` on a flow call, or as
  *   `callsTool` and the class's `parse` throw.
@@ -275,9 +279,9 @@ function parseCallBody(
   diagnostics: LoadDiagnostics,
 ): NodeDescriptor {
   if (!normalized.has("call") || normalized.has("tool_id")) return cls.parse(nodeId, normalized);
-  if (callsTool(nodeId, normalized.get("call"), normalized.rangeOf("call"))) {
-    return ToolDescriptor.parse(nodeId, normalized.renamed(CALL_AS_TOOL));
-  }
+  const tool = callsTool(nodeId, normalized.get("call"), normalized.rangeOf("call"));
+  if (cls.kind !== "call") return cls.parse(nodeId, normalized);
+  if (tool) return ToolDescriptor.parse(nodeId, normalized.renamed(CALL_AS_TOOL));
   const subject = `node ${reprText(nodeId)} (kind=call)`;
   if (normalized.has("retries")) {
     throw diagnostics.error(

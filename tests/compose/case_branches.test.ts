@@ -211,7 +211,7 @@ test("a quoted call holding a span is its own error", () => {
   const error = loadErrorWith(
     text,
     "case node 'route' then: a quoted `call(...)` is text, so it can't hold `${...}` " +
-      "here; drop the quotes to call the flow, or reword the text",
+      "here; drop the quotes to make the call, or reword the text",
   );
 
   expect(errorLine(error)).toBe(lineOf(text, 'then: "call(pick'));

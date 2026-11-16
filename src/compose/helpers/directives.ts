@@ -130,16 +130,16 @@ export function splitCallsAware(text: string, sep: string): string[] {
 
 /** An unquoted value whose trimmed text starts with this is a `call(...)` directive. */
 export const CALL_HEAD = /^call\s*\(/;
-// A flow id, or a library alias and one of its defs: `billing.quote`.
+// A flow or tool name, or an alias and one of its defs or tools: `billing.quote`.
 const FLOW_ID = /^[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)?$/;
 
 /**
  * Recognize a whole-value `call(...)` directive.
  *
  * A value whose trimmed text starts with `call(` must be exactly one directive: its parentheses
- * balance, nothing follows the closing `)`, and the first argument is a bare flow id (an
- * identifier, hyphens allowed), or a library alias and one of its defs (`billing.quote`). A
- * positional argument after the flow id is kept in the remaining text, so the keyword-argument
+ * balance, nothing follows the closing `)`, and the first argument is a bare flow or tool name (an
+ * identifier, hyphens allowed), or an alias and one of its defs or tools (`billing.quote`). A
+ * positional argument after the name is kept in the remaining text, so the keyword-argument
  * parser rejects it with its own message.
  *
  * Example: `matchCallDirective("call(f, x=1)")` is `["f", " x=1"]`;
@@ -170,8 +170,8 @@ export function matchCallDirective(value: string): [flowId: string, remaining: s
   const first = splitCallsAware(argsStr, ",")[0]!.trim();
   if (!FLOW_ID.test(first)) {
     throw new ExpressionError(
-      `a call(...) must start with a flow id (a bare name, or alias.def for a library's def) and a comma, ` +
-        `got ${reprText(first)}`,
+      "a call(...) must start with the name it calls (a bare name, or alias.name for a library's def or a " +
+        `group's tool) and a comma, got ${reprText(first)}`,
     );
   }
   // Everything after the first comma is the remaining (keyword) args; the parser over this text

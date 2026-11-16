@@ -153,7 +153,7 @@ function checkBranch(
   } else if (typeof value === "string" && CALL_HEAD.test(value.trim()) && value.includes("${")) {
     throw diagnostics.error(
       `${host} a quoted \`call(...)\` is text, so it can't hold \`\${...}\` here; ` +
-        "drop the quotes to call the flow, or reword the text",
+        "drop the quotes to make the call, or reword the text",
       { range: branch.range },
     );
   }

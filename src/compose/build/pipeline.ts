@@ -1347,7 +1347,7 @@ function stampInlineCallOrigins(
   // address's JSON, since arrays don't compare by value.
   const origins = new Map<string, OriginRef | null>();
   for (const [callId, descriptor] of descriptors) {
-    if (!(descriptor instanceof CallDescriptor) || descriptor.callSite === null) continue;
+    if (descriptor.callSite === null) continue;
     const address = descriptor.callSite;
     const addressKey = JSON.stringify(address);
     if (!origins.has(addressKey)) {
@@ -1701,6 +1701,8 @@ interface ReadSections {
   readonly flowAssertionOriginAt: (index: number) => OriginRef | null;
   /** The flow's parameters. */
   readonly params: FlowParameters;
+  /** Whether a `call:` or a `call(...)` names a tool, by the file's rule. */
+  readonly callsTool: CallsTool;
   /** The located node descriptors, tagged inputs and `llm_config` split, before any desugar. */
   readonly descriptors: ReadonlyMap<string, NodeDescriptor>;
   /** The ids of the tagged `nodes:` entries, which have no node body to re-read. */
@@ -1827,8 +1829,9 @@ function readFlowParameters(options: AssembleOptions, ctx: AssembleContext): Flo
 }
 
 /**
- * Return the rule that says whether a `call` node's `call:` names a tool. A name the file defines
- * means the file's own thing; any other name is a tool the run supplies, looked up at run start.
+ * Return the rule that says whether a `call` node's `call:`, or a `call(...)`, names a tool. A name
+ * the file defines means the file's own thing; any other name is a tool the run supplies, looked
+ * up at run start.
  *
  * - A bare name is a tool when it is a built-in or `load_skill`, a module alias, or a name the
  *   file doesn't define; a `defs:` entry, a `uses:` flow or library alias, or an inline body is a
@@ -1847,14 +1850,15 @@ function readFlowParameters(options: AssembleOptions, ctx: AssembleContext): Flo
 function callsToolRule(scope: CallableScope, memories: ReadonlySet<string>, diagnostics: LoadDiagnostics): CallsTool {
   const isLibrary = (name: string) =>
     scope.section(name) === "uses" && scope.toolModule(name) === null && scope.resolve(name).library !== null;
-  return (nodeId, call, range) => {
-    const fail = (message: string) => diagnostics.error(`node ${reprText(nodeId)}: ${message}`, { range });
+  return (nodeId, call, range, site = null) => {
+    const fail = (message: string) => diagnostics.error(`${site ?? `node ${reprText(nodeId)}`}: ${message}`, { range });
     if (typeof call === "string") {
       if (RESERVED_TOOL_NAMES.has(call)) return true;
       if (call.startsWith(INLINE_FLOW_PREFIX)) return false;
       if (scope.section(call) !== null) return scope.toolModule(call) !== null;
       if (memories.has(call)) {
-        throw fail(`\`${call}\` is a memory input; name one of its tools: \`call: {${call}: <tool>}\``);
+        const fix = site === null ? `call: {${call}: <tool>}` : `call(${call}.<tool>, ...)`;
+        throw fail(`\`${call}\` is a memory input; name one of its tools: \`${fix}\``);
       }
       return true;
     }
@@ -2017,6 +2021,7 @@ function readSections(options: AssembleOptions, ctx: AssembleContext): ReadSecti
     flowAssertionRanges,
     flowAssertionOriginAt,
     params,
+    callsTool,
     descriptors,
     valueEntries,
     outputs: {
@@ -2040,13 +2045,14 @@ function desugarSections(
   ctx: AssembleContext,
 ): DesugaredSections {
   const { registry, owner, resolveOrigin, diagnostics } = ctx;
-  const { nodesCursor, valueEntries, outputs } = read;
+  const { nodesCursor, valueEntries, outputs, callsTool } = read;
   const flowAssertionRangeAt = (index: number): SourceRange | null => read.flowAssertionRanges[index]!;
 
-  // Desugar each whole-value `call(<flow>, ...)` binding: it becomes a synth `call` node
-  // (CallDescriptor, over=null) and its host binding is rewritten to `${<synth>.output}`. Pure
-  // sugar — the rest of the pipeline treats the synth nodes as ordinary `call` nodes
-  // (build/edges/validate/DAG run unchanged). The retired `${ f(...) }` form is refused here.
+  // Desugar each whole-value `call(<name>, ...)` binding: it becomes a synth `call` node
+  // (CallDescriptor, over=null), or a TOOL node when `callsTool` says it names a tool, and its host
+  // binding is rewritten to `${<synth>.output}`. Pure sugar — the rest of the pipeline treats the
+  // synth nodes as ordinary nodes (build/edges/validate/DAG run unchanged). The retired
+  // `${ f(...) }` form is refused here.
   const mint = synthIdGen(); // ONE synth-id minter shared by both inline-call desugars (no collision)
   const [withCalls, callOutputs, asserts] = desugarInlineCalls(read.descriptors, outputs.section, {
     assertsSection,
@@ -2063,6 +2069,7 @@ function desugarSections(
     nextId: mint,
     typeNames: new Set(registry.keys()),
     isCallable: (name) => ctx.scope.has(name),
+    callsTool,
     diagnostics,
   });
 
@@ -2073,9 +2080,9 @@ function desugarSections(
   const withComposers = desugarAdaptiveQuestions(withCalls, { diagnostics });
 
   // `then:/else: call(...)`: a `case` branch target that is a call directive becomes a synth
-  // `call` node, the then:/else: rewritten to its id. Runs BEFORE expandCaseOutputs (so the synth args +
+  // `call` or TOOL node, the then:/else: rewritten to its id. Runs BEFORE expandCaseOutputs (so the synth args +
   // the rewritten then-targets are visible to it) and shares `mint`.
-  const withTargets = desugarCaseCallTargets(withComposers, mint, { diagnostics });
+  const withTargets = desugarCaseCallTargets(withComposers, mint, { callsTool, diagnostics });
 
   // The cases whose value is used, taken before the expansion below rewrites the reads; each
   // must be exhaustive (checked once producer types are known).

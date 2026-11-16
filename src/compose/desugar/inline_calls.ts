@@ -1,13 +1,14 @@
 /**
- * Graph-stage: whole-value `call(<flow-id>, kw=...)` directive desugar.
+ * Graph-stage: whole-value `call(<name>, kw=...)` directive desugar.
  *
  * `desugarCallDirectives` (below) is the pure string-to-data half: a field whose WHOLE trimmed
  * value is exactly `call( … )` rewrites to `${<synth>.output}` and emits an `InlineCall`. This
  * module is the assembly pass that runs it over a flow's parsed descriptors and `output:` section
- * and installs each synth `call` node (`over = null`). After it runs, the rest of `assemble`
- * (build, edge inference, validation, DAG) sees the synth nodes as ordinary `call` nodes: inline
- * calls are pure load-time sugar, no new runtime kind, and the synth callee resolves through the
- * SAME composite resolver (defs first) as a named call.
+ * and installs each synth `call` node (`over = null`), or a synth TOOL node when the file's call
+ * rule says the callee names a tool. After it runs, the rest of `assemble` (build, edge
+ * inference, validation, DAG) sees the synth nodes as ordinary nodes: inline calls are pure
+ * load-time sugar, no new runtime kind, and the synth callee resolves through the SAME composite
+ * resolver (defs first) as a named call.
  *
  * An unquoted value whose trimmed text starts with `call(` must be exactly one well-formed
  * directive; anything else (unbalanced parens, trailing text, a missing comma, a positional or
@@ -54,7 +55,7 @@
  * Knows about: diagnostics, node contracts, `expr` (the ref walk and the span flow-call
  * detector), typesys, the compose helpers (errors, directives, YAML style and quoting), the
  * compose source (a bare argument's plain-scalar reading), the kind-blind binding-field walk and
- * the CALL descriptor.
+ * the CALL and TOOL descriptors.
  */
 
 import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
@@ -76,7 +77,8 @@ import { LoadDiagnostics } from "../helpers/errors.ts";
 import { QUOTED_STYLES, yamlQuoted } from "../helpers/tags.ts";
 import { type NodeDescriptor, siteKey } from "../nodes/base.ts";
 import { mapBindingSources } from "../nodes/bindings.ts";
-import { CallDescriptor } from "../nodes/call.ts";
+import { CallDescriptor, type CallsTool } from "../nodes/call.ts";
+import { ToolDescriptor } from "../nodes/tool.ts";
 import type { ScalarStyle } from "../source/common.ts";
 import { readPlainScalar, SourceSyntaxError } from "../source/index.ts";
 import { INLINE_FLOW_PREFIX } from "./inline_bodies.ts";
@@ -128,6 +130,9 @@ export function synthIdGen(): () => string {
  * display and origin stay stable. A span-wrapped inline `${ f(...) }` in an assert expression is
  * the retired form and fails as in any binding.
  *
+ * Where `callsTool` says a callee names a tool, its synth node is a `ToolDescriptor` instead;
+ * absent, every callee names a flow.
+ *
  * Each synth node from a node host locates at the range of the binding it was found in (its own
  * `call(...)` directive line). A synth from flow `output:` uses `outputsRange`; one from
  * `asserts:` uses the authored item returned by `assertionRangeAt`.
@@ -168,6 +173,7 @@ export function desugarInlineCalls(
     nextId?: (() => string) | null;
     typeNames?: ReadonlySet<string>;
     isCallable?: (name: string) => boolean;
+    callsTool?: CallsTool | null;
     diagnostics?: LoadDiagnostics | null;
   } = {},
 ): [descriptors: Map<string, NodeDescriptor>, outputsSection: unknown, assertsSection: Assertion[]] {
@@ -181,11 +187,12 @@ export function desugarInlineCalls(
     typedOutputs = new Set<string | null>(),
     typeNames = new Set<string>(),
     isCallable = () => false,
+    callsTool = null,
   } = options;
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
   const mint = options.nextId ?? synthIdGen();
 
-  const synth = new Map<string, CallDescriptor>();
+  const synth = new Map<string, NodeDescriptor>();
   const newDescriptors = new Map<string, NodeDescriptor>();
   for (const [nodeId, desc] of descriptors) {
     const [newDesc, calls, origins, sites, callSites] = desugarDescriptor(desc, mint, {
@@ -202,12 +209,13 @@ export function desugarInlineCalls(
       // (valid) host input that shares the param name.
       synth.set(
         call.id,
-        toCallDescriptor(call, {
+        liftCall(call, {
           host: `node ${reprText(nodeId)}`,
           site: sites.get(call.id)!,
           callSite: callSites.get(call.id)!,
           hostId: nodeId,
           range: origins.get(call.id)!,
+          callsTool,
           diagnostics,
         }),
       );
@@ -225,11 +233,12 @@ export function desugarInlineCalls(
   for (const call of outCalls) {
     synth.set(
       call.id,
-      toCallDescriptor(call, {
+      liftCall(call, {
         host: "flow outputs",
         site: outSites.get(call.id)!,
         callSite: outCallSites.get(call.id)!,
         range: outputsRange,
+        callsTool,
         diagnostics,
       }),
     );
@@ -243,11 +252,12 @@ export function desugarInlineCalls(
   for (const call of assertCalls) {
     synth.set(
       call.id,
-      toCallDescriptor(call, {
+      liftCall(call, {
         host: "assert",
         site: assertSites.get(call.id)!,
         callSite: assertCallSites.get(call.id)!,
         range: assertRanges.get(call.id) ?? null,
+        callsTool,
         diagnostics,
       }),
     );
@@ -522,7 +532,7 @@ function rejectQuotedCallSpan(
   if (!value.includes("${")) return;
   throw options.diagnostics.error(
     `${host}: a quoted \`call(...)\` is text, so it can't hold \`\${...}\` here; ` +
-      "drop the quotes to call the flow, or reword the text",
+      "drop the quotes to make the call, or reword the text",
     { range: options.range },
   );
 }
@@ -562,7 +572,7 @@ function rejectSpanFlowCalls(
   if (callee === "call") {
     throw diagnostics.error(
       `${where}: call(...) can't go inside \${...}. Write it unquoted as the whole value, ` +
-        `call(${spanCallFlowId(value)}, ...), or call the flow in its own node and read its output.`,
+        `call(${spanCallFlowId(value)}, ...), or make the call in its own node and read its output.`,
       { range },
     );
   }
@@ -610,7 +620,7 @@ export function desugarCallDirectives(value: string, mint: () => string): [strin
     if (parts.length < 2) {
       throw new ExpressionError(
         `call(${flowId}, ...) passes a positional argument ${reprText(pair.trim())}; ` +
-          "every argument after the flow id must be a keyword (name=value)",
+          "every argument after the name it calls must be a keyword (name=value)",
       );
     }
     const name = parts[0]!.trim();
@@ -800,7 +810,8 @@ function desugarAsserts(
 }
 
 /**
- * One `InlineCall` to a synth `CallDescriptor` (`over = null`), after its guards.
+ * One `InlineCall` to a synth `CallDescriptor` (`over = null`), or to a synth `ToolDescriptor`
+ * when `callsTool` says it names a tool, after its guards.
  *
  * Authored calls into the compiler-private inline-flow namespace are rejected at this shared
  * boundary, before any synth descriptor can reach child resolution. The synth node carries its
@@ -819,12 +830,13 @@ function desugarAsserts(
  *   so it takes that node's CASE routes, `dependsOn`, and `runsAfter`. `null` for a call with no
  *   host node (flow `output:`/`asserts:`, or a branch target).
  * @param options.range The site the directive desugared from.
+ * @param options.callsTool Says whether the callee names a tool; absent, it names a flow.
  * @param options.diagnostics Locates load errors; absent uses a range-only default.
  * @returns The synth call node.
  * @throws LoadError when the callee is in the private inline-flow namespace or an arg captures
- *   `${item}`.
+ *   `${item}`, as `callsTool` throws, or when a tool call fails `ToolDescriptor.lift`'s checks.
  */
-export function toCallDescriptor(
+export function liftCall(
   call: InlineCall,
   options: {
     host: string;
@@ -832,10 +844,11 @@ export function toCallDescriptor(
     callSite?: CallSite | null;
     hostId?: string | null;
     range?: SourceRange | null;
+    callsTool?: CallsTool | null;
     diagnostics?: LoadDiagnostics | null;
   },
-): CallDescriptor {
-  const { host, site = null, callSite = null, hostId = null, range = null } = options;
+): CallDescriptor | ToolDescriptor {
+  const { host, site = null, callSite = null, hostId = null, range = null, callsTool = null } = options;
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
   if (call.callee.startsWith(INLINE_FLOW_PREFIX)) {
     throw diagnostics.error(
@@ -862,20 +875,16 @@ export function toCallDescriptor(
       fieldLabels.set(`input ${reprText(name)}`, `${site} call(${call.callee}) argument ${reprText(name)}`);
     }
   }
-  // `billing.quote` names def `quote` of library `billing`; a flow id has no dot.
+  // `billing.quote` names def `quote` of library `billing`, or tool `quote` of group `billing`.
   const dot = call.callee.indexOf(".");
-  return new CallDescriptor({
-    id: call.id,
-    call: dot === -1 ? call.callee : call.callee.slice(0, dot),
-    def: dot === -1 ? null : call.callee.slice(dot + 1),
-    inputs: { ...call.args },
-    over: null,
-    host: hostId,
-    range,
-    fieldRanges: new Map(),
-    fieldLabels,
-    callSite,
-  });
+  const name = dot === -1 ? call.callee : call.callee.slice(0, dot);
+  const def = dot === -1 ? null : call.callee.slice(dot + 1);
+  const fields = { id: call.id, inputs: { ...call.args }, host: hostId, range, fieldLabels, callSite };
+  const written = def === null ? name : { [name]: def };
+  if (callsTool?.(call.id, written, range, fieldLabels.get("call") ?? null)) {
+    return ToolDescriptor.lift({ ...fields, toolId: written }, diagnostics);
+  }
+  return new CallDescriptor({ ...fields, call: name, def, over: null });
 }
 
 /** True if a binding-string arg value reads `${item}` (a ref with head `item`). */

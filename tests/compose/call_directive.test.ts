@@ -81,7 +81,8 @@ function expectThrows(value: string, message: string): void {
 
 const NEVER_CLOSED = "`call(` is never closed (check its parentheses and quotes)";
 const notFirst = (first: string) =>
-  `a call(...) must start with a flow id (a bare name, or alias.def for a library's def) and a comma, got ${first}`;
+  "a call(...) must start with the name it calls (a bare name, or alias.name for a library's def or a " +
+  `group's tool) and a comma, got ${first}`;
 
 test.each([
   ["call(f) tail", "text follows the closing `)`: 'tail'; a call(...) must be the whole value"],
@@ -202,7 +203,7 @@ test("mid value call is literal not directive", () => {
 
 const TRAILING_TAIL = "text follows the closing `)`: 'tail'; a call(...) must be the whole value";
 const POSITIONAL = (flowId: string, arg: string) =>
-  `call(${flowId}, ...) passes a positional argument '${arg}'; every argument after the flow id must be a ` +
+  `call(${flowId}, ...) passes a positional argument '${arg}'; every argument after the name it calls must be a ` +
   "keyword (name=value)";
 
 test.each([
@@ -240,7 +241,7 @@ test("quoted directive holding a span is loud", () => {
   // Quoting makes a `call(...)` text, which can't be what a span-bearing call meant.
   const error = topicError("call(f, x=${input.x})", { bindingStyleAt: () => "double" });
   expect(error.message).toBe(
-    "use: a quoted `call(...)` is text, so it can't hold `${...}` here; drop the quotes to call the flow, " +
+    "use: a quoted `call(...)` is text, so it can't hold `${...}` here; drop the quotes to make the call, " +
       "or reword the text",
   );
 });
@@ -672,7 +673,7 @@ test.each([
   // The hint names the real flow, not `call`, and never suggests another `${...}` form.
   expect(topicError(value).message).toBe(
     "use: call(...) can't go inside ${...}. Write it unquoted as the whole value, " +
-      `call(${flow}, ...), or call the flow in its own node and read its output.`,
+      `call(${flow}, ...), or make the call in its own node and read its output.`,
   );
 });
 

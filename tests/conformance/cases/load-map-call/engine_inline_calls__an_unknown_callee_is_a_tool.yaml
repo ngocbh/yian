@@ -1,0 +1,19 @@
+# An inline `call(...)` of a name the file doesn't define is a tool, looked up among the run's
+# tools at run start.
+kind: load
+flow: |2
+
+  id: ic_unk
+  name: ic_unk
+  input:
+    topic: !str
+  nodes:
+    use:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input:
+        topic: call(nope, x=${input.topic})
+      output: !str
+  output: ${use.output}
+expect:
+  load: ok

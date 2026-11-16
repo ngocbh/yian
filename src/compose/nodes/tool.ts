@@ -36,7 +36,7 @@ import {
   ValueKind,
   valueRepr,
 } from "../../typesys/values.ts";
-import { LoadDiagnostics } from "../helpers/errors.ts";
+import { LoadDiagnostics, type LoadError } from "../helpers/errors.ts";
 import { checkMemoryGrants, grantErrorText, memoryBinding } from "../helpers/memory.ts";
 import { literalValue, NOT_LITERAL } from "../../compile/output_contracts.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
@@ -69,6 +69,7 @@ export interface ToolDescriptorFields extends NodeDescriptorFields {
 /**
  * How a TOOL node's load messages name the node and the field its tool is written in, so each
  * message reads in the author's own words: `kind=tool` and `tool_id:`, or `kind=call` and `call:`.
+ * A lifted `call(...)` is named by its site instead, and its tool is written as a directive.
  */
 class ToolWording {
   /** The node's own id. */
@@ -77,35 +78,52 @@ class ToolWording {
   readonly kind: string;
   /** The field the author named the tool in. */
   readonly field: ToolField;
+  /** A lifted `call(...)`'s labels (`ToolDescriptor.fieldLabels`); empty for a node in `nodes:`. */
+  readonly labels: ReadonlyMap<string, string>;
 
-  constructor(nodeId: string, field: ToolField) {
+  constructor(nodeId: string, field: ToolField, labels: ReadonlyMap<string, string> = new Map()) {
     this.nodeId = nodeId;
     this.field = field;
     this.kind = field === "call" ? "call" : ToolDescriptor.kind;
+    this.labels = labels;
+  }
+
+  /** The call's site, `node 'n' input 'x' call(sleep)`, for a lifted `call(...)`; else `null`. */
+  private get site(): string | null {
+    return this.labels.get("call") ?? null;
   }
 
   /** The node: `node 'f'`. */
   node(): string {
-    return `node ${reprText(this.nodeId)}`;
+    return this.site ?? `node ${reprText(this.nodeId)}`;
   }
 
   /** The node and its kind: `node 'f' (kind=tool)`. */
   nodeKind(): string {
-    return `${this.node()} (kind=${this.kind})`;
+    return this.site ?? `${this.node()} (kind=${this.kind})`;
   }
 
   /** The node and the tool it names: `node 'w' (tool_id: sleep)`. */
   nodeTool(tool: string): string {
-    return `${this.node()} (${this.written(tool)})`;
+    return this.site ?? `${this.node()} (${this.written(tool)})`;
   }
 
   /** The node's input `name`, for the tool it names: `node 'w' (tool_id: sleep) input 'for'`. */
   input(tool: string, name: string): string {
-    return `${this.nodeTool(tool)} input ${reprText(name)}`;
+    return this.labels.get(`input ${reprText(name)}`) ?? `${this.nodeTool(tool)} input ${reprText(name)}`;
   }
 
-  /** The field as written, with `value` when given: `tool_id: {crm: search}`, or `tool_id:`. */
+  /** Tool `name` of `group` as the field writes it: `{crm: search}`, or `crm.search` in a directive. */
+  ref(group: string, name: string): string {
+    return this.site === null ? `{${group}: ${name}}` : `${group}.${name}`;
+  }
+
+  /**
+   * The field as written, with `value` when given: `tool_id: {crm: search}`, or `tool_id:`; a
+   * lifted call's directive, `call(crm.search, ...)`.
+   */
   written(value?: string): string {
+    if (this.site !== null) return `call(${value ?? "<tool>"}, ...)`;
     return value === undefined ? `${this.field}:` : `${this.field}: ${value}`;
   }
 
@@ -185,7 +203,7 @@ export class ToolDescriptor extends NodeDescriptor {
 
   /** How this node's load messages name it and its tool's field. */
   get wording(): ToolWording {
-    return new ToolWording(this.id, this.toolField);
+    return new ToolWording(this.id, this.toolField, this.fieldLabels);
   }
 
   /** `call` for a `kind: call` body naming a tool. */
@@ -232,25 +250,31 @@ export class ToolDescriptor extends NodeDescriptor {
         { range: cursor.keyRangeOf("adaptive_questions") },
       );
     }
-    if (desc.toolId === ASK && Object.hasOwn(desc.inputs, QUESTIONS_INPUT)) {
-      throw diagnostics.error(
-        `${wording.nodeTool(ASK)}: input '${QUESTIONS_INPUT}' is reserved for adaptive_questions`,
-        { range: rangeAt(cursor, ["inputs", QUESTIONS_INPUT]) ?? desc.range },
-      );
+    if (reservesQuestions(desc)) {
+      throw questionsReserved(wording, rangeAt(cursor, ["inputs", QUESTIONS_INPUT]) ?? desc.range, diagnostics);
     }
     recordAdaptiveRanges(desc, cursor);
     return desc as InstanceType<T>;
   }
 
   /**
-   * Read `tool_id:` into `toolRef`, rejecting anything but a tool id or a one-key `{group: tool}`
-   * (`null` included), a built-in or `load_skill` named in a group, the reserved `load_skill`, the
-   * fields a built-in refuses, and a bad `retries:`; store `retries` as a `number`, then run the
-   * base checks.
+   * Return the TOOL node a lifted `call(...)` naming a tool runs, under the checks a `call` node
+   * naming a tool gets; its messages name the call's site, from `fields.fieldLabels`.
    *
-   * `take` and `sleep` refuse `retries:`, `asserts:` and `output:` (they make no tool call, and
-   * their output is fixed); `ask` refuses `retries:`. `tool_id: ask_user`, `ask`'s old name, is
-   * rewritten to `ask` first, so the node and its manifest are an `ask`'s.
+   * @param fields The synth node's fields, `toolId` the tool as written: a name or `{group: tool}`.
+   * @throws LoadError at `fields.range` as the field checks throw, or for an `ask`'s `__questions`.
+   */
+  static lift(fields: NodeDescriptorFields & { toolId: unknown }, diagnostics: LoadDiagnostics): ToolDescriptor {
+    const own: Record<string, unknown> = { ...fields, toolField: "call" };
+    const wording = new ToolWording(fields.id, "call", fields.fieldLabels);
+    ToolDescriptor.readFields(wording, own, new Map(), fields.range ?? null, diagnostics);
+    const desc = new ToolDescriptor(own as unknown as ToolDescriptorFields);
+    if (reservesQuestions(desc)) throw questionsReserved(wording, desc.range, diagnostics);
+    return desc;
+  }
+
+  /**
+   * Read the tool's fields (`readFields`), then run the base checks.
    *
    * @throws LoadError at the field for a bad shape or a refused field.
    */
@@ -262,10 +286,31 @@ export class ToolDescriptor extends NodeDescriptor {
     diagnostics: LoadDiagnostics,
     cursor: SourceCursor,
   ): void {
-    const rangeOf = (key: string) => ranges.get(siteKey("field", key)) ?? ownRange;
     const field = toolFieldOf(cursor);
     fields["toolField"] = field;
-    const wording = new ToolWording(nodeId, field);
+    ToolDescriptor.readFields(new ToolWording(nodeId, field), fields, ranges, ownRange, diagnostics);
+    super._validateFields(nodeId, fields, ranges, ownRange, diagnostics, cursor);
+  }
+
+  /**
+   * Read `tool_id:` into `toolRef`, rejecting anything but a tool id or a one-key `{group: tool}`
+   * (`null` included), a built-in or `load_skill` named in a group, the reserved `load_skill`, the
+   * fields a built-in refuses, and a bad `retries:`; store `retries` as a `number`.
+   *
+   * `take` and `sleep` refuse `retries:`, `asserts:` and `output:` (they make no tool call, and
+   * their output is fixed); `ask` refuses `retries:`. `tool_id: ask_user`, `ask`'s old name, is
+   * rewritten to `ask` first, so the node and its manifest are an `ask`'s.
+   *
+   * @throws LoadError at the field for a bad shape or a refused field.
+   */
+  private static readFields(
+    wording: ToolWording,
+    fields: Record<string, unknown>,
+    ranges: Map<string, SourceRange>,
+    ownRange: SourceRange | null,
+    diagnostics: LoadDiagnostics,
+  ): void {
+    const rangeOf = (key: string) => ranges.get(siteKey("field", key)) ?? ownRange;
     const raw = fields["toolId"] ?? null;
     const ref = ToolDescriptor.readToolRef(wording, raw, rangeOf("tool_id"), diagnostics);
     delete fields["toolId"];
@@ -302,7 +347,6 @@ export class ToolDescriptor extends NodeDescriptor {
       }
       fields["retries"] = Number(fields["retries"]);
     }
-    super._validateFields(nodeId, fields, ranges, ownRange, diagnostics, cursor);
   }
 
   /**
@@ -345,7 +389,8 @@ export class ToolDescriptor extends NodeDescriptor {
       const bare = name === ASK_USER ? ASK : name;
       const reserved = `\`${name}\` is reserved by yian`;
       const fix = name === LOAD_SKILL ? reserved : `write \`${wording.written(bare)}\``;
-      return fail(`\`${wording.written(`{${group}: ${name}}`)}\`: ${name} is a built-in, not a group's tool; ${fix}`);
+      const written = wording.written(wording.ref(group, name));
+      return fail(`\`${written}\`: ${name} is a built-in, not a group's tool; ${fix}`);
     }
     return Object.freeze({ group, name });
   }
@@ -416,7 +461,7 @@ export class ToolDescriptor extends NodeDescriptor {
     // A group's tool shows as `<group>_<tool>`, which is never a built-in's name.
     if (group !== null && RESERVED_TOOL_NAMES.has(this.toolId)) {
       throw ctx.diagnostics.error(
-        `${this.wording.nodeKind()}: \`${this.wording.written(`{${group}: ${name}}`)}\` ` +
+        `${this.wording.nodeKind()}: \`${this.wording.written(this.wording.ref(group, name))}\` ` +
           `would show as \`${this.toolId}\`, a name yian reserves; rename the group or the tool`,
         { range: this.fieldRanges.get(siteKey("field", "tool_id")) ?? this.range },
       );
@@ -470,7 +515,8 @@ export class ToolDescriptor extends NodeDescriptor {
     const single = splitModuleRef(module.ref).exportName !== null;
     if (memory) throw fail(`\`${group}\` is both a memory input and a tool module; rename one`);
     if (group === null && !single) {
-      throw fail(`\`${name}\` is a tool module; name one of its tools: \`${wording.written(`{${name}: <tool>}`)}\``);
+      const fix = wording.written(wording.ref(name, "<tool>"));
+      throw fail(`\`${name}\` is a tool module; name one of its tools: \`${fix}\``);
     }
     if (group !== null && single) {
       throw fail(`\`${group}\` is one tool, ${module.ref}; write \`${wording.written(group)}\``);
@@ -509,7 +555,7 @@ export class ToolDescriptor extends NodeDescriptor {
     const range = this.fieldRanges.get(siteKey("field", "tool_id")) ?? this.range;
     if (memory.nullable) {
       throw ctx.diagnostics.error(
-        `${this.wording.node()}: \`${this.wording.written(`{${input}: ${name}}`)}\` names \`${input}\`, ` +
+        `${this.wording.node()}: \`${this.wording.written(this.wording.ref(input, name))}\` names \`${input}\`, ` +
           `an Optional memory; ${this.wording.noun()} needs one that is always bound`,
         { range },
       );
@@ -782,6 +828,19 @@ export class ToolDescriptor extends NodeDescriptor {
 
 /** The `ask` input `adaptive_questions:` writes its questions to; no author writes it. */
 export const QUESTIONS_INPUT = "__questions";
+
+/** Whether `desc` is an `ask` whose author bound `QUESTIONS_INPUT`. */
+function reservesQuestions(desc: ToolDescriptor): boolean {
+  return desc.toolId === ASK && Object.hasOwn(desc.inputs, QUESTIONS_INPUT);
+}
+
+/** The error for an `ask` whose author bound `QUESTIONS_INPUT`, at `range`. */
+function questionsReserved(wording: ToolWording, range: SourceRange | null, diagnostics: LoadDiagnostics): LoadError {
+  return diagnostics.error(`${wording.nodeTool(ASK)}: input '${QUESTIONS_INPUT}' is reserved for adaptive_questions`, {
+    range,
+  });
+}
+
 /** The inputs a `take` reads. */
 const TAKE_INPUTS: ReadonlySet<string> = new Set(["from", "take", "timeout"]);
 const DATE = Type.scalar(ValueKind.DATE);

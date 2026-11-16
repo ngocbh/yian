@@ -1,0 +1,107 @@
+# `call:` and `call(...)` name a built-in as `tool_id:` does: a `call` node, a taken case branch
+# and an inline call each run `take`, and `sleep`, whose past deadline returns null at once; a
+# `call` node runs `ask` too. The trace shows what the output can't: the inline take `__call_0`
+# and the branch's take `__call_2` wait under their own call ids, the sleeps `__call_1` and
+# `__call_4` run, and the untaken branches `__call_3` and `__call_5` never start.
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    go: !bool
+    notes: !Inbox(str)
+    more: !Inbox(str)
+    late: !Inbox(str)
+  nodes:
+    heard: {kind: call, call: take, input: {from: "${input.notes}"}}
+    asked: {kind: call, call: ask, input: {prompt: Name?}, output: !str}
+    waited: {kind: call, call: sleep, input: {until: "2020-01-01T00:00:00Z"}}
+    took:
+      kind: case
+      cases:
+        - when: input.go
+          then: call(take, from=${input.more})
+      else: call(sleep, until="2020-01-01T00:00:00Z")
+    paused:
+      kind: case
+      cases:
+        - when: input.go
+          then: call(sleep, until="2020-01-01T00:00:00Z")
+      else: call(take, from=${input.more})
+  output:
+    heard: ${heard.output.events}
+    asked: ${asked.output}
+    waited: ${waited.output}
+    took: ${took.output}
+    paused: ${paused.output}
+    caught: call(take, from=${input.late})
+    slept: call(sleep, until="2020-01-01T00:00:00Z")
+inputs: {go: true}
+run: {run_id: r1, num_workers: 0}
+host:
+  sends:
+  - {inbox: notes, event: hi}
+  - {inbox: more, event: there}
+  - {inbox: late, event: again}
+  human:
+    asked: [Ada]
+expect:
+  output:
+    status: succeeded
+    output:
+      heard: [hi]
+      asked: Ada
+      waited: null
+      took: {events: [there], closed: false}
+      paused: null
+      caught: {events: [again], closed: false}
+      slept: null
+  trace:
+  - [run_started, null, {num_workers: 0}]
+  - [pool_commit, __start__, {key: system.now}]
+  - [pool_commit, __start__, {key: system.run_id, value: r1}]
+  - [pool_commit, __start__, {key: system.today}]
+  - [pool_commit, __start__, {value: {go: true}}]
+  - [node_started, __start__]
+  - [pool_commit, __start__, {value: {go: true, late: {inbox: late}, more: {inbox: more}, notes: {inbox: notes}}}]
+  - [node_succeeded, __start__, {commit: 6}]
+  - [node_started, heard]
+  - [node_waiting, heard, {call_ids: [r1/heard], waits: [{call_id: r1/heard, inbox: notes, mode: one, tool: take}]}]
+  - [node_started, __call_0]
+  - [node_waiting, __call_0, {call_ids: [r1/__call_0], waits: [{call_id: r1/__call_0, inbox: late, mode: one, tool: take}]}]
+  - [node_started, __call_1]
+  - [pool_commit, __call_1]
+  - [node_succeeded, __call_1, {commit: 13}]
+  - [node_started, asked]
+  - [pool_commit, asked, {value: Ada}]
+  - [node_succeeded, asked, {commit: 16}]
+  - [node_started, paused]
+  - [node_routed, paused, {handle: __call_4}]
+  - [node_started, took]
+  - [node_routed, took, {handle: __call_2}]
+  - [node_started, waited]
+  - [pool_commit, waited]
+  - [node_succeeded, waited, {commit: 23}]
+  - [node_started, __call_4]
+  - [pool_commit, __call_4]
+  - [node_succeeded, __call_4, {commit: 26}]
+  - [node_started, __call_2]
+  - [node_waiting, __call_2, {call_ids: [r1/__call_2], waits: [{call_id: r1/__call_2, inbox: more, mode: one, tool: take}]}]
+  - [run_waiting, null, {node_ids: [heard, __call_0, __call_2]}]
+  - [pool_commit, __start__, {key: __start__.notes, value: hi}]
+  - [node_woken, heard]
+  - [pool_commit, heard, {closed: false, events: [31], inbox: notes}]
+  - [node_succeeded, heard, {commit: 33}]
+  - [run_waiting, null, {node_ids: [__call_0, __call_2]}]
+  - [pool_commit, __start__, {key: __start__.more, value: there}]
+  - [node_woken, __call_2]
+  - [pool_commit, __call_2, {closed: false, events: [36], inbox: more}]
+  - [node_succeeded, __call_2, {commit: 38}]
+  - [run_waiting, null, {node_ids: [__call_0]}]
+  - [pool_commit, __start__, {key: __start__.late, value: again}]
+  - [node_woken, __call_0]
+  - [pool_commit, __call_0, {closed: false, events: [41], inbox: late}]
+  - [node_succeeded, __call_0, {commit: 43}]
+  - [node_started, __end__]
+  - [pool_commit, __end__, {value: {asked: Ada, caught: {closed: false, events: [again]}, heard: [hi], paused: null, slept: null, took: {closed: false, events: [there]}, waited: null}}]
+  - [node_succeeded, __end__, {commit: 46}]

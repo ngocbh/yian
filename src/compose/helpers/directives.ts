@@ -130,28 +130,28 @@ export function splitCallsAware(text: string, sep: string): string[] {
 
 /** An unquoted value whose trimmed text starts with this is a `call(...)` directive. */
 export const CALL_HEAD = /^call\s*\(/;
-// A flow id, or a library alias and one of its defs: `billing.quote`.
-const FLOW_ID = /^[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)?$/;
+// A flow or tool name, or an alias and one of its defs or tools: `billing.quote`.
+const CALLEE = /^[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)?$/;
 
 /**
  * Recognize a whole-value `call(...)` directive.
  *
  * A value whose trimmed text starts with `call(` must be exactly one directive: its parentheses
- * balance, nothing follows the closing `)`, and the first argument is a bare flow id (an
- * identifier, hyphens allowed), or a library alias and one of its defs (`billing.quote`). A
- * positional argument after the flow id is kept in the remaining text, so the keyword-argument
+ * balance, nothing follows the closing `)`, and the first argument is a bare flow or tool name (an
+ * identifier, hyphens allowed), or an alias and one of its defs or tools (`billing.quote`). A
+ * positional argument after the name is kept in the remaining text, so the keyword-argument
  * parser rejects it with its own message.
  *
  * Example: `matchCallDirective("call(f, x=1)")` is `["f", " x=1"]`;
  * `matchCallDirective("pre call(x)")` is `null`.
  *
  * @param value The binding text.
- * @returns The flow id and the raw argument text after the flow id's comma (empty for
+ * @returns The name and the raw argument text after the name's comma (empty for
  *   `call(f)`), or `null` when the trimmed text doesn't start with `call(`.
  * @throws {ExpressionError} When the value starts with `call(` but its parentheses are
- *   unbalanced, text follows the closing `)`, or the first argument is not a bare flow id.
+ *   unbalanced, text follows the closing `)`, or the first argument is not a bare name.
  */
-export function matchCallDirective(value: string): [flowId: string, remaining: string] | null {
+export function matchCallDirective(value: string): [callee: string, remaining: string] | null {
   const s = value.trim();
   const m = CALL_HEAD.exec(s);
   if (m === null) return null;
@@ -168,34 +168,34 @@ export function matchCallDirective(value: string): [flowId: string, remaining: s
   }
   const argsStr = s.slice(openIdx + 1, closeIdx);
   const first = splitCallsAware(argsStr, ",")[0]!.trim();
-  if (!FLOW_ID.test(first)) {
+  if (!CALLEE.test(first)) {
     throw new ExpressionError(
-      `a call(...) must start with a flow id (a bare name, or alias.def for a library's def) and a comma, ` +
-        `got ${reprText(first)}`,
+      "a call(...) must start with the name it calls (a bare name, or alias.name for a library's def or a " +
+        `group's tool) and a comma, got ${reprText(first)}`,
     );
   }
   // Everything after the first comma is the remaining (keyword) args; the parser over this text
-  // never re-sees the positional flow id, so a positional arg among them (`call(f, 30)`) fails
+  // never re-sees the positional name, so a positional arg among them (`call(f, 30)`) fails
   // loudly there.
   const comma = argsStr.indexOf(",");
   return [first, comma !== -1 ? argsStr.slice(comma + 1) : ""];
 }
 
 /**
- * Return the flow id to suggest for a `call(...)` written inside a `${...}` span of `text`.
+ * Return the name to suggest for a `call(...)` written inside a `${...}` span of `text`.
  *
  * @param text A binding or branch value whose spans parse and call `call`.
- * @returns The first such call's flow id, read as `matchCallDirective` reads it, or `<flow>` when
- *   that call doesn't start with a flow id.
+ * @returns The first such call's name, read as `matchCallDirective` reads it, or `<name>` when
+ *   that call doesn't start with a name.
  */
-export function spanCallFlowId(text: string): string {
+export function spanCallName(text: string): string {
   const call = spanCallDirectiveText(text);
-  if (call === null) return "<flow>";
+  if (call === null) return "<name>";
   try {
-    return matchCallDirective(call)?.[0] ?? "<flow>";
+    return matchCallDirective(call)?.[0] ?? "<name>";
   } catch (error) {
     if (!(error instanceof ExpressionError)) throw error;
-    return "<flow>";
+    return "<name>";
   }
 }
 

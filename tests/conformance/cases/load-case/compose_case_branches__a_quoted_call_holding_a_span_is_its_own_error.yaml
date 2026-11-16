@@ -23,7 +23,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'case node ''route'' then: a quoted `call(...)` is text, so it can''t hold `${...}` here; drop the quotes to call the flow, or reword the text'
+      message: 'case node ''route'' then: a quoted `call(...)` is text, so it can''t hold `${...}` here; drop the quotes to make the call, or reword the text'
       frames:
       - label: flow.yaml
         range: [11, 15, 11, 43]

@@ -12,6 +12,7 @@ flow: |
       input:
         over: ${item}
   output: ${m.output}
+  defs: {child: {kind: code, code: "return 1", output: !int}}
 expect:
   load:
     diagnostics:

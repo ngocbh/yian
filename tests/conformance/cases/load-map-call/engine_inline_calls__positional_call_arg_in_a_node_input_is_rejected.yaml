@@ -31,7 +31,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'use: call(enrich, ...) passes a positional argument ''30''; every argument after the flow id must be a keyword (name=value). If you meant the text, quote the whole value: `"call(enrich, 30)"`'
+      message: 'use: call(enrich, ...) passes a positional argument ''30''; every argument after the name it calls must be a keyword (name=value). If you meant the text, quote the whole value: `"call(enrich, 30)"`'
       frames:
       - label: flow.yaml
         range: [25, 14, 25, 30]

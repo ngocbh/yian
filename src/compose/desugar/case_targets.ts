@@ -2,7 +2,7 @@
  * Graph-stage: `case` then:/else: inline-call branch targets to synth call nodes.
  *
  * A `case` branch may route to a FRESH owned call instead of a placed node id:
- * `then: call(take, stance="pro")` (and `else:` symmetric). It desugars to a synth `__call_<n>`
+ * `then: call(pick, stance="pro")` (and `else:` symmetric). It desugars to a synth `__call_<n>`
  * node (the same machinery as an inline-binding call); the then:/else: target is rewritten to that
  * synth id (which is then both the CaseNode handle and the control-edge target, exactly like a
  * plain `then: id`). Accepted grammar: a whole-value `call(...)` directive — a route target
@@ -25,8 +25,8 @@
  * the case node's own range when a span is unavailable.
  *
  * Knows about: diagnostics, `expr` (the expression error), the compose helpers (errors, positional
- * metadata), the CASE descriptor and the inline-call desugar (the shared `call(...)` recognizer
- * and synth-node factory).
+ * metadata), the CASE descriptor, the CALL descriptor's call rule (`CallsTool`) and the
+ * inline-call desugar (the shared `call(...)` recognizer and synth-node factory).
  */
 
 import { reprText, type SourceRange } from "../../diagnostics.ts";
@@ -36,20 +36,23 @@ import { LoadDiagnostics } from "../helpers/errors.ts";
 import { nth } from "../helpers/source.ts";
 import { type NodeDescriptor, siteKey } from "../nodes/base.ts";
 import { CaseDescriptor } from "../nodes/case.ts";
-import { desugarCallDirectives, toCallDescriptor } from "./inline_calls.ts";
+import type { CallsTool } from "../nodes/call.ts";
+import { desugarCallDirectives, liftCall } from "./inline_calls.ts";
 
 /**
  * Rewrite each `case` then:/else: that is an inline call to a synth call node id.
  *
- * An inline call is a whole-value `call(<flow-id>, kw=...)` directive; its `CallDescriptor`
- * (`over = null`) is minted and the descriptor map returned, augmented with the synth nodes. A
- * plain node id (no `${`, not a `call(...)` directive) passes through unchanged.
+ * An inline call is a whole-value `call(<name>, kw=...)` directive; its `CallDescriptor`
+ * (`over = null`), or its TOOL node when `callsTool` says it names a tool, is minted and the
+ * descriptor map returned, augmented with the synth nodes. A plain node id (no `${`, not a
+ * `call(...)` directive) passes through unchanged.
  *
  * Each synth branch-target node locates at the `then:`/`else:` it was lifted from (its own source
  * line), falling back to the case node's range when that span is unavailable.
  *
  * @param descriptors Node descriptors keyed by node id.
  * @param mint The synth-id minter `desugarInlineCalls` used.
+ * @param options.callsTool Says whether a call names a tool; absent, every call names a flow.
  * @param options.diagnostics Factory for located load errors.
  * @returns The new descriptor map, the synth nodes after the authored ones.
  * @throws LoadError for a branch target that is neither a node id nor one `call(...)` directive,
@@ -58,9 +61,10 @@ import { desugarCallDirectives, toCallDescriptor } from "./inline_calls.ts";
 export function desugarCaseCallTargets(
   descriptors: ReadonlyMap<string, NodeDescriptor>,
   mint: () => string,
-  options: { diagnostics?: LoadDiagnostics | null } = {},
+  options: { callsTool?: CallsTool | null; diagnostics?: LoadDiagnostics | null } = {},
 ): Map<string, NodeDescriptor> {
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
+  const callsTool = options.callsTool ?? null;
   const synth = new Map<string, NodeDescriptor>();
   const newDescriptors = new Map<string, NodeDescriptor>();
   for (const [nodeId, desc] of descriptors) {
@@ -77,6 +81,7 @@ export function desugarCaseCallTargets(
           site: `node ${id} cases[${index}].then`,
           callSite: ["then", nodeId, index],
           range: nth(desc.thenRanges, index) ?? desc.range,
+          callsTool,
           diagnostics,
         }),
       }),
@@ -88,6 +93,7 @@ export function desugarCaseCallTargets(
             site: `node ${id} else`,
             callSite: ["else", nodeId],
             range: desc.fieldRanges.get(siteKey("field", "else")) ?? desc.range,
+            callsTool,
             diagnostics,
           })
         : null;
@@ -101,7 +107,7 @@ export function desugarCaseCallTargets(
  * Return a then:/else: target rewritten to a single node id.
  *
  * Accepts TWO forms and rejects everything else with a located `LoadError`:
- * - a whole-value `call(<flow-id>, kw=...)` directive (the compile-time form): its synth call
+ * - a whole-value `call(<name>, kw=...)` directive (the compile-time form): its synth call
  *   node(s) are lifted into `synth` and the OUTER call's synth id returned;
  * - a plain node id (no `${`, not a `call(...)` directive): passed through unchanged.
  *
@@ -124,10 +130,11 @@ function liftCaseTarget(
     site: string;
     callSite: readonly (string | number | null)[];
     range: SourceRange | null;
+    callsTool: CallsTool | null;
     diagnostics: LoadDiagnostics;
   },
 ): unknown {
-  const { host, site, callSite, range, diagnostics } = options;
+  const { host, site, callSite, range, callsTool, diagnostics } = options;
   if (typeof target !== "string") return target; // null (handled by the caller) or a native literal
   // A whole-value `call(...)` directive: recognized BEFORE the plain-id passthrough, since a
   // directive carries no `${` and would otherwise look like a bare node id. The loader's
@@ -150,12 +157,13 @@ function liftCaseTarget(
       // it, so the outer call is its host and passes that route on.
       synth.set(
         call.id,
-        toCallDescriptor(call, {
+        liftCall(call, {
           host,
           site,
           callSite,
           hostId: call === outer ? null : outer.id,
           range,
+          callsTool,
           diagnostics,
         }),
       );

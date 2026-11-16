@@ -1,7 +1,8 @@
 /**
- * `call:` names a tool on a `call` node and in a compact flow: a name the file defines means the
- * file's own flow or module, any other name is a tool the run supplies, and a `call` node naming a
- * tool loads as the TOOL node `kind: tool` builds, under its field rules, in the author's words.
+ * `call:` names a tool on a `call` node, in a compact flow, in an inline `call(...)` and in a case
+ * branch's `call(...)`: a name the file defines means the file's own flow or module, any other name
+ * is a tool the run supplies, and a call naming a tool loads as the TOOL node `kind: tool` builds,
+ * under its field rules, in the author's words.
  */
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
@@ -10,9 +11,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { flowFingerprint } from "../../src/compile/manifest.ts";
+import { OriginRef } from "../../src/diagnostics.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
-import { outputContractType } from "../../src/nodes/contracts.ts";
+import { Binding, outputContractType } from "../../src/nodes/contracts.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { runFlow } from "../../src/run.ts";
 import { tool } from "../../src/tools/function_tools.ts";
@@ -61,11 +63,11 @@ ${nodes}`;
 const load = (text: string) => loadFlow(text, { searchPaths: [tmp] });
 
 /**
- * What node `n` of the flow loaded from `text` runs: `tool <id>`, with ` module <alias>` or
+ * What node `nodeId` of the flow loaded from `text` runs: `tool <id>`, with ` module <alias>` or
  * ` memory` when it names one, or `flow <id>`, with `.<def>` for a library's def.
  */
-async function target(text: string): Promise<string> {
-  const node = (await load(text)).compiled.nodes.get("n");
+async function target(text: string, nodeId = "n"): Promise<string> {
+  const node = (await load(text)).compiled.nodes.get(nodeId);
   if (node instanceof ToolNode) {
     const where = node.module !== null ? ` module ${node.module.alias}` : node.memoryTool ? " memory" : "";
     return `tool ${node.toolId}${where}`;
@@ -295,3 +297,201 @@ test("a compact flow's call: of a memory input names one of its tools", async ()
     "node 's': `lessons` is a memory input; name one of its tools: `call: {lessons: <tool>}`",
   );
 });
+
+/** `app` whose node `n` is a CODE node with input `x` written as `value`. */
+const inlineApp = (value: string, inputs = "") =>
+  app(`  n:\n    kind: code\n    code: "return 1"\n    input:\n      x: ${value}\n    output: !int\n`, inputs);
+
+// Each row: the inline call at node `n`'s input `x`, any extra input lines, and what its synth node
+// runs or the load error, which names the call's site.
+test.each<[string, string, string]>([
+  ["call(sleep, for=1s)", "", "tool sleep"],
+  ["call(take, from=${input.inbox})", "  inbox: !Inbox(str)\n", "tool take"],
+  ["call(ask_user, prompt=hi)", "", "tool ask"],
+  ["call(load_skill)", "", "node 'n' input 'x' call(load_skill): tool id `load_skill` is reserved by yian"],
+  ["call(greet)", "", "flow greet"],
+  ["call(billing.quote)", "", "flow billing.quote"],
+  ["call(one, qty=3)", "", "tool one module one"],
+  [
+    "call(crm)",
+    "",
+    "node 'n' input 'x' call(crm): `crm` is a tool module; name one of its tools: `call(crm.<tool>, ...)`",
+  ],
+  [
+    "call(lessons)",
+    "",
+    "node 'n' input 'x' call(lessons): `lessons` is a memory input; name one of its tools: " +
+      "`call(lessons.<tool>, ...)`",
+  ],
+  ["call(search, q=hi)", "", "tool search"],
+  [
+    "call(crm.take)",
+    "",
+    "node 'n' input 'x' call(crm.take): `call(crm.take, ...)`: take is a built-in, not a group's tool; " +
+      "write `call(take, ...)`",
+  ],
+  [
+    "call(crm.lookup)",
+    "  crm: !FileMemory\n",
+    "node 'n' input 'x' call(crm.lookup): `crm` is both a memory input and a tool module; rename one",
+  ],
+  ["call(lessons.read, path=a.md)", "", "tool lessons_read memory"],
+  ["call(crm.lookup)", "", "tool crm_lookup module crm"],
+  [
+    "call(greet.x)",
+    "",
+    "node 'n' input 'x' call(greet.x): `greet` is a flow, not a library; a tool group named `greet` is " +
+      "shadowed in this file, so rename the def to reach it",
+  ],
+  [
+    "call(one.quote)",
+    "",
+    "node 'n' input 'x' call(one.quote): `one` is one tool, ./tools.ts:quote; write `call(one, ...)`",
+  ],
+  ["call(github.search)", "", "tool github_search"],
+  [
+    "call(notes.read)",
+    "  notes: !Optional(FileMemory)\n",
+    "node 'n' input 'x' call(notes.read): `call(notes.read, ...)` names `notes`, an Optional memory; a tool " +
+      "call needs one that is always bound",
+  ],
+  [
+    "call(sleep, for=5)",
+    "",
+    "node 'n' input 'x' call(sleep) argument 'for': a duration is text such as 24h, got 5; write 5s",
+  ],
+])("inline %s (inputs %j) is %s", async (call, inputs, expected) => {
+  const text = inlineApp(call, inputs);
+  const got =
+    expected.startsWith("tool ") || expected.startsWith("flow ") ? await target(text, "__call_0") : await refusal(text);
+  expect(got).toBe(expected);
+});
+
+/** `app` whose node `g` is a case taking `then` on `input.go`, else `otherwise`. */
+const caseApp = (then: string, otherwise: string) =>
+  app(
+    `  g:\n    kind: case\n    cases:\n      - when: input.go\n        then: ${then}\n    else: ${otherwise}\n`,
+    "  go: !bool\n",
+  );
+
+test("a case branch's call(...) of a tool is a TOOL node", async () => {
+  const text = caseApp("call(sleep, for=1s)", "call(github.search, q=hi)");
+
+  expect(await target(text, "__call_0")).toBe("tool sleep");
+  expect(await target(text, "__call_1")).toBe("tool github_search");
+});
+
+test.each([
+  [
+    "call(sleep, for=5)",
+    "call(greet)",
+    "node 'g' cases[0].then call(sleep) argument 'for': a duration is text such as 24h, got 5; write 5s",
+  ],
+  [
+    "call(greet)",
+    "call(lessons)",
+    "node 'g' else call(lessons): `lessons` is a memory input; name one of its tools: `call(lessons.<tool>, ...)`",
+  ],
+])("a case branch's tool call refuses then: %s else: %s at its site", async (then, otherwise, message) => {
+  expect(await refusal(caseApp(then, otherwise))).toBe(message);
+});
+
+test("an inline tool call is located at the binding it was written in", async () => {
+  const compiled = (await load(inlineApp("call(search, q=hi)"))).compiled;
+  const binding = compiled.wiring.get("n")!.get("x") as Binding;
+
+  expect(binding.origin).toBeInstanceOf(OriginRef);
+  expect(compiled.nodes.get("__call_0")!.origin).toBe(binding.origin);
+});
+
+
+test.each([
+  ["call(ask)", "node 'n' input 'x' call(ask): ask needs argument prompt or questions"],
+  [
+    "call(ask, prompt=hi, __questions=x)",
+    "node 'n' input 'x' call(ask): argument '__questions' is reserved for adaptive_questions",
+  ],
+])("inline %s names its arguments", async (call, message) => {
+  expect(await refusal(inlineApp(call))).toBe(message);
+});
+
+/**
+ * A host tool named `name`, taking the arguments in `properties`, that records each call's arguments
+ * in `calls` and returns `result`.
+ */
+function recording(name: string, properties: Record<string, { type: string }>, result: unknown, calls: unknown[]) {
+  return tool({
+    name,
+    description: "A host tool.",
+    parameters: { type: "object", properties },
+    execute: (args: unknown) => {
+      calls.push(args);
+      return result;
+    },
+  });
+}
+
+test("an inline tool call runs in a map's over: and in a flow assert", async () => {
+  const text =
+    "id: r\nname: r\n" +
+    'defs:\n  double: {input: {x: !int}, kind: code, code: "return inputs.x * 2", output: !int}\n' +
+    'nodes:\n  each:\n    kind: map\n    call: double\n    over: call(numbers)\n    input: {x: "${item}"}\n' +
+    "asserts:\n  - call(check, n=1)\n" +
+    "output: ${each.output}\n";
+  const checked: unknown[] = [];
+  const tools = {
+    numbers: recording("numbers", {}, [1, 2], []),
+    check: recording("check", { n: { type: "integer" } }, true, checked),
+  };
+  const result = await runFlow(await loadFlow(text), {}, { env: hostEnv(tmp), tools });
+
+  expect(result.output).toEqual([2n, 4n]);
+  expect(checked).toEqual([{ n: 1 }]);
+});
+
+test("an inline tool call on a branch not taken never runs", async () => {
+  const text =
+    "id: r\nname: r\ninput:\n  go: !bool\nnodes:\n" +
+    "  g:\n    kind: case\n    cases:\n      - when: input.go\n        then: n\n    else: m\n" +
+    '  n:\n    kind: code\n    input:\n      x: call(lookup, q=hi)\n    code: "return 1"\n    output: !int\n' +
+    "  m: !int 2\n" +
+    "output: ${g.output}\n";
+  const calls: unknown[] = [];
+  const result = await runFlow(await loadFlow(text), { go: false }, {
+    env: hostEnv(tmp),
+    tools: { lookup: recording("lookup", { q: { type: "string" } }, "found", calls) },
+  });
+
+  expect(result.output).toBe(2n);
+  expect(calls).toEqual([]);
+});
+
+const RUNS_ONLY_FLOWS = "and a `{kind}` runs only flows for now; call it from a `call` node, or wrap it in a def";
+
+// Each row: the `call:` value on a map or loop and the refusal, `{kind}` standing for the kind.
+const mapOrLoopRows: [string, string][] = [
+  ["gret", `\`gret\` names no def or alias in this file, so it is a tool, ${RUNS_ONLY_FLOWS}; did you mean \`greet\`?`],
+  ["search", `\`search\` names no def or alias in this file, so it is a tool, ${RUNS_ONLY_FLOWS}`],
+  ["sleep", `\`sleep\` is a built-in tool, ${RUNS_ONLY_FLOWS}`],
+  ["load_skill", "tool id `load_skill` is reserved by yian"],
+  ["one", `\`one\` is a tool module, ${RUNS_ONLY_FLOWS}`],
+  ["lessons", "`lessons` is a memory input, not a flow; call one of its tools from a `call` node"],
+  ["{crm: take}", `\`take\` is a built-in tool, ${RUNS_ONLY_FLOWS}`],
+  [
+    "{github: search}",
+    `\`github\` names no def or alias in this file, so \`{github: search}\` is a tool, ${RUNS_ONLY_FLOWS}`,
+  ],
+  ["{lessons: read}", `\`lessons\` is a memory input, so \`{lessons: read}\` is a tool, ${RUNS_ONLY_FLOWS}`],
+  ["{crm: lookup}", `\`crm\` is a tool module, so \`{crm: lookup}\` is a tool, ${RUNS_ONLY_FLOWS}`],
+  ["{greet: x}", "`greet` is a flow, not a library"],
+];
+
+test.each(mapOrLoopRows.flatMap(([call, message]) => ["map", "loop"].map((kind) => [kind, call, message])))(
+  "a %s naming %s refuses it",
+  async (kind, call, message) => {
+    const field = kind === "map" ? "over: [1]" : "times: 1";
+    expect(await refusal(app(`  n: {kind: ${kind}, call: ${call}, ${field}}\n`))).toBe(
+      `${kind} node 'n': ${message!.replaceAll("{kind}", kind!)}`,
+    );
+  },
+);

@@ -585,6 +585,7 @@ export interface NodeDescriptorFields {
   inputTypes?: Map<string, ValueContract>;
   host?: string | null;
   fieldLabels?: Map<string, string>;
+  callSite?: readonly (string | number | null)[] | null;
   origin?: OriginRef | null;
   range?: SourceRange | null;
   fieldRanges?: Map<string, SourceRange>;
@@ -667,6 +668,14 @@ export class NodeDescriptor {
   readonly host: string | null;
   /** Site label to the author-facing phrase naming it, set on a desugared node. */
   readonly fieldLabels: Map<string, string>;
+  /**
+   * The address of the authored binding a lifted `call(...)` was written in: `["input", hostId,
+   * key]` for a node input (a value entry's key is its id), `["field", hostId, field]` for a MAP
+   * `over:`, `["output", key]` for a flow output (`key` is `null` for a single output), `["assert",
+   * index]` for a flow `asserts:` item, and `["then", caseId, index]` / `["else", caseId]` for a
+   * CASE branch. `null` on an authored node.
+   */
+  readonly callSite: readonly (string | number | null)[] | null;
   /** The opaque authored node identity. */
   readonly origin: OriginRef | null;
   /** The node body's range. */
@@ -700,6 +709,7 @@ export class NodeDescriptor {
     this.inputTypes = fields.inputTypes ?? new Map();
     this.host = fields.host ?? null;
     this.fieldLabels = fields.fieldLabels ?? new Map();
+    this.callSite = fields.callSite ?? null;
     this.origin = fields.origin ?? null;
     this.range = fields.range ?? null;
     this.fieldRanges = fields.fieldRanges ?? new Map();

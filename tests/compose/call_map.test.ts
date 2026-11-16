@@ -198,7 +198,8 @@ test("a map input named over is reserved", async () => {
     "id: bad-over\nname: bad\ninput:\n  xs: !list(str)\n" +
     "nodes:\n  m:\n    kind: map\n    call: child\n    over: ${input.xs}\n" +
     "    input:\n      over: ${item}\n" +
-    "output: ${m.output}\n";
+    "output: ${m.output}\n" +
+    'defs: {child: {kind: code, code: "return 1", output: !int}}\n';
 
   const error = await loadErrorAsync(loadFlow(text));
 

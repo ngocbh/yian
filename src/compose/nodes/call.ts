@@ -32,18 +32,28 @@ import { callableDisplay, type ChildSignature, childSignature, resolveChild } fr
 
 /**
  * Says whether a `call` node's `call:` value names a tool, which the node then runs as a TOOL
- * node, or a flow; the flow file's rule, given the node's id and where its `call:` is.
+ * node, or a flow; the flow file's rule, given the node's id and where its `call:` is. A lifted
+ * `call(...)` gives its `site` (`node 'n' input 'x' call(lessons)`), which a message names in
+ * place of the node, writing its fix as a directive. A `map` or `loop` gives its `kind`: it runs
+ * only flows for now, so a tool there is refused.
  *
- * @throws LoadError at `range` for a name no `call:` may take.
+ * @throws LoadError at `range` for a name no `call:` may take, or a tool on a `map` or `loop`.
  */
-export type CallsTool = (nodeId: string, call: unknown, range: SourceRange | null) => boolean;
+export type CallsTool = (
+  nodeId: string,
+  call: unknown,
+  range: SourceRange | null,
+  where?: { site?: string | null; kind?: CallingKind },
+) => boolean;
+
+/** The kinds whose `call:` names what they run. */
+export type CallingKind = "call" | "map" | "loop";
 
 /** The fields `CallDescriptor`'s constructor takes: the common ones and the CALL's own. */
 export interface CallDescriptorFields extends NodeDescriptorFields {
   call: string;
   def?: string | null;
   childLabel?: string | null;
-  callSite?: readonly (string | number | null)[] | null;
   over?: unknown;
   parallel?: unknown;
   asserts?: readonly string[] | null;
@@ -67,12 +77,7 @@ export interface CallDescriptorFields extends NodeDescriptorFields {
  * `parallel` live here, on the shared class; only `map` lists them in its `allowed`.
  *
  * `childLabel` is compiler-owned diagnostic text for an anonymous inline child; it is not in
- * `allowed`, so never authored. `callSite` is compiler-owned too: the address of the authored
- * binding a lifted `call(...)` was written in: `["input", hostId, key]` for a node input (a value
- * entry's key is its id), `["field", hostId, field]` for a MAP `over:`, `["output", key]` for a
- * flow output (`key` is `null` for a single output), `["assert", index]` for a flow `asserts:`
- * item, and `["then", caseId, index]` / `["else", caseId]` for a CASE branch. It is `null` on an
- * authored node.
+ * `allowed`, so never authored.
  */
 export class CallDescriptor extends NodeDescriptor {
   // Typed `: string` so `MapDescriptor` can override it with `"map"`.
@@ -87,8 +92,6 @@ export class CallDescriptor extends NodeDescriptor {
   readonly def: string | null;
   /** The diagnostic label of an anonymous inline child; `null` on an authored node. */
   readonly childLabel: string | null;
-  /** The address of the binding a lifted `call(...)` was written in; `null` on an authored node. */
-  readonly callSite: readonly (string | number | null)[] | null;
   /**
    * The map's iteration source as YAML read it: a reference, a `call(...)` directive or a list
    * literal; `null` on a plain `call`.
@@ -109,7 +112,6 @@ export class CallDescriptor extends NodeDescriptor {
     this.call = fields.call;
     this.def = fields.def ?? null;
     this.childLabel = fields.childLabel ?? null;
-    this.callSite = fields.callSite ?? null;
     this.over = fields.over ?? null;
     // Not `?? false`: an authored `parallel: null` stays null.
     this.parallel = fields.parallel === undefined ? false : fields.parallel;

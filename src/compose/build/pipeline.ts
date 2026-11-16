@@ -49,6 +49,7 @@ import {
   Diagnostic,
   DiagnosticFrame,
   Failure,
+  getCloseMatches,
   type OriginRef,
   type OriginResolver,
   reprText,
@@ -66,6 +67,7 @@ import {
   type ValuePath,
   type ValueTemplate,
 } from "../../nodes/contracts.ts";
+import { LOAD_SKILL } from "../../skills/tool.ts";
 import { ASK } from "../../tools/context.ts";
 import type { ToolModuleRef } from "../../tools/modules.ts";
 import { RESERVED_TOOL_NAMES } from "../../tools/registry.ts";
@@ -85,6 +87,7 @@ import { LoadDiagnostics, LoadError, rejectReservedName } from "../helpers/error
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
 import { assertExactContracts, resolveOutputBindingContract, type TypeFn } from "../../compile/output_contracts.ts";
 import {
+  CLOSE_MATCH_CUTOFF,
   oldFormSuggestion,
   oldTypedText,
   QUOTED_STYLES,
@@ -500,6 +503,8 @@ export interface CallableScope extends PrivateRegistrar {
   section(flowId: string): "defs" | "uses" | null;
   /** The tool module a `uses:` alias imports, by alias; `null` for any other name. */
   toolModule(name: string): ToolModuleRef | null;
+  /** The file's `defs:` entries and `uses:` aliases, in written order. */
+  names(): readonly string[];
   /** Resolve one named or compiler-owned callable in this file scope. */
   resolve(flowId: string): ComposedFlow;
 }
@@ -1347,7 +1352,7 @@ function stampInlineCallOrigins(
   // address's JSON, since arrays don't compare by value.
   const origins = new Map<string, OriginRef | null>();
   for (const [callId, descriptor] of descriptors) {
-    if (!(descriptor instanceof CallDescriptor) || descriptor.callSite === null) continue;
+    if (descriptor.callSite === null) continue;
     const address = descriptor.callSite;
     const addressKey = JSON.stringify(address);
     if (!origins.has(addressKey)) {
@@ -1701,6 +1706,8 @@ interface ReadSections {
   readonly flowAssertionOriginAt: (index: number) => OriginRef | null;
   /** The flow's parameters. */
   readonly params: FlowParameters;
+  /** Whether a `call:` or a `call(...)` names a tool, by the file's rule. */
+  readonly callsTool: CallsTool;
   /** The located node descriptors, tagged inputs and `llm_config` split, before any desugar. */
   readonly descriptors: ReadonlyMap<string, NodeDescriptor>;
   /** The ids of the tagged `nodes:` entries, which have no node body to re-read. */
@@ -1827,8 +1834,9 @@ function readFlowParameters(options: AssembleOptions, ctx: AssembleContext): Flo
 }
 
 /**
- * Return the rule that says whether a `call` node's `call:` names a tool. A name the file defines
- * means the file's own thing; any other name is a tool the run supplies, looked up at run start.
+ * Return the rule that says whether a `call` node's `call:`, or a `call(...)`, names a tool. A name
+ * the file defines means the file's own thing; any other name is a tool the run supplies, looked
+ * up at run start.
  *
  * - A bare name is a tool when it is a built-in or `load_skill`, a module alias, or a name the
  *   file doesn't define; a `defs:` entry, a `uses:` flow or library alias, or an inline body is a
@@ -1838,40 +1846,72 @@ function readFlowParameters(options: AssembleOptions, ctx: AssembleContext): Flo
  * - Any other value is left to the CALL node, whose `call:` check reports its shape.
  *
  * The CALL node refuses a library named bare, and the TOOL node a built-in in a group, `load_skill`
- * and a module alias in the wrong form.
+ * and a module alias in the wrong form. A map or loop runs only flows for now, so there the rule
+ * refuses every tool, saying why the name is one, and `load_skill`.
  *
  * @param memories The flow's memory inputs.
  * @returns The rule, which throws a LoadError at `call:` for a bare memory input, a group that is
- *   a memory input and a def or alias too, or a group that is a def or a flow alias.
+ *   a memory input and a def or alias too, a group that is a def or a flow alias, or a tool or
+ *   `load_skill` on a `map` or `loop`.
  */
 function callsToolRule(scope: CallableScope, memories: ReadonlySet<string>, diagnostics: LoadDiagnostics): CallsTool {
   const isLibrary = (name: string) =>
     scope.section(name) === "uses" && scope.toolModule(name) === null && scope.resolve(name).library !== null;
-  return (nodeId, call, range) => {
-    const fail = (message: string) => diagnostics.error(`node ${reprText(nodeId)}: ${message}`, { range });
+  return (nodeId, call, range, { site = null, kind = "call" } = {}) => {
+    const onCall = kind === "call";
+    const subject = site ?? `${onCall ? "node" : `${kind} node`} ${reprText(nodeId)}`;
+    const fail = (message: string) => diagnostics.error(`${subject}: ${message}`, { range });
+    /** A tool, `why` saying why the name is one, which a map or loop can't run yet. */
+    const tool = (why: string, hint = ""): true => {
+      if (onCall) return true;
+      throw fail(
+        `${why}, and a \`${kind}\` runs only flows for now; call it from a \`call\` node, or wrap it in a ` +
+          `def${hint}`,
+      );
+    };
+    /** Built-in `name`; a map or loop refuses `load_skill` as the TOOL node does. */
+    const builtin = (name: string): true => {
+      if (name === LOAD_SKILL && !onCall) throw fail(`tool id \`${LOAD_SKILL}\` is reserved by yian`);
+      return tool(`\`${name}\` is a built-in tool`);
+    };
+    /** `name`, which the file doesn't define, so `what` (`it`, or the group's tool) is a tool. */
+    const undefinedName = (name: string, what: string): true => {
+      if (onCall) return true;
+      const [close] = getCloseMatches(name, scope.names(), 1, CLOSE_MATCH_CUTOFF);
+      const hint = close === undefined ? "" : `; did you mean \`${close}\`?`;
+      return tool(`\`${name}\` names no def or alias in this file, so ${what} is a tool`, hint);
+    };
     if (typeof call === "string") {
-      if (RESERVED_TOOL_NAMES.has(call)) return true;
+      if (RESERVED_TOOL_NAMES.has(call)) return builtin(call);
       if (call.startsWith(INLINE_FLOW_PREFIX)) return false;
-      if (scope.section(call) !== null) return scope.toolModule(call) !== null;
+      if (scope.section(call) !== null) return scope.toolModule(call) !== null && tool(`\`${call}\` is a tool module`);
       if (memories.has(call)) {
-        throw fail(`\`${call}\` is a memory input; name one of its tools: \`call: {${call}: <tool>}\``);
+        if (!onCall) {
+          throw fail(`\`${call}\` is a memory input, not a flow; call one of its tools from a \`call\` node`);
+        }
+        const fix = site === null ? `call: {${call}: <tool>}` : `call(${call}.<tool>, ...)`;
+        throw fail(`\`${call}\` is a memory input; name one of its tools: \`${fix}\``);
       }
-      return true;
+      return undefinedName(call, "it");
     }
     if (!isRecord(call)) return false;
     const entries = Object.entries(call);
     if (entries.length !== 1 || entries[0]![0] === "") return false;
-    const [group, tool] = entries[0]!;
-    if (typeof tool === "string" && RESERVED_TOOL_NAMES.has(tool)) return true;
+    const [group, name] = entries[0]!;
+    const written = `\`{${group}: ${String(name)}}\``;
+    if (typeof name === "string" && RESERVED_TOOL_NAMES.has(name)) return builtin(name);
     const section = scope.section(group);
     const module = scope.toolModule(group);
     if (memories.has(group)) {
-      if (section === null) return true;
+      if (section === null) return tool(`\`${group}\` is a memory input, so ${written} is a tool`);
       const what = module !== null ? "tool module" : isLibrary(group) ? "library" : "flow";
       throw fail(`\`${group}\` is both a memory input and a ${what}; rename one`);
     }
-    if (section === null || module !== null) return true;
+    if (section === null) return undefinedName(group, written);
+    if (module !== null) return tool(`\`${group}\` is a tool module, so ${written} is a tool`);
     if (isLibrary(group)) return false;
+    // Renaming the def would reach a tool group, which a map or loop can't run either.
+    if (!onCall) throw fail(`\`${group}\` is a flow, not a library`);
     const named = section === "defs" ? "def" : "alias";
     throw fail(
       `\`${group}\` is a flow, not a library; a tool group named \`${group}\` is shadowed in this file, ` +
@@ -2017,6 +2057,7 @@ function readSections(options: AssembleOptions, ctx: AssembleContext): ReadSecti
     flowAssertionRanges,
     flowAssertionOriginAt,
     params,
+    callsTool,
     descriptors,
     valueEntries,
     outputs: {
@@ -2040,13 +2081,14 @@ function desugarSections(
   ctx: AssembleContext,
 ): DesugaredSections {
   const { registry, owner, resolveOrigin, diagnostics } = ctx;
-  const { nodesCursor, valueEntries, outputs } = read;
+  const { nodesCursor, valueEntries, outputs, callsTool } = read;
   const flowAssertionRangeAt = (index: number): SourceRange | null => read.flowAssertionRanges[index]!;
 
-  // Desugar each whole-value `call(<flow>, ...)` binding: it becomes a synth `call` node
-  // (CallDescriptor, over=null) and its host binding is rewritten to `${<synth>.output}`. Pure
-  // sugar — the rest of the pipeline treats the synth nodes as ordinary `call` nodes
-  // (build/edges/validate/DAG run unchanged). The retired `${ f(...) }` form is refused here.
+  // Desugar each whole-value `call(<name>, ...)` binding: it becomes a synth `call` node
+  // (CallDescriptor, over=null), or a TOOL node when `callsTool` says it names a tool, and its host
+  // binding is rewritten to `${<synth>.output}`. Pure sugar — the rest of the pipeline treats the
+  // synth nodes as ordinary nodes (build/edges/validate/DAG run unchanged). The retired
+  // `${ f(...) }` form is refused here.
   const mint = synthIdGen(); // ONE synth-id minter shared by both inline-call desugars (no collision)
   const [withCalls, callOutputs, asserts] = desugarInlineCalls(read.descriptors, outputs.section, {
     assertsSection,
@@ -2063,6 +2105,7 @@ function desugarSections(
     nextId: mint,
     typeNames: new Set(registry.keys()),
     isCallable: (name) => ctx.scope.has(name),
+    callsTool,
     diagnostics,
   });
 
@@ -2073,9 +2116,9 @@ function desugarSections(
   const withComposers = desugarAdaptiveQuestions(withCalls, { diagnostics });
 
   // `then:/else: call(...)`: a `case` branch target that is a call directive becomes a synth
-  // `call` node, the then:/else: rewritten to its id. Runs BEFORE expandCaseOutputs (so the synth args +
+  // `call` or TOOL node, the then:/else: rewritten to its id. Runs BEFORE expandCaseOutputs (so the synth args +
   // the rewritten then-targets are visible to it) and shares `mint`.
-  const withTargets = desugarCaseCallTargets(withComposers, mint, { diagnostics });
+  const withTargets = desugarCaseCallTargets(withComposers, mint, { callsTool, diagnostics });
 
   // The cases whose value is used, taken before the expansion below rewrites the reads; each
   // must be exhaustive (checked once producer types are known).

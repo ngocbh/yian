@@ -1,0 +1,49 @@
+# `call:` and `call(...)` name a run's tool: a host tool by its name, and a host group's tool as
+# `{docs: search}` or `docs.search`. A branch not taken calls nothing.
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    go: !bool
+  nodes:
+    found: {kind: call, call: lookup, input: {id: "1"}}
+    searched: {kind: call, call: {docs: search}, input: {query: one}}
+    routed:
+      kind: case
+      cases:
+        - when: input.go
+          then: call(docs.search, query=two)
+      else: call(lookup, id="0")
+  output:
+    found: ${found.output}
+    searched: ${searched.output}
+    routed: ${routed.output}
+    named: call(lookup, id="7")
+inputs: {go: true}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    lookup:
+      parameters: {type: object, properties: {id: {type: string}}, required: [id]}
+      results:
+        found: [{return: Ada}]
+        __call_0: [{return: Bo}]
+    docs:
+      group:
+        search:
+          parameters: {type: object, properties: {query: {type: string}}, required: [query]}
+          results:
+            searched: [{return: first}]
+            __call_1: [{return: second}]
+expect:
+  output:
+    status: succeeded
+    output: {found: Ada, searched: first, routed: second, named: Bo}
+  tool_calls:
+    lookup:
+    - {args: {id: '7'}, call_id: r1/__call_0, attempt: 1, node: __call_0}
+    - {args: {id: '1'}, call_id: r1/found, attempt: 1, node: found}
+    docs_search:
+    - {args: {query: one}, call_id: r1/searched, attempt: 1, node: searched}
+    - {args: {query: two}, call_id: r1/__call_1, attempt: 1, node: __call_1}

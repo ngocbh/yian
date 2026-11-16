@@ -100,7 +100,8 @@ A `then:` or `else:` names what runs on that branch:
 
 - a sibling node, as an unquoted word (`then: reply`);
 - a value entry, which is also a node (`then: approve`);
-- a child flow call, as an unquoted `call(...)` (`else: call(respond, text=${input.text})`).
+- a call of a child flow or a [tool](#call-a-tool), as an unquoted `call(...)`
+  (`else: call(respond, text=${input.text})`, `then: call(sleep, for=1h)`).
 
 Anything else, such as quoted text, a number or `null`, is a load error: put the value in a
 value entry and name that. A word that names no node is a load error that suggests the nearest
@@ -254,7 +255,8 @@ $ yian run greet_team.yaml --input lead=Ada --input team="Bo, Cy"
 ```
 
 - `call:` names a `defs:` entry first, then a [`uses:`](#import-a-flow-from-another-file-with-uses)
-  alias. On a `call` node any other name is a [tool](#call-a-tool); on a `map` it is a load error.
+  alias. On a `call` node or in a `call(...)` any other name is a [tool](#call-a-tool); a `map`
+  or `loop` runs only flows for now, so a tool there is a load error.
   A `defs:` name or alias can't also be a node id or a built-in's name: `take`, `sleep`, `ask`,
   `ask_user` or `load_skill`. `call: {billing: quote}` names a
   [library's def](#call-a-librarys-def).
@@ -432,11 +434,16 @@ output: ${place.output}
   group `clean`. A memory input named alone, `call: lessons`, is a load error too.
 - A tool call takes `retries:`, `output:` (the result's type) and `asserts:`. A flow call takes
   neither `retries:` nor `output:`, and only `call: ask` takes `adaptive_questions:`.
+- `call(...)` [in a binding](#call-inside-a-binding) or a [branch](#branch-targets) names a tool
+  the same way: `call(sleep, for=1h)`, `call(github.search, query=${input.q})`.
+- In `call(...)`, `a.b` always means tool `b` of group `a` (or def `b` of library `a`), and a name
+  holds only letters, digits, `_` and `-`. A tool named otherwise needs a `call` node:
+  `call: "a.b"` names the one tool `a.b`.
 
-### Call a flow inside a binding
+### Call inside a binding
 
-To call a child once without writing a `call` node, write `call(...)` as a binding's whole value.
-The loader turns it into a `call` node for you:
+To call a child flow or a [tool](#call-a-tool) once without writing a `call` node, write
+`call(...)` as a binding's whole value. The loader turns it into a `call` node for you:
 
 ```yaml check=fragment
 brief:
@@ -453,7 +460,7 @@ brief:
 - The call runs only when the node it is written in can run: on that node's `case` branches,
   after its `runs_after:` nodes, and once its other inputs are ready.
 - A quoted value is text, never a call: `note: "call(f)"` is the text `call(f)`.
-- A flow call inside `${...}` is a load error, and in the middle of other text `call(...)` is
+- A `call(...)` inside `${...}` is a load error, and in the middle of other text `call(...)` is
   plain text. Give the call its own node and read that node's output.
 
 ## Repeat with `loop`

@@ -38,7 +38,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: "case node 'gate' then: a branch target must be a node id or a single call: call(pick, ...) passes a positional argument '30'; every argument after the flow id must be a keyword (name=value)"
+      message: "case node 'gate' then: a branch target must be a node id or a single call: call(pick, ...) passes a positional argument '30'; every argument after the name it calls must be a keyword (name=value)"
       frames:
       - label: flow.yaml
         range: [25, 15, 25, 29]

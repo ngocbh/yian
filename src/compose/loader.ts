@@ -1965,6 +1965,11 @@ export class CallableScope implements AssemblyScope {
     return this.#modules.get(name) ?? null;
   }
 
+  /** The file's `defs:` entries and `uses:` aliases, in written order. */
+  names(): readonly string[] {
+    return [...Object.keys(this.#defsSection), ...Object.keys(this.#uses)];
+  }
+
   /** The section declaring `flowId`: `defs` or `uses`; `null` for neither. */
   section(flowId: string): "defs" | "uses" | null {
     if (Object.hasOwn(this.#defsSection, flowId)) return "defs";

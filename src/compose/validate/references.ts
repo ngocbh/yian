@@ -236,7 +236,7 @@ const MAP_TAIL = "(a map body can't read an inbox)";
 const EXPRESSION_TAIL = "(not inside text or an expression)";
 
 /** What an error says of a memory read where it can't be, before the site's tail. */
-const MEMORY_USE =
+export const MEMORY_USE =
   "is a memory; use it whole as an agent input, in prompt text, as a child's memory input of the same type, " +
   "or name it in `tools:`/`tool_id:`";
 /** Why a typed binding or a value holding a memory refuses it. */

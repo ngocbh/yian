@@ -197,6 +197,29 @@ test("a memory's tool reads the memory through the body, never as an argument", 
   expect((result.output as { text: string }[]).map((each) => each.text)).toEqual(["one", "two"]);
 });
 
+test("a memory bound to a tool's argument is refused in the author's words, at their binding", async () => {
+  expect(await failure(mapApp("search", "    input:\n      q: ${input.lessons}\n"))).toEqual([
+    "node 'fetch' input 'q' from: ${input.lessons} is a memory; use it whole as an agent input, in prompt text, as " +
+      "a child's memory input of the same type, or name it in `tools:`/`tool_id:` (a tool node can't take a memory)",
+    "${input.lessons}",
+  ]);
+});
+
+test("an argument that isn't an identifier, or is named over, reaches the tool as written", async () => {
+  const echo = tool({
+    name: "echo",
+    description: "Return the arguments.",
+    parameters: { type: "object", properties: { "max-results": { type: "string" }, over: { type: "string" } } },
+    execute: (args: Record<string, unknown>) => args,
+  });
+  const text = `${mapApp("echo", "    input:\n      max-results: ${item}\n      over: ${item}\n")}output: \${fetch.output}\n`;
+  const result = await runFlow(await loadFlow(text), { ids: ["a"], lessons: lessons() }, {
+    env: hostEnv(tmp),
+    tools: { echo },
+  });
+  expect(result.output).toEqual([{ "max-results": "a", over: "a" }]);
+});
+
 test("an input: key named as the memory the map calls is refused at the key", async () => {
   const text = mapApp("{lessons: read}", "    input:\n      lessons: ${input.lessons}\n      path: a.md\n");
   expect(await failure(text)).toEqual([

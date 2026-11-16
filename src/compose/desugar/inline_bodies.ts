@@ -20,6 +20,7 @@ import { LoadDiagnostics } from "../helpers/errors.ts";
 import { hasSpan } from "../helpers/tags.ts";
 import { readCallTarget } from "../nodes/base.ts";
 import type { CallsTool } from "../nodes/call.ts";
+import { identifierSuggestion, isIdentifier } from "../parse/nodes.ts";
 import { setRecordKey } from "../source/common.ts";
 import { SourceCursor } from "../source/index.ts";
 
@@ -262,7 +263,8 @@ function rejectAuthoredPrivateCallTargets(nodesCursor: SourceCursor): void {
  *
  * A literal argument (`limit: 5`) is written straight into the node's `input:`, so the node checks
  * it as a `call` node would. Each other argument is a body input, which the node passes through as
- * `k: ${input.k}`, and so is the `memory` whose tool it calls, if any. Each field keeps the
+ * `k: ${input.k}`, and so is the `memory` whose tool it calls, if any; an argument whose name a body
+ * input can't take (`max-results`) passes through one named `arg_max_results`. Each field keeps the
  * author's source, and the memory's binding the source of `call:`, so the body's errors point at
  * what the author wrote.
  *
@@ -291,15 +293,25 @@ function toolBody(
   const passed = new Map<string, readonly [Value, SourceCursor | null]>();
   const toolInputs = new Map<string, string>();
   const inputRanges = new Map<string, SourceRange>();
+  const taken = new Set([...Object.keys(authored), ...(memory === null ? [] : [memory])]);
   for (const [key, argument] of Object.entries(authored)) {
     if (isLiteral(argument)) {
       passed.set(key, [argument, inputCursor.child(key)]);
       continue;
     }
-    passed.set(key, [`\${input.${key}}`, inputCursor.child(key)]);
-    toolInputs.set(key, key);
+    // A body input is read as `${input.<name>}`, and a map binds `over` itself, so an argument
+    // named otherwise gets a name of its own; the tool still gets it as `key`.
+    let name = key;
+    if (!isIdentifier(key) || (kind === "map" && key === "over")) {
+      const base = `arg_${identifierSuggestion(key)}`;
+      name = base;
+      for (let n = 2; taken.has(name); n++) name = `${base}_${n}`;
+      taken.add(name);
+    }
+    passed.set(key, [`\${input.${name}}`, inputCursor.child(key)]);
+    toolInputs.set(name, key);
     const range = authoredRanges.get(key);
-    if (range !== undefined) inputRanges.set(key, range);
+    if (range !== undefined) inputRanges.set(name, range);
   }
   if (memory !== null) {
     passed.set(memory, [`\${input.${memory}}`, callCursor]);

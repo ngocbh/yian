@@ -60,6 +60,7 @@ import {
   asBinding,
   type Assertion,
   Binding,
+  bindingSource,
   isExactly,
   type OutputContract,
   Parameter,
@@ -160,7 +161,7 @@ import {
 } from "../validate/constructors.ts";
 import { rejectCycles } from "../validate/cycles.ts";
 import { checkCaseHandles } from "../validate/handles.ts";
-import { validateReferences } from "../validate/references.ts";
+import { MEMORY_USE, validateReferences } from "../validate/references.ts";
 import { checkReservedSources } from "../validate/reserved_sources.ts";
 import { stampToolInputTypes } from "../validate/tool_inputs.ts";
 import { checkWrittenValues } from "../validate/value_nesting.ts";
@@ -2310,9 +2311,20 @@ function buildNodes(
               unproven,
             });
       const canonical = canonicalizeInlineType(parameterType);
-      // Before the body's own checks, which would refuse the inbox in the generated binding's words.
+      // Before the body's own checks, which would refuse an inbox or a memory in the words of the
+      // binding yian generated.
+      const argument = body.toolInputs.get(key) ?? key;
       if (body.tool !== null && isInboxType(canonical)) {
-        throw diagnostics.error(inboxInputError(descriptor.id, `tool \`${body.tool}\``, key), { range: bindingRange });
+        throw diagnostics.error(inboxInputError(descriptor.id, `tool \`${body.tool}\``, argument), {
+          range: bindingRange,
+        });
+      }
+      if (body.tool !== null && key !== body.memory && isMemoryType(canonical)) {
+        throw diagnostics.error(
+          `node ${reprText(descriptor.id)} input ${reprText(argument)} from: ${String(bindingSource(value))} ` +
+            `${MEMORY_USE} (a tool node can't take a memory)`,
+          { range: bindingRange },
+        );
       }
       childInputs.push(
         new Parameter(key, {

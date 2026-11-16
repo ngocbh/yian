@@ -164,7 +164,8 @@ output:
 - **Quote YAML that YAML would parse itself**: a slice or comprehension
   (`names: "${[m.text for m in input.msgs]}"`), and any `${...}` inside a `{...}` flow mapping
   (`input: {x: "${input.x}"}`). Block style avoids most of this.
-- **A child flow call is `call(f, k=v)` as a binding's whole value**, never `${f(...)}`. A
+- **A child flow or tool call is `call(f, k=v)` as a binding's whole value**, never `${f(...)}`.
+  `call(f, ...)` names what `call: f` names, and `call(a.b, ...)` what `call: {a: b}` does. A
   quoted `"call(f)"` is text. See [Expressions](https://yian.readthedocs.io/expressions/).
 
 ### Branching with `case`
@@ -191,12 +192,12 @@ output:
   importing file, without the extension (only `.yaml` files are found); `@<version>` must equal
   the child's quoted `version:` text (`clean: ../common/clean@1`). A def or alias can't be named
   `take`, `sleep`, `ask`, `ask_user` or `load_skill`.
-- **On a `call` node, a built-in, a module or memory input's tool, or a name the file doesn't
-  define is a tool**, called as a `tool` node calls it: `call: sleep`, `{crm: lookup}`,
-  `{lessons: append}`, or one of the run's tools (`search`, `{github: search}`), looked up when
-  the run starts. The file's own names hide a run's tool of that name, and `{clean: x}` with
-  `clean` a flow is a load error. A tool call takes `retries:`, `output:` and `asserts:`; a flow
-  call takes neither `retries:` nor `output:`. See
+- **On a `call` node or in a `call(...)`, a built-in, a module or memory input's tool, or a name
+  the file doesn't define is a tool**, called as a `tool` node calls it: `call: sleep`,
+  `{crm: lookup}`, `{lessons: append}`, or one of the run's tools (`search`, `{github: search}`),
+  looked up when the run starts. The file's own names hide a run's tool of that name, and
+  `{clean: x}` with `clean` a flow is a load error. A tool call takes `retries:`, `output:` and
+  `asserts:`; a flow call takes neither `retries:` nor `output:`. See
   [Call a tool](https://yian.readthedocs.io/control-flow/#call-a-tool).
 - **A library's def is `call: {billing: quote}`** (or `call(billing.quote, k=v)` in a binding),
   on `call`, `map` and `loop`. `call: billing` alone is a load error, and a flow's own `defs:`

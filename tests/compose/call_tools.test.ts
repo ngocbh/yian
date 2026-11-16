@@ -282,6 +282,9 @@ test("a mistyped call: name fails at run start, before any record", async () => 
   expect(existsSync(log)).toBe(false);
 });
 
+/** A CODE node whose input `x` is `call`, as one line. */
+const inlineNode = (call: string) => `{kind: code, code: return 1, output: !int, input: {x: ${call}}}`;
+
 // Each row: node `n` as written, and the hint run start and `yian check` give for its tool.
 test.each<[string, string | null]>([
   ["{kind: call, call: gret}", "did you mean the def greet?"],
@@ -291,16 +294,16 @@ test.each<[string, string | null]>([
   ["{kind: call, call: search}", null],
   // `tool_id:` says the name is a tool, so no def is offered.
   ["{kind: tool, tool_id: gret}", null],
-  ["{kind: code, code: return 1, output: !int, input: {x: call(gret)}}", "did you mean the def greet?"],
-  ["{kind: code, code: return 1, output: !int, input: {x: call(quot)}}", "did you mean the library def billing.quote?"],
+  [inlineNode("call(gret)"), "did you mean the def greet?"],
+  [inlineNode("call(quot)"), "did you mean the library def billing.quote?"],
   // A mistyped group is matched against the file's libraries and tool modules.
   ["{kind: call, call: {bilin: quote}}", "did you mean the library def {billing: quote}?"],
   ["{kind: call, call: {bilin: qoute}}", "did you mean the library def {billing: quote}?"],
   ["{kind: call, call: {bilin: refund}}", "did you mean the alias billing?"],
   ["{kind: call, call: {crn: lookup}}", "did you mean the module tool {crm: lookup}?"],
   ["{kind: call, call: {github: search}}", null],
-  ["{kind: code, code: return 1, output: !int, input: {x: call(bilin.quote)}}", "did you mean the library def billing.quote?"],
-  ["{kind: code, code: return 1, output: !int, input: {x: call(crn.lookup)}}", "did you mean the module tool crm.lookup?"],
+  [inlineNode("call(bilin.quote)"), "did you mean the library def billing.quote?"],
+  [inlineNode("call(crn.lookup)"), "did you mean the module tool crm.lookup?"],
 ])("n: %s is checked at run start, with hint %p", async (node, hint) => {
   const [tool] = runStartTools(await load(app(`  n: ${node}\n`)));
   expect(tool!.hint).toBe(hint);
@@ -374,20 +377,26 @@ const typoApp = (node: string) =>
   "id: r\nname: r\nuses:\n  crm: ./crm.ts\n  one: ./tools.ts:quote\n  billing: ./billing\n  clean: ./clean\n" +
   `defs:\n  greet: {kind: code, code: "return 1", output: !int}\nnodes:\n  n: ${node}\n`;
 
-const NO_GROUP = (group: string) => `unknown tool group '${group}'; tool groups in this run: []`;
+const NO_TOOL = (tool: string) => `tool '${tool}', which isn't in this run's tools; known tools: ["search"]`;
+/** How run start says `{<written>}`'s group, such as `bilin: quote`, isn't one of the run's. */
+const NO_GROUP = (written: string) =>
+  `{${written}}: unknown tool group '${written.split(":")[0]}'; tool groups in this run: []`;
 
-// Each row: node `n` as written, and how its run-start error ends.
+// Each row: the `call:` of node `n`, why run start refuses it, and the name it offers.
 test.each([
-  ["{kind: call, call: {bilin: quote}}", `{bilin: quote}: ${NO_GROUP("bilin")}; did you mean the library def \`{billing: quote}\`?`],
-  ["{kind: call, call: {crn: lookup}}", `{crn: lookup}: ${NO_GROUP("crn")}; did you mean the module tool \`{crm: lookup}\`?`],
-])("run start offers the file's closest name for n: %s", async (node, ending) => {
-  expect(await startError(typoApp(node))).toBe(`TOOL node 'n' names ${ending}`);
+  ["clen", NO_TOOL("clen"), "the alias `clean`"],
+  ["quot", NO_TOOL("quot"), "the library def `{billing: quote}`"],
+  ["on", NO_TOOL("on"), "the module tool `one`"],
+  ["{bilin: quote}", NO_GROUP("bilin: quote"), "the library def `{billing: quote}`"],
+  ["{crn: lookup}", NO_GROUP("crn: lookup"), "the module tool `{crm: lookup}`"],
+])("run start offers the file's closest name for call: %s", async (call, reason, hint) => {
+  const error = await startError(typoApp(`{kind: call, call: ${call}}`));
+  expect(error).toBe(`TOOL node 'n' names ${reason}; did you mean ${hint}?`);
 });
 
 test("run start offers an inline call's closest group as the call writes it", async () => {
-  const node = "{kind: code, code: return 1, output: !int, input: {x: call(crn.lookup)}}";
-  expect(await startError(typoApp(node))).toBe(
-    `node 'n' input 'x' call(crn.lookup) names {crn: lookup}: ${NO_GROUP("crn")}; did you mean the module tool ` +
+  expect(await startError(typoApp(inlineNode("call(crn.lookup)")))).toBe(
+    `node 'n' input 'x' call(crn.lookup) names ${NO_GROUP("crn: lookup")}; did you mean the module tool ` +
       "`crm.lookup`?",
   );
 });

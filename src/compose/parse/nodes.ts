@@ -263,8 +263,9 @@ function parseNode(
 
 /**
  * Parse a `call`, `map` or `loop` body. A `kind: call` body parses as a TOOL body, its `call:` read
- * as `tool_id:`, when `callsTool` says its `call:` names a tool. A map naming a tool already calls
- * the body generated for it. A loop runs only flows, so its body parses with `cls`, then
+ * as `tool_id:`, when `callsTool` says its `call:` names a tool. A map naming a tool calls the body
+ * generated for it once its body is extracted; the one node of that body keeps the map's `kind:`
+ * and parses as a TOOL body too. A loop runs only flows, so its body parses with `cls`, then
  * `callsTool` refuses a name no `call:` may take and a tool. A call or map naming a flow parses
  * with `cls`, refusing `retries:` and `adaptive_questions:`, which only a tool call takes. A body
  * that also writes `tool_id:` is left to `cls`, which refuses it.
@@ -287,7 +288,7 @@ function parseCallBody(
     callsTool(nodeId, normalized.get("call"), normalized.rangeOf("call"), { kind });
     return desc;
   }
-  if (kind === "call" && callsTool(nodeId, normalized.get("call"), normalized.rangeOf("call"))) {
+  if (callsTool(nodeId, normalized.get("call"), normalized.rangeOf("call"), { kind })) {
     return ToolDescriptor.parse(nodeId, normalized.renamed(CALL_AS_TOOL));
   }
   const subject = `node ${reprText(nodeId)} (kind=${kind})`;

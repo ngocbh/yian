@@ -1959,10 +1959,14 @@ function readSections(options: AssembleOptions, ctx: AssembleContext): ReadSecti
   const callsTool = callsToolRule(scope, memories, diagnostics);
 
   // Inline-body extraction masks child-only fields for descriptor parsing. Assertion provenance
-  // still belongs to the unmodified authored occurrence tree.
-  const [nodesCursor, inlineBodies] = locateSourceAccess(diagnostics, () =>
-    extractInlineBodies(authoredNodesCursor, { owner, callsTool, memories }),
-  );
+  // still belongs to the unmodified authored occurrence tree. A generated tool body's one node is
+  // the map's tool call itself, which has no body to extract.
+  const [nodesCursor, inlineBodies] =
+    options.bodyOf != null
+      ? [authoredNodesCursor, new Map<string, InlineBody>()]
+      : locateSourceAccess(diagnostics, () =>
+          extractInlineBodies(authoredNodesCursor, { owner, callsTool, memories }),
+        );
 
   rejectIncludeIn(assertsCursor, "asserts", "assertions", diagnostics);
   const flowAssertionCursors = assertionCursors(options.assertsSection, assertsCursor, diagnostics);

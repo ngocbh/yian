@@ -142,7 +142,21 @@ test("a body input takes its binding's proven type, else Optional(Any)", async (
 
 // Each row: the map's `call:` and other lines, the load error, and the text it points at.
 test.each([
-  ["search", "    retries: -1\n", "node 'fetch' (kind=call): `retries:` must be a non-negative integer, got -1", "-1"],
+  ["search", "    retries: -1\n", "node 'fetch' (kind=map): `retries:` must be a non-negative integer, got -1", "-1"],
+  [
+    "{crm: sleep}",
+    "",
+    "node 'fetch' (kind=map): `call: {crm: sleep}`: sleep is a built-in, not a group's tool; write `call: sleep`",
+    "{crm: sleep}",
+  ],
+  ["{lessons: raed}", "", "node 'fetch' (kind=map) grants {lessons: [raed]}: `lessons` has no tool `raed`", "{lessons: raed}"],
+  [
+    "{load: skill}",
+    "",
+    "node 'fetch' (kind=map): `call: {load: skill}` would show as `load_skill`, a name yian reserves; rename the " +
+      "group or the tool",
+    "{load: skill}",
+  ],
   ["search", "    output: !Nope\n", "unknown type 'Nope'", "!Nope"],
   [
     "search",

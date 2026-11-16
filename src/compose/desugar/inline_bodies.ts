@@ -263,8 +263,9 @@ function rejectAuthoredPrivateCallTargets(nodesCursor: SourceCursor): void {
 }
 
 /**
- * Generate the body a `kind` node's tool call runs each time. Its one node has the node's id, calls
- * the tool and takes the node's `TOOL_CALL_FIELDS`; its output is that node's.
+ * Generate the body a `kind` node's tool call runs each time. Its one node has the node's id and
+ * `kind:`, calls the tool and takes the node's `TOOL_CALL_FIELDS`; its output is that node's. The
+ * body's assembly parses that node as the tool call it is.
  *
  * A literal argument (`limit: 5`) is written straight into the node's `input:`, so the node checks
  * it as a `call` node would. Each other argument is a body input, which the node passes through as
@@ -326,7 +327,7 @@ function toolBody(
 
   const input = inputCursor.projectMapping(passed);
   const fields = new Map<string, readonly [Value, SourceCursor | null]>([
-    ["kind", ["call", cursor.child("kind")]],
+    ["kind", [kind, cursor.child("kind")]],
     ["call", [value["call"]!, callCursor]],
     ["input", [input.value, input]],
   ]);

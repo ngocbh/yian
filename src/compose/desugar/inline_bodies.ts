@@ -4,8 +4,8 @@
  * Extraction projects immutable source cursors. Each alias occurrence therefore gets its own
  * masked view while the document graph stays unchanged, and retained child cursors keep their
  * original paths and ranges. A tagged `nodes:` entry is a value, never an inline body, even when
- * its mapping has a `kind:` key. A `map` whose `call:` names a tool gets a one-node body generated
- * the same way, as a projection over the author's own fields.
+ * its mapping has a `kind:` key. A `map` or `loop` whose `call:` names a tool gets a one-node body
+ * generated the same way, as a projection over the author's own fields.
  *
  * Knows about: diagnostics, typesys values, the compose error and template helpers, the node
  *              kinds (`KINDS`, the CALL node's `call:` shape check and rule), the node parse's
@@ -22,7 +22,12 @@ import { hasSpan } from "../helpers/tags.ts";
 import { readCallTarget } from "../nodes/base.ts";
 import type { CallsTool } from "../nodes/call.ts";
 import { KINDS } from "../nodes/index.ts";
-import { identifierSuggestion, isIdentifier, normalizeNodeSignatureCursor } from "../parse/nodes.ts";
+import {
+  identifierSuggestion,
+  isIdentifier,
+  normalizeNodeSignatureCursor,
+  rejectNonIdentifierInput,
+} from "../parse/nodes.ts";
 import { setRecordKey } from "../source/common.ts";
 import { SourceCursor } from "../source/index.ts";
 
@@ -31,9 +36,16 @@ export const INLINE_FLOW_PREFIX = "__inline_flow_";
 
 const INLINE_COMPOSITE_KINDS: ReadonlySet<string> = new Set(["call", "map", "loop"]);
 
-// A tool call's own fields, which mean nothing on the map running it: they move to the generated
-// node, so they apply to each item's call.
-const TOOL_CALL_FIELDS: ReadonlySet<string> = new Set(["retries", "output", "adaptive_questions", "asserts"]);
+// A tool call's own fields, which mean nothing on the map or loop running it: they move to the
+// generated node, so they apply to each item's call or each turn's. A loop keeps `asserts:`, which
+// check its final record.
+const LOOP_TOOL_CALL_FIELDS: readonly string[] = ["retries", "output", "adaptive_questions"];
+const MAP_TOOL_CALL_FIELDS: readonly string[] = [...LOOP_TOOL_CALL_FIELDS, "asserts"];
+
+/** The fields that move from a `kind` node naming a tool to the node generated for it. */
+function toolCallFields(kind: string): readonly string[] {
+  return kind === "loop" ? LOOP_TOOL_CALL_FIELDS : MAP_TOOL_CALL_FIELDS;
+}
 
 /** One retained inline child and its occurrence-local private identity; frozen. */
 export class InlineBody {
@@ -112,20 +124,20 @@ export function inlineFlowId(owner: readonly string[]): string {
  * record retains its original child/output values and source locations. The supplied cursor and
  * its YAML anchors remain read-only.
  *
- * A `map` whose `call:` names a tool gets a generated body (`toolBody`): the map calls it, and its
- * one node calls the tool once per item. `output:` beside a named `call:` is kept on a `call` node
- * naming a tool, where it types the tool's result, moves to a map's generated node, and is refused
- * otherwise.
+ * A `map` or `loop` whose `call:` names a tool gets a generated body (`toolBody`): the node calls
+ * it, and its one node calls the tool once per item or turn. `output:` beside a named `call:` is
+ * kept on a `call` node naming a tool, where it types the tool's result, moves to a map's or loop's
+ * generated node, and is refused beside a flow.
  *
  * @param nodesCursor The located `nodes:` value.
  * @param options.owner The lexical owner path of the flow these nodes belong to.
- * @param options.callsTool Says whether a `call` or `map` node's `call:` names a tool; without it
- *   every one names a flow.
+ * @param options.callsTool Says whether a `call`, `map` or `loop` node's `call:` names a tool;
+ *   without it every one names a flow.
  * @param options.memories The flow's memory inputs, whose tools a generated body calls.
  * @returns The masked `nodes:` cursor and the retained bodies by node id, in source order.
  * @throws LoadError for an authored call into the private namespace, a malformed inline body,
- *   `output:` beside a named `call:` that isn't a tool call's, or a map's `input:` key naming the
- *   memory it calls; as `callsTool` throws.
+ *   `output:` beside a named `call:` that isn't a tool call's, a map's or loop's `input:` key naming
+ *   the memory it calls, or a loop's carried field that isn't an identifier; as `callsTool` throws.
  * @throws SourceAccessError when a needed field is behind a recursive alias.
  */
 export function extractInlineBodies(
@@ -168,11 +180,12 @@ export function extractInlineBodies(
 
     if (hasCall) {
       const call = rawBody["call"];
-      // The map's own check reports a malformed `call:` first, as for a flow.
-      if (kind === "map") readCallTarget(kind, nodeId, { call }, bodyCursor.rangeOf("call"), diagnostics);
-      if (kind === "map" && callsTool?.(nodeId, call, bodyCursor.rangeOf("call"), { kind }) === true) {
-        // The map's parse sees it without the tool call's fields, so it couldn't list them.
-        const moved = [...TOOL_CALL_FIELDS].map((key) => (key === "output" ? "outputs" : key));
+      const runsBody = kind === "map" || kind === "loop";
+      // The node's own check reports a malformed `call:` first, as for a flow.
+      if (runsBody) readCallTarget(kind, nodeId, { call }, bodyCursor.rangeOf("call"), diagnostics);
+      if (runsBody && callsTool?.(nodeId, call, bodyCursor.rangeOf("call"), { kind }) === true) {
+        // The node's parse sees it without the tool call's fields, so it couldn't list them.
+        const moved = toolCallFields(kind).map((key) => (key === "output" ? "outputs" : key));
         const cls = KINDS.get(kind)!;
         cls._checkKeys(nodeId, cls._normalizeCursor(normalizeNodeSignatureCursor(bodyCursor)), moved);
         const group = isRecord(call) ? Object.keys(call)[0]! : null;
@@ -180,18 +193,17 @@ export function extractInlineBodies(
         const value = nodesSnapshot[nodeId] as ValueRecord;
         const body = toolBody(kind, nodeId, bodyCursor, value, owner, memory);
         bodies.set(nodeId, body);
-        const [masked, maskedValue] = maskToolBody(bodyCursor, body, value);
+        const [masked, maskedValue] = maskToolBody(kind, bodyCursor, body, value);
         projected.set(nodeId, [maskedValue, masked]);
         continue;
       }
       if (Object.hasOwn(rawBody, "output")) {
         // A `call` node naming a tool keeps it: the type of the tool's result.
         if (!(kind === "call" && callsTool?.(nodeId, call, bodyCursor.rangeOf("call")) === true)) {
-          const ruled = kind !== "loop" && callsTool !== undefined;
-          const problem = ruled
-            ? "`output:` doesn't apply to a flow call: a flow's result type comes from the flow"
-            : "`output:` is only valid with inline `nodes:`";
-          throw diagnostics.error(`${subject}: ${problem}`, { range: bodyCursor.rangeOf("output") });
+          throw diagnostics.error(
+            `${subject}: \`output:\` doesn't apply to a flow call: a flow's result type comes from the flow`,
+            { range: bodyCursor.rangeOf("output") },
+          );
         }
       }
       projected.set(nodeId, [nodesSnapshot[nodeId] as Value, bodyCursor]);
@@ -265,18 +277,21 @@ function rejectAuthoredPrivateCallTargets(nodesCursor: SourceCursor): void {
 
 /**
  * Generate the body a `kind` node's tool call runs each time. Its one node has the node's id and
- * `kind:`, calls the tool and takes the node's `TOOL_CALL_FIELDS`; its output is that node's. The
+ * `kind:`, calls the tool and takes the node's `toolCallFields`; its output is that node's. The
  * body's assembly parses that node as the tool call it is.
  *
- * A literal argument (`limit: 5`) is written straight into the node's `input:`, so the node checks
- * it as a `call` node would. Each other argument is a body input, which the node passes through as
- * `k: ${input.k}`; an argument whose name a body input can't take (`max-results`) passes through
- * one named `arg_max_results`. The `memory` whose tool it calls, if any, is a body input too, which
- * the node's memory routing reads. Each field keeps the author's source, and the memory's binding
- * the source of `call:`, so the body's errors point at what the author wrote.
+ * On a map, a literal argument (`limit: 5`) is written straight into the node's `input:`, so the
+ * node checks it as a `call` node would. Each other argument is a body input, which the node passes
+ * through as `k: ${input.k}`; an argument whose name a body input can't take (`max-results`)
+ * passes through one named `arg_max_results`. A loop's arguments are its carried fields, each a
+ * body input of its own name, since a literal seed holds only the first turn's value. The `memory`
+ * whose tool it calls, if any, is a body input too, which the node's memory routing reads. Each
+ * field keeps the author's source, and the memory's binding the source of `call:`, so the body's
+ * errors point at what the author wrote.
  *
  * @param memory The memory input whose tool the node calls; `null` for none.
- * @throws LoadError at the key for an `input:` key named `memory`.
+ * @throws LoadError at the key for an `input:` key named `memory`, or a loop's that isn't an
+ *   identifier.
  */
 function toolBody(
   kind: string,
@@ -287,11 +302,12 @@ function toolBody(
   memory: string | null,
 ): InlineBody {
   const callCursor = cursor.child("call");
-  // A malformed `input:` is left to the map's own check.
+  const diagnostics = LoadDiagnostics.fromCursor(cursor);
+  // A malformed `input:` is left to the node's own check.
   const authored = isRecord(value["input"]) ? value["input"] : {};
   const inputCursor = Object.hasOwn(value, "input") ? cursor.child("input") : callCursor;
   if (memory !== null && Object.hasOwn(authored, memory)) {
-    throw LoadDiagnostics.fromCursor(cursor).error(
+    throw diagnostics.error(
       `${kind} node ${reprText(nodeId)}: \`${memory}\` is the memory this node calls; yian passes it, so remove the entry`,
       { range: inputCursor.keyRangeOf(memory) },
     );
@@ -302,7 +318,11 @@ function toolBody(
   const inputRanges = new Map<string, SourceRange>();
   const taken = new Set([...Object.keys(authored), ...(memory === null ? [] : [memory])]);
   for (const [key, argument] of Object.entries(authored)) {
-    if (isLiteral(argument)) {
+    if (kind === "loop") {
+      // The tool's result names the carried fields that change, so it can't rename one.
+      const what = `loop node ${reprText(nodeId)}: carried field`;
+      rejectNonIdentifierInput(what, key, inputCursor.keyRangeOf(key), diagnostics);
+    } else if (isLiteral(argument)) {
       passed.set(key, [argument, inputCursor.child(key)]);
       continue;
     }
@@ -331,7 +351,7 @@ function toolBody(
     ["call", [value["call"]!, callCursor]],
     ["input", [input.value, input]],
   ]);
-  for (const key of TOOL_CALL_FIELDS) {
+  for (const key of toolCallFields(kind)) {
     if (Object.hasOwn(value, key)) fields.set(key, [value[key]!, cursor.child(key)]);
   }
   const node = cursor.projectMapping(fields);
@@ -365,21 +385,26 @@ function isLiteral(value: Value, seen: Set<object> = new Set()): boolean {
 }
 
 /**
- * Project a node naming a tool onto a private `call:` of `body`, its generated body: the node keeps
- * its other fields, and its `input:` binds each of the body's inputs, the memory's as
+ * Project a `kind` node naming a tool onto a private `call:` of `body`, its generated body: the
+ * node keeps its other fields, and its `input:` binds each of the body's inputs, the memory's as
  * `${input.<memory>}` at `call:`.
  */
-function maskToolBody(cursor: SourceCursor, body: InlineBody, bodyValue: ValueRecord): [SourceCursor, ValueRecord] {
+function maskToolBody(
+  kind: string,
+  cursor: SourceCursor,
+  body: InlineBody,
+  bodyValue: ValueRecord,
+): [SourceCursor, ValueRecord] {
   const masked: ValueRecord = {};
   const entries = new Map<string, readonly [Value, SourceCursor | null]>();
   for (const [key, value] of Object.entries(bodyValue)) {
-    if (TOOL_CALL_FIELDS.has(key) || key === "input") continue;
+    if (toolCallFields(kind).includes(key) || key === "input") continue;
     setRecordKey(masked, key, key === "call" ? body.flowId : value);
     entries.set(key, [null, cursor.child(key)]);
   }
   const authored = bodyValue["input"];
   if (authored !== undefined && !isRecord(authored)) {
-    // Left for the map's own check.
+    // Left for the node's own check.
     masked["input"] = authored;
     entries.set("input", [null, cursor.child("input")]);
   } else if (body.toolInputs.size > 0) {

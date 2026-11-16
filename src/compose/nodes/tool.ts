@@ -19,6 +19,7 @@ import {
   bindingSource,
   type CallableHint,
   isExactly,
+  type OutputContract,
   ValueContract,
   ValueTemplate,
 } from "../../nodes/contracts.ts";
@@ -77,8 +78,8 @@ export interface ToolDescriptorFields extends NodeDescriptorFields {
 /**
  * How a TOOL node's load messages name the node and the field its tool is written in, so each
  * message reads in the author's own words: `kind=tool` and `tool_id:`, or `kind=call` and `call:`
- * (`kind=map` for the node a map's tool call generates). A lifted `call(...)` is named by its site
- * instead, and its tool is written as a directive.
+ * (`kind=map` or `kind=loop` for the node a map's or loop's tool call generates). A lifted
+ * `call(...)` is named by its site instead, and its tool is written as a directive.
  */
 class ToolWording {
   /** The node's own id. */
@@ -197,8 +198,8 @@ function closeCallable(ctx: BuildContext, ref: ToolRef, wording: ToolWording): C
 }
 
 /**
- * The kind a TOOL body in `cursor` was written as: `tool`, `call`, or the `map` whose tool call
- * generated it.
+ * The kind a TOOL body in `cursor` was written as: `tool`, `call`, or the `map` or `loop` whose tool
+ * call generated it.
  */
 function writtenKindOf(cursor: SourceCursor): string {
   const kind = cursor.get("kind");
@@ -223,8 +224,9 @@ function toolField(kind: string): ToolField {
  * or is the answer type (`ask`, which alone takes `adaptive_questions:`).
  *
  * A `kind: call` body whose `call:` names a tool parses here too, its `call:` read as `tool_id:`,
- * and so does the node a map naming a tool generates; `writtenKind` records the kind the author
- * wrote, so the messages use the author's words.
+ * and so does the node a map or loop naming a tool generates; `writtenKind` records the kind the
+ * author wrote, so the messages use the author's words. A loop's node with no `output:` returns the
+ * whole carried record (`resultContract`).
  */
 export class ToolDescriptor extends NodeDescriptor {
   static override readonly kind = "tool";
@@ -245,7 +247,7 @@ export class ToolDescriptor extends NodeDescriptor {
 
   /** The tool, looked up in the run's `ToolSet`: a bare id, or a group's tool. */
   readonly toolRef: ToolRef;
-  /** The kind the author wrote: `tool`, `call`, or the `map` that generated the node. */
+  /** The kind the author wrote: `tool`, `call`, or the `map` or `loop` that generated the node. */
   readonly writtenKind: string;
   /**
    * Whether `input:` binds the tool's group by a binding yian generated, as a one-node flow binds
@@ -290,12 +292,12 @@ export class ToolDescriptor extends NodeDescriptor {
     return new ToolWording(this.id, this.writtenKind, this.fieldLabels);
   }
 
-  /** `call` for a `kind: call` body naming a tool, `map` for a map's. */
+  /** `call` for a `kind: call` body naming a tool, `map` or `loop` for a map's or loop's. */
   static override _writtenKind(cursor: SourceCursor): string {
     return writtenKindOf(cursor);
   }
 
-  /** `call` for `tool_id` in a body written as `kind: call` or `kind: map`. */
+  /** `call` for `tool_id` in a body written as `kind: call`, `kind: map` or `kind: loop`. */
   static override _writtenKey(key: string, cursor: SourceCursor): string {
     return key === "tool_id" ? toolField(writtenKindOf(cursor)) : super._writtenKey(key, cursor);
   }
@@ -588,10 +590,31 @@ export class ToolDescriptor extends NodeDescriptor {
       const answer = isExactly(node.outputContract, ValueContract) ? node.outputContract.type : null;
       node.answerSchema = answerSchema(answer === null ? null : answer.replace({ nullable: false }));
     } else {
-      node.outputContract = this.outputContract(ctx);
+      node.outputContract = this.resultContract(ctx);
     }
     node.params = this.sinkParams();
     return this._finish(node, wiring);
+  }
+
+  /**
+   * Return the contract of the tool's result: its declared `output:`. Without one, a loop's tool
+   * returns the whole carried record, the body's inputs but its memories and inboxes, which the
+   * engine checks each turn's result against (`null` for no such input); any other's is `null`.
+   *
+   * @throws LoadError as `outputContract` throws.
+   */
+  private resultContract(ctx: BuildContext): OutputContract | null {
+    const declared = this.outputContract(ctx);
+    if (declared !== null || this.writtenKind !== "loop") return declared;
+    const carried = [...ctx.flowInputs].filter(([, typ]) => !isMemoryType(typ) && !isInboxType(typ));
+    if (carried.length === 0) return null;
+    const fields = new Map(carried);
+    return new ValueContract(new Type({ kind: ValueKind.OBJECT, fields, required: new Set(fields.keys()) }));
+  }
+
+  /** What a built-in's refusal of input it doesn't take adds in a loop, which passes it every field. */
+  private get carriedTail(): string {
+    return this.writtenKind === "loop" ? " (a loop passes every carried field to its tool)" : "";
   }
 
   /**
@@ -672,8 +695,9 @@ export class ToolDescriptor extends NodeDescriptor {
       title: this.nodeName,
       retries: this.retries,
       memoryTool: true,
+      bodyOf: ctx.bodyOf?.label ?? null,
     });
-    node.outputContract = this.outputContract(ctx);
+    node.outputContract = this.resultContract(ctx);
     const wiring = this.sinkWiring();
     if (this.autoWiredGroup) wiring.delete(input);
     node.params = this.sinkParams().filter((parameter) => wiring.has(parameter.name));
@@ -692,7 +716,8 @@ export class ToolDescriptor extends NodeDescriptor {
     const subject = this.wording.nodeTool(TAKE);
     for (const name of Object.keys(this.inputs)) {
       if (TAKE_INPUTS.has(name)) continue;
-      throw ctx.diagnostics.error(`${subject}: take takes from, take and timeout; got ${reprText(name)}`, {
+      const got = `got ${reprText(name)}${this.carriedTail}`;
+      throw ctx.diagnostics.error(`${subject}: take takes from, take and timeout; ${got}`, {
         range: this.inputRange(name),
       });
     }
@@ -755,7 +780,7 @@ export class ToolDescriptor extends NodeDescriptor {
     const names = Object.keys(this.inputs);
     const extra = names.find((name) => name !== "until" && name !== "for");
     if (extra !== undefined || names.length !== 1) {
-      const got = extra === undefined ? "" : `; got ${reprText(extra)}`;
+      const got = extra === undefined ? "" : `; got ${reprText(extra)}${this.carriedTail}`;
       throw ctx.diagnostics.error(`${this.wording.nodeTool(SLEEP)}: sleep takes until: or for:, exactly one${got}`, {
         range: extra === undefined ? (this.fieldRanges.get(siteKey("field", "inputs")) ?? this.range) : this.inputRange(extra),
       });

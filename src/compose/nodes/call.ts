@@ -34,11 +34,10 @@ import { callableDisplay, type ChildSignature, childSignature, resolveChild } fr
  * Says whether a `call` node's `call:` value names a tool, which the node then runs as a TOOL
  * node, or a flow; the flow file's rule, given the node's id and where its `call:` is. A lifted
  * `call(...)` gives its `site` (`node 'n' input 'x' call(lessons)`), which a message names in
- * place of the node, writing its fix as a directive. A `map` or `loop` gives its `kind`: a map
- * runs any tool but `take`, and a loop runs only flows for now, so a tool there is refused.
+ * place of the node, writing its fix as a directive. A `map` or `loop` gives its `kind`: a loop
+ * runs any tool, and a map any but `take`.
  *
- * @throws LoadError at `range` for a name no `call:` may take, `take` on a `map`, or a tool on a
- *   `loop`.
+ * @throws LoadError at `range` for a name no `call:` may take, or `take` on a `map`.
  */
 export type CallsTool = (
   nodeId: string,
@@ -65,8 +64,8 @@ export interface CallDescriptorFields extends NodeDescriptorFields {
  *
  * `call` names the callable: a `defs:` entry or a `uses:` alias (the loader composes that
  * resolution). A `call` node whose `call:` names a tool parses as a TOOL node instead
- * (`parseNodes`), and a map naming one calls a body generated for it (`extractInlineBodies`); a
- * tool on a loop is a load error. `def` names a def of the
+ * (`parseNodes`), and a map or loop naming one calls a body generated for it
+ * (`extractInlineBodies`). `def` names a def of the
  * library `call` names, from `call: {billing: quote}` or `call(billing.quote, ...)`, and is
  * `null` for a flow.
  * `kind: call` is a single application; `kind: map` with `over: ${list}` (`MapDescriptor`)
@@ -194,7 +193,7 @@ export class CallDescriptor extends NodeDescriptor {
       // A def the body calls can get an inbox only from the body, so the body's own inputs
       // cover its whole subtree.
       for (const input of sig.inputs) {
-        if (isInboxType(input.contract?.type)) errors.push(inboxInputError(this.id, display, input.name));
+        if (isInboxType(input.contract?.type)) errors.push(inboxInputError("map", this.id, display, input.name));
       }
       if (sig.outputNames.length === 0) {
         errors.push(
@@ -225,12 +224,16 @@ export class CallDescriptor extends NodeDescriptor {
   }
 }
 
-/** Why map `nodeId` can't call `display`, which declares inbox input `input`. */
-export function inboxInputError(nodeId: string, display: string, input: string): string {
-  return (
-    `map node ${reprText(nodeId)}: ${display} declares inbox input ${reprText(input)}; a map body can't read ` +
-    "an inbox (per-instance inboxes aren't supported yet)"
-  );
+/**
+ * Why the `kind` node `nodeId` can't call `display`, which declares inbox input `input`: any body of
+ * a map, or a loop's tool other than `take`.
+ */
+export function inboxInputError(kind: "map" | "loop", nodeId: string, display: string, input: string): string {
+  const why =
+    kind === "map"
+      ? "a map body can't read an inbox (per-instance inboxes aren't supported yet)"
+      : "only `take` reads an inbox (a loop passes every carried field to its tool)";
+  return `${kind} node ${reprText(nodeId)}: ${display} declares inbox input ${reprText(input)}; ${why}`;
 }
 
 /** Return the type `list(element)`, a MAP's output, stored as `resolveType` stores a list. */

@@ -15,8 +15,8 @@
  * body's inputs read that way, and `carriedFieldTypes` gives the carried record's proven field
  * types.
  *
- * Knows about: diagnostics, expr, the LOOP runtime node, node contracts, compile's output
- * contracts, typesys, compose helpers, `base.ts` and `resolver.ts`.
+ * Knows about: diagnostics, expr, the LOOP and TOOL runtime nodes, the built-in tool ids, node
+ * contracts, compile's output contracts, typesys, compose helpers, `base.ts` and `resolver.ts`.
  */
 
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
@@ -28,11 +28,14 @@ import {
   isExactly,
   type OutputContract,
   outputContractFieldError,
+  outputContractType,
   Parameter,
   PartialRecordContract,
   ValueContract,
 } from "../../nodes/contracts.ts";
 import { LoopNode } from "../../nodes/loop/node.ts";
+import { ToolNode } from "../../nodes/tool/node.ts";
+import { SLEEP, TAKE } from "../../tools/context.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import { isInboxType, isMemoryType, Type, ValueKind, valueRepr, writeAsText } from "../../typesys/values.ts";
 import { AllOf, type Guard, Holds, NotNullCheck, proves, sameGuard } from "../helpers/condition_guards.ts";
@@ -48,6 +51,7 @@ import {
   widerType,
 } from "../helpers/narrowing_facts.ts";
 import { combineOutputContracts, projectOutputContract } from "../../compile/output_contracts.ts";
+import { namedTypeLabel } from "../helpers/tags.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import type { SourceCursor } from "../source/index.ts";
 import {
@@ -59,6 +63,9 @@ import {
   siteKey,
 } from "./base.ts";
 import { callableDisplay, childSignature, resolveChild } from "./resolver.ts";
+
+// Why a loop refuses what its tool returns.
+const TOOL_RESULT = "(a loop's tool returns the carried fields that change)";
 
 // Each predicate key with the example its non-string error shows.
 const PREDICATE_EXAMPLES: readonly (readonly [string, string])[] = [
@@ -83,7 +90,8 @@ export interface LoopDescriptorFields extends NodeDescriptorFields {
  * kind=loop: a `('a -> 'a) -> 'a -> 'a` driver over a carried record.
  *
  * `call` names the body child flow, resolved as a `call`'s is, and `def` a def of the library
- * `call` names (`null` for a flow). The authored `input:` mapping
+ * `call` names (`null` for a flow); a `call:` naming a tool calls the one-node body generated for
+ * it (`extractInlineBodies`). The authored `input:` mapping
  * seeds the carried record at turn 0. The body returns a subset of the carried record; each
  * omitted field keeps its previous value. Exactly one of `while_`, `until_` and `times` drives
  * the loop; `max` optionally limits a `while:` or `until:` loop's iterations, and
@@ -218,7 +226,9 @@ export class LoopDescriptor extends NodeDescriptor {
    * `returnedFields` (carried order) and a merged contract: each returned field projected from
    * the body's codomain, each omitted field typed from its seed (the seed's tag when it has one,
    * else through `ctx.bindingContractReader`, opaque without a reader or an unproven seed). The
-   * returned fields' types are checked against the seeds' later, over the assembled flow.
+   * returned fields' types are checked against the seeds' later, over the assembled flow. A tool's
+   * generated body is refused in the tool's words: what it returns, and why a loop's tool returns
+   * carried fields.
    *
    * A `while:` or `until:` predicate must parse, and every name it reads must be a carried field.
    * With the names valid, its checks and field reads are checked against the carried record's
@@ -309,11 +319,22 @@ export class LoopDescriptor extends NodeDescriptor {
     const carriedOnly = new Set([...inboxFields, ...memoryFields]);
     const carriedText = namesText(carriedNames);
     const outNames = contractFieldNames(sig.output);
+    const display = callableDisplay(this.call, this.childLabel, this.def);
+    // A tool the loop runs through the body generated for it: the body returns the tool's result.
+    const bodyNode = child.compiled.nodes.get(this.id);
+    const tool = bodyNode instanceof ToolNode && bodyNode.bodyOf !== null ? bodyNode : null;
+    /** What the tool returns, as its refusals start: `loop node 'w': tool `sleep` returns None`. */
+    const returns = (): string => {
+      const typ = outputContractType(sig.output);
+      return `${subject}: ${display} returns ${typ === null ? "an untyped value" : namedTypeLabel(typ, ctx.registry)}`;
+    };
     if (outNames === null || outNames.size === 0) {
       errors.push(
-        `${subject}: body ${callableDisplay(this.call, this.childLabel, this.def)} must return a record with at ` +
-          `least one carried field (a subset of the carried record ${carriedText}); ` +
-          "write `output: {field: ...}` or a whole reference to a node with a record output",
+        tool !== null
+          ? `${returns()}, not a record of carried fields ${TOOL_RESULT}${declareResultFix(tool)}`
+          : `${subject}: body ${display} must return a record with at least one carried field (a subset of ` +
+              `the carried record ${carriedText}); write \`output: {field: ...}\` or a whole reference to a node ` +
+              "with a record output",
       );
     } else {
       const outside = [...outNames].filter((name) => !carried.has(name));
@@ -326,9 +347,16 @@ export class LoopDescriptor extends NodeDescriptor {
         );
       }
       if (returnedInboxes.length === 0 && outside.length > 0) {
+        const names = outside.toSorted(compareCodeUnits).map((name) => `\`${name}\``);
+        const which =
+          names.length === 1
+            ? `${names[0]} isn't a carried field`
+            : `${names.slice(0, -1).join(", ")} and ${names.at(-1)} aren't carried fields`;
         errors.push(
-          `${subject}: body output field(s) ${namesText(outside)} are not carried record fields ` +
-            `${carriedText} (a body returns a subset of the carried record)`,
+          tool !== null
+            ? `${returns()}, but ${which} ${carriedText} ${TOOL_RESULT}`
+            : `${subject}: body output field(s) ${namesText(outside)} are not carried record fields ` +
+                `${carriedText} (a body returns a subset of the carried record)`,
         );
       } else if (returnedInboxes.length === 0 && outNames.size !== carried.size) {
         node.returnedFields = carriedNames.filter((name) => outNames.has(name));
@@ -502,6 +530,11 @@ function checkedCount(subject: string, key: "times" | "max", value: unknown, err
     return Number(value);
   }
   return null;
+}
+
+/** The fix for a loop's tool whose result isn't a record of carried fields: `sleep` and `take` take no `output:`. */
+function declareResultFix(tool: ToolNode): string {
+  return tool.builtin === SLEEP || tool.builtin === TAKE ? "" : "; declare the record it returns with `output:`";
 }
 
 /** Return `names` sorted by code unit, as a JSON list of text. */

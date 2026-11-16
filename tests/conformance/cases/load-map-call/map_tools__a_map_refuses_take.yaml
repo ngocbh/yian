@@ -1,0 +1,19 @@
+# A map can't run `take`: each item would need its own inbox, which yian doesn't support yet. The
+# error is at `call:`.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    notes: !Inbox(str)
+  nodes:
+    each: {kind: map, over: [a, b], call: take, input: {from: "${input.notes}"}}
+  output: ${each.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "map node 'each': `call: take` reads an inbox, and a map can't give each item its own (per-instance inboxes aren't supported yet); take before the map"
+      frames:
+      - label: flow.yaml
+        range: [6, 41, 6, 45]

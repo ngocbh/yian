@@ -155,8 +155,8 @@ export function shortArgs(args: unknown): string {
 }
 
 /**
- * A JSON object's fields as `key: value` lines, a string value bare and a null one left out (a
- * check's `error: null` says nothing); null for other text.
+ * A JSON object's fields as `key: value` lines, a string value bare, and a null one or an empty list
+ * left out (a check's `error: null` and `run_start_tools: []` say nothing); null for other text.
  */
 function jsonFields(text: string): string[] | null {
   let parsed: unknown;
@@ -167,7 +167,7 @@ function jsonFields(text: string): string[] | null {
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
   return Object.entries(parsed)
-    .filter(([, value]) => value !== null)
+    .filter(([, value]) => value !== null && !(Array.isArray(value) && value.length === 0))
     .map(([key, value]) => `${key}: ${typeof value === "string" ? value : shortValue(value)}`);
 }
 

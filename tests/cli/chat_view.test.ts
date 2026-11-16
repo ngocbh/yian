@@ -1065,8 +1065,8 @@ describe("the view's helpers", () => {
     expect(summary("x ".repeat(50), 20)).toEqual(["x x x x x x x x x x", "x x x x x x x x x x…"]);
   });
 
-  test("summary shows a JSON record's fields, a null one left out", () => {
-    const written = JSON.stringify({ written: true, path: "a.yaml", reason: null });
+  test("summary shows a JSON record's fields, a null one and an empty list left out", () => {
+    const written = JSON.stringify({ written: true, path: "a.yaml", reason: null, run_start_tools: [] });
     expect(summary(written, 60)).toEqual(["written: true · path: a.yaml"]);
   });
 });
@@ -1139,8 +1139,7 @@ describe("a session on a terminal", () => {
         "> run hello for Ada",
         "",
         "⏺ check_flow(hello.yaml)",
-        `  ⎿  ok: true · name: hello · inputs: [{name: "name", ty… ·`,
-        "     run_start_tools: []",
+        `  ⎿  ok: true · name: hello · inputs: [{name: "name", ty…`,
         '⏺ start_flow(hello.yaml, {name: "Ada"})',
         `╭─ Run hello.yaml ${"─".repeat(41)}╮`,
         ...CARD.slice(0, 4).map(row),

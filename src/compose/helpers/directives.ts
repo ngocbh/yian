@@ -131,7 +131,7 @@ export function splitCallsAware(text: string, sep: string): string[] {
 /** An unquoted value whose trimmed text starts with this is a `call(...)` directive. */
 export const CALL_HEAD = /^call\s*\(/;
 // A flow or tool name, or an alias and one of its defs or tools: `billing.quote`.
-const FLOW_ID = /^[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)?$/;
+const CALLEE = /^[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)?$/;
 
 /**
  * Recognize a whole-value `call(...)` directive.
@@ -146,12 +146,12 @@ const FLOW_ID = /^[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)?$/;
  * `matchCallDirective("pre call(x)")` is `null`.
  *
  * @param value The binding text.
- * @returns The flow id and the raw argument text after the flow id's comma (empty for
+ * @returns The name and the raw argument text after the name's comma (empty for
  *   `call(f)`), or `null` when the trimmed text doesn't start with `call(`.
  * @throws {ExpressionError} When the value starts with `call(` but its parentheses are
- *   unbalanced, text follows the closing `)`, or the first argument is not a bare flow id.
+ *   unbalanced, text follows the closing `)`, or the first argument is not a bare name.
  */
-export function matchCallDirective(value: string): [flowId: string, remaining: string] | null {
+export function matchCallDirective(value: string): [callee: string, remaining: string] | null {
   const s = value.trim();
   const m = CALL_HEAD.exec(s);
   if (m === null) return null;
@@ -168,14 +168,14 @@ export function matchCallDirective(value: string): [flowId: string, remaining: s
   }
   const argsStr = s.slice(openIdx + 1, closeIdx);
   const first = splitCallsAware(argsStr, ",")[0]!.trim();
-  if (!FLOW_ID.test(first)) {
+  if (!CALLEE.test(first)) {
     throw new ExpressionError(
       "a call(...) must start with the name it calls (a bare name, or alias.name for a library's def or a " +
         `group's tool) and a comma, got ${reprText(first)}`,
     );
   }
   // Everything after the first comma is the remaining (keyword) args; the parser over this text
-  // never re-sees the positional flow id, so a positional arg among them (`call(f, 30)`) fails
+  // never re-sees the positional name, so a positional arg among them (`call(f, 30)`) fails
   // loudly there.
   const comma = argsStr.indexOf(",");
   return [first, comma !== -1 ? argsStr.slice(comma + 1) : ""];
@@ -188,7 +188,7 @@ export function matchCallDirective(value: string): [flowId: string, remaining: s
  * @returns The first such call's name, read as `matchCallDirective` reads it, or `<name>` when
  *   that call doesn't start with a name.
  */
-export function spanCallFlowId(text: string): string {
+export function spanCallName(text: string): string {
   const call = spanCallDirectiveText(text);
   if (call === null) return "<name>";
   try {

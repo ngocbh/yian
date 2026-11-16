@@ -1,9 +1,9 @@
 /**
- * The whole-value `call(<flow-id>, kw=...)` compile-time directive.
+ * The whole-value `call(<name>, kw=...)` compile-time directive.
  *
  * An unquoted value whose trimmed text starts with `call(` must be exactly one directive, else it
- * is a load error naming the problem; a quoted value is text. The first arg is the POSITIONAL flow
- * id, the rest are `name=value` keywords. It desugars through `desugarInlineCalls` and a shared
+ * is a load error naming the problem; a quoted value is text. The first arg is the POSITIONAL name
+ * it calls, the rest are `name=value` keywords. It desugars through `desugarInlineCalls` and a shared
  * minter into a synth `CallDescriptor` (`over = null`), the host binding rewritten to
  * `${<synth>.output}`. The rows drive the pass directly with a deterministic minter; the load rows
  * assemble the flow (`assembleText`), a `defs:` callee built by hand (`handChild`) where the build
@@ -202,8 +202,8 @@ test("mid value call is literal not directive", () => {
 });
 
 const TRAILING_TAIL = "text follows the closing `)`: 'tail'; a call(...) must be the whole value";
-const POSITIONAL = (flowId: string, arg: string) =>
-  `call(${flowId}, ...) passes a positional argument '${arg}'; every argument after the name it calls must be a ` +
+const POSITIONAL = (callee: string, arg: string) =>
+  `call(${callee}, ...) passes a positional argument '${arg}'; every argument after the name it calls must be a ` +
   "keyword (name=value)";
 
 test.each([

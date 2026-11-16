@@ -72,7 +72,7 @@ import {
 import { YianTypeError } from "../../typesys/errors.ts";
 import { BUILTIN_TYPE_NAMES } from "../../typesys/types.ts";
 import { isRecord, jsTypeName, type Value } from "../../typesys/values.ts";
-import { CALL_HEAD, InlineCall, matchCallDirective, spanCallFlowId, splitCallsAware } from "../helpers/directives.ts";
+import { CALL_HEAD, InlineCall, matchCallDirective, spanCallName, splitCallsAware } from "../helpers/directives.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { QUOTED_STYLES, yamlQuoted } from "../helpers/tags.ts";
 import { type NodeDescriptor, siteKey } from "../nodes/base.ts";
@@ -101,13 +101,13 @@ export class ArgumentValueError extends ExpressionError {
   override name = "ArgumentValueError";
 
   /**
-   * @param flowId The called flow's id.
+   * @param callee The name the call names.
    * @param name The keyword argument's name.
    * @param reason Why the value can't be read.
    */
-  constructor(flowId: string, name: string, reason: string) {
+  constructor(callee: string, name: string, reason: string) {
     super(
-      `call(${flowId}, ...) keyword ${reprText(name)} value can't be read as YAML ` +
+      `call(${callee}, ...) keyword ${reprText(name)} value can't be read as YAML ` +
         `(${reason}); quote it to keep it as text`,
     );
   }
@@ -572,7 +572,7 @@ function rejectSpanFlowCalls(
   if (callee === "call") {
     throw diagnostics.error(
       `${where}: call(...) can't go inside \${...}. Write it unquoted as the whole value, ` +
-        `call(${spanCallFlowId(value)}, ...), or make the call in its own node and read its output.`,
+        `call(${spanCallName(value)}, ...), or make the call in its own node and read its output.`,
       { range },
     );
   }
@@ -611,7 +611,7 @@ function rejectSpanFlowCalls(
 export function desugarCallDirectives(value: string, mint: () => string): [string, InlineCall[]] {
   const match = matchCallDirective(value);
   if (match === null) return [value, []];
-  const [flowId, argsStr] = match;
+  const [callee, argsStr] = match;
   const calls: InlineCall[] = [];
   const args = new Map<string, Value>();
   for (const pair of splitCallsAware(argsStr, ",")) {
@@ -619,38 +619,38 @@ export function desugarCallDirectives(value: string, mint: () => string): [strin
     const parts = splitCallsAware(pair, "=");
     if (parts.length < 2) {
       throw new ExpressionError(
-        `call(${flowId}, ...) passes a positional argument ${reprText(pair.trim())}; ` +
+        `call(${callee}, ...) passes a positional argument ${reprText(pair.trim())}; ` +
           "every argument after the name it calls must be a keyword (name=value)",
       );
     }
     const name = parts[0]!.trim();
     if (!name || /\s/.test(name)) {
       throw new ExpressionError(
-        `call(${flowId}, ...) argument ${reprText(pair.trim())} needs one name before ` +
+        `call(${callee}, ...) argument ${reprText(pair.trim())} needs one name before ` +
           `\`=\`; ${name ? "add the missing comma" : "write the keyword name"}`,
       );
     }
     const argValue = parts.slice(1).join("=");
     if (hasInnerKeyword(parts.slice(1))) {
       throw new ExpressionError(
-        `call(${flowId}, ...) keyword ${reprText(name)} value ${reprText(argValue.trim())} looks ` +
+        `call(${callee}, ...) keyword ${reprText(name)} value ${reprText(argValue.trim())} looks ` +
           "like two keywords; add the missing comma, or quote the value",
       );
     }
     const [newValue, inner] = desugarCallDirectives(argValue, mint); // inner-first recursion
     calls.push(...inner);
     if (args.has(name)) {
-      throw new ExpressionError(`call(${flowId}, ...) passes keyword ${reprText(name)} more than once`);
+      throw new ExpressionError(`call(${callee}, ...) passes keyword ${reprText(name)} more than once`);
     }
     try {
       args.set(name, argSource(newValue));
     } catch (error) {
       if (!(error instanceof SourceSyntaxError)) throw error;
-      throw new ArgumentValueError(flowId, name, error.message);
+      throw new ArgumentValueError(callee, name, error.message);
     }
   }
   const callId = mint();
-  calls.push(new InlineCall(callId, flowId, Object.fromEntries(args)));
+  calls.push(new InlineCall(callId, callee, Object.fromEntries(args)));
   return ["${" + callId + ".output}", calls];
 }
 

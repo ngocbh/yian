@@ -130,7 +130,8 @@ for plain JavaScript on either runtime.
 
 A `tool` node calls one tool by id, with its `input:` as the tool's arguments. There is no model
 in the loop. Your host supplies the tools (see [Agents](/agents/#tools) for where tools come
-from), so the flow names a tool and the run looks it up.
+from), so the flow names a tool and the run looks it up. A `call` node does the same with `call:`
+in place of `tool_id:` (see [Call a tool](/control-flow/#call-a-tool)).
 
 ```yaml check=fragment
 quote:
@@ -193,9 +194,9 @@ When every attempt fails, the error lists each attempt.
 ## Tool modules
 
 A tool module is a TypeScript or JavaScript file whose exports are tools. A flow imports it with
-`uses:`, and its tools work as [host tools](/agents/#host-tools) do: a `tool` node calls one, and
-an agent grants them. A module needs no runtime import of yian, so it runs wherever the flow
-runs, under a compiled `yian` too.
+`uses:`, and its tools work as [host tools](/agents/#host-tools) do: a `tool` or `call` node calls
+one, and an agent grants them. A module needs no runtime import of yian, so it runs wherever the
+flow runs, under a compiled `yian` too.
 
 ```ts title="crm.ts"
 import type { ToolOptions } from "@ngocbh/yian/tools";
@@ -264,8 +265,9 @@ other export, and `default`, is ignored.
 - A ref is a relative path, `./` or `../`, to a `.ts`, `.js` or `.mjs` file, resolved from the
   importing file's real folder, never from `system.paths`. It takes no `@version`, and under a
   `codeRoot` or `yian check --root` it must stay inside, as a CODE file must.
-- `call:` on a module's alias is a load error; call its tools from a `tool` node. A `tool` node
-  calls the module's tool even when the run has a host tool or group of the alias's name.
+- A `call` node names a module's tool as `tool_id:` does: `call: {crm: lookup}`, or `call: quote`.
+  A `map` or `loop` can't. Either node calls the module's tool even when the run has a host tool
+  or group of the alias's name.
 
 ### When a module runs
 

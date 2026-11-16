@@ -1,3 +1,4 @@
+# A `call:` name the file doesn't define is a tool, looked up among the run's tools at run start.
 kind: load
 flow: |
   id: f
@@ -8,10 +9,4 @@ flow: |
     a: {kind: call, call: ghost, input: {x: "${input.x}"}}
   output: {y: "${a.output}"}
 expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: 'callable ''ghost'' is neither an in-file defs: callable nor a uses: alias — external flows are reachable only through a uses: alias (declare `uses: {ghost: <ref>}`)'
-      frames:
-      - label: flow.yaml
-        range: [6, 3, 6, 4]
+  load: ok

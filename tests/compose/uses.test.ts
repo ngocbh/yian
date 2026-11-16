@@ -10,6 +10,7 @@ import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts"
 import { parseUsesRef, UsesRef } from "../../src/compose/helpers/uses.ts";
 import { parseFile } from "../../src/compose/parse/file.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
+import { NodeKind } from "../../src/nodes/base.ts";
 
 import { loadConformanceFlow, loadErrorAsync } from "../helpers/declarations.ts";
 
@@ -290,14 +291,10 @@ describe("resolving a uses: alias", () => {
     expect(error.diagnostic.frames.map((frame) => frame.range)).toEqual([expected!]);
   });
 
-  test("a bare call without uses: or defs: is a located error that never asks the resolver", async () => {
+  test("a bare call without uses: or defs: names a tool and never asks the resolver", async () => {
     const seen: [string, string | null][] = [];
-    const error = await loadErrorAsync(loadConformanceFlow(withCall("ghost"), { childResolver: fakeResolver(seen) }));
-    expect(error.message).toBe(
-      "callable 'ghost' is neither an in-file defs: callable nor a uses: alias — external flows " +
-        "are reachable only through a uses: alias (declare `uses: {ghost: <ref>}`)",
-    );
-    expect(error.diagnostic.frames.length).toBeGreaterThan(0);
+    const flow = await loadConformanceFlow(withCall("ghost"), { childResolver: fakeResolver(seen) });
+    expect(flow.compiled.nodes.get("a")!.kind).toBe(NodeKind.TOOL);
     expect(seen).toEqual([]);
   });
 });

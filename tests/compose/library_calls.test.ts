@@ -114,7 +114,7 @@ test("a library def's own calls count toward the nesting limit", async () => {
 
 test("a call: mapping to a list shows the one def to write", async () => {
   expect(await loadMessage("  price: {kind: call, call: {billing: [quote]}}\n")).toBe(
-    "node 'price' (kind=call): `call: {billing: ...}` names one def; write `call: {billing: quote}`",
+    "node 'price' (kind=call): `call: {billing: ...}` names one def or tool; write `call: {billing: quote}`",
   );
 });
 

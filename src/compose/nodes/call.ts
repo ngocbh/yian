@@ -30,6 +30,14 @@ import {
 } from "./base.ts";
 import { callableDisplay, type ChildSignature, childSignature, resolveChild } from "./resolver.ts";
 
+/**
+ * Says whether a `call` node's `call:` value names a tool, which the node then runs as a TOOL
+ * node, or a flow; the flow file's rule, given the node's id and where its `call:` is.
+ *
+ * @throws LoadError at `range` for a name no `call:` may take.
+ */
+export type CallsTool = (nodeId: string, call: unknown, range: SourceRange | null) => boolean;
+
 /** The fields `CallDescriptor`'s constructor takes: the common ones and the CALL's own. */
 export interface CallDescriptorFields extends NodeDescriptorFields {
   call: string;
@@ -45,8 +53,10 @@ export interface CallDescriptorFields extends NodeDescriptorFields {
  * kind=call|map: apply a callable (`call:`) to the call-argument bindings in `input:`.
  *
  * `call` names the callable: a `defs:` entry or a `uses:` alias (the loader composes that
- * resolution; any other name is a load error). `def` names a def of the library `call` names,
- * from `call: {billing: quote}` or `call(billing.quote, ...)`, and is `null` for a flow.
+ * resolution). A `call` node whose `call:` names a tool parses as a TOOL node instead
+ * (`parseNodes`); any other name on a map or loop is a load error. `def` names a def of the
+ * library `call` names, from `call: {billing: quote}` or `call(billing.quote, ...)`, and is
+ * `null` for a flow.
  * `kind: call` is a single application; `kind: map` with `over: ${list}` (`MapDescriptor`)
  * applies it to each element, with `${item}` in element scope. `parallel:` is kept but inert:
  * run-level workers control concurrency.

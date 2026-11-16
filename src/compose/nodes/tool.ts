@@ -54,9 +54,13 @@ import {
   valueTypeError,
 } from "./base.ts";
 
+/** The field a TOOL node's tool is written in: `tool_id` under `kind: tool`, `call` under `kind: call`. */
+export type ToolField = "tool_id" | "call";
+
 /** The fields `ToolDescriptor`'s constructor takes: the common ones and the TOOL's own. */
 export interface ToolDescriptorFields extends NodeDescriptorFields {
   toolRef: ToolRef;
+  toolField?: ToolField;
   retries?: number;
   asserts?: readonly string[] | null;
   adaptiveQuestions?: unknown;
@@ -64,18 +68,20 @@ export interface ToolDescriptorFields extends NodeDescriptorFields {
 
 /**
  * How a TOOL node's load messages name the node and the field its tool is written in, so each
- * message reads in the author's own words.
+ * message reads in the author's own words: `kind=tool` and `tool_id:`, or `kind=call` and `call:`.
  */
 class ToolWording {
   /** The node's own id. */
   readonly nodeId: string;
   /** The node kind the author wrote. */
-  readonly kind: string = ToolDescriptor.kind;
+  readonly kind: string;
   /** The field the author named the tool in. */
-  readonly field = "tool_id";
+  readonly field: ToolField;
 
-  constructor(nodeId: string) {
+  constructor(nodeId: string, field: ToolField) {
     this.nodeId = nodeId;
+    this.field = field;
+    this.kind = field === "call" ? "call" : ToolDescriptor.kind;
   }
 
   /** The node: `node 'f'`. */
@@ -102,6 +108,16 @@ class ToolWording {
   written(value?: string): string {
     return value === undefined ? `${this.field}:` : `${this.field}: ${value}`;
   }
+
+  /** What the node is, in a sentence: `a TOOL node`, or `a tool call` under `kind: call`. */
+  noun(): string {
+    return this.field === "call" ? "a tool call" : "a TOOL node";
+  }
+}
+
+/** The field a TOOL body in `cursor` names its tool in: `call` under `kind: call`, else `tool_id`. */
+function toolFieldOf(cursor: SourceCursor): ToolField {
+  return cursor.get("kind") === "call" ? "call" : "tool_id";
 }
 
 /**
@@ -115,6 +131,9 @@ class ToolWording {
  * `tool_id:` is a tool's id or a group's tool, `{group: tool}`. `tool_id: take | sleep | ask` names
  * a yian built-in, whose inputs are checked at load and whose output is inferred (`take`, `sleep`)
  * or is the answer type (`ask`, which alone takes `adaptive_questions:`).
+ *
+ * A `kind: call` body whose `call:` names a tool parses here too, its `call:` read as `tool_id:`;
+ * `toolField` records which the author wrote, so the messages use the author's words.
  */
 export class ToolDescriptor extends NodeDescriptor {
   static override readonly kind = "tool";
@@ -135,6 +154,8 @@ export class ToolDescriptor extends NodeDescriptor {
 
   /** The tool, looked up in the run's `ToolSet`: a bare id, or a group's tool. */
   readonly toolRef: ToolRef;
+  /** The field the author wrote the tool in. */
+  readonly toolField: ToolField;
   /** The effective retry count, so the manifest holds it; zero is left out of the manifest. */
   readonly retries: number;
   /** The node asserts. */
@@ -151,6 +172,7 @@ export class ToolDescriptor extends NodeDescriptor {
   constructor(fields: ToolDescriptorFields) {
     super(fields);
     this.toolRef = fields.toolRef;
+    this.toolField = fields.toolField ?? "tool_id";
     this.retries = fields.retries ?? current().toolRetries;
     this.asserts = fields.asserts ?? [];
     this.adaptiveQuestions = fields.adaptiveQuestions ?? null;
@@ -163,14 +185,24 @@ export class ToolDescriptor extends NodeDescriptor {
 
   /** How this node's load messages name it and its tool's field. */
   get wording(): ToolWording {
-    return new ToolWording(this.id);
+    return new ToolWording(this.id, this.toolField);
+  }
+
+  /** `call` for a `kind: call` body naming a tool. */
+  static override _writtenKind(cursor: SourceCursor): string {
+    return toolFieldOf(cursor) === "call" ? "call" : this.kind;
+  }
+
+  /** `call` for `tool_id` in a `kind: call` body naming a tool. */
+  static override _writtenKey(key: string, cursor: SourceCursor): string {
+    return key === "tool_id" ? toolFieldOf(cursor) : super._writtenKey(key, cursor);
   }
 
   /**
    * Check an `adaptive_questions:` block and an `ask`'s reserved input around the template
    * `parse`, and range the block's brief and `llm_config:`.
    *
-   * @throws LoadError when `adaptive_questions:` is on a tool id other than `ask` (at the block),
+   * @throws LoadError when `adaptive_questions:` is on a tool other than `ask` (at the block),
    *   authors a key other than `prompt`/`llm_config`/`retries` or a non-text brief, an `ask`
    *   authors input `__questions`, or the template `parse` rejects the node.
    */
@@ -180,7 +212,7 @@ export class ToolDescriptor extends NodeDescriptor {
     cursor: SourceCursor,
   ): InstanceType<T> {
     const diagnostics = LoadDiagnostics.fromCursor(cursor);
-    const wording = new ToolWording(nodeId);
+    const wording = new ToolWording(nodeId, toolFieldOf(cursor));
     const toolId = cursor.get("tool_id");
     if (typeof toolId === "string" && cursor.has("adaptive_questions")) {
       if (toolId !== ASK && toolId !== ASK_USER) {
@@ -192,6 +224,14 @@ export class ToolDescriptor extends NodeDescriptor {
       checkAdaptiveBlock(wording, cursor, diagnostics);
     }
     const desc = super.parse(nodeId, cursor) as ToolDescriptor;
+    const { group, name } = desc.toolRef;
+    // Checked once the template parse has read the group form, which is never `ask`.
+    if (group !== null && cursor.has("adaptive_questions")) {
+      throw diagnostics.error(
+        `${wording.nodeTool(`{${group}: ${name}}`)}: \`adaptive_questions:\` applies only to ${wording.written(ASK)}`,
+        { range: cursor.keyRangeOf("adaptive_questions") },
+      );
+    }
     if (desc.toolId === ASK && Object.hasOwn(desc.inputs, QUESTIONS_INPUT)) {
       throw diagnostics.error(
         `${wording.nodeTool(ASK)}: input '${QUESTIONS_INPUT}' is reserved for adaptive_questions`,
@@ -223,7 +263,9 @@ export class ToolDescriptor extends NodeDescriptor {
     cursor: SourceCursor,
   ): void {
     const rangeOf = (key: string) => ranges.get(siteKey("field", key)) ?? ownRange;
-    const wording = new ToolWording(nodeId);
+    const field = toolFieldOf(cursor);
+    fields["toolField"] = field;
+    const wording = new ToolWording(nodeId, field);
     const raw = fields["toolId"] ?? null;
     const ref = ToolDescriptor.readToolRef(wording, raw, rangeOf("tool_id"), diagnostics);
     delete fields["toolId"];
@@ -267,8 +309,8 @@ export class ToolDescriptor extends NodeDescriptor {
    * Read an authored `tool_id:`: a tool id (`ask_user` read as `ask`), or a one-key mapping
    * `{group: tool}` naming one tool of a group.
    *
-   * @throws LoadError at `tool_id:` for any other value, `null` included, or a built-in or
-   *   `load_skill` named in a group.
+   * @throws LoadError at `tool_id:` for any other value, `null` and empty text included, or a
+   *   built-in or `load_skill` named in a group.
    */
   private static readToolRef(
     wording: ToolWording,
@@ -279,12 +321,14 @@ export class ToolDescriptor extends NodeDescriptor {
     const fail = (problem: string): never => {
       throw diagnostics.error(`${wording.nodeKind()}: ${problem}`, { range });
     };
-    if (typeof raw === "string") {
+    if (typeof raw === "string" && raw !== "") {
       return Object.freeze({ group: null, name: raw === ASK_USER ? ASK : raw });
     }
     if (!isRecord(raw)) {
-      const fix = raw === null ? "write a tool name" : "put it in quotes";
-      return fail(valueTypeError(wording.field, "a tool name or `{group: tool}`", raw, fix));
+      // No tool has an empty name, so `""` is read as empty, as `null` is.
+      const empty = raw === null || raw === "";
+      const fix = empty ? "write a tool name" : "put it in quotes";
+      return fail(valueTypeError(wording.field, "a tool name or `{group: tool}`", empty ? null : raw, fix));
     }
     const keys = Object.keys(raw);
     if (keys.length !== 1 || keys[0] === "") {
@@ -466,7 +510,7 @@ export class ToolDescriptor extends NodeDescriptor {
     if (memory.nullable) {
       throw ctx.diagnostics.error(
         `${this.wording.node()}: \`${this.wording.written(`{${input}: ${name}}`)}\` names \`${input}\`, ` +
-          "an Optional memory; a TOOL node needs one that is always bound",
+          `an Optional memory; ${this.wording.noun()} needs one that is always bound`,
         { range },
       );
     }

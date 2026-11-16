@@ -85,8 +85,11 @@ const ALLOWED_TOP_MESSAGE = [...TOP_SURFACE_KEYS].sort(compareCodeUnits).join(",
  */
 const COMPACT_FLOW_KEYS: readonly string[] = ["id", "name", "description", "version", "typedefs"];
 
-/** The kinds a compact flow may use: the value-producing leaf kinds. */
-const COMPACT_KINDS: ReadonlySet<string> = new Set(["agent", "code", "tool"]);
+/**
+ * The kinds a compact flow may use: the value-producing leaf kinds, and `call`, whose `call:` can
+ * name only a tool in a file with no `defs:` or `uses:`.
+ */
+const COMPACT_KINDS: ReadonlySet<string> = new Set(["agent", "call", "code", "tool"]);
 
 /**
  * The kinds a compact flow refuses: they reference other nodes or callables that a one-node flow

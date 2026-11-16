@@ -24,7 +24,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'node ''a'' (kind=call): `call:` must be a callable name or `{library: def}`, but YAML read it as a boolean; put it in quotes'
+      message: 'node ''a'' (kind=call): `call:` must be a callable name, `{library: def}` or `{group: tool}`, but YAML read it as a boolean; put it in quotes'
       frames:
       - label: flow.yaml
         range: [18, 11, 18, 15]

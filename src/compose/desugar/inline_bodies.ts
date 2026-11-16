@@ -6,7 +6,8 @@
  * original paths and ranges. A tagged `nodes:` entry is a value, never an inline body, even when
  * its mapping has a `kind:` key.
  *
- * Knows about: diagnostics, typesys values, the compose error helpers and source cursors.
+ * Knows about: diagnostics, typesys values, the compose error helpers, the CALL node's
+ *              `call:` rule and source cursors.
  */
 
 import { createHash } from "node:crypto";
@@ -14,6 +15,7 @@ import { createHash } from "node:crypto";
 import { reprText, type SourceRange } from "../../diagnostics.ts";
 import { isRecord, type Value, type ValueRecord } from "../../typesys/values.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
+import type { CallsTool } from "../nodes/call.ts";
 import { setRecordKey } from "../source/common.ts";
 import type { SourceCursor } from "../source/index.ts";
 
@@ -84,17 +86,23 @@ export function inlineFlowId(owner: readonly string[]): string {
  * record retains its original child/output values and source locations. The supplied cursor and
  * its YAML anchors remain read-only.
  *
+ * `output:` beside a named `call:` is kept on a `call` node naming a tool, where it types the
+ * tool's result, and refused otherwise.
+ *
  * @param nodesCursor The located `nodes:` value.
  * @param options.owner The lexical owner path of the flow these nodes belong to.
+ * @param options.callsTool Says whether a `call` node's `call:` names a tool; without it every
+ *   `call` node names a flow.
  * @returns The masked `nodes:` cursor and the retained bodies by node id, in source order.
- * @throws LoadError for an authored call into the private namespace or a malformed inline body.
+ * @throws LoadError for an authored call into the private namespace, a malformed inline body, or
+ *   `output:` beside a named `call:` that isn't a tool call's; as `callsTool` throws.
  * @throws SourceAccessError when a needed field is behind a recursive alias.
  */
 export function extractInlineBodies(
   nodesCursor: SourceCursor,
-  options: { owner: readonly string[] },
+  options: { owner: readonly string[]; callsTool?: CallsTool },
 ): [SourceCursor, Map<string, InlineBody>] {
-  const { owner } = options;
+  const { owner, callsTool } = options;
   const diagnostics = LoadDiagnostics.fromCursor(nodesCursor);
   const nodes = nodesCursor._valueView();
   if (!isRecord(nodes)) return [nodesCursor, new Map()];
@@ -130,9 +138,14 @@ export function extractInlineBodies(
 
     if (hasCall) {
       if (Object.hasOwn(rawBody, "output")) {
-        throw diagnostics.error(`${subject}: \`output:\` is only valid with inline \`nodes:\``, {
-          range: bodyCursor.rangeOf("output"),
-        });
+        // A `call` node naming a tool keeps it: the type of the tool's result.
+        const ruled = kind === "call" && callsTool !== undefined;
+        if (!ruled || !callsTool(nodeId, rawBody["call"], bodyCursor.rangeOf("call"))) {
+          const problem = ruled
+            ? "`output:` doesn't apply to a flow call: a flow's result type comes from the flow"
+            : "`output:` is only valid with inline `nodes:`";
+          throw diagnostics.error(`${subject}: ${problem}`, { range: bodyCursor.rangeOf("output") });
+        }
       }
       projected.set(nodeId, [nodesSnapshot[nodeId] as Value, bodyCursor]);
       continue;

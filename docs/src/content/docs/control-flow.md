@@ -254,9 +254,10 @@ $ yian run greet_team.yaml --input lead=Ada --input team="Bo, Cy"
 ```
 
 - `call:` names a `defs:` entry first, then a [`uses:`](#import-a-flow-from-another-file-with-uses)
-  alias. Any other name is a load error, and so is a `defs:` name or alias that is also a node id
-  or a built-in's name: `take`, `sleep`, `ask`, `ask_user` or `load_skill`.
-  `call: {billing: quote}` names a [library's def](#call-a-librarys-def).
+  alias. On a `call` node any other name is a [tool](#call-a-tool); on a `map` it is a load error.
+  A `defs:` name or alias can't also be a node id or a built-in's name: `take`, `sleep`, `ask`,
+  `ask_user` or `load_skill`. `call: {billing: quote}` names a
+  [library's def](#call-a-librarys-def).
 - `input:` lists the child's arguments, one per name. A whole `${...}` record there is a load
   error.
 - Each argument must fit the child's input type, checked at load. Nothing is converted: a `str`
@@ -398,6 +399,39 @@ call node 'price': library 'billing' has no def 'quot'; did you mean 'quote'?
 ```
 
 - A flow's own `defs:` are private: `call: {clean: trim}` on a flow alias is a load error.
+
+### Call a tool
+
+On a `call` node, `call:` may name a tool: a built-in, a module's or memory's tool, or any name
+the file doesn't define. The node calls it once, as a [`tool` node](/code-and-tools/#tool-nodes)
+does, with `input:` as its arguments:
+
+```yaml
+id: order
+name: order
+input:
+  qty: !int
+nodes:
+  place:
+    kind: call
+    call: place_order           # one of the run's tools
+    input:
+      qty: ${input.qty}
+    retries: 2
+    output: !str
+output: ${place.output}
+```
+
+- `call:` names a built-in (`take`, `sleep` or `ask`), a
+  [tool module](/code-and-tools/#tool-modules)'s tool (`{crm: lookup}`, or `quote` for one
+  export), a [memory](/memory/)'s tool (`{lessons: append}`), or one of the run's tools (`search`,
+  or an MCP server's `{github: search}`). The run's tools are looked up when it starts, so a
+  misspelled name fails then, before anything runs.
+- A name the file defines means the file's own: a def or alias hides a run's tool of that name.
+  `call: {clean: x}` on a flow `clean` is a load error; rename the def or alias to reach a tool
+  group `clean`. A memory input named alone, `call: lessons`, is a load error too.
+- A tool call takes `retries:`, `output:` (the result's type) and `asserts:`. A flow call takes
+  neither `retries:` nor `output:`, and only `call: ask` takes `adaptive_questions:`.
 
 ### Call a flow inside a binding
 
@@ -619,7 +653,7 @@ loud:
 ```
 
 - Write exactly one of `call:` and `nodes:`. An inline body needs `output:`; `output:` beside a
-  named `call:` is a load error.
+  named `call:` is a load error, except on a `call` node naming a tool.
 - The node's `input:` becomes the body's inputs, read as `${input.<name>}`, so each name is an
   identifier.
 - The body can't read its parent's inputs, nodes or `${item}`. Pass what it needs through

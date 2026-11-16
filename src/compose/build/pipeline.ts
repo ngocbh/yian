@@ -5,8 +5,9 @@
  * runs one phase function after another; each takes the `AssembleContext` and the records the
  * earlier phases returned, and returns its own:
  *
- *   1. `readSections`: extract inline bodies; stamp flow-assert origins; read the flow parameters;
- *      parse nodes (a tagged `nodes:` entry lowers to a CODE node returning its value) and stamp
+ *   1. `readSections`: read the flow parameters; extract inline bodies; stamp flow-assert origins;
+ *      parse nodes (a tagged `nodes:` entry lowers to a CODE node returning its value, and a `call`
+ *      node whose `call:` names a tool to a TOOL node, by `callsToolRule`) and stamp
  *      their origins; refuse a `uses:` alias that collides with a node id; bound written-value
  *      nesting; refuse a tagged node `output:`; split tagged inputs, `llm_config` and flow outputs
  *      into value + declared contract; check case branches.
@@ -67,10 +68,19 @@ import {
 } from "../../nodes/contracts.ts";
 import { ASK } from "../../tools/context.ts";
 import type { ToolModuleRef } from "../../tools/modules.ts";
+import { RESERVED_TOOL_NAMES } from "../../tools/registry.ts";
 import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import { messagesKey, NEW_MESSAGES } from "../../typesys/pool.ts";
 import { newMessagesType, type TypeRegistry } from "../../typesys/types.ts";
-import { isList, isListKind, isRecord, type Type, type Value, writeAsText } from "../../typesys/values.ts";
+import {
+  isList,
+  isListKind,
+  isMemoryType,
+  isRecord,
+  type Type,
+  type Value,
+  writeAsText,
+} from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError, rejectReservedName } from "../helpers/errors.ts";
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
 import { assertExactContracts, resolveOutputBindingContract, type TypeFn } from "../../compile/output_contracts.ts";
@@ -103,14 +113,14 @@ import { QUESTIONS_INPUT, ToolDescriptor } from "../nodes/tool.ts";
 import { desugarAdaptiveQuestions } from "../desugar/adaptive_questions.ts";
 import { type CaseRead, caseOutputReads, expandCaseOutputs } from "../desugar/case_outputs.ts";
 import { desugarCaseCallTargets } from "../desugar/case_targets.ts";
-import { extractInlineBodies, type InlineBody } from "../desugar/inline_bodies.ts";
+import { extractInlineBodies, INLINE_FLOW_PREFIX, type InlineBody } from "../desugar/inline_bodies.ts";
 import { desugarInlineCalls, synthIdGen } from "../desugar/inline_calls.ts";
 import { isValueEntry, readValueEntry, type ValueEntryDescriptor } from "../desugar/value_entries.ts";
 import { inferDataEdges } from "../edges/data.ts";
 import { hostControlEdges } from "../edges/hosts.ts";
 import { inferOrderingEdges } from "../edges/ordering.ts";
 import { bindingProducers } from "../edges/producers.ts";
-import { CallDescriptor } from "../nodes/call.ts";
+import { CallDescriptor, type CallsTool } from "../nodes/call.ts";
 import { CaseDescriptor } from "../nodes/case.ts";
 import { LoopDescriptor } from "../nodes/loop.ts";
 import { MapDescriptor } from "../nodes/map.ts";
@@ -1817,8 +1827,62 @@ function readFlowParameters(options: AssembleOptions, ctx: AssembleContext): Flo
 }
 
 /**
- * Read the authored sections: extract inline bodies, stamp flow-assert origins, read the
- * parameters, parse and locate the nodes, refuse a colliding `uses:` alias, bound written-value
+ * Return the rule that says whether a `call` node's `call:` names a tool. A name the file defines
+ * means the file's own thing; any other name is a tool the run supplies, looked up at run start.
+ *
+ * - A bare name is a tool when it is a built-in or `load_skill`, a module alias, or a name the
+ *   file doesn't define; a `defs:` entry, a `uses:` flow or library alias, or an inline body is a
+ *   flow.
+ * - `{g: t}` is a tool when `t` is a built-in or `load_skill`, or `g` is a memory input, a module
+ *   alias or a name the file doesn't define; `g` a library alias is a flow, its def `t`.
+ * - Any other value is left to the CALL node, whose `call:` check reports its shape.
+ *
+ * The CALL node refuses a library named bare, and the TOOL node a built-in in a group, `load_skill`
+ * and a module alias in the wrong form.
+ *
+ * @param memories The flow's memory inputs.
+ * @returns The rule, which throws a LoadError at `call:` for a bare memory input, a group that is
+ *   a memory input and a def or alias too, or a group that is a def or a flow alias.
+ */
+function callsToolRule(scope: CallableScope, memories: ReadonlySet<string>, diagnostics: LoadDiagnostics): CallsTool {
+  const isLibrary = (name: string) =>
+    scope.section(name) === "uses" && scope.toolModule(name) === null && scope.resolve(name).library !== null;
+  return (nodeId, call, range) => {
+    const fail = (message: string) => diagnostics.error(`node ${reprText(nodeId)}: ${message}`, { range });
+    if (typeof call === "string") {
+      if (RESERVED_TOOL_NAMES.has(call)) return true;
+      if (call.startsWith(INLINE_FLOW_PREFIX)) return false;
+      if (scope.section(call) !== null) return scope.toolModule(call) !== null;
+      if (memories.has(call)) {
+        throw fail(`\`${call}\` is a memory input; name one of its tools: \`call: {${call}: <tool>}\``);
+      }
+      return true;
+    }
+    if (!isRecord(call)) return false;
+    const entries = Object.entries(call);
+    if (entries.length !== 1 || entries[0]![0] === "") return false;
+    const [group, tool] = entries[0]!;
+    if (typeof tool === "string" && RESERVED_TOOL_NAMES.has(tool)) return true;
+    const section = scope.section(group);
+    const module = scope.toolModule(group);
+    if (memories.has(group)) {
+      if (section === null) return true;
+      const what = module !== null ? "tool module" : isLibrary(group) ? "library" : "flow";
+      throw fail(`\`${group}\` is both a memory input and a ${what}; rename one`);
+    }
+    if (section === null || module !== null) return true;
+    if (isLibrary(group)) return false;
+    const named = section === "defs" ? "def" : "alias";
+    throw fail(
+      `\`${group}\` is a flow, not a library; a tool group named \`${group}\` is shadowed in this file, ` +
+        `so rename the ${named} to reach it`,
+    );
+  };
+}
+
+/**
+ * Read the authored sections: read the parameters, extract inline bodies, stamp flow-assert
+ * origins, parse and locate the nodes, refuse a colliding `uses:` alias, bound written-value
  * nesting, refuse a tagged node `output:`, split tagged values from their contracts, and check case
  * branches.
  */
@@ -1828,10 +1892,15 @@ function readSections(options: AssembleOptions, ctx: AssembleContext): ReadSecti
   const authoredNodesCursor = options.nodesCursor;
   const outputsRange = options.outputsRange ?? outputsCursor?.range ?? null;
 
+  // First: whether a `call:` names a tool turns on the flow's memory inputs.
+  const params = readFlowParameters(options, ctx);
+  const memories = new Set([...params.types].filter(([, typ]) => isMemoryType(typ)).map(([name]) => name));
+  const callsTool = callsToolRule(scope, memories, diagnostics);
+
   // Inline-body extraction masks child-only fields for descriptor parsing. Assertion provenance
   // still belongs to the unmodified authored occurrence tree.
   const [nodesCursor, inlineBodies] = locateSourceAccess(diagnostics, () =>
-    extractInlineBodies(authoredNodesCursor, { owner }),
+    extractInlineBodies(authoredNodesCursor, { owner, callsTool }),
   );
 
   rejectIncludeIn(assertsCursor, "asserts", "assertions", diagnostics);
@@ -1840,8 +1909,6 @@ function readSections(options: AssembleOptions, ctx: AssembleContext): ReadSecti
   const flowAssertionOriginAt = (index: number): OriginRef | null =>
     registerAssertionOrigin(flowAssertionCursors[index]!, [...owner, "assert", index], catalogBuilder, diagnostics);
 
-  const params = readFlowParameters(options, ctx);
-
   /** Lower one tagged `nodes:` entry after checking its nesting. */
   const readValue = (nodeId: string, cursor: SourceCursor): ValueEntryDescriptor => {
     // First: the tag read walks the value recursively.
@@ -1849,7 +1916,7 @@ function readSections(options: AssembleOptions, ctx: AssembleContext): ReadSecti
     return readValueEntry(nodeId, cursor, { registry, owner, catalogBuilder, diagnostics });
   };
 
-  const parsed = parseNodes(nodesCursor, { readValue });
+  const parsed = parseNodes(nodesCursor, { readValue, callsTool });
   // Value entries have no node body, so every pass below that re-reads a node's body from
   // `nodesCursor` skips them or reads the entry itself.
   const valueEntries: ReadonlySet<string> = new Set(

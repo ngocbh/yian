@@ -75,7 +75,7 @@ cases:
 `;
 
 test("a compact flow rejects a non-leaf kind", () => {
-  // case/call/map/loop reference other nodes a one-node flow has none of.
+  // case/map/loop reference other nodes a one-node flow has none of.
   const error = loadError(() => parseFile(COMPACT_NON_LEAF));
 
   expect(error.message).toContain("not allowed inline");
@@ -86,8 +86,8 @@ test("a compact loop is refused with the other non-leaf kinds", () => {
   const error = loadError(() => parseFile("id: f\nname: f\nkind: loop\ntimes: 2\ncall: body\n"));
 
   expect(error.message).toBe(
-    "compact (single-node) flow: kind 'loop' is not allowed inline (allowed: agent, code, tool); " +
-      "case/call/map/loop reference other nodes a one-node flow has none of — write a full `nodes:` map instead",
+    "compact (single-node) flow: kind 'loop' is not allowed inline (allowed: agent, call, code, tool); " +
+      "case/map/loop reference other nodes a one-node flow has none of — write a full `nodes:` map instead",
   );
 });
 

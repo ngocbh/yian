@@ -9,7 +9,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'compact (single-node) flow: `kind:` must be text, but it is empty; write one of agent, code, tool'
+      message: 'compact (single-node) flow: `kind:` must be text, but it is empty; write one of agent, call, code, tool'
       frames:
       - label: flow.yaml
         range: [4, 7, 4, 11]

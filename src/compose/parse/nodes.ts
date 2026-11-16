@@ -11,7 +11,9 @@
  * Only the generic, kind-independent pre-checks live here (node id shape and reserved ids, entry
  * classification, the `input:`/`output:` to plural back-map, `kind:` resolution); each kind's own
  * `parse` owns its field legality and its descriptor-local `SourceRange` recording (each field
- * keyed `siteKey("field", name)`). Two kind-blind enrichments run after every kind parse: each
+ * keyed `siteKey("field", name)`). A `kind: call` body whose `call:` names a tool, by the caller's
+ * `callsTool` rule, parses as a TOOL body with `call:` read as `tool_id:`; one naming a flow refuses
+ * the fields only a tool call takes. Two kind-blind enrichments run after every kind parse: each
  * `input:` binding's own range is stamped into the descriptor's `fieldRanges` under
  * `siteKey("input", name)`, and each `asserts:` item range is appended positionally to its
  * `assertRanges`. This metadata stays inside Compose; `_finish` copies node and field locations
@@ -45,7 +47,9 @@ import { oneLineText } from "../helpers/source.ts";
 import { QUOTED_STYLES, suggestTag, yamlQuoted } from "../helpers/tags.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import { type NodeDescriptor, notTextError, rejectInfinityName, siteKey } from "../nodes/base.ts";
-import { KINDS, REMOVED_KINDS } from "../nodes/index.ts";
+import type { CallsTool } from "../nodes/call.ts";
+import { type DescriptorClass, KINDS, REMOVED_KINDS } from "../nodes/index.ts";
+import { ToolDescriptor } from "../nodes/tool.ts";
 import type { ScalarStyle } from "../source/common.ts";
 import {
   parseYamlLiteral,
@@ -60,6 +64,9 @@ const INPUT_OUTPUT_REMAP: ReadonlyMap<string, string> = new Map([
   ["input", "inputs"],
   ["output", "outputs"],
 ]);
+
+// A `call` node naming a tool is read as a TOOL node, whose tool is in `tool_id:`.
+const CALL_AS_TOOL: ReadonlyMap<string, string> = new Map([["call", "tool_id"]]);
 
 // Explicit ASCII classes, matching the expression `NAME` terminal: `${...}` can't reference a
 // non-ASCII letter (`café`).
@@ -137,16 +144,18 @@ export type ValueReader = (nodeId: string, cursor: SourceCursor) => NodeDescript
  * @param nodesCursor Cursor over the `nodes:` mapping; a non-mapping value parses to no nodes.
  * @param options.readValue Reads one tagged entry into its descriptor; may be omitted only for a
  *   mapping with no tagged entry.
+ * @param options.callsTool Says whether a `call` node's `call:` names a tool; without it every
+ *   `call` node names a flow.
  * @returns The descriptors keyed by entry id, in source order, each anchored on its entry's key
  *   line whenever an authored source exists.
  * @throws LoadError at the entry for a bad or reserved id, an untagged entry that is not a node
  *   body, or a node body that fails its kind's parse; at the `kind:` value for a non-text or
- *   unknown kind.
+ *   unknown kind; as `callsTool` throws.
  * @throws TypeError when a tagged entry is found and `readValue` is absent.
  */
 export function parseNodes(
   nodesCursor: SourceCursor,
-  options: { readValue?: ValueReader } = {},
+  options: { readValue?: ValueReader; callsTool?: CallsTool } = {},
 ): Map<string, NodeDescriptor> {
   const diagnostics = LoadDiagnostics.fromCursor(nodesCursor);
   const out = new Map<string, NodeDescriptor>();
@@ -154,7 +163,7 @@ export function parseNodes(
     const nodes = nodesCursor._valueView();
     if (!isRecord(nodes)) return out;
     for (const nodeId of Object.keys(nodes)) {
-      let desc = parseNode(nodeId, nodesCursor.child(nodeId), options.readValue);
+      let desc = parseNode(nodeId, nodesCursor.child(nodeId), options);
       // Anchor the node-level range on the node's key, not its body: the anchor a cycle, an
       // unresolved ref, or a namespaced runtime failure boxes.
       const header = nodesCursor.keyRangeOf(nodeId);
@@ -175,8 +184,9 @@ export function parseNodes(
 function parseNode(
   nodeId: string,
   cursor: SourceCursor,
-  readValue: ValueReader | undefined,
+  options: { readValue?: ValueReader; callsTool?: CallsTool },
 ): NodeDescriptor {
+  const { readValue, callsTool } = options;
   const diagnostics = LoadDiagnostics.fromCursor(cursor);
   rejectReservedNodeId(nodeId, cursor);
   // A tag makes the entry a value even when its mapping has a `kind:` key.
@@ -217,7 +227,10 @@ function parseNode(
       { range: normalized.rangeOf("kind") },
     );
   }
-  const desc = cls.parse(nodeId, normalized);
+  const desc =
+    kind === "call" && callsTool !== undefined
+      ? parseCallBody(nodeId, cls, normalized, callsTool, diagnostics)
+      : cls.parse(nodeId, normalized);
   // Compose-only enrichments, read from the normalized cursor (`input:` is `inputs` there):
   // each `input:` binding's own range, keyed apart from a like-named field, and each `asserts:`
   // item's range by position, since two identical asserts still need distinct carets. Both
@@ -234,7 +247,7 @@ function parseNode(
     }
   }
   desc.assertRanges.push(...normalized.itemRangeList("asserts"));
-  const localNames = cls.inputsAreLocals ? Object.keys(desc.inputs) : [];
+  const localNames = (desc.constructor as DescriptorClass).inputsAreLocals ? Object.keys(desc.inputs) : [];
   if (localNames.length > 0) {
     const inputs = normalized.child("inputs");
     for (const name of localNames) {
@@ -244,6 +257,40 @@ function parseNode(
     }
   }
   return desc;
+}
+
+/**
+ * Parse a `kind: call` body: as a TOOL body, its `call:` read as `tool_id:`, when `callsTool` says
+ * its `call:` names a tool; else with `cls`, refusing `retries:` and `adaptive_questions:`, which
+ * only a tool call takes. A body that also writes `tool_id:` is left to `cls`, which refuses it.
+ *
+ * @throws LoadError at the field for `retries:` or `adaptive_questions:` on a flow call, or as
+ *   `callsTool` and the class's `parse` throw.
+ */
+function parseCallBody(
+  nodeId: string,
+  cls: DescriptorClass,
+  normalized: SourceCursor,
+  callsTool: CallsTool,
+  diagnostics: LoadDiagnostics,
+): NodeDescriptor {
+  if (!normalized.has("call") || normalized.has("tool_id")) return cls.parse(nodeId, normalized);
+  if (callsTool(nodeId, normalized.get("call"), normalized.rangeOf("call"))) {
+    return ToolDescriptor.parse(nodeId, normalized.renamed(CALL_AS_TOOL));
+  }
+  const subject = `node ${reprText(nodeId)} (kind=call)`;
+  if (normalized.has("retries")) {
+    throw diagnostics.error(
+      `${subject}: \`retries:\` doesn't apply to a flow call: a flow retries inside its own nodes`,
+      { range: normalized.rangeOf("retries") },
+    );
+  }
+  if (normalized.has("adaptive_questions")) {
+    throw diagnostics.error(`${subject}: \`adaptive_questions:\` applies only to \`call: ask\``, {
+      range: normalized.keyRangeOf("adaptive_questions"),
+    });
+  }
+  return cls.parse(nodeId, normalized);
 }
 
 /** The registered kind names, sorted and comma-joined, for a bad-kind message. */

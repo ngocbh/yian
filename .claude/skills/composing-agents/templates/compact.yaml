@@ -7,8 +7,8 @@
 # own name, so the prompt reads it bare; the flow `output:` is the node's output
 # TYPE, re-exported as the flow output.
 #
-# Allowed only for the LEAF kinds: agent, code, tool. case, call, map and loop
-# need the full `nodes:` form (see minimal.yaml).
+# Allowed only for agent, code, tool and call (whose `call:` then names a tool).
+# case, map and loop need the full `nodes:` form (see minimal.yaml).
 
 id: greet
 name: greet

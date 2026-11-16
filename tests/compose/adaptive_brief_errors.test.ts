@@ -24,8 +24,8 @@ name: f
 input: {proj: !str }
 nodes:
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       proj: \${input.proj}
 ${gatePrompt}    adaptive_questions:
@@ -90,8 +90,8 @@ name: f
 input: {proj: !str }
 nodes:
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       proj: \${input.proj}
       prompt: &p "Q \${nope}"
@@ -110,8 +110,8 @@ test("a compact flow's brief error names the flow node", () => {
 id: f
 name: f
 input: {proj: !str }
-kind: tool
-tool_id: ask
+kind: call
+call: ask
 adaptive_questions:
   prompt: "Q \${nope}"
 `);
@@ -134,8 +134,8 @@ defs:
       topic: !str
     nodes:
       ask:
-        kind: tool
-        tool_id: ask
+        kind: call
+        call: ask
         input:
           topic: \${input.topic}
         adaptive_questions:

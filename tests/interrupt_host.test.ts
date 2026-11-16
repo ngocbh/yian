@@ -60,8 +60,8 @@ ${steerInbox ? "    steer_inbox: \${input.m}\n" : ""}${output === null ? "" : ` 
 
 /** A take from `m`, so a flow whose agent reads no steer inbox still reads its inbox. */
 const HEARD = `  heard:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     input:
       from: \${input.m}
       take: all
@@ -269,8 +269,8 @@ input:
   m: !Inbox(str)
 nodes:
   heard:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     input:
       from: \${input.m}
       take: one
@@ -287,13 +287,13 @@ ${gate}
 output: \${reply.output}
 `;
 
-const ASK_GATE = `    kind: tool
-    tool_id: ask
+const ASK_GATE = `    kind: call
+    call: ask
     input:
       prompt: approve?`;
 
-const SLEEP_GATE = `    kind: tool
-    tool_id: sleep
+const SLEEP_GATE = `    kind: call
+    call: sleep
     input:
       for: 60s`;
 
@@ -427,8 +427,8 @@ input:
   m: !Inbox(str)
 nodes:
   heard:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     input:
       from: \${input.m}
       take: one
@@ -440,8 +440,8 @@ nodes:
       got: \${heard.output.events}
     output: !Optional(str)
   approve:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: 'approve? \${reply1.output :- "-"}'
   reply2:
@@ -596,8 +596,8 @@ test("a host call re-pended after a replay stays open; an interrupt closes it", 
 
 test("offline Esc on a crashed run with a take waiting and a node in flight is recorded", async () => {
   // `gate`, a host tool beside the take, was mid-call when the run crashed.
-  const text = gateFlow(`    kind: tool
-    tool_id: lookup`);
+  const text = gateFlow(`    kind: call
+    call: lookup`);
   const flow = await loadFlow(text);
   const lookup = tool({ name: "lookup", description: "Look up.", parameters: { type: "object", properties: {} }, execute: () => "found" });
   const whole = freshLog();
@@ -630,11 +630,11 @@ nodes:
     steer_inbox: \${input.m}
     output: !Optional(str)
   gate:
-    kind: tool
-    tool_id: open
+    kind: call
+    call: open
   heard:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     depends_on: [gate]
     input:
       from: \${input.m}

@@ -4,8 +4,8 @@ flow: |
   name: f
   nodes:
     a:
-      kind: tool
-      tool_id: '5'
+      kind: call
+      call: '5'
       input: {symbol: x}
   output: ${a.output}
 expect:

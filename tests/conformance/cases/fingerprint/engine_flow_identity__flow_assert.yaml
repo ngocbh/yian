@@ -9,8 +9,8 @@ flow: |
     - input.x > 0
   nodes:
     body:
-      kind: tool
-      tool_id: body
+      kind: call
+      call: body
       output: !int
   output: ${body.output}
 other: |
@@ -22,8 +22,8 @@ other: |
     - input.x > 1
   nodes:
     body:
-      kind: tool
-      tool_id: body
+      kind: call
+      call: body
       output: !int
   output: ${body.output}
 expect:

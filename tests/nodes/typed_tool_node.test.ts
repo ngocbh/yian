@@ -99,8 +99,8 @@ id: count
 name: count
 nodes:
   place:
-    kind: tool
-    tool_id: place_order
+    kind: call
+    call: place_order
     input:
       qty: 5
     output: !int
@@ -133,8 +133,8 @@ id: count
 name: count
 input:
   qty: !int
-kind: tool
-tool_id: place_order
+kind: call
+call: place_order
 output: !int
 `;
 
@@ -161,8 +161,8 @@ typedefs:
   OrderResult: Union(Filled, Interrupted)
 nodes:
   place:
-    kind: tool
-    tool_id: place_order
+    kind: call
+    call: place_order
     input:
       qty: 5
     output: !OrderResult
@@ -260,8 +260,8 @@ id: placing
 name: placing
 nodes:
   place:
-    kind: tool
-    tool_id: place_order
+    kind: call
+    call: place_order
     input:
 ${inputBlock}
 output: \${place.output}
@@ -294,8 +294,8 @@ nodes:
     code: 'return "ok"'
     output: !str
   place:
-    kind: tool
-    tool_id: place_order
+    kind: call
+    call: place_order
     input:
       qtty: 5
       sym: X
@@ -309,8 +309,8 @@ defs:
   inner:
     nodes:
       place:
-        kind: tool
-        tool_id: place_order
+        kind: call
+        call: place_order
         input:
           qtty: 5
           sym: X
@@ -333,8 +333,8 @@ nodes:
       x: \${item}
     nodes:
       place:
-        kind: tool
-        tool_id: place_order
+        kind: call
+        call: place_order
         input:
           qtty: \${input.x}
           sym: X
@@ -352,8 +352,8 @@ defs:
       last: !str
     nodes:
       place:
-        kind: tool
-        tool_id: place_order
+        kind: call
+        call: place_order
         input:
           qtty: \${input.count}
           sym: X
@@ -394,7 +394,7 @@ for (const [name, source, nodePath] of [
  * It also renames the `qtty` input to `qty`, so each case has only one fault: the unknown tool id.
  */
 const misspelled = (source: string) =>
-  source.replace("tool_id: place_order", "tool_id: place_ordr").replaceAll("qtty", "qty");
+  source.replace("call: place_order", "call: place_ordr").replaceAll("qtty", "qty");
 
 const INLINE_CALL_FLOW = `
 id: inline_call
@@ -406,8 +406,8 @@ nodes:
       n: 5
     nodes:
       place:
-        kind: tool
-        tool_id: place_order
+        kind: call
+        call: place_order
         input:
           qty: \${input.n}
           sym: X
@@ -429,8 +429,8 @@ nodes:
     max: 3
     nodes:
       place:
-        kind: tool
-        tool_id: place_order
+        kind: call
+        call: place_order
         input:
           qty: \${input.count}
           sym: X
@@ -497,8 +497,8 @@ id: asking
 name: asking
 nodes:
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: Proceed?
 output: \${ask.output}
@@ -599,8 +599,8 @@ ${options.flowInputs ?? ""}
 nodes:
 ${options.extraNodes ?? ""}
   place:
-    kind: tool
-    tool_id: place_order
+    kind: call
+    call: place_order
     input:
       qty: ${binding}
 output: \${place.output}
@@ -687,8 +687,8 @@ input:
   order: !Order
 nodes:
   place:
-    kind: tool
-    tool_id: place_order
+    kind: call
+    call: place_order
     input:
       order: \${input.order}
 output: \${place.output}
@@ -726,8 +726,8 @@ input:
   s: !str
 nodes:
   place:
-    kind: tool
-    tool_id: place_order
+    kind: call
+    call: place_order
     input:
       qty: 1
       note: ${binding}
@@ -797,8 +797,8 @@ typedefs:
   Short: {n: int(..-1)}
 nodes:
   place:
-    kind: tool
-    tool_id: place_order
+    kind: call
+    call: place_order
     input:
       qty: 5
     output: !Short
@@ -879,8 +879,8 @@ id: placing
 name: placing
 nodes:
   place:
-    kind: tool
-    tool_id: place_order
+    kind: call
+    call: place_order
     input:
       qty: 5
     output: {qty: !int}
@@ -894,8 +894,8 @@ typedefs:
   Quote: {price: float, venue: str}
 nodes:
   quote:
-    kind: tool
-    tool_id: place_order
+    kind: call
+    call: place_order
     input:
       qty: 5
     output: !Quote
@@ -963,11 +963,11 @@ id: two_step
 name: two_step
 nodes:
   first:
-    kind: tool
-    tool_id: first_step
+    kind: call
+    call: first_step
   place:
-    kind: tool
-    tool_id: place_order
+    kind: call
+    call: place_order
     depends_on: [first]
     input:
       qty: 5

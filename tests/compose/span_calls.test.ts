@@ -75,7 +75,7 @@ id: f
 name: f
 input: {v: !str }
 nodes:
-  t: {kind: tool, tool_id: echo, input: {n: '<n>'}, output: !str}
+  t: {kind: call, call: echo, input: {n: '<n>'}, output: !str}
 output: \${t.output}
 `;
 
@@ -150,8 +150,8 @@ name: f
 input: {d: !str }
 nodes:
   w:
-    kind: tool
-    tool_id: sleep
+    kind: call
+    call: sleep
     input:
       until: '<until>'
 output: ok
@@ -198,8 +198,8 @@ name: f
 input: {v: !str }
 nodes:
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: '<prompt>'
       questions:
@@ -217,8 +217,8 @@ name: f
 input: {v: !str }
 nodes:
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       t: \${input.v}
     adaptive_questions:

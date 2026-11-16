@@ -8,8 +8,8 @@ flow: |
     plan: !str
   nodes:
     approval:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       node_name: Plan approval
       input:
         prompt: "Approve ${input.plan}?"

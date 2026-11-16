@@ -12,8 +12,8 @@ flow: |
       price: float
   nodes:
     body:
-      kind: tool
-      tool_id: body
+      kind: call
+      call: body
       output: !Union(Buy;Sell)
   output: ${body.output}
 other: |
@@ -28,8 +28,8 @@ other: |
       price: float
   nodes:
     body:
-      kind: tool
-      tool_id: body
+      kind: call
+      call: body
       output: !Union(Sell;Buy)
   output: ${body.output}
 expect:

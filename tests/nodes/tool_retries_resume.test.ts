@@ -56,7 +56,7 @@ const freshLog = () => join(dir, `run-${++logs}.jsonl`);
 
 /** Load a one-TOOL flow calling `x` with `retries:`. */
 const flowOf = (retries: number) =>
-  loadFlow(`id: t\nname: t\nnodes:\n  call:\n    kind: tool\n    tool_id: x\n    retries: ${retries}\noutput: \${call.output}\n`);
+  loadFlow(`id: t\nname: t\nnodes:\n  call:\n    kind: call\n    call: x\n    retries: ${retries}\noutput: \${call.output}\n`);
 
 /** What a tool's context showed for one call. */
 interface Seen {
@@ -375,8 +375,8 @@ defs:
       n: !int
     nodes:
       place:
-        kind: tool
-        tool_id: x
+        kind: call
+        call: x
         retries: 3
         input: {n: "\${input.n}"}
     output: \${place.output}
@@ -536,8 +536,8 @@ defs:
       count: !int
     nodes:
       place:
-        kind: tool
-        tool_id: x
+        kind: call
+        call: x
         retries: 1
         input: {n: "\${input.count}"}
     output:
@@ -604,8 +604,8 @@ const OLD_TOOL_FLOW = `id: old_tool_crash
 name: old_tool_crash
 nodes:
   place:
-    kind: tool
-    tool_id: place
+    kind: call
+    call: place
     input: {symbol: "ACME"}
 output: \${place.output}
 `;
@@ -618,8 +618,8 @@ defs:
       count: !int
     nodes:
       place:
-        kind: tool
-        tool_id: place
+        kind: call
+        call: place
         input: {n: "\${input.count}"}
     output:
       count: \${input.count + 1}

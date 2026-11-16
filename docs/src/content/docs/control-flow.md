@@ -404,7 +404,7 @@ call node 'price': library 'billing' has no def 'quot'; did you mean 'quote'?
 ### Call a tool
 
 On a `call` node, `call:` may name a tool: a built-in, a module's or memory's tool, or any name
-the file doesn't define. The node calls it once, as a [`tool` node](/code-and-tools/#tool-nodes)
+the file doesn't define. The node calls it once, as a [TOOL node](/code-and-tools/#tool-nodes)
 does, with `input:` as its arguments:
 
 ```yaml

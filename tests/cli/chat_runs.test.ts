@@ -142,8 +142,8 @@ test(
 name: shout
 nodes:
   loud:
-    kind: tool
-    tool_id: shout
+    kind: call
+    call: shout
     input:
       text: hi
     output: !str
@@ -232,8 +232,8 @@ const NAP = `id: nap
 name: nap
 nodes:
   nap:
-    kind: tool
-    tool_id: sleep
+    kind: call
+    call: sleep
     input:
       for: "1m"
   done:
@@ -317,8 +317,8 @@ const ASK = `id: ask
 name: ask
 nodes:
   sure:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: "Proceed?"
     output: !str
@@ -338,8 +338,8 @@ defs:
       messages: !Inbox(str)
     nodes:
       heard:
-        kind: tool
-        tool_id: take
+        kind: call
+        call: take
         input:
           from: \${input.messages}
           take: all
@@ -571,7 +571,7 @@ test(
     expect(existsSync(join(root, "runs", `${CHAT}-r1`))).toBe(false);
     expect(() => children.status("r1")).toThrow(RangeError);
     // Refused by `runFlow` itself, after the key check.
-    const fake = "id: fake\nname: fake\nnodes:\n  f: {kind: tool, tool_id: fake}\noutput: ${f.output}\n";
+    const fake = "id: fake\nname: fake\nnodes:\n  f: {kind: call, call: fake}\noutput: ${f.output}\n";
     await expect(children.start(await flow(fake, "fake.yaml"), {})).rejects.toThrow("fake");
     expect(existsSync(join(root, "runs", `${CHAT}-r1`))).toBe(false);
     // The id goes to the next start that succeeds.
@@ -673,8 +673,8 @@ const NAP_THEN_BUSY = `id: nap_busy
 name: nap_busy
 nodes:
   nap:
-    kind: tool
-    tool_id: sleep
+    kind: call
+    call: sleep
     input:
       for: "1m"
 ${after("nap")}output: \${busy.output}
@@ -815,7 +815,7 @@ test(
   async () => {
     const statuses: ChildStatus[] = [];
     const children = childRuns({ onStatus: (status) => void statuses.push(status) });
-    const fake = "id: fake\nname: fake\nnodes:\n  f: {kind: tool, tool_id: fake}\noutput: ${f.output}\n";
+    const fake = "id: fake\nname: fake\nnodes:\n  f: {kind: call, call: fake}\noutput: ${f.output}\n";
     await expect(children.start(await flow(fake, "fake.yaml"), {})).rejects.toThrow("fake");
     expect(statuses).toEqual([]);
   },
@@ -868,8 +868,8 @@ input:
   lessons: !FileMemory
 nodes:
   add:
-    kind: tool
-    tool_id: {lessons: append}
+    kind: call
+    call: {lessons: append}
     input: {path: MEMORY.md, text: noted}
 output: \${add.output.path}
 `;
@@ -882,13 +882,13 @@ input:
   messages: !Inbox(str)
 nodes:
   heard:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     input:
       from: \${input.messages}
   add:
-    kind: tool
-    tool_id: {lessons: append}
+    kind: call
+    call: {lessons: append}
     depends_on: [heard]
     input: {path: MEMORY.md, text: heard}
 output: \${add.output.path}
@@ -1017,8 +1017,8 @@ describe("memory", () => {
       const key = join(home, ".yian", "memory", projectKey(root));
       mkdirSync(key, { mode: 0o500 });
       const cases =
-        "id: cases\nname: cases\ninput:\n  cases: !VectorDBMemory\nnodes:\n  add:\n    kind: tool\n" +
-        "    tool_id: {cases: add}\n    input: {text: x}\noutput: ${add.output.id}\n";
+        "id: cases\nname: cases\ninput:\n  cases: !VectorDBMemory\nnodes:\n  add:\n    kind: call\n" +
+        "    call: {cases: add}\n    input: {text: x}\noutput: ${add.output.id}\n";
       const env = (name: string) => (name === "YIAN_DEFAULT_EMBEDDING" ? "openai/m" : NO_ENV(name));
       const embed = async (texts: readonly string[]) => texts.map(() => Float32Array.of(1, 0));
       try {

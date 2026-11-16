@@ -7,8 +7,8 @@ flow: |
     token: "first-value"
   nodes:
     step:
-      kind: tool
-      tool_id: step
+      kind: call
+      call: step
   output: ${step.output}
 other: |
   id: literal-env
@@ -17,8 +17,8 @@ other: |
     token: "second-value"
   nodes:
     step:
-      kind: tool
-      tool_id: step
+      kind: call
+      call: step
   output: ${step.output}
 expect:
   fingerprint: different

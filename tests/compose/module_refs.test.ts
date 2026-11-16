@@ -128,9 +128,9 @@ test("an agent bakes each module alias it grants once, and its host grants leave
   expect(agent.grantedTools()).toEqual([{ kind: "name", name: "search" }]);
 });
 
-test("a tool node bakes the module its tool_id names", async () => {
+test("a tool node bakes the module its call: names", async () => {
   const flow = await load(
-    app(USES, ["g: {kind: tool, tool_id: {crm: lookup}}", "s: {kind: tool, tool_id: quote}", "h: {kind: tool, tool_id: x}"]),
+    app(USES, ["g: {kind: call, call: {crm: lookup}}", "s: {kind: call, call: quote}", "h: {kind: call, call: x}"]),
   );
   const tool = (id: string) => flow.compiled.nodes.get(id) as ToolNode;
 
@@ -155,7 +155,7 @@ test("a map naming a module alias alone names one of its tools", async () => {
   );
 });
 
-test.each(["tools: [crm]", "tool_id: {crm: lookup}"])("%s naming a memory input too is a load error", async (field) => {
+test.each(["tools: [crm]", "call: {crm: lookup}"])("%s naming a memory input too is a load error", async (field) => {
   const text = app(USES, [`a: {kind: ${KINDS[field.split(":")[0]!]}, ${field}}`], "input:\n  crm: !FileMemory\n");
   expect(await refusal(text)).toBe("node 'a': `crm` is both a memory input and a tool module; rename one");
 });
@@ -176,7 +176,7 @@ test("the fingerprint holds each module's ref, not where it resolved", async () 
     mkdirSync(join(tmp, dir));
     for (const file of ["crm.ts", "tools.ts"]) writeFileSync(join(tmp, dir, file), MODULE);
   }
-  const text = app({ crm: "./crm.ts" }, [AGENT, "t: {kind: tool, tool_id: {crm: lookup}}"]);
+  const text = app({ crm: "./crm.ts" }, [AGENT, "t: {kind: call, call: {crm: lookup}}"]);
   const fingerprint = async (flow: string, dir: string) =>
     flowFingerprint((await load(flow, { searchPaths: [join(tmp, dir)] })).compiled);
 

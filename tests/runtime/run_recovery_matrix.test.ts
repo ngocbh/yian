@@ -173,8 +173,8 @@ defs:
       token: !str
     nodes:
       ask:
-        kind: tool
-        tool_id: ask
+        kind: call
+        call: ask
         input:
           prompt: nested call input
         output: !str
@@ -341,8 +341,8 @@ id: recovery-human
 name: recovery_human
 nodes:
   effect:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: this host interaction must never be invoked
     output: !str
@@ -353,8 +353,8 @@ id: recovery-wait
 name: recovery_wait
 nodes:
   effect:
-    kind: tool
-    tool_id: sleep
+    kind: call
+    call: sleep
     input:
       until: '${WAIT_DEADLINE}'
 output: \${effect.output}
@@ -371,8 +371,8 @@ nodes:
     output: !str
     code: ./compose_codefns.ts:echo_x
   wait:
-    kind: tool
-    tool_id: sleep
+    kind: call
+    call: sleep
     depends_on: [release]
     input:
       until: '${WAIT_DEADLINE}'
@@ -382,8 +382,8 @@ nodes:
     prompt: never invoked
     llm_config: {provider: openai, model: offline-test}
   human:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     depends_on: [release]
     input:
       prompt: never invoked

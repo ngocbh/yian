@@ -9,8 +9,8 @@ flow: |
         x: !object
       nodes:
         up:
-          kind: tool
-          tool_id: up
+          kind: call
+          call: up
           input:
             x: ${input.x}
           output: !str
@@ -32,8 +32,8 @@ other: |
         x: !object
       nodes:
         up:
-          kind: tool
-          tool_id: up
+          kind: call
+          call: up
           input:
             x: ${input.x}
           output: !str

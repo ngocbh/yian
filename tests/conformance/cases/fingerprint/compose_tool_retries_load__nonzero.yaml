@@ -5,16 +5,16 @@ flow: |
   name: retries
   nodes:
     place:
-      kind: tool
-      tool_id: place
+      kind: call
+      call: place
   output: ${place.output}
 other: |
   id: retries
   name: retries
   nodes:
     place:
-      kind: tool
-      tool_id: place
+      kind: call
+      call: place
       retries: 1
   output: ${place.output}
 expect:

@@ -11,8 +11,8 @@ flow: |
         password: !Optional(str) null
       nodes:
         run:
-          kind: tool
-          tool_id: run
+          kind: call
+          call: run
           output: !str
       output: ${run.output}
   nodes:
@@ -34,8 +34,8 @@ other: |
         password: !Optional(str) null
       nodes:
         run:
-          kind: tool
-          tool_id: run
+          kind: call
+          call: run
           output: !str
       output: ${run.output}
   nodes:

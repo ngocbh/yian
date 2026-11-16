@@ -34,8 +34,8 @@ files:
     name: child
     nodes:
       worker:
-        kind: tool
-        tool_id: worker
+        kind: call
+        call: worker
         output: !int
     output: ${worker.output}
   twin.yaml: |
@@ -43,8 +43,8 @@ files:
     name: child
     nodes:
       worker:
-        kind: tool
-        tool_id: worker
+        kind: call
+        call: worker
         output: !int
     output: ${worker.output}
 expect:

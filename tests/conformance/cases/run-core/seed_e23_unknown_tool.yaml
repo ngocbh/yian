@@ -10,8 +10,8 @@ flow: |
     topic: !str
   nodes:
     fetch:
-      kind: tool
-      tool_id: nonesuch_tool       # ERROR at run start: no such tool
+      kind: call
+      call: nonesuch_tool          # ERROR at run start: no such tool
       input:
         topic: ${input.topic}
   output: ${fetch.output}

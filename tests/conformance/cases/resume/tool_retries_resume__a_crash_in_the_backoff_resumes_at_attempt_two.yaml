@@ -11,8 +11,8 @@ flow: |
   name: t
   nodes:
     call:
-      kind: tool
-      tool_id: x
+      kind: call
+      call: x
       retries: 3
   output: ${call.output}
 env:

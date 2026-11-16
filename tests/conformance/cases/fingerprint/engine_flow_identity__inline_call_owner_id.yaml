@@ -8,8 +8,8 @@ flow: |
       kind: call
       nodes:
         step:
-          kind: tool
-          tool_id: step
+          kind: call
+          call: step
           output: !int
       output: ${step.output}
   output: ${wrapper.output}
@@ -21,8 +21,8 @@ other: |
       kind: call
       nodes:
         step:
-          kind: tool
-          tool_id: step
+          kind: call
+          call: step
           output: !int
       output: ${step.output}
   output: ${renamed.output}

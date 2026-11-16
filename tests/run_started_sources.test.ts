@@ -70,7 +70,7 @@ const caller = (id: string, alias: string, ref: string, extra = "") =>
 /** A flow `id` taking `q` that runs the tool `lookup` on it. */
 const leaf = (id: string) =>
   `id: ${id}\nname: ${id}\ninput:\n  q: !str\n` +
-  `nodes:\n  fetch:\n    kind: tool\n    tool_id: lookup\n    input:\n      q: \${input.q}\noutput: \${fetch.output}\n`;
+  `nodes:\n  fetch:\n    kind: call\n    call: lookup\n    input:\n      q: \${input.q}\noutput: \${fetch.output}\n`;
 
 /** A flow `id` with no input whose output is its id. */
 const leafOut = (id: string) => `id: ${id}\nname: ${id}\nnodes: {}\noutput: ${id}\n`;

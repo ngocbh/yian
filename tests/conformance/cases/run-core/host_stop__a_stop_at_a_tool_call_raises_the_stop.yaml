@@ -6,8 +6,8 @@ flow: |
   name: fetch_once
   nodes:
     fetch:
-      kind: tool
-      tool_id: lookup
+      kind: call
+      call: lookup
   output: ${fetch.output}
 run: {run_id: r1, num_workers: 0}
 host:

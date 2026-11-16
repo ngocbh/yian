@@ -17,8 +17,8 @@ flow: |
           then: ask
       else: done
     ask:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       input:
         prompt: "Pick one"
         ctx: ${input.go}

@@ -168,8 +168,8 @@ ${input}defs:
       messages: !Inbox(str)
 ${input.replace(/^ {2}/gm, "      ")}    nodes:
       heard:
-        kind: tool
-        tool_id: take
+        kind: call
+        call: take
         input:
           from: \${input.messages}
           take: all
@@ -212,8 +212,8 @@ input:
   messages: !Inbox(str)
 nodes:
   heard:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     input:
       from: \${input.messages}
   question:
@@ -224,8 +224,8 @@ nodes:
     code: |
       return "Sure about " + inputs["events"].join(" ") + "?";
   sure:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: \${question.output}
     output: !str
@@ -249,8 +249,8 @@ const NAP_NODES = `      delay:
         code: |
           return "60s";
       nap:
-        kind: tool
-        tool_id: sleep
+        kind: call
+        call: sleep
         input:
           for: \${delay.output}
 `;
@@ -300,13 +300,13 @@ input:
   lessons: !FileMemory
 nodes:
   heard:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     input:
       from: \${input.messages}
   add:
-    kind: tool
-    tool_id: {lessons: append}
+    kind: call
+    call: {lessons: append}
     depends_on: [heard]
     input: {path: MEMORY.md, text: kept}
 output: \${add.output.path}
@@ -331,7 +331,7 @@ output: \${add.output.path}
       const home = join(tmp, "home");
       const flow = flowFile(
         "id: keep\nname: keep\ninput:\n  messages: !Inbox(str)\n  lessons: !FileMemory\nnodes:\n  heard:\n" +
-          "    kind: tool\n    tool_id: take\n    input:\n      from: ${input.messages}\noutput: done\n",
+          "    kind: call\n    call: take\n    input:\n      from: ${input.messages}\noutput: done\n",
       );
       const location = defaultLocation(home, defaultIdentity(realpathSync(tmp), "keep", "lessons"), "FileMemory");
       mkdirSync(join(location, ".yian", "tmp"), { recursive: true });
@@ -813,8 +813,8 @@ describe("yian chat's failures under --engine-trace", () => {
 
 /** A turn whose reply is the host tool `hold`, which waits until the test releases it. */
 const HOLD = turnFlow(`      reply:
-        kind: tool
-        tool_id: hold
+        kind: call
+        call: hold
         input:
           events: \${heard.output.events}
         output: !str
@@ -832,8 +832,8 @@ const HOLD_IN_TURN = HOLD.replace(
 /** `HOLD_IN_TURN` with a 60 s sleep before the reply. */
 const NAP_HOLD = turnFlow(
   `      reply:
-        kind: tool
-        tool_id: hold
+        kind: call
+        call: hold
         input:
           events: \${heard.output.events}
           napped: \${nap.output}
@@ -902,8 +902,8 @@ test(
 const HOLD_THEN_NAP = turnFlow(NAP_REPLY, {
   nodes:
     `      held:
-        kind: tool
-        tool_id: hold
+        kind: call
+        call: hold
         input:
           events: \${heard.output.events}
         output: !str
@@ -965,7 +965,7 @@ describe("the chat's inbox and inputs", () => {
     const names = Object.keys(inboxes);
     const input = names.map((name) => `  ${name}: !Inbox(${inboxes[name]})\n`).join("");
     const takes = names
-      .map((name) => `  take_${name}:\n    kind: tool\n    tool_id: take\n    input:\n      from: \${input.${name}}\n`)
+      .map((name) => `  take_${name}:\n    kind: call\n    call: take\n    input:\n      from: \${input.${name}}\n`)
       .join("");
     const node = "  n:\n    kind: code\n    output: !str\n    code: return \"x\";\n";
     return `id: f\nname: f\n${input ? `input:\n${input}` : ""}nodes:\n${node}${takes}output: \${n.output}\n`;
@@ -1103,7 +1103,7 @@ describe("runOrChat", () => {
   const TWO_INBOXES = ECHO.replace("  messages: !Inbox(str)\n", "  messages: !Inbox(str)\n  other: !Inbox(str)\n")
     .replace(
       "nodes:\n  chat:",
-      "nodes:\n  other:\n    kind: tool\n    tool_id: take\n    input:\n      from: \${input.other}\n  chat:",
+      "nodes:\n  other:\n    kind: call\n    call: take\n    input:\n      from: \${input.other}\n  chat:",
     );
 
   test(
@@ -1210,7 +1210,7 @@ describe("runOrChat", () => {
   test(
     "a flow that needs MCP tools goes to run, which reads the MCP config",
     async () => {
-      const tool = "  fetch:\n    kind: tool\n    tool_id: fake\n";
+      const tool = "  fetch:\n    kind: call\n    call: fake\n";
       const flow = flowFile(ECHO.replace("nodes:\n  chat:", `nodes:\n${tool}  chat:`), "mcp.yaml");
       const result = await runOn(flow, { typed: BYE });
       expect(result.code).toBe(1);
@@ -1896,8 +1896,8 @@ defs:
       messages: !Inbox(str)
     nodes:
       heard:
-        kind: tool
-        tool_id: take
+        kind: call
+        call: take
         input:
           from: \${input.messages}
           take: all
@@ -2004,14 +2004,14 @@ defs:
       messages: !Inbox(${element})
     nodes:
       heard:
-        kind: tool
-        tool_id: take
+        kind: call
+        call: take
         input:
           from: \${input.messages}
           take: all
       reply:
-        kind: tool
-        tool_id: sender
+        kind: call
+        call: sender
         input:
           events: \${heard.output.events}
         output: !str
@@ -2507,13 +2507,13 @@ input:
   other: !Inbox(str)
 nodes:
   heard:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     input:
       from: \${input.messages}
   side:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     input:
       from: \${input.other}
   reply:

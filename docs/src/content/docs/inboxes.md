@@ -4,9 +4,9 @@ description: "Wait for messages, time or people: take, sleep, ask, and durable s
 ---
 
 This page explains how a flow waits for messages, time or people. Three built-in tools wait, each
-in a `kind: tool` node:
+called from a `kind: call` node:
 
-| `tool_id` | Waits for | Output |
+| `call` | Waits for | Output |
 |---|---|---|
 | `take` | messages sent to an inbox input | `{events: list(T), closed: bool}` |
 | `sleep` | a time | `null` |
@@ -35,8 +35,8 @@ nodes:
     while: not closed
     nodes:
       heard:
-        kind: tool
-        tool_id: take
+        kind: call
+        call: take
         input:
           from: ${input.notes}
           take: all
@@ -71,8 +71,8 @@ A `take` reads messages from an inbox:
 
 ```yaml check=fragment
 heard:
-  kind: tool
-  tool_id: take
+  kind: call
+  call: take
   input:
     from: ${input.notes}        # required: an inbox input
     take: all                   # one (the default) or all
@@ -101,8 +101,8 @@ A `sleep` waits until a time. Give exactly one of `until:` and `for:`:
 
 ```yaml check=fragment
 cool_off:
-  kind: tool
-  tool_id: sleep
+  kind: call
+  call: sleep
   input:
     for: 1h                     # or until: 2026-05-21T09:00:00Z
 ```
@@ -124,8 +124,8 @@ typedefs:
   Trip: {city: str, nights: str}
 nodes:
   plan:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       questions:
         - question: Which city?
@@ -154,7 +154,7 @@ output: ${plan.output}
 - With a `timeout:`, an unanswered ask is `null` when `output:` is `Optional(...)`. Otherwise it
   fails with `tool.timeout`.
 - `asserts:` apply to the answer. `retries:` is a load error.
-- `tool_id: ask_user` is the same as `ask`.
+- `call: ask_user` is the same as `ask`.
 
 `yian run` asks at the terminal and waits for your answer there, so `timeout:` has no effect in
 it. A host's handler may hold the question instead; then the run waits until the host

@@ -113,8 +113,8 @@ input:
   n: !int
 nodes:
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: "v=\${10 ** input.n}"
     output: !str

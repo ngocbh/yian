@@ -170,8 +170,8 @@ input:
   topic: !str
 nodes:
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       topic: \${input.topic}
     adaptive_questions:
@@ -449,8 +449,8 @@ nodes:
     code: return "ok"
     output: !str
   ask_leaf:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: continue?
     output: !str

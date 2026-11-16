@@ -12,8 +12,8 @@ input:
   model: !str
 nodes:
   q:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       proj: \${input.proj}
     adaptive_questions:

@@ -9,7 +9,7 @@
  * Tool ids must be unique across everything registered into the process. `ToolSet` holds one
  * run's tools: this registry, or a host mapping that replaces it and may hold named tool groups.
  * The reserved names never live here. `take` and `sleep` are engine built-ins a TOOL node reaches
- * with `tool_id:`; `load_skill` is bound by granting skills; each run gets its ask handler, which
+ * with `call:`; `load_skill` is bound by granting skills; each run gets its ask handler, which
  * serves both the agent's `ask_user` tool and the TOOL built-in `ask`, through
  * `new ToolSet({ ask: handler, ... })`.
  *

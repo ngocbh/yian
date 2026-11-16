@@ -402,8 +402,8 @@ id: mcp_echo
 name: mcp_echo
 nodes:
   say:
-    kind: tool
-    tool_id: echo
+    kind: call
+    call: echo
     input:
       text: hi
 output: \${say.output}

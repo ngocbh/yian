@@ -5,16 +5,16 @@ flow: |
   name: human
   nodes:
     first:
-      kind: tool
-      tool_id: src
+      kind: call
+      call: src
       output: !list(object)
     second:
-      kind: tool
-      tool_id: src
+      kind: call
+      call: src
       output: !list(object)
     node:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       input:
         questions: ${first.output}
   output: ${node.output}
@@ -23,16 +23,16 @@ other: |
   name: human
   nodes:
     first:
-      kind: tool
-      tool_id: src
+      kind: call
+      call: src
       output: !list(object)
     second:
-      kind: tool
-      tool_id: src
+      kind: call
+      call: src
       output: !list(object)
     node:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       input:
         questions: ${second.output}
   output: ${node.output}

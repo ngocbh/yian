@@ -12,9 +12,9 @@
  * backoff with jitter on its scheduler, and records each retried attempt's failure and start as
  * node steps in the run log, so a resumed run continues the attempt count.
  *
- * A memory's tool (`tool_id: {lessons: read}`) is looked up in the memory the node's flow binds to
+ * A memory's tool (`call: {lessons: read}`) is looked up in the memory the node's flow binds to
  * that input instead, and called on the run's session on it. A tool module's tool
- * (`tool_id: {crm: lookup}`, or a one-export alias) is looked up among the node's own stand-ins
+ * (`call: {crm: lookup}`, or a one-export alias) is looked up among the node's own stand-ins
  * for the tools the run's segment listed from that module.
  *
  * Knows about: nodes/base, nodes/binding, nodes/contracts, nodes/ids, nodes/tool/questions,

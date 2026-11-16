@@ -6,8 +6,8 @@ flow: |
   name: rate
   nodes:
     rate:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       input:
         prompt: "Rate the release"
       output: {rating: !float, note: !Optional(str)}

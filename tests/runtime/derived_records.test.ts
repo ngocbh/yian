@@ -64,7 +64,7 @@ defs:
   turn:
     input: {history: !list(Msg), log: !str}
     nodes:
-      ask: {kind: tool, tool_id: ask, input: {prompt: "You:"}, output: !str}
+      ask: {kind: call, call: ask, input: {prompt: "You:"}, output: !str}
       reply:
         kind: agent
         input: {history: "\${input.history}", message: "\${ask.output}"}

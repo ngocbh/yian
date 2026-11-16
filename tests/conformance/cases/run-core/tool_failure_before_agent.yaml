@@ -6,8 +6,8 @@ flow: |
     x: !str
   nodes:
     check:
-      kind: tool
-      tool_id: probe
+      kind: call
+      call: probe
       input:
         x: ${input.x}
     write:

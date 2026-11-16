@@ -91,7 +91,7 @@ defs:
       c: {kind: code, input: {x: "\${input.x}"}, output: !int, code: "return inputs.x"}
     output: {x: "\${c.output}"}
 nodes:
-  ask: {kind: tool, tool_id: ask, input: {prompt: "q?"}, output: !str}
+  ask: {kind: call, call: ask, input: {prompt: "q?"}, output: !str}
   route:
     kind: case
     cases:
@@ -99,7 +99,7 @@ nodes:
         then: yes
     else: no
   yes: {kind: agent, prompt: hi}
-  no: {kind: tool, tool_id: echo, input: {n: "x"}, output: !str}
+  no: {kind: call, call: echo, input: {n: "x"}, output: !str}
   code: {kind: code, code: "return 1", output: !int}
   one_call: {kind: call, call: one, input: {x: 1}}
   each: {kind: map, over: "\${input.xs}", call: one, input: {x: "\${item}"}}

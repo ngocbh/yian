@@ -8,8 +8,8 @@ flow: |
       qty: int
   nodes:
     size:
-      kind: tool
-      tool_id: size
+      kind: call
+      call: size
   output: ${size.output}
 other: |
   id: sized
@@ -19,8 +19,8 @@ other: |
       qty: int
   nodes:
     size:
-      kind: tool
-      tool_id: size
+      kind: call
+      call: size
   output: !Size ${size.output}
 expect:
   fingerprint: different

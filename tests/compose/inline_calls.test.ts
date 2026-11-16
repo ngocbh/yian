@@ -147,8 +147,8 @@ input:
 ${ENRICH_DEF}
 nodes:
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: Review
       context: call(enrich, topic=\${input.topic})

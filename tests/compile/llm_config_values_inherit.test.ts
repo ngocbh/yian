@@ -89,8 +89,8 @@ nodes:
     input: {}
     nodes:
       ask:
-        kind: tool
-        tool_id: ask
+        kind: call
+        call: ask
         input:
           prompt: hi
         adaptive_questions:

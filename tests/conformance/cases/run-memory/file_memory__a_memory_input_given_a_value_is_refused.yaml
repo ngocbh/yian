@@ -8,8 +8,8 @@ flow: |
     lessons: !FileMemory
   nodes:
     found:
-      kind: tool
-      tool_id: {lessons: list}
+      kind: call
+      call: {lessons: list}
   output: ${found.output}
 inputs: {lessons: /srv/memory/lessons}
 run: {run_id: r1, num_workers: 0}

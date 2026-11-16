@@ -67,8 +67,8 @@ nodes:
     code: |
       return {"v": [1, true]}
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     runs_after: [mixed, obj, big, flt, items, nothing, rec]
     input:
       prompt: "Go on?"

@@ -163,8 +163,8 @@ input:
   box: !Inbox(int)
 nodes:
   heard:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     input:
       from: \${input.box}
       take: all
@@ -236,8 +236,8 @@ nodes:
     while: not closed
     nodes:
       heard:
-        kind: tool
-        tool_id: take
+        kind: call
+        call: take
         input: {from: "\${input.notes}", take: one}
     output:
       count: \${input.count + len(heard.output.events)}
@@ -386,8 +386,8 @@ id: f
 name: f
 nodes:
   pick:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     node_name: Pick a plan
     input:
       questions:
@@ -541,8 +541,8 @@ async function codeAskFlow(confined = false): Promise<{ dir: string; flow: Compo
     "      q: hi",
     "    output: !str",
     "  ask:",
-    "    kind: tool",
-    "    tool_id: ask",
+    "    kind: call",
+    "    call: ask",
     "    input:",
     "      prompt: ${up.output}",
     "output: ${ask.output}",
@@ -916,8 +916,8 @@ async function codeTakeFlow(confined = false): Promise<{ dir: string; flow: Comp
     "    code: ./fn.ts:up",
     "    output: !str",
     "  heard:",
-    "    kind: tool",
-    "    tool_id: take",
+    "    kind: call",
+    "    call: take",
     "    input:",
     "      from: ${input.m}",
     "      take: all",
@@ -1131,9 +1131,9 @@ nodes:
     prompt: "\${cases} keep it"
     output: !str
   found:
-    kind: tool
+    kind: call
     depends_on: [keep]
-    tool_id: {cases: search}
+    call: {cases: search}
     input:
       query: bravo
       k: 1

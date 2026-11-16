@@ -9,14 +9,14 @@ flow: |
     notes: !FileMemory
   nodes:
     first:
-      kind: tool
-      tool_id: {lessons: append}
+      kind: call
+      call: {lessons: append}
       input:
         path: log.md
         text: first
     second:
-      kind: tool
-      tool_id: {notes: append}
+      kind: call
+      call: {notes: append}
       input:
         path: log.md
         text: ${"second after " + first.output.path}

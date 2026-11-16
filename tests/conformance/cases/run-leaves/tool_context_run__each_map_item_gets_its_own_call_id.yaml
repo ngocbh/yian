@@ -9,8 +9,8 @@ flow: |
         item: !str
       nodes:
         place:
-          kind: tool
-          tool_id: place
+          kind: call
+          call: place
       output: ${place.output}
   input:
     items: !list(str)

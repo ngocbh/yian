@@ -85,7 +85,7 @@ test("each segment starts one thread per module its nodes reach and ends them as
   writeFileSync(join(dir, "quote.ts"), logged("quote") + tools(["quote"]));
   writeFileSync(join(dir, "idle.ts"), logged("idle") + tools(["idle"]));
   const uses = { crm: "./crm.ts", find: "./crm.ts:lookup", quote: "./quote.ts:quote", idle: "./idle.ts" };
-  const text = app(uses, ["h: {kind: tool, tool_id: hold}", "a: {kind: agent, input: {go: '${h.output}'}, prompt: '${go}', tools: [find, crm, quote]}"]);
+  const text = app(uses, ["h: {kind: call, call: hold}", "a: {kind: agent, input: {go: '${h.output}'}, prompt: '${go}', tools: [find, crm, quote]}"]);
   const log = join(dir, "log.jsonl");
   const model = new ScriptedModel([textReply("done")]);
 
@@ -185,7 +185,7 @@ export const audited = { name: "audited", description: "audited.", parameters, o
 `,
   );
   const tool = how === "checked" || how === "audited" ? how : "flaky";
-  const node = `t: {kind: tool, tool_id: {crm: ${tool}}, input: {how: ${how}}, retries: 2}`;
+  const node = `t: {kind: call, call: {crm: ${tool}}, input: {how: ${how}}, retries: 2}`;
 
   const result = await run(app({ crm: "./crm.ts" }, [node], "output: ${t.output}\n"));
 
@@ -231,7 +231,7 @@ const plain = (name: string, body: string, more = "") =>
   `export const ${name} = { name: "${name}", description: "${name}.", parameters: { type: "object" }, ${more}execute: ${body} };\n`;
 
 test.each([
-  ["a tool node", "t: {kind: tool, tool_id: {crm: hold}, input: {}, retries: 2}", "${t.output}"],
+  ["a tool node", "t: {kind: call, call: {crm: hold}, input: {}, retries: 2}", "${t.output}"],
   ["an agent", "a: {kind: agent, prompt: go, tools: [crm]}", "${a.output}"],
 ])("a module tool's pending() makes %s wait for complete() when the host completes calls, else fails its call", async (_name, node, output) => {
   const calls = join(dir, "calls");
@@ -258,7 +258,7 @@ test.each([
 
 test("what a module tool prints goes to onConsole under the calling node, and what its import prints to this process's console", async () => {
   writeFileSync(join(dir, "crm.ts"), 'console.log("importing");\n' + plain("talk", '(_args, ctx) => { console.info("serving", ctx.node); return 1; }'));
-  const text = app({ crm: "./crm.ts" }, ["t: {kind: tool, tool_id: {crm: talk}, input: {}}", "a: {kind: agent, input: {go: '${t.output}'}, prompt: '${go}', tools: [crm]}"]);
+  const text = app({ crm: "./crm.ts" }, ["t: {kind: call, call: {crm: talk}, input: {}}", "a: {kind: agent, input: {go: '${t.output}'}, prompt: '${go}', tools: [crm]}"]);
   const model = new ScriptedModel([callReply(["crm_talk", {}, "c1"]), textReply("done")]);
   const lines: unknown[] = [];
   const log = spyOn(console, "log").mockImplementation(() => {});
@@ -309,7 +309,7 @@ const exits = { version: 1, vendor: "t", validate: () => process.exit(4), jsonSc
 const once = () => Object.assign(new Error("not yet"), { [TOOL_ERROR]: ["transient"], retryAfter: 0 });
 ${plain("audited", "() => ({ total: 1 })", 'output: { "~standard": exits }, ')}${plain("flaky", "(_args, ctx) => { if (ctx.attempt === 1) throw once(); process.exit(5); }")}`,
   );
-  const node = `t: {kind: tool, tool_id: {crm: ${tool}}, input: {}, retries: 2}`;
+  const node = `t: {kind: call, call: {crm: ${tool}}, input: {}, retries: 2}`;
 
   const failed = await run(app({ crm: "./crm.ts" }, [node], "output: ${t.output}\n"));
 
@@ -383,9 +383,9 @@ test("a module that fails to start closes the run's MCP servers, and a failed ch
 }, 30_000);
 
 test.each([
-  ["t: {kind: tool, tool_id: {crm: lookup}, input: {nope: x}}", "TOOL node 't' input 'nope': tool 'crm_lookup' takes no such input; it takes [\"id\"]"],
-  ["t: {kind: tool, tool_id: quote, input: {id: x}, output: !str}", "TOOL node 't' output: declared str, but tool 'quote' returns int"],
-  ["t: {kind: tool, tool_id: {crm: find}, input: {id: x}}", "TOOL node 't' names {crm: find}: `crm` has no tool `find`; it has lookup"],
+  ["t: {kind: call, call: {crm: lookup}, input: {nope: x}}", "TOOL node 't' input 'nope': tool 'crm_lookup' takes no such input; it takes [\"id\"]"],
+  ["t: {kind: call, call: quote, input: {id: x}, output: !str}", "TOOL node 't' output: declared str, but tool 'quote' returns int"],
+  ["t: {kind: call, call: {crm: find}, input: {id: x}}", "TOOL node 't' names {crm: find}: `crm` has no tool `find`; it has lookup"],
   ["a: {kind: agent, prompt: go, tools: [quote]}", "AGENT node 'a': `quote` is both a tool module it grants and a tool of this run; rename one"],
   ["a: {kind: agent, prompt: go, tools: [notes, notes_read]}", "AGENT node 'a': the memory tool `notes_read` of `notes` has the name of another tool it grants; rename one"],
   ["a: {kind: agent, prompt: go, tools: [load]}", "AGENT node 'a': tool `skill` of `load` would show as `load_skill`, a name yian reserves; rename the alias or the tool"],
@@ -410,7 +410,7 @@ test.each([
     writeFileSync(join(dir, "crm.ts"), tools(["lookup"]));
     const host = (name: string) =>
       new FunctionTool({ name, description: "d", parametersJsonSchema: { type: "object" }, execute: () => "host" });
-    const text = app({ [alias]: ref }, [`t: {kind: tool, tool_id: ${toolId}, input: {id: x}}`], "output: ${t.output}\n");
+    const text = app({ [alias]: ref }, [`t: {kind: call, call: ${toolId}, input: {id: x}}`], "output: ${t.output}\n");
     // A host tool named like the alias, then a host group of that name holding the module's tool name.
     for (const hostTools of [{ [alias]: host(alias) }, { [alias]: [host(member)] }]) {
       const done = await run(text, { tools: hostTools });
@@ -464,7 +464,7 @@ test("run_started records, by module key, the tools agent grants reach, and no t
   writeFileSync(join(dir, "tools", "crm.ts"), tools(["lookup", "create"]));
   writeFileSync(join(dir, "quote.ts"), tools(["quote", "rate"]));
   writeFileSync(join(dir, "solo.ts"), tools(["solo"]));
-  const call = "t: {kind: tool, tool_id: {solo: solo}, input: {id: x}}";
+  const call = "t: {kind: call, call: {solo: solo}, input: {id: x}}";
   const uses = { crm: "./tools/crm.ts", price: "./quote.ts:quote", solo: "./solo.ts" };
   const text = app(uses, ["a: {kind: agent, prompt: go, tools: [{crm: [lookup]}, price]}", call]);
   const log = join(dir, "log.jsonl");
@@ -494,7 +494,7 @@ test.each([
 ])("a resume imports each module again and refuses a group whose tools differ from the recorded ones: %s", async (_name, source, message) => {
   writeFileSync(join(dir, "crm.ts"), tools(["create", "lookup"]));
   const agent = "a: {kind: agent, input: {go: '${h.output}'}, prompt: '${go}', tools: [crm]}";
-  const text = app({ crm: "./crm.ts" }, ["h: {kind: tool, tool_id: hold}", agent]);
+  const text = app({ crm: "./crm.ts" }, ["h: {kind: call, call: hold}", agent]);
   const log = join(dir, "log.jsonl");
   expect((await run(text, { log, runId: "r1", tools: { hold } })).status).toBe("waiting");
   await complete(log, "r1/h", { output: "go" });

@@ -5,8 +5,8 @@ flow: |
   name: human
   nodes:
     node:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       input:
         prompt: first
       output: !str
@@ -16,8 +16,8 @@ other: |
   name: human
   nodes:
     node:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       input:
         prompt: second
       output: !str

@@ -129,7 +129,7 @@ test("tool retries stop on a reported error that is also permanent", async () =>
     },
   });
   const flow = await loadFlow(
-    "id: t\nname: t\nnodes:\n  call:\n    kind: tool\n    tool_id: read_file\n    retries: 2\n" +
+    "id: t\nname: t\nnodes:\n  call:\n    kind: call\n    call: read_file\n    retries: 2\n" +
       "output: ${call.output}\n",
   );
   const result = await runFlow(flow, {}, {

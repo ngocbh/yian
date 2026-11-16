@@ -12,8 +12,8 @@ flow: |
       output: !str
       code: "return null"
     settle:
-      kind: tool
-      tool_id: sleep
+      kind: call
+      call: sleep
       input:
         until: ${step.output.at}
   output: ${step.output}

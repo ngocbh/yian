@@ -11,8 +11,8 @@ flow: |
         x: ${item}
       nodes:
         place:
-          kind: tool
-          tool_id: place_order
+          kind: call
+          call: place_order
           input:
             x: ${input.x}
           output: !int

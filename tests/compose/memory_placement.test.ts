@@ -83,7 +83,7 @@ test.each([
   ["text in a binding", agent('      t: "notes: ${input.lessons}"\n'), "(not inside text or an expression)"],
   ["a case condition", `  k:\n    kind: case\n    cases:\n      - when: \${input.lessons == null}\n        then: done\n  done: !int 1\n`, "(not inside text or an expression)"],
   ["a CODE input", code("      t: ${input.lessons}\n"), "(a code node can't take a memory)"],
-  ["a TOOL input", `  t:\n    kind: tool\n    tool_id: f\n    input:\n      t: \${input.lessons}\n`, "(a tool node can't take a memory)"],
+  ["a TOOL input", `  t:\n    kind: call\n    call: f\n    input:\n      t: \${input.lessons}\n`, "(a tool node can't take a memory)"],
   ["a record member", agent("      t:\n        a: ${input.lessons}\n"), "(not inside a list, record or dict)"],
   ["a list member", agent("      t:\n        - ${input.lessons}\n"), "(not inside a list, record or dict)"],
   ["an inline call", code("      t: call(file, notes=${input.lessons})\n"), "(pass it through a named `kind: call` node)"],

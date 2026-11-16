@@ -150,7 +150,7 @@ function writeRun(runs: string, runId: string, write: (log: JsonlRunLog) => void
 async function memoryRun(runs: string, runId: string): Promise<void> {
   const flow = await loadFlow(
     "id: m\nname: m\ninput:\n  lessons: !FileMemory\n  notes: !Optional(FileMemory)\nnodes:\n  add:\n" +
-      "    kind: tool\n    tool_id: {lessons: append}\n    input: {path: MEMORY.md, text: hi}\n" +
+      "    kind: call\n    call: {lessons: append}\n    input: {path: MEMORY.md, text: hi}\n" +
       "output: ${add.output.path}\n",
   );
   const lessons = new FileMemory({ root: join(runs, "..", `${runId}-memory`), id: "t/lessons" });
@@ -876,8 +876,8 @@ console.log(JSON.stringify({ warnings, runs: readRunIndex(${JSON.stringify(runs)
     const flow = await loadFlow(
       "id: m\nname: m\ntypedefs:\n  Cfg: {memory: object}\ninput:\n  lessons: !FileMemory\n" +
         "  notes: !Optional(FileMemory)\n  cfg: !object\n  typed: !Cfg\n  memory: !object\nnodes:\n" +
-        "  add:\n    kind: tool\n" +
-        "    tool_id: {lessons: append}\n    input: {path: MEMORY.md, text: hi}\noutput: ${add.output.path}\n",
+        "  add:\n    kind: call\n" +
+        "    call: {lessons: append}\n    input: {path: MEMORY.md, text: hi}\noutput: ${add.output.path}\n",
     );
     // A memory value's form, given as plain data to inputs that aren't memories.
     const forged = {

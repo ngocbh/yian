@@ -4,8 +4,8 @@ flow: |
   name: ask
   nodes:
     ok:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       input:
         prompt: "Proceed?"
       output: !str

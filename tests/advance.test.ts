@@ -359,8 +359,8 @@ async function codeHostFlow(root: string, codeRoot: string | null = null): Promi
     "      q: hi",
     "    output: !str",
     "  ask:",
-    "    kind: tool",
-    "    tool_id: lookup",
+    "    kind: call",
+    "    call: lookup",
     "    input:",
     "      q: ${up.output}",
     "output: ${ask.output}",
@@ -496,8 +496,8 @@ input:
   notes: !Inbox(str)
 nodes:
   got:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     input:
       from: \${input.notes}
       take: all

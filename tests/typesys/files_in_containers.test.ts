@@ -1112,7 +1112,7 @@ test("a template binding reads the uri of a file", async () => {
 
 test("a prompt reads the name of a file", async () => {
   const text = fileFlow(
-    '  b:\n    kind: tool\n    tool_id: ask\n    input:\n      prompt: "u=${n.output.uri} k=${n.output.name}"\n    output: !str\n',
+    '  b:\n    kind: call\n    call: ask\n    input:\n      prompt: "u=${n.output.uri} k=${n.output.name}"\n    output: !str\n',
   );
   const output = await okRun(text, { tools: { ask: (request: { question: string }) => request.question } });
   expect(output).toBe("u=f k=a.txt");
@@ -1434,8 +1434,8 @@ nodes:
     code: |
       return [${F}, ${F}]
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: "Go?"
   b:

@@ -28,8 +28,8 @@ name: f
 input: {proj: !str }
 nodes:
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       proj: \${input.proj}
     adaptive_questions:

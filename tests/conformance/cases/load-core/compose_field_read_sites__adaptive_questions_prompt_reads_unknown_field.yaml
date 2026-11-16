@@ -19,8 +19,8 @@ flow: |
       output: !Rec
       code: "return ({a: \"x\"})"
     h:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       input:
         v: ${step.output}
         prompt: "Pick for ${step.output.a}"

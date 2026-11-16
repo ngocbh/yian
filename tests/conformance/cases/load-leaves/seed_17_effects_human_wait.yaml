@@ -3,10 +3,10 @@ kind: load
 flow: |
   # 17 — Effects: ask + sleep.
   #
-  # Propose an action, ask a human to APPROVE it (tool_id: ask, a TYPED answer), route on
+  # Propose an action, ask a human to APPROVE it (call: ask, a TYPED answer), route on
   # the answer, SLEEP until a settle time, then confirm (a side effect). Shows:
-  # tool_id: ask (input prompt, `output:` the answer validated against a type),
-  # tool_id: sleep (input until), `case … on` routing the human's answer, and depends_on: to
+  # call: ask (input prompt, `output:` the answer validated against a type),
+  # call: sleep (input until), `case … on` routing the human's answer, and depends_on: to
   # order a side-effect node after the sleep with no data binding.
   #
   # `ask` goes through the host's ask handler, which answers or holds the call; `sleep` waits
@@ -34,8 +34,8 @@ flow: |
       prompt: "Propose one concrete, neutral action for ${topic} in a single sentence."
 
     approve:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       input:
         prompt: "Approve this action? ${propose.output}  (approve / reject)"
       output: !Approval                  # the injected answer is validated against Approval's tags
@@ -49,8 +49,8 @@ flow: |
       else: abort
 
     settle:
-      kind: tool
-      tool_id: sleep
+      kind: call
+      call: sleep
       input:
         until: ${input.settle_at}        # a date means midnight UTC
       # `sleep` produces no meaningful value — downstream orders after it via depends_on.

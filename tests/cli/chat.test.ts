@@ -181,8 +181,8 @@ const ASK = `id: ask
 name: ask
 nodes:
   sure:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: "Which region?"
     output: !str
@@ -224,8 +224,8 @@ nodes:
       }
       return "open";
   sure:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     depends_on: [gate]
     input:
       prompt: "Which region?"
@@ -360,8 +360,8 @@ test(
     const path = join(root, "my talk.yaml");
     writeFileSync(
       path,
-      "id: talk\nname: talk\ninput:\n  messages: !Inbox(str)\nnodes:\n  heard:\n    kind: tool\n" +
-        "    tool_id: take\n    input:\n      from: ${input.messages}\noutput: done\n",
+      "id: talk\nname: talk\ninput:\n  messages: !Inbox(str)\nnodes:\n  heard:\n    kind: call\n" +
+        "    call: take\n    input:\n      from: ${input.messages}\noutput: done\n",
     );
     const { io, stdin, stderr } = chatIo();
     stdin.write("/exit\n");
@@ -392,8 +392,8 @@ test(
     const path = join(root, "talk.yaml");
     writeFileSync(
       path,
-      "id: talk\nname: talk\ninput:\n  messages: !Inbox(str)\nnodes:\n  heard:\n    kind: tool\n" +
-        "    tool_id: take\n    input:\n      from: ${input.messages}\noutput: done\n",
+      "id: talk\nname: talk\ninput:\n  messages: !Inbox(str)\nnodes:\n  heard:\n    kind: call\n" +
+        "    call: take\n    input:\n      from: ${input.messages}\noutput: done\n",
     );
     const { io, stdin, stderr } = chatIo();
     stdin.write("/exit\n");
@@ -443,8 +443,8 @@ test(
   async () => {
     writeFileSync(
       join(root, "remember.yaml"),
-      "id: answer\nname: answer\ninput:\n  lessons: !FileMemory\nnodes:\n  add:\n    kind: tool\n" +
-        "    tool_id: {lessons: append}\n    input: {path: MEMORY.md, text: noted}\noutput: ${add.output.path}\n",
+      "id: answer\nname: answer\ninput:\n  lessons: !FileMemory\nnodes:\n  add:\n    kind: call\n" +
+        "    call: {lessons: append}\n    input: {path: MEMORY.md, text: noted}\noutput: ${add.output.path}\n",
     );
     const { io, stdin, stdout, screen } = chatIo({ tty: true });
     const script = [

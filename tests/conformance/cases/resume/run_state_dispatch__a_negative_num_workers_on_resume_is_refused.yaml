@@ -9,8 +9,8 @@ flow: |
     x: !str
   nodes:
     n:
-      kind: tool
-      tool_id: lookup
+      kind: call
+      call: lookup
       input:
         x: ${input.x}
   output: ${n.output}

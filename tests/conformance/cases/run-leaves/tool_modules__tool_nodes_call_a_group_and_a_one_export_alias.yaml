@@ -11,14 +11,14 @@ flow: |
     quote: ./tools.ts:quote
   nodes:
     found:
-      kind: tool
-      tool_id: {crm: lookup}
+      kind: call
+      call: {crm: lookup}
       retries: 1
       input: {id: "7"}
       output: {id: !str, name: !str}
     priced:
-      kind: tool
-      tool_id: quote
+      kind: call
+      call: quote
       input: {qty: 3}
       output: !int
   output:

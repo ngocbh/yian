@@ -5,8 +5,8 @@ flow: |
   name: grants
   nodes:
     found:
-      kind: tool
-      tool_id: {cases: search}
+      kind: call
+      call: {cases: search}
       input: {query: owls}
   output: ${found.output}
 expect:

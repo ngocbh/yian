@@ -364,7 +364,7 @@ test("node consuming case value loads with data edges from both branches", () =>
 test("an adaptive ask's llm_config reading a case value is wired from both branches", () => {
   const text = CASE_VALUE_FLOW.replace(
     "output: ${gate.output}\n",
-    "  ask:\n    kind: tool\n    tool_id: ask\n    adaptive_questions:\n      prompt: Ask\n" +
+    "  ask:\n    kind: call\n    call: ask\n    adaptive_questions:\n      prompt: Ask\n" +
       "      llm_config: {model: !str '${gate.output}'}\noutput: ${ask.output}\n",
   );
   const edges = load(text).edges.map((edge) => `${edge.from}->${edge.to}`);

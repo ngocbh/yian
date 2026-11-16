@@ -203,8 +203,8 @@ input:
   lessons: !FileMemory
 nodes:
   add:
-    kind: tool
-    tool_id: {lessons: append}
+    kind: call
+    call: {lessons: append}
     input:
       path: MEMORY.md
       text: Check sums twice.
@@ -219,12 +219,12 @@ input:
   notes: !FileMemory
 nodes:
   a:
-    kind: tool
-    tool_id: {lessons: append}
+    kind: call
+    call: {lessons: append}
     input: {path: a.md, text: from lessons}
   b:
-    kind: tool
-    tool_id: {notes: append}
+    kind: call
+    call: {notes: append}
     depends_on: [a]
     input: {path: b.md, text: from notes}
 output: \${b.output.path}
@@ -426,8 +426,8 @@ nodes:
       - user: \${question}
     output: !str
   keep:
-    kind: tool
-    tool_id: {lessons: append}
+    kind: call
+    call: {lessons: append}
     depends_on: [reply]
     input:
       path: MEMORY.md
@@ -622,8 +622,8 @@ input:
   cases: !VectorDBMemory
 nodes:
   add:
-    kind: tool
-    tool_id: {cases: add}
+    kind: call
+    call: {cases: add}
     input: {text: Check sums twice.}
 output: \${add.output.id}
 `;
@@ -640,7 +640,7 @@ describe("VectorDBMemory inputs", () => {
     expect(result.stderr).toMatch(new RegExp(`memory cases: at-[0-9a-f]{16} at ${store} \\(new\\)`));
     // Inputs given one store share it.
     const again =
-      "  again:\n    kind: tool\n    tool_id: {more: add}\n    depends_on: [add]\n" +
+      "  again:\n    kind: call\n    call: {more: add}\n    depends_on: [add]\n" +
       "    input: {text: Carry the one.}\noutput: ${again.output.id}";
     const two = ADD_CASE.replace("  cases: !VectorDBMemory\n", "  cases: !VectorDBMemory\n  more: !VectorDBMemory\n")
       .replace("output: ${add.output.id}", again);

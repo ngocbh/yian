@@ -7,8 +7,8 @@ flow: |
     signature: !str 'q -> a'
   nodes:
     step:
-      kind: tool
-      tool_id: step
+      kind: call
+      call: step
   output: ${step.output}
 other: |
   id: literal-default
@@ -17,8 +17,8 @@ other: |
     signature: !str 'q -> s'
   nodes:
     step:
-      kind: tool
-      tool_id: step
+      kind: call
+      call: step
   output: ${step.output}
 expect:
   fingerprint: different

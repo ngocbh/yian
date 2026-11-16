@@ -51,8 +51,8 @@ nodes:
     else: other
   other: !str not blue
   sure:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: "Is \${choose.output} right?"
     output: !str

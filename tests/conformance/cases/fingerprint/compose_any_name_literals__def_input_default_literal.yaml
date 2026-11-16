@@ -9,8 +9,8 @@ flow: |
         password: !str hunter2
       nodes:
         run:
-          kind: tool
-          tool_id: run
+          kind: call
+          call: run
           output: !str
       output: ${run.output}
   nodes:
@@ -27,8 +27,8 @@ other: |
         password: !str hunter3
       nodes:
         run:
-          kind: tool
-          tool_id: run
+          kind: call
+          call: run
           output: !str
       output: ${run.output}
   nodes:

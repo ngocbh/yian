@@ -11,7 +11,7 @@ export const SLEEP = "sleep";
 export const ASK = "ask";
 /** A built-in tool id. */
 export type BuiltinToolId = typeof TAKE | typeof SLEEP | typeof ASK;
-/** The built-in tool ids, which a TOOL node reaches with `tool_id:`. */
+/** The built-in tool ids, which a TOOL node reaches with `call:`. */
 export const BUILTIN_TOOL_IDS: ReadonlySet<BuiltinToolId> = new Set<BuiltinToolId>([TAKE, SLEEP, ASK]);
 
 /** A TOOL node's call id: the same on every attempt and start of the node. */

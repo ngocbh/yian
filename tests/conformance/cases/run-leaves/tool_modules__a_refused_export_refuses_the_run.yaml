@@ -8,8 +8,8 @@ flow: |
     crm: ./crm.ts
   nodes:
     found:
-      kind: tool
-      tool_id: {crm: lookup}
+      kind: call
+      call: {crm: lookup}
       input: {id: "7"}
   output: ${found.output}
 files:

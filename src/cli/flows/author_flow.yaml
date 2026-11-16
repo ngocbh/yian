@@ -59,8 +59,8 @@ defs:
       content: !str
     nodes:
       written:
-        kind: tool
-        tool_id: write_flow
+        kind: call
+        call: write_flow
         input:
           path: ${input.path}
           content: ${input.content}
@@ -143,8 +143,8 @@ defs:
           const fenced = inputs.reply.match(/```(?:ya?ml)?[ \t]*\n([\s\S]*?)\n```/);
           return (fenced ? fenced[1] : inputs.reply).trim() + "\n";
       checked:
-        kind: tool
-        tool_id: check_flow
+        kind: call
+        call: check_flow
         input:
           path: ${input.path}
           content: ${text.output}
@@ -218,9 +218,10 @@ defs:
           max_tool_iterations: 12
         output: !str
         system_prompt: |-
-          You write flows in yian, a YAML language for flows of agent, code, tool, case, call,
-          map and loop nodes. Load the composing-agents skill first and follow it; read yian's
-          docs with read_docs for a rule you're unsure of, and read_flow for a flow the user has.
+          You write flows in yian, a YAML language for flows of agent, code, case, call, map and
+          loop nodes, where a call node runs a flow or calls a tool. Load the composing-agents
+          skill first and follow it; read yian's docs with read_docs for a rule you're unsure of,
+          and read_flow for a flow the user has.
           Write the flow the contract describes, with exactly its inputs and output and its
           nodes in outline. When there is a last version, change it as asked and keep the rest.
           Prefer code to a prompt for deterministic work, grant each agent only the tools it

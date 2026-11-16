@@ -11,8 +11,8 @@ flow: |
         a: ${ask__compose.output}
       prompt: "x ${a}"
     ask:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       input:
         proj: ${b.output}
       adaptive_questions:

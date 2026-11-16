@@ -39,8 +39,8 @@ id: gate
 name: gate
 nodes:
   gate:
-    kind: tool
-    tool_id: ${tool}
+    kind: call
+    call: ${tool}
     input:
 ${input}
 output: \${gate.output}
@@ -116,8 +116,8 @@ input:
   m: !Inbox(str)
 nodes:
   gate:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     input:
       from: \${input.m}
 output: \${gate.output}
@@ -156,8 +156,8 @@ input:
   plan: !str
 nodes:
   approve:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     node_name: Plan approval
     input:
       prompt: "Approve \${input.plan}?"
@@ -207,8 +207,8 @@ input:
   candidate: !str
 nodes:
   choose:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: "Choose for \${input.project}"
       questions:
@@ -250,8 +250,8 @@ input:
   qs: !list(object)
 nodes:
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       questions: \${input.qs}
 output: \${ask.output}
@@ -292,8 +292,8 @@ id: adaptive
 name: adaptive
 nodes:
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     adaptive_questions:
       prompt: Ask whether to ship
       llm_config: {provider: openai, model: gpt-test}

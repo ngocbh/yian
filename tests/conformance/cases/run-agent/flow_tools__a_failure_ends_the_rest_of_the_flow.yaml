@@ -13,8 +13,8 @@ flow: |
         item: !str
       nodes:
         sign:
-          kind: tool
-          tool_id: sign
+          kind: call
+          call: sign
           input:
             item: ${input.item}
           output: !str

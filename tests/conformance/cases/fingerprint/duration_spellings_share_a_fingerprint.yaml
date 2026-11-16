@@ -5,8 +5,8 @@ flow: |
   name: f
   nodes:
     nap:
-      kind: tool
-      tool_id: sleep
+      kind: call
+      call: sleep
       input:
         for: 24h
   output: null
@@ -15,8 +15,8 @@ other: |
   name: f
   nodes:
     nap:
-      kind: tool
-      tool_id: sleep
+      kind: call
+      call: sleep
       input:
         for: 86400s
   output: null

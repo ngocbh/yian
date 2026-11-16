@@ -9,8 +9,8 @@ flow: |
     candidate: !str
   nodes:
     choose:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       input:
         prompt: "Choose for ${input.project}"
         questions:

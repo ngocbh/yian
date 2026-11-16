@@ -116,8 +116,8 @@ nodes:
     code: |
       return /^[0-9]+$/.test(inputs["n"]) ? Number(inputs["n"]) : inputs["n"]
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: "Proceed with \${src.output} items?"
       count: !int \${src.output}
@@ -167,8 +167,8 @@ nodes:
     code: |
       return /^[0-9]+$/.test(inputs["n"]) ? Number(inputs["n"]) : inputs["n"]
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       count: !int \${src.output}
     adaptive_questions:

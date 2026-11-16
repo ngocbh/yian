@@ -5,8 +5,8 @@ flow: |
   name: common
   nodes:
     body:
-      kind: tool
-      tool_id: t
+      kind: call
+      call: t
       output: !int
   output: ${body.output}
 other: |
@@ -14,8 +14,8 @@ other: |
   name: common
   nodes:
     renamed:
-      kind: tool
-      tool_id: t
+      kind: call
+      call: t
       output: !int
   output: ${renamed.output}
 expect:

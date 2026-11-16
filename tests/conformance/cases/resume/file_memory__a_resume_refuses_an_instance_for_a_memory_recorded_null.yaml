@@ -9,8 +9,8 @@ flow: |
     notes: !Optional(FileMemory)
   nodes:
     add:
-      kind: tool
-      tool_id: {lessons: append}
+      kind: call
+      call: {lessons: append}
       input:
         path: notes.md
         text: Check sums twice.

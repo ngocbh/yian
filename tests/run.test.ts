@@ -588,8 +588,8 @@ id: placing
 name: placing
 nodes:
   place:
-    kind: tool
-    tool_id: ${toolId}
+    kind: call
+    call: ${toolId}
     input:
 ${inputBlock}
 output: \${place.output}
@@ -663,8 +663,8 @@ id: asking
 name: asking
 nodes:
   ask:
-    kind: tool
-    tool_id: ask_user
+    kind: call
+    call: ask_user
     input:
       prompt: Proceed?
 output: \${ask.output}
@@ -717,8 +717,8 @@ input:
   s: !str
 nodes:
   place:
-    kind: tool
-    tool_id: place_order
+    kind: call
+    call: place_order
     input:
       qty: \${input.s}
       sym: X
@@ -746,8 +746,8 @@ id: count
 name: count
 nodes:
   place:
-    kind: tool
-    tool_id: place_order
+    kind: call
+    call: place_order
     input:
       qty: 5
     output: !int
@@ -1052,8 +1052,8 @@ id: inspect-stop
 name: inspect_stop
 nodes:
   work:
-    kind: tool
-    tool_id: work
+    kind: call
+    call: work
 output: \${work.output}
 `;
 
@@ -1066,8 +1066,8 @@ nodes:
     code: ./compose_codefns.ts:boom
     output: !str
   waiter:
-    kind: tool
-    tool_id: waiter
+    kind: call
+    call: waiter
 output:
   fail: \${fail.output}
   waiter: \${waiter.output}
@@ -1318,8 +1318,8 @@ defs:
     input: {m: !str }
     nodes:
       ask:
-        kind: tool
-        tool_id: ask
+        kind: call
+        call: ask
         adaptive_questions:
           prompt: "Q"
           llm_config: {provider: openai, model: '\${input.m}'}
@@ -1450,8 +1450,8 @@ id: inspect-timed
 name: inspect_timed
 nodes:
   settle:
-    kind: tool
-    tool_id: sleep
+    kind: call
+    call: sleep
     input:
       until: "2026-10-20T14:05:00+00:00"
 output: \${settle.output}
@@ -1770,8 +1770,8 @@ nodes:
       console.warn("warned", inputs.word);
       return inputs.word;
   heard:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     depends_on: [say]
     input:
       from: \${input.more}

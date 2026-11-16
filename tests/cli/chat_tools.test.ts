@@ -398,7 +398,7 @@ describe("checkFocus", () => {
     writeFileSync(
       path,
       "id: talk\nname: talk\ninput:\n  messages: !Inbox(Message)\n  seen: !Optional(list(Message))\n" +
-        "nodes:\n  heard:\n    kind: tool\n    tool_id: take\n    input:\n      from: ${input.messages}\noutput: done\n",
+        "nodes:\n  heard:\n    kind: call\n    call: take\n    input:\n      from: ${input.messages}\noutput: done\n",
     );
     expect((await checkFocus(path, NO_ENV)).check.inputs).toEqual([
       { name: "messages", type: "Inbox(Message)" },
@@ -410,8 +410,8 @@ describe("checkFocus", () => {
     const path = join(root, "inbox.yaml");
     writeFileSync(
       path,
-      "id: talk\nname: talk\ninput:\n  messages: !Inbox(str)\nnodes:\n  heard:\n    kind: tool\n" +
-        "    tool_id: take\n    input:\n      from: ${input.messages}\noutput: done\n",
+      "id: talk\nname: talk\ninput:\n  messages: !Inbox(str)\nnodes:\n  heard:\n    kind: call\n" +
+        "    call: take\n    input:\n      from: ${input.messages}\noutput: done\n",
     );
     expect((await checkFocus(path, NO_ENV)).inbox).toBe(true);
   });

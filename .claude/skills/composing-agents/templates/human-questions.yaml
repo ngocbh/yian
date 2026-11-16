@@ -16,8 +16,8 @@ input:
 nodes:
   # STATIC — a literal questions list; its text is a wiring template that reads the pool.
   ask_static:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       questions:
         - question: "Which framework for ${input.proj}?"
@@ -40,8 +40,8 @@ nodes:
   # `ctx` is not part of yian's ask surface, so it is a host extra: the host declares it
   # (`tools: {ask: {handler, inputs: {ctx: {...}}}}`) or the run fails before it starts.
   ask_adaptive:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       ctx: ${ask_static.output}    # feed the static answers as composing context
     adaptive_questions:

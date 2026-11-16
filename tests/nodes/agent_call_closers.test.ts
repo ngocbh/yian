@@ -525,8 +525,8 @@ nodes:
     prompt: go
     tools: [ask_user]
   slow:
-    kind: tool
-    tool_id: gate
+    kind: call
+    call: gate
 output: \${agent.output}
 `;
   const m = scripted(callReply(["ask_user", { question: "q", timeout: "1m" }, "c1"]), textReply("done"));

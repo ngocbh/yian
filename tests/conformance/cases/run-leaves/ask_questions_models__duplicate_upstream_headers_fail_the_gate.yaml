@@ -8,8 +8,8 @@ flow: |
     qs: !list(object)
   nodes:
     ask:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       input:
         questions: ${input.qs}
   output: ${ask.output}

@@ -9,8 +9,8 @@ flow: |
       output: !int
       code: "return 1"
     ask:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       input:
         proj: "${input.nope}"
       adaptive_questions:

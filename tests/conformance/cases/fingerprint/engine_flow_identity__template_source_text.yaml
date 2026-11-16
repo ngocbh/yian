@@ -7,8 +7,8 @@ flow: |
     t: !str
   nodes:
     step:
-      kind: tool
-      tool_id: step
+      kind: call
+      call: step
       input:
         authorization: "Bearer ${input.t}"
   output: ${step.output}
@@ -19,8 +19,8 @@ other: |
     t: !str
   nodes:
     step:
-      kind: tool
-      tool_id: step
+      kind: call
+      call: step
       input:
         authorization: "Basic ${input.t}"
   output: ${step.output}

@@ -15,8 +15,8 @@ other: |
   name: kind
   nodes:
     leaf:
-      kind: tool
-      tool_id: leaf
+      kind: call
+      call: leaf
       output: !str
   output: ${leaf.output}
 expect:

@@ -30,8 +30,8 @@ input:
   settle_at: !date
 nodes:
   settle:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: "continue?"
     output: !Optional(str)

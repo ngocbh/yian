@@ -7,14 +7,14 @@ flow: |
     first:
       nodes:
         run:
-          kind: tool
-          tool_id: run
+          kind: call
+          call: run
       output: ${run.output}
     second:
       nodes:
         run:
-          kind: tool
-          tool_id: run
+          kind: call
+          call: run
       output: ${run.output}
   nodes:
     node:
@@ -28,14 +28,14 @@ other: |
     first:
       nodes:
         run:
-          kind: tool
-          tool_id: run
+          kind: call
+          call: run
       output: ${run.output}
     second:
       nodes:
         run:
-          kind: tool
-          tool_id: run
+          kind: call
+          call: run
       output: ${run.output}
   nodes:
     node:

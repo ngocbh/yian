@@ -6,8 +6,8 @@ flow: |
   name: grants
   nodes:
     found:
-      kind: tool
-      tool_id: {docs: search}
+      kind: call
+      call: {docs: search}
       input: {query: retries}
   output: ${found.output}
 run:

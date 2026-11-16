@@ -101,8 +101,8 @@ nodes:
       };
       return { title: clean(inputs.report.title), body: clean(inputs.report.body) };
   file:
-    kind: tool
-    tool_id: file_issue
+    kind: call
+    call: file_issue
     input:
       title: ${scrub.output.title}
       body: ${scrub.output.body}

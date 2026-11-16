@@ -66,12 +66,12 @@ const agent = (header: string, value: string) =>
 
 /** A flow whose `ask` node `use` declares `output: value`. */
 const ask = (header: string, value: string) =>
-  `${header}id: f\nname: f\nnodes:\n  use:\n    kind: tool\n    tool_id: ask\n` +
+  `${header}id: f\nname: f\nnodes:\n  use:\n    kind: call\n    call: ask\n` +
   `    input:\n      prompt: hi\n    output: ${value}\noutput: \${use.output}\n`;
 
 /** A flow whose TOOL node `use` declares `output: value`. */
 const toolSite = (header: string, value: string) =>
-  `${header}id: f\nname: f\nnodes:\n  use:\n    kind: tool\n    tool_id: http_get\n` +
+  `${header}id: f\nname: f\nnodes:\n  use:\n    kind: call\n    call: http_get\n` +
   `    input:\n      url: x\n    output: ${value}\noutput: \${use.output}\n`;
 
 /** A compact (single-node) flow declaring `output: value`. */

@@ -4,8 +4,8 @@ flow: |
   name: f
   nodes:
     n:
-      kind: tool
-      tool_id: place_order
+      kind: call
+      call: place_order
       output: Optional(str)
   output: ${n.output}
 expect:

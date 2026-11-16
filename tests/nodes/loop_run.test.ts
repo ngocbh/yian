@@ -179,8 +179,8 @@ defs:
       messages: !list(str)
     nodes:
       ask:
-        kind: tool
-        tool_id: ask
+        kind: call
+        call: ask
         input:
           prompt: "your message"
         output: !str
@@ -228,8 +228,8 @@ defs:
       exited: !bool
     nodes:
       ask:
-        kind: tool
-        tool_id: ask
+        kind: call
+        call: ask
         input:
           prompt: "your message"
         output: !str

@@ -91,8 +91,8 @@ id: typed-gate-replay
 name: typed_gate_replay
 nodes:
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: "How many?"
   use:

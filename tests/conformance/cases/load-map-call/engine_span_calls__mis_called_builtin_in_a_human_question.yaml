@@ -6,8 +6,8 @@ flow: |2
   input: {v: !str }
   nodes:
     ask:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       input:
         prompt: '${input.v}'
         questions:

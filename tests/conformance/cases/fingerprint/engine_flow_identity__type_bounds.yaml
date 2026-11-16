@@ -5,8 +5,8 @@ flow: |
   name: typed
   nodes:
     body:
-      kind: tool
-      tool_id: body
+      kind: call
+      call: body
       output: !int
   output: ${body.output}
 other: |
@@ -14,8 +14,8 @@ other: |
   name: typed
   nodes:
     body:
-      kind: tool
-      tool_id: body
+      kind: call
+      call: body
       output: !int(1..12)
   output: ${body.output}
 expect:

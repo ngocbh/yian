@@ -4,7 +4,7 @@ description: "CODE and TOOL nodes: inline TypeScript bodies, ./file.ts:fn refere
 ---
 
 This page explains the two nodes that run without a model: a `code` node runs your own
-TypeScript or JavaScript, and a `tool` node calls one tool your host or a
+TypeScript or JavaScript, and a `call` node naming a tool calls one tool your host or a
 [tool module](#tool-modules) supplies. Both are deterministic steps: same inputs, same work, no
 model in the loop.
 
@@ -128,18 +128,18 @@ for plain JavaScript on either runtime.
 
 ## TOOL nodes
 
-A `tool` node calls one tool by id, with its `input:` as the tool's arguments. There is no model
-in the loop. Your host supplies the tools (see [Agents](/agents/#tools) for where tools come
-from), so the flow names a tool and the run looks it up. A `call` node does the same with `call:`
-in place of `tool_id:`, and so does `call(get_quote, ...)` in a binding or a `case` branch (see
+A `call` node whose `call:` names a tool is a TOOL node: it calls that one tool, with its
+`input:` as the tool's arguments. There is no model in the loop. Your host supplies the tools (see
+[Agents](/agents/#tools) for where tools come from), so the flow names a tool and the run looks it
+up. `call(get_quote, ...)` in a binding or a `case` branch calls a tool the same way (see
 [Call a tool](/control-flow/#call-a-tool)). A `map` calls a tool once per item, and a `loop` once
 per turn (see [Map over a tool](/control-flow/#map-over-a-tool) and
 [Loop over a tool](/control-flow/#loop-over-a-tool)).
 
 ```yaml check=fragment
 quote:
-  kind: tool
-  tool_id: get_quote
+  kind: call
+  call: get_quote
   retries: 3
   input:
     symbol: ${input.symbol}
@@ -150,7 +150,7 @@ quote:
 
 | Field | Required | What it holds |
 |---|---|---|
-| `tool_id` | yes | A tool name, `{group: tool}` (a group's, a [memory](/memory/)'s or a [tool module](#tool-modules)'s tool), or a built-in: `take`, `sleep` or `ask` |
+| `call` | yes | A tool name, `{group: tool}` (a group's, a [memory](/memory/)'s or a [tool module](#tool-modules)'s tool), or a built-in: `take`, `sleep` or `ask` |
 | `input` | no | The tool's arguments, by the tool's own parameter names |
 | `output` | no | The type the result must have; without it any JSON value or file passes |
 | `retries` | no | Extra attempts after a failed call (default 0); not for `take`, `sleep`, `ask` |
@@ -159,6 +159,9 @@ quote:
 
 The built-ins `take`, `sleep` and `ask` read an inbox, wait until a time and ask a person; they
 are covered on [Inboxes and waiting](/inboxes/).
+
+`kind: tool`, with `tool_id:` in place of `call:`, is the old spelling of a TOOL node. It still
+loads, but it is going away: write `kind: call`.
 
 ### Checks before the run starts
 
@@ -197,8 +200,8 @@ When every attempt fails, the error lists each attempt.
 ## Tool modules
 
 A tool module is a TypeScript or JavaScript file whose exports are tools. A flow imports it with
-`uses:`, and its tools work as [host tools](/agents/#host-tools) do: a `tool` or `call` node calls
-one, and an agent grants them. A module needs no runtime import of yian, so it runs wherever the
+`uses:`, and its tools work as [host tools](/agents/#host-tools) do: a `call` node calls one, and
+an agent grants them. A module needs no runtime import of yian, so it runs wherever the
 flow runs, under a compiled `yian` too.
 
 ```ts title="crm.ts"
@@ -230,8 +233,8 @@ uses:
   crm: ./crm.ts
 nodes:
   found:
-    kind: tool
-    tool_id: {crm: lookup}
+    kind: call
+    call: {crm: lookup}
     input:
       id: ${input.id}
     output: {id: !str, name: !str}
@@ -258,19 +261,19 @@ other export, and `default`, is ignored.
   `import { type ToolOptions }` as an import, which fails where yian isn't installed.
 - Write an ES module: Node and Bun read a CommonJS file's exports differently.
 
-| `uses:` entry | Imports | A `tool` node calls | An agent's model sees |
+| `uses:` entry | Imports | A `call` node calls | An agent's model sees |
 |---|---|---|---|
-| `crm: ./crm.ts` | Every tool the file exports, as a group | `tool_id: {crm: lookup}` | `crm_lookup`, `crm_create`, ... |
-| `quote: ./tools.ts:quote` | One export, as one tool | `tool_id: quote` | `quote` |
+| `crm: ./crm.ts` | Every tool the file exports, as a group | `call: {crm: lookup}` | `crm_lookup`, `crm_create`, ... |
+| `quote: ./tools.ts:quote` | One export, as one tool | `call: quote` | `quote` |
 
 - An agent grants a group whole (`tools: [crm]`) or in part (`{crm: [lookup]}`), and a
   one-export alias by its name. A tool that two aliases of one file reach is offered once.
 - A ref is a relative path, `./` or `../`, to a `.ts`, `.js` or `.mjs` file, resolved from the
   importing file's real folder, never from `system.paths`. It takes no `@version`, and under a
   `codeRoot` or `yian check --root` it must stay inside, as a CODE file must.
-- A `call`, `map` or `loop` node names a module's tool as `tool_id:` does: `call: {crm: lookup}`,
-  or `call: quote`; in a binding, `call(crm.lookup, ...)` or `call(quote, ...)`. Each calls the
-  module's tool even when the run has a host tool or group of the alias's name.
+- A `map` or `loop` names a module's tool the same way, `call: {crm: lookup}` or `call: quote`;
+  in a binding, `call(crm.lookup, ...)` or `call(quote, ...)`. Each calls the module's tool even
+  when the run has a host tool or group of the alias's name.
 
 ### When a module runs
 
@@ -307,7 +310,7 @@ A module's tool is checked, called and retried as a host tool is, and its valida
   a host's [`onConsole`](/embedding/#runflow-options). Lines printed at import, or after the call
   ended, go to the process's `console`.
 - An error marked `reported` is a result an agent's model reads; any other error fails the agent.
-  A `tool` node retries as [Retries](#retries) says. Mark a kind without importing yian through
+  A TOOL node retries as [Retries](#retries) says. Mark a kind without importing yian through
   the `Symbol.for("yian.tool_error")` key, which yian's own error classes carry too;
   `["reported", "permanent"]` is both.
 
@@ -332,7 +335,7 @@ throw Object.assign(new Error("rate limited"), { [TOOL_ERROR]: ["transient"], re
 When a module's thread exits (`process.exit`, or an error nothing catches, such as one a timer
 throws), every call it was running fails with `tool.module_exited`:
 `crm.ts's thread exited (code 3); the call's outcome is unknown`. An agent's model reads it, unless
-the thread exited while checking the result; a `tool` node fails without a retry, since the call
+the thread exited while checking the result; a TOOL node fails without a retry, since the call
 may have run.
 
 The next call starts a fresh thread, which imports the module again. When that import fails or

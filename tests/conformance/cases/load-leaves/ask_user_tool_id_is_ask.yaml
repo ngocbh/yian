@@ -1,12 +1,12 @@
-# Tool_id: ask_user is the ask built-in under its old name, so it takes ask's inputs.
+# `call: ask_user` is the ask built-in under its old name, so it takes ask's inputs.
 kind: load
 flow: |
   id: f
   name: f
   nodes:
     q:
-      kind: tool
-      tool_id: ask_user
+      kind: call
+      call: ask_user
       input:
         prompt: Ship it?
       output: !Literal(yes;no)

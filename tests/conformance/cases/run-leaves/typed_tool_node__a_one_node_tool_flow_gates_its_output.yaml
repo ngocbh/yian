@@ -6,8 +6,8 @@ flow: |
   name: count
   input:
     qty: !int
-  kind: tool
-  tool_id: place_order
+  kind: call
+  call: place_order
   output: !int
 inputs:
   qty: 5

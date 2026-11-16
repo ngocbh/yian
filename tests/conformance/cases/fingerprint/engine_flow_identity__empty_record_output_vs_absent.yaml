@@ -5,8 +5,8 @@ flow: |
   name: pin
   nodes:
     step:
-      kind: tool
-      tool_id: step
+      kind: call
+      call: step
       output: !str
   output: {}
 other: |
@@ -14,8 +14,8 @@ other: |
   name: pin
   nodes:
     step:
-      kind: tool
-      tool_id: step
+      kind: call
+      call: step
       output: !str
 expect:
   fingerprint: different

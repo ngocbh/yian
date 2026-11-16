@@ -1,20 +1,20 @@
-# A TOOL's tool_id is identity.
+# A TOOL's `call:` is identity.
 kind: fingerprint
 flow: |
   id: tool
   name: tool
   nodes:
     node:
-      kind: tool
-      tool_id: first
+      kind: call
+      call: first
   output: ${node.output}
 other: |
   id: tool
   name: tool
   nodes:
     node:
-      kind: tool
-      tool_id: second
+      kind: call
+      call: second
   output: ${node.output}
 expect:
   fingerprint: different

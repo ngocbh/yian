@@ -48,8 +48,8 @@ id: tool_ctx
 name: tool_ctx
 nodes:
   place:
-    kind: tool
-    tool_id: place
+    kind: call
+    call: place
 output: \${place.output}
 `;
 
@@ -198,7 +198,7 @@ test("a registered tool sees the context", async () => {
   const seen: ToolContext[] = [];
   registerTool("tool_ctx_run_registered_place", recorder(seen, "tool_ctx_run_registered_place"));
   const db = new Db();
-  const flow = await loadFlow(TOOL_FLOW.replace("tool_id: place", "tool_id: tool_ctx_run_registered_place"));
+  const flow = await loadFlow(TOOL_FLOW.replace("call: place", "call: tool_ctx_run_registered_place"));
 
   const result = await runFlow(flow, {}, { context: db, runId: "run-7f3a", env: hostEnv(dir) });
 
@@ -352,8 +352,8 @@ nodes:
     prompt: go
     tools: [ask_user]
   confirm:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: "Ship \${worker.output}?"
 output: \${confirm.output}

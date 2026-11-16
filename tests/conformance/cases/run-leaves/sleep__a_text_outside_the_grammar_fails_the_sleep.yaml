@@ -9,8 +9,8 @@ flow: |
     t: !str
   nodes:
     settle:
-      kind: tool
-      tool_id: sleep
+      kind: call
+      call: sleep
       input:
         until: ${input.t}
   output: ${settle.output}

@@ -15,8 +15,8 @@ const FLOW = `id: old_tool_crash
 name: old_tool_crash
 nodes:
   place:
-    kind: tool
-    tool_id: place
+    kind: call
+    call: place
     input: {symbol: "ACME"}
 output: \${place.output}
 `;
@@ -25,7 +25,7 @@ const OLD_FINGERPRINT = "fde8e299e6e345b350315fabc2cc6406390fcb79db37fd3cff4ed3a
 
 /** Return `FLOW` with `fieldLine` added to the TOOL node, as line 7. */
 function withLine(fieldLine: string): string {
-  return FLOW.replace("    tool_id: place\n", `    tool_id: place\n${fieldLine}\n`);
+  return FLOW.replace("    call: place\n", `    call: place\n${fieldLine}\n`);
 }
 
 /** Return the retries of the built TOOL node of flow `text`. */
@@ -67,7 +67,7 @@ test.each([
 ])("bad retries is a load error at its line: %s", (line, got) => {
   const error = loadError(() => assembleText(withLine(line)));
 
-  expect(error.message).toBe(`node 'place' (kind=tool): \`retries:\` must be a non-negative integer, got ${got}`);
+  expect(error.message).toBe(`node 'place' (kind=call): \`retries:\` must be a non-negative integer, got ${got}`);
   expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(7);
 });
 

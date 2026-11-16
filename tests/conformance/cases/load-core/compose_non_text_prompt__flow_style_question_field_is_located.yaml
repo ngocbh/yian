@@ -4,8 +4,8 @@ flow: |
   name: f
   nodes:
     ask:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       input:
         questions:
           - question: Which?
@@ -16,7 +16,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: "node 'ask' (tool_id: ask) input 'questions': `questions[0].options[0].label:` must be text, but YAML read it as an integer; put it in quotes"
+      message: "node 'ask' (call: ask) input 'questions': `questions[0].options[0].label:` must be text, but YAML read it as an integer; put it in quotes"
       frames:
       - label: flow.yaml
         range: [9, 9, 12, 1]

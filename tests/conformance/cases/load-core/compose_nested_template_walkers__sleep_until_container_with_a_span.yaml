@@ -9,8 +9,8 @@ flow: |
       kind: code
       code: return '2030-01-01'
     w:
-      kind: tool
-      tool_id: sleep
+      kind: call
+      call: sleep
       input:
         until:
           - ${a.output}
@@ -19,7 +19,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: "node 'w' (tool_id: sleep) input 'until': must be a date or datetime, but the value is a list; write one such as `until: 2026-05-21`, or a reference such as `until: ${input.as_of}`"
+      message: "node 'w' (call: sleep) input 'until': must be a date or datetime, but the value is a list; write one such as `until: 2026-05-21`, or a reference such as `until: ${input.as_of}`"
       frames:
       - label: flow.yaml
         range: [12, 9, 13, 1]

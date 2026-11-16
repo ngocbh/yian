@@ -5,8 +5,8 @@ flow: |
   name: f
   nodes:
     q:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       input:
         to: lead
   output: null
@@ -14,7 +14,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: "node 'q' (tool_id: ask): ask needs input prompt:, input questions:, or adaptive_questions:"
+      message: "node 'q' (call: ask): ask needs input prompt:, input questions:, or adaptive_questions:"
       frames:
       - label: flow.yaml
         range: [5, 5, 9, 1]

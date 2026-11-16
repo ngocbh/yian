@@ -5,8 +5,8 @@ flow: |
   name: f
   nodes:
     q:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       input:
         questions:
           - header: Ship
@@ -15,7 +15,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: "node 'q' (tool_id: ask) input 'questions': question[0] is invalid: missing key(s) [\"question\"]"
+      message: "node 'q' (call: ask) input 'questions': question[0] is invalid: missing key(s) [\"question\"]"
       frames:
       - label: flow.yaml
         range: [9, 9, 10, 1]

@@ -7,8 +7,8 @@ flow: |
       kind: call
       nodes:
         pause:
-          kind: tool
-          tool_id: sleep
+          kind: call
+          call: sleep
           input:
             until: 5
         worker:
@@ -23,7 +23,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: "node 'pause' (tool_id: sleep) input 'until': must be a date or datetime, got 5; write one such as `until: 2026-05-21`, or a reference such as `until: ${input.as_of}`"
+      message: "node 'pause' (call: sleep) input 'until': must be a date or datetime, got 5; write one such as `until: 2026-05-21`, or a reference such as `until: ${input.as_of}`"
       frames:
       - label: flow.yaml
         range: [11, 18, 11, 19]

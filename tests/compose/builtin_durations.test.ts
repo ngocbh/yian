@@ -13,8 +13,8 @@ input:
   t: !${tType}
 nodes:
   heard:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     input:
       from: \${input.m}
       timeout: ${timeout}
@@ -34,7 +34,7 @@ test.each(["24h", "86400s"])("timeout: %s compiles to seconds", (timeout) => {
 
 test("a plain number is refused with a hint in seconds", () => {
   const message = refused(takeFlow("86400"));
-  expect(message).toContain("node 'heard' (tool_id: take) input 'timeout': a duration is text such as 24h");
+  expect(message).toContain("node 'heard' (call: take) input 'timeout': a duration is text such as 24h");
   expect(message).toContain("write 86400s");
 });
 
@@ -57,8 +57,8 @@ input:
   d: !datetime
 nodes:
   nap:
-    kind: tool
-    tool_id: sleep
+    kind: call
+    call: sleep
     input:
 ${inputs}output: \${input.d}
 `;
@@ -92,6 +92,6 @@ test.each([
 
 test("a tagged literal duration is refused at the input", () => {
   expect(refused(takeFlow("!str 5m"))).toContain(
-    "node 'heard' (tool_id: take) input 'timeout': a literal duration takes no tag; write `timeout: 5m`",
+    "node 'heard' (call: take) input 'timeout': a literal duration takes no tag; write `timeout: 5m`",
   );
 });

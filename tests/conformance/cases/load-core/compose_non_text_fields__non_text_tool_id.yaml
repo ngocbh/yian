@@ -4,15 +4,15 @@ flow: |
   name: f
   nodes:
     a:
-      kind: tool
-      tool_id: 5
+      kind: call
+      call: 5
       input: {symbol: x}
   output: ${a.output}
 expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'node ''a'' (kind=tool): `tool_id:` must be a tool name or `{group: tool}`, but YAML read it as an integer; put it in quotes'
+      message: 'node ''a'' (kind=call): `call:` must be a tool name or `{group: tool}`, but YAML read it as an integer; put it in quotes'
       frames:
       - label: flow.yaml
-        range: [6, 14, 6, 15]
+        range: [6, 11, 6, 12]

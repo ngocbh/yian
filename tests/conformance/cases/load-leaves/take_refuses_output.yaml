@@ -7,8 +7,8 @@ flow: |
     m: !Inbox(str)
   nodes:
     heard:
-      kind: tool
-      tool_id: take
+      kind: call
+      call: take
       input:
         from: ${input.m}
       output: !str
@@ -17,7 +17,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: "node 'heard' (tool_id: take): take's output is inferred ({events: list(T), closed: bool}); remove `output:`"
+      message: "node 'heard' (call: take): take's output is inferred ({events: list(T), closed: bool}); remove `output:`"
       frames:
       - label: flow.yaml
         range: [11, 13, 11, 17]

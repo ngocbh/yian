@@ -18,11 +18,11 @@ input:
   m: !Inbox(str)
 nodes:
   q:
-    kind: tool
-    tool_id: ${toolId}
+    kind: call
+    call: ${toolId}
 ${body}  keep:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     input:
       from: \${input.m}
 output: null
@@ -37,7 +37,7 @@ const ADAPTIVE = `    adaptive_questions:
 test.each([
   ["nothing to ask", "    input:\n      to: lead\n", "ask needs input prompt:, input questions:, or adaptive_questions:"],
   ["no input at all", "", "ask needs input prompt:, input questions:, or adaptive_questions:"],
-  ["a non-mapping input", "    input: Ship?\n", "node 'q' (kind=tool): `input:` must be a mapping of"],
+  ["a non-mapping input", "    input: Ship?\n", "node 'q' (kind=call): `input:` must be a mapping of"],
   [
     "questions and adaptive_questions together",
     `    input:\n      questions:\n        - question: Ship?\n${ADAPTIVE}`,
@@ -59,28 +59,28 @@ test.each([
   expect(refused(askFlow(body))).toContain(message);
 });
 
-test("tool_id: ask_user asks like ask: a lone question is a host extra, not something to ask", () => {
+test("call: ask_user asks like ask: a lone question is a host extra, not something to ask", () => {
   const body = "    input:\n      question: Ship?\n";
   expect(refused(askFlow(body, "ask_user"))).toContain(
-    "node 'q' (tool_id: ask): ask needs input prompt:, input questions:, or adaptive_questions:",
+    "node 'q' (call: ask): ask needs input prompt:, input questions:, or adaptive_questions:",
   );
 });
 
-test("tool_id: ask_user takes adaptive_questions as ask does", () => {
+test("call: ask_user takes adaptive_questions as ask does", () => {
   const node = assembleText(askFlow(ADAPTIVE, "ask_user")).flow.compiled.nodes.get("q") as ToolNode;
   expect(node.builtin).toBe("ask");
 });
 
 test("adaptive_questions is refused on a take", () => {
   const body = `    input:\n      from: \${input.m}\n${ADAPTIVE}`;
-  expect(refused(askFlow(body, "take"))).toContain("`adaptive_questions:` applies only to tool_id: ask");
+  expect(refused(askFlow(body, "take"))).toContain("`adaptive_questions:` applies only to call: ask");
 });
 
 test("ask with adaptive_questions parses and ranges the brief and llm_config", () => {
   const text = `nodes:
   q:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     adaptive_questions:
       prompt: Ask what matters
       llm_config:
@@ -102,8 +102,8 @@ input:
   plan: !str
 nodes:
   lead:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       to: lead
       prompt: "Approve this plan?\\n\\n\${input.plan}"
@@ -115,8 +115,8 @@ nodes:
       - when: \${lead.output == null}
         then: manager
   manager:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       to: manager
       prompt: "No answer from the lead in 24h. Approve this plan?\\n\\n\${input.plan}"
@@ -145,8 +145,8 @@ input:
   n: !int
 nodes:
   q:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
 ${inputs}${extra}output: \${q.output}
 `;

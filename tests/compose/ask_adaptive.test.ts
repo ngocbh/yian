@@ -14,8 +14,8 @@ input:
   topic: !str
 nodes:
   q:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       to: lead
       topic: \${input.topic}
@@ -60,6 +60,6 @@ test("a brief reading an undeclared name is refused like an agent prompt", () =>
 test("a node named like the composer is refused", () => {
   const text = ASK.replace("output: ", "  q__compose:\n    kind: code\n    code: return 1\noutput: ");
   expect(loadError(() => assembleText(text)).message).toContain(
-    "node 'q' (tool_id: ask): synthesized composer id 'q__compose' collides with an existing node id",
+    "node 'q' (call: ask): synthesized composer id 'q__compose' collides with an existing node id",
   );
 });

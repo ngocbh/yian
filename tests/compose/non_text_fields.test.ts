@@ -139,14 +139,14 @@ output: \${a.output}
 `;
 }
 
-/** A flow whose TOOL node `a` has `tool_id: <v>`. */
+/** A flow whose TOOL node `a` has `call: <v>`. */
 function toolFlow(v: string): string {
   return `id: f
 name: f
 nodes:
   a:
-    kind: tool
-    tool_id: ${v}
+    kind: call
+    call: ${v}
     input: {symbol: x}
 output: \${a.output}
 `;
@@ -507,14 +507,14 @@ describe("parseNodes", () => {
     const error = loadError(() => nodesOf(text));
 
     expect(error.message).toContain(
-      `node 'a' (kind=tool): \`tool_id:\` must be a tool name or \`{group: tool}\`, but YAML read it as ${phrase}; put it in quotes`,
+      `node 'a' (kind=call): \`call:\` must be a tool name or \`{group: tool}\`, but YAML read it as ${phrase}; put it in quotes`,
     );
-    expect(startLine(error)).toBe(lineOf(text, "tool_id: "));
+    expect(startLine(error)).toBe(lineOf(text, "call: "));
   });
 
   test.each([
     [codeFlow("null"), "code", "code", "`code:` must be text, but it is empty; write the text"],
-    [toolFlow("null"), "tool", "tool_id", "`tool_id:` must be a tool name or `{group: tool}`, but it is empty; write a tool name"],
+    [toolFlow("null"), "tool", "tool_id", "`call:` must be a tool name or `{group: tool}`, but it is empty; write a tool name"],
   ])("null code and tool id are empty: %#", (text, kind, key, message) => {
     const error = loadError(() => nodesOf(text));
 
@@ -529,7 +529,7 @@ describe("parseNodes", () => {
   test("tagged non-text tool id", () => {
     // `!str 5` still reads as an integer here; the tag's own error comes once it is quoted.
     expect(loadError(() => nodesOf(toolFlow("!str 5"))).message).toContain(
-      "`tool_id:` must be a tool name or `{group: tool}`, but YAML read it as an integer; put it in quotes",
+      "`call:` must be a tool name or `{group: tool}`, but YAML read it as an integer; put it in quotes",
     );
   });
 
@@ -727,8 +727,8 @@ input:
   proj: !str
 nodes:
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       proj: \${input.proj}
     adaptive_questions:

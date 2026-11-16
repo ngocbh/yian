@@ -4,15 +4,15 @@ flow: |
   name: f
   nodes:
     a:
-      kind: tool
-      tool_id: null
+      kind: call
+      call: null
       input: {symbol: x}
   output: ${a.output}
 expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'node ''a'' (kind=tool): `tool_id:` must be a tool name or `{group: tool}`, but it is empty; write a tool name'
+      message: 'node ''a'' (kind=call): `call:` must be a tool name or `{group: tool}`, but it is empty; write a tool name'
       frames:
       - label: flow.yaml
-        range: [6, 14, 6, 18]
+        range: [6, 11, 6, 15]

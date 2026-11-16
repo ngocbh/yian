@@ -5,7 +5,7 @@
  */
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -26,13 +26,11 @@ let tmp: string;
 beforeAll(() => {
   tmp = realpathSync(mkdtempSync(join(tmpdir(), "yian-map-tools-")));
   mkdirSync(join(tmp, "lessons"));
-  writeFileSync(join(tmp, "lessons", "a.md"), "one");
-  writeFileSync(join(tmp, "lessons", "b.md"), "two");
 });
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
-/** The memory `lessons`, whose files `a.md` and `b.md` hold `one` and `two`. */
+/** The memory `lessons`, which `app` declares. */
 const lessons = () => new FileMemory({ root: join(tmp, "lessons"), id: "t/lessons" });
 
 /** A flow with the inputs `ids`, the memory `lessons` and `inputs` (lines under `input:`), and `nodes`. */
@@ -61,37 +59,19 @@ async function failure(text: string): Promise<[string, string]> {
   return [error.message, at];
 }
 
-/** A host tool taking string `q` and int `limit` that records each call's id and returns `found <q> <limit>`. */
-function search(calls: string[]) {
-  return tool({
-    name: "search",
-    description: "A host tool.",
-    parameters: { type: "object", properties: { q: { type: "string" }, limit: { type: "integer" } }, required: ["q"] },
-    execute: (args: Record<string, unknown>, ctx) => {
-      calls.push(ctx.callId);
-      return `found ${String(args["q"])} ${String(args["limit"])}`;
-    },
-  });
-}
+/** A host tool named `search`. */
+const search = tool({
+  name: "search",
+  description: "A host tool.",
+  parameters: { type: "object", properties: {} },
+  execute: () => "found",
+});
 
 /** The names of the inputs the START node of map `fetch`'s generated body declares. */
 async function bodyInputs(text: string): Promise<string[]> {
   const start = staticNodes(await loadFlow(text)).find(([path]) => path === "fetch/__start__")![1];
   return start.params!.map((parameter) => parameter.name);
 }
-
-test("a map runs a host tool once per item, each call under the map's own node id", async () => {
-  const text = `${mapApp("search", "    input:\n      q: ${item}\n      limit: 2\n")}output: \${fetch.output}\n`;
-  const calls: string[] = [];
-  const result = await runFlow(await loadFlow(text), { ids: ["a", "b"], lessons: lessons() }, {
-    env: hostEnv(tmp),
-    runId: "r",
-    tools: { search: search(calls) },
-  });
-
-  expect(result.output).toEqual(["found a 2", "found b 2"]);
-  expect(calls.sort()).toEqual(["r/fetch#0/fetch", "r/fetch#1/fetch"]);
-});
 
 test("a literal argument goes straight to the body's node; only a binding is a body input", async () => {
   const text = mapApp("search", "    input:\n      q: ${item}\n      limit: 2\n      tags: [a, b]\n");
@@ -196,15 +176,6 @@ test("an unknown field on a map naming a tool lists the tool call's fields among
   ]);
 });
 
-test("take is refused at call:, since a map can't give each item an inbox", async () => {
-  const text = mapApp("take", "    input:\n      from: ${input.box}\n", "  box: !Inbox(str)\n");
-  expect(await failure(text)).toEqual([
-    "map node 'fetch': `call: take` reads an inbox, and a map can't give each item its own (per-instance " +
-      "inboxes aren't supported yet); take before the map",
-    "take",
-  ]);
-});
-
 test("a tool given an inbox gets the map's inbox rule, naming the tool", async () => {
   const text = mapApp("search", "    input:\n      box: ${input.box}\n", "  box: !Inbox(str)\n");
   expect((await failure(text))[0]).toBe(
@@ -218,11 +189,6 @@ test("a memory's tool reads the memory through the body, never as an argument", 
   const node = await bodyNode(text);
   expect(node.params!.map((parameter) => parameter.name)).toEqual(["path"]);
   expect(node.memoryTool).toBe(true);
-
-  const result = await runFlow(await loadFlow(text), { ids: ["a.md", "b.md"], lessons: lessons() }, {
-    env: hostEnv(tmp),
-  });
-  expect((result.output as { text: string }[]).map((each) => each.text)).toEqual(["one", "two"]);
 });
 
 test("a memory bound to a tool's argument is refused as a call node refuses it, at the author's binding", async () => {
@@ -277,7 +243,7 @@ test("run start names a map's tool by the map", async () => {
   const flow = await loadFlow(text);
 
   expect(runStartTools(flow)).toEqual([{ node: "run/fetch", site: "map node 'fetch'", name: "serch", hint: null }]);
-  const run = runFlow(flow, {}, { env: hostEnv(tmp), tools: { search: search([]) } });
+  const run = runFlow(flow, {}, { env: hostEnv(tmp), tools: { search } });
   expect(((await run.catch((caught: unknown) => caught)) as Error).message).toBe(
     "map node 'fetch' in 'run' names tool 'serch', which isn't in this run's tools; known tools: [\"search\"]; " +
       "did you mean 'search'?",

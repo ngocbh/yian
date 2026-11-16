@@ -1,0 +1,13 @@
+kind: cli
+flow: |
+  id: r
+  name: r
+  defs:
+    greet: {kind: code, code: "return 1", output: !int}
+  nodes:
+    n: {kind: call, call: gret}
+    m: {kind: call, call: {github: search}}
+args: [check, flow.yaml]
+expect:
+  exit: 0
+  stdout: "flow.yaml: ok; checked at run start: gret (node 'n'; did you mean the def greet?), {github: search} (node 'm')\n"

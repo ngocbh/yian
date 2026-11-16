@@ -292,11 +292,26 @@ describe("read_flow", () => {
   });
 });
 
+/** What check_flow says of `parentFlow`'s flow `main`, which takes `n`. */
+const MAIN_CHECK = { ok: true, name: "main", inputs: [{ name: "n", type: "int" }], run_start_tools: [], error: null };
+
 describe("check_flow", () => {
   test("a flow that loads is ok, with its name and inputs", async () => {
     writeFileSync(join(root, "main.yaml"), parentFlow("sub/child"));
     writeFileSync(join(root, "sub", "child.yaml"), FLOW);
-    expect(await call("check_flow", { path: "main.yaml" })).toEqual({ ok: true, name: "main", inputs: [{ name: "n", type: "int" }], error: null });
+    expect(await call("check_flow", { path: "main.yaml" })).toEqual(MAIN_CHECK);
+  });
+
+  test("lists the tools left for run start, with the closest name the flow defines", async () => {
+    writeFileSync(
+      join(root, "typo.yaml"),
+      'id: r\nname: r\ndefs:\n  greet: {kind: code, code: "return 1", output: !int}\n' +
+        "nodes:\n  n: {kind: call, call: gret}\n  m: {kind: call, call: search}\n",
+    );
+    expect(((await call("check_flow", { path: "typo.yaml" })) as FlowCheck).run_start_tools).toEqual([
+      { node: "n", name: "gret", hint: "did you mean the def greet?" },
+      { node: "m", name: "search", hint: null },
+    ]);
   });
 
   test("a flow that doesn't load shows the diagnostic as yian check does, without colour", async () => {
@@ -335,7 +350,7 @@ describe("check_flow", () => {
   test("checks given content as the file at the path, without writing it", async () => {
     writeFileSync(join(root, "sub", "child.yaml"), FLOW);
     const ok = await call("check_flow", { path: "draft.yaml", content: parentFlow("sub/child") });
-    expect(ok).toEqual({ ok: true, name: "main", inputs: [{ name: "n", type: "int" }], error: null });
+    expect(ok).toEqual(MAIN_CHECK);
     const bad = await failed(call("check_flow", { path: "sub/a.yaml", content: "id: [\n" }));
     expect(bad).toContain("a.yaml");
     expect(existsSync(join(root, "draft.yaml"))).toBe(false);
@@ -362,7 +377,7 @@ describe("checkFocus", () => {
     writeFileSync(join(tmp, "elsewhere", "lib", "child.yaml"), FLOW);
     expect(await checkFocus(path, NO_ENV)).toEqual({
       text: parentFlow("lib/child"),
-      check: { ok: true, name: "main", inputs: [{ name: "n", type: "int" }], error: null },
+      check: MAIN_CHECK,
       inbox: false,
     });
   });
@@ -397,7 +412,7 @@ describe("checkFocus", () => {
     expect(focus.text).toStartWith(FLOW);
     expect(focus.text).toEndWith("\n(cut at 32768 bytes)");
     expect(Buffer.byteLength(focus.text)).toBeLessThan(33 * 1024);
-    expect(focus.check).toEqual({ ok: true, name: "f", inputs: [{ name: "n", type: "int" }], error: null });
+    expect(focus.check).toEqual({ ...MAIN_CHECK, name: "f" });
   });
 
   test("a flow that doesn't load gives its diagnostic", async () => {

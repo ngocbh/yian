@@ -28,3 +28,4 @@ expect:
           - {name: n, type: int, required: true, has_default: false}
           - {name: tag, type: Optional(str), required: false, has_default: false}
           - {name: w, type: int, required: false, has_default: true}
+        run_start_tools: []

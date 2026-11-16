@@ -86,6 +86,7 @@ const ALLOWED: Record<string, string> = {
   "cli/render.ts: SPAN_WHOLE": "longest marked span an error's source frame shows whole",
   "cli/render.ts: SGR": "terminal color and style codes",
   "cli/run.ts: SPIN_MS": "spinner frame interval",
+  "cli/run.ts: RUN_START_SHOWN": "tools left for run start a flow's yian check line names",
   "cli/cells.ts: columnsOf.||": "terminal width when the output reports none",
   "cli/cells.ts: rowsOf.||": "terminal height when the output reports none",
   "cli/report_issue.ts: LINK_CHARS": "longest prefilled new-issue link, read whole by the model",

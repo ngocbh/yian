@@ -168,7 +168,13 @@ output: \${greet.output}
 `;
 
 /** What check_flow says of HELLO, as the model reads it. */
-const HELLO_CHECK = { ok: true, name: "hello", inputs: [{ name: "name", type: "str" }], error: null };
+const HELLO_CHECK = {
+  ok: true,
+  name: "hello",
+  inputs: [{ name: "name", type: "str" }],
+  run_start_tools: [],
+  error: null,
+};
 
 /** A flow that asks which region at once. */
 const ASK = `id: ask

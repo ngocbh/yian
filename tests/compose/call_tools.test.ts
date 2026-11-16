@@ -688,10 +688,6 @@ test("an inline tool call on a branch not taken never runs", async () => {
   expect(calls).toEqual([]);
 });
 
-const TAKE_IN_MAP =
-  "map node 'n': `call: take` reads an inbox, and a map can't give each item its own (per-instance inboxes " +
-  "aren't supported yet); take before the map";
-
 // Each row: the `call:` value on a map, and what its generated body's node runs or the load error.
 test.each([
   ["gret", "tool gret"],
@@ -701,10 +697,14 @@ test.each([
   ["{lessons: read}", "tool lessons_read memory"],
   ["{crm: lookup}", "tool crm_lookup module crm"],
   ["greet", "flow greet"],
-  ["take", TAKE_IN_MAP],
   [
     "{crm: take}",
-    "node 'n' (kind=map): `call: {crm: take}`: take is a built-in, not a group's tool; write `call: take`",
+    "map node 'n': `call: {crm: take}` reads an inbox, and a map can't give each item its own (per-instance " +
+      "inboxes aren't supported yet); take before the map",
+  ],
+  [
+    "{crm: sleep}",
+    "node 'n' (kind=map): `call: {crm: sleep}`: sleep is a built-in, not a group's tool; write `call: sleep`",
   ],
   ["load_skill", "map node 'n': tool id `load_skill` is reserved by yian"],
   ["lessons", "map node 'n': `lessons` is a memory input; name one of its tools: `call: {lessons: <tool>}`"],

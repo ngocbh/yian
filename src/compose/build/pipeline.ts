@@ -1889,12 +1889,15 @@ function callsToolRule(scope: CallableScope, memories: ReadonlySet<string>, diag
           `def${hint}`,
       );
     };
-    /** Built-in `name`; a map or loop refuses `load_skill` as the TOOL node does. */
-    const builtin = (name: string): true => {
+    /**
+     * Built-in `name`, as `written`; a map or loop refuses `load_skill` as the TOOL node does, and a
+     * map refuses `take`.
+     */
+    const builtin = (name: string, written = `call: ${name}`): true => {
       if (name === LOAD_SKILL && !onCall) throw fail(`tool id \`${LOAD_SKILL}\` is reserved by yian`);
       if (name === TAKE && kind === "map") {
         throw fail(
-          "`call: take` reads an inbox, and a map can't give each item its own (per-instance inboxes aren't " +
+          `\`${written}\` reads an inbox, and a map can't give each item its own (per-instance inboxes aren't ` +
             "supported yet); take before the map",
         );
       }
@@ -1925,8 +1928,12 @@ function callsToolRule(scope: CallableScope, memories: ReadonlySet<string>, diag
     if (entries.length !== 1 || entries[0]![0] === "") return false;
     const [group, name] = entries[0]!;
     const written = `\`{${group}: ${String(name)}}\``;
-    // A built-in in a group is the TOOL node's refusal, which shows the bare form to write.
-    if (typeof name === "string" && RESERVED_TOOL_NAMES.has(name)) return runsTools || builtin(name);
+    if (typeof name === "string" && RESERVED_TOOL_NAMES.has(name)) {
+      // A built-in in a group is the TOOL node's refusal, which shows the bare form to write; on a
+      // map, `take` gets the map's own, as the bare form would.
+      if (runsTools && !(name === TAKE && kind === "map")) return true;
+      return builtin(name, `call: {${group}: ${name}}`);
+    }
     const section = scope.section(group);
     const module = scope.toolModule(group);
     if (memories.has(group)) {

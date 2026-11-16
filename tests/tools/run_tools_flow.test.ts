@@ -49,11 +49,11 @@ id: greeting
 name: greeting
 nodes:
   who:
-    kind: tool
-    tool_id: whoami
+    kind: call
+    call: whoami
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: "Hello \${who.output}?"
 output: \${ask.output}
@@ -64,8 +64,8 @@ id: global_tool
 name: global_tool
 nodes:
   call:
-    kind: tool
-    tool_id: run_flow_global_probe
+    kind: call
+    call: run_flow_global_probe
 output: \${call.output}
 `;
 
@@ -79,8 +79,8 @@ defs:
       last: !str
     nodes:
       ask:
-        kind: tool
-        tool_id: ask
+        kind: call
+        call: ask
         input:
           prompt: "next turn"
         output: !str
@@ -108,8 +108,8 @@ defs:
       item: !str
     nodes:
       ask:
-        kind: tool
-        tool_id: ask
+        kind: call
+        call: ask
         input:
           prompt: "item?"
         output: !str
@@ -411,8 +411,8 @@ id: group_tool
 name: group_tool
 nodes:
   found:
-    kind: tool
-    tool_id: {github: search}
+    kind: call
+    call: {github: search}
     input: {text: owls}
 output: \${found.output}
 `;
@@ -435,7 +435,7 @@ test.each([
   ["github_serch", "`{github: search}`"],
   ["lookp", "'lookup'"],
 ])("a TOOL node's unknown tool_id %s suggests the form to write: %s", async (toolId, suggestion) => {
-  const flow = `id: t\nname: t\nnodes:\n  found:\n    kind: tool\n    tool_id: ${toolId}\n    input: {text: owls}\noutput: \${found.output}\n`;
+  const flow = `id: t\nname: t\nnodes:\n  found:\n    kind: call\n    call: ${toolId}\n    input: {text: owls}\noutput: \${found.output}\n`;
   const tools = { lookup: textTool("lookup"), github: [textTool("search")] };
 
   const error = await rejected(run(flow, {}, { log: freshLog(), tools }));
@@ -447,7 +447,7 @@ test.each([
 });
 
 test("a TOOL node naming a group offers one of its tools as {group: tool}", async () => {
-  const flow = `id: t\nname: t\nnodes:\n  found:\n    kind: tool\n    tool_id: github\n    input: {text: owls}\noutput: \${found.output}\n`;
+  const flow = `id: t\nname: t\nnodes:\n  found:\n    kind: call\n    call: github\n    input: {text: owls}\noutput: \${found.output}\n`;
 
   const error = await rejected(run(flow, {}, { log: freshLog(), tools: { github: [textTool("search")] } }));
 
@@ -473,8 +473,8 @@ id: group_tool
 name: group_tool
 nodes:
   found:
-    kind: tool
-    tool_id: {github: search}
+    kind: call
+    call: {github: search}
     input: {text: owls}
 output: \${found.output}
 `;

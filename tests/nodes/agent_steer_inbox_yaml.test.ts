@@ -159,7 +159,7 @@ test.each([
 ])("steer_inbox refuses %s", (_label, line, input, message) => {
   const flow = steerFlow(line, "    output: !str", input).replace(
     "output: ${chat.output}",
-    "  other:\n    kind: code\n    code: return 1\n  keep:\n    kind: tool\n    tool_id: take\n    input:\n" +
+    "  other:\n    kind: code\n    code: return 1\n  keep:\n    kind: call\n    call: take\n    input:\n" +
       "      from: ${input.notes}\noutput: ${chat.output}",
   );
   const error = loadError(() => assembleText(flow));

@@ -445,8 +445,8 @@ name: f
 input: {proj: !str , m: !str , p: !str }
 nodes:
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       proj: \${input.proj}
     adaptive_questions:
@@ -648,8 +648,8 @@ input: {d: !D }
 llm_config: {provider: openai}
 nodes:
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: hi
     adaptive_questions:

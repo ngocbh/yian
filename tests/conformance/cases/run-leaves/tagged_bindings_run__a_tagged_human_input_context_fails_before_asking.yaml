@@ -9,8 +9,8 @@ flow: |
     n: !Any
   nodes:
     ask:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       input:
         count: !int ${input.n}
         prompt: "Proceed with ${input.n} items?"

@@ -9,8 +9,8 @@ flow: |
         n: !int
       nodes:
         bump:
-          kind: tool
-          tool_id: bump
+          kind: call
+          call: bump
           input:
             n: ${input.n}
           output:
@@ -21,8 +21,8 @@ flow: |
         n: !int
       nodes:
         bump:
-          kind: tool
-          tool_id: bump
+          kind: call
+          call: bump
           input:
             n: ${input.n}
           output:
@@ -45,8 +45,8 @@ other: |
         n: !int
       nodes:
         bump:
-          kind: tool
-          tool_id: bump
+          kind: call
+          call: bump
           input:
             n: ${input.n}
           output:
@@ -57,8 +57,8 @@ other: |
         n: !int
       nodes:
         bump:
-          kind: tool
-          tool_id: bump
+          kind: call
+          call: bump
           input:
             n: ${input.n}
           output:

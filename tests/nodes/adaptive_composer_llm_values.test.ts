@@ -50,8 +50,8 @@ name: f
 ${typedefs}input: ${inputs}
 nodes:
 ${pick}  ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       proj: \${input.proj}
     adaptive_questions:
@@ -224,8 +224,8 @@ defs:
     input: {p: !str }
     nodes:
       ask:
-        kind: tool
-        tool_id: ask
+        kind: call
+        call: ask
         adaptive_questions:
           prompt: "Q"
           llm_config: {provider: '\${input.p}', model: m}
@@ -248,8 +248,8 @@ defs:
     input: {m: !Optional(str) }
     nodes:
       ask:
-        kind: tool
-        tool_id: ask
+        kind: call
+        call: ask
         adaptive_questions:
           prompt: "Q"
           llm_config: {model: !str '\${input.m}'}

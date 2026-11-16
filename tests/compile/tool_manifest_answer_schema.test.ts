@@ -11,8 +11,8 @@ const askFlow = (output: string, timeout = "24h") => `id: f
 name: f
 nodes:
   q:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: Ship it?
       timeout: ${timeout}
@@ -25,8 +25,8 @@ const PLAIN = `id: old_tool_crash
 name: old_tool_crash
 nodes:
   place:
-    kind: tool
-    tool_id: place
+    kind: call
+    call: place
     input: {symbol: "ACME"}
 output: \${place.output}
 `;

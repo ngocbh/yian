@@ -148,8 +148,8 @@ nodes:
     code: |
       return "5"
   place:
-    kind: tool
-    tool_id: place_order
+    kind: call
+    call: place_order
     input:
       qty: ${binding}
 output: \${place.output}
@@ -304,8 +304,8 @@ nodes:
     code: |
       return /^[0-9]+$/.test(inputs["n"]) ? Number(inputs["n"]) : inputs["n"]
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: "Proceed with \${src.output} items?"
       count: !int \${src.output}

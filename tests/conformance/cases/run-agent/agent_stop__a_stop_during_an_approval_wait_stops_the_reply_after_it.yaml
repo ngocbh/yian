@@ -12,13 +12,13 @@ flow: |
     notes: !Inbox(str)
   nodes:
     heard:
-      kind: tool
-      tool_id: take
+      kind: call
+      call: take
       input:
         from: ${input.notes}
     approve:
-      kind: tool
-      tool_id: approve
+      kind: call
+      call: approve
       depends_on: [heard]
     reply:
       kind: agent

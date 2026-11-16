@@ -36,8 +36,8 @@ flow: |
       prompt: "Propose one concrete, neutral action for ${topic} in a single sentence."
 
     approve:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       input:
         prompt: "Approve this action? ${propose.output}  (approve / reject)"
       output: !Approval                  # the injected answer is validated against Approval's tags
@@ -51,8 +51,8 @@ flow: |
       else: abort
 
     settle:
-      kind: tool
-      tool_id: sleep
+      kind: call
+      call: sleep
       input:
         until: ${input.settle_at}        # a date means midnight UTC
       # `sleep` produces no meaningful value — downstream orders after it via depends_on.

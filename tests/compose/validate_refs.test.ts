@@ -134,8 +134,8 @@ nodes:
     code: |
       return "2026-01-01T00:00:00Z"
   settle:
-    kind: tool
-    tool_id: sleep
+    kind: call
+    call: sleep
     input:
       until: SOURCE
 output: \${settle.output}

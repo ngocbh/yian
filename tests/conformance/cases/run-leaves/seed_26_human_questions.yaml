@@ -28,8 +28,8 @@ flow: |
 
   nodes:
     ask:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       input:
         questions:
           - question: "Which framework for ${input.proj}?"   # renders against the pool

@@ -6,14 +6,14 @@ flow: |
     q: !str
   nodes:
     fetch:
-      kind: tool
-      tool_id: lookup
+      kind: call
+      call: lookup
       retries: 1
       input:
         q: ${input.q}
     ok:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       input:
         prompt: "Use ${fetch.output}?"
       output: !str

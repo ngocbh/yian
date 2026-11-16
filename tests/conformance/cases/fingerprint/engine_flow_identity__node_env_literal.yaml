@@ -5,8 +5,8 @@ flow: |
   name: literal_env
   nodes:
     step:
-      kind: tool
-      tool_id: step
+      kind: call
+      call: step
       env:
         token: "first-value"
   output: ${step.output}
@@ -15,8 +15,8 @@ other: |
   name: literal_env
   nodes:
     step:
-      kind: tool
-      tool_id: step
+      kind: call
+      call: step
       env:
         token: "second-value"
   output: ${step.output}

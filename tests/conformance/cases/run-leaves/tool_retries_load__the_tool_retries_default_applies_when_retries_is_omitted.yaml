@@ -6,8 +6,8 @@ flow: |
   name: t
   nodes:
     call:
-      kind: tool
-      tool_id: flaky
+      kind: call
+      call: flaky
   output: ${call.output}
 env:
   YIAN_TOOL_RETRIES: '1'

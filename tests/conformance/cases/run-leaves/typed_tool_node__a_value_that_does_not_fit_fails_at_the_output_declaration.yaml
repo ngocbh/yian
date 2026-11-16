@@ -6,8 +6,8 @@ flow: |
   name: count
   nodes:
     place:
-      kind: tool
-      tool_id: place_order
+      kind: call
+      call: place_order
       retries: 3
       input:
         qty: 5

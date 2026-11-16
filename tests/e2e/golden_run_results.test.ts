@@ -40,8 +40,8 @@ input:
   settle_at: !date
 nodes:
   approve:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: "approve? (approve/reject)"
     output: !Approval
@@ -53,8 +53,8 @@ nodes:
         then: settle
     else: abort
   settle:
-    kind: tool
-    tool_id: sleep
+    kind: call
+    call: sleep
     input:
       until: \${input.settle_at}
   confirm:

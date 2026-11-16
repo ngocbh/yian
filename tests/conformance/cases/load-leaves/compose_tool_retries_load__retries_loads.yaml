@@ -4,8 +4,8 @@ flow: |
   name: old_tool_crash
   nodes:
     place:
-      kind: tool
-      tool_id: place
+      kind: call
+      call: place
       retries: 2
       input: {symbol: "ACME"}
   output: ${place.output}

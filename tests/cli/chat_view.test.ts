@@ -1668,8 +1668,8 @@ const COLOR_FLOW = `id: color
 name: color
 nodes:
   pick:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: "Which colour?"
     output: !str
@@ -1774,8 +1774,8 @@ const NAP_FLOW = `id: nap
 name: nap
 nodes:
   nap:
-    kind: tool
-    tool_id: sleep
+    kind: call
+    call: sleep
     input:
       for: "2s"
   done:

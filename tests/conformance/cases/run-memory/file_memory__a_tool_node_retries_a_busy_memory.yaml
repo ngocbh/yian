@@ -16,8 +16,8 @@ flow: |
       prompt: What should we note?
       output: !str
     add:
-      kind: tool
-      tool_id: {lessons: append}
+      kind: call
+      call: {lessons: append}
       retries: 1
       input:
         path: notes.md

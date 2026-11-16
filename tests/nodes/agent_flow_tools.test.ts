@@ -214,8 +214,8 @@ defs:
     description: Ask for approval.
     nodes:
       sign:
-        kind: tool
-        tool_id: sign
+        kind: call
+        call: sign
         output: !str
     output: \${sign.output}
 nodes:

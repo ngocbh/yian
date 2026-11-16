@@ -5,13 +5,13 @@ flow: |
   name: typed
   nodes:
     size:
-      kind: tool
-      tool_id: size
+      kind: call
+      call: size
       output:
         qty: !int
     use:
-      kind: tool
-      tool_id: use
+      kind: call
+      call: use
       input:
         qty: ${size.output.qty}
       output: !int
@@ -21,13 +21,13 @@ other: |
   name: typed
   nodes:
     size:
-      kind: tool
-      tool_id: size
+      kind: call
+      call: size
       output:
         qty: !int
     use:
-      kind: tool
-      tool_id: use
+      kind: call
+      call: use
       input:
         qty: !int ${size.output.qty}
       output: !int

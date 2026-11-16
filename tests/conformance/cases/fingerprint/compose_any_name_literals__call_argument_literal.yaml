@@ -9,14 +9,14 @@ flow: |
         password: !Optional(str) null
       nodes:
         run:
-          kind: tool
-          tool_id: run
+          kind: call
+          call: run
           output: !str
       output: ${run.output}
   nodes:
     n:
-      kind: tool
-      tool_id: n
+      kind: call
+      call: n
       input:
         x: call(g, password=hunter2)
       output: !str
@@ -30,14 +30,14 @@ other: |
         password: !Optional(str) null
       nodes:
         run:
-          kind: tool
-          tool_id: run
+          kind: call
+          call: run
           output: !str
       output: ${run.output}
   nodes:
     n:
-      kind: tool
-      tool_id: n
+      kind: call
+      call: n
       input:
         x: call(g, password=hunter3)
       output: !str

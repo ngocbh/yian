@@ -8,8 +8,8 @@ flow: |
     n: !int(101..)
   nodes:
     place:
-      kind: tool
-      tool_id: place_order
+      kind: call
+      call: place_order
       input:
         qty: ${input.n}
   output: ${place.output}

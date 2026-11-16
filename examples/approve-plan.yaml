@@ -28,8 +28,8 @@ input:
   plan: !str
 nodes:
   lead:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       to: lead                           # host extension: who answers
       prompt: |-
@@ -44,8 +44,8 @@ nodes:
       - when: ${lead.output == null}
         then: manager
   manager:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       to: manager
       prompt: |-

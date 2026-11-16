@@ -892,7 +892,7 @@ test("arithmetic in a map over: names map over", () => {
 test("arithmetic in a sleep until: names the until input", () => {
   // A sleep's `until:` that does arithmetic on a skipped value is rejected at its input.
   const until = "      until: ${order.output.s + '-01-01'}";
-  const text = flow(`${ITEMS}  w:\n    kind: tool\n    tool_id: sleep\n    input:\n${until}\n`, "\n  r: ${rejected.output}");
+  const text = flow(`${ITEMS}  w:\n    kind: call\n    call: sleep\n    input:\n${until}\n`, "\n  r: ${rejected.output}");
   const error = loadError(() => assembleText(text));
   expect(error.message).toBe(
     `node 'w' input 'until': ${fieldArithmetic("order.output", "s", "node 'order' may be skipped while 'w' runs")}`,

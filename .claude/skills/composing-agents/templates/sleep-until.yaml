@@ -8,8 +8,8 @@ input:
   deadline: !datetime
 nodes:
   settle:
-    kind: tool
-    tool_id: sleep
+    kind: call
+    call: sleep
     input:
       until: ${input.deadline}     # or `for: 2h`; exactly one of the two
   continue:

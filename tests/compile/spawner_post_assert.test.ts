@@ -150,8 +150,8 @@ input:
   v: !int
 nodes:
   approve:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: "value \${input.v}?"
     output: !int

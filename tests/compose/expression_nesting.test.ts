@@ -70,7 +70,7 @@ const searched = (condition: string) => routed('    cases:\n      - when: "' + c
 
 /** An `ask` flow whose question text holds an `n`-level span. */
 const asked = (n: number) =>
-  "id: f\nname: f\ninput:\n  proj: !str\nnodes:\n  ask:\n    kind: tool\n    tool_id: ask\n" +
+  "id: f\nname: f\ninput:\n  proj: !str\nnodes:\n  ask:\n    kind: call\n    call: ask\n" +
   "    input:\n      questions:\n" +
   '        - question: "Which framework for ${' + upper(n, "input.proj") + '}?"\n' +
   "          header: Framework\n" +

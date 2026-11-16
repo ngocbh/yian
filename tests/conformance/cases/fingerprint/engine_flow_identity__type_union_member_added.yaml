@@ -14,8 +14,8 @@ flow: |
       action: Literal(hold)
   nodes:
     body:
-      kind: tool
-      tool_id: body
+      kind: call
+      call: body
       output: !Union(Buy;Sell)
   output: ${body.output}
 other: |
@@ -32,8 +32,8 @@ other: |
       action: Literal(hold)
   nodes:
     body:
-      kind: tool
-      tool_id: body
+      kind: call
+      call: body
       output: !Union(Buy;Sell;Hold)
   output: ${body.output}
 expect:

@@ -130,8 +130,8 @@ output: \${c.output}
 name: ask
 nodes:
   sure:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: "Which region?"
     output: !str
@@ -149,8 +149,8 @@ defs:
       messages: !Inbox(str)
     nodes:
       heard:
-        kind: tool
-        tool_id: take
+        kind: call
+        call: take
         input:
           from: \${input.messages}
           take: all
@@ -318,7 +318,7 @@ output: done
   test(
     "the approval lists what the flow and the flows it uses can do",
     async () => {
-      writeFileSync(join(root, "nap.yaml"), "id: nap\nname: nap\nnodes:\n  nap: {kind: tool, tool_id: sleep, input: {for: 1s}}\noutput: ${nap.output}\n");
+      writeFileSync(join(root, "nap.yaml"), "id: nap\nname: nap\nnodes:\n  nap: {kind: call, call: sleep, input: {for: 1s}}\noutput: ${nap.output}\n");
       writeFileSync(
         join(root, "main.yaml"),
         "id: main\nname: main\nnodes:\n  work:\n    kind: call\n    call: nap\noutput: ${work.output}\nuses:\n  nap: ./nap\n",
@@ -448,8 +448,8 @@ output: done
     async () => {
       writeFileSync(
         join(root, "remember.yaml"),
-        "id: remember\nname: remember\ninput:\n  lessons: !FileMemory\nnodes:\n  add:\n    kind: tool\n" +
-          "    tool_id: {lessons: append}\n    input: {path: MEMORY.md, text: noted}\noutput: ${add.output.path}\n",
+        "id: remember\nname: remember\ninput:\n  lessons: !FileMemory\nnodes:\n  add:\n    kind: call\n" +
+          "    call: {lessons: append}\n    input: {path: MEMORY.md, text: noted}\noutput: ${add.output.path}\n",
       );
       const { requests, invoke, json } = runTools();
       const given = await rejection(
@@ -472,7 +472,7 @@ output: done
       writeFileSync(
         join(root, "cases.yaml"),
         "id: cases\nname: cases\ninput:\n  line: !str\n  cases: !VectorDBMemory\nnodes:\n  add:\n" +
-          "    kind: tool\n    tool_id: {cases: add}\n    input:\n      text: ${input.line}\noutput: ${add.output.id}\n",
+          "    kind: call\n    call: {cases: add}\n    input:\n      text: ${input.line}\noutput: ${add.output.id}\n",
       );
       const embed: Embed = async (texts) => texts.map(() => Float32Array.of(1, 1, 0, 0));
       // The store a test reads is its own, never the account's.
@@ -506,7 +506,7 @@ output: done
       writeFileSync(
         join(root, "remember.yaml"),
         "id: remember\nname: remember\ninput:\n  lessons: !FileMemory\n  notes: !Optional(FileMemory)\n" +
-          "nodes:\n  add:\n    kind: tool\n    tool_id: {lessons: append}\n" +
+          "nodes:\n  add:\n    kind: call\n    call: {lessons: append}\n" +
           "    input: {path: MEMORY.md, text: noted}\noutput: ${add.output.path}\n",
       );
       const { requests, json } = runTools();
@@ -531,8 +531,8 @@ output: done
       mkdirSync(join(root, "shared"));
       writeFileSync(
         join(root, "shared", "remember.yaml"),
-        "id: remember\nname: remember\ninput:\n  lessons: !FileMemory\nnodes:\n  add:\n    kind: tool\n" +
-          "    tool_id: {lessons: append}\n    input: {path: MEMORY.md, text: noted}\noutput: ${add.output.path}\n",
+        "id: remember\nname: remember\ninput:\n  lessons: !FileMemory\nnodes:\n  add:\n    kind: call\n" +
+          "    call: {lessons: append}\n    input: {path: MEMORY.md, text: noted}\noutput: ${add.output.path}\n",
       );
       symlinkSync(join(root, "shared", "remember.yaml"), join(root, "proj", "remember.yaml"));
       const home = join(tmp, "home");
@@ -918,8 +918,8 @@ input:
   notes: !Inbox(str)
 nodes:
   heard:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     input:
       from: \${input.notes}
       take: all
@@ -931,8 +931,8 @@ output: \${heard.output.closed}
 name: asks
 nodes:
   sure:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: "Which region?"
     output: !str
@@ -1234,7 +1234,7 @@ output: \${sure.output}
       expect(names).not.toContain("review_flow");
       // A flow the user wrote can't call the tools the authoring runs are granted.
       const GREEDY =
-        "id: g\nname: g\nnodes:\n  w: {kind: tool, tool_id: write_flow, input: {path: a.yaml, " +
+        "id: g\nname: g\nnodes:\n  w: {kind: call, call: write_flow, input: {path: a.yaml, " +
         "content: x}}\noutput: ${w.output}\n";
       const greedy = await loadConfinedText(root, join(root, "greedy.yaml"), GREEDY, NO_ENV);
       await expect(runs.start(greedy, {})).rejects.toThrow("write_flow");

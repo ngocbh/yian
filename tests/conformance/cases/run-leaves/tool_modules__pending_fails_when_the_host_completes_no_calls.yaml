@@ -8,8 +8,8 @@ flow: |
     crm: ./crm.ts
   nodes:
     later:
-      kind: tool
-      tool_id: {crm: later}
+      kind: call
+      call: {crm: later}
       retries: 1
   output: ${later.output}
 files:

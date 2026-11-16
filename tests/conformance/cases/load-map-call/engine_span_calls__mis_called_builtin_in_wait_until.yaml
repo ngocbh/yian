@@ -6,8 +6,8 @@ flow: |2
   input: {d: !str }
   nodes:
     w:
-      kind: tool
-      tool_id: sleep
+      kind: call
+      call: sleep
       input:
         until: '${upper(input.d, 1)}'
   output: ok

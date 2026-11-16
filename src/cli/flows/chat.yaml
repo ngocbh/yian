@@ -193,8 +193,8 @@ defs:
         call: compact_history
         input: {summary: "${input.summary}", history: "${input.history}", model: "${input.model}"}
       heard:
-        kind: tool
-        tool_id: take                    # waits until a message arrives or the inbox closes
+        kind: call
+        call: take                    # waits until a message arrives or the inbox closes
         input:
           from: ${input.owner_messages}
           take: all

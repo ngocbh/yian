@@ -66,8 +66,8 @@ defs:
       owner_messages: !Inbox(str)
     nodes:
       heard:
-        kind: tool
-        tool_id: take
+        kind: call
+        call: take
         input:
           from: \${input.owner_messages}
           take: all
@@ -112,8 +112,8 @@ const sleepFlow = (input: string) => `id: nap
 name: nap
 nodes:
   nap:
-    kind: tool
-    tool_id: sleep
+    kind: call
+    call: sleep
     input:
       ${input}
 output: \${nap.output}
@@ -149,8 +149,8 @@ typedefs:
     note: Optional(str)
 nodes:
   lead:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       to: lead
       prompt: Approve this plan?
@@ -162,8 +162,8 @@ nodes:
       - when: \${lead.output == null}
         then: manager
   manager:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       to: manager
       prompt: No answer from the lead in 24h. Approve this plan?

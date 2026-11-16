@@ -35,8 +35,8 @@ nodes:
     input:
       topic: \${input.n}
   t:
-    kind: tool
-    tool_id: place_order
+    kind: call
+    call: place_order
     input:
       v: ${binding}
 output: \${t.output}
@@ -79,8 +79,8 @@ defs:
       m: !int
     nodes:
       t:
-        kind: tool
-        tool_id: place_order
+        kind: call
+        call: place_order
         input:
           v: \${input.m}
     output: \${t.output}
@@ -123,8 +123,8 @@ nodes:
         then: t
     else: hold
   t:
-    kind: tool
-    tool_id: place_order
+    kind: call
+    call: place_order
     input:
       order: \${d.output}
   hold:
@@ -154,8 +154,8 @@ nodes:
       x: \${item}
     nodes:
       t:
-        kind: tool
-        tool_id: place_order
+        kind: call
+        call: place_order
         input:
           x: \${input.x}
     output: \${t.output}

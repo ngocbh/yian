@@ -41,8 +41,8 @@ id: mcp_resume
 name: mcp_resume
 nodes:
   call:
-    kind: tool
-    tool_id: whoami
+    kind: call
+    call: whoami
 output: \${call.output}
 `;
 

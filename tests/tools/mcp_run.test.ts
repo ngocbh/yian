@@ -62,7 +62,7 @@ function run(flow: ComposedFlow, tools: Readonly<Record<string, ToolEntry>>, opt
 function toolFlow(toolId: string, inputs = ""): Promise<ComposedFlow> {
   const line = inputs ? `    input: ${inputs}\n` : "";
   return loadFlow(
-    `id: mcp_tool\nname: mcp_tool\nnodes:\n  call:\n    kind: tool\n    tool_id: ${toolId}\n` +
+    `id: mcp_tool\nname: mcp_tool\nnodes:\n  call:\n    kind: call\n    call: ${toolId}\n` +
       `${line}output: \${call.output}\n`,
   );
 }
@@ -177,11 +177,11 @@ id: mcp_restart
 name: mcp_restart
 nodes:
   first:
-    kind: tool
-    tool_id: answer_then_exit
+    kind: call
+    call: answer_then_exit
   second:
-    kind: tool
-    tool_id: echo
+    kind: call
+    call: echo
     input: {text: "\${first.output} again"}
 output: \${second.output}
 `);
@@ -219,7 +219,7 @@ test(
   async () => {
     const server = mcpServer({ ...stdioOptions("--lone-surrogate"), label: "cut" });
     const flow = await loadFlow(
-      "id: cut\nname: cut\nnodes:\n  call:\n    kind: tool\n    tool_id: cut_structured\n    retries: 2\n" +
+      "id: cut\nname: cut\nnodes:\n  call:\n    kind: call\n    call: cut_structured\n    retries: 2\n" +
         "output: ${call.output}\n",
     );
     const log = join(dir, "cut.jsonl");

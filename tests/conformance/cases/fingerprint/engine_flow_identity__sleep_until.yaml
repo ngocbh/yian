@@ -5,8 +5,8 @@ flow: |
   name: wait
   nodes:
     node:
-      kind: tool
-      tool_id: sleep
+      kind: call
+      call: sleep
       input:
         until: "2026-01-01T00:00:00+00:00"
   output: ${node.output}
@@ -15,8 +15,8 @@ other: |
   name: wait
   nodes:
     node:
-      kind: tool
-      tool_id: sleep
+      kind: call
+      call: sleep
       input:
         until: "2026-01-02T00:00:00+00:00"
   output: ${node.output}

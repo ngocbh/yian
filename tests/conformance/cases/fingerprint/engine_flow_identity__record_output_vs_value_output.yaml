@@ -5,8 +5,8 @@ flow: |
   name: pin
   nodes:
     step:
-      kind: tool
-      tool_id: step
+      kind: call
+      call: step
       output: !str
   output:
     result: ${step.output}
@@ -15,8 +15,8 @@ other: |
   name: pin
   nodes:
     step:
-      kind: tool
-      tool_id: step
+      kind: call
+      call: step
       output: !str
   output: ${step.output}
 expect:

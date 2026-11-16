@@ -9,8 +9,8 @@ flow: |
         count: !int
       nodes:
         place:
-          kind: tool
-          tool_id: place
+          kind: call
+          call: place
       output:
         count: ${input.count + 1}
   nodes:

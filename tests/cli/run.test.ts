@@ -795,8 +795,8 @@ output: \${inspect.output}
 `;
 
 const REGISTERED_TOOL_FLOW =
-  "id: cli_registered_tool\nname: cli_registered_tool\nnodes:\n  call:\n    kind: tool\n" +
-  "    tool_id: cli_run_probe\noutput: ${call.output}\n";
+  "id: cli_registered_tool\nname: cli_registered_tool\nnodes:\n  call:\n    kind: call\n" +
+  "    call: cli_run_probe\noutput: ${call.output}\n";
 
 /** Run `yian run flow.yaml argv` on a flow holding `body`, its default log under `tmp/home`. */
 async function runFlowCli(body: string, argv: readonly string[]) {
@@ -1141,7 +1141,7 @@ describe("run's input prompts on a TTY", () => {
 });
 
 const ASK_FLOW =
-  "id: ask\nname: ask\nnodes:\n  ok:\n    kind: tool\n    tool_id: ask\n" +
+  "id: ask\nname: ask\nnodes:\n  ok:\n    kind: call\n    call: ask\n" +
   '    input:\n      prompt: "Proceed?"\n    output: !str\noutput: ${ok.output}\n';
 
 // A CODE node that runs until the run is stopped (or 30 s pass), after a node whose progress line
@@ -1171,7 +1171,7 @@ test("an ask off a terminal writes its prompt with no escape codes", async () =>
 test("a value for an inbox input is a usage error, as in chat", async () => {
   const flow =
     "id: f\nname: f\ninput:\n  messages: !Inbox(str)\nnodes:\n" +
-    "  heard:\n    kind: tool\n    tool_id: take\n    input:\n      from: ${input.messages}\n" +
+    "  heard:\n    kind: call\n    call: take\n    input:\n      from: ${input.messages}\n" +
     "output: ${heard.output}\n";
   const { code, stdout, stderr } = await runFlowCli(flow, ["-q", "-i", "messages=hello"]);
   expect(code).toBe(2);
@@ -2244,7 +2244,7 @@ describe("status", () => {
     const failAfter =
       "id: failafter\nname: failafter\nnodes:\n  boom:\n    kind: code\n    output: !str\n    code: |\n" +
       '      await new Promise((r) => setTimeout(r, 300));\n      throw new Error("boom");\noutput: done\n';
-    const nap = "id: nap\nname: nap\nnodes:\n  nap:\n    kind: tool\n    tool_id: sleep\n    input:\n      for: 1h\noutput: done\n";
+    const nap = "id: nap\nname: nap\nnodes:\n  nap:\n    kind: call\n    call: sleep\n    input:\n      for: 1h\noutput: done\n";
     expect((await runFlowCli(failAfter, ["-q"])).code).toBe(1);
     expect((await runFlowCli(nap, ["-q"])).code).toBe(0);
     const json = testIo({ HOME: join(tmp, "home") });

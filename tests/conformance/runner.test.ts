@@ -1055,7 +1055,7 @@ describe("run", () => {
    */
   const ASK_CASE = (inputs: string, toolCalls: string) =>
     "kind: run\nflow: |\n  id: f\n  name: f\n  input:\n    plan: !str\n  nodes:\n    n:\n" +
-    "      kind: tool\n      tool_id: ask\n      input:\n        prompt: Ship?\n" +
+    "      kind: call\n      call: ask\n      input:\n        prompt: Ship?\n" +
     inputs +
     "      output: !str\n  output: ${n.output}\n" +
     "inputs: {plan: p1}\nrun: {run_id: r1, num_workers: 0}\nhost: {human: {n: [yes]}}\n" +
@@ -1103,8 +1103,8 @@ describe("run", () => {
   const SENDS_CASE = (sends: string, output: string) =>
     "kind: run\nflow: |\n  id: sends\n  name: sends\n  input:\n    m: !Inbox(str)\n" +
     "  defs:\n    turn:\n      input:\n        got: !list(str)\n        closed: !bool\n" +
-    "        m: !Inbox(str)\n      nodes:\n        heard:\n          kind: tool\n" +
-    "          tool_id: take\n          input:\n            from: ${input.m}\n" +
+    "        m: !Inbox(str)\n      nodes:\n        heard:\n          kind: call\n" +
+    "          call: take\n          input:\n            from: ${input.m}\n" +
     "            take: all\n      output:\n        got: ${input.got + heard.output.events}\n" +
     "        closed: ${heard.output.closed}\n  nodes:\n    chat:\n      kind: loop\n" +
     "      call: turn\n      input:\n        got: []\n        closed: false\n" +
@@ -1194,7 +1194,7 @@ describe("run", () => {
    */
   const MEMORY_CASE =
     "kind: run\nflow: |\n  id: f\n  name: f\n  input:\n    lessons: !FileMemory\n  nodes:\n    add:\n" +
-    "      kind: tool\n      tool_id: {lessons: append}\n      input: {path: notes.md, text: x}\n" +
+    "      kind: call\n      call: {lessons: append}\n      input: {path: notes.md, text: x}\n" +
     "  output: ${add.output.path}\n" +
     'run: {run_id: r1, num_workers: 0}\nhost: {memory: {lessons: {type: FileMemory, id: t/lessons, files: {"MEMORY.md": m}}}}\n' +
     "expect:\n  output: {status: succeeded, output: notes.md}\n";
@@ -1254,12 +1254,12 @@ flow: |
     cases: !VectorDBMemory(Case)
   nodes:
     add:
-      kind: tool
-      tool_id: {cases: add}
+      kind: call
+      call: {cases: add}
       input: {text: bravo charlie, fields: {title: b}}
     found:
-      kind: tool
-      tool_id: {cases: search}
+      kind: call
+      call: {cases: search}
       depends_on: [add]
       input: {query: charlie, k: 1}
   output: \${found.output}
@@ -1605,7 +1605,7 @@ describe("main", () => {
       "  q: !str",
       "nodes:",
       ...comment,
-      `  find: {kind: tool, tool_id: ${tool}, input: {q: "\${input.q}"}}`,
+      `  find: {kind: call, call: ${tool}, input: {q: "\${input.q}"}}`,
       "output: ${find.output}",
     );
   const CYCLE = block(
@@ -1989,8 +1989,8 @@ flow: |
   name: t
   nodes:
     call:
-      kind: tool
-      tool_id: flaky
+      kind: call
+      call: flaky
       retries: 2
   output: \${call.output}
 env:

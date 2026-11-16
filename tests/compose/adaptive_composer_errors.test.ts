@@ -25,8 +25,8 @@ name: f
 input: {proj: !str }
 nodes:
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       proj: \${input.proj}
     adaptive_questions:
@@ -79,8 +79,8 @@ test("a compact flow's llm config error names the flow node", async () => {
 id: f
 name: f
 input: {proj: !str }
-kind: tool
-tool_id: ask
+kind: call
+call: ask
 adaptive_questions:
   prompt: "Q \${proj}"
   llm_config: {temparature: 1}
@@ -105,8 +105,8 @@ nodes:
     output: !int
     code: "return 1"
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
 ${inputs}${gatePrompt}    adaptive_questions:
       prompt: "${brief}"
@@ -216,8 +216,8 @@ nodes:
     code: |
       return {"qty": 1}
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       q: \${order.output.qty * 2}
     adaptive_questions:
@@ -245,8 +245,8 @@ defs:
       topic: !str
     nodes:
       ask:
-        kind: tool
-        tool_id: ask
+        kind: call
+        call: ask
         input:
           proj: \${input.nope}
         adaptive_questions:
@@ -281,8 +281,8 @@ name: f
 input: {proj: !str }
 nodes:
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       proj: \${ask.output}
     adaptive_questions:
@@ -319,8 +319,8 @@ nodes:
       a: \${${bReads}}
     prompt: "x \${a}"
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
 ${gateExtra}    input:
       proj: \${${gateReads}}
     adaptive_questions:
@@ -370,8 +370,8 @@ output:
 test("two self-reading gates each name only the gate", () => {
   const text = `${SELF_READING}\
   ask2:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       proj: \${ask2.output}
     adaptive_questions:
@@ -397,8 +397,8 @@ name: f
 input: {proj: !str }
 nodes:
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       proj: \${input.proj}
       x: \${ask__compose.output}
@@ -423,8 +423,8 @@ defs:
       topic: !str
     nodes:
       ask:
-        kind: tool
-        tool_id: ask
+        kind: call
+        call: ask
         input:
           proj: \${ask.output}
         adaptive_questions:

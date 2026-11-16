@@ -14,8 +14,8 @@ flow: |
         topic: !str
       nodes:
         write:
-          kind: tool
-          tool_id: {notes: append}
+          kind: call
+          call: {notes: append}
           input:
             path: ${input.topic + ".md"}
             text: ${"about " + input.topic}

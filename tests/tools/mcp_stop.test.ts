@@ -44,8 +44,8 @@ input:
   seconds: !float
 nodes:
   call:
-    kind: tool
-    tool_id: slow
+    kind: call
+    call: slow
     input: {seconds: "\${input.seconds}"}
 output: \${call.output}
 `;

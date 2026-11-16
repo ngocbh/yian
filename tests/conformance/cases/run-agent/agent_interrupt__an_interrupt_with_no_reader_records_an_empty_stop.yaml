@@ -15,8 +15,8 @@ flow: |
       prompt: Help the user.
       output: !str
     heard:
-      kind: tool
-      tool_id: take
+      kind: call
+      call: take
       input:
         from: ${input.notes}
       depends_on: [chat]

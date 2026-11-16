@@ -49,7 +49,7 @@ test.each([
   ["an expression", `  c:\n    kind: code\n    code: return 1\n    input:\n      t: \${input.m :- 1}\n`, "not inside text"],
   ["a CODE input", `  c:\n    kind: code\n    code: return 1\n    input:\n      t: \${input.m}\n`, "take from it"],
   ["an AGENT input", `  a:\n    kind: agent\n    prompt: hi\n    input:\n      t: \${input.m}\n`, "take from it"],
-  ["a TOOL input", `  t:\n    kind: tool\n    tool_id: f\n    input:\n      t: \${input.m}\n`, "take from it"],
+  ["a TOOL input", `  t:\n    kind: call\n    call: f\n    input:\n      t: \${input.m}\n`, "take from it"],
   ["a record in a CODE input", `  c:\n    kind: code\n    code: return 1\n    input:\n      t:\n        a: \${input.m}\n`, "is read only whole"],
   ["a case", `  k:\n    kind: case\n    cases:\n      - when: \${input.m == null}\n        then: done\n  done: !int 1\n`, "not inside text"],
   ["a call directive", `  c:\n    kind: code\n    code: return 1\n    input:\n      t: call(sink_str, m=\${input.m})\n`, "named `kind: call`"],

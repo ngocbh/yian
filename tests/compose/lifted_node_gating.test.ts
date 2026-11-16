@@ -530,8 +530,8 @@ const ADAPTIVE = `
         then: ask
     else: done
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       ctx: \${input.go}
     adaptive_questions:

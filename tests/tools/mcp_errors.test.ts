@@ -688,8 +688,8 @@ id: retry
 name: retry
 nodes:
   call:
-    kind: tool
-    tool_id: TOOL
+    kind: call
+    call: TOOL
     retries: 2
     input: INPUT
 output: \${call.output}

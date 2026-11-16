@@ -134,7 +134,7 @@ test("provider without model names that provider", async () => {
 /** A flow whose TOOL `ask` composes its question with `adaptive_questions`. */
 function gateFlow(adaptiveQuestions: string): Promise<ComposedFlow> {
   return loadFlow(
-    "id: f\nname: f\ninput: {proj: !str }\nnodes:\n  ask:\n    kind: tool\n    tool_id: ask\n" +
+    "id: f\nname: f\ninput: {proj: !str }\nnodes:\n  ask:\n    kind: call\n    call: ask\n" +
       "    input:\n      proj: ${input.proj}\n" +
       `    adaptive_questions: ${adaptiveQuestions}\n` +
       "output: ${ask.output}\n",

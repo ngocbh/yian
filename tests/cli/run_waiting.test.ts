@@ -64,8 +64,8 @@ const NAP = `id: nap
 name: nap
 nodes:
   nap:
-    kind: tool
-    tool_id: sleep
+    kind: call
+    call: sleep
     input:
       for: "1h"
 output: \${nap.output}

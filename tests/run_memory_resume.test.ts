@@ -166,8 +166,8 @@ input:
   lessons: !FileMemory
 nodes:
   hold:
-    kind: tool
-    tool_id: hold
+    kind: call
+    call: hold
 output: \${hold.output}
 `;
   const hold = new FunctionTool({ name: "hold", description: "Hold.", parametersJsonSchema: { type: "object" }, execute: () => pending() });
@@ -192,8 +192,8 @@ input:
   lessons: !FileMemory
 nodes:
   hold:
-    kind: tool
-    tool_id: hold
+    kind: call
+    call: hold
 output: \${hold.output}
 `;
   const hold = new FunctionTool({ name: "hold", description: "Hold.", parametersJsonSchema: { type: "object" }, execute: () => pending() });
@@ -278,8 +278,8 @@ input:
   lessons: !FileMemory
 nodes:
   hold:
-    kind: tool
-    tool_id: hold
+    kind: call
+    call: hold
 output: \${hold.output}
 `;
   const hold = new FunctionTool({ name: "hold", description: "Hold.", parametersJsonSchema: { type: "object" }, execute: () => pending() });

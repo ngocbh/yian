@@ -6,8 +6,8 @@ flow: |
     q: !str
   nodes:
     score:
-      kind: tool
-      tool_id: score
+      kind: call
+      call: score
       input:
         q: ${input.q}
   output: ${score.output}

@@ -7,8 +7,8 @@ flow: |
     x: !int
   nodes:
     body:
-      kind: tool
-      tool_id: body
+      kind: call
+      call: body
       input:
         x: ${input.x}
       output: !int
@@ -23,8 +23,8 @@ other: |
     x: !int
   nodes:
     body:
-      kind: tool
-      tool_id: body
+      kind: call
+      call: body
       input:
         x: ${input.x}
       output: !int

@@ -25,8 +25,8 @@ defs:
       messages: !list(str)          # a subset of the carried names is fine
     nodes:
       ask:
-        kind: tool
-        tool_id: ask
+        kind: call
+        call: ask
         input:
           prompt: "your message (type 'bye' to end)"
         output: !str               # the typed answer

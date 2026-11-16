@@ -14,8 +14,8 @@ flow: |
         n: !int
       nodes:
         write:
-          kind: tool
-          tool_id: {m: append}
+          kind: call
+          call: {m: append}
           input:
             path: log.md
             text: tick

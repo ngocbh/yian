@@ -200,8 +200,8 @@ test("optional binding field reads", () => {
 test("adaptive brief field read is reported on the gate", () => {
   const gate =
     "  h:\n" +
-    "    kind: tool\n" +
-    "    tool_id: ask\n" +
+    "    kind: call\n" +
+    "    call: ask\n" +
     "    input:\n      v: ${step.output}\n" +
     '      prompt: "Pick for ${step.output.a}"\n' +
     "    adaptive_questions:\n" +
@@ -255,7 +255,7 @@ test("agent variable field read", () => {
 });
 
 test("ask prompt field read", () => {
-  const gate = '  h:\n    kind: tool\n    tool_id: ask\n    input:\n      prompt: "${step.output.b}"\n';
+  const gate = '  h:\n    kind: call\n    call: ask\n    input:\n      prompt: "${step.output.b}"\n';
   expect(loadMessage(flow(gate, "${h.output}"))).toContain(
     "node 'h' input 'prompt' from: reference ${step.output.b} reads unknown field 'b' on record",
   );
@@ -264,8 +264,8 @@ test("ask prompt field read", () => {
 test("ask question field read", () => {
   const gate =
     "  h:\n" +
-    "    kind: tool\n" +
-    "    tool_id: ask\n" +
+    "    kind: call\n" +
+    "    call: ask\n" +
     "    input:\n" +
     '      prompt: "Pick for ${step.output.a}"\n' +
     "      questions:\n" +

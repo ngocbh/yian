@@ -31,8 +31,8 @@ input:
   lessons: !FileMemory
 nodes:
   found:
-    kind: tool
-    tool_id: {lessons: ${tool}}
+    kind: call
+    call: {lessons: ${tool}}
     retries: ${retries}
     input: ${input}
 output: \${found.output}

@@ -704,8 +704,8 @@ const TOOL_FLOW = `id: mcp_tool
 name: mcp_tool
 nodes:
   call:
-    kind: tool
-    tool_id: echo
+    kind: call
+    call: echo
     input: {text: "hi"}
 output: \${call.output}
 `;

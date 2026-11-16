@@ -1319,8 +1319,8 @@ input:
   notes: !Inbox(str)
 nodes:
   heard:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     input:
       from: \${input.notes}
       take: one

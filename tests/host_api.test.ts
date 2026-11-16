@@ -163,8 +163,8 @@ input:
   box: !Inbox(int)
 nodes:
   heard:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     input:
       from: \${input.box}
       take: all
@@ -236,8 +236,8 @@ nodes:
     while: not closed
     nodes:
       heard:
-        kind: tool
-        tool_id: take
+        kind: call
+        call: take
         input: {from: "\${input.notes}", take: one}
     output:
       count: \${input.count + len(heard.output.events)}
@@ -386,8 +386,8 @@ id: f
 name: f
 nodes:
   pick:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     node_name: Pick a plan
     input:
       questions:
@@ -1131,9 +1131,9 @@ nodes:
     prompt: "\${cases} keep it"
     output: !str
   found:
-    kind: tool
+    kind: call
     depends_on: [keep]
-    tool_id: {cases: search}
+    call: {cases: search}
     input:
       query: bravo
       k: 1

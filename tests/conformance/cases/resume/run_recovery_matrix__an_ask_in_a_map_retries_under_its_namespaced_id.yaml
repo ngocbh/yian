@@ -12,8 +12,8 @@ flow: |
         token: !str
       nodes:
         ask:
-          kind: tool
-          tool_id: ask
+          kind: call
+          call: ask
           input:
             prompt: nested map input
           output: !str

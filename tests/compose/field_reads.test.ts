@@ -192,7 +192,7 @@ test("a field on str in map over is a load error", () => {
 test("a field on str in a sleep's until is a load error", () => {
   const text = flow(
     "str",
-    "  settle:\n    kind: tool\n    tool_id: sleep\n    input:\n      until: ${step.output.at}\noutput: ${step.output}\n",
+    "  settle:\n    kind: call\n    call: sleep\n    input:\n      until: ${step.output.at}\noutput: ${step.output}\n",
   );
   expect(failure(text)).toContain(
     "node 'settle' input 'until' from: reference ${step.output.at} reads field 'at' on type str",

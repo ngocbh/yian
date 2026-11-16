@@ -8,8 +8,8 @@ flow: |
     lessons: !FileMemory
   nodes:
     add:
-      kind: tool
-      tool_id: {lessons: create}
+      kind: call
+      call: {lessons: create}
       retries: 2
       input:
         path: notes.md

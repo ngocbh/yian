@@ -267,8 +267,8 @@ test("a null key is reported before a tag under it", async () => {
 name: f
 nodes:
   settle:
-    kind: tool
-    tool_id: sleep
+    kind: call
+    call: sleep
     input:
       until:
         null: !int 3
@@ -361,7 +361,7 @@ output: \${route.output}
 
 test.each([
   ["agent", "    kind: agent\n    prompt: write\n"],
-  ["tool", "    kind: tool\n    tool_id: place_order\n"],
+  ["tool", "    kind: call\n    call: place_order\n"],
 ])("an untagged %s output is rejected at its line", async (_kind, head) => {
   await expectLoadError(
     `id: f\nname: f\nnodes:\n  n:\n${head}    output: str\noutput: \${n.output}\n`,

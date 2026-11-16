@@ -5,8 +5,8 @@ flow: |
   name: out
   nodes:
     a:
-      kind: tool
-      tool_id: a
+      kind: call
+      call: a
       output: !int
   output:
     first: ${a.output}
@@ -15,8 +15,8 @@ other: |
   name: out
   nodes:
     a:
-      kind: tool
-      tool_id: a
+      kind: call
+      call: a
       output: !int
   output:
     second: ${a.output}

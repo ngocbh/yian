@@ -11,8 +11,8 @@ flow: |
       prompt: Help the user.
       output: !str
     keep:
-      kind: tool
-      tool_id: take
+      kind: call
+      call: take
       input:
         from: ${input.notes}
   output: ${chat.output}
@@ -28,8 +28,8 @@ other: |
       steer_inbox: ${input.notes}
       output: !str
     keep:
-      kind: tool
-      tool_id: take
+      kind: call
+      call: take
       input:
         from: ${input.notes}
   output: ${chat.output}

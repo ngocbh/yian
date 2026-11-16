@@ -34,8 +34,8 @@ nodes:
     prompt: "Draft a short, concrete plan (exactly 3 numbered steps) for: ${task}"
 
   approve:
-    kind: tool
-    tool_id: ask                         # always asks; the host answers
+    kind: call
+    call: ask                         # always asks; the host answers
     input:
       prompt: |-
         Here is the proposed plan:

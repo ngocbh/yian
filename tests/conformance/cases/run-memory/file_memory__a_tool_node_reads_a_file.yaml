@@ -8,8 +8,8 @@ flow: |
     lessons: !FileMemory
   nodes:
     found:
-      kind: tool
-      tool_id: {lessons: read}
+      kind: call
+      call: {lessons: read}
       input:
         path: notes/math.md
   output: ${found.output}

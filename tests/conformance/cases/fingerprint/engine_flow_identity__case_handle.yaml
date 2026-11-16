@@ -16,16 +16,16 @@ flow: |
           then: second
       else: other
     first:
-      kind: tool
-      tool_id: first
+      kind: call
+      call: first
       output: !str
     second:
-      kind: tool
-      tool_id: second
+      kind: call
+      call: second
       output: !str
     other:
-      kind: tool
-      tool_id: other
+      kind: call
+      call: other
       output: !str
   output: ${first.output | second.output | other.output}
 other: |
@@ -44,16 +44,16 @@ other: |
           then: first
       else: other
     first:
-      kind: tool
-      tool_id: first
+      kind: call
+      call: first
       output: !str
     second:
-      kind: tool
-      tool_id: second
+      kind: call
+      call: second
       output: !str
     other:
-      kind: tool
-      tool_id: other
+      kind: call
+      call: other
       output: !str
   output: ${first.output | second.output | other.output}
 expect:

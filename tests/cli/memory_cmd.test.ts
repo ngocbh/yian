@@ -92,8 +92,8 @@ input:
   notes: !Optional(FileMemory)
 nodes:
   add:
-    kind: tool
-    tool_id: {lessons: append}
+    kind: call
+    call: {lessons: append}
     input:
       path: MEMORY.md
       text: \${input.line}
@@ -733,14 +733,14 @@ input:
   messages: !Inbox(str)
 nodes:
   add:
-    kind: tool
-    tool_id: {lessons: append}
+    kind: call
+    call: {lessons: append}
     input:
       path: MEMORY.md
       text: \${input.line}
   heard:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     depends_on: [add]
     input:
       from: \${input.messages}
@@ -906,8 +906,8 @@ input:
   cases: !VectorDBMemory
 nodes:
   add:
-    kind: tool
-    tool_id: {cases: add}
+    kind: call
+    call: {cases: add}
     input:
       text: \${input.line}
 output: \${add.output.id}
@@ -1041,8 +1041,8 @@ input:
   cases: !VectorDBMemory(Case)
 nodes:
   add:
-    kind: tool
-    tool_id: {cases: add}
+    kind: call
+    call: {cases: add}
     input:
       text: \${input.ticket}
       fields: {title: first, tags: [setup]}

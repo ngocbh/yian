@@ -156,7 +156,7 @@ test("a TOOL node calls its memory's tool, though a host tool or group has the m
   writeFileSync(join(root, "a.md"), "Prefer short answers.");
   const text =
     "id: f\nname: f\ninput:\n  lessons: !FileMemory\n" +
-    "nodes:\n  found: {kind: tool, tool_id: {lessons: read}, input: {path: a.md}}\noutput: ${found.output.text}\n";
+    "nodes:\n  found: {kind: call, call: {lessons: read}, input: {path: a.md}}\noutput: ${found.output.text}\n";
   const read = new FunctionTool({ name: "read", description: "Read.", parametersJsonSchema: { type: "object" }, execute: () => "host" });
   for (const tools of [{ lessons: [read] }, { lessons: new FunctionTool({ ...read, name: "lessons" }) }]) {
     const { result } = await run(text, { lessons: new FileMemory({ root, id: "t/lessons" }) }, { tools });
@@ -246,8 +246,8 @@ input:
   cases: !VectorDBMemory(Case)
 nodes:
   found:
-    kind: tool
-    tool_id: {cases: search}
+    kind: call
+    call: {cases: search}
     input:
       query: \${input.q}
       k: 3

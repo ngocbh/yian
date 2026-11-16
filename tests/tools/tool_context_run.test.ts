@@ -48,8 +48,8 @@ id: tool_ctx
 name: tool_ctx
 nodes:
   place:
-    kind: tool
-    tool_id: place
+    kind: call
+    call: place
 output: \${place.output}
 `;
 
@@ -352,8 +352,8 @@ nodes:
     prompt: go
     tools: [ask_user]
   confirm:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: "Ship \${worker.output}?"
 output: \${confirm.output}

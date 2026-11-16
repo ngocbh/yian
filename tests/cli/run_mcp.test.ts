@@ -82,7 +82,7 @@ function toolFlow(toolId = "echo"): string {
   const flow = join(tmp, "flow.yaml");
   writeFileSync(
     flow,
-    `id: mcp_tool\nname: mcp_tool\nnodes:\n  call:\n    kind: tool\n    tool_id: ${toolId}\n` +
+    `id: mcp_tool\nname: mcp_tool\nnodes:\n  call:\n    kind: call\n    call: ${toolId}\n` +
       '    input: {text: "hi"}\noutput: ${call.output}\n',
   );
   return flow;
@@ -487,8 +487,8 @@ const WHOAMI_FLOW = `id: mcp_resume
 name: mcp_resume
 nodes:
   call:
-    kind: tool
-    tool_id: whoami
+    kind: call
+    call: whoami
 output: \${call.output}
 `;
 
@@ -744,7 +744,7 @@ test.each([
     'export const lookup = { name: "lookup", description: "Find.", parameters: { type: "object" }, execute: () => "Ada" };\n',
   );
   const uses = `uses:\n  ${ref === "./crm.ts" ? "crm" : "find"}: ${ref}\n`;
-  const flow = flowFile(`id: crm\nname: crm\n${uses}nodes:\n  call: {kind: tool, tool_id: ${toolId}}\noutput: \${call.output}\n`);
+  const flow = flowFile(`id: crm\nname: crm\n${uses}nodes:\n  call: {kind: call, call: ${toolId}}\noutput: \${call.output}\n`);
   mkdirSync(join(home, ".yian"));
   writeFileSync(join(home, ".yian", "mcp.json"), "{not json");
 

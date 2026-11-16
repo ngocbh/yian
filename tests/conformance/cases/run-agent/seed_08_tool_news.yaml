@@ -22,8 +22,8 @@ flow: |
 
   nodes:
     news:
-      kind: tool
-      tool_id: get_facts    # a real TOOL_REGISTRY key
+      kind: call
+      call: get_facts    # a real TOOL_REGISTRY key
       input:                       # the tool's argument names — each value is a ${...} ref or a literal
         symbol: ${input.topic}
         limit: 10

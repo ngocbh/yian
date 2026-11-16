@@ -71,8 +71,8 @@ input:
   m: !Inbox(str)
 nodes:
   heard:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     input:
       from: \${input.m}
       take: all
@@ -110,8 +110,8 @@ defs:
       m: !Inbox(str)
     nodes:
       heard:
-        kind: tool
-        tool_id: take
+        kind: call
+        call: take
         input:
           from: \${input.m}
     output: \${heard.output.events}
@@ -150,8 +150,8 @@ defs:
       m: !Inbox(str)
     nodes:
       heard:
-        kind: tool
-        tool_id: take
+        kind: call
+        call: take
         input:
           from: \${input.m}
           take: all
@@ -199,8 +199,8 @@ typedefs:
     decision: Literal(approve, reject)
 nodes:
   lead:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: Approve?
       timeout: 1s
@@ -240,8 +240,8 @@ defs:
       m: !Inbox(str)
     nodes:
       heard:
-        kind: tool
-        tool_id: take
+        kind: call
+        call: take
         input:
           from: \${input.m}
           take: one
@@ -274,8 +274,8 @@ const ASK = `id: approve
 name: approve
 nodes:
   lead:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: Approve this plan?
       timeout: 1h

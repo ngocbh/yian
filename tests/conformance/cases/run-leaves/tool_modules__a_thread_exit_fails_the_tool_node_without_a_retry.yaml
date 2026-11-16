@@ -8,8 +8,8 @@ flow: |
     crm: ./crm.ts
   nodes:
     gone:
-      kind: tool
-      tool_id: {crm: exit}
+      kind: call
+      call: {crm: exit}
       retries: 2
   output: ${gone.output}
 files:

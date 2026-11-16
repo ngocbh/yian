@@ -35,8 +35,8 @@ input:
   m: !Inbox(str)
 nodes:
   heard:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     input:
       from: \${input.m}
       take: one
@@ -173,7 +173,7 @@ test("two hosts racing: two live withdraws in one tick give the sends once and [
 test("a send nested past the value limit is refused, appending nothing, and withdraw then takes back nothing", async () => {
   const log = freshLog();
   const flow = await loadFlow(
-    "id: notes\nname: notes\ninput:\n  notes: !Inbox(Any)\nnodes:\n  heard:\n    kind: tool\n    tool_id: take\n" +
+    "id: notes\nname: notes\ninput:\n  notes: !Inbox(Any)\nnodes:\n  heard:\n    kind: call\n    call: take\n" +
       "    input: {from: \"${input.notes}\", take: all}\noutput: ${heard.output.events}\n",
   );
   expect((await runFlow(flow, {}, { env, log, runId: "r" })).status).toBe("waiting");

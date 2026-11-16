@@ -258,11 +258,11 @@ id: lifecycle-callback-drain
 name: lifecycle_callback_drain
 nodes:
   trigger:
-    kind: tool
-    tool_id: trigger
+    kind: call
+    call: trigger
   waiter:
-    kind: tool
-    tool_id: waiter
+    kind: call
+    call: waiter
 output:
   trigger: \${trigger.output}
   waiter: \${waiter.output}
@@ -273,11 +273,11 @@ id: lifecycle-human-drain
 name: lifecycle_human_drain
 nodes:
   trigger:
-    kind: tool
-    tool_id: trigger
+    kind: call
+    call: trigger
   human:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: "Approve?"
     output: !str
@@ -291,11 +291,11 @@ id: lifecycle-host-drain
 name: lifecycle_host_drain
 nodes:
   interrupter:
-    kind: tool
-    tool_id: interrupter
+    kind: call
+    call: interrupter
   waiter:
-    kind: tool
-    tool_id: waiter
+    kind: call
+    call: waiter
 output:
   interrupter: \${interrupter.output}
   waiter: \${waiter.output}
@@ -966,8 +966,8 @@ id: lifecycle-retry
 name: lifecycle_retry
 nodes:
   call:
-    kind: tool
-    tool_id: flaky
+    kind: call
+    call: flaky
     retries: 1
 output: \${call.output}
 `);

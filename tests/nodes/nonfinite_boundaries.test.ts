@@ -186,8 +186,8 @@ id: nonfinite
 name: nonfinite
 nodes:
   t:
-    kind: tool
-    tool_id: measure
+    kind: call
+    call: measure
     input:
       qty: 5
 output: \${t.output}

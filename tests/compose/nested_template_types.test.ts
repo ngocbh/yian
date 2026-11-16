@@ -183,8 +183,8 @@ input:
   o: !Optional(str)
 nodes:
   t:
-    kind: tool
-    tool_id: place_order
+    kind: call
+    call: place_order
     input:
       v: ${binding}
 output: \${t.output}

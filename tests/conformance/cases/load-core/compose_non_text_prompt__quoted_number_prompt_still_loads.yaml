@@ -5,8 +5,8 @@ flow: |
   input: {proj: !str }
   nodes:
     ask:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       input:
         prompt: "5"
         proj: ${input.proj}

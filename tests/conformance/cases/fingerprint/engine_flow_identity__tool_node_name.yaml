@@ -5,8 +5,8 @@ flow: |
   name: tool
   nodes:
     node:
-      kind: tool
-      tool_id: t
+      kind: call
+      call: t
       node_name: First title
   output: ${node.output}
 other: |
@@ -14,8 +14,8 @@ other: |
   name: tool
   nodes:
     node:
-      kind: tool
-      tool_id: t
+      kind: call
+      call: t
       node_name: A different title
   output: ${node.output}
 expect:

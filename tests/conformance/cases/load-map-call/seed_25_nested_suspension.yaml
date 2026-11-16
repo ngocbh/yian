@@ -27,8 +27,8 @@ flow: |
         action: !str
       nodes:
         approve:
-          kind: tool
-          tool_id: ask
+          kind: call
+          call: ask
           input:
             prompt: "Approve this action? ${input.action}  (approve / reject)"
           output: !Approval      # the injected answer, validated against Approval's tags

@@ -15,8 +15,8 @@ flow: |
     cases: !VectorDBMemory(Case)
   nodes:
     found:
-      kind: tool
-      tool_id: {cases: search}
+      kind: call
+      call: {cases: search}
       input:
         query: ${input.q}
         k: 2

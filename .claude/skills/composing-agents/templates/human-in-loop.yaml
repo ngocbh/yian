@@ -24,8 +24,8 @@ nodes:
     prompt: "Draft a short announcement about ${topic}."
 
   review:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: |-                   # a wiring template: it reads the pool, not local names
         Here is the draft:

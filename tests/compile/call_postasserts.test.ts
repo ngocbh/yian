@@ -127,8 +127,8 @@ input:
   action: !str
 nodes:
   approve:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: "Approve \${input.action}?"
     output: !str

@@ -832,8 +832,8 @@ input:
   when: !date
 nodes:
   w:
-    kind: tool
-    tool_id: sleep
+    kind: call
+    call: sleep
     input:
       until: \${isinstance(input.when, date)}
 output: \${w.output}
@@ -933,8 +933,8 @@ test("isinstance as an ask's questions is a located load error", () => {
   order: !object
 nodes:
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       questions: '\${isinstance(input.order, Buy)}'
 output: \${ask.output}

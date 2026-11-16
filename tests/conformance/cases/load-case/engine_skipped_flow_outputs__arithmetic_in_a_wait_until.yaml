@@ -24,8 +24,8 @@ flow: |
       code: |
         return "no"
     w:
-      kind: tool
-      tool_id: sleep
+      kind: call
+      call: sleep
       input:
         until: ${order.output.s + '-01-01'}
   output:

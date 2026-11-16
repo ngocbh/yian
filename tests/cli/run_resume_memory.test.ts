@@ -62,12 +62,12 @@ input:
   lessons: !FileMemory
 nodes:
   first:
-    kind: tool
-    tool_id: {lessons: append}
+    kind: call
+    call: {lessons: append}
     input: {path: MEMORY.md, text: first}
   second:
-    kind: tool
-    tool_id: {lessons: append}
+    kind: call
+    call: {lessons: append}
     depends_on: [first]
     input: {path: MEMORY.md, text: second}
 output: \${second.output.path}
@@ -81,13 +81,13 @@ input:
   messages: !Inbox(str)
 nodes:
   heard:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     input:
       from: \${input.messages}
   keep:
-    kind: tool
-    tool_id: {lessons: append}
+    kind: call
+    call: {lessons: append}
     depends_on: [heard]
     input:
       path: MEMORY.md
@@ -222,12 +222,12 @@ input:
   cases: !VectorDBMemory
 nodes:
   first:
-    kind: tool
-    tool_id: {cases: add}
+    kind: call
+    call: {cases: add}
     input: {text: first}
   second:
-    kind: tool
-    tool_id: {cases: add}
+    kind: call
+    call: {cases: add}
     depends_on: [first]
     input: {text: second}
 output: \${second.output.id}

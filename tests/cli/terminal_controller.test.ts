@@ -26,7 +26,7 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-const ASK = '  ask:\n    kind: tool\n    tool_id: ask\n    input:\n      prompt: "Proceed?"\n    output: !str\n';
+const ASK = '  ask:\n    kind: call\n    call: ask\n    input:\n      prompt: "Proceed?"\n    output: !str\n';
 
 /** A flow whose nodes are `nodes` (YAML lines) and whose output is `output`. */
 function flowFile(nodes: string, output: string): string {
@@ -112,7 +112,7 @@ test("the first stop wins: the end of input, then the host's, and the reverse", 
     lateDuringRun = !returned;
     return "held";
   };
-  const nodes = `${ASK}  hold:\n    kind: tool\n    tool_id: cli_hold_run\n`;
+  const nodes = `${ASK}  hold:\n    kind: call\n    call: cli_hold_run\n`;
   const held = flowFile(nodes, "\n  ask: ${ask.output}\n  hold: ${hold.output}");
   const eofFirst = await withTool("cli_hold_run", hold, () =>
     runJson(held, ended, { stop: late.signal, stderrStream: drawn }),
@@ -141,7 +141,7 @@ test("the first stop wins: the end of input, then the host's, and the reverse", 
 test("a failed result wins over the stop it gives a sibling's prompt", async () => {
   const input = new FakeInput();
   const output = new FakeOutput();
-  const nodes = `${ASK}  fail:\n    kind: tool\n    tool_id: cli_fail_at_prompt\n`;
+  const nodes = `${ASK}  fail:\n    kind: call\n    call: cli_fail_at_prompt\n`;
   const flow = flowFile(nodes, "\n  ask: ${ask.output}\n  fail: ${fail.output}");
   const execute = async () => {
     await until(() => output.text.includes("Proceed?"));
@@ -161,7 +161,7 @@ test("a failed result wins over the stop it gives a sibling's prompt", async () 
 test("an observer failure wins over the prompt it cancels", async () => {
   const input = new FakeInput();
   const output = new FakeOutput();
-  const nodes = `${ASK}  done:\n    kind: tool\n    tool_id: cli_done_at_prompt\n`;
+  const nodes = `${ASK}  done:\n    kind: call\n    call: cli_done_at_prompt\n`;
   const flow = flowFile(nodes, "\n  ask: ${ask.output}\n  done: ${done.output}");
   // Progress on a TTY whose line for `done`, printed while the prompt is up, throws.
   const chunks: string[] = [];
@@ -192,7 +192,7 @@ test("an observer failure wins over the prompt it cancels", async () => {
 });
 
 test("a HostStop a tool throws fails its node, not reported as Ctrl-C", async () => {
-  const nodes = "  stop:\n    kind: tool\n    tool_id: cli_throw_host_stop\n";
+  const nodes = "  stop:\n    kind: call\n    call: cli_throw_host_stop\n";
   const flow = flowFile(nodes, "${stop.output}");
   const execute = () => {
     throw new HostStop("SIGINT");

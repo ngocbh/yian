@@ -5,23 +5,23 @@ flow: |
   name: waits
   nodes:
     naive:
-      kind: tool
-      tool_id: sleep
+      kind: call
+      call: sleep
       input:
         until: "2020-01-01T01:02:03"
     aware:
-      kind: tool
-      tool_id: sleep
+      kind: call
+      call: sleep
       input:
         until: "2020-01-02T05:30:00+05:30"
     zulu:
-      kind: tool
-      tool_id: sleep
+      kind: call
+      call: sleep
       input:
         until: "2020-01-02T00:00:00Z"
     spaced:
-      kind: tool
-      tool_id: sleep
+      kind: call
+      call: sleep
       input:
         until: "2020-01-01 01:00"
   output:

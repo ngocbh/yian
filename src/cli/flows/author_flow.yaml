@@ -59,8 +59,8 @@ defs:
       content: !str
     nodes:
       written:
-        kind: tool
-        tool_id: write_flow
+        kind: call
+        call: write_flow
         input:
           path: ${input.path}
           content: ${input.content}
@@ -143,8 +143,8 @@ defs:
           const fenced = inputs.reply.match(/```(?:ya?ml)?[ \t]*\n([\s\S]*?)\n```/);
           return (fenced ? fenced[1] : inputs.reply).trim() + "\n";
       checked:
-        kind: tool
-        tool_id: check_flow
+        kind: call
+        call: check_flow
         input:
           path: ${input.path}
           content: ${text.output}

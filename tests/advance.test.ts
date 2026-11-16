@@ -496,8 +496,8 @@ input:
   notes: !Inbox(str)
 nodes:
   got:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     input:
       from: \${input.notes}
       take: all

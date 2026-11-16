@@ -357,8 +357,8 @@ nodes:
     prompt: go
     tools: [ask_user]
   slow:
-    kind: tool
-    tool_id: gate
+    kind: call
+    call: gate
 output: \${agent.output}
 `;
 
@@ -401,15 +401,15 @@ nodes:
     prompt: go
     tools: [ask_user]
   lead:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: "Ship?"
       timeout: "1m"
     output: !Optional(str)
   slow:
-    kind: tool
-    tool_id: gate
+    kind: call
+    call: gate
 output: \${agent.output}
 `;
   const model = new ScriptedModel([callReply(["ask_user", { question: "q" }, "c1"]), textReply("done")], CONFIG);

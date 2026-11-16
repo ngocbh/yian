@@ -5,16 +5,16 @@ flow: |
   name: tool
   nodes:
     node:
-      kind: tool
-      tool_id: first
+      kind: call
+      call: first
   output: ${node.output}
 other: |
   id: tool
   name: tool
   nodes:
     node:
-      kind: tool
-      tool_id: second
+      kind: call
+      call: second
   output: ${node.output}
 expect:
   fingerprint: different

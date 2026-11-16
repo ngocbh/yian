@@ -5,8 +5,8 @@ flow: |
   name: f
   nodes:
     q:
-      kind: tool
-      tool_id: ask_user
+      kind: call
+      call: ask_user
       input:
         prompt: Ship it?
       output: !Literal(yes;no)

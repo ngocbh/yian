@@ -388,8 +388,8 @@ input:
   t: !str
 nodes:
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: "Command?"
   route:

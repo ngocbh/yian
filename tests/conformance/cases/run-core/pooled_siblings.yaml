@@ -6,13 +6,13 @@ flow: |
     q: !str
   nodes:
     a:
-      kind: tool
-      tool_id: lookup
+      kind: call
+      call: lookup
       input:
         q: ${input.q}
     b:
-      kind: tool
-      tool_id: lookup
+      kind: call
+      call: lookup
       input:
         q: ${input.q}
   output:

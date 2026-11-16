@@ -12,8 +12,8 @@ flow: |
         done: !bool
       nodes:
         heard:
-          kind: tool
-          tool_id: take
+          kind: call
+          call: take
           input:
             from: ${input.m}
       output:

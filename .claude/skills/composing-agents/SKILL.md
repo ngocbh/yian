@@ -224,7 +224,8 @@ output:
   A `loop` over a tool passes it every carried field each turn (the `while:` flag too) and takes
   its result as the fields that change: the whole carried record, checked each turn, unless
   `output:` declares fewer. `retries:` and `output:` apply to each turn's call; `asserts:` check the
-  final record. `call: sleep` and `call: take` are load errors there. See
+  final record. `call: sleep` and `call: take` are load errors there, and a FileMemory or
+  VectorDBMemory tool fails each turn (it returns fields a loop doesn't carry). See
   [Loop over a tool](https://yian.readthedocs.io/control-flow/#loop-over-a-tool).
 
 ### Code nodes

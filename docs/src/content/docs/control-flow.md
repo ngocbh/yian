@@ -692,8 +692,10 @@ poll:
   `asserts:`, which check its final record.
 - `call: sleep` and `call: take` are load errors, since neither returns a record of carried
   fields. `call: ask` works when its `output:` is a record of carried fields.
-- A [memory](/memory/)'s tool (`call: {lessons: read}`) gets its memory from yian, never as an
-  argument. Each turn's call is `poll#<i>/poll` in the run log.
+- A [memory](/memory/)'s tool gets its memory from yian, never as an argument. FileMemory and
+  VectorDBMemory tools return fields a loop doesn't carry (such as `hash`), so as a loop's body
+  each turn fails its result check; call them from a node inside a def instead.
+- Each turn's call is `poll#<i>/poll` in the run log.
 
 ## Write a body inline
 

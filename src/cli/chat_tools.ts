@@ -616,12 +616,12 @@ export function chatFileTools(host: ChatToolHost): FunctionTool[] {
       name: "check_flow",
       description:
         "Check that a flow file in the chat's folder loads, running nothing. Returns {ok, name, inputs, " +
-        "run_start_tools, error}: ok with its name, its inputs (each {name, type}) and the tools a run must " +
-        "supply, which it looks up when it starts (each {node, site, name, hint}: site is a call(...)'s, null " +
-        "for a node; a hint {what, name} names a close name the flow defines, so the tool may be a typo); or " +
-        "not ok with the error. Flows it imports (uses:) and code files it references must also be inside the " +
-        "chat's folder; system.paths isn't supported. With content, checks that text as the file at path " +
-        "would be, without writing it: a draft.",
+        "run_start_tools, error}: ok with its name, its inputs (each {name, type}) and the tools its call: " +
+        "names leave for run start (each {node, site, name, hint}: site is a call(...)'s, null for a node; a " +
+        "hint {what, name} names a close name the flow defines, so the tool may be a typo); or not ok with " +
+        "the error. Flows it imports (uses:) and code files it references must also be inside the chat's " +
+        "folder; system.paths isn't supported. With content, checks that text as the file at path would be, " +
+        "without writing it: a draft.",
       parameters: stringArguments(
         ["path", "The flow file, relative to the chat's folder.", true],
         ["content", "A draft's whole text, checked in place of the file's.", false],

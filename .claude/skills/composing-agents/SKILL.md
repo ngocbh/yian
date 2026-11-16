@@ -195,8 +195,8 @@ output:
 - **On a `call` node or in a `call(...)`, a built-in, a module or memory input's tool, or a name
   the file doesn't define is a tool**, called as a `tool` node calls it: `call: sleep`,
   `{crm: lookup}`, `{lessons: append}`, or one of the run's tools (`search`, `{github: search}`),
-  looked up when the run starts, so a typo fails then, naming the closest name the file
-  defines; `yian check` lists these names after `ok`. The file's own names hide a run's tool of that name,
+  looked up when the run starts, so a typo fails then, naming the closest name the file defines;
+  `yian check` lists these names after `ok`. The file's own names hide a run's tool of that name,
   and `{clean: x}` with `clean` a flow is a load error. A tool call takes `retries:`, `output:` and
   `asserts:`; a flow call takes neither `retries:` nor `output:`. See
   [Call a tool](https://yian.readthedocs.io/control-flow/#call-a-tool).

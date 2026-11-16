@@ -104,6 +104,7 @@ import type { MemoryClass, MemoryTypeTable } from "../helpers/memory.ts";
 import { readFlowInputs, readSourceParameters, readValueContract } from "../helpers/types.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import {
+  type BodyOwner,
   BuildContext,
   type BindingContractReader,
   type BuildResult,
@@ -1650,11 +1651,8 @@ export interface AssembleOptions {
    * the current directory.
    */
   baseDir?: string | null;
-  /**
-   * For a map's or loop's generated tool body, the node that runs it, `map node 'fetch'`, which run
-   * start names the body's TOOL node by; `null` (the default) for any other flow.
-   */
-  bodyOf?: string | null;
+  /** For a map's or loop's generated tool body, the node that runs it; `null` (the default) for any other flow. */
+  bodyOf?: BodyOwner | null;
 }
 
 /** What every phase of one assembly reads: its diagnostics, file scope, typedefs and lexical owner. */
@@ -1676,7 +1674,7 @@ interface AssembleContext {
   /** The directory the flow's CODE references resolve against; `null` is the current directory. */
   readonly baseDir: string | null;
   /** For a generated tool body, the node that runs it (`AssembleOptions.bodyOf`); else `null`. */
-  readonly bodyOf: string | null;
+  readonly bodyOf: BodyOwner | null;
 }
 
 /** The flow's parameters and the views of them the passes read. */
@@ -2355,7 +2353,8 @@ function buildNodes(
       outputsCursor: body.outputCursor,
       flowId: body.flowId,
       baseDir,
-      bodyOf: body.tool === null ? null : `${descriptor.kind} node ${reprText(descriptor.id)}`,
+      bodyOf:
+        body.tool === null ? null : { label: `${descriptor.kind} node ${reprText(descriptor.id)}`, flowInputs: params.types },
     });
   };
 

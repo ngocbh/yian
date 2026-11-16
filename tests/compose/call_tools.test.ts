@@ -310,6 +310,8 @@ test.each<[string, RunStartTool["hint"]]>([
   ["{kind: call, call: {bilin: refund}}", hint("alias", "billing")],
   ["{kind: call, call: {crn: lookup}}", hint("module tool", "{crm: lookup}")],
   ["{kind: call, call: {lesons: read}}", hint("memory tool", "{lessons: read}")],
+  ["{kind: map, over: [1], call: {lesons: read}}", hint("memory tool", "{lessons: read}")],
+  ["{kind: map, over: [1], call: gret}", hint("def", "greet")],
   [inlineNode("call(lesons.read)"), hint("memory tool", "lessons.read")],
   ["{kind: call, call: {github: search}}", null],
   [inlineNode("call(bilin.quote)"), hint("library def", "billing.quote")],

@@ -428,6 +428,14 @@ export type BindingContractReader = (
   range: SourceRange | null,
 ) => OutputContract | null;
 
+/** The map or loop node that runs a generated tool body. */
+export interface BodyOwner {
+  /** How run start names the body's TOOL node: `map node 'fetch'`. */
+  readonly label: string;
+  /** The inputs of the flow the node is in, whose memories a mistyped tool group is matched against. */
+  readonly flowInputs: ReadonlyMap<string, Type>;
+}
+
 /** The inputs a node `build` reads; frozen. */
 export class BuildContext {
   /** The flow's named types, for reading declared types. */
@@ -464,11 +472,8 @@ export class BuildContext {
   readonly flowInputs: ReadonlyMap<string, Type>;
   /** The memory types the load knows beyond the built-ins, which a grant's tools are checked against. */
   readonly memoryTypes: MemoryTypeTable;
-  /**
-   * For a map's or loop's generated tool body, the node that runs it, `map node 'fetch'`, which run
-   * start names the body's TOOL node by; else `null`.
-   */
-  readonly bodyOf: string | null;
+  /** For a map's or loop's generated tool body, the node that runs it; else `null`. */
+  readonly bodyOf: BodyOwner | null;
 
   /**
    * Create a context. Only `registry` is required; the readers, `resolver`, `baseDir` and `bodyOf`
@@ -491,7 +496,7 @@ export class BuildContext {
     bindingContractReader?: BindingContractReader | null;
     flowInputs?: ReadonlyMap<string, Type>;
     memoryTypes?: MemoryTypeTable;
-    bodyOf?: string | null;
+    bodyOf?: BodyOwner | null;
   }) {
     const {
       registry,

@@ -186,7 +186,8 @@ function closeCallable(ctx: BuildContext, ref: ToolRef, wording: ToolWording): C
     }
   }
   if (group !== null) {
-    for (const [input, typ] of ctx.flowInputs) {
+    // A generated body's inputs are its node's arguments; the memories are its owner's flow's.
+    for (const [input, typ] of ctx.bodyOf?.flowInputs ?? ctx.flowInputs) {
       if (isMemoryType(typ)) offer(input, "memory tool", wording.ref(input, name));
     }
   }
@@ -552,7 +553,7 @@ export class ToolDescriptor extends NodeDescriptor {
     const mayBeTypo = this.toolField === "call" && module === null && !builtin;
     const hint = mayBeTypo ? closeCallable(ctx, this.toolRef, this.wording) : null;
     const site = this.wording.site;
-    const bodyOf = site === null ? ctx.bodyOf : null;
+    const bodyOf = site === null ? (ctx.bodyOf?.label ?? null) : null;
     const node = new ToolNode(this.id, { toolId: this.toolRef, title: this.nodeName, retries, module, site, bodyOf, hint });
     const wiring = this.sinkWiring();
     if (this.toolId === TAKE) {

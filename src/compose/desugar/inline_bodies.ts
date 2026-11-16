@@ -20,7 +20,8 @@ import { LoadDiagnostics } from "../helpers/errors.ts";
 import { hasSpan } from "../helpers/tags.ts";
 import { readCallTarget } from "../nodes/base.ts";
 import type { CallsTool } from "../nodes/call.ts";
-import { identifierSuggestion, isIdentifier } from "../parse/nodes.ts";
+import { KINDS } from "../nodes/index.ts";
+import { identifierSuggestion, isIdentifier, normalizeNodeSignatureCursor } from "../parse/nodes.ts";
 import { setRecordKey } from "../source/common.ts";
 import { SourceCursor } from "../source/index.ts";
 
@@ -169,6 +170,10 @@ export function extractInlineBodies(
       // The map's own check reports a malformed `call:` first, as for a flow.
       if (kind === "map") readCallTarget(kind, nodeId, { call }, bodyCursor.rangeOf("call"), diagnostics);
       if (kind === "map" && callsTool?.(nodeId, call, bodyCursor.rangeOf("call"), { kind }) === true) {
+        // The map's parse sees it without the tool call's fields, so it couldn't list them.
+        const moved = [...TOOL_CALL_FIELDS].map((key) => (key === "output" ? "outputs" : key));
+        const cls = KINDS.get(kind)!;
+        cls._checkKeys(nodeId, cls._normalizeCursor(normalizeNodeSignatureCursor(bodyCursor)), moved);
         const group = isRecord(call) ? Object.keys(call)[0]! : null;
         const memory = group !== null && memories.has(group) ? group : null;
         const value = nodesSnapshot[nodeId] as ValueRecord;

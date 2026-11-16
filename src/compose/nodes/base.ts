@@ -821,21 +821,24 @@ export class NodeDescriptor {
   }
 
   /**
-   * Reject a body key outside `allowed`, at its value (a `when:` adds `whenHint`), then a missing
-   * `required` key, at the body.
+   * Reject a body key outside `allowed` and `also`, at its value (a `when:` adds `whenHint`), then a
+   * missing `required` key, at the body.
    *
+   * @param also More keys the body may hold, as `allowed` names them: a map naming a tool takes the
+   *   tool call's own.
    * @throws LoadError for the first offending key.
    */
-  static _checkKeys(nodeId: string, cursor: SourceCursor): void {
+  static _checkKeys(nodeId: string, cursor: SourceCursor, also: readonly string[] = []): void {
     const diagnostics = LoadDiagnostics.fromCursor(cursor);
     const body = cursor._valueView() as ValueRecord;
     const subject = `node ${reprText(nodeId)} (kind=${this._writtenKind(cursor)})`;
+    const allowed = new Set([...this.allowed, ...also]);
     for (const key of Object.keys(body)) {
-      if (this.allowed.has(key)) continue;
+      if (allowed.has(key)) continue;
       const hint = key === "when" ? this.whenHint : "";
       // Name the authored spellings, the offending key's too; the plural carrier names fail to load.
       const field = this._writtenKey(key, cursor);
-      const surface = new Set([...this.allowed].map((name) => this._writtenKey(name, cursor)));
+      const surface = new Set([...allowed].map((name) => this._writtenKey(name, cursor)));
       throw diagnostics.error(
         `${subject}: field ${reprText(field)} is not allowed ` +
           `(allowed: ${[...surface].sort(compareCodeUnits).join(", ")})${hint}`,

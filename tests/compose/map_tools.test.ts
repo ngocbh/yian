@@ -168,6 +168,14 @@ test.each([
   expect(where).toBe(at);
 });
 
+test("an unknown field on a map naming a tool lists the tool call's fields among those allowed", async () => {
+  expect(await failure(mapApp("search", "    retry: 2\n"))).toEqual([
+    "node 'fetch' (kind=map): field 'retry' is not allowed (allowed: adaptive_questions, asserts, call, depends_on, " +
+      "env, input, kind, node_name, output, over, parallel, retries, runs_after)",
+    "2",
+  ]);
+});
+
 test("take is refused at call:, since a map can't give each item an inbox", async () => {
   const text = mapApp("take", "    input:\n      from: ${input.box}\n", "  box: !Inbox(str)\n");
   expect(await failure(text)).toEqual([

@@ -1865,8 +1865,8 @@ function readFlowParameters(options: AssembleOptions, ctx: AssembleContext): Flo
  *
  * @param memories The flow's memory inputs.
  * @returns The rule, which throws a LoadError at `call:` for a bare memory input, a group that is
- *   a memory input and a def or alias too, a group that is a def or a flow alias, `take` or
- *   `load_skill` on a `map`, or a tool or `load_skill` on a `loop`.
+ *   a memory input and a def or alias too, a group that is a def or a flow alias, a bare `take`
+ *   or `load_skill` on a `map`, or a tool or `load_skill` on a `loop`.
  */
 function callsToolRule(scope: CallableScope, memories: ReadonlySet<string>, diagnostics: LoadDiagnostics): CallsTool {
   const isLibrary = (name: string) =>
@@ -1920,7 +1920,8 @@ function callsToolRule(scope: CallableScope, memories: ReadonlySet<string>, diag
     if (entries.length !== 1 || entries[0]![0] === "") return false;
     const [group, name] = entries[0]!;
     const written = `\`{${group}: ${String(name)}}\``;
-    if (typeof name === "string" && RESERVED_TOOL_NAMES.has(name)) return builtin(name);
+    // A built-in in a group is the TOOL node's refusal, which shows the bare form to write.
+    if (typeof name === "string" && RESERVED_TOOL_NAMES.has(name)) return runsTools || builtin(name);
     const section = scope.section(group);
     const module = scope.toolModule(group);
     if (memories.has(group)) {

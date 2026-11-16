@@ -680,7 +680,10 @@ test.each([
   ["{crm: lookup}", "tool crm_lookup module crm"],
   ["greet", "flow greet"],
   ["take", TAKE_IN_MAP],
-  ["{crm: take}", TAKE_IN_MAP],
+  [
+    "{crm: take}",
+    "node 'n' (kind=map): `call: {crm: take}`: take is a built-in, not a group's tool; write `call: take`",
+  ],
   ["load_skill", "map node 'n': tool id `load_skill` is reserved by yian"],
   ["lessons", "map node 'n': `lessons` is a memory input; name one of its tools: `call: {lessons: <tool>}`"],
   [

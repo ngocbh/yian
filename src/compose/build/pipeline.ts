@@ -568,7 +568,8 @@ export function registerInlineBodies(
       if (name === key) continue;
       fieldLabels.set(`map input ${reprText(name)}`, `node ${reprText(body.nodeId)} map input ${reprText(key)}`);
     }
-    const labelledDescriptor = descriptor.replace({ childLabel: label, fieldLabels });
+    const bodyTool = descriptor instanceof LoopDescriptor ? { bodyTool: body.tool } : {};
+    const labelledDescriptor = descriptor.replace({ childLabel: label, fieldLabels, ...bodyTool });
     associated.set(body.nodeId, labelledDescriptor);
     registrations.push([body, labelledDescriptor, label]);
   }
@@ -2462,15 +2463,12 @@ function routeEdges(built: BuiltNodes, params: FlowParameters, ctx: AssembleCont
 /**
  * Check types over the built flow: case `when:` values and impossible `when:`s, typed inputs (and
  * stamp TOOL input types), CALL/MAP types, the LOOP contract, case exhaustiveness, wiring parity.
- * `inlineBodies` are the retained bodies by node id, whose generated ones the LOOP errors name by
- * their tool.
  */
 function checkTypes(
   built: BuiltNodes,
   params: FlowParameters,
   narrowing: Narrowing,
   valueCaseIds: ReadonlySet<string>,
-  inlineBodies: ReadonlyMap<string, InlineBody>,
   ctx: AssembleContext,
 ): void {
   const { registry, resolveOrigin, constructorType, diagnostics } = ctx;
@@ -2509,17 +2507,14 @@ function checkTypes(
   // carried seed-source Type (needs producers, so it runs alongside the cross-flow call/map type
   // check above). Each returned field must also fit the body parameter it is bound to on the
   // next turn: a named body's declared input, or the parameter an inline body generates from its
-  // seed (`inlineLoops` only selects the wording, which names a generated body by its tool).
-  const inlineLoops = new Map(
-    [...descriptors]
-      .filter(([, d]) => d instanceof LoopDescriptor && d.childLabel !== null)
-      .map(([id]) => {
-        const tool = inlineBodies.get(id)?.tool ?? null;
-        return [id, tool === null ? "the body" : `tool \`${tool}\``] as const;
-      }),
-  );
+  // seed (`bodyLabels` only selects the wording, which names a generated body by its tool).
+  const bodyLabels = new Map<string, string>();
+  for (const [id, d] of descriptors) {
+    if (!(d instanceof LoopDescriptor) || d.childLabel === null) continue;
+    bodyLabels.set(id, d.bodyTool === null ? "the body" : `tool \`${d.bodyTool}\``);
+  }
   checkLoopTypeContract(buildResults, producers, flowInputContracts, flowWiring, {
-    inlineLoops,
+    bodyLabels,
     registry,
     diagnostics,
   });
@@ -2890,7 +2885,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   const desugared = desugarSections(read, options.assertsSection, options.flowLlmConfig ?? null, ctx);
   const built = buildNodes(read, desugared, options.flowEnv ?? null, ctx);
   const routed = routeEdges(built, read.params, ctx);
-  checkTypes(built, read.params, routed.narrowing, desugared.valueCaseIds, read.inlineBodies, ctx);
+  checkTypes(built, read.params, routed.narrowing, desugared.valueCaseIds, ctx);
   const checked = checkReferences(read, desugared, built, routed, ctx);
   const outputs = finishOutputs(read, desugared, built, routed.narrowing, checked, ctx);
   const closed = closeFlow(read, desugared, built, routed.narrowing, checked, outputs, ctx);

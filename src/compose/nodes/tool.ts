@@ -695,7 +695,6 @@ export class ToolDescriptor extends NodeDescriptor {
       title: this.nodeName,
       retries: this.retries,
       memoryTool: true,
-      bodyOf: ctx.bodyOf?.label ?? null,
     });
     node.outputContract = this.resultContract(ctx);
     const wiring = this.sinkWiring();

@@ -15,8 +15,7 @@
  * body's inputs read that way, and `carriedFieldTypes` gives the carried record's proven field
  * types.
  *
- * Knows about: diagnostics, expr, the LOOP and TOOL runtime nodes, the built-in tool ids, node
- * contracts, compile's output contracts, typesys, compose helpers, `base.ts` and `resolver.ts`.
+ * Knows about: diagnostics, expr, the LOOP runtime node, the built-in tool ids, node contracts, compile's output contracts, typesys, compose helpers, `base.ts` and `resolver.ts`.
  */
 
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
@@ -34,7 +33,6 @@ import {
   ValueContract,
 } from "../../nodes/contracts.ts";
 import { LoopNode } from "../../nodes/loop/node.ts";
-import { ToolNode } from "../../nodes/tool/node.ts";
 import { SLEEP, TAKE } from "../../tools/context.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import { isInboxType, isMemoryType, Type, ValueKind, valueRepr, writeAsText } from "../../typesys/values.ts";
@@ -78,6 +76,7 @@ export interface LoopDescriptorFields extends NodeDescriptorFields {
   call: string;
   def?: string | null;
   childLabel?: string | null;
+  bodyTool?: string | null;
   while_?: string | null;
   until_?: string | null;
   times?: unknown;
@@ -104,8 +103,8 @@ export interface LoopDescriptorFields extends NodeDescriptorFields {
  * take part in the inline-call and case-output rewrites. `keywordRemap` reads `while:` and
  * `until:` into `while_` and `until_`; their ranges stay keyed by the YAML key.
  *
- * `childLabel` is compiler-owned diagnostic text for an anonymous inline child; it is not in
- * `allowed`, so never authored.
+ * `childLabel` is compiler-owned diagnostic text for an anonymous inline child, and `bodyTool` the
+ * tool a generated body calls, as `call:` wrote it; neither is in `allowed`, so never authored.
  */
 export class LoopDescriptor extends NodeDescriptor {
   static override readonly kind = "loop";
@@ -139,6 +138,8 @@ export class LoopDescriptor extends NodeDescriptor {
   readonly def: string | null;
   /** The diagnostic label of an anonymous inline child; `null` on an authored node. */
   readonly childLabel: string | null;
+  /** The tool the generated body calls, as `call:` wrote it (`sleep`, `{jobs: status}`); `null` for a flow. */
+  readonly bodyTool: string | null;
   /** The `while:` predicate text; `null` when absent. */
   readonly while_: string | null;
   /** The `until:` predicate text; `null` when absent. */
@@ -162,6 +163,7 @@ export class LoopDescriptor extends NodeDescriptor {
     this.call = fields.call;
     this.def = fields.def ?? null;
     this.childLabel = fields.childLabel ?? null;
+    this.bodyTool = fields.bodyTool ?? null;
     this.while_ = fields.while_ ?? null;
     this.until_ = fields.until_ ?? null;
     this.times = fields.times ?? null;
@@ -321,8 +323,7 @@ export class LoopDescriptor extends NodeDescriptor {
     const outNames = contractFieldNames(sig.output);
     const display = callableDisplay(this.call, this.childLabel, this.def);
     // A tool the loop runs through the body generated for it: the body returns the tool's result.
-    const bodyNode = child.compiled.nodes.get(this.id);
-    const tool = bodyNode instanceof ToolNode && bodyNode.bodyOf !== null ? bodyNode : null;
+    const tool = this.bodyTool;
     /** What the tool returns, as its refusals start: `loop node 'w': tool `sleep` returns None`. */
     const returns = (): string => {
       const typ = outputContractType(sig.output);
@@ -537,9 +538,9 @@ function checkedCount(subject: string, key: "times" | "max", value: unknown, err
   return null;
 }
 
-/** The fix for a loop's tool whose result isn't a record of carried fields: `sleep` and `take` take no `output:`. */
-function declareResultFix(tool: ToolNode): string {
-  return tool.builtin === SLEEP || tool.builtin === TAKE ? "" : "; declare the record it returns with `output:`";
+/** The fix for a loop's `tool` whose result isn't a record of carried fields: `sleep` and `take` take no `output:`. */
+function declareResultFix(tool: string): string {
+  return tool === SLEEP || tool === TAKE ? "" : "; declare the record it returns with `output:`";
 }
 
 /** Return `names` sorted by code unit, as a JSON list of text. */

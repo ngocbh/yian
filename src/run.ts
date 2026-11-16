@@ -3416,7 +3416,7 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
  * Refuse a memory grant this run's tools clash with, before any record is written: one whose
  * memory input is also a host tool or tool group of the run, and one whose tool would show to a
  * model under the name of a host tool, flow or module tool the same node grants. Every static
- * node is checked, child flows' included, each against its own flow's inputs.
+ * node is checked, child flows' included, each against its own flow's inputs, except a TOOL node.
  *
  * @param hostTypes The tool names of the host memory types the flow was loaded with, by type.
  * @throws RangeError naming the node, the input and the fix.
@@ -3429,6 +3429,9 @@ function checkMemoryGrantNames(
   const scope = tools.scope();
   const table = { tools: hostTypes, opaque: false, clashes: new Set<string>() };
   for (const [nodeId, node, inputs] of nodesWithFlowInputs(flow)) {
+    // A TOOL node calls its memory's tool before any run tool, so a host tool of that name is only
+    // shadowed there.
+    if (node.kind === NodeKind.TOOL) continue;
     const grants = node.memoryGrants();
     if (grants.length === 0) continue;
     const where = `${node.kind.toUpperCase()} node ${reprText(nodeId)}`;
@@ -3459,22 +3462,23 @@ function checkMemoryGrantNames(
 }
 
 /**
- * Refuse a flow, library or tool module a node grants or calls under the name of a host tool or
- * tool group of the run, before any record is written: the name would mean two tools. Every
- * static node is checked, child flows' included.
+ * Refuse a flow, library or tool module a node grants under the name of a host tool or tool group
+ * of the run, before any record is written: the name would mean two tools. Every static node is
+ * checked, child flows' included, except a TOOL node.
  *
  * @throws RangeError naming the node, the flow, library or module, and the fix.
  */
 function checkFlowGrantNames(flow: CompiledFlow, tools: ToolSet): void {
   const scope = tools.scope();
   for (const [nodeId, node] of staticNodes(flow)) {
+    // A TOOL node calls its module's tool before any run tool, so a host tool of that name is only
+    // shadowed there.
+    if (node.kind === NodeKind.TOOL) continue;
     const own = node.flowGrants().scope;
-    // A TOOL node calls the module its `tool_id:` names; an AGENT grants its modules.
-    const module = node.hostToolCall() === null ? "a tool module it grants" : "a tool module it calls";
     const names: [string, string][] = [
       ...[...own.groups.keys()].map((name): [string, string] => [name, "a library it grants"]),
       ...own.tools.map(({ name }): [string, string] => [name, "a flow it grants"]),
-      ...node.toolModules().map(({ alias }): [string, string] => [alias, module]),
+      ...node.toolModules().map(({ alias }): [string, string] => [alias, "a tool module it grants"]),
     ];
     for (const [name, what] of names) {
       const host = scope.group(name) !== null ? "a tool group" : scope.hasTool(name) ? "a tool" : null;

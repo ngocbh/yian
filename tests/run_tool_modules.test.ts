@@ -387,7 +387,6 @@ test.each([
   ["t: {kind: tool, tool_id: quote, input: {id: x}, output: !str}", "TOOL node 't' output: declared str, but tool 'quote' returns int"],
   ["t: {kind: tool, tool_id: {crm: find}, input: {id: x}}", "TOOL node 't' names {crm: find}: `crm` has no tool `find`; it has lookup"],
   ["a: {kind: agent, prompt: go, tools: [quote]}", "AGENT node 'a': `quote` is both a tool module it grants and a tool of this run; rename one"],
-  ["t: {kind: tool, tool_id: quote, input: {id: x}}", "TOOL node 't': `quote` is both a tool module it calls and a tool of this run; rename one"],
   ["a: {kind: agent, prompt: go, tools: [notes, notes_read]}", "AGENT node 'a': the memory tool `notes_read` of `notes` has the name of another tool it grants; rename one"],
 ])("run start checks each node's module tools: %s", async (node, message) => {
   writeFileSync(join(dir, "crm.ts"), tools(["lookup"]));
@@ -397,6 +396,16 @@ test.each([
   const host: Record<string, FunctionTool> = message.includes("a tool of this run") ? { quote } : {};
   const text = app(uses, [node], "input:\n  notes: !FileMemory\n");
   await expect(run(text, { tools: host }, { notes: new FakeMemory() })).rejects.toThrow(new RangeError(message));
+});
+
+test("a TOOL node calls its module's tool, though a host tool or group has the alias's name", async () => {
+  writeFileSync(join(dir, "quote.ts"), tools(["quote"]));
+  const host = new FunctionTool({ name: "quote", description: "d", parametersJsonSchema: { type: "object" }, execute: () => "host" });
+  const text = app({ quote: "./quote.ts:quote" }, ["t: {kind: tool, tool_id: quote, input: {id: x}}"], "output: ${t.output}\n");
+  for (const tools of [{ quote: host }, { quote: [host] }]) {
+    const done = await run(text, { tools });
+    expect([done.status, done.output]).toEqual(["succeeded", 1n]);
+  }
 });
 
 /** The payload of the `run_started` record of the log at `log`. */

@@ -108,6 +108,11 @@ class ToolWording {
   written(value?: string): string {
     return value === undefined ? `${this.field}:` : `${this.field}: ${value}`;
   }
+
+  /** What the node is, in a sentence: `a TOOL node`, or `a tool call` under `kind: call`. */
+  noun(): string {
+    return this.field === "call" ? "a tool call" : "a TOOL node";
+  }
 }
 
 /** The field a TOOL body in `cursor` names its tool in: `call` under `kind: call`, else `tool_id`. */
@@ -304,8 +309,8 @@ export class ToolDescriptor extends NodeDescriptor {
    * Read an authored `tool_id:`: a tool id (`ask_user` read as `ask`), or a one-key mapping
    * `{group: tool}` naming one tool of a group.
    *
-   * @throws LoadError at `tool_id:` for any other value, `null` included, or a built-in or
-   *   `load_skill` named in a group.
+   * @throws LoadError at `tool_id:` for any other value, `null` and empty text included, or a
+   *   built-in or `load_skill` named in a group.
    */
   private static readToolRef(
     wording: ToolWording,
@@ -316,12 +321,14 @@ export class ToolDescriptor extends NodeDescriptor {
     const fail = (problem: string): never => {
       throw diagnostics.error(`${wording.nodeKind()}: ${problem}`, { range });
     };
-    if (typeof raw === "string") {
+    if (typeof raw === "string" && raw !== "") {
       return Object.freeze({ group: null, name: raw === ASK_USER ? ASK : raw });
     }
     if (!isRecord(raw)) {
-      const fix = raw === null ? "write a tool name" : "put it in quotes";
-      return fail(valueTypeError(wording.field, "a tool name or `{group: tool}`", raw, fix));
+      // No tool has an empty name, so `""` is read as empty, as `null` is.
+      const empty = raw === null || raw === "";
+      const fix = empty ? "write a tool name" : "put it in quotes";
+      return fail(valueTypeError(wording.field, "a tool name or `{group: tool}`", empty ? null : raw, fix));
     }
     const keys = Object.keys(raw);
     if (keys.length !== 1 || keys[0] === "") {
@@ -503,7 +510,7 @@ export class ToolDescriptor extends NodeDescriptor {
     if (memory.nullable) {
       throw ctx.diagnostics.error(
         `${this.wording.node()}: \`${this.wording.written(`{${input}: ${name}}`)}\` names \`${input}\`, ` +
-          "an Optional memory; a TOOL node needs one that is always bound",
+          `an Optional memory; ${this.wording.noun()} needs one that is always bound`,
         { range },
       );
     }

@@ -24,7 +24,7 @@ import { hostEnv } from "../helpers/mcp_helpers.ts";
 let tmp: string;
 
 // Its top level throws, so a load that imported it would fail.
-const MODULE = 'throw new Error("imported");\nexport const lookup = {};\n';
+const MODULE = 'throw new Error("imported");\nexport const lookup = {};\nexport const quote = {};\n';
 
 beforeAll(() => {
   tmp = realpathSync(mkdtempSync(join(tmpdir(), "yian-call-tools-")));
@@ -160,6 +160,19 @@ test.each([
     "search, adaptive_questions: {prompt: hi}",
     "node 'n' (call: search): `adaptive_questions:` applies only to call: ask",
   ],
+  [
+    "take, output: !int",
+    "node 'n' (call: take): take's output is inferred ({events: list(T), closed: bool}); remove `output:`",
+  ],
+  [
+    "ask, retries: 1, input: {prompt: hi}",
+    "node 'n' (call: ask): `retries:` doesn't apply to ask: the host owns retries of a call it holds",
+  ],
+  ['""', "node 'n' (kind=call): `call:` must be a tool name or `{group: tool}`, but it is empty; write a tool name"],
+  [
+    "{notes: read}",
+    "node 'n': `call: {notes: read}` names `notes`, an Optional memory; a tool call needs one that is always bound",
+  ],
   ["{crm: [search]}", "node 'n' (kind=call): `call: {crm: ...}` names one tool; write `{crm: search}`"],
   ["{github: [search]}", "node 'n' (kind=call): `call: {github: ...}` names one tool; write `{github: search}`"],
   [
@@ -177,7 +190,7 @@ test.each([
       "parameter, such as `<field>: ...`",
   ],
 ])("call: %s reads in the author's words", async (call, message) => {
-  expect(await refusal(app(`  n: {kind: call, call: ${call}}\n`))).toBe(message);
+  expect(await refusal(app(`  n: {kind: call, call: ${call}}\n`, "  notes: !Optional(FileMemory)\n"))).toBe(message);
 });
 
 test.each([
@@ -187,6 +200,12 @@ test.each([
   const text = app(`  n: {kind: ${kind}, ${field}: {github: search}, adaptive_questions: {prompt: hi}}\n`);
   expect(await refusal(text)).toBe(
     `node 'n' (${field}: {github: search}): \`adaptive_questions:\` applies only to ${field}: ask`,
+  );
+});
+
+test("an empty tool_id: is a load error", async () => {
+  expect(await refusal(app('  n: {kind: tool, tool_id: ""}\n'))).toBe(
+    "node 'n' (kind=tool): `tool_id:` must be a tool name or `{group: tool}`, but it is empty; write a tool name",
   );
 });
 
@@ -218,6 +237,25 @@ test.each<[string, string, string, string]>([
 /** A host tool named `name` that returns `host`. */
 const hostTool = (name: string) =>
   tool({ name, description: "A host tool.", parameters: { type: "object", properties: {} }, execute: () => "host" });
+
+test("a call node runs a host tool and a host group's tool", async () => {
+  const echo = (name: string, said: string) =>
+    tool({
+      name,
+      description: "Echo the query.",
+      parameters: { type: "object", properties: { q: { type: "string" } }, required: ["q"] },
+      execute: (args: Record<string, unknown>) => `${said} ${String(args["q"])}`,
+    });
+  const text =
+    "id: r\nname: r\ninput:\n  q: !str\nnodes:\n" +
+    '  bare: {kind: call, call: lookup, input: {q: "${input.q}"}, output: !str}\n' +
+    '  grouped: {kind: call, call: {github: search}, input: {q: "${input.q}"}, output: !str}\n' +
+    'output: {bare: "${bare.output}", grouped: "${grouped.output}"}\n';
+  const tools = { lookup: echo("lookup", "found"), github: [echo("search", "searched")] };
+  const result = await runFlow(await loadFlow(text), { q: "hi" }, { env: hostEnv(tmp), tools });
+
+  expect(result.output).toEqual({ bare: "found hi", grouped: "searched hi" });
+});
 
 test("a def named like a host tool runs the def", async () => {
   const text =

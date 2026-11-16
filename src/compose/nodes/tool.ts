@@ -175,7 +175,7 @@ function closeCallable(ctx: BuildContext, ref: ToolRef, wording: ToolWording): C
       else offer(each, "library def", wording.ref(each, def));
     } else if (single) {
       offer(each, "module tool", each);
-    } else if (module === null && section === "defs") {
+    } else if (section === "defs") {
       offer(each, "def", each);
     } else if (module === null) {
       // A library alias names no flow of its own; its defs are matched by their names.
@@ -525,7 +525,8 @@ export class ToolDescriptor extends NodeDescriptor {
     const builtin = BUILTIN_TOOL_IDS.has(this.toolId as BuiltinToolId);
     // A built-in is never retried by the node: take and sleep make no call, and the host owns an ask.
     const retries = builtin ? 0 : this.retries;
-    // A name the run supplies may be a mistyped def; under `tool_id:` the author said it is a tool.
+    // A name the run supplies may be a mistyped def or alias; under `tool_id:` the author said it is
+    // a tool.
     const mayBeTypo = this.toolField === "call" && module === null && !builtin;
     const hint = mayBeTypo ? closeCallable(ctx, this.toolRef, this.wording) : null;
     const site = this.wording.site;

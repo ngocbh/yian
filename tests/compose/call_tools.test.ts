@@ -293,6 +293,14 @@ test.each<[string, string | null]>([
   ["{kind: tool, tool_id: gret}", null],
   ["{kind: code, code: return 1, output: !int, input: {x: call(gret)}}", "did you mean the def greet?"],
   ["{kind: code, code: return 1, output: !int, input: {x: call(quot)}}", "did you mean the library def billing.quote?"],
+  // A mistyped group is matched against the file's libraries and tool modules.
+  ["{kind: call, call: {bilin: quote}}", "did you mean the library def {billing: quote}?"],
+  ["{kind: call, call: {bilin: qoute}}", "did you mean the library def {billing: quote}?"],
+  ["{kind: call, call: {bilin: refund}}", "did you mean the alias billing?"],
+  ["{kind: call, call: {crn: lookup}}", "did you mean the module tool {crm: lookup}?"],
+  ["{kind: call, call: {github: search}}", null],
+  ["{kind: code, code: return 1, output: !int, input: {x: call(bilin.quote)}}", "did you mean the library def billing.quote?"],
+  ["{kind: code, code: return 1, output: !int, input: {x: call(crn.lookup)}}", "did you mean the module tool crm.lookup?"],
 ])("n: %s is checked at run start, with hint %p", async (node, hint) => {
   const [tool] = runStartTools(await load(app(`  n: ${node}\n`)));
   expect(tool!.hint).toBe(hint);
@@ -345,7 +353,7 @@ async function startError(text: string): Promise<string> {
     parameters: { type: "object", properties: { q: { type: "string" } }, required: ["q"], additionalProperties: false },
     execute: () => "found",
   });
-  const run = runFlow(await loadFlow(text), {}, { env: hostEnv(tmp), tools: { search } });
+  const run = runFlow(await load(text), {}, { env: hostEnv(tmp), tools: { search } });
   return ((await run.catch((caught: unknown) => caught)) as Error).message;
 }
 
@@ -356,6 +364,32 @@ test("run start offers the name the file defines before the run's tools", async 
     'id: r\nname: r\ndefs:\n  serch2: {kind: code, code: "return 1", output: !int}\n' +
     "nodes:\n  n: {kind: call, call: serch}\n";
   expect(await startError(text)).toBe(`TOOL node 'n' ${UNKNOWN}; did you mean the def \`serch2\`?`);
+});
+
+/**
+ * A flow whose file defines the def `greet`, the flow alias `clean`, the library `billing` and the
+ * tool modules `crm` (a group) and `one` (one export), and whose node `n` is `node`.
+ */
+const typoApp = (node: string) =>
+  "id: r\nname: r\nuses:\n  crm: ./crm.ts\n  one: ./tools.ts:quote\n  billing: ./billing\n  clean: ./clean\n" +
+  `defs:\n  greet: {kind: code, code: "return 1", output: !int}\nnodes:\n  n: ${node}\n`;
+
+const NO_GROUP = (group: string) => `unknown tool group '${group}'; tool groups in this run: []`;
+
+// Each row: node `n` as written, and how its run-start error ends.
+test.each([
+  ["{kind: call, call: {bilin: quote}}", `{bilin: quote}: ${NO_GROUP("bilin")}; did you mean the library def \`{billing: quote}\`?`],
+  ["{kind: call, call: {crn: lookup}}", `{crn: lookup}: ${NO_GROUP("crn")}; did you mean the module tool \`{crm: lookup}\`?`],
+])("run start offers the file's closest name for n: %s", async (node, ending) => {
+  expect(await startError(typoApp(node))).toBe(`TOOL node 'n' names ${ending}`);
+});
+
+test("run start offers an inline call's closest group as the call writes it", async () => {
+  const node = "{kind: code, code: return 1, output: !int, input: {x: call(crn.lookup)}}";
+  expect(await startError(typoApp(node))).toBe(
+    `node 'n' input 'x' call(crn.lookup) names {crn: lookup}: ${NO_GROUP("crn")}; did you mean the module tool ` +
+      "`crm.lookup`?",
+  );
 });
 
 // Each row: what fails, the flow's lines and the run-start error, which names the inline call's

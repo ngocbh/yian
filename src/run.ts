@@ -3393,9 +3393,11 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
       callTools(call, tools).resolve([callRef(call)]);
     } catch (error) {
       if (!(error instanceof RangeError)) throw error;
+      // The closest name the file defines comes first: a mistyped def or alias is a tool name.
+      const hint = call.hint === null ? null : `; did you mean the ${call.hint.what} \`${call.hint.name}\`?`;
       let reason: string;
       if (call.group !== null) {
-        reason = `{${call.group}: ${call.toolId}}: ${error.message}`;
+        reason = `{${call.group}: ${call.toolId}}: ${error.message}${hint ?? ""}`;
       } else if (
         error instanceof GrantError ||
         call.toolId === ASK ||
@@ -3421,8 +3423,7 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
           known.map((id) => [shown.get(id) ?? id, shown.has(id) ? `\`${id}\`` : reprText(id)]),
         );
         const [close] = getCloseMatches(call.toolId, [...candidates.keys()], 1, CLOSE_MATCH_CUTOFF);
-        // The closest name the file defines comes first: a mistyped def is a tool name.
-        if (call.hint !== null) reason += `; did you mean the ${call.hint.what} \`${call.hint.name}\`?`;
+        if (hint !== null) reason += hint;
         else if (close !== undefined) reason += `; did you mean ${candidates.get(close)!}?`;
       }
       throw new YianRangeError(`${toolNodeName(nodeId, call)} names ${reason}`);

@@ -146,29 +146,44 @@ class ToolWording {
 }
 
 /**
- * The name the file defines closest to `name`, a tool a call names that the run must supply: a
- * def, a flow alias, a library's def or a one-export module's tool, by `CLOSE_MATCH_CUTOFF`;
- * `null` when none is close. A module group lists its tools only at run start, so it offers none.
+ * The name the file defines closest to the tool `ref` a call names, which the run must supply, by
+ * `CLOSE_MATCH_CUTOFF`; `null` when none is close.
+ *
+ * - A bare name is matched against the file's defs, flow aliases, library defs and one-export
+ *   modules' tools.
+ * - A group is matched against the file's libraries, offering the def the call names, else the one
+ *   closest to it, else the alias; and its modules of several tools, offering the tool the call
+ *   names, since such a module lists its tools only at run start.
  */
-function closeCallable(ctx: BuildContext, name: string, wording: ToolWording): CallableHint | null {
+function closeCallable(ctx: BuildContext, ref: ToolRef, wording: ToolWording): CallableHint | null {
+  const { group, name } = ref;
   const candidates = new Map<string, CallableHint>();
   const offer = (key: string, what: CallableHint["what"], written: string) => {
     if (!candidates.has(key)) candidates.set(key, { what, name: written });
   };
   for (const each of ctx.callableNames()) {
     const module = ctx.toolModule(each);
-    if (module !== null) {
-      if (splitModuleRef(module.ref).exportName !== null) offer(each, "module tool", each);
-    } else if (ctx.callableSection(each) === "defs") {
+    const single = module !== null && splitModuleRef(module.ref).exportName !== null;
+    const section = ctx.callableSection(each);
+    const library = module === null && section === "uses" ? (ctx.resolver?.(each).library ?? null) : null;
+    if (group !== null) {
+      // Only a library or a module of several tools is written as a group.
+      if (module !== null && !single) offer(each, "module tool", wording.ref(each, name));
+      if (library === null) continue;
+      const [def] = library.has(name) ? [name] : getCloseMatches(name, [...library.keys()], 1, CLOSE_MATCH_CUTOFF);
+      if (def === undefined) offer(each, "alias", each);
+      else offer(each, "library def", wording.ref(each, def));
+    } else if (single) {
+      offer(each, "module tool", each);
+    } else if (module === null && section === "defs") {
       offer(each, "def", each);
-    } else {
+    } else if (module === null) {
       // A library alias names no flow of its own; its defs are matched by their names.
-      const library = ctx.resolver?.(each).library ?? null;
       if (library === null) offer(each, "alias", each);
       else for (const def of library.keys()) offer(def, "library def", wording.ref(each, def));
     }
   }
-  const [close] = getCloseMatches(name, [...candidates.keys()], 1, CLOSE_MATCH_CUTOFF);
+  const [close] = getCloseMatches(group ?? name, [...candidates.keys()], 1, CLOSE_MATCH_CUTOFF);
   return close === undefined ? null : candidates.get(close)!;
 }
 
@@ -511,8 +526,8 @@ export class ToolDescriptor extends NodeDescriptor {
     // A built-in is never retried by the node: take and sleep make no call, and the host owns an ask.
     const retries = builtin ? 0 : this.retries;
     // A name the run supplies may be a mistyped def; under `tool_id:` the author said it is a tool.
-    const mayBeTypo = this.toolField === "call" && module === null && group === null && !builtin;
-    const hint = mayBeTypo ? closeCallable(ctx, name, this.wording) : null;
+    const mayBeTypo = this.toolField === "call" && module === null && !builtin;
+    const hint = mayBeTypo ? closeCallable(ctx, this.toolRef, this.wording) : null;
     const site = this.wording.site;
     const node = new ToolNode(this.id, { toolId: this.toolRef, title: this.nodeName, retries, module, site, hint });
     const wiring = this.sinkWiring();

@@ -189,7 +189,8 @@ output:
 - **`call:` names a `defs:` entry first, then a `uses:` alias** (`uses: {summarize:
   child-summarize}` loads `child-summarize.yaml` beside the flow). A ref is a path relative to the
   importing file, without the extension (only `.yaml` files are found); `@<version>` must equal
-  the child's quoted `version:` text (`clean: ../common/clean@1`).
+  the child's quoted `version:` text (`clean: ../common/clean@1`). A def or alias can't be named
+  `take`, `sleep`, `ask`, `ask_user` or `load_skill`.
 - **A library's def is `call: {billing: quote}`** (or `call(billing.quote, k=v)` in a binding),
   on `call`, `map` and `loop`. `call: billing` alone is a load error, and a flow's own `defs:`
   can't be called from outside. `tool_id: billing` is a load error too.

@@ -254,7 +254,8 @@ $ yian run greet_team.yaml --input lead=Ada --input team="Bo, Cy"
 ```
 
 - `call:` names a `defs:` entry first, then a [`uses:`](#import-a-flow-from-another-file-with-uses)
-  alias. Any other name is a load error, and so is a `defs:` name or alias that is also a node id.
+  alias. Any other name is a load error, and so is a `defs:` name or alias that is also a node id
+  or a built-in's name: `take`, `sleep`, `ask`, `ask_user` or `load_skill`.
   `call: {billing: quote}` names a [library's def](#call-a-librarys-def).
 - `input:` lists the child's arguments, one per name. A whole `${...}` record there is a load
   error.

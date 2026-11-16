@@ -84,7 +84,8 @@ tool.
 - Grant only the tools an agent needs: a write changes what every later run reads.
 
 A TOOL node calls one memory tool. Its `input:` holds the tool's arguments, and its output is the
-tool's result. It can't name an `Optional` memory.
+tool's result. It can't name an `Optional` memory. A host tool or group with the memory's name
+doesn't stop it: the node calls the memory's tool.
 
 ```yaml check=fragment
 note:

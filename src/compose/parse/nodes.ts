@@ -263,12 +263,11 @@ function parseNode(
 
 /**
  * Parse a `call`, `map` or `loop` body. A `kind: call` body parses as a TOOL body, its `call:` read
- * as `tool_id:`, when `callsTool` says its `call:` names a tool. A map naming a tool calls the body
- * generated for it once its body is extracted; the one node of that body keeps the map's `kind:`
- * and parses as a TOOL body too. A loop runs only flows, so its body parses with `cls`, then
- * `callsTool` refuses a name no `call:` may take and a tool. A call or map naming a flow parses
- * with `cls`, refusing `retries:` and `adaptive_questions:`, which only a tool call takes. A body
- * that also writes `tool_id:` is left to `cls`, which refuses it.
+ * as `tool_id:`, when `callsTool` says its `call:` names a tool. A map or loop naming a tool calls
+ * the body generated for it once its body is extracted; the one node of that body keeps the map's
+ * or loop's `kind:` and parses as a TOOL body too. A body naming a flow parses with `cls`, refusing
+ * `retries:` and `adaptive_questions:`, which only a tool call takes. A body that also writes
+ * `tool_id:` is left to `cls`, which refuses it.
  *
  * @throws LoadError at the field for `retries:` or `adaptive_questions:` on a flow call, or as
  *   `callsTool` and the class's `parse` throw.
@@ -282,12 +281,6 @@ function parseCallBody(
   diagnostics: LoadDiagnostics,
 ): NodeDescriptor {
   if (!normalized.has("call") || normalized.has("tool_id")) return cls.parse(nodeId, normalized);
-  if (kind === "loop") {
-    // The parse reports a malformed `call:` first, so the rule's refusal shows a well-formed one.
-    const desc = cls.parse(nodeId, normalized);
-    callsTool(nodeId, normalized.get("call"), normalized.rangeOf("call"), { kind });
-    return desc;
-  }
   if (callsTool(nodeId, normalized.get("call"), normalized.rangeOf("call"), { kind })) {
     return ToolDescriptor.parse(nodeId, normalized.renamed(CALL_AS_TOOL));
   }

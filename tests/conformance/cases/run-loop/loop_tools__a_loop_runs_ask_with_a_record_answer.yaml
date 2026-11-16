@@ -1,0 +1,45 @@
+# A loop runs `ask` each turn when its declared answer is a record of carried fields. The ask gets
+# every carried field, `name` as a host extra, and each turn asks under its own node path,
+# `asked#<i>/asked`.
+kind: run
+flow: |
+  id: f
+  name: f
+  nodes:
+    asked:
+      kind: loop
+      call: ask
+      input: {prompt: Name?, name: ""}
+      until: name != ""
+      max: 3
+      output: {name: !str}
+  output: ${asked.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  human:
+    asked#0/asked: [{name: ""}]
+    asked#1/asked: [{name: Ada}]
+expect:
+  output:
+    status: succeeded
+    output: {prompt: Name?, name: Ada}
+  tool_calls:
+    ask:
+    - args:
+        question: Name?
+        answer_schema:
+        - {name: name, type: str, required: true}
+        node_id: asked#0/asked
+        name: ''
+      call_id: r1/asked#0/asked
+      attempt: 1
+      node: asked#0/asked
+    - args:
+        question: Name?
+        answer_schema:
+        - {name: name, type: str, required: true}
+        node_id: asked#1/asked
+        name: ''
+      call_id: r1/asked#1/asked
+      attempt: 1
+      node: asked#1/asked

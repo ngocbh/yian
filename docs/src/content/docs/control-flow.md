@@ -255,9 +255,8 @@ $ yian run greet_team.yaml --input lead=Ada --input team="Bo, Cy"
 ```
 
 - `call:` names a `defs:` entry first, then a [`uses:`](#import-a-flow-from-another-file-with-uses)
-  alias. On a `call` or `map` node or in a `call(...)` any other name is a
-  [tool](#call-a-tool); a `loop` runs only flows for now, so a tool there is a load error.
-  A `defs:` name or alias can't also be a node id or a built-in's name: `take`, `sleep`, `ask`,
+  alias. On a `call`, `map` or `loop` node or in a `call(...)` any other name is a
+  [tool](#call-a-tool). A `defs:` name or alias can't also be a node id or a built-in's name: `take`, `sleep`, `ask`,
   `ask_user` or `load_skill`. `call: {billing: quote}` names a
   [library's def](#call-a-librarys-def).
 - `input:` lists the child's arguments, one per name. A whole `${...}` record there is a load
@@ -667,6 +666,39 @@ A loop may run any number of times. The run log keeps every run (see
 
 A body may wait for a message, a time or a person; see [Inboxes and waiting](/inboxes/).
 
+### Loop over a tool
+
+A `loop` whose `call:` names a tool calls it once per turn. The tool gets every carried field as
+an argument and returns the fields that change:
+
+```yaml check=fragment
+poll:
+  kind: loop
+  call: {jobs: status}
+  input:
+    job: ${start.output.id}
+    done: false
+  while: not done
+  max: 30
+  output: {done: !bool}
+```
+
+- Each turn `jobs.status` gets `job` and `done`, the `while:` flag included, so it must take both
+  or declare that it takes other arguments. Run start refuses a tool that doesn't.
+- Without `output:`, the tool returns the whole carried record, checked each turn: a result that
+  leaves out a field or adds one fails the turn. To return only the fields that change, declare
+  them with `output:`, as above; `job` keeps its value.
+- Without `output:`, each field keeps its seed's type, so tag a seed the tool changes: an untagged
+  `cursor: null` is a load error; write `cursor: !Optional(str) null`.
+- `retries:`, `output:` and `adaptive_questions:` apply to each turn's call. The loop keeps
+  `asserts:`, which check its final record.
+- `call: sleep` and `call: take` are load errors, since neither returns a record of carried
+  fields. `call: ask` works when its `output:` is a record of carried fields.
+- A [memory](/memory/)'s tool gets its memory from yian, never as an argument. FileMemory and
+  VectorDBMemory tools return fields a loop doesn't carry (such as `hash`), so as a loop's body
+  one fails on its first turn; call them from a node inside a def instead.
+- Each turn's call is `poll#<i>/poll` in the run log.
+
 ## Write a body inline
 
 A `call`, `map` or `loop` used once can hold its body on the node: `nodes:` and `output:` instead
@@ -689,7 +721,7 @@ loud:
 ```
 
 - Write exactly one of `call:` and `nodes:`. An inline body needs `output:`; `output:` beside a
-  named `call:` is a load error, except on a `call` or `map` node naming a tool.
+  named `call:` is a load error, except on a node naming a tool.
 - The node's `input:` becomes the body's inputs, read as `${input.<name>}`, so each name is an
   identifier.
 - The body can't read its parent's inputs, nodes or `${item}`. Pass what it needs through

@@ -49,7 +49,6 @@ import {
   Diagnostic,
   DiagnosticFrame,
   Failure,
-  getCloseMatches,
   type OriginRef,
   type OriginResolver,
   reprText,
@@ -90,7 +89,6 @@ import { LoadDiagnostics, LoadError, rejectReservedName } from "../helpers/error
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
 import { assertExactContracts, resolveOutputBindingContract, type TypeFn } from "../../compile/output_contracts.ts";
 import {
-  CLOSE_MATCH_CUTOFF,
   oldFormSuggestion,
   oldTypedText,
   QUOTED_STYLES,
@@ -570,7 +568,8 @@ export function registerInlineBodies(
       if (name === key) continue;
       fieldLabels.set(`map input ${reprText(name)}`, `node ${reprText(body.nodeId)} map input ${reprText(key)}`);
     }
-    const labelledDescriptor = descriptor.replace({ childLabel: label, fieldLabels });
+    const bodyTool = descriptor instanceof LoopDescriptor ? { bodyTool: body.tool } : {};
+    const labelledDescriptor = descriptor.replace({ childLabel: label, fieldLabels, ...bodyTool });
     associated.set(body.nodeId, labelledDescriptor);
     registrations.push([body, labelledDescriptor, label]);
   }
@@ -1869,31 +1868,21 @@ function readFlowParameters(options: AssembleOptions, ctx: AssembleContext): Flo
  * - Any other value is left to the CALL node, whose `call:` check reports its shape.
  *
  * The CALL node refuses a library named bare, and the TOOL node a built-in in a group, `load_skill`
- * and a module alias in the wrong form. A map runs a tool per item, but not `take`, whose inbox
- * can't be each item's own; a loop runs only flows for now, so there the rule refuses every tool,
- * saying why the name is one. Both refuse `load_skill`.
+ * and a module alias in the wrong form. A map or loop runs any tool but `load_skill`, and a map
+ * not `take`, whose inbox can't be each item's own.
  *
  * @param memories The flow's memory inputs.
  * @returns The rule, which throws a LoadError at `call:` for a bare memory input, a group that is
- *   a memory input and a def or alias too, a group that is a def or a flow alias, a bare `take`
- *   or `load_skill` on a `map`, or a tool or `load_skill` on a `loop`.
+ *   a memory input and a def or alias too, a group that is a def or a flow alias, `load_skill` on a
+ *   `map` or `loop`, or a `take` on a `map`.
  */
 function callsToolRule(scope: CallableScope, memories: ReadonlySet<string>, diagnostics: LoadDiagnostics): CallsTool {
   const isLibrary = (name: string) =>
     scope.section(name) === "uses" && scope.toolModule(name) === null && scope.resolve(name).library !== null;
   return (nodeId, call, range, { site = null, kind = "call" } = {}) => {
     const onCall = kind === "call";
-    const runsTools = kind !== "loop";
     const subject = site ?? `${onCall ? "node" : `${kind} node`} ${reprText(nodeId)}`;
     const fail = (message: string) => diagnostics.error(`${subject}: ${message}`, { range });
-    /** A tool, `why` saying why the name is one, which a loop can't run yet. */
-    const tool = (why: string, hint = ""): true => {
-      if (runsTools) return true;
-      throw fail(
-        `${why}, and a \`${kind}\` runs only flows for now; call it from a \`call\` node, or wrap it in a ` +
-          `def${hint}`,
-      );
-    };
     /**
      * Built-in `name`, as `written`; a map or loop refuses `load_skill` as the TOOL node does, and a
      * map refuses `take`.
@@ -1906,51 +1895,37 @@ function callsToolRule(scope: CallableScope, memories: ReadonlySet<string>, diag
             "supported yet); take before the map",
         );
       }
-      return tool(`\`${name}\` is a built-in tool`);
-    };
-    /** `name`, which the file doesn't define, so `what` (`it`, or the group's tool) is a tool. */
-    const undefinedName = (name: string, what: string): true => {
-      if (runsTools) return true;
-      const [close] = getCloseMatches(name, scope.names(), 1, CLOSE_MATCH_CUTOFF);
-      const hint = close === undefined ? "" : `; did you mean \`${close}\`?`;
-      return tool(`\`${name}\` names no def or alias in this file, so ${what} is a tool`, hint);
+      return true;
     };
     if (typeof call === "string") {
       if (RESERVED_TOOL_NAMES.has(call)) return builtin(call);
       if (call.startsWith(INLINE_FLOW_PREFIX)) return false;
-      if (scope.section(call) !== null) return scope.toolModule(call) !== null && tool(`\`${call}\` is a tool module`);
+      if (scope.section(call) !== null) return scope.toolModule(call) !== null;
       if (memories.has(call)) {
-        if (!runsTools) {
-          throw fail(`\`${call}\` is a memory input, not a flow; call one of its tools from a \`call\` node`);
-        }
         const fix = site === null ? `call: {${call}: <tool>}` : `call(${call}.<tool>, ...)`;
         throw fail(`\`${call}\` is a memory input; name one of its tools: \`${fix}\``);
       }
-      return undefinedName(call, "it");
+      return true;
     }
     if (!isRecord(call)) return false;
     const entries = Object.entries(call);
     if (entries.length !== 1 || entries[0]![0] === "") return false;
     const [group, name] = entries[0]!;
-    const written = `\`{${group}: ${String(name)}}\``;
     if (typeof name === "string" && RESERVED_TOOL_NAMES.has(name)) {
       // A built-in in a group is the TOOL node's refusal, which shows the bare form to write; on a
       // map, `take` gets the map's own, as the bare form would.
-      if (runsTools && !(name === TAKE && kind === "map")) return true;
+      if (!(name === TAKE && kind === "map")) return true;
       return builtin(name, `call: {${group}: ${name}}`);
     }
     const section = scope.section(group);
     const module = scope.toolModule(group);
     if (memories.has(group)) {
-      if (section === null) return tool(`\`${group}\` is a memory input, so ${written} is a tool`);
+      if (section === null) return true;
       const what = module !== null ? "tool module" : isLibrary(group) ? "library" : "flow";
       throw fail(`\`${group}\` is both a memory input and a ${what}; rename one`);
     }
-    if (section === null) return undefinedName(group, written);
-    if (module !== null) return tool(`\`${group}\` is a tool module, so ${written} is a tool`);
+    if (section === null || module !== null) return true;
     if (isLibrary(group)) return false;
-    // Renaming the def would reach a tool group, which a loop can't run either.
-    if (!runsTools) throw fail(`\`${group}\` is a flow, not a library`);
     const named = section === "defs" ? "def" : "alias";
     throw fail(
       `\`${group}\` is a flow, not a library; a tool group named \`${group}\` is shadowed in this file, ` +
@@ -2335,10 +2310,12 @@ function buildNodes(
             });
       const canonical = canonicalizeInlineType(parameterType);
       // Before the body's own checks, which would refuse an inbox or a memory in the words of the
-      // binding yian generated.
+      // binding yian generated. A loop's `take` reads the inbox it carries, under its own checks,
+      // and one named in a group gets the TOOL node's refusal of the group.
       const argument = body.toolInputs.get(key) ?? key;
-      if (body.tool !== null && isInboxType(canonical)) {
-        throw diagnostics.error(inboxInputError(descriptor.id, `tool \`${body.tool}\``, argument), {
+      if (body.toolRef !== null && body.toolRef.name !== TAKE && isInboxType(canonical)) {
+        const kind = descriptor instanceof LoopDescriptor ? "loop" : "map";
+        throw diagnostics.error(inboxInputError(kind, descriptor.id, `tool \`${body.tool}\``, argument), {
           range: bindingRange,
         });
       }
@@ -2531,12 +2508,14 @@ function checkTypes(
   // carried seed-source Type (needs producers, so it runs alongside the cross-flow call/map type
   // check above). Each returned field must also fit the body parameter it is bound to on the
   // next turn: a named body's declared input, or the parameter an inline body generates from its
-  // seed (`inlineLoops` only selects the wording).
-  const inlineLoops = new Set(
-    [...descriptors].filter(([, d]) => d instanceof LoopDescriptor && d.childLabel !== null).map(([id]) => id),
-  );
+  // seed (`bodyLabels` only selects the wording, which names a generated body by its tool).
+  const bodyLabels = new Map<string, string>();
+  for (const [id, d] of descriptors) {
+    if (!(d instanceof LoopDescriptor) || d.childLabel === null) continue;
+    bodyLabels.set(id, d.bodyTool === null ? "the body" : `tool \`${d.bodyTool}\``);
+  }
   checkLoopTypeContract(buildResults, producers, flowInputContracts, flowWiring, {
-    inlineLoops,
+    bodyLabels,
     registry,
     diagnostics,
   });

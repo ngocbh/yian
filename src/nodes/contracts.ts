@@ -980,6 +980,8 @@ export class HostToolCall {
   readonly site: string | null;
   /** The map or loop node whose generated body makes the call, `map node 'fetch'`, which names it in messages; else `null`. */
   readonly bodyOf: string | null;
+  /** Whether `outputType` is the record a loop's tool carries, not a declared `output:`, which words messages. */
+  readonly carriedOutput: boolean;
   /** The closest name the node's file defines, for a tool the run must supply; else `null`. */
   readonly hint: CallableHint | null;
 
@@ -994,8 +996,9 @@ export class HostToolCall {
     {
       site = null,
       bodyOf = null,
+      carriedOutput = false,
       hint = null,
-    }: { site?: string | null; bodyOf?: string | null; hint?: CallableHint | null } = {},
+    }: { site?: string | null; bodyOf?: string | null; carriedOutput?: boolean; hint?: CallableHint | null } = {},
   ) {
     this.toolId = toolId;
     this.group = group;
@@ -1005,6 +1008,7 @@ export class HostToolCall {
     this.module = module;
     this.site = site;
     this.bodyOf = bodyOf;
+    this.carriedOutput = carriedOutput;
     this.hint = hint;
     Object.freeze(this);
   }

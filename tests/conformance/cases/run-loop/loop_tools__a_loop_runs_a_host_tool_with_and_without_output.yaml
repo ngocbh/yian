@@ -1,0 +1,78 @@
+# A loop runs a host tool each turn with every carried field as its arguments, the `while:` flag
+# included. Without `output:`, `status` returns the whole carried record; with
+# `output: {done: !bool}`, the group's `{jobs: check}` returns only `done` and `job` carries over.
+# `retries:` applies to each turn's call, and the loop's `asserts:` check its final record. Each
+# turn's call runs under the loop's own node id, `<loop>#<i>/<loop>`.
+kind: run
+flow: |
+  id: f
+  name: f
+  nodes:
+    polled:
+      kind: loop
+      call: status
+      input: {job: j1, done: false}
+      while: not done
+      max: 3
+    checked:
+      kind: loop
+      call: {jobs: check}
+      input: {job: j2, done: false}
+      while: not done
+      max: 3
+      retries: 1
+      output: {done: !bool}
+      asserts: ["output.job == 'j2'"]
+  output:
+    polled: ${polled.output}
+    checked: ${checked.output}
+env:
+  YIAN_TOOL_RETRY_DELAY_SECONDS: '0'
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    status:
+      parameters:
+        type: object
+        properties: {job: {type: string}, done: {type: boolean}}
+        required: [job, done]
+      results:
+        polled#0/polled: [{return: {job: j1, done: false}}]
+        polled#1/polled: [{return: {job: j1, done: true}}]
+    jobs:
+      group:
+        check:
+          parameters:
+            type: object
+            properties: {job: {type: string}, done: {type: boolean}}
+            required: [job, done]
+          results:
+            checked#0/checked:
+            - raise: {class: TimeoutError, message: slow}
+            - return: {done: true}
+  jitter: [0.0]
+expect:
+  output:
+    status: succeeded
+    output:
+      polled: {job: j1, done: true}
+      checked: {job: j2, done: true}
+  tool_calls:
+    jobs_check:
+    - args: {job: j2, done: false}
+      call_id: r1/checked#0/checked
+      attempt: 1
+      node: checked#0/checked
+    - args: {job: j2, done: false}
+      call_id: r1/checked#0/checked
+      attempt: 2
+      node: checked#0/checked
+    status:
+    - args: {job: j1, done: false}
+      call_id: r1/polled#0/polled
+      attempt: 1
+      node: polled#0/polled
+    - args: {job: j1, done: false}
+      call_id: r1/polled#1/polled
+      attempt: 1
+      node: polled#1/polled

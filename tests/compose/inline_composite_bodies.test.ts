@@ -582,9 +582,10 @@ const INLINE_SHAPE_CASES: [string, string, string, string | null, string][] = [
   [
     "named-with-output",
     "loop",
-    "call: named\n    output: ${named.output}\n",
+    // `named` is a def, so the loader sees a loop over a flow.
+    'call: named\n    output: ${named.output}\ndefs:\n  named: {kind: code, code: "return 1", output: !int}\n',
     "output",
-    "node 'composite' (kind=loop): `output:` is only valid with inline `nodes:`",
+    "node 'composite' (kind=loop): `output:` doesn't apply to a flow call: a flow's result type comes from the flow",
   ],
   [
     "empty-nodes",

@@ -720,24 +720,27 @@ test.each([
   else expect(await refusal(text)).toBe(expected);
 });
 
-const RUNS_ONLY_FLOWS = "and a `loop` runs only flows for now; call it from a `call` node, or wrap it in a def";
-
-// Each row: the `call:` value on a loop and the refusal.
+// Each row: the `call:` value on a loop carrying `n`, and what its generated body's node runs or the
+// load error.
 test.each([
-  ["gret", `\`gret\` names no def or alias in this file, so it is a tool, ${RUNS_ONLY_FLOWS}; did you mean \`greet\`?`],
-  ["search", `\`search\` names no def or alias in this file, so it is a tool, ${RUNS_ONLY_FLOWS}`],
-  ["sleep", `\`sleep\` is a built-in tool, ${RUNS_ONLY_FLOWS}`],
-  ["load_skill", "tool id `load_skill` is reserved by yian"],
-  ["one", `\`one\` is a tool module, ${RUNS_ONLY_FLOWS}`],
-  ["lessons", "`lessons` is a memory input, not a flow; call one of its tools from a `call` node"],
-  ["{crm: take}", `\`take\` is a built-in tool, ${RUNS_ONLY_FLOWS}`],
+  ["gret", "tool gret"],
+  ["one", "tool one module one"],
+  ["{github: search}", "tool github_search"],
+  ["{lessons: read}", "tool lessons_read memory"],
+  ["{crm: lookup}", "tool crm_lookup module crm"],
+  ["load_skill", "loop node 'n': tool id `load_skill` is reserved by yian"],
+  ["lessons", "loop node 'n': `lessons` is a memory input; name one of its tools: `call: {lessons: <tool>}`"],
   [
-    "{github: search}",
-    `\`github\` names no def or alias in this file, so \`{github: search}\` is a tool, ${RUNS_ONLY_FLOWS}`,
+    "{crm: take}",
+    "node 'n' (kind=loop): `call: {crm: take}`: take is a built-in, not a group's tool; write `call: take`",
   ],
-  ["{lessons: read}", `\`lessons\` is a memory input, so \`{lessons: read}\` is a tool, ${RUNS_ONLY_FLOWS}`],
-  ["{crm: lookup}", `\`crm\` is a tool module, so \`{crm: lookup}\` is a tool, ${RUNS_ONLY_FLOWS}`],
-  ["{greet: x}", "`greet` is a flow, not a library"],
-])("a loop naming %s refuses it", async (call, message) => {
-  expect(await refusal(app(`  n: {kind: loop, call: ${call}, times: 1}\n`))).toBe(`loop node 'n': ${message}`);
+  [
+    "{greet: x}",
+    "loop node 'n': `greet` is a flow, not a library; a tool group named `greet` is shadowed in this file, so " +
+      "rename the def to reach it",
+  ],
+])("a loop naming %s runs %s", async (call, expected) => {
+  const text = app(`  n: {kind: loop, call: ${call}, input: {n: 0}, times: 1}\n`);
+  if (expected.startsWith("tool ")) expect(await target(text, "n/n")).toBe(expected);
+  else expect(await refusal(text)).toBe(expected);
 });

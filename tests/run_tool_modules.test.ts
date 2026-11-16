@@ -427,6 +427,25 @@ test("run start checks a map's module tool call by the map", async () => {
   );
 });
 
+// Each row: a loop calling a module's tool, and how run start refuses it: a carried field the tool
+// doesn't take, or a declared result that isn't the carried record.
+test.each([
+  [
+    "g: {kind: loop, call: {crm: lookup}, input: {id: x, done: false}, while: not done, max: 2}",
+    "loop node 'g' input 'done': tool 'crm_lookup' takes no such input; it takes [\"id\"]",
+  ],
+  ["g: {kind: loop, call: quote, input: {id: x}, times: 1}", "loop node 'g' carries {\"id\":str}, but tool 'quote' returns int"],
+  [
+    "g: {kind: loop, call: quote, input: {id: x}, times: 1, output: {id: !str}}",
+    "loop node 'g' output: declared {\"id\":str}, but tool 'quote' returns int",
+  ],
+])("run start checks a loop's module tool call against the carried record: %s", async (node, message) => {
+  writeFileSync(join(dir, "crm.ts"), tools(["lookup"]));
+  writeFileSync(join(dir, "quote.ts"), tools(["quote"], 'output: { type: "integer" }, '));
+  const text = app({ crm: "./crm.ts", quote: "./quote.ts:quote" }, [node]);
+  await expect(run(text)).rejects.toThrow(new RangeError(message));
+});
+
 /** The payload of the `run_started` record of the log at `log`. */
 function started(log: string): Record<string, unknown> {
   return JSON.parse(readFileSync(log, "utf8").split("\n")[0]!).payload;

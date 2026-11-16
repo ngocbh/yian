@@ -315,6 +315,17 @@ test("run start checks only the run's tools, each node named by its path or its 
   ]);
 });
 
+test("a case branch's mistyped call(...) is checked at run start by its site, with the hint", async () => {
+  expect(runStartTools(await load(caseApp("call(gret)", "call(greet)")))).toEqual([
+    {
+      node: "node 'g' cases[0].then call(gret)",
+      label: "node 'g' cases[0].then call(gret)",
+      name: "gret",
+      hint: "did you mean the def greet?",
+    },
+  ]);
+});
+
 test("the hint is diagnostic-only: the fingerprint is the same with and without it", async () => {
   const flow = (def: string) =>
     `id: r\nname: r\ndefs:\n  ${def}: {kind: code, code: "return 1", output: !int}\n` +

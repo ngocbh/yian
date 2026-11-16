@@ -151,8 +151,8 @@ test("depends_on a case runs on every branch", async () => {
   expect(await run(text, { approve: false })).toEqual({ a: "after" });
 });
 
-const TAKE = `defs:
-  take:
+const PICK = `defs:
+  pick:
     input:
       stance: !str
     nodes:
@@ -169,8 +169,8 @@ const TAKE = `defs:
 test("a then: call target is null", async () => {
   // Reading `${inner.output}` makes `inner` produce a value, so it must be exhaustive; the skip
   // comes from the routing-only `outer`, which may match nothing.
-  const nodes = gate("inner", null, "outer") + gate('call(take, stance="pro")', 'call(take, stance="con")', "inner", "inner");
-  const text = flow(nodes, "\n  v: ${inner.output}", { inputs: "approve: !bool\n  inner: !bool", defs: TAKE });
+  const nodes = gate("inner", null, "outer") + gate('call(pick, stance="pro")', 'call(pick, stance="con")', "inner", "inner");
+  const text = flow(nodes, "\n  v: ${inner.output}", { inputs: "approve: !bool\n  inner: !bool", defs: PICK });
   expect(await run(text, { approve: false, inner: true })).toEqual({ v: null });
   expect(await run(text, { approve: true, inner: true })).toEqual({ v: "pro" });
   expect(await run(text, { approve: true, inner: false })).toEqual({ v: "con" });
@@ -180,9 +180,9 @@ test("a call node target is null", async () => {
   // A `kind: call` node behind a CASE gives null when skipped.
   const nodes =
     gate("c", "rejected") +
-    '  c:\n    kind: call\n    call: take\n    input:\n      stance: "pro"\n' +
+    '  c:\n    kind: call\n    call: pick\n    input:\n      stance: "pro"\n' +
     code("rejected", '"no"');
-  const text = flow(nodes, "\n  v: ${c.output}", { defs: TAKE });
+  const text = flow(nodes, "\n  v: ${c.output}", { defs: PICK });
   expect(await run(text, { approve: false })).toEqual({ v: null });
   expect(await run(text, { approve: true })).toEqual({ v: "pro" });
 });
@@ -218,9 +218,9 @@ test("a map node target is null", async () => {
   // A `kind: map` node behind a CASE gives null when skipped.
   const nodes =
     gate("m", "rejected") +
-    "  m:\n    kind: map\n    call: take\n    over: ${input.xs}\n    input:\n      stance: ${item}\n" +
+    "  m:\n    kind: map\n    call: pick\n    over: ${input.xs}\n    input:\n      stance: ${item}\n" +
     code("rejected", '"no"');
-  const text = flow(nodes, "\n  v: ${m.output}", { inputs: "approve: !bool\n  xs: !list(str)", defs: TAKE });
+  const text = flow(nodes, "\n  v: ${m.output}", { inputs: "approve: !bool\n  xs: !list(str)", defs: PICK });
   expect(await run(text, { approve: false, xs: ["p"] })).toEqual({ v: null });
   expect(await run(text, { approve: true, xs: ["p"] })).toEqual({ v: ["p"] });
 });

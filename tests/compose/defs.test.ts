@@ -704,6 +704,23 @@ output: \${a.output}
   );
 });
 
+// Each built-in's name, as a def and as a uses: alias.
+const RESERVED_DECLARATIONS = ["take", "sleep", "ask", "ask_user", "load_skill"].flatMap((name) => [
+  ["defs", name, "\n    nodes: {}\n    output: x", `defs entry '${name}'`, "def"] as const,
+  ["uses", name, " lib/none", `uses: alias '${name}'`, "alias"] as const,
+]);
+
+test.each(RESERVED_DECLARATIONS)(
+  "a %s entry named %s, a built-in's name, is refused at its key",
+  async (section, name, body, subject, entry) => {
+    const text = `id: f\nname: f\n${section}:\n  ${name}:${body}\nnodes:\n  a: !str hi\noutput: \${a.output}\n`;
+    const error = await loadErrorAsync(loadConformanceFlow(text));
+    expect(error.message).toBe(`${subject}: \`${name}\` is a name yian reserves; rename the ${entry}`);
+    const key = SourceDocument.parse(text).root.child(section).keyRangeOf(name)!;
+    expect(error.diagnostic.frames.at(-1)!.range).toEqual(key);
+  },
+);
+
 /** A flow whose node `go` calls the single-node def `d`, written as `kind`. */
 const singleNodeDef = (kind: string) => `id: f
 name: f

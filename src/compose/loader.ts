@@ -329,25 +329,40 @@ function validateSystem(system: ValueRecord, cursor: SourceCursor | null = null)
 }
 
 /**
- * Reject file-scoped callable declarations in the inline-flow namespace, at the offending
- * declaration's key.
+ * Reject a file-scoped callable declaration under a reserved name, at its key: a name in the
+ * inline-flow namespace, or a built-in's name (`take`, `sleep`, `ask`, `ask_user`, `load_skill`),
+ * so such a name never means two things.
  *
- * @throws LoadError when a `defs:` name or `uses:` alias starts with `INLINE_FLOW_PREFIX`.
+ * @throws LoadError when a `defs:` name or `uses:` alias starts with `INLINE_FLOW_PREFIX` or is a
+ *   built-in's name.
  */
-function rejectAuthoredPrivateCallableNames(root: SourceCursor, defs: ValueRecord, uses: Record<string, string>): void {
-  for (const [section, declarations] of [
-    ["defs", defs],
-    ["uses", uses],
+function rejectReservedCallableNames(
+  root: SourceCursor,
+  defs: ValueRecord,
+  uses: Record<string, string>,
+  diagnostics: LoadDiagnostics,
+): void {
+  for (const [section, declarations, noun, subject, entry] of [
+    ["defs", defs, "callable names", "defs entry", "def"],
+    ["uses", uses, "aliases", "uses: alias", "alias"],
   ] as const) {
-    const offender = Object.keys(declarations).find((name) => name.startsWith(INLINE_FLOW_PREFIX));
-    if (offender === undefined) continue;
-    const declarationRange = root.has(section) ? root.child(section).keyRangeOf(offender) : null;
-    const noun = section === "defs" ? "callable names" : "aliases";
-    throw LoadDiagnostics.fromCursor(root).error(
-      `${section}: ${noun} with prefix ${reprText(INLINE_FLOW_PREFIX)} are reserved ` +
-        "for compiler-generated inline child flows",
-      { range: declarationRange },
-    );
+    const names = Object.keys(declarations);
+    const keyRange = (name: string) => (root.has(section) ? root.child(section).keyRangeOf(name) : null);
+    const offender = names.find((name) => name.startsWith(INLINE_FLOW_PREFIX));
+    if (offender !== undefined) {
+      throw diagnostics.error(
+        `${section}: ${noun} with prefix ${reprText(INLINE_FLOW_PREFIX)} are reserved ` +
+          "for compiler-generated inline child flows",
+        { range: keyRange(offender) },
+      );
+    }
+    const builtin = names.find((name) => RESERVED_TOOL_NAMES.has(name));
+    if (builtin !== undefined) {
+      throw diagnostics.error(
+        `${subject} ${reprText(builtin)}: \`${builtin}\` is a name yian reserves; rename the ${entry}`,
+        { range: keyRange(builtin) },
+      );
+    }
   }
 }
 
@@ -1565,7 +1580,7 @@ export async function loadFlowFile(
   const root = document.root;
   const diagnostics = LoadDiagnostics.fromDocument(document);
   const f = parseFile(document);
-  rejectAuthoredPrivateCallableNames(root, f.defs, f.uses);
+  rejectReservedCallableNames(root, f.defs, f.uses, diagnostics);
   validateEnv(f.env, "flow ", root.has("env") ? root.child("env") : null, diagnostics);
   validateSystem(f.system, root.has("system") ? root.child("system") : null);
 
@@ -2103,7 +2118,7 @@ export class CallableScope implements AssemblyScope {
    * `system: paths`, as a CODE reference's does.
    *
    * @throws LoadError when the ref has a version, names a default export or a name that isn't an
-   *   identifier, isn't relative, the alias is a name yian reserves, or as `moduleFile` throws.
+   *   identifier, isn't relative, or as `moduleFile` throws.
    */
   async #resolveModule(alias: string, authored: string, parts: ModuleRefParts): Promise<ToolModuleRef> {
     const fail = (problem: string) => this.#diagnostics.error(`uses: alias ${reprText(alias)}: ${problem}`);
@@ -2119,7 +2134,6 @@ export class CallableScope implements AssemblyScope {
       if (path.startsWith("/")) throw fail("a tool module ref is a relative path, starting with ./ or ../");
       throw fail(`a tool module ref is a relative path: write \`./${shown}\``);
     }
-    if (RESERVED_TOOL_NAMES.has(alias)) throw fail(`\`${alias}\` is a name yian reserves; rename the alias`);
     const real = await moduleFile(this.#baseDir ?? process.cwd(), path, this.#codeRoot, fail);
     return Object.freeze({ alias, ref: authored, path: real });
   }

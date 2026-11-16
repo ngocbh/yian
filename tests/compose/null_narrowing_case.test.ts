@@ -35,11 +35,11 @@ function skip(nodeId: string): string {
   return `  ${nodeId}:\n    kind: code\n    code: ${ECHO}\n    input:\n      topic: 0\n    output: !int\n`;
 }
 
-/** The `use` node: a CALL of `take`, or a MAP of `take_each`, passing `${x.output}`. */
+/** The `use` node: a CALL of `pick`, or a MAP of `pick_each`, passing `${x.output}`. */
 function sink(target: "call" | "map"): string {
-  if (target === "call") return "  use:\n    kind: call\n    call: take\n    input:\n      v: ${x.output}\n";
+  if (target === "call") return "  use:\n    kind: call\n    call: pick\n    input:\n      v: ${x.output}\n";
   return (
-    "  use:\n    kind: map\n    call: take_each\n    over: ${input.items}\n" +
+    "  use:\n    kind: map\n    call: pick_each\n    over: ${input.items}\n" +
     "    input:\n      i: ${item}\n      v: ${x.output}\n"
   );
 }
@@ -65,11 +65,11 @@ function producerFlow(cases: readonly (readonly [string, string])[], target: "ca
     "    input:\n      topic: skipped\n    output: !str\n" +
     "output: ${use.output :- skip.output}\n" +
     "defs:\n" +
-    "  take:\n    input:\n      v: !str\n    nodes:\n" +
+    "  pick:\n    input:\n      v: !str\n    nodes:\n" +
     `      d:\n        kind: code\n        code: ${ECHO}\n` +
     "        input:\n          topic: ${input.v}\n        output: !str\n" +
     "    output: ${d.output}\n" +
-    "  take_each:\n    input:\n      i: !int\n      v: !str\n    nodes:\n" +
+    "  pick_each:\n    input:\n      i: !int\n      v: !str\n    nodes:\n" +
     `      d:\n        kind: code\n        code: ${ECHO}\n` +
     "        input:\n          topic: ${input.v}\n        output: !str\n" +
     "    output: ${d.output}\n"
@@ -96,11 +96,11 @@ function inputFlow(when: string, xType: string, sinkType = "Item", source = "${i
     "  gate:\n    kind: case\n    cases:\n" +
     `      - when: "${when}"\n        then: use\n` +
     "    else: skip\n" +
-    `  use:\n    kind: call\n    call: take\n    input:\n      v: ${source}\n` +
+    `  use:\n    kind: call\n    call: pick\n    input:\n      v: ${source}\n` +
     skip("skip") +
     "output: ${use.output :- skip.output}\n" +
     "defs:\n" +
-    `  take:\n    input:\n      v: !${sinkType}\n    nodes:\n` +
+    `  pick:\n    input:\n      v: !${sinkType}\n    nodes:\n` +
     `      d:\n        kind: code\n        code: ${ECHO}\n` +
     "        input:\n          topic: ${input.v}\n        output: !Any\n" +
     "    output: ${d.output}\n"
@@ -119,12 +119,12 @@ function crossNodeFlow(outer: string, inner: string, xType: string): string {
     "  inner:\n    kind: case\n    cases:\n" +
     `      - when: "${inner}"\n        then: use\n` +
     "    else: skip2\n" +
-    "  use:\n    kind: call\n    call: take\n    input:\n      v: ${input.x}\n" +
+    "  use:\n    kind: call\n    call: pick\n    input:\n      v: ${input.x}\n" +
     skip("skip") +
     skip("skip2") +
     "output: ${use.output :- skip.output}\n" +
     "defs:\n" +
-    "  take:\n    input:\n      v: !Item\n    nodes:\n" +
+    "  pick:\n    input:\n      v: !Item\n    nodes:\n" +
     `      d:\n        kind: code\n        code: ${ECHO}\n` +
     "        input:\n          topic: ${input.v.qty}\n        output: !int\n" +
     "    output: ${d.output}\n"
@@ -221,11 +221,11 @@ function onFlow(sinkType: string): string {
     "  gate:\n    kind: case\n    on: ${input.v?.kind}\n    cases:\n" +
     "      - when: a\n        then: use\n" +
     "    else: skip\n" +
-    "  use:\n    kind: call\n    call: take\n    input:\n      v: ${input.v}\n" +
+    "  use:\n    kind: call\n    call: pick\n    input:\n      v: ${input.v}\n" +
     skip("skip") +
     "output: ${use.output :- skip.output}\n" +
     "defs:\n" +
-    `  take:\n    input:\n      v: !${sinkType}\n    nodes:\n` +
+    `  pick:\n    input:\n      v: !${sinkType}\n    nodes:\n` +
     `      d:\n        kind: code\n        code: ${ECHO}\n` +
     "        input:\n          topic: 1\n        output: !int\n" +
     "    output: ${d.output}\n"

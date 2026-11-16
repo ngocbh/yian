@@ -151,6 +151,20 @@ test("a memory input named like a host tool group fails at run start", async () 
   expect(memory.opens).toBe(0);
 });
 
+test("a TOOL node calls its memory's tool, though a host tool or group has the memory's name", async () => {
+  const root = mkdtempSync(join(tmp, "m-"));
+  writeFileSync(join(root, "a.md"), "Prefer short answers.");
+  const text =
+    "id: f\nname: f\ninput:\n  lessons: !FileMemory\n" +
+    "nodes:\n  found: {kind: tool, tool_id: {lessons: read}, input: {path: a.md}}\noutput: ${found.output.text}\n";
+  const read = new FunctionTool({ name: "read", description: "Read.", parametersJsonSchema: { type: "object" }, execute: () => "host" });
+  for (const tools of [{ lessons: [read] }, { lessons: new FunctionTool({ ...read, name: "lessons" }) }]) {
+    const { result } = await run(text, { lessons: new FileMemory({ root, id: "t/lessons" }) }, { tools });
+    expect(result.status).toBe("succeeded");
+    expect(result.output).toContain("Prefer short answers.");
+  }
+});
+
 test("a memory tool whose visible name is a host tool's fails at run start", async () => {
   const text = FLOW.replace("    prompt: ", "    tools: [{lessons: [read]}, lessons_read]\n    prompt: ");
   const tool = new FunctionTool({

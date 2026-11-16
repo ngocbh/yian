@@ -7,7 +7,7 @@ flow: |2
     score: !float
 
   defs:
-    take:
+    pick:
       input:
         stance: !str
       nodes:
@@ -24,7 +24,7 @@ flow: |2
       kind: case
       cases:
         - when: "input.score >= 0.5"
-          then: call(take
+          then: call(pick
       else: nope
     nope:
       kind: code

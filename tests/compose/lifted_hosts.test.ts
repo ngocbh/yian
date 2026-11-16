@@ -97,14 +97,14 @@ test("nested branch call records the outer call as host", () => {
     "  gate:\n    kind: case\n    cases:\n" +
       "      - when: ${input.go}\n" +
       '        then: call(outer, x=call(inner, y="hi"))\n' +
-      "    else: call(take)\n",
+      "    else: call(pick)\n",
   );
   const newDescriptors = desugarCaseCallTargets(descriptors, synthIdGen());
   const byCallee = new Map([...synthOf(newDescriptors).values()].map((desc) => [desc.call, desc]));
   const outer = byCallee.get("outer")!;
   expect(byCallee.get("inner")!.host).toBe(outer.id);
   expect(outer.host).toBeNull();
-  expect(byCallee.get("take")!.host).toBeNull();
+  expect(byCallee.get("pick")!.host).toBeNull();
   expect((newDescriptors.get("gate") as CaseDescriptor).cases[0]!["then"]).toBe(outer.id);
 });
 

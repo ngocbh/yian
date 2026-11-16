@@ -63,6 +63,48 @@ export interface ToolDescriptorFields extends NodeDescriptorFields {
 }
 
 /**
+ * How a TOOL node's load messages name the node and the field its tool is written in, so each
+ * message reads in the author's own words.
+ */
+class ToolWording {
+  /** The node's own id. */
+  readonly nodeId: string;
+  /** The node kind the author wrote. */
+  readonly kind: string = ToolDescriptor.kind;
+  /** The field the author named the tool in. */
+  readonly field = "tool_id";
+
+  constructor(nodeId: string) {
+    this.nodeId = nodeId;
+  }
+
+  /** The node: `node 'f'`. */
+  node(): string {
+    return `node ${reprText(this.nodeId)}`;
+  }
+
+  /** The node and its kind: `node 'f' (kind=tool)`. */
+  nodeKind(): string {
+    return `${this.node()} (kind=${this.kind})`;
+  }
+
+  /** The node and the tool it names: `node 'w' (tool_id: sleep)`. */
+  nodeTool(tool: string): string {
+    return `${this.node()} (${this.written(tool)})`;
+  }
+
+  /** The node's input `name`, for the tool it names: `node 'w' (tool_id: sleep) input 'for'`. */
+  input(tool: string, name: string): string {
+    return `${this.nodeTool(tool)} input ${reprText(name)}`;
+  }
+
+  /** The field as written, with `value` when given: `tool_id: {crm: search}`, or `tool_id:`. */
+  written(value?: string): string {
+    return value === undefined ? `${this.field}:` : `${this.field}: ${value}`;
+  }
+}
+
+/**
  * kind=tool: a direct, deterministic call to one tool in the run's `ToolSet`.
  *
  * `allowed` adds `tool_id`, `inputs`/`outputs`, `retries`, `asserts` and `adaptive_questions` to
@@ -119,6 +161,11 @@ export class ToolDescriptor extends NodeDescriptor {
     return visibleToolName(this.toolRef.group, this.toolRef.name);
   }
 
+  /** How this node's load messages name it and its tool's field. */
+  get wording(): ToolWording {
+    return new ToolWording(this.id);
+  }
+
   /**
    * Check an `adaptive_questions:` block and an `ask`'s reserved input around the template
    * `parse`, and range the block's brief and `llm_config:`.
@@ -133,20 +180,21 @@ export class ToolDescriptor extends NodeDescriptor {
     cursor: SourceCursor,
   ): InstanceType<T> {
     const diagnostics = LoadDiagnostics.fromCursor(cursor);
+    const wording = new ToolWording(nodeId);
     const toolId = cursor.get("tool_id");
     if (typeof toolId === "string" && cursor.has("adaptive_questions")) {
       if (toolId !== ASK && toolId !== ASK_USER) {
         throw diagnostics.error(
-          `node ${reprText(nodeId)} (tool_id: ${toolId}): \`adaptive_questions:\` applies only to tool_id: ask`,
+          `${wording.nodeTool(toolId)}: \`adaptive_questions:\` applies only to ${wording.written(ASK)}`,
           { range: cursor.keyRangeOf("adaptive_questions") },
         );
       }
-      checkAdaptiveBlock(nodeId, `tool_id: ${ASK}`, cursor, diagnostics);
+      checkAdaptiveBlock(wording, cursor, diagnostics);
     }
     const desc = super.parse(nodeId, cursor) as ToolDescriptor;
     if (desc.toolId === ASK && Object.hasOwn(desc.inputs, QUESTIONS_INPUT)) {
       throw diagnostics.error(
-        `node ${reprText(nodeId)} (tool_id: ask): input '${QUESTIONS_INPUT}' is reserved for adaptive_questions`,
+        `${wording.nodeTool(ASK)}: input '${QUESTIONS_INPUT}' is reserved for adaptive_questions`,
         { range: rangeAt(cursor, ["inputs", QUESTIONS_INPUT]) ?? desc.range },
       );
     }
@@ -175,22 +223,23 @@ export class ToolDescriptor extends NodeDescriptor {
     cursor: SourceCursor,
   ): void {
     const rangeOf = (key: string) => ranges.get(siteKey("field", key)) ?? ownRange;
+    const wording = new ToolWording(nodeId);
     const raw = fields["toolId"] ?? null;
-    const ref = ToolDescriptor.readToolRef(nodeId, raw, rangeOf("tool_id"), diagnostics);
+    const ref = ToolDescriptor.readToolRef(wording, raw, rangeOf("tool_id"), diagnostics);
     delete fields["toolId"];
     fields["toolRef"] = ref;
     // A group's tool showing as a built-in's name is refused at build, which knows whether the
     // group is a memory input, whose fix is to rename the input.
     const toolId = visibleToolName(ref.group, ref.name);
     if (toolId === LOAD_SKILL && ref.group === null) {
-      throw diagnostics.error(`node ${reprText(nodeId)} (kind=${this.kind}): tool id \`${LOAD_SKILL}\` is reserved by yian`, {
+      throw diagnostics.error(`${wording.nodeKind()}: tool id \`${LOAD_SKILL}\` is reserved by yian`, {
         range: rangeOf("tool_id"),
       });
     }
     if (BUILTIN_TOOL_IDS.has(toolId as BuiltinToolId)) {
       const refuse = (key: string, problem: string) => {
         if (!Object.hasOwn(fields, key)) return;
-        throw diagnostics.error(`node ${reprText(nodeId)} (tool_id: ${toolId}): ${problem}`, { range: rangeOf(key) });
+        throw diagnostics.error(`${wording.nodeTool(toolId)}: ${problem}`, { range: rangeOf(key) });
       };
       if (toolId === ASK) {
         refuse("retries", "`retries:` doesn't apply to ask: the host owns retries of a call it holds");
@@ -201,11 +250,11 @@ export class ToolDescriptor extends NodeDescriptor {
         refuse("outputs", `${toolId}'s output is ${output}; remove \`output:\``);
       }
     }
-    if (toolId === ASK) ToolDescriptor.checkAskSurface(nodeId, fields, ranges, ownRange, diagnostics);
+    if (toolId === ASK) ToolDescriptor.checkAskSurface(wording, fields, ranges, ownRange, diagnostics);
     if (Object.hasOwn(fields, "retries")) {
       const problem = retriesError(fields["retries"]);
       if (problem !== null) {
-        throw diagnostics.error(`node ${reprText(nodeId)} (kind=${this.kind}): \`retries:\` ${problem}`, {
+        throw diagnostics.error(`${wording.nodeKind()}: \`retries:\` ${problem}`, {
           range: rangeOf("retries"),
         });
       }
@@ -222,40 +271,37 @@ export class ToolDescriptor extends NodeDescriptor {
    *   `load_skill` named in a group.
    */
   private static readToolRef(
-    nodeId: string,
+    wording: ToolWording,
     raw: unknown,
     range: SourceRange | null,
     diagnostics: LoadDiagnostics,
   ): ToolRef {
     const fail = (problem: string): never => {
-      const where = `node ${reprText(nodeId)} (kind=${this.kind})`;
-      throw diagnostics.error(`${where}: ${problem}`, { range });
+      throw diagnostics.error(`${wording.nodeKind()}: ${problem}`, { range });
     };
     if (typeof raw === "string") {
       return Object.freeze({ group: null, name: raw === ASK_USER ? ASK : raw });
     }
     if (!isRecord(raw)) {
       const fix = raw === null ? "write a tool name" : "put it in quotes";
-      return fail(valueTypeError("tool_id", "a tool name or `{group: tool}`", raw, fix));
+      return fail(valueTypeError(wording.field, "a tool name or `{group: tool}`", raw, fix));
     }
     const keys = Object.keys(raw);
     if (keys.length !== 1 || keys[0] === "") {
-      return fail("`tool_id:` names one tool: `{cases: search}` or `search`");
+      return fail(`\`${wording.written()}\` names one tool: \`{cases: search}\` or \`search\``);
     }
     const group = keys[0]!;
     const name = raw[group];
     if (typeof name !== "string" || name === "") {
       const first = Array.isArray(name) ? name[0] : undefined;
       const example = typeof first === "string" && first !== "" ? first : "search";
-      return fail(`\`tool_id: {${group}: ...}\` names one tool; write \`{${group}: ${example}}\``);
+      return fail(`\`${wording.written(`{${group}: ...}`)}\` names one tool; write \`{${group}: ${example}}\``);
     }
     if (BUILTIN_TOOL_IDS.has(name as BuiltinToolId) || name === ASK_USER || name === LOAD_SKILL) {
       const bare = name === ASK_USER ? ASK : name;
       const reserved = `\`${name}\` is reserved by yian`;
-      const fix = name === LOAD_SKILL ? reserved : `write \`tool_id: ${bare}\``;
-      return fail(
-        `\`tool_id: {${group}: ${name}}\`: ${name} is a built-in, not a group's tool; ${fix}`,
-      );
+      const fix = name === LOAD_SKILL ? reserved : `write \`${wording.written(bare)}\``;
+      return fail(`\`${wording.written(`{${group}: ${name}}`)}\`: ${name} is a built-in, not a group's tool; ${fix}`);
     }
     return Object.freeze({ group, name });
   }
@@ -269,13 +315,12 @@ export class ToolDescriptor extends NodeDescriptor {
    * @throws LoadError for the first rule broken.
    */
   private static checkAskSurface(
-    nodeId: string,
+    wording: ToolWording,
     fields: Record<string, unknown>,
     ranges: Map<string, SourceRange>,
     ownRange: SourceRange | null,
     diagnostics: LoadDiagnostics,
   ): void {
-    const id = reprText(nodeId);
     const given = fields["inputs"] ?? null;
     // The base check reports a malformed `input:`; reading it as empty would blame the questions.
     if (given !== null && !isRecord(given)) return;
@@ -285,17 +330,17 @@ export class ToolDescriptor extends NodeDescriptor {
     const autoRange = ranges.get(siteKey("field", "adaptive_questions")) ?? ownRange;
     if ((inputs["prompt"] ?? null) === null && !hasQuestions && auto === null) {
       throw diagnostics.error(
-        `node ${id} (tool_id: ask): ask needs input prompt:, input questions:, or adaptive_questions:`,
+        `${wording.nodeTool(ASK)}: ask needs input prompt:, input questions:, or adaptive_questions:`,
         { range: ownRange },
       );
     }
     if (hasQuestions && auto !== null) {
       throw diagnostics.error(
-        `node ${id} (tool_id: ask): input questions: and adaptive_questions: are mutually exclusive`,
+        `${wording.nodeTool(ASK)}: input questions: and adaptive_questions: are mutually exclusive`,
         { range: autoRange },
       );
     }
-    if (auto !== null) checkAdaptiveFields(nodeId, `tool_id: ${ASK}`, auto, autoRange, diagnostics);
+    if (auto !== null) checkAdaptiveFields(wording, auto, autoRange, diagnostics);
   }
 
   /**
@@ -327,7 +372,7 @@ export class ToolDescriptor extends NodeDescriptor {
     // A group's tool shows as `<group>_<tool>`, which is never a built-in's name.
     if (group !== null && RESERVED_TOOL_NAMES.has(this.toolId)) {
       throw ctx.diagnostics.error(
-        `node ${reprText(this.id)} (kind=${this.kind}): \`tool_id: {${group}: ${name}}\` ` +
+        `${this.wording.nodeKind()}: \`${this.wording.written(`{${group}: ${name}}`)}\` ` +
           `would show as \`${this.toolId}\`, a name yian reserves; rename the group or the tool`,
         { range: this.fieldRanges.get(siteKey("field", "tool_id")) ?? this.range },
       );
@@ -373,16 +418,19 @@ export class ToolDescriptor extends NodeDescriptor {
    */
   private checkModuleRef(ctx: BuildContext, module: ToolModuleRef, memory: boolean): void {
     const { group, name } = this.toolRef;
+    const { wording } = this;
     const fail = (message: string) =>
-      ctx.diagnostics.error(`node ${reprText(this.id)}: ${message}`, {
+      ctx.diagnostics.error(`${wording.node()}: ${message}`, {
         range: this.fieldRanges.get(siteKey("field", "tool_id")) ?? this.range,
       });
     const single = splitModuleRef(module.ref).exportName !== null;
     if (memory) throw fail(`\`${group}\` is both a memory input and a tool module; rename one`);
     if (group === null && !single) {
-      throw fail(`\`${name}\` is a tool module; name one of its tools: \`tool_id: {${name}: <tool>}\``);
+      throw fail(`\`${name}\` is a tool module; name one of its tools: \`${wording.written(`{${name}: <tool>}`)}\``);
     }
-    if (group !== null && single) throw fail(`\`${group}\` is one tool, ${module.ref}; write \`tool_id: ${group}\``);
+    if (group !== null && single) {
+      throw fail(`\`${group}\` is one tool, ${module.ref}; write \`${wording.written(group)}\``);
+    }
   }
 
   /**
@@ -398,7 +446,7 @@ export class ToolDescriptor extends NodeDescriptor {
     if (library === null) return;
     const def = group === null ? (library.keys().next().value ?? "<def>") : name;
     throw ctx.diagnostics.error(
-      `node ${reprText(this.id)}: \`${alias}\` is a library; call its def with \`kind: call\`: ` +
+      `${this.wording.node()}: \`${alias}\` is a library; call its def with \`kind: call\`: ` +
         `\`call: {${alias}: ${def}}\``,
       { range: this.fieldRanges.get(siteKey("field", "tool_id")) ?? this.range },
     );
@@ -417,8 +465,8 @@ export class ToolDescriptor extends NodeDescriptor {
     const range = this.fieldRanges.get(siteKey("field", "tool_id")) ?? this.range;
     if (memory.nullable) {
       throw ctx.diagnostics.error(
-        `node ${reprText(this.id)}: \`tool_id: {${input}: ${name}}\` names \`${input}\`, an Optional memory; ` +
-          "a TOOL node needs one that is always bound",
+        `${this.wording.node()}: \`${this.wording.written(`{${input}: ${name}}`)}\` names \`${input}\`, ` +
+          "an Optional memory; a TOOL node needs one that is always bound",
         { range },
       );
     }
@@ -426,7 +474,7 @@ export class ToolDescriptor extends NodeDescriptor {
       checkMemoryGrants([{ kind: "group", group: input, tools: [name] }], ctx.flowInputs, ctx.memoryTypes);
     } catch (error) {
       if (!(error instanceof GrantError)) throw error;
-      throw ctx.diagnostics.error(grantErrorText(`node ${reprText(this.id)} (kind=${this.kind})`, error), {
+      throw ctx.diagnostics.error(grantErrorText(this.wording.nodeKind(), error), {
         range,
         cause: error,
       });
@@ -452,22 +500,22 @@ export class ToolDescriptor extends NodeDescriptor {
    *   `from` that isn't an inbox, or a `take` other than `one` or `all`.
    */
   private buildTake(ctx: BuildContext): ValueContract {
-    const id = reprText(this.id);
+    const subject = this.wording.nodeTool(TAKE);
     for (const name of Object.keys(this.inputs)) {
       if (TAKE_INPUTS.has(name)) continue;
-      throw ctx.diagnostics.error(`node ${id} (tool_id: take): take takes from, take and timeout; got ${reprText(name)}`, {
+      throw ctx.diagnostics.error(`${subject}: take takes from, take and timeout; got ${reprText(name)}`, {
         range: this.inputRange(name),
       });
     }
     if (!Object.hasOwn(this.inputs, "from")) {
-      throw ctx.diagnostics.error(`node ${id} (tool_id: take): take needs from: \${input.<inbox>}`, {
+      throw ctx.diagnostics.error(`${subject}: take needs from: \${input.<inbox>}`, {
         range: this.fieldRanges.get(siteKey("field", "inputs")) ?? this.range,
       });
     }
     const fromType = this.inputType(ctx, "from");
     if (fromType === null || !isInboxType(fromType)) {
       throw ctx.diagnostics.error(
-        `node ${id} (tool_id: take): take's from must be an Inbox input of this flow, as \${input.<name>}`,
+        `${subject}: take's from must be an Inbox input of this flow, as \${input.<name>}`,
         { range: this.inputRange("from") },
       );
     }
@@ -515,12 +563,11 @@ export class ToolDescriptor extends NodeDescriptor {
    * @throws LoadError for any other input, both or neither, or a bad `until`.
    */
   private checkSleep(ctx: BuildContext): void {
-    const id = reprText(this.id);
     const names = Object.keys(this.inputs);
     const extra = names.find((name) => name !== "until" && name !== "for");
     if (extra !== undefined || names.length !== 1) {
       const got = extra === undefined ? "" : `; got ${reprText(extra)}`;
-      throw ctx.diagnostics.error(`node ${id} (tool_id: sleep): sleep takes until: or for:, exactly one${got}`, {
+      throw ctx.diagnostics.error(`${this.wording.nodeTool(SLEEP)}: sleep takes until: or for:, exactly one${got}`, {
         range: extra === undefined ? (this.fieldRanges.get(siteKey("field", "inputs")) ?? this.range) : this.inputRange(extra),
       });
     }
@@ -668,7 +715,7 @@ export class ToolDescriptor extends NodeDescriptor {
 
   /** Return the message prefix naming this node's input `name`. */
   private inputSubject(name: string): string {
-    return `node ${reprText(this.id)} (tool_id: ${this.toolId}) input ${reprText(name)}`;
+    return this.wording.input(this.toolId, name);
   }
 
   /** Return the range of input `name`, else of `input:`, else of the node. */
@@ -707,17 +754,11 @@ const ADAPTIVE_KEYS: ReadonlySet<string> = new Set(["prompt", "llm_config", "ret
 /**
  * Check an authored `adaptive_questions:` block's keys and brief, before the template parse.
  *
- * @param label The node's kind or tool id as messages name it, such as `tool_id: ask`.
  * @throws LoadError when the block authors `mode:` or a key other than `prompt`/`llm_config`/
  *   `retries` (at the key), or its brief is not text or holds a lone surrogate (at the brief).
  */
-function checkAdaptiveBlock(
-  nodeId: string,
-  label: string,
-  cursor: SourceCursor,
-  diagnostics: LoadDiagnostics,
-): void {
-  const subject = `node ${reprText(nodeId)} (${label})`;
+function checkAdaptiveBlock(wording: ToolWording, cursor: SourceCursor, diagnostics: LoadDiagnostics): void {
+  const subject = wording.nodeTool(ASK);
   const adaptive = cursor.get("adaptive_questions");
   if (!isRecord(adaptive)) return;
   if (Object.hasOwn(adaptive, "mode")) {
@@ -739,7 +780,7 @@ function checkAdaptiveBlock(
   if (typeof brief !== "string") {
     throw diagnostics.error(`${subject}: ${notTextError("adaptive_questions.prompt", brief)}`, { range: briefRange });
   }
-  checkWrittenValue(brief, `node ${reprText(nodeId)} field 'adaptive_questions.prompt'`, briefRange, diagnostics);
+  checkWrittenValue(brief, `${wording.node()} field 'adaptive_questions.prompt'`, briefRange, diagnostics);
 }
 
 /**
@@ -764,17 +805,15 @@ function recordAdaptiveRanges(desc: NodeDescriptor, cursor: SourceCursor): void 
  * Check a parsed `adaptive_questions:` block: a mapping with its own `prompt:` (the LLM brief)
  * and a valid `retries:`.
  *
- * @param label The node's kind or tool id as messages name it, such as `tool_id: ask`.
  * @throws LoadError at `range` for the first rule broken.
  */
 function checkAdaptiveFields(
-  nodeId: string,
-  label: string,
+  wording: ToolWording,
   adaptive: unknown,
   range: SourceRange | null,
   diagnostics: LoadDiagnostics,
 ): void {
-  const subject = `node ${reprText(nodeId)} (${label})`;
+  const subject = wording.nodeTool(ASK);
   if (!isRecord(adaptive) || !adaptive["prompt"]) {
     throw diagnostics.error(`${subject}: \`adaptive_questions:\` requires a \`prompt:\` (the LLM brief)`, { range });
   }

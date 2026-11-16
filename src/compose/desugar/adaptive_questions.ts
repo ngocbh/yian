@@ -75,7 +75,7 @@ export function desugarAdaptiveQuestions(
     const synthId = `${gid}__compose`;
     if (descriptors.has(synthId)) {
       throw diagnostics.error(
-        `node ${reprText(gid)} (tool_id: ${ASK}): synthesized composer id ${reprText(synthId)} ` +
+        `${desc.wording.nodeTool(ASK)}: synthesized composer id ${reprText(synthId)} ` +
           "collides with an existing node id",
         { range: desc.range },
       );

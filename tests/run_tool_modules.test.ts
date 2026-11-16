@@ -387,17 +387,37 @@ test.each([
   ["t: {kind: tool, tool_id: quote, input: {id: x}, output: !str}", "TOOL node 't' output: declared str, but tool 'quote' returns int"],
   ["t: {kind: tool, tool_id: {crm: find}, input: {id: x}}", "TOOL node 't' names {crm: find}: `crm` has no tool `find`; it has lookup"],
   ["a: {kind: agent, prompt: go, tools: [quote]}", "AGENT node 'a': `quote` is both a tool module it grants and a tool of this run; rename one"],
-  ["t: {kind: tool, tool_id: quote, input: {id: x}}", "TOOL node 't': `quote` is both a tool module it calls and a tool of this run; rename one"],
   ["a: {kind: agent, prompt: go, tools: [notes, notes_read]}", "AGENT node 'a': the memory tool `notes_read` of `notes` has the name of another tool it grants; rename one"],
+  ["a: {kind: agent, prompt: go, tools: [load]}", "AGENT node 'a': tool `skill` of `load` would show as `load_skill`, a name yian reserves; rename the alias or the tool"],
 ])("run start checks each node's module tools: %s", async (node, message) => {
   writeFileSync(join(dir, "crm.ts"), tools(["lookup"]));
   writeFileSync(join(dir, "quote.ts"), tools(["quote"], 'output: { type: "integer" }, '));
-  const uses = { crm: "./crm.ts", quote: "./quote.ts:quote", notes_read: "./crm.ts:lookup" };
+  writeFileSync(join(dir, "skill.ts"), tools(["skill"]));
+  const uses = { crm: "./crm.ts", quote: "./quote.ts:quote", notes_read: "./crm.ts:lookup", load: "./skill.ts" };
   const quote = new FunctionTool({ name: "quote", description: "d", parametersJsonSchema: { type: "object" }, execute: () => 1 });
   const host: Record<string, FunctionTool> = message.includes("a tool of this run") ? { quote } : {};
   const text = app(uses, [node], "input:\n  notes: !FileMemory\n");
   await expect(run(text, { tools: host }, { notes: new FakeMemory() })).rejects.toThrow(new RangeError(message));
 });
+
+test.each([
+  ["quote", "quote", "./quote.ts:quote", "quote"],
+  ["{crm: lookup}", "crm", "./crm.ts", "lookup"],
+])(
+  "a TOOL node calls its module's tool %s over a host tool or group of the alias's name",
+  async (toolId, alias, ref, member) => {
+    writeFileSync(join(dir, "quote.ts"), tools(["quote"]));
+    writeFileSync(join(dir, "crm.ts"), tools(["lookup"]));
+    const host = (name: string) =>
+      new FunctionTool({ name, description: "d", parametersJsonSchema: { type: "object" }, execute: () => "host" });
+    const text = app({ [alias]: ref }, [`t: {kind: tool, tool_id: ${toolId}, input: {id: x}}`], "output: ${t.output}\n");
+    // A host tool named like the alias, then a host group of that name holding the module's tool name.
+    for (const hostTools of [{ [alias]: host(alias) }, { [alias]: [host(member)] }]) {
+      const done = await run(text, { tools: hostTools });
+      expect([done.status, done.output]).toEqual(["succeeded", 1n]);
+    }
+  },
+);
 
 /** The payload of the `run_started` record of the log at `log`. */
 function started(log: string): Record<string, unknown> {

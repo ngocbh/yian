@@ -51,6 +51,23 @@ export const TOOL_REGISTRY = new Map<string, FunctionTool>();
 
 /** Names no host tool may take: the engine built-ins, the run's ask slot and the skills tool. */
 export const RESERVED_TOOL_NAMES: ReadonlySet<string> = new Set([TAKE, SLEEP, ASK, ASK_USER, LOAD_SKILL]);
+
+/**
+ * Return why a model can't be granted `tool` of `group` (a library's def or a module's tool): it
+ * would show under a name yian reserves, so the built-in would take its calls. `null` when its
+ * shown name is free.
+ *
+ * @param what What the tool is in its group, as the message names it: `def` or `tool`.
+ */
+export function reservedShownError(what: "def" | "tool", group: string, tool: string): string | null {
+  const shown = visibleToolName(group, tool);
+  if (!RESERVED_TOOL_NAMES.has(shown)) return null;
+  return (
+    `${what} \`${tool}\` of \`${group}\` would show as \`${shown}\`, a name yian reserves; ` +
+    `rename the alias or the ${what}`
+  );
+}
+
 const ASK_HINT = "pass tools: {...registeredTools(), ask: handler} to runFlow or advance";
 
 /** Return why a reserved name is reserved, for a refusal message. */

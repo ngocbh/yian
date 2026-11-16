@@ -366,14 +366,14 @@ const DEFS_CALL_TIME = `id: f
 name: f
 llm_config: {provider: openai}
 defs:
-  ask:
+  say:
     input: {m: !str }
     nodes:
       chat: {kind: agent, prompt: Go., llm_config: {model: '\${input.m}'}}
     output: \${chat.output}
 nodes:
-  a: {kind: call, call: ask, input: {m: model-a}}
-  b: {kind: call, call: ask, input: {m: '\${a.output}'}}
+  a: {kind: call, call: say, input: {m: model-a}}
+  b: {kind: call, call: say, input: {m: '\${a.output}'}}
 output: \${b.output}
 `;
 

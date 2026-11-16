@@ -264,7 +264,8 @@ other export, and `default`, is ignored.
 - A ref is a relative path, `./` or `../`, to a `.ts`, `.js` or `.mjs` file, resolved from the
   importing file's real folder, never from `system.paths`. It takes no `@version`, and under a
   `codeRoot` or `yian check --root` it must stay inside, as a CODE file must.
-- `call:` on a module's alias is a load error; call its tools from a `tool` node.
+- `call:` on a module's alias is a load error; call its tools from a `tool` node. A `tool` node
+  calls the module's tool even when the run has a host tool or group of the alias's name.
 
 ### When a module runs
 

@@ -1,5 +1,5 @@
-# A library alias named like a built-in tool is refused when granted: `ask` with a def `user` would
-# show as `ask_user`.
+# A library alias named like a built-in is refused at its key; granted, `ask` with a def `user`
+# would show as `ask_user`.
 kind: load
 flow: |
   id: f
@@ -23,7 +23,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'node ''helper'': library `ask` has the name of a built-in tool; rename the uses: alias'
+      message: 'uses: alias ''ask'': `ask` is a name yian reserves; rename the alias'
       frames:
       - label: flow.yaml
-        range: [10, 12, 10, 17]
+        range: [4, 3, 4, 6]

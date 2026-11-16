@@ -1,6 +1,8 @@
 # `call:` and `call(...)` name a built-in as `tool_id:` does: a `call` node, a taken case branch
 # and an inline call each run `take`, and `sleep`, whose past deadline returns null at once; a
-# `call` node runs `ask` too.
+# `call` node runs `ask` too. The trace shows what the output can't: the inline take `__call_0`
+# and the branch's take `__call_2` wait under their own call ids, the sleeps `__call_1` and
+# `__call_4` run, and the untaken branches `__call_3` and `__call_5` never start.
 kind: run
 flow: |
   id: f

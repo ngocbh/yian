@@ -192,8 +192,8 @@ output:
   importing file, without the extension (only `.yaml` files are found); `@<version>` must equal
   the child's quoted `version:` text (`clean: ../common/clean@1`). A def or alias can't be named
   `take`, `sleep`, `ask`, `ask_user` or `load_skill`.
-- **On a `call` or `map` node or in a `call(...)`, a built-in, a module or memory input's tool, or
-  a name the file doesn't define is a tool**, called as a `tool` node calls it: `call: sleep`,
+- **On a `call`, `map` or `loop` node or in a `call(...)`, a built-in, a module or memory input's
+  tool, or a name the file doesn't define is a tool**, called as a `tool` node calls it: `call: sleep`,
   `{crm: lookup}`, `{lessons: append}`, or one of the run's tools (`search`, `{github: search}`),
   looked up when the run starts, so a typo fails then, naming the closest name the file defines;
   `yian check` lists these names after `ok`. The file's own names hide a run's tool of that name,
@@ -221,6 +221,11 @@ output:
   (`while: not done`). Without `max:`, a condition that doesn't end the loop at once must
   read a carried field the body returns. The body returns only carried fields, at least one; a field it leaves out
   keeps its value. See [Repeat with loop](https://yian.readthedocs.io/control-flow/#repeat-with-loop).
+  A `loop` over a tool passes it every carried field each turn (the `while:` flag too) and takes
+  its result as the fields that change: the whole carried record, checked each turn, unless
+  `output:` declares fewer. `retries:` and `output:` apply to each turn's call; `asserts:` check the
+  final record. `call: sleep` and `call: take` are load errors there. See
+  [Loop over a tool](https://yian.readthedocs.io/control-flow/#loop-over-a-tool).
 
 ### Code nodes
 

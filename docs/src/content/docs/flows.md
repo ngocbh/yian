@@ -153,7 +153,7 @@ A node id is an identifier: ASCII letters, digits and `_`, not starting with a d
 | `case` | Sends the run down one branch | [Control flow](/control-flow/) |
 | `call` | Runs a child flow once | [Control flow](/control-flow/) |
 | `map` | Runs a child flow or a tool once per list item | [Control flow](/control-flow/) |
-| `loop` | Runs a child flow again and again | [Control flow](/control-flow/) |
+| `loop` | Runs a child flow or a tool again and again | [Control flow](/control-flow/) |
 
 ### Common fields
 
@@ -161,7 +161,7 @@ A node id is an identifier: ASCII letters, digits and `_`, not starting with a d
 |---|---|---|
 | `kind` | all | The node kind |
 | `input` | all but `case` | A mapping of names to the values the node reads |
-| `output` | `agent`, `code`, `tool`, and a `call` or `map` naming a tool | The type of the node's result, written as a type with no tag |
+| `output` | `agent`, `code`, `tool`, and a `call`, `map` or `loop` naming a tool | The type of the node's result, written as a type with no tag |
 | `asserts` | all but `case`, and a `map` over a flow | Conditions on the node's inputs and result (see [Asserts](#asserts)) |
 | `depends_on` | all | Node ids to run after; this node is skipped when one is skipped |
 | `runs_after` | all | Node ids to run after; this node still runs when one is skipped |

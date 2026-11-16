@@ -1525,6 +1525,20 @@ describe("check", () => {
     );
   });
 
+  test("text: a tool named alike from two nodes is named once, and the document lists both", async () => {
+    const flow = file(
+      "twice.yaml",
+      'id: r\nname: r\ndefs:\n  greet: {kind: code, code: "return 1", output: !int}\n' +
+        "  wrap:\n    nodes:\n      n: {kind: call, call: gret}\n    output: ${n.output}\n" +
+        "nodes:\n  a: {kind: call, call: wrap}\n  b: {kind: call, call: wrap}\n",
+    );
+    const { io, stdout } = testIo();
+    expect(await main(["check", flow], io)).toBe(0);
+    expect(stdout()).toBe(`${flow}: ok; checked at run start: gret (node 'a/n'; did you mean the def greet?)\n`);
+    const { flows } = await checkJson([flow]);
+    expect(flows[0].run_start_tools.map((tool: { node: string }) => tool.node)).toEqual(["a/n", "b/n"]);
+  });
+
   test("a library lists the tools its defs leave for run start, each node under its def", async () => {
     const library = file(
       "lib.yaml",

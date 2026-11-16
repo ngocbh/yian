@@ -381,8 +381,8 @@ A [library](/flows/#library-files) is ok when every def loads.
 
 A host or MCP tool is looked up only when a run starts, so a misspelled `call:` name loads. The
 ok line lists those tools, each with its node (a `call(...)` by its site, a library's node under
-its def's name) and the closest name the flow defines, if one is close. Tools with a hint come
-first, and past five the rest are counted:
+its def's name) and the closest name the flow defines, if one is close. Each name and hint shows
+once, tools with a hint come first, and past five the rest are counted:
 
 ```console
 $ yian check flow.yaml

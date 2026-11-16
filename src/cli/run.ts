@@ -1524,11 +1524,20 @@ const RUN_START_SHOWN = 5;
 
 /**
  * `; checked at run start: gret (node 'n'; did you mean the def greet?), search (node 'm')` for
- * the tools only the run supplies, those with a hint first, at most `RUN_START_SHOWN`; `""` for none.
+ * the tools only the run supplies, each name and hint once, at its first node, those with a hint
+ * first, at most `RUN_START_SHOWN`; `""` for none.
  */
 function runStartText(tools: readonly RunStartTool[]): string {
   if (tools.length === 0) return "";
-  const ordered = [...tools.filter((tool) => tool.hint !== null), ...tools.filter((tool) => tool.hint === null)];
+  // A def calling a mistyped tool, run from two nodes, would otherwise fill the line twice.
+  const seen = new Set<string>();
+  const unique = tools.filter((tool) => {
+    const key = JSON.stringify([tool.name, tool.hint]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const ordered = [...unique.filter((tool) => tool.hint !== null), ...unique.filter((tool) => tool.hint === null)];
   const shown = ordered
     .slice(0, RUN_START_SHOWN)
     .map((tool) => {

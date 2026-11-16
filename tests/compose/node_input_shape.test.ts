@@ -16,8 +16,8 @@ import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
 import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
-import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
+import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceDocument } from "../../src/compose/source/document.ts";
 import { runFlow } from "../../src/run.ts";
 import {
@@ -36,7 +36,6 @@ const CLASSES: ReadonlyMap<string, DescriptorClass> = new Map<string, Descriptor
   ["call", CallDescriptor],
   ["map", MapDescriptor],
   ["code", CodeDescriptor],
-  ["tool", ToolDescriptor],
   ["agent", AgentDescriptor],
 ]);
 
@@ -76,11 +75,14 @@ test.each([
   ["call", "call: step", CHILD],
   ["map", "over: [1, 2]\n    call: step", CHILD],
   ["code", "code: return 1", PARAMETERS],
-  ["tool", "tool_id: http_get", PARAMETERS],
+  ["call", "call: http_get", PARAMETERS],
   ["agent", "prompt: hi", PARAMETERS],
-] as const)("a whole-reference input is a load error for %s", (kind, fields, [noun, verb]) => {
+] as const)("a whole-reference input is a load error for kind: %s, %s", (kind, fields, [noun, verb]) => {
   const text = `nodes:\n  under_test:\n    kind: ${kind}\n    ${fields}\n    input: \${seed.output}\n`;
-  expect(loadError(() => parseNode(text, "under_test")).diagnostic.message).toBe(
+  // As the loader's call rule reads them, `http_get` is a tool and `step` a flow.
+  const nodes = SourceDocument.parse(text).root.child("nodes");
+  const callsTool = (_nodeId: string, call: unknown) => call === "http_get";
+  expect(loadError(() => parseNodes(nodes, { callsTool })).diagnostic.message).toBe(
     `node 'under_test' (kind=${kind}): \`input:\` must be a mapping of ${noun} ` +
       `(got the reference '\${seed.output}'); ${verb}, such as ` +
       "`<field>: ${seed.output.<field>}`",

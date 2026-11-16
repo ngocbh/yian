@@ -1,4 +1,4 @@
-# A `tool_id:` mapping names one tool, so a second key is refused.
+# A `call:` mapping names one callable, so a second key is refused.
 kind: load
 flow: |
   id: grants
@@ -13,7 +13,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'node ''found'' (kind=call): `call:` names one tool: `{cases: search}` or `search`'
+      message: 'node ''found'' (kind=call): `call:` names one callable: `greet`, `{billing: quote}` or `{crm: lookup}`'
       frames:
       - label: flow.yaml
         range: [6, 11, 6, 40]

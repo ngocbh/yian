@@ -1,4 +1,4 @@
-# A TOOL node's memory must always be bound, so it can't be Optional.
+# A tool call's memory must always be bound, so it can't be Optional.
 kind: load
 flow: |
   id: f
@@ -16,7 +16,7 @@ expect:
   load:
     diagnostics:
       - code: compose.load
-        message: "node 'found': `call: {notes: read}` names `notes`, an Optional memory; a TOOL node needs one that is always bound"
+        message: "node 'found': `call: {notes: read}` names `notes`, an Optional memory; a tool call needs one that is always bound"
         frames:
           - label: flow.yaml
             range:

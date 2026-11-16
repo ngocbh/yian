@@ -86,7 +86,9 @@ test("ask with adaptive_questions parses and ranges the brief and llm_config", (
       llm_config:
         model: m
 `;
-  const desc = ToolDescriptor.parse("q", SourceDocument.parse(text).root.child("nodes").child("q"));
+  // The loader parses a `call` node naming a tool as a TOOL body, its `call` key renamed to the TOOL's.
+  const cursor = SourceDocument.parse(text).root.child("nodes").child("q").renamed(new Map([["call", "tool_id"]]));
+  const desc = ToolDescriptor.parse("q", cursor);
   expect(desc.adaptiveQuestions).toEqual({ prompt: "Ask what matters", llm_config: { model: "m" } });
   expect(desc.fieldRanges.get(siteKey("text", "adaptive_questions.prompt"))).toBeInstanceOf(SourceRange);
   expect(desc.fieldRanges.get(siteKey("field", "adaptive_questions.llm_config"))).toBeInstanceOf(SourceRange);

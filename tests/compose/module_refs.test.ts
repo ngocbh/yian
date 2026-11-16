@@ -35,7 +35,7 @@ afterEach(() => {
 const USES = { crm: "./crm.ts", quote: "./tools.ts:quote" };
 const AGENT = "a: {kind: agent, prompt: hi, tools: [crm]}";
 // The node kind each field is on.
-const KINDS: Record<string, string> = { call: "call", tools: "agent, prompt: hi", tool_id: "tool" };
+const KINDS: Record<string, string> = { call: "call", tools: "agent, prompt: hi" };
 
 /** A flow `app` importing `uses` (alias to ref), with `nodes`, one node per line, after `head`. */
 function app(uses: Record<string, string>, nodes: string[], head = ""): string {
@@ -143,8 +143,7 @@ test("a tool node bakes the module its call: names", async () => {
 test.each([
   ["call: crm", "node 'a': `crm` is a tool module; name one of its tools: `call: {crm: <tool>}`"],
   ["tools: [{quote: [quote]}]", "node 'a': `quote` is one tool, ./tools.ts:quote; grant it as `quote`"],
-  ["tool_id: crm", "node 'a': `crm` is a tool module; name one of its tools: `tool_id: {crm: <tool>}`"],
-  ["tool_id: {quote: quote}", "node 'a': `quote` is one tool, ./tools.ts:quote; write `tool_id: quote`"],
+  ["call: {quote: quote}", "node 'a': `quote` is one tool, ./tools.ts:quote; write `call: quote`"],
 ])("%s is a load error", async (field, message) => {
   expect(await refusal(app(USES, [`a: {kind: ${KINDS[field.split(":")[0]!]}, ${field}}`]))).toBe(message);
 });

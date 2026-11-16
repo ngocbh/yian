@@ -6,7 +6,7 @@ import { flowFingerprint } from "../../src/compile/manifest.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { current, forget, reload } from "../../src/defaults.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
-import { assembled, assembleText, type CaseRow, loadError, parsedNodes, runCase } from "../helpers/declarations.ts";
+import { assembled, assembleText, type CaseRow, loadError, runCase } from "../helpers/declarations.ts";
 
 afterEach(() => forget());
 
@@ -80,12 +80,8 @@ test("nonzero retries changes the flow fingerprint", async () => {
   expect(await fingerprintOf(withLine("    retries: 1"))).not.toBe(OLD_FINGERPRINT);
 });
 
-test.each<CaseRow>([{ id: "load-leaves/compose_tool_retries_load__negative_retries", call: parsedNodes }])(
-  "parseNodes: $id",
-  runCase,
-);
-
-test.each<CaseRow>([{ id: "load-leaves/compose_tool_retries_load__retries_loads", call: assembled }])(
-  "assembles: $id",
-  runCase,
-);
+// Assembled: parsing alone has no call rule, so it reads every `call:` as a flow's.
+test.each<CaseRow>([
+  { id: "load-leaves/compose_tool_retries_load__negative_retries", call: assembled },
+  { id: "load-leaves/compose_tool_retries_load__retries_loads", call: assembled },
+])("assembles: $id", runCase);

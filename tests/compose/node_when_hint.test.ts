@@ -7,7 +7,7 @@ import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
 import { compareCodeUnits } from "../../src/diagnostics.ts";
-import { type CaseRow, loadError, nodesOf, parsedNodes, runCase } from "../helpers/declarations.ts";
+import { assembled, type CaseRow, loadError, nodesOf, parsedNodes, runCase } from "../helpers/declarations.ts";
 
 afterEach(() => forget());
 
@@ -57,8 +57,13 @@ test.each<CaseRow>([
   { id: "load-core/compose_node_when_hint__when_on_a_code_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_loop_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_map_node", call: parsedNodes },
-  { id: "load-core/compose_node_when_hint__when_on_a_tool_node", call: parsedNodes },
 ])("parseNodes: $id", runCase);
+
+// Assembled: parsing alone has no call rule, so it reads every `call:` as a flow's.
+test.each<CaseRow>([{ id: "load-core/compose_node_when_hint__when_on_a_tool_node", call: assembled }])(
+  "assembles: $id",
+  runCase,
+);
 
 test("when on a case node points at cases entries", () => {
   const text = `id: f

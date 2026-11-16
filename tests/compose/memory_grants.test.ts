@@ -101,7 +101,7 @@ test("a TOOL node can't name an Optional memory", async () => {
   const nodes = "found:\n  kind: call\n  call: {notes: read}\n";
   const error = await loadErrorAsync(loadFlow(flow("notes: !Optional(FileMemory)", nodes)));
   expect(error.diagnostic.message).toContain(
-    "`call: {notes: read}` names `notes`, an Optional memory; a TOOL node needs one that is always bound",
+    "`call: {notes: read}` names `notes`, an Optional memory; a tool call needs one that is always bound",
   );
 });
 

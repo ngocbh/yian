@@ -1,4 +1,4 @@
-# A `tool_id:` group names one tool, not a list of them.
+# A `call:` group names one tool, not a list of them.
 kind: load
 flow: |
   id: grants

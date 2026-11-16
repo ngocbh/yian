@@ -25,9 +25,10 @@ nodes:
 output: \${q.output}
 `;
 
-/** Return the descriptors of flow `text`'s nodes, lowered. */
+/** Return the descriptors of flow `text`'s nodes, lowered; its `call: ask` names a tool, as the loader reads it. */
 function lowered(text: string) {
-  return desugarAdaptiveQuestions(parseNodes(SourceDocument.parse(text).root.child("nodes")));
+  const nodes = SourceDocument.parse(text).root.child("nodes");
+  return desugarAdaptiveQuestions(parseNodes(nodes, { callsTool: () => true }));
 }
 
 test("the composer comes first, then the ask reading its questions", () => {

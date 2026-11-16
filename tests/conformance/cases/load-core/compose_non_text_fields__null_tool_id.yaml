@@ -12,7 +12,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'node ''a'' (kind=call): `call:` must be a tool name or `{group: tool}`, but it is empty; write a tool name'
+      message: 'node ''a'' (kind=call): `call:` must be a callable name, `{library: def}` or `{group: tool}`, but it is empty; write a callable name'
       frames:
       - label: flow.yaml
         range: [6, 11, 6, 15]

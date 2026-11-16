@@ -59,7 +59,7 @@ export const RESERVED_TOOL_NAMES: ReadonlySet<string> = new Set([TAKE, SLEEP, AS
  *
  * @param what What the tool is in its group, as the message names it: `def` or `tool`.
  */
-export function reservedShownName(what: "def" | "tool", group: string, tool: string): string | null {
+export function reservedShownError(what: "def" | "tool", group: string, tool: string): string | null {
   const shown = visibleToolName(group, tool);
   if (!RESERVED_TOOL_NAMES.has(shown)) return null;
   return (
@@ -67,6 +67,7 @@ export function reservedShownName(what: "def" | "tool", group: string, tool: str
     `rename the alias or the ${what}`
   );
 }
+
 const ASK_HINT = "pass tools: {...registeredTools(), ask: handler} to runFlow or advance";
 
 /** Return why a reserved name is reserved, for a refusal message. */

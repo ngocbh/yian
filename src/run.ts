@@ -210,7 +210,7 @@ import {
 import {
   type AskRequest,
   RESERVED_TOOL_NAMES,
-  reservedShownName,
+  reservedShownError,
   type ToolEntry,
   type ToolRef,
   ToolSet,
@@ -3342,9 +3342,8 @@ function* streamedEnvelopes(log: string, maxLineBytes: number | null): Generator
  * @throws RangeError when an AGENT grants a built-in (`take`, `sleep`, `ask`), a tool or group
  *   this run lacks, a tool of two groups by its bare name, a tool its group lacks, two tools that
  *   would show one name, a module tool that would show under a built-in's name, or `ask_user` with
- *   no handler; or a TOOL node names a tool or group this
- *   run lacks, a tool of two groups by its bare name, a tool group, or `ask` or `ask_user` with no
- *   handler.
+ *   no handler; or a TOOL node names a tool or group this run lacks, a tool of two groups by its
+ *   bare name, a tool group, or `ask` or `ask_user` with no handler.
  */
 function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
   const memories = memoryInputNames(flow);
@@ -3385,7 +3384,7 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
     // its calls to the built-in.
     for (const tool of granted) {
       if (tool.scope >= own.scopes.length || tool.group === null) continue;
-      const reserved = reservedShownName("tool", tool.group, tool.tool);
+      const reserved = reservedShownError("tool", tool.group, tool.tool);
       if (reserved !== null) throw new YianRangeError(`AGENT node ${reprText(nodeId)}: ${reserved}`);
     }
     const call = node.hostToolCall();

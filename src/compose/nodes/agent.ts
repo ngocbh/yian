@@ -59,7 +59,7 @@ import {
   visibleToolName,
 } from "../../tools/grants.ts";
 import { splitModuleRef, type ToolModuleRef } from "../../tools/modules.ts";
-import { reservedShownName } from "../../tools/registry.ts";
+import { reservedShownError } from "../../tools/registry.ts";
 import { YianTypeError } from "../../typesys/errors.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import {
@@ -1117,7 +1117,7 @@ export class AgentDescriptor extends NodeDescriptor {
       for (const def of defs) {
         if (tools.some((tool) => tool.library?.alias === name && tool.library.def === def)) continue;
         const found = resolve(def);
-        const reserved = reservedShownName("def", name, def);
+        const reserved = reservedShownError("def", name, def);
         if (reserved !== null) throw fail(reserved);
         const shown = visibleToolName(name, def);
         checkNames(() => checkVisibleNames([{ visible: shown, group: name, tool: def, scope: 0, key: shown }]));
@@ -1196,7 +1196,7 @@ export class AgentDescriptor extends NodeDescriptor {
       }
       // A whole group's tools are listed only at run start, which checks their shown names.
       for (const tool of grant.kind === "group" ? grant.tools : []) {
-        const reserved = reservedShownName("tool", name, tool);
+        const reserved = reservedShownError("tool", name, tool);
         if (reserved !== null) throw fail(reserved);
       }
       if (!modules.includes(module)) modules.push(module);

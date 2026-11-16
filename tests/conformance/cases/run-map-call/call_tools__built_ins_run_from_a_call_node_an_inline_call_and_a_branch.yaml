@@ -1,0 +1,38 @@
+# `call:` and `call(...)` name a built-in as `tool_id:` does: a `call` node runs `take`, `ask` and
+# `sleep` (a past deadline returns null at once), a case branch `take`, and an inline call `sleep`.
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    go: !bool
+    notes: !Inbox(str)
+    more: !Inbox(str)
+  nodes:
+    heard: {kind: call, call: take, input: {from: "${input.notes}"}}
+    asked: {kind: call, call: ask, input: {prompt: Name?}, output: !str}
+    waited: {kind: call, call: sleep, input: {until: "2020-01-01T00:00:00Z"}}
+    routed:
+      kind: case
+      cases:
+        - when: input.go
+          then: call(take, from=${input.more})
+      else: call(sleep, until="2020-01-01T00:00:00Z")
+  output:
+    heard: ${heard.output.events}
+    asked: ${asked.output}
+    waited: ${waited.output}
+    routed: ${routed.output}
+    slept: call(sleep, until="2020-01-01T00:00:00Z")
+inputs: {go: true}
+run: {run_id: r1, num_workers: 0}
+host:
+  sends:
+  - {inbox: notes, event: hi}
+  - {inbox: more, event: there}
+  human:
+    asked: [Ada]
+expect:
+  output:
+    status: succeeded
+    output: {heard: [hi], asked: Ada, waited: null, routed: {events: [there], closed: false}, slept: null}

@@ -1,0 +1,39 @@
+# `call:` and `call(...)` name a memory's tool: `{lessons: read}` on a `call` node, and
+# `lessons.read` in an inline call and a case branch.
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    go: !bool
+    lessons: !FileMemory
+  nodes:
+    found: {kind: call, call: {lessons: read}, input: {path: a.md}}
+    inline:
+      kind: code
+      input:
+        read: call(lessons.read, path=b.md)
+      output: !str
+      code: return inputs.read.text
+    routed:
+      kind: case
+      cases:
+        - when: input.go
+          then: call(lessons.read, path=c.md)
+      else: call(lessons.read, path=a.md)
+  output:
+    found: ${found.output.text}
+    inline: ${inline.output}
+    routed: ${routed.output.text}
+inputs: {go: true}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons:
+      type: FileMemory
+      id: t/lessons
+      files: {a.md: one, b.md: two, c.md: three}
+expect:
+  output:
+    status: succeeded
+    output: {found: one, inline: two, routed: three}

@@ -1,0 +1,46 @@
+# `call:` and `call(...)` name a tool module's tool: its group alias's tool, `{crm: lookup}` or
+# `crm.lookup`, and a one-export alias, `quote`.
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    go: !bool
+  uses:
+    crm: ./crm.ts
+    quote: ./tools.ts:quote
+  nodes:
+    found: {kind: call, call: {crm: lookup}, input: {id: "1"}}
+    priced: {kind: call, call: quote, input: {qty: 1}}
+    routed:
+      kind: case
+      cases:
+        - when: input.go
+          then: call(quote, qty=3)
+      else: call(crm.lookup, id="0")
+  output:
+    found: ${found.output}
+    priced: ${priced.output}
+    routed: ${routed.output}
+    named: call(crm.lookup, id="7")
+files:
+  crm.ts: |
+    export const lookup = {
+      name: "lookup",
+      description: "Find a customer by id.",
+      parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+      execute: (args) => `Ada ${args.id}`,
+    };
+  tools.ts: |
+    export const quote = {
+      name: "quote",
+      description: "Price an order.",
+      parameters: { type: "object", properties: { qty: { type: "integer" } }, required: ["qty"] },
+      execute: (args) => args.qty * 2,
+    };
+inputs: {go: true}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output:
+    status: succeeded
+    output: {found: Ada 1, priced: 2, routed: 6, named: Ada 7}

@@ -3421,11 +3421,59 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
           known.map((id) => [shown.get(id) ?? id, shown.has(id) ? `\`${id}\`` : reprText(id)]),
         );
         const [close] = getCloseMatches(call.toolId, [...candidates.keys()], 1, CLOSE_MATCH_CUTOFF);
-        if (close !== undefined) reason += `; did you mean ${candidates.get(close)!}?`;
+        // The closest name the file defines comes first: a mistyped def is a tool name.
+        if (call.hint !== null) reason += `; did you mean the ${call.hint.what} \`${call.hint.name}\`?`;
+        else if (close !== undefined) reason += `; did you mean ${candidates.get(close)!}?`;
       }
-      throw new YianRangeError(`TOOL node ${reprText(nodeId)} names ${reason}`);
+      throw new YianRangeError(`${toolNodeName(nodeId, call)} names ${reason}`);
     }
   }
+}
+
+/**
+ * How run start names the static TOOL node at `nodePath`, or its input `input`: `TOOL node 'c/n'`
+ * (`... input 'q'`), or a lifted `call(...)` by its site (`... argument 'q'`), followed by `in` the
+ * path of the child flow it is in.
+ */
+function toolNodeName(nodePath: string, call: HostToolCall, input: string | null = null): string {
+  if (call.site === null) return `TOOL node ${reprText(nodePath)}${input === null ? "" : ` input ${reprText(input)}`}`;
+  const argument = input === null ? "" : ` argument ${reprText(input)}`;
+  const slash = nodePath.lastIndexOf("/");
+  return `${call.site}${argument}${slash === -1 ? "" : ` in ${reprText(nodePath.slice(0, slash))}`}`;
+}
+
+/** A tool a static TOOL node names that only the run supplies, so only run start can find it. */
+export interface RunStartTool {
+  /** The node's path, or a lifted `call(...)`'s site, as `toolNodeName` names it. */
+  readonly node: string;
+  /** How a message names the node: `node 'c/n'`, or the site. */
+  readonly label: string;
+  /** The tool as written: `search`, or `{github: search}`. */
+  readonly name: string;
+  /** The closest name the node's file defines, as `did you mean the def greet?`; else `null`. */
+  readonly hint: string | null;
+}
+
+/**
+ * Return the tools `flow`'s static TOOL nodes name that only the run supplies, a host or MCP tool,
+ * in node order: none of a built-in, a tool module's or a memory's tool. `checkToolGrants` looks
+ * each up when the run starts.
+ */
+export function runStartTools(flow: ComposedFlow | Flow): RunStartTool[] {
+  const found: RunStartTool[] = [];
+  for (const [nodePath, node] of staticNodes(flow)) {
+    const call = node.hostToolCall();
+    if (call === null || call.module !== null) continue;
+    if (call.group === null && BUILTIN_TOOL_IDS.has(call.toolId as BuiltinToolId)) continue;
+    const site = call.site === null ? null : toolNodeName(nodePath, call);
+    found.push({
+      node: site ?? nodePath,
+      label: site ?? `node ${reprText(nodePath)}`,
+      name: call.group === null ? call.toolId : `{${call.group}: ${call.toolId}}`,
+      hint: call.hint === null ? null : `did you mean the ${call.hint.what} ${call.hint.name}?`,
+    });
+  }
+  return found;
 }
 
 /**
@@ -3670,16 +3718,18 @@ function checkToolInputs(
     if (!inputs.has(name) && extra === undefined) {
       const taken = [...inputs.keys()].sort(compareCodeUnits);
       throw new YianRangeError(
-        `TOOL node ${reprText(nodeId)} input ${reprText(name)}: tool ${tool} takes no such ` +
+        `${toolNodeName(nodeId, call, name)}: tool ${tool} takes no such ` +
           `input; it takes ${writeAsText(taken)}`,
       );
     }
   }
   const missing = [...required].filter((name) => !call.inputs.includes(name)).sort(compareCodeUnits);
   if (missing.length > 0) {
-    const named = missing.length === 1 ? `input ${reprText(missing[0]!)}` : `inputs ${writeAsText(missing)}`;
+    // A `call(...)` passes arguments.
+    const noun = call.site === null ? "input" : "argument";
+    const named = missing.length === 1 ? `${noun} ${reprText(missing[0]!)}` : `${noun}s ${writeAsText(missing)}`;
     throw new YianRangeError(
-      `TOOL node ${reprText(nodeId)} is missing ${named} that tool ${tool} requires`,
+      `${toolNodeName(nodeId, call)} is missing ${named} that tool ${tool} requires`,
     );
   }
   for (const [name, inferred] of call.inputTypes) {
@@ -3688,7 +3738,7 @@ function checkToolInputs(
     // string of digits into an int) is rejected too.
     if (expected !== null && typeRelation(inferred, expected) === "disjoint") {
       throw new YianRangeError(
-        `TOOL node ${reprText(nodeId)} input ${reprText(name)}: tool ${tool} takes ` +
+        `${toolNodeName(nodeId, call, name)}: tool ${tool} takes ` +
           `${canonicalTypeLabel(expected)}, but the binding is ${bindingLabel(inferred)}`,
       );
     }
@@ -3705,7 +3755,7 @@ function checkToolOutput(nodeId: string, call: HostToolCall, declaredOutput: Typ
   if (call.outputType === null) return;
   if (typeRelation(declaredOutput, call.outputType) === "disjoint") {
     throw new YianRangeError(
-      `TOOL node ${reprText(nodeId)} output: declared ${canonicalTypeLabel(call.outputType)}, ` +
+      `${toolNodeName(nodeId, call)} output: declared ${canonicalTypeLabel(call.outputType)}, ` +
         `but tool ${reprText(visibleToolName(call.group, call.toolId))} returns ` +
         canonicalTypeLabel(declaredOutput),
     );

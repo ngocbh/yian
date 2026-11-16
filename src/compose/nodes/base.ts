@@ -439,6 +439,8 @@ export class BuildContext {
    * tool; `null` for neither.
    */
   readonly callableSection: (name: string) => "defs" | "uses" | null;
+  /** The file's `defs:` entries and `uses:` aliases, in written order. */
+  readonly callableNames: () => readonly string[];
   /** The tool module a `uses:` alias of the file imports, by alias; `null` for any other name. */
   readonly toolModule: (name: string) => ToolModuleRef | null;
   /** The opaque file name an inline CODE body reports in its errors. */
@@ -465,14 +467,15 @@ export class BuildContext {
 
   /**
    * Create a context. Only `registry` is required; the readers, `resolver` and `baseDir` default
-   * to `null`, `callableSection` and `toolModule` to no name, `sourceFile` to `"<inline-code>"`,
-   * `diagnostics` to an unlocated context, `flowInputs` to none and `memoryTypes` to the built-ins
-   * only.
+   * to `null`, `callableSection`, `callableNames` and `toolModule` to no name, `sourceFile` to
+   * `"<inline-code>"`, `diagnostics` to an unlocated context, `flowInputs` to none and
+   * `memoryTypes` to the built-ins only.
    */
   constructor(options: {
     registry: TypeRegistry;
     resolver?: CallableResolver | null;
     callableSection?: (name: string) => "defs" | "uses" | null;
+    callableNames?: () => readonly string[];
     toolModule?: (name: string) => ToolModuleRef | null;
     sourceFile?: string;
     baseDir?: string | null;
@@ -488,6 +491,7 @@ export class BuildContext {
       registry,
       resolver = null,
       callableSection = () => null,
+      callableNames = () => [],
       toolModule = () => null,
       sourceFile = "<inline-code>",
       baseDir = null,
@@ -502,6 +506,7 @@ export class BuildContext {
     this.registry = registry;
     this.resolver = resolver;
     this.callableSection = callableSection;
+    this.callableNames = callableNames;
     this.toolModule = toolModule;
     this.sourceFile = sourceFile;
     this.baseDir = baseDir;

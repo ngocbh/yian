@@ -1,0 +1,35 @@
+# A map runs a tool module's tool per item: its group alias's tool, `{crm: lookup}`, and a
+# one-export alias, `quote`.
+kind: run
+flow: |
+  id: f
+  name: f
+  uses:
+    crm: ./crm.ts
+    quote: ./tools.ts:quote
+  nodes:
+    found: {kind: map, over: ["1", "2"], call: {crm: lookup}, input: {id: "${item}"}}
+    priced: {kind: map, over: [1, 3], call: quote, input: {qty: "${item}"}, output: !int}
+  output:
+    found: ${found.output}
+    priced: ${priced.output}
+files:
+  crm.ts: |
+    export const lookup = {
+      name: "lookup",
+      description: "Find a customer by id.",
+      parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+      execute: (args) => `Ada ${args.id}`,
+    };
+  tools.ts: |
+    export const quote = {
+      name: "quote",
+      description: "Price an order.",
+      parameters: { type: "object", properties: { qty: { type: "integer" } }, required: ["qty"] },
+      execute: (args) => args.qty * 2,
+    };
+run: {run_id: r1, num_workers: 0}
+expect:
+  output:
+    status: succeeded
+    output: {found: [Ada 1, Ada 2], priced: [2, 6]}

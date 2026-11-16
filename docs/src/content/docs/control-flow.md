@@ -9,7 +9,7 @@ This page explains how a flow branches, repeats and reuses work. Four node kinds
 |---|---|---|
 | `case` | Takes one branch and skips the others | The output of the branch that ran |
 | `call` | Runs a child flow once | The child's output |
-| `map` | Runs a child flow once per list item | A list of the child's outputs, in list order |
+| `map` | Runs a child flow or a tool once per list item | A list of the outputs, in list order |
 | `loop` | Runs a child flow again and again, passing a record from one run to the next | The final record |
 
 A child flow is a `defs:` entry, a flow imported with [`uses:`](#import-a-flow-from-another-file-with-uses),
@@ -255,8 +255,8 @@ $ yian run greet_team.yaml --input lead=Ada --input team="Bo, Cy"
 ```
 
 - `call:` names a `defs:` entry first, then a [`uses:`](#import-a-flow-from-another-file-with-uses)
-  alias. On a `call` node or in a `call(...)` any other name is a [tool](#call-a-tool); a `map`
-  or `loop` runs only flows for now, so a tool there is a load error.
+  alias. On a `call` or `map` node or in a `call(...)` any other name is a
+  [tool](#call-a-tool); a `loop` runs only flows for now, so a tool there is a load error.
   A `defs:` name or alias can't also be a node id or a built-in's name: `take`, `sleep`, `ask`,
   `ask_user` or `load_skill`. `call: {billing: quote}` names a
   [library's def](#call-a-librarys-def).
@@ -441,6 +441,33 @@ output: ${place.output}
 - In `call(...)`, `a.b` always means tool `b` of group `a` (or def `b` of library `a`), and a name
   holds only letters, digits, `_` and `-`. A tool named otherwise needs a `call` node:
   `call: "a.b"` names the one tool `a.b`.
+
+### Map over a tool
+
+A `map` whose `call:` names a tool calls it once per item of `over:`, with `input:` as each call's
+arguments. It returns a list of the results, in list order:
+
+```yaml check=fragment
+fetch:
+  kind: map
+  over: ${input.ids}
+  call: {crm: lookup}
+  input:
+    id: ${item}
+  retries: 2
+  output: !Customer
+```
+
+- `retries:`, `output:`, `asserts:` and `adaptive_questions:` apply to each item's call. Without
+  `output:`, each result is any JSON value.
+- An `asserts:` item or an adaptive `prompt:` reads the call's own arguments, so read the item
+  through the argument it's bound to: `id != ''`, not `item != ''`.
+- `call: ask` asks each item its own question. `call: take` is a load error: a map can't give each
+  item its own inbox, so take before the map.
+- yian runs each call in a one-node body of its own, so each item writes about 8 records to the
+  run log, where a `call` node writes about 3. The node's path in the log is `fetch#<i>/fetch`.
+- An argument whose type yian can't prove at load is left to the tool to check, as on a `call`
+  node.
 
 ### Call inside a binding
 
@@ -662,7 +689,7 @@ loud:
 ```
 
 - Write exactly one of `call:` and `nodes:`. An inline body needs `output:`; `output:` beside a
-  named `call:` is a load error, except on a `call` node naming a tool.
+  named `call:` is a load error, except on a `call` or `map` node naming a tool.
 - The node's `input:` becomes the body's inputs, read as `${input.<name>}`, so each name is an
   identifier.
 - The body can't read its parent's inputs, nodes or `${item}`. Pass what it needs through

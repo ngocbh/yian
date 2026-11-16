@@ -428,6 +428,14 @@ export type BindingContractReader = (
   range: SourceRange | null,
 ) => OutputContract | null;
 
+/** The map or loop node that runs a generated tool body. */
+export interface BodyOwner {
+  /** How run start names the body's TOOL node: `map node 'fetch'`. */
+  readonly label: string;
+  /** The inputs of the flow the node is in, whose memories a mistyped tool group is matched against. */
+  readonly flowInputs: ReadonlyMap<string, Type>;
+}
+
 /** The inputs a node `build` reads; frozen. */
 export class BuildContext {
   /** The flow's named types, for reading declared types. */
@@ -464,11 +472,13 @@ export class BuildContext {
   readonly flowInputs: ReadonlyMap<string, Type>;
   /** The memory types the load knows beyond the built-ins, which a grant's tools are checked against. */
   readonly memoryTypes: MemoryTypeTable;
+  /** For a map's or loop's generated tool body, the node that runs it; else `null`. */
+  readonly bodyOf: BodyOwner | null;
 
   /**
-   * Create a context. Only `registry` is required; the readers, `resolver` and `baseDir` default
-   * to `null`, `callableSection`, `callableNames` and `toolModule` to no name, `sourceFile` to
-   * `"<inline-code>"`, `diagnostics` to an unlocated context, `flowInputs` to none and
+   * Create a context. Only `registry` is required; the readers, `resolver`, `baseDir` and `bodyOf`
+   * default to `null`, `callableSection`, `callableNames` and `toolModule` to no name, `sourceFile`
+   * to `"<inline-code>"`, `diagnostics` to an unlocated context, `flowInputs` to none and
    * `memoryTypes` to the built-ins only.
    */
   constructor(options: {
@@ -486,6 +496,7 @@ export class BuildContext {
     bindingContractReader?: BindingContractReader | null;
     flowInputs?: ReadonlyMap<string, Type>;
     memoryTypes?: MemoryTypeTable;
+    bodyOf?: BodyOwner | null;
   }) {
     const {
       registry,
@@ -502,6 +513,7 @@ export class BuildContext {
       bindingContractReader = null,
       flowInputs = new Map<string, Type>(),
       memoryTypes = NO_MEMORY_TYPES,
+      bodyOf = null,
     } = options;
     this.registry = registry;
     this.resolver = resolver;
@@ -517,6 +529,7 @@ export class BuildContext {
     this.bindingContractReader = bindingContractReader;
     this.flowInputs = flowInputs;
     this.memoryTypes = memoryTypes;
+    this.bodyOf = bodyOf;
     Object.freeze(this);
   }
 }
@@ -813,21 +826,24 @@ export class NodeDescriptor {
   }
 
   /**
-   * Reject a body key outside `allowed`, at its value (a `when:` adds `whenHint`), then a missing
-   * `required` key, at the body.
+   * Reject a body key outside `allowed` and `also`, at its value (a `when:` adds `whenHint`), then a
+   * missing `required` key, at the body.
    *
+   * @param also More keys the body may hold, as `allowed` names them: a map naming a tool takes the
+   *   tool call's own.
    * @throws LoadError for the first offending key.
    */
-  static _checkKeys(nodeId: string, cursor: SourceCursor): void {
+  static _checkKeys(nodeId: string, cursor: SourceCursor, also: readonly string[] = []): void {
     const diagnostics = LoadDiagnostics.fromCursor(cursor);
     const body = cursor._valueView() as ValueRecord;
     const subject = `node ${reprText(nodeId)} (kind=${this._writtenKind(cursor)})`;
+    const allowed = new Set([...this.allowed, ...also]);
     for (const key of Object.keys(body)) {
-      if (this.allowed.has(key)) continue;
+      if (allowed.has(key)) continue;
       const hint = key === "when" ? this.whenHint : "";
       // Name the authored spellings, the offending key's too; the plural carrier names fail to load.
       const field = this._writtenKey(key, cursor);
-      const surface = new Set([...this.allowed].map((name) => this._writtenKey(name, cursor)));
+      const surface = new Set([...allowed].map((name) => this._writtenKey(name, cursor)));
       throw diagnostics.error(
         `${subject}: field ${reprText(field)} is not allowed ` +
           `(allowed: ${[...surface].sort(compareCodeUnits).join(", ")})${hint}`,

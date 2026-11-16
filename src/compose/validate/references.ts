@@ -235,6 +235,9 @@ const MAP_TAIL = "(a map body can't read an inbox)";
 /** Why text, an expression, or a case's `when:` or `on:` refuses an inbox read. */
 const EXPRESSION_TAIL = "(not inside text or an expression)";
 
+/** The headline of the error listing a flow's unresolved references, each on a line below it. */
+export const UNRESOLVED_REFERENCES = "flow has unresolved references";
+
 /** What an error says of a memory read where it can't be, before the site's tail. */
 const MEMORY_USE =
   "is a memory; use it whole as an agent input, in prompt text, as a child's memory input of the same type, " +
@@ -245,6 +248,19 @@ const MEMORY_VALUE_TAIL = "(not inside a list, record or dict)";
 const MEMORY_SITE_TAIL = "(it can't be read here)";
 
 /**
+ * The line refusing the memory read `read` (`${input.lessons}`) at `where` (`node 'n' input 'q' from`),
+ * which `tail` says why.
+ */
+export function memoryReadProblem(where: string, read: string, tail: string): string {
+  return `${where}: ${read} ${MEMORY_USE} ${tail}`;
+}
+
+/** Why a node of `kind`, which takes no memory, refuses one as an input. */
+export function kindMemoryTail(kind: string): string {
+  return `(a ${kind} node can't take a memory)`;
+}
+
+/**
  * Return why node `node`'s input `param` can't take a memory whole, or `null` when it can: an
  * AGENT input, or an input a named call's, loop's or map's child declares as a memory. The child's
  * type is checked with the other binding types.
@@ -252,9 +268,7 @@ const MEMORY_SITE_TAIL = "(it can't be read here)";
 function memorySiteTail(nodeId: string, node: Node, param: string): string | null {
   if (node instanceof AgentNode) return null;
   if (node instanceof CaseNode) return EXPRESSION_TAIL;
-  if (!(node instanceof CallNode || node.isLoop || node.bindsPerItem)) {
-    return `(a ${node.kind} node can't take a memory)`;
-  }
+  if (!(node instanceof CallNode || node.isLoop || node.bindsPerItem)) return kindMemoryTail(node.kind);
   if (nodeId.startsWith(SYNTH_PREFIX)) return "(pass it through a named `kind: call` node)";
   const childInputs = (node as { childInputs?: readonly Parameter[] }).childInputs ?? [];
   if (childInputs.some((input) => input.name === param && isMemoryType(input.contract?.type))) return null;
@@ -600,7 +614,7 @@ export function validateReferences(
     let tail = memoryTail;
     if (parts.length > 2) tail = "(a memory has no fields)";
     else if (lone === null || lone.length !== 2) tail = EXPRESSION_TAIL;
-    if (tail !== null) errors.push([`${where}: \${input.${parts[1]}} ${MEMORY_USE} ${tail}`, rng]);
+    if (tail !== null) errors.push([memoryReadProblem(where, `\${input.${parts[1]}}`, tail), rng]);
   }
 
   /**
@@ -630,7 +644,7 @@ export function validateReferences(
         if (!memories.has(parts[0]!)) continue;
         if (lone !== null && lone.length === 1) continue;
         const tail = parts.length > 1 ? "(a memory has no fields)" : "(not inside an expression)";
-        errors.push([`${where}: \${${parts[0]}} ${MEMORY_USE} ${tail}`, rng]);
+        errors.push([memoryReadProblem(where, `\${${parts[0]}}`, tail), rng]);
       }
     }
   }
@@ -811,7 +825,7 @@ export function validateReferences(
   }
 
   for (const [headline, problems] of [
-    ["flow has unresolved references", errors],
+    [UNRESOLVED_REFERENCES, errors],
     ["flow has ?. inside a reference root", misplacedOptionals],
     ["flow has constructor calls that can never succeed", constructorProblems],
     ["flow has expressions that can never succeed", typeProblems],
@@ -899,7 +913,7 @@ function checkAgentPrompts(
       }
       const ref = `\${${item.splice}}`;
       if (memories.has(item.splice)) {
-        sites.error(`${where}: ${ref} ${MEMORY_USE} (not as a prompt splice)`, rng);
+        sites.error(memoryReadProblem(where, ref, "(not as a prompt splice)"), rng);
         return;
       }
       sites.checkTemplate(where, ref, declared, rng, promptSite);
@@ -986,7 +1000,7 @@ function checkMapInputs(
     if (reserved.has(param)) continue;
     sites.scan(
       src,
-      `node ${reprText(nodeId)} map input ${reprText(param)} from`,
+      `${result.siteName(nodeId, `map input ${reprText(param)}`)} from`,
       franges.get(siteKey("input", param)) ?? inputRng,
       {
         siteProducers: nodeProducers,

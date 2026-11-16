@@ -1,0 +1,21 @@
+# A map runs a built-in per item: `sleep`, whose past deadline returns null at once, and `ask`, where
+# each item asks its own question under its own node path, `asked#<i>/asked`.
+kind: run
+flow: |
+  id: f
+  name: f
+  nodes:
+    waited: {kind: map, over: [a, b], call: sleep, input: {until: "2020-01-01T00:00:00Z"}}
+    asked: {kind: map, over: [Name?, Town?], call: ask, input: {prompt: "${item}"}, output: !str}
+  output:
+    waited: ${waited.output}
+    asked: ${asked.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  human:
+    asked#0/asked: [Ada]
+    asked#1/asked: [Oslo]
+expect:
+  output:
+    status: succeeded
+    output: {waited: [null, null], asked: [Ada, Oslo]}

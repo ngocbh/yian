@@ -165,9 +165,9 @@ const IGNORED_KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
   [NodeKind.CODE]: ["mode", "baseDir", "sourceFile", "codeLineStarts", "codeOrigin", "codeLineOrigins", "stripped"],
   // `inputTypes` is derived from wiring and producer contracts; the run-start tool check reads it.
   // `toolId` is the name messages show, derived from `toolRef`. `memoryTool` mirrors the reserved
-  // `__memory_<input>` wiring of a memory's tool, which `toolRef` names as authored. `site` and
-  // `hint` only word run-start messages.
-  [NodeKind.TOOL]: ["inputTypes", "toolId", "memoryTool", "site", "hint"],
+  // `__memory_<input>` wiring of a memory's tool, which `toolRef` names as authored. `site`,
+  // `bodyOf` and `hint` only word run-start messages.
+  [NodeKind.TOOL]: ["inputTypes", "toolId", "memoryTool", "site", "bodyOf", "hint"],
   [NodeKind.CASE]: [],
   // `childInputs` duplicates the recursive child's START signature.
   [NodeKind.CALL]: ["childInputs"],

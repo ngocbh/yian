@@ -1,0 +1,278 @@
+/**
+ * A `map` whose `call:` names a tool runs it once per item through a one-node body yian generates
+ * at load: the body's node takes the map's id and the author's `call:`, `input:` keys, `retries:`,
+ * `output:`, `adaptive_questions:` and `asserts:`, so its load errors point at the author's fields.
+ */
+
+import { afterAll, beforeAll, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { flowFingerprint } from "../../src/compile/manifest.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
+import { FileMemory } from "../../src/memory/file.ts";
+import { outputContractType } from "../../src/nodes/contracts.ts";
+import { ToolNode } from "../../src/nodes/tool/node.ts";
+import { runFlow, runStartTools, staticNodes } from "../../src/run.ts";
+import { tool } from "../../src/tools/function_tools.ts";
+import { canonicalTypeLabel } from "../../src/typesys/values.ts";
+
+import { loadErrorAsync } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+
+let tmp: string;
+
+beforeAll(() => {
+  tmp = realpathSync(mkdtempSync(join(tmpdir(), "yian-map-tools-")));
+  mkdirSync(join(tmp, "lessons"));
+});
+
+afterAll(() => rmSync(tmp, { recursive: true, force: true }));
+
+/** The memory `lessons`, which `app` declares. */
+const lessons = () => new FileMemory({ root: join(tmp, "lessons"), id: "t/lessons" });
+
+/** A flow with the inputs `ids`, the memory `lessons` and `inputs` (lines under `input:`), and `nodes`. */
+const app = (nodes: string, inputs = "") =>
+  `id: app\nname: app\ninput:\n  ids: !list(str)\n  lessons: !FileMemory\n${inputs}nodes:\n${nodes}`;
+
+/** `app` whose map `fetch` over `${input.ids}` calls `call` with the node's other `lines`. */
+const mapApp = (call: string, lines = "", inputs = "") =>
+  app(`  fetch:\n    kind: map\n    over: \${input.ids}\n    call: ${call}\n${lines}`, inputs);
+
+/** The TOOL node a map's generated body runs, by the map's id. */
+async function bodyNode(text: string, mapId = "fetch"): Promise<ToolNode> {
+  const found = staticNodes(await loadFlow(text)).find(([path]) => path === `${mapId}/${mapId}`);
+  return found![1] as ToolNode;
+}
+
+/** The message and the source text at the range loading `text` fails with. */
+async function failure(text: string): Promise<[string, string]> {
+  const error = await loadErrorAsync(loadFlow(text));
+  const range = error.diagnostic.frames.at(-1)!.range!;
+  const lines = text.split("\n");
+  const at =
+    range.startLine === range.endLine
+      ? lines[range.startLine - 1]!.slice(range.startCol - 1, range.endCol - 1)
+      : `${lines[range.startLine - 1]!.slice(range.startCol - 1)}...`;
+  return [error.message, at];
+}
+
+/** A host tool named `search`. */
+const search = tool({
+  name: "search",
+  description: "A host tool.",
+  parameters: { type: "object", properties: {} },
+  execute: () => "found",
+});
+
+/** The names of the inputs the START node of map `fetch`'s generated body declares. */
+async function bodyInputs(text: string): Promise<string[]> {
+  const start = staticNodes(await loadFlow(text)).find(([path]) => path === "fetch/__start__")![1];
+  return start.params!.map((parameter) => parameter.name);
+}
+
+test("a literal argument goes straight to the body's node; only a binding is a body input", async () => {
+  const text = mapApp("search", "    input:\n      q: ${item}\n      limit: 2\n      tags: [a, b]\n");
+  expect(await bodyInputs(text)).toEqual(["q"]);
+  expect((await bodyNode(text)).params!.map((parameter) => parameter.name)).toEqual(["q", "limit", "tags"]);
+});
+
+// Each row: a built-in and literal arguments that a `call` node refuses at load.
+test.each([
+  ["sleep", "{for: 5}"],
+  ["sleep", "{for: soon}"],
+  ["sleep", "{until: tomorrow}"],
+  ["ask", "{prompt: hi, timeout: soon}"],
+  ["ask", "{questions: [{header: h}]}"],
+])("a map's %s with literal %s fails at load as a call node does, at the author's value", async (call, args) => {
+  const onMap = await failure(mapApp(call, `    input: ${args}\n`));
+  const onCall = await failure(app(`  fetch:\n    kind: call\n    call: ${call}\n    input: ${args}\n`));
+  expect(onMap).toEqual(onCall);
+});
+
+test("retries:, output: and asserts: move to the body's node; the map keeps its own fields", async () => {
+  const lines =
+    "    input:\n      q: ${item}\n    retries: 2\n    output: !str\n    asserts: [output != '']\n" +
+    "    node_name: Fetch\n";
+  const node = await bodyNode(mapApp("search", lines));
+
+  expect(node.id).toBe("fetch");
+  expect(node.retries).toBe(2);
+  expect(canonicalTypeLabel(outputContractType(node.outputContract)!)).toBe("str");
+  expect(node.postAsserts.map((assertion) => assertion.display)).toEqual(["output != ''"]);
+  expect(node.params!.map((parameter) => parameter.name)).toEqual(["q"]);
+  const map = (await loadFlow(mapApp("search", lines))).compiled.nodes.get("fetch")!;
+  expect(map.title).toBe("Fetch");
+  expect(canonicalTypeLabel(outputContractType(map.outputContract)!)).toBe("list(str)");
+});
+
+test("a body input takes its binding's proven type, else Optional(Any)", async () => {
+  const lines =
+    "    input:\n      q: ${item}\n      n: !int ${other.output}\n      raw: ${other.output}\n" +
+    "  other: {kind: call, call: lookup}\n";
+  const start = staticNodes(await loadFlow(mapApp("search", lines))).find(([path]) => path === "fetch/__start__")![1];
+  const types = Object.fromEntries(
+    start.params!.map((parameter) => [parameter.name, canonicalTypeLabel(parameter.contract!.type)]),
+  );
+
+  expect(types).toEqual({ q: "str", n: "int", raw: "Optional(Any)" });
+});
+
+// Each row: the map's `call:` and other lines, the load error, and the text it points at.
+test.each([
+  ["search", "    retries: -1\n", "node 'fetch' (kind=map): `retries:` must be a non-negative integer, got -1", "-1"],
+  [
+    "{crm: sleep}",
+    "",
+    "node 'fetch' (kind=map): `call: {crm: sleep}`: sleep is a built-in, not a group's tool; write `call: sleep`",
+    "{crm: sleep}",
+  ],
+  ["{lessons: raed}", "", "node 'fetch' (kind=map) grants {lessons: [raed]}: `lessons` has no tool `raed`", "{lessons: raed}"],
+  [
+    "{load: skill}",
+    "",
+    "node 'fetch' (kind=map): `call: {load: skill}` would show as `load_skill`, a name yian reserves; rename the " +
+      "group or the tool",
+    "{load: skill}",
+  ],
+  ["search", "    output: !Nope\n", "unknown type 'Nope'", "!Nope"],
+  [
+    "search",
+    "    adaptive_questions: {prompt: hi}\n",
+    "node 'fetch' (call: search): `adaptive_questions:` applies only to call: ask",
+    "adaptive_questions",
+  ],
+  [
+    "{crm: [a]}",
+    "",
+    "node 'fetch' (kind=map): `call: {crm: ...}` names one def or tool; write `call: {crm: a}`",
+    "{crm: [a]}",
+  ],
+  [
+    "sleep",
+    "    input:\n      for: ${other.output}\n  other: {kind: call, call: lookup}\n",
+    "node 'fetch' (call: sleep) input 'for': a duration reference must be typed str (tag it: `for: !str ${...}`)",
+    "${other.output}",
+  ],
+  [
+    "search",
+    "    input:\n      q: ${input.nope}\n",
+    "node 'fetch' map input 'q' from: reference ${input.nope} points to unknown flow input 'nope'",
+    "${input.nope}",
+  ],
+])("call: %s with %j fails at the author's field", async (call, lines, message, at) => {
+  const [got, where] = await failure(mapApp(call, lines));
+  expect(got).toContain(message);
+  expect(where).toBe(at);
+});
+
+test("an unknown field on a map naming a tool lists the tool call's fields among those allowed", async () => {
+  expect(await failure(mapApp("search", "    retry: 2\n"))).toEqual([
+    "node 'fetch' (kind=map): field 'retry' is not allowed (allowed: adaptive_questions, asserts, call, depends_on, " +
+      "env, input, kind, node_name, output, over, parallel, retries, runs_after)",
+    "2",
+  ]);
+});
+
+test("a tool given an inbox gets the map's inbox rule, naming the tool", async () => {
+  const text = mapApp("search", "    input:\n      box: ${input.box}\n", "  box: !Inbox(str)\n");
+  expect((await failure(text))[0]).toBe(
+    "map node 'fetch': tool `search` declares inbox input 'box'; a map body can't read an inbox (per-instance " +
+      "inboxes aren't supported yet)",
+  );
+});
+
+test("a memory's tool reads the memory through the body, never as an argument", async () => {
+  const text = `${mapApp("{lessons: read}", "    input:\n      path: ${item}\n")}output: \${fetch.output}\n`;
+  const node = await bodyNode(text);
+  expect(node.params!.map((parameter) => parameter.name)).toEqual(["path"]);
+  expect(node.memoryTool).toBe(true);
+});
+
+test("a memory bound to a tool's argument is refused as a call node refuses it, at the author's binding", async () => {
+  const args = "    input:\n      q: ${input.lessons}\n";
+  const onMap = await failure(mapApp("search", args));
+  expect(onMap).toEqual(await failure(app(`  fetch:\n    kind: call\n    call: search\n${args}`)));
+  expect(onMap[1]).toBe("${input.lessons}");
+});
+
+test("an argument that isn't an identifier, or is named over, reaches the tool as written", async () => {
+  const echo = tool({
+    name: "echo",
+    description: "Return the arguments.",
+    parameters: { type: "object", properties: { "max-results": { type: "string" }, over: { type: "string" } } },
+    execute: (args: Record<string, unknown>) => args,
+  });
+  const text = `${mapApp("echo", "    input:\n      max-results: ${item}\n      over: ${item}\n")}output: \${fetch.output}\n`;
+  const result = await runFlow(await loadFlow(text), { ids: ["a"], lessons: lessons() }, {
+    env: hostEnv(tmp),
+    tools: { echo },
+  });
+  expect(result.output).toEqual([{ "max-results": "a", over: "a" }]);
+});
+
+// Each row: an argument a body input is named apart from, its binding, and the error, which names
+// the argument as written.
+test.each([
+  ["max-results", "${nope.output}", "node 'fetch' map input 'max-results' from: reference ${nope.output} uses unknown"],
+  ["over", "${nope.output}", "node 'fetch' map input 'over' from: reference ${nope.output} uses unknown"],
+  ["max-results", "${fetch.output}", "node build dependency cycle: fetch.input.max-results -> fetch"],
+  ["over", "${fetch.output}", "node build dependency cycle: fetch.input.over -> fetch"],
+])("a binding error on argument %s (%s) names it as written", async (key, binding, message) => {
+  const [got, at] = await failure(mapApp("search", `    input:\n      ${key}: ${binding}\n`));
+  expect(got).toContain(message);
+  expect(got).not.toContain("arg_");
+  expect(at).toBe(binding);
+});
+
+test("an input: key named as the memory the map calls is refused at the key", async () => {
+  const text = mapApp("{lessons: read}", "    input:\n      lessons: ${input.lessons}\n      path: a.md\n");
+  expect(await failure(text)).toEqual([
+    "map node 'fetch': `lessons` is the memory this node calls; yian passes it, so remove the entry",
+    "lessons",
+  ]);
+});
+
+test("run start names a map's tool by the map", async () => {
+  const text =
+    "id: r\nname: r\ndefs:\n  c:\n    nodes:\n" +
+    '      fetch: {kind: map, over: [a], call: serch, input: {q: "${item}"}}\n' +
+    "    output: ${fetch.output}\nnodes:\n  run: {kind: call, call: c}\n";
+  const flow = await loadFlow(text);
+
+  expect(runStartTools(flow)).toEqual([{ node: "run/fetch", site: "map node 'fetch'", name: "serch", hint: null }]);
+  const run = runFlow(flow, {}, { env: hostEnv(tmp), tools: { search } });
+  expect(((await run.catch((caught: unknown) => caught)) as Error).message).toBe(
+    "map node 'fetch' in 'run' names tool 'serch', which isn't in this run's tools; known tools: [\"search\"]; " +
+      "did you mean 'search'?",
+  );
+});
+
+// Each row: the field on a map naming the flow `greet`, and the refusal.
+test.each([
+  ["retries: 2", "`retries:` doesn't apply to a flow call: a flow retries inside its own nodes"],
+  ["output: !int", "`output:` doesn't apply to a flow call: a flow's result type comes from the flow"],
+  ["adaptive_questions: {prompt: hi}", "`adaptive_questions:` applies only to `call: ask`"],
+])("a map naming a flow refuses %s", async (field, problem) => {
+  const text =
+    'id: r\nname: r\ndefs:\n  greet: {input: {x: !int}, kind: code, code: "return 1", output: !int}\n' +
+    `nodes:\n  m: {kind: map, over: [1], call: greet, input: {x: "\${item}"}, ${field}}\n`;
+  expect((await failure(text))[0]).toBe(`node 'm' (kind=map): ${problem}`);
+});
+
+test("a map over a flow keeps its fingerprint", async () => {
+  const text =
+    "id: r\nname: r\ninput:\n  ns: !list(int)\n" +
+    'defs:\n  double: {input: {x: !int}, kind: code, code: "return inputs.x * 2", output: !int}\n' +
+    "nodes:\n" +
+    '  named: {kind: map, call: double, over: "${input.ns}", input: {x: "${item}"}}\n' +
+    '  inline:\n    kind: map\n    over: "${input.ns}"\n    input: {x: "${item}"}\n' +
+    '    nodes:\n      d: {kind: code, code: "return inputs.x + 1", input: {x: "${input.x}"}, output: !int}\n' +
+    "    output: ${d.output}\n" +
+    "output:\n  named: ${named.output}\n  inline: ${inline.output}\n";
+  expect(flowFingerprint((await loadFlow(text)).compiled)).toBe(
+    "2a00c8f82aaae892fab1e07490e03b76f2109a09efffa7a6efd5a7c8976cd91d",
+  );
+});

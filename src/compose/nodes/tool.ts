@@ -67,7 +67,8 @@ export type ToolField = "tool_id" | "call";
 /** The fields `ToolDescriptor`'s constructor takes: the common ones and the TOOL's own. */
 export interface ToolDescriptorFields extends NodeDescriptorFields {
   toolRef: ToolRef;
-  toolField?: ToolField;
+  writtenKind?: string;
+  autoWiredGroup?: boolean;
   retries?: number;
   asserts?: readonly string[] | null;
   adaptiveQuestions?: unknown;
@@ -75,8 +76,9 @@ export interface ToolDescriptorFields extends NodeDescriptorFields {
 
 /**
  * How a TOOL node's load messages name the node and the field its tool is written in, so each
- * message reads in the author's own words: `kind=tool` and `tool_id:`, or `kind=call` and `call:`.
- * A lifted `call(...)` is named by its site instead, and its tool is written as a directive.
+ * message reads in the author's own words: `kind=tool` and `tool_id:`, or `kind=call` and `call:`
+ * (`kind=map` for the node a map's tool call generates). A lifted `call(...)` is named by its site
+ * instead, and its tool is written as a directive.
  */
 class ToolWording {
   /** The node's own id. */
@@ -88,10 +90,10 @@ class ToolWording {
   /** A lifted `call(...)`'s labels (`ToolDescriptor.fieldLabels`); empty for a node in `nodes:`. */
   readonly labels: ReadonlyMap<string, string>;
 
-  constructor(nodeId: string, field: ToolField, labels: ReadonlyMap<string, string> = new Map()) {
+  constructor(nodeId: string, kind: string, labels: ReadonlyMap<string, string> = new Map()) {
     this.nodeId = nodeId;
-    this.field = field;
-    this.kind = field === "call" ? "call" : ToolDescriptor.kind;
+    this.kind = kind;
+    this.field = toolField(kind);
     this.labels = labels;
   }
 
@@ -185,7 +187,8 @@ function closeCallable(ctx: BuildContext, ref: ToolRef, wording: ToolWording): C
     }
   }
   if (group !== null) {
-    for (const [input, typ] of ctx.flowInputs) {
+    // A generated body's inputs are its node's arguments; the memories are its owner's flow's.
+    for (const [input, typ] of ctx.bodyOf?.flowInputs ?? ctx.flowInputs) {
       if (isMemoryType(typ)) offer(input, "memory tool", wording.ref(input, name));
     }
   }
@@ -193,9 +196,18 @@ function closeCallable(ctx: BuildContext, ref: ToolRef, wording: ToolWording): C
   return close === undefined ? null : { ...candidates.get(close)!, score: closeness(group ?? name, close) };
 }
 
-/** The field a TOOL body in `cursor` names its tool in: `call` under `kind: call`, else `tool_id`. */
-function toolFieldOf(cursor: SourceCursor): ToolField {
-  return cursor.get("kind") === "call" ? "call" : "tool_id";
+/**
+ * The kind a TOOL body in `cursor` was written as: `tool`, `call`, or the `map` whose tool call
+ * generated it.
+ */
+function writtenKindOf(cursor: SourceCursor): string {
+  const kind = cursor.get("kind");
+  return typeof kind === "string" ? kind : ToolDescriptor.kind;
+}
+
+/** The field a TOOL body written as `kind` names its tool in: `tool_id` under `kind: tool`, else `call`. */
+function toolField(kind: string): ToolField {
+  return kind === ToolDescriptor.kind ? "tool_id" : "call";
 }
 
 /**
@@ -210,8 +222,9 @@ function toolFieldOf(cursor: SourceCursor): ToolField {
  * a yian built-in, whose inputs are checked at load and whose output is inferred (`take`, `sleep`)
  * or is the answer type (`ask`, which alone takes `adaptive_questions:`).
  *
- * A `kind: call` body whose `call:` names a tool parses here too, its `call:` read as `tool_id:`;
- * `toolField` records which the author wrote, so the messages use the author's words.
+ * A `kind: call` body whose `call:` names a tool parses here too, its `call:` read as `tool_id:`,
+ * and so does the node a map naming a tool generates; `writtenKind` records the kind the author
+ * wrote, so the messages use the author's words.
  */
 export class ToolDescriptor extends NodeDescriptor {
   static override readonly kind = "tool";
@@ -232,8 +245,13 @@ export class ToolDescriptor extends NodeDescriptor {
 
   /** The tool, looked up in the run's `ToolSet`: a bare id, or a group's tool. */
   readonly toolRef: ToolRef;
-  /** The field the author wrote the tool in. */
-  readonly toolField: ToolField;
+  /** The kind the author wrote: `tool`, `call`, or the `map` that generated the node. */
+  readonly writtenKind: string;
+  /**
+   * Whether `input:` binds the tool's group by a binding yian generated, as a one-node flow binds
+   * each of its inputs; such a binding has no key of its own.
+   */
+  readonly autoWiredGroup: boolean;
   /** The effective retry count, so the manifest holds it; zero is left out of the manifest. */
   readonly retries: number;
   /** The node asserts. */
@@ -250,7 +268,8 @@ export class ToolDescriptor extends NodeDescriptor {
   constructor(fields: ToolDescriptorFields) {
     super(fields);
     this.toolRef = fields.toolRef;
-    this.toolField = fields.toolField ?? "tool_id";
+    this.writtenKind = fields.writtenKind ?? ToolDescriptor.kind;
+    this.autoWiredGroup = fields.autoWiredGroup ?? false;
     this.retries = fields.retries ?? current().toolRetries;
     this.asserts = fields.asserts ?? [];
     this.adaptiveQuestions = fields.adaptiveQuestions ?? null;
@@ -261,19 +280,24 @@ export class ToolDescriptor extends NodeDescriptor {
     return visibleToolName(this.toolRef.group, this.toolRef.name);
   }
 
+  /** The field the author wrote the tool in. */
+  get toolField(): ToolField {
+    return toolField(this.writtenKind);
+  }
+
   /** How this node's load messages name it and its tool's field. */
   get wording(): ToolWording {
-    return new ToolWording(this.id, this.toolField, this.fieldLabels);
+    return new ToolWording(this.id, this.writtenKind, this.fieldLabels);
   }
 
-  /** `call` for a `kind: call` body naming a tool. */
+  /** `call` for a `kind: call` body naming a tool, `map` for a map's. */
   static override _writtenKind(cursor: SourceCursor): string {
-    return toolFieldOf(cursor) === "call" ? "call" : this.kind;
+    return writtenKindOf(cursor);
   }
 
-  /** `call` for `tool_id` in a `kind: call` body naming a tool. */
+  /** `call` for `tool_id` in a body written as `kind: call` or `kind: map`. */
   static override _writtenKey(key: string, cursor: SourceCursor): string {
-    return key === "tool_id" ? toolFieldOf(cursor) : super._writtenKey(key, cursor);
+    return key === "tool_id" ? toolField(writtenKindOf(cursor)) : super._writtenKey(key, cursor);
   }
 
   /**
@@ -290,7 +314,7 @@ export class ToolDescriptor extends NodeDescriptor {
     cursor: SourceCursor,
   ): InstanceType<T> {
     const diagnostics = LoadDiagnostics.fromCursor(cursor);
-    const wording = new ToolWording(nodeId, toolFieldOf(cursor));
+    const wording = new ToolWording(nodeId, writtenKindOf(cursor));
     const toolId = cursor.get("tool_id");
     if (typeof toolId === "string" && cursor.has("adaptive_questions")) {
       if (toolId !== ASK && toolId !== ASK_USER) {
@@ -314,7 +338,12 @@ export class ToolDescriptor extends NodeDescriptor {
       throw questionsReserved(wording, rangeAt(cursor, ["inputs", QUESTIONS_INPUT]) ?? desc.range, diagnostics);
     }
     recordAdaptiveRanges(desc, cursor);
-    return desc as InstanceType<T>;
+    // A one-node flow's generated `<group>: ${input.<group>}` has no authored text of its own.
+    const autoWiredGroup =
+      group !== null &&
+      desc.inputs[group] === `\${input.${group}}` &&
+      cursor.child("inputs").child(group).scalarText === null;
+    return (autoWiredGroup ? desc.replace({ autoWiredGroup }) : desc) as InstanceType<T>;
   }
 
   /**
@@ -325,7 +354,7 @@ export class ToolDescriptor extends NodeDescriptor {
    * @throws LoadError at `fields.range` as the field checks throw, or for an `ask`'s `__questions`.
    */
   static lift(fields: NodeDescriptorFields & { toolId: unknown }, diagnostics: LoadDiagnostics): ToolDescriptor {
-    const own: Record<string, unknown> = { ...fields, toolField: "call" };
+    const own: Record<string, unknown> = { ...fields, writtenKind: "call" };
     const wording = new ToolWording(fields.id, "call", fields.fieldLabels);
     ToolDescriptor.readFields(wording, own, new Map(), fields.range ?? null, diagnostics);
     const desc = new ToolDescriptor(own as unknown as ToolDescriptorFields);
@@ -346,9 +375,9 @@ export class ToolDescriptor extends NodeDescriptor {
     diagnostics: LoadDiagnostics,
     cursor: SourceCursor,
   ): void {
-    const field = toolFieldOf(cursor);
-    fields["toolField"] = field;
-    ToolDescriptor.readFields(new ToolWording(nodeId, field), fields, ranges, ownRange, diagnostics);
+    const kind = writtenKindOf(cursor);
+    fields["writtenKind"] = kind;
+    ToolDescriptor.readFields(new ToolWording(nodeId, kind), fields, ranges, ownRange, diagnostics);
     super._validateFields(nodeId, fields, ranges, ownRange, diagnostics, cursor);
   }
 
@@ -536,7 +565,8 @@ export class ToolDescriptor extends NodeDescriptor {
     const mayBeTypo = this.toolField === "call" && module === null && !builtin;
     const hint = mayBeTypo ? closeCallable(ctx, this.toolRef, this.wording) : null;
     const site = this.wording.site;
-    const node = new ToolNode(this.id, { toolId: this.toolRef, title: this.nodeName, retries, module, site, hint });
+    const bodyOf = site === null ? (ctx.bodyOf?.label ?? null) : null;
+    const node = new ToolNode(this.id, { toolId: this.toolRef, title: this.nodeName, retries, module, site, bodyOf, hint });
     const wiring = this.sinkWiring();
     if (this.toolId === TAKE) {
       node.outputContract = this.buildTake(ctx);
@@ -611,7 +641,8 @@ export class ToolDescriptor extends NodeDescriptor {
 
   /**
    * Build a TOOL node calling the tool `toolRef.name` of the memory input `toolRef.group`, whose
-   * type is `memory`.
+   * type is `memory`. The memory is routed to its tool, never passed as an argument, so a one-node
+   * flow's generated binding of it (`autoWiredGroup`) isn't one of the node's inputs.
    *
    * @throws LoadError when the memory is Optional, which a run may leave unbound, or its type lacks
    *   the tool.
@@ -643,8 +674,9 @@ export class ToolDescriptor extends NodeDescriptor {
       memoryTool: true,
     });
     node.outputContract = this.outputContract(ctx);
-    node.params = this.sinkParams();
     const wiring = this.sinkWiring();
+    if (this.autoWiredGroup) wiring.delete(input);
+    node.params = this.sinkParams().filter((parameter) => wiring.has(parameter.name));
     wiring.set(memoryKey(input), memoryBinding(input));
     return this._finish(node, wiring);
   }

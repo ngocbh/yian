@@ -419,6 +419,14 @@ test.each([
   },
 );
 
+test("run start checks a map's module tool call by the map", async () => {
+  writeFileSync(join(dir, "crm.ts"), tools(["lookup"]));
+  const wrong = app({ crm: "./crm.ts" }, ["g: {kind: map, over: [a], call: {crm: lookup}, input: {nope: x}}"]);
+  await expect(run(wrong)).rejects.toThrow(
+    new RangeError("map node 'g' input 'nope': tool 'crm_lookup' takes no such input; it takes [\"id\"]"),
+  );
+});
+
 /** The payload of the `run_started` record of the log at `log`. */
 function started(log: string): Record<string, unknown> {
   return JSON.parse(readFileSync(log, "utf8").split("\n")[0]!).payload;

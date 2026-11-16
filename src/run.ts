@@ -3435,7 +3435,7 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
           reason += `; did you mean ${runFirst ? `${run} or ${own}` : `${own} or ${run}`}?`;
         }
       }
-      throw new YianRangeError(`${toolNodeName(nodeId, call.site)} names ${reason}`);
+      throw new YianRangeError(`${toolNodeName(nodeId, call)} names ${reason}`);
     }
   }
 }
@@ -3452,15 +3452,25 @@ export function hintText(hint: Pick<CallableHint, "what" | "name">, { quoted }: 
 }
 
 /**
- * How run start names the static TOOL node at `nodePath`, or its input `input`: `TOOL node 'c/n'`
- * (`... input 'q'`), or a lifted `call(...)` by its `site` (`... argument 'q'`), followed by `in`
- * the path of the child flow it is in.
+ * How run start names the static TOOL node at `nodePath` making `call`, or its input `input`:
+ * `TOOL node 'c/n'` (`... input 'q'`); a lifted `call(...)` by its `site` (`... argument 'q'`); or
+ * a map's or loop's generated body by that node, `bodyOf` (`map node 'm' input 'q'`). A site or
+ * `bodyOf` is followed by `in` the path of the child flow the node it names is in.
  */
-function toolNodeName(nodePath: string, site: string | null, input: string | null = null): string {
-  if (site === null) return `TOOL node ${reprText(nodePath)}${input === null ? "" : ` input ${reprText(input)}`}`;
-  const argument = input === null ? "" : ` argument ${reprText(input)}`;
-  const slash = nodePath.lastIndexOf("/");
-  return `${site}${argument}${slash === -1 ? "" : ` in ${reprText(nodePath.slice(0, slash))}`}`;
+function toolNodeName(
+  nodePath: string,
+  call: Pick<HostToolCall, "site" | "bodyOf">,
+  input: string | null = null,
+): string {
+  const { site, bodyOf } = call;
+  if (site === null && bodyOf === null) {
+    return `TOOL node ${reprText(nodePath)}${input === null ? "" : ` input ${reprText(input)}`}`;
+  }
+  const named = input === null ? "" : ` ${site === null ? "input" : "argument"} ${reprText(input)}`;
+  // A generated body's node is at `<map path>/<map id>`.
+  const path = site === null ? nodePath.slice(0, nodePath.lastIndexOf("/")) : nodePath;
+  const slash = path.lastIndexOf("/");
+  return `${site ?? bodyOf}${named}${slash === -1 ? "" : ` in ${reprText(path.slice(0, slash))}`}`;
 }
 
 /**
@@ -3468,9 +3478,9 @@ function toolNodeName(nodePath: string, site: string | null, input: string | nul
  * `yian check --json` and `check_flow` give it.
  */
 export interface RunStartTool {
-  /** The node's path: `c/n`, or a lifted `call(...)`'s own id, `__call_0`. */
+  /** The node's path: `c/n`, a lifted `call(...)`'s own id, `__call_0`, or the path of the map or loop whose generated body it is. */
   readonly node: string;
-  /** A lifted `call(...)`'s site, `node 'n' input 'x' call(gret)`; else `null`. */
+  /** A lifted `call(...)`'s site, `node 'n' input 'x' call(gret)`, or that map or loop, `map node 'm'`; else `null`. */
   readonly site: string | null;
   /** The tool as the node writes it: `search`, `{github: search}`, or `github.search` in a `call(...)`. */
   readonly name: string;
@@ -3480,7 +3490,7 @@ export interface RunStartTool {
 
 /** How a message names `tool`'s node: `node 'c/n'`, or its site, with `in` the child flow it is in. */
 export function runStartLabel(tool: RunStartTool): string {
-  return tool.site === null ? `node ${reprText(tool.node)}` : toolNodeName(tool.node, tool.site);
+  return tool.site === null ? `node ${reprText(tool.node)}` : toolNodeName(tool.node, { site: tool.site, bodyOf: null });
 }
 
 /**
@@ -3501,7 +3511,9 @@ export function runStartTools(flow: ComposedFlow | Flow): RunStartTool[] {
     if (call === null || call.module !== null) continue;
     if (call.group === null && BUILTIN_TOOL_IDS.has(call.toolId as BuiltinToolId)) continue;
     const hint = call.hint === null ? null : { what: call.hint.what, name: call.hint.name };
-    found.push({ node: nodePath, site: call.site, name: writtenTool(call.group, call.toolId, call.site), hint });
+    const name = writtenTool(call.group, call.toolId, call.site);
+    if (call.bodyOf === null) found.push({ node: nodePath, site: call.site, name, hint });
+    else found.push({ node: nodePath.slice(0, nodePath.lastIndexOf("/")), site: call.bodyOf, name, hint });
   }
   return found;
 }
@@ -3748,7 +3760,7 @@ function checkToolInputs(
     if (!inputs.has(name) && extra === undefined) {
       const taken = [...inputs.keys()].sort(compareCodeUnits);
       throw new YianRangeError(
-        `${toolNodeName(nodeId, call.site, name)}: tool ${tool} takes no such ` +
+        `${toolNodeName(nodeId, call, name)}: tool ${tool} takes no such ` +
           `input; it takes ${writeAsText(taken)}`,
       );
     }
@@ -3759,7 +3771,7 @@ function checkToolInputs(
     const noun = call.site === null ? "input" : "argument";
     const named = missing.length === 1 ? `${noun} ${reprText(missing[0]!)}` : `${noun}s ${writeAsText(missing)}`;
     throw new YianRangeError(
-      `${toolNodeName(nodeId, call.site)} is missing ${named} that tool ${tool} requires`,
+      `${toolNodeName(nodeId, call)} is missing ${named} that tool ${tool} requires`,
     );
   }
   for (const [name, inferred] of call.inputTypes) {
@@ -3768,7 +3780,7 @@ function checkToolInputs(
     // string of digits into an int) is rejected too.
     if (expected !== null && typeRelation(inferred, expected) === "disjoint") {
       throw new YianRangeError(
-        `${toolNodeName(nodeId, call.site, name)}: tool ${tool} takes ` +
+        `${toolNodeName(nodeId, call, name)}: tool ${tool} takes ` +
           `${canonicalTypeLabel(expected)}, but the binding is ${bindingLabel(inferred)}`,
       );
     }
@@ -3785,7 +3797,7 @@ function checkToolOutput(nodeId: string, call: HostToolCall, declaredOutput: Typ
   if (call.outputType === null) return;
   if (typeRelation(declaredOutput, call.outputType) === "disjoint") {
     throw new YianRangeError(
-      `${toolNodeName(nodeId, call.site)} output: declared ${canonicalTypeLabel(call.outputType)}, ` +
+      `${toolNodeName(nodeId, call)} output: declared ${canonicalTypeLabel(call.outputType)}, ` +
         `but tool ${reprText(visibleToolName(call.group, call.toolId))} returns ` +
         canonicalTypeLabel(declaredOutput),
     );

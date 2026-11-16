@@ -1,0 +1,50 @@
+# A map runs a host tool per item, by name and as a host group's `{docs: search}`. `retries:`,
+# `output:` and `asserts:` apply to each item's call: item 0's first `lookup` fails and is retried,
+# and each result is checked against `!str` and `output != ''`. Each call runs under the map's own
+# node id, `found#<i>/found`.
+kind: run
+flow: |
+  id: f
+  name: f
+  nodes:
+    found:
+      kind: map
+      over: ["1", "2"]
+      call: lookup
+      input: {id: "${item}"}
+      retries: 1
+      output: !str
+      asserts: ["output != ''"]
+    searched: {kind: map, over: [one], call: {docs: search}, input: {query: "${item}"}}
+  output:
+    found: ${found.output}
+    searched: ${searched.output}
+env:
+  YIAN_TOOL_RETRY_DELAY_SECONDS: '0'
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    lookup:
+      parameters: {type: object, properties: {id: {type: string}}, required: [id]}
+      results:
+        found#0/found:
+        - raise: {class: TimeoutError, message: slow}
+        - return: Ada
+        found#1/found: [{return: Bo}]
+    docs:
+      group:
+        search:
+          parameters: {type: object, properties: {query: {type: string}}, required: [query]}
+          results: [{return: first}]
+  jitter: [0.0]
+expect:
+  output:
+    status: succeeded
+    output: {found: [Ada, Bo], searched: [first]}
+  tool_calls:
+    lookup:
+    - {args: {id: '1'}, call_id: r1/found#0/found, attempt: 1, node: found#0/found}
+    - {args: {id: '1'}, call_id: r1/found#0/found, attempt: 2, node: found#0/found}
+    - {args: {id: '2'}, call_id: r1/found#1/found, attempt: 1, node: found#1/found}
+    docs_search:
+    - {args: {query: one}, call_id: r1/searched#0/searched, attempt: 1, node: searched#0/searched}

@@ -61,21 +61,27 @@ async function failure(text: string): Promise<[string, string]> {
   return [error.message, at];
 }
 
-/** A host tool taking string `q` that records each call's id and returns `found <q>`. */
+/** A host tool taking string `q` and int `limit` that records each call's id and returns `found <q> <limit>`. */
 function search(calls: string[]) {
   return tool({
     name: "search",
     description: "A host tool.",
-    parameters: { type: "object", properties: { q: { type: "string" } }, required: ["q"] },
+    parameters: { type: "object", properties: { q: { type: "string" }, limit: { type: "integer" } }, required: ["q"] },
     execute: (args: Record<string, unknown>, ctx) => {
       calls.push(ctx.callId);
-      return `found ${String(args["q"])}`;
+      return `found ${String(args["q"])} ${String(args["limit"])}`;
     },
   });
 }
 
+/** The names of the inputs the START node of map `fetch`'s generated body declares. */
+async function bodyInputs(text: string): Promise<string[]> {
+  const start = staticNodes(await loadFlow(text)).find(([path]) => path === "fetch/__start__")![1];
+  return start.params!.map((parameter) => parameter.name);
+}
+
 test("a map runs a host tool once per item, each call under the map's own node id", async () => {
-  const text = `${mapApp("search", "    input:\n      q: ${item}\n")}output: \${fetch.output}\n`;
+  const text = `${mapApp("search", "    input:\n      q: ${item}\n      limit: 2\n")}output: \${fetch.output}\n`;
   const calls: string[] = [];
   const result = await runFlow(await loadFlow(text), { ids: ["a", "b"], lessons: lessons() }, {
     env: hostEnv(tmp),
@@ -83,8 +89,27 @@ test("a map runs a host tool once per item, each call under the map's own node i
     tools: { search: search(calls) },
   });
 
-  expect(result.output).toEqual(["found a", "found b"]);
+  expect(result.output).toEqual(["found a 2", "found b 2"]);
   expect(calls.sort()).toEqual(["r/fetch#0/fetch", "r/fetch#1/fetch"]);
+});
+
+test("a literal argument goes straight to the body's node; only a binding is a body input", async () => {
+  const text = mapApp("search", "    input:\n      q: ${item}\n      limit: 2\n      tags: [a, b]\n");
+  expect(await bodyInputs(text)).toEqual(["q"]);
+  expect((await bodyNode(text)).params!.map((parameter) => parameter.name)).toEqual(["q", "limit", "tags"]);
+});
+
+// Each row: a built-in and literal arguments that a `call` node refuses at load.
+test.each([
+  ["sleep", "{for: 5}"],
+  ["sleep", "{for: soon}"],
+  ["sleep", "{until: tomorrow}"],
+  ["ask", "{prompt: hi, timeout: soon}"],
+  ["ask", "{questions: [{header: h}]}"],
+])("a map's %s with literal %s fails at load as a call node does, at the author's value", async (call, args) => {
+  const onMap = await failure(mapApp(call, `    input: ${args}\n`));
+  const onCall = await failure(app(`  fetch:\n    kind: call\n    call: ${call}\n    input: ${args}\n`));
+  expect(onMap).toEqual(onCall);
 });
 
 test("retries:, output: and asserts: move to the body's node; the map keeps its own fields", async () => {
@@ -107,8 +132,7 @@ test("a body input takes its binding's proven type, else Optional(Any)", async (
   const lines =
     "    input:\n      q: ${item}\n      n: !int ${other.output}\n      raw: ${other.output}\n" +
     "  other: {kind: call, call: lookup}\n";
-  const flow = await loadFlow(mapApp("search", lines));
-  const start = staticNodes(flow).find(([path]) => path === "fetch/__start__")![1];
+  const start = staticNodes(await loadFlow(mapApp("search", lines))).find(([path]) => path === "fetch/__start__")![1];
   const types = Object.fromEntries(
     start.params!.map((parameter) => [parameter.name, canonicalTypeLabel(parameter.contract!.type)]),
   );

@@ -14,8 +14,10 @@
 import { createHash } from "node:crypto";
 
 import { reprText, type SourceRange } from "../../diagnostics.ts";
-import { isRecord, type Value, type ValueRecord } from "../../typesys/values.ts";
+import { isList, isRecord, type Value, type ValueRecord } from "../../typesys/values.ts";
+import { CALL_HEAD } from "../helpers/directives.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
+import { hasSpan } from "../helpers/tags.ts";
 import { readCallTarget } from "../nodes/base.ts";
 import type { CallsTool } from "../nodes/call.ts";
 import { setRecordKey } from "../source/common.ts";
@@ -46,6 +48,13 @@ export class InlineBody {
   readonly inputRanges: ReadonlyMap<string, SourceRange>;
   /** The tool a generated body calls, as `call:` writes it (`{crm: lookup}`); `null` for an authored body. */
   readonly tool: string | null;
+  /** The memory input whose tool a generated body calls; `null` for none. */
+  readonly memory: string | null;
+  /**
+   * A generated body's inputs, each with the `input:` key it passes through, the memory's with its
+   * own name; empty for an authored body.
+   */
+  readonly toolInputs: ReadonlyMap<string, string>;
 
   /** Record one retained body; `owner` is copied and frozen. */
   constructor(fields: {
@@ -56,6 +65,8 @@ export class InlineBody {
     outputCursor: SourceCursor;
     inputRanges: ReadonlyMap<string, SourceRange>;
     tool?: string | null;
+    memory?: string | null;
+    toolInputs?: ReadonlyMap<string, string>;
   }) {
     this.nodeId = fields.nodeId;
     this.owner = Object.freeze([...fields.owner]);
@@ -64,6 +75,8 @@ export class InlineBody {
     this.outputCursor = fields.outputCursor;
     this.inputRanges = fields.inputRanges;
     this.tool = fields.tool ?? null;
+    this.memory = fields.memory ?? null;
+    this.toolInputs = fields.toolInputs ?? new Map();
     Object.freeze(this);
   }
 
@@ -160,7 +173,7 @@ export function extractInlineBodies(
         const value = nodesSnapshot[nodeId] as ValueRecord;
         const body = toolBody(kind, nodeId, bodyCursor, value, owner, memory);
         bodies.set(nodeId, body);
-        const [masked, maskedValue] = maskToolBody(bodyCursor, body.flowId, value, memory);
+        const [masked, maskedValue] = maskToolBody(bodyCursor, body, value);
         projected.set(nodeId, [maskedValue, masked]);
         continue;
       }
@@ -244,11 +257,14 @@ function rejectAuthoredPrivateCallTargets(nodesCursor: SourceCursor): void {
 }
 
 /**
- * Generate the body a `kind` node's tool call runs each time. Its inputs are the node's `input:`
- * keys and the `memory` whose tool it calls, if any; its one node has the node's id, calls the tool
- * with `k: ${input.k}` for each input, and takes the node's `TOOL_CALL_FIELDS`; its output is that
- * node's. Each field keeps the author's source, and the memory's binding the source of `call:`, so
- * the body's errors point at what the author wrote.
+ * Generate the body a `kind` node's tool call runs each time. Its one node has the node's id, calls
+ * the tool and takes the node's `TOOL_CALL_FIELDS`; its output is that node's.
+ *
+ * A literal argument (`limit: 5`) is written straight into the node's `input:`, so the node checks
+ * it as a `call` node would. Each other argument is a body input, which the node passes through as
+ * `k: ${input.k}`, and so is the `memory` whose tool it calls, if any. Each field keeps the
+ * author's source, and the memory's binding the source of `call:`, so the body's errors point at
+ * what the author wrote.
  *
  * @param memory The memory input whose tool the node calls; `null` for none.
  * @throws LoadError at the key for an `input:` key named `memory`.
@@ -271,12 +287,25 @@ function toolBody(
       { range: inputCursor.keyRangeOf(memory) },
     );
   }
-  const passed = new Map<string, readonly [Value, SourceCursor | null]>(
-    Object.keys(authored).map((key) => [key, [`\${input.${key}}`, inputCursor.child(key)]]),
-  );
-  if (memory !== null) passed.set(memory, [`\${input.${memory}}`, callCursor]);
-  const inputRanges = new Map(cursor.mappingValueRanges("input"));
-  if (memory !== null && callCursor.range !== null) inputRanges.set(memory, callCursor.range);
+  const authoredRanges = cursor.mappingValueRanges("input");
+  const passed = new Map<string, readonly [Value, SourceCursor | null]>();
+  const toolInputs = new Map<string, string>();
+  const inputRanges = new Map<string, SourceRange>();
+  for (const [key, argument] of Object.entries(authored)) {
+    if (isLiteral(argument)) {
+      passed.set(key, [argument, inputCursor.child(key)]);
+      continue;
+    }
+    passed.set(key, [`\${input.${key}}`, inputCursor.child(key)]);
+    toolInputs.set(key, key);
+    const range = authoredRanges.get(key);
+    if (range !== undefined) inputRanges.set(key, range);
+  }
+  if (memory !== null) {
+    passed.set(memory, [`\${input.${memory}}`, callCursor]);
+    toolInputs.set(memory, memory);
+    if (callCursor.range !== null) inputRanges.set(memory, callCursor.range);
+  }
 
   const input = inputCursor.projectMapping(passed);
   const fields = new Map<string, readonly [Value, SourceCursor | null]>([
@@ -299,34 +328,51 @@ function toolBody(
     outputCursor: SourceCursor.virtual(`\${${nodeId}.output}`),
     inputRanges,
     tool: group === null ? String(name) : `{${group}: ${String(name)}}`,
+    memory,
+    toolInputs,
   });
 }
 
 /**
- * Project a node naming a tool onto a private `call:` of its generated body, `flowId`: the node
- * keeps its other fields and binds the `memory` whose tool it calls as `${input.<memory>}`, at
- * `call:`.
+ * Whether `value` holds no `${...}` span and no `call(...)` at any depth, so it means the same
+ * written on the generated node as on the node the author wrote.
  */
-function maskToolBody(
-  cursor: SourceCursor,
-  flowId: string,
-  bodyValue: ValueRecord,
-  memory: string | null,
-): [SourceCursor, ValueRecord] {
+function isLiteral(value: Value, seen: Set<object> = new Set()): boolean {
+  if (typeof value === "string") return !hasSpan(value) && !CALL_HEAD.test(value.trim());
+  if (!isList(value) && !isRecord(value)) return true;
+  // A YAML alias may share or nest a value; each is walked once.
+  if (seen.has(value)) return true;
+  seen.add(value);
+  return (isList(value) ? value : Object.values(value)).every((item) => isLiteral(item, seen));
+}
+
+/**
+ * Project a node naming a tool onto a private `call:` of `body`, its generated body: the node keeps
+ * its other fields, and its `input:` binds each of the body's inputs, the memory's as
+ * `${input.<memory>}` at `call:`.
+ */
+function maskToolBody(cursor: SourceCursor, body: InlineBody, bodyValue: ValueRecord): [SourceCursor, ValueRecord] {
   const masked: ValueRecord = {};
   const entries = new Map<string, readonly [Value, SourceCursor | null]>();
   for (const [key, value] of Object.entries(bodyValue)) {
-    if (TOOL_CALL_FIELDS.has(key)) continue;
-    setRecordKey(masked, key, key === "call" ? flowId : value);
+    if (TOOL_CALL_FIELDS.has(key) || key === "input") continue;
+    setRecordKey(masked, key, key === "call" ? body.flowId : value);
     entries.set(key, [null, cursor.child(key)]);
   }
-  const authored = Object.hasOwn(bodyValue, "input") ? bodyValue["input"]! : {};
-  if (memory !== null && isRecord(authored)) {
-    const base = Object.hasOwn(bodyValue, "input") ? cursor.child("input") : cursor.child("call");
+  const authored = bodyValue["input"];
+  if (authored !== undefined && !isRecord(authored)) {
+    // Left for the map's own check.
+    masked["input"] = authored;
+    entries.set("input", [null, cursor.child("input")]);
+  } else if (body.toolInputs.size > 0) {
+    const base = authored === undefined ? cursor.child("call") : cursor.child("input");
     const input = new Map<string, readonly [Value, SourceCursor | null]>(
-      Object.keys(authored).map((key) => [key, [authored[key]!, base.child(key)]]),
+      [...body.toolInputs].map(([name, key]) =>
+        key === body.memory
+          ? [name, [`\${input.${key}}`, cursor.child("call")]]
+          : [name, [authored![key]!, base.child(key)]],
+      ),
     );
-    input.set(memory, [`\${input.${memory}}`, cursor.child("call")]);
     const inputCursor = base.projectMapping(input);
     masked["input"] = inputCursor.value;
     entries.set("input", [null, inputCursor]);

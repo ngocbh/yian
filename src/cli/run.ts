@@ -75,6 +75,8 @@ import {
   type RunInspection,
   type RunResult,
   runFlow,
+  hintText,
+  runStartLabel,
   type RunStartTool,
   runStartTools,
   skillGrants,
@@ -1529,7 +1531,10 @@ function runStartText(tools: readonly RunStartTool[]): string {
   const ordered = [...tools.filter((tool) => tool.hint !== null), ...tools.filter((tool) => tool.hint === null)];
   const shown = ordered
     .slice(0, RUN_START_SHOWN)
-    .map(({ name, label, hint }) => `${name} (${label}${hint === null ? "" : `; ${hint}`})`);
+    .map((tool) => {
+      const hint = tool.hint === null ? "" : `; did you mean ${hintText(tool.hint, { quoted: false })}?`;
+      return `${tool.name} (${runStartLabel(tool)}${hint})`;
+    });
   const more = ordered.length > shown.length ? `, and ${ordered.length - shown.length} more` : "";
   return `; checked at run start: ${shown.join(", ")}${more}`;
 }
@@ -1591,8 +1596,7 @@ export async function check(
     const documents = results.map((result) => {
       if (!result.ok) return { path: result.path, ok: false, diagnostics: [diagnosticJson(result.diagnostic)] };
       const { runStart, ...loaded } = result;
-      const tools = runStart.map(({ node, site, name, hint }) => ({ node, site, name, hint }));
-      return { ...loaded, run_start_tools: tools };
+      return { ...loaded, run_start_tools: runStart };
     });
     await printJson({ flows: documents }, io.stdout);
   } else {

@@ -1536,7 +1536,7 @@ describe("check", () => {
     expect(stdout()).toBe(`${library}: ok; checked at run start: quot (node 'price/n'; did you mean the def quote?)\n`);
     const { flows } = await checkJson([library]);
     expect(flows[0].run_start_tools).toEqual([
-      { node: "price/n", site: null, name: "quot", hint: "did you mean the def quote?" },
+      { node: "price/n", site: null, name: "quot", hint: { what: "def", name: "quote" } },
     ]);
   });
 
@@ -1549,7 +1549,7 @@ describe("check", () => {
     const { flows } = await checkJson([flow]);
     expect(flows[0].run_start_tools).toEqual([
       { node: "n", site: null, name: "search", hint: null },
-      { node: "__call_0", site: "node 'm' input 'x' call(gret)", name: "gret", hint: "did you mean the def greet?" },
+      { node: "__call_0", site: "node 'm' input 'x' call(gret)", name: "gret", hint: { what: "def", name: "greet" } },
     ]);
   });
 

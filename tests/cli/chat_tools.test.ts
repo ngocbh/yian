@@ -309,7 +309,7 @@ describe("check_flow", () => {
         "nodes:\n  n: {kind: call, call: gret}\n  m: {kind: call, call: search}\n",
     );
     expect(((await call("check_flow", { path: "typo.yaml" })) as FlowCheck).run_start_tools).toEqual([
-      { node: "n", site: null, name: "gret", hint: "did you mean the def greet?" },
+      { node: "n", site: null, name: "gret", hint: { what: "def", name: "greet" } },
       { node: "m", site: null, name: "search", hint: null },
     ]);
   });
@@ -321,7 +321,7 @@ describe("check_flow", () => {
         "  price:\n    nodes:\n      n: {kind: call, call: quot}\n    output: ${n.output}\n",
     );
     expect(((await call("check_flow", { path: "lib.yaml" })) as FlowCheck).run_start_tools).toEqual([
-      { node: "price/n", site: null, name: "quot", hint: "did you mean the def quote?" },
+      { node: "price/n", site: null, name: "quot", hint: { what: "def", name: "quote" } },
     ]);
   });
 

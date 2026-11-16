@@ -34,7 +34,7 @@ import { LoadError } from "../compose/helpers/errors.ts";
 import type { Env } from "../defaults.ts";
 import { compareCodeUnits, type Diagnostic, reprText } from "../diagnostics.ts";
 import { isSystemError, leavesRoot, resolvedPath } from "../platform.ts";
-import { runStartTools } from "../run.ts";
+import { type RunStartTool, runStartTools } from "../run.ts";
 import { isReportedToolError, ReportedToolError } from "../tools/errors.ts";
 import { type FunctionTool, tool } from "../tools/function_tools.ts";
 import { builtinType } from "../typesys/types.ts";
@@ -316,12 +316,7 @@ export interface FlowCheck {
   readonly ok: boolean;
   readonly name: string | null;
   readonly inputs: readonly { readonly name: string; readonly type: string }[];
-  readonly run_start_tools: readonly {
-    readonly node: string;
-    readonly site: string | null;
-    readonly name: string;
-    readonly hint: string | null;
-  }[];
+  readonly run_start_tools: readonly RunStartTool[];
   readonly error: string | null;
 }
 
@@ -360,7 +355,7 @@ async function checkedFlow(
   }
   // A flow's `input:` entry always declares its type, so its contract is set.
   const inputs = flow.input.map((decl) => ({ name: decl.name, type: shownTypeLabel(decl.contract!.type) }));
-  const tools = runStartTools(flow).map(({ node, site, name, hint }) => ({ node, site, name, hint }));
+  const tools = runStartTools(flow);
   const check = { ok: true, name: flow.name ?? flow.compiled.flowId, inputs, run_start_tools: tools, error: null };
   return { check, flow };
 }
@@ -623,10 +618,10 @@ export function chatFileTools(host: ChatToolHost): FunctionTool[] {
         "Check that a flow file in the chat's folder loads, running nothing. Returns {ok, name, inputs, " +
         "run_start_tools, error}: ok with its name, its inputs (each {name, type}) and the tools a run must " +
         "supply, which it looks up when it starts (each {node, site, name, hint}: site is a call(...)'s, null " +
-        "for a node; a hint names a close name the flow defines, so the tool may be a typo); or not ok with " +
-        "the error. Flows it imports (uses:) and code files it references must also be inside the chat's " +
-        "folder; system.paths isn't supported. With content, checks that text as the file at path would be, " +
-        "without writing it: a draft.",
+        "for a node; a hint {what, name} names a close name the flow defines, so the tool may be a typo); or " +
+        "not ok with the error. Flows it imports (uses:) and code files it references must also be inside the " +
+        "chat's folder; system.paths isn't supported. With content, checks that text as the file at path " +
+        "would be, without writing it: a draft.",
       parameters: stringArguments(
         ["path", "The flow file, relative to the chat's folder.", true],
         ["content", "A draft's whole text, checked in place of the file's.", false],

@@ -14,9 +14,9 @@ import { flowFingerprint } from "../../src/compile/manifest.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
-import { Binding, outputContractType } from "../../src/nodes/contracts.ts";
+import { Binding, type CallableHint, outputContractType } from "../../src/nodes/contracts.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
-import { runFlow, runStartTools } from "../../src/run.ts";
+import { runFlow, runStartLabel, type RunStartTool, runStartTools } from "../../src/run.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { canonicalTypeLabel } from "../../src/typesys/values.ts";
 
@@ -290,33 +290,34 @@ const TYPO_LIBRARY =
 /** A CODE node whose input `x` is `call`, as one line. */
 const inlineNode = (call: string) => `{kind: code, code: return 1, output: !int, input: {x: ${call}}}`;
 
+/** A hint: the name the file defines that is closest to a tool, and what it is. */
+const hint = (what: CallableHint["what"], name: string): RunStartTool["hint"] => ({ what, name });
+
 // Each row: node `n` as written, and the hint run start and `yian check` give for its tool.
-test.each<[string, string | null]>([
-  ["{kind: call, call: gret}", "did you mean the def greet?"],
-  ["{kind: call, call: clen}", "did you mean the alias clean?"],
-  ["{kind: call, call: quot}", "did you mean the library def {billing: quote}?"],
-  ["{kind: call, call: on}", "did you mean the module tool one?"],
+test.each<[string, RunStartTool["hint"]]>([
+  ["{kind: call, call: gret}", hint("def", "greet")],
+  ["{kind: call, call: clen}", hint("alias", "clean")],
+  ["{kind: call, call: quot}", hint("library def", "{billing: quote}")],
+  ["{kind: call, call: on}", hint("module tool", "one")],
   ["{kind: call, call: search}", null],
   // `tool_id:` says the name is a tool, so no def is offered.
   ["{kind: tool, tool_id: gret}", null],
-  [inlineNode("call(gret)"), "did you mean the def greet?"],
-  [inlineNode("call(quot)"), "did you mean the library def billing.quote?"],
+  [inlineNode("call(gret)"), hint("def", "greet")],
+  [inlineNode("call(quot)"), hint("library def", "billing.quote")],
   // A mistyped group is matched against the file's libraries, tool modules and memory inputs.
-  ["{kind: call, call: {bilin: quote}}", "did you mean the library def {billing: quote}?"],
-  ["{kind: call, call: {bilin: qoute}}", "did you mean the library def {billing: quote}?"],
-  ["{kind: call, call: {bilin: refund}}", "did you mean the alias billing?"],
-  ["{kind: call, call: {crn: lookup}}", "did you mean the module tool {crm: lookup}?"],
-  ["{kind: call, call: {lesons: read}}", "did you mean the memory tool {lessons: read}?"],
-  [inlineNode("call(lesons.read)"), "did you mean the memory tool lessons.read?"],
+  ["{kind: call, call: {bilin: quote}}", hint("library def", "{billing: quote}")],
+  ["{kind: call, call: {bilin: qoute}}", hint("library def", "{billing: quote}")],
+  ["{kind: call, call: {bilin: refund}}", hint("alias", "billing")],
+  ["{kind: call, call: {crn: lookup}}", hint("module tool", "{crm: lookup}")],
+  ["{kind: call, call: {lesons: read}}", hint("memory tool", "{lessons: read}")],
+  [inlineNode("call(lesons.read)"), hint("memory tool", "lessons.read")],
   ["{kind: call, call: {github: search}}", null],
-  [inlineNode("call(bilin.quote)"), "did you mean the library def billing.quote?"],
-  [inlineNode("call(crn.lookup)"), "did you mean the module tool crm.lookup?"],
-])("n: %s is checked at run start, with hint %p", async (node, hint) => {
+  [inlineNode("call(bilin.quote)"), hint("library def", "billing.quote")],
+  [inlineNode("call(crn.lookup)"), hint("module tool", "crm.lookup")],
+])("n: %s is checked at run start, with hint %p", async (node, expected) => {
   const [tool] = runStartTools(await load(app(`  n: ${node}\n`)));
-  expect(tool!.hint).toBe(hint);
+  expect(tool!.hint).toEqual(expected);
 });
-
-const SERCH_SITE = "node 'g' input 'x' call(serch)";
 
 test("run start checks only the run's tools, each node named by its path or its call's site", async () => {
   const text = app(
@@ -330,8 +331,8 @@ test("run start checks only the run's tools, each node named by its path or its 
   );
 
   expect(runStartTools(await load(text))).toEqual([
-    { node: "f", site: null, label: "node 'f'", name: "{github: search}", hint: null },
-    { node: "__call_0", site: SERCH_SITE, label: SERCH_SITE, name: "serch", hint: null },
+    { node: "f", site: null, name: "{github: search}", hint: null },
+    { node: "__call_0", site: "node 'g' input 'x' call(serch)", name: "serch", hint: null },
   ]);
 });
 
@@ -340,9 +341,8 @@ test("a case branch's mistyped call(...) is checked at run start by its site, wi
     {
       node: "__call_0",
       site: "node 'g' cases[0].then call(gret)",
-      label: "node 'g' cases[0].then call(gret)",
       name: "gret",
-      hint: "did you mean the def greet?",
+      hint: hint("def", "greet"),
     },
   ]);
 });
@@ -353,15 +353,15 @@ test("a call(...) in a child flow is listed by its path, and its label says whic
     inlineNode("call(serch)") +
     "\n    output: ${m.output}\nnodes:\n  c: {kind: call, call: inner}\n";
   const site = "node 'm' input 'x' call(serch)";
-  expect(runStartTools(await loadFlow(text))).toEqual([
-    { node: "c/__call_0", site, label: `${site} in 'c'`, name: "serch", hint: null },
-  ]);
+  const tools = runStartTools(await loadFlow(text));
+  expect(tools).toEqual([{ node: "c/__call_0", site, name: "serch", hint: null }]);
+  expect(runStartLabel(tools[0]!)).toBe(`${site} in 'c'`);
 });
 
 test("a library's defs are checked at run start under their names, with hints from the library", async () => {
   const flow = await loadFlow(TYPO_LIBRARY);
   expect(runStartTools(flow)).toEqual([
-    { node: "price/n", site: null, label: "node 'price/n'", name: "quot", hint: "did you mean the def quote?" },
+    { node: "price/n", site: null, name: "quot", hint: hint("def", "quote") },
   ]);
 });
 
@@ -371,7 +371,7 @@ test("the hint is diagnostic-only: the fingerprint is the same with and without 
     "nodes:\n  n: {kind: call, call: gret}\n  m: {kind: code, code: return 1, output: !int, input: {x: call(gret)}}\n";
   const [hinted, plain] = [await loadFlow(flow("greet")), await loadFlow(flow("zzzzz"))];
 
-  expect(runStartTools(hinted).map((each) => each.hint)).toEqual(Array(2).fill("did you mean the def greet?"));
+  expect(runStartTools(hinted).map((each) => each.hint)).toEqual([hint("def", "greet"), hint("def", "greet")]);
   expect(runStartTools(plain).map((each) => each.hint)).toEqual([null, null]);
   expect(flowFingerprint(hinted.compiled)).toBe(flowFingerprint(plain.compiled));
 });

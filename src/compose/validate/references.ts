@@ -986,7 +986,7 @@ function checkMapInputs(
     if (reserved.has(param)) continue;
     sites.scan(
       src,
-      `node ${reprText(nodeId)} map input ${reprText(param)} from`,
+      `${result.siteName(nodeId, `map input ${reprText(param)}`)} from`,
       franges.get(siteKey("input", param)) ?? inputRng,
       {
         siteProducers: nodeProducers,

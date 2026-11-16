@@ -520,8 +520,9 @@ const OPTIONAL_ANY = new Type({ kind: ValueKind.ANY, nullable: true });
  * Associate retained inline bodies with descriptors and register lazy builders.
  *
  * Every association is validated before the registrar is touched. The returned map replaces only
- * matching frozen descriptors with copies carrying an author-facing child label; the input
- * descriptors remain unchanged. Child construction stays lazy until the registrar invokes a
+ * matching frozen descriptors with copies carrying an author-facing child label, and for a
+ * generated tool body the `input:` key each renamed body input passes; the input descriptors
+ * remain unchanged. Child construction stays lazy until the registrar invokes a
  * captured zero-argument builder.
  *
  * @param descriptors The final node descriptors by id.
@@ -558,7 +559,13 @@ export function registerInlineBodies(
       throw new YianRangeError(`${label}: final node descriptor does not target its retained inline body`);
     }
 
-    const labelledDescriptor = descriptor.replace({ childLabel: label });
+    // A generated body's input named apart from its argument is named as the author wrote it.
+    const fieldLabels = new Map(descriptor.fieldLabels);
+    for (const [name, key] of body.toolInputs) {
+      if (name === key) continue;
+      fieldLabels.set(`map input ${reprText(name)}`, `node ${reprText(body.nodeId)} map input ${reprText(key)}`);
+    }
+    const labelledDescriptor = descriptor.replace({ childLabel: label, fieldLabels });
     associated.set(body.nodeId, labelledDescriptor);
     registrations.push([body, labelledDescriptor, label]);
   }
@@ -2295,7 +2302,7 @@ function buildNodes(
 
     const childInputs: Parameter[] = [];
     for (const [key, value] of Object.entries(descriptor.inputs)) {
-      const bindingLabel = `${descriptor.id}.input.${key}`;
+      const bindingLabel = `${descriptor.id}.input.${body.toolInputs.get(key) ?? key}`;
       const bindingRange = body.inputRanges.get(key) ?? null;
       const declared = descriptor.inputTypes.get(key);
       // A typed binding states the parameter's type, and the binder checks the value against it at

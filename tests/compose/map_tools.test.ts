@@ -242,6 +242,20 @@ test("an argument that isn't an identifier, or is named over, reaches the tool a
   expect(result.output).toEqual([{ "max-results": "a", over: "a" }]);
 });
 
+// Each row: an argument a body input is named apart from, its binding, and the error, which names
+// the argument as written.
+test.each([
+  ["max-results", "${nope.output}", "node 'fetch' map input 'max-results' from: reference ${nope.output} uses unknown"],
+  ["over", "${nope.output}", "node 'fetch' map input 'over' from: reference ${nope.output} uses unknown"],
+  ["max-results", "${fetch.output}", "node build dependency cycle: fetch.input.max-results -> fetch"],
+  ["over", "${fetch.output}", "node build dependency cycle: fetch.input.over -> fetch"],
+])("a binding error on argument %s (%s) names it as written", async (key, binding, message) => {
+  const [got, at] = await failure(mapApp("search", `    input:\n      ${key}: ${binding}\n`));
+  expect(got).toContain(message);
+  expect(got).not.toContain("arg_");
+  expect(at).toBe(binding);
+});
+
 test("an input: key named as the memory the map calls is refused at the key", async () => {
   const text = mapApp("{lessons: read}", "    input:\n      lessons: ${input.lessons}\n      path: a.md\n");
   expect(await failure(text)).toEqual([

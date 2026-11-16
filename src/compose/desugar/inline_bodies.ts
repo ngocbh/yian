@@ -9,7 +9,7 @@
  *
  * Knows about: diagnostics, typesys values, the compose error and template helpers, the node
  *              kinds (`KINDS`, the CALL node's `call:` shape check and rule), the node parse's
- *              identifier and signature helpers, and source cursors.
+ *              identifier and signature helpers, source cursors, and the tools' `ToolRef`.
  */
 
 import { createHash } from "node:crypto";
@@ -30,6 +30,7 @@ import {
 } from "../parse/nodes.ts";
 import { setRecordKey } from "../source/common.ts";
 import { SourceCursor } from "../source/index.ts";
+import type { ToolRef } from "../../tools/registry.ts";
 
 /** Callable-name prefix reserved for compiler-generated inline child flows. */
 export const INLINE_FLOW_PREFIX = "__inline_flow_";
@@ -61,8 +62,8 @@ export class InlineBody {
   readonly outputCursor: SourceCursor;
   /** Outer input name to authored binding-value range. */
   readonly inputRanges: ReadonlyMap<string, SourceRange>;
-  /** The tool a generated body calls, as `call:` writes it (`{crm: lookup}`); `null` for an authored body. */
-  readonly tool: string | null;
+  /** The tool a generated body calls; `null` for an authored body. */
+  readonly toolRef: ToolRef | null;
   /** The memory input whose tool a generated body calls; `null` for none. */
   readonly memory: string | null;
   /**
@@ -79,7 +80,7 @@ export class InlineBody {
     nodesCursor: SourceCursor;
     outputCursor: SourceCursor;
     inputRanges: ReadonlyMap<string, SourceRange>;
-    tool?: string | null;
+    toolRef?: ToolRef | null;
     memory?: string | null;
     toolInputs?: ReadonlyMap<string, string>;
   }) {
@@ -89,10 +90,16 @@ export class InlineBody {
     this.nodesCursor = fields.nodesCursor;
     this.outputCursor = fields.outputCursor;
     this.inputRanges = fields.inputRanges;
-    this.tool = fields.tool ?? null;
+    this.toolRef = fields.toolRef ?? null;
     this.memory = fields.memory ?? null;
     this.toolInputs = fields.toolInputs ?? new Map();
     Object.freeze(this);
+  }
+
+  /** The tool a generated body calls, as `call:` writes it (`{crm: lookup}`); `null` for an authored body. */
+  get tool(): string | null {
+    const ref = this.toolRef;
+    return ref === null ? null : ref.group === null ? ref.name : `{${ref.group}: ${ref.name}}`;
   }
 
   /** A fresh copy of the authored child output value. */
@@ -367,7 +374,7 @@ function toolBody(
     nodesCursor: cursor.projectMapping(new Map([[nodeId, [node.value, node]]])),
     outputCursor: SourceCursor.virtual(`\${${nodeId}.output}`),
     inputRanges,
-    tool: group === null ? String(name) : `{${group}: ${String(name)}}`,
+    toolRef: { group, name: String(name) },
     memory,
     toolInputs,
   });

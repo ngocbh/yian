@@ -151,6 +151,13 @@ test("a tool other than take given an inbox gets the loop's inbox rule, naming t
   );
 });
 
+test("take named in a group and given an inbox gets the call node's refusal of the group", async () => {
+  const text = loopApp("{crm: take}", "    input:\n      from: ${input.box}\n    times: 1\n", "  box: !Inbox(str)\n");
+  expect((await failure(text))[0]).toBe(
+    "node 'poll' (kind=loop): `call: {crm: take}`: take is a built-in, not a group's tool; write `call: take`",
+  );
+});
+
 test("take carrying the fields it returns fails its own input rule, saying a loop passes them all", async () => {
   const lines = "    input:\n      from: ${input.box}\n      events: !list(str) []\n      closed: false\n    until: closed\n";
   expect((await failure(loopApp("take", lines, "  box: !Inbox(str)\n")))[0]).toBe(

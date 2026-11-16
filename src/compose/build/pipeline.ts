@@ -2310,9 +2310,10 @@ function buildNodes(
             });
       const canonical = canonicalizeInlineType(parameterType);
       // Before the body's own checks, which would refuse an inbox or a memory in the words of the
-      // binding yian generated. A loop's `take` reads the inbox it carries, under its own checks.
+      // binding yian generated. A loop's `take` reads the inbox it carries, under its own checks,
+      // and one named in a group gets the TOOL node's refusal of the group.
       const argument = body.toolInputs.get(key) ?? key;
-      if (body.tool !== null && body.tool !== TAKE && isInboxType(canonical)) {
+      if (body.toolRef !== null && body.toolRef.name !== TAKE && isInboxType(canonical)) {
         const kind = descriptor instanceof LoopDescriptor ? "loop" : "map";
         throw diagnostics.error(inboxInputError(kind, descriptor.id, `tool \`${body.tool}\``, argument), {
           range: bindingRange,

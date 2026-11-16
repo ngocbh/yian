@@ -581,10 +581,10 @@ const INLINE_SHAPE_CASES: [string, string, string, string | null, string][] = [
   ["inline-missing-output", "loop", INLINE_CHILD, null, "node 'composite' (kind=loop): inline `nodes:` requires `output:`"],
   [
     "named-with-output",
-    "map",
+    "loop",
     "call: named\n    output: ${named.output}\n",
     "output",
-    "node 'composite' (kind=map): `output:` is only valid with inline `nodes:`",
+    "node 'composite' (kind=loop): `output:` is only valid with inline `nodes:`",
   ],
   [
     "empty-nodes",

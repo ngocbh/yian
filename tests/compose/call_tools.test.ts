@@ -16,7 +16,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import { Binding, type CallableHint, outputContractType } from "../../src/nodes/contracts.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
-import { runFlow, runStartLabel, type RunStartTool, runStartTools } from "../../src/run.ts";
+import { runFlow, runStartLabel, type RunStartTool, runStartTools, staticNodes } from "../../src/run.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { canonicalTypeLabel } from "../../src/typesys/values.ts";
 
@@ -63,11 +63,11 @@ ${nodes}`;
 const load = (text: string) => loadFlow(text, { searchPaths: [tmp] });
 
 /**
- * What node `nodeId` of the flow loaded from `text` runs: `tool <id>`, with ` module <alias>` or
- * ` memory` when it names one, or `flow <id>`, with `.<def>` for a library's def.
+ * What the node at path `nodePath` of the flow loaded from `text` runs: `tool <id>`, with
+ * ` module <alias>` or ` memory` when it names one, or `flow <id>`, with `.<def>` for a library's def.
  */
-async function target(text: string, nodeId = "n"): Promise<string> {
-  const node = (await load(text)).compiled.nodes.get(nodeId);
+async function target(text: string, nodePath = "n"): Promise<string> {
+  const node = staticNodes(await load(text)).find(([path]) => path === nodePath)![1];
   if (node instanceof ToolNode) {
     const where = node.module !== null ? ` module ${node.module.alias}` : node.memoryTool ? " memory" : "";
     return `tool ${node.toolId}${where}`;
@@ -666,10 +666,39 @@ test("an inline tool call on a branch not taken never runs", async () => {
   expect(calls).toEqual([]);
 });
 
-const RUNS_ONLY_FLOWS = "and a `{kind}` runs only flows for now; call it from a `call` node, or wrap it in a def";
+const TAKE_IN_MAP =
+  "map node 'n': `call: take` reads an inbox, and a map can't give each item its own (per-instance inboxes " +
+  "aren't supported yet); take before the map";
 
-// Each row: the `call:` value on a map or loop and the refusal, `{kind}` standing for the kind.
-const mapOrLoopRows: [string, string][] = [
+// Each row: the `call:` value on a map, and what its generated body's node runs or the load error.
+test.each([
+  ["gret", "tool gret"],
+  ["sleep, input: {until: 2020-01-01}", "tool sleep"],
+  ["one", "tool one module one"],
+  ["{github: search}", "tool github_search"],
+  ["{lessons: read}", "tool lessons_read memory"],
+  ["{crm: lookup}", "tool crm_lookup module crm"],
+  ["greet", "flow greet"],
+  ["take", TAKE_IN_MAP],
+  ["{crm: take}", TAKE_IN_MAP],
+  ["load_skill", "map node 'n': tool id `load_skill` is reserved by yian"],
+  ["lessons", "map node 'n': `lessons` is a memory input; name one of its tools: `call: {lessons: <tool>}`"],
+  [
+    "{greet: x}",
+    "map node 'n': `greet` is a flow, not a library; a tool group named `greet` is shadowed in this file, so " +
+      "rename the def to reach it",
+  ],
+])("a map naming %s runs %s", async (call, expected) => {
+  const text = app(`  n: {kind: map, over: [1], call: ${call}}\n`);
+  if (expected.startsWith("flow ")) expect(await target(text)).toBe(expected);
+  else if (expected.startsWith("tool ")) expect(await target(text, "n/n")).toBe(expected);
+  else expect(await refusal(text)).toBe(expected);
+});
+
+const RUNS_ONLY_FLOWS = "and a `loop` runs only flows for now; call it from a `call` node, or wrap it in a def";
+
+// Each row: the `call:` value on a loop and the refusal.
+test.each([
   ["gret", `\`gret\` names no def or alias in this file, so it is a tool, ${RUNS_ONLY_FLOWS}; did you mean \`greet\`?`],
   ["search", `\`search\` names no def or alias in this file, so it is a tool, ${RUNS_ONLY_FLOWS}`],
   ["sleep", `\`sleep\` is a built-in tool, ${RUNS_ONLY_FLOWS}`],
@@ -684,14 +713,6 @@ const mapOrLoopRows: [string, string][] = [
   ["{lessons: read}", `\`lessons\` is a memory input, so \`{lessons: read}\` is a tool, ${RUNS_ONLY_FLOWS}`],
   ["{crm: lookup}", `\`crm\` is a tool module, so \`{crm: lookup}\` is a tool, ${RUNS_ONLY_FLOWS}`],
   ["{greet: x}", "`greet` is a flow, not a library"],
-];
-
-test.each(mapOrLoopRows.flatMap(([call, message]) => ["map", "loop"].map((kind) => [kind, call, message])))(
-  "a %s naming %s refuses it",
-  async (kind, call, message) => {
-    const field = kind === "map" ? "over: [1]" : "times: 1";
-    expect(await refusal(app(`  n: {kind: ${kind}, call: ${call}, ${field}}\n`))).toBe(
-      `${kind} node 'n': ${message!.replaceAll("{kind}", kind!)}`,
-    );
-  },
-);
+])("a loop naming %s refuses it", async (call, message) => {
+  expect(await refusal(app(`  n: {kind: loop, call: ${call}, times: 1}\n`))).toBe(`loop node 'n': ${message}`);
+});

@@ -68,19 +68,21 @@ import {
   type ValueTemplate,
 } from "../../nodes/contracts.ts";
 import { LOAD_SKILL } from "../../skills/tool.ts";
-import { ASK } from "../../tools/context.ts";
+import { ASK, TAKE } from "../../tools/context.ts";
 import type { ToolModuleRef } from "../../tools/modules.ts";
 import { RESERVED_TOOL_NAMES } from "../../tools/registry.ts";
 import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import { messagesKey, NEW_MESSAGES } from "../../typesys/pool.ts";
 import { newMessagesType, type TypeRegistry } from "../../typesys/types.ts";
 import {
+  isInboxType,
   isList,
   isListKind,
   isMemoryType,
   isRecord,
-  type Type,
+  Type,
   type Value,
+  ValueKind,
   writeAsText,
 } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError, rejectReservedName } from "../helpers/errors.ts";
@@ -123,7 +125,7 @@ import { inferDataEdges } from "../edges/data.ts";
 import { hostControlEdges } from "../edges/hosts.ts";
 import { inferOrderingEdges } from "../edges/ordering.ts";
 import { bindingProducers } from "../edges/producers.ts";
-import { CallDescriptor, type CallsTool } from "../nodes/call.ts";
+import { CallDescriptor, type CallsTool, inboxInputError } from "../nodes/call.ts";
 import { CaseDescriptor } from "../nodes/case.ts";
 import { LoopDescriptor } from "../nodes/loop.ts";
 import { MapDescriptor } from "../nodes/map.ts";
@@ -509,6 +511,9 @@ export interface CallableScope extends PrivateRegistrar {
   resolve(flowId: string): ComposedFlow;
 }
 
+/** The type of a generated tool body's input that nothing proves a type for. */
+const OPTIONAL_ANY = new Type({ kind: ValueKind.ANY, nullable: true });
+
 /**
  * Associate retained inline bodies with descriptors and register lazy builders.
  *
@@ -539,7 +544,7 @@ export function registerInlineBodies(
   const registrations: [InlineBody, CallDescriptor | LoopDescriptor, string][] = [];
 
   for (const body of bodies.values()) {
-    const label = `inline body of node ${reprText(body.nodeId)}`;
+    const label = body.tool === null ? `inline body of node ${reprText(body.nodeId)}` : `tool \`${body.tool}\``;
     const descriptor = descriptors.get(body.nodeId);
     if (descriptor === undefined) {
       throw new YianRangeError(`${label}: no matching composite node descriptor`);
@@ -1644,6 +1649,11 @@ export interface AssembleOptions {
    * the current directory.
    */
   baseDir?: string | null;
+  /**
+   * For a map's or loop's generated tool body, the node that runs it, `map node 'fetch'`, which run
+   * start names the body's TOOL node by; `null` (the default) for any other flow.
+   */
+  bodyOf?: string | null;
 }
 
 /** What every phase of one assembly reads: its diagnostics, file scope, typedefs and lexical owner. */
@@ -1664,6 +1674,8 @@ interface AssembleContext {
   readonly owner: readonly string[];
   /** The directory the flow's CODE references resolve against; `null` is the current directory. */
   readonly baseDir: string | null;
+  /** For a generated tool body, the node that runs it (`AssembleOptions.bodyOf`); else `null`. */
+  readonly bodyOf: string | null;
 }
 
 /** The flow's parameters and the views of them the passes read. */
@@ -1846,24 +1858,26 @@ function readFlowParameters(options: AssembleOptions, ctx: AssembleContext): Flo
  * - Any other value is left to the CALL node, whose `call:` check reports its shape.
  *
  * The CALL node refuses a library named bare, and the TOOL node a built-in in a group, `load_skill`
- * and a module alias in the wrong form. A map or loop runs only flows for now, so there the rule
- * refuses every tool, saying why the name is one, and `load_skill`.
+ * and a module alias in the wrong form. A map runs a tool per item, but not `take`, whose inbox
+ * can't be each item's own; a loop runs only flows for now, so there the rule refuses every tool,
+ * saying why the name is one. Both refuse `load_skill`.
  *
  * @param memories The flow's memory inputs.
  * @returns The rule, which throws a LoadError at `call:` for a bare memory input, a group that is
- *   a memory input and a def or alias too, a group that is a def or a flow alias, or a tool or
- *   `load_skill` on a `map` or `loop`.
+ *   a memory input and a def or alias too, a group that is a def or a flow alias, `take` or
+ *   `load_skill` on a `map`, or a tool or `load_skill` on a `loop`.
  */
 function callsToolRule(scope: CallableScope, memories: ReadonlySet<string>, diagnostics: LoadDiagnostics): CallsTool {
   const isLibrary = (name: string) =>
     scope.section(name) === "uses" && scope.toolModule(name) === null && scope.resolve(name).library !== null;
   return (nodeId, call, range, { site = null, kind = "call" } = {}) => {
     const onCall = kind === "call";
+    const runsTools = kind !== "loop";
     const subject = site ?? `${onCall ? "node" : `${kind} node`} ${reprText(nodeId)}`;
     const fail = (message: string) => diagnostics.error(`${subject}: ${message}`, { range });
-    /** A tool, `why` saying why the name is one, which a map or loop can't run yet. */
+    /** A tool, `why` saying why the name is one, which a loop can't run yet. */
     const tool = (why: string, hint = ""): true => {
-      if (onCall) return true;
+      if (runsTools) return true;
       throw fail(
         `${why}, and a \`${kind}\` runs only flows for now; call it from a \`call\` node, or wrap it in a ` +
           `def${hint}`,
@@ -1872,11 +1886,17 @@ function callsToolRule(scope: CallableScope, memories: ReadonlySet<string>, diag
     /** Built-in `name`; a map or loop refuses `load_skill` as the TOOL node does. */
     const builtin = (name: string): true => {
       if (name === LOAD_SKILL && !onCall) throw fail(`tool id \`${LOAD_SKILL}\` is reserved by yian`);
+      if (name === TAKE && kind === "map") {
+        throw fail(
+          "`call: take` reads an inbox, and a map can't give each item its own (per-instance inboxes aren't " +
+            "supported yet); take before the map",
+        );
+      }
       return tool(`\`${name}\` is a built-in tool`);
     };
     /** `name`, which the file doesn't define, so `what` (`it`, or the group's tool) is a tool. */
     const undefinedName = (name: string, what: string): true => {
-      if (onCall) return true;
+      if (runsTools) return true;
       const [close] = getCloseMatches(name, scope.names(), 1, CLOSE_MATCH_CUTOFF);
       const hint = close === undefined ? "" : `; did you mean \`${close}\`?`;
       return tool(`\`${name}\` names no def or alias in this file, so ${what} is a tool`, hint);
@@ -1886,7 +1906,7 @@ function callsToolRule(scope: CallableScope, memories: ReadonlySet<string>, diag
       if (call.startsWith(INLINE_FLOW_PREFIX)) return false;
       if (scope.section(call) !== null) return scope.toolModule(call) !== null && tool(`\`${call}\` is a tool module`);
       if (memories.has(call)) {
-        if (!onCall) {
+        if (!runsTools) {
           throw fail(`\`${call}\` is a memory input, not a flow; call one of its tools from a \`call\` node`);
         }
         const fix = site === null ? `call: {${call}: <tool>}` : `call(${call}.<tool>, ...)`;
@@ -1910,8 +1930,8 @@ function callsToolRule(scope: CallableScope, memories: ReadonlySet<string>, diag
     if (section === null) return undefinedName(group, written);
     if (module !== null) return tool(`\`${group}\` is a tool module, so ${written} is a tool`);
     if (isLibrary(group)) return false;
-    // Renaming the def would reach a tool group, which a map or loop can't run either.
-    if (!onCall) throw fail(`\`${group}\` is a flow, not a library`);
+    // Renaming the def would reach a tool group, which a loop can't run either.
+    if (!runsTools) throw fail(`\`${group}\` is a flow, not a library`);
     const named = section === "defs" ? "def" : "alias";
     throw fail(
       `\`${group}\` is a flow, not a library; a tool group named \`${group}\` is shadowed in this file, ` +
@@ -1940,7 +1960,7 @@ function readSections(options: AssembleOptions, ctx: AssembleContext): ReadSecti
   // Inline-body extraction masks child-only fields for descriptor parsing. Assertion provenance
   // still belongs to the unmodified authored occurrence tree.
   const [nodesCursor, inlineBodies] = locateSourceAccess(diagnostics, () =>
-    extractInlineBodies(authoredNodesCursor, { owner, callsTool }),
+    extractInlineBodies(authoredNodesCursor, { owner, callsTool, memories }),
   );
 
   rejectIncludeIn(assertsCursor, "asserts", "assertions", diagnostics);
@@ -2207,8 +2227,13 @@ function buildNodes(
   // before the build.
   let descriptorCache: DescriptorBuildCache | null = null;
 
-  /** Assemble one retained body lazily in this file's callable scope. */
+  /**
+   * Assemble one retained body lazily in this file's callable scope. A generated tool body's input
+   * that nothing proves a type for is `Optional(Any)`, which leaves it to run start and the tool, as
+   * a `call` node naming the tool would.
+   */
   const buildInlineChild = (body: InlineBody, descriptor: CallDescriptor | LoopDescriptor): ComposedFlow => {
+    const unproven = body.tool === null ? null : OPTIONAL_ANY;
     /** Resolve one parent producer through this assembly's build cache. */
     const producerType: ProducerType = (producerKey, bindingLabel, bindingRange) => {
       // `messagesKey(id)` names an AGENT's new messages.
@@ -2247,8 +2272,10 @@ function buildNodes(
           bindingLabel,
           bindingRange,
           diagnostics,
+          unproven,
         });
         if (!isListKind(overType.kind)) {
+          if (unproven !== null) return unproven;
           throw diagnostics.error(
             `cannot infer type for inline binding ${reprText(bindingLabel)}: ` +
               "MAP `over:` must have a proven list element type; " +
@@ -2280,8 +2307,13 @@ function buildNodes(
               bindingLabel,
               bindingRange,
               diagnostics,
+              unproven,
             });
       const canonical = canonicalizeInlineType(parameterType);
+      // Before the body's own checks, which would refuse the inbox in the generated binding's words.
+      if (body.tool !== null && isInboxType(canonical)) {
+        throw diagnostics.error(inboxInputError(descriptor.id, `tool \`${body.tool}\``, key), { range: bindingRange });
+      }
       childInputs.push(
         new Parameter(key, {
           contract: new ValueContract(canonical),
@@ -2306,6 +2338,7 @@ function buildNodes(
       outputsCursor: body.outputCursor,
       flowId: body.flowId,
       baseDir,
+      bodyOf: body.tool === null ? null : `${descriptor.kind} node ${reprText(descriptor.id)}`,
     });
   };
 
@@ -2350,6 +2383,7 @@ function buildNodes(
     baseDir,
     flowInputs: params.types,
     memoryTypes: scope.memoryTypes,
+    bodyOf: ctx.bodyOf,
   });
   descriptorCache = new DescriptorBuildCache(descriptors, ctxBase);
   const buildResults = descriptorCache.buildInSourceOrder();
@@ -2831,6 +2865,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     constructorType: constructorTypeFn(registry),
     owner: options.owner,
     baseDir: options.baseDir ?? null,
+    bodyOf: options.bodyOf ?? null,
   };
 
   const read = readSections(options, ctx);

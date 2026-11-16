@@ -978,6 +978,8 @@ export class HostToolCall {
   readonly module: ModuleOfCall | null;
   /** A lifted `call(...)`'s site, `node 'n' input 'x' call(gret)`, which names it in messages; else `null`. */
   readonly site: string | null;
+  /** The map or loop node whose generated body makes the call, `map node 'fetch'`, which names it in messages; else `null`. */
+  readonly bodyOf: string | null;
   /** The closest name the node's file defines, for a tool the run must supply; else `null`. */
   readonly hint: CallableHint | null;
 
@@ -989,7 +991,11 @@ export class HostToolCall {
     inputTypes: ReadonlyMap<string, Type>,
     outputType: Type | null,
     module: ModuleOfCall | null = null,
-    { site = null, hint = null }: { site?: string | null; hint?: CallableHint | null } = {},
+    {
+      site = null,
+      bodyOf = null,
+      hint = null,
+    }: { site?: string | null; bodyOf?: string | null; hint?: CallableHint | null } = {},
   ) {
     this.toolId = toolId;
     this.group = group;
@@ -998,6 +1004,7 @@ export class HostToolCall {
     this.outputType = outputType;
     this.module = module;
     this.site = site;
+    this.bodyOf = bodyOf;
     this.hint = hint;
     Object.freeze(this);
   }

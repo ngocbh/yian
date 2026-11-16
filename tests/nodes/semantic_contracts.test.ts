@@ -441,7 +441,7 @@ test("a host tool call is frozen", () => {
   const integer = Type.scalar(ValueKind.INTEGER);
   const call = new HostToolCall("search", null, ["q"], new Map([["q", integer]]), null);
 
-  const keys = ["toolId", "group", "inputs", "inputTypes", "outputType", "module", "site", "hint"];
+  const keys = ["toolId", "group", "inputs", "inputTypes", "outputType", "module", "site", "bodyOf", "hint"];
   expect(Object.keys(call)).toEqual(keys);
   expect(call.inputs).toEqual(["q"]);
   expect(call.inputTypes.get("q")).toBe(integer);

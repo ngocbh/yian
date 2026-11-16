@@ -464,11 +464,16 @@ export class BuildContext {
   readonly flowInputs: ReadonlyMap<string, Type>;
   /** The memory types the load knows beyond the built-ins, which a grant's tools are checked against. */
   readonly memoryTypes: MemoryTypeTable;
+  /**
+   * For a map's or loop's generated tool body, the node that runs it, `map node 'fetch'`, which run
+   * start names the body's TOOL node by; else `null`.
+   */
+  readonly bodyOf: string | null;
 
   /**
-   * Create a context. Only `registry` is required; the readers, `resolver` and `baseDir` default
-   * to `null`, `callableSection`, `callableNames` and `toolModule` to no name, `sourceFile` to
-   * `"<inline-code>"`, `diagnostics` to an unlocated context, `flowInputs` to none and
+   * Create a context. Only `registry` is required; the readers, `resolver`, `baseDir` and `bodyOf`
+   * default to `null`, `callableSection`, `callableNames` and `toolModule` to no name, `sourceFile`
+   * to `"<inline-code>"`, `diagnostics` to an unlocated context, `flowInputs` to none and
    * `memoryTypes` to the built-ins only.
    */
   constructor(options: {
@@ -486,6 +491,7 @@ export class BuildContext {
     bindingContractReader?: BindingContractReader | null;
     flowInputs?: ReadonlyMap<string, Type>;
     memoryTypes?: MemoryTypeTable;
+    bodyOf?: string | null;
   }) {
     const {
       registry,
@@ -502,6 +508,7 @@ export class BuildContext {
       bindingContractReader = null,
       flowInputs = new Map<string, Type>(),
       memoryTypes = NO_MEMORY_TYPES,
+      bodyOf = null,
     } = options;
     this.registry = registry;
     this.resolver = resolver;
@@ -517,6 +524,7 @@ export class BuildContext {
     this.bindingContractReader = bindingContractReader;
     this.flowInputs = flowInputs;
     this.memoryTypes = memoryTypes;
+    this.bodyOf = bodyOf;
     Object.freeze(this);
   }
 }

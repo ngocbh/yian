@@ -149,10 +149,9 @@ test.each([
   expect(await refusal(app(USES, [`a: {kind: ${KINDS[field.split(":")[0]!]}, ${field}}`]))).toBe(message);
 });
 
-test("a map naming a module alias is a load error that points to a call node", async () => {
+test("a map naming a module alias alone names one of its tools", async () => {
   expect(await refusal(app(USES, ["a: {kind: map, over: [1], call: crm}"]))).toBe(
-    "map node 'a': `crm` is a tool module, and a `map` runs only flows for now; call it from a `call` node, or " +
-      "wrap it in a def",
+    "node 'a': `crm` is a tool module; name one of its tools: `call: {crm: <tool>}`",
   );
 });
 

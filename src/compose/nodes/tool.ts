@@ -536,7 +536,8 @@ export class ToolDescriptor extends NodeDescriptor {
     const mayBeTypo = this.toolField === "call" && module === null && !builtin;
     const hint = mayBeTypo ? closeCallable(ctx, this.toolRef, this.wording) : null;
     const site = this.wording.site;
-    const node = new ToolNode(this.id, { toolId: this.toolRef, title: this.nodeName, retries, module, site, hint });
+    const bodyOf = site === null ? ctx.bodyOf : null;
+    const node = new ToolNode(this.id, { toolId: this.toolRef, title: this.nodeName, retries, module, site, bodyOf, hint });
     const wiring = this.sinkWiring();
     if (this.toolId === TAKE) {
       node.outputContract = this.buildTake(ctx);

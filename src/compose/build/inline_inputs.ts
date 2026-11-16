@@ -4,7 +4,8 @@
  * Inline composite bodies become private child flows, so every outer binding must produce a
  * concrete child-parameter type. This module infers only types that the Compose source proves:
  * an expression's type comes from the shared output-contract inference, and a literal's from its
- * structure. It never falls back to the runtime value builder's lenient `Any` behavior.
+ * structure. It never falls back to the runtime value builder's lenient `Any` behavior; a caller
+ * may name the type an unproven value takes instead, as a map's generated tool body does.
  * Top-level strings and the leaf strings of a value template are binding templates; a span-free
  * literal container's strings are ordinary strings.
  *
@@ -120,8 +121,10 @@ interface Walk {
  * @param options.bindingRange The binding value's source range, or `null` (the default) for
  *   spanless input.
  * @param options.diagnostics Factory for located load errors (default: source-free).
- * @returns The exact scalar or recursively structural type proven by `value`.
- * @throws LoadError when the value has no statically proven type under the inline-body rules.
+ * @param options.unproven The type of a value nothing proves (default `null`, which fails).
+ * @returns The exact scalar or recursively structural type proven by `value`, else `unproven`.
+ * @throws LoadError when the value has no statically proven type under the inline-body rules and
+ *   `unproven` is `null`, or as `producerType` throws.
  */
 export function inferInlineBindingType(
   value: unknown,
@@ -133,8 +136,20 @@ export function inferInlineBindingType(
     bindingLabel: string;
     bindingRange?: SourceRange | null;
     diagnostics?: LoadDiagnostics | null;
+    unproven?: Type | null;
   },
 ): Type {
+  const { unproven = null } = options;
+  try {
+    return inferProvenType(value, options);
+  } catch (error) {
+    if (unproven === null || !UNPROVEN.has(error as LoadError)) throw error;
+    return unproven;
+  }
+}
+
+/** `inferInlineBindingType` with no fallback for an unproven value. */
+function inferProvenType(value: unknown, options: Parameters<typeof inferInlineBindingType>[1]): Type {
   const walk: Walk = {
     parentInputTypes: options.parentInputTypes,
     producerType: options.producerType,
@@ -466,6 +481,9 @@ function commonElementType(elementTypes: readonly Type[], path: string, walk: Wa
   );
 }
 
+// The errors that say a value has no proven type, which a fallback type stands in for.
+const UNPROVEN = new WeakSet<LoadError>();
+
 /** Create the one located error shape used by strict inline inference. */
 function inferenceError(
   bindingLabel: string,
@@ -474,8 +492,10 @@ function inferenceError(
   diagnostics: LoadDiagnostics,
   cause?: unknown,
 ): LoadError {
-  return diagnostics.error(
+  const error = diagnostics.error(
     `cannot infer type for inline binding ${reprText(bindingLabel)}: ${reason}; ${explicitTypeHint(bindingLabel)}`,
     { range: bindingRange, cause },
   );
+  UNPROVEN.add(error);
+  return error;
 }

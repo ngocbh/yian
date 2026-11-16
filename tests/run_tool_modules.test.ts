@@ -419,6 +419,20 @@ test.each([
   },
 );
 
+test("a map runs its module's tool per item, and run start checks the call by the map", async () => {
+  writeFileSync(join(dir, "crm.ts"), tools(["lookup"]));
+  writeFileSync(join(dir, "quote.ts"), tools(["quote"]));
+  const uses = { crm: "./crm.ts", quote: "./quote.ts:quote" };
+  const nodes = ["g: {kind: map, over: [a, b], call: {crm: lookup}, input: {id: '${item}'}}", "q: {kind: map, over: [a], call: quote, input: {id: x}}"];
+  const done = await run(app(uses, nodes, "output: {g: '${g.output}', q: '${q.output}'}\n"));
+  expect([done.status, done.output]).toEqual(["succeeded", { g: [1n, 1n], q: [1n] }]);
+
+  const wrong = app(uses, ["g: {kind: map, over: [a], call: {crm: lookup}, input: {nope: x}}"]);
+  await expect(run(wrong)).rejects.toThrow(
+    new RangeError("map node 'g' input 'nope': tool 'crm_lookup' takes no such input; it takes [\"id\"]"),
+  );
+});
+
 /** The payload of the `run_started` record of the log at `log`. */
 function started(log: string): Record<string, unknown> {
   return JSON.parse(readFileSync(log, "utf8").split("\n")[0]!).payload;

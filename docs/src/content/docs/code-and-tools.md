@@ -132,7 +132,8 @@ A `tool` node calls one tool by id, with its `input:` as the tool's arguments. T
 in the loop. Your host supplies the tools (see [Agents](/agents/#tools) for where tools come
 from), so the flow names a tool and the run looks it up. A `call` node does the same with `call:`
 in place of `tool_id:`, and so does `call(get_quote, ...)` in a binding or a `case` branch (see
-[Call a tool](/control-flow/#call-a-tool)).
+[Call a tool](/control-flow/#call-a-tool)). A `map` calls a tool once per item (see
+[Map over a tool](/control-flow/#map-over-a-tool)).
 
 ```yaml check=fragment
 quote:
@@ -266,9 +267,9 @@ other export, and `default`, is ignored.
 - A ref is a relative path, `./` or `../`, to a `.ts`, `.js` or `.mjs` file, resolved from the
   importing file's real folder, never from `system.paths`. It takes no `@version`, and under a
   `codeRoot` or `yian check --root` it must stay inside, as a CODE file must.
-- A `call` node names a module's tool as `tool_id:` does: `call: {crm: lookup}`, or `call: quote`;
-  in a binding, `call(crm.lookup, ...)` or `call(quote, ...)`. A `map` or `loop` can't. Each calls
-  the module's tool even when the run has a host tool or group of the alias's name.
+- A `call` or `map` node names a module's tool as `tool_id:` does: `call: {crm: lookup}`, or
+  `call: quote`; in a binding, `call(crm.lookup, ...)` or `call(quote, ...)`. A `loop` can't. Each
+  calls the module's tool even when the run has a host tool or group of the alias's name.
 
 ### When a module runs
 

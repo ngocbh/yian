@@ -57,8 +57,8 @@ with `tools: [billing]` or `{billing: [quote]}`.
 | `!float ${total.output}` | One value, checked against the type |
 | none | null |
 
-Fields every node takes: `kind`, `input` (not on `case`), `asserts` (not on `case` or `map`),
-`depends_on`, `runs_after`, `node_name`, `env`. `output` is a type on `agent`, `code` and `tool`,
+Fields every node takes: `kind`, `input` (not on `case`), `asserts` (not on `case`, or a `map`
+over a flow), `depends_on`, `runs_after`, `node_name`, `env`. `output` is a type on `agent`, `code` and `tool`,
 written as a tag (`output: !str`), or for a record as an untagged mapping of tags
 (`output: {n: !int}`).
 
@@ -93,7 +93,8 @@ inline `nodes` plus `output`; `input` (the child's arguments, or the loop's seed
 adds `over`; `loop` adds one of `while`, `until`, `times`, and optional `max` and
 `on_max_exceeded` (`fail` or `output`). A `call` node whose `call` names a tool (a built-in, a
 module's or memory's tool, or a name the file doesn't define) takes the **tool** fields instead,
-with `call` in place of `tool_id`.
+with `call` in place of `tool_id`; a `map` naming one takes them too, applied to each item's call
+(not `call: take`).
 
 **ask** ([Inboxes and waiting](https://yian.readthedocs.io/inboxes/#ask-a-person)):
 `tool_id: ask`, `input` with one of `prompt` or `questions` (1 to 4, each with `question`, a

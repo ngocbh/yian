@@ -192,8 +192,8 @@ output:
   importing file, without the extension (only `.yaml` files are found); `@<version>` must equal
   the child's quoted `version:` text (`clean: ../common/clean@1`). A def or alias can't be named
   `take`, `sleep`, `ask`, `ask_user` or `load_skill`.
-- **On a `call` node or in a `call(...)`, a built-in, a module or memory input's tool, or a name
-  the file doesn't define is a tool**, called as a `tool` node calls it: `call: sleep`,
+- **On a `call` or `map` node or in a `call(...)`, a built-in, a module or memory input's tool, or
+  a name the file doesn't define is a tool**, called as a `tool` node calls it: `call: sleep`,
   `{crm: lookup}`, `{lessons: append}`, or one of the run's tools (`search`, `{github: search}`),
   looked up when the run starts, so a typo fails then, naming the closest name the file defines;
   `yian check` lists these names after `ok`. The file's own names hide a run's tool of that name,
@@ -210,7 +210,10 @@ output:
   doesn't fill an `int`, and an `Optional` value doesn't fill a strict input. Tag a value you
   know is set to check it at run time: `n: !int ${input.n}`.
 - **`map`** runs the child per item of `over:` (a list), with the item as `${item}`, and returns
-  a list in order. A `map` can't have `asserts:`.
+  a list in order. A `map` over a flow can't have `asserts:`. A `map` over a tool calls it per
+  item, and its `retries:`, `output:` and `asserts:` apply to each call; `call: take` is a load
+  error (take before the map). See
+  [Map over a tool](https://yian.readthedocs.io/control-flow/#map-over-a-tool).
 - **`loop`** takes exactly one driver: `while:` (checked before each run), `until:` (after each
   run) or `times: N`. `max:` guards `while:` and `until:`, and is a load error with `times:`.
   Reaching `max:` fails the loop, unless `on_max_exceeded: output` ends it with the last record.

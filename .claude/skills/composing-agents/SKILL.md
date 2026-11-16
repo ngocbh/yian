@@ -1,6 +1,6 @@
 ---
 name: composing-agents
-description: 'Use when writing or editing a yian flow (a YAML file run with `yian run`): wiring agent, code, tool, case, call, map or loop nodes, asking a person, waiting on an inbox or a time, or answering "how do I write a flow that ...". Trigger on "write a flow", "create an agent", "compose a workflow", "add a node to my flow", "how do I branch / loop / call another flow".'
+description: 'Use when writing or editing a yian flow (a YAML file run with `yian run`): wiring agent, code, case, call, map or loop nodes, asking a person, waiting on an inbox or a time, or answering "how do I write a flow that ...". Trigger on "write a flow", "create an agent", "compose a workflow", "add a node to my flow", "how do I branch / loop / call another flow".'
 ---
 
 # Writing yian flows
@@ -18,8 +18,8 @@ lookup sheet; [templates/](templates/) holds a flow that loads for each common s
 2. **Start from a template** (index in [reference.md](reference.md#templates)). Copy it beside
    your flow and edit it.
 3. **Write one node per step.** A model call is an `agent`; deterministic work is `code` (not a
-   prompt); a host tool is `tool`; a branch is `case`; a child flow is `call`, `map` or `loop`.
-   Prefer several small typed nodes to one large prompt.
+   prompt); a branch is `case`; a child flow or a tool (a host tool, `ask`, `take`, `sleep`) is
+   `call`, `map` or `loop`. Prefer several small typed nodes to one large prompt.
 4. **Check.** `yian check` loads the flow, checks every type and reference, and runs nothing.
    Each error names its place, and most show the rewrite. Fix and repeat until it prints `ok`.
 5. **Run.** Agents need a provider and model: run `yian auth <provider>` once, or pass
@@ -86,7 +86,7 @@ output:
 | `agent` | A model call, with optional tools, skills and steering | [Agents](https://yian.readthedocs.io/agents/) |
 | `code` | A TypeScript or JavaScript body, or a `./file.ts:fn` export | [Code and tools](https://yian.readthedocs.io/code-and-tools/) |
 | `case` | Take one branch, skip the others | [Control flow](https://yian.readthedocs.io/control-flow/) |
-| `call`, `map`, `loop` | Run a child flow or a tool (a host tool, or the built-ins `ask`, `take` and `sleep`) once, per list item, or repeatedly | [Control flow](https://yian.readthedocs.io/control-flow/), [Code and tools](https://yian.readthedocs.io/code-and-tools/#tool-nodes), [Inboxes and waiting](https://yian.readthedocs.io/inboxes/) |
+| `call`, `map`, `loop` | Run a child flow or a tool once, per list item, or repeatedly: a host tool, or the built-ins `ask`, `take` and `sleep` (a `map` can't `take`; a `loop` can't `take` or `sleep`) | [Control flow](https://yian.readthedocs.io/control-flow/), [Code and tools](https://yian.readthedocs.io/code-and-tools/#tool-nodes), [Inboxes and waiting](https://yian.readthedocs.io/inboxes/) |
 | `tool` | The old spelling of a `call` node naming a tool, with `tool_id:` for `call:`; it still loads, but is going away | [Code and tools](https://yian.readthedocs.io/code-and-tools/#tool-nodes) |
 | a tagged entry | A fixed or computed value, such as `count: !int 3` | [Flows and nodes](https://yian.readthedocs.io/flows/#values) |
 
@@ -96,8 +96,8 @@ output:
 
 - **A `!` marks every type except under `typedefs:`.** A flow input (`qty: !int`), a binding
   (`n: !int ${x.output}`), a value entry, a flow output (`output: !Order ${x.output}`), and the
-  `output:` of an `agent` or `code` node or a tool call, compact flows included: `output: !str`, or a
-  record as an untagged mapping of tags, `output: {n: !int, note: !Optional(str)}`. Only a
+  `output:` of an `agent` or `code` node or a tool call, compact flows included: `output: !str`,
+  or a record as an untagged mapping of tags, `output: {n: !int, note: !Optional(str)}`. Only a
   `typedefs:` entry is plain text. Mixing them up is a load error.
 - **Every flow input has a tag**, with an optional default: `lookback: !int 30`,
   `note: !Optional(str)` (omitted is null).
@@ -142,7 +142,7 @@ output:
 - **Order without data** with `depends_on: [a]` (skipped when `a` is skipped) or
   `runs_after: [a]` (runs either way). Both take a list.
 - **Compact form** (the node's fields at the top level, no `nodes:`) is only for a flow whose
-  body is one `agent`, `code`, `tool` or `call` node; a compact `call` names a tool. See
+  body is one `agent`, `code` or `call` node; a compact `call` may name a tool. See
   [Compact form](https://yian.readthedocs.io/flows/#compact-form).
 
 ### Expressions and null
@@ -193,12 +193,12 @@ output:
   the child's quoted `version:` text (`clean: ../common/clean@1`). A def or alias can't be named
   `take`, `sleep`, `ask`, `ask_user` or `load_skill`.
 - **On a `call`, `map` or `loop` node or in a `call(...)`, a built-in, a module or memory input's
-  tool, or a name the file doesn't define is a tool**, called with `input:` as its arguments: `call: sleep`,
-  `{crm: lookup}`, `{lessons: append}`, or one of the run's tools (`search`, `{github: search}`),
-  looked up when the run starts, so a typo fails then, naming the closest name the file defines;
-  `yian check` lists these names after `ok`. The file's own names hide a run's tool of that name,
-  and `{clean: x}` with `clean` a flow is a load error. A tool call takes `retries:`, `output:` and
-  `asserts:`; a flow call takes neither `retries:` nor `output:`. See
+  tool, or a name the file doesn't define is a tool**, called with `input:` as its arguments:
+  `call: sleep`, `{crm: lookup}`, `{lessons: append}`, or one of the run's tools (`search`,
+  `{github: search}`), looked up when the run starts, so a typo fails then, naming the closest
+  name the file defines; `yian check` lists these names after `ok`. The file's own names hide a
+  run's tool of that name, and `{clean: x}` with `clean` a flow is a load error. A tool call takes
+  `retries:`, `output:` and `asserts:`; a flow call takes neither `retries:` nor `output:`. See
   [Call a tool](https://yian.readthedocs.io/control-flow/#call-a-tool).
 - **A library's def is `call: {billing: quote}`** (or `call(billing.quote, k=v)` in a binding),
   on `call`, `map` and `loop`. `call: billing` alone is a load error, and a flow's own `defs:`

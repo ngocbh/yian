@@ -27,6 +27,7 @@ expect:
         description: null
         inputs:
           - {name: n, type: int, required: true, has_default: false}
+        run_start_tools: []
       - path: bad.yaml
         ok: false
         diagnostics:

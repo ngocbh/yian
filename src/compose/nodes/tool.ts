@@ -14,8 +14,14 @@
 
 import { typeRelation } from "../../compile/validation.ts";
 import { current } from "../../defaults.ts";
-import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
-import { bindingSource, isExactly, ValueContract, ValueTemplate } from "../../nodes/contracts.ts";
+import { closeness, compareCodeUnits, getCloseMatches, reprText, type SourceRange } from "../../diagnostics.ts";
+import {
+  bindingSource,
+  type CallableHint,
+  isExactly,
+  ValueContract,
+  ValueTemplate,
+} from "../../nodes/contracts.ts";
 import { parseQuestions, QuestionSpecError } from "../../nodes/tool/questions.ts";
 import { memoryKey } from "../../nodes/base.ts";
 import { ToolNode } from "../../nodes/tool/node.ts";
@@ -37,6 +43,7 @@ import {
   valueRepr,
 } from "../../typesys/values.ts";
 import { LoadDiagnostics, type LoadError } from "../helpers/errors.ts";
+import { CLOSE_MATCH_CUTOFF } from "../helpers/tags.ts";
 import { checkMemoryGrants, grantErrorText, memoryBinding } from "../helpers/memory.ts";
 import { literalValue, NOT_LITERAL } from "../../compile/output_contracts.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
@@ -89,7 +96,7 @@ class ToolWording {
   }
 
   /** The call's site, `node 'n' input 'x' call(sleep)`, for a lifted `call(...)`; else `null`. */
-  private get site(): string | null {
+  get site(): string | null {
     return this.labels.get("call") ?? null;
   }
 
@@ -136,6 +143,54 @@ class ToolWording {
   noun(): string {
     return this.field === "call" ? "a tool call" : "a TOOL node";
   }
+}
+
+/**
+ * The name the file defines closest to the tool `ref` a call names, which the run must supply, by
+ * `CLOSE_MATCH_CUTOFF`; `null` when none is close.
+ *
+ * - A bare name is matched against the file's defs, flow aliases, library defs and one-export
+ *   modules' tools.
+ * - A group is matched against the file's libraries, offering the def the call names, else the one
+ *   closest to it, else the alias; its modules of several tools, offering the tool the call names,
+ *   since such a module lists its tools only at run start; and the memory inputs of the node's
+ *   flow, offering their tool the call names.
+ */
+function closeCallable(ctx: BuildContext, ref: ToolRef, wording: ToolWording): CallableHint | null {
+  const { group, name } = ref;
+  const candidates = new Map<string, Omit<CallableHint, "score">>();
+  const offer = (key: string, what: CallableHint["what"], written: string) => {
+    if (!candidates.has(key)) candidates.set(key, { what, name: written });
+  };
+  for (const each of ctx.callableNames()) {
+    const module = ctx.toolModule(each);
+    const single = module !== null && splitModuleRef(module.ref).exportName !== null;
+    const section = ctx.callableSection(each);
+    const library = module === null && section === "uses" ? (ctx.resolver?.(each).library ?? null) : null;
+    if (group !== null) {
+      // Only a library or a module of several tools is written as a group.
+      if (module !== null && !single) offer(each, "module tool", wording.ref(each, name));
+      if (library === null) continue;
+      const [def] = library.has(name) ? [name] : getCloseMatches(name, [...library.keys()], 1, CLOSE_MATCH_CUTOFF);
+      if (def === undefined) offer(each, "alias", each);
+      else offer(each, "library def", wording.ref(each, def));
+    } else if (single) {
+      offer(each, "module tool", each);
+    } else if (section === "defs") {
+      offer(each, "def", each);
+    } else if (module === null) {
+      // A library alias names no flow of its own; its defs are matched by their names.
+      if (library === null) offer(each, "alias", each);
+      else for (const def of library.keys()) offer(def, "library def", wording.ref(each, def));
+    }
+  }
+  if (group !== null) {
+    for (const [input, typ] of ctx.flowInputs) {
+      if (isMemoryType(typ)) offer(input, "memory tool", wording.ref(input, name));
+    }
+  }
+  const [close] = getCloseMatches(group ?? name, [...candidates.keys()], 1, CLOSE_MATCH_CUTOFF);
+  return close === undefined ? null : { ...candidates.get(close)!, score: closeness(group ?? name, close) };
 }
 
 /** The field a TOOL body in `cursor` names its tool in: `call` under `kind: call`, else `tool_id`. */
@@ -476,7 +531,12 @@ export class ToolDescriptor extends NodeDescriptor {
     const builtin = BUILTIN_TOOL_IDS.has(this.toolId as BuiltinToolId);
     // A built-in is never retried by the node: take and sleep make no call, and the host owns an ask.
     const retries = builtin ? 0 : this.retries;
-    const node = new ToolNode(this.id, { toolId: this.toolRef, title: this.nodeName, retries, module });
+    // A name the run supplies may be a mistyped def or alias; under `tool_id:` the author said it is
+    // a tool.
+    const mayBeTypo = this.toolField === "call" && module === null && !builtin;
+    const hint = mayBeTypo ? closeCallable(ctx, this.toolRef, this.wording) : null;
+    const site = this.wording.site;
+    const node = new ToolNode(this.id, { toolId: this.toolRef, title: this.nodeName, retries, module, site, hint });
     const wiring = this.sinkWiring();
     if (this.toolId === TAKE) {
       node.outputContract = this.buildTake(ctx);

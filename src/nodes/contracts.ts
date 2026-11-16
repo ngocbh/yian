@@ -946,6 +946,19 @@ export function validateOutputContract(contract: OutputContract | null, value: u
 /** A tool module's `uses:` alias, its value as written, and its file's real path. */
 type ModuleOfCall = { readonly alias: string; readonly ref: string; readonly path: string };
 
+/**
+ * The name a TOOL node's file defines closest to the tool the node names, which the run must
+ * supply: run start and `yian check` offer it for a mistyped name.
+ */
+export interface CallableHint {
+  /** What the name is. */
+  readonly what: "def" | "alias" | "library def" | "module tool" | "memory tool";
+  /** The name as the node would write it: `greet`, `{billing: quote}`, or `billing.quote` in a `call(...)`. */
+  readonly name: string;
+  /** How close it is to the tool the node names (`closeness`), to weigh against a run's tool. */
+  readonly score: number;
+}
+
 /** One direct tool call a node makes, as the run boundary checks it. Frozen. */
 export class HostToolCall {
   /** The id of the tool the node invokes: its own name, in its group when `group` is set. */
@@ -963,6 +976,10 @@ export class HostToolCall {
    * which this module can't import), or `null` for a run's tool.
    */
   readonly module: ModuleOfCall | null;
+  /** A lifted `call(...)`'s site, `node 'n' input 'x' call(gret)`, which names it in messages; else `null`. */
+  readonly site: string | null;
+  /** The closest name the node's file defines, for a tool the run must supply; else `null`. */
+  readonly hint: CallableHint | null;
 
   /** Describe one tool call; `inputs` is copied and `inputTypes` retained. */
   constructor(
@@ -972,6 +989,7 @@ export class HostToolCall {
     inputTypes: ReadonlyMap<string, Type>,
     outputType: Type | null,
     module: ModuleOfCall | null = null,
+    { site = null, hint = null }: { site?: string | null; hint?: CallableHint | null } = {},
   ) {
     this.toolId = toolId;
     this.group = group;
@@ -979,6 +997,8 @@ export class HostToolCall {
     this.inputTypes = inputTypes;
     this.outputType = outputType;
     this.module = module;
+    this.site = site;
+    this.hint = hint;
     Object.freeze(this);
   }
 }

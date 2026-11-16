@@ -34,10 +34,13 @@ typedefs:
     samples: str           # inputs to try the flow on, as a JSON object
   Checked: {path: str, problem: str}
   Input: {name: str, type: str}
+  Hint: {what: str, name: str}
+  RunStartTool: {node: str, site: Optional(str), name: str, hint: Optional(Hint)}
   Check:                   # what check_flow returns
     ok: bool
     name: Optional(str)
     inputs: list(Input)
+    run_start_tools: list(RunStartTool)
     error: Optional(str)
   Written: {written: bool, path: str, reason: Optional(str)}   # what write_flow returns
   Gate: {go: bool, why: str}

@@ -195,8 +195,9 @@ output:
 - **On a `call` node or in a `call(...)`, a built-in, a module or memory input's tool, or a name
   the file doesn't define is a tool**, called as a `tool` node calls it: `call: sleep`,
   `{crm: lookup}`, `{lessons: append}`, or one of the run's tools (`search`, `{github: search}`),
-  looked up when the run starts. The file's own names hide a run's tool of that name, and
-  `{clean: x}` with `clean` a flow is a load error. A tool call takes `retries:`, `output:` and
+  looked up when the run starts, so a typo fails then, naming the closest name the file defines;
+  `yian check` lists these names after `ok`. The file's own names hide a run's tool of that name,
+  and `{clean: x}` with `clean` a flow is a load error. A tool call takes `retries:`, `output:` and
   `asserts:`; a flow call takes neither `retries:` nor `output:`. See
   [Call a tool](https://yian.readthedocs.io/control-flow/#call-a-tool).
 - **A library's def is `call: {billing: quote}`** (or `call(billing.quote, k=v)` in a binding),
@@ -299,7 +300,7 @@ node or host tool reads the variable itself. `api_key`, `headers`, `organization
 
 ## Before you hand the flow over
 
-- `yian check` prints `ok`.
+- `yian check` prints `ok`, and each name it lists as checked at run start is a tool the run has.
 - Every node reads what it needs through `${...}` in `input:`, and the flow `output:` names the
   results the caller wants.
 - Every `case` whose result is read is exhaustive, and every interruptible agent has an

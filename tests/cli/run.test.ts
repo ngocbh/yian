@@ -1477,7 +1477,15 @@ describe("check", () => {
     const broken = file("broken.yaml", `${LIBRARY}  refund: {kind: code, code: return 1, output: !nope}\n`);
     const { code, flows } = await checkJson([library, broken]);
     expect(code).toBe(1);
-    expect(flows[0]).toEqual({ path: library, ok: true, id: "billing", name: "billing", description: null, inputs: [] });
+    expect(flows[0]).toEqual({
+      path: library,
+      ok: true,
+      id: "billing",
+      name: "billing",
+      description: null,
+      inputs: [],
+      run_start_tools: [],
+    });
     expect(flows[1].diagnostics[0].message).toStartWith("defs entry 'refund': ");
   });
 
@@ -1487,6 +1495,76 @@ describe("check", () => {
     expect(await main(["check", flow], io)).toBe(0);
     expect(stdout()).toBe(`${flow}: ok\n`);
     expect(stderr()).toBe("");
+  });
+
+  test("text: the ok line lists the tools left for run start, with the closest name the file defines", async () => {
+    const flow = file(
+      "typo.yaml",
+      'id: r\nname: r\ndefs:\n  greet: {kind: code, code: "return 1", output: !int}\nnodes:\n' +
+        "  n: {kind: call, call: gret}\n  m: {kind: call, call: {github: search}}\n",
+    );
+    const { io, stdout } = testIo();
+    expect(await main(["check", flow], io)).toBe(0);
+    expect(stdout()).toBe(
+      `${flow}: ok; checked at run start: gret (node 'n'; did you mean the def greet?), {github: search} (node 'm')\n`,
+    );
+  });
+
+  test("text: past five tools left for run start, those with a hint come first and the rest are counted", async () => {
+    const nodes = ["a", "b", "c", "d", "e", "f"].map((id) => `  ${id}: {kind: call, call: t${id}}\n`).join("");
+    const flow = file(
+      "many.yaml",
+      'id: r\nname: r\ndefs:\n  greet: {kind: code, code: "return 1", output: !int}\nnodes:\n' +
+        `${nodes}  g: {kind: call, call: gret}\n`,
+    );
+    const { io, stdout } = testIo();
+    expect(await main(["check", flow], io)).toBe(0);
+    expect(stdout()).toBe(
+      `${flow}: ok; checked at run start: gret (node 'g'; did you mean the def greet?), ta (node 'a'), ` +
+        "tb (node 'b'), tc (node 'c'), td (node 'd'), and 2 more\n",
+    );
+  });
+
+  test("text: a tool named alike from two nodes is named once, and the document lists both", async () => {
+    const flow = file(
+      "twice.yaml",
+      'id: r\nname: r\ndefs:\n  greet: {kind: code, code: "return 1", output: !int}\n' +
+        "  wrap:\n    nodes:\n      n: {kind: call, call: gret}\n    output: ${n.output}\n" +
+        "nodes:\n  a: {kind: call, call: wrap}\n  b: {kind: call, call: wrap}\n",
+    );
+    const { io, stdout } = testIo();
+    expect(await main(["check", flow], io)).toBe(0);
+    expect(stdout()).toBe(`${flow}: ok; checked at run start: gret (node 'a/n'; did you mean the def greet?)\n`);
+    const { flows } = await checkJson([flow]);
+    expect(flows[0].run_start_tools.map((tool: { node: string }) => tool.node)).toEqual(["a/n", "b/n"]);
+  });
+
+  test("a library lists the tools its defs leave for run start, each node under its def", async () => {
+    const library = file(
+      "lib.yaml",
+      'id: lib\nname: lib\ndefs:\n  quote: {kind: code, code: "return 1", output: !int}\n' +
+        "  price:\n    nodes:\n      n: {kind: call, call: quot}\n    output: ${n.output}\n",
+    );
+    const { io, stdout } = testIo();
+    expect(await main(["check", library], io)).toBe(0);
+    expect(stdout()).toBe(`${library}: ok; checked at run start: quot (node 'price/n'; did you mean the def quote?)\n`);
+    const { flows } = await checkJson([library]);
+    expect(flows[0].run_start_tools).toEqual([
+      { node: "price/n", site: null, name: "quot", hint: { what: "def", name: "quote" } },
+    ]);
+  });
+
+  test("the ok document lists each tool left for run start by its node's path and a call(...)'s site", async () => {
+    const flow = file(
+      "typo.yaml",
+      'id: r\nname: r\ndefs:\n  greet: {kind: code, code: "return 1", output: !int}\nnodes:\n' +
+        "  n: {kind: call, call: search}\n  m: {kind: code, code: return 1, output: !int, input: {x: call(gret)}}\n",
+    );
+    const { flows } = await checkJson([flow]);
+    expect(flows[0].run_start_tools).toEqual([
+      { node: "n", site: null, name: "search", hint: null },
+      { node: "__call_0", site: "node 'm' input 'x' call(gret)", name: "gret", hint: { what: "def", name: "greet" } },
+    ]);
   });
 
   test("text on a terminal: a file name's control characters show in its ok line and a failure's path", async () => {
@@ -1526,8 +1604,9 @@ describe("check", () => {
             { name: "tag", type: "Optional(str)", required: false, has_default: false },
             { name: "w", type: "int", required: false, has_default: true },
           ],
+          run_start_tools: [],
         },
-        { path: bare, ok: true, id: "bare", name: "bare", description: null, inputs: [] },
+        { path: bare, ok: true, id: "bare", name: "bare", description: null, inputs: [], run_start_tools: [] },
       ],
     });
   });
@@ -1598,6 +1677,7 @@ describe("check", () => {
           name: "main",
           description: null,
           inputs: [{ name: "n", type: "int", required: true, has_default: false }],
+          run_start_tools: [],
         },
       ],
     });

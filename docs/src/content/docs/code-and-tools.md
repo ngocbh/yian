@@ -163,8 +163,8 @@ are covered on [Inboxes and waiting](/inboxes/).
 When a run starts, yian checks every TOOL node against the tool it names, including nodes in
 branches and child flows that may never run. The run doesn't start when:
 
-- the run's tools have no tool with that id (the error suggests a close match), or two groups hold
-  a tool of that bare name;
+- the run's tools have no tool with that id (the error suggests the closest name the file
+  defines and a close tool, the closer first), or two groups hold a tool of that bare name;
 - the node passes an argument the tool doesn't take, or leaves out a required one;
 - an argument, literal or `${...}`, can never fit the tool's parameter type, such as a `str` for
   an `int`;

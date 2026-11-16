@@ -75,6 +75,10 @@ import {
   type RunInspection,
   type RunResult,
   runFlow,
+  hintText,
+  runStartLabel,
+  type RunStartTool,
+  runStartTools,
   skillGrants,
   staticNodes,
   updateRunIndex,
@@ -1499,7 +1503,10 @@ interface CheckInput {
   has_default: boolean;
 }
 
-/** One `yian check` result: the loaded flow's id, name, description and inputs, or why it failed. */
+/**
+ * One `yian check` result: the loaded flow's id, name, description, inputs and the tools only its
+ * run supplies, or why it failed.
+ */
 type CheckResult =
   | {
       path: string;
@@ -1508,8 +1515,38 @@ type CheckResult =
       name: string | null;
       description: string | null;
       inputs: CheckInput[];
+      runStart: RunStartTool[];
     }
   | { path: string; ok: false; diagnostic: Diagnostic };
+
+/** The most tools left for run start a flow's ok line names; the rest are counted. */
+const RUN_START_SHOWN = 5;
+
+/**
+ * `; checked at run start: gret (node 'n'; did you mean the def greet?), search (node 'm')` for
+ * the tools only the run supplies, each name and hint once, at its first node, those with a hint
+ * first, at most `RUN_START_SHOWN`; `""` for none.
+ */
+function runStartText(tools: readonly RunStartTool[]): string {
+  if (tools.length === 0) return "";
+  // A def calling a mistyped tool, run from two nodes, would otherwise fill the line twice.
+  const seen = new Set<string>();
+  const unique = tools.filter((tool) => {
+    const key = JSON.stringify([tool.name, tool.hint]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const ordered = [...unique.filter((tool) => tool.hint !== null), ...unique.filter((tool) => tool.hint === null)];
+  const shown = ordered
+    .slice(0, RUN_START_SHOWN)
+    .map((tool) => {
+      const hint = tool.hint === null ? "" : `; did you mean ${hintText(tool.hint, { quoted: false })}?`;
+      return `${tool.name} (${runStartLabel(tool)}${hint})`;
+    });
+  const more = ordered.length > shown.length ? `, and ${ordered.length - shown.length} more` : "";
+  return `; checked at run start: ${shown.join(", ")}${more}`;
+}
 
 /**
  * Load the flow file `path` as `yian run` loads it, or confined to `root`, running nothing.
@@ -1542,7 +1579,7 @@ async function checkFlow(path: string, root: string | undefined, env: Env): Prom
     has_default: decl.hasDefault,
   }));
   const { name, description } = flow;
-  return { path, ok: true, id: flow.compiled.flowId, name, description, inputs };
+  return { path, ok: true, id: flow.compiled.flowId, name, description, inputs, runStart: runStartTools(flow) };
 }
 
 /**
@@ -1551,9 +1588,10 @@ async function checkFlow(path: string, root: string | undefined, env: Env): Prom
  *
  * With `root`, each flow, its `uses:` imports and its CODE references must be inside that
  * directory, a flow may not set `system.paths`, and its diagnostics are labelled with its path
- * relative to the root. As text, a loaded flow is a `<path>: ok` line on stdout and a failure its
- * `<path>:` line and diagnostic on stderr, each path showing its control characters on a terminal;
- * with `json`, one document lists every result, each path as given.
+ * relative to the root. As text, a loaded flow is a `<path>: ok` line on stdout, naming the tools
+ * only its run supplies (`runStartText`), and a failure its `<path>:` line and diagnostic on
+ * stderr, each line showing its control characters on a terminal; with `json`, one document lists
+ * every result, each path as given, a loaded flow's tools as `run_start_tools`.
  */
 export async function check(
   flows: readonly string[],
@@ -1564,14 +1602,16 @@ export async function check(
   const results: CheckResult[] = [];
   for (const path of flows) results.push(await checkFlow(path, resolvedRoot, io.env));
   if (json) {
-    const documents = results.map((result) =>
-      result.ok ? result : { path: result.path, ok: false, diagnostics: [diagnosticJson(result.diagnostic)] },
-    );
+    const documents = results.map((result) => {
+      if (!result.ok) return { path: result.path, ok: false, diagnostics: [diagnosticJson(result.diagnostic)] };
+      const { runStart, ...loaded } = result;
+      return { ...loaded, run_start_tools: runStart };
+    });
     await printJson({ flows: documents }, io.stdout);
   } else {
     for (const result of results) {
       if (result.ok) {
-        await io.stdout.write(`${showForTerminal(result.path, io.stdout)}: ok\n`);
+        await io.stdout.write(`${showForTerminal(`${result.path}: ok${runStartText(result.runStart)}`, io.stdout)}\n`);
       } else {
         await printStyled(io, `${showForTerminal(result.path, io.stderr)}:`, "red");
         await renderDiagnostic(result.diagnostic, io.stderr, io.env);

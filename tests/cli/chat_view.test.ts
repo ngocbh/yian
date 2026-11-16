@@ -1065,8 +1065,8 @@ describe("the view's helpers", () => {
     expect(summary("x ".repeat(50), 20)).toEqual(["x x x x x x x x x x", "x x x x x x x x x x…"]);
   });
 
-  test("summary shows a JSON record's fields, a null one left out", () => {
-    const written = JSON.stringify({ written: true, path: "a.yaml", reason: null });
+  test("summary shows a JSON record's fields, a null one and an empty list left out", () => {
+    const written = JSON.stringify({ written: true, path: "a.yaml", reason: null, run_start_tools: [] });
     expect(summary(written, 60)).toEqual(["written: true · path: a.yaml"]);
   });
 });

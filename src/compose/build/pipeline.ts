@@ -2337,6 +2337,7 @@ function buildNodes(
     registry,
     resolver: (childId) => scope.resolve(childId),
     callableSection: (name) => scope.section(name),
+    callableNames: () => scope.names(),
     toolModule: (name) => scope.toolModule(name),
     // Inline CODE receives the owning document label only as an opaque traceback file name;
     // authored locations come from semantic origins. Inert for reference-mode CODE.

@@ -67,7 +67,7 @@ import {
   Pending,
 } from "../base.ts";
 import { BindingError, type ReservedBinder } from "../binding.ts";
-import { acceptsNull, type CallView, HostToolCall, outputContractType } from "../contracts.ts";
+import { acceptsNull, type CallableHint, type CallView, HostToolCall, outputContractType } from "../contracts.ts";
 import { staticPathOf } from "../ids.ts";
 import { dropRepeatedLabels, parseQuestions, type QuestionSpec } from "./questions.ts";
 
@@ -310,6 +310,10 @@ export class ToolNode extends Node {
   inputTypes: ReadonlyMap<string, Type>;
   /** `ask`: the answer schema derived from `output:`, one entry per field; `[]` otherwise. */
   answerSchema: readonly Readonly<Record<string, unknown>>[];
+  /** A lifted `call(...)`'s site, `node 'n' input 'x' call(gret)`, which run start names it by; else `null`. */
+  readonly site: string | null;
+  /** The closest name the node's file defines, for a tool the run must supply; else `null`. */
+  readonly hint: CallableHint | null;
 
   /**
    * Build a TOOL node.
@@ -324,6 +328,8 @@ export class ToolNode extends Node {
    * @param options.memoryTool Whether `toolId` names a memory's tool by its input; defaults to
    *   `false`.
    * @param options.module The tool module `toolId` names; defaults to `null`.
+   * @param options.site A lifted `call(...)`'s site; defaults to `null`.
+   * @param options.hint The closest name the node's file defines; defaults to `null`.
    * @throws TypeError when `retries` isn't a safe-integer number or `null`, or `module` is malformed.
    * @throws RangeError when `retries` is negative, a memory's tool names no memory input, or
    *   `toolId` doesn't name `module` by its alias.
@@ -337,9 +343,12 @@ export class ToolNode extends Node {
       answerSchema?: readonly Readonly<Record<string, unknown>>[] | null;
       memoryTool?: boolean;
       module?: ToolModuleRef | null;
+      site?: string | null;
+      hint?: CallableHint | null;
     },
   ) {
     const { toolId, title = null, retries = null, answerSchema = null, memoryTool = false, module = null } = options;
+    const { site = null, hint = null } = options;
     super(nodeId, { title });
     if (retries !== null) {
       const message = `node ${reprText(nodeId)}: retries must be a non-negative int, got ${valueRepr(retries)}`;
@@ -365,6 +374,8 @@ export class ToolNode extends Node {
     this.retries = retries ?? current().toolRetries;
     this.inputTypes = new Map();
     this.answerSchema = answerSchema ?? [];
+    this.site = site;
+    this.hint = hint;
   }
 
   /**
@@ -376,8 +387,8 @@ export class ToolNode extends Node {
   }
 
   /**
-   * Return this node's tool id and group, input names, proven input types, output type and tool
-   * module; `null` for a memory's tool, which the run's tools never hold.
+   * Return this node's tool id and group, input names, proven input types, output type, tool
+   * module, site and hint; `null` for a memory's tool, which the run's tools never hold.
    */
   override hostToolCall(): HostToolCall | null {
     if (this.memoryTool) return null;
@@ -388,6 +399,7 @@ export class ToolNode extends Node {
       this.inputTypes,
       outputContractType(this.outputContract),
       this.module,
+      { site: this.site, hint: this.hint },
     );
   }
 

@@ -1,0 +1,35 @@
+kind: cli
+flow: |
+  id: r
+  name: r
+  defs:
+    greet: {kind: code, code: "return 1", output: !int}
+  nodes:
+    n: {kind: call, call: gret}
+    m: {kind: call, call: {github: search}}
+    s: {kind: call, call: sleep, input: {for: 1s}}
+    o:
+      kind: code
+      code: return 1
+      output: !int
+      input:
+        x: call(gret)
+args: [check, --json, flow.yaml]
+expect:
+  exit: 0
+  json:
+    format: yian.cli.v1
+    flows:
+      - path: flow.yaml
+        ok: true
+        id: r
+        name: r
+        description: null
+        inputs: []
+        run_start_tools:
+          - {node: n, site: null, name: gret, hint: {what: def, name: greet}}
+          - {node: m, site: null, name: "{github: search}", hint: null}
+          - node: __call_0
+            site: node 'o' input 'x' call(gret)
+            name: gret
+            hint: {what: def, name: greet}

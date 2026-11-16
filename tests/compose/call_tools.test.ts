@@ -14,9 +14,9 @@ import { flowFingerprint } from "../../src/compile/manifest.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
-import { Binding, outputContractType } from "../../src/nodes/contracts.ts";
+import { Binding, type CallableHint, outputContractType } from "../../src/nodes/contracts.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
-import { runFlow } from "../../src/run.ts";
+import { runFlow, runStartLabel, type RunStartTool, runStartTools } from "../../src/run.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { canonicalTypeLabel } from "../../src/typesys/values.ts";
 
@@ -280,6 +280,206 @@ test("a mistyped call: name fails at run start, before any record", async () => 
       "did you mean 'search'?",
   );
   expect(existsSync(log)).toBe(false);
+});
+
+/** A library whose def `price` calls `quot`, a typo of its def `quote`. */
+const TYPO_LIBRARY =
+  'id: lib\nname: lib\ndefs:\n  quote: {kind: code, code: "return 1", output: !int}\n' +
+  "  price:\n    nodes:\n      n: {kind: call, call: quot}\n    output: ${n.output}\n";
+
+/** A CODE node whose input `x` is `call`, as one line. */
+const inlineNode = (call: string) => `{kind: code, code: return 1, output: !int, input: {x: ${call}}}`;
+
+/** A hint: the name the file defines that is closest to a tool, and what it is. */
+const hint = (what: CallableHint["what"], name: string): RunStartTool["hint"] => ({ what, name });
+
+// Each row: node `n` as written, and the hint run start and `yian check` give for its tool.
+test.each<[string, RunStartTool["hint"]]>([
+  ["{kind: call, call: gret}", hint("def", "greet")],
+  ["{kind: call, call: clen}", hint("alias", "clean")],
+  ["{kind: call, call: quot}", hint("library def", "{billing: quote}")],
+  ["{kind: call, call: on}", hint("module tool", "one")],
+  ["{kind: call, call: search}", null],
+  // `tool_id:` says the name is a tool, so no def is offered.
+  ["{kind: tool, tool_id: gret}", null],
+  [inlineNode("call(gret)"), hint("def", "greet")],
+  [inlineNode("call(quot)"), hint("library def", "billing.quote")],
+  // A mistyped group is matched against the file's libraries, tool modules and memory inputs.
+  ["{kind: call, call: {bilin: quote}}", hint("library def", "{billing: quote}")],
+  ["{kind: call, call: {bilin: qoute}}", hint("library def", "{billing: quote}")],
+  ["{kind: call, call: {bilin: refund}}", hint("alias", "billing")],
+  ["{kind: call, call: {crn: lookup}}", hint("module tool", "{crm: lookup}")],
+  ["{kind: call, call: {lesons: read}}", hint("memory tool", "{lessons: read}")],
+  [inlineNode("call(lesons.read)"), hint("memory tool", "lessons.read")],
+  ["{kind: call, call: {github: search}}", null],
+  [inlineNode("call(bilin.quote)"), hint("library def", "billing.quote")],
+  [inlineNode("call(crn.lookup)"), hint("module tool", "crm.lookup")],
+])("n: %s is checked at run start, with hint %p", async (node, expected) => {
+  const [tool] = runStartTools(await load(app(`  n: ${node}\n`)));
+  expect(tool!.hint).toEqual(expected);
+});
+
+test("run start checks only the run's tools, each node named by its path or its call's site", async () => {
+  const text = app(
+    "  a: {kind: call, call: sleep, input: {for: 1s}}\n" +
+      "  b: {kind: call, call: {crm: lookup}}\n" +
+      "  c: {kind: call, call: one}\n" +
+      "  d: {kind: call, call: {lessons: read}, input: {path: a.md}}\n" +
+      "  e: {kind: call, call: ask, input: {prompt: hi}}\n" +
+      "  f: {kind: call, call: {github: search}}\n" +
+      "  g: {kind: code, code: return 1, output: !int, input: {x: call(serch)}}\n",
+  );
+
+  expect(runStartTools(await load(text))).toEqual([
+    { node: "f", site: null, name: "{github: search}", hint: null },
+    { node: "__call_0", site: "node 'g' input 'x' call(serch)", name: "serch", hint: null },
+  ]);
+});
+
+test("a case branch's mistyped call(...) is checked at run start by its site, with the hint", async () => {
+  expect(runStartTools(await load(caseApp("call(gret)", "call(greet)")))).toEqual([
+    {
+      node: "__call_0",
+      site: "node 'g' cases[0].then call(gret)",
+      name: "gret",
+      hint: hint("def", "greet"),
+    },
+  ]);
+});
+
+test("a call(...) in a child flow is listed by its path, and its label says which flow", async () => {
+  const text =
+    "id: r\nname: r\ndefs:\n  inner:\n    nodes:\n      m: " +
+    inlineNode("call(serch)") +
+    "\n    output: ${m.output}\nnodes:\n  c: {kind: call, call: inner}\n";
+  const site = "node 'm' input 'x' call(serch)";
+  const tools = runStartTools(await loadFlow(text));
+  expect(tools).toEqual([{ node: "c/__call_0", site, name: "serch", hint: null }]);
+  expect(runStartLabel(tools[0]!)).toBe(`${site} in 'c'`);
+});
+
+test("a library's defs are checked at run start under their names, with hints from the library", async () => {
+  const flow = await loadFlow(TYPO_LIBRARY);
+  expect(runStartTools(flow)).toEqual([
+    { node: "price/n", site: null, name: "quot", hint: hint("def", "quote") },
+  ]);
+});
+
+test("the hint is diagnostic-only: the fingerprint is the same with and without it", async () => {
+  const flow = (def: string) =>
+    `id: r\nname: r\ndefs:\n  ${def}: {kind: code, code: "return 1", output: !int}\n` +
+    "nodes:\n  n: {kind: call, call: gret}\n  m: {kind: code, code: return 1, output: !int, input: {x: call(gret)}}\n";
+  const [hinted, plain] = [await loadFlow(flow("greet")), await loadFlow(flow("zzzzz"))];
+
+  expect(runStartTools(hinted).map((each) => each.hint)).toEqual([hint("def", "greet"), hint("def", "greet")]);
+  expect(runStartTools(plain).map((each) => each.hint)).toEqual([null, null]);
+  expect(flowFingerprint(hinted.compiled)).toBe(flowFingerprint(plain.compiled));
+});
+
+/**
+ * The message the flow `text` fails to start with, given the host tool `search`, which needs `q`,
+ * and a tool for each of `others`.
+ */
+async function startError(text: string, others: readonly string[] = []): Promise<string> {
+  const search = tool({
+    name: "search",
+    description: "A host tool.",
+    parameters: { type: "object", properties: { q: { type: "string" } }, required: ["q"], additionalProperties: false },
+    execute: () => "found",
+  });
+  const tools = { search, ...Object.fromEntries(others.map((name) => [name, hostTool(name)])) };
+  const run = runFlow(await load(text), {}, { env: hostEnv(tmp), tools });
+  return ((await run.catch((caught: unknown) => caught)) as Error).message;
+}
+
+const UNKNOWN = "names tool 'serch', which isn't in this run's tools; known tools: [\"search\"]";
+
+// Each row: the def, the `call:` that misspells it, the run's other tools, and what run start offers.
+test.each<[string, string, string[], string]>([
+  ["greet", "gret", [], "the def `greet`"],
+  // As close as the run's `search`: the file's name comes first.
+  ["serch2", "serch", [], "the def `serch2` or the tool `search`"],
+  ["fetch_all", "fetch_ur", ["fetch_url"], "the tool `fetch_url` or the def `fetch_all`"],
+])("run start offers the def %s for call: %s, and a run's tool as close or closer", async (def, call, others, offer) => {
+  const text =
+    `id: r\nname: r\ndefs:\n  ${def}: {kind: code, code: "return 1", output: !int}\n` +
+    `nodes:\n  n: {kind: call, call: ${call}}\n`;
+  expect(await startError(text, others)).toEndWith(`; did you mean ${offer}?`);
+});
+
+/**
+ * A flow whose file defines the def `greet`, the flow alias `clean`, the library `billing` and the
+ * tool modules `crm` (a group) and `one` (one export), and whose node `n` is `node`.
+ */
+const typoApp = (node: string) =>
+  "id: r\nname: r\nuses:\n  crm: ./crm.ts\n  one: ./tools.ts:quote\n  billing: ./billing\n  clean: ./clean\n" +
+  `defs:\n  greet: {kind: code, code: "return 1", output: !int}\nnodes:\n  n: ${node}\n`;
+
+const NO_TOOL = (tool: string) => `tool '${tool}', which isn't in this run's tools; known tools: ["search"]`;
+/** How run start says `{<written>}`'s group, such as `bilin: quote`, isn't one of the run's. */
+const NO_GROUP = (written: string) =>
+  `{${written}}: unknown tool group '${written.split(":")[0]}'; tool groups in this run: []`;
+
+// Each row: the `call:` of node `n`, why run start refuses it, and the name it offers.
+test.each([
+  ["clen", NO_TOOL("clen"), "the alias `clean`"],
+  ["quot", NO_TOOL("quot"), "the library def `{billing: quote}`"],
+  ["on", NO_TOOL("on"), "the module tool `one`"],
+  ["{bilin: quote}", NO_GROUP("bilin: quote"), "the library def `{billing: quote}`"],
+  ["{crn: lookup}", NO_GROUP("crn: lookup"), "the module tool `{crm: lookup}`"],
+])("run start offers the file's closest name for call: %s", async (call, reason, hint) => {
+  const error = await startError(typoApp(`{kind: call, call: ${call}}`));
+  expect(error).toBe(`TOOL node 'n' names ${reason}; did you mean ${hint}?`);
+});
+
+test("run start spells an inline call's tool and the names it offers as the call writes them", async () => {
+  expect(await startError(typoApp(inlineNode("call(crn.lookup)")))).toBe(
+    "node 'n' input 'x' call(crn.lookup) names crn.lookup: unknown tool group 'crn'; tool groups in this run: []; " +
+      "did you mean the module tool `crm.lookup`?",
+  );
+  const text = `id: r\nname: r\nnodes:\n  n: ${inlineNode("call(github_serch)")}\n`;
+  const run = runFlow(await loadFlow(text), {}, { env: hostEnv(tmp), tools: { github: [hostTool("search")] } });
+  expect(((await run.catch((caught: unknown) => caught)) as Error).message).toEndWith(
+    "; did you mean `github.search`?",
+  );
+});
+
+test("the check list spells an inline call's tool as the call writes it", async () => {
+  const [tool] = runStartTools(await load(app(`  n: ${inlineNode("call(github.search)")}\n`)));
+  expect(tool!.name).toBe("github.search");
+});
+
+// Each row: what fails, the flow's lines and the run-start error, which names the inline call's
+// site.
+test.each([
+  [
+    "an unknown tool",
+    "nodes:\n  n: {kind: code, code: return 1, output: !int, input: {x: call(serch)}}\n",
+    `node 'n' input 'x' call(serch) ${UNKNOWN}; did you mean 'search'?`,
+  ],
+  [
+    "an unknown tool in a child flow",
+    "defs:\n  inner:\n    nodes:\n      m: {kind: code, code: return 1, output: !int, input: {x: call(serch)}}\n" +
+      "    output: ${m.output}\nnodes:\n  c: {kind: call, call: inner}\n",
+    `node 'm' input 'x' call(serch) in 'c' ${UNKNOWN}; did you mean 'search'?`,
+  ],
+  [
+    "an argument the tool doesn't take",
+    "nodes:\n  n:\n    kind: code\n    code: return 1\n    output: !int\n    input:\n      x: call(search, k=1)\n",
+    "node 'n' input 'x' call(search) argument 'k': tool 'search' takes no such input; it takes [\"q\"]",
+  ],
+  [
+    "an argument the tool can't take",
+    "nodes:\n  n:\n    kind: code\n    code: return 1\n    output: !int\n    input:\n      x: call(search, q=1)\n",
+    "node 'n' input 'x' call(search) argument 'q': tool 'search' takes str, but the binding is 1 (int)",
+  ],
+  [
+    "an argument the tool needs",
+    "nodes:\n  n: {kind: code, code: return 1, output: !int, input: {x: call(search)}}\n",
+    "node 'n' input 'x' call(search) is missing argument 'q' that tool 'search' requires",
+  ],
+])("run start names an inline tool call by its site: %s", async (_what, lines, message) => {
+  expect(await startError(`id: r\nname: r\n${lines}`)).toBe(message);
 });
 
 test("a compact flow's call: names a tool", async () => {

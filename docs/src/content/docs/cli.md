@@ -379,6 +379,17 @@ review.yaml: ok
 A flow that doesn't load prints its path and the located error on stderr, and the command exits 1.
 A [library](/flows/#library-files) is ok when every def loads.
 
+A host or MCP tool is looked up only when a run starts, so a misspelled `call:` name loads. The
+ok line lists the tools its `call:` names leave for run start, each with its node (a `call(...)`
+by its site, a library's node under its def's name) and the closest name the flow defines, if
+one is close. Each name and hint shows once, tools with a hint come first, and past five the rest
+are counted:
+
+```console
+$ yian check flow.yaml
+flow.yaml: ok; checked at run start: gret (node 'n'; did you mean the def greet?), {github: search} (node 'm')
+```
+
 With `--root DIR`, each flow and each `uses:` import must be inside `DIR` (`compose.outside_root`
 otherwise), a `uses:` ref loads only from the importing file's folder, resolved as `yian run`
 resolves it (an absolute ref too), and a flow that sets
@@ -387,11 +398,13 @@ resolves it (an absolute ref too), and a flow that sets
 with `loadFlow`'s `codeRoot`; one outside fails with `compose.load`.
 
 With `--json`, `flows` holds one result per argument, in order. A flow that loads gives its `id`,
-`name`, `description` and `inputs`, each input with its `type`, `required` and `has_default`; one
-that doesn't gives `diagnostics`:
+`name`, `description`, `inputs`, each input with its `type`, `required` and `has_default`, and
+`run_start_tools`, each with its `node` path, a `call(...)`'s `site` (else `null`), its `name`
+and its `hint`, `{what, name}` such as `{"what": "def", "name": "greet"}` (`null` when nothing is
+close); one that doesn't gives `diagnostics`:
 
 ```json
-{"format":"yian.cli.v1","flows":[{"description":null,"id":"brief","inputs":[{"has_default":false,"name":"topic","required":true,"type":"str"}],"name":"brief","ok":true,"path":"brief.yaml"}]}
+{"format":"yian.cli.v1","flows":[{"description":null,"id":"brief","inputs":[{"has_default":false,"name":"topic","required":true,"type":"str"}],"name":"brief","ok":true,"path":"brief.yaml","run_start_tools":[]}]}
 ```
 
 ## yian status

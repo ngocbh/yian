@@ -153,19 +153,43 @@
         "has_default": {"type": "boolean"}
       }
     },
+    "run_start_tool": {
+      "description": "A host or MCP tool a TOOL node names, which the run looks up when it starts. node is the node's path; site is a call(...)'s site, or null; hint is the closest name the flow defines and what it is, or null.",
+      "type": "object",
+      "required": ["node", "site", "name", "hint"],
+      "properties": {
+        "node": {"type": "string"},
+        "site": {"type": ["string", "null"]},
+        "name": {"type": "string"},
+        "hint": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "required": ["what", "name"],
+              "properties": {
+                "what": {"enum": ["def", "alias", "library def", "module tool", "memory tool"]},
+                "name": {"type": "string"}
+              }
+            }
+          ]
+        }
+      }
+    },
     "flow_result": {
       "description": "One flow `yian check` loaded; path is the argument exactly as given.",
       "oneOf": [
         {
           "type": "object",
-          "required": ["path", "ok", "id", "name", "description", "inputs"],
+          "required": ["path", "ok", "id", "name", "description", "inputs", "run_start_tools"],
           "properties": {
             "path": {"type": "string"},
             "ok": {"const": true},
             "id": {"type": "string"},
             "name": {"type": "string"},
             "description": {"type": ["string", "null"]},
-            "inputs": {"type": "array", "items": {"$ref": "#/$defs/input"}}
+            "inputs": {"type": "array", "items": {"$ref": "#/$defs/input"}},
+            "run_start_tools": {"type": "array", "items": {"$ref": "#/$defs/run_start_tool"}}
           }
         },
         {

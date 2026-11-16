@@ -16,6 +16,7 @@ import * as events from "../../src/events.ts";
 import { registerTemplateFn } from "../../src/expr/builtins.ts";
 import { ExpressionError, evaluateWhen } from "../../src/expr/expressions.ts";
 import * as yian from "../../src/index.ts";
+import { authoredText, escapeAuthorTags } from "../../src/llm/body.ts";
 import {
   ChangeIdReusedError,
   isMemory,
@@ -141,7 +142,7 @@ test("only the final log-only runtime and run API remain", () => {
   expect(Object.getOwnPropertyNames(run.RunResult.prototype)).toEqual(["constructor"]);
 });
 
-test("the package root exports exactly its documented root list plus ToolAttemptsFailed, pending, the message names, InboxRef, the host calls and the memory names", () => {
+test("the package root exports exactly its documented root list plus ToolAttemptsFailed, pending, the message names, InboxRef, the host calls, the memory names and the author label", () => {
   const expected: Record<string, unknown> = {
     loadFlow,
     runFlow: run.runFlow,
@@ -186,6 +187,8 @@ test("the package root exports exactly its documented root list plus ToolAttempt
     MemoryMissingError,
     memoryErrorKind,
     MemoryRef,
+    authoredText,
+    escapeAuthorTags,
   };
   expect(Object.keys(yian).sort()).toEqual(Object.keys(expected).sort());
   const exported = yian as Record<string, unknown>;

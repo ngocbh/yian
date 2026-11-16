@@ -15,7 +15,8 @@
  * body's inputs read that way, and `carriedFieldTypes` gives the carried record's proven field
  * types.
  *
- * Knows about: diagnostics, expr, the LOOP runtime node, the built-in tool ids, node contracts, compile's output contracts, typesys, compose helpers, `base.ts` and `resolver.ts`.
+ * Knows about: diagnostics, expr, the LOOP runtime node, the built-in tool ids, node contracts,
+ * compile's output contracts, typesys, compose helpers, `base.ts` and `resolver.ts`.
  */
 
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
@@ -323,7 +324,11 @@ export class LoopDescriptor extends NodeDescriptor {
     const outNames = contractFieldNames(sig.output);
     const display = callableDisplay(this.call, this.childLabel, this.def);
     // A tool the loop runs through the body generated for it: the body returns the tool's result.
+    // Its messages list the carried fields but the memory yian passes the tool, and offer `output:`
+    // only when a field it may return, neither a memory nor an inbox, is carried.
     const tool = this.bodyTool;
+    const toolCarried = carriedNames.filter((name) => !memoryFields.has(name));
+    const returnable = toolCarried.filter((name) => !inboxFields.has(name));
     /** What the tool returns, as its refusals start: `loop node 'w': tool `sleep` returns None`. */
     const returns = (): string => {
       const typ = outputContractType(sig.output);
@@ -332,7 +337,7 @@ export class LoopDescriptor extends NodeDescriptor {
     if (outNames === null || outNames.size === 0) {
       errors.push(
         tool !== null
-          ? `${returns()}, not a record of carried fields ${TOOL_RESULT}${declareResultFix(tool)}`
+          ? `${returns()}, not a record of carried fields ${TOOL_RESULT}${declareResultFix(tool, returnable)}`
           : `${subject}: body ${display} must return a record with at least one carried field (a subset of ` +
               `the carried record ${carriedText}); write \`output: {field: ...}\` or a whole reference to a node ` +
               "with a record output",
@@ -355,7 +360,7 @@ export class LoopDescriptor extends NodeDescriptor {
             : `${names.slice(0, -1).join(", ")} and ${names.at(-1)} aren't carried fields`;
         errors.push(
           tool !== null
-            ? `${returns()}, but ${which} ${carriedText} ${TOOL_RESULT}`
+            ? `${returns()}, but ${which} ${namesText(toolCarried)} ${TOOL_RESULT}`
             : `${subject}: body output field(s) ${namesText(outside)} are not carried record fields ` +
                 `${carriedText} (a body returns a subset of the carried record)`,
         );
@@ -538,9 +543,13 @@ function checkedCount(subject: string, key: "times" | "max", value: unknown, err
   return null;
 }
 
-/** The fix for a loop's `tool` whose result isn't a record of carried fields: `sleep` and `take` take no `output:`. */
-function declareResultFix(tool: string): string {
-  return tool === SLEEP || tool === TAKE ? "" : "; declare the record it returns with `output:`";
+/**
+ * The fix for a loop's `tool` whose result isn't a record of the `returnable` carried fields; none
+ * when no field is carried, or for `sleep` and `take`, which take no `output:`.
+ */
+function declareResultFix(tool: string, returnable: readonly string[]): string {
+  if (returnable.length === 0 || tool === SLEEP || tool === TAKE) return "";
+  return "; declare the record it returns with `output:`";
 }
 
 /** Return `names` sorted by code unit, as a JSON list of text. */

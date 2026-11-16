@@ -200,6 +200,31 @@ test.each([
   expect((await failure(text))[0]).toContain(message);
 });
 
+// Each row: a loop's `call:` and lines, and its refusal of what the tool returns, which lists the
+// carried fields but the memory yian passes, and offers `output:` only when a field is carried.
+test.each([
+  [
+    "{lessons: read}",
+    "    input:\n      path: a.md\n    times: 1\n    output: {path: !str, x: !int}\n",
+    "loop node 'poll': tool `{lessons: read}` returns {\"path\":str,\"x\":int}, but `x` isn't a carried field " +
+      "[\"path\"] (a loop's tool returns the carried fields that change)",
+  ],
+  [
+    "{lessons: read}",
+    "    times: 1\n",
+    "loop node 'poll': tool `{lessons: read}` returns an untyped value, not a record of carried fields (a loop's " +
+      "tool returns the carried fields that change)",
+  ],
+  [
+    "tick",
+    "    times: 1\n",
+    "loop node 'poll': tool `tick` returns an untyped value, not a record of carried fields (a loop's tool returns " +
+      "the carried fields that change)",
+  ],
+])("a loop over %s with %j words its refusal by the carried fields", async (call, lines, message) => {
+  expect((await failure(loopApp(call, lines)))[0]).toBe(message);
+});
+
 test("run start names a loop's tool by the loop", async () => {
   const text =
     "id: r\nname: r\ndefs:\n  c:\n    nodes:\n" +

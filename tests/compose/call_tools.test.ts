@@ -301,11 +301,13 @@ test.each<[string, string | null]>([
   ["{kind: tool, tool_id: gret}", null],
   [inlineNode("call(gret)"), "did you mean the def greet?"],
   [inlineNode("call(quot)"), "did you mean the library def billing.quote?"],
-  // A mistyped group is matched against the file's libraries and tool modules.
+  // A mistyped group is matched against the file's libraries, tool modules and memory inputs.
   ["{kind: call, call: {bilin: quote}}", "did you mean the library def {billing: quote}?"],
   ["{kind: call, call: {bilin: qoute}}", "did you mean the library def {billing: quote}?"],
   ["{kind: call, call: {bilin: refund}}", "did you mean the alias billing?"],
   ["{kind: call, call: {crn: lookup}}", "did you mean the module tool {crm: lookup}?"],
+  ["{kind: call, call: {lesons: read}}", "did you mean the memory tool {lessons: read}?"],
+  [inlineNode("call(lesons.read)"), "did you mean the memory tool lessons.read?"],
   ["{kind: call, call: {github: search}}", null],
   [inlineNode("call(bilin.quote)"), "did you mean the library def billing.quote?"],
   [inlineNode("call(crn.lookup)"), "did you mean the module tool crm.lookup?"],

@@ -952,7 +952,7 @@ type ModuleOfCall = { readonly alias: string; readonly ref: string; readonly pat
  */
 export interface CallableHint {
   /** What the name is. */
-  readonly what: "def" | "alias" | "library def" | "module tool";
+  readonly what: "def" | "alias" | "library def" | "module tool" | "memory tool";
   /** The name as the node would write it: `greet`, `{billing: quote}`, or `billing.quote` in a `call(...)`. */
   readonly name: string;
   /** How close it is to the tool the node names (`closeness`), to weigh against a run's tool. */

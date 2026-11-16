@@ -152,8 +152,9 @@ class ToolWording {
  * - A bare name is matched against the file's defs, flow aliases, library defs and one-export
  *   modules' tools.
  * - A group is matched against the file's libraries, offering the def the call names, else the one
- *   closest to it, else the alias; and its modules of several tools, offering the tool the call
- *   names, since such a module lists its tools only at run start.
+ *   closest to it, else the alias; its modules of several tools, offering the tool the call names,
+ *   since such a module lists its tools only at run start; and the memory inputs of the node's
+ *   flow, offering their tool the call names.
  */
 function closeCallable(ctx: BuildContext, ref: ToolRef, wording: ToolWording): CallableHint | null {
   const { group, name } = ref;
@@ -181,6 +182,11 @@ function closeCallable(ctx: BuildContext, ref: ToolRef, wording: ToolWording): C
       // A library alias names no flow of its own; its defs are matched by their names.
       if (library === null) offer(each, "alias", each);
       else for (const def of library.keys()) offer(def, "library def", wording.ref(each, def));
+    }
+  }
+  if (group !== null) {
+    for (const [input, typ] of ctx.flowInputs) {
+      if (isMemoryType(typ)) offer(input, "memory tool", wording.ref(input, name));
     }
   }
   const [close] = getCloseMatches(group ?? name, [...candidates.keys()], 1, CLOSE_MATCH_CUTOFF);

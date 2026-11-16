@@ -906,11 +906,11 @@ nodes:
     cases:
       - when: \${input.go}
         then: call(outer, topic=call(inner, topic=\${input.topic}))
-    else: call(take, topic=\${input.topic})
+    else: call(pick, topic=\${input.topic})
 output: \${gate.output}
 `;
   const gate = SourceDocument.parse(text).root.child("nodes").child("gate");
-  const { flow, builder } = assembleText(text, "flow.yaml", { children: { outer: topic, inner: topic, take: topic } });
+  const { flow, builder } = assembleText(text, "flow.yaml", { children: { outer: topic, inner: topic, pick: topic } });
   const compiled = flow.compiled;
 
   // __call_0 is the inner call, __call_1 the outer one (inner first), __call_2 the else call.

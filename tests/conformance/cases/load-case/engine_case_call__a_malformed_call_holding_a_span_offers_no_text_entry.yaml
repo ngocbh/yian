@@ -7,7 +7,7 @@ flow: |2
     score: !float
 
   defs:
-    take:
+    pick:
       input:
         stance: !str
       nodes:
@@ -24,8 +24,8 @@ flow: |2
       kind: case
       cases:
         - when: "input.score >= 0.5"
-          then: call(take, stance=${input.score}
-      else: call(take, stance="c")
+          then: call(pick, stance=${input.score}
+      else: call(pick, stance="c")
   output: ${gate.output}
 expect:
   load:

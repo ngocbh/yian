@@ -8,7 +8,7 @@ flow: |2
     score: !float
 
   defs:
-    take:
+    pick:
       input:
         stance: !str
       nodes:
@@ -25,7 +25,7 @@ flow: |2
       kind: case
       cases:
         - when: "input.score >= 0.5"
-          then: call(take stance="a")
+          then: call(pick stance="a")
       else: nope
     nope:
       kind: code
@@ -38,7 +38,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: "case node 'gate' then: a branch target must be a node id or a single call: a call(...) must start with a flow id (a bare name, or alias.def for a library's def) and a comma, got 'take stance=\"a\"'"
+      message: "case node 'gate' then: a branch target must be a node id or a single call: a call(...) must start with a flow id (a bare name, or alias.def for a library's def) and a comma, got 'pick stance=\"a\"'"
       frames:
       - label: flow.yaml
         range: [25, 15, 25, 36]

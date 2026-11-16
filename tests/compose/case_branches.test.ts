@@ -145,9 +145,9 @@ test.each<[string, string]>([
   ["${input.n}", "then: ${input.n}"],
   ["${route.output}", "then: ${route.output}"],
   ['{a: "${input.cmd"}', "then: {a:"],
-  ['${ take(stance="pro") }', "then: ${ take"],
+  ['${ pick(stance="pro") }', "then: ${ pick"],
   ["int = ${input.n}", "then: int ="],
-  ['"call(take"', 'then: "call(take"'],
+  ['"call(pick"', 'then: "call(pick"'],
   // A tag makes the branch a value, even a word naming a node, as in a value entry.
   ["!int 3", "then: !int 3"],
   ["!str reply", "then: !str reply"],
@@ -206,7 +206,7 @@ test("a NaN branch is refused by the YAML reader at the scalar", () => {
 });
 
 test("a quoted call holding a span is its own error", () => {
-  const text = flow(on('"call(take, x=${input.cmd})"'));
+  const text = flow(on('"call(pick, x=${input.cmd})"'));
 
   const error = loadErrorWith(
     text,
@@ -214,7 +214,7 @@ test("a quoted call holding a span is its own error", () => {
       "here; drop the quotes to call the flow, or reword the text",
   );
 
-  expect(errorLine(error)).toBe(lineOf(text, 'then: "call(take'));
+  expect(errorLine(error)).toBe(lineOf(text, 'then: "call(pick'));
 });
 
 // ---------- unquoted words that name no node ----------

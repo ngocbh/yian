@@ -7,7 +7,7 @@
  * Accepted grammar: a whole-value `call(...)` directive (a route target is one node id). A quoted
  * branch, or one holding `${...}`, is a value, a LoadError that shows the value entry to write; a
  * flow call inside its `${...}` is a LoadError that says to call the flow as the branch
- * (`then: call(take, ...)`).
+ * (`then: call(pick, ...)`).
  */
 
 import { expect, test } from "bun:test";
@@ -39,12 +39,12 @@ function def(inputs: string): ComposedFlow {
   });
 }
 
-const TAKE = def("  stance: !str\n");
+const PICK = def("  stance: !str\n");
 
-// An in-file `take` def (the branch callable): echoes its stance via the `took` CODE fn.
-const TAKE_DEF = `
+// An in-file `pick` def (the branch callable): echoes its stance via the `took` CODE fn.
+const PICK_DEF = `
 defs:
-  take:
+  pick:
     input:
       stance: !str
     nodes:
@@ -58,7 +58,7 @@ defs:
 `;
 
 /** Assemble `text` with the hand-built callees `children`; return the compiled flow. */
-const load = (text: string, children: Record<string, ComposedFlow> = { take: TAKE }) =>
+const load = (text: string, children: Record<string, ComposedFlow> = { pick: PICK }) =>
   assembleText(text, "flow.yaml", { children }).flow.compiled;
 
 /** Load `text` with its real defs and run it on `inputs`; return the result. */
@@ -84,14 +84,14 @@ id: bad
 name: bad
 input:
   score: !float
-${TAKE_DEF}
+${PICK_DEF}
 nodes:
   gate:
     kind: case
     cases:
       - when: "input.score >= 0.5"
-        then: \${ take(stance="a") | take(stance="b") }
-    else: call(take, stance="c")
+        then: \${ pick(stance="a") | pick(stance="b") }
+    else: call(pick, stance="c")
 output: \${gate.output}
 `;
   expect(loadError(() => load(text)).message).toBe(valueBranch("then"));
@@ -126,14 +126,14 @@ id: bad
 name: bad
 input:
   score: !float
-${TAKE_DEF}
+${PICK_DEF}
 nodes:
   gate:
     kind: case
     cases:
       - when: "input.score >= 0.5"
-        then: \${ call(take, stance="a") }
-    else: call(take, stance="c")
+        then: \${ call(pick, stance="a") }
+    else: call(pick, stance="c")
 output: \${gate.output}
 `;
   expect(loadError(() => load(text)).message).toBe(valueBranch("then"));
@@ -147,7 +147,7 @@ input:
   score: !float
   topic: !str
 defs:
-  take:
+  pick:
     input:
       stance: !str
     nodes:
@@ -180,13 +180,13 @@ nodes:
     kind: case
     cases:
       - when: "input.score >= 0.5"
-        then: call(take, stance="pro")
+        then: call(pick, stance="pro")
     else: use
 output: \${gate.output}
 `;
 
 test("inline binding and then call share minter no collision", () => {
-  const synth = synthIds(load(BOTH, { take: TAKE, enrich: def("  topic: !str\n") }));
+  const synth = synthIds(load(BOTH, { pick: PICK, enrich: def("  topic: !str\n") }));
   expect(synth).toEqual(["__call_0", "__call_1"]); // distinct ids, no collision
 });
 
@@ -197,14 +197,14 @@ id: cc
 name: cc
 input:
   score: !float
-${TAKE_DEF}
+${PICK_DEF}
 nodes:
   gate:
     kind: case
     cases:
       - when: "input.score >= 0.5"
-        then: call(take, stance="pro")
-    else: call(take, stance="con")
+        then: call(pick, stance="pro")
+    else: call(pick, stance="con")
 output: \${gate.output}
 `;
 
@@ -233,37 +233,37 @@ id: bad
 name: bad
 input:
   score: !float
-${TAKE_DEF}
+${PICK_DEF}
 nodes:
   gate:
     kind: case
     cases:
       - when: "input.score >= 0.5"
-        then: call(take, stance="a") | call(take, stance="b")
-    else: call(take, stance="c")
+        then: call(pick, stance="a") | call(pick, stance="b")
+    else: call(pick, stance="c")
 output: \${gate.output}
 `;
   expect(loadError(() => load(text)).message).toBe(
     "case node 'gate' then: a branch target must be a node id or a single call: text follows the " +
-      "closing `)`: '| call(take, stance=\"b\")'; a call(...) must be the whole value",
+      "closing `)`: '| call(pick, stance=\"b\")'; a call(...) must be the whole value",
   );
 });
 
 test.each(
   ["then", "else"].flatMap((label) =>
     [
-      ['call(take, stance="a", stance="b")', "call(take, ...) passes keyword 'stance' more than once"],
+      ['call(pick, stance="a", stance="b")', "call(pick, ...) passes keyword 'stance' more than once"],
       [
-        "call(take, 30)",
-        "call(take, ...) passes a positional argument '30'; every argument after the " +
+        "call(pick, 30)",
+        "call(pick, ...) passes a positional argument '30'; every argument after the " +
           "flow id must be a keyword (name=value)",
       ],
-      ["call(take", "`call(` is never closed (check its parentheses and quotes)"],
-      ['call(take, stance="a") tail', "text follows the closing `)`: 'tail'; a call(...) must be the whole value"],
+      ["call(pick", "`call(` is never closed (check its parentheses and quotes)"],
+      ['call(pick, stance="a") tail', "text follows the closing `)`: 'tail'; a call(...) must be the whole value"],
       [
-        'call(take stance="a")',
+        'call(pick stance="a")',
         "a call(...) must start with a flow id (a bare name, or alias.def for a library's def) and a comma, " +
-          "got 'take stance=\"a\"'",
+          "got 'pick stance=\"a\"'",
       ],
     ].map(([target, problem]) => [label, target!, problem!]),
   ),
@@ -275,7 +275,7 @@ id: bad
 name: bad
 input:
   score: !float
-${TAKE_DEF}
+${PICK_DEF}
 nodes:
   gate:
     kind: case
@@ -307,8 +307,8 @@ nodes:
     kind: case
     cases:
       - when: "input.score >= 0.5"
-        then: 'call(take'
-    else: "call(take) tail"
+        then: 'call(pick'
+    else: "call(pick) tail"
 output: \${gate.output}
 `;
   expect(loadError(() => load(text, {})).message).toBe(valueBranch("then"));
@@ -332,8 +332,8 @@ test("nested then call directive lifts two synth nodes", () => {
   // The nested then: target lifts BOTH the inner and outer call as synth nodes; the else: lifts one
   // more: three synth call nodes in all, the gate's then-edge on the outer.
   const text = FLOW_DIRECTIVE.replace(
-    'then: call(take, stance="pro")',
-    'then: call(take, stance=call(take, stance="pro"))',
+    'then: call(pick, stance="pro")',
+    'then: call(pick, stance=call(pick, stance="pro"))',
   );
   expect(synthIds(load(text))).toEqual(["__call_0", "__call_1", "__call_2"]);
 });
@@ -373,7 +373,7 @@ id: bad
 name: bad
 input:
   score: !float
-${TAKE_DEF}
+${PICK_DEF}
 nodes:
   gate:
     kind: case
@@ -385,13 +385,13 @@ output: \${gate.output}
 `;
 
 test.each([
-  ["then", '${ take(stance="pro") }'],
-  ["else", '"${ take(stance=\'con\') }"'],
-  ["then", '{a: "${ take(stance=\'pro\') }"}'],
+  ["then", '${ pick(stance="pro") }'],
+  ["else", '"${ pick(stance=\'con\') }"'],
+  ["then", '{a: "${ pick(stance=\'pro\') }"}'],
 ])("a span flow call branch is a value branch: %s %s", (label, branch) => {
   // The retired inline `${flow(args)}` case branch is a value, located at the branch.
   const [then, else_] =
-    label === "else" ? ['call(take, stance="pro")', branch] : [branch, 'call(take, stance="con")'];
+    label === "else" ? ['call(pick, stance="pro")', branch] : [branch, 'call(pick, stance="con")'];
   const text = SPAN_CALL_FLOW.replace("THEN", then).replace("ELSE", else_);
   const error = loadError(() => load(text));
   expect(error.message).toBe(valueBranch(label));
@@ -399,7 +399,7 @@ test.each([
 });
 
 test("the call directive written for a span flow call loads", async () => {
-  const text = SPAN_CALL_FLOW.replace("THEN", 'call(take, stance="pro")').replace("ELSE", 'call(take, stance="con")');
+  const text = SPAN_CALL_FLOW.replace("THEN", 'call(pick, stance="pro")').replace("ELSE", 'call(pick, stance="con")');
   expect((await run(text, { score: 0.9 })).output).toBe("took:pro");
 });
 
@@ -409,14 +409,14 @@ id: bad
 name: bad
 input:
   score: !float
-${TAKE_DEF}
+${PICK_DEF}
 nodes:
   gate:
     kind: case
     cases:
       - when: "input.score >= 0.5"
-        then: call(take, stance=\${input.score}
-    else: call(take, stance="c")
+        then: call(pick, stance=\${input.score}
+    else: call(pick, stance="c")
 output: \${gate.output}
 `;
   expect(loadError(() => load(text)).message).toBe(
@@ -436,5 +436,5 @@ test.each<CaseRow>([
     "a_branch_call_without_a_flow_id_and_comma",
     "a_malformed_call_holding_a_span_offers_no_text_entry",
     "a_span_flow_call_branch_is_rejected",
-  ].map((name) => ({ id: `load-case/engine_case_call__${name}`, call: assembledWith({ take: TAKE }) })),
+  ].map((name) => ({ id: `load-case/engine_case_call__${name}`, call: assembledWith({ pick: PICK }) })),
 ])("assemble: $id", runCase);

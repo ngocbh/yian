@@ -9,7 +9,7 @@ flow: |2
   input:
     item: !Optional(Item)
   defs:
-    take:
+    pick:
       input:
         item: !Item
       nodes:
@@ -29,7 +29,7 @@ flow: |2
       else: skip
     use:
       kind: call
-      call: take
+      call: pick
       input:
         item: ${input.item}
     skip:

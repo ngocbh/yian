@@ -8,7 +8,7 @@ flow: |2
     score: !float
 
   defs:
-    take:
+    pick:
       input:
         stance: !str
       nodes:
@@ -25,7 +25,7 @@ flow: |2
       kind: case
       cases:
         - when: "input.score >= 0.5"
-          then: call(take, stance="a", stance="b")
+          then: call(pick, stance="a", stance="b")
       else: nope
     nope:
       kind: code
@@ -38,7 +38,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: "case node 'gate' then: a branch target must be a node id or a single call: call(take, ...) passes keyword 'stance' more than once"
+      message: "case node 'gate' then: a branch target must be a node id or a single call: call(pick, ...) passes keyword 'stance' more than once"
       frames:
       - label: flow.yaml
         range: [25, 15, 25, 49]

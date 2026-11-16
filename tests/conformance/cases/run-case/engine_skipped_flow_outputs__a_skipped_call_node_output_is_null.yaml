@@ -5,7 +5,7 @@ flow: |
   input:
     approve: !bool
   defs:
-    take:
+    pick:
       input:
         stance: !str
       nodes:
@@ -26,7 +26,7 @@ flow: |
       else: rejected
     c:
       kind: call
-      call: take
+      call: pick
       input:
         stance: "pro"
     rejected:

@@ -48,7 +48,7 @@ nodes:
     output: !str
 output: \${use.output :- skip.output}
 defs:
-  take:
+  pick:
     input:
       v: !str
     nodes:
@@ -75,7 +75,7 @@ defs:
 
 const CALL = `use:
     kind: call
-    call: take
+    call: pick
     input:
       v: \${x.output}`;
 
@@ -96,7 +96,7 @@ typedefs:
 input:
   item: !Optional(Item)
 defs:
-  take:
+  pick:
     input:
       item: !Item
     nodes:
@@ -116,7 +116,7 @@ nodes:
     else: skip
   use:
     kind: call
-    call: take
+    call: pick
     input:
       item: \${input.item}
   skip:

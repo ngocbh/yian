@@ -123,7 +123,7 @@ const CHILD = `
 id: f
 name: f
 defs:
-  ask:
+  say:
     nodes:
       reply:
         kind: agent
@@ -134,7 +134,7 @@ defs:
 nodes:
   c:
     kind: call
-    call: ask
+    call: say
 output: \${c.output}
 `;
 

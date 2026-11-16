@@ -21,7 +21,7 @@ flow: |2
       else: skip
     use:
       kind: call
-      call: take
+      call: pick
       input:
         v: ${x.output}
     skip:
@@ -32,7 +32,7 @@ flow: |2
       output: !str
   output: ${use.output :- skip.output}
   defs:
-    take:
+    pick:
       input:
         v: !str
       nodes:

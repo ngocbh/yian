@@ -1,4 +1,4 @@
-# A flow granted under a built-in tool's name would hide that tool.
+# A def named like a built-in tool is refused at its key, before a node can grant it.
 kind: load
 flow: |
   id: f
@@ -20,7 +20,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'node ''helper'': flow `ask_user` has the name of a built-in tool; rename the defs entry'
+      message: 'defs entry ''ask_user'': `ask_user` is a name yian reserves; rename the def'
       frames:
       - label: flow.yaml
-        range: [14, 12, 14, 22]
+        range: [4, 3, 4, 11]

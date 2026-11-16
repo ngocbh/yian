@@ -59,7 +59,6 @@ import {
   visibleToolName,
 } from "../../tools/grants.ts";
 import { splitModuleRef, type ToolModuleRef } from "../../tools/modules.ts";
-import { RESERVED_TOOL_NAMES } from "../../tools/registry.ts";
 import { YianTypeError } from "../../typesys/errors.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import {
@@ -1064,9 +1063,9 @@ export class AgentDescriptor extends NodeDescriptor {
    *
    * @throws LoadError, at `tools:`, when a grant names both a memory input and a flow or library,
    *   grants a flow in the group form, a library with no defs or a def it lacks, names one by a
-   *   built-in tool's name or a name a model can't call, grants two tools that would show one
-   *   name, or a flow or def with no `description:` or with an input a model can't send (an inbox,
-   *   a memory, a file); or as `resolveChild` throws.
+   *   name a model can't call, grants two tools that would show one name, or a flow or def with no
+   *   `description:` or with an input a model can't send (an inbox, a memory, a file); or as
+   *   `resolveChild` throws.
    */
   private readFlowTools(ctx: BuildContext, memoryInputs: readonly string[], range: SourceRange | null): FlowTool[] {
     const fail = (message: string, cause: unknown = null) =>
@@ -1096,9 +1095,7 @@ export class AgentDescriptor extends NodeDescriptor {
       const child = resolve();
       const library = child.library ?? null;
       const what = library === null ? "flow" : "library";
-      const entry = section === "defs" ? "the defs entry" : "the uses: alias";
       if (memoryInputs.includes(name)) throw fail(`\`${name}\` is both a memory input and a ${what}; rename one`);
-      if (RESERVED_TOOL_NAMES.has(name)) throw fail(`${what} \`${name}\` has the name of a built-in tool; rename ${entry}`);
       if (library === null) {
         if (grant.kind === "group") {
           const why =

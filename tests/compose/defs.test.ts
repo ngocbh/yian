@@ -704,6 +704,23 @@ output: \${a.output}
   );
 });
 
+test.each(["take", "sleep", "ask", "ask_user", "load_skill"])(
+  "a def or uses: alias named %s, a built-in's name, is refused at its key",
+  async (name) => {
+    for (const [section, body, subject, entry] of [
+      ["defs", "\n    nodes: {}\n    output: x", `defs entry '${name}'`, "def"],
+      ["uses", " lib/none", `uses: alias '${name}'`, "alias"],
+    ] as const) {
+      const text = `id: f\nname: f\n${section}:\n  ${name}:${body}\nnodes:\n  a: !str hi\noutput: \${a.output}\n`;
+      const error = await loadErrorAsync(loadConformanceFlow(text));
+      expect(error.message).toBe(`${subject}: \`${name}\` is a name yian reserves; rename the ${entry}`);
+      expect(error.diagnostic.frames.at(-1)!.range).toEqual(
+        SourceDocument.parse(text).root.child(section).keyRangeOf(name)!,
+      );
+    }
+  },
+);
+
 /** A flow whose node `go` calls the single-node def `d`, written as `kind`. */
 const singleNodeDef = (kind: string) => `id: f
 name: f

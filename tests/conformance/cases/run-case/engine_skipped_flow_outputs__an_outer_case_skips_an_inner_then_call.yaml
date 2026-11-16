@@ -6,7 +6,7 @@ flow: |
     approve: !bool
     inner: !bool
   defs:
-    take:
+    pick:
       input:
         stance: !str
       nodes:
@@ -28,8 +28,8 @@ flow: |
       kind: case
       cases:
         - when: ${input.inner}
-          then: call(take, stance="pro")
-      else: call(take, stance="con")
+          then: call(pick, stance="pro")
+      else: call(pick, stance="con")
   output:
     v: ${inner.output}
 inputs:

@@ -3,14 +3,14 @@ flow: |
   id: f
   name: f
   defs:
-    ask:
+    say:
       input: {m: !str }
       llm_config: {model: '${input.m}'}
       nodes:
         chat: {kind: agent, prompt: Go., llm_config: {provider: openai}}
       output: ${chat.output}
   nodes:
-    a: {kind: call, call: ask, input: {m: def-model}}
+    a: {kind: call, call: say, input: {m: def-model}}
   output: ${a.output}
 run:
   num_workers: 0

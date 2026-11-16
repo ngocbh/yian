@@ -8,7 +8,8 @@
  *
  * A user message's author goes to the model as an `<authored_message author="...">` …
  * `</authored_message>` wrapper around its parts, and the tag is escaped in every user and tool
- * text, so only the adapter can write it.
+ * text, so only the adapter can write it. `authoredText` and `escapeAuthorTags` give a host the
+ * same label and escaping for text it sends to an agent outside yian.
  */
 
 import { YianTypeError } from "../typesys/errors.ts";
@@ -197,6 +198,36 @@ export function authorClose(): string {
   return `</${AUTHOR_TAG}>`;
 }
 
+/**
+ * Return `text` with `open` and a line break before it, and a line break and `close` after it,
+ * leaving out a `null` tag.
+ */
+function fold(open: string | null, text: string, close: string | null): string {
+  return (open === null ? "" : `${open}\n`) + text + (close === null ? "" : `\n${close}`);
+}
+
+/** Whether `text` holds more than whitespace, which a user message needs to be wrapped in its author. */
+function hasText(text: string): boolean {
+  return text.trim() !== "";
+}
+
+/**
+ * Return `text` labelled as written by `author`, exactly as an adapter sends a user message from
+ * `author` whose only part is `text` as one string: escaped with `escapeAuthorTags`, then between
+ * `authorOpen(author)` and `authorClose()`, each tag on its own line. Text that is only
+ * whitespace is returned unwrapped, as an adapter sends it.
+ *
+ * For a host that sends text from several speakers to an agent outside yian, so that agent reads
+ * the labels a flow's agents read.
+ *
+ * @throws {TypeError} If `author` is empty, which no message can carry.
+ */
+export function authoredText(author: string, text: string): string {
+  if (author === "") throw new YianTypeError("an author must be a non-empty string");
+  const escaped = escapeAuthorTags(text);
+  return hasText(text) ? fold(authorOpen(author), escaped, authorClose()) : escaped;
+}
+
 /** One value still to escape in `escapeAuthorTagsInJson`, and where its copy goes. */
 interface EscapeTask {
   item: JsonValue;
@@ -264,10 +295,9 @@ function escapeResult(part: ToolResultPart): ToolResultPart {
   });
 }
 
-/** Return `part` with `open + "\n"` before its text, or `"\n" + close` after it. */
+/** Return `part` with its text folded between `open` and `close` as `fold` does. */
 function foldTags(part: TextPart, open: string | null, close: string | null): TextPart {
-  const text = (open === null ? "" : `${open}\n`) + part.text + (close === null ? "" : `\n${close}`);
-  return new TextPart(text, part.providerPayload);
+  return new TextPart(fold(open, part.text, close), part.providerPayload);
 }
 
 /**
@@ -289,7 +319,7 @@ export function withAuthorWrapper(message: Message, options: { inline?: boolean 
   if (message.role === "user") {
     parts = message.parts.map((part) => (part instanceof TextPart ? escapeText(part) : part));
     const author = message.author;
-    const sendable = message.parts.some((part) => part instanceof TextPart && part.text.trim() !== "");
+    const sendable = message.parts.some((part) => part instanceof TextPart && hasText(part.text));
     // The wrapper always closes: Anthropic merges consecutive user turns, and the next message's
     // text must not read as this author's.
     if (author !== null && sendable) {

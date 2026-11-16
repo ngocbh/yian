@@ -3788,16 +3788,18 @@ function checkToolInputs(
 }
 
 /**
- * Prove one TOOL node's declared output can hold a value its tool returns; a call with no output
- * type isn't checked.
+ * Prove one TOOL node's output type, declared or the record a loop's tool carries, can hold a value
+ * its tool returns; a call with no output type isn't checked.
  *
  * @throws RangeError when the tool's return type is disjoint from the node's output type.
  */
 function checkToolOutput(nodeId: string, call: HostToolCall, declaredOutput: Type): void {
   if (call.outputType === null) return;
   if (typeRelation(declaredOutput, call.outputType) === "disjoint") {
+    // A loop's tool with no `output:` returns the record the loop carries, which nothing declared.
+    const contract = call.carriedOutput ? "carries" : "output: declared";
     throw new YianRangeError(
-      `${toolNodeName(nodeId, call)} output: declared ${canonicalTypeLabel(call.outputType)}, ` +
+      `${toolNodeName(nodeId, call)} ${contract} ${canonicalTypeLabel(call.outputType)}, ` +
         `but tool ${reprText(visibleToolName(call.group, call.toolId))} returns ` +
         canonicalTypeLabel(declaredOutput),
     );

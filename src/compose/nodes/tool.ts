@@ -568,7 +568,18 @@ export class ToolDescriptor extends NodeDescriptor {
     const hint = mayBeTypo ? closeCallable(ctx, this.toolRef, this.wording) : null;
     const site = this.wording.site;
     const bodyOf = site === null ? (ctx.bodyOf?.label ?? null) : null;
-    const node = new ToolNode(this.id, { toolId: this.toolRef, title: this.nodeName, retries, module, site, bodyOf, hint });
+    // A loop's tool with no `output:` returns the carried record (`resultContract`).
+    const carriedOutput = this.writtenKind === "loop" && this.outputs === null;
+    const node = new ToolNode(this.id, {
+      toolId: this.toolRef,
+      title: this.nodeName,
+      retries,
+      module,
+      site,
+      bodyOf,
+      carriedOutput,
+      hint,
+    });
     const wiring = this.sinkWiring();
     if (this.toolId === TAKE) {
       node.outputContract = this.buildTake(ctx);

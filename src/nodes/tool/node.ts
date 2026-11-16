@@ -317,6 +317,11 @@ export class ToolNode extends Node {
    * names it by; else `null`.
    */
   readonly bodyOf: string | null;
+  /**
+   * Whether the output contract is the carried record a loop's tool returns with no `output:`, not
+   * a declared one, which run start words its message by.
+   */
+  readonly carriedOutput: boolean;
   /** The closest name the node's file defines, for a tool the run must supply; else `null`. */
   readonly hint: CallableHint | null;
 
@@ -335,6 +340,8 @@ export class ToolNode extends Node {
    * @param options.module The tool module `toolId` names; defaults to `null`.
    * @param options.site A lifted `call(...)`'s site; defaults to `null`.
    * @param options.bodyOf The map or loop whose generated body this node is; defaults to `null`.
+   * @param options.carriedOutput Whether the output contract is a loop's carried record; defaults to
+   *   `false`.
    * @param options.hint The closest name the node's file defines; defaults to `null`.
    * @throws TypeError when `retries` isn't a safe-integer number or `null`, or `module` is malformed.
    * @throws RangeError when `retries` is negative, a memory's tool names no memory input, or
@@ -351,11 +358,12 @@ export class ToolNode extends Node {
       module?: ToolModuleRef | null;
       site?: string | null;
       bodyOf?: string | null;
+      carriedOutput?: boolean;
       hint?: CallableHint | null;
     },
   ) {
     const { toolId, title = null, retries = null, answerSchema = null, memoryTool = false, module = null } = options;
-    const { site = null, bodyOf = null, hint = null } = options;
+    const { site = null, bodyOf = null, carriedOutput = false, hint = null } = options;
     super(nodeId, { title });
     if (retries !== null) {
       const message = `node ${reprText(nodeId)}: retries must be a non-negative int, got ${valueRepr(retries)}`;
@@ -383,6 +391,7 @@ export class ToolNode extends Node {
     this.answerSchema = answerSchema ?? [];
     this.site = site;
     this.bodyOf = bodyOf;
+    this.carriedOutput = carriedOutput;
     this.hint = hint;
   }
 
@@ -396,7 +405,8 @@ export class ToolNode extends Node {
 
   /**
    * Return this node's tool id and group, input names, proven input types, output type, tool
-   * module, site, `bodyOf` and hint; `null` for a memory's tool, which the run's tools never hold.
+   * module, site, `bodyOf`, `carriedOutput` and hint; `null` for a memory's tool, which the run's
+   *   tools never hold.
    */
   override hostToolCall(): HostToolCall | null {
     if (this.memoryTool) return null;
@@ -407,7 +417,7 @@ export class ToolNode extends Node {
       this.inputTypes,
       outputContractType(this.outputContract),
       this.module,
-      { site: this.site, bodyOf: this.bodyOf, hint: this.hint },
+      { site: this.site, bodyOf: this.bodyOf, carriedOutput: this.carriedOutput, hint: this.hint },
     );
   }
 

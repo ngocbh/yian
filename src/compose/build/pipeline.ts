@@ -1977,8 +1977,9 @@ function readSections(options: AssembleOptions, ctx: AssembleContext): ReadSecti
   const callsTool = callsToolRule(scope, memories, diagnostics);
 
   // Inline-body extraction masks child-only fields for descriptor parsing. Assertion provenance
-  // still belongs to the unmodified authored occurrence tree. A generated tool body's one node is
-  // the map's tool call itself, which has no body to extract.
+  // still belongs to the unmodified authored occurrence tree. A generated tool body holds exactly
+  // one node, the map's tool call itself, which keeps the map's `kind:` and has no body to extract
+  // (extracting it would generate the body again).
   const [nodesCursor, inlineBodies] =
     options.bodyOf != null
       ? [authoredNodesCursor, new Map<string, InlineBody>()]

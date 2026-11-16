@@ -15,8 +15,8 @@
  * body's inputs read that way, and `carriedFieldTypes` gives the carried record's proven field
  * types.
  *
- * Knows about: diagnostics, expr, the LOOP runtime node, the built-in tool ids, node contracts,
- * compile's output contracts, typesys, compose helpers, `base.ts` and `resolver.ts`.
+ * Knows about: diagnostics, expr, memory's `listed`, the LOOP runtime node, the built-in tool ids,
+ * node contracts, compile's output contracts, typesys, compose helpers, `base.ts` and `resolver.ts`.
  */
 
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
@@ -33,6 +33,7 @@ import {
   PartialRecordContract,
   ValueContract,
 } from "../../nodes/contracts.ts";
+import { listed } from "../../memory/common.ts";
 import { LoopNode } from "../../nodes/loop/node.ts";
 import { SLEEP, TAKE } from "../../tools/context.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
@@ -354,10 +355,7 @@ export class LoopDescriptor extends NodeDescriptor {
       }
       if (returnedInboxes.length === 0 && outside.length > 0) {
         const names = outside.toSorted(compareCodeUnits).map((name) => `\`${name}\``);
-        const which =
-          names.length === 1
-            ? `${names[0]} isn't a carried field`
-            : `${names.slice(0, -1).join(", ")} and ${names.at(-1)} aren't carried fields`;
+        const which = `${listed(names)} ${names.length === 1 ? "isn't a carried field" : "aren't carried fields"}`;
         errors.push(
           tool !== null
             ? `${returns()}, but ${which} ${namesText(toolCarried)} ${TOOL_RESULT}`

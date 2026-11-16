@@ -144,6 +144,9 @@ export function inferInlineBindingType(
     return inferProvenType(value, options);
   } catch (error) {
     if (unproven === null || !UNPROVEN.has(error as LoadError)) throw error;
+    // Safe for any inference error: `value` is the caller's own binding, so a real mistake in it
+    // (an unknown input, a bad field read, a malformed template) is reported at that binding by the
+    // caller's reference checks; only its type is left unknown here.
     return unproven;
   }
 }

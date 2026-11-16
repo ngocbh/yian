@@ -176,6 +176,12 @@ test.each([
     "node 'fetch' (call: sleep) input 'for': a duration reference must be typed str (tag it: `for: !str ${...}`)",
     "${other.output}",
   ],
+  [
+    "search",
+    "    input:\n      q: ${input.nope}\n",
+    "node 'fetch' map input 'q' from: reference ${input.nope} points to unknown flow input 'nope'",
+    "${input.nope}",
+  ],
 ])("call: %s with %j fails at the author's field", async (call, lines, message, at) => {
   const [got, where] = await failure(mapApp(call, lines));
   expect(got).toContain(message);

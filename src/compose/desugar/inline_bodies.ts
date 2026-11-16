@@ -269,10 +269,10 @@ function rejectAuthoredPrivateCallTargets(nodesCursor: SourceCursor): void {
  *
  * A literal argument (`limit: 5`) is written straight into the node's `input:`, so the node checks
  * it as a `call` node would. Each other argument is a body input, which the node passes through as
- * `k: ${input.k}`, and so is the `memory` whose tool it calls, if any; an argument whose name a body
- * input can't take (`max-results`) passes through one named `arg_max_results`. Each field keeps the
- * author's source, and the memory's binding the source of `call:`, so the body's errors point at
- * what the author wrote.
+ * `k: ${input.k}`; an argument whose name a body input can't take (`max-results`) passes through
+ * one named `arg_max_results`. The `memory` whose tool it calls, if any, is a body input too, which
+ * the node's memory routing reads. Each field keeps the author's source, and the memory's binding
+ * the source of `call:`, so the body's errors point at what the author wrote.
  *
  * @param memory The memory input whose tool the node calls; `null` for none.
  * @throws LoadError at the key for an `input:` key named `memory`.
@@ -320,7 +320,6 @@ function toolBody(
     if (range !== undefined) inputRanges.set(name, range);
   }
   if (memory !== null) {
-    passed.set(memory, [`\${input.${memory}}`, callCursor]);
     toolInputs.set(memory, memory);
     if (callCursor.range !== null) inputRanges.set(memory, callCursor.range);
   }

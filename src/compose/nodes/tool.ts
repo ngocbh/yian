@@ -68,6 +68,7 @@ export type ToolField = "tool_id" | "call";
 export interface ToolDescriptorFields extends NodeDescriptorFields {
   toolRef: ToolRef;
   writtenKind?: string;
+  autoWiredGroup?: boolean;
   retries?: number;
   asserts?: readonly string[] | null;
   adaptiveQuestions?: unknown;
@@ -246,6 +247,11 @@ export class ToolDescriptor extends NodeDescriptor {
   readonly toolRef: ToolRef;
   /** The kind the author wrote: `tool`, `call`, or the `map` that generated the node. */
   readonly writtenKind: string;
+  /**
+   * Whether `input:` binds the tool's group by a binding yian generated, as a one-node flow binds
+   * each of its inputs; such a binding has no key of its own.
+   */
+  readonly autoWiredGroup: boolean;
   /** The effective retry count, so the manifest holds it; zero is left out of the manifest. */
   readonly retries: number;
   /** The node asserts. */
@@ -263,6 +269,7 @@ export class ToolDescriptor extends NodeDescriptor {
     super(fields);
     this.toolRef = fields.toolRef;
     this.writtenKind = fields.writtenKind ?? ToolDescriptor.kind;
+    this.autoWiredGroup = fields.autoWiredGroup ?? false;
     this.retries = fields.retries ?? current().toolRetries;
     this.asserts = fields.asserts ?? [];
     this.adaptiveQuestions = fields.adaptiveQuestions ?? null;
@@ -331,7 +338,12 @@ export class ToolDescriptor extends NodeDescriptor {
       throw questionsReserved(wording, rangeAt(cursor, ["inputs", QUESTIONS_INPUT]) ?? desc.range, diagnostics);
     }
     recordAdaptiveRanges(desc, cursor);
-    return desc as InstanceType<T>;
+    // A one-node flow's generated `<group>: ${input.<group>}` has no authored text of its own.
+    const autoWiredGroup =
+      group !== null &&
+      desc.inputs[group] === `\${input.${group}}` &&
+      cursor.child("inputs").child(group).scalarText === null;
+    return (autoWiredGroup ? desc.replace({ autoWiredGroup }) : desc) as InstanceType<T>;
   }
 
   /**
@@ -629,9 +641,8 @@ export class ToolDescriptor extends NodeDescriptor {
 
   /**
    * Build a TOOL node calling the tool `toolRef.name` of the memory input `toolRef.group`, whose
-   * type is `memory`. The memory is routed to its tool, never passed as an argument, so an input
-   * that passes it through (`<group>: ${input.<group>}`, as a one-node flow and a map's generated
-   * body bind every flow input) isn't one of the node's inputs.
+   * type is `memory`. The memory is routed to its tool, never passed as an argument, so a one-node
+   * flow's generated binding of it (`autoWiredGroup`) isn't one of the node's inputs.
    *
    * @throws LoadError when the memory is Optional, which a run may leave unbound, or its type lacks
    *   the tool.
@@ -664,7 +675,7 @@ export class ToolDescriptor extends NodeDescriptor {
     });
     node.outputContract = this.outputContract(ctx);
     const wiring = this.sinkWiring();
-    if (bindingSource(wiring.get(input)) === `\${input.${input}}`) wiring.delete(input);
+    if (this.autoWiredGroup) wiring.delete(input);
     node.params = this.sinkParams().filter((parameter) => wiring.has(parameter.name));
     wiring.set(memoryKey(input), memoryBinding(input));
     return this._finish(node, wiring);

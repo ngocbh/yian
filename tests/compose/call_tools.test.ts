@@ -493,6 +493,26 @@ test("a compact flow's call: names a tool", async () => {
   expect(node.params!.map((parameter) => parameter.name)).toEqual(["q"]);
 });
 
+test.each([
+  ["call", "call"],
+  ["tool", "tool_id"],
+])("a kind: %s node binding the memory it calls is refused, as any tool argument holding one", async (kind, field) => {
+  const text = app(`  n: {kind: ${kind}, ${field}: {lessons: read}, input: {lessons: "\${input.lessons}", path: a.md}}\n`);
+  expect(await refusal(text)).toBe(
+    "flow has unresolved references:\n  node 'n' input 'lessons' from: ${input.lessons} is a memory; use it whole as an " +
+      "agent input, in prompt text, as a child's memory input of the same type, or name it in `tools:`/`tool_id:` " +
+      "(a tool node can't take a memory)",
+  );
+});
+
+test("a single-node def calling its memory input's tool doesn't take the memory as an argument", async () => {
+  const text =
+    "id: r\nname: r\ninput:\n  lessons: !FileMemory\n" +
+    "defs:\n  rd: {input: {lessons: !FileMemory, path: !str}, kind: call, call: {lessons: read}}\n" +
+    'nodes:\n  n: {kind: call, call: rd, input: {lessons: "${input.lessons}", path: a.md}}\n';
+  expect(await target(text, "n/rd")).toBe("tool lessons_read memory");
+});
+
 test("a compact flow's call: of a memory input names one of its tools", async () => {
   const text = "id: s\nname: s\ninput:\n  lessons: !FileMemory\nkind: call\ncall: lessons\n";
   expect((await loadErrorAsync(loadFlow(text))).message).toBe(

@@ -54,9 +54,13 @@ import {
   valueTypeError,
 } from "./base.ts";
 
+/** The field a TOOL node's tool is written in: `tool_id` under `kind: tool`, `call` under `kind: call`. */
+export type ToolField = "tool_id" | "call";
+
 /** The fields `ToolDescriptor`'s constructor takes: the common ones and the TOOL's own. */
 export interface ToolDescriptorFields extends NodeDescriptorFields {
   toolRef: ToolRef;
+  toolField?: ToolField;
   retries?: number;
   asserts?: readonly string[] | null;
   adaptiveQuestions?: unknown;
@@ -64,18 +68,20 @@ export interface ToolDescriptorFields extends NodeDescriptorFields {
 
 /**
  * How a TOOL node's load messages name the node and the field its tool is written in, so each
- * message reads in the author's own words.
+ * message reads in the author's own words: `kind=tool` and `tool_id:`, or `kind=call` and `call:`.
  */
 class ToolWording {
   /** The node's own id. */
   readonly nodeId: string;
   /** The node kind the author wrote. */
-  readonly kind: string = ToolDescriptor.kind;
+  readonly kind: string;
   /** The field the author named the tool in. */
-  readonly field = "tool_id";
+  readonly field: ToolField;
 
-  constructor(nodeId: string) {
+  constructor(nodeId: string, field: ToolField) {
     this.nodeId = nodeId;
+    this.field = field;
+    this.kind = field === "call" ? "call" : ToolDescriptor.kind;
   }
 
   /** The node: `node 'f'`. */
@@ -104,6 +110,11 @@ class ToolWording {
   }
 }
 
+/** The field a TOOL body in `cursor` names its tool in: `call` under `kind: call`, else `tool_id`. */
+function toolFieldOf(cursor: SourceCursor): ToolField {
+  return cursor.get("kind") === "call" ? "call" : "tool_id";
+}
+
 /**
  * kind=tool: a direct, deterministic call to one tool in the run's `ToolSet`.
  *
@@ -115,6 +126,9 @@ class ToolWording {
  * `tool_id:` is a tool's id or a group's tool, `{group: tool}`. `tool_id: take | sleep | ask` names
  * a yian built-in, whose inputs are checked at load and whose output is inferred (`take`, `sleep`)
  * or is the answer type (`ask`, which alone takes `adaptive_questions:`).
+ *
+ * A `kind: call` body whose `call:` names a tool parses here too, its `call:` read as `tool_id:`;
+ * `toolField` records which the author wrote, so the messages use the author's words.
  */
 export class ToolDescriptor extends NodeDescriptor {
   static override readonly kind = "tool";
@@ -135,6 +149,8 @@ export class ToolDescriptor extends NodeDescriptor {
 
   /** The tool, looked up in the run's `ToolSet`: a bare id, or a group's tool. */
   readonly toolRef: ToolRef;
+  /** The field the author wrote the tool in. */
+  readonly toolField: ToolField;
   /** The effective retry count, so the manifest holds it; zero is left out of the manifest. */
   readonly retries: number;
   /** The node asserts. */
@@ -151,6 +167,7 @@ export class ToolDescriptor extends NodeDescriptor {
   constructor(fields: ToolDescriptorFields) {
     super(fields);
     this.toolRef = fields.toolRef;
+    this.toolField = fields.toolField ?? "tool_id";
     this.retries = fields.retries ?? current().toolRetries;
     this.asserts = fields.asserts ?? [];
     this.adaptiveQuestions = fields.adaptiveQuestions ?? null;
@@ -163,7 +180,17 @@ export class ToolDescriptor extends NodeDescriptor {
 
   /** How this node's load messages name it and its tool's field. */
   get wording(): ToolWording {
-    return new ToolWording(this.id);
+    return new ToolWording(this.id, this.toolField);
+  }
+
+  /** `call` for a `kind: call` body naming a tool. */
+  static override _writtenKind(cursor: SourceCursor): string {
+    return toolFieldOf(cursor) === "call" ? "call" : this.kind;
+  }
+
+  /** `call` for `tool_id` in a `kind: call` body naming a tool. */
+  static override _writtenKey(key: string, cursor: SourceCursor): string {
+    return key === "tool_id" ? toolFieldOf(cursor) : super._writtenKey(key, cursor);
   }
 
   /**
@@ -180,7 +207,7 @@ export class ToolDescriptor extends NodeDescriptor {
     cursor: SourceCursor,
   ): InstanceType<T> {
     const diagnostics = LoadDiagnostics.fromCursor(cursor);
-    const wording = new ToolWording(nodeId);
+    const wording = new ToolWording(nodeId, toolFieldOf(cursor));
     const toolId = cursor.get("tool_id");
     if (typeof toolId === "string" && cursor.has("adaptive_questions")) {
       if (toolId !== ASK && toolId !== ASK_USER) {
@@ -223,7 +250,9 @@ export class ToolDescriptor extends NodeDescriptor {
     cursor: SourceCursor,
   ): void {
     const rangeOf = (key: string) => ranges.get(siteKey("field", key)) ?? ownRange;
-    const wording = new ToolWording(nodeId);
+    const field = toolFieldOf(cursor);
+    fields["toolField"] = field;
+    const wording = new ToolWording(nodeId, field);
     const raw = fields["toolId"] ?? null;
     const ref = ToolDescriptor.readToolRef(wording, raw, rangeOf("tool_id"), diagnostics);
     delete fields["toolId"];

@@ -7,11 +7,13 @@ flow: |
       kind: call
       call: named
       output: ${named.output}
+  defs:
+    named: {kind: code, code: return 1, output: !int}
 expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'node ''composite'' (kind=call): `output:` is only valid with inline `nodes:`'
+      message: 'node ''composite'' (kind=call): `output:` doesn''t apply to a flow call: a flow''s result type comes from the flow'
       frames:
       - label: flow.yaml
         range: [7, 13, 7, 28]

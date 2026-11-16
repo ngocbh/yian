@@ -141,12 +141,18 @@ test("a tool node bakes the module its tool_id names", async () => {
 });
 
 test.each([
-  ["call: crm", "`crm` is a tool module; call its tools from a tool node"],
+  ["call: crm", "node 'a': `crm` is a tool module; name one of its tools: `call: {crm: <tool>}`"],
   ["tools: [{quote: [quote]}]", "node 'a': `quote` is one tool, ./tools.ts:quote; grant it as `quote`"],
   ["tool_id: crm", "node 'a': `crm` is a tool module; name one of its tools: `tool_id: {crm: <tool>}`"],
   ["tool_id: {quote: quote}", "node 'a': `quote` is one tool, ./tools.ts:quote; write `tool_id: quote`"],
 ])("%s is a load error", async (field, message) => {
   expect(await refusal(app(USES, [`a: {kind: ${KINDS[field.split(":")[0]!]}, ${field}}`]))).toBe(message);
+});
+
+test("a map naming a module alias is a load error that points to a call node", async () => {
+  expect(await refusal(app(USES, ["a: {kind: map, over: [1], call: crm}"]))).toBe(
+    "`crm` is a tool module; call its tools from a `call` node",
+  );
 });
 
 test.each(["tools: [crm]", "tool_id: {crm: lookup}"])("%s naming a memory input too is a load error", async (field) => {

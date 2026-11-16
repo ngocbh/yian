@@ -2011,7 +2011,7 @@ export class CallableScope implements AssemblyScope {
       );
     }
     if (this.#modules.has(flowId)) {
-      throw this.#diagnostics.error(`\`${flowId}\` is a tool module; call its tools from a tool node`);
+      throw this.#diagnostics.error(`\`${flowId}\` is a tool module; call its tools from a \`call\` node`);
     }
     if (Object.hasOwn(this.#uses, flowId)) {
       throw this.#diagnostics.error(`uses: alias ${reprText(flowId)} was not resolved before assembly`, {

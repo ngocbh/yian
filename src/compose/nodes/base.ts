@@ -259,7 +259,8 @@ export function rejectNonText(
 
 /**
  * Read a CALL's, MAP's or LOOP's `call:` in `fields`: text names a callable, and a one-key
- * mapping `{billing: quote}` a def of the library `billing`, read into `call` and `def`.
+ * mapping `{billing: quote}` a def of the library `billing`, read into `call` and `def`. The
+ * messages name a tool's forms too, which a `call` node naming a tool reads as a TOOL node.
  *
  * @throws LoadError at `call:` for any other value, `null` included.
  */
@@ -275,18 +276,18 @@ export function readCallTarget(
   if (typeof raw === "string") return;
   if (!isRecord(raw)) {
     const fix = raw === null ? "write a callable name" : "put it in quotes";
-    throw fail(valueTypeError("call", "a callable name or `{library: def}`", raw, fix));
+    throw fail(valueTypeError("call", "a callable name, `{library: def}` or `{group: tool}`", raw, fix));
   }
   const keys = Object.keys(raw);
   if (keys.length !== 1 || keys[0] === "") {
-    throw fail("`call:` names one library def, such as `call: {billing: quote}`");
+    throw fail("`call:` names one callable: `greet`, `{billing: quote}` or `{crm: lookup}`");
   }
   const alias = keys[0]!;
   const def = raw[alias];
   if (typeof def !== "string" || def === "") {
     const first = Array.isArray(def) ? def[0] : undefined;
     const example = typeof first === "string" && first !== "" ? first : "quote";
-    throw fail(`\`call: {${alias}: ...}\` names one def; write \`call: {${alias}: ${example}}\``);
+    throw fail(`\`call: {${alias}: ...}\` names one def or tool; write \`call: {${alias}: ${example}}\``);
   }
   fields["call"] = alias;
   fields["def"] = def;
@@ -784,6 +785,19 @@ export class NodeDescriptor {
   }
 
   /**
+   * The kind a body's messages name: this kind, unless `cursor`'s body was written under another
+   * kind's name, as a `kind: call` naming a tool is.
+   */
+  static _writtenKind(cursor: SourceCursor): string {
+    return this.kind;
+  }
+
+  /** The key the author wrote for body key `key` of `cursor`: `input` for `inputs`, say. */
+  static _writtenKey(key: string, cursor: SourceCursor): string {
+    return SURFACE_NAMES.get(key) ?? key;
+  }
+
+  /**
    * Reject a body key outside `allowed`, at its value (a `when:` adds `whenHint`), then a missing
    * `required` key, at the body.
    *
@@ -792,24 +806,24 @@ export class NodeDescriptor {
   static _checkKeys(nodeId: string, cursor: SourceCursor): void {
     const diagnostics = LoadDiagnostics.fromCursor(cursor);
     const body = cursor._valueView() as ValueRecord;
+    const subject = `node ${reprText(nodeId)} (kind=${this._writtenKind(cursor)})`;
     for (const key of Object.keys(body)) {
       if (this.allowed.has(key)) continue;
       const hint = key === "when" ? this.whenHint : "";
       // Name the authored spellings, the offending key's too; the plural carrier names fail to load.
-      const field = SURFACE_NAMES.get(key) ?? key;
-      const surface = new Set([...this.allowed].map((name) => SURFACE_NAMES.get(name) ?? name));
+      const field = this._writtenKey(key, cursor);
+      const surface = new Set([...this.allowed].map((name) => this._writtenKey(name, cursor)));
       throw diagnostics.error(
-        `node ${reprText(nodeId)} (kind=${this.kind}): field ${reprText(field)} is not allowed ` +
+        `${subject}: field ${reprText(field)} is not allowed ` +
           `(allowed: ${[...surface].sort(compareCodeUnits).join(", ")})${hint}`,
         { range: cursor.rangeOf(key) },
       );
     }
     for (const key of this.required) {
       if (!Object.hasOwn(body, key)) {
-        throw diagnostics.error(
-          `node ${reprText(nodeId)} (kind=${this.kind}): missing required field ${reprText(key)}`,
-          { range: cursor.range },
-        );
+        throw diagnostics.error(`${subject}: missing required field ${reprText(this._writtenKey(key, cursor))}`, {
+          range: cursor.range,
+        });
       }
     }
   }
@@ -834,7 +848,7 @@ export class NodeDescriptor {
       const value = cursor.get(key);
       const range = cursor.rangeOf(key);
       if (key === "node_name") {
-        rejectNonText(this.kind, nodeId, key, value, range, diagnostics);
+        rejectNonText(this._writtenKind(cursor), nodeId, key, value, range, diagnostics);
       } else {
         this._checkOrderingField(nodeId, key, value, cursor, diagnostics);
       }
@@ -843,10 +857,10 @@ export class NodeDescriptor {
     }
     if (Object.hasOwn(body, "env")) {
       if (!isRecord(body["env"])) {
-        throw diagnostics.error(
-          `node ${reprText(nodeId)} (kind=${this.kind}): \`env:\` must be a mapping with string keys`,
-          { range: cursor.rangeOf("env") },
-        );
+        const subject = `node ${reprText(nodeId)} (kind=${this._writtenKind(cursor)})`;
+        throw diagnostics.error(`${subject}: \`env:\` must be a mapping with string keys`, {
+          range: cursor.rangeOf("env"),
+        });
       }
       const env = cursor.mapping("env");
       checkEnvValues(env, `node ${reprText(nodeId)} `, cursor.child("env"), diagnostics);
@@ -876,8 +890,8 @@ export class NodeDescriptor {
     else if (value === null) got = "null";
     else got = `${typeName(value)} ${valueRepr(value)}`;
     let message =
-      `node ${reprText(nodeId)} (kind=${this.kind}): \`${key}:\` must be a list of node ids ` +
-      `(got ${got})`;
+      `node ${reprText(nodeId)} (kind=${this._writtenKind(cursor)}): \`${key}:\` must be a list of ` +
+      `node ids (got ${got})`;
     if (typeof value === "string" && value !== "") message += `; write \`${key}: [${value}]\``;
     throw diagnostics.error(message, { range: cursor.rangeOf(key) });
   }
@@ -904,11 +918,11 @@ export class NodeDescriptor {
     cursor: SourceCursor,
   ): void {
     const inputs = fields["inputs"];
+    const subject = `node ${reprText(nodeId)} (kind=${this._writtenKind(cursor)})`;
     if (inputs !== undefined && inputs !== null && !isRecord(inputs)) {
-      throw diagnostics.error(
-        `node ${reprText(nodeId)} (kind=${this.kind}): ${inputShapeProblem(this.kind, inputs)}`,
-        { range: ranges.get(siteKey("field", "inputs")) ?? ownRange },
-      );
+      throw diagnostics.error(`${subject}: ${inputShapeProblem(this.kind, inputs)}`, {
+        range: ranges.get(siteKey("field", "inputs")) ?? ownRange,
+      });
     }
     const asserts = fields["asserts"];
     if (
@@ -916,10 +930,9 @@ export class NodeDescriptor {
       asserts !== null &&
       !(Array.isArray(asserts) && asserts.every((item) => typeof item === "string"))
     ) {
-      throw diagnostics.error(
-        `node ${reprText(nodeId)} (kind=${this.kind}): \`asserts:\` must be a list of strings`,
-        { range: ranges.get(siteKey("field", "asserts")) ?? null },
-      );
+      throw diagnostics.error(`${subject}: \`asserts:\` must be a list of strings`, {
+        range: ranges.get(siteKey("field", "asserts")) ?? null,
+      });
     }
   }
 

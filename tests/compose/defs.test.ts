@@ -17,6 +17,7 @@ import { parseFile } from "../../src/compose/parse/file.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
+import { NodeKind } from "../../src/nodes/base.ts";
 import type { CodeNode } from "../../src/nodes/code/node.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { runFlow } from "../../src/run.ts";
@@ -294,7 +295,7 @@ output: \${go.output}
   await loadErrorAsync(loadConformanceFlow(text));
 });
 
-test("a call to an unknown callable is loud", async () => {
+test("a call to a name the file doesn't define names a tool", async () => {
   const text = `
 id: unk
 name: unk
@@ -320,10 +321,8 @@ nodes:
       topic: \${input.topic}
 output: \${go.output}
 `;
-  const error = await loadErrorAsync(loadConformanceFlow(text));
-  expect(error.message).toContain("missing");
-  // A bare call to a non-def, non-alias callable is loud: external flows only through uses:.
-  expect(error.message).toContain("uses:");
+  // External flows come only through uses:, so the name is a tool the run supplies.
+  expect((await loadConformanceFlow(text)).compiled.nodes.get("go")!.kind).toBe(NodeKind.TOOL);
 });
 
 test("a malformed def without nodes: is loud", async () => {

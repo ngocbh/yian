@@ -250,7 +250,7 @@ describe("parseFile", () => {
 
     expect(error.message).toContain(
       `compact (single-node) flow: \`kind:\` must be text, but ${phrase}; ` +
-        "write one of agent, code, tool",
+        "write one of agent, call, code, tool",
     );
     expect(startLine(error)).toBe(lineOf(text, "kind: "));
   });
@@ -419,16 +419,16 @@ describe("parseNodes", () => {
         const error = loadError(() => nodesOf(text));
 
         expect(error.message).toContain(
-          `node 'a' (kind=${kind}): \`call:\` must be a callable name or \`{library: def}\`, but YAML read it as ` +
-            `${phrase}; put it in quotes`,
+          `node 'a' (kind=${kind}): \`call:\` must be a callable name, \`{library: def}\` or \`{group: tool}\`, ` +
+            `but YAML read it as ${phrase}; put it in quotes`,
         );
         expect(startLine(error)).toBe(lineOf(text, "call: "));
       },
     );
 
     test.each([
-      ["{x: 1}", "`call: {x: ...}` names one def; write `call: {x: quote}`"],
-      ["{}", "`call:` names one library def, such as `call: {billing: quote}`"],
+      ["{x: 1}", "`call: {x: ...}` names one def or tool; write `call: {x: quote}`"],
+      ["{}", "`call:` names one callable: `greet`, `{billing: quote}` or `{crm: lookup}`"],
     ])("a call mapping that names no one def is a load error: %s", (value, problem) => {
       const text = callFlow(kind, value);
 
@@ -444,8 +444,8 @@ describe("parseNodes", () => {
       const error = loadError(() => nodesOf(text));
 
       expect(error.message).toContain(
-        `node 'a' (kind=${kind}): \`call:\` must be a callable name or \`{library: def}\`, but it is empty; ` +
-          "write a callable name",
+        `node 'a' (kind=${kind}): \`call:\` must be a callable name, \`{library: def}\` or \`{group: tool}\`, ` +
+          "but it is empty; write a callable name",
       );
       expect(startLine(error)).toBe(lineOf(text, "call: "));
     });

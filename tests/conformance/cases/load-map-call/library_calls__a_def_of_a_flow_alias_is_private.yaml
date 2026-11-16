@@ -1,4 +1,5 @@
-# A flow imported with `uses:` is no library: its defs can't be called from outside.
+# A flow imported with `uses:` is no library: its defs can't be called from outside, and a tool group
+# of its name is shadowed.
 kind: load
 flow: |
   id: orders
@@ -30,7 +31,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'call node ''tidy'': callable ''clean'' is a flow, not a library; its defs are private'
+      message: 'node ''tidy'': `clean` is a flow, not a library; a tool group named `clean` is shadowed in this file, so rename the alias to reach it'
       frames:
       - label: flow.yaml
         range: [8, 11, 8, 24]

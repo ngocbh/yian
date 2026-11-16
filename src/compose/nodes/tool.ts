@@ -611,7 +611,9 @@ export class ToolDescriptor extends NodeDescriptor {
 
   /**
    * Build a TOOL node calling the tool `toolRef.name` of the memory input `toolRef.group`, whose
-   * type is `memory`.
+   * type is `memory`. The memory is routed to its tool, never passed as an argument, so an input
+   * that passes it through (`<group>: ${input.<group>}`, as a one-node flow and a map's generated
+   * body bind every flow input) isn't one of the node's inputs.
    *
    * @throws LoadError when the memory is Optional, which a run may leave unbound, or its type lacks
    *   the tool.
@@ -643,8 +645,9 @@ export class ToolDescriptor extends NodeDescriptor {
       memoryTool: true,
     });
     node.outputContract = this.outputContract(ctx);
-    node.params = this.sinkParams();
     const wiring = this.sinkWiring();
+    if (bindingSource(wiring.get(input)) === `\${input.${input}}`) wiring.delete(input);
+    node.params = this.sinkParams().filter((parameter) => wiring.has(parameter.name));
     wiring.set(memoryKey(input), memoryBinding(input));
     return this._finish(node, wiring);
   }

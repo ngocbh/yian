@@ -7,7 +7,7 @@
  * re-exported as the flow output, and every other top-level key is the node body.
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,6 +18,7 @@ import { flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compo
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { forget } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
+import { FileMemory } from "../../src/memory/file.ts";
 import { runFlow } from "../../src/run.ts";
 import { fileOf, loadConformanceFlow, loadError, runTextCase } from "../helpers/declarations.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
@@ -245,6 +246,25 @@ code: ./fixtures/compose_codefns.ts:make_plan
     const result = await runFlow(flow, { topic: "ACME" }, { env: hostEnv(dir) });
     expect(result.failure).toBeNull();
     expect(result.output).toEqual({ rating: "plan for ACME", score: 0.9 });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Its memory input is wired by name like the others, yet a memory is never a tool's argument.
+test.each([
+  ["call", "call"],
+  ["tool", "tool_id"],
+])("a compact kind: %s naming its memory input's tool runs", async (kind, field) => {
+  const flow = await loadConformanceFlow(
+    `id: s\nname: s\ninput:\n  lessons: !FileMemory\n  path: !str\nkind: ${kind}\n${field}: {lessons: read}\n`,
+  );
+  const dir = mkdtempSync(join(tmpdir(), "yian-compact-"));
+  try {
+    writeFileSync(join(dir, "a.md"), "one");
+    const lessons = new FileMemory({ root: dir, id: "t/lessons" });
+    const result = await runFlow(flow, { lessons, path: "a.md" }, { env: hostEnv(dir) });
+    expect((result.output as { text: string }).text).toBe("one");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

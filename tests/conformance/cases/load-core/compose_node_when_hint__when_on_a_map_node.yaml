@@ -8,6 +8,8 @@ flow: |
       call: sub
       when: ${x.output}
   output: ${x.output}
+  defs:
+    sub: {kind: code, code: "return 1", output: !int}
 expect:
   load:
     diagnostics:

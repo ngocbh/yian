@@ -1,4 +1,4 @@
-# A TOOL node's `tool_id: {cases: search}` embeds its query and returns the items most like it, best
+# A TOOL node's `call: {cases: search}` embeds its query and returns the items most like it, best
 # first, each with its id, version, similarity score, text and fields. The runner's embedder counts
 # the words `alpha` to `hotel`, so `charlie delta` matches itself fully and `charlie echo` by half.
 # The store is unchanged.

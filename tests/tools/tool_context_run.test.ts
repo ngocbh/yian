@@ -198,7 +198,7 @@ test("a registered tool sees the context", async () => {
   const seen: ToolContext[] = [];
   registerTool("tool_ctx_run_registered_place", recorder(seen, "tool_ctx_run_registered_place"));
   const db = new Db();
-  const flow = await loadFlow(TOOL_FLOW.replace("tool_id: place", "tool_id: tool_ctx_run_registered_place"));
+  const flow = await loadFlow(TOOL_FLOW.replace("call: place", "call: tool_ctx_run_registered_place"));
 
   const result = await runFlow(flow, {}, { context: db, runId: "run-7f3a", env: hostEnv(dir) });
 

@@ -3,7 +3,7 @@ kind: load
 flow: |
   # 26 — ask questions: the three question surfaces.
   #
-  # A `tool_id: ask` node asks a person and collects a STRUCTURED answer keyed by each
+  # A `call: ask` node asks a person and collects a STRUCTURED answer keyed by each
   # question's `header`. It carries questions in one of three forms:
   #
   #   static   — a literal `questions` input list written in the YAML (THIS seed).

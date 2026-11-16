@@ -588,7 +588,7 @@ test("adaptive composer runs on the taken route", async () => {
 });
 
 test("adaptive composer runs after the gate runs after", async () => {
-  const nodes = PREP + ADAPTIVE.replace("    tool_id: ask\n", "    tool_id: ask\n    runs_after: [prep]\n");
+  const nodes = PREP + ADAPTIVE.replace("    call: ask\n", "    call: ask\n    runs_after: [prep]\n");
   const { flow: loaded, result, calls } = await adaptive(nodes, true);
   const ordering = edge(loaded, "prep~>ask__compose#0");
   expect(ordering.ordering && ordering.optional).toBe(true);
@@ -597,7 +597,7 @@ test("adaptive composer runs after the gate runs after", async () => {
 });
 
 test("adaptive composer is skipped with the gate depends on", async () => {
-  const nodes = MAYBE + ADAPTIVE.replace("    tool_id: ask\n", "    tool_id: ask\n    depends_on: [maybe]\n");
+  const nodes = MAYBE + ADAPTIVE.replace("    call: ask\n", "    call: ask\n    depends_on: [maybe]\n");
   const { result, calls, asked } = await adaptive(nodes, true, false);
   expect([calls, asked]).toEqual([0, []]);
   expect(neverRan(result, "ask__compose")).toBe(true);
@@ -607,8 +607,8 @@ test("adaptive gate with an inline call gates both lifted nodes", async () => {
   const nodes =
     PREP +
     ADAPTIVE.replace("      ctx: ${input.go}\n", '      ctx: call(side, tag="ctx")\n').replace(
-      "    tool_id: ask\n",
-      "    tool_id: ask\n    runs_after: [prep]\n",
+      "    call: ask\n",
+      "    call: ask\n    runs_after: [prep]\n",
     );
   const { flow: loaded, result, calls, asked } = await adaptive(nodes, false);
   expect([calls, asked, recorded(result)]).toEqual([0, [], ["prep"]]);
@@ -621,7 +621,7 @@ test("reading a lifted node in the hosts runs after is a cycle", async () => {
   // `audit` reads the composer, and the gate orders after `audit`: the composer now orders after
   // `audit` too, so the two wait on each other.
   const nodes =
-    ADAPTIVE.replace("    tool_id: ask\n", "    tool_id: ask\n    runs_after: [audit]\n") +
+    ADAPTIVE.replace("    call: ask\n", "    call: ask\n    runs_after: [audit]\n") +
     `
   audit:
     kind: code

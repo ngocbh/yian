@@ -394,7 +394,7 @@ for (const [name, source, nodePath] of [
  * It also renames the `qtty` input to `qty`, so each case has only one fault: the unknown tool id.
  */
 const misspelled = (source: string) =>
-  source.replace("tool_id: place_order", "tool_id: place_ordr").replaceAll("qtty", "qty");
+  source.replace("call: place_order", "call: place_ordr").replaceAll("qtty", "qty");
 
 const INLINE_CALL_FLOW = `
 id: inline_call

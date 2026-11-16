@@ -128,7 +128,7 @@ test("an agent bakes each module alias it grants once, and its host grants leave
   expect(agent.grantedTools()).toEqual([{ kind: "name", name: "search" }]);
 });
 
-test("a tool node bakes the module its tool_id names", async () => {
+test("a tool node bakes the module its call: names", async () => {
   const flow = await load(
     app(USES, ["g: {kind: call, call: {crm: lookup}}", "s: {kind: call, call: quote}", "h: {kind: call, call: x}"]),
   );

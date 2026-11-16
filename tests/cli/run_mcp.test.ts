@@ -448,7 +448,7 @@ test.each(["fake", "{fake: [echo]}"])(
 );
 
 test(
-  "a server named like its own tool: tool_id reaches the tool, and an agent's grant of the name grants the server",
+  "a server named like its own tool: call: reaches the tool, and an agent's grant of the name grants the server",
   async () => {
     const bound: string[][] = [];
     const fakeFetch = async (input: string | URL | Request, init?: RequestInit) => {

@@ -329,7 +329,7 @@ test("a store whose items have another type fails before RunStarted, with no log
   );
 });
 
-test("a TOOL node tool_id: {cases: search} returns the hits as ${found.output}", async () => {
+test("a TOOL node call: {cases: search} returns the hits as ${found.output}", async () => {
   const path = storePath();
   await seed(path, ["alpha bravo", "charlie", "alpha alpha"]);
   const embed = wordEmbed();

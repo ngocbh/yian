@@ -1,4 +1,4 @@
-# A TOOL node calls a memory's tool by its group form, `tool_id: {lessons: read}`, with the tool's
+# A TOOL node calls a memory's tool by its group form, `call: {lessons: read}`, with the tool's
 # arguments as its input. Its output is the read's result: the path, the file's hash and its text.
 kind: run
 flow: |

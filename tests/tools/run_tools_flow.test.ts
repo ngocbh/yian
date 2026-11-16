@@ -434,7 +434,7 @@ test.each([
   ["github_search", "`{github: search}`"],
   ["github_serch", "`{github: search}`"],
   ["lookp", "'lookup'"],
-])("a TOOL node's unknown tool_id %s suggests the form to write: %s", async (toolId, suggestion) => {
+])("a TOOL node's unknown call: %s suggests the form to write: %s", async (toolId, suggestion) => {
   const flow = `id: t\nname: t\nnodes:\n  found:\n    kind: call\n    call: ${toolId}\n    input: {text: owls}\noutput: \${found.output}\n`;
   const tools = { lookup: textTool("lookup"), github: [textTool("search")] };
 

@@ -1,5 +1,5 @@
 /**
- * A TOOL node calls a memory's tool by its group form, `tool_id: {lessons: read}`: the call goes
+ * A TOOL node calls a memory's tool by its group form, `call: {lessons: read}`: the call goes
  * to the run's session on the memory bound to the input, with the node's call id as a change's id,
  * and a refusal or a reused id fails the node unretried while a busy memory is retried.
  */
@@ -52,7 +52,7 @@ async function run(text: string, memory: unknown) {
   return { result, log };
 }
 
-test("tool_id: {lessons: read} returns the read result as ${found.output}", async () => {
+test("call: {lessons: read} returns the read result as ${found.output}", async () => {
   const root = mkdtempSync(join(tmp, "m-"));
   writeFileSync(join(root, "a.md"), "first line\nsecond line");
   const { result } = await run(flow("read", "{path: a.md}"), new FileMemory({ root, id: "t/lessons" }));

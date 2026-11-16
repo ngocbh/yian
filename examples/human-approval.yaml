@@ -35,7 +35,7 @@ nodes:
 
   approve:
     kind: call
-    call: ask                         # always asks; the host answers
+    call: ask                            # always asks; the host answers
     input:
       prompt: |-
         Here is the proposed plan:

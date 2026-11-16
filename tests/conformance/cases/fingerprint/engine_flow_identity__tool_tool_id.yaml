@@ -1,4 +1,4 @@
-# A TOOL's tool_id is identity.
+# A TOOL's `call:` is identity.
 kind: fingerprint
 flow: |
   id: tool

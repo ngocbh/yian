@@ -235,7 +235,7 @@ test(
 );
 
 test.each(["{fake: echo}", "echo"])(
-  "a tool node calls a server tool as tool_id: %s",
+  "a tool node calls a server tool as call: %s",
   async (toolId) => {
     const server = fake();
     const result = await run(await toolFlow(toolId, '{text: "hi"}'), { fake: server });

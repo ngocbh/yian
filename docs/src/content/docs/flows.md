@@ -149,11 +149,11 @@ A node id is an identifier: ASCII letters, digits and `_`, not starting with a d
 |---|---|---|
 | `agent` | Asks a model, which may call tools | [Agents](/agents/) |
 | `code` | Runs a TypeScript function | [Code and tools](/code-and-tools/) |
-| `tool` | Calls a tool, such as a host tool or `ask`, `take` or `sleep` | [Code and tools](/code-and-tools/), [Inboxes and waiting](/inboxes/) |
 | `case` | Sends the run down one branch | [Control flow](/control-flow/) |
-| `call` | Runs a child flow once | [Control flow](/control-flow/) |
+| `call` | Runs a child flow once, or calls a tool, such as a host tool or `ask`, `take` or `sleep` | [Control flow](/control-flow/), [Code and tools](/code-and-tools/#tool-nodes), [Inboxes and waiting](/inboxes/) |
 | `map` | Runs a child flow or a tool once per list item | [Control flow](/control-flow/) |
 | `loop` | Runs a child flow or a tool again and again | [Control flow](/control-flow/) |
+| `tool` | The old spelling of a `call` node naming a tool, with `tool_id:` for `call:`; it still loads, but is going away | [Code and tools](/code-and-tools/#tool-nodes) |
 
 ### Common fields
 

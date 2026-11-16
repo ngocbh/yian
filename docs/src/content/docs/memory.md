@@ -45,7 +45,7 @@ output: ${answer.output}
 |---|---|
 | An agent input | `lessons: ${input.lessons}` |
 | An agent's `prompt:` or `system_prompt:` text | `${lessons}` |
-| An agent's `tools:`, or a TOOL node's `tool_id:` | `tools: [lessons]` |
+| An agent's `tools:`, or a TOOL node's `call:` | `tools: [lessons]` |
 | A `call`, `loop` or `map` child's memory input of the same type | `lessons: ${input.lessons}` |
 
 A child flow's memory input must be wired from its parent.
@@ -89,8 +89,8 @@ doesn't stop it: the node calls the memory's tool.
 
 ```yaml check=fragment
 note:
-  kind: tool
-  tool_id: {lessons: append}
+  kind: call
+  call: {lessons: append}
   input:
     path: notes.md
     text: ${plan.output}
@@ -165,8 +165,8 @@ input:
   cases: !VectorDBMemory(Case)
 nodes:
   similar:
-    kind: tool
-    tool_id: {cases: search}
+    kind: call
+    call: {cases: search}
     input:
       query: ${input.ticket}
       k: 3

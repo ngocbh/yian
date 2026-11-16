@@ -1,7 +1,7 @@
 # Tool use — a TOOL node (deterministic, no LLM) feeds an AGENT node.
-# A `tool` uses `tool_id:` + `input:` (the tool's argument names), and may declare
-# `output:`; every value the tool returns is checked against it. The host passes the tool
-# to the run:
+# A `call` node naming a tool uses `call:` + `input:` (the tool's argument names), and may
+# declare `output:`; every value the tool returns is checked against it. The host passes the
+# tool to the run:
 #
 #   import { runFlow, tool } from "@ngocbh/yian";
 #
@@ -34,7 +34,7 @@ input:
 nodes:
   facts:
     kind: call
-    call: get_facts             # a tool the host passes to the run
+    call: get_facts                # a tool the host passes to the run
     input:                         # each value is a ${...} ref or a literal
       query: ${input.subject}
       limit: 5

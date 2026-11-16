@@ -23,7 +23,7 @@ lookup sheet; [templates/](templates/) holds a flow that loads for each common s
 4. **Check.** `yian check` loads the flow, checks every type and reference, and runs nothing.
    Each error names its place, and most show the rewrite. Fix and repeat until it prints `ok`.
 5. **Run.** Agents need a provider and model: run `yian auth <provider>` once, or pass
-   `--provider` and `--model`. A flow with only `code` and `tool` nodes needs neither.
+   `--provider` and `--model`. A flow with only `code` nodes and tool calls needs neither.
 
 ```console
 $ yian check flow.yaml
@@ -85,9 +85,9 @@ output:
 |---|---|---|
 | `agent` | A model call, with optional tools, skills and steering | [Agents](https://yian.readthedocs.io/agents/) |
 | `code` | A TypeScript or JavaScript body, or a `./file.ts:fn` export | [Code and tools](https://yian.readthedocs.io/code-and-tools/) |
-| `tool` | A host tool, or the built-ins `ask`, `take` and `sleep` | [Code and tools](https://yian.readthedocs.io/code-and-tools/), [Inboxes and waiting](https://yian.readthedocs.io/inboxes/) |
 | `case` | Take one branch, skip the others | [Control flow](https://yian.readthedocs.io/control-flow/) |
-| `call`, `map`, `loop` | Run a child flow once, per list item, or repeatedly | [Control flow](https://yian.readthedocs.io/control-flow/) |
+| `call`, `map`, `loop` | Run a child flow or a tool (a host tool, or the built-ins `ask`, `take` and `sleep`) once, per list item, or repeatedly | [Control flow](https://yian.readthedocs.io/control-flow/), [Code and tools](https://yian.readthedocs.io/code-and-tools/#tool-nodes), [Inboxes and waiting](https://yian.readthedocs.io/inboxes/) |
+| `tool` | The old spelling of a `call` node naming a tool, with `tool_id:` for `call:`; it still loads, but is going away | [Code and tools](https://yian.readthedocs.io/code-and-tools/#tool-nodes) |
 | a tagged entry | A fixed or computed value, such as `count: !int 3` | [Flows and nodes](https://yian.readthedocs.io/flows/#values) |
 
 ## Rules that most often go wrong
@@ -96,7 +96,7 @@ output:
 
 - **A `!` marks every type except under `typedefs:`.** A flow input (`qty: !int`), a binding
   (`n: !int ${x.output}`), a value entry, a flow output (`output: !Order ${x.output}`), and the
-  `output:` of an `agent`, `code` or `tool` node, compact flows included: `output: !str`, or a
+  `output:` of an `agent` or `code` node or a tool call, compact flows included: `output: !str`, or a
   record as an untagged mapping of tags, `output: {n: !int, note: !Optional(str)}`. Only a
   `typedefs:` entry is plain text. Mixing them up is a load error.
 - **Every flow input has a tag**, with an optional default: `lookback: !int 30`,
@@ -193,7 +193,7 @@ output:
   the child's quoted `version:` text (`clean: ../common/clean@1`). A def or alias can't be named
   `take`, `sleep`, `ask`, `ask_user` or `load_skill`.
 - **On a `call`, `map` or `loop` node or in a `call(...)`, a built-in, a module or memory input's
-  tool, or a name the file doesn't define is a tool**, called as a `tool` node calls it: `call: sleep`,
+  tool, or a name the file doesn't define is a tool**, called with `input:` as its arguments: `call: sleep`,
   `{crm: lookup}`, `{lessons: append}`, or one of the run's tools (`search`, `{github: search}`),
   looked up when the run starts, so a typo fails then, naming the closest name the file defines;
   `yian check` lists these names after `ok`. The file's own names hide a run's tool of that name,
@@ -202,7 +202,7 @@ output:
   [Call a tool](https://yian.readthedocs.io/control-flow/#call-a-tool).
 - **A library's def is `call: {billing: quote}`** (or `call(billing.quote, k=v)` in a binding),
   on `call`, `map` and `loop`. `call: billing` alone is a load error, and a flow's own `defs:`
-  can't be called from outside. `tool_id: billing` is a load error too.
+  can't be called from outside.
 - **Write exactly one of `call:` and an inline body** (`nodes:` plus `output:`). An inline body
   can't see its parent's inputs, nodes or `${item}`: pass them through the node's `input:`, and
   read them inside as `${input.<name>}`.
@@ -241,8 +241,8 @@ output:
 - **A tool module is a `uses:` ref to a `.ts`, `.js` or `.mjs` file** whose named exports are
   tools: plain objects of `tool()`'s options (`name` equal to the export's, `description`,
   `parameters`, `execute`), with no runtime import of yian (`import type { ToolOptions } from
-  "@ngocbh/yian/tools"`, the whole statement). `crm: ./crm.ts` is a group (`tool_id: {crm:
-  lookup}`, `tools: [crm]` shows `crm_lookup`); `quote: ./tools.ts:quote` is one tool (`tool_id:
+  "@ngocbh/yian/tools"`, the whole statement). `crm: ./crm.ts` is a group (`call: {crm:
+  lookup}`, `tools: [crm]` shows `crm_lookup`); `quote: ./tools.ts:quote` is one tool (`call:
   quote`). Load and `yian check` never import it; each run start and resume does, on its own
   thread. An error the model should read carries `{[Symbol.for("yian.tool_error")]:
   ["reported"]}`, and `ctx.context` is `undefined`. See
@@ -285,7 +285,7 @@ output:
   `yian run` keeps an unbound memory input per project; `--memory NAME=PATH` binds one to a path,
   inputs given one path share it, and a new store needs `--embedding provider/model`.
 - **`cases: !VectorDBMemory(Case)` holds items found by meaning**, each a text with `Case` fields.
-  Search it in a TOOL node (`tool_id: {cases: search}`, with `query` and `k` in its `input:`) and
+  Search it in a TOOL node (`call: {cases: search}`, with `query` and `k` in its `input:`) and
   pass the hits to the agent; grant `{cases: [add]}` to keep new items.
 
 ### Waiting: `ask`, `take`, `sleep`

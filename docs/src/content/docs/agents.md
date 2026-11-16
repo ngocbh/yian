@@ -368,7 +368,7 @@ The file uses the `mcpServers` format other MCP clients use:
   `ask_user`, `load_skill`.
 - A server may share its name with one of its own tools, as a server keyed `fetch` that lists
   `fetch` does. `tools: [fetch]` then grants the whole server, `{fetch: [fetch]}` just the tool,
-  and a TOOL node's `tool_id: fetch` calls the tool.
+  and a TOOL node's `call: fetch` calls the tool.
 - A model sees a server's tools as `<server>_<tool>`, so name servers with letters, digits, `_`
   and `-`. The run fails before it starts on a name a model can't call, or one past 64 characters.
 - In `command`, `args`, `cwd`, `url` and the values of `env` and `headers`, `${VAR}` reads an
@@ -378,7 +378,7 @@ The file uses the `mcpServers` format other MCP clients use:
 - A result's text that holds half a character, as text cut inside an emoji does, reaches the model
   with `�` in its place. Structured content that isn't a yian value is reported as a failed call.
 - A server starts when the flow names it: a grant of `github` or `{github: [search]}`, or a TOOL
-  node's `tool_id: {github: search}`. A bare tool name, as `tool_id: search` or a grant of
+  node's `call: {github: search}`. A bare tool name, as `call: search` or a grant of
   `search`, starts the servers in file order until one lists it, then stops those the flow
   doesn't use, so name the server when one is slow to start or does something when it starts.
 - The run's servers start together and stop together when it ends. The config files are read

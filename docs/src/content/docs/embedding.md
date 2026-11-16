@@ -35,8 +35,8 @@ input:
   price: !float
 nodes:
   quote:
-    kind: tool
-    tool_id: quote
+    kind: call
+    call: quote
     input:
       qty: ${input.qty}
       price: ${input.price}
@@ -248,8 +248,8 @@ input:
   notes: !Inbox(str)
 nodes:
   heard:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     input:
       from: ${input.notes}
       take: all
@@ -304,8 +304,8 @@ input:
   item: !str
 nodes:
   answer:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       prompt: Approve ${input.item}?
       timeout: 2d

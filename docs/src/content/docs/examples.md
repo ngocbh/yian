@@ -479,8 +479,8 @@ nodes:
     prompt: "Draft a short, concrete plan (exactly 3 numbered steps) for: ${task}"
 
   approve:
-    kind: tool
-    tool_id: ask                         # always asks; the host answers
+    kind: call
+    call: ask                            # always asks; the host answers
     input:
       prompt: |-
         Here is the proposed plan:
@@ -600,8 +600,8 @@ input:
   plan: !str
 nodes:
   lead:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       to: lead                           # host extension: who answers
       prompt: |-
@@ -616,8 +616,8 @@ nodes:
       - when: ${lead.output == null}
         then: manager
   manager:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       to: manager
       prompt: |-
@@ -784,8 +784,8 @@ defs:
         call: compact_history
         input: {summary: "${input.summary}", history: "${input.history}"}
       heard:
-        kind: tool
-        tool_id: take                    # waits until a message arrives or the inbox closes
+        kind: call
+        call: take                       # waits until a message arrives or the inbox closes
         input:
           from: ${input.owner_messages}
           take: all

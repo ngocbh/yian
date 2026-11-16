@@ -58,7 +58,7 @@ with `tools: [billing]` or `{billing: [quote]}`.
 | none | null |
 
 Fields every node takes: `kind`, `input` (not on `case`), `asserts` (not on `case`, or a `map`
-over a flow), `depends_on`, `runs_after`, `node_name`, `env`. `output` is a type on `agent`, `code` and `tool`,
+over a flow), `depends_on`, `runs_after`, `node_name`, `env`. `output` is a type on `agent`, `code` and a tool call,
 written as a tag (`output: !str`), or for a record as an untagged mapping of tags
 (`output: {n: !int}`).
 
@@ -78,11 +78,12 @@ as `billing_<def>`; a tool module alias grants its tools, `crm` or `{crm: [looku
 **code** ([Code and tools](https://yian.readthedocs.io/code-and-tools/)): `code` (an inline body
 or `./file.ts:fn`), `input`, `output`. The body reads `inputs.<name>` and returns a value.
 
-**tool** ([Code and tools](https://yian.readthedocs.io/code-and-tools/#tool-nodes)): `tool_id`
+**tool call** ([Code and tools](https://yian.readthedocs.io/code-and-tools/#tool-nodes)): `kind: call`, `call`
 (a tool name or `{group: tool}`; a [tool module](https://yian.readthedocs.io/code-and-tools/#tool-modules)'s
 tool as `{crm: lookup}`, or `quote` for a one-export alias), `input` (the tool's own argument names), `output`, `retries`
 (default 0). The run fails before it starts when the tool is missing or an argument can never
-fit.
+fit. `kind: tool` with `tool_id:` for `call:` is the old spelling; it still loads, but is going
+away.
 
 **case** ([Control flow](https://yian.readthedocs.io/control-flow/#branch-with-case)): `on`
 (optional), `cases` (a list of `{when, then}`), `else`. A `when:` or `on:` may read an agent's
@@ -92,21 +93,20 @@ fit.
 inline `nodes` plus `output`; `input` (the child's arguments, or the loop's seed record); `map`
 adds `over`; `loop` adds one of `while`, `until`, `times`, and optional `max` and
 `on_max_exceeded` (`fail` or `output`). A `call` node whose `call` names a tool (a built-in, a
-module's or memory's tool, or a name the file doesn't define) takes the **tool** fields instead,
-with `call` in place of `tool_id`; a `map` or `loop` naming one takes them too, applied to each
-item's or turn's call (a map not `call: take`, a loop not `take` or `sleep`; a loop's `asserts`
-check its final record).
+module's or memory's tool, or a name the file doesn't define) takes the **tool call** fields
+instead; a `map` or `loop` naming one takes them too, applied to each item's or turn's call (a
+map not `call: take`, a loop not `take` or `sleep`; a loop's `asserts` check its final record).
 
 **ask** ([Inboxes and waiting](https://yian.readthedocs.io/inboxes/#ask-a-person)):
-`tool_id: ask`, `input` with one of `prompt` or `questions` (1 to 4, each with `question`, a
+`call: ask`, `input` with one of `prompt` or `questions` (1 to 4, each with `question`, a
 unique `header`, optional `options` (labels unique within the question) and `multi_select`),
 optional `timeout`; or
 `adaptive_questions: {prompt: ...}` beside `input`. A `questions:` answer is a record keyed by
 `header`. Other inputs reach the host's handler, which must declare them.
 
-**take**: `tool_id: take`, `input` with `from: ${input.<inbox>}`, optional `take:` (`one`, the
+**take**: `call: take`, `input` with `from: ${input.<inbox>}`, optional `take:` (`one`, the
 default, or `all`) and optional `timeout:`.
-**sleep**: `tool_id: sleep`, `input` with exactly one of `until:` (a date or datetime, UTC when
+**sleep**: `call: sleep`, `input` with exactly one of `until:` (a date or datetime, UTC when
 it has no offset) or `for:` (a duration). Its output is null.
 
 ## References

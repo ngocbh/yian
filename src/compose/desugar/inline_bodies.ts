@@ -7,8 +7,9 @@
  * its mapping has a `kind:` key. A `map` whose `call:` names a tool gets a one-node body generated
  * the same way, as a projection over the author's own fields.
  *
- * Knows about: diagnostics, typesys values, the compose error helpers, the CALL node's
- *              `call:` shape check and rule, and source cursors.
+ * Knows about: diagnostics, typesys values, the compose error and template helpers, the node
+ *              kinds (`KINDS`, the CALL node's `call:` shape check and rule), the node parse's
+ *              identifier and signature helpers, and source cursors.
  */
 
 import { createHash } from "node:crypto";

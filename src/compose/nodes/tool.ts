@@ -197,7 +197,7 @@ export class ToolDescriptor extends NodeDescriptor {
    * Check an `adaptive_questions:` block and an `ask`'s reserved input around the template
    * `parse`, and range the block's brief and `llm_config:`.
    *
-   * @throws LoadError when `adaptive_questions:` is on a tool id other than `ask` (at the block),
+   * @throws LoadError when `adaptive_questions:` is on a tool other than `ask` (at the block),
    *   authors a key other than `prompt`/`llm_config`/`retries` or a non-text brief, an `ask`
    *   authors input `__questions`, or the template `parse` rejects the node.
    */
@@ -219,6 +219,14 @@ export class ToolDescriptor extends NodeDescriptor {
       checkAdaptiveBlock(wording, cursor, diagnostics);
     }
     const desc = super.parse(nodeId, cursor) as ToolDescriptor;
+    const { group, name } = desc.toolRef;
+    // Checked once the template parse has read the group form, which is never `ask`.
+    if (group !== null && cursor.has("adaptive_questions")) {
+      throw diagnostics.error(
+        `${wording.nodeTool(`{${group}: ${name}}`)}: \`adaptive_questions:\` applies only to ${wording.written(ASK)}`,
+        { range: cursor.keyRangeOf("adaptive_questions") },
+      );
+    }
     if (desc.toolId === ASK && Object.hasOwn(desc.inputs, QUESTIONS_INPUT)) {
       throw diagnostics.error(
         `${wording.nodeTool(ASK)}: input '${QUESTIONS_INPUT}' is reserved for adaptive_questions`,

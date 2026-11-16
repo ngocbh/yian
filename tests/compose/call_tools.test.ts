@@ -180,6 +180,16 @@ test.each([
   expect(await refusal(app(`  n: {kind: call, call: ${call}}\n`))).toBe(message);
 });
 
+test.each([
+  ["call", "call"],
+  ["tool", "tool_id"],
+])("adaptive_questions: on a group's tool is refused under kind: %s", async (kind, field) => {
+  const text = app(`  n: {kind: ${kind}, ${field}: {github: search}, adaptive_questions: {prompt: hi}}\n`);
+  expect(await refusal(text)).toBe(
+    `node 'n' (${field}: {github: search}): \`adaptive_questions:\` applies only to ${field}: ask`,
+  );
+});
+
 test("a call node naming a tool also written with tool_id: is refused at tool_id:", async () => {
   expect(await refusal(app("  n: {kind: call, call: search, tool_id: search}\n"))).toContain(
     "node 'n' (kind=call): field 'tool_id' is not allowed",

@@ -668,7 +668,7 @@ test.each([
   ["with a hyphenated flow id", "${call(my-flow, x=1)}", "my-flow"],
   ["around a nested call", "${call(outer, x=call(inner))}", "outer"],
   ["inside an expression", "${upper(call(enrich))}", "enrich"],
-  ["with no flow id", '${call("enrich")}', "<flow>"],
+  ["with no name", '${call("enrich")}', "<name>"],
 ])("call directive in a span %s names the forms that work", (_name, value, flow) => {
   // The hint names the real flow, not `call`, and never suggests another `${...}` form.
   expect(topicError(value).message).toBe(
@@ -790,6 +790,7 @@ nodes:
     input:
       topic: \${item}
 output: \${many.output}
+defs: {f: {kind: code, code: "return 1", output: !int}}
 `;
   const error = loadError(() => assembleText(text));
   expect(error.message).toContain("many: `call(` is never closed");

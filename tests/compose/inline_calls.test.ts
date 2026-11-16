@@ -505,6 +505,7 @@ nodes:
     input:
       topic: call(wrap, t=\${item})
 output: \${each.output}
+defs: {one: {kind: code, code: "return 1", output: !int}}
 `;
   expect(loadError(() => assembleText(text)).message).toBe(
     "node 'each': inline call 'wrap' cannot capture ${item} (arg 't') — it desugars to a top-level call node " +

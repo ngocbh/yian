@@ -448,7 +448,7 @@ function desugarSource(
 }
 
 /**
- * Desugar one binding string. A WHOLE-VALUE `call(<flow-id>, kw=...)` directive lifts to a synth
+ * Desugar one binding string. A WHOLE-VALUE `call(<name>, kw=...)` directive lifts to a synth
  * call node (accumulated in `calls`, the value rewritten to `${<synth>.output}`). A flow call
  * embedded INSIDE a `${...}` span is the retired `${flow(args)}` form: a located `LoadError`
  * pointing at the `call(...)` directive. A builtin type name called like a function
@@ -584,11 +584,11 @@ function rejectSpanFlowCalls(
 }
 
 /**
- * Desugar a WHOLE-VALUE `call(<flow-id>, kw=...)` directive, else no-op.
+ * Desugar a WHOLE-VALUE `call(<name>, kw=...)` directive, else no-op.
  *
  * A value whose trimmed text starts with `call(` must be exactly one directive: a leading `call`,
  * balanced parens, and nothing non-whitespace after the close paren. Its FIRST arg is the
- * POSITIONAL flow id (a bare identifier, may be hyphenated: flow ids allow `-`); every remaining
+ * POSITIONAL name it calls (a bare identifier, may be hyphenated, or `alias.name`); every remaining
  * arg is a `name=value` keyword, each at most once. Each keyword value passes through
  * `argSource`: a bare value reads like a named `input:` value (`window=30` gives `30n`, `1e3`
  * gives `1000`), a quoted value loses only its outer quotes (no escape processing), and a
@@ -603,7 +603,7 @@ function rejectSpanFlowCalls(
  *   unchanged (the caller then checks the value for a retired span flow call).
  * @throws ExpressionError naming the problem when a value starting with `call(` is not one
  *   directive: unbalanced parentheses, text after the close paren, a first arg that is not a bare
- *   flow id, a positional arg after the flow id (the message mentions "keyword"), an unquoted `=`
+ *   name, a positional arg after the name (the message mentions "keyword"), an unquoted `=`
  *   inside a keyword value (a missing comma), or a keyword passed more than once.
  * @throws ArgumentValueError when a bare keyword value the flow's YAML rules can't build (an
  *   impossible date).
@@ -881,7 +881,7 @@ export function liftCall(
   const def = dot === -1 ? null : call.callee.slice(dot + 1);
   const fields = { id: call.id, inputs: { ...call.args }, host: hostId, range, fieldLabels, callSite };
   const written = def === null ? name : { [name]: def };
-  if (callsTool?.(call.id, written, range, fieldLabels.get("call") ?? null)) {
+  if (callsTool?.(call.id, written, range, { site: fieldLabels.get("call") ?? null })) {
     return ToolDescriptor.lift({ ...fields, toolId: written }, diagnostics);
   }
   return new CallDescriptor({ ...fields, call: name, def, over: null });

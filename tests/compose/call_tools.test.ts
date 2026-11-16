@@ -413,3 +413,25 @@ test.each([
       "the def to reach it",
   );
 });
+
+/** A map or loop's refusal of the tool written `call`, which it can't run yet. */
+const runsOnlyFlows = (call: string, kind: string) =>
+  `node 'n': \`${call}\` is a tool; a \`${kind}\` runs only flows for now; call it from a \`call\` node, or wrap ` +
+  "it in a def";
+
+// Each row: the `call:` value and the refusal for a map or loop, by its kind.
+test.each<[string, string, (kind: string) => string]>([
+  ["map", "sleep", (kind) => runsOnlyFlows("sleep", kind)],
+  ["map", "search", (kind) => runsOnlyFlows("search", kind)],
+  ["map", "{github: search}", (kind) => runsOnlyFlows("{github: search}", kind)],
+  ["map", "{lessons: read}", (kind) => runsOnlyFlows("{lessons: read}", kind)],
+  ["map", "{crm: lookup}", () => "`crm` is a tool module; call its tools from a `call` node"],
+  ["loop", "sleep", (kind) => runsOnlyFlows("sleep", kind)],
+  ["loop", "search", (kind) => runsOnlyFlows("search", kind)],
+  ["loop", "{github: search}", (kind) => runsOnlyFlows("{github: search}", kind)],
+  ["loop", "{lessons: read}", (kind) => runsOnlyFlows("{lessons: read}", kind)],
+  ["loop", "{crm: lookup}", () => "`crm` is a tool module; call its tools from a `call` node"],
+])("a %s naming %s refuses it", async (kind, call, message) => {
+  const field = kind === "map" ? "over: [1]" : "times: 1";
+  expect(await refusal(app(`  n: {kind: ${kind}, call: ${call}, ${field}}\n`))).toBe(message(kind));
+});

@@ -1845,36 +1845,47 @@ function readFlowParameters(options: AssembleOptions, ctx: AssembleContext): Flo
  *
  * @param memories The flow's memory inputs.
  * @returns The rule, which throws a LoadError at `call:` for a bare memory input, a group that is
- *   a memory input and a def or alias too, or a group that is a def or a flow alias.
+ *   a memory input and a def or alias too, a group that is a def or a flow alias, or a tool on a
+ *   `map` or `loop` other than a module's, which the loader refuses.
  */
 function callsToolRule(scope: CallableScope, memories: ReadonlySet<string>, diagnostics: LoadDiagnostics): CallsTool {
   const isLibrary = (name: string) =>
     scope.section(name) === "uses" && scope.toolModule(name) === null && scope.resolve(name).library !== null;
-  return (nodeId, call, range, site = null) => {
+  return (nodeId, call, range, { site = null, kind = "call" } = {}) => {
     const fail = (message: string) => diagnostics.error(`${site ?? `node ${reprText(nodeId)}`}: ${message}`, { range });
+    /** A tool, written `written`, which a map or loop can't run yet. */
+    const tool = (written: string): true => {
+      if (kind === "call") return true;
+      throw fail(
+        `\`${written}\` is a tool; a \`${kind}\` runs only flows for now; call it from a \`call\` node, ` +
+          "or wrap it in a def",
+      );
+    };
     if (typeof call === "string") {
-      if (RESERVED_TOOL_NAMES.has(call)) return true;
+      if (RESERVED_TOOL_NAMES.has(call)) return tool(call);
       if (call.startsWith(INLINE_FLOW_PREFIX)) return false;
       if (scope.section(call) !== null) return scope.toolModule(call) !== null;
       if (memories.has(call)) {
         const fix = site === null ? `call: {${call}: <tool>}` : `call(${call}.<tool>, ...)`;
         throw fail(`\`${call}\` is a memory input; name one of its tools: \`${fix}\``);
       }
-      return true;
+      return tool(call);
     }
     if (!isRecord(call)) return false;
     const entries = Object.entries(call);
     if (entries.length !== 1 || entries[0]![0] === "") return false;
-    const [group, tool] = entries[0]!;
-    if (typeof tool === "string" && RESERVED_TOOL_NAMES.has(tool)) return true;
+    const [group, name] = entries[0]!;
+    const written = `{${group}: ${String(name)}}`;
+    if (typeof name === "string" && RESERVED_TOOL_NAMES.has(name)) return tool(written);
     const section = scope.section(group);
     const module = scope.toolModule(group);
     if (memories.has(group)) {
-      if (section === null) return true;
+      if (section === null) return tool(written);
       const what = module !== null ? "tool module" : isLibrary(group) ? "library" : "flow";
       throw fail(`\`${group}\` is both a memory input and a ${what}; rename one`);
     }
-    if (section === null || module !== null) return true;
+    if (section === null) return tool(written);
+    if (module !== null) return true;
     if (isLibrary(group)) return false;
     const named = section === "defs" ? "def" : "alias";
     throw fail(

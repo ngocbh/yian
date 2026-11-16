@@ -182,20 +182,20 @@ export function matchCallDirective(value: string): [flowId: string, remaining: s
 }
 
 /**
- * Return the flow id to suggest for a `call(...)` written inside a `${...}` span of `text`.
+ * Return the name to suggest for a `call(...)` written inside a `${...}` span of `text`.
  *
  * @param text A binding or branch value whose spans parse and call `call`.
- * @returns The first such call's flow id, read as `matchCallDirective` reads it, or `<flow>` when
- *   that call doesn't start with a flow id.
+ * @returns The first such call's name, read as `matchCallDirective` reads it, or `<name>` when
+ *   that call doesn't start with a name.
  */
 export function spanCallFlowId(text: string): string {
   const call = spanCallDirectiveText(text);
-  if (call === null) return "<flow>";
+  if (call === null) return "<name>";
   try {
-    return matchCallDirective(call)?.[0] ?? "<flow>";
+    return matchCallDirective(call)?.[0] ?? "<name>";
   } catch (error) {
     if (!(error instanceof ExpressionError)) throw error;
-    return "<flow>";
+    return "<name>";
   }
 }
 

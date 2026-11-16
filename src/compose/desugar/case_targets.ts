@@ -25,8 +25,8 @@
  * the case node's own range when a span is unavailable.
  *
  * Knows about: diagnostics, `expr` (the expression error), the compose helpers (errors, positional
- * metadata), the CASE descriptor and the inline-call desugar (the shared `call(...)` recognizer
- * and synth-node factory).
+ * metadata), the CASE descriptor, the CALL descriptor's call rule (`CallsTool`) and the
+ * inline-call desugar (the shared `call(...)` recognizer and synth-node factory).
  */
 
 import { reprText, type SourceRange } from "../../diagnostics.ts";
@@ -107,7 +107,7 @@ export function desugarCaseCallTargets(
  * Return a then:/else: target rewritten to a single node id.
  *
  * Accepts TWO forms and rejects everything else with a located `LoadError`:
- * - a whole-value `call(<flow-id>, kw=...)` directive (the compile-time form): its synth call
+ * - a whole-value `call(<name>, kw=...)` directive (the compile-time form): its synth call
  *   node(s) are lifted into `synth` and the OUTER call's synth id returned;
  * - a plain node id (no `${`, not a `call(...)` directive): passed through unchanged.
  *

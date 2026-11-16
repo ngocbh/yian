@@ -164,6 +164,23 @@ test.each([
   expect((await failure(text))[0]).toBe(message);
 });
 
+// Each row: the lines of a loop over `status` carrying `job` and `done`, and its type or end error,
+// which names the tool.
+test.each([
+  [
+    "    output: {done: !str}\n    while: not done\n    max: 3\n",
+    "loop node 'poll': tool `status` returns 'done' as str, but the carried field is typed bool from its seed;",
+  ],
+  [
+    "    output: {job: !str}\n    while: not done\n",
+    "loop node 'poll': this loop can never end: `while: not done` reads `done`, which tool `status` never " +
+      "returns; add `done` to its `output:`, or add `max:`",
+  ],
+])("a loop's tool with %j gets the loop's error in the tool's words", async (lines, message) => {
+  const text = loopApp("status", `    input:\n      job: \${input.job}\n      done: false\n${lines}`);
+  expect((await failure(text))[0]).toContain(message);
+});
+
 test("run start names a loop's tool by the loop", async () => {
   const text =
     "id: r\nname: r\ndefs:\n  c:\n    nodes:\n" +

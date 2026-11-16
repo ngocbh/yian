@@ -454,9 +454,14 @@ export class LoopDescriptor extends NodeDescriptor {
         const stuck = [...heads].toSorted(compareCodeUnits);
         const reads = stuck.map((name) => `\`${name}\``).join(", ");
         const fix = stuck.map((name) => `\`${name}\``).join(" or ");
+        // A tool returns the fields its `output:` declares.
+        const never =
+          tool !== null
+            ? `${display} never returns; add ${fix} to its \`output:\``
+            : `the body never updates; return ${fix} from the body`;
         errors.push(
-          `${subject}: this loop can never end: \`${key}: ${predicate}\` reads ${reads}, which the body ` +
-            `never updates; return ${fix} from the body, or add \`max:\``,
+          `${subject}: this loop can never end: \`${key}: ${predicate}\` reads ${reads}, which ${never}, or ` +
+            "add `max:`",
         );
       }
       // Builtins are pure, so a predicate that reads no carried field has the same value on every

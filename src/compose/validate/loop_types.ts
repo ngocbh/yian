@@ -85,8 +85,9 @@ import { carriedFieldTypes, loopEntryInputs } from "../nodes/loop.ts";
  * @param producers Each producer node's output contract.
  * @param flowInputs The flow's declared input contracts.
  * @param flowWiring Each node's `param -> source` bindings.
- * @param options.inlineLoops The ids of loop nodes whose body is written inline; it selects the
- *   wording of the error for a returned field that does not fit its parameter (default none).
+ * @param options.inlineLoops The loop nodes whose body is written inline or generated for a tool,
+ *   by id, each with how the error for a returned field that does not fit its parameter names the
+ *   body: `the body`, or `tool `X`` (default none).
  * @param options.registry The flow's typedefs, used to spell a suggested seed tag by a typedef
  *   name and to type a `T(...)` constructor seed as `T`.
  * @param options.diagnostics Factory for located load errors.
@@ -102,12 +103,12 @@ export function checkLoopTypeContract(
   flowInputs: ReadonlyMap<string, ValueContract>,
   flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>,
   options: {
-    inlineLoops?: ReadonlySet<string>;
+    inlineLoops?: ReadonlyMap<string, string>;
     registry?: TypeRegistry | null;
     diagnostics?: LoadDiagnostics | null;
   } = {},
 ): void {
-  const { inlineLoops = new Set<string>(), registry = null } = options;
+  const { inlineLoops = new Map<string, string>(), registry = null } = options;
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
   const typeFn = registry !== null ? constructorTypeFn(registry) : null;
   assertExactContracts(producers, flowInputs);
@@ -173,7 +174,7 @@ export function checkLoopTypeContract(
       }
     }
     checkReturnedFields(node, result, carriedFields, wiring, registry, diagnostics, {
-      inline: inlineLoops.has(nodeId),
+      inline: inlineLoops.get(nodeId) ?? null,
     });
   }
 }
@@ -228,7 +229,8 @@ function holdsOnLiteralSeeds(predicate: string, wiring: ReadonlyMap<string, unkn
  * @param wiring The loop's seed bindings keyed by carried field.
  * @param registry The flow's typedefs, for the suggested types and tags.
  * @param diagnostics Factory for located load errors.
- * @param options.inline Whether the body is written inline, which selects the wording.
+ * @param options.inline How an inline or generated body is named (`the body`, `tool `X``), which
+ *   selects the wording; `null` for a named body.
  * @throws LoadError when a returned field's type can't fit its parameter; the error names both
  *   types and says how to make them agree.
  */
@@ -239,7 +241,7 @@ function checkReturnedFields(
   wiring: ReadonlyMap<string, unknown>,
   registry: TypeRegistry | null,
   diagnostics: LoadDiagnostics,
-  options: { inline: boolean },
+  options: { inline: string | null },
 ): void {
   const returned = node.returnedFields;
   const parameters = new Map<string, ValueContract>();
@@ -268,9 +270,9 @@ function checkReturnedFields(
     const parameterLabel = canonicalTypeLabel(parameter.type);
     const shownSeed = seedText(bindingSource(seed));
     let message: string;
-    if (options.inline) {
+    if (options.inline !== null) {
       message =
-        `loop node ${reprText(node.id)}: the body returns ${reprText(fieldName)} as ${returnedLabel}, ` +
+        `loop node ${reprText(node.id)}: ${options.inline} returns ${reprText(fieldName)} as ${returnedLabel}, ` +
         "but the carried field is " +
         (typed ? `declared ${parameterLabel}` : `typed ${parameterLabel} from its seed`) +
         "; " +

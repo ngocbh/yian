@@ -226,7 +226,7 @@ output:
   `output:` declares fewer; without `output:` each field keeps its seed's type, so tag a seed the
   tool changes (`cursor: !Optional(str) null`). `retries:` and `output:` apply to each turn's call; `asserts:` check the
   final record. `call: sleep` and `call: take` are load errors there, and a FileMemory or
-  VectorDBMemory tool fails each turn (it returns fields a loop doesn't carry). See
+  VectorDBMemory tool fails on its first turn (it returns fields a loop doesn't carry). See
   [Loop over a tool](https://yian.readthedocs.io/control-flow/#loop-over-a-tool).
 
 ### Code nodes

@@ -101,6 +101,15 @@ test("with no output:, an untagged null seed is refused at the seed; a tagged on
   expect(canonicalTypeLabel(outputContractType(node.outputContract)!)).toBe('{"cursor":Optional(str),"job":str}');
 });
 
+test("adaptive_questions: moves to the body's node on a loop over ask", async () => {
+  const lines =
+    "    input:\n      topic: ${input.job}\n      name: ''\n    until: name != ''\n    max: 2\n" +
+    "    adaptive_questions: {prompt: 'Ask about ${topic}'}\n    output: {name: !str}\n";
+  const kinds = staticNodes(await loadFlow(loopApp("ask", lines))).map(([path, node]) => `${path} ${node.kind}`);
+  expect(kinds).toContain("poll/poll__compose agent");
+  expect(kinds).toContain("poll/poll tool");
+});
+
 // Each row: the loop's `call:` and other lines, the load error, and the text it points at.
 test.each([
   ["status", `${POLL}    retries: -1\n`, "node 'poll' (kind=loop): `retries:` must be a non-negative integer, got -1", "-1"],

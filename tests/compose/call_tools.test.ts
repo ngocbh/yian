@@ -282,6 +282,11 @@ test("a mistyped call: name fails at run start, before any record", async () => 
   expect(existsSync(log)).toBe(false);
 });
 
+/** A library whose def `price` calls `quot`, a typo of its def `quote`. */
+const TYPO_LIBRARY =
+  'id: lib\nname: lib\ndefs:\n  quote: {kind: code, code: "return 1", output: !int}\n' +
+  "  price:\n    nodes:\n      n: {kind: call, call: quot}\n    output: ${n.output}\n";
+
 /** A CODE node whose input `x` is `call`, as one line. */
 const inlineNode = (call: string) => `{kind: code, code: return 1, output: !int, input: {x: ${call}}}`;
 
@@ -334,6 +339,13 @@ test("a case branch's mistyped call(...) is checked at run start by its site, wi
       name: "gret",
       hint: "did you mean the def greet?",
     },
+  ]);
+});
+
+test("a library's defs are checked at run start under their names, with hints from the library", async () => {
+  const flow = await loadFlow(TYPO_LIBRARY);
+  expect(runStartTools(flow)).toEqual([
+    { node: "price/n", label: "node 'price/n'", name: "quot", hint: "did you mean the def quote?" },
   ]);
 });
 

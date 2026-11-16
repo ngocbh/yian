@@ -3458,11 +3458,17 @@ export interface RunStartTool {
 /**
  * Return the tools `flow`'s static TOOL nodes name that only the run supplies, a host or MCP tool,
  * in node order: none of a built-in, a tool module's or a memory's tool. `checkToolGrants` looks
- * each up when the run starts.
+ * each up when the run starts. A library's defs are walked too, each node's path under its def.
  */
 export function runStartTools(flow: ComposedFlow | Flow): RunStartTool[] {
+  const nodes = staticNodes(flow);
+  // A library has no nodes; its defs run when a caller's run starts.
+  const library = flow instanceof ComposedFlow ? (flow.library ?? []) : [];
+  for (const [def, child] of library) {
+    for (const [nodePath, node] of staticNodes(child)) nodes.push([`${def}/${nodePath}`, node]);
+  }
   const found: RunStartTool[] = [];
-  for (const [nodePath, node] of staticNodes(flow)) {
+  for (const [nodePath, node] of nodes) {
     const call = node.hostToolCall();
     if (call === null || call.module !== null) continue;
     if (call.group === null && BUILTIN_TOOL_IDS.has(call.toolId as BuiltinToolId)) continue;

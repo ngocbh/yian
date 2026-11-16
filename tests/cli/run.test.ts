@@ -1525,6 +1525,19 @@ describe("check", () => {
     );
   });
 
+  test("a library lists the tools its defs leave for run start, each node under its def", async () => {
+    const library = file(
+      "lib.yaml",
+      'id: lib\nname: lib\ndefs:\n  quote: {kind: code, code: "return 1", output: !int}\n' +
+        "  price:\n    nodes:\n      n: {kind: call, call: quot}\n    output: ${n.output}\n",
+    );
+    const { io, stdout } = testIo();
+    expect(await main(["check", library], io)).toBe(0);
+    expect(stdout()).toBe(`${library}: ok; checked at run start: quot (node 'price/n'; did you mean the def quote?)\n`);
+    const { flows } = await checkJson([library]);
+    expect(flows[0].run_start_tools).toEqual([{ node: "price/n", name: "quot", hint: "did you mean the def quote?" }]);
+  });
+
   test("the ok document lists the tools left for run start, a call(...) by its site", async () => {
     const flow = file(
       "typo.yaml",

@@ -314,6 +314,17 @@ describe("check_flow", () => {
     ]);
   });
 
+  test("lists the tools a library's defs leave for run start", async () => {
+    writeFileSync(
+      join(root, "lib.yaml"),
+      'id: lib\nname: lib\ndefs:\n  quote: {kind: code, code: "return 1", output: !int}\n' +
+        "  price:\n    nodes:\n      n: {kind: call, call: quot}\n    output: ${n.output}\n",
+    );
+    expect(((await call("check_flow", { path: "lib.yaml" })) as FlowCheck).run_start_tools).toEqual([
+      { node: "price/n", name: "quot", hint: "did you mean the def quote?" },
+    ]);
+  });
+
   test("a flow that doesn't load shows the diagnostic as yian check does, without colour", async () => {
     writeFileSync(join(root, "bad.yaml"), "id: [\n");
     const text = await failed(call("check_flow", { path: "bad.yaml" }));

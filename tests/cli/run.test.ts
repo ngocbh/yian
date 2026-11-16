@@ -1535,10 +1535,12 @@ describe("check", () => {
     expect(await main(["check", library], io)).toBe(0);
     expect(stdout()).toBe(`${library}: ok; checked at run start: quot (node 'price/n'; did you mean the def quote?)\n`);
     const { flows } = await checkJson([library]);
-    expect(flows[0].run_start_tools).toEqual([{ node: "price/n", name: "quot", hint: "did you mean the def quote?" }]);
+    expect(flows[0].run_start_tools).toEqual([
+      { node: "price/n", site: null, name: "quot", hint: "did you mean the def quote?" },
+    ]);
   });
 
-  test("the ok document lists the tools left for run start, a call(...) by its site", async () => {
+  test("the ok document lists each tool left for run start by its node's path and a call(...)'s site", async () => {
     const flow = file(
       "typo.yaml",
       'id: r\nname: r\ndefs:\n  greet: {kind: code, code: "return 1", output: !int}\nnodes:\n' +
@@ -1546,8 +1548,8 @@ describe("check", () => {
     );
     const { flows } = await checkJson([flow]);
     expect(flows[0].run_start_tools).toEqual([
-      { node: "n", name: "search", hint: null },
-      { node: "node 'm' input 'x' call(gret)", name: "gret", hint: "did you mean the def greet?" },
+      { node: "n", site: null, name: "search", hint: null },
+      { node: "__call_0", site: "node 'm' input 'x' call(gret)", name: "gret", hint: "did you mean the def greet?" },
     ]);
   });
 

@@ -1591,7 +1591,8 @@ export async function check(
     const documents = results.map((result) => {
       if (!result.ok) return { path: result.path, ok: false, diagnostics: [diagnosticJson(result.diagnostic)] };
       const { runStart, ...loaded } = result;
-      return { ...loaded, run_start_tools: runStart.map(({ node, name, hint }) => ({ node, name, hint })) };
+      const tools = runStart.map(({ node, site, name, hint }) => ({ node, site, name, hint }));
+      return { ...loaded, run_start_tools: tools };
     });
     await printJson({ flows: documents }, io.stdout);
   } else {

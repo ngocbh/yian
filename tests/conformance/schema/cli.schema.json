@@ -154,11 +154,12 @@
       }
     },
     "run_start_tool": {
-      "description": "A host or MCP tool a TOOL node names, which the run looks up when it starts. node is the node's path, or a call(...)'s site; hint is the closest name the flow defines, or null.",
+      "description": "A host or MCP tool a TOOL node names, which the run looks up when it starts. node is the node's path; site is a call(...)'s site, or null; hint is the closest name the flow defines, or null.",
       "type": "object",
-      "required": ["node", "name", "hint"],
+      "required": ["node", "site", "name", "hint"],
       "properties": {
         "node": {"type": "string"},
+        "site": {"type": ["string", "null"]},
         "name": {"type": "string"},
         "hint": {"type": ["string", "null"]}
       }

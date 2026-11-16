@@ -34,7 +34,7 @@ typedefs:
     samples: str           # inputs to try the flow on, as a JSON object
   Checked: {path: str, problem: str}
   Input: {name: str, type: str}
-  RunStartTool: {node: str, name: str, hint: Optional(str)}
+  RunStartTool: {node: str, site: Optional(str), name: str, hint: Optional(str)}
   Check:                   # what check_flow returns
     ok: bool
     name: Optional(str)

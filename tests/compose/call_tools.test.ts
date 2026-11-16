@@ -314,6 +314,8 @@ test.each<[string, string | null]>([
   expect(tool!.hint).toBe(hint);
 });
 
+const SERCH_SITE = "node 'g' input 'x' call(serch)";
+
 test("run start checks only the run's tools, each node named by its path or its call's site", async () => {
   const text = app(
     "  a: {kind: call, call: sleep, input: {for: 1s}}\n" +
@@ -326,15 +328,16 @@ test("run start checks only the run's tools, each node named by its path or its 
   );
 
   expect(runStartTools(await load(text))).toEqual([
-    { node: "f", label: "node 'f'", name: "{github: search}", hint: null },
-    { node: "node 'g' input 'x' call(serch)", label: "node 'g' input 'x' call(serch)", name: "serch", hint: null },
+    { node: "f", site: null, label: "node 'f'", name: "{github: search}", hint: null },
+    { node: "__call_0", site: SERCH_SITE, label: SERCH_SITE, name: "serch", hint: null },
   ]);
 });
 
 test("a case branch's mistyped call(...) is checked at run start by its site, with the hint", async () => {
   expect(runStartTools(await load(caseApp("call(gret)", "call(greet)")))).toEqual([
     {
-      node: "node 'g' cases[0].then call(gret)",
+      node: "__call_0",
+      site: "node 'g' cases[0].then call(gret)",
       label: "node 'g' cases[0].then call(gret)",
       name: "gret",
       hint: "did you mean the def greet?",
@@ -342,10 +345,21 @@ test("a case branch's mistyped call(...) is checked at run start by its site, wi
   ]);
 });
 
+test("a call(...) in a child flow is listed by its path, and its label says which flow", async () => {
+  const text =
+    "id: r\nname: r\ndefs:\n  inner:\n    nodes:\n      m: " +
+    inlineNode("call(serch)") +
+    "\n    output: ${m.output}\nnodes:\n  c: {kind: call, call: inner}\n";
+  const site = "node 'm' input 'x' call(serch)";
+  expect(runStartTools(await loadFlow(text))).toEqual([
+    { node: "c/__call_0", site, label: `${site} in 'c'`, name: "serch", hint: null },
+  ]);
+});
+
 test("a library's defs are checked at run start under their names, with hints from the library", async () => {
   const flow = await loadFlow(TYPO_LIBRARY);
   expect(runStartTools(flow)).toEqual([
-    { node: "price/n", label: "node 'price/n'", name: "quot", hint: "did you mean the def quote?" },
+    { node: "price/n", site: null, label: "node 'price/n'", name: "quot", hint: "did you mean the def quote?" },
   ]);
 });
 

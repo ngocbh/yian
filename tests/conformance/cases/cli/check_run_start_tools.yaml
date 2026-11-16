@@ -27,6 +27,9 @@ expect:
         description: null
         inputs: []
         run_start_tools:
-          - {node: n, name: gret, hint: did you mean the def greet?}
-          - {node: m, name: "{github: search}", hint: null}
-          - {node: "node 'o' input 'x' call(gret)", name: gret, hint: did you mean the def greet?}
+          - {node: n, site: null, name: gret, hint: did you mean the def greet?}
+          - {node: m, site: null, name: "{github: search}", hint: null}
+          - node: __call_0
+            site: node 'o' input 'x' call(gret)
+            name: gret
+            hint: did you mean the def greet?

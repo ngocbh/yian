@@ -3445,9 +3445,11 @@ function toolNodeName(nodePath: string, call: HostToolCall, input: string | null
 
 /** A tool a static TOOL node names that only the run supplies, so only run start can find it. */
 export interface RunStartTool {
-  /** The node's path, or a lifted `call(...)`'s site, as `toolNodeName` names it. */
+  /** The node's path: `c/n`, or a lifted `call(...)`'s own id, `__call_0`. */
   readonly node: string;
-  /** How a message names the node: `node 'c/n'`, or the site. */
+  /** A lifted `call(...)`'s site, `node 'n' input 'x' call(gret)`; else `null`. */
+  readonly site: string | null;
+  /** How a message names the node: `node 'c/n'`, or the site, as `toolNodeName` names it. */
   readonly label: string;
   /** The tool as written: `search`, or `{github: search}`. */
   readonly name: string;
@@ -3472,10 +3474,10 @@ export function runStartTools(flow: ComposedFlow | Flow): RunStartTool[] {
     const call = node.hostToolCall();
     if (call === null || call.module !== null) continue;
     if (call.group === null && BUILTIN_TOOL_IDS.has(call.toolId as BuiltinToolId)) continue;
-    const site = call.site === null ? null : toolNodeName(nodePath, call);
     found.push({
-      node: site ?? nodePath,
-      label: site ?? `node ${reprText(nodePath)}`,
+      node: nodePath,
+      site: call.site,
+      label: call.site === null ? `node ${reprText(nodePath)}` : toolNodeName(nodePath, call),
       name: call.group === null ? call.toolId : `{${call.group}: ${call.toolId}}`,
       hint: call.hint === null ? null : `did you mean the ${call.hint.what} ${call.hint.name}?`,
     });

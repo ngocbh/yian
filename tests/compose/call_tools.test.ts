@@ -432,11 +432,21 @@ test.each([
   expect(error).toBe(`TOOL node 'n' names ${reason}; did you mean ${hint}?`);
 });
 
-test("run start offers an inline call's closest group as the call writes it", async () => {
+test("run start spells an inline call's tool and the names it offers as the call writes them", async () => {
   expect(await startError(typoApp(inlineNode("call(crn.lookup)")))).toBe(
-    `node 'n' input 'x' call(crn.lookup) names ${NO_GROUP("crn: lookup")}; did you mean the module tool ` +
-      "`crm.lookup`?",
+    "node 'n' input 'x' call(crn.lookup) names crn.lookup: unknown tool group 'crn'; tool groups in this run: []; " +
+      "did you mean the module tool `crm.lookup`?",
   );
+  const text = `id: r\nname: r\nnodes:\n  n: ${inlineNode("call(github_serch)")}\n`;
+  const run = runFlow(await loadFlow(text), {}, { env: hostEnv(tmp), tools: { github: [hostTool("search")] } });
+  expect(((await run.catch((caught: unknown) => caught)) as Error).message).toEndWith(
+    "; did you mean `github.search`?",
+  );
+});
+
+test("the check list spells an inline call's tool as the call writes it", async () => {
+  const [tool] = runStartTools(await load(app(`  n: ${inlineNode("call(github.search)")}\n`)));
+  expect(tool!.name).toBe("github.search");
 });
 
 // Each row: what fails, the flow's lines and the run-start error, which names the inline call's

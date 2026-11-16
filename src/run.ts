@@ -3398,7 +3398,7 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
       const hint = call.hint === null ? null : `; did you mean ${hintText(call.hint, { quoted: true })}?`;
       let reason: string;
       if (call.group !== null) {
-        reason = `{${call.group}: ${call.toolId}}: ${error.message}${hint ?? ""}`;
+        reason = `${writtenTool(call.group, call.toolId, call.site)}: ${error.message}${hint ?? ""}`;
       } else if (
         error instanceof GrantError ||
         call.toolId === ASK ||
@@ -3411,25 +3411,26 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
         reason =
           `tool ${reprText(call.toolId)}, which isn't in this run's tools; ` +
           `known tools: ${writeAsText([...known])}`;
-        // A group's tool is matched by the name a model sees it under, and offered as written:
-        // `{group: tool}`.
+        // A group's tool is matched by the name a model sees it under, and offered as the node
+        // writes it: `{group: tool}`, or `group.tool` in a `call(...)`.
         const scope = tools.scope();
-        const shown = new Map<string, string>();
+        const shown = new Map<string, [visible: string, written: string]>();
         for (const group of scope.groupNames()) {
           for (const name of scope.group(group)!) {
-            shown.set(`{${group}: ${name}}`, visibleToolName(group, name));
+            shown.set(`{${group}: ${name}}`, [visibleToolName(group, name), writtenTool(group, name, call.site)]);
           }
         }
-        const candidates = new Map(known.map((id) => [shown.get(id) ?? id, id]));
+        const candidates = new Map(known.map((id) => [shown.get(id)?.[0] ?? id, id]));
         const [close] = getCloseMatches(call.toolId, [...candidates.keys()], 1, CLOSE_MATCH_CUTOFF);
         const id = close === undefined ? null : candidates.get(close)!;
+        const written = id === null ? null : (shown.get(id)?.[1] ?? id);
         if (call.hint === null) {
-          if (id !== null) reason += `; did you mean ${shown.has(id) ? `\`${id}\`` : reprText(id)}?`;
+          if (id !== null) reason += `; did you mean ${shown.has(id) ? `\`${written}\`` : reprText(id)}?`;
         } else if (id === null) {
           reason += hint;
         } else {
           // Both are close: the closer comes first, the file's name on a tie.
-          const [own, run] = [hintText(call.hint, { quoted: true }), `the tool \`${id}\``];
+          const [own, run] = [hintText(call.hint, { quoted: true }), `the tool \`${written}\``];
           const runFirst = closeness(call.toolId, close!) > call.hint.score;
           reason += `; did you mean ${runFirst ? `${run} or ${own}` : `${own} or ${run}`}?`;
         }
@@ -3437,6 +3438,12 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
       throw new YianRangeError(`${toolNodeName(nodeId, call)} names ${reason}`);
     }
   }
+}
+
+/** Tool `name` of `group` as a node writes it: `{group: name}`, or `group.name` in a `call(...)`. */
+function writtenTool(group: string | null, name: string, site: string | null): string {
+  if (group === null) return name;
+  return site === null ? `{${group}: ${name}}` : `${group}.${name}`;
 }
 
 /** `the def greet`, the hint's name in backticks when `quoted`. */
@@ -3464,7 +3471,7 @@ export interface RunStartTool {
   readonly site: string | null;
   /** How a message names the node: `node 'c/n'`, or the site, as `toolNodeName` names it. */
   readonly label: string;
-  /** The tool as written: `search`, or `{github: search}`. */
+  /** The tool as the node writes it: `search`, `{github: search}`, or `github.search` in a `call(...)`. */
   readonly name: string;
   /** The closest name the node's file defines, as `did you mean the def greet?`; else `null`. */
   readonly hint: string | null;
@@ -3491,7 +3498,7 @@ export function runStartTools(flow: ComposedFlow | Flow): RunStartTool[] {
       node: nodePath,
       site: call.site,
       label: call.site === null ? `node ${reprText(nodePath)}` : toolNodeName(nodePath, call),
-      name: call.group === null ? call.toolId : `{${call.group}: ${call.toolId}}`,
+      name: writtenTool(call.group, call.toolId, call.site),
       hint: call.hint === null ? null : `did you mean ${hintText(call.hint, { quoted: false })}?`,
     });
   }

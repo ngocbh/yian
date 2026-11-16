@@ -428,7 +428,9 @@ output: ${place.output}
   [tool module](/code-and-tools/#tool-modules)'s tool (`{crm: lookup}`, or `quote` for one
   export), a [memory](/memory/)'s tool (`{lessons: append}`), or one of the run's tools (`search`,
   or an MCP server's `{github: search}`). The run's tools are looked up when it starts, so a
-  misspelled name fails then, before anything runs.
+  misspelled name fails then, before anything runs. The error offers the closest name the file
+  defines (`gret` gets the def `greet`), and [`yian check`](/cli/#yian-check) lists every name
+  left for run start.
 - A name the file defines means the file's own: a def or alias hides a run's tool of that name.
   `call: {clean: x}` on a flow `clean` is a load error; rename the def or alias to reach a tool
   group `clean`. A memory input named alone, `call: lessons`, is a load error too.

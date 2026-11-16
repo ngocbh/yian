@@ -319,17 +319,19 @@ function toolBody(
   const taken = new Set([...Object.keys(authored), ...(memory === null ? [] : [memory])]);
   for (const [key, argument] of Object.entries(authored)) {
     if (kind === "loop") {
-      // The tool's result names the carried fields that change, so it can't rename one.
+      // The carried record is keyed by the body's input names, and the tool returns fields by its
+      // argument names, so they must be the same.
       const what = `loop node ${reprText(nodeId)}: carried field`;
       rejectNonIdentifierInput(what, key, inputCursor.keyRangeOf(key), diagnostics);
     } else if (isLiteral(argument)) {
       passed.set(key, [argument, inputCursor.child(key)]);
       continue;
     }
-    // A body input is read as `${input.<name>}`, and a map binds `over` itself, so an argument
+    // A body input is read as `${input.<name>}`, and a map binds `over` itself, so a map's argument
     // named otherwise gets a name of its own; the tool still gets it as `key`.
     let name = key;
-    if (!isIdentifier(key) || (kind === "map" && key === "over")) {
+    const rename = kind === "map" && (!isIdentifier(key) || key === "over");
+    if (rename) {
       const base = `arg_${identifierSuggestion(key)}`;
       name = base;
       for (let n = 2; taken.has(name); n++) name = `${base}_${n}`;

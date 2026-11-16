@@ -233,9 +233,9 @@ reads a field of a child's record output as `${child.output.total}`.
 
 ## Compact form
 
-A flow whose body is one `agent`, `code` or `tool` node can drop `nodes:` and put the node's
-fields at the top level. Only `id`, `name`, `description`, `version` and `typedefs` stay with the
-flow; every other key, `asserts:` included, belongs to the node:
+A flow whose body is one `agent`, `code`, `tool` or `call` node can drop `nodes:` and put the
+node's fields at the top level. Only `id`, `name`, `description`, `version` and `typedefs` stay
+with the flow; every other key, `asserts:` included, belongs to the node:
 
 <!-- yian-test {"replies": ["Hello, Ada! Lovely to meet you."]} -->
 ```yaml title="hello.yaml" check=runnable
@@ -257,7 +257,8 @@ Hello, Ada! Lovely to meet you.
 - Each flow input is passed to the node under its own name, so the prompt reads `${name}`.
 - `output:` is the node's output type, a tag as on any node (`output: !str`), and the flow
   returns the node's result.
-- `case`, `call`, `map` and `loop` need the full `nodes:` form, and so do `uses:` and `defs:`.
+- `case`, `map` and `loop` need the full `nodes:` form, and so do `uses:` and `defs:`. So a
+  compact `call` names a [tool](/control-flow/#call-a-tool).
 
 ## Library files
 

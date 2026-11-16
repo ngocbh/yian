@@ -142,7 +142,7 @@ output:
 - **Order without data** with `depends_on: [a]` (skipped when `a` is skipped) or
   `runs_after: [a]` (runs either way). Both take a list.
 - **Compact form** (the node's fields at the top level, no `nodes:`) is only for a flow whose
-  body is one `agent`, `code` or `tool` node. See
+  body is one `agent`, `code`, `tool` or `call` node; a compact `call` names a tool. See
   [Compact form](https://yian.readthedocs.io/flows/#compact-form).
 
 ### Expressions and null
@@ -191,6 +191,12 @@ output:
   importing file, without the extension (only `.yaml` files are found); `@<version>` must equal
   the child's quoted `version:` text (`clean: ../common/clean@1`). A def or alias can't be named
   `take`, `sleep`, `ask`, `ask_user` or `load_skill`.
+- **On a `call` node, any other name is a tool**, called as a `tool` node calls it: a built-in
+  (`call: sleep`), a module's or memory's tool (`{crm: lookup}`, `{lessons: append}`), or one of
+  the run's tools (`search`, `{github: search}`), looked up when the run starts. The file's own
+  names hide a run's tool of that name, and `{clean: x}` with `clean` a flow is a load error. A
+  tool call takes `retries:`, `output:` and `asserts:`; a flow call takes neither `retries:` nor
+  `output:`. See [Call a tool](https://yian.readthedocs.io/control-flow/#call-a-tool).
 - **A library's def is `call: {billing: quote}`** (or `call(billing.quote, k=v)` in a binding),
   on `call`, `map` and `loop`. `call: billing` alone is a load error, and a flow's own `defs:`
   can't be called from outside. `tool_id: billing` is a load error too.

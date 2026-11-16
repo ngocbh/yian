@@ -55,7 +55,8 @@ This flow collects notes until its inbox closes, then returns them all.
   agent's `steer_inbox:` (see [Agents](/agents/)), or an `Inbox` input of a `kind: call` node's
   or a `loop`'s child.
 - Anything else is a load error: text around it, a field read, a code or agent input, a `case`,
-  a `map`, an inline `call(...)`, a flow output.
+  a `map`, an inline `call(...)` of a flow, a flow output. An inline `call(take, from=...)` is a
+  `take`.
 - A loop passes an inbox to every run of its body and leaves it out of its output.
 - A child that a `map` runs can't declare an inbox.
 - An inbox nothing reads is a load error:

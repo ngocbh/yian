@@ -255,8 +255,8 @@ $ yian run greet_team.yaml --input lead=Ada --input team="Bo, Cy"
 ```
 
 - `call:` names a `defs:` entry first, then a [`uses:`](#import-a-flow-from-another-file-with-uses)
-  alias. On a `call` node or in a `call(...)` any other name is a [tool](#call-a-tool); on a `map`
-  it is a load error.
+  alias. On a `call` node or in a `call(...)` any other name is a [tool](#call-a-tool); a `map`
+  or `loop` runs only flows for now, so a tool there is a load error.
   A `defs:` name or alias can't also be a node id or a built-in's name: `take`, `sleep`, `ask`,
   `ask_user` or `load_skill`. `call: {billing: quote}` names a
   [library's def](#call-a-librarys-def).

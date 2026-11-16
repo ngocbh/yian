@@ -136,6 +136,8 @@ const NAMES: Record<string, string[]> = {
     "MemoryMissingError",
     "memoryErrorKind",
     "MemoryRef",
+    "authoredText",
+    "escapeAuthorTags",
   ],
   "./run": [
     "RunResult",

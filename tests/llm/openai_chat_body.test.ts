@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { encodeBody } from "../../src/llm/body.ts";
+import { authoredText, encodeBody } from "../../src/llm/body.ts";
 import {
   MediaPart,
   Message,
@@ -181,6 +181,12 @@ describe("author", () => {
       ]);
     });
   }
+
+  test("a one-text authored message is sent as authoredText's string", () => {
+    for (const text of [...FORGED, ...SPLIT]) {
+      expect(sent([authored('a"b', text)])).toEqual([{ role: "user", content: authoredText('a"b', text) }]);
+    }
+  });
 
   test("a system or assistant message's author is not sent", () => {
     const messages = [

@@ -20,7 +20,9 @@
  *   session types (`memory/base`); `FileMemory` and `FileMemoryOptions` (`memory/file`);
  *   `VectorDBMemory` and `VectorDBMemoryOptions` (`memory/vectordb`), whose embedder a host builds
  *   with `defaultEmbed` from `yian/llm_clients`; and `MemoryRef` (`typesys/values`), the value a
- *   memory input records when a run starts.
+ *   memory input records when a run starts;
+ * - labelling text for an agent outside yian as yian labels a message's author: `authoredText`
+ *   and `escapeAuthorTags` (`llm/body`).
  *
  * `RunResult` is on `yian/run` (`run.ts`), with `MemoryDrift`, a memory a crash resume found
  * changed. `Message`, `MessagePart`, `checkMessage`, `checkConversation` and `ConversationError`
@@ -28,7 +30,7 @@
  * send, are also on `yian/run`. `InboxRef` (`typesys/values`), the handle an `Inbox(T)` input
  * holds, is on both, as are `MemoryRef` and `RecordedMemoryTool`.
  *
- * Knows about: compile, compose, diagnostics, expr, memory, nodes, `run`, tools and typesys.
+ * Knows about: compile, compose, diagnostics, expr, llm, memory, nodes, `run`, tools and typesys.
  * Nothing in the package imports this module.
  */
 
@@ -40,6 +42,7 @@ export { loadFlow } from "./compose/loader.ts";
 export { Diagnostic, Failure } from "./diagnostics.ts";
 export { registerTemplateFn } from "./expr/builtins.ts";
 export { ExpressionError, evaluateWhen } from "./expr/expressions.ts";
+export { authoredText, escapeAuthorTags } from "./llm/body.ts";
 export {
   type Applied,
   type Author,

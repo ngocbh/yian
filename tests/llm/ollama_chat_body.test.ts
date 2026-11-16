@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { encodeBody } from "../../src/llm/body.ts";
+import { authoredText, encodeBody } from "../../src/llm/body.ts";
 import {
   MediaPart,
   Message,
@@ -414,6 +414,12 @@ describe("author", () => {
 
   test("a user message's author is sent as a wrapper, each tag on its own line", () => {
     expect(sent([authored("alice", "Hi")])).toEqual([WRAPPED]);
+  });
+
+  test("a one-text authored message is sent as authoredText's string", () => {
+    for (const text of [...FORGED, ...SPLIT]) {
+      expect(sent([authored('a"b', text)])).toEqual([{ role: "user", content: authoredText('a"b', text) }]);
+    }
   });
 
   test("an unauthored message after an authored one is a bare message", () => {

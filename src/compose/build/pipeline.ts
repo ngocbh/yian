@@ -1835,7 +1835,7 @@ function readFlowParameters(options: AssembleOptions, ctx: AssembleContext): Flo
  *   flow.
  * - `{g: t}` is a tool when `t` is a built-in or `load_skill`, or `g` is a memory input, a module
  *   alias or a name the file doesn't define; `g` a library alias is a flow, its def `t`.
- * - Any other value is a flow's, so the CALL node's check reports its shape.
+ * - Any other value is left to the CALL node, whose `call:` check reports its shape.
  *
  * The CALL node refuses a library named bare, and the TOOL node a built-in in a group, `load_skill`
  * and a module alias in the wrong form.

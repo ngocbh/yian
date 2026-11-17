@@ -3091,6 +3091,12 @@ async function checkInvariants(
     // A flow call's growth leaves its agent in flight.
     if (kind === "node_expanded" && payload["call_id"] === null) inFlight.delete(payload["spawner_id"] as string);
     if (kind === "node_failed") inFlight.delete((payload["failure"] as Readonly<Case>)["node_id"] as string);
+    // An interrupt, or a failure inside a flow call, ends a flow call's scope: its running nodes
+    // leave the graph the log replays to after the record.
+    if (kind === "interrupted" || (kind === "node_failed" && payload["scope"] != null)) {
+      const graph = replay(seq + 1).flow.nodes;
+      for (const nodeId of inFlight) if (!graph.has(nodeId)) inFlight.delete(nodeId);
+    }
     if (inFlight.size > workers) {
       fail(`${inFlight.size} nodes are in flight after record ${seq}, over ${workers}`);
     }

@@ -160,8 +160,8 @@ quote:
 The built-ins `take`, `sleep` and `ask` read an inbox, wait until a time and ask a person; they
 are covered on [Inboxes and waiting](/inboxes/).
 
-`kind: tool`, with `tool_id:` in place of `call:`, is the old spelling of a TOOL node. It still
-loads, but it is going away: write `kind: call`.
+`kind: tool`, with `tool_id:` in place of `call:`, was the old spelling of a tool call. It was
+removed: a flow that writes it fails to load, and the error shows the `kind: call` to write.
 
 ### Checks before the run starts
 

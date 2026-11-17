@@ -36,8 +36,10 @@ nodes:
     output: !Review
     system_prompt: |-
       You review flows written in yian, a YAML language for flows of agent, code, case, call,
-      map and loop nodes, where a call node runs a flow or calls a tool (`kind: tool` is the old
-      spelling of a call naming a tool). You report problems; you never change the flow.
+      map and loop nodes, where a call node runs a flow or calls a tool. A flow written before
+      `kind: tool` was removed no longer loads: report each `kind: tool` node, to be rewritten as
+      `kind: call` with its `tool_id:` renamed `call:`. You report problems; you never change the
+      flow.
 
       Check each area:
       - security: a CODE node, which runs on the user's machine with no sandbox; any shell,

@@ -153,7 +153,7 @@ A node id is an identifier: ASCII letters, digits and `_`, not starting with a d
 | `call` | Runs a child flow once, or calls a tool, such as a host tool or `ask`, `take` or `sleep` | [Control flow](/control-flow/), [Code and tools](/code-and-tools/#tool-nodes), [Inboxes and waiting](/inboxes/) |
 | `map` | Runs a child flow or a tool once per list item | [Control flow](/control-flow/) |
 | `loop` | Runs a child flow or a tool again and again | [Control flow](/control-flow/) |
-| `tool` | The old spelling of a `call` node naming a tool, with `tool_id:` for `call:`; it still loads, but is going away | [Code and tools](/code-and-tools/#tool-nodes) |
+| `tool` | Removed: write a `call` node naming the tool, with `call:` in place of `tool_id:` | [Code and tools](/code-and-tools/#tool-nodes) |
 
 ### Common fields
 
@@ -161,7 +161,7 @@ A node id is an identifier: ASCII letters, digits and `_`, not starting with a d
 |---|---|---|
 | `kind` | all | The node kind |
 | `input` | all but `case` | A mapping of names to the values the node reads |
-| `output` | `agent`, `code`, `tool`, and a `call`, `map` or `loop` naming a tool | The type of the node's result, written as a type with no tag |
+| `output` | `agent`, `code`, and a `call`, `map` or `loop` naming a tool | The type of the node's result, written as a type with no tag |
 | `asserts` | all but `case`, and a `map` over a flow | Conditions on the node's inputs and result (see [Asserts](#asserts)) |
 | `depends_on` | all | Node ids to run after; this node is skipped when one is skipped |
 | `runs_after` | all | Node ids to run after; this node still runs when one is skipped |
@@ -233,7 +233,7 @@ reads a field of a child's record output as `${child.output.total}`.
 
 ## Compact form
 
-A flow whose body is one `agent`, `code`, `tool` or `call` node can drop `nodes:` and put the
+A flow whose body is one `agent`, `code` or `call` node can drop `nodes:` and put the
 node's fields at the top level. Only `id`, `name`, `description`, `version` and `typedefs` stay
 with the flow; every other key, `asserts:` included, belongs to the node:
 

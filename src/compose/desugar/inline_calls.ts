@@ -882,7 +882,7 @@ export function liftCall(
   const fields = { id: call.id, inputs: { ...call.args }, host: hostId, range, fieldLabels, callSite };
   const written = def === null ? name : { [name]: def };
   if (callsTool?.(call.id, written, range, { site: fieldLabels.get("call") ?? null })) {
-    return ToolDescriptor.lift({ ...fields, toolId: written }, diagnostics);
+    return ToolDescriptor.lift({ ...fields, call: written }, diagnostics);
   }
   return new CallDescriptor({ ...fields, call: name, def, over: null });
 }

@@ -1267,7 +1267,8 @@ describe("scalar facts", () => {
     const nodes = SourceDocument.parse(
       "nodes:\n" +
         "  step:\n" +
-        "    kind: tool\n" +
+        "    kind: call\n" +
+        "    call: fetch\n" +
         "    input:\n" +
         "      plain: !int 3\n" +
         "      quoted: 'int = 3'\n",
@@ -1289,7 +1290,8 @@ describe("scalar facts", () => {
         '      b: "x = 1"\n' +
         "    nodes:\n" +
         "      inner:\n" +
-        "        kind: tool\n" +
+        "        kind: call\n" +
+        "        call: fetch\n" +
         "        input:\n" +
         "          c: y = 2\n" +
         "          d: >\n" +
@@ -1314,7 +1316,8 @@ describe("scalar facts", () => {
         "  helper:\n" +
         "    nodes:\n" +
         "      step:\n" +
-        "        kind: tool\n" +
+        "        kind: call\n" +
+        "        call: fetch\n" +
         "        input:\n" +
         "          plain: !int 3\n" +
         "          quoted: 'int = 3'\n",

@@ -660,8 +660,8 @@ output: \${agent.output}
 `;
 
 for (const [tool, message] of [
-  ["take", "AGENT node 'agent' grants 'take': an engine built-in a TOOL node reaches with tool_id: take"],
-  ["sleep", "AGENT node 'agent' grants 'sleep': an engine built-in a TOOL node reaches with tool_id: sleep"],
+  ["take", "AGENT node 'agent' grants 'take': an engine built-in; reach it with `call: take`"],
+  ["sleep", "AGENT node 'agent' grants 'sleep': an engine built-in; reach it with `call: sleep`"],
   ["ask", "AGENT node 'agent' grants 'ask': grant ask_user; ask is a TOOL-node built-in in this version"],
 ] as const) {
   test(`an AGENT can't grant the built-in ${tool}`, async () => {

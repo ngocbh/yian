@@ -1,7 +1,7 @@
 # The removed `kind: model` fails at the `kind:` value, naming what to write instead.
 kind: load
 flow: |
-  # e42 — removed node kind. COMPILE: "kind 'model' was removed" (use kind: tool).
+  # e42 — removed node kind. COMPILE: "kind 'model' was removed" (use kind: call).
   id: err-removed-model-kind
   name: err_removed_model_kind
   input:
@@ -18,5 +18,5 @@ expect:
   load:
     diagnostics:
       - code: compose.load
-        message: "node 'rank': kind 'model' was removed; serve the model behind a host tool and call it with kind: tool (set tool_id: and input:)"
+        message: "node 'rank': kind 'model' was removed; serve the model behind a host tool, then write `kind: call` with `call: <tool>` and `input:`"
         frames: [{label: flow.yaml, range: [8, 11, 8, 16]}]

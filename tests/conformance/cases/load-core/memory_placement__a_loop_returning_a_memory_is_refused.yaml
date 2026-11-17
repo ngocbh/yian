@@ -29,7 +29,7 @@ expect:
       - code: compose.load
         message: |-
           defs entry 'body': flow has unresolved references:
-            flow output from: ${input.m} is a memory; use it whole as an agent input, in prompt text, as a child's memory input of the same type, or name it in `tools:`/`tool_id:` (a flow output can't be a memory)
+            flow output from: ${input.m} is a memory; use it whole as an agent input, in prompt text, as a child's memory input of the same type, or name it in `tools:`/`call:` (a flow output can't be a memory)
         frames:
           - label: flow.yaml
             range:

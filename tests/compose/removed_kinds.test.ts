@@ -1,17 +1,42 @@
-/** Loading a removed node kind is a load error that names its replacement. */
+/** Loading a removed node kind, or the removed `tool_id:`, is a load error that names what to write instead. */
 import { expect, test } from "bun:test";
 
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { rejected } from "../helpers/run_state_fixtures.ts";
 
+/** The message loading a flow whose one node `n` is `body` fails with. */
+async function refusal(body: string): Promise<string> {
+  const error = await rejected(loadFlow(`id: f\nname: f\nnodes:\n  n:\n${body}output: \${n.output}\n`));
+  return (error as LoadError).message;
+}
+
 test.each([
   [
     "human_input",
-    "kind 'human_input' was removed; ask a person with kind: tool, tool_id: ask (input: prompt, questions, timeout)",
+    "kind 'human_input' was removed; to ask a person, write `kind: call` with `call: ask` " +
+      "(input: prompt, questions, timeout)",
   ],
-  ["wait", "kind 'wait' was removed; wait with kind: tool, tool_id: sleep (input: until or for)"],
+  ["wait", "kind 'wait' was removed; to wait, write `kind: call` with `call: sleep` (input: until or for)"],
 ])("loading kind %p names its replacement", async (kind, why) => {
-  const error = await rejected(loadFlow(`id: f\nname: f\nnodes:\n  n:\n    kind: ${kind}\noutput: \${n.output}\n`));
-  expect((error as LoadError).message).toContain(`node 'n': ${why}`);
+  expect(await refusal(`    kind: ${kind}\n`)).toContain(`node 'n': ${why}`);
+});
+
+// Each row: the node's `tool_id:` lines, and the `call:` the message shows for them.
+test.each([
+  ["    tool_id: search\n", "search"],
+  ["    tool_id: {github: search}\n", "{github: search}"],
+  ["    tool_id:\n      github: search\n", "{github: search}"],
+  ["", "<tool>"],
+  ["    tool_id: [search]\n", "<tool>"],
+])("kind: tool with %p shows the call to write", async (toolId, call) => {
+  expect(await refusal(`    kind: tool\n${toolId}`)).toBe(
+    `node 'n': kind 'tool' was removed; write \`kind: call\` with \`call: ${call}\``,
+  );
+});
+
+test("tool_id: on a call node shows the call: to write", async () => {
+  expect(await refusal("    kind: call\n    tool_id: {github: search}\n")).toBe(
+    "node 'n' (kind=call): `tool_id:` is now `call:`; write `call: {github: search}`",
+  );
 });

@@ -21,7 +21,7 @@ import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
 import { ValueKind } from "../../src/typesys/values.ts";
-import { caseDocument, loadError } from "../helpers/declarations.ts";
+import { callsATool, caseDocument, loadError } from "../helpers/declarations.ts";
 import { grantText } from "../../src/tools/grants.ts";
 
 afterEach(() => forget());
@@ -36,8 +36,9 @@ function build(
   return [result.node, result.wiring];
 }
 
-/** Parse the `nodes:` of a parsed flow document as the loader does. */
-const nodesOfDocument = (document: SourceDocument) => parseNodes(flowNodesCursor(document, parseFile(document).nodes));
+/** Parse the `nodes:` of a parsed flow document as the loader does; each seed's `call:` names a tool. */
+const nodesOfDocument = (document: SourceDocument) =>
+  parseNodes(flowNodesCursor(document, parseFile(document).nodes), { callsTool: callsATool });
 
 /** Parse the `nodes:` of seed case `id`. */
 const seedNodes = (id: string) => nodesOfDocument(caseDocument(id).document);
@@ -174,7 +175,7 @@ test("a CODE node is built", () => {
 // ---------- tool ----------
 
 test("a TOOL node is built with its argument bindings", () => {
-  // Seed 08's news: tool_id and untyped inputs.
+  // Seed 08's news: a flat call: and untyped inputs.
   const [node, wiring] = build(seedNodes("load-leaves/seed_08_tool_news").get("news")!);
 
   expect(node).toBeInstanceOf(ToolNode);

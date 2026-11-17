@@ -229,7 +229,7 @@ interface ReferenceSites {
 }
 
 /** Why most sites refuse a whole inbox read: only `take` reads its events. */
-const TAKE_TAIL = "(take from it with `tool_id: take`)";
+const TAKE_TAIL = "(take from it with `call: take`)";
 /** Why a MAP's sources refuse an inbox read. */
 const MAP_TAIL = "(a map body can't read an inbox)";
 /** Why text, an expression, or a case's `when:` or `on:` refuses an inbox read. */
@@ -241,7 +241,7 @@ export const UNRESOLVED_REFERENCES = "flow has unresolved references";
 /** What an error says of a memory read where it can't be, before the site's tail. */
 const MEMORY_USE =
   "is a memory; use it whole as an agent input, in prompt text, as a child's memory input of the same type, " +
-  "or name it in `tools:`/`tool_id:`";
+  "or name it in `tools:`/`call:`";
 /** Why a typed binding or a value holding a memory refuses it. */
 const MEMORY_VALUE_TAIL = "(not inside a list, record or dict)";
 /** Why a site with no tail of its own refuses a memory read. */

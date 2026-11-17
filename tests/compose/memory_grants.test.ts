@@ -265,7 +265,8 @@ test("a TOOL node's memory tool named like a built-in says to rename the input",
   const nodes = "found:\n  kind: call\n  call: {load: skill}\n";
   const error = await loadErrorAsync(loadFlow(flow("load: !Notes", nodes), { memoryTypes: [Notes] }));
   expect(error.diagnostic.message).toBe(
-    "node 'found' (kind=call): the tool name `load_skill` of `{load: [skill]}` is yian's; rename the input",
+    "node 'found' (kind=call): `call: {load: skill}` would show as `load_skill`, a name yian reserves; " +
+      "rename the input",
   );
 });
 

@@ -742,7 +742,7 @@ test("a single-node def of kind case is refused at its kind, asking for nodes:",
   const error = await loadErrorAsync(loadConformanceFlow(text));
   expect(error.message).toBe(
     "defs entry 'd': kind 'case' is not allowed in a single-node def (allowed: agent, call, code, loop, " +
-      "map, tool); a case routes to other nodes, which a one-node def has none of — write a full " +
+      "map); a case routes to other nodes, which a one-node def has none of — write a full " +
       "`nodes:` body instead",
   );
   expect(error.diagnostic.frames.at(-1)!.range).toEqual(
@@ -753,10 +753,10 @@ test("a single-node def of kind case is refused at its kind, asking for nodes:",
 test("a single-node def's unknown or non-text kind lists the kinds it takes", async () => {
   const unknown = await loadErrorAsync(loadConformanceFlow(singleNodeDef("bogus")));
   expect(unknown.message).toBe(
-    "defs entry 'd': node 'd': unknown kind 'bogus' (allowed: agent, call, code, loop, map, tool)",
+    "defs entry 'd': node 'd': unknown kind 'bogus' (allowed: agent, call, code, loop, map)",
   );
   const number = await loadErrorAsync(loadConformanceFlow(singleNodeDef("1")));
-  expect(number.message).toContain("write one of agent, call, code, loop, map, tool");
+  expect(number.message).toContain("write one of agent, call, code, loop, map");
 });
 
 test("defs without a source cursor build from their normalized bodies", () => {

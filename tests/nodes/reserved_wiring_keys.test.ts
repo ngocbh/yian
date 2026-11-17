@@ -30,6 +30,6 @@ test("an AGENT reserves `__memory_<input>` for each memory its grants name, once
   expect(agent.reservedKeyLabel("__memory_lessons")).toBe("tools");
   const tool = new ToolNode("t", { toolId: { group: "lessons", name: "read" }, memoryTool: true });
   expect(tool.reservedWiringKeys()).toEqual(new Set(["__memory_lessons"]));
-  expect(tool.reservedKeyLabel("__memory_lessons")).toBe("tool_id");
+  expect(tool.reservedKeyLabel("__memory_lessons")).toBe("call");
   expect(new ToolNode("h", { toolId: { group: "github", name: "search" } }).reservedWiringKeys()).toEqual(new Set());
 });

@@ -54,7 +54,7 @@ const refused = (nodes: string, output = "null") => loadError(() => load(nodes, 
 
 const USE =
   "is a memory; use it whole as an agent input, in prompt text, as a child's memory input of the same type, " +
-  "or name it in `tools:`/`tool_id:`";
+  "or name it in `tools:`/`call:`";
 const agent = (input: string, prompt = "hi") =>
   `  a:\n    kind: agent\n    output: !str\n    prompt: ${JSON.stringify(prompt)}\n    input:\n${input}`;
 const code = (input: string) => `  c:\n    kind: code\n    code: return 1\n    input:\n${input}`;

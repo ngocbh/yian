@@ -1,8 +1,8 @@
 /**
  * `call:` names a tool on a `call` node, in a compact flow, in an inline `call(...)` and in a case
  * branch's `call(...)`: a name the file defines means the file's own flow or module, any other name
- * is a tool the run supplies, and a call naming a tool loads as the TOOL node `kind: tool` builds,
- * under its field rules, in the author's words.
+ * is a tool the run supplies, and a call naming a tool loads as a TOOL node, under its field rules,
+ * in the author's words.
  */
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
@@ -151,8 +151,7 @@ test("a tool call takes retries:, output: and asserts:", async () => {
   expect(node.postAsserts.map((assertion) => assertion.display)).toEqual(["output > 0"]);
 });
 
-// A `call` node naming a tool reads `call:` and `kind=call` where `kind: tool` reads `tool_id:` and
-// `kind=tool`.
+// A `call` node naming a tool names its node `kind=call` and its tool `call:`.
 test.each([
   [
     "sleep, retries: 1, input: {for: 1s}",
@@ -203,27 +202,8 @@ test("adaptive_questions: on a group's tool is refused", async () => {
 });
 
 test("a call node naming a tool also written with tool_id: is refused at tool_id:", async () => {
-  expect(await refusal(app("  n: {kind: call, call: search, tool_id: search}\n"))).toContain(
-    "node 'n' (kind=call): field 'tool_id' is not allowed",
-  );
-});
-
-// Each row: the tool as written, the node's other lines, and any extra input lines.
-test.each<[string, string, string, string]>([
-  ["sleep", "sleep", "    input: {for: 1s}\n", ""],
-  ["take", "take", '    input: {from: "${input.inbox}"}\n', "  inbox: !Inbox(str)\n"],
-  ["ask with adaptive questions", "ask", "    adaptive_questions: {prompt: Ask about the trip}\n", ""],
-  ["a module's one export", "one", "", ""],
-  ["a module group's tool", "{crm: lookup}", "", ""],
-  ["a memory's tool", "{lessons: read}", "    input: {path: a.md}\n", ""],
-  ["a host tool", "search", "    retries: 2\n    output: !int\n    asserts: [output > 0]\n", ""],
-  ["a host group's tool", "{github: search}", "", ""],
-])("kind: call naming %s has kind: tool's fingerprint", async (_label, written, rest, inputs) => {
-  const fingerprint = async (head: string) =>
-    flowFingerprint((await load(app(`  n:\n${head}${rest}`, inputs))).compiled);
-
-  expect(await fingerprint(`    kind: call\n    call: ${written}\n`)).toBe(
-    await fingerprint(`    kind: tool\n    tool_id: ${written}\n`),
+  expect(await refusal(app("  n: {kind: call, call: search, tool_id: search}\n"))).toBe(
+    "node 'n' (kind=call): `tool_id:` is now `call:`; write `call: search`",
   );
 });
 
@@ -291,8 +271,6 @@ test.each<[string, RunStartTool["hint"]]>([
   ["{kind: call, call: quot}", hint("library def", "{billing: quote}")],
   ["{kind: call, call: on}", hint("module tool", "one")],
   ["{kind: call, call: search}", null],
-  // `tool_id:` says the name is a tool, so no def is offered.
-  ["{kind: tool, tool_id: gret}", null],
   [inlineNode("call(gret)"), hint("def", "greet")],
   [inlineNode("call(quot)"), hint("library def", "billing.quote")],
   // A mistyped group is matched against the file's libraries, tool modules and memory inputs.
@@ -488,7 +466,7 @@ test("a call binding the memory it calls is refused, as any tool argument holdin
   const text = app('  n: {kind: call, call: {lessons: read}, input: {lessons: "${input.lessons}", path: a.md}}\n');
   expect(await refusal(text)).toBe(
     "flow has unresolved references:\n  node 'n' input 'lessons' from: ${input.lessons} is a memory; use it whole as an " +
-      "agent input, in prompt text, as a child's memory input of the same type, or name it in `tools:`/`tool_id:` " +
+      "agent input, in prompt text, as a child's memory input of the same type, or name it in `tools:`/`call:` " +
       "(a tool node can't take a memory)",
   );
 });

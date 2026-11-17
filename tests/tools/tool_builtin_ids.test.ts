@@ -48,9 +48,7 @@ describe("reserved names", () => {
   });
   test("take is reserved by yian", () => {
     expect(() => registerTool("take", echo("take"))).toThrow(
-      new RangeError(
-        "tool name 'take' is reserved by yian: an engine built-in a TOOL node reaches with tool_id: take",
-      ),
+      new RangeError("tool name 'take' is reserved by yian: an engine built-in; reach it with `call: take`"),
     );
   });
   test.each(["take", "sleep", "load_skill"])("a top-level %p key is refused", (name) => {
@@ -58,9 +56,7 @@ describe("reserved names", () => {
   });
   test("a top-level take key says why", () => {
     expect(() => new ToolSet({ take: echo("take") })).toThrow(
-      new RangeError(
-        'tools["take"]: the name is reserved by yian: an engine built-in a TOOL node reaches with tool_id: take',
-      ),
+      new RangeError('tools["take"]: the name is reserved by yian: an engine built-in; reach it with `call: take`'),
     );
   });
   test.each(["take", "sleep", "ask", "ask_user", "load_skill"])("a group member named %p is refused", (name) => {
@@ -158,7 +154,7 @@ describe("the ask slot", () => {
   });
   test.each(["take", "sleep"])("%p is not a tool a set resolves", (name) => {
     expect(() => new ToolSet({}).resolve([name])).toThrow(
-      new RangeError(`'${name}' is an engine built-in, not a tool; reach it with a TOOL node's tool_id: ${name}`),
+      new RangeError(`'${name}' is an engine built-in, not a tool; reach it with \`call: ${name}\``),
     );
   });
 });

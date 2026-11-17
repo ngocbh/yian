@@ -184,10 +184,10 @@ describe("message builders", () => {
 
   test("rejectNonText with required rejects an empty value", () => {
     const error = loadError(() =>
-      rejectNonText("tool", "t", "tool_id", null, RANGE, DIAGNOSTICS, { required: true }),
+      rejectNonText("code", "c", "code", null, RANGE, DIAGNOSTICS, { required: true }),
     );
     expect(error.diagnostic.message).toBe(
-      "node 't' (kind=tool): `tool_id:` must be text, but it is empty; write the text",
+      "node 'c' (kind=code): `code:` must be text, but it is empty; write the text",
     );
   });
 

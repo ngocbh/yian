@@ -15,6 +15,7 @@ import { assemble, type CallableScope as AssemblyScope, ComposedFlow } from "../
 import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
 import { readSourceParameters } from "../../src/compose/helpers/types.ts";
 import type { NodeDescriptor } from "../../src/compose/nodes/base.ts";
+import type { CallsTool } from "../../src/compose/nodes/call.ts";
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
 import { CallableScope, loadFlow, readAuthoredLlmConfig, rootAssembleOptions } from "../../src/compose/loader.ts";
 import { flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
@@ -122,21 +123,26 @@ export function handChild(options: {
   return new ComposedFlow(new CompiledFlow(nodes, [], { outputs }));
 }
 
+/** A call rule for a test that parses nodes without the loader: every `call:` names a tool. */
+export const callsATool: CallsTool = () => true;
+
 /**
  * Parse flow `text`'s `nodes:` as the loader reads them (`parseSourceDocument`, `parseFile`,
  * `flowNodesCursor`, `parseNodes`), with `classes` (default none) registered as the node kinds.
  *
  * @param label The file name diagnostics name (default `<flow>`).
+ * @param options.callsTool Says whether a `call:` names a tool; without it every one names a flow.
  * @returns The node descriptors by id.
  */
 export function nodesOf(
   text: string,
   classes: readonly DescriptorClass[] = [],
   label = "<flow>",
+  options: { callsTool?: CallsTool } = {},
 ): Map<string, NodeDescriptor> {
   const document = parseSourceDocument(text, label);
   const cursor = flowNodesCursor(document, parseFile(document).nodes);
-  return withKinds(classes, () => parseNodes(cursor));
+  return withKinds(classes, () => parseNodes(cursor, options));
 }
 
 /** Parse flow `text`'s top level as the loader does (`parseSourceDocument`, `parseFile`). */

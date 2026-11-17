@@ -26,7 +26,7 @@ import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { OriginRef, SourceRange } from "../../src/diagnostics.ts";
 import { Assertion } from "../../src/nodes/contracts.ts";
-import { loadError } from "../helpers/declarations.ts";
+import { callsATool, loadError } from "../helpers/declarations.ts";
 
 /** Return the physical cursor over a flow document's `nodes:` mapping. */
 function nodesReader(text: string): SourceCursor {
@@ -156,12 +156,12 @@ test("desugar adaptive questions preserves ranges", () => {
   // named as the ask's field.
   const text =
     "id: f\nname: f\nnodes:\n" +
-    "  ask:\n    kind: tool\n    tool_id: ask\n" +
+    "  ask:\n    kind: call\n    call: ask\n" +
     "    adaptive_questions:\n      prompt: Ask about ${input.topic}\n" +
     "      llm_config: {model: m}\n" +
     "    input:\n      topic: ${input.topic}\n" +
     "output: ${ask.output}\n";
-  const descriptors = parseNodes(nodesReader(text));
+  const descriptors = parseNodes(nodesReader(text), { callsTool: callsATool });
   const gate = descriptors.get("ask")!;
   const brief = gate.fieldRanges.get(siteKey("text", "adaptive_questions.prompt"))!;
   const llmConfig = gate.fieldRanges.get(siteKey("field", "adaptive_questions.llm_config"))!;

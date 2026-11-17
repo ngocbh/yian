@@ -1,0 +1,22 @@
+# `tool_id:` on a `kind: call` node fails at the key, showing the `call:` to write instead.
+kind: load
+flow: |
+  id: news
+  name: news
+  input:
+    topic: !str
+  nodes:
+    search:
+      kind: call
+      tool_id: search
+      input:
+        q: ${input.topic}
+  output: ${search.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "node 'search' (kind=call): `tool_id:` is now `call:`; write `call: search`"
+      frames:
+      - label: flow.yaml
+        range: [8, 5, 8, 12]

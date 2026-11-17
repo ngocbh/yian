@@ -11,7 +11,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'compact (single-node) flow: kind ''model'' was removed; serve the model behind a host tool and call it with kind: tool (set tool_id: and input:)'
+      message: 'compact (single-node) flow: kind ''model'' was removed; serve the model behind a host tool, then write `kind: call` with `call: <tool>` and `input:`'
       frames:
       - label: flow.yaml
         range: [6, 7, 6, 12]

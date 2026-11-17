@@ -21,9 +21,10 @@ import { BUILTIN, forget, install, processEnv } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { ModelCallFinished, ToolCallStarted } from "../../src/events.ts";
 import { Finish, ToolCallDelta } from "../../src/llm/events.ts";
-import { Message, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
+import { Message, Response, TextPart, ToolCallPart, type ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
+import { unparsedText } from "../../src/nodes/agent/results.ts";
 import { Output } from "../../src/nodes/base.ts";
 import { applyDefaults, BindingError, bindParams } from "../../src/nodes/binding.ts";
 import { ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
@@ -136,7 +137,8 @@ const STRATEGIES = [
   ["native", NATIVE],
   ["fallback", PROMPTED],
 ] as const;
-const ROWS = STRATEGIES.flatMap(([name, config]) => [101, 1500].map((levels) => [name, config, levels] as const));
+// 500 levels and the reply's own record stay inside the 512 a received JSON text may nest.
+const ROWS = STRATEGIES.flatMap(([name, config]) => [101, 500].map((levels) => [name, config, levels] as const));
 
 test.each(ROWS)("a structured agent over the limit self-corrects under retries (%s, %d levels)", async (_, config, levels) => {
   const model = texts(config, `{"value": ${deepText(levels)}}`, '{"value": {"k": 1}}');
@@ -147,7 +149,7 @@ test.each(ROWS)("a structured agent over the limit self-corrects under retries (
   expect(correction(model)).not.toContain("provider error (");
 });
 
-test.each([125, 1500])("a deep native reply that misses the schema retries (%d levels)", async (levels) => {
+test.each([125, 500])("a deep native reply that misses the schema retries (%d levels)", async (levels) => {
   const model = texts(NATIVE, `{"t": ${deepText(levels)}, "n": "notint"}`, '{"t": {}, "n": 1}');
 
   expect(await runAgent(model, T_AND_N, 1)).toEqual(new Output({ t: {}, n: 1n }));
@@ -157,7 +159,7 @@ test.each([125, 1500])("a deep native reply that misses the schema retries (%d l
   expect(correction(model)).not.toContain("provider error (");
 });
 
-test.each([125, 1500])("an exhausted deep native schema miss keeps the node origin (%d levels)", async (levels) => {
+test.each([125, 500])("an exhausted deep native schema miss keeps the node origin (%d levels)", async (levels) => {
   const origins = new ContractOrigins({ default: new OriginRef("output"), entries: [[["n"], new OriginRef("output/n")]] });
   const model = texts(NATIVE, `{"t": ${deepText(levels)}, "n": "notint"}`);
 
@@ -179,6 +181,13 @@ test.each(ROWS)("a structured agent over the limit without retries fails (%s, %d
   expect([failure.code, failure.nodeId]).toEqual(["agent.output_invalid", "agent"]);
   expectReplyTooDeep(failure.message, "structured output");
   expect(failure.trace).toEqual([new OriginRef("node")]);
+});
+
+test.each(STRATEGIES)("a structured reply nested past 512 levels is corrected as bad JSON (%s)", async (_, config) => {
+  const model = texts(config, `{"value": ${deepText(1500)}}`, '{"value": {"k": 1}}');
+
+  expect(await runAgent(model, FREEFORM, 1)).toEqual(new Output({ k: 1n }));
+  expect(correction(model)).toStartWith("Your previous output was invalid: Invalid json output: ");
 });
 
 // ---------- the tool loop's argument checks ----------
@@ -225,7 +234,7 @@ function failureOf(outcome: unknown) {
   return (outcome as EvaluationFailure).failure;
 }
 
-test.each([101, 1500])("tool arguments over the limit fail the agent before any call (%d levels)", async (levels) => {
+test.each([101, 512])("tool arguments over the limit fail the agent before any call (%d levels)", async (levels) => {
   const model = new ScriptedModel([partsReply(deepCall(levels))], NATIVE);
   const { outcome, calls } = toolRun(model);
 
@@ -234,6 +243,16 @@ test.each([101, 1500])("tool arguments over the limit fail the agent before any 
   expectReplyTooDeep(failure.message, "tool call 'lookup' arguments");
   expect(calls).toEqual([]);
   expect(model.requests).toHaveLength(1);
+});
+
+test("tool arguments nested past 512 levels reach the model as arguments that aren't JSON", async () => {
+  const model = new ScriptedModel([partsReply(deepCall(513)), partsReply(new TextPart("finished"))], NATIVE);
+  const { outcome, calls } = toolRun(model);
+
+  expect(await outcome).toEqual(new Output("finished"));
+  expect(calls).toEqual([]);
+  const result = model.requests[1]!.messages.at(-1)!.parts[0] as ToolResultPart;
+  expect([result.content, result.isError]).toEqual([unparsedText("lookup"), true]);
 });
 
 test("tool arguments over the limit in a later call stop every call", async () => {
@@ -279,7 +298,7 @@ function expectFailedTooDeep(result: RunResult, code: string, where: string): vo
   expect(result.failure!.message).toContain("deeper than 100 levels");
 }
 
-test.each([126, 1500])("a model value over the limit fails the agent (%d levels)", async (levels) => {
+test.each([126, 500])("a model value over the limit fails the agent (%d levels)", async (levels) => {
   const flow = await loadFlow(STRUCTURED_FLOW);
   // The first reply and both `retries:` attempts.
   const model = structured(deepText(levels), deepText(levels), deepText(levels));
@@ -288,7 +307,7 @@ test.each([126, 1500])("a model value over the limit fails the agent (%d levels)
   expectFailedTooDeep(result, "agent.output_invalid", "structured output at t.a");
 });
 
-test.each([124, 1500])("tool arguments over the limit fail the agent (%d levels)", async (levels) => {
+test.each([124, 500])("tool arguments over the limit fail the agent (%d levels)", async (levels) => {
   const flow = await loadFlow(`id: nesting
 name: nesting
 llm_config: {provider: openai, model: gpt-5.5}

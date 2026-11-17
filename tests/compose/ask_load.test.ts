@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 
 import { siteKey } from "../../src/compose/nodes/base.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
+import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import { bindingSource, outputContractType } from "../../src/nodes/contracts.ts";
@@ -86,9 +87,8 @@ test("ask with adaptive_questions parses and ranges the brief and llm_config", (
       llm_config:
         model: m
 `;
-  // The loader parses a `call` node naming a tool as a TOOL body, its `call` key renamed to the TOOL's.
-  const cursor = SourceDocument.parse(text).root.child("nodes").child("q").renamed(new Map([["call", "tool_id"]]));
-  const desc = ToolDescriptor.parse("q", cursor);
+  const nodes = parseNodes(SourceDocument.parse(text).root.child("nodes"), { callsTool: () => true });
+  const desc = nodes.get("q") as ToolDescriptor;
   expect(desc.adaptiveQuestions).toEqual({ prompt: "Ask what matters", llm_config: { model: "m" } });
   expect(desc.fieldRanges.get(siteKey("text", "adaptive_questions.prompt"))).toBeInstanceOf(SourceRange);
   expect(desc.fieldRanges.get(siteKey("field", "adaptive_questions.llm_config"))).toBeInstanceOf(SourceRange);

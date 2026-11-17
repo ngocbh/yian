@@ -9,13 +9,10 @@ import { join } from "node:path";
 
 import { afterAll, expect, test } from "bun:test";
 
-import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import type { NodeDescriptor } from "../../src/compose/nodes/base.ts";
-import { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
 import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
-import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceDocument } from "../../src/compose/source/document.ts";
@@ -33,10 +30,7 @@ import { hostEnv } from "../helpers/mcp_helpers.ts";
 
 const CLASSES: ReadonlyMap<string, DescriptorClass> = new Map<string, DescriptorClass>([
   ["loop", LoopDescriptor],
-  ["call", CallDescriptor],
-  ["map", MapDescriptor],
   ["code", CodeDescriptor],
-  ["agent", AgentDescriptor],
 ]);
 
 /** Parse node `nodeId` of `text`'s `nodes:` with the class its `kind:` names. */
@@ -72,12 +66,12 @@ const CHILD = ["the child's arguments", "bind each argument"];
 const PARAMETERS = ["parameter names to bindings", "bind each parameter"];
 
 test.each([
-  ["call", "call: step", CHILD],
-  ["map", "over: [1, 2]\n    call: step", CHILD],
-  ["code", "code: return 1", PARAMETERS],
-  ["call", "call: http_get", PARAMETERS],
-  ["agent", "prompt: hi", PARAMETERS],
-] as const)("a whole-reference input is a load error for kind: %s, %s", (kind, fields, [noun, verb]) => {
+  ["a call naming a flow", "call", "call: step", CHILD],
+  ["a map", "map", "over: [1, 2]\n    call: step", CHILD],
+  ["a code node", "code", "code: return 1", PARAMETERS],
+  ["a call naming a tool", "call", "call: http_get", PARAMETERS],
+  ["an agent", "agent", "prompt: hi", PARAMETERS],
+] as const)("a whole-reference input is a load error for %s", (_label, kind, fields, [noun, verb]) => {
   const text = `nodes:\n  under_test:\n    kind: ${kind}\n    ${fields}\n    input: \${seed.output}\n`;
   // As the loader's call rule reads them, `http_get` is a tool and `step` a flow.
   const nodes = SourceDocument.parse(text).root.child("nodes");

@@ -170,6 +170,18 @@ test("an unparsed call gets an error result the model reads, never reaching its 
   await expectRebuilt(run, 2);
 });
 
+test("a call whose arguments nest past the received-JSON bound gets the unparsed error result, not a failed node", async () => {
+  const log: string[] = [];
+  const deep = '{"n": '.repeat(513) + "1" + "}".repeat(513);
+  const model = new ScriptedModel([reply(call(0, "a", deep)), textReply("done")], CONFIG);
+  const run = agent(model, new ToolSet({ a: instant("a", log) }), ["a"]);
+
+  expect(((await run.running) as Output).value).toBe("done");
+  expect(log).toEqual([]);
+  expect(toolResults(model, 1)).toEqual([result(0, "a", unparsedText("a"), true)]);
+  await expectRebuilt(run, 2);
+});
+
 test("the request after an unparsed call answers every call, through the Anthropic and OpenAI Chat adapters", async () => {
   const log: string[] = [];
   const calls = [call(0, "a", { n: 1 }), call(1, "a", '{"n": '), call(2, "a", { n: 2 })];

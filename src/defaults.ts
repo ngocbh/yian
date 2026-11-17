@@ -467,7 +467,8 @@ export const ENTRIES = Object.freeze([
   // size. The largest real replies (a model listing, a batch of embeddings) hold well under this.
   entry("MAX_RECEIVED_JSON_VALUES", {
     default: 1_000_000,
-    description: "Most values in one JSON text from a provider or MCP server: an event, a line, a reply or an MCP message",
+    description:
+      "Most values in one JSON text from a provider or MCP server: an event, a line, a reply, a tool call's arguments or an MCP message",
     group: "input cap",
     minimum: 1,
   }),

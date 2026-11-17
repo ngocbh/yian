@@ -1079,7 +1079,7 @@ function identityOf(turn: ToolTurn, call: ToolCallPart, index: number): ToolCall
  * conversation sent next, a replay and an AGENT's new messages would all give each the last
  * result). An unparsed call's raw arguments text is parsed at any depth and checked the same way,
  * since the assembler leaves a call unparsed when its arguments nest too deep; text that is not
- * JSON is left to the invalid call's own handling.
+ * JSON, or passes the received-JSON bounds, is left to the invalid call's own handling.
  */
 function rejectInvalidReply(reply: Message): void {
   const names = new Map<string, string>();

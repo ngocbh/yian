@@ -91,6 +91,20 @@ describe("parseArguments", () => {
     expect(parseArguments('{"a": "\\ud83d\\ude00"}')).toEqual([{ a: "\u{1f600}" }, null]);
   });
 
+  test("a text past the received-JSON value bound fails, at any depth limit", () => {
+    install({ ...BUILTIN, maxReceivedJsonValues: 3 });
+    expect(parseArguments('{"a": [1]}')).toEqual([{ a: [1n] }, null]);
+    const wide = '{"a": [1, 2]}';
+    expect(parseArguments(wide)).toEqual([null, wide]);
+    expect(parseArguments(wide, { anyDepth: true })).toEqual([null, wide]);
+  });
+
+  test("anyDepth still refuses a text nested past 512 levels", () => {
+    const nested = (levels: number) => '{"a": '.repeat(levels - 1) + "{}" + "}".repeat(levels - 1);
+    expect(parseArguments(nested(512), { anyDepth: true })[0]).not.toBeNull();
+    expect(parseArguments(nested(513), { anyDepth: true })).toEqual([null, nested(513)]);
+  });
+
   test("deep brackets fail without a stack overflow", () => {
     let text = "[".repeat(100_000);
     expect(parseArguments(text)).toEqual([null, text]);
@@ -168,6 +182,14 @@ describe("collect", () => {
   test("unparsable arguments keep the raw text", async () => {
     const response = await collect([call(0, "c", "f", "{bad"), STOP]);
     expect(response.message.parts).toEqual([new ToolCallPart({ id: "c", name: "f", arguments: null, rawArguments: "{bad" })]);
+  });
+
+  test("arguments assembled from deltas past the received-JSON value bound keep the raw text", async () => {
+    install({ ...BUILTIN, maxReceivedJsonValues: 3 });
+    const response = await collect([call(0, "c", "f", '{"a": ['), call(0, null, null, "1, 2]}"), STOP]);
+    expect(response.message.parts).toEqual([
+      new ToolCallPart({ id: "c", name: "f", arguments: null, rawArguments: '{"a": [1, 2]}' }),
+    ]);
   });
 
   test("empty arguments are an empty object", async () => {

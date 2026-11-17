@@ -9,8 +9,8 @@
  */
 
 import { YianTypeError } from "../typesys/errors.ts";
-import { JSONDecodeError, parseJson, type JsonObject } from "../typesys/json.ts";
-import { ProviderError } from "./errors.ts";
+import { JSONDecodeError, type JsonObject } from "../typesys/json.ts";
+import { parseReceivedJson, ProviderError } from "./errors.ts";
 import {
   checkJsonValue,
   isPart,
@@ -154,13 +154,14 @@ function escapeControls(text: string): string {
  * Parse a tool call's complete arguments text.
  *
  * An empty text is an empty object. Otherwise the text must be a JSON object that
- * `parseJson` reads in plain mode (ints as `bigint`; no `NaN` or `Infinity`, overflowing
- * float, duplicate key or unpaired surrogate), nested at most `current().maxValueNesting`
- * levels. Raw control characters such as tabs and newlines are accepted inside strings.
+ * `parseReceivedJson` reads within its bounds (ints as `bigint`; no `NaN` or `Infinity`,
+ * overflowing float, duplicate key or unpaired surrogate), nested at most
+ * `current().maxValueNesting` levels. Raw control characters such as tabs and newlines are
+ * accepted inside strings.
  *
  * @param text The arguments text as the model sent it.
  * @param options `anyDepth` drops the nesting limit, for a caller that checks the depth of the
- *   value it reads out of the object.
+ *   value it reads out of the object; the received-JSON bounds still apply.
  * @returns `[object, null]` on success, `[null, text]` on any failure, so the caller can
  *   apply its own checks to the raw text.
  */
@@ -172,7 +173,7 @@ export function parseArguments(
   try {
     // Models send raw tabs and newlines inside string values, which the provider SDKs
     // accept; a strict parse would reject working calls.
-    const value = parseJson(escapeControls(text), "plain");
+    const value = parseReceivedJson(escapeControls(text));
     if (typeof value !== "object" || value === null || Array.isArray(value)) return [null, text];
     // `parseJson` already refuses everything else `checkJsonValue` does, at any depth.
     if (!options.anyDepth) checkJsonValue(value, "");

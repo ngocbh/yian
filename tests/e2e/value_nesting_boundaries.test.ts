@@ -21,9 +21,10 @@ import { BUILTIN, forget, install, processEnv } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { ModelCallFinished, ToolCallStarted } from "../../src/events.ts";
 import { Finish, ToolCallDelta } from "../../src/llm/events.ts";
-import { Message, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
+import { Message, Response, TextPart, ToolCallPart, type ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
+import { unparsedText } from "../../src/nodes/agent/results.ts";
 import { Output } from "../../src/nodes/base.ts";
 import { applyDefaults, BindingError, bindParams } from "../../src/nodes/binding.ts";
 import { ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
@@ -181,6 +182,27 @@ test.each(ROWS)("a structured agent over the limit without retries fails (%s, %d
   expect(failure.trace).toEqual([new OriginRef("node")]);
 });
 
+// Past YIAN_MAX_RECEIVED_JSON_VALUES, a reply's text or a call's arguments aren't read: the model is
+// told they aren't JSON. Depth is still the nesting limit's, as the 1500-level rows above pin.
+
+test.each(STRATEGIES)("a structured reply with more values than the received bound is corrected as bad JSON (%s)", async (_, config) => {
+  install({ ...BUILTIN, modelRetries: 0, maxReceivedJsonValues: 10 });
+  const model = texts(config, `{"value": {"k": [${"1, ".repeat(20)}1]}}`, '{"value": {"k": 1}}');
+
+  expect(await runAgent(model, FREEFORM, 1)).toEqual(new Output({ k: 1n }));
+  expect(correction(model)).toStartWith("Your previous output was invalid: Invalid json output: ");
+});
+
+test.each(STRATEGIES)("a structured reply the received bound stops after it nests too deep is corrected as too deep (%s)", async (_, config) => {
+  install({ ...BUILTIN, modelRetries: 0, maxReceivedJsonValues: 200 });
+  // 150 records, then a list of 101 ints: the read stops past 200 values, after the 101st level.
+  const deep = '{"a": '.repeat(150) + `[${"1, ".repeat(100)}1]` + "}".repeat(150);
+  const model = texts(config, `{"value": ${deep}}`, '{"value": {"k": 1}}');
+
+  expect(await runAgent(model, FREEFORM, 1)).toEqual(new Output({ k: 1n }));
+  expect(correction(model)).toContain("structured output: value nests deeper than 100 levels");
+});
+
 // ---------- the tool loop's argument checks ----------
 
 /** A `lookup` tool that records the arguments of each call in `calls`. */
@@ -234,6 +256,21 @@ test.each([101, 1500])("tool arguments over the limit fail the agent before any 
   expectReplyTooDeep(failure.message, "tool call 'lookup' arguments");
   expect(calls).toEqual([]);
   expect(model.requests).toHaveLength(1);
+});
+
+test("streamed tool arguments with more values than the received bound reach the model as not JSON", async () => {
+  install({ ...BUILTIN, modelRetries: 0, maxReceivedJsonValues: 10 });
+  const events = [
+    new ToolCallDelta({ index: 0, id: "c1", name: "lookup", arguments: `{"x": [${"1, ".repeat(20)}1]}` }),
+    new Finish({ reason: "tool_calls" }),
+  ];
+  const model = new ScriptedModel([events, partsReply(new TextPart("finished"))], NATIVE);
+  const { outcome, calls } = toolRun(model);
+
+  expect(await outcome).toEqual(new Output("finished"));
+  expect(calls).toEqual([]);
+  const result = model.requests[1]!.messages.at(-1)!.parts[0] as ToolResultPart;
+  expect([result.content, result.isError]).toEqual([unparsedText("lookup"), true]);
 });
 
 test("tool arguments over the limit in a later call stop every call", async () => {

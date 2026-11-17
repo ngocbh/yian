@@ -45,7 +45,7 @@
 
 import { reprText } from "../../diagnostics.ts";
 import { ReplayDegraded } from "../../events.ts";
-import { type ChatModel, parseArguments } from "../../llm/events.ts";
+import { ArgumentsTooDeepError, type ChatModel, parseDeepArguments } from "../../llm/events.ts";
 import { RouteModel } from "../../llm/executor.ts";
 import { scrubCallCredentials } from "../../llm_clients/connection.ts";
 import {
@@ -1079,7 +1079,8 @@ function identityOf(turn: ToolTurn, call: ToolCallPart, index: number): ToolCall
  * conversation sent next, a replay and an AGENT's new messages would all give each the last
  * result). An unparsed call's raw arguments text is parsed at any depth and checked the same way,
  * since the assembler leaves a call unparsed when its arguments nest too deep; text that is not
- * JSON is left to the invalid call's own handling.
+ * JSON, or that passes the received value bound before it nests too deep, is left to the invalid
+ * call's own handling.
  */
 function rejectInvalidReply(reply: Message): void {
   const names = new Map<string, string>();
@@ -1098,7 +1099,14 @@ function rejectInvalidReply(reply: Message): void {
     if (!(part instanceof ToolCallPart)) continue;
     // `ToolCallPart` already refuses parsed arguments past the limit; checking them again matters
     // only if the depth limit changed after the part was built.
-    const args = part.arguments ?? parseArguments(part.rawArguments!, { anyDepth: true })[0];
-    if (args !== null) rejectDeepNesting(args, `tool call ${reprText(part.name)} arguments`);
+    const where = `tool call ${reprText(part.name)} arguments`;
+    let args = part.arguments;
+    try {
+      args ??= parseDeepArguments(part.rawArguments!);
+    } catch (error) {
+      if (!(error instanceof ArgumentsTooDeepError)) throw error;
+      throw new TypeCheckError(`${where}: ${error.message}`);
+    }
+    if (args !== null) rejectDeepNesting(args, where);
   }
 }

@@ -60,6 +60,7 @@ import {
   type RetrySettings,
   STORAGE_ERROR_KIND,
 } from "./context.ts";
+import { isFlowCall } from "./flow_tools.ts";
 import { ReplyInterrupted } from "./interrupts.ts";
 
 /** The stream key of AGENT reply text. */
@@ -502,8 +503,9 @@ function toolEventIdentity(live: LiveSinks, identity: ToolCallIdentity) {
  * Emits `ToolCallStarted` with a copy of the arguments, awaits `invoke()`, then emits
  * `ToolCallFinished` with `result: text(result)` (`null` when `text` throws), or with the
  * rejection's `name` (`typeof` for a non-`Error`) as `error`. No finished event is emitted once
- * `signal` has aborted, or for a call whose handler returned `pending()` (it hasn't finished), and
- * a `CapabilityFault` passes through with none. Without an event sink nothing is emitted.
+ * `signal` has aborted, or for a call whose handler returned `pending()` (it hasn't finished) or a
+ * flow call, whose agent reports it once the flow's result is known (`observeFlowCallFinished`),
+ * and a `CapabilityFault` passes through with none. Without an event sink nothing is emitted.
  *
  * @returns What `invoke()` resolves to.
  * @throws Whatever `invoke()` rejects with, unchanged.
@@ -529,9 +531,25 @@ export async function observeToolCall(
     throw error;
   }
   // A call that waits for a later answer hasn't finished; hosts learn of the wait from the run.
-  if (isPending(result)) return result;
+  if (isPending(result) || isFlowCall(result)) return result;
   if (!signal?.aborted) emitEvent(new ToolCallFinished({ ...ids, result: shownResult(result, text) }));
   return result;
+}
+
+/**
+ * Report flow call `identity` finished, once its agent records what the model reads of it: the
+ * flow's output as `result` text, or as `error` the word of a call that didn't answer (`failed`
+ * for a flow that failed or didn't start, `interrupted` for one an interrupt ended). Without an
+ * event sink nothing is emitted.
+ */
+export function observeFlowCallFinished(
+  live: LiveSinks | null,
+  identity: ToolCallIdentity,
+  outcome: { readonly result: string } | { readonly error: string },
+): void {
+  const emitEvent = live?.emitEvent ?? null;
+  if (live === null || emitEvent === null) return;
+  emitEvent(new ToolCallFinished({ ...toolEventIdentity(live, identity), ...outcome }));
 }
 
 /**

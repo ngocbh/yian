@@ -212,6 +212,36 @@ describe("value pass", () => {
     ]);
   });
 
+  test("a map entry's issue also gives its location and message without the entry's key", () => {
+    const s = schema({
+      v: { kind: "list", item: { kind: "map", key: { kind: "str", maxLength: 2 }, value: { kind: "str" } } },
+      j: { kind: "map", key: STR, value: { kind: "json" } },
+    });
+    expect(checkObject(s, { v: [{ abc: 1n }], j: { k: { deep: [Infinity] } } }).issues).toEqual([
+      {
+        loc: ["v", 0, "abc", "[key]"],
+        type: "string_too_long",
+        msg: "String should have at most 2 characters",
+        unnamedLoc: ["v", 0],
+        unnamedError: "an entry's key: String should have at most 2 characters",
+      },
+      {
+        loc: ["v", 0, "abc"],
+        type: "string_type",
+        msg: "Input should be a valid string",
+        unnamedLoc: ["v", 0],
+        unnamedError: "an entry's value: Input should be a valid string",
+      },
+      {
+        loc: ["j", "k", "deep", 0],
+        type: "finite_number",
+        msg: "Input should be a finite number",
+        unnamedLoc: ["j"],
+        unnamedError: "an entry's value: Input should be a finite number",
+      },
+    ]);
+  });
+
   test("map entries holding undefined are skipped and not counted", () => {
     const s = schema({ v: { kind: "map", key: STR, value: STR, maxLength: 2 } });
     const result = value(s, { v: { a: "x", b: undefined, c: "y" } }) as { v: object };
@@ -1351,14 +1381,15 @@ describe("Chat Completions blocks", () => {
     [OpenRouterChatBlock.title, OpenRouterChatBlock, "provider"],
     [VLLMChatBlock.title, VLLMChatBlock, "chat_template_kwargs"],
   ] as const)("%s: a non-finite number in a pass-through mapping is refused where it is", (_title, block, key) => {
+    const unnamed = { unnamedLoc: [key], unnamedError: "an entry's value: Input should be a finite number" };
     for (const bad of [NaN, Infinity, -Infinity]) {
       expect(checkBlock(block, { [key]: { a: bad } })).toEqual({
         value: null,
-        issues: [{ loc: [key, "a"], type: "finite_number", msg: "Input should be a finite number" }],
+        issues: [{ loc: [key, "a"], type: "finite_number", msg: "Input should be a finite number", ...unnamed }],
       });
     }
     expect(checkBlock(block, { [key]: { a: [{ b: Infinity }] } }).issues).toEqual([
-      { loc: [key, "a", 0, "b"], type: "finite_number", msg: "Input should be a finite number" },
+      { loc: [key, "a", 0, "b"], type: "finite_number", msg: "Input should be a finite number", ...unnamed },
     ]);
     const content = { allow_fallbacks: false, order: ["anthropic"], nested: { x: [1n, 0.5, null, "y"] } };
     expect(validateBlock(block, { [key]: content }) as unknown).toEqual({ [key]: content });
@@ -1513,6 +1544,8 @@ describe("logit_bias", () => {
             loc: ["logit_bias", badKey, "[key]"],
             type: "string_pattern_mismatch",
             msg: "String should match pattern '^[0-9]+$'",
+            unnamedLoc: ["logit_bias"],
+            unnamedError: "an entry's key: String should match pattern '^[0-9]+$'",
           },
         ]);
       }

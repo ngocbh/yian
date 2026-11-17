@@ -14,6 +14,7 @@ import {
   CallClosed,
   CLOSE_REASONS,
   IN_LOOP_EVENTS,
+  Interrupted,
   ModelCallFinished,
   type ModelCallPurpose,
   ModelCallStarted,
@@ -113,13 +114,29 @@ const SAMPLES: readonly { event: RunEvent; data: Record<string, unknown> }[] = [
     data: { node_id: "c", handle: "#else" },
   },
   { event: new NodeSkipped({ nodeId: "s" }), data: { node_id: "s" } },
-  { event: new NodeFailed({ failure: FAILURE }), data: { failure: FAILURE_DATA } },
+  { event: new NodeFailed({ failure: FAILURE }), data: { failure: FAILURE_DATA, call_id: null, scope: null } },
+  {
+    event: new NodeFailed({ failure: FAILURE, callId: "r/helper/1/0", scope: "helper/shout#0" }),
+    data: { failure: FAILURE_DATA, call_id: "r/helper/1/0", scope: "helper/shout#0" },
+  },
   {
     event: new NodeExpanded({
       nodeId: "loop",
       grow: { seed: [{ n: 0 }, 0], prune: new Set(["b", "a", "B"]) },
     }),
-    data: { node_id: "loop", grow: { seed: [{ n: 0 }, 0], prune: ["B", "a", "b"] } },
+    data: { node_id: "loop", grow: { seed: [{ n: 0 }, 0], prune: ["B", "a", "b"] }, call_id: null },
+  },
+  {
+    event: new NodeExpanded({
+      nodeId: "helper",
+      grow: { seed: { tool: "shout", arguments: { text: "hi" }, scope: "helper/shout#0" }, prune: new Set() },
+      callId: "r/helper/1/0",
+    }),
+    data: {
+      node_id: "helper",
+      grow: { seed: { tool: "shout", arguments: { text: "hi" }, scope: "helper/shout#0" }, prune: [] },
+      call_id: "r/helper/1/0",
+    },
   },
   {
     event: new NodeAttemptResumed({ nodeId: "n", crashed: 2 }),
@@ -288,6 +305,11 @@ const SAMPLES: readonly { event: RunEvent; data: Record<string, unknown> }[] = [
   { event: new RunWaiting({ nodeIds: ["heard", "nap"] }), data: { node_ids: ["heard", "nap"] } },
   { event: new RunCancelled(), data: {} },
   { event: new CallClosed({ callId: "r/ask/1", reason: "cancelled" }), data: { call_id: "r/ask/1", reason: "cancelled" } },
+  {
+    event: new Interrupted({ inbox: "notes", nodes: ["helper"], scopes: ["helper/approve#0"] }),
+    data: { inbox: "notes", nodes: ["helper"], scopes: ["helper/approve#0"] },
+  },
+  { event: new Interrupted({ inbox: "notes", nodes: [], scopes: [] }), data: { inbox: "notes", nodes: [], scopes: [] } },
   { event: new RunStarted(), data: {} },
   { event: new RunResumed(), data: {} },
   { event: new RunSucceeded({ output: { greeting: "hi" } }), data: { output: { greeting: "hi" } } },
@@ -397,8 +419,9 @@ describe("wait events", () => {
     const waiting = new NodeWaiting({ nodeId: "heard", callIds: ids });
     const woken = new NodeWoken({ nodeId: "heard", timedOut: ids });
     const run = new RunWaiting({ nodeIds: ids });
+    const interrupted = new Interrupted({ inbox: "m", nodes: ids, scopes: ids });
     ids.push("r/heard/2");
-    for (const list of [waiting.callIds, woken.timedOut, run.nodeIds]) {
+    for (const list of [waiting.callIds, woken.timedOut, run.nodeIds, interrupted.nodes, interrupted.scopes]) {
       expect(list).toEqual(["r/heard/1"]);
       expect(Object.isFrozen(list)).toBe(true);
     }
@@ -440,7 +463,7 @@ describe("type discriminant", () => {
   test("the samples cover every event class", () => {
     const sampled: string[] = [...new Set(SAMPLES.map(({ event }) => event.type))].sort();
     expect(sampled).toEqual(EVENT_CLASS_NAMES);
-    expect(EVENT_CLASS_NAMES).toHaveLength(22);
+    expect(EVENT_CLASS_NAMES).toHaveLength(23);
   });
 
   test("TokenUsage is not an event and has no type", () => {
@@ -585,7 +608,7 @@ describe("events schema", () => {
     [
       "failure code: nope",
       "NodeFailed",
-      { failure: { ...FAILURE_DATA, code: "nope" } },
+      { failure: { ...FAILURE_DATA, code: "nope" }, call_id: null, scope: null },
       ['$.failure.code: "nope" is not one of the enum'],
     ],
   ] as const)("rejects %s", (_, name, data, problems) => {

@@ -1,7 +1,8 @@
 /**
  * An AGENT's call of a flow it grants as a tool: the call records a `pending` step holding its
  * arguments and its scope, the run grows the flow's scope under the agent and answers the call
- * from its END, cut to `YIAN_MAX_FLOW_RESULT_CHARS`; hosts never see the call.
+ * from its END, cut to `YIAN_MAX_FLOW_RESULT_CHARS`; hosts never see the call, but its live
+ * events name it and its scope as its records do.
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -10,16 +11,24 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadFlow } from "../../src/compose/loader.ts";
+import { Interrupted, NodeExpanded, NodeFailed, NodeWaiting, type RunEvent } from "../../src/events.ts";
 import { ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { flowResultText } from "../../src/nodes/agent/flow_tools.ts";
-import { advance, complete, pendingCalls, runFlow } from "../../src/run.ts";
-import { decodeRecord, NodeStepRecord } from "../../src/runtime/log.ts";
+import { advance, complete, interrupt, pendingCalls, runFlow } from "../../src/run.ts";
+import {
+  decodeRecord,
+  InterruptedRecord,
+  NodeExpandedRecord,
+  NodeFailedRecord,
+  NodeStepRecord,
+  readRunLog,
+} from "../../src/runtime/log.ts";
 import { DeliveryRefused } from "../../src/runtime/state.ts";
 import { pending } from "../../src/tools/context.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
-import { callReply, serving, textReply } from "../helpers/run_state_fixtures.ts";
+import { callReply, crashAfter, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-agent-flow-tools-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -349,4 +358,114 @@ test("in one reply, a failed flow call and a good one each get their own result"
     ["c1", "Flow shout failed at node loud (node.execute): Error: bad text", true],
     ["c2", "OK", false],
   ]);
+});
+
+// --- Live events ------------------------------------------------------------------------------ //
+
+/** The records of class `cls` in the log at `log`, in order. */
+const recordsOf = <T>(log: string, cls: abstract new (...args: never[]) => T): T[] =>
+  readRunLog(log).flatMap(({ record }) => (record instanceof cls ? [record as T] : []));
+
+/** The events of class `cls` in `events`, in order. */
+const eventsOf = <T>(events: readonly RunEvent[], cls: abstract new (...args: never[]) => T): T[] =>
+  events.flatMap((event) => (event instanceof cls ? [event as T] : []));
+
+/** The flow call and scope of each `NodeFailed` in `events`, with the failing node. */
+const failedEvents = (events: readonly RunEvent[]) =>
+  eventsOf(events, NodeFailed).map(({ failure, callId, scope }) => [failure.nodeId, callId, scope]);
+
+/** The flow call and scope of each `node_failed` record at `log`, with the failing node. */
+const failedRecords = (log: string) =>
+  recordsOf(log, NodeFailedRecord).map(({ failure, callId, scope }) => [failure.nodeId, callId, scope]);
+
+test("a flow call's NodeExpanded names the call its node_expanded record names, its seed the call's scope", async () => {
+  const log = freshLog();
+  const events: RunEvent[] = [];
+  const model = new ScriptedModel([callReply(["shout", { text: "hi" }, "c1"]), textReply("done")]);
+  const onEvent = (event: RunEvent) => void events.push(event);
+  const result = await runFlow(await loadFlow(shoutFlow()), {}, { log, runId: "r1", models: serving(model), env: hostEnv(dir), onEvent });
+  expect(result.status).toBe("succeeded");
+  const expanded = eventsOf(events, NodeExpanded).map(({ nodeId, callId, grow }) => [nodeId, callId, (grow.seed as { scope: string }).scope]);
+  const [, pendingStep] = helperSteps(log);
+  expect(expanded).toEqual([["helper", "r1/helper/1/0", "helper/shout#0"]]);
+  expect(recordsOf(log, NodeExpandedRecord).map(({ spawnerId, callId }) => [spawnerId, callId])).toEqual([["helper", "r1/helper/1/0"]]);
+  expect([pendingStep!["call_id"], pendingStep!["scope"]]).toEqual(["r1/helper/1/0", "helper/shout#0"]);
+});
+
+test("a failure inside a flow call: NodeFailed names the call and scope its node_failed record names, live and after a resume", async () => {
+  const flow = await loadFlow(shoutFlow('throw new Error("bad text")'));
+  const failing = [["helper/shout#0/loud", "r1/helper/1/0", "helper/shout#0"]];
+  const log = freshLog();
+  const events: RunEvent[] = [];
+  const onEvent = (event: RunEvent) => void events.push(event);
+  const model = () => new ScriptedModel([callReply(["shout", { text: "x" }, "c1"]), textReply("lost")]);
+  const result = await runFlow(flow, {}, { log, runId: "r1", models: serving(model()), env: hostEnv(dir), onEvent });
+  expect(result.status).toBe("succeeded");
+  expect(failedEvents(events)).toEqual(failing);
+  expect(failedRecords(log)).toEqual(failing);
+  expect(events.some((event) => event.type === "RunFailed")).toBe(false);
+
+  // Cut after the scope grew, the resume replays the growth silently and fails the same node.
+  const cut = freshLog();
+  const grownAt = readRunLog(log).findIndex(({ record }) => record instanceof NodeExpandedRecord);
+  await crashAfter(grownAt + 1, () => runFlow(flow, {}, { log: cut, runId: "r1", models: serving(model()), env: hostEnv(dir) }));
+  const resumedEvents: RunEvent[] = [];
+  const resumed = await advance({
+    log: cut,
+    models: serving(new ScriptedModel([textReply("lost")])),
+    env: hostEnv(dir),
+    onEvent: (event) => void resumedEvents.push(event),
+  });
+  expect(resumed.status).toBe("succeeded");
+  expect(eventsOf(resumedEvents, NodeExpanded)).toEqual([]);
+  expect(failedEvents(resumedEvents)).toEqual(failing);
+  expect(failedRecords(cut)).toEqual(failing);
+});
+
+test("an interrupt of an agent waiting on its flow call: Interrupted names its record's inbox and nodes, and the call's scope", async () => {
+  const flow = await loadFlow(`
+id: helping
+name: helping
+llm_config: {provider: openai, model: test-model}
+input:
+  notes: !Inbox(str)
+defs:
+  approve:
+    description: Ask for approval.
+    nodes:
+      sign:
+        kind: call
+        call: sign
+        output: !str
+    output: \${sign.output}
+nodes:
+  helper:
+    kind: agent
+    prompt: go
+    steer_inbox: \${input.notes}
+    tools: [approve]
+    output: !Optional(str)
+output: \${helper.output}
+`);
+  const sign = tool({ name: "sign", description: "Sign.", parameters: { type: "object", properties: {} }, execute: () => pending() });
+  const log = freshLog();
+  const events: RunEvent[] = [];
+  const env = hostEnv(dir);
+  const onEvent = (event: RunEvent) => {
+    events.push(event);
+    // While the run is live, so the interrupt goes through its engine and publishes its events.
+    if (event instanceof NodeWaiting && event.nodeId === "helper/approve#0/sign") void interrupt(log, "notes", { env });
+  };
+  const model = new ScriptedModel([callReply(["approve", {}, "c1"])]);
+  const result = await runFlow(flow, {}, { log, runId: "r1", tools: { sign }, models: serving(model), env, onEvent });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toBeNull();
+  const interrupted = eventsOf(events, Interrupted).map(({ inbox, nodes, scopes }) => [inbox, nodes, scopes]);
+  expect(interrupted).toEqual([["notes", ["helper"], ["helper/approve#0"]]]);
+  expect(recordsOf(log, InterruptedRecord).map(({ inbox, nodes }) => [inbox, nodes])).toEqual([["notes", ["helper"]]]);
+  const [, pendingStep] = helperSteps(log);
+  expect(pendingStep!["scope"]).toBe("helper/approve#0");
+  // The scope's host call closes after the event that ended its scope.
+  const at = events.findIndex((event) => event instanceof Interrupted);
+  expect(events[at + 1]?.toJSON()).toEqual({ call_id: "r1/helper/approve#0/sign", reason: "interrupted" });
 });

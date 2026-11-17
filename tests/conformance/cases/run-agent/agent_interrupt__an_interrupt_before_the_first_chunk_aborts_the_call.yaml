@@ -135,6 +135,10 @@ expect:
       provider: openai
       purpose: chat
       n: 1
+  - - Interrupted
+    - inbox: notes
+      nodes: [chat]
+      scopes: []
   - - ModelCallFinished
     - model: gpt-5.5
       node_id: chat

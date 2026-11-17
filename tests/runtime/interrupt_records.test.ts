@@ -252,7 +252,8 @@ test("prepareInterrupt names running readers first, then waiting readers, and cl
   const prepared = prepareInterrupt(state, "msgs", ["a"])!;
   expect([...(prepared.record as InterruptedRecord).nodes]).toEqual(["a", "w"]);
   const events = commitPrepared(log, state, prepared);
-  expect(events.map((event) => [event.constructor.name, (event as CallClosed).callId, (event as CallClosed).reason])).toEqual([
+  expect(events[0]!.toJSON()).toEqual({ inbox: "msgs", nodes: ["a", "w"], scopes: [] });
+  expect(events.slice(1).map((event) => [event.constructor.name, (event as CallClosed).callId, (event as CallClosed).reason])).toEqual([
     ["CallClosed", agentCall("a", 1, 0), "interrupted"],
     ["CallClosed", agentCall("w", 1, 0), "interrupted"],
   ]);

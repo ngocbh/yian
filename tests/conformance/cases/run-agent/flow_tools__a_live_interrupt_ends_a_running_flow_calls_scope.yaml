@@ -1,0 +1,70 @@
+# The agent `helper` calls `approve` and waits on the call. Its scope has grown but not started when
+# a model call of `other` interrupts helper's steer inbox, live: `Interrupted` names helper and the
+# call's scope, which ends before its nodes run, and the Optional(str) agent succeeds null.
+kind: run
+flow: |
+  id: helping
+  name: helping
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    notes: !Inbox(str)
+  defs:
+    approve:
+      description: Ask for approval.
+      input:
+        item: !str
+      nodes:
+        sign:
+          kind: call
+          call: sign
+          input:
+            item: ${input.item}
+          output: !str
+      output: ${sign.output}
+  nodes:
+    helper:
+      kind: agent
+      steer_inbox: ${input.notes}
+      tools: [approve]
+      system_prompt: Help.
+      prompt: hi
+      output: !Optional(str)
+    other:
+      kind: agent
+      system_prompt: Help.
+      prompt: hello
+      output: !str
+  output:
+    helper: ${helper.output}
+    other: ${other.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  sends:
+  - {interrupt: notes, after: {node: other, model_call: 1}}
+  tools:
+    sign:
+      parameters: {type: object, properties: {item: {type: string}}}
+      pending: true
+  models:
+    helper:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: call-a, name: approve, arguments: {item: the refund}}
+    other:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: text, text: hi there}
+expect:
+  output:
+    status: succeeded
+    output: {helper: null, other: hi there}
+  trace: [[run_started, null, {effective_llm_by_static_path: {helper: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}, other: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {notes: {inbox: notes}}}], [node_succeeded, __start__, {commit: 6}], [node_started, helper], [node_step, helper, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {item: the refund}, id: call-a, name: approve, type: tool_call}], role: assistant}, purpose: chat, request_sha256: 1391cc667005f328f47f55c0ad7efb75359b79d41f4189015064db48ee19514c, response_id: null, usage: null}}], [node_step, helper, {n: 2, step: {arguments: {item: the refund}, call_id: r1/helper/1/0, flow: true, index: 0, kind: pending, reply: 1, scope: helper/approve#0, tool: approve, tool_call_id: call-a}}], [node_expanded, helper, {prune_ids: []}], [node_waiting, helper, {call_ids: [r1/helper/1/0], steer_inbox: notes}], [node_started, other], [interrupted, null, {inbox: notes, nodes: [helper]}], [node_step, other, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: hi there, type: text}], role: assistant}, purpose: chat, request_sha256: 5b0b86348e73539127f7f2c7bd4831c636e3320dda82022749b04d50ac750a6b, response_id: null, usage: null}}], [pool_commit, other, {value: hi there}], [pool_commit, other, {key: other.new_messages, steps: [15]}], [node_succeeded, other, {commit: 16, messages: 17}], [node_woken, helper], [node_step, helper, {n: 3, step: {call_id: call-a, closed: interrupted, is_error: true, kind: tool_result, output: The user interrupted this tool call; its outcome is unknown. Check its effect before retrying.}}], [node_step, helper, {n: 4, step: {by: 14, kind: interrupted}}], [pool_commit, helper], [pool_commit, helper, {key: helper.new_messages, steps: [9, 20, 21]}], [node_succeeded, helper, {commit: 22, messages: 23}], [node_started, __end__], [pool_commit, __end__, {value: {helper: null, other: hi there}}], [node_succeeded, __end__, {commit: 26}]]
+  events: [[RunStarted], [NodeStarted, {node_id: __start__}], [NodeSucceeded, {node_id: __start__, output: {notes: {inbox: notes}}, interrupted: false}], [NodeStarted, {node_id: helper}], [ModelCallStarted, {node_id: helper, n: 1, purpose: chat, provider: anthropic, model: claude-test}], [ModelCallFinished, {node_id: helper, n: 1, purpose: chat, provider: anthropic, model: claude-test}], [ToolCallStarted, {node_id: helper, n: 1, call_index: 0, tool_call_id: call-a, name: approve, arguments: {item: the refund}}], [ToolCallFinished, {node_id: helper, n: 1, call_index: 0, tool_call_id: call-a, name: approve, result: '{"arguments":{"item":"the refund"}}'}], [NodeExpanded, {node_id: helper, grow: {seed: {arguments: {item: the refund}, scope: helper/approve#0, tool: approve}, prune: []}, call_id: r1/helper/1/0}], [NodeWaiting, {node_id: helper, call_ids: [r1/helper/1/0]}], [NodeStarted, {node_id: other}], [ModelCallStarted, {node_id: other, n: 1, purpose: chat, provider: anthropic, model: claude-test}], [Interrupted, {inbox: notes, nodes: [helper], scopes: [helper/approve#0]}], [ModelCallFinished, {node_id: other, n: 1, purpose: chat, provider: anthropic, model: claude-test}], [NodeSucceeded, {node_id: other, output: hi there, interrupted: false}], [NodeWoken, {node_id: helper, timed_out: []}], [NodeSucceeded, {node_id: helper, interrupted: true}], [NodeStarted, {node_id: __end__}], [NodeSucceeded, {node_id: __end__, output: {helper: null, other: hi there}, interrupted: false}], [RunSucceeded, {output: {helper: null, other: hi there}}]]

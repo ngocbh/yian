@@ -305,20 +305,32 @@ export class ProgressReporter {
       }
       case "NodeExpanded":
         // A spawner grew the graph instead of returning a value; the spliced fragment's terminal
-        // commits it, so it gets no line, only its spinner cleared.
-        this.#running.delete(event.nodeId);
+        // commits it, so it gets no line, only its spinner cleared. An agent's flow call leaves
+        // the agent running.
+        if (event.callId === null) this.#running.delete(event.nodeId);
         break;
       case "NodeFailed": {
+        // A flow call whose scope couldn't grow fails as the agent's tool call; the agent goes on.
+        if (event.scope !== null && !String(nodeId).startsWith(`${event.scope}/`)) break;
         const took = nodeId === null ? "" : this.#finish(nodeId);
         const message = forTerminal(event.failure.message, this.#out);
         const head = style(failedNodeText(String(nodeId), took), "red bold");
+        if (event.scope !== null) this.#endScope(event.scope);
         this.#print(`${head}\n${style(`    ${message}`, "red")}`);
         break;
       }
+      case "Interrupted":
+        for (const scope of event.scopes) this.#endScope(scope);
+        break;
       default:
         return;
     }
     this.#sync();
+  }
+
+  /** Clear the spinners of flow call scope `scope`'s nodes, which ended with it. */
+  #endScope(scope: string): void {
+    for (const nodeId of this.#running.keys()) if (nodeId.startsWith(`${scope}/`)) this.#running.delete(nodeId);
   }
 
   /**

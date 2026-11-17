@@ -254,18 +254,6 @@ test("run start names a loop's tool by the loop", async () => {
   );
 });
 
-// Each row: the field on a loop naming the flow `step`, and the refusal.
-test.each([
-  ["retries: 2", "`retries:` doesn't apply to a flow call: a flow retries inside its own nodes"],
-  ["output: !int", "`output:` doesn't apply to a flow call: a flow's result type comes from the flow"],
-  ["adaptive_questions: {prompt: hi}", "`adaptive_questions:` applies only to `call: ask`"],
-])("a loop naming a flow refuses %s", async (field, problem) => {
-  const text =
-    'id: r\nname: r\ndefs:\n  step: {input: {n: !int}, kind: code, code: "return {n: 1}", output: {n: !int}}\n' +
-    `nodes:\n  l: {kind: loop, call: step, input: {n: 0}, times: 1, ${field}}\n`;
-  expect((await failure(text))[0]).toBe(`node 'l' (kind=loop): ${problem}`);
-});
-
 test("a loop over a flow keeps its fingerprint", async () => {
   const text =
     "id: r\nname: r\n" +

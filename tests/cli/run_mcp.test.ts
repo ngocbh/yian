@@ -286,20 +286,26 @@ test(
   SLOW,
 );
 
-test(
-  "a tool node naming a server's tool as {server: tool} starts that server and no other",
-  async () => {
+// Each row: a node kind, its fields beside `call: {fake: echo}`, and the run's output.
+test.each([
+  ["call", 'input: {text: "hi"}', "hi"],
+  ["map", 'over: [hi], input: {text: "${item}"}', '["hi"]'],
+])(
+  "a %s node naming a server's tool as {server: tool} starts that server and no other",
+  async (kind, fields, output) => {
     const files = { other: marker("other.pid"), fake: marker("fake.pid") };
     // Listed first and supplying `echo` too, so probing for a bare `echo` would pick it.
     const cfg = config(join(tmp, "cfg.json"), {
       other: stdio("--only", "echo", "--marker", files.other),
       fake: stdio("--marker", files.fake),
     });
+    const node = `{kind: ${kind}, call: {fake: echo}, ${fields}}`;
+    const flow = flowFile(`id: mcp_tool\nname: mcp_tool\nnodes:\n  call: ${node}\noutput: \${call.output}\n`);
 
-    const result = await run([toolFlow("{fake: echo}"), "--mcp-config", cfg]);
+    const result = await run([flow, "--mcp-config", cfg]);
 
     expect(result.code, result.output).toBe(0);
-    expect(lastLine(result.stdout)).toBe("hi");
+    expect(lastLine(result.stdout)).toBe(output);
     expect(pids(files.fake)).toHaveLength(1);
     expect(existsSync(files.other)).toBe(false);
     await expectNoChildren(files.fake);

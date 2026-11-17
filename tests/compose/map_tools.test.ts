@@ -255,18 +255,6 @@ test("run start names a map's tool by the map", async () => {
   );
 });
 
-// Each row: the field on a map naming the flow `greet`, and the refusal.
-test.each([
-  ["retries: 2", "`retries:` doesn't apply to a flow call: a flow retries inside its own nodes"],
-  ["output: !int", "`output:` doesn't apply to a flow call: a flow's result type comes from the flow"],
-  ["adaptive_questions: {prompt: hi}", "`adaptive_questions:` applies only to `call: ask`"],
-])("a map naming a flow refuses %s", async (field, problem) => {
-  const text =
-    'id: r\nname: r\ndefs:\n  greet: {input: {x: !int}, kind: code, code: "return 1", output: !int}\n' +
-    `nodes:\n  m: {kind: map, over: [1], call: greet, input: {x: "\${item}"}, ${field}}\n`;
-  expect((await failure(text))[0]).toBe(`node 'm' (kind=map): ${problem}`);
-});
-
 test("a map over a flow keeps its fingerprint", async () => {
   const text =
     "id: r\nname: r\ninput:\n  ns: !list(int)\n" +

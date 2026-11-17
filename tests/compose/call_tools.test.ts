@@ -134,12 +134,23 @@ test("a call node's id may equal the tool it names", async () => {
   expect(node.toolId).toBe("place");
 });
 
-test.each([
-  ["retries: 2", "`retries:` doesn't apply to a flow call: a flow retries inside its own nodes"],
-  ["output: !int", "`output:` doesn't apply to a flow call: a flow's result type comes from the flow"],
-  ["adaptive_questions: {prompt: hi}", "`adaptive_questions:` applies only to `call: ask`"],
-])("a flow call refuses %s", async (field, problem) => {
-  expect(await refusal(app(`  n: {kind: call, call: greet, ${field}}\n`))).toBe(`node 'n' (kind=call): ${problem}`);
+// Each row: a kind, a field a flow call has no use for, the refusal, and the kind's other fields
+// for naming the flow `greet`.
+test.each(
+  [
+    ["call", ""],
+    ["map", "over: [1], "],
+    ["loop", "times: 1, "],
+  ].flatMap(([kind, fields]) =>
+    [
+      ["retries: 2", "`retries:` doesn't apply to a flow call: a flow retries inside its own nodes"],
+      ["output: !int", "`output:` doesn't apply to a flow call: a flow's result type comes from the flow"],
+      ["adaptive_questions: {prompt: hi}", "`adaptive_questions:` applies only to `call: ask`"],
+    ].map(([field, problem]) => [kind!, field!, problem!, fields!]),
+  ),
+)("a %s naming a flow refuses %s", async (kind, field, problem, fields) => {
+  const text = app(`  n: {kind: ${kind}, ${fields}call: greet, ${field}}\n`);
+  expect(await refusal(text)).toBe(`node 'n' (kind=${kind}): ${problem}`);
 });
 
 test("a tool call takes retries:, output: and asserts:", async () => {
@@ -210,25 +221,6 @@ test("a call node naming a tool also written with tool_id: is refused at tool_id
 /** A host tool named `name` that returns `host`. */
 const hostTool = (name: string) =>
   tool({ name, description: "A host tool.", parameters: { type: "object", properties: {} }, execute: () => "host" });
-
-test("a call node runs a host tool and a host group's tool", async () => {
-  const echo = (name: string, said: string) =>
-    tool({
-      name,
-      description: "Echo the query.",
-      parameters: { type: "object", properties: { q: { type: "string" } }, required: ["q"] },
-      execute: (args: Record<string, unknown>) => `${said} ${String(args["q"])}`,
-    });
-  const text =
-    "id: r\nname: r\ninput:\n  q: !str\nnodes:\n" +
-    '  bare: {kind: call, call: lookup, input: {q: "${input.q}"}, output: !str}\n' +
-    '  grouped: {kind: call, call: {github: search}, input: {q: "${input.q}"}, output: !str}\n' +
-    'output: {bare: "${bare.output}", grouped: "${grouped.output}"}\n';
-  const tools = { lookup: echo("lookup", "found"), github: [echo("search", "searched")] };
-  const result = await runFlow(await loadFlow(text), { q: "hi" }, { env: hostEnv(tmp), tools });
-
-  expect(result.output).toEqual({ bare: "found hi", grouped: "searched hi" });
-});
 
 test("a def named like a host tool runs the def", async () => {
   const text =

@@ -39,6 +39,7 @@ import {
   OpenAIAuth,
 } from "../../src/llm_clients/auth/index.ts";
 import { LLM_CONFIG_KEYS, SUPPORTED_LLM_PROVIDERS, validateBaseUrl } from "../../src/llm_clients/config.ts";
+import { OpenAIResponsesBlock } from "../../src/llm_clients/provider_blocks.ts";
 import { ConnectionSnapshot } from "../../src/llm_clients/connection.ts";
 import {
   OPENAI_REFUSED_HEADER_NAMES,
@@ -196,6 +197,34 @@ describe("configErrors", () => {
     expect(EXTRA_FIELD).toBe(`llm_config has an extra field; the fields are ${[...LLM_CONFIG_KEYS].sort().join(", ")}`);
   });
 
+  test("an unknown key in a provider block is reported at its object, without its name", () => {
+    expect(configErrors({ provider: "openai", openai: { "sk-pasted-key": 1, "sk-other-key": 2 } })).toEqual([
+      { field: "openai", message: UNKNOWN_OPENAI_FIELD },
+    ]);
+    expect(configErrors({ provider: "openai", openai: { reasoning: { effort: "low", "sk-pasted-key": 1 } } })).toEqual([
+      {
+        field: "openai",
+        message:
+          "`openai.reasoning` has a field that is not a supported field of the OpenAI Responses API request; " +
+          "allowed: context, effort, mode, summary",
+      },
+    ]);
+    expect(configErrors({ provider: "google", google: { safetySettings: [{ "sk-pasted-key": 1 }] } })).toEqual([
+      {
+        field: "google",
+        message:
+          "`google.safetySettings[0]` has a field that is not a supported field of the Gemini generateContent " +
+          "request; allowed: category, threshold",
+      },
+    ]);
+  });
+
+  test("a reserved key in a provider block is still named, beside an unnamed unknown key", () => {
+    expect(configErrors({ provider: "openai", openai: { tools: [], "sk-pasted-key": 1 } })).toEqual([
+      { field: "openai", message: `\`openai.tools\` is built by yian (tools); remove it; ${UNKNOWN_OPENAI_FIELD}` },
+    ]);
+  });
+
   test("a bad base_url with a key names base_url", () => {
     const errors = configErrors({ provider: "openai", api_key: "k", base_url: "http://example.com/v1" });
     expect(errors.map((error) => error.field)).toEqual(["base_url"]);
@@ -305,9 +334,24 @@ describe("configCheck", () => {
     });
   });
 
+  test("an unknown key in a provider block is not printed, in text or in JSON", async () => {
+    const stdin = JSON.stringify({ provider: "openai", openai: { "sk-pasted-key": 1 } });
+    const text = await run(configCheck, jsonArgs(false), fakeIo({ stdin }));
+    expect(text).toEqual({ code: 1, out: "", err: `openai: ${UNKNOWN_OPENAI_FIELD}\n` });
+    const json = await run(configCheck, jsonArgs(true), fakeIo({ stdin }));
+    expect(json.code).toBe(1);
+    expect(json.out).not.toContain("sk-pasted-key");
+    expect(JSON.parse(json.out)).toEqual({
+      format: "yian.cli.v1",
+      ok: false,
+      errors: [{ field: "openai", message: UNKNOWN_OPENAI_FIELD }],
+    });
+  });
+
   test("text on a terminal shows an error line's control characters; piped, it keeps them", async () => {
+    // A mapping field's own keys are named, as the error's field.
     const key = "\u001b]0;PWNEDTITLE\u0007\u001b[2J\u001b[41mXX";
-    const stdin = JSON.stringify({ provider: "openai", openai: { [key]: 1 } });
+    const stdin = JSON.stringify({ provider: "openai", openai: { metadata: { [key]: 1 } } });
     const tty = await run(configCheck, jsonArgs(false), fakeIo({ stdin, outTty: true }));
     expect(tty.code).toBe(1);
     expect(tty.err).not.toContain("\x1b");
@@ -363,6 +407,11 @@ describe("configCheck", () => {
     });
   });
 });
+
+/** The error config check gives for an unknown key in the `openai` block. */
+const UNKNOWN_OPENAI_FIELD =
+  "`openai` has a field that is not a supported field of the OpenAI Responses API request; allowed: " +
+  Object.keys(OpenAIResponsesBlock.fields).sort().join(", ");
 
 /** The error config check gives for `provider`'s block on a model routed to the Responses API. */
 function responsesBlock(provider: string): string {

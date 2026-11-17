@@ -19,8 +19,8 @@ Claude Code or OpenCode for that.
 
 ## Install
 
-```console
-$ curl -fsSL https://raw.githubusercontent.com/ngocbh/yian/main/install.sh | bash
+```sh
+curl -fsSL https://raw.githubusercontent.com/ngocbh/yian/main/install.sh | bash
 ```
 
 This clones yian into `~/.local/share/yian`, installs Bun if you have none, and puts a `yian`
@@ -30,8 +30,8 @@ command in `~/.local/bin` and on your PATH. Run it again to update. Flags such a
 
 As a package:
 
-```console
-$ npm install @ngocbh/yian
+```sh
+npm install @ngocbh/yian
 ```
 
 Or `bun add @ngocbh/yian`. yian runs on Node ≥ 22.18 or Bun ≥ 1.4. `npm i -g @ngocbh/yian` puts
@@ -43,8 +43,8 @@ Plain `npx yian` fetches an unrelated package.
 yian has no built-in model. Save a login for a provider; [the docs](https://yian.readthedocs.io/models/)
 cover the others:
 
-```console
-$ yian auth anthropic
+```sh
+yian auth anthropic
 ```
 
 ## Run a flow
@@ -70,9 +70,9 @@ Hello, Ada!
 
 Yian Chat is the first application built on Yian, serving as a way to dogfood the framework through real-world use. See [CLI](https://github.com/ngocbh/yian/tree/main/src/cli) and [CLI Flows](https://github.com/ngocbh/yian/tree/main/src/cli/flows) for example.
 
-```console
-$ yian chat
-$ yian chat hello.yaml
+```sh
+yian chat
+yian chat hello.yaml
 ```
 
 `yian chat` opens Yian, yian's assistant, in the current folder. Yian runs, writes, edits and

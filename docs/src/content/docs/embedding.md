@@ -493,8 +493,8 @@ import "@ngocbh/yian/code-worker";
 Otherwise every CODE call fails with `CODE worker failed: Cannot find module ...`. With
 `bun build --compile`, pass both entries:
 
-```console
-$ bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig src/main.ts src/nodes/code/worker.ts --outfile out/host
+```sh
+bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig src/main.ts src/nodes/code/worker.ts --outfile out/host
 ```
 
 A `./file.ts:fn` CODE file and a [tool module](/code-and-tools/#tool-modules) are read from disk

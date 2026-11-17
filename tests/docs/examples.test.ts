@@ -2,8 +2,8 @@
  * Every example on the docs site is checked against the code: each YAML block loads with the real
  * loader (or fails to with the error its page shows, or is only parsed, as its `check=` says),
  * each `check=runnable` block runs on a scripted model and prints the output its page shows, and
- * each `yian` line in a console block is one the CLI's command table takes. `docs/STYLE.md` says
- * how writers mark blocks.
+ * each `yian` line in an sh or console block is one the CLI's command table takes. `docs/STYLE.md`
+ * says how writers mark blocks.
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -45,7 +45,8 @@ const BLOCKS = [...PAGE_BLOCKS, ...README_BLOCKS];
 // A `source=` block shows a file of examples/ whole.
 const SOURCE = /^examples\/[\w.-]+\.yaml$/;
 const YAML_BLOCKS = BLOCKS.filter((block) => block.lang === "yaml");
-const SHELLS = new Set(["sh", "bash", "shell", "zsh"]);
+// Commands go in sh blocks, or console blocks when they show output; never in these.
+const OTHER_SHELLS = new Set(["bash", "shell", "zsh"]);
 // A shell line that runs the CLI, directly or through npx or bunx.
 const STRAY = /^\s*(?:\$\s+)?(?:yian\b|(?:npx|bunx)\s+(?:-\S+\s+)*@ngocbh\/yian\b)/;
 // Any provider and model: the scripted model answers whichever the flow asks for.
@@ -63,10 +64,10 @@ const PAGE_FILES = new Map(
 
 const where = (block: Block) => `${block.file}:${block.line}`;
 
-/** The CLI lines of `blocks`' console blocks, each with a `<file>:<line> <command>` label. */
+/** The CLI lines of `blocks`' sh and console blocks, each with a `<file>:<line> <command>` label. */
 const yianLines = (blocks: readonly Block[]) =>
   blocks
-    .filter((block) => block.lang === "console")
+    .filter((block) => block.lang === "sh" || block.lang === "console")
     .flatMap((block) =>
       readInvocations(block).map(({ line, argv }) => [`${block.file}:${line} ${argv.join(" ")}`, argv] as const),
     );
@@ -163,14 +164,25 @@ test.each(YIAN_LINES)("%s", (_label, argv) => {
   expect(cliProblem(argv)).toBeNull();
 });
 
-test("yian lines are in console blocks", () => {
-  const stray = BLOCKS.filter((block) => SHELLS.has(block.lang)).flatMap((block) =>
+test("yian lines are in sh or console blocks", () => {
+  const stray = BLOCKS.filter((block) => OTHER_SHELLS.has(block.lang)).flatMap((block) =>
     block.text
       .split("\n")
       .filter((line) => STRAY.test(line))
       .map((line) => `${where(block)}: ${line}`),
   );
   expect(stray).toEqual([]);
+});
+
+// The copy button copies a `$ ` prompt too, so a command shown without output has none.
+test("a console block shows a command's output, and an sh block has no $ prompt", () => {
+  const silent = BLOCKS.filter(
+    (block) => block.lang === "console" && readCommands(block).every((command) => command.output === ""),
+  );
+  const prompted = BLOCKS.filter(
+    (block) => block.lang === "sh" && block.text.split("\n").some((line) => line.startsWith("$ ")),
+  );
+  expect([...silent, ...prompted].map(where)).toEqual([]);
 });
 
 // control-flow.md says a `../` ref loads under `yian check --root` when the root holds its file.

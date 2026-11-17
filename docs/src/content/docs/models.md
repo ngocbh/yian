@@ -12,10 +12,10 @@ model.
 Save a login for each provider you use. `yian auth` checks the model and stores the credential
 and model together:
 
-```console
-$ yian auth anthropic --model claude-sonnet-4-5
-$ yian auth openai
-$ yian auth ollama --model llama3.2:3b
+```sh
+yian auth anthropic --model claude-sonnet-4-5
+yian auth openai
+yian auth ollama --model llama3.2:3b
 ```
 
 When no default is saved, the provider you save becomes the default. In a terminal, `yian auth` asks for anything
@@ -216,8 +216,8 @@ and needs `VLLM_API_KEY` only when its server was started with a key.
 `provider: openai` can run on a ChatGPT subscription instead of a billed API key. Sign in with a
 browser, or with a device code when you work over SSH:
 
-```console
-$ yian auth openai --method subscription --login device --model gpt-5.5
+```sh
+yian auth openai --method subscription --login device --model gpt-5.5
 ```
 
 The login refreshes its token by itself and wins over an `OPENAI_API_KEY` in the environment.

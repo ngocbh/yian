@@ -121,6 +121,17 @@ test("console blocks run the CLI with or without the $ prompt", () => {
   ]);
 });
 
+test("sh blocks run the CLI on each line, a trailing \\ joining the next", () => {
+  const [block] = readBlocks(
+    ["```sh", "npm install @ngocbh/yian", "yian run a.yaml \\", "  --input name=Ada", "npx @ngocbh/yian check a.yaml", "```"].join("\n"),
+    "p.md",
+  );
+  expect(readInvocations(block!)).toEqual([
+    { line: 3, argv: ["yian", "run", "a.yaml", "--input", "name=Ada"] },
+    { line: 5, argv: ["yian", "check", "a.yaml"] },
+  ]);
+});
+
 /** Run `body` with a fresh temporary folder, removed afterwards. */
 function inTempDir(body: (dir: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "doc-blocks-"));

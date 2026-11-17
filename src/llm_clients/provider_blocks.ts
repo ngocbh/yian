@@ -1325,6 +1325,8 @@ interface PartialWalk {
   readonly top: BlockSchema;
   readonly isValue: (leaf: unknown) => boolean;
   readonly problems: BlockProblem[];
+  /** Each problem `checkLiteral` added, as the JSON of its key parts and message. */
+  readonly seen: Set<string>;
 }
 
 /**
@@ -1352,7 +1354,7 @@ export function locatedBlockProblems(
   const top = blockSchema(block);
   if (isValue(tree)) return [];
   if (!isRecord(tree)) return [new BlockProblem([], `\`${top.name}\` must be a mapping`)];
-  const walk: PartialWalk = { top, isValue, problems: [] };
+  const walk: PartialWalk = { top, isValue, problems: [], seen: new Set() };
   partialProblems(walk, top, tree, "", []);
   return walk.problems;
 }
@@ -1449,11 +1451,12 @@ function checkLiteral(
   path: string,
   keys: Loc,
 ): void {
-  const { top, problems } = walk;
+  const { top, problems, seen } = walk;
   const add = (parts: Loc, message: string): void => {
-    // Keys hold only strings and numbers, so equal JSON means equal keys.
-    const keysJson = JSON.stringify(parts);
-    if (!problems.some((problem) => problem.message === message && JSON.stringify(problem.keys) === keysJson)) {
+    // Keys hold only strings and numbers, so equal JSON means an equal problem.
+    const key = JSON.stringify([parts, message]);
+    if (!seen.has(key)) {
+      seen.add(key);
       problems.push(new BlockProblem(parts, message));
     }
   };

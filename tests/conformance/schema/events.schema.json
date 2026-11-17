@@ -292,8 +292,8 @@
         "call_index": {"type": "integer", "minimum": 0, "description": "The call's 0-based position in the reply."},
         "tool_call_id": {"type": "string", "description": "The provider's id for the call."},
         "name": {"type": "string", "description": "The tool's name."},
-        "result": {"type": ["string", "null"], "description": "The tool's result text; null when it raised or was skipped."},
-        "error": {"type": ["string", "null"], "description": "The error's type name when the tool raised, \"interrupted\" for a call an interrupt skipped, or \"tool_limit\" for a call of a reply at the tool-call cap (the tool did not run); null when it returned."}
+        "result": {"type": ["string", "null"], "description": "The tool's result text (for a flow granted as a tool, the flow's output as the model reads it, sent once the flow ends); null when it raised or was skipped."},
+        "error": {"type": ["string", "null"], "description": "The error's type name when the tool raised, \"interrupted\" for a call an interrupt skipped or a flow call it ended, \"failed\" for a flow call whose flow failed or didn't start, or \"tool_limit\" for a call of a reply at the tool-call cap (the tool did not run); null when it returned."}
       }
     },
     "ReplayDegraded": {

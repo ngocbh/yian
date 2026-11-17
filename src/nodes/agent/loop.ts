@@ -92,6 +92,7 @@ import {
   type LiveSinks,
   liveSinks,
   markModelFailure,
+  observeFlowCallFinished,
   observeSkippedToolCall,
   observeToolCall,
   type ToolCallIdentity,
@@ -367,7 +368,9 @@ function closePended(turn: ToolTurn): void {
     const view = views.find((each) => each.callId === callId);
     if (view?.state !== "closed") continue;
     const { output, closed } = closerResult(closerReason(view.closedReason));
-    turn.steps.toolResult({ callId: turn.calls[index]!.id, startedAt: null, output, isError: true, closed });
+    const call = turn.calls[index]!;
+    turn.steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed });
+    if (view.scope !== null) observeFlowCallFinished(turn.live, identityOf(turn, call, index), { error: closed });
   }
 }
 
@@ -698,6 +701,7 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
       const output = view.result["output"] as string;
       const isError = view.result["is_error"] === true;
       const written = steps.toolResult({ callId: call.id, startedAt: null, output, isError });
+      observeFlowCallFinished(turn.live, identityOf(turn, call, index), { result: output });
       if (laterPending === null) reached = written;
       pushToolMessage(turn, call, output, isError);
       continue;
@@ -714,6 +718,7 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
         ? { output: flowFailureText(call.name, view.scope, view.failure), closed: "failed" as const }
         : closerResult(closerReason(view?.closedReason ?? null));
     const closer = steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed });
+    if (view?.scope != null) observeFlowCallFinished(turn.live, identityOf(turn, call, index), { error: closed });
     // A later start that pended the call reached the next one already.
     if (laterPending === null) reached = closer;
     pushToolMessage(turn, call, output, true);
@@ -958,6 +963,7 @@ async function runGroup(
         const tooLarge = turn.steps.pendingTooLarge(fields);
         if (tooLarge !== null) {
           turn.steps.toolResult({ callId: call.id, startedAt, output: tooLarge, isError: true }, { settled: true });
+          observeFlowCallFinished(live, identityOf(turn, call, index), { error: "failed" });
           return { content: tooLarge, reported: true };
         }
         turn.steps.pending(fields);

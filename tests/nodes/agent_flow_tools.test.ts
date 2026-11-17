@@ -11,7 +11,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadFlow } from "../../src/compose/loader.ts";
-import { Interrupted, NodeExpanded, NodeFailed, NodeWaiting, type RunEvent, type StreamChunk } from "../../src/events.ts";
+import {
+  Interrupted,
+  ModelCallStarted,
+  NodeExpanded,
+  NodeFailed,
+  NodeSucceeded,
+  NodeWaiting,
+  type RunEvent,
+  type StreamChunk,
+  ToolCallFinished,
+} from "../../src/events.ts";
 import { Finish, TextDelta } from "../../src/llm/events.ts";
 import { ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
@@ -256,12 +266,15 @@ test("arguments too large to record are the call's error result, and the flow ne
   const log = freshLog();
   const model = new ScriptedModel([callReply(["shout", { text: "x".repeat(5000) }, "c1"]), textReply("too big")]);
   const env = hostEnv(dir, { YIAN_MAX_EVENT_BYTES: "2000" });
-  const result = await runFlow(await loadFlow(shoutFlow()), {}, { log, runId: "r1", models: serving(model), env });
+  const events: RunEvent[] = [];
+  const onEvent = (event: RunEvent) => void events.push(event);
+  const result = await runFlow(await loadFlow(shoutFlow()), {}, { log, runId: "r1", models: serving(model), env, onEvent });
   expect(result.status).toBe("succeeded");
   const [[callId, content, isError]] = sentResults(model, 1) as [[string, string, boolean]];
   expect([callId, isError]).toEqual(["c1", true]);
   expect(content).toMatch(/^Arguments for shout make a call of \d+ bytes, over the run's limit of 2000 \(YIAN_MAX_EVENT_BYTES\); send less\.$/);
   expect(readFileSync(log, "utf8")).not.toContain("helper/shout#0");
+  expect(eventsOf(events, ToolCallFinished).map(({ result, error }) => [result, error])).toEqual([[null, "failed"]]);
 });
 
 test("a failure inside a flow stops its other running nodes, whose late outcomes are dropped", async () => {
@@ -469,6 +482,41 @@ output: \${helper.output}
   // The scope's host call closes after the event that ended its scope.
   const at = events.findIndex((event) => event instanceof Interrupted);
   expect(events[at + 1]?.toJSON()).toEqual({ call_id: "r1/helper/approve#0/sign", reason: "interrupted" });
+  // The flow call finishes once the agent reads it as interrupted.
+  const finished = eventsOf(events, ToolCallFinished).map(({ toolCallId, result, error }) => [toolCallId, result, error]);
+  expect(finished).toEqual([["c1", null, "interrupted"]]);
+  expect(events.findIndex((event) => event instanceof ToolCallFinished)).toBeGreaterThan(at);
+});
+
+test("a flow call's ToolCallFinished comes once its flow ends, with the result the model reads", async () => {
+  const log = freshLog();
+  const events: RunEvent[] = [];
+  const model = new ScriptedModel([callReply(["shout", { text: "abcdefghij" }, "c1"]), textReply("done")]);
+  const env = hostEnv(dir, { YIAN_MAX_FLOW_RESULT_CHARS: "4" });
+  const onEvent = (event: RunEvent) => void events.push(event);
+  const result = await runFlow(await loadFlow(shoutFlow()), {}, { log, models: serving(model), env, onEvent });
+  expect(result.status).toBe("succeeded");
+  const finished = eventsOf(events, ToolCallFinished).map(({ toolCallId, result, error }) => [toolCallId, result, error]);
+  expect(finished).toEqual([["c1", "ABCD… (6 more characters); the run log holds the whole output", null]]);
+  // After the flow's END, and before the model reads the result.
+  const at = events.findIndex((event) => event instanceof ToolCallFinished);
+  const ended = events.findIndex((event) => event instanceof NodeSucceeded && event.nodeId === "helper/shout#0/__end__");
+  const read = events.findLastIndex((event) => event instanceof ModelCallStarted);
+  expect([ended < at, at < read]).toEqual([true, true]);
+});
+
+test("a flow call whose flow fails finishes with error `failed`, and the reply's other flow call with its result", async () => {
+  const events: RunEvent[] = [];
+  const onEvent = (event: RunEvent) => void events.push(event);
+  const flow = await loadFlow(shoutFlow('if (inputs.text === "bad") throw new Error("bad text"); return inputs.text.toUpperCase();'));
+  const model = new ScriptedModel([callReply(["shout", { text: "bad" }, "c1"], ["shout", { text: "ok" }, "c2"]), textReply("done")]);
+  const result = await runFlow(flow, {}, { models: serving(model), env: hostEnv(dir), numWorkers: 4, onEvent });
+  expect(result.status).toBe("succeeded");
+  const finished = eventsOf(events, ToolCallFinished).map(({ toolCallId, result, error }) => [toolCallId, result, error]);
+  expect(finished.sort()).toEqual([
+    ["c1", null, "failed"],
+    ["c2", "OK", null],
+  ]);
 });
 
 for (const numWorkers of [0, 2]) {

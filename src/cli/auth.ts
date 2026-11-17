@@ -16,6 +16,7 @@ import type { EventEmitter } from "node:events";
 import { current } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import type { EmbeddingModel } from "../llm/embeddings.ts";
+import { ProviderError } from "../llm/errors.ts";
 import { collect } from "../llm/events.ts";
 import { Message, Request, TextPart } from "../llm/messages.ts";
 import { apiKeyEnvNames, OPTIONAL_API_KEY_PROVIDERS, PROVIDER_API_KEY_ENV } from "../llm_clients/api_key_env.ts";
@@ -36,7 +37,7 @@ import {
   validateOrganization,
 } from "../llm_clients/connection_settings.ts";
 import { callCredentials, checkLoginEndpoint, ConnectionSnapshot, embeddingModel } from "../llm_clients/connection.ts";
-import { OPENAI_API_ENDPOINT } from "../llm_clients/endpoints.ts";
+import { OPENAI_API_ENDPOINT, prefersResponses } from "../llm_clients/endpoints.ts";
 import { chatModelFromConfig, warnOnce } from "../llm_clients/factory.ts";
 import { listModels, ModelListError, timeoutMilliseconds } from "../llm_clients/model_list.ts";
 import { ValidationError } from "../llm_clients/provider_blocks.ts";
@@ -620,6 +621,11 @@ const WARNED = new Set<string>();
  * sends to a keyless server, and Ollama sends none. The build and the call get
  * `YIAN_MODEL_CHECK_TIMEOUT_SECONDS` (30 by default) together on `deps.scheduler`.
  *
+ * An Azure deployment goes where a run with no `api` sends it, by its name. When that is Chat
+ * Completions and it refuses with HTTP 400, as Azure refuses an operation a deployment doesn't
+ * serve, the Responses API is asked too; if it answers, a line on stdout says to set
+ * `api: responses`, else the Chat Completions error is the one reported.
+ *
  * @param provider Provider name.
  * @param model Model id, or the Azure deployment name.
  * @param key API key to send, or `null` for none.
@@ -652,21 +658,37 @@ export async function modelAnswers(
   if (Object.keys(headers).length > 0) config["headers"] = { ...headers };
   const seconds = current().modelCheckTimeoutSeconds;
   const timedOut = new TimeoutError(`The model didn't reply within ${seconds} seconds`);
+  let responsesOnly = false;
   try {
     await withDeadline(seconds * 1000, timedOut, deps.scheduler ?? realScheduler, async (deadline) => {
       try {
         const signal = AbortSignal.any([stop, deadline]);
-        const chat = await (deps.chatModel ?? chatModelFromConfig)(config, {
-          env: io.env,
-          snapshot: new ConnectionSnapshot({ defaults: {}, providerModels: {}, connections: {} }),
-          signal,
-          onWarning: (message) => {
-            // The reply decides whether the model is usable, not yian's catalog.
-            if (!/^Model .* is not in the known model list/s.test(message)) warnOnce(WARNED, message);
-          },
-        });
-        const prompt = new Message({ role: "user", parts: [new TextPart("Reply with OK.")] });
-        await collect(chat.stream(new Request({ messages: [prompt] }), { signal }));
+        const ask = async (sent: Record<string, unknown>) => {
+          const chat = await (deps.chatModel ?? chatModelFromConfig)(sent, {
+            env: io.env,
+            snapshot: new ConnectionSnapshot({ defaults: {}, providerModels: {}, connections: {} }),
+            signal,
+            onWarning: (message) => {
+              // The reply decides whether the model is usable, not yian's catalog.
+              if (!/^Model .* is not in the known model list/s.test(message)) warnOnce(WARNED, message);
+            },
+          });
+          const prompt = new Message({ role: "user", parts: [new TextPart("Reply with OK.")] });
+          await collect(chat.stream(new Request({ messages: [prompt] }), { signal }));
+        };
+        try {
+          await ask(config);
+        } catch (error) {
+          const refused = error instanceof ProviderError && error.status === 400;
+          if (!(provider === "azure" && !prefersResponses(model) && refused)) throw error;
+          try {
+            await ask({ ...config, api: "responses" });
+          } catch (second) {
+            // Unless a stop or the deadline cut it short, the refusal a run would meet is the one to report.
+            throw signal.aborted ? second : error;
+          }
+          responsesOnly = true;
+        }
       } catch (error) {
         // Whatever a call cut short by the deadline rejects with, the deadline is the cause.
         throw deadline.aborted && !stop.aborted ? timedOut : error;
@@ -686,6 +708,12 @@ export async function modelAnswers(
     // Cut by code points, so no surrogate pair splits.
     const text = Array.from(folded).slice(0, 200).join("");
     return error instanceof Error ? `${error.name}: ${text}` : text;
+  }
+  if (responsesOnly) {
+    await io.stdout.write(
+      `Deployment ${model} answered through the Responses API, not Chat Completions; set api: responses ` +
+        "in the llm_config of runs that use it\n",
+    );
   }
   return null;
 }

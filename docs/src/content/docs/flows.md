@@ -116,9 +116,9 @@ default stays text. A null default needs an `Optional` type.
 Nodes read an input as `${input.qty}`. From the command line, pass inputs with
 `--input qty=3` or a JSON file with `--inputs`:
 
-```console
-$ yian run report.yaml --input qty=3 --input note="first run"
-$ yian run report.yaml --inputs inputs.json
+```sh
+yian run report.yaml --input qty=3 --input note="first run"
+yian run report.yaml --inputs inputs.json
 ```
 
 Text from `--input` becomes an `int`, `float` or `bool` when the input has that type (see

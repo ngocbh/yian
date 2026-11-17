@@ -11,8 +11,8 @@ yian is the npm package `@ngocbh/yian`. It runs on Node 22.18 or later, or Bun 1
 
 Add it to a project:
 
-```console
-$ npm install @ngocbh/yian
+```sh
+npm install @ngocbh/yian
 ```
 
 With Bun, run `bun add @ngocbh/yian` instead.
@@ -27,8 +27,8 @@ To run flows from the terminal, you need the `yian` command. Pick one way:
 | Install from GitHub | `curl -fsSL https://raw.githubusercontent.com/ngocbh/yian/main/install.sh \| bash` | Clones yian into `~/.local/share/yian` and runs it with Bun, installing Bun if needed. Run it again to update; `uninstall.sh` removes it |
 | Install a clone of the repo | `./install.sh` | Runs the checkout with Bun, installing Bun if needed. `./uninstall.sh` removes it |
 
-```console
-$ npx @ngocbh/yian --version
+```sh
+npx @ngocbh/yian --version
 ```
 
 :::caution
@@ -41,8 +41,8 @@ The rest of the docs write the command as `yian`. Run `yian --help` to list the 
 To use tools from MCP servers, install the MCP client package where yian is installed: in the
 same project, or globally (`npm i -g`) next to a global yian.
 
-```console
-$ npm install @modelcontextprotocol/client@2.3.1
+```sh
+npm install @modelcontextprotocol/client@2.3.1
 ```
 
 ## Set up a model provider
@@ -50,17 +50,17 @@ $ npm install @modelcontextprotocol/client@2.3.1
 yian has no built-in model. Each agent step needs a provider (such as `anthropic` or `openai`)
 and a model. The simplest way is to save a login once:
 
-```console
-$ yian auth anthropic
+```sh
+yian auth anthropic
 ```
 
 `yian auth` asks for the API key with a hidden prompt, unless the provider's key variable
 (here `ANTHROPIC_API_KEY`) is set. It then asks which model to use, checks it, and saves both.
 The first provider you set up becomes the default. Pass `--model` to skip the model prompt:
 
-```console
-$ yian auth anthropic --model claude-sonnet-4-5
-$ yian auth ollama --model llama3.2:3b
+```sh
+yian auth anthropic --model claude-sonnet-4-5
+yian auth ollama --model llama3.2:3b
 ```
 
 Useful commands:
@@ -118,16 +118,16 @@ Flows with more than one step list them under `nodes:`; see [Flows and nodes](/f
 
 To check a flow without running it or calling a model, use `yian check`:
 
-```console
-$ yian check hello.yaml
+```sh
+yian check hello.yaml
 ```
 
 ## Run a flow
 
 `yian run` starts the flow and prints its result:
 
-```console
-$ yian run hello.yaml --input name=Ada
+```sh
+yian run hello.yaml --input name=Ada
 ```
 
 - The result goes to stdout, as text for a `str` and as JSON for anything else.
@@ -157,9 +157,9 @@ A run that stops to wait, for example for a person's answer, prints the
 flows in the current folder. It asks before it writes a file or runs a flow, and it needs the
 provider login you set up above.
 
-```console
-$ yian chat
-$ yian chat hello.yaml
+```sh
+yian chat
+yian chat hello.yaml
 ```
 
 Give it a flow to talk about that flow. Type `/exit` or press Ctrl-D to leave. See
@@ -174,8 +174,8 @@ is printed.
 Save [`chat.yaml` and `compact_history.yaml`](/examples/#chatyaml) from the Examples page in
 one folder, then run:
 
-```console
-$ yian run chat.yaml
+```sh
+yian run chat.yaml
 ```
 
 Type a line and press Enter to send it; `/exit` or Ctrl-D ends the chat.

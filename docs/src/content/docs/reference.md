@@ -11,8 +11,8 @@ yian keeps its files, failure and error codes, and the records of a run log.
 Every default and limit yian builds in can be changed with an environment variable: `YIAN_` plus
 the entry's name. `YIAN_MAX_TOTAL_NODES=20000` raises the node budget from 10,000 to 20,000.
 
-```console
-$ YIAN_MAX_TOTAL_NODES=20000 yian run brief.yaml --input topic=climate
+```sh
+YIAN_MAX_TOTAL_NODES=20000 yian run brief.yaml --input topic=climate
 ```
 
 Each entry is in one of three groups:

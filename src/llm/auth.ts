@@ -275,12 +275,18 @@ export const REDACTED = "[REDACTED]";
 /**
  * One form a secret may take in text: its name, its text, whether to compare it
  * case-insensitively, and whether it may be wrapped across line breaks, as base64 is.
+ *
+ * A `wraps` form may give `partial`: its alphabet, and whether the character just before it and
+ * the one just after it hold some of the secret's bits mixed with other bits, as a base64
+ * fragment's can. A match takes each such character that is in the alphabet, and up to two `=` of
+ * padding after the one after.
  */
 export interface SecretForm {
   form: string;
   text: string;
   ignoreCase?: boolean;
   wraps?: boolean;
+  partial?: { alphabet: RegExp; before: boolean; after: boolean };
 }
 
 /** Percent-encode `value`: every character but `A-Za-z0-9_.-~`. */
@@ -353,26 +359,40 @@ export function secretForms(value: string): SecretForm[] {
 
 // Shorter base64 fragments would match too much unrelated text.
 const MIN_BASE64_FRAGMENT = 8;
+// The characters of the standard and the URL-safe base64 alphabets, padding aside.
+const BASE64_ALPHABET = /^[A-Za-z0-9+/]$/;
+const BASE64URL_ALPHABET = /^[A-Za-z0-9_-]$/;
 
 /**
  * Return the base64 forms of `secret`: for each of the three byte alignments, the characters of
  * its standard and URL-safe encoding that only the secret's bits decide, when there are
  * `MIN_BASE64_FRAGMENT` or more. They match in their own letter case only: base64 is
  * case-sensitive. A `Basic` credential holds one, whatever the user name before the secret. Each
- * `wraps`: MIME and PEM bodies break base64 into lines.
+ * `wraps`: MIME and PEM bodies break base64 into lines. Each has a `partial`, as an alignment can
+ * leave a character at either edge that holds some of the secret's bits and some of its
+ * neighbours' or the padding's.
  */
 export function base64Forms(secret: string): SecretForm[] {
   const bytes = Buffer.from(secret, "utf8");
   const forms: SecretForm[] = [];
   for (let pad = 0; pad < 3; pad++) {
     const encoded = Buffer.concat([Buffer.alloc(pad), bytes]).toString("base64");
-    // Character i holds bits [6i, 6i + 6); keep those wholly inside the secret's bits.
-    const start = Math.ceil((8 * pad) / 6);
-    const end = Math.floor((8 * (pad + bytes.length)) / 6);
+    // Character i holds bits [6i, 6i + 6); keep those wholly inside the secret's, [first, last).
+    const first = 8 * pad;
+    const last = 8 * (pad + bytes.length);
+    const start = Math.ceil(first / 6);
+    const end = Math.floor(last / 6);
     const fragment = encoded.slice(start, end);
     if (fragment.length < MIN_BASE64_FRAGMENT) continue;
-    forms.push({ form: "base64", text: fragment, wraps: true });
-    forms.push({ form: "URL-safe base64", text: fragment.replaceAll("+", "-").replaceAll("/", "_"), wraps: true });
+    // Only the characters next to the fragment can hold some of the secret's bits.
+    const [before, after] = [6 * start > first, 6 * end < last];
+    forms.push({ form: "base64", text: fragment, wraps: true, partial: { alphabet: BASE64_ALPHABET, before, after } });
+    forms.push({
+      form: "URL-safe base64",
+      text: fragment.replaceAll("+", "-").replaceAll("/", "_"),
+      wraps: true,
+      partial: { alphabet: BASE64URL_ALPHABET, before, after },
+    });
   }
   return forms;
 }
@@ -463,11 +483,30 @@ function unwrapBase64(text: string): { text: string; source: (index: number) => 
 }
 
 /**
+ * Return the span in `text` of `form`'s match at `at`, with the characters next to it that its
+ * `partial` says hold some of the secret's bits, when they are in its alphabet, and the `=`
+ * padding after them.
+ */
+function matchSpan(text: string, at: number, form: SecretForm): [number, number] {
+  let [start, end] = [at, at + form.text.length];
+  const partial = form.partial;
+  if (partial === undefined) return [start, end];
+  if (partial.before && partial.alphabet.test(text[start - 1] ?? "")) start--;
+  if (partial.after && partial.alphabet.test(text[end] ?? "")) {
+    end++;
+    // A base64 run ends in at most two `=`.
+    for (let padding = 0; padding < 2 && text[end] === "="; padding++) end++;
+  }
+  return [start, end];
+}
+
+/**
  * Replace each match of `forms` in `text` with `marker`.
  *
  * Every match is found in `text` as given, an `ignoreCase` form's in any letter case and a
  * `wraps` form's across each single line break (`\n` or `\r\n`) between two base64 characters,
- * as MIME and PEM bodies wrap base64; matches that overlap are replaced as one, so a form inside a
+ * as MIME and PEM bodies wrap base64. A `wraps` form's match takes the characters its `partial`
+ * names and the padding after them. Matches that overlap are replaced as one, so a form inside a
  * longer one goes with it, while matches that only touch get a marker each. A plain search, not a
  * regular expression, so a form of any length can be looked for.
  *
@@ -486,7 +525,8 @@ export function replaceForms(text: string, forms: Iterable<SecretForm>, marker: 
       // A match is in `text` unwrapped; its last character's index there marks its end.
       const { text: within, source } = (unwrapped ??= unwrapBase64(text));
       for (let at = within.indexOf(form.text); at !== -1; at = within.indexOf(form.text, at + 1)) {
-        matches.push([source(at), source(at + form.text.length - 1) + 1]);
+        const [start, end] = matchSpan(within, at, form);
+        matches.push([source(start), source(end - 1) + 1]);
       }
       continue;
     }
@@ -517,8 +557,9 @@ export function replaceForms(text: string, forms: Iterable<SecretForm>, marker: 
 /**
  * Replace each form of each credential in `text` with `marker`.
  *
- * The forms are `secretForms`', in any letter case, and `base64Forms`', across a line break too;
- * overlapping matches are replaced as one, so a credential that contains a shorter one is replaced whole. Empty
+ * The forms are `secretForms`', in any letter case, and `base64Forms`', across a line break too,
+ * with the characters at their edges that hold some of the secret's bits and the padding after
+ * them; overlapping matches are replaced as one, so a credential that contains a shorter one is replaced whole. Empty
  * credentials are ignored.
  *
  * @param text The text to scrub.

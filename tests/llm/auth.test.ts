@@ -269,11 +269,49 @@ describe("base64Forms", () => {
     expect(forms.every((form) => !form.ignoreCase)).toBe(true);
   });
 
+  test("says, for each alignment, whether the characters next to the fragment hold some of the value's bits", () => {
+    // 25 bytes: at alignments 0, 1 and 2 the value holds bits [0, 200), [8, 208) and [16, 216).
+    const edges = base64Forms("sk-sectest-~~~~~~-05d503c").map(({ partial }) => [partial?.before, partial?.after]);
+    const each = [[false, true], [true, true], [true, false]];
+    expect(edges).toEqual(each.flatMap((edge) => [edge, edge]));
+  });
+
   test("a value too short for an 8-character fragment has none", () => {
     expect(base64Forms("abcde")).toEqual([]);
     expect(base64Forms("")).toEqual([]);
   });
 });
+
+/**
+ * Return where the characters holding any of `key`'s bits start and end in the base64 of
+ * `head` + `key` + anything (UTF-8): character i holds bits [6i, 6i + 6).
+ */
+function keyCharacters(head: string, key: string): [number, number] {
+  const first = 8 * Buffer.byteLength(head);
+  const last = first + 8 * Buffer.byteLength(key);
+  return [Math.floor(first / 6), Math.ceil(last / 6)];
+}
+
+/**
+ * Return `encoded`, the base64 of `head` + `key` + anything, with the characters holding any of
+ * `key`'s bits, and the `=` padding right after them, replaced by `REDACTED`.
+ */
+function withoutKeyBits(encoded: string, head: string, key: string): string {
+  const [start, end] = keyCharacters(head, key);
+  return encoded.slice(0, start) + REDACTED + encoded.slice(end).replace(/^=+/, "");
+}
+
+/** Return the base64 of `text` as a server may quote it: standard, and URL-safe with and without padding. */
+function encodings(text: string): string[] {
+  const standard = Buffer.from(text).toString("base64");
+  const urlSafe = standard.replaceAll("+", "-").replaceAll("/", "_");
+  return [standard, urlSafe, urlSafe.replaceAll("=", "")];
+}
+
+// Keys of 3n, 3n + 1 and 3n + 2 bytes; each "~~~" encodes as "fn5+", so the alphabets differ.
+const PARTIAL_KEYS = ["sk-sectest-~~~~~~-05d503", "sk-sectest-~~~~~~-05d503c", "sk-sectest-~~~~~~-05d503c7"];
+// User names of 0, 2 and 4 bytes put the key at each byte alignment.
+const PARTIAL_HEADS = ["", "u:", "usr:"];
 
 describe("scrub", () => {
   test("replaces a credential", () => {
@@ -341,6 +379,64 @@ describe("scrub", () => {
         // No line holds a run of the key's base64 that MIN_BASE64_FRAGMENT would match.
         const joined = text.replace(/\r?\n/g, "");
         for (const form of base64Forms(key)) expect(joined).not.toContain(form.text);
+      }
+    }
+  });
+
+  test("a base64 match takes the characters that mix the credential's bits with others, and their padding, and no more", () => {
+    for (const key of PARTIAL_KEYS) {
+      for (const head of PARTIAL_HEADS) {
+        // Alone, or with other bytes after it in the same base64 run.
+        for (const tail of ["", ":other-bytes"]) {
+          for (const encoded of encodings(head + key + tail)) {
+            const expected = `Basic ${withoutKeyBits(encoded, head, key)} rejected`;
+            expect(scrub(`Basic ${encoded} rejected`, [key])).toBe(expected);
+          }
+        }
+      }
+    }
+    // A 17-byte key's base64 ends in a character holding its last 4 bits, then "=".
+    const key = "sk-sectest-05d50z";
+    const encoded = Buffer.from(key).toString("base64");
+    expect(encoded).toEndWith("o=");
+    expect(scrub(`echo ${encoded}.`, [key])).toBe(`echo ${REDACTED}.`);
+  });
+
+  test("a base64 match takes a mixed character only from its own alphabet", () => {
+    // 25 bytes: the character after the first alignment's fragment holds 2 of the key's bits.
+    const key = PARTIAL_KEYS[1]!;
+    const [standard, urlSafe] = base64Forms(key);
+    expect(standard!.text).toContain("+");
+    expect(urlSafe!.text).toContain("-");
+    // The other alphabet's characters, padding and punctuation are not part of the run.
+    for (const after of ["-", "_", "=", ".", '"', " "]) {
+      expect(scrub(`${standard!.text}${after}x`, [key])).toBe(`${REDACTED}${after}x`);
+    }
+    for (const after of ["+", "/", "=", "."]) {
+      expect(scrub(`${urlSafe!.text}${after}x`, [key])).toBe(`${REDACTED}${after}x`);
+    }
+    expect(scrub(`${standard!.text}/=x`, [key])).toBe(`${REDACTED}x`);
+    expect(scrub(`${urlSafe!.text}_==x`, [key])).toBe(`${REDACTED}x`);
+  });
+
+  test("a wrapped base64 match takes its mixed characters wherever the line break falls", () => {
+    const key = PARTIAL_KEYS[1]!;
+    for (const head of PARTIAL_HEADS) {
+      for (const tail of ["", ":other-bytes"]) {
+        const [start, end] = keyCharacters(head, key);
+        for (const encoded of encodings(head + key + tail)) {
+          const expected = withoutKeyBits(encoded, head, key);
+          // Every break between two characters before the padding.
+          for (let at = 1; at < encoded.replace(/=+$/, "").length; at++) {
+            for (const lineBreak of ["\n", "\r\n"]) {
+              const text = `Basic\n${encoded.slice(0, at)}${lineBreak}${encoded.slice(at)}\nrejected`;
+              // A break among the redacted characters goes with them; one outside them stays.
+              const kept = at <= start ? at : at >= end ? at + start + REDACTED.length - end : null;
+              const scrubbed = kept === null ? expected : expected.slice(0, kept) + lineBreak + expected.slice(kept);
+              expect(scrub(text, [key])).toBe(`Basic\n${scrubbed}\nrejected`);
+            }
+          }
+        }
       }
     }
   });

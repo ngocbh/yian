@@ -455,6 +455,17 @@ describe("redact", () => {
     expect(text).not.toContain("-longer-1234");
   });
 
+  test("a key's base64 copy goes whole: the characters that mix its bits with others and the padding go too", () => {
+    // 17 bytes, so its base64 ends in "o=": the "o" holds the key's last 4 bits.
+    const key = "sk-sentinel-zqxwz";
+    expect(redactKey("provided: c2stc2VudGluZWwtenF4d3o=.", key)).toBe("provided: [REDACTED].");
+    // After a user name, as a Basic credential holds it; the characters of the name alone stay.
+    expect(redactKey("Basic dXNlcjpzay1zZW50aW5lbC16cXh3eg== rejected", key)).toBe("Basic dXNlcj[REDACTED] rejected");
+    expect(redactKey("Basic dXNlcjpzay1zZW50aW5lbC16cXh3eg rejected", key)).toBe("Basic dXNlcj[REDACTED] rejected");
+    const short = "sk-sentinel-zqxw";
+    expect(redactKeys("Basic dXNyOnNrLXNlbnRpbmVsLXpxeHc= rejected", [short])).toBe("Basic dXNyO[REDACTED] rejected");
+  });
+
   test("encoded and masked echoes of keys with /, a space, ~, ], \\, [ and ^ are removed", () => {
     const key = "sk/sent inel~scr]ub-zqxw";
     const json = JSON.stringify(key).slice(1, -1).replaceAll("/", "\\/");

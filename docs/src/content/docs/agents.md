@@ -313,7 +313,7 @@ and the model reads an error result instead:
 
 | The model | It reads |
 |---|---|
-| Sends arguments that aren't valid JSON, or that hold more than `YIAN_MAX_RECEIVED_JSON_VALUES` values or nest more than 512 levels | `Arguments for <tool> are not valid JSON; send them as one JSON object.` |
+| Sends arguments that aren't valid JSON, or that hold more than `YIAN_MAX_RECEIVED_JSON_VALUES` values | `Arguments for <tool> are not valid JSON; send them as one JSON object.` |
 | Calls a tool it wasn't granted | `Unavailable tool: <tool>` |
 | Sends arguments the tool's schema or validator refuses | The check's message |
 | Still calls tools at `max_tool_iterations: N` | `Tool-call limit reached (N turns). No more tool calls will run; give your final answer now.` |
@@ -322,7 +322,8 @@ The model's reply after the cap is the last. If it still calls tools, they get t
 and its text is the output. A structured agent then makes its structured call.
 
 A reply that gives two tool calls the same id, or whose arguments nest deeper than
-`YIAN_MAX_VALUE_NESTING` but at most 512 levels, still fails the node.
+`YIAN_MAX_VALUE_NESTING`, however deep, still fails the node. So do arguments that nest too deep
+before they pass `YIAN_MAX_RECEIVED_JSON_VALUES` values.
 
 ### MCP servers
 

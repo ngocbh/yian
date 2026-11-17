@@ -137,8 +137,9 @@ An entry whose valid values say "can only be lowered" has its default as its max
 - A JSON text from a provider or MCP server past `YIAN_MAX_RECEIVED_JSON_VALUES`, or nested more
   than 512 levels, is refused as it is read. A model call then fails with a `protocol` error and is
   not retried; an MCP server over stdio is closed, and its call fails naming the bound. Tool-call
-  arguments or a structured reply past a bound count as text that isn't JSON: the agent's model
-  reads an error and tries again.
+  arguments or a structured reply with more values than that count as text that isn't JSON: the
+  agent's model reads an error and tries again. Their nesting is held to `YIAN_MAX_VALUE_NESTING`
+  alone, however deep it goes.
 
 ## Environment variables
 

@@ -8,8 +8,9 @@
  * returns, which owns and closes the underlying connection.
  */
 
-import { YianTypeError } from "../typesys/errors.ts";
-import { JSONDecodeError, type JsonObject } from "../typesys/json.ts";
+import { current } from "../defaults.ts";
+import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
+import { JSONBoundError, JSONDecodeError, type JsonObject, parseJson } from "../typesys/json.ts";
 import { parseReceivedJson, ProviderError } from "./errors.ts";
 import {
   checkJsonValue,
@@ -160,15 +161,10 @@ function escapeControls(text: string): string {
  * accepted inside strings.
  *
  * @param text The arguments text as the model sent it.
- * @param options `anyDepth` drops the nesting limit, for a caller that checks the depth of the
- *   value it reads out of the object; the received-JSON bounds still apply.
  * @returns `[object, null]` on success, `[null, text]` on any failure, so the caller can
  *   apply its own checks to the raw text.
  */
-export function parseArguments(
-  text: string,
-  options: { anyDepth?: boolean } = {},
-): [JsonObject | null, string | null] {
+export function parseArguments(text: string): [JsonObject | null, string | null] {
   if (text === "") return [{}, null];
   try {
     // Models send raw tabs and newlines inside string values, which the provider SDKs
@@ -176,11 +172,58 @@ export function parseArguments(
     const value = parseReceivedJson(escapeControls(text));
     if (typeof value !== "object" || value === null || Array.isArray(value)) return [null, text];
     // `parseJson` already refuses everything else `checkJsonValue` does, at any depth.
-    if (!options.anyDepth) checkJsonValue(value, "");
+    checkJsonValue(value, "");
     return [value, null];
   } catch (error) {
     if (error instanceof JSONDecodeError || error instanceof MessageFormatError) return [null, text];
     throw error;
+  }
+}
+
+/**
+ * A text `parseDeepArguments` stopped at the received value bound after it had nested past
+ * `YIAN_MAX_VALUE_NESTING`: too deep either way, but with no value built to say where.
+ */
+export class ArgumentsTooDeepError extends YianRangeError {
+  override name = "ArgumentsTooDeepError";
+  /** The nesting limit the text passed. */
+  readonly limit: number;
+
+  constructor(limit: number) {
+    super(`value nests deeper than ${limit} levels, the limit for a yian value (each record and list is a level)`);
+    this.limit = limit;
+  }
+}
+
+/**
+ * Parse a tool call's arguments text, or a structured reply's, for a caller that checks the depth
+ * of the object itself: as `parseArguments`, but at any depth, within only the received value
+ * bound (`YIAN_MAX_RECEIVED_JSON_VALUES`), so the caller can say where a deep value passes
+ * `YIAN_MAX_VALUE_NESTING`.
+ *
+ * @returns The object; `null` when the text is not one, or holds more values than the bound.
+ * @throws {ArgumentsTooDeepError} The value bound stopped the read after the text had nested past
+ *   the limit.
+ */
+export function parseDeepArguments(text: string): JsonObject | null {
+  if (text === "") return {};
+  const escaped = escapeControls(text);
+  const maxValues = current().maxReceivedJsonValues;
+  try {
+    const value = parseJson(escaped, "plain", { maxValues });
+    return typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
+  } catch (error) {
+    if (!(error instanceof JSONDecodeError)) throw error;
+    if (error instanceof JSONBoundError) {
+      // Read again up to the nesting limit, so the bound the text passes first decides.
+      const limit = current().maxValueNesting;
+      try {
+        parseJson(escaped, "plain", { maxValues, maxDepth: limit });
+      } catch (again) {
+        if (again instanceof JSONBoundError && again.bound === "depth") throw new ArgumentsTooDeepError(limit);
+      }
+    }
+    return null;
   }
 }
 

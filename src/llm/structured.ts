@@ -15,7 +15,7 @@ import { YianTypeError } from "../typesys/errors.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { encodeBody } from "./body.ts";
 import { modelProfile } from "./capabilities.ts";
-import { type ChatModel, parseArguments, type StructuredOutput } from "./events.ts";
+import { ArgumentsTooDeepError, type ChatModel, parseDeepArguments, type StructuredOutput } from "./events.ts";
 import { RouteModel } from "./executor.ts";
 import {
   anthropicOutputSchema,
@@ -257,8 +257,12 @@ function fenced(text: string): string {
 /**
  * Return the JSON object a model's text reply holds, or `null`: the text stripped of whitespace
  * and backticks, or else the text inside its first code fence up to the last one, must be one JSON
- * object, with no repair. Duplicate keys and lone surrogates are refused. The object may nest past
+ * object, with no repair. Duplicate keys and lone surrogates are refused, and so is a text holding
+ * more than `YIAN_MAX_RECEIVED_JSON_VALUES` values. The object may nest past
  * `YIAN_MAX_VALUE_NESTING`: the caller checks the value it holds.
+ *
+ * @throws {StructuredOutputError} `structured output: value nests deeper than ...` for a text the
+ *   value bound stopped after it had nested past the limit.
  */
 export function parseObjectReply(text: string): JsonObject | null {
   return parseObject(strip(text)) ?? parseObject(fenced(text));
@@ -266,10 +270,16 @@ export function parseObjectReply(text: string): JsonObject | null {
 
 /**
  * Return the JSON object `text` holds, at any depth, or `null`; an empty text holds none (checked
- * here because `parseArguments` reads `""` as `{}`).
+ * here because `parseDeepArguments` reads `""` as `{}`).
  */
 function parseObject(text: string): JsonObject | null {
-  return text === "" ? null : parseArguments(text, { anyDepth: true })[0];
+  if (text === "") return null;
+  try {
+    return parseDeepArguments(text);
+  } catch (error) {
+    if (!(error instanceof ArgumentsTooDeepError)) throw error;
+    throw new StructuredOutputError(`structured output: ${error.message}`);
+  }
 }
 
 /**

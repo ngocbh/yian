@@ -9,11 +9,13 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { BUILTIN, install } from "../../src/defaults.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
 import {
+  ArgumentsTooDeepError,
   collect,
   type Event,
   EventStream,
   Finish,
   parseArguments,
+  parseDeepArguments,
   PartDone,
   ReasoningDelta,
   ReplyAssembler,
@@ -57,6 +59,7 @@ async function drain(stream: EventStream): Promise<Event[]> {
 describe("parseArguments", () => {
   test("empty text is an empty object", () => {
     expect(parseArguments("")).toEqual([{}, null]);
+    expect(parseDeepArguments("")).toEqual({});
   });
 
   test("object", () => {
@@ -79,8 +82,8 @@ describe("parseArguments", () => {
     install({ ...BUILTIN, maxValueNesting: 3 });
     expect(parseArguments('{"a": {"b": [1]}}')).toEqual([{ a: { b: [1n] } }, null]);
     expect(parseArguments('{"a": {"b": [[1]]}}')).toEqual([null, '{"a": {"b": [[1]]}}']);
-    expect(parseArguments('{"a": {"b": [[1]]}}', { anyDepth: true })).toEqual([{ a: { b: [[1n]] } }, null]);
-    expect(parseArguments('{"a": NaN}', { anyDepth: true })).toEqual([null, '{"a": NaN}']);
+    expect(parseDeepArguments('{"a": {"b": [[1]]}}')).toEqual({ a: { b: [[1n]] } });
+    expect(parseDeepArguments('{"a": NaN}')).toBeNull();
   });
 
   test.each(['{"a": "\\ud800"}', '{"\\udfff": 1}', '{"a": "\ud800"}'])("unpaired surrogate %p is a failure", (text) => {
@@ -91,18 +94,39 @@ describe("parseArguments", () => {
     expect(parseArguments('{"a": "\\ud83d\\ude00"}')).toEqual([{ a: "\u{1f600}" }, null]);
   });
 
-  test("a text past the received-JSON value bound fails, at any depth limit", () => {
+  test("a text past the received-JSON value bound fails, read at any depth too", () => {
     install({ ...BUILTIN, maxReceivedJsonValues: 3 });
     expect(parseArguments('{"a": [1]}')).toEqual([{ a: [1n] }, null]);
     const wide = '{"a": [1, 2]}';
     expect(parseArguments(wide)).toEqual([null, wide]);
-    expect(parseArguments(wide, { anyDepth: true })).toEqual([null, wide]);
+    expect(parseDeepArguments(wide)).toBeNull();
   });
 
-  test("anyDepth still refuses a text nested past 512 levels", () => {
+  test("a text nested past 512 levels fails, and is read at any depth for its caller's depth check", () => {
     const nested = (levels: number) => '{"a": '.repeat(levels - 1) + "{}" + "}".repeat(levels - 1);
-    expect(parseArguments(nested(512), { anyDepth: true })[0]).not.toBeNull();
-    expect(parseArguments(nested(513), { anyDepth: true })).toEqual([null, nested(513)]);
+    expect(parseArguments(nested(513))).toEqual([null, nested(513)]);
+    expect(parseDeepArguments(nested(1500))).not.toBeNull();
+  });
+
+  test("read at any depth, a text the value bound stops is too deep if it already nested past the limit", () => {
+    install({ ...BUILTIN, maxValueNesting: 3, maxReceivedJsonValues: 5 });
+    // The fourth record, the fourth value, passes the limit before the list passes the value bound.
+    const deep = '{"a": {"b": {"c": {"d": 1}}}, "e": [1, 2]}';
+    const error = (() => {
+      try {
+        parseDeepArguments(deep);
+      } catch (thrown) {
+        return thrown;
+      }
+      return null;
+    })();
+    expect(error).toBeInstanceOf(ArgumentsTooDeepError);
+    expect((error as ArgumentsTooDeepError).limit).toBe(3);
+    expect((error as Error).message).toBe(
+      "value nests deeper than 3 levels, the limit for a yian value (each record and list is a level)",
+    );
+    // Here the list passes the value bound first.
+    expect(parseDeepArguments('{"e": [1, 2, 3, 4, 5], "a": {"b": {"c": {"d": 1}}}}')).toBeNull();
   });
 
   test("deep brackets fail without a stack overflow", () => {

@@ -35,7 +35,7 @@ import { FunctionTool, type StandardSchemaV1 } from "../../src/tools/function_to
 import { asToolGrant, expandGrants, type GrantedTool, requestToolSpecs } from "../../src/tools/grants.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import type { JsonObject, JsonValue } from "../../src/typesys/json.ts";
-import { Type, type ValueRecord, ValueKind } from "../../src/typesys/values.ts";
+import { Type, TypeCheckError, type ValueRecord, ValueKind } from "../../src/typesys/values.ts";
 import { rejected, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
@@ -170,16 +170,32 @@ test("an unparsed call gets an error result the model reads, never reaching its 
   await expectRebuilt(run, 2);
 });
 
-test("a call whose arguments nest past the received-JSON bound gets the unparsed error result, not a failed node", async () => {
+test("arguments the received value bound stops after they nest past the limit fail the node as too deep", async () => {
+  install({ ...BUILTIN, modelRetries: 0, maxReceivedJsonValues: 200 });
   const log: string[] = [];
-  const deep = '{"n": '.repeat(513) + "1" + "}".repeat(513);
+  // 150 records, then a list of 101 ints: the read stops past 200 values, after the 101st level.
+  const deep = '{"n": '.repeat(150) + `[${"1, ".repeat(100)}1]` + "}".repeat(150);
   const model = new ScriptedModel([reply(call(0, "a", deep)), textReply("done")], CONFIG);
+  const run = agent(model, new ToolSet({ a: instant("a", log) }), ["a"]);
+
+  const error = (await rejected(run.running)) as Error;
+  expect(error).toBeInstanceOf(TypeCheckError);
+  expect(error.message).toBe(
+    "tool call 'a' arguments: value nests deeper than 100 levels, the limit for a yian value (each record and list is a level)",
+  );
+  expect(log).toEqual([]);
+});
+
+test("arguments the received value bound stops before any nesting past the limit get the unparsed error result", async () => {
+  install({ ...BUILTIN, modelRetries: 0, maxReceivedJsonValues: 200 });
+  const log: string[] = [];
+  const wide = `{"m": [${"1, ".repeat(250)}1], "n": ` + '{"n": '.repeat(150) + "1" + "}".repeat(151);
+  const model = new ScriptedModel([reply(call(0, "a", wide)), textReply("done")], CONFIG);
   const run = agent(model, new ToolSet({ a: instant("a", log) }), ["a"]);
 
   expect(((await run.running) as Output).value).toBe("done");
   expect(log).toEqual([]);
   expect(toolResults(model, 1)).toEqual([result(0, "a", unparsedText("a"), true)]);
-  await expectRebuilt(run, 2);
 });
 
 test("the request after an unparsed call answers every call, through the Anthropic and OpenAI Chat adapters", async () => {

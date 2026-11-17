@@ -2062,7 +2062,7 @@ function readSections(options: AssembleOptions, ctx: AssembleContext): ReadSecti
   const descriptors = splitTypedLlmConfig(typedInputs, nodesCursor, splitOptions);
   const [outputsSection, outputTypes] = splitTypedOutputs(options.outputsSection, outputsCursor, splitOptions);
 
-  // A case branch names a node or calls a flow, and a case has no `output:`. Runs BEFORE the
+  // A case branch names a node or makes a `call(...)`, and a case has no `output:`. Runs BEFORE the
   // inline-call desugar so a branch's text is still as authored.
   checkCaseBranches(descriptors, {
     outputAt: (nodeId) => caseOutputCursor(nodesCursor, nodeId, { diagnostics }),

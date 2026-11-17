@@ -587,7 +587,7 @@ describe("the CASE build", () => {
 
     const error = loadError(() => assembleText(text));
 
-    expect(error.message).toContain("a branch names a node or calls a flow");
+    expect(error.message).toContain("a branch names a node or makes a `call(...)`");
     expect(startLine(error)).toBe(lineOf(text, marker));
   });
 

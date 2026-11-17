@@ -180,7 +180,7 @@ output: \${hot.output | cold.output}
   // The tag makes the branch the text `hot`, as in a value entry, not the node.
   expectError(
     text,
-    "case node 'route' then: a branch names a node or calls a flow; put the value " +
+    "case node 'route' then: a branch names a node or makes a `call(...)`; put the value " +
       "in an entry in `nodes:` and name that entry",
     "        then: !str hot",
   );

@@ -66,8 +66,8 @@ const run = async (text: string, inputs: Record<string, unknown>) => runFlow(awa
 
 /** Return the full message for a value branch of `gate`. */
 const valueBranch = (label: string) =>
-  `case node 'gate' ${label}: a branch names a node or calls a flow; put the value in an entry ` +
-  "in `nodes:` and name that entry";
+  `case node 'gate' ${label}: a branch names a node or makes a \`call(...)\`; put the value in an ` +
+  "entry in `nodes:` and name that entry";
 
 /** Return the 1-based line number of the first line containing `needle`. */
 const lineOf = (text: string, needle: string) => text.split("\n").findIndex((line) => line.includes(needle)) + 1;

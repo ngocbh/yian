@@ -31,7 +31,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: "case node 'gate' then: a branch names a node or calls a flow; put the value in an entry in `nodes:` and name that entry"
+      message: "case node 'gate' then: a branch names a node or makes a `call(...)`; put the value in an entry in `nodes:` and name that entry"
       frames:
       - label: flow.yaml
         range: [25, 15, 25, 38]

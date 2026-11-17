@@ -1,0 +1,8 @@
+# A prompt reads its node's input named `item` by bare name; the MAP item is never in scope there.
+kind: expr
+mode: strict
+template: "Say ${item.name}, ${item}"
+values:
+  item: {name: Ada}
+expect:
+  value: 'Say Ada, {"name":"Ada"}'

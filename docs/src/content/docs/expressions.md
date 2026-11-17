@@ -117,9 +117,9 @@ There is no record literal. Write a record as a YAML mapping (`!object {a: 1}`) 
 | `f.uri`, `f.mime`, `f.name` | A field of a [file](/types/#files) |
 | `system.today`, `system.now` | Today's date and the current time, in UTC, read once per run |
 | `system.run_id` | The run's id |
-| `item` | The current item, inside a `map` (see [Control flow](/control-flow/)) |
+| `item` | The current item, in a `map` node's `input:` (see [Control flow](/control-flow/)) |
 | `draft.new_messages` | The messages agent `draft` added (see [Agents](/agents/)) |
-| `qty` | A node's own input, in its prompt and asserts |
+| `qty` | A node's own input, in its prompt and asserts, even one named `item` |
 | `output`, `output.amount` | A node's own result, in its asserts |
 
 A dot reads a field. When the loader knows a value's type, reading a field the type doesn't have

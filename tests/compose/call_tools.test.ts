@@ -85,7 +85,7 @@ test.each<[string, string, string]>([
   // A bare name.
   ["sleep, input: {for: 1s}", "", "tool sleep"],
   ["ask_user, input: {prompt: hi}", "", "tool ask"],
-  ["load_skill", "", "node 'n' (kind=call): tool id `load_skill` is reserved by yian"],
+  ["load_skill", "", "node 'n': `call: load_skill`: `load_skill` is reserved by yian"],
   ["greet", "", "flow greet"],
   ["clean", "", "flow clean"],
   ["billing", "", "call node 'n': callable 'billing' is a library; name a def: `call: {billing: quote}`"],
@@ -112,14 +112,14 @@ test.each<[string, string, string]>([
   [
     "{greet: x}",
     "",
-    "node 'n': `greet` is a flow, not a library; a tool group named `greet` is shadowed in this file, so rename " +
-      "the def to reach it",
+    "call node 'n': `greet` is a flow, not a library; a tool group named `greet` is shadowed in this file, so " +
+      "rename the def to reach it",
   ],
   [
     "{clean: x}",
     "",
-    "node 'n': `clean` is a flow, not a library; a tool group named `clean` is shadowed in this file, so rename " +
-      "the alias to reach it",
+    "call node 'n': `clean` is a flow, not a library; a tool group named `clean` is shadowed in this file, so " +
+      "rename the alias to reach it",
   ],
   ["{one: quote}", "", "node 'n': `one` is one tool, ./tools.ts:quote; write `call: one`"],
   ["{github: search}", "", "tool github_search"],
@@ -410,8 +410,9 @@ test("run start spells an inline call's tool and the names it offers as the call
   );
   const text = `id: r\nname: r\nnodes:\n  n: ${inlineNode("call(github_serch)")}\n`;
   const run = runFlow(await loadFlow(text), {}, { env: hostEnv(tmp), tools: { github: [hostTool("search")] } });
-  expect(((await run.catch((caught: unknown) => caught)) as Error).message).toEndWith(
-    "; did you mean `github.search`?",
+  expect(((await run.catch((caught: unknown) => caught)) as Error).message).toBe(
+    "node 'n' input 'x' call(github_serch) names tool 'github_serch', which isn't in this run's tools; " +
+      'known tools: ["github.search"]; did you mean `github.search`?',
   );
 });
 
@@ -496,7 +497,11 @@ test.each<[string, string, string]>([
   ["call(sleep, for=1s)", "", "tool sleep"],
   ["call(take, from=${input.inbox})", "  inbox: !Inbox(str)\n", "tool take"],
   ["call(ask_user, prompt=hi)", "", "tool ask"],
-  ["call(load_skill)", "", "node 'n' input 'x' call(load_skill): tool id `load_skill` is reserved by yian"],
+  [
+    "call(load_skill)",
+    "",
+    "node 'n' input 'x' call(load_skill): `call(load_skill, ...)`: `load_skill` is reserved by yian",
+  ],
   ["call(greet)", "", "flow greet"],
   ["call(billing.quote)", "", "flow billing.quote"],
   ["call(one, qty=3)", "", "tool one module one"],
@@ -670,9 +675,9 @@ test.each([
   ],
   [
     "{crm: sleep}",
-    "node 'n' (kind=map): `call: {crm: sleep}`: sleep is a built-in, not a group's tool; write `call: sleep`",
+    "map node 'n': `call: {crm: sleep}`: sleep is a built-in, not a group's tool; write `call: sleep`",
   ],
-  ["load_skill", "map node 'n': tool id `load_skill` is reserved by yian"],
+  ["load_skill", "map node 'n': `call: load_skill`: `load_skill` is reserved by yian"],
   ["lessons", "map node 'n': `lessons` is a memory input; name one of its tools: `call: {lessons: <tool>}`"],
   [
     "{greet: x}",
@@ -694,11 +699,11 @@ test.each([
   ["{github: search}", "tool github_search"],
   ["{lessons: read}", "tool lessons_read memory"],
   ["{crm: lookup}", "tool crm_lookup module crm"],
-  ["load_skill", "loop node 'n': tool id `load_skill` is reserved by yian"],
+  ["load_skill", "loop node 'n': `call: load_skill`: `load_skill` is reserved by yian"],
   ["lessons", "loop node 'n': `lessons` is a memory input; name one of its tools: `call: {lessons: <tool>}`"],
   [
     "{crm: take}",
-    "node 'n' (kind=loop): `call: {crm: take}`: take is a built-in, not a group's tool; write `call: take`",
+    "loop node 'n': `call: {crm: take}`: take is a built-in, not a group's tool; write `call: take`",
   ],
   [
     "{greet: x}",

@@ -125,7 +125,7 @@ import { inferDataEdges } from "../edges/data.ts";
 import { hostControlEdges } from "../edges/hosts.ts";
 import { inferOrderingEdges } from "../edges/ordering.ts";
 import { bindingProducers } from "../edges/producers.ts";
-import { CallDescriptor, type CallsTool, inboxInputError } from "../nodes/call.ts";
+import { CallDescriptor, type CallsTool, toolInboxError } from "../nodes/call.ts";
 import { CaseDescriptor } from "../nodes/case.ts";
 import { LoopDescriptor } from "../nodes/loop.ts";
 import { MapDescriptor } from "../nodes/map.ts";
@@ -1881,14 +1881,18 @@ function callsToolRule(scope: CallableScope, memories: ReadonlySet<string>, diag
     scope.section(name) === "uses" && scope.toolModule(name) === null && scope.resolve(name).library !== null;
   return (nodeId, call, range, { site = null, kind = "call" } = {}) => {
     const onCall = kind === "call";
-    const subject = site ?? `${onCall ? "node" : `${kind} node`} ${reprText(nodeId)}`;
-    const fail = (message: string) => diagnostics.error(`${subject}: ${message}`, { range });
+    // Named as the node's other messages name it: a call node naming a tool as its TOOL node
+    // (`node 'n'`), one naming a flow as its CALL node (`call node 'n'`), a map or loop by its kind.
+    const fail = (message: string, { flow = false } = {}) => {
+      const subject = site ?? `${onCall && !flow ? "" : `${kind} `}node ${reprText(nodeId)}`;
+      return diagnostics.error(`${subject}: ${message}`, { range });
+    };
     /**
      * Built-in `name`, as `written`; a map or loop refuses `load_skill` as the TOOL node does, and a
      * map refuses `take`.
      */
     const builtin = (name: string, written = `call: ${name}`): true => {
-      if (name === LOAD_SKILL && !onCall) throw fail(`tool id \`${LOAD_SKILL}\` is reserved by yian`);
+      if (name === LOAD_SKILL && !onCall) throw fail(`\`${written}\`: \`${LOAD_SKILL}\` is reserved by yian`);
       if (name === TAKE && kind === "map") {
         throw fail(
           `\`${written}\` reads an inbox, and a map can't give each item its own (per-instance inboxes aren't ` +
@@ -1930,6 +1934,7 @@ function callsToolRule(scope: CallableScope, memories: ReadonlySet<string>, diag
     throw fail(
       `\`${group}\` is a flow, not a library; a tool group named \`${group}\` is shadowed in this file, ` +
         `so rename the ${named} to reach it`,
+      { flow: true },
     );
   };
 }
@@ -2313,9 +2318,10 @@ function buildNodes(
       // binding yian generated. A loop's `take` reads the inbox it carries, under its own checks,
       // and one named in a group gets the TOOL node's refusal of the group.
       const argument = body.toolInputs.get(key) ?? key;
-      if (body.toolRef !== null && body.toolRef.name !== TAKE && isInboxType(canonical)) {
+      const tool = body.tool;
+      if (tool !== null && body.toolRef?.name !== TAKE && isInboxType(canonical)) {
         const kind = descriptor instanceof LoopDescriptor ? "loop" : "map";
-        throw diagnostics.error(inboxInputError(kind, descriptor.id, `tool \`${body.tool}\``, argument), {
+        throw diagnostics.error(toolInboxError(kind, descriptor.id, tool, argument), {
           range: bindingRange,
         });
       }

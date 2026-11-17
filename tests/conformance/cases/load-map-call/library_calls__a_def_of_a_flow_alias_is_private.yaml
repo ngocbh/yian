@@ -31,7 +31,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'node ''tidy'': `clean` is a flow, not a library; a tool group named `clean` is shadowed in this file, so rename the alias to reach it'
+      message: 'call node ''tidy'': `clean` is a flow, not a library; a tool group named `clean` is shadowed in this file, so rename the alias to reach it'
       frames:
       - label: flow.yaml
         range: [8, 11, 8, 24]

@@ -193,7 +193,11 @@ export class CallDescriptor extends NodeDescriptor {
       // A def the body calls can get an inbox only from the body, so the body's own inputs
       // cover its whole subtree.
       for (const input of sig.inputs) {
-        if (isInboxType(input.contract?.type)) errors.push(inboxInputError("map", this.id, display, input.name));
+        if (!isInboxType(input.contract?.type)) continue;
+        errors.push(
+          `map node ${reprText(this.id)}: ${display} declares inbox input ${reprText(input.name)}; a map body ` +
+            "can't read an inbox (per-instance inboxes aren't supported yet)",
+        );
       }
       if (sig.outputNames.length === 0) {
         errors.push(
@@ -225,15 +229,15 @@ export class CallDescriptor extends NodeDescriptor {
 }
 
 /**
- * Why the `kind` node `nodeId` can't call `display`, which declares inbox input `input`: any body of
- * a map, or a loop's tool other than `take`.
+ * Why the map or loop `nodeId` can't pass inbox `argument` to its tool `tool`, other than `take`:
+ * only `take` reads an inbox.
  */
-export function inboxInputError(kind: "map" | "loop", nodeId: string, display: string, input: string): string {
-  const why =
-    kind === "map"
-      ? "a map body can't read an inbox (per-instance inboxes aren't supported yet)"
-      : "only `take` reads an inbox (a loop passes every carried field to its tool)";
-  return `${kind} node ${reprText(nodeId)}: ${display} declares inbox input ${reprText(input)}; ${why}`;
+export function toolInboxError(kind: "map" | "loop", nodeId: string, tool: string, argument: string): string {
+  const why = kind === "map" ? ", so take before the map" : " (a loop passes every carried field to its tool)";
+  return (
+    `${kind} node ${reprText(nodeId)}: passes inbox ${reprText(argument)} to tool \`${tool}\`; only \`take\` ` +
+    `reads an inbox${why}`
+  );
 }
 
 /** Return the type `list(element)`, a MAP's output, stored as `resolveType` stores a list. */

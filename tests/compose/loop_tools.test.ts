@@ -112,17 +112,17 @@ test("adaptive_questions: moves to the body's node on a loop over ask", async ()
 
 // Each row: the loop's `call:` and other lines, the load error, and the text it points at.
 test.each([
-  ["status", `${POLL}    retries: -1\n`, "node 'poll' (kind=loop): `retries:` must be a non-negative integer, got -1", "-1"],
+  ["status", `${POLL}    retries: -1\n`, "loop node 'poll': `retries:` must be a non-negative integer, got -1", "-1"],
   [
     "{crm: sleep}",
     POLL,
-    "node 'poll' (kind=loop): `call: {crm: sleep}`: sleep is a built-in, not a group's tool; write `call: sleep`",
+    "loop node 'poll': `call: {crm: sleep}`: sleep is a built-in, not a group's tool; write `call: sleep`",
     "{crm: sleep}",
   ],
   [
     "{lessons: raed}",
     POLL,
-    "node 'poll' (kind=loop): `call: {lessons: raed}`: `lessons` has no tool `raed`",
+    "loop node 'poll': `call: {lessons: raed}`: `lessons` has no tool `raed`",
     "{lessons: raed}",
   ],
   [
@@ -134,7 +134,7 @@ test.each([
   [
     "status",
     `${POLL}    adaptive_questions: {prompt: hi}\n`,
-    "node 'poll' (call: status): `adaptive_questions:` applies only to call: ask",
+    "loop node 'poll' (call: status): `adaptive_questions:` applies only to call: ask",
     "adaptive_questions",
   ],
   [
@@ -160,7 +160,7 @@ test.each([
 test("a tool other than take given an inbox gets the loop's inbox rule, naming the tool", async () => {
   const text = loopApp("status", "    input:\n      box: ${input.box}\n    times: 1\n", "  box: !Inbox(str)\n");
   expect((await failure(text))[0]).toBe(
-    "loop node 'poll': tool `status` declares inbox input 'box'; only `take` reads an inbox (a loop passes every " +
+    "loop node 'poll': passes inbox 'box' to tool `status`; only `take` reads an inbox (a loop passes every " +
       "carried field to its tool)",
   );
 });
@@ -168,14 +168,14 @@ test("a tool other than take given an inbox gets the loop's inbox rule, naming t
 test("take named in a group and given an inbox gets the call node's refusal of the group", async () => {
   const text = loopApp("{crm: take}", "    input:\n      from: ${input.box}\n    times: 1\n", "  box: !Inbox(str)\n");
   expect((await failure(text))[0]).toBe(
-    "node 'poll' (kind=loop): `call: {crm: take}`: take is a built-in, not a group's tool; write `call: take`",
+    "loop node 'poll': `call: {crm: take}`: take is a built-in, not a group's tool; write `call: take`",
   );
 });
 
 test("take carrying the fields it returns fails its own input rule, saying a loop passes them all", async () => {
   const lines = "    input:\n      from: ${input.box}\n      events: !list(str) []\n      closed: false\n    until: closed\n";
   expect((await failure(loopApp("take", lines, "  box: !Inbox(str)\n")))[0]).toBe(
-    "node 'poll' (call: take): take takes from, take and timeout; got 'events' (a loop passes " +
+    "loop node 'poll' (call: take): take takes from, take and timeout; got 'events' (a loop passes " +
       "every carried field to its tool)",
   );
 });

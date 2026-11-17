@@ -79,7 +79,8 @@ test("a literal argument goes straight to the body's node; only a binding is a b
   expect((await bodyNode(text)).params!.map((parameter) => parameter.name)).toEqual(["q", "limit", "tags"]);
 });
 
-// Each row: a built-in and literal arguments that a `call` node refuses at load.
+// Each row: a built-in and literal arguments that a `call` node refuses at load; the map's message
+// names the map.
 test.each([
   ["sleep", "{for: 5}"],
   ["sleep", "{for: soon}"],
@@ -88,8 +89,8 @@ test.each([
   ["ask", "{questions: [{header: h}]}"],
 ])("a map's %s with literal %s fails at load as a call node does, at the author's value", async (call, args) => {
   const onMap = await failure(mapApp(call, `    input: ${args}\n`));
-  const onCall = await failure(app(`  fetch:\n    kind: call\n    call: ${call}\n    input: ${args}\n`));
-  expect(onMap).toEqual(onCall);
+  const [message, at] = await failure(app(`  fetch:\n    kind: call\n    call: ${call}\n    input: ${args}\n`));
+  expect(onMap).toEqual([`map ${message}`, at]);
 });
 
 test("retries:, output: and asserts: move to the body's node; the map keeps its own fields", async () => {
@@ -122,23 +123,23 @@ test("a body input takes its binding's proven type, else Optional(Any)", async (
 
 // Each row: the map's `call:` and other lines, the load error, and the text it points at.
 test.each([
-  ["search", "    retries: -1\n", "node 'fetch' (kind=map): `retries:` must be a non-negative integer, got -1", "-1"],
+  ["search", "    retries: -1\n", "map node 'fetch': `retries:` must be a non-negative integer, got -1", "-1"],
   [
     "{crm: sleep}",
     "",
-    "node 'fetch' (kind=map): `call: {crm: sleep}`: sleep is a built-in, not a group's tool; write `call: sleep`",
+    "map node 'fetch': `call: {crm: sleep}`: sleep is a built-in, not a group's tool; write `call: sleep`",
     "{crm: sleep}",
   ],
   [
     "{lessons: raed}",
     "",
-    "node 'fetch' (kind=map): `call: {lessons: raed}`: `lessons` has no tool `raed`",
+    "map node 'fetch': `call: {lessons: raed}`: `lessons` has no tool `raed`",
     "{lessons: raed}",
   ],
   [
     "{load: skill}",
     "",
-    "node 'fetch' (kind=map): `call: {load: skill}` would show as `load_skill`, a name yian reserves; rename the " +
+    "map node 'fetch': `call: {load: skill}` would show as `load_skill`, a name yian reserves; rename the " +
       "group or the tool",
     "{load: skill}",
   ],
@@ -146,7 +147,7 @@ test.each([
   [
     "search",
     "    adaptive_questions: {prompt: hi}\n",
-    "node 'fetch' (call: search): `adaptive_questions:` applies only to call: ask",
+    "map node 'fetch' (call: search): `adaptive_questions:` applies only to call: ask",
     "adaptive_questions",
   ],
   [
@@ -158,7 +159,7 @@ test.each([
   [
     "sleep",
     "    input:\n      for: ${other.output}\n  other: {kind: call, call: lookup}\n",
-    "node 'fetch' (call: sleep) input 'for': a duration reference must be typed str (tag it: `for: !str ${...}`)",
+    "map node 'fetch' (call: sleep) input 'for': a duration reference must be typed str (tag it: `for: !str ${...}`)",
     "${other.output}",
   ],
   [
@@ -184,8 +185,7 @@ test("an unknown field on a map naming a tool lists the tool call's fields among
 test("a tool given an inbox gets the map's inbox rule, naming the tool", async () => {
   const text = mapApp("search", "    input:\n      box: ${input.box}\n", "  box: !Inbox(str)\n");
   expect((await failure(text))[0]).toBe(
-    "map node 'fetch': tool `search` declares inbox input 'box'; a map body can't read an inbox (per-instance " +
-      "inboxes aren't supported yet)",
+    "map node 'fetch': passes inbox 'box' to tool `search`; only `take` reads an inbox, so take before the map",
   );
 });
 

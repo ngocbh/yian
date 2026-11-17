@@ -31,7 +31,7 @@ test("call: ask_user is the ask built-in, its old name", () => {
 });
 
 test("load_skill is refused as a tool id", () => {
-  expect(refused(toolFlow("load_skill", ""))).toContain("tool id `load_skill` is reserved by yian");
+  expect(refused(toolFlow("load_skill", ""))).toContain("`call: load_skill`: `load_skill` is reserved by yian");
 });
 
 const INBOX = `    input:

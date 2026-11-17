@@ -74,9 +74,9 @@ export interface ToolDescriptorFields extends NodeDescriptorFields {
 
 /**
  * How a tool call's load messages name its node and its `call:`, so each message reads in the
- * author's own words: `kind=call` (`kind=map` or `kind=loop` for the node a map's or loop's tool
- * call generates). A lifted `call(...)` is named by its site instead, and its tool is written as a
- * directive.
+ * author's own words: `node 'n'` for a `call` node, and `map node 'n'` or `loop node 'n'` for the
+ * node a map's or loop's tool call generates, as the map's or loop's other messages name it. A
+ * lifted `call(...)` is named by its site instead, and its tool is written as a directive.
  */
 class ToolWording {
   /** The node's own id. */
@@ -102,14 +102,14 @@ class ToolWording {
     return this.site === null ? "input" : "argument";
   }
 
-  /** The node: `node 'f'`. */
+  /** The node: `node 'f'`, or `map node 'f'` for a map's. */
   node(): string {
-    return this.site ?? `node ${reprText(this.nodeId)}`;
+    return this.site ?? `${this.kind === "call" ? "" : `${this.kind} `}node ${reprText(this.nodeId)}`;
   }
 
-  /** The node and its kind: `node 'f' (kind=call)`. */
+  /** The node and its kind: `node 'f' (kind=call)`, or `map node 'f'`, which names it already. */
   nodeKind(): string {
-    return this.site ?? `${this.node()} (kind=${this.kind})`;
+    return this.site !== null || this.kind !== "call" ? this.node() : `${this.node()} (kind=${this.kind})`;
   }
 
   /** The node and the tool it names: `node 'w' (call: sleep)`. */
@@ -377,9 +377,10 @@ export class ToolDescriptor extends NodeDescriptor {
     // group is a memory input, whose fix is to rename the input.
     const toolId = visibleToolName(ref.group, ref.name);
     if (toolId === LOAD_SKILL && ref.group === null) {
-      throw diagnostics.error(`${wording.nodeKind()}: tool id \`${LOAD_SKILL}\` is reserved by yian`, {
-        range: rangeOf("call"),
-      });
+      throw diagnostics.error(
+        `${wording.node()}: \`${wording.written(LOAD_SKILL)}\`: \`${LOAD_SKILL}\` is reserved by yian`,
+        { range: rangeOf("call") },
+      );
     }
     if (BUILTIN_TOOL_IDS.has(toolId as BuiltinToolId)) {
       const refuse = (key: string, problem: string) => {
@@ -574,7 +575,7 @@ export class ToolDescriptor extends NodeDescriptor {
       const [name] = none;
       const { group, name: tool } = this.toolRef;
       throw ctx.diagnostics.error(
-        `${ctx.bodyOf?.label ?? this.wording.node()}: carried field ${reprText(name)} is typed None from its ` +
+        `${this.wording.node()}: carried field ${reprText(name)} is typed None from its ` +
           `seed, and tool \`${group === null ? tool : this.wording.ref(group, tool)}\` returns every carried ` +
           `field, so it could only return null there; declare the seed's type, e.g. \`${name}: !Optional(str) null\``,
         { range: this.inputRange(name) },

@@ -1150,6 +1150,105 @@ output: \${sure.output}
     TIMEOUT,
   );
 
+  /** GREET's code as the def `greet`, which its node calls by a mistyped name: the flow loads. */
+  const TYPO = `id: greet
+name: greet
+input:
+  who: !str
+defs:
+  greet:
+    input:
+      who: !str
+    nodes:
+      hi:
+        kind: code
+        input:
+          who: \${input.who}
+        output: !str
+        code: |
+          return "hi " + inputs["who"];
+    output: \${hi.output}
+nodes:
+  said:
+    kind: call
+    call: gret
+    input:
+      who: \${input.who}
+output: \${said.output}
+`;
+
+  /** The replies of one round that drafts `draft`, fixes it to each of `fixes`, and stops untried. */
+  const fixedRound = (draft: string, fixes: string[]) => [
+    textReply(draft),
+    ...fixes.map(textReply),
+    ...answered({ findings: [] }),
+    textReply("The user rejected the run."),
+    ...answered({ next: "stop", changes: "" }),
+  ];
+
+  test(
+    "a draft that loads but calls a name close to one it defines is fixed until no hint is left",
+    async () => {
+      const fixed = TYPO.replace("call: gret", "call: greet");
+      const { runs, model, invoke } = authoringTools([
+        ...answered(BRIEF),
+        ...answered(contract("greet.yaml")),
+        ...fixedRound(TYPO, [TYPO, fixed]),
+      ]);
+      await invoke("author_flow", { goal: "greet" });
+      const { status } = await drive(runs, "r1", []);
+      expect(status).toMatchObject({
+        status: "succeeded",
+        output: { outcome: "not written: the user stopped before the write" },
+      });
+      const fixes = requestsOf(model, "You fix a yian");
+      expect(fixes).toHaveLength(2);
+      for (const fix of fixes) {
+        expect(fix).toContain("call: gret\n");
+        expect(fix).toContain("- gret (node 'said'): did you mean the def greet?");
+      }
+      expect(requestsOf(model, "You review flows")[0]).toContain("call: greet\n");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a hinted name the fixes keep is left after three tries, for the plan to show",
+    async () => {
+      const { runs, model, invoke } = authoringTools([
+        ...answered(BRIEF),
+        ...answered(contract("greet.yaml")),
+        ...fixedRound(TYPO, [TYPO, TYPO, TYPO]),
+      ]);
+      await invoke("author_flow", { goal: "greet" });
+      const { status } = await drive(runs, "r1", []);
+      expect(status).toMatchObject({ status: "succeeded" });
+      expect(requestsOf(model, "You fix a yian")).toHaveLength(3);
+      const plan = requestsOf(model, "finish a yian")[0]!;
+      expect(plan).toContain("call: gret\n");
+      expect(plan).toContain('"what": "def"');
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a draft calling a host tool's name with no hint isn't sent to a fix",
+    async () => {
+      const search = TYPO.replace("call: gret", "call: search");
+      const { runs, model, invoke } = authoringTools([
+        ...answered(BRIEF),
+        ...answered(contract("greet.yaml")),
+        ...fixedRound(search, []),
+      ]);
+      await invoke("author_flow", { goal: "greet" });
+      const { status } = await drive(runs, "r1", []);
+      expect(status).toMatchObject({ status: "succeeded" });
+      expect(requestsOf(model, "You fix a yian")).toEqual([]);
+      expect(requestsOf(model, "You review flows")[0]).toContain("call: search\n");
+    },
+    TIMEOUT,
+  );
+
   test(
     "five rounds without a write end with their own outcome, the last one said so",
     async () => {

@@ -526,9 +526,9 @@ describe.if(process.versions.bun !== undefined)("install.sh, piped", () => {
     expect(calls(fx)).toBe("");
   });
 
-  test("never takes a bun from a relative PATH entry, the current folder or a folder inside it", () => {
+  test("never takes a bun from a relative PATH entry, or from a project in the home or a folder inside it", () => {
     const fx = fixture();
-    const project = join(fx.base, "project");
+    const project = join(fx.home, "project");
     // Where direnv's PATH_add puts a project's own commands.
     const tools = join(project, "node_modules", ".bin");
     mkdirSync(tools, { recursive: true });
@@ -543,6 +543,38 @@ describe.if(process.versions.bun !== undefined)("install.sh, piped", () => {
     const wrapper = readFileSync(join(fx.bin, "yian"), "utf8");
     expect(wrapper).toContain(`'${join(fx.stubs, "bun")}'`);
     expect(wrapper).not.toContain(project);
+  });
+
+  test("run from a folder outside the home, as Homebrew's /opt, takes a bun from a folder inside it", () => {
+    const fx = fixture();
+    const opt = join(fx.base, "opt");
+    const brew = join(opt, "homebrew", "bin");
+    mkdirSync(brew, { recursive: true });
+    copyFileSync(fx.stubBun, join(brew, "bun"));
+    chmodSync(join(brew, "bun"), 0o755);
+    const result = pipe("install.sh", fx, ["--repo", fx.remote], { PATH: `${brew}:${fx.stubs}:/usr/bin:/bin` }, opt);
+    expect(result.stderr).not.toContain("✗");
+    expect(result.status).toBe(0);
+    expect(readFileSync(join(fx.bin, "yian"), "utf8")).toContain(`'${join(realpathSync(brew), "bun")}'`);
+  });
+
+  test("installs the dependencies with the chosen Bun's folder first on PATH", () => {
+    const fx = fixture();
+    const chosen = join(fx.base, "chosen");
+    mkdirSync(chosen);
+    // A Bun whose install says which bun a dependency's install script would run.
+    writeScript(
+      join(chosen, "bun"),
+      `#!/bin/sh
+case $1 in
+  --version) echo 1.4.2 ;;
+  install) echo "bun on PATH: $(command -v bun)" >>'${fx.log}' ;;
+  *) echo ran ;;
+esac
+`,
+    );
+    install(fx, ["--no-modify-path"], { YIAN_BUN: join(chosen, "bun") });
+    expect(calls(fx)).toContain(`bun on PATH: ${join(realpathSync(chosen), "bun")}\n`);
   });
 
   test("run from the home, takes a bun from a folder inside the home", () => {

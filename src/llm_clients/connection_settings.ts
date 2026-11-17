@@ -5,11 +5,12 @@
  * carrier, the auth store, `yian auth`, resuming a run) checks them here. This module imports
  * nothing from `config.ts` or `auth/`, so each of those can use it. Every check throws
  * `RangeError` with a message that never contains a header value or an id, since header values
- * are secrets; header names are not secret and are named.
+ * are secrets; header names are not secret and are named. A `HeaderError` also gives its message
+ * without the name, for output that names no key a host chose.
  */
 
 import { current } from "../defaults.ts";
-import { checkConnectionHeaderValue } from "../llm/auth.ts";
+import { headerValueProblem } from "../llm/auth.ts";
 import { YianRangeError } from "../typesys/errors.ts";
 import { isRecord } from "../typesys/index.ts";
 
@@ -84,17 +85,32 @@ export function validateHeaderName(name: unknown, provider: string | null): stri
 }
 
 /**
+ * A `RangeError` about a header a host named, with its message also given without the name, since
+ * a pasted credential could be the name.
+ */
+export class HeaderError extends YianRangeError {
+  /** The message with the header left unnamed. */
+  readonly unnamed: string;
+
+  constructor(message: string, unnamed: string) {
+    super(message);
+    this.unnamed = unnamed;
+  }
+}
+
+// Named as the built-in it extends in `errorTypeName` and run records, as `YianRangeError` is.
+Object.defineProperty(HeaderError, "name", { value: "RangeError" });
+
+/**
  * Return a header value unchanged if it may be sent.
  *
- * `name` is the header's name, already checked; messages name it. Throws `RangeError` with
+ * `name` is the header's name, already checked; messages name it. Throws `HeaderError` with
  * `checkConnectionHeaderValue`'s message if that check refuses the value.
  */
 export function validateHeaderValue(name: string, value: unknown): string {
-  try {
-    return checkConnectionHeaderValue(name, value);
-  } catch (error) {
-    throw new YianRangeError((error as Error).message);
-  }
+  const problem = headerValueProblem(value);
+  if (problem !== null) throw new HeaderError(`header ${name} ${problem}`, `a header ${problem}`);
+  return value as string;
 }
 
 /**
@@ -115,7 +131,10 @@ export function validateHeaders(headers: unknown, provider: string | null): Reco
   for (const [name, value] of entries) {
     validateHeaderName(name, provider);
     const lower = name.toLowerCase();
-    if (seen.has(lower)) throw new YianRangeError(`header ${name} is given more than once (names ignore case)`);
+    if (seen.has(lower)) {
+      const repeated = "is given more than once (names ignore case)";
+      throw new HeaderError(`header ${name} ${repeated}`, `a header name ${repeated}`);
+    }
     seen.add(lower);
     checked.push([name, validateHeaderValue(name, value)]);
   }

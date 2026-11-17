@@ -58,6 +58,21 @@ export function checkHeaderValue(name: string, value: unknown): string {
 const FIELD_VALUE = /^[\x21-\x7e]+(?:[ \t]+[\x21-\x7e]+)*$/;
 
 /**
+ * Return why a connection header value can't be sent, as what follows the header in a sentence
+ * ("value must be a string"), or `null` when it can. It never quotes the value.
+ */
+export function headerValueProblem(value: unknown): string | null {
+  if (typeof value !== "string") return "value must be a string";
+  const limit = current().maxHeaderValueChars;
+  // Spread counts code points, not UTF-16 units.
+  if ([...value].length > limit) return `value must be at most ${limit} characters`;
+  if (!FIELD_VALUE.test(value)) {
+    return "value must be non-empty visible ASCII, with spaces or tabs only between characters";
+  }
+  return null;
+}
+
+/**
  * Return a connection header value unchanged if it may be sent, never echoing it on failure.
  *
  * Route headers, extra headers and connection settings all check their values here.
@@ -69,16 +84,9 @@ const FIELD_VALUE = /^[\x21-\x7e]+(?:[ \t]+[\x21-\x7e]+)*$/;
  *   characters, or is not non-empty visible ASCII with spaces or tabs only between characters.
  */
 export function checkConnectionHeaderValue(name: string, value: unknown): string {
-  if (typeof value !== "string") throw new YianTypeError(`header ${name} value must be a string`);
-  const limit = current().maxHeaderValueChars;
-  // Spread counts code points, not UTF-16 units.
-  if ([...value].length > limit) throw new YianTypeError(`header ${name} value must be at most ${limit} characters`);
-  if (!FIELD_VALUE.test(value)) {
-    throw new YianTypeError(
-      `header ${name} value must be non-empty visible ASCII, with spaces or tabs only between characters`,
-    );
-  }
-  return value;
+  const problem = headerValueProblem(value);
+  if (problem !== null) throw new YianTypeError(`header ${name} ${problem}`);
+  return value as string;
 }
 
 /** An ordered set of the secrets an auth object has resolved. */

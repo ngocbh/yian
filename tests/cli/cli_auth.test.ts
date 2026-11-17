@@ -19,6 +19,7 @@ import {
   type AuthDeps,
   configCheck,
   configErrors,
+  type ConfigProblem,
   EXTRA_FIELD,
   loginModels,
   modelAnswers,
@@ -39,7 +40,12 @@ import {
   OpenAIAuth,
 } from "../../src/llm_clients/auth/index.ts";
 import { LLM_CONFIG_KEYS, SUPPORTED_LLM_PROVIDERS, validateBaseUrl } from "../../src/llm_clients/config.ts";
-import { OpenAIResponsesBlock } from "../../src/llm_clients/provider_blocks.ts";
+import {
+  type Field,
+  type ObjectSchema,
+  OpenAIResponsesBlock,
+  PROVIDER_BLOCKS,
+} from "../../src/llm_clients/provider_blocks.ts";
 import { ConnectionSnapshot } from "../../src/llm_clients/connection.ts";
 import {
   OPENAI_REFUSED_HEADER_NAMES,
@@ -226,6 +232,86 @@ describe("configErrors", () => {
     ]);
   });
 
+  test("a bad entry of a mapping field is reported at the field, without its key", () => {
+    const metadata = { "sk-pasted-key": 1n, "sk-other-key": 2n, ["sk-" + "k".repeat(70)]: "v".repeat(600) };
+    expect(configErrors({ provider: "openai", openai: { metadata } })).toEqual([
+      { field: "openai.metadata", message: "an entry's value: Input should be a valid string" },
+      { field: "openai.metadata", message: "an entry's key: String should have at most 64 characters" },
+      { field: "openai.metadata", message: "an entry's value: String should have at most 512 characters" },
+    ]);
+    expect(configErrors({ provider: "azure", azure: { logit_bias: { "sk-pasted-key": 500n } } })).toEqual([
+      { field: "azure.logit_bias", message: "an entry's key: String should match pattern '^[0-9]+$'" },
+      { field: "azure.logit_bias", message: "an entry's value: Input should be less than or equal to 100" },
+    ]);
+    expect(configErrors({ provider: "openai", api_key: "k", headers: { "sk-pasted-key": 1n } })).toEqual([
+      { field: "headers", message: "an entry's value: Input should be a valid string" },
+    ]);
+  });
+
+  test("a header's bad value or repeated name is reported without its name; a refused name is named", () => {
+    const layer = { provider: "openai", api_key: "k" };
+    expect(configErrors({ ...layer, headers: { "sk-pasted-key": "" } })).toEqual([
+      {
+        field: "headers",
+        message: "a header value must be non-empty visible ASCII, with spaces or tabs only between characters",
+      },
+    ]);
+    const long = "a".repeat(current().maxHeaderValueChars + 1);
+    expect(configErrors({ ...layer, headers: { "sk-pasted-key": long } })).toEqual([
+      { field: "headers", message: `a header value must be at most ${current().maxHeaderValueChars} characters` },
+    ]);
+    expect(configErrors({ ...layer, headers: { "sk-pasted-key": "a", "SK-PASTED-KEY": "b" } })).toEqual([
+      { field: "headers", message: "a header name is given more than once (names ignore case)" },
+    ]);
+    // A refused name is one of yian's, so it can't be a pasted key.
+    expect(configErrors({ ...layer, headers: { Authorization: "a" } })).toEqual([
+      { field: "headers", message: `header Authorization is refused: ${REFUSED_HEADER_NAMES["authorization"]}` },
+    ]);
+  });
+
+  test("no error names a key of headers or of a mapping field in any provider block", () => {
+    const key = "sk-pasted-key";
+    const entries: Record<string, unknown>[] = [
+      { [key]: 1n },
+      { [key]: 1.5 },
+      { [key]: "x" },
+      { [key]: "v".repeat(600) },
+      { [key]: 500n },
+      { [key]: true },
+      { [key]: [] },
+      { [key]: [Infinity] },
+      { [key]: { [key]: Infinity } },
+      { [key + "k".repeat(70)]: "v" },
+    ];
+    const blocks = new Set<string>();
+    let refused = 0;
+    for (const [block, schema] of Object.entries(PROVIDER_BLOCKS)) {
+      for (const entry of entries) {
+        for (const value of objectsHolding(schema, entry)) {
+          const errors = configErrors({ provider: "openai", [block]: value });
+          expect(JSON.stringify(errors)).not.toContain(key);
+          blocks.add(block);
+          if (errors.length > 0) refused += 1;
+        }
+      }
+    }
+    expect([...blocks].sort()).toEqual(["azure", "openai", "openrouter", "vllm"]);
+    expect(refused).toBeGreaterThan(entries.length);
+    const badHeaders: Record<string, unknown>[] = [
+      { [key]: 1n },
+      { [key]: true },
+      { [key]: "" },
+      { [key]: "a\nb" },
+      { [key]: "v".repeat(current().maxHeaderValueChars + 1) },
+      { [key]: "a", [key.toUpperCase()]: "b" },
+    ];
+    for (const headers of badHeaders) {
+      const errors = configErrors({ provider: "openai", api_key: "k", headers });
+      expect(errors.length).toBeGreaterThan(0);
+      expect(JSON.stringify(errors)).not.toContain(key);
+    }
+  });
+
   test("a bad base_url with a key names base_url", () => {
     const errors = configErrors({ provider: "openai", api_key: "k", base_url: "http://example.com/v1" });
     expect(errors.map((error) => error.field)).toEqual(["base_url"]);
@@ -349,16 +435,38 @@ describe("configCheck", () => {
     });
   });
 
-  test("text on a terminal shows an error line's control characters; piped, it keeps them", async () => {
-    // A mapping field's own keys are named, as the error's field.
+  test.each<[string, Record<string, unknown>, ConfigProblem]>([
+    [
+      "openai.metadata",
+      { provider: "openai", openai: { metadata: { "sk-pasted-key": 1 } } },
+      { field: "openai.metadata", message: "an entry's value: Input should be a valid string" },
+    ],
+    [
+      "azure.logit_bias",
+      { provider: "azure", azure: { logit_bias: { "sk-pasted-key": 1 } } },
+      { field: "azure.logit_bias", message: "an entry's key: String should match pattern '^[0-9]+$'" },
+    ],
+    [
+      "headers",
+      { provider: "openai", api_key: "k", headers: { "sk-pasted-key": 1 } },
+      { field: "headers", message: "an entry's value: Input should be a valid string" },
+    ],
+  ])("a bad entry's key in %s is not printed, in text or in JSON", async (_, layer, problem) => {
+    const stdin = JSON.stringify(layer);
+    const text = await run(configCheck, jsonArgs(false), fakeIo({ stdin }));
+    expect(text).toEqual({ code: 1, out: "", err: `${problem.field}: ${problem.message}\n` });
+    const json = await run(configCheck, jsonArgs(true), fakeIo({ stdin }));
+    expect(json.code).toBe(1);
+    expect(json.out).not.toContain("sk-pasted-key");
+    expect(JSON.parse(json.out)).toEqual({ format: "yian.cli.v1", ok: false, errors: [problem] });
+  });
+
+  test("a mapping key holding control characters is not printed, on a terminal or piped", async () => {
     const key = "\u001b]0;PWNEDTITLE\u0007\u001b[2J\u001b[41mXX";
     const stdin = JSON.stringify({ provider: "openai", openai: { metadata: { [key]: 1 } } });
-    const tty = await run(configCheck, jsonArgs(false), fakeIo({ stdin, outTty: true }));
-    expect(tty.code).toBe(1);
-    expect(tty.err).not.toContain("\x1b");
-    expect(tty.err).toContain("^[]0;PWNEDTITLE^G^[[2J^[[41mXX");
-    const piped = await run(configCheck, jsonArgs(false), fakeIo({ stdin }));
-    expect(piped.err).toContain(key);
+    const err = "openai.metadata: an entry's value: Input should be a valid string\n";
+    expect(await run(configCheck, jsonArgs(false), fakeIo({ stdin, outTty: true }))).toEqual({ code: 1, out: "", err });
+    expect(await run(configCheck, jsonArgs(false), fakeIo({ stdin }))).toEqual({ code: 1, out: "", err });
   });
 
   test("text writes every error line at once", async () => {
@@ -408,6 +516,33 @@ describe("configCheck", () => {
     });
   });
 });
+
+/** Each object of `schema` that holds `entry` in one of its mapping fields, at any depth. */
+function objectsHolding(schema: ObjectSchema, entry: Record<string, unknown>): Record<string, unknown>[] {
+  return Object.entries(schema.fields).flatMap(([name, field]) =>
+    holding(field, entry).map((value) => ({ [name]: value })),
+  );
+}
+
+/** Each value of `field` that holds `entry` in a mapping, at any depth. */
+function holding(field: Field, entry: Record<string, unknown>): unknown[] {
+  switch (field.kind) {
+    case "map":
+      return [entry];
+    case "object":
+      return objectsHolding(field.schema, entry);
+    case "list":
+      return holding(field.item, entry).map((item) => [item]);
+    case "union":
+      return field.members.flatMap((member) => holding(member, entry));
+    case "tagged":
+      return Object.entries(field.variants).flatMap(([type, variant]) =>
+        objectsHolding(variant, entry).map((value) => ({ ...value, type })),
+      );
+    default:
+      return [];
+  }
+}
 
 /** The error config check gives for an unknown key in the `openai` block. */
 const UNKNOWN_OPENAI_FIELD =

@@ -1074,10 +1074,15 @@ export function configErrors(layer: Readonly<Record<string, unknown>>): ConfigPr
       const errors: ConfigProblem[] = [];
       const seen = new Set<string>();
       for (const issue of error.issues) {
+        // An unknown key is never named, at the top level or in a provider block: a pasted key
+        // could be the name.
         const entry =
           issue.type === "extra_forbidden" && issue.loc.length === 1
             ? { field: null, message: EXTRA_FIELD }
-            : { field: issue.loc.join(".") || null, message: issue.msg.replace(/^Value error, /, "") };
+            : {
+                field: issue.loc.join(".") || null,
+                message: issue.unnamedError ?? issue.msg.replace(/^Value error, /, ""),
+              };
         const key = JSON.stringify([entry.field, entry.message]);
         if (!seen.has(key)) {
           seen.add(key);

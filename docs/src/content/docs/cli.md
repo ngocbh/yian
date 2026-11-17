@@ -577,7 +577,8 @@ listing. A failed listing exits 1.
 
 `yian config check` reads an `llm_config` layer as a JSON object on stdin, key included, and checks
 it as a run would if no flow or agent overrides its provider or model. Values never appear in its
-messages.
+messages, and neither does the name of a field it doesn't know, since a pasted key could be that
+name; the message names the object that holds the field and lists the fields it takes.
 
 ```console
 $ cat layer.json | yian config check --json

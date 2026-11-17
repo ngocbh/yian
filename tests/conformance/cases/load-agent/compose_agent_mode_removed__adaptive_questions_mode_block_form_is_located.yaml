@@ -4,8 +4,8 @@ flow: |
   name: gate
   nodes:
     ask:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       adaptive_questions:
         prompt: Ask
         mode: plain
@@ -14,7 +14,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: "node 'ask' (tool_id: ask): `adaptive_questions.mode:` was removed: an AGENT with tools runs the tool loop, one without tools makes a single call; delete this line"
+      message: "node 'ask' (call: ask): `adaptive_questions.mode:` was removed: an AGENT with tools runs the tool loop, one without tools makes a single call; delete this line"
       frames:
       - label: flow.yaml
         range: [9, 7, 9, 11]

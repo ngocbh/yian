@@ -5,8 +5,8 @@ flow: |
   name: f
   nodes:
     q:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       retries: 1
       input:
         prompt: Ship it?
@@ -15,7 +15,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: "node 'q' (tool_id: ask): `retries:` doesn't apply to ask: the host owns retries of a call it holds"
+      message: "node 'q' (call: ask): `retries:` doesn't apply to ask: the host owns retries of a call it holds"
       frames:
       - label: flow.yaml
         range: [7, 14, 7, 15]

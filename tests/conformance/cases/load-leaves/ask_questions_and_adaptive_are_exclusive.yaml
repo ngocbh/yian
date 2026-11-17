@@ -5,8 +5,8 @@ flow: |
   name: f
   nodes:
     q:
-      kind: tool
-      tool_id: ask
+      kind: call
+      call: ask
       input:
         questions:
           - question: Ship it?
@@ -18,7 +18,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: "node 'q' (tool_id: ask): input questions: and adaptive_questions: are mutually exclusive"
+      message: "node 'q' (call: ask): input questions: and adaptive_questions: are mutually exclusive"
       frames:
       - label: flow.yaml
         range: [12, 7, 13, 1]

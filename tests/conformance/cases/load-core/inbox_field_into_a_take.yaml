@@ -7,8 +7,8 @@ flow: |
     m: !Inbox(str)
   nodes:
     heard:
-      kind: tool
-      tool_id: take
+      kind: call
+      call: take
       input:
         from: ${input.m.text}
   output: null
@@ -16,7 +16,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: "node 'heard' (tool_id: take): take's from must be an Inbox input of this flow, as ${input.<name>}"
+      message: "node 'heard' (call: take): take's from must be an Inbox input of this flow, as ${input.<name>}"
       frames:
       - label: flow.yaml
         range: [10, 13, 10, 28]

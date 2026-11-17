@@ -195,19 +195,10 @@ test.each([
   expect(await refusal(app(`  n: {kind: call, call: ${call}}\n`, "  notes: !Optional(FileMemory)\n"))).toBe(message);
 });
 
-test.each([
-  ["call", "call"],
-  ["tool", "tool_id"],
-])("adaptive_questions: on a group's tool is refused under kind: %s", async (kind, field) => {
-  const text = app(`  n: {kind: ${kind}, ${field}: {github: search}, adaptive_questions: {prompt: hi}}\n`);
+test("adaptive_questions: on a group's tool is refused", async () => {
+  const text = app("  n: {kind: call, call: {github: search}, adaptive_questions: {prompt: hi}}\n");
   expect(await refusal(text)).toBe(
-    `node 'n' (${field}: {github: search}): \`adaptive_questions:\` applies only to ${field}: ask`,
-  );
-});
-
-test("an empty tool_id: is a load error", async () => {
-  expect(await refusal(app('  n: {kind: tool, tool_id: ""}\n'))).toBe(
-    "node 'n' (kind=tool): `tool_id:` must be a tool name or `{group: tool}`, but it is empty; write a tool name",
+    "node 'n' (call: {github: search}): `adaptive_questions:` applies only to call: ask",
   );
 });
 
@@ -493,11 +484,8 @@ test("a compact flow's call: names a tool", async () => {
   expect(node.params!.map((parameter) => parameter.name)).toEqual(["q"]);
 });
 
-test.each([
-  ["call", "call"],
-  ["tool", "tool_id"],
-])("a kind: %s node binding the memory it calls is refused, as any tool argument holding one", async (kind, field) => {
-  const text = app(`  n: {kind: ${kind}, ${field}: {lessons: read}, input: {lessons: "\${input.lessons}", path: a.md}}\n`);
+test("a call binding the memory it calls is refused, as any tool argument holding one", async () => {
+  const text = app('  n: {kind: call, call: {lessons: read}, input: {lessons: "${input.lessons}", path: a.md}}\n');
   expect(await refusal(text)).toBe(
     "flow has unresolved references:\n  node 'n' input 'lessons' from: ${input.lessons} is a memory; use it whole as an " +
       "agent input, in prompt text, as a child's memory input of the same type, or name it in `tools:`/`tool_id:` " +

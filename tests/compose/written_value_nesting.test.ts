@@ -107,7 +107,7 @@ const mapFlow: Flow = (header, value) =>
 
 /** A flow whose sleep `w` sleeps `until: value`. */
 const sleepFlow: Flow = (header, value) =>
-  `id: f\nname: f\n${header}nodes:\n  w:\n    kind: tool\n    tool_id: sleep\n    input:\n      until: ${value}\n` +
+  `id: f\nname: f\n${header}nodes:\n  w:\n    kind: call\n    call: sleep\n    input:\n      until: ${value}\n` +
   `  use:\n${ECHO}    input:\n      topic: x\n    runs_after: [w]\n` +
   "output: ${use.output}\n";
 
@@ -281,7 +281,7 @@ describe("node bindings", () => {
       if (site === "sleep-until") {
         // Past the nesting check, a list `until:` meets the type check.
         const error = loadError(() => assembleText(flow(header, value)));
-        expect(error.message).toContain("node 'w' (tool_id: sleep) input 'until': must be a date or datetime, got [[[");
+        expect(error.message).toContain("node 'w' (call: sleep) input 'until': must be a date or datetime, got [[[");
         return;
       }
       assembleText(flow(header, value));

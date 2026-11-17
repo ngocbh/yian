@@ -5,8 +5,8 @@ flow: |
   name: f
   nodes:
     nap:
-      kind: tool
-      tool_id: sleep
+      kind: call
+      call: sleep
       input:
         until: 2026-05-21
         for: 90s
@@ -15,7 +15,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: "node 'nap' (tool_id: sleep): sleep takes until: or for:, exactly one"
+      message: "node 'nap' (call: sleep): sleep takes until: or for:, exactly one"
       frames:
       - label: flow.yaml
         range: [8, 7, 10, 1]

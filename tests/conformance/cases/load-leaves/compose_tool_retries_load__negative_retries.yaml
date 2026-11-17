@@ -4,8 +4,8 @@ flow: |
   name: old_tool_crash
   nodes:
     place:
-      kind: tool
-      tool_id: place
+      kind: call
+      call: place
       retries: -1
       input: {symbol: "ACME"}
   output: ${place.output}
@@ -13,7 +13,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'node ''place'' (kind=tool): `retries:` must be a non-negative integer, got -1'
+      message: 'node ''place'' (kind=call): `retries:` must be a non-negative integer, got -1'
       frames:
       - label: flow.yaml
         range: [7, 14, 7, 16]

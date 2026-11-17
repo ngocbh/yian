@@ -5,8 +5,8 @@ flow: |
   name: f
   nodes:
     nap:
-      kind: tool
-      tool_id: sleep
+      kind: call
+      call: sleep
       input:
         for: 86400
   output: null
@@ -14,7 +14,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: "node 'nap' (tool_id: sleep) input 'for': a duration is text such as 24h, got 86400; write 86400s"
+      message: "node 'nap' (call: sleep) input 'for': a duration is text such as 24h, got 86400; write 86400s"
       frames:
       - label: flow.yaml
         range: [8, 12, 8, 17]

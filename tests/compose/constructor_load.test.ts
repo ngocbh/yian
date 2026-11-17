@@ -635,8 +635,8 @@ test("a constructor in a sleep's until is a binding, checked as a date", () => {
   when: !date
 nodes:
   w:
-    kind: tool
-    tool_id: sleep
+    kind: call
+    call: sleep
     input:
       until: \${Size(input.when)}
 output: \${w.output}
@@ -645,7 +645,7 @@ output: \${w.output}
   const error = loadError(() => loadedNodes(text));
 
   expect(error.message).toContain(
-    "node 'w' (tool_id: sleep) input 'until': must be a date or datetime, but the value is Literal(l, m, s)",
+    "node 'w' (call: sleep) input 'until': must be a date or datetime, but the value is Literal(l, m, s)",
   );
   expect(errorLine(error)).toBe(lineOf(text, "until:"));
 });

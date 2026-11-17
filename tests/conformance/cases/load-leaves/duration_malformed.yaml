@@ -5,8 +5,8 @@ flow: |
   name: f
   nodes:
     nap:
-      kind: tool
-      tool_id: sleep
+      kind: call
+      call: sleep
       input:
         for: 1.5h
   output: null
@@ -14,7 +14,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: "node 'nap' (tool_id: sleep) input 'for': a duration is a positive integer and a unit (90s | 30m | 24h | 2d)"
+      message: "node 'nap' (call: sleep) input 'for': a duration is a positive integer and a unit (90s | 30m | 24h | 2d)"
       frames:
       - label: flow.yaml
         range: [8, 12, 8, 16]

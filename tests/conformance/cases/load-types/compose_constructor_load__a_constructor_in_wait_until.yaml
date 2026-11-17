@@ -11,8 +11,8 @@ flow: |
     when: !date
   nodes:
     w:
-      kind: tool
-      tool_id: sleep
+      kind: call
+      call: sleep
       input:
         until: ${Size(input.when)}
   output: ${w.output}
@@ -20,7 +20,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: "node 'w' (tool_id: sleep) input 'until': must be a date or datetime, but the value is Literal(l, m, s); write one such as `until: 2026-05-21`, or a reference such as `until: ${input.as_of}`"
+      message: "node 'w' (call: sleep) input 'until': must be a date or datetime, but the value is Literal(l, m, s); write one such as `until: 2026-05-21`, or a reference such as `until: ${input.as_of}`"
       frames:
       - label: flow.yaml
         range: [15, 14, 15, 33]

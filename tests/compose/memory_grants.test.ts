@@ -1,5 +1,5 @@
 /**
- * Memory grants: `tools: [lessons]`, `tools: [{lessons: [read]}]` and `tool_id: {lessons: read}`
+ * Memory grants: `tools: [lessons]`, `tools: [{lessons: [read]}]` and `call: {lessons: read}`
  * name a memory input of the node's own flow, are checked against its type's tools at load, and
  * are routed through the reserved wiring `__memory_<input>`.
  */
@@ -82,7 +82,7 @@ test("a bare tool name never reaches a memory: it stays a host grant", async () 
 });
 
 test("a TOOL node names a memory's tool by its group form", async () => {
-  const nodes = "found:\n  kind: tool\n  tool_id: {lessons: read}\n  input:\n    path: notes.md\n";
+  const nodes = "found:\n  kind: call\n  call: {lessons: read}\n  input:\n    path: notes.md\n";
   const loaded = await loadFlow(flow("lessons: !FileMemory", nodes));
   const node = nodeOf<ToolNode>(loaded, "found");
   expect(node.memoryGrants()).toEqual([{ input: "lessons", tools: ["read"] }]);
@@ -92,16 +92,16 @@ test("a TOOL node names a memory's tool by its group form", async () => {
 });
 
 test("a TOOL node's memory tool is checked against the type's tools", async () => {
-  const nodes = "found:\n  kind: tool\n  tool_id: {lessons: upsert}\n";
+  const nodes = "found:\n  kind: call\n  call: {lessons: upsert}\n";
   const error = await loadErrorAsync(loadFlow(flow("lessons: !FileMemory", nodes)));
   expect(error.diagnostic.message).toContain("`lessons` has no tool `upsert`; it has list, read");
 });
 
 test("a TOOL node can't name an Optional memory", async () => {
-  const nodes = "found:\n  kind: tool\n  tool_id: {notes: read}\n";
+  const nodes = "found:\n  kind: call\n  call: {notes: read}\n";
   const error = await loadErrorAsync(loadFlow(flow("notes: !Optional(FileMemory)", nodes)));
   expect(error.diagnostic.message).toContain(
-    "`tool_id: {notes: read}` names `notes`, an Optional memory; a TOOL node needs one that is always bound",
+    "`call: {notes: read}` names `notes`, an Optional memory; a tool call needs one that is always bound",
   );
 });
 
@@ -109,7 +109,7 @@ test.each([
   ["an agent input", agent("[lessons]", "  input:\n    __memory_lessons: ${input.lessons}\n")],
   [
     "a TOOL node input",
-    "found:\n  kind: tool\n  tool_id: {lessons: read}\n  input:\n    __memory_x: 1\n",
+    "found:\n  kind: call\n  call: {lessons: read}\n  input:\n    __memory_x: 1\n",
   ],
 ])("%s named like a reserved memory key is refused", async (_, nodes) => {
   const error = await loadErrorAsync(loadFlow(flow("lessons: !FileMemory", nodes)));
@@ -262,15 +262,15 @@ test("a host memory tool a model can't call by name is refused", async () => {
 
 test("a TOOL node's memory tool named like a built-in says to rename the input", async () => {
   const Notes = hostType("Notes", ["skill"]);
-  const nodes = "found:\n  kind: tool\n  tool_id: {load: skill}\n";
+  const nodes = "found:\n  kind: call\n  call: {load: skill}\n";
   const error = await loadErrorAsync(loadFlow(flow("load: !Notes", nodes), { memoryTypes: [Notes] }));
   expect(error.diagnostic.message).toBe(
-    "node 'found' (kind=tool): the tool name `load_skill` of `{load: [skill]}` is yian's; rename the input",
+    "node 'found' (kind=call): the tool name `load_skill` of `{load: [skill]}` is yian's; rename the input",
   );
 });
 
 test("a TOOL node's host group tool named like a built-in still says to rename the group or the tool", async () => {
-  const error = await loadErrorAsync(loadFlow(flow("q: !str", "found:\n  kind: tool\n  tool_id: {load: skill}\n")));
+  const error = await loadErrorAsync(loadFlow(flow("q: !str", "found:\n  kind: call\n  call: {load: skill}\n")));
   expect(error.diagnostic.message).toContain("would show as `load_skill`, a name yian reserves; rename the group or the tool");
 });
 

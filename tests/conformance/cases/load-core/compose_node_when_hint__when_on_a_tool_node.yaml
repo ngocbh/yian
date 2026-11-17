@@ -4,15 +4,15 @@ flow: |
   name: f
   nodes:
     x:
-      kind: tool
-
+      kind: call
+      call: search
       when: ${x.output}
   output: ${x.output}
 expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'node ''x'' (kind=tool): field ''when'' is not allowed (allowed: adaptive_questions, asserts, depends_on, env, input, kind, node_name, output, retries, runs_after, tool_id); to run a node only when a condition holds, route to it from a `case` node (`cases: [{when: ..., then: <node>}]`)'
+      message: 'node ''x'' (kind=call): field ''when'' is not allowed (allowed: adaptive_questions, asserts, call, depends_on, env, input, kind, node_name, output, retries, runs_after); to run a node only when a condition holds, route to it from a `case` node (`cases: [{when: ..., then: <node>}]`)'
       frames:
       - label: flow.yaml
         range: [7, 11, 7, 22]

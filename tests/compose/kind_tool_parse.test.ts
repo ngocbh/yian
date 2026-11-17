@@ -142,7 +142,6 @@ test("build passes the title and the retries to the node", () => {
 test.each<CaseRow>([
   { id: "load-leaves/seed_08_tool_news", call: assembled },
   { id: "load-leaves/tool_grants__a_tool_node_names_a_group_tool", call: assembled },
-  { id: "load-leaves/tool_grants__a_tool_id_mapping_with_two_keys_is_refused", call: assembled },
-  { id: "load-leaves/tool_grants__a_tool_id_group_with_a_list_is_refused", call: assembled },
+  { id: "load-leaves/tool_grants__a_call_group_with_a_list_is_refused", call: assembled },
   { id: "load-leaves/tool_grants__a_built_in_in_a_group_is_refused", call: assembled },
 ])("assembles: $id", runCase);

@@ -6,7 +6,7 @@ import { flowFingerprint } from "../../src/compile/manifest.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { current, forget, reload } from "../../src/defaults.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
-import { assembled, assembleText, type CaseRow, loadError, parsedNodes, runCase } from "../helpers/declarations.ts";
+import { assembled, assembleText, type CaseRow, loadError, runCase } from "../helpers/declarations.ts";
 
 afterEach(() => forget());
 
@@ -15,8 +15,8 @@ const FLOW = `id: old_tool_crash
 name: old_tool_crash
 nodes:
   place:
-    kind: tool
-    tool_id: place
+    kind: call
+    call: place
     input: {symbol: "ACME"}
 output: \${place.output}
 `;
@@ -25,7 +25,7 @@ const OLD_FINGERPRINT = "fde8e299e6e345b350315fabc2cc6406390fcb79db37fd3cff4ed3a
 
 /** Return `FLOW` with `fieldLine` added to the TOOL node, as line 7. */
 function withLine(fieldLine: string): string {
-  return FLOW.replace("    tool_id: place\n", `    tool_id: place\n${fieldLine}\n`);
+  return FLOW.replace("    call: place\n", `    call: place\n${fieldLine}\n`);
 }
 
 /** Return the retries of the built TOOL node of flow `text`. */
@@ -67,7 +67,7 @@ test.each([
 ])("bad retries is a load error at its line: %s", (line, got) => {
   const error = loadError(() => assembleText(withLine(line)));
 
-  expect(error.message).toBe(`node 'place' (kind=tool): \`retries:\` must be a non-negative integer, got ${got}`);
+  expect(error.message).toBe(`node 'place' (kind=call): \`retries:\` must be a non-negative integer, got ${got}`);
   expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(7);
 });
 
@@ -80,12 +80,8 @@ test("nonzero retries changes the flow fingerprint", async () => {
   expect(await fingerprintOf(withLine("    retries: 1"))).not.toBe(OLD_FINGERPRINT);
 });
 
-test.each<CaseRow>([{ id: "load-leaves/compose_tool_retries_load__negative_retries", call: parsedNodes }])(
-  "parseNodes: $id",
-  runCase,
-);
-
-test.each<CaseRow>([{ id: "load-leaves/compose_tool_retries_load__retries_loads", call: assembled }])(
-  "assembles: $id",
-  runCase,
-);
+// Assembled: parsing alone has no call rule, so it reads every `call:` as a flow's.
+test.each<CaseRow>([
+  { id: "load-leaves/compose_tool_retries_load__negative_retries", call: assembled },
+  { id: "load-leaves/compose_tool_retries_load__retries_loads", call: assembled },
+])("assembles: $id", runCase);

@@ -1,0 +1,19 @@
+# A `call:` mapping names one callable, so a second key is refused.
+kind: load
+flow: |
+  id: grants
+  name: grants
+  nodes:
+    found:
+      kind: call
+      call: {cases: search, docs: search}
+      input: {query: owls}
+  output: ${found.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''found'' (kind=call): `call:` names one callable: `greet`, `{billing: quote}` or `{crm: lookup}`'
+      frames:
+      - label: flow.yaml
+        range: [6, 11, 6, 40]

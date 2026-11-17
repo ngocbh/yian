@@ -1,0 +1,19 @@
+# A `call:` group names one tool, not a list of them.
+kind: load
+flow: |
+  id: grants
+  name: grants
+  nodes:
+    found:
+      kind: call
+      call: {cases: [search]}
+      input: {query: owls}
+  output: ${found.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''found'' (kind=call): `call: {cases: ...}` names one tool; write `{cases: search}`'
+      frames:
+      - label: flow.yaml
+        range: [6, 11, 6, 28]

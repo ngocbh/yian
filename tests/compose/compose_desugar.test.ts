@@ -20,8 +20,8 @@ input:
   ctx: !str
 nodes:
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       ctx: \${input.ctx}
       prompt: "Help me with \${input.ctx}."
@@ -58,7 +58,7 @@ test("a composer id collision is located at the gate", () => {
   const text = AUTO.replace("output:", "  ask__compose:\n    kind: code\n    code: return 1\n    output: !int\noutput:");
   const error = loadError(() => assembleText(text));
   expect(error.message).toBe(
-    "node 'ask' (tool_id: ask): synthesized composer id 'ask__compose' collides with an existing node id",
+    "node 'ask' (call: ask): synthesized composer id 'ask__compose' collides with an existing node id",
   );
   expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(7);
 });

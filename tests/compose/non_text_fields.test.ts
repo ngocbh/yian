@@ -139,14 +139,14 @@ output: \${a.output}
 `;
 }
 
-/** A flow whose TOOL node `a` has `tool_id: <v>`. */
+/** A flow whose `call` node `a` has `call: <v>` and no `defs:`, so a name there is a tool. */
 function toolFlow(v: string): string {
   return `id: f
 name: f
 nodes:
   a:
-    kind: tool
-    tool_id: ${v}
+    kind: call
+    call: ${v}
     input: {symbol: x}
 output: \${a.output}
 `;
@@ -500,37 +500,17 @@ describe("parseNodes", () => {
     expect(startLine(error)).toBe(lineOf(text, "code: "));
   });
 
-  // A mapping is the `{group: tool}` form, whose own errors the conformance cases pin.
-  test.each(NON_TEXT.filter(([, phrase]) => phrase !== "a mapping"))("non-text tool id is a load error: %s", (value, phrase) => {
-    const text = toolFlow(value);
+  test("null code is empty", () => {
+    const text = codeFlow("null");
 
     const error = loadError(() => nodesOf(text));
 
-    expect(error.message).toContain(
-      `node 'a' (kind=tool): \`tool_id:\` must be a tool name or \`{group: tool}\`, but YAML read it as ${phrase}; put it in quotes`,
-    );
-    expect(startLine(error)).toBe(lineOf(text, "tool_id: "));
+    expect(error.message).toContain("node 'a' (kind=code): `code:` must be text, but it is empty; write the text");
+    expect(startLine(error)).toBe(lineOf(text, "code: "));
   });
 
-  test.each([
-    [codeFlow("null"), "code", "code", "`code:` must be text, but it is empty; write the text"],
-    [toolFlow("null"), "tool", "tool_id", "`tool_id:` must be a tool name or `{group: tool}`, but it is empty; write a tool name"],
-  ])("null code and tool id are empty: %#", (text, kind, key, message) => {
-    const error = loadError(() => nodesOf(text));
-
-    expect(error.message).toContain(`node 'a' (kind=${kind}): ${message}`);
-    expect(startLine(error)).toBe(lineOf(text, `${key}: `));
-  });
-
-  test.each([codeFlow(`"return 'x'"`), toolFlow("'5'")])("text code and tool id still load: %#", (text) => {
-    expect(() => assembleText(text)).not.toThrow();
-  });
-
-  test("tagged non-text tool id", () => {
-    // `!str 5` still reads as an integer here; the tag's own error comes once it is quoted.
-    expect(loadError(() => nodesOf(toolFlow("!str 5"))).message).toContain(
-      "`tool_id:` must be a tool name or `{group: tool}`, but YAML read it as an integer; put it in quotes",
-    );
+  test("text code still loads", () => {
+    expect(() => assembleText(codeFlow(`"return 'x'"`))).not.toThrow();
   });
 
   test.each(["load-core/compose_non_text_fields__non_text_kind", "load-core/compose_non_text_fields__null_kind"])(
@@ -539,6 +519,7 @@ describe("parseNodes", () => {
   );
 
   test.each([
+    "load-core/compose_non_text_fields__a_call_mapping_with_two_keys_is_refused",
     "load-core/compose_non_text_fields__node_asserts_holding_a_number",
     "load-core/compose_non_text_fields__non_text_call_on_a_call_node",
     "load-core/compose_non_text_fields__non_text_call_on_a_loop_node",
@@ -548,10 +529,35 @@ describe("parseNodes", () => {
     "load-core/compose_non_text_fields__non_text_code",
     "load-core/compose_non_text_fields__non_text_loop_while",
     "load-core/compose_non_text_fields__non_text_node_name",
-    "load-core/compose_non_text_fields__non_text_tool_id",
     "load-core/compose_non_text_fields__null_call",
-    "load-core/compose_non_text_fields__null_tool_id",
   ])("case %s", (id) => runCase({ id, call: parsedNodes }));
+});
+
+// The call rule reads a text `call:` the file doesn't define as a tool; a value that isn't text
+// or a one-key mapping is still the call node's own shape error.
+describe("the call rule", () => {
+  /** The call node's shape error, ending in `tail`: what YAML read and the fix. */
+  const shapeError = (tail: string) =>
+    `node 'a' (kind=call): \`call:\` must be a callable name, \`{library: def}\` or \`{group: tool}\`, ${tail}`;
+
+  test.each([
+    ["5", "but YAML read it as an integer; put it in quotes"],
+    ["[a]", "but YAML read it as a list; put it in quotes"],
+    ["null", "but it is empty; write a callable name"],
+    // `!str 5` still reads as an integer here; the tag's own error comes once it is quoted.
+    ["!str 5", "but YAML read it as an integer; put it in quotes"],
+  ])("a non-text call: %s with no defs is the call node's shape error", (value, tail) => {
+    const text = toolFlow(value);
+
+    const error = loadError(() => assembleText(text));
+
+    expect(error.message).toBe(shapeError(tail));
+    expect(startLine(error)).toBe(lineOf(text, "call: "));
+  });
+
+  test("a quoted call: naming a tool loads", () => {
+    expect(() => assembleText(toolFlow("'5'"))).not.toThrow();
+  });
 });
 
 describe("the CASE build", () => {
@@ -727,8 +733,8 @@ input:
   proj: !str
 nodes:
   ask:
-    kind: tool
-    tool_id: ask
+    kind: call
+    call: ask
     input:
       proj: \${input.proj}
     adaptive_questions:

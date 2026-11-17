@@ -8,8 +8,8 @@ flow: |
         n: !int
       nodes:
         w:
-          kind: tool
-          tool_id: sleep
+          kind: call
+          call: sleep
           input:
             until: ${input.n}
         after:
@@ -30,7 +30,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: "defs entry 'pause': node 'w' (tool_id: sleep) input 'until': must be a date or datetime, but the value is int; write one such as `until: 2026-05-21`, or a reference such as `until: ${input.as_of}`"
+      message: "defs entry 'pause': node 'w' (call: sleep) input 'until': must be a date or datetime, but the value is int; write one such as `until: 2026-05-21`, or a reference such as `until: ${input.as_of}`"
       frames:
       - label: flow.yaml
         range: [5, 5, 20, 1]

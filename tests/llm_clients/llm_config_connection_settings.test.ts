@@ -5,9 +5,11 @@ import { inspect } from "node:util";
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { BUILTIN, install } from "../../src/defaults.ts";
+import { errorTypeName } from "../../src/diagnostics.ts";
 import { LLMConfig } from "../../src/llm_clients/config.ts";
 
 import {
+  HeaderError,
   OPENAI_REFUSED_HEADER_NAMES,
   openaiIdHeaders,
   REFUSED_HEADER_NAMES,
@@ -168,6 +170,43 @@ test("a non-string header value is refused", () => {
   expect(error.message).not.toContain("2024");
 });
 
+test.each<[string, Record<string, unknown>, Record<string, unknown>]>([
+  [
+    "a non-string value",
+    { "X-Gateway": 1n },
+    {
+      loc: ["headers", "X-Gateway"],
+      unnamedLoc: ["headers"],
+      unnamedError: "an entry's value: Input should be a valid string",
+    },
+  ],
+  [
+    "a bad value",
+    { "X-Gateway": "" },
+    {
+      loc: ["headers"],
+      unnamedError: "a header value must be non-empty visible ASCII, with spaces or tabs only between characters",
+    },
+  ],
+  [
+    "a repeated name",
+    { "X-Gateway": "a", "x-gateway": "b" },
+    { loc: ["headers"], unnamedError: "a header name is given more than once (names ignore case)" },
+  ],
+])("a header with %s is also reported without its name, which the message keeps", (_, headers, expected) => {
+  const error = thrown(() => config({ headers }));
+  expect(error).toBeInstanceOf(ValidationError);
+  expect(error.message.toLowerCase()).toContain("x-gateway");
+  expect((error as ValidationError).issues).toEqual([expect.objectContaining(expected)]);
+});
+
+test("a refused header name is named everywhere: it is one of yian's", () => {
+  const error = thrown(() => config({ headers: { Authorization: "a" } })) as ValidationError;
+  expect(error.issues).toHaveLength(1);
+  expect(error.issues[0]!.error).toBe("header Authorization is refused: yian sends the credential itself");
+  expect(error.issues[0]!.unnamedError).toBeUndefined();
+});
+
 test.each(["organization", "project"])("%s values", (field) => {
   install({ ...BUILTIN, maxOrganizationChars: 8 });
   expect(config({ [field]: "org-1234" })[field as "organization" | "project"]).toBe("org-1234");
@@ -252,6 +291,11 @@ test("module functions return valid input and throw RangeError", () => {
   ]) {
     expect(call).toThrow(RangeError);
   }
+  // A header's error names the built-in it extends, as a run records it.
+  const header = thrown(() => validateHeaders({ "X-A": "1", "x-a": "2" }, null));
+  expect(header).toBeInstanceOf(HeaderError);
+  expect(errorTypeName(header)).toBe("RangeError");
+  expect(header.name).toBe("RangeError");
 });
 
 test("openaiIdHeaders maps the ids to their headers", () => {

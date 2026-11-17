@@ -17,7 +17,7 @@ import { isRecord } from "../typesys/index.ts";
 import type { StructuredOutput } from "../llm/events.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { fromHost as hostValue } from "../typesys/values.ts";
-import { validateHeaderName, validateHeaders, validateOrganization } from "./connection_settings.ts";
+import { HeaderError, validateHeaderName, validateHeaders, validateOrganization } from "./connection_settings.ts";
 import { CHAT_APIS, type ChatApi, PROVIDER_BASE_URL, sendsToResponses, takesApi } from "./endpoints.ts";
 import { blockSchema, checkBlock, choices, type Issue, PROVIDER_BLOCKS, ValidationError } from "./provider_blocks.ts";
 
@@ -342,7 +342,8 @@ function readApi(value: unknown, provider: LLMProvider | null, issues: Issue[]):
  * Return `value` read as connection headers, appending its issues to `issues`.
  *
  * A non-record is `dict_type` and a non-string value `string_type`; an empty record is `null`;
- * then the names and values must pass `validateHeaders` for every provider.
+ * then the names and values must pass `validateHeaders` for every provider. An issue about one
+ * header also carries its message without the header's name, as a mapping field's entry does.
  */
 function readHeaders(value: unknown, issues: Issue[]): Record<string, string> | null {
   if (value === null || value === undefined) return null;
@@ -352,9 +353,11 @@ function readHeaders(value: unknown, issues: Issue[]): Record<string, string> | 
   }
   const entries = Object.entries(value).filter(([, item]) => item !== undefined);
   const before = issues.length;
+  const msg = "Input should be a valid string";
   for (const [name, item] of entries) {
     if (typeof item !== "string") {
-      issues.push({ loc: ["headers", name], type: "string_type", msg: "Input should be a valid string" });
+      const unnamed = { unnamedLoc: ["headers"], unnamedError: `an entry's value: ${msg}` };
+      issues.push({ loc: ["headers", name], type: "string_type", msg, ...unnamed });
     }
   }
   if (issues.length > before || entries.length === 0) return null;
@@ -362,7 +365,8 @@ function readHeaders(value: unknown, issues: Issue[]): Record<string, string> | 
     return validateHeaders(value, null);
   } catch (error) {
     if (!(error instanceof RangeError)) throw error;
-    issues.push(valueError(["headers"], error.message));
+    const issue = valueError(["headers"], error.message);
+    issues.push(error instanceof HeaderError ? { ...issue, unnamedError: error.unnamed } : issue);
     return null;
   }
 }
@@ -551,7 +555,13 @@ export class LLMConfig {
       const value = own(data, key);
       if (value === null || value === undefined) continue;
       const checked = checkBlock(blockSchema(key), value);
-      issues.push(...checked.issues.map((issue) => ({ ...issue, loc: [key, ...issue.loc] })));
+      issues.push(
+        ...checked.issues.map((issue) => ({
+          ...issue,
+          loc: [key, ...issue.loc],
+          ...(issue.unnamedLoc && { unnamedLoc: [key, ...issue.unnamedLoc] }),
+        })),
+      );
       if (checked.value !== null) blocks.set(key, checked.value);
     }
     for (const [key, value] of Object.entries(data)) {

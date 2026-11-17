@@ -68,10 +68,13 @@ export interface Issue {
   /** For a `value_error`: the validator's own message, without "Value error, ". */
   readonly error?: string;
   /**
-   * For a block's reserved and unknown keys: `error` with each unknown key left unnamed, for output
-   * that must not echo a host's keys (a pasted credential could be one).
+   * The message without a key the host chose, for output that must not echo a host's keys (a
+   * pasted credential could be one). For a block's reserved and unknown keys, `error` with each
+   * unknown key left unnamed; for an entry of a mapping field, `msg` said of the entry's key or value.
    */
   readonly unnamedError?: string;
+  /** For an entry of a mapping field: `loc` up to the mapping, without the entry's key. */
+  readonly unnamedLoc?: Loc;
 }
 
 /**
@@ -259,16 +262,22 @@ function checkList(field: Extract<Field, { kind: "list" }>, value: unknown, at: 
   return { value: items, issues };
 }
 
-/** Check each entry's key and value, then the mapping's length. */
+/**
+ * Check each entry's key and value, then the mapping's length. An entry's issues also carry their
+ * location and message without the entry's key.
+ */
 function checkMap(field: Extract<Field, { kind: "map" }>, value: unknown, at: At): Checked {
   if (!isRecord(value)) return fail(at, "dict_type", "Input should be a valid dictionary");
   const entries: [string, JsonValue][] = [];
   const issues: Issue[] = [];
+  const unnamedLoc = Object.freeze(locOf(at));
+  const unnamed = (part: string, found: Issue[]): Issue[] =>
+    found.map((issue) => ({ ...issue, unnamedLoc, unnamedError: `an entry's ${part}: ${issue.msg}` }));
   for (const [key, item] of Object.entries(value)) {
     if (item === undefined) continue;
-    issues.push(...checkField(field.key, key, down(down(at, key), "[key]")).issues);
+    issues.push(...unnamed("key", checkField(field.key, key, down(down(at, key), "[key]")).issues));
     const checked = checkItem(field.value, item, down(at, key));
-    issues.push(...checked.issues);
+    issues.push(...unnamed("value", checked.issues));
     entries.push([key, checked.value]);
   }
   if (issues.length > 0) return { value: null, issues };

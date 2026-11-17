@@ -1081,15 +1081,17 @@ export interface ConfigProblem {
  * runs.
  *
  * The credentials are popped from a copy, then the rest is validated; the first failing step's
- * errors are returned. An unknown top-level key is reported without its name, since a pasted key
- * could be the name; a provider block reports its own field problems at its block's name. When
- * the layer sets both the provider and the model, its block is then checked against the model's
- * API as if no flow or agent layer overrides either, so a layer a run with such overrides accepts
- * can still be refused here.
+ * errors are returned. No key the host chose is named, since a pasted key could be the name: an
+ * unknown top-level key is reported without its name, a provider block reports its own unknown
+ * keys at the object holding them, and a mapping field (`headers`, `openai.metadata`) reports a
+ * bad entry at the field, without the entry's key. When the layer sets both the provider and the
+ * model, its block is then checked against the model's API as if no flow or agent layer overrides
+ * either, so a layer a run with such overrides accepts can still be refused here.
  *
- * @returns Each distinct error, where `field` is the error's location joined with `.`, or `null`
- *   for an unknown top-level key, a plain `RangeError` or a model-level error, and the block's
- *   name for a block the model's API can't take; empty when the layer is valid.
+ * @returns Each distinct error, where `field` is the error's location joined with `.` (up to the
+ *   mapping, for a mapping field's entry), or `null` for an unknown top-level key, a plain
+ *   `RangeError` or a model-level error, and the block's name for a block the model's API can't
+ *   take; empty when the layer is valid.
  */
 export function configErrors(layer: Readonly<Record<string, unknown>>): ConfigProblem[] {
   const rest = { ...layer };
@@ -1102,13 +1104,13 @@ export function configErrors(layer: Readonly<Record<string, unknown>>): ConfigPr
       const errors: ConfigProblem[] = [];
       const seen = new Set<string>();
       for (const issue of error.issues) {
-        // An unknown key is never named, at the top level or in a provider block: a pasted key
-        // could be the name.
+        // A key the host chose is never named: an unknown key, at the top level or in a provider
+        // block, or the key of a mapping field's entry. A pasted key could be the name.
         const entry =
           issue.type === "extra_forbidden" && issue.loc.length === 1
             ? { field: null, message: EXTRA_FIELD }
             : {
-                field: issue.loc.join(".") || null,
+                field: (issue.unnamedLoc ?? issue.loc).join(".") || null,
                 message: issue.unnamedError ?? issue.msg.replace(/^Value error, /, ""),
               };
         const key = JSON.stringify([entry.field, entry.message]);
@@ -1159,7 +1161,7 @@ export async function configCheck(command: ParsedArgs, io: CliIo): Promise<numbe
   } else if (errors.length === 0) {
     await io.stdout.write("ok\n");
   } else {
-    // A field and its message can quote a layer's key: on a terminal each control character in it shows.
+    // No line quotes a key the host chose; still, on a terminal any control character shows, not acts.
     const line = ({ field, message }: ConfigProblem) => showForTerminal(field ? `${field}: ${message}` : message, io.stderr);
     await io.stderr.write(errors.map((error) => `${line(error)}\n`).join(""));
   }

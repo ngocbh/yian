@@ -323,7 +323,8 @@ assistant and goes step by step; small edits it makes with `write_flow`.
 1. **Goal**: what the flow is for, its inputs and output, and what "done" means.
 2. **Contract**: types, nodes in outline, sample inputs and the path, which you confirm.
 3. **Draft**: written with the `composing-agents` skill.
-4. **Check**: fixes load errors, three tries at most.
+4. **Check**: fixes load errors, and each `call:` name the check finds close to one the flow
+   defines (`gret` for the def `greet`); three tries at most.
 5. **Review**: runs `review_flow`.
 6. **Try**: runs the draft on the samples once you approve; skipped after a high-severity security
    finding or for a flow with an inbox input.

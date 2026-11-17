@@ -21,7 +21,7 @@ test("source span is absent from runtime events", () => {
 test("failure carriers have no parallel location fields", () => {
   const failure = new Failure({ code: "node.execute", message: "boom", nodeId: "work" });
   expect(Object.keys(new EvaluationFailure(failure))).toEqual(["failure"]);
-  expect(Object.keys(new NodeFailed({ failure }))).toEqual(["type", "failure"]);
+  expect(Object.keys(new NodeFailed({ failure }))).toEqual(["type", "failure", "callId", "scope"]);
   expect(Object.keys(new RunFailed({ failure }))).toEqual(["type", "failure"]);
   expect(Object.keys(new NodeFailedRecord(failure))).toEqual(["failure", "callId", "scope"]);
 

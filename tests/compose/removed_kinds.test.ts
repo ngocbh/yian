@@ -32,6 +32,11 @@ test.each([
   ["    tool_id: 'web search'\n", "<tool>"],
   ["    tool_id: |\n      search\n", "<tool>"],
   ["    tool_id: {github: 'web search'}\n", "<tool>"],
+  // Each would read back as a boolean, a null or a number after `call:`.
+  ["    tool_id: 'true'\n", "<tool>"],
+  ["    tool_id: '1e3'\n", "<tool>"],
+  ["    tool_id: '.inf'\n", "<tool>"],
+  ["    tool_id: {github: 'null'}\n", "<tool>"],
 ])("kind: tool with %p shows the call to write", async (toolId, call) => {
   expect(await refusal(`    kind: tool\n${toolId}`)).toBe(
     `node 'n': kind 'tool' was removed; write \`kind: call\` with \`call: ${call}\``,

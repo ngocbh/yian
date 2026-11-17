@@ -16,6 +16,7 @@
  */
 
 import { isRecord } from "../../typesys/values.ts";
+import { parseYamlLiteral, SourceSyntaxError } from "../source/index.ts";
 import type { NodeDescriptor } from "./base.ts";
 import { AgentDescriptor } from "./agent.ts";
 import { CodeDescriptor } from "./code.ts";
@@ -51,8 +52,8 @@ export const BINDING_FIELDS: ReadonlyMap<string, readonly string[]> = new Map(
 
 // Stands for the tool in a fix that can't name it.
 const TOOL_PLACEHOLDER = "<tool>";
-// A name a fix can show as written: one line, nothing YAML would read another way.
-const PLAIN_NAME = /^[A-Za-z0-9_.-]+$/;
+// The characters of a name a fix can show as written, on one line.
+const NAME_CHARS = /^[A-Za-z0-9_.-]+$/;
 
 /**
  * Each removed kind to what to write instead, so loading one names the replacement rather than
@@ -72,18 +73,31 @@ export const REMOVED_KINDS: ReadonlyMap<string, string> = new Map([
  */
 export function removedKindFix(kind: string, toolId: unknown): string | undefined {
   const fix = REMOVED_KINDS.get(kind);
-  return kind === "tool" ? fix!.replace(TOOL_PLACEHOLDER, writtenTool(toolId)) : fix;
+  return kind === "tool" ? fix!.replace(TOOL_PLACEHOLDER, toolIdAsCall(toolId)) : fix;
 }
 
 /**
- * A tool as a `call:` writes it: a plain name, or `{group: tool}` for a one-key mapping of plain
- * names; `<tool>` for any other value.
+ * The value of the `call:` that the removed `tool_id:` value `value` becomes: a plain name, or
+ * `{group: tool}` for a one-key mapping of plain names; `<tool>` for any other value.
  */
-export function writtenTool(value: unknown): string {
-  const plain = (text: unknown): text is string => typeof text === "string" && PLAIN_NAME.test(text);
-  if (plain(value)) return value;
+export function toolIdAsCall(value: unknown): string {
+  if (plainName(value)) return value;
   const entries = isRecord(value) ? Object.entries(value) : [];
   if (entries.length !== 1) return TOOL_PLACEHOLDER;
   const [group, name] = entries[0]!;
-  return plain(group) && plain(name) ? `{${group}: ${name}}` : TOOL_PLACEHOLDER;
+  return plainName(group) && plainName(name) ? `{${group}: ${name}}` : TOOL_PLACEHOLDER;
+}
+
+/**
+ * Whether `value` is a name a fix can show as written: name characters on one line, which YAML
+ * reads back as the same text, not as `true`, `null` or `1e3`.
+ */
+function plainName(value: unknown): value is string {
+  if (typeof value !== "string" || !NAME_CHARS.test(value)) return false;
+  try {
+    return parseYamlLiteral(value) === value;
+  } catch (error) {
+    if (error instanceof SourceSyntaxError) return false;
+    throw error;
+  }
 }

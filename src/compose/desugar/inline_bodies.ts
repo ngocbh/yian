@@ -21,13 +21,12 @@ import { LoadDiagnostics } from "../helpers/errors.ts";
 import { hasSpan } from "../helpers/tags.ts";
 import { readCallTarget } from "../nodes/base.ts";
 import type { CallsTool } from "../nodes/call.ts";
-import { KINDS } from "../nodes/index.ts";
+import { KINDS, toolIdAsCall } from "../nodes/index.ts";
 import {
   identifierSuggestion,
   isIdentifier,
   normalizeNodeSignatureCursor,
   rejectNonIdentifierInput,
-  rejectToolId,
 } from "../parse/nodes.ts";
 import { setRecordKey } from "../source/common.ts";
 import { SourceCursor } from "../source/index.ts";
@@ -145,8 +144,8 @@ export function inlineFlowId(owner: readonly string[]): string {
  * @returns The masked `nodes:` cursor and the retained bodies by node id, in source order.
  * @throws LoadError for an authored call into the private namespace, a malformed inline body,
  *   `output:` beside a named `call:` that isn't a tool call's, a map's or loop's `input:` key naming
- *   the memory it calls, a loop's carried field that isn't an identifier, or `tool_id:`
- *   (`rejectToolId`); as `callsTool` throws.
+ *   the memory it calls, a loop's carried field that isn't an identifier, or the removed
+ *   `tool_id:` (at its key, showing the `call:` to write); as `callsTool` throws.
  * @throws SourceAccessError when a needed field is behind a recursive alias.
  */
 export function extractInlineBodies(
@@ -178,7 +177,12 @@ export function extractInlineBodies(
       continue;
     }
     const subject = `node ${reprText(nodeId)} (kind=${kind})`;
-    rejectToolId(nodeId, kind, bodyCursor, diagnostics);
+    if (Object.hasOwn(rawBody, "tool_id")) {
+      throw diagnostics.error(
+        `${subject}: \`tool_id:\` is now \`call:\`; write \`call: ${toolIdAsCall(rawBody["tool_id"])}\``,
+        { range: bodyCursor.keyRangeOf("tool_id") },
+      );
+    }
 
     const hasCall = Object.hasOwn(rawBody, "call");
     const hasNodes = Object.hasOwn(rawBody, "nodes");

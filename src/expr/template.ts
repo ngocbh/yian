@@ -190,8 +190,8 @@ export function scanTemplate(text: string | Verbatim): TemplateSegment[] {
  *
  * @param segments The scan from `scanTemplate`.
  * @param resolve Reads a reference's root from its names (see `evalExpr`).
- * @param options.item The MAP-body-local scope for `item` / `item.path`; `null` (the default)
- *   means no item scope.
+ * @param options.item The MAP-body-local scope for `item` / `item.path`; absent (the default),
+ *   `item` is a root `resolve` reads (see `evalExpr`).
  * @param options.mode How a missing reference is treated inside a span (default
  *   `BINDING_NONE`; see `evalExpr`).
  * @param options.types The type table `isinstance(x, T)` and a `T(...)` constructor look `T` up

@@ -950,8 +950,9 @@ class EvalExpr {
 
   /**
    * Read a reference: its root, then its steps by the step table (`walkSteps`). An `item`-headed
-   * one reads the MAP-body `item` scope; any other root comes from `resolve`. Only a missing root
-   * with no steps after it is `MISSING`.
+   * one reads the MAP-body `item` scope when there is one; any other root, and `item` without that
+   * scope (a local named `item`), comes from `resolve`. Only a missing root with no steps after it
+   * is `MISSING`.
    *
    * @param head The reference's first name.
    * @param steps Its steps as written.
@@ -960,11 +961,11 @@ class EvalExpr {
    */
   reference(head: string, steps: readonly RefStep[], text: string): Walked {
     const stepNames = steps.map((step) => step.name);
-    if (head === "item") {
-      // MAP-body-local scope (not a resolver head); an absent item means no item scope.
-      const item = this.#item;
+    if (head === "item" && this.#item !== undefined) {
+      // MAP-body-local scope, not a resolver head. Without it (a prompt, an assert, a loop
+      // condition), `item` is a local name like any other.
       const membersOf = () => declaredOf(this.#itemType);
-      const [walked] = this.walkSteps(item === undefined ? MISSING : item, membersOf, steps, "item", null);
+      const [walked] = this.walkSteps(this.#item, membersOf, steps, "item", null);
       return walked === MISSING ? this.missAt(text) : walked;
     }
     const read = this.#resolve([head, ...stepNames]);
@@ -1161,7 +1162,7 @@ class EvalExpr {
     if (untyped && this.#vars.size === 0) return null;
     const refType = (path: string): Type | null => {
       const names = path.split(".");
-      if (names[0] === "item") return declaredAt(this.#itemType, names.slice(1));
+      if (names[0] === "item" && this.#item !== undefined) return declaredAt(this.#itemType, names.slice(1));
       return this.#declared?.(names) ?? null;
     };
     const typeFn = (name: string): Type | null => this.#types?.get(name) ?? null;
@@ -1511,9 +1512,10 @@ export interface EvalOptions {
  *
  * @param tree The parsed expression: a `Tree`, or a lone literal `Token`.
  * @param resolve Reads a reference's root from its names (`RootResolver`); the evaluator walks the
- *   names after the root. `item`-headed references bypass it.
+ *   names after the root. `item`-headed references bypass it when there is an item scope.
  * @param options.item The MAP-body-local scope for `item` / `item.path` (record and file
- *   fields); `null` (the default) means no item scope.
+ *   fields). Absent (the default), there is no item scope, and `item` is a root `resolve` reads,
+ *   such as a node's own input named `item`.
  * @param options.mode How a missing root is treated (default `BINDING_NONE`).
  * @param options.types The type table `isinstance(x, T)` and a `T(...)` constructor look `T` up
  *   in, keyed by type name; `null` (the default) means no types.

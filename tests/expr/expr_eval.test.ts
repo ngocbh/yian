@@ -477,6 +477,17 @@ test("item-headed paths never reach resolve", () => {
   expect(evaluate("item.k", resolve, { item: { k: "item" } })).toBe("item");
 });
 
+test("without an item scope, item is a root like any other, read from resolve", () => {
+  // A prompt, an assert or a loop condition reads a local named `item`; only a MAP binding has the item.
+  const resolve = fromRecord({ item: { k: "local" } });
+  expect(evalExpr(parseExpr("item.k"), resolve)).toBe("local");
+  expect(evalExpr(parseExpr("item"), resolve, { mode: ResolveMode.STRICT_RAISE })).toEqual({ k: "local" });
+  expect(() => evalExpr(parseExpr("item"), MISSING_ROOT, { mode: ResolveMode.STRICT_RAISE })).toThrow(
+    "unresolved reference ${item} in expression",
+  );
+  expect(evalExpr(parseExpr("item.k"), resolve, { item: { k: "mapped" } })).toBe("mapped");
+});
+
 // --------------------------------------------------------------------------------------- //
 // `and` / `or` fold by truthiness
 // --------------------------------------------------------------------------------------- //

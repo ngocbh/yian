@@ -1,0 +1,8 @@
+# A `when:`, a `while:` or an assert reads a local named `item` by bare name, as `input` or
+# `system` would be: the MAP item is never in scope there.
+kind: expr
+mode: condition
+expr: item == "hi" and input == "x"
+values: {item: hi, input: x}
+expect:
+  value: true

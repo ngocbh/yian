@@ -1,8 +1,7 @@
 # An AGENT grants the tool module alias `crm`, a group the model sees as `crm_<export>` in export
 # order, and the one-export alias `quote`, the tool `quote`. Each call runs on its module's thread.
 # `run_started` records both modules' tools under `tool_modules` (the golden log), every tool of
-# the group's file. The tools are resumable, so under `--crash-sweep` a resume sends a call a cut
-# cut off again.
+# the group's file. Under `--crash-sweep` a resume closes a call a cut cut off `crashed`.
 kind: run
 flow: |
   id: crm
@@ -26,14 +25,12 @@ files:
       name: "lookup",
       description: "Find a customer by id.",
       parameters: id,
-      resumable: true,
       execute: (args) => ({ id: args.id, name: "Ada" }),
     };
     export const create = {
       name: "create",
       description: "Create a customer.",
       parameters: id,
-      resumable: true,
       execute: () => null,
     };
   tools.ts: |
@@ -41,7 +38,6 @@ files:
       name: "quote",
       description: "Price an order.",
       parameters: { type: "object", properties: { qty: { type: "integer" } }, required: ["qty"] },
-      resumable: true,
       execute: (args) => args.qty * 2,
     };
 run:

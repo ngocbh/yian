@@ -658,11 +658,12 @@ it `unstarted`, and the resume to refuse it (`run log <path> ends inside its run
 inputs were recorded; delete it and start the run again`) and leave the log as it is. Each resume is held to
 the host scripts as the uncut run is: a model request that differs from its entry's `request`, a
 call past a script's end, or an entry left unused fails the sweep. An AGENT tool call whose reply
-is in the cut log, but not its result, and that the uncut run made is closed `crashed`, not made
-again (`closed: crashed` above): the resume must close exactly those calls, by node and call id (a
-call the agent never makes, such as an ungranted tool's, has nothing to cut off). A resumable stub's
-cut call is sent again instead, so it is never closed and gets none of the allowances below; an
-answer the stub gave after the cut goes back with its entry. For each closed call, the
+is in the cut log, but not its result, and that the uncut run made (it reached a stub, or was sent
+to a tool module's thread) is closed `crashed`, not made again (`closed: crashed` above): the
+resume must close exactly those calls, by node and call id (a call the agent never makes, such as
+an ungranted tool's, has nothing to cut off). A resumable stub's or module tool's cut call is sent
+again instead, so it is never closed and gets none of the allowances below; an answer the stub
+gave after the cut goes back with its entry. For each closed call, the
 script it took from (`host.tools` or `host.human`) may keep one entry, since what the call took
 stays taken; its agent's `host.models` script may run out, since the agent reads the closer and
 may make a model call more; and the agent's later scripted requests are compared with that call's

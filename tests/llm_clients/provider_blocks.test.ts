@@ -532,15 +532,22 @@ describe("OpenAI Responses block", () => {
   });
 
   test("key problems are one value error at the block, in written order", () => {
-    const joined =
-      "`openai.temprature` is not a supported field of the OpenAI Responses API request; allowed: " +
+    const refused =
+      "is not a supported field of the OpenAI Responses API request; allowed: " +
       "access_programs, max_output_tokens, max_tool_calls, metadata, moderation, prompt_cache_key, " +
       "prompt_cache_options, prompt_cache_retention, reasoning, safety_identifier, service_tier, " +
-      "store, temperature, text, top_logprobs, top_p, truncation, user; " +
-      "`openai.include` is built by yian (response items); remove it";
+      "store, temperature, text, top_logprobs, top_p, truncation, user";
+    const reserved = "`openai.include` is built by yian (response items); remove it";
+    const joined = `\`openai.temprature\` ${refused}; ${reserved}`;
     const result = checkBlock(OpenAIResponsesBlock, { temprature: 1n, include: [], skipped: undefined });
     expect(result.value).toBeNull();
-    expect(result.issues).toEqual([{ loc: [], type: "value_error", msg: `Value error, ${joined}`, error: joined }]);
+    // Unnamed, the unknown key gives the object it is in; a second one there reads the same.
+    const unnamedError = `\`openai\` has a field that ${refused}; ${reserved}`;
+    expect(result.issues).toEqual([
+      { loc: [], type: "value_error", msg: `Value error, ${joined}`, error: joined, unnamedError },
+    ]);
+    const twice = checkBlock(OpenAIResponsesBlock, { temprature: 1n, include: [], tempreture: 1n });
+    expect(twice.issues[0]!.unnamedError).toBe(unnamedError);
     expect(error(OpenAIResponsesBlock, { temprature: 1n, include: [] })).toBe(
       `1 validation error for OpenAIResponsesBlock\n  Value error, ${joined}`,
     );

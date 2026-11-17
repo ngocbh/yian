@@ -204,7 +204,9 @@ llm_config:
 ```
 
 `yian auth azure --endpoint URL --model DEPLOYMENT` saves both, and fills them for Azure agents
-that leave them unset. Without a key from the host or a saved login, a run uses
+that leave them unset. It checks the deployment where a run with no `api` sends it. If Chat
+Completions refuses it with HTTP 400 and the Responses API answers, the login is saved, and it says
+to set `api: responses`. Without a key from the host or a saved login, a run uses
 `AZURE_OPENAI_AD_TOKEN` (a bearer token), then `AZURE_OPENAI_API_KEY`.
 
 **Local models.** Ollama takes no key and is called at `OLLAMA_BASE_URL` (default

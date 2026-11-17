@@ -39,6 +39,7 @@ import {
   OpenAIAuth,
 } from "../../src/llm_clients/auth/index.ts";
 import { LLM_CONFIG_KEYS, SUPPORTED_LLM_PROVIDERS, validateBaseUrl } from "../../src/llm_clients/config.ts";
+import { OpenAIResponsesBlock } from "../../src/llm_clients/provider_blocks.ts";
 import { ConnectionSnapshot } from "../../src/llm_clients/connection.ts";
 import {
   OPENAI_REFUSED_HEADER_NAMES,
@@ -51,7 +52,8 @@ import { chatModelFromConfig } from "../../src/llm_clients/factory.ts";
 import { type ListModelsOptions, listModels, ModelListError } from "../../src/llm_clients/model_list.ts";
 import { type Event, Finish, PartDone, TextDelta } from "../../src/llm/events.ts";
 import { Message, Request, TextPart } from "../../src/llm/messages.ts";
-import { lockFile, virtualScheduler } from "../../src/platform.ts";
+import { lockFile, type Send, virtualScheduler } from "../../src/platform.ts";
+import { chatText, recorder, type Replier, responsesText } from "../helpers/run_state_fixtures.ts";
 
 let tmp: string;
 
@@ -196,6 +198,34 @@ describe("configErrors", () => {
     expect(EXTRA_FIELD).toBe(`llm_config has an extra field; the fields are ${[...LLM_CONFIG_KEYS].sort().join(", ")}`);
   });
 
+  test("an unknown key in a provider block is reported at its object, without its name", () => {
+    expect(configErrors({ provider: "openai", openai: { "sk-pasted-key": 1, "sk-other-key": 2 } })).toEqual([
+      { field: "openai", message: UNKNOWN_OPENAI_FIELD },
+    ]);
+    expect(configErrors({ provider: "openai", openai: { reasoning: { effort: "low", "sk-pasted-key": 1 } } })).toEqual([
+      {
+        field: "openai",
+        message:
+          "`openai.reasoning` has a field that is not a supported field of the OpenAI Responses API request; " +
+          "allowed: context, effort, mode, summary",
+      },
+    ]);
+    expect(configErrors({ provider: "google", google: { safetySettings: [{ "sk-pasted-key": 1 }] } })).toEqual([
+      {
+        field: "google",
+        message:
+          "`google.safetySettings[0]` has a field that is not a supported field of the Gemini generateContent " +
+          "request; allowed: category, threshold",
+      },
+    ]);
+  });
+
+  test("a reserved key in a provider block is still named, beside an unnamed unknown key", () => {
+    expect(configErrors({ provider: "openai", openai: { tools: [], "sk-pasted-key": 1 } })).toEqual([
+      { field: "openai", message: `\`openai.tools\` is built by yian (tools); remove it; ${UNKNOWN_OPENAI_FIELD}` },
+    ]);
+  });
+
   test("a bad base_url with a key names base_url", () => {
     const errors = configErrors({ provider: "openai", api_key: "k", base_url: "http://example.com/v1" });
     expect(errors.map((error) => error.field)).toEqual(["base_url"]);
@@ -305,9 +335,24 @@ describe("configCheck", () => {
     });
   });
 
+  test("an unknown key in a provider block is not printed, in text or in JSON", async () => {
+    const stdin = JSON.stringify({ provider: "openai", openai: { "sk-pasted-key": 1 } });
+    const text = await run(configCheck, jsonArgs(false), fakeIo({ stdin }));
+    expect(text).toEqual({ code: 1, out: "", err: `openai: ${UNKNOWN_OPENAI_FIELD}\n` });
+    const json = await run(configCheck, jsonArgs(true), fakeIo({ stdin }));
+    expect(json.code).toBe(1);
+    expect(json.out).not.toContain("sk-pasted-key");
+    expect(JSON.parse(json.out)).toEqual({
+      format: "yian.cli.v1",
+      ok: false,
+      errors: [{ field: "openai", message: UNKNOWN_OPENAI_FIELD }],
+    });
+  });
+
   test("text on a terminal shows an error line's control characters; piped, it keeps them", async () => {
+    // A mapping field's own keys are named, as the error's field.
     const key = "\u001b]0;PWNEDTITLE\u0007\u001b[2J\u001b[41mXX";
-    const stdin = JSON.stringify({ provider: "openai", openai: { [key]: 1 } });
+    const stdin = JSON.stringify({ provider: "openai", openai: { metadata: { [key]: 1 } } });
     const tty = await run(configCheck, jsonArgs(false), fakeIo({ stdin, outTty: true }));
     expect(tty.code).toBe(1);
     expect(tty.err).not.toContain("\x1b");
@@ -363,6 +408,11 @@ describe("configCheck", () => {
     });
   });
 });
+
+/** The error config check gives for an unknown key in the `openai` block. */
+const UNKNOWN_OPENAI_FIELD =
+  "`openai` has a field that is not a supported field of the OpenAI Responses API request; allowed: " +
+  Object.keys(OpenAIResponsesBlock.fields).sort().join(", ");
 
 /** The error config check gives for `provider`'s block on a model routed to the Responses API. */
 function responsesBlock(provider: string): string {
@@ -2042,7 +2092,54 @@ describe("modelAnswers", () => {
     stop.abort(reason);
     await expect(checking).rejects.toBe(reason);
   });
+
+  test("a stop while Azure's Responses API is asked rejects with the stop's reason", async () => {
+    const stop = new AbortController();
+    const reason = new Error("stopped");
+    const send: Send = async (input, init) => {
+      if (new URL(String(input)).pathname !== "/openai/responses") return refusal(400, "not served here");
+      stop.abort(reason);
+      // As fetch rejects once its signal aborts.
+      throw init.signal!.reason;
+    };
+    const env = { OPENAI_API_VERSION: "2025-03-01-preview" };
+    const deps = { chatModel: realChatModel(send) };
+    const endpoint = "https://r.openai.azure.com/";
+    const checking = modelAnswers("azure", "dep", "private-key", endpoint, {}, io(env), deps, stop.signal);
+    await expect(checking).rejects.toBe(reason);
+  });
 });
+
+/** A `chatModel` that builds the real model, its requests going to `send`. */
+function realChatModel(send: Send): NonNullable<AuthDeps["chatModel"]> {
+  return ((config, options = {}) => chatModelFromConfig(config, { ...options, send })) as NonNullable<
+    AuthDeps["chatModel"]
+  >;
+}
+
+/** A JSON error reply with `status` and Azure's error `message`. */
+function refusal(status: number, message: string): globalThis.Response {
+  const body = { error: { code: "OperationNotSupported", message } };
+  return new globalThis.Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+/**
+ * An Azure resource whose deployment answers "OK" through `api` and refuses the other API as Azure
+ * refuses an operation a deployment doesn't serve (HTTP 400 `OperationNotSupported`).
+ */
+function azureServing(api: "chat" | "responses" | "neither"): Replier {
+  return (sent) => {
+    const responses = new URL(sent.url).pathname === "/openai/responses";
+    if (api === "responses" && responses) return responsesText("OK");
+    if (api === "chat" && !responses) return chatText("OK");
+    const operation = responses ? "responses" : "chatCompletion";
+    return refusal(
+      400,
+      `The ${operation} operation does not work with the specified model, ${String(sent.body["model"] ?? "dep")}. ` +
+        "Please choose different model and try again.",
+    );
+  };
+}
 
 /**
  * `setupAuth` with a fake `listModels` and a fake `chatModel`. The listing
@@ -2433,6 +2530,71 @@ describe("auth provider setup", () => {
     ]);
     expect(c.answers()).toEqual([["azure", "dep", "private-key", endpoint]]);
     expect(c.store.selection("azure")?.endpoint).toBe(endpoint);
+  });
+
+  test("an Azure deployment serving only the Responses API passes the check there, which says to set api", async () => {
+    const c = checks();
+    c.env["AZURE_OPENAI_API_KEY"] = "private-key";
+    c.env["OPENAI_API_VERSION"] = "2025-03-01-preview";
+    const endpoint = "https://r.openai.azure.com/";
+    const azure = recorder(azureServing("responses"));
+    const result = await runAuth(c, "azure", { endpoint, model: "dep" }, { chatModel: realChatModel(azure.send) });
+    expect(result.err).toBe("");
+    expect(result.code).toBe(0);
+    expect(azure.requests.map((sent) => new URL(sent.url).pathname)).toEqual([
+      "/openai/deployments/dep/chat/completions",
+      "/openai/responses",
+    ]);
+    expect(azure.requests[1]!.body["model"]).toBe("dep");
+    expect(result.out).toBe(
+      "Deployment dep answered through the Responses API, not Chat Completions; set api: responses in the " +
+        "llm_config of runs that use it\nSaved azure login (api-key) with model dep\nDefault provider: azure\n",
+    );
+    expect(c.store.selection("azure")!.model).toBe("dep");
+  });
+
+  test("an Azure deployment serving Chat Completions is checked there alone", async () => {
+    const c = checks();
+    c.env["AZURE_OPENAI_API_KEY"] = "private-key";
+    c.env["OPENAI_API_VERSION"] = "2025-03-01-preview";
+    const azure = recorder(azureServing("chat"));
+    const chatModel = realChatModel(azure.send);
+    const result = await runAuth(c, "azure", { endpoint: "https://r.openai.azure.com/", model: "dep" }, { chatModel });
+    const out = "Saved azure login (api-key) with model dep\nDefault provider: azure\n";
+    expect(result).toMatchObject({ code: 0, out });
+    const paths = azure.requests.map((sent) => new URL(sent.url).pathname);
+    expect(paths).toEqual(["/openai/deployments/dep/chat/completions"]);
+  });
+
+  test("an Azure deployment refused on both APIs reports the Chat Completions refusal and saves nothing", async () => {
+    const c = checks();
+    c.env["AZURE_OPENAI_API_KEY"] = "private-key";
+    c.env["OPENAI_API_VERSION"] = "2025-03-01-preview";
+    const azure = recorder(azureServing("neither"));
+    const chatModel = realChatModel(azure.send);
+    const result = await runAuth(c, "azure", { endpoint: "https://r.openai.azure.com/", model: "dep" }, { chatModel });
+    expect(result.code).toBe(1);
+    expect(result.err).toBe(
+      "The model didn't answer: ProviderError: azure returned HTTP 400 (bad_request): The chatCompletion operation " +
+        "does not work with the specified model, dep. Please choose different model and try again.; the previous " +
+        "login is unchanged\n",
+    );
+    expect(azure.requests).toHaveLength(2);
+    expect(existsSync(c.path)).toBe(false);
+  });
+
+  test.each([
+    ["a deployment the name rule sends to Responses", "my-codex", 400],
+    ["a refusal that isn't HTTP 400", "dep", 404],
+  ])("the Azure check asks only one API for %s", async (_, model, status) => {
+    const c = checks();
+    c.env["AZURE_OPENAI_API_KEY"] = "private-key";
+    c.env["OPENAI_API_VERSION"] = "2025-03-01-preview";
+    const azure = recorder(() => refusal(status, "refused"));
+    const chatModel = realChatModel(azure.send);
+    const result = await runAuth(c, "azure", { endpoint: "https://r.openai.azure.com/", model }, { chatModel });
+    expect(result.code).toBe(1);
+    expect(azure.requests).toHaveLength(1);
   });
 
   // Azure setup requires the api version.

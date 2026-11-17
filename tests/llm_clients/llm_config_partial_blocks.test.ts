@@ -255,6 +255,18 @@ describe("edge cases", () => {
     expect(blockFieldAnnotation("anthropic", ["constructor"], {})).toBeNull();
   });
 
+  test("many duplicate issues are each reported once, in linear time", () => {
+    // Each empty entry misses both of its required fields, and both report at the entry's path.
+    const count = 50_000;
+    const started = performance.now();
+    const found = problems("google", { safetySettings: Array.from({ length: count }, () => ({})) });
+
+    expect(performance.now() - started).toBeLessThan(3_000);
+    expect(found).toHaveLength(count);
+    expect(found[0]).toBe("`google.safetySettings[0]`: Field required");
+    expect(found.at(-1)).toBe(`\`google.safetySettings[${count - 1}]\`: Field required`);
+  });
+
   test("null leaves an optional field unset; a required field given null is checked", () => {
     expect(problems("anthropic", { temperature: null, top_p: new Value() })).toEqual([]);
     expect(problems("anthropic", { thinking: { type: "enabled", budget_tokens: null } })).toEqual([

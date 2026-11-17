@@ -67,6 +67,11 @@ export interface Issue {
   readonly msg: string;
   /** For a `value_error`: the validator's own message, without "Value error, ". */
   readonly error?: string;
+  /**
+   * For a block's reserved and unknown keys: `error` with each unknown key left unnamed, for output
+   * that must not echo a host's keys (a pasted credential could be one).
+   */
+  readonly unnamedError?: string;
 }
 
 /**
@@ -383,11 +388,14 @@ export interface BlockSchema extends ObjectSchema {
 /** Check `data` against a block: the key walk, then the value pass. */
 export function checkBlock(schema: BlockSchema, data: unknown): { value: JsonObject | null; issues: Issue[] } {
   if (isRecord(data)) {
-    const problems: string[] = [];
+    const problems: KeyProblem[] = [];
     keyProblems(schema, schema, data, "", problems);
     if (problems.length > 0) {
-      const joined = problems.join("; ");
-      return { value: null, issues: [{ loc: [], type: "value_error", msg: `Value error, ${joined}`, error: joined }] };
+      const joined = problems.map((problem) => problem.message).join("; ");
+      // Several unknown keys of one object read the same once unnamed.
+      const unnamedError = [...new Set(problems.map((problem) => problem.unnamed))].join("; ");
+      const issue = { loc: [], type: "value_error", msg: `Value error, ${joined}`, error: joined, unnamedError };
+      return { value: null, issues: [issue] };
     }
   }
   return checkObject(schema, data);
@@ -400,8 +408,15 @@ export function validateBlock(schema: BlockSchema, data: unknown): JsonObject {
   return value!;
 }
 
+/** Why a block refuses a key: the message, and the same with an unknown key left unnamed. */
+interface KeyProblem {
+  readonly message: string;
+  /** The message naming the object the unknown key is in instead; a reserved key's message as it is. */
+  readonly unnamed: string;
+}
+
 /**
- * Append a message for each reserved or unknown key of `data`, recursing into parts.
+ * Append the problem of each reserved or unknown key of `data`, recursing into parts.
  *
  * `model` is the schema `data` is checked against; `top` is the block, which supplies the
  * block name, the reserved paths and the unknown-key wording.
@@ -411,28 +426,37 @@ function keyProblems(
   model: ObjectSchema,
   data: Readonly<Record<string, unknown>>,
   prefix: string,
-  problems: string[],
+  problems: KeyProblem[],
 ): void {
   for (const [key, value] of Object.entries(data)) {
     if (value === undefined) continue;
-    const path = `${prefix}${key}`;
-    const problem = badKey(top, path, key, model.fields);
+    const problem = badKey(top, prefix, key, model.fields);
     if (problem !== null) problems.push(problem);
-    else valueProblems(top, model.fields[key]!, value, path, problems);
+    else valueProblems(top, model.fields[key]!, value, `${prefix}${key}`, problems);
   }
 }
 
 /**
- * Return why `key` at `path` is not allowed, or `null` when it is.
+ * Return why `key` is not allowed in the object at `prefix` (its written path and a dot, or
+ * `""` for the block), or `null` when it is.
  *
  * `allowed` holds the keys the enclosing object accepts.
  */
-function badKey(top: BlockSchema, path: string, key: string, allowed: Readonly<Record<string, Field>>): string | null {
+function badKey(
+  top: BlockSchema,
+  prefix: string,
+  key: string,
+  allowed: Readonly<Record<string, Field>>,
+): KeyProblem | null {
+  const path = `${prefix}${key}`;
   if (Object.hasOwn(top.reserved, path)) {
-    return `\`${top.name}.${path}\` is built by yian (${top.reserved[path]!}); remove it`;
+    const message = `\`${top.name}.${path}\` is built by yian (${top.reserved[path]!}); remove it`;
+    return { message, unnamed: message };
   }
   if (!Object.hasOwn(allowed, key)) {
-    return `\`${top.name}.${path}\` ${top.api}; allowed: ${Object.keys(allowed).sort(compareCodeUnits).join(", ")}`;
+    const refused = `${top.api}; allowed: ${Object.keys(allowed).sort(compareCodeUnits).join(", ")}`;
+    const object = prefix === "" ? top.name : `${top.name}.${prefix.slice(0, -1)}`;
+    return { message: `\`${top.name}.${path}\` ${refused}`, unnamed: `\`${object}\` has a field that ${refused}` };
   }
   return null;
 }
@@ -443,7 +467,7 @@ function badKey(top: BlockSchema, path: string, key: string, allowed: Readonly<R
  * Objects inside a map field are not walked; none exists, and the value pass's
  * `extra_forbidden` would still refuse an unknown key there.
  */
-function valueProblems(top: BlockSchema, field: Field, value: unknown, path: string, problems: string[]): void {
+function valueProblems(top: BlockSchema, field: Field, value: unknown, path: string, problems: KeyProblem[]): void {
   if (isRecord(value)) {
     const part = nestedSchema(field, value);
     if (part !== null) keyProblems(top, part, value, `${path}.`, problems);
@@ -1325,6 +1349,8 @@ interface PartialWalk {
   readonly top: BlockSchema;
   readonly isValue: (leaf: unknown) => boolean;
   readonly problems: BlockProblem[];
+  /** Each problem `checkLiteral` added, as the JSON of its key parts and message. */
+  readonly seen: Set<string>;
 }
 
 /**
@@ -1352,7 +1378,7 @@ export function locatedBlockProblems(
   const top = blockSchema(block);
   if (isValue(tree)) return [];
   if (!isRecord(tree)) return [new BlockProblem([], `\`${top.name}\` must be a mapping`)];
-  const walk: PartialWalk = { top, isValue, problems: [] };
+  const walk: PartialWalk = { top, isValue, problems: [], seen: new Set() };
   partialProblems(walk, top, tree, "", []);
   return walk.problems;
 }
@@ -1371,10 +1397,9 @@ function partialProblems(
 ): void {
   for (const [key, value] of Object.entries(data)) {
     if (value === undefined) continue;
-    const path = `${prefix}${key}`;
-    const problem = badKey(walk.top, path, key, model.fields);
-    if (problem !== null) walk.problems.push(new BlockProblem([...keys, key], problem));
-    else partialField(walk, model, key, value, path, [...keys, key]);
+    const problem = badKey(walk.top, prefix, key, model.fields);
+    if (problem !== null) walk.problems.push(new BlockProblem([...keys, key], problem.message));
+    else partialField(walk, model, key, value, `${prefix}${key}`, [...keys, key]);
   }
   for (const key of Object.keys(model.fields)) {
     const given = Object.hasOwn(data, key) ? data[key] : undefined;
@@ -1449,20 +1474,21 @@ function checkLiteral(
   path: string,
   keys: Loc,
 ): void {
-  const { top, problems } = walk;
+  const { top, problems, seen } = walk;
   const add = (parts: Loc, message: string): void => {
-    // Keys hold only strings and numbers, so equal JSON means equal keys.
-    const keysJson = JSON.stringify(parts);
-    if (!problems.some((problem) => problem.message === message && JSON.stringify(problem.keys) === keysJson)) {
+    // Keys hold only strings and numbers, so equal JSON means an equal problem.
+    const key = JSON.stringify([parts, message]);
+    if (!seen.has(key)) {
+      seen.add(key);
       problems.push(new BlockProblem(parts, message));
     }
   };
   if (model === top) {
     // The field is checked as part of the block, whose key walk runs first and stops on a problem.
-    const found: string[] = [];
+    const found: KeyProblem[] = [];
     keyProblems(top, top, { [name]: value }, "", found);
     if (found.length > 0) {
-      add(keys, `\`${top.name}.${path}\`: Value error, ${found.join("; ")}`);
+      add(keys, `\`${top.name}.${path}\`: Value error, ${found.map((problem) => problem.message).join("; ")}`);
       return;
     }
   }

@@ -13,6 +13,8 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "bun:test";
 
 import { loadFlow } from "../../src/compose/loader.ts";
+import { type ChatModel, EventStream } from "../../src/llm/events.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
 import { Failure } from "../../src/diagnostics.ts";
 import {
   LiveChannel,
@@ -33,10 +35,10 @@ import {
   type RunRecord,
   RunStoppedRecord,
 } from "../../src/runtime/log.ts";
-import { runFlow } from "../../src/run.ts";
+import { interrupt, runFlow } from "../../src/run.ts";
 import { logJson } from "../../src/typesys/json.ts";
 import { callTexts, GatedModel, key, MAP_AGENTS, ONE_AGENT, runLog, until } from "./live_fixtures.ts";
-import { NO_ENV, serving } from "../helpers/run_state_fixtures.ts";
+import { callReply, NO_ENV, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 const T0 = "2026-10-23T10:00:00.000Z";
 
@@ -237,6 +239,17 @@ test("a node's failure, a run stop or a cancel drops every call", () => {
   }
 });
 
+test("a failure inside a flow call drops no call by its record; a call its scope ended goes with its end frame", () => {
+  const { frame } = recording();
+  const view = LiveView.from([], { last_seq: -1, calls: [] });
+  for (const next of [start("other", 1), start("helper/shout#0/slow", 1)]) view.apply(next);
+  const failure = new Failure({ code: "node.execute", message: "boom", nodeId: "helper/shout#0/loud" });
+  expect(view.apply(frame(new NodeFailedRecord(failure, { callId: "r1/helper/1/0", scope: "helper/shout#0" })))).toBe(true);
+  expect(view.calls().map(({ node }) => node)).toEqual(["other", "helper/shout#0/slow"]);
+  expect(view.apply({ type: "end", node: "helper/shout#0/slow", n: 1, error: "ScopeEnded" })).toBe(true);
+  expect(view.calls().map(({ node }) => node)).toEqual(["other"]);
+});
+
 test("a view reads a record frame's kind and step without decoding its payload", () => {
   const { frame } = recording();
   const view = LiveView.from([], { last_seq: -1, calls: [] });
@@ -370,6 +383,143 @@ test("a dropped chunk makes the view report a gap", async () => {
     drop: (frame) => frame.type === "chunk" && frame.index === 1,
   });
   expect(result.gapAt).toMatchObject({ type: "chunk", index: 2, text: "o" });
+});
+
+/**
+ * A view that follows `live` from before its run starts, applying every frame, and `seen`, the
+ * view's calls and the channel's snapshot right after each record frame of kind `kind` applied.
+ */
+function followFromStart(live: LiveChannel, kind: string) {
+  let view: LiveView | null = null;
+  const seen: { calls: string[]; snapshot: string[] }[] = [];
+  live.follow((frame) => {
+    if (frame.type === "snapshot") {
+      view = LiveView.from([], frame.snapshot);
+      return;
+    }
+    expect(view!.apply(frame)).toBe(true);
+    if (frame.type === "record" && decodeRecord(frame.line).kind === kind) {
+      seen.push({ calls: view!.calls().map(({ node }) => node), snapshot: live.snapshot().calls.map(({ node }) => node) });
+    }
+  });
+  return { view: () => view!, seen };
+}
+
+/** A model that streams `model`'s reply to each request only once `opened` resolves. */
+function heldModel(model: ChatModel, opened: Promise<void>): ChatModel {
+  return {
+    provider: model.provider,
+    model: model.model,
+    stream: (request, options) => {
+      const events = model.stream(request, options);
+      async function* held() {
+        await opened;
+        for (let next = await events.next(); !next.done; next = await events.next()) yield next.value;
+      }
+      return new EventStream(held(), () => events.close());
+    },
+  };
+}
+
+test("a view following a run keeps another node's call through a failure inside a flow call", async () => {
+  const flow = `
+id: helping
+name: helping
+llm_config: {provider: openai, model: gpt-test}
+defs:
+  shout:
+    description: Shout the text back.
+    input:
+      text: !str
+    nodes:
+      loud:
+        kind: code
+        input:
+          text: \${input.text}
+        output: !str
+        code: throw new Error("bad text")
+    output: \${loud.output}
+nodes:
+  helper:
+    kind: agent
+    prompt: go
+    tools: [shout]
+    output: !str
+  other:
+    kind: agent
+    prompt: o
+    output: !str
+output:
+  helper: \${helper.output}
+  other: \${other.output}
+`;
+  const live = new LiveChannel();
+  const { view, seen } = followFromStart(live, "node_failed");
+  const gated = new GatedModel({ o: ["o0", "o1"] });
+  const go = Promise.withResolvers<void>();
+  const helper = heldModel(new ScriptedModel([callReply(["shout", { text: "x" }, "c1"]), textReply("done")]), go.promise);
+  const models = { env: NO_ENV, createModel: (_config: unknown, { nodeId }: { nodeId: string }) => (nodeId === "helper" ? helper : gated) };
+  const log = runLog();
+  const run = runFlow(await loadFlow(flow), {}, { log, env: NO_ENV, models, numWorkers: 2, live });
+  gated.release("o");
+  await until(() => live.snapshot().calls.some(({ node, chunks }) => node === "other" && chunks.length === 1));
+  go.resolve();
+  await until(() => seen.length === 1);
+  // The flow call's failure ended its scope only: `other` still streams.
+  expect(seen).toEqual([{ calls: ["other"], snapshot: ["other"] }]);
+  expect(view().calls()).toEqual([{ node: "other", n: 1, text: "o0", nextIndex: 1 }]);
+  gated.release("o");
+  gated.release("o");
+  expect((await run).status).toBe("succeeded");
+  expect(view().calls()).toEqual([]);
+});
+
+test("a view following a run drops the calls of a flow call's scope an interrupt ended, with the channel", async () => {
+  const flow = `
+id: helping
+name: helping
+llm_config: {provider: openai, model: gpt-test}
+input:
+  notes: !Inbox(str)
+defs:
+  review:
+    description: Review a thing.
+    input:
+      thing: !str
+    nodes:
+      sub:
+        kind: agent
+        input:
+          thing: \${input.thing}
+        prompt: \${thing}
+        output: !str
+    output: \${sub.output}
+nodes:
+  helper:
+    kind: agent
+    steer_inbox: \${input.notes}
+    tools: [review]
+    prompt: hi
+    output: !Optional(str)
+output: \${helper.output}
+`;
+  const live = new LiveChannel();
+  const { view, seen } = followFromStart(live, "interrupted");
+  const gated = new GatedModel({ x: ["x0", "x1"] });
+  const helper = new ScriptedModel([callReply(["review", { thing: "x" }, "c1"])]);
+  const models = { env: NO_ENV, createModel: (_config: unknown, { nodeId }: { nodeId: string }) => (nodeId === "helper" ? helper : gated) };
+  const log = runLog();
+  const run = runFlow(await loadFlow(flow), {}, { log, env: NO_ENV, models, numWorkers: 2, live });
+  gated.release("x");
+  await until(() => live.snapshot().calls[0]?.chunks.length === 1);
+  expect(view().calls()).toEqual([{ node: "helper/review#0/sub", n: 1, text: "x0", nextIndex: 1 }]);
+  await interrupt(log, "notes", { env: NO_ENV });
+  // The record ended the scope; the call went with it, in the view and in the channel.
+  expect(seen).toEqual([{ calls: ["helper/review#0/sub"], snapshot: ["helper/review#0/sub"] }]);
+  expect(view().calls()).toEqual([]);
+  expect(live.snapshot().calls).toEqual([]);
+  expect((await run).status).toBe("succeeded");
+  expect(view().calls()).toEqual([]);
 });
 
 // ---------- two processes ----------

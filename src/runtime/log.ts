@@ -1590,21 +1590,27 @@ export interface RecordHeader {
   readonly kind: string;
   /** A `node_step`'s node and step number; `null` for every other kind. */
   readonly step: { readonly node: string; readonly n: number } | null;
+  /** A `node_failed`'s flow call scope, which the failure ends; `null` when it fails the run, and for every other kind. */
+  readonly scope: string | null;
 }
 
 /**
- * Read one run-log line's seq and kind, and a step's node and number, without building its
- * record: the envelope is checked as `decodeRecord` checks it, and of the payload only what is
- * read.
+ * Read one run-log line's seq and kind, a step's node and number, and a failure's flow call
+ * scope, without building its record: the envelope is checked as `decodeRecord` checks it, and of
+ * the payload only what is read.
  *
  * @throws RunLogSchemaError, RangeError, TypeError as `decodeRecord` does for the envelope, and
- *   when a step's node id or number isn't valid.
+ *   when a step's node id or number, or a failure's scope, isn't valid.
  */
 export function decodeRecordHeader(data: string | Uint8Array): RecordHeader {
   const { seq, kind, payload } = decodeWire(data, false);
-  if (kind !== "node_step") return { seq, kind, step: null };
+  if (kind === "node_failed") {
+    const scope = payload["scope"] ?? null;
+    return { seq, kind, step: null, scope: scope === null ? null : requireName(scope, "node_failed payload scope") };
+  }
+  if (kind !== "node_step") return { seq, kind, step: null, scope: null };
   const label = "node_step payload";
-  return { seq, kind, step: { node: payloadNodeId(payload, label), n: wireInt(payload["n"], `${label} n`) } };
+  return { seq, kind, step: { node: payloadNodeId(payload, label), n: wireInt(payload["n"], `${label} n`) }, scope: null };
 }
 
 /**

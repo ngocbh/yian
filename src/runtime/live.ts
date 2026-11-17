@@ -9,7 +9,9 @@
  *
  * The channel keeps the chunks of each call in flight, one buffer per `(node, n)`, so the calls of
  * parallel nodes stay apart. A call's buffer goes when its step record is appended (a failed
- * attempt's too, before its end frame), when its node settles, or when a record ends the run. A
+ * attempt's too, before its end frame), when its node settles, when a record ends the run, or when
+ * its node's flow call scope ends (a failure inside it, or an interrupt of its agent), with an end
+ * frame whose error is `ScopeEnded`. A
  * late viewer calls `follow`, which sends the snapshot, then every later frame; it reads the log up
  * to the snapshot's `last_seq` (this may be async), then applies the frames that came meanwhile and
  * follows. Every frame after the snapshot is new to it: records continue after `last_seq` and each
@@ -24,7 +26,7 @@
 
 import { warn } from "../platform.ts";
 import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
-import { decodeRecordHeader, encodeRecord, NodeStepRecord, type RecordEnvelope, type RunLog } from "./log.ts";
+import { decodeRecordHeader, encodeRecord, NodeFailedRecord, NodeStepRecord, type RecordEnvelope, type RunLog } from "./log.ts";
 
 /** One live frame: a record the log appended, or the start, a chunk or the end of a model call. */
 export type LiveFrame =
@@ -152,9 +154,20 @@ export class LiveChannel {
   }
 
   /**
+   * @internal Engine only: end the calls of `node`, which stopped because its flow call's scope
+   * ended: drop each and send its end frame with error `ScopeEnded`, since no step record will.
+   */
+  retire(node: string): void {
+    const byN = this.#calls.get(node);
+    if (byN === undefined) return;
+    this.#calls.delete(node);
+    for (const n of byN.keys()) this.#send({ type: "end", node, n, error: SCOPE_ENDED });
+  }
+
+  /**
    * @internal Run boundary only: return a log that appends to `log` and sends each appended record
-   * to this channel once the append returns; a `node_step` drops its call, and a `node_failed`,
-   * `run_stopped` or `run_cancelled`, which end the run, drop every call. The other members read
+   * to this channel once the append returns; a `node_step` drops its call, and a `node_failed` that
+   * fails the run, a `run_stopped` or a `run_cancelled` drop every call. The other members read
    * `log`; closing it closes `log`. The records `log` already holds (a resumed run's) count as seen:
    * the snapshot's `last_seq` starts at the last.
    */
@@ -166,7 +179,10 @@ export class LiveChannel {
       if (record instanceof NodeStepRecord) deleteCall(this.#calls, record.nodeId, record.n);
       // A node failure, a stop or a cancel ends the run: its calls get no record, and their nodes
       // settle only later, so a snapshot taken in between would list calls that nothing ever drops.
-      else if (RUN_ENDING_KINDS.has(envelope.kind)) this.#calls.clear();
+      // A failure inside a flow call ends only its scope, whose calls the engine retires.
+      else if (RUN_ENDING_KINDS.has(envelope.kind) && !(record instanceof NodeFailedRecord && record.scope !== null)) {
+        this.#calls.clear();
+      }
       this.#send({ type: "record", seq, line: encodeRecord(envelope) });
     };
     return {
@@ -238,9 +254,10 @@ export interface LiveViewCall {
  * `lastSeq`, the start of a call in flight, or a chunk below its call's next index is a duplicate
  * and changes nothing; a record past the next seq, a chunk past its call's next index, or a chunk of
  * a call not in flight is a gap: `apply` returns false and changes nothing, and the host asks
- * `follow` again. A call goes when its step record arrives or when it ends with an error; a node
- * failure, a run stop or a cancel ends the run and drops every call. A run that ends without one (a
- * host fault, or its process gone) sends nothing more, so the host drops the view when the run ends.
+ * `follow` again. A call goes when its step record arrives or when it ends with an error, as a call
+ * whose flow call scope ended does (`ScopeEnded`); a node failure that fails the run, a run stop or
+ * a cancel ends the run and drops every call. A run that ends without one (a host fault, or its
+ * process gone) sends nothing more, so the host drops the view when the run ends.
  */
 export class LiveView {
   /** The text and next chunk index of each call in flight by node, then by `n`, in start order. */
@@ -303,10 +320,11 @@ export class LiveView {
       case "record": {
         if (frame.seq <= this.#lastSeq) return true;
         if (frame.seq !== this.#lastSeq + 1) return false;
-        const { kind, step } = decodeRecordHeader(frame.line);
+        const { kind, step, scope } = decodeRecordHeader(frame.line);
         this.#lastSeq = frame.seq;
         if (step !== null) deleteCall(this.#calls, step.node, step.n);
-        else if (RUN_ENDING_KINDS.has(kind)) this.#calls.clear();
+        // A failure inside a flow call ends only its scope, whose calls get end frames.
+        else if (RUN_ENDING_KINDS.has(kind) && scope === null) this.#calls.clear();
         return true;
       }
       case "start":
@@ -342,9 +360,12 @@ function setCall<V>(calls: Map<string, Map<number, V>>, node: string, n: number,
 
 /**
  * The kinds of the records that end the run, so no call in flight gets a step record: a node
- * failure, a stop or a cancel.
+ * failure (unless a flow call takes it), a stop or a cancel.
  */
 const RUN_ENDING_KINDS: ReadonlySet<string> = new Set(["node_failed", "run_stopped", "run_cancelled"]);
+
+/** The error of the end frame of a call whose node stopped because its flow call's scope ended. */
+const SCOPE_ENDED = "ScopeEnded";
 
 /** Delete the call of `node`'s step `n` from `calls`, and its node's map once empty. */
 function deleteCall<V>(calls: Map<string, Map<number, V>>, node: string, n: number): void {

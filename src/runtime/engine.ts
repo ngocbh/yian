@@ -1080,11 +1080,14 @@ export class FlowEngine {
 
   /**
    * Stop each running evaluation whose node left the graph: an ended flow call scope's (a failure
-   * inside it, or an interrupt of its agent). Its late outcome is dropped (`#retired`).
+   * inside it, or an interrupt of its agent). Its late outcome is dropped (`#retired`), and the
+   * live channel ends its model calls, which no step record will.
    */
   #stopRetired(): void {
     for (const [nodeId, controller] of this.#controllers) {
-      if (!this.state.inFlight.has(nodeId)) controller.abort(new ScopeEnded(nodeId));
+      if (this.state.inFlight.has(nodeId) || controller.signal.aborted) continue;
+      controller.abort(new ScopeEnded(nodeId));
+      this.live?.retire(nodeId);
     }
   }
 
@@ -1100,8 +1103,8 @@ export class FlowEngine {
   #stream(chunk: StreamChunk): void {
     const { live, onStream } = this;
     const { nodeId, n, index, final, chunk: text } = chunk;
-    // The channel never throws, so it needs no host-callback guard; a stopping run sends nothing.
-    if (live !== null && n !== null && index !== null && !final && !this.#controller.signal.aborted) {
+    // The channel never throws, so it needs no host-callback guard.
+    if (live !== null && n !== null && index !== null && !final && this.#framesLive(nodeId)) {
       live.chunk(nodeId, n, index, text);
     }
     if (onStream !== null) this.#emit(onStream, chunk);
@@ -1122,15 +1125,21 @@ export class FlowEngine {
   /** Pass one in-loop event to the live channel (a model call's start or end) and to `onEvent`. */
   #event(event: RunEvent): void {
     const { live, onEvent } = this;
-    if (live !== null && !this.#controller.signal.aborted) {
-      if (event instanceof ModelCallStarted) {
-        const { node_id, n, model, purpose, started_at } = event.toJSON();
-        live.start(node_id, n, model, purpose, started_at);
-      } else if (event instanceof ModelCallFinished) {
-        live.end(event.nodeId, event.n, event.error);
-      }
+    if (live !== null && event instanceof ModelCallStarted && this.#framesLive(event.nodeId)) {
+      const { node_id, n, model, purpose, started_at } = event.toJSON();
+      live.start(node_id, n, model, purpose, started_at);
+    } else if (live !== null && event instanceof ModelCallFinished && this.#framesLive(event.nodeId)) {
+      live.end(event.nodeId, event.n, event.error);
     }
     if (onEvent !== null) this.#emit(onEvent, event);
+  }
+
+  /**
+   * Whether the live channel takes `nodeId`'s call frames: not while the run stops, nor once the
+   * node's flow call scope ended, since `#stopRetired` ended its calls.
+   */
+  #framesLive(nodeId: string): boolean {
+    return !this.#controller.signal.aborted && this.state.flow.nodes.has(nodeId);
   }
 
   /**

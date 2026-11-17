@@ -11,7 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadFlow } from "../../src/compose/loader.ts";
-import { Interrupted, NodeExpanded, NodeFailed, NodeWaiting, type RunEvent } from "../../src/events.ts";
+import { Interrupted, NodeExpanded, NodeFailed, NodeWaiting, type RunEvent, type StreamChunk } from "../../src/events.ts";
+import { Finish, TextDelta } from "../../src/llm/events.ts";
 import { ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { flowResultText } from "../../src/nodes/agent/flow_tools.ts";
@@ -469,3 +470,57 @@ output: \${helper.output}
   const at = events.findIndex((event) => event instanceof Interrupted);
   expect(events[at + 1]?.toJSON()).toEqual({ call_id: "r1/helper/approve#0/sign", reason: "interrupted" });
 });
+
+for (const numWorkers of [0, 2]) {
+  test(`an interrupt that ends a flow call's scope while an agent inside it streams ends that agent, and the run goes on (${numWorkers} workers)`, async () => {
+    const flow = await loadFlow(`
+id: helping
+name: helping
+llm_config: {provider: openai, model: test-model}
+input:
+  notes: !Inbox(str)
+defs:
+  review:
+    description: Review a thing.
+    input:
+      thing: !str
+    nodes:
+      sub:
+        kind: agent
+        input:
+          subject: \${input.thing}
+        prompt: \${subject}
+        output: !str
+    output: \${sub.output}
+nodes:
+  helper:
+    kind: agent
+    steer_inbox: \${input.notes}
+    tools: [review]
+    prompt: hi
+    output: !Optional(str)
+output: \${helper.output}
+`);
+    const log = freshLog();
+    const env = hostEnv(dir);
+    const events: RunEvent[] = [];
+    let cut: Promise<unknown> | null = null;
+    // At the inner agent's first chunk, so the interrupt lands while its model call is open.
+    const onStream = (chunk: StreamChunk) => {
+      if (chunk.nodeId === "helper/review#0/sub" && cut === null) cut = interrupt(log, "notes", { env });
+    };
+    const model = new ScriptedModel([
+      callReply(["review", { thing: "x" }, "c1"]),
+      [new TextDelta(0, "looks"), new TextDelta(0, " fine"), new Finish({ reason: "stop" })],
+    ]);
+    const onEvent = (event: RunEvent) => void events.push(event);
+    const result = await runFlow(flow, {}, { log, runId: "r1", models: serving(model), env, onEvent, onStream, numWorkers });
+    await cut;
+    expect(result.status, result.failure?.message).toBe("succeeded");
+    expect(result.output).toBeNull();
+    expect(eventsOf(events, Interrupted).map(({ nodes, scopes }) => [nodes, scopes])).toEqual([[["helper"], ["helper/review#0"]]]);
+    // The inner agent ended with its scope: it records no outcome.
+    const ended = readRunLog(log).filter(({ record }) => "nodeId" in record && record.nodeId === "helper/review#0/sub");
+    expect(ended.map(({ record }) => record.constructor.name)).toEqual(["NodeStartedRecord"]);
+  });
+}

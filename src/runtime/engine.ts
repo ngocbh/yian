@@ -557,10 +557,16 @@ export class FlowEngine {
           continue;
         }
         signal.throwIfAborted();
-        const evaluated = await this.#startEvaluation(nodeId);
+        // Settled to a value, so a node whose flow call's scope ended while it ran (it rejects with
+        // `ScopeEnded`) has its outcome dropped as the pooled loop drops it, not thrown as the run's.
+        const evaluated = await this.#startEvaluation(nodeId).then(
+          (outcome) => ({ outcome }),
+          (error: unknown) => ({ error }),
+        );
         signal.throwIfAborted();
         if (this.#retired(nodeId)) continue;
-        const settled = this.#commitOutcome(nodeId, evaluated);
+        if ("error" in evaluated) throw evaluated.error;
+        const settled = this.#commitOutcome(nodeId, evaluated.outcome);
         this.#stopRetired();
         // The commit may have set the result, which the loop condition narrowed to `null`.
         if ((state.result as RunState["result"]) instanceof RunFailed) this.#controller.abort();

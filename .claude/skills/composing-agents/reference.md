@@ -82,8 +82,7 @@ or `./file.ts:fn`), `input`, `output`. The body reads `inputs.<name>` and return
 (a tool name or `{group: tool}`; a [tool module](https://yian.readthedocs.io/code-and-tools/#tool-modules)'s
 tool as `{crm: lookup}`, or `quote` for a one-export alias), `input` (the tool's own argument names), `output`, `retries`
 (default 0). The run fails before it starts when the tool is missing or an argument can never
-fit. `kind: tool` with `tool_id:` for `call:` was the old spelling; it was removed and no longer
-loads.
+fit. `kind: tool` with `tool_id:` for `call:` was the old spelling; it no longer loads.
 
 **case** ([Control flow](https://yian.readthedocs.io/control-flow/#branch-with-case)): `on`
 (optional), `cases` (a list of `{when, then}`), `else`. A `when:` or `on:` may read an agent's

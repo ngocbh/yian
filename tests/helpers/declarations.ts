@@ -123,7 +123,11 @@ export function handChild(options: {
   return new ComposedFlow(new CompiledFlow(nodes, [], { outputs }));
 }
 
-/** A call rule for a test that parses nodes without the loader: every `call:` names a tool. */
+/**
+ * A call rule for a test that parses nodes without the loader: every `call:` names a tool. It fits
+ * only a well-formed `call:`, a name or `{group: tool}`; the loader's rule leaves any other to the
+ * CALL node.
+ */
 export const callsATool: CallsTool = () => true;
 
 /**

@@ -3356,7 +3356,7 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
       if (BUILTIN_TOOL_IDS.has(toolId as BuiltinToolId)) {
         const reason =
           toolId === ASK
-            ? "grant ask_user; ask is a TOOL-node built-in in this version"
+            ? "grant ask_user, or reach ask with `call: ask`"
             : `an engine built-in; reach it with \`call: ${toolId}\``;
         throw new YianRangeError(`AGENT node ${reprText(nodeId)} grants ${reprText(toolId)}: ${reason}`);
       }

@@ -2145,6 +2145,53 @@ expect:
     );
   }, SWEEP);
 
+  test.each([
+    ["isn't resumable: the resume closes it crashed", false],
+    ["is resumable: the resume sends it again", true],
+  ])("a module tool's call that a cut cut off %s", async (_, resumable) => {
+    // `crm_lookup` runs on its module's thread, which no stub sees; the sweep counts its call.
+    const [case_, ctx] = sweepCase(`kind: run
+flow: |
+  id: m
+  name: m
+  llm_config: {provider: openai, model: gpt-5.5}
+  uses:
+    crm: ./crm.ts
+  nodes:
+    clerk:
+      kind: agent
+      tools: [crm]
+      system_prompt: Help.
+      prompt: Find 7.
+      output: !str
+  output: \${clerk.output}
+files:
+  crm.ts: |
+    export const lookup = {
+      name: "lookup",
+      description: "Find a customer by id.",
+      parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+      resumable: ${resumable},
+      execute: (args) => ({ id: args.id, name: "Ada" }),
+    };
+run: {run_id: r1, num_workers: 0}
+host:
+  models:
+    clerk:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts: [{type: tool_call, id: c1, name: crm_lookup, arguments: {id: "7"}}]
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: Ada}]}
+expect:
+  output: {status: succeeded, output: Ada}
+`);
+    const cuts: string[] = [];
+    await crashSweep(case_, ctx, { beforeResume: (log) => cuts.push(log) });
+    expect(cuts.length).toBeGreaterThan(0);
+  }, SWEEP);
+
   test("fails a resume whose model request differs from its scripted one, though its reply is the same", async () => {
     // The agent's second request carries lookup's result. A cut right after that result is
     // recorded makes the resume send the request again, now with the rewritten result; the

@@ -144,6 +144,7 @@ import {
 } from "../../src/typesys/values.ts";
 import type { Type, Value as YianValue, ValueRecord } from "../../src/typesys/values.ts";
 import { withAppendHook } from "../helpers/append_hook.ts";
+import { withModuleCalls } from "../helpers/module_calls.ts";
 import { validate } from "../helpers/schema.ts";
 import type { Schema } from "../helpers/schema.ts";
 
@@ -3208,10 +3209,11 @@ export function sourcesByRecord(entries: readonly Value[][]): Value[][] {
 /**
  * Return, by node, the AGENT tool calls a cut after record `k` of the uncut run's `records` cuts
  * off: each call a reply up to `k` made, with no result up to `k`, that the uncut run made
- * (`made` holds the yian ids of its host calls, `<run>/<node>/<n>/<index>`), by call id with its
- * tool's name. These are the calls a resume closes `crashed`; a call the agent never made (an
- * ungranted tool, a reply past its tool-call limit) has nothing to cut off. A memory tool's call
- * isn't a host call, so it is never here: memory tools are resumable, and the resume sends it again.
+ * (`made` holds the yian ids, `<run>/<node>/<n>/<index>`, of its calls to stubs and of those it
+ * sent to tool modules' threads but a resumable tool's), by call id with its tool's name. These are
+ * the calls a resume closes `crashed`; a call the agent never made (an ungranted tool, a reply past
+ * its tool-call limit) has nothing to cut off. A memory tool's call isn't a host call, so it is
+ * never here: memory tools are resumable, and the resume sends it again.
  */
 function cutCalls(
   records: readonly RecordEnvelope[],
@@ -3325,7 +3327,7 @@ export function sweepable(case_: Case): boolean {
  * cut `k`, and the resume binds new instances on the cut's folders. A cut inside the run start (before the START inputs' commit) must instead be
  * refused by the resume, leaving the log as it is. The resume must end with a result whose invariants hold,
  * close `crashed` exactly the AGENT tool calls the cut cut off before their result (`cutCalls`) but
- * those to resumable stubs, which it sends again, pass its
+ * those to resumable stubs and module tools, which it sends again, pass its
  * host's `check()` with no entry left, and leave no filled secret in its log, as the uncut run's
  * log must not. For each call closed `crashed`, the script its call took from may keep one entry,
  * the agent's `host.models` script may run out, and the agent's later scripted requests read the
@@ -3363,8 +3365,12 @@ export async function crashSweep(
   const uncutMemories = await caseMemories(spec, join(ctx.dir, "sweep-memory"), env, flow);
   const uncutHost = host(case_, uncutLog, env, flow, uncutMemories);
   const uncutHooks = runHooks(uncutLog, env, uncutHost, start);
-  const uncut = await runFlow(flow, { ...inputs, ...uncutMemories.bind() }, { ...args, ...uncutHooks });
-  const made = new Set([...uncutHost.calls.values()].flatMap((list) => list.map(({ call_id }) => call_id as string)));
+  // A module's tool runs on its own thread, where no stub sees it: its calls count as sent there.
+  const sent: [callId: string, module: string, tool: string][] = [];
+  const uncut = await withModuleCalls(
+    (call, module, tool) => sent.push([call.callId, module, tool]),
+    () => runFlow(flow, { ...inputs, ...uncutMemories.bind() }, { ...args, ...uncutHooks }),
+  );
   const uncutText = { "the uncut run log (crash sweep)": readFileSync(uncutLog, "utf8") };
   checkSecrets(case_, uncutText);
   checkNoRoots(uncutMemories.roots, uncutText);
@@ -3378,6 +3384,12 @@ export async function crashSweep(
   const expected = outcomes(uncutLog);
   const uncutRecords = readRunLog(uncutLog);
   const count = uncutRecords.length;
+  const made = new Set([...uncutHost.calls.values()].flatMap((list) => list.map(({ call_id }) => call_id as string)));
+  // A resume sends a resumable module tool's cut call again, as it does a resumable stub's.
+  const recorded = sent.length === 0 ? {} : (uncutRecords[0]!.record as RunStartedRecord).toolModules;
+  for (const [callId, module, tool] of sent) {
+    if (recorded[module]?.find(({ name }) => name === tool)?.resumable !== true) made.add(callId);
+  }
   // The run start's last record is the START inputs' commit, the first whose key is its node.
   const inputsCommit = uncutRecords.findIndex(({ kind, record }) => {
     const { nodeId, key } = record as { nodeId?: string; key?: string };

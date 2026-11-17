@@ -177,16 +177,17 @@ check_clone() {
   CLONE=update
 }
 
-# Prints the first bun in a PATH folder that is absolute and is neither the current folder nor
-# inside it, as direnv's PATH_add makes a project's folders. Any of those would make whatever
-# project this runs in supply the Bun the wrapper keeps. Run from the home, or a folder above it,
-# folders inside it are the user's own.
+# Prints the first bun in an absolute PATH folder that, when this runs in a project, is neither the
+# project's folder nor inside it: direnv's PATH_add puts a project's folders on PATH, and the
+# project would then supply the Bun the wrapper keeps. The current folder is a project only when
+# it's inside the home and isn't the home itself, so a run from /opt or /usr still finds
+# Homebrew's or the system's Bun.
 bun_on_path() {
   cwd=$(pwd -P)
   home=$(cd "$HOME" 2>/dev/null && pwd -P) || home=$HOME
-  project=$cwd
-  case $home/ in
-    "${cwd%/}"/*) project= ;;
+  project=
+  case $cwd/ in
+    "${home%/}"/?*) project=$cwd ;;
   esac
   rest=$PATH:
   while [ -n "$rest" ]; do
@@ -198,7 +199,6 @@ bun_on_path() {
     esac
     [ -f "$entry/bun" ] && [ -x "$entry/bun" ] || continue
     dir=$(cd "$entry" && pwd -P) || continue
-    [ "$dir" != "$cwd" ] || continue
     if [ -n "$project" ]; then
       case $dir/ in
         "${project%/}"/*) continue ;;
@@ -275,7 +275,9 @@ get_clone() {
 
 install_dependencies() {
   step "Installing dependencies in $ROOT"
-  (cd "$ROOT" && "$BUN" install --frozen-lockfile) || die "bun install failed in $ROOT."
+  # Bun's folder first on PATH, so a dependency's install script that runs bun gets this Bun, even
+  # one Bun's installer just put in a folder that isn't on PATH yet.
+  (cd "$ROOT" && PATH=$(dirname "$BUN"):$PATH "$BUN" install --frozen-lockfile) || die "bun install failed in $ROOT."
   ok "Installed dependencies"
 }
 

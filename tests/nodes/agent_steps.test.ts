@@ -392,7 +392,7 @@ test("a key echoed in another letter case or base64-encoded leaves no form in th
   const failure = new ProviderError("bad_request", `key ${key} (lower ${key.toUpperCase()}) basic ${basic}`, { status: 400 });
   const { log, result } = await run(new ScriptedModel([failure], llmConfig), { llmConfig, flow: flowText([]) });
   expect(result.status).toBe("failed");
-  expect(steps(log)[0]!["error"]).toEqual({ kind: "bad_request", message: "key [REDACTED] (lower [REDACTED]) basic dXNlcjp[REDACTED]" });
+  expect(steps(log)[0]!["error"]).toEqual({ kind: "bad_request", message: "key [REDACTED] (lower [REDACTED]) basic dXNlcj[REDACTED]" });
   const text = readFileSync(log, "utf8");
   expect(text.toLowerCase()).not.toContain(key.slice(0, 12));
   for (const form of base64Forms(key)) expect(text).not.toContain(form.text);

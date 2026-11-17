@@ -1,0 +1,34 @@
+# A 401 quotes the key (sk-conformance-1, 16 bytes) in base64: alone, and after the user name
+# `usr:` as a Basic credential holds it. Neither run's byte count is a multiple of 3, so each
+# has characters that hold some of the key's bits and some of the user name's or the padding's.
+# The redaction takes those characters and the `=` padding, and keeps the user name's own.
+kind: run
+flow: |
+  id: provider-auth-base64
+  name: provider_auth_base64
+  nodes:
+    write:
+      kind: agent
+      output: !str
+      llm_config: {provider: openai, model: gpt-5.5}
+      prompt: "Write a line."
+  output: ${write.output}
+env: {OPENAI_API_KEY: "<key:1>"}
+run: {run_id: r1, num_workers: 0}
+host:
+  models:
+    write:
+      agent:
+        - chunks: []
+          raise:
+            class: AuthenticationError
+            status: 401
+            message: "Incorrect API key provided: c2stY29uZm9ybWFuY2UtMQ== (Basic dXNyOnNrLWNvbmZvcm1hbmNlLTE=)"
+expect:
+  output:
+    status: failed
+    failure:
+      code: provider.auth
+      message: "Incorrect API key provided: [REDACTED] (Basic dXNyO[REDACTED])"
+      node: write
+      frames: [{label: flow.yaml, range: [4, 3, 4, 8]}]

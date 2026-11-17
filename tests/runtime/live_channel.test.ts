@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import { expect, test } from "bun:test";
 
 import { loadFlow } from "../../src/compose/loader.ts";
+import { Failure } from "../../src/diagnostics.ts";
 import type { RunEvent } from "../../src/events.ts";
 import { type ChatModel, Finish, TextDelta } from "../../src/llm/events.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
@@ -24,6 +25,7 @@ import {
   encodeRecord,
   iterRunRecords,
   MemoryRunLog,
+  NodeFailedRecord,
   NodeStartedRecord,
   NodeStepRecord,
   type RecordEnvelope,
@@ -120,6 +122,23 @@ test("settling a node drops its calls", () => {
   channel.start("b", 1, null, "chat", T0);
   channel.settle("a");
   expect(channel.snapshot().calls.map((call) => call.node)).toEqual(["b"]);
+});
+
+test("a failure inside a flow call drops no call; retiring a node ends each of its calls with an end frame", () => {
+  const { channel, frames, log } = subscribed();
+  channel.start("other", 1, null, "chat", T0);
+  channel.start("helper/shout#0/slow", 1, null, "chat", T0);
+  channel.start("helper/shout#0/slow", 2, null, "chat", T0);
+  const failure = new Failure({ code: "node.execute", message: "boom", nodeId: "helper/shout#0/loud" });
+  log.append(new NodeFailedRecord(failure, { callId: "r1/helper/1/0", scope: "helper/shout#0" }));
+  expect(channel.snapshot().calls.map((call) => call.node)).toEqual(["other", "helper/shout#0/slow", "helper/shout#0/slow"]);
+  channel.retire("helper/shout#0/slow");
+  channel.retire("helper/shout#0/slow");
+  expect(channel.snapshot().calls.map((call) => call.node)).toEqual(["other"]);
+  expect(frames.filter((frame) => frame.type === "end")).toEqual([
+    { type: "end", node: "helper/shout#0/slow", n: 1, error: "ScopeEnded" },
+    { type: "end", node: "helper/shout#0/slow", n: 2, error: "ScopeEnded" },
+  ]);
 });
 
 test("an unsubscribed function gets nothing more", () => {

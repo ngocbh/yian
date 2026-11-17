@@ -15,11 +15,11 @@
  * `callsTool` rule, parses as a TOOL body; one naming a flow refuses the fields only a tool call
  * takes. A removed kind, `tool` among them, is refused, showing what to write. Two kind-blind
  * enrichments run after every kind parse: each `input:` binding's own range is stamped into the
- * descriptor's `fieldRanges` under
- * `siteKey("input", name)`, and each `asserts:` item range is appended positionally to its
- * `assertRanges`. This metadata stays inside Compose; `_finish` copies node and field locations
- * to the `BuildResult` for validation. Then, for a kind whose `inputsAreLocals`, an `input:` key
- * named `inf` is refused at the key, since `${inf}` reads infinity.
+ * descriptor's `fieldRanges` under `siteKey("input", name)`, and each `asserts:` item range is
+ * appended positionally to its `assertRanges`. This metadata stays inside Compose; `_finish`
+ * copies node and field locations to the `BuildResult` for validation. Then, for a kind whose
+ * `inputsAreLocals`, an `input:` key named `inf` is refused at the key, since `${inf}` reads
+ * infinity.
  *
  * Knows about: diagnostics, compose source, helpers and node kinds, compile model, expr and
  * typesys.

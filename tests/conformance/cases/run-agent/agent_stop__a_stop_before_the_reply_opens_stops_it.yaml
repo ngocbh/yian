@@ -138,6 +138,10 @@ expect:
       interrupted: false
   - - NodeStarted
     - {node_id: reply}
+  - - Interrupted
+    - inbox: notes
+      nodes: [reply]
+      scopes: []
   - - NodeSucceeded
     - {node_id: reply, interrupted: true}
   - - NodeStarted

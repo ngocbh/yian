@@ -201,10 +201,19 @@ await runFlow(flow, { qty: 3, price: 2.5 }, { tools: { quote }, onEvent });
 | Events | When |
 |---|---|
 | `RunStarted`, `RunResumed`, `RunSucceeded`, `RunFailed`, `RunWaiting`, `RunCancelled` | The run starts, resumes, ends or starts waiting |
-| `NodeStarted`, `NodeSucceeded`, `NodeFailed`, `NodeRouted`, `NodeSkipped`, `NodeExpanded` | A node runs, a `case` picks a branch, a node is skipped, a `map` or `loop` grows its nodes |
+| `NodeStarted`, `NodeSucceeded`, `NodeFailed`, `NodeRouted`, `NodeSkipped`, `NodeExpanded` | A node runs, a `case` picks a branch, a node is skipped, a `map`, `loop` or flow call grows its nodes |
 | `NodeWaiting`, `NodeWoken`, `CallClosed` | A node waits on a call, wakes, or a call closes without an answer |
+| `Interrupted` | An `interrupt` stops agents |
 | `NodeAttemptResumed` | A resume runs a crashed node again |
 | `ModelCallStarted`, `ModelCallFinished`, `ToolCallStarted`, `ToolCallFinished`, `ReplayDegraded` | Inside an agent; not in the log |
+
+An agent's [flow call](/agents/#flows-as-tools) runs the flow's nodes under its scope, as
+`helper/shout#0/loud`. Its `NodeExpanded` names the agent, which keeps running, the call
+(`callId`) and, in `grow.seed.scope`, the scope. A failure inside the scope is a `NodeFailed` with
+that `callId` and `scope`: the scope's other unfinished nodes end and the run goes on. Both are
+`null` when a failure fails the run. `Interrupted` names the agents an interrupt stopped and, in
+`scopes`, the scopes of their open flow calls, which end with them. An `interrupt` made while the
+run isn't running in your process publishes no event; it returns the stopped agents as `nodes`.
 
 Event fields are camelCase. `event.toJSON()` gives the snake_case form; it keeps flow values as
 they are (ints as `bigint`), so write it with `logJson` from `@ngocbh/yian/run`, not

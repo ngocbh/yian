@@ -249,6 +249,10 @@ expect:
       provider: openai
       purpose: chat
       n: 1
+  - - Interrupted
+    - inbox: notes
+      nodes: [loop#0/reply]
+      scopes: []
   - - ModelCallFinished
     - model: gpt-5.5
       node_id: loop#0/reply
@@ -299,6 +303,10 @@ expect:
       interrupted: false
   - - NodeStarted
     - node_id: loop#1/reply
+  - - Interrupted
+    - inbox: notes
+      nodes: [loop#1/reply]
+      scopes: []
   - - NodeSucceeded
     - node_id: loop#1/reply
       interrupted: true

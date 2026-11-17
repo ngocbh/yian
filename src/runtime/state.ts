@@ -22,6 +22,7 @@ import { BUILTIN, type Defaults, fromRecorded } from "../defaults.ts";
 import { compareCodeUnits, Failure, type OriginRef, reprText, sameFailure } from "../diagnostics.ts";
 import {
   CallClosed,
+  Interrupted,
   NodeExpanded,
   NodeFailed,
   NodeRouted,
@@ -2208,8 +2209,11 @@ function frontierObservers(record: RunRecord, delta: FrontierPlan["delta"]): Run
     }
     case "runWaiting":
       return [new RunWaiting({ nodeIds: delta.nodeIds })];
-    case "interrupted":
-      return closed("interrupted");
+    case "interrupted": {
+      // The scopes the reducer retires, so the event and the state can't disagree.
+      const { inbox, nodes } = record as InterruptedRecord;
+      return [new Interrupted({ inbox, nodes, scopes: delta.scopes }), ...closed("interrupted")];
+    }
     case "stopped":
     case "inboxClosed":
     case "withdrawn":
@@ -3342,7 +3346,10 @@ function prepareFlowFailureTransition(state: RunState, record: NodeFailedRecord)
     retires,
     closedCalls,
   });
-  const observers = [new NodeFailed({ failure }), ...closedCalls.map((id) => new CallClosed({ callId: id, reason: "failed" }))];
+  const observers = [
+    new NodeFailed({ failure, callId, scope }),
+    ...closedCalls.map((id) => new CallClosed({ callId: id, reason: "failed" })),
+  ];
   return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, observers);
 }
 
@@ -6500,7 +6507,7 @@ function materializeEnding(plan: EndingPlan): EndingApply {
 /** Build one independent canonical expansion observer. */
 function growthObserver(record: NodeExpandedRecord, seedWire: JsonValue): NodeExpanded {
   const [, seed] = canonicalSeed(seedWire);
-  return new NodeExpanded({ nodeId: record.spawnerId, grow: new Grow(seed, record.pruneIds) });
+  return new NodeExpanded({ nodeId: record.spawnerId, grow: new Grow(seed, record.pruneIds), callId: record.callId });
 }
 
 /** The detached values one growth commit installs, all built before the durable append. */

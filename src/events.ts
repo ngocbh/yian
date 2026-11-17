@@ -15,7 +15,8 @@
  * `RunFailed` is derived from a durable node failure or from a reduced transition
  * that makes the terminal output unreachable. `NodeWaiting` and `NodeWoken` follow a
  * node's move out of and back into flight, `RunWaiting` a quiescence with nodes waiting,
- * `RunCancelled` a cancel, and `CallClosed` a host call closed without an answer. Plain classes keep this low-level
+ * `RunCancelled` a cancel, `Interrupted` a host interrupt and the flow call scopes it ended, and
+ * `CallClosed` a host call closed without an answer. Plain classes keep this low-level
  * observer module separate from the serialized record vocabulary in `runtime/log`;
  * canonical semantic failures come from `diagnostics`.
  *
@@ -178,35 +179,54 @@ export class NodeSkipped {
   }
 }
 
-/** A node failed with one canonical semantic failure. */
+/**
+ * A node failed with one canonical semantic failure.
+ *
+ * It fails the run, unless the node is inside the scope of an AGENT's flow call: then `callId`
+ * names that call and `scope` its scope, `<agent>/<flow>#<k>`, as the `node_failed` record does.
+ * The call fails, the scope's other unfinished nodes end with it, and the run goes on. When the
+ * scope couldn't grow, the failing node is the AGENT itself. Both are `null` for a run failure.
+ */
 export class NodeFailed {
   readonly type = "NodeFailed" as const;
   readonly failure: Failure;
+  /** The flow call that takes the failure; `null` when it fails the run. */
+  readonly callId: string | null;
+  /** That call's scope, whose unfinished nodes end; `null` with no call. */
+  readonly scope: string | null;
 
-  constructor(options: { failure: Failure }) {
+  constructor(options: { failure: Failure; callId?: string | null; scope?: string | null }) {
     this.failure = options.failure;
+    this.callId = options.callId ?? null;
+    this.scope = options.scope ?? null;
   }
 
   /** Return the data form, the failure in its JSON form. */
   toJSON() {
-    return { failure: this.failure.toJSON() };
+    return { failure: this.failure.toJSON(), call_id: this.callId, scope: this.scope };
   }
 }
 
 /**
  * A spawner returned a seed-first `Grow`; the dispatcher builds and splices its fragment.
  *
- * The node ran; its eventual value is committed by the fragment terminal via `commitAs`.
+ * A CALL, MAP or LOOP ran; its eventual value is committed by the fragment terminal via
+ * `commitAs`. For an AGENT's flow call, `callId` names the call, as the `node_expanded` record
+ * does, and the seed is `{tool, arguments, scope}`: the called flow's nodes run under `<scope>/`
+ * while the AGENT stays in flight. `callId` is `null` for any other spawner.
  */
 export class NodeExpanded {
   readonly type = "NodeExpanded" as const;
   readonly nodeId: string;
   // Structural, because `Grow` lives in `nodes/base.ts`, a layer above this one.
   readonly grow: { readonly seed: unknown; readonly prune: ReadonlySet<string> };
+  /** The AGENT flow call whose scope this grows; `null` for a CALL, MAP or LOOP. */
+  readonly callId: string | null;
 
-  constructor(options: { nodeId: string; grow: NodeExpanded["grow"] }) {
+  constructor(options: { nodeId: string; grow: NodeExpanded["grow"]; callId?: string | null }) {
     this.nodeId = options.nodeId;
     this.grow = options.grow;
+    this.callId = options.callId ?? null;
   }
 
   /** Return the data form, the growth's `prune` set as a sorted list. */
@@ -214,6 +234,7 @@ export class NodeExpanded {
     return {
       node_id: this.nodeId,
       grow: { seed: this.grow.seed, prune: [...this.grow.prune].sort(compareCodeUnits) },
+      call_id: this.callId,
     };
   }
 }
@@ -294,6 +315,32 @@ export class CallClosed {
   /** Return the data form. */
   toJSON() {
     return { call_id: this.callId, reason: this.reason };
+  }
+}
+
+/**
+ * A host interrupt (a Stop) of `inbox` was recorded, as the `interrupted` record is: `nodes` are
+ * the AGENTs it stops, none when no agent read the inbox then. `scopes` are the scopes of their
+ * open flow calls, which end with them: each scope's unfinished nodes leave the run. A
+ * `CallClosed {reason: "interrupted"}` follows for each host call it closes.
+ */
+export class Interrupted {
+  readonly type = "Interrupted" as const;
+  readonly inbox: string;
+  /** The interrupted node ids. */
+  readonly nodes: readonly string[];
+  /** The flow call scopes, `<agent>/<flow>#<k>`, that ended. */
+  readonly scopes: readonly string[];
+
+  constructor(options: { inbox: string; nodes: readonly string[]; scopes: readonly string[] }) {
+    this.inbox = options.inbox;
+    this.nodes = Object.freeze([...options.nodes]);
+    this.scopes = Object.freeze([...options.scopes]);
+  }
+
+  /** Return the data form. */
+  toJSON() {
+    return { inbox: this.inbox, nodes: [...this.nodes], scopes: [...this.scopes] };
   }
 }
 
@@ -666,6 +713,7 @@ export type RunEvent =
   | NodeWaiting
   | NodeWoken
   | CallClosed
+  | Interrupted
   | ModelCallStarted
   | ModelCallFinished
   | ToolCallStarted

@@ -185,6 +185,10 @@ expect:
       purpose: chat
       provider: openai
       model: gpt-5.5
+  - - Interrupted
+    - inbox: notes
+      nodes: [chat]
+      scopes: []
   - - ModelCallFinished
     - {node_id: chat, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
   - - ToolCallStarted

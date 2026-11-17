@@ -5,7 +5,7 @@
 import { expect, test } from "bun:test";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
-import { CallClosed } from "../../src/events.ts";
+import { CallClosed, Interrupted } from "../../src/events.ts";
 import { type CompleteResult, Node, NodeKind, type NodeCaps, type NodeResult, Output, type SteerInbox } from "../../src/nodes/base.ts";
 import { acceptsNull, type CallView, HostToolCall, NodeSteps } from "../../src/nodes/contracts.ts";
 import { toolCallId } from "../../src/tools/context.ts";
@@ -136,7 +136,7 @@ test("a reader that hasn't opened its inbox yet isn't named: an empty Stop is re
   const before = engine.log.records().length;
   const { seq, events, record } = engine.deliver({ kind: "interrupt", inbox: "m" });
   expect(seq).toBe(before);
-  expect(events).toEqual([]);
+  expect(events).toEqual([new Interrupted({ inbox: "m", nodes: [], scopes: [] })]);
   expect(record).toEqual(engine.log.records().at(-1)!.record);
   expect([...(record as InterruptedRecord).nodes]).toEqual([]);
   probe.release();
@@ -208,7 +208,10 @@ test("an interrupt wakes a waiting reader, whose call it closed", async () => {
   await gate.started;
   expect(engine.state.waits.waiting.get("h")!.steerInbox).toBe("m");
   const { events } = engine.deliver({ kind: "interrupt", inbox: "m" });
-  expect(events).toEqual([new CallClosed({ callId: host.callId, reason: "interrupted" })]);
+  expect(events).toEqual([
+    new Interrupted({ inbox: "m", nodes: ["h"], scopes: [] }),
+    new CallClosed({ callId: host.callId, reason: "interrupted" }),
+  ]);
   gate.release();
   await running;
   const woken = engine.log.records().find((entry) => entry.record instanceof NodeWokenRecord)!.record as NodeWokenRecord;

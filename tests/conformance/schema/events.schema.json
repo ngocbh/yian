@@ -20,6 +20,7 @@
     {"properties": {"name": {"const": "NodeWaiting"}, "data": {"$ref": "#/$defs/NodeWaiting"}}},
     {"properties": {"name": {"const": "NodeWoken"}, "data": {"$ref": "#/$defs/NodeWoken"}}},
     {"properties": {"name": {"const": "CallClosed"}, "data": {"$ref": "#/$defs/CallClosed"}}},
+    {"properties": {"name": {"const": "Interrupted"}, "data": {"$ref": "#/$defs/Interrupted"}}},
     {"properties": {"name": {"const": "ModelCallStarted"}, "data": {"$ref": "#/$defs/ModelCallStarted"}}},
     {"properties": {"name": {"const": "ModelCallFinished"}, "data": {"$ref": "#/$defs/ModelCallFinished"}}},
     {"properties": {"name": {"const": "ToolCallStarted"}, "data": {"$ref": "#/$defs/ToolCallStarted"}}},
@@ -165,20 +166,23 @@
       }
     },
     "NodeFailed": {
-      "description": "A node failed.",
+      "description": "A node failed. It fails the run, unless the node is inside the scope of an AGENT's flow call: then that call fails, the scope's other unfinished nodes end, and the run goes on.",
       "type": "object",
-      "required": ["failure"],
+      "required": ["failure", "call_id", "scope"],
       "properties": {
-        "failure": {"$ref": "#/$defs/failure"}
+        "failure": {"$ref": "#/$defs/failure"},
+        "call_id": {"type": ["string", "null"], "description": "The flow call that takes the failure, as the node_failed record names it; null when it fails the run."},
+        "scope": {"type": ["string", "null"], "description": "That call's scope, <agent>/<flow>#<k>, whose unfinished nodes end; null with no call."}
       }
     },
     "NodeExpanded": {
-      "description": "A spawner returned a growth; its fragment's terminal commits the node's eventual value.",
+      "description": "A spawner returned a growth; its fragment's terminal commits the node's eventual value. For an AGENT's flow call the AGENT stays in flight, and the seed is {tool, arguments, scope}: the called flow's nodes run under <scope>/.",
       "type": "object",
-      "required": ["node_id", "grow"],
+      "required": ["node_id", "grow", "call_id"],
       "properties": {
         "node_id": {"type": "string"},
-        "grow": {"$ref": "#/$defs/grow"}
+        "grow": {"$ref": "#/$defs/grow"},
+        "call_id": {"type": ["string", "null"], "description": "The AGENT flow call whose scope this grows, as the node_expanded record names it; null for a CALL, MAP or LOOP."}
       }
     },
     "NodeAttemptResumed": {
@@ -215,6 +219,16 @@
       "properties": {
         "call_id": {"type": "string"},
         "reason": {"type": "string", "enum": ["crashed", "interrupted", "timed_out", "cancelled", "failed"], "description": "Why the call was closed."}
+      }
+    },
+    "Interrupted": {
+      "description": "A host interrupt of an inbox was recorded, as the interrupted record is. A CallClosed with reason interrupted follows for each host call it closes.",
+      "type": "object",
+      "required": ["inbox", "nodes", "scopes"],
+      "properties": {
+        "inbox": {"type": "string"},
+        "nodes": {"type": "array", "items": {"type": "string"}, "description": "The AGENTs it stops; none when no agent read the inbox then."},
+        "scopes": {"type": "array", "items": {"type": "string"}, "description": "The scopes, <agent>/<flow>#<k>, of their open flow calls, which end with them: each scope's unfinished nodes leave the run."}
       }
     },
     "ModelCallStarted": {

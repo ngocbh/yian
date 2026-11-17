@@ -150,7 +150,7 @@ test.each([
 
 test("a map naming a module alias alone names one of its tools", async () => {
   expect(await refusal(app(USES, ["a: {kind: map, over: [1], call: crm}"]))).toBe(
-    "node 'a': `crm` is a tool module; name one of its tools: `call: {crm: <tool>}`",
+    "map node 'a': `crm` is a tool module; name one of its tools: `call: {crm: <tool>}`",
   );
 });
 

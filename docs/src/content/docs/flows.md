@@ -153,7 +153,6 @@ A node id is an identifier: ASCII letters, digits and `_`, not starting with a d
 | `call` | Runs a child flow once, or calls a tool, such as a host tool or `ask`, `take` or `sleep` | [Control flow](/control-flow/), [Code and tools](/code-and-tools/#tool-nodes), [Inboxes and waiting](/inboxes/) |
 | `map` | Runs a child flow or a tool once per list item | [Control flow](/control-flow/) |
 | `loop` | Runs a child flow or a tool again and again | [Control flow](/control-flow/) |
-| `tool` | Removed: write a `call` node naming the tool, with `call:` in place of `tool_id:` | [Code and tools](/code-and-tools/#tool-nodes) |
 
 ### Common fields
 

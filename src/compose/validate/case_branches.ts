@@ -1,11 +1,11 @@
 /**
- * Graph-stage: a `case` branch names a node or calls a flow, and a `case` has no `output:`.
+ * Graph-stage: a `case` branch names a node or makes a `call(...)`, and a `case` has no `output:`.
  *
  * A `case` only routes. Each `then:`/`else:` is classified by its YAML tag and scalar style:
  *
- * - an unquoted string starting with `call(` calls a flow. A whole-value directive is left for
- *   `desugarCaseCallTargets`; any other text starting with `call(` is a load error naming the
- *   problem. Any other untagged unquoted string without `${` that names a node names it; one that
+ * - an unquoted string starting with `call(` calls a flow or a tool. A whole-value directive is
+ *   left for `desugarCaseCallTargets`; any other text starting with `call(` is a load error naming
+ *   the problem. Any other untagged unquoted string without `${` that names a node names it; one that
  *   names no node is a load error that suggests the nearest node. An unquoted date is text, so it
  *   is such a word too;
  * - anything else is a value, a load error that says to put it in an entry in `nodes:`: a tagged
@@ -69,7 +69,7 @@ interface Branch {
  *   `output:`.
  *
  * Example: a case `route` with `then: "approve"` fails with ``case node 'route' then: a branch
- * names a node or calls a flow; put the value in an entry in `nodes:` and name that entry``.
+ * names a node or makes a `call(...)`; put the value in an entry in `nodes:` and name that entry``.
  */
 export function checkCaseBranches(
   descriptors: ReadonlyMap<string, NodeDescriptor>,
@@ -158,8 +158,8 @@ function checkBranch(
     );
   }
   throw diagnostics.error(
-    `${host} a branch names a node or calls a flow; put the value in an entry in \`nodes:\` and name ` +
-      "that entry",
+    `${host} a branch names a node or makes a \`call(...)\`; put the value in an entry in \`nodes:\` ` +
+      "and name that entry",
     { range: branch.range },
   );
 }

@@ -1,5 +1,5 @@
 /**
- * A CASE routes only: a branch names a node or calls a flow, and a CASE has no `output:`.
+ * A CASE routes only: a branch names a node or makes a `call(...)`, and a CASE has no `output:`.
  *
  * An untagged unquoted word names a node and an unquoted whole-value `call(...)` calls a flow.
  * Every other branch is a value: a tagged value (even a word naming a node), quoted text, `null` or
@@ -88,8 +88,8 @@ function on(then: string, else_ = "reply", options: { output?: string } = {}): s
 /** Return the message for a value branch of `route`. */
 function valueBranch(label: string): string {
   return (
-    `case node 'route' ${label}: a branch names a node or calls a flow; put the value in an entry ` +
-    "in `nodes:` and name that entry"
+    `case node 'route' ${label}: a branch names a node or makes a \`call(...)\`; put the value in an ` +
+    "entry in `nodes:` and name that entry"
   );
 }
 

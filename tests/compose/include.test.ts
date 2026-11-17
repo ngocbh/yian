@@ -874,8 +874,8 @@ test("a case branch an !include(T) reads is a value branch", async () => {
     "        then: !include(str) a.md\n    else: b\n  b: !str no\noutput: ${b.output}\n";
   const { message, line } = await failure(load(flow));
   expect(message).toBe(
-    "case node 'g' then: a branch names a node or calls a flow; put the value in an entry in `nodes:` " +
-      "and name that entry",
+    "case node 'g' then: a branch names a node or makes a `call(...)`; put the value in an entry in " +
+      "`nodes:` and name that entry",
   );
   expect(line).toBe(10);
 });

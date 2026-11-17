@@ -8,9 +8,9 @@ This page explains how a flow branches, repeats and reuses work. Four node kinds
 | Kind | What it does | Its value |
 |---|---|---|
 | `case` | Takes one branch and skips the others | The output of the branch that ran |
-| `call` | Runs a child flow once | The child's output |
+| `call` | Runs a child flow or a tool once | The child's or the tool's output |
 | `map` | Runs a child flow or a tool once per list item | A list of the outputs, in list order |
-| `loop` | Runs a child flow again and again, passing a record from one run to the next | The final record |
+| `loop` | Runs a child flow or a tool again and again, passing a record from one run to the next | The final record |
 
 A child flow is a `defs:` entry, a flow imported with [`uses:`](#import-a-flow-from-another-file-with-uses),
 a [library's def](#call-a-librarys-def), or a body written inline on the node.

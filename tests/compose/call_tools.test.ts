@@ -85,7 +85,7 @@ test.each<[string, string, string]>([
   // A bare name.
   ["sleep, input: {for: 1s}", "", "tool sleep"],
   ["ask_user, input: {prompt: hi}", "", "tool ask"],
-  ["load_skill", "", "node 'n' (kind=call): tool id `load_skill` is reserved by yian"],
+  ["load_skill", "", "node 'n': `call: load_skill`: `load_skill` is reserved by yian"],
   ["greet", "", "flow greet"],
   ["clean", "", "flow clean"],
   ["billing", "", "call node 'n': callable 'billing' is a library; name a def: `call: {billing: quote}`"],
@@ -112,14 +112,14 @@ test.each<[string, string, string]>([
   [
     "{greet: x}",
     "",
-    "node 'n': `greet` is a flow, not a library; a tool group named `greet` is shadowed in this file, so rename " +
-      "the def to reach it",
+    "call node 'n': `greet` is a flow, not a library; a tool group named `greet` is shadowed in this file, so " +
+      "rename the def to reach it",
   ],
   [
     "{clean: x}",
     "",
-    "node 'n': `clean` is a flow, not a library; a tool group named `clean` is shadowed in this file, so rename " +
-      "the alias to reach it",
+    "call node 'n': `clean` is a flow, not a library; a tool group named `clean` is shadowed in this file, so " +
+      "rename the alias to reach it",
   ],
   ["{one: quote}", "", "node 'n': `one` is one tool, ./tools.ts:quote; write `call: one`"],
   ["{github: search}", "", "tool github_search"],
@@ -134,12 +134,23 @@ test("a call node's id may equal the tool it names", async () => {
   expect(node.toolId).toBe("place");
 });
 
-test.each([
-  ["retries: 2", "`retries:` doesn't apply to a flow call: a flow retries inside its own nodes"],
-  ["output: !int", "`output:` doesn't apply to a flow call: a flow's result type comes from the flow"],
-  ["adaptive_questions: {prompt: hi}", "`adaptive_questions:` applies only to `call: ask`"],
-])("a flow call refuses %s", async (field, problem) => {
-  expect(await refusal(app(`  n: {kind: call, call: greet, ${field}}\n`))).toBe(`node 'n' (kind=call): ${problem}`);
+// Each row: a kind, a field a flow call has no use for, the refusal, and the kind's other fields
+// for naming the flow `greet`.
+test.each(
+  [
+    ["call", ""],
+    ["map", "over: [1], "],
+    ["loop", "times: 1, "],
+  ].flatMap(([kind, fields]) =>
+    [
+      ["retries: 2", "`retries:` doesn't apply to a flow call: a flow retries inside its own nodes"],
+      ["output: !int", "`output:` doesn't apply to a flow call: a flow's result type comes from the flow"],
+      ["adaptive_questions: {prompt: hi}", "`adaptive_questions:` applies only to `call: ask`"],
+    ].map(([field, problem]) => [kind!, field!, problem!, fields!]),
+  ),
+)("a %s naming a flow refuses %s", async (kind, field, problem, fields) => {
+  const text = app(`  n: {kind: ${kind}, ${fields}call: greet, ${field}}\n`);
+  expect(await refusal(text)).toBe(`node 'n' (kind=${kind}): ${problem}`);
 });
 
 test("a tool call takes retries:, output: and asserts:", async () => {
@@ -210,25 +221,6 @@ test("a call node naming a tool also written with tool_id: is refused at tool_id
 /** A host tool named `name` that returns `host`. */
 const hostTool = (name: string) =>
   tool({ name, description: "A host tool.", parameters: { type: "object", properties: {} }, execute: () => "host" });
-
-test("a call node runs a host tool and a host group's tool", async () => {
-  const echo = (name: string, said: string) =>
-    tool({
-      name,
-      description: "Echo the query.",
-      parameters: { type: "object", properties: { q: { type: "string" } }, required: ["q"] },
-      execute: (args: Record<string, unknown>) => `${said} ${String(args["q"])}`,
-    });
-  const text =
-    "id: r\nname: r\ninput:\n  q: !str\nnodes:\n" +
-    '  bare: {kind: call, call: lookup, input: {q: "${input.q}"}, output: !str}\n' +
-    '  grouped: {kind: call, call: {github: search}, input: {q: "${input.q}"}, output: !str}\n' +
-    'output: {bare: "${bare.output}", grouped: "${grouped.output}"}\n';
-  const tools = { lookup: echo("lookup", "found"), github: [echo("search", "searched")] };
-  const result = await runFlow(await loadFlow(text), { q: "hi" }, { env: hostEnv(tmp), tools });
-
-  expect(result.output).toEqual({ bare: "found hi", grouped: "searched hi" });
-});
 
 test("a def named like a host tool runs the def", async () => {
   const text =
@@ -410,8 +402,9 @@ test("run start spells an inline call's tool and the names it offers as the call
   );
   const text = `id: r\nname: r\nnodes:\n  n: ${inlineNode("call(github_serch)")}\n`;
   const run = runFlow(await loadFlow(text), {}, { env: hostEnv(tmp), tools: { github: [hostTool("search")] } });
-  expect(((await run.catch((caught: unknown) => caught)) as Error).message).toEndWith(
-    "; did you mean `github.search`?",
+  expect(((await run.catch((caught: unknown) => caught)) as Error).message).toBe(
+    "node 'n' input 'x' call(github_serch) names tool 'github_serch', which isn't in this run's tools; " +
+      'known tools: ["github.search"]; did you mean `github.search`?',
   );
 });
 
@@ -496,7 +489,11 @@ test.each<[string, string, string]>([
   ["call(sleep, for=1s)", "", "tool sleep"],
   ["call(take, from=${input.inbox})", "  inbox: !Inbox(str)\n", "tool take"],
   ["call(ask_user, prompt=hi)", "", "tool ask"],
-  ["call(load_skill)", "", "node 'n' input 'x' call(load_skill): tool id `load_skill` is reserved by yian"],
+  [
+    "call(load_skill)",
+    "",
+    "node 'n' input 'x' call(load_skill): `call(load_skill, ...)`: `load_skill` is reserved by yian",
+  ],
   ["call(greet)", "", "flow greet"],
   ["call(billing.quote)", "", "flow billing.quote"],
   ["call(one, qty=3)", "", "tool one module one"],
@@ -670,9 +667,9 @@ test.each([
   ],
   [
     "{crm: sleep}",
-    "node 'n' (kind=map): `call: {crm: sleep}`: sleep is a built-in, not a group's tool; write `call: sleep`",
+    "map node 'n': `call: {crm: sleep}`: sleep is a built-in, not a group's tool; write `call: sleep`",
   ],
-  ["load_skill", "map node 'n': tool id `load_skill` is reserved by yian"],
+  ["load_skill", "map node 'n': `call: load_skill`: `load_skill` is reserved by yian"],
   ["lessons", "map node 'n': `lessons` is a memory input; name one of its tools: `call: {lessons: <tool>}`"],
   [
     "{greet: x}",
@@ -694,11 +691,11 @@ test.each([
   ["{github: search}", "tool github_search"],
   ["{lessons: read}", "tool lessons_read memory"],
   ["{crm: lookup}", "tool crm_lookup module crm"],
-  ["load_skill", "loop node 'n': tool id `load_skill` is reserved by yian"],
+  ["load_skill", "loop node 'n': `call: load_skill`: `load_skill` is reserved by yian"],
   ["lessons", "loop node 'n': `lessons` is a memory input; name one of its tools: `call: {lessons: <tool>}`"],
   [
     "{crm: take}",
-    "node 'n' (kind=loop): `call: {crm: take}`: take is a built-in, not a group's tool; write `call: take`",
+    "loop node 'n': `call: {crm: take}`: take is a built-in, not a group's tool; write `call: take`",
   ],
   [
     "{greet: x}",

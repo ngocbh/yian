@@ -3408,11 +3408,8 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
         reason = `${reprText(call.toolId)}: ${error.message}`;
       } else {
         const known = tools.toolIds;
-        reason =
-          `tool ${reprText(call.toolId)}, which isn't in this run's tools; ` +
-          `known tools: ${writeAsText([...known])}`;
-        // A group's tool is matched by the name a model sees it under, and offered as the node
-        // writes it: `{group: tool}`, or `group.tool` in a `call(...)`.
+        // A group's tool is matched by the name a model sees it under, and listed and offered as the
+        // node writes it: `{group: tool}`, or `group.tool` in a `call(...)`.
         const scope = tools.scope();
         const shown = new Map<string, [visible: string, written: string]>();
         for (const group of scope.groupNames()) {
@@ -3420,6 +3417,9 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
             shown.set(`{${group}: ${name}}`, [visibleToolName(group, name), writtenTool(group, name, call.site)]);
           }
         }
+        reason =
+          `tool ${reprText(call.toolId)}, which isn't in this run's tools; ` +
+          `known tools: ${writeAsText(known.map((id) => shown.get(id)?.[1] ?? id))}`;
         const candidates = new Map(known.map((id) => [shown.get(id)?.[0] ?? id, id]));
         const [close] = getCloseMatches(call.toolId, [...candidates.keys()], 1, CLOSE_MATCH_CUTOFF);
         const id = close === undefined ? null : candidates.get(close)!;

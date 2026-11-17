@@ -1,0 +1,22 @@
+# The removed `kind: tool` fails at its `kind:` value, showing the `call:` its `tool_id:` becomes.
+kind: load
+flow: |
+  id: news
+  name: news
+  input:
+    topic: !str
+  nodes:
+    search:
+      kind: tool
+      tool_id: {github: search}
+      input:
+        q: ${input.topic}
+  output: ${search.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "node 'search': kind 'tool' was removed; write `kind: call` with `call: {github: search}`"
+      frames:
+      - label: flow.yaml
+        range: [7, 11, 7, 15]

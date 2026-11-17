@@ -129,7 +129,12 @@ test.each([
     "node 'fetch' (kind=map): `call: {crm: sleep}`: sleep is a built-in, not a group's tool; write `call: sleep`",
     "{crm: sleep}",
   ],
-  ["{lessons: raed}", "", "node 'fetch' (kind=map) grants {lessons: [raed]}: `lessons` has no tool `raed`", "{lessons: raed}"],
+  [
+    "{lessons: raed}",
+    "",
+    "node 'fetch' (kind=map): `call: {lessons: raed}`: `lessons` has no tool `raed`",
+    "{lessons: raed}",
+  ],
   [
     "{load: skill}",
     "",

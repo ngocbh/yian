@@ -820,11 +820,6 @@ export class NodeDescriptor {
     return this.kind;
   }
 
-  /** The key the author wrote for body key `key` of `cursor`: `input` for `inputs`, say. */
-  static _writtenKey(key: string, cursor: SourceCursor): string {
-    return SURFACE_NAMES.get(key) ?? key;
-  }
-
   /**
    * Reject a body key outside `allowed` and `also`, at its value (a `when:` adds `whenHint`), then a
    * missing `required` key, at the body.
@@ -842,8 +837,8 @@ export class NodeDescriptor {
       if (allowed.has(key)) continue;
       const hint = key === "when" ? this.whenHint : "";
       // Name the authored spellings, the offending key's too; the plural carrier names fail to load.
-      const field = this._writtenKey(key, cursor);
-      const surface = new Set([...allowed].map((name) => this._writtenKey(name, cursor)));
+      const field = writtenKey(key);
+      const surface = new Set([...allowed].map(writtenKey));
       throw diagnostics.error(
         `${subject}: field ${reprText(field)} is not allowed ` +
           `(allowed: ${[...surface].sort(compareCodeUnits).join(", ")})${hint}`,
@@ -852,7 +847,7 @@ export class NodeDescriptor {
     }
     for (const key of this.required) {
       if (!Object.hasOwn(body, key)) {
-        throw diagnostics.error(`${subject}: missing required field ${reprText(this._writtenKey(key, cursor))}`, {
+        throw diagnostics.error(`${subject}: missing required field ${reprText(writtenKey(key))}`, {
           range: cursor.range,
         });
       }
@@ -1073,7 +1068,12 @@ const SURFACE_NAMES: ReadonlyMap<string, string> = new Map([
   ["outputs", "output"],
 ]);
 
-/** Return the camelCase field name of a snake_case YAML key: `tool_id` is `toolId`. */
+/** The key the author wrote for body key `key`: `input` for `inputs`, say. */
+function writtenKey(key: string): string {
+  return SURFACE_NAMES.get(key) ?? key;
+}
+
+/** Return the camelCase field name of a snake_case YAML key: `node_name` is `nodeName`. */
 function camelCase(key: string): string {
   return key.replace(/_([a-z0-9])/g, (_match, letter: string) => letter.toUpperCase());
 }

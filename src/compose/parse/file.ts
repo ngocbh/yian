@@ -29,7 +29,7 @@ import { LoadDiagnostics, rejectRemovedMemoryKey, rejectReservedName } from "../
 import { isExtensionKey } from "../helpers/source.ts";
 import { yamlReadAs } from "../helpers/yaml_words.ts";
 import { notTextError, rejectInfinityName, valueTypeError } from "../nodes/base.ts";
-import { KINDS, REMOVED_KINDS } from "../nodes/index.ts";
+import { KINDS, removedKindFix } from "../nodes/index.ts";
 import {
   type IncludedValues,
   SourceAccessError,
@@ -89,7 +89,7 @@ const COMPACT_FLOW_KEYS: readonly string[] = ["id", "name", "description", "vers
  * The kinds a compact flow may use: the value-producing leaf kinds, and `call`, whose `call:` can
  * name only a tool in a file with no `defs:` or `uses:`.
  */
-const COMPACT_KINDS: ReadonlySet<string> = new Set(["agent", "call", "code", "tool"]);
+const COMPACT_KINDS: ReadonlySet<string> = new Set(["agent", "call", "code"]);
 
 /**
  * The kinds a compact flow refuses: they reference other nodes or callables that a one-node flow
@@ -363,7 +363,7 @@ function desugarCompact(body: ValueRecord, root: SourceCursor): ValueRecord {
       { range: root.rangeOf("kind") },
     );
   }
-  const removed = REMOVED_KINDS.get(kind);
+  const removed = removedKindFix(kind, body["tool_id"] ?? null);
   if (removed !== undefined) {
     throw diagnostics.error(
       `compact (single-node) flow: kind ${reprText(kind)} was removed; ${removed}`,

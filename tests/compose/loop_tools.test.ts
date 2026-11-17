@@ -119,7 +119,12 @@ test.each([
     "node 'poll' (kind=loop): `call: {crm: sleep}`: sleep is a built-in, not a group's tool; write `call: sleep`",
     "{crm: sleep}",
   ],
-  ["{lessons: raed}", POLL, "node 'poll' (kind=loop) grants {lessons: [raed]}: `lessons` has no tool `raed`", "{lessons: raed}"],
+  [
+    "{lessons: raed}",
+    POLL,
+    "node 'poll' (kind=loop): `call: {lessons: raed}`: `lessons` has no tool `raed`",
+    "{lessons: raed}",
+  ],
   [
     "{lessons: read}",
     "    input:\n      path: a.md\n    while: path == lessons\n    max: 2\n",

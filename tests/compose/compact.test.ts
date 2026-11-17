@@ -87,7 +87,7 @@ test("a compact loop is refused with the other non-leaf kinds", () => {
   const error = loadError(() => parseFile("id: f\nname: f\nkind: loop\ntimes: 2\ncall: body\n"));
 
   expect(error.message).toBe(
-    "compact (single-node) flow: kind 'loop' is not allowed inline (allowed: agent, call, code, tool); " +
+    "compact (single-node) flow: kind 'loop' is not allowed inline (allowed: agent, call, code); " +
       "case/map/loop reference other nodes a one-node flow has none of — write a full `nodes:` map instead",
   );
 });
@@ -251,14 +251,11 @@ code: ./fixtures/compose_codefns.ts:make_plan
   }
 });
 
+const COMPACT_MEMORY_TOOL = "id: s\nname: s\ninput:\n  lessons: !FileMemory\n  path: !str\n";
+
 // Its memory input is wired by name like the others, yet a memory is never a tool's argument.
-test.each([
-  ["call", "call"],
-  ["tool", "tool_id"],
-])("a compact kind: %s naming its memory input's tool runs", async (kind, field) => {
-  const flow = await loadConformanceFlow(
-    `id: s\nname: s\ninput:\n  lessons: !FileMemory\n  path: !str\nkind: ${kind}\n${field}: {lessons: read}\n`,
-  );
+test("a compact call naming its memory input's tool runs", async () => {
+  const flow = await loadConformanceFlow(`${COMPACT_MEMORY_TOOL}kind: call\ncall: {lessons: read}\n`);
   const dir = mkdtempSync(join(tmpdir(), "yian-compact-"));
   try {
     writeFileSync(join(dir, "a.md"), "one");
@@ -268,6 +265,14 @@ test.each([
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("a compact kind: tool is removed, showing the call its tool_id: becomes", () => {
+  const text = `${COMPACT_MEMORY_TOOL}kind: tool\ntool_id: {lessons: read}\n`;
+  const error = loadError(() => parseFile(parseSourceDocument(text, "compact.yaml")));
+  expect(error.message).toBe(
+    "compact (single-node) flow: kind 'tool' was removed; write `kind: call` with `call: {lessons: read}`",
+  );
 });
 
 test.each([

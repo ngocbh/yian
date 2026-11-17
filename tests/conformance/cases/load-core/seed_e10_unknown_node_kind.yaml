@@ -18,5 +18,5 @@ expect:
   load:
     diagnostics:
       - code: compose.load
-        message: "node 'note': unknown kind 'llm' (allowed: agent, call, case, code, loop, map, tool)"
+        message: "node 'note': unknown kind 'llm' (allowed: agent, call, case, code, loop, map)"
         frames: [{label: flow.yaml, range: [8, 11, 8, 14]}]

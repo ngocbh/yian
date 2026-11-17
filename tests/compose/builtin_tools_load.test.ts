@@ -1,4 +1,4 @@
-/** `kind: tool` with `tool_id: take | sleep | ask` loads as a yian built-in. */
+/** `call: take | sleep | ask` loads as a yian built-in. */
 import { expect, test } from "bun:test";
 
 import { outputContractType } from "../../src/nodes/contracts.ts";
@@ -6,19 +6,19 @@ import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { canonicalTypeLabel } from "../../src/typesys/values.ts";
 import { assembleText, loadError } from "../helpers/declarations.ts";
 
-/** Return a flow with one TOOL node `t` of tool id `toolId` and `extra` body lines. */
+/** Return a flow with one node `t` calling the tool `toolId`, with `extra` body lines. */
 const toolFlow = (toolId: string, extra: string) => `id: f
 name: f
 nodes:
   t:
-    kind: tool
-    tool_id: ${toolId}
+    kind: call
+    call: ${toolId}
 ${extra}output: null
 `;
 
 const refused = (text: string) => loadError(() => assembleText(text)).message;
 
-test("tool_id: ask_user is the ask built-in, its old name", () => {
+test("call: ask_user is the ask built-in, its old name", () => {
   const text = toolFlow(
     "ask_user",
     `    input:
@@ -38,15 +38,15 @@ const INBOX = `    input:
       from: \${input.m}
 `;
 
-/** Return a flow taking from inbox `m` in TOOL node `t`, with `extra` body lines. */
+/** Return a flow taking from inbox `m` in node `t`, with `extra` body lines. */
 const takeFlow = (extra: string) => `id: f
 name: f
 input:
   m: !Inbox(str)
 nodes:
   t:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
 ${INBOX}${extra}output: null
 `;
 
@@ -65,7 +65,7 @@ test.each([
 ])("a sleep until written as %s holding a reference is refused", (shape, body) => {
   const text =
     "id: f\nname: f\nnodes:\n  a:\n    kind: code\n    code: return '2030-01-01'\n" +
-    `  t:\n    kind: tool\n    tool_id: sleep\n    input:\n      until:\n${body}output: null\n`;
+    `  t:\n    kind: call\n    call: sleep\n    input:\n      until:\n${body}output: null\n`;
   expect(refused(text)).toContain(`input 'until': must be a date or datetime, but the value is ${shape}`);
 });
 
@@ -92,8 +92,8 @@ input:
   m: !Inbox(str)
 nodes:
   heard:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     input:
       from: \${input.m}
       take: all
@@ -124,12 +124,12 @@ input:
   t: !str
 nodes:
   t1:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     input:
 ${inputs}  keep:
-    kind: tool
-    tool_id: take
+    kind: call
+    call: take
     input:
       from: \${input.m}
 output: \${input.t}

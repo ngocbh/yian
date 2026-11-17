@@ -12,13 +12,14 @@
  * classification, the `input:`/`output:` to plural back-map, `kind:` resolution); each kind's own
  * `parse` owns its field legality and its descriptor-local `SourceRange` recording (each field
  * keyed `siteKey("field", name)`). A `kind: call` body whose `call:` names a tool, by the caller's
- * `callsTool` rule, parses as a TOOL body with `call:` read as `tool_id:`; one naming a flow refuses
- * the fields only a tool call takes. Two kind-blind enrichments run after every kind parse: each
- * `input:` binding's own range is stamped into the descriptor's `fieldRanges` under
- * `siteKey("input", name)`, and each `asserts:` item range is appended positionally to its
- * `assertRanges`. This metadata stays inside Compose; `_finish` copies node and field locations
- * to the `BuildResult` for validation. Then, for a kind whose `inputsAreLocals`, an `input:` key
- * named `inf` is refused at the key, since `${inf}` reads infinity.
+ * `callsTool` rule, parses as a TOOL body; one naming a flow refuses the fields only a tool call
+ * takes. A removed kind, `tool` among them, is refused, showing what to write. Two kind-blind
+ * enrichments run after every kind parse: each `input:` binding's own range is stamped into the
+ * descriptor's `fieldRanges` under `siteKey("input", name)`, and each `asserts:` item range is
+ * appended positionally to its `assertRanges`. This metadata stays inside Compose; `_finish`
+ * copies node and field locations to the `BuildResult` for validation. Then, for a kind whose
+ * `inputsAreLocals`, an `input:` key named `inf` is refused at the key, since `${inf}` reads
+ * infinity.
  *
  * Knows about: diagnostics, compose source, helpers and node kinds, compile model, expr and
  * typesys.
@@ -48,7 +49,7 @@ import { QUOTED_STYLES, suggestTag, yamlQuoted } from "../helpers/tags.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import { type NodeDescriptor, notTextError, rejectInfinityName, siteKey } from "../nodes/base.ts";
 import type { CallingKind, CallsTool } from "../nodes/call.ts";
-import { type DescriptorClass, KINDS, REMOVED_KINDS } from "../nodes/index.ts";
+import { type DescriptorClass, KINDS, removedKindFix } from "../nodes/index.ts";
 import { ToolDescriptor } from "../nodes/tool.ts";
 import type { ScalarStyle } from "../source/common.ts";
 import {
@@ -65,8 +66,6 @@ const INPUT_OUTPUT_REMAP: ReadonlyMap<string, string> = new Map([
   ["output", "outputs"],
 ]);
 
-// A `call` node naming a tool is read as a TOOL node, whose tool is in `tool_id:`.
-const CALL_AS_TOOL: ReadonlyMap<string, string> = new Map([["call", "tool_id"]]);
 // The kinds whose `call:` the file's call rule reads.
 const CALLING_KINDS: ReadonlySet<string> = new Set<CallingKind>(["call", "map", "loop"]);
 
@@ -151,8 +150,8 @@ export type ValueReader = (nodeId: string, cursor: SourceCursor) => NodeDescript
  * @returns The descriptors keyed by entry id, in source order, each anchored on its entry's key
  *   line whenever an authored source exists.
  * @throws LoadError at the entry for a bad or reserved id, an untagged entry that is not a node
- *   body, or a node body that fails its kind's parse; at the `kind:` value for a non-text or
- *   unknown kind; as `callsTool` throws.
+ *   body, or a node body that fails its kind's parse; at the `kind:` value for a non-text,
+ *   removed or unknown kind; as `callsTool` throws.
  * @throws TypeError when a tagged entry is found and `readValue` is absent.
  */
 export function parseNodes(
@@ -215,7 +214,7 @@ function parseNode(
       { range: normalized.rangeOf("kind") },
     );
   }
-  const removed = REMOVED_KINDS.get(kind);
+  const removed = removedKindFix(kind, normalized.get("tool_id"));
   if (removed !== undefined) {
     throw diagnostics.error(
       `node ${reprText(nodeId)}: kind ${reprText(kind)} was removed; ${removed}`,
@@ -262,12 +261,11 @@ function parseNode(
 }
 
 /**
- * Parse a `call`, `map` or `loop` body. A `kind: call` body parses as a TOOL body, its `call:` read
- * as `tool_id:`, when `callsTool` says its `call:` names a tool. A map or loop naming a tool calls
- * the body generated for it once its body is extracted; the one node of that body keeps the map's
- * or loop's `kind:` and parses as a TOOL body too. A body naming a flow parses with `cls`, refusing
- * `retries:` and `adaptive_questions:`, which only a tool call takes. A body that also writes
- * `tool_id:` is left to `cls`, which refuses it.
+ * Parse a `call`, `map` or `loop` body. A `kind: call` body parses as a TOOL body when `callsTool`
+ * says its `call:` names a tool. A map or loop naming a tool calls the body generated for it once
+ * its body is extracted; the one node of that body keeps the map's or loop's `kind:` and parses as
+ * a TOOL body too. A body naming a flow parses with `cls`, refusing `retries:` and
+ * `adaptive_questions:`, which only a tool call takes.
  *
  * @throws LoadError at the field for `retries:` or `adaptive_questions:` on a flow call, or as
  *   `callsTool` and the class's `parse` throw.
@@ -280,9 +278,9 @@ function parseCallBody(
   callsTool: CallsTool,
   diagnostics: LoadDiagnostics,
 ): NodeDescriptor {
-  if (!normalized.has("call") || normalized.has("tool_id")) return cls.parse(nodeId, normalized);
+  if (!normalized.has("call")) return cls.parse(nodeId, normalized);
   if (callsTool(nodeId, normalized.get("call"), normalized.rangeOf("call"), { kind })) {
-    return ToolDescriptor.parse(nodeId, normalized.renamed(CALL_AS_TOOL));
+    return ToolDescriptor.parse(nodeId, normalized);
   }
   const subject = `node ${reprText(nodeId)} (kind=${kind})`;
   if (normalized.has("retries")) {

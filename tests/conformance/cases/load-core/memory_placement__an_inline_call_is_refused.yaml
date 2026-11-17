@@ -28,7 +28,7 @@ expect:
       - code: compose.load
         message: |-
           flow has unresolved references:
-            node 'c' input 't' call(child) argument 'notes' from: ${input.lessons} is a memory; use it whole as an agent input, in prompt text, as a child's memory input of the same type, or name it in `tools:`/`tool_id:` (pass it through a named `kind: call` node)
+            node 'c' input 't' call(child) argument 'notes' from: ${input.lessons} is a memory; use it whole as an agent input, in prompt text, as a child's memory input of the same type, or name it in `tools:`/`call:` (pass it through a named `kind: call` node)
         frames:
           - label: flow.yaml
             range:

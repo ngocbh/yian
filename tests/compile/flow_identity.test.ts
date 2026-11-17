@@ -656,6 +656,25 @@ test("agent variable manifest preserves the variable-free fingerprint", () => {
   expect(flowFingerprint(flow)).toBe("4bf7361e46300e1e8c9250fbca0505b9ad985ce4159558c1528ac1bc29bf8bd4");
 });
 
+// The hash `kind: tool` with `tool_id:` gave these nodes, so runs recorded before the removal keep
+// their fingerprints: the manifest keeps the key `tool_id`.
+test("tool calls keep the fingerprint the removed kind: tool gave them", async () => {
+  const call = (tool: string, rest: string) => `    kind: call\n    call: ${tool}\n${rest}`;
+  const text =
+    "id: pin\nname: pin\ninput:\n  lessons: !FileMemory\n  inbox: !Inbox(str)\nnodes:\n" +
+    `  host:\n${call("search", "    retries: 2\n    output: !int\n    asserts: [output > 0]\n    input: {q: x}\n")}` +
+    `  grouped:\n${call("{github: search}", "    input: {q: x}\n")}` +
+    `  mem:\n${call("{lessons: read}", "    input: {path: a.md}\n")}` +
+    `  took:\n${call("take", '    input: {from: "${input.inbox}"}\n')}` +
+    `  slept:\n${call("sleep", "    input: {for: 1s}\n")}` +
+    `  asked:\n${call("ask", "    adaptive_questions: {prompt: Ask about the trip}\n")}` +
+    "output: ${host.output}\n";
+
+  expect(flowFingerprint((await loadFlow(text)).compiled)).toBe(
+    "5672e3b157f6da79f7f1f45567b7ecca17003310b7ad651ed3fdd4c32b4f0fad",
+  );
+});
+
 test("agent variable identity tracks names domains defaults and order only", () => {
   const countType = (high: bigint) => new Type({ kind: ValueKind.INTEGER, bounds: [1n, high] });
   const count = new Parameter("count", { contract: new ValueContract(countType(12n)), hasDefault: true, default: 4n });

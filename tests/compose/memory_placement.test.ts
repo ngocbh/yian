@@ -54,7 +54,7 @@ const refused = (nodes: string, output = "null") => loadError(() => load(nodes, 
 
 const USE =
   "is a memory; use it whole as an agent input, in prompt text, as a child's memory input of the same type, " +
-  "or name it in `tools:`/`tool_id:`";
+  "or name it in `tools:`/`call:`";
 const agent = (input: string, prompt = "hi") =>
   `  a:\n    kind: agent\n    output: !str\n    prompt: ${JSON.stringify(prompt)}\n    input:\n${input}`;
 const code = (input: string) => `  c:\n    kind: code\n    code: return 1\n    input:\n${input}`;
@@ -83,7 +83,7 @@ test.each([
   ["text in a binding", agent('      t: "notes: ${input.lessons}"\n'), "(not inside text or an expression)"],
   ["a case condition", `  k:\n    kind: case\n    cases:\n      - when: \${input.lessons == null}\n        then: done\n  done: !int 1\n`, "(not inside text or an expression)"],
   ["a CODE input", code("      t: ${input.lessons}\n"), "(a code node can't take a memory)"],
-  ["a TOOL input", `  t:\n    kind: call\n    call: f\n    input:\n      t: \${input.lessons}\n`, "(a tool node can't take a memory)"],
+  ["a TOOL input", `  t:\n    kind: call\n    call: f\n    input:\n      t: \${input.lessons}\n`, "(a tool call can't take a memory as an argument)"],
   ["a record member", agent("      t:\n        a: ${input.lessons}\n"), "(not inside a list, record or dict)"],
   ["a list member", agent("      t:\n        - ${input.lessons}\n"), "(not inside a list, record or dict)"],
   ["an inline call", code("      t: call(file, notes=${input.lessons})\n"), "(pass it through a named `kind: call` node)"],

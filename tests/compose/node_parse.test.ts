@@ -16,6 +16,7 @@ import { reprText } from "../../src/diagnostics.ts";
 import {
   assembled,
   assembleText,
+  callsATool,
   type CaseRow,
   caseText,
   loadError,
@@ -250,20 +251,20 @@ describe("code", () => {
 });
 
 describe("tool", () => {
-  test("model kind is removed and points at tool", () => {
-    // ML inference is a host capability: `kind: model` names `kind: tool` as the replacement,
-    // not the generic "unknown kind".
+  test("model kind is removed and points at a tool call", () => {
+    // ML inference is a host capability: `kind: model` names a call of a host tool as the
+    // replacement, not the generic "unknown kind".
     const text = "\npredict:\n  kind: model\n  model_id: x\n  output: !float\n";
     const error = loadError(() => nodes(text));
 
     expect(error.message).toContain("kind 'model' was removed");
-    expect(error.message).toContain("kind: tool");
+    expect(error.message).toContain("`kind: call`");
     expect(error.diagnostic.frames.at(-1)!.range!.startLine).toBe(3);
   });
 
   test("tool parses", () => {
     const { text, label } = caseText("load-leaves/seed_08_tool_news");
-    const node = nodesOf(text, [], label).get("news") as ToolDescriptor;
+    const node = nodesOf(text, [], label, { callsTool: callsATool }).get("news") as ToolDescriptor;
 
     expect(node).toBeInstanceOf(ToolDescriptor);
     expect(node.toolId).toBe("get_facts");
@@ -273,8 +274,8 @@ describe("tool", () => {
   test("tool legacy args key is loud", () => {
     // `args:` was retired in favor of `input:`: the old key is an unknown field, no silent alias.
     const text =
-      "\nnews:\n  kind: tool\n  tool_id: get_facts\n  args:\n    symbol: ${input.topic}\n";
-    const error = loadError(() => nodes(text));
+      "\nnews:\n  kind: call\n  call: get_facts\n  args:\n    symbol: ${input.topic}\n";
+    const error = loadError(() => parseNodes(SourceDocument.parse(text).root, { callsTool: callsATool }));
 
     expect(error.message).toContain("args");
     expect(error.message).toContain("not allowed");
@@ -483,11 +484,11 @@ fetch:
     expect(error.diagnostic.frames.at(-1)!.range).not.toBeNull();
   });
 
-  test("tool id illegal on agent is loud", () => {
-    const text = "\nn:\n  kind: agent\n  tool_id: get_facts\n  output: !str\n  prompt: hi\n";
+  test("a tool call's call: is illegal on an agent", () => {
+    const text = "\nn:\n  kind: agent\n  call: get_facts\n  output: !str\n  prompt: hi\n";
     const error = loadError(() => nodes(text));
 
-    expect(error.message).toContain("tool_id");
+    expect(error.message).toContain("field 'call' is not allowed");
   });
 
   test("unknown kind is loud", () => {

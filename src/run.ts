@@ -3330,7 +3330,7 @@ function* streamedEnvelopes(log: string, maxLineBytes: number | null): Generator
 }
 
 /**
- * Prove every static AGENT grant and TOOL `tool_id` names a tool this run supplies.
+ * Prove every static AGENT grant and TOOL node names a tool this run supplies.
  *
  * An AGENT's grants expand as its request will, its own flows and tool modules first: a group
  * gives its tools, a group grant the tools it lists, and a bare name a top-level tool or the one
@@ -3356,8 +3356,8 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
       if (BUILTIN_TOOL_IDS.has(toolId as BuiltinToolId)) {
         const reason =
           toolId === ASK
-            ? "grant ask_user; ask is a TOOL-node built-in in this version"
-            : `an engine built-in a TOOL node reaches with tool_id: ${toolId}`;
+            ? "grant ask_user, or reach ask with `call: ask`"
+            : `an engine built-in; reach it with \`call: ${toolId}\``;
         throw new YianRangeError(`AGENT node ${reprText(nodeId)} grants ${reprText(toolId)}: ${reason}`);
       }
       if (toolId !== ASK_USER) continue;

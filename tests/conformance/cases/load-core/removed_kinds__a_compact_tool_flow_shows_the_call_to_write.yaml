@@ -1,0 +1,18 @@
+# A compact flow's removed `kind: tool` fails at its `kind:` value, showing the `call:` its
+# `tool_id:` becomes.
+kind: load
+flow: |
+  id: search
+  name: search
+  input:
+    q: !str
+  kind: tool
+  tool_id: search
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "compact (single-node) flow: kind 'tool' was removed; write `kind: call` with `call: search`"
+      frames:
+      - label: flow.yaml
+        range: [5, 7, 5, 11]

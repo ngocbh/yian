@@ -1,5 +1,4 @@
-# `tool_id:` naming a library is refused: a call node runs its defs, and the error shows the
-# `call:` to write.
+# The removed `kind: tool` naming a library's def shows the `call:` that runs the def.
 kind: load
 flow: |
   id: orders
@@ -28,7 +27,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'node ''price'': `billing` is a library; call its def with `kind: call`: `call: {billing: quote}`'
+      message: "node 'price': kind 'tool' was removed; write `kind: call` with `call: {billing: quote}`"
       frames:
       - label: flow.yaml
-        range: [8, 14, 8, 30]
+        range: [7, 11, 7, 15]

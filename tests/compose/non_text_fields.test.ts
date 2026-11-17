@@ -250,7 +250,7 @@ describe("parseFile", () => {
 
     expect(error.message).toContain(
       `compact (single-node) flow: \`kind:\` must be text, but ${phrase}; ` +
-        "write one of agent, call, code, tool",
+        "write one of agent, call, code",
     );
     expect(startLine(error)).toBe(lineOf(text, "kind: "));
   });
@@ -372,7 +372,7 @@ describe("parseNodes", () => {
 
     expect(error.message).toContain(
       `node 'a': \`kind:\` must be text, but YAML read it as ${phrase}; ` +
-        "write one of agent, call, case, code, loop, map, tool",
+        "write one of agent, call, case, code, loop, map",
     );
     expect(startLine(error)).toBe(lineOf(text, "kind: "));
   });
@@ -640,7 +640,7 @@ output: \${a.output}
 
     expect(error.message).toBe(
       "node 'echo': `kind:` must be text, but YAML read it as a list; " +
-        "write one of agent, call, case, code, loop, map, tool",
+        "write one of agent, call, case, code, loop, map",
     );
     expect(startLine(error)).toBe(lineOf(kindInInlineBody, "kind: [a]"));
   });

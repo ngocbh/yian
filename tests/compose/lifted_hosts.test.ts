@@ -15,17 +15,17 @@ import { desugarInlineCalls, synthIdGen } from "../../src/compose/desugar/inline
 import { readValueEntry } from "../../src/compose/desugar/value_entries.ts";
 import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
 import type { NodeDescriptor } from "../../src/compose/nodes/base.ts";
-import type { CallDescriptor } from "../../src/compose/nodes/call.ts";
+import type { CallDescriptor, CallsTool } from "../../src/compose/nodes/call.ts";
 import type { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
-import { assembleText, loadError } from "../helpers/declarations.ts";
+import { assembleText, callsATool, loadError } from "../helpers/declarations.ts";
 
-/** Parse a flow whose `nodes:` section is `nodesYaml` into descriptors. */
-function descriptorsOf(nodesYaml: string): Map<string, NodeDescriptor> {
+/** Parse a flow whose `nodes:` section is `nodesYaml` into descriptors, `callsTool` as `parseNodes` takes it. */
+function descriptorsOf(nodesYaml: string, callsTool?: CallsTool): Map<string, NodeDescriptor> {
   const text = "id: f\nname: f\nnodes:\n" + nodesYaml;
-  return parseNodes(SourceDocument.parse(text).root.child("nodes"));
+  return parseNodes(SourceDocument.parse(text).root.child("nodes"), { callsTool });
 }
 
 /** The lifted `__call_N` descriptors, keyed by id. */
@@ -110,9 +110,10 @@ test("nested branch call records the outer call as host", () => {
 
 test("adaptive composer records the gate as host", () => {
   const descriptors = descriptorsOf(
-    "  ask:\n    kind: tool\n    tool_id: ask\n" +
+    "  ask:\n    kind: call\n    call: ask\n" +
       "    adaptive_questions:\n      prompt: Ask about ${topic}\n" +
       "    input:\n      topic: ${input.topic}\n",
+    callsATool,
   );
   const newDescriptors = desugarAdaptiveQuestions(descriptors);
   expect(newDescriptors.get("ask__compose")!.host).toBe("ask");

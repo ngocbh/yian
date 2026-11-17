@@ -19,7 +19,7 @@ expect:
       - code: compose.load
         message: |-
           flow has unresolved references:
-            node 'a' input 't' from: ${input.lessons} is a memory; use it whole as an agent input, in prompt text, as a child's memory input of the same type, or name it in `tools:`/`tool_id:` (not inside text or an expression)
+            node 'a' input 't' from: ${input.lessons} is a memory; use it whole as an agent input, in prompt text, as a child's memory input of the same type, or name it in `tools:`/`call:` (not inside text or an expression)
         frames:
           - label: flow.yaml
             range:

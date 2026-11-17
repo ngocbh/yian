@@ -24,12 +24,15 @@ const AUTHORED_KINDS: readonly string[] = [
   "code",
   "loop",
   "map",
-  "tool",
 ];
 
-/** Expect `KINDS` and `BINDING_FIELDS` to name the same kinds, each with its class's fields. */
+/**
+ * Expect `BINDING_FIELDS` to name `KINDS`' kinds and the TOOL node's, which a call naming a tool
+ * builds, each with its class's fields.
+ */
 function expectTablesAgree(): void {
-  expect([...KINDS.keys()]).toEqual([...BINDING_FIELDS.keys()]);
+  expect([...BINDING_FIELDS.keys()].filter((kind) => kind !== ToolDescriptor.kind)).toEqual([...KINDS.keys()]);
+  expect(BINDING_FIELDS.get(ToolDescriptor.kind)).toBe(ToolDescriptor.bindingFields);
   for (const [kind, cls] of KINDS) {
     expect(cls.kind).toBe(kind);
     expect(BINDING_FIELDS.get(kind)).toBe(cls.bindingFields);
@@ -44,7 +47,6 @@ test("the kind tables are maps", () => {
 test("KINDS maps the kind text to its descriptor class", () => {
   expect(KINDS.get("agent")).toBe(AgentDescriptor);
   expect(KINDS.get("code")).toBe(CodeDescriptor);
-  expect(KINDS.get("tool")).toBe(ToolDescriptor);
   expect(KINDS.get("case")).toBe(CaseDescriptor);
   expect(KINDS.get("call")).toBe(CallDescriptor);
   expect(KINDS.get("map")).toBe(MapDescriptor);
@@ -73,8 +75,9 @@ test("a loop binds its inputs", () => {
 test("removed kinds are not registered", () => {
   expect([...REMOVED_KINDS.keys()].filter((kind) => KINDS.has(kind))).toEqual([]);
   expect(REMOVED_KINDS.get("model")).toBe(
-    "serve the model behind a host tool and call it with kind: tool (set tool_id: and input:)",
+    "serve the model behind a host tool, then write `kind: call` with `call: <tool>` and `input:`",
   );
+  expect(REMOVED_KINDS.get("tool")).toBe("write `kind: call` with `call: <tool>`");
 });
 
 test("KINDS and BINDING_FIELDS agree", () => {

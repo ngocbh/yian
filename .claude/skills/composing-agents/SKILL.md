@@ -87,7 +87,7 @@ output:
 | `code` | A TypeScript or JavaScript body, or a `./file.ts:fn` export | [Code and tools](https://yian.readthedocs.io/code-and-tools/) |
 | `case` | Take one branch, skip the others | [Control flow](https://yian.readthedocs.io/control-flow/) |
 | `call`, `map`, `loop` | Run a child flow or a tool once, per list item, or repeatedly: a host tool, or the built-ins `ask`, `take` and `sleep` (a `map` can't `take`; a `loop` can't `take` or `sleep`) | [Control flow](https://yian.readthedocs.io/control-flow/), [Code and tools](https://yian.readthedocs.io/code-and-tools/#tool-nodes), [Inboxes and waiting](https://yian.readthedocs.io/inboxes/) |
-| `tool` | The old spelling of a `call` node naming a tool, with `tool_id:` for `call:`; it still loads, but is going away | [Code and tools](https://yian.readthedocs.io/code-and-tools/#tool-nodes) |
+| `tool` | Removed: write a `call` node naming the tool, with `call:` in place of `tool_id:` | [Code and tools](https://yian.readthedocs.io/code-and-tools/#tool-nodes) |
 | a tagged entry | A fixed or computed value, such as `count: !int 3` | [Flows and nodes](https://yian.readthedocs.io/flows/#values) |
 
 ## Rules that most often go wrong

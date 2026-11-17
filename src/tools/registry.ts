@@ -72,7 +72,7 @@ const ASK_HINT = "pass tools: {...registeredTools(), ask: handler} to runFlow or
 
 /** Return why a reserved name is reserved, for a refusal message. */
 function reservedReason(name: string): string {
-  if (name === TAKE || name === SLEEP) return `an engine built-in a TOOL node reaches with tool_id: ${name}`;
+  if (name === TAKE || name === SLEEP) return `an engine built-in; reach it with \`call: ${name}\``;
   if (name === ASK || name === ASK_USER) return ASK_HINT;
   return "granting skills binds it";
 }
@@ -731,7 +731,7 @@ export class ToolSet {
     }
     if (toolId === TAKE || toolId === SLEEP) {
       throw new YianRangeError(
-        `${reprText(toolId)} is an engine built-in, not a tool; reach it with a TOOL node's tool_id: ${toolId}`,
+        `${reprText(toolId)} is an engine built-in, not a tool; reach it with \`call: ${toolId}\``,
       );
     }
     const group = this.groupMap.get(toolId);

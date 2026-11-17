@@ -1,4 +1,4 @@
-/** The `tool` kind's parse side. */
+/** A tool call's parse side: the TOOL node a `call:` naming a tool parses to. */
 
 import { describe, expect, test } from "bun:test";
 
@@ -13,8 +13,8 @@ import { assembled, assembleText, type CaseRow, loadError, runCase } from "../he
 
 const FLOW = `nodes:
   fetch:
-    kind: tool
-    tool_id: http_get
+    kind: call
+    call: http_get
     inputs:
       url: \${input.url}
 `;
@@ -41,7 +41,7 @@ test("tool parse matches descriptor and records ranges", () => {
     fieldsOf(new ToolDescriptor({ id: "fetch", toolRef: { group: null, name: "http_get" }, inputs: { url: "${input.url}" } })),
   );
   expect(desc.range).toBeInstanceOf(SourceRange);
-  expect(desc.fieldRanges.get(siteKey("field", "tool_id"))).toBeInstanceOf(SourceRange);
+  expect(desc.fieldRanges.get(siteKey("field", "call"))).toBeInstanceOf(SourceRange);
   expect(desc.fieldRanges.get(siteKey("field", "inputs"))).toBeInstanceOf(SourceRange);
 });
 
@@ -61,8 +61,8 @@ test("a tool node with an authored output loads", () => {
 name: count
 nodes:
   place:
-    kind: tool
-    tool_id: place_order
+    kind: call
+    call: place_order
     input:
       qty: 5
     output: !int
@@ -78,8 +78,8 @@ output: \${place.output}
 function builtTool(outputYaml: string): ToolNode {
   const text = `nodes:
   place:
-    kind: tool
-    tool_id: place_order
+    kind: call
+    call: place_order
     inputs:
       qty: 5
     outputs: ${outputYaml}
@@ -102,13 +102,13 @@ test("tool build sets a record output contract", () => {
 });
 
 // Refused at build, which knows whether the group is a memory input (`memory_grants.test.ts`).
-test("a tool_id group tool that would show under a reserved name is refused in the form written", () => {
+test("a group tool that would show under a reserved name is refused in the form written", () => {
   const error = loadError(() =>
-    assembleText("id: f\nname: f\nnodes:\n  a:\n    kind: tool\n    tool_id: {load: skill}\noutput: null\n"),
+    assembleText("id: f\nname: f\nnodes:\n  a:\n    kind: call\n    call: {load: skill}\noutput: null\n"),
   );
 
   expect(error.message).toBe(
-    "node 'a' (kind=tool): `tool_id: {load: skill}` would show as `load_skill`, a name yian reserves; " +
+    "node 'a' (kind=call): `call: {load: skill}` would show as `load_skill`, a name yian reserves; " +
       "rename the group or the tool",
   );
 });
@@ -116,13 +116,13 @@ test("a tool_id group tool that would show under a reserved name is refused in t
 describe("retries", () => {
   /** Parse node `a` of a TOOL flow with `line` added. */
   const parseA = (line: string) =>
-    ToolDescriptor.parse("a", readerFor(`nodes:\n  a:\n    kind: tool\n    tool_id: t\n${line}`, "a"));
+    ToolDescriptor.parse("a", readerFor(`nodes:\n  a:\n    kind: call\n    call: t\n${line}`, "a"));
 
   test("a count past the largest safe integer is refused", () => {
     const error = loadError(() => parseA("    retries: 9007199254740992\n"));
 
     expect(error.message).toBe(
-      "node 'a' (kind=tool): `retries:` must be at most 9007199254740991, got 9007199254740992",
+      "node 'a' (kind=call): `retries:` must be at most 9007199254740991, got 9007199254740992",
     );
     expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(5);
   });

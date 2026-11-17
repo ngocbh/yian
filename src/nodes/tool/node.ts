@@ -382,7 +382,7 @@ export class ToolNode extends Node {
       // A group alias names a module's tool as `{<alias>: <tool>}`; a one-export alias is that tool.
       const group = splitModuleRef(moduleRef).exportName === null;
       if (memoryTool || (group ? ref.group !== alias : ref.group !== null || ref.name !== alias)) {
-        throw new YianRangeError(`node ${reprText(nodeId)}: tool_id doesn't name tool module ${reprText(alias)}`);
+        throw new YianRangeError(`node ${reprText(nodeId)}: \`call:\` doesn't name tool module ${reprText(alias)}`);
       }
     }
     this.toolId = visibleToolName(this.toolRef.group, this.toolRef.name);
@@ -449,12 +449,12 @@ export class ToolNode extends Node {
     pool: VariablePool,
     options: { bind?: ReservedBinder | null } = {},
   ): Record<string, unknown> {
-    return bindMemoryGrants(this.id, this.memoryGrants(), "tool_id", nodeWiring, pool, options.bind ?? null);
+    return bindMemoryGrants(this.id, this.memoryGrants(), "call", nodeWiring, pool, options.bind ?? null);
   }
 
-  /** Name the reserved `__memory_<input>` key as the authored `tool_id`. */
+  /** Name the reserved `__memory_<input>` key as the authored `call`. */
   override reservedKeyLabel(key: string): string {
-    return key.startsWith(MEMORY_KEY_PREFIX) ? "tool_id" : super.reservedKeyLabel(key);
+    return key.startsWith(MEMORY_KEY_PREFIX) ? "call" : super.reservedKeyLabel(key);
   }
 
   /**

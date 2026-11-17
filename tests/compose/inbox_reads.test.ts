@@ -65,7 +65,7 @@ test("a flow output can't read an inbox", () => {
 test("the refusal names the site and the inbox", () => {
   expect(refused(`  c:\n    kind: code\n    code: return 1\n    input:\n      t: \${input.m}\n`)).toContain(
     "node 'c' input 't' from: ${input.m} is an inbox; it is read only whole, bound to a child's Inbox input " +
-      "(take from it with `tool_id: take`)",
+      "(take from it with `call: take`)",
   );
 });
 

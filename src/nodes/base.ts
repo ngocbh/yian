@@ -164,7 +164,7 @@ export function memoryKey(input: string): string {
  * Resolve the reserved binding of each memory input `grants` name, once per input, to the memory
  * value it holds (`null` for an Optional memory left out), keyed by its reserved key.
  *
- * @param field The authored field the grants are in (`tools` or `tool_id`), for the message.
+ * @param field The authored field the grants are in (`tools` or `call`), for the message.
  * @param bind Resolves a named source and applies the check, as `bindReserved`'s `bind`; `null`
  *   resolves against `pool`.
  * @throws Error when the wiring lacks a grant's reserved binding.

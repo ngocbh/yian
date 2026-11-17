@@ -23,7 +23,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'defs entry ''score'': node ''score'': kind ''model'' was removed; serve the model behind a host tool and call it with kind: tool (set tool_id: and input:)'
+      message: 'defs entry ''score'': node ''score'': kind ''model'' was removed; serve the model behind a host tool, then write `kind: call` with `call: <tool>` and `input:`'
       frames:
       - label: flow.yaml
         range: [8, 5, 13, 1]

@@ -2,7 +2,9 @@
 # call, `crm_ok`, starts a fresh thread, whose import finds the `exited` file `exit` wrote, so it
 # describes `ok` otherwise: that call fails the AGENT with `tool.module_restart`. Pooled
 # (`num_workers: 1`), so the crash sweep doesn't cut it: a resume starts its own thread and has no
-# exited one to take over from.
+# exited one to take over from. Its first import finds `exited`, so the resume is refused
+# (`resume refused: tool_modules.crm.ts.ok description differs from the recorded one`); and
+# `exited` outlives the run, so each later cut run would list `ok` changed from the start.
 kind: run
 flow: |
   id: crm

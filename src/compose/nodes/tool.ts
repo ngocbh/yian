@@ -45,7 +45,7 @@ import {
 } from "../../typesys/values.ts";
 import { LoadDiagnostics, type LoadError } from "../helpers/errors.ts";
 import { CLOSE_MATCH_CUTOFF } from "../helpers/tags.ts";
-import { checkMemoryGrants, grantErrorText, memoryBinding } from "../helpers/memory.ts";
+import { checkMemoryGrants, grantErrorText, memoryBinding, memoryToolNames } from "../helpers/memory.ts";
 import { literalValue, NOT_LITERAL } from "../../compile/output_contracts.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import { SourceAccessError, type SourceCursor } from "../source/index.ts";
@@ -504,25 +504,16 @@ export class ToolDescriptor extends NodeDescriptor {
    * calls that module's tool.
    *
    * @throws LoadError when `output:` isn't a valid type expression, a built-in's input is unknown,
-   *   missing or of the wrong type (at the input), a group's tool would show under a reserved name,
-   *   a memory's tool names an Optional memory or a tool its type lacks, or as `checkModuleRef`
-   *   throws.
+   *   missing or of the wrong type (at the input), a memory's tool names an Optional memory or a
+   *   tool its type lacks, or as `checkModuleRef` and `checkShownName` throw.
    */
   override build(ctx: BuildContext): BuildResult {
     const { group, name } = this.toolRef;
     const memory = group === null ? undefined : ctx.flowInputs.get(group);
     const module = ctx.toolModule(group ?? name);
     if (module !== null) this.checkModuleRef(ctx, module, isMemoryType(memory));
-    // A group's tool shows as `<group>_<tool>`, which must never be a built-in's name.
-    if (group !== null && RESERVED_TOOL_NAMES.has(this.toolId)) {
-      const fix = isMemoryType(memory) ? "rename the input" : "rename the group or the tool";
-      throw ctx.diagnostics.error(
-        `${this.wording.nodeKind()}: \`${this.wording.written(this.wording.ref(group, name))}\` ` +
-          `would show as \`${this.toolId}\`, a name yian reserves; ${fix}`,
-        { range: this.fieldRanges.get(siteKey("field", "call")) ?? this.range },
-      );
-    }
     if (isMemoryType(memory)) return this.buildMemoryTool(ctx, memory);
+    if (group !== null) this.checkShownName(ctx, "rename the group or the tool");
     const builtin = BUILTIN_TOOL_IDS.has(this.toolId as BuiltinToolId);
     // A built-in is never retried by the node: take and sleep make no call, and the host owns an ask.
     const retries = builtin ? 0 : this.retries;
@@ -629,24 +620,50 @@ export class ToolDescriptor extends NodeDescriptor {
   }
 
   /**
+   * Refuse a group's tool that would show as `<group>_<tool>`, a name yian reserves, with `fix`.
+   *
+   * @throws LoadError at `call:` when the shown name is reserved.
+   */
+  private checkShownName(ctx: BuildContext, fix: string): void {
+    if (!RESERVED_TOOL_NAMES.has(this.toolId)) return;
+    const { group, name } = this.toolRef;
+    throw ctx.diagnostics.error(
+      `${this.wording.nodeKind()}: \`${this.wording.written(this.wording.ref(group!, name))}\` ` +
+        `would show as \`${this.toolId}\`, a name yian reserves; ${fix}`,
+      { range: this.fieldRanges.get(siteKey("field", "call")) ?? this.range },
+    );
+  }
+
+  /**
    * Build a TOOL node calling the tool `toolRef.name` of the memory input `toolRef.group`, whose
    * type is `memory`. The memory is routed to its tool, never passed as an argument, so a one-node
    * flow's generated binding of it (`autoWiredGroup`) isn't one of the node's inputs.
    *
-   * @throws LoadError when the memory is Optional, which a run may leave unbound, or its type lacks
-   *   the tool.
+   * @throws LoadError when the memory is Optional, which a run may leave unbound, its type lacks
+   *   the tool, the tool would show under a reserved name, or as `checkMemoryGrants` throws.
    */
-  private buildMemoryTool(ctx: BuildContext, memory: Type): BuildResult {
+  private buildMemoryTool(ctx: BuildContext, memory: Type & { readonly memory: string }): BuildResult {
     const { group, name } = this.toolRef;
     const input = group!;
     const range = this.fieldRanges.get(siteKey("field", "call")) ?? this.range;
+    const written = this.wording.written(this.wording.ref(input, name));
     if (memory.nullable) {
       throw ctx.diagnostics.error(
-        `${this.wording.node()}: \`${this.wording.written(this.wording.ref(input, name))}\` names \`${input}\`, ` +
-          "an Optional memory; a tool call needs one that is always bound",
+        `${this.wording.node()}: \`${written}\` names \`${input}\`, an Optional memory; a tool call needs one ` +
+          "that is always bound",
         { range },
       );
     }
+    // A type this load doesn't know, a recorded flow's, was checked when its run started.
+    const tools = memoryToolNames(memory, ctx.memoryTypes);
+    if (tools !== null && !tools.includes(name)) {
+      const has = tools.length === 0 ? "no tools" : tools.join(", ");
+      throw ctx.diagnostics.error(
+        `${this.wording.nodeKind()}: \`${written}\`: \`${input}\` has no tool \`${name}\`; it has ${has}`,
+        { range },
+      );
+    }
+    if (tools !== null) this.checkShownName(ctx, "rename the input");
     try {
       checkMemoryGrants([{ kind: "group", group: input, tools: [name] }], ctx.flowInputs, ctx.memoryTypes);
     } catch (error) {

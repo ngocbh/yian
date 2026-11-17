@@ -29,14 +29,21 @@ test.each([
   ["    tool_id:\n      github: search\n", "{github: search}"],
   ["", "<tool>"],
   ["    tool_id: [search]\n", "<tool>"],
+  ["    tool_id: 'web search'\n", "<tool>"],
+  ["    tool_id: |\n      search\n", "<tool>"],
+  ["    tool_id: {github: 'web search'}\n", "<tool>"],
 ])("kind: tool with %p shows the call to write", async (toolId, call) => {
   expect(await refusal(`    kind: tool\n${toolId}`)).toBe(
     `node 'n': kind 'tool' was removed; write \`kind: call\` with \`call: ${call}\``,
   );
 });
 
-test("tool_id: on a call node shows the call: to write", async () => {
-  expect(await refusal("    kind: call\n    tool_id: {github: search}\n")).toBe(
-    "node 'n' (kind=call): `tool_id:` is now `call:`; write `call: {github: search}`",
+test.each([
+  ["call", ""],
+  ["map", "    over: [1]\n"],
+  ["loop", "    max: 2\n"],
+])("tool_id: on a %s node shows the call: to write", async (kind, rest) => {
+  expect(await refusal(`    kind: ${kind}\n    tool_id: {github: search}\n${rest}`)).toBe(
+    `node 'n' (kind=${kind}): \`tool_id:\` is now \`call:\`; write \`call: {github: search}\``,
   );
 });

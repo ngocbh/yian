@@ -49,7 +49,7 @@ import {
   scanTemplate,
 } from "../../expr/index.ts";
 import { Span, templateRefs } from "../../expr/template.ts";
-import { memoryKey, type Node } from "../../nodes/base.ts";
+import { memoryKey, type Node, NodeKind } from "../../nodes/base.ts";
 import { AgentNode, isPromptText, STEER_INBOX_KEY } from "../../nodes/agent/node.ts";
 import { CallNode } from "../../nodes/call/node.ts";
 import { CaseNode } from "../../nodes/case/node.ts";
@@ -257,6 +257,8 @@ export function memoryReadProblem(where: string, read: string, tail: string): st
 
 /** Why a node of `kind`, which takes no memory, refuses one as an input. */
 export function kindMemoryTail(kind: string): string {
+  // A tool call reaches a memory's tool through `call: {<memory>: <tool>}`, never an argument.
+  if (kind === NodeKind.TOOL) return "(a tool call can't take a memory as an argument)";
   return `(a ${kind} node can't take a memory)`;
 }
 

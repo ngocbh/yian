@@ -91,10 +91,21 @@ test("a TOOL node names a memory's tool by its group form", async () => {
   expect(node.dataInputNames()).toEqual(["path"]);
 });
 
-test("a TOOL node's memory tool is checked against the type's tools", async () => {
+test("a TOOL node's memory tool is checked against the type's tools, in the call: written", async () => {
   const nodes = "found:\n  kind: call\n  call: {lessons: upsert}\n";
   const error = await loadErrorAsync(loadFlow(flow("lessons: !FileMemory", nodes)));
-  expect(error.diagnostic.message).toContain("`lessons` has no tool `upsert`; it has list, read");
+  expect(error.diagnostic.message).toBe(
+    "node 'found' (kind=call): `call: {lessons: upsert}`: `lessons` has no tool `upsert`; " +
+      "it has list, read, search, append, create, edit, delete, rewrite",
+  );
+});
+
+test("a TOOL node's memory tool its type lacks is refused as missing, even under a reserved name", async () => {
+  const error = await loadErrorAsync(loadFlow(flow("load: !FileMemory", "found:\n  kind: call\n  call: {load: skill}\n")));
+  expect(error.diagnostic.message).toBe(
+    "node 'found' (kind=call): `call: {load: skill}`: `load` has no tool `skill`; " +
+      "it has list, read, search, append, create, edit, delete, rewrite",
+  );
 });
 
 test("a TOOL node can't name an Optional memory", async () => {

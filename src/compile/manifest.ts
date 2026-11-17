@@ -782,7 +782,8 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
       break;
     case NodeKind.TOOL: {
       const tool = node as ToolNode;
-      // As authored: a bare id stays text, so flows naming bare tools keep their identity.
+      // As authored: a bare id stays text, so flows naming bare tools keep their identity. The
+      // key stays `tool_id`, the old field's name, so recorded fingerprints stay valid.
       const { group, name } = tool.toolRef;
       manifest.tool_id = group === null ? name : Object.fromEntries([[group, name]]);
       const retries = count(tool.retries, `${path}.retries`, false);

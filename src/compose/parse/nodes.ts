@@ -13,8 +13,8 @@
  * `parse` owns its field legality and its descriptor-local `SourceRange` recording (each field
  * keyed `siteKey("field", name)`). A `kind: call` body whose `call:` names a tool, by the caller's
  * `callsTool` rule, parses as a TOOL body; one naming a flow refuses the fields only a tool call
- * takes. A removed kind, `tool` among them, and a `kind: call` body writing the removed `tool_id:`
- * are refused, showing what to write. Two kind-blind enrichments run after every kind parse: each
+ * takes. A removed kind, `tool` among them, and a `call`, `map` or `loop` body writing the removed
+ * `tool_id:` are refused, showing what to write. Two kind-blind enrichments run after every kind parse: each
  * `input:` binding's own range is stamped into the descriptor's `fieldRanges` under
  * `siteKey("input", name)`, and each `asserts:` item range is appended positionally to its
  * `assertRanges`. This metadata stays inside Compose; `_finish` copies node and field locations
@@ -151,7 +151,8 @@ export type ValueReader = (nodeId: string, cursor: SourceCursor) => NodeDescript
  *   line whenever an authored source exists.
  * @throws LoadError at the entry for a bad or reserved id, an untagged entry that is not a node
  *   body, or a node body that fails its kind's parse; at the `kind:` value for a non-text,
- *   removed or unknown kind; at `tool_id:` on a `call` node; as `callsTool` throws.
+ *   removed or unknown kind; at `tool_id:` on a `call`, `map` or `loop` node; as `callsTool`
+ *   throws.
  * @throws TypeError when a tagged entry is found and `readValue` is absent.
  */
 export function parseNodes(
@@ -299,14 +300,15 @@ function parseCallBody(
 }
 
 /**
- * Refuse the removed `tool_id:` on a `kind: call` body, at its key, showing the `call:` to write.
+ * Refuse the removed `tool_id:` on a `call`, `map` or `loop` body, at its key, showing the `call:`
+ * to write.
  *
- * @throws LoadError when `kind` is `call` and `body` writes `tool_id:`.
+ * @throws LoadError when `kind` is a calling kind and `body` writes `tool_id:`.
  */
 export function rejectToolId(nodeId: string, kind: string, body: SourceCursor, diagnostics: LoadDiagnostics): void {
-  if (kind !== "call" || !body.has("tool_id")) return;
+  if (!isCallingKind(kind) || !body.has("tool_id")) return;
   throw diagnostics.error(
-    `node ${reprText(nodeId)} (kind=call): \`tool_id:\` is now \`call:\`; ` +
+    `node ${reprText(nodeId)} (kind=${kind}): \`tool_id:\` is now \`call:\`; ` +
       `write \`call: ${writtenTool(body.get("tool_id"))}\``,
     { range: body.keyRangeOf("tool_id") },
   );

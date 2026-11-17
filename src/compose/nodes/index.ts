@@ -51,6 +51,8 @@ export const BINDING_FIELDS: ReadonlyMap<string, readonly string[]> = new Map(
 
 // Stands for the tool in a fix that can't name it.
 const TOOL_PLACEHOLDER = "<tool>";
+// A name a fix can show as written: one line, nothing YAML would read another way.
+const PLAIN_NAME = /^[A-Za-z0-9_.-]+$/;
 
 /**
  * Each removed kind to what to write instead, so loading one names the replacement rather than
@@ -74,13 +76,14 @@ export function removedKindFix(kind: string, toolId: unknown): string | undefine
 }
 
 /**
- * A tool as a `call:` writes it: the name, or `{group: tool}` for a one-key mapping to a name;
- * `<tool>` for any other value.
+ * A tool as a `call:` writes it: a plain name, or `{group: tool}` for a one-key mapping of plain
+ * names; `<tool>` for any other value.
  */
 export function writtenTool(value: unknown): string {
-  if (typeof value === "string" && value !== "") return value;
+  const plain = (text: unknown): text is string => typeof text === "string" && PLAIN_NAME.test(text);
+  if (plain(value)) return value;
   const entries = isRecord(value) ? Object.entries(value) : [];
   if (entries.length !== 1) return TOOL_PLACEHOLDER;
   const [group, name] = entries[0]!;
-  return group !== "" && typeof name === "string" && name !== "" ? `{${group}: ${name}}` : TOOL_PLACEHOLDER;
+  return plain(group) && plain(name) ? `{${group}: ${name}}` : TOOL_PLACEHOLDER;
 }

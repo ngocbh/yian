@@ -145,8 +145,8 @@ export function inlineFlowId(owner: readonly string[]): string {
  * @returns The masked `nodes:` cursor and the retained bodies by node id, in source order.
  * @throws LoadError for an authored call into the private namespace, a malformed inline body,
  *   `output:` beside a named `call:` that isn't a tool call's, a map's or loop's `input:` key naming
- *   the memory it calls, a loop's carried field that isn't an identifier, or `tool_id:` on a call
- *   node (`rejectToolId`); as `callsTool` throws.
+ *   the memory it calls, a loop's carried field that isn't an identifier, or `tool_id:`
+ *   (`rejectToolId`); as `callsTool` throws.
  * @throws SourceAccessError when a needed field is behind a recursive alias.
  */
 export function extractInlineBodies(

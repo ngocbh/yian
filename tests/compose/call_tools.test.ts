@@ -467,7 +467,7 @@ test("a call binding the memory it calls is refused, as any tool argument holdin
   expect(await refusal(text)).toBe(
     "flow has unresolved references:\n  node 'n' input 'lessons' from: ${input.lessons} is a memory; use it whole as an " +
       "agent input, in prompt text, as a child's memory input of the same type, or name it in `tools:`/`call:` " +
-      "(a tool node can't take a memory)",
+      "(a tool call can't take a memory as an argument)",
   );
 });
 

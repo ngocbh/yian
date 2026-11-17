@@ -39,10 +39,10 @@ Before a command reads its flags, yian checks every `YIAN_*` variable in the env
 run writes a durable run log, so you can resume a run that stopped. On a terminal, a flow with an
 inbox input becomes a chat (see [Chatting on a terminal](#chatting-on-a-terminal)).
 
-```console
-$ yian run brief.yaml --input topic=climate
-$ yian run brief.yaml --inputs inputs.json --input words=200 --quiet
-$ yian run --resume ~/.yian/runs/4f1c/log.jsonl
+```sh
+yian run brief.yaml --input topic=climate
+yian run brief.yaml --inputs inputs.json --input words=200 --quiet
+yian run --resume ~/.yian/runs/4f1c/log.jsonl
 ```
 
 | Flag | Value | What it does |
@@ -152,8 +152,8 @@ chats when stdin and stderr are a terminal, the flow has one such input (or `--i
 one), it uses no MCP tool, and there is no `--json`. Otherwise a `take` on the inbox leaves the run
 waiting; from a script, use [`send` and `advance`](/embedding/#inbox-calls).
 
-```console
-$ yian run chat.yaml
+```sh
+yian run chat.yaml
 ```
 
 | Key | What it does |
@@ -246,9 +246,9 @@ run too; if it hasn't stopped 5 seconds later, its process ends and the run read
 in the folder you start it in, and answers questions from these docs. Give it a flow to talk about
 that flow; start it from the flow's folder, since it reaches no file outside it.
 
-```console
-$ yian chat
-$ yian chat hello.yaml
+```sh
+yian chat
+yian chat hello.yaml
 ```
 
 | Flag | Value | What it does |
@@ -454,15 +454,15 @@ says what is wrong. So does a run folder named for another run, such as a copy o
 default memory of input `NAME` of the flow file `FLOW`, or with `--at PATH`, a memory's folder or
 `.db` file. A change it makes is yours: history shows it as `user` and your user name.
 
-```console
-$ yian memory list
-$ yian memory show answer.yaml lessons
-$ yian memory history answer.yaml lessons --limit 5
-$ yian memory undo answer.yaml lessons 2001c567d78a491facd383297e13fc6b/add
-$ yian memory edit --at ./memory/lessons --file notes/math.md
-$ yian memory erase answer.yaml lessons MEMORY.md --text 555-0100
-$ yian memory edit triage.yaml cases --add "Ask for the order id first." --fields '{"title": "refunds", "tags": ["billing"]}'
-$ yian memory reembed triage.yaml cases --embedding openai/text-embedding-3-large
+```sh
+yian memory list
+yian memory show answer.yaml lessons
+yian memory history answer.yaml lessons --limit 5
+yian memory undo answer.yaml lessons 2001c567d78a491facd383297e13fc6b/add
+yian memory edit --at ./memory/lessons --file notes/math.md
+yian memory erase answer.yaml lessons MEMORY.md --text 555-0100
+yian memory edit triage.yaml cases --add "Ask for the order id first." --fields '{"title": "refunds", "tags": ["billing"]}'
+yian memory reembed triage.yaml cases --embedding openai/text-embedding-3-large
 ```
 
 | Command | What it does |
@@ -494,12 +494,12 @@ $ yian memory reembed triage.yaml cases --embedding openai/text-embedding-3-larg
 `yian auth` saves the provider login a run uses when no `llm_config` names one. See
 [Models and providers](/models/) for how the login is chosen.
 
-```console
-$ yian auth
-$ yian auth anthropic --model claude-sonnet-4-5
-$ yian auth openai --method subscription --login device
-$ yian auth openai --default
-$ yian auth anthropic --remove
+```sh
+yian auth
+yian auth anthropic --model claude-sonnet-4-5
+yian auth openai --method subscription --login device
+yian auth openai --default
+yian auth anthropic --remove
 ```
 
 | Flag | Value | What it does |
@@ -556,9 +556,9 @@ With `--json`, `providers` holds each one's `name`, `methods` and `api_key_env` 
 
 `yian models` lists the models a login or a key offers.
 
-```console
-$ yian models --auth-file ~/.config/yian/auth.json
-$ printf '%s' "$OPENROUTER_API_KEY" | yian models --provider openrouter
+```sh
+yian models --auth-file ~/.config/yian/auth.json
+printf '%s' "$OPENROUTER_API_KEY" | yian models --provider openrouter
 ```
 
 | Flag | Value | What it does |

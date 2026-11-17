@@ -1057,8 +1057,8 @@ output: \${add.output.id}
     expect(bare.stderr).toContain("an add to this memory needs fields, since its items are typed");
     // The line the CLI page shows, run from the flow's folder.
     const page = readFileSync(fileURLToPath(new URL("../../docs/src/content/docs/cli.md", import.meta.url)), "utf8");
-    const line = page.split("\n").find((each) => each.startsWith("$ yian memory edit triage.yaml cases --add"))!;
-    const args = shellWords(line.slice(2)).slice(1).map((word) => (word === "triage.yaml" ? flow : word));
+    const line = page.split("\n").find((each) => each.startsWith("yian memory edit triage.yaml cases --add"))!;
+    const args = shellWords(line).slice(1).map((word) => (word === "triage.yaml" ? flow : word));
     const added = await yian(args, vectors);
     expect(added.code, added.stderr).toBe(0);
     expect(added.stdout).toStartWith("added item 2;");
@@ -1068,7 +1068,7 @@ output: \${add.output.id}
     const shown = JSON.parse((await yian(["memory", "show", flow, "cases", "--all", "--json"], vectors)).stdout);
     expect(shown.items.map((item: { id: number; text: string; fields: unknown }) => [item.id, item.fields])).toEqual([
       [1, { title: "sums", tags: ["math", "checks"] }],
-      [2, JSON.parse(shellWords(line.slice(2)).at(-1)!)],
+      [2, JSON.parse(shellWords(line).at(-1)!)],
     ]);
   });
 

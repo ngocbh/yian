@@ -169,6 +169,15 @@ export function shellWords(line: string): string[] {
   return words;
 }
 
+/**
+ * Return the command starting at `lines[i]`, `text` being that line without its prompt, each
+ * trailing `\` joining the next line, and the index of its last line.
+ */
+function joinContinued(lines: readonly string[], i: number, text: string): [string, number] {
+  while (text.endsWith("\\") && i + 1 < lines.length) text = `${text.slice(0, -1)} ${lines[++i]!.trim()}`;
+  return [text, i];
+}
+
 /** Return the `$ ` lines of a console block, a trailing `\` joining the next line, with their output. */
 export function readCommands(block: Block): CommandLine[] {
   const lines = block.text.replace(/\n$/, "").split("\n");
@@ -176,8 +185,8 @@ export function readCommands(block: Block): CommandLine[] {
   for (let i = 0; i < lines.length; i++) {
     if (!lines[i]!.startsWith("$ ")) continue;
     const line = block.line + 1 + i;
-    let text = lines[i]!.slice(2);
-    while (text.endsWith("\\") && i + 1 < lines.length) text = `${text.slice(0, -1)} ${lines[++i]!.trim()}`;
+    let text: string;
+    [text, i] = joinContinued(lines, i, lines[i]!.slice(2));
     const output: string[] = [];
     while (i + 1 < lines.length && !lines[i + 1]!.startsWith("$ ")) output.push(lines[++i]!);
     commands.push({ line, argv: shellWords(text), output: output.join("\n") });
@@ -208,15 +217,21 @@ export function asYian(argv: readonly string[]): string[] | null {
 }
 
 /**
- * Return the lines of a console block that run the CLI: its `$ ` commands, and lines that run
- * `yian`, `npx @ngocbh/yian` or `bunx @ngocbh/yian` without the `$ ` prompt.
+ * Return the lines of an sh or console block that run the CLI: a console block's `$ ` commands,
+ * and lines that run `yian`, `npx @ngocbh/yian` or `bunx @ngocbh/yian` without the `$ ` prompt,
+ * a trailing `\` joining the next line.
  */
 export function readInvocations(block: Block): Invocation[] {
   const prompted = readCommands(block).map(({ line, argv }) => ({ line, argv }));
-  const bare = block.text
-    .replace(/\n$/, "")
-    .split("\n")
-    .flatMap((text, i) => (BARE.test(text) ? [{ line: block.line + 1 + i, argv: shellWords(text) }] : []));
+  const lines = block.text.replace(/\n$/, "").split("\n");
+  const bare: Invocation[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!BARE.test(lines[i]!)) continue;
+    const line = block.line + 1 + i;
+    let text: string;
+    [text, i] = joinContinued(lines, i, lines[i]!);
+    bare.push({ line, argv: shellWords(text) });
+  }
   return [...prompted, ...bare]
     .sort((a, b) => a.line - b.line)
     .flatMap(({ line, argv }) => {

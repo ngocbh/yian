@@ -58,10 +58,12 @@ blocks in the root `README.md`.
   is `$ yian run <name>.yaml --input k=v ...` and whose next lines are what the run prints.
 - When a runnable flow calls a model, give the model's replies, in order, on the line before the
   YAML block: `<!-- yian-test {"replies": ["Hello, Ada!"]} -->`.
-- Show commands in `console` blocks, each line starting with `$ `, followed only by what the
-  command prints on stdout. Every `yian` command and flag is checked against the CLI, with or
-  without the `$ `, and so are `npx @ngocbh/yian` and `bunx @ngocbh/yian` lines; don't put them in
-  `sh` or `bash` blocks.
+- Show a command you don't show output for in an `sh` block, with no `$ ` prompt, so the copy
+  button copies commands that run as pasted.
+- Use a `console` block only to show a command with its output: each command line starts with
+  `$ `, followed only by what it prints on stdout.
+- Every `yian` command and flag in an `sh` or `console` block is checked against the CLI, and so
+  are `npx @ngocbh/yian` and `bunx @ngocbh/yian` lines; don't put them in `bash` blocks.
 - Draw diagrams in `mermaid` blocks.
 
 ## Before you open a PR

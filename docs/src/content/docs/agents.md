@@ -331,8 +331,8 @@ file's entry replaces an earlier one of the same name. Its commands run as you, 
 refuses `~/.yian/mcp.json` unless you own it and no one else can write it
 (`chmod go-w ~/.yian/mcp.json` fixes that); `--mcp-config` files aren't checked.
 
-```console
-$ yian run research.yaml --mcp-config ./mcp.json --input question="Which issues are stale?"
+```sh
+yian run research.yaml --mcp-config ./mcp.json --input question="Which issues are stale?"
 ```
 
 The file uses the `mcpServers` format other MCP clients use:

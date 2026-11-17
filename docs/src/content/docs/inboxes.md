@@ -198,8 +198,8 @@ On a terminal, `yian run` does this for you. It runs a flow with one `Inbox(str)
 `Inbox(Message)` input (pick one with `--inbox NAME` when there are several), sends each line you
 type, and prints the output of each node named `reply`:
 
-```console
-$ yian run collect.yaml
+```sh
+yian run collect.yaml
 ```
 
 | You do | The chat calls |

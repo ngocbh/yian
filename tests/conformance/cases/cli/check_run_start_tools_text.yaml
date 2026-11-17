@@ -7,7 +7,9 @@ flow: |
   nodes:
     n: {kind: call, call: gret}
     m: {kind: call, call: {github: search}}
+    ma: {kind: map, call: {github: fetch}, over: [1], input: {q: "${item}"}}
+    lo: {kind: loop, call: {github: poll}, input: {done: false}, until: done, max: 2}
 args: [check, flow.yaml]
 expect:
   exit: 0
-  stdout: "flow.yaml: ok; checked at run start: gret (node 'n'; did you mean the def greet?), {github: search} (node 'm')\n"
+  stdout: "flow.yaml: ok; checked at run start: gret (node 'n'; did you mean the def greet?), {github: search} (node 'm'), {github: fetch} (map node 'ma'), {github: poll} (loop node 'lo')\n"

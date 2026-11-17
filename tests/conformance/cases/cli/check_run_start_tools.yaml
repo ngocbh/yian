@@ -14,6 +14,8 @@ flow: |
       output: !int
       input:
         x: call(gret)
+    ma: {kind: map, call: {github: search}, over: [1], input: {q: "${item}"}}
+    lo: {kind: loop, call: {github: poll}, input: {done: false}, until: done, max: 2}
 args: [check, --json, flow.yaml]
 expect:
   exit: 0
@@ -29,6 +31,8 @@ expect:
         run_start_tools:
           - {node: n, site: null, name: gret, hint: {what: def, name: greet}}
           - {node: m, site: null, name: "{github: search}", hint: null}
+          - {node: ma, site: map node 'ma', name: "{github: search}", hint: null}
+          - {node: lo, site: loop node 'lo', name: "{github: poll}", hint: null}
           - node: __call_0
             site: node 'o' input 'x' call(gret)
             name: gret

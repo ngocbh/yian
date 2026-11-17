@@ -399,9 +399,11 @@ with `loadFlow`'s `codeRoot`; one outside fails with `compose.load`.
 
 With `--json`, `flows` holds one result per argument, in order. A flow that loads gives its `id`,
 `name`, `description`, `inputs`, each input with its `type`, `required` and `has_default`, and
-`run_start_tools`, each with its `node` path, a `call(...)`'s `site` (else `null`), its `name`
-and its `hint`, `{what, name}` such as `{"what": "def", "name": "greet"}` (`null` when nothing is
-close); one that doesn't gives `diagnostics`:
+`run_start_tools`, each with its `node` path, `site`, `name` and `hint`. `site` names the call when
+it isn't the node at `node`: a `call(...)`'s site, or the `map` or `loop` that runs the tool
+(`map node 'm'`, and `node` is the map's path); otherwise it is `null`. `hint` is `{what, name}`,
+such as `{"what": "def", "name": "greet"}`, or `null` when nothing is close. A flow that doesn't
+load gives `diagnostics`:
 
 ```json
 {"format":"yian.cli.v1","flows":[{"description":null,"id":"brief","inputs":[{"has_default":false,"name":"topic","required":true,"type":"str"}],"name":"brief","ok":true,"path":"brief.yaml","run_start_tools":[]}]}

@@ -28,7 +28,7 @@ import { memoryKey } from "../../nodes/base.ts";
 import { ToolNode } from "../../nodes/tool/node.ts";
 import { LOAD_SKILL } from "../../skills/tool.ts";
 import { ASK, ASK_USER, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "../../tools/context.ts";
-import { GrantError, visibleToolName } from "../../tools/grants.ts";
+import { visibleToolName } from "../../tools/grants.ts";
 import { splitModuleRef, type ToolModuleRef } from "../../tools/modules.ts";
 import { RESERVED_TOOL_NAMES, type ToolRef } from "../../tools/registry.ts";
 import { parseDateOrDatetime, parseDuration } from "../../typesys/temporal.ts";
@@ -45,7 +45,7 @@ import {
 } from "../../typesys/values.ts";
 import { LoadDiagnostics, type LoadError } from "../helpers/errors.ts";
 import { CLOSE_MATCH_CUTOFF } from "../helpers/tags.ts";
-import { checkMemoryGrants, grantErrorText, memoryBinding, memoryToolNames } from "../helpers/memory.ts";
+import { memoryBinding, memoryToolNames } from "../helpers/memory.ts";
 import { literalValue, NOT_LITERAL } from "../../compile/output_contracts.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import { SourceAccessError, type SourceCursor } from "../source/index.ts";
@@ -640,7 +640,7 @@ export class ToolDescriptor extends NodeDescriptor {
    * flow's generated binding of it (`autoWiredGroup`) isn't one of the node's inputs.
    *
    * @throws LoadError when the memory is Optional, which a run may leave unbound, its type lacks
-   *   the tool, the tool would show under a reserved name, or as `checkMemoryGrants` throws.
+   *   the tool, or the tool would show under a reserved name.
    */
   private buildMemoryTool(ctx: BuildContext, memory: Type & { readonly memory: string }): BuildResult {
     const { group, name } = this.toolRef;
@@ -664,15 +664,6 @@ export class ToolDescriptor extends NodeDescriptor {
       );
     }
     if (tools !== null) this.checkShownName(ctx, "rename the input");
-    try {
-      checkMemoryGrants([{ kind: "group", group: input, tools: [name] }], ctx.flowInputs, ctx.memoryTypes);
-    } catch (error) {
-      if (!(error instanceof GrantError)) throw error;
-      throw ctx.diagnostics.error(grantErrorText(this.wording.nodeKind(), error), {
-        range,
-        cause: error,
-      });
-    }
     const node = new ToolNode(this.id, {
       toolId: this.toolRef,
       title: this.nodeName,

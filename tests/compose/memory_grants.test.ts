@@ -100,6 +100,14 @@ test("a TOOL node's memory tool is checked against the type's tools, in the call
   );
 });
 
+// A model never sees a TOOL node's tool, so its shown name needn't be one a model can call.
+test("a TOOL node calls the tool of a memory whose name is too long to show to a model", async () => {
+  const long = "l".repeat(60);
+  const nodes = `found:\n  kind: call\n  call: {${long}: read}\n  input:\n    path: a.md\n`;
+  const node = nodeOf<ToolNode>(await loadFlow(flow(`${long}: !FileMemory`, nodes)), "found");
+  expect(node.memoryGrants()).toEqual([{ input: long, tools: ["read"] }]);
+});
+
 test("a TOOL node's memory tool its type lacks is refused as missing, even under a reserved name", async () => {
   const error = await loadErrorAsync(loadFlow(flow("load: !FileMemory", "found:\n  kind: call\n  call: {load: skill}\n")));
   expect(error.diagnostic.message).toBe(

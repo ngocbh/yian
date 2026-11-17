@@ -14,8 +14,8 @@
  * keyed `siteKey("field", name)`). A `kind: call` body whose `call:` names a tool, by the caller's
  * `callsTool` rule, parses as a TOOL body; one naming a flow refuses the fields only a tool call
  * takes. A removed kind, `tool` among them, and a `call`, `map` or `loop` body writing the removed
- * `tool_id:` are refused, showing what to write. Two kind-blind enrichments run after every kind parse: each
- * `input:` binding's own range is stamped into the descriptor's `fieldRanges` under
+ * `tool_id:` are refused, showing what to write. Two kind-blind enrichments run after every kind
+ * parse: each `input:` binding's own range is stamped into the descriptor's `fieldRanges` under
  * `siteKey("input", name)`, and each `asserts:` item range is appended positionally to its
  * `assertRanges`. This metadata stays inside Compose; `_finish` copies node and field locations
  * to the `BuildResult` for validation. Then, for a kind whose `inputsAreLocals`, an `input:` key

@@ -127,13 +127,9 @@ class ToolWording {
     return this.site === null ? `{${group}: ${name}}` : `${group}.${name}`;
   }
 
-  /**
-   * The `call:` as written, with `value` when given: `call: {crm: search}`, or `call:`; a lifted
-   * call's directive, `call(crm.search, ...)`.
-   */
-  written(value?: string): string {
-    if (this.site !== null) return `call(${value ?? "<tool>"}, ...)`;
-    return value === undefined ? "call:" : `call: ${value}`;
+  /** The call of the tool `value` as written: `call: {crm: search}`, or `call(crm.search, ...)` lifted. */
+  written(value: string): string {
+    return this.site === null ? `call: ${value}` : `call(${value}, ...)`;
   }
 }
 
@@ -263,7 +259,7 @@ export class ToolDescriptor extends NodeDescriptor {
     return visibleToolName(this.toolRef.group, this.toolRef.name);
   }
 
-  /** How this node's load messages name it and its tool's field. */
+  /** How this node's load messages name it and the `call:` that names its tool. */
   get wording(): ToolWording {
     return new ToolWording(this.id, this.writtenKind, this.fieldLabels);
   }

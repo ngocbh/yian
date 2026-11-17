@@ -17,7 +17,7 @@ import { ProgressReporter } from "../../src/cli/run.ts";
 import type { CliIo, Writer } from "../../src/cli/utils.ts";
 import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { Failure } from "../../src/diagnostics.ts";
-import { NodeExpanded, NodeFailed, NodeRouted, NodeStarted, NodeSucceeded } from "../../src/events.ts";
+import { Interrupted, NodeExpanded, NodeFailed, NodeRouted, NodeStarted, NodeSucceeded } from "../../src/events.ts";
 import { readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 
 // `NO_COLOR` keeps a TTY writer's text plain, so the tests see only the cursor control.
@@ -152,6 +152,48 @@ test("expanded clears spinner without check", () => {
   expect(tty.chunks).toEqual(["\r\x1b[K⠋ polish~1 [0s]", "\r\x1b[K"]);
   jest.advanceTimersByTime(400);
   expect(tty.chunks).toHaveLength(2);
+});
+
+describe("an agent's flow call", () => {
+  /** A TTY reporter with `helper` running its flow call `helper/shout#0`, whose `loud` and `slow` run. */
+  const callRunning = () => {
+    jest.useFakeTimers();
+    const tty = sinkReporter({ isTTY: true });
+    tty.reporter.handle(started("helper"));
+    const seed = { tool: "shout", arguments: {}, scope: "helper/shout#0" };
+    tty.reporter.handle(new NodeExpanded({ nodeId: "helper", grow: { seed, prune: new Set() }, callId: "r/helper/1/0" }));
+    tty.reporter.handle(started("helper/shout#0/loud"));
+    tty.reporter.handle(started("helper/shout#0/slow"));
+    return tty;
+  };
+
+  test("keeps the agent's spinner while the call runs", () => {
+    const { chunks } = callRunning();
+    expect(chunks.at(-1)).toBe("\r\x1b[K\x1b[A\x1b[K⠋ helper [0s]\n⠋ helper/shout#0/loud [0s]\n⠋ helper/shout#0/slow [0s]");
+  });
+
+  test("a failure inside it clears the scope's other spinners and keeps the agent's", () => {
+    const { reporter, chunks } = callRunning();
+    const failure = new Failure({ code: "node.execute", message: "boom", nodeId: "helper/shout#0/loud", causeType: "Error" });
+    reporter.handle(new NodeFailed({ failure, callId: "r/helper/1/0", scope: "helper/shout#0" }));
+    expect(chunks.at(-1)).toBe("\r\x1b[K⠋ helper [0s]");
+  });
+
+  test("a call whose scope couldn't grow fails as a tool call: no line, and the agent keeps its spinner", () => {
+    jest.useFakeTimers();
+    const { reporter, chunks } = sinkReporter({ isTTY: true });
+    reporter.handle(started("helper"));
+    const failure = new Failure({ code: "contract.growth", message: "too big", nodeId: "helper", causeType: "GrowthRejected" });
+    reporter.handle(new NodeFailed({ failure, callId: "r/helper/1/0", scope: "helper/shout#0" }));
+    expect(chunks).toEqual(["\r\x1b[K⠋ helper [0s]", "\r\x1b[K⠋ helper [0s]"]);
+  });
+
+  test("an interrupt clears the ended scope's spinners", () => {
+    const { reporter, chunks } = callRunning();
+    reporter.handle(new Interrupted({ inbox: "notes", nodes: ["helper"], scopes: ["helper/shout#0"] }));
+    // No line to print: the three spinner rows are erased and the agent's drawn again.
+    expect(chunks.at(-1)).toBe("\r\x1b[K\x1b[A\x1b[K\x1b[A\x1b[K⠋ helper [0s]");
+  });
 });
 
 test("on a TTY a running node draws a spinner the finish line replaces", () => {

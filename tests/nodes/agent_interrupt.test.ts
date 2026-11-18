@@ -4,7 +4,8 @@
  * `skipped` results for calls not started, `interrupted` closers for the reply's pending calls),
  * then the honor step `interrupted {by: <record seq>}`; the agent's output is null, so
  * `Optional(...)` succeeds and anything else fails `agent.interrupted`. Steers the interrupted
- * agent never read stay unread.
+ * agent never read stay unread. A running tool call learns of the interrupt through its own
+ * `ctx.interrupted`, and its result is recorded as usual.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -45,7 +46,7 @@ import { type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/cont
 import { Interrupted, ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
 import { callModel, liveSinks } from "../../src/nodes/agent/live.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
-import { TOOL_INTERRUPTED_OUTCOME } from "../../src/nodes/agent/results.ts";
+import { SKIPPED_TOOL_RESULT, TOOL_INTERRUPTED_OUTCOME } from "../../src/nodes/agent/results.ts";
 import { AgentNode, STEER_INBOX_KEY } from "../../src/nodes/agent/node.ts";
 import { generateStructured, userMessage } from "../../src/nodes/agent/structured.ts";
 import { CapabilityFault } from "../../src/nodes/base.ts";
@@ -57,7 +58,7 @@ import type { FlowEngine } from "../../src/runtime/engine.ts";
 import { InterruptedRecord, NodeStepRecord, NodeWaitingRecord, readRunLog } from "../../src/runtime/log.ts";
 import { commitPrepared, prepareSend } from "../../src/runtime/state.ts";
 import { applyWaitsRecord, unreadEvents, WaitsState } from "../../src/runtime/waits.ts";
-import { pending } from "../../src/tools/context.ts";
+import { pending, type ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
@@ -1153,6 +1154,128 @@ test("a call that pends after the record is registered closed; its closer, then 
   expect(events.filter((event) => event instanceof CallClosed)).toEqual([
     new CallClosed({ callId: `${running!.state.runId}/chat/1/1`, reason: "interrupted" }),
   ]);
+});
+
+// --- a running tool call learns of the interrupt ------------------------------------------- //
+
+/** Resolve once `signal` aborts: at once when it already has. */
+function aborted(signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) resolve();
+    else signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+}
+
+/**
+ * A tool `name`, safe to run beside others when `safe`, that keeps its context in `seen`, calls
+ * `began`, then returns `<name> stopped` once its `ctx.interrupted` aborts.
+ */
+function stoppingTool(name: string, seen: Map<string, ToolContext>, began: () => void, safe = false): FunctionTool {
+  return new FunctionTool({
+    name,
+    description: `Tool ${name}.`,
+    parametersJsonSchema: { type: "object", properties: {} },
+    isConcurrencySafe: safe ? () => true : null,
+    execute: async (_args, ctx) => {
+      seen.set(name, ctx);
+      began();
+      await aborted(ctx.interrupted);
+      return `${name} stopped`;
+    },
+  });
+}
+
+/** A tool `name` that keeps its context in `seen` and returns `body()`. */
+function keptTool(name: string, seen: Map<string, ToolContext>, body: () => string, safe = false): FunctionTool {
+  return new FunctionTool({
+    name,
+    description: `Tool ${name}.`,
+    parametersJsonSchema: { type: "object", properties: {} },
+    isConcurrencySafe: safe ? () => true : null,
+    execute: (_args, ctx) => (seen.set(name, ctx), body()),
+  });
+}
+
+/** The `[call_id, output]` of each `tool_result` step of `chat` in the last run, in record order. */
+function results(): [unknown, unknown][] {
+  return steps().flatMap((step) => (step["kind"] === "tool_result" ? [[step["call_id"], step["output"]]] : []));
+}
+
+test("a tool that watches ctx.interrupted returns early: its result is recorded, the agent ends interrupted, ctx.signal never fires", async () => {
+  const seen = new Map<string, ToolContext>();
+  const began = Promise.withResolvers<void>();
+  const wait = stoppingTool("wait", seen, began.resolve);
+  const model = new ScriptedModel([reply("Waiting.", ["wait", {}, "call-1"])], CONFIG);
+
+  const done = run(chatFlow({ tools: ["wait"] }), model, { tools: new ToolSet({ wait }) });
+  await began.promise;
+  expect(seen.get("wait")!.interrupted.aborted).toBe(false);
+  interruptNow();
+
+  expect(await done).toBeNull();
+  expect(model.requests).toHaveLength(1);
+  expect(shape()).toEqual(["model_call", "tool_result", "interrupted"]);
+  expect(steps()[1]).toMatchObject({ call_id: "call-1", output: "wait stopped", is_error: false });
+  expect(honors()).toEqual([recordSeq()]);
+  expect([seen.get("wait")!.interrupted.aborted, seen.get("wait")!.signal.aborted]).toEqual([true, false]);
+});
+
+test("calls running together each learn of the interrupt: one result each, and the calls after them are skipped", async () => {
+  const seen = new Map<string, ToolContext>();
+  const began = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+  const tools = new ToolSet({
+    a: stoppingTool("a", seen, began[0]!.resolve, true),
+    b: stoppingTool("b", seen, began[1]!.resolve, true),
+    lookup: lookupTool(() => "found"),
+  });
+  const calls = reply("", ["a", {}, "call-1"], ["b", {}, "call-2"], ["lookup", { topic: "x" }, "call-3"]);
+  const model = new ScriptedModel([calls], CONFIG);
+
+  const done = run(chatFlow({ tools: ["a", "b", "lookup"] }), model, { tools });
+  await Promise.all(began.map((each) => each.promise));
+  interruptNow();
+
+  expect(await done).toBeNull();
+  expect(shape()).toEqual(["model_call", "tool_result", "tool_result", "skipped", "interrupted"]);
+  expect(results()).toEqual([
+    ["call-1", "a stopped"],
+    ["call-2", "b stopped"],
+    ["call-3", SKIPPED_TOOL_RESULT],
+  ]);
+  expect([...seen.values()].map((ctx) => [ctx.interrupted.aborted, ctx.signal.aborted])).toEqual([
+    [true, false],
+    [true, false],
+  ]);
+});
+
+test("a call that finished as the interrupt landed keeps its one result, and its ctx.interrupted never fires", async () => {
+  const seen = new Map<string, ToolContext>();
+  const tools = new ToolSet({ quick: keptTool("quick", seen, () => "found", true), wait: stoppingTool("wait", seen, () => {}, true) });
+  // The interrupt lands as `quick` finishes, while `wait` still runs beside it.
+  const onEvent = (event: unknown) => void (event instanceof ToolCallFinished && event.toolCallId === "call-1" && interruptNow());
+  const model = new ScriptedModel([reply("", ["quick", {}, "call-1"], ["wait", {}, "call-2"])], CONFIG);
+
+  expect(await run(chatFlow({ tools: ["quick", "wait"] }), model, { tools, onEvent })).toBeNull();
+  expect(shape()).toEqual(["model_call", "tool_result", "tool_result", "interrupted"]);
+  expect(results()).toEqual([
+    ["call-1", "found"],
+    ["call-2", "wait stopped"],
+  ]);
+  expect([seen.get("quick")!.interrupted.aborted, seen.get("wait")!.interrupted.aborted]).toEqual([false, true]);
+});
+
+test("a call's ctx.interrupted is its own: an interrupt during a later call leaves an earlier call's unfired", async () => {
+  const seen = new Map<string, ToolContext>();
+  const tools = new ToolSet({
+    keep: keptTool("keep", seen, () => "kept"),
+    later: keptTool("later", seen, () => (interruptNow(), "late")),
+    lookup: lookupTool(() => "found"),
+  });
+  const model = new ScriptedModel([reply("", ["keep", {}, "call-1"], ["later", {}, "call-2"], ["lookup", { topic: "x" }, "call-3"])], CONFIG);
+
+  expect(await run(chatFlow({ tools: ["keep", "later", "lookup"] }), model, { tools })).toBeNull();
+  expect(shape()).toEqual(["model_call", "tool_result", "tool_result", "skipped", "interrupted"]);
+  expect([seen.get("keep")!.interrupted.aborted, seen.get("later")!.interrupted.aborted]).toEqual([false, true]);
 });
 
 // --- one interrupt, every reader ----------------------------------------------------------- //

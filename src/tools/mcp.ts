@@ -183,6 +183,16 @@ export class McpCallCancelled extends McpError {
   readonly [TOOL_ERROR]: readonly ToolErrorKind[] = PERMANENT;
 }
 
+/**
+ * The calling agent took a host interrupt (`ToolContext.interrupted`): a call that waited was
+ * cancelled on the server, and one not yet sent never was. An AGENT's model reads it as the call's
+ * result.
+ */
+export class McpCallInterrupted extends McpError {
+  override name = "McpCallInterrupted";
+  readonly [TOOL_ERROR]: readonly ToolErrorKind[] = REPORTED_PERMANENT;
+}
+
 /** Thrown by `open()` and `openForRun()` when the server is already open or still opening. */
 export class AlreadyOpenError extends Error {
   override name = "AlreadyOpenError";
@@ -910,6 +920,8 @@ export class McpServer {
    *   error status.
    * @throws {McpServerClosed} The server is closed or gone, or an HTTP server forgot the session.
    * @throws {McpCallCancelled} `ctx.signal` aborted before or while the call waited.
+   * @throws {McpCallInterrupted} `ctx.interrupted` aborted before the call was sent or while it
+   *   waited, and `ctx.signal` didn't.
    */
   private async callTool(tool: ListedTool, args: Record<string, unknown>, ctx: ToolContext<unknown>): Promise<unknown> {
     try {
@@ -950,6 +962,7 @@ export class McpServer {
         throw new Error(`MCP server '${this.label}' is not open`);
       }
       if (ctx.signal.aborted) throw cancelledError(name);
+      if (ctx.interrupted.aborted) throw interruptedError(name);
       const result = await this.sendOnce(generation, tool, sent, ctx, !reconnected && !unread);
       if (result !== RESEND) return result;
       // The server ended or forgot the session before it read the call: reconnect, then send it.
@@ -976,6 +989,7 @@ export class McpServer {
     // long-lived run signal holding every call it ever saw.
     const onAbort = () => call.abort();
     ctx.signal.addEventListener("abort", onAbort, { once: true });
+    ctx.interrupted.addEventListener("abort", onAbort, { once: true });
     generation.calls.add(call);
     // The SDK starts its timer before sending, and `maxTotalTimeout` bounds input-required rounds.
     const ms = Math.min(generation.callTimeout * 1000, MAX_TIMER_MS);
@@ -993,9 +1007,10 @@ export class McpServer {
       );
     } catch (error) {
       if (resend && refusedUnread(generation, error) && this.mayReconnect(generation)) return RESEND;
-      throw this.callError(generation, name, error, ctx.signal);
+      throw this.callError(generation, name, error, ctx);
     } finally {
       ctx.signal.removeEventListener("abort", onAbort);
+      ctx.interrupted.removeEventListener("abort", onAbort);
       generation.calls.delete(call);
     }
     // `undefined`: the tool listed no `outputSchema`; `null`: one yian can't read as a type.
@@ -1007,14 +1022,15 @@ export class McpServer {
    * Return the error a failed call to `name` on `generation` throws. yian's own state comes first,
    * since the SDK reports any abort as a request timeout.
    */
-  private callError(generation: Generation, name: string, error: unknown, signal: AbortSignal): Error {
+  private callError(generation: Generation, name: string, error: unknown, ctx: ToolContext<unknown>): Error {
     const label = this.label;
     const sdk = generation.sdk!;
     const code = error instanceof sdk.SdkError ? error.code : undefined;
     // The tool is named only for a call the server may have been running.
     const tool = neverSent(error, sdk) ? undefined : name;
     if (generation.closed || generation.gone) return this.closedError(generation, tool);
-    if (signal.aborted) return cancelledError(name);
+    if (ctx.signal.aborted) return cancelledError(name);
+    if (ctx.interrupted.aborted) return interruptedError(name);
     if (code === sdk.SdkErrorCode.RequestTimeout) {
       return new McpTimeoutError(
         `MCP server '${label}' tool '${name}' timed out after ${secondsText(generation.callTimeout)} s`,
@@ -1164,6 +1180,13 @@ export class McpServer {
 /** The `McpCallCancelled` for a call to `name`. */
 function cancelledError(name: string): McpCallCancelled {
   return new McpCallCancelled(`MCP call to '${name}' cancelled by a run stop`);
+}
+
+/** The `McpCallInterrupted` for a call to `name`, whose text the model reads. */
+function interruptedError(name: string): McpCallInterrupted {
+  return new McpCallInterrupted(
+    `MCP call to '${name}' cancelled: interrupted by the user. Its outcome is unknown; check its effect before retrying.`,
+  );
 }
 
 /** What `sendOnce` returns for a call to send again on a new connection. */

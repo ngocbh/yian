@@ -726,3 +726,107 @@ test("offline, a crashed reader stopping by another inbox doesn't make an Esc a 
   const before = readRunLog(log).length;
   expect(await interrupt(log, "a", { env })).toEqual({ seq: before, nodes: [], calls: [] });
 });
+
+// --- a running tool call learns of the interrupt, across a crash ------------------------------ //
+
+/** One AGENT `reply` reading steer inbox `m`, granted `wait`. */
+const WAIT_FLOW = `
+id: wait_flow
+name: wait_flow
+llm_config: {provider: openai, model: test-model}
+input:
+  m: !Inbox(str)
+nodes:
+  reply:
+    kind: agent
+    prompt: go
+    tools: [wait]
+    steer_inbox: \${input.m}
+    output: !Optional(str)
+output: \${reply.output}
+`;
+
+/** What one call of `waiting`'s tool saw: its attempt, and whether its interrupt and its signal had aborted at its start and at its end. */
+interface WaitSeen {
+  attempt: number;
+  start: [boolean, boolean];
+  end: [boolean, boolean];
+}
+
+/**
+ * A resumable `wait` tool that calls `began` once it runs, then returns "stopped" once its
+ * `ctx.interrupted` aborts, noting each call in `seen`.
+ */
+function waiting(seen: WaitSeen[], began: () => void = () => {}) {
+  const wait = tool({
+    name: "wait",
+    description: "Wait until interrupted.",
+    parameters: { type: "object", properties: {} },
+    resumable: true,
+    execute: async (_args, ctx) => {
+      const start: [boolean, boolean] = [ctx.interrupted.aborted, ctx.signal.aborted];
+      began();
+      if (!ctx.interrupted.aborted) await new Promise((resolve) => ctx.interrupted.addEventListener("abort", resolve, { once: true }));
+      seen.push({ attempt: ctx.attempt, start, end: [ctx.interrupted.aborted, ctx.signal.aborted] });
+      return "stopped";
+    },
+  });
+  return { wait };
+}
+
+/** Run `WAIT_FLOW` at `log`, a host interrupting `m` once `wait` runs; resolve once the interrupt is delivered too. */
+async function interruptedWait(log: string, seen: WaitSeen[]) {
+  const delivered: Promise<unknown>[] = [];
+  const tools = waiting(seen, () => void delivered.push(interrupt(log, "m", { env })));
+  const model = new ScriptedModel([callReply(["wait", {}, "c1"])], CONFIG);
+  try {
+    return await runFlow(await loadFlow(WAIT_FLOW), {}, { env, log, tools, models: serving(model), runId: "r" });
+  } finally {
+    await Promise.allSettled(delivered);
+  }
+}
+
+test("a host interrupt reaches a running tool as ctx.interrupted: its early result is recorded, the agent honors, ctx.signal never fires", async () => {
+  const seen: WaitSeen[] = [];
+  const log = freshLog();
+  const done = await interruptedWait(log, seen);
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect(done.output).toBeNull();
+  expect(seen).toEqual([{ attempt: 1, start: [false, false], end: [true, false] }]);
+  expect(stepKinds(log, "reply")).toEqual(["model_call", "tool_result", "interrupted"]);
+  expect(stepsOf(log, "reply")[1]).toMatchObject({ call_id: "c1", output: "stopped", is_error: false });
+});
+
+test("a resume replays a call's recorded early result: the tool isn't called again, and the agent honors the interrupt", async () => {
+  const whole = freshLog();
+  await interruptedWait(whole, []);
+  const seen: WaitSeen[] = [];
+  const log = freshLog();
+  await crashAfter(kinds(whole).indexOf("tool_result") + 1, () => interruptedWait(log, seen));
+  expect(stepKinds(log, "reply")).toEqual(["model_call", "tool_result"]);
+  const model = new ScriptedModel([], CONFIG);
+  const done = await advance({ env, log, tools: waiting(seen), models: serving(model) });
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect(done.output).toBeNull();
+  expect(model.requests).toHaveLength(0);
+  expect(seen).toHaveLength(1);
+  expect(stepKinds(log, "reply")).toEqual(["model_call", "tool_result", "interrupted"]);
+});
+
+test("a resumable call a crash cut off is sent again with ctx.interrupted aborted from its start while the agent holds the interrupt", async () => {
+  const whole = freshLog();
+  await interruptedWait(whole, []);
+  const seen: WaitSeen[] = [];
+  const log = freshLog();
+  // Cut after the interrupt's record, before the call's result.
+  await crashAfter(kinds(whole).indexOf("interrupted") + 1, () => interruptedWait(log, seen));
+  expect(stepKinds(log, "reply")).toEqual(["model_call"]);
+  const model = new ScriptedModel([], CONFIG);
+  const done = await advance({ env, log, tools: waiting(seen), models: serving(model) });
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect(done.output).toBeNull();
+  expect(model.requests).toHaveLength(0);
+  expect(seen.at(-1)).toEqual({ attempt: 2, start: [true, false], end: [true, false] });
+  expect(stepKinds(log, "reply")).toEqual(["model_call", "tool_result", "interrupted"]);
+  expect(stepsOf(log, "reply")[1]).toMatchObject({ call_id: "c1", output: "stopped" });
+});

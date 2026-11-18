@@ -3,10 +3,11 @@
 import { expect, test } from "bun:test";
 
 import { ProviderError } from "../../src/llm/errors.ts";
-import { ChangeIdReusedError, MemoryBusyError } from "../../src/memory/base.ts";
+import { type Applied, type Author, ChangeIdReusedError, MemoryBusyError } from "../../src/memory/base.ts";
 import { memoryTools } from "../../src/memory/tools.ts";
 import { ToolContext } from "../../src/tools/context.ts";
 import { isPermanentToolError, isReportedToolError } from "../../src/tools/errors.ts";
+import type { JsonObject } from "../../src/typesys/json.ts";
 import { fileRef, RecordingSession } from "../helpers/memory_fakes.ts";
 
 const value = fileRef("t/lessons");
@@ -137,6 +138,30 @@ test("outside a run the author holds no run or node", async () => {
   const [append] = memoryTools(value, session, { input: "lessons", tools: ["append"] }, { kind: "tool", name: "save" });
   await append!.execute({ path: "a.md", text: "x" }, ctx({ callId: "abc", node: "", runId: "" }));
   expect(session.applied[0]!.author).toEqual({ kind: "tool", name: "save" });
+});
+
+test("an interrupt doesn't cut a memory call: the session gets only the call's stop signal, and the call ends as usual", async () => {
+  const signals: AbortSignal[] = [];
+  const session = new (class extends RecordingSession {
+    override async call(tool: string, args: JsonObject, o?: { signal: AbortSignal }): Promise<JsonObject> {
+      signals.push(o!.signal);
+      return await super.call(tool, args);
+    }
+    override async apply(c: { id: string; change: JsonObject; author: Author; signal?: AbortSignal }): Promise<Applied> {
+      signals.push(c.signal!);
+      return await super.apply(c);
+    }
+  })();
+  session.onCall = () => ({ text: "x" });
+  const [read, append] = memoryTools(value, session, { input: "lessons", tools: ["read", "append"] }, { kind: "agent", name: "a" });
+  const stop = new AbortController();
+  const interrupt = new AbortController();
+  interrupt.abort();
+  const at = new ToolContext({ callId: "r/a/1/0", attempt: 1, toolName: "x", runId: "r", node: "a", context: undefined, signal: stop.signal, interrupted: interrupt.signal });
+
+  expect(await read!.execute({ path: "a.md" }, at)).toEqual({ text: "x" });
+  expect(await append!.execute({ path: "a.md", text: "x" }, at)).toEqual({});
+  expect(signals).toEqual([stop.signal, stop.signal]);
 });
 
 test("a transient provider error, from an embedder, is a reported error the model may try again", async () => {

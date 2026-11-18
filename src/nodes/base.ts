@@ -574,7 +574,8 @@ export interface SteerRead {
  * returns them; with nothing queued it records nothing and returns `null`.
  *
  * A host's `interrupt(run, inbox)` of this inbox aborts `interrupt`. The signal is separate from
- * the node's own `caps.signal`, so an interrupt never aborts a running tool.
+ * the node's own `caps.signal`, so an interrupt never aborts a running tool's signal; the tool
+ * learns of it through its own `ToolContext.interrupted`.
  */
 export interface SteerInbox {
   /** The top-level inbox read. */

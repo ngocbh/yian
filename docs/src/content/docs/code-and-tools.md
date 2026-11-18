@@ -304,7 +304,8 @@ changed. A changed `execute` runs as written.
 A module's tool is checked, called and retried as a host tool is, and its validators,
 `isConcurrencySafe` and `execute` run on the module's thread.
 
-- `ctx` holds `callId`, `attempt`, `runId`, `node`, `toolName` (the export's name) and `signal`.
+- `ctx` holds `callId`, `attempt`, `runId`, `node`, `toolName` (the export's name), `signal` and
+  [`interrupted`](/embedding/#tools-and-skills), which a stop and an interrupt abort on the thread.
   `ctx.context` is `undefined`: the host's app object can't reach the thread.
 - What `console` prints during a call goes where the calling node's console goes: printed, or to
   a host's [`onConsole`](/embedding/#runflow-options). Lines printed at import, or after the call

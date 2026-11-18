@@ -368,7 +368,8 @@ const closed = await cancel(log);              // the open host calls it closed
 [Agents](/agents/#steering-and-interrupts)). Each one's reply is cut: an `Optional(...)` output
 succeeds with `null`, any other fails with `agent.interrupted`. A later `complete` of the open
 calls it closes is refused, the calls of the agents' running [flow calls](/agents/#flows-as-tools)
-included, which end with it. An agent that starts reading the inbox
+included, which end with it. A running tool call learns of it through `ctx.interrupted` (see
+[Tools and skills](#tools-and-skills)). An agent that starts reading the inbox
 soon after is stopped too, before its first model call. `interrupt` appends nothing
 (`seq: null`) when the run is waiting for the next message on the inbox, or is already stopping.
 Queued steers stay; `withdraw` takes them back.
@@ -388,17 +389,27 @@ signal's reason, and `advance` runs the stopped nodes again.
   `callId` (the same on every retry and resume, so use it as an idempotency key), `attempt` (1
   on the first try, higher on a TOOL node's retry or when a resume makes the call again), `runId`,
   `node`, `context` (your app object; `undefined` for a [tool module](/code-and-tools/#tool-modules)'s
-  tool, which runs on its own thread) and `signal` (aborted when the call must end).
+  tool, which runs on its own thread), `signal` (aborted when the call must end: the run stops,
+  or a sibling call fails) and `interrupted`.
   Tool groups may hold same-named tools, which a model sees as `<group>_<tool>`; two tools that
   could show one name are refused. `ToolOptions` (from `@ngocbh/yian/tools`) is the type of
   `tool()`'s options, so an options object written on its own
   (`{ ... } satisfies ToolOptions<typeof Params>`) is typed as `tool()` types it.
+- **Interrupts.** `ctx.interrupted` aborts when a host [interrupts](#interrupt-and-cancel) the
+  calling agent while the call runs, and `ctx.signal` doesn't. A tool that watches it can return
+  early with its own result, such as `"stopped"`: the agent records that result as usual, then
+  ends interrupted. A tool that ignores it runs to its end first. A call a resume sends again while
+  the agent holds an interrupt starts with it aborted. It never aborts for a TOOL node's call or
+  an agent without a `steer_inbox:`, nor after the call returned. A memory's tools ignore it: their
+  calls are short, and a write applies whole.
 - **MCP servers.** `mcpServer({ command, args })` or `mcpServer({ url, headers })` describes a
   server (an `https` url; `http` only on `localhost`, `127.0.0.1` or `[::1]`); pass it as a
   `tools` entry and its tools become one group. `concurrencySafe: true` (or a list of tool names)
   lets those tools' calls in one reply run together, as `isConcurrencySafe` does for a host tool.
   yian opens it for the run and closes it after, unless you opened it yourself with
-  `await server.open()`. It needs the optional peer package `@modelcontextprotocol/client`.
+  `await server.open()`. It needs the optional peer package `@modelcontextprotocol/client`. An
+  interrupt cancels a waiting call on the server, and the model reads `McpCallInterrupted` as its
+  result.
 - **Skills.** `loadSkills(defaultSkillRoots())` reads the Claude Code and Codex skill folders
   into the `Map` that `skills` takes.
 

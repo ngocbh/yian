@@ -14,6 +14,7 @@ import { runFlow } from "../../src/run.ts";
 import { isPermanentToolError, isReportedToolError, isTransientToolError } from "../../src/tools/errors.ts";
 import {
   McpCallCancelled,
+  McpCallInterrupted,
   McpConnectError,
   McpInvalidRequestError,
   McpRequestError,
@@ -198,6 +199,38 @@ describe("errors from a running server", () => {
     stop.abort();
     const error = await rejection(tools(server).forRun("r", { signal: stop.signal }).invoke("echo", { text: "x" }));
     expect(error).toBeInstanceOf(McpCallCancelled);
+    expect(((await tools(server).invoke("calls", {})) as { result: number }).result).toBe(before);
+  });
+
+  test(
+    "an interrupt cancels a waiting call as an error the model reads, and the server still works",
+    async () => {
+      const interrupt = new AbortController();
+      const outcome = timed(tools(server).invoke("slow", { seconds: 30 }, { interrupted: interrupt.signal }));
+      await sleep(0.3);
+      interrupt.abort();
+      const { error, ended } = await outcome;
+      expect(error).toBeInstanceOf(McpCallInterrupted);
+      expect(ended).toBeLessThan(0.3 + 2);
+      expect([isReportedToolError(error), isPermanentToolError(error)]).toEqual([true, true]);
+      expect(error!.message).toBe(
+        "MCP call to 'slow' cancelled: interrupted by the user. Its outcome is unknown; check its effect before retrying.",
+      );
+      expect(await tools(server).invoke("echo", { text: "after interrupt" })).toBe("after interrupt");
+    },
+    SLOW,
+  );
+
+  test("a call with the interrupt already set isn't sent; a stop set too wins", async () => {
+    const before = ((await tools(server).invoke("calls", {})) as { result: number }).result;
+    const interrupt = new AbortController();
+    interrupt.abort();
+    const interrupted = { interrupted: interrupt.signal };
+    expect(await rejection(tools(server).invoke("echo", { text: "x" }, interrupted))).toBeInstanceOf(McpCallInterrupted);
+    const stop = new AbortController();
+    stop.abort();
+    const both = tools(server).forRun("r", { signal: stop.signal }).invoke("echo", { text: "x" }, interrupted);
+    expect(await rejection(both)).toBeInstanceOf(McpCallCancelled);
     expect(((await tools(server).invoke("calls", {})) as { result: number }).result).toBe(before);
   });
 });

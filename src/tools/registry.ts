@@ -143,6 +143,8 @@ export interface InvokeOptions {
   attempt?: number;
   /** The call's abort signal. Absent, the bound run's signal, else a signal that never aborts. */
   signal?: AbortSignal;
+  /** The call's interrupt signal, `ToolContext.interrupted`. Absent, a signal that never aborts. */
+  interrupted?: AbortSignal;
 }
 
 /** A tool by name: a top-level tool (`group: null`), or the tool `name` of group `group`. */
@@ -529,7 +531,7 @@ function serverTools(key: string, server: McpServer): readonly FunctionTool[] {
  * `load_skill`). `scope()` is this set as a `GrantScope`, which `expandGrants` reads.
  *
  * A tool's `execute(args, ctx)` receives a `ToolContext` on each call: the call id, attempt, tool
- * name, run id, calling node, this set's `context` and the call's abort signal.
+ * name, run id, calling node, this set's `context`, and the call's abort and interrupt signals.
  *
  * `validate` checks a call's arguments, runs the tool's validator once, and returns a
  * `CheckedCall`; `invoke` takes that call, or a tool id and arguments to check first, and checks
@@ -1011,7 +1013,8 @@ export class ToolSet {
    * @param call A call `validate` returned, on this set or any other.
    * @param toolId The id of the tool to call, or a group tool's ref.
    * @param inputs Public arguments keyed by parameter name.
-   * @param options The calling node, call id, attempt and abort signal the tool's context carries.
+   * @param options The calling node, call id, attempt, abort signal and interrupt signal the tool's
+   *   context carries.
    * @returns The tool's result, awaited, `undefined` read as `null`; for a tool that declares an
    *   output, the checked value in host form. A `pending()` marker comes back unchanged, unchecked.
    * @throws {TypeError} The first argument is neither a tool id nor a `CheckedCall`; and as
@@ -1051,7 +1054,8 @@ export class ToolSet {
    *
    * @param toolId The id of the tool to call.
    * @param inputs Public and injected arguments keyed by parameter name.
-   * @param options The calling node, call id, attempt and abort signal the tool's context carries.
+   * @param options The calling node, call id, attempt, abort signal and interrupt signal the tool's
+   *   context carries.
    * @returns The tool's result, awaited, `undefined` read as `null`; for a tool that declares an
    *   output, the checked value in host form.
    * @throws {RangeError} The id is not visible to this run, an argument is not in the full schema,
@@ -1178,6 +1182,7 @@ export class ToolSet {
       node,
       context: this.hostContext,
       signal: options.signal ?? this.boundSignal ?? new AbortController().signal,
+      interrupted: options.interrupted,
     });
     let result: unknown;
     try {

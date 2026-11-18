@@ -45,7 +45,7 @@ export function isPending(value: unknown): value is PendingMarker {
 }
 
 /**
- * Who is calling a tool, the host's app object, and the call's abort signal.
+ * Who is calling a tool, the host's app object, the call's abort signal, and its interrupt signal.
  *
  * @example
  * const place = (args: { symbol: string }, ctx: ToolContext<Broker>) =>
@@ -85,8 +85,16 @@ export class ToolContext<T = unknown> {
    * that waits should pass it on or watch it.
    */
   readonly signal: AbortSignal;
+  /**
+   * Aborted when the calling agent takes a host interrupt (`interrupt(run, inbox)` of its steer
+   * inbox) while the call runs; already aborted for a call a resume sends again while the agent
+   * holds one. A tool that watches it may return early: its result is recorded as usual, and the
+   * agent then ends interrupted. It never aborts for a call from a TOOL node or from an agent
+   * without a steer inbox, nor once the call returned. `signal` is unchanged by an interrupt.
+   */
+  readonly interrupted: AbortSignal;
 
-  /** Build a frozen context from its fields. */
+  /** Build a frozen context from its fields; without `interrupted`, a signal that never aborts. */
   constructor(fields: {
     callId: string;
     attempt: number;
@@ -95,6 +103,7 @@ export class ToolContext<T = unknown> {
     node: string;
     context: T;
     signal: AbortSignal;
+    interrupted?: AbortSignal;
   }) {
     this.callId = fields.callId;
     this.attempt = fields.attempt;
@@ -103,6 +112,7 @@ export class ToolContext<T = unknown> {
     this.node = fields.node;
     this.context = fields.context;
     this.signal = fields.signal;
+    this.interrupted = fields.interrupted ?? new AbortController().signal;
     Object.freeze(this);
   }
 }

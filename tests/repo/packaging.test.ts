@@ -179,6 +179,7 @@ const NAMES: Record<string, string[]> = {
     "McpServer",
     "McpError",
     "McpCallCancelled",
+    "McpCallInterrupted",
     "McpConnectError",
     "McpInvalidRequestError",
     "McpOutputError",

@@ -575,7 +575,9 @@ output: ${worker.output :- "(stopped)"}
 - **Interrupts.** A host can interrupt every agent reading an inbox. The agent stops at its next
   safe point: before a model call, while it waits for a reply, between streamed chunks, at the end
   of the stream (a reply whose text had all arrived is still cut), or before a tool call. A running
-  tool call finishes, but a running [flow call](#flows-as-tools) ends where it is. In `yian run`'s
+  tool call finishes, early when its tool watches
+  [`ctx.interrupted`](/embedding/#tools-and-skills), and an MCP server's call is cancelled. A
+  running [flow call](#flows-as-tools) ends where it is. In `yian run`'s
   chat, Ctrl-C or Esc during a turn does this.
 - **The result.** An interrupted agent's output is null. With an `Optional(...)` output it
   succeeds, so the flow can route on null as above. Any other output fails the node with

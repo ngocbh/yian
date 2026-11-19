@@ -14,6 +14,7 @@ import { runFlow } from "../../src/run.ts";
 import { isPermanentToolError, isReportedToolError, isTransientToolError } from "../../src/tools/errors.ts";
 import {
   McpCallCancelled,
+  McpCallInterrupted,
   McpConnectError,
   McpInvalidRequestError,
   McpRequestError,
@@ -200,6 +201,44 @@ describe("errors from a running server", () => {
     expect(error).toBeInstanceOf(McpCallCancelled);
     expect(((await tools(server).invoke("calls", {})) as { result: number }).result).toBe(before);
   });
+
+  test(
+    "an interrupt cancels a waiting call as an error the model reads, and the server still works",
+    async () => {
+      const interrupt = new AbortController();
+      const outcome = timed(tools(server).invoke("slow", { seconds: 30 }, { interrupted: interrupt.signal }));
+      await sleep(0.3);
+      interrupt.abort();
+      const { error, ended } = await outcome;
+      expect(error).toBeInstanceOf(McpCallInterrupted);
+      expect(ended).toBeLessThan(0.3 + 2);
+      expect([isReportedToolError(error), isPermanentToolError(error)]).toEqual([true, true]);
+      expect(error!.message).toBe(
+        "MCP call to 'slow' cancelled: interrupted by the user. Its outcome is unknown; check its effect before retrying.",
+      );
+      expect(await tools(server).invoke("echo", { text: "after interrupt" })).toBe("after interrupt");
+    },
+    SLOW,
+  );
+
+  test("a call with the interrupt already set isn't sent, and says so unless an earlier attempt may have run; a stop set too wins", async () => {
+    const before = ((await tools(server).invoke("calls", {})) as { result: number }).result;
+    const interrupt = new AbortController();
+    interrupt.abort();
+    const interrupted = { interrupted: interrupt.signal };
+    const unsent = await rejection(tools(server).invoke("echo", { text: "x" }, interrupted));
+    expect(unsent).toBeInstanceOf(McpCallInterrupted);
+    expect(unsent.message).toBe("MCP call to 'echo' not sent: interrupted by the user.");
+    const resent = await rejection(tools(server).invoke("echo", { text: "x" }, { ...interrupted, attempt: 2 }));
+    expect(resent.message).toBe(
+      "MCP call to 'echo' cancelled: interrupted by the user. Its outcome is unknown; check its effect before retrying.",
+    );
+    const stop = new AbortController();
+    stop.abort();
+    const both = tools(server).forRun("r", { signal: stop.signal }).invoke("echo", { text: "x" }, interrupted);
+    expect(await rejection(both)).toBeInstanceOf(McpCallCancelled);
+    expect(((await tools(server).invoke("calls", {})) as { result: number }).result).toBe(before);
+  });
 });
 
 describe("errors that end a call", () => {
@@ -253,6 +292,24 @@ describe("errors that end a call", () => {
         "MCP server 'loud' exited (code 3) during tool 'exit_loudly'\n" +
           "server stderr:\nFATAL: database file /data/x.db is locked",
       );
+    },
+    SLOW,
+  );
+
+  test(
+    "a call that finds the server gone with its interrupt set doesn't start it again",
+    async () => {
+      const server = await fake([], { label: "gone" }).open();
+      const set = tools(server);
+      await rejection(set.invoke("exit_now", {}));
+      const interrupt = new AbortController();
+      interrupt.abort();
+      const error = await rejection(set.invoke("echo", { text: "x" }, { interrupted: interrupt.signal }));
+      expect(error).toBeInstanceOf(McpCallInterrupted);
+      expect(error.message).toBe("MCP call to 'echo' not sent: interrupted by the user.");
+      expect(pids(lastMarker())).toHaveLength(1);
+      expect(await set.invoke("echo", { text: "y" })).toBe("y");
+      expect(pids(lastMarker())).toHaveLength(2);
     },
     SLOW,
   );

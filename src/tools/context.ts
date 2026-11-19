@@ -45,7 +45,7 @@ export function isPending(value: unknown): value is PendingMarker {
 }
 
 /**
- * Who is calling a tool, the host's app object, and the call's abort signal.
+ * Who is calling a tool, the host's app object, the call's abort signal, and its interrupt signal.
  *
  * @example
  * const place = (args: { symbol: string }, ctx: ToolContext<Broker>) =>
@@ -81,12 +81,24 @@ export class ToolContext<T = unknown> {
   /** The host's app object given to the run, or to its resume. It is never recorded. */
   readonly context: T;
   /**
-   * Aborted when the call must end early: the run stops, or a sibling call fails the node. A tool
-   * that waits should pass it on or watch it.
+   * Aborted when the call must end early: the run stops, a sibling call fails the node, or the
+   * flow call the calling node runs in ends (a failure inside it, or an interrupt of the agent that
+   * called the flow). A tool that waits should pass it on or watch it.
    */
   readonly signal: AbortSignal;
+  /**
+   * Aborted when the agent making the call takes a host interrupt (`interrupt(run, inbox)` of its
+   * own steer inbox) while the call runs; already aborted for a call a resume sends again while the
+   * agent holds one. A tool that watches it may return early with its own result, or reject with
+   * its abort, which the model reads as a call the user interrupted; either is recorded as the
+   * call's result, and the agent then ends interrupted. It never aborts for a call from a TOOL node, from an agent without a
+   * steer inbox, or from inside a flow call (the interrupt ends that flow call: `signal`), nor once
+   * the call returned; and that agent's interrupt never aborts `signal`. Its abort listeners run
+   * inside the host's `interrupt` call, so they must not throw.
+   */
+  readonly interrupted: AbortSignal;
 
-  /** Build a frozen context from its fields. */
+  /** Build a frozen context from its fields; without `interrupted`, a signal that never aborts. */
   constructor(fields: {
     callId: string;
     attempt: number;
@@ -95,6 +107,7 @@ export class ToolContext<T = unknown> {
     node: string;
     context: T;
     signal: AbortSignal;
+    interrupted?: AbortSignal;
   }) {
     this.callId = fields.callId;
     this.attempt = fields.attempt;
@@ -103,6 +116,7 @@ export class ToolContext<T = unknown> {
     this.node = fields.node;
     this.context = fields.context;
     this.signal = fields.signal;
+    this.interrupted = fields.interrupted ?? new AbortController().signal;
     Object.freeze(this);
   }
 }

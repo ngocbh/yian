@@ -198,9 +198,10 @@ function failure(promise: Promise<unknown>): Promise<Error | null> {
   return promise.then(() => null, (error: Error) => error);
 }
 
-/** A call's context from run `r1`'s node `a`, stopped by `signal`. */
-function context(signal = new AbortController().signal, attempt = 2): ToolContext {
-  return new ToolContext({ callId: "r1/a/1/0", attempt, toolName: "find", runId: "r1", node: "a", context: { app: 1 }, signal });
+/** A call's context from run `r1`'s node `a`, stopped by `signal` and interrupted by `interrupted`. */
+function context(signal = new AbortController().signal, attempt = 2, interrupted?: AbortSignal): ToolContext {
+  const fields = { callId: "r1/a/1/0", attempt, toolName: "find", runId: "r1", node: "a", context: { app: 1 } };
+  return new ToolContext({ ...fields, signal, interrupted });
 }
 
 /** Check `args` for `tool` on `thread`, as the registry does, and return the checked arguments. */
@@ -359,6 +360,36 @@ test("a stop aborts the tool's own signal on the thread, and other calls go on m
   stop.abort();
 
   expect(await waiting).toBe("stopped");
+});
+
+/** A tool `wait` that returns whether its signal had aborted once its `ctx.interrupted` aborts; a `quick` one beside it. */
+const INTERRUPTIBLE =
+  calling(
+    "wait",
+    `execute: (_args, ctx) => new Promise((resolve) => {
+    const stopped = () => resolve({ stopped: true, signal: ctx.signal.aborted });
+    if (ctx.interrupted.aborted) stopped();
+    else ctx.interrupted.addEventListener("abort", stopped);
+  })`,
+  ) + calling("quick", 'execute: (_args, ctx) => ({ interrupted: ctx.interrupted.aborted })');
+
+test("an interrupt aborts the tool's own interrupted on the thread, not its signal, and other calls go on meanwhile", async () => {
+  const thread = started(INTERRUPTIBLE);
+  const interrupt = new AbortController();
+
+  const waiting = called(thread, "wait", {}, context(undefined, 2, interrupt.signal));
+  expect(await called(thread, "quick", {})).toEqual({ interrupted: false });
+  interrupt.abort();
+
+  expect(await waiting).toEqual({ stopped: true, signal: false });
+});
+
+test("an interrupt already set when the call is sent reaches the thread with it", async () => {
+  const thread = started(INTERRUPTIBLE);
+  const interrupt = new AbortController();
+  interrupt.abort();
+
+  expect(await called(thread, "wait", {}, context(undefined, 2, interrupt.signal))).toEqual({ stopped: true, signal: false });
 });
 
 /** Source of a full garbage collection on the running thread: `Bun.gc` on Bun; on Node, V8's `gc`, exposed for the call. */

@@ -6,9 +6,9 @@
  * path for injected metadata. `ToolSet` holds one run's tools: the global registry, or a host
  * mapping (with its `ask` handler, which serves both `ask_user` and the TOOL built-in `ask`) that
  * replaces it. `tools/types` reads a tool's declared argument types as yian types. `tools/context`
- * holds `ToolContext`, the call's identity, the host's app object and the call's abort signal; the
- * built-in ids `take`, `sleep` and `ask`; and `pending()`, the marker a host handler returns when
- * the answer comes later. `tools/function_tools` holds `FunctionTool` (a
+ * holds `ToolContext`, the call's identity, the host's app object and the call's abort and
+ * interrupt signals; the built-in ids `take`, `sleep` and `ask`; and `pending()`, the marker a
+ * host handler returns when the answer comes later. `tools/function_tools` holds `FunctionTool` (a
  * tool given as a name, description, JSON Schema and `execute`, with optional Standard Schema
  * validators and an output JSON Schema) and `tool()`, which builds one from a Standard Schema
  * validator or a raw JSON Schema, and `ToolOptions`, the type of `tool()`'s options, beside the
@@ -53,6 +53,7 @@ export type { JsonObject } from "../typesys/json.ts";
 export {
   isMcpError,
   McpCallCancelled,
+  McpCallInterrupted,
   McpConnectError,
   McpError,
   McpInvalidRequestError,

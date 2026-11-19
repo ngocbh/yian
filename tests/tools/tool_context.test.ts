@@ -1,5 +1,6 @@
 /**
- * Every `FunctionTool` receives a `ToolContext` per call, including the call's abort signal.
+ * Every `FunctionTool` receives a `ToolContext` per call, including the call's abort signal and its
+ * interrupt signal.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -216,5 +217,41 @@ describe("the call's abort signal", () => {
     expect(first.signal).toBeInstanceOf(AbortSignal);
     expect(first.signal.aborted).toBe(false);
     expect(first.signal).not.toBe(second.signal);
+  });
+});
+
+describe("the call's interrupt signal", () => {
+  test("the option is the context's interrupted, apart from its signal", async () => {
+    const run = new AbortController();
+    const interrupt = new AbortController();
+    const tools = new ToolSet({ place: place() }).forRun("r", { signal: run.signal });
+
+    await tools.invoke("place", { symbol: "X" }, { interrupted: interrupt.signal });
+    await tools.invokeTrusted("place", { symbol: "X" }, { interrupted: interrupt.signal });
+
+    expect(seen.map(([ctx]) => ctx.interrupted)).toEqual([interrupt.signal, interrupt.signal]);
+    expect(seen[0]![0].signal).toBe(run.signal);
+  });
+
+  test("without it, a fresh signal that never aborts, for a run's call too", async () => {
+    const tools = new ToolSet({ place: place() }).forRun("r", { signal: new AbortController().signal });
+
+    await tools.invoke("place", { symbol: "X" });
+    await tools.invoke("place", { symbol: "Y" });
+
+    const [[first], [second]] = seen as [[ToolContext<any>, unknown], [ToolContext<any>, unknown]];
+    expect(first.interrupted).toBeInstanceOf(AbortSignal);
+    expect(first.interrupted.aborted).toBe(false);
+    expect(first.interrupted).not.toBe(second.interrupted);
+    expect(first.interrupted).not.toBe(first.signal);
+  });
+
+  test("a context built without one gets a fresh signal that never aborts", () => {
+    const fields = { callId: "c", attempt: 1, toolName: "t", runId: "", node: "", context: undefined };
+    const ctx = new ToolContext({ ...fields, signal: new AbortController().signal });
+    const given = new AbortController().signal;
+
+    expect(ctx.interrupted.aborted).toBe(false);
+    expect(new ToolContext({ ...fields, signal: ctx.signal, interrupted: given }).interrupted).toBe(given);
   });
 });

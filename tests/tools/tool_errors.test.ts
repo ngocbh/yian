@@ -260,6 +260,7 @@ test("tools/index.ts exports the tools API, the same objects as its modules'", (
     McpTransportError: mcp.McpTransportError,
     McpServerClosed: mcp.McpServerClosed,
     McpCallCancelled: mcp.McpCallCancelled,
+    McpCallInterrupted: mcp.McpCallInterrupted,
     isMcpError: mcp.isMcpError,
   };
   // Exactly these names: no translator, no `ask_user` id (the built-in ids are), no `isFunctionTool` or

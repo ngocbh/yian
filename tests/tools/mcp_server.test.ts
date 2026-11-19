@@ -28,6 +28,7 @@ import {
   isMcpError,
   isMcpServer,
   McpCallCancelled,
+  McpCallInterrupted,
   McpConnectError,
   McpError,
   McpInvalidRequestError,
@@ -267,6 +268,7 @@ describe("MCP errors", () => {
       [new McpTransportError("m"), ["reported", "transient"]],
       [new McpServerClosed("m"), ["permanent"]],
       [new McpCallCancelled("m"), ["permanent"]],
+      [new McpCallInterrupted("m"), ["reported", "permanent"]],
     ];
     for (const [error, kinds] of cases) {
       expect(isMcpError(error)).toBe(true);

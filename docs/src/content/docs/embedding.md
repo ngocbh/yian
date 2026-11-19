@@ -389,19 +389,24 @@ signal's reason, and `advance` runs the stopped nodes again.
   `callId` (the same on every retry and resume, so use it as an idempotency key), `attempt` (1
   on the first try, higher on a TOOL node's retry or when a resume makes the call again), `runId`,
   `node`, `context` (your app object; `undefined` for a [tool module](/code-and-tools/#tool-modules)'s
-  tool, which runs on its own thread), `signal` (aborted when the call must end: the run stops,
-  or a sibling call fails) and `interrupted`.
+  tool, which runs on its own thread), `signal` (aborted when the call must end: the run stops, a
+  sibling call fails, or the [flow call](/agents/#flows-as-tools) the tool runs in ends, as when
+  the agent that called the flow is interrupted) and `interrupted`.
   Tool groups may hold same-named tools, which a model sees as `<group>_<tool>`; two tools that
   could show one name are refused. `ToolOptions` (from `@ngocbh/yian/tools`) is the type of
   `tool()`'s options, so an options object written on its own
   (`{ ... } satisfies ToolOptions<typeof Params>`) is typed as `tool()` types it.
 - **Interrupts.** `ctx.interrupted` aborts when a host [interrupts](#interrupt-and-cancel) the
-  calling agent while the call runs, and `ctx.signal` doesn't. A tool that watches it can return
-  early with its own result, such as `"stopped"`: the agent records that result as usual, then
-  ends interrupted. A tool that ignores it runs to its end first. A call a resume sends again while
-  the agent holds an interrupt starts with it aborted. It never aborts for a TOOL node's call or
-  an agent without a `steer_inbox:`, nor after the call returned. A memory's tools ignore it: their
-  calls are short, and a write applies whole.
+  agent that made the call while the call runs; that agent's interrupt never aborts `ctx.signal`.
+  A tool that watches it can return early with its own result, such as `"stopped"`, or reject
+  with the abort, as a timer, `fetch` or `spawn` given the signal does, and the model reads that
+  the user interrupted the call. Either way the agent records the result, then ends interrupted.
+  A tool that ignores it runs to its end first. A call a resume sends again while the agent holds
+  an interrupt starts with it aborted. It fires only for calls the agent reading the interrupted
+  inbox makes itself: never for a TOOL node's call, an agent without a `steer_inbox:`, or a call
+  inside that agent's flow call, which gets `ctx.signal` as the flow call ends; nor after the call
+  returned. Its listeners run inside the host's `interrupt` call, so they must not throw. A
+  memory's tools ignore it: their calls are short, and a write applies whole.
 - **MCP servers.** `mcpServer({ command, args })` or `mcpServer({ url, headers })` describes a
   server (an `https` url; `http` only on `localhost`, `127.0.0.1` or `[::1]`); pass it as a
   `tools` entry and its tools become one group. `concurrencySafe: true` (or a list of tool names)

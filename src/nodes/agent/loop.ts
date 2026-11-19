@@ -104,6 +104,7 @@ import {
   closerResult,
   reportedText,
   SKIPPED_TOOL_RESULT,
+  TOOL_INTERRUPTED_OUTCOME,
   toolLimitText,
   toolText,
   unavailableText,
@@ -921,8 +922,10 @@ async function failCall(turn: ToolTurn, call: ToolCallPart, index: number, error
  *
  * The calls share one child signal of the node's, and each call's own interrupt
  * (`PlannedCall.interrupted`) follows the agent's from its start until it settles. Each starts in
- * call order; the first to fail (in time; a `ReportedToolError` is the call's error result, not a failure; a result `toolText`
- * refuses is a failure) aborts the group's signal, and no further call starts. As each call
+ * call order; the first to fail (in time; a `ReportedToolError` is the call's error result, not a
+ * failure, and so is a rejection with the abort of the call's own interrupt, which the model reads
+ * as `TOOL_INTERRUPTED_OUTCOME`; a result `toolText` refuses is a failure) aborts the group's
+ * signal, and no further call starts. As each call
  * finishes with a result, its text is computed and written as a `tool_result` step at once, in
  * finish order, unless the node has stopped by then; a call whose handler returned `pending()` is
  * written as a `pending` step instead and gets no tool message (the loop returns `Pending`). An
@@ -1027,6 +1030,11 @@ async function runGroup(
         (value): ToolOutcome => settle(planned, startedAt, value, false),
         (error): ToolOutcome => {
           if (isReportedToolError(error)) return settle(planned, startedAt, error, true);
+          // A tool that passed its interrupt on (to a timer, `fetch`, `spawn`) rejects with its
+          // abort: the user's act, which the model reads, not the tool's failure.
+          if (interruptAbort(planned.interrupted.signal, error)) {
+            return settle(planned, startedAt, new ReportedToolError(TOOL_INTERRUPTED_OUTCOME), true);
+          }
           fail(error);
           return { error };
         },
@@ -1085,6 +1093,21 @@ async function whileLinked<T>(
     return await call();
   } finally {
     interrupt.removeEventListener("abort", relay);
+  }
+}
+
+/**
+ * Whether a call's rejection `error` is the abort of its aborted `interrupted`: the signal's
+ * reason, or an `AbortError`, which an API given the signal rejects with and which a module tool's
+ * thread sends back by name.
+ */
+function interruptAbort(interrupted: AbortSignal, error: unknown): boolean {
+  if (!interrupted.aborted) return false;
+  try {
+    return error === interrupted.reason || (error instanceof Error && error.name === "AbortError");
+  } catch {
+    // A thrown Proxy whose traps throw is no abort.
+    return false;
   }
 }
 

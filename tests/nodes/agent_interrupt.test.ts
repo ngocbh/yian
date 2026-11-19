@@ -9,6 +9,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { setTimeout as sleepMs } from "node:timers/promises";
 
 import { type CompiledFlow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
@@ -1276,6 +1277,52 @@ test("a call's ctx.interrupted is its own: an interrupt during a later call leav
   expect(await run(chatFlow({ tools: ["keep", "later", "lookup"] }), model, { tools })).toBeNull();
   expect(shape()).toEqual(["model_call", "tool_result", "tool_result", "skipped", "interrupted"]);
   expect([seen.get("keep")!.interrupted.aborted, seen.get("later")!.interrupted.aborted]).toEqual([false, true]);
+});
+
+/** A `wait` tool that calls `began`, then returns what `body` does with its context. */
+function waitTool(began: () => void, body: (ctx: ToolContext) => Promise<unknown>): ToolSet {
+  const wait = new FunctionTool({
+    name: "wait",
+    description: "Wait.",
+    parametersJsonSchema: { type: "object", properties: {} },
+    execute: async (_args, ctx) => (began(), await body(ctx)),
+  });
+  return new ToolSet({ wait });
+}
+
+test.each<[string, (ctx: ToolContext) => Promise<unknown>]>([
+  ["an abortable timer's AbortError", (ctx) => sleepMs(30_000, undefined, { signal: ctx.interrupted })],
+  ["the signal's own reason", (ctx) => aborted(ctx.interrupted).then(() => Promise.reject(ctx.interrupted.reason))],
+])("a tool that rejects with its interrupt's abort (%s) gets the interrupted result; the agent ends interrupted", async (_name, body) => {
+  const began = Promise.withResolvers<void>();
+  const model = new ScriptedModel([reply("Waiting.", ["wait", {}, "call-1"])], CONFIG);
+
+  const done = run(chatFlow({ tools: ["wait"] }), model, { tools: waitTool(began.resolve, body) });
+  await began.promise;
+  interruptNow();
+
+  expect(await done).toBeNull();
+  expect(shape()).toEqual(["model_call", "tool_result", "interrupted"]);
+  expect(steps()[1]).toMatchObject({ call_id: "call-1", output: TOOL_INTERRUPTED_OUTCOME, is_error: true });
+  // The call ran, so its result is its own, not a closer yian wrote in its place.
+  expect(Object.hasOwn(steps()[1]!, "closed")).toBe(false);
+});
+
+test.each<[string, boolean, (ctx: ToolContext) => Promise<unknown>, string]>([
+  ["another error after the interrupt", true, (ctx) => aborted(ctx.interrupted).then(() => Promise.reject(new Error("broke on the way out"))), "broke on the way out"],
+  ["an AbortError of its own, with no interrupt", false, () => Promise.reject(new DOMException("gave up", "AbortError")), "gave up"],
+])("any other rejection still fails the node: %s", async (_name, interrupts, body, message) => {
+  const began = Promise.withResolvers<void>();
+  const model = new ScriptedModel([reply("Waiting.", ["wait", {}, "call-1"])], CONFIG);
+
+  const done = runEngine(chatFlow({ tools: ["wait"] }), model, { tools: waitTool(began.resolve, body) });
+  await began.promise;
+  if (interrupts) interruptNow();
+
+  const last = await done;
+  expect(last).toBeInstanceOf(RunFailed);
+  expect([(last as RunFailed).failure.code, (last as RunFailed).failure.message]).toEqual(["node.execute", expect.stringContaining(message)]);
+  expect(shape()).toEqual(["model_call"]);
 });
 
 // --- one interrupt, every reader ----------------------------------------------------------- //

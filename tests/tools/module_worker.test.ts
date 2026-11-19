@@ -2,7 +2,7 @@
  * Which exports of a tool module are tools, as its thread reads them: plain objects of `tool()`'s
  * options and `tool()` values from any yian copy, each named as its export, in export-name order.
  * A refused or unreadable export is reported for itself, and anything else is ignored. The
- * modules are imported on this thread.
+ * modules are imported on this thread, and so is one served over a channel.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -10,8 +10,10 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { MessageChannel } from "node:worker_threads";
 
-import { listToolModule, type ToolModuleListing } from "../../src/tools/module_worker.ts";
+import { current } from "../../src/defaults.ts";
+import { listToolModule, serveToolModule, type ToolModuleListing, type ToolModuleRequest } from "../../src/tools/module_worker.ts";
 
 const SOURCE = join(import.meta.dirname, "..", "..", "src");
 const PARAMS = 'parameters: { type: "object" }';
@@ -191,5 +193,40 @@ export const seen = listToolModule(cycle, "cycle.ts").listing;
   expect(seen.refused.map((each) => each.name)).toEqual(["LIMIT", "early"]);
   for (const { name, message } of seen.refused) {
     expect(message).toStartWith(`cycle.ts export '${name}' can't be read: ReferenceError: `);
+  }
+});
+
+test("the thread takes an interrupt or a stop for a call it already finished as a no-op, and serves the next call", async () => {
+  writeFileSync(join(tmp, "crm.ts"), `export const quick = { name: "quick", description: "d", ${PARAMS}, execute: (_args, ctx) => ({ interrupted: ctx.interrupted.aborted }) };\n`);
+  const methods = ["log", "info", "warn", "error", "debug"] as const;
+  // Serving takes over this thread's console, as it does a module's thread.
+  const saved = methods.map((method) => console[method]);
+  const { port1, port2 } = new MessageChannel();
+  const call = (id: number): ToolModuleRequest => ({
+    kind: "call",
+    id,
+    defaults: current(),
+    tool: "quick",
+    args: {},
+    check: null,
+    where: "tool 'quick' arguments",
+    callId: `r/a/1/${id}`,
+    attempt: 1,
+    runId: "r",
+    node: "a",
+  });
+  const reply = () => new Promise<unknown>((resolve) => port2.once("message", resolve));
+  try {
+    serveToolModule(port1, { path: join(tmp, "crm.ts"), label: "crm.ts" });
+    port2.postMessage(call(1));
+    expect(await reply()).toEqual({ id: 1, as: "result", value: { interrupted: false } });
+    port2.postMessage({ kind: "interrupt", id: 1 } satisfies ToolModuleRequest);
+    port2.postMessage({ kind: "abort", id: 1 } satisfies ToolModuleRequest);
+    port2.postMessage(call(2));
+    expect(await reply()).toEqual({ id: 2, as: "result", value: { interrupted: false } });
+  } finally {
+    port1.close();
+    port2.close();
+    methods.forEach((method, index) => (console[method] = saved[index]!));
   }
 });

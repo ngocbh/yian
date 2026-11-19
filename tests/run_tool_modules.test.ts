@@ -23,6 +23,7 @@ import { ToolResultPart } from "../src/llm/messages.ts";
 import { ScriptedModel } from "../src/llm/testing.ts";
 import { advance, agentCall, agentCalls, complete, interrupt, pendingCalls, runFlow, type RunFlowOptions } from "../src/run.ts";
 import { NodeStepRecord, readRunLog } from "../src/runtime/log.ts";
+import { TOOL_INTERRUPTED_OUTCOME } from "../src/nodes/agent/results.ts";
 import { pending } from "../src/tools/context.ts";
 import { FunctionTool, tool } from "../src/tools/function_tools.ts";
 import { mcpServer } from "../src/tools/mcp.ts";
@@ -299,14 +300,20 @@ test("a thread exit fails an agent's calls in flight as errors its model reads, 
   expect(resultContents(model)).toEqual([exited, exited, "ok"]);
 });
 
-test("a host interrupt reaches a running module tool as ctx.interrupted on its thread: its early result is recorded and the agent honors", async () => {
-  const body = `(_args, ctx) => new Promise((resolve) => {
+/** A module tool body that returns once its interrupt aborts, and one that rejects with the abort, as a timer given the signal does. */
+const STOPPING = `(_args, ctx) => new Promise((resolve) => {
     console.log("waiting");
     const stopped = () => resolve(\`stopped, signal \${ctx.signal.aborted}\`);
     if (ctx.interrupted.aborted) stopped();
     else ctx.interrupted.addEventListener("abort", stopped);
   })`;
-  writeFileSync(join(dir, "crm.ts"), plain("wait", body));
+const REJECTING = '(_args, ctx) => (console.log("waiting"), sleep(30000, undefined, { signal: ctx.interrupted }))';
+
+test.each([
+  ["returns early", STOPPING, "stopped, signal false", false],
+  ["rejects with the abort", REJECTING, TOOL_INTERRUPTED_OUTCOME, true],
+])("a host interrupt reaches a running module tool as ctx.interrupted on its thread: one that %s gets its result recorded, and the agent honors", async (_name, body, output, isError) => {
+  writeFileSync(join(dir, "crm.ts"), 'import { setTimeout as sleep } from "node:timers/promises";\n' + plain("wait", body));
   const agent = "a:\n    kind: agent\n    prompt: go\n    tools: [crm]\n    steer_inbox: ${input.m}\n    output: !Optional(str)";
   const text = app({ crm: "./crm.ts" }, [agent], "input:\n  m: !Inbox(str)\noutput: ${a.output}\n");
   const log = join(dir, "log.jsonl");
@@ -322,7 +329,7 @@ test("a host interrupt reaches a running module tool as ctx.interrupted on its t
   expect(model.requests).toHaveLength(1);
   const steps = readRunLog(log).flatMap(({ record }) => (record instanceof NodeStepRecord && record.nodeId === "a" ? [record.step] : []));
   expect(steps.map((step) => step["kind"])).toEqual(["model_call", "tool_result", "interrupted"]);
-  expect(steps[1]).toMatchObject({ call_id: "c1", output: "stopped, signal false", is_error: false });
+  expect(steps[1]).toMatchObject({ call_id: "c1", output, is_error: isError });
 });
 
 test.each([

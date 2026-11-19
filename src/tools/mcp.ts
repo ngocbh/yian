@@ -955,6 +955,7 @@ export class McpServer {
       if (generation?.gone) {
         if (reconnected || !this.mayReconnect(generation)) throw this.closedError(generation);
         if (ctx.signal.aborted) throw cancelledError(name);
+        if (ctx.interrupted.aborted) throw interruptedError(name, ctx.attempt > 1);
         generation = await this.reconnect(generation, name, ctx.signal);
         reconnected = true;
       }
@@ -962,7 +963,8 @@ export class McpServer {
         throw new Error(`MCP server '${this.label}' is not open`);
       }
       if (ctx.signal.aborted) throw cancelledError(name);
-      if (ctx.interrupted.aborted) throw interruptedError(name);
+      // Not sent: only an earlier attempt, which a resume sends again, may have run.
+      if (ctx.interrupted.aborted) throw interruptedError(name, ctx.attempt > 1);
       const result = await this.sendOnce(generation, tool, sent, ctx, !reconnected && !unread);
       if (result !== RESEND) return result;
       // The server ended or forgot the session before it read the call: reconnect, then send it.
@@ -1030,7 +1032,7 @@ export class McpServer {
     const tool = neverSent(error, sdk) ? undefined : name;
     if (generation.closed || generation.gone) return this.closedError(generation, tool);
     if (ctx.signal.aborted) return cancelledError(name);
-    if (ctx.interrupted.aborted) return interruptedError(name);
+    if (ctx.interrupted.aborted) return interruptedError(name, true);
     if (code === sdk.SdkErrorCode.RequestTimeout) {
       return new McpTimeoutError(
         `MCP server '${label}' tool '${name}' timed out after ${secondsText(generation.callTimeout)} s`,
@@ -1182,10 +1184,15 @@ function cancelledError(name: string): McpCallCancelled {
   return new McpCallCancelled(`MCP call to '${name}' cancelled by a run stop`);
 }
 
-/** The `McpCallInterrupted` for a call to `name`, whose text the model reads. */
-function interruptedError(name: string): McpCallInterrupted {
+/**
+ * The `McpCallInterrupted` for a call to `name`, whose text the model reads: one the server may
+ * have run when `mayHaveRun` (it was sent, or an earlier attempt was), else one never sent.
+ */
+function interruptedError(name: string, mayHaveRun: boolean): McpCallInterrupted {
   return new McpCallInterrupted(
-    `MCP call to '${name}' cancelled: interrupted by the user. Its outcome is unknown; check its effect before retrying.`,
+    mayHaveRun
+      ? `MCP call to '${name}' cancelled: interrupted by the user. Its outcome is unknown; check its effect before retrying.`
+      : `MCP call to '${name}' not sent: interrupted by the user.`,
   );
 }
 

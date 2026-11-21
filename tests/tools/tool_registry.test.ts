@@ -1039,3 +1039,30 @@ describe("withNodeScope", () => {
     expect(() => new ToolSet({}).withNodeScope({ groups, tools })).toThrow(message);
   });
 });
+
+describe("sourceOf", () => {
+  test("a host tool's source names its group, null for a top-level or registry tool; a node's own tool has none", () => {
+    registerTool("weather", topic("weather"));
+    const run = new ToolSet({ lookup: topic("lookup"), team: [topic("a"), topic("team")] });
+    const local = run.withNodeScope({ groups: new Map([["lessons", [topic("read")]]]), tools: [topic("quote")] });
+    const sources = [
+      { group: null, name: "lookup" },
+      { group: "team", name: "a" },
+      { group: null, name: "a" },
+      { group: null, name: "team" },
+      { group: "lessons", name: "read" },
+      { group: null, name: "quote" },
+    ].map((ref) => local.sourceOf(ref));
+    expect(sources).toEqual([
+      { kind: "host", group: null, tool: "lookup" },
+      { kind: "host", group: "team", tool: "a" },
+      { kind: "host", group: "team", tool: "a" },
+      { kind: "host", group: "team", tool: "team" },
+      null,
+      null,
+    ]);
+    expect(sources.every((source) => source === null || Object.isFrozen(source))).toBe(true);
+    expect(new ToolSet().sourceOf({ group: null, name: "weather" })).toEqual({ kind: "host", group: null, tool: "weather" });
+    expect(() => run.sourceOf({ group: "team", name: "b" })).toThrow("`team` has no tool `b`; it has a, team");
+  });
+});

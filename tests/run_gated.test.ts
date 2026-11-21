@@ -1,25 +1,27 @@
 /**
- * A run a host gates: `runFlow` and `advance` with a `beforeToolCall` hook record it, every node's
- * tool set carries the hook, and an unfinished gated run is refused to a resume without one.
+ * A run a host gates: `runFlow` and `advance` with a `beforeToolCall` hook record it, each asks its
+ * own hook about its agents' tool calls, and an unfinished gated run is refused to a resume without
+ * one.
  */
 
-import { afterAll, expect, spyOn, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { ComposedFlow } from "../src/compose/build/pipeline.ts";
-import type { NodeCaps } from "../src/nodes/base.ts";
+import { loadFlow } from "../src/compose/loader.ts";
+import { ScriptedModel } from "../src/llm/testing.ts";
 import { ToolNode } from "../src/nodes/tool/node.ts";
-import { advance, inspectRun, pendingCalls, runFlow } from "../src/run.ts";
-import { readRunLog, RunResumedRecord, RunStartedRecord } from "../src/runtime/log.ts";
+import { advance, complete, inspectRun, pendingCalls, runFlow } from "../src/run.ts";
+import { NodeStepRecord, readRunLog, RunResumedRecord, RunStartedRecord } from "../src/runtime/log.ts";
 import { pending } from "../src/tools/context.ts";
-import { FunctionTool } from "../src/tools/function_tools.ts";
-import type { BeforeToolCall } from "../src/tools/gate.ts";
+import { FunctionTool, tool } from "../src/tools/function_tools.ts";
+import type { BeforeToolCall, GatedCall } from "../src/tools/gate.ts";
 import { YianRangeError, YianTypeError } from "../src/typesys/errors.ts";
 import { gated } from "./helpers/gate.ts";
 import { completeByHand } from "./helpers/inbox_fixtures.ts";
-import { crashAfter, graph, NO_ENV, rejected } from "./helpers/run_state_fixtures.ts";
+import { callReply, crashAfter, graph, NO_ENV, rejected, serving, textReply } from "./helpers/run_state_fixtures.ts";
 
 const ROOT = mkdtempSync(join(tmpdir(), "run-gated-"));
 afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
@@ -137,21 +139,36 @@ test("a hooked advance that can't move appends nothing, and the run stays ungate
   expect(resumes(log)).toEqual([]);
 });
 
-test("runFlow and advance give their nodes a tool set holding the hook", async () => {
-  const seen: (BeforeToolCall | null | undefined)[] = [];
-  const forward = ToolNode.prototype.forward;
-  const spy = spyOn(ToolNode.prototype, "forward").mockImplementation(function (this: ToolNode, inputs, caps: NodeCaps) {
-    seen.push(caps.tools?.gate);
-    return forward.call(this, inputs, caps);
-  });
-  try {
-    const { log, flow, tools, runId } = await waitingRun(HOOK);
-    completeByHand(log, flow, `${runId}/first`, { output: "one" });
-    const other: BeforeToolCall = () => undefined;
-    expect((await advance(gated({ log, flow, tools, env: NO_ENV }, other))).status).toBe("waiting");
-    // `first` runs, then wakes to read its answer; `second` runs.
-    expect(seen).toEqual([HOOK, other, other]);
-  } finally {
-    spy.mockRestore();
-  }
+test("runFlow and advance each ask their own hook; a pending() tool's note lands on its pending step", async () => {
+  const flow = await loadFlow(`
+id: gated_agent
+name: gated_agent
+llm_config: {provider: openai, model: test-model}
+nodes:
+  reply:
+    kind: agent
+    prompt: go
+    tools: [lookup, find]
+output: \${reply.output}
+`);
+  const find = tool({ name: "find", description: "Find.", parameters: { type: "object", properties: {} }, execute: () => "found" });
+  const tools = { lookup: LOOKUP, find };
+  const model = new ScriptedModel([callReply(["lookup", {}, "c1"]), callReply(["find", {}, "c2"]), textReply("done")]);
+  /** A hook noting each tool it is asked about in `asked`. */
+  const noting = (asked: string[], note?: string): BeforeToolCall => (call: GatedCall) => {
+    asked.push(call.tool);
+    return note === undefined ? undefined : { run: true, note };
+  };
+  const first: string[] = [];
+  const second: string[] = [];
+  const log = freshLog();
+  const options = { log, env: NO_ENV, tools, models: serving(model) };
+  const started = await runFlow(flow, {}, gated(options, noting(first, "a person checks it")));
+  expect(started.status, started.failure?.message).toBe("waiting");
+  const held = readRunLog(log).flatMap(({ record }) => (record instanceof NodeStepRecord && record.step["kind"] === "pending" ? [record.step] : []));
+  expect(held.map((step) => step["note"])).toEqual(["a person checks it"]);
+  await complete(log, pendingCalls(log)[0]!.callId, { output: "looked up" }, { env: NO_ENV });
+  const done = await advance(gated(options, noting(second)));
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect([first, second]).toEqual([["lookup"], ["find"]]);
 });

@@ -17,10 +17,12 @@ import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { runFlow, type RunFlowOptions } from "../../src/run.ts";
 import { isRunLogLocked, NodeStepRecord, readRunLog } from "../../src/runtime/log.ts";
 import type { Skill } from "../../src/skills/catalog.ts";
+import type { BeforeToolCall, GatedCall } from "../../src/tools/gate.ts";
 import { McpConnectError, McpServer, mcpServer } from "../../src/tools/mcp.ts";
 import type { ToolEntry } from "../../src/tools/registry.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { startHttpServer } from "../fixtures/mcp/fake_server.ts";
+import { gated } from "../helpers/gate.ts";
 import { expectClosed, hostEnv, killMarkers, pids, stdioOptions, strayProcesses, waitFor } from "../helpers/mcp_helpers.ts";
 
 // Each row starts at least one server process; the default 5 s is too tight on a loaded machine.
@@ -148,6 +150,38 @@ test(
     expect(Object.keys(bound.get("fake_add")!.parameters["properties"] as JsonObject).sort()).toEqual(["a", "b"]);
     // `add` returns structured content, which the call's result is.
     expect(toolResults(model, 1).map((part) => part.content)).toEqual(['{"result":5}']);
+    await expectClosed(server);
+  },
+  SLOW,
+);
+
+test(
+  "a host's check sees an MCP tool call's server and the tool's own name, and the model reads its refusal",
+  async () => {
+    const asked: GatedCall[] = [];
+    const hook: BeforeToolCall = (call) => {
+      asked.push(call);
+      return call.tool === "fake_add" ? { refuse: "No adding." } : undefined;
+    };
+    const calls = [
+      new ToolCallPart({ id: "c0", name: "fake_echo", arguments: { text: "hi" } }),
+      new ToolCallPart({ id: "c1", name: "fake_add", arguments: { a: 2, b: 3 } }),
+    ];
+    const model = new ScriptedModel([
+      new Response({ message: new Message({ role: "assistant", parts: calls }), finishReason: "tool_calls" }),
+      new Response({ message: new Message({ role: "assistant", parts: [new TextPart("done")] }), finishReason: "stop" }),
+    ]);
+    const server = fake();
+    const result = await run(await agentFlow("fake"), { fake: server }, gated({ models: serving(model) }, hook));
+    expect(result.failure).toBeNull();
+    expect(asked.map((call) => [call.tool, call.source, call.arguments])).toEqual([
+      ["fake_echo", { kind: "mcp", server: "fake", tool: "echo" }, { text: "hi" }],
+      ["fake_add", { kind: "mcp", server: "fake", tool: "add" }, { a: 2, b: 3 }],
+    ]);
+    expect(toolResults(model, 1).map((part) => [part.content, part.isError])).toEqual([
+      ["hi", false],
+      ["No adding.", true],
+    ]);
     await expectClosed(server);
   },
   SLOW,

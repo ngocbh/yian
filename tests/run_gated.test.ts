@@ -4,20 +4,21 @@
  * one.
  */
 
-import { afterAll, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { afterAll, describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { ComposedFlow } from "../src/compose/build/pipeline.ts";
 import { loadFlow } from "../src/compose/loader.ts";
+import type { RunEvent } from "../src/events.ts";
 import { ScriptedModel } from "../src/llm/testing.ts";
 import { ToolNode } from "../src/nodes/tool/node.ts";
-import { advance, complete, inspectRun, pendingCalls, runFlow } from "../src/run.ts";
+import { advance, cancel, complete, inspectRun, interrupt, pendingCalls, runFlow } from "../src/run.ts";
 import { NodeStepRecord, readRunLog, RunResumedRecord, RunStartedRecord } from "../src/runtime/log.ts";
 import { pending } from "../src/tools/context.ts";
 import { FunctionTool, tool } from "../src/tools/function_tools.ts";
-import type { BeforeToolCall, GatedCall } from "../src/tools/gate.ts";
+import type { BeforeToolCall, GatedCall, ToolSource } from "../src/tools/gate.ts";
 import { YianRangeError, YianTypeError } from "../src/typesys/errors.ts";
 import { gated } from "./helpers/gate.ts";
 import { completeByHand } from "./helpers/inbox_fixtures.ts";
@@ -171,4 +172,76 @@ output: \${reply.output}
   const done = await advance(gated(options, noting(second)));
   expect(done.status, done.failure?.message).toBe("succeeded");
   expect([first, second]).toEqual([["lookup"], ["find"]]);
+});
+
+describe("a held call through the host calls", () => {
+  /** An agent `reply` reading steer inbox `m`, granted `lookup`, whose handler counts its runs in `ran`. */
+  const FLOW = `
+id: held_agent
+name: held_agent
+llm_config: {provider: openai, model: test-model}
+input:
+  m: !Inbox(str)
+nodes:
+  reply:
+    kind: agent
+    prompt: go
+    tools: [lookup]
+    steer_inbox: \${input.m}
+    output: !Optional(str)
+output: \${reply.output}
+`;
+  const SOURCE: ToolSource = { kind: "host", group: null, tool: "lookup" };
+
+  /**
+   * Rewrite the log's pending step of `callId` into a hold, as the gate writes one; the agent
+   * loop writes none yet.
+   */
+  function holdIn(log: string, callId: string): void {
+    const lines = readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => {
+      const json = JSON.parse(line);
+      const step = json.kind === "node_step" ? json.payload.step : null;
+      if (step?.kind !== "pending" || step.call_id !== callId) return line;
+      Object.assign(step, { held: true, source: SOURCE, group_end: step.index });
+      return JSON.stringify(json);
+    });
+    writeFileSync(log, `${lines.join("\n")}\n`);
+  }
+
+  /** A run waiting on its agent's one `lookup` call, rewritten into a hold; `ran` counts the tool's runs. */
+  async function heldRun() {
+    const ran: string[] = [];
+    const lookup = tool({ name: "lookup", description: "Look up.", parameters: { type: "object", properties: {} }, execute: () => (ran.push("lookup"), pending()) });
+    const log = freshLog();
+    const options = { log, env: NO_ENV, tools: { lookup }, models: serving(new ScriptedModel([callReply(["lookup", {}, "c1"])])) };
+    const result = await runFlow(await loadFlow(FLOW), {}, options);
+    expect(result.status, result.failure?.message).toBe("waiting");
+    const [call] = pendingCalls(log);
+    holdIn(log, call!.callId);
+    ran.length = 0;
+    return { log, options, ran, callId: call!.callId };
+  }
+
+  test("interrupt() and cancel() return the hold held, with a frozen copy of its source", async () => {
+    const interrupted = await heldRun();
+    const { calls } = await interrupt(interrupted.log, "m", { env: NO_ENV });
+    const cancelled = await heldRun();
+    const closed = await cancel(cancelled.log, { env: NO_ENV });
+    for (const [call] of [calls, closed]) {
+      expect([call!.held, call!.source, Object.isFrozen(call!.source)]).toEqual([true, SOURCE, true]);
+    }
+  });
+
+  test("a resume after a crash before node_waiting keeps the hold, runs no tool and publishes no CallHeld", async () => {
+    const { log, options, ran, callId } = await heldRun();
+    const lines = readFileSync(log, "utf8").split("\n").filter(Boolean);
+    writeFileSync(log, `${lines.slice(0, lines.findIndex((line) => line.includes('"held":true')) + 1).join("\n")}\n`);
+    const events: RunEvent[] = [];
+    const resumed = await advance({ ...options, onEvent: (event) => void events.push(event) });
+    expect(resumed.status, resumed.failure?.message).toBe("waiting");
+    expect(events.map((event) => event.type)).not.toContain("CallHeld");
+    expect(events.map((event) => event.type)).not.toContain("CallClosed");
+    expect(ran).toEqual([]);
+    expect(pendingCalls(log).map((call) => [call.callId, call.held])).toEqual([[callId, true]]);
+  });
 });

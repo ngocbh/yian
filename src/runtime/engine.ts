@@ -73,6 +73,7 @@ import {
 } from "./log.ts";
 import {
   callResultStep,
+  callView,
   commitPrepared,
   type GrowBuilder,
   isDerivedCommit,
@@ -298,22 +299,11 @@ export function prepareDelivery(state: RunState, op: DeliveryOp): PreparedTransi
   }
 }
 
-/** The node's calls as its evaluation sees them: state, closing reason, deadline and answer. */
+/** The node's calls as its evaluation sees them, each answer a copy the state doesn't hold. */
 function callViews(state: RunState, nodeId: string): CallView[] {
   return nodeCalls(state.waits, nodeId).map((call) => {
     const answer = callResultStep(state, call.callId);
-    return {
-      callId: call.callId,
-      tool: call.tool,
-      resultKey: call.resultKey,
-      state: call.state,
-      closedReason: call.closedReason,
-      result: answer === null ? null : structuredClone(answer),
-      deadline: call.deadline,
-      scope: call.scope,
-      failure: state.flowFailures.get(call.callId) ?? null,
-      held: call.held,
-    };
+    return callView(state, call, answer === null ? null : structuredClone(answer));
   });
 }
 

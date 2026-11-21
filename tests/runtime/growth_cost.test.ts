@@ -226,6 +226,7 @@ function inventories(state: RunState): (Map<unknown, unknown> | Set<unknown>)[] 
     state.inFlight,
     state.nodeStarts,
     state.nodeStartSeqs,
+    state.nodeWakeSeqs,
     state.nodeSteps,
     state.nodeStepSeqs,
     state.pendingCommits,

@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { childEvent } from "../../src/cli/chat_events.ts";
+import { shownStatus } from "../../src/cli/chat_run_tools.ts";
 import { ChildRuns, type ChildRunsOptions, type ChildStatus } from "../../src/cli/chat_runs.ts";
 import { loadConfinedText } from "../../src/cli/confined_load.ts";
 import { defaultIdentity, defaultLocation, projectKey } from "../../src/cli/memory_bind.ts";
@@ -279,6 +280,8 @@ test(
     const waiting = await children.next("r1");
     expect(waiting).toMatchObject({ status: "waiting", wake_at: "2026-01-01T00:01:00.000Z" });
     expect(waiting.waits).toEqual([expect.objectContaining({ node: "nap", tool: "sleep" })]);
+    // A chat's children are never gated, so the model reads no held flag.
+    expect(Object.keys((shownStatus(waiting)["waits"] as object[])[0]!)).toEqual(["node", "callId", "tool", "inbox", "deadline", "settled"]);
     open();
     expect(await children.next("r1")).toMatchObject({ status: "succeeded", output: "rested" });
   },

@@ -7,7 +7,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { loadFlow } from "../../src/compose/loader.ts";
-import { CallClosed, CallHeld } from "../../src/events.ts";
+import { CallClosed, CallHeld, RunResumed } from "../../src/events.ts";
 import { AgentNode, STEER_INBOX_KEY } from "../../src/nodes/agent/node.ts";
 import { Binding } from "../../src/nodes/contracts.ts";
 import { pendingCalls } from "../../src/run.ts";
@@ -378,7 +378,7 @@ describe("a held call's run state", () => {
     ]);
   });
 
-  test("a resume keeps it open, and closes only the reply's other open calls crashed", () => {
+  test("a resume keeps it open, publishes no CallHeld again, and closes only the reply's other open calls crashed", () => {
     const holds = replied();
     step(holds.log, holds.state, "a", holdOf(0));
     step(holds.log, holds.state, "a", holdOf(1));
@@ -387,7 +387,10 @@ describe("a held call's run state", () => {
     const { log, state, path } = replied();
     step(log, state, "a", holdOf(0));
     step(log, state, "a", pendingOf(1));
-    commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
+    expect(commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }))).toEqual([
+      new RunResumed(),
+      new CallClosed({ callId: callOf(1), reason: "crashed" }),
+    ]);
     expect([state.waits.calls.get(callOf(0))!.state, state.waits.calls.get(callOf(1))!.closedReason]).toEqual(["open", "crashed"]);
     log.close();
     expect(replayed(state.flow, path).waits.calls.get(callOf(0))!.state).toBe("open");

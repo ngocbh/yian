@@ -780,7 +780,8 @@ export class ChildRuns {
     return {
       ...base,
       status: "waiting",
-      waits: result.waits.map((wait) => ({ ...wait })),
+      // A chat's children are never gated, so no call of theirs is held.
+      waits: result.waits.map(({ held: _, ...wait }) => wait),
       wake_at: wakeAt(result.waits),
       ...(asks.length > 0 ? { asks } : {}),
     };

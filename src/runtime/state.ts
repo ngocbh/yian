@@ -415,10 +415,10 @@ export class RunState {
   unadmittedCommits = new Map<string, number>();
   /**
    * @internal The nodes whose entries in `nodeState` or a per-node inventory (`inFlight`,
-   * `acceptedStarts`, `nodeStarts`, `nodeStartSeqs`, `nodeSteps`, `nodeStepSeqs`, `pendingCommits`,
-   * `pendingMessages`, `crashedAttempts`) changed since a transition last checked them. Each
-   * write adds its node, and the next transition checks those nodes before its append
-   * (`requireTouchedInventories`).
+   * `acceptedStarts`, `nodeStarts`, `nodeStartSeqs`, `nodeWakeSeqs`, `nodeSteps`, `nodeStepSeqs`,
+   * `pendingCommits`, `pendingMessages`, `crashedAttempts`) changed since a transition last
+   * checked them. Each write adds its node, and the next transition checks those nodes before its
+   * append (`requireTouchedInventories`).
    */
   readonly touched = new Set<string>();
   /**
@@ -1589,15 +1589,22 @@ function sameStep(a: Readonly<JsonObject> | null, b: Readonly<JsonObject> | null
   return a !== null && b !== null && logJson(canonicalSeed(a)[0]) === logJson(canonicalSeed(b)[0]);
 }
 
-/** `call` as its node reads it: its state, closing reason, answer and deadline. */
-function callView(state: RunState, call: Call): CallView {
+/**
+ * `call` as its node reads it, frozen: its state, closing reason, answer and deadline, with
+ * `result` as its answer (by default the step that answered it, `callResultStep`).
+ */
+export function callView(
+  state: RunState,
+  call: Call,
+  result: Readonly<JsonObject> | null = callResultStep(state, call.callId),
+): CallView {
   return Object.freeze({
     callId: call.callId,
     tool: call.tool,
     resultKey: call.resultKey,
     state: call.state,
     closedReason: call.closedReason,
-    result: callResultStep(state, call.callId),
+    result,
     deadline: call.deadline,
     scope: call.scope,
     failure: state.flowFailures.get(call.callId) ?? null,
@@ -1624,19 +1631,9 @@ export function callResultStep(state: RunState, callId: string): Readonly<JsonOb
  */
 function flowAnswerStep(state: RunState, call: Call): Readonly<JsonObject> {
   const output = state.pool.store.get(`${call.scope!}/${END_ID}`)!.toObject();
-  const view: CallView = Object.freeze({
-    callId: call.callId,
-    tool: call.tool,
-    resultKey: call.resultKey,
-    state: call.state,
-    closedReason: call.closedReason,
-    result: null,
-    deadline: call.deadline,
-    scope: call.scope,
-    failure: null,
-    held: call.held,
-  });
   const node = state.flow.nodes.get(call.nodeId)!;
+  // The view before its answer: an answered call took no failure.
+  const view = callView(state, call, null);
   return node.waitResultStep(view, { output }, { maxFlowResultChars: state.runDefaults.maxFlowResultChars });
 }
 
@@ -2233,7 +2230,7 @@ function frontierObservers(record: RunRecord, delta: FrontierPlan["delta"]): Run
       // A step is node-owned detail; no observer event announces it, except a hold, and a host call
       // registered closed is announced closed.
       const { nodeId, step } = record as NodeStepRecord;
-      if (step["held"] !== true) return closed("interrupted");
+      if (step["kind"] !== "pending" || step["held"] !== true) return closed("interrupted");
       return [new CallHeld({ nodeId, callId: String(step["call_id"]), tool: String(step["tool"]) }), ...closed("interrupted")];
     }
     case "waiting": {
@@ -3957,9 +3954,8 @@ function validateNodeWoken(state: RunState, record: NodeWokenRecord): void {
   }
   // A wake by answers needs the node wakeable; a timeout wake may leave the node's other calls open.
   if (record.timedOut.length === 0 && !isWakeable(w, nodeId)) {
-    // Not wakeable, so a call it waits on is still open.
-    const open = waiting.callIds.find((callId) => w.calls.get(callId)?.state === "open")!;
-    throw new YianRangeError(`NodeWoken node ${reprText(nodeId)} still waits on open call ${reprText(open)}`);
+    const open = waiting.callIds.find((callId) => w.calls.get(callId)?.state === "open");
+    throw new YianRangeError(`NodeWoken node ${reprText(nodeId)} still waits on open call ${reprText(open ?? waiting.callIds[0] ?? "")}`);
   }
 }
 

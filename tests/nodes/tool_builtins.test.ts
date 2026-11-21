@@ -1,7 +1,7 @@
 /**
  * The TOOL built-ins at run time: `take` and `sleep` return the wait the engine decides, a host
- * tool or `ask` that returns `pending()` records its call and waits, a held call is reused, and
- * `waitResultStep` shapes a host's answer.
+ * tool or `ask` that returns `pending()` records its call and waits, a call it registered is
+ * reused, and `waitResultStep` shapes a host's answer.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -158,8 +158,8 @@ describe("take and sleep", () => {
     );
   });
 
-  test("a held take or sleep call still returns its request (the engine reuses the call)", async () => {
-    const held: CallView = {
+  test("a registered take or sleep call still returns its request (the engine reuses the call)", async () => {
+    const own: CallView = {
       callId: "r1/heard",
       tool: "take",
       resultKey: "r1/heard",
@@ -171,7 +171,7 @@ describe("take and sleep", () => {
       failure: null,
       held: false,
     };
-    const { caps } = capsWith([held]);
+    const { caps } = capsWith([own]);
     expect(await take.forward({ from: new InboxRef("m") }, caps)).toEqual(
       new Pending([], { wait: { tool: "take", inbox: "m", mode: "one", timeoutSeconds: null } }),
     );
@@ -188,8 +188,8 @@ function sendTool(ids: string[], answer: () => unknown = () => pending()): Funct
   });
 }
 
-/** One held call of node `send` (or `node`), open unless `fields` says otherwise. */
-function heldCall(fields: Partial<CallView> = {}): CallView {
+/** One registered call of node `send` (or `node`), open unless `fields` says otherwise. */
+function ownCall(fields: Partial<CallView> = {}): CallView {
   const callId = fields.callId ?? "r1/send";
   return { callId, tool: "codex_send", resultKey: callId, state: "open", closedReason: null, result: null, deadline: null, scope: null, failure: null, held: false, ...fields };
 }
@@ -211,7 +211,7 @@ describe("host calls", () => {
     expect(ids).toEqual(["r1/send"]);
   });
 
-  test("a re-run with no held call calls the handler again with the same call id", async () => {
+  test("a re-run with no registered call calls the handler again with the same call id", async () => {
     const ids: string[] = [];
     const tools = new ToolSet({ codex_send: sendTool(ids) }).forRun("r1");
     const node = new ToolNode("send", { toolId: "codex_send" });
@@ -220,9 +220,9 @@ describe("host calls", () => {
     expect(ids).toEqual(["r1/send", "r1/send"]);
   });
 
-  test("an open held call waits again without calling the handler", async () => {
+  test("an open registered call waits again without calling the handler", async () => {
     const ids: string[] = [];
-    const { recorded, caps } = capsWith([heldCall()], new ToolSet({ codex_send: sendTool(ids) }).forRun("r1"));
+    const { recorded, caps } = capsWith([ownCall()], new ToolSet({ codex_send: sendTool(ids) }).forRun("r1"));
     expect(await new ToolNode("send", { toolId: "codex_send" }).forward({ text: "hi" }, caps)).toEqual(
       new Pending(["r1/send"]),
     );
@@ -230,16 +230,16 @@ describe("host calls", () => {
     expect(recorded).toEqual([]);
   });
 
-  test("an answered held call returns its output, or fails with its error for good", async () => {
+  test("an answered registered call returns its output, or fails with its error for good", async () => {
     const ids: string[] = [];
     const tools = new ToolSet({ codex_send: sendTool(ids) }).forRun("r1");
     const node = new ToolNode("send", { toolId: "codex_send", retries: 3 });
-    const answered = heldCall({
+    const answered = ownCall({
       state: "answered",
       result: { kind: "tool_result", call_id: "r1/send", output: { kind: "str", value: "done" } },
     });
     expect(await node.forward({ text: "hi" }, capsWith([answered], tools).caps)).toEqual(new Output("done"));
-    const failed = heldCall({
+    const failed = ownCall({
       state: "answered",
       result: { kind: "tool_result", call_id: "r1/send", error: { type: "CompletedError", message: "no" } },
     });
@@ -290,7 +290,7 @@ describe("host calls", () => {
   test("waitResultStep shapes complete()", () => {
     const node = new ToolNode("send", { toolId: "codex_send" });
     node.outputContract = new ValueContract(Type.scalar(ValueKind.STRING));
-    const view = heldCall();
+    const view = ownCall();
     expect(node.waitResultStep(view, { output: "ok" })).toEqual({
       kind: "tool_result",
       call_id: "r1/send",
@@ -325,7 +325,7 @@ describe("host calls", () => {
       return value;
     };
     const free = new ToolNode("send", { toolId: "codex_send" });
-    const view = heldCall();
+    const view = ownCall();
     expect(free.waitResultStep(view, { output: nest(100) })).toMatchObject({ kind: "tool_result" });
     for (const levels of [101, 200_000]) {
       expect(() => free.waitResultStep(view, { output: nest(levels) })).toThrow(
@@ -404,10 +404,10 @@ describe("ask", () => {
     expect(recorded).toEqual([]);
   });
 
-  test("an ask with an open held call waits again without asking", async () => {
+  test("an ask with an open registered call waits again without asking", async () => {
     const seen: AskRequest[] = [];
-    const held = heldCall({ callId: "r1/lead", tool: "ask", deadline: "2026-10-24T00:00:00.000Z" });
-    const { recorded, caps } = capsWith([held], askTools(seen));
+    const own = ownCall({ callId: "r1/lead", tool: "ask", deadline: "2026-10-24T00:00:00.000Z" });
+    const { recorded, caps } = capsWith([own], askTools(seen));
     expect(await new ToolNode("lead", { toolId: "ask" }).forward({ prompt: "?" }, caps)).toEqual(
       new Pending(["r1/lead"]),
     );
@@ -416,7 +416,7 @@ describe("ask", () => {
   });
 
   test("an ask closed timed_out returns null for Optional(T) and fails tool.timeout otherwise, no output: included", async () => {
-    const held = heldCall({
+    const own = ownCall({
       callId: "r1/lead",
       tool: "ask",
       state: "closed",
@@ -426,11 +426,11 @@ describe("ask", () => {
     const tools = askTools([]);
     const optional = new ToolNode("lead", { toolId: "ask" });
     optional.outputContract = new ValueContract(APPROVAL.replace({ nullable: true }));
-    expect(await optional.forward({ prompt: "?" }, capsWith([held], tools).caps)).toEqual(new Output(null));
+    expect(await optional.forward({ prompt: "?" }, capsWith([own], tools).caps)).toEqual(new Output(null));
 
     const strict = new ToolNode("lead", { toolId: "ask" });
     strict.outputContract = new ValueContract(APPROVAL);
-    const error = await rejection(strict.forward({ prompt: "?" }, capsWith([held], tools).caps));
+    const error = await rejection(strict.forward({ prompt: "?" }, capsWith([own], tools).caps));
     expect(error).toBeInstanceOf(ToolTimeoutError);
     expect((error as Error).message).toBe(
       "TOOL node 'lead' (ask): nobody answered by 2026-10-24T00:00:00.000Z; declare `output: !Optional(...)` to route on a timeout",
@@ -439,13 +439,13 @@ describe("ask", () => {
 
     // No `output:` reads as `str`, which a timeout can't give.
     const free = new ToolNode("lead", { toolId: "ask" });
-    expect(await rejection(free.forward({ prompt: "?" }, capsWith([held], tools).caps))).toBeInstanceOf(ToolTimeoutError);
+    expect(await rejection(free.forward({ prompt: "?" }, capsWith([own], tools).caps))).toBeInstanceOf(ToolTimeoutError);
   });
 
   test("ask's waitResultStep checks the answer type without null", () => {
     const node = new ToolNode("lead", { toolId: "ask" });
     node.outputContract = new ValueContract(APPROVAL.replace({ nullable: true }));
-    const view = heldCall({ callId: "r1/lead", tool: "ask" });
+    const view = ownCall({ callId: "r1/lead", tool: "ask" });
     expect(() => node.waitResultStep(view, { output: null })).toThrow(TypeCheckError);
     // With no declared output null is still refused: it means nobody answered in time.
     const free = new ToolNode("lead", { toolId: "ask" });

@@ -185,7 +185,7 @@ import {
 import { Skill } from "./skills/catalog.ts";
 import { isAlreadyOpenError, isMcpServer, type McpServer, openTogether } from "./tools/mcp.ts";
 import { ASK, ASK_USER, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "./tools/context.ts";
-import { type BeforeToolCall, gateOf, type ToolSource } from "./tools/gate.ts";
+import { type BeforeToolCall, gateOf, isToolSource, type ToolSource } from "./tools/gate.ts";
 import {
   checkVisibleNames,
   expandGrants,
@@ -2578,10 +2578,12 @@ function stateArguments(state: RunState, call: Call): RecordedCall {
 
 /**
  * What `pending` step `step` recorded: its arguments (`pendingArguments`, which reads its reply by
- * step number through `stepAt`), its question, and a hold's source.
+ * step number through `stepAt`), its question, and a hold's source as a frozen copy, since the
+ * step may be the run state's own.
  */
 function recordedCall(stepAt: (n: number) => Readonly<JsonObject> | undefined, step: Readonly<JsonObject>): RecordedCall {
-  const source = step["held"] === true ? (step["source"] as unknown as ToolSource) : null;
+  const recorded = step["source"];
+  const source = step["held"] === true && isToolSource(recorded) ? Object.freeze({ ...recorded }) : null;
   return { arguments: pendingArguments(stepAt, step), ask: askQuestion(step), source };
 }
 
@@ -2725,8 +2727,8 @@ export interface RunInspection {
   readonly waits: readonly WaitInfo[];
   /**
    * Whether a `waiting` run has a waiting node it can wake now (every call it waits on is
-   * settled); `false` for any other status. A host also advances a waiting run once `wakeAt` is
-   * due, though `ready` is still `false`.
+   * settled, or a held call it waits on is no longer open); `false` for any other status. A host
+   * also advances a waiting run once `wakeAt` is due, though `ready` is still `false`.
    */
   readonly ready: boolean;
   /**

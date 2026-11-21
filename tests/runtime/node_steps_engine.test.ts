@@ -766,6 +766,37 @@ describe("NodeSteps.evaluationsSince counts the node's starts and wakes after a 
     await built.run();
     expect(seen).toEqual(["node 'work' has no step 1"]);
   });
+
+  test("NodeSteps.evaluationsAfter counts starts and wakes after a record, and answeredAt gives the record a host's answer is", async () => {
+    /** A `Rewoken` that also reads, at each evaluation, both readers for each step and call it read. */
+    class Reread extends Rewoken {
+      readonly reads: unknown[] = [];
+
+      override forward(inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
+        const steps = caps.steps!;
+        const seqs = steps.prior.map((_, index) => steps.seqOf(index + 1));
+        const pending = steps.prior.flatMap((step) => (step["kind"] === "pending" ? [String(step["call_id"])] : []));
+        const answers = steps.prior.flatMap((step, index) => (step["kind"] === "tool_result" ? [seqs[index]] : []));
+        this.reads.push([
+          seqs.map((seq, index) => steps.evaluationsAfter(seq) === steps.evaluationsSince(index + 1)),
+          pending.map((callId) => steps.answeredAt(callId)),
+          answers,
+        ]);
+        return super.forward(inputs, caps);
+      }
+    }
+    const node = new Reread("work");
+    const run = single(node);
+    node.answer = (callId) => run.deliver({ kind: "complete", callId, result: { output: "yes" } });
+    await run.run();
+    expect(run.state.result).toBeInstanceOf(RunSucceeded);
+    const reads = node.reads as [boolean[], (number | null)[], number[]][];
+    expect(reads.map(([agree]) => agree)).toEqual([[], [true, true, true], [true, true, true, true, true, true]]);
+    // Each call the host answered reads as the seq of its tool_result step.
+    expect(reads.map(([, answeredAt]) => answeredAt)).toEqual(reads.map(([, , answers]) => answers));
+    expect(reads[2]![2]).toHaveLength(2);
+    expect([new NodeSteps(1, [], () => 1).evaluationsAfter(5), new NodeSteps(1, [], () => 1).answeredAt("c")]).toEqual([1, null]);
+  });
 });
 
 test("a node's own step that says held: true publishes no CallHeld", async () => {

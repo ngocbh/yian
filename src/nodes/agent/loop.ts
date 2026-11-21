@@ -696,15 +696,18 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
  * (`NodeSteps.seqOf`), so a replay decides as an earlier one did. A call outside the group is
  * skipped before its check.
  *
- * @param after For the calls after a reply's holds (`replayHeldCalls`): they start at `from`, and
- *   the first evaluation after the last hold's `answer` ran them as live, so it stands for the
- *   reply's own start, and each call's attempts count from the answer.
+ * @param after For the calls after a reply's holds (`replayHeldCalls`): they start at `from`; the
+ *   evaluation `runner` (as `laterRunner` counts it) ran them as live, so it stands for the reply's
+ *   own start; and each call's attempts count from the last hold's `answer`.
  * @returns Whether a host interrupt skipped calls of this reply, when it was live (a recorded
  *   `skipped` result) or now.
  * @throws A stop's reason, a faulted check's error (`failCall`), or what a call sent again throws
  *   (`resendCall`).
  */
-async function replayCalls(turn: ToolTurn, after: { from: number; answer: number } | null = null): Promise<boolean> {
+async function replayCalls(
+  turn: ToolTurn,
+  after: { from: number; answer: number; runner: number } | null = null,
+): Promise<boolean> {
   const { steps } = turn;
   const resumesSince = turn.ctx.steps?.resumesSince ?? (() => 0);
   const from = after?.from ?? 0;
@@ -713,7 +716,7 @@ async function replayCalls(turn: ToolTurn, after: { from: number; answer: number
   const own =
     after === null
       ? (m: number) => resumesSince(m) === resumesSince(turn.n)
-      : (m: number) => evaluationsSince(turn, m) === evaluationsSince(turn, after.answer) - 1;
+      : (m: number) => evaluationsSince(turn, m) === after.runner - 1;
   // The group the reply's own start was running at its cut: not reached yet, still taking safe
   // calls, or ended. Set in `joins`, so declared wide: an initializer alone would narrow it.
   let running = "ahead" as "ahead" | "open" | "ended";
@@ -795,12 +798,10 @@ async function replayCalls(turn: ToolTurn, after: { from: number; answer: number
  *    interrupt is pending, so the node wakes at once to run the waiting calls.
  * 3. A held call with no result is pended again while open, or gets the closer of the interrupt
  *    that closed it.
- * 4. The calls after every hold's group never ran when no answer decided a hold, a record closed
- *    one (its interrupt stays pending until honored, and nothing after it starts), or this is the
- *    first evaluation after the last answer: they run as live (`runToolCalls`), their attempts
- *    counting from the answer, or are skipped with a host interrupt pending, or were skipped
- *    already. Otherwise the first evaluation after the answer ran them, and `replayCalls` replays
- *    them from its records.
+ * 4. The calls after every hold's group were run as live by the evaluation `laterRunner` finds,
+ *    and `replayCalls` replays them from its records. When none ran them, they run as live now
+ *    (`runToolCalls`), their attempts counting from the last answer, or are skipped with a host
+ *    interrupt pending, or were skipped already.
  * 5. Any other call keeps its result, or is answered by its view (`answerUnrecorded`). One with no
  *    record is in a hold's group, since the groups before a hold's ran to their end, so it may have
  *    started with the hold: it is sent again or closed, never skipped. Its attempts count from the
@@ -823,11 +824,10 @@ async function replayHeldCalls(turn: ToolTurn, holds: ReplyHolds): Promise<boole
       // An interrupt skipped the calls from here on, live or as it was honored; a cut can land
       // among the skips, so the later calls without one are skipped now.
       if (turn.steps.recordedResult(turn.n, call.id)?.closed === "skipped") return skipFrom(turn, index + 1);
-      const answer = holds.decidedAt;
-      const ranAfter = answer !== null && !holds.closed && evaluationsSince(turn, answer) > 1;
-      if (ranAfter) return await replayCalls(turn, { from: index, answer });
+      const runner = laterRunner(turn, holds, by);
+      if (runner !== null) return await replayCalls(turn, { from: index, answer: holds.decidedAt!, runner });
       if (by !== null) return skipFrom(turn, index);
-      return await runToolCalls(turn, { from: index, attemptSince: answer });
+      return await runToolCalls(turn, { from: index, attemptSince: holds.decidedAt });
     }
     const callId = agentCallId(turn, index)!;
     const result = turn.steps.recordedResult(turn.n, call.id);
@@ -952,6 +952,44 @@ function replyHolds(turn: ToolTurn): ReplyHolds {
   const waitAfter = Math.min(...[...undecided].map((index) => ends.get(index)!));
   const decidedAt = answers.size === 0 ? null : Math.max(...answers.values());
   return { ends, answers, undecided, closed, waitAfter, lastEnd: Math.max(-1, ...ends.values()), decidedAt };
+}
+
+/**
+ * Return the evaluation that ran the calls after every hold's group as live, as the number of the
+ * node's evaluations that began at or after it (this one counting 1, so at least 2); `null` when
+ * none did.
+ *
+ * No call after a hold's group starts before every hold is decided, and none after a hold a record
+ * closed. Of the evaluations after the last answer, the first one that got past every call up to
+ * the last group's end ran them, and any later one only sends cut calls again. An evaluation got
+ * past a call when it had the call's result, wrote it, or found it open: registered before the
+ * evaluation began, and settled after (the run knows when an interrupt closed a call and when a
+ * flow's scope or a host answered it; any other close counts as after). One that began with the
+ * pending interrupt skipped them instead.
+ */
+function laterRunner(turn: ToolTurn, holds: ReplyHolds, by: number | null): number | null {
+  const answer = holds.decidedAt;
+  if (answer === null || holds.closed) return null;
+  const steps = turn.ctx.steps!;
+  /** Whether the evaluation `rank` evaluations back got past call `index`. */
+  const passed = (rank: number, index: number): boolean => {
+    const call = turn.calls[index]!;
+    const callId = agentCallId(turn, index)!;
+    const result = turn.steps.recordedResult(turn.n, call.id);
+    if (result !== null && rank <= evaluationsSince(turn, result.n) + 1) return true;
+    const registered = turn.steps.recordedPending(callId);
+    if (registered === null || rank > evaluationsSince(turn, registered) + 1) return false;
+    const view = steps.calls.find((each) => each.callId === callId);
+    // Open now, or a host's answer, which came while it was open.
+    if (view?.state === "open" || (view?.state === "answered" && view.scope === null)) return true;
+    const settled = view?.state === "answered" ? steps.answeredAt(callId) : view?.closedReason === "interrupted" ? by : null;
+    return settled === null || rank > steps.evaluationsAfter(settled);
+  };
+  for (let rank = evaluationsSince(turn, answer); rank > 1; rank--) {
+    const past = turn.calls.every((_, index) => index > holds.lastEnd || holds.ends.has(index) || passed(rank, index));
+    if (past) return by !== null && steps.evaluationsAfter(by) >= rank ? null : rank;
+  }
+  return null;
 }
 
 /**

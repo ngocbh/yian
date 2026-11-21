@@ -21,7 +21,7 @@
 
 import { AsyncResource } from "node:async_hooks";
 
-import { GrowthRejected } from "../compile/model.ts";
+import { END_ID, GrowthRejected } from "../compile/model.ts";
 import { addNote, type Failure, type FailureCode, type OriginRef, reprText } from "../diagnostics.ts";
 import {
   type ConsoleLine,
@@ -731,6 +731,10 @@ export class FlowEngine {
     // The node reads its calls on every evaluation, so a node holding a call reuses it instead of
     // calling its handler again after a wake or a crash.
     const calls = callViews(state, nodeId);
+    const evaluationsAfter = (seq: number): number => {
+      const after = (seqs: readonly number[] | undefined) => (seqs ?? []).filter((at) => at > seq).length;
+      return after(state.nodeStartSeqs.get(nodeId)) + after(state.nodeWakeSeqs.get(nodeId));
+    };
     const stepSeq = (n: number): number => {
       const seq = state.nodeStepSeqs.get(nodeId)?.[n - 1];
       if (seq === undefined) throw new YianRangeError(`node ${reprText(nodeId)} has no step ${String(n)}`);
@@ -754,10 +758,13 @@ export class FlowEngine {
           return (state.nodeStartSeqs.get(nodeId) ?? []).filter((start) => start > seq).length;
         },
         seqOf: stepSeq,
-        evaluationsSince: (n) => {
-          const seq = stepSeq(n);
-          const after = (seqs: readonly number[] | undefined) => (seqs ?? []).filter((at) => at > seq).length;
-          return after(state.nodeStartSeqs.get(nodeId)) + after(state.nodeWakeSeqs.get(nodeId));
+        evaluationsSince: (n) => evaluationsAfter(stepSeq(n)),
+        evaluationsAfter,
+        answeredAt: (callId) => {
+          const call = state.waits.calls.get(callId);
+          if (call?.nodeId !== nodeId || call.state !== "answered") return null;
+          // A flow call's END answers it; the agent's `tool_result` only records that answer.
+          return call.scope === null ? call.resultSeq : (state.producers.get(`${call.scope}/${END_ID}`) ?? null);
         },
         // Read on demand, so a node that never asks does no more work per start.
         flowCalls: () => enclosingFlowCalls(state, nodeId),

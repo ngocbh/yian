@@ -40,7 +40,7 @@ import { ASK, ASK_USER, isPending, SLEEP, TAKE, ToolContext, toolCallId } from "
 import { isToolCheckError, ToolCheckError, toolErrorKinds } from "./errors.ts";
 import { FunctionTool, isFunctionTool, type StandardIssue, type StandardResult } from "./function_tools.ts";
 import type { BeforeToolCall, ToolSource } from "./gate.ts";
-import { GrantError, type GrantScope, type NodeScope, nodeScope, visibleToolName } from "./grants.ts";
+import { GrantError, type GrantScope, type NodeScope, nodeScope, nodeScopeKey, visibleToolName } from "./grants.ts";
 import { isMcpServer, type McpServer } from "./mcp.ts";
 import type { StartedToolModule } from "./modules.ts";
 import { inputTypeFromJsonSchema } from "./types.ts";
@@ -789,15 +789,21 @@ export class ToolSet {
   }
 
   /**
-   * @internal Return where the tool `ref` names comes from, frozen, as `beforeToolCall` sees it: a
-   * host tool (`group` `null` for a top-level or registry tool) or an MCP server's tool, each by
-   * its own name; `null` for a node's own tool (`withNodeScope`).
+   * @internal Return where the tool `ref` names comes from, frozen, as `beforeToolCall` sees it,
+   * found as `resolve` finds the tool: a node's own tool (`withNodeScope`) by the source its node
+   * scope names (`NodeScope.sources`); else a host tool (`group` `null` for a top-level or registry
+   * tool, the ask handler included) or an MCP server's tool, each by its own name.
    *
-   * @throws As `resolve` throws.
+   * @throws As `resolve` throws, and RangeError for a node's own tool when its scope names no
+   *   sources, as a TOOL node's doesn't (`withNodeScope` refuses a scope that names some, not all).
    */
-  sourceOf(ref: ToolRef): ToolSource | null {
+  sourceOf(ref: ToolRef): ToolSource {
     const { tool, group, node } = this.locate(ref);
-    if (node) return null;
+    if (node) {
+      const own = this.ownTools?.sources?.get(nodeScopeKey(group, tool.name));
+      if (own === undefined) throw new YianRangeError(`this node's tool ${reprText(visibleToolName(group, tool.name))} has no source`);
+      return Object.freeze({ ...own });
+    }
     const source: ToolSource =
       group !== null && this.serverKeys.has(group)
         ? { kind: "mcp", server: group, tool: tool.name }
@@ -860,21 +866,28 @@ export class ToolSet {
 
   /**
    * @internal Return a copy that also holds one node's own tools (`NodeScope`), such as its
-   * memories' groups, the flows it grants and its tool modules' stand-ins, with their identities,
-   * in place of any this set held. A ref `{group, name}` to a group of them, and a bare name of a
-   * top-level one, resolve to it before any tool of this set; a bare name never reaches a group's
-   * tool. `scopes()` tries them first. The copy keeps this set's run, signal, context, tools and
-   * modules.
+   * memories' groups, the flows it grants and its tool modules' stand-ins, with their identities
+   * and sources, in place of any this set held. A ref `{group, name}` to a group of them, and a
+   * bare name of a top-level one, resolve to it before any tool of this set; a bare name never
+   * reaches a group's tool. `scopes()` tries them first. The copy keeps this set's run, signal,
+   * context, tools and modules.
    *
-   * @throws {RangeError} A group holds two tools of one name, two top-level tools share a name, or a
-   *   name is both a group and a top-level tool.
+   * @throws {RangeError} A group holds two tools of one name, two top-level tools share a name, a
+   *   name is both a group and a top-level tool, or the scope names sources but none for an entry.
    */
   withNodeScope(scope: NodeScope<FunctionTool>): this {
+    const { sources } = scope;
+    // A scope naming sources is one an agent's calls go through, so it fails here, not at a call.
+    const requireSource = (group: string | null, name: string) => {
+      if (sources === undefined || sources.has(nodeScopeKey(group, name))) return;
+      throw new YianRangeError(`this node's tool ${reprText(visibleToolName(group, name))} has no source`);
+    };
     const groups = new Map<string, readonly FunctionTool[]>();
     for (const [group, tools] of scope.groups) {
       const names = new Set<string>();
       for (const { name } of tools) {
         if (names.has(name)) throw new YianRangeError(`this node's group ${reprText(group)} holds ${reprText(name)} twice`);
+        requireSource(group, name);
         names.add(name);
       }
       groups.set(group, [...tools]);
@@ -883,10 +896,11 @@ export class ToolSet {
     for (const { name } of scope.tools) {
       if (names.has(name)) throw new YianRangeError(`this node's tools hold ${reprText(name)} twice`);
       if (groups.has(name)) throw new YianRangeError(`this node holds ${reprText(name)} as a group and a tool`);
+      requireSource(null, name);
       names.add(name);
     }
     const copy = ToolSet.#copy(this);
-    const own = { groups, tools: [...scope.tools], identities: scope.identities };
+    const own = { groups, tools: [...scope.tools], identities: scope.identities, sources: scope.sources };
     copy.ownTools = groups.size === 0 && names.size === 0 ? null : own;
     return copy;
   }

@@ -47,6 +47,7 @@ import { BindingError, copyValue } from "../nodes/binding.ts";
 import {
   type Binding,
   type CallView,
+  type EnclosingFlowCall,
   fileFieldsType,
   isExactly,
   iterSourceStrings,
@@ -1870,13 +1871,20 @@ export function prepareFlowCallFailed(state: RunState, nodeId: string, callId: s
  * The innermost grown flow call scope holding node `nodeId`, with its call; `null` for a node in
  * no such scope.
  */
-function enclosingFlowCall(state: RunState, nodeId: string): { callId: string; scope: string } | null {
-  let found: { callId: string; scope: string } | null = null;
+function enclosingFlowCall(state: RunState, nodeId: string): EnclosingFlowCall | null {
+  return enclosingFlowCalls(state, nodeId).at(-1) ?? null;
+}
+
+/**
+ * The grown flow call scopes holding node `nodeId`, each with its call, outermost first: each
+ * scope's id is a prefix of the next's.
+ */
+export function enclosingFlowCalls(state: RunState, nodeId: string): EnclosingFlowCall[] {
+  const found: EnclosingFlowCall[] = [];
   for (const [callId, scope] of state.flowScopes) {
-    if (!nodeId.startsWith(`${scope}/`) || !state.flow.nodes.has(`${scope}/${START_ID}`)) continue;
-    if (found === null || scope.length > found.scope.length) found = { callId, scope };
+    if (nodeId.startsWith(`${scope}/`) && state.flow.nodes.has(`${scope}/${START_ID}`)) found.push({ callId, scope });
   }
-  return found;
+  return found.sort((a, b) => a.scope.length - b.scope.length);
 }
 
 /** The ids of the registered calls whose nodes are in flow call scope `scope`. */

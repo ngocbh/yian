@@ -533,13 +533,15 @@ export class AgentSteps {
 
   /**
    * Return why `call`'s `pending` step can't be recorded: it is over the run's
-   * `YIAN_MAX_EVENT_BYTES`, as a flow call's large arguments can make it; `null` when it fits.
+   * `YIAN_MAX_EVENT_BYTES`, as a flow call's large arguments can make it; `null` when it fits. The
+   * size counts the host's note, which the text says, so the model knows it isn't all its own.
    */
   pendingTooLarge(call: PendingFields): string | null {
     const max = this.#steps?.maxEventBytes;
     const size = eventBytes(this.#pendingStep(call));
     if (max === undefined || size <= max) return null;
-    return `Arguments for ${call.tool} make a call of ${size} bytes, over the run's limit of ${max} (YIAN_MAX_EVENT_BYTES); send less.`;
+    const note = call.note == null ? "" : ` with the host's ${new TextEncoder().encode(call.note).length}-byte note on it`;
+    return `Arguments for ${call.tool} make a call of ${size} bytes${note}, over the run's limit of ${max} (YIAN_MAX_EVENT_BYTES); send less.`;
   }
 
   /** The `pending` step `pending` writes for `call`. */

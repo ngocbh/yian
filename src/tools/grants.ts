@@ -5,13 +5,15 @@
  * (`{github: [search, create_issue]}`). A tool reached through a group shows to the model as
  * `<group>_<tool>`; a tool granted by its own name keeps it.
  *
- * Knows about: `diagnostics`, typesys and `llm/messages` (a request's tool specs).
+ * Knows about: `diagnostics`, typesys, `llm/messages` (a request's tool specs) and the tool
+ * sources of `gate`.
  */
 
 import { reprText } from "../diagnostics.ts";
 import { ToolSpec } from "../llm/messages.ts";
 import { YianRangeError } from "../typesys/errors.ts";
 import { isRecord } from "../typesys/values.ts";
+import type { ToolSource } from "./gate.ts";
 
 /** One authored grant: a tool or a group by name, or some tools of a group. */
 export type ToolGrant =
@@ -151,11 +153,25 @@ export interface NodeScope<T extends { readonly name: string } = { readonly name
   readonly groups: ReadonlyMap<string, readonly T[]>;
   readonly tools: readonly T[];
   /**
-   * The identity of each entry that has its own, by `JSON.stringify([group, name])` (`group` is
-   * `null` for a top-level tool): a module tool's file and export, which two aliases of one file
-   * share. Every other entry's identity is its group and name.
+   * The identity of each entry that has its own, by `nodeScopeKey`: a module tool's file and
+   * export, which two aliases of one file share. Every other entry's identity is its group and name.
    */
   readonly identities?: ReadonlyMap<string, string>;
+  /**
+   * Where each entry's tool comes from, by `nodeScopeKey`, as the host's check before a model-made
+   * call sees it. The scope an agent's calls go through names one for every entry.
+   */
+  readonly sources?: ReadonlyMap<string, ToolSource>;
+}
+
+/** A node scope that names every entry's source, as one an agent's calls go through does. */
+export type SourcedNodeScope<T extends { readonly name: string }> = NodeScope<T> & {
+  readonly sources: ReadonlyMap<string, ToolSource>;
+};
+
+/** The key a node scope's `identities` and `sources` name an entry by: `group` is `null` for a top-level tool. */
+export function nodeScopeKey(group: string | null, name: string): string {
+  return JSON.stringify([group, name]);
 }
 
 /**
@@ -175,7 +191,7 @@ export function nodeScope(own: NodeScope): GrantScope {
     groupsHolding: () => [],
     groupNames: () => [...groups.keys()],
     identity: (group, tool) => {
-      const named = JSON.stringify([group, tool]);
+      const named = nodeScopeKey(group, tool);
       return own.identities?.get(named) ?? named;
     },
   };

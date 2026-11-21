@@ -13,7 +13,7 @@ import { pathToFileURL } from "node:url";
 
 import { pending, ToolContext } from "../../src/tools/context.ts";
 import { isToolCheckError, toolErrorKinds } from "../../src/tools/errors.ts";
-import { nodeScope, expandGrants, parseToolGrants } from "../../src/tools/grants.ts";
+import { nodeScope, nodeScopeKey, expandGrants, parseToolGrants } from "../../src/tools/grants.ts";
 import { ToolModuleThread } from "../../src/tools/module_thread.ts";
 import { listToolModule, type ListedTool, type ToolModuleListing } from "../../src/tools/module_worker.ts";
 import {
@@ -115,6 +115,11 @@ test("a node scope holds a group alias's tools by export name and a one-export a
   ]);
   const visible = expandGrants(parseToolGrants(["find", "crm"], "n"), [nodeScope(scope)]).map((each) => each.visible);
   expect(visible).toEqual(["find", "crm_create", "crm_place"]);
+  // Each entry's source names its alias, the ref as written and the export.
+  expect([scope.sources.get(nodeScopeKey(null, "find")), scope.sources.get(nodeScopeKey("crm", "create"))]).toEqual([
+    { kind: "module", alias: "find", ref: "./crm.ts:lookup", export: "lookup" },
+    { kind: "module", alias: "crm", ref: "./crm.ts", export: "create" },
+  ]);
   // Each stand-in checks its export's arguments on the module's thread, which says whether the call
   // is safe, and calls the export with what the check returned.
   const handle = await find!.parametersValidator!["~standard"].validate({ id: "1" });

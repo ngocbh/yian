@@ -2,11 +2,13 @@
  * The host's check before each tool call an agent's model makes (`beforeToolCall`): it runs a call,
  * with an audit note the model never reads, or refuses it with a text the model reads as the
  * call's error. It is asked about a whole group before any of the group's calls starts, and a call
- * never starts once the node stopped or the agent took an interrupt while the hook decided.
+ * never starts once the node stopped or the agent took an interrupt while the hook decided. Every
+ * source is asked about: host, MCP, module, memory and flow tools, a refused flow call starting no
+ * flow, and the agents inside a granted flow with the flow calls enclosing them.
  */
 
 import { afterAll, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,7 +27,8 @@ import { NodeStepRecord, readRunLog } from "../../src/runtime/log.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { pending } from "../../src/tools/context.ts";
 import { tool } from "../../src/tools/function_tools.ts";
-import { type BeforeToolCall, GATE_FAILED_TEXT, type GatedCall, type GateDecision } from "../../src/tools/gate.ts";
+import { type BeforeToolCall, GATE_FAILED_TEXT, type GatedCall, type GateDecision, type ToolSource } from "../../src/tools/gate.ts";
+import { nodeScopeKey } from "../../src/tools/grants.ts";
 import { registerTool, TOOL_REGISTRY, ToolSet } from "../../src/tools/registry.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { gated } from "../helpers/gate.ts";
@@ -297,7 +300,7 @@ test("the hook isn't asked about load_skill, ask_user, a call refused before its
   expect(ran).toEqual([]);
 });
 
-test("the hook isn't asked about a TOOL node's call or a map's", async () => {
+test("the hook isn't asked about a TOOL node's call, a map's or a loop's", async () => {
   const { asked, hook } = asking();
   const flow = await loadFlow(`
 id: nodes
@@ -305,12 +308,17 @@ name: nodes
 nodes:
   direct: {kind: call, call: lookup, input: {q: one}}
   each: {kind: map, over: [a, b], call: lookup, input: {q: "\${item}"}}
+  again: {kind: loop, call: echo, input: {q: two}, times: 1}
 output: \${each.output}
 `);
   const ran: string[] = [];
-  const result = await runFlow(flow, {}, gated({ env, tools: hostTools(ran) }, hook));
+  const echo = tool({ name: "echo", description: "Echo.", parameters: { type: "object", properties: { q: { type: "string" } } }, execute: (args) => {
+    ran.push("echo");
+    return { q: String(args.q) };
+  } });
+  const result = await runFlow(flow, {}, gated({ env, tools: { ...hostTools(ran), echo } }, hook));
   expect(result.status, result.failure?.message).toBe("succeeded");
-  expect([asked, ran]).toEqual([[], ["lookup", "lookup", "lookup"]]);
+  expect([asked, ran.sort()]).toEqual([[], ["echo", "lookup", "lookup", "lookup"]]);
 });
 
 test("an interrupt while the hook decides leaves the group unrun and skipped, even when the decision then runs it", async () => {
@@ -467,7 +475,11 @@ test("a resend with an interrupt pending is closed crashed without asking the ho
   expect(shape(log)).toEqual(["model_call", "crashed", "interrupted"]);
 });
 
-/** A flow whose agent grants a module tool `price`, the memory tool `lessons_append`, the flow `shout` and `lookup`. */
+/**
+ * A flow whose agent grants the module tools `price` (one export) and `crm_rate` (a group's), the
+ * memory tool `lessons_append`, the flow `shout`, the library's def `billing_quote`, the `uses:`
+ * flow `kid` and `lookup`.
+ */
 const OWN_FLOW = `
 id: own
 name: own
@@ -476,6 +488,9 @@ input:
   lessons: !FileMemory
 uses:
   price: "./quote.ts:quote"
+  crm: ./quote.ts
+  billing: ./billing
+  kid: ./kid/child
 defs:
   shout:
     description: Shout the text back.
@@ -495,34 +510,376 @@ nodes:
     input:
       lessons: \${input.lessons}
     prompt: go
-    tools: [price, {lessons: [append]}, shout, lookup]
+    tools: [price, {crm: [rate]}, {lessons: [append]}, shout, {billing: [quote]}, kid, lookup]
 output: \${reply.output}
 `;
 
-test.each<[string, string, JsonObject]>([
-  ["a module tool", "price", { id: "1" }],
-  ["a memory tool", "lessons_append", { path: "a.md", text: "x" }],
-  ["a flow tool", "shout", { text: "hi" }],
-])("under a gate, a call of %s, which the hook can't check yet, fails the agent before anything of it runs", async (_, name, args) => {
-  const marker = join(dir, "quoted");
-  const execute = `() => { appendFileSync(${JSON.stringify(marker)}, "."); return 1; }`;
-  const parameters = '{ type: "object", properties: { id: { type: "string" } } }';
-  writeFileSync(
-    join(dir, "quote.ts"),
-    `import { appendFileSync } from "node:fs";\nexport const quote = { name: "quote", description: "Quote.", parameters: ${parameters}, execute: ${execute} };\n`,
-  );
+/** Where the tools of `quote.ts` and `kid/quote.ts` note each run. */
+const quoted = join(dir, "quoted");
+
+/** A module's source exporting tools `names`, each noting its run in `quoted` as `<note> `. */
+const quoteModule = (names: readonly string[], note: (name: string) => string = (name) => name) =>
+  `import { appendFileSync } from "node:fs";\n` +
+  names
+    .map((name) => `export const ${name} = { name: "${name}", description: "${name}.", parameters: { type: "object", properties: { id: { type: "string" } } }, ` +
+      `execute: () => { appendFileSync(${JSON.stringify(quoted)}, "${note(name)} "); return 1; } };\n`)
+    .join("");
+
+/**
+ * Run `OWN_FLOW` with `model`, gated by `hook`, once its files are written: `quote.ts`, whose
+ * tools `quote` and `rate` note each run in `quoted` (cleared first), the library `billing`, and
+ * the flow `kid/child.yaml`, whose agent `leaf` grants its own module's tool `price`.
+ */
+async function ownRun(model: ScriptedModel, hook: BeforeToolCall, extra: { env?: typeof env } = {}) {
+  rmSync(quoted, { force: true });
+  writeFileSync(join(dir, "quote.ts"), quoteModule(["quote", "rate"]));
+  mkdirSync(join(dir, "kid"), { recursive: true });
+  writeFileSync(join(dir, "kid", "quote.ts"), quoteModule(["quote"], () => "kid"));
+  const child = "id: child\nname: child\ndescription: Price a thing.\nllm_config: {provider: openai, model: test-model}\n" +
+    'input:\n  thing: !str\nuses:\n  price: "./quote.ts:quote"\nnodes:\n  leaf: {kind: agent, prompt: leaf, tools: [price]}\n' +
+    "output: ${leaf.output}\n";
+  writeFileSync(join(dir, "kid", "child.yaml"), child);
+  const billing = "id: billing\nname: billing\ndefs:\n  quote:\n    description: Price an order.\n    input: {qty: !int}\n" +
+    "    kind: code\n    code: return inputs.qty * 3\n    output: !int\n";
+  writeFileSync(join(dir, "billing.yaml"), billing);
   const memory = new FakeMemory(() => new RecordingSession(fileInfo("t/lessons")));
+  const log = freshLog();
+  const ran: string[] = [];
+  const options = { env: extra.env ?? env, log, runId: "r", tools: hostTools(ran), models: serving(model) };
+  const result = await runFlow(await loadFlow(OWN_FLOW, { searchPaths: [dir] }), { lessons: memory }, gated(options, hook));
+  const applied = memory.sessions.flatMap((session) => session.applied);
+  return { result, log, ran, applied, quotes: existsSync(quoted) ? readFileSync(quoted, "utf8") : null };
+}
+
+/** Whether the log at `log` grew a flow's scope. */
+const expanded = (log: string) => readRunLog(log).some(({ kind }) => kind === "node_expanded");
+
+test.each<[string, string, JsonObject, ToolSource]>([
+  ["a one-export module tool", "price", { id: "1" }, { kind: "module", alias: "price", ref: "./quote.ts:quote", export: "quote" }],
+  ["a module group's tool", "crm_rate", { id: "1" }, { kind: "module", alias: "crm", ref: "./quote.ts", export: "rate" }],
+  ["a memory tool", "lessons_append", { path: "a.md", text: "x" }, { kind: "memory", input: "lessons", tool: "append" }],
+  ["a flow tool", "shout", { text: "hi" }, { kind: "flow", flow: "shout", library: null }],
+  ["a library's def", "billing_quote", { qty: 2n }, { kind: "flow", flow: "quote", library: "billing" }],
+  ["a uses: flow", "kid", { thing: "x" }, { kind: "flow", flow: "kid", library: null }],
+])("the hook is asked about a call of %s with its source, and its refusal leaves the tool unrun", async (_, name, args, source) => {
+  const { asked, hook } = asking((call) => (call.tool === "lookup" ? undefined : { refuse: "Not yours." }));
+  const model = new ScriptedModel([callReply([name, args, "c1"], ["lookup", { q: "x" }, "c2"]), textReply("done")], CONFIG);
+  const { result, log, ran, applied, quotes } = await ownRun(model, hook);
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const n = shape(log).indexOf("model_call") + 1;
+  expect(asked).toEqual([
+    { callId: `r/reply/${n}/0`, node: "reply", tool: name, source, arguments: args, scopes: [], attempt: 1 },
+    { callId: `r/reply/${n}/1`, node: "reply", tool: "lookup", source: { kind: "host", group: null, tool: "lookup" }, arguments: { q: "x" }, scopes: [], attempt: 1 },
+  ]);
+  expect(Object.isFrozen(asked[0]!.source)).toBe(true);
+  // A refused flow call grows no scope.
+  expect([ran, quotes, applied, expanded(log)]).toEqual([["lookup"], null, [], false]);
+  expect(read(model, 1)).toEqual([
+    ["c1", "Not yours.", true],
+    ["c2", "lookup:x", false],
+  ]);
+});
+
+/** A flow whose agent `reply` grants the def `shout`, a code node. */
+const SHOUT_FLOW = `
+id: shouting
+name: shouting
+llm_config: {provider: openai, model: test-model}
+defs:
+  shout:
+    description: Shout the text back.
+    input: {text: !str}
+    kind: code
+    code: return inputs.text.toUpperCase()
+    output: !str
+nodes:
+  reply: {kind: agent, prompt: go, tools: [shout]}
+output: \${reply.output}
+`;
+
+/** The flow call scopes node `node`'s pending steps name in the log at `log`. */
+const scopesOf = (log: string, node = "reply") =>
+  stepsOf(log, node).flatMap((step) => (step["kind"] === "pending" && typeof step["scope"] === "string" ? [step["scope"]] : []));
+
+/** The `model_call` steps the log at `log` holds, of any node. */
+const modelCalls = (log: string) =>
+  readRunLog(log).filter(({ record }) => record instanceof NodeStepRecord && record.step["kind"] === "model_call").length;
+
+test("a flow call the hook fails on takes no scope number: the allowed call after it is #0, and a resume cut at any record agrees", async () => {
+  const flow = await loadFlow(SHOUT_FLOW);
+  const replies = () => [callReply(["shout", { text: "no" }, "c1"], ["shout", { text: "yes" }, "c2"]), textReply("done")];
+  const hook: BeforeToolCall = (call) => {
+    if (call.arguments["text"] === "no") throw new Error("boom");
+  };
+  const quiet = <T>(fn: () => Promise<T>) => withWarnings(() => {}, fn);
+  const run = (log: string, model: ScriptedModel) => runFlow(flow, {}, gated({ env, log, runId: "r", models: serving(model) }, hook));
+  const uncut = freshLog();
+  const model = new ScriptedModel(replies(), CONFIG);
+  expect((await quiet(() => run(uncut, model))).status).toBe("succeeded");
+  expect([shape(uncut).slice(0, 3), scopesOf(uncut)]).toEqual([["model_call", "refused", "pending"], ["reply/shout#0"]]);
+  expect(read(model, 1)).toEqual([
+    ["c1", GATE_FAILED_TEXT, true],
+    ["c2", "YES", false],
+  ]);
+  for (let k = through(uncut, "model_call"); k < readRunLog(uncut).length; k++) {
+    const log = freshLog();
+    await quiet(() => crashAfter(k, () => run(log, new ScriptedModel(replies(), CONFIG))));
+    const rest = new ScriptedModel(replies().slice(modelCalls(log)), CONFIG);
+    const done = await quiet(() => advance(gated({ env, log, models: serving(rest) }, hook)));
+    expect(done.status, `cut at ${k}: ${done.failure?.message}`).toBe("succeeded");
+    expect(scopesOf(log)).toEqual(["reply/shout#0"]);
+  }
+});
+
+test("a crash after the hook allows a flow call, before its pending step, asks again on resume before the flow's scope grows", async () => {
+  const flow = await loadFlow(SHOUT_FLOW);
+  const replies = () => [callReply(["shout", { text: "yes" }, "c1"]), textReply("done")];
+  const uncut = freshLog();
+  await runFlow(flow, {}, gated({ env, log: uncut, models: serving(new ScriptedModel(replies(), CONFIG)) }, () => undefined));
+  const log = freshLog();
+  const asked: [number, boolean][] = [];
+  const hook: BeforeToolCall = (call) => void asked.push([call.attempt, expanded(log)]);
+  // Cut after the reply's model_call: the hook allowed the call, and its pending step is lost.
+  await crashAfter(through(uncut, "model_call"), () => runFlow(flow, {}, gated({ env, log, models: serving(new ScriptedModel(replies(), CONFIG)) }, hook)));
+  expect([asked, shape(log)]).toEqual([[[1, false]], ["model_call"]]);
+  const done = await advance(gated({ env, log, models: serving(new ScriptedModel(replies().slice(1), CONFIG)) }, hook));
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect(asked).toEqual([[1, false], [2, false]]);
+  expect([shape(log), scopesOf(log)]).toEqual([["model_call", "pending", "tool_result", "model_call"], ["reply/shout#0"]]);
+});
+
+test("an allowed module, memory or flow call runs with its note on its first record; the flow's answer isn't asked about", async () => {
+  const { asked, hook } = asking((call) => ({ run: true, note: `ok ${call.tool}` }));
+  const calls: [string, JsonObject, string][] = [["price", { id: "1" }, "c1"], ["lessons_append", { path: "a.md", text: "x" }, "c2"], ["shout", { text: "hi" }, "c3"]];
+  const model = new ScriptedModel([callReply(...calls), textReply("done")], CONFIG);
+  const { result, log, applied, quotes } = await ownRun(model, hook);
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect([asked.map((call) => call.tool), quotes, applied.length]).toEqual([["price", "lessons_append", "shout"], "quote ", 1]);
+  const [, price, append, flow, answer] = stepsOf(log);
+  expect([price, append]).toMatchObject([{ call_id: "c1", note: "ok price" }, { call_id: "c2", note: "ok lessons_append" }]);
+  expect(flow).toMatchObject({ kind: "pending", flow: true, scope: "reply/shout#0", note: "ok shout" });
+  // The flow's answer is the agent's, as the run shaped it: it holds no note.
+  expect(answer).toEqual({ kind: "tool_result", call_id: "c3", started_at: null, output: "HI", is_error: false });
+  expect(read(model, 1).map(([id, , isError]) => [id, isError])).toEqual([["c1", false], ["c2", false], ["c3", false]]);
+});
+
+test("an allowed flow call whose arguments are too large to record keeps its note on its error result, which counts it", async () => {
+  const model = new ScriptedModel([callReply(["shout", { text: "x".repeat(5000) }, "c1"]), textReply("done")], CONFIG);
+  const { result, log } = await ownRun(model, () => ({ run: true, note: "big" }), { env: hostEnv(dir, { YIAN_MAX_EVENT_BYTES: "2000" }) });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(stepsOf(log)[1]).toMatchObject({ kind: "tool_result", call_id: "c1", is_error: true, note: "big" });
+  const [[, content]] = read(model, 1) as [[string, string]];
+  expect(content).toMatch(/^Arguments for shout make a call of \d+ bytes with the host's 3-byte note on it, over the run's limit of 2000 /);
+  expect(expanded(log)).toBe(false);
+});
+
+test("a module tool's validator runs on its thread before the hook, which reads the model's arguments; a refused call never reaches execute", async () => {
+  const marker = join(dir, "checked");
+  const validate = `(value) => { appendFileSync(${JSON.stringify(marker)}, "checked "); return { value: { id: "default", ...value } }; }`;
+  writeFileSync(
+    join(dir, "checked.ts"),
+    `import { appendFileSync, readFileSync } from "node:fs";\nexport const quote = { name: "quote", description: "Quote.", ` +
+      `parameters: { "~standard": { version: 1, vendor: "test", validate: ${validate} } }, ` +
+      `parametersJsonSchema: { type: "object", properties: { id: { type: "string" } } }, ` +
+      `execute: (args) => { appendFileSync(${JSON.stringify(marker)}, "ran " + args.id); return 1; } };\n`,
+  );
+  const seen: string[] = [];
+  const { asked, hook } = asking((call) => {
+    seen.push(readFileSync(marker, "utf8"));
+    return call.callId.endsWith("/0") ? { refuse: "No." } : undefined;
+  });
+  const flow = await loadFlow(
+    `id: checked\nname: checked\nllm_config: {provider: openai, model: test-model}\nuses:\n  quote: "./checked.ts:quote"\n` +
+      "nodes:\n  reply: {kind: agent, prompt: go, tools: [quote]}\noutput: ${reply.output}\n",
+    { searchPaths: [dir] },
+  );
+  const model = new ScriptedModel([callReply(["quote", {}, "c1"], ["quote", {}, "c2"]), textReply("done")], CONFIG);
+  const result = await runFlow(flow, {}, gated({ env, log: freshLog(), runId: "r", models: serving(model) }, hook));
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(asked.map((call) => [call.source, call.arguments])).toEqual([
+    [{ kind: "module", alias: "quote", ref: "./checked.ts:quote", export: "quote" }, {}],
+    [{ kind: "module", alias: "quote", ref: "./checked.ts:quote", export: "quote" }, {}],
+  ]);
+  expect(seen).toEqual(["checked ", "checked checked "]);
+  expect(readFileSync(marker, "utf8")).toBe("checked checked ran default");
+});
+
+/**
+ * A flow whose agent `top` grants `outer`, whose agent `mid` grants `inner`, whose agent `leaf`
+ * calls `lookup`; then the authored call `authored` of `plain`, whose agent `solo` calls `lookup`.
+ */
+const NESTED_FLOW = `
+id: nested
+name: nested
+llm_config: {provider: openai, model: test-model}
+defs:
+  outer:
+    description: Outer.
+    nodes:
+      mid: {kind: agent, prompt: mid, tools: [inner]}
+    output: \${mid.output}
+  inner:
+    description: Inner.
+    nodes:
+      leaf: {kind: agent, prompt: leaf, tools: [lookup]}
+    output: \${leaf.output}
+  plain:
+    description: Plain.
+    input:
+      after: !str
+    nodes:
+      solo: {kind: agent, prompt: solo, tools: [lookup]}
+    output: \${solo.output}
+nodes:
+  top: {kind: agent, prompt: top, tools: [outer]}
+  authored:
+    kind: call
+    call: plain
+    input:
+      after: \${top.output}
+output: \${authored.output}
+`;
+
+/** `NESTED_FLOW`'s model replies, in the order its agents ask. */
+const nestedReplies = () => [
+  callReply(["outer", {}, "c1"]),
+  callReply(["inner", {}, "c2"]),
+  callReply(["lookup", { q: "x" }, "c3"]),
+  textReply("leaf"),
+  textReply("mid"),
+  textReply("top"),
+  callReply(["lookup", { q: "y" }, "c4"]),
+  textReply("solo"),
+];
+
+/** The flow calls enclosing `NESTED_FLOW`'s agents `mid` (`outer`) and `leaf` (both). */
+const outer = { scope: "top/outer#0", callId: "r/top/1/0" };
+const inner = { scope: "top/outer#0/mid/inner#0", callId: "r/top/outer#0/mid/1/0" };
+
+test("an agent inside a granted flow is asked with the flow calls enclosing it, outermost first; an authored call adds none", async () => {
+  const flow = await loadFlow(NESTED_FLOW);
   const { asked, hook } = asking();
   const ran: string[] = [];
+  const options = { env, log: freshLog(), runId: "r", tools: hostTools(ran), models: serving(new ScriptedModel(nestedReplies(), CONFIG)) };
+  const result = await runFlow(flow, {}, gated(options, hook));
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(asked.map(({ node, tool, scopes }) => [node, tool, scopes])).toEqual([
+    ["top", "outer", []],
+    ["top/outer#0/mid", "inner", [outer]],
+    ["top/outer#0/mid/inner#0/leaf", "lookup", [outer, inner]],
+    [asked[3]!.node, "lookup", []],
+  ]);
+  expect(asked[3]!.node).toEndWith("/solo");
+  expect(asked.every((call) => Object.isFrozen(call.scopes) && call.scopes.every(Object.isFrozen))).toBe(true);
+  expect(ran).toEqual(["lookup", "lookup"]);
+});
+
+test("a crash inside a flow call's scope asks the child again on resume, with the same scopes and its next attempt", async () => {
+  const flow = await loadFlow(NESTED_FLOW);
+  const leaf = "top/outer#0/mid/inner#0/leaf";
+  const run = (log: string, hook: BeforeToolCall, replies: Response[]) =>
+    gated({ env, log, runId: "r", tools: hostTools([]), models: serving(new ScriptedModel(replies, CONFIG)) }, hook);
+  const uncut = freshLog();
+  await runFlow(flow, {}, run(uncut, () => undefined, nestedReplies()));
+  // Cut after `leaf`'s reply, before its call's result.
+  const cut = readRunLog(uncut).findIndex(({ record }) => record instanceof NodeStepRecord && record.nodeId === leaf) + 1;
   const log = freshLog();
-  const model = new ScriptedModel([callReply([name, args, "c1"], ["lookup", { q: "x" }, "c2"]), textReply("done")], CONFIG);
-  const options = { env, log, runId: "r", tools: hostTools(ran), models: serving(model) };
-  const result = await runFlow(await loadFlow(OWN_FLOW, { searchPaths: [dir] }), { lessons: memory }, gated(options, hook));
-  expect(result.status).toBe("failed");
-  expect(result.failure!.message).toContain(`beforeToolCall can't check tool '${name}' yet`);
-  expect([asked, ran, existsSync(marker), memory.sessions.flatMap((session) => session.applied)]).toEqual([[], [], false, []]);
-  expect(shape(log)).toEqual(["model_call"]);
-  expect(readRunLog(log).some(({ kind }) => kind === "node_expanded")).toBe(false);
+  const first = asking();
+  await crashAfter(cut, () => runFlow(flow, {}, run(log, first.hook, nestedReplies())));
+  const second = asking();
+  const done = await advance(run(log, second.hook, nestedReplies().slice(modelCalls(log))));
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  const leafCalls = (asked: GatedCall[]) => asked.filter((call) => call.node === leaf).map(({ scopes, attempt }) => [scopes, attempt]);
+  expect([leafCalls(first.asked), leafCalls(second.asked)]).toEqual([[[[outer, inner], 1]], [[[outer, inner], 2]]]);
+});
+
+test("an agent inside a granted uses: flow is asked about its module tool, with the module's source and the flow's scope", async () => {
+  const { asked, hook } = asking();
+  const replies = [callReply(["kid", { thing: "x" }, "c1"]), callReply(["price", { id: "1" }, "c2"]), textReply("priced"), textReply("done")];
+  const { result, quotes } = await ownRun(new ScriptedModel(replies, CONFIG), hook);
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(asked.map(({ node, source, scopes }) => [node, source, scopes])).toEqual([
+    ["reply", { kind: "flow", flow: "kid", library: null }, []],
+    ["reply/kid#0/leaf", { kind: "module", alias: "price", ref: "./quote.ts:quote", export: "quote" }, [{ scope: "reply/kid#0", callId: "r/reply/1/0" }]],
+  ]);
+  expect(quotes).toBe("kid ");
+});
+
+test("a child agent of a flow call never runs its call when its parent's interrupt ends the scope while the hook decides", async () => {
+  const flow = await loadFlow(`
+id: helping
+name: helping
+llm_config: {provider: openai, model: test-model}
+input:
+  m: !Inbox(str)
+defs:
+  review:
+    description: Review a thing.
+    input:
+      thing: !str
+    nodes:
+      sub:
+        kind: agent
+        prompt: check
+        tools: [lookup]
+        output: !Optional(str)
+    output: \${sub.output}
+nodes:
+  helper:
+    kind: agent
+    steer_inbox: \${input.m}
+    tools: [review]
+    prompt: hi
+    output: !Optional(str)
+output: \${helper.output}
+`);
+  const askedNow = Promise.withResolvers<void>();
+  const decision = Promise.withResolvers<GateDecision>();
+  // The parent's flow call runs at once; the child's call waits on the decision.
+  const { asked, signals, hook } = asking((call) => {
+    if (call.tool === "review") return undefined;
+    askedNow.resolve();
+    return decision.promise;
+  });
+  const model = new ScriptedModel([callReply(["review", { thing: "x" }, "c1"]), callReply(["lookup", { q: "y" }, "c2"])], CONFIG);
+  const log = freshLog();
+  const ran: string[] = [];
+  const warnings: string[] = [];
+  const running = withWarnings(
+    (text) => void warnings.push(text),
+    () => runFlow(flow, {}, gated({ env, log, runId: "r", tools: hostTools(ran), models: serving(model) }, hook)),
+  );
+  await askedNow.promise;
+  await interrupt(log, "m", { env });
+  decision.resolve(undefined);
+  const result = await running;
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(warnings).toEqual([]);
+  expect(result.output).toBeNull();
+  expect(asked.map((call) => [call.node, call.tool])).toEqual([
+    ["helper", "review"],
+    ["helper/review#0/sub", "lookup"],
+  ]);
+  expect((signals[1]!.reason as Error).name).toBe("ScopeEnded");
+  expect(ran).toEqual([]);
+  expect(stepsOf(log, "helper/review#0/sub").map((step) => step["kind"])).toEqual(["model_call"]);
+});
+
+test("a node's own tool named ask_user is asked about, unlike the run's ask handler; without skills, so is one named load_skill", async () => {
+  const { asked, hook } = asking();
+  const own = (name: string) => tool({ name, description: "Own.", parameters: { type: "object", properties: {} }, execute: () => name });
+  const source = (flow: string) => ({ kind: "flow", flow, library: null }) as const;
+  const sources = new Map(["ask_user", "load_skill"].map((name) => [nodeScopeKey(null, name), source(name)]));
+  const scope = { groups: new Map(), tools: [own("ask_user"), own("load_skill")], sources };
+  const toolset = new ToolSet({ ask: () => "yes" }).withGate(hook).forRun("r").withNodeScope(scope);
+  const model = new ScriptedModel([callReply(["ask_user", {}, "c1"], ["load_skill", {}, "c2"]), textReply("done")], CONFIG);
+  const output = await direct(model, toolset, ["ask_user", "load_skill"]);
+  expect((output as { value: unknown }).value).toBe("done");
+  expect(asked.map((call) => call.source)).toEqual([source("ask_user"), source("load_skill")]);
+  expect(read(model, 1)).toEqual([
+    ["c1", "ask_user", false],
+    ["c2", "load_skill", false],
+  ]);
 });
 
 test.each<[string, BeforeToolCall | null]>([

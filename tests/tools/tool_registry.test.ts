@@ -22,7 +22,8 @@ import {
   ToolSet,
   type ToolEntry,
 } from "../../src/tools/registry.ts";
-import { asToolGrant, expandGrants } from "../../src/tools/grants.ts";
+import { asToolGrant, expandGrants, nodeScopeKey } from "../../src/tools/grants.ts";
+import type { ToolSource } from "../../src/tools/gate.ts";
 import { toolTypes } from "../../src/tools/types.ts";
 import { canonicalTypeLabel, TypeCheckError } from "../../src/typesys/values.ts";
 import { thrownClass } from "../helpers/own_errors.ts";
@@ -1041,15 +1042,20 @@ describe("withNodeScope", () => {
 });
 
 describe("sourceOf", () => {
-  test("a host tool's source names its group, null for a top-level or registry tool; a node's own tool has none", () => {
+  test("a host tool's source names its group, null for a top-level or registry tool; a node's own tool has its scope's", () => {
     registerTool("weather", topic("weather"));
-    const run = new ToolSet({ lookup: topic("lookup"), team: [topic("a"), topic("team")] });
-    const local = run.withNodeScope({ groups: new Map([["lessons", [topic("read")]]]), tools: [topic("quote")] });
+    const read = { kind: "memory", input: "lessons", tool: "read" } as const;
+    const quote = { kind: "module", alias: "quote", ref: "./quote.ts:quote", export: "quote" } as const;
+    const run = new ToolSet({ lookup: topic("lookup"), team: [topic("a"), topic("team")], ask: () => "yes" });
+    const groups = new Map([["lessons", [topic("read")]]]);
+    const own = new Map<string, ToolSource>([[nodeScopeKey("lessons", "read"), read], [nodeScopeKey(null, "quote"), quote]]);
+    const local = run.withNodeScope({ groups, tools: [topic("quote")], sources: own });
     const sources = [
       { group: null, name: "lookup" },
       { group: "team", name: "a" },
       { group: null, name: "a" },
       { group: null, name: "team" },
+      { group: null, name: "ask_user" },
       { group: "lessons", name: "read" },
       { group: null, name: "quote" },
     ].map((ref) => local.sourceOf(ref));
@@ -1058,11 +1064,19 @@ describe("sourceOf", () => {
       { kind: "host", group: "team", tool: "a" },
       { kind: "host", group: "team", tool: "a" },
       { kind: "host", group: "team", tool: "team" },
-      null,
-      null,
+      { kind: "host", group: null, tool: "ask_user" },
+      read,
+      quote,
     ]);
-    expect(sources.every((source) => source === null || Object.isFrozen(source))).toBe(true);
+    expect(sources.every((source) => Object.isFrozen(source))).toBe(true);
     expect(new ToolSet().sourceOf({ group: null, name: "weather" })).toEqual({ kind: "host", group: null, tool: "weather" });
     expect(() => run.sourceOf({ group: "team", name: "b" })).toThrow("`team` has no tool `b`; it has a, team");
+    // A scope that names sources names one for each entry, or is refused before any call.
+    const partial = new Map<string, ToolSource>([[nodeScopeKey(null, "quote"), quote]]);
+    const missing = new RangeError("this node's tool 'lessons_read' has no source");
+    expect(() => run.withNodeScope({ groups, tools: [topic("quote")], sources: partial })).toThrow(missing);
+    // A scope that names none, as a TOOL node's, has no source to give.
+    const unsourced = run.withNodeScope({ groups, tools: [] });
+    expect(() => unsourced.sourceOf({ group: "lessons", name: "read" })).toThrow(missing);
   });
 });

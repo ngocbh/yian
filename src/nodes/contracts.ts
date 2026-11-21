@@ -1032,6 +1032,12 @@ export interface CallView {
   readonly failure: Failure | null;
 }
 
+/** An AGENT flow call whose scope holds a node: the scope, `<agent>/<flow>#<k>`, and the call's id. */
+export interface EnclosingFlowCall {
+  readonly scope: string;
+  readonly callId: string;
+}
+
 /**
  * The durable steps one start of a node reads and records, from the engine. Frozen.
  *
@@ -1104,17 +1110,14 @@ export class NodeSteps {
    * @throws RangeError when `n` isn't one of the node's recorded steps, or outside a run.
    */
   readonly seqOf: (n: number) => number;
-  /**
-   * The AGENT flow calls whose scopes hold this node, outermost first: each scope,
-   * `<agent>/<flow>#<k>`, and its call id. Empty for a node outside them, and outside a run.
-   */
-  readonly flowCalls: readonly { readonly scope: string; readonly callId: string }[];
   /** The `n` after the last step recorded through this object, or after `prior` before any. */
   #next: number;
   /** Reads the node's calls as the run state holds them now; `null` outside a run. */
   readonly #current: (() => readonly CallView[]) | null;
   /** Reads the `n` the node's next step gets in the run state; `null` outside a run. */
   readonly #nextStep: (() => number) | null;
+  /** Reads the flow calls enclosing the node from the run state; `null` outside a run. */
+  readonly #flowCalls: (() => readonly EnclosingFlowCall[]) | null;
 
   /**
    * Check the field types and that the current start is counted; `prior` and `calls` are
@@ -1130,10 +1133,11 @@ export class NodeSteps {
    *   state; the engine passes it, and `resumesSince` is 0 without it.
    * @param seqOf Gives a step's seq, from the run state; the engine passes it, and `seqOf` throws
    *   without it.
-   * @param flowCalls The flow calls enclosing the node, from the run state; copied, each frozen.
+   * @param flowCalls Reads the flow calls enclosing the node, from the run state; the engine
+   *   passes it, and `flowCalls()` is empty without it.
    * @throws TypeError when `starts` isn't a safe integer, `prior` isn't an array of plain
-   *   records, `record` isn't a function, `calls` or `flowCalls` isn't an array, or
-   *   `currentCalls`, `nextStep`, `resumesSince` or `seqOf` isn't a function or `null`.
+   *   records, `record` isn't a function, `calls` isn't an array, or `currentCalls`, `nextStep`,
+   *   `resumesSince`, `seqOf` or `flowCalls` isn't a function or `null`.
    * @throws RangeError when `starts` is less than 1 or `maxEventBytes` isn't a positive safe
    *   integer.
    */
@@ -1148,7 +1152,7 @@ export class NodeSteps {
     nextStep: (() => number) | null = null,
     resumesSince: ((n: number) => number) | null = null,
     seqOf: ((n: number) => number) | null = null,
-    flowCalls: readonly { readonly scope: string; readonly callId: string }[] = [],
+    flowCalls: (() => readonly EnclosingFlowCall[]) | null = null,
   ) {
     if (typeof starts !== "number" || !Number.isSafeInteger(starts)) throw new YianTypeError("starts must be an int");
     if (starts < 1) throw new YianRangeError("starts must be at least 1");
@@ -1157,20 +1161,19 @@ export class NodeSteps {
     }
     if (typeof record !== "function") throw new YianTypeError("record must be callable");
     if (!Array.isArray(calls)) throw new YianTypeError("calls must be an array");
-    if (!Array.isArray(flowCalls)) throw new YianTypeError("flowCalls must be an array");
     if (currentCalls !== null && typeof currentCalls !== "function") throw new YianTypeError("currentCalls must be callable or null");
     if (nextStep !== null && typeof nextStep !== "function") throw new YianTypeError("nextStep must be callable or null");
     if (resumesSince !== null && typeof resumesSince !== "function") {
       throw new YianTypeError("resumesSince must be callable or null");
     }
     if (seqOf !== null && typeof seqOf !== "function") throw new YianTypeError("seqOf must be callable or null");
+    if (flowCalls !== null && typeof flowCalls !== "function") throw new YianTypeError("flowCalls must be callable or null");
     if (typeof maxEventBytes !== "number" || !Number.isSafeInteger(maxEventBytes) || maxEventBytes < 1) {
       throw new YianRangeError("maxEventBytes must be a positive int");
     }
     this.starts = starts;
     this.prior = Object.freeze([...prior]);
     this.calls = Object.freeze(calls.map((call) => Object.freeze({ ...call })));
-    this.flowCalls = Object.freeze(flowCalls.map(({ scope, callId }) => Object.freeze({ scope, callId })));
     this.maxEventBytes = maxEventBytes;
     this.durable = durable === true;
     this.resumesSince = resumesSince ?? (() => 0);
@@ -1182,6 +1185,7 @@ export class NodeSteps {
     this.#next = prior.length + 1;
     this.#current = currentCalls;
     this.#nextStep = nextStep;
+    this.#flowCalls = flowCalls;
     this.record = (step, options) => {
       const n = record(step, options);
       this.#next = n + 1;
@@ -1207,6 +1211,15 @@ export class NodeSteps {
   currentCalls(): readonly CallView[] {
     if (this.#current === null) return this.calls;
     return Object.freeze(this.#current().map((call) => Object.freeze({ ...call })));
+  }
+
+  /**
+   * The AGENT flow calls whose scopes hold this node, outermost first, each a frozen copy; empty
+   * for a node outside them, and outside a run. Read from the run state at each call.
+   */
+  flowCalls(): readonly EnclosingFlowCall[] {
+    const calls = this.#flowCalls?.() ?? [];
+    return Object.freeze(calls.map(({ scope, callId }) => Object.freeze({ scope, callId })));
   }
 }
 

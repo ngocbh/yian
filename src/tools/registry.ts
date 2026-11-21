@@ -794,14 +794,14 @@ export class ToolSet {
    * scope names (`NodeScope.sources`); else a host tool (`group` `null` for a top-level or registry
    * tool, the ask handler included) or an MCP server's tool, each by its own name.
    *
-   * @throws As `resolve` throws, and RangeError when the node scope names no source for its tool.
+   * @throws As `resolve` throws, and RangeError for a node's own tool when its scope names no
+   *   sources, as a TOOL node's doesn't (`withNodeScope` refuses a scope that names some, not all).
    */
   sourceOf(ref: ToolRef): ToolSource {
     const { tool, group, node } = this.locate(ref);
     if (node) {
       const own = this.ownTools?.sources?.get(nodeScopeKey(group, tool.name));
-      const shown = reprText(visibleToolName(group, tool.name));
-      if (own === undefined) throw new YianRangeError(`this node's tool ${shown} has no source`);
+      if (own === undefined) throw new YianRangeError(`this node's tool ${reprText(visibleToolName(group, tool.name))} has no source`);
       return Object.freeze({ ...own });
     }
     const source: ToolSource =
@@ -872,15 +872,22 @@ export class ToolSet {
    * reaches a group's tool. `scopes()` tries them first. The copy keeps this set's run, signal,
    * context, tools and modules.
    *
-   * @throws {RangeError} A group holds two tools of one name, two top-level tools share a name, or a
-   *   name is both a group and a top-level tool.
+   * @throws {RangeError} A group holds two tools of one name, two top-level tools share a name, a
+   *   name is both a group and a top-level tool, or the scope names sources but none for an entry.
    */
   withNodeScope(scope: NodeScope<FunctionTool>): this {
+    const { sources } = scope;
+    // A scope naming sources is one an agent's calls go through, so it fails here, not at a call.
+    const requireSource = (group: string | null, name: string) => {
+      if (sources === undefined || sources.has(nodeScopeKey(group, name))) return;
+      throw new YianRangeError(`this node's tool ${reprText(visibleToolName(group, name))} has no source`);
+    };
     const groups = new Map<string, readonly FunctionTool[]>();
     for (const [group, tools] of scope.groups) {
       const names = new Set<string>();
       for (const { name } of tools) {
         if (names.has(name)) throw new YianRangeError(`this node's group ${reprText(group)} holds ${reprText(name)} twice`);
+        requireSource(group, name);
         names.add(name);
       }
       groups.set(group, [...tools]);
@@ -889,6 +896,7 @@ export class ToolSet {
     for (const { name } of scope.tools) {
       if (names.has(name)) throw new YianRangeError(`this node's tools hold ${reprText(name)} twice`);
       if (groups.has(name)) throw new YianRangeError(`this node holds ${reprText(name)} as a group and a tool`);
+      requireSource(null, name);
       names.add(name);
     }
     const copy = ToolSet.#copy(this);

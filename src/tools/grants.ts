@@ -164,6 +164,11 @@ export interface NodeScope<T extends { readonly name: string } = { readonly name
   readonly sources?: ReadonlyMap<string, ToolSource>;
 }
 
+/** A node scope that names every entry's source, as one an agent's calls go through does. */
+export type SourcedNodeScope<T extends { readonly name: string }> = NodeScope<T> & {
+  readonly sources: ReadonlyMap<string, ToolSource>;
+};
+
 /** The key a node scope's `identities` and `sources` name an entry by: `group` is `null` for a top-level tool. */
 export function nodeScopeKey(group: string | null, name: string): string {
   return JSON.stringify([group, name]);

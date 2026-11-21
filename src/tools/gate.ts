@@ -76,11 +76,12 @@ export type GateDecision =
   | PendingMarker;
 
 /**
- * The host's check before each tool call an AGENT's model makes, an agent's inside a flow it
- * granted included; it may answer later through a Promise. It is asked once the call is checked:
- * its arguments' schema, then its validator and `isConcurrencySafe` (a module tool's on its
- * module's thread), which must have no effects, since a checked call may never run. It reads the
- * model's arguments, never a validator's output. A refused flow call never starts its flow.
+ * The host's check before each tool call an AGENT's model makes, including the agents inside a
+ * flow an agent calls as a tool; it may answer later through a Promise. It is asked once the call
+ * is checked: its arguments' schema, then its validator and `isConcurrencySafe` (a module tool's
+ * on its module's thread), which must have no effects, since a checked call may never run. It
+ * reads the model's arguments, never a validator's output. A refused flow call never starts its
+ * flow.
  */
 export type BeforeToolCall = (call: GatedCall, ctx: GateContext) => GateDecision | PromiseLike<GateDecision>;
 

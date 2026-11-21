@@ -13,7 +13,7 @@
 import { type Failure, reprText } from "../../diagnostics.ts";
 import { FunctionTool } from "../../tools/function_tools.ts";
 import type { ToolSource } from "../../tools/gate.ts";
-import { type NodeScope, nodeScopeKey, visibleToolName } from "../../tools/grants.ts";
+import { nodeScopeKey, type SourcedNodeScope, visibleToolName } from "../../tools/grants.ts";
 import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import type { JsonObject } from "../../typesys/json.ts";
 import { cutText, fromHost, isRecord, type ValueRecord } from "../../typesys/values.ts";
@@ -63,7 +63,7 @@ export function flowToolFunction({ description, parameters }: FlowTool, name: st
 export function flowToolScope<T extends { readonly name: string }>(
   tools: readonly FlowTool[],
   make: (tool: FlowTool, name: string) => T,
-): NodeScope<T> & { readonly sources: ReadonlyMap<string, ToolSource> } {
+): SourcedNodeScope<T> {
   const groups = new Map<string, T[]>();
   const top: T[] = [];
   const sources = new Map<string, ToolSource>();

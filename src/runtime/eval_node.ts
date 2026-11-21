@@ -447,7 +447,7 @@ async function evaluateNode(
       () => steps.next,
       steps.resumesSince,
       steps.seqOf,
-      steps.flowCalls,
+      () => steps.flowCalls(),
     );
   }
   if (steerInbox !== null && node.readsSteerInbox === true) {

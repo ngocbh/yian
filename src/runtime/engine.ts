@@ -761,7 +761,8 @@ export class FlowEngine {
         return (state.nodeStartSeqs.get(nodeId) ?? []).filter((start) => start > seq).length;
       },
       stepSeq,
-      enclosingFlowCalls(state, nodeId),
+      // Read on demand, so a node that never asks does no more work per start.
+      () => enclosingFlowCalls(state, nodeId),
     );
   }
 

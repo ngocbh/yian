@@ -19,7 +19,7 @@ import { isPending } from "./context.ts";
 import { ToolCheckError } from "./errors.ts";
 import { FunctionTool, type StandardSchemaV1 } from "./function_tools.ts";
 import type { ToolSource } from "./gate.ts";
-import { type NodeScope, nodeScopeKey, visibleToolName } from "./grants.ts";
+import { type NodeScope, nodeScopeKey, type SourcedNodeScope, visibleToolName } from "./grants.ts";
 import type { ConsoleSink, ToolModuleThread } from "./module_thread.ts";
 import type { ListedTool, ToolModuleListing } from "./module_worker.ts";
 import { RESERVED_TOOL_NAMES, type ToolSet } from "./registry.ts";
@@ -135,7 +135,7 @@ export function moduleScope(
   refs: readonly ToolModuleRef[],
   tools: ToolSet,
   sink: ConsoleSink | null = null,
-): NodeScope<FunctionTool> & { readonly sources: ReadonlyMap<string, ToolSource> } {
+): SourcedNodeScope<FunctionTool> {
   const host = { sink, completesCalls: tools.completesCalls };
   const groups = new Map<string, FunctionTool[]>();
   const single: FunctionTool[] = [];

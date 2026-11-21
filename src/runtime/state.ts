@@ -47,6 +47,7 @@ import { BindingError, copyValue } from "../nodes/binding.ts";
 import {
   type Binding,
   type CallView,
+  type EnclosingFlowCall,
   fileFieldsType,
   isExactly,
   iterSourceStrings,
@@ -1870,7 +1871,7 @@ export function prepareFlowCallFailed(state: RunState, nodeId: string, callId: s
  * The innermost grown flow call scope holding node `nodeId`, with its call; `null` for a node in
  * no such scope.
  */
-function enclosingFlowCall(state: RunState, nodeId: string): { callId: string; scope: string } | null {
+function enclosingFlowCall(state: RunState, nodeId: string): EnclosingFlowCall | null {
   return enclosingFlowCalls(state, nodeId).at(-1) ?? null;
 }
 
@@ -1878,8 +1879,8 @@ function enclosingFlowCall(state: RunState, nodeId: string): { callId: string; s
  * The grown flow call scopes holding node `nodeId`, each with its call, outermost first: each
  * scope's id is a prefix of the next's.
  */
-export function enclosingFlowCalls(state: RunState, nodeId: string): { callId: string; scope: string }[] {
-  const found: { callId: string; scope: string }[] = [];
+export function enclosingFlowCalls(state: RunState, nodeId: string): EnclosingFlowCall[] {
+  const found: EnclosingFlowCall[] = [];
   for (const [callId, scope] of state.flowScopes) {
     if (nodeId.startsWith(`${scope}/`) && state.flow.nodes.has(`${scope}/${START_ID}`)) found.push({ callId, scope });
   }

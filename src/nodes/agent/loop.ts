@@ -996,8 +996,7 @@ async function runGroup(
   const { live } = turn;
   checkNodeStopped(turn);
   const hook = turn.toolset.gate;
-  const asking =
-    hook === null ? [] : group.flatMap((planned) => (planned.source === null ? [] : [gatedCall(turn, planned, planned.source)]));
+  const asking = hook === null ? [] : group.filter(isAsked).map((planned) => gatedCall(turn, planned));
   // A resend may have run before its cut, so an interrupt doesn't skip it; but the hook isn't
   // asked to let it run again once the agent holds one.
   let end = interruptible || asking.length > 0 ? caught(turn, group, interruptible) : null;
@@ -1031,8 +1030,9 @@ async function runGroup(
           throw new AgentLoopError(`agent node ${reprText(turn.ctx.nodeId)}: flow tool ${reprText(call.name)} runs only in a run`);
         }
         if (signal?.aborted) return { pending: callId };
-        const flowArguments = value.arguments;
-        const fields = { callId, tool: call.name, toolCallId: call.id, reply: turn.n, index, deadline, flowArguments, note };
+        const fields = {
+          callId, tool: call.name, toolCallId: call.id, reply: turn.n, index, deadline, flowArguments: value.arguments, note,
+        };
         // Arguments too large to record are the model's to fix, as its result.
         const tooLarge = turn.steps.pendingTooLarge(fields);
         if (tooLarge !== null) {
@@ -1160,6 +1160,14 @@ interface Asked {
   readonly call: GatedCall;
 }
 
+/** A planned call the hook is asked about: one with a source. */
+type AskedCall = PlannedCall & { readonly source: ToolSource };
+
+/** Whether the hook is asked about `planned` (`PlannedCall.source`). */
+function isAsked(planned: PlannedCall): planned is AskedCall {
+  return planned.source !== null;
+}
+
 /** No refusals or notes: a group the hook isn't asked about. */
 const NO_RULINGS: ReadonlyMap<PlannedCall, string> = new Map();
 
@@ -1240,19 +1248,19 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
 const NO_SCOPES: readonly FlowCallScope[] = Object.freeze([]);
 
 /**
- * Return what the hook sees of `planned`, whose tool comes from `source`, deep-frozen: its
- * arguments are a copy of the model's, so the hook can't change what the tool gets, and its scopes
- * are the flow calls enclosing the agent (`NodeSteps.flowCalls`).
+ * Return what the hook sees of `planned`, deep-frozen: its arguments are a copy of the model's, so
+ * the hook can't change what the tool gets, and its scopes are the flow calls enclosing the agent
+ * (`NodeSteps.flowCalls`).
  *
  * @throws AgentLoopError when `planned` has no call id: outside a run.
  */
-function gatedCall(turn: ToolTurn, planned: PlannedCall, source: ToolSource): Asked {
-  const { call, callId, attempt } = planned;
+function gatedCall(turn: ToolTurn, planned: AskedCall): Asked {
+  const { call, callId, source, attempt } = planned;
   if (callId === undefined) {
     throw new AgentLoopError(`agent node ${reprText(turn.ctx.nodeId)}: beforeToolCall checks tool calls only in a run`);
   }
   const args = freezeParsed(copyJson(call.arguments!));
-  const scopes = turn.ctx.steps?.flowCalls ?? NO_SCOPES;
+  const scopes = turn.ctx.steps?.flowCalls() ?? NO_SCOPES;
   const gated: GatedCall = { callId, node: turn.ctx.nodeId, tool: call.name, source, arguments: args, scopes, attempt };
   return { planned, call: Object.freeze(gated) };
 }

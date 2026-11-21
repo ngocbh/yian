@@ -194,12 +194,6 @@ export interface HoldFields {
   readonly groupEnd: number;
 }
 
-/** A hold an earlier start recorded: the `n` of its `pending` step and its group's last call. */
-export interface RecordedHold {
-  readonly n: number;
-  readonly groupEnd: number;
-}
-
 /** A tool call's result as an earlier start recorded it. */
 export interface RecordedResult {
   readonly output: string;
@@ -268,8 +262,8 @@ export class AgentSteps {
   readonly #results: ReadonlyMap<number, StepExchange["results"]>;
   /** The `n` of each recorded `pending` step that isn't a hold, by its yian call id. */
   readonly #pending: ReadonlyMap<string, number>;
-  /** Each recorded hold, by its yian call id. */
-  readonly #holds: ReadonlyMap<string, RecordedHold>;
+  /** The `group_end` of each recorded hold, by its yian call id. */
+  readonly #holds: ReadonlyMap<string, number>;
   /** The `n` of the latest reply this start took or recorded, which its `tool_result` steps answer. */
   #reply: number | null = null;
   /** The result keys (`call_id`) of the `tool_result` steps this start wrote for `#reply`. */
@@ -310,7 +304,7 @@ export class AgentSteps {
     this.#holds = new Map(
       pending
         .filter(({ step }) => step["held"] === true)
-        .map(({ step, n }) => [step["call_id"] as string, { n, groupEnd: Number(step["group_end"]) }]),
+        .map(({ step }) => [step["call_id"] as string, Number(step["group_end"])]),
     );
     for (const step of steps?.prior ?? []) {
       if (step["kind"] !== "pending" || step["flow"] !== true) continue;
@@ -433,8 +427,11 @@ export class AgentSteps {
     return this.#pending.get(callId) ?? null;
   }
 
-  /** Return the hold an earlier start recorded for yian call `callId`, or `null`. */
-  recordedHold(callId: string): RecordedHold | null {
+  /**
+   * Return the last call of the group of the hold an earlier start recorded for yian call
+   * `callId` (its `group_end`), or `null` when none did.
+   */
+  recordedHold(callId: string): number | null {
     return this.#holds.get(callId) ?? null;
   }
 

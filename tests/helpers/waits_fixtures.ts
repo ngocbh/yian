@@ -118,7 +118,8 @@ export function succeed(log: RunLog, state: RunState, nodeId: string, output: un
  * A JSONL log and state of `flow` after run start and START's success (holding each inbox's
  * handle). `fingerprint` defaults to `flowFingerprint(flow)`; a flow holding a test double passes
  * `FINGERPRINT` and is never replayed through `replayRunLog`. `numWorkers` defaults to 0; an
- * AGENT's model config comes from `effectiveLlmByStaticPath` (none by default).
+ * AGENT's model config comes from `effectiveLlmByStaticPath` (none by default); `gated` says the
+ * run start records a host's tool-call check.
  */
 export function started(
   flow: CompiledFlow,
@@ -127,6 +128,7 @@ export function started(
     fingerprint?: string;
     numWorkers?: number;
     effectiveLlmByStaticPath?: Record<string, JsonObject>;
+    gated?: boolean;
   } = {},
 ) {
   const fingerprint = options.fingerprint ?? flowFingerprint(flow);
@@ -144,6 +146,7 @@ export function started(
       effectiveLlmByStaticPath: options.effectiveLlmByStaticPath ?? {},
       numWorkers: options.numWorkers ?? 0,
       defaults: options.defaults ?? {},
+      gated: options.gated ?? false,
     }),
   );
   const initial = new VariablePool(START_ID);

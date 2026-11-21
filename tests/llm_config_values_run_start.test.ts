@@ -19,6 +19,7 @@ import type { AgentNode } from "../src/nodes/agent/node.ts";
 import { Parameter } from "../src/nodes/contracts.ts";
 import { VERSION } from "../src/platform.ts";
 import { runFlow, type RunFlowOptions, runStartInputs } from "../src/run.ts";
+import { SCHEMA_VERSION } from "../src/runtime/log.ts";
 import { hostEnv } from "./helpers/mcp_helpers.ts";
 import { rejected, serving, textReply } from "./helpers/run_state_fixtures.ts";
 
@@ -150,7 +151,7 @@ const GOLDEN_RUN_STARTED = {
     yian_version: VERSION,
   },
   run_id: "golden",
-  schema: 33,
+  schema: SCHEMA_VERSION,
   seq: 0,
   at: "<at>",
 };

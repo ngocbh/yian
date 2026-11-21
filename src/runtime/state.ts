@@ -10,8 +10,8 @@
  *
  * Knows about: compile/declared_types, compile/manifest, compile/model, compile/validation,
  *              defaults, diagnostics, events, expr, nodes, runtime/common,
- *              runtime/eval_node, runtime/log, runtime/sources, runtime/waits, tools/context,
- *              typesys.
+ *              runtime/eval_node, runtime/log, runtime/sources, runtime/waits, skills/tool,
+ *              tools/context, tools/gate, tools/grants, typesys.
  */
 
 import { localTypes } from "../compile/declared_types.ts";
@@ -120,7 +120,9 @@ import {
   type WaitEntry,
 } from "./log.ts";
 import { decodeTyped, SYSTEM_PREFIX } from "./sources.ts";
+import { LOAD_SKILL } from "../skills/tool.ts";
 import { ASK, ASK_USER, SLEEP, TAKE, toolCallId } from "../tools/context.ts";
+import { checkGateText, isToolSource } from "../tools/gate.ts";
 import { visibleToolName } from "../tools/grants.ts";
 import {
   applyWaitsRecord,
@@ -375,6 +377,11 @@ export class RunState {
   nextSequence = 0;
   /** The active dispatcher worker count; zero selects serial execution. */
   numWorkers = 0;
+  /**
+   * Whether a host checks each agent tool call before it runs: set by `RunStarted.gated` or any
+   * `RunResumed.gated`, and never cleared, so every later segment needs a hook too.
+   */
+  gated = false;
   /** The canonical caller-supplied START priming record, kept across START's commit. */
   input: JsonObject = {};
   /**
@@ -729,6 +736,8 @@ export interface RunStartData {
   yianVersion?: string;
   /** The run that started this one; `null` (the default) when none did. */
   parent?: RunParent | null;
+  /** Whether the host checks each agent tool call before it runs; defaults to `false`. */
+  gated?: boolean;
 }
 
 /**
@@ -762,6 +771,7 @@ interface RunResumedDelta {
   readonly retryNodeIds: readonly string[];
   readonly numWorkers: number;
   readonly closedCalls: readonly string[];
+  readonly gated: boolean;
 }
 
 /**
@@ -1145,6 +1155,7 @@ export function prepareRunStarted(state: RunState, data: RunStartData): Prepared
     toolModules: data.toolModules ?? {},
     yianVersion: data.yianVersion,
     parent: data.parent ?? null,
+    gated: data.gated ?? false,
   });
   const { envelopeJson, envelope, canonical } = canonicalEnvelope(state, candidate, [RunStartedRecord], "run-start", data.runId);
   const plan: RunStartedPlan = Object.freeze({ kind: "runStarted", ...planAnchors(state, envelopeJson) });
@@ -1930,21 +1941,25 @@ function retireScope(state: RunState, scope: string): void {
  *
  * The retry list comes only from the insertion-ordered `state.inFlight` (a waiting node isn't in
  * flight, so it isn't retried), and the closed calls are the retried agents' open calls; the
- * caller chooses only the worker count of the new segment.
+ * caller chooses only the worker count of the new segment, and whether its host checks agent tool
+ * calls.
  *
  * @param state An initialized nonterminal state rebuilt through a complete log prefix.
  * @param options.numWorkers The exact non-negative worker count; zero selects serial execution.
+ * @param options.gated Whether the segment's host checks each agent tool call before it runs
+ *   (default `false`); a gated run's resume must say so.
  * @returns The canonical `RunResumedRecord`, whose retries keep dispatch order, and its observers:
  *   `RunResumed`, then a `CallClosed` for each closed call.
  * @throws TypeError when `state` has the wrong type or the worker count isn't a safe integer.
- * @throws RangeError when the worker count is negative, or the state is uninitialized or terminal.
+ * @throws RangeError when the worker count is negative, the state is uninitialized or terminal, or
+ *   the run is gated and `gated` isn't `true`.
  */
-export function prepareRunResumed(state: RunState, options: { numWorkers: number }): PreparedTransition {
+export function prepareRunResumed(state: RunState, options: { numWorkers: number; gated?: boolean }): PreparedTransition {
   if (!isExactly(state, RunState)) throw new YianTypeError("prepareRunResumed expects a RunState");
-  const { numWorkers } = options;
+  const { numWorkers, gated = false } = options;
   requireWorkerCount(numWorkers);
   requireInitializedNonterminal(state);
-  return prepareRecord(state, new RunResumedRecord([...state.inFlight], numWorkers, retriedAgentCalls(state)));
+  return prepareRecord(state, new RunResumedRecord([...state.inFlight], numWorkers, retriedAgentCalls(state), { gated }));
 }
 
 /**
@@ -2128,6 +2143,7 @@ export function prepareRecord(
       retryNodeIds: canonical.retryNodeIds,
       numWorkers: canonical.numWorkers,
       closedCalls: canonical.closedCalls,
+      gated: canonical.gated,
     };
   } else if (isExactly(canonical, NodeStepRecord)) {
     validateNodeStep(state, canonical);
@@ -2988,6 +3004,7 @@ export function replayRecords(
     toolModules: start.toolModules,
     yianVersion: start.yianVersion,
     parent: start.parent,
+    gated: start.gated,
   });
   commitPrepared(cursor, state, prepared);
 
@@ -3104,7 +3121,8 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
     if (
       !sameItems(delta.retryNodeIds, record.retryNodeIds) ||
       !Number.isSafeInteger(delta.numWorkers) ||
-      delta.numWorkers !== record.numWorkers
+      delta.numWorkers !== record.numWorkers ||
+      delta.gated !== record.gated
     ) {
       throw new YianRangeError("frontier resume delta disagrees with its record");
     }
@@ -3166,6 +3184,7 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       for (const nodeId of state.pendingMessages.keys()) state.touched.add(nodeId);
       state.pendingMessages.clear();
       state.numWorkers = delta.numWorkers;
+      if (delta.gated) state.gated = true;
       break;
     case "step":
       state.touched.add(delta.nodeId);
@@ -3724,6 +3743,7 @@ function validateNodeStarted(state: RunState, record: NodeStartedRecord): void {
 /** Require a resume record to name the exact ordered unfinished frontier. */
 function validateRunResumed(state: RunState, record: RunResumedRecord): void {
   requireWorkerCount(record.numWorkers);
+  if (state.gated && record.gated !== true) throw new YianRangeError("a resume of a gated run must record gated: true");
   const retries: unknown = record.retryNodeIds;
   if (!Array.isArray(retries) || retries.some((nodeId) => typeof nodeId !== "string")) {
     throw new YianTypeError("RunResumedRecord retry_node_ids must be an array of strings");
@@ -4021,7 +4041,8 @@ function validateRunWaiting(state: RunState, record: RunWaitingRecord): void {
 /**
  * Require a step record to name an existing unknown node, in flight or waiting, and be its next
  * step. A `pending` step registers a host call; a `tool_result` for a registered call answers it.
- * A waiting node records only a `tool_result` answering one of its open calls.
+ * A waiting node records only a `tool_result` answering one of its open calls, or a `released`
+ * step naming one of its holds.
  */
 function validateNodeStep(state: RunState, record: NodeStepRecord): void {
   const nodeId: unknown = record.nodeId;
@@ -4041,6 +4062,8 @@ function validateNodeStep(state: RunState, record: NodeStepRecord): void {
   const step = record.step;
   if (step["kind"] === "tool_result") {
     validateToolResultStep(state, nodeId, step, waiting);
+  } else if (step["kind"] === "released") {
+    validateReleasedStep(state, nodeId, step);
   } else if (waiting) {
     throw new YianRangeError(`waiting node ${reprText(nodeId)} records only a tool_result answering one of its open calls`);
   } else if (step["kind"] === "pending") {
@@ -4119,7 +4142,42 @@ function validateSteerStep(state: RunState, nodeId: string, step: Readonly<JsonO
 }
 
 /** The steps' fields only an AGENT's `pending` step holds. */
-const AGENT_PENDING_FIELDS = ["tool_call_id", "reply", "index", "flow"] as const;
+const AGENT_PENDING_FIELDS = ["tool_call_id", "reply", "index", "flow", "note", "held", "source", "group_end"] as const;
+
+/** The keys of a held call's `pending` step: the hold, written before its tool runs. */
+const HOLD_STEP_KEYS = ["kind", "call_id", "tool", "tool_call_id", "reply", "index", "held", "source", "group_end"] as const;
+
+/**
+ * Require a hold's `pending` step to hold exactly `HOLD_STEP_KEYS`: `held: true`, a tool other
+ * than the never-gated `ask_user` and `load_skill`, a `ToolSource`, an `index` among the `calls`
+ * tool calls of its reply, and a `group_end` (the last call of its concurrency group) from its
+ * `index` to the reply's last call. A step holds `source` and `group_end` only as a hold.
+ */
+function requireHoldStep(step: Readonly<JsonObject>, index: number, calls: number): void {
+  if (!Object.hasOwn(step, "held")) throw new YianRangeError("a pending step holds source and group_end only as a hold");
+  if (Object.keys(step).length !== HOLD_STEP_KEYS.length || !HOLD_STEP_KEYS.every((key) => Object.hasOwn(step, key))) {
+    throw new YianRangeError(
+      "a hold's pending step holds exactly kind, call_id, tool, tool_call_id, reply, index, held, source and group_end",
+    );
+  }
+  if (step["held"] !== true) throw new YianRangeError("a hold's pending step says held: true");
+  if (step["tool"] === ASK_USER || step["tool"] === LOAD_SKILL) {
+    throw new YianRangeError(`a hold's tool can't be ${String(step["tool"])}, whose calls are never checked`);
+  }
+  if (!isToolSource(step["source"])) throw new YianRangeError("a hold's source must be a tool source");
+  if (index >= calls) throw new YianRangeError(`a hold's index ${index} is past its reply's last call ${calls - 1}`);
+  const end = stepInt(step["group_end"]);
+  if (end === null || end < index || end >= calls) {
+    throw new YianRangeError(`a hold's group_end must be an int from its index ${index} to its reply's last call ${calls - 1}`);
+  }
+}
+
+/** The number of tool calls in the reply of `nodeId`'s `model_call` step `reply`. */
+function replyCallCount(state: RunState, nodeId: string, reply: number): number {
+  const output = state.nodeSteps.get(nodeId)?.[reply - 1]?.["output"];
+  const parts = isRecord(output) ? output["parts"] : undefined;
+  return Array.isArray(parts) ? parts.filter((part) => isRecord(part) && part["type"] === "tool_call").length : 0;
+}
 
 /**
  * Return the name a node's host tool call shows in its steps and waits: the tool id, or
@@ -4173,8 +4231,9 @@ function validatePendingStep(state: RunState, nodeId: string, step: Readonly<Jso
  * node's latest `model_call` step and `index` the call's place among its tool calls, which
  * `call_id` (`<run>/<node>/<reply>/<index>`) names; no `arguments` (they are in the reply) but on
  * a call of a flow the node grants, which says `flow: true` and holds its `arguments` as an
- * object; a `deadline` only on `ask_user`, as a record time; not yet registered, and within the
- * run's `MAX_EVENT_BYTES`.
+ * object; a `deadline` only on `ask_user`, as a record time; a `note` (`checkGateText`) on any
+ * tool but `ask_user` and `load_skill`; not yet registered, and within the run's
+ * `MAX_EVENT_BYTES`. A hold's fields are `requireHoldStep`'s.
  */
 function validateAgentPendingStep(state: RunState, nodeId: string, step: Readonly<JsonObject>): void {
   const { call_id: callId, tool, tool_call_id: toolCallIdOf } = step;
@@ -4198,7 +4257,9 @@ function validateAgentPendingStep(state: RunState, nodeId: string, step: Readonl
     const which = `call ${index} of node ${reprText(nodeId)}'s reply ${reply}`;
     throw new YianRangeError(`pending call_id ${writeAsText(callId ?? null)} isn't ${which}`);
   }
-  if (Object.hasOwn(step, "flow")) {
+  if (["held", "source", "group_end"].some((key) => Object.hasOwn(step, key))) {
+    requireHoldStep(step, index, replyCallCount(state, nodeId, reply));
+  } else if (Object.hasOwn(step, "flow")) {
     const flows = state.flow.nodes.get(nodeId)!.originChildSegments();
     if (step["flow"] !== true || !flows.includes(tool)) {
       throw new YianRangeError(`an agent's pending step says flow: true only for a flow it grants, not ${reprText(tool)}`);
@@ -4219,7 +4280,43 @@ function validateAgentPendingStep(state: RunState, nodeId: string, step: Readonl
     if (tool !== ASK_USER) throw new YianRangeError(`an agent's pending ${reprText(tool)} call has no deadline; only ask_user times out`);
     requirePendingDeadline(step);
   }
+  if (Object.hasOwn(step, "note")) {
+    if (tool === ASK_USER || tool === LOAD_SKILL) {
+      throw new YianRangeError(`a ${tool} call's pending step holds no note; its calls are never checked`);
+    }
+    checkGateText(step["note"], "a pending step's note");
+  }
   requireNewPendingCall(state, callId, step);
+}
+
+/** The keys a `released` step may hold. */
+const RELEASED_STEP_KEYS: ReadonlySet<string> = new Set(["kind", "call_id", "note"]);
+
+/**
+ * Require an AGENT's `released` step, the host's release of a held call: only `kind`, `call_id`
+ * and an optional `note` (`checkGateText`); `call_id` names a call of this node a hold's `pending`
+ * step registered, still open and not released before.
+ */
+function validateReleasedStep(state: RunState, nodeId: string, step: Readonly<JsonObject>): void {
+  if (state.flow.nodes.get(nodeId)!.kind !== NodeKind.AGENT) {
+    throw new YianRangeError(`a released step on node ${reprText(nodeId)}, which isn't an agent`);
+  }
+  if (!Object.hasOwn(step, "call_id") || Object.keys(step).some((key) => !RELEASED_STEP_KEYS.has(key))) {
+    throw new YianRangeError("a released step holds only kind, call_id and note");
+  }
+  const callId = step["call_id"];
+  const call = typeof callId === "string" ? state.waits.calls.get(callId) : undefined;
+  if (call === undefined || call.nodeId !== nodeId || pendingStepOf(state, call)?.["held"] !== true) {
+    const named = typeof callId === "string" ? reprText(callId) : writeAsText(callId ?? null);
+    throw new YianRangeError(`a released step names call ${named}, which isn't a hold of node ${reprText(nodeId)}`);
+  }
+  if (call.state !== "open") {
+    throw new YianRangeError(`a released step names call ${reprText(call.callId)}, which is already ${settledText(call)}`);
+  }
+  if (state.nodeSteps.get(nodeId)!.some((each) => each["kind"] === "released" && each["call_id"] === callId)) {
+    throw new YianRangeError(`a released step names call ${reprText(call.callId)}, which was released already`);
+  }
+  if (Object.hasOwn(step, "note")) checkGateText(step["note"], "a released step's note");
 }
 
 /** Require a `pending` step's `deadline` to be a record time. */
@@ -4262,11 +4359,13 @@ function latestReply(state: RunState, nodeId: string): number | null {
  * latest reply (`resultCall`), since provider ids repeat across replies and nodes. A call closed
  * by record takes one more result on a running AGENT, its closer: `closed` equal to the call's
  * reason, once. No other result carries `closed` for a registered call. A flow call its scope's
- * END answered takes one result on its running agent: exactly the answer that output gives.
+ * END answered takes one result on its running agent: exactly the answer that output gives. A
+ * refused call's result and a note are `validateGateResult`'s.
  */
 function validateToolResultStep(state: RunState, nodeId: string, step: Readonly<JsonObject>, waiting: boolean): void {
   const key = typeof step["tool_call_id"] === "string" ? step["tool_call_id"] : step["call_id"];
   const call = resultCall(state, nodeId, key);
+  if (step["closed"] === "refused" || Object.hasOwn(step, "note")) validateGateResult(state, nodeId, step, call);
   if (call === undefined) {
     if (waiting) {
       throw new YianRangeError(`waiting node ${reprText(nodeId)} records only a tool_result answering one of its open calls`);
@@ -4296,6 +4395,40 @@ function validateToolResultStep(state: RunState, nodeId: string, step: Readonly<
   }
   const size = eventBytes(step);
   if (size > state.runDefaults.maxEventBytes) throw new YianRangeError(eventTooLarge(`the answer to ${reprText(call.callId)}`, size, state));
+}
+
+/**
+ * Require a `tool_result` the host's check before a call shaped, a refusal (`closed: "refused"`)
+ * or an allowed call's result with a `note`, to be an AGENT's, for a call no `pending` step
+ * registered (`call` is `undefined`): the check decides before a call pends, and a call that pends
+ * keeps its note on its `pending` step. A refusal never started (`started_at: null`), is an error
+ * whose `output` is the refusal text the model reads (`checkGateText`), and holds no note; a note
+ * passes `checkGateText`, on a result that is no closer.
+ */
+function validateGateResult(state: RunState, nodeId: string, step: Readonly<JsonObject>, call: Call | undefined): void {
+  const refused = step["closed"] === "refused";
+  const what = refused ? "a refused tool_result" : "a tool_result with a note";
+  if (state.flow.nodes.get(nodeId)!.kind !== NodeKind.AGENT) {
+    throw new YianRangeError(`${what} on node ${reprText(nodeId)}, which isn't an agent`);
+  }
+  if (call !== undefined) {
+    const which = `call ${reprText(call.callId)}, which a pending step registered`;
+    throw new YianRangeError(
+      refused
+        ? `a refused tool_result for ${which}; only a call that never pended is refused`
+        : `a tool_result for ${which}, holds no note; its pending step does`,
+    );
+  }
+  if (refused) {
+    if (Object.hasOwn(step, "note")) throw new YianRangeError("a refused tool_result holds no note");
+    if (step["started_at"] !== null || step["is_error"] !== true) {
+      throw new YianRangeError("a refused tool_result has started_at null, is_error true and its text as output");
+    }
+    checkGateText(step["output"], "a refused tool_result's output");
+    return;
+  }
+  if (Object.hasOwn(step, "closed")) throw new YianRangeError("a tool_result with a note is no closer");
+  checkGateText(step["note"], "a tool_result's note");
 }
 
 /**
@@ -6243,6 +6376,7 @@ function requirePristine(state: RunState): void {
     state.inputsCommitted === false &&
     state.crashedAttempts.size === 0 &&
     state.lastStopSequence === null &&
+    state.gated === false &&
     state.result === null &&
     state.terminalUnreachableFailure === null &&
     state.depth.size === 0 &&
@@ -6316,6 +6450,7 @@ interface RunStartedApply {
   recordedToolGroups: Readonly<Record<string, readonly string[]>>;
   recordedToolModules: Readonly<Record<string, readonly RecordedTool[]>>;
   runDefaults: Defaults;
+  gated: boolean;
   observers: readonly RunEvent[];
 }
 
@@ -6361,6 +6496,7 @@ function materializeRunStarted(state: RunState, prepared: PreparedTransition, pl
     recordedToolGroups: record.toolGroups,
     recordedToolModules: record.toolModules,
     runDefaults: fromRecorded(record.defaults),
+    gated: record.gated,
     observers: [new RunStarted()],
   };
 }
@@ -6389,6 +6525,7 @@ function applyRunStarted(state: RunState, apply: RunStartedApply): void {
   state.recordedToolGroups = apply.recordedToolGroups;
   state.recordedToolModules = apply.recordedToolModules;
   state.runDefaults = apply.runDefaults;
+  state.gated = apply.gated;
   state.nextSequence = apply.nextSequence;
 }
 

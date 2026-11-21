@@ -185,6 +185,7 @@ import {
 import { Skill } from "./skills/catalog.ts";
 import { isAlreadyOpenError, isMcpServer, type McpServer, openTogether } from "./tools/mcp.ts";
 import { ASK, ASK_USER, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "./tools/context.ts";
+import { type BeforeToolCall, gateOf } from "./tools/gate.ts";
 import {
   checkVisibleNames,
   expandGrants,
@@ -866,8 +867,8 @@ function refuseRemovedOptions(options: object, takesMemory = false): void {
  * @returns The unopened `tools` servers, as `splitRunServers` returns them.
  * @throws TypeError when `signal` isn't an `AbortSignal`, `live` isn't a `LiveChannel`, `onEvent`,
  *   `onStream` or `onConsole` isn't a function, `completesCalls` isn't a boolean, `scheduler` lacks
- *   `now` or `sleep`, `random` isn't a function, `models` lacks `env` or `createModel`, or a
- *   `tools` entry is malformed.
+ *   `now` or `sleep`, `random` isn't a function, `models` lacks `env` or `createModel`, the
+ *   `beforeToolCall` hook isn't a function or `null`, or a `tools` entry is malformed.
  * @throws RangeError when a `tools` key is reserved, or a server was opened by another run in
  *   progress, or a removed option is given (`memory` unless `takesMemory`).
  * @throws The signal's reason when it has aborted.
@@ -891,6 +892,7 @@ function checkDriveOptions(options: DriveOptions, takesMemory = false): [string,
   }
   if (random !== null && typeof random !== "function") throw new YianTypeError("random must be a function or null");
   requireModels(models);
+  gateOf(options);
   signal?.throwIfAborted();
   const [otherTools, unopened] = splitRunServers(tools);
   // The other entries' errors come before anything is opened.
@@ -1274,6 +1276,7 @@ async function startRun(
   runDefaults: Defaults,
   env: Env,
 ): Promise<RunResult> {
+  const gate = gateOf(options);
   const { log = null, runId = null, numWorkers = 8 } = options;
   const live = options.live ?? null;
   const { tools = null, skills = null, context, completesCalls = false, signal = null } = options;
@@ -1289,7 +1292,7 @@ async function startRun(
   try {
     runServers = await openRunServers(unopened, signal);
     runModules = await openRunModules(reachedModules(flow), signal);
-    const runTools = new ToolSet(tools, { context }).withModules(runModules, { completesCalls });
+    const runTools = runToolSet(tools, { context, modules: runModules, completesCalls, gate });
     const hostTypes = memoryTypeTools(flow.memoryTypes);
     checkToolGrants(flow.compiled, runTools);
     checkMemoryGrantNames(flow.compiled, runTools, hostTypes);
@@ -1381,6 +1384,7 @@ async function startRun(
       toolModules: recordedToolModules(flow.compiled, runTools),
       yianVersion: VERSION,
       parent: options.parent == null ? null : { runId: options.parent.runId, node: options.parent.node ?? null },
+      gated: gate !== null,
     });
 
     // Taken once, so a later directory change can't move the log.
@@ -1438,6 +1442,24 @@ async function startRun(
       landed: () => true,
     });
   }
+}
+
+/**
+ * Return the tool set a segment of a run gives its nodes: the host's `tools`, with `context`, the
+ * tool modules the segment started, whether its host completes calls, and the host's check before
+ * each agent tool call (`null` for none). `runFlow` and `advance` both build theirs here.
+ */
+function runToolSet(
+  tools: Readonly<Record<string, ToolEntry>> | null,
+  options: {
+    context: unknown;
+    modules: readonly StartedToolModule[];
+    completesCalls: boolean;
+    gate: BeforeToolCall | null;
+  },
+): ToolSet {
+  const { context, modules, completesCalls, gate } = options;
+  return new ToolSet(tools, { context }).withModules(modules, { completesCalls }).withGate(gate);
 }
 
 /**
@@ -1646,7 +1668,8 @@ export interface AdvanceOptions {
  * when the segment ends, a failed close reported as `runFlow` reports it.
  *
  * `RunResumed` is written only when the last segment crashed or stopped (work in flight, a
- * recorded stop, or no `run_waiting` as its last frontier record) or `numWorkers` changes; then the
+ * recorded stop, or no `run_waiting` as its last frontier record), `numWorkers` changes, or a
+ * `beforeToolCall` hook first gates a run that can move (`gated: true`, kept from then on); then the
  * starts the log left unfinished are retried first, in their recorded order, after one
  * `RunResumed` observer and one `NodeAttemptResumed` per retried node. A waiting run with a node
  * that is wakeable (its calls settled by a delivery) or due (a deadline past by the scheduler's
@@ -1683,7 +1706,10 @@ export interface AdvanceOptions {
  *   recomputed one; ...`), before its model call. Also when `learnable`, a removed option, is
  *   given; when `memory` names an input that isn't a memory input, or gives an instance to one
  *   recorded null (checked for any run, finished or not); or, for an unfinished run, a memory it
- *   recorded isn't bound or isn't at its location, or differs from the recorded one.
+ *   recorded isn't bound or isn't at its location, or differs from the recorded one. Also, before
+ *   anything opens or is appended, for an unfinished gated run (one a `beforeToolCall` hook
+ *   checked) advanced without a hook: `run log <log> is gated: a host checked its tool calls with
+ *   beforeToolCall; resume it with one (advance({ log, beforeToolCall }))`.
  * @throws AuthError when a call-time agent resolves to the provider of the run's host key and
  *   `apiKey` (or a recorded header) wasn't given, before its model call, or the credential store
  *   can't be read.
@@ -1754,14 +1780,22 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       }
       // A finished run opens no tools.
       if (state.result !== null) return resultFromState(state, log, []);
+      const gate = gateOf(options);
+      // Without the hook, a model-made call of a run the host checked would run unchecked.
+      if (state.gated && gate === null) {
+        throw new YianRangeError(
+          `run log ${log} is gated: a host checked its tool calls with beforeToolCall; ` +
+            "resume it with one (advance({ log, beforeToolCall }))",
+        );
+      }
       const models = options.models ?? defaultModelAccess(env);
       const numWorkers = options.numWorkers ?? state.numWorkers;
       // A crash or a stop left work unfinished, or the last segment ended before its run_waiting.
       const crashed =
         state.inFlight.size > 0 || state.lastStopSequence !== null || state.waits.lastFrontier !== "run_waiting";
-      const resume = crashed || numWorkers !== state.numWorkers;
+      const forced = crashed || numWorkers !== state.numWorkers;
       if (
-        !resume &&
+        !forced &&
         state.ready.length === 0 &&
         wakeableNodes(state.waits).length === 0 &&
         dueTimeouts(state.waits, scheduler.now()).size === 0
@@ -1769,6 +1803,8 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
         // Nothing can move: the run still waits, and nothing is appended.
         return resultFromState(state, log, []);
       }
+      // A hooked segment of a run not gated yet records that it is from now on.
+      const resume = forced || (gate !== null && !state.gated);
       if (start.yianVersion !== VERSION) {
         warn(`run log ${log} was started by yian ${start.yianVersion}; resuming it with yian ${VERSION}`);
       }
@@ -1793,7 +1829,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       checkRecordedSpecs("skills", start.skills, recordedSkills(flow.compiled, skills));
       runServers = await openRunServers(unopened, signal);
       runModules = await openRunModules(reachedModules(flow), signal);
-      const runTools = new ToolSet(tools, { context }).withModules(runModules, { completesCalls });
+      const runTools = runToolSet(tools, { context, modules: runModules, completesCalls, gate });
       const hostTypes = memoryTypeTools(flow.memoryTypes);
       checkToolGrants(flow.compiled, runTools);
       checkMemoryGrantNames(flow.compiled, runTools, hostTypes);
@@ -1809,7 +1845,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       );
       memories = reopened.memories;
 
-      const prepared = resume ? prepareRunResumed(state, { numWorkers }) : null;
+      const prepared = resume ? prepareRunResumed(state, { numWorkers, gated: gate !== null }) : null;
       // This segment's appends go through the live channel's wrapper.
       const live = options.live ?? null;
       const appender = live === null ? authority : live.wrap(authority);

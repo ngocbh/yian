@@ -180,6 +180,7 @@ test("a pending step registers a host call; its tool_result answers it", () => {
       assigned: [],
       closedInbox: false,
       closedReason: null,
+      closedSeq: null,
       flow: false,
       scope: null,
       held: false,
@@ -233,7 +234,7 @@ test("node_woken times out takes and sleeps, closes host calls timed_out, and en
   );
   expect(nodeCalls(w, "heard")[0]).toMatchObject({ state: "timed_out", closedReason: null });
   expect(nodeCalls(w, "nap")[0]).toMatchObject({ state: "timed_out" });
-  expect(nodeCalls(w, "ask")[0]).toMatchObject({ state: "closed", closedReason: "timed_out" });
+  expect(nodeCalls(w, "ask")[0]).toMatchObject({ state: "closed", closedReason: "timed_out", closedSeq: 8 });
   expect(w.inboxes.get("msgs")!.absorbing).toEqual([]);
   expect(w.waiting.size).toBe(0);
   expect(w._lastWoken).toEqual(new Map([["heard", 6], ["nap", 7], ["ask", 8]]));
@@ -253,18 +254,18 @@ test("an outcome settles the node's calls and bookkeeping", () => {
 
 test("node_failed closes every other open call failed", () => {
   const w = fold(...START, pending("ask", 1, "r/ask/1"), new NodeWaitingRecord("ask", ["r/ask/1"]), takeWait("heard", "one"), new NodeFailedRecord(failure("work")));
-  expect(nodeCalls(w, "ask")[0]).toMatchObject({ state: "closed", closedReason: "failed" });
-  expect(nodeCalls(w, "heard")[0]).toMatchObject({ state: "closed", closedReason: "failed" });
+  expect(nodeCalls(w, "ask")[0]).toMatchObject({ state: "closed", closedReason: "failed", closedSeq: 5 });
+  expect(nodeCalls(w, "heard")[0]).toMatchObject({ state: "closed", closedReason: "failed", closedSeq: 5 });
 });
 
 test("run_cancelled closes open calls cancelled and run_failed closes them failed; answered calls stay", () => {
   const records = [...START, pending("ask", 1, "r/ask/1"), answer("ask", 2, "r/ask/1"), takeWait("heard", "one")];
   const cancelled = fold(...records, new RunCancelledRecord());
   expect(nodeCalls(cancelled, "ask")[0]!.state).toBe("answered");
-  expect(nodeCalls(cancelled, "heard")[0]).toMatchObject({ state: "closed", closedReason: "cancelled" });
+  expect(nodeCalls(cancelled, "heard")[0]).toMatchObject({ state: "closed", closedReason: "cancelled", closedSeq: 5 });
   const unreachable = new Failure({ code: "graph.terminal_unreachable", message: "END is unreachable", nodeId: "choice" });
   const failed = fold(...records, new RunFailedRecord(unreachable));
-  expect(nodeCalls(failed, "heard")[0]).toMatchObject({ state: "closed", closedReason: "failed" });
+  expect(nodeCalls(failed, "heard")[0]).toMatchObject({ state: "closed", closedReason: "failed", closedSeq: 5 });
 });
 
 test("run_resumed closes its closed_calls crashed and drops pending take commits", () => {
@@ -274,7 +275,7 @@ test("run_resumed closes its closed_calls crashed and drops pending take commits
     pending("agent", 1, "r/agent/1/0", { tool_call_id: "c1" }),
     new RunResumedRecord(["agent"], 2, ["r/agent/1/0"]),
   );
-  expect(nodeCalls(w, "agent")[0]).toMatchObject({ state: "closed", closedReason: "crashed" });
+  expect(nodeCalls(w, "agent")[0]).toMatchObject({ state: "closed", closedReason: "crashed", closedSeq: 4 });
 });
 
 test("a node waiting on two host calls is wakeable only when both settle", () => {

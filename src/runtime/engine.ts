@@ -21,7 +21,7 @@
 
 import { AsyncResource } from "node:async_hooks";
 
-import { END_ID, GrowthRejected } from "../compile/model.ts";
+import { GrowthRejected } from "../compile/model.ts";
 import { addNote, type Failure, type FailureCode, type OriginRef, reprText } from "../diagnostics.ts";
 import {
   type ConsoleLine,
@@ -73,6 +73,7 @@ import {
 } from "./log.ts";
 import {
   callResultStep,
+  callSettledAt,
   callView,
   commitPrepared,
   type GrowBuilder,
@@ -760,11 +761,9 @@ export class FlowEngine {
         seqOf: stepSeq,
         evaluationsSince: (n) => evaluationsAfter(stepSeq(n)),
         evaluationsAfter,
-        answeredAt: (callId) => {
+        settledAt: (callId) => {
           const call = state.waits.calls.get(callId);
-          if (call?.nodeId !== nodeId || call.state !== "answered") return null;
-          // A flow call's END answers it; the agent's `tool_result` only records that answer.
-          return call.scope === null ? call.resultSeq : (state.producers.get(`${call.scope}/${END_ID}`) ?? null);
+          return call?.nodeId === nodeId ? callSettledAt(state, call) : null;
         },
         // Read on demand, so a node that never asks does no more work per start.
         flowCalls: () => enclosingFlowCalls(state, nodeId),

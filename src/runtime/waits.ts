@@ -87,6 +87,8 @@ export interface Call {
   closedInbox: boolean;
   /** Why the call was closed, when its state is `closed`. */
   closedReason: CloseReason | null;
+  /** The seq of the record that closed it, when its state is `closed`. */
+  closedSeq: number | null;
 }
 
 /** One inbox's queue: unread send seqs, whether it is closed, and the takes absorbing its sends. */
@@ -315,6 +317,7 @@ function callFromJson(value: unknown, label: string): Call {
     assigned: seqList(value["assigned"]) ?? undefined,
     closedInbox: typeof value["closedInbox"] === "boolean" ? value["closedInbox"] : undefined,
     closedReason: textOrNull("closedReason"),
+    closedSeq: intOrNullField("closedSeq"),
     flow: typeof value["flow"] === "boolean" ? value["flow"] : undefined,
     scope: textOrNull("scope"),
     held: typeof value["held"] === "boolean" ? value["held"] : undefined,
@@ -417,10 +420,10 @@ export function applyWaitsRecord(w: WaitsState, envelope: { readonly seq: number
   else if (record instanceof NodeFailedRecord) {
     if (record.scope !== null) {
       // A failure inside a flow call's scope fails the call and ends the scope; the run goes on.
-      close(w.calls.get(record.callId!), "failed");
+      close(w.calls.get(record.callId!), "failed", seq);
       endScope(w, record.scope);
     } else {
-      closeOpenCalls(w, "failed");
+      closeOpenCalls(w, "failed", seq);
       settle(w, record.failure.nodeId!);
       // A node failure ends the run.
       w.stops.clear();
@@ -433,15 +436,15 @@ export function applyWaitsRecord(w: WaitsState, envelope: { readonly seq: number
     const freed = [...w._pendingTakes.values()];
     w._pendingTakes.clear();
     for (const take of freed) reoffer(w, take.inbox);
-    for (const callId of record.closedCalls) close(w.calls.get(callId), "crashed");
+    for (const callId of record.closedCalls) close(w.calls.get(callId), "crashed", seq);
   } else if (record instanceof InboxClosedRecord) applyClose(w, record.inbox);
   else if (record instanceof InboxWithdrawnRecord) applyWithdrawn(w, record);
   else if (record instanceof InterruptedRecord) applyInterrupted(w, seq, record);
   else if (record instanceof RunCancelledRecord) {
-    closeOpenCalls(w, "cancelled");
+    closeOpenCalls(w, "cancelled", seq);
     w.stops.clear();
   } else if (record instanceof RunFailedRecord) {
-    closeOpenCalls(w, "failed");
+    closeOpenCalls(w, "failed", seq);
     w.stops.clear();
   }
   const frontier = FRONTIER_KINDS.get(record.constructor);
@@ -540,13 +543,14 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
       assigned: [],
       closedInbox: false,
       closedReason: null,
+      closedSeq: null,
       flow: step["flow"] === true,
       scope: step["flow"] === true && typeof step["scope"] === "string" ? step["scope"] : null,
       held: step["held"] === true,
     });
     // The interrupt closed the node's calls when it landed; a tool whose group was already
     // running may pend after it, and its call is closed at once.
-    if (w.interrupts.has(record.nodeId)) close(w.calls.get(callId), "interrupted");
+    if (w.interrupts.has(record.nodeId)) close(w.calls.get(callId), "interrupted", seq);
   } else if (step["kind"] === "model_call") {
     w._replies.set(record.nodeId, seq);
   } else if (step["kind"] === "tool_result") {
@@ -598,7 +602,7 @@ function applyInterrupted(w: WaitsState, seq: number, record: InterruptedRecord)
     w._interruptInboxes.set(nodeId, record.inbox);
     for (const call of nodeCalls(w, nodeId)) {
       const open = call.state === "open";
-      close(call, "interrupted");
+      close(call, "interrupted", seq);
       if (open && call.scope !== null) endScope(w, call.scope);
     }
   }
@@ -631,6 +635,7 @@ function applyWaiting(w: WaitsState, seq: number, record: NodeWaitingRecord): vo
       assigned: [],
       closedInbox: false,
       closedReason: null,
+      closedSeq: null,
       flow: false,
       scope: null,
       held: false,
@@ -650,7 +655,7 @@ function applyWoken(w: WaitsState, seq: number, record: NodeWokenRecord): void {
     const call = w.calls.get(callId);
     if (call === undefined || call.state !== "open") continue;
     if (call.tool === "take" || call.tool === "sleep") call.state = "timed_out";
-    else close(call, "timed_out");
+    else close(call, "timed_out", seq);
     // A take timing out is a pickup (of nothing).
     if (call.tool === "take") w.stops.delete(call.inbox!);
   }
@@ -731,16 +736,17 @@ function applyWithdrawn(w: WaitsState, record: InboxWithdrawnRecord): void {
   }
 }
 
-/** Close `call` with `reason` when it is open. */
-function close(call: Call | undefined, reason: CloseReason): void {
+/** Close `call` with `reason` when it is open, at the record at `seq`. */
+function close(call: Call | undefined, reason: CloseReason, seq: number): void {
   if (call === undefined || call.state !== "open") return;
   call.state = "closed";
   call.closedReason = reason;
+  call.closedSeq = seq;
 }
 
-/** Close every open call with `reason`. */
-function closeOpenCalls(w: WaitsState, reason: CloseReason): void {
-  for (const call of w.calls.values()) close(call, reason);
+/** Close every open call with `reason`, at the record at `seq`. */
+function closeOpenCalls(w: WaitsState, reason: CloseReason, seq: number): void {
+  for (const call of w.calls.values()) close(call, reason, seq);
 }
 
 /** Forget a settled node's calls and bookkeeping; a take commit no success accepted frees its events. */

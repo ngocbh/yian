@@ -383,27 +383,57 @@ function honor(ctx: AgentRunContext, steps: AgentSteps): Interrupted {
 }
 
 /**
- * Write a closer for each call of the turn that pended and was closed since (the interrupt closed
- * it, or it was registered closed) and has no result yet, in call order (`closeRecorded`). A call
- * the host answered meanwhile keeps its answer.
+ * Write the agent's record of each call of the turn that pended and was settled since without one,
+ * in call order (`recordSettled`): the interrupt closed it, it was registered closed, or its flow's
+ * scope answered or failed. A call the host answered meanwhile keeps its answer.
  */
 function closePended(turn: ToolTurn): void {
   const views = turn.ctx.steps?.currentCalls() ?? [];
   for (const [index, callId] of [...turn.pended].sort(([a], [b]) => a - b)) {
     const view = views.find((each) => each.callId === callId);
     const call = turn.calls[index]!;
-    if (view?.state !== "closed" || turn.steps.hasResult(turn.n, call.id)) continue;
-    closeRecorded(turn, call, index, view);
+    if (view !== undefined && !turn.steps.hasResult(turn.n, call.id)) recordSettled(turn, call, index, view);
   }
 }
 
 /**
+ * Write the agent's record of registered call `index`, which the run settled (`view`) and which
+ * has no result: the answer its flow's scope gave, or its closer (`closeRecorded`). A flow call's
+ * end is announced.
+ *
+ * @returns The text the model reads and whether it is an error; `null` when the record isn't the
+ *   agent's to write: the call is open, or a host answered it.
+ */
+function recordSettled(
+  turn: ToolTurn,
+  call: ToolCallPart,
+  index: number,
+  view: CallView,
+): { readonly output: string; readonly isError: boolean } | null {
+  if (view.state === "closed") return { output: closeRecorded(turn, call, index, view), isError: true };
+  // A host's answer is its own record; the agent records the answer the run shaped for a flow call.
+  if (view.state !== "answered" || view.scope === null || view.result === null) return null;
+  const output = view.result["output"] as string;
+  const isError = view.result["is_error"] === true;
+  turn.steps.toolResult({ callId: call.id, startedAt: null, output, isError });
+  observeFlowCallFinished(turn.live, identityOf(turn, call, index), { result: output });
+  return { output, isError };
+}
+
+/**
  * Write the closer of call `index`, which a record closed (`view`), with that record's word; a
- * flow call's end is announced. A hold never ran, so the model reads it as skipped.
+ * flow call's end is announced. A failed flow call's closer gives its failure. A hold never ran,
+ * so the model reads it as skipped.
  *
  * @returns The text the model reads.
  */
 function closeRecorded(turn: ToolTurn, call: ToolCallPart, index: number, view: CallView): string {
+  if (view.closedReason === "failed" && view.failure !== null) {
+    const output = flowFailureText(call.name, view.scope, view.failure);
+    turn.steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed: "failed" });
+    if (view.scope !== null) observeFlowCallFinished(turn.live, identityOf(turn, call, index), { error: "failed" });
+    return output;
+  }
   const closer = closerResult(closerReason(view.closedReason));
   const output = view.held ? SKIPPED_TOOL_RESULT : closer.output;
   turn.steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed: closer.closed });
@@ -875,29 +905,14 @@ async function answerUnrecorded(turn: ToolTurn, planned: PlannedCall): Promise<n
     turn.pended.set(index, callId);
     return null;
   }
-  // A flow call its scope answered: the agent records the answer the run shaped for it.
-  if (view?.state === "answered" && view.result !== null) {
-    const output = view.result["output"] as string;
-    const isError = view.result["is_error"] === true;
-    const written = turn.steps.toolResult({ callId: call.id, startedAt: null, output, isError });
-    observeFlowCallFinished(turn.live, identityOf(turn, call, index), { result: output });
-    pushToolMessage(turn, call, output, isError);
-    return written;
-  }
   if (view === undefined) {
     if (!planned.resumable) return closeCrashed(turn, call);
     await resendCall(turn, planned);
     return turn.steps.lastWritten();
   }
-  // A flow call that failed: the model reads the failure.
-  if (view.closedReason === "failed" && view.failure !== null) {
-    const output = flowFailureText(call.name, view.scope, view.failure);
-    const closer = turn.steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed: "failed" });
-    if (view.scope !== null) observeFlowCallFinished(turn.live, identityOf(turn, call, index), { error: "failed" });
-    pushToolMessage(turn, call, output, true);
-    return closer;
-  }
-  pushToolMessage(turn, call, closeRecorded(turn, call, index, view), true);
+  // Answered by its flow's scope, or closed: a host's answer is a recorded result, never here.
+  const { output, isError } = recordSettled(turn, call, index, view)!;
+  pushToolMessage(turn, call, output, isError);
   return turn.steps.lastWritten();
 }
 
@@ -963,9 +978,8 @@ function replyHolds(turn: ToolTurn): ReplyHolds {
  * closed. Of the evaluations after the last answer, the first one that got past every call up to
  * the last group's end ran them, and any later one only sends cut calls again. An evaluation got
  * past a call when it had the call's result, wrote it, or found it open: registered before the
- * evaluation began, and settled after (the run knows when an interrupt closed a call and when a
- * flow's scope or a host answered it; any other close counts as after). One that began with the
- * pending interrupt skipped them instead.
+ * evaluation began, and settled after (`NodeSteps.settledAt`). One that began with the pending
+ * interrupt skipped them instead.
  */
 function laterRunner(turn: ToolTurn, holds: ReplyHolds, by: number | null): number | null {
   const answer = holds.decidedAt;
@@ -982,8 +996,10 @@ function laterRunner(turn: ToolTurn, holds: ReplyHolds, by: number | null): numb
     const view = steps.calls.find((each) => each.callId === callId);
     // Open now, or a host's answer, which came while it was open.
     if (view?.state === "open" || (view?.state === "answered" && view.scope === null)) return true;
-    const settled = view?.state === "answered" ? steps.answeredAt(callId) : view?.closedReason === "interrupted" ? by : null;
-    return settled === null || rank > steps.evaluationsAfter(settled);
+    // Found open only when it began before the record that settled the call: a wake that timed
+    // the call out began with it closed.
+    const settled = steps.settledAt(callId);
+    return settled === null || rank > steps.evaluationsAfter(settled - 1);
   };
   for (let rank = evaluationsSince(turn, answer); rank > 1; rank--) {
     const past = turn.calls.every((_, index) => index > holds.lastEnd || holds.ends.has(index) || passed(rank, index));
@@ -1050,8 +1066,8 @@ async function concurrencySafe(turn: ToolTurn, call: ToolCallPart, index: number
  * Report the calls from call `start` on as skipped by a host interrupt, in call order: each gets a
  * `skipped` `tool_result` step (`SKIPPED_TOOL_RESULT`, an error) and its skipped events. None of
  * them runs. A call with a result keeps it, whether an earlier start or this one wrote it; a call
- * the run registered keeps the host's answer, or takes the closer of the record that closed it
- * (`closeRecorded`).
+ * the run registered keeps the host's answer, or takes its flow's answer or the closer of the
+ * record that closed it (`recordSettled`).
  *
  * @returns `true`, for the caller to return.
  */
@@ -1062,7 +1078,7 @@ function skipFrom(turn: ToolTurn, start: number): true {
     const callId = agentCallId(turn, index);
     const view = views.find((each) => each.callId === callId);
     if (view !== undefined) {
-      if (view.state === "closed") closeRecorded(turn, call, index, view);
+      recordSettled(turn, call, index, view);
       continue;
     }
     turn.steps.toolResult({

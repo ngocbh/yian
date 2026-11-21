@@ -1062,6 +1062,10 @@ export interface NodeStepsReaders {
   readonly seqOf?: ((n: number) => number) | null;
   /** Counts the node's starts and wakes since a step; `evaluationsSince` is 1 without it. */
   readonly evaluationsSince?: ((n: number) => number) | null;
+  /** Counts the node's starts and wakes after a record; `evaluationsAfter` is 1 without it. */
+  readonly evaluationsAfter?: ((seq: number) => number) | null;
+  /** Gives the seq of the record that answered one of the node's calls; `answeredAt` is `null` without it. */
+  readonly answeredAt?: ((callId: string) => number | null) | null;
   /** Reads the flow calls enclosing the node; `flowCalls()` is empty without it. */
   readonly flowCalls?: (() => readonly EnclosingFlowCall[]) | null;
 }
@@ -1073,6 +1077,8 @@ const NODE_STEPS_READERS = [
   "resumesSince",
   "seqOf",
   "evaluationsSince",
+  "evaluationsAfter",
+  "answeredAt",
   "flowCalls",
 ] as const satisfies readonly (keyof NodeStepsReaders)[];
 
@@ -1158,6 +1164,12 @@ export class NodeSteps {
    * @throws RangeError in a run, when `n` isn't one of the node's recorded steps.
    */
   readonly evaluationsSince: (n: number) => number;
+  /**
+   * How many of the node's evaluations began after the run-log record at `seq`: its
+   * `node_started` and `node_woken` records after it, this evaluation's own included. Outside a run
+   * it is 1.
+   */
+  readonly evaluationsAfter: (seq: number) => number;
   /** The `n` after the last step recorded through this object, or after `prior` before any. */
   #next: number;
   /** What the node reads from the run state, as the engine passed it; empty outside a run. */
@@ -1196,7 +1208,7 @@ export class NodeSteps {
       const reader = readers[name] ?? null;
       if (reader !== null && typeof reader !== "function") throw new YianTypeError(`${name} must be callable or null`);
     }
-    const { resumesSince = null, seqOf = null, evaluationsSince = null } = readers;
+    const { resumesSince = null, seqOf = null, evaluationsSince = null, evaluationsAfter = null } = readers;
     if (typeof maxEventBytes !== "number" || !Number.isSafeInteger(maxEventBytes) || maxEventBytes < 1) {
       throw new YianRangeError("maxEventBytes must be a positive int");
     }
@@ -1212,6 +1224,7 @@ export class NodeSteps {
         throw new YianRangeError(`step ${String(n)} has no seq outside a run`);
       });
     this.evaluationsSince = evaluationsSince ?? (() => 1);
+    this.evaluationsAfter = evaluationsAfter ?? (() => 1);
     this.#next = prior.length + 1;
     this.#readers = Object.freeze({ ...readers });
     this.record = (step, options) => {
@@ -1241,6 +1254,15 @@ export class NodeSteps {
     const current = this.#readers.currentCalls ?? null;
     if (current === null) return this.calls;
     return Object.freeze(current().map((call) => Object.freeze({ ...call })));
+  }
+
+  /**
+   * The seq of the record that answered the node's call `callId` as the run state holds it now:
+   * the host's `tool_result` step, or the END of a flow call's scope; `null` while it isn't
+   * answered, when the run no longer knows it, and outside a run.
+   */
+  answeredAt(callId: string): number | null {
+    return this.#readers.answeredAt?.(callId) ?? null;
   }
 
   /**

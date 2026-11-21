@@ -29,6 +29,11 @@
  * with the run under its call id `<run>/<node>/<n>/<index>`; the reply's other calls still run, and
  * then the loop returns `Pending` naming every call of the reply that pended. A host's `complete`
  * writes the call's `tool_result`; the woken agent replays and calls the model with every result.
+ * A call the host's check holds (`beforeToolCall` gives `pending()`) is registered the same way, by
+ * a hold step written before its tool runs, and its tool never runs: `complete` gives the model
+ * its result. The calls before it and in its group run; the reply's later calls wait until every
+ * hold is answered, then run as live, checked and asked about again. An interrupt closes a hold,
+ * whose closer reads as skipped, and skips the waiting calls.
  *
  * An agent with a steer inbox reads it at the top of each iteration (a recorded `steer` step) and
  * stops at a host interrupt of that inbox between effects, while a model call waits for its reply
@@ -41,8 +46,8 @@
  * `maxToolIterations`; a structured agent without tools or skills reads its steers once, before
  * its single call.
  *
- * Knows about: diagnostics, events, llm, llm_clients connection, platform, nodes/base, skills,
- *              tools, typesys, peer AGENT modules.
+ * Knows about: diagnostics, events, llm, llm_clients connection, platform, nodes/base,
+ *              nodes/contracts, skills, tools, typesys, peer AGENT modules.
  */
 
 import { reprText } from "../../diagnostics.ts";
@@ -86,6 +91,7 @@ import { freezeParsed } from "../../typesys/json.ts";
 import { formatRecordTime, parseDuration } from "../../typesys/temporal.ts";
 import { isRecord, rejectDeepNesting, type Type, TypeCheckError, type ValueRecord } from "../../typesys/values.ts";
 import { CapabilityFault, Output, Pending, type RebuiltRequest, type RebuiltRequests, type SteerInbox } from "../base.ts";
+import type { CallView } from "../contracts.ts";
 import {
   AgentLoopError,
   type AgentRunContext,
@@ -326,7 +332,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
 
     const pended = new Map<number, string>();
     const turn: ToolTurn = {
-      ctx, toolset, granted, resumable, skills, live, n, steps, messages, calls, interrupt, pended,
+      ctx, toolset, granted, resumable, skills, live, n, steps, messages, calls, interrupt, pended, waitingFrom: null,
     };
     if (capped || iterations === ctx.maxToolIterations) {
       // The model reads why its calls didn't run, then gives its answer.
@@ -336,9 +342,11 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
       continue;
     }
     const skipped = await (replayed ? replayToolCalls(turn) : runToolCalls(turn));
-    // The interrupt closed the reply's pending calls; the agent doesn't wait on them.
+    // The interrupt closed the reply's pending calls, and the calls waiting for a hold never run;
+    // the agent doesn't wait on them.
     if (skipped || (pended.size > 0 && interruptRequested(interrupt, steps))) {
       closePended(turn);
+      if (turn.waitingFrom !== null) skipFrom(turn, turn.waitingFrom);
       return honor(ctx, steps);
     }
     if (pended.size > 0) return new Pending([...pended].sort(([a], [b]) => a - b).map(([, callId]) => callId));
@@ -376,19 +384,31 @@ function honor(ctx: AgentRunContext, steps: AgentSteps): Interrupted {
 
 /**
  * Write a closer for each call of the turn that pended and was closed since (the interrupt closed
- * it, or it was registered closed), in call order, with the word of what closed it. A call the
- * host answered meanwhile keeps its answer.
+ * it, or it was registered closed) and has no result yet, in call order (`closeRecorded`). A call
+ * the host answered meanwhile keeps its answer.
  */
 function closePended(turn: ToolTurn): void {
   const views = turn.ctx.steps?.currentCalls() ?? [];
   for (const [index, callId] of [...turn.pended].sort(([a], [b]) => a - b)) {
     const view = views.find((each) => each.callId === callId);
-    if (view?.state !== "closed") continue;
-    const { output, closed } = closerResult(closerReason(view.closedReason));
     const call = turn.calls[index]!;
-    turn.steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed });
-    if (view.scope !== null) observeFlowCallFinished(turn.live, identityOf(turn, call, index), { error: closed });
+    if (view?.state !== "closed" || turn.steps.hasResult(turn.n, call.id)) continue;
+    closeRecorded(turn, call, index, view);
   }
+}
+
+/**
+ * Write the closer of call `index`, which a record closed (`view`), with that record's word; a
+ * flow call's end is announced. A hold never ran, so the model reads it as skipped.
+ *
+ * @returns The text the model reads.
+ */
+function closeRecorded(turn: ToolTurn, call: ToolCallPart, index: number, view: CallView): string {
+  const closer = closerResult(closerReason(view.closedReason));
+  const output = view.held ? SKIPPED_TOOL_RESULT : closer.output;
+  turn.steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed: closer.closed });
+  if (view.scope !== null) observeFlowCallFinished(turn.live, identityOf(turn, call, index), { error: closer.closed });
+  return output;
 }
 
 /** The closer word for a call closed for `reason`: a deadline's or an interrupt's, else `crashed` (its outcome is unknown). */
@@ -525,8 +545,13 @@ interface ToolTurn {
   readonly calls: readonly ToolCallPart[];
   /** The host's interrupt signal, or `undefined` for an agent without a steer inbox. */
   readonly interrupt: AbortSignal | undefined;
-  /** The calls whose handler returned `pending()`: each one's yian call id by its index. */
+  /** The calls whose handler returned `pending()`, or that the host's check held: each one's yian call id by its index. */
   readonly pended: Map<number, string>;
+  /**
+   * The first of the reply's calls that wait until a hold before them is answered, which an honor
+   * skips; `null` when none waits.
+   */
+  waitingFrom: number | null;
 }
 
 /**
@@ -591,53 +616,72 @@ type CallCheck = { readonly planned: PlannedCall; readonly safe: boolean } | { r
  * `load_skill` call, or a tool whose `isConcurrencySafe` says so) form a group; an unsafe call
  * runs alone, after the group before it, as does a call refused before its tool, which gets its
  * error result. A check that faults ends the calls before it as their own group, which runs and
- * commits; then the node fails at it.
+ * commits; then the node fails at it. Once a group holds a call (`runGroup` gives `held`), the
+ * later calls wait until the hold is answered: none of them starts, and a check that faulted is
+ * made again then.
  *
  * A host interrupt seen before a call's check, before a group starts, or at a faulted check skips
  * every call not started yet (`skipFrom`); a running group always finishes and commits, its calls
  * told of the interrupt through `ToolContext.interrupted`.
  *
+ * @param options `from` is the first call to run, the calls before it already answered;
+ *   `attemptSince` the step after which the calls became runnable (a hold's answer), whose
+ *   evaluations since count each call's attempts (`checkCall`).
  * @returns Whether a host interrupt skipped the remaining calls.
  * @throws A stop's reason, the first failing call's error, a result `toolText` refuses, or a
  *   faulted check's error.
  */
-async function runToolCalls(turn: ToolTurn): Promise<boolean> {
+async function runToolCalls(
+  turn: ToolTurn,
+  { from = 0, attemptSince = null }: { from?: number; attemptSince?: number | null } = {},
+): Promise<boolean> {
   let group: PlannedCall[] = [];
   for (const [index, call] of turn.calls.entries()) {
+    if (index < from) continue;
     // Not `checkStopped(ctx)`: without a context signal, the tools run under the tool set's bound
     // run signal, so a stop on it must stop the calls too.
     checkNodeStopped(turn);
     // After the stop; nothing of `group` has started yet, so it is skipped whole.
     if (turn.interrupt?.aborted) return skipFrom(turn, group[0]?.index ?? index);
-    const check = await checkCall(turn, call, index);
+    const check = await checkCall(turn, call, index, attemptSince);
     if ("error" in check) {
-      if (await runGroup(turn, group)) return true;
-      return await failCall(turn, call, index, check.error);
+      const before = await runGroup(turn, group);
+      return before === "ran" ? await failCall(turn, call, index, check.error) : before === "skipped";
     }
     if (check.safe) {
       group.push(check.planned);
       continue;
     }
-    if (await runGroup(turn, group)) return true;
+    const before = await runGroup(turn, group);
+    if (before !== "ran") return before === "skipped";
     group = [];
-    if (await runGroup(turn, [check.planned])) return true;
+    const alone = await runGroup(turn, [check.planned]);
+    if (alone !== "ran") return alone === "skipped";
   }
-  return await runGroup(turn, group);
+  return (await runGroup(turn, group)) === "skipped";
+}
+
+/**
+ * Give a replayed reply's tool calls their results, appending a tool message per call in call
+ * order, as live commits them: a reply the host's check held a call of as `replayHeldCalls` does,
+ * any other as `replayCalls` does.
+ *
+ * @returns Whether a host interrupt skipped calls of this reply, when it was live (a recorded
+ *   `skipped` result) or now.
+ * @throws As the walk it takes throws.
+ */
+async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
+  const holds = replyHolds(turn);
+  return holds.ends.size > 0 ? await replayHeldCalls(turn, holds) : await replayCalls(turn);
 }
 
 /**
  * Give a replayed reply's tool calls their results, appending a tool message per call in call
  * order, as live commits them. A call keeps the result an earlier start recorded, unchecked. A
- * call with none is checked as live: a faulted check fails the node as live. Otherwise a call the
- * run still holds open (it pended and waits on, beside a sibling a deadline closed) is pended
- * again, with no closer and no handler call, and gets no tool message: the loop then returns
- * `Pending`. A call to a resumable tool that no record closed was cut off by a crash or a stop,
- * so it is sent again (`resendCall`), with the same call id; so is a call refused for what the
- * reply alone shows (unparsed arguments, an ungranted name, the schema check), which gets the same
- * error result again. Any other call is closed with the word of the record that closed it
- * (`closerResult`: `timed_out` for an ask whose deadline passed, `interrupted` for a call a host
- * interrupt closed), `crashed` when none did (its run was cut off before its result), the closer
- * written as its `tool_result` step, and never runs.
+ * call with none is checked as live: a faulted check fails the node as live. Otherwise it is
+ * answered by its view (`answerUnrecorded`): pended again while the run still holds it open, sent
+ * again when no record closed it and its tool is resumable (or the reply alone refuses it), else
+ * closed with the word of the record that closed it, `crashed` when none did.
  *
  * With a host interrupt pending, only the calls that may have run are sent again or closed, and
  * the rest are skipped from the first one on (`skipFrom`), as live skips the calls it hasn't
@@ -652,16 +696,27 @@ async function runToolCalls(turn: ToolTurn): Promise<boolean> {
  * (`NodeSteps.seqOf`), so a replay decides as an earlier one did. A call outside the group is
  * skipped before its check.
  *
+ * @param after For the calls after a reply's holds (`replayHeldCalls`): they start at `from`; the
+ *   evaluation `runner` (as `laterRunner` counts it) ran them as live, so it stands for the reply's
+ *   own start; and each call's attempts count from the last hold's `answer`.
  * @returns Whether a host interrupt skipped calls of this reply, when it was live (a recorded
  *   `skipped` result) or now.
  * @throws A stop's reason, a faulted check's error (`failCall`), or what a call sent again throws
  *   (`resendCall`).
  */
-async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
+async function replayCalls(
+  turn: ToolTurn,
+  after: { from: number; answer: number; runner: number } | null = null,
+): Promise<boolean> {
   const { steps } = turn;
   const resumesSince = turn.ctx.steps?.resumesSince ?? (() => 0);
-  /** Whether step `m` was recorded by the start that recorded the reply. */
-  const own = (m: number) => resumesSince(m) === resumesSince(turn.n);
+  const from = after?.from ?? 0;
+  const attemptSince = after?.answer ?? null;
+  /** Whether step `m` was recorded by the start that recorded the reply, or ran the calls after its holds. */
+  const own =
+    after === null
+      ? (m: number) => resumesSince(m) === resumesSince(turn.n)
+      : (m: number) => evaluationsSince(turn, m) === after.runner - 1;
   // The group the reply's own start was running at its cut: not reached yet, still taking safe
   // calls, or ended. Set in `joins`, so declared wide: an initializer alone would narrow it.
   let running = "ahead" as "ahead" | "open" | "ended";
@@ -680,7 +735,7 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
     return (callId === undefined ? null : steps.recordedPending(callId)) ?? steps.recordedResult(turn.n, call.id)?.n ?? null;
   };
   // Only a call with neither can be skipped, so with none the groups needn't be formed.
-  const unfinished = turn.calls.some((call, index) => ranAt(call, index) === null);
+  const unfinished = turn.calls.some((call, index) => index >= from && ranAt(call, index) === null);
   // The step at which a start after the reply's own last reached the next call: where it finished
   // the call before, with its result or, for a call it pended, its pending step (the answer or the
   // closer comes after, and a host writes the answer). `null` before any.
@@ -692,6 +747,7 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
   const mayHaveRun = (call: ToolCallPart, by: number): boolean =>
     turn.resumable.has(call.name) && (reached === null || turn.ctx.steps!.seqOf(reached) < by);
   for (const [index, call] of turn.calls.entries()) {
+    if (index < from) continue;
     checkNodeStopped(turn);
     const result = steps.recordedResult(turn.n, call.id);
     // An interrupt skipped from this call's group on; the groups before it committed. A cut can
@@ -721,41 +777,233 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
       pushToolMessage(turn, call, result.output, result.isError);
       continue;
     }
-    const check = await checkCall(turn, call, index);
+    const check = await checkCall(turn, call, index, attemptSince);
     if ("error" in check) return await failCall(turn, call, index, check.error);
-    const view = turn.ctx.steps?.calls.find((each) => each.callId === callId);
-    if (callId !== undefined && view?.state === "open") {
-      turn.pended.set(index, callId);
-      continue;
-    }
-    // A flow call its scope answered: the agent records the answer the run shaped for it.
-    if (view?.state === "answered" && view.result !== null) {
-      const output = view.result["output"] as string;
-      const isError = view.result["is_error"] === true;
-      const written = steps.toolResult({ callId: call.id, startedAt: null, output, isError });
-      observeFlowCallFinished(turn.live, identityOf(turn, call, index), { result: output });
-      if (laterPending === null) reached = written;
-      pushToolMessage(turn, call, output, isError);
-      continue;
-    }
+    // Only a call nothing registered is placed: one the run registered has a pending step.
     if (ran === null && !joins(check.safe) && by !== null && !mayHaveRun(call, by)) return skipFrom(turn, index);
-    if (view === undefined && check.planned.resumable) {
-      await resendCall(turn, check.planned);
-      reached = steps.lastWritten() ?? reached;
-      continue;
-    }
-    // A flow call that failed: the model reads the failure.
-    const { output, closed } =
-      view?.closedReason === "failed" && view.failure !== null
-        ? { output: flowFailureText(call.name, view.scope, view.failure), closed: "failed" as const }
-        : closerResult(closerReason(view?.closedReason ?? null));
-    const closer = steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed });
-    if (view?.scope != null) observeFlowCallFinished(turn.live, identityOf(turn, call, index), { error: closed });
+    const written = await answerUnrecorded(turn, check.planned);
     // A later start that pended the call reached the next one already.
-    if (laterPending === null) reached = closer;
-    pushToolMessage(turn, call, output, true);
+    if (written !== null && laterPending === null) reached = written;
   }
   return false;
+}
+
+/**
+ * Give a replayed reply the host's check held calls of its tool calls' results, as `replayCalls`
+ * does, by its holds as the steps and the calls when the evaluation began show them
+ * (`replyHolds`), in call order:
+ * 1. A call after the group of a hold undecided for this evaluation waits, unchecked: the walk
+ *    stops there (`ToolTurn.waitingFrom`), or skips from it with a host interrupt pending.
+ * 2. A held call keeps the host's answer, and is pended again too while it is undecided and no
+ *    interrupt is pending, so the node wakes at once to run the waiting calls.
+ * 3. A held call with no result is pended again while open, or gets the closer of the interrupt
+ *    that closed it.
+ * 4. The calls after every hold's group were run as live by the evaluation `laterRunner` finds,
+ *    and `replayCalls` replays them from its records. When none ran them, they run as live now
+ *    (`runToolCalls`), their attempts counting from the last answer, or are skipped with a host
+ *    interrupt pending, or were skipped already.
+ * 5. Any other call keeps its result, or is answered by its view (`answerUnrecorded`). One with no
+ *    record is in a hold's group, since the groups before a hold's ran to their end, so it may have
+ *    started with the hold: it is sent again or closed, never skipped. Its attempts count from the
+ *    latest answer of the holds before its group.
+ *
+ * @returns Whether a host interrupt skipped calls of this reply.
+ * @throws As `replayCalls`.
+ */
+async function replayHeldCalls(turn: ToolTurn, holds: ReplyHolds): Promise<boolean> {
+  for (const [index, call] of turn.calls.entries()) {
+    checkNodeStopped(turn);
+    // Read at each call: an interrupt can arrive while a call is sent again.
+    const by = turn.ctx.steerInbox?.interruptedBy() ?? null;
+    if (index > holds.waitAfter) {
+      if (by !== null) return skipFrom(turn, index);
+      turn.waitingFrom = index;
+      return false;
+    }
+    if (index > holds.lastEnd) {
+      // An interrupt skipped the calls from here on, live or as it was honored; a cut can land
+      // among the skips, so the later calls without one are skipped now.
+      if (turn.steps.recordedResult(turn.n, call.id)?.closed === "skipped") return skipFrom(turn, index + 1);
+      const runner = laterRunner(turn, holds, by);
+      if (runner !== null) return await replayCalls(turn, { from: index, answer: holds.decidedAt!, runner });
+      if (by !== null) return skipFrom(turn, index);
+      return await runToolCalls(turn, { from: index, attemptSince: holds.decidedAt });
+    }
+    const callId = agentCallId(turn, index)!;
+    const result = turn.steps.recordedResult(turn.n, call.id);
+    if (holds.ends.has(index)) {
+      if (result !== null) {
+        pushToolMessage(turn, call, result.output, result.isError);
+        if (holds.undecided.has(index) && by === null) turn.pended.set(index, callId);
+        continue;
+      }
+      const view = turn.ctx.steps?.calls.find((each) => each.callId === callId);
+      if (view?.state === "closed") pushToolMessage(turn, call, closeRecorded(turn, call, index, view), true);
+      else turn.pended.set(index, callId);
+      continue;
+    }
+    if (result?.closed === "skipped") return skipFrom(turn, index + 1);
+    if (result !== null) {
+      pushToolMessage(turn, call, result.output, result.isError);
+      continue;
+    }
+    const check = await checkCall(turn, call, index, answerBefore(holds, index));
+    if ("error" in check) return await failCall(turn, call, index, check.error);
+    await answerUnrecorded(turn, check.planned);
+  }
+  return false;
+}
+
+/**
+ * Answer replayed call `planned`, which has no result, by its view as the evaluation began
+ * (`NodeSteps.calls`), appending its tool message unless it pends. A call the run still holds
+ * open (it pended and waits on, beside a sibling a deadline closed) is pended again, with no closer
+ * and no handler call: the loop then returns `Pending`. A flow call its scope answered gets the
+ * answer the run shaped for it. A call nothing registered was cut off by a crash or a stop: it is
+ * sent again (`resendCall`), with the same call id, when it is resumable (its tool is, or the
+ * reply alone refuses it, which gets the same error result again), else closed `crashed`, its
+ * outcome unknown. Any other call is closed with the word of the record that closed it
+ * (`closeRecorded`), a failed flow call with its failure; it never runs.
+ *
+ * @returns The `n` of the last step it wrote, or `null` when it pended the call.
+ * @throws What a call sent again throws (`resendCall`).
+ */
+async function answerUnrecorded(turn: ToolTurn, planned: PlannedCall): Promise<number | null> {
+  const { call, index, callId } = planned;
+  const view = turn.ctx.steps?.calls.find((each) => each.callId === callId);
+  if (callId !== undefined && view?.state === "open") {
+    turn.pended.set(index, callId);
+    return null;
+  }
+  // A flow call its scope answered: the agent records the answer the run shaped for it.
+  if (view?.state === "answered" && view.result !== null) {
+    const output = view.result["output"] as string;
+    const isError = view.result["is_error"] === true;
+    const written = turn.steps.toolResult({ callId: call.id, startedAt: null, output, isError });
+    observeFlowCallFinished(turn.live, identityOf(turn, call, index), { result: output });
+    pushToolMessage(turn, call, output, isError);
+    return written;
+  }
+  if (view === undefined) {
+    if (!planned.resumable) return closeCrashed(turn, call);
+    await resendCall(turn, planned);
+    return turn.steps.lastWritten();
+  }
+  // A flow call that failed: the model reads the failure.
+  if (view.closedReason === "failed" && view.failure !== null) {
+    const output = flowFailureText(call.name, view.scope, view.failure);
+    const closer = turn.steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed: "failed" });
+    if (view.scope !== null) observeFlowCallFinished(turn.live, identityOf(turn, call, index), { error: "failed" });
+    pushToolMessage(turn, call, output, true);
+    return closer;
+  }
+  pushToolMessage(turn, call, closeRecorded(turn, call, index, view), true);
+  return turn.steps.lastWritten();
+}
+
+/** Close `call` `crashed`, its outcome unknown, and append its message; return the closer's `n`. */
+function closeCrashed(turn: ToolTurn, call: ToolCallPart): number {
+  const { output, closed } = closerResult("crashed");
+  const n = turn.steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed });
+  pushToolMessage(turn, call, output, true);
+  return n;
+}
+
+/** What a replay knows of a reply's holds, from its steps and the calls as the evaluation began. */
+interface ReplyHolds {
+  /** The last call of each held call's group, by the held call's index. */
+  readonly ends: ReadonlyMap<number, number>;
+  /** The step of the host's answer that decided each hold before the evaluation began, by the held call's index. */
+  readonly answers: ReadonlyMap<number, number>;
+  /** The held calls undecided for this evaluation: open, or answered after it began. */
+  readonly undecided: ReadonlySet<number>;
+  /** Whether a record closed a hold. */
+  readonly closed: boolean;
+  /** The calls after this one wait for an undecided hold; `Infinity` when none waits. */
+  readonly waitAfter: number;
+  /** The last call of the last hold's group; -1 without a hold. */
+  readonly lastEnd: number;
+  /** The latest of `answers`; `null` when no answer decided a hold. */
+  readonly decidedAt: number | null;
+}
+
+/**
+ * Return what the steps and the calls as the evaluation began (`NodeSteps.calls`) show of the
+ * reply's holds. A hold is decided by the host's answer before the evaluation began, or by the
+ * interrupt that closed it; one answered after the evaluation began (none of its evaluations since,
+ * `evaluationsSince`) is undecided for it, as an open one is.
+ */
+function replyHolds(turn: ToolTurn): ReplyHolds {
+  const ends = new Map<number, number>();
+  const answers = new Map<number, number>();
+  const undecided = new Set<number>();
+  let closed = false;
+  for (const [index, call] of turn.calls.entries()) {
+    const callId = agentCallId(turn, index);
+    const groupEnd = callId === undefined ? null : turn.steps.recordedHold(callId);
+    if (groupEnd === null) continue;
+    ends.set(index, groupEnd);
+    const view = turn.ctx.steps?.calls.find((each) => each.callId === callId);
+    const answer = view?.state === "answered" ? turn.steps.recordedResult(turn.n, call.id) : null;
+    if (view?.state === "closed") closed = true;
+    else if (answer !== null && evaluationsSince(turn, answer.n) > 0) answers.set(index, answer.n);
+    else undecided.add(index);
+  }
+  const waitAfter = Math.min(...[...undecided].map((index) => ends.get(index)!));
+  const decidedAt = answers.size === 0 ? null : Math.max(...answers.values());
+  return { ends, answers, undecided, closed, waitAfter, lastEnd: Math.max(-1, ...ends.values()), decidedAt };
+}
+
+/**
+ * Return the evaluation that ran the calls after every hold's group as live, as the number of the
+ * node's evaluations that began at or after it (this one counting 1, so at least 2); `null` when
+ * none did.
+ *
+ * No call after a hold's group starts before every hold is decided, and none after a hold a record
+ * closed. Of the evaluations after the last answer, the first one that got past every call up to
+ * the last group's end ran them, and any later one only sends cut calls again. An evaluation got
+ * past a call when it had the call's result, wrote it, or found it open: registered before the
+ * evaluation began, and settled after (the run knows when an interrupt closed a call and when a
+ * flow's scope or a host answered it; any other close counts as after). One that began with the
+ * pending interrupt skipped them instead.
+ */
+function laterRunner(turn: ToolTurn, holds: ReplyHolds, by: number | null): number | null {
+  const answer = holds.decidedAt;
+  if (answer === null || holds.closed) return null;
+  const steps = turn.ctx.steps!;
+  /** Whether the evaluation `rank` evaluations back got past call `index`. */
+  const passed = (rank: number, index: number): boolean => {
+    const call = turn.calls[index]!;
+    const callId = agentCallId(turn, index)!;
+    const result = turn.steps.recordedResult(turn.n, call.id);
+    if (result !== null && rank <= evaluationsSince(turn, result.n) + 1) return true;
+    const registered = turn.steps.recordedPending(callId);
+    if (registered === null || rank > evaluationsSince(turn, registered) + 1) return false;
+    const view = steps.calls.find((each) => each.callId === callId);
+    // Open now, or a host's answer, which came while it was open.
+    if (view?.state === "open" || (view?.state === "answered" && view.scope === null)) return true;
+    const settled = view?.state === "answered" ? steps.answeredAt(callId) : view?.closedReason === "interrupted" ? by : null;
+    return settled === null || rank > steps.evaluationsAfter(settled);
+  };
+  for (let rank = evaluationsSince(turn, answer); rank > 1; rank--) {
+    const past = turn.calls.every((_, index) => index > holds.lastEnd || holds.ends.has(index) || passed(rank, index));
+    if (past) return by !== null && steps.evaluationsAfter(by) >= rank ? null : rank;
+  }
+  return null;
+}
+
+/**
+ * The latest answer of the reply's holds whose groups end before call `index`, where the call
+ * became runnable; `null` when none does.
+ */
+function answerBefore(holds: ReplyHolds, index: number): number | null {
+  const before = [...holds.answers].filter(([held]) => holds.ends.get(held)! < index).map(([, answer]) => answer);
+  return before.length === 0 ? null : Math.max(...before);
+}
+
+/** How many of the node's evaluations began after step `n` (`NodeSteps.evaluationsSince`); 1 outside a run. */
+function evaluationsSince(turn: ToolTurn, n: number): number {
+  return turn.ctx.steps?.evaluationsSince(n) ?? 1;
 }
 
 /**
@@ -801,14 +1049,22 @@ async function concurrencySafe(turn: ToolTurn, call: ToolCallPart, index: number
 /**
  * Report the calls from call `start` on as skipped by a host interrupt, in call order: each gets a
  * `skipped` `tool_result` step (`SKIPPED_TOOL_RESULT`, an error) and its skipped events. None of
- * them runs. A call an earlier start recorded a result for keeps it, as does one at `answered`,
- * whose result this start wrote.
+ * them runs. A call with a result keeps it, whether an earlier start or this one wrote it; a call
+ * the run registered keeps the host's answer, or takes the closer of the record that closed it
+ * (`closeRecorded`).
  *
  * @returns `true`, for the caller to return.
  */
-function skipFrom(turn: ToolTurn, start: number, answered: ReadonlySet<number> = new Set()): true {
+function skipFrom(turn: ToolTurn, start: number): true {
+  const views = turn.ctx.steps?.currentCalls() ?? [];
   for (const [index, call] of turn.calls.entries()) {
-    if (index < start || answered.has(index) || turn.steps.recordedResult(turn.n, call.id) !== null) continue;
+    if (index < start || turn.steps.hasResult(turn.n, call.id)) continue;
+    const callId = agentCallId(turn, index);
+    const view = views.find((each) => each.callId === callId);
+    if (view !== undefined) {
+      if (view.state === "closed") closeRecorded(turn, call, index, view);
+      continue;
+    }
     turn.steps.toolResult({
       callId: call.id,
       startedAt: null,
@@ -829,9 +1085,17 @@ function skipFrom(turn: ToolTurn, start: number, answered: ReadonlySet<number> =
  * and arguments the schema or the validator refuses (the check's message, or the message of a
  * `ReportedToolError` the validator threw).
  *
+ * @param attemptSince The step after which the call became runnable (the answer of a hold it
+ *   waited for), whose evaluations since are its attempt (`NodeSteps.evaluationsSince`); `null` for
+ *   a call runnable since its reply.
  * @returns The planned call, or the error of a check that failed otherwise (a validator that threw).
  */
-async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Promise<CallCheck> {
+async function checkCall(
+  turn: ToolTurn,
+  call: ToolCallPart,
+  index: number,
+  attemptSince: number | null = null,
+): Promise<CallCheck> {
   const { ctx, toolset, skills } = turn;
   const args = call.arguments;
   if (args === null) return refused(call, index, new ReportedToolError(unparsedText(call.name)), true);
@@ -898,8 +1162,9 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
   // calls that ran: a reply a crash cut before its `model_call` was written ran no tool. Outside a
   // run (no run id) the tool set gives each call a fresh id.
   const callId = agentCallId(turn, index);
-  // Above 1 only for a call a crash or a stop cut off after its reply, which a resume sends again.
-  const attempt = 1 + (ctx.steps?.resumesSince(turn.n) ?? 0);
+  // Above 1 only for a call a crash or a stop cut off after its reply, which a resume sends again;
+  // a call that waited for a hold counts from the hold's answer.
+  const attempt = attemptSince === null ? 1 + (ctx.steps?.resumesSince(turn.n) ?? 0) : evaluationsSince(turn, attemptSince);
   const interrupted = new AbortController();
   const invoke = (signal: AbortSignal) =>
     toolset.invoke(checked, { node: ctx.nodeId, callId, attempt, signal, interrupted: interrupted.signal });
@@ -962,12 +1227,17 @@ async function failCall(turn: ToolTurn, call: ToolCallPart, index: number, error
  * With the host's check (`ToolSet.gate`), the hook is asked about each call with a source
  * (`PlannedCall.source`), in call order, before any of the group's calls starts (`askGate`). Once
  * every answer is in, or the node stops or the agent takes an interrupt, nothing awaits until the
- * calls start: a stop or an interrupt ends the group (`caught`), writing nothing else; each
- * refusal, and each answer that isn't a valid decision (`decide`), is written in call order as a
- * `refused` result with its brackets; a stop or an interrupt a host delivered while those steps
- * committed ends it the same way; then the other calls start, each allowed call's note going on
- * its first record. A refused call's text joins the model's messages in call order with the
- * others' results.
+ * calls start: a stop or an interrupt ends the group (`caught`), writing nothing else. Then each
+ * decision is written in call order: a refusal, or an answer that isn't a valid decision
+ * (`decide`), as a `refused` result with its brackets; a hold (`pending()`) as its hold step,
+ * whose `group_end` is the group's last call. A stop or an interrupt a host delivered while those
+ * steps committed ends the group the same way, a written hold taking the closer of the interrupt
+ * that closed it. Then the holds pend, the reply's later calls wait until they are answered (the
+ * honor of an interrupt skips them from `ToolTurn.waitingFrom`), and the other calls start, each
+ * allowed call's note going on its first record. A held call never starts; a refused call's text
+ * joins the model's messages in call order with the others' results. A hold outside a durable run
+ * fails the group before anything of it is written. A resend can't be held, since it may have run
+ * before its cut: it is closed `crashed`.
  *
  * The calls share one child signal of the node's, and each call's own interrupt
  * (`PlannedCall.interrupted`) follows the agent's from before the hook is asked until the call
@@ -983,16 +1253,16 @@ async function failCall(turn: ToolTurn, call: ToolCallPart, index: number, error
  * interrupt, is checked before the group starts; the interrupt skips from the group's first call,
  * unless `options.interruptible` is `false` and the host checks none of its calls.
  *
- * @returns Whether a host interrupt skipped the group and every later call.
+ * @returns How the group ended (`GroupEnd`).
  * @throws AgentLoopError, before anything of the group is asked or written, when the host checks
- *   a call outside a run (`gatedCall`).
+ *   a call outside a run (`gatedCall`), or holds one outside a durable run.
  */
 async function runGroup(
   turn: ToolTurn,
   group: readonly PlannedCall[],
   { interruptible = true }: { interruptible?: boolean } = {},
-): Promise<boolean> {
-  if (group.length === 0) return false;
+): Promise<GroupEnd> {
+  if (group.length === 0) return "ran";
   const { live } = turn;
   checkNodeStopped(turn);
   const hook = turn.toolset.gate;
@@ -1004,6 +1274,9 @@ async function runGroup(
   const unlinks = new Map(group.map((planned) => [planned, link(turn.interrupt, planned.interrupted)]));
   let refusals: ReadonlyMap<PlannedCall, string> = NO_RULINGS;
   let notes: ReadonlyMap<PlannedCall, string> = NO_RULINGS;
+  let holds: ReadonlySet<AskedCall> = NO_HOLDS;
+  /** Whether `planned` is held. */
+  const held = (planned: PlannedCall) => isAsked(planned) && holds.has(planned);
   const signal = nodeSignal(turn);
   const controller = new AbortController();
   const relay = () => controller.abort(signal!.reason);
@@ -1076,17 +1349,36 @@ async function runGroup(
       // check and a start.
       end = caught(turn, group, interruptible);
       if (end !== null) return end;
-      ({ refusals, notes } = decide(turn, asking, answers));
-      for (const [planned, text] of refusals) refuse(turn, planned, text);
+      ({ refusals, notes, holds } = decide(turn, asking, answers));
+      if (holds.size > 0 && turn.ctx.steps?.durable !== true) {
+        const name = reprText([...holds][0]!.call.name);
+        throw new AgentLoopError(
+          `agent node ${reprText(turn.ctx.nodeId)}: beforeToolCall held tool ${name} outside a durable run; give the run a log`,
+        );
+      }
+      if (holds.size > 0 && !interruptible) {
+        // A resend runs alone. It may have run before its cut, and a hold says its tool never ran.
+        const where = `node ${reprText(turn.ctx.nodeId)}: beforeToolCall held tool ${reprText(group[0]!.call.name)}`;
+        warn(`${where}, sent again after a cut; it may have run, so it is closed crashed`);
+        return interruptGroup(turn, group, false);
+      }
+      const groupEnd = group.at(-1)!.index;
+      for (const planned of group) {
+        const text = refusals.get(planned);
+        if (text !== undefined) refuse(turn, planned, text);
+        else if (isAsked(planned) && holds.has(planned)) hold(turn, planned, groupEnd);
+      }
       // A host's `onEvent` can deliver while those steps commit.
       end = caught(turn, group, interruptible, refusals);
       if (end !== null) return end;
+      for (const planned of holds) turn.pended.set(planned.index, planned.callId!);
+      if (holds.size > 0 && groupEnd + 1 < turn.calls.length) turn.waitingFrom = groupEnd + 1;
     }
     // Removed once the group settles, so a long loop leaves no listeners on the node's signal.
     signal?.addEventListener("abort", relay, { once: true });
     const settling: Promise<SettledCall>[] = [];
     for (const planned of group) {
-      if (refusals.has(planned)) continue;
+      if (refusals.has(planned) || held(planned)) continue;
       if (controller.signal.aborted) break;
       const { call, index } = planned;
       let started = false;
@@ -1131,10 +1423,11 @@ async function runGroup(
     if (failure !== null) throw failure.error;
     const outcomes = new Map(settled.map(({ planned, outcome }) => [planned, outcome]));
     for (const planned of group) {
+      // A held call has no result yet; the loop returns before the model reads any.
+      if (held(planned)) continue;
       const refusal = refusals.get(planned);
       const outcome = refusal === undefined ? outcomes.get(planned)! : { content: refusal, reported: true };
-      // A pended call has no result yet; the loop returns before the model reads any. No outcome
-      // is an error: a failure was thrown above.
+      // Neither has a pended call. No outcome is an error: a failure was thrown above.
       if (!("content" in outcome)) continue;
       pushToolMessage(turn, planned.call, outcome.content, outcome.reported);
     }
@@ -1142,21 +1435,28 @@ async function runGroup(
     signal?.removeEventListener("abort", relay);
     for (const unlink of unlinks.values()) unlink();
   }
-  return false;
+  return holds.size > 0 ? "held" : "ran";
 }
+
+/**
+ * How a group ended: a host interrupt skipped it and every later call; it held a call, so the
+ * reply's later calls wait until the hold is answered; or each of its calls has its result or
+ * pended.
+ */
+type GroupEnd = "skipped" | "held" | "ran";
 
 /** What the hook answered about one call: its value, or what it threw or rejected with. */
 type GateAnswer = { readonly value: unknown } | { readonly fault: unknown };
 
 /**
- * A valid decision of the hook: run the call, with its note (`null` for none), or refuse it with
- * the text the model reads.
+ * A valid decision of the hook: run the call, with its note (`null` for none), refuse it with the
+ * text the model reads, or hold it.
  */
-type GateRuling = { readonly note: string | null } | { readonly refuse: string };
+type GateRuling = { readonly note: string | null } | { readonly refuse: string } | { readonly hold: true };
 
 /** One call the hook is asked about, and what it sees of it. */
 interface Asked {
-  readonly planned: PlannedCall;
+  readonly planned: AskedCall;
   readonly call: GatedCall;
 }
 
@@ -1171,9 +1471,13 @@ function isAsked(planned: PlannedCall): planned is AskedCall {
 /** No refusals or notes: a group the hook isn't asked about. */
 const NO_RULINGS: ReadonlyMap<PlannedCall, string> = new Map();
 
+/** No holds: a group the hook isn't asked about. */
+const NO_HOLDS: ReadonlySet<AskedCall> = new Set();
+
 /**
  * End the group when a stop or an interrupt caught it before its calls started: a stop throws its
- * reason, and an interrupt answers the group (`interruptGroup`), keeping `refusals`.
+ * reason, and an interrupt answers the group (`interruptGroup`), with the texts of the refusals
+ * this start wrote (`refusals`).
  *
  * @returns What `interruptGroup` returns; `null` when neither caught the group.
  */
@@ -1182,7 +1486,7 @@ function caught(
   group: readonly PlannedCall[],
   interruptible: boolean,
   refusals: ReadonlyMap<PlannedCall, string> = NO_RULINGS,
-): boolean | null {
+): GroupEnd | null {
   checkNodeStopped(turn);
   return turn.interrupt?.aborted ? interruptGroup(turn, group, interruptible, refusals) : null;
 }
@@ -1266,17 +1570,22 @@ function gatedCall(turn: ToolTurn, planned: AskedCall): Asked {
 }
 
 /**
- * Return the hook's answers about `asking` as the group's refusals and notes, in call order. An
- * answer that threw or rejected, or that isn't a valid decision (`checkDecision`), refuses its call
- * with `GATE_FAILED_TEXT` and warns with its error, which the model never reads.
+ * Return the hook's answers about `asking` as the group's refusals, notes and holds, in call order.
+ * An answer that threw or rejected, or that isn't a valid decision (`checkDecision`), refuses its
+ * call with `GATE_FAILED_TEXT` and warns with its error, which the model never reads.
  */
 function decide(
   turn: ToolTurn,
   asking: readonly Asked[],
   answers: ReadonlyMap<PlannedCall, GateAnswer>,
-): { refusals: ReadonlyMap<PlannedCall, string>; notes: ReadonlyMap<PlannedCall, string> } {
+): {
+  refusals: ReadonlyMap<PlannedCall, string>;
+  notes: ReadonlyMap<PlannedCall, string>;
+  holds: ReadonlySet<AskedCall>;
+} {
   const refusals = new Map<PlannedCall, string>();
   const notes = new Map<PlannedCall, string>();
+  const holds = new Set<AskedCall>();
   for (const { planned } of asking) {
     let ruling: GateRuling;
     try {
@@ -1289,21 +1598,22 @@ function decide(
       ruling = { refuse: GATE_FAILED_TEXT };
     }
     if ("refuse" in ruling) refusals.set(planned, ruling.refuse);
+    else if ("hold" in ruling) holds.add(planned);
     else if (ruling.note !== null) notes.set(planned, ruling.note);
   }
-  return { refusals, notes };
+  return { refusals, notes, holds };
 }
 
 /**
  * Return `value` as a ruling when it is a valid decision: `undefined`, a plain object
- * `{run: true}` or `{run: true, note}` (a `note` that is `undefined` is none), or `{refuse}`, each
- * text passing `checkGateText`.
+ * `{run: true}` or `{run: true, note}` (a `note` that is `undefined` is none), `{refuse}`, each
+ * text passing `checkGateText`, or `pending()`.
  *
- * @throws TypeError or RangeError for anything else, `pending()` included.
+ * @throws TypeError or RangeError for anything else.
  */
 function checkDecision(value: unknown): GateRuling {
   if (value === undefined) return { note: null };
-  if (isPending(value)) throw new YianTypeError("a hold (pending()) isn't supported yet");
+  if (isPending(value)) return { hold: true };
   const shapes = "a decision must be undefined, {run: true}, {run: true, note} or {refuse}";
   if (!isRecord(value)) throw new YianTypeError(shapes);
   const keys = Object.keys(value);
@@ -1328,28 +1638,37 @@ function refuse(turn: ToolTurn, { call, index }: PlannedCall, text: string): voi
   observeSkippedToolCall(turn.live, identityOf(turn, call, index), REFUSED_TOOL_ERROR);
 }
 
+/** Write `planned`'s hold, in a group whose last call is `groupEnd`; it publishes no brackets. */
+function hold(turn: ToolTurn, { call, index, callId, source }: AskedCall, groupEnd: number): void {
+  const fields = { callId: callId!, tool: call.name, toolCallId: call.id, reply: turn.n, index, source, groupEnd };
+  turn.steps.hold(fields);
+}
+
 /**
  * Answer a group a host interrupt caught before any of its calls started: skip it and every later
- * call (`skipFrom`); or, for a resend, which may have run before its cut, close each of its calls
- * `crashed` and append its message. A call in `refusals` keeps the refusal this start wrote.
+ * call (`skipFrom`), each call with a result this start wrote, such as a refusal, keeping it; or,
+ * for a resend, which may have run before its cut, close each of its calls `crashed`
+ * (`closeCrashed`), a call in `refusals` keeping the refusal this start wrote, whose text it
+ * appends instead.
  *
- * @returns Whether the calls were skipped.
+ * @returns `skipped`, or `ran` for a resend.
  */
 function interruptGroup(
   turn: ToolTurn,
   group: readonly PlannedCall[],
   interruptible: boolean,
-  refusals: ReadonlyMap<PlannedCall, string> = new Map(),
-): boolean {
+  refusals: ReadonlyMap<PlannedCall, string> = NO_RULINGS,
+): GroupEnd {
   if (interruptible) {
-    return skipFrom(turn, group[0]!.index, new Set([...refusals.keys()].map((planned) => planned.index)));
+    skipFrom(turn, group[0]!.index);
+    return "skipped";
   }
-  const { output, closed } = closerResult("crashed");
-  for (const { call } of group.filter((planned) => !refusals.has(planned))) {
-    turn.steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed });
+  for (const planned of group) {
+    const refusal = refusals.get(planned);
+    if (refusal === undefined) closeCrashed(turn, planned.call);
+    else pushToolMessage(turn, planned.call, refusal, true);
   }
-  for (const planned of group) pushToolMessage(turn, planned.call, refusals.get(planned) ?? output, true);
-  return false;
+  return "ran";
 }
 
 /**
@@ -1357,7 +1676,8 @@ function interruptGroup(
  * events, its `tool_result` step (or its `pending` step) and its tool message, a reported error as
  * the call's result, as live. The replay sends again only a call that may have started before the
  * cut, so a pending host interrupt doesn't skip it: its `ToolContext.interrupted` is aborted from
- * its start, and the loop honors the interrupt afterwards.
+ * its start, and the loop honors the interrupt afterwards. The host's check is asked about it
+ * again; a hold it gives closes the call `crashed` (`runGroup`).
  *
  * @throws As `runGroup` throws.
  */

@@ -10,13 +10,14 @@ import { join } from "node:path";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { NodeStarted, type RunEvent } from "../../src/events.ts";
+import { NodeStarted, type RunEvent, ToolCallStarted } from "../../src/events.ts";
 import { Message, Response, TextPart, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
-import { runFlow, type RunFlowOptions } from "../../src/run.ts";
+import { advance, complete, pendingCalls, runFlow, type RunFlowOptions } from "../../src/run.ts";
 import { isRunLogLocked, NodeStepRecord, readRunLog } from "../../src/runtime/log.ts";
 import type { Skill } from "../../src/skills/catalog.ts";
+import { pending } from "../../src/tools/context.ts";
 import type { BeforeToolCall, GatedCall } from "../../src/tools/gate.ts";
 import { McpConnectError, McpServer, mcpServer } from "../../src/tools/mcp.ts";
 import type { ToolEntry } from "../../src/tools/registry.ts";
@@ -24,6 +25,7 @@ import type { JsonObject } from "../../src/typesys/json.ts";
 import { startHttpServer } from "../fixtures/mcp/fake_server.ts";
 import { gated } from "../helpers/gate.ts";
 import { expectClosed, hostEnv, killMarkers, pids, stdioOptions, strayProcesses, waitFor } from "../helpers/mcp_helpers.ts";
+import { crashAfter } from "../helpers/run_state_fixtures.ts";
 
 // Each row starts at least one server process; the default 5 s is too tight on a loaded machine.
 const SLOW = 30_000;
@@ -183,6 +185,38 @@ test(
       ["No adding.", true],
     ]);
     await expectClosed(server);
+  },
+  SLOW,
+);
+
+test.each(["pending", "node_waiting"])(
+  "a held MCP tool call survives a crash after its %s record, and complete answers it with the tool never run",
+  async (kind) => {
+    const flow = await agentFlow("fake");
+    const events: RunEvent[] = [];
+    const options = (log: string, model: ScriptedModel, server: McpServer) =>
+      gated({ env: hostEnv(dir), log, tools: { fake: server }, models: serving(model), onEvent: (event: RunEvent) => void events.push(event) }, () => pending());
+    /** Run `fn` with a fresh server, closed by the time it returns. */
+    const served = async (fn: (server: McpServer) => Promise<unknown>) => {
+      const server = fake();
+      await fn(server);
+      await expectClosed(server);
+    };
+    const uncut = join(dir, "uncut.jsonl");
+    await served(async (server) => expect((await runFlow(flow, {}, options(uncut, callThenAnswer("fake_echo", { text: "hi" }), server))).status).toBe("waiting"));
+    const at = readRunLog(uncut).findIndex(({ kind: recorded, record }) =>
+      recorded === kind || (record instanceof NodeStepRecord && record.step["kind"] === kind)) + 1;
+    const log = join(dir, "run.jsonl");
+    await served((server) => crashAfter(at, () => runFlow(flow, {}, options(log, callThenAnswer("fake_echo", { text: "hi" }), server))));
+    await served(async (server) => expect((await advance(options(log, new ScriptedModel([]), server))).status).toBe("waiting"));
+    const [call] = pendingCalls(log);
+    expect([call!.held, call!.source]).toEqual([true, { kind: "mcp", server: "fake", tool: "echo" }]);
+    await complete(log, call!.callId, { output: "approved" }, { env: hostEnv(dir) });
+    const done = new Response({ message: new Message({ role: "assistant", parts: [new TextPart("done")] }), finishReason: "stop" });
+    const model = new ScriptedModel([done]);
+    await served(async (server) => expect((await advance(options(log, model, server))).status).toBe("succeeded"));
+    expect(toolResults(model, 0).map((part) => part.content)).toEqual(["approved"]);
+    expect(events.some((event) => event instanceof ToolCallStarted)).toBe(false);
   },
   SLOW,
 );

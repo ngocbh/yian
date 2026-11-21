@@ -13,24 +13,26 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadFlow } from "../../src/compose/loader.ts";
-import { type RunEvent, ToolCallFinished, ToolCallStarted } from "../../src/events.ts";
+import { CallHeld, NodeWaiting, NodeWoken, type RunEvent, ToolCallFinished, ToolCallStarted } from "../../src/events.ts";
 import { Message, Response, ToolCallPart, type ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { type AgentRunContext, AgentLoopError, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { Interrupted } from "../../src/nodes/agent/interrupts.ts";
+import { SKIPPED_TOOL_RESULT, TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/results.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { rebuildMessages } from "../../src/nodes/agent/messages.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
 import { withWarnings } from "../../src/platform.ts";
-import { advance, agentCall, interrupt, runFlow } from "../../src/run.ts";
+import { advance, agentCall, complete, interrupt, pendingCalls, runFlow } from "../../src/run.ts";
 import { NodeStepRecord, readRunLog } from "../../src/runtime/log.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { pending } from "../../src/tools/context.ts";
-import { tool } from "../../src/tools/function_tools.ts";
+import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { type BeforeToolCall, GATE_FAILED_TEXT, type GatedCall, type GateDecision, type ToolSource } from "../../src/tools/gate.ts";
 import { nodeScopeKey } from "../../src/tools/grants.ts";
 import { registerTool, TOOL_REGISTRY, ToolSet } from "../../src/tools/registry.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
+import type { ValueRecord } from "../../src/typesys/values.ts";
 import { gated } from "../helpers/gate.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import { FakeMemory, fileInfo, RecordingSession } from "../helpers/memory_fakes.ts";
@@ -242,7 +244,6 @@ test.each<[string, () => unknown, RegExp]>([
   ["an oversized note", () => ({ run: true, note: "x".repeat(4097) }), /note is 4097 UTF-8 bytes/],
   ["a note that is null", () => ({ run: true, note: null }), /note must be a string/],
   ["a Promise of a bad shape", () => Promise.resolve({ run: "yes" }), /./],
-  ["pending()", () => pending(), /a hold \(pending\(\)\) isn't supported yet/],
 ])("a hook giving %s refuses the call with the fixed text and a warning", async (_, decide, message) => {
   const warnings: string[] = [];
   const model = oneLookup();
@@ -347,7 +348,7 @@ test("an interrupt while the hook decides leaves the group unrun and skipped, ev
   expect(warnings).toEqual([]);
 });
 
-test("a fault decided at once and a Promise still out when an interrupt lands write only skips, with no fault", async () => {
+test("a hold decided at once and a Promise still out when an interrupt lands write only skips, with no fault", async () => {
   const askedNow = Promise.withResolvers<void>();
   const { hook } = asking((call) => {
     if (call.tool === "lookup") return pending();
@@ -601,9 +602,9 @@ output: \${reply.output}
 const scopesOf = (log: string, node = "reply") =>
   stepsOf(log, node).flatMap((step) => (step["kind"] === "pending" && typeof step["scope"] === "string" ? [step["scope"]] : []));
 
-/** The `model_call` steps the log at `log` holds, of any node. */
+/** The `model_call` steps the log at `log` holds, of any node; none before it exists. */
 const modelCalls = (log: string) =>
-  readRunLog(log).filter(({ record }) => record instanceof NodeStepRecord && record.step["kind"] === "model_call").length;
+  !existsSync(log) ? 0 : readRunLog(log).filter(({ record }) => record instanceof NodeStepRecord && record.step["kind"] === "model_call").length;
 
 test("a flow call the hook fails on takes no scope number: the allowed call after it is #0, and a resume cut at any record agrees", async () => {
   const flow = await loadFlow(SHOUT_FLOW);
@@ -969,4 +970,671 @@ test.each<[string, BeforeToolCall | null]>([
   const output = await direct(model, toolset.forRun("r"), ["lookup", "team"], { signal: node.signal, steerInbox });
   expect((output as { value: unknown }).value).toBe("done");
   expect([node.live.size, interrupt.live.size]).toEqual([0, 0]);
+});
+
+// ------------------------------------------------------------------------------------------- //
+// Holds: the hook answers pending(). The held call never runs; the calls before it and in its
+// group do, and the reply's later calls wait until it is answered.
+// ------------------------------------------------------------------------------------------- //
+
+/**
+ * Tools noting each run in `ran` as `<tool>:<q>`: `lookup` (safe to run together, resumable), the
+ * group `team`'s `a` (safe, not resumable), `later`, which runs alone and isn't resumable, and
+ * `again`, which runs alone and is.
+ */
+function notedTools(ran: string[]) {
+  const make = (name: string, safe: boolean, resumable: boolean) =>
+    tool({
+      name,
+      description: `Tool ${name}.`,
+      parameters: { type: "object", properties: { q: { type: "string" } } },
+      isConcurrencySafe: () => safe,
+      resumable,
+      execute: (args) => {
+        ran.push(`${name}:${String(args.q)}`);
+        return `${name}:${String(args.q)}`;
+      },
+    });
+  const again = make("again", false, true);
+  return { lookup: make("lookup", true, true), team: [make("a", true, false)], later: make("later", false, false), again };
+}
+
+/** The agent granted `notedTools`' tools. */
+const NOTED = "lookup, team, later, again";
+
+/**
+ * A reply whose call `q: "0"` runs alone, then `1` to `3` together, the hold `2` among them, then
+ * the later calls `4`, alone, and `5`; and the answer after.
+ */
+const heldReplies = () => [
+  callReply(
+    ["later", { q: "0" }, "c0"],
+    ["lookup", { q: "1" }, "c1"],
+    ["team_a", { q: "2" }, "c2"],
+    ["team_a", { q: "3" }, "c3"],
+    ["later", { q: "4" }, "c4"],
+    ["lookup", { q: "5" }, "c5"],
+  ),
+  textReply("done"),
+];
+
+/** The call id of `heldReplies`' call `index`, of the reply step 1. */
+const heldId = (index: number) => `r/reply/1/${index}`;
+
+/** A hook holding each call whose `q` is one of `held` and running the others, keeping each call it is asked about. */
+const holding = (...held: string[]) => asking((call) => (held.includes(String(call.arguments["q"])) ? pending() : undefined));
+
+/** A gated run's options at `log` over `notedTools(ran)`, its model left with `replies`, its events in `events`. */
+const notedOptions = (log: string, ran: string[], replies: Response[], events: RunEvent[] = []) => ({
+  env,
+  log,
+  runId: "r",
+  tools: notedTools(ran),
+  models: serving(new ScriptedModel(replies, CONFIG)),
+  onEvent: (event: RunEvent) => void events.push(event),
+});
+
+/** The model replies of `calls` (`[tool, q]` each, the call id `c<q>`), then the answer. */
+const replying = (...calls: [string, string][]) => () => [callReply(...calls.map(([name, q]) => [name, { q }, `c${q}`] as [string, JsonObject, string])), textReply("done")];
+
+/**
+ * Advance the gated run at `log` with `hook` and the model left of `replies` until it ends,
+ * answering each hold it waits on with "approved", noted in `ran` as `answer:<q>` first.
+ */
+async function finish(log: string, ran: string[], hook: BeforeToolCall, replies: () => Response[] = heldReplies) {
+  for (let round = 0; round < 6; round++) {
+    for (const held of pendingCalls(log).filter((call) => call.held)) {
+      ran.push(`answer:${String(held.arguments!["q"])}`);
+      await complete(log, held.callId, { output: "approved" }, { env });
+    }
+    const result = await advance(gated(notedOptions(log, ran, replies().slice(modelCalls(log))), hook));
+    if (result.status !== "waiting") return result;
+  }
+  throw new Error(`the run at ${log} never ended`);
+}
+
+test("a held call never runs: the calls before it and in its group run, and the later ones wait for complete, asked about then", async () => {
+  const ran: string[] = [];
+  const { asked, hook } = holding("2");
+  const log = freshLog();
+  const events: RunEvent[] = [];
+  const first = await runFlow(await flowOf(NOTED), {}, gated(notedOptions(log, ran, heldReplies(), events), hook));
+  expect(first.status, first.failure?.message).toBe("waiting");
+  expect([ran, asked.map((call) => call.arguments["q"])]).toEqual([["later:0", "lookup:1", "a:3"], ["0", "1", "2", "3"]]);
+  expect(stepsOf(log)[2]).toEqual({
+    kind: "pending", call_id: heldId(2), tool: "team_a", tool_call_id: "c2", reply: 1n, index: 2n, held: true,
+    source: { kind: "host", group: "team", tool: "a" }, group_end: 3n,
+  });
+  // Published once its hold is durable; a hold has no brackets until it runs.
+  expect(events.filter((event) => event instanceof CallHeld)).toEqual([new CallHeld({ nodeId: "reply", callId: heldId(2), tool: "team_a" })]);
+  expect(brackets(events).map(([, id]) => id)).not.toContain("c2");
+  expect(pendingCalls(log).map((call) => [call.callId, call.held])).toEqual([[heldId(2), true]]);
+  await complete(log, heldId(2), { output: "approved" }, { env });
+  const model = new ScriptedModel(heldReplies().slice(1), CONFIG);
+  const done = await advance(gated({ ...notedOptions(log, ran, []), models: serving(model) }, hook));
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect(ran.slice(3)).toEqual(["later:4", "lookup:5"]);
+  expect(asked.slice(4).map((call) => [call.arguments["q"], call.attempt])).toEqual([["4", 1], ["5", 1]]);
+  expect(read(model, 0)).toEqual([
+    ["c0", "later:0", false],
+    ["c1", "lookup:1", false],
+    ["c2", "approved", false],
+    ["c3", "a:3", false],
+    ["c4", "later:4", false],
+    ["c5", "lookup:5", false],
+  ]);
+});
+
+/**
+ * Cut the life of a gated run of `replies`, holding the calls `held`, at every record from its
+ * reply's model call on; resume and finish each cut run (`finish`), and check it. A held call never
+ * runs, and has the host's answer when its hold was written, else a crashed closer (a resend can't
+ * be held); each call in `once` runs at most once; each call in `after` (a run, by the `q` of the
+ * hold it waits for) runs only after that hold's answer; and every call has one result.
+ */
+async function sweep(replies: () => Response[], held: string[], once: string[], after: Record<string, string>) {
+  const flow = await flowOf(NOTED);
+  /** Answer each hold the run at `log` waits on, noted in `ran`. */
+  const answer = async (log: string, ran: string[]) => {
+    for (const call of pendingCalls(log).filter((each) => each.held)) {
+      ran.push(`answer:${String(call.arguments!["q"])}`);
+      await complete(log, call.callId, { output: "approved" }, { env });
+    }
+  };
+  /** Run segment `i` of the life at `log`: the start, then each advance after the answers. */
+  const segment = (log: string, ran: string[], hook: BeforeToolCall, i: number) =>
+    i === 0
+      ? runFlow(flow, {}, gated(notedOptions(log, ran, replies()), hook))
+      : advance(gated(notedOptions(log, ran, replies().slice(modelCalls(log))), hook));
+  const uncut = freshLog();
+  const whole = holding(...held).hook;
+  // Each segment's records in the uncut life.
+  const spans: [number, number][] = [];
+  for (let i = 0, ended = false; !ended; i++) {
+    if (i > 0) await answer(uncut, []);
+    const start = i === 0 ? 0 : readRunLog(uncut).length;
+    ended = (await segment(uncut, [], whole, i)).status !== "waiting";
+    spans.push([start, readRunLog(uncut).length]);
+  }
+  const ids = (replies()[0]!.message.parts as ToolCallPart[]).map((part) => part.id);
+  for (const [i, [start, end]] of spans.entries()) {
+    for (let k = Math.max(start, through(uncut, "model_call")); k < end; k++) {
+      const log = freshLog();
+      const ran: string[] = [];
+      const { hook } = holding(...held);
+      const done = await withWarnings(() => {}, async () => {
+        for (let j = 0; j < i; j++) {
+          if (j > 0) await answer(log, ran);
+          await segment(log, ran, hook, j);
+        }
+        if (i > 0) await answer(log, ran);
+        await crashAfter(k, () => segment(log, ran, hook, i));
+        return await finish(log, ran, hook, replies);
+      });
+      const where = `segment ${i}, cut at ${k}: ${ran}`;
+      expect(done.status, `${where}: ${done.failure?.message}`).toBe("succeeded");
+      const steps = stepsOf(log);
+      const results = steps.filter((step) => step["kind"] === "tool_result");
+      for (const q of held) {
+        const answer = results.find((step) => step["call_id"] === `c${q}`)?.["output"];
+        const wrote = steps.some((step) => step["held"] === true && step["tool_call_id"] === `c${q}`);
+        expect(answer, `${where}: ${q}`).toBe(wrote ? "approved" : TOOL_OUTCOME_UNKNOWN);
+        expect(ran.some((name) => name.endsWith(`:${q}`) && !name.startsWith("answer:")), `${where}: ${q} ran`).toBe(false);
+      }
+      for (const name of once) expect(ran.filter((each) => each === name).length, `${where}: ${name}`).toBeLessThanOrEqual(1);
+      // A later call waits for a hold that was written; a cut before it leaves nothing to wait for.
+      for (const [name, hold] of Object.entries(after)) {
+        const answered = ran.indexOf(`answer:${hold}`);
+        const wrote = steps.some((step) => step["held"] === true && step["tool_call_id"] === `c${hold}`);
+        if (wrote && ran.includes(name)) expect(answered >= 0 && answered < ran.indexOf(name), `${where}: ${name} before ${hold}`).toBe(true);
+      }
+      expect(ids.map((id) => results.filter((step) => step["call_id"] === id).length), where).toEqual(ids.map(() => 1));
+    }
+  }
+}
+
+test("a crash at any record of a held reply's life never runs the held call, a call twice unless it is resumable, or a later call before the answer", async () => {
+  await sweep(heldReplies, ["2"], ["later:0", "a:3", "later:4"], { "later:4": "2", "lookup:5": "2" });
+});
+
+/** A reply with two holds: `b` alone, `h1` held beside `x`, `m` alone, `h2` held beside `y`, then `z`. */
+const twoHolds = replying(["later", "b"], ["lookup", "h1"], ["team_a", "x"], ["later", "m"], ["lookup", "h2"], ["lookup", "y"], ["later", "z"]);
+
+test("a crash at any record of a two-hold reply's life keeps each later call after the answer it waits for", async () => {
+  await sweep(twoHolds, ["h1", "h2"], ["later:b", "a:x", "later:m", "later:z"], { "later:m": "h1", "lookup:y": "h1", "later:z": "h2" });
+}, 60_000);
+
+/** The closers of the log at `log`'s calls (`[call id, word]`), and the calls closed `crashed` that never ran (`ran`). */
+const closersOf = (log: string, ran: readonly string[]) => {
+  const closers = stepsOf(log).flatMap((step) => (typeof step["closed"] === "string" ? [[step["call_id"], step["closed"]]] : []));
+  const neverRan = closers.filter(([id, word]) => word === "crashed" && !ran.some((name) => name.endsWith(`:${String(id).slice(1)}`)));
+  return { closers, neverRan };
+};
+
+/** The record count of the log at `log` up to and with its `nth` step that `match` holds of, from record `from`. */
+const recordAt = (log: string, match: (step: ValueRecord) => boolean, nth = 1, from = 0) =>
+  readRunLog(log).findIndex(({ record }, at) => at >= from && record instanceof NodeStepRecord && match(record.step) && --nth === 0) + 1;
+
+test("a crash as the start after an answer writes a flow call's answer leaves the later calls to run: it never reached them", async () => {
+  // [shout F] [later h] [later L] [lookup L2]: F's scope answers it while the hold waits.
+  const flow = await loadFlow(SHOUT_FLOW.replace("reply: {kind: agent, prompt: go, tools: [shout]}", "reply: {kind: agent, prompt: go, tools: [shout, lookup, later]}"));
+  const replies = () => [callReply(["shout", { text: "f" }, "cF"], ["later", { q: "h" }, "ch"], ["later", { q: "L" }, "cL"], ["lookup", { q: "L2" }, "cL2"]), textReply("done")];
+  const run = (log: string, ran: string[]) => gated({ ...notedOptions(log, ran, replies().slice(modelCalls(log))) }, holding("h").hook);
+  const uncut = freshLog();
+  expect((await runFlow(flow, {}, run(uncut, []))).status).toBe("waiting");
+  await complete(uncut, heldId(1), { output: "yes" }, { env });
+  expect((await advance(run(uncut, []))).status).toBe("succeeded");
+  const log = freshLog();
+  const ran: string[] = [];
+  await runFlow(flow, {}, run(log, ran));
+  await complete(log, heldId(1), { output: "yes" }, { env });
+  // Cut at the woken start's first step: its record of F's answer.
+  const woke = readRunLog(uncut).findIndex(({ kind }) => kind === "node_woken");
+  await crashAfter(recordAt(uncut, (step) => step["call_id"] === "cF", 1, woke) - 1, () => advance(run(log, ran)));
+  expect((await advance(run(log, ran))).status).toBe("succeeded");
+  expect([ran, closersOf(log, ran).closers]).toEqual([["later:L", "lookup:L2"], []]);
+});
+
+test.each<[string, () => Response[], (step: ValueRecord) => boolean, string[]]>([
+  [
+    "its first skip",
+    replying(["later", "h"], ["team_a", "a"], ["lookup", "b"], ["team_a", "c"], ["later", "L"]),
+    (step) => step["closed"] === "skipped",
+    ["skipped", "skipped", "skipped", "skipped"],
+  ],
+  [
+    "the closer of a host call beside the hold",
+    replying(["lookup", "h"], ["ticket", "p"], ["team_a", "x"], ["later", "L1"], ["again", "L2"]),
+    (step) => step["closed"] === "interrupted",
+    ["interrupted", "skipped", "skipped"],
+  ],
+])("a crash at %s, after an answer and then an interrupt, skips the later calls: the start that began with the interrupt ran none", async (_, replies, cut, words) => {
+  const ticket = tool({ name: "ticket", description: "Ticket.", parameters: { type: "object", properties: { q: { type: "string" } } },
+    isConcurrencySafe: () => true, execute: () => pending() });
+  const flow = await flowOf(`${NOTED}, ticket`);
+  const run = (log: string, ran: string[]) =>
+    gated({ ...notedOptions(log, ran, replies().slice(modelCalls(log))), tools: { ...notedTools(ran), ticket } }, holding("h").hook);
+  /** Run to the wait, answer the hold, interrupt, and advance, cut at record `k` when given. */
+  const life = async (log: string, ran: string[], k: number | null) => {
+    await runFlow(flow, {}, run(log, ran));
+    await complete(log, heldId(0), { output: "yes" }, { env });
+    await interrupt(log, "m", { env });
+    if (k === null) await advance(run(log, ran));
+    else await crashAfter(k, () => advance(run(log, ran)));
+  };
+  const uncut = freshLog();
+  await life(uncut, [], null);
+  const log = freshLog();
+  const ran: string[] = [];
+  await life(log, ran, recordAt(uncut, cut) - 1);
+  const ranBefore = [...ran];
+  expect((await advance(run(log, ran))).status).toBe("succeeded");
+  expect(ran).toEqual(ranBefore);
+  expect(closersOf(log, ran).closers.map(([, word]) => word)).toEqual(words);
+});
+
+test("two crashes cutting a hold's resumable mate leave the later calls to run, and the later hold to be asked", async () => {
+  // [h1 x] [h2] [L0] [L1 L2] [L3]; h1 is answered as it is announced.
+  const replies = replying(["lookup", "h1"], ["lookup", "x"], ["again", "h2"], ["later", "L0"], ["team_a", "L1"], ["team_a", "L2"], ["later", "L3"]);
+  const flow = await flowOf(NOTED);
+  const delivered: Promise<unknown>[] = [];
+  const run = (log: string, ran: string[], hook: BeforeToolCall) => {
+    const onEvent = (event: RunEvent) => {
+      if (event instanceof CallHeld && event.callId === heldId(0)) delivered.push(complete(log, heldId(0), { output: "one" }, { env }));
+    };
+    return gated({ ...notedOptions(log, ran, replies().slice(modelCalls(log))), onEvent }, hook);
+  };
+  /** Cut the start at x's result (`k1`), then the resume at x's result again (`k2`) when given. */
+  const cut = async (log: string, ran: string[], hook: BeforeToolCall, k1: number, k2: number | null) => {
+    await crashAfter(k1, () => runFlow(flow, {}, run(log, ran, hook)));
+    await Promise.all(delivered.splice(0));
+    if (k2 !== null) await crashAfter(k2, () => advance(run(log, ran, hook)));
+  };
+  const uncut = freshLog();
+  await runFlow(flow, {}, run(uncut, [], holding("h1", "h2").hook));
+  await Promise.all(delivered.splice(0));
+  const k1 = recordAt(uncut, (step) => step["call_id"] === "cx") - 1;
+  const once = freshLog();
+  await cut(once, [], holding("h1", "h2").hook, k1, null);
+  await advance(run(once, [], holding("h1", "h2").hook));
+  const k2 = recordAt(once, (step) => step["call_id"] === "cx") - 1;
+  const log = freshLog();
+  const ran: string[] = [];
+  const { asked, hook } = holding("h1", "h2");
+  const warnings: string[] = [];
+  const done = await withWarnings((text) => void warnings.push(text), async () => {
+    await cut(log, ran, hook, k1, k2);
+    return await finish(log, ran, hook, replies);
+  });
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect([warnings, closersOf(log, ran).neverRan]).toEqual([[], []]);
+  expect(ran).toEqual(["lookup:x", "lookup:x", "lookup:x", "answer:h2", "later:L0", "a:L1", "a:L2", "later:L3"]);
+  // Two evaluations began after h1's answer, which made h2 runnable.
+  expect(asked.filter((call) => call.arguments["q"] === "h2").map((call) => call.attempt)).toEqual([2]);
+});
+
+test("a call cut alongside a hold is sent again when its tool is resumable, else closed crashed; it never runs fresh", async () => {
+  const flow = await flowOf(NOTED);
+  const uncut = freshLog();
+  await runFlow(flow, {}, gated(notedOptions(uncut, [], heldReplies()), holding("2").hook));
+  // Cut right after the hold: its group's other calls started, and their results are lost.
+  const log = freshLog();
+  const ran: string[] = [];
+  const { asked, hook } = holding("2");
+  await crashAfter(through(uncut, "pending"), () => runFlow(flow, {}, gated(notedOptions(log, ran, heldReplies()), hook)));
+  expect(ran).toEqual(["later:0", "lookup:1", "a:3"]);
+  const resumed = await advance(gated(notedOptions(log, ran, heldReplies().slice(1)), hook));
+  expect(resumed.status, resumed.failure?.message).toBe("waiting");
+  expect(ran).toEqual(["later:0", "lookup:1", "a:3", "lookup:1"]);
+  expect(asked.slice(4).map((call) => [call.arguments["q"], call.attempt])).toEqual([["1", 2]]);
+  expect(shape(log)).toEqual(["model_call", "tool_result", "pending", "tool_result", "crashed"]);
+  expect(pendingCalls(log).map((call) => call.callId)).toEqual([heldId(2)]);
+});
+
+test.each([false, true])("calls cut beside a second hold count their attempts from the first answer, and an interrupt (%s) never skips them", async (interrupted) => {
+  // [h1] [m] [h2, y, w] [z]. A crash before the first wait makes the start after the answer a
+  // second resume, so counting resumes since the reply would give y a third attempt.
+  const replies = replying(["lookup", "h1"], ["later", "m"], ["lookup", "h2"], ["lookup", "y"], ["team_a", "w"], ["later", "z"]);
+  const flow = await flowOf(NOTED);
+  /** The record count up to and with the `nth` hold of the log at `log`. */
+  const holdAt = (log: string, nth: number) =>
+    readRunLog(log).findIndex(({ record }) => record instanceof NodeStepRecord && record.step["held"] === true && --nth === 0) + 1;
+  /** Cut a run at `log` after its first hold, resume it, answer it, and advance; cut there at `k` when given. */
+  const run = async (log: string, ran: string[], hook: BeforeToolCall, k: number | null) => {
+    await crashAfter(holdAt(uncut, 1), () => runFlow(flow, {}, gated(notedOptions(log, ran, replies()), hook)));
+    expect((await advance(gated(notedOptions(log, ran, replies().slice(1)), hook))).status).toBe("waiting");
+    await complete(log, heldId(0), { output: "one" }, { env });
+    const advancing = () => advance(gated(notedOptions(log, ran, replies().slice(1)), hook));
+    if (k === null) expect((await advancing()).status).toBe("waiting");
+    else await crashAfter(k, advancing);
+  };
+  const uncut = freshLog();
+  await runFlow(flow, {}, gated(notedOptions(uncut, [], replies()), holding("h1", "h2").hook));
+  const whole = freshLog();
+  await run(whole, [], holding("h1", "h2").hook, null);
+  // Cut after the second hold: y and w started beside it.
+  const log = freshLog();
+  const ran: string[] = [];
+  const { asked, hook } = holding("h1", "h2");
+  await run(log, ran, hook, holdAt(whole, 2));
+  expect(ran).toEqual(["later:m", "lookup:y", "a:w"]);
+  if (interrupted) await interrupt(log, "m", { env });
+  const done = await advance(gated(notedOptions(log, ran, replies().slice(1)), hook));
+  expect(done.status, done.failure?.message).toBe(interrupted ? "succeeded" : "waiting");
+  const closers = stepsOf(log).flatMap((step) => (typeof step["closed"] === "string" ? [[step["call_id"], step["closed"]]] : []));
+  if (interrupted) {
+    // A resend with an interrupt pending is closed crashed. The resume takes the interrupt as the
+    // node opens its inbox, after it read its calls, so the hold pends and is closed at the honor.
+    expect([ran, closers]).toEqual([["later:m", "lookup:y", "a:w"], [["cy", "crashed"], ["cw", "crashed"], ["cz", "skipped"], ["ch2", "interrupted"]]]);
+  } else {
+    expect([ran, closers]).toEqual([["later:m", "lookup:y", "a:w", "lookup:y"], [["cw", "crashed"]]]);
+    expect(asked.filter((call) => call.arguments["q"] === "y").map((call) => call.attempt)).toEqual([1, 2]);
+  }
+});
+
+test.each<[string, () => Response[], string[], string]>([
+  ["holds in one group", replying(["lookup", "h1"], ["lookup", "h2"], ["later", "l"]), ["h1"], "l"],
+  ["holds in two groups", replying(["lookup", "h1"], ["later", "m"], ["lookup", "h2"], ["later", "z"]), ["h1"], "z"],
+])("an interrupt closing one of the %s, after another was answered, skips the waiting calls: none of them ran", async (_, replies, answered, last) => {
+  const ran: string[] = [];
+  const { hook } = holding("h1", "h2");
+  const log = freshLog();
+  await runFlow(await flowOf(NOTED), {}, gated(notedOptions(log, ran, replies()), hook));
+  for (const q of answered) await complete(log, pendingCalls(log).find((call) => call.arguments!["q"] === q)!.callId, { output: "yes" }, { env });
+  expect((await advance(gated(notedOptions(log, ran, replies().slice(1)), hook))).status).toBe("waiting");
+  await interrupt(log, "m", { env });
+  const done = await advance(gated(notedOptions(log, ran, replies().slice(1)), hook));
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect(ran.some((name) => name.endsWith(`:${last}`))).toBe(false);
+  expect(stepsOf(log).find((step) => step["call_id"] === `c${last}`)).toMatchObject({ output: SKIPPED_TOOL_RESULT, closed: "skipped" });
+});
+
+test("after a hold's answer, an interrupt skips the calls a later start never reached, as without a hold", async () => {
+  // [h] [x] [c2] [c3], each alone: the start after the answer runs x, and is cut while c2 runs.
+  const replies = replying(["later", "h"], ["lookup", "x"], ["later", "2"], ["later", "3"]);
+  const flow = await flowOf(NOTED);
+  /** Run to the answer at `log`, then advance, cut at record `k` when given. */
+  const run = async (log: string, ran: string[], hook: BeforeToolCall | null, k: number | null) => {
+    const options = () => gated(notedOptions(log, ran, replies().slice(modelCalls(log))), hook);
+    if (hook === null) return k === null ? await runFlow(flow, {}, options()) : await crashAfter(k, () => runFlow(flow, {}, options()));
+    await runFlow(flow, {}, options());
+    await complete(log, heldId(0), { output: "one" }, { env });
+    return k === null ? await advance(options()) : await crashAfter(k, () => advance(options()));
+  };
+  for (const hook of [holding("h").hook, null]) {
+    const uncut = freshLog();
+    await run(uncut, [], hook, null);
+    const log = freshLog();
+    const ran: string[] = [];
+    await run(log, ran, hook, readRunLog(uncut).findIndex(({ record }) => record instanceof NodeStepRecord && record.step["call_id"] === "c2"));
+    // Without a hook, the first call ran too.
+    const runs = hook === null ? ["later:h", "lookup:x", "later:2"] : ["lookup:x", "later:2"];
+    expect(ran).toEqual(runs);
+    await interrupt(log, "m", { env });
+    const done = await advance(gated(notedOptions(log, ran, []), hook));
+    expect(done.status, done.failure?.message).toBe("succeeded");
+    const closers = stepsOf(log).flatMap((step) => (typeof step["closed"] === "string" ? [[step["call_id"], step["closed"]]] : []));
+    expect([ran, closers]).toEqual([runs, [["c2", "crashed"], ["c3", "skipped"]]]);
+  }
+});
+
+test.each([false, true])("an interrupt after a hold's answer, before its later calls start (from onEvent: %s), skips them and keeps the answer", async (fromEvent) => {
+  const ran: string[] = [];
+  const { asked, hook } = holding("2");
+  const log = freshLog();
+  await runFlow(await flowOf(NOTED), {}, gated(notedOptions(log, ran, heldReplies()), hook));
+  await complete(log, heldId(2), { output: "approved" }, { env });
+  const delivered: Promise<unknown>[] = [];
+  if (!fromEvent) await interrupt(log, "m", { env });
+  const onEvent = (event: RunEvent) => {
+    if (fromEvent && event instanceof NodeWoken && delivered.length === 0) delivered.push(interrupt(log, "m", { env }));
+  };
+  const done = await advance(gated({ ...notedOptions(log, ran, []), onEvent }, hook));
+  await Promise.all(delivered);
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect([ran, asked.length]).toEqual([["later:0", "lookup:1", "a:3"], 4]);
+  const results = stepsOf(log).flatMap((step) => (step["kind"] === "tool_result" ? [[step["call_id"], step["closed"] ?? step["output"]]] : []));
+  expect(results.slice(-3)).toEqual([["c2", "approved"], ["c4", "skipped"], ["c5", "skipped"]]);
+});
+
+test("a later call whose check faults waits with the others, and is checked again once the hold is answered", async () => {
+  let checks = 0;
+  const bad = new FunctionTool({
+    name: "bad",
+    description: "Bad.",
+    parametersJsonSchema: { type: "object", properties: { q: { type: "string" } } },
+    parametersValidator: { "~standard": { version: 1, vendor: "test", validate: () => {
+      checks += 1;
+      throw new Error("no check");
+    } } },
+    execute: () => "bad",
+  });
+  const flow = await flowOf("lookup, bad");
+  const replies = replying(["lookup", "h"], ["bad", "z"]);
+  const ran: string[] = [];
+  const { hook } = holding("h");
+  const log = freshLog();
+  const options = (models: Response[]) => gated({ ...notedOptions(log, ran, models), tools: { ...notedTools(ran), bad } }, hook);
+  const first = await runFlow(flow, {}, options(replies()));
+  expect([first.status, checks]).toEqual(["waiting", 1]);
+  await complete(log, heldId(0), { output: "ok" }, { env });
+  const done = await advance(options(replies().slice(1)));
+  expect([done.status, checks]).toEqual(["failed", 2]);
+  expect(done.failure?.message).toContain("no check");
+});
+
+test("a hold beside a tool's own pending() makes the later call wait only for the hold", async () => {
+  const ran: string[] = [];
+  const ticket = tool({
+    name: "ticket",
+    description: "Ticket.",
+    parameters: { type: "object", properties: { q: { type: "string" } } },
+    isConcurrencySafe: () => true,
+    execute: (args) => (ran.push(`ticket:${String(args.q)}`), pending()),
+  });
+  const replies = replying(["ticket", "p"], ["lookup", "h"], ["later", "l"]);
+  const { hook } = holding("h");
+  const log = freshLog();
+  const options = () => gated({ ...notedOptions(log, ran, replies().slice(modelCalls(log))), tools: { ...notedTools(ran), ticket } }, hook);
+  expect((await runFlow(await flowOf("ticket, lookup, later"), {}, options())).status).toBe("waiting");
+  expect(pendingCalls(log).map((call) => [call.callId, call.held])).toEqual([[heldId(1), true], [heldId(0), false]]);
+  await complete(log, heldId(1), { output: "approved" }, { env });
+  expect((await advance(options())).status).toBe("waiting");
+  expect([ran, pendingCalls(log).map((call) => call.callId)]).toEqual([["ticket:p", "later:l"], [heldId(0)]]);
+  await complete(log, heldId(0), { output: "ticket" }, { env });
+  expect((await advance(options())).status).toBe("succeeded");
+  expect(ran).toEqual(["ticket:p", "later:l"]);
+});
+
+test("an interrupt closes a waiting hold, whose closer reads Not run, and skips the later calls; none of them runs", async () => {
+  const ran: string[] = [];
+  const { hook } = holding("2");
+  const log = freshLog();
+  await runFlow(await flowOf(NOTED), {}, gated(notedOptions(log, ran, heldReplies()), hook));
+  const { calls } = await interrupt(log, "m", { env });
+  expect(calls.map((call) => [call.callId, call.held])).toEqual([[heldId(2), true]]);
+  const done = await advance(gated(notedOptions(log, ran, []), hook));
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect(done.output).toBeNull();
+  expect(ran).toEqual(["later:0", "lookup:1", "a:3"]);
+  const steps = stepsOf(log);
+  expect(steps[5]).toEqual({ kind: "tool_result", call_id: "c2", started_at: null, output: SKIPPED_TOOL_RESULT, is_error: true, closed: "interrupted" });
+  expect(shape(log).slice(5)).toEqual(["interrupted", "skipped", "skipped", "interrupted"]);
+});
+
+test("an honored interrupt that closed a hold and skipped the later calls stands across a crash at every record after it", async () => {
+  const flow = await flowOf(NOTED);
+  /** A run at `log` waiting on its hold, then interrupted while it waits. */
+  const interrupted = async (log: string, ran: string[]) => {
+    await runFlow(flow, {}, gated(notedOptions(log, ran, heldReplies()), holding("2").hook));
+    await interrupt(log, "m", { env });
+  };
+  const uncut = freshLog();
+  await interrupted(uncut, []);
+  const start = readRunLog(uncut).length;
+  expect((await advance(gated(notedOptions(uncut, [], []), holding("2").hook))).status).toBe("succeeded");
+  for (let k = start; k < readRunLog(uncut).length; k++) {
+    const log = freshLog();
+    const ran: string[] = [];
+    await interrupted(log, ran);
+    await crashAfter(k, () => advance(gated(notedOptions(log, ran, []), holding("2").hook)));
+    const done = await advance(gated(notedOptions(log, ran, []), holding("2").hook));
+    expect(done.status, `cut at ${k}: ${done.failure?.message}`).toBe("succeeded");
+    expect(ran, `cut at ${k}`).toEqual(["later:0", "lookup:1", "a:3"]);
+    const results = stepsOf(log).filter((step) => step["kind"] === "tool_result").map((step) => step["call_id"]);
+    expect(results.toSorted(), `cut at ${k}`).toEqual(["c0", "c1", "c2", "c3", "c4", "c5"]);
+  }
+});
+
+test.each<[string, (event: RunEvent) => boolean, boolean, string[], string[]]>([
+  [
+    "its hold is announced",
+    (event) => event instanceof CallHeld,
+    false,
+    ["later:0"],
+    ["skipped", "interrupted", "skipped", "skipped", "skipped", "interrupted"],
+  ],
+  [
+    "its hold is announced and answered",
+    (event) => event instanceof CallHeld,
+    true,
+    ["later:0"],
+    ["tool_result", "skipped", "skipped", "skipped", "skipped", "interrupted"],
+  ],
+  [
+    "a call beside it starts",
+    (event) => event instanceof ToolCallStarted && event.toolCallId === "c1",
+    false,
+    ["later:0", "lookup:1", "a:3"],
+    ["tool_result", "tool_result", "interrupted", "skipped", "skipped", "interrupted"],
+  ],
+])("an interrupt delivered from onEvent as %s closes the hold or keeps its answer, and no later call starts", async (_, when, answer, runs, rest) => {
+  const ran: string[] = [];
+  const log = freshLog();
+  const delivered: Promise<unknown>[] = [];
+  const options = notedOptions(log, ran, heldReplies());
+  const onEvent = (event: RunEvent) => {
+    if (!when(event) || delivered.length > 0) return;
+    if (answer) delivered.push(complete(log, heldId(2), { output: "approved" }, { env }));
+    delivered.push(interrupt(log, "m", { env }));
+  };
+  const result = await runFlow(await flowOf(NOTED), {}, gated({ ...options, onEvent }, holding("2").hook));
+  await Promise.all(delivered);
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(ran).toEqual(runs);
+  expect(shape(log)).toEqual(["model_call", "tool_result", "pending", ...rest]);
+  const closer = stepsOf(log).find((step) => step["call_id"] === "c2" && step["kind"] === "tool_result");
+  expect(closer).toMatchObject(answer ? { output: "approved" } : { output: SKIPPED_TOOL_RESULT, closed: "interrupted" });
+});
+
+test("a hold answered between its node's wake and the node reading its calls pends again; the later call then runs once, across a crash too", async () => {
+  // Two holds in one group, then `later`. The first hold's answer, given as it is announced, wakes
+  // the node; the second's lands from onEvent(NodeWoken), before the woken node reads its calls.
+  const flow = await flowOf(NOTED);
+  const replies = () => [callReply(["lookup", { q: "1" }, "c1"], ["team_a", { q: "2" }, "c2"], ["later", { q: "3" }, "c3"]), textReply("done")];
+  /** Run the flow at `log`, answering both holds in flight, cut at record `k` when given. */
+  const run = async (log: string, ran: string[], k: number | null) => {
+    const { asked, hook } = holding("1", "2");
+    const events: RunEvent[] = [];
+    const delivered: Promise<unknown>[] = [];
+    const onEvent = (event: RunEvent) => {
+      events.push(event);
+      if (event instanceof CallHeld && event.callId === heldId(0)) delivered.push(complete(log, heldId(0), { output: "one" }, { env }));
+      if (event instanceof NodeWoken && delivered.length === 1) delivered.push(complete(log, heldId(1), { output: "two" }, { env }));
+    };
+    const running = () => runFlow(flow, {}, gated({ ...notedOptions(log, ran, replies()), onEvent }, hook));
+    if (k === null) expect((await running()).status).toBe("succeeded");
+    else await crashAfter(k, running);
+    await Promise.all(delivered);
+    return { asked, hook, events };
+  };
+  const uncut = freshLog();
+  const ran: string[] = [];
+  const { asked, events } = await run(uncut, ran, null);
+  // The wake saw the second answer recorded after it began, so it waited on that call again.
+  const waits = events.filter((event) => event instanceof NodeWaiting).map((event) => (event as NodeWaiting).callIds);
+  expect(waits).toEqual([[heldId(0), heldId(1)], [heldId(1)]]);
+  expect(ran).toEqual(["later:3"]);
+  expect(asked.slice(2).map((call) => [call.tool, call.attempt])).toEqual([["later", 1]]);
+  // A crash right after the second answer: the next start is the first evaluation to see it.
+  const answered = readRunLog(uncut).findIndex(({ record }) => record instanceof NodeStepRecord && record.step["call_id"] === "c2") + 1;
+  expect(readRunLog(uncut)[answered - 2]!.kind).toBe("node_woken");
+  const log = freshLog();
+  const cut: string[] = [];
+  const { hook } = await run(log, cut, answered);
+  expect(cut).toEqual([]);
+  const done = await advance(gated(notedOptions(log, cut, replies().slice(1)), hook));
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect(cut).toEqual(["later:3"]);
+});
+
+test("a held flow call grows no scope: complete answers it, and its flow never runs", async () => {
+  const flow = await loadFlow(SHOUT_FLOW);
+  const log = freshLog();
+  const hold: BeforeToolCall = () => pending();
+  const first = await runFlow(flow, {}, gated({ env, log, runId: "r", models: serving(new ScriptedModel([callReply(["shout", { text: "hi" }, "c1"])], CONFIG)) }, hold));
+  expect(first.status, first.failure?.message).toBe("waiting");
+  const [call] = pendingCalls(log);
+  expect([call!.held, call!.source]).toEqual([true, { kind: "flow", flow: "shout", library: null }]);
+  await complete(log, call!.callId, { output: "quiet" }, { env });
+  const model = new ScriptedModel([textReply("done")], CONFIG);
+  const done = await advance(gated({ env, log, models: serving(model) }, hold));
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect(read(model, 0)).toEqual([["c1", "quiet", false]]);
+  expect([expanded(log), scopesOf(log)]).toEqual([false, []]);
+});
+
+test.each(["pending", "node_waiting"])("a held module tool call survives a crash after its %s record, and complete answers it with the tool never run", async (kind) => {
+  rmSync(quoted, { force: true });
+  writeFileSync(join(dir, "held.ts"), quoteModule(["quote"]));
+  const flow = await loadFlow(
+    `id: held\nname: held\nllm_config: {provider: openai, model: test-model}\nuses:\n  price: "./held.ts:quote"\n` +
+      "nodes:\n  reply: {kind: agent, prompt: go, tools: [price]}\noutput: ${reply.output}\n",
+    { searchPaths: [dir] },
+  );
+  const hold: BeforeToolCall = () => pending();
+  const options = (log: string, replies: Response[]) => gated({ env, log, runId: "r", models: serving(new ScriptedModel(replies, CONFIG)) }, hold);
+  const replies = () => [callReply(["price", { id: "1" }, "c1"]), textReply("done")];
+  const uncut = freshLog();
+  expect((await runFlow(flow, {}, options(uncut, replies()))).status).toBe("waiting");
+  const at = readRunLog(uncut).findIndex(({ kind: recorded, record }) =>
+    recorded === kind || (record instanceof NodeStepRecord && record.step["kind"] === kind)) + 1;
+  const log = freshLog();
+  await crashAfter(at, () => runFlow(flow, {}, options(log, replies())));
+  expect((await advance(options(log, []))).status).toBe("waiting");
+  const [call] = pendingCalls(log);
+  expect([call!.held, call!.source]).toEqual([true, { kind: "module", alias: "price", ref: "./held.ts:quote", export: "quote" }]);
+  await complete(log, call!.callId, { output: 7 }, { env });
+  const model = new ScriptedModel([textReply("done")], CONFIG);
+  expect((await advance({ ...options(log, []), models: serving(model) })).status).toBe("succeeded");
+  expect(read(model, 0)).toEqual([["c1", "7", false]]);
+  expect(existsSync(quoted)).toBe(false);
+});
+
+test("a hold outside a durable run fails the agent before anything of its group is written", async () => {
+  const ran: string[] = [];
+  const { hook } = asking((call) => (call.tool === "lookup" ? { refuse: "No." } : pending()));
+  const model = new ScriptedModel([callReply(["lookup", { q: "x" }, "c1"], ["team_a", { q: "y" }, "c2"])], CONFIG);
+  const events: RunEvent[] = [];
+  const flow = await loadFlow("id: bare\nname: bare\nllm_config: {provider: openai, model: test-model}\nnodes:\n  reply: {kind: agent, prompt: go, tools: [lookup, team]}\noutput: ${reply.output}\n");
+  const options = { env, runId: "r", tools: hostTools(ran), models: serving(model), onEvent: (event: RunEvent) => void events.push(event) };
+  const result = await runFlow(flow, {}, gated(options, hook));
+  expect(result.status).toBe("failed");
+  expect(result.failure?.message).toContain("agent node 'reply': beforeToolCall held tool 'team_a' outside a durable run; give the run a log");
+  expect([ran, brackets(events)]).toEqual([[], []]);
+});
+
+test("a resend the hook holds is closed crashed with a warning, since it may have run before its cut", async () => {
+  const whole = await gatedRun("lookup", oneLookup(), () => undefined);
+  const ran: string[] = [];
+  const warnings: string[] = [];
+  const { asked, hook } = asking((call) => (call.attempt === 1 ? undefined : pending()));
+  const { done, log } = await withWarnings(
+    (text) => void warnings.push(text),
+    () => crashThenResume(through(whole.log, "model_call"), hook, ran),
+  );
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect([asked.length, ran]).toEqual([2, ["lookup"]]);
+  expect(shape(log)).toEqual(["model_call", "crashed", "model_call"]);
+  expect(warnings).toEqual(["node 'reply': beforeToolCall held tool 'lookup', sent again after a cut; it may have run, so it is closed crashed"]);
 });

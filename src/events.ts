@@ -541,10 +541,11 @@ export class ToolCallStarted {
  * `model_call` step.
  *
  * A call that a host interrupt skipped is reported as started and then finished with
- * `error: "interrupted"`, and a call of a reply at the tool-call cap with `error: "tool_limit"`;
- * the tool did not run. A call of a flow granted as a tool finishes once the agent reads what came
- * back: the flow's output as `result`, as the model reads it, or `error: "failed"` for a flow that
- * failed or didn't start and `"interrupted"` for one an interrupt ended.
+ * `error: "interrupted"`, a call of a reply at the tool-call cap with `error: "tool_limit"`, and
+ * a call the host's `beforeToolCall` refused with `error: "refused"`; the tool did not run. A call
+ * of a flow granted as a tool finishes once the agent reads what came back: the flow's output as
+ * `result`, as the model reads it, or `error: "failed"` for a flow that failed or didn't start and
+ * `"interrupted"` for one an interrupt ended.
  */
 export class ToolCallFinished {
   readonly type = "ToolCallFinished" as const;

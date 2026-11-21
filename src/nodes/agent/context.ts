@@ -36,7 +36,10 @@ export const DEFAULT_SYSTEM =
   "precisely, use the available tools to gather any facts you need, and return " +
   "a clear, self-contained answer. Ask the user only through an explicitly granted tool.";
 
-/** The AGENT tool loop could not go on: a tool returned `pending()` outside a durable run. */
+/**
+ * The AGENT tool loop could not go on: a tool returned `pending()` outside a durable run, or the
+ * host's `beforeToolCall` couldn't be asked about a call.
+ */
 export class AgentLoopError extends Error {
   override name = "AgentLoopError";
 }
@@ -154,11 +157,13 @@ export interface ToolResultFields {
   readonly isError: boolean;
   /**
    * Set only on a result yian wrote in place of running the call: `skipped` for one a host
-   * interrupt skipped, `crashed` for one a resume closed because its run was cut off before its
-   * result, `timed_out` for an `ask_user` whose deadline passed, `interrupted` for a pending call a
-   * host interrupt closed.
+   * interrupt skipped, `refused` for one the host's `beforeToolCall` refused, `crashed` for one a
+   * resume closed because its run was cut off before its result, `timed_out` for an `ask_user`
+   * whose deadline passed, `interrupted` for a pending call a host interrupt closed.
    */
-  readonly closed?: "skipped" | CloserReason;
+  readonly closed?: "skipped" | "refused" | CloserReason;
+  /** The host's audit note on the call it let run (`beforeToolCall`); the model never reads it. */
+  readonly note?: string | null;
 }
 
 /** A pending call as its `pending` step records it (`AgentSteps.pending`). */
@@ -171,6 +176,8 @@ export interface PendingFields {
   readonly deadline: string | null;
   /** A flow call's arguments; `null` or absent for any other call. */
   readonly flowArguments?: ValueRecord | null;
+  /** The host's audit note on the call it let run (`beforeToolCall`); the model never reads it. */
+  readonly note?: string | null;
 }
 
 /** A tool call's result as an earlier start recorded it. */
@@ -488,7 +495,7 @@ export class AgentSteps {
 
   /**
    * Write a tool call's result as a `tool_result` step: `call_id`, `started_at`, `output`,
-   * `is_error`, and `closed` when given.
+   * `is_error`, and `closed` and `note` when given.
    *
    * @returns The step's `n`.
    * @throws Whatever `NodeSteps.record` throws.
@@ -502,15 +509,17 @@ export class AgentSteps {
       is_error: result.isError,
     };
     if (result.closed !== undefined) step["closed"] = result.closed;
+    if (result.note != null) step["note"] = result.note;
     return this.#record(step, options);
   }
 
   /**
    * Write a call whose handler returned `pending()` as a `pending` step: `call_id` (the yian call
    * id), `tool`, `tool_call_id`, `reply` (the reply's `model_call` step `n`), `index` (the call's
-   * place among the reply's tool calls), and `deadline` (a record time) for an `ask_user` with a
-   * timeout. A flow tool's call adds `flow: true`, its `arguments`, which its scope starts with,
-   * and that `scope`'s callsite, `<node>/<flow>#<k>`, `k` counting the node's calls of the flow.
+   * place among the reply's tool calls), `deadline` (a record time) for an `ask_user` with a
+   * timeout, and the host's `note` when given. A flow tool's call adds `flow: true`, its
+   * `arguments`, which its scope starts with, and that `scope`'s callsite, `<node>/<flow>#<k>`, `k`
+   * counting the node's calls of the flow.
    *
    * @returns The step's `n`.
    * @throws Whatever `NodeSteps.record` throws.
@@ -535,7 +544,7 @@ export class AgentSteps {
 
   /** The `pending` step `pending` writes for `call`. */
   #pendingStep(call: PendingFields): ValueRecord {
-    const { callId, tool, toolCallId, reply, index, deadline, flowArguments = null } = call;
+    const { callId, tool, toolCallId, reply, index, deadline, flowArguments = null, note } = call;
     const step: ValueRecord = {
       kind: "pending",
       call_id: callId,
@@ -545,6 +554,7 @@ export class AgentSteps {
       index: BigInt(index),
     };
     if (deadline !== null) step["deadline"] = deadline;
+    if (note != null) step["note"] = note;
     if (flowArguments === null) return step;
     step["flow"] = true;
     step["arguments"] = flowArguments;

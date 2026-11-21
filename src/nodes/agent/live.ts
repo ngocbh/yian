@@ -458,6 +458,9 @@ export const SKIPPED_TOOL_ERROR = "interrupted";
 /** The `error` of the finished event of a call of a reply at the tool-call cap, which never ran. */
 export const CAPPED_TOOL_ERROR = "tool_limit";
 
+/** The `error` of the finished event of a call the host's `beforeToolCall` refused, which never ran. */
+export const REFUSED_TOOL_ERROR = "refused";
+
 /** One requested tool call, as its brackets name it. */
 export interface ToolCallIdentity {
   /** The `n` of the reply's `model_call` step. */
@@ -555,7 +558,7 @@ export function observeFlowCallFinished(
 /**
  * Report a tool call that never ran as started, then finished with `error`: `SKIPPED_TOOL_ERROR`
  * (the default) for one a host interrupt skipped, `CAPPED_TOOL_ERROR` for one of a reply at the
- * tool-call cap.
+ * tool-call cap, `REFUSED_TOOL_ERROR` for one the host refused.
  *
  * The same pair a run call emits, so a host can mark that call's part; the tool itself never runs.
  * Without an event sink nothing is emitted.

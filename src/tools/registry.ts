@@ -39,7 +39,7 @@ import {
 import { ASK, ASK_USER, isPending, SLEEP, TAKE, ToolContext, toolCallId } from "./context.ts";
 import { isToolCheckError, ToolCheckError, toolErrorKinds } from "./errors.ts";
 import { FunctionTool, isFunctionTool, type StandardIssue, type StandardResult } from "./function_tools.ts";
-import type { BeforeToolCall } from "./gate.ts";
+import type { BeforeToolCall, ToolSource } from "./gate.ts";
 import { GrantError, type GrantScope, type NodeScope, nodeScope, visibleToolName } from "./grants.ts";
 import { isMcpServer, type McpServer } from "./mcp.ts";
 import type { StartedToolModule } from "./modules.ts";
@@ -573,6 +573,8 @@ export class ToolSet {
   // Plain private fields, not `#` ones, so `forRun` can copy them into a subclass instance.
   private toolMap: ReadonlyMap<string, FunctionTool> | null;
   private groupMap: ReadonlyMap<string, ReadonlyMap<string, FunctionTool>>;
+  // The keys of the groups that are MCP servers.
+  private serverKeys: ReadonlySet<string>;
   // Each group tool's record name: `<group>_<tool>` under the first group holding the object.
   private recordNames: ReadonlyMap<FunctionTool, string>;
   private boundRunId: string;
@@ -600,6 +602,7 @@ export class ToolSet {
   constructor(tools?: Readonly<Record<string, ToolEntry>> | null, options?: { context?: unknown }) {
     this.toolMap = null;
     this.groupMap = new Map();
+    this.serverKeys = new Set();
     this.ownTools = null;
     this.startedModules = new Map();
     this.hostCompletesCalls = false;
@@ -617,6 +620,7 @@ export class ToolSet {
     }
     const built = new Map<string, FunctionTool>();
     const groupItems = new Map<string, readonly FunctionTool[]>();
+    const servers = new Set<string>();
     const trusted = new Map<string, JsonObject>();
     for (const key of keys) {
       if (key === "") throw new YianTypeError("tool ids in tools must be non-empty strings");
@@ -641,6 +645,7 @@ export class ToolSet {
         built.set(key, entry);
       } else if (isMcpServer(entry)) {
         groupItems.set(key, serverTools(key, entry));
+        servers.add(key);
       } else if (Array.isArray(entry)) {
         groupItems.set(key, groupTools(key, entry));
       } else {
@@ -701,6 +706,7 @@ export class ToolSet {
     }
     this.toolMap = built;
     this.groupMap = groups;
+    this.serverKeys = servers;
     this.recordNames = recordNames;
     this.trustedSchemas = trusted;
   }
@@ -717,11 +723,21 @@ export class ToolSet {
    * @throws {RangeError} No tool answers the ref.
    */
   private lookup(ref: string | ToolRef): FunctionTool {
+    return this.locate(ref).tool;
+  }
+
+  /**
+   * Return the tool `lookup` returns for `ref`, with where it was found: whether it is the node's
+   * own (`withNodeScope`), and the group holding it, `null` for a top-level or registry tool.
+   *
+   * @throws As `lookup` throws.
+   */
+  private locate(ref: string | ToolRef): { tool: FunctionTool; group: string | null; node: boolean } {
     if (typeof ref !== "string" && ref.group !== null) {
       const nodeGroup = this.ownTools?.groups.get(ref.group);
       if (nodeGroup !== undefined) {
         const tool = nodeGroup.find((each) => each.name === ref.name);
-        if (tool !== undefined) return tool;
+        if (tool !== undefined) return { tool, group: ref.group, node: true };
         const has = nodeGroup.length === 0 ? "no tools" : nodeGroup.map((each) => each.name).join(", ");
         throw new YianRangeError(`\`${ref.group}\` has no tool \`${ref.name}\`; it has ${has}`);
       }
@@ -735,11 +751,11 @@ export class ToolSet {
         const has = members.size === 0 ? "no tools" : [...members.keys()].join(", ");
         throw new YianRangeError(`\`${ref.group}\` has no tool \`${ref.name}\`; it has ${has}`);
       }
-      return tool;
+      return { tool, group: ref.group, node: false };
     }
     const toolId = typeof ref === "string" ? ref : ref.name;
     const nodeTool = this.ownTools?.tools.find((each) => each.name === toolId);
-    if (nodeTool !== undefined) return nodeTool;
+    if (nodeTool !== undefined) return { tool: nodeTool, group: null, node: true };
     if ((toolId === ASK || toolId === ASK_USER) && !this.toolMap?.has(toolId)) {
       throw new YianRangeError(`no ask handler for this run; ${ASK_HINT}`);
     }
@@ -751,7 +767,7 @@ export class ToolSet {
     const group = this.groupMap.get(toolId);
     // A group's tool of the group's own name is what the bare name reaches.
     const own = group?.get(toolId);
-    if (own !== undefined) return own;
+    if (own !== undefined) return { tool: own, group: toolId, node: false };
     if (group !== undefined) {
       const [first] = group.keys();
       const one = `; name one of its tools, as \`{${toolId}: ${first}}\``;
@@ -759,7 +775,7 @@ export class ToolSet {
       throw new YianRangeError(`${reprText(toolId)} is a tool group, not a tool${what}`);
     }
     const tool = (this.toolMap ?? TOOL_REGISTRY).get(toolId);
-    if (tool !== undefined) return tool;
+    if (tool !== undefined) return { tool, group: null, node: false };
     const holders = this.holders(toolId);
     if (holders.length > 1) {
       const groups = holders.map(({ group }) => reprText(group));
@@ -767,9 +783,26 @@ export class ToolSet {
       const fix = `name one as \`{${holders[0]!.group}: ${toolId}}\``;
       throw new GrantError(`${reprText(toolId)} is a tool of groups ${shown}; ${fix}`);
     }
-    if (holders.length === 1) return holders[0]!.tool;
+    if (holders.length === 1) return { ...holders[0]!, node: false };
     const known = writeAsText([...this.toolIds]);
     throw new YianRangeError(`unknown tool id ${reprText(toolId)}; known tools: ${known}`);
+  }
+
+  /**
+   * @internal Return where the tool `ref` names comes from, frozen, as `beforeToolCall` sees it: a
+   * host tool (`group` `null` for a top-level or registry tool) or an MCP server's tool, each by
+   * its own name; `null` for a node's own tool (`withNodeScope`).
+   *
+   * @throws As `resolve` throws.
+   */
+  sourceOf(ref: ToolRef): ToolSource | null {
+    const { tool, group, node } = this.locate(ref);
+    if (node) return null;
+    const source: ToolSource =
+      group !== null && this.serverKeys.has(group)
+        ? { kind: "mcp", server: group, tool: tool.name }
+        : { kind: "host", group, tool: tool.name };
+    return Object.freeze(source);
   }
 
   /** The group tools named `name`, one per distinct tool, each under the first group holding it. */

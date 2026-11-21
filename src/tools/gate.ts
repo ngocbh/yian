@@ -58,8 +58,8 @@ export interface GateContext {
 
 /**
  * The hook's decision: `undefined` or `{run: true}` runs the call, `{run: true, note}` runs it and
- * keeps the note in the run log for audit, `{refuse}` gives the model the text as the call's
- * error, and `pending()` holds the call until the host answers it.
+ * keeps the note in the run log for audit (a `note` that is `undefined` is none), `{refuse}` gives
+ * the model the text as the call's error, and `pending()` holds the call until the host answers it.
  */
 export type GateDecision =
   | undefined

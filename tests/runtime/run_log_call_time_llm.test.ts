@@ -78,11 +78,10 @@ const GOLDEN =
   '"start_wiring_override":{"name":"${input.name}"},"tool_groups":{},"tools":{},"yian_version":"' +
   VERSION +
   '"},"run_id":"r1",' +
-  '"schema":34,"seq":0}';
+  `"schema":${SCHEMA_VERSION},"seq":0}`;
 
-test("the schema is thirty-four", () => {
-  expect(SCHEMA_VERSION).toBe(34);
-  expect((parseJson(encode(record(CALL_TIME)), "codec") as JsonObject)["schema"]).toBe(34n);
+test("a run-start record is written in this version's schema", () => {
+  expect((parseJson(encode(record(CALL_TIME)), "codec") as JsonObject)["schema"]).toBe(BigInt(SCHEMA_VERSION));
 });
 
 test("call_time_llm round trips", () => {

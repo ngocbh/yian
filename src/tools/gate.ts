@@ -4,8 +4,8 @@
  * on the texts a decision carries. A run with a hook records that it is gated, and a resume of it
  * needs one.
  *
- * Until hosts can pass the hook as an option, it reaches a run only through `withGate`, which this
- * package's entry points don't export.
+ * Until hosts can pass the hook as an option, a run's options hold it under the `GATE` key, which
+ * this package's entry points don't export.
  *
  * Knows about: tools/context and typesys.
  */
@@ -119,22 +119,19 @@ export function checkGateText(value: unknown, what: string): string {
   return value;
 }
 
-/** The hook each registered options object carries. */
-const GATES = new WeakMap<object, BeforeToolCall | null>();
+/**
+ * @internal The key a `runFlow` or `advance` options object holds its `beforeToolCall` hook under.
+ * A symbol, so a spread copy of the options keeps the hook, as it will keep a named option.
+ */
+export const GATE: unique symbol = Symbol("yian.beforeToolCall");
 
 /**
- * @internal Register `hook` as the `beforeToolCall` of the `runFlow` or `advance` options object
- * `options`, and return the same object; a copy of it carries no hook.
+ * @internal The `beforeToolCall` hook `options` holds under `GATE`, or `null` when it holds none.
  *
- * @throws TypeError when `hook` isn't a function or `null`.
+ * @throws TypeError when the hook isn't a function, `null` or `undefined`.
  */
-export function withGate<T extends object>(options: T, hook: BeforeToolCall | null): T {
-  if (hook !== null && typeof hook !== "function") throw new YianTypeError("beforeToolCall must be a function or null");
-  GATES.set(options, hook);
-  return options;
-}
-
-/** @internal The hook `withGate` registered on `options`, or `null`. */
 export function gateOf(options: object): BeforeToolCall | null {
-  return GATES.get(options) ?? null;
+  const hook: unknown = (options as { [GATE]?: unknown })[GATE] ?? null;
+  if (hook !== null && typeof hook !== "function") throw new YianTypeError("beforeToolCall must be a function or null");
+  return hook as BeforeToolCall | null;
 }

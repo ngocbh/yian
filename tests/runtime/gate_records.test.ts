@@ -6,6 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { loadFlow } from "../../src/compose/loader.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { RunResumedRecord, type RunLog } from "../../src/runtime/log.ts";
 import {
@@ -24,8 +25,8 @@ import { askPending, paramFlow, replayed, started, tool } from "../helpers/waits
 
 const agent = (id: string) => new AgentNode(id, { prompt: "go", tools: ["ask_user", "lookup"] });
 
-/** A recorded chat reply calling `lookup` with no arguments, as `c0`, `c1`, ... */
-const reply = (calls: number) => ({
+/** A recorded chat reply calling `name` `calls` times with `args`, as `c0`, `c1`, ... */
+const reply = (calls: number, name = "lookup", args: Record<string, unknown> = {}) => ({
   kind: "model_call",
   purpose: "chat",
   model: "m",
@@ -35,7 +36,7 @@ const reply = (calls: number) => ({
   output: {
     format: "yian.message.v1",
     role: "assistant",
-    parts: Array.from({ length: calls }, (_, i) => ({ type: "tool_call", id: `c${i}`, name: "lookup", arguments: {} })),
+    parts: Array.from({ length: calls }, (_, i) => ({ type: "tool_call", id: `c${i}`, name, arguments: args })),
   },
   response_id: null,
   finish: "tool_calls",
@@ -82,6 +83,32 @@ function step(log: RunLog, state: RunState, node: string, body: Record<string, u
   commitPrepared(log, state, prepareNodeStep(state, node, body));
 }
 
+/** A flow whose agent `a` grants the def `shout`. */
+const SHOUT_FLOW = `
+id: shouting
+name: shouting
+llm_config: {provider: openai, model: test-model}
+defs:
+  shout:
+    description: Shout the text back.
+    input:
+      text: !str
+    nodes:
+      loud:
+        kind: code
+        input:
+          text: \${input.text}
+        output: !str
+        code: return inputs.text.toUpperCase();
+    output: \${loud.output}
+nodes:
+  a:
+    kind: agent
+    prompt: go
+    tools: [shout]
+output: \${a.output}
+`;
+
 /** A run whose agent `a` is running after a reply calling `lookup` three times (c0, c1, c2). */
 function replied() {
   const run = started(paramFlow([], agent("a"), tool("t", "ask")));
@@ -126,14 +153,17 @@ describe("a refused call's result", () => {
     expect(state.nodeSteps.get("a")!.at(-1)!["closed"]).toBe("refused");
   });
 
-  test.each<[string, Record<string, unknown>]>([
-    ["a start time", { started_at: "2026-10-20T14:02:11.123Z" }],
-    ["no error", { is_error: false }],
-    ["a non-text output", { output: 7n }],
-    ["a note", { note: "ok" }],
-  ])("refuses %s", (_name, change) => {
+  const SHAPE = "a refused tool_result has started_at null, is_error true and its text as output";
+  test.each<[string, Record<string, unknown>, string]>([
+    ["a start time", { started_at: "2026-10-20T14:02:11.123Z" }, SHAPE],
+    ["no error", { is_error: false }, SHAPE],
+    ["a non-text output", { output: 7n }, "a refused tool_result's output must be a string"],
+    ["an empty output", { output: "" }, "a refused tool_result's output must be a non-empty string"],
+    ["an oversized output", { output: "a".repeat(GATE_TEXT_MAX_BYTES + 1) }, "a refused tool_result's output is 4097 UTF-8 bytes"],
+    ["a note", { note: "ok" }, "a refused tool_result holds no note"],
+  ])("refuses %s", (_name, change, message) => {
     const { state } = replied();
-    expect(() => prepareNodeStep(state, "a", { ...refusal("c0"), ...change })).toThrow(RangeError);
+    expect(() => prepareNodeStep(state, "a", { ...refusal("c0"), ...change })).toThrow(message);
   });
 
   test("refuses a call a pending step registered", () => {
@@ -159,6 +189,23 @@ describe("a note", () => {
     step(log, state, "a", result("c0", { note: "rule 4 allows reads" }));
     step(log, state, "a", { ...pendingOf(1), note: "a person reviews" });
     expect(state.waits.calls.get(callOf(1))!.state).toBe("open");
+  });
+
+  test("rides a flow call's pending step", async () => {
+    const flow = await loadFlow(SHOUT_FLOW);
+    const { log, state } = started(flow.compiled);
+    commitPrepared(log, state, prepareNodeStarted(state, "a"));
+    step(log, state, "a", reply(1, "shout", { text: "hi" }));
+    const call = { ...pendingOf(0, "shout"), flow: true, arguments: { text: "hi" }, scope: "a/shout#0" };
+    step(log, state, "a", { ...call, note: "a flow the rules allow" });
+    expect(state.waits.calls.get(callOf(0))!.flow).toBe(true);
+  });
+
+  test.each(["ask_user", "load_skill"])("refuses a note on a %s call's pending step, which is never checked", (tool) => {
+    const { state } = replied();
+    expect(() => prepareNodeStep(state, "a", { ...pendingOf(0, tool), note: "ok" })).toThrow(
+      `a ${tool} call's pending step holds no note; its calls are never checked`,
+    );
   });
 
   test.each<[string, unknown, string]>([
@@ -206,7 +253,7 @@ describe("a hold's pending step", () => {
   const EXACT =
     "a hold's pending step holds exactly kind, call_id, tool, tool_call_id, reply, index, held, source and group_end";
   const NEVER_HELD = (tool: string) => `a hold's tool can't be ${tool}, whose calls are never checked`;
-  const GROUP_END = "a hold's group_end must be an int of at least its index 1";
+  const GROUP_END = "a hold's group_end must be an int from its index 1 to its reply's last call 2";
   test.each<[string, (step: Record<string, unknown>) => void, string]>([
     ["a note", (s) => (s["note"] = "x"), EXACT],
     ["a deadline", (s) => (s["deadline"] = "2026-10-21T00:00:00.000Z"), EXACT],
@@ -219,11 +266,18 @@ describe("a hold's pending step", () => {
     ["a source of no kind", (s) => (s["source"] = { kind: "skill", tool: "lookup" }), "a hold's source must be a tool source"],
     ["a group ending before it", (s) => (s["group_end"] = 0n), GROUP_END],
     ["a float group end", (s) => (s["group_end"] = 1.5), GROUP_END],
+    ["a text group end", (s) => (s["group_end"] = "2"), GROUP_END],
+    ["a group past the reply", (s) => (s["group_end"] = 3n), GROUP_END],
   ])("refuses %s", (_name, change, message) => {
     const { state } = replied();
     const hold: Record<string, unknown> = holdOf(1);
     change(hold);
     expect(() => prepareNodeStep(state, "a", hold)).toThrow(message);
+  });
+
+  test("refuses an index past its reply's calls", () => {
+    const { state } = replied();
+    expect(() => prepareNodeStep(state, "a", holdOf(3))).toThrow("a hold's index 3 is past its reply's last call 2");
   });
 
   test("is checked as any agent pending step: its reply and call id", () => {
@@ -253,6 +307,13 @@ describe("a released step", () => {
     ["an unknown call", { kind: "released", call_id: callOf(2) }, notHold(2)],
     ["a call that pended", { kind: "released", call_id: callOf(1) }, notHold(1)],
     ["an empty note", { kind: "released", call_id: callOf(0), note: "" }, "a released step's note must be a non-empty string"],
+    // The step's record refuses it before the reducer does.
+    ["a lone surrogate", { kind: "released", call_id: callOf(0), note: "ok\uD800" }, "lone surrogate"],
+    [
+      "an oversized note",
+      { kind: "released", call_id: callOf(0), note: "é".repeat(GATE_TEXT_MAX_BYTES / 2 + 1) },
+      "a released step's note is 4098 UTF-8 bytes, over the limit of 4096",
+    ],
   ])("refuses %s", (_name, body, message) => {
     const { log, state } = replied();
     step(log, state, "a", holdOf(0));

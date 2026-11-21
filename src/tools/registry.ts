@@ -589,6 +589,14 @@ export class ToolSet {
   // The host's check before each tool call an agent's model makes (`withGate`), or `null`.
   private gateHook: BeforeToolCall | null;
 
+  /**
+   * Return a copy of `set` of its own class, holding its fields. Static: a copy made this way has
+   * no private brand, so an instance `#` method would refuse it as a receiver.
+   */
+  static #copy<T extends ToolSet>(set: T): T {
+    return Object.assign(Object.create(Object.getPrototypeOf(set)), set) as T;
+  }
+
   constructor(tools?: Readonly<Record<string, ToolEntry>> | null, options?: { context?: unknown }) {
     this.toolMap = null;
     this.groupMap = new Map();
@@ -844,7 +852,7 @@ export class ToolSet {
       if (groups.has(name)) throw new YianRangeError(`this node holds ${reprText(name)} as a group and a tool`);
       names.add(name);
     }
-    const copy = Object.assign(Object.create(Object.getPrototypeOf(this)), this) as this;
+    const copy = ToolSet.#copy(this);
     const own = { groups, tools: [...scope.tools], identities: scope.identities };
     copy.ownTools = groups.size === 0 && names.size === 0 ? null : own;
     return copy;
@@ -857,7 +865,7 @@ export class ToolSet {
    * The copy keeps this set's run, signal, context, tools and node scope.
    */
   withModules(modules: readonly StartedToolModule[], options: { completesCalls?: boolean } = {}): this {
-    const copy = Object.assign(Object.create(Object.getPrototypeOf(this)), this) as this;
+    const copy = ToolSet.#copy(this);
     copy.startedModules = new Map(modules.map((module) => [module.path, module]));
     copy.hostCompletesCalls = options.completesCalls ?? false;
     return copy;
@@ -873,7 +881,7 @@ export class ToolSet {
    * in place of any hook this set held; `null` holds none. The copy keeps everything else.
    */
   withGate(hook: BeforeToolCall | null): this {
-    const copy = Object.assign(Object.create(Object.getPrototypeOf(this)), this) as this;
+    const copy = ToolSet.#copy(this);
     copy.gateHook = hook;
     return copy;
   }
@@ -899,7 +907,7 @@ export class ToolSet {
    *   included, with the run bound; this one stays as it was.
    */
   forRun(runId: string, options?: { signal?: AbortSignal }): this {
-    const bound = Object.assign(Object.create(Object.getPrototypeOf(this)), this) as this;
+    const bound = ToolSet.#copy(this);
     bound.boundRunId = runId;
     bound.boundSignal = options?.signal;
     return bound;

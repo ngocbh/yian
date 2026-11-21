@@ -4,7 +4,7 @@
  */
 
 import { afterAll, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -16,7 +16,7 @@ import { readRunLog, RunResumedRecord, RunStartedRecord } from "../src/runtime/l
 import { pending } from "../src/tools/context.ts";
 import { FunctionTool } from "../src/tools/function_tools.ts";
 import type { BeforeToolCall } from "../src/tools/gate.ts";
-import { YianRangeError } from "../src/typesys/errors.ts";
+import { YianRangeError, YianTypeError } from "../src/typesys/errors.ts";
 import { gated } from "./helpers/gate.ts";
 import { completeByHand } from "./helpers/inbox_fixtures.ts";
 import { crashAfter, graph, NO_ENV, rejected } from "./helpers/run_state_fixtures.ts";
@@ -73,6 +73,21 @@ test("a run started with a hook records gated: true; one without leaves it out",
   const start = (log: string) => readRunLog(log)[0]!;
   expect([(start(withHook.log).record as RunStartedRecord).gated, start(withHook.log).payload["gated"]]).toEqual([true, true]);
   expect(Object.hasOwn(start(without.log).payload, "gated")).toBe(false);
+});
+
+test("a hook that isn't a function is refused before the log is created or changed", async () => {
+  const log = freshLog();
+  const bad = 5 as unknown as BeforeToolCall;
+  const error = new YianTypeError("beforeToolCall must be a function or null");
+  const flow = twoCalls();
+  expect(await rejected(runFlow(flow, {}, gated({ log, env: NO_ENV, tools: { lookup: LOOKUP } }, bad)))).toEqual(error);
+  expect(existsSync(log)).toBe(false);
+  const waiting = await waitingRun();
+  const before = readFileSync(waiting.log);
+  // Another worker count would write run_resumed.
+  const options = { log: waiting.log, flow, tools: waiting.tools, env: NO_ENV, numWorkers: 2 };
+  expect(await rejected(advance(gated(options, bad)))).toEqual(error);
+  expect(readFileSync(waiting.log).equals(before)).toBe(true);
 });
 
 test("an unfinished gated run is refused to an advance without a hook, with the log unchanged", async () => {

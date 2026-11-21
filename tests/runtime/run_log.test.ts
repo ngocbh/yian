@@ -44,8 +44,9 @@ const DIGEST = "d".repeat(64);
 const AT = "2026-10-20T14:02:11.123Z";
 const CLOCK = () => Date.UTC(2026, 9, 20, 14, 2, 11, 123);
 /** The error text for the retired TS schema `schema`. */
-const retired = (schema: number) => `run log schema ${schema} predates schema 34 and is not supported`;
-const RETIRED_SCHEMA = retired(33);
+const retired = (schema: number) => `run log schema ${schema} predates schema ${SCHEMA_VERSION} and is not supported`;
+/** The retired TS schemas, 10 up to this one. */
+const RETIRED_SCHEMAS = Array.from({ length: SCHEMA_VERSION - 10 }, (_, index) => 10 + index);
 const NOT_CONTIGUOUS = "reopened prefix must have one run and contiguous sequences";
 
 /** Assert `fn` throws an error of exactly class `cls` with exactly `message`, and return it. */
@@ -167,125 +168,33 @@ test.each([7, 8, 9])("retired schema %d record is rejected by name", (schema) =>
   expectError(() => new RecordEnvelope(schema, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, message);
 });
 
-test("a schema 21 record, from before an AGENT's success wrote a messages commit, is retired", () => {
-  const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":21,"seq":0}`;
-  const error = expectError(() => decodeRecord(line), RunLogSchemaError, retired(21)) as RunLogSchemaError;
-  expect(error.schema).toBe(21);
-  expectError(() => new RecordEnvelope(21, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, retired(21));
-});
-
-test("a schema 22 record, from before inbox_withdrawn and empty interrupted records, is retired", () => {
-  const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":22,"seq":0}`;
-  const error = expectError(() => decodeRecord(line), RunLogSchemaError, retired(22)) as RunLogSchemaError;
-  expect(error.schema).toBe(22);
-  expectError(() => new RecordEnvelope(22, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, retired(22));
-});
-
-test("a schema 23 record, from before a forward capture recorded whether its bound inputs are usable, is retired", () => {
-  const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":23,"seq":0}`;
-  const error = expectError(() => decodeRecord(line), RunLogSchemaError, retired(23)) as RunLogSchemaError;
-  expect(error.schema).toBe(23);
-  expectError(() => new RecordEnvelope(23, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, retired(23));
-});
-
-test("a schema 24 record, from before run_started recorded its flow's code root, is retired", () => {
-  const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":24,"seq":0}`;
-  const error = expectError(() => decodeRecord(line), RunLogSchemaError, retired(24)) as RunLogSchemaError;
-  expect(error.schema).toBe(24);
-  expectError(() => new RecordEnvelope(24, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, retired(24));
-});
-
-test("a schema 25 record, from before run_started recorded tools by record name, is retired", () => {
-  const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":25,"seq":0}`;
-  const error = expectError(() => decodeRecord(line), RunLogSchemaError, retired(25)) as RunLogSchemaError;
-  expect(error.schema).toBe(25);
-  expectError(() => new RecordEnvelope(25, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, retired(25));
-});
-
-test("a schema 26 record, from before learning was removed, is retired", () => {
-  const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":26,"seq":0}`;
-  const error = expectError(() => decodeRecord(line), RunLogSchemaError, retired(26)) as RunLogSchemaError;
-  expect(error.schema).toBe(26);
-  expectError(() => new RecordEnvelope(26, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, retired(26));
-});
-
-test("a schema 27 record, from before run_started recorded each tool's resumable flag, is retired", () => {
-  const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":27,"seq":0}`;
-  const error = expectError(() => decodeRecord(line), RunLogSchemaError, retired(27)) as RunLogSchemaError;
-  expect(error.schema).toBe(27);
-  expectError(() => new RecordEnvelope(27, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, retired(27));
-});
-
-test("a schema 28 record, from before a memory input's value was a value kind, is retired", () => {
-  const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":28,"seq":0}`;
-  const error = expectError(() => decodeRecord(line), RunLogSchemaError, retired(28)) as RunLogSchemaError;
-  expect(error.schema).toBe(28);
-  expectError(() => new RecordEnvelope(28, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, retired(28));
-});
-
-test("a schema 29 record, from before a send recorded its key, is retired", () => {
-  const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":29,"seq":0}`;
-  const error = expectError(() => decodeRecord(line), RunLogSchemaError, retired(29)) as RunLogSchemaError;
-  expect(error.schema).toBe(29);
-  expectError(() => new RecordEnvelope(29, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, retired(29));
-});
-
-test("a schema 30 record, from before a flow call's growth named its call, is retired", () => {
-  const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":30,"seq":0}`;
-  const error = expectError(() => decodeRecord(line), RunLogSchemaError, retired(30)) as RunLogSchemaError;
-  expect(error.schema).toBe(30);
-  expectError(() => new RecordEnvelope(30, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, retired(30));
-});
-
-test("a schema 31 record, from before a node failure named the flow call taking it, is retired", () => {
-  const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":31,"seq":0}`;
-  const error = expectError(() => decodeRecord(line), RunLogSchemaError, retired(31)) as RunLogSchemaError;
-  expect(error.schema).toBe(31);
-  expectError(() => new RecordEnvelope(31, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, retired(31));
-});
-
-test("a schema 32 record, from before a run recorded its agents' tool modules, is retired", () => {
-  const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":32,"seq":0}`;
-  const error = expectError(() => decodeRecord(line), RunLogSchemaError, retired(32)) as RunLogSchemaError;
-  expect(error.schema).toBe(32);
-  expectError(() => new RecordEnvelope(32, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, retired(32));
-});
-
-test("a schema 33 record, from before a run recorded that a host checks its tool calls, is retired", () => {
-  const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":33,"seq":0}`;
-  const error = expectError(() => decodeRecord(line), RunLogSchemaError, RETIRED_SCHEMA) as RunLogSchemaError;
-  expect(error.schema).toBe(33);
-  expectError(() => new RecordEnvelope(33, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, RETIRED_SCHEMA);
+// Each retired schema from 21 on, with the change to the records that retired it.
+test.each<[number, string]>([
+  [21, "an AGENT's success wrote a messages commit"],
+  [22, "inbox_withdrawn and empty interrupted records"],
+  [23, "a forward capture recorded whether its bound inputs are usable"],
+  [24, "run_started recorded its flow's code root"],
+  [25, "run_started recorded tools by record name"],
+  [26, "learning was removed"],
+  [27, "run_started recorded each tool's resumable flag"],
+  [28, "a memory input's value was a value kind"],
+  [29, "a send recorded its key"],
+  [30, "a flow call's growth named its call"],
+  [31, "a node failure named the flow call taking it"],
+  [32, "a run recorded its agents' tool modules"],
+  [33, "a run recorded that a host checks its tool calls"],
+])("a schema %d record, from before %s, is retired", (schema) => {
+  const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":${schema},"seq":0}`;
+  const error = expectError(() => decodeRecord(line), RunLogSchemaError, retired(schema)) as RunLogSchemaError;
+  expect(error.schema).toBe(schema);
+  expectError(() => new RecordEnvelope(schema, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, retired(schema));
 });
 
 test.each<[number, string]>([
   [7, "unsupported run-record schema: 7"],
   [8, "unsupported run-record schema: 8"],
   [9, "unsupported run-record schema: 9"],
-  [10, retired(10)],
-  [11, retired(11)],
-  [12, retired(12)],
-  [13, retired(13)],
-  [14, retired(14)],
-  [15, retired(15)],
-  [16, retired(16)],
-  [17, retired(17)],
-  [18, retired(18)],
-  [19, retired(19)],
-  [20, retired(20)],
-  [21, retired(21)],
-  [22, retired(22)],
-  [23, retired(23)],
-  [24, retired(24)],
-  [25, retired(25)],
-  [26, retired(26)],
-  [27, retired(27)],
-  [28, retired(28)],
-  [29, retired(29)],
-  [30, retired(30)],
-  [31, retired(31)],
-  [32, retired(32)],
-  [33, RETIRED_SCHEMA],
+  ...RETIRED_SCHEMAS.map((schema): [number, string] => [schema, retired(schema)]),
 ])("a retired schema %d log is rejected on resume", (schema, message) => {
   const file = path.join(dir, "retired.jsonl");
   const bytes = `${wireLine({ schema: String(schema) })}\n`;
@@ -300,10 +209,10 @@ test.each<[string, unknown, string]>([
   ["6", 6, "6"],
   ["7", 7, "7"],
   ["8", 8, "8"],
-  ["35", 35, "35"],
+  [String(SCHEMA_VERSION + 1), SCHEMA_VERSION + 1, String(SCHEMA_VERSION + 1)],
   ["true", true, "true"],
   ["false", false, "false"],
-  ["34.0", undefined, "34.0"],
+  [`${SCHEMA_VERSION}.0`, undefined, `${SCHEMA_VERSION}.0`],
 ])("the schema check doesn't weaken validation: %s", (token, value, shown) => {
   const message = `unsupported run-record schema: ${shown}`;
   if (value !== undefined) {
@@ -347,7 +256,7 @@ test.each<[string, (wire: any) => void, new (...args: never[]) => Error, string]
       wire.kind = "unsupported";
     },
     RangeError,
-    "run-record kind 'unsupported' is unsupported in schema 34",
+    `run-record kind 'unsupported' is unsupported in schema ${SCHEMA_VERSION}`,
   ],
 ])("the schema check doesn't weaken payload validation: %s", (_name, corrupt, cls, message) => {
   const wire = JSON.parse(wireLine());
@@ -1153,7 +1062,7 @@ test("iterRunRecords with payloads: false reads the envelope and node id without
 test.each<[string, string, new (...args: never[]) => Error, string]>([
   ["an empty node id", kindLine("node_started", '{"node_id":""}'), RangeError, "node_started payload node_id must be a non-empty string"],
   ["a missing node id", kindLine("node_step", "{}"), TypeError, "node_step payload node_id must be a non-empty string"],
-  ["an unknown kind", kindLine("node_paused", "{}"), RangeError, "run-record kind 'node_paused' is unsupported in schema 34"],
+  ["an unknown kind", kindLine("node_paused", "{}"), RangeError, `run-record kind 'node_paused' is unsupported in schema ${SCHEMA_VERSION}`],
   ["invalid JSON", "{", RangeError, "invalid run-record JSON"],
 ])("iterRunRecords with payloads: false still refuses %s", (_name, line, causeClass, message) => {
   const file = path.join(dir, "run.jsonl");
@@ -1193,31 +1102,8 @@ test("iterRunRecords yields only the kinds asked for, still checking every line'
 
 test.each<[string, string, number]>([
   ["9", "unsupported run-record schema: 9", 9],
-  ["10", retired(10), 10],
-  ["11", retired(11), 11],
-  ["12", retired(12), 12],
-  ["13", retired(13), 13],
-  ["14", retired(14), 14],
-  ["15", retired(15), 15],
-  ["16", retired(16), 16],
-  ["17", retired(17), 17],
-  ["18", retired(18), 18],
-  ["19", retired(19), 19],
-  ["20", retired(20), 20],
-  ["21", retired(21), 21],
-  ["22", retired(22), 22],
-  ["23", retired(23), 23],
-  ["24", retired(24), 24],
-  ["25", retired(25), 25],
-  ["26", retired(26), 26],
-  ["27", retired(27), 27],
-  ["28", retired(28), 28],
-  ["29", retired(29), 29],
-  ["30", retired(30), 30],
-  ["31", retired(31), 31],
-  ["32", retired(32), 32],
-  ["33", RETIRED_SCHEMA, 33],
-  ["35", "unsupported run-record schema: 35", 35],
+  ...RETIRED_SCHEMAS.map((schema): [string, string, number] => [String(schema), retired(schema), schema]),
+  [String(SCHEMA_VERSION + 1), `unsupported run-record schema: ${SCHEMA_VERSION + 1}`, SCHEMA_VERSION + 1],
 ])("iterRunRecords refuses schema %s with a RunLogSchemaError naming the line", (schema, message, value) => {
   const file = path.join(dir, "run.jsonl");
   fs.writeFileSync(file, `${wireLine({ schema })}\n`);
@@ -1792,7 +1678,7 @@ test.each<[string, string, string]>([
   [
     "kind",
     wireLine({ seq: 2 }).replace("node_started", "xnode_started"),
-    "run-record kind 'xnode_started' is unsupported in schema 34",
+    `run-record kind 'xnode_started' is unsupported in schema ${SCHEMA_VERSION}`,
   ],
   ["sequence", wireLine({ seq: 5 }), "run-log sequence mismatch: expected 2, found 5"],
   ["run id", wireLine({ seq: 2, runId: "other" }), "run-log run_id mismatch: expected 'run', found 'other'"],

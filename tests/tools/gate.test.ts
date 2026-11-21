@@ -5,14 +5,7 @@
 
 import { expect, test } from "bun:test";
 
-import {
-  type BeforeToolCall,
-  checkGateText,
-  GATE_TEXT_MAX_BYTES,
-  gateOf,
-  isToolSource,
-  withGate,
-} from "../../src/tools/gate.ts";
+import { type BeforeToolCall, checkGateText, GATE, GATE_TEXT_MAX_BYTES, gateOf, isToolSource } from "../../src/tools/gate.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { YianRangeError, YianTypeError } from "../../src/typesys/errors.ts";
 import { gated } from "../helpers/gate.ts";
@@ -63,24 +56,16 @@ test.each<[string, unknown, Error]>([
   expect(() => checkGateText(value, "refusal")).toThrow(error);
 });
 
-test("the seam carries a hook on the options object it registers, and nothing else does", () => {
+test("options hold the hook under the gate key, and a spread copy keeps it", () => {
   const hook: BeforeToolCall = () => undefined;
-  const options = { log: "x" };
-  expect(withGate(options, hook)).toBe(options);
-  expect(gateOf(options)).toBe(hook);
-  // A copy isn't registered.
-  expect(gateOf({ ...options })).toBeNull();
-  expect(gateOf({})).toBeNull();
-  expect(gateOf(withGate(options, null))).toBeNull();
+  const options = gated({ log: "x" }, hook);
+  expect([gateOf(options), gateOf({ ...options, skills: null })]).toEqual([hook, hook]);
+  expect(Object.keys(options)).toEqual(["log"]);
+  expect([gateOf({}), gateOf(gated({}, null))]).toEqual([null, null]);
 });
 
-test("the seam refuses a hook that isn't a function or null", () => {
-  expect(() => withGate({}, 5 as never)).toThrow(new YianTypeError("beforeToolCall must be a function or null"));
-});
-
-test("the test helper reaches the seam", () => {
-  const hook: BeforeToolCall = () => undefined;
-  expect(gateOf(gated({ log: "x" }, hook))).toBe(hook);
+test("gateOf refuses a hook that isn't a function or null", () => {
+  expect(() => gateOf({ [GATE]: 5 })).toThrow(new YianTypeError("beforeToolCall must be a function or null"));
 });
 
 test("a tool set holds its gate across every copy", () => {

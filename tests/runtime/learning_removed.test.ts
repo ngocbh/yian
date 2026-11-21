@@ -19,7 +19,7 @@ import { EndNode } from "../../src/nodes/end/node.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { advance, agentCall, runFlow } from "../../src/run.ts";
-import { decodeRecord } from "../../src/runtime/log.ts";
+import { decodeRecord, SCHEMA_VERSION } from "../../src/runtime/log.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 
 const FIXTURES = fileURLToPath(new URL("../conformance/fixtures", import.meta.url));
@@ -112,13 +112,13 @@ test.each([
   "memory_commit_succeeded",
   "memory_commit_failed",
 ])("a %s record is an unknown kind", (kind) => {
-  const line = JSON.stringify({ at: "2026-11-06T00:00:00.000Z", kind, payload: {}, run_id: "r", schema: 34, seq: 1 });
-  expect(() => decodeRecord(line)).toThrow(`run-record kind '${kind}' is unsupported in schema 34`);
+  const line = JSON.stringify({ at: "2026-11-06T00:00:00.000Z", kind, payload: {}, run_id: "r", schema: SCHEMA_VERSION, seq: 1 });
+  expect(() => decodeRecord(line)).toThrow(`run-record kind '${kind}' is unsupported in schema ${SCHEMA_VERSION}`);
 });
 
 test("a schema-26 log is refused by name", () => {
   const line26 = JSON.stringify({ at: "2026-11-06T00:00:00.000Z", kind: "node_started", payload: {}, run_id: "r", schema: 26, seq: 1 });
-  expect(() => decodeRecord(line26)).toThrow("run log schema 26 predates schema 34 and is not supported");
+  expect(() => decodeRecord(line26)).toThrow(`run log schema 26 predates schema ${SCHEMA_VERSION} and is not supported`);
 });
 
 test.each([Node, AgentNode, EndNode, StartNode, LoopNode, CaseNode].map((cls) => [cls.name, cls] as const))(

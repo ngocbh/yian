@@ -824,8 +824,7 @@ export async function runFlow(
     if (flow.library !== null) throw new YianRangeError(libraryRunMessage(flow));
     const unopened = checkDriveOptions(options);
     const skills = checkFlowBeforeServers(flow.compiled, options.skills ?? null);
-    const run = { unopened, runDefaults, env, gate: gateOf(options) };
-    return await startRun(flow, inputs, { ...options, skills }, run);
+    return await startRun(flow, inputs, { ...options, skills }, unopened, runDefaults, env);
   });
 }
 
@@ -868,8 +867,8 @@ function refuseRemovedOptions(options: object, takesMemory = false): void {
  * @returns The unopened `tools` servers, as `splitRunServers` returns them.
  * @throws TypeError when `signal` isn't an `AbortSignal`, `live` isn't a `LiveChannel`, `onEvent`,
  *   `onStream` or `onConsole` isn't a function, `completesCalls` isn't a boolean, `scheduler` lacks
- *   `now` or `sleep`, `random` isn't a function, `models` lacks `env` or `createModel`, or a
- *   `tools` entry is malformed.
+ *   `now` or `sleep`, `random` isn't a function, `models` lacks `env` or `createModel`, the
+ *   `beforeToolCall` hook isn't a function or `null`, or a `tools` entry is malformed.
  * @throws RangeError when a `tools` key is reserved, or a server was opened by another run in
  *   progress, or a removed option is given (`memory` unless `takesMemory`).
  * @throws The signal's reason when it has aborted.
@@ -893,6 +892,7 @@ function checkDriveOptions(options: DriveOptions, takesMemory = false): [string,
   }
   if (random !== null && typeof random !== "function") throw new YianTypeError("random must be a function or null");
   requireModels(models);
+  gateOf(options);
   signal?.throwIfAborted();
   const [otherTools, unopened] = splitRunServers(tools);
   // The other entries' errors come before anything is opened.
@@ -1267,17 +1267,16 @@ export function runStartLlm(
 /**
  * Open the run's MCP servers and start its tool modules, check the tools, then record and drive a
  * fresh run. What this opened closes before the run is released, whatever fails.
- *
- * @param run The `tools` servers to open, the run's defaults and environment, and the host's check
- *   before each agent tool call (`null` for none).
  */
 async function startRun(
   flow: ComposedFlow,
   inputs: Readonly<Record<string, unknown>>,
   options: RunFlowOptions,
-  run: { unopened: readonly [string, McpServer][]; runDefaults: Defaults; env: Env; gate: BeforeToolCall | null },
+  unopened: readonly [string, McpServer][],
+  runDefaults: Defaults,
+  env: Env,
 ): Promise<RunResult> {
-  const { unopened, runDefaults, env, gate } = run;
+  const gate = gateOf(options);
   const { log = null, runId = null, numWorkers = 8 } = options;
   const live = options.live ?? null;
   const { tools = null, skills = null, context, completesCalls = false, signal = null } = options;
@@ -1669,7 +1668,8 @@ export interface AdvanceOptions {
  * when the segment ends, a failed close reported as `runFlow` reports it.
  *
  * `RunResumed` is written only when the last segment crashed or stopped (work in flight, a
- * recorded stop, or no `run_waiting` as its last frontier record) or `numWorkers` changes; then the
+ * recorded stop, or no `run_waiting` as its last frontier record), `numWorkers` changes, or a
+ * `beforeToolCall` hook first gates a run that can move (`gated: true`, kept from then on); then the
  * starts the log left unfinished are retried first, in their recorded order, after one
  * `RunResumed` observer and one `NodeAttemptResumed` per retried node. A waiting run with a node
  * that is wakeable (its calls settled by a delivery) or due (a deadline past by the scheduler's
@@ -1706,7 +1706,10 @@ export interface AdvanceOptions {
  *   recomputed one; ...`), before its model call. Also when `learnable`, a removed option, is
  *   given; when `memory` names an input that isn't a memory input, or gives an instance to one
  *   recorded null (checked for any run, finished or not); or, for an unfinished run, a memory it
- *   recorded isn't bound or isn't at its location, or differs from the recorded one.
+ *   recorded isn't bound or isn't at its location, or differs from the recorded one. Also, before
+ *   anything opens or is appended, for an unfinished gated run (one a `beforeToolCall` hook
+ *   checked) advanced without a hook: `run log <log> is gated: a host checked its tool calls with
+ *   beforeToolCall; resume it with one (advance({ log, beforeToolCall }))`.
  * @throws AuthError when a call-time agent resolves to the provider of the run's host key and
  *   `apiKey` (or a recorded header) wasn't given, before its model call, or the credential store
  *   can't be read.
@@ -1790,9 +1793,9 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       // A crash or a stop left work unfinished, or the last segment ended before its run_waiting.
       const crashed =
         state.inFlight.size > 0 || state.lastStopSequence !== null || state.waits.lastFrontier !== "run_waiting";
+      const forced = crashed || numWorkers !== state.numWorkers;
       if (
-        !crashed &&
-        numWorkers === state.numWorkers &&
+        !forced &&
         state.ready.length === 0 &&
         wakeableNodes(state.waits).length === 0 &&
         dueTimeouts(state.waits, scheduler.now()).size === 0
@@ -1801,7 +1804,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
         return resultFromState(state, log, []);
       }
       // A hooked segment of a run not gated yet records that it is from now on.
-      const resume = crashed || numWorkers !== state.numWorkers || (gate !== null && !state.gated);
+      const resume = forced || (gate !== null && !state.gated);
       if (start.yianVersion !== VERSION) {
         warn(`run log ${log} was started by yian ${start.yianVersion}; resuming it with yian ${VERSION}`);
       }

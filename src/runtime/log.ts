@@ -557,15 +557,21 @@ export class RunResumedRecord {
   readonly gated: boolean;
 
   /**
+   * @param options.gated Whether the segment's host checks each agent tool call (default `false`).
    * @throws RangeError when `retryNodeIds` or `closedCalls` isn't an array of unique non-empty
    *   strings, or `numWorkers` is negative.
    * @throws TypeError when `numWorkers` isn't a safe integer, or `gated` isn't a boolean.
    */
-  constructor(retryNodeIds: readonly string[], numWorkers: number, closedCalls: readonly string[] = [], gated = false) {
+  constructor(
+    retryNodeIds: readonly string[],
+    numWorkers: number,
+    closedCalls: readonly string[] = [],
+    options: { gated?: boolean } = {},
+  ) {
     this.retryNodeIds = validatedIdArray(retryNodeIds, "retry_node_ids");
     this.numWorkers = validatedCount(numWorkers, "num_workers");
     this.closedCalls = validatedIdArray(closedCalls, "closed_calls");
-    this.gated = wireBool(gated, "RunResumed gated");
+    this.gated = wireBool(options.gated ?? false, "RunResumed gated");
     Object.freeze(this);
   }
 }
@@ -2713,19 +2719,18 @@ function presentFields(payload: JsonObject, fields: readonly string[], optional:
   return [...fields, ...optional.filter((field) => Object.hasOwn(payload, field))];
 }
 
-/** A `run_started` or `run_resumed` payload's `gated` field: only a gated run's holds it, as `true`. */
-function gatedPayload(gated: boolean): JsonObject {
-  return gated ? { gated: true } : {};
-}
-
 /**
- * Decode a `run_started` or `run_resumed` payload's `gated` field; `label` names the payload.
+ * Decode a `run_started` or `run_resumed` payload's `gated` field, which only a gated run's payload
+ * holds, as `true`; `label` names the payload.
  *
- * @throws RangeError when it is there but isn't `true`.
+ * @throws TypeError when it is there but isn't a boolean.
+ * @throws RangeError when it is `false`.
  */
 function gatedFromPayload(payload: JsonObject, label: string): boolean {
   if (!Object.hasOwn(payload, "gated")) return false;
-  if (payload["gated"] !== true) throw new YianRangeError(`${label} gated must be true; a run that isn't gated leaves it out`);
+  if (!wireBool(payload["gated"], `${label} gated`)) {
+    throw new YianRangeError(`${label} gated must be true; a run that isn't gated leaves it out`);
+  }
   return true;
 }
 
@@ -2810,7 +2815,8 @@ const RECORD_CODECS: readonly RecordCodec[] = [
       ...(Object.keys(record.toolModules).length === 0 ? {} : { tool_modules: toolModulesPayload(record.toolModules) }),
       yian_version: record.yianVersion,
       parent: record.parent === null ? null : { run_id: record.parent.runId, node: record.parent.node },
-      ...gatedPayload(record.gated),
+      // Left out unless a host gates the run, like tool_modules.
+      ...(record.gated ? { gated: true } : {}),
     }),
     decode: (payload, label) => {
       const modules = Object.hasOwn(payload, "tool_modules");
@@ -2845,7 +2851,7 @@ const RECORD_CODECS: readonly RecordCodec[] = [
       retry_node_ids: [...record.retryNodeIds],
       num_workers: BigInt(record.numWorkers),
       closed_calls: [...record.closedCalls],
-      ...gatedPayload(record.gated),
+      ...(record.gated ? { gated: true } : {}),
     }),
     decode: (payload, label) => {
       requireFields(payload, presentFields(payload, ["retry_node_ids", "num_workers", "closed_calls"], ["gated"]), label);
@@ -2853,7 +2859,7 @@ const RECORD_CODECS: readonly RecordCodec[] = [
         wireTextArray(payload["retry_node_ids"], `${label} retry_node_ids`),
         wireInt(payload["num_workers"], `${label} num_workers`),
         wireTextArray(payload["closed_calls"], `${label} closed_calls`),
-        gatedFromPayload(payload, label),
+        { gated: gatedFromPayload(payload, label) },
       );
     },
   }),

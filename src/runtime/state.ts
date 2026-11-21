@@ -10,8 +10,8 @@
  *
  * Knows about: compile/declared_types, compile/manifest, compile/model, compile/validation,
  *              defaults, diagnostics, events, expr, nodes, runtime/common,
- *              runtime/eval_node, runtime/log, runtime/sources, runtime/waits, tools/context,
- *              typesys.
+ *              runtime/eval_node, runtime/log, runtime/sources, runtime/waits, skills/tool,
+ *              tools/context, tools/gate, tools/grants, typesys.
  */
 
 import { localTypes } from "../compile/declared_types.ts";
@@ -1959,7 +1959,7 @@ export function prepareRunResumed(state: RunState, options: { numWorkers: number
   const { numWorkers, gated = false } = options;
   requireWorkerCount(numWorkers);
   requireInitializedNonterminal(state);
-  return prepareRecord(state, new RunResumedRecord([...state.inFlight], numWorkers, retriedAgentCalls(state), gated));
+  return prepareRecord(state, new RunResumedRecord([...state.inFlight], numWorkers, retriedAgentCalls(state), { gated }));
 }
 
 /**
@@ -4149,11 +4149,11 @@ const HOLD_STEP_KEYS = ["kind", "call_id", "tool", "tool_call_id", "reply", "ind
 
 /**
  * Require a hold's `pending` step to hold exactly `HOLD_STEP_KEYS`: `held: true`, a tool other
- * than the never-gated `ask_user` and `load_skill`, a `ToolSource` and a `group_end` of at least
- * its `index` (the last call of its concurrency group). A step holds `source` and `group_end` only
- * as a hold.
+ * than the never-gated `ask_user` and `load_skill`, a `ToolSource`, an `index` among the `calls`
+ * tool calls of its reply, and a `group_end` (the last call of its concurrency group) from its
+ * `index` to the reply's last call. A step holds `source` and `group_end` only as a hold.
  */
-function requireHoldStep(step: Readonly<JsonObject>, index: number): void {
+function requireHoldStep(step: Readonly<JsonObject>, index: number, calls: number): void {
   if (!Object.hasOwn(step, "held")) throw new YianRangeError("a pending step holds source and group_end only as a hold");
   if (Object.keys(step).length !== HOLD_STEP_KEYS.length || !HOLD_STEP_KEYS.every((key) => Object.hasOwn(step, key))) {
     throw new YianRangeError(
@@ -4165,8 +4165,18 @@ function requireHoldStep(step: Readonly<JsonObject>, index: number): void {
     throw new YianRangeError(`a hold's tool can't be ${String(step["tool"])}, whose calls are never checked`);
   }
   if (!isToolSource(step["source"])) throw new YianRangeError("a hold's source must be a tool source");
+  if (index >= calls) throw new YianRangeError(`a hold's index ${index} is past its reply's last call ${calls - 1}`);
   const end = stepInt(step["group_end"]);
-  if (end === null || end < index) throw new YianRangeError(`a hold's group_end must be an int of at least its index ${index}`);
+  if (end === null || end < index || end >= calls) {
+    throw new YianRangeError(`a hold's group_end must be an int from its index ${index} to its reply's last call ${calls - 1}`);
+  }
+}
+
+/** The number of tool calls in the reply of `nodeId`'s `model_call` step `reply`. */
+function replyCallCount(state: RunState, nodeId: string, reply: number): number {
+  const output = state.nodeSteps.get(nodeId)?.[reply - 1]?.["output"];
+  const parts = isRecord(output) ? output["parts"] : undefined;
+  return Array.isArray(parts) ? parts.filter((part) => isRecord(part) && part["type"] === "tool_call").length : 0;
 }
 
 /**
@@ -4221,8 +4231,9 @@ function validatePendingStep(state: RunState, nodeId: string, step: Readonly<Jso
  * node's latest `model_call` step and `index` the call's place among its tool calls, which
  * `call_id` (`<run>/<node>/<reply>/<index>`) names; no `arguments` (they are in the reply) but on
  * a call of a flow the node grants, which says `flow: true` and holds its `arguments` as an
- * object; a `deadline` only on `ask_user`, as a record time; a `note` (`checkGateText`); not yet
- * registered, and within the run's `MAX_EVENT_BYTES`. A hold's step is `requireHoldStep`'s instead.
+ * object; a `deadline` only on `ask_user`, as a record time; a `note` (`checkGateText`) on any
+ * tool but `ask_user` and `load_skill`; not yet registered, and within the run's
+ * `MAX_EVENT_BYTES`. A hold's fields are `requireHoldStep`'s.
  */
 function validateAgentPendingStep(state: RunState, nodeId: string, step: Readonly<JsonObject>): void {
   const { call_id: callId, tool, tool_call_id: toolCallIdOf } = step;
@@ -4247,7 +4258,7 @@ function validateAgentPendingStep(state: RunState, nodeId: string, step: Readonl
     throw new YianRangeError(`pending call_id ${writeAsText(callId ?? null)} isn't ${which}`);
   }
   if (["held", "source", "group_end"].some((key) => Object.hasOwn(step, key))) {
-    requireHoldStep(step, index);
+    requireHoldStep(step, index, replyCallCount(state, nodeId, reply));
   } else if (Object.hasOwn(step, "flow")) {
     const flows = state.flow.nodes.get(nodeId)!.originChildSegments();
     if (step["flow"] !== true || !flows.includes(tool)) {
@@ -4269,7 +4280,12 @@ function validateAgentPendingStep(state: RunState, nodeId: string, step: Readonl
     if (tool !== ASK_USER) throw new YianRangeError(`an agent's pending ${reprText(tool)} call has no deadline; only ask_user times out`);
     requirePendingDeadline(step);
   }
-  if (Object.hasOwn(step, "note")) checkGateText(step["note"], "a pending step's note");
+  if (Object.hasOwn(step, "note")) {
+    if (tool === ASK_USER || tool === LOAD_SKILL) {
+      throw new YianRangeError(`a ${tool} call's pending step holds no note; its calls are never checked`);
+    }
+    checkGateText(step["note"], "a pending step's note");
+  }
   requireNewPendingCall(state, callId, step);
 }
 
@@ -4386,8 +4402,8 @@ function validateToolResultStep(state: RunState, nodeId: string, step: Readonly<
  * or an allowed call's result with a `note`, to be an AGENT's, for a call no `pending` step
  * registered (`call` is `undefined`): the check decides before a call pends, and a call that pends
  * keeps its note on its `pending` step. A refusal never started (`started_at: null`), is an error
- * whose `output` is the text the model reads, and holds no note; a note passes `checkGateText`, on
- * a result that is no closer.
+ * whose `output` is the refusal text the model reads (`checkGateText`), and holds no note; a note
+ * passes `checkGateText`, on a result that is no closer.
  */
 function validateGateResult(state: RunState, nodeId: string, step: Readonly<JsonObject>, call: Call | undefined): void {
   const refused = step["closed"] === "refused";
@@ -4405,9 +4421,10 @@ function validateGateResult(state: RunState, nodeId: string, step: Readonly<Json
   }
   if (refused) {
     if (Object.hasOwn(step, "note")) throw new YianRangeError("a refused tool_result holds no note");
-    if (step["started_at"] !== null || step["is_error"] !== true || typeof step["output"] !== "string") {
+    if (step["started_at"] !== null || step["is_error"] !== true) {
       throw new YianRangeError("a refused tool_result has started_at null, is_error true and its text as output");
     }
+    checkGateText(step["output"], "a refused tool_result's output");
     return;
   }
   if (Object.hasOwn(step, "closed")) throw new YianRangeError("a tool_result with a note is no closer");

@@ -243,12 +243,12 @@ A run log is a JSON Lines file: one record per line, appended and never rewritte
 compact JSON with its keys sorted:
 
 ```json
-{"at":"2026-10-27T08:47:40.404Z","kind":"node_started","payload":{"node_id":"greet"},"run_id":"31fc75ac4c0640de867d47f59f928ea3","schema":33,"seq":8}
+{"at":"2026-10-27T08:47:40.404Z","kind":"node_started","payload":{"node_id":"greet"},"run_id":"31fc75ac4c0640de867d47f59f928ea3","schema":34,"seq":8}
 ```
 
 | Key | What it holds |
 |---|---|
-| `schema` | The record format, `33`. yian reads only this one. A log of schema 10 to 32 reads as `run log schema N predates schema 33 and is not supported`, any other as `unsupported run-record schema: N` |
+| `schema` | The record format, `34`. yian reads only this one. A log of schema 10 to 33 reads as `run log schema N predates schema 34 and is not supported`, any other as `unsupported run-record schema: N` |
 | `run_id` | The run's id |
 | `seq` | The record's place in the log, from 0 |
 | `at` | When the record was appended, in UTC with milliseconds. Use `seq`, not `at`, for order |
@@ -257,8 +257,8 @@ compact JSON with its keys sorted:
 
 | Kind | What it records |
 |---|---|
-| `run_started` | The run begins: its flow files and code root, settings, model choices, granted tools and skills, the tools agents reach in tool modules (`tool_modules`, by file), and the `YIAN_*` values that differ from the built-in ones |
-| `run_resumed` | A resume begins: the unfinished nodes it retries, and its worker count |
+| `run_started` | The run begins: its flow files and code root, settings, model choices, granted tools and skills, the tools agents reach in tool modules (`tool_modules`, by file), and the `YIAN_*` values that differ from the built-in ones. `gated: true` when the host checks each agent tool call before it runs |
+| `run_resumed` | A resume begins: the unfinished nodes it retries, and its worker count. `gated: true` when the host checks agent tool calls; once a run is gated, every resume is |
 | `run_stopped` | The host stopped the run while nodes were running. The run can be resumed |
 | `run_waiting` | Every unfinished node waits, and the run holds no worker |
 | `run_cancelled` | The host cancelled the run. It is over |

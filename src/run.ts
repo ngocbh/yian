@@ -185,6 +185,7 @@ import {
 import { Skill } from "./skills/catalog.ts";
 import { isAlreadyOpenError, isMcpServer, type McpServer, openTogether } from "./tools/mcp.ts";
 import { ASK, ASK_USER, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "./tools/context.ts";
+import { type BeforeToolCall, gateOf } from "./tools/gate.ts";
 import {
   checkVisibleNames,
   expandGrants,
@@ -823,7 +824,8 @@ export async function runFlow(
     if (flow.library !== null) throw new YianRangeError(libraryRunMessage(flow));
     const unopened = checkDriveOptions(options);
     const skills = checkFlowBeforeServers(flow.compiled, options.skills ?? null);
-    return await startRun(flow, inputs, { ...options, skills }, unopened, runDefaults, env);
+    const run = { unopened, runDefaults, env, gate: gateOf(options) };
+    return await startRun(flow, inputs, { ...options, skills }, run);
   });
 }
 
@@ -1265,15 +1267,17 @@ export function runStartLlm(
 /**
  * Open the run's MCP servers and start its tool modules, check the tools, then record and drive a
  * fresh run. What this opened closes before the run is released, whatever fails.
+ *
+ * @param run The `tools` servers to open, the run's defaults and environment, and the host's check
+ *   before each agent tool call (`null` for none).
  */
 async function startRun(
   flow: ComposedFlow,
   inputs: Readonly<Record<string, unknown>>,
   options: RunFlowOptions,
-  unopened: readonly [string, McpServer][],
-  runDefaults: Defaults,
-  env: Env,
+  run: { unopened: readonly [string, McpServer][]; runDefaults: Defaults; env: Env; gate: BeforeToolCall | null },
 ): Promise<RunResult> {
+  const { unopened, runDefaults, env, gate } = run;
   const { log = null, runId = null, numWorkers = 8 } = options;
   const live = options.live ?? null;
   const { tools = null, skills = null, context, completesCalls = false, signal = null } = options;
@@ -1289,7 +1293,7 @@ async function startRun(
   try {
     runServers = await openRunServers(unopened, signal);
     runModules = await openRunModules(reachedModules(flow), signal);
-    const runTools = new ToolSet(tools, { context }).withModules(runModules, { completesCalls });
+    const runTools = runToolSet(tools, { context, modules: runModules, completesCalls, gate });
     const hostTypes = memoryTypeTools(flow.memoryTypes);
     checkToolGrants(flow.compiled, runTools);
     checkMemoryGrantNames(flow.compiled, runTools, hostTypes);
@@ -1381,6 +1385,7 @@ async function startRun(
       toolModules: recordedToolModules(flow.compiled, runTools),
       yianVersion: VERSION,
       parent: options.parent == null ? null : { runId: options.parent.runId, node: options.parent.node ?? null },
+      gated: gate !== null,
     });
 
     // Taken once, so a later directory change can't move the log.
@@ -1438,6 +1443,24 @@ async function startRun(
       landed: () => true,
     });
   }
+}
+
+/**
+ * Return the tool set a segment of a run gives its nodes: the host's `tools`, with `context`, the
+ * tool modules the segment started, whether its host completes calls, and the host's check before
+ * each agent tool call (`null` for none). `runFlow` and `advance` both build theirs here.
+ */
+function runToolSet(
+  tools: Readonly<Record<string, ToolEntry>> | null,
+  options: {
+    context: unknown;
+    modules: readonly StartedToolModule[];
+    completesCalls: boolean;
+    gate: BeforeToolCall | null;
+  },
+): ToolSet {
+  const { context, modules, completesCalls, gate } = options;
+  return new ToolSet(tools, { context }).withModules(modules, { completesCalls }).withGate(gate);
 }
 
 /**
@@ -1754,14 +1777,22 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       }
       // A finished run opens no tools.
       if (state.result !== null) return resultFromState(state, log, []);
+      const gate = gateOf(options);
+      // Without the hook, a model-made call of a run the host checked would run unchecked.
+      if (state.gated && gate === null) {
+        throw new YianRangeError(
+          `run log ${log} is gated: a host checked its tool calls with beforeToolCall; ` +
+            "resume it with one (advance({ log, beforeToolCall }))",
+        );
+      }
       const models = options.models ?? defaultModelAccess(env);
       const numWorkers = options.numWorkers ?? state.numWorkers;
       // A crash or a stop left work unfinished, or the last segment ended before its run_waiting.
       const crashed =
         state.inFlight.size > 0 || state.lastStopSequence !== null || state.waits.lastFrontier !== "run_waiting";
-      const resume = crashed || numWorkers !== state.numWorkers;
       if (
-        !resume &&
+        !crashed &&
+        numWorkers === state.numWorkers &&
         state.ready.length === 0 &&
         wakeableNodes(state.waits).length === 0 &&
         dueTimeouts(state.waits, scheduler.now()).size === 0
@@ -1769,6 +1800,8 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
         // Nothing can move: the run still waits, and nothing is appended.
         return resultFromState(state, log, []);
       }
+      // A hooked segment of a run not gated yet records that it is from now on.
+      const resume = crashed || numWorkers !== state.numWorkers || (gate !== null && !state.gated);
       if (start.yianVersion !== VERSION) {
         warn(`run log ${log} was started by yian ${start.yianVersion}; resuming it with yian ${VERSION}`);
       }
@@ -1793,7 +1826,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       checkRecordedSpecs("skills", start.skills, recordedSkills(flow.compiled, skills));
       runServers = await openRunServers(unopened, signal);
       runModules = await openRunModules(reachedModules(flow), signal);
-      const runTools = new ToolSet(tools, { context }).withModules(runModules, { completesCalls });
+      const runTools = runToolSet(tools, { context, modules: runModules, completesCalls, gate });
       const hostTypes = memoryTypeTools(flow.memoryTypes);
       checkToolGrants(flow.compiled, runTools);
       checkMemoryGrantNames(flow.compiled, runTools, hostTypes);
@@ -1809,7 +1842,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       );
       memories = reopened.memories;
 
-      const prepared = resume ? prepareRunResumed(state, { numWorkers }) : null;
+      const prepared = resume ? prepareRunResumed(state, { numWorkers, gated: gate !== null }) : null;
       // This segment's appends go through the live channel's wrapper.
       const live = options.live ?? null;
       const appender = live === null ? authority : live.wrap(authority);

@@ -40,11 +40,11 @@ import { formatRecordTime as recordTimeText, RECORD_TIME } from "../typesys/temp
 import { isList, isRecord, jsonPart, requireFields, valueRepr, writeAsText } from "../typesys/values.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 33;
+export const SCHEMA_VERSION = 34;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
 const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([
-  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
+  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33,
 ]);
 
 /** A typed value's wire object `{kind, value}`. */
@@ -231,6 +231,8 @@ export interface RunStartedFields {
   yianVersion?: string;
   /** The run that started this one; `null` (the default) for a run the host started on its own. */
   parent?: RunParent | null;
+  /** Whether a host checks each agent tool call before it runs (`beforeToolCall`); defaults to `false`. */
+  gated?: boolean;
 }
 
 /**
@@ -267,6 +269,8 @@ export class RunStartedRecord {
   readonly yianVersion: string;
   /** The frozen parent run, or `null`. */
   readonly parent: RunParent | null;
+  /** Whether a host checks each agent tool call before it runs; a resume of a gated run needs one too. */
+  readonly gated: boolean;
 
   /**
    * JSON fields keep `±Infinity` and read `-0` back as `0`.
@@ -274,8 +278,8 @@ export class RunStartedRecord {
    * @throws TypeError when the fingerprint isn't a string, the wiring override, the agent
    *   configuration or one agent's configuration isn't a JSON object, `numWorkers` isn't a safe
    *   integer, `defaults` isn't a plain object of `bigint`s, `callTimeLlm` or one of its parts
-   *   isn't a plain object, or a part of `flow`, `skills`, `tools`, `toolModules`, `yianVersion` or
-   *   `parent` has the wrong type.
+   *   isn't a plain object, a part of `flow`, `skills`, `tools`, `toolModules`, `yianVersion` or
+   *   `parent` has the wrong type, or `gated` isn't a boolean.
    * @throws RangeError when the fingerprint isn't 64 lowercase hex digits, `numWorkers` is
    *   negative, a defaults name is empty, `callTimeLlm` has
    *   missing or extra fields, no agent, an empty agent path or a non-JSON value, `flow.files`
@@ -296,6 +300,7 @@ export class RunStartedRecord {
       toolModules = {},
       yianVersion = VERSION,
       parent = null,
+      gated = false,
     } = fields;
     this.flowFingerprint = requireSha256(fields.flowFingerprint, "flow_fingerprint");
     const wiring = canonicalCopy(jsonPart(fields.startWiringOverride, [], "mapping"));
@@ -322,6 +327,7 @@ export class RunStartedRecord {
     this.toolModules = validatedToolModules(toolModules);
     this.yianVersion = requireName(yianVersion, "RunStarted yian_version");
     this.parent = parent === null ? null : validatedParent(parent);
+    this.gated = wireBool(gated, "RunStarted gated");
     Object.freeze(this);
   }
 }
@@ -535,7 +541,7 @@ function validatedDefaults(recorded: unknown): Readonly<Record<string, bigint>> 
 
 /**
  * Start a recovery segment with ordered unfinished work and a worker count, closing the open calls
- * of the nodes it retries. Frozen.
+ * of the nodes it retries, and saying whether its host checks agent tool calls. Frozen.
  */
 export class RunResumedRecord {
   /** Unfinished node ids to retry, in order; unique and non-empty. */
@@ -544,16 +550,22 @@ export class RunResumedRecord {
   readonly numWorkers: number;
   /** The open calls of retried nodes this resume closes, in order; unique and non-empty, possibly none. */
   readonly closedCalls: readonly string[];
+  /**
+   * Whether the segment's host checks each agent tool call before it runs. Once one segment of a
+   * run is gated, every later one is.
+   */
+  readonly gated: boolean;
 
   /**
    * @throws RangeError when `retryNodeIds` or `closedCalls` isn't an array of unique non-empty
    *   strings, or `numWorkers` is negative.
-   * @throws TypeError when `numWorkers` isn't a safe integer.
+   * @throws TypeError when `numWorkers` isn't a safe integer, or `gated` isn't a boolean.
    */
-  constructor(retryNodeIds: readonly string[], numWorkers: number, closedCalls: readonly string[] = []) {
+  constructor(retryNodeIds: readonly string[], numWorkers: number, closedCalls: readonly string[] = [], gated = false) {
     this.retryNodeIds = validatedIdArray(retryNodeIds, "retry_node_ids");
     this.numWorkers = validatedCount(numWorkers, "num_workers");
     this.closedCalls = validatedIdArray(closedCalls, "closed_calls");
+    this.gated = wireBool(gated, "RunResumed gated");
     Object.freeze(this);
   }
 }
@@ -2696,9 +2708,30 @@ function toolModulesFromPayload(value: unknown, label: string): Record<string, R
   return wire as Record<string, RecordedTool[]>;
 }
 
+/** `fields`, then each of `optional` that `payload` holds. */
+function presentFields(payload: JsonObject, fields: readonly string[], optional: readonly string[]): string[] {
+  return [...fields, ...optional.filter((field) => Object.hasOwn(payload, field))];
+}
+
+/** A `run_started` or `run_resumed` payload's `gated` field: only a gated run's holds it, as `true`. */
+function gatedPayload(gated: boolean): JsonObject {
+  return gated ? { gated: true } : {};
+}
+
 /**
- * The fields of a `run_started` payload; every `run_started` payload holds each one, and
- * `tool_modules` too when the run's agents grant a tool module.
+ * Decode a `run_started` or `run_resumed` payload's `gated` field; `label` names the payload.
+ *
+ * @throws RangeError when it is there but isn't `true`.
+ */
+function gatedFromPayload(payload: JsonObject, label: string): boolean {
+  if (!Object.hasOwn(payload, "gated")) return false;
+  if (payload["gated"] !== true) throw new YianRangeError(`${label} gated must be true; a run that isn't gated leaves it out`);
+  return true;
+}
+
+/**
+ * The fields of a `run_started` payload; every `run_started` payload holds each one, `tool_modules`
+ * too when the run's agents grant a tool module, and `gated` when a host checks its tool calls.
  */
 const RUN_STARTED_FIELDS = [
   "flow_fingerprint",
@@ -2777,10 +2810,11 @@ const RECORD_CODECS: readonly RecordCodec[] = [
       ...(Object.keys(record.toolModules).length === 0 ? {} : { tool_modules: toolModulesPayload(record.toolModules) }),
       yian_version: record.yianVersion,
       parent: record.parent === null ? null : { run_id: record.parent.runId, node: record.parent.node },
+      ...gatedPayload(record.gated),
     }),
     decode: (payload, label) => {
       const modules = Object.hasOwn(payload, "tool_modules");
-      requireFields(payload, modules ? [...RUN_STARTED_FIELDS, "tool_modules"] : RUN_STARTED_FIELDS, label);
+      requireFields(payload, presentFields(payload, RUN_STARTED_FIELDS, ["tool_modules", "gated"]), label);
       // The record's constructor checks the fields cast here (the pool, the agents' configs, the
       // defaults and the call-time agents), so a bad value is named by its entry.
       return new RunStartedRecord({
@@ -2800,6 +2834,7 @@ const RECORD_CODECS: readonly RecordCodec[] = [
         toolModules: modules ? toolModulesFromPayload(payload["tool_modules"], `${label} tool_modules`) : {},
         yianVersion: requireText(payload["yian_version"], `${label} yian_version`),
         parent: payload["parent"] === null ? null : parentFromPayload(payload["parent"], `${label} parent`),
+        gated: gatedFromPayload(payload, label),
       });
     },
   }),
@@ -2810,13 +2845,15 @@ const RECORD_CODECS: readonly RecordCodec[] = [
       retry_node_ids: [...record.retryNodeIds],
       num_workers: BigInt(record.numWorkers),
       closed_calls: [...record.closedCalls],
+      ...gatedPayload(record.gated),
     }),
     decode: (payload, label) => {
-      requireFields(payload, ["retry_node_ids", "num_workers", "closed_calls"], label);
+      requireFields(payload, presentFields(payload, ["retry_node_ids", "num_workers", "closed_calls"], ["gated"]), label);
       return new RunResumedRecord(
         wireTextArray(payload["retry_node_ids"], `${label} retry_node_ids`),
         wireInt(payload["num_workers"], `${label} num_workers`),
         wireTextArray(payload["closed_calls"], `${label} closed_calls`),
+        gatedFromPayload(payload, label),
       );
     },
   }),

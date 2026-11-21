@@ -44,8 +44,8 @@ const DIGEST = "d".repeat(64);
 const AT = "2026-10-20T14:02:11.123Z";
 const CLOCK = () => Date.UTC(2026, 9, 20, 14, 2, 11, 123);
 /** The error text for the retired TS schema `schema`. */
-const retired = (schema: number) => `run log schema ${schema} predates schema 33 and is not supported`;
-const RETIRED_SCHEMA = retired(32);
+const retired = (schema: number) => `run log schema ${schema} predates schema 34 and is not supported`;
+const RETIRED_SCHEMA = retired(33);
 const NOT_CONTIGUOUS = "reopened prefix must have one run and contiguous sequences";
 
 /** Assert `fn` throws an error of exactly class `cls` with exactly `message`, and return it. */
@@ -157,8 +157,8 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("the schema version is 33", () => {
-  expect(SCHEMA_VERSION).toBe(33);
+test("the schema version is 34", () => {
+  expect(SCHEMA_VERSION).toBe(34);
 });
 
 test.each([7, 8, 9])("retired schema %d record is rejected by name", (schema) => {
@@ -246,9 +246,16 @@ test("a schema 31 record, from before a node failure named the flow call taking 
 
 test("a schema 32 record, from before a run recorded its agents' tool modules, is retired", () => {
   const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":32,"seq":0}`;
-  const error = expectError(() => decodeRecord(line), RunLogSchemaError, RETIRED_SCHEMA) as RunLogSchemaError;
+  const error = expectError(() => decodeRecord(line), RunLogSchemaError, retired(32)) as RunLogSchemaError;
   expect(error.schema).toBe(32);
-  expectError(() => new RecordEnvelope(32, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, RETIRED_SCHEMA);
+  expectError(() => new RecordEnvelope(32, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, retired(32));
+});
+
+test("a schema 33 record, from before a run recorded that a host checks its tool calls, is retired", () => {
+  const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":33,"seq":0}`;
+  const error = expectError(() => decodeRecord(line), RunLogSchemaError, RETIRED_SCHEMA) as RunLogSchemaError;
+  expect(error.schema).toBe(33);
+  expectError(() => new RecordEnvelope(33, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, RETIRED_SCHEMA);
 });
 
 test.each<[number, string]>([
@@ -277,7 +284,8 @@ test.each<[number, string]>([
   [29, retired(29)],
   [30, retired(30)],
   [31, retired(31)],
-  [32, RETIRED_SCHEMA],
+  [32, retired(32)],
+  [33, RETIRED_SCHEMA],
 ])("a retired schema %d log is rejected on resume", (schema, message) => {
   const file = path.join(dir, "retired.jsonl");
   const bytes = `${wireLine({ schema: String(schema) })}\n`;
@@ -292,10 +300,10 @@ test.each<[string, unknown, string]>([
   ["6", 6, "6"],
   ["7", 7, "7"],
   ["8", 8, "8"],
-  ["34", 34, "34"],
+  ["35", 35, "35"],
   ["true", true, "true"],
   ["false", false, "false"],
-  ["33.0", undefined, "33.0"],
+  ["34.0", undefined, "34.0"],
 ])("the schema check doesn't weaken validation: %s", (token, value, shown) => {
   const message = `unsupported run-record schema: ${shown}`;
   if (value !== undefined) {
@@ -339,7 +347,7 @@ test.each<[string, (wire: any) => void, new (...args: never[]) => Error, string]
       wire.kind = "unsupported";
     },
     RangeError,
-    "run-record kind 'unsupported' is unsupported in schema 33",
+    "run-record kind 'unsupported' is unsupported in schema 34",
   ],
 ])("the schema check doesn't weaken payload validation: %s", (_name, corrupt, cls, message) => {
   const wire = JSON.parse(wireLine());
@@ -1145,7 +1153,7 @@ test("iterRunRecords with payloads: false reads the envelope and node id without
 test.each<[string, string, new (...args: never[]) => Error, string]>([
   ["an empty node id", kindLine("node_started", '{"node_id":""}'), RangeError, "node_started payload node_id must be a non-empty string"],
   ["a missing node id", kindLine("node_step", "{}"), TypeError, "node_step payload node_id must be a non-empty string"],
-  ["an unknown kind", kindLine("node_paused", "{}"), RangeError, "run-record kind 'node_paused' is unsupported in schema 33"],
+  ["an unknown kind", kindLine("node_paused", "{}"), RangeError, "run-record kind 'node_paused' is unsupported in schema 34"],
   ["invalid JSON", "{", RangeError, "invalid run-record JSON"],
 ])("iterRunRecords with payloads: false still refuses %s", (_name, line, causeClass, message) => {
   const file = path.join(dir, "run.jsonl");
@@ -1207,8 +1215,9 @@ test.each<[string, string, number]>([
   ["29", retired(29), 29],
   ["30", retired(30), 30],
   ["31", retired(31), 31],
-  ["32", RETIRED_SCHEMA, 32],
-  ["34", "unsupported run-record schema: 34", 34],
+  ["32", retired(32), 32],
+  ["33", RETIRED_SCHEMA, 33],
+  ["35", "unsupported run-record schema: 35", 35],
 ])("iterRunRecords refuses schema %s with a RunLogSchemaError naming the line", (schema, message, value) => {
   const file = path.join(dir, "run.jsonl");
   fs.writeFileSync(file, `${wireLine({ schema })}\n`);
@@ -1783,7 +1792,7 @@ test.each<[string, string, string]>([
   [
     "kind",
     wireLine({ seq: 2 }).replace("node_started", "xnode_started"),
-    "run-record kind 'xnode_started' is unsupported in schema 33",
+    "run-record kind 'xnode_started' is unsupported in schema 34",
   ],
   ["sequence", wireLine({ seq: 5 }), "run-log sequence mismatch: expected 2, found 5"],
   ["run id", wireLine({ seq: 2, runId: "other" }), "run-log run_id mismatch: expected 'run', found 'other'"],

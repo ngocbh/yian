@@ -13,9 +13,9 @@
  * serves both the agent's `ask_user` tool and the TOOL built-in `ask`, through
  * `new ToolSet({ ask: handler, ... })`.
  *
- * Knows about: `tools/context`, `tools/errors`, `tools/function_tools`, `tools/grants`,
- * `tools/mcp`, `tools/modules` (a started module's type), `tools/types`, `skills/tool` (the
- * reserved `load_skill` name), `defaults`, typesys and diagnostics.
+ * Knows about: `tools/context`, `tools/errors`, `tools/function_tools`, `tools/gate` (the hook's
+ * type), `tools/grants`, `tools/mcp`, `tools/modules` (a started module's type), `tools/types`,
+ * `skills/tool` (the reserved `load_skill` name), `defaults`, typesys and diagnostics.
  */
 
 import { current } from "../defaults.ts";
@@ -39,6 +39,7 @@ import {
 import { ASK, ASK_USER, isPending, SLEEP, TAKE, ToolContext, toolCallId } from "./context.ts";
 import { isToolCheckError, ToolCheckError, toolErrorKinds } from "./errors.ts";
 import { FunctionTool, isFunctionTool, type StandardIssue, type StandardResult } from "./function_tools.ts";
+import type { BeforeToolCall } from "./gate.ts";
 import { GrantError, type GrantScope, type NodeScope, nodeScope, visibleToolName } from "./grants.ts";
 import { isMcpServer, type McpServer } from "./mcp.ts";
 import type { StartedToolModule } from "./modules.ts";
@@ -585,6 +586,8 @@ export class ToolSet {
   private startedModules: ReadonlyMap<string, StartedToolModule>;
   // Whether the segment's host answers pending calls, so a module tool may pend (`withModules`).
   private hostCompletesCalls: boolean;
+  // The host's check before each tool call an agent's model makes (`withGate`), or `null`.
+  private gateHook: BeforeToolCall | null;
 
   constructor(tools?: Readonly<Record<string, ToolEntry>> | null, options?: { context?: unknown }) {
     this.toolMap = null;
@@ -592,6 +595,7 @@ export class ToolSet {
     this.ownTools = null;
     this.startedModules = new Map();
     this.hostCompletesCalls = false;
+    this.gateHook = null;
     this.recordNames = new Map();
     this.boundRunId = "";
     this.boundSignal = undefined;
@@ -862,6 +866,21 @@ export class ToolSet {
   /** @internal Whether the segment's host completes calls (`withModules`). */
   get completesCalls(): boolean {
     return this.hostCompletesCalls;
+  }
+
+  /**
+   * @internal Return a copy whose agents' model-made tool calls go through `hook` before they run,
+   * in place of any hook this set held; `null` holds none. The copy keeps everything else.
+   */
+  withGate(hook: BeforeToolCall | null): this {
+    const copy = Object.assign(Object.create(Object.getPrototypeOf(this)), this) as this;
+    copy.gateHook = hook;
+    return copy;
+  }
+
+  /** @internal The host's check before each model-made tool call (`withGate`), or `null`. */
+  get gate(): BeforeToolCall | null {
+    return this.gateHook;
   }
 
   /** @internal Return the started tool module at real path `path` (`withModules`), or `null`. */

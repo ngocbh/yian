@@ -44,7 +44,7 @@ flowchart LR
 | `defaults.ts` | Every default and limit, each overridable by a `YIAN_*` variable; an internal wait no one needs to tune, such as the 1 s the CLI waits for the run index's lock, stays in its module |
 | `llm/` | Provider-neutral messages, wire protocols, the HTTP transport and structured output |
 | `llm_clients/` | `LLMConfig`, provider blocks, connections and saved logins, the model catalog |
-| `tools/` | The tool registry, the context a tool gets, MCP tools, the `pending` marker, tool grants (`grants.ts`: parsing `tools:`, the `<group>_<tool>` names a model sees, and their expansion), and tool modules (their `uses:` refs in `modules.ts`, the thread each runs in in `module_thread.ts`, and that thread's job in `module_worker.ts`) |
+| `tools/` | The tool registry, the context a tool gets, MCP tools, the `pending` marker, tool grants (`grants.ts`: parsing `tools:`, the `<group>_<tool>` names a model sees, and their expansion), the host's check before each agent tool call (`gate.ts`), and tool modules (their `uses:` refs in `modules.ts`, the thread each runs in in `module_thread.ts`, and that thread's job in `module_worker.ts`) |
 | `skills/` | Host-supplied skills and the AGENT's built-in skill tool |
 | `memory/` | The memory a host binds to a flow input: the contract `MemoryBase`, its session and errors (`base.ts`), recall rendering (`render.ts`), `FileMemory` (`file.ts`) and its journal (`file_journal.ts`), `VectorDBMemory` (`vectordb.ts`), what the memory types share (`common.ts`: this process's queue on a memory's lock, argument checks and message text), and a memory's tools as `FunctionTool`s (`tools.ts`) |
 | `platform.ts` | The only module that uses Bun- or Node-specific APIs (SQLite, file locks, `fetch`, timers) |

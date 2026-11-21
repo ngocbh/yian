@@ -154,7 +154,7 @@ import { generateStructured, OutputTruncatedError, rebuildStructuredRequests, ty
  * @throws RangeError when a grant names no tool of the run (`ToolSet.resolve`).
  * @throws TypeCheckError when a reply repeats a tool call id or its tool call arguments nest too deep.
  * @throws AgentLoopError when a tool returns `pending()` outside a durable run, or when the host's
- *   `beforeToolCall` would be asked about a call outside a run or of the node's own tools.
+ *   `beforeToolCall` would be asked about a call outside a run.
  * @throws OutputTruncatedError when a reply was cut off at the token limit with no runnable call.
  * @throws CapabilityFault when a recorded call doesn't match the rebuilt request
  *   (`AgentSteps.takeRecorded`), or the loop was cut with no pending interrupt.
@@ -256,12 +256,6 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
       .filter((each) => toolset.resolve([{ group: each.group, name: each.tool }])[0]!.resumable === true)
       .map((each) => each.visible),
   );
-  // Where each granted tool comes from, which the host's check before each call reads.
-  const sources = new Map(
-    toolset.gate === null
-      ? []
-      : granted.map((each) => [each.visible, toolset.sourceOf({ group: each.group, name: each.tool })] as const),
-  );
   let iterations = 0;
   // Set once the reply at the cap had its calls answered: the next reply is the last.
   let capped = false;
@@ -332,7 +326,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
 
     const pended = new Map<number, string>();
     const turn: ToolTurn = {
-      ctx, toolset, granted, resumable, sources, skills, live, n, steps, messages, calls, interrupt, pended,
+      ctx, toolset, granted, resumable, skills, live, n, steps, messages, calls, interrupt, pended,
     };
     if (capped || iterations === ctx.maxToolIterations) {
       // The model reads why its calls didn't run, then gives its answer.
@@ -519,11 +513,6 @@ interface ToolTurn {
   readonly granted: readonly GrantedTool[];
   /** The names the model sees of the granted tools that are resumable. */
   readonly resumable: ReadonlySet<string>;
-  /**
-   * Where each granted tool comes from, by the name the model sees, when the host checks each call
-   * (`ToolSet.gate`); `null` for a node's own tool (`ToolSet.sourceOf`). Empty without the check.
-   */
-  readonly sources: ReadonlyMap<string, ToolSource | null>;
   readonly skills: ReadonlyMap<string, Skill>;
   readonly live: LiveSinks | null;
   /** The `n` of the reply's `model_call` step, which each call's idempotency key and brackets hold. */
@@ -575,13 +564,9 @@ interface PlannedCall {
   /** Whether it was refused before its tool, so it never starts: its result records no start. */
   readonly refused: boolean;
   /**
-   * Whether the host's `beforeToolCall` is never asked about it: `load_skill`, `ask_user`, or a
-   * call refused before its tool.
-   */
-  readonly exempt: boolean;
-  /**
-   * Where its tool comes from, as the hook sees it; `null` for `load_skill`, a call refused before
-   * its tool, a node's own tool, or any call of a run without the check.
+   * Where its tool comes from, which the host's `beforeToolCall` is asked about it with
+   * (`ToolSet.sourceOf`); `null` when the hook is never asked about it: `load_skill`, the run's
+   * `ask_user`, a call refused before its tool, and any call of a run without the hook.
    */
   readonly source: ToolSource | null;
   /** 1, or more for a call a crash or a stop cut off after its reply, which a resume sends again. */
@@ -862,7 +847,7 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
       }
     };
     const planned = { call, index, callId: undefined, deadline: null, resumable: false, refused: false };
-    const gate = { exempt: true, source: null, attempt: 1, interrupted: new AbortController() };
+    const gate = { source: null, attempt: 1, interrupted: new AbortController() };
     return { planned: { ...planned, ...gate, invoke }, safe: true };
   }
   const grant = turn.granted.find((each) => each.visible === call.name);
@@ -918,10 +903,21 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
   const interrupted = new AbortController();
   const invoke = (signal: AbortSignal) =>
     toolset.invoke(checked, { node: ctx.nodeId, callId, attempt, signal, interrupted: interrupted.signal });
-  // `ask_user` waits for a person already; reserved names keep any other tool from showing as it.
-  const gate = { exempt: call.name === ASK_USER, source: turn.sources.get(call.name) ?? null, attempt };
+  // Under the hook, every call is asked about but an `ask_user` call of the run's ask handler,
+  // which waits for a person already. The tool the name resolves to decides, not the name: a
+  // node's own tool comes first, under any name.
+  const source = toolset.gate === null ? null : toolset.sourceOf(ref);
+  const gate = { source: source === null || asksUser(source) ? null : source, attempt };
   const planned = { call, index, callId, deadline, resumable, refused: false, ...gate, interrupted, invoke };
   return { planned, safe: toolset.isConcurrencySafe(checked) };
+}
+
+/**
+ * Whether `source` is the run's ask handler's: reserved names keep any other host, group, MCP or
+ * registry tool from the top-level name `ask_user`.
+ */
+function asksUser(source: ToolSource): boolean {
+  return source.kind === "host" && source.group === null && source.tool === ASK_USER;
 }
 
 /**
@@ -934,7 +930,7 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
 function refused(call: ToolCallPart, index: number, error: unknown, resumable: boolean): CallCheck {
   const invoke = () => Promise.reject(error);
   const planned = { call, index, callId: undefined, deadline: null, resumable, refused: true };
-  const gate = { exempt: true, source: null, attempt: 1, interrupted: new AbortController() };
+  const gate = { source: null, attempt: 1, interrupted: new AbortController() };
   return { planned: { ...planned, ...gate, invoke }, safe: false };
 }
 
@@ -963,8 +959,8 @@ async function failCall(turn: ToolTurn, call: ToolCallPart, index: number, error
 /**
  * Run one group's calls together and commit their results in call order.
  *
- * With the host's check (`ToolSet.gate`), the hook is asked about each call that isn't exempt
- * (`PlannedCall.exempt`), in call order, before any of the group's calls starts (`askGate`). Once
+ * With the host's check (`ToolSet.gate`), the hook is asked about each call with a source
+ * (`PlannedCall.source`), in call order, before any of the group's calls starts (`askGate`). Once
  * every answer is in, or the node stops or the agent takes an interrupt, nothing awaits until the
  * calls start: a stop or an interrupt ends the group (`caught`), writing nothing else; each
  * refusal, and each answer that isn't a valid decision (`decide`), is written in call order as a
@@ -989,7 +985,7 @@ async function failCall(turn: ToolTurn, call: ToolCallPart, index: number, error
  *
  * @returns Whether a host interrupt skipped the group and every later call.
  * @throws AgentLoopError, before anything of the group is asked or written, when the host checks
- *   a call outside a run or a call of the node's own tools (`gatedCall`).
+ *   a call outside a run (`gatedCall`).
  */
 async function runGroup(
   turn: ToolTurn,
@@ -1000,7 +996,8 @@ async function runGroup(
   const { live } = turn;
   checkNodeStopped(turn);
   const hook = turn.toolset.gate;
-  const asking = hook === null ? [] : group.flatMap((planned) => (planned.exempt ? [] : [gatedCall(turn, planned)]));
+  const asking =
+    hook === null ? [] : group.flatMap((planned) => (planned.source === null ? [] : [gatedCall(turn, planned, planned.source)]));
   // A resend may have run before its cut, so an interrupt doesn't skip it; but the hook isn't
   // asked to let it run again once the agent holds one.
   let end = interruptible || asking.length > 0 ? caught(turn, group, interruptible) : null;
@@ -1034,11 +1031,12 @@ async function runGroup(
           throw new AgentLoopError(`agent node ${reprText(turn.ctx.nodeId)}: flow tool ${reprText(call.name)} runs only in a run`);
         }
         if (signal?.aborted) return { pending: callId };
-        const fields = { callId, tool: call.name, toolCallId: call.id, reply: turn.n, index, deadline, flowArguments: value.arguments };
+        const flowArguments = value.arguments;
+        const fields = { callId, tool: call.name, toolCallId: call.id, reply: turn.n, index, deadline, flowArguments, note };
         // Arguments too large to record are the model's to fix, as its result.
         const tooLarge = turn.steps.pendingTooLarge(fields);
         if (tooLarge !== null) {
-          turn.steps.toolResult({ callId: call.id, startedAt, output: tooLarge, isError: true }, { settled: true });
+          turn.steps.toolResult({ callId: call.id, startedAt, output: tooLarge, isError: true, note }, { settled: true });
           observeFlowCallFinished(live, identityOf(turn, call, index), { error: "failed" });
           return { content: tooLarge, reported: true };
         }
@@ -1238,27 +1236,24 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
   return object && typeof (value as { then?: unknown }).then === "function";
 }
 
-/** The `scopes` of every gated call: the hook isn't told of the flow calls enclosing an agent. */
+/** The `scopes` of a call outside a run's steps, which no flow call encloses. */
 const NO_SCOPES: readonly FlowCallScope[] = Object.freeze([]);
 
 /**
- * Return what the hook sees of `planned`, deep-frozen. Its arguments are a copy of the model's, so
- * the hook can't change what the tool gets.
+ * Return what the hook sees of `planned`, whose tool comes from `source`, deep-frozen: its
+ * arguments are a copy of the model's, so the hook can't change what the tool gets, and its scopes
+ * are the flow calls enclosing the agent (`NodeSteps.flowCalls`).
  *
- * @throws AgentLoopError when `planned` has no call id, outside a run, or no source: a call of the
- *   node's own tools (a module, memory or flow tool) isn't checked yet, so it never runs unasked.
+ * @throws AgentLoopError when `planned` has no call id: outside a run.
  */
-function gatedCall(turn: ToolTurn, planned: PlannedCall): Asked {
-  const { call, callId, source, attempt } = planned;
-  const where = `agent node ${reprText(turn.ctx.nodeId)}: beforeToolCall`;
-  if (callId === undefined) throw new AgentLoopError(`${where} checks tool calls only in a run`);
-  if (source === null) {
-    const own = "it is the node's own (a module, memory or flow tool)";
-    throw new AgentLoopError(`${where} can't check tool ${reprText(call.name)} yet: ${own}`);
+function gatedCall(turn: ToolTurn, planned: PlannedCall, source: ToolSource): Asked {
+  const { call, callId, attempt } = planned;
+  if (callId === undefined) {
+    throw new AgentLoopError(`agent node ${reprText(turn.ctx.nodeId)}: beforeToolCall checks tool calls only in a run`);
   }
   const args = freezeParsed(copyJson(call.arguments!));
-  const node = turn.ctx.nodeId;
-  const gated: GatedCall = { callId, node, tool: call.name, source, arguments: args, scopes: NO_SCOPES, attempt };
+  const scopes = turn.ctx.steps?.flowCalls ?? NO_SCOPES;
+  const gated: GatedCall = { callId, node: turn.ctx.nodeId, tool: call.name, source, arguments: args, scopes, attempt };
   return { planned, call: Object.freeze(gated) };
 }
 

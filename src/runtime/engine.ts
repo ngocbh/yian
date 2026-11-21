@@ -105,6 +105,7 @@ import {
   prepareTakeCommit,
   prepareWithdraw,
   RunState,
+  enclosingFlowCalls,
   inboxElementType,
   requireExpansionOutput,
   resolveFromPool,
@@ -760,6 +761,7 @@ export class FlowEngine {
         return (state.nodeStartSeqs.get(nodeId) ?? []).filter((start) => start > seq).length;
       },
       stepSeq,
+      enclosingFlowCalls(state, nodeId),
     );
   }
 

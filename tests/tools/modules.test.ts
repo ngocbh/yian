@@ -115,6 +115,11 @@ test("a node scope holds a group alias's tools by export name and a one-export a
   ]);
   const visible = expandGrants(parseToolGrants(["find", "crm"], "n"), [nodeScope(scope)]).map((each) => each.visible);
   expect(visible).toEqual(["find", "crm_create", "crm_place"]);
+  // Each entry's source names its alias, the ref as written and the export.
+  expect([scope.sources!.get(JSON.stringify([null, "find"])), scope.sources!.get(JSON.stringify(["crm", "create"]))]).toEqual([
+    { kind: "module", alias: "find", ref: "./crm.ts:lookup", export: "lookup" },
+    { kind: "module", alias: "crm", ref: "./crm.ts", export: "create" },
+  ]);
   // Each stand-in checks its export's arguments on the module's thread, which says whether the call
   // is safe, and calls the export with what the check returned.
   const handle = await find!.parametersValidator!["~standard"].validate({ id: "1" });

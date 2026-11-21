@@ -1041,28 +1041,32 @@ describe("withNodeScope", () => {
 });
 
 describe("sourceOf", () => {
-  test("a host tool's source names its group, null for a top-level or registry tool; a node's own tool has none", () => {
+  test("a host tool's source names its group, null for a top-level or registry tool; a node's own tool has its scope's", () => {
     registerTool("weather", topic("weather"));
-    const run = new ToolSet({ lookup: topic("lookup"), team: [topic("a"), topic("team")] });
-    const local = run.withNodeScope({ groups: new Map([["lessons", [topic("read")]]]), tools: [topic("quote")] });
+    const read = { kind: "memory", input: "lessons", tool: "read" } as const;
+    const run = new ToolSet({ lookup: topic("lookup"), team: [topic("a"), topic("team")], ask: () => "yes" });
+    const scope = { groups: new Map([["lessons", [topic("read")]]]), tools: [topic("quote")], sources: new Map([[JSON.stringify(["lessons", "read"]), read]]) };
+    const local = run.withNodeScope(scope);
     const sources = [
       { group: null, name: "lookup" },
       { group: "team", name: "a" },
       { group: null, name: "a" },
       { group: null, name: "team" },
+      { group: null, name: "ask_user" },
       { group: "lessons", name: "read" },
-      { group: null, name: "quote" },
     ].map((ref) => local.sourceOf(ref));
     expect(sources).toEqual([
       { kind: "host", group: null, tool: "lookup" },
       { kind: "host", group: "team", tool: "a" },
       { kind: "host", group: "team", tool: "a" },
       { kind: "host", group: "team", tool: "team" },
-      null,
-      null,
+      { kind: "host", group: null, tool: "ask_user" },
+      read,
     ]);
-    expect(sources.every((source) => source === null || Object.isFrozen(source))).toBe(true);
+    expect(sources.every((source) => Object.isFrozen(source))).toBe(true);
     expect(new ToolSet().sourceOf({ group: null, name: "weather" })).toEqual({ kind: "host", group: null, tool: "weather" });
     expect(() => run.sourceOf({ group: "team", name: "b" })).toThrow("`team` has no tool `b`; it has a, team");
+    // Every node scope an agent's calls go through names a source for each of its tools.
+    expect(() => local.sourceOf({ group: null, name: "quote" })).toThrow(new RangeError("this node's tool 'quote' has no source"));
   });
 });

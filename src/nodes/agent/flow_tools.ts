@@ -6,13 +6,14 @@
  * records a `pending` step holding its arguments (`flowCall`), so the run grows the flow's scope
  * and answers the call with the flow's output (`flowResultText`).
  *
- * Knows about: diagnostics, tools (the function tool, the node scope), typesys, and the peer AGENT
- * module `results`.
+ * Knows about: diagnostics, tools (the function tool, the node scope, tool sources), typesys, and
+ * the peer AGENT module `results`.
  */
 
 import { type Failure, reprText } from "../../diagnostics.ts";
 import { FunctionTool } from "../../tools/function_tools.ts";
-import { type NodeScope, visibleToolName } from "../../tools/grants.ts";
+import type { ToolSource } from "../../tools/gate.ts";
+import { type NodeScope, nodeScopeKey, visibleToolName } from "../../tools/grants.ts";
 import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import type { JsonObject } from "../../typesys/json.ts";
 import { cutText, fromHost, isRecord, type ValueRecord } from "../../typesys/values.ts";
@@ -56,23 +57,27 @@ export function flowToolFunction({ description, parameters }: FlowTool, name: st
 /**
  * Return `tools` as a node scope holds them, each entry built by `make` under the name the scope
  * knows it by: a library's defs as a group under its alias, each by its def's name, so the model
- * sees `<alias>_<def>`; every other flow as a top-level tool by its name.
+ * sees `<alias>_<def>`; every other flow as a top-level tool by its name. Each entry's source is
+ * its flow, by that name, and the library's alias (`null` for a flow of the file).
  */
 export function flowToolScope<T extends { readonly name: string }>(
   tools: readonly FlowTool[],
   make: (tool: FlowTool, name: string) => T,
-): NodeScope<T> {
+): NodeScope<T> & { readonly sources: ReadonlyMap<string, ToolSource> } {
   const groups = new Map<string, T[]>();
   const top: T[] = [];
+  const sources = new Map<string, ToolSource>();
   for (const tool of tools) {
     if (tool.library === null) {
       top.push(make(tool, tool.name));
+      sources.set(nodeScopeKey(null, tool.name), { kind: "flow", flow: tool.name, library: null });
       continue;
     }
     const { alias, def } = tool.library;
     groups.set(alias, [...(groups.get(alias) ?? []), make(tool, def)]);
+    sources.set(nodeScopeKey(alias, def), { kind: "flow", flow: def, library: alias });
   }
-  return { groups, tools: top };
+  return { groups, tools: top, sources };
 }
 
 /**

@@ -6,7 +6,8 @@
  * which the registry checks and calls as a host tool, and whose call runs on the module's thread.
  *
  * Knows about: tools/context, tools/errors, tools/function_tools, tools/grants, tools/registry,
- * the types of tools/module_thread and tools/module_worker, diagnostics, typesys and `node:path`.
+ * the types of tools/gate, tools/module_thread and tools/module_worker, diagnostics, typesys and
+ * `node:path`.
  */
 
 import { relative } from "node:path";
@@ -17,7 +18,8 @@ import { isRecord } from "../typesys/values.ts";
 import { isPending } from "./context.ts";
 import { ToolCheckError } from "./errors.ts";
 import { FunctionTool, type StandardSchemaV1 } from "./function_tools.ts";
-import { type NodeScope, visibleToolName } from "./grants.ts";
+import type { ToolSource } from "./gate.ts";
+import { type NodeScope, nodeScopeKey, visibleToolName } from "./grants.ts";
 import type { ConsoleSink, ToolModuleThread } from "./module_thread.ts";
 import type { ListedTool, ToolModuleListing } from "./module_worker.ts";
 import { RESERVED_TOOL_NAMES, type ToolSet } from "./registry.ts";
@@ -121,7 +123,8 @@ function listedExport(key: string, listing: ToolModuleListing, name: string): Li
  * Return the node scope `refs` reach in the modules `tools` started: a group alias's tools as a
  * group under the alias, each by its export name, and a one-export alias's tool under the alias,
  * each a stand-in with its listed spec that calls its tool on the module's thread. Every entry's
- * identity is its file and export, so two aliases of one file bind a tool once.
+ * identity is its file and export, so two aliases of one file bind a tool once; its source is its
+ * alias, the alias's ref as written and the export.
  *
  * @param sink Takes what a module prints while it serves a stand-in; `null` leaves that to this
  *   process's `console`.
@@ -132,11 +135,12 @@ export function moduleScope(
   refs: readonly ToolModuleRef[],
   tools: ToolSet,
   sink: ConsoleSink | null = null,
-): NodeScope<FunctionTool> {
+): NodeScope<FunctionTool> & { readonly sources: ReadonlyMap<string, ToolSource> } {
   const host = { sink, completesCalls: tools.completesCalls };
   const groups = new Map<string, FunctionTool[]>();
   const single: FunctionTool[] = [];
   const identities = new Map<string, string>();
+  const sources = new Map<string, ToolSource>();
   for (const { alias, ref, path } of refs) {
     const started = tools.toolModule(path);
     if (started === null) {
@@ -147,14 +151,18 @@ export function moduleScope(
     if (exportName === null) {
       const shown = (listed: ListedTool) => visibleToolName(alias, listed.name);
       groups.set(alias, listing.tools.map((listed) => standIn(thread, listed, listed.name, shown(listed), host)));
-      for (const listed of listing.tools) bindExport(identities, [alias, listed.name], path, listed.name);
+      for (const listed of listing.tools) {
+        bindExport(identities, [alias, listed.name], path, listed.name);
+        sources.set(nodeScopeKey(alias, listed.name), { kind: "module", alias, ref, export: listed.name });
+      }
     } else {
       const listed = listedExport(key, listing, exportName);
       single.push(standIn(thread, listed, alias, alias, host));
       bindExport(identities, [null, alias], path, listed.name);
+      sources.set(nodeScopeKey(null, alias), { kind: "module", alias, ref, export: listed.name });
     }
   }
-  return { groups, tools: single, identities };
+  return { groups, tools: single, identities, sources };
 }
 
 /**
@@ -167,7 +175,7 @@ function bindExport(
   path: string,
   exportName: string,
 ): void {
-  identities.set(JSON.stringify(entry), JSON.stringify({ module: path, export: exportName }));
+  identities.set(nodeScopeKey(...entry), JSON.stringify({ module: path, export: exportName }));
 }
 
 /**

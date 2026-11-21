@@ -15,7 +15,15 @@ import type { JsonObject } from "../typesys/json.ts";
 import { isRecord } from "../typesys/values.ts";
 import type { PendingMarker } from "./context.ts";
 
-/** Where a gated call's tool comes from. */
+/**
+ * Where a gated call's tool comes from:
+ * - `host`: a host tool, by its own name in its `group` (`null` for a top-level or registry tool);
+ * - `mcp`: an MCP server's tool, by the server's key in the run's tools and its name there;
+ * - `module`: a tool module's `export`, by its `uses:` alias and the alias's `ref` as written;
+ * - `memory`: a memory's tool, by the agent's memory `input` and the tool's name;
+ * - `flow`: a flow the agent grants, by its `defs:` entry or `uses:` alias, or a library's def,
+ *   by the def's name and the library's alias.
+ */
 export type ToolSource =
   | { readonly kind: "host"; readonly group: string | null; readonly tool: string }
   | { readonly kind: "mcp"; readonly server: string; readonly tool: string }
@@ -67,7 +75,13 @@ export type GateDecision =
   | { readonly refuse: string }
   | PendingMarker;
 
-/** The host's check before each tool call an AGENT's model makes; it may answer later through a Promise. */
+/**
+ * The host's check before each tool call an AGENT's model makes, an agent's inside a flow it
+ * granted included; it may answer later through a Promise. It is asked once the call is checked:
+ * its arguments' schema, then its validator and `isConcurrencySafe` (a module tool's on its
+ * module's thread), which must have no effects, since a checked call may never run. It reads the
+ * model's arguments, never a validator's output. A refused flow call never starts its flow.
+ */
 export type BeforeToolCall = (call: GatedCall, ctx: GateContext) => GateDecision | PromiseLike<GateDecision>;
 
 /** The longest note, refusal text or release note, in UTF-8 bytes. */

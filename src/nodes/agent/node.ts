@@ -32,7 +32,8 @@ import { LOAD_SKILL, loadSkillTool, systemPromptWithSkills } from "../../skills/
 import { renderRecall } from "../../memory/render.ts";
 import { grantedMemorySpecs, memoryTools } from "../../memory/tools.ts";
 import type { FunctionTool } from "../../tools/function_tools.ts";
-import { asToolGrant, type MemoryGrant, type ToolGrant, visibleToolName } from "../../tools/grants.ts";
+import type { ToolSource } from "../../tools/gate.ts";
+import { asToolGrant, type MemoryGrant, nodeScopeKey, type ToolGrant, visibleToolName } from "../../tools/grants.ts";
 import { checkedToolModule, moduleScope, type ToolModuleRef } from "../../tools/modules.ts";
 import { ToolSet } from "../../tools/registry.ts";
 import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
@@ -971,7 +972,7 @@ export class AgentNode extends Node {
    * run's tools with this node's own as its node scope: each bound memory's granted tools as a
    * group over its run session, each granted library's defs as a group, the other granted flows
    * as top-level tools, and each granted tool module's tools (`moduleScope`), whose modules print
-   * to `caps.console`.
+   * to `caps.console`; each with its source, which the host's check before a call reads.
    *
    * @throws CapabilityFault carrying the error when a memory is bound but the evaluator gave no
    *   memory sessions, or none on that memory.
@@ -983,10 +984,13 @@ export class AgentNode extends Node {
   ): { tools: ToolGrant[]; toolset: ToolSet | null } {
     const { tools, memories } = this.memoryPlan(inputs);
     const groups = new Map<string, FunctionTool[]>();
+    const sources = new Map<string, ToolSource>();
     const author = { kind: "agent" as const, name: staticPathOf(this.id) };
     for (const [input, value] of memories) {
       const session = memorySession(caps, value.identity);
-      groups.set(input, memoryTools(value, session, { input, tools: this.grantedMemoryTools(input) }, author));
+      const local = memoryTools(value, session, { input, tools: this.grantedMemoryTools(input) }, author);
+      groups.set(input, local);
+      for (const { name } of local) sources.set(nodeScopeKey(input, name), { kind: "memory", input, tool: name });
     }
     let toolset = caps.tools ?? null;
     if (groups.size > 0 || this.flowTools.length > 0 || this.moduleTools.length > 0) {
@@ -997,6 +1001,7 @@ export class AgentNode extends Node {
         groups: new Map([...groups, ...flows.groups, ...modules.groups]),
         tools: [...flows.tools, ...modules.tools],
         identities: modules.identities,
+        sources: new Map([...sources, ...flows.sources, ...modules.sources]),
       });
     }
     return { tools, toolset };

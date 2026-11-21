@@ -372,6 +372,8 @@ test("pendingCalls lists an open ask; complete answers it and it leaves the list
       pendingSeq,
       deadline: null,
       ask: { question: "Ship?", questions: null, answerSchema: null, title: null },
+      held: false,
+      source: null,
     },
   ]);
   const seq = await complete(log, callId, { output: "yes" }, { env, flow });

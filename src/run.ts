@@ -185,7 +185,7 @@ import {
 import { Skill } from "./skills/catalog.ts";
 import { isAlreadyOpenError, isMcpServer, type McpServer, openTogether } from "./tools/mcp.ts";
 import { ASK, ASK_USER, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "./tools/context.ts";
-import { type BeforeToolCall, gateOf } from "./tools/gate.ts";
+import { type BeforeToolCall, gateOf, type ToolSource } from "./tools/gate.ts";
 import {
   checkVisibleNames,
   expandGrants,
@@ -2454,7 +2454,17 @@ export interface PendingCall {
    * again after a restart; `null` for any other call.
    */
   readonly ask: AskQuestion | null;
+  /**
+   * Whether a host's check held the agent's call before its tool ran: `complete` answers it
+   * without running the tool.
+   */
+  readonly held: boolean;
+  /** Where a held call's tool comes from, as its hold recorded it; `null` for any other call. */
+  readonly source: ToolSource | null;
 }
+
+/** What a call's `pending` step recorded: its arguments and question, and a hold's source. */
+type RecordedCall = Pick<PendingCall, "arguments" | "ask" | "source">;
 
 /** The question of a TOOL `ask`: these fields of the `AskRequest` its handler got. */
 export type AskQuestion = Pick<AskRequest, "question" | "questions" | "answerSchema" | "title">;
@@ -2463,7 +2473,7 @@ export type AskQuestion = Pick<AskRequest, "question" | "questions" | "answerSch
  * List the open host calls (not takes or sleeps) of the run at `log`, in the order they were made,
  * from one pass over its records. It takes no lock, so it reads a log another writer holds; a
  * call leaves the list once it is answered, timed out or closed. Hosts rebuild their open asks
- * from it.
+ * and held calls from it.
  *
  * @param options.maxLineBytes The most bytes a line may hold, as `iterRunRecords` takes it; a longer
  *   line throws `RunLogLineTooLongError`.
@@ -2488,16 +2498,16 @@ export function pendingCalls(log: string, options: { maxLineBytes?: number | nul
 }
 
 /**
- * A fold of each unsettled call's recorded arguments and question, beside the waits fold `waits`:
- * `fold` takes each record after `waits` has, and `of` reads a call's.
+ * A fold of each unsettled call's recorded arguments, question and source, beside the waits fold
+ * `waits`: `fold` takes each record after `waits` has, and `of` reads a call's.
  */
 function callArguments(waits: WaitsState): {
   fold(record: RunRecord): void;
-  of(call: Call): { arguments: JsonObject | null; ask: AskQuestion | null };
+  of(call: Call): RecordedCall;
 } {
-  // Each unsettled call's recorded arguments and question; a settled node's calls leave the fold,
-  // so theirs go.
-  const args = new Map<string, { arguments: JsonObject | null; ask: AskQuestion | null }>();
+  // Each unsettled call's recorded arguments, question and source; a settled node's calls leave
+  // the fold, so theirs go.
+  const args = new Map<string, RecordedCall>();
   // Each running node's step count and latest `model_call` step with its number: an agent call's
   // `reply` must name that step, so the earlier ones needn't be kept.
   const nodes = new Map<string, { count: number; replyN: number; reply: Readonly<JsonObject> | undefined }>();
@@ -2513,7 +2523,7 @@ function callArguments(waits: WaitsState): {
           node.reply = step;
         } else if (step["kind"] === "pending") {
           const replyAt = (n: number) => (n === node.replyN ? node.reply : undefined);
-          args.set(String(step["call_id"]), { arguments: pendingArguments(replyAt, step), ask: askQuestion(step) });
+          args.set(String(step["call_id"]), recordedCall(replyAt, step));
         }
         return;
       }
@@ -2522,7 +2532,7 @@ function callArguments(waits: WaitsState): {
       nodes.delete(settled);
       for (const callId of args.keys()) if (!waits.calls.has(callId)) args.delete(callId);
     },
-    of: (call) => args.get(call.callId) ?? { arguments: null, ask: null },
+    of: (call) => args.get(call.callId) ?? { arguments: null, ask: null, source: null },
   };
 }
 
@@ -2538,13 +2548,10 @@ function settledNodeId(record: RunRecord): string | null {
 }
 
 /**
- * The open host calls of `waits`, in registration order, with the arguments and question
+ * The open host calls of `waits`, in registration order, with the arguments, question and source
  * `recorded` reads; a flow call is the run's to answer, so it is left out.
  */
-function openHostCalls(
-  waits: WaitsState,
-  recorded: (call: Call) => { arguments: JsonObject | null; ask: AskQuestion | null },
-): PendingCall[] {
+function openHostCalls(waits: WaitsState, recorded: (call: Call) => RecordedCall): PendingCall[] {
   return [...waits.calls.values()]
     .filter((call) => call.state === "open" && call.pendingSeq !== null && call.tool !== TAKE && call.tool !== SLEEP && !call.flow)
     .map((call) => ({
@@ -2554,18 +2561,28 @@ function openHostCalls(
       ...recorded(call),
       pendingSeq: call.pendingSeq!,
       deadline: call.deadline,
+      held: call.held,
     }));
 }
 
 /**
  * The arguments of `call`'s `pending` step among its node's steps in `state` (for an agent's call,
- * those of its reply's tool call), or `null`, and the question it recorded.
+ * those of its reply's tool call), or `null`, and the question and source it recorded.
  */
-function stateArguments(state: RunState, call: Call): { arguments: JsonObject | null; ask: AskQuestion | null } {
+function stateArguments(state: RunState, call: Call): RecordedCall {
   const steps = state.nodeSteps.get(call.nodeId) ?? [];
   const step = call.pendingSeq === null ? undefined : steps[stepIndexAt(state, call.nodeId, call.pendingSeq)];
-  if (step === undefined) return { arguments: null, ask: null };
-  return { arguments: pendingArguments((n) => steps[n - 1], step), ask: askQuestion(step) };
+  if (step === undefined) return { arguments: null, ask: null, source: null };
+  return recordedCall((n) => steps[n - 1], step);
+}
+
+/**
+ * What `pending` step `step` recorded: its arguments (`pendingArguments`, which reads its reply by
+ * step number through `stepAt`), its question, and a hold's source.
+ */
+function recordedCall(stepAt: (n: number) => Readonly<JsonObject> | undefined, step: Readonly<JsonObject>): RecordedCall {
+  const source = step["held"] === true ? (step["source"] as unknown as ToolSource) : null;
+  return { arguments: pendingArguments(stepAt, step), ask: askQuestion(step), source };
 }
 
 /**

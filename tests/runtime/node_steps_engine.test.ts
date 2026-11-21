@@ -556,6 +556,38 @@ function crashedAt(flow: CompiledFlow, records: readonly RecordEnvelope[], cutAf
 const workRecord = (kind: abstract new (...args: never[]) => unknown) => (record: RunRecord) =>
   record instanceof kind && (record as { nodeId?: string }).nodeId === "work";
 
+/**
+ * A host call `work` that records step 1 before its pending step, and pushes `since(steps)` to
+ * `seen`, `resumesSince(1)` by default.
+ */
+class SinceHost extends FakeHost {
+  readonly seen: number[] = [];
+  readonly since: (steps: NodeSteps) => number;
+
+  constructor(id: string, since: (steps: NodeSteps) => number = (steps) => steps.resumesSince(1)) {
+    super(id);
+    this.since = since;
+  }
+
+  override forward(inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
+    const steps = caps.steps!;
+    if (steps.prior.length === 0) steps.record({ kind: "test" });
+    this.seen.push(this.since(steps));
+    return super.forward(inputs, caps);
+  }
+}
+
+/** A run of `host` that a complete wakes as soon as it waits; the run has ended. */
+async function woken(host: SinceHost): Promise<FlowEngine> {
+  const run: FlowEngine = inboxEngine(inboxFlow([], [host], [[START_ID, "work"], ["work", END_ID]]), {
+    onEvent: (event: RunEvent) => {
+      if (event instanceof RunWaiting) run.deliver({ kind: "complete", callId: host.callId, result: { output: "yes" } });
+    },
+  });
+  await run.run();
+  return run;
+}
+
 describe("NodeSteps.resumesSince counts the resumes that cut the node off since a step", () => {
   test("0 live", async () => {
     const seen: number[] = [];
@@ -615,28 +647,6 @@ describe("NodeSteps.resumesSince counts the resumes that cut the node off since 
     });
   }
 
-  /** A host call `work` that records step 1 before its pending step, and pushes `resumesSince(1)` to `seen`. */
-  class SinceHost extends FakeHost {
-    readonly seen: number[] = [];
-    override forward(inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
-      const steps = caps.steps!;
-      if (steps.prior.length === 0) steps.record({ kind: "test" });
-      this.seen.push(steps.resumesSince(1));
-      return super.forward(inputs, caps);
-    }
-  }
-
-  /** A run of `host` that a complete wakes as soon as it waits; the run has ended. */
-  async function woken(host: SinceHost): Promise<FlowEngine> {
-    const run: FlowEngine = inboxEngine(inboxFlow([], [host], [[START_ID, "work"], ["work", END_ID]]), {
-      onEvent: (event: RunEvent) => {
-        if (event instanceof RunWaiting) run.deliver({ kind: "complete", callId: host.callId, result: { output: "yes" } });
-      },
-    });
-    await run.run();
-    return run;
-  }
-
   test("0 when the node waited after the step, was woken, and runs on", async () => {
     const host = new SinceHost("work");
     const run = await woken(host);
@@ -660,6 +670,48 @@ describe("NodeSteps.resumesSince counts the resumes that cut the node off since 
 
   test("outside a run it is 0", () => {
     expect(new NodeSteps(2, [{ kind: "test" }], () => 2).resumesSince(1)).toBe(0);
+  });
+});
+
+describe("NodeSteps.evaluationsSince counts the node's starts and wakes after a step", () => {
+  /** A `SinceHost` that pushes `evaluationsSince(1)`. */
+  const evaluations = () => new SinceHost("work", (steps) => steps.evaluationsSince(1));
+
+  test("0 in the evaluation that recorded it, then 1 in the wake after it", async () => {
+    const host = evaluations();
+    const run = await woken(host);
+    expect(run.state.result).toBeInstanceOf(RunSucceeded);
+    expect(host.seen).toEqual([0, 1]);
+  });
+
+  test("2 when a crash cut that wake and a resume started the node again", async () => {
+    const host = evaluations();
+    const run = await woken(host);
+    const resumed = crashedAt(
+      inboxFlow([], [host], [[START_ID, "work"], ["work", END_ID]]),
+      run.log.records(),
+      workRecord(NodeWokenRecord),
+    );
+    await resumed.run();
+    expect(resumed.state.result).toBeInstanceOf(RunSucceeded);
+    expect(host.seen).toEqual([0, 1, 2]);
+  });
+
+  test("1 outside a run, and a RangeError in a run for a step the node doesn't hold", async () => {
+    expect(new NodeSteps(2, [{ kind: "test" }], () => 2).evaluationsSince(1)).toBe(1);
+    const seen: unknown[] = [];
+    const built = single(
+      new StepNode("work", (caps) => {
+        try {
+          caps.steps!.evaluationsSince(1);
+        } catch (error) {
+          seen.push((error as Error).message);
+        }
+        return new Output("done");
+      }),
+    );
+    await built.run();
+    expect(seen).toEqual(["node 'work' has no step 1"]);
   });
 });
 

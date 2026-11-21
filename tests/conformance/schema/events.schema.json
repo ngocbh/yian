@@ -19,6 +19,7 @@
     {"properties": {"name": {"const": "NodeAttemptResumed"}, "data": {"$ref": "#/$defs/NodeAttemptResumed"}}},
     {"properties": {"name": {"const": "NodeWaiting"}, "data": {"$ref": "#/$defs/NodeWaiting"}}},
     {"properties": {"name": {"const": "NodeWoken"}, "data": {"$ref": "#/$defs/NodeWoken"}}},
+    {"properties": {"name": {"const": "CallHeld"}, "data": {"$ref": "#/$defs/CallHeld"}}},
     {"properties": {"name": {"const": "CallClosed"}, "data": {"$ref": "#/$defs/CallClosed"}}},
     {"properties": {"name": {"const": "Interrupted"}, "data": {"$ref": "#/$defs/Interrupted"}}},
     {"properties": {"name": {"const": "ModelCallStarted"}, "data": {"$ref": "#/$defs/ModelCallStarted"}}},
@@ -210,6 +211,16 @@
       "properties": {
         "node_id": {"type": "string"},
         "timed_out": {"type": "array", "items": {"type": "string"}, "description": "The node's calls that timed out, possibly none."}
+      }
+    },
+    "CallHeld": {
+      "description": "A host's check before an agent tool call held it, as its pending step records: the call waits, its tool not run, until the host answers it. A hold an interrupt closes gets its CallClosed.",
+      "type": "object",
+      "required": ["node_id", "call_id", "tool"],
+      "properties": {
+        "node_id": {"type": "string", "description": "The agent's node id."},
+        "call_id": {"type": "string", "description": "The id the host answers it by."},
+        "tool": {"type": "string", "description": "The tool's name, as the model sees it."}
       }
     },
     "CallClosed": {

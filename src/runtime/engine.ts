@@ -312,6 +312,7 @@ function callViews(state: RunState, nodeId: string): CallView[] {
       deadline: call.deadline,
       scope: call.scope,
       failure: state.flowFailures.get(call.callId) ?? null,
+      held: call.held,
     };
   });
 }
@@ -326,13 +327,13 @@ function callViews(state: RunState, nodeId: string): CallView[] {
  * node settles; the appended records reach it through the log the run boundary wraps. A derived
  * node's bindings are captured, for the sources its outcome points at. A node declaring
  * `needsSteps` gets a `NodeSteps` snapshot taken right after its start; each step it records is
- * appended and applied before `record` returns, with no observer but the `CallClosed` of a call a
- * `pending` step registers already closed (its node holds an interrupt), and the capability closes
- * once the evaluation's outcome is decided, as do the node's event sinks. Once the run stops,
- * `record` throws the node signal's reason and appends nothing, and the sinks drop what they get,
- * except a settled step (`{ settled: true }`) and a `ToolCallFinished` while the run has no
- * terminal result: the node vouches that the call settled while its signal was live (see
- * `NodeSteps.record`).
+ * appended and applied before `record` returns, with no observer but a held `pending` step's
+ * `CallHeld` and the `CallClosed` of a call a `pending` step registers already closed (its node
+ * holds an interrupt), and the capability closes once the evaluation's outcome is decided, as do
+ * the node's event sinks. Once the run stops, `record` throws the node signal's reason and appends
+ * nothing, and the sinks drop what they get, except a settled step (`{ settled: true }`) and a
+ * `ToolCallFinished` while the run has no terminal result: the node vouches that the call settled
+ * while its signal was live (see `NodeSteps.record`).
  *
  * Each node runs under its own signal (its `caps.signal`), aborted with the run signal's reason and
  * unlinked from it when the node settles. A host stop (the `signal` option aborting) or a failing
@@ -732,7 +733,8 @@ export class FlowEngine {
         // A refused or unrecorded step is a host fault, never the node's failure.
         throw new CapabilityFault(error);
       }
-      // A pending step on a node an interrupt names registers its call closed; the host dismisses it.
+      // A held pending step announces its hold; one on a node an interrupt names registers its call
+      // closed, and the host dismisses it.
       this.#publish(observers, this.#events);
       return (prepared.record as NodeStepRecord).n;
     };
@@ -762,6 +764,11 @@ export class FlowEngine {
           return (state.nodeStartSeqs.get(nodeId) ?? []).filter((start) => start > seq).length;
         },
         seqOf: stepSeq,
+        evaluationsSince: (n) => {
+          const seq = stepSeq(n);
+          const after = (seqs: readonly number[] | undefined) => (seqs ?? []).filter((at) => at > seq).length;
+          return after(state.nodeStartSeqs.get(nodeId)) + after(state.nodeWakeSeqs.get(nodeId));
+        },
         // Read on demand, so a node that never asks does no more work per start.
         flowCalls: () => enclosingFlowCalls(state, nodeId),
       },

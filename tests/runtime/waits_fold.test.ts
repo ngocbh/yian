@@ -182,6 +182,7 @@ test("a pending step registers a host call; its tool_result answers it", () => {
       closedReason: null,
       flow: false,
       scope: null,
+      held: false,
     },
   ]);
   applyWaitsRecord(w, { seq: 4, record: new NodeWaitingRecord("ask", ["r/ask/1"]) });
@@ -340,9 +341,9 @@ test("wakeAt of a waiting run's WaitInfos is the state's", () => {
 test("waitInfos lists each waiting node's calls, settled or not", () => {
   const w = fold(...START, takeWait("heard", "one"), sleepWait("nap", T9), send("msgs", "x"), pending("ask", 1, "r/ask/1"), new NodeWaitingRecord("ask", ["r/ask/1"]));
   expect(waitInfos(w)).toEqual([
-    { node: "heard", callId: "r/heard", tool: "take", inbox: "msgs", deadline: null, settled: true },
-    { node: "nap", callId: "r/nap", tool: "sleep", inbox: null, deadline: T9, settled: false },
-    { node: "ask", callId: "r/ask/1", tool: "ask", inbox: null, deadline: null, settled: false },
+    { node: "heard", callId: "r/heard", tool: "take", inbox: "msgs", deadline: null, settled: true, held: false },
+    { node: "nap", callId: "r/nap", tool: "sleep", inbox: null, deadline: T9, settled: false, held: false },
+    { node: "ask", callId: "r/ask/1", tool: "ask", inbox: null, deadline: null, settled: false, held: false },
   ]);
   expect(waitInfos(fold(...START))).toEqual([]);
 });

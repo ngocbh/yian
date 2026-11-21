@@ -169,6 +169,7 @@ describe("take and sleep", () => {
       deadline: null,
       scope: null,
       failure: null,
+      held: false,
     };
     const { caps } = capsWith([held]);
     expect(await take.forward({ from: new InboxRef("m") }, caps)).toEqual(
@@ -190,7 +191,7 @@ function sendTool(ids: string[], answer: () => unknown = () => pending()): Funct
 /** One held call of node `send` (or `node`), open unless `fields` says otherwise. */
 function heldCall(fields: Partial<CallView> = {}): CallView {
   const callId = fields.callId ?? "r1/send";
-  return { callId, tool: "codex_send", resultKey: callId, state: "open", closedReason: null, result: null, deadline: null, scope: null, failure: null, ...fields };
+  return { callId, tool: "codex_send", resultKey: callId, state: "open", closedReason: null, result: null, deadline: null, scope: null, failure: null, held: false, ...fields };
 }
 
 const APPROVAL = new Type({

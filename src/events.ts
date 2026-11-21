@@ -15,10 +15,10 @@
  * `RunFailed` is derived from a durable node failure or from a reduced transition
  * that makes the terminal output unreachable. `NodeWaiting` and `NodeWoken` follow a
  * node's move out of and back into flight, `RunWaiting` a quiescence with nodes waiting,
- * `RunCancelled` a cancel, `Interrupted` a host interrupt and the flow call scopes it ended, and
- * `CallClosed` a host call closed without an answer. Plain classes keep this low-level
- * observer module separate from the serialized record vocabulary in `runtime/log`;
- * canonical semantic failures come from `diagnostics`.
+ * `RunCancelled` a cancel, `Interrupted` a host interrupt and the flow call scopes it ended,
+ * `CallHeld` an agent tool call a host's check held, and `CallClosed` a host call closed without
+ * an answer. Plain classes keep this low-level observer module separate from the serialized record
+ * vocabulary in `runtime/log`; canonical semantic failures come from `diagnostics`.
  *
  * Each event has a `type` discriminant equal to its class name and a `toJSON()`
  * giving its snake_case data form, described by `tests/conformance/schema/events.schema.json`:
@@ -315,6 +315,31 @@ export class CallClosed {
   /** Return the data form. */
   toJSON() {
     return { call_id: this.callId, reason: this.reason };
+  }
+}
+
+/**
+ * A host's check before an agent tool call held it, as its `pending` step records: the call waits,
+ * its tool not run, until the host answers it. A hold an interrupt closes gets its `CallClosed`.
+ */
+export class CallHeld {
+  readonly type = "CallHeld" as const;
+  /** The agent's node id. */
+  readonly nodeId: string;
+  /** The id the host answers it by. */
+  readonly callId: string;
+  /** The tool's name, as the model sees it. */
+  readonly tool: string;
+
+  constructor(options: { nodeId: string; callId: string; tool: string }) {
+    this.nodeId = options.nodeId;
+    this.callId = options.callId;
+    this.tool = options.tool;
+  }
+
+  /** Return the data form. */
+  toJSON() {
+    return { node_id: this.nodeId, call_id: this.callId, tool: this.tool };
   }
 }
 
@@ -715,6 +740,7 @@ export type RunEvent =
   | NodeAttemptResumed
   | NodeWaiting
   | NodeWoken
+  | CallHeld
   | CallClosed
   | Interrupted
   | ModelCallStarted

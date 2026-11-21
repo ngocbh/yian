@@ -1,27 +1,34 @@
 /**
  * The run reducer's rules for the records of a host's check before each agent tool call: a gated
  * run's start and resumes, a refused call's result, a note, a held call's `pending` step and its
- * `released` step.
+ * `released` step; and a held call's run state, as the waits, `pendingCalls` and events show it.
  */
 
 import { describe, expect, test } from "bun:test";
 
 import { loadFlow } from "../../src/compose/loader.ts";
-import { AgentNode } from "../../src/nodes/agent/node.ts";
+import { CallClosed, CallHeld } from "../../src/events.ts";
+import { AgentNode, STEER_INBOX_KEY } from "../../src/nodes/agent/node.ts";
+import { Binding } from "../../src/nodes/contracts.ts";
+import { pendingCalls } from "../../src/run.ts";
 import { RunResumedRecord, type RunLog } from "../../src/runtime/log.ts";
 import {
   commitPrepared,
   prepareComplete,
+  prepareInterrupt,
   prepareNodeStarted,
   prepareNodeStep,
   prepareNodeWaiting,
+  prepareNodeWoken,
   prepareRecord,
+  prepareRunCancelled,
   prepareRunResumed,
   type RunState,
 } from "../../src/runtime/state.ts";
+import { waitInfos, WaitsState, wakeableNodes } from "../../src/runtime/waits.ts";
 import { GATE_TEXT_MAX_BYTES } from "../../src/tools/gate.ts";
 import { RUN_ID } from "../helpers/run_state_fixtures.ts";
-import { askPending, paramFlow, replayed, started, tool } from "../helpers/waits_fixtures.ts";
+import { askPending, MSGS, paramFlow, replayed, started, tool } from "../helpers/waits_fixtures.ts";
 
 const agent = (id: string) => new AgentNode(id, { prompt: "go", tools: ["ask_user", "lookup"] });
 
@@ -109,9 +116,17 @@ nodes:
 output: \${a.output}
 `;
 
-/** A run whose agent `a` is running after a reply calling `lookup` three times (c0, c1, c2). */
-function replied() {
-  const run = started(paramFlow([], agent("a"), tool("t", "ask")));
+/**
+ * A run whose agent `a` is running after a reply calling `lookup` three times (c0, c1, c2); with
+ * `steers`, `a` reads the steer inbox `msgs`, so an interrupt of it names `a`.
+ */
+function replied(options: { steers?: boolean } = {}) {
+  const steers = options.steers === true;
+  const a = new AgentNode("a", { prompt: "go", tools: ["ask_user", "lookup"], steerInbox: steers });
+  const flow = steers
+    ? paramFlow([MSGS], { wiring: new Map([["a", new Map([[STEER_INBOX_KEY, new Binding("${input.msgs}")]])]]) }, a, tool("t", "ask"))
+    : paramFlow([], a, tool("t", "ask"));
+  const run = started(flow);
   commitPrepared(run.log, run.state, prepareNodeStarted(run.state, "a"));
   step(run.log, run.state, "a", reply(3));
   return run;
@@ -337,5 +352,108 @@ describe("a released step", () => {
     expect(() => prepareNodeStep(state, "t", { kind: "released", call_id: callOf(1) })).toThrow(
       "a released step on node 't', which isn't an agent",
     );
+  });
+});
+
+describe("a held call's run state", () => {
+  /** The observers committing `body` as `a`'s next step publishes. */
+  const published = (log: RunLog, state: RunState, body: Record<string, unknown>) =>
+    commitPrepared(log, state, prepareNodeStep(state, "a", body));
+
+  test("its pending step registers it held and publishes CallHeld; a host's pending() call is neither", () => {
+    const { log, state } = replied();
+    expect(published(log, state, holdOf(0, 1))).toEqual([new CallHeld({ nodeId: "a", callId: callOf(0), tool: "lookup" })]);
+    expect(published(log, state, pendingOf(1))).toEqual([]);
+    expect([state.waits.calls.get(callOf(0))!.held, state.waits.calls.get(callOf(1))!.held]).toEqual([true, false]);
+    const back = WaitsState.fromJSON(JSON.parse(JSON.stringify(state.waits.toJSON())));
+    expect(back.calls.get(callOf(0))!.held).toBe(true);
+  });
+
+  test("a hold registered on a node an interrupt names is held, then closed", () => {
+    const { log, state } = replied({ steers: true });
+    commitPrepared(log, state, prepareInterrupt(state, "msgs", ["a"])!);
+    expect(published(log, state, holdOf(0))).toEqual([
+      new CallHeld({ nodeId: "a", callId: callOf(0), tool: "lookup" }),
+      new CallClosed({ callId: callOf(0), reason: "interrupted" }),
+    ]);
+  });
+
+  test("a resume keeps it open, and closes only the reply's other open calls crashed", () => {
+    const holds = replied();
+    step(holds.log, holds.state, "a", holdOf(0));
+    step(holds.log, holds.state, "a", holdOf(1));
+    expect((prepareRunResumed(holds.state, { numWorkers: 0 }).record as RunResumedRecord).closedCalls).toEqual([]);
+
+    const { log, state, path } = replied();
+    step(log, state, "a", holdOf(0));
+    step(log, state, "a", pendingOf(1));
+    commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
+    expect([state.waits.calls.get(callOf(0))!.state, state.waits.calls.get(callOf(1))!.closedReason]).toEqual(["open", "crashed"]);
+    log.close();
+    expect(replayed(state.flow, path).waits.calls.get(callOf(0))!.state).toBe("open");
+  });
+
+  test("complete answers it, and wakes its waiting node while the node's other call is open", () => {
+    const { log, state } = replied();
+    step(log, state, "a", holdOf(0));
+    step(log, state, "a", pendingOf(1));
+    commitPrepared(log, state, prepareNodeWaiting(state, "a", { callIds: [callOf(0), callOf(1)] }));
+    expect(wakeableNodes(state.waits)).toEqual([]);
+    commitPrepared(log, state, prepareComplete(state, callOf(0), { output: "done" })!);
+    expect(state.waits.calls.get(callOf(0))!.state).toBe("answered");
+    expect(wakeableNodes(state.waits)).toEqual(["a"]);
+    commitPrepared(log, state, prepareNodeWoken(state, "a"));
+    expect(state.waits.calls.get(callOf(1))!.state).toBe("open");
+  });
+
+  test("a wait may name a hold answered in flight, and its node wakes at once", () => {
+    const { log, state } = replied();
+    step(log, state, "a", holdOf(0));
+    step(log, state, "a", pendingOf(1));
+    commitPrepared(log, state, prepareComplete(state, callOf(0), { output: "done" })!);
+    commitPrepared(log, state, prepareNodeWaiting(state, "a", { callIds: [callOf(0), callOf(1)] }));
+    expect(wakeableNodes(state.waits)).toEqual(["a"]);
+  });
+
+  test("an answer to a call that isn't held doesn't wake the node while another is open", () => {
+    const { log, state } = replied();
+    step(log, state, "a", pendingOf(0));
+    step(log, state, "a", holdOf(1));
+    commitPrepared(log, state, prepareNodeWaiting(state, "a", { callIds: [callOf(0), callOf(1)] }));
+    commitPrepared(log, state, prepareComplete(state, callOf(0), { output: "done" })!);
+    expect(wakeableNodes(state.waits)).toEqual([]);
+    expect(() => prepareNodeWoken(state, "a")).toThrow(`NodeWoken node 'a' still waits on open call '${callOf(1)}'`);
+  });
+
+  test("an interrupt closes it, and a cancel does", () => {
+    const interrupted = replied({ steers: true });
+    step(interrupted.log, interrupted.state, "a", holdOf(0));
+    commitPrepared(interrupted.log, interrupted.state, prepareNodeWaiting(interrupted.state, "a", { callIds: [callOf(0)], steerInbox: "msgs" }));
+    const interrupt = prepareInterrupt(interrupted.state, "msgs")!;
+    expect(commitPrepared(interrupted.log, interrupted.state, interrupt).at(-1)).toEqual(
+      new CallClosed({ callId: callOf(0), reason: "interrupted" }),
+    );
+
+    const cancelled = replied();
+    step(cancelled.log, cancelled.state, "a", holdOf(0));
+    expect(commitPrepared(cancelled.log, cancelled.state, prepareRunCancelled(cancelled.state)).at(-1)).toEqual(
+      new CallClosed({ callId: callOf(0), reason: "cancelled" }),
+    );
+  });
+
+  test("pendingCalls and the waits show it held, with its recorded source", () => {
+    const { log, state, path } = replied();
+    step(log, state, "a", holdOf(0));
+    step(log, state, "a", pendingOf(1));
+    commitPrepared(log, state, prepareNodeWaiting(state, "a", { callIds: [callOf(0), callOf(1)] }));
+    log.close();
+    expect(pendingCalls(path).map(({ callId, held, source, arguments: args }) => ({ callId, held, source, args }))).toEqual([
+      { callId: callOf(0), held: true, source: { kind: "host", group: null, tool: "lookup" }, args: {} },
+      { callId: callOf(1), held: false, source: null, args: {} },
+    ]);
+    expect(waitInfos(state.waits).map(({ callId, held }) => [callId, held])).toEqual([
+      [callOf(0), true],
+      [callOf(1), false],
+    ]);
   });
 });

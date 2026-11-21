@@ -36,7 +36,7 @@ const waiting = new RunResult({
   status: "waiting",
   runId: "r",
   log: "/l.jsonl",
-  waits: [{ node: "ask", callId: "r/ask", tool: "ask", inbox: null, deadline: "2026-10-24T00:00:00.000Z", settled: false }],
+  waits: [{ node: "ask", callId: "r/ask", tool: "ask", inbox: null, deadline: "2026-10-24T00:00:00.000Z", settled: false, held: false }],
 });
 
 test("the waiting document matches run_document", async () => {

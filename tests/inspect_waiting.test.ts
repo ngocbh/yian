@@ -72,7 +72,7 @@ test("a run whose node waits on a take is waiting, not ready", () => {
     crashedAttempts: {},
     ready: false,
     wakeAt: null,
-    waits: [{ node: "heard", callId: "r/heard", tool: "take", inbox: "msgs", deadline: null, settled: false }],
+    waits: [{ node: "heard", callId: "r/heard", tool: "take", inbox: "msgs", deadline: null, settled: false, held: false }],
     endedAt: null,
   });
 });

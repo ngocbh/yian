@@ -73,6 +73,11 @@ export interface Call {
    * other call.
    */
   readonly scope: string | null;
+  /**
+   * Whether a host's check held the agent's call before its tool ran (its `pending` step says
+   * `held: true`): the reply's later calls wait for it, and its settling wakes its node alone.
+   */
+  readonly held: boolean;
   state: CallStateKind;
   /** The seq of the `tool_result` step that answered it, or `null`. */
   resultSeq: number | null;
@@ -120,6 +125,8 @@ export interface WaitInfo {
   readonly deadline: string | null;
   /** Whether the call is already answered, timed out or closed, so its node is about to wake. */
   readonly settled: boolean;
+  /** Whether a host's check held the agent's call before its tool ran (`Call.held`). */
+  readonly held: boolean;
 }
 
 /** The waits state a run's records build: the waiting set, the registered calls and the inboxes. */
@@ -310,6 +317,7 @@ function callFromJson(value: unknown, label: string): Call {
     closedReason: textOrNull("closedReason"),
     flow: typeof value["flow"] === "boolean" ? value["flow"] : undefined,
     scope: textOrNull("scope"),
+    held: typeof value["held"] === "boolean" ? value["held"] : undefined,
   };
   if (
     Object.values(call).some((field) => field === undefined) ||
@@ -387,8 +395,8 @@ const FRONTIER_KINDS: ReadonlyMap<Function, string> = new Map<Function, string>(
 /**
  * Fold one accepted record into `w`, in log order. Records only: the reducer validates each record
  * before it is folded, so the fold trusts what it reads and changes nothing for a record it has no
- * rule for. Of a step it reads only `kind`, `call_id`, `tool`, `tool_call_id`, `deadline`, `closed`,
- * `inbox` and `from`.
+ * rule for. Of a step it reads only `kind`, `call_id`, `tool`, `tool_call_id`, `deadline`, `flow`,
+ * `scope`, `held`, `closed`, `inbox` and `from`.
  *
  * @param envelope The record and its seq; a `RecordEnvelope` fits.
  * @throws RangeError when a `pending` step's `deadline` is set but isn't a record time.
@@ -534,6 +542,7 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
       closedReason: null,
       flow: step["flow"] === true,
       scope: step["flow"] === true && typeof step["scope"] === "string" ? step["scope"] : null,
+      held: step["held"] === true,
     });
     // The interrupt closed the node's calls when it landed; a tool whose group was already
     // running may pend after it, and its call is closed at once.
@@ -624,6 +633,7 @@ function applyWaiting(w: WaitsState, seq: number, record: NodeWaitingRecord): vo
       closedReason: null,
       flow: false,
       scope: null,
+      held: false,
     });
     if (entry.tool === "take") {
       inboxOf(w, entry.inbox!).absorbing.push(entry.callId);
@@ -755,15 +765,17 @@ export function nodeCalls(w: WaitsState, nodeId: string): readonly Call[] {
   return [...w.calls.values()].filter((call) => call.nodeId === nodeId);
 }
 
-/** Return whether `nodeId` waits and every call it waits on is settled, or an interrupt names it. */
+/**
+ * Return whether `nodeId` waits and an interrupt names it, every call it waits on is settled, or a
+ * held call it waits on is no longer open: the reply's later calls wait only for its holds.
+ */
 export function isWakeable(w: WaitsState, nodeId: string): boolean {
   const waiting = w.waiting.get(nodeId);
   if (waiting === undefined) return false;
   if (w.interrupts.has(nodeId)) return true;
-  return waiting.callIds.every((callId) => {
-    const call = w.calls.get(callId);
-    return call !== undefined && call.state !== "open";
-  });
+  const calls = waiting.callIds.map((callId) => w.calls.get(callId));
+  if (calls.some((call) => call?.held === true && call.state !== "open")) return true;
+  return calls.every((call) => call !== undefined && call.state !== "open");
 }
 
 /** Return the wakeable nodes, oldest `node_waiting` first. */
@@ -862,6 +874,7 @@ export function waitInfos(w: WaitsState): readonly WaitInfo[] {
         inbox: call?.inbox ?? null,
         deadline: call?.deadline ?? null,
         settled: call !== undefined && call.state !== "open",
+        held: call?.held ?? false,
       });
     }
   }

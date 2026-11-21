@@ -2129,6 +2129,7 @@ test("an inbox is drained while a take on it waits, unsettled", () => {
     inbox,
     deadline: null,
     settled,
+    held: false,
   });
   expect(inboxDrained([wait("take", "messages")], "messages")).toBe(true);
   expect(inboxDrained([wait("take", "messages", true)], "messages")).toBe(false);

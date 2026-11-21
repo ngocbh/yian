@@ -12,6 +12,7 @@ import { FAILURE_CODES, Failure, OriginRef } from "../src/diagnostics.ts";
 import * as events from "../src/events.ts";
 import {
   CallClosed,
+  CallHeld,
   CLOSE_REASONS,
   IN_LOOP_EVENTS,
   Interrupted,
@@ -304,6 +305,7 @@ const SAMPLES: readonly { event: RunEvent; data: Record<string, unknown> }[] = [
   { event: new NodeWoken({ nodeId: "heard", timedOut: [] }), data: { node_id: "heard", timed_out: [] } },
   { event: new RunWaiting({ nodeIds: ["heard", "nap"] }), data: { node_ids: ["heard", "nap"] } },
   { event: new RunCancelled(), data: {} },
+  { event: new CallHeld({ nodeId: "a", callId: "r/a/1/0", tool: "lookup" }), data: { node_id: "a", call_id: "r/a/1/0", tool: "lookup" } },
   { event: new CallClosed({ callId: "r/ask/1", reason: "cancelled" }), data: { call_id: "r/ask/1", reason: "cancelled" } },
   {
     event: new Interrupted({ inbox: "notes", nodes: ["helper"], scopes: ["helper/approve#0"] }),
@@ -463,7 +465,7 @@ describe("type discriminant", () => {
   test("the samples cover every event class", () => {
     const sampled: string[] = [...new Set(SAMPLES.map(({ event }) => event.type))].sort();
     expect(sampled).toEqual(EVENT_CLASS_NAMES);
-    expect(EVENT_CLASS_NAMES).toHaveLength(23);
+    expect(EVENT_CLASS_NAMES).toHaveLength(24);
   });
 
   test("TokenUsage is not an event and has no type", () => {

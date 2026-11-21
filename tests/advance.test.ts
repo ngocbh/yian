@@ -71,7 +71,7 @@ test("runFlow ends waiting: status, waits, no output, the lock released", async 
   const log = freshLog();
   const result = await runFlow(hostFlow(), {}, { log, env: NO_ENV, tools: { lookup: pendingTool() }, numWorkers: 0 });
   expect(result.status).toBe("waiting");
-  expect(result.waits).toEqual([{ node: "ask", callId: `${result.runId}/ask`, tool: "lookup", inbox: null, deadline: null, settled: false }]);
+  expect(result.waits).toEqual([{ node: "ask", callId: `${result.runId}/ask`, tool: "lookup", inbox: null, deadline: null, settled: false, held: false }]);
   expect([result.output, result.unread.size, isRunLogLocked(log)]).toEqual([null, 0, false]);
 });
 

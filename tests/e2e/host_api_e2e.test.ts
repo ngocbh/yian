@@ -297,6 +297,8 @@ test("YAML: a host rebuilds its open ask from pendingCalls and completes it", as
     pendingSeq: expect.any(Number),
     deadline: "2026-10-24T10:00:00.000Z",
     ask: { question: "Approve this plan?", questions: null, answerSchema: null, title: null },
+    held: false,
+    source: null,
   });
   expect(readRunLog(log)[call!.pendingSeq]!.kind).toBe("node_step");
   expect(typeof (await complete(log, call!.callId, { output: "yes" }, { env }))).toBe("number");

@@ -1030,6 +1030,8 @@ export interface CallView {
   readonly scope: string | null;
   /** The failure a flow call took, once it closed `failed`; `null` otherwise. */
   readonly failure: Failure | null;
+  /** Whether a host's check held the agent's call before its tool ran. */
+  readonly held: boolean;
 }
 
 /** An AGENT flow call whose scope holds a node: the scope, `<agent>/<flow>#<k>`, and the call's id. */
@@ -1037,6 +1039,42 @@ export interface EnclosingFlowCall {
   readonly scope: string;
   readonly callId: string;
 }
+
+/**
+ * What a `NodeSteps` reads from the run state, each a function the engine passes; every one left
+ * out or `null` takes its value outside a run.
+ */
+export interface NodeStepsReaders {
+  /**
+   * Reads the node's calls as the run state holds them now (answers and closes since the
+   * evaluation began); `currentCalls()` gives `calls` without it.
+   */
+  readonly currentCalls?: (() => readonly CallView[]) | null;
+  /**
+   * Reads the `n` the node's next step gets in the run state, which counts the steps the engine
+   * appends for the node without `record` (a steer read, a host's answer); `next` counts only
+   * `record`'s steps without it.
+   */
+  readonly nextStep?: (() => number) | null;
+  /** Counts the resumes that cut the node off since a step; `resumesSince` is 0 without it. */
+  readonly resumesSince?: ((n: number) => number) | null;
+  /** Gives a step's seq; `seqOf` throws without it. */
+  readonly seqOf?: ((n: number) => number) | null;
+  /** Counts the node's starts and wakes since a step; `evaluationsSince` is 1 without it. */
+  readonly evaluationsSince?: ((n: number) => number) | null;
+  /** Reads the flow calls enclosing the node; `flowCalls()` is empty without it. */
+  readonly flowCalls?: (() => readonly EnclosingFlowCall[]) | null;
+}
+
+/** The names of `NodeStepsReaders`, each checked to be a function or `null`. */
+const NODE_STEPS_READERS = [
+  "currentCalls",
+  "nextStep",
+  "resumesSince",
+  "seqOf",
+  "evaluationsSince",
+  "flowCalls",
+] as const satisfies readonly (keyof NodeStepsReaders)[];
 
 /**
  * The durable steps one start of a node reads and records, from the engine. Frozen.
@@ -1110,34 +1148,30 @@ export class NodeSteps {
    * @throws RangeError when `n` isn't one of the node's recorded steps, or outside a run.
    */
   readonly seqOf: (n: number) => number;
+  /**
+   * How many of the node's evaluations began after step `n` was recorded: its `node_started` and
+   * `node_woken` records after the step's, this evaluation's own included. So 0 when the step
+   * landed after this evaluation began (the node's own, or a host's answer in flight), 1 when this
+   * is the first evaluation after it, and more when an earlier one after it may have acted on it.
+   * Outside a run it is 1.
+   *
+   * @throws RangeError in a run, when `n` isn't one of the node's recorded steps.
+   */
+  readonly evaluationsSince: (n: number) => number;
   /** The `n` after the last step recorded through this object, or after `prior` before any. */
   #next: number;
-  /** Reads the node's calls as the run state holds them now; `null` outside a run. */
-  readonly #current: (() => readonly CallView[]) | null;
-  /** Reads the `n` the node's next step gets in the run state; `null` outside a run. */
-  readonly #nextStep: (() => number) | null;
-  /** Reads the flow calls enclosing the node from the run state; `null` outside a run. */
-  readonly #flowCalls: (() => readonly EnclosingFlowCall[]) | null;
+  /** What the node reads from the run state, as the engine passed it; empty outside a run. */
+  readonly #readers: Readonly<NodeStepsReaders>;
 
   /**
    * Check the field types and that the current start is counted; `prior` and `calls` are
    * copied, each call frozen.
    *
-   * @param currentCalls Reads the node's calls as the run state holds them now (answers and
-   *   closes since the evaluation began); the engine passes it, and `currentCalls()` gives `calls`
-   *   without it.
-   * @param nextStep Reads the `n` the node's next step gets in the run state, which counts the
-   *   steps the engine appends for the node without `record` (a steer read, a host's answer); the
-   *   engine passes it, and `next` counts only `record`'s steps without it.
-   * @param resumesSince Counts the resumes that cut the node off since a step, from the run
-   *   state; the engine passes it, and `resumesSince` is 0 without it.
-   * @param seqOf Gives a step's seq, from the run state; the engine passes it, and `seqOf` throws
-   *   without it.
-   * @param flowCalls Reads the flow calls enclosing the node, from the run state; the engine
-   *   passes it, and `flowCalls()` is empty without it.
+   * @param readers What the node reads from the run state; the engine passes them, and each one
+   *   left out takes its value outside a run.
    * @throws TypeError when `starts` isn't a safe integer, `prior` isn't an array of plain
-   *   records, `record` isn't a function, `calls` isn't an array, or `currentCalls`, `nextStep`,
-   *   `resumesSince`, `seqOf` or `flowCalls` isn't a function or `null`.
+   *   records, `record` isn't a function, `calls` isn't an array, `readers` isn't a plain object,
+   *   or a reader isn't a function or `null`.
    * @throws RangeError when `starts` is less than 1 or `maxEventBytes` isn't a positive safe
    *   integer.
    */
@@ -1148,11 +1182,7 @@ export class NodeSteps {
     calls: readonly CallView[] = [],
     maxEventBytes: number = MAX_EVENT_BYTES,
     durable: boolean = true,
-    currentCalls: (() => readonly CallView[]) | null = null,
-    nextStep: (() => number) | null = null,
-    resumesSince: ((n: number) => number) | null = null,
-    seqOf: ((n: number) => number) | null = null,
-    flowCalls: (() => readonly EnclosingFlowCall[]) | null = null,
+    readers: NodeStepsReaders = {},
   ) {
     if (typeof starts !== "number" || !Number.isSafeInteger(starts)) throw new YianTypeError("starts must be an int");
     if (starts < 1) throw new YianRangeError("starts must be at least 1");
@@ -1161,13 +1191,12 @@ export class NodeSteps {
     }
     if (typeof record !== "function") throw new YianTypeError("record must be callable");
     if (!Array.isArray(calls)) throw new YianTypeError("calls must be an array");
-    if (currentCalls !== null && typeof currentCalls !== "function") throw new YianTypeError("currentCalls must be callable or null");
-    if (nextStep !== null && typeof nextStep !== "function") throw new YianTypeError("nextStep must be callable or null");
-    if (resumesSince !== null && typeof resumesSince !== "function") {
-      throw new YianTypeError("resumesSince must be callable or null");
+    if (!isRecord(readers as unknown)) throw new YianTypeError("readers must be an object of functions");
+    for (const name of NODE_STEPS_READERS) {
+      const reader = readers[name] ?? null;
+      if (reader !== null && typeof reader !== "function") throw new YianTypeError(`${name} must be callable or null`);
     }
-    if (seqOf !== null && typeof seqOf !== "function") throw new YianTypeError("seqOf must be callable or null");
-    if (flowCalls !== null && typeof flowCalls !== "function") throw new YianTypeError("flowCalls must be callable or null");
+    const { resumesSince = null, seqOf = null, evaluationsSince = null } = readers;
     if (typeof maxEventBytes !== "number" || !Number.isSafeInteger(maxEventBytes) || maxEventBytes < 1) {
       throw new YianRangeError("maxEventBytes must be a positive int");
     }
@@ -1182,10 +1211,9 @@ export class NodeSteps {
       ((n) => {
         throw new YianRangeError(`step ${String(n)} has no seq outside a run`);
       });
+    this.evaluationsSince = evaluationsSince ?? (() => 1);
     this.#next = prior.length + 1;
-    this.#current = currentCalls;
-    this.#nextStep = nextStep;
-    this.#flowCalls = flowCalls;
+    this.#readers = Object.freeze({ ...readers });
     this.record = (step, options) => {
       const n = record(step, options);
       this.#next = n + 1;
@@ -1200,7 +1228,8 @@ export class NodeSteps {
    * flight names its step by it before the step is recorded.
    */
   get next(): number {
-    return this.#nextStep === null ? this.#next : this.#nextStep();
+    const nextStep = this.#readers.nextStep ?? null;
+    return nextStep === null ? this.#next : nextStep();
   }
 
   /**
@@ -1209,8 +1238,9 @@ export class NodeSteps {
    * this is `calls`.
    */
   currentCalls(): readonly CallView[] {
-    if (this.#current === null) return this.calls;
-    return Object.freeze(this.#current().map((call) => Object.freeze({ ...call })));
+    const current = this.#readers.currentCalls ?? null;
+    if (current === null) return this.calls;
+    return Object.freeze(current().map((call) => Object.freeze({ ...call })));
   }
 
   /**
@@ -1218,8 +1248,16 @@ export class NodeSteps {
    * for a node outside them, and outside a run. Read from the run state at each call.
    */
   flowCalls(): readonly EnclosingFlowCall[] {
-    const calls = this.#flowCalls?.() ?? [];
+    const calls = this.#readers.flowCalls?.() ?? [];
     return Object.freeze(calls.map(({ scope, callId }) => Object.freeze({ scope, callId })));
+  }
+
+  /**
+   * A copy over the same starts, prior steps, calls and run-state readers that records through
+   * `record`, which wraps this one's `record`.
+   */
+  withRecord(record: NodeSteps["record"]): NodeSteps {
+    return new NodeSteps(this.starts, this.prior, record, this.calls, this.maxEventBytes, this.durable, this.#readers);
   }
 }
 

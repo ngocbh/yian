@@ -22,6 +22,7 @@ import { BUILTIN, type Defaults, fromRecorded } from "../defaults.ts";
 import { compareCodeUnits, Failure, type OriginRef, reprText, sameFailure } from "../diagnostics.ts";
 import {
   CallClosed,
+  CallHeld,
   Interrupted,
   NodeExpanded,
   NodeFailed,
@@ -131,6 +132,7 @@ import {
   awaitsNextMessage,
   type Call,
   type CallStateKind,
+  isWakeable,
   nodeCalls,
   seqList,
   WaitsState,
@@ -320,6 +322,12 @@ export class RunState {
    */
   nodeStartSeqs = new Map<string, readonly number[]>();
   /**
+   * The seq of each accepted `NodeWoken` record of each unsettled node, in wake order. Appended in
+   * place, and gone with the node's start count; with `nodeStartSeqs` it orders the node's
+   * evaluations against its steps.
+   */
+  nodeWakeSeqs = new Map<string, readonly number[]>();
+  /**
    * The canonical steps each unsettled node recorded, in record order. They survive a resume and
    * go when the node's outcome is applied. The reducer appends to a node's list in place, so a
    * reader copies it to keep a snapshot.
@@ -407,10 +415,10 @@ export class RunState {
   unadmittedCommits = new Map<string, number>();
   /**
    * @internal The nodes whose entries in `nodeState` or a per-node inventory (`inFlight`,
-   * `acceptedStarts`, `nodeStarts`, `nodeStartSeqs`, `nodeSteps`, `nodeStepSeqs`, `pendingCommits`,
-   * `pendingMessages`, `crashedAttempts`) changed since a transition last checked them. Each
-   * write adds its node, and the next transition checks those nodes before its append
-   * (`requireTouchedInventories`).
+   * `acceptedStarts`, `nodeStarts`, `nodeStartSeqs`, `nodeWakeSeqs`, `nodeSteps`, `nodeStepSeqs`,
+   * `pendingCommits`, `pendingMessages`, `crashedAttempts`) changed since a transition last
+   * checked them. Each write adds its node, and the next transition checks those nodes before its
+   * append (`requireTouchedInventories`).
    */
   readonly touched = new Set<string>();
   /**
@@ -1581,18 +1589,26 @@ function sameStep(a: Readonly<JsonObject> | null, b: Readonly<JsonObject> | null
   return a !== null && b !== null && logJson(canonicalSeed(a)[0]) === logJson(canonicalSeed(b)[0]);
 }
 
-/** `call` as its node reads it: its state, closing reason, answer and deadline. */
-function callView(state: RunState, call: Call): CallView {
+/**
+ * `call` as its node reads it, frozen: its state, closing reason, answer and deadline, with
+ * `result` as its answer (by default the step that answered it, `callResultStep`).
+ */
+export function callView(
+  state: RunState,
+  call: Call,
+  result: Readonly<JsonObject> | null = callResultStep(state, call.callId),
+): CallView {
   return Object.freeze({
     callId: call.callId,
     tool: call.tool,
     resultKey: call.resultKey,
     state: call.state,
     closedReason: call.closedReason,
-    result: callResultStep(state, call.callId),
+    result,
     deadline: call.deadline,
     scope: call.scope,
     failure: state.flowFailures.get(call.callId) ?? null,
+    held: call.held,
   });
 }
 
@@ -1615,18 +1631,9 @@ export function callResultStep(state: RunState, callId: string): Readonly<JsonOb
  */
 function flowAnswerStep(state: RunState, call: Call): Readonly<JsonObject> {
   const output = state.pool.store.get(`${call.scope!}/${END_ID}`)!.toObject();
-  const view: CallView = Object.freeze({
-    callId: call.callId,
-    tool: call.tool,
-    resultKey: call.resultKey,
-    state: call.state,
-    closedReason: call.closedReason,
-    result: null,
-    deadline: call.deadline,
-    scope: call.scope,
-    failure: null,
-  });
   const node = state.flow.nodes.get(call.nodeId)!;
+  // The view before its answer: an answered call took no failure.
+  const view = callView(state, call, null);
   return node.waitResultStep(view, { output }, { maxFlowResultChars: state.runDefaults.maxFlowResultChars });
 }
 
@@ -2219,10 +2226,13 @@ function frontierObservers(record: RunRecord, delta: FrontierPlan["delta"]): Run
       return [new NodeStarted({ nodeId: delta.nodeId })];
     case "resumed":
       return [new RunResumed(), ...closed("crashed")];
-    case "step":
-      // A step is node-owned detail; no observer event announces it, except that a host call
+    case "step": {
+      // A step is node-owned detail; no observer event announces it, except a hold, and a host call
       // registered closed is announced closed.
-      return closed("interrupted");
+      const { nodeId, step } = record as NodeStepRecord;
+      if (step["kind"] !== "pending" || step["held"] !== true) return closed("interrupted");
+      return [new CallHeld({ nodeId, callId: String(step["call_id"]), tool: String(step["tool"]) }), ...closed("interrupted")];
+    }
     case "waiting": {
       const { nodeId, callIds } = record as NodeWaitingRecord;
       return [new NodeWaiting({ nodeId, callIds })];
@@ -3215,6 +3225,7 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       state.touched.add(delta.nodeId);
       state.inFlight.add(delta.nodeId);
       state.acceptedStarts.set(delta.nodeId, prepared.expectedSequence);
+      appendTo(state.nodeWakeSeqs, delta.nodeId, prepared.expectedSequence);
       break;
     case "withdrawn":
       // Withdrawn sends get no reply; nothing reads their values again.
@@ -3559,6 +3570,7 @@ function hasReducerContainers(state: RunState): boolean {
     isExactly(state.acceptedStarts, Map) &&
     isExactly(state.nodeStarts, Map) &&
     isExactly(state.nodeStartSeqs, Map) &&
+    isExactly(state.nodeWakeSeqs, Map) &&
     isExactly(state.nodeSteps, Map) &&
     isExactly(state.nodeStepSeqs, Map) &&
     isExactly(state.pendingCommits, Map) &&
@@ -3648,6 +3660,7 @@ function inventoryFault(state: RunState, nodeId: string): string | null {
     (starts !== undefined && !(Number.isSafeInteger(starts) && starts >= 1)) ||
     (steps !== undefined && (starts === undefined || !Array.isArray(steps) || steps.length === 0)) ||
     state.nodeStartSeqs.get(nodeId)?.length !== starts ||
+    (state.nodeWakeSeqs.has(nodeId) && starts === undefined) ||
     state.nodeStepSeqs.get(nodeId)?.length !== steps?.length ||
     (pending !== undefined &&
       (pending.admitted
@@ -3711,6 +3724,7 @@ function requireInventories(state: RunState): void {
     ...state.acceptedStarts.keys(),
     ...state.nodeStarts.keys(),
     ...state.nodeStartSeqs.keys(),
+    ...state.nodeWakeSeqs.keys(),
     ...state.nodeSteps.keys(),
     ...state.nodeStepSeqs.keys(),
     ...state.pendingCommits.keys(),
@@ -3785,13 +3799,14 @@ function validateRunResumed(state: RunState, record: RunResumedRecord): void {
  * make no direct host tool call, the agents'. A TOOL node's re-run reuses its call instead. An
  * agent's call registered before its last wake and still open (a timeout wake left it open) is
  * still pending at the host, not an unknown outcome: the replay waits on it again. So is a flow
- * call, which the run answers: the replay grows its scope if the cut came first.
+ * call, which the run answers: the replay grows its scope if the cut came first. So is a held call,
+ * whose tool never ran: the hold waits for the host's answer across the crash.
  */
 function retriedAgentCalls(state: RunState): string[] {
   const w = state.waits;
   return [...w.calls.values()]
     .filter((call) => {
-      if (call.state !== "open" || call.flow || !state.inFlight.has(call.nodeId)) return false;
+      if (call.state !== "open" || call.flow || call.held || !state.inFlight.has(call.nodeId)) return false;
       if (state.flow.nodes.get(call.nodeId)?.kind !== NodeKind.AGENT) return false;
       const lastWoken = w._lastWoken.get(call.nodeId);
       return lastWoken === undefined || call.seq > lastWoken;
@@ -3922,9 +3937,9 @@ function validateNodeWaiting(state: RunState, record: NodeWaitingRecord): void {
 
 /**
  * Require a wake record to name a waiting node whose `timed_out` calls are open calls of the node
- * with a deadline. A wake with no `timed_out` (by answers) needs every call it waits on settled,
- * unless an interrupt names the node; a timeout wake may leave the node's other calls open (the
- * reducer reads no clock: the engine decides which calls are due).
+ * with a deadline. A wake with no `timed_out` (by answers) needs the node wakeable: every call it
+ * waits on settled, a held one settled, or an interrupt naming the node; a timeout wake may leave
+ * the node's other calls open (the reducer reads no clock: the engine decides which calls are due).
  */
 function validateNodeWoken(state: RunState, record: NodeWokenRecord): void {
   const { nodeId } = record;
@@ -3937,10 +3952,10 @@ function validateNodeWoken(state: RunState, record: NodeWokenRecord): void {
       throw new YianRangeError(`NodeWoken timed_out ${reprText(callId)} isn't an open call of the node with a deadline`);
     }
   }
-  // A wake by answers needs every call settled; a timeout wake may leave the node's other calls open.
-  const open = waiting.callIds.find((callId) => w.calls.get(callId)?.state === "open");
-  if (record.timedOut.length === 0 && open !== undefined && !w.interrupts.has(nodeId)) {
-    throw new YianRangeError(`NodeWoken node ${reprText(nodeId)} still waits on open call ${reprText(open)}`);
+  // A wake by answers needs the node wakeable; a timeout wake may leave the node's other calls open.
+  if (record.timedOut.length === 0 && !isWakeable(w, nodeId)) {
+    const open = waiting.callIds.find((callId) => w.calls.get(callId)?.state === "open");
+    throw new YianRangeError(`NodeWoken node ${reprText(nodeId)} still waits on open call ${reprText(open ?? waiting.callIds[0] ?? "")}`);
   }
 }
 
@@ -4530,6 +4545,7 @@ function forgetNodeSteps(state: RunState, nodeId: string): void {
   state.touched.add(nodeId);
   if (!state.nodeStarts.delete(nodeId)) throw new YianRangeError(`node ${reprText(nodeId)} has no start count`);
   state.nodeStartSeqs.delete(nodeId);
+  state.nodeWakeSeqs.delete(nodeId);
   for (const step of state.nodeSteps.get(nodeId) ?? []) {
     if (step["kind"] === "steer") for (const seq of seqList(step["from"]) ?? []) state.inboxEvents.delete(seq);
   }
@@ -6376,6 +6392,7 @@ function requirePristine(state: RunState): void {
     state.acceptedStarts.size === 0 &&
     state.nodeStarts.size === 0 &&
     state.nodeStartSeqs.size === 0 &&
+    state.nodeWakeSeqs.size === 0 &&
     state.nodeSteps.size === 0 &&
     state.nodeStepSeqs.size === 0 &&
     state.pendingCommits.size === 0 &&

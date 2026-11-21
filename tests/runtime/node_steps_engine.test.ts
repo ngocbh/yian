@@ -12,8 +12,8 @@ import {
   RunWaiting,
   StreamChunk,
 } from "../../src/events.ts";
-import { CapabilityFault, Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
-import { NodeSteps } from "../../src/nodes/contracts.ts";
+import { CapabilityFault, Node, type NodeCaps, NodeKind, type NodeResult, Output, Pending } from "../../src/nodes/base.ts";
+import { type CallView, NodeSteps } from "../../src/nodes/contracts.ts";
 import { FlowEngine } from "../../src/runtime/engine.ts";
 import { evalNode } from "../../src/runtime/eval_node.ts";
 import {
@@ -29,10 +29,12 @@ import {
   RunStoppedRecord,
 } from "../../src/runtime/log.ts";
 import { commitPrepared, prepareRunResumed, replayRecords, RunState } from "../../src/runtime/state.ts";
+import { YianTypeError } from "../../src/typesys/errors.ts";
+import type { JsonObject } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import type { ValueRecord } from "../../src/typesys/values.ts";
 import { FakeHost, inboxEngine, inboxFlow, recordNames } from "../helpers/inbox_fixtures.ts";
-import { aborted, engine, FIXED_CLOCK, graph, noGrowth, rejected } from "../helpers/run_state_fixtures.ts";
+import { aborted, engine, FIXED_CLOCK, graph, noGrowth, rejected, RUN_ID } from "../helpers/run_state_fixtures.ts";
 
 /** A node that opts into steps and runs a scripted body over its capabilities; it may stream. */
 class StepNode extends Node {
@@ -64,6 +66,11 @@ test("NodeSteps checks its fields", () => {
   expect(() => new NodeSteps(1, ["x"] as never, record)).toThrow(TypeError);
   expect(() => new NodeSteps(1, ["x"] as never, record)).toThrow(/^prior must be an array of records$/);
   expect(() => new NodeSteps(1, [], null as never)).toThrow(TypeError);
+  expect(() => new NodeSteps(1, [], record, [], 64, true, { seqOf: 1 as never })).toThrow(/^seqOf must be callable or null$/);
+  for (const readers of [null, () => 1]) {
+    expect(() => new NodeSteps(1, [], record, [], 64, true, readers as never)).toThrow(YianTypeError);
+    expect(() => new NodeSteps(1, [], record, [], 64, true, readers as never)).toThrow(/^readers must be an object of functions$/);
+  }
 });
 
 test("NodeSteps.record returns the n its recorder returns", () => {
@@ -555,6 +562,38 @@ function crashedAt(flow: CompiledFlow, records: readonly RecordEnvelope[], cutAf
 const workRecord = (kind: abstract new (...args: never[]) => unknown) => (record: RunRecord) =>
   record instanceof kind && (record as { nodeId?: string }).nodeId === "work";
 
+/**
+ * A host call `work` that records step 1 before its pending step, and pushes `since(steps)` to
+ * `seen`, `resumesSince(1)` by default.
+ */
+class SinceHost extends FakeHost {
+  readonly seen: number[] = [];
+  readonly since: (steps: NodeSteps) => number;
+
+  constructor(id: string, since: (steps: NodeSteps) => number = (steps) => steps.resumesSince(1)) {
+    super(id);
+    this.since = since;
+  }
+
+  override forward(inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
+    const steps = caps.steps!;
+    if (steps.prior.length === 0) steps.record({ kind: "test" });
+    this.seen.push(this.since(steps));
+    return super.forward(inputs, caps);
+  }
+}
+
+/** A run of `host` that a complete wakes as soon as it waits; the run has ended. */
+async function woken(host: SinceHost): Promise<FlowEngine> {
+  const run: FlowEngine = inboxEngine(inboxFlow([], [host], [[START_ID, "work"], ["work", END_ID]]), {
+    onEvent: (event: RunEvent) => {
+      if (event instanceof RunWaiting) run.deliver({ kind: "complete", callId: host.callId, result: { output: "yes" } });
+    },
+  });
+  await run.run();
+  return run;
+}
+
 describe("NodeSteps.resumesSince counts the resumes that cut the node off since a step", () => {
   test("0 live", async () => {
     const seen: number[] = [];
@@ -614,28 +653,6 @@ describe("NodeSteps.resumesSince counts the resumes that cut the node off since 
     });
   }
 
-  /** A host call `work` that records step 1 before its pending step, and pushes `resumesSince(1)` to `seen`. */
-  class SinceHost extends FakeHost {
-    readonly seen: number[] = [];
-    override forward(inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
-      const steps = caps.steps!;
-      if (steps.prior.length === 0) steps.record({ kind: "test" });
-      this.seen.push(steps.resumesSince(1));
-      return super.forward(inputs, caps);
-    }
-  }
-
-  /** A run of `host` that a complete wakes as soon as it waits; the run has ended. */
-  async function woken(host: SinceHost): Promise<FlowEngine> {
-    const run: FlowEngine = inboxEngine(inboxFlow([], [host], [[START_ID, "work"], ["work", END_ID]]), {
-      onEvent: (event: RunEvent) => {
-        if (event instanceof RunWaiting) run.deliver({ kind: "complete", callId: host.callId, result: { output: "yes" } });
-      },
-    });
-    await run.run();
-    return run;
-  }
-
   test("0 when the node waited after the step, was woken, and runs on", async () => {
     const host = new SinceHost("work");
     const run = await woken(host);
@@ -660,6 +677,109 @@ describe("NodeSteps.resumesSince counts the resumes that cut the node off since 
   test("outside a run it is 0", () => {
     expect(new NodeSteps(2, [{ kind: "test" }], () => 2).resumesSince(1)).toBe(0);
   });
+});
+
+describe("NodeSteps.evaluationsSince counts the node's starts and wakes after a step", () => {
+  /** A `SinceHost` that pushes `evaluationsSince(1)`. */
+  const evaluations = () => new SinceHost("work", (steps) => steps.evaluationsSince(1));
+
+  /**
+   * An AGENT-kind node `work` that makes one host call per evaluation, twice, each answered by
+   * `answer` before it returns `Pending`; each evaluation pushes `evaluationsSince` of every step
+   * it read, then of the answer that landed while it ran.
+   */
+  class Rewoken extends Node {
+    readonly kind = NodeKind.AGENT;
+    override readonly needsSteps = true;
+    override readonly wakesWithoutWorker = true;
+    readonly seen: number[][] = [];
+    answer: (callId: string) => void = () => {};
+
+    override waitResultStep(call: CallView): JsonObject {
+      return { kind: "tool_result", call_id: call.resultKey, started_at: null, output: "yes", is_error: false };
+    }
+
+    override forward(_inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
+      const steps = caps.steps!;
+      const seen = steps.prior.map((_, index) => steps.evaluationsSince(index + 1));
+      this.seen.push(seen);
+      if (steps.prior.filter((step) => step["kind"] === "model_call").length === 2) return new Output("done");
+      const reply = steps.record({ kind: "model_call" });
+      const callId = `${RUN_ID}/work/${reply}/0`;
+      steps.record({ kind: "pending", call_id: callId, tool: "lookup", tool_call_id: `c${reply}`, reply: BigInt(reply), index: 0n });
+      this.answer(callId);
+      seen.push(steps.evaluationsSince(steps.next - 1));
+      return new Pending([callId]);
+    }
+  }
+
+  test("0 for a host's answer that landed during the evaluation, then 1 and 2 across two wakes", async () => {
+    const node = new Rewoken("work");
+    const run = single(node);
+    node.answer = (callId) => run.deliver({ kind: "complete", callId, result: { output: "yes" } });
+    await run.run();
+    expect(run.state.result).toBeInstanceOf(RunSucceeded);
+    expect(node.seen).toEqual([[0], [1, 1, 1, 0], [2, 2, 2, 1, 1, 1]]);
+  });
+
+  test("1 for a host's answer that landed while the node waited, in the wake after it", async () => {
+    const answered = (steps: NodeSteps) => steps.prior.findIndex((step) => step["kind"] === "tool_result") + 1;
+    const host = new SinceHost("work", (steps) => (answered(steps) === 0 ? -1 : steps.evaluationsSince(answered(steps))));
+    const run = await woken(host);
+    expect(run.state.result).toBeInstanceOf(RunSucceeded);
+    expect(host.seen).toEqual([-1, 1]);
+  });
+
+  test("0 in the evaluation that recorded it, then 1 in the wake after it", async () => {
+    const host = evaluations();
+    const run = await woken(host);
+    expect(run.state.result).toBeInstanceOf(RunSucceeded);
+    expect(host.seen).toEqual([0, 1]);
+  });
+
+  test("2 when a crash cut that wake and a resume started the node again", async () => {
+    const host = evaluations();
+    const run = await woken(host);
+    const resumed = crashedAt(
+      inboxFlow([], [host], [[START_ID, "work"], ["work", END_ID]]),
+      run.log.records(),
+      workRecord(NodeWokenRecord),
+    );
+    await resumed.run();
+    expect(resumed.state.result).toBeInstanceOf(RunSucceeded);
+    expect(host.seen).toEqual([0, 1, 2]);
+  });
+
+  test("1 outside a run, and a RangeError in a run for a step the node doesn't hold", async () => {
+    expect(new NodeSteps(2, [{ kind: "test" }], () => 2).evaluationsSince(1)).toBe(1);
+    const seen: unknown[] = [];
+    const built = single(
+      new StepNode("work", (caps) => {
+        try {
+          caps.steps!.evaluationsSince(1);
+        } catch (error) {
+          seen.push((error as Error).message);
+        }
+        return new Output("done");
+      }),
+    );
+    await built.run();
+    expect(seen).toEqual(["node 'work' has no step 1"]);
+  });
+});
+
+test("a node's own step that says held: true publishes no CallHeld", async () => {
+  const events: RunEvent[] = [];
+  const built = single(
+    new StepNode("work", (caps) => {
+      caps.steps!.record({ kind: "attempt", held: true, call_id: "c", tool: "t" });
+      return new Output("done");
+    }),
+    { onEvent: (event) => void events.push(event) },
+  );
+  await built.run();
+  expect(built.state.result).toBeInstanceOf(RunSucceeded);
+  expect(events.map((event) => event.type)).not.toContain("CallHeld");
 });
 
 test("NodeSteps.seqOf gives a step's seq in the log, and refuses a step it doesn't hold", async () => {

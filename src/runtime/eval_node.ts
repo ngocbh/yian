@@ -52,7 +52,7 @@ import {
   resolveSource,
   type SourceResolver,
 } from "../nodes/binding.ts";
-import { NodeSteps } from "../nodes/contracts.ts";
+import type { NodeSteps } from "../nodes/contracts.ts";
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { ToolSet } from "../tools/registry.ts";
@@ -436,19 +436,7 @@ async function evaluateNode(
         throw error;
       }
     };
-    caps.steps = new NodeSteps(
-      steps.starts,
-      steps.prior,
-      recordStep,
-      steps.calls,
-      steps.maxEventBytes,
-      steps.durable,
-      () => steps.currentCalls(),
-      () => steps.next,
-      steps.resumesSince,
-      steps.seqOf,
-      () => steps.flowCalls(),
-    );
+    caps.steps = steps.withRecord(recordStep);
   }
   if (steerInbox !== null && node.readsSteerInbox === true) {
     caps.openSteerInbox = steerInboxCapability(steerInbox, onFault, isClosed);

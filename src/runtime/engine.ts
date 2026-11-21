@@ -73,6 +73,7 @@ import {
 } from "./log.ts";
 import {
   callResultStep,
+  callView,
   commitPrepared,
   type GrowBuilder,
   isDerivedCommit,
@@ -298,21 +299,11 @@ export function prepareDelivery(state: RunState, op: DeliveryOp): PreparedTransi
   }
 }
 
-/** The node's calls as its evaluation sees them: state, closing reason, deadline and answer. */
+/** The node's calls as its evaluation sees them, each answer a copy the state doesn't hold. */
 function callViews(state: RunState, nodeId: string): CallView[] {
   return nodeCalls(state.waits, nodeId).map((call) => {
     const answer = callResultStep(state, call.callId);
-    return {
-      callId: call.callId,
-      tool: call.tool,
-      resultKey: call.resultKey,
-      state: call.state,
-      closedReason: call.closedReason,
-      result: answer === null ? null : structuredClone(answer),
-      deadline: call.deadline,
-      scope: call.scope,
-      failure: state.flowFailures.get(call.callId) ?? null,
-    };
+    return callView(state, call, answer === null ? null : structuredClone(answer));
   });
 }
 
@@ -326,13 +317,13 @@ function callViews(state: RunState, nodeId: string): CallView[] {
  * node settles; the appended records reach it through the log the run boundary wraps. A derived
  * node's bindings are captured, for the sources its outcome points at. A node declaring
  * `needsSteps` gets a `NodeSteps` snapshot taken right after its start; each step it records is
- * appended and applied before `record` returns, with no observer but the `CallClosed` of a call a
- * `pending` step registers already closed (its node holds an interrupt), and the capability closes
- * once the evaluation's outcome is decided, as do the node's event sinks. Once the run stops,
- * `record` throws the node signal's reason and appends nothing, and the sinks drop what they get,
- * except a settled step (`{ settled: true }`) and a `ToolCallFinished` while the run has no
- * terminal result: the node vouches that the call settled while its signal was live (see
- * `NodeSteps.record`).
+ * appended and applied before `record` returns, with no observer but a held `pending` step's
+ * `CallHeld` and the `CallClosed` of a call a `pending` step registers already closed (its node
+ * holds an interrupt), and the capability closes once the evaluation's outcome is decided, as do
+ * the node's event sinks. Once the run stops, `record` throws the node signal's reason and appends
+ * nothing, and the sinks drop what they get, except a settled step (`{ settled: true }`) and a
+ * `ToolCallFinished` while the run has no terminal result: the node vouches that the call settled
+ * while its signal was live (see `NodeSteps.record`).
  *
  * Each node runs under its own signal (its `caps.signal`), aborted with the run signal's reason and
  * unlinked from it when the node settles. A host stop (the `signal` option aborting) or a failing
@@ -732,7 +723,8 @@ export class FlowEngine {
         // A refused or unrecorded step is a host fault, never the node's failure.
         throw new CapabilityFault(error);
       }
-      // A pending step on a node an interrupt names registers its call closed; the host dismisses it.
+      // A held pending step announces its hold; one on a node an interrupt names registers its call
+      // closed, and the host dismisses it.
       this.#publish(observers, this.#events);
       return (prepared.record as NodeStepRecord).n;
     };
@@ -751,18 +743,25 @@ export class FlowEngine {
       calls,
       state.runDefaults.maxEventBytes,
       this.#durable,
-      () => callViews(state, nodeId),
-      // A steer read and a host's answer append the node's steps without `record`.
-      () => (state.nodeSteps.get(nodeId)?.length ?? 0) + 1,
-      // Only a resume that found the node cut off (by a crash or a stop) starts it again; a wake
-      // records no start.
-      (n) => {
-        const seq = stepSeq(n);
-        return (state.nodeStartSeqs.get(nodeId) ?? []).filter((start) => start > seq).length;
+      {
+        currentCalls: () => callViews(state, nodeId),
+        // A steer read and a host's answer append the node's steps without `record`.
+        nextStep: () => (state.nodeSteps.get(nodeId)?.length ?? 0) + 1,
+        // Only a resume that found the node cut off (by a crash or a stop) starts it again; a wake
+        // records no start.
+        resumesSince: (n) => {
+          const seq = stepSeq(n);
+          return (state.nodeStartSeqs.get(nodeId) ?? []).filter((start) => start > seq).length;
+        },
+        seqOf: stepSeq,
+        evaluationsSince: (n) => {
+          const seq = stepSeq(n);
+          const after = (seqs: readonly number[] | undefined) => (seqs ?? []).filter((at) => at > seq).length;
+          return after(state.nodeStartSeqs.get(nodeId)) + after(state.nodeWakeSeqs.get(nodeId));
+        },
+        // Read on demand, so a node that never asks does no more work per start.
+        flowCalls: () => enclosingFlowCalls(state, nodeId),
       },
-      stepSeq,
-      // Read on demand, so a node that never asks does no more work per start.
-      () => enclosingFlowCalls(state, nodeId),
     );
   }
 

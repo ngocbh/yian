@@ -780,7 +780,7 @@ console.log(JSON.stringify({ warnings, runs: readRunIndex(${JSON.stringify(runs)
     expect(readRunIndex(runs).map((row) => row.status)).toEqual(["cancelled"]);
     // The index as a yian of the older schema left it is rebuilt, as deleting it would rebuild it.
     const db = openSqlite(join(runs, "index.sqlite"));
-    db.exec(`PRAGMA user_version = ${7 * 1000 + SCHEMA_VERSION - 1}`);
+    db.exec(`PRAGMA user_version = ${8 * 1000 + SCHEMA_VERSION - 1}`);
     db.close();
     expect(readRunIndex(runs)).toEqual([]);
     withWarnings(() => {}, () => updateRunIndex(runs));
@@ -840,7 +840,7 @@ console.log(JSON.stringify({ warnings, runs: readRunIndex(${JSON.stringify(runs)
     try {
       const { scan } = reader.prepare("SELECT scan FROM runs").get() as { scan: string };
       expect(JSON.parse(scan).waits.stops).toEqual([]);
-      expect(reader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 7 * 1000 + SCHEMA_VERSION });
+      expect(reader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 8 * 1000 + SCHEMA_VERSION });
     } finally {
       reader.close();
     }
@@ -1241,6 +1241,23 @@ describe("waiting runs in the index", () => {
     );
   }
   const WAITING = [new NodeStartedRecord("heard"), takeWaitOn("heard"), new RunWaitingRecord(["heard"])];
+
+  test("an index of version 7, whose stored calls say nothing of holds, is rebuilt", () => {
+    const runs = freshRuns();
+    waitRun(runs, "run-w", WAITING);
+    updateRunIndex(runs);
+    const db = openSqlite(join(runs, "index.sqlite"));
+    db.exec(`UPDATE runs SET scan = json_remove(scan, '$.waits.calls[0][1].held'); PRAGMA user_version = ${7 * 1000 + SCHEMA_VERSION}`);
+    db.close();
+    // Another layout version reads as no rows, and an update rebuilds it without calling it damaged.
+    const warnings: string[] = [];
+    withWarnings((message) => warnings.push(message), () => {
+      expect(readRunIndex(runs)).toEqual([]);
+      updateRunIndex(runs);
+    });
+    expect(warnings).toEqual([]);
+    expect(readRunIndex(runs).map((row) => row.waits.map((wait) => wait.held))).toEqual([[false]]);
+  });
 
   test("a waiting take: waiting, not ready, no wake time; a send makes only its row ready, reading only the send", () => {
     const runs = freshRuns();

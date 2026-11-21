@@ -193,32 +193,17 @@ output: \${reply.output}
 `;
   const SOURCE: ToolSource = { kind: "host", group: null, tool: "lookup" };
 
-  /**
-   * Rewrite the log's pending step of `callId` into a hold, as the gate writes one; the agent
-   * loop writes none yet.
-   */
-  function holdIn(log: string, callId: string): void {
-    const lines = readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => {
-      const json = JSON.parse(line);
-      const step = json.kind === "node_step" ? json.payload.step : null;
-      if (step?.kind !== "pending" || step.call_id !== callId) return line;
-      Object.assign(step, { held: true, source: SOURCE, group_end: step.index });
-      return JSON.stringify(json);
-    });
-    writeFileSync(log, `${lines.join("\n")}\n`);
-  }
-
-  /** A run waiting on its agent's one `lookup` call, rewritten into a hold; `ran` counts the tool's runs. */
+  /** A run waiting on its agent's one `lookup` call, which the hook held; `ran` counts the tool's runs. */
   async function heldRun() {
     const ran: string[] = [];
-    const lookup = tool({ name: "lookup", description: "Look up.", parameters: { type: "object", properties: {} }, execute: () => (ran.push("lookup"), pending()) });
+    const lookup = tool({ name: "lookup", description: "Look up.", parameters: { type: "object", properties: {} }, execute: () => (ran.push("lookup"), "found") });
     const log = freshLog();
-    const options = { log, env: NO_ENV, tools: { lookup }, models: serving(new ScriptedModel([callReply(["lookup", {}, "c1"])])) };
+    const models = serving(new ScriptedModel([callReply(["lookup", {}, "c1"])]));
+    const options = gated({ log, env: NO_ENV, tools: { lookup }, models }, () => pending());
     const result = await runFlow(await loadFlow(FLOW), {}, options);
     expect(result.status, result.failure?.message).toBe("waiting");
     const [call] = pendingCalls(log);
-    holdIn(log, call!.callId);
-    ran.length = 0;
+    expect(ran).toEqual([]);
     return { log, options, ran, callId: call!.callId };
   }
 

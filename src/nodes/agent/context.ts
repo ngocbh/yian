@@ -20,6 +20,7 @@ import { isStorageError } from "../../llm_clients/auth/store.ts";
 import type { ModelAccess } from "../../llm_clients/factory.ts";
 import { type Scheduler, syncFolder, warn } from "../../platform.ts";
 import type { Skill } from "../../skills/catalog.ts";
+import type { ToolSource } from "../../tools/gate.ts";
 import type { ToolGrant } from "../../tools/grants.ts";
 import type { ToolSet } from "../../tools/registry.ts";
 import { YianRangeError } from "../../typesys/errors.ts";
@@ -180,6 +181,25 @@ export interface PendingFields {
   readonly note?: string | null;
 }
 
+/** A held call as its hold's `pending` step records it (`AgentSteps.hold`), before its tool runs. */
+export interface HoldFields {
+  readonly callId: string;
+  readonly tool: string;
+  readonly toolCallId: string;
+  readonly reply: number;
+  readonly index: number;
+  /** Where its tool comes from, as the host's check was asked about it. */
+  readonly source: ToolSource;
+  /** The last call of its concurrency group: the reply's calls after it wait until the hold is answered. */
+  readonly groupEnd: number;
+}
+
+/** A hold an earlier start recorded: the `n` of its `pending` step and its group's last call. */
+export interface RecordedHold {
+  readonly n: number;
+  readonly groupEnd: number;
+}
+
 /** A tool call's result as an earlier start recorded it. */
 export interface RecordedResult {
   readonly output: string;
@@ -220,7 +240,8 @@ export interface PriorAttempts {
  * It also replays what earlier starts recorded (`NodeSteps.prior`), in order, grouped as
  * `foldSteps` groups them: each logical call is taken back (`takeRecorded`) in place of
  * calling the model, and the retried attempts after the last one are the next live call's
- * (`priorAttempts`). Each `tool_result` is found by its reply and its call id (`recordedResult`).
+ * (`priorAttempts`). Each `tool_result` is found by its reply and its call id (`recordedResult`),
+ * each `pending` step by its call id, a hold's apart (`recordedPending`, `recordedHold`).
  * The `steer` steps before a logical call are handed back (`takeRecordedSteers`), in order, before
  * it, with the values the engine attached to each copy; those after the last call are handed back
  * after it. An `interrupted` step, the honor of a host interrupt, ends the replay where it was
@@ -245,8 +266,14 @@ export class AgentSteps {
   #trailing: readonly NumberedStep[];
   /** The recorded tool results, by the `n` of the reply they answer, then by call id. */
   readonly #results: ReadonlyMap<number, StepExchange["results"]>;
-  /** The `n` of each recorded `pending` step, by its yian call id. */
+  /** The `n` of each recorded `pending` step that isn't a hold, by its yian call id. */
   readonly #pending: ReadonlyMap<string, number>;
+  /** Each recorded hold, by its yian call id. */
+  readonly #holds: ReadonlyMap<string, RecordedHold>;
+  /** The `n` of the latest reply this start took or recorded, which its `tool_result` steps answer. */
+  #reply: number | null = null;
+  /** The result keys (`call_id`) of the `tool_result` steps this start wrote for `#reply`. */
+  readonly #answered = new Set<string>();
   /** How many flow calls the node recorded, by flow: the next one's scope number. */
   readonly #flowCalls = new Map<string, number>();
   /** The recorded steer steps, by the index in `#calls` of the logical call they preceded. */
@@ -278,10 +305,12 @@ export class AgentSteps {
     this.#calls = exchanges.map((exchange) => exchange.attempts);
     this.#trailing = open.attempts;
     this.#results = new Map(exchanges.map((exchange) => [exchange.attempts.at(-1)!.n, exchange.results]));
-    this.#pending = new Map(
-      (steps?.prior ?? []).flatMap((step, index) =>
-        step["kind"] === "pending" ? [[step["call_id"] as string, index + 1] as const] : [],
-      ),
+    const pending = (steps?.prior ?? []).flatMap((step, index) => (step["kind"] === "pending" ? [{ step, n: index + 1 }] : []));
+    this.#pending = new Map(pending.filter(({ step }) => step["held"] !== true).map(({ step, n }) => [step["call_id"] as string, n]));
+    this.#holds = new Map(
+      pending
+        .filter(({ step }) => step["held"] === true)
+        .map(({ step, n }) => [step["call_id"] as string, { n, groupEnd: Number(step["group_end"]) }]),
     );
     for (const step of steps?.prior ?? []) {
       if (step["kind"] !== "pending" || step["flow"] !== true) continue;
@@ -354,7 +383,10 @@ export class AgentSteps {
     this.#check(call, purpose, digest);
     this.#taken += 1;
     const { n, step } = call.at(-1)!;
-    if (!Object.hasOwn(step, "error")) return { n, response: recordedResponse(step) };
+    if (!Object.hasOwn(step, "error")) {
+      this.#replied(n);
+      return { n, response: recordedResponse(step) };
+    }
     const { kind, message } = step["error"] as { kind: string; message: string };
     return { n, failure: { kind, message } };
   }
@@ -393,9 +425,25 @@ export class AgentSteps {
     };
   }
 
-  /** Return the `n` of the `pending` step an earlier start recorded for yian call `callId`, or `null`. */
+  /**
+   * Return the `n` of the `pending` step an earlier start recorded for yian call `callId`, or
+   * `null`; a hold's is `recordedHold`'s.
+   */
   recordedPending(callId: string): number | null {
     return this.#pending.get(callId) ?? null;
+  }
+
+  /** Return the hold an earlier start recorded for yian call `callId`, or `null`. */
+  recordedHold(callId: string): RecordedHold | null {
+    return this.#holds.get(callId) ?? null;
+  }
+
+  /**
+   * Whether tool call `callId` of the reply whose `model_call` step is `n` has a result: one an
+   * earlier start recorded, or one this start wrote.
+   */
+  hasResult(n: number, callId: string): boolean {
+    return this.recordedResult(n, callId) !== null || (n === this.#reply && this.#answered.has(callId));
   }
 
   /** Throw the replay mismatch fault unless each of `steps` recorded `purpose` and `digest`. */
@@ -456,7 +504,7 @@ export class AgentSteps {
         );
       }
     }
-    return this.#record(
+    const n = this.#record(
       {
         ...this.#callStep(call),
         output: call.output.toJSON(),
@@ -466,6 +514,14 @@ export class AgentSteps {
       },
       options,
     );
+    this.#replied(n);
+    return n;
+  }
+
+  /** Note that the reply of `model_call` step `n` is the one later `tool_result` steps answer. */
+  #replied(n: number): void {
+    this.#reply = n;
+    this.#answered.clear();
   }
 
   /**
@@ -510,7 +566,9 @@ export class AgentSteps {
     };
     if (result.closed !== undefined) step["closed"] = result.closed;
     if (result.note != null) step["note"] = result.note;
-    return this.#record(step, options);
+    const n = this.#record(step, options);
+    this.#answered.add(result.callId);
+    return n;
   }
 
   /**
@@ -529,6 +587,30 @@ export class AgentSteps {
     const n = this.#record(step, { settled: true });
     if (step["flow"] === true) this.#flowCalls.set(call.tool, (this.#flowCalls.get(call.tool) ?? 0) + 1);
     return n;
+  }
+
+  /**
+   * Write a call the host's check held as a hold's `pending` step: `call_id`, `tool`,
+   * `tool_call_id`, `reply` and `index`, as `pending` writes them, then `held: true`, its `source`
+   * and `group_end`. It is written before the call's tool runs, so it isn't settled: once the run
+   * stops it isn't written.
+   *
+   * @returns The step's `n`.
+   * @throws Whatever `NodeSteps.record` throws.
+   */
+  hold(call: HoldFields): number {
+    const { callId, tool, toolCallId, reply, index, source, groupEnd } = call;
+    return this.#record({
+      kind: "pending",
+      call_id: callId,
+      tool,
+      tool_call_id: toolCallId,
+      reply: BigInt(reply),
+      index: BigInt(index),
+      held: true,
+      source: { ...source },
+      group_end: BigInt(groupEnd),
+    });
   }
 
   /**

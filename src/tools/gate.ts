@@ -81,7 +81,10 @@ export type GateDecision =
  * is checked: its arguments' schema, then its validator and `isConcurrencySafe` (a module tool's
  * on its module's thread), which must have no effects, since a checked call may never run. It
  * reads the model's arguments, never a validator's output. A refused flow call never starts its
- * flow.
+ * flow. A held call's tool doesn't run: the host answers it with `complete`, whose result the model
+ * reads. The reply's calls before it and in its concurrency group run; its later calls wait until
+ * every hold is answered, then are asked about. A call sent again after a cut can't be held, since
+ * it may have run: it is closed `crashed`.
  */
 export type BeforeToolCall = (call: GatedCall, ctx: GateContext) => GateDecision | PromiseLike<GateDecision>;
 

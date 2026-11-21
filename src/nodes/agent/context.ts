@@ -36,7 +36,10 @@ export const DEFAULT_SYSTEM =
   "precisely, use the available tools to gather any facts you need, and return " +
   "a clear, self-contained answer. Ask the user only through an explicitly granted tool.";
 
-/** The AGENT tool loop could not go on: a tool returned `pending()` outside a durable run. */
+/**
+ * The AGENT tool loop could not go on: a tool returned `pending()` outside a durable run, or the
+ * host's `beforeToolCall` couldn't be asked about a call.
+ */
 export class AgentLoopError extends Error {
   override name = "AgentLoopError";
 }
@@ -541,7 +544,7 @@ export class AgentSteps {
 
   /** The `pending` step `pending` writes for `call`. */
   #pendingStep(call: PendingFields): ValueRecord {
-    const { callId, tool, toolCallId, reply, index, deadline, flowArguments = null, note = null } = call;
+    const { callId, tool, toolCallId, reply, index, deadline, flowArguments = null, note } = call;
     const step: ValueRecord = {
       kind: "pending",
       call_id: callId,
@@ -551,7 +554,7 @@ export class AgentSteps {
       index: BigInt(index),
     };
     if (deadline !== null) step["deadline"] = deadline;
-    if (note !== null) step["note"] = note;
+    if (note != null) step["note"] = note;
     if (flowArguments === null) return step;
     step["flow"] = true;
     step["arguments"] = flowArguments;

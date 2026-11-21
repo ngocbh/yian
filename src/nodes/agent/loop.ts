@@ -153,7 +153,8 @@ import { generateStructured, OutputTruncatedError, rebuildStructuredRequests, ty
  *   handler returned `pending()`, once the reply's other calls ran.
  * @throws RangeError when a grant names no tool of the run (`ToolSet.resolve`).
  * @throws TypeCheckError when a reply repeats a tool call id or its tool call arguments nest too deep.
- * @throws AgentLoopError when a tool returns `pending()` outside a durable run.
+ * @throws AgentLoopError when a tool returns `pending()` outside a durable run, or when the host's
+ *   `beforeToolCall` would be asked about a call outside a run or of the node's own tools.
  * @throws OutputTruncatedError when a reply was cut off at the token limit with no runnable call.
  * @throws CapabilityFault when a recorded call doesn't match the rebuilt request
  *   (`AgentSteps.takeRecorded`), or the loop was cut with no pending interrupt.
@@ -257,7 +258,9 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
   );
   // Where each granted tool comes from, which the host's check before each call reads.
   const sources = new Map(
-    toolset.gate === null ? [] : granted.map((each) => [each.visible, toolset.sourceOf({ group: each.group, name: each.tool })] as const),
+    toolset.gate === null
+      ? []
+      : granted.map((each) => [each.visible, toolset.sourceOf({ group: each.group, name: each.tool })] as const),
   );
   let iterations = 0;
   // Set once the reply at the cap had its calls answered: the next reply is the last.
@@ -328,7 +331,9 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
     }
 
     const pended = new Map<number, string>();
-    const turn: ToolTurn = { ctx, toolset, granted, resumable, sources, skills, live, n, steps, messages, calls, interrupt, pended };
+    const turn: ToolTurn = {
+      ctx, toolset, granted, resumable, sources, skills, live, n, steps, messages, calls, interrupt, pended,
+    };
     if (capped || iterations === ctx.maxToolIterations) {
       // The model reads why its calls didn't run, then gives its answer.
       if (answerAtCap(turn, ctx.maxToolIterations)) return honor(ctx, steps);
@@ -570,9 +575,13 @@ interface PlannedCall {
   /** Whether it was refused before its tool, so it never starts: its result records no start. */
   readonly refused: boolean;
   /**
-   * Where its tool comes from, when the host's `beforeToolCall` is asked about it; `null` for a
-   * call the host isn't asked about: `load_skill`, `ask_user`, one refused before its tool, one of
-   * the node's own tools, or any call of a run without the check.
+   * Whether the host's `beforeToolCall` is never asked about it: `load_skill`, `ask_user`, or a
+   * call refused before its tool.
+   */
+  readonly exempt: boolean;
+  /**
+   * Where its tool comes from, as the hook sees it; `null` for `load_skill`, a call refused before
+   * its tool, a node's own tool, or any call of a run without the check.
    */
   readonly source: ToolSource | null;
   /** 1, or more for a call a crash or a stop cut off after its reply, which a resume sends again. */
@@ -852,8 +861,9 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
         throw error;
       }
     };
-    const planned = { call, index, callId: undefined, deadline: null, resumable: false, refused: false, source: null, attempt: 1 };
-    return { planned: { ...planned, interrupted: new AbortController(), invoke }, safe: true };
+    const planned = { call, index, callId: undefined, deadline: null, resumable: false, refused: false };
+    const gate = { exempt: true, source: null, attempt: 1, interrupted: new AbortController() };
+    return { planned: { ...planned, ...gate, invoke }, safe: true };
   }
   const grant = turn.granted.find((each) => each.visible === call.name);
   // The model sees the granted tools in the request, so the name is all it needs.
@@ -909,8 +919,8 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
   const invoke = (signal: AbortSignal) =>
     toolset.invoke(checked, { node: ctx.nodeId, callId, attempt, signal, interrupted: interrupted.signal });
   // `ask_user` waits for a person already; reserved names keep any other tool from showing as it.
-  const source = call.name === ASK_USER ? null : (turn.sources.get(call.name) ?? null);
-  const planned = { call, index, callId, deadline, resumable, refused: false, source, attempt, interrupted, invoke };
+  const gate = { exempt: call.name === ASK_USER, source: turn.sources.get(call.name) ?? null, attempt };
+  const planned = { call, index, callId, deadline, resumable, refused: false, ...gate, interrupted, invoke };
   return { planned, safe: toolset.isConcurrencySafe(checked) };
 }
 
@@ -923,8 +933,9 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
  */
 function refused(call: ToolCallPart, index: number, error: unknown, resumable: boolean): CallCheck {
   const invoke = () => Promise.reject(error);
-  const planned = { call, index, callId: undefined, deadline: null, resumable, refused: true, source: null, attempt: 1 };
-  return { planned: { ...planned, interrupted: new AbortController(), invoke }, safe: false };
+  const planned = { call, index, callId: undefined, deadline: null, resumable, refused: true };
+  const gate = { exempt: true, source: null, attempt: 1, interrupted: new AbortController() };
+  return { planned: { ...planned, ...gate, invoke }, safe: false };
 }
 
 /**
@@ -952,15 +963,15 @@ async function failCall(turn: ToolTurn, call: ToolCallPart, index: number, error
 /**
  * Run one group's calls together and commit their results in call order.
  *
- * With the host's check (`ToolSet.gate`), the hook is asked about each call it checks
- * (`PlannedCall.source`), in call order, before any of the group's calls starts (`askGate`). Once
- * every answer is in, or the node stops or the agent takes an interrupt while one is out, nothing
- * awaits until the calls start: a stop throws its reason and an interrupt answers the group
- * (`interruptGroup`), writing nothing else; each refusal, and each answer that isn't a valid
- * decision (`decide`), is written in call order as a `refused` result with its brackets; a stop or
- * an interrupt a host delivered while those steps committed is honored the same way; then the
- * other calls start, each allowed call's note going on its first record. A refused call's text
- * joins the model's messages in call order with the others' results.
+ * With the host's check (`ToolSet.gate`), the hook is asked about each call that isn't exempt
+ * (`PlannedCall.exempt`), in call order, before any of the group's calls starts (`askGate`). Once
+ * every answer is in, or the node stops or the agent takes an interrupt, nothing awaits until the
+ * calls start: a stop or an interrupt ends the group (`caught`), writing nothing else; each
+ * refusal, and each answer that isn't a valid decision (`decide`), is written in call order as a
+ * `refused` result with its brackets; a stop or an interrupt a host delivered while those steps
+ * committed ends it the same way; then the other calls start, each allowed call's note going on
+ * its first record. A refused call's text joins the model's messages in call order with the
+ * others' results.
  *
  * The calls share one child signal of the node's, and each call's own interrupt
  * (`PlannedCall.interrupted`) follows the agent's from before the hook is asked until the call
@@ -977,7 +988,8 @@ async function failCall(turn: ToolTurn, call: ToolCallPart, index: number, error
  * unless `options.interruptible` is `false` and the host checks none of its calls.
  *
  * @returns Whether a host interrupt skipped the group and every later call.
- * @throws AgentLoopError when the host checks a call outside a run (`gatedCall`).
+ * @throws AgentLoopError, before anything of the group is asked or written, when the host checks
+ *   a call outside a run or a call of the node's own tools (`gatedCall`).
  */
 async function runGroup(
   turn: ToolTurn,
@@ -988,13 +1000,14 @@ async function runGroup(
   const { live } = turn;
   checkNodeStopped(turn);
   const hook = turn.toolset.gate;
-  const gated = hook === null ? [] : group.filter((planned) => planned.source !== null);
+  const asking = hook === null ? [] : group.flatMap((planned) => (planned.exempt ? [] : [gatedCall(turn, planned)]));
   // A resend may have run before its cut, so an interrupt doesn't skip it; but the hook isn't
   // asked to let it run again once the agent holds one.
-  if (turn.interrupt?.aborted && (interruptible || gated.length > 0)) return interruptGroup(turn, group, interruptible);
+  let end = interruptible || asking.length > 0 ? caught(turn, group, interruptible) : null;
+  if (end !== null) return end;
   const unlinks = new Map(group.map((planned) => [planned, link(turn.interrupt, planned.interrupted)]));
-  const refusals = new Map<PlannedCall, string>();
-  const notes = new Map<PlannedCall, string>();
+  let refusals: ReadonlyMap<PlannedCall, string> = NO_RULINGS;
+  let notes: ReadonlyMap<PlannedCall, string> = NO_RULINGS;
   const signal = nodeSignal(turn);
   const controller = new AbortController();
   const relay = () => controller.abort(signal!.reason);
@@ -1058,22 +1071,18 @@ async function runGroup(
     }
   };
   try {
-    if (hook !== null && gated.length > 0) {
-      const asked = askGate(turn, hook, gated);
-      const answers = asked instanceof Map ? asked : await asked;
+    if (hook !== null && asking.length > 0) {
+      const { answers, wait } = askGate(turn, hook, asking);
+      if (wait !== null) await wait;
       // From here to the starts nothing awaits, so no stop or interrupt lands between the last
       // check and a start.
-      checkNodeStopped(turn);
-      if (turn.interrupt?.aborted) return interruptGroup(turn, group, interruptible);
-      for (const planned of gated) {
-        const ruling = decide(turn, planned, answers.get(planned)!);
-        if ("refuse" in ruling) refusals.set(planned, ruling.refuse);
-        else if (ruling.note !== null) notes.set(planned, ruling.note);
-      }
+      end = caught(turn, group, interruptible);
+      if (end !== null) return end;
+      ({ refusals, notes } = decide(turn, asking, answers));
       for (const [planned, text] of refusals) refuse(turn, planned, text);
       // A host's `onEvent` can deliver while those steps commit.
-      checkNodeStopped(turn);
-      if (turn.interrupt?.aborted) return interruptGroup(turn, group, interruptible, refusals);
+      end = caught(turn, group, interruptible, refusals);
+      if (end !== null) return end;
     }
     // Removed once the group settles, so a long loop leaves no listeners on the node's signal.
     signal?.addEventListener("abort", relay, { once: true });
@@ -1102,10 +1111,11 @@ async function runGroup(
       const outcome = running.then(
         (value): ToolOutcome => settle(planned, startedAt, value, false),
         (error): ToolOutcome => {
-          if (isReportedToolError(error)) return settle(planned, startedAt, error, true);
+          // A call whose started event threw never ran: what was thrown is the host's failure.
+          if (started && isReportedToolError(error)) return settle(planned, startedAt, error, true);
           // A tool that passed its interrupt on (to a timer, `fetch`, `spawn`) rejects with its
           // abort: the user's act, which the model reads, not the tool's failure.
-          if (interruptAbort(planned.interrupted.signal, error)) {
+          if (started && interruptAbort(planned.interrupted.signal, error)) {
             return settle(planned, startedAt, new ReportedToolError(TOOL_INTERRUPTED_OUTCOME), true);
           }
           fail(error);
@@ -1140,41 +1150,70 @@ async function runGroup(
 /** What the hook answered about one call: its value, or what it threw or rejected with. */
 type GateAnswer = { readonly value: unknown } | { readonly fault: unknown };
 
-/** A valid decision of the hook: run the call, with its note (`null` for none), or refuse it with the text the model reads. */
+/**
+ * A valid decision of the hook: run the call, with its note (`null` for none), or refuse it with
+ * the text the model reads.
+ */
 type GateRuling = { readonly note: string | null } | { readonly refuse: string };
 
+/** One call the hook is asked about, and what it sees of it. */
+interface Asked {
+  readonly planned: PlannedCall;
+  readonly call: GatedCall;
+}
+
+/** No refusals or notes: a group the hook isn't asked about. */
+const NO_RULINGS: ReadonlyMap<PlannedCall, string> = new Map();
+
 /**
- * Ask `hook` about each of `gated`, in call order, before any await. Each is asked with a signal
- * that aborts once the node stops or the call's own interrupt does, which follows the agent's. A
- * thenable answer becomes a Promise, whose rejection is a fault.
+ * End the group when a stop or an interrupt caught it before its calls started: a stop throws its
+ * reason, and an interrupt answers the group (`interruptGroup`), keeping `refusals`.
  *
- * @returns The answers by call; or, when some answer is a Promise, a Promise of them, which
- *   resolves once every answer is in or a signal aborts. An answer still out then is left out, and
- *   ignored when it comes; there is no timeout.
- * @throws AgentLoopError when a call has no call id (`gatedCall`); the hook isn't asked then.
+ * @returns What `interruptGroup` returns; `null` when neither caught the group.
+ */
+function caught(
+  turn: ToolTurn,
+  group: readonly PlannedCall[],
+  interruptible: boolean,
+  refusals: ReadonlyMap<PlannedCall, string> = NO_RULINGS,
+): boolean | null {
+  checkNodeStopped(turn);
+  return turn.interrupt?.aborted ? interruptGroup(turn, group, interruptible, refusals) : null;
+}
+
+/**
+ * Ask `hook` about each of `asking`, in call order, before any await, until the group is stopped
+ * or interrupted: once it is, the later calls aren't asked. Every call is asked with one signal,
+ * which aborts once the node stops or the agent takes an interrupt. A thenable answer becomes a
+ * Promise, whose rejection is a fault.
+ *
+ * @returns The answers by call, and `wait`, which resolves once every answer is in or the signal
+ *   aborts; `null` when no answer is out. An answer still out then is ignored when it comes; there
+ *   is no timeout.
  */
 function askGate(
   turn: ToolTurn,
   hook: BeforeToolCall,
-  gated: readonly PlannedCall[],
-): Map<PlannedCall, GateAnswer> | Promise<Map<PlannedCall, GateAnswer>> {
-  const calls = gated.map((planned) => gatedCall(turn, planned));
+  asking: readonly Asked[],
+): { readonly answers: ReadonlyMap<PlannedCall, GateAnswer>; readonly wait: Promise<void> | null } {
   const answers = new Map<PlannedCall, GateAnswer>();
+  const stop = new AbortController();
+  const unlinks = [link(nodeSignal(turn), stop), link(turn.interrupt, stop)];
+  const ctx = Object.freeze({ runId: turn.toolset.runId, signal: stop.signal });
   const waits: Promise<void>[] = [];
-  const stops: AbortSignal[] = [];
-  const unlinks: (() => void)[] = [];
   let open = true;
   const answer = (planned: PlannedCall, given: GateAnswer) => {
     if (open) answers.set(planned, given);
   };
-  for (const [at, planned] of gated.entries()) {
-    const stop = new AbortController();
-    stops.push(stop.signal);
-    unlinks.push(link(nodeSignal(turn), stop), link(planned.interrupted.signal, stop));
+  for (const { planned, call } of asking) {
+    if (stop.signal.aborted) break;
     try {
-      const value: unknown = hook(calls[at]!, Object.freeze({ runId: turn.toolset.runId, signal: stop.signal }));
+      const value: unknown = hook(call, ctx);
       if (!isThenable(value)) answer(planned, { value });
-      else waits.push(Promise.resolve(value).then((later) => answer(planned, { value: later }), (fault) => answer(planned, { fault })));
+      else {
+        const given = Promise.resolve(value);
+        waits.push(given.then((later) => answer(planned, { value: later }), (fault) => answer(planned, { fault })));
+      }
     } catch (fault) {
       answer(planned, { fault });
     }
@@ -1182,15 +1221,15 @@ function askGate(
   const close = () => {
     open = false;
     for (const unlink of unlinks) unlink();
-    return answers;
   };
-  if (waits.length === 0) return close();
-  const stopped = Promise.withResolvers<void>();
-  for (const stop of stops) {
-    if (stop.aborted) stopped.resolve();
-    else stop.addEventListener("abort", () => stopped.resolve(), { once: true });
+  if (waits.length === 0 || stop.signal.aborted) {
+    close();
+    return { answers, wait: null };
   }
-  return Promise.race([Promise.all(waits), stopped.promise]).then(close);
+  const stopped = new Promise<void>((resolve) => {
+    stop.signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+  return { answers, wait: Promise.race([Promise.all(waits), stopped]).then(close) };
 }
 
 /** Whether `value` has a `then` method, as a Promise does. Reading it may throw. */
@@ -1203,51 +1242,72 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
 const NO_SCOPES: readonly FlowCallScope[] = Object.freeze([]);
 
 /**
- * Return the call the hook sees for `planned`, deep-frozen. Its arguments are a copy of the
- * model's, so the hook can't change what the tool gets.
+ * Return what the hook sees of `planned`, deep-frozen. Its arguments are a copy of the model's, so
+ * the hook can't change what the tool gets.
  *
- * @throws AgentLoopError when `planned` has no call id: the hook is asked only in a run.
+ * @throws AgentLoopError when `planned` has no call id, outside a run, or no source: a call of the
+ *   node's own tools (a module, memory or flow tool) isn't checked yet, so it never runs unasked.
  */
-function gatedCall(turn: ToolTurn, planned: PlannedCall): GatedCall {
+function gatedCall(turn: ToolTurn, planned: PlannedCall): Asked {
   const { call, callId, source, attempt } = planned;
-  if (callId === undefined) {
-    throw new AgentLoopError(`agent node ${reprText(turn.ctx.nodeId)}: beforeToolCall checks tool calls only in a run`);
+  const where = `agent node ${reprText(turn.ctx.nodeId)}: beforeToolCall`;
+  if (callId === undefined) throw new AgentLoopError(`${where} checks tool calls only in a run`);
+  if (source === null) {
+    const own = "it is the node's own (a module, memory or flow tool)";
+    throw new AgentLoopError(`${where} can't check tool ${reprText(call.name)} yet: ${own}`);
   }
   const args = freezeParsed(copyJson(call.arguments!));
-  return Object.freeze({ callId, node: turn.ctx.nodeId, tool: call.name, source: source!, arguments: args, scopes: NO_SCOPES, attempt });
+  const node = turn.ctx.nodeId;
+  const gated: GatedCall = { callId, node, tool: call.name, source, arguments: args, scopes: NO_SCOPES, attempt };
+  return { planned, call: Object.freeze(gated) };
 }
 
 /**
- * Return the hook's answer about `planned` as a ruling. An answer that threw or rejected, or that
- * isn't a valid decision (`checkDecision`), refuses the call with `GATE_FAILED_TEXT` and warns
- * with its error, which the model never reads.
+ * Return the hook's answers about `asking` as the group's refusals and notes, in call order. An
+ * answer that threw or rejected, or that isn't a valid decision (`checkDecision`), refuses its call
+ * with `GATE_FAILED_TEXT` and warns with its error, which the model never reads.
  */
-function decide(turn: ToolTurn, planned: PlannedCall, answer: GateAnswer): GateRuling {
-  try {
-    if ("fault" in answer) throw answer.fault;
-    return checkDecision(answer.value);
-  } catch (error) {
-    const node = reprText(turn.ctx.nodeId);
-    warn(`node ${node}: beforeToolCall failed for tool ${reprText(planned.call.name)}: ${faultText(error)}; the call is refused`);
-    return { refuse: GATE_FAILED_TEXT };
+function decide(
+  turn: ToolTurn,
+  asking: readonly Asked[],
+  answers: ReadonlyMap<PlannedCall, GateAnswer>,
+): { refusals: ReadonlyMap<PlannedCall, string>; notes: ReadonlyMap<PlannedCall, string> } {
+  const refusals = new Map<PlannedCall, string>();
+  const notes = new Map<PlannedCall, string>();
+  for (const { planned } of asking) {
+    let ruling: GateRuling;
+    try {
+      const answer = answers.get(planned)!;
+      if ("fault" in answer) throw answer.fault;
+      ruling = checkDecision(answer.value);
+    } catch (error) {
+      const where = `node ${reprText(turn.ctx.nodeId)}: beforeToolCall failed for tool ${reprText(planned.call.name)}`;
+      warn(`${where}: ${faultText(error)}; the call is refused`);
+      ruling = { refuse: GATE_FAILED_TEXT };
+    }
+    if ("refuse" in ruling) refusals.set(planned, ruling.refuse);
+    else if (ruling.note !== null) notes.set(planned, ruling.note);
   }
+  return { refusals, notes };
 }
 
 /**
  * Return `value` as a ruling when it is a valid decision: `undefined`, a plain object
- * `{run: true}` or `{run: true, note}`, or `{refuse}`, each text passing `checkGateText`.
+ * `{run: true}` or `{run: true, note}` (a `note` that is `undefined` is none), or `{refuse}`, each
+ * text passing `checkGateText`.
  *
  * @throws TypeError or RangeError for anything else, `pending()` included.
  */
 function checkDecision(value: unknown): GateRuling {
   if (value === undefined) return { note: null };
-  if (isPending(value)) throw new YianTypeError("a hold (pending()) isn't supported");
+  if (isPending(value)) throw new YianTypeError("a hold (pending()) isn't supported yet");
   const shapes = "a decision must be undefined, {run: true}, {run: true, note} or {refuse}";
   if (!isRecord(value)) throw new YianTypeError(shapes);
   const keys = Object.keys(value);
   if (keys.length === 1 && keys[0] === "refuse") return { refuse: checkGateText(value["refuse"], "refuse") };
   if (!keys.every((key) => key === "run" || key === "note") || value["run"] !== true) throw new YianTypeError(shapes);
-  return { note: Object.hasOwn(value, "note") ? checkGateText(value["note"], "note") : null };
+  const note = Object.hasOwn(value, "note") ? value["note"] : undefined;
+  return { note: note === undefined ? null : checkGateText(note, "note") };
 }
 
 /** The message of `error` for a warning; never throws. */
@@ -1278,13 +1338,14 @@ function interruptGroup(
   interruptible: boolean,
   refusals: ReadonlyMap<PlannedCall, string> = new Map(),
 ): boolean {
-  if (interruptible) return skipFrom(turn, group[0]!.index, new Set([...refusals.keys()].map((planned) => planned.index)));
-  const { output, closed } = closerResult("crashed");
-  for (const planned of group) {
-    const refusal = refusals.get(planned);
-    if (refusal === undefined) turn.steps.toolResult({ callId: planned.call.id, startedAt: null, output, isError: true, closed });
-    pushToolMessage(turn, planned.call, refusal ?? output, true);
+  if (interruptible) {
+    return skipFrom(turn, group[0]!.index, new Set([...refusals.keys()].map((planned) => planned.index)));
   }
+  const { output, closed } = closerResult("crashed");
+  for (const { call } of group.filter((planned) => !refusals.has(planned))) {
+    turn.steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed });
+  }
+  for (const planned of group) pushToolMessage(turn, planned.call, refusals.get(planned) ?? output, true);
   return false;
 }
 

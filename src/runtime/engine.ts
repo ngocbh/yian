@@ -751,18 +751,20 @@ export class FlowEngine {
       calls,
       state.runDefaults.maxEventBytes,
       this.#durable,
-      () => callViews(state, nodeId),
-      // A steer read and a host's answer append the node's steps without `record`.
-      () => (state.nodeSteps.get(nodeId)?.length ?? 0) + 1,
-      // Only a resume that found the node cut off (by a crash or a stop) starts it again; a wake
-      // records no start.
-      (n) => {
-        const seq = stepSeq(n);
-        return (state.nodeStartSeqs.get(nodeId) ?? []).filter((start) => start > seq).length;
+      {
+        currentCalls: () => callViews(state, nodeId),
+        // A steer read and a host's answer append the node's steps without `record`.
+        nextStep: () => (state.nodeSteps.get(nodeId)?.length ?? 0) + 1,
+        // Only a resume that found the node cut off (by a crash or a stop) starts it again; a wake
+        // records no start.
+        resumesSince: (n) => {
+          const seq = stepSeq(n);
+          return (state.nodeStartSeqs.get(nodeId) ?? []).filter((start) => start > seq).length;
+        },
+        seqOf: stepSeq,
+        // Read on demand, so a node that never asks does no more work per start.
+        flowCalls: () => enclosingFlowCalls(state, nodeId),
       },
-      stepSeq,
-      // Read on demand, so a node that never asks does no more work per start.
-      () => enclosingFlowCalls(state, nodeId),
     );
   }
 

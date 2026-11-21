@@ -64,6 +64,7 @@ test("NodeSteps checks its fields", () => {
   expect(() => new NodeSteps(1, ["x"] as never, record)).toThrow(TypeError);
   expect(() => new NodeSteps(1, ["x"] as never, record)).toThrow(/^prior must be an array of records$/);
   expect(() => new NodeSteps(1, [], null as never)).toThrow(TypeError);
+  expect(() => new NodeSteps(1, [], record, [], 64, true, { seqOf: 1 as never })).toThrow(/^seqOf must be callable or null$/);
 });
 
 test("NodeSteps.record returns the n its recorder returns", () => {

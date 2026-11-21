@@ -1039,6 +1039,33 @@ export interface EnclosingFlowCall {
 }
 
 /**
+ * What a `NodeSteps` reads from the run state, each a function the engine passes; every one left
+ * out or `null` takes its value outside a run.
+ */
+export interface NodeStepsReaders {
+  /**
+   * Reads the node's calls as the run state holds them now (answers and closes since the
+   * evaluation began); `currentCalls()` gives `calls` without it.
+   */
+  readonly currentCalls?: (() => readonly CallView[]) | null;
+  /**
+   * Reads the `n` the node's next step gets in the run state, which counts the steps the engine
+   * appends for the node without `record` (a steer read, a host's answer); `next` counts only
+   * `record`'s steps without it.
+   */
+  readonly nextStep?: (() => number) | null;
+  /** Counts the resumes that cut the node off since a step; `resumesSince` is 0 without it. */
+  readonly resumesSince?: ((n: number) => number) | null;
+  /** Gives a step's seq; `seqOf` throws without it. */
+  readonly seqOf?: ((n: number) => number) | null;
+  /** Reads the flow calls enclosing the node; `flowCalls()` is empty without it. */
+  readonly flowCalls?: (() => readonly EnclosingFlowCall[]) | null;
+}
+
+/** The names of `NodeStepsReaders`, each checked to be a function or `null`. */
+const NODE_STEPS_READERS = ["currentCalls", "nextStep", "resumesSince", "seqOf", "flowCalls"] as const;
+
+/**
  * The durable steps one start of a node reads and records, from the engine. Frozen.
  *
  * The engine passes it as `caps.steps` to a node declaring `needsSteps`. A step is a JSON object
@@ -1123,21 +1150,11 @@ export class NodeSteps {
    * Check the field types and that the current start is counted; `prior` and `calls` are
    * copied, each call frozen.
    *
-   * @param currentCalls Reads the node's calls as the run state holds them now (answers and
-   *   closes since the evaluation began); the engine passes it, and `currentCalls()` gives `calls`
-   *   without it.
-   * @param nextStep Reads the `n` the node's next step gets in the run state, which counts the
-   *   steps the engine appends for the node without `record` (a steer read, a host's answer); the
-   *   engine passes it, and `next` counts only `record`'s steps without it.
-   * @param resumesSince Counts the resumes that cut the node off since a step, from the run
-   *   state; the engine passes it, and `resumesSince` is 0 without it.
-   * @param seqOf Gives a step's seq, from the run state; the engine passes it, and `seqOf` throws
-   *   without it.
-   * @param flowCalls Reads the flow calls enclosing the node, from the run state; the engine
-   *   passes it, and `flowCalls()` is empty without it.
+   * @param readers What the node reads from the run state; the engine passes them, and each one
+   *   left out takes its value outside a run.
    * @throws TypeError when `starts` isn't a safe integer, `prior` isn't an array of plain
-   *   records, `record` isn't a function, `calls` isn't an array, or `currentCalls`, `nextStep`,
-   *   `resumesSince`, `seqOf` or `flowCalls` isn't a function or `null`.
+   *   records, `record` isn't a function, `calls` isn't an array, or a reader isn't a function or
+   *   `null`.
    * @throws RangeError when `starts` is less than 1 or `maxEventBytes` isn't a positive safe
    *   integer.
    */
@@ -1148,11 +1165,7 @@ export class NodeSteps {
     calls: readonly CallView[] = [],
     maxEventBytes: number = MAX_EVENT_BYTES,
     durable: boolean = true,
-    currentCalls: (() => readonly CallView[]) | null = null,
-    nextStep: (() => number) | null = null,
-    resumesSince: ((n: number) => number) | null = null,
-    seqOf: ((n: number) => number) | null = null,
-    flowCalls: (() => readonly EnclosingFlowCall[]) | null = null,
+    readers: NodeStepsReaders = {},
   ) {
     if (typeof starts !== "number" || !Number.isSafeInteger(starts)) throw new YianTypeError("starts must be an int");
     if (starts < 1) throw new YianRangeError("starts must be at least 1");
@@ -1161,13 +1174,11 @@ export class NodeSteps {
     }
     if (typeof record !== "function") throw new YianTypeError("record must be callable");
     if (!Array.isArray(calls)) throw new YianTypeError("calls must be an array");
-    if (currentCalls !== null && typeof currentCalls !== "function") throw new YianTypeError("currentCalls must be callable or null");
-    if (nextStep !== null && typeof nextStep !== "function") throw new YianTypeError("nextStep must be callable or null");
-    if (resumesSince !== null && typeof resumesSince !== "function") {
-      throw new YianTypeError("resumesSince must be callable or null");
+    for (const name of NODE_STEPS_READERS) {
+      const reader = readers[name] ?? null;
+      if (reader !== null && typeof reader !== "function") throw new YianTypeError(`${name} must be callable or null`);
     }
-    if (seqOf !== null && typeof seqOf !== "function") throw new YianTypeError("seqOf must be callable or null");
-    if (flowCalls !== null && typeof flowCalls !== "function") throw new YianTypeError("flowCalls must be callable or null");
+    const { currentCalls = null, nextStep = null, resumesSince = null, seqOf = null, flowCalls = null } = readers;
     if (typeof maxEventBytes !== "number" || !Number.isSafeInteger(maxEventBytes) || maxEventBytes < 1) {
       throw new YianRangeError("maxEventBytes must be a positive int");
     }
@@ -1220,6 +1231,20 @@ export class NodeSteps {
   flowCalls(): readonly EnclosingFlowCall[] {
     const calls = this.#flowCalls?.() ?? [];
     return Object.freeze(calls.map(({ scope, callId }) => Object.freeze({ scope, callId })));
+  }
+
+  /**
+   * A copy that records through `record`, which wraps this one's `record`, and reads everything
+   * else from this one.
+   */
+  withRecord(record: NodeSteps["record"]): NodeSteps {
+    return new NodeSteps(this.starts, this.prior, record, this.calls, this.maxEventBytes, this.durable, {
+      currentCalls: () => this.currentCalls(),
+      nextStep: () => this.next,
+      resumesSince: this.resumesSince,
+      seqOf: this.seqOf,
+      flowCalls: () => this.flowCalls(),
+    });
   }
 }
 

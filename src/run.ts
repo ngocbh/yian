@@ -185,7 +185,7 @@ import {
 import { Skill } from "./skills/catalog.ts";
 import { isAlreadyOpenError, isMcpServer, type McpServer, openTogether } from "./tools/mcp.ts";
 import { ASK, ASK_USER, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "./tools/context.ts";
-import { type BeforeToolCall, gateOf, isToolSource, type ToolSource } from "./tools/gate.ts";
+import { type BeforeToolCall, checkGateText, gateOf, isToolSource, type ToolSource } from "./tools/gate.ts";
 import {
   checkVisibleNames,
   expandGrants,
@@ -2271,6 +2271,41 @@ export async function complete(
       (Object.hasOwn(fields, "error") && typeof fields.error === "string"));
   if (!shaped) throw new YianTypeError("a complete's result must be {output} or {error: string}");
   return (await deliverTo(log, { kind: "complete", callId, result }, options)).seq;
+}
+
+/** The options of `release`: `DeliveryOptions`, and the host's audit note. */
+export interface ReleaseOptions extends DeliveryOptions {
+  /** Stored on the `released` step for audit; the model never reads it. */
+  note?: string | null;
+}
+
+/**
+ * Run the held call `callId` of the run at `log` once, as the model asked it, when the run next
+ * moves: its agent runs it at its first evaluation that begins after the release, checked again
+ * and not asked about again. If a crash may have cut it after it started, a resumable tool is sent
+ * again under the same call id, and any other is closed `crashed`. An interrupt before it starts
+ * skips it. Delivered as `send` is; it runs nothing itself.
+ *
+ * @param log The run's JSONL log.
+ * @param callId The held call's id, as `CallHeld` or `pendingCalls` gives it.
+ * @param options See `DeliveryOptions`; `note` is stored on the `released` step.
+ * @returns The `released` step's seq, or `null` when the call was released before, whatever its
+ *   state now (the first release and its note stand).
+ * @throws TypeError when `callId` isn't a string or `options.note` isn't a string or `null`.
+ * @throws RangeError when `options.note` is empty, has a lone surrogate, or is over
+ *   `GATE_TEXT_MAX_BYTES`.
+ * @throws DeliveryRefused (nothing appended), in this order: `ended`, `not_started`,
+ *   `unknown_call` (no such call, or its node doesn't run, wait or start again), `not_host_call`
+ *   for a take, a sleep or a flow call, `not_held` for a host call whose handler pended (its tool
+ *   ran), `call_settled` (with `callState`) for a hold `complete` answered or a record closed.
+ * @throws RunBusyError, RangeError, LoadError, DefaultsMismatchError and `ENOENT`, as `send`.
+ */
+export async function release(log: string, callId: string, options: ReleaseOptions = {}): Promise<number | null> {
+  if (typeof callId !== "string") throw new YianTypeError("callId must be a string");
+  const note = options.note ?? null;
+  if (note !== null && typeof note !== "string") throw new YianTypeError("note must be a string or null");
+  if (note !== null) checkGateText(note, "note");
+  return (await deliverTo(log, { kind: "release", callId, note }, options)).seq;
 }
 
 /**

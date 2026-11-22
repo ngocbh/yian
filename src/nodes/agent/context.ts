@@ -235,7 +235,8 @@ export interface PriorAttempts {
  * `foldSteps` groups them: each logical call is taken back (`takeRecorded`) in place of
  * calling the model, and the retried attempts after the last one are the next live call's
  * (`priorAttempts`). Each `tool_result` is found by its reply and its call id (`recordedResult`),
- * each `pending` step by its call id, a hold's apart (`recordedPending`, `recordedHold`).
+ * each `pending` step by its call id, a hold's apart (`recordedPending`, `recordedHold`), and each
+ * host's `released` step by its call id (`recordedRelease`).
  * The `steer` steps before a logical call are handed back (`takeRecordedSteers`), in order, before
  * it, with the values the engine attached to each copy; those after the last call are handed back
  * after it. An `interrupted` step, the honor of a host interrupt, ends the replay where it was
@@ -264,6 +265,8 @@ export class AgentSteps {
   readonly #pending: ReadonlyMap<string, number>;
   /** The `group_end` of each recorded hold, by its yian call id. */
   readonly #holds: ReadonlyMap<string, number>;
+  /** The `n` of each recorded `released` step, by the yian call id it releases. */
+  readonly #released: ReadonlyMap<string, number>;
   /** The `n` of the latest reply this start took or recorded, which its `tool_result` steps answer. */
   #reply: number | null = null;
   /** The result keys (`call_id`) of the `tool_result` steps this start wrote for `#reply`. */
@@ -306,6 +309,8 @@ export class AgentSteps {
         .filter(({ step }) => step["held"] === true)
         .map(({ step }) => [step["call_id"] as string, Number(step["group_end"])]),
     );
+    const released = (steps?.prior ?? []).flatMap((step, index) => (step["kind"] === "released" ? [{ step, n: index + 1 }] : []));
+    this.#released = new Map(released.map(({ step, n }) => [step["call_id"] as string, n]));
     for (const step of steps?.prior ?? []) {
       if (step["kind"] !== "pending" || step["flow"] !== true) continue;
       const tool = step["tool"] as string;
@@ -433,6 +438,11 @@ export class AgentSteps {
    */
   recordedHold(callId: string): number | null {
     return this.#holds.get(callId) ?? null;
+  }
+
+  /** Return the `n` of the `released` step a host recorded for yian call `callId`, or `null` when none did. */
+  recordedRelease(callId: string): number | null {
+    return this.#released.get(callId) ?? null;
   }
 
   /**

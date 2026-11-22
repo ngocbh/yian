@@ -1,11 +1,8 @@
 /**
- * The host's check before each tool call an AGENT's model makes (`BeforeToolCall`): the call it
- * sees, where the call's tool comes from (`ToolSource`), the decisions it may give, and the bound
- * on the texts a decision carries. A run with a hook records that it is gated, and a resume of it
- * needs one.
- *
- * Until hosts can pass the hook as an option, a run's options hold it under the `GATE` key, which
- * this package's entry points don't export.
+ * The host's check before each tool call an AGENT's model makes (`BeforeToolCall`, the
+ * `beforeToolCall` option of `runFlow` and `advance`): the call it sees, where the call's tool
+ * comes from (`ToolSource`), the decisions it may give, and the bound on the texts a decision
+ * carries. A run with a hook records that it is gated, and a resume of it needs one.
  *
  * Knows about: tools/context and typesys.
  */
@@ -39,7 +36,7 @@ export interface FlowCallScope {
 
 /** One model-made tool call before it runs. Deep-frozen. */
 export interface GatedCall {
-  /** `<run>/<node>/<n>/<index>`, the id `complete` takes. */
+  /** `<run>/<node>/<n>/<index>`, the id `complete` and `release` take. */
   readonly callId: string;
   /** The agent's expanded node id. */
   readonly node: string;
@@ -82,9 +79,9 @@ export type GateDecision =
  * on its module's thread), which must have no effects, since a checked call may never run. It
  * reads the model's arguments, never a validator's output. A refused flow call never starts its
  * flow. A held call's tool doesn't run: the host answers it with `complete`, whose result the model
- * reads. The reply's calls before it and in its concurrency group run; its later calls wait until
- * every hold is answered, then are asked about. A call sent again after a cut can't be held, since
- * it may have run: it is closed `crashed`.
+ * reads, or runs it once with `release`. The reply's calls before it and in its concurrency group
+ * run; its later calls wait until every hold is answered, then are asked about. A call sent again
+ * after a cut can't be held, since it may have run: it is closed `crashed`.
  */
 export type BeforeToolCall = (call: GatedCall, ctx: GateContext) => GateDecision | PromiseLike<GateDecision>;
 
@@ -135,21 +132,4 @@ export function checkGateText(value: unknown, what: string): string {
     throw new YianRangeError(`${what} is ${size} UTF-8 bytes, over the limit of ${GATE_TEXT_MAX_BYTES}`);
   }
   return value;
-}
-
-/**
- * @internal The key a `runFlow` or `advance` options object holds its `beforeToolCall` hook under.
- * A symbol, so a spread copy of the options keeps the hook, as it will keep a named option.
- */
-export const GATE: unique symbol = Symbol("yian.beforeToolCall");
-
-/**
- * @internal The `beforeToolCall` hook `options` holds under `GATE`, or `null` when it holds none.
- *
- * @throws TypeError when the hook isn't a function, `null` or `undefined`.
- */
-export function gateOf(options: object): BeforeToolCall | null {
-  const hook: unknown = (options as { [GATE]?: unknown })[GATE] ?? null;
-  if (hook !== null && typeof hook !== "function") throw new YianTypeError("beforeToolCall must be a function or null");
-  return hook as BeforeToolCall | null;
 }

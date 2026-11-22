@@ -14,12 +14,24 @@ import { loadFlow } from "../src/compose/loader.ts";
 import type { RunEvent } from "../src/events.ts";
 import { ScriptedModel } from "../src/llm/testing.ts";
 import { ToolNode } from "../src/nodes/tool/node.ts";
-import { advance, cancel, complete, inspectRun, interrupt, pendingCalls, release, replayRunLog, runFlow } from "../src/run.ts";
+import {
+  advance,
+  agentCall,
+  agentCalls,
+  cancel,
+  complete,
+  inspectRun,
+  interrupt,
+  pendingCalls,
+  release,
+  replayRunLog,
+  runFlow,
+} from "../src/run.ts";
 import { JsonlRunLog, NodeStepRecord, readRunLog, RunResumedRecord, RunStartedRecord } from "../src/runtime/log.ts";
 import { commitPrepared, DeliveryRefused, prepareRelease } from "../src/runtime/state.ts";
 import { pending } from "../src/tools/context.ts";
 import { FunctionTool, tool } from "../src/tools/function_tools.ts";
-import type { BeforeToolCall, GatedCall, ToolSource } from "../src/tools/gate.ts";
+import type { BeforeToolCall, GatedCall, GateDecision, ToolSource } from "../src/tools/gate.ts";
 import { YianRangeError, YianTypeError } from "../src/typesys/errors.ts";
 import { gated } from "./helpers/gate.ts";
 import { completeByHand } from "./helpers/inbox_fixtures.ts";
@@ -141,7 +153,7 @@ test("a hooked advance that can't move appends nothing, and the run stays ungate
   expect(resumes(log)).toEqual([]);
 });
 
-test("runFlow and advance each ask their own hook; a pending() tool's note lands on its pending step", async () => {
+test("runFlow and advance each ask the hook their beforeToolCall option holds; a pending() tool's note lands on its pending step", async () => {
   const flow = await loadFlow(`
 id: gated_agent
 name: gated_agent
@@ -165,14 +177,45 @@ output: \${reply.output}
   const second: string[] = [];
   const log = freshLog();
   const options = { log, env: NO_ENV, tools, models: serving(model) };
-  const started = await runFlow(flow, {}, gated(options, noting(first, "a person checks it")));
+  // The option itself, not the test helper: runFlow's copy of its options must keep it.
+  const started = await runFlow(flow, {}, { ...options, beforeToolCall: noting(first, "a person checks it") });
   expect(started.status, started.failure?.message).toBe("waiting");
   const held = readRunLog(log).flatMap(({ record }) => (record instanceof NodeStepRecord && record.step["kind"] === "pending" ? [record.step] : []));
   expect(held.map((step) => step["note"])).toEqual(["a person checks it"]);
   await complete(log, pendingCalls(log)[0]!.callId, { output: "looked up" }, { env: NO_ENV });
-  const done = await advance(gated(options, noting(second)));
+  const done = await advance({ ...options, beforeToolCall: noting(second) });
   expect(done.status, done.failure?.message).toBe("succeeded");
   expect([first, second]).toEqual([["lookup"], ["find"]]);
+});
+
+test("agentCall shows what the hook decided of each call: a refusal, a run's note, a hold and its release's note", async () => {
+  const flow = await loadFlow(`
+id: viewed
+name: viewed
+llm_config: {provider: openai, model: test-model}
+nodes:
+  reply:
+    kind: agent
+    prompt: go
+    tools: [find]
+output: \${reply.output}
+`);
+  const find = tool({ name: "find", description: "Find.", parameters: { type: "object", properties: {} }, execute: () => "found" });
+  const replies = ["c1", "c2", "c3"].map((id) => callReply(["find", {}, id]));
+  const models = serving(new ScriptedModel([...replies, textReply("done")]));
+  const answers: GateDecision[] = [{ refuse: "not now" }, { run: true, note: "a rule allows it" }, pending()];
+  const log = freshLog();
+  const options = { log, env: NO_ENV, tools: { find }, models, beforeToolCall: () => answers.shift() };
+  expect((await runFlow(flow, {}, options)).status).toBe("waiting");
+  await release(log, pendingCalls(log)[0]!.callId, { env: NO_ENV, note: "approved" });
+  expect((await advance(options)).status).toBe("succeeded");
+  const views = await Promise.all(agentCalls(log).map((entry) => agentCall(log, entry, { env: NO_ENV })));
+  const seen = views.flatMap((view) => view.toolResults.map(({ output, closed, note, held, releaseNote }) => [output, closed, note, held, releaseNote]));
+  expect(seen).toEqual([
+    ["not now", "refused", null, false, null],
+    ["found", null, "a rule allows it", false, null],
+    ["found", null, null, true, "approved"],
+  ]);
 });
 
 describe("a held call through the host calls", () => {

@@ -90,6 +90,7 @@ test("only the final log-only runtime and run API remain", () => {
     skills: true,
     context: true,
     completesCalls: true,
+    beforeToolCall: true,
     signal: true,
     env: true,
     scheduler: true,
@@ -97,7 +98,7 @@ test("only the final log-only runtime and run API remain", () => {
     models: true,
     parent: true,
   };
-  expect(Object.keys(options)).toHaveLength(18);
+  expect(Object.keys(options)).toHaveLength(19);
   expect(run.runFlow.length).toBe(2);
   const advanceOptions: Record<keyof run.AdvanceOptions, true> = {
     log: true,
@@ -114,6 +115,7 @@ test("only the final log-only runtime and run API remain", () => {
     headers: true,
     context: true,
     completesCalls: true,
+    beforeToolCall: true,
     memory: true,
     signal: true,
     env: true,
@@ -122,7 +124,7 @@ test("only the final log-only runtime and run API remain", () => {
     models: true,
     checkLlmConfigs: true,
   };
-  expect(Object.keys(advanceOptions)).toHaveLength(21);
+  expect(Object.keys(advanceOptions)).toHaveLength(22);
   expect(run.advance.length).toBe(1);
 
   const result = new run.RunResult({ input: {}, status: "succeeded", runId: "r1", log: null });
@@ -150,6 +152,7 @@ test("the package root exports exactly its documented root list plus ToolAttempt
     send: run.send,
     withdraw: run.withdraw,
     complete: run.complete,
+    release: run.release,
     close: run.close,
     interrupt: run.interrupt,
     cancel: run.cancel,

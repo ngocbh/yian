@@ -16,9 +16,11 @@
  * `ReportedToolError`, which a tool throws for a failure an AGENT's model reads as the call's
  * result, `PermanentToolError` and `TransientToolError`, which a tool throws to stop or steer a
  * TOOL node's retries, and `ToolCheckError`, thrown when a check yian runs on a call fails; yian
- * classifies them by brand, with `toolErrorKinds` and the guards. `tools/mcp` holds `mcpServer`,
- * which describes a Model Context Protocol server, the `McpServer` it returns, whose opened tools
- * a `ToolSet` takes as one group, and the `McpError` classes its calls throw. `tools/grants`
+ * classifies them by brand, with `toolErrorKinds` and the guards. `tools/gate` holds the types of a
+ * run's `beforeToolCall` hook: the call it checks (`GatedCall`, with its `ToolSource`), its context
+ * and its decision. `tools/mcp` holds `mcpServer`, which describes a Model Context Protocol
+ * server, the `McpServer` it returns, whose opened tools a `ToolSet` takes as one group, and the
+ * `McpError` classes its calls throw. `tools/grants`
  * parses an AGENT's `tools:` grants, names a group's tools `<group>_<tool>` for a model, and
  * expands grants over `GrantScope`s, a `ToolSet`'s `scope()` among them.
  *
@@ -48,6 +50,14 @@ export {
   tool,
   type ToolOptions,
 } from "./function_tools.ts";
+export type {
+  BeforeToolCall,
+  FlowCallScope,
+  GateContext,
+  GatedCall,
+  GateDecision,
+  ToolSource,
+} from "./gate.ts";
 export { type GrantScope } from "./grants.ts";
 export type { JsonObject } from "../typesys/json.ts";
 export {

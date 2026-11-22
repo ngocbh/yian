@@ -388,7 +388,7 @@
           "type": "object",
           "additionalProperties": {"type": "integer", "minimum": 0}
         },
-        "ready": {"type": "boolean", "description": "For a waiting run, whether some waiting node can be woken now (every call it waits on is settled); false otherwise. A host also wakes the run once wake_at is due."},
+        "ready": {"type": "boolean", "description": "For a waiting run, whether some waiting node can be woken now (every call it waits on is settled, or a held call it waits on is no longer open); false otherwise. A host also wakes the run once wake_at is due."},
         "wake_at": {"type": ["string", "null"], "description": "For a waiting run, the earliest deadline of an open call of a waiting node, as a UTC time such as 2026-10-20T14:02:11.123Z; null when none has one, and for any other status."}
       }
     },

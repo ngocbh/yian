@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { ChatRuns, type ChatRunsOptions } from "../../src/cli/chat_run_tools.ts";
-import { ChildRuns, type ChildStatus, childEvent, shownStatus } from "../../src/cli/chat_runs.ts";
+import { type BoundMemories, ChildRuns, type ChildStatus, childEvent, shownStatus } from "../../src/cli/chat_runs.ts";
 import { loadConfinedText } from "../../src/cli/confined_load.ts";
 import { defaultIdentity, defaultLocation, projectKey } from "../../src/cli/memory_bind.ts";
 import { MissingKeyError } from "../../src/cli/utils.ts";
@@ -26,6 +26,7 @@ import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { advance, inspectRun, RunResult } from "../../src/run.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
+import { FileMemory } from "../../src/memory/file.ts";
 import { readRunLog, type RunStartedRecord } from "../../src/runtime/log.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { tool } from "../../src/tools/function_tools.ts";
@@ -138,6 +139,8 @@ test(
   "the driver leaves to its host's hooks the key preflight, the memories, the errors it reports and the console",
   async () => {
     const calls: string[] = [];
+    const scrubbed: BoundMemories[] = [];
+    const lessons = new FileMemory({ root: join(root, "lessons") });
     const children = new ChildRuns({
       codeRoot: root,
       logDir: join(root, "runs"),
@@ -148,14 +151,17 @@ test(
       skillsFor: () => null,
       preflight: (flow) => void calls.push(`preflight ${flow.name}`),
       memories: {
-        bind: (flow, project, note) => {
+        bind: (flow, project, note): BoundMemories => {
           calls.push(`bind ${flow.name} in ${project}`);
           if (project === null) throw new Error("no project");
           note("a memory was made");
-          return {};
+          return flow.name === "fake" ? { lessons } : {};
         },
         drift: (drift) => `drift ${drift.input}`,
-        scrub: (error) => new Error(`scrubbed: ${(error as Error).message}`),
+        scrub: (error, memory) => {
+          scrubbed.push(memory);
+          return new Error(`scrubbed: ${(error as Error).message}`);
+        },
       },
       onConsole: ({ text }) => void calls.push(`console ${text}`),
     });
@@ -164,8 +170,14 @@ test(
     expect(await settled(children, "r1")).toMatchObject({ status: "succeeded", memory_notes: ["a memory was made"] });
     await expect(children.start(await flow(GREET), { who: "a" })).rejects.toThrow("scrubbed: no project");
     // Refused by `runFlow` before the run starts.
-    const fake = "id: fake\nname: fake\nnodes:\n  f: {kind: call, call: fake}\noutput: ${f.output}\n";
+    const fake =
+      "id: fake\nname: fake\ninput:\n  lessons: !FileMemory\nnodes:\n  f: {kind: call, call: fake}\noutput: ${f.output}\n";
     await expect(children.start(await flow(fake, "fake.yaml"), {}, { project: "p" })).rejects.toThrow("scrubbed: ");
+    // A bind's own error has no instances to scrub; a run's has the child's.
+    expect(scrubbed).toHaveLength(2);
+    expect(scrubbed[0]).toEqual({});
+    expect(Object.keys(scrubbed[1]!)).toEqual(["lessons"]);
+    expect(scrubbed[1]!["lessons"]).toBe(lessons);
     expect(calls).toEqual([
       "preflight chatty",
       "bind chatty in p",

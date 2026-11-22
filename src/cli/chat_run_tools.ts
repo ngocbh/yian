@@ -34,7 +34,7 @@ import { type FunctionTool, stringArg, stringArguments, tool } from "../tools/fu
 import { grantText, visibleToolName } from "../tools/grants.ts";
 import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { buildValueAs, isInboxType, isMemoryType, renderValuePath, TypeCheckError } from "../typesys/values.ts";
-import { ChildRuns, type ChildRunsOptions, type ChildStatus, cutText, shownStatus } from "./chat_runs.ts";
+import { ChildRuns, type ChildRunsOptions, type ChildStatus, cutStatusText, shownStatus } from "./chat_runs.ts";
 import {
   type ChatToolHost,
   chatFileTools,
@@ -248,7 +248,7 @@ interface StartHooks<T extends StartTarget> {
 }
 
 /** A flow `start_flow` names in the chat's folder: its real path and text, and whether it is a draft. */
-interface ChatStart extends StartTarget {
+interface ChatStartTarget extends StartTarget {
   readonly real: string;
   readonly text: string;
   readonly draft: boolean;
@@ -427,7 +427,7 @@ async function loadForStart(
  * them; the user approves each start on the terminal, unless they approved the same flow,
  * unchanged, for this chat.
  */
-function chatStart(host: ChatToolHost, runs: ChatRuns): StartHooks<ChatStart> {
+function chatStart(host: ChatToolHost, runs: ChatRuns): StartHooks<ChatStartTarget> {
   // The approvals given "for this chat", by real path: the digest of what was approved.
   const approved = new Map<string, string>();
   return {
@@ -461,7 +461,7 @@ function chatStart(host: ChatToolHost, runs: ChatRuns): StartHooks<ChatStart> {
         title: startTitle(file, draft, requester),
         body: [
           `Starts ${draft ? "the draft " : ""}${file} in the background.`,
-          `inputs: ${cutText(JSON.stringify(inputs))}`,
+          `inputs: ${cutStatusText(JSON.stringify(inputs))}`,
           ...can,
           ...memoryLine(marked),
         ].join("\n"),
@@ -493,7 +493,7 @@ function chatStart(host: ChatToolHost, runs: ChatRuns): StartHooks<ChatStart> {
  */
 export function chatRunTools(host: ChatToolHost, runs: ChatRuns, options: ChatRunToolsOptions = {}): FunctionTool[] {
   const { seen = null, scheduler = realScheduler, report = null, authoring = null } = options;
-  const start = chatStart(host, runs);
+  const starts = chatStart(host, runs);
   const chatView = view(true);
   const { show } = chatView;
   const runArgument = (description: string, ...more: [name: string, description: string][]) =>
@@ -812,21 +812,21 @@ export function chatRunTools(host: ChatToolHost, runs: ChatRuns, options: ChatRu
   }
 
   /**
-   * Start the flow `args` name with their `inputs` once `start` lets it, as `start_flow`
+   * Start the flow `args` name with their `inputs` once `starts` lets it, as `start_flow`
    * describes, showing it through `through`. A library is returned as not started, without
-   * asking, and so is every outcome once `start` is asked.
+   * asking, and so is every outcome once `starts` is asked.
    */
   async function startFlow(
     through: View,
     args: Record<string, unknown>,
     signal: AbortSignal,
   ): Promise<string | Record<string, unknown>> {
-    const target = await start.resolve(args);
+    const target = await starts.resolve(args);
     const { flow, name, project } = target;
     if (flow.library !== null) return `not started: ${libraryRunMessage(flow)}`;
     const inputs = args["inputs"];
     checkStartInputs(flow, inputs);
-    const refused = await start.approve(target, inputs, through.requester, signal);
+    const refused = await starts.approve(target, inputs, through.requester, signal);
     if (refused !== null) return `not started: ${refused}`;
     let id: string;
     try {

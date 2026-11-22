@@ -65,7 +65,7 @@ import { isInboxType, typeEquals, type Value, writeAsJson, writeAsText } from ".
 const EVENT_BODY_CHARS = 2000;
 
 /** The most asks, or waits, a child event or a status shown to the model lists. */
-export const LIST_ITEMS = 20;
+const LIST_ITEMS = 20;
 
 /** The most characters of each text field a run tool's status shows the model. */
 const STATUS_TEXT_CHARS = 4000;
@@ -123,10 +123,10 @@ export interface ChildStatus {
 type Unnumbered = Omit<ChildStatus, "seq">;
 
 /** A child's memory instances, by input name. */
-export type ChildMemory = Readonly<Record<string, MemoryBase>>;
+export type BoundMemories = Readonly<Record<string, MemoryBase>>;
 
 /** How a host binds the children's memory inputs, and keeps them out of what the driver reports. */
-export interface ChildMemories {
+export interface MemoryHooks {
   /**
    * Bind `flow`'s memory inputs for a child whose flow file is in the folder `project` (`null` for
    * a flow with no file); every pass of the child gets these instances. `note` takes a line for the
@@ -134,14 +134,14 @@ export interface ChildMemories {
    *
    * @throws To refuse the start, before anything is written.
    */
-  bind(flow: ComposedFlow, project: string | null, note: (line: string) => void): ChildMemory;
+  bind(flow: ComposedFlow, project: string | null, note: (line: string) => void): BoundMemories;
   /** The line for a memory a crash resume found changed since its run started. */
   drift(drift: MemoryDrift): string;
   /**
    * `error` as the driver may report it: a start's rejection, a failed child's note. `memory` is the
    * child's instances, or none for a bind's own error.
    */
-  scrub(error: unknown, memory: ChildMemory): unknown;
+  scrub(error: unknown, memory: BoundMemories): unknown;
 }
 
 /** What a `ChildRuns` needs from its host. */
@@ -166,7 +166,7 @@ export interface ChildRunsOptions {
    */
   parentRunId: string;
   /** How the children's memory inputs are bound. */
-  memories: ChildMemories;
+  memories: MemoryHooks;
   /**
    * Check that `flow` can start with `llmConfig` and `inputs` before anything is written: that
    * the provider keys its agents need are there, say. What it throws, `start` throws.
@@ -230,7 +230,7 @@ interface Child {
   /** The tools, skills and memories every pass of the child is given. */
   readonly tools: Record<string, ToolEntry>;
   readonly skills: ReadonlyMap<string, Skill> | null;
-  readonly memory: ChildMemory;
+  readonly memory: BoundMemories;
   /** The last published status. */
   status: ChildStatus;
   readonly waiters: Set<Waiter>;
@@ -354,7 +354,7 @@ export function childEvent(status: ChildStatus): ChildEvent | null {
 }
 
 /** @internal `text` cut to `STATUS_TEXT_CHARS` characters, with a note when it was cut. */
-export function cutText(text: string): string {
+export function cutStatusText(text: string): string {
   if (text.length <= STATUS_TEXT_CHARS) return text;
   return `${text.slice(0, STATUS_TEXT_CHARS)}... (cut at ${STATUS_TEXT_CHARS} characters)`;
 }
@@ -374,16 +374,16 @@ export function shownStatus(status: ChildStatus): Record<string, unknown> {
   if (output !== undefined) {
     // An output too long as JSON is shown as its cut JSON text.
     const json = writeAsJson(output as Value);
-    if (typeof output === "string") shown["output"] = cutText(output);
-    else shown["output"] = json.length > STATUS_TEXT_CHARS ? cutText(json) : output;
+    if (typeof output === "string") shown["output"] = cutStatusText(output);
+    else shown["output"] = json.length > STATUS_TEXT_CHARS ? cutStatusText(json) : output;
   }
-  if (failure !== undefined) shown["failure"] = { ...failure, message: cutText(failure.message) };
+  if (failure !== undefined) shown["failure"] = { ...failure, message: cutStatusText(failure.message) };
   if (asks !== undefined) {
-    shown["asks"] = asks.slice(0, LIST_ITEMS).map((ask) => ({ ...ask, question: cutText(ask.question) }));
+    shown["asks"] = asks.slice(0, LIST_ITEMS).map((ask) => ({ ...ask, question: cutStatusText(ask.question) }));
     if (asks.length > LIST_ITEMS) more.unshift(`${asks.length - LIST_ITEMS} more asks`);
   }
-  if (replies !== undefined) shown["replies"] = replies.map(cutText);
-  if (note !== undefined) shown["note"] = cutText(note);
+  if (replies !== undefined) shown["replies"] = replies.map(cutStatusText);
+  if (note !== undefined) shown["note"] = cutStatusText(note);
   if (more.length > 0) shown["not_shown"] = `${more.join(" and ")}; the run's log has all`;
   return shown;
 }
@@ -479,7 +479,7 @@ export class ChildRuns {
     check();
     // A memory the start creates is said with the pass.
     const fresh: Said[] = [];
-    let memory: ChildMemory;
+    let memory: BoundMemories;
     try {
       memory = memories.bind(flow, project, (text) => void fresh.push({ kind: "memory", text }));
     } catch (error) {

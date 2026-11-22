@@ -22,6 +22,7 @@ import { parseDocument } from "yaml";
 import {
   CaseFailure,
   checkCase,
+  checkReleasedFirst,
   compare,
   crashSweep,
   sourcesByRecord,
@@ -57,6 +58,7 @@ import {
   NodeWaitingRecord,
   NodeWokenRecord,
   PoolCommitRecord,
+  readRunLog,
   RecordEnvelope,
   type RunRecord,
   RunCancelledRecord,
@@ -419,14 +421,16 @@ describe("checkCase", () => {
       "1",
     ].map((entry) => [`${RUN}host: {gate: {t: [${entry}]}}`, GATE_ENTRY("host.gate.t[0]")]),
     [`${RUN}host: {gate: {t: {n: [{x: 1}]}}}`, GATE_ENTRY("host.gate.t.n[0]")],
-    [`${RESUME}resume: {gate: 1}`, "`resume.gate` must be null"],
+    [`${RESUME}resume: {gate: 1}`, "`resume.gate` must be a mapping"],
+    [`${RESUME}resume: {gate: {t: [{x: 1}]}}`, GATE_ENTRY("resume.gate.t[0]")],
+    [`${RUN}host: {resumable_tools: quote}`, "`host.resumable_tools` must be a list of tool names"],
     [`${RUN}host: {sends: [{withdraw: m, after: {tool_call: 1}}]}`, "`host.sends[0].after.node` must be a node id"],
     [`${RUN}host: {sends: [{inbox: m, event: a, after: {tool_call: 1}}]}`, "`host.sends[0].after.node` must be a node id"],
     [`${RUN}host: {sends: [{interrupt: m, after: {tool_call: 1}}]}`, "`host.sends[0].after.node` must be a node id"],
     [`${RUN}host: {sends: [{interrupt: m, after: {node: chat, tool_call: 0}}]}`, COUNTS],
     [
       `${RUN}host: {sends: [{inbox: m, event: a, after: {node: chat, chunk: 1}}]}`,
-      "`host.sends[0].after` is `{model_call, chunk}`, `{model_call}`, `{tool_call}` or `{gate_call}`",
+      "`host.sends[0].after` is `{model_call, chunk}`, `{model_call}`, `{tool_call}`, `{gate_call}` or `{refusal}`",
     ],
     [`${LOAD}host: {sends: []}`, "`host` is not a key of a `load` case"],
     [`${RUN}host: {models: 1}`, "`host.models` must be a mapping"],
@@ -592,7 +596,7 @@ describe("checkCase", () => {
     [`${RUN}host: {stop: {a: {after: {tool_call: 1}, steer: [x]}}}`, "unknown key `host.stop.a.steer`"],
     [
       `${RUN}host: {stop: {a: {after: {chunk: 1}}}}`,
-      "`host.stop.a.after` is `{model_call, chunk}`, `{model_call}`, `{tool_call}` or `{gate_call}`",
+      "`host.stop.a.after` is `{model_call, chunk}`, `{model_call}`, `{tool_call}`, `{gate_call}` or `{refusal}`",
     ],
     [`${RUN}host: {stop: {a: {after: {model_call: 0}}}}`, STOP_COUNTS],
     [`${RUN}host: {stop: {a: {after: {model_call: 1, chunk: -1}}}}`, STOP_COUNTS],
@@ -668,11 +672,13 @@ describe("checkCase", () => {
       "flow: x",
       "host:",
       "  gate: {t: [{run: true}, {run: true, note: n, later: true}, {refuse: r}, {hold: true}, {throw: e, later: true}], u: {n: [{refuse: \"\"}]}}",
-      "  sends: [{release: r/n/1/0, note: ok, hold: true}, {release: r/n/1/1}, {release: r/n/1/2, after: {node: n, gate_call: 1}}]",
+      "  sends: [{release: r/n/1/0, note: ok, hold: true}, {release: r/n/1/1}, {release: r/n/1/2, after: {node: n, gate_call: 1}}, {interrupt: m, after: {node: n, refusal: 1}}]",
+      "  resumable_tools: [quote]",
       "  stop: {n: {after: {gate_call: 2}}}",
       "expect: {output: 1, gate_calls: []}",
     ].join("\n"),
     `${BARE_RESUME}run: {num_workers: 0}\nhost: {crash_after_record: 1, gate: {t: [{hold: true}]}}\nresume: {gate: null}`,
+    `${BARE_RESUME}run: {num_workers: 0}\nhost: {crash_after_record: 1}\nresume: {gate: {t: [{run: true}], u: {n: [{refuse: r}]}}}`,
     `${EXPR}expr: a\nitem: 1`,
     `${EXPR}expr: a\nmode: condition`,
     `${EXPR}expr: a\nitem: 1\ntypedefs: {}\nmode: strict`,
@@ -1233,6 +1239,16 @@ describe("run", () => {
       .replace("results: [{return: saved}]", "results: []")
       .replace(/ {6}- reply: \{[^\n]*text: done\}\]\}\n/, "");
     await runCase(text);
+  });
+
+  test("a stub call of a held call that comes before its `released` step fails the case", async () => {
+    await runCase(GATE_CASE("{save: [{hold: true}]}", "[{release: r1/agent/1/0}]"));
+    const log = join(made.at(-1)!, "run.jsonl");
+    const released = readRunLog(log).find(({ record }) => record instanceof NodeStepRecord && record.step["kind"] === "released")!;
+    checkReleasedFirst(log, [{ callId: "r1/agent/1/0", sequence: released.seq + 1 }]);
+    expect(() => checkReleasedFirst(log, [{ callId: "r1/agent/1/0", sequence: released.seq }], " (here)")).toThrow(
+      "held call r1/agent/1/0 ran before a `released` step for it (here)",
+    );
   });
 
   test("a run still waiting after `host.sends` ran out fails the case", async () => {
@@ -2243,7 +2259,8 @@ expect:
     ["isn't resumable: the resume closes it crashed", false],
     ["is resumable: the resume sends it again", true],
   ])("a module tool's call that a cut cut off %s", async (_, resumable) => {
-    // `crm_lookup` runs on its module's thread, which no stub sees; the sweep counts its call.
+    // `crm_lookup` runs on its module's thread, which no stub sees; the sweep counts its call, and
+    // reads that it is resumable from `host.resumable_tools`.
     const [case_, ctx] = sweepCase(`kind: run
 flow: |
   id: m
@@ -2270,6 +2287,7 @@ files:
     };
 run: {run_id: r1, num_workers: 0}
 host:
+  resumable_tools: [${resumable ? "crm_lookup" : ""}]
   models:
     clerk:
       agent:
@@ -2442,6 +2460,51 @@ expect:
     };
     await expect(crashSweep(case_, ctx, { beforeResume: unwake })).rejects.toThrow(
       "`save` ran call r1/agent/1/0 2 times across the cut and the resume (crash sweep, cut after record 14)",
+    );
+  }, SWEEP);
+
+  // `HELD`, with `send` held beside `save`, now resumable, and both released on one wait.
+  const PAIR = HELD("[{release: r1/agent/1/0, hold: true}, {release: r1/agent/1/1}]")
+    .replace("tools: [save]", "tools: [save, send]")
+    .replace(
+      "results: [{return: saved}]}",
+      "concurrency_safe: true, resumable: true, results: [{return: saved}]}\n" +
+        "    send: {parameters: {type: object, properties: {}}, concurrency_safe: true, results: [{return: sent}]}",
+    )
+    .replace("gate: {save: [{hold: true}]}", "gate: {save: [{hold: true}], send: [{hold: true}]}")
+    .replace("name: save, arguments: {}}]", "name: save, arguments: {}}, {type: tool_call, id: c2, name: send, arguments: {}}]");
+
+  /** Append `step` to the log at `log` as agent `agent`'s next step, as the agent would write it. */
+  const appendStep = (log: string, step: Record<string, unknown>) => {
+    const records = readFileSync(log, "utf8").split("\n").filter((line) => line !== "").map((line) => JSON.parse(line));
+    const n = Math.max(...records.filter(({ kind }) => kind === "node_step").map(({ payload }) => payload.n)) + 1;
+    const record = { at: records.at(-1).at, kind: "node_step", payload: { n, node_id: "agent", step }, run_id: "r1", schema: SCHEMA_VERSION, seq: records.length };
+    writeFileSync(log, `${[...records, record].map((each) => JSON.stringify(each)).join("\n")}\n`);
+  };
+  /** The last record of the log at `log`, as its JSON. */
+  const lastRecord = (log: string) => JSON.parse(readFileSync(log, "utf8").trimEnd().split("\n").at(-1)!);
+
+  test("fails a resume that skips a resumable call the cut cut off, rather than sending it again", async () => {
+    const [case_, ctx] = sweepCase(PAIR);
+    // Cut after the wake that started both released calls (record 16), the resume finds `save` skipped.
+    const skipSave = (log: string) => {
+      if (lastRecord(log).kind !== "node_woken") return;
+      const output = "Not run: interrupted by the user.";
+      appendStep(log, { call_id: "c1", closed: "skipped", is_error: true, kind: "tool_result", output, started_at: null });
+    };
+    await expect(crashSweep(case_, ctx, { beforeResume: skipSave })).rejects.toThrow(
+      "the resume didn't send `save` call r1/agent/1/0 again, which the cut cut off (crash sweep, cut after record 16)",
+    );
+  }, SWEEP);
+
+  test("fails a resume that ends with an item it didn't skip undelivered, when its course is the uncut run's", async () => {
+    const [case_, ctx] = sweepCase(HELD("[{release: r1/agent/1/0}]"));
+    // Released behind the sweep's back, the resume runs the call and ends before the release item.
+    const release = (log: string) => {
+      if (lastRecord(log).payload?.step?.held === true) appendStep(log, { call_id: "r1/agent/1/0", kind: "released" });
+    };
+    await expect(crashSweep(case_, ctx, { beforeResume: release })).rejects.toThrow(
+      "the resume ended with 1 `host.sends` item undelivered (crash sweep, cut after record 10)",
     );
   }, SWEEP);
 

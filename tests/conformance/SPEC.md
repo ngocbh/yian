@@ -141,10 +141,11 @@ run's, read-only. With `host.stop`, the first run must reject with the stop, and
 continues the stopped run. Then the flow is resumed from the log with the `resume` arguments
 `num_workers` (absent: the recorded value), `api_key`, `headers`, `context` (`context` as in
 `run`), `memory` (below) and `gate`: `gate: null` resumes without the hook `host.gate` gave the
-first run. The expectations are for the resumed run: its output, the trace of
-the whole log, the events and stream of the resume call, `tool_calls` over both runs, the memory
-folders after the resume, and `memory_drift`, the inputs, in order, whose memory the resume call
-reports moved while the run was down (`RunResult.memoryDrift`).
+first run, and scripts as `host.gate`'s (labelled `resume.gate.<tool>`) give the resume a hook of
+its own. The expectations are for the resumed run: its output, the trace of
+the whole log, the events and stream of the resume call, `tool_calls` and `gate_calls` over both
+runs, the memory folders after the resume, and `memory_drift`, the inputs, in order, whose memory
+the resume call reports moved while the run was down (`RunResult.memoryDrift`).
 
 The resume binds each `host.memory` input to a new instance on the same folder, except as
 `resume.memory` says, by input: `null` binds nothing, and `{id: <identity>}` binds a memory of that
@@ -330,7 +331,11 @@ A case can't hold code, so its host is declared under `host`.
   A check past a script's end and an entry left unused fail the case as tool scripts do, so a
   replay that asks again fails; a call sent again after a cut (`attempt` above 1) gets the entry
   it got before and takes none. A check of the run's `ask_user` or `load_skill` fails the case.
-  Without `gate`, the run has no hook.
+  Without `gate`, the run has no hook. The host has no MCP server and grants no skills, so no case
+  checks an MCP tool's source, or that `load_skill` goes unchecked.
+- **`resumable_tools`**: the visible names of the run's resumable tools that aren't stubs (a tool
+  module's export whose tool says `resumable: true`). The crash sweep reads it, and a stub's own
+  `resumable`, to know which cut calls a resume sends again.
 - **`jitter`**: the random draws in `[0, 1)` retry backoffs take, TOOL retries and AGENT model
   retries alike, in the order they are drawn: one per retry that waits a backoff, even a zero one,
   and none for a `retry_after` wait (a provider's retry-after, for a model retry). The same rules
@@ -437,7 +442,10 @@ A `sends` item's `after: {node: <node id>, <point>}`, and a `stop`'s `{<node id>
   counted as in `expect.tool_calls` (`ask_user` included). Stub tools return at once, so calls
   finish in call order;
 - `{gate_call: i}`: once the hook has been asked its `i`th check of the node, before its decision
-  reaches the agent; for a `later` entry, after the hook handed back its Promise.
+  reaches the agent; for a `later` entry, after the hook handed back its Promise;
+- `{refusal: i}`: once the run has published, from `onEvent`, the `ToolCallFinished` of the node's
+  `i`th call the hook refused; that is while the gate writes its group's decisions, before any
+  of the group starts.
 
 Counts start at 1. In a `resume` case they run across the cut run and the resume, as the
 scripts do. A resumed AGENT replays its recorded calls, steers and
@@ -687,10 +695,10 @@ call past a script's end, or an entry left unused fails the sweep. An AGENT tool
 is in the cut log, but not its result, and that the uncut run made (it reached a stub, or was sent
 to a tool module's thread) is closed `crashed`, not made again (`closed: crashed` above): the
 resume must close exactly those calls, by node and call id (a call the agent never makes, such as
-an ungranted tool's, has nothing to cut off). A resumable stub's or module tool's cut call is sent
-again instead, so it is never closed and gets none of the allowances below; an answer the stub
-gave after the cut goes back with its entry. For each closed call, the
-script it took from (`host.tools` or `host.human`) may keep one entry, since what the call took
+an ungranted tool's, has nothing to cut off). A resumable stub's or module tool's cut call (one
+`host.resumable_tools` names) is sent again instead, so it is never closed and gets none of the
+allowances below; an answer the stub gave after the cut goes back with its entry. For each closed
+call, the script it took from (`host.tools` or `host.human`) may keep one entry, since what the call took
 stays taken; its agent's `host.models` script may run out, since the agent reads the closer and
 may make a model call more; and the agent's later scripted requests are compared with that call's
 result read as the closer (`content` the closer text, `is_error: true`). A filled secret in the
@@ -700,9 +708,10 @@ Every run of a sweep delivers the case's `host.sends` items as the run waits. Th
 record count after each delivery says which items a cut log holds: the cut run delivers those, and
 the resume the rest, in order, those of a wait the cut log already waits on (the rest of a
 `hold: true` chain) before it advances, and each later one as the run waits, as the uncut run did.
-An item that names a call the resume closed `crashed` (`complete`, `release`) is skipped.
-`host.gate` entries taken after the cut go back with the other scripts', and a call sent again gets
-the entry it got before.
+An item that names a call the resume closed `crashed` (`complete`, `release`) is skipped. The uncut
+run must deliver every item, and the resume every item it doesn't skip, unless its course changed
+(below). `host.gate` entries taken after the cut go back with the other scripts', and a call sent
+again gets the entry it got before.
 
 A held call's tool hasn't run, so holds narrow the calls a cut cuts off, as the log shows them. A
 held call may have started only once the cut log holds a start or wake of its node after its
@@ -711,14 +720,22 @@ have started only once every such hold has its record (the host's answer, or the
 result) and the cut log holds a start or wake after the last of their answers and releases. A call
 a `pending` step registered is cut off only when the cut leaves its node in flight and the step
 came after the node's last wake; else it waits for the host's answer. A call the hook was asked
-about counts as made, as does one that waited behind a hold, and a memory or flow tool's call is
-sent again. A resumable call is sent again and checked again, unless the uncut run held it and the
-cut log lacks that hold: a call sent again can't be held, so the resume closes it `crashed`. For
-each call closed `crashed`, its tool's `host.gate` script may keep one entry too.
+about counts as made, as does one that waited behind a hold (but `ask_user`, `load_skill`, and a
+call refused before its tool: its result has no `started_at` and no `closed`), and a memory or flow
+tool's call is sent again. A resumable call is sent again and checked again, unless the uncut run
+held it and the cut log lacks that hold: a call sent again can't be held, so the resume closes it
+`crashed`. For each call closed `crashed`, its tool's `host.gate` script may keep one entry too.
 
-Two checks hold at every cut: no non-resumable stub runs an AGENT call twice across the cut run and
-the resume, and a released call whose hold the cut log holds, but not its node's first start or
-wake after the release, runs exactly once.
+Four checks hold at every cut:
+- no non-resumable stub runs an AGENT call twice across the cut run and the resume;
+- a released call whose hold the cut log holds, but not its node's first start or wake after the
+  release, runs exactly once;
+- each resumable call the cut cut off, and the resume doesn't close `crashed`, is sent again: the
+  resume calls its stub or tool module with the call's id and an attempt above 1, or the hook
+  checks it so. A released memory or flow call reaches neither, so the resume's result for it must
+  not be a `skipped` closer;
+- a stub runs a held call only once the log holds a `released` step for it, which the uncut run
+  must keep too.
 
 A resume reads `crashed`, or sends a resumable call again, though the call never ran, in these
 accepted windows (the design's Open list):
@@ -734,14 +751,26 @@ accepted windows (the design's Open list):
   same.
 - **A Stop applied at the agent's start (#1789).** An interrupt delivered while the run is down is
   recorded after the agent's next `node_started`; a crash at that record, or before the released
-  call's skip, leaves the next start reading the call as maybe started. The sweep delivers items
-  only as the run waits and cuts once, so no cut reaches this window; a run that reaches it ends so.
+  call's skip, leaves the next start reading the call as maybe started, so a resumable one is sent
+  again after the Stop and any other reads `crashed`, not `skipped`. The sweep delivers items only
+  while the run waits, never while it is down, so no case it sweeps records such a Stop.
 
-A cut that loses a hold, or closes `crashed` a call the uncut run waited on (one with a `pending`
-step: a host's `pending()` call or a hold), lets the resumed agent go on without that wait, so the
-run's course may change. Such a cut is held to the invariants, the two checks, the calls it closes,
-its secrets and its folders, not to the uncut run's output, node outcomes or memory contents, and
-its scripts may keep entries.
+A sweep cuts each run once, so it can't reach a fault that only a second crash, inside the resume,
+shows. One such: when an evaluation runs a reply's released calls, some fresh (its first after
+their release) and some stale, it starts the fresh ones before it writes any record of that run,
+such as a stale call's `crashed` closer or a skip. An agent that wrote a record first would lose a
+fresh call to a crash at that record, since the next start would read the call as maybe started.
+`tests/nodes/agent_release.test.ts` cuts its runs twice and covers it.
+
+A closed call that the uncut run waited on after the cut changes the run's course: the cut log lacks
+the call's `pending` step (a host's `pending()` registration or a hold), or holds one still open at
+the cut. The resumed agent goes on at once with the closer, rather than waiting. A released call
+isn't waited on, so closing it changes nothing but the result the model reads. A changed course is
+held to the invariants, the four checks, the calls it closes, its secrets and its folders, and to
+the uncut run's status, though it may fail where an allowed `host.models` script runs out. It isn't
+held to the uncut run's output, node outcomes or memory contents, nor to the items left undelivered;
+its `host.models`, `host.human` and `host.gate` scripts may keep entries, and a stub script may keep
+one entry for each call the uncut run ran that the resume skips or never reaches.
 
 Each cut run binds its `host.memory` memories in new folders, seeded from `files` or `items`, and
 its resume binds new instances on that cut's folders. A memory tool is resumable, so the resume

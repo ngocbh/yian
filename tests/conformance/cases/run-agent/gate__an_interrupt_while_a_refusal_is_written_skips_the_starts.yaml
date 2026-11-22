@@ -1,0 +1,43 @@
+# The hook runs `lookup` and refuses `save`, its group-mate. The host interrupts from `onEvent` as
+# the refusal's `ToolCallFinished` is published, while the gate writes the group's decisions. The
+# check after the writes sees it: `lookup` never starts and is skipped, and the agent ends null.
+kind: run
+flow: |
+  id: refusalcut
+  name: refusalcut
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    notes: !Inbox(str)
+  nodes:
+    agent:
+      kind: agent
+      steer_inbox: ${input.notes}
+      tools: [lookup, save]
+      prompt: hi
+      output: !Optional(str)
+  output: ${agent.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    lookup: {parameters: {type: object, properties: {}}, concurrency_safe: true, results: []}
+    save: {parameters: {type: object, properties: {}}, concurrency_safe: true, results: []}
+  gate:
+    lookup: [{run: true}]
+    save: [{refuse: Not allowed.}]
+  sends:
+  - {interrupt: notes, after: {node: agent, refusal: 1}}
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: c1, name: lookup, arguments: {}}
+          - {type: tool_call, id: c2, name: save, arguments: {}}
+expect:
+  output: {status: succeeded, output: null}
+  trace: [[run_started, null, {effective_llm_by_static_path: {agent: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, gated: true, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {notes: {inbox: notes}}}], [node_succeeded, __start__, {commit: 6}], [node_started, agent], [node_step, agent, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {}, id: c1, name: lookup, type: tool_call}, {arguments: {}, id: c2, name: save, type: tool_call}], role: assistant}, purpose: chat, request_sha256: 2c412c8e79bce173e1363c2a7f33cc42172d16e3670068791c05373f01aec8e2, response_id: null, usage: null}}], [node_step, agent, {n: 2, step: {call_id: c2, closed: refused, is_error: true, kind: tool_result, output: Not allowed.}}], [interrupted, null, {inbox: notes, nodes: [agent]}], [node_step, agent, {n: 3, step: {call_id: c1, closed: skipped, is_error: true, kind: tool_result, output: 'Not run: interrupted by the user.'}}], [node_step, agent, {n: 4, step: {by: 11, kind: interrupted}}], [pool_commit, agent], [pool_commit, agent, {key: agent.new_messages, steps: [9, 10, 12, 13]}], [node_succeeded, agent, {commit: 14, messages: 15}], [node_started, __end__], [pool_commit, __end__], [node_succeeded, __end__, {commit: 18}]]
+  events: [[RunStarted], [NodeStarted, {node_id: __start__}], [NodeSucceeded, {node_id: __start__, output: {notes: {inbox: notes}}, interrupted: false}], [NodeStarted, {node_id: agent}], [ModelCallStarted, {node_id: agent, n: 1, purpose: chat, provider: anthropic, model: claude-test}], [ModelCallFinished, {node_id: agent, n: 1, purpose: chat, provider: anthropic, model: claude-test}], [ToolCallStarted, {node_id: agent, n: 1, call_index: 1, tool_call_id: c2, name: save, arguments: {}}], [ToolCallFinished, {node_id: agent, n: 1, call_index: 1, tool_call_id: c2, name: save, error: refused}], [Interrupted, {inbox: notes, nodes: [agent], scopes: []}], [ToolCallStarted, {node_id: agent, n: 1, call_index: 0, tool_call_id: c1, name: lookup, arguments: {}}], [ToolCallFinished, {node_id: agent, n: 1, call_index: 0, tool_call_id: c1, name: lookup, error: interrupted}], [NodeSucceeded, {node_id: agent, interrupted: true}], [NodeStarted, {node_id: __end__}], [NodeSucceeded, {node_id: __end__, interrupted: false}], [RunSucceeded]]
+  tool_calls: {}
+  gate_calls: [{tool: lookup, call_id: r1/agent/1/0, node: agent, source: {kind: host, group: null, tool: lookup}, arguments: {}, attempt: 1, scopes: []}, {tool: save, call_id: r1/agent/1/1, node: agent, source: {kind: host, group: null, tool: save}, arguments: {}, attempt: 1, scopes: []}]

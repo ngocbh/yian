@@ -1,0 +1,71 @@
+# The hook refuses a memory's tool (`lessons_append`), a granted flow (`review`) and a tool
+# module's export (`quote`), each with its own text. None runs: the memory keeps its file, the
+# flow call grows no scope, and the module's `execute` isn't called. The model reads each text as
+# the call's error. (The conformance host has no MCP server, and `load_skill` is never checked.)
+kind: run
+flow: |
+  id: refusals
+  name: refusals
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    lessons: !FileMemory
+  uses:
+    quote: ./tools.ts:quote
+  defs:
+    review:
+      description: Review the text.
+      input:
+        text: !str
+      nodes:
+        checker:
+          kind: agent
+          input:
+            text: ${input.text}
+          system_prompt: Check.
+          prompt: ${text}
+          output: !str
+      output: ${checker.output}
+  nodes:
+    helper:
+      kind: agent
+      input:
+        lessons: ${input.lessons}
+      tools: [{lessons: [append]}, review, quote]
+      system_prompt: Help.
+      prompt: hi
+      output: !str
+  output: ${helper.output}
+files:
+  tools.ts: |
+    export const quote = {
+      name: "quote",
+      description: "Price an order.",
+      parameters: { type: "object", properties: { qty: { type: "integer" } }, required: ["qty"] },
+      execute: () => { throw new Error("quote ran"); },
+    };
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons: {type: FileMemory, id: t/lessons, files: {notes.md: Keep it short.}}
+  gate:
+    lessons_append: [{refuse: No notes today.}]
+    review: [{refuse: No reviews.}]
+    quote: [{refuse: No prices.}]
+  models:
+    helper:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: c1, name: lessons_append, arguments: {path: notes.md, text: Check sums.}}
+          - {type: tool_call, id: c2, name: review, arguments: {text: draft}}
+          - {type: tool_call, id: c3, name: quote, arguments: {qty: 3}}
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: done}]}
+expect:
+  output: {status: succeeded, output: done}
+  trace: [[run_started, null, {effective_llm_by_static_path: {helper: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}, helper/review/checker: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, gated: true, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {lessons: {memory: {identity: t/lessons, recall: {cut: null, hint: {text: 'Read them with {tool}.', tool: read}, text: 'notes.md: Keep it short.'}, settings: {index: MEMORY.md, max_change_ids: 10000, max_depth: 4, max_file_chars: 100000, max_files: 1000, max_history_chars: 1000000, max_read_chars: 20000, max_recall_chars: 8000, max_results: 100, max_total_chars: 1000000, max_undo: 100}, tools: [{description: "List the memory's files, each with its hash and its size in characters. Pass dir to list one folder.", name: list, parameters: {additionalProperties: false, properties: {dir: {description: A folder of the memory to list; the whole memory when omitted., type: string}}, required: [], type: object}, write: false}, {description: "Read a file of the memory: its text, from line offset for limit lines, and the file's hash, which delete and rewrite take as if_hash.", name: read, parameters: {additionalProperties: false, properties: {limit: {description: The most lines to read; the rest of the file when omitted., minimum: 1.0, type: integer}, offset: {description: 'The first line to read, counting from one; one when omitted.', minimum: 1.0, type: integer}, path: {description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit.", type: string}}, required: [path], type: object}, write: false}, {description: "Find the lines that hold query, ignoring case, in every file of the memory. Each match gives its path, line number and text, and the file's hash.", name: search, parameters: {additionalProperties: false, properties: {query: {description: The text to find., type: string}}, required: [query], type: object}, write: false}, {description: 'Add text to the end of a file, on a new line. Creates the file and its folders when missing, and never conflicts.', name: append, parameters: {additionalProperties: false, properties: {path: {description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit.", type: string}, text: {description: The text to add., type: string}}, required: [path, text], type: object}, write: true}, {description: 'Create a file holding text, and its folders when missing. Conflicts when the file exists.', name: create, parameters: {additionalProperties: false, properties: {path: {description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit.", type: string}, text: {description: The file's whole text., type: string}}, required: [path, text], type: object}, write: true}, {description: Replace the text old with new in a file. Conflicts unless old appears in the file exactly once; read the file first., name: edit, parameters: {additionalProperties: false, properties: {new: {description: The text to put in its place., type: string}, old: {description: 'The exact text to replace, as the file holds it.', type: string}, path: {description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit.", type: string}}, required: [path, old, new], type: object}, write: true}, {description: "Delete a file. Conflicts unless the file's hash is if_hash, as read gives it.", name: delete, parameters: {additionalProperties: false, properties: {if_hash: {description: "The file's hash, as read gave it.", type: string}, path: {description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit.", type: string}}, required: [path, if_hash], type: object}, write: true}, {description: "Replace the whole text of a file. Conflicts unless the file's hash is if_hash, as read gives it.", name: rewrite, parameters: {additionalProperties: false, properties: {if_hash: {description: "The file's hash, as read gave it.", type: string}, path: {description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit.", type: string}, text: {description: The file's whole new text., type: string}}, required: [path, text, if_hash], type: object}, write: true}], type: FileMemory, version: af2b482b5c5ce041b2ab19bb4270f2868d93a27e92341adeb2c38add1ff6e083}}}}], [node_started, __start__], [pool_commit, __start__, {value: {lessons: {memory: {identity: t/lessons, recall: {cut: null, hint: {text: 'Read them with {tool}.', tool: read}, text: 'notes.md: Keep it short.'}, settings: {index: MEMORY.md, max_change_ids: 10000, max_depth: 4, max_file_chars: 100000, max_files: 1000, max_history_chars: 1000000, max_read_chars: 20000, max_recall_chars: 8000, max_results: 100, max_total_chars: 1000000, max_undo: 100}, tools: [{description: "List the memory's files, each with its hash and its size in characters. Pass dir to list one folder.", name: list, parameters: {additionalProperties: false, properties: {dir: {description: A folder of the memory to list; the whole memory when omitted., type: string}}, required: [], type: object}, write: false}, {description: "Read a file of the memory: its text, from line offset for limit lines, and the file's hash, which delete and rewrite take as if_hash.", name: read, parameters: {additionalProperties: false, properties: {limit: {description: The most lines to read; the rest of the file when omitted., minimum: 1.0, type: integer}, offset: {description: 'The first line to read, counting from one; one when omitted.', minimum: 1.0, type: integer}, path: {description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit.", type: string}}, required: [path], type: object}, write: false}, {description: "Find the lines that hold query, ignoring case, in every file of the memory. Each match gives its path, line number and text, and the file's hash.", name: search, parameters: {additionalProperties: false, properties: {query: {description: The text to find., type: string}}, required: [query], type: object}, write: false}, {description: 'Add text to the end of a file, on a new line. Creates the file and its folders when missing, and never conflicts.', name: append, parameters: {additionalProperties: false, properties: {path: {description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit.", type: string}, text: {description: The text to add., type: string}}, required: [path, text], type: object}, write: true}, {description: 'Create a file holding text, and its folders when missing. Conflicts when the file exists.', name: create, parameters: {additionalProperties: false, properties: {path: {description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit.", type: string}, text: {description: The file's whole text., type: string}}, required: [path, text], type: object}, write: true}, {description: Replace the text old with new in a file. Conflicts unless old appears in the file exactly once; read the file first., name: edit, parameters: {additionalProperties: false, properties: {new: {description: The text to put in its place., type: string}, old: {description: 'The exact text to replace, as the file holds it.', type: string}, path: {description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit.", type: string}}, required: [path, old, new], type: object}, write: true}, {description: "Delete a file. Conflicts unless the file's hash is if_hash, as read gives it.", name: delete, parameters: {additionalProperties: false, properties: {if_hash: {description: "The file's hash, as read gave it.", type: string}, path: {description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit.", type: string}}, required: [path, if_hash], type: object}, write: true}, {description: "Replace the whole text of a file. Conflicts unless the file's hash is if_hash, as read gives it.", name: rewrite, parameters: {additionalProperties: false, properties: {if_hash: {description: "The file's hash, as read gave it.", type: string}, path: {description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit.", type: string}, text: {description: The file's whole new text., type: string}}, required: [path, text, if_hash], type: object}, write: true}], type: FileMemory, version: af2b482b5c5ce041b2ab19bb4270f2868d93a27e92341adeb2c38add1ff6e083}}}}], [node_succeeded, __start__, {commit: 6}], [node_started, helper], [node_step, helper, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {path: notes.md, text: Check sums.}, id: c1, name: lessons_append, type: tool_call}, {arguments: {text: draft}, id: c2, name: review, type: tool_call}, {arguments: {qty: 3}, id: c3, name: quote, type: tool_call}], role: assistant}, purpose: chat, request_sha256: 020dc359deb41eafa8eed09b8285c64f25c7d9afebeaec811347285b49525b43, response_id: null, usage: null}}], [node_step, helper, {n: 2, step: {call_id: c1, closed: refused, is_error: true, kind: tool_result, output: No notes today.}}], [node_step, helper, {n: 3, step: {call_id: c2, closed: refused, is_error: true, kind: tool_result, output: No reviews.}}], [node_step, helper, {n: 4, step: {call_id: c3, closed: refused, is_error: true, kind: tool_result, output: No prices.}}], [node_step, helper, {n: 5, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: done, type: text}], role: assistant}, purpose: chat, request_sha256: 4a252ea4659974a8831ae55b9f781b2e22475835c11157e3cbacbd66cbde57a9, response_id: null, usage: null}}], [pool_commit, helper, {value: done}], [pool_commit, helper, {key: helper.new_messages, steps: [9, 10, 11, 12, 13]}], [node_succeeded, helper, {commit: 14, messages: 15}], [node_started, __end__], [pool_commit, __end__, {value: done}], [node_succeeded, __end__, {commit: 18}]]
+  tool_calls: {}
+  gate_calls: [{tool: lessons_append, call_id: r1/helper/1/0, node: helper, source: {kind: memory, input: lessons, tool: append}, arguments: {path: notes.md, text: Check sums.}, attempt: 1, scopes: []}, {tool: review, call_id: r1/helper/1/1, node: helper, source: {kind: flow, flow: review, library: null}, arguments: {text: draft}, attempt: 1, scopes: []}, {tool: quote, call_id: r1/helper/1/2, node: helper, source: {kind: module, alias: quote, ref: ./tools.ts:quote, export: quote}, arguments: {qty: 3}, attempt: 1, scopes: []}]
+  memory:
+    lessons: {notes.md: Keep it short.}

@@ -40,7 +40,7 @@ defs:
       route:
         kind: case
         cases:
-          - when: \${not all([p.type == "action" for m in heard.output.events for p in m.parts])}
+          - when: \${not all([len(m.parts) > 0 and all([p.type == "action" for p in m.parts]) for m in heard.output.events])}
             then: reply
       reply:
         kind: agent
@@ -96,7 +96,7 @@ test("an action is filed without a model call, then joins the next turn signed a
     author: "Ngoc",
     parts: [
       { type: "text", text: '<authored_message author="Ngoc">' },
-      { type: "text", text: "action: shell_type\nsummary: Ngoc typed into shell 1" },
+      { type: "text", text: 'action: {"tool":"shell_type","summary":"Ngoc typed into shell 1"}' },
       { type: "text", text: "</authored_message>" },
     ],
   });

@@ -134,10 +134,10 @@ function steerParts(message: Message, onDrop: (part: number) => void): Part[] {
   message.parts.forEach((part, index) => {
     if (part.type === "media") onDrop(index);
     else if (part.type === "text" || part.type === "reasoning" || part.type === "refusal") parts.push(new TextPart(part.text));
+    else if (part.type === "action") parts.push(actionPart(part) ?? new TextPart(writeAsText(part as Value)));
     else {
-      const action = part.type === "action" ? actionPart(part) : null;
-      const { provider_payload: _payload, ...rest } = part as { provider_payload?: unknown };
-      parts.push(action ?? new TextPart(writeAsText(rest as Value)));
+      const { provider_payload: _payload, ...rest } = part;
+      parts.push(new TextPart(writeAsText(rest as Value)));
     }
   });
   return parts;
@@ -315,10 +315,7 @@ export function checkModelConversation(messages: readonly ConversationMessage[])
     }
     if (message.parts.length === 0) throw new ConversationError(index, "the message has no parts");
     for (const part of message.parts) {
-      if (!allowed.has(part.type)) {
-        const article = part.type === "action" ? "an" : "a";
-        throw new ConversationError(index, `${message.role} messages can't hold ${article} ${part.type} part`);
-      }
+      if (!allowed.has(part.type)) throw new ConversationError(index, `${message.role} messages can't hold ${part.type} parts`);
     }
     if (message.role === "tool") {
       for (const part of message.parts) {

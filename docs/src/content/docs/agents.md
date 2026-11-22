@@ -582,9 +582,10 @@ output: ${worker.output :- "(stopped)"}
   message in a template. The template reads only `${event}`.
 - **Actions.** A `Message` whose parts are all `action` parts records something a person did with
   one of the agent's tools (see [Embedding yian](/embedding/#record-a-persons-action)). It joins
-  the next model call, signed by its `author`, but never causes one, even at the final answer, and
-  skips `render:`. A `take` still wakes for it: a chat loop can test `p.type == "action"` and keep
-  it for the next turn instead of answering it.
+  the next model call, signed by its `author`, but never causes one: one queued at the final answer
+  stays unread for the next reader. It skips `render:`. A `take` still wakes for it, so a chat loop
+  keeps it for the next turn instead of answering it. This condition tells one apart:
+  `len(m.parts) > 0 and all([p.type == "action" for p in m.parts])`.
 - **Interrupts.** A host can interrupt every agent reading an inbox. The agent stops at its next
   safe point: before a model call, while it waits for a reply, between streamed chunks, at the end
   of the stream (a reply whose text had all arrived is still cut), or before a tool call. A running

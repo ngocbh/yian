@@ -217,10 +217,10 @@ class SteerProbe extends Node {
   override forward(_inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
     const steer = caps.openSteerInbox!(this.inbox);
     this.opened = steer;
-    const queuedBefore = steer.queued();
+    const queuedBefore = steer.queuedBesidesActions();
     const first = steer.read();
     const second = steer.read();
-    this.seen = { queuedBefore, first, second, queuedAfter: steer.queued() };
+    this.seen = { queuedBefore, first, second, queuedAfter: steer.queuedBesidesActions() };
     return new Output("done");
   }
 }

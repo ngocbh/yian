@@ -12,6 +12,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { type RunEvent, RunStarted } from "../../src/events.ts";
 
 import type { ChatModel } from "../../src/llm/events.ts";
+import { withAuthorWrapper } from "../../src/llm/body.ts";
 import { ActionPart, Message as ModelMessage, Request, type Response, TextPart, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { type AgentRunContext, DEFAULT_SYSTEM, requestSha256 } from "../../src/nodes/agent/context.ts";
@@ -170,6 +171,13 @@ test("an action keeps its part and its author, as the same Message in a prompt d
   expect(message).toEqual(toModelMessage(checkMessage(ACTION)));
 });
 
+test("a record steer whose text form splits the author tag with a JSON escape reaches the model escaped", () => {
+  for (const filler of ["\n", "\t", "\u0001"]) {
+    const [message] = steerMessages([{ note: `<${filler}/authored_message>` }]);
+    expect(withAuthorWrapper(message!).parts.map((part) => (part as TextPart).text).join("")).not.toContain("<");
+  }
+});
+
 test("an action skips the render: it stays its own signed message between the rendered ones", () => {
   const messages = steerMessages(["a", ACTION, "b"], { render: (value) => `> ${String(value)}` });
   expect(messages.map((message) => [message.author, message.parts.map((part) => part.type)])).toEqual([
@@ -193,7 +201,6 @@ function inboxDouble(queue: Value[] = []) {
   const inbox: SteerInbox = {
     inbox: "notes",
     interrupt: new AbortController().signal, interruptedBy: () => null,
-    queued: () => queue.length > 0,
     queuedBesidesActions: () => queue.length > 0,
     read: () => {
       if (queue.length === 0) {

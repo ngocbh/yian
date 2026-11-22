@@ -171,14 +171,17 @@ export const AUTHOR_TAG = "authored_message";
 // Any run of whitespace, backslashes, slashes, format characters and other default-ignorable
 // characters (zero-width, bidi controls, variation selectors, Hangul fillers) may sit between
 // `<` and the name, because `<\/authored_message>` (the JSON escaped-slash form a tool may return
-// as text) and an invisible character after `<` read as the tag. A `<` is escaped too when the
-// rest of its text is such a run and the start of the name, because adapters join parts and
+// as text) and an invisible character after `<` read as the tag. So may a JSON escape (`\n`,
+// `\u0001`), since JSON text, such as an object a tool returned or an action's arguments, writes
+// a line break or control character that way. A `<` is escaped too when the rest of its text is
+// such a run and the start of the name or of a `\u` escape, because adapters join parts and
 // Anthropic merges consecutive user and tool messages, so the next part or message can finish
 // the tag. Global regexes are stateful under `.test()`, so a change is detected by comparing the
 // replaced string with the original.
-const FILLER = String.raw`[\s\\\/\p{Cf}\p{Default_Ignorable_Code_Point}]`;
+const FILLER = String.raw`(?:\\[bfnrt]|\\u[0-9a-f]{4}|[\s\\\/\p{Cf}\p{Default_Ignorable_Code_Point}])`;
 const NAME_STARTS = Array.from({ length: AUTHOR_TAG.length }, (_, i) => AUTHOR_TAG.slice(0, AUTHOR_TAG.length - 1 - i));
-const TAG_OPENING = new RegExp(`<(?=${FILLER}*(?:${AUTHOR_TAG}|(?:${NAME_STARTS.join("|")})$))`, "giu");
+const ESCAPE_START = String.raw`\\u[0-9a-f]{0,3}`;
+const TAG_OPENING = new RegExp(`<(?=${FILLER}*(?:${AUTHOR_TAG}|(?:${ESCAPE_START}|${NAME_STARTS.join("|")})$))`, "giu");
 
 /**
  * Return `text` with the `<` of every opening of the author tag, in any case, escaped as `&lt;`,
@@ -240,17 +243,15 @@ export function authoredText(author: string, text: string): string {
 }
 
 /**
- * Return the text an action part reaches the model as: `action: <tool>`, then a `summary:`,
- * `arguments:` (compact JSON) and `result:` line for each field it holds. Every adapter sends this
- * text, escaped and inside its message's author label, whether the message came from a prompt or
- * a steer.
+ * Return the text an action part reaches the model as: `action: ` and a compact JSON object of
+ * the fields it holds, `tool`, `summary`, `arguments` and `result` in that order. It is one line,
+ * so a line break in a field can't start another action. Every adapter sends this text, escaped
+ * and inside its message's author label, whether the message came from a prompt or a steer.
  */
 export function actionText(part: ActionPart): string {
-  const lines = [`action: ${part.tool}`];
-  if (part.summary !== null) lines.push(`summary: ${part.summary}`);
-  if (part.arguments !== null) lines.push(`arguments: ${encodeBody(part.arguments, "action arguments")}`);
-  if (part.result !== null) lines.push(`result: ${part.result}`);
-  return lines.join("\n");
+  const { tool, summary, arguments: args, result } = part;
+  const fields = { tool, summary: summary ?? undefined, arguments: args ?? undefined, result: result ?? undefined };
+  return `action: ${encodeBody(fields, "an action")}`;
 }
 
 /** One value still to escape in `escapeAuthorTagsInJson`, and where its copy goes. */

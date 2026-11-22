@@ -129,7 +129,7 @@ function steer(event: string): void {
 }
 
 /** A steer inbox opener that never has anything queued, for a node driven without an engine. */
-const NO_STEERS = (inbox: string): SteerInbox => ({ inbox, queued: () => false, queuedBesidesActions: () => false, read: () => null, interrupt: new AbortController().signal, interruptedBy: () => null });
+const NO_STEERS = (inbox: string): SteerInbox => ({ inbox, queuedBesidesActions: () => false, read: () => null, interrupt: new AbortController().signal, interruptedBy: () => null });
 
 /**
  * One loaded `chat` agent granted `tools`, output `${chat.output}`; with

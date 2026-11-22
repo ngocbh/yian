@@ -249,10 +249,10 @@ test.each([
     "node 'reply' prompt[0]: rendered message 1: tool result 'c1' answers no open tool call"],
   ["a tool call in a user message", CHAT,
     [{ role: "user", parts: [{ type: "tool_call", id: "c", name: "t", arguments: {} }] }],
-    "node 'reply' prompt[0]: rendered message 0: user messages can't hold a tool_call part"],
+    "node 'reply' prompt[0]: rendered message 0: user messages can't hold tool_call parts"],
   ["text in a tool message", CHAT,
     [TOOL_HISTORY[0], TOOL_HISTORY[1], { role: "tool", parts: [{ type: "text", text: "x" }] }],
-    "node 'reply' prompt[0]: rendered message 2: tool messages can't hold a text part"],
+    "node 'reply' prompt[0]: rendered message 2: tool messages can't hold text parts"],
   ["an empty Message", CHAT, [{ role: "assistant", parts: [] }],
     "node 'reply' prompt[0]: rendered message 0: the message has no parts"],
 ])("%s fails the node before any model call", async (_, prompt, history, text) => {

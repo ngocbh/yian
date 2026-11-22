@@ -309,9 +309,8 @@ export class AgentSteps {
         .filter(({ step }) => step["held"] === true)
         .map(({ step }) => [step["call_id"] as string, Number(step["group_end"])]),
     );
-    this.#released = new Map(
-      (steps?.prior ?? []).flatMap((step, index) => (step["kind"] === "released" ? [[step["call_id"] as string, index + 1]] : [])),
-    );
+    const released = (steps?.prior ?? []).flatMap((step, index) => (step["kind"] === "released" ? [{ step, n: index + 1 }] : []));
+    this.#released = new Map(released.map(({ step, n }) => [step["call_id"] as string, n]));
     for (const step of steps?.prior ?? []) {
       if (step["kind"] !== "pending" || step["flow"] !== true) continue;
       const tool = step["tool"] as string;

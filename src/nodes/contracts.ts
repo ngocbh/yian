@@ -1264,10 +1264,9 @@ export class NodeSteps {
 
   /**
    * The seq of the record that settled the node's call `callId` as the run state holds it now:
-   * the host's `tool_result` step, the END of a flow call's scope, the host's `released` step of a
-   * hold it released and the agent hasn't run, or the record that closed it (an interrupt, a wake
-   * that timed it out, a resume, its scope's failure); `null` while it is open, when the run no
-   * longer knows it, and outside a run.
+   * the host's `tool_result` step, the END of a flow call's scope, or the record that closed it
+   * (an interrupt, a wake that timed it out, a resume, its scope's failure); `null` while it is
+   * open, when the run no longer knows it, and outside a run.
    */
   settledAt(callId: string): number | null {
     return this.#readers.settledAt?.(callId) ?? null;

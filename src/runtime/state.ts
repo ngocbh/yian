@@ -1703,13 +1703,12 @@ export function callResultStep(state: RunState, callId: string): Readonly<JsonOb
 
 /**
  * The seq of the record that settled registered call `call`: the record that closed it, the
- * `tool_result` step that answered it, for a flow call its scope END's commit (the agent's
- * `tool_result` only records that answer), or for a held call the host released its `released`
- * step, after which only its agent runs it; `null` while it is open, and for a take or sleep.
+ * `tool_result` step that answered it, or for a flow call its scope END's commit (the agent's
+ * `tool_result` only records that answer); `null` while it is open or released, and for a take or
+ * sleep.
  */
 export function callSettledAt(state: RunState, call: Call): number | null {
   if (call.state === "closed") return call.closedSeq;
-  if (call.state === "released") return call.releasedSeq;
   if (call.state !== "answered") return null;
   return call.scope === null ? call.resultSeq : (state.producers.get(`${call.scope}/${END_ID}`) ?? null);
 }

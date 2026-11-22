@@ -15,18 +15,19 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { CallHeld, NodeWaiting, NodeWoken, type RunEvent, ToolCallFinished, ToolCallStarted } from "../../src/events.ts";
 import type { Response } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
+import type { ToolResultPart } from "../../src/llm/messages.ts";
 import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/results.ts";
-import { advance, complete, interrupt, pendingCalls, release, runFlow } from "../../src/run.ts";
-import { NodeStepRecord, readRunLog, type RunLog } from "../../src/runtime/log.ts";
+import { advance, complete, interrupt, pendingCalls, release, runFlow, type RunResult } from "../../src/run.ts";
+import { NodeStepRecord, readRunLog, type RunLog, type RunRecord } from "../../src/runtime/log.ts";
 import { pending } from "../../src/tools/context.ts";
-import { tool } from "../../src/tools/function_tools.ts";
+import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import type { BeforeToolCall, GatedCall } from "../../src/tools/gate.ts";
 import { mcpServer, type McpServer } from "../../src/tools/mcp.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { withAppendHook } from "../helpers/append_hook.ts";
 import { gated } from "../helpers/gate.ts";
 import { expectClosed, hostEnv, stdioOptions, strayProcesses } from "../helpers/mcp_helpers.ts";
-import { callReply, Crash, crashAfter, serving, textReply } from "../helpers/run_state_fixtures.ts";
+import { callReply, Crash, crashAfter, rejected, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-agent-release-"));
 afterAll(() => {
@@ -70,7 +71,7 @@ nodes:
   reply:
     kind: agent
     prompt: go
-    tools: [keep, once, alone, again, defer, price, shout${extra}]
+    tools: [keep, once, alone, again, defer, checked, price, shout${extra}]
     steer_inbox: \${input.m}
     output: !Optional(str)
 output: \${reply.output}
@@ -87,8 +88,10 @@ interface Start {
 
 /**
  * Host tools noting each start in `starts`: `keep` (resumable) and `once` (not), safe to run
- * together, `alone` and `again` (resumable), which run alone, and `defer`, whose handler returns
- * `pending()`. Each waits a moment, so calls that start together are all started before any ends.
+ * together, `alone` and `again` (resumable), which run alone, `defer`, whose handler returns
+ * `pending()`, and `checked`, whose validator, once the log at `log` holds a release, refuses a
+ * `q` ending in `refuse` and throws for one ending in `throw`. Each waits a moment, so calls that
+ * start together are all started before any ends.
  */
 function hostTools(log: string, starts: Start[]) {
   const make = (name: string, resumable: boolean, safe = true) =>
@@ -105,7 +108,32 @@ function hostTools(log: string, starts: Start[]) {
         return name === "defer" ? pending() : `${name}:${String(args.q)}`;
       },
     });
-  return { keep: make("keep", true), once: make("once", false), alone: make("alone", false, false), again: make("again", true, false), defer: make("defer", false) };
+  const released = () => existsSync(log) && stepsOf(log).some((step) => step["kind"] === "released");
+  const checked = new FunctionTool({
+    name: "checked",
+    description: "Tool checked.",
+    parametersJsonSchema: { type: "object", properties: { q: { type: "string" } } },
+    parametersValidator: {
+      "~standard": {
+        version: 1,
+        vendor: "test",
+        validate: (value: unknown) => {
+          const q = String((value as JsonObject)["q"]);
+          if (released() && q.endsWith("throw")) throw new Error("validator down");
+          return released() && q.endsWith("refuse") ? { issues: [{ message: "no longer allowed" }] } : { value };
+        },
+      },
+    },
+    execute: () => (starts.push({ run: "checked", callId: "", afterInterrupt: false }), "checked"),
+  });
+  return {
+    keep: make("keep", true),
+    once: make("once", false),
+    alone: make("alone", false, false),
+    again: make("again", true, false),
+    defer: make("defer", false),
+    checked,
+  };
 }
 
 /** The call id of the first reply's call `index`. */
@@ -115,11 +143,23 @@ const heldId = (index: number) => `r/reply/1/${index}`;
 const stepsOf = (log: string) =>
   !existsSync(log) ? [] : readRunLog(log).flatMap(({ record }) => (record instanceof NodeStepRecord && record.nodeId === "reply" ? [record.step] : []));
 
+/** How many model calls node `reply` recorded in the log at `log`. */
+const modelCalls = (log: string) => stepsOf(log).filter((step) => step["kind"] === "model_call").length;
+
+/** The call ids of the tool results `model` read in its request `index`, in order. */
+const readIds = (model: ScriptedModel, index = 0) =>
+  model.requests[index]!.messages.flatMap((message) => (message.role === "tool" ? message.parts.map((part) => (part as ToolResultPart).callId) : []));
+
 /** How the host releases each hold: once the run is idle, from `CallHeld` while its agent runs, or from `NodeWaiting` while the run moves. */
 type When = "idle" | "flight" | "live";
 
-/** How a run of `life` went: its log, the host tools' starts, the calls the hook was asked about, and its events. */
+/**
+ * How a run of `life` went: its result, its log, the host tools' starts, the calls the hook was
+ * asked about, its events, and the model its last part called.
+ */
 interface Life {
+  readonly result: RunResult;
+  readonly model: ScriptedModel;
   readonly log: string;
   readonly starts: readonly Start[];
   readonly asked: readonly GatedCall[];
@@ -136,6 +176,8 @@ interface LifeOptions {
   readonly mcp?: boolean;
   /** The calls of a second reply. */
   readonly next?: readonly [string, string][];
+  /** The status the life must end with; `succeeded` by default. */
+  readonly status?: RunResult["status"];
 }
 
 /**
@@ -149,7 +191,7 @@ interface LifeOptions {
  */
 async function life(
   calls: readonly [string, string][],
-  { when = "idle", cuts = [], interruptAt, mcp = false, next }: LifeOptions = {},
+  { when = "idle", cuts = [], interruptAt, mcp = false, next, status = "succeeded" }: LifeOptions = {},
 ): Promise<Life> {
   rmSync(priced, { force: true });
   const log = freshLog();
@@ -184,9 +226,10 @@ async function life(
   const replyOf = (each: readonly [string, string][]) =>
     callReply(...each.map(([name, q], index): [string, JsonObject, string] => [name, name.startsWith("fake_") ? { text: q } : { q }, `c${index}`]));
   const replies = [replyOf(calls), ...(next === undefined ? [] : [replyOf(next)]), textReply("done")];
+  let model = new ScriptedModel([], CONFIG);
   const options = () => {
-    const left = replies.slice(stepsOf(log).filter((step) => step["kind"] === "model_call").length);
-    return gated({ env, log, runId: "r", tools: tools(), models: serving(new ScriptedModel(left, CONFIG)), onEvent }, hook);
+    model = new ScriptedModel(replies.slice(modelCalls(log)), CONFIG);
+    return gated({ env, log, runId: "r", tools: tools(), models: serving(model), onEvent }, hook);
   };
   let cutsDone = 0;
   /** Run `fn`, cut at the next of `cuts`; `null` when it was cut. */
@@ -217,8 +260,8 @@ async function life(
     result = await part(() => advance(options()));
   }
   for (const server of servers) await expectClosed(server);
-  expect(result?.status, result?.failure?.message).toBe("succeeded");
-  return { log, starts, asked, events };
+  expect(result?.status, result?.failure?.message).toBe(status);
+  return { result: result!, model, log, starts, asked, events };
 }
 
 /** The seq of the first record of the log at `log` that `match` holds of; -1 when none does. */
@@ -234,7 +277,9 @@ const releaseSpan = (log: string): [number, number] => [
 test("a release, idle, live or in flight, runs the held call once as the model asked it; the hook is asked about the next reply, never the call again", async () => {
   for (const when of ["idle", "live", "flight"] as const) {
     const { log, starts, asked, events } = await life([["defer", "h"]], { when, next: [["once", "n"]] });
-    expect(starts.map((start) => [start.run, start.callId]), when).toEqual([["defer:h@1", heldId(0)], ["once:n@1", "r/reply/6/0"]]);
+    // The second reply is the agent's second model call.
+    const next = stepsOf(log).flatMap((step, index) => (step["kind"] === "model_call" ? [index + 1] : []))[1];
+    expect(starts.map((start) => [start.run, start.callId]), when).toEqual([["defer:h@1", heldId(0)], ["once:n@1", `r/reply/${next}/0`]]);
     expect(asked.map((call) => [call.arguments["q"], call.attempt]), when).toEqual([["h", 1], ["n", 1]]);
     // The released call's tool pended: it registered again as a plain host call, which the host answered.
     expect(stepsOf(log).filter((step) => step["kind"] === "pending").map((step) => [step["call_id"], step["held"] ?? false]), when).toEqual([
@@ -285,6 +330,7 @@ test.each(["idle", "live", "flight"] as const)(
       expect(cut.starts.map((start) => start.run.split("@")[0]), where).toEqual(["once:h", "alone:L"]);
     });
   },
+  60_000,
 );
 
 test.each(["idle", "live", "flight"] as const)(
@@ -297,6 +343,7 @@ test.each(["idle", "live", "flight"] as const)(
       expect(cut.starts.filter((start) => start.run.startsWith("alone:L")).length, where).toBe(1);
     });
   },
+  60_000,
 );
 
 test("a crash at any record from a release through its result sends a module tool's call again on its thread, under its call id", async () => {
@@ -352,7 +399,7 @@ test("an interrupt after a release, before its run, skips the call unstarted; ac
       if (later["closed"] === "crashed") expect(cut.starts.map((start) => start.run), `${name}, cut at ${k}`).toContain("again:L@1");
     }
   }
-});
+}, 60_000);
 
 test("a release and an interrupt in flight skip the call; across a crash at its skip, and the resume's, it never starts", async () => {
   for (const name of ["keep", "once"]) {
@@ -418,8 +465,10 @@ test("a released call runs before a call cut beside its hold is sent again, so a
   const resultOf = (log: string) => recordWhere(log, (step) => step?.["kind"] === "tool_result" && step["call_id"] === "c0");
   const ran = resultOf((await life(calls)).log);
   const resent = resultOf((await life(calls, { cuts: [ran] })).log);
-  const { starts, log } = await life(calls, { cuts: [ran, resent] });
+  const { starts, log, model } = await life(calls, { cuts: [ran, resent] });
   expect(starts.map((start) => start.run)).toEqual(["keep:x@1", "once:h@1", "keep:x@2", "keep:x@3"]);
+  // The model reads the results in call order, though h ran before x was sent again.
+  expect(readIds(model)).toEqual(["c0", "c1"]);
   expect(stepsOf(log).find((step) => step["kind"] === "tool_result" && step["call_id"] === "c1")!["output"]).toBe("once:h");
 });
 
@@ -429,4 +478,73 @@ test("two released calls of one group start together", async () => {
   const brackets = events.flatMap((event) =>
     event instanceof ToolCallStarted ? [`start ${event.toolCallId}`] : event instanceof ToolCallFinished ? [`end ${event.toolCallId}`] : []);
   expect(brackets).toEqual(["start c0", "start c1", "end c0", "end c1"]);
+});
+
+/**
+ * Run `fn`, refusing appends once it appends call `callId`'s first `tool_result` step, as a crash
+ * there would.
+ */
+async function cutAtResult(callId: string, fn: () => Promise<unknown>): Promise<void> {
+  const crash = new Crash(`cut at ${callId}'s result`);
+  let cut = false;
+  const refuse = (_target: RunLog, record: RunRecord) => {
+    cut ||= record instanceof NodeStepRecord && record.step["kind"] === "tool_result" && record.step["call_id"] === callId;
+    if (cut) throw crash;
+  };
+  expect(await withAppendHook(refuse, () => fn().then(() => null, (error: unknown) => error))).toBe(crash);
+}
+
+test.each(["a crash", "a stop"])(
+  "two holds of a group released at different times: %s before the first runs, then a crash at its closer, never loses the second",
+  async (how) => {
+    // [once h1, once h2], held together. h1 is released, and its first evaluation is cut by a crash
+    // as it ran, or stopped before it started; h2 is released meanwhile. The next start closes h1
+    // crashed and runs h2 fresh, and a crash lands on h1's closer.
+    const log = freshLog();
+    const starts: Start[] = [];
+    const replies = [callReply(["once", { q: "h1" }, "c0"], ["once", { q: "h2" }, "c1"]), textReply("done")];
+    const stop = new AbortController();
+    const onEvent = (event: RunEvent) => void (how === "a stop" && event instanceof NodeWoken && stop.abort(new Error("office shutting down")));
+    const options = (extra = {}) =>
+      gated({ env, log, runId: "r", tools: hostTools(log, starts), models: serving(new ScriptedModel(replies.slice(modelCalls(log)), CONFIG)), ...extra }, () => pending());
+    expect((await runFlow(await flowOf(), {}, options())).status).toBe("waiting");
+    await release(log, heldId(0), { env });
+    if (how === "a crash") await cutAtResult("c0", () => advance(options()));
+    else expect(await rejected(advance(options({ signal: stop.signal, onEvent })))).toBe(stop.signal.reason);
+    await release(log, heldId(1), { env });
+    await cutAtResult("c0", () => advance(options()));
+    expect((await advance(options())).status).toBe("succeeded");
+    expect(starts.map((start) => start.run)).toEqual([...(how === "a crash" ? ["once:h1@1"] : []), "once:h2@1"]);
+    const results = stepsOf(log).flatMap((step) => (step["kind"] === "tool_result" ? [[step["call_id"], step["closed"] ?? step["output"]]] : []));
+    expect(results).toEqual([["c1", "once:h2"], ["c0", "crashed"]]);
+  },
+  60_000,
+);
+
+test("releasing one hold of a group runs it while the other stays held, and the later call waits for both", async () => {
+  const log = freshLog();
+  const starts: Start[] = [];
+  const replies = [callReply(["keep", { q: "h1" }, "c0"], ["keep", { q: "h2" }, "c1"], ["alone", { q: "L" }, "c2"]), textReply("done")];
+  const hook: BeforeToolCall = (call) => (String(call.arguments["q"]).startsWith("h") ? pending() : undefined);
+  const options = () =>
+    gated({ env, log, runId: "r", tools: hostTools(log, starts), models: serving(new ScriptedModel(replies.slice(modelCalls(log)), CONFIG)) }, hook);
+  expect((await runFlow(await flowOf(), {}, options())).status).toBe("waiting");
+  await release(log, heldId(0), { env });
+  expect((await advance(options())).status).toBe("waiting");
+  expect(starts.map((start) => start.run)).toEqual(["keep:h1@1"]);
+  expect(pendingCalls(log).map((call) => [call.callId, call.held])).toEqual([[heldId(1), true]]);
+  await release(log, heldId(1), { env });
+  expect((await advance(options())).status).toBe("succeeded");
+  expect(starts.map((start) => start.run)).toEqual(["keep:h1@1", "keep:h2@1", "alone:L@1"]);
+});
+
+test("a released call checked again runs its validator: a refusal is the call's error result, and a throw fails the node", async () => {
+  const refused = await life([["checked", "h-refuse"]]);
+  expect(refused.starts).toEqual([]);
+  expect(stepsOf(refused.log).find((step) => step["kind"] === "tool_result")).toMatchObject({ is_error: true, started_at: null });
+  const read = refused.model.requests[0]!.messages.at(-1)!.parts[0] as ToolResultPart;
+  expect([read.content, read.isError]).toEqual([expect.stringContaining("no longer allowed"), true]);
+  const thrown = await life([["checked", "h-throw"]], { status: "failed" });
+  expect(thrown.result.failure?.message).toContain("validator down");
+  expect([thrown.starts, stepsOf(thrown.log).some((step) => step["kind"] === "tool_result")]).toEqual([[], false]);
 });

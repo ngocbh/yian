@@ -1804,7 +1804,7 @@ test("a replayed call whose view is a host's answer its steps don't hold fails t
 test.each<[string, "hold" | "run"]>([
   ["the hold's group was being written (skipFrom)", "hold"],
   ["its group-mate ran (closePended, at the honor)", "run"],
-])("a release in flight, then an interrupt, fails the agent at the released call once %s", async (_, when) => {
+])("a release in flight, then an interrupt, skips the released call, which never started, once %s", async (_, when) => {
   // [lookup h (held), lookup x]: the release and the interrupt land as the hold is recorded, or
   // while x runs. Each path settles the reply's pended calls, and finds h released.
   const interrupt = new AbortController();
@@ -1833,10 +1833,9 @@ test.each<[string, "hold" | "run"]>([
   const steerInbox = { inbox: "m", queued: () => false, read: () => null, interrupt: interrupt.signal, interruptedBy: () => 7 };
   const toolset = new ToolSet({ lookup }).withGate(holding("h").hook).forRun("r");
   const model = new ScriptedModel([callReply(["lookup", { q: "h" }, "ch"], ["lookup", { q: "x" }, "cx"])], CONFIG);
-  const error = await rejected(direct(model, toolset, ["lookup"], { steps, steerInbox }));
-  expect(error).toBeInstanceOf(AgentLoopError);
-  expect((error as Error).message).toBe("agent node 'chat': call 'r/chat/1/0' was released, which this agent can't run yet");
-  expect(written.some((step) => step["kind"] === "tool_result" && step["call_id"] === "ch")).toBe(false);
+  expect(await direct(model, toolset, ["lookup"], { steps, steerInbox })).toEqual(new Interrupted(7));
+  const results = written.flatMap((step) => (step["kind"] === "tool_result" ? [[step["call_id"], step["closed"] ?? step["output"]]] : []));
+  expect(results).toEqual(when === "hold" ? [["ch", "skipped"], ["cx", "skipped"]] : [["cx", "found x"], ["ch", "skipped"]]);
 });
 
 test("a hold outside a durable run fails the agent before anything of its group is written", async () => {

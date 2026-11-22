@@ -65,8 +65,9 @@ export class ToolContext<T = unknown> {
    * The attempt number, starting at 1. For a TOOL node it counts the attempts at the same call: 2
    * on its first retry, and the next number when a resumed run re-runs an unfinished attempt.
    * For a call from an AGENT's tool loop it is 1 plus the number of times a crash or a stop cut the
-   * node off after the reply's `model_call` step; it is above 1 only for a resumable tool's call
-   * sent again. Every other call sees 1.
+   * node off after the call became runnable: after the reply's `model_call` step, or after the
+   * host answered or released a held call it waited for (a held call's own release included). It
+   * is above 1 only for a resumable tool's call sent again. Every other call sees 1.
    */
   readonly attempt: number;
   /** The tool's own name: its id, or a group's tool's name without its group. */

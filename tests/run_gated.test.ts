@@ -14,9 +14,9 @@ import { loadFlow } from "../src/compose/loader.ts";
 import type { RunEvent } from "../src/events.ts";
 import { ScriptedModel } from "../src/llm/testing.ts";
 import { ToolNode } from "../src/nodes/tool/node.ts";
-import { advance, cancel, complete, inspectRun, interrupt, pendingCalls, replayRunLog, runFlow } from "../src/run.ts";
+import { advance, cancel, complete, inspectRun, interrupt, pendingCalls, release, replayRunLog, runFlow } from "../src/run.ts";
 import { JsonlRunLog, NodeStepRecord, readRunLog, RunResumedRecord, RunStartedRecord } from "../src/runtime/log.ts";
-import { commitPrepared, prepareRelease } from "../src/runtime/state.ts";
+import { commitPrepared, DeliveryRefused, prepareRelease } from "../src/runtime/state.ts";
 import { pending } from "../src/tools/context.ts";
 import { FunctionTool, tool } from "../src/tools/function_tools.ts";
 import type { BeforeToolCall, GatedCall, ToolSource } from "../src/tools/gate.ts";
@@ -218,16 +218,29 @@ output: \${reply.output}
     }
   });
 
-  test("an agent woken to a released hold fails its node, and never runs the call", async () => {
+  test("release runs the hold once at the next advance, with its note on the released step; a repeat is null, and complete is refused", async () => {
     const { log, options, ran, callId } = await heldRun();
-    const authority = JsonlRunLog.resume(log);
-    const state = replayRunLog(await loadFlow(FLOW), authority);
-    commitPrepared(authority, state, prepareRelease(state, callId)!);
-    authority.close();
-    const result = await advance(options);
-    expect(result.status).toBe("failed");
-    expect(result.failure?.message).toContain(`agent node 'reply': call '${callId}' was released, which this agent can't run yet`);
-    expect(ran).toEqual([]);
+    expect(await release(log, callId, { env: NO_ENV, note: "approved" })).toBe(readRunLog(log).length - 1);
+    expect(await release(log, callId, { env: NO_ENV, note: "again" })).toBeNull();
+    const settled = (await rejected(complete(log, callId, { output: "no" }, { env: NO_ENV }))) as DeliveryRefused;
+    expect([settled.reason, settled.callState]).toEqual(["call_settled", "released"]);
+    const model = new ScriptedModel([textReply("done")]);
+    const done = await advance({ ...options, models: serving(model) });
+    expect(done.status, done.failure?.message).toBe("succeeded");
+    expect(ran).toEqual(["lookup"]);
+    const steps = readRunLog(log).flatMap(({ record }) => (record instanceof NodeStepRecord ? [record.step] : []));
+    expect(steps.filter((step) => step["kind"] === "released")).toEqual([{ kind: "released", call_id: callId, note: "approved" }]);
+    expect(JSON.stringify(model.requests[0]!.messages)).not.toContain("approved");
+  });
+
+  test("release checks its arguments before it opens the log, and refuses a call that isn't a hold", async () => {
+    const missing = join(ROOT, "missing.jsonl");
+    expect(await rejected(release(missing, 5 as unknown as string))).toEqual(new YianTypeError("callId must be a string"));
+    expect(await rejected(release(missing, "c", { note: 5 as unknown as string }))).toEqual(new YianTypeError("note must be a string or null"));
+    expect(await rejected(release(missing, "c", { note: "" }))).toEqual(new YianRangeError("note must be a non-empty string"));
+    const { log, flow, runId } = await waitingRun();
+    const refused = async (callId: string) => ((await rejected(release(log, callId, { env: NO_ENV, flow }))) as DeliveryRefused).reason;
+    expect([await refused(`${runId}/first`), await refused("nobody")]).toEqual(["not_held", "unknown_call"]);
   });
 
   test("a resume after a crash before node_waiting keeps the hold, runs no tool and publishes no CallHeld", async () => {

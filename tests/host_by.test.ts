@@ -164,18 +164,52 @@ test("complete records its by beside the step, which holds none, and the model n
   expect(JSON.stringify(model.requests)).not.toContain("Zelda Quartermain");
 });
 
-test("release records its by beside the released step", async () => {
+/** A run of `REPLY` waiting on its agent's one `lookup` call, which the hook held. */
+async function heldRun() {
   const log = freshLog();
   const lookup = tool({ name: "lookup", description: "Look up.", parameters: { type: "object", properties: {} }, execute: () => "found" });
   const models = serving(new ScriptedModel([callReply(["lookup", {}, "c1"])], CONFIG));
   const flow = await loadFlow(REPLY.replace("[hold, lookup]", "[lookup]"));
   const result = await runFlow(flow, {}, gated({ env, log, tools: { lookup }, models }, () => pending()));
   expect(result.status, result.failure?.message).toBe("waiting");
-  const [held] = pendingCalls(log);
-  await release(log, held!.callId, { env, by: OWNER, note: "fine" });
+  return { log, callId: pendingCalls(log)[0]!.callId };
+}
+
+test("release records its by beside the released step", async () => {
+  const { log, callId } = await heldRun();
+  await release(log, callId, { env, by: OWNER, note: "fine" });
   const record = last(log) as NodeStepRecord;
-  expect(record.step).toEqual({ kind: "released", call_id: held!.callId, note: "fine" });
+  expect(record.step).toEqual({ kind: "released", call_id: callId, note: "fine" });
   expect(record.by).toEqual(OWNER);
+});
+
+test("a repeated complete or release by the same by is null, by anyone else call_settled, also from a replay", async () => {
+  const answered = freshLog();
+  const model = new ScriptedModel([callReply(["hold", {}, "c1"])], CONFIG);
+  await runFlow(await loadFlow(REPLY), {}, { env, log: answered, tools: tools(), models: serving(model), runId: "r" });
+  const [call] = pendingCalls(answered);
+  await complete(answered, call!.callId, { output: "ok" }, { env, by: ADA });
+  const held = await heldRun();
+  await release(held.log, held.callId, { env, by: OWNER, note: "fine" });
+  type Again = (at: string, by: Author | null) => Promise<number | null>;
+  const cases: [string, Again, Author, "answered" | "released"][] = [
+    [answered, (at, by) => complete(at, call!.callId, { output: "ok" }, { env, by }), ADA, "answered"],
+    // A release's note may differ: the first one stands.
+    [held.log, (at, by) => release(at, held.callId, { env, by, note: "again" }), OWNER, "released"],
+  ];
+  for (const [log, again, first, state] of cases) {
+    const copy = freshLog();
+    copyFileSync(log, copy);
+    for (const at of [log, copy]) {
+      const before = readFileSync(at);
+      expect(await again(at, first)).toBeNull();
+      for (const by of [HOST, null]) {
+        const error = (await rejected(again(at, by))) as DeliveryRefused;
+        expect([error.reason, error.callState]).toEqual(["call_settled", state]);
+      }
+      expect(readFileSync(at).equals(before)).toBe(true);
+    }
+  }
 });
 
 test("a Stop's by rides the record the run applies for it when the reply opens the inbox", async () => {
@@ -192,6 +226,33 @@ test("a Stop's by rides the record the run applies for it when the reply opens t
     [[], ADA],
     [["reply"], ADA],
   ]);
+});
+
+test("a resume from a copy of the log between a Stop and the record the run applies for it keeps the Stop's by", async () => {
+  const log = freshLog();
+  const options = { env, log, models: serving(new ScriptedModel([], CONFIG)), runId: "r", tools: { ask: () => pending() } };
+  expect((await runFlow(await loadFlow(ASK_THEN_REPLY), {}, options)).status).toBe("waiting");
+  const [ask] = pendingCalls(log);
+  await interrupt(log, "m", { env, by: ADA });
+  // A copy has no state in this process: its complete and advance replay the records.
+  const copy = freshLog();
+  copyFileSync(log, copy);
+  await complete(copy, ask!.callId, { output: "yes" }, { env, by: OWNER });
+  expect((await advance({ ...options, log: copy })).output).toBeNull();
+  expect(stopsAt(copy)).toEqual([
+    [[], ADA],
+    [["reply"], ADA],
+  ]);
+});
+
+test("a second interrupt while a Stop stands records nothing, whoever makes it", async () => {
+  const log = freshLog();
+  const options = { env, log, models: serving(new ScriptedModel([], CONFIG)), runId: "r", tools: { ask: () => pending() } };
+  expect((await runFlow(await loadFlow(ASK_THEN_REPLY), {}, options)).status).toBe("waiting");
+  await interrupt(log, "m", { env, by: ADA });
+  const before = readFileSync(log);
+  expect(await interrupt(log, "m", { env, by: OWNER })).toEqual({ seq: null, nodes: [], calls: [] });
+  expect(readFileSync(log).equals(before)).toBe(true);
 });
 
 test("a live interrupt records its by", async () => {

@@ -1,0 +1,164 @@
+# A person interrupts while `approve` (a TOOL calling the pending host tool `approve`) holds the
+# reply back: no agent reads the inbox, so the interrupt records `interrupted {notes, []}` with the
+# person's `by`. An agent completes the approval, and its `by` rides the step that answers it.
+# `reply` opens the inbox while the Stop stands, and the `interrupted` record the run applies for
+# it carries the Stop's `by`, not the approver's. The crash sweep cuts between the two records.
+kind: run
+flow: |
+  id: stop_by
+  name: stop_by
+  llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    notes: !Inbox(str)
+  nodes:
+    approve:
+      kind: call
+      call: approve
+    reply:
+      kind: agent
+      steer_inbox: ${input.notes}
+      input: {ok: "${approve.output}"}
+      system_prompt: Help.
+      prompt: answer
+      output: !Optional(str)
+  output: ${reply.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  sends:
+  - {interrupt: notes, by: {kind: user, name: Ada}}
+  - {complete: r1/approve, output: ok, by: {kind: agent, name: yian-chat}}
+  tools:
+    approve:
+      description: Approve the reply.
+      parameters:
+        type: object
+        properties: {}
+      pending: true
+expect:
+  output:
+    status: succeeded
+    output: null
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        reply:
+          model: gpt-5.5
+          provider: openai
+          _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        notes: {inbox: notes}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, approve]
+  - - node_step
+    - approve
+    - n: 1
+      step:
+        arguments: {}
+        call_id: r1/approve
+        kind: pending
+        tool: approve
+  - - node_waiting
+    - approve
+    - call_ids: [r1/approve]
+  - - run_waiting
+    - null
+    - node_ids: [approve]
+  - - interrupted
+    - null
+    - by: {kind: user, name: Ada}
+      inbox: notes
+      nodes: []
+  - - node_step
+    - approve
+    - by: {kind: agent, name: yian-chat}
+      n: 2
+      step:
+        call_id: r1/approve
+        kind: tool_result
+        output: {kind: str, value: ok}
+  - [node_woken, approve]
+  - - pool_commit
+    - approve
+    - {value: ok}
+  - - node_succeeded
+    - approve
+    - {commit: 15}
+  - [node_started, reply]
+  - - interrupted
+    - null
+    - by: {kind: user, name: Ada}
+      inbox: notes
+      nodes: [reply]
+  - - node_step
+    - reply
+    - n: 1
+      step: {by: 18, kind: interrupted}
+  - [pool_commit, reply]
+  - - pool_commit
+    - reply
+    - key: reply.new_messages
+      steps: [19]
+  - - node_succeeded
+    - reply
+    - {commit: 20, messages: 21}
+  - [node_started, __end__]
+  - [pool_commit, __end__]
+  - - node_succeeded
+    - __end__
+    - {commit: 24}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - {node_id: __start__}
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        notes: {inbox: notes}
+      interrupted: false
+  - - NodeStarted
+    - {node_id: approve}
+  - - NodeWaiting
+    - node_id: approve
+      call_ids: [r1/approve]
+  - - RunWaiting
+    - node_ids: [approve]
+  - - NodeWoken
+    - node_id: approve
+      timed_out: []
+  - - NodeSucceeded
+    - {node_id: approve, output: ok, interrupted: false}
+  - - NodeStarted
+    - {node_id: reply}
+  - - Interrupted
+    - inbox: notes
+      nodes: [reply]
+      scopes: []
+  - - NodeSucceeded
+    - {node_id: reply, interrupted: true}
+  - - NodeStarted
+    - {node_id: __end__}
+  - - NodeSucceeded
+    - {node_id: __end__, interrupted: false}
+  - [RunSucceeded]
+  stream: []

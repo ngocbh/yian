@@ -280,7 +280,9 @@ A record a host call made holds `by` when the call passed one: who made it, as
 `{kind, name, run?, node?}`, its kind `user` (a person), `agent`, `tool`, `host` or `run`. These are
 a send's `pool_commit`, the `node_step` of a `complete` or `release` (beside its `step`),
 `inbox_closed`, `inbox_withdrawn`, `interrupted` and `run_cancelled`. An `interrupted` record that
-stops an agent opening the inbox after a Stop copies that Stop's `by`. No model reads it.
+stops an agent opening the inbox after a Stop copies that Stop's `by`. No model reads it. The
+payload's `by` is an author; an agent's `interrupted` step holds a different `by`, the seq of the
+`interrupted` record it honors.
 
 `yian status` reads these records to say where a run stands. See [How yian works](/how-it-works/)
 for how yian replays a log to recover a run.

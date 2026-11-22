@@ -243,8 +243,8 @@ Your program reaches a waiting run by its log path:
 | `send(log, inbox, value, { key })` | the send's seq | Adds a message to an `Inbox(T)` input; `value` must fit `T`, read as [a tool's result](/code-and-tools/#values-in-and-out) (a whole number is an `int`). With `key`, a later send with the same key, inbox, value and `by` appends nothing and returns the first seq, so a send is safe to retry |
 | `withdraw(log, inbox)` | `[{seq, value}]` | Takes back every message nothing has read yet |
 | `close(log, inbox)` | the seq, or `null` if already closed | Refuses later sends; takes still read what is queued |
-| `complete(log, callId, result)` | the seq, or `null` for the same answer twice | Answers a pending host call (see [Pending host calls](#pending-host-calls)) or a held one |
-| `release(log, callId, { note })` | the seq, or `null` if released before | Runs a held call (see [Gate tool calls](#gate-tool-calls)) |
+| `complete(log, callId, result)` | the seq, or `null` for the same answer twice by the same `by` | Answers a pending host call (see [Pending host calls](#pending-host-calls)) or a held one. The same answer by another `by` is refused `call_settled` |
+| `release(log, callId, { note })` | the seq, or `null` if released before by the same `by` | Runs a held call (see [Gate tool calls](#gate-tool-calls)). A release after one by another `by` is refused `call_settled` |
 | `interrupt(log, inbox)` | `{seq, nodes, calls}` | Stops the agents steered by that inbox |
 | `cancel(log)` | the open host calls it closed | Ends the run as `cancelled` |
 | `pendingCalls(log)` | `PendingCall[]` | Lists open host calls; reads without the lock |

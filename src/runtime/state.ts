@@ -1566,13 +1566,15 @@ export function prepareRunFailed(state: RunState): PreparedTransition {
  * @param result The answer: `{output}` or `{error}`.
  * @param by Who answers it, recorded beside the step; `null` for none.
  * @returns The canonical `NodeStepRecord` and its plan, with no observers; `null` when the call
- *   is already answered with exactly this step (a host's repeat, whoever makes it).
+ *   is already answered with exactly this step and this `by` (a host's repeat).
  * @throws TypeError when `state` or `callId` has the wrong type, or `by` isn't an author or null.
+ * @throws RangeError when a field of `by` is empty.
  * @throws DeliveryRefused, in this order: `ended` once the run has a terminal result;
  *   `not_started` before its run start is complete; `unknown_call` when no open or settled call
  *   has the id (its node settled, or its handler hasn't returned `pending()`); `not_host_call` for
  *   a take or sleep; `call_settled` (with the call's state) for an answered, timed-out, closed or
- *   released call, unless it is an identical repeat; `invalid_value` when the node refuses the
+ *   released call, unless it is an identical repeat (the same answer by the same `by`);
+ *   `invalid_value` when the node refuses the
  *   answer (the `TypeCheckError` is the cause); `too_large` when the step is over the run's
  *   `MAX_EVENT_BYTES`.
  */
@@ -1584,6 +1586,7 @@ export function prepareComplete(
 ): PreparedTransition | null {
   if (!isExactly(state, RunState)) throw new YianTypeError("prepareComplete expects a RunState");
   if (typeof callId !== "string") throw new YianTypeError("call_id must be a string");
+  const answerer = validatedBy(by, "a complete's by");
   requireDeliverable(state);
   const call = hostRecordCall(state, callId);
   if (call.tool === TAKE || call.tool === SLEEP) {
@@ -1595,8 +1598,10 @@ export function prepareComplete(
   const node = state.flow.nodes.get(call.nodeId)!;
   const view = callView(state, call);
   if (call.state !== "open") {
-    if (call.state === "answered" && sameStep(shapedRepeat(node, view, result), view.result)) return null;
-    throw new DeliveryRefused("call_settled", `call ${reprText(callId)} is already ${settledText(call)}`, { callState: call.state });
+    const repeat = call.state === "answered" && sameStep(shapedRepeat(node, view, result), view.result);
+    if (repeat && byJson(call.answeredBy) === byJson(answerer)) return null;
+    const settled = `call ${reprText(callId)} is already ${settledText(call)}${repeat ? " by someone else" : ""}`;
+    throw new DeliveryRefused("call_settled", settled, { callState: call.state });
   }
   let step: JsonObject;
   try {
@@ -1609,7 +1614,7 @@ export function prepareComplete(
   if (size > state.runDefaults.maxEventBytes) {
     throw new DeliveryRefused("too_large", eventTooLarge(`the answer to ${reprText(callId)}`, size, state));
   }
-  return prepareNodeStep(state, call.nodeId, step, by);
+  return prepareNodeStep(state, call.nodeId, step, answerer);
 }
 
 /**
@@ -1622,15 +1627,17 @@ export function prepareComplete(
  * @param note The host's audit note, stored on the step; the model never reads it.
  * @param by Who releases it, recorded beside the step; `null` for none.
  * @returns The canonical `NodeStepRecord` and its plan, with no observers; `null` when the call was
- *   released before, whatever its state now (the first release, its note and its `by` stand).
+ *   released before with this `by`, whatever its state now and whatever the note (the first
+ *   release and its note stand).
  * @throws TypeError when `state` or `callId` has the wrong type, `note` isn't a string or null, or
  *   `by` isn't an author or null.
- * @throws RangeError when `note` is empty, has a lone surrogate, or is over `GATE_TEXT_MAX_BYTES`.
+ * @throws RangeError when `note` is empty, has a lone surrogate, or is over `GATE_TEXT_MAX_BYTES`,
+ *   or a field of `by` is empty.
  * @throws DeliveryRefused, in this order: `ended` once the run has a terminal result;
  *   `not_started` before its run start is complete; `unknown_call` when no open or settled call
  *   has the id; `not_host_call` for a take, a sleep or a flow call; `not_held` for a host call its
  *   handler pended, whose tool ran; `call_settled` (with the call's state) for a hold `complete`
- *   answered or a record closed.
+ *   answered or a record closed, or one released before with another `by`.
  */
 export function prepareRelease(
   state: RunState,
@@ -1642,9 +1649,13 @@ export function prepareRelease(
   if (typeof callId !== "string") throw new YianTypeError("call_id must be a string");
   if (note !== null && typeof note !== "string") throw new YianTypeError("note must be a string or null");
   if (note !== null) checkGateText(note, "note");
+  const releaser = validatedBy(by, "a release's by");
   requireDeliverable(state);
   const call = hostRecordCall(state, callId);
-  if (call.releasedSeq !== null) return null;
+  if (call.releasedSeq !== null) {
+    if (byJson(call.releasedBy) === byJson(releaser)) return null;
+    throw new DeliveryRefused("call_settled", `call ${reprText(callId)} was already released by someone else`, { callState: call.state });
+  }
   if (call.tool === TAKE || call.tool === SLEEP) {
     throw new DeliveryRefused("not_host_call", `call ${reprText(callId)} is a ${call.tool}, which the run settles itself`);
   }
@@ -1658,7 +1669,7 @@ export function prepareRelease(
     throw new DeliveryRefused("call_settled", `call ${reprText(callId)} is already ${settledText(call)}`, { callState: call.state });
   }
   const step = note === null ? { kind: "released", call_id: callId } : { kind: "released", call_id: callId, note };
-  return prepareNodeStep(state, call.nodeId, step, by);
+  return prepareNodeStep(state, call.nodeId, step, releaser);
 }
 
 /**
@@ -4216,7 +4227,8 @@ function validateRunWaiting(state: RunState, record: RunWaitingRecord): void {
  * by a resume (`retried`), and be its next step. A `pending` step registers a host call; a
  * `tool_result` for a registered call answers it. A node that isn't running records only a host's
  * `tool_result` answering one of its open calls, or a `released` step naming one of its holds. An
- * agent records no `model_call` or honor while one of its calls is released.
+ * agent records no `model_call` or honor while one of its calls is released. Only a step a host
+ * call writes holds `by` (`hostWritten`).
  */
 function validateNodeStep(state: RunState, record: NodeStepRecord): void {
   const nodeId: unknown = record.nodeId;
@@ -4251,6 +4263,19 @@ function validateNodeStep(state: RunState, record: NodeStepRecord): void {
   } else if (step["kind"] === "steer") {
     validateSteerStep(state, nodeId, step);
   }
+  if (record.by !== null && !hostWritten(state, nodeId, step)) {
+    throw new YianRangeError(
+      `node step ${record.n} of ${reprText(nodeId)} holds by, which only a released step or a tool_result answering an open host call holds`,
+    );
+  }
+}
+
+/** Whether a host call writes `step` on `nodeId`: a `released` step, or a `tool_result` answering an open host call. */
+function hostWritten(state: RunState, nodeId: string, step: Readonly<JsonObject>): boolean {
+  if (step["kind"] === "released") return true;
+  if (step["kind"] !== "tool_result") return false;
+  const call = resultCall(state, nodeId, typeof step["tool_call_id"] === "string" ? step["tool_call_id"] : step["call_id"]);
+  return call?.state === "open" && !call.flow;
 }
 
 /** How a node that isn't running reads in a message: waiting, or put back in ready by a resume. */

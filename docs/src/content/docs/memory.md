@@ -291,8 +291,9 @@ await session.erase({ id: "erase-1", target: { path: "people/ada.md", text: "555
 await session.close();
 ```
 
-- `history` lists changes, newest first, each with its id, author (an agent or TOOL node and its
-  run, or a host) and time.
+- `history` lists changes, newest first, each with its id, author and time. An author is
+  `{kind, name, run?, node?}`, its kind `agent` or `tool` (with its run and node), `user` (a
+  person, as `yian memory` records them), `host` (a program) or `run`.
 - `apply({id, change, author, signal})` makes a change as a write tool does: `change` is the tool's
   arguments and `op`, its name.
 - Each change takes an `id`. Sent again with the same change, it returns the first result; with

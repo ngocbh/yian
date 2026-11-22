@@ -133,6 +133,11 @@ export interface MemoryInfo {
 /** The kinds of `Author`, in the order messages list them. */
 export const AUTHOR_KINDS = Object.freeze(["agent", "tool", "user", "host", "run"] as const);
 
+/** Whether `kind` is one of `AUTHOR_KINDS`. */
+export function isAuthorKind(kind: unknown): kind is Author["kind"] {
+  return (AUTHOR_KINDS as readonly unknown[]).includes(kind);
+}
+
 /**
  * Who made a change, or a host call on a run: an agent, a TOOL node, a person (`user`), a host
  * program, or a run (`run` names it).

@@ -16,7 +16,7 @@ import os from "node:os";
 import { dirname } from "node:path";
 
 import { compareCodeUnits, Failure, OriginRef, reprText } from "../diagnostics.ts";
-import { AUTHOR_KINDS, type Author } from "../memory/base.ts";
+import { AUTHOR_KINDS, type Author, isAuthorKind } from "../memory/base.ts";
 import { retainFailure } from "../nodes/base.ts";
 import { type FileLock, FileLockError, isLocked, lockFile, syncFolder, VERSION } from "../platform.ts";
 import { isExactly } from "../nodes/contracts.ts";
@@ -358,6 +358,8 @@ function requireName(value: unknown, label: string): string {
 /**
  * Return a frozen copy of who made a host call: its `kind` and `name`, and `run` and `node` when
  * set; `null` for `null` or `undefined`. Other fields are left out. `label` names it in errors.
+ * Stricter than a memory change's author (`checkAuthor`), which may hold empty texts: a record
+ * names who made the call, so each text it keeps is non-empty.
  *
  * @throws TypeError when it isn't an object, its kind isn't one of `AUTHOR_KINDS`, or a field
  *   isn't a string.
@@ -367,10 +369,8 @@ export function validatedBy(by: unknown, label: string): Author | null {
   if (by === null || by === undefined) return null;
   if (!isRecord(by)) throw new YianTypeError(`${label} must be {kind, name, run?, node?} or null`);
   const { kind, name, run, node } = by;
-  if (!(AUTHOR_KINDS as readonly unknown[]).includes(kind)) {
-    throw new YianTypeError(`${label} kind must be one of ${AUTHOR_KINDS.join(", ")}`);
-  }
-  const copy: Author = { kind: kind as Author["kind"], name: requireName(name, `${label} name`) };
+  if (!isAuthorKind(kind)) throw new YianTypeError(`${label} kind must be one of ${AUTHOR_KINDS.join(", ")}`);
+  const copy: Author = { kind, name: requireName(name, `${label} name`) };
   if (run !== undefined) copy.run = requireName(run, `${label} run`);
   if (node !== undefined) copy.node = requireName(node, `${label} node`);
   return Object.freeze(copy);

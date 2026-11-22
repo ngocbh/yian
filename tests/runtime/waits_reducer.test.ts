@@ -269,6 +269,16 @@ describe("sends", () => {
     expect(() => prepareRecord(run.state, node)).toThrow(new RangeError("only a send holds by"));
   });
 
+  test("only a step a host call writes holds by", () => {
+    const ada = { kind: "user", name: "Ada" } as const;
+    const run = started(waitFlow(tool("heard", "take")));
+    start(run.log, run.state, "heard");
+    const message = "node step 1 of 'heard' holds by, which only a released step or a tool_result answering an open host call holds";
+    for (const step of [{ kind: "tool_attempt", event: "started", attempt: 1n }, { kind: "tool_result", call_id: "nobody", output: "x" }]) {
+      expect(() => prepareRecord(run.state, new NodeStepRecord("heard", 1, step, { by: ada }))).toThrow(new RangeError(message));
+    }
+  });
+
   test("the size cap is the run's MAX_EVENT_BYTES over the value's run-log JSON", () => {
     const run = started(waitFlow(tool("heard", "take")), { defaults: { MAX_EVENT_BYTES: 7n } });
     send(run.log, run.state, "hello");

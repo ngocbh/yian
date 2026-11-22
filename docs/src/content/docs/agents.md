@@ -494,7 +494,7 @@ The flow said HI!
 - A host never sees a flow call once its flow runs: `pendingCalls` and a run's `waits` leave it
   out, and `complete` refuses it (`not_host_call`). A host's
   [`beforeToolCall`](/embedding/#gate-tool-calls) checks it first, and the flow of a call it holds
-  runs only once released.
+  runs only once released; `complete` answers a held call without running the flow.
 
 A [library](/flows/#library-files) alias grants its defs, each shown as `<alias>_<def>`:
 

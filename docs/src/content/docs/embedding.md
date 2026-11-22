@@ -120,7 +120,7 @@ only a warning: the call still resolves, so your program doesn't repeat it.
 | `log` | The log path you gave, or `null` |
 | `input` | The inputs the run recorded |
 | `events` | The events of this call |
-| `waits` | What a waiting run waits on: `node`, `callId`, `tool`, `inbox`, `deadline`, `settled`, and `held` for a call [`beforeToolCall`](#gate-tool-calls) held |
+| `waits` | What a waiting run waits on: `node`, `callId`, `tool`, `inbox`, `deadline`, `settled`, and `held` (whether [`beforeToolCall`](#gate-tool-calls) held the call) |
 | `unread` | At the end of a run, the messages no take read, as send seqs by inbox |
 | `crashedAttempts` | Node attempts a resume ran again after a crash, by node id |
 | `memoryDrift` | After `advance` recovers a crash or a stop, each memory that changed since the run started, the run's own writes included: `input`, `identity`, and the `recorded` and `current` versions |
@@ -170,8 +170,7 @@ model settings. Pass again what the log doesn't hold: `tools`, `skills`, `contex
 `completesCalls`, `beforeToolCall`, the memories (`memory: { lessons: instance }`, for any
 unfinished run; see [Memory](/memory/#bind-a-memory)), and the API key (`apiKey`, `headers`) of a
 run started with `llmConfig.api_key`. Without that key, `advance` of an unfinished run whose agents
-use it rejects before writing anything, and so does `advance` of an unfinished
-[gated run](#resume-a-gated-run) without `beforeToolCall`.
+use it rejects before writing anything.
 
 The log holds the `codeRoot` the flow was loaded under, so `advance` and the host calls below
 confine the recorded flow's CODE files to it without being told. Passing `codeRoot` is optional; one
@@ -388,19 +387,21 @@ signal's reason, and `advance` runs the stopped nodes again.
 
 ## Gate tool calls
 
-Pass `beforeToolCall` to `runFlow` and `advance` to check each tool call an agent's model makes
-before it runs, such as a permission check. It sees calls to host, MCP, module, memory and flow
-tools, the calls of agents inside a flow an agent calls included. It never sees `ask_user`,
-`load_skill`, a call refused before its tool (see [Agents](/agents/#tools)), a TOOL node, or a
-`call`, `map` or `loop` node.
+Pass `beforeToolCall` to `runFlow` and `advance` to check, before it runs, every tool call an
+agent's model makes, in any flow of the run: a permission check, for example. It never sees
+`ask_user`, `load_skill`, a call refused before its tool (see [Agents](/agents/#tools)), or the
+calls TOOL, `call`, `map` and `loop` nodes make themselves.
 
 ```ts check=fragment
 import { pending, runFlow, type BeforeToolCall } from "@ngocbh/yian";
 
 const beforeToolCall: BeforeToolCall = (call) => {
-  if (call.source.kind === "memory") return undefined;                  // run it
-  if (call.tool === "github_delete_repo") return { refuse: "Deleting a repository needs a person." };
-  if (readOnly(call)) return { run: true, note: "read-only rule" };      // run it, with an audit note
+  const { source } = call;
+  if (source.kind === "memory") return undefined;                        // run it
+  if (source.kind === "mcp" && source.server === "github" && source.tool === "delete_repo") {
+    return { refuse: "Deleting a repository needs a person." };
+  }
+  if (readOnly(source)) return { run: true, note: "read-only rule" };    // run it, with an audit note
   showApprovalCard(call.callId, call.tool, call.arguments);              // your code
   return pending();                                                      // hold it until you answer
 };
@@ -418,7 +419,7 @@ const first = await runFlow(flow, inputs, { log, tools, beforeToolCall });
 | `attempt` | 1, or more for a call sent again after a crash or a stop |
 
 The second argument holds `runId` and a `signal` that aborts once the answer isn't wanted: the run
-stops, or the agent is interrupted.
+or the node stops (a failing sibling, the end of a flow call's scope), or the agent is interrupted.
 
 | Answer | What happens |
 |---|---|
@@ -427,8 +428,8 @@ stops, or the agent is interrupted.
 | `{ refuse: text }` | The call doesn't run; the model reads `text` as its error |
 | `pending()` | The call is held: its tool doesn't run until you answer it (below) |
 
-- A call is checked after its arguments' schema, its validators and `isConcurrencySafe`, so keep
-  those free of effects. The hook reads the model's arguments, never a validator's output.
+- The hook runs after the call's schema, validators and `isConcurrencySafe` (see
+  [Host tools](/agents/#host-tools)), and reads the model's arguments.
 - Calls that run together (see [Agents](/agents/#tools)) are all decided before any of them starts.
   A call is never started if its agent is interrupted while the hook decides.
 - The hook may return a Promise; yian sets no timeout. A stop or crash while it decides loses the
@@ -436,11 +437,12 @@ stops, or the agent is interrupted.
   answer with a Promise only for quick checks, and hold with `pending()` for a classifier or a
   person.
 - A hook that throws or rejects, or an answer of any other shape, refuses the call with `The
-  host's permission check failed; the call didn't run.` and a warning. A note or refusal must be
-  non-empty and at most 4096 UTF-8 bytes.
+  host's permission check failed; the call didn't run.` and a warning. So does a note or refusal
+  that is empty, holds a lone surrogate, or is over 4096 UTF-8 bytes.
 - A refusal publishes `ToolCallStarted`, then `ToolCallFinished` with `error: "refused"`.
 - The model never reads a note. It is stored on the call's first record, and `agentCall`'s
-  `toolResults` show it as `note`; a crash before that record loses it.
+  `toolResults` show it as `note`; a crash before that record loses it. Notes, a release's too,
+  are plain text in the log, so keep secrets out of them.
 
 ### Held calls
 
@@ -457,22 +459,23 @@ const next = await advance({ log, tools, beforeToolCall });
 ```
 
 - `complete` answers it without running the tool; the model reads that result.
-- `release` runs it once, as the model asked it, when the agent next starts or wakes: checked
-  again, not asked about again. Its note is stored on the `released` step, and `agentCall` shows
-  it as `releaseNote`; the model never reads it. A later `complete` is refused with
-  `call_settled`.
+- `release` runs it once, as the model asked it, when the agent next starts or wakes: its
+  validators run again; the hook isn't asked again. Its note is stored on the `released` step, and
+  `agentCall` shows it as `releaseNote`; the model never reads it. A note that is empty, holds a
+  lone surrogate or is over 4096 UTF-8 bytes throws a `RangeError`. Until its agent runs it,
+  `complete` is refused with `call_settled`; a tool that then returns `pending()` is answered with
+  `complete` as usual.
 - The reply's calls before a hold, and those that run with it, run. Its later calls wait until
   every hold is answered or released, then are checked. Steers stay queued until then; to answer a
   card with what someone typed, pass it to `complete`.
 - `interrupt` closes a hold, and the model reads `Not run: interrupted by the user.`; a released
   call that hasn't started is skipped the same way. `interrupt`'s `calls` lists the holds it
   closed, but not the released calls. `cancel` closes holds too.
-- If a crash or stop may have cut a released call after it started, a resumable tool is sent again
-  with the same `ctx.callId` and its next `ctx.attempt`, and any other is closed `crashed`. Two
-  cases count as such a cut though the call never started: a stop between the agent's wake and the
-  call's start, which a graceful shutdown can make; and a crash just as the agent starts with an
-  interrupt sent while the run was down, after which a resumable call is sent again despite the
-  interrupt.
+- A stop or crash after the agent woke for a released call and before its result is recorded,
+  where a graceful shutdown often lands, means it may have started: a resumable tool is sent again
+  with the same `ctx.callId` and its next `ctx.attempt`, and any other is closed `crashed`. A crash
+  just as the agent starts with an interrupt sent while the run was down also sends a resumable
+  call again, despite the interrupt.
 - A call sent again after a crash can't be held, since it may have run: when the hook answers
   `pending()` for it, it is closed `crashed`, with a warning.
 

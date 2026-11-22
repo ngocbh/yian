@@ -129,8 +129,8 @@ take `-w`, `--mcp-config` and `--memory`.
   recorded. A missing memory, or another one, stops the resume. A crash resume that finds a memory
   changed since the run started says so, and the run keeps the recall it started with.
 - A run a host gated with [`beforeToolCall`](/embedding/#gate-tool-calls) resumes only with that
-  hook, which `yian run` doesn't have: `--resume` stops with exit 1, in a chat too, and leaves the
-  log as it was.
+  hook, which `yian run` doesn't have: `--resume` stops with exit 1, also when it resumes as a
+  terminal chat, and leaves the log as it was.
 
 ### Waiting runs
 
@@ -437,9 +437,9 @@ crashed attempts: draft=1
 With `--json`, the document also has `ready` and `wake_at`. `ready` is `true` when a waiting node
 can wake now: every call it waits on is settled, a call a host's
 [`beforeToolCall`](/embedding/#gate-tool-calls) held is answered, closed or released, or an
-interrupt stops it. `wake_at` is the
-earliest deadline a waiting node waits on, or `null`. Once `wake_at` has passed, `--resume` runs
-on too, though `ready` stays `false`. A log it can't read exits 1.
+interrupt stops it. `wake_at` is the earliest deadline a waiting node waits on, or `null`. Once
+`wake_at` has passed, `--resume` runs on too, though `ready` stays `false`. A log it can't read
+exits 1.
 
 `yian status` with no `LOG` lists the runs in `~/.yian/runs`, oldest first: run id, status, start
 time and flow file. It first updates the run index, `~/.yian/runs/index.sqlite`, which is rebuilt

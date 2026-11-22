@@ -14,8 +14,9 @@ import { loadFlow } from "../src/compose/loader.ts";
 import type { RunEvent } from "../src/events.ts";
 import { ScriptedModel } from "../src/llm/testing.ts";
 import { ToolNode } from "../src/nodes/tool/node.ts";
-import { advance, cancel, complete, inspectRun, interrupt, pendingCalls, runFlow } from "../src/run.ts";
-import { NodeStepRecord, readRunLog, RunResumedRecord, RunStartedRecord } from "../src/runtime/log.ts";
+import { advance, cancel, complete, inspectRun, interrupt, pendingCalls, replayRunLog, runFlow } from "../src/run.ts";
+import { JsonlRunLog, NodeStepRecord, readRunLog, RunResumedRecord, RunStartedRecord } from "../src/runtime/log.ts";
+import { commitPrepared, prepareRelease } from "../src/runtime/state.ts";
 import { pending } from "../src/tools/context.ts";
 import { FunctionTool, tool } from "../src/tools/function_tools.ts";
 import type { BeforeToolCall, GatedCall, ToolSource } from "../src/tools/gate.ts";
@@ -215,6 +216,18 @@ output: \${reply.output}
     for (const [call] of [calls, closed]) {
       expect([call!.held, call!.source, Object.isFrozen(call!.source)]).toEqual([true, SOURCE, true]);
     }
+  });
+
+  test("an agent woken to a released hold fails its node, and never runs the call", async () => {
+    const { log, options, ran, callId } = await heldRun();
+    const authority = JsonlRunLog.resume(log);
+    const state = replayRunLog(await loadFlow(FLOW), authority);
+    commitPrepared(authority, state, prepareRelease(state, callId)!);
+    authority.close();
+    const result = await advance(options);
+    expect(result.status).toBe("failed");
+    expect(result.failure?.message).toContain(`agent node 'reply': call '${callId}' was released, which this agent can't run yet`);
+    expect(ran).toEqual([]);
   });
 
   test("a resume after a crash before node_waiting keeps the hold, runs no tool and publishes no CallHeld", async () => {

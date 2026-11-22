@@ -490,7 +490,7 @@ test("the interrupt delivery op prepares the interrupt; a missing running is non
   // rule, and only the waiting reader is named.
   const offline = prepareDelivery(state, { kind: "interrupt", inbox: "msgs" }) as PreparedTransition;
   expect([...(offline.record as InterruptedRecord).nodes]).toEqual(["w"]);
-  expect(() => prepareDelivery(state, { kind: "nope" } as never)).toThrow(/send, withdraw, complete, close, interrupt or cancel/);
+  expect(() => prepareDelivery(state, { kind: "nope" } as never)).toThrow(/send, withdraw, complete, release, close, interrupt or cancel/);
 });
 
 // --- The remembered Stop's window ------------------------------------------------------------- //

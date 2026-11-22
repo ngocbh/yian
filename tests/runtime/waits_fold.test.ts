@@ -181,6 +181,7 @@ test("a pending step registers a host call; its tool_result answers it", () => {
       closedInbox: false,
       closedReason: null,
       closedSeq: null,
+      releasedSeq: null,
       flow: false,
       scope: null,
       held: false,

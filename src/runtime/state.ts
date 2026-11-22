@@ -207,7 +207,7 @@ export class NodeDataError extends Error {
   }
 }
 
-/** Why a host delivery (a send, withdraw, complete, close, interrupt or cancel) was refused. */
+/** Why a host delivery (a send, withdraw, complete, release, close, interrupt or cancel) was refused. */
 export type DeliveryRefusal =
   | "unknown_inbox"
   | "not_started"
@@ -218,9 +218,10 @@ export type DeliveryRefusal =
   | "too_large"
   | "unknown_call"
   | "call_settled"
-  | "not_host_call";
+  | "not_host_call"
+  | "not_held";
 
-/** A send, withdraw, complete, close, interrupt or cancel the run refuses; nothing was appended. */
+/** A send, withdraw, complete, release, close, interrupt or cancel the run refuses; nothing was appended. */
 export class DeliveryRefused extends YianRangeError {
   override name = "DeliveryRefused";
   /** Why the delivery was refused. */
@@ -1532,9 +1533,9 @@ export function prepareRunFailed(state: RunState): PreparedTransition {
  * @throws DeliveryRefused, in this order: `ended` once the run has a terminal result;
  *   `not_started` before its run start is complete; `unknown_call` when no open or settled call
  *   has the id (its node settled, or its handler hasn't returned `pending()`); `not_host_call` for
- *   a take or sleep; `call_settled` (with the call's state) for an answered, timed-out or closed
- *   call, unless it is an identical repeat; `invalid_value` when the node refuses the answer (the
- *   `TypeCheckError` is the cause); `too_large` when the step is over the run's
+ *   a take or sleep; `call_settled` (with the call's state) for an answered, timed-out, closed or
+ *   released call, unless it is an identical repeat; `invalid_value` when the node refuses the
+ *   answer (the `TypeCheckError` is the cause); `too_large` when the step is over the run's
  *   `MAX_EVENT_BYTES`.
  */
 export function prepareComplete(state: RunState, callId: string, result: CompleteResult): PreparedTransition | null {
@@ -1569,9 +1570,52 @@ export function prepareComplete(state: RunState, callId: string, result: Complet
   return prepareNodeStep(state, call.nodeId, step);
 }
 
-/** How a settled call's state reads in a message: `closed (<reason>)`, `answered` or `timed out`. */
+/**
+ * Prepare a host's release of the held call `callId`: a `released` step on its node, whether it
+ * waits or still runs, holding `note` when given. Its agent runs the call as the model asked it
+ * when it next evaluates; nothing runs it now.
+ *
+ * @param state The run's state.
+ * @param callId The call's id, as its hold's `pending` step names it.
+ * @param note The host's audit note, stored on the step; the model never reads it.
+ * @returns The canonical `NodeStepRecord` and its plan, with no observers; `null` when the call was
+ *   released before, whatever its state now (the first release and its note stand).
+ * @throws TypeError when `state` or `callId` has the wrong type, or `note` isn't a string or null.
+ * @throws RangeError when `note` is empty, has a lone surrogate, or is over `GATE_TEXT_MAX_BYTES`.
+ * @throws DeliveryRefused, in this order: `ended` once the run has a terminal result;
+ *   `not_started` before its run start is complete; `unknown_call` when no open or settled call
+ *   has the id; `not_host_call` for a take, a sleep or a flow call; `not_held` for a host call its
+ *   handler pended, whose tool ran; `call_settled` (with the call's state) for a hold `complete`
+ *   answered or a record closed.
+ */
+export function prepareRelease(state: RunState, callId: string, note: string | null = null): PreparedTransition | null {
+  if (!isExactly(state, RunState)) throw new YianTypeError("prepareRelease expects a RunState");
+  if (typeof callId !== "string") throw new YianTypeError("call_id must be a string");
+  if (note !== null && typeof note !== "string") throw new YianTypeError("note must be a string or null");
+  if (note !== null) checkGateText(note, "note");
+  requireDeliverable(state);
+  const call = state.waits.calls.get(callId);
+  if (call === undefined) throw new DeliveryRefused("unknown_call", `the run has no pending call ${reprText(callId)}`);
+  if (call.releasedSeq !== null) return null;
+  if (call.tool === TAKE || call.tool === SLEEP) {
+    throw new DeliveryRefused("not_host_call", `call ${reprText(callId)} is a ${call.tool}, which the run settles itself`);
+  }
+  if (call.flow) {
+    throw new DeliveryRefused("not_host_call", `call ${reprText(callId)} is a call of flow ${reprText(call.tool)}, which the run answers itself`);
+  }
+  if (!call.held) {
+    throw new DeliveryRefused("not_held", `call ${reprText(callId)} wasn't held: its tool ran and pended, so complete answers it`);
+  }
+  if (call.state !== "open") {
+    throw new DeliveryRefused("call_settled", `call ${reprText(callId)} is already ${settledText(call)}`, { callState: call.state });
+  }
+  return prepareNodeStep(state, call.nodeId, note === null ? { kind: "released", call_id: callId } : { kind: "released", call_id: callId, note });
+}
+
+/** How a settled call's state reads in a message: `closed (<reason>)`, `answered`, `timed out` or `released`. */
 function settledText(call: Call): string {
-  return call.state === "closed" ? `closed (${call.closedReason})` : call.state === "answered" ? "answered" : "timed out";
+  if (call.state === "closed") return `closed (${call.closedReason})`;
+  return call.state === "timed_out" ? "timed out" : call.state;
 }
 
 /** The step `node` shapes for a repeated answer, or `null` when it refuses the answer. */
@@ -1627,11 +1671,13 @@ export function callResultStep(state: RunState, callId: string): Readonly<JsonOb
 
 /**
  * The seq of the record that settled registered call `call`: the record that closed it, the
- * `tool_result` step that answered it, or for a flow call its scope END's commit (the agent's
- * `tool_result` only records that answer); `null` while it is open, and for a take or sleep.
+ * `tool_result` step that answered it, the `released` step that released it (its agent's result
+ * is still to come), or for a flow call its scope END's commit (the agent's `tool_result` only
+ * records that answer); `null` while it is open, and for a take or sleep.
  */
 export function callSettledAt(state: RunState, call: Call): number | null {
   if (call.state === "closed") return call.closedSeq;
+  if (call.state === "released") return call.releasedSeq;
   if (call.state !== "answered") return null;
   return call.scope === null ? call.resultSeq : (state.producers.get(`${call.scope}/${END_ID}`) ?? null);
 }
@@ -2200,13 +2246,17 @@ export function prepareRecord(
     // Before the close: an interrupt has every field a close has, so the close's guard would narrow it away.
     validateInterrupted(state, canonical);
     const open = canonical.nodes.flatMap((nodeId) => nodeCalls(state.waits, nodeId).filter((call) => call.state === "open"));
+    // A waiting node's released calls never started, so they close too (`applyInterrupted`).
+    const released = canonical.nodes
+      .filter((nodeId) => state.waits.waiting.has(nodeId))
+      .flatMap((nodeId) => nodeCalls(state.waits, nodeId).filter((call) => call.state === "released"));
     const scopes = open.flatMap((call) => (call.scope === null ? [] : [call.scope]));
     // The host calls of the ended scopes close with the interrupted ones.
     const ended = scopes.flatMap((scope) => scopeCalls(state, scope));
     delta = {
       kind: "interrupted",
       nodeIds: canonical.nodes,
-      closedCalls: hostCalls(state, [...open.map((call) => call.callId), ...ended]),
+      closedCalls: hostCalls(state, [...open, ...released].map((call) => call.callId).concat(ended)),
       scopes,
     };
   } else if (isExactly(canonical, InboxClosedRecord)) {
@@ -3860,7 +3910,8 @@ function hostCalls(state: RunState, callIds: Iterable<string>): string[] {
  * Require a wait record to move an in-flight node with no pending commit to the waiting set: its
  * `waits` entry (a take or sleep TOOL node's own call, not yet registered; a take's inbox declared,
  * open and with nothing unread a take may read), and `call_ids` naming exactly calls of the node
- * registered since its last wake or still open at it, not closed, including every open one. A
+ * registered since its last wake or still open at it, not closed, including every open or released
+ * one; a released one only when it was released after the node's latest start or wake. A
  * `steer_inbox` names a declared top-level inbox, on a node that reads a steer inbox.
  */
 function validateNodeWaiting(state: RunState, record: NodeWaitingRecord): void {
@@ -3925,7 +3976,7 @@ function validateNodeWaiting(state: RunState, record: NodeWaitingRecord): void {
     const answeredAt = call.state === "answered" ? callSettledAt(state, call) : null;
     const answeredSince = answeredAt !== null && answeredAt > began;
     const settledByWake =
-      lastWoken !== undefined && call.seq < lastWoken && call.state !== "open" && call.state !== "closed" && !answeredSince;
+      lastWoken !== undefined && call.seq < lastWoken && (call.state === "answered" || call.state === "timed_out") && !answeredSince;
     if (settledByWake) {
       throw new YianRangeError(
         `NodeWaiting call ${reprText(callId)} was registered before the node's last node_woken and settled before its latest start or wake`,
@@ -3939,10 +3990,15 @@ function validateNodeWaiting(state: RunState, record: NodeWaitingRecord): void {
     if (call.state === "closed" && !interrupted && !failedSince) {
       throw new YianRangeError(`NodeWaiting call ${reprText(callId)} was closed (${call.closedReason})`);
     }
+    // A release that landed after the evaluation began finds the hold pended, and the node wakes
+    // at once to run it; a call released before is the evaluation's to run, never to wait on.
+    if (call.state === "released" && call.releasedSeq! <= began) {
+      throw new YianRangeError(`NodeWaiting call ${reprText(callId)} was released before the node's latest start or wake; its agent runs it`);
+    }
   }
   for (const call of nodeCalls(w, nodeId)) {
-    if (call.state === "open" && !record.callIds.includes(call.callId)) {
-      throw new YianRangeError(`NodeWaiting must name the node's open call ${reprText(call.callId)}`);
+    if ((call.state === "open" || call.state === "released") && !record.callIds.includes(call.callId)) {
+      throw new YianRangeError(`NodeWaiting must name the node's ${call.state} call ${reprText(call.callId)}`);
     }
   }
 }
@@ -4330,7 +4386,7 @@ const RELEASED_STEP_KEYS: ReadonlySet<string> = new Set(["kind", "call_id", "not
 /**
  * Require an AGENT's `released` step, the host's release of a held call: only `kind`, `call_id`
  * and an optional `note` (`checkGateText`); `call_id` names a call of this node a hold's `pending`
- * step registered, still open and not released before.
+ * step registered, still open, so never released before.
  */
 function validateReleasedStep(state: RunState, nodeId: string, step: Readonly<JsonObject>): void {
   if (state.flow.nodes.get(nodeId)!.kind !== NodeKind.AGENT) {
@@ -4341,15 +4397,15 @@ function validateReleasedStep(state: RunState, nodeId: string, step: Readonly<Js
   }
   const callId = step["call_id"];
   const call = typeof callId === "string" ? state.waits.calls.get(callId) : undefined;
+  if (call?.nodeId === nodeId && call.releasedSeq !== null) {
+    throw new YianRangeError(`a released step names call ${reprText(call.callId)}, which was released already`);
+  }
   if (call === undefined || call.nodeId !== nodeId || pendingStepOf(state, call)?.["held"] !== true) {
     const named = typeof callId === "string" ? reprText(callId) : writeAsText(callId ?? null);
     throw new YianRangeError(`a released step names call ${named}, which isn't a hold of node ${reprText(nodeId)}`);
   }
   if (call.state !== "open") {
     throw new YianRangeError(`a released step names call ${reprText(call.callId)}, which is already ${settledText(call)}`);
-  }
-  if (state.nodeSteps.get(nodeId)!.some((each) => each["kind"] === "released" && each["call_id"] === callId)) {
-    throw new YianRangeError(`a released step names call ${reprText(call.callId)}, which was released already`);
   }
   if (Object.hasOwn(step, "note")) checkGateText(step["note"], "a released step's note");
 }
@@ -4361,12 +4417,24 @@ function requirePendingDeadline(step: Readonly<JsonObject>): void {
   requireRecordTime(deadline, "pending deadline");
 }
 
-/** Require a `pending` step within the run's `MAX_EVENT_BYTES` whose call isn't registered yet. */
+/**
+ * Require a `pending` step within the run's `MAX_EVENT_BYTES` whose call isn't registered yet, or
+ * is a released call registering again (its tool pended, or its flow is to grow) under its own
+ * tool and tool call id, not as a hold and with no note: the host's note is on its release.
+ */
 function requireNewPendingCall(state: RunState, callId: string, step: Readonly<JsonObject>): void {
   const size = eventBytes(step);
   if (size > state.runDefaults.maxEventBytes) throw new YianRangeError(eventTooLarge(`the pending step of ${reprText(callId)}`, size, state));
-  if (state.waits.calls.has(callId)) {
+  const registered = state.waits.calls.get(callId);
+  if (registered === undefined) return;
+  if (registered.state !== "released" || Object.hasOwn(step, "held")) {
     throw new YianRangeError(`call ${reprText(callId)} is already registered; it belongs to its node until the node settles`);
+  }
+  if (step["tool"] !== registered.tool || step["tool_call_id"] !== registered.resultKey || Object.hasOwn(step, "note")) {
+    throw new YianRangeError(
+      `released call ${reprText(callId)} registers again only as tool ${reprText(registered.tool)}, ` +
+        `call ${reprText(registered.resultKey)}, with no note`,
+    );
   }
 }
 
@@ -4393,9 +4461,11 @@ function latestReply(state: RunState, nodeId: string): number | null {
  * An AGENT's result refers to a registered call only when that call is its own node's and of its
  * latest reply (`resultCall`), since provider ids repeat across replies and nodes. A call closed
  * by record takes one more result on a running AGENT, its closer: `closed` equal to the call's
- * reason, once. No other result carries `closed` for a registered call. A flow call its scope's
- * END answered takes one result on its running agent: exactly the answer that output gives. A
- * refused call's result and a note are `validateGateResult`'s.
+ * reason, once. A released call takes one result on its running agent: its run's, or `closed:
+ * "skipped"` or `"crashed"` for one it didn't run. No other result carries `closed` for a
+ * registered call. A flow call its scope's END answered takes one result on its running agent:
+ * exactly the answer that output gives. A refused call's result and a note are
+ * `validateGateResult`'s.
  */
 function validateToolResultStep(state: RunState, nodeId: string, step: Readonly<JsonObject>, waiting: boolean): void {
   const key = typeof step["tool_call_id"] === "string" ? step["tool_call_id"] : step["call_id"];
@@ -4424,6 +4494,12 @@ function validateToolResultStep(state: RunState, nodeId: string, step: Readonly<
     // Its scope's END answered it; the agent records the answer it reads, exactly.
     if (!sameStep(step, flowAnswerStep(state, call))) {
       throw new YianRangeError(`tool_result for flow call ${reprText(call.callId)} isn't the output its scope committed`);
+    }
+  } else if (agent && !waiting && call.state === "released") {
+    if (closed !== undefined && closed !== "skipped" && closed !== "crashed") {
+      throw new YianRangeError(
+        `tool_result for released call ${reprText(call.callId)} closes it only skipped or crashed, not ${writeAsText(closed)}`,
+      );
     }
   } else if (call.state !== "open") {
     throw new YianRangeError(`tool_result for call ${reprText(call.callId)}, which is already ${settledText(call)}`);

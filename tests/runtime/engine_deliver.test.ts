@@ -67,6 +67,14 @@ test("complete answers once; an identical repeat is a no-op and a different one 
   expect([settled.reason, settled.callState]).toEqual(["call_settled", "answered"]);
 });
 
+test("release refuses a host call its tool pended, which wasn't held, and appends nothing", async () => {
+  const { run, host } = await waitingRun();
+  const before = run.log.nextSequence;
+  expect(refusal(run, { kind: "release", callId: host.callId, note: "ok" }).reason).toBe("not_held");
+  expect(refusal(run, { kind: "release", callId: "nobody" }).reason).toBe("unknown_call");
+  expect(run.log.nextSequence).toBe(before);
+});
+
 test("closing a closed inbox is a no-op", async () => {
   const { run } = await waitingRun();
   expect(run.deliver({ kind: "close", inbox: "m" }).seq).toBe(run.log.nextSequence - 1);

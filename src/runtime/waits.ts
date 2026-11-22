@@ -40,8 +40,11 @@ import {
 
 import { CLOSE_REASONS, type CloseReason } from "../events.ts";
 
-/** Where a registered call stands. */
-export type CallStateKind = "open" | "answered" | "timed_out" | "closed";
+/**
+ * Where a registered call stands: `released` for a held call the host released, which its agent
+ * is to run.
+ */
+export type CallStateKind = "open" | "answered" | "timed_out" | "closed" | "released";
 
 /** One call a waiting or in-flight node registered: a host call, a take or a sleep. */
 export interface Call {
@@ -89,6 +92,11 @@ export interface Call {
   closedReason: CloseReason | null;
   /** The seq of the record that closed it, when its state is `closed`. */
   closedSeq: number | null;
+  /**
+   * The seq of the `released` step that released it, kept once it registers again or settles;
+   * `null` for a call never released.
+   */
+  releasedSeq: number | null;
 }
 
 /** One inbox's queue: unread send seqs, whether it is closed, and the takes absorbing its sends. */
@@ -125,7 +133,7 @@ export interface WaitInfo {
   readonly tool: string;
   readonly inbox: string | null;
   readonly deadline: string | null;
-  /** Whether the call is already answered, timed out or closed, so its node is about to wake. */
+  /** Whether the call is already answered, timed out, closed or released, so its node is about to wake. */
   readonly settled: boolean;
   /** Whether a host's check held the agent's call before its tool ran (`Call.held`). */
   readonly held: boolean;
@@ -243,7 +251,7 @@ const WAITS_JSON_KEYS = [
 ] as const;
 
 /** The call states, for checking a stored call. */
-const CALL_STATES: readonly string[] = ["open", "answered", "timed_out", "closed"];
+const CALL_STATES: readonly string[] = ["open", "answered", "timed_out", "closed", "released"];
 
 /** Return whether `value` is a plain JSON object (not an array or null). */
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -318,6 +326,7 @@ function callFromJson(value: unknown, label: string): Call {
     closedInbox: typeof value["closedInbox"] === "boolean" ? value["closedInbox"] : undefined,
     closedReason: textOrNull("closedReason"),
     closedSeq: intOrNullField("closedSeq"),
+    releasedSeq: intOrNullField("releasedSeq"),
     flow: typeof value["flow"] === "boolean" ? value["flow"] : undefined,
     scope: textOrNull("scope"),
     held: typeof value["held"] === "boolean" ? value["held"] : undefined,
@@ -327,8 +336,9 @@ function callFromJson(value: unknown, label: string): Call {
     (call.mode !== null && call.mode !== "one" && call.mode !== "all") ||
     !CALL_STATES.includes(call.state!) ||
     (call.closedReason !== null && !(CLOSE_REASONS as readonly string[]).includes(call.closedReason!)) ||
-    // A closed call keeps the seq of the record that closed it.
-    (call.state === "closed" && call.closedSeq === null)
+    // A closed call keeps the seq of the record that closed it, and a released one its release's.
+    (call.state === "closed" && call.closedSeq === null) ||
+    (call.state === "released" && call.releasedSeq === null)
   ) {
     throw bad();
   }
@@ -401,7 +411,8 @@ const FRONTIER_KINDS: ReadonlyMap<Function, string> = new Map<Function, string>(
  * Fold one accepted record into `w`, in log order. Records only: the reducer validates each record
  * before it is folded, so the fold trusts what it reads and changes nothing for a record it has no
  * rule for. Of a step it reads only `kind`, `call_id`, `tool`, `tool_call_id`, `deadline`, `flow`,
- * `scope`, `held`, `closed`, `inbox` and `from`.
+ * `scope`, `held`, `closed`, `inbox` and `from`. A released call registered again keeps its
+ * release.
  *
  * @param envelope The record and its seq; a `RecordEnvelope` fits.
  * @throws RangeError when a `pending` step's `deadline` is set but isn't a record time.
@@ -520,7 +531,10 @@ function reoffer(w: WaitsState, name: string): void {
   }
 }
 
-/** Apply a node step: a `pending` step registers a host call, a `tool_result` answers one. */
+/**
+ * Apply a node step: a `pending` step registers a host call, a `tool_result` answers one, and a
+ * `released` step releases a held one.
+ */
 function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
   const step = record.step;
   const callId = step["call_id"];
@@ -546,6 +560,7 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
       closedInbox: false,
       closedReason: null,
       closedSeq: null,
+      releasedSeq: w.calls.get(callId)?.releasedSeq ?? null,
       flow: step["flow"] === true,
       scope: step["flow"] === true && typeof step["scope"] === "string" ? step["scope"] : null,
       held: step["held"] === true,
@@ -553,20 +568,29 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
     // The interrupt closed the node's calls when it landed; a tool whose group was already
     // running may pend after it, and its call is closed at once.
     if (w.interrupts.has(record.nodeId)) close(w.calls.get(callId), "interrupted", seq);
+  } else if (step["kind"] === "released") {
+    const call = typeof callId === "string" ? w.calls.get(callId) : undefined;
+    if (call?.state === "open") {
+      call.state = "released";
+      call.releasedSeq = seq;
+    }
   } else if (step["kind"] === "model_call") {
     w._replies.set(record.nodeId, seq);
   } else if (step["kind"] === "tool_result") {
     const key = typeof toolCallId === "string" ? toolCallId : callId;
     const closed = step["closed"];
-    // An agent's closer for a call a record closed is its result; the call stays closed. Only a
-    // call of the node's latest reply takes it, as the reducer checks: provider ids repeat across
-    // replies. Any other closer, or an agent result no pending step registered, answers nothing.
+    // An agent's closer for a call a record closed is its result; the call stays closed. A released
+    // call its agent didn't run takes `skipped` or `crashed` as its answer. Only a call of the
+    // node's latest reply takes either, as the reducer checks: provider ids repeat across replies.
+    // Any other closer, or an agent result no pending step registered, answers nothing.
     if (typeof closed === "string") {
       const reply = w._replies.get(record.nodeId);
       for (const call of w.calls.values()) {
         const latest = call.pendingSeq !== null && (reply === undefined || call.pendingSeq > reply);
         const closes = call.state === "closed" && call.closedReason === closed && call.resultSeq === null;
-        if (call.nodeId === record.nodeId && call.resultKey === key && latest && closes) {
+        const answers = call.state === "released" && (closed === "skipped" || closed === "crashed");
+        if (call.nodeId === record.nodeId && call.resultKey === key && latest && (closes || answers)) {
+          if (answers) call.state = "answered";
           call.resultSeq = seq;
           return;
         }
@@ -574,9 +598,11 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
       return;
     }
     for (const call of w.calls.values()) {
-      // A flow call its scope's END answered takes its agent's result, once.
+      // A flow call its scope's END answered takes its agent's result, once, and a released call
+      // the result of its run.
       const flowAnswer = call.flow && call.state === "answered" && call.resultSeq === null;
-      if (call.nodeId === record.nodeId && call.resultKey === key && (call.state === "open" || flowAnswer)) {
+      const takes = call.state === "open" || call.state === "released" || flowAnswer;
+      if (call.nodeId === record.nodeId && call.resultKey === key && takes) {
         call.state = "answered";
         call.resultSeq = seq;
         return;
@@ -593,7 +619,8 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
 
 /**
  * Apply `interrupted`: each named node holds a pending interrupt, and its open calls close
- * `interrupted`; the scope of each of its open flow calls ends.
+ * `interrupted`, a waiting node's released calls too; the scope of each of its open flow calls
+ * ends.
  */
 function applyInterrupted(w: WaitsState, seq: number, record: InterruptedRecord): void {
   // Once it has stopped an agent the Stop stays so: a replayed empty record can't extend its window.
@@ -602,8 +629,11 @@ function applyInterrupted(w: WaitsState, seq: number, record: InterruptedRecord)
   for (const nodeId of record.nodes) {
     w.interrupts.set(nodeId, seq);
     w._interruptInboxes.set(nodeId, record.inbox);
+    // A waiting node's released calls haven't started; a running node's are its agent's to settle.
+    const waiting = w.waiting.has(nodeId);
     for (const call of nodeCalls(w, nodeId)) {
       const open = call.state === "open";
+      if (waiting && call.state === "released") shut(call, "interrupted", seq);
       close(call, "interrupted", seq);
       if (open && call.scope !== null) endScope(w, call.scope);
     }
@@ -638,6 +668,7 @@ function applyWaiting(w: WaitsState, seq: number, record: NodeWaitingRecord): vo
       closedInbox: false,
       closedReason: null,
       closedSeq: null,
+      releasedSeq: null,
       flow: false,
       scope: null,
       held: false,
@@ -740,7 +771,11 @@ function applyWithdrawn(w: WaitsState, record: InboxWithdrawnRecord): void {
 
 /** Close `call` with `reason` when it is open, at the record at `seq`. */
 function close(call: Call | undefined, reason: CloseReason, seq: number): void {
-  if (call === undefined || call.state !== "open") return;
+  if (call !== undefined && call.state === "open") shut(call, reason, seq);
+}
+
+/** Close `call` with `reason`, at the record at `seq`. */
+function shut(call: Call, reason: CloseReason, seq: number): void {
   call.state = "closed";
   call.closedReason = reason;
   call.closedSeq = seq;
@@ -775,7 +810,8 @@ export function nodeCalls(w: WaitsState, nodeId: string): readonly Call[] {
 
 /**
  * Return whether `nodeId` waits and an interrupt names it, every call it waits on is settled, or a
- * held call it waits on is no longer open: the reply's later calls wait only for its holds.
+ * held call it waits on is no longer open (answered, closed or released): the reply's later calls
+ * wait only for its holds.
  */
 export function isWakeable(w: WaitsState, nodeId: string): boolean {
   const waiting = w.waiting.get(nodeId);

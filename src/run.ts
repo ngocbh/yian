@@ -103,7 +103,7 @@ import {
 import { validateHeaders } from "./llm_clients/connection_settings.ts";
 import { defaultModelAccess, type ModelAccess } from "./llm_clients/factory.ts";
 import { Message, NamedTool, type Request, ToolCallPart, ToolSpec } from "./llm/messages.ts";
-import { isMemory, type MemoryBase } from "./memory/base.ts";
+import { type Author, isMemory, type MemoryBase } from "./memory/base.ts";
 import {
   type FoldedSteps,
   foldSteps,
@@ -155,6 +155,7 @@ import {
   type RunRecord,
   RunResumedRecord,
   RunStartedRecord,
+  validatedBy,
 } from "./runtime/log.ts";
 import { emptyRunScan, foldRunScan, scanStatus, unfinishedStatus } from "./runtime/run_index.ts";
 import {
@@ -2088,10 +2089,17 @@ function checkRecordedToolGroups(
 }
 
 /**
- * The options of a host call on a run log. A live delivery ignores them, except `codeRoot`'s check
- * and the checks of `apiKey` and `headers`.
+ * The options of a host call on a run log. A live delivery ignores them, except `by`, `codeRoot`'s
+ * check and the checks of `apiKey` and `headers`.
  */
 export interface DeliveryOptions {
+  /**
+   * Who makes the call: a person (`user`), an agent, a TOOL node, a host program or a run. It is
+   * recorded on the call's record (beside the step of a `complete` or `release`, never in it), and
+   * no model reads it. A Stop's is copied onto the records the run applies for it. `null` (the
+   * default) records none.
+   */
+  by?: Author | null;
   /**
    * As `advance`'s `env`: the environment the call reads `YIAN_*` values from, which must be the
    * ones the run recorded (default `processEnv`).
@@ -2119,7 +2127,7 @@ export interface DeliveryOptions {
 /** The options of `send`: `DeliveryOptions`, and the send's idempotency key. */
 export interface SendOptions extends DeliveryOptions {
   /**
-   * A non-empty key recorded with the send. A later send with the same key, inbox and value
+   * A non-empty key recorded with the send. A later send with the same key, inbox, value and `by`
    * appends nothing and returns this send's seq, so a host that lost the reply can send again.
    */
   key?: string | null;
@@ -2141,15 +2149,20 @@ interface Delivered {
  * Offline, a waiting run's registry entry is reused while the log is the file it left; otherwise
  * `fromRecords`, when given, delivers from the opened log alone, else the recorded flow is
  * compiled and the log replayed, as `advance` does. A refused delivery keeps the entry. `before`
- * sees the state just before the delivery, synchronously, when there is one.
+ * sees the state just before the delivery, synchronously, when there is one. `options.by` is
+ * checked first and goes with `op`, and to `fromRecords`.
+ *
+ * @throws TypeError, RangeError when `options.by` isn't an author or null (`validatedBy`).
  */
 async function deliverTo(
   log: string,
-  op: DeliveryOp,
+  bare: DeliveryOp,
   options: DeliveryOptions,
   before: (state: RunState) => void = () => {},
-  fromRecords: ((authority: JsonlRunLog) => Delivered) | null = null,
+  fromRecords: ((authority: JsonlRunLog, by: Author | null) => Delivered) | null = null,
 ): Promise<Delivered> {
+  const by = validatedBy(options.by, "a host call's by");
+  const op: DeliveryOp = { ...bare, by };
   const env = options.env ?? processEnv;
   return withEnv(env, async () => {
     current();
@@ -2184,7 +2197,7 @@ async function deliverTo(
       const want = given === null ? { hostFlow } : { hostFlow, credentials: given };
       const kept = reusable(runHold.idle, authority, key, want);
       if (kept === null && fromRecords !== null) {
-        const delivered = fromRecords(opened);
+        const delivered = fromRecords(opened, by);
         appended = delivered.record !== null;
         return delivered;
       }
@@ -2233,13 +2246,13 @@ async function deliverTo(
  * @param event The value, checked against `T`.
  * @param options See `SendOptions`.
  * @returns The send's seq; for a repeat of a keyed send, the first send's.
- * @throws TypeError when `inbox` isn't a string, `options.key` isn't a string or `null`, or
- *   `options.flow` isn't a `ComposedFlow` or `null`.
- * @throws RangeError when `options.key` is empty.
+ * @throws TypeError when `inbox` isn't a string, `options.key` isn't a string or `null`,
+ *   `options.by` isn't an author or `null`, or `options.flow` isn't a `ComposedFlow` or `null`.
+ * @throws RangeError when `options.key` or a field of `options.by` is empty.
  * @throws DeliveryRefused (nothing appended) with reason `ended` once the run has a terminal
  *   result, `unknown_inbox`, `inbox_closed` (not for a repeat of a keyed send), `invalid_value`
  *   (the `TypeCheckError` is the cause), `key_reused` (an earlier send holds the key with another
- *   inbox or value) or `too_large` (over the run's `YIAN_MAX_EVENT_BYTES`).
+ *   inbox, value or `by`) or `too_large` (over the run's `YIAN_MAX_EVENT_BYTES`).
  * @throws RunBusyError when another writer holds the log.
  * @throws RangeError when the log is empty or doesn't start with `RunStarted`, the run's flow was
  *   built in code and `options.flow` is missing (or was recorded and it is given),
@@ -2269,15 +2282,17 @@ export async function send(log: string, inbox: string, event: unknown, options: 
  * @param result `{output}`, checked against the tool's output type (an `ask`'s answer can't be
  *   null), or `{error}`, final for the call.
  * @param options See `DeliveryOptions`.
- * @returns The answer's seq, or `null` when the call is already answered with exactly this result.
+ * @returns The answer's seq, or `null` when the call is already answered with exactly this result
+ *   by the same `options.by`; the same answer by anyone else is refused `call_settled`.
  * @throws TypeError when `callId` isn't a string, `result` isn't `{output}` (output not
- *   `undefined`) or `{error: string}`,
- *   or `options.flow` isn't a `ComposedFlow` or `null`.
+ *   `undefined`) or `{error: string}`, `options.by` isn't an author or `null`, or `options.flow`
+ *   isn't a `ComposedFlow` or `null`.
+ * @throws RangeError when a field of `options.by` is empty.
  * @throws DeliveryRefused (nothing appended) with reason `ended` once the run has a terminal
  *   result, `unknown_call` (no such call, its node settled, or its handler hasn't returned
  *   `pending()`), `not_host_call` for a take or sleep, `call_settled` (with `callState`) for an
- *   answered, timed-out, closed or released call, `invalid_value` (the `TypeCheckError` is the
- *   cause) or `too_large`.
+ *   answered (unless it repeats), timed-out, closed or released call, `invalid_value` (the
+ *   `TypeCheckError` is the cause) or `too_large`.
  * @throws RunBusyError, RangeError, LoadError, DefaultsMismatchError and `ENOENT`, as `send`.
  */
 export async function complete(
@@ -2313,15 +2328,18 @@ export interface ReleaseOptions extends DeliveryOptions {
  * @param log The run's JSONL log.
  * @param callId The held call's id, as `CallHeld` or `pendingCalls` gives it.
  * @param options See `DeliveryOptions`; `note` is stored on the `released` step.
- * @returns The `released` step's seq, or `null` when the call was released before, whatever its
- *   state now (the first release and its note stand).
- * @throws TypeError when `callId` isn't a string or `options.note` isn't a string or `null`.
+ * @returns The `released` step's seq, or `null` when the call was released before by the same
+ *   `options.by`, whatever its state now and whatever the note (the first release and its note
+ *   stand); a release by anyone else is refused `call_settled`.
+ * @throws TypeError when `callId` isn't a string, `options.note` isn't a string or `null`, or
+ *   `options.by` isn't an author or `null`.
  * @throws RangeError when `options.note` is empty, has a lone surrogate, or is over
- *   `GATE_TEXT_MAX_BYTES`.
+ *   `GATE_TEXT_MAX_BYTES`, or a field of `options.by` is empty.
  * @throws DeliveryRefused (nothing appended), in this order: `ended`, `not_started`,
- *   `unknown_call` (no such call, or its node doesn't run, wait or start again), `not_host_call`
- *   for a take, a sleep or a flow call, `not_held` for a host call whose handler pended (its tool
- *   ran), `call_settled` (with `callState`) for a hold `complete` answered or a record closed.
+ *   `unknown_call` (no such call, or its node doesn't run, wait or start again), `call_settled`
+ *   (with `callState`) for a call released before by another `options.by`, `not_host_call` for a
+ *   take, a sleep or a flow call, `not_held` for a host call whose handler pended (its tool ran),
+ *   `call_settled` for a hold `complete` answered or a record closed.
  * @throws RunBusyError, RangeError, LoadError, DefaultsMismatchError and `ENOENT`, as `send`.
  */
 export async function release(log: string, callId: string, options: ReleaseOptions = {}): Promise<number | null> {
@@ -2341,7 +2359,9 @@ export async function release(log: string, callId: string, options: ReleaseOptio
  * @param inbox The name of one of the flow's `Inbox(T)` inputs.
  * @param options See `DeliveryOptions`.
  * @returns The close's seq, or `null` when the inbox is already closed.
- * @throws TypeError when `inbox` isn't a string, or `options.flow` isn't a `ComposedFlow` or `null`.
+ * @throws TypeError when `inbox` isn't a string, `options.by` isn't an author or `null`, or
+ *   `options.flow` isn't a `ComposedFlow` or `null`.
+ * @throws RangeError when a field of `options.by` is empty.
  * @throws DeliveryRefused (nothing appended) with reason `ended` once the run has a terminal
  *   result, or `unknown_inbox`.
  * @throws RunBusyError, RangeError, LoadError, DefaultsMismatchError and `ENOENT`, as `send`.
@@ -2370,7 +2390,9 @@ export interface WithdrawnEvent {
  * @param inbox The name of one of the flow's `Inbox(T)` inputs.
  * @param options See `DeliveryOptions`.
  * @returns The sends taken back, in send order; `[]` when nothing was unread (nothing is appended).
- * @throws TypeError when `inbox` isn't a string, or `options.flow` isn't a `ComposedFlow` or `null`.
+ * @throws TypeError when `inbox` isn't a string, `options.by` isn't an author or `null`, or
+ *   `options.flow` isn't a `ComposedFlow` or `null`.
+ * @throws RangeError when a field of `options.by` is empty.
  * @throws DeliveryRefused (nothing appended) with reason `ended` once the run has a terminal
  *   result, `not_started`, or `unknown_inbox`.
  * @throws RunBusyError, RangeError, LoadError, DefaultsMismatchError and `ENOENT`, as `send`.
@@ -2393,22 +2415,24 @@ export async function withdraw(log: string, inbox: string, options: DeliveryOpti
  * engine aborts its running nodes and publishes `CallClosed {reason: "cancelled"}` for each open
  * host call. Delivered as `send` is, except that offline, with no state of this process to reuse,
  * the log's records alone decide it: the flow isn't compiled, so a run whose flow no longer loads
- * (a CODE file gone) can still be ended, and `options.flow` isn't needed.
+ * (a CODE file gone) can still be ended, and `options.flow` isn't needed. Either way the cancel
+ * records `options.by`.
  *
  * @param log The run's JSONL log.
  * @param options See `DeliveryOptions`; `flow` is read only by a live or reused run.
  * @returns The open host calls the cancel closed, as `pendingCalls` listed them.
- * @throws TypeError when `options.flow` isn't a `ComposedFlow` or `null`.
+ * @throws TypeError when `options.by` isn't an author or `null`, or `options.flow` isn't a
+ *   `ComposedFlow` or `null`.
  * @throws DeliveryRefused (nothing appended) with reason `ended` once the run has a terminal
  *   result (a second cancel among them), as `inspectRun` reads it from the records offline, or
  *   `not_started` when the log ends inside its run start.
- * @throws RunBusyError, DefaultsMismatchError and `ENOENT`, as `send`; RangeError when the log is
- *   empty or doesn't start with `RunStarted`, `options.codeRoot` isn't the recorded code root, or
- *   `options.apiKey` or `options.headers` is refused.
+ * @throws RunBusyError, DefaultsMismatchError and `ENOENT`, as `send`; RangeError when a field of
+ *   `options.by` is empty, the log is empty or doesn't start with `RunStarted`, `options.codeRoot`
+ *   isn't the recorded code root, or `options.apiKey` or `options.headers` is refused.
  */
 export async function cancel(log: string, options: DeliveryOptions = {}): Promise<readonly PendingCall[]> {
   let open: readonly PendingCall[] = [];
-  const fromRecords = (authority: JsonlRunLog): Delivered => {
+  const fromRecords = (authority: JsonlRunLog, by: Author | null): Delivered => {
     const scan = emptyRunScan();
     const calls = callArguments(scan.waits);
     for (const envelope of authority) {
@@ -2425,7 +2449,7 @@ export async function cancel(log: string, options: DeliveryOptions = {}): Promis
     const closed = [...scan.waits.calls.values()].filter(
       (call) => call.state === "open" && call.tool !== TAKE && call.tool !== SLEEP,
     );
-    const envelope = authority.append(new RunCancelledRecord());
+    const envelope = authority.append(new RunCancelledRecord({ by }));
     const events = [new RunCancelled(), ...closed.map((call) => new CallClosed({ callId: call.callId, reason: "cancelled" }))];
     return { seq: envelope.seq, events, record: envelope.record };
   };
@@ -2470,7 +2494,8 @@ export interface InterruptResult {
  * the next pickup from `inbox` (a take of it waits, a waiting take is answered or times out, an
  * inline take commits, a withdraw reopens a take), the first `run_waiting` after it stopped an
  * agent, or run end: a reader that opens `inbox` meanwhile is stopped before its first model
- * call, and only its own `interrupted` record and `CallClosed` events report it. Delivered as
+ * call, and only its own `interrupted` record (carrying the Stop's `options.by`) and `CallClosed`
+ * events report it. Delivered as
  * `send` is; offline only waiting agents are named, and a crashed run's agents stop when they
  * reopen.
  *
@@ -2478,7 +2503,9 @@ export interface InterruptResult {
  * @param inbox The name of one of the flow's `Inbox(T)` inputs.
  * @param options See `DeliveryOptions`.
  * @returns The record's seq, the agents it named and the open host calls it closed.
- * @throws TypeError when `inbox` isn't a string, or `options.flow` isn't a `ComposedFlow` or `null`.
+ * @throws TypeError when `inbox` isn't a string, `options.by` isn't an author or `null`, or
+ *   `options.flow` isn't a `ComposedFlow` or `null`.
+ * @throws RangeError when a field of `options.by` is empty.
  * @throws DeliveryRefused (nothing appended) with reason `ended` once the run has a terminal
  *   result, `not_started`, or `unknown_inbox`.
  * @throws RunBusyError, RangeError, LoadError, DefaultsMismatchError and `ENOENT`, as `send`.

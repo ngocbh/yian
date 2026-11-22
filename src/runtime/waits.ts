@@ -3,12 +3,13 @@
  * `inspectRun` and the run index, so each reads the same waits from the same records; run status
  * stays with the run scan (`runtime/run_index.ts`).
  *
- * Knows about: runtime/log (record types, record times), events (`CloseReason`), nodes/base
+ * Knows about: runtime/log (record types, record times, `by`), events (`CloseReason`), nodes/base
  * (`WaitRequest`), nodes/contracts (`CALL_STATES`), nodes/start and nodes/end (the START and END
- * ids), diagnostics.
+ * ids), memory/base (`Author`), diagnostics.
  */
 
 import { reprText } from "../diagnostics.ts";
+import type { Author } from "../memory/base.ts";
 import type { WaitRequest } from "../nodes/base.ts";
 import { CALL_STATES } from "../nodes/contracts.ts";
 import { EndNode } from "../nodes/end/node.ts";
@@ -37,6 +38,7 @@ import {
   recordTimeMs,
   requireRecordTime,
   type TakeCommit,
+  validatedBy,
   type WaitEntry,
 } from "./log.ts";
 
@@ -96,6 +98,13 @@ export interface Call {
    * `null` for a call never released.
    */
   releasedSeq: number | null;
+  /** The `by` of the `released` step that released it, kept as `releasedSeq` is. */
+  releasedBy: Author | null;
+  /**
+   * The `by` of the `tool_result` that answered it, which a host's `complete` records; `null`
+   * while it is unanswered, or when its answer holds none.
+   */
+  answeredBy: Author | null;
 }
 
 /** One inbox's queue: unread send seqs, whether it is closed, and the takes absorbing its sends. */
@@ -123,6 +132,8 @@ export interface StopState {
   readonly seq: number;
   /** Whether it has stopped an agent: an `interrupted` record on the inbox named one. */
   readonly stopped: boolean;
+  /** Who made it: the `by` of the host's `interrupted` record, which the records the run applies copy. */
+  readonly by: Author | null;
 }
 
 /** One call a host can see the run waiting on. */
@@ -323,6 +334,8 @@ function callFromJson(value: unknown, label: string): Call {
     closedReason: textOrNull("closedReason"),
     closedSeq: intOrNullField("closedSeq"),
     releasedSeq: intOrNullField("releasedSeq"),
+    releasedBy: storedBy(value["releasedBy"]),
+    answeredBy: storedBy(value["answeredBy"]),
     flow: typeof value["flow"] === "boolean" ? value["flow"] : undefined,
     scope: textOrNull("scope"),
     held: typeof value["held"] === "boolean" ? value["held"] : undefined,
@@ -354,8 +367,18 @@ function inboxFromJson(value: unknown, label: string): InboxState {
 function stopFromJson(value: unknown, label: string): StopState {
   const seq = isObject(value) ? intOrNull(value["seq"]) : null;
   const stopped = isObject(value) ? value["stopped"] : undefined;
-  if (seq === null || typeof stopped !== "boolean") throw new YianRangeError(`waits JSON ${label} must be a stop`);
-  return { seq, stopped };
+  const by = isObject(value) ? storedBy(value["by"]) : undefined;
+  if (seq === null || typeof stopped !== "boolean" || by === undefined) throw new YianRangeError(`waits JSON ${label} must be a stop`);
+  return { seq, stopped, by };
+}
+
+/** Return a stored `by` (`validatedBy`), `null` included; `undefined` when it isn't one. */
+function storedBy(value: unknown): Author | null | undefined {
+  try {
+    return value === undefined ? undefined : validatedBy(value, "by");
+  } catch {
+    return undefined;
+  }
 }
 
 /** Return a stored pending take commit. @throws RangeError when it isn't one. */
@@ -407,8 +430,8 @@ const FRONTIER_KINDS: ReadonlyMap<Function, string> = new Map<Function, string>(
  * Fold one accepted record into `w`, in log order. Records only: the reducer validates each record
  * before it is folded, so the fold trusts what it reads and changes nothing for a record it has no
  * rule for. Of a step it reads only `kind`, `call_id`, `tool`, `tool_call_id`, `deadline`, `flow`,
- * `scope`, `held`, `closed`, `inbox` and `from`. A released call registered again keeps its
- * release.
+ * `scope`, `held`, `closed`, `inbox` and `from`, and its record's `by`. A released call registered
+ * again keeps its release.
  *
  * @param envelope The record and its seq; a `RecordEnvelope` fits.
  * @throws RangeError when a `pending` step's `deadline` is set but isn't a record time.
@@ -557,6 +580,8 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
       closedReason: null,
       closedSeq: null,
       releasedSeq: w.calls.get(callId)?.releasedSeq ?? null,
+      releasedBy: w.calls.get(callId)?.releasedBy ?? null,
+      answeredBy: null,
       flow: step["flow"] === true,
       scope: step["flow"] === true && typeof step["scope"] === "string" ? step["scope"] : null,
       held: step["held"] === true,
@@ -569,6 +594,7 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
     if (call?.state === "open") {
       call.state = "released";
       call.releasedSeq = seq;
+      call.releasedBy = record.by;
     }
   } else if (step["kind"] === "model_call") {
     w._replies.set(record.nodeId, seq);
@@ -586,7 +612,10 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
         const closes = call.state === "closed" && call.closedReason === closed && call.resultSeq === null;
         const answers = call.state === "released" && (closed === "skipped" || closed === "crashed");
         if (call.nodeId === record.nodeId && call.resultKey === key && latest(call) && (closes || answers)) {
-          if (answers) call.state = "answered";
+          if (answers) {
+            call.state = "answered";
+            call.answeredBy = record.by;
+          }
           call.resultSeq = seq;
           return;
         }
@@ -601,6 +630,7 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
       if (call.nodeId === record.nodeId && call.resultKey === key && latest(call) && takes) {
         call.state = "answered";
         call.resultSeq = seq;
+        call.answeredBy = record.by;
         return;
       }
     }
@@ -621,7 +651,7 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
 function applyInterrupted(w: WaitsState, seq: number, record: InterruptedRecord): void {
   // Once it has stopped an agent the Stop stays so: a replayed empty record can't extend its window.
   const stopped = (w.stops.get(record.inbox)?.stopped ?? false) || record.nodes.length > 0;
-  w.stops.set(record.inbox, { seq, stopped });
+  w.stops.set(record.inbox, { seq, stopped, by: record.by });
   for (const nodeId of record.nodes) {
     w.interrupts.set(nodeId, seq);
     w._interruptInboxes.set(nodeId, record.inbox);
@@ -672,6 +702,8 @@ function applyWaiting(w: WaitsState, seq: number, record: NodeWaitingRecord): vo
       closedReason: null,
       closedSeq: null,
       releasedSeq: null,
+      releasedBy: null,
+      answeredBy: null,
       flow: false,
       scope: null,
       held: false,

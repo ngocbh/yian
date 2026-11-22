@@ -1039,6 +1039,14 @@ describe("history and undo", () => {
     await s.close();
   });
 
+  test("a run can author a change, and history keeps it", async () => {
+    const s = await openAt();
+    const sop: Author = { kind: "run", name: "review r1", run: "chat-r1" };
+    await s.apply({ id: "sop-1", change: { op: "create", path: "b.md", text: "B" }, author: sop, signal });
+    expect((await s.history({ limit: 1 }))[0]!.author).toEqual(sop);
+    await s.close();
+  });
+
   test("undo applies a change's inverse when its file is still what that change wrote", async () => {
     put(root, "a.md", "Prefer tabs.");
     const s = await openAt();

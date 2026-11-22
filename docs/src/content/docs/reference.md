@@ -243,12 +243,12 @@ A run log is a JSON Lines file: one record per line, appended and never rewritte
 compact JSON with its keys sorted:
 
 ```json
-{"at":"2026-10-27T08:47:40.404Z","kind":"node_started","payload":{"node_id":"greet"},"run_id":"31fc75ac4c0640de867d47f59f928ea3","schema":34,"seq":8}
+{"at":"2026-10-27T08:47:40.404Z","kind":"node_started","payload":{"node_id":"greet"},"run_id":"31fc75ac4c0640de867d47f59f928ea3","schema":35,"seq":8}
 ```
 
 | Key | What it holds |
 |---|---|
-| `schema` | The record format, `34`. yian reads only this one. A log of schema 10 to 33 reads as `run log schema N predates schema 34 and is not supported`, any other as `unsupported run-record schema: N` |
+| `schema` | The record format, `35`. yian reads only this one. A log of schema 10 to 34 reads as `run log schema N predates schema 35 and is not supported`, any other as `unsupported run-record schema: N` |
 | `run_id` | The run's id |
 | `seq` | The record's place in the log, from 0 |
 | `at` | When the record was appended, in UTC with milliseconds. Use `seq`, not `at`, for order |
@@ -275,6 +275,14 @@ compact JSON with its keys sorted:
 | `inbox_closed` | An inbox was closed; it takes no more messages |
 | `inbox_withdrawn` | Messages nobody had read yet were taken back from an inbox |
 | `interrupted` | The agents reading an inbox were interrupted |
+
+A record a host call made holds `by` when the call passed one: who made it, as
+`{kind, name, run?, node?}`, its kind `user` (a person), `agent`, `tool`, `host` or `run`. These are
+a send's `pool_commit`, the `node_step` of a `complete` or `release` (beside its `step`),
+`inbox_closed`, `inbox_withdrawn`, `interrupted` and `run_cancelled`. An `interrupted` record that
+stops an agent opening the inbox after a Stop copies that Stop's `by`. No model reads it. The
+payload's `by` is an author; an agent's `interrupted` step holds a different `by`, the seq of the
+`interrupted` record it honors.
 
 `yian status` reads these records to say where a run stands. See [How yian works](/how-it-works/)
 for how yian replays a log to recover a run.

@@ -130,9 +130,20 @@ export interface MemoryInfo {
   readonly tools: readonly MemoryToolSpec[];
 }
 
-/** Who made a change: an agent, a TOOL node, a person through the CLI, or a host program. */
+/** The kinds of `Author`, in the order messages list them. */
+export const AUTHOR_KINDS = Object.freeze(["agent", "tool", "user", "host", "run"] as const);
+
+/** Whether `kind` is one of `AUTHOR_KINDS`. */
+export function isAuthorKind(kind: unknown): kind is Author["kind"] {
+  return (AUTHOR_KINDS as readonly unknown[]).includes(kind);
+}
+
+/**
+ * Who made a change, or a host call on a run: an agent, a TOOL node, a person (`user`), a host
+ * program, or a run (`run` names it).
+ */
 export type Author = {
-  kind: "agent" | "tool" | "user" | "host";
+  kind: (typeof AUTHOR_KINDS)[number];
   name: string;
   run?: string;
   node?: string;

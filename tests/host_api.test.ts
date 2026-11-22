@@ -284,7 +284,7 @@ test("a keyed send lands once: a repeat returns its seq and appends nothing, aft
   expect(await send(log, "m", "hi", { env, flow, key: "msg-1" })).toBe(seq);
   expect(readFileSync(log).equals(after)).toBe(true);
   const reused = await refusedWith(log, () => send(log, "m", "bye", { env, flow, key: "msg-1" }), "key_reused");
-  expect(reused.message).toBe(`send key 'msg-1' was used by send ${seq} with another value or inbox`);
+  expect(reused.message).toBe(`send key 'msg-1' was used by send ${seq} with another value, inbox or by`);
   // A copy of the log has no state in this process, so the call replays it and knows the key.
   const copy = freshLog();
   copyFileSync(log, copy);

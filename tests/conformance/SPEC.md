@@ -303,8 +303,9 @@ A case can't hold code, so its host is declared under `host`.
   the runner delivers the next one (`send`, `close`, `withdraw`, `interrupt`, `complete` or
   `release`) and moves the run on with `advance`, with the same host, clock and observers, so
   `events` and `stream` cover the whole run. An item with `hold: true` is delivered with no
-  `advance` after it, so the next item lands on the same waiting run. A run still waiting when
-  the items run out fails the case. More forms of a send item:
+  `advance` after it, so the next item lands on the same waiting run. Any item may say who makes
+  it, `by: {kind, name, run?, node?}`, which the runner passes as the call's `by`. A run still
+  waiting when the items run out fails the case. More forms of a send item:
   - `{inbox, event, after: {node: <node id>, <point>}}` is sent while the run is live, when it
     reaches the point (see [points](#points) below), through the run's engine, as a host's `send`
     does. A steer to an AGENT's `steer_inbox` is such an item: sent at `{tool_call: i}`, it joins
@@ -539,14 +540,14 @@ they are, except as the rules below say), and an empty payload is left out.
 | `node_waiting` | `node_id` | `call_ids`, `waits`, `steer_inbox` |
 | `node_woken` | `node_id` | `timed_out` |
 | `run_waiting` | null | `node_ids` |
-| `inbox_closed` | null | `inbox` |
-| `inbox_withdrawn` | null | `inbox`, `events` |
-| `interrupted` | null | `inbox`, `nodes` (may be empty) |
-| `run_cancelled` | null | none |
+| `inbox_closed` | null | `inbox`, `by` |
+| `inbox_withdrawn` | null | `inbox`, `events`, `by` |
+| `interrupted` | null | `inbox`, `nodes` (may be empty), `by` |
+| `run_cancelled` | null | `by` |
 | `run_failed` | null | `failure` |
 | `node_started` | `node_id` | none |
-| `node_step` | `node_id` | `n` (the step's number within the node), `step` |
-| `pool_commit` | `node_id` | `key` (only when it differs from the node), `value` (left out for `system.now` and `system.today`), `from` (a derived commit's sources), `inbox`, `events`, `closed` (a take commit's), `steps` (a messages commit's) |
+| `node_step` | `node_id` | `n` (the step's number within the node), `step`, `by` |
+| `pool_commit` | `node_id` | `key` (only when it differs from the node), `value` (left out for `system.now` and `system.today`), `from` (a derived commit's sources), `inbox`, `events`, `closed` (a take commit's), `steps` (a messages commit's), `by` (a send's) |
 | `node_succeeded` | `node_id` | `commit` (the seq of the `pool_commit` it accepts), `messages` (the seq of its messages commit) |
 | `node_routed` | `node_id` | `handle`, `terminal_failure` |
 | `node_expanded` | `spawner_id` | `prune_ids` |
@@ -591,6 +592,9 @@ For example:
   success rebuilds the value from those sends.
 - `defaults`, `effective_llm_by_static_path`, `call_time_llm`, `parent`, `waits`, `timed_out` and
   `closed_calls` are left out when empty or absent.
+- `by` is who made the host call that wrote the record (`{kind, name, run?, node?}`), present only
+  when the call said one: on a send, the `node_step` of a `complete` or `release`, a close, a
+  withdraw, an interrupt (and the record the run applies for its Stop) and a cancel.
 - Deadlines are times: a `node_waiting` wait entry's `deadline` and a `pending` step's
   `deadline` are left out.
 - Dropped: the envelope (`schema`, `run_id`, `seq`); a `pool_commit`'s `kind`; from

@@ -62,6 +62,7 @@ import {
   sameItems,
   validateOutputContract,
 } from "../nodes/contracts.ts";
+import type { Author } from "../memory/base.ts";
 import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { eventBytes, type JsonObject, type JsonValue, logJson } from "../typesys/json.ts";
 import { messagesKey, NEW_MESSAGES, referenceRoot, type RootValue, VariablePool } from "../typesys/pool.ts";
@@ -119,6 +120,7 @@ import {
   requireRecordTime,
   SCHEMA_VERSION,
   type TakeCommit,
+  validatedBy,
   type WaitEntry,
 } from "./log.ts";
 import { decodeTyped, SYSTEM_PREFIX } from "./sources.ts";
@@ -1029,6 +1031,8 @@ export interface SentKey {
   readonly inbox: string;
   /** The send's typed wire, as the run log writes it. */
   readonly value: string;
+  /** Who made the send, as the run log writes it; `null` when its call said no one. */
+  readonly by: string | null;
 }
 
 /** A send that repeats a keyed send the run holds: it appends nothing, and its seq is that send's. */
@@ -1196,13 +1200,15 @@ export function prepareNodeStarted(state: RunState, nodeId: string): PreparedTra
  * @param state An initialized nonterminal state in which `nodeId` is in flight.
  * @param nodeId The exact id of the in-flight node recording the step.
  * @param step A JSON object with a string `kind`, at any depth; only the node gives it meaning.
+ * @param by Who made the host call that writes the step, recorded beside it; `null` for none.
  * @returns The canonical `NodeStepRecord` and a detached append-before-apply plan, with no
  *   observers.
- * @throws TypeError when `state`, `nodeId` or `step` has the wrong type, or `step` has no kind.
+ * @throws TypeError when `state`, `nodeId`, `step` or `by` has the wrong type, or `step` has no
+ *   kind.
  * @throws RangeError when the state is uninitialized or terminal, or `nodeId` isn't in flight.
  * @throws TypeCheckError when `step` isn't a JSON value.
  */
-export function prepareNodeStep(state: RunState, nodeId: string, step: unknown): PreparedTransition {
+export function prepareNodeStep(state: RunState, nodeId: string, step: unknown, by: Author | null = null): PreparedTransition {
   if (!isExactly(state, RunState)) throw new YianTypeError("prepareNodeStep expects a RunState");
   if (typeof nodeId !== "string") throw new YianTypeError("node_id must be a string");
   if (!isRecord(step)) throw new YianTypeError("node step must be a JSON object");
@@ -1210,7 +1216,7 @@ export function prepareNodeStep(state: RunState, nodeId: string, step: unknown):
   // a reply whose tool call arguments may themselves sit at the limit.
   // Steps outlive a resume, so `n` keeps counting across the node's starts.
   const n = (state.nodeSteps.get(nodeId)?.length ?? 0) + 1;
-  return prepareRecord(state, new NodeStepRecord(nodeId, n, step));
+  return prepareRecord(state, new NodeStepRecord(nodeId, n, step, { by }));
 }
 
 /**
@@ -1243,37 +1249,49 @@ const TAKE_ENVELOPE_LEVELS = 2;
  * Prepare a host's send of `event` to the top-level inbox `inbox`: a commit by the START under
  * `<START>.<inbox>`, applied at once to the inbox store, never to the pool.
  *
- * With `key`, the send is recorded with it, and a later send with the same key, inbox and value
- * is its repeat: it appends nothing and gives the first send's seq, even once the inbox is closed.
+ * With `key`, the send is recorded with it, and a later send with the same key, inbox, value and
+ * `by` is its repeat: it appends nothing and gives the first send's seq, even once the inbox is
+ * closed.
  *
  * @param state The run's state.
  * @param inbox The name of one of the START's `Inbox(T)` params.
  * @param event The host value, taken as `fromHost` takes it (a whole number is an int), then
  *   checked against `T`.
  * @param key The send's idempotency key, or `null` for none.
+ * @param by Who makes the send, recorded with it; `null` for none.
  * @returns The canonical `PoolCommitRecord` and its plan, with no observers; or, for a repeat of a
  *   keyed send, that send's seq.
- * @throws TypeError when `state` or `inbox` has the wrong type, or `key` isn't a string or null.
+ * @throws TypeError when `state` or `inbox` has the wrong type, `key` isn't a string or null, or
+ *   `by` isn't an author or null.
+ * @throws RangeError when a field of `by` is empty.
  * @throws DeliveryRefused, in this order: `ended` once the run has a terminal result;
  *   `not_started` before its run start is complete; `unknown_inbox` when the START declares no
  *   such inbox; `inbox_closed` once it is closed (unless `key` repeats a send); `invalid_value`
  *   when `event` isn't a host value, nests deeper than two levels under the run's
  *   `MAX_VALUE_NESTING` (a take reads it inside `{events: [...]}`), or fails `T` (the
  *   `TypeCheckError` is the cause); `key_reused`
- *   when an earlier send holds `key` with another inbox or value; `too_large` when its run-log
- *   JSON is over the run's `MAX_EVENT_BYTES`.
+ *   when an earlier send holds `key` with another inbox, value or `by`; `too_large` when its
+ *   run-log JSON is over the run's `MAX_EVENT_BYTES`.
  */
 export function prepareSend(state: RunState, inbox: string, event: unknown): PreparedTransition;
-export function prepareSend(state: RunState, inbox: string, event: unknown, key: string | null): PreparedTransition | RepeatedSend;
+export function prepareSend(
+  state: RunState,
+  inbox: string,
+  event: unknown,
+  key: string | null,
+  by?: Author | null,
+): PreparedTransition | RepeatedSend;
 export function prepareSend(
   state: RunState,
   inbox: string,
   event: unknown,
   key: string | null = null,
+  by: Author | null = null,
 ): PreparedTransition | RepeatedSend {
   if (!isExactly(state, RunState)) throw new YianTypeError("prepareSend expects a RunState");
   if (typeof inbox !== "string") throw new YianTypeError("inbox must be a string");
   if (key !== null && typeof key !== "string") throw new YianTypeError("a send's key must be a string or null");
+  const sender = validatedBy(by, "a send's by");
   requireDeliverable(state);
   const element = requireDeclaredInbox(state, inbox);
   const sent = key === null ? undefined : state.sendKeys.get(key);
@@ -1315,17 +1333,22 @@ export function prepareSend(
     });
   }
   if (sent !== undefined) {
-    if (sent.inbox === inbox && sent.value === logJson(wire)) return { repeatOf: sent.seq };
+    if (sent.inbox === inbox && sent.value === logJson(wire) && sent.by === byJson(sender)) return { repeatOf: sent.seq };
     throw new DeliveryRefused(
       "key_reused",
-      `send key ${reprText(key!)} was used by send ${sent.seq} with another value or inbox`,
+      `send key ${reprText(key!)} was used by send ${sent.seq} with another value, inbox or by`,
     );
   }
   const size = eventBytes(wire.value);
   if (size > state.runDefaults.maxEventBytes) {
     throw new DeliveryRefused("too_large", eventTooLarge(`the event to inbox ${reprText(inbox)}`, size, state));
   }
-  return prepareRecord(state, new PoolCommitRecord(state.flow.startId, sendKey(state, inbox), wire, { sendKey: key }));
+  return prepareRecord(state, new PoolCommitRecord(state.flow.startId, sendKey(state, inbox), wire, { sendKey: key, by: sender }));
+}
+
+/** `by` as the run log writes it, so two can be compared; `null` for none. */
+function byJson(by: Author | null): string | null {
+  return by === null ? null : logJson(by);
 }
 
 /**
@@ -1362,20 +1385,21 @@ export function inboxElementType(state: RunState, name: string): Type | null {
  *
  * @param state The run's state.
  * @param inbox The name of one of the START's `Inbox(T)` params.
+ * @param by Who closes it, recorded with the close; `null` for none.
  * @returns The canonical `InboxClosedRecord` and its plan, with no observers; `null` when the
  *   inbox is already closed.
- * @throws TypeError when `state` or `inbox` has the wrong type.
+ * @throws TypeError when `state` or `inbox` has the wrong type, or `by` isn't an author or null.
  * @throws DeliveryRefused, in this order: `ended` once the run has a terminal result;
  *   `not_started` before its run start is complete; `unknown_inbox` when the START declares no
  *   such inbox.
  */
-export function prepareInboxClosed(state: RunState, inbox: string): PreparedTransition | null {
+export function prepareInboxClosed(state: RunState, inbox: string, by: Author | null = null): PreparedTransition | null {
   if (!isExactly(state, RunState)) throw new YianTypeError("prepareInboxClosed expects a RunState");
   if (typeof inbox !== "string") throw new YianTypeError("inbox must be a string");
   requireDeliverable(state);
   requireDeclaredInbox(state, inbox);
   if (state.waits.inboxes.get(inbox)?.closed === true) return null;
-  return prepareRecord(state, new InboxClosedRecord(inbox));
+  return prepareRecord(state, new InboxClosedRecord(inbox, { by }));
 }
 
 /**
@@ -1385,21 +1409,22 @@ export function prepareInboxClosed(state: RunState, inbox: string): PreparedTran
  *
  * @param state The run's state.
  * @param inbox The name of one of the START's `Inbox(T)` params.
+ * @param by Who withdraws them, recorded with the withdraw; `null` for none.
  * @returns The canonical `InboxWithdrawnRecord` and its plan, with no observers; `null` when
  *   nothing of the inbox is unread.
- * @throws TypeError when `state` or `inbox` has the wrong type.
+ * @throws TypeError when `state` or `inbox` has the wrong type, or `by` isn't an author or null.
  * @throws DeliveryRefused, in this order: `ended` once the run has a terminal result;
  *   `not_started` before its run start is complete; `unknown_inbox` when the START declares no
  *   such inbox.
  */
-export function prepareWithdraw(state: RunState, inbox: string): PreparedTransition | null {
+export function prepareWithdraw(state: RunState, inbox: string, by: Author | null = null): PreparedTransition | null {
   if (!isExactly(state, RunState)) throw new YianTypeError("prepareWithdraw expects a RunState");
   if (typeof inbox !== "string") throw new YianTypeError("inbox must be a string");
   requireDeliverable(state);
   requireDeclaredInbox(state, inbox);
   const events = withdrawableEvents(state.waits, inbox);
   if (events.length === 0) return null;
-  return prepareRecord(state, new InboxWithdrawnRecord(inbox, events));
+  return prepareRecord(state, new InboxWithdrawnRecord(inbox, events, { by }));
 }
 
 /**
@@ -1407,16 +1432,17 @@ export function prepareWithdraw(state: RunState, inbox: string): PreparedTransit
  * is refused.
  *
  * @param state The run's state.
+ * @param by Who cancels it, recorded with the cancel; `null` for none.
  * @returns The canonical `RunCancelledRecord` and its plan; its observers are `RunCancelled`, then
  *   a `CallClosed` for each open host call (takes and sleeps get none).
- * @throws TypeError when `state` has the wrong type.
+ * @throws TypeError when `state` has the wrong type, or `by` isn't an author or null.
  * @throws DeliveryRefused `ended` once the run has a terminal result (a second cancel among them),
  *   then `not_started` before its run start is complete.
  */
-export function prepareRunCancelled(state: RunState): PreparedTransition {
+export function prepareRunCancelled(state: RunState, by: Author | null = null): PreparedTransition {
   if (!isExactly(state, RunState)) throw new YianTypeError("prepareRunCancelled expects a RunState");
   requireDeliverable(state);
-  return prepareRecord(state, new RunCancelledRecord());
+  return prepareRecord(state, new RunCancelledRecord({ by }));
 }
 
 /**
@@ -1434,6 +1460,8 @@ export function prepareRunCancelled(state: RunState): PreparedTransition {
  * @param running The in-flight nodes reading `inbox` as their steer inbox, which only the engine
  *   knows; `null` offline, where any in-flight node counts as an open reader for the idle rule,
  *   and any in-flight node that reads a steer inbox as a current reader for "already stopping".
+ * @param by Who makes the Stop, recorded with it, and copied by the record the run applies for
+ *   it; `null` for none.
  * @returns The canonical `InterruptedRecord`, its plan and a `CallClosed {reason: "interrupted"}`
  *   per open host call of the named nodes; `null` when the run waits for the inbox's next message
  *   (a take of it waits with nothing unread and no reader is open), or when it is already
@@ -1445,7 +1473,12 @@ export function prepareRunCancelled(state: RunState): PreparedTransition {
  *   such inbox.
  * @throws RangeError when a running node can't be interrupted (see `validateInterrupted`).
  */
-export function prepareInterrupt(state: RunState, inbox: string, running: readonly string[] | null = null): PreparedTransition | null {
+export function prepareInterrupt(
+  state: RunState,
+  inbox: string,
+  running: readonly string[] | null = null,
+  by: Author | null = null,
+): PreparedTransition | null {
   if (!isExactly(state, RunState)) throw new YianTypeError("prepareInterrupt expects a RunState");
   if (typeof inbox !== "string") throw new YianTypeError("inbox must be a string");
   if (running !== null && (!Array.isArray(running) || running.some((nodeId) => typeof nodeId !== "string"))) {
@@ -1471,13 +1504,14 @@ export function prepareInterrupt(state: RunState, inbox: string, running: readon
   const readers = [...runningReaders, ...waiting];
   if (readers.length > 0 && readers.every(stopping)) return null;
   const named = running === null ? waiting : readers;
-  return prepareRecord(state, new InterruptedRecord(inbox, named.filter((nodeId) => !stopping(nodeId))));
+  return prepareRecord(state, new InterruptedRecord(inbox, named.filter((nodeId) => !stopping(nodeId)), { by }));
 }
 
 /**
  * Prepare the remembered Stop on `inbox` for `nodeId`, which has just opened it as its steer
- * inbox: an `interrupted` record naming it and each waiting reader without a pending interrupt.
- * The caller checks that a Stop stands and that the node holds and has honored none.
+ * inbox: an `interrupted` record naming it and each waiting reader without a pending interrupt,
+ * carrying the Stop's `by`. The caller checks that a Stop stands and that the node holds and has
+ * honored none.
  *
  * @param state The run's state.
  * @param inbox The name of one of the START's `Inbox(T)` params.
@@ -1495,7 +1529,8 @@ export function prepareAppliedStop(state: RunState, inbox: string, nodeId: strin
   requireDeliverable(state);
   requireDeclaredInbox(state, inbox);
   const waiting = waitingReaders(state, inbox).filter((id) => id !== nodeId && !state.waits.interrupts.has(id));
-  return prepareRecord(state, new InterruptedRecord(inbox, [nodeId, ...waiting]));
+  const by = state.waits.stops.get(inbox)?.by ?? null;
+  return prepareRecord(state, new InterruptedRecord(inbox, [nodeId, ...waiting], { by }));
 }
 
 /** The waiting nodes whose `node_waiting` named `inbox` as their steer inbox, in waiting order. */
@@ -1529,20 +1564,29 @@ export function prepareRunFailed(state: RunState): PreparedTransition {
  * @param state The run's state.
  * @param callId The call's id, as its `pending` step names it.
  * @param result The answer: `{output}` or `{error}`.
+ * @param by Who answers it, recorded beside the step; `null` for none.
  * @returns The canonical `NodeStepRecord` and its plan, with no observers; `null` when the call
- *   is already answered with exactly this step (a host's repeat).
- * @throws TypeError when `state` or `callId` has the wrong type.
+ *   is already answered with exactly this step and this `by` (a host's repeat).
+ * @throws TypeError when `state` or `callId` has the wrong type, or `by` isn't an author or null.
+ * @throws RangeError when a field of `by` is empty.
  * @throws DeliveryRefused, in this order: `ended` once the run has a terminal result;
  *   `not_started` before its run start is complete; `unknown_call` when no open or settled call
  *   has the id (its node settled, or its handler hasn't returned `pending()`); `not_host_call` for
  *   a take or sleep; `call_settled` (with the call's state) for an answered, timed-out, closed or
- *   released call, unless it is an identical repeat; `invalid_value` when the node refuses the
+ *   released call, unless it is an identical repeat (the same answer by the same `by`);
+ *   `invalid_value` when the node refuses the
  *   answer (the `TypeCheckError` is the cause); `too_large` when the step is over the run's
  *   `MAX_EVENT_BYTES`.
  */
-export function prepareComplete(state: RunState, callId: string, result: CompleteResult): PreparedTransition | null {
+export function prepareComplete(
+  state: RunState,
+  callId: string,
+  result: CompleteResult,
+  by: Author | null = null,
+): PreparedTransition | null {
   if (!isExactly(state, RunState)) throw new YianTypeError("prepareComplete expects a RunState");
   if (typeof callId !== "string") throw new YianTypeError("call_id must be a string");
+  const answerer = validatedBy(by, "a complete's by");
   requireDeliverable(state);
   const call = hostRecordCall(state, callId);
   if (call.tool === TAKE || call.tool === SLEEP) {
@@ -1554,8 +1598,10 @@ export function prepareComplete(state: RunState, callId: string, result: Complet
   const node = state.flow.nodes.get(call.nodeId)!;
   const view = callView(state, call);
   if (call.state !== "open") {
-    if (call.state === "answered" && sameStep(shapedRepeat(node, view, result), view.result)) return null;
-    throw new DeliveryRefused("call_settled", `call ${reprText(callId)} is already ${settledText(call)}`, { callState: call.state });
+    const repeat = call.state === "answered" && sameStep(shapedRepeat(node, view, result), view.result);
+    if (repeat && byJson(call.answeredBy) === byJson(answerer)) return null;
+    const settled = `call ${reprText(callId)} is already ${settledText(call)}${repeat ? " by someone else" : ""}`;
+    throw new DeliveryRefused("call_settled", settled, { callState: call.state });
   }
   let step: JsonObject;
   try {
@@ -1568,7 +1614,7 @@ export function prepareComplete(state: RunState, callId: string, result: Complet
   if (size > state.runDefaults.maxEventBytes) {
     throw new DeliveryRefused("too_large", eventTooLarge(`the answer to ${reprText(callId)}`, size, state));
   }
-  return prepareNodeStep(state, call.nodeId, step);
+  return prepareNodeStep(state, call.nodeId, step, answerer);
 }
 
 /**
@@ -1579,24 +1625,37 @@ export function prepareComplete(state: RunState, callId: string, result: Complet
  * @param state The run's state.
  * @param callId The call's id, as its hold's `pending` step names it.
  * @param note The host's audit note, stored on the step; the model never reads it.
+ * @param by Who releases it, recorded beside the step; `null` for none.
  * @returns The canonical `NodeStepRecord` and its plan, with no observers; `null` when the call was
- *   released before, whatever its state now (the first release and its note stand).
- * @throws TypeError when `state` or `callId` has the wrong type, or `note` isn't a string or null.
- * @throws RangeError when `note` is empty, has a lone surrogate, or is over `GATE_TEXT_MAX_BYTES`.
+ *   released before with this `by`, whatever its state now and whatever the note (the first
+ *   release and its note stand).
+ * @throws TypeError when `state` or `callId` has the wrong type, `note` isn't a string or null, or
+ *   `by` isn't an author or null.
+ * @throws RangeError when `note` is empty, has a lone surrogate, or is over `GATE_TEXT_MAX_BYTES`,
+ *   or a field of `by` is empty.
  * @throws DeliveryRefused, in this order: `ended` once the run has a terminal result;
  *   `not_started` before its run start is complete; `unknown_call` when no open or settled call
  *   has the id; `not_host_call` for a take, a sleep or a flow call; `not_held` for a host call its
  *   handler pended, whose tool ran; `call_settled` (with the call's state) for a hold `complete`
- *   answered or a record closed.
+ *   answered or a record closed, or one released before with another `by`.
  */
-export function prepareRelease(state: RunState, callId: string, note: string | null = null): PreparedTransition | null {
+export function prepareRelease(
+  state: RunState,
+  callId: string,
+  note: string | null = null,
+  by: Author | null = null,
+): PreparedTransition | null {
   if (!isExactly(state, RunState)) throw new YianTypeError("prepareRelease expects a RunState");
   if (typeof callId !== "string") throw new YianTypeError("call_id must be a string");
   if (note !== null && typeof note !== "string") throw new YianTypeError("note must be a string or null");
   if (note !== null) checkGateText(note, "note");
+  const releaser = validatedBy(by, "a release's by");
   requireDeliverable(state);
   const call = hostRecordCall(state, callId);
-  if (call.releasedSeq !== null) return null;
+  if (call.releasedSeq !== null) {
+    if (byJson(call.releasedBy) === byJson(releaser)) return null;
+    throw new DeliveryRefused("call_settled", `call ${reprText(callId)} was already released by someone else`, { callState: call.state });
+  }
   if (call.tool === TAKE || call.tool === SLEEP) {
     throw new DeliveryRefused("not_host_call", `call ${reprText(callId)} is a ${call.tool}, which the run settles itself`);
   }
@@ -1609,7 +1668,8 @@ export function prepareRelease(state: RunState, callId: string, note: string | n
   if (call.state !== "open") {
     throw new DeliveryRefused("call_settled", `call ${reprText(callId)} is already ${settledText(call)}`, { callState: call.state });
   }
-  return prepareNodeStep(state, call.nodeId, note === null ? { kind: "released", call_id: callId } : { kind: "released", call_id: callId, note });
+  const step = note === null ? { kind: "released", call_id: callId } : { kind: "released", call_id: callId, note };
+  return prepareNodeStep(state, call.nodeId, step, releaser);
 }
 
 /**
@@ -2203,6 +2263,7 @@ export function prepareRecord(
       return prepareCommitTransition(state, record, "send");
     }
     if (record.sendKey !== null) throw new YianRangeError("only a send holds a send key");
+    if (record.by !== null) throw new YianRangeError("only a send holds by");
     // A key the flow doesn't hold yet is a child START the spawner's expansion is about to add.
     const expansion = !state.flow.nodes.has(record.key) && state.flow.nodes.get(record.nodeId)?.isSpawner === true;
     if (expansion) validateExpansionCommit(state, record);
@@ -3179,7 +3240,8 @@ function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransi
     const { key, sendKey: sent } = prepared.record as PoolCommitRecord;
     if (sent !== null) {
       const inbox = key.slice(sendKey(state, "").length);
-      state.sendKeys.set(sent, Object.freeze({ seq: prepared.expectedSequence, inbox, value: plan.valueJson! }));
+      const by = byJson((prepared.record as PoolCommitRecord).by);
+      state.sendKeys.set(sent, Object.freeze({ seq: prepared.expectedSequence, inbox, value: plan.valueJson!, by }));
     }
   } else if (plan.commitKind === "messages") {
     const pending: PendingMessages = { seq: prepared.expectedSequence, key: plan.key, valueJson: plan.messagesJson! };
@@ -4084,13 +4146,18 @@ function validateInboxWithdrawn(state: RunState, record: InboxWithdrawnRecord): 
  * inbox: in flight with `readsSteerInbox` (which inbox a running node opened is the engine's word,
  * bound at run time), or waiting with `node_waiting.steer_inbox` equal to it; none holding a
  * pending interrupt already; and every waiting reader of the inbox without one among them. It may
- * name none: the Stop is recorded for a reader that opens the inbox later. When a host may record
- * one (the idle and already-stopping rules) is `prepareInterrupt`'s.
+ * name none: the Stop is recorded for a reader that opens the inbox later. While a Stop stands on
+ * the inbox, only the run applies one, which carries that Stop's `by`. When a host may record one
+ * (the idle and already-stopping rules) is `prepareInterrupt`'s.
  */
 function validateInterrupted(state: RunState, record: InterruptedRecord): void {
   const { inbox, nodes } = record;
   if (inboxElementType(state, inbox) === null) {
     throw new YianRangeError(`Interrupted inbox ${reprText(inbox)} is no inbox the START declares`);
+  }
+  const stop = state.waits.stops.get(inbox);
+  if (stop !== undefined && byJson(stop.by) !== byJson(record.by)) {
+    throw new YianRangeError(`Interrupted while a Stop stands on ${reprText(inbox)} must carry that Stop's by`);
   }
   if (new Set(nodes).size !== nodes.length) throw new YianRangeError("Interrupted names each node once");
   const w = state.waits;
@@ -4160,7 +4227,8 @@ function validateRunWaiting(state: RunState, record: RunWaitingRecord): void {
  * by a resume (`retried`), and be its next step. A `pending` step registers a host call; a
  * `tool_result` for a registered call answers it. A node that isn't running records only a host's
  * `tool_result` answering one of its open calls, or a `released` step naming one of its holds. An
- * agent records no `model_call` or honor while one of its calls is released.
+ * agent records no `model_call` or honor while one of its calls is released. Only a step a host
+ * call writes holds `by` (`hostWritten`).
  */
 function validateNodeStep(state: RunState, record: NodeStepRecord): void {
   const nodeId: unknown = record.nodeId;
@@ -4195,6 +4263,19 @@ function validateNodeStep(state: RunState, record: NodeStepRecord): void {
   } else if (step["kind"] === "steer") {
     validateSteerStep(state, nodeId, step);
   }
+  if (record.by !== null && !hostWritten(state, nodeId, step)) {
+    throw new YianRangeError(
+      `node step ${record.n} of ${reprText(nodeId)} holds by, which only a released step or a tool_result answering an open host call holds`,
+    );
+  }
+}
+
+/** Whether a host call writes `step` on `nodeId`: a `released` step, or a `tool_result` answering an open host call. */
+function hostWritten(state: RunState, nodeId: string, step: Readonly<JsonObject>): boolean {
+  if (step["kind"] === "released") return true;
+  if (step["kind"] !== "tool_result") return false;
+  const call = resultCall(state, nodeId, typeof step["tool_call_id"] === "string" ? step["tool_call_id"] : step["call_id"]);
+  return call?.state === "open" && !call.flow;
 }
 
 /** How a node that isn't running reads in a message: waiting, or put back in ready by a resume. */
@@ -5682,6 +5763,7 @@ function validateInitialCommit(state: RunState, record: PoolCommitRecord): void 
     throw new YianRangeError(`a run-start pool_commit must name the START ${reprText(startId)}, not ${reprText(record.nodeId)}`);
   }
   if (record.value === null) throw new YianRangeError("a run-start pool_commit holds its value, not from");
+  if (record.by !== null) throw new YianRangeError("only a send holds by");
   const value = TypedValue.fromWire(record.value).toObject();
   if (key === startId) {
     if (state.pool.readRoot(["system", "run_id"]).value !== state.runId) {

@@ -8,7 +8,7 @@
  * reducer, so the same validated carriers can back memory and JSONL logs without creating an
  * authority cycle.
  *
- * Knows about: diagnostics, nodes/base, nodes/contracts, platform, typesys.
+ * Knows about: diagnostics, memory/base (`Author`), nodes/base, nodes/contracts, platform, typesys.
  */
 
 import fs from "node:fs";
@@ -16,6 +16,7 @@ import os from "node:os";
 import { dirname } from "node:path";
 
 import { compareCodeUnits, Failure, OriginRef, reprText } from "../diagnostics.ts";
+import { AUTHOR_KINDS, type Author, isAuthorKind } from "../memory/base.ts";
 import { retainFailure } from "../nodes/base.ts";
 import { type FileLock, FileLockError, isLocked, lockFile, syncFolder, VERSION } from "../platform.ts";
 import { isExactly } from "../nodes/contracts.ts";
@@ -40,11 +41,11 @@ import { formatRecordTime as recordTimeText, RECORD_TIME } from "../typesys/temp
 import { isList, isRecord, jsonPart, requireFields, valueRepr, writeAsText } from "../typesys/values.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 34;
+export const SCHEMA_VERSION = 35;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
 const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([
-  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33,
+  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34,
 ]);
 
 /** A typed value's wire object `{kind, value}`. */
@@ -352,6 +353,27 @@ function requireName(value: unknown, label: string): string {
   if (typeof value !== "string") throw new YianTypeError(`${label} must be a non-empty string`);
   if (value === "") throw new YianRangeError(`${label} must be a non-empty string`);
   return value;
+}
+
+/**
+ * Return a frozen copy of who made a host call: its `kind` and `name`, and `run` and `node` when
+ * set; `null` for `null` or `undefined`. Other fields are left out. `label` names it in errors.
+ * Stricter than a memory change's author (`checkAuthor`), which may hold empty texts: a record
+ * names who made the call, so each text it keeps is non-empty.
+ *
+ * @throws TypeError when it isn't an object, its kind isn't one of `AUTHOR_KINDS`, or a field
+ *   isn't a string.
+ * @throws RangeError when a field is empty.
+ */
+export function validatedBy(by: unknown, label: string): Author | null {
+  if (by === null || by === undefined) return null;
+  if (!isRecord(by)) throw new YianTypeError(`${label} must be {kind, name, run?, node?} or null`);
+  const { kind, name, run, node } = by;
+  if (!isAuthorKind(kind)) throw new YianTypeError(`${label} kind must be one of ${AUTHOR_KINDS.join(", ")}`);
+  const copy: Author = { kind, name: requireName(name, `${label} name`) };
+  if (run !== undefined) copy.run = requireName(run, `${label} run`);
+  if (node !== undefined) copy.node = requireName(node, `${label} node`);
+  return Object.freeze(copy);
 }
 
 /**
@@ -734,13 +756,16 @@ export class RunWaitingRecord {
 export class InboxClosedRecord {
   /** The closed inbox's non-empty name. */
   readonly inbox: string;
+  /** Who closed it, as the host's call said (`validatedBy`); `null` when it said no one. */
+  readonly by: Author | null;
 
   /**
-   * @throws TypeError when `inbox` isn't a string.
-   * @throws RangeError when it is empty.
+   * @throws TypeError when `inbox` isn't a string, or `by` isn't an author or null.
+   * @throws RangeError when `inbox` or a field of `by` is empty.
    */
-  constructor(inbox: string) {
+  constructor(inbox: string, options: { by?: Author | null } = {}) {
     this.inbox = requireName(inbox, "inbox");
+    this.by = validatedBy(options.by, "by");
     Object.freeze(this);
   }
 }
@@ -754,17 +779,20 @@ export class InboxWithdrawnRecord {
   readonly inbox: string;
   /** The withdrawn sends' seqs; strictly increasing positive integers, at least one. */
   readonly events: readonly number[];
+  /** Who withdrew them, as the host's call said (`validatedBy`); `null` when it said no one. */
+  readonly by: Author | null;
 
   /**
-   * @throws TypeError when `inbox` isn't a string.
-   * @throws RangeError when `inbox` is empty, or `events` is empty or isn't a list of strictly
-   *   increasing positive safe integers.
+   * @throws TypeError when `inbox` isn't a string, or `by` isn't an author or null.
+   * @throws RangeError when `inbox` or a field of `by` is empty, or `events` is empty or isn't a
+   *   list of strictly increasing positive safe integers.
    */
-  constructor(inbox: string, events: readonly number[]) {
+  constructor(inbox: string, events: readonly number[], options: { by?: Author | null } = {}) {
     this.inbox = requireName(inbox, "inbox");
     const seqs = validatedEventSeqs(events, "events");
     if (seqs.length === 0) throw new YianRangeError("events must be non-empty");
     this.events = Object.freeze(seqs);
+    this.by = validatedBy(options.by, "by");
     Object.freeze(this);
   }
 }
@@ -783,22 +811,36 @@ export class InterruptedRecord {
    * Stop was recorded.
    */
   readonly nodes: readonly string[];
+  /**
+   * Who made the Stop, as the host's call said (`validatedBy`); a record the run applies for a
+   * standing Stop copies that Stop's. `null` when it said no one.
+   */
+  readonly by: Author | null;
 
   /**
-   * @throws TypeError when `inbox` isn't a string.
-   * @throws RangeError when `inbox` is empty, or `nodes` isn't an array of unique non-empty
-   *   strings.
+   * @throws TypeError when `inbox` isn't a string, or `by` isn't an author or null.
+   * @throws RangeError when `inbox` or a field of `by` is empty, or `nodes` isn't an array of
+   *   unique non-empty strings.
    */
-  constructor(inbox: string, nodes: readonly string[]) {
+  constructor(inbox: string, nodes: readonly string[], options: { by?: Author | null } = {}) {
     this.inbox = requireName(inbox, "inbox");
     this.nodes = validatedIdArray(nodes, "nodes");
+    this.by = validatedBy(options.by, "by");
     Object.freeze(this);
   }
 }
 
 /** End the run because its host cancelled it. Terminal. Frozen. */
 export class RunCancelledRecord {
-  constructor() {
+  /** Who cancelled it, as the host's call said (`validatedBy`); `null` when it said no one. */
+  readonly by: Author | null;
+
+  /**
+   * @throws TypeError when `by` isn't an author or null.
+   * @throws RangeError when a field of `by` is empty.
+   */
+  constructor(options: { by?: Author | null } = {}) {
+    this.by = validatedBy(options.by, "by");
     Object.freeze(this);
   }
 }
@@ -850,17 +892,23 @@ export class NodeStepRecord {
   readonly n: number;
   /** A deep-frozen canonical copy of the step, keys in code-unit order. */
   readonly step: Readonly<JsonObject>;
+  /**
+   * Who made the host call that wrote the step (a `complete` or a `release`), as it said
+   * (`validatedBy`); kept beside the step, which the node reads, never in it. `null` for a step
+   * the node wrote, or a call that said no one.
+   */
+  readonly by: Author | null;
 
   /**
    * @param step A JSON object with a non-empty string `kind`; `-0` is kept as `0` and
    *   `±Infinity` as is.
    * @throws TypeError when `nodeId` isn't a string, `n` isn't a safe integer, `step` isn't a
-   *   plain object, or its `kind` isn't a non-empty string.
-   * @throws RangeError when `nodeId` is empty or `n` is less than 1.
+   *   plain object, its `kind` isn't a non-empty string, or `by` isn't an author or null.
+   * @throws RangeError when `nodeId` or a field of `by` is empty, or `n` is less than 1.
    * @throws TypeCheckError at the bad part's path when the step holds NaN, a `FileRef` or
    *   another non-JSON value (see `jsonPart`).
    */
-  constructor(nodeId: string, n: number, step: Readonly<Record<string, unknown>>) {
+  constructor(nodeId: string, n: number, step: Readonly<Record<string, unknown>>, options: { by?: Author | null } = {}) {
     this.nodeId = requireName(nodeId, "node_id");
     if (typeof n !== "number" || !Number.isSafeInteger(n)) throw new YianTypeError("node step n must be an int");
     if (n < 1) throw new YianRangeError("node step n must be at least 1");
@@ -871,6 +919,7 @@ export class NodeStepRecord {
       freshCanonical(step as JsonObject) ?? freezeParsed(canonicalCopy(jsonPart(step, [], "refuse")) as JsonObject);
     const kind = this.step["kind"];
     if (typeof kind !== "string" || kind === "") throw new YianTypeError("node step kind must be a non-empty string");
+    this.by = validatedBy(options.by, "by");
     Object.freeze(this);
   }
 }
@@ -905,6 +954,8 @@ export class PoolCommitRecord {
   readonly steps: readonly number[] | null;
   /** A send's idempotency key, which no other send of the run holds; `null` for any other commit. */
   readonly sendKey: string | null;
+  /** Who made a send, as the host's call said (`validatedBy`); `null` for any other commit. */
+  readonly by: Author | null;
 
   /**
    * @param value A typed value's wire form (see `TypedValue.fromWire`), or `null` with `from`,
@@ -913,12 +964,14 @@ export class PoolCommitRecord {
    * @param options.take A take commit's pointer form.
    * @param options.steps A messages commit's step seqs.
    * @param options.sendKey A send's idempotency key, with `value`.
+   * @param options.by Who made a send, with `value`.
    * @throws TypeError when an id or the send key isn't a string, `from` isn't a `Map` or `null`,
-   *   or `take` isn't an object or has a field of the wrong type.
+   *   `take` isn't an object or has a field of the wrong type, or `by` isn't an author or null.
    * @throws RangeError when an id is empty, `value` isn't a typed-value wire form, a `from` name is
    *   empty or its seq isn't a positive safe integer, `take` breaks the take commit rules, `steps`
    *   aren't strictly increasing positive safe integers, the commit doesn't hold exactly one of
-   *   `value`, `from`, `take` and `steps`, or a send key is empty or given without `value`.
+   *   `value`, `from`, `take` and `steps`, a send key is empty or given without `value`, or `by`
+   *   has an empty field or is given without `value`.
    * @throws TypeCheckError when the value holds NaN or another non-JSON value.
    */
   constructor(
@@ -930,6 +983,7 @@ export class PoolCommitRecord {
       take?: TakeCommit | null;
       steps?: readonly number[] | null;
       sendKey?: string | null;
+      by?: Author | null;
     } = {},
   ) {
     this.nodeId = requireName(nodeId, "node_id");
@@ -945,6 +999,8 @@ export class PoolCommitRecord {
     if (this.sendKey !== null && this.value === null) {
       throw new YianRangeError("only a pool_commit that holds a value holds a send key");
     }
+    this.by = validatedBy(options.by, "by");
+    if (this.by !== null && this.value === null) throw new YianRangeError("only a pool_commit that holds a value holds by");
     Object.freeze(this);
   }
 }
@@ -2714,6 +2770,25 @@ function toolModulesFromPayload(value: unknown, label: string): Record<string, R
   return wire as Record<string, RecordedTool[]>;
 }
 
+/** A record's `by` as its payload holds it: none when it is `null`. */
+function byPayload(by: Author | null): JsonObject {
+  return by === null ? {} : { by: { ...by } };
+}
+
+/**
+ * Decode a payload's `by`, which only a record a host call made with one holds; `null` when it is
+ * left out. `label` names the payload.
+ *
+ * @throws TypeError when it is there but isn't an object, or a field has the wrong type or kind.
+ * @throws RangeError for its missing or extra fields, or an empty one.
+ */
+function byFromPayload(payload: JsonObject, label: string): Author | null {
+  if (!Object.hasOwn(payload, "by")) return null;
+  const by = wireObject(payload["by"], `${label} by`);
+  requireFields(by, presentFields(by, ["kind", "name"], ["node", "run"]), `${label} by`);
+  return validatedBy(by, `${label} by`);
+}
+
 /** `fields`, then each of `optional` that `payload` holds. */
 function presentFields(payload: JsonObject, fields: readonly string[], optional: readonly string[]): string[] {
   return [...fields, ...optional.filter((field) => Object.hasOwn(payload, field))];
@@ -2929,40 +3004,43 @@ const RECORD_CODECS: readonly RecordCodec[] = [
   recordCodec({
     cls: InboxClosedRecord,
     kind: "inbox_closed",
-    encode: (record) => ({ inbox: record.inbox }),
+    encode: (record) => ({ inbox: record.inbox, ...byPayload(record.by) }),
     decode: (payload, label) => {
-      requireFields(payload, ["inbox"], label);
-      return new InboxClosedRecord(requireName(payload["inbox"], `${label} inbox`));
+      requireFields(payload, presentFields(payload, ["inbox"], ["by"]), label);
+      return new InboxClosedRecord(requireName(payload["inbox"], `${label} inbox`), { by: byFromPayload(payload, label) });
     },
   }),
   recordCodec({
     cls: InboxWithdrawnRecord,
     kind: "inbox_withdrawn",
-    encode: (record) => ({ inbox: record.inbox, events: record.events.map(BigInt) }),
+    encode: (record) => ({ inbox: record.inbox, events: record.events.map(BigInt), ...byPayload(record.by) }),
     decode: (payload, label) => {
-      requireFields(payload, ["inbox", "events"], label);
+      requireFields(payload, presentFields(payload, ["inbox", "events"], ["by"]), label);
       return new InboxWithdrawnRecord(
         requireName(payload["inbox"], `${label} inbox`),
         wireItems(payload["events"], `${label} events`, wireInt),
+        { by: byFromPayload(payload, label) },
       );
     },
   }),
   recordCodec({
     cls: InterruptedRecord,
     kind: "interrupted",
-    encode: (record) => ({ inbox: record.inbox, nodes: [...record.nodes] }),
+    encode: (record) => ({ inbox: record.inbox, nodes: [...record.nodes], ...byPayload(record.by) }),
     decode: (payload, label) => {
-      requireFields(payload, ["inbox", "nodes"], label);
-      return new InterruptedRecord(requireName(payload["inbox"], `${label} inbox`), wireTextArray(payload["nodes"], `${label} nodes`));
+      requireFields(payload, presentFields(payload, ["inbox", "nodes"], ["by"]), label);
+      return new InterruptedRecord(requireName(payload["inbox"], `${label} inbox`), wireTextArray(payload["nodes"], `${label} nodes`), {
+        by: byFromPayload(payload, label),
+      });
     },
   }),
   recordCodec({
     cls: RunCancelledRecord,
     kind: "run_cancelled",
-    encode: () => ({}),
+    encode: (record) => byPayload(record.by),
     decode: (payload, label) => {
-      requireFields(payload, [], label);
-      return new RunCancelledRecord();
+      requireFields(payload, presentFields(payload, [], ["by"]), label);
+      return new RunCancelledRecord({ by: byFromPayload(payload, label) });
     },
   }),
   recordCodec({
@@ -2987,9 +3065,9 @@ const RECORD_CODECS: readonly RecordCodec[] = [
   recordCodec({
     cls: NodeStepRecord,
     kind: "node_step",
-    encode: (record) => ({ node_id: record.nodeId, n: BigInt(record.n), step: record.step as JsonObject }),
+    encode: (record) => ({ node_id: record.nodeId, n: BigInt(record.n), step: record.step as JsonObject, ...byPayload(record.by) }),
     decode: (payload, label) => {
-      requireFields(payload, ["node_id", "n", "step"], label);
+      requireFields(payload, presentFields(payload, ["node_id", "n", "step"], ["by"]), label);
       const step = wireObject(payload["step"], `${label} step`);
       // Decoders only ever get a payload the line's parse just built.
       FRESH.add(step);
@@ -2997,6 +3075,7 @@ const RECORD_CODECS: readonly RecordCodec[] = [
         requireName(payload["node_id"], `${label} node_id`),
         wireInt(payload["n"], `${label} n`),
         step,
+        { by: byFromPayload(payload, label) },
       );
     },
     nodeId: payloadNodeId,
@@ -3008,7 +3087,7 @@ const RECORD_CODECS: readonly RecordCodec[] = [
       if (record.value !== null) {
         const { nodeId: node_id, key, sendKey } = record;
         const value = record.value.value as JsonValue;
-        return { node_id, key, kind: record.value.kind, value, ...(sendKey === null ? {} : { send_key: sendKey }) };
+        return { node_id, key, kind: record.value.kind, value, ...(sendKey === null ? {} : { send_key: sendKey }), ...byPayload(record.by) };
       }
       if (record.take !== null) {
         const { inbox, events, closed } = record.take;
@@ -3027,9 +3106,14 @@ const RECORD_CODECS: readonly RecordCodec[] = [
           : Object.hasOwn(payload, "inbox")
             ? "take"
             : "value";
-      // A send's key rides its value form, and only when it has one.
+      // A send's key and by ride its value form, and only when it has them.
       const keyed = form === "value" && Object.hasOwn(payload, "send_key");
-      requireFields(payload, ["node_id", "key", ...POOL_COMMIT_FORM_FIELDS[form], ...(keyed ? ["send_key"] : [])], label);
+      const sent = form === "value" && Object.hasOwn(payload, "by");
+      requireFields(
+        payload,
+        ["node_id", "key", ...POOL_COMMIT_FORM_FIELDS[form], ...(keyed ? ["send_key"] : []), ...(sent ? ["by"] : [])],
+        label,
+      );
       let wire: TypedWire | null = null;
       if (form === "value") {
         wire = { kind: payload["kind"], value: payload["value"] } as TypedWire;
@@ -3044,6 +3128,7 @@ const RECORD_CODECS: readonly RecordCodec[] = [
           take: form === "take" ? takeFromPayload(payload, label) : null,
           steps: form === "steps" ? wireItems(payload["steps"], `${label} steps`, wireInt) : null,
           sendKey: keyed ? requireName(payload["send_key"], `${label} send_key`) : null,
+          by: byFromPayload(payload, label),
         },
       );
     },

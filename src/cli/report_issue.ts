@@ -26,9 +26,8 @@ import {
   type Send,
   VERSION,
 } from "../platform.ts";
-import { type FunctionTool, tool } from "../tools/function_tools.ts";
+import { type FunctionTool, stringArg, stringArguments, tool } from "../tools/function_tools.ts";
 import { FLOWS } from "./bundled.ts";
-import { stringArg, stringArguments } from "./chat_tools.ts";
 import { homePath } from "./chat_view.ts";
 import type { ApproveRequest } from "./terminal.ts";
 import { osReason } from "./utils.ts";

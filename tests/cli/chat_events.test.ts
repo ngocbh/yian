@@ -9,17 +9,10 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  CHAT_WAKE,
-  type ChildEvent,
-  childEvent,
-  EventQueue,
-  InFlight,
-  toMessage,
-  trackInFlight,
-} from "../../src/cli/chat_events.ts";
+import { CHAT_WAKE, EventQueue, InFlight, toMessage, trackInFlight } from "../../src/cli/chat_events.ts";
 import type { ChatEvents } from "../../src/cli/chat_flush.ts";
-import { ChildRuns, type ChildStatus } from "../../src/cli/chat_runs.ts";
+import { ChatRuns } from "../../src/cli/chat_run_tools.ts";
+import { type ChildEvent, type ChildStatus, childEvent } from "../../src/cli/chat_runs.ts";
 import { loadConfinedText } from "../../src/cli/confined_load.ts";
 import { inboxChat } from "../../src/cli/inbox_chat.ts";
 import type { CliIo, Writer } from "../../src/cli/utils.ts";
@@ -199,7 +192,7 @@ describe("EventQueue", () => {
     "fed from a child's statuses, it queues the child's question",
     async () => {
       const queue = new EventQueue();
-      const runs = new ChildRuns({
+      const runs = new ChatRuns({
         root: tmp,
         logDir: join(tmp, "runs"),
         home: join(tmp, "home"),

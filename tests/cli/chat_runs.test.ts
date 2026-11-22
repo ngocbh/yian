@@ -17,9 +17,8 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { childEvent } from "../../src/cli/chat_events.ts";
-import { shownStatus } from "../../src/cli/chat_run_tools.ts";
-import { ChildRuns, type ChildRunsOptions, type ChildStatus } from "../../src/cli/chat_runs.ts";
+import { ChatRuns, type ChatRunsOptions } from "../../src/cli/chat_run_tools.ts";
+import { ChildRuns, type ChildStatus, childEvent, shownStatus } from "../../src/cli/chat_runs.ts";
 import { loadConfinedText } from "../../src/cli/confined_load.ts";
 import { defaultIdentity, defaultLocation, projectKey } from "../../src/cli/memory_bind.ts";
 import { MissingKeyError } from "../../src/cli/utils.ts";
@@ -49,9 +48,9 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-/** A `ChildRuns` over the temporary root, its logs under `<root>/runs`, on a held clock. */
-function childRuns(options: Partial<ChildRunsOptions> = {}): ChildRuns {
-  runs = new ChildRuns({
+/** The chat's `ChildRuns` over the temporary root, its logs under `<root>/runs`, on a held clock. */
+function childRuns(options: Partial<ChatRunsOptions> = {}): ChildRuns {
+  runs = new ChatRuns({
     root,
     logDir: join(root, "runs"),
     home: join(root, "home"),
@@ -131,6 +130,52 @@ test(
     expect((await settled(children, "r2")).output).toBe("hi b");
     expect((await settled(children, "r1")).output).toBe("hi a");
     expect(inspectRun(second.log).runId).toBe(`${CHAT}-r2`);
+  },
+  TIMEOUT,
+);
+
+test(
+  "the driver leaves to its host's hooks the key preflight, the memories, the errors it reports and the console",
+  async () => {
+    const calls: string[] = [];
+    const children = new ChildRuns({
+      codeRoot: root,
+      logDir: join(root, "runs"),
+      env: NO_ENV,
+      llmConfig: {},
+      scheduler: heldScheduler().scheduler,
+      parentRunId: CHAT,
+      skillsFor: () => null,
+      preflight: (flow) => void calls.push(`preflight ${flow.name}`),
+      memories: {
+        bind: (flow, project, note) => {
+          calls.push(`bind ${flow.name} in ${project}`);
+          if (project === null) throw new Error("no project");
+          note("a memory was made");
+          return {};
+        },
+        drift: (drift) => `drift ${drift.input}`,
+        scrub: (error) => new Error(`scrubbed: ${(error as Error).message}`),
+      },
+      onConsole: ({ text }) => void calls.push(`console ${text}`),
+    });
+    runs = children;
+    await children.start(await flow(CHATTY), {}, { project: "p" });
+    expect(await settled(children, "r1")).toMatchObject({ status: "succeeded", memory_notes: ["a memory was made"] });
+    await expect(children.start(await flow(GREET), { who: "a" })).rejects.toThrow("scrubbed: no project");
+    // Refused by `runFlow` before the run starts.
+    const fake = "id: fake\nname: fake\nnodes:\n  f: {kind: call, call: fake}\noutput: ${f.output}\n";
+    await expect(children.start(await flow(fake, "fake.yaml"), {}, { project: "p" })).rejects.toThrow("scrubbed: ");
+    expect(calls).toEqual([
+      "preflight chatty",
+      "bind chatty in p",
+      "console x",
+      "console y",
+      "preflight greet",
+      "bind greet in null",
+      "preflight fake",
+      "bind fake in p",
+    ]);
   },
   TIMEOUT,
 );

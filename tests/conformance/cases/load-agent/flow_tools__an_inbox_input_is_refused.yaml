@@ -1,4 +1,5 @@
-# A flow tool's inputs come from the model, which can't send an inbox.
+# A flow tool's inputs come from the model, which can't send an inbox: the refusal points to
+# running the flow as its own run instead.
 kind: load
 flow: |
   id: f
@@ -29,7 +30,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'node ''helper'': flow `classify` can''t be a tool: its input `notes` is an inbox, which a model can''t send'
+      message: 'node ''helper'': flow `classify` can''t be a tool: its input `notes` is an inbox, which a model can''t send. A flow that reads an inbox is talked to while it works, so run it as a run of its own that the host starts and messages (`runFlow`, then `send`), as `yian chat`''s `flows` tools do.'
       frames:
       - label: flow.yaml
         range: [23, 12, 23, 22]

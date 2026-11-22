@@ -3,40 +3,38 @@
  * chat's folder as a child run once the user approves it on the terminal, and read, wait on,
  * answer, message and stop the runs it started. As with the file tools (`chat_tools.ts`), the
  * model always gets text back: a tool returns the run's status as JSON, or throws a
- * `ReportedToolError` it reads.
+ * `ReportedToolError` it reads. `start_flow` asks the chat which flow its arguments name and
+ * whether the user lets it start (`chatStart`). The runs are `ChatRuns`: the child-run driver
+ * with the chat's hooks.
  *
  * Knows about: the host tool API and its errors, confined loading, the run boundary's flow readers
- * and input intake, CODE references, the chat's file tools and their helpers, its child runs, its
- * events and its bundled flows.
+ * and input intake, CODE references, the chat's file tools and their helpers, its child runs and
+ * their driver's hooks, the CLI's key preflight and memory binding, the default embeddings, and
+ * its bundled flows.
  */
 
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
+import type { Env } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
+import type { Embed } from "../llm/embeddings.ts";
+import { defaultEmbedding } from "../llm_clients/connection.ts";
+import { defaultEmbed } from "../llm_clients/factory.ts";
 import { coerceInputs } from "../nodes/binding.ts";
 import { splitReference } from "../nodes/code/worker.ts";
 import { isSystemError, realScheduler, type Scheduler } from "../platform.ts";
-import { hostInputs, libraryRunMessage, skillGrants, staticNodes } from "../run.ts";
+import { type ConsoleHook, hostInputs, libraryRunMessage, skillGrants, staticNodes } from "../run.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { ReportedToolError } from "../tools/errors.ts";
-import { type FunctionTool, tool } from "../tools/function_tools.ts";
+import { type FunctionTool, stringArg, stringArguments, tool } from "../tools/function_tools.ts";
 import { grantText, visibleToolName } from "../tools/grants.ts";
 import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
-import {
-  buildValueAs,
-  isInboxType,
-  isMemoryType,
-  renderValuePath,
-  TypeCheckError,
-  type Value,
-  writeAsJson,
-} from "../typesys/values.ts";
-import { LIST_ITEMS } from "./chat_events.ts";
-import type { ChildRuns, ChildStatus } from "./chat_runs.ts";
+import { buildValueAs, isInboxType, isMemoryType, renderValuePath, TypeCheckError } from "../typesys/values.ts";
+import { ChildRuns, type ChildRunsOptions, type ChildStatus, cutText, shownStatus } from "./chat_runs.ts";
 import {
   type ChatToolHost,
   chatFileTools,
@@ -47,20 +45,28 @@ import {
   renderedDiagnostic,
   resolveRoot,
   slashed,
-  stringArg,
-  stringArguments,
 } from "./chat_tools.ts";
 import { AUTHOR_TOOLS, loadAuthorFlow, loadReviewFlow, REVIEW_TOOLS } from "./authoring.ts";
 import { loadConfinedText } from "./confined_load.ts";
 import { unifiedDiff } from "./diff.ts";
-import { type DefaultMemory, projectFolder } from "./memory_bind.ts";
+import {
+  bindMemories,
+  type CliMemory,
+  type CreatedMemory,
+  createdLine,
+  type DefaultMemory,
+  defaultMemories,
+  driftNote,
+  memoryLocation,
+  projectFolder,
+  withoutLocations,
+} from "./memory_bind.ts";
 import { loadReportFlow } from "./report_issue.ts";
+import { ensureProviderKeys } from "./startup.ts";
+import { CommandEnv } from "./utils.ts";
 
 /** The longest `wait_flow` waits, in seconds. */
 const WAIT_FLOW_MAX_S = 120;
-
-/** The most characters of each text field a run tool's status shows the model. */
-const STATUS_TEXT_CHARS = 4000;
 
 /** The approval answers `start_flow` offers: the first two start, the last (Ctrl-C's) doesn't. */
 const START_CHOICES = ["Approve", "Approve this flow for this chat", "Reject"] as const;
@@ -125,6 +131,129 @@ export interface ChatRunToolsOptions {
   authoring?: AuthoringOptions | null;
 }
 
+/** What the chat's child runs need from the chat (`ChatRuns`). */
+export interface ChatRunsOptions
+  extends Omit<ChildRunsOptions, "codeRoot" | "parentRunId" | "memories" | "preflight" | "onConsole"> {
+  /** The folder the chat's flows are confined to: their CODE files must resolve inside it. */
+  root: string;
+  /** The chat's own run id: each child's is `<chatRunId>-r<n>`, and its parent is the chat. */
+  chatRunId: string;
+  /** The home folder whose `~/.yian/memory` holds the children's default memories. */
+  home: string;
+  /** For tests: the embeddings call VectorDB memories make; `defaultEmbed` over `env` when absent. */
+  embed?: Embed;
+  /**
+   * The file the console output of the children's CODE nodes is appended to, so it doesn't land on
+   * the chat's terminal; `null` (the default) leaves it on the console.
+   */
+  consoleFile?: string | null;
+}
+
+/**
+ * Return an `onConsole` that appends each line a child's CODE prints to `file`, so it doesn't
+ * land on the chat's terminal.
+ */
+function consoleTo(file: string): ConsoleHook {
+  return ({ text }) => {
+    try {
+      appendFileSync(file, `${text}\n`);
+    } catch {
+      // A line that can't be kept mustn't fail the node that printed it.
+    }
+  };
+}
+
+/**
+ * The chat's child runs: the driver with the chat's hooks. A missing provider key is reported to
+ * the assistant rather than prompted for mid-chat. A child's memory inputs are bound to their
+ * defaults under `home`, as `yian run` binds them; a memory a pass creates is said by identity
+ * alone, and an error the driver reports names no location, since a status reaches the chat's log
+ * and its model, which never hold one.
+ */
+export class ChatRuns extends ChildRuns {
+  readonly #home: string;
+  readonly #env: Env;
+
+  constructor({ root, chatRunId, home, embed, consoleFile = null, ...options }: ChatRunsOptions) {
+    const { env } = options;
+    super({
+      ...options,
+      codeRoot: root,
+      parentRunId: chatRunId,
+      preflight: (flow, llmConfig, inputs) =>
+        ensureProviderKeys(flow, llmConfig, inputs, { env: new CommandEnv(env), terminal: null }),
+      memories: {
+        bind: (flow, project, note) => {
+          const told = (created: CreatedMemory) => note(createdLine(created, false));
+          const given = { home, note: told, project, memoryFlag: false, embed: embed ?? defaultEmbed(env) };
+          return bindMemories(flow, [], { ...given, defaultEmbedding: () => defaultEmbedding({ env }) });
+        },
+        drift: driftNote,
+        // A memory's open names its folder or store. A store's own folder, in an OS error on
+        // making it, is under ~/.yian/memory, written from `~`.
+        scrub: (error, memory) => {
+          // The instances are the ones `bind` made.
+          const roots = Object.values(memory as Readonly<Record<string, CliMemory>>).map(memoryLocation);
+          return withoutLocations(error, home, roots);
+        },
+      },
+      onConsole: consoleFile === null ? null : consoleTo(consoleFile),
+    });
+    this.#home = home;
+    this.#env = env;
+  }
+
+  /**
+   * Return the default memories `flow`'s start would bind, keyed by `project` as `start` keys
+   * them, by identity and whether each exists yet: for the start's approval, never a location. A
+   * new store's embedding model is the default `start` would use.
+   *
+   * @throws {RangeError} As `start` throws for a memory input with no default, or a new store with
+   *   no embedding model, naming no location.
+   */
+  defaultMemories(flow: ComposedFlow, project: string | null): DefaultMemory[] {
+    const home = this.#home;
+    const env = this.#env;
+    try {
+      const options = { home, project, memoryFlag: false, defaultEmbedding: () => defaultEmbedding({ env }) };
+      return defaultMemories(flow, options);
+    } catch (error) {
+      throw withoutLocations(error, home, []);
+    }
+  }
+}
+
+/** The flow a start names (`StartHooks.resolve`), and what its run is listed and keyed by. */
+interface StartTarget {
+  readonly flow: ComposedFlow;
+  /** What the runs list it by (`LiveChild.name`). */
+  readonly name: string;
+  /** The folder its memories are keyed by, or `null` for none. */
+  readonly project: string | null;
+}
+
+/** What a start asks its host: which flow its arguments name, and whether that flow may start. */
+interface StartHooks<T extends StartTarget> {
+  /**
+   * The flow `args` name.
+   *
+   * @throws {ReportedToolError} What the model reads when they name none it can start.
+   */
+  resolve(args: Record<string, unknown>): Promise<T>;
+  /**
+   * Whether `target` may start with `inputs`, asked for `requester` (a bundled flow, or `null` for
+   * the assistant): `null` once it may, else why not.
+   */
+  approve(target: T, inputs: unknown, requester: string | null, signal: AbortSignal): Promise<string | null>;
+}
+
+/** A flow `start_flow` names in the chat's folder: its real path and text, and whether it is a draft. */
+interface ChatStart extends StartTarget {
+  readonly real: string;
+  readonly text: string;
+  readonly draft: boolean;
+}
+
 /**
  * The start card's title for `file`: a draft says it isn't written, and a start a bundled flow
  * (`requester`) asks for names it.
@@ -134,41 +263,6 @@ function startTitle(file: string, draft: boolean, requester: string | null): str
   const shown = notes.filter((note) => note !== null);
   if (draft && requester === null) shown.push("not written");
   return shown.length === 0 ? `Run ${file}` : `Run ${file} (${shown.join(", ")})`;
-}
-
-/** `text` cut to `STATUS_TEXT_CHARS` characters, with a note when it was cut. */
-function cutText(text: string): string {
-  if (text.length <= STATUS_TEXT_CHARS) return text;
-  return `${text.slice(0, STATUS_TEXT_CHARS)}... (cut at ${STATUS_TEXT_CHARS} characters)`;
-}
-
-/**
- * @internal `status` as the model reads it: its text fields cut, its asks and waits listed up to
- * `LIST_ITEMS` each (`not_shown` says how many more), without the seq it doesn't need.
- */
-export function shownStatus(status: ChildStatus): Record<string, unknown> {
-  const { seq: _, output, failure, asks, replies, note, waits, ...rest } = status;
-  const shown: Record<string, unknown> = { ...rest };
-  const more: string[] = [];
-  if (waits !== undefined) {
-    shown["waits"] = waits.slice(0, LIST_ITEMS);
-    if (waits.length > LIST_ITEMS) more.push(`${waits.length - LIST_ITEMS} more waits`);
-  }
-  if (output !== undefined) {
-    // An output too long as JSON is shown as its cut JSON text.
-    const json = writeAsJson(output as Value);
-    if (typeof output === "string") shown["output"] = cutText(output);
-    else shown["output"] = json.length > STATUS_TEXT_CHARS ? cutText(json) : output;
-  }
-  if (failure !== undefined) shown["failure"] = { ...failure, message: cutText(failure.message) };
-  if (asks !== undefined) {
-    shown["asks"] = asks.slice(0, LIST_ITEMS).map((ask) => ({ ...ask, question: cutText(ask.question) }));
-    if (asks.length > LIST_ITEMS) more.unshift(`${asks.length - LIST_ITEMS} more asks`);
-  }
-  if (replies !== undefined) shown["replies"] = replies.map(cutText);
-  if (note !== undefined) shown["note"] = cutText(note);
-  if (more.length > 0) shown["not_shown"] = `${more.join(" and ")}; the run's log has all`;
-  return shown;
 }
 
 /**
@@ -328,6 +422,64 @@ async function loadForStart(
 }
 
 /**
+ * `start_flow`'s hooks in the chat: its `path` names a flow file in `host.root`, or its `content` a
+ * draft of that file, whose memories are keyed by the folder `path` names, as `yian run` keys
+ * them; the user approves each start on the terminal, unless they approved the same flow,
+ * unchanged, for this chat.
+ */
+function chatStart(host: ChatToolHost, runs: ChatRuns): StartHooks<ChatStart> {
+  // The approvals given "for this chat", by real path: the digest of what was approved.
+  const approved = new Map<string, string>();
+  return {
+    resolve: async (args) => {
+      const content = args["content"] === undefined ? undefined : stringArg(args, "content");
+      const path = stringArg(args, "path");
+      const { real, shown, text, flow } = await loadForStart(host, path, content);
+      const project = projectFolder(resolve(resolveRoot(host.root), path));
+      return { flow, name: shown, project, real, text, draft: content !== undefined };
+    },
+    approve: async ({ flow, name: file, project, real, text, draft }, inputs, requester, signal) => {
+      const files = codeFiles(flow);
+      const root = resolveRoot(host.root);
+      let memories: DefaultMemory[];
+      try {
+        memories = runs.defaultMemories(flow, project);
+      } catch (error) {
+        if (error instanceof Error) return error.message;
+        throw error;
+      }
+      const can = capabilities(flow, files.map((each) => slashed(relative(root, each))));
+      // The user sees when a flow (a draft, say) would use a memory another flow made. Which one it
+      // binds is part of what is approved; whether it exists yet isn't.
+      const named = memories.map(({ input, identity }) => `${input} → ${identity}`);
+      const marked = memories.map(({ exists }, i) => `${named[i]} (${exists ? "existing" : "new"})`);
+      const memoryLine = (list: readonly string[]) => (list.length === 0 ? [] : [`memories: ${list.join(", ")}`]);
+      const digest = startDigest(flow, text, files, [...can, ...memoryLine(named)]);
+      if (approved.get(real) === digest) return null;
+      // A draft is on no disk for the user to read, so the card shows all of it.
+      const answer = await host.approve({
+        title: startTitle(file, draft, requester),
+        body: [
+          `Starts ${draft ? "the draft " : ""}${file} in the background.`,
+          `inputs: ${cutText(JSON.stringify(inputs))}`,
+          ...can,
+          ...memoryLine(marked),
+        ].join("\n"),
+        diff: draft
+          ? unifiedDiff("", text, { oldLabel: "/dev/null", newLabel: `${file} (draft)` })
+          : null,
+        choices: START_CHOICES,
+        signal,
+      });
+      if (answer === null) return "not approved (no terminal, or the prompt ended)";
+      if (answer === START_CHOICES[1]) approved.set(real, digest);
+      else if (answer !== START_CHOICES[0]) return "rejected";
+      return null;
+    },
+  };
+}
+
+/**
  * The chat assistant's run tools over `runs`: `start_flow`, which asks the user through
  * `host.approve` before it starts a flow in `host.root`; `flow_status` and `wait_flow`, which
  * read a child's status; and `answer_flow`, `message_flow`, `close_inbox` and `stop_flow`, which
@@ -339,10 +491,9 @@ async function loadForStart(
  * `options.authoring`, also `author_flow` and `review_flow`, which start the bundled authoring
  * flows likewise (`authoringTools`).
  */
-export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatRunToolsOptions = {}): FunctionTool[] {
+export function chatRunTools(host: ChatToolHost, runs: ChatRuns, options: ChatRunToolsOptions = {}): FunctionTool[] {
   const { seen = null, scheduler = realScheduler, report = null, authoring = null } = options;
-  // The approvals given "for this chat", by real path: the digest of what was approved.
-  const approved = new Map<string, string>();
+  const start = chatStart(host, runs);
   const chatView = view(true);
   const { show } = chatView;
   const runArgument = (description: string, ...more: [name: string, description: string][]) =>
@@ -494,10 +645,7 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
         required: ["path", "inputs"],
         additionalProperties: false,
       },
-      execute: (args, ctx) => {
-        const content = args["content"] === undefined ? undefined : stringArg(args, "content");
-        return startFlow(through, stringArg(args, "path"), args["inputs"], content, ctx.signal);
-      },
+      execute: (args, ctx) => startFlow(through, args, ctx.signal),
     });
   }
 
@@ -664,62 +812,25 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
   }
 
   /**
-   * Start the flow at `path`, or the draft `content` as that file, with `inputs` once the user
-   * approves it, as `start_flow` describes, showing it through `through`. A library is returned
-   * as not started, without asking, and so is every outcome once the user is asked.
+   * Start the flow `args` name with their `inputs` once `start` lets it, as `start_flow`
+   * describes, showing it through `through`. A library is returned as not started, without
+   * asking, and so is every outcome once `start` is asked.
    */
   async function startFlow(
     through: View,
-    path: string,
-    inputs: unknown,
-    content: string | undefined,
+    args: Record<string, unknown>,
     signal: AbortSignal,
   ): Promise<string | Record<string, unknown>> {
-    const { real, shown: file, text, flow } = await loadForStart(host, path, content);
+    const target = await start.resolve(args);
+    const { flow, name, project } = target;
     if (flow.library !== null) return `not started: ${libraryRunMessage(flow)}`;
+    const inputs = args["inputs"];
     checkStartInputs(flow, inputs);
-    const files = codeFiles(flow);
-    const root = resolveRoot(host.root);
-    // Its memories are keyed by the folder `path` names, as `yian run` keys them.
-    const project = projectFolder(resolve(root, path));
-    let memories: DefaultMemory[];
-    try {
-      memories = runs.defaultMemories(flow, project);
-    } catch (error) {
-      if (error instanceof Error) return `not started: ${error.message}`;
-      throw error;
-    }
-    const can = capabilities(flow, files.map((each) => slashed(relative(root, each))));
-    // The user sees when a flow (a draft, say) would use a memory another flow made. Which one it
-    // binds is part of what is approved; whether it exists yet isn't.
-    const named = memories.map(({ input, identity }) => `${input} → ${identity}`);
-    const marked = memories.map(({ exists }, i) => `${named[i]} (${exists ? "existing" : "new"})`);
-    const memoryLine = (list: readonly string[]) => (list.length === 0 ? [] : [`memories: ${list.join(", ")}`]);
-    const digest = startDigest(flow, text, files, [...can, ...memoryLine(named)]);
-    if (approved.get(real) !== digest) {
-      // A draft is on no disk for the user to read, so the card shows all of it.
-      const draft = content !== undefined;
-      const answer = await host.approve({
-        title: startTitle(file, draft, through.requester),
-        body: [
-          `Starts ${draft ? "the draft " : ""}${file} in the background.`,
-          `inputs: ${cutText(JSON.stringify(inputs))}`,
-          ...can,
-          ...memoryLine(marked),
-        ].join("\n"),
-        diff: draft
-          ? unifiedDiff("", text, { oldLabel: "/dev/null", newLabel: `${file} (draft)` })
-          : null,
-        choices: START_CHOICES,
-        signal,
-      });
-      if (answer === null) return "not started: not approved (no terminal, or the prompt ended)";
-      if (answer === START_CHOICES[1]) approved.set(real, digest);
-      else if (answer !== START_CHOICES[0]) return "not started: rejected";
-    }
+    const refused = await start.approve(target, inputs, through.requester, signal);
+    if (refused !== null) return `not started: ${refused}`;
     let id: string;
     try {
-      ({ id } = await runs.start(flow, inputs as Record<string, unknown>, { signal, name: file, project }));
+      ({ id } = await runs.start(flow, inputs as Record<string, unknown>, { signal, name, project }));
     } catch (error) {
       if (error instanceof Error) return `not started: ${error.message}`;
       throw error;

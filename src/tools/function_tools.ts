@@ -4,8 +4,10 @@
  * `FunctionTool` describes a tool by its argument JSON Schema and an `execute` function, and may
  * carry Standard Schema v1 validators and an output JSON Schema. `tool()` builds one from a
  * validator (zod, valibot, ArkType, ...) or a raw JSON Schema; yian imports no validator library.
+ * `stringArguments` and `stringArg` declare and read a tool's string arguments.
  *
- * Knows about: `tools/context`, `llm/messages` (the JSON check), typesys and diagnostics.
+ * Knows about: `tools/context`, `tools/errors`, `llm/messages` (the JSON check), typesys and
+ * diagnostics.
  */
 
 import { reprText } from "../diagnostics.ts";
@@ -14,6 +16,7 @@ import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { isRecord, jsTypeName } from "../typesys/values.ts";
 import type { ToolContext } from "./context.ts";
+import { ReportedToolError } from "./errors.ts";
 
 /**
  * The brand every `FunctionTool` carries. The registry checks it rather than `instanceof`, so a
@@ -236,6 +239,27 @@ export function isFunctionTool(value: unknown): value is FunctionTool {
   } catch {
     return false;
   }
+}
+
+/** @internal A tool's JSON Schema for string arguments, each `[name, description, required]`. */
+export function stringArguments(...fields: [name: string, description: string, required: boolean][]) {
+  return {
+    type: "object",
+    properties: Object.fromEntries(fields.map(([name, description]) => [name, { type: "string", description }])),
+    required: fields.filter(([, , required]) => required).map(([name]) => name),
+    additionalProperties: false,
+  };
+}
+
+/**
+ * @internal The string argument `name` of a tool call.
+ *
+ * @throws {ReportedToolError} When it isn't a string.
+ */
+export function stringArg(args: Record<string, unknown>, name: string): string {
+  const value = args[name];
+  if (typeof value !== "string") throw new ReportedToolError(`${name} must be a string`);
+  return value;
 }
 
 /**

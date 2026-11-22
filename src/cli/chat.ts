@@ -27,13 +27,13 @@ import {
 } from "../llm_clients/connection.ts";
 import { SUPPORTED_LLM_PROVIDERS } from "../llm_clients/config.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
-import { homeDir, isSystemError, leavesRoot, realScheduler, type Scheduler } from "../platform.ts";
+import { homeDir, isSystemError, leavesRoot, realScheduler, removeEmptyDir, type Scheduler } from "../platform.ts";
 import { skillGrants } from "../run.ts";
 import { type Skill, SkillError } from "../skills/catalog.ts";
 import { DOCS, FLOWS } from "./bundled.ts";
 import { bundledSkill } from "./bundled_skill.ts";
 import { EventQueue, InFlight, trackInFlight } from "./chat_events.ts";
-import { chatRunTools } from "./chat_run_tools.ts";
+import { ChatRuns, type ChatRunsOptions, chatRunTools } from "./chat_run_tools.ts";
 import {
   chatBanner,
   ChatView,
@@ -43,7 +43,7 @@ import {
   runRows,
   type ViewStream,
 } from "./chat_view.ts";
-import { ChildRuns, type ChildRunsOptions, type WaitingChild } from "./chat_runs.ts";
+import type { ChildRuns, WaitingChild } from "./chat_runs.ts";
 import { type ChatToolHost, chatFileTools, checkFocus, slashed } from "./chat_tools.ts";
 import { cells, columnsOf, fit } from "./cells.ts";
 import {
@@ -67,7 +67,7 @@ import {
 import { type ChatCommandOutcome, inboxChat, type InboxChatHost } from "./inbox_chat.ts";
 import { type Colored, paint, printStyled, type Style } from "./render.ts";
 import { type FileIssueHost, fileIssueTool, hostFacts } from "./report_issue.ts";
-import { CHAT_FLOW_FILE, removeEmptyDir, validateRunLogOptions } from "./run.ts";
+import { CHAT_FLOW_FILE, validateRunLogOptions } from "./run.ts";
 import { sanitize } from "./sanitize.ts";
 import { RunProgress, runScreen } from "./run_view.ts";
 import { cliLayer, defaultRunsDir, freshLog } from "./startup.ts";
@@ -106,7 +106,7 @@ export interface ChatDeps {
   signals?: Pick<NodeJS.EventEmitter, "on" | "off">;
   models?: ModelAccess | null;
   /** The `advance` and `cancel` the children's runs use. */
-  children?: Pick<ChildRunsOptions, "advance" | "cancel">;
+  children?: Pick<ChatRunsOptions, "advance" | "cancel">;
   /** The clock the spinner ticks on, apart from `scheduler`, which a test may hold. */
   ticker?: Scheduler;
   /** How `file_issue` runs gh and sends to GitHub, for a test that mustn't file a real issue. */
@@ -778,7 +778,7 @@ export async function chat(
       title: seed?.title ?? null,
     };
     const wake = new EventTarget();
-    const runs: ChildRuns = new ChildRuns({
+    const runs: ChatRuns = new ChatRuns({
       root,
       logDir: runsDir,
       env,

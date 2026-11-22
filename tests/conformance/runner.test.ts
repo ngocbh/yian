@@ -175,10 +175,12 @@ const TEXT_REPLY = "{format: yian.message.v1, role: assistant, parts: [{type: te
 const MODEL = (entry: string) => `${RUN}host: {models: {n: {agent: [${entry}]}}}\n`;
 const AT = "host.models.n.agent[0]";
 const SENDS =
-  "`host.sends` items are {inbox, event, after?|down?}, {close}, {withdraw, after?}, {interrupt, after?} or {complete, output | error}; " +
+  "`host.sends` items are {inbox, event, after?|down?}, {close}, {withdraw, after?}, {interrupt, after?}, {complete, output | error} or {release, note?, after?}; " +
   "`hold: true` marks an item sent while the run waits that isn't followed by an advance";
 const COUNTS = "`host.sends[0].after` counts must be ints from 1, `chunk` from 0";
 const STOP_COUNTS = "`host.stop.a.after` counts must be ints from 1, `chunk` from 0";
+const GATE_ENTRY = (at: string) =>
+  `\`${at}\` is {run: true}, {run: true, note}, {refuse}, {hold: true} or {throw}, each with an optional \`later: true\``;
 const USAGE = "{input_tokens: 1, output_tokens: 2, total_tokens: 3}";
 const CONSUMER_LIST = "agent, structured_retry, compose, summary";
 /** A `run` case whose `expect` adds `results`. */
@@ -394,14 +396,37 @@ describe("checkCase", () => {
       "[{inbox: m, event: a, after: {node: chat, model_call: 1}, hold: true}]",
       "[{interrupt: m, after: {node: chat, model_call: 1}, hold: true}]",
       "[{inbox: m, event: a, down: true, hold: true}]",
+      "[{release: 1}]",
+      "[{release: r/n, note: 1}]",
+      "[{release: r/n, down: true}]",
+      "[{release: r/n, output: a}]",
+      "[{release: r/n, after: {node: chat, tool_call: 1}, hold: true}]",
     ].map((items) => [`${RUN}host: {sends: ${items}}`, SENDS]),
+    [`${RUN}host: {sends: [{release: r/n, after: {tool_call: 1}}]}`, "`host.sends[0].after.node` must be a node id"],
+    [`${RUN}host: {sends: [{release: r/n, after: {node: chat, gate_call: 0}}]}`, COUNTS],
+    [`${RUN}host: {gate: 1}`, "`host.gate` must be a mapping"],
+    [`${RUN}host: {gate: {t: 1}}`, "`host.gate.t` must be a list or a mapping of lists"],
+    [`${RUN}host: {gate: {t: {n: 1}}}`, "`host.gate.t` must be a list or a mapping of lists"],
+    ...[
+      "{}",
+      "{run: false}",
+      "{run: true, refuse: r}",
+      "{run: true, later: false}",
+      "{refuse: 1}",
+      "{hold: 1}",
+      "{throw: [e]}",
+      "{note: n}",
+      "1",
+    ].map((entry) => [`${RUN}host: {gate: {t: [${entry}]}}`, GATE_ENTRY("host.gate.t[0]")]),
+    [`${RUN}host: {gate: {t: {n: [{x: 1}]}}}`, GATE_ENTRY("host.gate.t.n[0]")],
+    [`${RESUME}resume: {gate: 1}`, "`resume.gate` must be null"],
     [`${RUN}host: {sends: [{withdraw: m, after: {tool_call: 1}}]}`, "`host.sends[0].after.node` must be a node id"],
     [`${RUN}host: {sends: [{inbox: m, event: a, after: {tool_call: 1}}]}`, "`host.sends[0].after.node` must be a node id"],
     [`${RUN}host: {sends: [{interrupt: m, after: {tool_call: 1}}]}`, "`host.sends[0].after.node` must be a node id"],
     [`${RUN}host: {sends: [{interrupt: m, after: {node: chat, tool_call: 0}}]}`, COUNTS],
     [
       `${RUN}host: {sends: [{inbox: m, event: a, after: {node: chat, chunk: 1}}]}`,
-      "`host.sends[0].after` is `{model_call, chunk}`, `{model_call}` or `{tool_call}`",
+      "`host.sends[0].after` is `{model_call, chunk}`, `{model_call}`, `{tool_call}` or `{gate_call}`",
     ],
     [`${LOAD}host: {sends: []}`, "`host` is not a key of a `load` case"],
     [`${RUN}host: {models: 1}`, "`host.models` must be a mapping"],
@@ -567,7 +592,7 @@ describe("checkCase", () => {
     [`${RUN}host: {stop: {a: {after: {tool_call: 1}, steer: [x]}}}`, "unknown key `host.stop.a.steer`"],
     [
       `${RUN}host: {stop: {a: {after: {chunk: 1}}}}`,
-      "`host.stop.a.after` is `{model_call, chunk}`, `{model_call}` or `{tool_call}`",
+      "`host.stop.a.after` is `{model_call, chunk}`, `{model_call}`, `{tool_call}` or `{gate_call}`",
     ],
     [`${RUN}host: {stop: {a: {after: {model_call: 0}}}}`, STOP_COUNTS],
     [`${RUN}host: {stop: {a: {after: {model_call: 1, chunk: -1}}}}`, STOP_COUNTS],
@@ -638,6 +663,16 @@ describe("checkCase", () => {
     `${BARE_RESUME}run: {num_workers: 0}\nhost: {crash_after_record: 1, memory: {m: {type: FileMemory}}}\n` +
       "resume: {memory: {m: null, n: {id: t/n}}}",
     `kind: resume\nflow: x\nrun: {num_workers: 0}\nhost: {crash_after_record: 1}\nexpect: {output: 1, memory_drift: [m]}`,
+    [
+      "kind: run",
+      "flow: x",
+      "host:",
+      "  gate: {t: [{run: true}, {run: true, note: n, later: true}, {refuse: r}, {hold: true}, {throw: e, later: true}], u: {n: [{refuse: \"\"}]}}",
+      "  sends: [{release: r/n/1/0, note: ok, hold: true}, {release: r/n/1/1}, {release: r/n/1/2, after: {node: n, gate_call: 1}}]",
+      "  stop: {n: {after: {gate_call: 2}}}",
+      "expect: {output: 1, gate_calls: []}",
+    ].join("\n"),
+    `${BARE_RESUME}run: {num_workers: 0}\nhost: {crash_after_record: 1, gate: {t: [{hold: true}]}}\nresume: {gate: null}`,
     `${EXPR}expr: a\nitem: 1`,
     `${EXPR}expr: a\nmode: condition`,
     `${EXPR}expr: a\nitem: 1\ntypedefs: {}\nmode: strict`,
@@ -1139,6 +1174,65 @@ describe("run", () => {
     await runCase(PENDING_CASE("[{complete: r1/agent/1/0, error: no}]", "done"));
     const waiting = runCase(PENDING_CASE("[]", "done"));
     await expect(waiting).rejects.toThrow("the run is still waiting after host.sends ran out");
+  });
+
+  /**
+   * A gated `run` case: agent `agent` calls the stub `save` once (call r1/agent/1/0), then answers
+   * `done`; its host has the gate scripts `gate` and the items `sends`, and its `expect` adds `more`.
+   */
+  const GATE_CASE = (gate: string, sends: string, more = "") =>
+    "kind: run\nflow: |\n  id: f\n  name: f\n  llm_config: {provider: anthropic, model: claude-test}\n" +
+    "  nodes:\n    agent:\n      kind: agent\n      tools: [save]\n      prompt: hi\n      output: !str\n" +
+    "  output: ${agent.output}\nrun: {run_id: r1, num_workers: 0}\n" +
+    "host:\n  tools:\n    save: {parameters: {type: object, properties: {}}, results: [{return: saved}]}\n" +
+    `  gate: ${gate}\n  sends: ${sends}\n` +
+    "  models:\n    agent:\n      agent:\n" +
+    "      - reply: {format: yian.message.v1, role: assistant, parts: [{type: tool_call, id: c1, name: save, arguments: {}}]}\n" +
+    "      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: done}]}\n" +
+    `expect:\n  output: {status: succeeded, output: done}\n${more}`;
+  const ASKED =
+    "{tool: save, call_id: r1/agent/1/0, node: agent, source: {kind: host, group: null, tool: save}, arguments: {}, scopes: []";
+
+  test("`host.gate` decides each call the hook is asked about, and `gate_calls` lists each ask", async () => {
+    await runCase(GATE_CASE("{save: [{run: true, note: ok}]}", "[]", `  gate_calls: [${ASKED}, attempt: 1}]\n`));
+    const differs = runCase(GATE_CASE("{save: [{run: true}]}", "[]", `  gate_calls: [${ASKED}, attempt: 2}]\n`));
+    await expect(differs).rejects.toThrow("gate_calls differs");
+  });
+
+  test("a held call waits until a `{release}` item runs it, the note on its `released` step", async () => {
+    await runCase(GATE_CASE("{save: [{hold: true}]}", "[{release: r1/agent/1/0, note: approved}]"));
+    const steps = readFileSync(join(made.at(-1)!, "run.jsonl"), "utf8")
+      .split("\n")
+      .filter((line) => line !== "")
+      .map((line) => decodeRecord(line).record)
+      .flatMap((record) => (record instanceof NodeStepRecord ? [record.step] : []));
+    expect(steps.find((step) => step["kind"] === "released")).toEqual({ kind: "released", call_id: "r1/agent/1/0", note: "approved" });
+  });
+
+  test("a gate entry left unused, or a check past its script, fails the case", async () => {
+    await expect(runCase(GATE_CASE("{save: [{run: true}, {run: true}]}", "[]"))).rejects.toThrow(
+      "`host.gate.save` has 1 entry left",
+    );
+    await expect(runCase(GATE_CASE("{save: []}", "[]"))).rejects.toThrow(
+      "the hook's check of a call to `save` from node 'agent' found `host.gate.save` used up",
+    );
+    await expect(runCase(GATE_CASE("{other: []}", "[]"))).rejects.toThrow(
+      "the hook's check of a call to `save` from node 'agent' found no `host.gate.save` list",
+    );
+  });
+
+  test("`resume.gate: null` resumes a gated run without its gate, which the resume refuses", async () => {
+    const gated = "run log <tmp>/run.jsonl is gated: a host checked its tool calls with beforeToolCall; " +
+      "resume it with one (advance({ log, beforeToolCall }))";
+    const text = GATE_CASE("{save: [{hold: true}]}", "[]")
+      .replace("kind: run", "kind: resume")
+      .replace("host:\n", "host:\n  crash_after_record: 10\n")
+      .replace("  sends: []\n", "")
+      .replace("expect:\n  output: {status: succeeded, output: done}\n", `resume: {gate: null}\nexpect:\n  raises: {class: RangeError, message: "${gated}"}\n`)
+      // Neither the tool nor the second reply is reached.
+      .replace("results: [{return: saved}]", "results: []")
+      .replace(/ {6}- reply: \{[^\n]*text: done\}\]\}\n/, "");
+    await runCase(text);
   });
 
   test("a run still waiting after `host.sends` ran out fails the case", async () => {
@@ -1909,7 +2003,7 @@ describe("sourcesByRecord", () => {
 });
 
 describe("pooled", () => {
-  const results = (entries: unknown[][]) => ({ trace: entries, events: [], stream: [], tool_calls: {} });
+  const results = (entries: unknown[][]) => ({ trace: entries, events: [], stream: [], tool_calls: {}, gate_calls: [] });
 
   test("names each from seq by its record's kind and node, so the interleaving doesn't show", () => {
     const aFirst = [
@@ -2291,6 +2385,64 @@ expect:
     const failure = crashSweep(case_, ctx, { beforeResume: emptied });
     await expect(failure).rejects.toBeInstanceOf(CaseFailure);
     await expect(failure).rejects.toThrow(/memory \(crash sweep, cut after record \d+\) differs/);
+  }, SWEEP);
+
+  // An agent whose one call to `save`, held, runs once a release lets it; the case adds the items.
+  const HELD = (sends: string) => `kind: run
+flow: |
+  id: f
+  name: f
+  llm_config: {provider: anthropic, model: claude-test}
+  nodes:
+    agent:
+      kind: agent
+      tools: [save]
+      prompt: hi
+      output: !str
+  output: \${agent.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    save: {parameters: {type: object, properties: {}}, results: [{return: saved}]}
+  gate: {save: [{hold: true}]}
+  sends: ${sends}
+  models:
+    agent:
+      agent:
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: tool_call, id: c1, name: save, arguments: {}}]}
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: done}]}
+expect:
+  output: {status: succeeded, output: done}
+`;
+
+  test("a case whose items all wait for the run is swept; one with an `after` or `down` item isn't", () => {
+    expect(sweepable(sweepCase(HELD("[{release: r1/agent/1/0}]"))[0])).toBe(true);
+    const live = HELD("[{release: r1/agent/1/0, after: {node: agent, model_call: 1}}]");
+    expect(sweepable(sweepCase(live)[0])).toBe(false);
+    // `down` is a `resume` case's, which no sweep takes; the item alone keeps a run case out too.
+    const [down] = sweepCase(HELD("[]"));
+    (down["host"] as Case)["sends"] = [{ inbox: "m", event: "a", down: true }];
+    expect(sweepable(down)).toBe(false);
+  });
+
+  test("a hold released while the run waits is swept: a cut runs the call at most once, and once when before its wake", async () => {
+    const [case_, ctx] = sweepCase(HELD("[{release: r1/agent/1/0, note: ok}]"));
+    const cuts: string[] = [];
+    await crashSweep(case_, ctx, { beforeResume: (log) => cuts.push(log) });
+    // 23 records; the 4 cuts inside the run start are refused instead of resumed.
+    expect(cuts).toHaveLength(18);
+  }, SWEEP);
+
+  test("fails a resume that runs a released call again after its first evaluation", async () => {
+    const [case_, ctx] = sweepCase(HELD("[{release: r1/agent/1/0}]"));
+    // Cut after the wake (record 14), the cut ran the call; without the wake, the resume runs it again.
+    const unwake = (log: string) => {
+      const lines = readFileSync(log, "utf8").split("\n");
+      if (lines.at(-2)?.includes('"kind":"node_woken"')) writeFileSync(log, [...lines.slice(0, -2), ""].join("\n"));
+    };
+    await expect(crashSweep(case_, ctx, { beforeResume: unwake })).rejects.toThrow(
+      "`save` ran call r1/agent/1/0 2 times across the cut and the resume (crash sweep, cut after record 14)",
+    );
   }, SWEEP);
 
   test("a sweep still going refuses no other run's appends", async () => {

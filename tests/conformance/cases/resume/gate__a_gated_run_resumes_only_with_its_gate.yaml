@@ -1,0 +1,34 @@
+# A run its host gated records `gated` on `run_started`. Resumed without a hook, it is refused
+# before anything is appended, since its model-made calls would run unchecked.
+kind: resume
+flow: |
+  id: d11
+  name: d11
+  llm_config: {provider: anthropic, model: claude-test}
+  nodes:
+    agent:
+      kind: agent
+      tools: [save]
+      prompt: hi
+      output: !str
+  output: ${agent.output}
+run: {run_id: r1, num_workers: 0}
+resume: {gate: null}
+host:
+  crash_after_record: 10
+  tools:
+    save: {parameters: {type: object, properties: {}}, results: []}
+  gate:
+    save: [{hold: true}]
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts: [{type: tool_call, id: c1, name: save, arguments: {}}]
+expect:
+  raises:
+    class: RangeError
+    message: "run log <tmp>/run.jsonl is gated: a host checked its tool calls with beforeToolCall; resume it with one (advance({ log, beforeToolCall }))"
+  trace: [[run_started, null, {effective_llm_by_static_path: {agent: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, gated: true, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, agent], [node_step, agent, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {}, id: c1, name: save, type: tool_call}], role: assistant}, purpose: chat, request_sha256: 41da36ba1135cbab58bd3ac89968f1984f4db4d1c40b533b081f4725e0b28030, response_id: null, usage: null}}], [node_step, agent, {n: 2, step: {call_id: r1/agent/1/0, group_end: 0, held: true, index: 0, kind: pending, reply: 1, source: {group: null, kind: host, tool: save}, tool: save, tool_call_id: c1}}]]

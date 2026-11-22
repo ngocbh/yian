@@ -97,7 +97,7 @@ it says "or". A `run` or `resume` case's `expect` has exactly one of `raises` an
 | Kind | Keys | Checks |
 |---|---|---|
 | `load` | `flow` (required), `files`, `env`, `memory_types` | `expect.load` |
-| `run` | `flow` (required), `files`, `env`, `inputs`, `run`, `host` | `expect.raises`, or `expect.output`; then `trace`, `events`, `stream`, `tool_calls`, `memory` when present |
+| `run` | `flow` (required), `files`, `env`, `inputs`, `run`, `host` | `expect.raises`, or `expect.output`; then `trace`, `events`, `stream`, `tool_calls`, `gate_calls`, `memory` when present |
 | `resume` | as `run`, plus `host.crash_after_record` or `host.stop`, and `resume` | as `run`, for the resumed run, plus `memory_drift` when present |
 | `expr` | exactly one of `expr` and `template` (required), `values`, `item`, `mode`, `typedefs`, `env` | `expect.value` or `expect.raises` |
 | `value` | `type` and `value` (required), `typedefs`, `env` | `expect.value` and `expect.kind`, or `expect.raises` |
@@ -126,8 +126,8 @@ runner always gives the run a log file in the case directory, and projects it to
 
 `expect.output` is `{status: succeeded, output: <value>}`, the output in data form (a file as
 `{uri, mime, name}`), or `{status: failed, failure: <failure>}`. `expect.raises` is the host
-error the run raised instead (the log may not exist). When the run raised before creating its
-log, its trace is `[]`.
+error the run raised instead (the log may not exist), with the case directory in its message
+written `<tmp>`. When the run raised before creating its log, its trace is `[]`.
 
 ### `resume`
 
@@ -140,7 +140,8 @@ first run run to its end (a first run that raises fails the case), so the resume
 run's, read-only. With `host.stop`, the first run must reject with the stop, and the resume
 continues the stopped run. Then the flow is resumed from the log with the `resume` arguments
 `num_workers` (absent: the recorded value), `api_key`, `headers`, `context` (`context` as in
-`run`) and `memory` (below). The expectations are for the resumed run: its output, the trace of
+`run`), `memory` (below) and `gate`: `gate: null` resumes without the hook `host.gate` gave the
+first run. The expectations are for the resumed run: its output, the trace of
 the whole log, the events and stream of the resume call, `tool_calls` over both runs, the memory
 folders after the resume, and `memory_drift`, the inputs, in order, whose memory the resume call
 reports moved while the run was down (`RunResult.memoryDrift`).
@@ -295,14 +296,14 @@ A case can't hold code, so its host is declared under `host`.
   as an `adaptive_questions:` brief's context). A case with `human` doesn't declare a tool named
   `ask` or `ask_user`.
 - **`sends`**: a list of `{inbox: <name>, event:
-  <value>}`, `{close: <name>}`, `{withdraw: <name>}`, `{interrupt: <name>}` and `{complete:
-  <call id>, output: <value>}` or `{complete: <call id>, error: <text>}` items. While the run
-  ends `waiting` and items are left, the runner delivers the next one (`send`, `close`,
-  `withdraw`, `interrupt` or `complete`) and moves the run on with `advance`, with the same host,
-  clock and observers, so `events` and `stream` cover the whole run. An item with `hold: true` is
-  delivered with no `advance` after it, so the next item lands on the same waiting run. A run
-  still waiting when the items run out fails the case. A case with such items gets no crash
-  sweep. More forms of a send item:
+  <value>}`, `{close: <name>}`, `{withdraw: <name>}`, `{interrupt: <name>}`, `{complete:
+  <call id>, output: <value>}` or `{complete: <call id>, error: <text>}`, and `{release: <call
+  id>, note: <text>}` (`note` optional) items. While the run ends `waiting` and items are left,
+  the runner delivers the next one (`send`, `close`, `withdraw`, `interrupt`, `complete` or
+  `release`) and moves the run on with `advance`, with the same host, clock and observers, so
+  `events` and `stream` cover the whole run. An item with `hold: true` is delivered with no
+  `advance` after it, so the next item lands on the same waiting run. A run still waiting when
+  the items run out fails the case. More forms of a send item:
   - `{inbox, event, after: {node: <node id>, <point>}}` is sent while the run is live, when it
     reaches the point (see [points](#points) below), through the run's engine, as a host's `send`
     does. A steer to an AGENT's `steer_inbox` is such an item: sent at `{tool_call: i}`, it joins
@@ -314,8 +315,22 @@ A case can't hold code, so its host is declared under `host`.
     waiting.
   - `{withdraw, after: {node: <node id>, <point>}}` calls `withdraw(log, inbox)` while the run is
     live, when it reaches the point, through the run's engine.
+  - `{release, note, after: {node: <node id>, <point>}}` calls `release(log, callId, {note})`
+    while the run is live, when it reaches the point, through the run's engine: a release in
+    flight.
   - `{inbox, event, down: true}`, `resume` cases only, is sent after the cut and before the
     resume, as a host does while the run is down.
+- **`gate`**: the run's `beforeToolCall` hook, as scripts by the checked call's visible tool name,
+  each a list of entries or a mapping from node id to such a list, taken by the calling node.
+  Each check takes its script's next entry: `{run: true}` runs the call, `{run: true, note:
+  <text>}` runs it with the note, `{refuse: <text>}` refuses it with the text, `{hold: true}` holds
+  it (`pending()`), and `{throw: <text>}` throws an error with that message. With `later: true`
+  the decision comes back through a Promise (a rejection, for `throw`), which settles after the
+  check's point (below). The texts are handed to the hook as written, so an empty one is a fault.
+  A check past a script's end and an entry left unused fail the case as tool scripts do, so a
+  replay that asks again fails; a call sent again after a cut (`attempt` above 1) gets the entry
+  it got before and takes none. A check of the run's `ask_user` or `load_skill` fails the case.
+  Without `gate`, the run has no hook.
 - **`jitter`**: the random draws in `[0, 1)` retry backoffs take, TOOL retries and AGENT model
   retries alike, in the order they are drawn: one per retry that waits a backoff, even a zero one,
   and none for a `retry_after` wait (a provider's retry-after, for a model retry). The same rules
@@ -384,6 +399,12 @@ A case can't hold code, so its host is declared under `host`.
   the case if one does.
 - **`crash_after_record`**: `resume` cases only (above).
 
+`expect.gate_calls` lists the hook's checks in order, each `{tool, call_id, node, source,
+arguments, attempt, scopes}`: the visible tool name, the call id, the agent's node id, the tool's
+source (`{kind: host, group, tool}`, `{kind: mcp, server, tool}`, `{kind: module, alias, ref,
+export}`, `{kind: memory, input, tool}` or `{kind: flow, flow, library}`), the model's arguments,
+the attempt, and the flow calls enclosing the agent, outermost first, each `{scope, call_id}`.
+
 `expect.tool_calls` lists, per tool that was called, each call in order as `{args, call_id,
 attempt, node}`. A memory's tools aren't host tools, so their calls aren't listed.
 Calls answered from `human` are listed too, under the name they were made by (`ask` for a
@@ -414,7 +435,9 @@ A `sends` item's `after: {node: <node id>, <point>}`, and a `stop`'s `{<node id>
   first chunk is asked for, before the model sends it;
 - `{tool_call: i}`: once the node's `i`th tool call in call order has returned or raised,
   counted as in `expect.tool_calls` (`ask_user` included). Stub tools return at once, so calls
-  finish in call order.
+  finish in call order;
+- `{gate_call: i}`: once the hook has been asked its `i`th check of the node, before its decision
+  reaches the agent; for a `later` entry, after the hook handed back its Promise.
 
 Counts start at 1. In a `resume` case they run across the cut run and the resume, as the
 scripts do. A resumed AGENT replays its recorded calls, steers and
@@ -502,8 +525,8 @@ they are, except as the rules below say), and an empty payload is left out.
 
 | Record | Node | Payload fields |
 |---|---|---|
-| `run_started` | null | `num_workers`, `defaults`, `effective_llm_by_static_path`, `call_time_llm`, `parent` |
-| `run_resumed` | null | `retry_node_ids`, `num_workers`, `closed_calls` |
+| `run_started` | null | `num_workers`, `defaults`, `effective_llm_by_static_path`, `call_time_llm`, `parent`, `gated` |
+| `run_resumed` | null | `retry_node_ids`, `num_workers`, `closed_calls`, `gated` |
 | `run_stopped` | null | `reason` (the reason's kind), `node_ids` |
 | `node_waiting` | `node_id` | `call_ids`, `waits`, `steer_inbox` |
 | `node_woken` | `node_id` | `timed_out` |
@@ -578,8 +601,10 @@ For example:
 - A step shows its `n` and every field as written, its `kind` included: a TOOL's
   `tool_attempt`, a call-time agent's `llm_config`, an AGENT's `model_call` and `tool_result`
   (`closed: skipped` for a call a host interrupt skipped, `closed: crashed` for one a resume
-  closed because its run was cut off before its result). Its times (`started_at`,
-  `first_token_at`) are left out.
+  closed because its run was cut off before its result, `closed: refused` for one the hook
+  refused, and the hook's `note` on an allowed call's first record), its `pending` step (`held`,
+  `source` and `group_end` for a call the hook held) and its `released` step. Its times
+  (`started_at`, `first_token_at`) are left out.
 - In TOOL steps, `retry_in` is a float. A `failed` step's error type and a failed `model_call`'s
   error `kind` stay as recorded: a class name (as under Error classes), or a provider error's
   kind such as `rate_limit`.
@@ -642,7 +667,8 @@ exits 1 when any case fails. On every `run` and `resume` case with a log it also
 invariants (in-flight nodes within `num_workers`, no record after the terminal outcome,
 `inspectRun` agreeing with a replay, a finished log resumed read-only).
 `--crash-sweep` also cuts each serial `run` case that expects `output`, isn't `pending`, and has no
-`host.sends`, `host.stop` or `held` memory after every record but the last, resumes it (passing the
+`host.stop`, no `host.sends` item sent at a point or while down (`after`, `down`), and no `held`
+memory after every record but the last, resumes it (passing the
 run's `context`, `llm_config.api_key` and `llm_config.headers` again), and checks the invariants,
 plus the output and node outcomes when the case has no `host.human` or `host.jitter` and its tool
 scripts only return. What a run took from the host scripts after the cut (tool results, model
@@ -650,7 +676,7 @@ replies, backoff draws) goes back; what it took before stays taken, since the re
 steps that hold it (an AGENT replays its recorded model calls and tool results rather than making
 them again). A resume adds records, so in those outcomes a success's `commit` is compared by the
 trace fields of the `pool_commit` it names (a `from` seq by the kind and node of the record it
-names). A node
+names, and a take commit's `events` by the send commits' trace entries). A node
 cut right after its `pool_commit` runs again, so what it took from the host scripts goes back from
 its last record before the commit (its steps replay). A cut inside the run start (before the START
 inputs' commit) can't be resumed: the sweep expects `inspectRun`, with and without the flow, to read
@@ -669,6 +695,53 @@ stays taken; its agent's `host.models` script may run out, since the agent reads
 may make a model call more; and the agent's later scripted requests are compared with that call's
 result read as the closer (`content` the closer text, `is_error: true`). A filled secret in the
 uncut run's log or in a resumed log fails the sweep too, as does a memory's folder.
+
+Every run of a sweep delivers the case's `host.sends` items as the run waits. The uncut run's
+record count after each delivery says which items a cut log holds: the cut run delivers those, and
+the resume the rest, in order, those of a wait the cut log already waits on (the rest of a
+`hold: true` chain) before it advances, and each later one as the run waits, as the uncut run did.
+An item that names a call the resume closed `crashed` (`complete`, `release`) is skipped.
+`host.gate` entries taken after the cut go back with the other scripts', and a call sent again gets
+the entry it got before.
+
+A held call's tool hasn't run, so holds narrow the calls a cut cuts off, as the log shows them. A
+held call may have started only once the cut log holds a start or wake of its node after its
+release, and no interrupt after the hold. A call behind a hold of its reply (in a later group) may
+have started only once every such hold has its record (the host's answer, or the released call's
+result) and the cut log holds a start or wake after the last of their answers and releases. A call
+a `pending` step registered is cut off only when the cut leaves its node in flight and the step
+came after the node's last wake; else it waits for the host's answer. A call the hook was asked
+about counts as made, as does one that waited behind a hold, and a memory or flow tool's call is
+sent again. A resumable call is sent again and checked again, unless the uncut run held it and the
+cut log lacks that hold: a call sent again can't be held, so the resume closes it `crashed`. For
+each call closed `crashed`, its tool's `host.gate` script may keep one entry too.
+
+Two checks hold at every cut: no non-resumable stub runs an AGENT call twice across the cut run and
+the resume, and a released call whose hold the cut log holds, but not its node's first start or
+wake after the release, runs exactly once.
+
+A resume reads `crashed`, or sends a resumable call again, though the call never ran, in these
+accepted windows (the design's Open list):
+
+- **A lost decision.** The hook's decisions are recorded only with the calls' first records, so a
+  cut between a reply and those records, a hold's step among them, loses them: the resume treats
+  each unrecorded call of the reply as one that may have run. When the lost record is a hold, the
+  resume may check calls the uncut run never checked (those behind it), so every `host.gate`
+  script may run out.
+- **A release's first evaluation.** Once the cut log holds a start or wake of the node after the
+  release, the resume can't tell whether it started the released call, so it closes it `crashed`
+  or sends a resumable one again, even when the cut came before the start. A stop there does the
+  same.
+- **A Stop applied at the agent's start (#1789).** An interrupt delivered while the run is down is
+  recorded after the agent's next `node_started`; a crash at that record, or before the released
+  call's skip, leaves the next start reading the call as maybe started. The sweep delivers items
+  only as the run waits and cuts once, so no cut reaches this window; a run that reaches it ends so.
+
+A cut that loses a hold, or closes `crashed` a call the uncut run waited on (one with a `pending`
+step: a host's `pending()` call or a hold), lets the resumed agent go on without that wait, so the
+run's course may change. Such a cut is held to the invariants, the two checks, the calls it closes,
+its secrets and its folders, not to the uncut run's output, node outcomes or memory contents, and
+its scripts may keep entries.
 
 Each cut run binds its `host.memory` memories in new folders, seeded from `files` or `items`, and
 its resume binds new instances on that cut's folders. A memory tool is resumable, so the resume

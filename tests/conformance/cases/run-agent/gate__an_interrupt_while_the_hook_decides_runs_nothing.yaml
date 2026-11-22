@@ -1,0 +1,40 @@
+# The hook answers through a Promise, and the person interrupts the agent while it is out. The
+# agent stops waiting: the call never runs, though the late answer says run, and the reply's calls
+# are skipped. The agent honors the interrupt and ends null.
+kind: run
+flow: |
+  id: decide
+  name: decide
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    notes: !Inbox(str)
+  nodes:
+    agent:
+      kind: agent
+      steer_inbox: ${input.notes}
+      tools: [save]
+      prompt: hi
+      output: !Optional(str)
+  output: ${agent.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    save:
+      parameters: {type: object, properties: {}}
+      results: []
+  gate:
+    save: [{run: true, later: true}]
+  sends:
+  - {interrupt: notes, after: {node: agent, gate_call: 1}}
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts: [{type: tool_call, id: c1, name: save, arguments: {}}]
+expect:
+  output: {status: succeeded, output: null}
+  trace: [[run_started, null, {effective_llm_by_static_path: {agent: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, gated: true, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {notes: {inbox: notes}}}], [node_succeeded, __start__, {commit: 6}], [node_started, agent], [node_step, agent, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {}, id: c1, name: save, type: tool_call}], role: assistant}, purpose: chat, request_sha256: 41da36ba1135cbab58bd3ac89968f1984f4db4d1c40b533b081f4725e0b28030, response_id: null, usage: null}}], [interrupted, null, {inbox: notes, nodes: [agent]}], [node_step, agent, {n: 2, step: {call_id: c1, closed: skipped, is_error: true, kind: tool_result, output: 'Not run: interrupted by the user.'}}], [node_step, agent, {n: 3, step: {by: 10, kind: interrupted}}], [pool_commit, agent], [pool_commit, agent, {key: agent.new_messages, steps: [9, 11, 12]}], [node_succeeded, agent, {commit: 13, messages: 14}], [node_started, __end__], [pool_commit, __end__], [node_succeeded, __end__, {commit: 17}]]
+  tool_calls: {}
+  gate_calls: [{tool: save, call_id: r1/agent/1/0, node: agent, source: {kind: host, group: null, tool: save}, arguments: {}, attempt: 1, scopes: []}]

@@ -1,0 +1,39 @@
+# The run is stopped while the hook's answers are out, so no decision is recorded. The resume
+# can't tell whether the calls ran: it sends the resumable `save` again, which the hook checks
+# again (attempt 2, the answer it gave before), and closes `send` crashed.
+kind: resume
+flow: |
+  id: lost
+  name: lost
+  llm_config: {provider: anthropic, model: claude-test}
+  nodes:
+    agent:
+      kind: agent
+      tools: [save, send]
+      prompt: hi
+      output: !str
+  output: ${agent.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  stop: {agent: {after: {gate_call: 2}}}
+  tools:
+    save: {parameters: {type: object, properties: {}}, concurrency_safe: true, resumable: true, results: [{return: saved}]}
+    send: {parameters: {type: object, properties: {}}, concurrency_safe: true, results: []}
+  gate:
+    save: [{run: true, later: true}]
+    send: [{run: true, later: true}]
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: c1, name: save, arguments: {}}
+          - {type: tool_call, id: c2, name: send, arguments: {}}
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: done}]}
+expect:
+  output: {status: succeeded, output: done}
+  trace: [[run_started, null, {effective_llm_by_static_path: {agent: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, gated: true, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, agent], [node_step, agent, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {}, id: c1, name: save, type: tool_call}, {arguments: {}, id: c2, name: send, type: tool_call}], role: assistant}, purpose: chat, request_sha256: b9f9476a52a866c8d5bfc7c677b7cce7186d0d6e67a541f4d3ffcaffb7562e78, response_id: null, usage: null}}], [run_stopped, null, {node_ids: [agent], reason: signal}], [run_resumed, null, {gated: true, num_workers: 0, retry_node_ids: [agent]}], [node_started, agent], [node_step, agent, {n: 2, step: {call_id: c1, is_error: false, kind: tool_result, output: saved}}], [node_step, agent, {n: 3, step: {call_id: c2, closed: crashed, is_error: true, kind: tool_result, output: The tool call was interrupted; its outcome is unknown. Check its effect before retrying.}}], [node_step, agent, {n: 4, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: done, type: text}], role: assistant}, purpose: chat, request_sha256: b9b5820821e680d38b7bec0c4a775044c8480de38b35b31c139793d4b852f383, response_id: null, usage: null}}], [pool_commit, agent, {value: done}], [pool_commit, agent, {key: agent.new_messages, steps: [9, 13, 14, 15]}], [node_succeeded, agent, {commit: 16, messages: 17}], [node_started, __end__], [pool_commit, __end__, {value: done}], [node_succeeded, __end__, {commit: 20}]]
+  tool_calls: {save: [{args: {}, call_id: r1/agent/1/0, attempt: 2, node: agent}]}
+  gate_calls: [{tool: save, call_id: r1/agent/1/0, node: agent, source: {kind: host, group: null, tool: save}, arguments: {}, attempt: 1, scopes: []}, {tool: send, call_id: r1/agent/1/1, node: agent, source: {kind: host, group: null, tool: send}, arguments: {}, attempt: 1, scopes: []}, {tool: save, call_id: r1/agent/1/0, node: agent, source: {kind: host, group: null, tool: save}, arguments: {}, attempt: 2, scopes: []}]

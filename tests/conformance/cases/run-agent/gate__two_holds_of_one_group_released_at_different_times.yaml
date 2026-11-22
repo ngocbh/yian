@@ -1,0 +1,44 @@
+# The hook holds both calls of one group, and `send` waits behind them. Released at different
+# waits, each runs at the first evaluation after its own release: the first wake runs `save` and
+# pends `post` again; the second runs `post`, then checks and runs `send`.
+kind: run
+flow: |
+  id: twoholds
+  name: twoholds
+  llm_config: {provider: anthropic, model: claude-test}
+  nodes:
+    agent:
+      kind: agent
+      tools: [save, post, send]
+      prompt: hi
+      output: !str
+  output: ${agent.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    save: {parameters: {type: object, properties: {}}, concurrency_safe: true, results: [{return: saved}]}
+    post: {parameters: {type: object, properties: {}}, concurrency_safe: true, results: [{return: posted}]}
+    send: {parameters: {type: object, properties: {}}, results: [{return: sent}]}
+  gate:
+    save: [{hold: true}]
+    post: [{hold: true}]
+    send: [{run: true}]
+  sends:
+  - {release: r1/agent/1/0}
+  - {release: r1/agent/1/1}
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: c1, name: save, arguments: {}}
+          - {type: tool_call, id: c2, name: post, arguments: {}}
+          - {type: tool_call, id: c3, name: send, arguments: {}}
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: done}]}
+expect:
+  output: {status: succeeded, output: done}
+  trace: [[run_started, null, {effective_llm_by_static_path: {agent: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, gated: true, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, agent], [node_step, agent, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {}, id: c1, name: save, type: tool_call}, {arguments: {}, id: c2, name: post, type: tool_call}, {arguments: {}, id: c3, name: send, type: tool_call}], role: assistant}, purpose: chat, request_sha256: 178b8506b2535b6f87c0a3fc74de4914d08e0190093e5fab10df5bc0d31f093e, response_id: null, usage: null}}], [node_step, agent, {n: 2, step: {call_id: r1/agent/1/0, group_end: 1, held: true, index: 0, kind: pending, reply: 1, source: {group: null, kind: host, tool: save}, tool: save, tool_call_id: c1}}], [node_step, agent, {n: 3, step: {call_id: r1/agent/1/1, group_end: 1, held: true, index: 1, kind: pending, reply: 1, source: {group: null, kind: host, tool: post}, tool: post, tool_call_id: c2}}], [node_waiting, agent, {call_ids: [r1/agent/1/0, r1/agent/1/1]}], [run_waiting, null, {node_ids: [agent]}], [node_step, agent, {n: 4, step: {call_id: r1/agent/1/0, kind: released}}], [node_woken, agent], [node_step, agent, {n: 5, step: {call_id: c1, is_error: false, kind: tool_result, output: saved}}], [node_waiting, agent, {call_ids: [r1/agent/1/1]}], [run_waiting, null, {node_ids: [agent]}], [node_step, agent, {n: 6, step: {call_id: r1/agent/1/1, kind: released}}], [node_woken, agent], [node_step, agent, {n: 7, step: {call_id: c2, is_error: false, kind: tool_result, output: posted}}], [node_step, agent, {n: 8, step: {call_id: c3, is_error: false, kind: tool_result, output: sent}}], [node_step, agent, {n: 9, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: done, type: text}], role: assistant}, purpose: chat, request_sha256: 537ea719cdc32f30802bafdb51fcddf5010bf455d7e1fed95ae3088030ee76e4, response_id: null, usage: null}}], [pool_commit, agent, {value: done}], [pool_commit, agent, {key: agent.new_messages, steps: [9, 16, 21, 22, 23]}], [node_succeeded, agent, {commit: 24, messages: 25}], [node_started, __end__], [pool_commit, __end__, {value: done}], [node_succeeded, __end__, {commit: 28}]]
+  tool_calls: {save: [{args: {}, call_id: r1/agent/1/0, attempt: 1, node: agent}], post: [{args: {}, call_id: r1/agent/1/1, attempt: 1, node: agent}], send: [{args: {}, call_id: r1/agent/1/2, attempt: 1, node: agent}]}
+  gate_calls: [{tool: save, call_id: r1/agent/1/0, node: agent, source: {kind: host, group: null, tool: save}, arguments: {}, attempt: 1, scopes: []}, {tool: post, call_id: r1/agent/1/1, node: agent, source: {kind: host, group: null, tool: post}, arguments: {}, attempt: 1, scopes: []}, {tool: send, call_id: r1/agent/1/2, node: agent, source: {kind: host, group: null, tool: send}, arguments: {}, attempt: 1, scopes: []}]

@@ -1,0 +1,46 @@
+# The hook holds a call of the granted flow `shout`: the hold takes no scope and the flow doesn't
+# start. Once released, the woken agent writes the flow call's `pending` step, its scope grows,
+# and the model reads the flow's output.
+kind: run
+flow: |
+  id: heldflow
+  name: heldflow
+  llm_config: {provider: anthropic, model: claude-test}
+  defs:
+    shout:
+      description: Shout the text back.
+      input:
+        text: !str
+      nodes:
+        loud:
+          kind: code
+          input:
+            text: ${input.text}
+          output: !str
+          code: return inputs.text.toUpperCase()
+      output: ${loud.output}
+  nodes:
+    helper:
+      kind: agent
+      tools: [shout]
+      prompt: hi
+      output: !str
+  output: ${helper.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  gate:
+    shout: [{hold: true}]
+  sends:
+  - {release: r1/helper/1/0}
+  models:
+    helper:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts: [{type: tool_call, id: c1, name: shout, arguments: {text: hey}}]
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: done}]}
+expect:
+  output: {status: succeeded, output: done}
+  trace: [[run_started, null, {effective_llm_by_static_path: {helper: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, gated: true, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, helper], [node_step, helper, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {text: hey}, id: c1, name: shout, type: tool_call}], role: assistant}, purpose: chat, request_sha256: e02c838bdbe10bab2936e40d4bbf4f2edf221aab89ea52ce2daecb6fca3d828a, response_id: null, usage: null}}], [node_step, helper, {n: 2, step: {call_id: r1/helper/1/0, group_end: 0, held: true, index: 0, kind: pending, reply: 1, source: {flow: shout, kind: flow, library: null}, tool: shout, tool_call_id: c1}}], [node_waiting, helper, {call_ids: [r1/helper/1/0]}], [run_waiting, null, {node_ids: [helper]}], [node_step, helper, {n: 3, step: {call_id: r1/helper/1/0, kind: released}}], [node_woken, helper], [node_step, helper, {n: 4, step: {arguments: {text: hey}, call_id: r1/helper/1/0, flow: true, index: 0, kind: pending, reply: 1, scope: helper/shout#0, tool: shout, tool_call_id: c1}}], [node_expanded, helper, {prune_ids: []}], [node_waiting, helper, {call_ids: [r1/helper/1/0]}], [node_started, helper/shout#0/__start__], [pool_commit, helper/shout#0/__start__, {from: {}}], [node_succeeded, helper/shout#0/__start__, {commit: 19}], [node_started, helper/shout#0/loud], [pool_commit, helper/shout#0/loud, {value: HEY}], [node_succeeded, helper/shout#0/loud, {commit: 22}], [node_started, helper/shout#0/__end__], [pool_commit, helper/shout#0/__end__, {from: {helper/shout#0/loud: 22}}], [node_succeeded, helper/shout#0/__end__, {commit: 25}], [node_woken, helper], [node_step, helper, {n: 5, step: {call_id: c1, is_error: false, kind: tool_result, output: HEY}}], [node_step, helper, {n: 6, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: done, type: text}], role: assistant}, purpose: chat, request_sha256: baee485f76eec5c8b2151d55e3459d3913ad5f748faef732d6e5efd939943b11, response_id: null, usage: null}}], [pool_commit, helper, {value: done}], [pool_commit, helper, {key: helper.new_messages, steps: [9, 28, 29]}], [node_succeeded, helper, {commit: 30, messages: 31}], [node_started, __end__], [pool_commit, __end__, {value: done}], [node_succeeded, __end__, {commit: 34}]]
+  gate_calls: [{tool: shout, call_id: r1/helper/1/0, node: helper, source: {kind: flow, flow: shout, library: null}, arguments: {text: hey}, attempt: 1, scopes: []}]

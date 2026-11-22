@@ -1,0 +1,40 @@
+# The hook holds `save` and runs `lookup`, its group-mate; the release lands while `lookup` runs,
+# after the evaluation began. That evaluation pends `save` again and `node_waiting` names it, so
+# the node wakes at once; the wake is the first evaluation after the release, and runs it.
+kind: run
+flow: |
+  id: inflight
+  name: inflight
+  llm_config: {provider: anthropic, model: claude-test}
+  nodes:
+    agent:
+      kind: agent
+      tools: [save, lookup]
+      prompt: hi
+      output: !str
+  output: ${agent.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    save: {parameters: {type: object, properties: {}}, concurrency_safe: true, results: [{return: saved}]}
+    lookup: {parameters: {type: object, properties: {}}, concurrency_safe: true, results: [{return: found}]}
+  gate:
+    save: [{hold: true}]
+    lookup: [{run: true}]
+  sends:
+  - {release: r1/agent/1/0, after: {node: agent, tool_call: 1}}
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: c1, name: save, arguments: {}}
+          - {type: tool_call, id: c2, name: lookup, arguments: {}}
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: done}]}
+expect:
+  output: {status: succeeded, output: done}
+  trace: [[run_started, null, {effective_llm_by_static_path: {agent: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, gated: true, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, agent], [node_step, agent, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {}, id: c1, name: save, type: tool_call}, {arguments: {}, id: c2, name: lookup, type: tool_call}], role: assistant}, purpose: chat, request_sha256: f59b38ad3f1c6e9c07334f73ed6423e990a80f1282de858fbd8c07a695419666, response_id: null, usage: null}}], [node_step, agent, {n: 2, step: {call_id: r1/agent/1/0, group_end: 1, held: true, index: 0, kind: pending, reply: 1, source: {group: null, kind: host, tool: save}, tool: save, tool_call_id: c1}}], [node_step, agent, {n: 3, step: {call_id: r1/agent/1/0, kind: released}}], [node_step, agent, {n: 4, step: {call_id: c2, is_error: false, kind: tool_result, output: found}}], [node_waiting, agent, {call_ids: [r1/agent/1/0]}], [node_woken, agent], [node_step, agent, {n: 5, step: {call_id: c1, is_error: false, kind: tool_result, output: saved}}], [node_step, agent, {n: 6, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: done, type: text}], role: assistant}, purpose: chat, request_sha256: 30b42c387e6cb94323d059c8868732c05eff0d88145a56518cc6b865622d3425, response_id: null, usage: null}}], [pool_commit, agent, {value: done}], [pool_commit, agent, {key: agent.new_messages, steps: [9, 12, 15, 16]}], [node_succeeded, agent, {commit: 17, messages: 18}], [node_started, __end__], [pool_commit, __end__, {value: done}], [node_succeeded, __end__, {commit: 21}]]
+  tool_calls: {lookup: [{args: {}, call_id: r1/agent/1/1, attempt: 1, node: agent}], save: [{args: {}, call_id: r1/agent/1/0, attempt: 1, node: agent}]}
+  gate_calls: [{tool: save, call_id: r1/agent/1/0, node: agent, source: {kind: host, group: null, tool: save}, arguments: {}, attempt: 1, scopes: []}, {tool: lookup, call_id: r1/agent/1/1, node: agent, source: {kind: host, group: null, tool: lookup}, arguments: {}, attempt: 1, scopes: []}]

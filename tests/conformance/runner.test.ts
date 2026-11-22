@@ -177,7 +177,7 @@ const TEXT_REPLY = "{format: yian.message.v1, role: assistant, parts: [{type: te
 const MODEL = (entry: string) => `${RUN}host: {models: {n: {agent: [${entry}]}}}\n`;
 const AT = "host.models.n.agent[0]";
 const SENDS =
-  "`host.sends` items are {inbox, event, after?|down?}, {close}, {withdraw, after?}, {interrupt, after?}, {complete, output | error} or {release, note?, after?}; " +
+  "`host.sends` items are {inbox, event, after?|down?}, {close}, {withdraw, after?}, {interrupt, after?}, {complete, output | error} or {release, note?, after?}, each with an optional `by` mapping; " +
   "`hold: true` marks an item sent while the run waits that isn't followed by an advance";
 const COUNTS = "`host.sends[0].after` counts must be ints from 1, `chunk` from 0";
 const STOP_COUNTS = "`host.stop.a.after` counts must be ints from 1, `chunk` from 0";
@@ -403,6 +403,8 @@ describe("checkCase", () => {
       "[{release: r/n, down: true}]",
       "[{release: r/n, output: a}]",
       "[{release: r/n, after: {node: chat, tool_call: 1}, hold: true}]",
+      "[{interrupt: m, by: Ada}]",
+      "[{by: {kind: user, name: Ada}}]",
     ].map((items) => [`${RUN}host: {sends: ${items}}`, SENDS]),
     [`${RUN}host: {sends: [{release: r/n, after: {tool_call: 1}}]}`, "`host.sends[0].after.node` must be a node id"],
     [`${RUN}host: {sends: [{release: r/n, after: {node: chat, gate_call: 0}}]}`, COUNTS],
@@ -639,6 +641,7 @@ describe("checkCase", () => {
     `${RUN}host: {sends: [{interrupt: m, after: {node: chat, model_call: 1, chunk: 2}}, {interrupt: m}]}`,
     `${RUN}host: {sends: [{inbox: m, event: a, after: {node: chat, model_call: 1, chunk: 2}}, {close: m}]}`,
     `${BARE_RESUME}run: {num_workers: 0}\nhost: {crash_after_record: 1, sends: [{inbox: m, event: a, down: true}]}`,
+    `${RUN}host: {sends: [{interrupt: m, by: {kind: user, name: Ada}}, {complete: r/a, output: ok, by: {kind: agent, name: o}, hold: true}]}`,
     EXPECT("events: [[ModelCallStarted, {node_id: a, n: 1}]], stream: [{node_id: a, n: 1, index: 0}]"),
     TOOL("{n: [{return: 1}, {raise: {class: TransientToolError, message: m, retry_after: 1}}]}"),
     TOOL("[{raise: {class: TransientToolError, message: m, retry_after: 0.5}}]"),

@@ -76,7 +76,7 @@ import {
 } from "../../src/llm/messages.ts";
 import type { EmbeddingModel } from "../../src/llm/embeddings.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
-import { MemoryBase, type MemoryContract, type MemorySession } from "../../src/memory/base.ts";
+import { type Author, MemoryBase, type MemoryContract, type MemorySession } from "../../src/memory/base.ts";
 import { FileMemory } from "../../src/memory/file.ts";
 import { VectorDBMemory } from "../../src/memory/vectordb.ts";
 import { checkModelConfig, resolveModelConfig } from "../../src/llm_clients/connection.ts";
@@ -578,7 +578,7 @@ function checkStop(stop: Value | undefined): void {
  * `down: true` (sent after the crash, before the resume), `{close}` items, `{withdraw}` items
  * (`withdraw(run, inbox)`) and `{interrupt}` items (`interrupt(run, inbox)`), each optionally
  * with `after`, `{complete, output}` or `{complete, error}` items, and `{release, note}` items
- * (`note` optional), optionally with `after`.
+ * (`note` optional), optionally with `after`. Any item may say who makes it (`by`, a mapping).
  */
 function checkSends(value: Value | undefined, kind: Kind): void {
   if (!Array.isArray(value)) throw new Error("`host.sends` must be a list");
@@ -586,9 +586,10 @@ function checkSends(value: Value | undefined, kind: Kind): void {
     // `hold: true` is only for an item sent while the run waits, so not with `after` or `down`.
     const holds = isMapping(item) && Object.hasOwn(item, "hold");
     const held = holds && (item as Case)["hold"] === true && !Object.hasOwn(item, "after") && !Object.hasOwn(item, "down");
+    const byOk = !isMapping(item) || !Object.hasOwn(item, "by") || isMapping((item as Case)["by"]);
     const fields = isMapping(item)
       ? Object.keys(item)
-          .filter((key) => key !== "hold")
+          .filter((key) => key !== "hold" && key !== "by")
           .sort(compareCodeUnits)
           .join(",")
       : null;
@@ -601,6 +602,7 @@ function checkSends(value: Value | undefined, kind: Kind): void {
       ["release", "note,release", "after,release", "after,note,release"].includes(fields!) &&
       ["string", "undefined"].includes(typeof (item as Case)["note"]);
     const valid =
+      byOk &&
       (!holds || held) &&
       ((fields === "event,inbox" && send) ||
       (fields === "after,event,inbox" && send && isMapping((item as Case)["after"])) ||
@@ -615,7 +617,7 @@ function checkSends(value: Value | undefined, kind: Kind): void {
       (releases && (!Object.hasOwn(item as Case, "after") || isMapping((item as Case)["after"]))));
     if (!valid) {
       throw new Error(
-        "`host.sends` items are {inbox, event, after?|down?}, {close}, {withdraw, after?}, {interrupt, after?}, {complete, output | error} or {release, note?, after?}; " +
+        "`host.sends` items are {inbox, event, after?|down?}, {close}, {withdraw, after?}, {interrupt, after?}, {complete, output | error} or {release, note?, after?}, each with an optional `by` mapping; " +
           "`hold: true` marks an item sent while the run waits that isn't followed by an advance",
       );
     }
@@ -1789,22 +1791,22 @@ class Inbox {
   readonly #counts = new Map<string, number>();
   readonly #pending: { label: string; node: string; action: Case }[] = [];
   readonly #onStop: () => void;
-  readonly #deliver: (inbox: string, event: Value) => void;
-  readonly #interrupt: (inbox: string) => void;
-  readonly #withdraw: (inbox: string) => void;
+  readonly #deliver: (inbox: string, event: Value, by: Author | null) => void;
+  readonly #interrupt: (inbox: string, by: Author | null) => void;
+  readonly #withdraw: (inbox: string, by: Author | null) => void;
   readonly #hold: (input: string) => void;
-  readonly #release: (callId: string, note: string | null) => void;
+  readonly #release: (callId: string, note: string | null, by: Author | null) => void;
 
   constructor(
     stop: Case = {},
     onStop: () => void = () => {},
     sends: readonly Case[] = [],
-    deliver: (inbox: string, event: Value) => void = () => {},
-    interrupt: (inbox: string) => void = () => {},
-    withdraw: (inbox: string) => void = () => {},
+    deliver: (inbox: string, event: Value, by: Author | null) => void = () => {},
+    interrupt: (inbox: string, by: Author | null) => void = () => {},
+    withdraw: (inbox: string, by: Author | null) => void = () => {},
     memory: Case = {},
     hold: (input: string) => void = () => {},
-    release: (callId: string, note: string | null) => void = () => {},
+    release: (callId: string, note: string | null, by: Author | null) => void = () => {},
   ) {
     this.#release = release;
     this.#onStop = onStop;
@@ -1823,13 +1825,14 @@ class Inbox {
     sends.forEach((item, index) => {
       if (!Object.hasOwn(item, "after")) return;
       const { node, ...point } = item["after"] as Case;
+      const by = get(item, "by", null)!;
       const action: Case = Object.hasOwn(item, "interrupt")
-        ? { after: point, interrupt: item["interrupt"]! }
+        ? { after: point, interrupt: item["interrupt"]!, by }
         : Object.hasOwn(item, "withdraw")
-          ? { after: point, withdraw: item["withdraw"]! }
+          ? { after: point, withdraw: item["withdraw"]!, by }
           : Object.hasOwn(item, "release")
-            ? { after: point, release: item["release"]!, note: get(item, "note", null)! }
-            : { after: point, send: { inbox: item["inbox"]!, event: item["event"]! } };
+            ? { after: point, release: item["release"]!, note: get(item, "note", null)!, by }
+            : { after: point, send: { inbox: item["inbox"]!, event: item["event"]! }, by };
       this.#pending.push({ label: `host.sends[${index}]`, node: node as string, action });
     });
   }
@@ -1839,8 +1842,9 @@ class Inbox {
    * held call, take its memory's lock, or stop the run.
    */
   #act(action: Case): void {
+    const by = (action["by"] ?? null) as Author | null;
     if (Object.hasOwn(action, "release")) {
-      this.#release(action["release"] as string, action["note"] as string | null);
+      this.#release(action["release"] as string, action["note"] as string | null, by);
       return;
     }
     if (action["stop"] === true) {
@@ -1853,14 +1857,14 @@ class Inbox {
     }
     if (Object.hasOwn(action, "send")) {
       const { inbox, event } = action["send"] as Case;
-      this.#deliver(inbox as string, event as Value);
+      this.#deliver(inbox as string, event as Value, by);
       return;
     }
     if (Object.hasOwn(action, "withdraw")) {
-      this.#withdraw(action["withdraw"] as string);
+      this.#withdraw(action["withdraw"] as string, by);
       return;
     }
-    this.#interrupt(action["interrupt"] as string);
+    this.#interrupt(action["interrupt"] as string, by);
   }
 
   /** Count a `model_call`, `tool_call`, `gate_call` or `refusal` of `node`; return its number, `null` unarmed. */
@@ -2333,26 +2337,26 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow, memories?:
     () => stopper.abort(stopError),
     get(spec, "sends", []) as Case[],
     // A live run takes the send through its engine at once; the promise settles after.
-    (name, event) => {
-      const sent = send(log, name, event, { env });
+    (name, event, by) => {
+      const sent = send(log, name, event, { env, by });
       sent.catch(() => {});
       delivered.push(sent);
     },
-    (name) => {
-      const cut = interrupt(log, name, { env });
+    (name, by) => {
+      const cut = interrupt(log, name, { env, by });
       cut.catch(() => {});
       delivered.push(cut);
     },
-    (name) => {
-      const taken = withdraw(log, name, { env });
+    (name, by) => {
+      const taken = withdraw(log, name, { env, by });
       taken.catch(() => {});
       delivered.push(taken);
     },
     get(spec, "memory", {}) as Case,
     // The run start made `.yian/`; the lock is the one FileMemory takes, so its writes wait.
     (input) => locks.push(lockFile(join(memories!.real(input), ".yian", "lock"), { private: true })),
-    (callId, note) => {
-      const released = release(log, callId, { env, note });
+    (callId, note, by) => {
+      const released = release(log, callId, { env, note, by });
       released.catch(() => {});
       delivered.push(released);
     },
@@ -2613,14 +2617,14 @@ const TRACE: ReadonlyMap<string, TraceRow> = new Map<string, TraceRow>([
   ["node_waiting", ["node_id", ["call_ids", "waits", "steer_inbox"]]],
   ["node_woken", ["node_id", ["timed_out"]]],
   ["run_waiting", [null, ["node_ids"]]],
-  ["inbox_closed", [null, ["inbox"]]],
-  ["inbox_withdrawn", [null, ["inbox", "events"]]],
-  ["interrupted", [null, ["inbox", "nodes"]]],
-  ["run_cancelled", [null, []]],
+  ["inbox_closed", [null, ["inbox", "by"]]],
+  ["inbox_withdrawn", [null, ["inbox", "events", "by"]]],
+  ["interrupted", [null, ["inbox", "nodes", "by"]]],
+  ["run_cancelled", [null, ["by"]]],
   ["run_failed", [null, ["failure"]]],
   ["node_started", ["node_id", []]],
-  ["node_step", ["node_id", ["n", "step"]]],
-  ["pool_commit", ["node_id", ["key", "value", "from", "inbox", "events", "closed", "steps"]]],
+  ["node_step", ["node_id", ["n", "step", "by"]]],
+  ["pool_commit", ["node_id", ["key", "value", "from", "inbox", "events", "closed", "steps", "by"]]],
   ["node_succeeded", ["node_id", ["commit", "messages"]]],
   ["node_routed", ["node_id", ["handle", "terminal_failure"]]],
   ["node_expanded", ["spawner_id", ["prune_ids"]]],
@@ -2931,15 +2935,16 @@ function runHooks(
   };
 }
 
-/** Deliver the `host.sends` item `item`, one sent while the run waits, to the run at `log`. */
+/** Deliver the `host.sends` item `item`, one sent while the run waits, to the run at `log`, made by its `by`. */
 async function deliver(log: string, item: Case, env: Env): Promise<void> {
-  if (Object.hasOwn(item, "close")) await close(log, item["close"] as string, { env });
-  else if (Object.hasOwn(item, "withdraw")) await withdraw(log, item["withdraw"] as string, { env });
-  else if (Object.hasOwn(item, "interrupt")) await interrupt(log, item["interrupt"] as string, { env });
-  else if (Object.hasOwn(item, "complete")) await complete(log, item["complete"] as string, completion(item), { env });
+  const options = { env, by: get(item, "by", null) as Author | null };
+  if (Object.hasOwn(item, "close")) await close(log, item["close"] as string, options);
+  else if (Object.hasOwn(item, "withdraw")) await withdraw(log, item["withdraw"] as string, options);
+  else if (Object.hasOwn(item, "interrupt")) await interrupt(log, item["interrupt"] as string, options);
+  else if (Object.hasOwn(item, "complete")) await complete(log, item["complete"] as string, completion(item), options);
   else if (Object.hasOwn(item, "release")) {
-    await release(log, item["release"] as string, { env, note: get(item, "note", null) as string | null });
-  } else await send(log, item["inbox"] as string, item["event"], { env });
+    await release(log, item["release"] as string, { ...options, note: get(item, "note", null) as string | null });
+  } else await send(log, item["inbox"] as string, item["event"], options);
 }
 
 /**
@@ -3023,7 +3028,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
       signal = {};
       // The sends a host makes while the run is down.
       for (const item of get(spec, "sends", []) as Case[]) {
-        if (item["down"] === true) await send(log, item["inbox"] as string, item["event"], { env });
+        if (item["down"] === true) await send(log, item["inbox"] as string, item["event"], { env, by: get(item, "by", null) as Author | null });
       }
       events.length = 0;
       chunks.length = 0;

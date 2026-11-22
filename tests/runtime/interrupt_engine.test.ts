@@ -301,7 +301,7 @@ test("a reader that opens while a Stop stands gets an applied interrupted record
   expect([(applied.record as InterruptedRecord).inbox, [...(applied.record as InterruptedRecord).nodes]]).toEqual(["m", ["p"]]);
   expect(probe.opened!.interrupt.aborted).toBe(true);
   expect(probe.opened!.interruptedBy()).toBe(host.seq! + 1);
-  expect(engine.state.waits.stops.get("m")).toEqual({ seq: host.seq! + 1, stopped: true });
+  expect(engine.state.waits.stops.get("m")).toEqual({ seq: host.seq! + 1, stopped: true, by: null });
   probe.release();
   await running;
   expect(engine.state.pool.store.get("p")!.toObject()).toBe(true);

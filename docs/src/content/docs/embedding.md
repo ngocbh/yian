@@ -240,17 +240,20 @@ Your program reaches a waiting run by its log path:
 
 | Call | Returns | What it does |
 |---|---|---|
-| `send(log, inbox, value, { key })` | the send's seq | Adds a message to an `Inbox(T)` input; `value` must fit `T`, read as [a tool's result](/code-and-tools/#values-in-and-out) (a whole number is an `int`). With `key`, a later send with the same key, inbox and value appends nothing and returns the first seq, so a send is safe to retry |
+| `send(log, inbox, value, { key })` | the send's seq | Adds a message to an `Inbox(T)` input; `value` must fit `T`, read as [a tool's result](/code-and-tools/#values-in-and-out) (a whole number is an `int`). With `key`, a later send with the same key, inbox, value and `by` appends nothing and returns the first seq, so a send is safe to retry |
 | `withdraw(log, inbox)` | `[{seq, value}]` | Takes back every message nothing has read yet |
 | `close(log, inbox)` | the seq, or `null` if already closed | Refuses later sends; takes still read what is queued |
-| `complete(log, callId, result)` | the seq, or `null` for the same answer twice | Answers a pending host call (see [Pending host calls](#pending-host-calls)) or a held one |
-| `release(log, callId, { note })` | the seq, or `null` if released before | Runs a held call (see [Gate tool calls](#gate-tool-calls)) |
+| `complete(log, callId, result)` | the seq, or `null` for the same answer twice by the same `by` | Answers a pending host call (see [Pending host calls](#pending-host-calls)) or a held one. The same answer by another `by` is refused `call_settled` |
+| `release(log, callId, { note })` | the seq, or `null` if released before by the same `by` | Runs a held call (see [Gate tool calls](#gate-tool-calls)). A release after one by another `by` is refused `call_settled` |
 | `interrupt(log, inbox)` | `{seq, nodes, calls}` | Stops the agents steered by that inbox |
 | `cancel(log)` | the open host calls it closed | Ends the run as `cancelled` |
 | `pendingCalls(log)` | `PendingCall[]` | Lists open host calls; reads without the lock |
 
 Apart from `cancel`, which ends the run, none of them moves the run on: call `advance` next. If
-your process is running the run right now, the call goes straight to it instead. For a run started
+your process is running the run right now, the call goes straight to it instead. Each call but
+`pendingCalls` takes `by`, who makes it, and the log keeps it on the call's record (see
+[Run log records](/reference/#run-log-records)): `{ kind: "user", name: "Ada" }` for a person, or
+kind `agent`, `tool`, `host` or `run`. No model reads it. For a run started
 with `llmConfig.api_key`, pass these calls the `apiKey` and `headers` you pass `advance`. They are
 never recorded; passing them lets the next `advance` reuse the state the call left instead of
 replaying the log again. This flow waits for notes:
@@ -298,7 +301,7 @@ A refused call appends nothing and throws `DeliveryRefused`, whose `reason` says
 | `unknown_inbox` | The flow has no such inbox input |
 | `inbox_closed` | The inbox is closed |
 | `invalid_value` | The value doesn't fit the inbox's type or the call's output type, or nests deeper than `YIAN_MAX_VALUE_NESTING` (a message two levels less, since a take reads it inside `{events: [...]}`) |
-| `key_reused` | An earlier send used the send's `key` with another inbox or value |
+| `key_reused` | An earlier send used the send's `key` with another inbox, value or `by` |
 | `too_large` | The message is over `YIAN_MAX_EVENT_BYTES` (1 MiB by default) |
 | `unknown_call` | No open call has that id |
 | `not_host_call` | The id names a take, a sleep or an agent's [flow call](/agents/#flows-as-tools), which the run answers itself |

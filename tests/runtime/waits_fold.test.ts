@@ -182,6 +182,8 @@ test("a pending step registers a host call; its tool_result answers it", () => {
       closedReason: null,
       closedSeq: null,
       releasedSeq: null,
+      releasedBy: null,
+      answeredBy: null,
       flow: false,
       scope: null,
       held: false,
@@ -205,6 +207,28 @@ test("a result answers only a call of its node's latest reply: a later reply's c
     new NodeStepRecord("agent", 5, { kind: "tool_result", tool_call_id: "c0", output: "inline" }),
   );
   expect(nodeCalls(w, "agent")[0]).toMatchObject({ state: "released", releasedSeq: 5, resultSeq: null });
+});
+
+test("a call keeps the by of the released step that released it and of the tool_result that answered it", () => {
+  const ada = { kind: "user", name: "Ada" } as const;
+  const owner = { kind: "agent", name: "yian-chat" } as const;
+  const w = fold(
+    ...START,
+    new NodeStartedRecord("agent"),
+    new NodeStepRecord("agent", 1, { kind: "model_call" }),
+    pending("agent", 2, "r/agent/1/0", { tool_call_id: "c0", held: true }),
+    pending("agent", 3, "r/agent/1/1", { tool_call_id: "c1" }),
+    new NodeStepRecord("agent", 4, { kind: "released", call_id: "r/agent/1/0" }, { by: owner }),
+    new NodeStepRecord("agent", 5, { kind: "tool_result", tool_call_id: "c1", output: "yes" }, { by: ada }),
+  );
+  expect(nodeCalls(w, "agent").map((call) => [call.state, call.releasedBy, call.answeredBy])).toEqual([
+    ["released", owner, null],
+    ["answered", null, ada],
+  ]);
+  const back = WaitsState.fromJSON(JSON.parse(JSON.stringify(w.toJSON())));
+  expect([...back.calls]).toEqual([...w.calls]);
+  applyWaitsRecord(w, { seq: 9, record: new NodeStepRecord("agent", 6, { kind: "tool_result", tool_call_id: "c0", output: "ran" }) });
+  expect(nodeCalls(w, "agent")[0]).toMatchObject({ state: "answered", releasedBy: owner, answeredBy: null });
 });
 
 test("an agent's pending call is answered by the tool_result naming its tool_call_id", () => {

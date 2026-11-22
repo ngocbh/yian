@@ -238,7 +238,7 @@ describe("sends", () => {
     const other = refused(run.state, run.log, () => prepareSend(run.state, "msgs", "bye", "k1"));
     expect([other.reason, other.message]).toEqual([
       "key_reused",
-      "send key 'k1' was used by send " + seq + " with another value or inbox",
+      "send key 'k1' was used by send " + seq + " with another value, inbox or by",
     ]);
     expect(refused(run.state, run.log, () => prepareSend(run.state, "other", "hi", "k1")).reason).toBe("key_reused");
     // A new key to a closed inbox is refused as any send to it.
@@ -253,6 +253,30 @@ describe("sends", () => {
     start(run.log, run.state, "heard");
     const node = new PoolCommitRecord("heard", "heard", { kind: "str", value: "x" }, { sendKey: "k3" });
     expect(() => prepareRecord(run.state, node)).toThrow(new RangeError("only a send holds a send key"));
+  });
+
+  test("a keyed send's by is part of it: a repeat by someone else is key_reused, and only a send holds by", () => {
+    const ada = { kind: "user", name: "Ada" } as const;
+    const run = started(waitFlow(tool("heard", "take")));
+    const seq = commit(run.log, run.state, prepareSend(run.state, "msgs", "hi", "k1", ada) as PreparedTransition);
+    expect((run.log.records().at(-1)!.record as PoolCommitRecord).by).toEqual(ada);
+    expect(prepareSend(run.state, "msgs", "hi", "k1", { name: "Ada", kind: "user" })).toEqual({ repeatOf: seq });
+    for (const by of [null, { kind: "agent", name: "Ada" } as const]) {
+      expect(refused(run.state, run.log, () => prepareSend(run.state, "msgs", "hi", "k1", by)).reason).toBe("key_reused");
+    }
+    start(run.log, run.state, "heard");
+    const node = new PoolCommitRecord("heard", "heard", { kind: "str", value: "x" }, { by: ada });
+    expect(() => prepareRecord(run.state, node)).toThrow(new RangeError("only a send holds by"));
+  });
+
+  test("only a step a host call writes holds by", () => {
+    const ada = { kind: "user", name: "Ada" } as const;
+    const run = started(waitFlow(tool("heard", "take")));
+    start(run.log, run.state, "heard");
+    const message = "node step 1 of 'heard' holds by, which only a released step or a tool_result answering an open host call holds";
+    for (const step of [{ kind: "tool_attempt", event: "started", attempt: 1n }, { kind: "tool_result", call_id: "nobody", output: "x" }]) {
+      expect(() => prepareRecord(run.state, new NodeStepRecord("heard", 1, step, { by: ada }))).toThrow(new RangeError(message));
+    }
   });
 
   test("the size cap is the run's MAX_EVENT_BYTES over the value's run-log JSON", () => {

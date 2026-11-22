@@ -897,6 +897,8 @@ async function replayHeldCalls(turn: ToolTurn, holds: ReplyHolds): Promise<boole
  *
  * @returns The `n` of the last step it wrote, or `null` when it pended the call.
  * @throws What a call sent again throws (`resendCall`).
+ * @throws CapabilityFault carrying a RangeError for a view the agent has no record to write for,
+ *   such as a host's answer its steps don't hold.
  */
 async function answerUnrecorded(turn: ToolTurn, planned: PlannedCall): Promise<number | null> {
   const { call, index, callId } = planned;
@@ -911,8 +913,12 @@ async function answerUnrecorded(turn: ToolTurn, planned: PlannedCall): Promise<n
     return turn.steps.lastWritten();
   }
   // Answered by its flow's scope, or closed: a host's answer is a recorded result, never here.
-  const { output, isError } = recordSettled(turn, call, index, view)!;
-  pushToolMessage(turn, call, output, isError);
+  const settled = recordSettled(turn, call, index, view);
+  if (settled === null) {
+    const what = `node ${reprText(turn.ctx.nodeId)}'s call ${reprText(view.callId)} is ${view.state} with no result recorded`;
+    throw new CapabilityFault(new YianRangeError(what));
+  }
+  pushToolMessage(turn, call, settled.output, settled.isError);
   return turn.steps.lastWritten();
 }
 

@@ -459,6 +459,11 @@ test.each<[string, unknown, string]>([
   ["an interrupt inbox that isn't a name", { ...new WaitsState().toJSON(), interruptInboxes: [["a", 1]] }, "waits JSON interruptInboxes 'a' must be an inbox name"],
   ["a call that isn't an object", { ...new WaitsState().toJSON(), calls: [["r/a", 1]] }, "waits JSON calls 'r/a' must be a call"],
   ["a call with an unknown state", { ...new WaitsState().toJSON(), calls: [["r/a", { ...callJson(), state: "lost" }]] }, "waits JSON calls 'r/a' must be a call"],
+  [
+    "a closed call that doesn't say which record closed it",
+    { ...new WaitsState().toJSON(), calls: [["r/a", { ...callJson(), state: "closed", closedReason: "cancelled", closedSeq: null }]] },
+    "waits JSON calls 'r/a' must be a call",
+  ],
   ["an inbox without its queue", { ...new WaitsState().toJSON(), inboxes: [["msgs", { closed: false, absorbing: [] }]] }, "waits JSON inboxes 'msgs' must be an inbox"],
   ["a waiting node without call ids", { ...new WaitsState().toJSON(), waiting: [["a", { seq: 3, steerInbox: null }]] }, "waits JSON waiting 'a' must be a waiting node"],
   ["a pending take without events", { ...new WaitsState().toJSON(), pendingTakes: [["a", { seq: 3, inbox: "msgs", closed: false }]] }, "waits JSON pendingTakes 'a' must be a take commit"],

@@ -23,6 +23,8 @@ import { SKIPPED_TOOL_RESULT, TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent
 import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { rebuildMessages } from "../../src/nodes/agent/messages.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
+import { CapabilityFault } from "../../src/nodes/base.ts";
+import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { withWarnings } from "../../src/platform.ts";
 import { advance, agentCall, complete, interrupt, pendingCalls, runFlow } from "../../src/run.ts";
 import { NodeStepRecord, readRunLog } from "../../src/runtime/log.ts";
@@ -1778,6 +1780,25 @@ test.each(["pending", "node_waiting"])("a held module tool call survives a crash
   expect((await advance({ ...options(log, []), models: serving(model) })).status).toBe("succeeded");
   expect(read(model, 0)).toEqual([["c1", "7", false]]);
   expect(existsSync(quoted)).toBe(false);
+});
+
+test("a replayed call whose view is a host's answer its steps don't hold fails the agent as a capability fault", async () => {
+  const toolset = new ToolSet(notedTools([])).forRun("r");
+  const written: ValueRecord[] = [];
+  const first = new ScriptedModel([callReply(["lookup", { q: "1" }, "c1"]), textReply("done")], CONFIG);
+  await direct(first, toolset, ["lookup"], { steps: new NodeSteps(1, [], (step) => written.push(step)) });
+  // The reply as an earlier start recorded it, without the call's result, which a host's answer says it has.
+  const view = {
+    callId: "r/chat/1/0", tool: "lookup", resultKey: "c1", state: "answered", closedReason: null,
+    result: null, deadline: null, scope: null, failure: null, held: false,
+  } as const;
+  const resumed: ValueRecord[] = [];
+  const steps = new NodeSteps(2, written.slice(0, 1), (step) => 1 + resumed.push(step), [view]);
+  const error = await rejected(direct(new ScriptedModel([], CONFIG), toolset, ["lookup"], { steps }));
+  expect(error).toBeInstanceOf(CapabilityFault);
+  expect((error as CapabilityFault).original).toBeInstanceOf(RangeError);
+  expect((error as Error).message).toBe("node 'chat''s call 'r/chat/1/0' is answered with no result recorded");
+  expect(resumed).toEqual([]);
 });
 
 test("a hold outside a durable run fails the agent before anything of its group is written", async () => {

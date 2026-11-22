@@ -4,11 +4,15 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { dirname, join } from "node:path";
 
+import { loadFlow } from "../../src/compose/loader.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
-import { pendingCalls } from "../../src/run.ts";
+import { pendingCalls, replayRunLog, runFlow } from "../../src/run.ts";
 import { ASK_TIMED_OUT_RESULT, TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/results.ts";
-import { NodeStepRecord, RunResumedRecord, type RunLog } from "../../src/runtime/log.ts";
+import { MemoryRunLog, NodeStepRecord, readRunLog, RunResumedRecord, type RunLog } from "../../src/runtime/log.ts";
 import {
   callResultStep,
   commitPrepared,
@@ -22,7 +26,8 @@ import {
   type RunState,
 } from "../../src/runtime/state.ts";
 import { wakeableNodes } from "../../src/runtime/waits.ts";
-import { RUN_ID } from "../helpers/run_state_fixtures.ts";
+import { pending } from "../../src/tools/context.ts";
+import { callReply, NO_ENV, RUN_ID, serving } from "../helpers/run_state_fixtures.ts";
 import { call, paramFlow, started, tool } from "../helpers/waits_fixtures.ts";
 
 const agent = (id: string) => new AgentNode(id, { prompt: "go", tools: ["ask_user", "lookup"] });
@@ -315,8 +320,80 @@ describe("a timeout wake leaves the agent's other calls open", () => {
     commitPrepared(log, state, prepareComplete(state, lookup, { output: "found" })!);
     commitPrepared(log, state, prepareNodeWoken(state, "a", [ask]));
     step(log, state, "a", closer("c1"));
-    expect(() => prepareNodeWaiting(state, "a", { callIds: [lookup] })).toThrow(
-      /registered before the node's last node_woken and had settled by then/,
+    expect(() => prepareNodeWaiting(state, "a", { callIds: [lookup] })).toThrow(SETTLED_BEFORE);
+  });
+
+  test("a call answered after the wake but before a resume's start can't be named after it", () => {
+    const { log, state, ask, lookup } = waitingOnTwo();
+    commitPrepared(log, state, prepareNodeWoken(state, "a", [ask]));
+    step(log, state, "a", closer("c1"));
+    commitPrepared(log, state, prepareComplete(state, lookup, { output: "found" })!);
+    commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
+    start(log, state, "a");
+    expect(() => prepareNodeWaiting(state, "a", { callIds: [lookup] })).toThrow(SETTLED_BEFORE);
+  });
+});
+
+/** The refusal of a wait naming a call registered before the last wake and settled before the evaluation began. */
+const SETTLED_BEFORE = /registered before the node's last node_woken and settled before its latest start or wake/;
+
+/** Agent `a` granted `ask_user` and the defs `shout`, which answers, and `fail`, which fails. */
+const FLOW_CALLS = `
+id: flow_calls
+name: flow_calls
+llm_config: {provider: openai, model: test-model}
+defs:
+  shout:
+    description: Shout the text back.
+    input: {text: !str}
+    kind: code
+    code: return inputs.text.toUpperCase()
+    output: !str
+  fail:
+    description: Fail.
+    input: {text: !str}
+    kind: code
+    code: throw new Error("no " + inputs.text)
+    output: !str
+nodes:
+  a:
+    kind: agent
+    prompt: go
+    tools: [ask_user, shout, fail]
+output: \${a.output}
+`;
+
+describe("a flow call beside an ask_user the wake timed out", () => {
+  /**
+   * The state of a run whose agent `a` called the def `name` (call 0) beside an `ask_user` with a
+   * deadline (call 1) and waits on both; the flow's scope ended while it waited, then a wake timed
+   * the ask out.
+   */
+  async function wokenAfterScope(name: string) {
+    const flow = await loadFlow(FLOW_CALLS);
+    const path = join(mkdtempSync(join(dirname(process.env.HOME!), "flow-calls-")), "log.jsonl");
+    const model = new ScriptedModel(
+      [callReply([name, { text: "f" }, "cF"], ["ask_user", { question: "q", timeout: "2d" }, "cQ"])],
+      { provider: "openai", model: "test-model" },
     );
+    // On the real clock, so the scope ends long before the ask's deadline; the reducer reads no clock.
+    const result = await runFlow(flow, {}, { env: NO_ENV, log: path, runId: "r", models: serving(model), tools: { ask: () => pending() } });
+    expect(result.status, result.failure?.message).toBe("waiting");
+    const log = MemoryRunLog.fromRecords(readRunLog(path));
+    const state = replayRunLog(flow, log);
+    commitPrepared(log, state, prepareNodeWoken(state, "a", ["r/a/1/1"]));
+    return { state, flowCall: "r/a/1/0" };
+  }
+
+  test("one its scope answered before the wake can't be waited on after it", async () => {
+    const { state, flowCall } = await wokenAfterScope("shout");
+    expect(state.waits.calls.get(flowCall)!.state).toBe("answered");
+    expect(() => prepareNodeWaiting(state, "a", { callIds: [flowCall] })).toThrow(SETTLED_BEFORE);
+  });
+
+  test("one that failed before the evaluation began can't be waited on", async () => {
+    const { state, flowCall } = await wokenAfterScope("fail");
+    expect(state.waits.calls.get(flowCall)!.closedReason).toBe("failed");
+    expect(() => prepareNodeWaiting(state, "a", { callIds: [flowCall] })).toThrow(`NodeWaiting call '${flowCall}' was closed (failed)`);
   });
 });

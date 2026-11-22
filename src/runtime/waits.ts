@@ -326,7 +326,9 @@ function callFromJson(value: unknown, label: string): Call {
     Object.values(call).some((field) => field === undefined) ||
     (call.mode !== null && call.mode !== "one" && call.mode !== "all") ||
     !CALL_STATES.includes(call.state!) ||
-    (call.closedReason !== null && !(CLOSE_REASONS as readonly string[]).includes(call.closedReason!))
+    (call.closedReason !== null && !(CLOSE_REASONS as readonly string[]).includes(call.closedReason!)) ||
+    // A closed call keeps the seq of the record that closed it.
+    (call.state === "closed" && call.closedSeq === null)
   ) {
     throw bad();
   }

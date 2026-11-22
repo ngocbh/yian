@@ -148,7 +148,6 @@ import {
 } from "../../src/typesys/values.ts";
 import type { Type, Value as YianValue, ValueRecord } from "../../src/typesys/values.ts";
 import { withAppendHook } from "../helpers/append_hook.ts";
-import { gated } from "../helpers/gate.ts";
 import { withModuleCalls } from "../helpers/module_calls.ts";
 import { validate } from "../helpers/schema.ts";
 import type { Schema } from "../helpers/schema.ts";
@@ -2912,7 +2911,7 @@ function runHooks(
   events: RunEvent[] = [],
   chunks: StreamChunk[] = [],
 ) {
-  const options = {
+  return {
     log,
     env,
     tools,
@@ -2928,8 +2927,8 @@ function runHooks(
     onStream: (chunk: StreamChunk) => {
       chunks.push(chunk);
     },
+    beforeToolCall: gate,
   };
-  return gated(options, gate);
 }
 
 /** Deliver the `host.sends` item `item`, one sent while the run waits, to the run at `log`. */
@@ -3032,7 +3031,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
       roots.push(...resumed.roots);
       if (binds) bound = () => ({ memory: resumed.bind() });
       const resumeArguments = runOptions<AdvanceOptions>(resumeArgs, RESUME_OPTIONS);
-      if (Object.hasOwn(resume, "gate")) hooks = gated(hooks, scripted.resumeGate);
+      if (Object.hasOwn(resume, "gate")) hooks = { ...hooks, beforeToolCall: scripted.resumeGate };
       advanceArguments = resumeArguments;
       start = () => advance({ ...resumeArguments, ...hooks, ...bound() });
     }

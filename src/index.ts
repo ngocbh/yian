@@ -4,7 +4,9 @@
  *
  * - loading: `loadFlow` (`compose/loader`), `LoadError` (`compose/helpers/errors`) and
  *   `ComposedFlow` (`compose/build/pipeline`);
- * - running: `runFlow` and `advance` (`run`);
+ * - running: `runFlow` and `advance` (`run`), and the types of their `beforeToolCall` hook,
+ *   `BeforeToolCall`, `GatedCall`, `GateContext`, `GateDecision`, `ToolSource` and `FlowCallScope`
+ *   (`tools/gate`);
  * - `Failure` and `Diagnostic` (`diagnostics`), `CompiledFlow` (`compile/model`),
  *   `FlowValidationError` (`compile/validation`) and `VariablePool` (`typesys/pool`);
  * - `evaluateWhen` and `ExpressionError` (`expr/expressions`), and `registerTemplateFn`
@@ -13,8 +15,9 @@
  *   answer comes later; `FunctionTool` and `tool` (`tools/function_tools`); `PermanentToolError`,
  *   `TransientToolError` and `ReportedToolError` (`tools/errors`), and `ToolAttemptsFailed`
  *   (`nodes/tool/node`);
- * - the host calls on a run log, `send`, `withdraw`, `complete`, `close`, `interrupt`, `cancel` and
- *   `pendingCalls`, with their errors `RunBusyError` and `DeliveryRefused` (`run`);
+ * - the host calls on a run log, `send`, `withdraw`, `complete`, `release` (with `ReleaseOptions`),
+ *   `close`, `interrupt`, `cancel` and `pendingCalls`, with their errors `RunBusyError` and
+ *   `DeliveryRefused` (`run`);
  * - memory: `MemoryBase`, `isMemory`, the session's errors `MemoryBusyError`,
  *   `ChangeIdReusedError` and `MemoryMissingError`, `memoryErrorKind`, and the contract and
  *   session types (`memory/base`); `FileMemory` and `FileMemoryOptions` (`memory/file`);
@@ -80,6 +83,8 @@ export {
   DeliveryRefused,
   interrupt,
   pendingCalls,
+  release,
+  type ReleaseOptions,
   RunBusyError,
   runFlow,
   send,
@@ -88,5 +93,13 @@ export {
 export { pending, ToolContext } from "./tools/context.ts";
 export { PermanentToolError, ReportedToolError, TransientToolError } from "./tools/errors.ts";
 export { FunctionTool, tool } from "./tools/function_tools.ts";
+export type {
+  BeforeToolCall,
+  FlowCallScope,
+  GateContext,
+  GatedCall,
+  GateDecision,
+  ToolSource,
+} from "./tools/gate.ts";
 export { VariablePool } from "./typesys/pool.ts";
 export { InboxRef, MemoryRef } from "./typesys/values.ts";

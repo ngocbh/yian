@@ -189,6 +189,7 @@ A host program moves messages and answers into a run through its log:
 | `withdraw` | Takes back every message no take or agent has read yet |
 | `close` | Closes an inbox: later sends are refused, and takes still read what is queued |
 | `complete` | Answers a call a host's tool handler held, such as an `ask` |
+| `release` | Runs an agent's tool call the host's [`beforeToolCall`](/embedding/#gate-tool-calls) held |
 
 None of these moves the run; the host then calls `advance`. A message may nest two levels less than
 `YIAN_MAX_VALUE_NESTING` (98 by default), since a take reads it inside `{events: [...]}`; `send`
@@ -256,8 +257,9 @@ status: waiting
 - `--resume` runs the flow the log recorded, not the file on disk, so an edited flow needs a new
   run.
 - `yian status` reads a log without changing it. With `--json` it adds `ready` (every call a
-  waiting node waits on is settled, or an interrupt stops it) and `wake_at` (its earliest
-  deadline). A run is due for `--resume` once `wake_at` has passed, though `ready` stays `false`.
+  waiting node waits on is settled, a held call it waits on is answered, closed or released, or an
+  interrupt stops it) and `wake_at` (its earliest deadline). A run is due for `--resume` once
+  `wake_at` has passed, though `ready` stays `false`.
 
 A run whose process dies resumes the same way: nodes that started and didn't finish run again.
 [How yian works](/how-it-works/) explains how the log makes this safe.

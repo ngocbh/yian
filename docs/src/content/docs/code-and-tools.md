@@ -302,7 +302,10 @@ changed. A changed `execute` runs as written.
 ### Calls
 
 A module's tool is checked, called and retried as a host tool is, and its validators,
-`isConcurrencySafe` and `execute` run on the module's thread.
+`isConcurrencySafe` and `execute` run on the module's thread. For an agent's call, the validators
+and `isConcurrencySafe` run before the host's [`beforeToolCall`](/embedding/#gate-tool-calls)
+check, which reads the model's arguments, not the validator's output. Keep both free of effects: a
+checked call may be refused or held and never run.
 
 - `ctx` holds `callId`, `attempt`, `runId`, `node`, `toolName` (the export's name), `signal` and
   [`interrupted`](/embedding/#tools-and-skills), which a stop and an interrupt abort on the thread.

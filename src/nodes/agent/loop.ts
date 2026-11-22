@@ -403,6 +403,7 @@ function closePended(turn: ToolTurn): void {
  *
  * @returns The text the model reads and whether it is an error; `null` when the record isn't the
  *   agent's to write: the call is open, or a host answered it.
+ * @throws AgentLoopError for a call the host released (`refuseReleased`).
  */
 function recordSettled(
   turn: ToolTurn,
@@ -410,6 +411,7 @@ function recordSettled(
   index: number,
   view: CallView,
 ): { readonly output: string; readonly isError: boolean } | null {
+  refuseReleased(turn, view);
   if (view.state === "closed") return { output: closeRecorded(turn, call, index, view), isError: true };
   // A host's answer is its own record; the agent records the answer the run shaped for a flow call.
   if (view.state !== "answered" || view.scope === null || view.result === null) return null;
@@ -439,6 +441,17 @@ function closeRecorded(turn: ToolTurn, call: ToolCallPart, index: number, view: 
   turn.steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed: closer.closed });
   if (view.scope !== null) observeFlowCallFinished(turn.live, identityOf(turn, call, index), { error: closer.closed });
   return output;
+}
+
+/**
+ * Fail the node at a held call the host released (`view`), before anything of it is written: this
+ * loop doesn't run a released call, which must run once and never be lost.
+ *
+ * @throws AgentLoopError when the call is released.
+ */
+function refuseReleased(turn: ToolTurn, view: CallView | undefined): void {
+  if (view?.state !== "released") return;
+  throw new AgentLoopError(`agent node ${reprText(turn.ctx.nodeId)}: call ${reprText(view.callId)} was released, which this agent can't run yet`);
 }
 
 /** The closer word for a call closed for `reason`: a deadline's or an interrupt's, else `crashed` (its outcome is unknown). */
@@ -897,6 +910,8 @@ async function replayHeldCalls(turn: ToolTurn, holds: ReplyHolds): Promise<boole
  *
  * @returns The `n` of the last step it wrote, or `null` when it pended the call.
  * @throws What a call sent again throws (`resendCall`).
+ * @throws CapabilityFault carrying a RangeError for a view the agent has no record to write for,
+ *   such as a host's answer its steps don't hold.
  */
 async function answerUnrecorded(turn: ToolTurn, planned: PlannedCall): Promise<number | null> {
   const { call, index, callId } = planned;
@@ -911,8 +926,12 @@ async function answerUnrecorded(turn: ToolTurn, planned: PlannedCall): Promise<n
     return turn.steps.lastWritten();
   }
   // Answered by its flow's scope, or closed: a host's answer is a recorded result, never here.
-  const { output, isError } = recordSettled(turn, call, index, view)!;
-  pushToolMessage(turn, call, output, isError);
+  const settled = recordSettled(turn, call, index, view);
+  if (settled === null) {
+    const what = `node ${reprText(turn.ctx.nodeId)}'s call ${reprText(view.callId)} is ${view.state} with no result recorded`;
+    throw new CapabilityFault(new YianRangeError(what));
+  }
+  pushToolMessage(turn, call, settled.output, settled.isError);
   return turn.steps.lastWritten();
 }
 
@@ -947,6 +966,9 @@ interface ReplyHolds {
  * reply's holds. A hold is decided by the host's answer before the evaluation began, or by the
  * interrupt that closed it; one answered after the evaluation began (none of its evaluations since,
  * `evaluationsSince`) is undecided for it, as an open one is.
+ *
+ * @throws AgentLoopError for a hold the host released (`refuseReleased`), before the walk writes
+ *   anything.
  */
 function replyHolds(turn: ToolTurn): ReplyHolds {
   const ends = new Map<number, number>();
@@ -959,6 +981,7 @@ function replyHolds(turn: ToolTurn): ReplyHolds {
     if (groupEnd === null) continue;
     ends.set(index, groupEnd);
     const view = turn.ctx.steps?.calls.find((each) => each.callId === callId);
+    refuseReleased(turn, view);
     const answer = view?.state === "answered" ? turn.steps.recordedResult(turn.n, call.id) : null;
     if (view?.state === "closed") closed = true;
     else if (answer !== null && evaluationsSince(turn, answer.n) > 0) answers.set(index, answer.n);

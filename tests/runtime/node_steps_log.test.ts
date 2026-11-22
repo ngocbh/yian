@@ -332,11 +332,11 @@ test("a resume keeps the steps, and a resumed start counts two", () => {
   expect(state.inFlight.has("first")).toBe(false);
   expect(state.ready).toEqual(["first", "second"]);
 
-  // A resumed node is ready again, not in flight, so it can't record a step yet.
+  // A resumed node is ready again, not in flight: until it starts, only a host answers its calls.
   expectError(
     () => prepareNodeStep(state, "first", { kind: "x", event: "started" }),
     RangeError,
-    "NodeStep node 'first' is not in-flight",
+    "node 'first', not started again since its resume, records only a tool_result answering one of its open calls",
   );
   commitPrepared(log, state, prepareNodeStarted(state, "first"));
   expect(state.nodeStarts).toEqual(new Map([["first", 2]]));

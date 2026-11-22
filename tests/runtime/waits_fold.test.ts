@@ -181,6 +181,7 @@ test("a pending step registers a host call; its tool_result answers it", () => {
       closedInbox: false,
       closedReason: null,
       closedSeq: null,
+      releasedSeq: null,
       flow: false,
       scope: null,
       held: false,
@@ -191,6 +192,19 @@ test("a pending step registers a host call; its tool_result answers it", () => {
   applyWaitsRecord(w, { seq: 5, record: answer("ask", 2, "r/ask/1") });
   expect(nodeCalls(w, "ask")[0]).toMatchObject({ state: "answered", resultSeq: 5 });
   expect(isWakeable(w, "ask")).toBe(true);
+});
+
+test("a result answers only a call of its node's latest reply: a later reply's call under the same provider id answers no released call", () => {
+  const w = fold(
+    ...START,
+    new NodeStartedRecord("agent"),
+    new NodeStepRecord("agent", 1, { kind: "model_call" }),
+    pending("agent", 2, "r/agent/1/0", { tool_call_id: "c0", held: true }),
+    new NodeStepRecord("agent", 3, { kind: "released", call_id: "r/agent/1/0" }),
+    new NodeStepRecord("agent", 4, { kind: "model_call" }),
+    new NodeStepRecord("agent", 5, { kind: "tool_result", tool_call_id: "c0", output: "inline" }),
+  );
+  expect(nodeCalls(w, "agent")[0]).toMatchObject({ state: "released", releasedSeq: 5, resultSeq: null });
 });
 
 test("an agent's pending call is answered by the tool_result naming its tool_call_id", () => {
@@ -459,6 +473,11 @@ test.each<[string, unknown, string]>([
   ["an interrupt inbox that isn't a name", { ...new WaitsState().toJSON(), interruptInboxes: [["a", 1]] }, "waits JSON interruptInboxes 'a' must be an inbox name"],
   ["a call that isn't an object", { ...new WaitsState().toJSON(), calls: [["r/a", 1]] }, "waits JSON calls 'r/a' must be a call"],
   ["a call with an unknown state", { ...new WaitsState().toJSON(), calls: [["r/a", { ...callJson(), state: "lost" }]] }, "waits JSON calls 'r/a' must be a call"],
+  [
+    "a closed call that doesn't say which record closed it",
+    { ...new WaitsState().toJSON(), calls: [["r/a", { ...callJson(), state: "closed", closedReason: "cancelled", closedSeq: null }]] },
+    "waits JSON calls 'r/a' must be a call",
+  ],
   ["an inbox without its queue", { ...new WaitsState().toJSON(), inboxes: [["msgs", { closed: false, absorbing: [] }]] }, "waits JSON inboxes 'msgs' must be an inbox"],
   ["a waiting node without call ids", { ...new WaitsState().toJSON(), waiting: [["a", { seq: 3, steerInbox: null }]] }, "waits JSON waiting 'a' must be a waiting node"],
   ["a pending take without events", { ...new WaitsState().toJSON(), pendingTakes: [["a", { seq: 3, inbox: "msgs", closed: false }]] }, "waits JSON pendingTakes 'a' must be a take commit"],

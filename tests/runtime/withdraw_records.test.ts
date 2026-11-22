@@ -229,5 +229,5 @@ test("the withdraw delivery op prepares the withdraw", () => {
   const x = commitSend(run, "x");
   const prepared = prepareDelivery(run.state, { kind: "withdraw", inbox: "msgs" }) as PreparedTransition;
   expect(prepared.record).toEqual(new InboxWithdrawnRecord("msgs", [x]));
-  expect(() => prepareDelivery(run.state, { kind: "nope" } as never)).toThrow(/send, withdraw, complete, close, interrupt or cancel/);
+  expect(() => prepareDelivery(run.state, { kind: "nope" } as never)).toThrow(/send, withdraw, complete, release, close, interrupt or cancel/);
 });

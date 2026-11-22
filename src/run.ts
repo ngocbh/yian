@@ -2388,7 +2388,10 @@ export interface InterruptResult {
   readonly seq: number | null;
   /** The agents the record named. */
   readonly nodes: readonly string[];
-  /** The open host calls it closed, as `pendingCalls` listed them. */
+  /**
+   * The open host calls it closed, as `pendingCalls` listed them. A waiting agent's released calls
+   * it closed aren't listed; their `CallClosed` events report them.
+   */
   readonly calls: readonly PendingCall[];
 }
 
@@ -2397,9 +2400,9 @@ export interface InterruptResult {
  * inbox, and remember the Stop for one that opens it soon. Each named agent's current reply is cut
  * and its result is null, which its declared output decides (`Optional(...)` succeeds with null;
  * anything else, no `output:` included, fails `agent.interrupted`). The interrupt closes their open
- * calls (`CallClosed {reason: "interrupted"}`), so a later `complete` of one is refused. A live
- * engine cuts a running reply at once; a waiting agent honors it when the run next moves. Queued
- * steers stay in the inbox: `withdraw` takes them back.
+ * calls, and a waiting agent's released calls (`CallClosed {reason: "interrupted"}`), so a later
+ * `complete` of one is refused. A live engine cuts a running reply at once; a waiting agent honors
+ * it when the run next moves. Queued steers stay in the inbox: `withdraw` takes them back.
  *
  * It appends nothing (`seq: null`) when the run waits for the next message on `inbox` (a take of
  * it waits with nothing unread and no reader is open), or when it is already stopping (a Stop on
@@ -2472,8 +2475,8 @@ export type AskQuestion = Pick<AskRequest, "question" | "questions" | "answerSch
 /**
  * List the open host calls (not takes or sleeps) of the run at `log`, in the order they were made,
  * from one pass over its records. It takes no lock, so it reads a log another writer holds; a
- * call leaves the list once it is answered, timed out or closed. Hosts rebuild their open asks
- * and held calls from it.
+ * call leaves the list once it is answered, timed out, closed or released. Hosts rebuild their
+ * open asks and held calls from it.
  *
  * @param options.maxLineBytes The most bytes a line may hold, as `iterRunRecords` takes it; a longer
  *   line throws `RunLogLineTooLongError`.

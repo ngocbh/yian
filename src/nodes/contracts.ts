@@ -1014,13 +1014,19 @@ export class HostToolCall {
   }
 }
 
+/**
+ * Where a registered call stands: `released` for a held call the host released, which its agent is
+ * to run.
+ */
+export const CALL_STATES = Object.freeze(["open", "answered", "timed_out", "closed", "released"] as const);
+
 /** One of the node's calls, as the engine reads it from the run state. Frozen. */
 export interface CallView {
   readonly callId: string;
   readonly tool: string;
   /** The key the call's `tool_result` step's `call_id` holds: an agent's provider tool call id, else the call id. */
   readonly resultKey: string;
-  readonly state: "open" | "answered" | "timed_out" | "closed";
+  readonly state: (typeof CALL_STATES)[number];
   readonly closedReason: "crashed" | "interrupted" | "timed_out" | "cancelled" | "failed" | null;
   /** The answering `tool_result` step's body, once the call is answered. */
   readonly result: Readonly<JsonObject> | null;

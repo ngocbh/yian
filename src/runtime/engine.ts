@@ -99,6 +99,7 @@ import {
   prepareNodeWaiting,
   prepareNodeWoken,
   preparePoolCommit,
+  prepareRelease,
   prepareRunCancelled,
   prepareRunFailed,
   prepareRunStopped,
@@ -256,15 +257,16 @@ export function resumedAttemptEvents(state: RunState, record: RunResumedRecord):
 }
 
 /**
- * One host delivery: a send, a withdraw of an inbox's unread sends, a completed call, an inbox
- * close, an interrupt or a cancel. An interrupt's `running` are the in-flight readers of its
- * inbox, which only the engine knows; absent offline: then any in-flight node counts as an open
- * reader for the idle rule.
+ * One host delivery: a send, a withdraw of an inbox's unread sends, a completed call, a released
+ * hold, an inbox close, an interrupt or a cancel. An interrupt's `running` are the in-flight
+ * readers of its inbox, which only the engine knows; absent offline: then any in-flight node
+ * counts as an open reader for the idle rule.
  */
 export type DeliveryOp =
   | { readonly kind: "send"; readonly inbox: string; readonly event: unknown; readonly key?: string | null }
   | { readonly kind: "withdraw"; readonly inbox: string }
   | { readonly kind: "complete"; readonly callId: string; readonly result: CompleteResult }
+  | { readonly kind: "release"; readonly callId: string; readonly note?: string | null }
   | { readonly kind: "close"; readonly inbox: string }
   | { readonly kind: "interrupt"; readonly inbox: string; readonly running?: readonly string[] }
   | { readonly kind: "cancel" };
@@ -272,9 +274,9 @@ export type DeliveryOp =
 /**
  * @internal Prepare `op` on `state`; the engine and the run boundary share it.
  *
- * @returns null for a no-op (nothing to withdraw, an identical repeat complete, closing a closed
- *   inbox, or an interrupt while the run waits for the inbox's next message or is already
- *   stopping), and the seq of the first send for a repeat of a keyed send.
+ * @returns null for a no-op (nothing to withdraw, an identical repeat complete, a repeat release,
+ *   closing a closed inbox, or an interrupt while the run waits for the inbox's next message or is
+ *   already stopping), and the seq of the first send for a repeat of a keyed send.
  * @throws DeliveryRefused when the run refuses it.
  * @throws TypeError when `op` is no delivery.
  */
@@ -286,6 +288,8 @@ export function prepareDelivery(state: RunState, op: DeliveryOp): PreparedTransi
       return prepareWithdraw(state, op.inbox);
     case "complete":
       return prepareComplete(state, op.callId, op.result);
+    case "release":
+      return prepareRelease(state, op.callId, op.note ?? null);
     case "close":
       return prepareInboxClosed(state, op.inbox);
     case "interrupt":
@@ -295,7 +299,9 @@ export function prepareDelivery(state: RunState, op: DeliveryOp): PreparedTransi
     default: {
       const unknown: never = op;
       const kind = (unknown as { readonly kind: unknown }).kind;
-      throw new YianTypeError(`a delivery's kind must be send, withdraw, complete, close, interrupt or cancel, got ${reprText(String(kind))}`);
+      throw new YianTypeError(
+        `a delivery's kind must be send, withdraw, complete, release, close, interrupt or cancel, got ${reprText(String(kind))}`,
+      );
     }
   }
 }

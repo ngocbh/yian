@@ -1,0 +1,50 @@
+# A hook that throws, rejects, or gives a decision that isn't one of its shapes (here an empty
+# refusal, an empty note, and a refusal and a note each over 4096 UTF-8 bytes though under 4096
+# characters) refuses the call with yian's fixed text, never the host's error, and warns. No tool
+# runs, and the model reads the fixed text for each.
+kind: run
+flow: |
+  id: faults
+  name: faults
+  llm_config: {provider: anthropic, model: claude-test}
+  nodes:
+    agent:
+      kind: agent
+      tools: [save]
+      prompt: hi
+      output: !str
+  output: ${agent.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    save:
+      parameters: {type: object, properties: {k: {type: string}}}
+      concurrency_safe: true
+      results: []
+  gate:
+    save:
+    - {throw: boom}
+    - {throw: later boom, later: true}
+    - {refuse: ""}
+    - {run: true, note: ""}
+    - {refuse: ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé}
+    - {run: true, note: €€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€}
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: c1, name: save, arguments: {k: a}}
+          - {type: tool_call, id: c2, name: save, arguments: {k: b}}
+          - {type: tool_call, id: c3, name: save, arguments: {k: c}}
+          - {type: tool_call, id: c4, name: save, arguments: {k: d}}
+          - {type: tool_call, id: c5, name: save, arguments: {k: e}}
+          - {type: tool_call, id: c6, name: save, arguments: {k: f}}
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: done}]}
+expect:
+  output: {status: succeeded, output: done}
+  trace: [[run_started, null, {effective_llm_by_static_path: {agent: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, gated: true, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, agent], [node_step, agent, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {k: a}, id: c1, name: save, type: tool_call}, {arguments: {k: b}, id: c2, name: save, type: tool_call}, {arguments: {k: c}, id: c3, name: save, type: tool_call}, {arguments: {k: d}, id: c4, name: save, type: tool_call}, {arguments: {k: e}, id: c5, name: save, type: tool_call}, {arguments: {k: f}, id: c6, name: save, type: tool_call}], role: assistant}, purpose: chat, request_sha256: 575f483c5579e2e1d0152e273678750e3a6702f0e3e652ba32a8ae58113bb411, response_id: null, usage: null}}], [node_step, agent, {n: 2, step: {call_id: c1, closed: refused, is_error: true, kind: tool_result, output: The host's permission check failed; the call didn't run.}}], [node_step, agent, {n: 3, step: {call_id: c2, closed: refused, is_error: true, kind: tool_result, output: The host's permission check failed; the call didn't run.}}], [node_step, agent, {n: 4, step: {call_id: c3, closed: refused, is_error: true, kind: tool_result, output: The host's permission check failed; the call didn't run.}}], [node_step, agent, {n: 5, step: {call_id: c4, closed: refused, is_error: true, kind: tool_result, output: The host's permission check failed; the call didn't run.}}], [node_step, agent, {n: 6, step: {kind: tool_result, output: The host's permission check failed; the call didn't run., call_id: c5, closed: refused, is_error: true}}], [node_step, agent, {n: 7, step: {call_id: c6, closed: refused, is_error: true, kind: tool_result, output: The host's permission check failed; the call didn't run.}}], [node_step, agent, {n: 8, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: done, type: text}], role: assistant}, purpose: chat, request_sha256: 10a8cc3416a6f818e6f1861b863cbccdc8fd7e7022da9aaeffd8177eb671e538, response_id: null, usage: null}}], [pool_commit, agent, {value: done}], [pool_commit, agent, {key: agent.new_messages, steps: [9, 10, 11, 12, 13, 14, 15, 16]}], [node_succeeded, agent, {commit: 17, messages: 18}], [node_started, __end__], [pool_commit, __end__, {value: done}], [node_succeeded, __end__, {commit: 21}]]
+  tool_calls: {}
+  gate_calls: [{tool: save, call_id: r1/agent/1/0, node: agent, source: {kind: host, group: null, tool: save}, arguments: {k: a}, attempt: 1, scopes: []}, {tool: save, call_id: r1/agent/1/1, node: agent, source: {kind: host, group: null, tool: save}, arguments: {k: b}, attempt: 1, scopes: []}, {tool: save, call_id: r1/agent/1/2, node: agent, source: {kind: host, group: null, tool: save}, arguments: {k: c}, attempt: 1, scopes: []}, {tool: save, call_id: r1/agent/1/3, node: agent, source: {kind: host, group: null, tool: save}, arguments: {k: d}, attempt: 1, scopes: []}, {tool: save, call_id: r1/agent/1/4, node: agent, source: {kind: host, group: null, tool: save}, arguments: {k: e}, attempt: 1, scopes: []}, {tool: save, call_id: r1/agent/1/5, node: agent, source: {kind: host, group: null, tool: save}, arguments: {k: f}, attempt: 1, scopes: []}]

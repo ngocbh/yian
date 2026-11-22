@@ -1,0 +1,36 @@
+# The first run has no hook: `lookup` (resumable) runs unchecked, and the crash cuts the run before
+# its result. The resume gives a hook (`resume.gate`): its `run_resumed` records `gated`, which no
+# later resume can drop, and the hook checks `lookup`, sent again, and the call the agent makes next.
+kind: resume
+flow: |
+  id: lategate
+  name: lategate
+  llm_config: {provider: anthropic, model: claude-test}
+  nodes:
+    agent:
+      kind: agent
+      tools: [lookup, save]
+      prompt: hi
+      output: !str
+  output: ${agent.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  crash_after_record: 9
+  tools:
+    lookup: {parameters: {type: object, properties: {}}, resumable: true, results: [{return: found}]}
+    save: {parameters: {type: object, properties: {}}, results: [{return: saved}]}
+  models:
+    agent:
+      agent:
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: tool_call, id: c1, name: lookup, arguments: {}}]}
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: tool_call, id: c2, name: save, arguments: {}}]}
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: done}]}
+resume:
+  gate:
+    lookup: [{run: true}]
+    save: [{run: true, note: checked after the resume}]
+expect:
+  output: {status: succeeded, output: done}
+  trace: [[run_started, null, {effective_llm_by_static_path: {agent: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, agent], [node_step, agent, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {}, id: c1, name: lookup, type: tool_call}], role: assistant}, purpose: chat, request_sha256: 2c412c8e79bce173e1363c2a7f33cc42172d16e3670068791c05373f01aec8e2, response_id: null, usage: null}}], [run_resumed, null, {gated: true, num_workers: 0, retry_node_ids: [agent]}], [node_started, agent], [node_step, agent, {n: 2, step: {call_id: c1, is_error: false, kind: tool_result, output: found}}], [node_step, agent, {n: 3, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {}, id: c2, name: save, type: tool_call}], role: assistant}, purpose: chat, request_sha256: 83a55ce509620f85de5a763855019f2216519eccc2db63fe410db6654f253226, response_id: null, usage: null}}], [node_step, agent, {n: 4, step: {call_id: c2, is_error: false, kind: tool_result, note: checked after the resume, output: saved}}], [node_step, agent, {n: 5, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: done, type: text}], role: assistant}, purpose: chat, request_sha256: 644b20a5b179d582614237b3fe88b4f877f5fbd026ab64589f71e5a9a06696ce, response_id: null, usage: null}}], [pool_commit, agent, {value: done}], [pool_commit, agent, {key: agent.new_messages, steps: [9, 12, 13, 14, 15]}], [node_succeeded, agent, {commit: 16, messages: 17}], [node_started, __end__], [pool_commit, __end__, {value: done}], [node_succeeded, __end__, {commit: 20}]]
+  tool_calls: {lookup: [{args: {}, call_id: r1/agent/1/0, attempt: 1, node: agent}, {args: {}, call_id: r1/agent/1/0, attempt: 2, node: agent}], save: [{args: {}, call_id: r1/agent/3/0, attempt: 1, node: agent}]}
+  gate_calls: [{tool: lookup, call_id: r1/agent/1/0, node: agent, source: {kind: host, group: null, tool: lookup}, arguments: {}, attempt: 2, scopes: []}, {tool: save, call_id: r1/agent/3/0, node: agent, source: {kind: host, group: null, tool: save}, arguments: {}, attempt: 1, scopes: []}]

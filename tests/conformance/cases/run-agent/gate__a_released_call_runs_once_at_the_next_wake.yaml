@@ -1,0 +1,36 @@
+# The hook holds `save`. A release, with the host's note, lands while the run waits; the next
+# evaluation is the first after it, so it runs `save` once, as the model asked, without asking the
+# hook again. The note stays on the `released` step.
+kind: run
+flow: |
+  id: release
+  name: release
+  llm_config: {provider: anthropic, model: claude-test}
+  nodes:
+    agent:
+      kind: agent
+      tools: [save]
+      prompt: hi
+      output: !str
+  output: ${agent.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    save: {parameters: {type: object, properties: {k: {type: string}}}, results: [{return: saved}]}
+  gate:
+    save: [{hold: true}]
+  sends:
+  - {release: r1/agent/1/0, note: approved by Ada}
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts: [{type: tool_call, id: c1, name: save, arguments: {k: a}}]
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: done}]}
+expect:
+  output: {status: succeeded, output: done}
+  trace: [[run_started, null, {effective_llm_by_static_path: {agent: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, gated: true, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, agent], [node_step, agent, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {k: a}, id: c1, name: save, type: tool_call}], role: assistant}, purpose: chat, request_sha256: 575f483c5579e2e1d0152e273678750e3a6702f0e3e652ba32a8ae58113bb411, response_id: null, usage: null}}], [node_step, agent, {n: 2, step: {call_id: r1/agent/1/0, group_end: 0, held: true, index: 0, kind: pending, reply: 1, source: {group: null, kind: host, tool: save}, tool: save, tool_call_id: c1}}], [node_waiting, agent, {call_ids: [r1/agent/1/0]}], [run_waiting, null, {node_ids: [agent]}], [node_step, agent, {n: 3, step: {call_id: r1/agent/1/0, kind: released, note: approved by Ada}}], [node_woken, agent], [node_step, agent, {n: 4, step: {call_id: c1, is_error: false, kind: tool_result, output: saved}}], [node_step, agent, {n: 5, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: done, type: text}], role: assistant}, purpose: chat, request_sha256: 10db998c907336e61a50b8ee48ac3fbca4c8d12e9625a2ead5812cda17d4beca, response_id: null, usage: null}}], [pool_commit, agent, {value: done}], [pool_commit, agent, {key: agent.new_messages, steps: [9, 15, 16]}], [node_succeeded, agent, {commit: 17, messages: 18}], [node_started, __end__], [pool_commit, __end__, {value: done}], [node_succeeded, __end__, {commit: 21}]]
+  tool_calls: {save: [{args: {k: a}, call_id: r1/agent/1/0, attempt: 1, node: agent}]}
+  gate_calls: [{tool: save, call_id: r1/agent/1/0, node: agent, source: {kind: host, group: null, tool: save}, arguments: {k: a}, attempt: 1, scopes: []}]

@@ -51,7 +51,7 @@ import {
   OriginRef,
   reprText,
 } from "../../src/diagnostics.ts";
-import { type RunEvent, RunFailed, RunSucceeded, type StreamChunk } from "../../src/events.ts";
+import { type RunEvent, RunFailed, RunSucceeded, type StreamChunk, ToolCallFinished } from "../../src/events.ts";
 import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/results.ts";
 import type { CompleteResult } from "../../src/nodes/base.ts";
 import { ProviderError, kindForStatus } from "../../src/llm/errors.ts";
@@ -105,6 +105,7 @@ import {
   type RunInspection,
   type RunFlowOptions,
   type RunResult,
+  release,
   runFlow,
   send,
   staticNodes,
@@ -118,8 +119,11 @@ import {
   type RunLog,
   type RunStartedRecord,
 } from "../../src/runtime/log.ts";
+import { unfinishedStatus } from "../../src/runtime/run_index.ts";
 import { addCrashedAttempts } from "../../src/runtime/state.ts";
+import { waitInfos, wakeableNodes, wakeAt } from "../../src/runtime/waits.ts";
 import { ASK, pending, type ToolContext } from "../../src/tools/context.ts";
+import type { BeforeToolCall, GateDecision } from "../../src/tools/gate.ts";
 import {
   PermanentToolError,
   ReportedToolError,
@@ -144,6 +148,7 @@ import {
 } from "../../src/typesys/values.ts";
 import type { Type, Value as YianValue, ValueRecord } from "../../src/typesys/values.ts";
 import { withAppendHook } from "../helpers/append_hook.ts";
+import { gated } from "../helpers/gate.ts";
 import { withModuleCalls } from "../helpers/module_calls.ts";
 import { validate } from "../helpers/schema.ts";
 import type { Schema } from "../helpers/schema.ts";
@@ -199,7 +204,7 @@ const RESULTS = {
   json: [["value"], ["text"], ["raises"]],
 } satisfies Record<Kind, readonly (readonly string[])[]>;
 const RUN_OPTIONAL: ReadonlySet<string> = new Set([
-  "trace", "events", "stream", "tool_calls", "memory",
+  "trace", "events", "stream", "tool_calls", "gate_calls", "memory",
 ]);
 const OPTIONAL: Partial<Record<Kind, ReadonlySet<string>>> = {
   run: RUN_OPTIONAL,
@@ -222,11 +227,11 @@ const ALL_EXPECT_KEYS: ReadonlySet<string> = new Set(
 const RUN_KEYS: ReadonlySet<string> = new Set([
   "run_id", "num_workers", "llm_config", "context",
 ]);
-const RESUME_KEYS: ReadonlySet<string> = new Set(["num_workers", "api_key", "headers", "context", "memory"]);
+const RESUME_KEYS: ReadonlySet<string> = new Set(["num_workers", "api_key", "headers", "context", "memory", "gate"]);
 // Host keys the format reserves and this runner doesn't support yet.
 const RESERVED_HOST_KEYS: readonly string[] = ["skills"];
 const HOST_KEYS: ReadonlySet<string> = new Set([
-  "tools", "human", "jitter", "models", "stop", "sends", "memory", ...RESERVED_HOST_KEYS,
+  "tools", "human", "jitter", "models", "stop", "sends", "memory", "gate", "resumable_tools", ...RESERVED_HOST_KEYS,
 ]);
 const RESUME_HOST_KEYS: ReadonlySet<string> = new Set([...HOST_KEYS, "crash_after_record"]);
 /** The `[section, key]` pairs a case may not use yet: it fails before it is set up. */
@@ -537,17 +542,20 @@ function checkArguments(
   if (get(args, "context", "present") !== "present") {
     throw new Error(`\`${where}.context\` must be \`present\``);
   }
+  if (get(args, "gate", null) !== null) checkGate(args["gate"], `${where}.gate`);
 }
 
 /**
- * Throw unless `value`, at `where`, is a point: `{model_call: n, chunk: k}`, `{model_call: n}` or
- * `{tool_call: i}`, counted from 1 (`chunk` from 0).
+ * Throw unless `value`, at `where`, is a point: `{model_call: n, chunk: k}`, `{model_call: n}`,
+ * `{tool_call: i}`, `{gate_call: i}` or `{refusal: i}`, counted from 1 (`chunk` from 0).
  */
 function checkPoint(where: string, value: Value | undefined): void {
   const point = mapping(where, value);
   const names = Object.keys(point).sort().join(",");
-  if (!["chunk,model_call", "model_call", "tool_call"].includes(names)) {
-    throw new Error(`\`${where}\` is \`{model_call, chunk}\`, \`{model_call}\` or \`{tool_call}\``);
+  if (!["chunk,model_call", "model_call", "tool_call", "gate_call", "refusal"].includes(names)) {
+    throw new Error(
+      `\`${where}\` is \`{model_call, chunk}\`, \`{model_call}\`, \`{tool_call}\`, \`{gate_call}\` or \`{refusal}\``,
+    );
   }
   const counted = ([name, count]: [string, Value]) =>
     typeof count === "bigint" && count >= (name === "chunk" ? 0n : 1n);
@@ -570,7 +578,8 @@ function checkStop(stop: Value | undefined): void {
  * `after: {node, <point>}` (sent live when the run reaches the point) or, in a `resume` case,
  * `down: true` (sent after the crash, before the resume), `{close}` items, `{withdraw}` items
  * (`withdraw(run, inbox)`) and `{interrupt}` items (`interrupt(run, inbox)`), each optionally
- * with `after`, and `{complete, output}` or `{complete, error}` items.
+ * with `after`, `{complete, output}` or `{complete, error}` items, and `{release, note}` items
+ * (`note` optional), optionally with `after`.
  */
 function checkSends(value: Value | undefined, kind: Kind): void {
   if (!Array.isArray(value)) throw new Error("`host.sends` must be a list");
@@ -588,6 +597,10 @@ function checkSends(value: Value | undefined, kind: Kind): void {
     const completes = typeof (item as Case | null)?.["complete"] === "string";
     const interrupts = typeof (item as Case | null)?.["interrupt"] === "string";
     const withdraws = typeof (item as Case | null)?.["withdraw"] === "string";
+    const releases =
+      typeof (item as Case | null)?.["release"] === "string" &&
+      ["release", "note,release", "after,release", "after,note,release"].includes(fields!) &&
+      ["string", "undefined"].includes(typeof (item as Case)["note"]);
     const valid =
       (!holds || held) &&
       ((fields === "event,inbox" && send) ||
@@ -599,14 +612,15 @@ function checkSends(value: Value | undefined, kind: Kind): void {
       (fields === "interrupt" && interrupts) ||
       (fields === "after,interrupt" && interrupts && isMapping((item as Case)["after"])) ||
       (fields === "complete,output" && completes) ||
-      (fields === "complete,error" && completes && typeof (item as Case)["error"] === "string"));
+      (fields === "complete,error" && completes && typeof (item as Case)["error"] === "string") ||
+      (releases && (!Object.hasOwn(item as Case, "after") || isMapping((item as Case)["after"]))));
     if (!valid) {
       throw new Error(
-        "`host.sends` items are {inbox, event, after?|down?}, {close}, {withdraw, after?}, {interrupt, after?} or {complete, output | error}; " +
+        "`host.sends` items are {inbox, event, after?|down?}, {close}, {withdraw, after?}, {interrupt, after?}, {complete, output | error} or {release, note?, after?}; " +
           "`hold: true` marks an item sent while the run waits that isn't followed by an advance",
       );
     }
-    if (fields === "after,event,inbox" || fields === "after,interrupt" || fields === "after,withdraw") {
+    if (Object.hasOwn(item as Case, "after")) {
       const { node, ...point } = (item as Case)["after"] as Case;
       if (typeof node !== "string") throw new Error(`\`host.sends[${index}].after.node\` must be a node id`);
       checkPoint(`host.sends[${index}].after`, point);
@@ -675,6 +689,38 @@ function checkFiles(where: string, files: Value | undefined): void {
     if (typeof text !== "string") throw new Error(`\`${where}\` values must be text`);
     if (path.startsWith("/") || path.split("/").includes("..")) {
       throw new Error(`\`${where}\`: \`${path}\` must be a relative path without \`..\``);
+    }
+  }
+}
+
+/**
+ * Throw unless `value` is `host.gate` (or, at `where`, `resume.gate`): visible tool names to
+ * scripts, each a list of entries or a mapping from node id to such a list. An entry is
+ * `{run: true}`, `{run: true, note}`, `{refuse}`, `{hold: true}` or `{throw}`, each text any text,
+ * and may add `later: true`.
+ */
+function checkGate(value: Value | undefined, where = "host.gate"): void {
+  for (const [tool, script] of Object.entries(mapping(where, value))) {
+    const lists = isMapping(script) ? Object.entries(script).map(([node, list]) => [`.${node}`, list] as const) : [["", script] as const];
+    for (const [node, list] of lists) {
+      if (!Array.isArray(list)) throw new Error(`\`${where}.${tool}\` must be a list or a mapping of lists`);
+      list.forEach((entry, index) => {
+        // A non-mapping entry has no shape, so it matches none below.
+        const { later, ...decision } = isMapping(entry) ? entry : {};
+        const text = (key: string) => typeof decision[key] === "string";
+        const shape = Object.keys(decision).sort().join(",");
+        const valid =
+          (later === undefined || later === true) &&
+          ((shape === "run" && decision["run"] === true) ||
+            (shape === "note,run" && decision["run"] === true && text("note")) ||
+            (shape === "refuse" && text("refuse")) ||
+            (shape === "hold" && decision["hold"] === true) ||
+            (shape === "throw" && text("throw")));
+        if (!valid) {
+          const shapes = "{run: true}, {run: true, note}, {refuse}, {hold: true} or {throw}";
+          throw new Error(`\`${where}.${tool}${node}[${index}]\` is ${shapes}, each with an optional \`later: true\``);
+        }
+      });
     }
   }
 }
@@ -780,6 +826,11 @@ function checkHost(value: Value | undefined, kind: Kind): void {
   checkMemory(get(host, "memory", {}));
   checkStop(get(host, "stop", {}));
   checkSends(get(host, "sends", []), kind);
+  checkGate(get(host, "gate", {}));
+  const resumable = get(host, "resumable_tools", []);
+  if (!Array.isArray(resumable) || resumable.some((name) => typeof name !== "string")) {
+    throw new Error("`host.resumable_tools` must be a list of tool names");
+  }
   const human = mapping("host.human", get(host, "human", {}));
   if (Object.values(human).some((answers) => !Array.isArray(answers))) {
     throw new Error("`host.human` maps node ids to lists of answers");
@@ -1714,7 +1765,7 @@ function v1Request(request: Request): Case {
 }
 
 /** A point of the run a `host.stop` or `host.sends` item waits for: its `after`. */
-type Point = { model_call?: bigint; chunk?: bigint; tool_call?: bigint };
+type Point = { model_call?: bigint; chunk?: bigint; tool_call?: bigint; gate_call?: bigint; refusal?: bigint };
 
 /** The error the runner stops a run with at its `host.stop` point. */
 class ConformanceStop extends Error {
@@ -1727,12 +1778,12 @@ class ConformanceStop extends Error {
 
 /**
  * The run points an AGENT reaches: the `host.stop` points, the `host.sends` items delivered at
- * a point (`after`), a send, a withdraw or an interrupt, and the `host.memory` locks taken at a
- * point (`held`).
+ * a point (`after`), a send, a withdraw, an interrupt or a release, and the `host.memory` locks
+ * taken at a point (`held`).
  *
  * Reaching a stop calls `onStop`; reaching a send calls `deliver`, a withdraw `withdraw`, an
- * interrupt `interrupt`, a lock `hold`. Calls are counted, and points reached, only once `armed`,
- * so that runs before the main one neither count nor act.
+ * interrupt `interrupt`, a release `release`, a lock `hold`. Calls are counted, and points reached,
+ * only once `armed`, so that runs before the main one neither count nor act.
  */
 class Inbox {
   armed = false;
@@ -1743,6 +1794,7 @@ class Inbox {
   readonly #interrupt: (inbox: string) => void;
   readonly #withdraw: (inbox: string) => void;
   readonly #hold: (input: string) => void;
+  readonly #release: (callId: string, note: string | null) => void;
 
   constructor(
     stop: Case = {},
@@ -1753,7 +1805,9 @@ class Inbox {
     withdraw: (inbox: string) => void = () => {},
     memory: Case = {},
     hold: (input: string) => void = () => {},
+    release: (callId: string, note: string | null) => void = () => {},
   ) {
+    this.#release = release;
     this.#onStop = onStop;
     this.#deliver = deliver;
     this.#interrupt = interrupt;
@@ -1774,16 +1828,22 @@ class Inbox {
         ? { after: point, interrupt: item["interrupt"]! }
         : Object.hasOwn(item, "withdraw")
           ? { after: point, withdraw: item["withdraw"]! }
-          : { after: point, send: { inbox: item["inbox"]!, event: item["event"]! } };
+          : Object.hasOwn(item, "release")
+            ? { after: point, release: item["release"]!, note: get(item, "note", null)! }
+            : { after: point, send: { inbox: item["inbox"]!, event: item["event"]! } };
       this.#pending.push({ label: `host.sends[${index}]`, node: node as string, action });
     });
   }
 
   /**
-   * Send `action`'s event, withdraw its inbox's unread sends, interrupt its readers, take its
-   * memory's lock, or stop the run.
+   * Send `action`'s event, withdraw its inbox's unread sends, interrupt its readers, release its
+   * held call, take its memory's lock, or stop the run.
    */
   #act(action: Case): void {
+    if (Object.hasOwn(action, "release")) {
+      this.#release(action["release"] as string, action["note"] as string | null);
+      return;
+    }
     if (action["stop"] === true) {
       this.#onStop();
       return;
@@ -1804,8 +1864,8 @@ class Inbox {
     this.#interrupt(action["interrupt"] as string);
   }
 
-  /** Count a `model_call` or `tool_call` of `node`; return its number, `null` unarmed. */
-  count(node: string, what: "model_call" | "tool_call"): bigint | null {
+  /** Count a `model_call`, `tool_call`, `gate_call` or `refusal` of `node`; return its number, `null` unarmed. */
+  count(node: string, what: "model_call" | "tool_call" | "gate_call" | "refusal"): bigint | null {
     if (!this.armed) return null;
     const key = `${what} ${node}`;
     const number = (this.#counts.get(key) ?? 0) + 1;
@@ -2209,11 +2269,19 @@ interface Host {
   stop: { signal: AbortSignal; error: ConformanceStop } | null;
   /** Each tool's calls in order, by tool name, as `{args, call_id, attempt, node}`. */
   calls: Map<string, Case[]>;
+  /** Each call of a stub or the ask slot, in order, with the log's `nextSequence` when it was made. */
+  runs: { callId: string; sequence: number }[];
+  /** With `host.gate`, the run's `beforeToolCall` hook; else `null`. */
+  gate: BeforeToolCall | null;
+  /** With a `resume.gate` mapping, the resume's hook, from its scripts; else `null`. */
+  resumeGate: BeforeToolCall | null;
+  /** Each call the hook was asked about, in order, as `{tool, call_id, node, source, arguments, attempt, scopes}`. */
+  gateCalls: Case[];
   /** Each script entry taken, in order, with the log's `nextSequence` when it was taken. */
   taken: { label: string; entry: Value; sequence: number }[];
   /**
    * Put each entry taken while the log's `nextSequence` was above `last` back at its script's
-   * front, and forget the answers resumable stubs gave then.
+   * front, and forget the answers resumable stubs and the hook gave then.
    */
   putBack: (last: number) => void;
   /** By node, the AGENT calls a resume closes `crashed`, whose results its model requests read as the closer. */
@@ -2221,10 +2289,14 @@ interface Host {
   /**
    * Throw a `CaseFailure` when a script ran out or was missing or a model call's request differed
    * from its entry's; return a message per script with entries left and per `host.stop` or
-   * `host.sends` point never reached. `allowed` names the scripts that may run out, and how many
-   * entries each may leave.
+   * `host.sends` point never reached. `allowed` names the scripts that may run out, how many
+   * entries each may leave, and with `kept`, the only scripts whose entries left count.
    */
-  check: (allowed?: { overruns?: ReadonlySet<string>; left?: ReadonlyMap<string, number> }) => string[];
+  check: (allowed?: {
+    overruns?: ReadonlySet<string>;
+    left?: ReadonlyMap<string, number>;
+    kept?: (label: string) => boolean;
+  }) => string[];
   /** Release the memory locks taken at `held` points. */
   release: () => void;
 }
@@ -2239,11 +2311,14 @@ interface Host {
  * run's log file. The ask slot declares, as extras, every input the `flow`'s TOOL `ask` nodes pass
  * beyond yian's ask surface, such as an `adaptive_questions:` brief's context. At a `host.memory`
  * entry's `held` point, the lock of its memory, in its folder in `memories`, is taken and held
- * until `release`.
+ * until `release`. With `host.gate`, the run's hook takes the next entry of the checked call's tool,
+ * and of its node for a script by node, and reaches the node's `gate_call` points; a `resume.gate`
+ * mapping's hook does the same from its own scripts.
  */
 function host(case_: Case, log: string, env: Env, flow: ComposedFlow, memories?: CaseMemories): Host {
   const spec = get(case_, "host", {}) as Case;
   const calls = new Map<string, Case[]>();
+  const runs: Host["runs"] = [];
   const problems: Problem[] = [];
   const taken: Host["taken"] = [];
   // What each resumable stub answered, by `<where> <call id>`, with the log's `nextSequence` then.
@@ -2277,6 +2352,11 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow, memories?:
     get(spec, "memory", {}) as Case,
     // The run start made `.yian/`; the lock is the one FileMemory takes, so its writes wait.
     (input) => locks.push(lockFile(join(memories!.real(input), ".yian", "lock"), { private: true })),
+    (callId, note) => {
+      const released = release(log, callId, { env, note });
+      released.catch(() => {});
+      delivered.push(released);
+    },
   );
   const scripts = new Map<string, Value[]>(
     Object.entries(get(spec, "human", {}) as Case).map(([node, answers]) => [
@@ -2304,6 +2384,7 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow, memories?:
   /** Record a call to `name`; take its script's next entry, or `null` with no `label` (a pending tool). */
   const call = (name: string, label: string | null, ctx: ToolContext, args: Case): Value => {
     const record = { args, call_id: ctx.callId, attempt: BigInt(ctx.attempt), node: ctx.node };
+    if (ctx.callId !== undefined) runs.push({ callId: ctx.callId, sequence: nextSequence(log) });
     let list = calls.get(name);
     if (list === undefined) calls.set(name, (list = []));
     list.push(record);
@@ -2402,6 +2483,45 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow, memories?:
       scripts.set(`host.models.${node}.${consumer}`, [...(script as Value[])]);
     }
   }
+  const gateCalls: Case[] = [];
+  // What the hook answered each call, by `<label> <call id>`, with the log's `nextSequence` then.
+  const decided = new Map<string, { entry: Value; sequence: number }>();
+  /**
+   * Return the hook `gates`, the scripts at `where`, give: by visible tool name and, for a mapping,
+   * by the calling node. A call sent again after a cut gets the entry it got before; an entry
+   * taken, the check reaches its point before it answers, or after it hands back its Promise for
+   * a `later` entry.
+   */
+  const scriptedGate = (where: string, gates: Value | undefined): BeforeToolCall | null => {
+    if (!isMapping(gates)) return null;
+    for (const [name, script] of Object.entries(gates)) {
+      if (!isMapping(script)) scripts.set(`${where}.${name}`, [...(script as Value[])]);
+      else for (const [node, list] of Object.entries(script)) scripts.set(`${where}.${name}.${node}`, [...(list as Value[])]);
+    }
+    return (call) => {
+      const { tool: name, callId, node, source, attempt } = call;
+      const scopes = call.scopes.map(({ scope, callId: id }) => ({ scope, call_id: id }));
+      gateCalls.push({ tool: name, call_id: callId, node, source: { ...source }, arguments: call.arguments as Case, attempt: BigInt(attempt), scopes });
+      // The run's ask handler and its skill loader are never checked.
+      if (source.kind === "host" && source.group === null && ["ask_user", "load_skill"].includes(name)) {
+        problems.push({ text: `the hook was asked about \`${name}\`, which is never checked` });
+      }
+      const number = inbox.count(node, "gate_call");
+      const label = `${where}.${name}${isMapping(gates[name]) ? `.${node}` : ""}`;
+      let entry = attempt > 1 ? decided.get(`${label} ${callId}`)?.entry : undefined;
+      if (entry === undefined) {
+        entry = take(label, `the hook's check of a call to \`${name}\` from node ${reprText(node)}`);
+        decided.set(`${label} ${callId}`, { entry, sequence: taken.at(-1)!.sequence });
+      }
+      const answer = (): GateDecision => {
+        if (number !== null) inbox.reached(node, { gate_call: number });
+        return gateDecision(entry as Case);
+      };
+      return (entry as Case)["later"] === true ? Promise.resolve().then(answer) : answer();
+    };
+  };
+  const gate = scriptedGate("host.gate", spec["gate"]);
+  const resumeGate = scriptedGate("resume.gate", (get(case_, "resume", {}) as Case)["gate"]);
   const count = (label: string) => taken.filter((item) => item.label === label).length;
   const scripted = scriptedModels(take, problems, inbox, count, crashed);
   // Installed even without `host.models`, so an unscripted model call never reaches a provider.
@@ -2416,11 +2536,11 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow, memories?:
     },
   };
 
-  const check: Host["check"] = ({ overruns = new Set(), left = new Map() } = {}) => {
+  const check: Host["check"] = ({ overruns = new Set(), left = new Map(), kept = () => true } = {}) => {
     const failing = problems.filter(({ overrun }) => overrun === undefined || !overruns.has(overrun));
     if (failing.length > 0) throw new CaseFailure(failing.map(({ text }) => text).join("\n"));
     return [...scripts]
-      .filter(([label, script]) => script.length > (left.get(label) ?? 0))
+      .filter(([label, script]) => kept(label) && script.length > (left.get(label) ?? 0))
       .map(([label, script]) => {
         const entries = script.length === 1 ? "entry" : "entries";
         return `\`${label}\` has ${script.length} ${entries} left`;
@@ -2429,19 +2549,30 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow, memories?:
   };
   const putBack = (last: number): void => {
     // An answer given after the cut goes with its entry, so a call sent again takes it again.
-    for (const [key, { sequence }] of answered) if (sequence > last) answered.delete(key);
+    for (const answers of [answered, decided]) {
+      for (const [key, { sequence }] of answers) if (sequence > last) answers.delete(key);
+    }
     // Taken in `nextSequence` order, so the entries to put back are a tail.
     const first = taken.findIndex(({ sequence }) => sequence > last);
     if (first === -1) return;
     for (const item of taken.splice(first).reverse()) scripts.get(item.label)!.unshift(item.entry);
   };
   const sent = async (): Promise<void> => void (await Promise.all(delivered));
-  const release = () => {
+  const releaseLocks = () => {
     for (const lock of locks.splice(0)) lock.release();
   };
   return {
-    tools: Object.fromEntries(tools), random, models, inbox, stop, calls, taken, putBack, crashed, check, sent, release,
+    tools: Object.fromEntries(tools), random, models, inbox, stop, calls, runs, gate, resumeGate, gateCalls, taken, putBack, crashed,
+    check, sent, release: releaseLocks,
   };
+}
+
+/** Return the decision the `host.gate` entry `entry` gives; a `throw` entry throws its text. */
+function gateDecision(entry: Case): GateDecision {
+  if (Object.hasOwn(entry, "throw")) throw new Error(entry["throw"] as string);
+  if (Object.hasOwn(entry, "hold")) return pending();
+  if (Object.hasOwn(entry, "refuse")) return { refuse: entry["refuse"] as string };
+  return Object.hasOwn(entry, "note") ? { run: true, note: entry["note"] as string } : { run: true };
 }
 
 /** Return a run's `failure` in the case's failure form. */
@@ -2476,9 +2607,9 @@ type TraceRow = readonly [string | null, readonly string[]];
 const TRACE: ReadonlyMap<string, TraceRow> = new Map<string, TraceRow>([
   [
     "run_started",
-    [null, ["num_workers", "defaults", "effective_llm_by_static_path", "call_time_llm", "parent"]],
+    [null, ["num_workers", "defaults", "effective_llm_by_static_path", "call_time_llm", "parent", "gated"]],
   ],
-  ["run_resumed", [null, ["retry_node_ids", "num_workers", "closed_calls"]]],
+  ["run_resumed", [null, ["retry_node_ids", "num_workers", "closed_calls", "gated"]]],
   ["run_stopped", [null, ["reason", "node_ids"]]],
   ["node_waiting", ["node_id", ["call_ids", "waits", "steer_inbox"]]],
   ["node_woken", ["node_id", ["timed_out"]]],
@@ -2641,7 +2772,7 @@ function grouped<T>(entries: readonly T[], nodeOf: (entry: T) => string | null):
   });
 }
 
-/** Return `results` with the trace, events, stream and each tool's calls `grouped` by node. */
+/** Return `results` with the trace, events, stream, each tool's calls and the hook's checks `grouped` by node. */
 export function pooled(results: Record<string, unknown>): Record<string, unknown> {
   // A `NodeFailed` belongs to its failure's node; run events have no `node_id`.
   const eventNode = (event: Value[]): string | null => {
@@ -2686,6 +2817,7 @@ export function pooled(results: Record<string, unknown>): Record<string, unknown
         grouped(calls, (call) => call["node"] as string),
       ]),
     ),
+    gate_calls: grouped(results["gate_calls"] as Case[], (call) => call["node"] as string),
   };
 }
 
@@ -2767,18 +2899,20 @@ async function cutFirstRun(
 }
 
 /**
- * Return the options every run of a case gets: its log, environment and host, on a virtual clock that starts at `start`, with
- * `events` and `chunks` collecting what it publishes.
+ * Return the options every run of a case gets: its log, environment and host (its gate included),
+ * on a virtual clock that starts at `start`, with `events` and `chunks` collecting what it
+ * publishes. A refusal's `ToolCallFinished`, published while the gate writes, reaches its node's
+ * `refusal` point.
  */
 function runHooks(
   log: string,
   env: Env,
-  { tools, random, models }: Host,
+  { tools, random, models, gate, inbox }: Host,
   start: number,
   events: RunEvent[] = [],
   chunks: StreamChunk[] = [],
 ) {
-  return {
+  const options = {
     log,
     env,
     tools,
@@ -2787,11 +2921,46 @@ function runHooks(
     scheduler: virtualScheduler(start),
     onEvent: (event: RunEvent) => {
       events.push(event);
+      if (!(event instanceof ToolCallFinished) || event.error !== "refused") return;
+      const number = inbox.count(event.nodeId, "refusal");
+      if (number !== null) inbox.reached(event.nodeId, { refusal: number });
     },
     onStream: (chunk: StreamChunk) => {
       chunks.push(chunk);
     },
   };
+  return gated(options, gate);
+}
+
+/** Deliver the `host.sends` item `item`, one sent while the run waits, to the run at `log`. */
+async function deliver(log: string, item: Case, env: Env): Promise<void> {
+  if (Object.hasOwn(item, "close")) await close(log, item["close"] as string, { env });
+  else if (Object.hasOwn(item, "withdraw")) await withdraw(log, item["withdraw"] as string, { env });
+  else if (Object.hasOwn(item, "interrupt")) await interrupt(log, item["interrupt"] as string, { env });
+  else if (Object.hasOwn(item, "complete")) await complete(log, item["complete"] as string, completion(item), { env });
+  else if (Object.hasOwn(item, "release")) {
+    await release(log, item["release"] as string, { env, note: get(item, "note", null) as string | null });
+  } else await send(log, item["inbox"] as string, item["event"], { env });
+}
+
+/**
+ * While the run waits, take each of `items` in order and `put` it, then move the run on with `step`
+ * unless the item holds (`hold: true`); `result` `null` is a run that waits for its next item
+ * before it moves. Return the run's last result.
+ */
+async function moveOn(
+  result: RunResult | null,
+  items: Case[],
+  put: (item: Case) => Promise<void>,
+  step: () => Promise<RunResult>,
+): Promise<RunResult | null> {
+  while ((result === null || result.status === "waiting") && items.length > 0) {
+    const item = items.shift()!;
+    await put(item);
+    // A held item leaves the run waiting, so the next item lands on the same wait.
+    if (item["hold"] !== true) result = await step();
+  }
+  return result;
 }
 
 /**
@@ -2799,10 +2968,13 @@ function runHooks(
  * the case directory, its waits on a virtual clock that starts at the real current time; with
  * `host.stop`, the run is stopped at its point. A `resume` case's first run is cut after record
  * `host.crash_after_record` (or, for `end`, runs to its end; with `host.stop`, is stopped) and
- * resumed with the `resume` arguments. Each run and `advance` binds new instances of the
- * `host.memory` memories, in folders under `memory/` in the case directory. Return the results:
- * `trace`, `events`, `stream` (the resume's), `tool_calls` (every run's), `output` or the host
- * error as `raises` and `error` (never compared), `memory` (the folders `expect.memory` names,
+ * resumed with the `resume` arguments, with `resume.gate`'s hook when it gives one (none for
+ * `null`). Each run and `advance` binds new instances of the `host.memory` memories, in folders
+ * under `memory/` in the case directory; each run's held calls must run only once released.
+ * Return the results:
+ * `trace`, `events`, `stream` (the resume's), `tool_calls` and `gate_calls` (every run's), `output`
+ * or the host error as `raises`, the case directory in its message `<tmp>`, and `error` (never
+ * compared), `memory` (the folders `expect.memory` names,
  * after the run), `memory_drift` (the resume's), and `left`, a message per script with entries
  * left.
  */
@@ -2821,13 +2993,13 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   const chunks: StreamChunk[] = [];
   // One clock for every run of the case. `env` scopes the case's YIAN_* values to each run, so
   // nothing is installed around it.
-  const hooks = runHooks(log, env, scripted, Date.now(), events, chunks);
+  let hooks = runHooks(log, env, scripted, Date.now(), events, chunks);
   const inputs = get(case_, "inputs", {}) as Case;
   let signal: { signal?: AbortSignal } = stop === null ? {} : { signal: stop.signal };
   const runArguments = runOptions<RunFlowOptions>(run, RUN_OPTIONS);
   let start = () => runFlow(flow, { ...inputs, ...memories.bind() }, { ...runArguments, ...hooks, ...signal });
   // Each `advance` binds the memories again, as a host does; a case without them passes none.
-  const { memory: resumeMemory, ...resumeArgs } = resume;
+  const { memory: resumeMemory, gate: _gate, ...resumeArgs } = resume;
   const binds = Object.hasOwn(spec, "memory") || resumeMemory !== undefined;
   let bound = () => (binds ? { memory: memories.bind() } : {});
   const roots: [string, string][] = [...memories.roots];
@@ -2860,6 +3032,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
       roots.push(...resumed.roots);
       if (binds) bound = () => ({ memory: resumed.bind() });
       const resumeArguments = runOptions<AdvanceOptions>(resumeArgs, RESUME_OPTIONS);
+      if (Object.hasOwn(resume, "gate")) hooks = gated(hooks, scripted.resumeGate);
       advanceArguments = resumeArguments;
       start = () => advance({ ...resumeArguments, ...hooks, ...bound() });
     }
@@ -2868,20 +3041,17 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
       if (case_["kind"] === "resume") drift = result.memoryDrift.map(({ input }) => input);
       await sent();
       // Each item is delivered while the run waits; the same collectors see every `advance`.
-      while (result.status === "waiting" && sends.length > 0) {
-        const item = sends.shift()!;
-        if (Object.hasOwn(item, "close")) await close(log, item["close"] as string, { env });
-        else if (Object.hasOwn(item, "withdraw")) await withdraw(log, item["withdraw"] as string, { env });
-        else if (Object.hasOwn(item, "interrupt")) await interrupt(log, item["interrupt"] as string, { env });
-        else if (Object.hasOwn(item, "complete")) await complete(log, item["complete"] as string, completion(item), { env });
-        else await send(log, item["inbox"] as string, item["event"], { env });
-        // A held item leaves the run waiting, so the next item lands on the same wait.
-        if (item["hold"] === true) continue;
-        result = await advance({ ...advanceArguments, ...hooks, ...signal, ...bound() });
+      const step = async () => {
+        const moved = await advance({ ...advanceArguments, ...hooks, ...signal, ...bound() });
         await sent();
-      }
+        return moved;
+      };
+      result = (await moveOn(result, sends, (item) => deliver(log, item, env), step))!;
     } catch (error) {
-      caught = { raises: raised(error), error };
+      const form = raised(error);
+      // The case directory is a temporary one.
+      form["message"] = (form["message"] as string).replaceAll(ctx.dir, "<tmp>");
+      caught = { raises: form, error };
     }
   } finally {
     scripted.release();
@@ -2891,7 +3061,10 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   }
   // A call past a script's end is the case's own error, whatever it made differ.
   const left = check();
-  if (existsSync(log)) await checkInvariants(flow, log, { env, tools, models }, result ?? null);
+  if (existsSync(log)) {
+    checkReleasedFirst(log, scripted.runs);
+    await checkInvariants(flow, log, { env, tools, models }, result ?? null);
+  }
   goldenLog(log, ctx);
   const text = existsSync(log) ? readFileSync(log, "utf8") : "";
   const lines = text.split("\n").filter((line) => line !== "");
@@ -2900,6 +3073,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
     events: events.map((event) => eventForm(event, flow)),
     stream: chunks.map((chunk) => fields(chunk, flow)),
     tool_calls: Object.fromEntries([...calls].map(([name, list]) => [name, list.map(dataForm)])),
+    gate_calls: scripted.gateCalls.map(dataForm),
     ...(result !== undefined ? { output: output(result, flow) } : {}),
   };
   const texts = {
@@ -2923,9 +3097,9 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
 }
 
 /** The results `--write-expect` writes back. */
-const REWRITTEN: readonly string[] = ["trace", "events", "stream", "tool_calls"];
-/** The results that compare numbers by value: a run's events, stream and tool calls. */
-const BY_VALUE: ReadonlySet<string> = new Set(["events", "stream", "tool_calls"]);
+const REWRITTEN: readonly string[] = ["trace", "events", "stream", "tool_calls", "gate_calls"];
+/** The results that compare numbers by value: a run's events, stream, tool calls and hook checks. */
+const BY_VALUE: ReadonlySet<string> = new Set(["events", "stream", "tool_calls", "gate_calls"]);
 
 /**
  * Throw a `CaseFailure` unless the results in `actual` are the ones `expect` holds: the raised
@@ -3044,8 +3218,8 @@ function goldenLog(log: string, ctx: CaseContext): void {
  * a crash sweep): at every prefix, at most the segment's `num_workers` nodes are in flight (1 when
  * 0; a waiting node isn't, nor a woken TOOL node); no record follows the run's terminal outcome;
  * after a `run_stopped` only node steps until a `run_resumed`; `inspectRun` with the flow reads a
- * replay's status, in-flight nodes, crashed counts and failure, and the log's run id, schema, flow
- * fingerprint and last seq (and no waits), and without it the same except in its one blind
+ * replay's status, in-flight nodes, crashed counts, failure and waits, and the log's run id, schema,
+ * flow fingerprint and last seq, and without it the same except in its one blind
  * corner (nothing in flight, a node still ready, and END succeeded or proved unreachable); a finished
  * run's counts are `result`'s; and a finished log resumed with `options` gives the same status and
  * output and appends nothing.
@@ -3113,12 +3287,14 @@ async function checkInvariants(
   const state = replay(envelopes.length);
   const terminal = state.result;
   const finished = terminal === null ? null : terminal instanceof RunSucceeded ? "succeeded" : "failed";
+  const status = finished ?? unfinishedStatus(state.waits, state.lastStopSequence);
+  const waiting = status === "waiting";
   const counts = new Map(state.crashedAttempts);
-  if (finished === null) addCrashedAttempts(counts, state.acceptedStarts, state.lastStopSequence);
+  if (status === "crashed" || status === "stopped") addCrashedAttempts(counts, state.acceptedStarts, state.lastStopSequence);
   const first = envelopes[0]!;
   const started = first.record as RunStartedRecord;
   const expected = {
-    status: finished ?? (state.lastStopSequence === null ? "crashed" : "stopped"),
+    status,
     inFlight: finished === null ? [...state.acceptedStarts.keys()] : [],
     crashedAttempts: Object.fromEntries(counts),
     runId: first.runId,
@@ -3128,10 +3304,9 @@ async function checkInvariants(
     startedAt: first.at,
     endedAt: finished === null ? null : envelopes.at(-1)!.at,
     failure: terminal instanceof RunFailed ? failureForm(terminal.failure, flow) : null,
-    // No case waits yet, so the replay's waits read as none.
-    waits: [],
-    ready: false,
-    wakeAt: null,
+    waits: waiting ? waitInfos(state.waits) : [],
+    ready: waiting && wakeableNodes(state.waits).length > 0,
+    wakeAt: waiting ? wakeAt(state.waits) : null,
   };
   const form = (inspection: RunInspection) => ({
     ...inspection,
@@ -3167,6 +3342,27 @@ async function checkInvariants(
   if (result !== null) compare(`resumed output${at}`, output(reopened, flow), output(result, flow));
 }
 
+/**
+ * @internal Throw a `CaseFailure` (`at` saying where) unless each of `runs`, the stub calls of a
+ * run logged at `log`, of a call the log holds a hold for came after a `released` step for it:
+ * the log held that step when the stub was called.
+ */
+export function checkReleasedFirst(log: string, runs: Host["runs"], at = ""): void {
+  const held = new Set<string>();
+  const released = new Map<string, number>();
+  for (const { record, seq } of readRunLog(log)) {
+    if (!(record instanceof NodeStepRecord)) continue;
+    const callId = record.step["call_id"] as string;
+    if (record.step["kind"] === "pending" && record.step["held"] === true) held.add(callId);
+    if (record.step["kind"] === "released" && !released.has(callId)) released.set(callId, seq);
+  }
+  for (const { callId, sequence } of runs) {
+    if (held.has(callId) && !((released.get(callId) ?? sequence) < sequence)) {
+      throw new CaseFailure(`held call ${callId} ran before a \`released\` step for it${at}`);
+    }
+  }
+}
+
 /** The trace entries of node outcomes, which a crash sweep's strong oracle compares. */
 const OUTCOMES: ReadonlySet<string> = new Set([
   "node_succeeded", "node_routed", "node_expanded", "node_failed",
@@ -3175,10 +3371,11 @@ const OUTCOMES: ReadonlySet<string> = new Set([
 /**
  * Return the node outcome entries of a run log's trace `entries`, each success's `commit` replaced
  * by the trace fields of the `pool_commit` it names, whose `from` seqs are given as the kind and
- * node of the record each names, and its `messages` by the messages commit's fields, each of whose
- * `steps` is given as its step's node and kind (a resumed call-time agent records its config
- * again, so step numbers move): successes, `from` and `steps` name records by seq, and a resume
- * adds records, so a crash sweep compares the records instead.
+ * node of the record each names and a take commit's `events` as the send commits' trace entries,
+ * and its `messages` by the messages commit's fields, each of whose `steps` is given as its step's
+ * node and kind (a resumed call-time agent records its config again, so step numbers move):
+ * successes, `from`, `events` and `steps` name records by seq, and a resume adds records, so a
+ * crash sweep compares the records instead.
  */
 export function sourcesByRecord(entries: readonly Value[][]): Value[][] {
   const kept = entries.filter(([kind]) => OUTCOMES.has(kind as string));
@@ -3188,6 +3385,7 @@ export function sourcesByRecord(entries: readonly Value[][]): Value[][] {
     const named = entries[Number(commit)];
     if (named?.[0] !== "pool_commit") throw new CaseFailure(`a success names seq ${commit}, which isn't a pool_commit`);
     const fields = { ...((named[2] ?? {}) as Case) };
+    if (Array.isArray(fields["events"])) fields["events"] = fields["events"].map((seq) => spell(entries[Number(seq)]));
     if (isMapping(fields["from"])) {
       fields["from"] = Object.fromEntries(
         Object.entries(fields["from"]).map(([name, seq]) => {
@@ -3212,38 +3410,114 @@ export function sourcesByRecord(entries: readonly Value[][]): Value[][] {
   return kept;
 }
 
+/** An AGENT tool call a cut cut off: its tool's name, its yian call id, and whether the cut log holds its hold. */
+interface CutCall {
+  readonly name: string;
+  readonly callId: string;
+  readonly held: boolean;
+}
+
 /**
  * Return, by node, the AGENT tool calls a cut after record `k` of the uncut run's `records` cuts
- * off: each call a reply up to `k` made, with no result up to `k`, that the uncut run made
- * (`made` holds the yian ids, `<run>/<node>/<n>/<index>`, of its calls to stubs and of those it
- * sent to tool modules' threads but a resumable tool's), by call id with its tool's name. These are
- * the calls a resume closes `crashed`; a call the agent never made (an ungranted tool, a reply past
- * its tool-call limit) has nothing to cut off. A memory tool's call isn't a host call, so it is
- * never here: memory tools are resumable, and the resume sends it again.
+ * off: each call a reply up to `k` made, with no result up to `k`, that the uncut run made (`made` holds the yian ids,
+ * `<run>/<node>/<n>/<index>`, of its calls to stubs, of those it sent to tool modules' threads but
+ * a resumable tool's, and of those the hook was asked about), by call id. These are the calls a
+ * resume closes `crashed`; a call the agent never made (an ungranted tool, a reply past its
+ * tool-call limit) has nothing to cut off. A memory tool's call isn't a host call, so it is
+ * never here: memory tools are resumable, and the resume sends it again. A call a `pending` step
+ * registered (its tool pended) is cut off only when its node is in flight at the cut and the step
+ * came after the node's last wake, as a resume closes it; else it waits for its host's answer.
+ * Holds narrow it, as the log shows: a held call starts only in an evaluation after its release
+ * that no interrupt preceded, and a call behind a hold of its reply (a later group's) only once
+ * every such hold has its record, in an evaluation after the last of their answers and releases.
  */
 function cutCalls(
   records: readonly RecordEnvelope[],
   k: number,
   runId: string,
   made: ReadonlySet<string>,
-): Map<string, Map<string, string>> {
-  const cut = new Map<string, Map<string, string>>();
-  for (const { record } of records.slice(0, k + 1)) {
+): Map<string, Map<string, CutCall>> {
+  const cut = new Map<string, Map<string, CutCall & { n: number; index: number }>>();
+  // What the records up to `k` hold: each node's latest reply (provider id to yian id), the hold
+  // steps, releases and records by yian id, and each node's starts, wakes and interrupts.
+  const replies = new Map<string, Map<string, string>>();
+  const holds = new Map<string, { node: string; n: number; groupEnd: number; seq: number }>();
+  const released = new Map<string, number>();
+  const recorded = new Map<string, number>();
+  const evaluations = new Map<string, number[]>();
+  const interrupts = new Map<string, number[]>();
+  const registered = new Map<string, number>();
+  const running = new Set<string>();
+  const note = (seqs: Map<string, number[]>, node: string, seq: number) => seqs.set(node, [...(seqs.get(node) ?? []), seq]);
+  for (const { record, kind, payload, seq } of records.slice(0, k + 1)) {
+    const node = (kind === "node_failed" ? (payload["failure"] as Case)["node_id"] : payload["node_id"]) as string;
+    if (kind === "node_started" || kind === "node_woken") {
+      note(evaluations, node, seq);
+      running.add(node);
+    }
+    if (["node_waiting", "node_succeeded", "node_routed", "node_failed"].includes(kind)) running.delete(node);
+    if (kind === "interrupted") for (const each of payload["nodes"] as string[]) note(interrupts, each, seq);
     if (!(record instanceof NodeStepRecord)) continue;
     const { step, nodeId, n } = record;
-    if (step["kind"] === "tool_result") cut.get(nodeId)?.delete(step["call_id"] as string);
+    if (step["kind"] === "tool_result") {
+      const callId = replies.get(nodeId)?.get(step["call_id"] as string);
+      if (callId !== undefined) recorded.set(callId, seq);
+      cut.get(nodeId)?.delete(step["call_id"] as string);
+    }
+    if (step["kind"] === "pending" && step["held"] === true) {
+      holds.set(step["call_id"] as string, { node: nodeId, n: Number(step["reply"]), groupEnd: Number(step["group_end"]), seq });
+    } else if (step["kind"] === "pending") {
+      recorded.set(step["call_id"] as string, seq);
+      registered.set(step["call_id"] as string, seq);
+    }
+    if (step["kind"] === "released") released.set(step["call_id"] as string, seq);
     if (step["kind"] !== "model_call") continue;
     const parts = ((step["output"] as JsonObject | null)?.["parts"] ?? []) as JsonObject[];
     const calls = parts.filter((part) => part["type"] === "tool_call");
+    replies.set(nodeId, new Map(calls.map((part, index) => [part["id"] as string, `${runId}/${nodeId}/${n}/${index}`])));
     for (const [index, part] of calls.entries()) {
-      if (!made.has(`${runId}/${nodeId}/${n}/${index}`)) continue;
+      const callId = `${runId}/${nodeId}/${n}/${index}`;
+      if (!made.has(callId)) continue;
       let open = cut.get(nodeId);
       if (open === undefined) cut.set(nodeId, (open = new Map()));
-      open.set(part["id"] as string, part["name"] as string);
+      open.set(part["id"] as string, { name: part["name"] as string, callId, held: false, n, index });
     }
   }
-  for (const [node, calls] of cut) if (calls.size === 0) cut.delete(node);
-  return cut;
+  const evaluatedAfter = (node: string, seq: number) => (evaluations.get(node) ?? []).some((each) => each > seq);
+  const lastWake = (node: string) => records.slice(0, k + 1).findLast((each) => each.kind === "node_woken" && each.payload["node_id"] === node)?.seq ?? -1;
+  // A sweep delivers items only while the run waits, so an interrupt here landed while its node
+  // waited, when every call it had started had its record: a call with none at the cut never
+  // started before the interrupt, and none starts after it (the agent honors it).
+  const interruptedAfter = (node: string, seq: number) => (interrupts.get(node) ?? []).some((each) => each > seq);
+  /** Whether a call of `node`'s reply `n` at `index` got past every hold before its group. */
+  const pastHolds = (node: string, n: number, index: number): boolean => {
+    let decided = -1;
+    for (const [callId, hold] of holds) {
+      if (hold.node !== node || hold.n !== n || hold.groupEnd >= index) continue;
+      const answer = recorded.get(callId);
+      if (answer === undefined || interruptedAfter(node, hold.seq)) return false;
+      decided = Math.max(decided, released.get(callId) ?? answer);
+    }
+    return decided === -1 || evaluatedAfter(node, decided);
+  };
+  const result = new Map<string, Map<string, CutCall>>();
+  for (const [node, open] of cut) {
+    const kept = new Map<string, CutCall>();
+    for (const [id, { name, callId, n, index }] of open) {
+      const hold = holds.get(callId);
+      const release = released.get(callId);
+      const registration = registered.get(callId);
+      const started =
+        registration !== undefined
+          ? running.has(node) && registration > lastWake(node)
+          : hold === undefined
+            ? pastHolds(node, n, index)
+            : release !== undefined && !interruptedAfter(node, hold.seq) && evaluatedAfter(node, release);
+      if (started) kept.set(id, { name, callId, held: hold !== undefined });
+    }
+    if (kept.size > 0) result.set(node, kept);
+  }
+  return result;
 }
 
 /** Return `calls`, `[node, call id]` pairs, as one sorted text for a message. */
@@ -3272,6 +3546,13 @@ export function scriptLabel(spec: Case, node: string, name: string): string {
 function stubCalled(spec: Case, name: string): StubTool | undefined {
   const stubs = stubTools(spec);
   return stubs.find((each) => each.shown === name) ?? stubs.find((each) => each.own === name);
+}
+
+/** Return the label of each `host.gate` script: `host.gate.<tool>`, or `host.gate.<tool>.<node>`. */
+function gateLabels(spec: Case): string[] {
+  return Object.entries(get(spec, "gate", {}) as Case).flatMap(([tool, script]) =>
+    isMapping(script) ? Object.keys(script).map((node) => `host.gate.${tool}.${node}`) : [`host.gate.${tool}`],
+  );
 }
 
 /** One stub tool `host.tools` declares: where, its stub, its visible name and its own name. */
@@ -3309,18 +3590,43 @@ function stubTools(spec: Case): StubTool[] {
 
 /**
  * Return whether `case_` gets a crash sweep: a serial `run` case expecting `output`, not
- * `pending`, with no `host.stop`, `host.sends` (an interrupt item among them) or `held` memory.
+ * `pending`, with no `host.stop`, no `host.sends` item but those sent while the run waits (no
+ * `after` or `down`), and no `held` memory.
  */
 export function sweepable(case_: Case): boolean {
   const spec = get(case_, "host", {}) as Case;
+  const live = (item: Value) => Object.hasOwn(item as Case, "after") || Object.hasOwn(item as Case, "down");
   return (
     case_["kind"] === "run" &&
     isZero(get(get(case_, "run", {}) as Case, "num_workers", 8n)) &&
     Object.hasOwn(case_["expect"] as Case, "output") &&
     !Object.hasOwn(case_, "pending") &&
-    !["stop", "sends"].some((key) => Object.hasOwn(spec, key)) &&
+    !Object.hasOwn(spec, "stop") &&
+    !(get(spec, "sends", []) as Value[]).some(live) &&
     !Object.values(get(spec, "memory", {}) as Case).some((entry) => Object.hasOwn(entry as Case, "held"))
   );
+}
+
+/**
+ * Return, by yian call id (`<run>/<node>/<n>/<index>`), the first `tool_result` step `records`
+ * hold for each AGENT tool call of run `runId`: a result names its call by the provider's id in its
+ * node's latest reply.
+ */
+function agentResults(records: readonly RecordEnvelope[], runId: string): Map<string, Case> {
+  const replies = new Map<string, Map<string, string>>();
+  const results = new Map<string, Case>();
+  for (const { record } of records) {
+    if (!(record instanceof NodeStepRecord)) continue;
+    const { step, nodeId, n } = record;
+    if (step["kind"] === "model_call") {
+      const parts = ((step["output"] as JsonObject | null)?.["parts"] ?? []) as JsonObject[];
+      const calls = parts.filter((part) => part["type"] === "tool_call");
+      replies.set(nodeId, new Map(calls.map((part, index) => [part["id"] as string, `${runId}/${nodeId}/${n}/${index}`])));
+    }
+    const callId = step["kind"] === "tool_result" ? replies.get(nodeId)?.get(step["call_id"] as string) : undefined;
+    if (callId !== undefined && !results.has(callId)) results.set(callId, step as Case);
+  }
+  return results;
 }
 
 /**
@@ -3330,18 +3636,27 @@ export function sweepable(case_: Case): boolean {
  * runs again), the invariants are checked at the cut, `beforeResume` (for a test, to damage the log
  * or the cut's memory folders, by input name) runs, and the run is resumed. Each run binds new
  * memories in folders of its own, `sweep-memory/` for the uncut run and `sweep-<k>-memory/` for
- * cut `k`, and the resume binds new instances on the cut's folders. A cut inside the run start (before the START inputs' commit) must instead be
- * refused by the resume, leaving the log as it is. The resume must end with a result whose invariants hold,
- * close `crashed` exactly the AGENT tool calls the cut cut off before their result (`cutCalls`) but
- * those to resumable stubs and module tools, which it sends again, pass its
- * host's `check()` with no entry left, and leave no filled secret in its log, as the uncut run's
- * log must not. For each call closed `crashed`, the script its call took from may keep one entry,
- * the agent's `host.models` script may run out, and the agent's later scripted requests read the
- * call's result as the closer. The cut's memory folders must then hold what `expect.memory` says,
- * and no log a memory's folder. With no
- * `host.human` or `host.jitter` and only `return` entries in its tool scripts, the strong oracle
- * also holds: the same output, and the same node outcome entries in the trace, in order, with each
- * record a success names given by its kind and node rather than its seq.
+ * cut `k`, and the resume binds new instances on the cut's folders. Every run delivers the
+ * `host.sends` items as the run waits: the uncut run all of them, the cut run those before the cut,
+ * and the resume the rest, those of a wait the cut log already holds before it advances. A cut
+ * inside the run start (before the START inputs' commit) must instead be refused by the resume,
+ * leaving the log as it is. The resume must end with a result whose invariants hold, run no
+ * non-resumable stub's AGENT call twice across the cut and the resume, run once a released call
+ * whose first evaluation after its release the cut log lacks, run a held call's stub only after a
+ * `released` step for it (as the uncut run must), close `crashed` exactly the AGENT tool calls the
+ * cut cut off before their record (`cutCalls`) but the resumable ones, which it sends again unless
+ * the cut log lacks the hold the uncut run gave it, skip an item naming a call it closed and deliver
+ * every other, pass its host's `check()` with no entry left, and leave no filled secret in its log,
+ * as the uncut run's log must not. For each call closed `crashed`, the script its call took from and
+ * its tool's gate script may each keep one entry, the agent's `host.models` script may run out, and
+ * the agent's later scripted requests read the call's result as the closer. The resume ends as the
+ * uncut run did, and the cut's memory folders must then hold what `expect.memory` says, and no log a
+ * memory's folder. With no `host.human` or `host.jitter` and only `return` entries in its tool
+ * scripts, the strong oracle also holds: the same output, and the same node outcome entries in the
+ * trace, in order, with each record a success names given by its kind and node rather than its seq.
+ * A closed call the uncut run waited on after the cut changes the course: then the resume is held to
+ * neither the oracle, the memory contents nor the items, may end failed past an allowed model
+ * script, and keeps only stub script entries of calls it skipped.
  */
 export async function crashSweep(
   case_: Case,
@@ -3367,21 +3682,44 @@ export async function crashSweep(
   const start = Date.now();
   const inputs = get(case_, "inputs", {}) as Case;
   const args = runOptions<RunFlowOptions>(get(case_, "run", {}) as Case, RUN_OPTIONS);
+  const advanceArgs = runOptions<AdvanceOptions>(
+    Object.fromEntries(Object.entries(get(case_, "run", {}) as Case).filter(([key]) => Object.hasOwn(RESUME_OPTIONS, key))),
+    RESUME_OPTIONS,
+  );
+  // A case without memories passes no memory option, as before.
+  const binds = Object.hasOwn(spec, "memory");
+  const items = get(spec, "sends", []) as Case[];
+  /**
+   * Run `start`, then deliver `rest`'s items as the run waits, taking each from it, each `advance`
+   * with `hooks` and new `memories`; `sizes` gets the log's record count after each delivery.
+   */
+  const drive = async (log: string, hooks: object, memories: CaseMemories, start: () => Promise<RunResult>, rest: Case[], sizes: number[] = []) => {
+    const put = async (item: Case) => {
+      await deliver(log, item, env);
+      sizes.push(nextSequence(log));
+    };
+    const step = () => advance({ ...advanceArgs, ...hooks, ...(binds ? { memory: memories.bind() } : {}) });
+    return (await moveOn(await start(), rest, put, step))!;
+  };
   const uncutLog = join(ctx.dir, "sweep.jsonl");
   const uncutMemories = await caseMemories(spec, join(ctx.dir, "sweep-memory"), env, flow);
   const uncutHost = host(case_, uncutLog, env, flow, uncutMemories);
   const uncutHooks = runHooks(uncutLog, env, uncutHost, start);
   // A module's tool runs on its own thread, where no stub sees it: its calls count as sent there.
-  const sent: [callId: string, module: string, tool: string][] = [];
+  const sent: string[] = [];
+  // The uncut run's record count after each item it delivered, which says which items a cut holds.
+  const sizes: number[] = [];
+  const startUncut = () => runFlow(flow, { ...inputs, ...uncutMemories.bind() }, { ...args, ...uncutHooks });
+  const unsent = [...items];
   const uncut = await withModuleCalls(
-    (call, module, tool) => sent.push([call.callId, module, tool]),
-    () => runFlow(flow, { ...inputs, ...uncutMemories.bind() }, { ...args, ...uncutHooks }),
+    ({ callId }) => void (callId !== undefined && sent.push(callId)),
+    () => drive(uncutLog, uncutHooks, uncutMemories, startUncut, unsent, sizes),
   );
+  if (unsent.length > 0) throw new CaseFailure(`the uncut run (crash sweep) ended with ${itemsText(unsent.length)} undelivered`);
+  checkReleasedFirst(uncutLog, uncutHost.runs, " (crash sweep, the uncut run)");
   const uncutText = { "the uncut run log (crash sweep)": readFileSync(uncutLog, "utf8") };
   checkSecrets(case_, uncutText);
   checkNoRoots(uncutMemories.roots, uncutText);
-  // A case without memories passes no memory option, as before.
-  const binds = Object.hasOwn(spec, "memory");
   const expectMemory = get(case_["expect"] as Case, "memory");
   const outcomes = (log: string) => {
     const lines = readFileSync(log, "utf8").split("\n").filter((line) => line !== "");
@@ -3390,12 +3728,73 @@ export async function crashSweep(
   const expected = outcomes(uncutLog);
   const uncutRecords = readRunLog(uncutLog);
   const count = uncutRecords.length;
-  const made = new Set([...uncutHost.calls.values()].flatMap((list) => list.map(({ call_id }) => call_id as string)));
-  // A resume sends a resumable module tool's cut call again, as it does a resumable stub's.
-  const recorded = sent.length === 0 ? {} : (uncutRecords[0]!.record as RunStartedRecord).toolModules;
-  for (const [callId, module, tool] of sent) {
-    if (recorded[module]?.find(({ name }) => name === tool)?.resumable !== true) made.add(callId);
+  const ran = new Set([...uncutHost.calls.values()].flatMap((list) => list.map(({ call_id }) => call_id as string)));
+  const made = new Set([...ran, ...sent]);
+  // A call the hook was asked about may have run for all a log cut before its decision's record
+  // shows. A memory or flow tool's call reaches no host, and is sent again.
+  const hostless = new Set<string>();
+  for (const { call_id: callId, source } of uncutHost.gateCalls) {
+    made.add(callId as string);
+    if (["memory", "flow"].includes((source as Case)["kind"] as string)) hostless.add(callId as string);
   }
+  const resumableTools = new Set(get(spec, "resumable_tools", []) as string[]);
+  /** Whether a resume sends a cut call to tool `name` again, rather than closing it `crashed`. */
+  const resumable = (name: string, callId: string) =>
+    hostless.has(callId) || resumableTools.has(name) || stubCalled(spec, name)?.stub["resumable"] === true;
+  // Every AGENT call of the uncut run with its tool's name, the seq of each reply, each call's
+  // `pending` steps (registrations and holds) and release, the seq of each hold, and each released
+  // call it ran with the seq of its node's first start or wake after the release.
+  const agentCalls = new Map<string, string>();
+  const replySeqs = new Map<string, number>();
+  const pendings = new Map<string, number[]>();
+  const releases = new Map<string, number>();
+  const heldCalls = new Map<string, number>();
+  const holdReplies: { reply: string; groupEnd: number; seq: number }[] = [];
+  const releasedWakes = new Map<string, number>();
+  for (const { record, seq } of uncutRecords) {
+    if (!(record instanceof NodeStepRecord)) continue;
+    const { step, nodeId, n } = record;
+    const callId = step["call_id"] as string;
+    if (step["kind"] === "pending") pendings.set(callId, [...(pendings.get(callId) ?? []), seq]);
+    if (step["kind"] === "pending" && step["held"] === true) {
+      heldCalls.set(callId, seq);
+      holdReplies.push({ reply: `${uncut.runId}/${nodeId}/${String(step["reply"])}`, groupEnd: Number(step["group_end"]), seq });
+    }
+    if (step["kind"] === "model_call") {
+      replySeqs.set(`${uncut.runId}/${nodeId}/${n}`, seq);
+      const parts = ((step["output"] as JsonObject | null)?.["parts"] ?? []) as JsonObject[];
+      parts
+        .filter((part) => part["type"] === "tool_call")
+        .forEach((part, index) => agentCalls.set(`${uncut.runId}/${nodeId}/${n}/${index}`, part["name"] as string));
+    }
+    if (step["kind"] !== "released") continue;
+    releases.set(callId, seq);
+    if (!ran.has(callId)) continue;
+    const wake = uncutRecords.find((each) => each.seq > seq && ["node_started", "node_woken"].includes(each.kind) && each.payload["node_id"] === nodeId);
+    if (wake !== undefined) releasedWakes.set(callId, wake.seq);
+  }
+  // A call that waited behind a hold was planned, though never checked: a log cut before the
+  // hold's step shows it as a call that may have run. An exempt call, or one refused before its
+  // tool (its result records no start and no closer), reaches no host.
+  const uncutResults = agentResults(uncutRecords, uncut.runId);
+  for (const { reply, groupEnd } of holdReplies) {
+    for (const [callId, name] of agentCalls) {
+      const result = uncutResults.get(callId);
+      const refused = result !== undefined && result["started_at"] === null && result["closed"] === undefined;
+      const behind = callId.startsWith(`${reply}/`) && Number(callId.slice(reply.length + 1)) > groupEnd;
+      if (behind && !refused && !["ask_user", "load_skill"].includes(name)) made.add(callId);
+    }
+  }
+  /**
+   * Whether the uncut run waited on call `callId` after a cut after record `k`: the cut log lacks
+   * a registration or hold of it, or holds one no release followed by the cut.
+   */
+  const awaited = (callId: string, k: number): boolean => {
+    const seqs = pendings.get(callId) ?? [];
+    const last = seqs.findLast((seq) => seq <= k);
+    const released = releases.get(callId) ?? Infinity;
+    return seqs.some((seq) => seq > k) || (last !== undefined && !(last < released && released <= k));
+  };
   // The run start's last record is the START inputs' commit, the first whose key is its node.
   const inputsCommit = uncutRecords.findIndex(({ kind, record }) => {
     const { nodeId, key } = record as { nodeId?: string; key?: string };
@@ -3408,9 +3807,12 @@ export async function crashSweep(
     const memory = () => (binds ? { memory: memories.bind() } : {});
     const scripted = host(case_, log, env, flow, memories);
     const hooks = runHooks(log, env, scripted, start);
+    // The module calls of the cut run and the resume, by call id with their attempts.
+    const moduleCalls: [string, number][] = [];
+    const onModule = ({ callId, attempt }: ToolContext) => void (callId !== undefined && moduleCalls.push([callId, attempt]));
     // The uncut run's id, so the runs agree on it when the case gives none.
     const cut = () => runFlow(flow, { ...inputs, ...memories.bind() }, { ...args, ...hooks, runId: uncut.runId });
-    await cutAt(k, cut, at);
+    await withModuleCalls(onModule, () => cutAt(k, () => drive(log, hooks, memories, cut, [...items]), at));
     // A node's commit and its success are written with nothing awaited between them, so a cut
     // right after a commit is a crash before the success: the node runs again and takes its
     // script entries again. Entries taken up to the node's last record before the commit stay,
@@ -3439,14 +3841,31 @@ export async function crashSweep(
     await checkInvariants(flow, log, reopen, null, at);
     beforeResume(log, memories.roots);
     const open = cutCalls(uncutRecords, k, uncut.runId, made);
-    // The resume sends a resumable stub's cut calls again and reads their answers, so it closes
-    // only the others, and only theirs get a script allowance and a model overrun.
+    // Each call the cut cut off, resumable or not: the resume closes it or sends it again.
+    const cutOff = [...open].flatMap(([node, calls]) => [...calls].map(([id, call]) => ({ node, id, ...call })));
+    // The resume sends a resumable call again and reads its answer, so it closes only the others,
+    // and only theirs get a script allowance and a model overrun. A call the uncut run held, cut
+    // before its hold, is held again when sent again, which closes it.
     for (const [node, calls] of open) {
-      for (const [id, name] of calls) if (stubCalled(spec, name)?.stub["resumable"] === true) calls.delete(id);
+      for (const [id, { name, callId, held }] of calls) {
+        if (resumable(name, callId) && (held || !heldCalls.has(callId))) calls.delete(id);
+      }
       if (calls.size === 0) open.delete(node);
     }
+    // A cut between a reply and the hold its uncut run wrote loses the hook's decisions on it, so
+    // the resume checks the reply's calls anew, and the hook may be asked what the uncut run never
+    // asked it.
+    const lost = holdReplies.some(({ reply, seq }) => seq > k && replySeqs.get(reply)! <= k);
     for (const [node, calls] of open) scripted.crashed.set(node, new Set(calls.keys()));
+    const closing = new Set([...open.values()].flatMap((calls) => [...calls.values()].map(({ callId }) => callId)));
+    // A call the uncut run waited on after the cut, closed `crashed`, lets the resumed agent go on
+    // at once with the closer, so the course may change. A released call isn't waited on.
+    const changed = [...closing].some((callId) => awaited(callId, k));
+    // The stub, hook and module calls before the resume: the resume's are the ones after.
+    const stubsBefore = new Map([...scripted.calls].map(([name, list]) => [name, list.length]));
+    const [checksBefore, modulesBefore] = [scripted.gateCalls.length, moduleCalls.length];
     let resumed: RunResult;
+    let undelivered: Case[];
     try {
       // The cut run's `context`, host key and header values, which the log doesn't hold, as a
       // `resume` case passes them again.
@@ -3454,39 +3873,98 @@ export async function crashSweep(
       const { api_key: apiKey, headers } = (args.llmConfig ?? {}) as Pick<AdvanceOptions, "headers"> & {
         api_key?: string;
       };
-      resumed = await advance({ ...hooks, ...context, apiKey, headers, ...memory() });
+      const step = () => advance({ ...advanceArgs, ...hooks, ...context, apiKey, headers, ...memory() });
+      // The items the cut log lacks, by the uncut run's record counts; an item naming a call the
+      // resume closed is skipped. The rest of a wait the cut log holds is delivered before it moves.
+      const rest = items.slice(sizes.filter((size) => size <= k + 1).length);
+      const waits = items[items.length - rest.length - 1]?.["hold"] === true;
+      const skips = (item: Case) => closing.has((item["complete"] ?? item["release"]) as string);
+      const put = async (item: Case) => {
+        if (!skips(item)) await deliver(log, item, env);
+      };
+      resumed = (await withModuleCalls(onModule, async () => moveOn(waits ? null : await step(), rest, put, step)))!;
+      undelivered = rest.filter((item) => !skips(item));
     } catch (error) {
       throw new CaseFailure(`the resume raised${at}\n${failureText(error)}`);
     }
+    if (undelivered.length > 0 && !changed) {
+      throw new CaseFailure(`the resume ended with ${itemsText(undelivered.length)} undelivered${at}`);
+    }
+    checkReleasedFirst(log, scripted.runs, at);
+    // At most once: no non-resumable stub ran an AGENT call twice across the cut and the resume,
+    // and a released call whose hold the cut log holds, but not its first evaluation after the
+    // release, ran once.
+    const runs = new Map<string, number>();
+    for (const [name, list] of scripted.calls) {
+      for (const { call_id: callId } of list) runs.set(callId as string, (runs.get(callId as string) ?? 0) + 1);
+      if (stubCalled(spec, name)?.stub["resumable"] === true) continue;
+      for (const { call_id: callId } of list) {
+        const times = runs.get(callId as string)!;
+        if (agentCalls.has(callId as string) && times > 1) {
+          throw new CaseFailure(`\`${name}\` ran call ${callId} ${times} times across the cut and the resume${at}`);
+        }
+      }
+    }
+    for (const [callId, wake] of releasedWakes) {
+      const times = runs.get(callId) ?? 0;
+      if (heldCalls.get(callId)! <= k && k < wake && times !== 1) {
+        throw new CaseFailure(`released call ${callId} ran ${times} times, though the cut came before its first evaluation${at}`);
+      }
+    }
     // The calls the cut left open are closed `crashed`, not made again, and only they.
-    const closed = callNames(
-      readRunLog(log)
-        .slice(k + 1)
-        .flatMap(({ record }) =>
-          record instanceof NodeStepRecord && record.step["closed"] === "crashed"
-            ? [[record.nodeId, record.step["call_id"] as string] as const]
-            : [],
-        ),
-    );
+    const records = readRunLog(log);
+    const after = records.slice(k + 1).flatMap(({ record }) => (record instanceof NodeStepRecord ? [record] : []));
+    const crashed = after.filter(({ step }) => step["closed"] === "crashed").map(({ nodeId, step }) => [nodeId, step["call_id"] as string] as const);
+    const closed = callNames(crashed);
     const expectedClosed = callNames([...open].flatMap(([node, calls]) => [...calls.keys()].map((id) => [node, id] as const)));
     if (closed !== expectedClosed) {
       throw new CaseFailure(`the resume closed [${closed}] crashed, but the cut cut off [${expectedClosed}]${at}`);
     }
+    // Each resumable call the cut cut off, and the resume didn't close, was sent again: its stub or
+    // module ran it, or the hook checked it, with an attempt above 1. A released memory or flow
+    // call reaches neither, so its answer is checked instead: anything but a skip.
+    const resent = new Set<string>();
+    for (const [name, list] of scripted.calls) {
+      for (const { call_id: callId, attempt } of list.slice(stubsBefore.get(name) ?? 0)) if ((attempt as bigint) > 1n) resent.add(callId as string);
+    }
+    for (const { call_id: callId, attempt } of scripted.gateCalls.slice(checksBefore)) if ((attempt as bigint) > 1n) resent.add(callId as string);
+    for (const [callId, attempt] of moduleCalls.slice(modulesBefore)) if (attempt > 1) resent.add(callId);
+    const crashedIds = new Set(crashed.map(([node, id]) => `${node} ${id}`));
+    for (const { node, id, name, callId } of cutOff) {
+      if (!resumable(name, callId) || crashedIds.has(`${node} ${id}`) || resent.has(callId)) continue;
+      const answer = after.find(({ nodeId, step }) => nodeId === node && step["kind"] === "tool_result" && step["call_id"] === id);
+      if (hostless.has(callId) && answer !== undefined && answer.step["closed"] !== "skipped") continue;
+      throw new CaseFailure(`the resume didn't send \`${name}\` call ${callId} again, which the cut cut off${at}`);
+    }
     // Given back what it took after the cut, the resume takes every entry with the requests
     // scripted, as the uncut run did, but for the calls closed `crashed`: an entry such a call
     // took stays taken, and its agent may make a model call more, having read the closer.
-    const overruns = new Set<string>();
+    const overruns = new Set<string>(lost ? gateLabels(spec) : []);
     const allowance = new Map<string, number>();
+    const allow = (label: string) => allowance.set(label, (allowance.get(label) ?? 0) + 1);
     for (const [node, calls] of open) {
       overruns.add(`host.models.${node}.agent`);
-      for (const name of calls.values()) {
-        const label = scriptLabel(spec, node, name);
-        allowance.set(label, (allowance.get(label) ?? 0) + 1);
+      for (const { name } of calls.values()) {
+        allow(scriptLabel(spec, node, name));
+        const gate = get(get(spec, "gate", {}) as Case, name);
+        if (gate !== undefined) allow(`host.gate.${name}${isMapping(gate) ? `.${node}` : ""}`);
+      }
+    }
+    // A changed course may make other model calls and checks, and skip calls the uncut run made:
+    // only stub scripts count, and each may keep the entry of a call the resume skipped or never
+    // reached.
+    if (changed) {
+      const results = agentResults(records, uncut.runId);
+      for (const [name, list] of uncutHost.calls) {
+        for (const { call_id: callId, node } of list) {
+          const result = results.get(callId as string);
+          if (result === undefined || result["closed"] === "skipped") allow(scriptLabel(spec, node as string, name));
+        }
       }
     }
     let left: string[];
     try {
-      left = scripted.check({ overruns, left: allowance });
+      left = scripted.check({ overruns, left: allowance, ...(changed ? { kept: (label) => label.startsWith("host.tools.") } : {}) });
     } catch (error) {
       throw new CaseFailure(`the resume's host calls differ from the script${at}\n${(error as Error).message}`);
     }
@@ -3495,19 +3973,26 @@ export async function crashSweep(
     checkSecrets(case_, text);
     checkNoRoots(memories.roots, text);
     // Each write landed once: the cut's folders hold what the uncut run's would.
-    if (isMapping(expectMemory)) {
+    if (isMapping(expectMemory) && !changed) {
       const contents = Object.keys(expectMemory).map((input) => [input, memories.contents(input)]);
       compare(`memory${at}`, Object.fromEntries(contents), expectMemory);
     }
-    if (strong) {
+    // Past its script's end, an allowed model overrun fails its model call, and so the run.
+    const overran = [...overruns].some((label) => resumed.failure?.message === `\`${label}\` is used up`);
+    if (strong && !changed) {
       compare(`output${at}`, output(resumed, flow), output(uncut, flow), { byValue: true });
       compare(`node outcomes${at}`, outcomes(log), expected);
-    } else if (resumed.status !== uncut.status) {
+    } else if (resumed.status !== uncut.status && !(changed && overran)) {
       // Without the strong oracle, a resume still ends as the uncut run did.
       throw new CaseFailure(`the resume ${resumed.status}, the uncut run ${uncut.status}${at}`);
     }
     await checkInvariants(flow, log, reopen, resumed, at);
   }
+}
+
+/** Return `count` `host.sends` items as text: `1 \`host.sends\` item`, `2 \`host.sends\` items`. */
+function itemsText(count: number): string {
+  return `${count} \`host.sends\` ${count === 1 ? "item" : "items"}`;
 }
 
 /**

@@ -1,0 +1,72 @@
+# The hook checks the reply's first concurrency group, `lookup` and `save`, before either starts,
+# then `send`, which runs alone. It runs `lookup` with a note, refuses `save` and runs `send`. The
+# refusal is written first, as a `refused` result with the host's text and its brackets, and
+# `save` never runs; the note is on `lookup`'s result. The next request reads the refusal as the
+# call's error and never the note.
+kind: run
+flow: |
+  id: gated
+  name: gated
+  llm_config: {provider: anthropic, model: claude-test}
+  nodes:
+    agent:
+      kind: agent
+      tools: [lookup, save, send]
+      system_prompt: Help.
+      prompt: hi
+      output: !str
+  output: ${agent.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    lookup:
+      parameters: {type: object, properties: {q: {type: string}}}
+      concurrency_safe: true
+      results: [{return: found}]
+    save:
+      parameters: {type: object, properties: {}}
+      concurrency_safe: true
+      results: []
+    send:
+      parameters: {type: object, properties: {}}
+      results: [{return: sent}]
+  gate:
+    lookup: [{run: true, note: read-only}]
+    save: [{refuse: Not in Ask mode.}]
+    send: [{run: true}]
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: c1, name: lookup, arguments: {q: x}}
+          - {type: tool_call, id: c2, name: save, arguments: {}}
+          - {type: tool_call, id: c3, name: send, arguments: {}}
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: done}]}
+        request:
+          messages:
+          - {format: yian.message.v1, role: system, parts: [{type: text, text: Help.}]}
+          - {format: yian.message.v1, role: user, parts: [{type: text, text: hi}]}
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - {type: tool_call, id: c1, name: lookup, arguments: {q: x}}
+            - {type: tool_call, id: c2, name: save, arguments: {}}
+            - {type: tool_call, id: c3, name: send, arguments: {}}
+          - {format: yian.message.v1, role: tool, parts: [{type: tool_result, call_id: c1, name: lookup, content: found}]}
+          - format: yian.message.v1
+            role: tool
+            parts: [{type: tool_result, call_id: c2, name: save, content: Not in Ask mode., is_error: true}]
+          - {format: yian.message.v1, role: tool, parts: [{type: tool_result, call_id: c3, name: send, content: sent}]}
+          tools:
+          - {name: lookup, description: "", parameters: {type: object, properties: {q: {type: string}}}}
+          - {name: save, description: "", parameters: {type: object, properties: {}}}
+          - {name: send, description: "", parameters: {type: object, properties: {}}}
+expect:
+  output: {status: succeeded, output: done}
+  trace: [[run_started, null, {effective_llm_by_static_path: {agent: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, gated: true, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, agent], [node_step, agent, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {q: x}, id: c1, name: lookup, type: tool_call}, {arguments: {}, id: c2, name: save, type: tool_call}, {arguments: {}, id: c3, name: send, type: tool_call}], role: assistant}, purpose: chat, request_sha256: a9e88376c091f985a2584c28573b8fae1694f6f762f6ce61f33fbb2d1a2a32f5, response_id: null, usage: null}}], [node_step, agent, {n: 2, step: {call_id: c2, closed: refused, is_error: true, kind: tool_result, output: Not in Ask mode.}}], [node_step, agent, {n: 3, step: {call_id: c1, is_error: false, kind: tool_result, note: read-only, output: found}}], [node_step, agent, {n: 4, step: {call_id: c3, is_error: false, kind: tool_result, output: sent}}], [node_step, agent, {n: 5, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: done, type: text}], role: assistant}, purpose: chat, request_sha256: dfbfd8a9e7137fe6fb4fad329c24909e756ae61df33225ebb8fb8c759e172c3b, response_id: null, usage: null}}], [pool_commit, agent, {value: done}], [pool_commit, agent, {key: agent.new_messages, steps: [9, 10, 11, 12, 13]}], [node_succeeded, agent, {commit: 14, messages: 15}], [node_started, __end__], [pool_commit, __end__, {value: done}], [node_succeeded, __end__, {commit: 18}]]
+  events: [[RunStarted], [NodeStarted, {node_id: __start__}], [NodeSucceeded, {node_id: __start__, output: {}, interrupted: false}], [NodeStarted, {node_id: agent}], [ModelCallStarted, {node_id: agent, n: 1, purpose: chat, provider: anthropic, model: claude-test}], [ModelCallFinished, {node_id: agent, n: 1, purpose: chat, provider: anthropic, model: claude-test}], [ToolCallStarted, {node_id: agent, n: 1, call_index: 1, tool_call_id: c2, name: save, arguments: {}}], [ToolCallFinished, {node_id: agent, n: 1, call_index: 1, tool_call_id: c2, name: save, error: refused}], [ToolCallStarted, {node_id: agent, n: 1, call_index: 0, tool_call_id: c1, name: lookup, arguments: {q: x}}], [ToolCallFinished, {node_id: agent, n: 1, call_index: 0, tool_call_id: c1, name: lookup, result: found}], [ToolCallStarted, {node_id: agent, n: 1, call_index: 2, tool_call_id: c3, name: send, arguments: {}}], [ToolCallFinished, {node_id: agent, n: 1, call_index: 2, tool_call_id: c3, name: send, result: sent}], [ModelCallStarted, {node_id: agent, n: 5, purpose: chat, provider: anthropic, model: claude-test}], [ModelCallFinished, {node_id: agent, n: 5, purpose: chat, provider: anthropic, model: claude-test}], [NodeSucceeded, {node_id: agent, output: done, interrupted: false}], [NodeStarted, {node_id: __end__}], [NodeSucceeded, {node_id: __end__, output: done, interrupted: false}], [RunSucceeded, {output: done}]]
+  tool_calls: {lookup: [{args: {q: x}, call_id: r1/agent/1/0, attempt: 1, node: agent}], send: [{args: {}, call_id: r1/agent/1/2, attempt: 1, node: agent}]}
+  gate_calls: [{tool: lookup, call_id: r1/agent/1/0, node: agent, source: {kind: host, group: null, tool: lookup}, arguments: {q: x}, attempt: 1, scopes: []}, {tool: save, call_id: r1/agent/1/1, node: agent, source: {kind: host, group: null, tool: save}, arguments: {}, attempt: 1, scopes: []}, {tool: send, call_id: r1/agent/1/2, node: agent, source: {kind: host, group: null, tool: send}, arguments: {}, attempt: 1, scopes: []}]

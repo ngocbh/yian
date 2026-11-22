@@ -1,0 +1,43 @@
+# The hook holds `save` and runs `lookup`, its group-mate. While `lookup` runs, a release and then
+# an interrupt land: the node is running, so the interrupt leaves the released call to its agent,
+# which skips it ("Not run") since it never started. `save` never runs, and the agent ends null.
+kind: run
+flow: |
+  id: releasecut
+  name: releasecut
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    notes: !Inbox(str)
+  nodes:
+    agent:
+      kind: agent
+      steer_inbox: ${input.notes}
+      tools: [save, lookup]
+      prompt: hi
+      output: !Optional(str)
+  output: ${agent.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    save: {parameters: {type: object, properties: {}}, concurrency_safe: true, results: []}
+    lookup: {parameters: {type: object, properties: {}}, concurrency_safe: true, results: [{return: found}]}
+  gate:
+    save: [{hold: true}]
+    lookup: [{run: true}]
+  sends:
+  - {release: r1/agent/1/0, after: {node: agent, tool_call: 1}}
+  - {interrupt: notes, after: {node: agent, tool_call: 1}}
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: c1, name: save, arguments: {}}
+          - {type: tool_call, id: c2, name: lookup, arguments: {}}
+expect:
+  output: {status: succeeded, output: null}
+  trace: [[run_started, null, {effective_llm_by_static_path: {agent: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, gated: true, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {notes: {inbox: notes}}}], [node_succeeded, __start__, {commit: 6}], [node_started, agent], [node_step, agent, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {}, id: c1, name: save, type: tool_call}, {arguments: {}, id: c2, name: lookup, type: tool_call}], role: assistant}, purpose: chat, request_sha256: f59b38ad3f1c6e9c07334f73ed6423e990a80f1282de858fbd8c07a695419666, response_id: null, usage: null}}], [node_step, agent, {n: 2, step: {call_id: r1/agent/1/0, group_end: 1, held: true, index: 0, kind: pending, reply: 1, source: {group: null, kind: host, tool: save}, tool: save, tool_call_id: c1}}], [node_step, agent, {n: 3, step: {call_id: r1/agent/1/0, kind: released}}], [interrupted, null, {inbox: notes, nodes: [agent]}], [node_step, agent, {n: 4, step: {call_id: c2, is_error: false, kind: tool_result, output: found}}], [node_step, agent, {n: 5, step: {call_id: c1, closed: skipped, is_error: true, kind: tool_result, output: 'Not run: interrupted by the user.'}}], [node_step, agent, {n: 6, step: {by: 12, kind: interrupted}}], [pool_commit, agent], [pool_commit, agent, {key: agent.new_messages, steps: [9, 13, 14, 15]}], [node_succeeded, agent, {commit: 16, messages: 17}], [node_started, __end__], [pool_commit, __end__], [node_succeeded, __end__, {commit: 20}]]
+  tool_calls: {lookup: [{args: {}, call_id: r1/agent/1/1, attempt: 1, node: agent}]}
+  gate_calls: [{tool: save, call_id: r1/agent/1/0, node: agent, source: {kind: host, group: null, tool: save}, arguments: {}, attempt: 1, scopes: []}, {tool: lookup, call_id: r1/agent/1/1, node: agent, source: {kind: host, group: null, tool: lookup}, arguments: {}, attempt: 1, scopes: []}]

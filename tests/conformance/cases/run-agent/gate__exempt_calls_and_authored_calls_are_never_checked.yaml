@@ -1,0 +1,46 @@
+# The hook never checks the run's `ask_user`, a call refused before its tool (here an ungranted
+# name), or a TOOL node's call of a host tool (an authored `call:`); it checks the agent's call of
+# `save`.
+kind: run
+flow: |
+  id: exempt
+  name: exempt
+  llm_config: {provider: anthropic, model: claude-test}
+  nodes:
+    first:
+      kind: call
+      call: save
+      input: {}
+    agent:
+      kind: agent
+      runs_after: [first]
+      tools: [save, ask_user]
+      prompt: hi
+      output: !str
+  output: ${agent.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    save:
+      parameters: {type: object, properties: {}}
+      results: [{return: authored}, {return: saved}]
+  human:
+    agent: [yes]
+  gate:
+    save: [{run: true}]
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: c1, name: ask_user, arguments: {question: Save?}}
+          - {type: tool_call, id: c2, name: delete, arguments: {}}
+          - {type: tool_call, id: c3, name: save, arguments: {}}
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: done}]}
+expect:
+  output: {status: succeeded, output: done}
+  trace: [[run_started, null, {effective_llm_by_static_path: {agent: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, gated: true, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, first], [pool_commit, first, {value: authored}], [node_succeeded, first, {commit: 9}], [node_started, agent], [node_step, agent, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {question: Save?}, id: c1, name: ask_user, type: tool_call}, {arguments: {}, id: c2, name: delete, type: tool_call}, {arguments: {}, id: c3, name: save, type: tool_call}], role: assistant}, purpose: chat, request_sha256: 8aa12786bba72b9e870d1e2d74bc400729a5373ea940d6d5825f24c5258de57d, response_id: null, usage: null}}], [node_step, agent, {n: 2, step: {call_id: c1, is_error: false, kind: tool_result, output: yes}}], [node_step, agent, {n: 3, step: {call_id: c2, is_error: true, kind: tool_result, output: 'Unavailable tool: delete'}}], [node_step, agent, {n: 4, step: {call_id: c3, is_error: false, kind: tool_result, output: saved}}], [node_step, agent, {n: 5, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: done, type: text}], role: assistant}, purpose: chat, request_sha256: 9a51a85d48219d2bf6b823c566f193e1b2193db15a799ed036be418a9e379ebf, response_id: null, usage: null}}], [pool_commit, agent, {value: done}], [pool_commit, agent, {key: agent.new_messages, steps: [12, 13, 14, 15, 16]}], [node_succeeded, agent, {commit: 17, messages: 18}], [node_started, __end__], [pool_commit, __end__, {value: done}], [node_succeeded, __end__, {commit: 21}]]
+  tool_calls: {save: [{args: {}, call_id: r1/first, attempt: 1, node: first}, {args: {}, call_id: r1/agent/1/2, attempt: 1, node: agent}], ask_user: [{args: {question: Save?}, call_id: r1/agent/1/0, attempt: 1, node: agent}]}
+  gate_calls: [{tool: save, call_id: r1/agent/1/2, node: agent, source: {kind: host, group: null, tool: save}, arguments: {}, attempt: 1, scopes: []}]

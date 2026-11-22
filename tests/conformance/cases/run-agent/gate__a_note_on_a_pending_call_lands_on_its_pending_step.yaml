@@ -1,0 +1,32 @@
+# The hook runs `wait` with a note; the tool returns pending(), so the call's first record is its
+# `pending` step, which carries the note. `complete` answers it, and the model never reads the note.
+kind: run
+flow: |
+  id: pendingnote
+  name: pendingnote
+  llm_config: {provider: anthropic, model: claude-test}
+  nodes:
+    agent:
+      kind: agent
+      tools: [wait]
+      prompt: hi
+      output: !str
+  output: ${agent.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    wait: {parameters: {type: object, properties: {}}, pending: true}
+  gate:
+    wait: [{run: true, note: the owner approved it}]
+  sends:
+  - {complete: r1/agent/1/0, output: answered}
+  models:
+    agent:
+      agent:
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: tool_call, id: c1, name: wait, arguments: {}}]}
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: done}]}
+expect:
+  output: {status: succeeded, output: done}
+  trace: [[run_started, null, {effective_llm_by_static_path: {agent: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, gated: true, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, agent], [node_step, agent, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {}, id: c1, name: wait, type: tool_call}], role: assistant}, purpose: chat, request_sha256: 75effca592310ed82ba386d42855a1e3d610abe1615cfc7c8485829054a78daf, response_id: null, usage: null}}], [node_step, agent, {n: 2, step: {call_id: r1/agent/1/0, index: 0, kind: pending, note: the owner approved it, reply: 1, tool: wait, tool_call_id: c1}}], [node_waiting, agent, {call_ids: [r1/agent/1/0]}], [run_waiting, null, {node_ids: [agent]}], [node_step, agent, {n: 3, step: {call_id: c1, is_error: false, kind: tool_result, output: answered}}], [node_woken, agent], [node_step, agent, {n: 4, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: done, type: text}], role: assistant}, purpose: chat, request_sha256: 2d73d1abe7b7aae4c58afa7f9ee770ba6409f040f2d6fb8dd451af97baf414cc, response_id: null, usage: null}}], [pool_commit, agent, {value: done}], [pool_commit, agent, {key: agent.new_messages, steps: [9, 13, 15]}], [node_succeeded, agent, {commit: 16, messages: 17}], [node_started, __end__], [pool_commit, __end__, {value: done}], [node_succeeded, __end__, {commit: 20}]]
+  tool_calls: {wait: [{args: {}, call_id: r1/agent/1/0, attempt: 1, node: agent}]}
+  gate_calls: [{tool: wait, call_id: r1/agent/1/0, node: agent, source: {kind: host, group: null, tool: wait}, arguments: {}, attempt: 1, scopes: []}]

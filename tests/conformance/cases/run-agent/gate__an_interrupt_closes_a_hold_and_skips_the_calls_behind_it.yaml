@@ -1,0 +1,40 @@
+# An interrupt while the agent waits on a hold closes it: the woken agent writes its closer, read
+# "Not run" since it never ran, skips the later call that waited behind it unchecked, and ends null.
+kind: run
+flow: |
+  id: closehold
+  name: closehold
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    notes: !Inbox(str)
+  nodes:
+    agent:
+      kind: agent
+      steer_inbox: ${input.notes}
+      tools: [save, send]
+      prompt: hi
+      output: !Optional(str)
+  output: ${agent.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    save: {parameters: {type: object, properties: {}}, results: []}
+    send: {parameters: {type: object, properties: {}}, results: []}
+  gate:
+    save: [{hold: true}]
+  sends:
+  - {interrupt: notes}
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: c1, name: save, arguments: {}}
+          - {type: tool_call, id: c2, name: send, arguments: {}}
+expect:
+  output: {status: succeeded, output: null}
+  trace: [[run_started, null, {effective_llm_by_static_path: {agent: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, gated: true, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {notes: {inbox: notes}}}], [node_succeeded, __start__, {commit: 6}], [node_started, agent], [node_step, agent, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {}, id: c1, name: save, type: tool_call}, {arguments: {}, id: c2, name: send, type: tool_call}], role: assistant}, purpose: chat, request_sha256: b9f9476a52a866c8d5bfc7c677b7cce7186d0d6e67a541f4d3ffcaffb7562e78, response_id: null, usage: null}}], [node_step, agent, {n: 2, step: {call_id: r1/agent/1/0, group_end: 0, held: true, index: 0, kind: pending, reply: 1, source: {group: null, kind: host, tool: save}, tool: save, tool_call_id: c1}}], [node_waiting, agent, {call_ids: [r1/agent/1/0], steer_inbox: notes}], [run_waiting, null, {node_ids: [agent]}], [interrupted, null, {inbox: notes, nodes: [agent]}], [node_woken, agent], [node_step, agent, {n: 3, step: {call_id: c1, closed: interrupted, is_error: true, kind: tool_result, output: 'Not run: interrupted by the user.'}}], [node_step, agent, {n: 4, step: {call_id: c2, closed: skipped, is_error: true, kind: tool_result, output: 'Not run: interrupted by the user.'}}], [node_step, agent, {n: 5, step: {by: 13, kind: interrupted}}], [pool_commit, agent], [pool_commit, agent, {key: agent.new_messages, steps: [9, 15, 16, 17]}], [node_succeeded, agent, {commit: 18, messages: 19}], [node_started, __end__], [pool_commit, __end__], [node_succeeded, __end__, {commit: 22}]]
+  events: [[RunStarted], [NodeStarted, {node_id: __start__}], [NodeSucceeded, {node_id: __start__, output: {notes: {inbox: notes}}, interrupted: false}], [NodeStarted, {node_id: agent}], [ModelCallStarted, {node_id: agent, n: 1, purpose: chat, provider: anthropic, model: claude-test}], [ModelCallFinished, {node_id: agent, n: 1, purpose: chat, provider: anthropic, model: claude-test}], [CallHeld, {node_id: agent, call_id: r1/agent/1/0, tool: save}], [NodeWaiting, {node_id: agent, call_ids: [r1/agent/1/0]}], [RunWaiting, {node_ids: [agent]}], [NodeWoken, {node_id: agent, timed_out: []}], [ToolCallStarted, {node_id: agent, n: 1, call_index: 1, tool_call_id: c2, name: send, arguments: {}}], [ToolCallFinished, {node_id: agent, n: 1, call_index: 1, tool_call_id: c2, name: send, error: interrupted}], [NodeSucceeded, {node_id: agent, interrupted: true}], [NodeStarted, {node_id: __end__}], [NodeSucceeded, {node_id: __end__, interrupted: false}], [RunSucceeded]]
+  gate_calls: [{tool: save, call_id: r1/agent/1/0, node: agent, source: {kind: host, group: null, tool: save}, arguments: {}, attempt: 1, scopes: []}]

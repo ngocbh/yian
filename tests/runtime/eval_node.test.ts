@@ -472,6 +472,7 @@ describe("the steer inbox capability", () => {
       return {
         inbox,
         queued: () => (calls.push("queued"), false),
+        queuedBesidesActions: () => (calls.push("queuedBesidesActions"), false),
         read: () => (calls.push("read"), read()),
         interrupt: new AbortController().signal, interruptedBy: () => null,
       };
@@ -511,6 +512,7 @@ describe("the steer inbox capability", () => {
     await drive(new Keeper("chat", new Map()), { steerInbox: open });
     expect(thrown(() => inbox!.read())).toBeInstanceOf(CapabilityFault);
     expect(thrown(() => inbox!.queued())).toBeInstanceOf(CapabilityFault);
+    expect(thrown(() => inbox!.queuedBesidesActions())).toBeInstanceOf(CapabilityFault);
     expect(calls).toEqual(["open m"]);
   });
 

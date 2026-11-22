@@ -301,6 +301,32 @@ A refused call appends nothing and throws `DeliveryRefused`, whose `reason` says
 | `not_host_call` | The id names a take, a sleep or an agent's [flow call](/agents/#flows-as-tools), which the run answers itself |
 | `call_settled` | The call already has an answer, timed out or was closed |
 
+### Record a person's action
+
+When a person uses one of an agent's tools themselves, such as typing into its terminal, send the
+agent's steer inbox a `Message` whose part is an `action`. The agent then sees what they did, signed
+by them, without being asked to answer it:
+
+```ts check=fragment
+await send(log, "notes", {
+  role: "user",
+  author: "Ngoc",
+  parts: [{ type: "action", tool: "shell_type", summary: "Ngoc typed into shell 1" }],
+}, { key: pressId });
+```
+
+- An action holds `tool`, and optionally `summary`, `arguments` (an object) and `result` (text).
+  Your program ran the tool, so it chooses what to record. When the arguments hold a secret, leave
+  them out or replace them with a `summary`, and leave out the result too, since it may echo them.
+  Never record a refusal's message, which can quote the value; record its `reason`.
+- The model reads it inside the author's label as `action: <tool>`, then a `summary:`,
+  `arguments:` (JSON) and `result:` line for each field it holds.
+- As a steer, an action never causes a model call: one queued at the final answer gets no extra
+  call. It doesn't answer an open `ask_user` either; the agent reads it with the answer. A flow's
+  `take` still wakes for it, so a chat loop keeps it for the next turn (see
+  [Agents](/agents/#steering-and-interrupts)).
+- Give each action a `key`, and a new one when you send it again after `withdraw`.
+
 ### Pending host calls
 
 A host tool can answer later: its handler returns `pending()`, yian records the call, and the

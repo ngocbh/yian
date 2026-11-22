@@ -6,7 +6,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  MediaPart, Message as ModelMessage, ReasoningPart, RefusalPart, replayRecord, TextPart, ToolCallPart, ToolResultPart,
+  ActionPart, MediaPart, Message as ModelMessage, ReasoningPart, RefusalPart, replayRecord, TextPart, ToolCallPart, ToolResultPart,
 } from "../../src/llm/messages.ts";
 import {
   checkConversation, checkMessage, checkModelConversation, ConversationError, foldSteps, fromModelMessage, type Message, messageSteps,
@@ -47,6 +47,7 @@ function history(): ModelMessage[] {
     }),
     new ModelMessage({ role: "tool", parts: [new ToolResultPart({ callId: "c1", name: "read_file", content: "hi", isError: true })] }),
     new ModelMessage({ role: "user", parts: [new MediaPart({ mime: "image/png", file: FILE, name: "x.png" })] }),
+    new ModelMessage({ role: "user", author: "ana", parts: [new ActionPart({ tool: "/model", arguments: { model: "m", n: 2n }, result: "set" })] }),
   ];
 }
 
@@ -127,7 +128,7 @@ describe("agreement with message.schema.json", () => {
     expect([...message.fields!.keys()].sort()).toEqual(Object.keys(SCHEMA.properties).filter((key) => key !== "format").sort());
   });
 
-  test.each(["text", "reasoning", "refusal", "tool_call", "tool_result", "media"])("the %s part has the schema's keys", (tag) => {
+  test.each(["text", "reasoning", "refusal", "tool_call", "tool_result", "media", "action"])("the %s part has the schema's keys", (tag) => {
     const keys = Object.keys(SCHEMA.$defs[tag]!.properties).filter((key) => !(tag === "media" && (key === "data" || key === "url")));
     expect(partFields(tag)).toEqual(keys.sort());
   });
@@ -156,6 +157,7 @@ describe("checkModelConversation", () => {
     ["a structural text message, as the render passes it", [{ role: "user", parts: [{ type: "text" }] }]],
     ["two user messages in a row", [user(), user()]],
     ["media in a user message", [new ModelMessage({ role: "user", parts: [new MediaPart({ mime: "image/png", file: FILE })] })]],
+    ["an action in a user message", [new ModelMessage({ role: "user", parts: [new ActionPart({ tool: "t" })] }), user()]],
   ])("%s passes", (_, messages) => {
     expect(() => checkModelConversation(messages)).not.toThrow();
   });
@@ -171,6 +173,8 @@ describe("checkModelConversation", () => {
       "assistant messages can't hold a media part"],
     ["reasoning in a user message", [new ModelMessage({ role: "user", parts: [new ReasoningPart("r")] })], 0,
       "user messages can't hold a reasoning part"],
+    ["an action in an assistant message", [user(), new ModelMessage({ role: "assistant", parts: [new ActionPart({ tool: "t" })] })], 1,
+      "assistant messages can't hold an action part"],
     ["an empty message", [user(), new ModelMessage({ role: "assistant", parts: [] }), user()], 1, "the message has no parts"],
     ["a system message", [new ModelMessage({ role: "system", parts: [new TextPart("x")] })], 0,
       "a system message can't be in a prompt list; use system_prompt:"],

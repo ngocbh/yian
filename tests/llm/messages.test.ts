@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 
 import { BUILTIN, install } from "../../src/defaults.ts";
 import {
+  ActionPart,
   checkJsonValue,
   isPart,
   MESSAGE_FORMAT,
@@ -67,6 +68,8 @@ function fullMessage(): Message {
       new ToolResultPart({ callId: "call_2", name: "broken", content: "ok" }),
       new RefusalPart("I can't help with that", { id: "msg_2", phase: "final" }),
       new MediaPart({ mime: "image/png", file: new FileRef({ uri: "media/ab.png", mime: "image/png", name: "ab.png" }) }),
+      new ActionPart({ tool: "flows_message", summary: "sent to r1", arguments: { run: "r1", n: 2n }, result: "sent" }),
+      new ActionPart({ tool: "/model" }),
     ],
     protocol: "anthropic_messages",
     providerPayload: { stop_sequence: null, meta: { k: "v" } },
@@ -88,6 +91,7 @@ function canonical(): Data {
       { type: "tool_result", call_id: "c2", name: "g", content: "r" },
       { type: "refusal", text: "no", provider_payload: { id: "msg_1" } },
       { type: "media", mime: "image/png", file: { uri: "media/ab.png", mime: "image/png", name: "ab.png" } },
+      { type: "action", tool: "flows_message", summary: "s", arguments: { run: "r1" }, result: "sent" },
     ],
     protocol: "openai_responses",
     provider_payload: { id: "resp_1" },
@@ -176,6 +180,15 @@ describe("round trip", () => {
     expect(message.toJSON()["parts"]).toEqual([{ type: "refusal", text: "no", provider_payload: { id: "m" } }]);
     expect(Message.fromJSON(message.toJSON())).toEqual(message);
     expect(Message.fromJSON(message.toJSON()).parts[0]).toBeInstanceOf(RefusalPart);
+  });
+
+  test("an action part keeps its tool and leaves out what the host didn't give", () => {
+    const part = new ActionPart({ tool: "shell_type", summary: "Ngoc typed into shell 1" });
+    expect([part.arguments, part.result]).toEqual([null, null]);
+    expect(part.toJSON()).toEqual({ type: "action", tool: "shell_type", summary: "Ngoc typed into shell 1" });
+    expect(Message.fromJSON(new Message({ role: "user", parts: [part] }).toJSON()).parts[0]).toEqual(part);
+    expect(formatError(() => new ActionPart({ tool: bad(3) })).message).toBe("tool: expected string, got number");
+    expect(formatError(() => new ActionPart({ tool: "t", arguments: bad([1]) })).message).toBe("arguments: expected an object, got array");
   });
 
   test("payload records shaped like the codec's tags round-trip through the codec", () => {
@@ -395,6 +408,9 @@ describe("strict decode", () => {
       [(data) => (data["parts"][2]["name"] = null), "parts[2].name", "expected string, got null"],
       [(data) => (data["parts"][4]["raw_arguments"] = null), "parts[4].raw_arguments", "expected string, got null"],
       [(data) => (data["parts"][5]["arguments"] = null), "parts[5].arguments", "expected an object, got null"],
+      [(data) => (data["parts"][10]["summary"] = null), "parts[10].summary", "expected string, got null"],
+      [(data) => (data["parts"][10]["result"] = null), "parts[10].result", "expected string, got null"],
+      [(data) => (data["parts"][10]["arguments"] = null), "parts[10].arguments", "expected an object, got null"],
     ];
     for (const [edit, path, reason] of cases) {
       const data = canonical();
@@ -1169,6 +1185,8 @@ describe("message schema", () => {
     ["an explicit null raw_arguments", (data: Data) => (data["parts"][4]["raw_arguments"] = null)],
     ["an explicit null arguments", (data: Data) => (data["parts"][5]["arguments"] = null)],
     ["an explicit null is_error", (data: Data) => (data["parts"][6]["is_error"] = null)],
+    ["an action without a tool", (data: Data) => delete data["parts"][10]["tool"]],
+    ["an explicit null action result", (data: Data) => (data["parts"][10]["result"] = null)],
   ])("rejects %s, as decoding does", (_, edit) => {
     const data = canonical();
     edit(data);

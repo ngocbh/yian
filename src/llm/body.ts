@@ -9,12 +9,23 @@
  * A user message's author goes to the model as an `<authored_message author="...">` …
  * `</authored_message>` wrapper around its parts, and the tag is escaped in every user and tool
  * text, so only the adapter can write it. `authoredText` and `escapeAuthorTags` give a host the
- * same label and escaping for text it sends to an agent outside yian.
+ * same label and escaping for text it sends to an agent outside yian. A person's action on a tool
+ * goes as text (`actionText`) inside the same label.
  */
 
 import { YianTypeError } from "../typesys/errors.ts";
 import type { JsonObject, JsonValue } from "../typesys/json.ts";
-import { copyJson, isPlainObject, Message, type Part, put, TextPart, ToolResultPart, typeName } from "./messages.ts";
+import {
+  ActionPart,
+  copyJson,
+  isPlainObject,
+  Message,
+  type Part,
+  put,
+  TextPart,
+  ToolResultPart,
+  typeName,
+} from "./messages.ts";
 
 /**
  * Deep-merge a provider block into a request body, in place.
@@ -228,6 +239,20 @@ export function authoredText(author: string, text: string): string {
   return hasText(text) ? fold(authorOpen(author), escaped, authorClose()) : escaped;
 }
 
+/**
+ * Return the text an action part reaches the model as: `action: <tool>`, then a `summary:`,
+ * `arguments:` (compact JSON) and `result:` line for each field it holds. Every adapter sends this
+ * text, escaped and inside its message's author label, whether the message came from a prompt or
+ * a steer.
+ */
+export function actionText(part: ActionPart): string {
+  const lines = [`action: ${part.tool}`];
+  if (part.summary !== null) lines.push(`summary: ${part.summary}`);
+  if (part.arguments !== null) lines.push(`arguments: ${encodeBody(part.arguments, "action arguments")}`);
+  if (part.result !== null) lines.push(`result: ${part.result}`);
+  return lines.join("\n");
+}
+
 /** One value still to escape in `escapeAuthorTagsInJson`, and where its copy goes. */
 interface EscapeTask {
   item: JsonValue;
@@ -301,12 +326,12 @@ function foldTags(part: TextPart, open: string | null, close: string | null): Te
 }
 
 /**
- * Return `message` as an adapter sends it: a user message's texts and a tool message's results
- * with the author tag escaped, and an authored user message's parts wrapped in `authorOpen` and
- * `authorClose` text parts.
+ * Return `message` as an adapter sends it: a user message's actions as text (`actionText`), its
+ * texts and a tool message's results with the author tag escaped, and an authored user message's
+ * parts wrapped in `authorOpen` and `authorClose` text parts. No adapter sees an action part.
  *
- * A user message is wrapped only when it has an author and some text part holds more than
- * whitespace; an unauthored one stays unmarked, as the flow's own user. With
+ * A user message is wrapped only when it has an author and some text part, an action's included,
+ * holds more than whitespace; an unauthored one stays unmarked, as the flow's own user. With
  * `inline`, the tags are folded into the first and last parts with `"\n"` when those are text,
  * and added as parts of their own otherwise, for routes that send a one-text message as a
  * string. System and assistant messages, and any message with nothing to change, are returned
@@ -317,9 +342,11 @@ export function withAuthorWrapper(message: Message, options: { inline?: boolean 
   // author even where no real one exists.
   let parts: Part[];
   if (message.role === "user") {
-    parts = message.parts.map((part) => (part instanceof TextPart ? escapeText(part) : part));
+    // Actions become text before the check below, so a message of actions alone is signed too.
+    const shown = message.parts.map((part) => (part instanceof ActionPart ? new TextPart(actionText(part)) : part));
+    parts = shown.map((part) => (part instanceof TextPart ? escapeText(part) : part));
     const author = message.author;
-    const sendable = message.parts.some((part) => part instanceof TextPart && hasText(part.text));
+    const sendable = shown.some((part) => part instanceof TextPart && hasText(part.text));
     // The wrapper always closes: Anthropic merges consecutive user turns, and the next message's
     // text must not read as this author's.
     if (author !== null && sendable) {

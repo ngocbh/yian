@@ -996,7 +996,7 @@ function record(fields: Readonly<Record<string, string>>): RecordDef {
 const BUILTIN_RECORDS: TypeRegistry = new Map<string, TypeDef>([
   ["Message", record({
     role: "Literal(user, assistant, tool)",
-    parts: "list(Union(Text, Reasoning, Refusal, ToolCall, ToolResult, Media))",
+    parts: "list(Union(Text, Reasoning, Refusal, ToolCall, ToolResult, Media, Action))",
     author: "Optional(str)",
     protocol: "Optional(str)",
     provider_payload: "Optional(object)",
@@ -1014,6 +1014,9 @@ const BUILTIN_RECORDS: TypeRegistry = new Map<string, TypeDef>([
   })],
   ["Media", record({
     type: "Literal(media)", mime: "str", file: "file", name: "Optional(str)", provider_payload: "Optional(object)",
+  })],
+  ["Action", record({
+    type: "Literal(action)", tool: "str", summary: "Optional(str)", arguments: "Optional(object)", result: "Optional(str)",
   })],
 ]);
 

@@ -1753,6 +1753,7 @@ export function interruptible(): { steerInbox: SteerInbox; interrupt: (by?: numb
     steerInbox: {
       inbox: "owner",
       queued: () => false,
+      queuedBesidesActions: () => false,
       read: () => null,
       interrupt: controller.signal,
       interruptedBy: () => pending,

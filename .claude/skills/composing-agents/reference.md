@@ -170,7 +170,7 @@ text, which prompts may call too: `upper`, `lower`, `join(value, sep="\n")`,
 | `Literal(a, b)` | One of these texts |
 | `Union(A, B)` | One of these records, told apart by a tag field or by shape |
 | `file` | Fields `uri`, `mime`, `name` |
-| `Message` | Built in: `role` (`user`, `assistant`, `tool`) and `parts` (text, tool calls, ...) |
+| `Message` | Built in: `role` (`user`, `assistant`, `tool`) and `parts` (text, tool calls, a person's `action`s, ...) |
 | `Inbox(X)` | A flow input whose events arrive while the run goes on |
 | `FileMemory` | A flow input the host binds to a memory; see [Memory](https://yian.readthedocs.io/memory/) |
 | `VectorDBMemory(T)` | A flow input the host binds to a memory of items with `T` fields, searched by meaning |

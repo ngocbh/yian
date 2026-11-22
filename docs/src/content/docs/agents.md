@@ -572,6 +572,11 @@ output: ${worker.output :- "(stopped)"}
   no tools or skills reads its steers once, before its only call.
 - **Render.** `steer_inbox: {from: ${input.notes}, render: "From the owner: ${event}"}` wraps each
   message in a template. The template reads only `${event}`.
+- **Actions.** A `Message` whose parts are all `action` parts records something a person did with
+  one of the agent's tools (see [Embedding yian](/embedding/#record-a-persons-action)). It joins
+  the next model call, signed by its `author`, but never causes one, even at the final answer, and
+  skips `render:`. A `take` still wakes for it: a chat loop can test `p.type == "action"` and keep
+  it for the next turn instead of answering it.
 - **Interrupts.** A host can interrupt every agent reading an inbox. The agent stops at its next
   safe point: before a model call, while it waits for a reply, between streamed chunks, at the end
   of the stream (a reply whose text had all arrived is still cut), or before a tool call. A running

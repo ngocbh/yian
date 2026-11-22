@@ -359,11 +359,11 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
 
 /**
  * Whether a live steer joins after a final answer: once replay is over and no recorded attempt
- * continues the call, the inbox has events queued now. The loop top reads them; nothing awaits
- * between this check and that read.
+ * continues the call, the inbox has events queued now besides actions, which never cause a call.
+ * The loop top reads them; nothing awaits between this check and that read.
  */
 function queuedSteer(steps: AgentSteps, inbox: SteerInbox | undefined): boolean {
-  return inbox !== undefined && !steps.replaying() && !steps.continuesCall() && inbox.queued();
+  return inbox !== undefined && !steps.replaying() && !steps.continuesCall() && inbox.queuedBesidesActions();
 }
 
 /**

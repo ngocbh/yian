@@ -158,8 +158,8 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("the schema version is 34", () => {
-  expect(SCHEMA_VERSION).toBe(34);
+test("the schema version is 35", () => {
+  expect(SCHEMA_VERSION).toBe(35);
 });
 
 test.each([7, 8, 9])("retired schema %d record is rejected by name", (schema) => {
@@ -183,6 +183,7 @@ test.each<[number, string]>([
   [31, "a node failure named the flow call taking it"],
   [32, "a run recorded its agents' tool modules"],
   [33, "a run recorded that a host checks its tool calls"],
+  [34, "a message could hold a person's action"],
 ])("a schema %d record, from before %s, is retired", (schema) => {
   const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":${schema},"seq":0}`;
   const error = expectError(() => decodeRecord(line), RunLogSchemaError, retired(schema)) as RunLogSchemaError;

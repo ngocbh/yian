@@ -1,14 +1,13 @@
 /**
  * The host's check before each agent tool call: the tool sources a run records, the bound on its
- * texts, the internal seam that carries the hook, and the run tool set that holds it.
+ * texts, and the run tool set that holds the hook.
  */
 
 import { expect, test } from "bun:test";
 
-import { type BeforeToolCall, checkGateText, GATE, GATE_TEXT_MAX_BYTES, gateOf, isToolSource } from "../../src/tools/gate.ts";
+import { type BeforeToolCall, checkGateText, GATE_TEXT_MAX_BYTES, isToolSource } from "../../src/tools/gate.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { YianRangeError, YianTypeError } from "../../src/typesys/errors.ts";
-import { gated } from "../helpers/gate.ts";
 
 test.each([
   { kind: "host", group: null, tool: "lookup" },
@@ -54,18 +53,6 @@ test.each<[string, unknown, Error]>([
   ["a lone surrogate", "a\uD800", new YianRangeError("refusal has a lone surrogate")],
 ])("checkGateText refuses %s", (_name, value, error) => {
   expect(() => checkGateText(value, "refusal")).toThrow(error);
-});
-
-test("options hold the hook under the gate key, and a spread copy keeps it", () => {
-  const hook: BeforeToolCall = () => undefined;
-  const options = gated({ log: "x" }, hook);
-  expect([gateOf(options), gateOf({ ...options, skills: null })]).toEqual([hook, hook]);
-  expect(Object.keys(options)).toEqual(["log"]);
-  expect([gateOf({}), gateOf(gated({}, null))]).toEqual([null, null]);
-});
-
-test("gateOf refuses a hook that isn't a function or null", () => {
-  expect(() => gateOf({ [GATE]: 5 })).toThrow(new YianTypeError("beforeToolCall must be a function or null"));
 });
 
 test("a tool set holds its gate across every copy", () => {

@@ -287,6 +287,10 @@ A resume does this:
 | `unstarted` | The process ended before the run's inputs were recorded | Refuses; delete the log and start the run again |
 | `running` | Another process holds the lock | Refuses |
 
+A run a host gated (`gated: true` in `run_started` or `run_resumed`) resumes only with the host's
+[`beforeToolCall`](/embedding/#gate-tool-calls) hook. `yian run --resume` has none, so it refuses
+any unfinished gated run.
+
 ### What comes from the log, and what you give again
 
 A resume takes the run's inputs, run id, model settings and worker count from the log. With

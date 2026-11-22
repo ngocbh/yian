@@ -304,6 +304,8 @@ server. Each entry grants one of these:
   `concurrencySafe`. Results reach the model in call order.
 - A tool that throws `ReportedToolError` doesn't fail the node: the model reads the message as
   the call's result and carries on. MCP tool errors work this way. Any other error fails the node.
+- A host program can check each call before it runs, and run, refuse or hold it (see
+  [Gate tool calls](/embedding/#gate-tool-calls)). The model reads a refusal as the call's error.
 - `max_tool_iterations` caps the model turns. The default is 50, and `-1` means no cap. At the
   cap, a reply that still asks for tools runs none of them, and the model answers once more. Set
   it in the node's `env:` or the flow's `env:`.
@@ -411,6 +413,10 @@ const result = await runFlow(flow, { question }, { tools: { search, toolbox: [a,
 checked arguments and must return `true` at once; without it, or when it throws or returns a
 Promise, the call runs alone. Mark only tools whose calls don't depend on each other.
 
+A tool's validators and `isConcurrencySafe` run before the host's
+[`beforeToolCall`](/embedding/#gate-tool-calls) check, which reads the model's arguments, not the
+validator's output. Keep both free of effects: a checked call may be refused and never run.
+
 A tool that passes `ctx.callId` to its service as an idempotency key can set `resumable: true`.
 When a crash or a stop cuts off an agent's call to it before the result is recorded, the resumed
 agent sends the call again, with the same `ctx.callId`, instead of telling the model the outcome
@@ -485,8 +491,10 @@ The flow said HI!
 - A run is refused before it starts when a granted flow, library or tool module has the name of
   one of its host tools or tool groups, or when a granted flow or module tool and a granted host
   tool would show one name. This holds for every agent of the flow, even one that never runs.
-- A host never sees a flow call: `pendingCalls` and a run's `waits` leave it out, and `complete`
-  refuses it (`not_host_call`).
+- A host never sees a flow call once its flow runs: `pendingCalls` and a run's `waits` leave it
+  out, and `complete` refuses it (`not_host_call`). A host's
+  [`beforeToolCall`](/embedding/#gate-tool-calls) checks it first, and the flow of a call it holds
+  runs only once released; `complete` answers a held call without running the flow.
 
 A [library](/flows/#library-files) alias grants its defs, each shown as `<alias>_<def>`:
 

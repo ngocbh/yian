@@ -164,6 +164,9 @@ test("a tool loop: each call's request is the one sent, its reply and its two re
     isError: false,
     closed: null,
     startedAt: expect.any(String),
+    note: null,
+    held: false,
+    releaseNote: null,
   });
   expect(first.toolResults).toEqual([ran("call-a", "lookup", "a"), ran("call-b", "save", "b")]);
   expect(first).toMatchObject({
@@ -352,6 +355,9 @@ test("an interrupted call: a reply the interrupt cut, and a reply whose calls it
       isError: true,
       closed: "skipped",
       startedAt: null,
+      note: null,
+      held: false,
+      releaseNote: null,
     },
   ]);
 });
@@ -969,7 +975,18 @@ test("an agent with a flow tool: its request lists the flow, and the flow's answ
   expect(requestOf(first)).toMatchObject(sentView(model.requests[0]!));
   expect(requestOf(first).tools.map((tool) => tool.name)).toEqual(["shout", "lookup"]);
   expect(first.toolResults).toEqual([
-    { callId: "call-a", name: "shout", arguments: { text: "hey" }, output: "hey!", isError: false, closed: null, startedAt: null },
+    {
+      callId: "call-a",
+      name: "shout",
+      arguments: { text: "hey" },
+      output: "hey!",
+      isError: false,
+      closed: null,
+      startedAt: null,
+      note: null,
+      held: false,
+      releaseNote: null,
+    },
   ]);
   const second = await agentCall(log, { nodeId: "helper", n: 4 }, { env: NO_ENV });
   expect(second.digestMismatch).toBe(false);

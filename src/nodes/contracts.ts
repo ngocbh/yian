@@ -1064,8 +1064,8 @@ export interface NodeStepsReaders {
   readonly evaluationsSince?: ((n: number) => number) | null;
   /** Counts the node's starts and wakes after a record; `evaluationsAfter` is 1 without it. */
   readonly evaluationsAfter?: ((seq: number) => number) | null;
-  /** Gives the seq of the record that answered one of the node's calls; `answeredAt` is `null` without it. */
-  readonly answeredAt?: ((callId: string) => number | null) | null;
+  /** Gives the seq of the record that answered or closed one of the node's calls; `settledAt` is `null` without it. */
+  readonly settledAt?: ((callId: string) => number | null) | null;
   /** Reads the flow calls enclosing the node; `flowCalls()` is empty without it. */
   readonly flowCalls?: (() => readonly EnclosingFlowCall[]) | null;
 }
@@ -1078,7 +1078,7 @@ const NODE_STEPS_READERS = [
   "seqOf",
   "evaluationsSince",
   "evaluationsAfter",
-  "answeredAt",
+  "settledAt",
   "flowCalls",
 ] as const satisfies readonly (keyof NodeStepsReaders)[];
 
@@ -1257,12 +1257,13 @@ export class NodeSteps {
   }
 
   /**
-   * The seq of the record that answered the node's call `callId` as the run state holds it now:
-   * the host's `tool_result` step, or the END of a flow call's scope; `null` while it isn't
-   * answered, when the run no longer knows it, and outside a run.
+   * The seq of the record that settled the node's call `callId` as the run state holds it now:
+   * the host's `tool_result` step, the END of a flow call's scope, or the record that closed it
+   * (an interrupt, a wake that timed it out, a resume, its scope's failure); `null` while it is
+   * open, when the run no longer knows it, and outside a run.
    */
-  answeredAt(callId: string): number | null {
-    return this.#readers.answeredAt?.(callId) ?? null;
+  settledAt(callId: string): number | null {
+    return this.#readers.settledAt?.(callId) ?? null;
   }
 
   /**

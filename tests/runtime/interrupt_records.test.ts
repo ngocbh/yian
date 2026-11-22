@@ -92,13 +92,13 @@ test("the record sets the pending interrupt and closes the node's open calls int
     new InterruptedRecord("owner", ["reply"]),
   );
   expect(w.interrupts.get("reply")).toBe(5);
-  expect(w.calls.get("r/reply/1/0")).toMatchObject({ state: "closed", closedReason: "interrupted" });
+  expect(w.calls.get("r/reply/1/0")).toMatchObject({ state: "closed", closedReason: "interrupted", closedSeq: 5 });
   expect(isWakeable(w, "reply")).toBe(true);
 });
 
-test("a pending step on a node with a pending interrupt registers its call closed interrupted", () => {
+test("a pending step on a node with a pending interrupt registers its call closed interrupted, at its own record", () => {
   const w = fold(...START, modelCall("reply", 1), new InterruptedRecord("owner", ["reply"]), agentPending("reply", 2, 1, 0, "tc-0"));
-  expect(w.calls.get("r/reply/1/0")).toMatchObject({ state: "closed", closedReason: "interrupted" });
+  expect(w.calls.get("r/reply/1/0")).toMatchObject({ state: "closed", closedReason: "interrupted", closedSeq: 4 });
 });
 
 test("the honor step drops the pending interrupt and marks the node honored until it settles", () => {

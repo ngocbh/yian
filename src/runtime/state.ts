@@ -1626,6 +1626,17 @@ export function callResultStep(state: RunState, callId: string): Readonly<JsonOb
 }
 
 /**
+ * The seq of the record that settled registered call `call`: the record that closed it, the
+ * `tool_result` step that answered it, or for a flow call its scope END's commit (the agent's
+ * `tool_result` only records that answer); `null` while it is open, and for a take or sleep.
+ */
+export function callSettledAt(state: RunState, call: Call): number | null {
+  if (call.state === "closed") return call.closedSeq;
+  if (call.state !== "answered") return null;
+  return call.scope === null ? call.resultSeq : (state.producers.get(`${call.scope}/${END_ID}`) ?? null);
+}
+
+/**
  * The `tool_result` step a flow call's agent writes for the output its scope's END committed
  * (`Node.waitResultStep`, cut to the run's `YIAN_MAX_FLOW_RESULT_CHARS`).
  */
@@ -3906,25 +3917,25 @@ function validateNodeWaiting(state: RunState, record: NodeWaitingRecord): void {
       throw new YianRangeError(`NodeWaiting call ${reprText(callId)} belongs to node ${reprText(call.nodeId)}`);
     }
     // A call registered before the last wake may be waited on again only if it was still open at
-    // that wake (a timeout wake leaves the node's other calls open): open now, or answered by a
-    // result after the wake. A closed one is refused below.
+    // that wake (a timeout wake, or a hold's answer, leaves the node's other calls open): open now,
+    // or answered after the wake, by a host or a flow call's scope. A closed one is refused below.
     const settledByWake =
       lastWoken !== undefined &&
       call.seq < lastWoken &&
       call.state !== "open" &&
       call.state !== "closed" &&
-      !(call.state === "answered" && call.resultSeq !== null && call.resultSeq > lastWoken);
+      !(call.state === "answered" && (callSettledAt(state, call) ?? 0) > lastWoken);
     if (settledByWake) {
       throw new YianRangeError(
         `NodeWaiting call ${reprText(callId)} was registered before the node's last node_woken and had settled by then`,
       );
     }
     // An interrupt can land between an agent's `Pending` and the engine's `node_waiting`; the node
-    // is wakeable at once and honors it. So is a flow call whose scope couldn't grow, which fails
-    // as the node is about to wait.
+    // is wakeable at once and honors it. So is a flow call that failed after this evaluation
+    // began: its scope couldn't grow as the node was about to wait, or failed while the node ran.
     const interrupted = call.closedReason === "interrupted" && w.interrupts.has(nodeId);
-    const ungrown = call.flow && call.closedReason === "failed" && !state.flowScopes.has(callId);
-    if (call.state === "closed" && !interrupted && !ungrown) {
+    const failedSince = call.flow && call.closedReason === "failed" && call.closedSeq! > state.acceptedStarts.get(nodeId)!;
+    if (call.state === "closed" && !interrupted && !failedSince) {
       throw new YianRangeError(`NodeWaiting call ${reprText(callId)} was closed (${call.closedReason})`);
     }
   }

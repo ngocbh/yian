@@ -12,8 +12,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { END_ID } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { CallHeld, NodeWaiting, NodeWoken, type RunEvent, ToolCallFinished, ToolCallStarted } from "../../src/events.ts";
+import { CallHeld, NodeFailed, NodeSucceeded, NodeWaiting, NodeWoken, type RunEvent, ToolCallFinished, ToolCallStarted } from "../../src/events.ts";
 import { Message, Response, ToolCallPart, type ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { type AgentRunContext, AgentLoopError, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
@@ -1193,6 +1194,174 @@ test("a crash as the start after an answer writes a flow call's answer leaves th
   await crashAfter(recordAt(uncut, (step) => step["call_id"] === "cF", 1, woke) - 1, () => advance(run(log, ran)));
   expect((await advance(run(log, ran))).status).toBe("succeeded");
   expect([ran, closersOf(log, ran).closers]).toEqual([["later:L", "lookup:L2"], []]);
+});
+
+/** `flowOf`'s flow, its agent granted `grants`, with the defs `shout`, a code node, and `fail`, one that throws. */
+const flowCallsOf = (grants: string) =>
+  loadFlow(`
+id: gate
+name: gate
+llm_config: {provider: openai, model: test-model}
+input:
+  m: !Inbox(str)
+defs:
+  shout:
+    description: Shout the text back.
+    input: {text: !str}
+    kind: code
+    code: return inputs.text.toUpperCase()
+    output: !str
+  fail:
+    description: Fail.
+    input: {text: !str}
+    kind: code
+    code: throw new Error("no " + inputs.text)
+    output: !str
+nodes:
+  reply:
+    kind: agent
+    prompt: go
+    tools: [${grants}]
+    steer_inbox: \${input.m}
+    output: !Optional(str)
+output: \${reply.output}
+`);
+
+/**
+ * Tools noting each run in `ran`, each running alone and returning once a flow call's scope ended
+ * (its END succeeded or it failed), so the flow's answer lands while it runs: `settle`, and `stop`,
+ * which then interrupts the run at `log` and returns once its call learns of it. `onEvent` sees the
+ * scope end.
+ */
+function scopeWaiters(log: string, ran: string[]) {
+  let ended = () => {};
+  const scopeEnded = new Promise<void>((resolve) => (ended = resolve));
+  const onEvent = (event: RunEvent) => {
+    if (event instanceof NodeFailed ? event.scope !== null : event instanceof NodeSucceeded && event.nodeId.endsWith(`#0/${END_ID}`)) ended();
+  };
+  const waiter = (name: string, then: (interrupted: AbortSignal) => Promise<unknown>) =>
+    tool({
+      name,
+      description: `Tool ${name}.`,
+      parameters: { type: "object", properties: { q: { type: "string" } } },
+      execute: async (args, ctx) => {
+        ran.push(`${name}:${String(args.q)}`);
+        await scopeEnded;
+        await then(ctx.interrupted);
+        return `${name}:${String(args.q)}`;
+      },
+    });
+  const settle = waiter("settle", async () => {});
+  const stop = waiter("stop", async (interrupted) => {
+    await interrupt(log, "m", { env });
+    if (!interrupted.aborted) await new Promise((resolve) => interrupted.addEventListener("abort", resolve, { once: true }));
+  });
+  return { tools: { settle, stop }, onEvent };
+}
+
+/**
+ * Run `replies` at `log` over `notedTools` and `scopeWaiters`, holding the call `h` and answering
+ * it as it is announced, so its answer wakes the agent while the reply's flow call `cF` still runs.
+ */
+async function flowBesideHold(replies: () => Response[], log = freshLog()) {
+  const ran: string[] = [];
+  const events: RunEvent[] = [];
+  const delivered: Promise<unknown>[] = [];
+  const waiters = scopeWaiters(log, ran);
+  const onEvent = (event: RunEvent) => {
+    events.push(event);
+    waiters.onEvent(event);
+    if (event instanceof CallHeld) delivered.push(complete(log, event.callId, { output: "approved" }, { env }));
+  };
+  const model = new ScriptedModel(replies(), CONFIG);
+  const options = { ...notedOptions(log, ran, []), models: serving(model), tools: { ...notedTools(ran), ...waiters.tools }, onEvent };
+  const result = await runFlow(await flowCallsOf(`${NOTED}, settle, stop, shout, fail`), {}, gated(options, holding("h").hook));
+  await Promise.all(delivered);
+  const waits = events.filter((event) => event instanceof NodeWaiting).map((event) => (event as NodeWaiting).callIds);
+  return { result, log, ran, model, waits, results: stepsOf(log).filter((step) => step["kind"] === "tool_result") };
+}
+
+test.each<[string, string, [string, string, boolean]]>([
+  ["answers", "shout", ["cF", "F", false]],
+  ["fails", "fail", ["cF", "Flow fail failed at node fail (node.execute): Error: no f", true]],
+])("a flow call whose scope %s while the woken agent runs a later call is waited on again and read on the next wake", async (_, name, read0) => {
+  // [F] [later h] [settle L]: h's answer wakes the agent while F's scope runs, and the scope ends
+  // while L runs, after the woken start read F open.
+  const replies = () => [callReply([name, { text: "f" }, "cF"], ["later", { q: "h" }, "ch"], ["settle", { q: "L" }, "cL"]), textReply("done")];
+  const { result, ran, model, waits, results } = await flowBesideHold(replies);
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(ran).toEqual(["settle:L"]);
+  expect(waits).toEqual([[heldId(0), heldId(1)], [heldId(0)]]);
+  expect(results.map((step) => step["call_id"])).toEqual(["ch", "cL", "cF"]);
+  expect(read(model, 1)).toEqual([read0, ["ch", "approved", false], ["cL", "settle:L", false]]);
+});
+
+test.each<[string, string, string | undefined]>([
+  ["answer", "shout", undefined],
+  ["failure", "fail", "failed"],
+])("an interrupt honored after a flow call's scope ended while a later call ran records the flow's %s", async (_, name, closed) => {
+  // [F] [later h] [settle L0] [stop L1]: F's scope ends while L0 runs; the interrupt lands while L1 runs.
+  const replies = () => [
+    callReply([name, { text: "f" }, "cF"], ["later", { q: "h" }, "ch"], ["settle", { q: "L0" }, "cL0"], ["stop", { q: "L1" }, "cL1"]),
+  ];
+  const { result, ran, results } = await flowBesideHold(replies);
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toBeNull();
+  expect(ran).toEqual(["settle:L0", "stop:L1"]);
+  expect(results.map((step) => [step["call_id"], step["closed"]])).toEqual([["ch", undefined], ["cL0", undefined], ["cL1", undefined], ["cF", closed]]);
+});
+
+test("a flow call that failed while its hold waited, cut at its closer on the wake, leaves the later calls to run: the wake never reached them", async () => {
+  // [G] [team_a h1, lookup x] [later L0] [again L1]: G's scope fails while the node waits on h1.
+  const replies = () => [
+    callReply(["fail", { text: "g" }, "cG"], ["team_a", { q: "h1" }, "ch1"], ["lookup", { q: "x" }, "cx"], ["later", { q: "L0" }, "cL0"], ["again", { q: "L1" }, "cL1"]),
+    textReply("done"),
+  ];
+  const flow = await flowCallsOf(`${NOTED}, fail`);
+  const run = (log: string, ran: string[]) => gated(notedOptions(log, ran, replies().slice(modelCalls(log))), holding("h1").hook);
+  /** Run to the wait, answer h1 and advance, cut at record `k` when given; then advance to the end. */
+  const life = async (log: string, ran: string[], k: number | null) => {
+    expect((await runFlow(flow, {}, run(log, ran))).status).toBe("waiting");
+    await complete(log, heldId(1), { output: "yes" }, { env });
+    if (k !== null) await crashAfter(k, () => advance(run(log, ran)));
+    return await advance(run(log, ran));
+  };
+  const uncut = freshLog();
+  expect((await life(uncut, [], null)).status).toBe("succeeded");
+  const woke = readRunLog(uncut).findIndex(({ kind }) => kind === "node_woken");
+  const log = freshLog();
+  const ran: string[] = [];
+  const done = await life(log, ran, recordAt(uncut, (step) => step["call_id"] === "cG", 1, woke) - 1);
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect([ran, closersOf(log, ran).closers]).toEqual([["lookup:x", "later:L0", "again:L1"], [["cG", "failed"]]]);
+});
+
+test("a host call a resume closed crashed, cut at its closer by the next start, leaves the later calls to run: that start never reached them", async () => {
+  // [team_a h1, ticket p, team_a x] [later L1] [again L2]: a crash at node_waiting, h1 answered
+  // while the run is down; the resume closes p crashed and is cut at p's closer.
+  const ticket = tool({ name: "ticket", description: "Ticket.", parameters: { type: "object", properties: { q: { type: "string" } } },
+    isConcurrencySafe: () => true, execute: () => pending() });
+  const replies = replying(["team_a", "h1"], ["ticket", "p"], ["team_a", "x"], ["later", "L1"], ["again", "L2"]);
+  const flow = await flowOf(`${NOTED}, ticket`);
+  const run = (log: string, ran: string[]) =>
+    gated({ ...notedOptions(log, ran, replies().slice(modelCalls(log))), tools: { ...notedTools(ran), ticket } }, holding("h1").hook);
+  /** Cut the start at record `k1`, answer h1, cut the resume at record `k2` when given; then advance to the end. */
+  const life = async (log: string, ran: string[], k1: number, k2: number | null) => {
+    await crashAfter(k1, () => runFlow(flow, {}, run(log, ran)));
+    await complete(log, heldId(0), { output: "yes" }, { env });
+    if (k2 !== null) await crashAfter(k2, () => advance(run(log, ran)));
+    return await advance(run(log, ran));
+  };
+  const uncut = freshLog();
+  await runFlow(flow, {}, run(uncut, []));
+  const k1 = readRunLog(uncut).findIndex(({ kind }) => kind === "node_waiting");
+  const once = freshLog();
+  expect((await life(once, [], k1, null)).status).toBe("succeeded");
+  const log = freshLog();
+  const ran: string[] = [];
+  const done = await life(log, ran, k1, recordAt(once, (step) => step["closed"] === "crashed") - 1);
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect([ran, closersOf(log, ran).closers]).toEqual([["a:x", "later:L1", "again:L2"], [["cp", "crashed"]]]);
 });
 
 test.each<[string, () => Response[], (step: ValueRecord) => boolean, string[]]>([

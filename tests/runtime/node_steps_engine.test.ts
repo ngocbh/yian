@@ -767,7 +767,7 @@ describe("NodeSteps.evaluationsSince counts the node's starts and wakes after a 
     expect(seen).toEqual(["node 'work' has no step 1"]);
   });
 
-  test("NodeSteps.evaluationsAfter counts starts and wakes after a record, and answeredAt gives the record a host's answer is", async () => {
+  test("NodeSteps.evaluationsAfter counts starts and wakes after a record, and settledAt gives the record a host's answer is", async () => {
     /** A `Rewoken` that also reads, at each evaluation, both readers for each step and call it read. */
     class Reread extends Rewoken {
       readonly reads: unknown[] = [];
@@ -779,7 +779,7 @@ describe("NodeSteps.evaluationsSince counts the node's starts and wakes after a 
         const answers = steps.prior.flatMap((step, index) => (step["kind"] === "tool_result" ? [seqs[index]] : []));
         this.reads.push([
           seqs.map((seq, index) => steps.evaluationsAfter(seq) === steps.evaluationsSince(index + 1)),
-          pending.map((callId) => steps.answeredAt(callId)),
+          pending.map((callId) => steps.settledAt(callId)),
           answers,
         ]);
         return super.forward(inputs, caps);
@@ -793,9 +793,9 @@ describe("NodeSteps.evaluationsSince counts the node's starts and wakes after a 
     const reads = node.reads as [boolean[], (number | null)[], number[]][];
     expect(reads.map(([agree]) => agree)).toEqual([[], [true, true, true], [true, true, true, true, true, true]]);
     // Each call the host answered reads as the seq of its tool_result step.
-    expect(reads.map(([, answeredAt]) => answeredAt)).toEqual(reads.map(([, , answers]) => answers));
+    expect(reads.map(([, settledAt]) => settledAt)).toEqual(reads.map(([, , answers]) => answers));
     expect(reads[2]![2]).toHaveLength(2);
-    expect([new NodeSteps(1, [], () => 1).evaluationsAfter(5), new NodeSteps(1, [], () => 1).answeredAt("c")]).toEqual([1, null]);
+    expect([new NodeSteps(1, [], () => 1).evaluationsAfter(5), new NodeSteps(1, [], () => 1).settledAt("c")]).toEqual([1, null]);
   });
 });
 

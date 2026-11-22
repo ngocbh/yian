@@ -780,7 +780,7 @@ console.log(JSON.stringify({ warnings, runs: readRunIndex(${JSON.stringify(runs)
     expect(readRunIndex(runs).map((row) => row.status)).toEqual(["cancelled"]);
     // The index as a yian of the older schema left it is rebuilt, as deleting it would rebuild it.
     const db = openSqlite(join(runs, "index.sqlite"));
-    db.exec(`PRAGMA user_version = ${8 * 1000 + SCHEMA_VERSION - 1}`);
+    db.exec(`PRAGMA user_version = ${9 * 1000 + SCHEMA_VERSION - 1}`);
     db.close();
     expect(readRunIndex(runs)).toEqual([]);
     withWarnings(() => {}, () => updateRunIndex(runs));
@@ -840,7 +840,7 @@ console.log(JSON.stringify({ warnings, runs: readRunIndex(${JSON.stringify(runs)
     try {
       const { scan } = reader.prepare("SELECT scan FROM runs").get() as { scan: string };
       expect(JSON.parse(scan).waits.stops).toEqual([]);
-      expect(reader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 8 * 1000 + SCHEMA_VERSION });
+      expect(reader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 9 * 1000 + SCHEMA_VERSION });
     } finally {
       reader.close();
     }
@@ -1257,6 +1257,22 @@ describe("waiting runs in the index", () => {
     });
     expect(warnings).toEqual([]);
     expect(readRunIndex(runs).map((row) => row.waits.map((wait) => wait.held))).toEqual([[false]]);
+  });
+
+  test("an index of version 8, whose stored calls say nothing of when they closed, is rebuilt", () => {
+    const runs = freshRuns();
+    waitRun(runs, "run-w", WAITING);
+    updateRunIndex(runs);
+    const db = openSqlite(join(runs, "index.sqlite"));
+    db.exec(`UPDATE runs SET scan = json_remove(scan, '$.waits.calls[0][1].closedSeq'); PRAGMA user_version = ${8 * 1000 + SCHEMA_VERSION}`);
+    db.close();
+    const warnings: string[] = [];
+    withWarnings((message) => warnings.push(message), () => {
+      expect(readRunIndex(runs)).toEqual([]);
+      updateRunIndex(runs);
+    });
+    expect(warnings).toEqual([]);
+    expect(readRunIndex(runs).map((row) => row.waits.length)).toEqual([1]);
   });
 
   test("a waiting take: waiting, not ready, no wake time; a send makes only its row ready, reading only the send", () => {

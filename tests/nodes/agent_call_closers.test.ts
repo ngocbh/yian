@@ -11,13 +11,14 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { END_ID } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { CallClosed, type RunEvent } from "../../src/events.ts";
+import { CallClosed, NodeSucceeded, NodeWaiting, NodeWoken, type RunEvent } from "../../src/events.ts";
 import { type Response, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { ASK_TIMED_OUT_RESULT, closerResult, TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/results.ts";
 import { type Scheduler, virtualScheduler } from "../../src/platform.ts";
-import { advance, complete, inspectRun, pendingCalls, runFlow } from "../../src/run.ts";
+import { advance, complete, inspectRun, interrupt, pendingCalls, runFlow } from "../../src/run.ts";
 import { decodeRecord, NodeStepRecord, type RecordEnvelope } from "../../src/runtime/log.ts";
 import { DeliveryRefused } from "../../src/runtime/state.ts";
 import { pending } from "../../src/tools/context.ts";
@@ -577,4 +578,63 @@ test("a crash between the timeout wake and the re-wait: the ask's closer says ti
     ["c1", "timed out: no answer", true],
     ["c2", "held", false],
   ]);
+});
+
+test.each([false, true])("a flow call whose scope ends while the agent its ask's timeout woke replays gets its answer recorded (interrupted: %s)", async (interrupted) => {
+  // The ask times out while the flow's agent waits to start; that agent answers once the wake is
+  // recorded, and the flow's END lands (then an interrupt, when given) after the woken agent read
+  // the flow call open.
+  const flow = await loadFlow(`
+id: closers
+name: closers
+llm_config: {provider: openai, model: test-model}
+input:
+  m: !Inbox(str)
+defs:
+  think:
+    description: Think it over.
+    nodes:
+      inner: {kind: agent, prompt: think}
+    output: \${inner.output}
+nodes:
+  agent:
+    kind: agent
+    prompt: go
+    tools: [ask_user, think]
+    steer_inbox: \${input.m}
+    output: !Optional(str)
+output: \${agent.output}
+`);
+  const m = scripted(callReply(["think", {}, "c1"], ["ask_user", { question: "q", timeout: "1m" }, "c2"]), textReply("thought"), textReply("done"));
+  const log = freshLog();
+  let woke = () => {};
+  let ended = () => {};
+  const gates = { woke: new Promise<void>((resolve) => (woke = resolve)), ended: new Promise<void>((resolve) => (ended = resolve)) };
+  let builds = 0;
+  const models = {
+    ...serving(m),
+    createModel: async (_config: unknown, { nodeId }: { nodeId: string }) => {
+      if (nodeId === "agent/think#0/inner") await gates.woke;
+      else if (++builds === 2) await gates.ended;
+      return m;
+    },
+  };
+  const events: RunEvent[] = [];
+  const onEvent = (event: RunEvent) => {
+    events.push(event);
+    if (event instanceof NodeWoken && event.nodeId === "agent") woke();
+    if (event instanceof NodeSucceeded && event.nodeId === `agent/think#0/${END_ID}`) {
+      if (interrupted) void interrupt(log, "m", { env: hostEnv(dir) }).then(ended);
+      else ended();
+    }
+  };
+  const result = await runFlow(flow, {}, { ...options(log, m, () => pending()), models, onEvent });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const answers = records(log).flatMap(({ record }) =>
+    record instanceof NodeStepRecord && record.nodeId === "agent" && record.step["kind"] === "tool_result" ? [[record.step["call_id"], record.step["output"]]] : [],
+  );
+  expect(answers).toEqual([["c2", "timed out: no answer"], ["c1", "thought"]]);
+  const waits = events.flatMap((event) => (event instanceof NodeWaiting && event.nodeId === "agent" ? [event.callIds] : []));
+  expect(waits).toEqual(interrupted ? [[CALL, "r/agent/1/1"]] : [[CALL, "r/agent/1/1"], [CALL]]);
+  if (!interrupted) expect(sentResults(m, 2)).toEqual([["c1", "thought", false], ["c2", "timed out: no answer", true]]);
 });

@@ -158,8 +158,8 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("the schema version is 34", () => {
-  expect(SCHEMA_VERSION).toBe(34);
+test("the schema version is 35", () => {
+  expect(SCHEMA_VERSION).toBe(35);
 });
 
 test.each([7, 8, 9])("retired schema %d record is rejected by name", (schema) => {

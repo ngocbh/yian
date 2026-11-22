@@ -140,7 +140,8 @@ test("node_woken, run_waiting, inbox_closed, run_cancelled and run_failed", () =
   expect(new InboxClosedRecord("msgs").inbox).toBe("msgs");
   expectError(() => new InboxClosedRecord(""), RangeError, "inbox must be a non-empty string");
   const cancelled = new RunCancelledRecord();
-  expect(Object.keys(cancelled)).toEqual([]);
+  expect(Object.keys(cancelled)).toEqual(["by"]);
+  expect(cancelled.by).toBeNull();
   expect(Object.isFrozen(cancelled)).toBe(true);
   expect(new RunFailedRecord(FAILURE).failure).toEqual(FAILURE);
   expectError(() => new RunFailedRecord({ ...FAILURE } as never), TypeError, "RunFailedRecord failure must be a Failure");

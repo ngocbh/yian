@@ -102,7 +102,7 @@ import {
 import { validateHeaders } from "./llm_clients/connection_settings.ts";
 import { defaultModelAccess, type ModelAccess } from "./llm_clients/factory.ts";
 import { Message, NamedTool, type Request, ToolCallPart, ToolSpec } from "./llm/messages.ts";
-import { isMemory, type MemoryBase } from "./memory/base.ts";
+import { type Author, isMemory, type MemoryBase } from "./memory/base.ts";
 import {
   type FoldedSteps,
   foldSteps,
@@ -154,6 +154,7 @@ import {
   type RunRecord,
   RunResumedRecord,
   RunStartedRecord,
+  validatedBy,
 } from "./runtime/log.ts";
 import { emptyRunScan, foldRunScan, scanStatus, unfinishedStatus } from "./runtime/run_index.ts";
 import {
@@ -2064,10 +2065,17 @@ function checkRecordedToolGroups(
 }
 
 /**
- * The options of a host call on a run log. A live delivery ignores them, except `codeRoot`'s check
- * and the checks of `apiKey` and `headers`.
+ * The options of a host call on a run log. A live delivery ignores them, except `by`, `codeRoot`'s
+ * check and the checks of `apiKey` and `headers`.
  */
 export interface DeliveryOptions {
+  /**
+   * Who makes the call: a person (`user`), an agent, a TOOL node, a host program or a run. It is
+   * recorded on the call's record (beside the step of a `complete` or `release`, never in it), and
+   * no model reads it. A Stop's is copied onto the records the run applies for it. `null` (the
+   * default) records none.
+   */
+  by?: Author | null;
   /**
    * As `advance`'s `env`: the environment the call reads `YIAN_*` values from, which must be the
    * ones the run recorded (default `processEnv`).
@@ -2095,7 +2103,7 @@ export interface DeliveryOptions {
 /** The options of `send`: `DeliveryOptions`, and the send's idempotency key. */
 export interface SendOptions extends DeliveryOptions {
   /**
-   * A non-empty key recorded with the send. A later send with the same key, inbox and value
+   * A non-empty key recorded with the send. A later send with the same key, inbox, value and `by`
    * appends nothing and returns this send's seq, so a host that lost the reply can send again.
    */
   key?: string | null;
@@ -2117,15 +2125,20 @@ interface Delivered {
  * Offline, a waiting run's registry entry is reused while the log is the file it left; otherwise
  * `fromRecords`, when given, delivers from the opened log alone, else the recorded flow is
  * compiled and the log replayed, as `advance` does. A refused delivery keeps the entry. `before`
- * sees the state just before the delivery, synchronously, when there is one.
+ * sees the state just before the delivery, synchronously, when there is one. `options.by` is
+ * checked first and goes with `op`, and to `fromRecords`.
+ *
+ * @throws TypeError, RangeError when `options.by` isn't an author or null (`validatedBy`).
  */
 async function deliverTo(
   log: string,
-  op: DeliveryOp,
+  bare: DeliveryOp,
   options: DeliveryOptions,
   before: (state: RunState) => void = () => {},
-  fromRecords: ((authority: JsonlRunLog) => Delivered) | null = null,
+  fromRecords: ((authority: JsonlRunLog, by: Author | null) => Delivered) | null = null,
 ): Promise<Delivered> {
+  const by = validatedBy(options.by, "a host call's by");
+  const op: DeliveryOp = { ...bare, by };
   const env = options.env ?? processEnv;
   return withEnv(env, async () => {
     current();
@@ -2160,7 +2173,7 @@ async function deliverTo(
       const want = given === null ? { hostFlow } : { hostFlow, credentials: given };
       const kept = reusable(runHold.idle, authority, key, want);
       if (kept === null && fromRecords !== null) {
-        const delivered = fromRecords(opened);
+        const delivered = fromRecords(opened, by);
         appended = delivered.record !== null;
         return delivered;
       }
@@ -2209,13 +2222,13 @@ async function deliverTo(
  * @param event The value, checked against `T`.
  * @param options See `SendOptions`.
  * @returns The send's seq; for a repeat of a keyed send, the first send's.
- * @throws TypeError when `inbox` isn't a string, `options.key` isn't a string or `null`, or
- *   `options.flow` isn't a `ComposedFlow` or `null`.
- * @throws RangeError when `options.key` is empty.
+ * @throws TypeError when `inbox` isn't a string, `options.key` isn't a string or `null`,
+ *   `options.by` isn't an author or `null`, or `options.flow` isn't a `ComposedFlow` or `null`.
+ * @throws RangeError when `options.key` or a field of `options.by` is empty.
  * @throws DeliveryRefused (nothing appended) with reason `ended` once the run has a terminal
  *   result, `unknown_inbox`, `inbox_closed` (not for a repeat of a keyed send), `invalid_value`
  *   (the `TypeCheckError` is the cause), `key_reused` (an earlier send holds the key with another
- *   inbox or value) or `too_large` (over the run's `YIAN_MAX_EVENT_BYTES`).
+ *   inbox, value or `by`) or `too_large` (over the run's `YIAN_MAX_EVENT_BYTES`).
  * @throws RunBusyError when another writer holds the log.
  * @throws RangeError when the log is empty or doesn't start with `RunStarted`, the run's flow was
  *   built in code and `options.flow` is missing (or was recorded and it is given),
@@ -2377,14 +2390,15 @@ export async function withdraw(log: string, inbox: string, options: DeliveryOpti
  * @throws TypeError when `options.flow` isn't a `ComposedFlow` or `null`.
  * @throws DeliveryRefused (nothing appended) with reason `ended` once the run has a terminal
  *   result (a second cancel among them), as `inspectRun` reads it from the records offline, or
- *   `not_started` when the log ends inside its run start.
+ *   `not_started` when the log ends inside its run start. Read from the records alone, the cancel
+ *   records `options.by` too.
  * @throws RunBusyError, DefaultsMismatchError and `ENOENT`, as `send`; RangeError when the log is
  *   empty or doesn't start with `RunStarted`, `options.codeRoot` isn't the recorded code root, or
  *   `options.apiKey` or `options.headers` is refused.
  */
 export async function cancel(log: string, options: DeliveryOptions = {}): Promise<readonly PendingCall[]> {
   let open: readonly PendingCall[] = [];
-  const fromRecords = (authority: JsonlRunLog): Delivered => {
+  const fromRecords = (authority: JsonlRunLog, by: Author | null): Delivered => {
     const scan = emptyRunScan();
     const calls = callArguments(scan.waits);
     for (const envelope of authority) {
@@ -2401,7 +2415,7 @@ export async function cancel(log: string, options: DeliveryOptions = {}): Promis
     const closed = [...scan.waits.calls.values()].filter(
       (call) => call.state === "open" && call.tool !== TAKE && call.tool !== SLEEP,
     );
-    const envelope = authority.append(new RunCancelledRecord());
+    const envelope = authority.append(new RunCancelledRecord({ by }));
     const events = [new RunCancelled(), ...closed.map((call) => new CallClosed({ callId: call.callId, reason: "cancelled" }))];
     return { seq: envelope.seq, events, record: envelope.record };
   };

@@ -21,7 +21,7 @@ import {
 import { ReportedToolError } from "../tools/errors.ts";
 import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import type { JsonObject } from "../typesys/json.ts";
-import { type Applied, type Author, MemoryBusyError } from "./base.ts";
+import { type Applied, type Author, AUTHOR_KINDS, MemoryBusyError } from "./base.ts";
 
 /**
  * A body that runs holding a memory's lock. It must finish before it returns, so it can't be async:
@@ -337,9 +337,9 @@ export function stringArg(type: string, args: JsonObject, name: string, required
 export function asAuthor(value: unknown): Author | null {
   if (!isObject(value) || typeof value.name !== "string") return null;
   const { kind, name, run, node } = value;
-  if (kind !== "agent" && kind !== "tool" && kind !== "user" && kind !== "host") return null;
+  if (!(AUTHOR_KINDS as readonly unknown[]).includes(kind)) return null;
   if ((run !== undefined && typeof run !== "string") || (node !== undefined && typeof node !== "string")) return null;
-  return authorOf({ kind, name, run, node });
+  return authorOf({ kind: kind as Author["kind"], name, run, node });
 }
 
 /** @internal Return `author` with only its own fields, in a fixed order. */
@@ -358,7 +358,7 @@ export function authorOf(author: Author): Author {
 export function checkAuthor(author: Author): Author {
   const checked = asAuthor(author);
   if (checked === null) {
-    throw new YianTypeError("a change's author must be {kind, name, run?, node?}, its kind agent, tool, user or host");
+    throw new YianTypeError(`a change's author must be {kind, name, run?, node?}, its kind one of ${AUTHOR_KINDS.join(", ")}`);
   }
   return checked;
 }

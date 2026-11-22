@@ -19,7 +19,7 @@ import { ScriptedModel } from "../../src/llm/testing.ts";
 import { ASK_TIMED_OUT_RESULT, closerResult, TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/results.ts";
 import { type Scheduler, virtualScheduler } from "../../src/platform.ts";
 import { advance, complete, inspectRun, interrupt, pendingCalls, runFlow } from "../../src/run.ts";
-import { decodeRecord, NodeStepRecord, type RecordEnvelope } from "../../src/runtime/log.ts";
+import { decodeRecord, NodeStepRecord, type NodeWokenRecord, type RecordEnvelope, type RunResumedRecord } from "../../src/runtime/log.ts";
 import { DeliveryRefused } from "../../src/runtime/state.ts";
 import { pending } from "../../src/tools/context.ts";
 import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
@@ -141,7 +141,7 @@ test("a crash after an agent's pending step: the resume closes the call, the clo
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(asked).toBe(1);
   const resumed = records(log).find(({ kind }) => kind === "run_resumed")!;
-  expect((resumed.record as { closedCalls: string[] }).closedCalls).toEqual([CALL]);
+  expect((resumed.record as RunResumedRecord).closedCalls).toEqual([CALL]);
   expect(closedEvents(events)).toEqual([[CALL, "crashed"]]);
   expect(sentResults(m, 0)).toEqual([["c1", TOOL_OUTCOME_UNKNOWN, true]]);
   expect(closers(log)).toEqual(["crashed"]);
@@ -193,7 +193,7 @@ test("a complete appended while the run is crashed, before run_resumed, is kept"
 
   expect(result.status, result.failure?.message).toBe("succeeded");
   const resumed = records(log).find(({ kind }) => kind === "run_resumed")!;
-  expect((resumed.record as { closedCalls: string[] }).closedCalls).toEqual([]);
+  expect((resumed.record as RunResumedRecord).closedCalls).toEqual([]);
   expect(sentResults(m, 0)).toEqual([["c1", "yes", false]]);
   expect(closers(log)).toEqual([]);
 });
@@ -235,7 +235,7 @@ test("a stop with an agent call open closes it crashed", async () => {
   const result = await advance(resumeOf(log, m, () => pending(), START, undefined, { gate: gateTool().tool }));
   expect(result.status, result.failure?.message).toBe("succeeded");
   const resumed = records(log).find(({ kind }) => kind === "run_resumed")!;
-  expect((resumed.record as { closedCalls: string[] }).closedCalls).toEqual([CALL]);
+  expect((resumed.record as RunResumedRecord).closedCalls).toEqual([CALL]);
   // The ask closed by record and the gate a stop cut: both read as outcome unknown.
   expect(closers(log)).toEqual(["crashed", "crashed"]);
   expect(sentResults(m, 0)).toEqual([
@@ -253,7 +253,7 @@ test("two pended calls and a crash before node_waiting: both close, in call orde
 
   expect(result.status, result.failure?.message).toBe("succeeded");
   const resumed = records(log).find(({ kind }) => kind === "run_resumed")!;
-  expect((resumed.record as { closedCalls: string[] }).closedCalls).toEqual([CALL, "r/agent/1/1"]);
+  expect((resumed.record as RunResumedRecord).closedCalls).toEqual([CALL, "r/agent/1/1"]);
   expect(closers(log)).toEqual(["crashed", "crashed"]);
   expect(sentResults(m, 0)).toEqual([
     ["c1", TOOL_OUTCOME_UNKNOWN, true],
@@ -280,7 +280,7 @@ test("a resumable call that pended and was closed by the resume stays closed cra
 
   expect(result.status, result.failure?.message).toBe("succeeded");
   const resumed = records(log).find(({ kind }) => kind === "run_resumed")!;
-  expect((resumed.record as { closedCalls: string[] }).closedCalls).toEqual([CALL]);
+  expect((resumed.record as RunResumedRecord).closedCalls).toEqual([CALL]);
   expect(calls).toBe(0);
   expect(closers(log)).toEqual(["crashed"]);
   expect(sentResults(m, 0)).toEqual([["c1", TOOL_OUTCOME_UNKNOWN, true]]);
@@ -335,7 +335,7 @@ async function waitingOnAsk(timeout = "30m", more: Parameters<typeof callReply> 
 
 /** The `timed_out` of each `node_woken` in the log. */
 const wakes = (log: string) =>
-  records(log).flatMap(({ kind, record }) => (kind === "node_woken" ? [[...(record as { timedOut: string[] }).timedOut]] : []));
+  records(log).flatMap(({ kind, record }) => (kind === "node_woken" ? [[...(record as NodeWokenRecord).timedOut]] : []));
 
 test("at the deadline the agent wakes timed_out, reads 'timed out: no answer', and goes on", async () => {
   const log = await waitingOnAsk();
@@ -365,7 +365,7 @@ test("a complete after the timeout's wake is refused; the closer still says time
   const done = await advance(resumeOf(log, m, () => pending(), START + 32 * MINUTE));
   expect(done.status, done.failure?.message).toBe("succeeded");
   const resumed = records(log).find(({ kind }) => kind === "run_resumed")!;
-  expect((resumed.record as { closedCalls: string[] }).closedCalls).toEqual([]);
+  expect((resumed.record as RunResumedRecord).closedCalls).toEqual([]);
   expect(closers(log)).toEqual(["timed_out"]);
   expect(sentResults(m, 0)).toEqual([["c1", "timed out: no answer", true]]);
 });
@@ -564,7 +564,7 @@ test("a crash between the timeout wake and the re-wait: the ask's closer says ti
   // The hold call was still open at the wake: it is pending at the host, not an unknown outcome.
   expect(rewait.status, rewait.failure?.message).toBe("waiting");
   const resumed = records(log).find(({ kind }) => kind === "run_resumed")!;
-  expect((resumed.record as { closedCalls: string[] }).closedCalls).toEqual([]);
+  expect((resumed.record as RunResumedRecord).closedCalls).toEqual([]);
   expect(closedEvents(events)).toEqual([]);
   expect(closers(log)).toEqual(["timed_out"]);
   expect(quiet.requests).toHaveLength(0);

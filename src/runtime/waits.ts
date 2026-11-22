@@ -3,12 +3,13 @@
  * `inspectRun` and the run index, so each reads the same waits from the same records; run status
  * stays with the run scan (`runtime/run_index.ts`).
  *
- * Knows about: runtime/log (record types, record times), events (`CloseReason`), nodes/base
+ * Knows about: runtime/log (record types, record times, `by`), events (`CloseReason`), nodes/base
  * (`WaitRequest`), nodes/contracts (`CALL_STATES`), nodes/start and nodes/end (the START and END
- * ids), diagnostics.
+ * ids), memory/base (`Author`), diagnostics.
  */
 
 import { reprText } from "../diagnostics.ts";
+import type { Author } from "../memory/base.ts";
 import type { WaitRequest } from "../nodes/base.ts";
 import { CALL_STATES } from "../nodes/contracts.ts";
 import { EndNode } from "../nodes/end/node.ts";
@@ -37,6 +38,7 @@ import {
   recordTimeMs,
   requireRecordTime,
   type TakeCommit,
+  validatedBy,
   type WaitEntry,
 } from "./log.ts";
 
@@ -123,6 +125,8 @@ export interface StopState {
   readonly seq: number;
   /** Whether it has stopped an agent: an `interrupted` record on the inbox named one. */
   readonly stopped: boolean;
+  /** Who made it: the `by` of the host's `interrupted` record, which the records the run applies copy. */
+  readonly by: Author | null;
 }
 
 /** One call a host can see the run waiting on. */
@@ -354,8 +358,20 @@ function inboxFromJson(value: unknown, label: string): InboxState {
 function stopFromJson(value: unknown, label: string): StopState {
   const seq = isObject(value) ? intOrNull(value["seq"]) : null;
   const stopped = isObject(value) ? value["stopped"] : undefined;
-  if (seq === null || typeof stopped !== "boolean") throw new YianRangeError(`waits JSON ${label} must be a stop`);
-  return { seq, stopped };
+  const by = isObject(value) ? storedBy(value["by"]) : undefined;
+  if (seq === null || typeof stopped !== "boolean" || by === undefined) throw new YianRangeError(`waits JSON ${label} must be a stop`);
+  return { seq, stopped, by };
+}
+
+/** Return a stored `by`: `null`, or an author (`validatedBy`); `undefined` when it is neither. */
+function storedBy(value: unknown): Author | null | undefined {
+  if (value === null) return null;
+  if (!isObject(value)) return undefined;
+  try {
+    return validatedBy(value, "by");
+  } catch {
+    return undefined;
+  }
 }
 
 /** Return a stored pending take commit. @throws RangeError when it isn't one. */
@@ -621,7 +637,7 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
 function applyInterrupted(w: WaitsState, seq: number, record: InterruptedRecord): void {
   // Once it has stopped an agent the Stop stays so: a replayed empty record can't extend its window.
   const stopped = (w.stops.get(record.inbox)?.stopped ?? false) || record.nodes.length > 0;
-  w.stops.set(record.inbox, { seq, stopped });
+  w.stops.set(record.inbox, { seq, stopped, by: record.by });
   for (const nodeId of record.nodes) {
     w.interrupts.set(nodeId, seq);
     w._interruptInboxes.set(nodeId, record.inbox);

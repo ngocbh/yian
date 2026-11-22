@@ -75,6 +75,8 @@ const takeWait = (node: string, mode: "one" | "all", inbox = "msgs") =>
 const takeCommit = (node: string, events: number[], closed = false) =>
   new PoolCommitRecord(node, node, null, { take: { inbox: "msgs", events, closed } });
 const stop = (inbox: string, nodes: string[] = []) => new InterruptedRecord(inbox, nodes);
+/** A person, as a host call's `by` names one. */
+const ADA = { kind: "user", name: "Ada" } as const;
 
 /** Fold `records` at seqs 0, 1, ... into a fresh state. */
 function fold(...records: RunRecord[]): WaitsState {
@@ -331,6 +333,20 @@ test("prepareAppliedStop names the opener and each waiting reader without an int
   expect(state.waits.calls.get(agentCall("w", 1, 0))).toMatchObject({ state: "closed", closedReason: "interrupted" });
 });
 
+test("an applied Stop carries the standing Stop's by; a replayed one carrying another is refused", () => {
+  const run = readersFlow();
+  const { log, state } = run;
+  commitPrepared(log, state, prepareInterrupt(state, "msgs", [], ADA)!);
+  startUpTo(run, "a");
+  const prepared = prepareAppliedStop(state, "msgs", "a");
+  expect((prepared.record as InterruptedRecord).by).toEqual(ADA);
+  expect(() => prepareRecord(state, new InterruptedRecord("msgs", ["a"]))).toThrow(
+    "Interrupted while a Stop stands on 'msgs' must carry that Stop's by",
+  );
+  commitPrepared(log, state, prepared);
+  expect(state.waits.stops.get("msgs")).toEqual({ seq: prepared.expectedSequence, stopped: true, by: ADA });
+});
+
 test("prepareAppliedStop refusals: unknown inbox, not started, ended", () => {
   const run = readersFlow();
   startUpTo(run, "a");
@@ -497,12 +513,13 @@ test("the interrupt delivery op prepares the interrupt; a missing running is non
 
 describe("stops", () => {
   test("an interrupted record remembers the Stop; stopped says whether it named an agent", () => {
-    expect([...fold(...START, stop("msgs")).stops]).toEqual([["msgs", { seq: 2, stopped: false }]]);
-    expect(fold(...START, new NodeStartedRecord("reply"), stop("msgs", ["reply"])).stops.get("msgs")).toEqual({ seq: 3, stopped: true });
+    expect([...fold(...START, stop("msgs")).stops]).toEqual([["msgs", { seq: 2, stopped: false, by: null }]]);
+    expect(fold(...START, new NodeStartedRecord("reply"), stop("msgs", ["reply"])).stops.get("msgs")).toEqual({ seq: 3, stopped: true, by: null });
     // A replayed empty record after a stopping one doesn't reset stopped (so it can't outlive the next wait).
     expect(fold(...START, new NodeStartedRecord("reply"), stop("msgs", ["reply"]), stop("msgs")).stops.get("msgs")).toEqual({
       seq: 4,
       stopped: true,
+      by: null,
     });
   });
 
@@ -580,13 +597,17 @@ describe("stops", () => {
     expect(w.stops.has("msgs")).toBe(true);
   });
 
-  test("toJSON/fromJSON keeps stops; a bad stop entry is refused", () => {
-    const w = fold(...START, stop("msgs"));
+  test("an interrupted record's by is the Stop's", () => {
+    const w = fold(...START, new InterruptedRecord("msgs", [], { by: ADA }));
+    expect(w.stops.get("msgs")).toEqual({ seq: 2, stopped: false, by: ADA });
+  });
+
+  test("toJSON/fromJSON keeps stops and their by; a bad stop entry is refused", () => {
+    const w = fold(...START, stop("msgs"), new InterruptedRecord("other", [], { by: ADA }));
     expect([...WaitsState.fromJSON(JSON.parse(JSON.stringify(w.toJSON()))).stops]).toEqual([...w.stops]);
-    expect(() => WaitsState.fromJSON({ ...w.toJSON(), stops: [["msgs", { seq: 1 }]] } as never)).toThrow(/stops 'msgs' must be a stop/);
-    expect(() => WaitsState.fromJSON({ ...w.toJSON(), stops: [["msgs", { seq: "1", stopped: true }]] } as never)).toThrow(
-      /stops 'msgs' must be a stop/,
-    );
+    for (const entry of [{ seq: 1, stopped: true }, { seq: "1", stopped: true, by: null }, { seq: 1, stopped: true, by: { kind: "app", name: "x" } }]) {
+      expect(() => WaitsState.fromJSON({ ...w.toJSON(), stops: [["msgs", entry]] } as never)).toThrow(/stops 'msgs' must be a stop/);
+    }
   });
 });
 
@@ -616,5 +637,5 @@ test("a Stop between a take's wake and its commit stands through the commit", ()
     new NodeSucceededRecord("heard", 6),
     new NodeStartedRecord("reply"),
   );
-  expect(w.stops.get("msgs")).toEqual({ seq: 5, stopped: false });
+  expect(w.stops.get("msgs")).toEqual({ seq: 5, stopped: false, by: null });
 });

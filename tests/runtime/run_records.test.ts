@@ -726,13 +726,22 @@ const ROUND_TRIP_RECORDS: [string, RunRecord][] = [
   ["InboxWithdrawnRecord", new InboxWithdrawnRecord("msgs", [3])],
   ["InterruptedRecord", new InterruptedRecord("owner", ["reply", "side"])],
   ["RunCancelledRecord", new RunCancelledRecord()],
+  ["InboxClosedRecord with its by", new InboxClosedRecord("msgs", { by: { kind: "user", name: "Ada" } })],
+  ["InboxWithdrawnRecord with its by", new InboxWithdrawnRecord("msgs", [3], { by: { kind: "agent", name: "yian-chat" } })],
+  ["InterruptedRecord with its by", new InterruptedRecord("owner", [], { by: { kind: "tool", name: "t", run: "p", node: "n" } })],
+  ["RunCancelledRecord with its by", new RunCancelledRecord({ by: { kind: "host", name: "daemon" } })],
   [
     "RunFailedRecord",
     new RunFailedRecord(new Failure({ code: "graph.terminal_unreachable", message: "END is unreachable", nodeId: "choice" })),
   ],
   ["NodeStartedRecord", new NodeStartedRecord("agent")],
   ["NodeStepRecord", new NodeStepRecord("agent", 2, { kind: "tool_attempt", event: "started", attempt: 2n })],
+  ["NodeStepRecord with its by", new NodeStepRecord("agent", 2, { kind: "released", call_id: "c" }, { by: { kind: "run", name: "review r1", run: "r1" } })],
   ["PoolCommitRecord", new PoolCommitRecord("agent", "agent", { kind: "str", value: "done" })],
+  [
+    "PoolCommitRecord, a send with its by",
+    new PoolCommitRecord("__start__", "__start__.m", { kind: "str", value: "hi" }, { sendKey: "k", by: { kind: "user", name: "Ada" } }),
+  ],
   ["PoolCommitRecord, a take", new PoolCommitRecord("heard", "heard", null, { take: { inbox: "msgs", events: [4, 6], closed: true } })],
   ["NodeSucceededRecord", new NodeSucceededRecord("agent", 3)],
   ["NodeSucceededRecord with its messages commit", new NodeSucceededRecord("agent", 3, { messages: 4 })],
@@ -1005,6 +1014,60 @@ test.each(ROUND_TRIP_RECORDS)("every record round trips through a validated enve
 
 test("the record wire examples cover the closed record inventory", () => {
   expect(new Set(ROUND_TRIP_RECORDS.map(([, record]) => record.constructor))).toEqual(new Set(RUN_RECORD_TYPES));
+});
+
+/** `record`'s log line at seq 5. */
+const wireLine = (record: RunRecord) => encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "r1", 5, record, "2026-11-22T00:00:00.000Z"));
+
+test("a host call's by is a frozen copy of its own fields, written in the payload and left out when null", () => {
+  const record = new InboxClosedRecord("msgs", { by: { kind: "user", name: "Ada", seat: "1" } as never });
+  expect([record.by, Object.isFrozen(record.by)]).toEqual([{ kind: "user", name: "Ada" }, true]);
+  expect(wireLine(record)).toContain('"payload":{"by":{"kind":"user","name":"Ada"},"inbox":"msgs"}');
+  expect(wireLine(new NodeStepRecord("a", 1, { kind: "released", call_id: "c" }, { by: { kind: "agent", name: "o" } }))).toContain(
+    '"payload":{"by":{"kind":"agent","name":"o"},"n":1,"node_id":"a","step":{"call_id":"c","kind":"released"}}',
+  );
+  expect(wireLine(new InboxClosedRecord("msgs"))).toContain('"payload":{"inbox":"msgs"}');
+  expect(new RunCancelledRecord({ by: null }).by).toBeNull();
+});
+
+test.each<[string, () => unknown, new (...args: never[]) => Error, string]>([
+  ["a text", () => new InboxClosedRecord("m", { by: "Ada" as never }), TypeError, "by must be {kind, name, run?, node?} or null"],
+  [
+    "an unknown kind",
+    () => new RunCancelledRecord({ by: { kind: "app", name: "x" } as never }),
+    TypeError,
+    "by kind must be one of agent, tool, user, host, run",
+  ],
+  ["an empty name", () => new InterruptedRecord("m", [], { by: { kind: "user", name: "" } }), RangeError, "by name must be a non-empty string"],
+  [
+    "an empty node",
+    () => new InboxWithdrawnRecord("m", [1], { by: { kind: "tool", name: "t", node: "" } }),
+    RangeError,
+    "by node must be a non-empty string",
+  ],
+  [
+    "on a commit with no value",
+    () => new PoolCommitRecord("heard", "heard", null, { take: { inbox: "m", events: [], closed: false }, by: { kind: "user", name: "Ada" } }),
+    RangeError,
+    "only a pool_commit that holds a value holds by",
+  ],
+])("a host call's by is refused when it is %s", (_name, build, cls, message) => {
+  expectError(build, cls, message);
+});
+
+test.each<[string, string, new (...args: never[]) => Error, string]>([
+  ["null", '"by":null', TypeError, "inbox_closed payload by must be an object"],
+  [
+    "an extra field",
+    '"by":{"kind":"user","name":"Ada","seat":"1"}',
+    RangeError,
+    'invalid inbox_closed payload by fields; missing=[], extra=["seat"]',
+  ],
+  ["no name", '"by":{"kind":"user"}', RangeError, 'invalid inbox_closed payload by fields; missing=["name"], extra=[]'],
+  ["an unknown kind", '"by":{"kind":"yian","name":"x"}', TypeError, "inbox_closed payload by kind must be one of agent, tool, user, host, run"],
+])("a payload whose by is %s is refused", (_name, by, cls, message) => {
+  const line = `{"at":"2026-11-22T00:00:00.000Z","kind":"inbox_closed","payload":{${by},"inbox":"m"},"run_id":"r1","schema":${SCHEMA_VERSION},"seq":5}`;
+  expectError(() => decodeRecord(line), cls, message);
 });
 
 test.each([

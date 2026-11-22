@@ -35,6 +35,7 @@ import {
   ToolCallFinished,
 } from "../events.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
+import type { Author } from "../memory/base.ts";
 import {
   CapabilityFault,
   type CompleteResult,
@@ -258,18 +259,19 @@ export function resumedAttemptEvents(state: RunState, record: RunResumedRecord):
 
 /**
  * One host delivery: a send, a withdraw of an inbox's unread sends, a completed call, a released
- * hold, an inbox close, an interrupt or a cancel. An interrupt's `running` are the in-flight
- * readers of its inbox, which only the engine knows; absent offline: then any in-flight node
- * counts as an open reader for the idle rule.
+ * hold, an inbox close, an interrupt or a cancel, and who makes it (`by`, recorded on its record).
+ * An interrupt's `running` are the in-flight readers of its inbox, which only the engine knows;
+ * absent offline: then any in-flight node counts as an open reader for the idle rule.
  */
-export type DeliveryOp =
+export type DeliveryOp = (
   | { readonly kind: "send"; readonly inbox: string; readonly event: unknown; readonly key?: string | null }
   | { readonly kind: "withdraw"; readonly inbox: string }
   | { readonly kind: "complete"; readonly callId: string; readonly result: CompleteResult }
   | { readonly kind: "release"; readonly callId: string; readonly note?: string | null }
   | { readonly kind: "close"; readonly inbox: string }
   | { readonly kind: "interrupt"; readonly inbox: string; readonly running?: readonly string[] }
-  | { readonly kind: "cancel" };
+  | { readonly kind: "cancel" }
+) & { readonly by?: Author | null };
 
 /**
  * @internal Prepare `op` on `state`; the engine and the run boundary share it.
@@ -281,21 +283,22 @@ export type DeliveryOp =
  * @throws TypeError when `op` is no delivery.
  */
 export function prepareDelivery(state: RunState, op: DeliveryOp): PreparedTransition | RepeatedSend | null {
+  const by = op.by ?? null;
   switch (op.kind) {
     case "send":
-      return prepareSend(state, op.inbox, op.event, op.key ?? null);
+      return prepareSend(state, op.inbox, op.event, op.key ?? null, by);
     case "withdraw":
-      return prepareWithdraw(state, op.inbox);
+      return prepareWithdraw(state, op.inbox, by);
     case "complete":
-      return prepareComplete(state, op.callId, op.result);
+      return prepareComplete(state, op.callId, op.result, by);
     case "release":
-      return prepareRelease(state, op.callId, op.note ?? null);
+      return prepareRelease(state, op.callId, op.note ?? null, by);
     case "close":
-      return prepareInboxClosed(state, op.inbox);
+      return prepareInboxClosed(state, op.inbox, by);
     case "interrupt":
-      return prepareInterrupt(state, op.inbox, op.running ?? null);
+      return prepareInterrupt(state, op.inbox, op.running ?? null, by);
     case "cancel":
-      return prepareRunCancelled(state);
+      return prepareRunCancelled(state, by);
     default: {
       const unknown: never = op;
       const kind = (unknown as { readonly kind: unknown }).kind;

@@ -9,12 +9,13 @@
  * engine's structured drain. It also owns the compile/runtime inversion seam by injecting
  * `compile/expand.ts`'s `buildGrow` into the kind-blind engine.
  *
- * This is the `yian/run` module: it exports `runFlow`, `advance` and `RunResult`. Hosts reach a
- * run by its log through `send`, `withdraw`, `complete`, `close`, `interrupt`, `cancel` and
- * `pendingCalls`; their errors are `RunBusyError` and the re-exported `DeliveryRefused`
- * (`runtime/state.ts`). For hosts that show runs it also exports `inspectRun`, which reads
- * where a run log stands, and `staticNodes`, which names each node of a flow, and re-exports
- * `staticPathOf` (`nodes/ids.ts`), the lock-free reader `iterRunRecords`, `RunLogChangedError`,
+ * This is the `yian/run` module: it exports `runFlow`, `advance` and `RunResult`, and re-exports
+ * the types of their `beforeToolCall` hook (`tools/gate.ts`). Hosts reach a run by its log through
+ * `send`, `withdraw`, `complete`, `release`, `close`, `interrupt`, `cancel` and `pendingCalls`;
+ * their errors are `RunBusyError` and the re-exported `DeliveryRefused` (`runtime/state.ts`). For
+ * hosts that show runs it also exports `inspectRun`, which reads where a run log stands, and
+ * `staticNodes`, which names each node of a flow, and re-exports `staticPathOf` (`nodes/ids.ts`),
+ * the lock-free reader `iterRunRecords`, `RunLogChangedError`,
  * `RunLogLineTooLongError` and `RunLogSchemaError` (`runtime/log.ts`). `runLogPath` gives a fresh
  * run a folder of its own under the host's runs folder and names its log there, and
  * `updateRunIndex` and `readRunIndex` (`runtime/run_index.ts`) keep and read the runs folder's
@@ -186,7 +187,7 @@ import {
 import { Skill } from "./skills/catalog.ts";
 import { isAlreadyOpenError, isMcpServer, type McpServer, openTogether } from "./tools/mcp.ts";
 import { ASK, ASK_USER, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "./tools/context.ts";
-import { type BeforeToolCall, checkGateText, gateOf, isToolSource, type ToolSource } from "./tools/gate.ts";
+import { type BeforeToolCall, checkGateText, isToolSource, type ToolSource } from "./tools/gate.ts";
 import {
   checkVisibleNames,
   expandGrants,
@@ -292,6 +293,14 @@ export type { WaitInfo } from "./runtime/waits.ts";
 export type { MemoryDrift } from "./runtime/memories.ts";
 export type { CompleteResult } from "./nodes/base.ts";
 export type { DeliveryOp } from "./runtime/engine.ts";
+export type {
+  BeforeToolCall,
+  FlowCallScope,
+  GateContext,
+  GatedCall,
+  GateDecision,
+  ToolSource,
+} from "./tools/gate.ts";
 export { DeliveryRefused, type DeliveryRefusal } from "./runtime/state.ts";
 export {
   readRunIndex,
@@ -735,6 +744,12 @@ export interface RunFlowOptions {
    */
   completesCalls?: boolean;
   /**
+   * The host's check before each tool call an AGENT's model makes (`BeforeToolCall`): it runs,
+   * refuses or holds the call. Never recorded, but a run started with one records `gated: true`,
+   * and `advance` of the unfinished run then needs one. `null` (the default) checks nothing.
+   */
+  beforeToolCall?: BeforeToolCall | null;
+  /**
    * The host's stop: aborting it stops the run, which rejects with its reason. An already-aborted
    * signal rejects before anything is created.
    */
@@ -780,8 +795,9 @@ export interface RunFlowOptions {
  * @throws TypeError when `flow` isn't a `ComposedFlow`, `signal` isn't an `AbortSignal`, `live`
  *   isn't a `LiveChannel`, `onEvent`, `onStream` or `onConsole` isn't a function, `inputs` isn't a record (a
  *   Proxy included), `llmConfig` is a primitive or an array, a `tools` entry is malformed, `skills`
- *   isn't a `Map` of `Skill`s each keyed by its name, `completesCalls` isn't a boolean, `scheduler`
- *   lacks `now` or `sleep`, `random` isn't a function, or `models` lacks `env` or `createModel`.
+ *   isn't a `Map` of `Skill`s each keyed by its name, `completesCalls` isn't a boolean,
+ *   `beforeToolCall` isn't a function or `null`, `scheduler` lacks `now` or `sleep`, `random` isn't
+ *   a function, or `models` lacks `env` or `createModel`.
  * @throws RangeError when `learnable` or `memory`, a removed option, is given, or `flow` is a
  *   library (`libraryRunMessage`).
  * @throws ExpressionError when a condition, binding or prompt set in code can't run.
@@ -843,7 +859,7 @@ export function libraryRunMessage(flow: ComposedFlow): string {
 type DriveOptions = Pick<
   RunFlowOptions,
   | "tools" | "context" | "completesCalls" | "signal" | "live" | "onEvent" | "onStream" | "onConsole"
-  | "scheduler" | "random" | "models"
+  | "scheduler" | "random" | "models" | "beforeToolCall"
 >;
 
 /**
@@ -883,8 +899,11 @@ function checkDriveOptions(options: DriveOptions, takesMemory = false): [string,
   if (onEvent !== null && typeof onEvent !== "function") throw new YianTypeError("onEvent must be a function or null");
   if (onStream !== null && typeof onStream !== "function") throw new YianTypeError("onStream must be a function or null");
   if (onConsole !== null && typeof onConsole !== "function") throw new YianTypeError("onConsole must be a function or null");
-  const { completesCalls = false } = options;
+  const { completesCalls = false, beforeToolCall = null } = options;
   if (typeof completesCalls !== "boolean") throw new YianTypeError("completesCalls must be a boolean");
+  if (beforeToolCall !== null && typeof beforeToolCall !== "function") {
+    throw new YianTypeError("beforeToolCall must be a function or null");
+  }
   if (
     scheduler !== null &&
     (typeof scheduler !== "object" || typeof scheduler.now !== "function" || typeof scheduler.sleep !== "function")
@@ -893,7 +912,6 @@ function checkDriveOptions(options: DriveOptions, takesMemory = false): [string,
   }
   if (random !== null && typeof random !== "function") throw new YianTypeError("random must be a function or null");
   requireModels(models);
-  gateOf(options);
   signal?.throwIfAborted();
   const [otherTools, unopened] = splitRunServers(tools);
   // The other entries' errors come before anything is opened.
@@ -1277,7 +1295,7 @@ async function startRun(
   runDefaults: Defaults,
   env: Env,
 ): Promise<RunResult> {
-  const gate = gateOf(options);
+  const gate = options.beforeToolCall ?? null;
   const { log = null, runId = null, numWorkers = 8 } = options;
   const live = options.live ?? null;
   const { tools = null, skills = null, context, completesCalls = false, signal = null } = options;
@@ -1626,6 +1644,11 @@ export interface AdvanceOptions {
   /** As `runFlow`'s, for this segment's calls; the log doesn't hold it. */
   completesCalls?: boolean;
   /**
+   * As `runFlow`'s, for this segment's calls; the log doesn't hold it. A run started or advanced
+   * with one is gated for good: an unfinished one is refused to an `advance` without one.
+   */
+  beforeToolCall?: BeforeToolCall | null;
+  /**
    * The instance of each memory input the run started with, by input name: the same memories,
    * bound again. An unfinished run opens each with `create: false` and needs every one it
    * recorded; an Optional memory left out takes none, or `null`, as `runFlow` takes it.
@@ -1689,9 +1712,10 @@ export interface AdvanceOptions {
  *   its post-durable observers; a waiting run that couldn't move returns `waiting` with none.
  * @throws TypeError when `flow` isn't a `ComposedFlow` or `null`, `signal` isn't an `AbortSignal`,
  *   `live` isn't a `LiveChannel`, `onEvent`, `onStream` or `onConsole` isn't a function, a `tools` entry is
- *   malformed, `completesCalls` isn't a boolean, `skills`, `scheduler`, `random` or `models` is
- *   malformed, a worker count isn't an integer, a recorded carrier has the wrong type, or `memory`
- *   isn't a record of `MemoryBase` instances (or `null`, for an Optional memory).
+ *   malformed, `completesCalls` isn't a boolean, `beforeToolCall` isn't a function or `null`,
+ *   `skills`, `scheduler`, `random` or `models` is malformed, a worker count isn't an integer, a
+ *   recorded carrier has the wrong type, or `memory` isn't a record of `MemoryBase` instances (or
+ *   `null`, for an Optional memory).
  * @throws ExpressionError as `runFlow`, for an unfinished run.
  * @throws RangeError when the log's prefix is invalid, the run's flow was built in code and no
  *   `flow` was passed, or its flow files were recorded and one was, `codeRoot` isn't the recorded
@@ -1781,7 +1805,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       }
       // A finished run opens no tools.
       if (state.result !== null) return resultFromState(state, log, []);
-      const gate = gateOf(options);
+      const gate = options.beforeToolCall ?? null;
       // Without the hook, a model-made call of a run the host checked would run unchecked.
       if (state.gated && gate === null) {
         throw new YianRangeError(
@@ -2265,8 +2289,8 @@ export async function send(log: string, inbox: string, event: unknown, options: 
  * @throws DeliveryRefused (nothing appended) with reason `ended` once the run has a terminal
  *   result, `unknown_call` (no such call, its node settled, or its handler hasn't returned
  *   `pending()`), `not_host_call` for a take or sleep, `call_settled` (with `callState`) for an
- *   answered, timed-out or closed call, `invalid_value` (the `TypeCheckError` is the cause) or
- *   `too_large`.
+ *   answered, timed-out, closed or released call, `invalid_value` (the `TypeCheckError` is the
+ *   cause) or `too_large`.
  * @throws RunBusyError, RangeError, LoadError, DefaultsMismatchError and `ENOENT`, as `send`.
  */
 export async function complete(
@@ -3029,12 +3053,18 @@ export interface AgentToolResult {
   /** Whether the result is an error; `null` without a result. */
   readonly isError: boolean | null;
   /**
-   * `skipped`, `interrupted`, `timed_out` or `crashed` for a result yian wrote in place of running
-   * the call, else `null`.
+   * `skipped`, `interrupted`, `timed_out`, `crashed` or `failed` for a result yian wrote in place of
+   * running the call, `refused` for a call the host's `beforeToolCall` refused, else `null`.
    */
   readonly closed: string | null;
   /** When the call started; `null` for one that never ran, or without a result. */
   readonly startedAt: string | null;
+  /** The note the host's `beforeToolCall` ran the call with, from the call's first record; else `null`. */
+  readonly note: string | null;
+  /** Whether the host's `beforeToolCall` held the call. */
+  readonly held: boolean;
+  /** The note a held call was released with; `null` for none, or a call not released. */
+  readonly releaseNote: string | null;
 }
 
 /** One AGENT model call as `agentCall` rebuilds it. */
@@ -3255,7 +3285,7 @@ export async function agentCall(
     digestMismatch: request !== null && attempts.some((attempt) => rebuilt(attempt)?.digestOk !== true),
     attempts: attempts.map((attempt) => attemptView(attempt, appended.get(attempt.n)!)),
     reply: output == null ? null : fromModelMessage(Message.fromJSON(output)),
-    toolResults: output == null ? [] : toolResults(Message.fromJSON(output), exchange.results),
+    toolResults: output == null ? [] : toolResults(Message.fromJSON(output), last.n, exchange.results, steps),
     usage: usageView(last.step["usage"]),
     finish: (last.step["finish"] as string | undefined) ?? null,
     // The honor is the node's last step, so it follows its last call.
@@ -3413,12 +3443,28 @@ function usageView(usage: unknown): AgentCallUsage | null {
   };
 }
 
-/** Each tool call of `reply`, in call order, with its `tool_result` step from `results` (by call id). */
-function toolResults(reply: Message, results: StepExchange["results"]): AgentToolResult[] {
+/**
+ * Each tool call of `reply`, the reply of `model_call` step `n`, in call order, with its
+ * `tool_result` step from `results` (by call id) and what the node's `steps` record of the host's
+ * check: a run's note, a hold, and a release.
+ */
+function toolResults(
+  reply: Message,
+  n: number,
+  results: StepExchange["results"],
+  steps: readonly ValueRecord[],
+): AgentToolResult[] {
+  const pendings = steps.filter((step) => step["kind"] === "pending" && Number(step["reply"]) === n);
   return reply.parts
     .filter((part) => part instanceof ToolCallPart)
-    .map((part) => {
+    .map((part, index) => {
       const result = results.get(part.id)?.step;
+      // The call's first pending step, a hold's or its tool's, is its first record when it has one.
+      const registered = pendings.find((step) => Number(step["index"]) === index);
+      const released =
+        registered === undefined
+          ? undefined
+          : steps.find((step) => step["kind"] === "released" && step["call_id"] === registered["call_id"]);
       return {
         callId: part.id,
         name: part.name,
@@ -3427,6 +3473,9 @@ function toolResults(reply: Message, results: StepExchange["results"]): AgentToo
         isError: result === undefined ? null : result["is_error"] === true,
         closed: (result?.["closed"] as string | undefined) ?? null,
         startedAt: (result?.["started_at"] as string | null | undefined) ?? null,
+        note: ((registered ?? result)?.["note"] as string | undefined) ?? null,
+        held: registered?.["held"] === true,
+        releaseNote: (released?.["note"] as string | undefined) ?? null,
       };
     });
 }

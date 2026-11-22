@@ -11,9 +11,9 @@ runs on disk, move messages and answers into them, and watch what they do. Insta
 
 | Import | What it's for |
 |---|---|
-| `@ngocbh/yian` | Load and run flows: `loadFlow`, `runFlow`, `advance`; the host calls `send`, `withdraw`, `close`, `complete`, `interrupt`, `cancel`, `pendingCalls` and their errors `DeliveryRefused` and `RunBusyError`; host tools (`tool`, `ToolContext`, `pending`, the tool errors); memories (`FileMemory`, `VectorDBMemory`, `MemoryBase`, `MemoryBusyError`, `ChangeIdReusedError`); `LoadError`, `Failure`, `Diagnostic`; `authoredText` and `escapeAuthorTags` (see [Label speakers for an outside agent](#label-speakers-for-an-outside-agent)) |
-| `@ngocbh/yian/run` | Everything about runs: `runFlow`, `advance`, the host calls and their errors, plus `RunResult`, `runLogPath`, `inspectRun`, `loadRecordedFlow`, the types `RunFlowOptions`, `AdvanceOptions`, `MemoryDrift`, `EventHook` and `StreamHook`; for hosts that show runs, `LiveChannel`, `iterRunRecords`, `foldRunLog`, `agentCalls`, `agentCall`, `updateRunIndex` and `readRunIndex` |
-| `@ngocbh/yian/tools` | Tools without the run API: `registerTool`, `registeredTools`, `invokeTool`, `mcpServer` and the `Mcp*` errors, `pending`, `isPending`, and the ask handler types `AskHandler` and `AskRequest` |
+| `@ngocbh/yian` | Load and run flows: `loadFlow`, `runFlow`, `advance`; the host calls `send`, `withdraw`, `close`, `complete`, `release`, `interrupt`, `cancel`, `pendingCalls` and their errors `DeliveryRefused` and `RunBusyError`; the types of the [`beforeToolCall`](#gate-tool-calls) hook (`BeforeToolCall`, `GatedCall`, `GateContext`, `GateDecision`, `ToolSource`, `FlowCallScope`); host tools (`tool`, `ToolContext`, `pending`, the tool errors); memories (`FileMemory`, `VectorDBMemory`, `MemoryBase`, `MemoryBusyError`, `ChangeIdReusedError`); `LoadError`, `Failure`, `Diagnostic`; `authoredText` and `escapeAuthorTags` (see [Label speakers for an outside agent](#label-speakers-for-an-outside-agent)) |
+| `@ngocbh/yian/run` | Everything about runs: `runFlow`, `advance`, the host calls and their errors, plus `RunResult`, `runLogPath`, `inspectRun`, `loadRecordedFlow`, the types `RunFlowOptions`, `AdvanceOptions`, `ReleaseOptions`, `MemoryDrift`, `EventHook`, `StreamHook` and the `beforeToolCall` types; for hosts that show runs, `LiveChannel`, `iterRunRecords`, `foldRunLog`, `agentCalls`, `agentCall`, `updateRunIndex` and `readRunIndex` |
+| `@ngocbh/yian/tools` | Tools without the run API: `registerTool`, `registeredTools`, `invokeTool`, `mcpServer` and the `Mcp*` errors, `pending`, `isPending`, the ask handler types `AskHandler` and `AskRequest`, and the `beforeToolCall` types |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
 | `@ngocbh/yian/platform` | yian's file lock and SQLite wrapper, for hosts that lock files the same way: `lockFile`, `waitForLock`, `isLocked`, `FileLockError`, `openSqlite`, `sqliteErrorCode`; and `syncFolder`, which makes a folder's new entries durable |
 | `@ngocbh/yian/llm_clients` | Provider setup: `LLMConfig`, `SUPPORTED_LLM_PROVIDERS`, `listModels`, `AuthStore`, `AuthError` and `isStorageError` (an auth-store fault, whose message may name the auth file); `defaultEmbed` and `embedderFromConfig`, the embeddings calls a `VectorDBMemory` takes |
@@ -120,7 +120,7 @@ only a warning: the call still resolves, so your program doesn't repeat it.
 | `log` | The log path you gave, or `null` |
 | `input` | The inputs the run recorded |
 | `events` | The events of this call |
-| `waits` | What a waiting run waits on: `node`, `callId`, `tool`, `inbox`, `deadline`, `settled` |
+| `waits` | What a waiting run waits on: `node`, `callId`, `tool`, `inbox`, `deadline`, `settled`, and `held` (whether [`beforeToolCall`](#gate-tool-calls) held the call) |
 | `unread` | At the end of a run, the messages no take read, as send seqs by inbox |
 | `crashedAttempts` | Node attempts a resume ran again after a crash, by node id |
 | `memoryDrift` | After `advance` recovers a crash or a stop, each memory that changed since the run started, the run's own writes included: `input`, `identity`, and the `recorded` and `current` versions |
@@ -137,6 +137,7 @@ only a warning: the call still resolves, so your program doesn't repeat it.
 | `llmConfig` | none | The outermost `llm_config` layer (see [Models and providers](/models/)). Its `api_key` and header values are never recorded; its `base_url`, `organization`, `project` and header names are, on the agents that use the key |
 | `context` | `undefined` | Your app object; tools read it as `ctx.context`. Never recorded |
 | `completesCalls` | `false` | Set it when your host answers pending calls (see [Pending host calls](#pending-host-calls)); a tool module's tool can pend only then. `advance` takes it too. Never recorded |
+| `beforeToolCall` | none | Checks each tool call an agent's model makes before it runs (see [Gate tool calls](#gate-tool-calls)). `advance` takes it too. Never recorded, but the run records that it is gated |
 | `onEvent`, `onStream` | none | Event callbacks (see [Events](#events)) |
 | `onConsole` | none | Takes each line the run's CODE nodes print, and what a tool module prints during a node's call, as `{ runId, node, method, text }`, instead of `console`; `advance` takes it too |
 | `live` | none | A `LiveChannel` a viewer follows |
@@ -166,10 +167,10 @@ holds media fails if `media` is a symlink, another user's, or writable by others
 
 `advance` runs the flow the log recorded, not the file on disk, with the log's inputs, run id and
 model settings. Pass again what the log doesn't hold: `tools`, `skills`, `context`,
-`completesCalls`, the memories (`memory: { lessons: instance }`, for any unfinished run; see
-[Memory](/memory/#bind-a-memory)), and the API key (`apiKey`, `headers`) of a run started with
-`llmConfig.api_key`. Without that key, `advance` of an unfinished run whose agents use it rejects
-before writing anything.
+`completesCalls`, `beforeToolCall`, the memories (`memory: { lessons: instance }`, for any
+unfinished run; see [Memory](/memory/#bind-a-memory)), and the API key (`apiKey`, `headers`) of a
+run started with `llmConfig.api_key`. Without that key, `advance` of an unfinished run whose agents
+use it rejects before writing anything.
 
 The log holds the `codeRoot` the flow was loaded under, so `advance` and the host calls below
 confine the recorded flow's CODE files to it without being told. Passing `codeRoot` is optional; one
@@ -203,6 +204,7 @@ await runFlow(flow, { qty: 3, price: 2.5 }, { tools: { quote }, onEvent });
 | `RunStarted`, `RunResumed`, `RunSucceeded`, `RunFailed`, `RunWaiting`, `RunCancelled` | The run starts, resumes, ends or starts waiting |
 | `NodeStarted`, `NodeSucceeded`, `NodeFailed`, `NodeRouted`, `NodeSkipped`, `NodeExpanded` | A node runs, a `case` picks a branch, a node is skipped, a `map`, `loop` or flow call grows its nodes |
 | `NodeWaiting`, `NodeWoken`, `CallClosed` | A node waits on a call, wakes, or a call closes without an answer |
+| `CallHeld` | Your [`beforeToolCall`](#gate-tool-calls) held an agent's tool call: `nodeId`, `callId`, `tool` |
 | `Interrupted` | An `interrupt` stops agents |
 | `NodeAttemptResumed` | A resume runs a crashed node again |
 | `ModelCallStarted`, `ModelCallFinished`, `ToolCallStarted`, `ToolCallFinished`, `ReplayDegraded` | Inside an agent; not in the log |
@@ -241,7 +243,8 @@ Your program reaches a waiting run by its log path:
 | `send(log, inbox, value, { key })` | the send's seq | Adds a message to an `Inbox(T)` input; `value` must fit `T`, read as [a tool's result](/code-and-tools/#values-in-and-out) (a whole number is an `int`). With `key`, a later send with the same key, inbox, value and `by` appends nothing and returns the first seq, so a send is safe to retry |
 | `withdraw(log, inbox)` | `[{seq, value}]` | Takes back every message nothing has read yet |
 | `close(log, inbox)` | the seq, or `null` if already closed | Refuses later sends; takes still read what is queued |
-| `complete(log, callId, result)` | the seq, or `null` for the same answer twice | Answers a pending host call (see [Pending host calls](#pending-host-calls)) |
+| `complete(log, callId, result)` | the seq, or `null` for the same answer twice | Answers a pending host call (see [Pending host calls](#pending-host-calls)) or a held one |
+| `release(log, callId, { note })` | the seq, or `null` if released before | Runs a held call (see [Gate tool calls](#gate-tool-calls)) |
 | `interrupt(log, inbox)` | `{seq, nodes, calls}` | Stops the agents steered by that inbox |
 | `cancel(log)` | the open host calls it closed | Ends the run as `cancelled` |
 | `pendingCalls(log)` | `PendingCall[]` | Lists open host calls; reads without the lock |
@@ -302,7 +305,8 @@ A refused call appends nothing and throws `DeliveryRefused`, whose `reason` says
 | `too_large` | The message is over `YIAN_MAX_EVENT_BYTES` (1 MiB by default) |
 | `unknown_call` | No open call has that id |
 | `not_host_call` | The id names a take, a sleep or an agent's [flow call](/agents/#flows-as-tools), which the run answers itself |
-| `call_settled` | The call already has an answer, timed out or was closed |
+| `not_held` | `release` of a call no `beforeToolCall` held: its tool ran and pended |
+| `call_settled` | The call already has an answer, timed out, was closed or was released |
 
 ### Pending host calls
 
@@ -384,13 +388,117 @@ needs no `flow`; a log that ends inside its run start is refused with `not_start
 run you may want to resume, abort its `signal` instead: the run records a stop, rejects with the
 signal's reason, and `advance` runs the stopped nodes again.
 
+## Gate tool calls
+
+Pass `beforeToolCall` to `runFlow` and `advance` to check, before it runs, every tool call an
+agent's model makes, in any flow of the run: a permission check, for example. It never sees
+`ask_user`, `load_skill`, a call refused before its tool (see [Agents](/agents/#tools)), or the
+calls TOOL, `call`, `map` and `loop` nodes make themselves.
+
+```ts check=fragment
+import { pending, runFlow, type BeforeToolCall } from "@ngocbh/yian";
+
+const beforeToolCall: BeforeToolCall = (call) => {
+  const { source } = call;
+  if (source.kind === "memory") return undefined;                        // run it
+  if (source.kind === "mcp" && source.server === "github" && source.tool === "delete_repo") {
+    return { refuse: "Deleting a repository needs a person." };
+  }
+  if (readOnly(source)) return { run: true, note: "read-only rule" };    // run it, with an audit note
+  showApprovalCard(call.callId, call.tool, call.arguments);              // your code
+  return pending();                                                      // hold it until you answer
+};
+const first = await runFlow(flow, inputs, { log, tools, beforeToolCall });
+```
+
+| `call` field | Holds |
+|---|---|
+| `callId` | The id `complete` and `release` take |
+| `node` | The agent's node id |
+| `tool` | The name the model sees |
+| `source` | Where the tool comes from: `{kind: "host", group, tool}` (`group` is `null` for a top-level tool), `{kind: "mcp", server, tool}`, `{kind: "module", alias, ref, export}`, `{kind: "memory", input, tool}` or `{kind: "flow", flow, library}` |
+| `arguments` | The model's arguments, as its reply holds them |
+| `scopes` | The flow calls enclosing the agent, outermost first, each `{scope, callId}` |
+| `attempt` | 1, or more for a call sent again after a crash or a stop |
+
+The second argument holds `runId` and a `signal` that aborts once the answer isn't wanted: the run
+or the node stops (a failing sibling, the end of a flow call's scope), or the agent is interrupted.
+
+| Answer | What happens |
+|---|---|
+| `undefined` or `{ run: true }` | The call runs |
+| `{ run: true, note }` | The call runs; the note is kept in the run log for audit |
+| `{ refuse: text }` | The call doesn't run; the model reads `text` as its error |
+| `pending()` | The call is held: its tool doesn't run until you answer it (below) |
+
+- The hook runs after the call's schema, validators and `isConcurrencySafe` (see
+  [Host tools](/agents/#host-tools)), and reads the model's arguments.
+- Calls that run together (see [Agents](/agents/#tools)) are all decided before any of them starts.
+  A call is never started if its agent is interrupted while the hook decides.
+- The hook may return a Promise; yian sets no timeout. A stop or crash while it decides loses the
+  answer, and on resume a resumable call is checked again while any other is closed `crashed`. So
+  answer with a Promise only for quick checks, and hold with `pending()` for a classifier or a
+  person.
+- A hook that throws or rejects, or an answer of any other shape, refuses the call with `The
+  host's permission check failed; the call didn't run.` and a warning. So does a note or refusal
+  that is empty, holds a lone surrogate, or is over 4096 UTF-8 bytes.
+- A refusal publishes `ToolCallStarted`, then `ToolCallFinished` with `error: "refused"`.
+- The model never reads a note. It is stored on the call's first record, and `agentCall`'s
+  `toolResults` show it as `note`; a crash before that record loses it. Notes, a release's too,
+  are plain text in the log, so keep secrets out of them.
+
+### Held calls
+
+A held call waits as a [pending host call](#pending-host-calls) does, so the run needs a `log`;
+without one the agent fails. `CallHeld` reports it, and `pendingCalls` lists it with `held: true`
+and its `source`. Answer it once one of them shows it: before, `complete` and `release` refuse it
+with `unknown_call`. Holds survive a restart.
+
+```ts check=fragment
+// The person approved, or declined:
+await release(log, callId, { note: "approved by Ada" });
+await complete(log, callId, { error: "Ada declined: use the staging repository." });
+const next = await advance({ log, tools, beforeToolCall });
+```
+
+- `complete` answers it without running the tool; the model reads that result.
+- `release` runs it once, as the model asked it, when the agent next starts or wakes: its
+  validators run again; the hook isn't asked again. Its note is stored on the `released` step, and
+  `agentCall` shows it as `releaseNote`; the model never reads it. A note that is empty, holds a
+  lone surrogate or is over 4096 UTF-8 bytes throws a `RangeError`. Until its agent runs it,
+  `complete` is refused with `call_settled`; a tool that then returns `pending()` is answered with
+  `complete` as usual.
+- The reply's calls before a hold, and those that run with it, run. Its later calls wait until
+  every hold is answered or released, then are checked. Steers stay queued until then; to answer a
+  card with what someone typed, pass it to `complete`.
+- `interrupt` closes a hold, and the model reads `Not run: interrupted by the user.`; a released
+  call that hasn't started is skipped the same way. `interrupt`'s `calls` lists the holds it
+  closed, but not the released calls. `cancel` closes holds too.
+- A stop or crash after the agent woke for a released call and before its result is recorded,
+  where a graceful shutdown often lands, means it may have started: a resumable tool is sent again
+  with the same `ctx.callId` and its next `ctx.attempt`, and any other is closed `crashed`. A crash
+  just as the agent starts with an interrupt sent while the run was down also sends a resumable
+  call again, despite the interrupt.
+- A call sent again after a crash can't be held, since it may have run: when the hook answers
+  `pending()` for it, it is closed `crashed`, with a warning.
+
+### Resume a gated run
+
+A run started with `beforeToolCall`, or moved on by an `advance` with it, is gated for good:
+`run_started` or `run_resumed` records `gated: true`. `advance` of an unfinished gated run without
+the hook throws a `RangeError` before it appends anything: `run log <log> is gated: a host checked
+its tool calls with beforeToolCall; resume it with one (advance({ log, beforeToolCall }))`.
+`yian run --resume` passes no hook, so it refuses a gated run and leaves its log as it was.
+`inspectRun`, `pendingCalls`, `agentCalls`, `agentCall` and `yian status` read any log.
+
 ## Tools and skills
 
 - **Tools.** `tool()` builds a tool from a JSON Schema or a Standard Schema validator (zod,
   valibot, ArkType); see [Agents](/agents/#host-tools). With `resumable: true`, a resumed agent
   sends a call to it that a crash or a stop cut off again. A handler gets `(args, ctx)`. `ctx` holds
   `callId` (the same on every retry and resume, so use it as an idempotency key), `attempt` (1
-  on the first try, higher on a TOOL node's retry or when a resume makes the call again), `runId`,
+  on the first try, higher on a TOOL node's retry or when a resume makes the call again; an agent's
+  call counts from when it could run, such as its release), `runId`,
   `node`, `context` (your app object; `undefined` for a [tool module](/code-and-tools/#tool-modules)'s
   tool, which runs on its own thread), `signal` (aborted when the call must end: the run stops, a
   sibling call fails, or the [flow call](/agents/#flows-as-tools) the tool runs in ends, as when

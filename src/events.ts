@@ -320,7 +320,8 @@ export class CallClosed {
 
 /**
  * A host's check before an agent tool call held it, as its `pending` step records: the call waits,
- * its tool not run, until the host answers it. A hold an interrupt closes gets its `CallClosed`.
+ * its tool not run, until the host answers or releases it. A hold an interrupt closes gets its
+ * `CallClosed`.
  */
 export class CallHeld {
   readonly type = "CallHeld" as const;

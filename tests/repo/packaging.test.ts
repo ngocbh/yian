@@ -48,9 +48,14 @@ import type {
 import type {
   Applied,
   Author,
+  BeforeToolCall,
   ChangeEntry,
   Erased,
   FileMemoryOptions,
+  FlowCallScope,
+  GateContext,
+  GatedCall,
+  GateDecision,
   MemoryContract,
   MemoryErrorKind,
   MemoryInfo,
@@ -58,7 +63,9 @@ import type {
   MemoryToolSpec,
   Recall,
   RecordedMemoryTool,
+  ReleaseOptions,
   Message as RootMessage,
+  ToolSource,
   VectorDBMemoryOptions,
 } from "../../src/index.ts";
 import type {
@@ -68,10 +75,25 @@ import type {
   Message,
   MessagePart,
   RecordedMemoryTool as RunRecordedMemoryTool,
+  BeforeToolCall as RunBeforeToolCall,
+  FlowCallScope as RunFlowCallScope,
+  GateContext as RunGateContext,
+  GatedCall as RunGatedCall,
+  GateDecision as RunGateDecision,
+  ReleaseOptions as RunReleaseOptions,
+  ToolSource as RunToolSource,
   StorageKind,
   Value,
   ValueRecord,
 } from "../../src/run.ts";
+import type {
+  BeforeToolCall as ToolsBeforeToolCall,
+  FlowCallScope as ToolsFlowCallScope,
+  GateContext as ToolsGateContext,
+  GatedCall as ToolsGatedCall,
+  GateDecision as ToolsGateDecision,
+  ToolSource as ToolsToolSource,
+} from "../../src/tools/index.ts";
 import { stdioOptions } from "../helpers/mcp_helpers.ts";
 import { testNode } from "../helpers/test_node.ts";
 
@@ -99,6 +121,7 @@ const NAMES: Record<string, string[]> = {
     "send",
     "withdraw",
     "complete",
+    "release",
     "close",
     "interrupt",
     "cancel",
@@ -149,6 +172,7 @@ const NAMES: Record<string, string[]> = {
     "send",
     "withdraw",
     "complete",
+    "release",
     "close",
     "interrupt",
     "cancel",
@@ -407,6 +431,26 @@ describe("entry points", () => {
       FileMemoryOptions?,
       VectorDBMemoryOptions?,
       RunRecordedMemoryTool?,
+      BeforeToolCall?,
+      GatedCall?,
+      GateContext?,
+      GateDecision?,
+      ToolSource?,
+      FlowCallScope?,
+      ReleaseOptions?,
+      RunBeforeToolCall?,
+      RunGatedCall?,
+      RunGateContext?,
+      RunGateDecision?,
+      RunToolSource?,
+      RunFlowCallScope?,
+      RunReleaseOptions?,
+      ToolsBeforeToolCall?,
+      ToolsGatedCall?,
+      ToolsGateContext?,
+      ToolsGateDecision?,
+      ToolsToolSource?,
+      ToolsFlowCallScope?,
     ];
     expect(names).toEqual([]);
   });

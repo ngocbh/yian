@@ -194,6 +194,19 @@ test("a pending step registers a host call; its tool_result answers it", () => {
   expect(isWakeable(w, "ask")).toBe(true);
 });
 
+test("a result answers only a call of its node's latest reply: a later reply's call under the same provider id answers no released call", () => {
+  const w = fold(
+    ...START,
+    new NodeStartedRecord("agent"),
+    new NodeStepRecord("agent", 1, { kind: "model_call" }),
+    pending("agent", 2, "r/agent/1/0", { tool_call_id: "c0", held: true }),
+    new NodeStepRecord("agent", 3, { kind: "released", call_id: "r/agent/1/0" }),
+    new NodeStepRecord("agent", 4, { kind: "model_call" }),
+    new NodeStepRecord("agent", 5, { kind: "tool_result", tool_call_id: "c0", output: "inline" }),
+  );
+  expect(nodeCalls(w, "agent")[0]).toMatchObject({ state: "released", releasedSeq: 5, resultSeq: null });
+});
+
 test("an agent's pending call is answered by the tool_result naming its tool_call_id", () => {
   const w = fold(
     ...START,

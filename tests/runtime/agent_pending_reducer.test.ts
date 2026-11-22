@@ -335,7 +335,7 @@ describe("a timeout wake leaves the agent's other calls open", () => {
 });
 
 /** The refusal of a wait naming a call registered before the last wake and settled before the evaluation began. */
-const SETTLED_BEFORE = /registered before the node's last node_woken and settled before its latest start or wake/;
+const SETTLED_BEFORE = /registered before the node's latest start or wake and settled before it/;
 
 /** Agent `a` granted `ask_user` and the defs `shout`, which answers, and `fail`, which fails. */
 const FLOW_CALLS = `

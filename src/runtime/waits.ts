@@ -4,11 +4,13 @@
  * stays with the run scan (`runtime/run_index.ts`).
  *
  * Knows about: runtime/log (record types, record times), events (`CloseReason`), nodes/base
- * (`WaitRequest`), nodes/start and nodes/end (the START and END ids), diagnostics.
+ * (`WaitRequest`), nodes/contracts (`CALL_STATES`), nodes/start and nodes/end (the START and END
+ * ids), diagnostics.
  */
 
 import { reprText } from "../diagnostics.ts";
 import type { WaitRequest } from "../nodes/base.ts";
+import { CALL_STATES } from "../nodes/contracts.ts";
 import { EndNode } from "../nodes/end/node.ts";
 import { StartNode } from "../nodes/start/node.ts";
 import { YianRangeError } from "../typesys/errors.ts";
@@ -40,11 +42,8 @@ import {
 
 import { CLOSE_REASONS, type CloseReason } from "../events.ts";
 
-/**
- * Where a registered call stands: `released` for a held call the host released, which its agent
- * is to run.
- */
-export type CallStateKind = "open" | "answered" | "timed_out" | "closed" | "released";
+/** Where a registered call stands (`CALL_STATES`). */
+export type CallStateKind = (typeof CALL_STATES)[number];
 
 /** One call a waiting or in-flight node registered: a host call, a take or a sleep. */
 export interface Call {
@@ -250,9 +249,6 @@ const WAITS_JSON_KEYS = [
   "interruptInboxes",
 ] as const;
 
-/** The call states, for checking a stored call. */
-const CALL_STATES: readonly string[] = ["open", "answered", "timed_out", "closed", "released"];
-
 /** Return whether `value` is a plain JSON object (not an array or null). */
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -334,7 +330,7 @@ function callFromJson(value: unknown, label: string): Call {
   if (
     Object.values(call).some((field) => field === undefined) ||
     (call.mode !== null && call.mode !== "one" && call.mode !== "all") ||
-    !CALL_STATES.includes(call.state!) ||
+    !(CALL_STATES as readonly string[]).includes(call.state!) ||
     (call.closedReason !== null && !(CLOSE_REASONS as readonly string[]).includes(call.closedReason!)) ||
     // A closed call keeps the seq of the record that closed it, and a released one its release's.
     (call.state === "closed" && call.closedSeq === null) ||
@@ -579,17 +575,17 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
   } else if (step["kind"] === "tool_result") {
     const key = typeof toolCallId === "string" ? toolCallId : callId;
     const closed = step["closed"];
-    // An agent's closer for a call a record closed is its result; the call stays closed. A released
-    // call its agent didn't run takes `skipped` or `crashed` as its answer. Only a call of the
-    // node's latest reply takes either, as the reducer checks: provider ids repeat across replies.
-    // Any other closer, or an agent result no pending step registered, answers nothing.
+    // Only a call of the node's latest reply takes a result, as the reducer checks: provider ids
+    // repeat across replies. An agent's closer for a call a record closed is its result; the call
+    // stays closed. A released call its agent didn't run takes `skipped` or `crashed` as its
+    // answer. Any other closer, or an agent result no pending step registered, answers nothing.
+    const reply = w._replies.get(record.nodeId);
+    const latest = (call: Call) => call.pendingSeq !== null && (reply === undefined || call.pendingSeq > reply);
     if (typeof closed === "string") {
-      const reply = w._replies.get(record.nodeId);
       for (const call of w.calls.values()) {
-        const latest = call.pendingSeq !== null && (reply === undefined || call.pendingSeq > reply);
         const closes = call.state === "closed" && call.closedReason === closed && call.resultSeq === null;
         const answers = call.state === "released" && (closed === "skipped" || closed === "crashed");
-        if (call.nodeId === record.nodeId && call.resultKey === key && latest && (closes || answers)) {
+        if (call.nodeId === record.nodeId && call.resultKey === key && latest(call) && (closes || answers)) {
           if (answers) call.state = "answered";
           call.resultSeq = seq;
           return;
@@ -602,7 +598,7 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
       // the result of its run.
       const flowAnswer = call.flow && call.state === "answered" && call.resultSeq === null;
       const takes = call.state === "open" || call.state === "released" || flowAnswer;
-      if (call.nodeId === record.nodeId && call.resultKey === key && takes) {
+      if (call.nodeId === record.nodeId && call.resultKey === key && latest(call) && takes) {
         call.state = "answered";
         call.resultSeq = seq;
         return;
@@ -629,15 +625,22 @@ function applyInterrupted(w: WaitsState, seq: number, record: InterruptedRecord)
   for (const nodeId of record.nodes) {
     w.interrupts.set(nodeId, seq);
     w._interruptInboxes.set(nodeId, record.inbox);
-    // A waiting node's released calls haven't started; a running node's are its agent's to settle.
-    const waiting = w.waiting.has(nodeId);
-    for (const call of nodeCalls(w, nodeId)) {
+    for (const call of interruptedCalls(w, nodeId)) {
       const open = call.state === "open";
-      if (waiting && call.state === "released") shut(call, "interrupted", seq);
-      close(call, "interrupted", seq);
+      shut(call, "interrupted", seq);
       if (open && call.scope !== null) endScope(w, call.scope);
     }
   }
+}
+
+/**
+ * Return the calls of `nodeId` an interrupt naming it closes, in registration order: its open
+ * calls, and a waiting node's released calls, which haven't started. A running node's released
+ * calls are its agent's to settle.
+ */
+export function interruptedCalls(w: WaitsState, nodeId: string): readonly Call[] {
+  const waiting = w.waiting.has(nodeId);
+  return nodeCalls(w, nodeId).filter((call) => call.state === "open" || (waiting && call.state === "released"));
 }
 
 /** End flow call scope `scope`: each node of it, a nested scope's included, settles here. */

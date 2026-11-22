@@ -21,6 +21,7 @@ import {
   commitPrepared,
   DeliveryRefused,
   prepareComplete,
+  preparePoolCommit,
   prepareInterrupt,
   prepareNodeStarted,
   prepareNodeStep,
@@ -477,6 +478,18 @@ describe("a released call", () => {
     commitPrepared(log, state, prepared);
     return prepared.expectedSequence;
   };
+  /**
+   * Agent `a` waiting on its hold of call 0, which the host then released, woken: the evaluation
+   * that runs it.
+   */
+  const wokenToRelease = (options: { steers?: boolean } = {}) => {
+    const run = replied(options);
+    step(run.log, run.state, "a", holdOf(0));
+    commitPrepared(run.log, run.state, prepareNodeWaiting(run.state, "a", { callIds: [callOf(0)], ...(options.steers ? { steerInbox: "msgs" } : {}) }));
+    const released = release(run.log, run.state, 0, "first");
+    commitPrepared(run.log, run.state, prepareNodeWoken(run.state, "a"));
+    return { ...run, released };
+  };
   /** The `DeliveryRefused` `run` throws. */
   const refusedBy = (run: () => unknown): DeliveryRefused => {
     try {
@@ -517,9 +530,7 @@ describe("a released call", () => {
   });
 
   test("a second release is a no-op whatever the call's state, and complete is refused once it is released", () => {
-    const { log, state } = replied();
-    step(log, state, "a", holdOf(0));
-    release(log, state, 0, "first");
+    const { log, state } = wokenToRelease();
     expect(prepareRelease(state, callOf(0), "second")).toBeNull();
     const refused = refusedBy(() => prepareComplete(state, callOf(0), { output: "done" }));
     expect([refused.reason, refused.callState, refused.message]).toEqual(["call_settled", "released", `call '${callOf(0)}' is already released`]);
@@ -601,9 +612,7 @@ describe("a released call", () => {
     ["skipped, as an interrupt skips it before it starts", { started_at: null, output: SKIPPED_TOOL_RESULT, is_error: true, closed: "skipped" }],
     ["crashed, as a cut that may have started it closes it", { started_at: null, output: TOOL_OUTCOME_UNKNOWN, is_error: true, closed: "crashed" }],
   ])("its running agent settles it once, with %s", (_name, extra) => {
-    const { log, state } = replied();
-    step(log, state, "a", holdOf(0));
-    const released = release(log, state, 0);
+    const { log, state, released } = wokenToRelease();
     step(log, state, "a", result("c0", extra));
     expect(state.waits.calls.get(callOf(0))).toMatchObject({ state: "answered", releasedSeq: released });
     expect(callResultStep(state, callOf(0))).toEqual(result("c0", extra));
@@ -619,6 +628,34 @@ describe("a released call", () => {
     );
   });
 
+  test.each<[string, Record<string, unknown>]>([
+    ["its run's result", result("c0")],
+    ["a crashed closer", result("c0", { started_at: null, output: TOOL_OUTCOME_UNKNOWN, is_error: true, closed: "crashed" })],
+    ["a skip with no interrupt pending", result("c0", { started_at: null, output: SKIPPED_TOOL_RESULT, is_error: true, closed: "skipped" })],
+    ["a pending step registering it again", pendingOf(0)],
+  ])("refuses %s from the evaluation that began before the release: it pends the call again", (_name, body) => {
+    const { log, state } = replied();
+    step(log, state, "a", holdOf(0));
+    release(log, state, 0);
+    expect(() => prepareNodeStep(state, "a", body)).toThrow("released after its node's latest start or wake");
+  });
+
+  test.each<[string, (log: RunLog, state: RunState) => unknown, string]>([
+    ["a model call", (log, state) => step(log, state, "a", reply(1)), "a model_call step on node 'a', whose released call"],
+    ["its output", (log, state) => commitPrepared(log, state, preparePoolCommit(state, "a", "done")), "an output commit on node 'a', whose released call"],
+    [
+      "an honor",
+      (log, state) => step(log, state, "a", { kind: "interrupted", by: BigInt(state.waits.interrupts.get("a")!) }),
+      "an interrupted step on node 'a', whose released call",
+    ],
+  ])("refuses %s while the agent holds a released call with no result", (_name, move, message) => {
+    const { log, state } = wokenToRelease({ steers: true });
+    commitPrepared(log, state, prepareInterrupt(state, "msgs", ["a"])!);
+    expect(() => move(log, state)).toThrow(message);
+    step(log, state, "a", result("c0", { started_at: null, output: SKIPPED_TOOL_RESULT, is_error: true, closed: "skipped" }));
+    move(log, state);
+  });
+
   test("refuses a refusal on it, and any result on its waiting node", () => {
     const { log, state } = replied();
     step(log, state, "a", holdOf(0));
@@ -629,9 +666,7 @@ describe("a released call", () => {
   });
 
   test("its tool's pending() registers it again, not held, its release kept, as its own tool and call", () => {
-    const { log, state } = replied();
-    step(log, state, "a", holdOf(0));
-    const released = release(log, state, 0);
+    const { log, state, released } = wokenToRelease();
     expect(() => prepareNodeStep(state, "a", holdOf(0))).toThrow(`call '${callOf(0)}' is already registered`);
     const again = `released call '${callOf(0)}' registers again only as tool 'lookup', call 'c0', with no note`;
     expect(() => prepareNodeStep(state, "a", pendingOf(0, "ask_user"))).toThrow(again);
@@ -651,9 +686,54 @@ describe("a released call", () => {
     step(log, state, "a", reply(1, "shout", { text: "hi" }));
     step(log, state, "a", { ...holdOf(0), tool: "shout", source: { kind: "flow", flow: "shout", library: null } });
     expect(state.waits.calls.get(callOf(0))).toMatchObject({ flow: false, scope: null });
+    commitPrepared(log, state, prepareNodeWaiting(state, "a", { callIds: [callOf(0)] }));
     release(log, state, 0);
+    commitPrepared(log, state, prepareNodeWoken(state, "a"));
     step(log, state, "a", { ...pendingOf(0, "shout"), flow: true, arguments: { text: "hi" }, scope: "a/shout#0" });
     expect(state.waits.calls.get(callOf(0))).toMatchObject({ state: "open", flow: true, scope: "a/shout#0", held: false });
+  });
+
+  test("an interrupt's CallClosed events follow the calls' registration order", () => {
+    const { log, state } = replied({ steers: true });
+    step(log, state, "a", holdOf(0, 1));
+    step(log, state, "a", pendingOf(1));
+    step(log, state, "a", holdOf(2));
+    commitPrepared(log, state, prepareNodeWaiting(state, "a", { callIds: [callOf(0), callOf(1), callOf(2)], steerInbox: "msgs" }));
+    release(log, state, 0);
+    const events = commitPrepared(log, state, prepareInterrupt(state, "msgs")!);
+    expect(events.filter((event) => event instanceof CallClosed).map((event) => (event as CallClosed).callId)).toEqual([
+      callOf(0),
+      callOf(1),
+      callOf(2),
+    ]);
+  });
+
+  test("a resume's retried agent takes a host's release or answer before it starts again, and reads it once it does", () => {
+    const { log, state } = replied();
+    step(log, state, "a", holdOf(0));
+    step(log, state, "a", holdOf(1));
+    commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
+    expect([state.inFlight.has("a"), state.ready.includes("a")]).toEqual([false, true]);
+    const released = release(log, state, 0);
+    const answered = prepareComplete(state, callOf(1), { output: "done" })!;
+    commitPrepared(log, state, answered);
+    expect(() => prepareNodeStep(state, "a", reply(1))).toThrow(
+      "node 'a', not started again since its resume, records only a tool_result answering one of its open calls",
+    );
+    commitPrepared(log, state, prepareNodeStarted(state, "a"));
+    expect(state.nodeStartSeqs.get("a")!.at(-1)).toBeGreaterThan(answered.expectedSequence);
+    step(log, state, "a", result("c0"));
+    expect(state.waits.calls.get(callOf(0))).toMatchObject({ state: "answered", releasedSeq: released });
+  });
+
+  test("a host's record for a node that doesn't run, wait or start again is a refused delivery", () => {
+    const { log, state } = replied();
+    step(log, state, "a", holdOf(0));
+    // No record leaves a call registered on such a node, so the state is changed by hand.
+    state.inFlight.delete("a");
+    for (const deliver of [() => prepareRelease(state, callOf(0)), () => prepareComplete(state, callOf(0), { output: "x" })]) {
+      expect(refusedBy(deliver)).toMatchObject({ reason: "unknown_call" });
+    }
   });
 
   test("a wait must name it when it was released in flight, and the node wakes at once", () => {

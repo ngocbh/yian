@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
-import { CallClosed, NodeWaiting, type RunEvent, RunCancelled, RunWaiting } from "../../src/events.ts";
-import { PoolCommitRecord } from "../../src/runtime/log.ts";
+import { CallClosed, NodeWaiting, type RunEvent, RunCancelled, RunSucceeded, RunWaiting } from "../../src/events.ts";
+import { Node, NodeKind, type NodeCaps, type NodeResult, Output, Pending } from "../../src/nodes/base.ts";
+import { NodeStepRecord, NodeWokenRecord, PoolCommitRecord } from "../../src/runtime/log.ts";
 import { DeliveryRefused } from "../../src/runtime/state.ts";
 import { FakeHost, FakeTake, GateNode, inboxEngine, inboxFlow, recordNames } from "../helpers/inbox_fixtures.ts";
+import { RUN_ID } from "../helpers/run_state_fixtures.ts";
 
 /** A run whose host call `ask` waits, with inbox `m` declared, already resolved waiting. */
 async function waitingRun() {
@@ -73,6 +75,52 @@ test("release refuses a host call its tool pended, which wasn't held, and append
   expect(refusal(run, { kind: "release", callId: host.callId, note: "ok" }).reason).toBe("not_held");
   expect(refusal(run, { kind: "release", callId: "nobody" }).reason).toBe("unknown_call");
   expect(run.log.nextSequence).toBe(before);
+});
+
+/**
+ * An agent's records without its loop: its first evaluation records a reply calling `lookup` once
+ * and the host's hold of that call, and waits; a later one notes the call's state in `seen` and
+ * records the call's result.
+ */
+class Holder extends Node {
+  readonly kind = NodeKind.AGENT;
+  override readonly needsSteps = true;
+  readonly seen: string[] = [];
+
+  get callId(): string {
+    return `${RUN_ID}/${this.id}/1/0`;
+  }
+
+  override forward(_inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
+    const steps = caps.steps!;
+    const view = steps.calls.find((call) => call.callId === this.callId);
+    if (view === undefined) {
+      steps.record({ kind: "model_call", output: { parts: [{ type: "tool_call", id: "c0", name: "lookup", arguments: {} }] } });
+      const source = { kind: "host", group: null, tool: "lookup" };
+      steps.record({ kind: "pending", call_id: this.callId, tool: "lookup", tool_call_id: "c0", reply: 1n, index: 0n, held: true, source, group_end: 0n });
+      return new Pending([this.callId]);
+    }
+    this.seen.push(view.state);
+    steps.record({ kind: "tool_result", call_id: "c0", started_at: null, output: "ran", is_error: false });
+    return new Output("ran");
+  }
+}
+
+test("release appends the hold's released step, publishing nothing, and its waiting node wakes to it", async () => {
+  const holder = new Holder("a");
+  const delivered: { seq: number | null; events: readonly RunEvent[] }[] = [];
+  const run = inboxEngine(inboxFlow([], [holder], [[START_ID, "a"], ["a", END_ID]]), {
+    onEvent: (event: RunEvent) => {
+      if (event instanceof RunWaiting) delivered.push(run.deliver({ kind: "release", callId: holder.callId, note: "ok" }));
+    },
+  });
+  await run.run();
+  expect(run.state.result).toBeInstanceOf(RunSucceeded);
+  const [{ seq, events }] = delivered as [(typeof delivered)[number]];
+  const released = run.log.records()[seq!]!.record as NodeStepRecord;
+  expect([released.nodeId, released.step, events]).toEqual(["a", { kind: "released", call_id: holder.callId, note: "ok" }, []]);
+  expect(run.log.records()[seq! + 1]!.record).toBeInstanceOf(NodeWokenRecord);
+  expect(holder.seen).toEqual(["released"]);
 });
 
 test("closing a closed inbox is a no-op", async () => {

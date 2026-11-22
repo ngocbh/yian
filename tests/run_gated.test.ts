@@ -242,4 +242,93 @@ output: \${reply.output}
     expect(ran).toEqual([]);
     expect(pendingCalls(log).map((call) => [call.callId, call.held])).toEqual([[callId, true]]);
   });
+
+  /** Release the hold `callId` of the run at `log` as an outside writer does, the hold's agent waiting or not started yet. */
+  async function releaseByHand(log: string, callId: string): Promise<void> {
+    const authority = JsonlRunLog.resume(log);
+    try {
+      const state = replayRunLog(await loadFlow(FLOW), authority);
+      commitPrepared(authority, state, prepareRelease(state, callId)!);
+    } finally {
+      authority.close();
+    }
+  }
+
+  test("an interrupt closes a waiting agent's released hold, which interrupt() doesn't list, and the tool never runs", async () => {
+    const { log, options, ran, callId } = await heldRun();
+    await releaseByHand(log, callId);
+    expect(await interrupt(log, "m", { env: NO_ENV })).toMatchObject({ nodes: ["reply"], calls: [] });
+    const done = await advance(options);
+    expect(done.status, done.failure?.message).toBe("succeeded");
+    expect(ran).toEqual([]);
+  });
+
+  test("a hold whose agent a resume put back in ready, cut before it started again, takes complete and release", async () => {
+    /** A held run cut after the hold, resumed, and cut again before its agent's next start. */
+    const cutInReady = async () => {
+      const run = await heldRun();
+      const lines = readFileSync(run.log, "utf8").split("\n").filter(Boolean);
+      const kept = lines.slice(0, lines.findIndex((line) => line.includes('"held":true')) + 1);
+      writeFileSync(run.log, `${kept.join("\n")}\n`);
+      // The resume appends run_resumed at kept.length; the crash comes at the agent's node_started.
+      await crashAfter(kept.length + 1, () => advance(run.options));
+      expect(readRunLog(run.log).at(-1)!.record).toBeInstanceOf(RunResumedRecord);
+      return run;
+    };
+    const answered = await cutInReady();
+    expect(await complete(answered.log, answered.callId, { output: "approved" }, { env: NO_ENV })).toBe(readRunLog(answered.log).length - 1);
+    const model = new ScriptedModel([textReply("done")]);
+    const done = await advance({ ...answered.options, models: serving(model) });
+    expect(done.status, done.failure?.message).toBe("succeeded");
+    expect(answered.ran).toEqual([]);
+    const sent = model.requests[0]!.messages.flatMap((message) => (message.role === "tool" ? message.parts : []));
+    expect(sent.map((part) => (part as { content: string }).content)).toEqual(["approved"]);
+
+    const released = await cutInReady();
+    await releaseByHand(released.log, released.callId);
+    const last = readRunLog(released.log).at(-1)!.record as NodeStepRecord;
+    expect([last.nodeId, last.step]).toEqual(["reply", { kind: "released", call_id: released.callId }]);
+  });
+
+  test("a hold whose agent waits in ready behind another retried agent, with one worker, takes complete live", async () => {
+    const flow = await loadFlow(`
+id: two_held
+name: two_held
+llm_config: {provider: openai, model: test-model}
+nodes:
+  a: {kind: agent, prompt: go, tools: [lookup]}
+  b: {kind: agent, prompt: go, tools: [lookup]}
+output: "\${a.output} \${b.output}"
+`);
+    const ran: string[] = [];
+    const lookup = tool({ name: "lookup", description: "Look up.", parameters: { type: "object", properties: {} }, execute: () => (ran.push("lookup"), "found") });
+    const log = freshLog();
+    const first = serving(new ScriptedModel([callReply(["lookup", {}, "c1"]), callReply(["lookup", {}, "c1"])]));
+    const held = gated({ log, env: NO_ENV, tools: { lookup }, models: first, numWorkers: 2 }, () => pending());
+    expect((await runFlow(flow, {}, held)).status).toBe("waiting");
+    // Cut before the first wait, with both holds written: a crash while both agents ran.
+    const lines = readFileSync(log, "utf8").split("\n").filter(Boolean);
+    const waited = lines.findIndex((line) => line.includes('"kind":"node_waiting"'));
+    expect(lines.slice(0, waited).filter((line) => line.includes('"held":true'))).toHaveLength(2);
+    writeFileSync(log, `${lines.slice(0, waited).join("\n")}\n`);
+    const holds = new Map(pendingCalls(log).map((call) => [call.node, call.callId]));
+    // The agent that takes the one worker answers its sibling's hold while the sibling is in ready.
+    let delivered: Promise<number | null> | null = null;
+    const model = new ScriptedModel([textReply("done")]);
+    const models = {
+      ...serving(model),
+      createModel: async (_config: unknown, { nodeId }: { nodeId: string }) => {
+        if (delivered === null) {
+          delivered = complete(log, holds.get(nodeId === "a" ? "b" : "a")!, { output: "approved" }, { env: NO_ENV });
+          await delivered;
+        }
+        return model;
+      },
+    };
+    const resumed = await advance(gated({ log, env: NO_ENV, tools: { lookup }, models, numWorkers: 1 }, () => pending()));
+    expect(resumed.status, resumed.failure?.message).toBe("waiting");
+    expect(typeof (await delivered!)).toBe("number");
+    expect(pendingCalls(log)).toHaveLength(1);
+    expect(ran).toEqual([]);
+  });
 });

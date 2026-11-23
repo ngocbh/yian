@@ -9,7 +9,8 @@
  */
 
 import { DeliveryRefused, type WithdrawnEvent } from "../run.ts";
-import { CHAT_WAKE, type ChildEvent, type EventQueue, toMessage } from "./chat_events.ts";
+import { CHAT_WAKE, type EventQueue, toMessage } from "./chat_events.ts";
+import type { ChildEvent } from "./chat_runs.ts";
 import { sanitize } from "./sanitize.ts";
 
 /** The child events a chat sends into its inbox, and what tells it when (`inboxChat`). */

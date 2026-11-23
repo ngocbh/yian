@@ -4,96 +4,14 @@
  * authored `yian`; and the count of the assistant's tool calls in flight, which tells the chat
  * when such a send would land in the middle of one.
  *
- * Knows about: the chat's child statuses and the host tool API.
+ * Knows about: the chat's child statuses and their events (`chat_runs.ts`), and the host tool API.
  */
 
-import { TAKE } from "../tools/context.ts";
 import { type FunctionTool, withExecute } from "../tools/function_tools.ts";
-import type { ChildStatus } from "./chat_runs.ts";
-
-/** The most characters of a child event's line. */
-const EVENT_BODY_CHARS = 2000;
-
-/** The most asks, or waits, a child event or a status shown to the model lists. */
-export const LIST_ITEMS = 20;
+import { type ChildEvent, type ChildStatus, childEvent } from "./chat_runs.ts";
 
 /** The type of the event a queue push or the last tool call ending dispatches on the wake target. */
 export const CHAT_WAKE = "wake";
-
-/**
- * One child event: the line the assistant reads, and the status it came from. `run` is `null` (and
- * `seq` 0) for one that came from no status of the chat's: a message authored `yian` the chat
- * didn't send, taken back from the inbox.
- */
-export interface ChildEvent {
-  readonly run: string | null;
-  readonly seq: number;
-  readonly text: string;
-  /** The event as the chat's view draws it; absent for one that came from no status. */
-  readonly card?: EventCard;
-}
-
-/**
- * A child event as a card on the terminal: the status it came from, what the run now does (its
- * first clause's verb: `asks`, `succeeded`, ...) and the rest of the line.
- */
-export interface EventCard {
-  readonly status: ChildStatus["status"];
-  readonly verb: string;
-  readonly body: string;
-}
-
-/** What a waiting status waits on, as far as `childEvent` reads it. */
-interface Wait {
-  readonly tool?: unknown;
-  readonly inbox?: unknown;
-  readonly settled?: unknown;
-}
-
-/**
- * The event `status` is for the assistant, or `null` when it says nothing to act on (a run
- * `running`, or waiting only for a timer with nothing said). The line names the run, then what
- * it now does (asks, with each question's call id; waits for a message on an inbox; succeeded,
- * failed or was cancelled), then what it said and what the chat noted about its memories; child
- * text is JSON-quoted, so the line stays one line, and the line is cut at `EVENT_BODY_CHARS` with
- * a note.
- */
-export function childEvent(status: ChildStatus): ChildEvent | null {
-  if (status.status === "running") return null;
-  // Each clause is its verb and what follows it, which starts with a space when it isn't empty.
-  const clauses: [string, string][] = [];
-  const quote = (value: unknown) => JSON.stringify(value) ?? "null";
-  if (status.status === "succeeded") clauses.push(["succeeded", ` with output ${quote(status.output ?? null)}`]);
-  else if (status.status === "cancelled") clauses.push(["was cancelled", ""]);
-  else if (status.status === "failed") {
-    const failure = status.failure;
-    clauses.push([
-      "failed",
-      failure === undefined
-        ? `: ${quote(status.note ?? "")}`
-        : ` (${failure.code}${failure.node === null ? "" : ` at ${failure.node}`}): ${quote(failure.message)}`,
-    ]);
-  } else if ((status.asks ?? []).length > 0) {
-    const asks = status.asks!.slice(0, LIST_ITEMS).map((ask) => `(call ${ask.call}): ${quote(ask.question)}`);
-    const more = status.asks!.length - LIST_ITEMS;
-    if (more > 0) asks.push(`(${more} more; flow_status shows all)`);
-    clauses.push(["asks", ` ${asks.join(", ")}`]);
-  } else {
-    const waits = (status.waits ?? []) as readonly Wait[];
-    const inbox = waits.find((wait) => wait.tool === TAKE && wait.settled !== true && typeof wait.inbox === "string");
-    if (inbox !== undefined) clauses.push(["waits for a message", ` on inbox ${quote(inbox.inbox)}`]);
-  }
-  if ((status.replies ?? []).length > 0) clauses.push(["said", ` ${status.replies!.map(quote).join(", ")}`]);
-  const notes = status.memory_notes ?? [];
-  if (notes.length > 0) clauses.push(["noted", ` ${notes.map(quote).join(", ")}`]);
-  if (clauses.length === 0) return null;
-  const cut = (line: string) =>
-    line.length > EVENT_BODY_CHARS ? `${line.slice(0, EVENT_BODY_CHARS)}... (cut; flow_status shows all)` : line;
-  const text = cut(`run ${status.run} ${clauses.map(([verb, rest]) => verb + rest).join("; ")}`);
-  const [[verb, first], ...others] = clauses as [[string, string], ...[string, string][]];
-  const body = cut([first.trim(), ...others.map(([word, rest]) => word + rest)].filter(Boolean).join("; "));
-  return { run: status.run, seq: status.seq, text, card: { status: status.status, verb, body } };
-}
 
 /** The message `event` is sent to the chat's inbox as: a user message authored `yian`. */
 export function toMessage(event: ChildEvent): {

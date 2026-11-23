@@ -27,7 +27,7 @@ import { Diagnostic, shellQuote } from "../diagnostics.ts";
 import { NodeSucceeded, type RunEvent, RunStarted, type StreamChunk } from "../events.ts";
 import { defaultEmbedding } from "../llm_clients/connection.ts";
 import { defaultEmbed, type ModelAccess } from "../llm_clients/factory.ts";
-import { homeDir, realScheduler, type Scheduler } from "../platform.ts";
+import { homeDir, realScheduler, removeEmptyDir, type Scheduler, sleepUntil } from "../platform.ts";
 import {
   advance,
   cancel,
@@ -50,8 +50,8 @@ import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { YianRangeError } from "../typesys/errors.ts";
 import { builtinType } from "../typesys/types.ts";
 import { canonicalTypeLabel, isInboxType, typeEquals, type Value, writeAsText } from "../typesys/values.ts";
-import type { ChildEvent } from "./chat_events.ts";
 import { type ChatEvents, ChatFlusher } from "./chat_flush.ts";
+import type { ChildEvent } from "./chat_runs.ts";
 import {
   accountHome,
   bindMemories,
@@ -71,7 +71,6 @@ import {
   mergeInputs,
   needsMcp,
   readGrantedSkills,
-  removeEmptyDir,
   renderRunError,
   reportRunLog,
   ResumeKeyError,
@@ -96,7 +95,7 @@ import {
   TerminalStopped,
   textDraft,
 } from "./terminal.ts";
-import { atTerminal, type CliIo, CommandEnv, forTerminal, HostStop, sleepUntil, UsageError } from "./utils.ts";
+import { atTerminal, type CliIo, CommandEnv, forTerminal, HostStop, UsageError } from "./utils.ts";
 
 /**
  * The options `inboxChat` reads, for `yian chat`'s assistant and the chats `runOrChat` hands over; an

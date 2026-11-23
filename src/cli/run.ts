@@ -24,7 +24,7 @@
  * Output is raw ANSI on stderr, coloured only on a TTY without `NO_COLOR`.
  */
 
-import { existsSync, lstatSync, realpathSync, rmdirSync, type Stats } from "node:fs";
+import { existsSync, lstatSync, realpathSync, type Stats } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
@@ -63,7 +63,15 @@ import {
 } from "../llm_clients/connection.ts";
 import { checkInputNames } from "../nodes/binding.ts";
 import type { Parameter } from "../nodes/contracts.ts";
-import { FileLockError, homeDir, isSystemError, sqliteErrorCode, statOrNull, withWarnings } from "../platform.ts";
+import {
+  FileLockError,
+  homeDir,
+  isSystemError,
+  removeEmptyDir,
+  sqliteErrorCode,
+  statOrNull,
+  withWarnings,
+} from "../platform.ts";
 import {
   advance,
   inspectRun,
@@ -679,16 +687,6 @@ function logExists(log: string): UsageError {
 function lostLogRace(error: Error, log: string): boolean {
   if (!isSystemError(error) || error.code !== "EEXIST" || error.path === undefined) return false;
   return resolve(error.path) === resolve(log);
-}
-
-/** Remove the directory `dir` if it is empty; otherwise, or when that fails, leave it as it is. */
-export function removeEmptyDir(dir: string): void {
-  try {
-    rmdirSync(dir);
-  } catch {
-    // Not empty (the run created its log) or not removable: tidying must not replace the
-    // command's own outcome.
-  }
 }
 
 /**

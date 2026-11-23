@@ -149,5 +149,7 @@ export {
   type ValueRecord,
   type WaitInfo,
   withdraw,
+  type Withdrawal,
   type WithdrawnEvent,
+  type WithdrawOptions,
 } from "./run.ts";

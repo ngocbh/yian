@@ -259,14 +259,15 @@ export function resumedAttemptEvents(state: RunState, record: RunResumedRecord):
 }
 
 /**
- * One host delivery: a send, a withdraw of an inbox's unread sends, a completed call, a released
- * hold, an inbox close, an interrupt or a cancel, and who makes it (`by`, recorded on its record).
+ * One host delivery: a send, a withdraw of an inbox's unread sends (every one, or the ones `events`
+ * names), a completed call, a released hold, an inbox close, an interrupt or a cancel, and who
+ * makes it (`by`, recorded on its record).
  * An interrupt's `running` are the in-flight readers of its inbox, which only the engine knows;
  * absent offline: then any in-flight node counts as an open reader for the idle rule.
  */
 export type DeliveryOp = (
   | { readonly kind: "send"; readonly inbox: string; readonly event: unknown; readonly key?: string | null }
-  | { readonly kind: "withdraw"; readonly inbox: string }
+  | { readonly kind: "withdraw"; readonly inbox: string; readonly events?: readonly number[] | null }
   | { readonly kind: "complete"; readonly callId: string; readonly result: CompleteResult }
   | { readonly kind: "release"; readonly callId: string; readonly note?: string | null }
   | { readonly kind: "close"; readonly inbox: string }
@@ -289,7 +290,7 @@ export function prepareDelivery(state: RunState, op: DeliveryOp): PreparedTransi
     case "send":
       return prepareSend(state, op.inbox, op.event, op.key ?? null, by);
     case "withdraw":
-      return prepareWithdraw(state, op.inbox, by);
+      return prepareWithdraw(state, op.inbox, op.events ?? null, by);
     case "complete":
       return prepareComplete(state, op.callId, op.result, by);
     case "release":

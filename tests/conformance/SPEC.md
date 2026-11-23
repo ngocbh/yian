@@ -306,6 +306,9 @@ A case can't hold code, so its host is declared under `host`.
   `advance` after it, so the next item lands on the same waiting run. Any item may say who makes
   it, `by: {kind, name, run?, node?}`, which the runner passes as the call's `by`. A run still
   waiting when the items run out fails the case. More forms of a send item:
+  - `{withdraw: <name>, sends: [<n>, ...]}` calls `withdraw(log, inbox, {events})` with the seqs
+    of the run's sends at those places in the log, `0` the first (a place past them fails the
+    case), so a crash sweep's resume, which moves the seqs, withdraws the same sends.
   - `{inbox, event, after: {node: <node id>, <point>}}` is sent while the run is live, when it
     reaches the point (see [points](#points) below), through the run's engine, as a host's `send`
     does. A steer to an AGENT's `steer_inbox` is such an item: sent at `{tool_call: i}`, it joins

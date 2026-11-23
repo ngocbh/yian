@@ -178,6 +178,7 @@ import {
 import {
   acceptedCommits,
   addCrashedAttempts,
+  chosenSends,
   commitInitialPool,
   commitPrepared,
   DeliveryRefused,
@@ -2407,39 +2408,85 @@ export interface WithdrawnEvent {
   readonly by: Author | null;
 }
 
+/** The options of `withdraw`: `DeliveryOptions`, and the sends to take back. */
+export interface WithdrawOptions extends DeliveryOptions {
+  /**
+   * The seqs of the sends to take back, as `send` returned them, in any order, at least one and
+   * each once. Each must be a send to the inbox and, with `by`, one made with the same `by`.
+   * `null` (the default) takes back every unread send.
+   */
+  events?: readonly number[] | null;
+}
+
+/** What a `withdraw` of chosen sends did. */
+export interface Withdrawal {
+  /** The named sends it took back, in send order. */
+  readonly withdrawn: readonly WithdrawnEvent[];
+  /**
+   * The named sends it left, in seq order: a take or an agent's steer had read them, or an
+   * earlier withdraw had taken them back.
+   */
+  readonly notWithdrawn: readonly number[];
+}
+
 /**
  * Take back the unread sends of the top-level inbox `inbox` of the run at `log`: those no take or
  * steer read has taken, including sends assigned to a take whose node hasn't woken, which then
- * waits again (or, on a closed inbox, gets `{events: [], closed: true}`). With `options.by`, only
- * the sends whose `by` is the same, every field alike, are taken back: the sends kept go to the
- * takes that lost theirs, oldest first, as new sends would; a take that lost nothing keeps what it
- * holds. Without it, every sender's. Withdrawn sends get no reply, take output or late steer. Delivered
- * as `send` is; a closed inbox is allowed. No event is published.
+ * waits again (or, on a closed inbox, gets `{events: [], closed: true}`). With `options.events`,
+ * only the sends it names that are still unread; with `options.by`, only the sends whose `by` is
+ * the same, every field alike. Without either, every unread send. The sends kept go to the takes
+ * that lost theirs, oldest first, as new sends would; a take that lost nothing keeps what it
+ * holds. Withdrawn sends get no reply, take output or late steer. Delivered as `send` is; a closed
+ * inbox is allowed. No event is published.
  *
  * @param log The run's JSONL log.
  * @param inbox The name of one of the flow's `Inbox(T)` inputs.
- * @param options See `DeliveryOptions`; `by` is who withdraws, and whose sends.
+ * @param options See `WithdrawOptions`; `by` is who withdraws, and whose sends.
  * @returns The sends taken back, in send order; `[]` when none was unread (nothing is appended).
- * @throws TypeError when `inbox` isn't a string, `options.by` isn't an author or `null`, or
- *   `options.flow` isn't a `ComposedFlow` or `null`.
- * @throws RangeError when a field of `options.by` is empty.
+ *   With `options.events`, a `Withdrawal`: those sends, and the named ones no longer unread.
+ * @throws TypeError when `inbox` isn't a string, `options.events` isn't a list of integers or
+ *   `null`, `options.by` isn't an author or `null`, or `options.flow` isn't a `ComposedFlow` or
+ *   `null`.
+ * @throws RangeError when `options.events` is empty or names a seq below 1 or twice, or a field
+ *   of `options.by` is empty.
  * @throws DeliveryRefused (nothing appended) with reason `ended` once the run has a terminal
- *   result, `not_started`, or `unknown_inbox`.
+ *   result, `not_started`, `unknown_inbox`, or `unknown_send` when `options.events` names a seq
+ *   that is no send to `inbox` or, with `options.by`, one made with another `by`.
  * @throws RunBusyError, RangeError, LoadError, DefaultsMismatchError and `ENOENT`, as `send`.
  */
-export async function withdraw(log: string, inbox: string, options: DeliveryOptions = {}): Promise<readonly WithdrawnEvent[]> {
+export function withdraw(
+  log: string,
+  inbox: string,
+  options: WithdrawOptions & { readonly events: readonly number[] },
+): Promise<Withdrawal>;
+export function withdraw(
+  log: string,
+  inbox: string,
+  options?: WithdrawOptions & { readonly events?: null },
+): Promise<readonly WithdrawnEvent[]>;
+export function withdraw(log: string, inbox: string, options?: WithdrawOptions): Promise<readonly WithdrawnEvent[] | Withdrawal>;
+export async function withdraw(
+  log: string,
+  inbox: string,
+  options: WithdrawOptions = {},
+): Promise<readonly WithdrawnEvent[] | Withdrawal> {
   if (typeof inbox !== "string") throw new YianTypeError("inbox must be a string");
+  const named = options.events ?? null;
+  const events = named === null ? null : chosenSends(named);
   const by = validatedBy(options.by, "a host call's by");
   let taken: WithdrawnEvent[] = [];
-  const { seq } = await deliverTo(log, { kind: "withdraw", inbox }, options, (state) => {
+  const { seq } = await deliverTo(log, { kind: "withdraw", inbox, events }, options, (state) => {
     // Read before the record drops the values, in the delivery's synchronous section.
-    taken = withdrawnSends(state, inbox, by).map((event) => ({
+    taken = withdrawnSends(state, inbox, by, events).map((event) => ({
       seq: event,
       value: copyValue(state.inboxEvents.get(event)!.toObject()),
       by: state.sendBy.get(event) ?? null,
     }));
   });
-  return seq === null ? [] : taken;
+  const withdrawn = seq === null ? [] : taken;
+  if (events === null) return withdrawn;
+  const back = new Set(withdrawn.map((event) => event.seq));
+  return { withdrawn, notWithdrawn: events.filter((event) => !back.has(event)) };
 }
 
 /**

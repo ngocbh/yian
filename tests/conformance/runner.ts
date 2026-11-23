@@ -37,7 +37,7 @@ import {
   resolveIsinstanceType,
 } from "../../src/compose/helpers/isinstance_types.ts";
 import { flowFingerprint } from "../../src/compile/manifest.ts";
-import { END_ID } from "../../src/compile/model.ts";
+import { END_ID, START_ID } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { LoadError } from "../../src/compose/helpers/errors.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
@@ -114,6 +114,7 @@ import {
 import {
   MemoryRunLog,
   NodeStepRecord,
+  PoolCommitRecord,
   readRunLog,
   type RecordEnvelope,
   type RunLog,
@@ -576,9 +577,10 @@ function checkStop(stop: Value | undefined): void {
  * Throw unless `value`, a `host.sends` list, holds only `{inbox, event}` items, optionally with
  * `after: {node, <point>}` (sent live when the run reaches the point) or, in a `resume` case,
  * `down: true` (sent after the crash, before the resume), `{close}` items, `{withdraw}` items
- * (`withdraw(run, inbox)`) and `{interrupt}` items (`interrupt(run, inbox)`), each optionally
- * with `after`, `{complete, output}` or `{complete, error}` items, and `{release, note}` items
- * (`note` optional), optionally with `after`. Any item may say who makes it (`by`, a mapping).
+ * (`withdraw(run, inbox)`; with `sends`, the run's sends by place, `withdraw(run, inbox, {events})`,
+ * not with `after`) and `{interrupt}` items (`interrupt(run, inbox)`), each optionally with
+ * `after`, `{complete, output}` or `{complete, error}` items, and `{release, note}` items (`note`
+ * optional), optionally with `after`. Any item may say who makes it (`by`, a mapping).
  */
 function checkSends(value: Value | undefined, kind: Kind): void {
   if (!Array.isArray(value)) throw new Error("`host.sends` must be a list");
@@ -597,6 +599,7 @@ function checkSends(value: Value | undefined, kind: Kind): void {
     const completes = typeof (item as Case | null)?.["complete"] === "string";
     const interrupts = typeof (item as Case | null)?.["interrupt"] === "string";
     const withdraws = typeof (item as Case | null)?.["withdraw"] === "string";
+    const chosen = (item as Case | null)?.["sends"];
     const releases =
       typeof (item as Case | null)?.["release"] === "string" &&
       ["release", "note,release", "after,release", "after,note,release"].includes(fields!) &&
@@ -609,6 +612,7 @@ function checkSends(value: Value | undefined, kind: Kind): void {
       (fields === "down,event,inbox" && send && (item as Case)["down"] === true && kind === "resume") ||
       (fields === "close" && typeof (item as Case)["close"] === "string") ||
       (fields === "withdraw" && withdraws) ||
+      (fields === "sends,withdraw" && withdraws && Array.isArray(chosen) && chosen.every((place) => typeof place === "bigint")) ||
       (fields === "after,withdraw" && withdraws && isMapping((item as Case)["after"])) ||
       (fields === "interrupt" && interrupts) ||
       (fields === "after,interrupt" && interrupts && isMapping((item as Case)["after"])) ||
@@ -617,7 +621,7 @@ function checkSends(value: Value | undefined, kind: Kind): void {
       (releases && (!Object.hasOwn(item as Case, "after") || isMapping((item as Case)["after"]))));
     if (!valid) {
       throw new Error(
-        "`host.sends` items are {inbox, event, after?|down?}, {close}, {withdraw, after?}, {interrupt, after?}, {complete, output | error} or {release, note?, after?}, each with an optional `by` mapping; " +
+        "`host.sends` items are {inbox, event, after?|down?}, {close}, {withdraw, after? | sends?}, {interrupt, after?}, {complete, output | error} or {release, note?, after?}, each with an optional `by` mapping; " +
           "`hold: true` marks an item sent while the run waits that isn't followed by an advance",
       );
     }
@@ -2935,11 +2939,32 @@ function runHooks(
   };
 }
 
+/**
+ * The seqs of the sends a `{withdraw, sends}` item names by their place among the run's sends in
+ * the log at `log` (`0` the first), so a case names a send the same way when a crash sweep's
+ * resume moves its seq.
+ *
+ * @throws CaseFailure for a place past the sends the log holds.
+ */
+function sentSeqs(log: string, places: readonly bigint[]): number[] {
+  const seqs = readRunLog(log).flatMap(({ record, seq }) =>
+    record instanceof PoolCommitRecord && record.key.startsWith(`${START_ID}.`) ? [seq] : [],
+  );
+  return places.map((place) => {
+    const seq = seqs[Number(place)];
+    if (seq === undefined) throw new CaseFailure(`a withdraw names send ${place}, but the run has ${seqs.length} sends`);
+    return seq;
+  });
+}
+
 /** Deliver the `host.sends` item `item`, one sent while the run waits, to the run at `log`, made by its `by`. */
 async function deliver(log: string, item: Case, env: Env): Promise<void> {
   const options = { env, by: get(item, "by", null) as Author | null };
   if (Object.hasOwn(item, "close")) await close(log, item["close"] as string, options);
-  else if (Object.hasOwn(item, "withdraw")) await withdraw(log, item["withdraw"] as string, options);
+  else if (Object.hasOwn(item, "withdraw")) {
+    const events = Object.hasOwn(item, "sends") ? sentSeqs(log, item["sends"] as bigint[]) : null;
+    await withdraw(log, item["withdraw"] as string, { ...options, events });
+  }
   else if (Object.hasOwn(item, "interrupt")) await interrupt(log, item["interrupt"] as string, options);
   else if (Object.hasOwn(item, "complete")) await complete(log, item["complete"] as string, completion(item), options);
   else if (Object.hasOwn(item, "release")) {

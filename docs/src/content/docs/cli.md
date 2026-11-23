@@ -357,15 +357,16 @@ words as you typed them, signed `the user, via yian-chat`, and its log records e
 relayed by the chat. The assistant gets each as your action, signed `the user`, that starts no
 reply: it reads them in its next turn, whatever starts it. The view shows what each did, or why
 it was refused. A question or held call leaves the strip once it is settled, and when one you
-picked was settled elsewhere, the view says so. Once the flow has ended, the view says so in place
-of the box.
+picked was settled elsewhere, the view says so. While the flow works, the one you picked stays
+picked, and Enter on it waits until the flow does. Once the flow has ended, the view says so in
+place of the box.
 
 | Key | What it does |
 |---|---|
 | Tab, Shift-Tab | Picks what the box goes to: an inbox, a question or a held call |
 | Enter on an inbox | Sends the box's text to it |
-| Enter on a question | Answers it with the box's text. A form (`questions:`) opens the chat's question card in place of the box instead, which Esc closes |
-| Enter on a held call | Shows what the call acts on, as its tool tells the check, else its arguments. `a` approves it and `r` refuses it, with the box's text as your reason; any other key leaves it held. A flow holds calls only under a host that checks them, which `yian chat` doesn't |
+| Enter on a question | Answers a `prompt:` ask with the box's text. A form (`questions:`), or an agent's question with options, opens the chat's question card in place of the box, which Esc closes |
+| Enter on a held call | Shows the whole call on a card in place of the box: what it acts on, as its tool tells the check, else its arguments, then your reason, the box's text. `a` approves it and `r` refuses it; any other key leaves it held. A card too big for the screen approves nothing. A host that gates its runs shows held calls here; `yian chat` doesn't |
 | `/close` | Closes the inbox picked once you press `y`: the flow reads no more from it |
 | `/stop` | Stops the flow once you press `y`: its run ends |
 | Esc while the flow runs | Interrupts it on the inbox picked: takes back your messages it hasn't read, which return to the box, then cuts the steps reading the inbox. When the flow waits for a message there, there is nothing to interrupt. When no step reads it, the interrupt stands until the flow next takes from the inbox, and a step that starts reading it before then stops at once |

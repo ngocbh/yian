@@ -93,7 +93,6 @@ const ALLOWED: Record<string, string> = {
   "cli/report_issue.ts: SAME_SECOND_REPORTS": "reports saved in one second before file_issue stops",
   "cli/run_view.ts: KEPT_ROWS": "rows of a child run's progress the chat's run view keeps",
   "cli/run_view.ts: SAID_ROWS": "rows the chat's run view gives what a press did",
-  "cli/run_view.ts: CARD_ROWS": "rows the chat's run view gives a held call's card",
   "cli/run_view.ts: STRIP_CELLS": "cells a question takes in the strip of the chat's run view",
   "cli/run_view.ts: RUN_ID_SHOWN": "characters of a run id a row of the chat's run view shows",
   "cli/run_view.ts: VIEW_ROWS": "screen rows the chat's run view keeps from its input box",

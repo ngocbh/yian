@@ -31,14 +31,17 @@ import {
   RunCancelledRecord,
   RunLogChangedError,
 } from "../runtime/log.ts";
-import type { AskQuestion, PendingCall } from "../run.ts";
+import type { PendingCall } from "../run.ts";
+import { ASK_USER } from "../tools/context.ts";
 import type { ToolSource } from "../tools/gate.ts";
+import type { AskUserRequest } from "../tools/registry.ts";
 import { TypedValue } from "../typesys/values.ts";
 import { cells, fit, wrapLine } from "./cells.ts";
 import { runStatusLabel, shortArgs, summary } from "./chat_view.ts";
 import { TAB } from "./markdown.ts";
 import {
   authorText,
+  box,
   type Colored,
   elapsedTag,
   endedNodeText,
@@ -205,7 +208,9 @@ export class RunProgress {
   /** An agent's step: a model call's text and tool calls, or a tool call's result. */
   #step({ step }: NodeStepRecord): void {
     if (step["kind"] === "tool_result") {
-      const output = typeof step["output"] === "string" ? step["output"].replaceAll("\t", TAB) : "";
+      // A TOOL node's answer (an ask's, say) is a typed value its node's row already ends.
+      if (typeof step["output"] !== "string") return;
+      const output = step["output"].replaceAll("\t", TAB);
       const style = step["is_error"] === true ? "red" : "dim";
       for (const [i, row] of summary(output, this.#width - 5).entries()) {
         this.#push({ lead: i === 0 ? "  ⎿  " : "     ", indent: "     ", text: row, style });
@@ -343,6 +348,18 @@ type Target =
   | { readonly kind: "question"; readonly key: string; readonly call: string; readonly question: string }
   | { readonly kind: "held"; readonly key: string; readonly call: string; readonly tool: string };
 
+/** A question the strip names. */
+type Question = Target & { readonly kind: "question" };
+
+/** A held call the strip names. */
+type Held = Target & { readonly kind: "held" };
+
+/**
+ * A held call being decided: the call as the run's log held it, the box's text and the reason it
+ * gives, and whether its card was last drawn whole.
+ */
+type Deciding = { readonly target: Held; readonly call: PendingCall; readonly text: string; readonly reason: string | null; whole: boolean };
+
 /** The strip's rows, in order: each kind of target and what its row is called. */
 const STRIP: readonly (readonly [Target["kind"], string])[] = [
   ["inbox", "inboxes"],
@@ -364,8 +381,8 @@ export interface RunViewHost {
   status(): ChildStatus;
   /** Its progress as `RunProgress.rows` gives it now. */
   progress(): { readonly lines: readonly string[]; readonly earlier: number };
-  /** Its open host call `call` as its log lists it now (`pendingCalls`); `null` when none is open. */
-  pendingCall(call: string): PendingCall | null;
+  /** Its open host calls as its log lists them now (`pendingCalls`). */
+  pendingCalls(): readonly PendingCall[];
   /** Press the assistant's tool `tool` on the run as the person (`ChildFlowOwner.press`). */
   press<K extends keyof PressArguments>(
     tool: K,
@@ -376,11 +393,11 @@ export interface RunViewHost {
 /** The most rows what a press did takes under the strip. */
 const SAID_ROWS = 2;
 
-/** The most rows a held call's card takes under the strip. */
-const CARD_ROWS = 6;
-
-/** The rows the view keeps from its box, beside the box's own margin: the header, the strip and what a press did. */
-const VIEW_ROWS = 6;
+/**
+ * The rows the view keeps from its box, beside the box's own margin: the header, a strip row per
+ * kind of target, what a press did, and the line under the box.
+ */
+const VIEW_ROWS = 9;
 
 /** What each press is called while it is under way, and when it ran nothing. */
 const PRESSING: Readonly<Record<keyof PressArguments, { doing: string; not: string }>> = {
@@ -392,8 +409,8 @@ const PRESSING: Readonly<Record<keyof PressArguments, { doing: string; not: stri
   approve: { doing: "deciding", not: "not decided" },
 };
 
-/** A line the view shows under the strip, its style, and the most rows it takes (`SAID_ROWS` when absent). */
-type Said = { readonly text: string; readonly style: Style; readonly rows?: number };
+/** A line the view shows under the strip, and its style; its own line breaks start rows. */
+type Said = { readonly text: string; readonly style: Style };
 
 /** The statuses of a run that has ended. */
 const ENDED: ReadonlySet<ChildStatus["status"]> = new Set(["succeeded", "failed", "cancelled"]);
@@ -424,12 +441,51 @@ function oneLine(text: string): string {
   return sanitize(text).replace(/[\n\t]/g, " ");
 }
 
-/** Where a held call's tool comes from, after a space, unless it is a host tool: ` from MCP server files`. */
-function sourceText(source: ToolSource | null): string {
-  if (source === null || source.kind === "host") return "";
-  if (source.kind === "mcp") return ` from MCP server ${source.server}`;
-  if (source.kind === "module") return ` from module ${source.alias}`;
-  return source.kind === "memory" ? ` from memory ${source.input}` : ` from flow ${source.flow}`;
+/** Where a held call's tool comes from, unless it is a host tool: `from MCP server files`. */
+function sourceText(source: ToolSource | null): string | null {
+  if (source === null || source.kind === "host") return null;
+  if (source.kind === "mcp") return `from MCP server ${source.server}`;
+  if (source.kind === "module") return `from module ${source.alias}`;
+  return source.kind === "memory" ? `from memory ${source.input}` : `from flow ${source.flow}`;
+}
+
+/**
+ * The card asking whether to approve `call`, a held call of run `run`, `columns` wide: a box titled
+ * with the question, holding what the call acts on (its tool's gate `target`, else its arguments)
+ * as JSON, where its tool comes from unless it is a host tool, and last the person's `reason`. Each
+ * label starts its row, and the text under it is indented on every row it wraps to, so no text from
+ * the call or the reason reads as a label. Its text shows the sequences it holds, as an approval's
+ * card does. `whole` is false when the title had to be cut.
+ */
+function heldCard(
+  run: string,
+  call: PendingCall,
+  reason: string | null,
+  columns: number,
+  colors: { out: Colored; env: Env },
+): { rows: string[]; whole: boolean } {
+  const { out, env } = colors;
+  const inner = Math.max(3, columns - 4);
+  const shown = (text: string) => sanitize(text, { sequences: "show" }).replaceAll("\t", TAB);
+  const rows: [string, string][] = [];
+  const label = (text: string) => void rows.push([text, paint(text, "bold", out, env)]);
+  const value = (text: string) => {
+    for (const line of shown(text).split("\n")) {
+      for (const [start, end] of wrapLine(line, inner - 2)) rows.push([`  ${line.slice(start, end)}`, `  ${line.slice(start, end)}`]);
+    }
+  };
+  if (call.target === null) label("arguments");
+  else label("acts on");
+  value(JSON.stringify(call.target ?? call.arguments ?? {}));
+  const from = sourceText(call.source);
+  if (from !== null) label(shown(from));
+  if (reason !== null) {
+    label("reason");
+    value(reason);
+  }
+  const title = `approve ${run}'s ${shown(call.tool)} call?`;
+  const card = box(rows, "yellow", out, env, title, inner, columns).split("\n");
+  return { rows: card, whole: cells(title) <= inner - 1 };
 }
 
 /**
@@ -438,17 +494,20 @@ function sourceText(source: ToolSource | null): string {
  * picked in brackets (Tab and Shift-Tab pick), what the last press did, and a box named after it,
  * which keeps its text and pastes as the chat's does. Each key presses the assistant's tool as the
  * person, never the chat's own. Enter on an inbox sends the box's text as it is (`message`); on a
- * question, answers it with the text as it is (`answer`), or for a form (an ask's `questions`)
- * opens the chat's question card in place of the box, which Escape closes; on a held call, shows
- * the call as the run's log holds it (what it acts on, else its arguments) and asks: `a` approves
- * it and `r` refuses it (`approve`), the box's text as the reason. `/close` closes the inbox
+ * question, answers it with the text as it is (`answer`), or for a form (an ask's `questions`) or
+ * an agent's question with options opens the chat's question card in place of the box, which
+ * Escape closes; on a held call, shows the call on a card in place of the box, as the run's log
+ * holds it, and asks: `a` approves it, once the card is drawn whole, and `r` refuses it
+ * (`approve`), the box's text as the reason. While the run works, a question or held call picked
+ * stays picked, and Enter on it waits for the run to wait. `/close` closes the inbox
  * (`close_inbox`) and `/stop` stops the run (`stop`), each after a `y`, and Escape, while the status
- * drawn is `running`, interrupts the inbox (`interrupt`), the lines it takes back returning to the
- * box. Escape at rest closes the view, pressing nothing. Once the run has ended, the box gives way
- * to a line saying so.
+ * drawn is `running` and an inbox is picked, interrupts it (`interrupt`), the lines it takes back
+ * returning to the box. Escape otherwise closes the view, pressing nothing. Once the run has ended,
+ * the box gives way to a line saying so.
  */
 export class RunView {
   readonly #host: RunViewHost;
+  readonly #colors: { out: Colored; env: Env };
   readonly #style: (text: string, s: Style) => string;
   readonly #editor: LineEditor;
   /** The screen's size at the last draw, which the box keeps within: each draw sets it first. */
@@ -459,24 +518,29 @@ export class RunView {
   #place = 0;
   /** The status the screen shows: keys act on its targets, and Escape interrupts only a run it shows running. */
   #shown: ChildStatus | null = null;
-  /** Each question's call as the run's log listed it when first drawn, for its form; `null` once settled. */
-  readonly #calls = new Map<string, PendingCall | null>();
+  /** The run's open calls as its log listed them, by id; a question's never changes. */
+  readonly #calls = new Map<string, PendingCall>();
+  /** The status (`ChildStatus.seq`) at which the run's open calls were last read; `null` before any read. */
+  #readAt: number | null = null;
   /** The questions and held calls pressed here, by key: one leaving the strip needs no word then. */
   readonly #pressed = new Set<string>();
-  /** The card of the form being answered, in place of the box; `null` when none is up. */
+  /** The card of the question being answered, in place of the box; `null` when none is up. */
   #card: QuestionCard | null = null;
+  /** The held call being decided, on its card in place of the box; `null` when none is. */
+  #deciding: Deciding | null = null;
   /** Where the box's rows, or the card's, start among those drawn last. */
   #boxAt = 0;
   /** What the last press did, or what the view asks; `null` for nothing. */
   #said: Said | null = null;
   /** Whether a press is under way: until it is done, no other starts. */
   #busy = false;
-  /** What the next key does while the view asks something; `null` when it asks nothing. */
-  #confirming: ((key: Key) => void) | null = null;
+  /** The press a command waits to make on a `y`, while its question is what the view says; `null` when none. */
+  #confirming: (() => void) | null = null;
   readonly #listeners = new Set<() => void>();
 
   constructor(host: RunViewHost, out: Colored, env: Env) {
     this.#host = host;
+    this.#colors = { out, env };
     this.#style = (text, s) => paint(text, s, out, env);
     const close = { name: "/close", description: "Close the inbox: the run reads no more from it" };
     const stop = { name: "/stop", description: "Stop the run: it ends" };
@@ -503,35 +567,36 @@ export class RunView {
     this.#shown = status;
     const style = this.#style;
     const target = this.#pick(status);
-    const said = this.#said;
-    const saidRows = said === null ? [] : this.#saidRows(said, columns).map((row) => style(row, said.style));
-    // The rows the cursor is placed in: the box, or the card in its place.
+    // Ctrl-C goes back to a prompt of the chat behind the view: Escape interrupts a run that works.
+    const behind = style("the chat waits on you · ctrl-c to answer", "yellow");
+    // The rows the cursor is placed in: the box, or the question card in its place.
     let lower: string[] = [];
     let foot: string[];
     if (this.#ended()) {
       this.#card = null;
-      foot = [...saidRows, style("the run has ended · esc to go back", "dim")];
+      this.#deciding = null;
+      foot = [...this.#saidRows(columns), waiting ? behind : style("the run has ended · esc to go back", "dim")];
+    } else if (this.#deciding !== null) {
+      foot = [...this.#decision(this.#deciding, columns, rows - (waiting ? 1 : 0)), ...(waiting ? [behind] : [])];
     } else if (this.#card !== null) {
       lower = this.#card.lines();
-      foot = [...lower, style("esc closes the form", "dim")];
+      foot = [...lower, waiting ? behind : style("esc closes the form", "dim")];
     } else {
       lower = this.#editor.lines();
       const back =
         status.status === "running" && target?.kind === "inbox"
           ? style(`esc interrupts ${sanitize(target.inbox)} · ctrl-c goes back to the chat`, "dim")
           : style("esc to go back to the chat", "dim");
-      foot = [...this.#strip(status, target), ...saidRows, ...lower, back];
+      foot = [...this.#strip(status, target, columns), ...this.#saidRows(columns), ...lower, waiting ? behind : back];
     }
-    // Ctrl-C goes back to a prompt of the chat behind the view: Escape interrupts a run that works.
-    if (waiting) foot[foot.length - 1] = style("the chat waits on you · ctrl-c to answer", "yellow");
     const screen = runScreen({ id, name, status }, this.#host.progress(), columns, rows, style, foot);
     this.#boxAt = screen.length - 1 - lower.length;
     return screen;
   }
 
-  /** Where the cursor shows among the rows drawn last: in the box or the card, while the run hasn't ended. */
+  /** Where the cursor shows among the rows drawn last: in the box or the question card, while the run hasn't ended. */
   cursor(): { row: number; before: string } | null {
-    const at = this.#ended() ? null : (this.#card ?? this.#editor).cursor();
+    const at = this.#ended() || this.#deciding !== null ? null : (this.#card ?? this.#editor).cursor();
     if (at === null || this.#boxAt + at.row < 0) return null;
     return { row: this.#boxAt + at.row, before: at.before };
   }
@@ -539,14 +604,18 @@ export class RunView {
   /** Take one key; return whether to close the view. */
   key(key: Key): boolean {
     if (this.#confirming !== null) {
-      const answer = this.#confirming;
+      const press = this.#confirming;
       this.#confirming = null;
       this.#said = null;
-      answer(key);
+      if (!key.paste && (key.str === "y" || key.str === "Y")) press();
       return false;
     }
     // Nothing more reaches an ended run: Escape goes back.
     if (this.#ended()) return key.name === "escape" && !key.paste;
+    if (this.#deciding !== null) {
+      this.#decided(key);
+      return false;
+    }
     if (this.#card !== null) {
       this.#card.key(key);
       return false;
@@ -568,25 +637,36 @@ export class RunView {
     return this.#shown !== null && ENDED.has(this.#shown.status);
   }
 
-  /** The run's targets in the status drawn last (now, before any draw): its inboxes, its questions, its held calls. */
-  #targets(status = this.#shown ?? this.#host.status()): Target[] {
-    return [
+  /** The status drawn last, or now, before any draw. */
+  #status(): ChildStatus {
+    return this.#shown ?? this.#host.status();
+  }
+
+  /**
+   * `status`'s targets: the run's inboxes, its questions and its held calls. A run that works lists
+   * no question or held call, so the one picked stays: its log still holds it open.
+   */
+  #targets(status = this.#status()): Target[] {
+    const targets: Target[] = [
       ...this.#host.inboxes.map((inbox) => ({ kind: "inbox", key: `inbox ${inbox}`, inbox }) as const),
       ...(status.asks ?? []).map(({ call, question }) => ({ kind: "question", key: `call ${call}`, call, question }) as const),
       ...(status.held ?? []).map(({ call, tool }) => ({ kind: "held", key: `call ${call}`, call, tool }) as const),
     ];
+    const picked = this.#picked;
+    const kept = status.status === "running" && picked !== null && picked.kind !== "inbox";
+    if (kept && !targets.some((target) => target.key === picked.key)) targets.push(picked);
+    return targets;
   }
 
   /** The target the box sends to, in the status drawn last; `null` when the strip is empty. */
   #target(): Target | null {
-    return this.#pick(this.#shown ?? this.#host.status());
+    return this.#pick(this.#status());
   }
 
   /**
    * The target the box sends to among `status`'s: the one picked while the strip holds it, else the
-   * one now in its place (the last, when the strip got shorter). A run that works lists no question
-   * or held call, so one picked stays picked for when it waits again. One that left as the run
-   * waits, and wasn't pressed here, is said to be no longer open.
+   * one now in its place (the last, when the strip got shorter). A question or held call that left
+   * as the run waits takes its card with it, and is said to be no longer open unless pressed here.
    */
   #pick(status: ChildStatus): Target | null {
     const targets = this.#targets(status);
@@ -597,10 +677,13 @@ export class RunView {
       return targets[at]!;
     }
     const now = targets[Math.min(this.#place, targets.length - 1)] ?? null;
-    if (picked !== null && status.status === "running") return now;
-    if (picked !== null && picked.kind !== "inbox" && !ENDED.has(status.status) && !this.#pressed.has(picked.key)) {
-      const what = picked.kind === "question" ? `the question "${this.#question(picked)}"` : `${picked.tool}'s held call`;
-      this.#said = { text: `${what} is no longer open`, style: "yellow" };
+    if (picked !== null && picked.kind !== "inbox" && !ENDED.has(status.status)) {
+      this.#card = null;
+      this.#deciding = null;
+      if (!this.#pressed.has(picked.key)) {
+        const what = picked.kind === "question" ? `the question "${oneLine(this.#question(picked))}"` : `${oneLine(picked.tool)}'s held call`;
+        this.#say({ text: `${what} is no longer open`, style: "yellow" });
+      }
     }
     this.#picked = now;
     return now;
@@ -617,26 +700,44 @@ export class RunView {
     this.#picked = targets[this.#place]!;
   }
 
-  /** `target`'s ask when it is a form (`questions`), read from its call once; `null` for a plain question. */
-  #form(target: Target): AskQuestion | null {
-    if (target.kind !== "question") return null;
-    if (!this.#calls.has(target.call)) {
+  /**
+   * Open call `id` as the run's log lists it, `null` when it doesn't: the log is read at most once a
+   * status, and only for a call not read before.
+   */
+  #call(id: string): PendingCall | null {
+    const seq = this.#status().seq;
+    if (!this.#calls.has(id) && this.#readAt !== seq) {
+      this.#readAt = seq;
       try {
-        this.#calls.set(target.call, this.#host.pendingCall(target.call));
+        for (const call of this.#host.pendingCalls()) this.#calls.set(call.callId, call);
       } catch {
-        // Unread, it is asked as a plain question, and read again next time.
-        return null;
+        // Unread, it is a question the box answers until a later status reads it.
       }
     }
-    const ask = this.#calls.get(target.call)?.ask ?? null;
-    return (ask?.questions ?? []).length > 0 ? ask : null;
+    return this.#calls.get(id) ?? null;
+  }
+
+  /**
+   * The question card `target` opens, as the chat's own asks it: a form (an ask's `questions`), or
+   * an agent's question with options (its choices and Other); `null` for one the box answers.
+   */
+  #asked(target: Target): AskUserRequest | null {
+    if (target.kind !== "question") return null;
+    const call = this.#call(target.call);
+    if (call === null) return null;
+    const { ask, node: nodeId } = call;
+    if (ask !== null) return (ask.questions ?? []).length > 0 ? { ...ask, options: null, nodeId } : null;
+    const options = call.arguments?.["options"];
+    if (call.tool !== ASK_USER || !Array.isArray(options) || options.length === 0) return null;
+    if (!options.every((option) => typeof option === "string")) return null;
+    return { question: target.question, options, questions: null, answerSchema: null, title: null, nodeId };
   }
 
   /** What a question asks, in words: a form's title, else its first question; else the question asked. */
-  #question(target: Target & { kind: "question" }): string {
-    const form = this.#form(target);
-    const first = (form?.questions?.[0] as { question?: unknown } | undefined)?.question;
-    return form?.title || (typeof first === "string" ? first : target.question);
+  #question(target: Question): string {
+    const asked = this.#asked(target);
+    const first = (asked?.questions?.[0] as { question?: unknown } | undefined)?.question;
+    return asked?.title || (typeof first === "string" ? first : target.question);
   }
 
   /** The box's hint: what Enter does to the target picked, then the commands. */
@@ -646,7 +747,9 @@ export class RunView {
     const tab = this.#targets().length > 1 ? " · tab picks" : "";
     if (target.kind === "inbox") return `enter sends${tab} · /close · /stop`;
     if (target.kind === "held") return `enter approves or refuses${tab} · /stop`;
-    return `${this.#form(target) === null ? "enter answers" : "enter opens the form"}${tab} · /stop`;
+    const asked = this.#asked(target);
+    const enter = asked === null ? "enter answers" : asked.questions === null ? "enter opens the choices" : "enter opens the form";
+    return `${enter}${tab} · /stop`;
   }
 
   /** What the box's edge names: the inbox picked, the question, or what the text is for a held call. */
@@ -658,21 +761,31 @@ export class RunView {
     return oneLine(this.#question(target));
   }
 
-  /** The strip: a row for each kind of target the run has, the one `picked` in brackets. */
-  #strip(status: ChildStatus, picked: Target | null): string[] {
+  /**
+   * The strip, `columns` wide: a row for each kind of target the run has, the one `picked` in
+   * brackets. A row too wide leaves out the items before the picked one until it shows.
+   */
+  #strip(status: ChildStatus, picked: Target | null, columns: number): string[] {
     const style = this.#style;
     const targets = this.#targets(status);
     return STRIP.flatMap(([kind, label]) => {
-      const named = targets
+      const items = targets
         .filter((target) => target.kind === kind)
         .map((target) => {
           let text: string;
           if (target.kind === "inbox") text = oneLine(target.inbox);
           else if (target.kind === "held") text = oneLine(target.tool);
           else text = fit(oneLine(this.#question(target)), STRIP_CELLS);
-          return target.key === picked?.key ? style(`[${text}]`, "cyan bold") : text;
+          return { text, picked: target.key === picked?.key };
         });
-      return named.length === 0 ? [] : [`${style(label, "dim")}  ${named.join("  ")}`];
+      if (items.length === 0) return [];
+      const at = items.findIndex((item) => item.picked);
+      const named = (from: number) => `${from > 0 ? "…  " : ""}${items.slice(from, at + 1).map(({ text }) => text).join("  ")}`;
+      let from = 0;
+      // The picked item's brackets take two cells.
+      while (from < at && cells(`${label}  ${named(from)}`) + 2 > columns) from++;
+      const shown = items.slice(from).map((item) => (item.picked ? style(`[${item.text}]`, "cyan bold") : item.text));
+      return [`${style(label, "dim")}  ${from > 0 ? "…  " : ""}${shown.join("  ")}`];
     });
   }
 
@@ -687,7 +800,7 @@ export class RunView {
 
   /**
    * Enter in the box with `text`: a command, asked first; else, for the target picked, the text sent
-   * to an inbox or answering a question as it is, a form's card, or a held call's decision.
+   * to an inbox or answering a question as it is, a question card, or a held call's card.
    */
   #enter(text: string): void {
     const command = text.trim();
@@ -697,21 +810,24 @@ export class RunView {
       return this.#confirm(`stop ${run}? its run ends (y/N)`, () => this.#press("stop", { run }, `stopped ${run}`));
     }
     if (target === null) {
-      if (command !== "") this.#said = { text: "this run has no inbox", style: "yellow" };
+      if (command !== "") this.#say({ text: "this run has no inbox", style: "yellow" });
       return;
     }
     if (command === "/close") {
       if (target.kind !== "inbox") {
         const why = this.#host.inboxes.length === 0 ? "this run has no inbox" : "/close closes an inbox: pick one with tab";
-        this.#said = { text: why, style: "yellow" };
-        return;
+        return this.#say({ text: why, style: "yellow" });
       }
       const { inbox } = target;
       const ask = `close ${inbox}? nothing more can be sent to it (y/N)`;
       return this.#confirm(ask, () => this.#press("close_inbox", { run, inbox }, `closed ${inbox}`));
     }
+    if (target.kind !== "inbox" && this.#shown?.status === "running") {
+      const what = target.kind === "question" ? "question" : "held call";
+      return this.#say({ text: `the run is working; its ${what} comes back when it waits`, style: "yellow" });
+    }
     if (target.kind === "held") return this.#decide(target, text);
-    if (target.kind === "question" && this.#form(target) !== null) return this.#open(target);
+    if (target.kind === "question" && this.#asked(target) !== null) return this.#open(target);
     if (command === "") return;
     this.#editor.set("");
     if (target.kind === "inbox") this.#press("message", { run, inbox: target.inbox, text }, `sent to ${target.inbox}`);
@@ -719,67 +835,85 @@ export class RunView {
   }
 
   /** Press `answer` on `target` with `value`. */
-  #answer(target: Target & { kind: "question" }, value: unknown): void {
+  #answer(target: Question, value: unknown): void {
     this.#pressed.add(target.key);
-    this.#press("answer", { run: this.#host.id, call: target.call, answer: value }, `answered: ${this.#question(target)}`);
+    const did = `answered: ${oneLine(this.#question(target))}`;
+    this.#press("answer", { run: this.#host.id, call: target.call, answer: value }, did);
   }
 
-  /** Open `target`'s form on the chat's question card, in place of the box; its answers go as one `answer`. */
-  #open(target: Target & { kind: "question" }): void {
-    const ask = this.#form(target)!;
-    const nodeId = this.#calls.get(target.call)?.node ?? null;
-    const request = { ...ask, options: null, nodeId };
-    const card = new QuestionCard(request, () => this.#size.columns, () => this.#notify());
+  /** Open `target`'s question card in place of the box; its answers go as one `answer`. */
+  #open(target: Question): void {
+    const card = new QuestionCard(this.#asked(target)!, () => this.#size.columns, () => this.#notify());
     this.#card = card;
-    this.#said = null;
+    this.#say(null);
     void card.answer.then((answered) => {
-      if (this.#card === card) this.#card = null;
-      if (answered !== null && !this.#ended()) this.#answer(target, answered.value);
+      // Gone with its question, or with the run: nothing to answer.
+      if (this.#card !== card) return;
+      this.#card = null;
+      if (answered !== null) this.#answer(target, answered.value);
     });
   }
 
-  /**
-   * Show `target`'s held call as the run's log holds it now: what it acts on (its tool's `target`),
-   * else its arguments. Then `a` approves it and `r` refuses it, with `text` as the reason when it
-   * isn't blank; any other key leaves it held, and the text back in the box.
-   */
-  #decide(target: Target & { kind: "held" }, text: string): void {
+  /** Put `target`'s held call, as the run's log holds it now, on its card in place of the box, `text` its reason. */
+  #decide(target: Held, text: string): void {
     let call: PendingCall | null;
     try {
-      call = this.#host.pendingCall(target.call);
+      call = this.#host.pendingCalls().find((each) => each.callId === target.call) ?? null;
     } catch (error) {
-      this.#said = { text: `can't read the call: ${error instanceof Error ? error.message : String(error)}`, style: "red" };
-      return;
+      return this.#say({ text: `can't read the call: ${error instanceof Error ? error.message : String(error)}`, style: "red" });
     }
-    if (call === null || !call.held) {
-      this.#said = { text: `${target.tool}'s held call is no longer open`, style: "yellow" };
-      return;
-    }
-    const run = this.#host.id;
-    const reason = text.trim() === "" ? null : text;
-    const card = [`approve ${run}'s ${call.tool} call${sourceText(call.source)}? a approves · r refuses · any other key leaves it held`];
-    if (reason !== null) card.push(`reason: ${reason}`);
-    card.push(call.target === null ? `arguments ${JSON.stringify(call.arguments ?? {})}` : `acts on ${JSON.stringify(call.target)}`);
+    if (call === null || !call.held) return this.#say({ text: `${oneLine(target.tool)}'s held call is no longer open`, style: "yellow" });
     this.#editor.set("");
-    this.#said = { text: card.join("\n"), style: "yellow", rows: CARD_ROWS };
-    const { tool } = call;
-    this.#confirming = (key) => {
-      const letter = key.paste ? "" : (key.str ?? "").toLowerCase();
-      const decision = letter === "a" ? "approve" : letter === "r" ? "refuse" : null;
-      if (decision === null) return this.#editor.set(text);
-      this.#pressed.add(target.key);
-      const args = { run, call: target.call, decision, ...(reason === null ? {} : { reason }) } as const;
-      this.#press("approve", args, `${decision === "approve" ? "approved" : "refused"} ${tool}`);
-    };
+    this.#say(null);
+    this.#deciding = { target, call, text, reason: text.trim() === "" ? null : text, whole: false };
+  }
+
+  /**
+   * The held call's card for `deciding`, `room` rows at most with the line under it saying which
+   * keys do what. A card that doesn't fit keeps its head and says how many rows it leaves out, and
+   * then `a` approves nothing: `deciding.whole` says whether the card was drawn whole.
+   */
+  #decision(deciding: Deciding, columns: number, room: number): string[] {
+    const style = this.#style;
+    const { rows: card, whole } = heldCard(this.#host.id, deciding.call, deciding.reason, columns, this.#colors);
+    const fits = card.length <= room - 1;
+    deciding.whole = whole && fits;
+    const kept = Math.max(0, room - 2);
+    const shown = fits ? card : [...card.slice(0, kept), style(`… ${card.length - kept} more rows`, "dim")];
+    const keys = deciding.whole
+      ? "a approves · r refuses · any other key leaves it held"
+      : "the call is too long to show here; widen the terminal · r refuses · any other key leaves it held";
+    return [...shown, style(keys, "yellow")];
+  }
+
+  /**
+   * A key on a held call's card: `a` approves the call, once the card was drawn whole, and `r`
+   * refuses it; any other key leaves it held, and the text back in the box.
+   */
+  #decided(key: Key): void {
+    const { target, call, text, reason, whole } = this.#deciding!;
+    const letter = key.paste ? "" : (key.str ?? "").toLowerCase();
+    // Never from a card cut or not drawn yet: the line under it says why.
+    if (letter === "a" && !whole) return;
+    this.#deciding = null;
+    if (letter !== "a" && letter !== "r") return this.#editor.set(text);
+    const decision = letter === "a" ? "approve" : "refuse";
+    this.#pressed.add(target.key);
+    const args = { run: this.#host.id, call: target.call, decision, ...(reason === null ? {} : { reason }) } as const;
+    this.#press("approve", args, `${decision === "approve" ? "approved" : "refused"} ${oneLine(call.tool)}`, text);
   }
 
   /** Ask `question` in place of what the last press did; `y` makes `press`, any other key nothing. */
   #confirm(question: string, press: () => void): void {
     this.#editor.set("");
-    this.#confirming = (key) => {
-      if (!key.paste && (key.str === "y" || key.str === "Y")) press();
-    };
     this.#said = { text: question, style: "yellow" };
+    this.#confirming = press;
+  }
+
+  /** Say `said` in place of what the view said; a command's question it replaces is no longer asked. */
+  #say(said: Said | null): void {
+    this.#said = said;
+    this.#confirming = null;
   }
 
   /** Tell the listeners the view changed. */
@@ -787,19 +921,27 @@ export class RunView {
     for (const listener of this.#listeners) listener();
   }
 
-  /** Press `tool` with `args`, and say what it did once it is done: `did`, unless the run's note says more. */
-  #press<K extends keyof PressArguments>(tool: K, args: PressArguments[K], did: string): void {
+  /**
+   * Press `tool` with `args`, and say what it did once it is done: `did`, unless the run's note says
+   * more. A press that ran nothing puts `back`, its words, back in an empty box.
+   */
+  #press<K extends keyof PressArguments>(tool: K, args: PressArguments[K], did: string, back = ""): void {
     this.#busy = true;
-    this.#said = { text: `${PRESSING[tool].doing}…`, style: "dim" };
-    const failed = (error: unknown): Said => {
-      const why = error instanceof Error ? error.message : String(error);
-      return { text: `${PRESSING[tool].not}: ${why}`, style: "red" };
+    this.#say({ text: `${PRESSING[tool].doing}…`, style: "dim" });
+    const giveBack = () => {
+      if (back !== "" && this.#editor.text() === "") this.#editor.set(back);
     };
     void this.#host
       .press(tool, args)
       .then(
-        (pressed) => (this.#said = this.#outcome(tool, args, pressed, did)),
-        (error: unknown) => (this.#said = failed(error)),
+        (pressed) => {
+          this.#say(this.#outcome(tool, args, pressed, did));
+          if (pressed.result === null) giveBack();
+        },
+        (error: unknown) => {
+          this.#say({ text: `${PRESSING[tool].not}: ${error instanceof Error ? error.message : String(error)}`, style: "red" });
+          giveBack();
+        },
       )
       .finally(() => {
         this.#busy = false;
@@ -844,19 +986,20 @@ export class RunView {
     return { text, style: "yellow" };
   }
 
-  /** `said`'s text on at most its rows `columns` wide, sanitized, each of its lines wrapped, the last row cut to fit. */
-  #saidRows(said: Said, columns: number): string[] {
+  /** What the view says, on at most `SAID_ROWS` rows `columns` wide, sanitized, each line wrapped, the last row cut to fit. */
+  #saidRows(columns: number): string[] {
+    const said = this.#said;
+    if (said === null) return [];
     const width = Math.max(1, columns);
-    const most = said.rows ?? SAID_ROWS;
     const rows = sanitize(said.text)
       .split("\n")
       .flatMap((line) => wrapLine(line, width).map(([start, end]) => ({ line, start, end })));
-    const kept = rows.slice(0, most).map(({ line, start, end }) => line.slice(start, end));
-    if (rows.length > most) {
-      const { line, start, end } = rows[most - 1]!;
+    const kept = rows.slice(0, SAID_ROWS).map(({ line, start, end }) => line.slice(start, end));
+    if (rows.length > SAID_ROWS) {
+      const { line, start, end } = rows[SAID_ROWS - 1]!;
       // Cut within its line, or at its end with more lines after.
-      kept[most - 1] = end < line.length ? fit(line.slice(start), width) : fit(`${line.slice(start, end)} …`, width);
+      kept[SAID_ROWS - 1] = end < line.length ? fit(line.slice(start), width) : fit(`${line.slice(start, end)} …`, width);
     }
-    return kept;
+    return kept.map((row) => this.#style(row, said.style));
   }
 }

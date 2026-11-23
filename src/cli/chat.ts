@@ -372,7 +372,7 @@ function runList(
           inboxes: child.inboxes,
           status: () => runs.status(child.id),
           progress: () => progress.rows(scheduler.now()),
-          pendingCall: (call) => pendingCalls(child.status.log).find((each) => each.callId === call) ?? null,
+          pendingCalls: () => pendingCalls(child.status.log),
           press: (tool, args) => owner.press(tool, args, { person: PERSON }),
         },
         out,

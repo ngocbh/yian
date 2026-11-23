@@ -25,7 +25,7 @@ import {
   ValueKind,
   writeAsText,
 } from "../typesys/values.ts";
-import { ANSI, cells, clip, columnsOf, fit, rowsOf, wrapLine } from "./cells.ts";
+import { ANSI, cells, charCells, clip, columnsOf, fit, rowsOf, wrapLine } from "./cells.ts";
 import { liveRows, type LiveRows, SYNC_OFF, SYNC_ON } from "./live_rows.ts";
 import { box, userRows } from "./render.ts";
 import { sanitize } from "./sanitize.ts";
@@ -2646,20 +2646,52 @@ async function promptRequest(
 }
 
 /**
+ * `line`, styled, folded into rows at most `columns` cells wide where the terminal would wrap it
+ * (`layout`), each row opening again the styles still open where it starts.
+ */
+function folded(line: string, columns: number): string[] {
+  const sequence = new RegExp(`^${ANSI.source}`);
+  const rows: string[] = [];
+  let row = "";
+  let used = 0;
+  let open = "";
+  for (let at = 0; at < line.length; ) {
+    const found = sequence.exec(line.slice(at));
+    if (found !== null) {
+      row += found[0];
+      open = found[0] === `${ESC}0m` ? "" : open + found[0];
+      at += found[0].length;
+      continue;
+    }
+    const char = String.fromCodePoint(line.codePointAt(at)!);
+    if (used > 0 && used + charCells(char) > columns) {
+      rows.push(open === "" ? row : `${row}${ESC}0m`);
+      [row, used] = [open, 0];
+    }
+    row += char;
+    used += charCells(char);
+    at += char.length;
+  }
+  return [...rows, row];
+}
+
+/**
  * A question card that a whole-screen view draws inside itself (`showScreen` with `key`): `request`
  * asked as `askUser` asks it (`promptRequest`), each key the view passes going to the widget asking.
  * Its rows are those the card printed (the panel, each question's rule, the line each answered one
- * collapsed to), then the widget asking. `answer` settles with the answer, or `null` once Escape
- * cancels it or a widget stops (Ctrl-Q, Ctrl-D); `changed` is called, later, each time a widget
- * opens and once the card settles.
+ * collapsed to), then the widget asking, folded to `columns()` as the terminal would wrap them.
+ * `answer` settles with the answer, or `null` once Escape cancels it or a widget stops (Ctrl-Q,
+ * Ctrl-D); `changed` is called, later, each time a widget opens and once the card settles.
  */
 export class QuestionCard {
   readonly answer: Promise<{ value: unknown } | null>;
+  readonly #columns: () => number;
   readonly #rows: string[] = [];
   /** The widget asking, and how it ends: with its outcome, or cancelled (`null`). */
   #asking: { widget: Widget<unknown>; end: (outcome: { value: unknown } | null) => void } | null = null;
 
   constructor(request: AskUserRequest, columns: () => number, changed: () => void) {
+    this.#columns = columns;
     // Later, so a view never draws in the middle of a key it is taking.
     const tell = (): void => queueMicrotask(changed);
     const run: RunWidget = <T>(widget: Widget<T>) =>
@@ -2685,13 +2717,25 @@ export class QuestionCard {
 
   /** The rows to draw, styled, one screen row each. */
   lines(): string[] {
-    return [...this.#rows, ...(this.#asking?.widget.lines() ?? []).flatMap((line) => line.split("\n"))];
+    const lines = [...this.#rows, ...(this.#asking?.widget.lines() ?? []).flatMap((line) => line.split("\n"))];
+    return lines.flatMap((line) => folded(line, this.#width()));
   }
 
   /** The cursor's row among `lines()` and the text before it there; null to hide it. */
   cursor(): { row: number; before: string } | null {
-    const at = this.#asking?.widget.cursor() ?? null;
-    return at === null ? null : { row: this.#rows.length + at.row, before: at.before };
+    const widget = this.#asking?.widget;
+    const at = widget?.cursor() ?? null;
+    if (widget === undefined || at === null) return null;
+    const width = this.#width();
+    const above = [...this.#rows, ...widget.lines().slice(0, at.row)].flatMap((line) => line.split("\n"));
+    const before = folded(at.before, width);
+    const row = above.reduce((sum, line) => sum + folded(line, width).length, 0) + before.length - 1;
+    return { row, before: before.at(-1)! };
+  }
+
+  /** The width the rows fold to: the screen's, one cell at least. */
+  #width(): number {
+    return Math.max(1, this.#columns());
   }
 
   /** Take one key: Escape cancels the card, any other goes to the widget asking. */

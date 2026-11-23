@@ -296,8 +296,8 @@ A long paste shows as a token such as `[Pasted text #1 +40 lines]`; the assistan
 | `list_flows`, `read_flow`, `read_docs` | Lists the flows in the folder, reads one, or reads a page of these docs |
 | `check_flow` | Loads a flow or a draft without running it, as `yian check` does |
 | `write_flow` | Writes a flow that loads, once you approve |
-| `start_flow` | Starts a flow or a draft in the background, once you approve |
-| `flow_status`, `wait_flow`, `answer_flow`, `message_flow`, `close_inbox`, `stop_flow` | Follows, answers, messages or cancels a flow it started |
+| `flows_start` | Starts a flow or a draft in the background, once you approve |
+| `flows_status`, `flows_wait`, `flows_answer`, `flows_message`, `flows_close_inbox`, `flows_stop` | Follows, answers, messages or cancels a flow it started |
 | `report_issue` | Reports a problem with yian (see [Reporting a problem](#reporting-a-problem)) |
 | `author_flow` | Builds or reworks a flow with you (see [Building and reviewing flows](#building-and-reviewing-flows)) |
 | `review_flow` | Reviews a flow for security, reliability, cost and clarity |

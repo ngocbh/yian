@@ -556,7 +556,14 @@ const driver = new ChildFlows({
 });
 const owner = driver.owner({ runId, group: "flows" });
 const started = await owner.start(flow, { topic: "billing" });
-const next = await advance({ log, tools: { ...tools, [owner.group]: childFlows(owner) } });
+const flows = childFlows(owner, {
+  start: {                                   // optional: lets the model start flows too
+    description: "Start a flow from the catalog by its name, once the user approves it.",
+    resolve: ({ flow }) => ({ flow: catalog.get(flow), name: flow }), // throws a ReportedToolError for none
+    approve: async (target, inputs, signal) => null,                   // or why not
+  },
+});
+const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
 ```
 
 - **Ids.** Children are `r1`, `r2`, ..., numbered across the driver. A child's run id is
@@ -567,6 +574,22 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: childFlows(o
 - **The group.** The model sees `<group>_status` and `<group>_wait`, which read a run's status, and
   `<group>_message`, `<group>_answer`, `<group>_close_inbox` and `<group>_stop`, which deliver to
   it. Each returns the run's status. `wait` waits at most 120 seconds on the driver's `scheduler`.
+- **Start.** With the `start` option the group has `<group>_start` too, which takes `flow`, `inputs`
+  and `content` (a draft's text). In order:
+  1. `resolve` finds the flow the call names. Throw a `ReportedToolError` for one it may not start.
+  2. A library is refused.
+  3. The inputs are checked as the run's start checks them. An Inbox input is never given, and a
+     memory input is the host's to bind (`memories.bind`). No message in them may carry an `author`
+     or an action part.
+  4. `approve` returns `null` to let it start, or why not.
+  5. The owner starts it.
+
+  A refusal after `resolve` reads `not started: <why>`. `description` begins the tool's
+  description, so say there what `flow` names. A crash-cut start isn't sent again, since it may have
+  started.
+- **Members.** A run records every tool of each group its agents are granted, so a run whose group
+  gains or loses a tool, such as `start`, can't be resumed: `resume refused: tool_groups.<group>
+  differs from the recorded one`.
 - **Resumes.** The four delivering tools are `resumable`. `message` keys its send by the call id,
   so a crash-cut call sent again sends nothing twice. A call sent again that is refused as
   `ended`, `unknown_call` or `call_settled` returns the status with no note, since the first may

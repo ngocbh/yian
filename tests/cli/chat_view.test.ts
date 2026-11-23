@@ -1053,8 +1053,9 @@ describe("the view's helpers", () => {
     expect(richChat(io(true, true))).toBe(false);
   });
 
-  test("shortArgs shows a path or run bare and other values short", () => {
+  test("shortArgs shows a path, flow or run bare and other values short", () => {
     expect(shortArgs({ path: "a.yaml", inputs: { n: 1, tags: ["x"] } })).toBe('a.yaml, {n: 1, tags: ["x"]}');
+    expect(shortArgs({ flow: "a.yaml", run: "r1", text: "hi" })).toBe('a.yaml, r1, "hi"');
     expect(shortArgs({ content: "y".repeat(60) })).toBe(`"${"y".repeat(38)}…"`);
     expect(shortArgs(null)).toBe("");
   });
@@ -1099,8 +1100,8 @@ describe("a session on a terminal", () => {
     const { io, stdin, output, rows } = terminalIo({ noColor });
     const script: ScriptedReply[] = [
       callReply(["check_flow", { path: "hello.yaml" }, "c1"]),
-      callReply(["start_flow", { path: "hello.yaml", inputs: { name: "Ada" } }, "c2"]),
-      callReply(["wait_flow", { run: "r1", seconds: 30 }, "c3"]),
+      callReply(["flows_start", { flow: "hello.yaml", inputs: { name: "Ada" } }, "c2"]),
+      callReply(["flows_wait", { run: "r1", seconds: 30 }, "c3"]),
       streamed("hello ran and ", "returned **Hi Ada**."),
     ];
     const model = new AnsweringModel((_, count) => script[count - 1] ?? textReply("noted"));
@@ -1139,7 +1140,7 @@ describe("a session on a terminal", () => {
         "",
         "⏺ check_flow(hello.yaml)",
         `  ⎿  ok: true · name: hello · inputs: [{name: "name", ty…`,
-        '⏺ start_flow(hello.yaml, {name: "Ada"})',
+        '⏺ flows_start(hello.yaml, {name: "Ada"})',
         `╭─ Run hello.yaml ${"─".repeat(41)}╮`,
         ...CARD.slice(0, 4).map(row),
         row("an approval for this chat doesn't cover changes to the"),
@@ -1148,7 +1149,7 @@ describe("a session on a terminal", () => {
         "? Run hello.yaml Approve",
         // Of several fields, each takes at most half the row: the log's path is cut.
         expect.stringMatching(/^ {2}⎿ {2}run: r1 · status: running · log: \S+…$/),
-        "⏺ wait_flow(r1, 30)",
+        "⏺ flows_wait(r1, 30)",
         expect.stringMatching(/^ {2}⎿ {2}run: r1 · log: \S+… · status:$/),
         "     succeeded · output: Hi Ada",
         "",
@@ -1682,7 +1683,7 @@ describe("the run list under the input box", () => {
       writeFileSync(join(root, "color.yaml"), COLOR_FLOW);
       const { io, stdin, output, rows } = terminalIo();
       const script: ScriptedReply[] = [
-        callReply(["start_flow", { path: "color.yaml", inputs: {} }, "c1"]),
+        callReply(["flows_start", { flow: "color.yaml", inputs: {} }, "c1"]),
         textReply("Started color.yaml (r1)."),
         textReply("r1 asks which colour you want."),
       ];
@@ -1800,7 +1801,7 @@ describe("a run's view while the chat goes on", () => {
         if (afterTool(request)) return textReply("done.");
         if (!started && asked(request, "pick a colour")) {
           started = true;
-          return callReply(["start_flow", { path: "color.yaml", inputs: {} }, "c1"]);
+          return callReply(["flows_start", { flow: "color.yaml", inputs: {} }, "c1"]);
         }
         if (!wrote && asked(request, "write it")) {
           wrote = true;
@@ -1863,7 +1864,7 @@ describe("a run's view while the chat goes on", () => {
         if (afterTool(request)) return textReply("Started.");
         if (!started && asked(request, "start nap")) {
           started = true;
-          return callReply(["start_flow", { path: "nap.yaml", inputs: {} }, "c1"]);
+          return callReply(["flows_start", { flow: "nap.yaml", inputs: {} }, "c1"]);
         }
         return asked(request, "run r1 succeeded") ? textReply("r1 is done.") : textReply("noted.");
       });

@@ -18,21 +18,24 @@ const AUTHOR_FILE = "author_flow.yaml";
 const REVIEW_FILE = "review_flow.yaml";
 const REVIEW_ALIAS = "review_flow";
 
+/** A tool grant as a flow writes it: a tool's name, or `{group: [tool, ...]}`. */
+export type AuthoredGrant = string | Readonly<Record<string, readonly string[]>>;
+
 /**
- * The chat's tools the author flow is granted, each under the same confinement and approvals as
- * the assistant's own; no other child run gets them. Its `start_flow` and `wait_flow` are its own.
+ * The chat's tools the author flow is granted, as it grants them, each under the same confinement
+ * and approvals as the assistant's own; no other child run gets them. Its `flows` group is its own:
+ * it starts its tries, and waits on them.
  */
-export const AUTHOR_TOOLS: readonly string[] = [
+export const AUTHOR_TOOLS: readonly AuthoredGrant[] = [
   "check_flow",
   "read_flow",
   "read_docs",
   "write_flow",
-  "start_flow",
-  "wait_flow",
+  { flows: ["start", "wait"] },
 ];
 
 /** The chat's tools the review flow is granted: it only reads. */
-export const REVIEW_TOOLS: readonly string[] = ["read_flow", "read_docs"];
+export const REVIEW_TOOLS: readonly AuthoredGrant[] = ["read_flow", "read_docs"];
 
 /**
  * Load the bundled review flow.

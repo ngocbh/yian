@@ -142,14 +142,17 @@ function shortValue(value: unknown): string {
   return String(value);
 }
 
+/** The arguments a tool call's line shows bare, as they name a file or a run. */
+const BARE_ARGS: ReadonlySet<string> = new Set(["path", "flow", "run"]);
+
 /**
- * A tool call's arguments, short: each value in order, a `path` or `run` bare and the others as
- * `shortValue` shows them.
+ * A tool call's arguments, short: each value in order, a `path`, `flow` or `run` bare and the others
+ * as `shortValue` shows them.
  */
 export function shortArgs(args: unknown): string {
   if (typeof args !== "object" || args === null || Array.isArray(args)) return args === null ? "" : shortValue(args);
   return Object.entries(args)
-    .map(([key, value]) => ((key === "path" || key === "run") && typeof value === "string" ? value : shortValue(value)))
+    .map(([key, value]) => (BARE_ARGS.has(key) && typeof value === "string" ? value : shortValue(value)))
     .join(", ");
 }
 

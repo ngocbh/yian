@@ -86,13 +86,7 @@ test("the reply agent gets the tools, the skill and steering, with no tool-call 
     "check_flow",
     "write_flow",
     "read_docs",
-    "start_flow",
-    "flow_status",
-    "wait_flow",
-    "answer_flow",
-    "message_flow",
-    "close_inbox",
-    "stop_flow",
+    "flows",
     "report_issue",
     "author_flow",
     "review_flow",
@@ -108,8 +102,8 @@ test("the prompt reads before explaining, checks before runs, and relays inbox r
   expect(text).toContain("Read a flow before you explain or change it, and check it before you run it.");
   expect(text).not.toContain("Check a flow before you write it");
   for (const phrase of [
-    "message_flow",
-    "close_inbox when the user is done with it",
+    "flows_message",
+    "flows_close_inbox when the user is done with it",
     "what a run said",
     "offer to report it with report_issue",
     "if the user pastes one, tell them to revoke it",
@@ -244,17 +238,14 @@ test("the report flow's scrub redacts each kind of secret and shows the home as 
   ]);
 });
 
-/** A stand-in for each tool the chat's reply agent is granted; none is called here. */
+/** A stand-in for each tool the chat's reply agent is granted, and its `flows` group; none is called here. */
 function replyToolStubs() {
   const names = [
-    "list_flows", "read_flow", "check_flow", "write_flow", "read_docs", "start_flow",
-    "flow_status", "wait_flow", "answer_flow", "message_flow", "close_inbox", "stop_flow",
-    "report_issue", "author_flow", "review_flow",
+    "list_flows", "read_flow", "check_flow", "write_flow", "read_docs", "report_issue", "author_flow", "review_flow",
   ];
   const parameters = { type: "object", properties: {} };
-  return Object.fromEntries(
-    names.map((name) => [name, tool({ name, description: name, parameters, execute: () => "" })]),
-  );
+  const stub = (name: string) => tool({ name, description: name, parameters, execute: () => "" });
+  return { ...Object.fromEntries(names.map((name) => [name, stub(name)])), flows: [stub("start"), stub("status")] };
 }
 
 /** A user message holding `text`; authored `yian` when `yian`. */

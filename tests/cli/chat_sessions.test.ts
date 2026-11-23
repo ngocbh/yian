@@ -40,17 +40,14 @@ beforeEach(() => {
 
 afterEach(() => rmSync(tmp, { recursive: true, force: true }));
 
-/** A stand-in for each tool the reply agent is granted. */
+/** A stand-in for each tool the reply agent is granted, and its `flows` group. */
 function stubs() {
   const names = [
-    "list_flows", "read_flow", "check_flow", "write_flow", "read_docs", "start_flow",
-    "flow_status", "wait_flow", "answer_flow", "message_flow", "close_inbox", "stop_flow",
-    "report_issue", "author_flow", "review_flow",
+    "list_flows", "read_flow", "check_flow", "write_flow", "read_docs", "report_issue", "author_flow", "review_flow",
   ];
   const parameters = { type: "object", properties: {} };
-  return Object.fromEntries(
-    names.map((name) => [name, tool({ name, description: name, parameters, execute: () => "" })]),
-  );
+  const stub = (name: string) => tool({ name, description: name, parameters, execute: () => "" });
+  return { ...Object.fromEntries(names.map((name) => [name, stub(name)])), flows: [stub("start"), stub("status")] };
 }
 
 const SKILL = new Skill({ name: "composing-agents", description: "Compose.", instructions: "." });

@@ -31,6 +31,7 @@ import type { ModelAccess } from "../llm_clients/factory.ts";
 import { homeDir, isSystemError, leavesRoot, realScheduler, removeEmptyDir, type Scheduler } from "../platform.ts";
 import { skillGrants } from "../run.ts";
 import { type Skill, SkillError } from "../skills/catalog.ts";
+import type { FunctionTool } from "../tools/function_tools.ts";
 import { DOCS, FLOWS } from "./bundled.ts";
 import { bundledSkill } from "./bundled_skill.ts";
 import { EventQueue, InFlight, trackInFlight } from "./chat_events.ts";
@@ -612,7 +613,8 @@ class ModelPicker {
  * prints `chat failed: ...` and exits 1. A banner line on stderr names the assistant's model
  * and the flow in focus; when that flow has an `Inbox` input, a hint says `yian run` chats with
  * it. The assistant gets the file tools (`chatFileTools`, over the docs bundle) and the run tools
- * (`chatRunTools`) over the chat's child runs, whose logs go in new run folders under
+ * (`chatRunTools`: the `flows` group, `flows_start` and the rest) over the chat's child runs, whose
+ * logs go in new run folders under
  * `~/.yian/runs` and whose CODE console output goes to a file beside the chat's log, `report_issue`
  * among them, its report filed through `file_issue` (`fileIssueTool`, on `deps.filing`), and
  * `author_flow` and `review_flow`, their runs given the bundled skill too; and the bundled
@@ -817,14 +819,12 @@ export async function chat(
       });
       const report = { facts: hostFacts(fresh.path, homes), homes, fileIssue };
       const authoring = { skills: new Map([[skill.name, skill]]) };
-      const all = trackInFlight(
-        [
-          ...chatFileTools(host),
-          ...chatRunTools(host, runs, owner, { report, authoring }),
-        ],
-        inFlight,
-      );
-      return Object.fromEntries(all.map((each) => [each.name, each]));
+      const files = Object.fromEntries(chatFileTools(host).map((each) => [each.name, each]));
+      const all = { ...files, ...chatRunTools(host, runs, owner, { report, authoring }) };
+      // A group's tools are tracked each.
+      const tracked = (entry: FunctionTool | FunctionTool[]) =>
+        Array.isArray(entry) ? trackInFlight(entry, inFlight) : trackInFlight([entry], inFlight)[0]!;
+      return Object.fromEntries(Object.entries(all).map(([key, entry]) => [key, tracked(entry)]));
     };
     // A numbered row fits on one line, after its label.
     const titleCells = (label: string) => columnsOf(out.stderrStream) - cells(label) - 4;

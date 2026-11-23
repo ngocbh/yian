@@ -411,8 +411,8 @@ test(
     const { io, stdin, stdout, screen } = chatIo({ tty: true });
     const script = [
       callReply(["check_flow", { path: "hello.yaml" }, "c1"]),
-      callReply(["start_flow", { path: "hello.yaml", inputs: { name: "Ada" } }, "c2"]),
-      callReply(["wait_flow", { run: "r1", seconds: 30 }, "c3"]),
+      callReply(["flows_start", { flow: "hello.yaml", inputs: { name: "Ada" } }, "c2"]),
+      callReply(["flows_wait", { run: "r1", seconds: 30 }, "c3"]),
       textReply("done"),
     ];
     // Past the script, a turn the child's events start gets a plain reply.
@@ -448,8 +448,8 @@ test(
     );
     const { io, stdin, stdout, screen } = chatIo({ tty: true });
     const script = [
-      callReply(["start_flow", { path: "remember.yaml", inputs: {} }, "c1"]),
-      callReply(["wait_flow", { run: "r1", seconds: 30 }, "c2"]),
+      callReply(["flows_start", { flow: "remember.yaml", inputs: {} }, "c1"]),
+      callReply(["flows_wait", { run: "r1", seconds: 30 }, "c2"]),
       textReply("done"),
     ];
     const model = new AnsweringModel((_, count) => script[count - 1] ?? textReply("noted"));
@@ -479,11 +479,11 @@ test(
     const { io, stdin, stdout, screen } = chatIo({ tty: true });
     let answered = false;
     const model = new AnsweringModel((request, count) => {
-      if (count === 1) return callReply(["start_flow", { path: "region.yaml", inputs: {} }, "c1"]);
+      if (count === 1) return callReply(["flows_start", { flow: "region.yaml", inputs: {} }, "c1"]);
       const call = askedCall(request);
       if (!answered && call !== null) {
         answered = true;
-        return callReply(["answer_flow", { run: "r1", call, answer: "eu" }, "c2"]);
+        return callReply(["flows_answer", { run: "r1", call, answer: "eu" }, "c2"]);
       }
       return textReply(answered ? "answered" : "started");
     });
@@ -493,7 +493,7 @@ test(
     await until(() => screen().includes("Run region.yaml"));
     stdin.write(ENTER);
     // Once the assistant has seen it start, the run asks.
-    await until(() => gotResult(model, "start_flow"));
+    await until(() => gotResult(model, "flows_start"));
     openGate();
     /** Whether the model was sent a message authored yian holding `text`. */
     const relayed = (text: string) =>
@@ -522,7 +522,7 @@ test(
     const { io, stdin, stderr, screen } = chatIo({ tty: true });
     const model = new AnsweringModel((_, count) =>
       count === 1
-        ? callReply(["start_flow", { path: "region.yaml", inputs: {} }, "c1"])
+        ? callReply(["flows_start", { flow: "region.yaml", inputs: {} }, "c1"])
         : textReply("waiting"),
     );
     // While the waiting children print, a Ctrl-C has a listener, so it can't end the process.
@@ -539,7 +539,7 @@ test(
     await until(() => screen().includes("Run region.yaml"));
     stdin.write(ENTER);
     // Once the assistant has seen it start, the run asks.
-    await until(() => gotResult(model, "start_flow"));
+    await until(() => gotResult(model, "flows_start"));
     openGate();
     // The question reaches the assistant in a turn of its own.
     await until(() => model.requests.some((request) => shown(request).includes("Which region?")));
@@ -564,11 +564,11 @@ test(
     const { io, stdin, stderr, screen } = chatIo({ tty: true });
     let answered = false;
     const model = new AnsweringModel((request, count) => {
-      if (count === 1) return callReply(["start_flow", { path: "ask.yaml", inputs: {} }, "c1"]);
+      if (count === 1) return callReply(["flows_start", { flow: "ask.yaml", inputs: {} }, "c1"]);
       const call = askedCall(request);
       if (!answered && call !== null) {
         answered = true;
-        return callReply(["answer_flow", { run: "r1", call, answer: "eu" }, "c2"]);
+        return callReply(["flows_answer", { run: "r1", call, answer: "eu" }, "c2"]);
       }
       return textReply("ok");
     });
@@ -593,7 +593,7 @@ test(
     await until(() => screen().includes("Run ask.yaml"));
     stdin.write(ENTER);
     // The answer is taken: the child runs the pass that never ends.
-    await until(() => gotResult(model, "answer_flow"));
+    await until(() => gotResult(model, "flows_answer"));
     stdin.write(`/exit${ENTER}`);
     await until(() => stderr().includes("session ended"));
     // The chat's own listener is gone; the cleanup's is the one left.
@@ -715,7 +715,7 @@ test(
       if (!answered && asked) {
         answered = true;
         const args = { run: "r1", call: asked[1]!, answer: "an error message" };
-        return callReply(["answer_flow", args, "c2"]);
+        return callReply(["flows_answer", args, "c2"]);
       }
       return textReply(shown(request).includes("succeeded with output") ? "saved it" : "on it");
     });

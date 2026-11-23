@@ -596,12 +596,22 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
   `message` to an `Inbox(Message)` is a user message authored by the owner's label, and so is
   each user message with no author that the model passes in an answer or a start's inputs. To an
   `Inbox(str)` the text goes as is, and the status's `note` says the run can't tell who wrote it.
-  The driver's own `answer`, `message`, `closeInbox` and `stop` sign nothing and record no one.
+  The driver's own `answer`, `message`, `interrupt`, `closeInbox` and `stop` sign nothing and
+  record no one.
 - **Reach.** An owner acts on the runs it started, and every run they start, at any depth. Any
   other id is `no run '<id>'`.
 - **The group.** The model sees `<group>_status` and `<group>_wait`, which read a run's status, and
-  `<group>_message`, `<group>_answer`, `<group>_close_inbox` and `<group>_stop`, which deliver to
-  it. Each returns the run's status. `wait` waits at most 120 seconds on the driver's `scheduler`.
+  `<group>_message`, `<group>_answer`, `<group>_interrupt`, `<group>_close_inbox` and
+  `<group>_stop`, which deliver to it. Each returns the run's status. `wait` waits at most 120
+  seconds on the driver's `scheduler`.
+- **Interrupt.** `<group>_interrupt` takes `run` and `inbox`. It first takes back the model's own
+  unread sends to that inbox (`withdraw` with the owner's `by`), never anyone else's. Then it
+  [interrupts](#interrupt-and-cancel) the inbox: the agents reading it as their steer inbox stop
+  their current step, and their open calls close, held calls and released calls not yet run
+  among them. The run goes on and waits for its next message; `stop` ends it. The status adds
+  `interrupted`, what it did (`interrupted (took back 1 message)`), and `taken_back`, the texts
+  taken back. The driver's own `interrupt` returns the sends it took back and `interrupt`'s
+  result, and takes back nothing, since the host's own sends are no one's.
 - **Start.** With the `start` option the group has `<group>_start` too, which takes `flow`, `inputs`
   and `content` (a draft's text). In order:
   1. `resolve` finds the flow the call names. Throw a `ReportedToolError` for one it may not start,
@@ -621,10 +631,12 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
   a tool, such as `start`, can't be resumed: `resume refused: tools.flows_start isn't recorded; the
   run started without it`, or `resume refused: tools.flows_stop is recorded, but this run's tools
   lack it`.
-- **Resumes.** The four delivering tools are `resumable`. `message` keys its send by the call id,
-  so a crash-cut call sent again sends nothing twice. A call sent again that is refused as
-  `ended`, `unknown_call` or `call_settled` returns the status with no note, since the first may
-  have landed.
+- **Resumes.** `message`, `answer`, `close_inbox` and `stop` are `resumable`. `message` keys its
+  send by the call id, so a crash-cut call sent again sends nothing twice. A call sent again that
+  is refused as `ended`, `unknown_call` or `call_settled` returns the status with no note, since
+  the first may have landed. `interrupt` isn't: a take-back or an interrupt has no key, so one
+  sent again couldn't tell it had landed, and could cut a turn the run began since. A crash-cut
+  call reads that its outcome is unknown.
 - **Statuses.** A status lists open questions as `asks` and calls the children's `beforeToolCall`
   held as `held`. `answer` refuses a held call. It also refuses an answer holding anything that
   reads as a `Message` with an `author` or an action part, whatever type the question declares.

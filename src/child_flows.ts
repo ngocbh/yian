@@ -58,6 +58,8 @@ import {
   type DeliveryRefusal,
   DeliveryRefused,
   hostInputs,
+  interrupt,
+  type InterruptResult,
   type JsonObject,
   libraryRunMessage,
   type MemoryDrift,
@@ -66,6 +68,8 @@ import {
   runFlow,
   runLogPath,
   send,
+  withdraw,
+  type WithdrawnEvent,
 } from "./run.ts";
 import { recordTimeMs, type RunParent } from "./runtime/log.ts";
 import { wakeAt } from "./runtime/waits.ts";
@@ -293,6 +297,14 @@ export interface StartedChild {
   readonly id: string;
   readonly log: string;
   readonly seq: number;
+}
+
+/** What `ChildFlows.interrupt` did: the child's status, the sends it took back, and what the interrupt did. */
+export interface ChildInterrupt extends InterruptResult {
+  /** The child's status, as `ChildFlows.answer` returns it: its `note` says why the run refused. */
+  readonly status: ChildStatus;
+  /** The caller's unread sends it took back, in send order, which the run never reads. */
+  readonly taken: readonly WithdrawnEvent[];
 }
 
 /** The flow a group's `start` call names, as its host's `resolve` finds it. */
@@ -1046,6 +1058,32 @@ export class ChildFlows {
   }
 
   /**
+   * Interrupt child `id`'s inbox `inbox`, as `interrupt` does: the agents reading it as their steer
+   * inbox stop their current step, and their open calls are closed; the run goes on, and waits for
+   * its next message there (`stop` ends it). First, so the cut agents never read them, take back
+   * the unread sends to `inbox` that `options.from` made: never anyone else's, so none without it,
+   * as the host's own sends are recorded as no one's. Returns its status, as `answer` does, with
+   * the sends taken back and the interrupt's result, which is empty when the run refused it.
+   *
+   * @throws {RangeError} When no child has the id.
+   * @throws What a delivery fault throws, as `answer` says.
+   */
+  async interrupt(id: string, inbox: string, options: Sent = {}): Promise<ChildInterrupt> {
+    const by = options.from?.by ?? null;
+    let taken: readonly WithdrawnEvent[] = [];
+    let cut: InterruptResult = { seq: null, nodes: [], calls: [] };
+    const status = await this.#deliver(
+      this.#child(id),
+      async (log, delivery) => {
+        if (by !== null) taken = await withdraw(log, inbox, delivery);
+        cut = await interrupt(log, inbox, delivery);
+      },
+      options,
+    );
+    return { ...cut, status, taken };
+  }
+
+  /**
    * Close child `id`'s inbox `inbox`, so its turns end. Returns its status, and throws, as `answer`
    * does.
    *
@@ -1477,6 +1515,11 @@ export class ChildFlowOwner {
     return this.#driver.message(this.#mine(id), inbox, text, { ...options, from: this.#from });
   }
 
+  /** As `ChildFlows.interrupt`, from this owner's model. @throws {RangeError} When it doesn't reach run `id`. */
+  interrupt(id: string, inbox: string): Promise<ChildInterrupt> {
+    return this.#driver.interrupt(this.#mine(id), inbox, { from: this.#from });
+  }
+
   /** As `ChildFlows.closeInbox`, from this owner's model. @throws {RangeError} When it doesn't reach run `id`. */
   closeInbox(id: string, inbox: string, options: Resend = {}): Promise<ChildStatus> {
     return this.#driver.closeInbox(this.#mine(id), inbox, { ...options, from: this.#from });
@@ -1607,10 +1650,40 @@ function checkStartInputs(flow: ComposedFlow, inputs: unknown): Readonly<Record<
   }
 }
 
+/** What a send taken back said, as the model reads it again: a message's text, else the value as a status shows it. */
+function sentText(value: unknown): unknown {
+  const parts = isRecord(value) ? value["parts"] : null;
+  const texts = Array.isArray(parts) ? parts.map((part) => (isRecord(part) ? part["text"] : null)) : [];
+  if (texts.length === 0 || !texts.every((text) => typeof text === "string")) return shownValue(value);
+  return cutStatusText(texts.join(""));
+}
+
+/** What `done`, an interrupt of `inbox`, did, in a line the model reads. */
+function interruptText(inbox: string, done: ChildInterrupt): string {
+  const count = (n: number, what: string) => `${n} ${what}${n === 1 ? "" : "s"}`;
+  const took = `took back ${count(done.taken.length, "message")}`;
+  if (done.status.note !== undefined) return `not interrupted (${took})`;
+  if (done.seq === null) {
+    return `nothing to interrupt: the run waits for a message on inbox '${inbox}', or is already stopping (${took})`;
+  }
+  if (done.nodes.length === 0) {
+    const later = `an agent that starts reading inbox '${inbox}' before its next message stops at once`;
+    return `nothing to cut now; ${later} (${took})`;
+  }
+  const held = done.calls.filter((call) => call.held).length;
+  const closed = [
+    ...(done.calls.length > held ? [count(done.calls.length - held, "question")] : []),
+    ...(held > 0 ? [count(held, "held call")] : []),
+  ];
+  return `interrupted (${took}${closed.length > 0 ? `; closed ${closed.join(" and ")}` : ""})`;
+}
+
 /**
  * The tools a run's model drives the child flows `owner` reaches with, for the host to pass under
  * `owner.group` in that run's tools, so the model sees `<group>_status`, and so on: `status` and
- * `wait` read a run's status, and `message`, `answer`, `close_inbox` and `stop` deliver to it.
+ * `wait` read a run's status, and `message`, `answer`, `interrupt`, `close_inbox` and `stop` deliver
+ * to it. `interrupt` first takes back the model's own unread sends to the inbox, and adds to the
+ * status what it did (`interrupted`) and the texts it took back (`taken_back`).
  *
  * With `options.start`, the group has `start` too, first. A call names a flow and its inputs; the
  * host's `resolve` finds the flow, a library is refused, the inputs are checked as the run's start
@@ -1622,10 +1695,12 @@ function checkStartInputs(flow: ComposedFlow, inputs: unknown): Readonly<Record<
  *
  * Each returns the run's status as `shownStatus` does; once the owner showed them, its replies and
  * memory notes aren't shown again, and with `owner.seen` they are marked read. A run the owner
- * doesn't reach, or an argument of the wrong type, is a `ReportedToolError`. The deliveries are
- * `resumable`: a resumed agent sends a crash-cut call again under its call id, which keys
- * `message`'s send, and a repeated answer, close or stop changes nothing; a call sent again
- * (`ctx.attempt` above 1) is `resent` (`ChildFlows.answer`).
+ * doesn't reach, or an argument of the wrong type, is a `ReportedToolError`. The deliveries but
+ * `interrupt` are `resumable`: a resumed agent sends a crash-cut call again under its call id, which
+ * keys `message`'s send, and a repeated answer, close or stop changes nothing; a call sent again
+ * (`ctx.attempt` above 1) is `resent` (`ChildFlows.answer`). A take-back or an interrupt has no key,
+ * so one sent again couldn't tell it had landed: it would say nothing was taken back, and could cut
+ * a turn the run began since. A crash-cut `interrupt` reads that its outcome is unknown.
  */
 export function childFlows<T extends ChildFlowTarget>(
   owner: ChildFlowOwner,
@@ -1718,6 +1793,23 @@ export function childFlows<T extends ChildFlowTarget>(
         const answer = args["answer"];
         if (answer === null || answer === undefined) throw new ReportedToolError("answer can't be null");
         return show(await owner.answer(id, call, answer, { resent: ctx.attempt > 1 }));
+      },
+    }),
+    tool({
+      name: "interrupt",
+      description:
+        "Stop what a run you started is doing on one of its Inbox inputs: first take back your messages " +
+        "there that the run hasn't read, then cut the current step of its agents reading that inbox, " +
+        "closing their questions and held calls. The run goes on, and waits for its next message; to " +
+        "end it, cancel it. Returns its status with interrupted (what it did) and taken_back (the " +
+        `messages taken back, which the run never reads; send again what still applies). ${status}`,
+      parameters: runArguments(["inbox", "The Inbox input's name."]),
+      execute: async (args) => {
+        const id = known(args);
+        const inbox = stringArg(args, "inbox");
+        const done = await owner.interrupt(id, inbox);
+        const taken = done.taken.map((send) => sentText(send.value));
+        return { ...show(done.status), interrupted: interruptText(inbox, done), taken_back: taken };
       },
     }),
     tool({

@@ -17,6 +17,7 @@ export {
   type ChildFlowsOptions,
   type ChildFlowStart,
   type ChildFlowTarget,
+  type ChildInterrupt,
   type ChildStartOptions,
   type ChildStatus,
   type LiveChild,

@@ -22,7 +22,7 @@ import {
 } from "../src/child_flows.ts";
 import type { ComposedFlow } from "../src/compose/build/pipeline.ts";
 import { loadFlow } from "../src/compose/loader.ts";
-import { advance, inspectRun, runFlow } from "../src/run.ts";
+import { advance, inspectRun, runFlow, send } from "../src/run.ts";
 import { ToolResultPart } from "../src/llm/messages.ts";
 import { ScriptedModel } from "../src/llm/testing.ts";
 import { FileMemory } from "../src/memory/file.ts";
@@ -1149,7 +1149,8 @@ output: \${reply.output}
 describe("childFlows", () => {
   test("the group's tools, which run beside other calls, and which a resumed agent sends again", () => {
     const tools = childFlows(chat(childRuns()));
-    expect(tools.map((each) => each.name)).toEqual(["status", "wait", "message", "answer", "close_inbox", "stop"]);
+    const names = ["status", "wait", "message", "answer", "interrupt", "close_inbox", "stop"];
+    expect(tools.map((each) => each.name)).toEqual(names);
     const resumable = tools.filter((each) => each.resumable).map((each) => each.name);
     expect(resumable).toEqual(["message", "answer", "close_inbox", "stop"]);
     const parallel = tools.filter((each) => each.isConcurrencySafe !== null).map((each) => each.name);
@@ -1386,6 +1387,188 @@ test(
   TIMEOUT,
 );
 
+/**
+ * A turn per message on `m`, as a chat: take one, then reply with an agent that reads the rest of
+ * `m` as its steers while it works, granted `hold`, which waits. A turn ends with its reply.
+ */
+const STEERED = `id: steered
+name: steered
+llm_config: {provider: xai, model: grok-4.3}
+input:
+  m: !Inbox(Message)
+defs:
+  turn:
+    input:
+      closed: !bool
+      last: !Optional(str)
+      m: !Inbox(Message)
+    nodes:
+      heard:
+        kind: call
+        call: take
+        input: {from: "\${input.m}", take: one}
+      reply:
+        kind: agent
+        tools: [hold]
+        steer_inbox: \${input.m}
+        input: {said: "\${heard.output.events}"}
+        prompt:
+          - \${said}
+        output: !Optional(str)
+    output:
+      closed: \${heard.output.closed}
+      last: \${reply.output}
+nodes:
+  chat:
+    kind: loop
+    call: turn
+    input: {closed: false, last: null, m: "\${input.m}"}
+    while: not closed
+output: \${chat.output.last}
+`;
+
+/** Keep busy, then take from `m`. */
+const BUSY_THEN_TAKE = `id: busy_take
+name: busy_take
+input:
+  m: !Inbox(str)
+defs:
+  hear:
+    input:
+      after: !str
+      m: !Inbox(str)
+    nodes:
+      heard:
+        kind: call
+        call: take
+        input: {from: "\${input.m}", take: all}
+    output: \${heard.output.events}
+nodes:
+${BUSY_NODE}  then:
+    kind: call
+    call: hear
+    input: {after: "\${busy.output}", m: "\${input.m}"}
+output: \${then.output}
+`;
+
+/** A host tool whose call waits for the host. */
+const HOLD = tool({
+  name: "hold",
+  description: "Hold.",
+  parameters: { type: "object", properties: {} },
+  execute: () => pending(),
+});
+
+describe("interrupt", () => {
+  const ADA = { kind: "user", name: "Ada" } as const;
+  const env = (name: string) => (name === "XAI_API_KEY" ? "test-xai-key" : NO_ENV(name));
+  const text = (said: string) => [{ type: "text", text: said }];
+
+  /** The driver over `model`, with `STEERED` started as `r1` and settled at its first take. */
+  async function steered(model: ScriptedModel) {
+    const children = childRuns({ env, llmConfig: { provider: "xai", model: "grok-4.3" }, models: serving(model, env) });
+    const owner = chat(children);
+    await owner.start(await flow(STEERED), {}, { tools: { hold: HOLD } });
+    return { children, owner, tools: childFlows(owner), seen: (await settled(children, "r1")).seq };
+  }
+
+  test(
+    "takes back only the caller's unread sends, then cuts the agent reading the inbox, and the run goes on",
+    async () => {
+      const model = new ScriptedModel([callReply(["hold", {}, "h1"]), textReply("ok")], {
+        provider: "xai",
+        model: "grok-4.3",
+      });
+      const { children, tools, ...rest } = await steered(model);
+      let seen = rest.seen;
+      await call(tools, "message", { run: "r1", inbox: "m", text: "go" }, `${CHAT}/reply/1/0`);
+      const holding = await settled(children, "r1", seen);
+      expect(holding.asks).toHaveLength(1);
+      // While the agent works, Ada and the owner's model both send it more.
+      const log = holding.log;
+      await send(log, "m", { role: "user", author: "Ada", parts: text("from Ada") }, { env, codeRoot: root, by: ADA });
+      children.nudge("r1");
+      await call(tools, "message", { run: "r1", inbox: "m", text: "more" }, `${CHAT}/reply/2/0`);
+      seen = (await settled(children, "r1", holding.seq)).seq;
+      const cut = await call(tools, "interrupt", { run: "r1", inbox: "m" }, `${CHAT}/reply/3/0`);
+      expect(cut).toMatchObject({
+        run: "r1",
+        status: "running",
+        interrupted: "interrupted (took back 1 message; closed 1 question)",
+        taken_back: ["more"],
+      });
+      // The cut agent asks nothing more; the next turn hears Ada, and the run waits for more.
+      const after = await settled(children, "r1", seen);
+      expect(after).toMatchObject({ status: "waiting" });
+      expect(after.asks).toBeUndefined();
+      expect(model.requests).toHaveLength(2);
+      const heard = JSON.stringify(model.requests[1]!.messages.map((message) => message.toJSON()));
+      expect(heard).toContain("from Ada");
+      expect(heard).not.toContain("more");
+      const agent = { kind: "agent", name: "yian-chat", run: CHAT };
+      expect(senders(log)).toEqual([
+        ["PoolCommitRecord", agent],
+        ["PoolCommitRecord", ADA],
+        ["PoolCommitRecord", agent],
+        ["InboxWithdrawnRecord", agent],
+        ["InterruptedRecord", agent],
+      ]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "with nothing to cut it records nothing; the host's own takes back nothing; a refusal is a note",
+    async () => {
+      const model = new ScriptedModel([callReply(["hold", {}, "h1"]), textReply("ok")], {
+        provider: "xai",
+        model: "grok-4.3",
+      });
+      const { children, owner, tools, seen } = await steered(model);
+      const log = children.status("r1").log;
+      const records = readRunLog(log).length;
+      expect(await call(tools, "interrupt", { run: "r1", inbox: "m" })).toMatchObject({
+        interrupted:
+          "nothing to interrupt: the run waits for a message on inbox 'm', or is already stopping " +
+          "(took back 0 messages)",
+        taken_back: [],
+      });
+      expect(readRunLog(log)).toHaveLength(records);
+      // The host's own sends are no one's, so its own interrupt takes back none of them.
+      await owner.message("r1", "m", "go");
+      const holding = await settled(children, "r1", seen);
+      await children.message("r1", "m", "plain");
+      const done = await children.interrupt("r1", "m");
+      expect([done.taken, done.nodes.length, done.calls.length]).toEqual([[], 1, 1]);
+      await settled(children, "r1", holding.seq);
+      const heard = JSON.stringify(model.requests[1]!.messages.map((message) => message.toJSON()));
+      expect(heard).toContain("plain");
+      const refused = await call(tools, "interrupt", { run: "r1", inbox: "nope" });
+      expect(refused).toMatchObject({
+        note: "the run has no inbox 'nope'",
+        interrupted: "not interrupted (took back 0 messages)",
+      });
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "with no agent reading the inbox now, it says one that starts reading it stops",
+    async () => {
+      const children = childRuns();
+      await chat(children).start(await flow(BUSY_THEN_TAKE), {});
+      const cut = await call(childFlows(chat(children)), "interrupt", { run: "r1", inbox: "m" });
+      expect(cut["interrupted"]).toBe(
+        "nothing to cut now; an agent that starts reading inbox 'm' before its next message stops at once " +
+          "(took back 0 messages)",
+      );
+      openGate();
+      expect((await settled(children, "r1")).waits).toMatchObject([{ tool: "take", inbox: "m" }]);
+    },
+    TIMEOUT,
+  );
+});
+
 /** Inputs of a start that hold messages, typed and untyped. */
 const HEARD = `id: heard
 name: heard
@@ -1424,7 +1607,7 @@ describe("start", () => {
     const owner = chat(childRuns());
     expect(childFlows(owner).map((each) => each.name)).not.toContain("start");
     const tools = childFlows(owner, { start: starting({}).start });
-    const names = ["start", "status", "wait", "message", "answer", "close_inbox", "stop"];
+    const names = ["start", "status", "wait", "message", "answer", "interrupt", "close_inbox", "stop"];
     expect(tools.map((each) => each.name)).toEqual(names);
     expect([tools[0]!.resumable, tools[0]!.isConcurrencySafe]).toEqual([false, null]);
     expect(tools[0]!.description).toStartWith("Start a flow by its key. ");

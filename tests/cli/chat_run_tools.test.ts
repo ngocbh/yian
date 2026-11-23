@@ -655,6 +655,7 @@ output: done
       ["flows_wait", { seconds: 1 }],
       ["flows_answer", { call: "c", answer: "x" }],
       ["flows_message", { inbox: "m", text: "x" }],
+      ["flows_interrupt", { inbox: "m" }],
       ["flows_close_inbox", { inbox: "m" }],
       ["flows_stop", {}],
     ] as const) {

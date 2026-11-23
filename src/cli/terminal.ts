@@ -543,7 +543,7 @@ export class LineEditor {
   readonly #text = textWidget({ label: "", mark: ">", collapse: true });
   readonly #columns: () => number;
   readonly #rows: () => number;
-  readonly #hint: string;
+  readonly #hint: () => string;
   /** What the box's top edge names, if anything. */
   readonly #title: () => string;
   /** The list under the hint, if any. */
@@ -563,13 +563,14 @@ export class LineEditor {
 
   /**
    * @param options.rows The screen's height, which the list keeps within; no bound when absent.
+   * @param options.hint The dim line under the box; a function is read at each draw.
    * @param options.title What the box's top edge names (what it sends to, say), read at each draw
    *   and cut to fit; none when absent or empty. Drawn as given: sanitize it first.
    */
   constructor(options: {
     columns: () => number;
     rows?: () => number;
-    hint: string;
+    hint: string | (() => string);
     list?: PromptList | null;
     commands?: readonly PromptCommand[];
     title?: () => string;
@@ -577,7 +578,8 @@ export class LineEditor {
     this.#columns = options.columns;
     this.#commands = options.commands ?? [];
     this.#rows = options.rows ?? (() => Infinity);
-    this.#hint = options.hint;
+    const hint = options.hint;
+    this.#hint = typeof hint === "string" ? () => hint : hint;
     this.#title = options.title ?? (() => "");
     this.list = options.list ?? null;
   }
@@ -726,9 +728,10 @@ export class LineEditor {
     const { menu, list } = this.#around();
     // Down moves the menu's highlight, not into the list, while the menu is open.
     const extra = list.length > 0 && menu.length === 0 ? this.list?.hint : undefined;
-    const both = extra ? `${this.#hint} · ${extra}` : this.#hint;
+    const own = this.#hint();
+    const both = extra ? `${own} · ${extra}` : own;
     // The list's hint only when it fits on the row: the box's hint matters more.
-    const hint = cells(both) + 2 <= this.#columns() ? both : this.#hint;
+    const hint = cells(both) + 2 <= this.#columns() ? both : own;
     return [
       ...menu,
       border(`╭${edge(start, "↑", this.#title())}╮`),
@@ -2640,4 +2643,63 @@ async function promptRequest(
     return askQuestion(run, { question: request.question, options, multiSelect: false });
   }
   return run(textWidget({ label: visible(request.question || `input for ${request.nodeId}`) }));
+}
+
+/**
+ * A question card that a whole-screen view draws inside itself (`showScreen` with `key`): `request`
+ * asked as `askUser` asks it (`promptRequest`), each key the view passes going to the widget asking.
+ * Its rows are those the card printed (the panel, each question's rule, the line each answered one
+ * collapsed to), then the widget asking. `answer` settles with the answer, or `null` once Escape
+ * cancels it or a widget stops (Ctrl-Q, Ctrl-D); `changed` is called, later, each time a widget
+ * opens and once the card settles.
+ */
+export class QuestionCard {
+  readonly answer: Promise<{ value: unknown } | null>;
+  readonly #rows: string[] = [];
+  /** The widget asking, and how it ends: with its outcome, or cancelled (`null`). */
+  #asking: { widget: Widget<unknown>; end: (outcome: { value: unknown } | null) => void } | null = null;
+
+  constructor(request: AskUserRequest, columns: () => number, changed: () => void) {
+    // Later, so a view never draws in the middle of a key it is taking.
+    const tell = (): void => queueMicrotask(changed);
+    const run: RunWidget = <T>(widget: Widget<T>) =>
+      new Promise<T>((resolve, reject) => {
+        this.#rows.push(...widget.preface.split("\r\n").slice(0, -1));
+        const end = (outcome: { value: unknown } | null): void => {
+          this.#asking = null;
+          if (outcome === null) return reject(new TerminalStopped("interrupt"));
+          const line = widget.done(outcome as Outcome<T>);
+          if (line !== null) this.#rows.push(...line.split("\n"));
+          resolve(outcome.value as T);
+        };
+        this.#asking = { widget: widget as Widget<unknown>, end };
+        tell();
+      });
+    const print = (rows: readonly string[]): void => void this.#rows.push(...rows.flatMap((row) => row.split("\n")));
+    this.answer = promptRequest(run, print, columns, request).then(
+      (value) => ({ value }),
+      () => null,
+    );
+    void this.answer.then(tell);
+  }
+
+  /** The rows to draw, styled, one screen row each. */
+  lines(): string[] {
+    return [...this.#rows, ...(this.#asking?.widget.lines() ?? []).flatMap((line) => line.split("\n"))];
+  }
+
+  /** The cursor's row among `lines()` and the text before it there; null to hide it. */
+  cursor(): { row: number; before: string } | null {
+    const at = this.#asking?.widget.cursor() ?? null;
+    return at === null ? null : { row: this.#rows.length + at.row, before: at.before };
+  }
+
+  /** Take one key: Escape cancels the card, any other goes to the widget asking. */
+  key(key: Key): void {
+    const asking = this.#asking;
+    if (asking === null) return;
+    if (key.name === "escape" && !key.paste) return asking.end(null);
+    const ended = asking.widget.key(key);
+    if (ended !== undefined) asking.end("value" in ended ? ended : null);
+  }
 }

@@ -29,7 +29,7 @@ import {
 import { SUPPORTED_LLM_PROVIDERS } from "../llm_clients/config.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import { homeDir, isSystemError, leavesRoot, realScheduler, removeEmptyDir, type Scheduler } from "../platform.ts";
-import { skillGrants } from "../run.ts";
+import { pendingCalls, skillGrants } from "../run.ts";
 import { type Skill, SkillError } from "../skills/catalog.ts";
 import { DOCS, FLOWS } from "./bundled.ts";
 import { bundledSkill } from "./bundled_skill.ts";
@@ -372,6 +372,7 @@ function runList(
           inboxes: child.inboxes,
           status: () => runs.status(child.id),
           progress: () => progress.rows(scheduler.now()),
+          pendingCall: (call) => pendingCalls(child.status.log).find((each) => each.callId === call) ?? null,
           press: (tool, args) => owner.press(tool, args, { person: PERSON }),
         },
         out,

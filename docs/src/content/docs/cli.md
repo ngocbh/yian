@@ -330,38 +330,45 @@ assistant reads them with it. `/exit` holds them too, and never lets them go: it
 `(not sent: ...)`, as it does a report that comes while the chat closes. Esc never puts a report
 in the prompt.
 
-The assistant relays a flow's questions to you and sends your answers back. Its messages to the
-flow are signed `yian-chat`, except to an `Inbox(str)` input, which takes plain text and can't
-tell who wrote it. The keys the flow's agents need must already be set, and its memory inputs get
-their default memories (see [Memory](#memory)). Its log is
+The assistant relays a flow's questions to you and sends your answers back, or you answer them in
+the flow's view. Its messages to the flow are signed `yian-chat`, except to an `Inbox(str)` input,
+which takes plain text and can't tell who wrote it. The keys the flow's agents need must already be
+set, and its memory inputs get their default memories (see [Memory](#memory)). Its log is
 `~/.yian/runs/<chat run id>-r<n>/log.jsonl`. It names the chat as the run's parent, with the
 chat's inbox it reports to, and the run as `<flow> r<n>`, and records each message, answer,
 interrupt, close and stop as the assistant's. A try that `author_flow` runs is that run's own
 child, so its log is `~/.yian/runs/<chat run id>-r<n>-r<m>/log.jsonl`; it reports to the
 assistant too.
 
-When you ask the assistant to stop what a flow is doing, it interrupts the flow: it takes back its
-own messages the flow hasn't read, then cuts the flow's current step. With no step running, the
-flow's next turn stops at once, and a message someone else queued for it may go unanswered; the
-assistant is told how many. The flow goes on; to end it, ask the assistant to stop it.
+When you ask the assistant to stop what a flow is doing, it interrupts the flow on an inbox: it
+takes back its own messages the flow hasn't read, then cuts the steps reading the inbox. When the
+flow waits for a message there, there is nothing to interrupt. When no step reads it, the interrupt
+stands until the flow next takes from the inbox, and a step that starts reading it before then
+stops at once, so a message someone else sent may go unanswered; the assistant is told how many
+are queued. The flow goes on; to end it, ask the assistant to stop it.
 
 ### A flow's view
 
 Enter on a flow in the list opens its view: its progress, each message sent to it and who sent it,
-its log, any question it waits on, its inboxes and a box. There you use the assistant's own tools
-(`flows_message`, `flows_interrupt`, `flows_close_inbox`, `flows_stop`) yourself. The flow gets
-your words as you typed them, signed `the user, via yian-chat`, and its log records each as yours,
+its log, and a box under a strip of its inboxes, the questions it waits on and the tool calls it
+holds for approval. There you use the assistant's own tools (`flows_message`, `flows_answer`,
+`flows_interrupt`, `flows_close_inbox`, `flows_stop`, `flows_approve`) yourself. The flow gets your
+words as you typed them, signed `the user, via yian-chat`, and its log records each as yours,
 relayed by the chat. The assistant gets each as your action, signed `the user`, that starts no
 reply: it reads them in its next turn, whatever starts it. The view shows what each did, or why
-it was refused. Once the flow has ended, the view says so in place of the box.
+it was refused. A question or held call leaves the strip once it is settled, and when one you
+picked was settled elsewhere, the view says so. Once the flow has ended, the view says so in place
+of the box.
 
 | Key | What it does |
 |---|---|
-| Tab, Shift-Tab | Picks the inbox the box sends to |
-| Enter | Sends the box's text to that inbox |
-| `/close` | Closes that inbox once you press `y`: the flow reads no more from it |
+| Tab, Shift-Tab | Picks what the box goes to: an inbox, a question or a held call |
+| Enter on an inbox | Sends the box's text to it |
+| Enter on a question | Answers it with the box's text. A form (`questions:`) opens the chat's question card in place of the box instead, which Esc closes |
+| Enter on a held call | Shows what the call acts on, as its tool tells the check, else its arguments. `a` approves it and `r` refuses it, with the box's text as your reason; any other key leaves it held. A flow holds calls only under a host that checks them, which `yian chat` doesn't |
+| `/close` | Closes the inbox picked once you press `y`: the flow reads no more from it |
 | `/stop` | Stops the flow once you press `y`: its run ends |
-| Esc while the flow runs | Interrupts it on that inbox: takes back your messages it hasn't read, which return to the box, then cuts the steps reading the inbox. When the flow waits for a message there, there is nothing to interrupt. When no step reads it, the interrupt stands until the flow next takes from the inbox, and a step that starts reading it before then stops at once |
+| Esc while the flow runs | Interrupts it on the inbox picked: takes back your messages it hasn't read, which return to the box, then cuts the steps reading the inbox. When the flow waits for a message there, there is nothing to interrupt. When no step reads it, the interrupt stands until the flow next takes from the inbox, and a step that starts reading it before then stops at once |
 | Esc at rest, or Ctrl-C | Goes back to the chat |
 
 Keys in the view reach only the flow: Esc there never stops the assistant's reply. While an

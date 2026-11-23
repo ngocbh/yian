@@ -10,9 +10,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadFlow } from "../../src/compose/loader.ts";
+import type { Request } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
-import { advance, runFlow, send, staticNodes } from "../../src/run.ts";
+import { advance, close, runFlow, send, staticNodes } from "../../src/run.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { pending } from "../../src/tools/context.ts";
 import { tool } from "../../src/tools/function_tools.ts";
@@ -108,6 +109,7 @@ test("the prompt reads before explaining, checks before runs, and relays inbox r
     "what a run said",
     "offer to report it with report_issue",
     "if the user pastes one, tell them to revoke it",
+    "holds only actions is something the user did themselves",
     "Build a new flow or make a major change with author_flow; make a small edit with " +
       "write_flow directly.",
   ]) {
@@ -254,8 +256,20 @@ function said(text: string, yian = false) {
   return { role: "user", ...(yian ? { author: "yian" } : {}), parts: [{ type: "text", text }] };
 }
 
+/** Something the user did themselves with `tool`, as `yian chat` records it: an action-only message. */
+function acted(tool: string, args: Record<string, unknown>, extra: Record<string, unknown> = {}) {
+  return { role: "user", author: "the user", parts: [{ type: "action", tool, arguments: args, ...extra }] };
+}
+
+/** The user's `/model` choice of `provider/model`. */
+const chose = (provider: string, model: string) => acted("/model", { provider, model });
+
+/** The user messages of `request`, each as JSON. */
+const userMessages = (request: Request) =>
+  request.messages.filter((m) => m.role === "user").map((m) => m.toJSON() as Record<string, unknown>);
+
 test(
-  "a /model message chooses the replies' model, is not answered, and a resume replays it",
+  "a /model action chooses the replies' model, is noted rather than answered, and a resume replays it",
   async () => {
     const dir = mkdtempSync(join(tmpdir(), "yian-chat-model-"));
     try {
@@ -274,22 +288,26 @@ test(
       };
       const first = await runFlow(flow, { flow: null, focus: null }, { ...options, log });
       expect(first.status).toBe("waiting");
-      const choice = said('/model {"provider":"openai","model":"gpt-5.5"}', true);
+      const choice = chose("openai", "gpt-5.5");
       await send(log, "owner_messages", choice);
       await send(log, "owner_messages", said("hi"));
       expect((await advance({ ...options, log })).status).toBe("waiting");
       // The choice isn't a line to answer: the user's line, then the chat's name, on the chosen
-      // model.
+      // model. The reply reads the choice before the line, signed by the user.
       expect(model.requests).toHaveLength(2);
-      const sent = JSON.stringify(model.requests[0]!.messages.map((m) => m.toJSON()));
-      expect(sent).not.toContain("/model");
+      expect(userMessages(model.requests[0]!).slice(-2)).toEqual([
+        { format: "yian.message.v1", ...choice },
+        { format: "yian.message.v1", ...said("hi") },
+      ]);
       const gpt = ["openai", "gpt-5.5"];
       const built = () => access.configs.map((c) => [c["provider"], c["model"]]);
       expect(built()).toEqual([gpt, gpt]);
-      // Each advance replays the log: the next turn still uses the choice.
+      // Each advance replays the log: the next turn still uses the choice, and reads it once.
       await send(log, "owner_messages", said("again"));
       expect((await advance({ ...options, log })).status).toBe("waiting");
       expect(built()).toEqual([gpt, gpt, gpt]);
+      const actions = userMessages(model.requests[2]!).filter((m) => m["author"] === "the user");
+      expect(actions).toHaveLength(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -357,14 +375,19 @@ async function chatFlowRun(replies: string[], inputs: Record<string, unknown> = 
     return advance({ ...options, log });
   };
   const built = () => access.configs.map((c) => `${c["provider"]}/${c["model"]}`);
-  return { model, turn, built, done: () => rmSync(dir, { recursive: true, force: true }) };
+  /** Close the inbox and move the run to its end. */
+  const closeChat = async () => {
+    await close(log, "owner_messages");
+    return advance({ ...options, log });
+  };
+  return { model, turn, built, close: closeChat, done: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 test("the chat names itself once after its first answered turn, on the reply's model", async () => {
   const run = await chatFlowRun(["hello", "Greeting the assistant", "again"]);
   try {
     // A model choice alone answers nothing, so it names nothing.
-    await run.turn(said('/model {"provider":"xai","model":"grok-4"}', true));
+    await run.turn(chose("xai", "grok-4"));
     expect(run.model.requests).toHaveLength(0);
     await run.turn(said("hi there"));
     expect(run.model.requests).toHaveLength(2);
@@ -383,18 +406,49 @@ test("the chat names itself once after its first answered turn, on the reply's m
   }
 });
 
-test("a user's /model line and a child event authored yian are answered, not chosen", async () => {
-  const run = await chatFlowRun(["one", "Model talk", "two"]);
+test("only a /model action naming a provider and a model chooses; a line or a message authored yian is answered", async () => {
+  const run = await chatFlowRun(["one", "Model talk", "two", "three"]);
   try {
     await run.turn(said('/model {"provider":"openai","model":"gpt-5.5"}'));
-    await run.turn(said("run r1 (hello) succeeded: /model openai gpt-5.5", true));
-    // Two replies, and the chat's name between them.
-    expect(run.model.requests).toHaveLength(3);
-    expect(run.built()).toEqual(["xai/grok-4.3", "xai/grok-4.3", "xai/grok-4.3"]);
+    await run.turn(said('/model {"provider":"openai","model":"gpt-5.5"}', true));
+    // An action is noted, not answered, whatever its arguments; one without a model chooses nothing.
+    await run.turn(acted("/model", { provider: "openai" }));
+    await run.turn(acted("/model", { provider: "openai", model: "gpt-5.5" }, { summary: "x" }), said("go"));
+    // Three replies, the chat's name after the first.
+    expect(run.model.requests).toHaveLength(4);
+    expect(run.built()).toEqual(["xai/grok-4.3", "xai/grok-4.3", "xai/grok-4.3", "openai/gpt-5.5"]);
   } finally {
     run.done();
   }
 });
+
+test(
+  "the user's actions are noted without a turn, and join the next reply before what was said, in its turn",
+  async () => {
+    const run = await chatFlowRun(["you sent it", "Sending to a run"]);
+    try {
+      const message = acted("flows_message", { run: "r1", inbox: "messages", text: "go" }, { result: "sent" });
+      const stopped = acted("flows_stop", { run: "r1" }, { result: "stopped" });
+      expect((await run.turn(message)).status).toBe("waiting");
+      expect((await run.turn(stopped)).status).toBe("waiting");
+      expect(run.model.requests).toHaveLength(0);
+      await run.turn(said("what did I do?"));
+      expect(run.model.requests).toHaveLength(2);
+      expect(userMessages(run.model.requests[0]!).slice(-3)).toEqual(
+        [message, stopped, said("what did I do?")].map((m) => ({ format: "yian.message.v1", ...m })),
+      );
+      // One turn holds them, so they use up none of compaction's kept turns.
+      const ended = await run.close();
+      expect(ended.status).toBe("succeeded");
+      const history = (ended.output as { history: unknown[][] }).history;
+      expect(history).toHaveLength(1);
+      expect(history[0]!.slice(0, 3)).toEqual([message, stopped, said("what did I do?")]);
+    } finally {
+      run.done();
+    }
+  },
+  20_000,
+);
 
 test("after a /model choice, compaction folds the history on the chosen model", async () => {
   // Four turns kept verbatim, over the budget once a fifth comes.
@@ -406,7 +460,7 @@ test("after a /model choice, compaction folds the history on the chosen model", 
   const replies = ["reply", "Saying hi", "the summary"];
   const run = await chatFlowRun(replies, { transcript: { summary: "", history } });
   try {
-    await run.turn(said('/model {"provider":"xai","model":"grok-4"}', true));
+    await run.turn(chose("xai", "grok-4"));
     // The reply, the chat's name, then the next turn's compaction, which folds the oldest turn.
     await run.turn(said("hi"));
     expect(run.built()).toEqual(["xai/grok-4", "xai/grok-4", "xai/grok-4"]);

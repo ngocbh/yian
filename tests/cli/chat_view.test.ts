@@ -52,6 +52,7 @@ import type { Request, Response } from "../../src/llm/messages.ts";
 import { Finish, PartDone, TextDelta } from "../../src/llm/events.ts";
 import { TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
+import { InboxWithdrawnRecord, InterruptedRecord, readRunLog } from "../../src/runtime/log.ts";
 import {
   callReply,
   chatServing,
@@ -1850,6 +1851,57 @@ describe("a run's view while the chat goes on", () => {
       await until(() => rows().includes("⏺ done.") && idle());
       stdin.write(`/exit${ENTER}`);
       expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "Esc in a run's view while a reply runs goes back to the chat, and the reply goes on uncut",
+    async () => {
+      writeFileSync(join(root, "color.yaml"), COLOR_FLOW);
+      const { io, stdin, output, rows } = terminalIo();
+      const gate = Promise.withResolvers<void>();
+      let started = false;
+      let held = false;
+      const model = new StepModel((request) => {
+        if (afterTool(request)) return textReply("Started.");
+        if (!started && asked(request, "pick a colour")) {
+          started = true;
+          return callReply(["flows_start", { flow: "color.yaml", inputs: {} }, "c1"]);
+        }
+        if (!held && asked(request, "take your time")) {
+          held = true;
+          return gate.promise.then(() => textReply("all done."));
+        }
+        return textReply("noted.");
+      });
+      const chatting = runChat(io, model, undefined, { ticker: manualClock() });
+      const thinking = () => rows().some((line) => line.includes("Thinking"));
+      await until(() => rows().includes(HINT));
+      stdin.write(`pick a colour${ENTER}`);
+      await until(() => output.text.includes("Run color.yaml"));
+      await pastGrace();
+      stdin.write(ENTER);
+      await until(() => rows().at(-1)!.includes("● asks") && !thinking());
+      stdin.write(`take your time${ENTER}`);
+      await until(() => held && thinking());
+      stdin.write(DOWN);
+      await until(() => rows().at(-1)!.startsWith("» r1"));
+      stdin.write(ENTER);
+      await until(() => rows()[0] === "r1  color.yaml  ● asks");
+      stdin.write(ESCAPE);
+      await pastEscape();
+      await until(() => rows().at(-1)!.startsWith("» r1"));
+      // The key reached the view only: nothing was taken back or stopped, and the reply runs on.
+      expect(output.text).not.toContain("withdrew");
+      expect(output.text).not.toContain("stopping the reply");
+      expect(thinking()).toBe(true);
+      gate.resolve();
+      await until(() => rows().includes("⏺ all done.") && !thinking());
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+      const log = readRunLog(join(tmp, "chat.jsonl")).map((envelope) => envelope.record);
+      expect(log.filter((record) => record instanceof InterruptedRecord || record instanceof InboxWithdrawnRecord)).toEqual([]);
     },
     TIMEOUT,
   );

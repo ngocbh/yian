@@ -109,22 +109,31 @@ async function chatRun(
   return log;
 }
 
-test("a model message reads back as its choice, and no other message does", () => {
+test("a model message is the person's /model action, reads back as its choice, and no other message does", () => {
   const choice = { provider: "openai", model: "gpt-5.5" };
-  expect(chosenModel(modelMessage(choice))).toEqual(choice);
-  // A user's line isn't a choice, even one written as one.
+  expect(modelMessage(choice, "Ada")).toEqual({
+    role: "user",
+    author: "Ada",
+    parts: [{ type: "action", tool: "/model", arguments: choice }],
+  });
+  expect(chosenModel(modelMessage(choice, "Ada"))).toEqual(choice);
+  // A user's line isn't a choice, even one written as one, nor is a message authored yian.
   expect(chosenModel(line('/model {"provider":"a","model":"b"}'))).toBeNull();
-  expect(chosenModel({ ...line("hi"), author: "yian" })).toBeNull();
-  expect(chosenModel({ ...line("/model {not json"), author: "yian" })).toBeNull();
+  expect(chosenModel({ ...line('/model {"provider":"a","model":"b"}'), author: "yian" })).toBeNull();
+  // Another action, or a /model action without both names, chooses nothing.
+  const action = (part: Record<string, unknown>) => ({ role: "user", author: "Ada", parts: [{ type: "action", ...part }] });
+  expect(chosenModel(action({ tool: "flows_message", arguments: choice }))).toBeNull();
+  expect(chosenModel(action({ tool: "/model", arguments: { provider: "a" } }))).toBeNull();
+  expect(chosenModel(action({ tool: "/model" }))).toBeNull();
   // A name with a space or a newline goes through whole.
   const odd = { provider: "vllm", model: "my model\nv2" };
-  expect(chosenModel(modelMessage(odd))).toEqual(odd);
+  expect(chosenModel(modelMessage(odd, "Ada"))).toEqual(odd);
 });
 
 test(
   "the folder's chats are listed newest first, with their first line and model",
   async () => {
-    await chatRun("s1", root, ["first chat", modelMessage({ provider: "xai", model: "grok-4" })]);
+    await chatRun("s1", root, ["first chat", modelMessage({ provider: "xai", model: "grok-4" }, "the user")]);
     await chatRun("s2", join(tmp), ["another folder"]);
     await chatRun("s3", root, [], { end: true });
     await chatRun("s4", root, ["second chat", "more"], { end: false });
@@ -228,18 +237,22 @@ test("a session's picker choice is its name, then when, its messages and model",
 test(
   "a seed holds a chat's transcript, from a finished one or one left waiting, and its model",
   async () => {
-    await chatRun("done", root, ["remember 7", modelMessage({ provider: "xai", model: "grok-4" })]);
+    await chatRun("done", root, ["remember 7", modelMessage({ provider: "xai", model: "grok-4" }, "the user")]);
     await chatRun("left", root, ["remember 9"], { end: false });
     const [left, done] = chatSessions(runsDir, root);
     const finished = await sessionSeed(done!, runsDir, NO_ENV);
     expect(finished.model).toEqual({ provider: "xai", model: "grok-4" });
     expect(finished.transcript.summary).toBe("");
-    // Turn by turn.
+    // Turn by turn: an action no reply read joins the last turn, as a turn of its own would use
+    // up one that compaction keeps.
     const texts = (seed: typeof finished) =>
       seed.transcript.history.map((turn) =>
-        turn.map((m) => (m as { parts: { text?: string }[] }).parts[0]!.text),
+        turn.map((m) => {
+          const [part] = (m as { parts: { text?: string; tool?: string }[] }).parts;
+          return part!.text ?? part!.tool;
+        }),
       );
-    expect(texts(finished)).toEqual([["remember 7", "re: 1"]]);
+    expect(texts(finished)).toEqual([["remember 7", "re: 1", "/model"]]);
     const waiting = await sessionSeed(left!, runsDir, NO_ENV);
     expect(texts(waiting)).toEqual([["remember 9", "re: 1"]]);
     // It ran on the defaults, which a chat going on from it uses too.

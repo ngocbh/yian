@@ -21,6 +21,8 @@
  * command's helpers and the chat's flusher.
  */
 
+import { randomUUID } from "node:crypto";
+
 import type { ChildEvent } from "../child_flows.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
@@ -28,6 +30,8 @@ import { Diagnostic, shellQuote } from "../diagnostics.ts";
 import { NodeSucceeded, type RunEvent, RunStarted, type StreamChunk } from "../events.ts";
 import { defaultEmbedding } from "../llm_clients/connection.ts";
 import { defaultEmbed, type ModelAccess } from "../llm_clients/factory.ts";
+import type { Author } from "../memory/base.ts";
+import { isActionMessage } from "../nodes/base.ts";
 import { homeDir, realScheduler, removeEmptyDir, type Scheduler, sleepUntil } from "../platform.ts";
 import {
   advance,
@@ -175,11 +179,15 @@ export interface InboxChatHost {
 }
 
 /**
- * What a host's command does to the chat: send `send` to the inbox and advance the run, as a
- * line is, calling `sent` once the inbox took it; or end the chat, as `/exit` does; or nothing
- * (`null`).
+ * What a host's command does to the chat: send `action`, a message of `action` parts recording
+ * what the person did, to the inbox as `by`, calling `sent` once the inbox took it; or end the
+ * chat, as `/exit` does; or nothing (`null`). An action starts no turn: the run's next take reads
+ * it with the next line.
  */
-export type ChatCommandOutcome = { send: unknown; sent?: () => void } | { exit: true } | null;
+export type ChatCommandOutcome =
+  | { action: unknown; by?: Author | null; sent?: () => void }
+  | { exit: true }
+  | null;
 
 /**
  * Commands a host adds to the chat's prompt, each a whole line such as `/model`. One entered in
@@ -222,6 +230,12 @@ export interface InboxChatView {
   /** A line sent from the input box while a turn runs, printed as the prompt leaves one. */
   echo(line: string): void;
 }
+
+/**
+ * A fresh key for an action sent to the inbox. A withdrawn send keeps its key, so an action Esc
+ * sends again needs a new one.
+ */
+const actionKey = (): string => `action-${randomUUID()}`;
 
 const INTERRUPTING = "(interrupting the reply; Ctrl-C again within 2 s to cancel the run)";
 // A second Ctrl-C this soon after the one that interrupted a turn cancels the run.
@@ -436,12 +450,14 @@ function inboxClosed(log: string, inbox: string): boolean {
  * <event>)`).
  *
  * With `host.commands`, a line that names one runs it at the prompt and does what it returns:
- * sends its value and moves the run on, as a line; closes the inbox, as `/exit`; or nothing. One
- * entered in the box during a turn waits for the turn's end. `host.start` runs on the terminal
- * before anything else and may end the chat with an exit code; `host.typed` are keys typed ahead
- * for the first prompts, and `host.onTyped` gets those left unread as the chat ends. A command's
- * send that Esc withdraws is sent again, as it isn't a typed line; `host.stopped` gives the text
- * a stopped chat prints.
+ * sends its action, keyed, and leaves the prompt up, the run's next take reading it with the next
+ * line; closes the inbox, as `/exit`; or nothing. One entered in the box during a turn waits for
+ * the turn's end. `host.start` runs on the terminal before anything else and may end the chat
+ * with an exit code; `host.typed` are keys typed ahead for the first prompts, and `host.onTyped`
+ * gets those left unread as the chat ends. An action Esc withdraws (a message of `action` parts,
+ * a command's or a host's press) isn't put back in the prompt, as what it records already
+ * happened: it is sent again, as its `by`, under a new key; `host.stopped` gives the text a
+ * stopped chat prints.
  *
  * The flow loads, inputs, provider keys, log path and run index are handled as `yian run`'s
  * (`--engine-trace` included), except that the inbox input is never asked for or supplied and
@@ -517,8 +533,6 @@ export async function inboxChat(
   let exiting = false;
   // A host command entered in the box while a turn ran, run once the turn has ended.
   let heldCommand: string | null = null;
-  // What host commands sent, by seq: Esc never takes one back, as it isn't a line typed.
-  const commandSends = new Map<number, unknown>();
   // The send of the line the prompt took, while it runs (its turn has started): a Ctrl-C or Esc
   // meanwhile acts once the line is in the log, so it stops the reply that line starts.
   let lineSending: Promise<void> | null = null;
@@ -605,14 +619,14 @@ export async function inboxChat(
       // The lines a withdraw may take back; one sent meanwhile is kept for the next.
       const known = [...sent.keys()];
       let back = await withdraw(path, inbox.name, { env: env.read });
-      // A host command's send isn't a line to take back: it goes to the run again, as it was.
-      const commands = back.filter((event) => commandSends.has(event.seq));
-      back = back.filter((event) => !commandSends.has(event.seq));
-      for (const event of commands) {
-        const value = commandSends.get(event.seq);
-        commandSends.delete(event.seq);
+      // An action records what someone already did, so it isn't a line to take back: it goes to
+      // the run again, as it was.
+      const actions = back.filter((event) => isActionMessage(event.value));
+      back = back.filter((event) => !actions.includes(event));
+      for (const event of actions) {
         try {
-          commandSends.set(await deliver(path, inbox.name, value, { env: env.read }), value);
+          const options = { env: env.read, by: event.by, key: actionKey() };
+          await deliver(path, inbox.name, event.value, options);
         } catch (error) {
           // Once the inbox is closed, nothing more reaches the run.
           if (!(error instanceof DeliveryRefused)) throw error;
@@ -979,24 +993,16 @@ export async function inboxChat(
       return moveOn();
     };
     /**
-     * Send `event`, a line's or a command's, and move the run on in a turn; `typed` is what the
-     * box held, which Esc puts back. Returns null when the inbox refused it and nothing moved.
+     * Send `event`, a line's, and move the run on in a turn; `typed` is what the box held, which
+     * Esc puts back. Returns null when the inbox refused it and nothing moved.
      */
-    const sendEvent = async (
-      event: unknown,
-      typed: Draft | null,
-      command?: () => void,
-    ): Promise<RunResult | null> => {
+    const sendEvent = async (event: unknown, typed: Draft | null): Promise<RunResult | null> => {
       pressedAt = null;
       const sending = (async () => {
         // The hold ends with this line: held events, and those withdrawn, go before it.
         await flusher?.lineSent();
         const seq = await deliver(path, inbox.name, event, { env: env.read });
         if (typed !== null) sent.set(seq, typed);
-        if (command !== undefined) {
-          commandSends.set(seq, event);
-          command();
-        }
       })();
       startsWith(sending);
       // The turn starts with the send, so a Ctrl-C from here on interrupts rather than cancels.
@@ -1026,7 +1032,19 @@ export async function inboxChat(
       stop.signal.throwIfAborted();
       if (outcome === null) return null;
       if ("exit" in outcome) return leave();
-      return sendEvent(outcome.send, null, outcome.sent ?? (() => {}));
+      // Sent plainly, with no turn of its own: the prompt comes back at once.
+      try {
+        const options = { env: env.read, by: outcome.by ?? null, key: actionKey() };
+        await deliver(path, inbox.name, outcome.action, options);
+      } catch (error) {
+        if (!(error instanceof DeliveryRefused)) throw error;
+        // A run that ended under the chat refuses it as `ended`; the move reads how it ended.
+        if (error.reason === "ended") return moveOn();
+        await note(`not sent: ${forTerminal(error.message, io.stderr)}\n`);
+        return null;
+      }
+      outcome.sent?.();
+      return null;
     };
     // Raw between turns too: a cooked tty drops what is typed past its queue (about 2 KB on macOS)
     // while the flow replies. Released once the inbox closes, so Ctrl-C raises SIGINT again while

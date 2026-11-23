@@ -220,6 +220,33 @@ test("compact_history's budget counts only the messages' text parts", async () =
   expect(prompt).not.toContain(big);
 });
 
+test("compact_history folds a person's actions as `<author> <tool>: <summary>` lines and counts them", async () => {
+  const flow = await load("compact_history.yaml");
+  const action = (part: Record<string, unknown>) => ({ role: "user", author: "Ada", parts: [{ type: "action", ...part }] });
+  const history = [
+    [
+      action({ tool: "shell_type", summary: "Ada typed into shell 1" }),
+      action({ tool: "/model", arguments: { provider: "xai", model: "grok-4" } }),
+      user("a1"),
+      assistant("b1"),
+    ],
+    [action({ tool: "flows_message", arguments: { run: "r1", text: "go" }, result: "sent" })],
+  ];
+  // The 4 characters of text are under 10, but the actions' JSON isn't.
+  const model = new PromptModel({ reply: "unused", summary: "S" });
+  const over = await runFlow(flow, { summary: "", history, budget: 10n, keep: 0n }, { ...opts, models: serving(model) });
+  expect(over.output).toEqual({ summary: "S", history: [] });
+  const prompt = model.requests[0]!.messages.at(-1)!.text();
+  for (const line of [
+    "Ada shell_type: Ada typed into shell 1",
+    'Ada /model: {"model":"grok-4","provider":"xai"}',
+    "user: a1",
+    'Ada flows_message: {"run":"r1","text":"go"} -> sent',
+  ]) {
+    expect(prompt).toContain(line);
+  }
+});
+
 test.each([
   [0n, 0],
   [1n, 1],

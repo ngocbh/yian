@@ -1,6 +1,6 @@
 /**
  * The earlier `yian chat` sessions of a folder, which `/resume`, `--resume` and `--continue` go
- * on from, and the model choice messages `/model` sends.
+ * on from, and the person's `/model` actions.
  *
  * A session is a top-level run of the bundled chat flow whose recorded flow folder is the folder
  * the chat works in (`chat.ts` loads the flow there). The run index finds them; each one's log
@@ -40,14 +40,16 @@ export interface ModelChoice {
   readonly model: string;
 }
 
-/** What a choice's text starts with, before its JSON (`chat.yaml`'s turn reads it so). */
-const MODEL_PREFIX = "/model ";
+/** The tool a `/model` action names (`chat.yaml`'s turn reads it so). */
+const MODEL_TOOL = "/model";
 
-/** The message `/model` sends to the chat's inbox for `choice`: authored `yian`, its JSON. */
-export function modelMessage(choice: ModelChoice): Record<string, unknown> {
-  const json = JSON.stringify({ provider: choice.provider, model: choice.model });
-  const text = `${MODEL_PREFIX}${json}`;
-  return { role: "user", author: "yian", parts: [{ type: "text", text }] };
+/**
+ * The message `/model` sends to the chat's inbox for `choice`: `person`'s action, its arguments
+ * the provider and model.
+ */
+export function modelMessage(choice: ModelChoice, person: string): Record<string, unknown> {
+  const chosen = { provider: choice.provider, model: choice.model };
+  return { role: "user", author: person, parts: [{ type: "action", tool: MODEL_TOOL, arguments: chosen }] };
 }
 
 /** The text of a message's single text part, or null. */
@@ -58,17 +60,12 @@ function onlyText(message: unknown): string | null {
   return part.type === "text" && typeof part.text === "string" ? part.text : null;
 }
 
-/** The model a message sent to the chat chooses, or null for any other message. */
+/** The model a message sent to the chat chooses (a `/model` action), or null for any other message. */
 export function chosenModel(message: unknown): ModelChoice | null {
-  if ((message as { author?: unknown } | null)?.author !== "yian") return null;
-  const text = onlyText(message) ?? "";
-  if (!text.startsWith(`${MODEL_PREFIX}{`)) return null;
-  try {
-    return recordedModel(JSON.parse(text.slice(MODEL_PREFIX.length)));
-  } catch {
-    // Not a choice: text the chat didn't write as one.
-    return null;
-  }
+  const parts = (message as { parts?: unknown } | null)?.parts;
+  if (!Array.isArray(parts) || parts.length !== 1) return null;
+  const part = parts[0] as { type?: unknown; tool?: unknown; arguments?: unknown };
+  return part.type === "action" && part.tool === MODEL_TOOL ? recordedModel(part.arguments) : null;
 }
 
 /** An earlier chat, as `/resume` lists it. */
@@ -282,8 +279,9 @@ const TURN_END = /^chat#\d+\/__end__$/;
 
 /**
  * The seed a new chat takes from `session`: its transcript as its last turn left it (the summary,
- * and every turn's messages), read by folding its log, and the model it chose, if it chose one;
- * and its children in `runsDir`, and theirs, left waiting or stopped.
+ * and every turn's messages, the actions no reply read joining the last), read by folding its
+ * log, and the model it chose, if it chose one; and its children in `runsDir`, and theirs, left
+ * waiting or stopped.
  *
  * @throws What `foldRunLog` throws for a log it can't replay.
  */
@@ -293,14 +291,17 @@ export async function sessionSeed(
   env: Env,
 ): Promise<SessionSeed> {
   const folded = await foldRunLog(session.log, { env });
-  let state: { summary: string; history: unknown[][] } = { summary: "", history: [] };
+  let state = { summary: "", history: [] as unknown[][], noted: [] as unknown[] };
   for (const { entry, value } of folded.records) {
     const record = entry.envelope.record;
     if (value !== null && record instanceof PoolCommitRecord && TURN_END.test(record.key)) {
       state = toHost(value.value) as typeof state;
     }
   }
-  const transcript = { summary: state.summary, history: state.history };
+  const { summary, history, noted } = state;
+  // A turn of their own would use up one that compaction keeps.
+  const turns = noted.length === 0 ? history : [...history.slice(0, -1), [...(history.at(-1) ?? []), ...noted]];
+  const transcript = { summary, history: turns };
   const rows = indexRows(runsDir);
   // A run an authoring run started is the chat's child's child.
   const ours = new Set([session.runId]);

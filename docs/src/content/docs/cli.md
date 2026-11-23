@@ -162,7 +162,7 @@ yian run chat.yaml
 | Key | What it does |
 |---|---|
 | Enter | Sends the line |
-| Esc | Takes back the lines the flow hasn't read yet, and stops the reply |
+| Esc | Takes back the lines the flow hasn't read yet, and stops the reply. A person's [action](/agents/#steering-and-interrupts) a host sent stays sent |
 | Ctrl-C | Stops the reply. A second Ctrl-C within 2 seconds, or one at the prompt, cancels the run |
 | `/exit`, `/quit` or Ctrl-D | Ends the chat once the flow has read your lines |
 
@@ -275,7 +275,7 @@ theirs. Off a terminal, or with `NO_COLOR`, it prints plain lines and numbered l
 | Key | What it does |
 |---|---|
 | Enter | Sends the line. During a reply, the assistant reads it before its next step |
-| Esc | Takes back the lines the assistant hasn't read yet, and stops the reply |
+| Esc | Takes back the lines the assistant hasn't read yet, and stops the reply. What you did yourself, such as a `/model` choice, stays sent |
 | Ctrl-C | Stops the reply. A second Ctrl-C within 2 seconds, or one at the prompt, ends the chat |
 | `/` | Lists the commands |
 | `/model` | Picks the model of the next replies, and of the flows the assistant starts after it, from your logins |
@@ -288,6 +288,10 @@ theirs. Off a terminal, or with `NO_COLOR`, it prints plain lines and numbered l
 | Esc in the list or a view | Goes back to the box |
 
 A long paste shows as a token such as `[Pasted text #1 +40 lines]`; the assistant gets all of it.
+
+What you do yourself, such as choosing a model with `/model`, reaches the assistant as your action,
+signed `the user`. It starts no reply: the assistant reads it with your next message, and a
+compaction keeps who did what.
 
 ### What the assistant can do
 

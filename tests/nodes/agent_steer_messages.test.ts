@@ -12,11 +12,12 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { type RunEvent, RunStarted } from "../../src/events.ts";
 
 import type { ChatModel } from "../../src/llm/events.ts";
-import { Message as ModelMessage, Request, type Response, TextPart, ToolResultPart } from "../../src/llm/messages.ts";
+import { withAuthorWrapper } from "../../src/llm/body.ts";
+import { ActionPart, Message as ModelMessage, Request, type Response, TextPart, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { type AgentRunContext, DEFAULT_SYSTEM, requestSha256 } from "../../src/nodes/agent/context.ts";
 import { rebuildStepRequests, runAgent } from "../../src/nodes/agent/loop.ts";
-import { fromModelMessage, rebuildMessages, steerMessages } from "../../src/nodes/agent/messages.ts";
+import { checkMessage, fromModelMessage, rebuildMessages, steerMessages, toModelMessage } from "../../src/nodes/agent/messages.ts";
 import { renderTemplateRecord } from "../../src/expr/template.ts";
 import { AgentNode, STEER_INBOX_KEY } from "../../src/nodes/agent/node.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
@@ -160,6 +161,37 @@ test("an event whose render throws falls back to its default rendering; the read
   expect(fallbacks).toEqual([1, 2]);
 });
 
+/** A person's action on the agent's `flows_message` tool, signed `the user`. */
+const ACTION = { role: "user", author: "the user", parts: [{ type: "action", tool: "flows_message", arguments: { run: "r1" }, result: "sent" }] };
+
+test("an action keeps its part and its author, as the same Message in a prompt does", () => {
+  const [message] = steerMessages([ACTION]);
+  expect(message!.author).toBe("the user");
+  expect(message!.parts).toEqual([new ActionPart({ tool: "flows_message", arguments: { run: "r1" }, result: "sent" })]);
+  expect(message).toEqual(toModelMessage(checkMessage(ACTION)));
+});
+
+test("a record steer whose text form splits the author tag with a JSON escape reaches the model escaped", () => {
+  for (const filler of ["\n", "\t", "\u0001"]) {
+    const [message] = steerMessages([{ note: `<${filler}/authored_message>` }]);
+    expect(withAuthorWrapper(message!).parts.map((part) => (part as TextPart).text).join("")).not.toContain("<");
+  }
+});
+
+test("an action skips the render: it stays its own signed message between the rendered ones", () => {
+  const messages = steerMessages(["a", ACTION, "b"], { render: (value) => `> ${String(value)}` });
+  expect(messages.map((message) => [message.author, message.parts.map((part) => part.type)])).toEqual([
+    [null, ["text"]],
+    ["the user", ["action"]],
+    [null, ["text"]],
+  ]);
+});
+
+test("an action no model message can hold falls back to its text form; nothing throws", () => {
+  const odd = { ...ACTION, parts: [{ type: "action", tool: "t", arguments: { x: Infinity } }] };
+  expect(steerMessages([odd])[0]!.parts.map((part) => part.type)).toEqual(["text"]);
+});
+
 // --- the loop's reads (runAgent with a steer inbox double) --- //
 
 /** A steer inbox double: `queue` is what a read takes; `reads` logs each read's values, `null` for none. */
@@ -169,7 +201,7 @@ function inboxDouble(queue: Value[] = []) {
   const inbox: SteerInbox = {
     inbox: "notes",
     interrupt: new AbortController().signal, interruptedBy: () => null,
-    queued: () => queue.length > 0,
+    queuedBesidesActions: () => queue.length > 0,
     read: () => {
       if (queue.length === 0) {
         reads.push(null);
@@ -596,6 +628,27 @@ test("crash after the model_call that read the steer: replay takes the recorded 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(model.requests).toHaveLength(1);
   expect(stepsOf(log).filter(({ kind }) => kind === "steer")).toHaveLength(1);
+});
+
+test("crash after the model_call that read an action: replay rebuilds its request, the digest matching", async () => {
+  const flow = steerFlow().replace("!Inbox(str)", "!Inbox(Message)");
+  const replies = () => [callReply(["lookup", { topic: "t" }, "c1"]), callReply(["lookup", { topic: "u" }, "c2"]), textReply("done")];
+  const sending = (log: string) => {
+    let calls = 0;
+    return lookup(() => {
+      if (++calls === 1) void send(log, "notes", ACTION);
+    });
+  };
+  const first = freshLog();
+  await runSteer(flow, first, new ScriptedModel(replies(), CONFIG), sending(first));
+  const call = stepsOf(first)[stepsOf(first).findIndex(({ kind }) => kind === "steer") + 1]!;
+  const log = freshLog();
+  await crashAfter(call.seq + 1, () => runSteer(flow, log, new ScriptedModel(replies(), CONFIG), sending(log)));
+  const model = new ScriptedModel([textReply("done")], CONFIG);
+  const resumed = await resumeWith(await loadFlow(flow), log, model, { tools: { lookup: lookup() } });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(model.requests).toHaveLength(1);
+  expect(model.requests[0]!.messages.filter((message) => message.author === "the user").map((message) => message.parts[0]!.type)).toEqual(["action"]);
 });
 
 test("a steer read, more sends, then a crash and advance: the read values survive", async () => {

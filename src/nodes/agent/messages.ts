@@ -15,10 +15,12 @@
 
 import { reprText } from "../../diagnostics.ts";
 import {
+  ActionPart,
   MediaPart,
   MESSAGE_FORMAT,
   MessageFormatError,
   Message as ModelMessage,
+  type Part,
   TextPart,
   ToolCallPart,
   ToolResultPart,
@@ -26,6 +28,7 @@ import {
 import { YianRangeError, YianTypeError } from "../../typesys/errors.ts";
 import type { JsonObject } from "../../typesys/json.ts";
 import { builtinType, newMessagesType } from "../../typesys/types.ts";
+import { isActionMessage } from "../base.ts";
 import {
   buildValueAs,
   FileRef,
@@ -42,7 +45,8 @@ export type MessagePart =
   | { type: "text" | "reasoning" | "refusal"; text: string; provider_payload?: JsonObject | null }
   | { type: "tool_call"; id: string; name: string; arguments?: JsonObject | null; raw_arguments?: string | null; provider_payload?: JsonObject | null }
   | { type: "tool_result"; call_id: string; name: string; content: string; is_error?: boolean | null; provider_payload?: JsonObject | null }
-  | { type: "media"; mime: string; file: FileRef; name?: string | null; provider_payload?: JsonObject | null };
+  | { type: "media"; mime: string; file: FileRef; name?: string | null; provider_payload?: JsonObject | null }
+  | { type: "action"; tool: string; summary?: string | null; arguments?: JsonObject | null; result?: string | null };
 
 /** A message as a yian value: the built-in `Message` type. */
 export type Message = {
@@ -120,21 +124,33 @@ function asMessage(value: unknown): Message | null {
 }
 
 /**
- * Return the text parts a steer `Message` keeps, each of its parts as a user message carries it:
- * text as is, a reasoning or refusal part's text, and any other part but media in its text form.
- * Media is dropped (no route sends it yet), each drop told to `onDrop`.
+ * Return the parts a steer `Message` keeps, each of its parts as a user message carries it: text
+ * as is, a reasoning or refusal part's text, an action as its part (or its text form when no model
+ * message can hold it), and any other part but media in its text form. Media is dropped (no route
+ * sends it yet), each drop told to `onDrop`.
  */
-function steerParts(message: Message, onDrop: (part: number) => void): TextPart[] {
-  const parts: TextPart[] = [];
+function steerParts(message: Message, onDrop: (part: number) => void): Part[] {
+  const parts: Part[] = [];
   message.parts.forEach((part, index) => {
     if (part.type === "media") onDrop(index);
     else if (part.type === "text" || part.type === "reasoning" || part.type === "refusal") parts.push(new TextPart(part.text));
+    else if (part.type === "action") parts.push(actionPart(part) ?? new TextPart(writeAsText(part as Value)));
     else {
       const { provider_payload: _payload, ...rest } = part;
       parts.push(new TextPart(writeAsText(rest as Value)));
     }
   });
   return parts;
+}
+
+/** Return an action part value as a model message part, or `null` when the model message refuses it. */
+function actionPart(part: Extract<MessagePart, { type: "action" }>): ActionPart | null {
+  try {
+    return new ActionPart(part);
+  } catch (error) {
+    if (error instanceof MessageFormatError) return null;
+    throw error;
+  }
 }
 
 /**
@@ -162,8 +178,8 @@ export interface SteerMessageOptions {
   readonly onFallback?: (event: number, error: unknown) => void;
 }
 
-/** The text parts an event's default rendering gives inside one message. */
-function defaultParts(value: unknown, onDrop: (part: number) => void): TextPart[] {
+/** The parts an event's default rendering gives inside one message. */
+function defaultParts(value: unknown, onDrop: (part: number) => void): Part[] {
   const message = typeof value === "string" ? null : asMessage(value);
   if (message === null) return [new TextPart(writeAsText(value as Value))];
   const parts = steerParts(message, onDrop);
@@ -176,32 +192,31 @@ function defaultParts(value: unknown, onDrop: (part: number) => void): TextPart[
  * turned into text and media dropped (`onDrop(event, part)` hears each drop); each run of other
  * events as one user message with a text part per event (a `str` as is, anything else in its text
  * form, `writeAsText`). A `Message` left with no part holds its event's text form. With a render,
- * the read is one user message with one text part per event, `render(event)`, `Message` events
- * included; an event whose render throws gets its default rendering's parts there instead
- * (`onFallback(event, error)` hears it). Never throws: the events are already consumed when it
- * runs.
+ * each run of events between actions is one user message with one text part per event,
+ * `render(event)`, other `Message` events included; an event whose render throws gets its default
+ * rendering's parts there instead (`onFallback(event, error)` hears it). An action
+ * (`isActionMessage`) skips the render and keeps its own message and author, so it stays signed.
+ * Never throws: the events are already consumed when it runs.
  */
 export function steerMessages(values: readonly unknown[], options: SteerMessageOptions = {}): ModelMessage[] {
   const { render = null, onDrop = () => {}, onFallback = () => {} } = options;
-  if (render !== null) {
-    const parts = values.flatMap((value, event) => {
-      try {
-        return [new TextPart(render(value))];
-      } catch (error) {
-        onFallback(event, error);
-        return defaultParts(value, (part) => onDrop(event, part));
-      }
-    });
-    return parts.length > 0 ? [new ModelMessage({ role: "user", parts })] : [];
-  }
   const messages: ModelMessage[] = [];
-  let run: TextPart[] = [];
+  let run: Part[] = [];
   const flush = (): void => {
     if (run.length > 0) messages.push(new ModelMessage({ role: "user", parts: run }));
     run = [];
   };
   values.forEach((value, event) => {
     const message = typeof value === "string" ? null : asMessage(value);
+    if (render !== null && !(message !== null && isActionMessage(message))) {
+      try {
+        run.push(new TextPart(render(value)));
+      } catch (error) {
+        onFallback(event, error);
+        run.push(...defaultParts(value, (part) => onDrop(event, part)));
+      }
+      return;
+    }
     if (message === null) {
       run.push(new TextPart(writeAsText(value as Value)));
       return;
@@ -246,7 +261,7 @@ export interface ConversationMessage {
 
 // The parts each role's messages may hold, as every route's adapter renders them.
 const ROLE_PARTS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  ["user", new Set(["text", "media"])],
+  ["user", new Set(["text", "media", "action"])],
   ["assistant", new Set(["text", "reasoning", "refusal", "tool_call"])],
   ["tool", new Set(["tool_result"])],
 ]);
@@ -276,8 +291,8 @@ export function checkConversation(messages: readonly Message[]): void {
  * Check that `messages`, a conversation after the system message in its model-message form, is one
  * a model route can send.
  *
- * Each message has a part, and each part is one its role can carry: a user message holds text and
- * media; an assistant message text, reasoning, refusals and tool calls; a tool message tool results.
+ * Each message has a part, and each part is one its role can carry: a user message holds text,
+ * media and actions; an assistant message text, reasoning, refusals and tool calls; a tool message tool results.
  * Every tool call an assistant message makes is answered by the tool messages that directly follow
  * it (its exchange), before the next user or assistant message or the end of the list. A tool result
  * answers the open call of its id in the current exchange. Ids may repeat across exchanges, as routes
@@ -300,7 +315,7 @@ export function checkModelConversation(messages: readonly ConversationMessage[])
     }
     if (message.parts.length === 0) throw new ConversationError(index, "the message has no parts");
     for (const part of message.parts) {
-      if (!allowed.has(part.type)) throw new ConversationError(index, `${message.role} messages can't hold a ${part.type} part`);
+      if (!allowed.has(part.type)) throw new ConversationError(index, `${message.role} messages can't hold ${part.type} parts`);
     }
     if (message.role === "tool") {
       for (const part of message.parts) {

@@ -537,8 +537,40 @@ export class RefusalPart {
   }
 }
 
+/**
+ * Something a person did with one of an agent's tools, which a user message records in the
+ * agent's conversation without asking for a reply. The host ran the tool and chose what to show:
+ * it may leave out or replace the arguments and the result, with `summary` in their place.
+ * Adapters send it as text inside the message's author label (`actionText` in `body.ts`).
+ */
+export class ActionPart {
+  readonly type = "action" as const;
+  /** The tool, by the name the agent knows it. */
+  readonly tool: string;
+  /** What the person did, in words. */
+  readonly summary: string | null;
+  /** The call's arguments, or `null` when the host leaves them out. */
+  readonly arguments: JsonObject | null;
+  /** What the call did, or `null` when the host leaves it out. */
+  readonly result: string | null;
+  /** Always `null`, never written: an action comes from a host, never from a provider. */
+  readonly providerPayload = null;
+
+  constructor(options: { tool: string; summary?: string | null; arguments?: JsonObject | null; result?: string | null }) {
+    this.tool = checkString(options.tool, "tool");
+    this.summary = optionalString(options.summary, "summary");
+    this.arguments = optionalObject(options.arguments, "arguments");
+    this.result = optionalString(options.result, "result");
+  }
+
+  /** Return the part's JSON, omitting `null` fields. */
+  toJSON(): JsonObject {
+    return partJSON(this.type, { tool: this.tool, summary: this.summary, arguments: this.arguments, result: this.result });
+  }
+}
+
 /** One piece of a message's content. */
-export type Part = TextPart | MediaPart | ToolCallPart | ToolResultPart | ReasoningPart | RefusalPart;
+export type Part = TextPart | MediaPart | ToolCallPart | ToolResultPart | ReasoningPart | RefusalPart | ActionPart;
 
 /** Return whether `value` is an instance of one of the part classes. */
 export function isPart(value: unknown): value is Part {
@@ -548,7 +580,8 @@ export function isPart(value: unknown): value is Part {
     value instanceof ToolCallPart ||
     value instanceof ToolResultPart ||
     value instanceof ReasoningPart ||
-    value instanceof RefusalPart
+    value instanceof RefusalPart ||
+    value instanceof ActionPart
   );
 }
 
@@ -633,6 +666,20 @@ const PART_READERS: ReadonlyMap<string, PartReader> = new Map<string, PartReader
       make: (d) => new RefusalPart(d["text"] as string, d["provider_payload"] as JsonObject),
     },
   ],
+  [
+    "action",
+    {
+      keys: ["tool", "summary", "arguments", "result"],
+      required: ["tool"],
+      make: (d) =>
+        new ActionPart({
+          tool: d["tool"] as string,
+          summary: d["summary"] as string,
+          arguments: d["arguments"] as JsonObject,
+          result: d["result"] as string,
+        }),
+    },
+  ],
 ]);
 
 // The keys among `NULLABLE_KEYS` whose value is a JSON object rather than a string.
@@ -648,6 +695,8 @@ const NULLABLE_KEYS: ReadonlySet<string> = new Set([
   "name",
   "arguments",
   "raw_arguments",
+  "summary",
+  "result",
 ]);
 
 /** Throw for the first of `keys` that `data` holds as an explicit `null` where `toJSON` would omit it. */

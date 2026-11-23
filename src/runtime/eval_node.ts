@@ -157,8 +157,9 @@ function observerSink<T>(
 
 /**
  * Wrap the engine's steer inbox opener for one evaluation: once the evaluation ended, opening and
- * each `queued`, `read` or `interruptedBy` throw a `CapabilityFault`; a `CapabilityFault` the
- * engine throws reaches `onFault` before it is rethrown, so a node that catches it can't hide it.
+ * each `queuedBesidesActions`, `read` or `interruptedBy` throw a `CapabilityFault`; a
+ * `CapabilityFault` the engine throws reaches `onFault` before it is rethrown, so a node that
+ * catches it can't hide it.
  */
 function steerInboxCapability(
   open: (inbox: string) => SteerInbox,
@@ -178,7 +179,7 @@ function steerInboxCapability(
     const opened = guarded(() => open(inbox));
     return {
       inbox: opened.inbox,
-      queued: () => guarded(() => opened.queued()),
+      queuedBesidesActions: () => guarded(() => opened.queuedBesidesActions()),
       read: () => guarded(() => opened.read()),
       interrupt: opened.interrupt,
       interruptedBy: () => guarded(() => opened.interruptedBy()),

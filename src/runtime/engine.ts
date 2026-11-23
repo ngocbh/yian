@@ -40,6 +40,7 @@ import {
   CapabilityFault,
   type CompleteResult,
   Grow,
+  isActionMessage,
   markerMessage,
   type NodeMemories,
   Output,
@@ -806,7 +807,8 @@ export class FlowEngine {
         inbox,
         interrupt: controller.signal,
         interruptedBy: () => state.waits.interrupts.get(nodeId) ?? null,
-        queued: () => availableUnread(state.waits, inbox).length > 0,
+        queuedBesidesActions: () =>
+          availableUnread(state.waits, inbox).some((seq) => !isActionMessage(state.inboxEvents.get(seq)!.toObject())),
         read: () => {
           if (signal.aborted) throw signal.reason;
           const from = [...availableUnread(state.waits, inbox)];

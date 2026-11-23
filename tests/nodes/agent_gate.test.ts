@@ -969,7 +969,7 @@ test.each<[string, BeforeToolCall | null]>([
   const model = new ScriptedModel([...turns, textReply("done")], CONFIG);
   let toolset = new ToolSet(hostTools([]));
   if (hook !== null) toolset = toolset.withGate(hook);
-  const steerInbox = { inbox: "m", queued: () => false, read: () => null, interrupt: interrupt.signal, interruptedBy: () => null };
+  const steerInbox = { inbox: "m", queuedBesidesActions: () => false, read: () => null, interrupt: interrupt.signal, interruptedBy: () => null };
   const output = await direct(model, toolset.forRun("r"), ["lookup", "team"], { signal: node.signal, steerInbox });
   expect((output as { value: unknown }).value).toBe("done");
   expect([node.live.size, interrupt.live.size]).toEqual([0, 0]);
@@ -1830,7 +1830,7 @@ test.each<[string, "hold" | "run"]>([
     return written.length;
   };
   const steps = new NodeSteps(1, [], record, [], undefined, true, { currentCalls: () => current });
-  const steerInbox = { inbox: "m", queued: () => false, read: () => null, interrupt: interrupt.signal, interruptedBy: () => 7 };
+  const steerInbox = { inbox: "m", queuedBesidesActions: () => false, read: () => null, interrupt: interrupt.signal, interruptedBy: () => 7 };
   const toolset = new ToolSet({ lookup }).withGate(holding("h").hook).forRun("r");
   const model = new ScriptedModel([callReply(["lookup", { q: "h" }, "ch"], ["lookup", { q: "x" }, "cx"])], CONFIG);
   expect(await direct(model, toolset, ["lookup"], { steps, steerInbox })).toEqual(new Interrupted(7));

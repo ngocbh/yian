@@ -21,7 +21,7 @@ import { type AgentRunContext, DEFAULT_SYSTEM, requestSha256 } from "../../src/n
 import { Interrupted } from "../../src/nodes/agent/interrupts.ts";
 import { rebuildStepRequests, runAgent } from "../../src/nodes/agent/loop.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
-import type { Output, SteerInbox } from "../../src/nodes/base.ts";
+import { isActionMessage, type Output, type SteerInbox } from "../../src/nodes/base.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { withWarnings } from "../../src/platform.ts";
 import { interrupt, send } from "../../src/run.ts";
@@ -38,14 +38,14 @@ const SYSTEM = new Message({ role: "system", parts: [new TextPart(DEFAULT_SYSTEM
  * A steer inbox double: `queue` is what a read takes; `reads` logs each read's values, `null` for
  * none. `interrupt` is its interrupt signal, which an `interrupted` record at seq `by` backs.
  */
-function inboxDouble(queue: string[] = [], interrupt = new AbortController().signal, by: number | null = null) {
+function inboxDouble(queue: unknown[] = [], interrupt = new AbortController().signal, by: number | null = null) {
   const reads: (readonly unknown[] | null)[] = [];
   let seq = 100;
   const inbox: SteerInbox = {
     inbox: "notes",
     interrupt,
     interruptedBy: () => (interrupt.aborted ? by : null),
-    queued: () => queue.length > 0,
+    queuedBesidesActions: () => queue.some((value) => !isActionMessage(value)),
     read: () => {
       if (queue.length === 0) {
         reads.push(null);
@@ -53,7 +53,7 @@ function inboxDouble(queue: string[] = [], interrupt = new AbortController().sig
       }
       const values = queue.splice(0);
       reads.push(values);
-      return { n: 0, from: values.map(() => seq++), values };
+      return { n: 0, from: values.map(() => seq++), values: values as ValueRecord[] };
     },
   };
   return { inbox, queue, reads };
@@ -161,6 +161,31 @@ test("no steer queued at the final answer: one model call, no read after it", as
   expect(await output(loopContext(model, { steerInbox: inbox, withLookup: true }))).toBe("final");
   expect(model.requests).toHaveLength(1);
   expect(reads).toEqual([null]);
+});
+
+/** A person's action, signed `the user`: something they did with one of the agent's tools. */
+const ACTION = { role: "user", author: "the user", parts: [{ type: "action", tool: "flows_message", result: "sent" }] };
+
+test("an action queued at the final answer gets no model call; it stays queued for the next one", async () => {
+  const { inbox, queue, reads } = inboxDouble();
+  const model = hooked(new ScriptedModel([textReply("final")], CONFIG), () => queue.push(ACTION));
+  expect(await output(loopContext(model, { steerInbox: inbox, withLookup: true }))).toBe("final");
+  expect(model.requests).toHaveLength(1);
+  expect(queue).toEqual([ACTION]);
+  expect(reads).toEqual([null]);
+});
+
+test("an action and a steer queued at the final answer: the call reads both", async () => {
+  const { inbox, queue, reads } = inboxDouble();
+  const model = hooked(new ScriptedModel([textReply("draft"), textReply("final")], CONFIG), (i) => {
+    if (i === 1) queue.push(ACTION, "use 2024");
+  });
+  expect(await output(loopContext(model, { steerInbox: inbox }))).toBe("final");
+  expect(reads).toEqual([null, [ACTION, "use 2024"]]);
+  expect(model.requests[1]!.messages.slice(-2).map((message) => [message.author, message.parts[0]!.type])).toEqual([
+    ["the user", "action"],
+    [null, "text"],
+  ]);
 });
 
 test("a late steer on a tool-free agent works the same", async () => {
@@ -306,6 +331,15 @@ test("through the engine: a send during the final reply writes a steer step and 
     ["user", "and cite"],
   ]);
   expect(result.unread).toEqual(new Map());
+});
+
+test("through the engine: an action sent during the final reply makes no call and stays unread", async () => {
+  const log = freshLog();
+  const model = hooked(new ScriptedModel([textReply("final")], CONFIG), () => send(log, "notes", ACTION));
+  const result = await runWith(await loadFlow(FLOW.replace("!Inbox(str)", "!Inbox(Message)")), {}, model, { log });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(steps(log)).toEqual(["model_call"]);
+  expect(result.unread).toEqual(new Map([["notes", sendSeqs(log)]]));
 });
 
 test("at the cap through the engine the event stays unread and no steer step is written", async () => {

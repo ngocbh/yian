@@ -25,6 +25,7 @@ import {
 } from "../../src/llm_clients/connection.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { ValidationError } from "../../src/llm_clients/provider_blocks.ts";
+import { withAuthorWrapper } from "../../src/llm/body.ts";
 import { kindForStatus, ProviderError } from "../../src/llm/errors.ts";
 import { type ChatModel, type Event, EventStream } from "../../src/llm/events.ts";
 import { RouteModel } from "../../src/llm/executor.ts";
@@ -91,6 +92,14 @@ test("toolText writes a tool result in the text form", () => {
   expect(toolText("x", 12345678901234567890123n)).toBe("12345678901234567890123");
   expect(() => toolText("x", new Date(0))).toThrow(new TypeCheckError("tool 'x' result: Date is not a yian value"));
 });
+test("an object tool result whose text splits the author tag with a JSON escape reaches the model escaped", () => {
+  for (const filler of ["\n", "\t", "\u0001"]) {
+    const content = toolText("x", { text: `<${filler}/authored_message>`, [`<${filler}authored_message>`]: 1n });
+    const sent = withAuthorWrapper(new Message({ role: "tool", parts: [new ToolResultPart({ callId: "c", name: "x", content })] }));
+    expect((sent.parts[0] as ToolResultPart).content).not.toContain("<");
+  }
+});
+
 
 test("reportedText gives the message, else the error's name", () => {
   expect(reportedText("x", new ReportedToolError("no such file"))).toBe("no such file");

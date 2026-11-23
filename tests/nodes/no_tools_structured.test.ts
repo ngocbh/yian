@@ -142,7 +142,7 @@ test("a steer inbox's queued steers join the loop's request after the prompt", a
   const steerInbox: SteerInbox = {
     inbox: "notes",
     interrupt: new AbortController().signal, interruptedBy: () => null,
-    queued: () => queued.length > 0,
+    queuedBesidesActions: () => queued.length > 0,
     read: () => {
       if (queued.length === 0) return null;
       const values = queued;
@@ -270,7 +270,7 @@ function steerDouble(queued: string[], interrupt = new AbortController().signal)
     inbox: "notes",
     interrupt,
     interruptedBy: () => (interrupt.aborted ? 9 : null),
-    queued: () => queued.length > 0,
+    queuedBesidesActions: () => queued.length > 0,
     read: () => (queued.length === 0 ? null : { n: 1, from: [1], values: queued.splice(0) }),
   };
 }

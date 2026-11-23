@@ -1,0 +1,38 @@
+# A person's action sent while the model gives its final answer: unlike a steer, it gets no more
+# model calls. The answer stands, and the action stays queued for the agent's next call.
+kind: run
+flow: |
+  id: late
+  name: late
+  llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    notes: !Inbox(Message)
+  nodes:
+    chat:
+      kind: agent
+      steer_inbox: ${input.notes}
+      system_prompt: Help.
+      prompt: Help the user.
+      output: !str
+  output: ${chat.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  sends:
+  - inbox: notes
+    event: {role: user, author: the user, parts: [{type: action, tool: flows_message, arguments: {run: r1}, result: sent}]}
+    after: {node: chat, model_call: 1}
+  models:
+    chat:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: final
+expect:
+  output:
+    status: succeeded
+    output: final

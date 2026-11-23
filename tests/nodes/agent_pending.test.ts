@@ -245,6 +245,27 @@ test("an ask_user answered inline works as before", async () => {
   expect(sentResults(model, 1)).toEqual([["c1", "yes", false]]);
 });
 
+test("an action sent while the agent waits on ask_user leaves the ask open; it joins the call after the answer", async () => {
+  const model = new ScriptedModel([callReply(["ask_user", { question: "Ship?" }, "c1"]), textReply("done")], CONFIG);
+  const log = freshLog();
+  const options = { env: hostEnv(dir), log, tools: { ask_user: () => pending() }, models: serving(model), runId: "r" };
+  const flow = await loadFlow(agentFlow("ask_user", true).replace("!Inbox(str)", "!Inbox(Message)"));
+  expect((await runFlow(flow, {}, options)).status).toBe("waiting");
+
+  await send(log, "notes", { role: "user", author: "the user", parts: [{ type: "action", tool: "shell_type", summary: "typed ls" }] });
+  const still = await advance(options);
+  expect(still.status, still.failure?.message).toBe("waiting");
+  expect(model.requests).toHaveLength(1);
+  expect(pendingCalls(log).map((call) => [call.callId, call.tool])).toEqual([["r/agent/1/0", "ask_user"]]);
+
+  await complete(log, "r/agent/1/0", { output: "yes" });
+  const resumed = await advance(options);
+  expect(resumed.output).toBe("done");
+  expect(sentResults(model, 1)).toEqual([["c1", "yes", false]]);
+  const last = model.requests[1]!.messages.at(-1)!;
+  expect([last.author, last.parts.map((part) => part.type)]).toEqual(["the user", ["action"]]);
+});
+
 test("an agent with a steer inbox whose tool returns pending() waits", async () => {
   const model = new ScriptedModel([callReply(["ask_user", { question: "Ship?" }, "c1"])], CONFIG);
   const { log, result } = await start(model, { ask_user: () => pending() }, "ask_user", { steerInbox: true });

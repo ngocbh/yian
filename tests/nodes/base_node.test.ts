@@ -17,6 +17,7 @@ import {
   DeferredBindingFault,
   HostOutputError,
   hostOutput,
+  isActionMessage,
   Node,
   NodeAssertFailed,
   NodeBodyError,
@@ -123,8 +124,22 @@ test("a node that produces no messages refuses the message methods", () => {
 
 test("a node opts into its steer inbox through readsSteerInbox; the base node doesn't", () => {
   expect(new FuncNode("f").readsSteerInbox).toBe(false);
-  const caps: NodeCaps = { openSteerInbox: (inbox) => ({ inbox, queued: () => false, read: () => null, interrupt: new AbortController().signal, interruptedBy: () => null }) };
+  const caps: NodeCaps = { openSteerInbox: (inbox) => ({ inbox, queuedBesidesActions: () => false, read: () => null, interrupt: new AbortController().signal, interruptedBy: () => null }) };
   expect(caps.openSteerInbox!("m").read()).toBeNull();
+});
+
+test("an action is a Message whose parts are all actions, one at least", () => {
+  const action = { type: "action", tool: "t" };
+  expect(isActionMessage({ role: "user", author: "Ngoc", parts: [action, action] })).toBe(true);
+  for (const value of [
+    { role: "user", parts: [action, { type: "text", text: "x" }] },
+    { role: "user", parts: [] },
+    { parts: [action] },
+    { role: "bot", parts: [action] },
+    "action",
+  ]) {
+    expect(isActionMessage(value)).toBe(false);
+  }
 });
 
 test("node rejects an origin that isn't an OriginRef", () => {

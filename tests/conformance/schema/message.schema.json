@@ -26,7 +26,8 @@
         {"$ref": "#/$defs/tool_call"},
         {"$ref": "#/$defs/tool_result"},
         {"$ref": "#/$defs/reasoning"},
-        {"$ref": "#/$defs/refusal"}
+        {"$ref": "#/$defs/refusal"},
+        {"$ref": "#/$defs/action"}
       ]
     },
     "text": {
@@ -123,6 +124,19 @@
         "type": {"const": "refusal"},
         "text": {"type": "string"},
         "provider_payload": {"$ref": "#/$defs/provider_payload"}
+      }
+    },
+    "action": {
+      "description": "Something a person did with one of an agent's tools, recorded in a user message without asking for a reply. The host may leave out or replace the arguments and the result, with summary in their place. Adapters send it as text inside the message's author label.",
+      "type": "object",
+      "required": ["type", "tool"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "action"},
+        "tool": {"type": "string", "description": "The tool, by the name the agent knows it."},
+        "summary": {"type": "string", "description": "What the person did, in words."},
+        "arguments": {"type": "object", "description": "The call's arguments, opaque JSON."},
+        "result": {"type": "string", "description": "What the call did."}
       }
     },
     "provider_payload": {

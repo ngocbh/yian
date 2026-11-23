@@ -9,12 +9,23 @@
  * A user message's author goes to the model as an `<authored_message author="...">` …
  * `</authored_message>` wrapper around its parts, and the tag is escaped in every user and tool
  * text, so only the adapter can write it. `authoredText` and `escapeAuthorTags` give a host the
- * same label and escaping for text it sends to an agent outside yian.
+ * same label and escaping for text it sends to an agent outside yian. A person's action on a tool
+ * goes as text (`actionText`) inside the same label.
  */
 
 import { YianTypeError } from "../typesys/errors.ts";
 import type { JsonObject, JsonValue } from "../typesys/json.ts";
-import { copyJson, isPlainObject, Message, type Part, put, TextPart, ToolResultPart, typeName } from "./messages.ts";
+import {
+  ActionPart,
+  copyJson,
+  isPlainObject,
+  Message,
+  type Part,
+  put,
+  TextPart,
+  ToolResultPart,
+  typeName,
+} from "./messages.ts";
 
 /**
  * Deep-merge a provider block into a request body, in place.
@@ -160,14 +171,17 @@ export const AUTHOR_TAG = "authored_message";
 // Any run of whitespace, backslashes, slashes, format characters and other default-ignorable
 // characters (zero-width, bidi controls, variation selectors, Hangul fillers) may sit between
 // `<` and the name, because `<\/authored_message>` (the JSON escaped-slash form a tool may return
-// as text) and an invisible character after `<` read as the tag. A `<` is escaped too when the
-// rest of its text is such a run and the start of the name, because adapters join parts and
+// as text) and an invisible character after `<` read as the tag. So may a JSON escape (`\n`,
+// `\u0001`), since JSON text, such as an object a tool returned or an action's arguments, writes
+// a line break or control character that way. A `<` is escaped too when the rest of its text is
+// such a run and the start of the name or of a `\u` escape, because adapters join parts and
 // Anthropic merges consecutive user and tool messages, so the next part or message can finish
 // the tag. Global regexes are stateful under `.test()`, so a change is detected by comparing the
 // replaced string with the original.
-const FILLER = String.raw`[\s\\\/\p{Cf}\p{Default_Ignorable_Code_Point}]`;
+const FILLER = String.raw`(?:\\[bfnrt]|\\u[0-9a-f]{4}|[\s\\\/\p{Cf}\p{Default_Ignorable_Code_Point}])`;
 const NAME_STARTS = Array.from({ length: AUTHOR_TAG.length }, (_, i) => AUTHOR_TAG.slice(0, AUTHOR_TAG.length - 1 - i));
-const TAG_OPENING = new RegExp(`<(?=${FILLER}*(?:${AUTHOR_TAG}|(?:${NAME_STARTS.join("|")})$))`, "giu");
+const ESCAPE_START = String.raw`\\u[0-9a-f]{0,3}`;
+const TAG_OPENING = new RegExp(`<(?=${FILLER}*(?:${AUTHOR_TAG}|(?:${ESCAPE_START}|${NAME_STARTS.join("|")})$))`, "giu");
 
 /**
  * Return `text` with the `<` of every opening of the author tag, in any case, escaped as `&lt;`,
@@ -226,6 +240,18 @@ export function authoredText(author: string, text: string): string {
   if (author === "") throw new YianTypeError("an author must be a non-empty string");
   const escaped = escapeAuthorTags(text);
   return hasText(text) ? fold(authorOpen(author), escaped, authorClose()) : escaped;
+}
+
+/**
+ * Return the text an action part reaches the model as: `action: ` and a compact JSON object of
+ * the fields it holds, `tool`, `summary`, `arguments` and `result` in that order. It is one line,
+ * so a line break in a field can't start another action. Every adapter sends this text, escaped
+ * and inside its message's author label, whether the message came from a prompt or a steer.
+ */
+export function actionText(part: ActionPart): string {
+  const { tool, summary, arguments: args, result } = part;
+  const fields = { tool, summary: summary ?? undefined, arguments: args ?? undefined, result: result ?? undefined };
+  return `action: ${encodeBody(fields, "an action")}`;
 }
 
 /** One value still to escape in `escapeAuthorTagsInJson`, and where its copy goes. */
@@ -301,12 +327,12 @@ function foldTags(part: TextPart, open: string | null, close: string | null): Te
 }
 
 /**
- * Return `message` as an adapter sends it: a user message's texts and a tool message's results
- * with the author tag escaped, and an authored user message's parts wrapped in `authorOpen` and
- * `authorClose` text parts.
+ * Return `message` as an adapter sends it: a user message's actions as text (`actionText`), its
+ * texts and a tool message's results with the author tag escaped, and an authored user message's
+ * parts wrapped in `authorOpen` and `authorClose` text parts. No adapter sees an action part.
  *
- * A user message is wrapped only when it has an author and some text part holds more than
- * whitespace; an unauthored one stays unmarked, as the flow's own user. With
+ * A user message is wrapped only when it has an author and some text part, an action's included,
+ * holds more than whitespace; an unauthored one stays unmarked, as the flow's own user. With
  * `inline`, the tags are folded into the first and last parts with `"\n"` when those are text,
  * and added as parts of their own otherwise, for routes that send a one-text message as a
  * string. System and assistant messages, and any message with nothing to change, are returned
@@ -317,9 +343,11 @@ export function withAuthorWrapper(message: Message, options: { inline?: boolean 
   // author even where no real one exists.
   let parts: Part[];
   if (message.role === "user") {
-    parts = message.parts.map((part) => (part instanceof TextPart ? escapeText(part) : part));
+    // Actions become text before the check below, so a message of actions alone is signed too.
+    const shown = message.parts.map((part) => (part instanceof ActionPart ? new TextPart(actionText(part)) : part));
+    parts = shown.map((part) => (part instanceof TextPart ? escapeText(part) : part));
     const author = message.author;
-    const sendable = message.parts.some((part) => part instanceof TextPart && hasText(part.text));
+    const sendable = shown.some((part) => part instanceof TextPart && hasText(part.text));
     // The wrapper always closes: Anthropic merges consecutive user turns, and the next message's
     // text must not read as this author's.
     if (author !== null && sendable) {

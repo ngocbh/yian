@@ -46,7 +46,9 @@ import type { ToolModuleRef } from "../tools/modules.ts";
 import type { ToolSet } from "../tools/registry.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import type { VariablePool } from "../typesys/pool.ts";
+import { builtinType } from "../typesys/types.ts";
 import {
+  buildValueAs,
   cutText,
   fromHost,
   isRecord,
@@ -580,14 +582,35 @@ export interface SteerRead {
 export interface SteerInbox {
   /** The top-level inbox read. */
   readonly inbox: string;
-  /** Whether a `read` now would consume anything. */
-  queued(): boolean;
+  /**
+   * Whether a `read` now would consume anything but actions (`isActionMessage`): a person's action
+   * joins the agent's next model call, but never causes one.
+   */
+  queuedBesidesActions(): boolean;
   /** @throws CapabilityFault when the run refuses the step; the node signal's reason once it stopped. */
   read(): SteerRead | null;
   /** Aborted once a host interrupts this inbox's readers; already aborted when the node opens with one pending. */
   readonly interrupt: AbortSignal;
   /** The seq of the `interrupted` record naming this node that it hasn't honored yet, else `null`. */
   interruptedBy(): number | null;
+}
+
+/**
+ * Whether a steer event is an action: a `Message` whose parts are all `action` parts, one at least,
+ * which records what a person did with one of the agent's tools without asking for a reply.
+ */
+export function isActionMessage(value: unknown): boolean {
+  const parts = isRecord(value) ? value["parts"] : undefined;
+  const actions = Array.isArray(parts) && parts.length > 0 && parts.every((part) => isRecord(part) && part["type"] === "action");
+  // The shape first, as it is cheap; then the whole value must be a `Message`.
+  if (!actions) return false;
+  try {
+    buildValueAs(builtinType("Message")!, value);
+    return true;
+  } catch (error) {
+    if (error instanceof TypeCheckError) return false;
+    throw error;
+  }
 }
 
 /**

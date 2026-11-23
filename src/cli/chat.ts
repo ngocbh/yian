@@ -315,7 +315,10 @@ function every(clock: Scheduler, ms: number, listener: () => void): () => void {
   return () => stop.abort();
 }
 
-/** Call `listener` each time run `id` of `runs` publishes a status, until the function returned is called. */
+/**
+ * Call `listener` each time run `id` of `runs` publishes a status, until the function returned is
+ * called. What it throws stops the calls: the view is drawn again on its tick all the same.
+ */
 function onStatusOf(runs: ChildFlows, id: string, listener: () => void): () => void {
   const stop = new AbortController();
   void (async () => {
@@ -327,7 +330,7 @@ function onStatusOf(runs: ChildFlows, id: string, listener: () => void): () => v
       seq = status.seq;
       listener();
     }
-  })();
+  })().catch(() => {});
   return () => stop.abort();
 }
 
@@ -379,7 +382,7 @@ function runList(
         await terminal.showScreen({
           draw: (columns, rows, waiting) => screen.draw(columns, rows, waiting),
           cursor: () => screen.cursor(),
-          key: (key, waiting) => screen.key(key, waiting),
+          key: (key) => screen.key(key),
           subscribe: (redraw) => {
             const stop = [every(ticker, VIEW_TICK_MS, redraw), onStatusOf(runs, id, redraw), screen.subscribe(redraw)];
             return () => stop.forEach((each) => each());

@@ -1855,10 +1855,9 @@ describe("a run's view while the chat goes on", () => {
       expect(rows().at(-1)).toBe("esc to go back to the chat");
       // The reply asks to write a file: its approval waits behind the view, which says so.
       gate.resolve();
-      await until(() => rows().at(-1) === "the chat waits on you · esc to answer");
+      await until(() => rows().at(-1) === "the chat waits on you · ctrl-c to answer");
       expect(rows()[0]).toBe("r1  color.yaml  ● asks");
-      stdin.write(ESCAPE);
-      await pastEscape();
+      stdin.write(CTRL_C);
       await until(() => rows().includes("? Write blue.yaml (Use arrow keys)"));
       // What the chat drew while the view was up is printed above the card, not after it.
       const shown = rows();
@@ -2006,6 +2005,46 @@ nodes:
     kind: loop
     call: turn
     input: {closed: false, notes: "\${input.notes}"}
+    while: not closed
+output: done
+`;
+
+/** Two loops, a turn per message: A takes from `notes`, B from `extra`, each replying with an agent that reads the rest as steers. */
+const PAIR = `id: pair
+name: pair
+llm_config: {provider: xai, model: grok-4.3}
+input:
+  notes: !Inbox(Message)
+  extra: !Inbox(Message)
+defs:
+  turn:
+    input:
+      closed: !bool
+      box: !Inbox(Message)
+    nodes:
+      heard:
+        kind: call
+        call: take
+        input: {from: "\${input.box}", take: one}
+      reply:
+        kind: agent
+        steer_inbox: \${input.box}
+        input: {said: "\${heard.output.events}"}
+        prompt:
+          - \${said}
+        output: !Optional(str)
+    output:
+      closed: \${heard.output.closed}
+nodes:
+  a:
+    kind: loop
+    call: turn
+    input: {closed: false, box: "\${input.notes}"}
+    while: not closed
+  b:
+    kind: loop
+    call: turn
+    input: {closed: false, box: "\${input.extra}"}
     while: not closed
 output: done
 `;
@@ -2175,6 +2214,33 @@ describe("a run's view presses the assistant's tools as the user", () => {
   );
 
   test(
+    "Esc on an inbox the run waits to take from interrupts nothing, and the view and the action say so",
+    async () => {
+      let working = false;
+      const { stdin, rows, done, log } = await viewOf("pair.yaml", PAIR, (request, signal) => {
+        if (chatting(request)) return textReply("noted.");
+        working = true;
+        // B's agent works until it is cut; A waits on its take of `notes`.
+        return new Promise((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason), { once: true }));
+      });
+      stdin.write(`\tto b${ENTER}`);
+      await until(() => working && rows()[0] === "r1  pair.yaml  ● running");
+      stdin.write("\x1b[Z");
+      await until(() => rows().at(-1) === "esc interrupts notes · ctrl-c goes back to the chat");
+      stdin.write(ESCAPE);
+      const said = "nothing to interrupt: the run waits for a message on notes, or is already stopping";
+      await until(() => rows().slice(-8, -5).join(" ").includes(said));
+      expect(records(log).filter((record) => record instanceof InterruptedRecord)).toEqual([]);
+      expect(actions().map((action) => action.parts[0]!.result)).toEqual(["sent", "nothing to interrupt (took back 0 messages)"]);
+      stdin.write(CTRL_C);
+      await until(() => !rows()[0]!.startsWith("r1  pair.yaml"));
+      stdin.write(`/exit${ENTER}`);
+      expect(await done).toBe(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
     "Esc at rest and Ctrl-C go back to the chat, pressing nothing",
     async () => {
       const { stdin, rows, done, open, log } = await viewOf("two.yaml", TWO, () => textReply("noted."));
@@ -2201,6 +2267,8 @@ describe("a run's view presses the assistant's tools as the user", () => {
     async () => {
       const { stdin, rows, done, log } = await viewOf("two.yaml", TWO, () => textReply("noted."));
       stdin.write(`/close${ENTER}`);
+      await until(() => rows().includes("close notes? nothing more can be sent to it (y/N)"));
+      stdin.write("y");
       await until(() => rows().includes("closed notes"));
       expect(records(log).filter((record) => record instanceof InboxClosedRecord).map((record) => [record.inbox, record.by])).toEqual([["notes", relayed]]);
       stdin.write(`late${ENTER}`);

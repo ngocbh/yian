@@ -190,6 +190,8 @@ export interface HoldFields {
   readonly index: number;
   /** Where its tool comes from, as the host's check was asked about it. */
   readonly source: ToolSource;
+  /** What the call acts on, as the host's check saw it (`GatedCall.target`); `null` for none. */
+  readonly target: Readonly<JsonObject> | null;
   /** The last call of its concurrency group: the reply's calls after it wait until the hold is answered. */
   readonly groupEnd: number;
 }
@@ -598,15 +600,15 @@ export class AgentSteps {
 
   /**
    * Write a call the host's check held as a hold's `pending` step: `call_id`, `tool`,
-   * `tool_call_id`, `reply` and `index`, as `pending` writes them, then `held: true`, its `source`
-   * and `group_end`. It is written before the call's tool runs, so it isn't settled: once the run
-   * stops it isn't written.
+   * `tool_call_id`, `reply` and `index`, as `pending` writes them, then `held: true`, its `source`,
+   * its `target` when it has one, and `group_end`. It is written before the call's tool runs, so it
+   * isn't settled: once the run stops it isn't written.
    *
    * @returns The step's `n`.
    * @throws Whatever `NodeSteps.record` throws.
    */
   hold(call: HoldFields): number {
-    const { callId, tool, toolCallId, reply, index, source, groupEnd } = call;
+    const { callId, tool, toolCallId, reply, index, source, target, groupEnd } = call;
     return this.#record({
       kind: "pending",
       call_id: callId,
@@ -616,6 +618,7 @@ export class AgentSteps {
       index: BigInt(index),
       held: true,
       source: { ...source },
+      ...(target === null ? {} : { target: target as ValueRecord }),
       group_end: BigInt(groupEnd),
     });
   }

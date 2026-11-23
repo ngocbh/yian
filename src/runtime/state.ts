@@ -126,7 +126,7 @@ import {
 import { decodeTyped, SYSTEM_PREFIX } from "./sources.ts";
 import { LOAD_SKILL } from "../skills/tool.ts";
 import { ASK, ASK_USER, SLEEP, TAKE, toolCallId } from "../tools/context.ts";
-import { checkGateText, isToolSource } from "../tools/gate.ts";
+import { checkGateText, GATE_TEXT_MAX_BYTES, isToolSource } from "../tools/gate.ts";
 import { visibleToolName } from "../tools/grants.ts";
 import {
   applyWaitsRecord,
@@ -4358,23 +4358,38 @@ function validateSteerStep(state: RunState, nodeId: string, step: Readonly<JsonO
 }
 
 /** The steps' fields only an AGENT's `pending` step holds. */
-const AGENT_PENDING_FIELDS = ["tool_call_id", "reply", "index", "flow", "note", "held", "source", "group_end"] as const;
+const AGENT_PENDING_FIELDS = [
+  "tool_call_id", "reply", "index", "flow", "note", "held", "source", "target", "group_end",
+] as const;
 
 /** The keys of a held call's `pending` step: the hold, written before its tool runs. */
 const HOLD_STEP_KEYS = ["kind", "call_id", "tool", "tool_call_id", "reply", "index", "held", "source", "group_end"] as const;
 
 /**
- * Require a hold's `pending` step to hold exactly `HOLD_STEP_KEYS`: `held: true`, a tool other
- * than the never-gated `ask_user` and `load_skill`, a `ToolSource`, an `index` among the `calls`
- * tool calls of its reply, and a `group_end` (the last call of its concurrency group) from its
- * `index` to the reply's last call. A step holds `source` and `group_end` only as a hold.
+ * Require a hold's `pending` step to hold exactly `HOLD_STEP_KEYS`, and maybe a `target`: `held:
+ * true`, a tool other than the never-gated `ask_user` and `load_skill`, a `ToolSource`, a target
+ * as the host's check saw it (a JSON object within `GATE_TEXT_MAX_BYTES`), an `index` among the
+ * `calls` tool calls of its reply, and a `group_end` (the last call of its concurrency group) from
+ * its `index` to the reply's last call. A step holds `source`, `target` and `group_end` only as a
+ * hold.
  */
 function requireHoldStep(step: Readonly<JsonObject>, index: number, calls: number): void {
-  if (!Object.hasOwn(step, "held")) throw new YianRangeError("a pending step holds source and group_end only as a hold");
-  if (Object.keys(step).length !== HOLD_STEP_KEYS.length || !HOLD_STEP_KEYS.every((key) => Object.hasOwn(step, key))) {
+  if (!Object.hasOwn(step, "held")) {
+    throw new YianRangeError("a pending step holds source, group_end and target only as a hold");
+  }
+  const keys = Object.keys(step).filter((key) => key !== "target");
+  if (keys.length !== HOLD_STEP_KEYS.length || !HOLD_STEP_KEYS.every((key) => Object.hasOwn(step, key))) {
     throw new YianRangeError(
-      "a hold's pending step holds exactly kind, call_id, tool, tool_call_id, reply, index, held, source and group_end",
+      "a hold's pending step holds exactly kind, call_id, tool, tool_call_id, reply, index, held, source and group_end, " +
+        "and may hold target",
     );
+  }
+  if (Object.hasOwn(step, "target")) {
+    if (!isRecord(step["target"])) throw new YianRangeError("a hold's target must be a JSON object");
+    const size = eventBytes(step["target"]);
+    if (size > GATE_TEXT_MAX_BYTES) {
+      throw new YianRangeError(`a hold's target is ${size} UTF-8 bytes, over the limit of ${GATE_TEXT_MAX_BYTES}`);
+    }
   }
   if (step["held"] !== true) throw new YianRangeError("a hold's pending step says held: true");
   if (step["tool"] === ASK_USER || step["tool"] === LOAD_SKILL) {
@@ -4473,7 +4488,7 @@ function validateAgentPendingStep(state: RunState, nodeId: string, step: Readonl
     const which = `call ${index} of node ${reprText(nodeId)}'s reply ${reply}`;
     throw new YianRangeError(`pending call_id ${writeAsText(callId ?? null)} isn't ${which}`);
   }
-  if (["held", "source", "group_end"].some((key) => Object.hasOwn(step, key))) {
+  if (["held", "source", "target", "group_end"].some((key) => Object.hasOwn(step, key))) {
     requireHoldStep(step, index, replyCallCount(state, nodeId, reply));
   } else if (Object.hasOwn(step, "flow")) {
     const flows = state.flow.nodes.get(nodeId)!.originChildSegments();

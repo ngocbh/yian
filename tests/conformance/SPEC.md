@@ -615,8 +615,8 @@ For example:
   (`closed: skipped` for a call a host interrupt skipped, `closed: crashed` for one a resume
   closed because its run was cut off before its result, `closed: refused` for one the hook
   refused, and the hook's `note` on an allowed call's first record), its `pending` step (`held`,
-  `source` and `group_end` for a call the hook held) and its `released` step. Its times
-  (`started_at`, `first_token_at`) are left out.
+  `source`, `group_end` and the tool's `target`, when it gave one, for a call the hook held) and
+  its `released` step. Its times (`started_at`, `first_token_at`) are left out.
 - In TOOL steps, `retry_in` is a float. A `failed` step's error type and a failed `model_call`'s
   error `kind` stay as recorded: a class name (as under Error classes), or a provider error's
   kind such as `rate_limit`.

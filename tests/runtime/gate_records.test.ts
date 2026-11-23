@@ -276,7 +276,8 @@ describe("a hold's pending step", () => {
   });
 
   const EXACT =
-    "a hold's pending step holds exactly kind, call_id, tool, tool_call_id, reply, index, held, source and group_end";
+    "a hold's pending step holds exactly kind, call_id, tool, tool_call_id, reply, index, held, source and group_end, and may hold target";
+  const ONLY_HOLD = "a pending step holds source, group_end and target only as a hold";
   const NEVER_HELD = (tool: string) => `a hold's tool can't be ${tool}, whose calls are never checked`;
   const GROUP_END = "a hold's group_end must be an int from its index 1 to its reply's last call 2";
   test.each<[string, (step: Record<string, unknown>) => void, string]>([
@@ -284,7 +285,13 @@ describe("a hold's pending step", () => {
     ["a deadline", (s) => (s["deadline"] = "2026-10-21T00:00:00.000Z"), EXACT],
     ["flow fields", (s) => Object.assign(s, { flow: true, arguments: {}, scope: "a/f#0" }), EXACT],
     ["no source", (s) => delete s["source"], EXACT],
-    ["no held", (s) => delete s["held"], "a pending step holds source and group_end only as a hold"],
+    ["no held", (s) => delete s["held"], ONLY_HOLD],
+    ["a target on a call that isn't held", (s) => {
+      for (const key of ["held", "source", "group_end"]) delete s[key];
+      s["target"] = {};
+    }, ONLY_HOLD],
+    ["a target that isn't an object", (s) => (s["target"] = ["x"]), "a hold's target must be a JSON object"],
+    ["a target over the bound", (s) => (s["target"] = { text: "x".repeat(4096) }), "a hold's target is 4107 UTF-8 bytes, over the limit of 4096"],
     ["held false", (s) => (s["held"] = false), "a hold's pending step says held: true"],
     ["an ask_user", (s) => (s["tool"] = "ask_user"), NEVER_HELD("ask_user")],
     ["a load_skill", (s) => (s["tool"] = "load_skill"), NEVER_HELD("load_skill")],
@@ -454,16 +461,19 @@ describe("a held call's run state", () => {
     );
   });
 
-  test("pendingCalls and the waits show it held, with its recorded source", () => {
+  test("pendingCalls and the waits show it held, with its recorded source and target", () => {
     const { log, state, path } = replied();
-    step(log, state, "a", holdOf(0));
+    const target = { run: "r1", call: { tool: "push", n: 2n, at: 1.5 } };
+    step(log, state, "a", { ...holdOf(0), target });
     step(log, state, "a", pendingOf(1));
     commitPrepared(log, state, prepareNodeWaiting(state, "a", { callIds: [callOf(0), callOf(1)] }));
     log.close();
-    expect(pendingCalls(path).map(({ callId, held, source, arguments: args }) => ({ callId, held, source, args }))).toEqual([
-      { callId: callOf(0), held: true, source: { kind: "host", group: null, tool: "lookup" }, args: {} },
-      { callId: callOf(1), held: false, source: null, args: {} },
+    const listed = pendingCalls(path).map(({ callId, held, source, target, arguments: args }) => ({ callId, held, source, target, args }));
+    expect(listed).toEqual([
+      { callId: callOf(0), held: true, source: { kind: "host", group: null, tool: "lookup" }, target, args: {} },
+      { callId: callOf(1), held: false, source: null, target: null, args: {} },
     ]);
+    expect(Object.isFrozen(listed[0]!.target!["call"])).toBe(true);
     expect(waitInfos(state.waits).map(({ callId, held }) => [callId, held])).toEqual([
       [callOf(0), true],
       [callOf(1), false],

@@ -1,15 +1,17 @@
 /**
  * The host's check before each tool call an AGENT's model makes (`BeforeToolCall`, the
  * `beforeToolCall` option of `runFlow` and `advance`): the call it sees, where the call's tool
- * comes from (`ToolSource`), the decisions it may give, and the bound on the texts a decision
- * carries. A run with a hook records that it is gated, and a resume of it needs one.
+ * comes from (`ToolSource`), what the call acts on as its tool says (`GatedCall.target`), the
+ * decisions it may give, and the bound on the texts a decision and a target carry. A run with a
+ * hook records that it is gated, and a resume of it needs one.
  *
- * Knows about: tools/context and typesys.
+ * Knows about: tools/context, llm/messages (the JSON check) and typesys.
  */
 
+import { checkJsonValue, MessageFormatError } from "../llm/messages.ts";
 import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
-import type { JsonObject } from "../typesys/json.ts";
-import { isRecord } from "../typesys/values.ts";
+import { eventBytes, freezeParsed, type JsonObject } from "../typesys/json.ts";
+import { isRecord, jsTypeName } from "../typesys/values.ts";
 import type { PendingMarker } from "./context.ts";
 
 /**
@@ -45,6 +47,11 @@ export interface GatedCall {
   readonly source: ToolSource;
   /** The model's parsed arguments, as the recorded reply holds them; never a validator's output. */
   readonly arguments: Readonly<JsonObject>;
+  /**
+   * What the call acts on, as its tool's `gateTarget` gives it (`checkGateTarget`), never read from
+   * the model's arguments; `null` when the tool declares none or gives `null`.
+   */
+  readonly target: Readonly<JsonObject> | null;
   /** The flow calls enclosing the agent, outermost first; empty at the top level. */
   readonly scopes: readonly FlowCallScope[];
   /** 1, or more for a call sent again after a crash cut it. */
@@ -85,7 +92,7 @@ export type GateDecision =
  */
 export type BeforeToolCall = (call: GatedCall, ctx: GateContext) => GateDecision | PromiseLike<GateDecision>;
 
-/** The longest note, refusal text or release note, in UTF-8 bytes. */
+/** The longest note, refusal text, release note or target (as the run log writes it), in UTF-8 bytes. */
 export const GATE_TEXT_MAX_BYTES = 4096;
 
 /** What the model reads when the hook fails or gives no valid decision. */
@@ -132,4 +139,33 @@ export function checkGateText(value: unknown, what: string): string {
     throw new YianRangeError(`${what} is ${size} UTF-8 bytes, over the limit of ${GATE_TEXT_MAX_BYTES}`);
   }
   return value;
+}
+
+/**
+ * Return `value` when it is a target a gated call may carry (`GatedCall.target`): `null`, or a
+ * deep-frozen copy of a plain JSON object of at most `GATE_TEXT_MAX_BYTES` UTF-8 bytes as the run
+ * log writes it; `what` names it in errors.
+ *
+ * @throws TypeError when it is neither, a Promise among them, or holds a value that isn't JSON.
+ * @throws RangeError when it is over the bound.
+ */
+export function checkGateTarget(value: unknown, what: string): Readonly<JsonObject> | null {
+  if (value === null) return null;
+  if (!isRecord(value)) {
+    // A Promise isn't a target; handle its rejection so it can't crash the process.
+    if (value instanceof Promise) value.catch(() => {});
+    throw new YianTypeError(`${what} must be a JSON object or null, got ${jsTypeName(value)}`);
+  }
+  let copy: JsonObject;
+  try {
+    copy = checkJsonValue(value, what) as JsonObject;
+  } catch (error) {
+    if (error instanceof MessageFormatError) throw new YianTypeError(error.message);
+    throw error;
+  }
+  const size = eventBytes(copy);
+  if (size > GATE_TEXT_MAX_BYTES) {
+    throw new YianRangeError(`${what} is ${size} UTF-8 bytes, over the limit of ${GATE_TEXT_MAX_BYTES}`);
+  }
+  return freezeParsed(copy);
 }

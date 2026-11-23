@@ -450,6 +450,7 @@ const first = await runFlow(flow, inputs, { log, tools, beforeToolCall });
 | `tool` | The name the model sees |
 | `source` | Where the tool comes from: `{kind: "host", group, tool}` (`group` is `null` for a top-level tool), `{kind: "mcp", server, tool}`, `{kind: "module", alias, ref, export}`, `{kind: "memory", input, tool}` or `{kind: "flow", flow, library}` |
 | `arguments` | The model's arguments, as its reply holds them |
+| `target` | What the call acts on, as its tool's `gateTarget` says (below); `null` when it says nothing |
 | `scopes` | The flow calls enclosing the agent, outermost first, each `{scope, callId}` |
 | `attempt` | 1, or more for a call sent again after a crash or a stop |
 
@@ -473,18 +474,27 @@ or the node stops (a failing sibling, the end of a flow call's scope), or the ag
   person.
 - A hook that throws or rejects, or an answer of any other shape, refuses the call with `The
   host's permission check failed; the call didn't run.` and a warning. So does a note or refusal
-  that is empty, holds a lone surrogate, or is over 4096 UTF-8 bytes.
+  that is empty, holds a lone surrogate, or is over 4096 UTF-8 bytes, and a `gateTarget` that
+  throws or gives anything but `null` or a JSON object of at most 4096 UTF-8 bytes; the hook
+  isn't asked then.
 - A refusal publishes `ToolCallStarted`, then `ToolCallFinished` with `error: "refused"`.
 - The model never reads a note. It is stored on the call's first record, and `agentCall`'s
   `toolResults` show it as `note`; a crash before that record loses it. Notes, a release's too,
   are plain text in the log, so keep secrets out of them.
 
+A tool that acts on something else, such as one that approves another run's held call, can show
+the hook what that is: its `gateTarget` (see [Host tools](/agents/#host-tools)) gives
+`call.target`, read from your own state, so your rule never depends on how the model describes the
+call. A tool that must never run unchecked sets `refuseUngated`: in a run without
+`beforeToolCall`, an agent's call to it reads that text as its error, and the tool doesn't run.
+
 ### Held calls
 
 A held call waits as a [pending host call](#pending-host-calls) does, so the run needs a `log`;
-without one the agent fails. `CallHeld` reports it, and `pendingCalls` lists it with `held: true`
-and its `source`. Answer it once one of them shows it: before, `complete` and `release` refuse it
-with `unknown_call`. Holds survive a restart.
+without one the agent fails. `CallHeld` reports it, and `pendingCalls` lists it with `held: true`,
+its `source` and its `target`, so you can show the same card after a restart. Answer it once one of
+them shows it: before, `complete` and `release` refuse it with `unknown_call`. Holds survive a
+restart.
 
 ```ts check=fragment
 // The person approved, or declined:

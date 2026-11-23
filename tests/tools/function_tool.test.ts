@@ -360,6 +360,20 @@ describe("withExecute", () => {
     expect(withExecute(kept, () => "y").resumable).toBe(true);
     expect(() => tool({ ...base, resumable: "yes" as never })).toThrow("FunctionTool 't' resumable must be a boolean");
   });
+
+  test("a tool's gateTarget and refuseUngated are checked, absent by default, and kept through withExecute", () => {
+    const base = { name: "t", description: "d", parameters: { type: "object", properties: {} }, execute: () => "x" };
+    expect([tool(base).gateTarget, tool(base).refuseUngated]).toEqual([null, null]);
+    const gateTarget = () => ({ on: "x" });
+    const kept = withExecute(tool({ ...base, gateTarget, refuseUngated: "Ask the user." }), () => "y");
+    expect([kept.gateTarget, kept.refuseUngated]).toEqual([gateTarget, "Ask the user."]);
+    expect(() => tool({ ...base, gateTarget: 1 as never })).toThrow(new TypeError("FunctionTool 't' gateTarget must be a function"));
+    expect(() => tool({ ...base, refuseUngated: 5 as never })).toThrow(new TypeError("FunctionTool 't' refuseUngated must be a string"));
+    expect(() => tool({ ...base, refuseUngated: "" })).toThrow(new RangeError("FunctionTool 't' refuseUngated must be a non-empty string"));
+    expect(() => tool({ ...base, refuseUngated: "x".repeat(4097) })).toThrow(
+      new RangeError("FunctionTool 't' refuseUngated is 4097 UTF-8 bytes, over the limit of 4096"),
+    );
+  });
 });
 
 describe("toolTypes", () => {
@@ -506,9 +520,11 @@ describe("FunctionTool in a ToolSet and the registry", () => {
     expect(tool.description).toBe("Echo.");
   });
 
-  test("registerTool's description override keeps the resumable flag", () => {
-    registerTool("echo", build({ resumable: true }), { descriptionOverride: "New." });
-    expect(TOOL_REGISTRY.get("echo")!.resumable).toBe(true);
+  test("registerTool's description override keeps the resumable flag, the gate target and the ungated refusal", () => {
+    const gateTarget = () => null;
+    registerTool("echo", build({ resumable: true, gateTarget, refuseUngated: "No." }), { descriptionOverride: "New." });
+    const { resumable, gateTarget: kept, refuseUngated } = TOOL_REGISTRY.get("echo")!;
+    expect([resumable, kept, refuseUngated]).toEqual([true, gateTarget, "No."]);
   });
 });
 

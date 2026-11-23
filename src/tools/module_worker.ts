@@ -167,8 +167,11 @@ export interface ToolModuleListing {
 /** The keys a plain-object tool may hold: the fields of `tool()`'s options. */
 const OPTION_KEYS: readonly string[] = [
   "name", "description", "parameters", "parametersJsonSchema", "output", "outputJsonSchema",
-  "execute", "isConcurrencySafe", "resumable",
+  "execute", "isConcurrencySafe", "resumable", "gateTarget", "refuseUngated",
 ] satisfies (keyof ToolOptions)[];
+
+/** The options only a host tool may set: a run's stand-in for a module's tool carries neither. */
+const HOST_ONLY_KEYS = ["gateTarget", "refuseUngated"] as const;
 
 /** The fields `tool()` needs besides `execute`. */
 const REQUIRED_KEYS = ["name", "description", "parameters"] as const;
@@ -246,7 +249,12 @@ function exportOutcome(head: string, name: string, value: unknown): FunctionTool
   if (typeof shown !== "string") return { refused: `${head} name must be a string, got ${jsTypeName(shown)}` };
   if (shown !== name) return { refused: `${head} holds a tool named ${reprText(shown)}; rename one` };
   try {
-    return build();
+    const built = build();
+    const hostOnly = HOST_ONLY_KEYS.find((key) => built[key] !== null);
+    if (hostOnly !== undefined) {
+      return { refused: `${head} sets ${hostOnly}, which only a host tool passed in the run's tools may` };
+    }
+    return built;
   } catch (error) {
     // `tool()` and `FunctionTool` name the tool first, by the export's name here: name the export.
     const message = thrownText(error, false);

@@ -26,11 +26,11 @@ import { userMessage } from "../../src/nodes/agent/structured.ts";
 import { CapabilityFault } from "../../src/nodes/base.ts";
 import { type CallView, NodeSteps } from "../../src/nodes/contracts.ts";
 import { withWarnings } from "../../src/platform.ts";
-import { advance, agentCall, complete, interrupt, pendingCalls, runFlow } from "../../src/run.ts";
+import { advance, agentCall, complete, interrupt, pendingCalls, release, runFlow } from "../../src/run.ts";
 import { NodeStepRecord, readRunLog } from "../../src/runtime/log.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { pending } from "../../src/tools/context.ts";
-import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
+import { FunctionTool, tool, type ToolOptions } from "../../src/tools/function_tools.ts";
 import { type BeforeToolCall, GATE_FAILED_TEXT, type GatedCall, type GateDecision, type ToolSource } from "../../src/tools/gate.ts";
 import { nodeScopeKey } from "../../src/tools/grants.ts";
 import { registerTool, TOOL_REGISTRY, ToolSet } from "../../src/tools/registry.ts";
@@ -187,8 +187,8 @@ test("the hook decides a whole group before any call starts; a refusal is record
   expect(ran).toEqual(["lookup"]);
   const n = shape(log).indexOf("model_call") + 1;
   expect(asked).toEqual([
-    { callId: `r/reply/${n}/0`, node: "reply", tool: "lookup", source: { kind: "host", group: null, tool: "lookup" }, arguments: { q: "x" }, scopes: [], attempt: 1 },
-    { callId: `r/reply/${n}/1`, node: "reply", tool: "team_a", source: { kind: "host", group: "team", tool: "a" }, arguments: { q: "y" }, scopes: [], attempt: 1 },
+    { callId: `r/reply/${n}/0`, node: "reply", tool: "lookup", source: { kind: "host", group: null, tool: "lookup" }, arguments: { q: "x" }, target: null, scopes: [], attempt: 1 },
+    { callId: `r/reply/${n}/1`, node: "reply", tool: "team_a", source: { kind: "host", group: "team", tool: "a" }, arguments: { q: "y" }, target: null, scopes: [], attempt: 1 },
   ]);
   // Frozen, so the hook can't change what the tool gets.
   expect([asked[0], asked[0]!.arguments, asked[0]!.source, asked[0]!.scopes].every(Object.isFrozen)).toBe(true);
@@ -572,8 +572,8 @@ test.each<[string, string, JsonObject, ToolSource]>([
   expect(result.status, result.failure?.message).toBe("succeeded");
   const n = shape(log).indexOf("model_call") + 1;
   expect(asked).toEqual([
-    { callId: `r/reply/${n}/0`, node: "reply", tool: name, source, arguments: args, scopes: [], attempt: 1 },
-    { callId: `r/reply/${n}/1`, node: "reply", tool: "lookup", source: { kind: "host", group: null, tool: "lookup" }, arguments: { q: "x" }, scopes: [], attempt: 1 },
+    { callId: `r/reply/${n}/0`, node: "reply", tool: name, source, arguments: args, target: null, scopes: [], attempt: 1 },
+    { callId: `r/reply/${n}/1`, node: "reply", tool: "lookup", source: { kind: "host", group: null, tool: "lookup" }, arguments: { q: "x" }, target: null, scopes: [], attempt: 1 },
   ]);
   expect(Object.isFrozen(asked[0]!.source)).toBe(true);
   // A refused flow call grows no scope.
@@ -1864,4 +1864,145 @@ test("a resend the hook holds is closed crashed with a warning, since it may hav
   expect([asked.length, ran]).toEqual([2, ["lookup"]]);
   expect(shape(log)).toEqual(["model_call", "crashed", "model_call"]);
   expect(warnings).toEqual(["node 'reply': beforeToolCall held tool 'lookup', sent again after a cut; it may have run, so it is closed crashed"]);
+});
+
+// ------------------------------------------------------------------------------------------- //
+// What a call acts on (its tool's `gateTarget`), and a tool that never runs without the hook
+// (`refuseUngated`).
+// ------------------------------------------------------------------------------------------- //
+
+/** What the host knows of each call `approve` may approve, by id; the model writes none of it. */
+const HELD_CALLS: Record<string, JsonObject> = {
+  h1: { tool: "push", arguments: { branch: "main" } },
+  h2: { tool: "rm", arguments: { path: "/" } },
+  h3: { tool: "push", arguments: { branch: "dev" } },
+};
+
+/**
+ * `approve`, noting each run in `ran`, whose target is the host's record of the call it approves,
+ * noting the call id it was read for in `seen`; `extra` replaces options.
+ */
+const approveTool = (ran: string[], seen: string[] = [], extra: Partial<ToolOptions> = {}) =>
+  tool({
+    name: "approve",
+    description: "Approve a held call.",
+    parameters: { type: "object", properties: { call: { type: "string" }, why: { type: "string" } }, required: ["call"] },
+    gateTarget: (args, ctx) => {
+      seen.push(ctx.callId);
+      return { call: String(args.call), held: HELD_CALLS[String(args.call)] ?? null };
+    },
+    execute: (args) => {
+      ran.push(`approve:${String(args.call)}`);
+      return "approved";
+    },
+    ...extra,
+  });
+
+/** A run's options at `log` over `approve`, with `model`. */
+const approveOptions = (log: string, approve: FunctionTool, model: ScriptedModel) => ({
+  env, log, runId: "r", tools: { approve }, models: serving(model),
+});
+
+test("the hook sees what a call acts on as its tool's target, never the model's words; a run, a refusal and a hold all work", async () => {
+  const ran: string[] = [];
+  const seen: string[] = [];
+  const { asked, hook } = asking((call) => {
+    const held = call.target!["held"] as JsonObject;
+    if (held["tool"] === "rm") return { refuse: "Never rm." };
+    return (held["arguments"] as JsonObject)["branch"] === "main" ? pending() : undefined;
+  });
+  // The model's words describe harmless calls; the targets hold what the host knows of them.
+  const replies = () => [
+    callReply(["approve", { call: "h3", why: "a read" }, "c1"], ["approve", { call: "h2" }, "c2"], ["approve", { call: "h1", why: '{"tool": "read"}' }, "c3"]),
+    textReply("done"),
+  ];
+  const log = freshLog();
+  const approve = approveTool(ran, seen);
+  const first = await runFlow(await flowOf("approve"), {}, gated(approveOptions(log, approve, new ScriptedModel(replies(), CONFIG)), hook));
+  expect(first.status, first.failure?.message).toBe("waiting");
+  expect(ran).toEqual(["approve:h3"]);
+  const targets = ["h3", "h2", "h1"].map((id) => ({ call: id, held: HELD_CALLS[id]! }));
+  expect(asked.map((call) => call.target)).toEqual(targets);
+  expect(asked[2]!.arguments).toEqual({ call: "h1", why: '{"tool": "read"}' });
+  // Read with the context the call's tool would get.
+  expect(seen).toEqual(asked.map((call) => call.callId));
+  const target = asked[0]!.target!;
+  expect([target, target["held"], (target["held"] as JsonObject)["arguments"]].every(Object.isFrozen)).toBe(true);
+  expect(stepsOf(log)[2]).toMatchObject({ call_id: "c2", output: "Never rm.", closed: "refused" });
+  // The hold records it, so a host rebuilds its card from the log after a restart.
+  expect(stepsOf(log)[3]).toMatchObject({ held: true, target: targets[2] });
+  expect(pendingCalls(log).map((call) => [call.callId, call.target])).toEqual([["r/reply/1/2", targets[2]!]]);
+  await release(log, "r/reply/1/2", { env });
+  const model = new ScriptedModel(replies().slice(1), CONFIG);
+  const done = await advance(gated(approveOptions(log, approve, model), hook));
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect([ran, asked.length]).toEqual([["approve:h3", "approve:h1"], 3]);
+  expect(read(model, 0)).toEqual([["c1", "approved", false], ["c2", "Never rm.", true], ["c3", "approved", false]]);
+});
+
+test("a tool without a target, or one giving null, shows the hook null, and a hold records none", async () => {
+  const { asked, hook } = asking(() => pending());
+  const model = new ScriptedModel([callReply(["approve", { call: "h9" }, "c1"])], CONFIG);
+  const log = freshLog();
+  const approve = approveTool([], [], { gateTarget: () => null });
+  const { status } = await runFlow(await flowOf("approve"), {}, gated(approveOptions(log, approve, model), hook));
+  expect(status).toBe("waiting");
+  expect(asked.map((call) => call.target)).toEqual([null]);
+  expect(Object.hasOwn(stepsOf(log)[1]!, "target")).toBe(false);
+  expect(pendingCalls(log).map((call) => call.target)).toEqual([null]);
+  const lookups = asking();
+  await gatedRun("lookup", oneLookup(), lookups.hook);
+  expect(lookups.asked.map((call) => call.target)).toEqual([null]);
+});
+
+test.each<[string, (args: Record<string, unknown>) => unknown, RegExp]>([
+  ["a throw", () => { throw new Error("boom"); }, /: its gateTarget threw: boom;/],
+  ["a list", () => ["x"], /: its gateTarget's result must be a JSON object or null, got Array;/],
+  ["a Promise", () => Promise.resolve({ a: 1 }), /: its gateTarget's result must be a JSON object or null, got Promise;/],
+  ["a non-JSON value", () => ({ when: new Date(0) }), /: its gateTarget's result\.when: Date is not a JSON value;/],
+  ["an oversized object", () => ({ text: "x".repeat(4096) }), /: its gateTarget's result is 4107 UTF-8 bytes, over the limit of 4096;/],
+])("a target that is %s refuses the call with the failed check's text and a warning; the hook isn't asked", async (_, gateTarget, message) => {
+  const warnings: string[] = [];
+  const ran: string[] = [];
+  const { asked, hook } = asking();
+  const model = new ScriptedModel([callReply(["approve", { call: "h1" }, "c1"]), textReply("done")], CONFIG);
+  const approve = approveTool(ran, [], { gateTarget: gateTarget as ToolOptions["gateTarget"] });
+  const log = freshLog();
+  const result = await withWarnings(
+    (text) => void warnings.push(text),
+    async () => runFlow(await flowOf("approve"), {}, gated(approveOptions(log, approve, model), hook)),
+  );
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect([ran, asked]).toEqual([[], []]);
+  expect(stepsOf(log)[1]).toMatchObject({ call_id: "c1", output: GATE_FAILED_TEXT, closed: "refused" });
+  expect(warnings).toHaveLength(1);
+  expect(warnings[0]).toStartWith("node 'reply': beforeToolCall failed for tool 'approve': ");
+  expect(warnings[0]).toMatch(message);
+});
+
+test("a tool that refuses to run ungated answers a call in a run without the hook with its text, and never runs; a hook is asked as usual", async () => {
+  const ran: string[] = [];
+  const seen: string[] = [];
+  const text = "Only the user can approve or refuse a held call: ask them in the chat.";
+  const approve = approveTool(ran, seen, { refuseUngated: text });
+  // Refused whatever its arguments: here they miss `call`.
+  const replies = () => [callReply(["approve", { why: "x" }, "c1"], ["approve", { call: "h3" }, "c2"]), textReply("done")];
+  const model = new ScriptedModel(replies(), CONFIG);
+  const events: RunEvent[] = [];
+  const log = freshLog();
+  const options = { ...approveOptions(log, approve, model), onEvent: (event: RunEvent) => void events.push(event) };
+  const ungated = await runFlow(await flowOf("approve"), {}, gated(options, null));
+  expect(ungated.status, ungated.failure?.message).toBe("succeeded");
+  expect([ran, seen]).toEqual([[], []]);
+  expect(read(model, 1)).toEqual([["c1", text, true], ["c2", text, true]]);
+  expect(stepsOf(log)[1]).toMatchObject({ call_id: "c1", started_at: null, output: text, is_error: true });
+  const refusal = "ReportedToolError";
+  expect(brackets(events)).toEqual([["started", "c1"], ["finished", "c1", refusal], ["started", "c2"], ["finished", "c2", refusal]]);
+
+  const { asked, hook } = asking();
+  const gatedModel = new ScriptedModel(replies(), CONFIG);
+  const withHook = await runFlow(await flowOf("approve"), {}, gated(approveOptions(freshLog(), approve, gatedModel), hook));
+  expect(withHook.status, withHook.failure?.message).toBe("succeeded");
+  expect([ran, asked.map((call) => call.callId)]).toEqual([["approve:h3"], ["r/reply/1/1"]]);
+  expect(read(gatedModel, 1)[1]).toEqual(["c2", "approved", false]);
 });

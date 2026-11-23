@@ -70,9 +70,9 @@ function childRuns(options: Partial<ChildFlowsOptions> = {}): ChildFlows {
   return runs;
 }
 
-/** The chat run's hold on `children`: the owner the tests start children through. */
+/** The chat run's hold on `children`, as `yian chat`'s: the owner the tests start children through. */
 function chat(children: ChildFlows, seen: ChildFlowOwnerOptions["seen"] = null): ChildFlowOwner {
-  return children.owner({ runId: CHAT, group: "flows", seen });
+  return children.owner({ runId: CHAT, group: "flows", label: "yian-chat", people: ["the user"], seen });
 }
 
 /** Load `text` as the flow `name`, the temporary root its code root, its busy nodes held by `<root>/gate`. */
@@ -434,6 +434,9 @@ nodes:
     while: not closed
 output: \${chat.output.said}
 `;
+
+/** The note on a status the model's message to `ECHO` returns. */
+const PLAIN = "inbox 'messages' takes plain text, so the run can't tell who wrote it";
 
 /** A CODE node that throws. */
 const BOOM = `id: boom
@@ -987,7 +990,7 @@ describe("owners", () => {
       const first = await owner.start(greet, { who: "a" });
       const sub = children.owner({ runId: `${CHAT}-r1`, group: "flows" });
       const second = await sub.start(greet, { who: "b" });
-      const other = children.owner({ runId: "other", group: "flows" });
+      const other = children.owner({ runId: "other", group: "flows", label: "other" });
       await other.start(greet, { who: "c" });
       expect(inspectRun(first.log).runId).toBe(`${CHAT}-r1`);
       expect(inspectRun(second.log).runId).toBe(`${CHAT}-r1-r2`);
@@ -1068,13 +1071,14 @@ describe("owners", () => {
   );
 });
 
-/** Run the group tool `name` of `tools` with `args`, as the chat's model's call `callId`. */
+/** Run the group tool `name` of `tools` with `args`, as the chat's model's call `callId` from `node`. */
 async function call(
   tools: readonly FunctionTool[],
   name: string,
   args: Record<string, unknown>,
   callId = `${CHAT}/reply/1/0`,
   attempt = 1,
+  node = "reply",
 ): Promise<Record<string, unknown>> {
   const found = tools.find((each) => each.name === name)!;
   const ctx = new ToolContext({
@@ -1082,7 +1086,7 @@ async function call(
     attempt,
     toolName: `flows_${name}`,
     runId: CHAT,
-    node: "reply",
+    node,
     context: undefined,
     signal: new AbortController().signal,
   });
@@ -1158,7 +1162,7 @@ describe("childFlows", () => {
     "a run the owner doesn't reach is an error the model reads, for every tool",
     async () => {
       const children = childRuns();
-      await children.owner({ runId: "other", group: "flows" }).start(await flow(GREET), { who: "a" });
+      await children.owner({ runId: "other", group: "flows", label: "other" }).start(await flow(GREET), { who: "a" });
       const tools = childFlows(chat(children));
       const args = { inbox: "messages", text: "x", call: "c", answer: "a", seconds: 0 };
       for (const each of tools) {
@@ -1331,8 +1335,9 @@ output: \${heard.output}
       await call(tools, "stop", { run: "r1" }, `${CHAT}/reply/2/0`);
       const ended = await settled(children, "r1", seen);
       expect(ended.status).toBe("cancelled");
-      // A resumed agent sends each cut call again, under its call id and a later attempt.
-      expect((await call(tools, "message", hi, `${CHAT}/reply/1/0`, 2))["note"]).toBeUndefined();
+      // A resumed agent sends each cut call again, under its call id and a later attempt. An
+      // `Inbox(str)` takes the text unsigned either way.
+      expect((await call(tools, "message", hi, `${CHAT}/reply/1/0`, 2))["note"]).toBe(PLAIN);
       expect((await call(tools, "stop", { run: "r1" }, `${CHAT}/reply/2/0`, 2))["note"]).toBeUndefined();
       expect((await call(tools, "stop", { run: "r1" }, `${CHAT}/reply/3/0`))["note"]).toContain("ended");
     },
@@ -1536,6 +1541,177 @@ describe("start", () => {
       const once = ["resolve greet", 'approve greet.yaml {"who":"a"}'];
       expect([first.asked, after.asked]).toEqual([once, once]);
       expect(readdirSync(join(root, "runs")).sort()).toEqual([`${CHAT}-r1`, `${CHAT}-r2`]);
+    },
+    TIMEOUT,
+  );
+});
+
+/** A flow that returns the first messages sent to its `Inbox(Message)`. */
+const LETTERS = `id: letters
+name: letters
+input:
+  messages: !Inbox(Message)
+nodes:
+  heard:
+    kind: call
+    call: take
+    input:
+      from: \${input.messages}
+      take: all
+output: \${heard.output.events}
+`;
+
+/** Each record of `log` that says who made its host call: its kind, and the `by` it holds. */
+function senders(log: string): [string, unknown][] {
+  return readRunLog(log)
+    .map(({ record }) => record as unknown as { by?: unknown; constructor: { name: string } })
+    .filter((record) => record.by !== undefined && record.by !== null)
+    .map((record) => [record.constructor.name, record.by]);
+}
+
+describe("labels", () => {
+  test(
+    "a child records its owner's run, the node whose call started it, the owner's inbox and its own label",
+    async () => {
+      const children = childRuns();
+      const owner = children.owner({ runId: CHAT, group: "flows", label: "yian-chat", inbox: "news" });
+      const { start } = starting({ greet: await flow(GREET) });
+      const tools = childFlows(owner, { start });
+      const args = { flow: "greet", inputs: { who: "a" } };
+      await call(tools, "start", args, `${CHAT}/turn#2/reply/1/0`, 1, "turn#2/reply");
+      const parent = (log: string) => (readRunLog(log)[0]!.record as RunStartedRecord).parent;
+      expect(parent(children.status("r1").log)).toEqual({
+        runId: CHAT,
+        node: "turn#2/reply",
+        inbox: "news",
+        label: "greet r1",
+      });
+      // A host's own start names no node, and may give the child a label of its own.
+      const shell = await owner.start(await flow(GREET), { who: "b" }, { label: "shell 1" });
+      expect(parent(shell.log)).toEqual({ runId: CHAT, node: null, inbox: "news", label: "shell 1" });
+      // With no inbox, the child still has its label.
+      const quiet = await chat(children).start(await flow(GREET), { who: "c" });
+      expect(parent(quiet.log)).toEqual({ runId: CHAT, node: null, inbox: null, label: "greet r3" });
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a child's label is its flow's id, reduced to plain characters and cut at 40, then its id",
+    async () => {
+      const children = childRuns();
+      const odd = `${GREET.replace("id: greet", 'id: "Ünïcode flow/with, a very long id that goes past forty chars"')}`;
+      const started = await chat(children).start(await flow(odd, "odd.yaml"), { who: "a" });
+      const sub = children.owner({ runId: `${CHAT}-${started.id}`, group: "flows" });
+      expect(sub.label).toBe("Unicode_flow_with_a_very_long_id_that_go r1");
+      expect((readRunLog(started.log)[0]!.record as RunStartedRecord).parent!.label).toBe(sub.label);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "an owner's or a person's label can't read as a child's or a relay, and an owner needs one",
+    () => {
+      const children = childRuns();
+      const owner = (label: string | undefined, people: string[] = []) =>
+        children.owner({ runId: CHAT, group: "flows", label, people });
+      expect(() => owner(undefined)).toThrow(`run '${CHAT}' needs an owner's label`);
+      expect(() => owner(" ​ ")).toThrow("an owner's label must hold more than whitespace");
+      expect(() => owner("review r1")).toThrow("an owner's label 'review r1' reads as a child run's (<flow> r<n>)");
+      expect(() => owner("Review_Flow  R2")).toThrow("reads as a child run's");
+      expect(() => owner("the user, via yian-chat")).toThrow("reads as a relay (<person>, via <employee>)");
+      expect(() => owner("yian-chat", ["greet r3"])).toThrow("a person's label 'greet r3' reads as a child run's");
+      expect(() => owner("yian-chat", ["Ada ,VIA Bob"])).toThrow("a person's label 'Ada ,VIA Bob' reads as a relay");
+      const made = owner("yian-chat", ["the user"]);
+      expect([made.label, made.people, made.inbox]).toEqual(["yian-chat", ["the user"], null]);
+    },
+  );
+
+  test(
+    "a label the host gives a child can't read as its owner's, a person's, a relay or another child's, however spaced",
+    async () => {
+      const children = childRuns();
+      const owner = chat(children);
+      const greet = await flow(GREET);
+      const refused = [
+        ["yian-chat", "its owner's"],
+        ["YIAN-CHAT", "its owner's"],
+        ["yian​-chat", "its owner's"],
+        ["the  user", "the person 'the user'"],
+        ["\tthe user ", "the person 'the user'"],
+        ["Ada, via yian-chat", "a relay"],
+        ["greet r9", "a child run's"],
+      ];
+      for (const [label, as] of refused) {
+        await expect(owner.start(greet, { who: "a" }, { label })).rejects.toThrow(`reads as ${as}`);
+      }
+      expect(existsSync(join(root, "runs"))).toBe(false);
+      await owner.start(greet, { who: "a" }, { label: "shell 1" });
+      // An owner of a run the driver started takes that run's label, and no other.
+      expect(children.owner({ runId: `${CHAT}-r1`, group: "flows" }).label).toBe("shell 1");
+      expect(() => children.owner({ runId: `${CHAT}-r1`, group: "flows", label: "shell 2" })).toThrow(
+        `run '${CHAT}-r1' is labelled 'shell 1'`,
+      );
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "every delivery the owner's model makes records it as its run's agent by its label, whichever node makes it",
+    async () => {
+      const children = childRuns();
+      const owner = chat(children);
+      const tools = childFlows(owner);
+      const [letters, ask, echo] = [await flow(LETTERS), await flow(ASK), await flow(ECHO)];
+      for (const each of [letters, ask, echo, ask]) await owner.start(each, {});
+      for (const id of ["r1", "r2", "r3", "r4"]) await settled(children, id);
+      const turn = (n: number) => [`${CHAT}/turn#${n}/reply/1/0`, 1, `turn#${n}/reply`] as const;
+      await call(tools, "message", { run: "r1", inbox: "messages", text: "hi" }, ...turn(1));
+      await call(tools, "answer", { run: "r2", call: asked(children.status("r2")), answer: "yes" }, ...turn(2));
+      await call(tools, "close_inbox", { run: "r3", inbox: "messages" }, ...turn(3));
+      await call(tools, "stop", { run: "r4" }, ...turn(4));
+      const agent = { kind: "agent", name: "yian-chat", run: CHAT };
+      expect(["r1", "r2", "r3", "r4"].map((id) => senders(children.status(id).log))).toEqual([
+        [["PoolCommitRecord", agent]],
+        [["NodeStepRecord", agent]],
+        [["InboxClosedRecord", agent]],
+        [["RunCancelledRecord", agent]],
+      ]);
+      // To an `Inbox(Message)`, the text goes as a user message signed with the owner's label.
+      expect(await settled(children, "r1")).toMatchObject({
+        status: "succeeded",
+        output: [{ role: "user", author: "yian-chat", parts: [{ type: "text", text: "hi" }] }],
+      });
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a message to an Inbox(str) goes as is, with a note that the run can't tell who wrote it",
+    async () => {
+      const children = childRuns();
+      const tools = childFlows(chat(children));
+      await chat(children).start(await flow(ECHO), {});
+      const before = (await settled(children, "r1")).seq;
+      const sent = await call(tools, "message", { run: "r1", inbox: "messages", text: "hi" });
+      expect(sent["note"]).toBe(PLAIN);
+      expect((await settled(children, "r1", before)).replies).toEqual(["echo: hi"]);
+      // The host's own send, from no one, needs no note.
+      expect((await children.message("r1", "messages", "again")).note).toBeUndefined();
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "the host's own deliveries sign nothing and record no one",
+    async () => {
+      const children = childRuns();
+      await chat(children).start(await flow(LETTERS), {});
+      await settled(children, "r1");
+      await children.message("r1", "messages", "hi");
+      const done = await settled(children, "r1");
+      expect(done.output).toEqual([{ role: "user", parts: [{ type: "text", text: "hi" }] }]);
+      expect(senders(done.log)).toEqual([]);
     },
     TIMEOUT,
   );

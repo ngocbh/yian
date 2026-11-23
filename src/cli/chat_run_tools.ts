@@ -40,6 +40,7 @@ import { splitReference } from "../nodes/code/worker.ts";
 import { isSystemError } from "../platform.ts";
 import { type ConsoleHook, skillGrants, staticNodes } from "../run.ts";
 import type { Skill } from "../skills/catalog.ts";
+import type { ToolContext } from "../tools/context.ts";
 import { ReportedToolError } from "../tools/errors.ts";
 import { type FunctionTool, stringArg, stringArguments, tool } from "../tools/function_tools.ts";
 import { grantText, visibleToolName } from "../tools/grants.ts";
@@ -449,7 +450,7 @@ export function chatRunTools(
       grants: readonly AuthoredGrant[],
       load: () => Promise<ComposedFlow>,
       inputs: Record<string, unknown>,
-      signal: AbortSignal,
+      ctx: ToolContext,
     ): Promise<string | Record<string, unknown>> => {
       // Its starts are its own: the runs it starts are its children, through its own owner.
       let own: ChildFlowOwner | null = null;
@@ -469,7 +470,8 @@ export function chatRunTools(
       let id: string;
       try {
         const flow = await load();
-        ({ id } = await owner.start(flow, inputs, { signal, tools, skills: options.skills }));
+        const { signal, node } = ctx;
+        ({ id } = await owner.start(flow, inputs, { signal, node, tools, skills: options.skills }));
       } catch (error) {
         if (error instanceof Error) return `not started: ${error.message}`;
         throw error;
@@ -503,7 +505,7 @@ export function chatRunTools(
           // Refused now, before the user answers anything for a flow that can't be written.
           if (path !== null) confineFlow(host.root, path);
           const load = () => loadAuthorFlow(host.env);
-          return start("author_flow", AUTHOR_TOOLS, load, { goal, path }, ctx.signal);
+          return start("author_flow", AUTHOR_TOOLS, load, { goal, path }, ctx);
         },
       }),
       tool({
@@ -521,7 +523,7 @@ export function chatRunTools(
           const path = stringArg(args, "path");
           const text = readFlow(path, confine(resolveRoot(host.root), path));
           const load = () => loadReviewFlow(host.env);
-          return start("review_flow", REVIEW_TOOLS, load, { path, text }, ctx.signal);
+          return start("review_flow", REVIEW_TOOLS, load, { path, text }, ctx);
         },
       }),
     ];
@@ -556,7 +558,7 @@ export function chatRunTools(
         try {
           const flow = await loadReportFlow(host.env);
           const tools = { file_issue: options.fileIssue };
-          ({ id } = await owner.start(flow, inputs, { signal: ctx.signal, tools }));
+          ({ id } = await owner.start(flow, inputs, { signal: ctx.signal, node: ctx.node, tools }));
         } catch (error) {
           if (error instanceof Error) return `not started: ${error.message}`;
           throw error;

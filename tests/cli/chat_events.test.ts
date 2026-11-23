@@ -137,7 +137,7 @@ describe("EventQueue", () => {
       try {
         const text = 'id: ask\nname: ask\nnodes:\n  sure: {kind: call, call: ask, input: {prompt: "Proceed?"}, output: !str}\noutput: ${sure.output}\n';
         const ask = await loadConfinedText(tmp, join(tmp, "ask.yaml"), text, NO_ENV);
-        await runs.owner({ runId: "chat-1", group: "flows" }).start(ask, {});
+        await runs.owner({ runId: "chat-1", group: "flows", label: "yian-chat" }).start(ask, {});
         while (queue.size === 0) await runs.next("r1");
         expect(queue.takeAll().map((event) => event.text)).toEqual(['run r1 asks (call chat-1-r1/sure): "Proceed?"']);
       } finally {

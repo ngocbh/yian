@@ -5,8 +5,8 @@
 # as a user message; each turn takes everything sent since the last one, compacts the history
 # with compact_history.yaml, and answers with `reply`, whose system prompt carries the rolling
 # summary. Messages sent while `reply` runs steer it, and an interrupt cuts it (its output is then
-# null). The chat also sends what its child runs do (a question, a reply, an output, a failure)
-# to `owner_messages` as user messages authored `yian`.
+# null). The flows it starts report to `owner_messages` when they pause or end (a question, a held
+# tool call, a reply, an output, a failure), each a user message signed by the run's label.
 #
 # A message of `action` parts only is something the user did themselves: `/model`, or a press on a
 # run's tool. A turn notes it in its state without answering it, and the next answered turn reads
@@ -154,10 +154,14 @@ defs:
             to revoke it.
 
           Runs you start:
-          - Messages authored `yian` come from the chat about your runs: a question, what a run
-            said, its output or its failure. The user hasn't seen them.
-          - Relay a run's question to the user and pass their answer back; never answer for
-            them. Report an output or a failure in a sentence or two.
+          - A run reports to you when it pauses or ends, in a message signed by its label, the
+            flow and the run's id (`hello r1`): its question, a tool call it holds for approval,
+            what it said or heard from someone else, its output or its failure. The user hasn't
+            read it; read it and act on it.
+          - Relay a run's question to the user and pass their answer back with flows_answer;
+            never answer for them. Report an output or a failure in a sentence or two.
+          - For a held tool call, tell the user what it would do. Only the user can approve or
+            refuse it here: flows_approve is refused, so ask them.
           - For a run that reads an inbox, relay what it says, pass on the user's messages for it
             with flows_message, and flows_close_inbox when the user is done with it. To stop what
             it is doing when the user asks, use flows_interrupt: it takes back your messages the

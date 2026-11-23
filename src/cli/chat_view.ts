@@ -1,17 +1,17 @@
 /**
  * The look of `yian chat` on a terminal: a banner box, the assistant's replies as `⏺` blocks of
- * Markdown streamed as they come, its tool calls and its child runs' events as `⏺` lines with a
+ * Markdown streamed as they come, its tool calls and its child runs' reports as `⏺` lines with a
  * `⎿` result, a spinner while a turn runs, and a framed prompt (drawn by the terminal). Everything
  * the chat prints goes through one writer, which keeps the spinner's line clear of other text.
  *
  * Off a terminal, or with `NO_COLOR`, the chat keeps its plain lines and none of this is used.
  *
- * Knows about: the run's events, the chat's child events, the box, colour and Markdown helpers,
+ * Knows about: the run's events, the child runs' reports, the box, colour and Markdown helpers,
  * the terminal's cell widths, the clock the spinner ticks on and the sanitizing of text printed on
  * the terminal.
  */
 
-import type { ChildEvent, ChildStatus, LiveChild } from "../child_flows.ts";
+import type { ChildReport, ChildStatus, LiveChild } from "../child_flows.ts";
 import type { Env } from "../defaults.ts";
 import {
   ModelCallFinished,
@@ -283,7 +283,7 @@ export interface LiveInput {
   cursor(): { row: number; before: string } | null;
 }
 
-/** The colour of a child event's card, by the status it came from. */
+/** The colour of a report's card, by the status it came from. */
 const CARD_STYLE: Readonly<Record<string, Style>> = {
   succeeded: "green",
   failed: "red",
@@ -599,19 +599,15 @@ export class ChatView {
   }
 
   /**
-   * A child event the chat sent its assistant: a `⏺ r1 <verb>` card with its body, printed above
-   * a reply still streaming, which goes on below it.
+   * A run's report to the assistant: a `⏺ <label> <verb>` card with its body, printed above a
+   * reply still streaming, which goes on below it.
    */
-  childEvent(event: ChildEvent): void {
+  report({ label, event: { card } }: ChildReport): void {
     this.#batch(() => {
       this.#gap("tool");
-      const card = event.card;
-      const style = card === undefined ? "cyan" : CARD_STYLE[card.status]!;
-      const head = card === undefined ? "yian" : `${sanitize(event.run ?? "")} ${card.verb}`;
-      const title = this.#paint(fit(head, this.#width() - 2), "bold");
-      this.#commit([`${this.#paint("⏺", style)} ${title}`]);
-      const body = card === undefined ? event.text : card.body;
-      if (body !== "") this.#result(summary(body, this.#width() - 5), "dim");
+      const title = this.#paint(fit(`${sanitize(label)} ${card.verb}`, this.#width() - 2), "bold");
+      this.#commit([`${this.#paint("⏺", CARD_STYLE[card.status]!)} ${title}`]);
+      if (card.body !== "") this.#result(summary(card.body, this.#width() - 5), "dim");
       this.#last = "tool";
     });
   }

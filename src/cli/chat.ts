@@ -4,18 +4,18 @@
  * hosts the flows it runs as child runs of the chat. With FLOW, the chat opens with that flow in
  * focus.
  *
- * The chat is an `inboxChat` of the bundled flow, given the assistant's file and run tools, its
- * bundled skill, and the events of its child runs (`ChildFlows`), which the chat relays to the
- * assistant as messages authored `yian`.
+ * The chat is an `inboxChat` of the bundled flow, given the assistant's file and run tools and its
+ * bundled skill. Its child runs (`ChildFlows`) report to the assistant's inbox, each signed by its
+ * label, and the chat moves its run to read each report.
  *
  * Knows about: compose, the run boundary's LLM cascade, connections, skills, the bundle, the
- * chat's tools, child runs and events, the inbox chat and the CLI's start-up helpers.
+ * chat's tools, child runs and their reports, the inbox chat and the CLI's start-up helpers.
  */
 
 import { mkdirSync, realpathSync } from "node:fs";
 import { basename, dirname, extname, join, relative } from "node:path";
 
-import type { ChildFlows, WaitingChild } from "../child_flows.ts";
+import type { ChildFlows, ReportHold, WaitingChild } from "../child_flows.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { loadFlow } from "../compose/loader.ts";
 import { defaultSkillRoots, loadSkills } from "../compose/skills.ts";
@@ -31,10 +31,8 @@ import type { ModelAccess } from "../llm_clients/factory.ts";
 import { homeDir, isSystemError, leavesRoot, realScheduler, removeEmptyDir, type Scheduler } from "../platform.ts";
 import { skillGrants } from "../run.ts";
 import { type Skill, SkillError } from "../skills/catalog.ts";
-import type { FunctionTool } from "../tools/function_tools.ts";
 import { DOCS, FLOWS } from "./bundled.ts";
 import { bundledSkill } from "./bundled_skill.ts";
-import { EventQueue, InFlight, trackInFlight } from "./chat_events.ts";
 import { ChatRuns, type ChatRunsOptions, chatRunTools } from "./chat_run_tools.ts";
 import {
   chatBanner,
@@ -65,7 +63,7 @@ import {
   type SessionSeed,
   sessionSeed,
 } from "./chat_sessions.ts";
-import { type ChatCommandOutcome, inboxChat, type InboxChatHost } from "./inbox_chat.ts";
+import { type ChatCommandOutcome, inboxChat, type InboxChatHost, type InboxNews } from "./inbox_chat.ts";
 import { type Colored, paint, printStyled, type Style } from "./render.ts";
 import { type FileIssueHost, fileIssueTool, hostFacts } from "./report_issue.ts";
 import { CHAT_FLOW_FILE, CHAT_FLOW_ID, CHAT_PERSON, validateRunLogOptions } from "./run.ts";
@@ -89,6 +87,9 @@ const CHAT_LABEL = CHAT_FLOW_FILE;
  * messages to its runs.
  */
 const PERSON = CHAT_PERSON;
+
+/** The chat flow's inbox: the user's lines and the reports of its runs go there. */
+const CHAT_INBOX = "owner_messages";
 
 /** The options `chat` reads; an absent option is `undefined`, an absent flag `false`. */
 export interface ChatOptions {
@@ -628,7 +629,7 @@ class ModelPicker {
  * `composing-agents` skill (`bundledSkill`). When stdin, stdout and stderr are a terminal
  * and `NO_COLOR` is unset (`richChat`), all of it is drawn through the chat's view (`ChatView`)
  * instead: a banner box naming the model, how it is reached, the folder and the focus; the reply
- * streamed as Markdown; tool calls, child events and approvals as cards; a spinner on
+ * streamed as Markdown; tool calls, the runs' reports and approvals as cards; a spinner on
  * `deps.ticker`; a framed prompt. A child granted skills gets them as
  * `yian run` reads them from the chat's folder.
  *
@@ -791,7 +792,6 @@ export async function chat(
       transcript: seed?.transcript ?? null,
       title: seed?.title ?? null,
     };
-    const wake = new EventTarget();
     const runs: ChatRuns = new ChatRuns({
       root,
       logDir: runsDir,
@@ -802,18 +802,30 @@ export async function chat(
       scheduler,
       skillsFor,
       consoleFile: consoleFileFor(fresh.path),
-      onStatus: (status) => queue.push(status),
       ...deps.children,
     });
-    const queue = new EventQueue({ wake, markRead: runs.markRead.bind(runs) });
+    // Told each report sent to the chat's log, which moves the run to read it, or held.
+    let listener: ((news: InboxNews) => void) | null = null;
     const owner = runs.owner({
       runId: chatRunId,
       group: "flows",
       label: CHAT_FLOW_ID,
       people: [PERSON],
-      seen: queue,
+      inbox: CHAT_INBOX,
+      log: fresh.path,
+      onReport: (report) => {
+        // None is told once the chat has ended.
+        if (listener === null) return;
+        const { outcome, seq, runId: from, event } = report;
+        // The chat's run ended, or closed its inbox, under it.
+        if (outcome === "refused") return void note(`(not sent: ${sanitize(event.text)})\n`).catch(() => {});
+        if (outcome === "sent") view?.report(report);
+        listener({ seq, from, text: event.text });
+      },
     });
-    const inFlight = new InFlight(wake);
+    // The hold on the reports from the user's interrupt until their next line, kept as it is
+    // taken, so that the release pairs with it whenever it lands.
+    let held: Promise<ReportHold> | null = null;
     const docs = new Map(Object.entries(DOCS));
     const tools: InboxChatHost["tools"] = (terminal) => {
       // On a terminal, the approval is drawn as a framed card.
@@ -833,11 +845,7 @@ export async function chat(
       const report = { facts: hostFacts(fresh.path, homes), homes, fileIssue };
       const authoring = { skills: new Map([[skill.name, skill]]) };
       const files = Object.fromEntries(chatFileTools(host).map((each) => [each.name, each]));
-      const all = { ...files, ...chatRunTools(host, runs, owner, { report, authoring }) };
-      // A group's tools are tracked each.
-      const tracked = (entry: FunctionTool | FunctionTool[]) =>
-        Array.isArray(entry) ? trackInFlight(entry, inFlight) : trackInFlight([entry], inFlight)[0]!;
-      return Object.fromEntries(Object.entries(all).map(([key, entry]) => [key, tracked(entry)]));
+      return { ...files, ...chatRunTools(host, runs, owner, { report, authoring }) };
     };
     // A numbered row fits on one line, after its label.
     const titleCells = (label: string) => columnsOf(out.stderrStream) - cells(label) - 4;
@@ -917,7 +925,25 @@ export async function chat(
           inputs: sessionInputs,
           skills: new Map([[skill.name, skill]]),
           tools,
-          events: { queue, inFlight, wake, onInterrupt: () => runs.cancelWaits() },
+          news: {
+            subscribe: (heard) => {
+              listener = heard;
+              return () => void (listener = null);
+            },
+            hold: async () => {
+              held ??= owner.hold();
+              // Each under its own send, so that its run's news held since doesn't replace it.
+              const { taken } = await held;
+              return taken.map((each) => ({ seq: null, from: `${each.runId}:${each.seq}`, text: each.text }));
+            },
+            release: async () => {
+              const hold = held;
+              held = null;
+              await (await hold)?.release();
+            },
+          },
+          onInterrupt: () => runs.cancelWaits(),
+          by: { kind: "user", name: PERSON },
           view,
           rows:
             view === null

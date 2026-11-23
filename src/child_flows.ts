@@ -31,8 +31,11 @@
  *
  * A child whose owner has an inbox reports to it after each pass with news, signed by its label:
  * what it said, asks or holds, its end, and what others than its owner told it, read from its log.
- * Reports wait while the owner's group tools run, and what a report or a tool's status told the
- * owner's model is read for both.
+ * A run a child starts through an owner with no inbox reports where that child does. Reports wait
+ * while the owner's group tools run, and what a report or a tool's status told the owner's model
+ * is read for both. The driver moves an owner's run on a report only when it drives that run; the
+ * host hears of each one (`onReport`) to move its own, and may hold them while a person has the
+ * floor (`ChildFlowOwner.hold`).
  *
  * A child's `ask` returns `pending()`, so the child waits durably for the user's answer, which the
  * host relays with `answer`. The children's stop is their own, tied to the host's exit by
@@ -170,6 +173,12 @@ const OWNER_SEND_RETRIES = 3;
 
 /** How long a send to an owner's busy log waits before it tries again, in milliseconds. */
 const OWNER_SEND_RETRY_MS = 100;
+
+/**
+ * How many of an owner run's latest reports the driver remembers what each told, so that a hold
+ * that takes one back unsent can give its news back.
+ */
+const SENT_REPORTS_KEPT = 100;
 
 /** @internal The longest a group's `wait` waits, in seconds. */
 export const WAIT_MAX_S = 120;
@@ -500,7 +509,8 @@ export interface ChildFlowOwnerOptions {
   readonly people?: readonly string[] | null;
   /**
    * The owner's inbox, an `Inbox(Message)` of its run, which each child records in its parent and
-   * reports to after each pass with news (`childFlows`); `null` (the default) for none.
+   * reports to after each pass with news (`childFlows`). `null` (the default) for none: the children
+   * of a run this driver started then report where that run does.
    */
   readonly inbox?: string | null;
   /**
@@ -525,13 +535,52 @@ export interface ChildFlowOwnerOptions {
    */
   readonly group: string;
   /**
-   * The host's record of what the owner's model has seen, by run and status seq. With it, the
-   * owner's tools mark each status they show read (`ChildFlows.markRead`) and tell `markSeen`, and
-   * `wait` returns at once for a status past `seen(run)`. Without it they mark nothing, so the
-   * host's other readers still get every reply. `null` (the default) for none. An owner with an
-   * inbox takes none: its reports and its tools mark what its model was told.
+   * Told what becomes of each report (`ChildReport.outcome`): for a host that moves the owner's run
+   * itself (the driver moves only the runs it started), or shows the reports. What it throws is
+   * dropped.
    */
-  readonly seen?: { markSeen(run: string, seq: number): void; seen(run: string): number } | null;
+  readonly onReport?: ((report: ChildReport) => void) | null;
+}
+
+/** A report, and what became of it (`ChildFlowOwnerOptions.onReport`). */
+export interface ChildReport {
+  /**
+   * `sent`: it is in the owner's log. `held`: it came due while the host holds the reports
+   * (`ChildFlowOwner.hold`), and is sent once the hold is let go. `refused`: the owner's run has
+   * ended or closed its inbox, so it wasn't sent, and its news stays unread for `status` and `wait`.
+   */
+  readonly outcome: "sent" | "held" | "refused";
+  /** The send's seq in the owner's log once `sent`, else `null`. */
+  readonly seq: number | null;
+  /** The child's run id (`<owner's run id>-r<n>`). */
+  readonly runId: string;
+  /** The child's label, which signs it. */
+  readonly label: string;
+  /** Its line, which the owner's model reads, and its card (`childEvent`). */
+  readonly event: ChildEvent;
+}
+
+/** A host's hold on an owner run's reports (`ChildFlowOwner.hold`). */
+export interface ReportHold {
+  /** The reports the owner's inbox held unread, taken back, oldest first: `release` sends them again. */
+  readonly taken: readonly TakenReport[];
+  /**
+   * Send the reports taken back again, then let the held ones go; resolves once they are sent, or
+   * failed (`ChildFlowOwner.hold`). A second call does nothing.
+   */
+  release(): Promise<void>;
+}
+
+/** A report taken back from its owner's inbox (`ReportHold.taken`). */
+export interface TakenReport {
+  /** The seq of the send taken back. */
+  readonly seq: number;
+  /** The child's run id. */
+  readonly runId: string;
+  /** The child's label, which signs it. */
+  readonly label: string;
+  /** Its line. */
+  readonly text: string;
 }
 
 /** A child left waiting when `dispose` ends its parent's hold on it, and what it waits on. */
@@ -608,6 +657,8 @@ interface Child {
    * that first held it.
    */
   unread: (Said & { readonly seq: number })[];
+  /** Its reports a hold took back whose sending again failed, in order: they go before its next report. */
+  readonly again: Taken[];
   /** Whether the run's log holds its start. */
   started: boolean;
   /** The child's own stop: it stops the driver and leaves the log as it is. */
@@ -635,6 +686,26 @@ interface Told {
   readonly ended: boolean;
 }
 
+/**
+ * A report in its owner's inbox: its event, the child's replies and memory notes sending it marked
+ * read, and what the owner's model was told of the child before it and with it.
+ */
+interface SentReport {
+  readonly event: ChildEvent;
+  readonly read: readonly (Said & { readonly seq: number })[];
+  readonly before: Told;
+  readonly after: Told;
+}
+
+/** A report a hold took back, to send again: the send's seq, value and `by`, its child, and what it told. */
+interface Taken {
+  readonly seq: number;
+  readonly value: unknown;
+  readonly by: Author | null;
+  readonly child: Child;
+  readonly sent: SentReport | null;
+}
+
 /** Where a send to an owner goes: its run, the run's log and inbox, and how the send is made. */
 interface OwnerLog {
   readonly runId: string;
@@ -647,6 +718,7 @@ interface OwnerLog {
 interface ReportTo {
   readonly owner: OwnerLog;
   readonly reports: Reports;
+  readonly onReport: ChildFlowOwnerOptions["onReport"];
   /** Set once the owner's run has ended or closed its inbox: the news then stays unread. */
   gone: boolean;
 }
@@ -654,14 +726,18 @@ interface ReportTo {
 /** The reports of an owner run's children, which the group tools of all its handles hold. */
 interface Reports {
   readonly runId: string;
-  /** How many of the owner's group tools run now: no report is sent meanwhile. */
+  /** How many of the owner's group tools and host holds there are now: no report is sent meanwhile. */
   busy: number;
+  /** How many of those are the host's holds (`ChildFlowOwner.hold`): a report due meanwhile is told as held. */
+  held: number;
   /** The children a pass of which settled since their last look, in the order they settled. */
   readonly due: Set<Child>;
   /** The children whose report failed to send: they are due again at the owner's next group tool's end. */
   readonly stalled: Set<Child>;
   /** The reports being sent now, or `null`. */
   sending: Promise<void> | null;
+  /** The latest reports sent, by their seq in the owner's log, up to `SENT_REPORTS_KEPT`. */
+  readonly sent: Map<number, SentReport>;
 }
 
 /** A reply of the child's, or a note of the host's about its memories. */
@@ -732,17 +808,16 @@ function questionText(args: Readonly<Record<string, unknown>> | null): string {
   return args?.["questions"] == null ? "" : JSON.stringify(args["questions"]);
 }
 
-/**
- * One child event: the line the owner's model reads, and the status it came from. `run` is `null`
- * (and `seq` 0) for one that came from no status of the chat's: a message authored `yian` the chat
- * didn't send, taken back from the inbox.
- */
+/** One child event: the line the owner's model reads, the status it came from, and its card. */
 export interface ChildEvent {
-  readonly run: string | null;
+  /** The child's id among its driver's children (`r1`). */
+  readonly run: string;
+  /** The seq of the status it came from (`ChildStatus.seq`). */
   readonly seq: number;
+  /** The line. */
   readonly text: string;
-  /** The event as the chat's view draws it; absent for one that came from no status. */
-  readonly card?: EventCard;
+  /** The event as a host's view draws it. */
+  readonly card: EventCard;
 }
 
 /**
@@ -988,9 +1063,12 @@ export class ChildFlows {
   readonly #children = new Map<string, Child>();
   /**
    * By the run id of each child a start began and didn't fail, the child as an owner: its label,
-   * its starter's people, the labels above it, and its log.
+   * its starter's people, the labels above it, its log, and where it reports.
    */
-  readonly #owners = new Map<string, Omit<Owned, "runId" | "inbox"> & { readonly log: string }>();
+  readonly #owners = new Map<
+    string,
+    Omit<Owned, "runId" | "inbox"> & { readonly log: string; readonly reportTo: ReportTo | null }
+  >();
   /** The reports of each owner run with an inbox, by its run id. */
   readonly #reports = new Map<string, Reports>();
   #seq = 0;
@@ -1013,7 +1091,7 @@ export class ChildFlows {
    * @throws {TypeError} When a label isn't a string.
    * @throws {RangeError} When it has no label, a label is refused (`ChildFlowOwnerOptions.label`),
    *   the label differs from the one this driver gave the run, the inbox or the log isn't a
-   *   non-empty string or `null`, or it has an inbox and no log or takes `seen`.
+   *   non-empty string or `null`, or it has an inbox and no log.
    */
   owner(options: ChildFlowOwnerOptions): ChildFlowOwner {
     const { runId, inbox = null } = options;
@@ -1035,18 +1113,19 @@ export class ChildFlows {
       throw new YianRangeError("an owner's log must be a non-empty string or null");
     }
     if (inbox !== null && log === null) throw new YianRangeError("an owner with an inbox needs its run's log");
-    if (inbox !== null && options.seen != null) {
-      throw new YianRangeError("an owner with an inbox takes no seen: its reports and tools mark what its model was told");
-    }
     const owned: Owned = Object.freeze({ runId, label, people, inbox, heard: started?.heard ?? [] });
     const { env = null, codeRoot = null, flow = null } = options.delivery ?? {};
     const delivery: DeliveryOptions = Object.freeze({ env: env ?? this.#options.env, codeRoot, flow });
+    const onReport = options.onReport ?? null;
+    // With no inbox, its children report where its run does.
     const reportTo: ReportTo | null =
-      inbox === null ? null : { owner: { runId, log: log!, inbox, delivery }, reports: this.#reportsOf(runId), gone: false };
-    // The run's children that report to it, whichever of its handles started them.
+      inbox === null
+        ? (started?.reportTo ?? null)
+        : { owner: { runId, log: log!, inbox, delivery }, reports: this.#reportsOf(runId), onReport, gone: false };
+    // The runs that report to it, whichever of its handles, or of its children's, started them.
     const mine = (id: string) => {
       const child = this.#children.get(id);
-      return child !== undefined && child.reportTo !== null && child.parent.runId === runId ? child : null;
+      return child !== undefined && child.reportTo?.owner.runId === runId ? child : null;
     };
     return new ChildFlowOwner(this, { ...options, log }, owned, {
       start: (flow, inputs, given) => this.#start(owned, reportTo, flow, inputs, given),
@@ -1055,6 +1134,7 @@ export class ChildFlows {
       scheduler: this.#options.scheduler,
       delivery,
       hold: () => this.#hold(this.#reports.get(runId) ?? null),
+      holdReports: () => this.#holdReports(inbox === null ? null : reportTo),
       unread: (id, seq) => this.#unreadAt(id, seq),
       shown: (status) => {
         const child = mine(status.run);
@@ -1066,7 +1146,8 @@ export class ChildFlows {
 
   /** The reports of owner run `runId`'s children: one set for the run, whichever of its handles asks. */
   #reportsOf(runId: string): Reports {
-    const made = this.#reports.get(runId) ?? { runId, busy: 0, due: new Set(), stalled: new Set(), sending: null };
+    const fresh: Reports = { runId, busy: 0, held: 0, due: new Set(), stalled: new Set(), sending: null, sent: new Map() };
+    const made = this.#reports.get(runId) ?? fresh;
     this.#reports.set(runId, made);
     return made;
   }
@@ -1085,6 +1166,115 @@ export class ChildFlows {
       this.#flush(reports);
     };
     return { sending: reports.sending, release };
+  }
+
+  /** A host's hold on the reports `to` sends, as `ChildFlowOwner.hold` says; one doing nothing for none. */
+  async #holdReports(to: ReportTo | null): Promise<ReportHold> {
+    if (to === null) return { taken: [], release: async () => {} };
+    const { owner, reports } = to;
+    const hold = this.#hold(reports);
+    reports.held += 1;
+    const letGo = (): void => {
+      reports.held -= 1;
+      hold.release();
+    };
+    const taken: Taken[] = [];
+    try {
+      if (hold.sending !== null) await hold.sending;
+      // What came due before the hold is held now.
+      for (const child of new Set([...reports.due, ...reports.stalled])) this.#tellHeld(child, child.reportTo!);
+      for (const child of this.#children.values()) {
+        if (child.reportTo?.owner.runId !== owner.runId) continue;
+        const by: Author = { kind: "run", name: child.parent.label, run: child.runId };
+        try {
+          for (const { seq, value } of await withdraw(owner.log, owner.inbox, { ...owner.delivery, by })) {
+            taken.push({ seq, value, by, child, sent: reports.sent.get(seq) ?? null });
+          }
+        } catch (error) {
+          if (!(error instanceof DeliveryRefused)) throw error;
+        }
+      }
+    } catch (error) {
+      letGo();
+      throw error;
+    }
+    // The others were read.
+    reports.sent.clear();
+    taken.sort((a, b) => a.seq - b.seq);
+    let releasing: Promise<void> | null = null;
+    const release = async (): Promise<void> => {
+      const failed = new Map<Child, unknown>();
+      for (const item of taken) {
+        const { child } = item;
+        const to = child.reportTo!;
+        // Behind one of its child's that failed, as the reports keep their order.
+        if (failed.has(child)) child.again.push(item);
+        else if (to.gone) this.#giveBack(item, to);
+        else {
+          const error = await this.#sendAgain(item, to);
+          if (error !== null) {
+            child.again.push(item);
+            failed.set(child, error);
+          }
+        }
+      }
+      letGo();
+      // Due again at the owner's next group tool's end, not at this one.
+      for (const [child, error] of failed) this.#stall(child, child.reportTo!, error);
+      if (reports.sending !== null) await reports.sending;
+    };
+    return {
+      taken: taken.map(({ seq, value, child }) => ({
+        seq,
+        runId: child.runId,
+        label: child.parent.label,
+        text: messageText(value) ?? "",
+      })),
+      release: () => (releasing ??= release()),
+    };
+  }
+
+  /**
+   * Send `item`, a report a hold took back, again to `to`: told as sent, or as refused once the
+   * owner's run has ended or closed its inbox, its news then given back. Returns why it failed
+   * otherwise, or `null`.
+   */
+  async #sendAgain(item: Taken, to: ReportTo): Promise<unknown> {
+    const { child } = item;
+    // A withdrawn send keeps its key, so it goes again under a key of its own.
+    const key = `report:${child.runId}:again:${item.seq}`;
+    const sent = await sendToOwner(to.owner, item.value, { by: item.by, key }, this.#options.scheduler);
+    if (sent.reason === "ended" || sent.reason === "inbox_closed") {
+      to.gone = true;
+      this.#giveBack(item, to);
+      return null;
+    }
+    if (sent.reason !== null) return sent.error;
+    if (item.sent !== null) remember(to.reports, sent.seq, item.sent);
+    this.#movesOn(to);
+    tell(to, { outcome: "sent", seq: sent.seq, runId: child.runId, label: child.parent.label, event: eventOf(item) });
+    return null;
+  }
+
+  /**
+   * Give back the news of `item`, a report taken back that won't be sent again, as the owner's run
+   * has ended or closed its inbox: what it marked read is unread again, and what it told is untold
+   * unless the child was told more since. Tell `to`'s host it was refused.
+   */
+  #giveBack(item: Taken, to: ReportTo): void {
+    const { child, sent } = item;
+    if (sent !== null) {
+      const kept = new Set(child.unread);
+      child.unread = [...sent.read.filter((said) => !kept.has(said)), ...child.unread].sort((a, b) => a.seq - b.seq);
+      if (child.told === sent.after) child.told = sent.before;
+    }
+    tell(to, { outcome: "refused", seq: null, runId: child.runId, label: child.parent.label, event: eventOf(item) });
+  }
+
+  /** Move on the owner's run `to` sends to when this driver drives it; its host moves any other. */
+  #movesOn(to: ReportTo): void {
+    const owner = [...this.#children.values()].find((each) => each.runId === to.owner.runId);
+    if (owner !== undefined) this.#moving(owner);
   }
 
   /** Child `id`'s replies and memory notes published at or before status `seq` that no reader marked read. */
@@ -1181,7 +1371,7 @@ export class ChildFlows {
     const label = given.label ?? childLabel(flow.compiled.flowId ?? name, id);
     // Before its tools are built, as they may make the child an owner.
     const heard = Object.freeze([owner.label, ...owner.people, ...owner.heard]);
-    this.#owners.set(runId, Object.freeze({ label, people: owner.people, heard, log }));
+    this.#owners.set(runId, Object.freeze({ label, people: owner.people, heard, log, reportTo }));
     const tools = typeof given.tools === "function" ? given.tools(runId) : given.tools;
     const seq = ++this.#seq;
     const child: Child = {
@@ -1194,6 +1384,7 @@ export class ChildFlows {
       sends: new Map(),
       heard: [],
       told: { seq: 0, calls: new Set(), ended: false },
+      again: [],
       flow,
       name,
       since: this.#options.scheduler.now(),
@@ -1851,13 +2042,14 @@ export class ChildFlows {
 
   /**
    * The send `record` to `child` as its report says it heard it, or `null` when it is no news to
-   * the child's owner: the owner's model made it, a person acting through the owner did, or it is a
-   * report of the child's own child.
+   * the child's owner: the owner's model made it, or the model of the run it reports to, a person
+   * acting through the owner did, or it is a report of the child's own child.
    */
   #news(child: Child, record: PoolCommitRecord): HeardSend | null {
     const { by } = record;
     const { owner } = child;
     if (by?.kind === "agent" && by.name === owner.label && by.run === owner.runId) return null;
+    if (by?.kind === "agent" && by.run === child.reportTo?.owner.runId) return null;
     if (by?.kind === "user" && owner.people.includes(by.name)) return null;
     const own = (each: Child) => each.runId === by?.run && each.parent.runId === child.runId;
     if (by?.kind === "run" && [...this.#children.values()].some(own)) return null;
@@ -1872,7 +2064,42 @@ export class ChildFlows {
     const to = child.reportTo;
     if (to === null || to.gone || this.#disposed) return;
     to.reports.due.add(child);
+    if (to.reports.held > 0) this.#tellHeld(child, to);
     this.#flush(to.reports);
+  }
+
+  /** Tell `to`'s host of `child`'s report, if it has news, as held. */
+  #tellHeld(child: Child, to: ReportTo): void {
+    let pending: Pending | null;
+    try {
+      pending = this.#pending(child);
+    } catch {
+      return;
+    }
+    if (pending === null) return;
+    const { event } = pending;
+    tell(to, { outcome: "held", seq: null, runId: child.runId, label: child.parent.label, event });
+  }
+
+  /**
+   * What `child`'s report would say now, or `null` when it has no news: a reply, a question or held
+   * call its owner's model wasn't told of, the run's end, or a send of another's it read.
+   *
+   * @throws What building its line throws.
+   */
+  #pending(child: Child): Pending | null {
+    const status = child.status;
+    // A delivery moved it on: the pass that follows reports it all.
+    if (status.status === "running") return null;
+    const ended = ENDED.has(status.status);
+    const heard = child.heard.slice();
+    const said = (kind: Said["kind"]) => child.unread.filter((each) => each.kind === kind).map((each) => each.text);
+    const [replies, notes] = [said("reply"), said("memory")];
+    const asked = [...openCalls(status)].some((call) => !child.told.calls.has(call));
+    if (heard.length === 0 && replies.length === 0 && !asked && (!ended || child.told.ended)) return null;
+    const { replies: _, memory_notes: __, ...rest } = status;
+    const unread = { ...(replies.length > 0 ? { replies } : {}), ...(notes.length > 0 ? { memory_notes: notes } : {}) };
+    return { status, heard, event: childEvent({ ...rest, ...unread }, heard)! };
   }
 
   /** Start sending `reports`' due reports, unless they're being sent or a group tool of the owner runs. */
@@ -1904,37 +2131,44 @@ export class ChildFlows {
    * next ends, or the child next settles.
    */
   async #report(child: Child, to: ReportTo): Promise<void> {
-    const status = child.status;
-    // A delivery moved it on: the pass that follows reports it all.
-    if (status.status === "running" || to.gone) return;
-    const ended = ENDED.has(status.status);
-    const heard = child.heard.slice();
-    const said = (kind: Said["kind"]) => child.unread.filter((each) => each.kind === kind).map((each) => each.text);
-    const [replies, notes] = [said("reply"), said("memory")];
-    const asked = [...openCalls(status)].some((call) => !child.told.calls.has(call));
-    if (heard.length === 0 && replies.length === 0 && !asked && (!ended || child.told.ended)) return;
-    const { replies: _, memory_notes: __, ...rest } = status;
-    const unread = { ...(replies.length > 0 ? { replies } : {}), ...(notes.length > 0 ? { memory_notes: notes } : {}) };
+    // Its reports a hold took back go first.
+    while (child.again.length > 0) {
+      const item = child.again[0]!;
+      if (to.gone) this.#giveBack(item, to);
+      else {
+        const error = await this.#sendAgain(item, to);
+        if (error !== null) return this.#stall(child, to, error);
+      }
+      child.again.shift();
+    }
+    if (to.gone) return;
+    let pending: Pending | null;
+    try {
+      pending = this.#pending(child);
+    } catch (error) {
+      return this.#stall(child, to, error);
+    }
+    if (pending === null) return;
+    const { status, heard, event } = pending;
     const label = child.parent.label;
     const by: Author = { kind: "run", name: label, run: child.runId };
     // A failure of the driver itself isn't in the log, so nothing could derive its report again.
     const key = status.at === undefined ? null : `report:${child.runId}:${status.at}`;
-    let message: unknown;
-    try {
-      const text = childEvent({ ...rest, ...unread }, heard)!.text;
-      message = { role: "user", author: label, parts: [{ type: "text", text }] };
-    } catch (error) {
-      return this.#stall(child, to, error);
+    const message = { role: "user", author: label, parts: [{ type: "text", text: event.text }] };
+    const sent = await sendToOwner(to.owner, message, { by, key }, this.#options.scheduler);
+    const told = { runId: child.runId, label, event };
+    if (sent.reason === "ended" || sent.reason === "inbox_closed") {
+      to.gone = true;
+      return tell(to, { ...told, outcome: "refused", seq: null });
     }
-    const unsent = await sendToOwner(to.owner, message, { by, key }, this.#options.scheduler);
-    if (unsent?.reason === "ended" || unsent?.reason === "inbox_closed") to.gone = true;
-    else if (unsent !== null) this.#stall(child, to, unsent.error);
-    if (unsent !== null) return;
+    if (sent.reason !== null) return this.#stall(child, to, sent.error);
     child.heard.splice(0, heard.length);
+    const before = child.told;
+    const read = child.unread.filter((said) => said.seq <= status.seq);
     this.#told(child, status);
-    // An owner this driver drives moves on the report.
-    const owner = [...this.#children.values()].find((each) => each.runId === to.owner.runId);
-    if (owner !== undefined) this.#moving(owner);
+    remember(to.reports, sent.seq, { event, read, before, after: child.told });
+    this.#movesOn(to);
+    tell(to, { ...told, outcome: "sent", seq: sent.seq });
   }
 
   /** Keep `child`'s news, whose report `error` stopped, for the next end of an owner's group tool, with a warning. */
@@ -1952,18 +2186,56 @@ export class ChildFlows {
   }
 }
 
+/** A report a child would send now: the status it reports, the sends it heard, and its event. */
+interface Pending {
+  readonly status: ChildStatus;
+  readonly heard: readonly HeardSend[];
+  readonly event: ChildEvent;
+}
+
+/** Remember `report`, sent to `reports`' owner at `seq`, forgetting the oldest beyond `SENT_REPORTS_KEPT`. */
+function remember(reports: Reports, seq: number, report: SentReport): void {
+  reports.sent.set(seq, report);
+  if (reports.sent.size > SENT_REPORTS_KEPT) reports.sent.delete(reports.sent.keys().next().value!);
+}
+
+/**
+ * The event of `item`, a report taken back: the one it was sent with, or, for one the driver no
+ * longer remembers, its line on a card of the child's status.
+ */
+function eventOf(item: Taken): ChildEvent {
+  if (item.sent !== null) return item.sent.event;
+  const text = messageText(item.value) ?? "";
+  const { status } = item.child;
+  return { run: item.child.id, seq: status.seq, text, card: { status: status.status, verb: "reported", body: text } };
+}
+
+/** Tell `to`'s host what became of a report (`ChildFlowOwnerOptions.onReport`), dropping what it throws. */
+function tell(to: ReportTo, report: ChildReport): void {
+  try {
+    to.onReport?.(report);
+  } catch {
+    // A host's fault mustn't stop the reports.
+  }
+}
+
+/** What `sendToOwner` did: the send's seq, or why it didn't send, with the error. */
+type OwnerSend =
+  | { readonly seq: number; readonly reason: null }
+  | { readonly reason: DeliveryRefusal | "wrong_log" | "busy" | "failed"; readonly error: unknown };
+
 /**
  * Send `message`, a report or a press's action, to `owner`'s inbox by `sent.by` under `sent.key`,
- * trying again on `scheduler` while another writer holds the log: `null` once it is sent, else why
- * not, with the error: the refusal's reason, `wrong_log` when the log is another run's, `busy` once
- * the retries are spent, or `failed`. It never throws.
+ * trying again on `scheduler` while another writer holds the log: the send's seq once it is sent,
+ * else why not, with the error: the refusal's reason, `wrong_log` when the log is another run's,
+ * `busy` once the retries are spent, or `failed`. It never throws.
  */
 async function sendToOwner(
   owner: OwnerLog,
   message: unknown,
   sent: Pick<SendOptions, "by" | "key">,
   scheduler: Scheduler,
-): Promise<{ readonly reason: DeliveryRefusal | "wrong_log" | "busy" | "failed"; readonly error: unknown } | null> {
+): Promise<OwnerSend> {
   const { runId, log, inbox, delivery } = owner;
   for (let tried = 0; ; tried += 1) {
     try {
@@ -1974,8 +2246,7 @@ async function sendToOwner(
         }
         break;
       }
-      await send(log, inbox, message, { ...delivery, ...sent });
-      return null;
+      return { seq: await send(log, inbox, message, { ...delivery, ...sent }), reason: null };
     } catch (error) {
       if (error instanceof DeliveryRefused) return { reason: error.reason, error };
       if (!(error instanceof RunBusyError)) return { reason: "failed", error };
@@ -2018,6 +2289,8 @@ interface OwnerCore {
   readonly delivery: DeliveryOptions;
   /** Hold the owner's reports while a group tool runs: the reports being sent, and what lets them go. */
   hold(): { readonly sending: Promise<void> | null; release(): void };
+  /** The host's hold on the owner's reports (`ChildFlowOwner.hold`). */
+  holdReports(): Promise<ReportHold>;
   /** Child `id`'s replies and memory notes up to status `seq` that no reader marked read. */
   unread(id: string, seq: number): Pick<ChildStatus, "replies" | "memory_notes">;
   /** Note that a tool of the owner showed its model `status`, and returned it. */
@@ -2043,7 +2316,6 @@ export class ChildFlowOwner {
   readonly inbox: string | null;
   /** Its run's log, or `null` for none. */
   readonly log: string | null;
-  readonly seen: NonNullable<ChildFlowOwnerOptions["seen"]> | null;
   readonly #driver: ChildFlows;
   readonly #core: OwnerCore;
   /**
@@ -2073,7 +2345,6 @@ export class ChildFlowOwner {
     this.people = owned.people;
     this.inbox = owned.inbox;
     this.log = options.log ?? null;
-    this.seen = options.seen ?? null;
     this.#driver = driver;
     this.#core = core;
     this.#owned = owned;
@@ -2196,6 +2467,24 @@ export class ChildFlowOwner {
    */
   heldCall(id: string, call: string): HeldChildCall | null {
     return this.#core.held(this.#mine(id), call);
+  }
+
+  /**
+   * Hold the reports to this owner's run while a person has the floor, as after they interrupt its
+   * agent: none is sent until the hold is let go, each that comes due is told to `onReport` as
+   * `held`, and its news stays unread for `status` and `wait`. Resolves once a report being sent
+   * has landed and the reports its inbox holds unread are taken back (`withdraw` by each child's
+   * `by`), so its agent reads none of them now. `release` sends those again, each under a key of
+   * its own (`report:<child's run id>:again:<seq taken back>`) and told to `onReport` as sent, then
+   * lets the held ones go. One the owner's run refuses, as it has ended or closed its inbox, is told
+   * as refused, and its news is unread again; one that fails otherwise stays with the driver, with a
+   * warning, and goes before its child's next report. A report taken back and never sent again
+   * stays read. An owner with no inbox holds nothing.
+   *
+   * @throws What taking a report back throws, other than a refusal (the run has ended, say).
+   */
+  hold(): Promise<ReportHold> {
+    return this.#core.holdReports();
   }
 
   /**
@@ -2347,12 +2636,12 @@ export class ChildFlowOwner {
    */
   async #record(message: unknown, by: Author, key: string): Promise<PressUnrecorded | null> {
     const owner = { runId: this.#owned.runId, log: this.#log!, inbox: this.#owned.inbox!, delivery: this.#delivery };
-    return (await sendToOwner(owner, message, { by, key }, this.#core.scheduler))?.reason ?? null;
+    return (await sendToOwner(owner, message, { by, key }, this.#core.scheduler)).reason;
   }
 
-  /** @internal The last status seq of run `id` this owner's model has seen: shown, reported, or told `seen`. */
+  /** @internal The last status seq of run `id` this owner's model has seen: shown or reported. */
   lastSeen(id: string): number {
-    return Math.max(this.#shown.get(id) ?? 0, this.#core.told(id), this.seen?.seen(id) ?? 0);
+    return Math.max(this.#shown.get(id) ?? 0, this.#core.told(id));
   }
 
   /**
@@ -2373,9 +2662,9 @@ export class ChildFlowOwner {
   }
 
   /**
-   * @internal Note that the owner's model is shown `status`, marking it read with `seen`; return it
-   * with only the replies and memory notes still unread, and none the model was shown before. What
-   * a report of the owner's would repeat is marked once the tool returns (`holding`).
+   * @internal Note that the owner's model is shown `status`; return it with only the replies and
+   * memory notes still unread, and none the model was shown before. What a report of the owner's
+   * would repeat is marked once the tool returns (`holding`).
    */
   show(status: ChildStatus): ChildStatus {
     const last = this.lastSeen(status.run);
@@ -2383,10 +2672,6 @@ export class ChildFlowOwner {
     // read since: shown, or told by a report.
     const { replies: _, memory_notes: __, ...rest } = status;
     const unread = status.seq <= last ? {} : this.#core.unread(status.run, status.seq);
-    if (this.seen !== null) {
-      this.#driver.markRead(status.run, status.seq);
-      this.seen.markSeen(status.run, status.seq);
-    }
     this.#shown.set(status.run, Math.max(status.seq, last));
     return { ...rest, ...unread };
   }
@@ -2670,11 +2955,11 @@ function interruptText(inbox: string, done: ChildInterrupt): string {
  * some of them.
  *
  * Each returns the run's status as `shownStatus` does; once the owner showed them, its replies and
- * memory notes aren't shown again, and with `owner.seen` they are marked read. For an owner with an
- * inbox, its children's reports wait while any of these tools runs, and a report and a status they
- * show are read for each other: no report repeats what a status showed its model, and no status
- * repeats a reply a report told, nor `wait` returns for a status one did. A run the owner
- * doesn't reach, or an argument of the wrong type, is a `ReportedToolError`. The deliveries but
+ * memory notes aren't shown again. For an owner with an inbox, its children's reports, and those
+ * of the runs they start through owners with none, wait while any of these tools runs, and a report
+ * and a status they show are read for each other: no report repeats what a status showed its model,
+ * and no status repeats a reply a report told, nor `wait` returns for a status one did. A run the
+ * owner doesn't reach, or an argument of the wrong type, is a `ReportedToolError`. The deliveries but
  * `interrupt` are `resumable`: a resumed agent sends a crash-cut call again under its call id, which
  * keys `message`'s send, and a repeated answer, close or stop changes nothing; a call sent again
  * (`ctx.attempt` above 1) is `resent` (`ChildFlows.answer`). A take-back or an interrupt has no key,

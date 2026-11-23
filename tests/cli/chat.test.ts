@@ -21,8 +21,8 @@ import { join } from "node:path";
 import { chat, type ChatDeps, type ChatOptions } from "../../src/cli/chat.ts";
 import { main } from "../../src/cli/index.ts";
 import { type CliIo, UsageError, type Writer } from "../../src/cli/utils.ts";
-import { type ChatModel, EventStream } from "../../src/llm/events.ts";
-import { type Request, Response, ToolResultPart } from "../../src/llm/messages.ts";
+import { type ChatModel, EventStream, TextDelta } from "../../src/llm/events.ts";
+import { type Message, type Request, Response, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { inspectRun } from "../../src/run.ts";
 import { NodeStepRecord, PoolCommitRecord, readRunLog, type RunStartedRecord } from "../../src/runtime/log.ts";
@@ -34,7 +34,7 @@ import {
   serving,
   textReply,
 } from "../helpers/run_state_fixtures.ts";
-import { ENTER, FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
+import { ENTER, ESCAPE, FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
 
 const TIMEOUT = 20_000;
 
@@ -88,6 +88,12 @@ function chatIo({ tty = false, environment = env } = {}) {
   return { io, stdin, stdout: out.text, stderr: err.text, screen: () => stderrStream.text };
 }
 
+/** A reply that streams a first word, then waits until `gate` settles or the call is aborted. */
+interface Gated {
+  readonly gate: Promise<void>;
+  readonly then: Response;
+}
+
 /**
  * A model answering each request with `answer` of it and its count (from 1); it keeps each. The
  * call naming the chat is kept apart (`named`) and answered `About <the first line>`.
@@ -97,9 +103,9 @@ class AnsweringModel implements ChatModel {
   readonly model = "grok-4.3";
   readonly requests: Request[] = [];
   readonly named: Request[] = [];
-  readonly #answer: (request: Request, count: number) => Response;
+  readonly #answer: (request: Request, count: number) => Response | Gated;
 
-  constructor(answer: (request: Request, count: number) => Response) {
+  constructor(answer: (request: Request, count: number) => Response | Gated) {
     this.#answer = answer;
   }
 
@@ -111,10 +117,23 @@ class AnsweringModel implements ChatModel {
       return new ScriptedModel([textReply(name)], this).stream(request, options);
     }
     this.requests.push(request);
-    return new ScriptedModel([this.#answer(request, this.requests.length)], this).stream(
-      request,
-      options,
-    );
+    const answer = this.#answer(request, this.requests.length);
+    if (!("gate" in answer)) return new ScriptedModel([answer], this).stream(request, options);
+    const gated: Gated = answer;
+    const model = this;
+    const { signal } = options;
+    async function* events() {
+      yield new TextDelta(0, "Thinking it over");
+      await Promise.race([
+        gated.gate,
+        new Promise<void>((_, reject) => {
+          if (signal?.aborted) reject(signal.reason);
+          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        }),
+      ]);
+      yield* new ScriptedModel([gated.then], model).stream(request, options);
+    }
+    return new EventStream(events());
   }
 }
 
@@ -191,14 +210,17 @@ nodes:
 output: \${sure.output}
 `;
 
+/** The reports `request` shows the model: user messages signed by a run's label, `<flow> r<n>`. */
+function reportsShown(request: Request): Message[] {
+  return request.messages.filter((message) => message.role === "user" && / r\d+$/.test(message.author ?? ""));
+}
+
 /**
- * The call id of the question "Which region?" as `request` shows it: in a message authored yian
- * relaying it, or in a status a run tool returned. Null when it isn't shown.
+ * The call id of the question "Which region?" as `request` shows it: in a run's report, or in a
+ * status a run tool returned. Null when it isn't shown.
  */
 function askedCall(request: Request): string | null {
-  const relayed = request.messages
-    .filter((message) => message.author === "yian")
-    .map((m) => m.text());
+  const relayed = reportsShown(request).map((m) => m.text());
   for (const text of [...relayed, ...toolResults(request)]) {
     const match =
       /\(call ([^)\s]+)\): "Which region\?"/.exec(text) ??
@@ -503,7 +525,7 @@ test(
 );
 
 test(
-  "a child's question reaches the assistant as a message authored yian, and its answer goes back",
+  "a child's question reaches the assistant as a report signed by its label, and its answer goes back",
   async () => {
     writeFileSync(join(root, "region.yaml"), region());
     const { io, stdin, stdout, screen } = chatIo({ tty: true });
@@ -525,28 +547,234 @@ test(
     // Once the assistant has seen it start, the run asks.
     await until(() => gotResult(model, "flows_start"));
     openGate();
-    /** Whether the model was sent a message authored yian holding `text`. */
+    /** Whether the model was sent a report of run r1's holding `text`. */
     const relayed = (text: string) =>
       model.requests.some((request) =>
-        request.messages.some(
-          (message) => message.author === "yian" && message.text().includes(text),
-        ),
+        reportsShown(request).some((message) => message.author === "region r1" && message.text().includes(text)),
       );
-    // The child's end is relayed too.
+    // The child's end is reported too.
     await until(() => relayed('run r1 succeeded with output "eu"'));
     stdin.write(`/exit${ENTER}`);
-    expect((await chatting).code).toBe(0);
+    const { code, log: chatLog } = await chatting;
+    expect(code).toBe(0);
     expect(relayed("Which region?")).toBe(true);
     expect(stdout()).toContain("answered");
+    // Nothing the model read is signed yian.
+    for (const request of model.requests) expect(request.messages.map((message) => message.author)).not.toContain("yian");
+    // The chat's log has the line the user typed, and the run's reports, by who sent each.
+    const sent = readRunLog(chatLog).flatMap(({ record }) =>
+      record instanceof PoolCommitRecord && record.key === "__start__.owner_messages" ? [record.by] : [],
+    );
+    const report = { kind: "run", name: "region r1", run: "chat-1-r1" } as const;
+    expect(sent).toEqual([{ kind: "user", name: "the user" }, report, report]);
     const log = join(home, ".yian", "runs", "chat-1-r1", "log.jsonl");
     expect(inspectRun(log).status).toBe("succeeded");
-    // The run knows the chat by its run and its label, and the answer as the assistant's.
+    // The run knows the chat by its run, its inbox and its label, and the answer as the assistant's.
     const records = readRunLog(log).map(({ record }) => record);
     const parent = (records[0] as RunStartedRecord).parent;
-    expect(parent).toMatchObject({ runId: "chat-1", inbox: null, label: "region r1" });
+    expect(parent).toMatchObject({ runId: "chat-1", inbox: "owner_messages", label: "region r1" });
     const answers = records.filter((record) => record instanceof NodeStepRecord && record.by !== null);
     const assistant = { kind: "agent", name: "yian-chat", run: "chat-1" } as const;
     expect(answers.map((record) => (record as NodeStepRecord).by)).toEqual([assistant]);
+  },
+  TIMEOUT,
+);
+
+/** A flow that ends with its input `name` once the test writes the file `<tmp>/gate-<name>`. */
+const gatedFlow = () => `id: gated
+name: gated
+input:
+  name: !str
+nodes:
+  gate:
+    kind: code
+    input:
+      name: \${input.name}
+    output: !str
+    code: |
+      const fs = await import("node:fs");
+      const path = ${JSON.stringify(join(tmp, "gate-"))} + inputs["name"];
+      const cap = Date.now() + 10000;
+      while (!fs.existsSync(path) && Date.now() < cap) await new Promise((wake) => setTimeout(wake, 5));
+      return inputs["name"];
+output: \${gate.output}
+`;
+
+/** Let the gated run named `name` end. */
+const openGated = (name: string) => writeFileSync(join(tmp, `gate-${name}`), "");
+
+/** The kinds of who made each send to the assistant's inbox in the chat's log. */
+function sendKinds(log: string): (string | undefined)[] {
+  return readRunLog(log).flatMap(({ record }) =>
+    record instanceof PoolCommitRecord && record.key === "__start__.owner_messages" ? [record.by?.kind] : [],
+  );
+}
+
+/**
+ * A chat in which the assistant starts the gated flow as `a` (r1), then as `b` (r2), each once
+ * the user approves; past that, `answer` answers. Resolves once it rests after the starts.
+ */
+async function gatedChat(answer: (request: Request) => Response | Gated) {
+  writeFileSync(join(root, "gated.yaml"), gatedFlow());
+  const chatIoParts = chatIo({ tty: true });
+  const { io, stdin, screen } = chatIoParts;
+  const starts = [
+    callReply(["flows_start", { flow: "gated.yaml", inputs: { name: "a" } }, "s1"]),
+    callReply(["flows_start", { flow: "gated.yaml", inputs: { name: "b" } }, "s2"]),
+    textReply("Started both."),
+  ];
+  const model = new AnsweringModel((request, count) => starts[count - 1] ?? answer(request));
+  const chatting = runChat(io, model);
+  await until(() => screen().includes("You:"));
+  stdin.write(`start both${ENTER}`);
+  await until(() => screen().split("Run gated.yaml").length === 2);
+  stdin.write(ENTER);
+  await until(() => screen().split("Run gated.yaml").length === 3);
+  stdin.write(ENTER);
+  await until(() => chatIoParts.stdout().includes("Started both."));
+  return { ...chatIoParts, model, chatting };
+}
+
+/** Whether any request `model` was sent shows a report of run `run`'s end. */
+const readEnd = (model: AnsweringModel, run: string) =>
+  model.requests.some((request) =>
+    reportsShown(request).some((message) => message.text().includes(`run ${run} succeeded`)),
+  );
+
+test(
+  "Esc mid-reply holds the runs' reports for the user's next line: one unread in the inbox, and one that comes after",
+  async () => {
+    const reply = Promise.withResolvers<void>();
+    let holding = false;
+    const c = await gatedChat((request) => {
+      if (request.messages.at(-1)!.text() !== "hold on") return textReply("ok");
+      holding = true;
+      return { gate: reply.promise, then: textReply("held") };
+    });
+    c.stdin.write(`hold on${ENTER}`);
+    await until(() => holding);
+    openGated("a");
+    // Unread: the reply's model call still runs.
+    const log = join(tmp, "chat.jsonl");
+    await until(() => sendKinds(log).includes("run"));
+    c.stdin.write(ESCAPE);
+    await until(() => c.stderr().includes("(stopping the reply)"));
+    // The scripted call answers once let go, cut or not.
+    reply.resolve();
+    await until(() => c.stderr().includes('(waiting for your next message: run r1 succeeded with output "a")'));
+    openGated("b");
+    await until(() => c.stderr().includes('(waiting for your next message: run r2 succeeded with output "b")'));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    // Nothing read either: no turn started.
+    expect(readEnd(c.model, "r1") || readEnd(c.model, "r2")).toBe(false);
+    c.stdin.write(`next${ENTER}`);
+    await until(() => readEnd(c.model, "r2"));
+    c.stdin.write(`/exit${ENTER}`);
+    expect((await c.chatting).code).toBe(0);
+    // One turn reads both reports, then the line.
+    const read = c.model.requests.find((request) => readEnd(c.model, "r1") && reportsShown(request).length > 0)!;
+    const tail = read.messages.slice(-3).map((message) => [message.author, message.text()]);
+    expect(tail).toEqual([
+      ["gated r1", 'run r1 succeeded with output "a"'],
+      ["gated r2", 'run r2 succeeded with output "b"'],
+      [null, "next"],
+    ]);
+    expect(c.model.requests.filter((request) => reportsShown(request).length > 0)).toHaveLength(1);
+  },
+  TIMEOUT,
+);
+
+test(
+  "/exit with reports held prints each as not sent, and the assistant reads none",
+  async () => {
+    const c = await gatedChat(() => textReply("ok"));
+    const asked = c.model.requests.length;
+    c.stdin.write(ESCAPE);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    openGated("a");
+    await until(() => c.stderr().includes('(waiting for your next message: run r1 succeeded with output "a")'));
+    c.stdin.write(`/exit${ENTER}`);
+    expect((await c.chatting).code).toBe(0);
+    expect(c.stderr()).toContain('(not sent: run r1 succeeded with output "a")\n');
+    expect(c.model.requests).toHaveLength(asked);
+    expect(sendKinds(join(tmp, "chat.jsonl"))).not.toContain("run");
+  },
+  TIMEOUT,
+);
+
+/** A flow that, once `<tmp>/gate-a` is written, asks which region, and 2 s later says `b`. */
+const askThenSay = () => `id: twice
+name: twice
+nodes:
+  gate:
+    kind: code
+    output: !str
+    code: |
+      const fs = await import("node:fs");
+      const cap = Date.now() + 10000;
+      while (!fs.existsSync(${JSON.stringify(join(tmp, "gate-a"))}) && Date.now() < cap) {
+        await new Promise((wake) => setTimeout(wake, 5));
+      }
+      return "open";
+  sure:
+    kind: call
+    call: ask
+    depends_on: [gate]
+    input:
+      prompt: "Which region?"
+    output: !str
+  nap:
+    kind: call
+    call: sleep
+    depends_on: [gate]
+    input:
+      for: 2s
+  reply:
+    kind: code
+    depends_on: [nap]
+    output: !str
+    code: |
+      return "b";
+output: \${sure.output}
+`;
+
+test(
+  "after Esc, a run's report taken back and the run's later news held are each printed as not sent at /exit",
+  async () => {
+    writeFileSync(join(root, "twice.yaml"), askThenSay());
+    const { io, stdin, stderr, screen } = chatIo({ tty: true });
+    const reply = Promise.withResolvers<void>();
+    let holding = false;
+    const model = new AnsweringModel((request, count) => {
+      if (count === 1) return callReply(["flows_start", { flow: "twice.yaml", inputs: {} }, "s1"]);
+      if (request.messages.at(-1)!.text() !== "hold on") return textReply("ok");
+      holding = true;
+      return { gate: reply.promise, then: textReply("held") };
+    });
+    const chatting = runChat(io, model);
+    await until(() => screen().includes("You:"));
+    stdin.write(`start it${ENTER}`);
+    await until(() => screen().includes("Run twice.yaml"));
+    stdin.write(ENTER);
+    await until(() => gotResult(model, "flows_start"));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    stdin.write(`hold on${ENTER}`);
+    await until(() => holding);
+    openGated("a");
+    // Its question, unread: the reply's model call still runs.
+    await until(() => sendKinds(join(tmp, "chat.jsonl")).includes("run"));
+    stdin.write(ESCAPE);
+    await until(() => stderr().includes("(stopping the reply)"));
+    reply.resolve();
+    await until(() => stderr().includes('(waiting for your next message: run r1 asks'));
+    // Its reply, two seconds on, while the reports are held.
+    await until(() => /\(waiting for your next message: [^\n]*said "b"/.test(stderr()));
+    stdin.write(`/exit${ENTER}`);
+    expect((await chatting).code).toBe(0);
+    const notSent = stderr().split("\n").filter((line) => line.startsWith("(not sent: run r1"));
+    expect(notSent).toHaveLength(2);
+    expect(notSent[0]).not.toContain('said "b"');
+    expect(notSent[1]).toContain('said "b"');
   },
   TIMEOUT,
 );
@@ -744,8 +972,7 @@ test(
         const args = { problem: "yian check crashed", context: "ran yian check a.yaml" };
         return callReply(["report_issue", args, "c1"]);
       }
-      const asked = request.messages
-        .filter((message) => message.author === "yian")
+      const asked = reportsShown(request)
         .map((message) => /\(call ([^)\s]+)\): "What did you expect\?"/.exec(message.text()))
         .find((match) => match !== null);
       if (!answered && asked) {

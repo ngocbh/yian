@@ -111,6 +111,7 @@ const ALLOWED: Record<string, string> = {
   "child_flows.ts: OWNER_SEND_RETRIES": "times a report or a press's action is sent again to an owner's busy log",
   "child_flows.ts: OWNER_SEND_RETRY_MS": "pause before a send to an owner's busy log is tried again",
   "child_flows.ts: REASON_MAX_CHARS": "longest reason an approve takes, so its release note fits the gate's text bound",
+  "child_flows.ts: SENT_REPORTS_KEPT": "reports per owner run whose news a hold that takes one back can give back",
   "child_flows.ts: STATUS_TEXT_CHARS": "size of each text field of a child run's status its owner's model reads",
   "child_flows.ts: WAIT_MAX_S": "longest a child-flow group's wait waits for a run to change",
   "llm_clients/redact.ts: MIN_VISIBLE": "key characters a masked echo must show to count",

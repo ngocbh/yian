@@ -21,7 +21,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { type ChildStatus, childEvent, type LiveChild } from "../../src/child_flows.ts";
+import { type ChildReport, type ChildStatus, childEvent, type HeardSend, type LiveChild } from "../../src/child_flows.ts";
 import { chat, type ChatDeps } from "../../src/cli/chat.ts";
 import {
   chatBanner,
@@ -175,6 +175,11 @@ const row = (text: string) => `│ ${text.padEnd(COLUMNS - 4)} │`;
 const TOP = `╭${"─".repeat(COLUMNS - 2)}╮`;
 const BOTTOM = `╰${"─".repeat(COLUMNS - 2)}╯`;
 const HINT = "  /exit to leave · ctrl-c interrupts · esc withdraws";
+
+/** The report of `status`, signed `label`, which heard `heard`. */
+function reported(status: ChildStatus, label = "hello r1", heard: readonly HeardSend[] = []): ChildReport {
+  return { outcome: "sent", seq: 1, runId: "chat-1-r1", label, event: childEvent(status, heard)! };
+}
 
 describe("the banner's pieces", () => {
   test("loginLabel names a subscription and a key that is there", () => {
@@ -490,13 +495,13 @@ describe("the chat's view", () => {
     expect(modes().at(-1)).toBe("?25h");
   });
 
-  test("a child event between two chunks of a reply prints above it, and the reply goes on as it was", () => {
+  test("a report between two chunks of a reply prints above it, and the reply goes on as it was", () => {
     const { view, rows } = viewOn();
     view.turn(true);
     view.onEvent(started(1));
     view.onStream(chunk(1, "Here:\n```py\nx = 1\ny = "));
     const status = { run: "r1", seq: 1, log: "r1.jsonl", status: "succeeded" as const, output: "ok" };
-    view.childEvent(childEvent(status)!);
+    view.report(reported(status));
     view.onStream(chunk(1, "2\n```\nDone **now**.\n"));
     view.onEvent(finished(1));
     view.turn(false);
@@ -507,7 +512,7 @@ describe("the chat's view", () => {
       `  ╭─ py ${"─".repeat(51)}╮`,
       frame("x = 1"),
       "",
-      "⏺ r1 succeeded",
+      "⏺ hello r1 succeeded",
       '  ⎿  with output "ok"',
       frame("y = 2"),
       `  ╰${"─".repeat(56)}╯`,
@@ -628,24 +633,28 @@ describe("the chat's view", () => {
     ]);
   });
 
-  test("a child event is a card coloured by its status", () => {
+  test("a report is a card signed by its run's label, coloured by its status", () => {
     const { view, output, rows } = viewOn();
     const status = (fields: object) => ({ run: "r1", seq: 1, log: "r1.jsonl", status: "waiting" as const, ...fields });
-    view.childEvent(childEvent(status({ status: "succeeded", output: "Hi Ada" }))!);
-    view.childEvent(childEvent(status({ asks: [{ call: "c1", question: "Which region?" }] }))!);
+    view.report(reported(status({ status: "succeeded", output: "Hi Ada" })));
+    view.report(reported(status({ asks: [{ call: "c1", question: "Which region?" }] })));
     const failure = { code: "code.error", message: "kaboom", node: "x" };
-    view.childEvent(childEvent(status({ status: "failed", failure }))!);
-    view.childEvent({ run: null, seq: 0, text: "run r9 was cancelled" });
+    view.report(reported(status({ status: "failed", failure })));
+    view.report(reported(status({ held: [{ call: "c2", tool: "shout", arguments: { text: "hi" } }] })));
+    const heard = [{ inbox: "messages", author: "Bob", by: null, text: "stop" }];
+    view.report(reported(status({}), "shell 1", heard));
     expect(rows()).toEqual([
       "",
-      "⏺ r1 succeeded",
+      "⏺ hello r1 succeeded",
       '  ⎿  with output "Hi Ada"',
-      "⏺ r1 asks",
+      "⏺ hello r1 asks",
       '  ⎿  (call c1): "Which region?"',
-      "⏺ r1 failed",
+      "⏺ hello r1 failed",
       '  ⎿  (code.error at x): "kaboom"',
-      "⏺ yian",
-      "  ⎿  run r9 was cancelled",
+      "⏺ hello r1 holds for approval",
+      '  ⎿  (call c2): shout {"text":"hi"}',
+      "⏺ shell 1 heard",
+      '  ⎿  from "Bob" on inbox "messages": "stop"',
     ]);
     expect(output.text).toContain("\x1b[32m⏺");
     expect(output.text).toContain("\x1b[31m⏺");
@@ -700,20 +709,20 @@ describe("the chat's view", () => {
     expect(rows()).toEqual(["", "⏺ Started it (r1)."]);
   });
 
-  test("a turn of a child event after a reply's turn leaves one blank line between them, not two", () => {
+  test("a turn of a report after a reply's turn leaves one blank line between them, not two", () => {
     const { view, rows } = viewOn();
     view.turn(true);
     view.onStream(chunk(1, "Started it (r1)."));
     view.onEvent(finished(1));
     view.turn(false);
-    // The prompt went up and was taken down for the event, leaving nothing on the screen.
+    // The prompt went up and was taken down for the report, leaving nothing on the screen.
     view.active(true);
     view.active(false, false);
     view.turn(true);
     const status = { run: "r1", seq: 2, log: "r1.jsonl", status: "succeeded" as const, output: "ok" };
-    view.childEvent(childEvent(status)!);
+    view.report(reported(status));
     view.turn(false);
-    expect(rows()).toEqual(["", "⏺ Started it (r1).", "", "⏺ r1 succeeded", '  ⎿  with output "ok"']);
+    expect(rows()).toEqual(["", "⏺ Started it (r1).", "", "⏺ hello r1 succeeded", '  ⎿  with output "ok"']);
   });
 
   test("a block longer than the screen prints its top for good", () => {
@@ -847,7 +856,7 @@ describe("the live rows' frames", () => {
     view.onStream(chunk(1, "one\ntw"));
     view.onStream(chunk(1, "o"));
     const status = { run: "r1", seq: 1, log: "l", status: "succeeded" as const, output: "ok" };
-    view.childEvent(childEvent(status)!);
+    view.report(reported(status));
     expect(writes).toHaveLength(4);
     for (const write of writes) {
       expect(write.startsWith(SYNC_ON)).toBe(true);
@@ -1907,7 +1916,7 @@ describe("a run's view while the chat goes on", () => {
   );
 
   test(
-    "opened from the prompt, lets the chat take a run's event in a turn of its own before Esc",
+    "opened from the prompt, lets the chat take a run's report in a turn of its own before Esc",
     async () => {
       writeFileSync(join(root, "nap.yaml"), NAP_FLOW);
       const { io, stdin, output, rows } = terminalIo();
@@ -1937,7 +1946,7 @@ describe("a run's view while the chat goes on", () => {
       stdin.write(ESCAPE);
       await pastEscape();
       await until(() => rows().includes("⏺ r1 is done.") && rows().at(-1) === HINT);
-      expect(rows()).toContain("⏺ r1 succeeded");
+      expect(rows()).toContain("⏺ nap r1 succeeded");
       stdin.write(`/exit${ENTER}`);
       expect(await chatting).toBe(0);
     },

@@ -9,6 +9,7 @@
 
 export {
   type BoundMemories,
+  type ChildEvent,
   type ChildFlowGroupOptions,
   type ChildFlowOwner,
   type ChildFlowOwnerOptions,
@@ -18,8 +19,10 @@ export {
   type ChildFlowStart,
   type ChildFlowTarget,
   type ChildInterrupt,
+  type ChildReport,
   type ChildStartOptions,
   type ChildStatus,
+  type EventCard,
   type LiveChild,
   type MemoryHooks,
   type PressArguments,
@@ -27,7 +30,9 @@ export {
   type PressOptions,
   type PressRecord,
   type PressUnrecorded,
+  type ReportHold,
   type StartedChild,
+  type TakenReport,
   type WaitingChild,
 } from "./child_flows.ts";
 

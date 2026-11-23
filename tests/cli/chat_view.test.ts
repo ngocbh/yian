@@ -21,6 +21,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { type ChildStatus, childEvent, type LiveChild } from "../../src/child_flows.ts";
 import { chat, type ChatDeps } from "../../src/cli/chat.ts";
 import {
   chatBanner,
@@ -32,7 +33,6 @@ import {
   shortArgs,
   summary,
 } from "../../src/cli/chat_view.ts";
-import { type ChildStatus, childEvent, type LiveChild } from "../../src/cli/chat_runs.ts";
 import { LineEditor, Terminal } from "../../src/cli/terminal.ts";
 import { cells } from "../../src/cli/cells.ts";
 import { liveRows, SYNC_OFF, SYNC_ON } from "../../src/cli/live_rows.ts";

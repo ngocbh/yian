@@ -90,7 +90,8 @@ const LAYERS: readonly (readonly string[])[] = [
   ["compile"],
   ["compose", "runtime"],
   ["run"],
-  ["index", "cli"],
+  ["child_flows"],
+  ["index", "cli", "run_entry"],
 ];
 
 /** The `src` entry a source path or module id sits in: its first segment, without `.ts`. */
@@ -105,6 +106,8 @@ const LAYER_HINTS: Record<string, string> = {
     "nodes must not import compile; return a canonical Grow seed and let the injected compile-layer " +
     "builder interpret it. nodes must not import runtime; direct-driver fallbacks belong on a lower seam",
   compile: "compile must stay representation-neutral and execution-free",
+  run: "the yian/run entry is run_entry.ts, which re-exports run.ts and the child-flow toolkit beside it",
+  child_flows: "the child-run driver takes what its host decides through its hooks",
 };
 
 /** One rule per layer below the top: its modules import no module of a layer above it. */
@@ -167,19 +170,6 @@ const RULES: Rule[] = [
       file: "llm/client.ts",
       bad: ["llm_clients", "nodes", "runtime", "index", "typesys", "typesys/other", "diagnostics"],
       good: ["defaults", "platform", "typesys/json", "typesys/errors", "llm/errors", "llm/index"],
-    },
-  },
-  {
-    name: "cli/chat_runs.ts imports nothing of the top layer",
-    files: only("cli/chat_runs.ts"),
-    forbid: ["index", "cli"],
-    why:
-      "the child-run driver takes what the chat decides through its hooks, so it can sit below the CLI; " +
-      "it must not import index or cli",
-    samples: {
-      file: "cli/chat_runs.ts",
-      bad: ["cli/utils", "cli/memory_bind", "index"],
-      good: ["run", "runtime/log", "platform", "tools/function_tools"],
     },
   },
 ];
@@ -544,7 +534,8 @@ describe("layer rule snippets", () => {
         expect(paths.filter((path) => !LAYER_RULES[rank]!.files(path))).toEqual([]);
       }
     });
-    expect(LAYER_RULES.filter((rule) => rule.files("index.ts") || rule.files("cli/x.ts"))).toEqual([]);
+    const top = ["index.ts", "cli/x.ts", "run_entry.ts"];
+    expect(LAYER_RULES.filter((rule) => top.some((path) => rule.files(path)))).toEqual([]);
   });
 
   test("a module of no layer, and a local import of none, are reported", () => {

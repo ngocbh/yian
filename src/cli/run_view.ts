@@ -10,6 +10,7 @@
  * terminal.
  */
 
+import type { ChildStatus } from "../child_flows.ts";
 import { END_ID, START_ID } from "../compile/model.ts";
 import type { Env } from "../defaults.ts";
 import {
@@ -21,7 +22,6 @@ import {
   RunLogChangedError,
 } from "../runtime/log.ts";
 import { cells, fit, wrapLine } from "./cells.ts";
-import type { ChildStatus } from "./chat_runs.ts";
 import { runStatusLabel, shortArgs, summary } from "./chat_view.ts";
 import { TAB } from "./markdown.ts";
 import {

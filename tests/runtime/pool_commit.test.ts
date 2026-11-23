@@ -140,7 +140,7 @@ output: {make: "\${make.output}", whole: "\${0.5 + 1.5}"}
 `;
 
 const ROOT = join(import.meta.dirname, "../..");
-const BUILT = join(ROOT, "dist/src/run.js");
+const BUILT = join(ROOT, "dist/src/run_entry.js");
 /**
  * The public entry. It resolves by self-reference from inside ROOT (this file, and children whose
  * cwd is ROOT). Typed string so tsc doesn't resolve it to dist/, missing before a build.
@@ -463,8 +463,8 @@ test("the public JSON form reads a file as a FileRef and refuses text the log re
 });
 
 test.if(process.versions.bun !== undefined)("on Bun the run entry is the source module", async () => {
-  expect(realpathSync(fileURLToPath(import.meta.resolve(ENTRY)))).toBe(realpathSync(join(ROOT, "src/run.ts")));
-  const entry = (await import(ENTRY)) as typeof import("../../src/run.ts");
+  expect(realpathSync(fileURLToPath(import.meta.resolve(ENTRY)))).toBe(realpathSync(join(ROOT, "src/run_entry.ts")));
+  const entry = (await import(ENTRY)) as typeof import("../../src/run_entry.ts");
   expect(entry.TypedValue).toBe(RuntimeTypedValue);
 });
 

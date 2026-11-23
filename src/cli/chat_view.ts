@@ -11,6 +11,7 @@
  * the terminal.
  */
 
+import type { ChildEvent, ChildStatus, LiveChild } from "../child_flows.ts";
 import type { Env } from "../defaults.ts";
 import {
   ModelCallFinished,
@@ -23,7 +24,6 @@ import {
 } from "../events.ts";
 import type { Scheduler } from "../platform.ts";
 import { TAKE } from "../tools/context.ts";
-import type { ChildEvent, ChildStatus, LiveChild } from "./chat_runs.ts";
 import { MarkdownLines, renderMarkdown, TAB } from "./markdown.ts";
 import { ANSI, cells, clip, columnsOf, fit, rowsOf, wrapLine } from "./cells.ts";
 import { liveRows, type LiveRows, type RowCursor } from "./live_rows.ts";

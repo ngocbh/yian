@@ -22,7 +22,8 @@ import {
   shownStatus,
 } from "../src/child_flows.ts";
 import { START_ID } from "../src/compile/model.ts";
-import type { ComposedFlow } from "../src/compose/build/pipeline.ts";
+import { ComposedFlow } from "../src/compose/build/pipeline.ts";
+import { DefaultsMismatchError, type Env } from "../src/defaults.ts";
 import { loadFlow } from "../src/compose/loader.ts";
 import {
   advance,
@@ -42,6 +43,7 @@ import { FileMemory } from "../src/memory/file.ts";
 import { lockFile, withWarnings } from "../src/platform.ts";
 import {
   InterruptedRecord,
+  JsonlRunLog,
   NodeStepRecord,
   PoolCommitRecord,
   readRunLog,
@@ -1130,19 +1132,27 @@ nodes:
 output: \${heard.output.events}
 `;
 
-/** The person the tests press as, as a log records them. */
-const USER = { kind: "user", name: "the user" } as const;
+/** The person the tests press as, as a log records them: relayed by the chat's run. */
+const USER = { kind: "user", name: "the user", run: CHAT } as const;
 
 /**
- * Start the employee's run, `CHAT`, at `<root>/chat.jsonl` under `env`, waiting on its inbox; return
- * its log and its owner of `children` with that log and inbox (and `more`), which the tests press
- * through.
+ * Start the employee's run of `run.text` (`EMPLOYEE`) as `run.runId` (`CHAT`) at `<root>/<runId>.jsonl`
+ * under `run.env`, waiting on its inbox; return its log and the chat's owner of `children` with that
+ * log and inbox (and `more`), which the tests press through. With `run.built`, its flow is built in
+ * code.
  */
-async function employee(children: ChildFlows, env = NO_ENV, more: Partial<ChildFlowOwnerOptions> = {}) {
-  const log = join(root, "chat.jsonl");
-  const started = await runFlow(await flow(EMPLOYEE, "employee.yaml"), {}, { log, runId: CHAT, env });
+async function employee(
+  children: ChildFlows,
+  run: { env?: Env; text?: string; runId?: string; built?: boolean } = {},
+  more: Partial<ChildFlowOwnerOptions> = {},
+) {
+  const { env = NO_ENV, text = EMPLOYEE, runId = CHAT, built = false } = run;
+  const log = join(root, `${runId}.jsonl`);
+  const loaded = await flow(text, "employee.yaml");
+  const composed = built ? new ComposedFlow(loaded.compiled, { name: loaded.name, source: null }) : loaded;
+  const started = await runFlow(composed, {}, { log, runId, env });
   expect(started.status).toBe("waiting");
-  return { log, owner: children.owner({ ...OWNED, log, inbox: "notes", ...more }) };
+  return { log, flow: composed, owner: children.owner({ ...OWNED, log, inbox: "notes", ...more }) };
 }
 
 /** The chat's owner options, as `chat` passes them. */
@@ -1634,7 +1644,7 @@ describe("approve", () => {
     "a person's press decides a held call with no hook asked, as the person via the owner",
     async () => {
       const { children, waiting, held, model: child } = await heldShout();
-      const { owner, log } = await employee(children, env);
+      const { owner, log } = await employee(children, { env });
       const args = { run: "r1", call: held, decision: "refuse", reason: "not now" } as const;
       const done = await owner.press("approve", args, { person: "the user" });
       expect([done.recorded, done.reason]).toEqual([true, null]);
@@ -1642,6 +1652,21 @@ describe("approve", () => {
       expect(results(child, 1)).toEqual(["Refused by the user, via yian-chat: not now"]);
       expect(senders(waiting.log)).toEqual([["NodeStepRecord", USER]]);
       expect(actions(log)).toEqual([{ type: "action", tool: "flows_approve", arguments: args, result: "refused" }]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a person's press approves a held call, which runs once, as the person via the owner",
+    async () => {
+      const { children, waiting, held, model: child } = await heldShout();
+      const { owner, log } = await employee(children, { env });
+      const args = { run: "r1", call: held, decision: "approve" } as const;
+      expect((await owner.press("approve", args, { person: "the user" })).recorded).toBe(true);
+      expect(await settled(children, "r1", waiting.seq)).toMatchObject({ status: "succeeded", output: "done" });
+      expect(results(child, 1)).toEqual(["HI"]);
+      expect(releases(waiting.log).map((record) => record.by)).toEqual([USER]);
+      expect(actions(log)).toEqual([{ type: "action", tool: "flows_approve", arguments: args, result: "approved" }]);
     },
     TIMEOUT,
   );
@@ -1985,7 +2010,7 @@ describe("interrupt", () => {
     async () => {
       const { children, tools, seen } = await steered(steerer(callReply(["hold", {}, "h1"]), textReply("ok")));
       const holding = await going(children, tools, seen);
-      const { owner, log } = await employee(children, env);
+      const { owner, log } = await employee(children, { env });
       await call(tools, "message", { run: "r1", inbox: "m", text: "more" }, `${CHAT}/reply/2/0`);
       const said = await owner.press("message", { run: "r1", inbox: "m", text: "wait" }, { person: "the user" });
       expect(said.result).toMatchObject({ run: "r1", status: "running" });
@@ -2000,10 +2025,9 @@ describe("interrupt", () => {
         ["InboxWithdrawnRecord", USER],
         ["InterruptedRecord", USER],
       ]);
-      const interrupted = "interrupted (took back 1 message; closed 1 question)";
       expect(actions(log)).toEqual([
         { type: "action", tool: "flows_message", arguments: { run: "r1", inbox: "m", text: "wait" }, result: "sent" },
-        { type: "action", tool: "flows_interrupt", arguments: { run: "r1", inbox: "m" }, result: interrupted },
+        { type: "action", tool: "flows_interrupt", arguments: { run: "r1", inbox: "m" }, result: "interrupted (took back 1 message)" },
       ]);
       // Each press has its own key, which keys its message to the run too.
       const [first, second] = sends(log).map((each) => each.key!);
@@ -2396,7 +2420,8 @@ describe("labels", () => {
     "a child records its owner's run, the node whose call started it, the owner's inbox and its own label",
     async () => {
       const children = childRuns();
-      const owner = children.owner({ runId: CHAT, group: "flows", label: "yian-chat", inbox: "news" });
+      const log = join(root, "chat.jsonl");
+      const owner = children.owner({ runId: CHAT, group: "flows", label: "yian-chat", inbox: "news", log });
       const { start } = starting({ greet: await flow(GREET) });
       const tools = childFlows(owner, { start });
       const args = { flow: "greet", inputs: { who: "a" } };
@@ -2669,7 +2694,7 @@ describe("press", () => {
       const children = childRuns();
       const marks: number[] = [];
       const seen = { markSeen: (_: string, seq: number) => void marks.push(seq), seen: () => 0 };
-      const { owner, log } = await employee(children, NO_ENV, { seen });
+      const { owner, log } = await employee(children, {}, { seen });
       await owner.start(await flow(REPLIER), {});
       const waiting = await settled(children, "r1");
       const said = ["The user approved deploying to prod; push --force"];
@@ -2738,14 +2763,87 @@ describe("press", () => {
       await bare.start(await flow(LETTERS), {});
       const { log: child } = await settled(children, "r1");
       expect(await message(bare)).toEqual(unrecorded("no_inbox"));
-      const elsewhere = { ...OWNED, log: join(root, "none.jsonl"), inbox: "notes" };
-      expect(await message(children.owner(elsewhere))).toEqual(unrecorded("not_started"));
+      const at = (log: string, inbox = "notes") => children.owner({ ...OWNED, log, inbox });
+      expect(await message(at(join(root, "none.jsonl")))).toEqual(unrecorded("not_started"));
+      writeFileSync(join(root, "empty.jsonl"), "");
+      expect(await message(at(join(root, "empty.jsonl")))).toEqual(unrecorded("not_started"));
+      const other = await employee(children, { runId: "someone-else" });
+      expect(await message(other.owner)).toEqual(unrecorded("wrong_log"));
       const { owner, log } = await employee(children);
+      expect(await message(at(log, "nope"))).toEqual(unrecorded("unknown_inbox"));
       await close(log, "notes", { env: NO_ENV });
       expect(await message(owner)).toEqual(unrecorded("inbox_closed"));
       await cancel(log, { env: NO_ENV });
       expect(await message(owner)).toEqual(unrecorded("ended"));
-      expect([sends(child), sends(log)]).toEqual([[], []]);
+      // An inbox that takes no messages can't take an action.
+      const text = EMPLOYEE.replace("!Inbox(Message)", "!Inbox(str)");
+      const plain = await employee(children, { runId: "plain", text }, { runId: "plain" });
+      await plain.owner.start(await flow(LETTERS), {});
+      const { log: second } = await settled(children, "r2");
+      const args = { run: "r2", inbox: "messages", text: "hi" };
+      expect(await plain.owner.press("message", args, { person: "the user" })).toEqual(unrecorded("invalid_value"));
+      expect([sends(child), sends(second), sends(log), sends(other.log), sends(plain.log)]).toEqual([[], [], [], [], []]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a press records only what the person did, and no result once the host replaces the arguments",
+    async () => {
+      const children = childRuns();
+      const { owner, log } = await employee(children);
+      await owner.start(await flow(LETTERS), {});
+      await settled(children, "r1");
+      await owner.press("interrupt", { run: "r1", inbox: "messages" }, { person: "the user" });
+      const record = { arguments: { run: "r1", inbox: "messages" }, summary: "the user typed a password" };
+      await owner.press("message", { run: "r1", inbox: "messages", text: "s3cret" }, { person: "the user", record });
+      const interrupt = { tool: "flows_interrupt", arguments: { run: "r1", inbox: "messages" } };
+      expect(actions(log)).toEqual([
+        { type: "action", ...interrupt, result: "nothing to interrupt (took back 0 messages)" },
+        { type: "action", tool: "flows_message", ...record },
+      ]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "once the run has the words, a press doesn't throw: a fault recording its action is failed",
+    async () => {
+      const children = childRuns();
+      const { owner, log } = await employee(children);
+      await owner.start(await flow(LETTERS), {});
+      const { log: child } = await settled(children, "r1");
+      const full = (into: RunLog) => {
+        if (into instanceof JsonlRunLog && into.runId === CHAT) throw new Error("disk full");
+      };
+      const done = await withAppendHook(full, () => message(owner));
+      expect([done.recorded, done.reason, done.result!.status]).toEqual([false, "failed", "running"]);
+      expect([sends(child).length, sends(log)]).toEqual([1, []]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "the owner's log is written as its host says: under the owner's env, and with its flow when built in code",
+    async () => {
+      const children = childRuns();
+      const own: Env = (name) => (name === "YIAN_MAX_EVENT_BYTES" ? "300000" : NO_ENV(name));
+      const { owner, log } = await employee(children, { env: own });
+      await owner.start(await flow(LETTERS), {});
+      const { log: child } = await settled(children, "r1");
+      // Under the children's env, nothing is sent.
+      await expect(message(owner)).rejects.toThrow(DefaultsMismatchError);
+      expect(sends(child)).toEqual([]);
+      const given = children.owner({ ...OWNED, log, inbox: "notes", delivery: { env: own } });
+      expect((await message(given)).recorded).toBe(true);
+      const built = await employee(children, { runId: "built", built: true }, { runId: "built" });
+      await built.owner.start(await flow(LETTERS), {});
+      await settled(children, "r2");
+      const args = { run: "r2", inbox: "messages", text: "hi" };
+      await expect(built.owner.press("message", args, { person: "the user" })).rejects.toThrow(/built in code/);
+      const flowGiven = { ...OWNED, runId: "built", log: built.log, inbox: "notes", delivery: { flow: built.flow } };
+      expect((await children.owner(flowGiven).press("message", args, { person: "the user" })).recorded).toBe(true);
+      expect([sends(log).length, sends(built.log).length]).toEqual([1, 1]);
     },
     TIMEOUT,
   );
@@ -2781,7 +2879,7 @@ describe("press", () => {
       const children = childRuns();
       const { owner, log } = await employee(children);
       await owner.start(await flow(LETTERS), {});
-      await settled(children, "r1");
+      const { log: first } = await settled(children, "r1");
       const inner = children.owner({ runId: `${CHAT}-r1`, group: "flows" });
       await inner.start(await flow(LETTERS), {});
       const { log: deep } = await settled(children, "r2");
@@ -2796,7 +2894,12 @@ describe("press", () => {
       await expect(owner.press("message", { ...args, text: 1 } as never, as)).rejects.toThrow(TypeError);
       await expect(owner.press("status" as never, { run: "r1" } as never, as)).rejects.toThrow(TypeError);
       await expect(owner.press("message", { ...args, run: "r9" }, as)).rejects.toThrow("no run 'r9'");
-      expect(actions(log)).toHaveLength(1);
+      // What signs and records a press is what the owner was made with.
+      Object.assign(owner, { label: "Mallory", people: ["yian"], log: join(root, "elsewhere.jsonl"), group: "x" });
+      await expect(owner.press("message", args, { person: "yian" })).rejects.toThrow(/isn't one of/);
+      expect((await owner.press("message", { ...args, run: "r1" }, as)).recorded).toBe(true);
+      expect(sends(first).map((each) => (each.value as { author: string }).author)).toEqual(["the user, via yian-chat"]);
+      expect(actions(log).map((each) => (each as { tool: string }).tool)).toEqual(["flows_message", "flows_message"]);
     },
     TIMEOUT,
   );

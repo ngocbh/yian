@@ -102,9 +102,9 @@ test("the unread sends, with who made each: one assigned to a take that hasn't w
 
 test("the closed inboxes, by name; none once the run ends", () => {
   const closed = [new InboxClosedRecord("msgs"), new InboxClosedRecord("asks")];
-  expect(inspectRun(logOf(...WAITING)).closed).toEqual([]);
-  expect(inspectRun(logOf(...WAITING, ...closed)).closed).toEqual(["asks", "msgs"]);
-  expect(inspectRun(logOf(...WAITING, ...closed, new RunCancelledRecord())).closed).toEqual([]);
+  expect(inspectRun(logOf(...WAITING)).closedInboxes).toEqual([]);
+  expect(inspectRun(logOf(...WAITING, ...closed)).closedInboxes).toEqual(["asks", "msgs"]);
+  expect(inspectRun(logOf(...WAITING, ...closed, new RunCancelledRecord())).closedInboxes).toEqual([]);
 });
 
 test("a sleeping node sets wakeAt to its deadline", () => {

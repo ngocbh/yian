@@ -2880,7 +2880,7 @@ export interface RunInspection {
    */
   readonly unread: readonly UnreadSend[];
   /** For a run that hasn't ended, the inboxes closed, which no send reaches, by name; `[]` for an ended run. */
-  readonly closed: readonly string[];
+  readonly closedInboxes: readonly string[];
 }
 
 /** One send nothing has read yet: its inbox, its seq, and who made it (`null` when its call said no one). */
@@ -2980,8 +2980,13 @@ export function inspectRun(
     ready: waiting && wakeableNodes(waits).length > 0,
     wakeAt: waiting ? wakeAt(waits) : null,
     unread: ended ? [] : unreadSends(waits, source.senders),
-    closed: ended ? [] : [...waits.inboxes].flatMap(([name, inbox]) => (inbox.closed ? [name] : [])).sort(compareCodeUnits),
+    closedInboxes: ended ? [] : closedInboxes(waits),
   };
+}
+
+/** The inboxes of `waits` that are closed, by name. */
+function closedInboxes(waits: WaitsState): string[] {
+  return [...waits.inboxes].flatMap(([name, inbox]) => (inbox.closed ? [name] : [])).sort(compareCodeUnits);
 }
 
 /** The sends of `waits`' inboxes that a withdraw would take back, in seq order, each with its sender from `senders`. */

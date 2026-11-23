@@ -3317,6 +3317,10 @@ async function checkInvariants(
             .flatMap((inbox) => withdrawableEvents(state.waits, inbox).map((seq) => ({ inbox, seq, by: state.sendBy.get(seq) ?? null })))
             .sort((a, b) => a.seq - b.seq)
         : [],
+    closedInboxes:
+      terminal === null
+        ? [...state.waits.inboxes].flatMap(([name, inbox]) => (inbox.closed ? [name] : [])).sort(compareCodeUnits)
+        : [],
   };
   const form = (inspection: RunInspection) => ({
     ...inspection,

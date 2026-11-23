@@ -58,6 +58,9 @@ import {
   type DeliveryRefusal,
   DeliveryRefused,
   hostInputs,
+  inspectRun,
+  interrupt,
+  type InterruptResult,
   type JsonObject,
   libraryRunMessage,
   type MemoryDrift,
@@ -66,6 +69,8 @@ import {
   runFlow,
   runLogPath,
   send,
+  withdraw,
+  type WithdrawnEvent,
 } from "./run.ts";
 import { recordTimeMs, type RunParent } from "./runtime/log.ts";
 import { wakeAt } from "./runtime/waits.ts";
@@ -293,6 +298,24 @@ export interface StartedChild {
   readonly id: string;
   readonly log: string;
   readonly seq: number;
+}
+
+/** What `ChildFlows.interrupt` did: the child's status, the sends it took back, and what the interrupt did. */
+export interface ChildInterrupt extends InterruptResult {
+  /** The child's status, as `ChildFlows.answer` returns it. */
+  readonly status: ChildStatus;
+  /** The caller's unread sends it took back, in send order, which the run never reads. */
+  readonly taken: readonly WithdrawnEvent[];
+  /**
+   * Whether the interrupt reached the run. When `false` (the run refused it or the take-back, or a
+   * fault stopped it after the take-back), the status's `note` says why, and the rest is empty.
+   */
+  readonly landed: boolean;
+  /**
+   * When it named no agent but left a Stop for the next one to read the inbox: the unread sends to
+   * the inbox from others than the caller, which that agent's turn may use up unanswered; else 0.
+   */
+  readonly queued: number;
 }
 
 /** The flow a group's `start` call names, as its host's `resolve` finds it. */
@@ -1046,6 +1069,55 @@ export class ChildFlows {
   }
 
   /**
+   * Interrupt child `id`'s inbox `inbox`, as `interrupt` does: the agents reading it as their steer
+   * inbox stop their current step, and their open calls and released calls not yet run are closed;
+   * the run goes on (`stop` ends it). With no agent reading it now, the next one to read it stops at
+   * once, though it may already have taken another sender's message, which then goes unanswered
+   * (`queued`). First, so the cut agents never read them, take back the unread sends to `inbox`
+   * that `options.from` made: never anyone else's, so none without it, as the host's own sends
+   * are recorded as no one's. Returns its status, as `answer` does, with the sends taken back and
+   * the interrupt's result (`landed` says whether it happened). When the take-back landed but the
+   * interrupt then fails, the fault is the status's note, so what came back is still returned.
+   *
+   * @throws {RangeError} When no child has the id.
+   * @throws What a delivery fault throws, as `answer` says, when nothing was taken back.
+   */
+  async interrupt(id: string, inbox: string, options: Sent = {}): Promise<ChildInterrupt> {
+    const child = this.#child(id);
+    const by = options.from?.by ?? null;
+    let taken: readonly WithdrawnEvent[] = [];
+    let cut = null as InterruptResult | null;
+    const none = { seq: null, nodes: [], calls: [], released: [], queued: 0, landed: false };
+    let status: ChildStatus;
+    try {
+      status = await this.#deliver(
+        child,
+        async (log, delivery) => {
+          if (by !== null) taken = await withdraw(log, inbox, delivery);
+          cut = await interrupt(log, inbox, delivery);
+          return taken.length > 0 || cut.seq !== null;
+        },
+        options,
+      );
+    } catch (error) {
+      if (taken.length === 0) throw error;
+      // The take-back may have reopened a take.
+      this.nudge(id);
+      const note = (error as Error | null)?.message ?? String(error);
+      return { ...none, taken, status: { ...child.status, note } };
+    }
+    if (cut === null) {
+      if (taken.length > 0) this.nudge(id);
+      return { ...none, taken, status };
+    }
+    // A Stop left standing: the next reader may take these before it stops.
+    const standing = cut.seq !== null && cut.nodes.length === 0;
+    const unread = standing ? inspectRun(child.log).unread : [];
+    const queued = unread.filter((send) => send.inbox === inbox && !isDeepStrictEqual(send.by, by)).length;
+    return { ...cut, landed: true, queued, status, taken };
+  }
+
+  /**
    * Close child `id`'s inbox `inbox`, so its turns end. Returns its status, and throws, as `answer`
    * does.
    *
@@ -1147,8 +1219,9 @@ export class ChildFlows {
 
   /**
    * Make `deliver`'s delivery to `child`'s log, by `options.from`, publish the child `running` and
-   * nudge its driver; return its status. A refusal (the run's, or `options.refusal`'s text, asked
-   * first), or a delivery after `dispose`, is a note on the status returned, and changes nothing;
+   * nudge its driver; return its status. A delivery that resolves `false` changed nothing, so the
+   * status is returned as it is. A refusal (the run's, or `options.refusal`'s text, asked first),
+   * or a delivery after `dispose`, is a note on the status returned, and changes nothing;
    * `options.resent` is as `answer` says. Every error goes through `memories.scrub`.
    */
   async #deliver(
@@ -1161,7 +1234,8 @@ export class ChildFlows {
     try {
       const refused = options.refusal?.() ?? null;
       if (refused !== null) return { ...child.status, note: refused };
-      await deliver(child.log, { ...this.#deliveryOptions(child), by: options.from?.by ?? null });
+      const moved = await deliver(child.log, { ...this.#deliveryOptions(child), by: options.from?.by ?? null });
+      if (moved === false) return child.status;
     } catch (error) {
       const scrubbed = this.#options.memories.scrub(error, child.memory);
       if (!(error instanceof DeliveryRefused)) throw scrubbed;
@@ -1477,6 +1551,11 @@ export class ChildFlowOwner {
     return this.#driver.message(this.#mine(id), inbox, text, { ...options, from: this.#from });
   }
 
+  /** As `ChildFlows.interrupt`, from this owner's model. @throws {RangeError} When it doesn't reach run `id`. */
+  interrupt(id: string, inbox: string): Promise<ChildInterrupt> {
+    return this.#driver.interrupt(this.#mine(id), inbox, { from: this.#from });
+  }
+
   /** As `ChildFlows.closeInbox`, from this owner's model. @throws {RangeError} When it doesn't reach run `id`. */
   closeInbox(id: string, inbox: string, options: Resend = {}): Promise<ChildStatus> {
     return this.#driver.closeInbox(this.#mine(id), inbox, { ...options, from: this.#from });
@@ -1607,10 +1686,43 @@ function checkStartInputs(flow: ComposedFlow, inputs: unknown): Readonly<Record<
   }
 }
 
+/** What a send taken back said, as the model reads it again: a message's text, else the value as a status shows it. */
+function sentText(value: unknown): unknown {
+  const parts = isRecord(value) ? value["parts"] : null;
+  const texts = Array.isArray(parts) ? parts.map((part) => (isRecord(part) ? part["text"] : null)) : [];
+  if (texts.length === 0 || !texts.every((text) => typeof text === "string")) return shownValue(value);
+  return cutStatusText(texts.join(""));
+}
+
+/** What `done`, an interrupt of `inbox`, did, in a line the model reads. */
+function interruptText(inbox: string, done: ChildInterrupt): string {
+  const count = (n: number, what: string) => `${n} ${what}${n === 1 ? "" : "s"}`;
+  const taken = done.taken.length;
+  const took = `took back ${count(taken, "message")}${taken > LIST_ITEMS ? `, the first ${LIST_ITEMS} shown` : ""}`;
+  if (!done.landed) return `not interrupted (${took})`;
+  if (done.seq === null) {
+    return `nothing to interrupt: the run waits for a message on inbox '${inbox}', or is already stopping (${took})`;
+  }
+  if (done.nodes.length === 0) {
+    const queued = `, and may use up ${count(done.queued, "queued message")} from others unanswered`;
+    return `nothing to stop now; the next turn on '${inbox}' stops at once${done.queued === 0 ? "" : queued} (${took})`;
+  }
+  const held = done.calls.filter((call) => call.held).length;
+  const closed = [
+    ...(done.calls.length > held ? [count(done.calls.length - held, "question")] : []),
+    ...(held > 0 ? [count(held, "held call")] : []),
+    ...(done.released.length > 0 ? [`${count(done.released.length, "approved call")} not yet run`] : []),
+  ];
+  const list = closed.length < 2 ? closed.join("") : `${closed.slice(0, -1).join(", ")} and ${closed.at(-1)}`;
+  return `interrupted (${took}${list === "" ? "" : `; closed ${list}`})`;
+}
+
 /**
  * The tools a run's model drives the child flows `owner` reaches with, for the host to pass under
  * `owner.group` in that run's tools, so the model sees `<group>_status`, and so on: `status` and
- * `wait` read a run's status, and `message`, `answer`, `close_inbox` and `stop` deliver to it.
+ * `wait` read a run's status, and `message`, `answer`, `interrupt`, `close_inbox` and `stop` deliver
+ * to it. `interrupt` first takes back the model's own unread sends to the inbox, and adds to the
+ * status what it did (`interrupted`) and the first `LIST_ITEMS` texts it took back (`taken_back`).
  *
  * With `options.start`, the group has `start` too, first. A call names a flow and its inputs; the
  * host's `resolve` finds the flow, a library is refused, the inputs are checked as the run's start
@@ -1622,10 +1734,12 @@ function checkStartInputs(flow: ComposedFlow, inputs: unknown): Readonly<Record<
  *
  * Each returns the run's status as `shownStatus` does; once the owner showed them, its replies and
  * memory notes aren't shown again, and with `owner.seen` they are marked read. A run the owner
- * doesn't reach, or an argument of the wrong type, is a `ReportedToolError`. The deliveries are
- * `resumable`: a resumed agent sends a crash-cut call again under its call id, which keys
- * `message`'s send, and a repeated answer, close or stop changes nothing; a call sent again
- * (`ctx.attempt` above 1) is `resent` (`ChildFlows.answer`).
+ * doesn't reach, or an argument of the wrong type, is a `ReportedToolError`. The deliveries but
+ * `interrupt` are `resumable`: a resumed agent sends a crash-cut call again under its call id, which
+ * keys `message`'s send, and a repeated answer, close or stop changes nothing; a call sent again
+ * (`ctx.attempt` above 1) is `resent` (`ChildFlows.answer`). A take-back or an interrupt has no key,
+ * so one sent again couldn't tell it had landed: it would say nothing was taken back, and could cut
+ * a turn the run began since. A crash-cut `interrupt` reads that its outcome is unknown.
  */
 export function childFlows<T extends ChildFlowTarget>(
   owner: ChildFlowOwner,
@@ -1718,6 +1832,23 @@ export function childFlows<T extends ChildFlowTarget>(
         const answer = args["answer"];
         if (answer === null || answer === undefined) throw new ReportedToolError("answer can't be null");
         return show(await owner.answer(id, call, answer, { resent: ctx.attempt > 1 }));
+      },
+    }),
+    tool({
+      name: "interrupt",
+      description:
+        "Stop what a run you started is doing on one of its Inbox inputs: first take back your messages " +
+        "there that the run hasn't read, then cut the current step of its agents reading that inbox, " +
+        "closing their questions and held calls. The run goes on, and waits for its next message; to " +
+        "end it, cancel it. Returns its status with interrupted (what it did) and taken_back (the " +
+        `messages taken back, which the run never reads; send again what still applies). ${status}`,
+      parameters: runArguments(["inbox", "The Inbox input's name."]),
+      execute: async (args) => {
+        const id = known(args);
+        const inbox = stringArg(args, "inbox");
+        const done = await owner.interrupt(id, inbox);
+        const taken = done.taken.slice(0, LIST_ITEMS).map((send) => sentText(send.value));
+        return { ...show(done.status), interrupted: interruptText(inbox, done), taken_back: taken };
       },
     }),
     tool({

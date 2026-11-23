@@ -104,6 +104,7 @@ test("the prompt reads before explaining, checks before runs, and relays inbox r
   for (const phrase of [
     "flows_message",
     "flows_close_inbox when the user is done with it",
+    "To stop what it is doing when the user asks, use flows_interrupt",
     "what a run said",
     "offer to report it with report_issue",
     "if the user pastes one, tell them to revoke it",

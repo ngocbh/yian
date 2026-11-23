@@ -427,6 +427,18 @@ test(
     stdin.write(`/exit${ENTER}`);
     const { code } = await chatting;
     expect(code).toBe(0);
+    // The flows group, as the chat's model is offered it.
+    const offered = model.requests[0]!.tools.map((each) => each.name).filter((name) => name.startsWith("flows_"));
+    expect(offered).toEqual([
+      "flows_start",
+      "flows_status",
+      "flows_wait",
+      "flows_message",
+      "flows_answer",
+      "flows_interrupt",
+      "flows_close_inbox",
+      "flows_stop",
+    ]);
     const results = toolResults(model.requests[3]!);
     expect(JSON.parse(results[0]!)).toEqual(HELLO_CHECK);
     expect(JSON.parse(results[1]!)).toMatchObject({ run: "r1" });

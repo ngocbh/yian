@@ -297,7 +297,7 @@ A long paste shows as a token such as `[Pasted text #1 +40 lines]`; the assistan
 | `check_flow` | Loads a flow or a draft without running it, as `yian check` does |
 | `write_flow` | Writes a flow that loads, once you approve |
 | `flows_start` | Starts a flow or a draft in the background, once you approve |
-| `flows_status`, `flows_wait`, `flows_answer`, `flows_message`, `flows_close_inbox`, `flows_stop` | Follows, answers, messages or cancels a flow it started |
+| `flows_status`, `flows_wait`, `flows_answer`, `flows_message`, `flows_interrupt`, `flows_close_inbox`, `flows_stop` | Follows, answers, messages, interrupts or cancels a flow it started |
 | `report_issue` | Reports a problem with yian (see [Reporting a problem](#reporting-a-problem)) |
 | `author_flow` | Builds or reworks a flow with you (see [Building and reviewing flows](#building-and-reviewing-flows)) |
 | `review_flow` | Reviews a flow for security, reliability, cost and clarity |
@@ -318,9 +318,14 @@ assistant, which sends your answers back. The assistant's messages to it are sig
 except to an `Inbox(str)` input, which takes plain text and can't tell who wrote it. The keys its
 agents need must already be set, and its memory inputs get their default memories (see
 [Memory](#memory)). Its log is `~/.yian/runs/<chat run id>-r<n>/log.jsonl`. It names the chat as
-the run's parent and the run as `<flow> r<n>`, and records each message, answer, close and stop as
-the assistant's. A try that `author_flow` runs is that run's own child, so its log is
+the run's parent and the run as `<flow> r<n>`, and records each message, answer, interrupt, close
+and stop as the assistant's. A try that `author_flow` runs is that run's own child, so its log is
 `~/.yian/runs/<chat run id>-r<n>-r<m>/log.jsonl`.
+
+When you ask the assistant to stop what a flow is doing, it interrupts the flow: it takes back its
+own messages the flow hasn't read, then cuts the flow's current step. With no step running, the
+flow's next turn stops at once, and a message someone else queued for it may go unanswered; the
+assistant is told how many. The flow goes on; to end it, ask the assistant to stop it.
 
 ### Building and reviewing flows
 

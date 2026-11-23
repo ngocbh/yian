@@ -19,7 +19,9 @@
  * What the host decides comes in through its hooks (`ChildFlowsOptions`): the key preflight, how a
  * child's memory inputs are bound and kept out of what the driver reports, the console sink, and
  * who hears each status. Every pass of a child gets the same memory instances. A group's `start`
- * asks its host which flow a call names and whether it may start (`ChildFlowStart`).
+ * asks its host which flow a call names and whether it may start (`ChildFlowStart`). A group's
+ * `approve` shows the owner's own `beforeToolCall` the child's held call it would decide, read from
+ * the child's log, and never runs without that check.
  *
  * The host names who speaks: an owner by its label, which signs its model's messages to its children
  * and names it on each delivery its model makes (`by`), and a child by its own, `<flow> r<n>` unless
@@ -64,7 +66,9 @@ import {
   type JsonObject,
   libraryRunMessage,
   type MemoryDrift,
+  type PendingCall,
   pendingCalls,
+  release,
   type RunResult,
   runFlow,
   runLogPath,
@@ -77,7 +81,14 @@ import { wakeAt } from "./runtime/waits.ts";
 import type { Skill } from "./skills/catalog.ts";
 import { pending, TAKE } from "./tools/context.ts";
 import { ReportedToolError } from "./tools/errors.ts";
-import { type FunctionTool, stringArg, stringArguments, tool } from "./tools/function_tools.ts";
+import { checkGateText } from "./tools/gate.ts";
+import {
+  type FunctionTool,
+  type StandardSchemaV1,
+  stringArg,
+  stringArguments,
+  tool,
+} from "./tools/function_tools.ts";
 import { registeredTools, type ToolEntry } from "./tools/registry.ts";
 import { YianRangeError, YianTypeError } from "./typesys/errors.ts";
 import { builtinType } from "./typesys/types.ts";
@@ -134,6 +145,19 @@ const VIA_LOOKALIKES: Readonly<Record<string, string>> = {
 
 /** @internal The longest a group's `wait` waits, in seconds. */
 export const WAIT_MAX_S = 120;
+
+/** The most characters of an `approve`'s reason, so its release note fits `GATE_TEXT_MAX_BYTES`. */
+const REASON_MAX_CHARS = 1000;
+
+/** A control character other than a line break or a tab, which an `approve`'s reason may not hold. */
+const REASON_CONTROL = /[^\P{Cc}\n\t]/u;
+
+/**
+ * What an owner's model reads for an `approve` in a run with no `beforeToolCall`: nothing would check
+ * the approval, so only a person gives one.
+ */
+const APPROVE_UNGATED =
+  "Only the user can approve or refuse a held call: ask them in the chat, or they can open the run and approve it.";
 
 /** The built-in `Message` type, which a model-made value may not sign. */
 const MESSAGE = builtinType("Message")!;
@@ -480,6 +504,13 @@ export interface ChildSender {
   readonly by: Author;
 }
 
+/** @internal A child's tool call held for approval, as its log lists it, with the child's run id and label. */
+export interface HeldChildCall {
+  readonly runId: string;
+  readonly label: string;
+  readonly call: PendingCall;
+}
+
 /** How a delivery is made: who from, and again or not. */
 interface Sent extends Resend {
   /**
@@ -793,6 +824,7 @@ export class ChildFlows {
     return new ChildFlowOwner(this, options, owned, {
       start: (flow, inputs, given) => this.#start(owned, flow, inputs, given),
       reaches: (id) => this.#reaches(runId, id),
+      held: (id, call) => this.#heldCall(id, call),
       scheduler: this.#options.scheduler,
     });
   }
@@ -1033,8 +1065,7 @@ export class ChildFlows {
     const refusal = () => {
       const signed = signedMessageAt(value);
       if (signed !== null) return signedNote(signed);
-      const held = child.started && pendingCalls(child.log).some((each) => each.callId === call && each.held);
-      return held ? `call '${call}' is a held tool call, not a question` : null;
+      return this.#held(child, call) === null ? null : `call '${call}' is a held tool call, not a question`;
     };
     const from = options.from ?? null;
     const output = from === null ? value : signedBy(value, from.label);
@@ -1139,6 +1170,37 @@ export class ChildFlows {
   }
 
   /**
+   * Decide child `id`'s held call `call` (`ChildStatus.held`): `approve` releases it, so the child's
+   * agent runs it once as its model asked it, with `options.reason` as the release's note; `refuse`
+   * answers it with the error `Refused by <label>: <reason>`, which that model reads, `<label>`
+   * being `options.from`'s (just `Refused` without it). Returns its status, and throws, as `answer`
+   * does. A call its log doesn't list as held, such as a question, is refused with a note, since
+   * refusing it would answer it. The child's log records `options.from`'s `by` as who decided.
+   *
+   * @throws {RangeError} When no child has the id, or `options.reason` is empty, has a lone
+   *   surrogate or is over `GATE_TEXT_MAX_BYTES` UTF-8 bytes.
+   * @throws {TypeError} When `decision` is neither `approve` nor `refuse`.
+   */
+  approve(
+    id: string,
+    call: string,
+    decision: "approve" | "refuse",
+    options: Sent & { reason?: string | null } = {},
+  ): Promise<ChildStatus> {
+    const child = this.#child(id);
+    if (decision !== "approve" && decision !== "refuse") throw new YianTypeError("decision must be approve or refuse");
+    const reason = options.reason ?? null;
+    if (reason !== null) checkGateText(reason, "reason");
+    const from = options.from ?? null;
+    const refused = from === null ? "Refused" : `Refused by ${from.label}`;
+    const error = reason === null ? `${refused}.` : `${refused}: ${reason}`;
+    const refusal = () => (this.#held(child, call) === null ? `call '${call}' isn't a held tool call` : null);
+    const decide = (log: string, delivery: DeliveryOptions) =>
+      decision === "approve" ? release(log, call, { ...delivery, note: reason }) : complete(log, call, { error }, delivery);
+    return this.#deliver(child, decide, { ...options, refusal });
+  }
+
+  /**
    * End the parent's hold on its children, by each one's published status: cancel each `running`
    * one; stop the driver of each `waiting` one, a pass at its `wakeAt` included, leaving its log to
    * resume; and resolve every waiting `next`. Returns the waiting children, by id. Later starts
@@ -1196,6 +1258,24 @@ export class ChildFlows {
   /** Whether `child`'s driver may still publish a status. */
   #driving(child: Child): boolean {
     return !ENDED.has(child.status.status) && !child.halt.signal.aborted;
+  }
+
+  /** `child`'s call `call` as its log lists it now, when a host's check holds it; else `null`. */
+  #held(child: Child, call: string): PendingCall | null {
+    if (!child.started) return null;
+    return pendingCalls(child.log).find((each) => each.callId === call && each.held) ?? null;
+  }
+
+  /** `OwnerCore.held`. @throws {RangeError} When no child has the id. */
+  #heldCall(id: string, call: string): HeldChildCall | null {
+    const child = this.#child(id);
+    let held: PendingCall | null;
+    try {
+      held = this.#held(child, call);
+    } catch (error) {
+      throw this.#options.memories.scrub(error, child.memory);
+    }
+    return held === null ? null : { runId: child.runId, label: child.parent.label, call: held };
   }
 
   /** What waiting `child` waits on, by its last status. */
@@ -1438,6 +1518,8 @@ interface OwnerCore {
     options: ChildStartOptions,
   ): Promise<StartedChild>;
   reaches(id: string): boolean;
+  /** Child `id`'s held call `call`, or `null`; what reading its log throws goes through `memories.scrub`. */
+  held(id: string, call: string): HeldChildCall | null;
   readonly scheduler: Scheduler;
 }
 
@@ -1564,6 +1646,32 @@ export class ChildFlowOwner {
   /** As `ChildFlows.stop`, from this owner's model. @throws {RangeError} When it doesn't reach run `id`. */
   stop(id: string, options: Resend = {}): Promise<ChildStatus> {
     return this.#driver.stop(this.#mine(id), { ...options, from: this.#from });
+  }
+
+  /**
+   * @internal As `ChildFlows.approve`, from this owner's model, unchecked: only the group's gated
+   * `approve` calls it.
+   *
+   * @throws {RangeError} When it doesn't reach run `id`.
+   */
+  approve(
+    id: string,
+    call: string,
+    decision: "approve" | "refuse",
+    options: { reason?: string | null } = {},
+  ): Promise<ChildStatus> {
+    return this.#driver.approve(this.#mine(id), call, decision, { ...options, from: this.#from });
+  }
+
+  /**
+   * @internal Run `id`'s call `call` as its log lists it now, when the children's check holds it;
+   * else `null`.
+   *
+   * @throws {RangeError} When this owner doesn't reach run `id`.
+   * @throws What reading the run's log throws, as `memories.scrub` leaves it.
+   */
+  heldCall(id: string, call: string): HeldChildCall | null {
+    return this.#core.held(this.#mine(id), call);
   }
 
   /** @internal The last status seq of run `id` this owner's model has seen: shown, or told `seen`. */
@@ -1720,9 +1828,20 @@ function interruptText(inbox: string, done: ChildInterrupt): string {
 /**
  * The tools a run's model drives the child flows `owner` reaches with, for the host to pass under
  * `owner.group` in that run's tools, so the model sees `<group>_status`, and so on: `status` and
- * `wait` read a run's status, and `message`, `answer`, `interrupt`, `close_inbox` and `stop` deliver
- * to it. `interrupt` first takes back the model's own unread sends to the inbox, and adds to the
- * status what it did (`interrupted`) and the first `LIST_ITEMS` texts it took back (`taken_back`).
+ * `wait` read a run's status, and `message`, `answer`, `interrupt`, `close_inbox`, `stop` and
+ * `approve` deliver to it. `interrupt` first takes back the model's own unread sends to the inbox,
+ * and adds to the status what it did (`interrupted`) and the first `LIST_ITEMS` texts it took back
+ * (`taken_back`).
+ *
+ * `approve` decides a run's held call (`ChildFlowOwner.approve`) only under the `beforeToolCall` of
+ * the owner's run. That hook sees the held call itself as the call's `target`, read from the run's
+ * log, beside the run's id and label and, apart from the call, the model's decision and reason:
+ * `{run, label, call: {callId, node, tool, source, arguments, target}, decision, reason}`, where a
+ * held approve's own `target` shows the call it would release. A call naming no held call is refused
+ * before the hook is asked, and its target throws, which refuses it too, should the call stop being
+ * held meanwhile. Without the hook, and from a TOOL node, it never runs (`refuseUngated`). When it
+ * runs, it decides the call its target named, if the log still holds it. A crash-cut approve isn't
+ * sent again: the run's status says whether it landed.
  *
  * With `options.start`, the group has `start` too, first. A call names a flow and its inputs; the
  * host's `resolve` finds the flow, a library is refused, the inputs are checked as the run's start
@@ -1870,7 +1989,78 @@ export function childFlows<T extends ChildFlowTarget>(
       resumable: true,
       execute: async (args, ctx) => show(await owner.stop(known(args), { resent: ctx.attempt > 1 })),
     }),
+    approveTool(),
   ];
+
+  /**
+   * The held call an `approve` call names, as its run's log lists it now, and the model's decision
+   * and reason: what the tool's check, its target and its run each read.
+   *
+   * @throws {ReportedToolError} When the run isn't the owner's, an argument is wrong, or the call
+   *   isn't held; its text holds no held call's arguments.
+   */
+  function approval(args: Record<string, unknown>) {
+    const id = known(args);
+    const call = stringArg(args, "call");
+    // The schema allows no other.
+    const decision = args["decision"] as "approve" | "refuse";
+    const reason = args["reason"] === undefined ? "" : stringArg(args, "reason");
+    if (!reason.isWellFormed() || [...reason].length > REASON_MAX_CHARS || REASON_CONTROL.test(reason)) {
+      throw new ReportedToolError(
+        `reason must be text of at most ${REASON_MAX_CHARS} characters, with no control characters but line breaks and tabs`,
+      );
+    }
+    const held = owner.heldCall(id, call);
+    if (held === null) throw new ReportedToolError(`call '${call}' isn't a call run ${id} holds for approval`);
+    return { id, call, decision, reason: reason === "" ? null : reason, held } as const;
+  }
+
+  /** The group's `approve`, which only a host's check lets run. */
+  function approveTool(): FunctionTool {
+    // Refuses a call that names no held call before the host's check is asked, so the model reads why.
+    const checked: StandardSchemaV1<unknown, Record<string, unknown>> = {
+      "~standard": {
+        version: 1,
+        vendor: "yian",
+        validate: (value) => {
+          approval(value as Record<string, unknown>);
+          return { value: value as Record<string, unknown> };
+        },
+      },
+    };
+    return tool({
+      name: "approve",
+      description:
+        "Approve or refuse a tool call a run you started holds for approval (its status's held), by its " +
+        "call id. approve runs the call once, as the run's agent asked it; refuse answers it with an " +
+        "error, with your reason, which that agent reads. The host checks each decision first: it may " +
+        `ask the user, or refuse it. ${status}`,
+      parameters: checked,
+      parametersJsonSchema: {
+        type: "object",
+        properties: {
+          run: { type: "string", description: run },
+          call: { type: "string", description: "The held call's id, from the status's held." },
+          decision: { type: "string", enum: ["approve", "refuse"], description: "approve runs the call; refuse doesn't." },
+          reason: { type: "string", maxLength: REASON_MAX_CHARS, description: "Why, in a sentence or two." },
+        },
+        required: ["run", "call", "decision"],
+        additionalProperties: false,
+      },
+      gateTarget: (args) => {
+        const { decision, reason, held } = approval(args);
+        // A held approve's own target, so a nested approval shows the call it would release.
+        const { callId, node, tool: name, source, arguments: given, target } = held.call;
+        const call = { callId, node, tool: name, source: source as JsonObject | null, arguments: given, target };
+        return { run: held.runId, label: held.label, call, decision, reason };
+      },
+      refuseUngated: APPROVE_UNGATED,
+      execute: async (args) => {
+        const { id, call, decision, reason } = approval(args);
+        return show(await owner.approve(id, call, decision, { reason }));
+      },
+    });
+  }
 
   /** The group's `start`, over the host's `hooks`. */
   function startTool(hooks: ChildFlowStart<T>): FunctionTool {

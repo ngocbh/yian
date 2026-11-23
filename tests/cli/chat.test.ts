@@ -262,6 +262,21 @@ test(
   TIMEOUT,
 );
 
+test(
+  "the assistant's flows_approve is refused, telling it to ask the user: nothing checks its calls in yian chat",
+  async () => {
+    const { io, stdin } = chatIo();
+    stdin.write("approve it\n/exit\n");
+    const script = [callReply(["flows_approve", { run: "r1", call: "c", decision: "approve" }, "c1"]), textReply("asked")];
+    const model = new AnsweringModel((_, count) => script[count - 1] ?? textReply("noted"));
+    expect((await runChat(io, model)).code).toBe(0);
+    expect(toolResults(model.requests[1]!)).toEqual([
+      "Only the user can approve or refuse a held call: ask them in the chat, or they can open the run and approve it.",
+    ]);
+  },
+  TIMEOUT,
+);
+
 test("yian chat --log in a missing folder is a usage error before the banner", async () => {
   const { io, stderr } = chatIo();
   const folder = join(tmp, "nodir");
@@ -438,6 +453,7 @@ test(
       "flows_interrupt",
       "flows_close_inbox",
       "flows_stop",
+      "flows_approve",
     ]);
     const results = toolResults(model.requests[3]!);
     expect(JSON.parse(results[0]!)).toEqual(HELLO_CHECK);

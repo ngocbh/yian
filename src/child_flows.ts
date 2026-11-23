@@ -1,7 +1,7 @@
 /**
- * The runs `yian chat`'s assistant starts: each child flow runs in the background under one
- * driver, which is the only caller of `runFlow` and `advance` on its log, and publishes the
- * child's status each time a pass of it settles differently.
+ * The child runs a run starts and owns, as `yian chat`'s assistant starts flows: each child flow
+ * runs in the background under one driver, which is the only caller of `runFlow` and `advance` on
+ * its log, and publishes the child's status each time a pass of it settles differently.
  *
  * A child moves only when its driver runs a pass (`runFlow`, then `advance`): `advance` refuses a
  * run whose engine still loops, so a second caller would race the first. A delivery reaches a
@@ -31,12 +31,12 @@
 import { dirname } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
-import type { ComposedFlow } from "../compose/build/pipeline.ts";
-import type { Env } from "../defaults.ts";
-import { NodeSucceeded, type RunEvent, RunStarted } from "../events.ts";
-import type { ModelAccess } from "../llm_clients/factory.ts";
-import type { MemoryBase } from "../memory/base.ts";
-import { removeEmptyDir, type Scheduler, sleepUntil } from "../platform.ts";
+import type { ComposedFlow } from "./compose/build/pipeline.ts";
+import type { Env } from "./defaults.ts";
+import { NodeSucceeded, type RunEvent, RunStarted } from "./events.ts";
+import type { ModelAccess } from "./llm_clients/factory.ts";
+import type { MemoryBase } from "./memory/base.ts";
+import { removeEmptyDir, type Scheduler, sleepUntil } from "./platform.ts";
 import {
   advance,
   cancel,
@@ -51,15 +51,15 @@ import {
   runFlow,
   runLogPath,
   send,
-} from "../run.ts";
-import { recordTimeMs } from "../runtime/log.ts";
-import { wakeAt } from "../runtime/waits.ts";
-import type { Skill } from "../skills/catalog.ts";
-import { pending, TAKE } from "../tools/context.ts";
-import { registeredTools, type ToolEntry } from "../tools/registry.ts";
-import { YianRangeError } from "../typesys/errors.ts";
-import { builtinType } from "../typesys/types.ts";
-import { isInboxType, typeEquals, type Value, writeAsJson, writeAsText } from "../typesys/values.ts";
+} from "./run.ts";
+import { recordTimeMs } from "./runtime/log.ts";
+import { wakeAt } from "./runtime/waits.ts";
+import type { Skill } from "./skills/catalog.ts";
+import { pending, TAKE } from "./tools/context.ts";
+import { registeredTools, type ToolEntry } from "./tools/registry.ts";
+import { YianRangeError } from "./typesys/errors.ts";
+import { builtinType } from "./typesys/types.ts";
+import { isInboxType, typeEquals, type Value, writeAsJson, writeAsText } from "./typesys/values.ts";
 
 /** The most characters of a child event's line. */
 const EVENT_BODY_CHARS = 2000;
@@ -70,9 +70,9 @@ const LIST_ITEMS = 20;
 /** The most characters of each text field a run tool's status shows the model. */
 const STATUS_TEXT_CHARS = 4000;
 
-/** Where a child run stands, as the chat's assistant is told. */
+/** Where a child run stands, as the model of the run that owns it is told. */
 export interface ChildStatus {
-  /** The child's id in the chat (`r1`, `r2`, ...). */
+  /** The child's id among its parent's children (`r1`, `r2`, ...). */
   readonly run: string;
   /**
    * `running` from the start and from each delivery the run took until the pass it causes
@@ -100,14 +100,14 @@ export interface ChildStatus {
    */
   readonly replies?: readonly string[];
   /**
-   * What the chat noted about the child's memories and no reader has marked read, oldest first: a
+   * What the host noted about the child's memories and no reader has marked read, oldest first: a
    * memory its start created, or one a crash resume found changed since the run started.
    */
   readonly memory_notes?: readonly string[];
   /**
-   * Something the chat couldn't do with the run, in words: a delivery the run refused or one made
-   * after the chat ended (only on the status that call returns), or the error that stopped the
-   * driver of a failed child.
+   * Something the driver couldn't do with the run, in words: a delivery the run refused or one made
+   * after `dispose` (only on the status that call returns), or the error that stopped the driver of
+   * a failed child.
    */
   readonly note?: string;
   /** The child's run log. */
@@ -191,7 +191,7 @@ export interface ChildRunsOptions {
   cancel?: typeof cancel;
 }
 
-/** A child left waiting when the chat ends, and what it waits on. */
+/** A child left waiting when `dispose` ends its parent's hold on it, and what it waits on. */
 export interface WaitingChild {
   readonly run: string;
   /**
@@ -279,8 +279,8 @@ function questionText(args: Readonly<Record<string, unknown>> | null): string {
 }
 
 /**
- * One child event: the line the assistant reads, and the status it came from. `run` is `null` (and
- * `seq` 0) for one that came from no status of the chat's: a message authored `yian` the chat
+ * One child event: the line the owner's model reads, and the status it came from. `run` is `null`
+ * (and `seq` 0) for one that came from no status of the chat's: a message authored `yian` the chat
  * didn't send, taken back from the inbox.
  */
 export interface ChildEvent {
@@ -309,10 +309,10 @@ interface Wait {
 }
 
 /**
- * The event `status` is for the assistant, or `null` when it says nothing to act on (a run
+ * The event `status` is for the owner's model, or `null` when it says nothing to act on (a run
  * `running`, or waiting only for a timer with nothing said). The line names the run, then what
  * it now does (asks, with each question's call id; waits for a message on an inbox; succeeded,
- * failed or was cancelled), then what it said and what the chat noted about its memories; child
+ * failed or was cancelled), then what it said and what the host noted about its memories; child
  * text is JSON-quoted, so the line stays one line, and the line is cut at `EVENT_BODY_CHARS` with
  * a note.
  */
@@ -578,7 +578,7 @@ export class ChildRuns {
   /**
    * Stop every child's driver at once, leaving each log as it is, and end a `dispose` that waits
    * on a cancel: it returns with each running child it hadn't cancelled yet as `halted`. For a
-   * second Ctrl-C while the chat ends.
+   * host that must stop at once, such as `yian chat` on a second Ctrl-C.
    */
   haltAll(): void {
     this.#halting.abort();
@@ -659,7 +659,7 @@ export class ChildRuns {
   }
 
   /**
-   * End the chat's hold on its children, by each one's published status: cancel each `running`
+   * End the parent's hold on its children, by each one's published status: cancel each `running`
    * one; stop the driver of each `waiting` one, a pass at its `wakeAt` included, leaving its log to
    * resume; and resolve every waiting `next`. Returns the waiting children, by id. Later starts
    * throw, and later deliveries change nothing.
@@ -727,8 +727,8 @@ export class ChildRuns {
 
   /**
    * Make `deliver`'s delivery to `child`'s log, publish the child `running` and nudge its driver;
-   * return its status. A refusal, or the chat having ended, is a note on the status returned, and
-   * changes nothing.
+   * return its status. A refusal, or a delivery after `dispose`, is a note on the status returned,
+   * and changes nothing.
    */
   async #deliver(
     child: Child,
@@ -875,7 +875,7 @@ export class ChildRuns {
     return {
       ...base,
       status: "waiting",
-      // A chat's children are never gated, so no call of theirs is held.
+      // The children are never gated, so no call of theirs is held.
       waits: result.waits.map(({ held: _, ...wait }) => wait),
       wake_at: wakeAt(result.waits),
       ...(asks.length > 0 ? { asks } : {}),

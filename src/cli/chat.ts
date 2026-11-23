@@ -15,6 +15,7 @@
 import { mkdirSync, realpathSync } from "node:fs";
 import { basename, dirname, extname, join, relative } from "node:path";
 
+import type { ChildRuns, WaitingChild } from "../child_flows.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { loadFlow } from "../compose/loader.ts";
 import { defaultSkillRoots, loadSkills } from "../compose/skills.ts";
@@ -43,7 +44,6 @@ import {
   runRows,
   type ViewStream,
 } from "./chat_view.ts";
-import type { ChildRuns, WaitingChild } from "./chat_runs.ts";
 import { type ChatToolHost, chatFileTools, checkFocus, slashed } from "./chat_tools.ts";
 import { cells, columnsOf, fit } from "./cells.ts";
 import {

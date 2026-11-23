@@ -9,8 +9,9 @@
  * engine's structured drain. It also owns the compile/runtime inversion seam by injecting
  * `compile/expand.ts`'s `buildGrow` into the kind-blind engine.
  *
- * This is the `yian/run` module: it exports `runFlow`, `advance` and `RunResult`, and re-exports
- * the types of their `beforeToolCall` hook (`tools/gate.ts`). Hosts reach a run by its log through
+ * Its names are the `yian/run` entry's, which `run_entry.ts` re-exports: it exports `runFlow`,
+ * `advance` and `RunResult`, and re-exports the types of their `beforeToolCall` hook
+ * (`tools/gate.ts`). Hosts reach a run by its log through
  * `send`, `withdraw`, `complete`, `release`, `close`, `interrupt`, `cancel` and `pendingCalls`;
  * their errors are `RunBusyError` and the re-exported `DeliveryRefused` (`runtime/state.ts`). For
  * hosts that show runs it also exports `inspectRun`, which reads where a run log stands, and

@@ -15,7 +15,7 @@
 import { mkdirSync, realpathSync } from "node:fs";
 import { basename, dirname, extname, join, relative } from "node:path";
 
-import type { ChildFlows, ReportHold, WaitingChild } from "../child_flows.ts";
+import type { ChildFlowOwner, ChildFlows, ReportHold, WaitingChild } from "../child_flows.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { loadFlow } from "../compose/loader.ts";
 import { defaultSkillRoots, loadSkills } from "../compose/skills.ts";
@@ -68,7 +68,7 @@ import { type Colored, paint, printStyled, type Style } from "./render.ts";
 import { type FileIssueHost, fileIssueTool, hostFacts } from "./report_issue.ts";
 import { CHAT_FLOW_FILE, CHAT_FLOW_ID, CHAT_PERSON, validateRunLogOptions } from "./run.ts";
 import { sanitize } from "./sanitize.ts";
-import { RunProgress, runScreen } from "./run_view.ts";
+import { RunProgress, RunView } from "./run_view.ts";
 import { cliLayer, defaultRunsDir, freshLog } from "./startup.ts";
 import type { Key, PickChoice, PromptCommand, Terminal } from "./terminal.ts";
 import { type CliIo, UsageError } from "./utils.ts";
@@ -315,14 +315,32 @@ function every(clock: Scheduler, ms: number, listener: () => void): () => void {
   return () => stop.abort();
 }
 
+/** Call `listener` each time run `id` of `runs` publishes a status, until the function returned is called. */
+function onStatusOf(runs: ChildFlows, id: string, listener: () => void): () => void {
+  const stop = new AbortController();
+  void (async () => {
+    let seq = runs.status(id).seq;
+    while (!stop.signal.aborted) {
+      const status = await runs.next(id, seq, { signal: stop.signal });
+      // Its driver stopped, or the waits were cancelled: none comes now.
+      if (status.seq <= seq) return;
+      seq = status.seq;
+      listener();
+    }
+  })();
+  return () => stop.abort();
+}
+
 /**
  * The run list under the chat's input box (`runRows` of the children still live, their times on
  * `scheduler`), drawn again each `LIST_TICK_MS` on `ticker`, and the run view Enter on a row opens:
- * the run's screen (`runScreen`), read again from its log each `VIEW_TICK_MS`, while the chat's
- * view holds what it draws; the screen says when an approval or a question waits behind it.
+ * the run's screen (`RunView`), read again from its log each `VIEW_TICK_MS` and as the run's status
+ * changes, while the chat's view holds what it draws; the screen says when an approval or a
+ * question waits behind it. What the user does there presses `owner`'s tools as `PERSON`.
  */
 function runList(
   runs: ChildFlows,
+  owner: ChildFlowOwner,
   view: ChatView,
   clocks: { scheduler: Scheduler; ticker: Scheduler },
   out: ViewStream,
@@ -344,13 +362,28 @@ function runList(
       const child = runs.live().find((each) => each.id === id);
       if (child === undefined) return;
       const progress = new RunProgress(child.status.log, () => columnsOf(out), out, env);
-      const info = () => ({ id: child.id, name: child.name, status: runs.status(child.id) });
+      const screen = new RunView(
+        {
+          id: child.id,
+          name: child.name,
+          inboxes: child.inboxes,
+          status: () => runs.status(child.id),
+          progress: () => progress.rows(scheduler.now()),
+          press: (tool, args) => owner.press(tool, args, { person: PERSON }),
+        },
+        out,
+        env,
+      );
       view.hold(true);
       try {
         await terminal.showScreen({
-          draw: (columns, rows, waiting) =>
-            runScreen(info(), progress.rows(scheduler.now()), columns, rows, out, env, waiting),
-          subscribe: (redraw) => every(ticker, VIEW_TICK_MS, redraw),
+          draw: (columns, rows, waiting) => screen.draw(columns, rows, waiting),
+          cursor: () => screen.cursor(),
+          key: (key, waiting) => screen.key(key, waiting),
+          subscribe: (redraw) => {
+            const stop = [every(ticker, VIEW_TICK_MS, redraw), onStatusOf(runs, id, redraw), screen.subscribe(redraw)];
+            return () => stop.forEach((each) => each());
+          },
           // What the chat drew meanwhile goes out before a prompt waiting behind the view draws.
           onClose: () => view.hold(false),
         });
@@ -948,7 +981,7 @@ export async function chat(
           rows:
             view === null
               ? null
-              : runList(runs, view, { scheduler, ticker }, out.stderrStream, env),
+              : runList(runs, owner, view, { scheduler, ticker }, out.stderrStream, env),
           start,
           // `yian run --resume` refuses a chat's log: an earlier chat goes on in a new one.
           stopped: (path) =>

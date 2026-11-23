@@ -52,7 +52,16 @@ import type { Request, Response } from "../../src/llm/messages.ts";
 import { Finish, PartDone, TextDelta } from "../../src/llm/events.ts";
 import { TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
-import { InboxWithdrawnRecord, InterruptedRecord, readRunLog } from "../../src/runtime/log.ts";
+import { ActionPart } from "../../src/llm/messages.ts";
+import {
+  InboxClosedRecord,
+  InboxWithdrawnRecord,
+  InterruptedRecord,
+  PoolCommitRecord,
+  readRunLog,
+  RunCancelledRecord,
+} from "../../src/runtime/log.ts";
+import { TypedValue } from "../../src/typesys/values.ts";
 import {
   callReply,
   chatServing,
@@ -1023,10 +1032,10 @@ describe("the user's lines", () => {
 describe("the run list", () => {
   const status = (fields: Partial<ChildStatus>): ChildStatus => ({ run: "r1", seq: 1, log: "l", status: "running", ...fields });
   const children: LiveChild[] = [
-    { id: "r1", name: "color.yaml", since: 0, status: status({}) },
-    { id: "r2", name: "ask.yaml", since: 5_000, status: status({ status: "waiting", asks: [{ call: "c", question: "?" }] }) },
-    { id: "r10", name: "notes.yaml", since: 0, status: status({ status: "waiting", waits: [{ tool: "take", settled: false }] }) },
-    { id: "r11", name: "nap.yaml", since: 0, status: status({ status: "waiting", waits: [{ tool: "sleep", settled: false }] }) },
+    { id: "r1", name: "color.yaml", since: 0, status: status({}), inboxes: [] },
+    { id: "r2", name: "ask.yaml", since: 5_000, status: status({ status: "waiting", asks: [{ call: "c", question: "?" }] }), inboxes: [] },
+    { id: "r10", name: "notes.yaml", since: 0, status: status({ status: "waiting", waits: [{ tool: "take", settled: false }] }), inboxes: ["m"] },
+    { id: "r11", name: "nap.yaml", since: 0, status: status({ status: "waiting", waits: [{ tool: "sleep", settled: false }] }), inboxes: [] },
   ];
 
   test("has a row per run, its columns lined up, coloured by what the run does", () => {
@@ -1730,7 +1739,8 @@ describe("the run list under the input box", () => {
       const view = rows();
       expect(view[1]).toMatch(/^log {2}\/\S+$/);
       expect(view).toContainEqual(expect.stringMatching(/^◷ pick \[\d+s\] waiting$/));
-      expect(view.slice(-3)).toEqual(["? Which colour?", "", "esc to go back to the chat"]);
+      // A run with no inbox gets a box all the same, for its commands.
+      expect(view.slice(-7)).toEqual(["? Which colour?", "", TOP, row(">"), BOTTOM, "  /stop ends the run", "esc to go back to the chat"]);
       stdin.write(ESCAPE);
       await pastEscape();
       await until(() => rows().at(-1)!.startsWith("» r1"));
@@ -1746,22 +1756,22 @@ describe("the run list under the input box", () => {
 });
 
 /**
- * A model answering by what a request holds: `answer` gets the request and gives a reply, or a
- * promise of one, so a test can hold a reply back.
+ * A model answering by what a request holds: `answer` gets the request and the call's signal and
+ * gives a reply, or a promise of one, so a test can hold a reply back.
  */
 class StepModel implements ChatModel {
   readonly provider = "xai";
   readonly model = "grok-4.3";
   readonly requests: Request[] = [];
-  readonly #answer: (request: Request) => ScriptedReply | Promise<ScriptedReply>;
+  readonly #answer: (request: Request, signal?: AbortSignal) => ScriptedReply | Promise<ScriptedReply>;
 
-  constructor(answer: (request: Request) => ScriptedReply | Promise<ScriptedReply>) {
+  constructor(answer: (request: Request, signal?: AbortSignal) => ScriptedReply | Promise<ScriptedReply>) {
     this.#answer = answer;
   }
 
-  stream(request: Request): EventStream {
+  stream(request: Request, options: { signal?: AbortSignal } = {}): EventStream {
     this.requests.push(request);
-    const reply = this.#answer(request);
+    const reply = this.#answer(request, options.signal);
     const model = this;
     async function* events() {
       yield* new ScriptedModel([await reply], model).stream(request);
@@ -1949,6 +1959,272 @@ describe("a run's view while the chat goes on", () => {
       expect(rows()).toContain("⏺ nap r1 succeeded");
       stdin.write(`/exit${ENTER}`);
       expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
+});
+
+/** A flow that reads one message from each of two inboxes, `notes` and `extra`, in any order. */
+const TWO = `id: two
+name: two
+input:
+  notes: !Inbox(Message)
+  extra: !Inbox(Message)
+nodes:
+  read_notes: {kind: call, call: take, input: {from: "\${input.notes}", take: all}}
+  read_extra: {kind: call, call: take, input: {from: "\${input.extra}", take: all}}
+output: \${[read_notes.output.events, read_extra.output.events]}
+`;
+
+/** A turn per message on `notes`: take one, then reply with an agent that reads the rest as steers. */
+const STEER = `id: steer
+name: steer
+llm_config: {provider: xai, model: grok-4.3}
+input:
+  notes: !Inbox(Message)
+defs:
+  turn:
+    input:
+      closed: !bool
+      notes: !Inbox(Message)
+    nodes:
+      heard:
+        kind: call
+        call: take
+        input: {from: "\${input.notes}", take: one}
+      reply:
+        kind: agent
+        steer_inbox: \${input.notes}
+        input: {said: "\${heard.output.events}"}
+        prompt:
+          - \${said}
+        output: !Optional(str)
+    output:
+      closed: \${heard.output.closed}
+nodes:
+  chat:
+    kind: loop
+    call: turn
+    input: {closed: false, notes: "\${input.notes}"}
+    while: not closed
+output: done
+`;
+
+describe("a run's view presses the assistant's tools as the user", () => {
+  /** Whether `request` is the chat's, which offers the flows group, not a run's. */
+  const chatting = (request: Request) => request.tools.some((tool) => tool.name === "flows_start");
+  /** The records of the run log at `log`. */
+  const records = (log: string) => readRunLog(log).map((envelope) => envelope.record);
+  /** The values sent to `inbox` in the log at `log`, with who sent each. */
+  const sends = (log: string, inbox: string) =>
+    records(log)
+      .filter((record): record is PoolCommitRecord => record instanceof PoolCommitRecord && record.key.endsWith(`.${inbox}`))
+      .map((record) => ({ value: TypedValue.fromWire(record.value).toObject(), by: record.by }));
+  /** The actions sent to the chat's inbox, in order. */
+  const actions = () =>
+    sends(join(tmp, "chat.jsonl"), "owner_messages")
+      .map(({ value }) => value as { author?: string; parts: { type: string; tool?: string; summary?: string; result?: string }[] })
+      .filter((value) => value.parts.every((part) => part.type === "action"));
+  /** The user, as the run hears their words relayed by the assistant of the chat run `chat-1`. */
+  const relayed = { kind: "user", name: "the user", run: "chat-1" } as const;
+
+  /**
+   * Start `file` (holding `text`) through the assistant, then open its view from the list; `answer`
+   * answers the requests past the start. Returns the chat, the model, the screen and the run's log.
+   */
+  async function viewOf(file: string, text: string, answer: (request: Request, signal?: AbortSignal) => ScriptedReply | Promise<ScriptedReply>) {
+    writeFileSync(join(root, file), text);
+    const tty = terminalIo();
+    const { stdin, output, rows } = tty;
+    let started = false;
+    const model = new StepModel((request, signal) => {
+      if (namingRequest(request)) return textReply("A chat");
+      if (chatting(request) && afterTool(request) && !started) {
+        started = true;
+        return textReply("Started.");
+      }
+      if (chatting(request) && asked(request, `start ${file}`) && !started) {
+        return callReply(["flows_start", { flow: file, inputs: {} }, "c1"]);
+      }
+      return answer(request, signal);
+    });
+    const done = runChat(tty.io, model, undefined, { ticker: manualClock(), runId: "chat-1" });
+    await until(() => rows().includes(HINT));
+    stdin.write(`start ${file}${ENTER}`);
+    await until(() => output.text.includes(`Run ${file}`));
+    await pastGrace();
+    stdin.write(ENTER);
+    await until(() => started && rows().at(-1)!.includes("● waits") && !rows().some((line) => line.includes("Thinking")));
+    const open = async () => {
+      stdin.write(DOWN);
+      await until(() => rows().at(-1)!.startsWith("» r1"));
+      stdin.write(ENTER);
+      await until(() => rows()[0]?.startsWith(`r1  ${file}`) === true);
+    };
+    await open();
+    return { ...tty, model, done, open, log: join(home, ".yian", "runs", "chat-1-r1", "log.jsonl") };
+  }
+
+  test(
+    "a send is the user's words as they are, signed as relayed by the assistant; it adds one action, read with the next line",
+    async () => {
+      const { stdin, rows, model, done, open, log } = await viewOf("two.yaml", TWO, () => textReply("noted."));
+      expect(rows().slice(-6)).toEqual([
+        "inboxes  [notes]  extra",
+        `╭─ notes ${"─".repeat(50)}╮`,
+        row(">"),
+        BOTTOM,
+        "  enter sends · tab picks · /close · /stop",
+        "esc to go back to the chat",
+      ]);
+      const turns = () => model.requests.filter(chatting);
+      const before = turns().length;
+      stdin.write(`  look: *this*  ${ENTER}`);
+      await until(() => rows().includes("sent to notes"));
+      await until(() => rows().includes('› notes  the user, via yian-chat: "  look: *this*  "'));
+      expect(sends(log, "notes")).toEqual([
+        {
+          value: { role: "user", author: "the user, via yian-chat", parts: [{ type: "text", text: "  look: *this*  " }] },
+          by: relayed,
+        },
+      ]);
+      const pressed = {
+        role: "user",
+        author: "the user",
+        parts: [{ type: "action", tool: "flows_message", arguments: { run: "r1", inbox: "notes", text: "  look: *this*  " }, result: "sent" }],
+      };
+      expect(actions()).toEqual([pressed]);
+      // The action starts no turn: the assistant reads it with the next line.
+      await until(() => rows()[0] === "r1  two.yaml  ● waits for a message");
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(turns().length).toBe(before);
+      stdin.write(ESCAPE);
+      await pastEscape();
+      await until(() => rows().at(-1)!.startsWith("» r1"));
+      stdin.write(`what now${ENTER}`);
+      await until(() => turns().length > before);
+      const read = (request: Request) => request.messages.flatMap((message) => message.parts).filter((part) => part instanceof ActionPart);
+      expect(read(turns()[before]!).map((part) => (part as ActionPart).tool)).toEqual(["flows_message"]);
+      await until(() => rows().includes("⏺ noted.") && rows().at(-1)!.includes("● waits"));
+      // Tab and Shift-Tab pick the inbox the box sends to.
+      await open();
+      stdin.write("\t");
+      await until(() => rows().includes(`╭─ extra ${"─".repeat(50)}╮`));
+      stdin.write("\x1b[Z");
+      await until(() => rows().includes("inboxes  [notes]  extra"));
+      stdin.write(`\thi${ENTER}`);
+      await until(() => rows().includes("sent to extra"));
+      expect(sends(log, "extra").map(({ value }) => value)).toEqual([
+        { role: "user", author: "the user, via yian-chat", parts: [{ type: "text", text: "hi" }] },
+      ]);
+      stdin.write(ESCAPE);
+      await pastEscape();
+      await until(() => !rows()[0]!.startsWith("r1  two.yaml"));
+      stdin.write(`/exit${ENTER}`);
+      expect(await done).toBe(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "Esc during the run's turn interrupts the run only, while the assistant's own reply goes on",
+    async () => {
+      const gate = Promise.withResolvers<void>();
+      let cut = false;
+      let working = false;
+      let held = false;
+      const { stdin, rows, done, open, log } = await viewOf("steer.yaml", STEER, (request, signal) => {
+        if (!chatting(request)) {
+          working = true;
+          // The run's agent works until it is interrupted.
+          return new Promise((_, reject) => signal?.addEventListener("abort", () => ((cut = true), reject(signal.reason)), { once: true }));
+        }
+        if (held || !asked(request, "take your time")) return textReply("noted.");
+        held = true;
+        return gate.promise.then(() => textReply("all done."));
+      });
+      stdin.write(ESCAPE);
+      await pastEscape();
+      await until(() => rows().at(-1)!.startsWith("» r1"));
+      stdin.write(`take your time${ENTER}`);
+      await until(() => rows().some((line) => line.includes("Thinking")));
+      await open();
+      stdin.write(`ping the run${ENTER}`);
+      await until(() => working && rows()[0] === "r1  steer.yaml  ● running");
+      expect(rows().at(-1)).toBe("esc interrupts notes · ctrl-c goes back to the chat");
+      stdin.write(ESCAPE);
+      await until(() => rows().includes("interrupted chat#0/reply"));
+      expect(cut).toBe(true);
+      const interrupted = records(log).filter((record) => record instanceof InterruptedRecord);
+      expect(interrupted.map((record) => [record.inbox, record.by])).toEqual([["notes", relayed]]);
+      expect(actions().map((action) => action.parts[0]!.tool)).toEqual(["flows_message", "flows_interrupt"]);
+      // Back at rest, Esc goes back to the chat, whose reply was never cut.
+      await until(() => rows()[0] === "r1  steer.yaml  ● waits for a message");
+      stdin.write(ESCAPE);
+      await pastEscape();
+      await until(() => rows().at(-1)!.startsWith("» r1"));
+      expect(rows().some((line) => line.includes("Thinking"))).toBe(true);
+      gate.resolve();
+      await until(() => rows().includes("⏺ all done."));
+      const chatLog = records(join(tmp, "chat.jsonl"));
+      expect(chatLog.filter((record) => record instanceof InterruptedRecord || record instanceof InboxWithdrawnRecord)).toEqual([]);
+      stdin.write(`/exit${ENTER}`);
+      expect(await done).toBe(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "Esc at rest and Ctrl-C go back to the chat, pressing nothing",
+    async () => {
+      const { stdin, rows, done, open, log } = await viewOf("two.yaml", TWO, () => textReply("noted."));
+      stdin.write(ESCAPE);
+      await pastEscape();
+      await until(() => rows().at(-1)!.startsWith("» r1"));
+      await open();
+      stdin.write(CTRL_C);
+      await until(() => rows().at(-1)!.startsWith("» r1"));
+      const cancels = (path: string) =>
+        records(path).filter((record) => record instanceof InterruptedRecord || record instanceof InboxWithdrawnRecord || record instanceof RunCancelledRecord);
+      expect(cancels(log)).toEqual([]);
+      expect(cancels(join(tmp, "chat.jsonl"))).toEqual([]);
+      expect(actions()).toEqual([]);
+      // The chat goes on.
+      stdin.write(`/exit${ENTER}`);
+      expect(await done).toBe(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "/close closes the inbox picked, a refused send says why, and /stop stops the run once confirmed",
+    async () => {
+      const { stdin, rows, done, log } = await viewOf("two.yaml", TWO, () => textReply("noted."));
+      stdin.write(`/close${ENTER}`);
+      await until(() => rows().includes("closed notes"));
+      expect(records(log).filter((record) => record instanceof InboxClosedRecord).map((record) => [record.inbox, record.by])).toEqual([["notes", relayed]]);
+      stdin.write(`late${ENTER}`);
+      await until(() => rows().includes("inbox 'notes' is closed"));
+      stdin.write(`/stop${ENTER}`);
+      await until(() => rows().includes("stop r1? its run ends (y/N)"));
+      stdin.write("n");
+      await until(() => !rows().includes("stop r1? its run ends (y/N)"));
+      stdin.write(`/stop${ENTER}`);
+      await until(() => rows().includes("stop r1? its run ends (y/N)"));
+      stdin.write("y");
+      await until(() => rows().includes("stopped r1") && rows()[0] === "r1  two.yaml  ● cancelled");
+      expect(records(log).filter((record) => record instanceof RunCancelledRecord).map((record) => record.by)).toEqual([relayed]);
+      const summaries = actions().map((action) => action.parts[0]);
+      expect(summaries).toEqual([
+        expect.objectContaining({ tool: "flows_close_inbox", result: "closed" }),
+        expect.objectContaining({ tool: "flows_message", summary: "the user's message to r1 was refused (inbox_closed)" }),
+        expect.objectContaining({ tool: "flows_stop", result: "stopped" }),
+      ]);
+      stdin.write(ESCAPE);
+      await pastEscape();
+      await until(() => !rows()[0]!.startsWith("r1  two.yaml"));
+      stdin.write(`/exit${ENTER}`);
+      expect(await done).toBe(0);
     },
     TIMEOUT,
   );

@@ -138,6 +138,28 @@ function parameter(
   return new Parameter(name, { contract: new ValueContract(type), coerceStrings: true, ...options });
 }
 
+describe("a LineEditor's title", () => {
+  /** The box's top edge as the screen shows it. */
+  const top = (editor: LineEditor) => editor.lines()[0]!.replace(/\x1b\[[0-9;]*m/g, "");
+
+  test("is drawn on the box's top edge, cut to fit, and follows what it is given", () => {
+    let title = "notes";
+    const editor = new LineEditor({ columns: () => 20, hint: "", title: () => title });
+    expect(top(editor)).toBe("╭─ notes ──────────╮");
+    title = "a very long inbox name";
+    expect(top(editor)).toBe("╭─ a very long i… ─╮");
+    title = "";
+    expect(top(editor)).toBe(`╭${"─".repeat(18)}╮`);
+  });
+
+  test("sits before the count of the rows above, on a box cut to fit", () => {
+    const editor = new LineEditor({ columns: () => 30, rows: () => 8, hint: "", title: () => "notes" });
+    // Four rows of 24 cells, one shown.
+    editor.set("w".repeat(73));
+    expect(top(editor)).toBe(`╭─ notes ─ ↑ 3 more ${"─".repeat(9)}╮`);
+  });
+});
+
 describe("inputLabel", () => {
   test("a required input", () => {
     expect(inputLabel(parameter("topic", Type.scalar(ValueKind.STRING), { required: true }))).toBe("topic (str) *");

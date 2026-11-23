@@ -603,6 +603,8 @@ export interface LiveChild {
   /** When it started, on the children's clock. */
   readonly since: number;
   readonly status: ChildStatus;
+  /** The inputs of its flow that are inboxes, by name, in the order declared: what a person can message. */
+  readonly inboxes: readonly string[];
 }
 
 /** A `next` call waiting for a status numbered after `after`. */
@@ -1460,7 +1462,10 @@ export class ChildFlows {
   live(): LiveChild[] {
     return [...this.#children.values()]
       .filter((child) => this.#driving(child))
-      .map(({ id, name, since, status }) => ({ id, name, since, status }));
+      .map(({ id, name, since, status, flow }) => {
+        const inboxes = flow.input.filter((input) => isInboxType(input.contract?.type ?? null));
+        return { id, name, since, status, inboxes: inboxes.map((input) => input.name) };
+      });
   }
 
   /** @internal For tests: how many `next` calls wait, over all children. */

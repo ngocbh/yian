@@ -3,15 +3,17 @@
  * the run, its flow, its status and its log, the run's progress read from its log and drawn as
  * `yian run` draws it (a `✓` or `✗` line per node that ended, a dim line per node still running
  * or waiting, an agent's text and tool calls as `⏺` lines with a `⎿` result), a dim `›` line per
- * record a host call on an inbox or the run wrote, with who made it, and the questions it waits on.
- * Read-only: answers still go through the chat's assistant.
+ * record a host call on an inbox or the run wrote, with who made it, and the questions it waits on;
+ * then a strip of its inboxes and a box. What the person does there presses the chat assistant's
+ * own tools as the person (`ChildFlowOwner.press`): the run hears them relayed by the assistant,
+ * and the assistant's conversation records each as their action.
  *
- * Knows about: the run log's records and its reader, the chat's child statuses and tool lines,
- * the colour helpers, the terminal's cell widths and the sanitizing of text printed on the
- * terminal.
+ * Knows about: the run log's records and its reader, the chat's child statuses, tool lines and
+ * presses, the colour helpers, the terminal's cell widths, keys and input box, and the sanitizing
+ * of text printed on the terminal.
  */
 
-import type { ChildStatus } from "../child_flows.ts";
+import type { ChildInterrupt, ChildStatus, PressArguments, Pressed } from "../child_flows.ts";
 import { END_ID, START_ID } from "../compile/model.ts";
 import type { Env } from "../defaults.ts";
 import type { Author } from "../memory/base.ts";
@@ -42,6 +44,7 @@ import {
   type Style,
 } from "./render.ts";
 import { sanitize } from "./sanitize.ts";
+import { joinDrafts, type Key, LineEditor, textDraft } from "./terminal.ts";
 
 /** The most rows of a run's progress the view keeps: the last ones, the rest counted. */
 const KEPT_ROWS = 2_000;
@@ -233,7 +236,8 @@ export class RunProgress {
 
 /**
  * A host call's record as a progress row, `<inbox>  <what>` then ` · <who>` when it says who made
- * it: a send's value, a withdraw, an interrupt and the agents it named, a close, or a cancel. An
+ * it: a send's value (after the label of a message's author, in place of who sent it), a withdraw,
+ * an interrupt and the agents it named, a close, or a cancel. An
  * interrupt the run applies for a Stop that stands is such a record too, so it draws a second
  * `interrupted` row, naming the agent it stopped. `null` for any other record. A step's `complete`
  * or `release` isn't one: its node's rows show it.
@@ -242,8 +246,12 @@ function deliveryText(record: unknown): string | null {
   let what: string;
   let by: Author | null;
   if (record instanceof PoolCommitRecord && record.key.startsWith(`${START_ID}.`)) {
-    what = `${record.key.slice(START_ID.length + 1)}  ${sentText(TypedValue.fromWire(record.value).toObject())}`;
-    by = record.by;
+    const value = TypedValue.fromWire(record.value).toObject();
+    const author = (value as { author?: unknown } | null)?.author;
+    // A message names who it is from, as its reader sees it.
+    const from = typeof author === "string" ? `${author}: ` : "";
+    what = `${record.key.slice(START_ID.length + 1)}  ${from}${sentText(value)}`;
+    by = from === "" ? record.by : null;
   } else if (record instanceof InboxWithdrawnRecord) {
     [what, by] = [`${record.inbox}  took back ${record.events.length}`, record.by];
   } else if (record instanceof InterruptedRecord) {
@@ -271,7 +279,7 @@ function sentText(value: unknown): string {
 }
 
 /** What the run view's header names. */
-export interface RunViewInfo {
+interface RunViewInfo {
   readonly id: string;
   /** The flow it runs, as the run list names it. */
   readonly name: string;
@@ -282,19 +290,16 @@ export interface RunViewInfo {
  * The run view's screen, `rows` high (each row is cut to the width when drawn): the header (the
  * run, its flow and its status, then its log), the `progress` lines, as many of the last as fit
  * under a dim count of those left out (and of the `earlier` ones no longer kept), the questions it
- * waits on, and how to go back: in yellow, saying so, when the chat `waiting` waits on the user
- * (an approval or a question behind the view).
+ * waits on, and `foot`.
  */
-export function runScreen(
+function runScreen(
   info: RunViewInfo,
   progress: { readonly lines: readonly string[]; readonly earlier: number },
   columns: number,
   rows: number,
-  out: Colored,
-  env: Env,
-  waiting = false,
+  style: (text: string, s: Style) => string,
+  foot: readonly string[],
 ): string[] {
-  const style = (text: string, s: Style) => paint(text, s, out, env);
   const { status } = info;
   const [label, labelStyle] = runStatusLabel(status);
   const name = fit(sanitize(info.name), Math.max(1, columns - info.id.length - label.length - 8));
@@ -304,16 +309,257 @@ export function runScreen(
     "",
   ];
   const asks = (status.asks ?? []).map((ask) => style(`? ${sanitize(ask.question)}`, "yellow"));
-  const back = waiting
-    ? style("the chat waits on you · esc to answer", "yellow")
-    : style("esc to go back to the chat", "dim");
-  const foot = [...(asks.length > 0 ? ["", ...asks] : []), "", back];
-  const room = Math.max(1, rows - head.length - foot.length);
+  const tail = [...(asks.length > 0 ? ["", ...asks] : []), "", ...foot];
+  const room = Math.max(1, rows - head.length - tail.length);
   const { lines, earlier } = progress;
   let body = lines.length > 0 ? [...lines] : [style("(nothing yet)", "dim")];
   if (body.length > room || earlier > 0) {
     const kept = body.slice(Math.max(0, body.length - (room - 1)));
     body = [style(`… ${earlier + lines.length - kept.length} earlier rows`, "dim"), ...kept];
   }
-  return [...head, ...body, ...foot];
+  return [...head, ...body, ...tail];
+}
+
+/** The tools of the chat's group a person presses from a run's view. */
+type ViewTool = "message" | "interrupt" | "close_inbox" | "stop";
+
+/** What a run's view shows and presses through: the chat's run and its owner, the assistant. */
+export interface RunViewHost {
+  /** The run's id among the chat's runs (`r1`). */
+  readonly id: string;
+  /** The flow it runs, as the run list names it. */
+  readonly name: string;
+  /** Its flow's inbox inputs, in the order declared (`LiveChild.inboxes`). */
+  readonly inboxes: readonly string[];
+  status(): ChildStatus;
+  /** Its progress as `RunProgress.rows` gives it now. */
+  progress(): { readonly lines: readonly string[]; readonly earlier: number };
+  /** Press the assistant's tool `tool` on the run as the person (`ChildFlowOwner.press`). */
+  press<K extends ViewTool>(
+    tool: K,
+    args: PressArguments[K],
+  ): Promise<Pressed<K extends "interrupt" ? ChildInterrupt : ChildStatus>>;
+}
+
+/** The most rows what a press did takes under the strip. */
+const SAID_ROWS = 2;
+
+/** The rows the view keeps from its box, beside the box's own margin: the header, the strip and what a press did. */
+const VIEW_ROWS = 6;
+
+/** What each press is called while it is under way, and when it ran nothing. */
+const PRESSING: Readonly<Record<ViewTool, { doing: string; not: string }>> = {
+  message: { doing: "sending", not: "not sent" },
+  interrupt: { doing: "interrupting", not: "not interrupted" },
+  close_inbox: { doing: "closing", not: "not closed" },
+  stop: { doing: "stopping", not: "not stopped" },
+};
+
+/** A line the view shows under the strip, and its style. */
+type Said = { readonly text: string; readonly style: Style };
+
+/** `count` of `noun`, with an `s` unless one. */
+function counted(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/** The words a send taken back held: a `str` as it is, a message's text parts joined. */
+function sentWords(value: unknown): string {
+  const parts = (value as { parts?: unknown } | null)?.parts;
+  if (!Array.isArray(parts)) return typeof value === "string" ? value : "";
+  return parts.map((part) => (part?.type === "text" && typeof part.text === "string" ? part.text : "")).join("");
+}
+
+/**
+ * A child run of the chat on the whole screen (`Terminal.showScreen`): `runScreen`, then a strip of
+ * the run's inboxes, the one picked in brackets (Tab and Shift-Tab pick), what the last press did,
+ * and a box named after the inbox picked, which keeps its text and pastes as the chat's does.
+ * Each key presses the assistant's tool as the person, never the chat's own: Enter sends the box's
+ * text as it is (`message`), `/close` closes the inbox (`close_inbox`), `/stop` stops the run after
+ * a `y` (`stop`), and Escape, while the status drawn is `running`, interrupts the inbox
+ * (`interrupt`), the lines it takes back returning to the box. Escape at rest, or while a prompt of
+ * the chat waits behind the view, closes it, pressing nothing.
+ */
+export class RunView {
+  readonly #host: RunViewHost;
+  readonly #style: (text: string, s: Style) => string;
+  readonly #editor: LineEditor;
+  /** The screen's size at the last draw, which the box keeps within: each draw sets it first. */
+  #size = { columns: 0, rows: 0 };
+  /** The strip's inbox the box sends to, by its place. */
+  #picked = 0;
+  /** The status the screen shows: Escape interrupts only a run it shows running. */
+  #drawn: ChildStatus["status"] | null = null;
+  /** Where the box's rows start among those drawn last. */
+  #boxAt = 0;
+  /** What the last press did, or what the view asks; `null` for nothing. */
+  #said: Said | null = null;
+  /** Whether a press is under way: until it is done, no other starts. */
+  #busy = false;
+  /** Whether `/stop` waits for its `y`. */
+  #confirming = false;
+  readonly #listeners = new Set<() => void>();
+
+  constructor(host: RunViewHost, out: Colored, env: Env) {
+    this.#host = host;
+    this.#style = (text, s) => paint(text, s, out, env);
+    const count = host.inboxes.length;
+    const close = { name: "/close", description: "Close the inbox: the run reads no more from it" };
+    const stop = { name: "/stop", description: "Stop the run: it ends" };
+    this.#editor = new LineEditor({
+      columns: () => this.#size.columns,
+      rows: () => this.#size.rows - VIEW_ROWS,
+      hint: count === 0 ? "/stop ends the run" : `enter sends${count > 1 ? " · tab picks" : ""} · /close · /stop`,
+      commands: count === 0 ? [stop] : [close, stop],
+      title: () => sanitize(this.#target() ?? ""),
+    });
+  }
+
+  /** Call `listener` when what the view draws changes without a key: a press is done. */
+  subscribe(listener: () => void): () => void {
+    this.#listeners.add(listener);
+    return () => void this.#listeners.delete(listener);
+  }
+
+  /** The screen, `rows` high and `columns` wide; `waiting` when a prompt of the chat waits behind it. */
+  draw(columns: number, rows: number, waiting: boolean): string[] {
+    this.#size = { columns, rows };
+    const { id, name, inboxes } = this.#host;
+    const status = this.#host.status();
+    this.#drawn = status.status;
+    const style = this.#style;
+    const picked = (inbox: string, i: number) =>
+      i === this.#picked ? style(`[${sanitize(inbox)}]`, "cyan bold") : sanitize(inbox);
+    const strip = inboxes.length === 0 ? [] : [`${style("inboxes", "dim")}  ${inboxes.map(picked).join("  ")}`];
+    const said = this.#said;
+    const saidRows = said === null ? [] : this.#saidRows(said.text, columns).map((row) => style(row, said.style));
+    const box = this.#editor.lines();
+    const target = this.#target();
+    const back = waiting
+      ? style("the chat waits on you · esc to answer", "yellow")
+      : this.#drawn === "running" && target !== null
+        ? style(`esc interrupts ${sanitize(target)} · ctrl-c goes back to the chat`, "dim")
+        : style("esc to go back to the chat", "dim");
+    const foot = [...strip, ...saidRows, ...box, back];
+    const screen = runScreen({ id, name, status }, this.#host.progress(), columns, rows, style, foot);
+    this.#boxAt = screen.length - 1 - box.length;
+    return screen;
+  }
+
+  /** Where the cursor shows among the rows drawn last: in the box. */
+  cursor(): { row: number; before: string } | null {
+    const at = this.#editor.cursor();
+    return at === null ? null : { row: this.#boxAt + at.row, before: at.before };
+  }
+
+  /** Take one key, `waiting` when a prompt of the chat waits behind the view; return whether to close it. */
+  key(key: Key, waiting: boolean): boolean {
+    if (this.#confirming) {
+      this.#confirming = false;
+      this.#said = null;
+      if (!key.paste && (key.str === "y" || key.str === "Y")) this.#press("stop", { run: this.#host.id });
+      return false;
+    }
+    const count = this.#host.inboxes.length;
+    // Tab completes a command while the menu is open.
+    if (key.name === "tab" && !key.paste && !this.#editor.menuOpen()) {
+      if (count > 0) this.#picked = (this.#picked + (key.shift === true ? count - 1 : 1)) % count;
+      return false;
+    }
+    const action = this.#editor.key(key);
+    if (action === null) return false;
+    if ("escape" in action) return this.#escape(waiting);
+    if ("value" in action && !this.#busy) this.#enter(action.value);
+    return false;
+  }
+
+  /** The inbox the box sends to; `null` when the run has none. */
+  #target(): string | null {
+    return this.#host.inboxes[this.#picked] ?? null;
+  }
+
+  /** Escape out of the menu: interrupt the run the screen shows running, else close the view. */
+  #escape(waiting: boolean): boolean {
+    const inbox = this.#target();
+    // A prompt of the chat behind the view comes first, and a run at rest has nothing to cut.
+    if (waiting || this.#drawn !== "running" || inbox === null) return true;
+    if (!this.#busy) this.#press("interrupt", { run: this.#host.id, inbox });
+    return false;
+  }
+
+  /** Enter in the box with `text`: a command, or the text sent to the inbox picked as it is. */
+  #enter(text: string): void {
+    const command = text.trim();
+    const inbox = this.#target();
+    if (command === "") return;
+    if (command === "/stop") {
+      this.#editor.set("");
+      this.#confirming = true;
+      this.#said = { text: `stop ${this.#host.id}? its run ends (y/N)`, style: "yellow" };
+    } else if (inbox === null) this.#said = { text: "this run has no inbox", style: "yellow" };
+    else {
+      this.#editor.set("");
+      if (command === "/close") this.#press("close_inbox", { run: this.#host.id, inbox });
+      else this.#press("message", { run: this.#host.id, inbox, text });
+    }
+  }
+
+  /** Press `tool` with `args`, and say what it did once it is done. */
+  #press<K extends ViewTool>(tool: K, args: PressArguments[K]): void {
+    this.#busy = true;
+    this.#said = { text: `${PRESSING[tool].doing}…`, style: "dim" };
+    const failed = (error: unknown): Said => {
+      const why = error instanceof Error ? error.message : String(error);
+      return { text: `${PRESSING[tool].not}: ${why}`, style: "red" };
+    };
+    void this.#host
+      .press(tool, args)
+      .then(
+        (pressed) => (this.#said = this.#outcome(tool, args, pressed)),
+        (error: unknown) => (this.#said = failed(error)),
+      )
+      .finally(() => {
+        this.#busy = false;
+        for (const listener of this.#listeners) listener();
+      });
+  }
+
+  /** What `pressed`, a press of `tool` with `args`, did: why nothing ran, the run's note, or what it did. */
+  #outcome<K extends ViewTool>(tool: K, args: PressArguments[K], pressed: Pressed<ChildStatus | ChildInterrupt>): Said {
+    const { result, recorded, reason } = pressed;
+    if (result === null) return { text: `${PRESSING[tool].not}: ${reason}`, style: "yellow" };
+    const inbox = sanitize((args as { inbox?: string }).inbox ?? "");
+    let said: Said;
+    if (tool === "interrupt") said = this.#interrupted(result as ChildInterrupt, inbox);
+    else {
+      const { note } = result as ChildStatus;
+      const did =
+        tool === "message" ? `sent to ${inbox}` : tool === "close_inbox" ? `closed ${inbox}` : `stopped ${this.#host.id}`;
+      said = note === undefined ? { text: did, style: "dim" } : { text: note, style: "yellow" };
+    }
+    // The run has the press, but the assistant's conversation doesn't hold it.
+    return recorded ? said : { text: `${said.text}; the assistant isn't told (${reason})`, style: "yellow" };
+  }
+
+  /** What `cut`, an interrupt of `inbox`, did; the lines it took back go back in the box, first. */
+  #interrupted(cut: ChildInterrupt, inbox: string): Said {
+    const back = cut.taken.map((event) => textDraft(sentWords(event.value)));
+    if (back.length > 0) this.#editor.set(joinDrafts([...back, this.#editor.draft()]));
+    const returned = back.length === 0 ? "" : `; ${counted(back.length, "message")} back in the box`;
+    if (!cut.landed) return { text: `${cut.status.note ?? PRESSING.interrupt.not}${returned}`, style: "yellow" };
+    if (cut.nodes.length > 0) return { text: `interrupted ${cut.nodes.join(", ")}${returned}`, style: "dim" };
+    const others = counted(cut.queued, "queued message");
+    const queued = cut.queued === 0 ? "" : `, and may use up ${others} from others unanswered`;
+    const text = `nothing to stop now; the next turn on ${inbox} stops at once${queued}${returned}`;
+    return { text, style: "yellow" };
+  }
+
+  /** `text` on at most `SAID_ROWS` rows `columns` wide, sanitized, the last cut to fit. */
+  #saidRows(text: string, columns: number): string[] {
+    const line = sanitize(text).replaceAll("\n", " ");
+    const ranges = wrapLine(line, Math.max(1, columns));
+    const rows = ranges.slice(0, SAID_ROWS).map(([start, end]) => line.slice(start, end));
+    if (ranges.length > SAID_ROWS) rows[SAID_ROWS - 1] = fit(line.slice(ranges[SAID_ROWS - 1]![0]), columns);
+    return rows;
+  }
 }

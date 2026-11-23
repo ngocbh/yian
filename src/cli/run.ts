@@ -109,6 +109,7 @@ import {
   resumeMemories,
 } from "./memory_bind.ts";
 import {
+  authorText,
   box,
   diagnosticJson,
   elapsedTag,
@@ -1532,6 +1533,9 @@ type CheckResult =
 /** The most tools left for run start a flow's ok line names; the rest are counted. */
 const RUN_START_SHOWN = 5;
 
+/** The most unread sends `yian status` names; the rest are counted. */
+const UNREAD_SHOWN = 10;
+
 /**
  * `; checked at run start: gret (node 'n'; did you mean the def greet?), search (node 'm')` for
  * the tools only the run supplies, each name and hint once, at its first node, those with a hint
@@ -1663,12 +1667,13 @@ export async function status(log: string | undefined, { json }: { json: boolean 
     }
     return 1;
   }
-  const { status: runStatus, inFlight, crashedAttempts, ready, wakeAt } = inspection;
+  const { status: runStatus, inFlight, crashedAttempts, ready, wakeAt, unread } = inspection;
   if (json) {
     // `printJson` writes a number as a float and a `bigint` as an int.
     const counts = Object.fromEntries([...crashedAttempts].map(([node, n]) => [node, BigInt(n)]));
+    const sends = unread.map(({ inbox, seq, by }) => ({ inbox, seq: BigInt(seq), by }));
     await printJson(
-      { status: runStatus, in_flight: inFlight, crashed_attempts: counts, ready, wake_at: wakeAt },
+      { status: runStatus, in_flight: inFlight, crashed_attempts: counts, ready, wake_at: wakeAt, unread: sends },
       io.stdout,
     );
     return 0;
@@ -1679,6 +1684,13 @@ export async function status(log: string | undefined, { json }: { json: boolean 
   if (crashedAttempts.size > 0) {
     const counts = [...crashedAttempts].map(([node, n]) => `${shown(node)}=${n}`);
     text += `crashed attempts: ${counts.join(", ")}\n`;
+  }
+  if (unread.length > 0) {
+    const sends = unread
+      .slice(0, UNREAD_SHOWN)
+      .map(({ inbox, seq, by }) => `${shown(inbox)} ${seq}${by === null ? "" : ` from ${shown(authorText(by))}`}`);
+    const more = unread.length > sends.length ? `, and ${unread.length - sends.length} more` : "";
+    text += `unread: ${sends.join(", ")}${more}\n`;
   }
   await io.stdout.write(text);
   return 0;

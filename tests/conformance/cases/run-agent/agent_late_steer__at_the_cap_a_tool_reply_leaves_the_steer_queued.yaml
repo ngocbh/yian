@@ -160,6 +160,8 @@ expect:
     - {node_id: chat}
   - - ModelCallStarted
     - {node_id: chat, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
+  - - InboxSent
+    - {inbox: notes, seq: 9}
   - - ModelCallFinished
     - {node_id: chat, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
   - - ToolCallStarted

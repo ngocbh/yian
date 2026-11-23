@@ -164,6 +164,8 @@ expect:
       node_id: chat
       tool_call_id: call-1
       n: 1
+  - - InboxSent
+    - {inbox: notes, seq: 10}
   - - Interrupted
     - inbox: notes
       nodes: [chat]

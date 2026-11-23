@@ -22,3 +22,4 @@ expect:
     crashed_attempts: {a: 1, b: 1}
     ready: false
     wake_at: null
+    unread: []

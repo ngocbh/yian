@@ -379,7 +379,7 @@
     "status_document": {
       "description": "`yian status LOG --json` (TS only): where the run in the log stands, read without appending or taking the writer's lock. status is running while a writer holds the log's lock; succeeded, failed or cancelled once the run ended; unstarted when the log ends inside its run start, before its inputs were recorded, so no resume can go on from it (delete the log and start the run again); waiting when its last segment ended with every unsettled node waiting (on a take, a sleep or a host call); stopped when the host stopped its last segment; else crashed (the process ended mid-run). in_flight lists the nodes started (or woken) and neither settled nor waiting, in start order (empty for an ended run). crashed_attempts maps a node id to the attempts a resume retried, or would retry, after a crash.",
       "type": "object",
-      "required": ["format", "status", "in_flight", "crashed_attempts", "ready", "wake_at"],
+      "required": ["format", "status", "in_flight", "crashed_attempts", "ready", "wake_at", "unread"],
       "properties": {
         "format": {"$ref": "#/$defs/format"},
         "status": {"$ref": "#/$defs/run_status"},
@@ -389,7 +389,37 @@
           "additionalProperties": {"type": "integer", "minimum": 0}
         },
         "ready": {"type": "boolean", "description": "For a waiting run, whether some waiting node can be woken now (every call it waits on is settled, or a held call it waits on is no longer open); false otherwise. A host also wakes the run once wake_at is due."},
-        "wake_at": {"type": ["string", "null"], "description": "For a waiting run, the earliest deadline of an open call of a waiting node, as a UTC time such as 2026-10-20T14:02:11.123Z; null when none has one, and for any other status."}
+        "wake_at": {"type": ["string", "null"], "description": "For a waiting run, the earliest deadline of an open call of a waiting node, as a UTC time such as 2026-10-20T14:02:11.123Z; null when none has one, and for any other status."},
+        "unread": {
+          "type": "array",
+          "description": "For a run that hasn't ended, the sends no take or steer has read yet (what withdraw takes back), in seq order; empty for an ended run.",
+          "items": {
+            "type": "object",
+            "required": ["inbox", "seq", "by"],
+            "properties": {
+              "inbox": {"type": "string"},
+              "seq": {"type": "integer", "minimum": 0},
+              "by": {
+                "description": "Who made the send, as its pool_commit records it; null when its call said no one.",
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": ["kind", "name"],
+                    "properties": {
+                      "kind": {"enum": ["agent", "tool", "user", "host", "run"]},
+                      "name": {"type": "string", "minLength": 1},
+                      "run": {"type": "string", "minLength": 1},
+                      "node": {"type": "string", "minLength": 1}
+                    },
+                    "additionalProperties": false
+                  },
+                  {"type": "null"}
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
       }
     },
     "run_status": {

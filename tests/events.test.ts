@@ -15,6 +15,7 @@ import {
   CallHeld,
   CLOSE_REASONS,
   IN_LOOP_EVENTS,
+  InboxSent,
   Interrupted,
   ModelCallFinished,
   type ModelCallPurpose,
@@ -312,6 +313,11 @@ const SAMPLES: readonly { event: RunEvent; data: Record<string, unknown> }[] = [
     data: { inbox: "notes", nodes: ["helper"], scopes: ["helper/approve#0"] },
   },
   { event: new Interrupted({ inbox: "notes", nodes: [], scopes: [] }), data: { inbox: "notes", nodes: [], scopes: [] } },
+  {
+    event: new InboxSent({ inbox: "notes", seq: 12, by: { kind: "run", name: "review r1", run: "chat-r1" } }),
+    data: { inbox: "notes", seq: 12, by: { kind: "run", name: "review r1", run: "chat-r1" } },
+  },
+  { event: new InboxSent({ inbox: "notes", seq: 3, by: null }), data: { inbox: "notes", seq: 3, by: null } },
   { event: new RunStarted(), data: {} },
   { event: new RunResumed(), data: {} },
   { event: new RunSucceeded({ output: { greeting: "hi" } }), data: { output: { greeting: "hi" } } },
@@ -465,7 +471,7 @@ describe("type discriminant", () => {
   test("the samples cover every event class", () => {
     const sampled: string[] = [...new Set(SAMPLES.map(({ event }) => event.type))].sort();
     expect(sampled).toEqual(EVENT_CLASS_NAMES);
-    expect(EVENT_CLASS_NAMES).toHaveLength(24);
+    expect(EVENT_CLASS_NAMES).toHaveLength(25);
   });
 
   test("TokenUsage is not an event and has no type", () => {

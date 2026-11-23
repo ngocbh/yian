@@ -153,6 +153,8 @@ expect:
       provider: openai
       purpose: chat
       n: 1
+  - - InboxSent
+    - {inbox: notes, seq: 9}
   - - Interrupted
     - inbox: notes
       nodes: []

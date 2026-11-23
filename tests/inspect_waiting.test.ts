@@ -1,6 +1,6 @@
 /**
- * `inspectRun` without a flow on logs whose nodes wait: `waiting`, `ready`, `wakeAt` and the
- * waits; crashes while nodes wait; `cancelled` and `run_failed` endings.
+ * `inspectRun` without a flow on logs whose nodes wait: `waiting`, `ready`, `wakeAt`, the waits
+ * and the unread sends; crashes while nodes wait; `cancelled` and `run_failed` endings.
  */
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -9,6 +9,7 @@ import { join } from "node:path";
 
 import { END_ID, START_ID } from "../src/compile/model.ts";
 import { Failure } from "../src/diagnostics.ts";
+import type { Author } from "../src/memory/base.ts";
 import { inspectRun } from "../src/run.ts";
 import {
   JsonlRunLog,
@@ -36,7 +37,8 @@ const takeWait = (node: string, deadline: string | null = null) =>
   new NodeWaitingRecord(node, [`r/${node}`], { waits: [{ callId: `r/${node}`, tool: "take", inbox: "msgs", mode: "one", deadline }] });
 const sleepWait = (node: string) =>
   new NodeWaitingRecord(node, [`r/${node}`], { waits: [{ callId: `r/${node}`, tool: "sleep", inbox: null, mode: null, deadline: DEADLINE }] });
-const send = (value: string) => new PoolCommitRecord(START_ID, `${START_ID}.msgs`, { kind: "str", value });
+const send = (value: string, by: Author | null = null) =>
+  new PoolCommitRecord(START_ID, `${START_ID}.msgs`, { kind: "str", value }, { by });
 const endSuccess = (commit: number) => [
   new NodeStartedRecord(END_ID),
   new PoolCommitRecord(END_ID, END_ID, { kind: "str", value: "x" }),
@@ -80,6 +82,20 @@ test("a run whose node waits on a take is waiting, not ready", () => {
 test("a send to the waiting take makes the run ready", () => {
   const inspection = progress(logOf(...WAITING, send("hi")));
   expect([inspection.status, inspection.ready, inspection.waits[0]!.settled]).toEqual(["waiting", true, true]);
+});
+
+test("the unread sends, with who made each: one assigned to a take that hasn't woken counts; none once the run ends", () => {
+  const ada: Author = { kind: "user", name: "Ada" };
+  // seqs: 2 started, 3 wait, 4 run_waiting, 5 x by Ada -> heard, 6 y unread
+  const waiting = logOf(...WAITING, send("x", ada), send("y"));
+  expect(inspectRun(waiting).unread).toEqual([
+    { inbox: "msgs", seq: 5, by: ada },
+    { inbox: "msgs", seq: 6, by: null },
+  ]);
+  expect(inspectRun(logOf(...WAITING, send("x", ada), send("y"), new NodeWokenRecord("heard"))).unread).toEqual([
+    { inbox: "msgs", seq: 6, by: null },
+  ]);
+  expect(inspectRun(logOf(...WAITING, send("x", ada), new RunCancelledRecord())).unread).toEqual([]);
 });
 
 test("a sleeping node sets wakeAt to its deadline", () => {

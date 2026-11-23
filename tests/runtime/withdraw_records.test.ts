@@ -1,7 +1,10 @@
 /**
- * TS-only: `inbox_withdrawn` in the waits fold and the reducer, and `withdraw`'s unread set.
+ * TS-only: `inbox_withdrawn` in the waits fold and the reducer, and `withdraw`'s unread set, whole
+ * or one sender's.
  */
 import { expect, test } from "bun:test";
+import { InboxSent } from "../../src/events.ts";
+import type { Author } from "../../src/memory/base.ts";
 import type { WaitRequest } from "../../src/nodes/base.ts";
 import {
   canonicalTyped,
@@ -85,6 +88,54 @@ test("withdraw un-assigns a shifted take:one and a take:all; absorbing order is 
   expect(w.calls.get(call("a"))!.assigned).toEqual([7]);
 });
 
+test("a withdraw of some sends: the sends kept go to the takes that lost theirs, oldest first; a take that lost nothing keeps them", () => {
+  // 2 take a (one), 3 x -> a (a shifts out), 4 y unread, 5 withdraw [3]: a takes y
+  const w = fold(...START, takeWait("a", "one"), send("msgs", "x"), send("msgs", "y"), new InboxWithdrawnRecord("msgs", [3]));
+  expect(w.calls.get(call("a"))).toMatchObject({ state: "answered", assigned: [4] });
+  expect(w.inboxes.get("msgs")).toEqual({ unread: [], closed: false, absorbing: [] });
+  // 2 take a (all), 3 take b (one), 4 x -> a, 5 y -> a, 6 withdraw [4]: a keeps y, b waits
+  const all = fold(
+    ...START,
+    takeWait("a", "all"),
+    takeWait("b", "one"),
+    send("msgs", "x"),
+    send("msgs", "y"),
+    new InboxWithdrawnRecord("msgs", [4]),
+  );
+  expect(all.calls.get(call("a"))).toMatchObject({ state: "answered", assigned: [5] });
+  expect(all.calls.get(call("b"))).toMatchObject({ state: "open", assigned: [] });
+  // 2 take a (one), 3 take b (one), 4 x -> a, 5 y -> b, 6 withdraw [4]: b keeps y, a waits again
+  const two = fold(
+    ...START,
+    takeWait("a", "one"),
+    takeWait("b", "one"),
+    send("msgs", "x"),
+    send("msgs", "y"),
+    new InboxWithdrawnRecord("msgs", [4]),
+  );
+  expect(two.calls.get(call("a"))).toMatchObject({ state: "open", assigned: [] });
+  expect(two.calls.get(call("b"))).toMatchObject({ state: "answered", assigned: [5] });
+  expect(two.inboxes.get("msgs")!.absorbing).toEqual([call("a")]);
+});
+
+test("on a closed inbox a take keeps the sends a withdraw doesn't name, and takes the close once none is left", () => {
+  // 2 take a (all), 3 x -> a, 4 y -> a, 5 close, 6 withdraw [3], 7 withdraw [4]
+  const w = fold(...START, takeWait("a", "all"), send("msgs", "x"), send("msgs", "y"), new InboxClosedRecord("msgs"));
+  applyWaitsRecord(w, { seq: 6, record: new InboxWithdrawnRecord("msgs", [3]) });
+  expect(w.calls.get(call("a"))).toMatchObject({ state: "answered", assigned: [4], closedInbox: false });
+  applyWaitsRecord(w, { seq: 7, record: new InboxWithdrawnRecord("msgs", [4]) });
+  expect(w.calls.get(call("a"))).toMatchObject({ state: "answered", assigned: [], closedInbox: true });
+});
+
+test("on a closed inbox a take that lost its send reads what is still unread before it takes the close", () => {
+  // 2 take a (one), 3 x -> a, 4 y unread, 5 close, 6 withdraw [3]: a takes y, then the close
+  const w = fold(...START, takeWait("a", "one"), send("msgs", "x"), send("msgs", "y"), new InboxClosedRecord("msgs"));
+  applyWaitsRecord(w, { seq: 6, record: new InboxWithdrawnRecord("msgs", [3]) });
+  expect(w.calls.get(call("a"))).toMatchObject({ state: "answered", assigned: [4], closedInbox: false });
+  expect(w.inboxes.get("msgs")!.unread).toEqual([]);
+  expect(decideWait(w, call("a"), takeOne(), 0)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [4], closed: true } });
+});
+
 test("withdraw on a closed inbox answers the take with the close; it takes {events: [], closed: true}", () => {
   const w = fold(...START, takeWait("a", "one"), send("msgs", "x"), new InboxClosedRecord("msgs"), new InboxWithdrawnRecord("msgs", [3]));
   expect(w.calls.get(call("a"))).toMatchObject({ state: "answered", assigned: [], closedInbox: true });
@@ -125,12 +176,15 @@ function takeRun(): Run {
   return run;
 }
 
-/** Commit a send of `event` to msgs and return its seq. */
-function commitSend(run: Run, event: unknown): number {
-  const prepared = prepareSend(run.state, "msgs", event);
+/** Commit a send of `event` to msgs, made by `by`, and return its seq. */
+function commitSend(run: Run, event: unknown, by: Author | null = null): number {
+  const prepared = prepareSend(run.state, "msgs", event, null, by) as PreparedTransition;
   commitPrepared(run.log, run.state, prepared);
   return prepared.expectedSequence;
 }
+
+const ADA: Author = { kind: "user", name: "Ada" };
+const OWNER: Author = { kind: "agent", name: "yian-chat" };
 
 /** Return the `DeliveryRefused` reason `run` throws. */
 function refusal(run: () => unknown): string {
@@ -165,6 +219,47 @@ test("nothing unread: null, nothing appended", () => {
   // x is the woken take's now.
   expect(run.state.inboxEvents.has(x)).toBe(true);
   expect(prepareWithdraw(run.state, "msgs")).toBeNull();
+});
+
+test("a withdraw by a sender names only its unread sends; the others stay and the take gets the oldest", () => {
+  const run = takeRun();
+  const x = commitSend(run, "x", ADA);
+  const y = commitSend(run, "y", OWNER);
+  const z = commitSend(run, "z");
+  const w = commitSend(run, "w", { ...ADA });
+  // The same author as another object is the same sender; another field makes it another.
+  commitSend(run, "v", { ...ADA, run: "chat" });
+  const prepared = prepareWithdraw(run.state, "msgs", ADA)!;
+  expect(prepared.record).toEqual(new InboxWithdrawnRecord("msgs", [x, w], { by: ADA }));
+  commitPrepared(run.log, run.state, prepared);
+  expect([x, y, z, w].map((seq) => run.state.inboxEvents.has(seq))).toEqual([false, true, true, false]);
+  expect([x, y, z, w].map((seq) => run.state.sendBy.get(seq) ?? null)).toEqual([null, OWNER, null, null]);
+  expect(run.state.waits.calls.get(callOf("heard"))).toMatchObject({ state: "answered", assigned: [y] });
+  expect(prepareWithdraw(run.state, "msgs", ADA)).toBeNull();
+  expect([...(prepareWithdraw(run.state, "msgs")!.record as InboxWithdrawnRecord).events]).toEqual([y, z, w + 1]);
+});
+
+test("replay refuses a withdraw by a sender that names another's send or leaves one of its own", () => {
+  const run = takeRun();
+  const x = commitSend(run, "x", ADA);
+  const y = commitSend(run, "y", OWNER);
+  const w = commitSend(run, "w", ADA);
+  for (const events of [[x, y, w], [x]]) {
+    expect(() => prepareRecord(run.state, new InboxWithdrawnRecord("msgs", events, { by: ADA }))).toThrow(
+      `InboxWithdrawn must name the whole unread set [${x}, ${w}] its by sent on inbox 'msgs'`,
+    );
+  }
+});
+
+test("a send publishes InboxSent with its inbox, seq and by; a keyed repeat publishes nothing", () => {
+  const run = takeRun();
+  const prepared = prepareSend(run.state, "msgs", "x", "k", ADA) as PreparedTransition;
+  const sent = new InboxSent({ inbox: "msgs", seq: prepared.expectedSequence, by: ADA });
+  expect(prepared.observers).toEqual([sent]);
+  expect(commitPrepared(run.log, run.state, prepared)).toEqual([sent]);
+  expect(prepareSend(run.state, "msgs", "x", "k", ADA)).toEqual({ repeatOf: prepared.expectedSequence });
+  const bare = prepareSend(run.state, "msgs", "y");
+  expect(bare.observers).toEqual([new InboxSent({ inbox: "msgs", seq: bare.expectedSequence, by: null })]);
 });
 
 test("allowed on a closed inbox; the waiting take is answered by the close", () => {

@@ -488,12 +488,12 @@ or the node stops (a failing sibling, the end of a flow call's scope), or the ag
   `toolResults` show it as `note`; a crash before that record loses it. Notes, a release's too,
   and a held call's target are plain text in the log, so keep secrets out of them.
 
-A tool that acts on something else, such as one that approves another run's held call, can show
-the hook what that is: its `gateTarget` (see [Host tools](/agents/#host-tools)) gives
-`call.target`, read from your own state, so your rule never depends on how the model describes the
-call. A tool that must never run unchecked sets `refuseUngated`: in a run without
-`beforeToolCall`, an agent's call to it reads that text as its error, and a TOOL node's call to it
-fails in any run, so the tool doesn't run.
+A tool that acts on something else, such as one that approves another run's held call (the
+child-flow group's [`approve`](#child-flows)), can show the hook what that is: its `gateTarget`
+(see [Host tools](/agents/#host-tools)) gives `call.target`, read from your own state, so your rule
+never depends on how the model describes the call. A tool that must never run unchecked sets
+`refuseUngated`: in a run without `beforeToolCall`, an agent's call to it reads that text as its
+error, and a TOOL node's call to it fails in any run, so the tool doesn't run.
 
 ### Held calls
 
@@ -597,14 +597,14 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
   `message` to an `Inbox(Message)` is a user message authored by the owner's label, and so is
   each user message with no author that the model passes in an answer or a start's inputs. To an
   `Inbox(str)` the text goes as is, and the status's `note` says the run can't tell who wrote it.
-  The driver's own `answer`, `message`, `interrupt`, `closeInbox` and `stop` sign nothing and
-  record no one.
+  The driver's own `answer`, `message`, `interrupt`, `closeInbox`, `stop` and `approve` sign
+  nothing and record no one.
 - **Reach.** An owner acts on the runs it started, and every run they start, at any depth. Any
   other id is `no run '<id>'`.
 - **The group.** The model sees `<group>_status` and `<group>_wait`, which read a run's status, and
-  `<group>_message`, `<group>_answer`, `<group>_interrupt`, `<group>_close_inbox` and
-  `<group>_stop`, which deliver to it. Each returns the run's status. `wait` waits at most 120
-  seconds on the driver's `scheduler`.
+  `<group>_message`, `<group>_answer`, `<group>_interrupt`, `<group>_close_inbox`, `<group>_stop`
+  and `<group>_approve`, which deliver to it. Each returns the run's status. `wait` waits at most
+  120 seconds on the driver's `scheduler`.
 - **Interrupt.** `<group>_interrupt` takes `run` and `inbox`.
   1. It takes back the model's own unread sends to that inbox (`withdraw` with the owner's
      `by`), never anyone else's. `by` names no node, so two agents of one owner run take back
@@ -638,6 +638,47 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
   an error the model reads, `bad inputs: <why>`, as is what `resolve` throws. `description` begins
   the tool's description, so say there what `flow` names. A crash-cut start isn't sent again, since
   it may have started.
+- **Approve.** `<group>_approve` takes `run`, `call` (a call in the status's `held`), `decision`
+  (`approve` or `refuse`) and an optional `reason`: at most 1000 characters, with no control
+  characters but line breaks and tabs. `approve` releases the call with the reason as its note.
+  `refuse` answers it with the error `Refused by <owner's label>: <reason>` (`Refused by <owner's
+  label>.` without one), which the child's model reads. It runs only when your hook on the owner's
+  run lets it:
+  - Your `beforeToolCall` sees `call.target`: `{run, label, call: {callId, node, tool, source,
+    arguments, target}, decision, reason}`. `run`, `label` and `call` come from the child's log:
+    the child's run id and label, and the held call as it was held. When that call is itself an
+    approve, its own `target` shows the call it would release. `decision` and `reason` are the
+    model's own words.
+  - Run it, refuse it, or hold it with `pending()` to ask a person; their `release` of the held
+    approve then runs it without asking the hook again. A refusal runs nothing in the child.
+  - With no hook, the model reads `Only the user can approve or refuse a held call: ask them in the
+    chat, or they can open the run and approve it.`, and nothing runs. Neither does a TOOL node's
+    call, in any run. In a gated run, a target that fails, such as one whose hold would be over the
+    owner's run's `YIAN_MAX_EVENT_BYTES`, refuses the call with that text too.
+  - A call naming a run the owner doesn't reach, or a call its run doesn't hold, is refused before
+    the hook is asked. When the approve runs, it checks again that the call is still held.
+  - A held approve records its target in the owner's log, the held call's arguments with it, so
+    keep secrets out of them.
+  - A crash-cut approve isn't sent again: the run's status says whether it landed. The driver's own
+    `approve(id, call, decision, {reason})` is never gated.
+
+  Base your rule on the held call's `source`, never on its name alone: a flow's own def can take
+  any name.
+
+  ```ts check=fragment
+  const beforeToolCall: BeforeToolCall = (call) => {
+    const { source } = call;
+    if (source.kind === "host" && source.group === "flows" && source.tool === "approve") {
+      const { label, decision } = call.target!;
+      const held = call.target!.call as { source: ToolSource; arguments: JsonObject; target: JsonObject | null };
+      if (decision === "refuse") return undefined;                         // runs nothing in the child
+      if (held.target === null && readOnly(held.source)) return undefined; // your rule: it goes through
+      showCard(`assistant wants to approve ${label}'s call`, held.source, held.arguments, held.target);
+      return pending();                                                    // the person's yes: release(log, call.callId)
+    }
+    /* your other rules */
+  };
+  ```
 - **Members.** A run records the tools its agents are granted, so a run whose group gains or loses
   a tool, such as `start`, can't be resumed: `resume refused: tools.flows_start isn't recorded; the
   run started without it`, or `resume refused: tools.flows_stop is recorded, but this run's tools

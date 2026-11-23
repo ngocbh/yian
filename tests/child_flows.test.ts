@@ -22,14 +22,17 @@ import {
 } from "../src/child_flows.ts";
 import type { ComposedFlow } from "../src/compose/build/pipeline.ts";
 import { loadFlow } from "../src/compose/loader.ts";
-import { advance, inspectRun, pendingCalls, release, runFlow, send } from "../src/run.ts";
+import { advance, inspectRun, pendingCalls, release, type RunResult, runFlow, send } from "../src/run.ts";
+import type { ChatModel } from "../src/llm/events.ts";
 import { type Response, ToolResultPart } from "../src/llm/messages.ts";
 import { ScriptedModel } from "../src/llm/testing.ts";
 import { FileMemory } from "../src/memory/file.ts";
-import { InterruptedRecord, readRunLog, type RunStartedRecord } from "../src/runtime/log.ts";
+import { withWarnings } from "../src/platform.ts";
+import { InterruptedRecord, NodeStepRecord, readRunLog, type RunLog, type RunStartedRecord } from "../src/runtime/log.ts";
 import { Skill } from "../src/skills/catalog.ts";
 import { pending, ToolContext } from "../src/tools/context.ts";
 import { ReportedToolError } from "../src/tools/errors.ts";
+import type { BeforeToolCall, GatedCall, GateDecision } from "../src/tools/gate.ts";
 import { type FunctionTool, tool } from "../src/tools/function_tools.ts";
 import { withAppendHook } from "./helpers/append_hook.ts";
 import { callReply, NO_ENV, serving, textReply } from "./helpers/run_state_fixtures.ts";
@@ -1149,7 +1152,7 @@ output: \${reply.output}
 describe("childFlows", () => {
   test("the group's tools, which run beside other calls, and which a resumed agent sends again", () => {
     const tools = childFlows(chat(childRuns()));
-    const names = ["status", "wait", "message", "answer", "interrupt", "close_inbox", "stop"];
+    const names = ["status", "wait", "message", "answer", "interrupt", "close_inbox", "stop", "approve"];
     expect(tools.map((each) => each.name)).toEqual(names);
     const resumable = tools.filter((each) => each.resumable).map((each) => each.name);
     expect(resumable).toEqual(["message", "answer", "close_inbox", "stop"]);
@@ -1363,6 +1366,367 @@ test(
   },
   TIMEOUT,
 );
+
+describe("approve", () => {
+  const XAI = { provider: "xai", model: "grok-4.3" };
+  const env = (name: string) => (name === "XAI_API_KEY" ? "test-xai-key" : NO_ENV(name));
+  const UNGATED =
+    "Only the user can approve or refuse a held call: ask them in the chat, or they can open the run and approve it.";
+  /** The chat's own run: an agent that drives its runs with the group. */
+  const OWNER = "id: boss\nname: boss\nnodes:\n  work: {kind: agent, tools: [flows], prompt: Go., output: !str}\noutput: ${work.output}\n";
+  const AGENT = { kind: "agent", name: "yian-chat", run: CHAT } as const;
+
+  /** A driver over `logDir` whose child `r1`, started by the chat, holds its call `shout {text}`. */
+  async function heldShout(text = "hi", logDir = join(root, "runs")) {
+    const model = new ScriptedModel([callReply(["shout", { text }, "t1"]), textReply("done")], XAI);
+    const children = childRuns({ env, logDir, llmConfig: XAI, models: serving(model, env), beforeToolCall: () => pending() });
+    const owner = chat(children);
+    await owner.start(await flow(LOUD), {}, { tools: { shout: SHOUT } });
+    const waiting = await settled(children, "r1");
+    return { children, owner, model, waiting, held: waiting.held![0]!.call };
+  }
+
+  /** The model's reply deciding run `r1`'s call `held`. */
+  const deciding = (held: string, decision = "approve", reason = "it only reads a file") =>
+    callReply(["flows_approve", { run: "r1", call: held, decision, reason }, "c1"]);
+
+  /** A hook noting each call it is asked about in `asked`, answering `decide(call)`. */
+  function asking(decide: (call: GatedCall) => GateDecision = () => ({ run: true })) {
+    const asked: GatedCall[] = [];
+    const hook: BeforeToolCall = (call) => {
+      asked.push(call);
+      return decide(call);
+    };
+    return { asked, hook };
+  }
+
+  /** The options of the chat's run at `log` over `owner`'s group, with `model`, gated by `hook`. */
+  const options = (owner: ChildFlowOwner, model: ScriptedModel, hook: BeforeToolCall | null, log: string) => ({
+    log,
+    env,
+    llmConfig: XAI,
+    models: serving(model, env),
+    tools: { flows: childFlows(owner) },
+    beforeToolCall: hook,
+  });
+
+  /** Start the chat's run of `text` at `log`, as `options` says. */
+  async function own(owner: ChildFlowOwner, model: ScriptedModel, hook: BeforeToolCall | null, log: string, text = OWNER) {
+    return runFlow(await flow(text, "boss.yaml"), {}, { ...options(owner, model, hook, log), runId: CHAT });
+  }
+
+  /** The texts of the tool results the model read in its request `index`. */
+  const results = (model: ScriptedModel, index: number) =>
+    model.requests[index]!.messages.flatMap((each) =>
+      each.parts.flatMap((part) => (part instanceof ToolResultPart ? [part.content] : [])),
+    );
+
+  /** The `released` steps of the log at `log`. */
+  const releases = (log: string) =>
+    readRunLog(log).flatMap(({ record }) =>
+      record instanceof NodeStepRecord && record.step["kind"] === "released" ? [record] : [],
+    );
+
+  test(
+    "the hook sees the held call as the child's log holds it, never the model's words, and its run releases it as the owner's agent",
+    async () => {
+      const { children, owner, waiting, held, model: child } = await heldShout();
+      const { asked, hook } = asking();
+      // The model says the call only reads a file.
+      const model = new ScriptedModel([deciding(held), textReply("done")], XAI);
+      const result = await own(owner, model, hook, join(root, "boss.jsonl"));
+      expect(result.status, result.failure?.message).toBe("succeeded");
+      const call = { callId: held, node: "say", tool: "shout", source: { kind: "host", group: null, tool: "shout" } };
+      const target = { run: `${CHAT}-r1`, label: "loud r1", call: { ...call, arguments: { text: "hi" }, target: null } };
+      const decided = { decision: "approve", reason: "it only reads a file" };
+      expect(asked.map((each) => [each.tool, each.target])).toEqual([["flows_approve", { ...target, ...decided }]]);
+      expect(await settled(children, "r1", waiting.seq)).toMatchObject({ status: "succeeded", output: "done" });
+      expect(results(child, 1)).toEqual(["HI"]);
+      expect(releases(waiting.log).map((record) => [record.step["note"], record.by])).toEqual([[decided.reason, AGENT]]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a held call that is itself an approve shows the owner's hook the call it would release",
+    async () => {
+      const MID = "id: mid\nname: mid\nnodes:\n  work: {kind: agent, tools: [spawn, flows], prompt: Mid work., output: !str}\n";
+      const deep = `${CHAT}-r1-r2/say/1/0`;
+      const scripts: Record<string, ScriptedModel> = {
+        "Shout hi.": new ScriptedModel([callReply(["shout", { text: "rm -rf /" }, "t1"]), textReply("done")], XAI),
+        "Mid work.": new ScriptedModel(
+          [
+            callReply(["spawn", {}, "s1"]),
+            callReply(["flows_approve", { run: "r2", call: deep, decision: "approve", reason: "it only says hi" }, "a1"]),
+            textReply("mid done"),
+          ],
+          XAI,
+        ),
+      };
+      // Each agent reads its own script, found by its prompt.
+      const routed: ChatModel = {
+        ...XAI,
+        stream: (request, given) => {
+          const text = JSON.stringify(request.messages.map((each) => each.toJSON()));
+          return scripts[Object.keys(scripts).find((key) => text.includes(key))!]!.stream(request, given);
+        },
+      };
+      const holding = (call: GatedCall) => (call.tool === "spawn" ? undefined : pending());
+      const children = childRuns({ env, llmConfig: XAI, models: serving(routed, env), beforeToolCall: holding });
+      const loud = await flow(LOUD);
+      // The mid run's `spawn` starts `loud` as its child, and returns once that child holds its call.
+      const tools = (runId: string) => {
+        const mid = children.owner({ runId, group: "flows" });
+        const spawn = tool({
+          name: "spawn",
+          description: "Start loud.",
+          parameters: { type: "object", properties: {} },
+          execute: async () => (await settled(children, (await mid.start(loud, {}, { tools: { shout: SHOUT } })).id)).run,
+        });
+        return { spawn, flows: childFlows(mid) };
+      };
+      const owner = chat(children);
+      await owner.start(await flow(`${MID}output: \${work.output}\n`, "mid.yaml"), {}, { tools });
+      const waiting = await settled(children, "r1");
+      const { asked, hook } = asking();
+      const model = new ScriptedModel([deciding(waiting.held![0]!.call, "approve", "fine"), textReply("done")], XAI);
+      expect((await own(owner, model, hook, join(root, "boss.jsonl"))).status).toBe("succeeded");
+      const source = { kind: "host", group: null, tool: "shout" };
+      const shout = { callId: deep, node: "say", tool: "shout", source, arguments: { text: "rm -rf /" }, target: null };
+      const nested = { run: `${CHAT}-r1-r2`, label: "loud r2", call: shout, decision: "approve", reason: "it only says hi" };
+      expect(asked[0]!.target).toMatchObject({ label: "mid r1", call: { tool: "flows_approve", target: nested }, reason: "fine" });
+      expect(await settled(children, "r1", waiting.seq)).toMatchObject({ status: "succeeded", output: "mid done" });
+      expect(await settled(children, "r2")).toMatchObject({ status: "succeeded", output: "done" });
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a question isn't a held call: approve refuses it before the hook, and refusing it never answers it",
+    async () => {
+      const children = childRuns();
+      const owner = chat(children);
+      await owner.start(await flow(ASK), {});
+      const waiting = await settled(children, "r1");
+      const ask = asked(waiting);
+      const gate = asking();
+      const model = new ScriptedModel([deciding(ask, "refuse", "no"), textReply("done")], XAI);
+      expect((await own(owner, model, gate.hook, join(root, "boss.jsonl"))).status).toBe("succeeded");
+      expect([results(model, 1), gate.asked]).toEqual([[`call '${ask}' isn't a call run r1 holds for approval`], []]);
+      for (const decision of ["approve", "refuse"] as const) {
+        expect((await children.approve("r1", ask, decision)).note).toBe(`call '${ask}' isn't a held tool call`);
+      }
+      expect(children.status("r1")).toMatchObject({ status: "waiting", asks: [{ call: ask }] });
+      expect((await children.answer("r1", ask, "yes")).status).toBe("running");
+      expect(await settled(children, "r1", waiting.seq)).toMatchObject({ status: "succeeded", output: "yes" });
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a call that stops being held while the hook decides is refused by the approve itself",
+    async () => {
+      const { children, owner, waiting, held, model: child } = await heldShout();
+      // The person refuses the child's call themselves while the owner's hook decides.
+      const hook: BeforeToolCall = async () => {
+        await children.approve("r1", held, "refuse", { reason: "the user said no" });
+        return { run: true };
+      };
+      const model = new ScriptedModel([deciding(held), textReply("done")], XAI);
+      expect((await own(owner, model, hook, join(root, "boss.jsonl"))).status).toBe("succeeded");
+      expect(results(model, 1)).toEqual([`call '${held}' isn't a call run r1 holds for approval`]);
+      expect(await settled(children, "r1", waiting.seq)).toMatchObject({ status: "succeeded" });
+      expect(results(child, 1)).toEqual(["Refused: the user said no"]);
+      expect(releases(waiting.log)).toEqual([]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "the host's refusal leaves the call held, and the model's refusal answers it with its reason, which the child's model reads",
+    async () => {
+      const { children, owner, waiting, held, model: child } = await heldShout();
+      const first = new ScriptedModel([deciding(held), textReply("asked")], XAI);
+      const refusing = asking(() => ({ refuse: "Ask Ada first." }));
+      expect((await own(owner, first, refusing.hook, join(root, "boss-1.jsonl"))).status).toBe("succeeded");
+      expect(results(first, 1)).toEqual(["Ask Ada first."]);
+      expect(children.status("r1")).toMatchObject({ status: "waiting", held: [{ call: held }] });
+      const second = new ScriptedModel([deciding(held, "refuse", "too loud,\n\tfor now"), textReply("done")], XAI);
+      expect((await own(owner, second, asking().hook, join(root, "boss-2.jsonl"))).status).toBe("succeeded");
+      expect(await settled(children, "r1", waiting.seq)).toMatchObject({ status: "succeeded", output: "done" });
+      expect(results(child, 1)).toEqual(["Refused by yian-chat: too loud,\n\tfor now"]);
+      expect(releases(waiting.log)).toEqual([]);
+      expect(senders(waiting.log)).toEqual([["NodeStepRecord", AGENT]]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a hold asks the person, whose release runs the held approve without asking the hook again",
+    async () => {
+      const { children, owner, waiting, held } = await heldShout();
+      const { asked, hook } = asking(() => pending());
+      const log = join(root, "boss.jsonl");
+      expect((await own(owner, new ScriptedModel([deciding(held)], XAI), hook, log)).status).toBe("waiting");
+      // The host's card, rebuilt from the log as after a restart.
+      const [card] = pendingCalls(log);
+      const { label, call } = card!.target as { label: string; call: { tool: string } };
+      expect(`${owner.label} wants to approve ${label}'s ${call.tool}`).toBe("yian-chat wants to approve loud r1's shout");
+      expect(card!.target).toEqual(asked[0]!.target);
+      const person = { kind: "user", name: "the user" } as const;
+      await release(log, card!.callId, { env, by: person });
+      const done = await advance(options(owner, new ScriptedModel([textReply("done")], XAI), hook, log));
+      expect(done.status, done.failure?.message).toBe("succeeded");
+      expect(asked).toHaveLength(1);
+      expect(await settled(children, "r1", waiting.seq)).toMatchObject({ status: "succeeded" });
+      expect([senders(log), senders(waiting.log)]).toEqual([[["NodeStepRecord", person]], [["NodeStepRecord", AGENT]]]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a call no run of the owner's holds is refused before the hook is asked, as is one no longer held when its hold is released",
+    async () => {
+      const { children, owner, waiting, held } = await heldShout();
+      await children.owner({ runId: "other", group: "flows", label: "other" }).start(await flow(GREET), { who: "a" });
+      const { asked, hook } = asking();
+      const calls = callReply(
+        ["flows_approve", { run: "r1", call: "nope", decision: "approve" }, "c1"],
+        ["flows_approve", { run: "r2", call: held, decision: "approve" }, "c2"],
+        ["flows_approve", { run: "r9", call: held, decision: "refuse" }, "c3"],
+        ["flows_approve", { run: "r1", call: held, decision: "maybe" }, "c4"],
+        ["flows_approve", { run: "r1", call: held, decision: "approve", reason: "ok\u001b[2J" }, "c5"],
+      );
+      const model = new ScriptedModel([calls, textReply("done")], XAI);
+      expect((await own(owner, model, hook, join(root, "boss-1.jsonl"))).status).toBe("succeeded");
+      const refusals = ["call 'nope' isn't a call run r1 holds for approval", "no run 'r2'", "no run 'r9'"];
+      const control = "reason must be text of at most 1000 characters, with no control characters but line breaks and tabs";
+      expect(results(model, 1)).toEqual([...refusals, expect.stringContaining("decision"), control]);
+      expect(asked).toEqual([]);
+
+      // Held for the person, who meanwhile approves the child's call themselves.
+      const log = join(root, "boss-2.jsonl");
+      const holding = asking(() => pending());
+      expect((await own(owner, new ScriptedModel([deciding(held)], XAI), holding.hook, log)).status).toBe("waiting");
+      expect((await children.approve("r1", held, "approve")).status).toBe("running");
+      await release(log, pendingCalls(log)[0]!.callId, { env });
+      const late = new ScriptedModel([textReply("done")], XAI);
+      expect((await advance(options(owner, late, holding.hook, log))).status).toBe("succeeded");
+      expect(results(late, 0)).toEqual([`call '${held}' isn't a call run r1 holds for approval`]);
+      expect(await settled(children, "r1", waiting.seq)).toMatchObject({ status: "succeeded" });
+      expect(releases(waiting.log).map((record) => record.by)).toEqual([null]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "without the hook, approve is refused with the fixed text and runs nothing; the host's own approve still releases it",
+    async () => {
+      const { children, owner, waiting, held } = await heldShout();
+      const model = new ScriptedModel([deciding(held), textReply("asked")], XAI);
+      expect((await own(owner, model, null, join(root, "boss.jsonl"))).status).toBe("succeeded");
+      expect(results(model, 1)).toEqual([UNGATED]);
+      expect(children.status("r1")).toMatchObject({ status: "waiting", held: [{ call: held }] });
+      expect((await children.approve("r1", "nope", "refuse")).note).toBe("call 'nope' isn't a held tool call");
+      expect((await children.approve("r1", held, "approve", { reason: "fine" })).status).toBe("running");
+      expect(await settled(children, "r1", waiting.seq)).toMatchObject({ status: "succeeded" });
+      expect(releases(waiting.log).map((record) => [record.step["note"], record.by])).toEqual([["fine", null]]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a TOOL node wrapping approve never runs it, gated or not",
+    async () => {
+      const WRAPPER = `id: boss
+name: boss
+defs:
+  wrap:
+    description: Approve a call.
+    input:
+      call: !str
+    nodes:
+      go: {kind: call, call: {flows: approve}, input: {run: r1, call: "\${input.call}", decision: approve}}
+    output: \${go.output}
+nodes:
+  work: {kind: agent, tools: [wrap], prompt: Go., output: !str}
+output: \${work.output}
+`;
+      const { children, owner, held } = await heldShout();
+      for (const [n, hook] of [null, asking().hook].entries()) {
+        const model = new ScriptedModel([callReply(["wrap", { call: held }, "c1"]), textReply("done")], XAI);
+        const result = await own(owner, model, hook, join(root, `boss-${n}.jsonl`), WRAPPER);
+        expect(result.status, result.failure?.message).toBe("succeeded");
+        expect(results(model, 1)).toEqual([expect.stringContaining(`nothing checks a TOOL node's call: ${UNGATED}`)]);
+      }
+      expect(children.status("r1")).toMatchObject({ status: "waiting", held: [{ call: held }] });
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a target over the owner's run's event bound refuses the call with the fixed text, the hook not asked",
+    async () => {
+      const { children, owner, held } = await heldShout("x".repeat(3000));
+      const { asked, hook } = asking();
+      const model = new ScriptedModel([deciding(held), textReply("done")], XAI);
+      const small = (name: string) => (name === "YIAN_MAX_EVENT_BYTES" ? "2000" : env(name));
+      const given = { ...options(owner, model, hook, join(root, "boss.jsonl")), env: small, runId: CHAT };
+      const warnings: string[] = [];
+      const result = await withWarnings(
+        (text) => void warnings.push(text),
+        async () => runFlow(await flow(OWNER, "boss.yaml"), {}, given),
+      );
+      expect(result.status, result.failure?.message).toBe("succeeded");
+      expect([results(model, 1), asked]).toEqual([[UNGATED], []]);
+      expect(warnings).toEqual([expect.stringMatching(/its target makes a hold of \d+ bytes, over the run's limit of 2000/)]);
+      expect(children.status("r1")).toMatchObject({ status: "waiting" });
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a crash at any record of the owner's run from its reply on releases the held call once and asks the hook once",
+    async () => {
+      /** Run the chat's run once, cut at its record `k`, then resume it; return its log. */
+      const once = async (k: number) => {
+        const { children, owner, waiting, held } = await heldShout("hi", join(root, `runs-${k}`));
+        const { asked, hook } = asking();
+        const log = join(root, `boss-${k}.jsonl`);
+        const replies = [deciding(held), textReply("done")];
+        const cut = new Error("crash");
+        const crash = (target: RunLog) => {
+          if (target.path === log && target.nextSequence >= k) throw cut;
+        };
+        const ran = withAppendHook(crash, () => own(owner, new ScriptedModel(replies, XAI), hook, log));
+        if (k === Infinity) expect((await ran).status).toBe("succeeded");
+        else {
+          await expect(ran).rejects.toBe(cut);
+          // A cut reply is asked for again; a recorded one isn't.
+          const replied = readRunLog(log).some(({ record }) => record instanceof NodeStepRecord && record.step["kind"] === "model_call");
+          const done = await advance(options(owner, new ScriptedModel(replies.slice(replied ? 1 : 0), XAI), hook, log));
+          expect(done.status, done.failure?.message).toBe("succeeded");
+        }
+        await settled(children, "r1", waiting.seq);
+        expect(releases(waiting.log).map((record) => record.by)).toEqual([AGENT]);
+        expect(asked).toHaveLength(1);
+        await children.dispose();
+        return readRunLog(log);
+      };
+      const records = await once(Infinity);
+      const reply = records.findIndex(({ record }) => record instanceof NodeStepRecord && record.step["kind"] === "model_call");
+      const closers: unknown[] = [];
+      for (let k = reply; k < records.length; k++) {
+        for (const { record } of await once(k)) {
+          if (record instanceof NodeStepRecord && typeof record.step["closed"] === "string") closers.push([k, record.step["closed"]]);
+        }
+      }
+      // Cut between the child's release and its own result, the approve isn't sent again.
+      expect(closers).toEqual([[reply + 1, "crashed"]]);
+    },
+    30_000,
+  );
+});
 
 test(
   "a group built again over the same owner shows nothing twice and waits past what it showed",
@@ -1734,7 +2098,7 @@ describe("start", () => {
     const owner = chat(childRuns());
     expect(childFlows(owner).map((each) => each.name)).not.toContain("start");
     const tools = childFlows(owner, { start: starting({}).start });
-    const names = ["start", "status", "wait", "message", "answer", "interrupt", "close_inbox", "stop"];
+    const names = ["start", "status", "wait", "message", "answer", "interrupt", "close_inbox", "stop", "approve"];
     expect(tools.map((each) => each.name)).toEqual(names);
     expect([tools[0]!.resumable, tools[0]!.isConcurrencySafe]).toEqual([false, null]);
     expect(tools[0]!.description).toStartWith("Start a flow by its key. ");

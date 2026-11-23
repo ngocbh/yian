@@ -298,6 +298,7 @@ A long paste shows as a token such as `[Pasted text #1 +40 lines]`; the assistan
 | `write_flow` | Writes a flow that loads, once you approve |
 | `flows_start` | Starts a flow or a draft in the background, once you approve |
 | `flows_status`, `flows_wait`, `flows_answer`, `flows_message`, `flows_interrupt`, `flows_close_inbox`, `flows_stop` | Follows, answers, messages, interrupts or cancels a flow it started |
+| `flows_approve` | Approves or refuses a tool call a flow it started holds for approval. Nothing checks its approvals here, so it is always refused and asks you instead |
 | `report_issue` | Reports a problem with yian (see [Reporting a problem](#reporting-a-problem)) |
 | `author_flow` | Builds or reworks a flow with you (see [Building and reviewing flows](#building-and-reviewing-flows)) |
 | `review_flow` | Reviews a flow for security, reliability, cost and clarity |

@@ -36,7 +36,7 @@ import { compareCodeUnits, type Diagnostic, reprText } from "../diagnostics.ts";
 import { isSystemError, leavesRoot, resolvedPath } from "../platform.ts";
 import { type RunStartTool, runStartTools } from "../run.ts";
 import { isReportedToolError, ReportedToolError } from "../tools/errors.ts";
-import { type FunctionTool, tool } from "../tools/function_tools.ts";
+import { type FunctionTool, stringArg, stringArguments, tool } from "../tools/function_tools.ts";
 import { builtinType } from "../typesys/types.ts";
 import { canonicalTypeLabel, isInboxType, type Type } from "../typesys/values.ts";
 import { loadConfinedText } from "./confined_load.ts";
@@ -120,17 +120,6 @@ export function resolveRoot(root: string): string {
     if (!isSystemError(error)) throw error;
     throw new ReportedToolError(`the chat's folder ${root} can't be used: ${osReason(error)}`);
   }
-}
-
-/**
- * @internal The string argument `name` of a tool call.
- *
- * @throws {ReportedToolError} When it isn't a string.
- */
-export function stringArg(args: Record<string, unknown>, name: string): string {
-  const value = args[name];
-  if (typeof value !== "string") throw new ReportedToolError(`${name} must be a string`);
-  return value;
 }
 
 /**
@@ -567,16 +556,6 @@ function quietly(action: () => unknown): void {
   try {
     action();
   } catch {}
-}
-
-/** @internal A tool's JSON Schema for string arguments, each `[name, description, required]`. */
-export function stringArguments(...fields: [name: string, description: string, required: boolean][]) {
-  return {
-    type: "object",
-    properties: Object.fromEntries(fields.map(([name, description]) => [name, { type: "string", description }])),
-    required: fields.filter(([, , required]) => required).map(([name]) => name),
-    additionalProperties: false,
-  };
 }
 
 /**

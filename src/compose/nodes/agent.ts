@@ -1152,14 +1152,18 @@ export class AgentDescriptor extends NodeDescriptor {
     const args: { name: string; type: Type; required: boolean }[] = [];
     for (const input of child.input) {
       const type = input.contract?.type ?? null;
-      const what = isInboxType(type)
-        ? "an inbox"
+      const [what, instead] = isInboxType(type)
+        ? [
+            "an inbox",
+            ". A flow that reads an inbox is talked to while it works: run it as a run of its own that the host " +
+              "starts and then messages (`runFlow`, then `send`).",
+          ]
         : isMemoryType(type)
-          ? "a memory"
+          ? ["a memory", ""]
           : type !== null && type.kind === ValueKind.FILE
-            ? "a file"
-            : null;
-      if (what !== null) throw fail(`${label} can't be a tool: its input \`${input.name}\` is ${what}, which a model can't send`);
+            ? ["a file", ""]
+            : [null, ""];
+      if (what !== null) throw fail(`${label} can't be a tool: its input \`${input.name}\` is ${what}, which a model can't send${instead}`);
       if (type !== null) args.push({ name: input.name, type, required: input.required });
     }
     let parameters;

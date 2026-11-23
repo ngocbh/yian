@@ -19,14 +19,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { EventQueue } from "../../src/cli/chat_events.ts";
 import { AUTHOR_TOOLS } from "../../src/cli/authoring.ts";
-import { chatRunTools, shownStatus } from "../../src/cli/chat_run_tools.ts";
-import { ChildRuns } from "../../src/cli/chat_runs.ts";
-import {
-  type ChatToolHost,
-  chatFileTools,
-  stringArguments,
-  ToolRefused,
-} from "../../src/cli/chat_tools.ts";
+import { ChatRuns, chatRunTools } from "../../src/cli/chat_run_tools.ts";
+import { type ChildRuns, shownStatus } from "../../src/cli/chat_runs.ts";
+import { type ChatToolHost, chatFileTools, ToolRefused } from "../../src/cli/chat_tools.ts";
 import { loadConfinedText } from "../../src/cli/confined_load.ts";
 import { main } from "../../src/cli/index.ts";
 import { defaultLocation, projectKey } from "../../src/cli/memory_bind.ts";
@@ -42,7 +37,7 @@ import { Skill } from "../../src/skills/catalog.ts";
 import { ToolContext } from "../../src/tools/context.ts";
 import { toolText } from "../../src/nodes/agent/results.ts";
 import { isReportedToolError } from "../../src/tools/errors.ts";
-import { type FunctionTool, tool } from "../../src/tools/function_tools.ts";
+import { type FunctionTool, stringArguments, tool } from "../../src/tools/function_tools.ts";
 import type { ToolEntry } from "../../src/tools/registry.ts";
 import { callReply, NO_ENV, serving, textReply } from "../helpers/run_state_fixtures.ts";
 import { heldScheduler } from "../helpers/schedulers.ts";
@@ -91,7 +86,7 @@ async function rejection(promise: Promise<unknown>): Promise<Error> {
 
 describe("the run tools", () => {
   const TIMEOUT = 10_000;
-  let runs: ChildRuns | null = null;
+  let runs: ChatRuns | null = null;
 
   afterEach(async () => {
     await runs?.dispose();
@@ -174,14 +169,14 @@ nodes:
 output: done
 `;
 
-  /** The run tools over a fresh `ChildRuns` on a held clock, approvals answered by `answer`. */
+  /** The run tools over a fresh `ChatRuns` on a held clock, approvals answered by `answer`. */
   function runTools(
     answer: string | null = "Approve",
     scheduler = heldScheduler().scheduler,
     queue: EventQueue | null = null,
     children: { env?: Env; embed?: Embed } = {},
   ) {
-    runs = new ChildRuns({
+    runs = new ChatRuns({
       root,
       logDir: join(tmp, "runs"),
       home: join(tmp, "home"),
@@ -746,7 +741,7 @@ async function until(check: () => boolean): Promise<void> {
 
 describe("report_issue", () => {
   const TIMEOUT = 10_000;
-  let runs: ChildRuns | null = null;
+  let runs: ChatRuns | null = null;
 
   afterEach(async () => {
     await runs?.dispose();
@@ -762,7 +757,7 @@ describe("report_issue", () => {
         provider: "xai",
         model: "grok-4.3",
       });
-      runs = new ChildRuns({
+      runs = new ChatRuns({
         root,
         logDir: join(tmp, "runs"),
         home: join(tmp, "home"),
@@ -828,7 +823,7 @@ describe("author_flow and review_flow", () => {
     description: "How to write flows.",
     instructions: "Write small typed nodes.",
   });
-  let runs: ChildRuns | null = null;
+  let runs: ChatRuns | null = null;
 
   afterEach(async () => {
     await runs?.dispose();
@@ -856,7 +851,7 @@ output: \${hi.output}
    */
   function authoringTools(replies: Response[], answer: string | null = "Approve") {
     const model = new ScriptedModel(replies, { provider: "xai", model: "grok-4.3" });
-    runs = new ChildRuns({
+    runs = new ChatRuns({
       root,
       logDir: join(tmp, "runs"),
       home: join(tmp, "home"),

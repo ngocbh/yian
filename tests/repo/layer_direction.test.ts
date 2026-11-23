@@ -169,6 +169,19 @@ const RULES: Rule[] = [
       good: ["defaults", "platform", "typesys/json", "typesys/errors", "llm/errors", "llm/index"],
     },
   },
+  {
+    name: "cli/chat_runs.ts imports nothing of the top layer",
+    files: only("cli/chat_runs.ts"),
+    forbid: ["index", "cli"],
+    why:
+      "the child-run driver takes what the chat decides through its hooks, so it can sit below the CLI; " +
+      "it must not import index or cli",
+    samples: {
+      file: "cli/chat_runs.ts",
+      bad: ["cli/utils", "cli/memory_bind", "index"],
+      good: ["run", "runtime/log", "platform", "tools/function_tools"],
+    },
+  },
 ];
 
 /** Whether module id `target` is `entry` or a module below it. */

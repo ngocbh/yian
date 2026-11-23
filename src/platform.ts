@@ -3,8 +3,8 @@
  * on Node and Bun: runtime detection, whether this is a compiled binary, a SQLite
  * wrapper over `bun:sqlite` or `node:sqlite`, loaded lazily for the runtime in use,
  * an exclusive file lock built on it, `syncFolder` for durable folder entries, the OS
- * error, missing-path, open-file path, path-confinement and home-directory helpers, the
- * scheduler that clocks and timed waits go through, the TypeScript stripper for CODE
+ * error, missing-path, empty-folder, open-file path, path-confinement and home-directory
+ * helpers, the scheduler that clocks and timed waits go through, the TypeScript stripper for CODE
  * bodies, loaded lazily too, `safeFetch`, the one way out to the network: no redirects,
  * yian's User-Agent, and a warning when TLS checks are off, and `warn`, the path every
  * yian warning takes.
@@ -520,6 +520,16 @@ export function statOrNull(path: string): fs.Stats | null {
   }
 }
 
+/** @internal Remove the directory `dir` if it is empty; otherwise, or when that fails, leave it as it is. */
+export function removeEmptyDir(dir: string): void {
+  try {
+    fs.rmdirSync(dir);
+  } catch {
+    // Not empty (the run created its log) or not removable: tidying must not replace the
+    // caller's own outcome.
+  }
+}
+
 /** The first bytes of a regular file and the file's device and inode, as `readRegularFile` reads them. */
 export interface RegularFileHead {
   readonly bytes: Uint8Array;
@@ -675,6 +685,18 @@ export const realScheduler: Scheduler = {
     await timer(ms, signal);
   },
 };
+
+/**
+ * @internal Resolve once `scheduler`'s clock reaches `at` (epoch milliseconds), re-reading it
+ * after each chunk, so a laptop that slept still wakes on time.
+ *
+ * @throws `signal.reason` once it aborts.
+ */
+export async function sleepUntil(scheduler: Scheduler, at: number, signal: AbortSignal): Promise<void> {
+  for (let left = at - scheduler.now(); left > 0; left = at - scheduler.now()) {
+    await scheduler.sleep(Math.min(left, SLEEP_CHUNK_MS), signal);
+  }
+}
 
 /**
  * Return a scheduler whose clock starts at `start` and moves only to the deadline of

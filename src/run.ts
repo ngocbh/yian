@@ -144,6 +144,7 @@ import {
   NodeStartedRecord,
   NodeStepRecord,
   NodeSucceededRecord,
+  PoolCommitRecord,
   readRunLog,
   type RecordedSkill,
   type RecordedTool,
@@ -187,6 +188,7 @@ import {
   replayRecords,
   stepIndexAt,
   stepsWithSteerValues,
+  withdrawnSends,
 } from "./runtime/state.ts";
 import { Skill } from "./skills/catalog.ts";
 import { isAlreadyOpenError, isMcpServer, type McpServer, openTogether } from "./tools/mcp.ts";
@@ -2394,25 +2396,29 @@ export async function close(log: string, inbox: string, options: DeliveryOptions
   return (await deliverTo(log, { kind: "close", inbox }, options)).seq;
 }
 
-/** One send `withdraw` took back: its seq and value. */
+/** One send `withdraw` took back: its seq, value, and who made it. */
 export interface WithdrawnEvent {
   /** The send's seq. */
   readonly seq: number;
   /** The value it sent. */
   readonly value: unknown;
+  /** The send's `by`; `null` when its call said no one. */
+  readonly by: Author | null;
 }
 
 /**
- * Take back every unread send of the top-level inbox `inbox` of the run at `log`: those no take or
+ * Take back the unread sends of the top-level inbox `inbox` of the run at `log`: those no take or
  * steer read has taken, including sends assigned to a take whose node hasn't woken, which then
- * waits again (or, on a closed inbox, gets `{events: [], closed: true}`). Withdrawn sends get no
- * reply, take output or late steer. Delivered as `send` is; a closed inbox is allowed. No event
- * is published.
+ * waits again (or, on a closed inbox, gets `{events: [], closed: true}`). With `options.by`, only
+ * the sends whose `by` is the same, every field alike, are taken back: the sends kept go to the
+ * takes that lost theirs, oldest first, as new sends would; a take that lost nothing keeps what it
+ * holds. Without it, every sender's. Withdrawn sends get no reply, take output or late steer. Delivered
+ * as `send` is; a closed inbox is allowed. No event is published.
  *
  * @param log The run's JSONL log.
  * @param inbox The name of one of the flow's `Inbox(T)` inputs.
- * @param options See `DeliveryOptions`.
- * @returns The sends taken back, in send order; `[]` when nothing was unread (nothing is appended).
+ * @param options See `DeliveryOptions`; `by` is who withdraws, and whose sends.
+ * @returns The sends taken back, in send order; `[]` when none was unread (nothing is appended).
  * @throws TypeError when `inbox` isn't a string, `options.by` isn't an author or `null`, or
  *   `options.flow` isn't a `ComposedFlow` or `null`.
  * @throws RangeError when a field of `options.by` is empty.
@@ -2422,12 +2428,14 @@ export interface WithdrawnEvent {
  */
 export async function withdraw(log: string, inbox: string, options: DeliveryOptions = {}): Promise<readonly WithdrawnEvent[]> {
   if (typeof inbox !== "string") throw new YianTypeError("inbox must be a string");
+  const by = validatedBy(options.by, "a host call's by");
   let taken: WithdrawnEvent[] = [];
   const { seq } = await deliverTo(log, { kind: "withdraw", inbox }, options, (state) => {
     // Read before the record drops the values, in the delivery's synchronous section.
-    taken = withdrawableEvents(state.waits, inbox).map((event) => ({
+    taken = withdrawnSends(state, inbox, by).map((event) => ({
       seq: event,
       value: copyValue(state.inboxEvents.get(event)!.toObject()),
+      by: state.sendBy.get(event) ?? null,
     }));
   });
   return seq === null ? [] : taken;
@@ -2848,6 +2856,18 @@ export interface RunInspection {
    * when `advance` times it out; `null` when none has a deadline, and for any other status.
    */
   readonly wakeAt: string | null;
+  /**
+   * For a run that hasn't ended, the sends no take or steer has read yet, which `withdraw` would
+   * take back, in seq order; `[]` for an ended run.
+   */
+  readonly unread: readonly UnreadSend[];
+}
+
+/** One send nothing has read yet: its inbox, its seq, and who made it (`null` when its call said no one). */
+export interface UnreadSend {
+  readonly inbox: string;
+  readonly seq: number;
+  readonly by: Author | null;
 }
 
 /**
@@ -2938,7 +2958,16 @@ export function inspectRun(
     waits: waiting ? waitInfos(waits) : [],
     ready: waiting && wakeableNodes(waits).length > 0,
     wakeAt: waiting ? wakeAt(waits) : null,
+    unread: ended ? [] : unreadSends(waits, source.senders),
   };
+}
+
+/** The sends of `waits`' inboxes that a withdraw would take back, in seq order, each with its sender from `senders`. */
+function unreadSends(waits: WaitsState, senders: ReadonlyMap<number, Author>): UnreadSend[] {
+  const sends = [...waits.inboxes.keys()].flatMap((inbox) =>
+    withdrawableEvents(waits, inbox).map((seq) => ({ inbox, seq, by: senders.get(seq) ?? null })),
+  );
+  return sends.sort((a, b) => a.seq - b.seq);
 }
 
 /** A run log replayed through the run reducer (see `foldRunLog`). */
@@ -4303,6 +4332,8 @@ type RecordScan = {
   failure: Failure | null;
   /** The inbox and call fold. */
   waits: WaitsState;
+  /** Who made each send whose call said, by the send's seq: at least those `waits` holds unread. */
+  senders: Map<number, Author>;
   /** The log's `RunStarted` envelope, or `null` for a log with no record. */
   started: RecordEnvelope | null;
   /** The last record's seq, or `null` for a log with no record. */
@@ -4323,9 +4354,12 @@ function scanRunRecords(envelopes: Iterable<RecordEnvelope>): RecordScan {
   let started: RecordEnvelope | null = null;
   let lastSeq: number | null = null;
   let lastAt: string | null = null;
+  const senders = new Map<number, Author>();
   for (const envelope of envelopes) {
     const { seq, record } = envelope;
     lastAt = envelope.at;
+    // Only a send's commit holds `by`.
+    if (record instanceof PoolCommitRecord && record.by !== null) senders.set(seq, record.by);
     if (seq === 0) {
       if (!(record instanceof RunStartedRecord)) throw new YianRangeError("the first run log record must be RunStarted");
       started = envelope;
@@ -4346,6 +4380,7 @@ function scanRunRecords(envelopes: Iterable<RecordEnvelope>): RecordScan {
     status,
     failure,
     waits: scan.waits,
+    senders,
     started,
     lastSeq,
     lastAt,
@@ -4373,6 +4408,7 @@ function replayedScan(flow: ComposedFlow, envelopes: readonly RecordEnvelope[]):
     status,
     failure: state.result instanceof RunFailed ? state.result.failure : null,
     waits: state.waits,
+    senders: new Map(state.sendBy),
     started: envelopes[0] ?? null,
     lastSeq: envelopes.at(-1)?.seq ?? null,
     lastAt: envelopes.at(-1)?.at ?? null,

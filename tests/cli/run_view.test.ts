@@ -13,7 +13,7 @@ import { RunProgress, runScreen } from "../../src/cli/run_view.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { virtualScheduler } from "../../src/platform.ts";
-import { runFlow } from "../../src/run.ts";
+import { cancel, close, interrupt, runFlow, send, withdraw } from "../../src/run.ts";
 import { pending } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { callReply, NO_ENV, serving, textReply } from "../helpers/run_state_fixtures.ts";
@@ -163,6 +163,44 @@ describe("a run's progress", () => {
     },
     20_000,
   );
+
+  test("draws each host call on an inbox or the run, with who made it", async () => {
+    const log = join(tmp, "notes.jsonl");
+    const flow = await loadFlow(
+      "id: notes\nname: notes\ninput:\n  m: !Inbox(str)\n  said: !Inbox(Message)\nnodes:\n" +
+        "  heard: {kind: call, call: take, input: {from: \"${input.m}\", take: all}}\n" +
+        "  told: {kind: call, call: take, input: {from: \"${input.said}\", take: all}}\n" +
+        "output: ${[heard.output.events, told.output.events]}\n",
+      { env: NO_ENV },
+    );
+    expect((await runFlow(flow, {}, { log, env: NO_ENV })).status).toBe("waiting");
+    const env = NO_ENV;
+    await send(log, "m", "hi", { env, by: { kind: "user", name: "Ada\x1b[2J" } });
+    await send(log, "m", "hey", { env });
+    await withdraw(log, "m", { env, by: { kind: "user", name: "Ada\x1b[2J" } });
+    const message = { role: "user", author: "the user, via yian-chat", parts: [{ type: "text", text: "look" }] };
+    await send(log, "said", message, { env, by: { kind: "agent", name: "yian-chat" } });
+    const action = { role: "user", author: "the user", parts: [{ type: "action", tool: "flows_message" }] };
+    await send(log, "said", action, { env, by: { kind: "user", name: "the user" } });
+    await interrupt(log, "m", { env, by: { kind: "agent", name: "yian-chat" } });
+    await close(log, "m", { env, by: { kind: "run", name: "review r1", run: "chat-r1" } });
+    await cancel(log, { env, by: { kind: "host", name: "daemon" } });
+    const progress = new RunProgress(log, () => 60, COLOR, NO_ENV);
+    const { lines } = progress.rows(0);
+    expect(shown(lines)).toEqual([
+      '› m  "hi" · user Ada',
+      '› m  "hey"',
+      "› m  took back 1 · user Ada",
+      '› said  "look" · agent yian-chat',
+      "› said  [action] · user the user",
+      "› m  interrupted · agent yian-chat",
+      "› m  closed · run review r1 (run chat-r1)",
+      "› cancelled · host daemon",
+      "◷ heard [0s] waiting",
+      "◷ told [0s] waiting",
+    ]);
+    expect(lines[0]).toContain("\x1b[2m›");
+  });
 
   test("of a log not written yet is empty", () => {
     const progress = new RunProgress(join(tmp, "none.jsonl"), () => 60, PLAIN, NO_ENV);

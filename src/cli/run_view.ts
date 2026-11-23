@@ -2,8 +2,9 @@
  * A child run of `yian chat` shown on the whole screen, as its run list opens it: a header naming
  * the run, its flow, its status and its log, the run's progress read from its log and drawn as
  * `yian run` draws it (a `✓` or `✗` line per node that ended, a dim line per node still running
- * or waiting, an agent's text and tool calls as `⏺` lines with a `⎿` result), and the questions it
- * waits on. Read-only: answers still go through the chat's assistant.
+ * or waiting, an agent's text and tool calls as `⏺` lines with a `⎿` result), a dim `›` line per
+ * record a host call on an inbox or the run wrote, with who made it, and the questions it waits on.
+ * Read-only: answers still go through the chat's assistant.
  *
  * Knows about: the run log's records and its reader, the chat's child statuses and tool lines,
  * the colour helpers, the terminal's cell widths and the sanitizing of text printed on the
@@ -12,19 +13,27 @@
 
 import { END_ID, START_ID } from "../compile/model.ts";
 import type { Env } from "../defaults.ts";
+import type { Author } from "../memory/base.ts";
 import {
+  InboxClosedRecord,
+  InboxWithdrawnRecord,
+  InterruptedRecord,
   iterRunRecords,
   type NodeFailedRecord,
   type NodeRoutedRecord,
   type NodeStepRecord,
+  PoolCommitRecord,
   recordTimeMs,
+  RunCancelledRecord,
   RunLogChangedError,
 } from "../runtime/log.ts";
+import { TypedValue } from "../typesys/values.ts";
 import { cells, fit, wrapLine } from "./cells.ts";
 import type { ChildStatus } from "./chat_runs.ts";
 import { runStatusLabel, shortArgs, summary } from "./chat_view.ts";
 import { TAB } from "./markdown.ts";
 import {
+  authorText,
   type Colored,
   elapsedTag,
   endedNodeText,
@@ -157,6 +166,11 @@ export class RunProgress {
 
   /** Fold one record into the rows. */
   #take(kind: string, nodeId: string | null, at: number, record: unknown): void {
+    const delivery = deliveryText(record);
+    if (delivery !== null) {
+      this.#push({ lead: "› ", indent: "  ", text: shown(delivery), style: "dim" });
+      return;
+    }
     if (kind === "node_failed") {
       const { failure } = record as NodeFailedRecord;
       const node = failure.nodeId ?? "";
@@ -215,6 +229,45 @@ export class RunProgress {
   #paint(text: string, style: Style): string {
     return paint(text, style, this.#out, this.#env);
   }
+}
+
+/**
+ * A host call's record as a progress row, `<inbox>  <what>` then ` · <who>` when it says who made
+ * it: a send's value, a withdraw, an interrupt and the agents it named, a close, or a cancel. An
+ * interrupt the run applies for a Stop that stands is such a record too, so it draws a second
+ * `interrupted` row, naming the agent it stopped. `null` for any other record. A step's `complete`
+ * or `release` isn't one: its node's rows show it.
+ */
+function deliveryText(record: unknown): string | null {
+  let what: string;
+  let by: Author | null;
+  if (record instanceof PoolCommitRecord && record.key.startsWith(`${START_ID}.`)) {
+    what = `${record.key.slice(START_ID.length + 1)}  ${sentText(TypedValue.fromWire(record.value).toObject())}`;
+    by = record.by;
+  } else if (record instanceof InboxWithdrawnRecord) {
+    [what, by] = [`${record.inbox}  took back ${record.events.length}`, record.by];
+  } else if (record instanceof InterruptedRecord) {
+    [what, by] = [[`${record.inbox}  interrupted`, ...record.nodes].join(" "), record.by];
+  } else if (record instanceof InboxClosedRecord) {
+    [what, by] = [`${record.inbox}  closed`, record.by];
+  } else if (record instanceof RunCancelledRecord) {
+    [what, by] = ["cancelled", record.by];
+  } else {
+    return null;
+  }
+  return by === null ? what : `${what} · ${authorText(by)}`;
+}
+
+/**
+ * A send's value on a row: a message's text, `[action]` for one that holds only actions, else the
+ * value as a tool call's arguments show.
+ */
+function sentText(value: unknown): string {
+  const parts = (value as { parts?: unknown } | null)?.parts;
+  if (!Array.isArray(parts)) return shortArgs(value);
+  const texts = (parts as { type?: unknown; text?: unknown }[]).filter((part) => part.type === "text");
+  if (texts.length === 0 && parts.length > 0 && parts.every((part) => part?.type === "action")) return "[action]";
+  return shortArgs(texts.map((part) => part.text).join(""));
 }
 
 /** What the run view's header names. */

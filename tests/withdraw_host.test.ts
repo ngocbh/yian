@@ -68,10 +68,10 @@ async function waitingAtTake(model = new ScriptedModel([], CONFIG)) {
   return { log, flow, options, model };
 }
 
-test("offline: a send assigned to the waiting take comes back with its seq and value; the take waits again", async () => {
+test("offline: a send assigned to the waiting take comes back with its seq, value and by; the take waits again", async () => {
   const { log, options } = await waitingAtTake();
   const seq = await send(log, "m", "hi", { env });
-  expect(await withdraw(log, "m", { env })).toEqual([{ seq, value: "hi" }]);
+  expect(await withdraw(log, "m", { env })).toEqual([{ seq, value: "hi", by: null }]);
   const record = readRunLog(log).at(-1)!.record as InboxWithdrawnRecord;
   expect([record.inbox, [...record.events]]).toEqual(["m", [seq]]);
   // Nothing to wake: no model call.
@@ -91,8 +91,8 @@ test("two withdraws: the second returns []", async () => {
   const first = await send(log, "m", "a", { env });
   const second = await send(log, "m", "b", { env });
   expect(await withdraw(log, "m", { env })).toEqual([
-    { seq: first, value: "a" },
-    { seq: second, value: "b" },
+    { seq: first, value: "a", by: null },
+    { seq: second, value: "b", by: null },
   ]);
   expect(await withdraw(log, "m", { env })).toEqual([]);
 });
@@ -102,7 +102,7 @@ test("a closed inbox: allowed; the take gets {events: [], closed: true}", async 
   const { log, options } = await waitingAtTake(model);
   const seq = await send(log, "m", "hi", { env });
   await close(log, "m", { env });
-  expect(await withdraw(log, "m", { env })).toEqual([{ seq, value: "hi" }]);
+  expect(await withdraw(log, "m", { env })).toEqual([{ seq, value: "hi", by: null }]);
   const done = await advance(options);
   expect(done.status, done.failure?.message).toBe("succeeded");
   const take = readRunLog(log).find(({ record }) => record instanceof PoolCommitRecord && record.take !== null)!.record as PoolCommitRecord;
@@ -146,7 +146,7 @@ test("live: a steer queued during the reply's final answer comes back, and no la
   const done = await advance({ ...options, onStream, numWorkers: 0 });
   expect(done.status, done.failure?.message).toBe("succeeded");
   expect(done.output).toBe(chunks.join(""));
-  expect(taken).toEqual([{ seq: sent, value: "more" }]);
+  expect(taken).toEqual([{ seq: sent, value: "more", by: null }]);
   const steps = readRunLog(log).flatMap(({ record }) => (record instanceof NodeStepRecord && record.nodeId === "reply" ? [record.step["kind"]] : []));
   expect(steps).toEqual(["model_call"]);
 });
@@ -167,7 +167,7 @@ test("two hosts racing: two live withdraws in one tick give the sends once and [
   };
   const done = await advance({ ...options, onStream, numWorkers: 0 });
   expect(done.status, done.failure?.message).toBe("succeeded");
-  expect(both).toEqual([[{ seq: sent, value: "more" }], []]);
+  expect(both).toEqual([[{ seq: sent, value: "more", by: null }], []]);
 });
 
 test("a send nested past the value limit is refused, appending nothing, and withdraw then takes back nothing", async () => {

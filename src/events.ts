@@ -16,9 +16,10 @@
  * that makes the terminal output unreachable. `NodeWaiting` and `NodeWoken` follow a
  * node's move out of and back into flight, `RunWaiting` a quiescence with nodes waiting,
  * `RunCancelled` a cancel, `Interrupted` a host interrupt and the flow call scopes it ended,
- * `CallHeld` an agent tool call a host's check held, and `CallClosed` a host call closed without
- * an answer. Plain classes keep this low-level observer module separate from the serialized record
- * vocabulary in `runtime/log`; canonical semantic failures come from `diagnostics`.
+ * `InboxSent` a host's send, `CallHeld` an agent tool call a host's check held, and `CallClosed` a
+ * host call closed without an answer. Plain classes keep this low-level observer module separate
+ * from the serialized record vocabulary in `runtime/log`; canonical semantic failures come from
+ * `diagnostics`.
  *
  * Each event has a `type` discriminant equal to its class name and a `toJSON()`
  * giving its snake_case data form, described by `tests/conformance/schema/events.schema.json`:
@@ -367,6 +368,41 @@ export class Interrupted {
   /** Return the data form. */
   toJSON() {
     return { inbox: this.inbox, nodes: [...this.nodes], scopes: [...this.scopes] };
+  }
+}
+
+/**
+ * Who made a host call, shaped as memory's `Author` (`{kind, name, run?, node?}`); declared here so
+ * this module imports nothing but diagnostics.
+ */
+export interface CallAuthor {
+  readonly kind: "agent" | "tool" | "user" | "host" | "run";
+  readonly name: string;
+  readonly run?: string;
+  readonly node?: string;
+}
+
+/**
+ * A host's send to a top-level inbox was recorded, as its `pool_commit` is: its seq, and who made
+ * it (`by`, as the record holds it), `null` when its call said no one. A keyed repeat appends
+ * nothing and publishes none.
+ */
+export class InboxSent {
+  readonly type = "InboxSent" as const;
+  readonly inbox: string;
+  /** The seq of the send's `pool_commit`. */
+  readonly seq: number;
+  readonly by: CallAuthor | null;
+
+  constructor(options: { inbox: string; seq: number; by: CallAuthor | null }) {
+    this.inbox = options.inbox;
+    this.seq = options.seq;
+    this.by = options.by;
+  }
+
+  /** Return the data form. */
+  toJSON() {
+    return { inbox: this.inbox, seq: this.seq, by: this.by === null ? null : { ...this.by } };
   }
 }
 
@@ -744,6 +780,7 @@ export type RunEvent =
   | CallHeld
   | CallClosed
   | Interrupted
+  | InboxSent
   | ModelCallStarted
   | ModelCallFinished
   | ToolCallStarted

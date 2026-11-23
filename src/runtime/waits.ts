@@ -775,23 +775,36 @@ function applyClose(w: WaitsState, name: string): void {
 }
 
 /**
- * Apply `inbox_withdrawn`: its sends leave `unread`, and each take of a waiting node they were
- * assigned to gives them up and waits again, absorbing in call order (or, on a closed inbox, is
- * answered by the close).
+ * Apply `inbox_withdrawn`: its sends leave `unread`, and each take of a waiting node that held one
+ * gives up what it was assigned and waits again, absorbing in call order; the sends kept go to the
+ * takes that lost theirs, oldest first, as new sends would, and a take that lost nothing keeps what
+ * it holds. No take absorbs a closed inbox: there a take keeps the sends not named, and one left
+ * with none reads what is still unread, as a new take would, and takes the close only when nothing
+ * is.
  */
 function applyWithdrawn(w: WaitsState, record: InboxWithdrawnRecord): void {
   const inbox = inboxOf(w, record.inbox);
+  const withdrawn = new Set(record.events);
   for (const seq of record.events) remove(inbox.unread, seq);
   for (const call of waitedTakes(w, record.inbox)) {
-    if (call.assigned.length === 0) continue;
+    const kept = call.assigned.filter((seq) => !withdrawn.has(seq));
+    if (kept.length === call.assigned.length) continue;
     call.assigned.length = 0;
-    // The take waits for the inbox's next message again (or takes the close): a pickup.
-    w.stops.delete(record.inbox);
-    if (inbox.closed) {
-      call.state = "answered";
-      call.closedInbox = true;
+    if (inbox.closed && kept.length > 0) {
+      call.assigned.push(...kept);
       continue;
     }
+    // The take waits for the inbox's next message again (or reads what is left, or the close): a pickup.
+    w.stops.delete(record.inbox);
+    if (inbox.closed) {
+      const available = availableUnread(w, record.inbox);
+      const next = call.mode === "one" ? available.slice(0, 1) : available;
+      for (const seq of next) remove(inbox.unread, seq);
+      call.assigned.push(...next);
+      call.closedInbox = next.length === 0;
+      continue;
+    }
+    inbox.unread.push(...kept);
     call.state = "open";
     // A `take: all` never left absorbing; a `take: one` shifted out at its assignment.
     if (!inbox.absorbing.includes(call.callId)) {
@@ -802,6 +815,8 @@ function applyWithdrawn(w: WaitsState, record: InboxWithdrawnRecord): void {
       inbox.absorbing.splice(later < 0 ? inbox.absorbing.length : later, 0, call.callId);
     }
   }
+  inbox.unread.sort((a, b) => a - b);
+  reoffer(w, record.inbox);
 }
 
 /** Close `call` with `reason` when it is open, at the record at `seq`. */

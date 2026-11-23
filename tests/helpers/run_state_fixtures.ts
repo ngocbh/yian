@@ -944,7 +944,7 @@ export interface Snapshot {
 
 /**
  * Return `state`'s snapshot: `stateSnapshot` with the latch, start counts, steps,
- * crashed-attempt counts, last stop sequence, waits and inbox events as well.
+ * crashed-attempt counts, last stop sequence, waits, inbox events and their senders as well.
  */
 export function snapshot(state: RunState): Snapshot {
   return {
@@ -957,6 +957,7 @@ export function snapshot(state: RunState): Snapshot {
       lastStopSequence: state.lastStopSequence,
       waits: structuredClone(state.waits.toJSON()),
       inboxEvents: [...state.inboxEvents].map(([seq, value]) => [seq, logJson(value.toWire())]),
+      sendBy: [...state.sendBy].map(([seq, by]) => [seq, { ...by }]),
     },
     roots: roots(state),
   };

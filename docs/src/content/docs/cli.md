@@ -284,7 +284,7 @@ theirs. Off a terminal, or with `NO_COLOR`, it prints plain lines and numbered l
 | `/exit`, `/quit` or Ctrl-D | Leaves the chat |
 | Ctrl-L | Rerenders the screen |
 | ↓, ↑ | Move between the box and the list of running flows under it |
-| Enter on a flow | Opens its view: its progress, its log and any question it waits on |
+| Enter on a flow | Opens its view: its progress, what was sent to it and who sent it, its log and any question it waits on |
 | Esc in the list or a view | Goes back to the box |
 
 A long paste shows as a token such as `[Pasted text #1 +40 lines]`; the assistant gets all of it.
@@ -424,6 +424,7 @@ $ yian status ~/.yian/runs/4f1c/log.jsonl
 status: crashed
 in flight: draft
 crashed attempts: draft=1
+unread: notes 14 from user Ada, notes 15
 ```
 
 | Status | Meaning |
@@ -435,9 +436,12 @@ crashed attempts: draft=1
 | `crashed` | The process ended mid-run; `--resume` continues it |
 | `unstarted` | The process ended before the run's inputs were recorded; `--resume` refuses it, so delete the log and start the run again |
 
-With `--json`, the document also has `ready` and `wake_at`. `ready` is `true` when a waiting node
-can wake now: every call it waits on is settled, a call a host's
-[`beforeToolCall`](/embedding/#gate-tool-calls) held is answered, closed or released, or an
+`unread` lists the messages no take or agent has read yet, which `withdraw` would take back: each
+one's inbox, seq and who sent it, when its send said. An ended run has none.
+
+With `--json`, the document has `unread` as `[{inbox, seq, by}]`, and also `ready` and `wake_at`.
+`ready` is `true` when a waiting node can wake now: every call it waits on is settled, a call a
+host's [`beforeToolCall`](/embedding/#gate-tool-calls) held is answered, closed or released, or an
 interrupt stops it. `wake_at` is the earliest deadline a waiting node waits on, or `null`. Once
 `wake_at` has passed, `--resume` runs on too, though `ready` stays `false`. A log it can't read
 exits 1.
@@ -634,7 +638,7 @@ exception: it prints JSON lines (`code`, `waiting`, then `done` or `error`).
 |---|---|
 | `yian run` | `status`, then `output` (succeeded), `failure` (failed), or `waits` and `wake_at` (waiting) |
 | `yian check` | `flows` |
-| `yian status LOG` | `status`, `in_flight`, `crashed_attempts`, `ready`, `wake_at` |
+| `yian status LOG` | `status`, `in_flight`, `crashed_attempts`, `ready`, `wake_at`, `unread` |
 | `yian status` | `runs` |
 | `yian memory list` | `memories` |
 | `yian memory show` | `identity`, `type`, `location`, `version`, `recall`, then `characters` and `files`, or a store's `count`, `retired` and, with `--all`, `items` |

@@ -47,7 +47,7 @@ import {
   memoryRoot,
   projectFolder,
 } from "./memory_bind.ts";
-import { diagnosticJson, printStyled } from "./render.ts";
+import { authorText, diagnosticJson, printStyled } from "./render.ts";
 import { defaultRunsDir, loadFlowFile } from "./startup.ts";
 import { Terminal } from "./terminal.ts";
 import {
@@ -462,14 +462,6 @@ async function showStore(
     await io.stdout.write(`${forTerminal(page.flatMap(itemLines).join("\n"), io.stdout)}\n`);
   }
   return 0;
-}
-
-/** `author` as history shows it: its kind and name, and its run and node when it has them. */
-function authorText(author: Author): string {
-  const shown: string[] = [];
-  if (author.run !== undefined) shown.push(`run ${author.run}`);
-  if (author.node !== undefined) shown.push(`node ${author.node}`);
-  return `${author.kind} ${author.name}${shown.length === 0 ? "" : ` (${shown.join(", ")})`}`;
 }
 
 /**

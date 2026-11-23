@@ -190,11 +190,11 @@ describe("ChatFlusher", () => {
     const other = { role: "user", author: "yian", parts: [{ type: "text", text: "run r9 was cancelled" }] };
     const typed = { role: "user", parts: [{ type: "text", text: "hi" }] };
     const back = [
-      { seq: 100, value: yian },
-      { seq: 101, value: typed },
-      { seq: 102, value: other },
+      { seq: 100, value: yian, by: null },
+      { seq: 101, value: typed, by: null },
+      { seq: 102, value: other, by: null },
     ];
-    expect(await f.flush.reclaim(back, false)).toEqual([{ seq: 101, value: typed }]);
+    expect(await f.flush.reclaim(back, false)).toEqual([{ seq: 101, value: typed, by: null }]);
     expect(f.lines).toEqual(["(withdrew 2 child events; sent again before your next message)\n"]);
     expect(f.queue.peek()).toEqual([
       {
@@ -213,10 +213,10 @@ describe("ChatFlusher", () => {
     f.queue.push(cancelled("r1", 4));
     await f.flush.sendQueued();
     const back = [
-      { seq: 100, value: "run r1 was cancelled" },
-      { seq: 101, value: "hi" },
+      { seq: 100, value: "run r1 was cancelled", by: null },
+      { seq: 101, value: "hi", by: null },
     ];
-    expect(await f.flush.reclaim(back, true)).toEqual([{ seq: 101, value: "hi" }]);
+    expect(await f.flush.reclaim(back, true)).toEqual([{ seq: 101, value: "hi", by: null }]);
     expect(f.lines).toEqual(["(not sent: run r1 was cancelled)\n"]);
     expect(f.queue.size).toBe(0);
   });
@@ -232,8 +232,8 @@ describe("ChatFlusher", () => {
     expect(f.flush.afterTurn(seqs, 100)).toBe(true);
     // 100 was read, so Esc no longer knows it as the chat's; 101 still is.
     const back = [
-      { seq: 100, value: "run r1 was cancelled" },
-      { seq: 101, value: "run r2 was cancelled" },
+      { seq: 100, value: "run r1 was cancelled", by: null },
+      { seq: 101, value: "run r2 was cancelled", by: null },
     ];
     expect(await f.flush.reclaim(back, false)).toEqual([back[0]!]);
     expect(f.flush.tracking([])).toBe(false);

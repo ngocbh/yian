@@ -1,7 +1,8 @@
 /**
  * Who made each host call: `by` on `send`, `complete`, `release`, `close`, `withdraw`, `interrupt`
  * and `cancel` lands on the call's record and never in a node's step or a model request; a Stop's
- * `by` rides the record the run applies for it; a keyed repeat by someone else is `key_reused`.
+ * `by` rides the record the run applies for it; a keyed repeat by someone else is `key_reused`; a
+ * withdraw by someone takes back only their sends; a live send publishes `InboxSent` with its `by`.
  */
 import { afterAll, expect, test } from "bun:test";
 import { copyFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -9,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadFlow } from "../src/compose/loader.ts";
-import type { StreamChunk } from "../src/events.ts";
+import { InboxSent, type RunEvent, type StreamChunk } from "../src/events.ts";
 import { Finish, TextDelta } from "../src/llm/events.ts";
 import { ScriptedModel } from "../src/llm/testing.ts";
 import type { Author } from "../src/memory/base.ts";
@@ -131,8 +132,8 @@ test("send, withdraw and close record their by; a waiting run's cancel and a can
   expect((await runFlow(await loadFlow(NOTES), {}, { env, log })).status).toBe("waiting");
   await send(log, "m", "hi", { env, by: ADA });
   expect((last(log) as PoolCommitRecord).by).toEqual(ADA);
-  await withdraw(log, "m", { env, by: OWNER });
-  expect((last(log) as InboxWithdrawnRecord).by).toEqual(OWNER);
+  await withdraw(log, "m", { env, by: ADA });
+  expect((last(log) as InboxWithdrawnRecord).by).toEqual(ADA);
   await close(log, "m", { env, by: SOP });
   expect((last(log) as InboxClosedRecord).by).toEqual(SOP);
   // A copy has no state in this process, so its cancel reads only the records.
@@ -147,6 +148,95 @@ test("send, withdraw and close record their by; a waiting run's cancel and a can
   await send(plain, "m", "hi", { env });
   expect((last(plain) as PoolCommitRecord).by).toBeNull();
   expect(readFileSync(plain, "utf8")).not.toContain('"by"');
+});
+
+test("a withdraw by someone takes back only their unread sends, each with its by; the run reads the rest", async () => {
+  const log = freshLog();
+  const options = { env, log };
+  expect((await runFlow(await loadFlow(NOTES), {}, options)).status).toBe("waiting");
+  const a = await send(log, "m", "a", { env, by: ADA });
+  const b = await send(log, "m", "b", { env, by: OWNER });
+  const c = await send(log, "m", "c", { env });
+  const d = await send(log, "m", "d", { env, by: ADA });
+  expect(await withdraw(log, "m", { env, by: ADA })).toEqual([
+    { seq: a, value: "a", by: ADA },
+    { seq: d, value: "d", by: ADA },
+  ]);
+  const before = readFileSync(log);
+  for (const by of [ADA, HOST]) expect(await withdraw(log, "m", { env, by })).toEqual([]);
+  expect(readFileSync(log).equals(before)).toBe(true);
+  // A copy replays the withdraw by Ada; a withdraw by no one takes back every sender's.
+  const copy = freshLog();
+  copyFileSync(log, copy);
+  expect(await withdraw(copy, "m", { env })).toEqual([
+    { seq: b, value: "b", by: OWNER },
+    { seq: c, value: "c", by: null },
+  ]);
+  await close(log, "m", { env });
+  expect((await advance(options)).output).toEqual(["b", "c"]);
+});
+
+test("on a closed inbox, the take that held a withdrawn send gets the others' send, and the next take the close", async () => {
+  const log = freshLog();
+  const flow = await loadFlow(
+    "id: two\nname: two\ninput:\n  m: !Inbox(str)\nnodes:\n  first: {kind: call, call: take, input: {from: \"${input.m}\"}}\n" +
+      "  second: {kind: call, call: take, runs_after: [first], input: {from: \"${input.m}\"}}\n" +
+      "output: {first: \"${first.output}\", second: \"${second.output}\"}\n",
+  );
+  const options = { env, log, numWorkers: 0 };
+  expect((await runFlow(flow, {}, options)).status).toBe("waiting");
+  const x = await send(log, "m", "x", { env, by: ADA });
+  await send(log, "m", "y", { env, by: OWNER });
+  await close(log, "m", { env });
+  expect(await withdraw(log, "m", { env, by: ADA })).toEqual([{ seq: x, value: "x", by: ADA }]);
+  expect((await advance(options)).output).toEqual({
+    first: { events: ["y"], closed: true },
+    second: { events: [], closed: true },
+  });
+});
+
+test("a send to a run moving in this process publishes InboxSent; a live withdraw by someone keeps the others' sends", async () => {
+  const log = freshLog();
+  const model = new ScriptedModel(
+    [[new TextDelta(0, "hello"), new TextDelta(0, " big"), new Finish({ reason: "stop" })], textReply("done")],
+    CONFIG,
+  );
+  const events: RunEvent[] = [];
+  let taken: unknown = null;
+  const onStream = (chunk: StreamChunk) => {
+    if (chunk.chunk !== " big") return;
+    void (async () => {
+      await send(log, "m", "from Ada", { env, by: ADA });
+      await send(log, "m", "from the owner", { env, by: OWNER });
+      taken = await withdraw(log, "m", { env, by: ADA });
+    })();
+  };
+  const options = { env, log, tools: tools(), models: serving(model), runId: "r", onStream, numWorkers: 0 };
+  const done = await runFlow(await loadFlow(REPLY), {}, { ...options, onEvent: (event: RunEvent) => void events.push(event) });
+  expect(done.output).toBe("done");
+  const sends = readRunLog(log).filter(({ record }) => record instanceof PoolCommitRecord && record.by !== null);
+  expect(events.filter((event) => event instanceof InboxSent)).toEqual([
+    new InboxSent({ inbox: "m", seq: sends[0]!.seq, by: ADA }),
+    new InboxSent({ inbox: "m", seq: sends[1]!.seq, by: OWNER }),
+  ]);
+  expect(taken).toEqual([{ seq: sends[0]!.seq, value: "from Ada", by: ADA }]);
+  // The late steer reads only the owner's line.
+  const steered = JSON.stringify(model.requests[1]);
+  expect([steered.includes("from the owner"), steered.includes("from Ada")]).toEqual([true, false]);
+});
+
+test("a send to a waiting run publishes nothing, nor does the advance that replays it", async () => {
+  const log = freshLog();
+  const events: RunEvent[] = [];
+  const options = { env, log, onEvent: (event: RunEvent) => void events.push(event) };
+  expect((await runFlow(await loadFlow(NOTES), {}, options)).status).toBe("waiting");
+  await send(log, "m", "hi", { env, by: ADA });
+  await close(log, "m", { env });
+  const copy = freshLog();
+  copyFileSync(log, copy);
+  expect((await advance(options)).output).toEqual(["hi"]);
+  expect((await advance({ ...options, log: copy })).output).toEqual(["hi"]);
+  expect(events.filter((event) => event instanceof InboxSent)).toEqual([]);
 });
 
 test("complete records its by beside the step, which holds none, and the model never reads it", async () => {

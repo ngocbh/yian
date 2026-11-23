@@ -1380,6 +1380,7 @@ test("inspectRun reads the run id, schema, fingerprint and last seq, with and wi
     waits: [],
     ready: false,
     wakeAt: null,
+    unread: [],
   });
 
   const crashed = join(dir, "crash.jsonl");
@@ -1424,6 +1425,7 @@ test("inspectRun reads a running log with no record yet as running with nothing 
       waits: [],
       ready: false,
       wakeAt: null,
+      unread: [],
     });
   } finally {
     log[Symbol.dispose]();

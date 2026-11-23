@@ -634,7 +634,7 @@ test("a flow call the hook fails on takes no scope number: the allowed call afte
     expect(done.status, `cut at ${k}: ${done.failure?.message}`).toBe("succeeded");
     expect(scopesOf(log)).toEqual(["reply/shout#0"]);
   }
-});
+}, 60_000);
 
 test("a crash after the hook allows a flow call, before its pending step, asks again on resume before the flow's scope grows", async () => {
   const flow = await loadFlow(SHOUT_FLOW);

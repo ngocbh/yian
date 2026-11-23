@@ -166,6 +166,8 @@ expect:
     - {node_id: reply}
   - - ModelCallStarted
     - {node_id: reply, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
+  - - InboxSent
+    - {inbox: notes, seq: 16}
   - - Interrupted
     - inbox: notes
       nodes: [reply]

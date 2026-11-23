@@ -1,0 +1,119 @@
+# Ada's message goes to the waiting take and the agent's is queued behind it. A withdraw by Ada
+# takes back only hers: `inbox_withdrawn` names it with her `by`, and the take gets the agent's.
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    notes: !Inbox(str)
+  nodes:
+    heard:
+      kind: call
+      call: take
+      input:
+        from: ${input.notes}
+    reply:
+      kind: code
+      input: {got: "${heard.output.events}"}
+      output: !str
+      code: |
+        return inputs.got[0]
+  output: ${reply.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  sends:
+  - {inbox: notes, event: first, by: {kind: user, name: Ada}, hold: true}
+  - {inbox: notes, event: second, by: {kind: agent, name: yian-chat}, hold: true}
+  - {withdraw: notes, by: {kind: user, name: Ada}}
+expect:
+  output:
+    status: succeeded
+    output: second
+  trace:
+  - - run_started
+    - null
+    - {num_workers: 0}
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - {value: {}}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - {value: {notes: {inbox: notes}}}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, heard]
+  - - node_waiting
+    - heard
+    - {call_ids: [r1/heard], waits: [{call_id: r1/heard, inbox: notes, mode: one, tool: take}]}
+  - - run_waiting
+    - null
+    - {node_ids: [heard]}
+  - - pool_commit
+    - __start__
+    - {by: {kind: user, name: Ada}, key: __start__.notes, value: first}
+  - - pool_commit
+    - __start__
+    - {by: {kind: agent, name: yian-chat}, key: __start__.notes, value: second}
+  - - inbox_withdrawn
+    - null
+    - {by: {kind: user, name: Ada}, events: [11], inbox: notes}
+  - [node_woken, heard]
+  - - pool_commit
+    - heard
+    - {closed: false, events: [12], inbox: notes}
+  - - node_succeeded
+    - heard
+    - {commit: 15}
+  - [node_started, reply]
+  - - pool_commit
+    - reply
+    - {value: second}
+  - - node_succeeded
+    - reply
+    - {commit: 18}
+  - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - {value: second}
+  - - node_succeeded
+    - __end__
+    - {commit: 21}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - {node_id: __start__}
+  - - NodeSucceeded
+    - {node_id: __start__, output: {notes: {inbox: notes}}, interrupted: false}
+  - - NodeStarted
+    - {node_id: heard}
+  - - NodeWaiting
+    - {node_id: heard, call_ids: [r1/heard]}
+  - - RunWaiting
+    - {node_ids: [heard]}
+  - - NodeWoken
+    - {node_id: heard, timed_out: []}
+  - - NodeSucceeded
+    - {node_id: heard, output: {closed: false, events: [second]}, interrupted: false}
+  - - NodeStarted
+    - {node_id: reply}
+  - - NodeSucceeded
+    - {node_id: reply, output: second, interrupted: false}
+  - - NodeStarted
+    - {node_id: __end__}
+  - - NodeSucceeded
+    - {node_id: __end__, output: second, interrupted: false}
+  - - RunSucceeded
+    - {output: second}

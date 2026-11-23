@@ -121,7 +121,7 @@ import {
 } from "../../src/runtime/log.ts";
 import { unfinishedStatus } from "../../src/runtime/run_index.ts";
 import { addCrashedAttempts } from "../../src/runtime/state.ts";
-import { waitInfos, wakeableNodes, wakeAt } from "../../src/runtime/waits.ts";
+import { waitInfos, wakeableNodes, wakeAt, withdrawableEvents } from "../../src/runtime/waits.ts";
 import { ASK, pending, type ToolContext } from "../../src/tools/context.ts";
 import type { BeforeToolCall, GateDecision } from "../../src/tools/gate.ts";
 import {
@@ -3222,8 +3222,8 @@ function goldenLog(log: string, ctx: CaseContext): void {
  * a crash sweep): at every prefix, at most the segment's `num_workers` nodes are in flight (1 when
  * 0; a waiting node isn't, nor a woken TOOL node); no record follows the run's terminal outcome;
  * after a `run_stopped` only node steps until a `run_resumed`; `inspectRun` with the flow reads a
- * replay's status, in-flight nodes, crashed counts, failure and waits, and the log's run id, schema,
- * flow fingerprint and last seq, and without it the same except in its one blind
+ * replay's status, in-flight nodes, crashed counts, failure, waits and unread sends, and the log's
+ * run id, schema, flow fingerprint and last seq, and without it the same except in its one blind
  * corner (nothing in flight, a node still ready, and END succeeded or proved unreachable); a finished
  * run's counts are `result`'s; and a finished log resumed with `options` gives the same status and
  * output and appends nothing.
@@ -3311,6 +3311,12 @@ async function checkInvariants(
     waits: waiting ? waitInfos(state.waits) : [],
     ready: waiting && wakeableNodes(state.waits).length > 0,
     wakeAt: waiting ? wakeAt(state.waits) : null,
+    unread:
+      terminal === null
+        ? [...state.waits.inboxes.keys()]
+            .flatMap((inbox) => withdrawableEvents(state.waits, inbox).map((seq) => ({ inbox, seq, by: state.sendBy.get(seq) ?? null })))
+            .sort((a, b) => a.seq - b.seq)
+        : [],
   };
   const form = (inspection: RunInspection) => ({
     ...inspection,

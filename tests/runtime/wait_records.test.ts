@@ -431,6 +431,7 @@ test.each<[string, (state: RunState) => void]>([
   ["an interrupt", (state) => state.waits.interrupts.set("msgs", 4)],
   ["a frontier kind", (state) => (state.waits.lastFrontier = "node_started")],
   ["an inbox event", (state) => state.inboxEvents.set(4, null as never)],
+  ["a send's by", (state) => state.sendBy.set(4, { kind: "user", name: "Ada" })],
 ])("a run doesn't start on a state holding %s", (_name, dirty) => {
   const state = new RunState(flow());
   dirty(state);

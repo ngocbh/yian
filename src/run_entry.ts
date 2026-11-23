@@ -129,6 +129,7 @@ export {
   type StreamHook,
   type ToolSource,
   TypedValue,
+  type UnreadSend,
   updateRunIndex,
   type Value,
   type ValueRecord,

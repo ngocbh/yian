@@ -22,6 +22,7 @@
     {"properties": {"name": {"const": "CallHeld"}, "data": {"$ref": "#/$defs/CallHeld"}}},
     {"properties": {"name": {"const": "CallClosed"}, "data": {"$ref": "#/$defs/CallClosed"}}},
     {"properties": {"name": {"const": "Interrupted"}, "data": {"$ref": "#/$defs/Interrupted"}}},
+    {"properties": {"name": {"const": "InboxSent"}, "data": {"$ref": "#/$defs/InboxSent"}}},
     {"properties": {"name": {"const": "ModelCallStarted"}, "data": {"$ref": "#/$defs/ModelCallStarted"}}},
     {"properties": {"name": {"const": "ModelCallFinished"}, "data": {"$ref": "#/$defs/ModelCallFinished"}}},
     {"properties": {"name": {"const": "ToolCallStarted"}, "data": {"$ref": "#/$defs/ToolCallStarted"}}},
@@ -240,6 +241,32 @@
         "inbox": {"type": "string"},
         "nodes": {"type": "array", "items": {"type": "string"}, "description": "The AGENTs it stops; none when no agent read the inbox then."},
         "scopes": {"type": "array", "items": {"type": "string"}, "description": "The scopes, <agent>/<flow>#<k>, of their open flow calls, which end with them: each scope's unfinished nodes leave the run."}
+      }
+    },
+    "InboxSent": {
+      "description": "A host's send to a top-level inbox was recorded, as its pool_commit is. A keyed repeat appends nothing and publishes none.",
+      "type": "object",
+      "required": ["inbox", "seq", "by"],
+      "properties": {
+        "inbox": {"type": "string"},
+        "seq": {"type": "integer", "minimum": 0, "description": "The seq of the send's pool_commit."},
+        "by": {
+          "description": "Who made the send, as the record holds it; null when its call said no one.",
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["kind", "name"],
+              "properties": {
+                "kind": {"enum": ["agent", "tool", "user", "host", "run"]},
+                "name": {"type": "string", "minLength": 1},
+                "run": {"type": "string", "minLength": 1},
+                "node": {"type": "string", "minLength": 1}
+              },
+              "additionalProperties": false
+            },
+            {"type": "null"}
+          ]
+        }
       }
     },
     "ModelCallStarted": {

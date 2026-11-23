@@ -206,6 +206,7 @@ await runFlow(flow, { qty: 3, price: 2.5 }, { tools: { quote }, onEvent });
 | `NodeWaiting`, `NodeWoken`, `CallClosed` | A node waits on a call, wakes, or a call closes without an answer |
 | `CallHeld` | Your [`beforeToolCall`](#gate-tool-calls) held an agent's tool call: `nodeId`, `callId`, `tool` |
 | `Interrupted` | An `interrupt` stops agents |
+| `InboxSent` | A `send` reached the run: `inbox`, `seq` and `by` |
 | `NodeAttemptResumed` | A resume runs a crashed node again |
 | `ModelCallStarted`, `ModelCallFinished`, `ToolCallStarted`, `ToolCallFinished`, `ReplayDegraded` | Inside an agent; not in the log |
 
@@ -217,7 +218,9 @@ the scope is a `NodeFailed` with that `callId` and `scope`: the scope's other un
 and the run goes on. Both are `null` when a failure fails the run. `Interrupted` names the agents
 an interrupt stopped and, in `scopes`, the scopes of their open flow calls, which end with them.
 An `interrupt` made while the run isn't running in your process publishes no event; it returns the
-stopped agents as `nodes`.
+stopped agents as `nodes`. A `send` made then publishes no event either, nor does the `advance`
+that replays it: read who sent what from the log's `pool_commit` records, or `inspectRun`'s
+`unread`.
 
 Event fields are camelCase. `event.toJSON()` gives the snake_case form; it keeps flow values as
 they are (ints as `bigint`), so write it with `logJson` from `@ngocbh/yian/run`, not
@@ -241,7 +244,7 @@ Your program reaches a waiting run by its log path:
 | Call | Returns | What it does |
 |---|---|---|
 | `send(log, inbox, value, { key })` | the send's seq | Adds a message to an `Inbox(T)` input; `value` must fit `T`, read as [a tool's result](/code-and-tools/#values-in-and-out) (a whole number is an `int`). With `key`, a later send with the same key, inbox, value and `by` appends nothing and returns the first seq, so a send is safe to retry |
-| `withdraw(log, inbox)` | `[{seq, value}]` | Takes back every message nothing has read yet |
+| `withdraw(log, inbox, { by })` | `[{seq, value, by}]` | Takes back the messages nothing has read yet: with `by`, only those sent with the same `by`, every field alike; without, everyone's. Each comes back with its sender's `by` |
 | `close(log, inbox)` | the seq, or `null` if already closed | Refuses later sends; takes still read what is queued |
 | `complete(log, callId, result)` | the seq, or `null` for the same answer twice by the same `by` | Answers a pending host call (see [Pending host calls](#pending-host-calls)) or a held one. The same answer by another `by` is refused `call_settled` |
 | `release(log, callId, { note })` | the seq, or `null` if released before by the same `by` | Runs a held call (see [Gate tool calls](#gate-tool-calls)). A release after one by another `by` is refused `call_settled` |
@@ -621,7 +624,7 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: childFlows(o
 
 | Call | Gives |
 |---|---|
-| `inspectRun(log)` | Where a run stands, without the lock: `status` (`running`, `succeeded`, `failed`, `cancelled`, `unstarted`, `waiting`, `stopped`, `crashed`), `inFlight`, `waits`, `ready`, `wakeAt`. Pass `{ flow }` (from `loadRecordedFlow`) for an exact `status` |
+| `inspectRun(log)` | Where a run stands, without the lock: `status` (`running`, `succeeded`, `failed`, `cancelled`, `unstarted`, `waiting`, `stopped`, `crashed`), `inFlight`, `waits`, `ready`, `wakeAt`, and `unread`, the messages nothing has read yet as `{inbox, seq, by}`. Pass `{ flow }` (from `loadRecordedFlow`) for an exact `status` |
 | `loadRecordedFlow(log)` | The flow the log recorded |
 | `iterRunRecords(log)` | The log's records, one by one, while another process may still be writing |
 | `foldRunLog(log)` | Each record with the value it wrote |

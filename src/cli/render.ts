@@ -10,6 +10,7 @@
 
 import type { Env } from "../defaults.ts";
 import type { Diagnostic, SourceRange } from "../diagnostics.ts";
+import type { Author } from "../memory/base.ts";
 import { cells, charCells, clip, columnsOf, fit, wrapLine } from "./cells.ts";
 import { showForTerminal } from "./sanitize.ts";
 import { type CliIo, forTerminal, type Writer } from "./utils.ts";
@@ -284,4 +285,15 @@ export function endedNodeText(nodeId: string, took: string, handle: string | nul
 /** @internal The text of a run's line for node `nodeId` that failed: `✗ <node>`, then `took`. */
 export function failedNodeText(nodeId: string, took: string): string {
   return `✗ ${nodeId}${took}`;
+}
+
+/**
+ * @internal `author` as the CLI shows who made a change or a host call: its kind and name, and its
+ * run and node when it has them (`user Ada`, `run review r1 (run chat-r1)`). Not sanitized.
+ */
+export function authorText(author: Author): string {
+  const shown: string[] = [];
+  if (author.run !== undefined) shown.push(`run ${author.run}`);
+  if (author.node !== undefined) shown.push(`node ${author.node}`);
+  return `${author.kind} ${author.name}${shown.length === 0 ? "" : ` (${shown.join(", ")})`}`;
 }

@@ -186,10 +186,14 @@ A host program moves messages and answers into a run through its log:
 | Call | What it does |
 |---|---|
 | `send` | Adds a message to an inbox |
-| `withdraw` | Takes back every message no take or agent has read yet |
+| `withdraw` | Takes back the messages no take or agent has read yet, everyone's or one sender's |
 | `close` | Closes an inbox: later sends are refused, and takes still read what is queued |
 | `complete` | Answers a call a host's tool handler held, such as an `ask` |
 | `release` | Runs an agent's tool call the host's [`beforeToolCall`](/embedding/#gate-tool-calls) held |
+
+A `withdraw` by one sender (`by`) leaves the others' messages: the messages kept go to the takes
+that lost theirs, oldest first, as new messages would; a take that lost nothing keeps what it
+holds.
 
 None of these moves the run; the host then calls `advance`. A message may nest two levels less than
 `YIAN_MAX_VALUE_NESTING` (98 by default), since a take reads it inside `{events: [...]}`; `send`

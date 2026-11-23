@@ -50,7 +50,8 @@ import {
 import { Diagnostic, DiagnosticFrame, SourceRange } from "../../src/diagnostics.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { registerTool, TOOL_REGISTRY } from "../../src/tools/registry.ts";
-import { inspectRun, readRunIndex } from "../../src/run.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
+import { inspectRun, readRunIndex, runFlow, send } from "../../src/run.ts";
 import { JsonlRunLog, NodeStartedRecord, NodeStepRecord, readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 import { FileRef } from "../../src/typesys/values.ts";
 import { compiled, openSqlite, VERSION } from "../../src/platform.ts";
@@ -2183,7 +2184,7 @@ describe("status", () => {
     const { io, stdout, stderr } = testIo();
     expect(await main(["status", log, "--json"], io)).toBe(0);
     expect(stdout()).toBe(
-      '{"format":"yian.cli.v1","crashed_attempts":{},"in_flight":[],"ready":false,"status":"succeeded","wake_at":null}\n',
+      '{"format":"yian.cli.v1","crashed_attempts":{},"in_flight":[],"ready":false,"status":"succeeded","unread":[],"wake_at":null}\n',
     );
     expect(stderr()).toBe("");
   });
@@ -2194,7 +2195,7 @@ describe("status", () => {
     const { io, stdout } = testIo();
     expect(await main(["status", log, "--json"], io)).toBe(0);
     expect(stdout()).toBe(
-      '{"format":"yian.cli.v1","crashed_attempts":{"echo":1},"in_flight":["echo"],"ready":false,"status":"crashed","wake_at":null}\n',
+      '{"format":"yian.cli.v1","crashed_attempts":{"echo":1},"in_flight":["echo"],"ready":false,"status":"crashed","unread":[],"wake_at":null}\n',
     );
     // It never appends.
     expect(readFileSync(log, "utf8")).toBe(before);
@@ -2212,6 +2213,39 @@ describe("status", () => {
     );
   });
 
+  test("the sends nothing has read yet, with who made each, as text and as JSON", async () => {
+    const log = join(tmp, "unread.jsonl");
+    const flow = await loadFlow(
+      "id: notes\nname: notes\ninput:\n  m: !Inbox(str)\nnodes:\n  heard:\n    kind: call\n    call: take\n" +
+        "    input: {from: \"${input.m}\", take: all}\noutput: ${heard.output.events}\n",
+    );
+    expect((await runFlow(flow, {}, { log, env: NO_ENV })).status).toBe("waiting");
+    const ada = await send(log, "m", "hi", { env: NO_ENV, by: { kind: "user", name: "Ada\x1b]52;c;x\x07" } });
+    const plain = await send(log, "m", "hey", { env: NO_ENV });
+    const owner = await send(log, "m", "go", { env: NO_ENV, by: { kind: "run", name: "review r1", run: "chat-r1" } });
+    const text = ttyIo();
+    expect(await main(["status", log], text.io)).toBe(0);
+    expect(text.stdout()).toBe(
+      `status: waiting\nunread: m ${ada} from user Ada^[]52;c;x^G, m ${plain}, m ${owner} from run review r1 (run chat-r1)\n`,
+    );
+    const json = testIo();
+    expect(await main(["status", log, "--json"], json.io)).toBe(0);
+    const document = parseJson(json.stdout(), "plain") as Record<string, unknown>;
+    expect(document["unread"]).toEqual([
+      { inbox: "m", seq: BigInt(ada), by: { kind: "user", name: "Ada\x1b]52;c;x\x07" } },
+      { inbox: "m", seq: BigInt(plain), by: null },
+      { inbox: "m", seq: BigInt(owner), by: { kind: "run", name: "review r1", run: "chat-r1" } },
+    ]);
+    const schema = JSON.parse(readFileSync(fileURLToPath(new URL("../conformance/schema/cli.schema.json", import.meta.url)), "utf8")) as Schema;
+    const statusDocument = (schema["$defs"] as Record<string, Schema>)["status_document"]!;
+    expect(validate(schema, statusDocument, document)).toEqual([]);
+    // The text names ten and counts the rest.
+    for (let i = 0; i < 9; i++) await send(log, "m", `more ${i}`, { env: NO_ENV });
+    const long = testIo();
+    expect(await main(["status", log], long.io)).toBe(0);
+    expect(long.stdout()).toMatch(/^status: waiting\nunread: (m \d+[^,]*, ){9}m \d+, and 2 more\n$/);
+  });
+
   test("a log cut inside its run start is unstarted, in the list too, and a resume says to delete it", async () => {
     const runs = join(tmp, "home", ".yian", "runs");
     expect((await runFlowCli(ECHO_FLOW, ["-q", "--input", "topic=clouds"])).code).toBe(0);
@@ -2225,7 +2259,7 @@ describe("status", () => {
     const json = testIo();
     expect(await main(["status", log, "--json"], json.io)).toBe(0);
     expect(json.stdout()).toBe(
-      '{"format":"yian.cli.v1","crashed_attempts":{},"in_flight":[],"ready":false,"status":"unstarted","wake_at":null}\n',
+      '{"format":"yian.cli.v1","crashed_attempts":{},"in_flight":[],"ready":false,"status":"unstarted","unread":[],"wake_at":null}\n',
     );
     const schema = JSON.parse(readFileSync(fileURLToPath(new URL("../conformance/schema/cli.schema.json", import.meta.url)), "utf8")) as Schema;
     const statusDocument = (schema["$defs"] as Record<string, Schema>)["status_document"]!;
@@ -2269,6 +2303,7 @@ describe("status", () => {
         crashed_attempts: {},
         ready: false,
         wake_at: null,
+        unread: [],
       });
     } finally {
       log.close();

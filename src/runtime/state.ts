@@ -23,6 +23,7 @@ import { compareCodeUnits, Failure, type OriginRef, reprText, sameFailure } from
 import {
   CallClosed,
   CallHeld,
+  InboxSent,
   Interrupted,
   NodeExpanded,
   NodeFailed,
@@ -353,6 +354,8 @@ export class RunState {
   readonly waits = new WaitsState();
   /** Each send's value by its seq, kept until its consumer settles. */
   readonly inboxEvents = new Map<number, TypedValue>();
+  /** Who made each send whose call said, by its seq, kept as `inboxEvents` keeps its value. */
+  readonly sendBy = new Map<number, Author>();
   /** Each keyed send by its key: its seq, inbox and run-log JSON value, kept for the whole run. */
   readonly sendKeys = new Map<string, SentKey>();
   /**
@@ -1372,6 +1375,11 @@ function sendKey(state: RunState, inbox: string): string {
   return `${state.flow.startId}.${inbox}`;
 }
 
+/** The inbox a send's pool key `key` (`sendKey`) names. */
+function sendInbox(state: RunState, key: string): string {
+  return key.slice(sendKey(state, "").length);
+}
+
 /** The element type `T` of the START's top-level `Inbox(T)` param `name`, or `null` when it declares none. */
 export function inboxElementType(state: RunState, name: string): Type | null {
   const start = state.flow.nodes.get(state.flow.startId);
@@ -1403,15 +1411,19 @@ export function prepareInboxClosed(state: RunState, inbox: string, by: Author | 
 }
 
 /**
- * Prepare a host's withdraw of every unread send of the top-level inbox `inbox`: its unread sends
- * and those assigned to a take whose node hasn't woken, which then waits again (or, on a closed
- * inbox, is answered by the close). The withdrawn sends' values are dropped.
+ * Prepare a host's withdraw of the unread sends of the top-level inbox `inbox` (`withdrawnSends`):
+ * its unread sends and those assigned to a take whose node hasn't woken, every sender's or, with
+ * `by`, only those `by` made. A take that loses its sends waits again (or, on a closed inbox, is
+ * answered by the close), and the sends kept go to the takes that lost theirs, oldest first, as
+ * new sends would; a take that lost nothing keeps what it holds. The withdrawn sends' values are
+ * dropped.
  *
  * @param state The run's state.
  * @param inbox The name of one of the START's `Inbox(T)` params.
- * @param by Who withdraws them, recorded with the withdraw; `null` for none.
+ * @param by Who withdraws them, recorded with the withdraw, whose own sends alone it takes back;
+ *   `null` for none, which takes back every sender's.
  * @returns The canonical `InboxWithdrawnRecord` and its plan, with no observers; `null` when
- *   nothing of the inbox is unread.
+ *   nothing it would take back is unread.
  * @throws TypeError when `state` or `inbox` has the wrong type, or `by` isn't an author or null.
  * @throws DeliveryRefused, in this order: `ended` once the run has a terminal result;
  *   `not_started` before its run start is complete; `unknown_inbox` when the START declares no
@@ -1422,9 +1434,27 @@ export function prepareWithdraw(state: RunState, inbox: string, by: Author | nul
   if (typeof inbox !== "string") throw new YianTypeError("inbox must be a string");
   requireDeliverable(state);
   requireDeclaredInbox(state, inbox);
-  const events = withdrawableEvents(state.waits, inbox);
+  const events = withdrawnSends(state, inbox, validatedBy(by, "a withdraw's by"));
   if (events.length === 0) return null;
   return prepareRecord(state, new InboxWithdrawnRecord(inbox, events, { by }));
+}
+
+/**
+ * Return the send seqs of inbox `name` a withdraw by `by` takes back, in seq order: every one
+ * `withdrawableEvents` gives, or, with `by`, those whose send recorded the same `by`, every field
+ * alike.
+ */
+export function withdrawnSends(state: RunState, name: string, by: Author | null): readonly number[] {
+  const events = withdrawableEvents(state.waits, name);
+  if (by === null) return events;
+  const sender = byJson(by);
+  return events.filter((seq) => byJson(state.sendBy.get(seq) ?? null) === sender);
+}
+
+/** Drop the value and sender a send's consumer, or a withdraw, is done with. */
+function forgetSend(state: RunState, seq: number): void {
+  state.inboxEvents.delete(seq);
+  state.sendBy.delete(seq);
 }
 
 /**
@@ -2465,7 +2495,9 @@ function prepareCommitTransition(
     commitKind,
     messagesJson,
   });
-  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, []);
+  const observers =
+    commitKind === "send" ? [new InboxSent({ inbox: sendInbox(state, canonical.key), seq: envelope.seq, by: canonical.by })] : [];
+  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, observers);
 }
 
 /** Freeze one fully validated success delta and its canonical public record. */
@@ -3237,11 +3269,11 @@ function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransi
   appendAndVerify(log, prepared);
   if (plan.commitKind === "send") {
     state.inboxEvents.set(prepared.expectedSequence, decodeTyped(plan.valueJson!));
-    const { key, sendKey: sent } = prepared.record as PoolCommitRecord;
+    const { key, sendKey: sent, by } = prepared.record as PoolCommitRecord;
+    if (by !== null) state.sendBy.set(prepared.expectedSequence, by);
     if (sent !== null) {
-      const inbox = key.slice(sendKey(state, "").length);
-      const by = byJson((prepared.record as PoolCommitRecord).by);
-      state.sendKeys.set(sent, Object.freeze({ seq: prepared.expectedSequence, inbox, value: plan.valueJson!, by }));
+      const inbox = sendInbox(state, key);
+      state.sendKeys.set(sent, Object.freeze({ seq: prepared.expectedSequence, inbox, value: plan.valueJson!, by: byJson(by) }));
     }
   } else if (plan.commitKind === "messages") {
     const pending: PendingMessages = { seq: prepared.expectedSequence, key: plan.key, valueJson: plan.messagesJson! };
@@ -3271,7 +3303,7 @@ function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransi
     state.inputsCommitted = true;
   }
   state.nextSequence = prepared.expectedSequence + 1;
-  return [];
+  return prepared.observers;
 }
 
 /** Validate, append and apply one sparse dispatch, recovery, step, stop, wait, wake, run-wait or close delta. */
@@ -3380,7 +3412,7 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       break;
     case "withdrawn":
       // Withdrawn sends get no reply; nothing reads their values again.
-      for (const seq of delta.events) state.inboxEvents.delete(seq);
+      for (const seq of delta.events) forgetSend(state, seq);
       break;
     case "interrupted":
       for (const scope of delta.scopes) retireScope(state, scope);
@@ -3430,7 +3462,7 @@ function commitSuccess(log: RunLog, state: RunState, prepared: PreparedTransitio
   state.inFlight.delete(delta.nodeId);
   state.acceptedStarts.delete(delta.nodeId);
   forgetNodeSteps(state, delta.nodeId);
-  for (const seq of delta.consumedEvents) state.inboxEvents.delete(seq);
+  for (const seq of delta.consumedEvents) forgetSend(state, seq);
   for (const nodeId of delta.newlyReadyIds) state.ready.push(nodeId);
   if (apply.terminal !== null) state.result = apply.terminal.result;
   state.nextSequence = prepared.expectedSequence + 1;
@@ -3738,6 +3770,7 @@ function hasReducerContainers(state: RunState): boolean {
     isExactly(state.wiringOverrides, Map) &&
     isExactly(state.waits, WaitsState) &&
     isExactly(state.inboxEvents, Map) &&
+    isExactly(state.sendBy, Map) &&
     isExactly(state.sendKeys, Map) &&
     isRecord(state.input) &&
     isRecord(state.effectiveLlmByStaticPath) &&
@@ -4127,16 +4160,18 @@ function validateInboxClosed(state: RunState, record: InboxClosedRecord): void {
 
 /**
  * Require a withdraw record to name a declared inbox and its whole unread set (as
- * `withdrawableEvents` reads it), in seq order, as a steer step names its whole queue.
+ * `withdrawnSends` reads it for the record's `by`), in seq order, as a steer step names its whole
+ * queue.
  */
 function validateInboxWithdrawn(state: RunState, record: InboxWithdrawnRecord): void {
   if (inboxElementType(state, record.inbox) === null) {
     throw new YianRangeError(`InboxWithdrawn inbox ${reprText(record.inbox)} is no inbox the START declares`);
   }
-  const unread = withdrawableEvents(state.waits, record.inbox);
+  const unread = withdrawnSends(state, record.inbox, record.by);
   if (!sameItems(record.events, unread)) {
+    const whose = record.by === null ? "of" : "its by sent on";
     throw new YianRangeError(
-      `InboxWithdrawn must name the whole unread set [${unread.join(", ")}] of inbox ${reprText(record.inbox)}, found [${record.events.join(", ")}]`,
+      `InboxWithdrawn must name the whole unread set [${unread.join(", ")}] ${whose} inbox ${reprText(record.inbox)}, found [${record.events.join(", ")}]`,
     );
   }
 }
@@ -4789,7 +4824,7 @@ function forgetNodeSteps(state: RunState, nodeId: string): void {
   state.nodeStartSeqs.delete(nodeId);
   state.nodeWakeSeqs.delete(nodeId);
   for (const step of state.nodeSteps.get(nodeId) ?? []) {
-    if (step["kind"] === "steer") for (const seq of seqList(step["from"]) ?? []) state.inboxEvents.delete(seq);
+    if (step["kind"] === "steer") for (const seq of seqList(step["from"]) ?? []) forgetSend(state, seq);
   }
   state.nodeSteps.delete(nodeId);
   state.nodeStepSeqs.delete(nodeId);
@@ -5934,7 +5969,7 @@ function validateExpansionCommit(state: RunState, record: PoolCommitRecord): voi
  * @throws RangeError otherwise (a `TypeCheckError` when the value fails `T`).
  */
 function validateSend(state: RunState, record: PoolCommitRecord): void {
-  const name = record.key.slice(sendKey(state, "").length);
+  const name = sendInbox(state, record.key);
   if (record.nodeId !== state.flow.startId) {
     throw new YianRangeError(`a send to ${reprText(record.key)} must name the START, not ${reprText(record.nodeId)}`);
   }
@@ -6656,6 +6691,7 @@ function requirePristine(state: RunState): void {
     state.deferredPrune.size === 0 &&
     state.wiringOverrides.size === 0 &&
     state.inboxEvents.size === 0 &&
+    state.sendBy.size === 0 &&
     state.sendKeys.size === 0 &&
     state.waits.waiting.size === 0 &&
     state.waits.calls.size === 0 &&

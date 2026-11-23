@@ -80,6 +80,7 @@ import {
   buildValueAs,
   isInboxType,
   isMemoryType,
+  isRecord,
   renderValuePath,
   TypeCheckError,
   typeEquals,
@@ -100,9 +101,31 @@ const STATUS_TEXT_CHARS = 4000;
 /** The most characters of the flow part of a child's label. */
 const LABEL_FLOW_CHARS = 40;
 
-/** A child's label (`<flow> r<n>`) and a relay's (`<person>, via <employee>`), as `labelKey` reads a label. */
-const CHILD_LABEL = /^[a-z0-9._-]+ r[0-9]+$/;
-const RELAY_LABEL = /, ?via /;
+/**
+ * What a label may not hold, as it doesn't show or doesn't read as what it is: control, format and
+ * default-ignorable characters (bidi controls among them), lone surrogates, the braille blank and
+ * the Hangul fillers.
+ */
+const UNSEEN = /[\p{Cc}\p{Cf}\p{Cs}\p{Default_Ignorable_Code_Point}\p{Bidi_Control}\u2800\u115f\u1160\u3164\uffa0]/u;
+
+/** Whitespace a label may not hold once NFKC-normalized: at an end, doubled, or other than a space. */
+const LOOSE_SPACE = /^\s|\s$|\s\s|[^\S ]/u;
+
+/** What no label may read as (by `labelKey`): nothing is signed `yian` or `office`. */
+const RESERVED: ReadonlySet<string> = new Set(["yian", "office"]);
+
+/** A child's label (`<flow> r<n>`), as `labelKey` reads a label: one whose last word is `r` and digits. */
+const CHILD_LABEL = /(^|\s)r\p{Nd}+$/u;
+
+/** A relay's label (`<person>, via <employee>`), as `labelKey` and `VIA_LOOKALIKES` read one: the word `via`. */
+const RELAY_LABEL = /(^|[^\p{L}\p{N}])via($|[^\p{L}\p{N}])/u;
+
+/** Letters of other scripts that look like `v`, `i` or `a`, read as those when looking for `via`. */
+const VIA_LOOKALIKES: Readonly<Record<string, string>> = {
+  "\u03bd": "v", "\u0475": "v", "\u1d20": "v",
+  "\u0131": "i", "\u0269": "i", "\u03b9": "i", "\u0456": "i", "\u04cf": "i",
+  "\u0251": "a", "\u03b1": "a", "\u0430": "a",
+};
 
 /** @internal The longest a group's `wait` waits, in seconds. */
 export const WAIT_MAX_S = 120;
@@ -426,7 +449,7 @@ interface Resend {
   readonly resent?: boolean;
 }
 
-/** Who a delivery to a child is from. */
+/** @internal Who a delivery to a child is from. */
 export interface ChildSender {
   /** The author a message to an `Inbox(Message)` carries. */
   readonly label: string;
@@ -434,17 +457,25 @@ export interface ChildSender {
   readonly by: Author;
 }
 
-/** How a delivery is made: who from (`null`, the default, for the host itself), and again or not. */
+/** How a delivery is made: who from, and again or not. */
 interface Sent extends Resend {
+  /**
+   * @internal Who it is from: the owner's model, as `ChildFlowOwner` passes it. `null`, the
+   * default, for the host itself, which signs nothing and records no one.
+   */
   readonly from?: ChildSender | null;
 }
 
-/** An owner as its children see it: its run, its label, its people's labels and its inbox. */
+/**
+ * An owner as its children see it: its run, its label, its people's labels, its inbox, and the
+ * labels above it (`heard`): the owners up the tree from it and their people's.
+ */
 interface Owned {
   readonly runId: string;
   readonly label: string;
   readonly people: readonly string[];
   readonly inbox: string | null;
+  readonly heard: readonly string[];
 }
 
 /** The refusals of a delivery made again that say it landed before, or that the run moved past it. */
@@ -582,49 +613,85 @@ export function shownStatus(status: ChildStatus): Record<string, unknown> {
   return shown;
 }
 
-/**
- * `label` as labels are compared, so that one can't pass for another by its case, spacing or
- * zero-width characters: compatibility-normalized (NFKC), without format characters, its
- * whitespace one space, trimmed, in lower case.
- */
+/** `label` as labels are compared: NFKC-normalized and fully case-folded (`ß` as `ss`). */
 function labelKey(label: string): string {
-  return label.normalize("NFKC").replace(/\p{Cf}/gu, "").replace(/\s+/gu, " ").trim().toLowerCase();
+  // Upper then lower case folds as full case folding does.
+  return label.normalize("NFKC").toUpperCase().toLowerCase().normalize("NFKC");
 }
 
 /**
- * `label` once it may sign what `what` names: it holds more than whitespace, and doesn't read as a
- * relay (`<person>, via <employee>`) or a child's label (`<flow> r<n>`), which only the driver gives.
+ * `label` once it may sign what `what` names, reading as it looks: it holds no `UNSEEN` character
+ * and no loose whitespace (`LOOSE_SPACE`), and doesn't read as a reserved label, a relay
+ * (`<person>, via <employee>`) or a child's (`<flow> r<n>`), which only the driver gives.
  *
  * @throws {TypeError} When `label` isn't a string.
  * @throws {RangeError} When it is refused.
  */
 function checkedLabel(label: unknown, what: string): string {
-  if (typeof label !== "string") throw new YianTypeError(`${what} must be a string`);
+  if (typeof label !== "string") throw new YianTypeError(`${what} must be a non-empty string`);
+  if (label === "") throw new YianRangeError(`${what} must be a non-empty string`);
+  const refused = (why: string) => new YianRangeError(`${what} ${reprText(label)} ${why}`);
+  const unseen = UNSEEN.exec(label)?.[0];
+  if (unseen !== undefined) {
+    const code = unseen.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0");
+    throw refused(`holds an invisible or control character (U+${code})`);
+  }
+  if (LOOSE_SPACE.test(label.normalize("NFKC"))) {
+    throw refused("has whitespace at an end, doubled, or other than a space");
+  }
   const key = labelKey(label);
-  if (key === "") throw new YianRangeError(`${what} must hold more than whitespace`);
-  const reads = RELAY_LABEL.test(key)
-    ? "a relay (<person>, via <employee>)"
-    : CHILD_LABEL.test(key)
-      ? "a child run's (<flow> r<n>)"
-      : null;
-  if (reads !== null) throw new YianRangeError(`${what} ${reprText(label)} reads as ${reads}`);
+  if (RESERVED.has(key)) throw refused("is reserved: nothing is signed yian or office");
+  const plain = Array.from(key, (char) => VIA_LOOKALIKES[char] ?? char).join("");
+  if (RELAY_LABEL.test(plain)) throw refused("reads as a relay (<person>, via <employee>)");
+  if (CHILD_LABEL.test(key)) throw refused("reads as a child run's (<flow> r<n>)");
   return label;
 }
 
 /**
+ * `people`, each checked as `checkedLabel` checks it, once none reads as the owner's `label` or as
+ * another person's.
+ *
+ * @throws {TypeError} When a label isn't a string.
+ * @throws {RangeError} When one is refused.
+ */
+function checkedPeople(people: readonly unknown[], label: string): string[] {
+  const seen = new Map<string, string>();
+  return people.map((each) => {
+    const person = checkedLabel(each, "a person's label");
+    const key = labelKey(person);
+    const same = seen.get(key);
+    if (key === labelKey(label)) throw new YianRangeError(`a person's label ${reprText(person)} reads as the owner's`);
+    if (same !== undefined) {
+      throw new YianRangeError(`a person's label ${reprText(person)} reads as the person ${reprText(same)}`);
+    }
+    seen.set(key, person);
+    return person;
+  });
+}
+
+/**
  * The host's `label` for a child of `owner`, once it reads as no one else's: as `checkedLabel`
- * checks it, and not as its owner's or one of its people's.
+ * checks it, and not as its owner's, one of its people's, a label above the owner (`Owned.heard`),
+ * or a label of `siblings`, its owner's children that still run.
  *
  * @throws {TypeError} When `label` isn't a string.
  * @throws {RangeError} When it is refused.
  */
-function checkedChildLabel(label: unknown, owner: Owned): string {
+function checkedChildLabel(
+  label: unknown,
+  owner: Owned,
+  siblings: readonly { readonly id: string; readonly label: string }[],
+): string {
   const checked = checkedLabel(label, "a child's label");
   const key = labelKey(checked);
   const as = (whose: string) => new YianRangeError(`a child's label ${reprText(checked)} reads as ${whose}`);
   if (key === labelKey(owner.label)) throw as("its owner's");
   const person = owner.people.find((each) => labelKey(each) === key);
   if (person !== undefined) throw as(`the person ${reprText(person)}`);
+  const above = owner.heard.find((each) => labelKey(each) === key);
+  if (above !== undefined) throw as(`${reprText(above)}, a label above it`);
+  const sibling = siblings.find((each) => labelKey(each.label) === key);
+  if (sibling !== undefined) throw as(`run ${sibling.id}'s, which still runs`);
   return checked;
 }
 
@@ -657,7 +724,10 @@ export class ChildFlows {
   /** The provider and model layer the children started from now on get. */
   #llmConfig: Readonly<Record<string, string>>;
   readonly #children = new Map<string, Child>();
-  /** By the run id of each child a start began, the child as an owner: its label and its starter's people. */
+  /**
+   * By the run id of each child a start began and didn't fail, the child as an owner: its label,
+   * its starter's people, and the labels above it.
+   */
   readonly #owners = new Map<string, Omit<Owned, "runId" | "inbox">>();
   #seq = 0;
   /** The number of the last child id a start took. */
@@ -692,11 +762,11 @@ export class ChildFlows {
       throw new YianRangeError(`run ${reprText(runId)} needs an owner's label`);
     }
     const label = started?.label ?? checkedLabel(given, "an owner's label");
-    const people = (options.people ?? started?.people ?? []).map((each) => checkedLabel(each, "a person's label"));
+    const people = Object.freeze(checkedPeople(options.people ?? started?.people ?? [], label));
     if (inbox !== null && (typeof inbox !== "string" || inbox === "")) {
       throw new YianRangeError("an owner's inbox must be a non-empty string or null");
     }
-    const owned: Owned = Object.freeze({ runId, label, people: Object.freeze(people), inbox });
+    const owned: Owned = Object.freeze({ runId, label, people, inbox, heard: started?.heard ?? [] });
     return new ChildFlowOwner(this, options, owned, {
       start: (flow, inputs, given) => this.#start(owned, flow, inputs, given),
       reaches: (id) => this.#reaches(runId, id),
@@ -750,7 +820,12 @@ export class ChildFlows {
       signal?.throwIfAborted();
     };
     check();
-    if (given.label !== null) checkedChildLabel(given.label, owner);
+    if (given.label !== null) {
+      const siblings = [...this.#children.values()]
+        .filter((child) => child.parent.runId === owner.runId && this.#driving(child))
+        .map((child) => ({ id: child.id, label: child.parent.label }));
+      checkedChildLabel(given.label, owner, siblings);
+    }
     const { logDir, skillsFor, memories } = this.#options;
     try {
       await this.#options.preflight(flow, this.#llmConfig, inputs);
@@ -782,7 +857,8 @@ export class ChildFlows {
     const runId = `${owner.runId}-${id}`;
     const label = given.label ?? childLabel(flow.compiled.flowId ?? name, id);
     // Before its tools are built, as they may make the child an owner.
-    this.#owners.set(runId, Object.freeze({ label, people: owner.people }));
+    const heard = Object.freeze([owner.label, ...owner.people, ...owner.heard]);
+    this.#owners.set(runId, Object.freeze({ label, people: owner.people, heard }));
     const tools = typeof given.tools === "function" ? given.tools(runId) : given.tools;
     const seq = ++this.#seq;
     const child: Child = {
@@ -814,6 +890,7 @@ export class ChildFlows {
       await started.promise;
     } catch (error) {
       this.#children.delete(id);
+      this.#owners.delete(runId);
       throw error;
     }
     this.#started = number;
@@ -916,11 +993,12 @@ export class ChildFlows {
    * status: `running` once the run took the answer, else the current one with a `note`. A held
    * call isn't a question: answering it would make up its tool's result, so the note refuses it.
    * Nor may `value` sign a message: nothing in it that reads as a `Message` carries an `author` or
-   * an action part, whatever type the question declares, since an answer reaches the child unsigned.
+   * an action part, whatever type the question declares, since only the driver signs one.
    * With `options.resent`, the call may have been made before, as a resumed agent's call is: a
    * refusal saying it landed or the run moved past it (`ended`, `unknown_call`, `call_settled`)
    * returns the status with no note. The child's log records `options.from`'s `by` as who made
-   * the call; without it (the default), the host itself, recorded as no one.
+   * the call, and each user message in `value` with no author is signed with its label
+   * (`signedBy`); without it (the default), the host itself, recorded as no one, signs nothing.
    *
    * @throws {RangeError} When no child has the id.
    * @throws {TypeError} When `value` is `undefined`.
@@ -935,7 +1013,9 @@ export class ChildFlows {
       const held = child.started && pendingCalls(child.log).some((each) => each.callId === call && each.held);
       return held ? `call '${call}' is a held tool call, not a question` : null;
     };
-    const answer = (log: string, delivery: DeliveryOptions) => complete(log, call, { output: value }, delivery);
+    const from = options.from ?? null;
+    const output = from === null ? value : signedBy(value, from.label);
+    const answer = (log: string, delivery: DeliveryOptions) => complete(log, call, { output }, delivery);
     return this.#deliver(child, answer, { ...options, refusal });
   }
 
@@ -948,12 +1028,7 @@ export class ChildFlows {
    *
    * @throws {RangeError} When no child has the id.
    */
-  async message(
-    id: string,
-    inbox: string,
-    text: string,
-    options: Sent & { key?: string | null } = {},
-  ): Promise<ChildStatus> {
+  message(id: string, inbox: string, text: string, options: Sent & { key?: string | null } = {}): Promise<ChildStatus> {
     const child = this.#child(id);
     const param = child.flow.input.find((input) => input.name === inbox);
     const type = param?.contract?.type ?? null;
@@ -963,9 +1038,11 @@ export class ChildFlows {
     const event = message ? { role: "user", ...author, parts: [{ type: "text", text }] } : text;
     const key = options.key ?? null;
     const sent = (log: string, delivery: DeliveryOptions) => send(log, inbox, event, { ...delivery, key });
-    const status = await this.#deliver(child, sent, options);
-    if (from === null || message || status.note !== undefined) return status;
-    return { ...status, note: `inbox ${reprText(inbox)} takes plain text, so the run can't tell who wrote it` };
+    return this.#deliver(child, sent, options).then((status) =>
+      from === null || message || status.note !== undefined
+        ? status
+        : { ...status, note: "sent as plain text: the run can't tell who wrote it" },
+    );
   }
 
   /**
@@ -1458,6 +1535,22 @@ function signedMessageAt(value: unknown, path: readonly (string | number)[] = []
   return null;
 }
 
+/**
+ * `value` with each user message in it that has no author signed by `label`: every object, at any
+ * depth, that reads as a user `Message` (`checkMessage`) with no `author`. What the owner's model
+ * passes speaks as the owner, never as the child's own user. A message with an author is
+ * `signedMessageAt`'s to refuse.
+ */
+function signedBy(value: unknown, label: string): unknown {
+  // Only JSON's arrays and objects: a host's value, such as a `FileRef`, stays as it is.
+  if (!Array.isArray(value) && !isRecord(value)) return value;
+  const { role, author } = value as { role?: unknown; author?: unknown };
+  const unsigned = role === "user" && (author === undefined || author === null);
+  if (unsigned && isMessage(value)) return { ...value, author: label };
+  if (Array.isArray(value)) return value.map((item) => signedBy(item, label));
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, signedBy(item, label)]));
+}
+
 /** Whether `value` reads as a `Message`. */
 function isMessage(value: unknown): boolean {
   try {
@@ -1671,7 +1764,8 @@ export function childFlows<T extends ChildFlowTarget>(
         const target = await hooks.resolve({ flow: stringArg(args, "flow"), content });
         const { flow, name, project = null } = target;
         if (flow.library !== null) return `not started: ${libraryRunMessage(flow)}`;
-        const inputs = checkStartInputs(flow, args["inputs"]);
+        const checked = checkStartInputs(flow, args["inputs"]);
+        const inputs = signedBy(checked, owner.label) as Readonly<Record<string, unknown>>;
         const refused = await hooks.approve(target, inputs, ctx.signal);
         if (refused !== null) return `not started: ${refused}`;
         let id: string;

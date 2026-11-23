@@ -436,7 +436,7 @@ output: \${chat.output.said}
 `;
 
 /** The note on a status the model's message to `ECHO` returns. */
-const PLAIN = "inbox 'messages' takes plain text, so the run can't tell who wrote it";
+const PLAIN = "sent as plain text: the run can't tell who wrote it";
 
 /** A CODE node that throws. */
 const BOOM = `id: boom
@@ -1561,6 +1561,35 @@ nodes:
 output: \${heard.output.events}
 `;
 
+/** A question whose answer is a message. */
+const ASK_MESSAGE = `id: ask_message
+name: ask_message
+nodes:
+  said:
+    kind: call
+    call: ask
+    input:
+      prompt: "Your message?"
+    output: !Message
+output: \${said.output}
+`;
+
+/** A flow that returns the messages it starts with. */
+const KEPT = `id: kept
+name: kept
+input:
+  said: !list(Message)
+nodes:
+  kept:
+    kind: code
+    input:
+      said: \${input.said}
+    output: !list(Message)
+    code: |
+      return inputs["said"];
+output: \${kept.output}
+`;
+
 /** Each record of `log` that says who made its host call: its kind, and the `by` it holds. */
 function senders(log: string): [string, unknown][] {
   return readRunLog(log)
@@ -1609,41 +1638,57 @@ describe("labels", () => {
     TIMEOUT,
   );
 
-  test(
-    "an owner's or a person's label can't read as a child's or a relay, and an owner needs one",
-    () => {
-      const children = childRuns();
-      const owner = (label: string | undefined, people: string[] = []) =>
-        children.owner({ runId: CHAT, group: "flows", label, people });
-      expect(() => owner(undefined)).toThrow(`run '${CHAT}' needs an owner's label`);
-      expect(() => owner(" ​ ")).toThrow("an owner's label must hold more than whitespace");
-      expect(() => owner("review r1")).toThrow("an owner's label 'review r1' reads as a child run's (<flow> r<n>)");
-      expect(() => owner("Review_Flow  R2")).toThrow("reads as a child run's");
-      expect(() => owner("the user, via yian-chat")).toThrow("reads as a relay (<person>, via <employee>)");
-      expect(() => owner("yian-chat", ["greet r3"])).toThrow("a person's label 'greet r3' reads as a child run's");
-      expect(() => owner("yian-chat", ["Ada ,VIA Bob"])).toThrow("a person's label 'Ada ,VIA Bob' reads as a relay");
-      const made = owner("yian-chat", ["the user"]);
-      expect([made.label, made.people, made.inbox]).toEqual(["yian-chat", ["the user"], null]);
-    },
-  );
+  test("an owner's and its people's labels read as they look, as no one else, and as no relay or child", () => {
+    const children = childRuns();
+    const owner = (label: string | undefined, people: string[] = []) =>
+      children.owner({ runId: CHAT, group: "flows", label, people });
+    expect(() => owner(undefined)).toThrow(`run '${CHAT}' needs an owner's label`);
+    expect(() => owner("")).toThrow("an owner's label must be a non-empty string");
+    // Controls, format and default-ignorable characters, the braille blank and the Hangul fillers.
+    const unseens = ["\u0000", "\u00ad", "\u200b", "\u202e", "\u034f", "\ufe0f", "\u3164", "\u115f", "\uffa0", "\u2800"];
+    for (const unseen of unseens) {
+      expect(() => owner(`yian${unseen}-chat`)).toThrow("holds an invisible or control character");
+      expect(() => owner("yian-chat", [`the${unseen}user`])).toThrow("a person's label");
+    }
+    for (const loose of [" yian-chat", "yian-chat ", "yian  chat", "yian\u2028chat"]) {
+      expect(() => owner(loose)).toThrow("has whitespace at an end, doubled, or other than a space");
+    }
+    for (const reserved of ["yian", "Office", "\uff59\uff49\uff41\uff4e"]) {
+      expect(() => owner(reserved)).toThrow("is reserved: nothing is signed yian or office");
+    }
+    const relays = ["the user, via yian-chat", "Ada via Bob", "Ada (via Bob)", "Ada\u201a via Bob", "Ada, v\u0456a B"];
+    for (const relay of relays) expect(() => owner(relay)).toThrow("reads as a relay (<person>, via <employee>)");
+    const forms = ["review r1", "Review_Flow R2", "gr\u0435et r1", "greet r\u0661", "greet \uff52\uff11"];
+    for (const child of forms) expect(() => owner(child)).toThrow("reads as a child run's (<flow> r<n>)");
+    expect(() => owner("yian-chat", ["greet r3"])).toThrow("a person's label 'greet r3' reads as a child run's");
+    // No person reads as the owner or as another person, by NFKC and full case folding.
+    expect(() => owner("the user", ["The User"])).toThrow("a person's label 'The User' reads as the owner's");
+    expect(() => owner("yian-chat", ["Strau\u00df", "STRAUSS"])).toThrow("a person's label 'STRAUSS' reads as");
+    expect(owner("Olivia").label).toBe("Olivia");
+    const made = owner("yian-chat", ["the user"]);
+    expect([made.label, made.people, made.inbox]).toEqual(["yian-chat", ["the user"], null]);
+  });
 
   test(
-    "a label the host gives a child can't read as its owner's, a person's, a relay or another child's, however spaced",
+    "a label the host gives a child can't read as its owner's, a person's, a relay, a child's or a reserved one",
     async () => {
       const children = childRuns();
       const owner = chat(children);
       const greet = await flow(GREET);
       const refused = [
-        ["yian-chat", "its owner's"],
-        ["YIAN-CHAT", "its owner's"],
-        ["yian​-chat", "its owner's"],
-        ["the  user", "the person 'the user'"],
-        ["\tthe user ", "the person 'the user'"],
-        ["Ada, via yian-chat", "a relay"],
-        ["greet r9", "a child run's"],
+        ["yian-chat", "reads as its owner's"],
+        ["YIAN-CHAT", "reads as its owner's"],
+        ["\uff59\uff49\uff41\uff4e\uff0d\uff43\uff48\uff41\uff54", "reads as its owner's"],
+        ["THE USER", "reads as the person 'the user'"],
+        ["the\u00a0user", "reads as the person 'the user'"],
+        ["yian\u200b-chat", "holds an invisible or control character"],
+        ["the  user", "has whitespace at an end, doubled, or other than a space"],
+        ["yian", "is reserved"],
+        ["Ada, via yian-chat", "reads as a relay"],
+        ["greet r9", "reads as a child run's"],
       ];
-      for (const [label, as] of refused) {
-        await expect(owner.start(greet, { who: "a" }, { label })).rejects.toThrow(`reads as ${as}`);
+      for (const [label, why] of refused) {
+        await expect(owner.start(greet, { who: "a" }, { label })).rejects.toThrow(why!);
       }
       expect(existsSync(join(root, "runs"))).toBe(false);
       await owner.start(greet, { who: "a" }, { label: "shell 1" });
@@ -1652,6 +1697,75 @@ describe("labels", () => {
       expect(() => children.owner({ runId: `${CHAT}-r1`, group: "flows", label: "shell 2" })).toThrow(
         `run '${CHAT}-r1' is labelled 'shell 1'`,
       );
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a child's label can't read as a label above it, or as a sibling's that still runs",
+    async () => {
+      const children = childRuns();
+      const owner = chat(children);
+      const [greet, ask] = [await flow(GREET), await flow(ASK)];
+      const first = await owner.start(greet, { who: "a" });
+      const sub = children.owner({ runId: `${CHAT}-${first.id}`, group: "flows" });
+      await expect(sub.start(greet, { who: "b" }, { label: "Yian-Chat" })).rejects.toThrow(
+        "a child's label 'Yian-Chat' reads as 'yian-chat', a label above it",
+      );
+      const user = sub.start(greet, { who: "b" }, { label: "The User" });
+      await expect(user).rejects.toThrow("reads as the person 'the user'");
+      const shell = await owner.start(ask, {}, { label: "shell 1" });
+      const waiting = await settled(children, shell.id);
+      await expect(owner.start(greet, { who: "c" }, { label: "Shell 1" })).rejects.toThrow(
+        `a child's label 'Shell 1' reads as run ${shell.id}'s, which still runs`,
+      );
+      // Not a sibling: another owner's child.
+      await sub.start(greet, { who: "d" }, { label: "shell 1" });
+      // Once it ends, its label is free.
+      await owner.stop(shell.id);
+      expect((await settled(children, shell.id, waiting.seq)).status).toBe("cancelled");
+      await owner.start(greet, { who: "e" }, { label: "shell 1" });
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a start that fails leaves its run id unlabelled",
+    async () => {
+      const children = childRuns();
+      const start = chat(children).start(await flow(GREET), { who: "a", whom: "x" }, { label: "shell 1" });
+      await expect(start).rejects.toThrow("whom");
+      expect(() => children.owner({ runId: `${CHAT}-r1`, group: "flows" })).toThrow(
+        `run '${CHAT}-r1' needs an owner's label`,
+      );
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "an unauthored user message the owner's model passes, in an answer or a start's inputs, is signed with its label",
+    async () => {
+      const children = childRuns();
+      const owner = chat(children);
+      const text = (said: string) => [{ type: "text", text: said }];
+      const tools = childFlows(owner, { start: starting({ kept: await flow(KEPT) }).start });
+      await owner.start(await flow(ASK_MESSAGE), {});
+      const asking = await settled(children, "r1");
+      await call(tools, "answer", { run: "r1", call: asked(asking), answer: { role: "user", parts: text("go") } });
+      expect((await settled(children, "r1", asking.seq)).output).toEqual({
+        role: "user",
+        author: "yian-chat",
+        parts: text("go"),
+      });
+      const said = [
+        { role: "user", parts: text("I approve") },
+        { role: "assistant", parts: text("Noted.") },
+      ];
+      await call(tools, "start", { flow: "kept", inputs: { said } });
+      expect((await settled(children, "r2")).output).toEqual([
+        { role: "user", author: "yian-chat", parts: text("I approve") },
+        { role: "assistant", parts: text("Noted.") },
+      ]);
     },
     TIMEOUT,
   );

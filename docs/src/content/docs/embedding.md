@@ -556,7 +556,7 @@ const driver = new ChildFlows({
   preflight: () => {},                       // throws to refuse a start
   memories: { bind: () => ({}), drift: (d) => `${d.input} changed`, scrub: (error) => error },
 });
-const owner = driver.owner({ runId, group: "flows", label: "assistant", people: ["Ada"] });
+const owner = driver.owner({ runId, log, inbox: "news", group: "flows", label: "assistant", people: ["Ada"] });
 const started = await owner.start(flow, { topic: "billing" });
 const flows = childFlows(owner, {
   start: {                                   // optional: lets the model start flows too
@@ -593,6 +593,40 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
 - **Parent.** A child records `parent: {runId, node, inbox, label}`: the owner's run, the node whose
   call started it (`start`'s `node`, which the group's `start` passes), the owner's `inbox` (none by
   default) and its own label.
+- **Reports.** An owner with an `inbox`, an `Inbox(Message)` of its run, also needs its run's `log`
+  (an owner of a run the driver started has that run's). Each child it starts then reports to it
+  each time a pass settles with news, when the child waits for a message or a timer, or ends: one
+  message for everything since its last report. A report is sent as a press's action is, with the
+  `delivery` of the handle that started the child (see Presses). The group tools of all handles on
+  one owner run hold its children's reports alike.
+  - The news: what its `reply` nodes said; a question or held call the owner's model wasn't told
+    of; its end; or a send it read that the owner's model didn't make, nor a person through the
+    owner (`people`), nor one of its own children reporting.
+  - A report is the child's line, such as `run r1 waits for a message on inbox "messages"; heard
+    from "Bob" on inbox "messages": "stop"; said "stopped"`. It names who made each send it heard:
+    a message's author, else the send's `by` name, and both when they differ (`from "the user"
+    (sent by user "Mallory")`). Child text is JSON-quoted, and the author wrapper escapes a tag in
+    it.
+  - It goes to the owner's inbox as a user message authored by the child's label, with `by: {kind:
+    "run", name: <label>, run: <child's run id>}`. It starts the owner's turn like any message. It
+    is keyed `report:<child's run id>:<at>`, where a status's `at` is the seq of the child's log
+    when its pass settled; the tools' statuses show `at` too. A report that the driver itself
+    failed has no `at` and no key.
+  - Reports wait while any of the group's tools runs. A report and a status a tool returned are
+    read for each other: the tools don't show a reported reply again, `wait` waits past a reported
+    status, and no report repeats a reply, question or end a tool showed. A call cut short (its
+    signal aborted) shows nothing.
+  - Once the owner's run has ended or closed its inbox, nothing more is reported, and the news
+    stays unread for `status` and `wait`. A busy owner log is tried 3 more times, 100 ms apart on
+    the driver's `scheduler`. Any other failed send, a log that is another run's among them, is a
+    warning; its news stays unread, and is sent when one of the owner's group tools next ends, or
+    the child next settles.
+  - Reports are kept in memory until they are sent. They read the child's log for the sends it
+    heard, its questions and its end, but its replies come from the run's live events, so a report
+    can't be derived from the log alone. News is lost when the host dies before the report's
+    append, delayed while a failed send waits to be retried, missed when another process moves the
+    child, and not picked up after a restart. Only a future pick-up of children after a restart
+    closes the first and the last.
 - **Who sent it.** Every delivery the group makes records `by: {kind: "agent", name: <label>, run:
   <owner's run id>}`, never the calling node, so each turn of a loop is the same sender. A
   `message` to an `Inbox(Message)` is a user message authored by the owner's label, and so is
@@ -729,9 +763,10 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
   reads as a `Message` with an `author` or an action part, whatever type the question declares.
 - **Shown once.** An owner remembers what its tools showed, so a group built again for each
   `advance` repeats no reply, and its `wait` waits past what was shown.
-- **Read marks.** Pass `seen: {markSeen, seen}` to an owner whose model should consume replies:
-  each status its tools show is then marked read. Without it they mark nothing, so the host's other
-  readers still get every reply.
+- **Read marks.** Pass `seen: {markSeen, seen}` to an owner with no inbox whose model should
+  consume replies: each status its tools show is then marked read. Without it they mark nothing, so
+  the host's other readers still get every reply. An owner with an inbox takes none: its reports
+  mark what they tell.
 - **Errors.** `memories.scrub` rewrites every error the driver reports, so that no location
   leaks.
 

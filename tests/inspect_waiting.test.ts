@@ -1,6 +1,7 @@
 /**
- * `inspectRun` without a flow on logs whose nodes wait: `waiting`, `ready`, `wakeAt`, the waits
- * and the unread sends; crashes while nodes wait; `cancelled` and `run_failed` endings.
+ * `inspectRun` without a flow on logs whose nodes wait: `waiting`, `ready`, `wakeAt`, the waits,
+ * the unread sends and the closed inboxes; crashes while nodes wait; `cancelled` and `run_failed`
+ * endings.
  */
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -12,6 +13,7 @@ import { Failure } from "../src/diagnostics.ts";
 import type { Author } from "../src/memory/base.ts";
 import { inspectRun } from "../src/run.ts";
 import {
+  InboxClosedRecord,
   JsonlRunLog,
   NodeRoutedRecord,
   NodeStartedRecord,
@@ -96,6 +98,13 @@ test("the unread sends, with who made each: one assigned to a take that hasn't w
     { inbox: "msgs", seq: 6, by: null },
   ]);
   expect(inspectRun(logOf(...WAITING, send("x", ada), new RunCancelledRecord())).unread).toEqual([]);
+});
+
+test("the closed inboxes, by name; none once the run ends", () => {
+  const closed = [new InboxClosedRecord("msgs"), new InboxClosedRecord("asks")];
+  expect(inspectRun(logOf(...WAITING)).closedInboxes).toEqual([]);
+  expect(inspectRun(logOf(...WAITING, ...closed)).closedInboxes).toEqual(["asks", "msgs"]);
+  expect(inspectRun(logOf(...WAITING, ...closed, new RunCancelledRecord())).closedInboxes).toEqual([]);
 });
 
 test("a sleeping node sets wakeAt to its deadline", () => {

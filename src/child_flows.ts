@@ -25,19 +25,23 @@
  *
  * The host names who speaks: an owner by its label, which signs its model's messages to its children
  * and names it on each delivery its model makes (`by`), and a child by its own, `<flow> r<n>` unless
- * the host gives one. No label may pass for another.
+ * the host gives one. No label may pass for another. A person acts on a child through its owner
+ * (`ChildFlowOwner.press`): their words reach it relayed by the owner, and the owner's run gets an
+ * action saying what they did.
  *
  * A child's `ask` returns `pending()`, so the child waits durably for the user's answer, which the
  * host relays with `answer`. The children's stop is their own, tied to the host's exit by
  * `dispose`, never to the call that started them.
  *
- * Knows about: the run boundary (`runFlow`, `advance`, the deliveries, `pendingCalls`,
+ * Knows about: the run boundary (`runFlow`, `advance`, the deliveries, `pendingCalls`, `inspectRun`,
  * `runLogPath`, the gate's hook, its input intake and library refusal), input coercion, the waits'
  * `wakeAt` and the record-time reader, the platform's scheduler and folder tidying, compose, memory's
  * base type, the run events, the host tool API and its errors, the tool registry and the `pending`
  * marker, skills, types and values.
  */
 
+import { randomUUID } from "node:crypto";
+import { statSync } from "node:fs";
 import { dirname } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
@@ -64,11 +68,15 @@ import {
   interrupt,
   type InterruptResult,
   type JsonObject,
+  type JsonValue,
   libraryRunMessage,
+  loadRecordedFlow,
   type MemoryDrift,
   type PendingCall,
   pendingCalls,
   release,
+  RunBusyError,
+  type RunInspection,
   type RunResult,
   runFlow,
   runLogPath,
@@ -158,6 +166,22 @@ const REASON_CONTROL = /[^\P{Cc}\n\t]/u;
  */
 const APPROVE_UNGATED =
   "Only the user can approve or refuse a held call: ask them in the chat, or they can open the run and approve it.";
+
+/** How many more times a press tries to record its action while its owner's log is busy. */
+const PRESS_RETRIES = 3;
+
+/** How long a press waits before it tries again to record its action, in milliseconds. */
+const PRESS_RETRY_MS = 100;
+
+/** The group's tools a person may press, each with what a failed press's summary calls its call. */
+const PRESSES: Readonly<Record<keyof PressArguments, string>> = {
+  message: "message to",
+  answer: "answer to",
+  interrupt: "interrupt of",
+  close_inbox: "inbox close on",
+  stop: "stop of",
+  approve: "decision on",
+};
 
 /** The built-in `Message` type, which a model-made value may not sign. */
 const MESSAGE = builtinType("Message")!;
@@ -342,6 +366,64 @@ export interface ChildInterrupt extends InterruptResult {
   readonly queued: number;
 }
 
+/** The tools of an owner's group a person may press (`ChildFlowOwner.press`), each with its arguments. */
+export interface PressArguments {
+  readonly message: { readonly run: string; readonly inbox: string; readonly text: string };
+  readonly answer: { readonly run: string; readonly call: string; readonly answer: unknown };
+  readonly interrupt: { readonly run: string; readonly inbox: string };
+  readonly close_inbox: { readonly run: string; readonly inbox: string };
+  readonly stop: { readonly run: string };
+  readonly approve: {
+    readonly run: string;
+    readonly call: string;
+    readonly decision: "approve" | "refuse";
+    readonly reason?: string | null;
+  };
+}
+
+/**
+ * What a press records in place of its own, each field when given: to keep a secret the person
+ * typed out of the owner's run, say. A press that failed keeps its own summary and no result, and
+ * takes only `arguments`.
+ */
+export interface PressRecord {
+  /** A line saying what the person did, such as `Ada typed into shell 1`. */
+  readonly summary?: string | null;
+  /** The arguments to record; `null` records none, and no result either, as it may echo them. */
+  readonly arguments?: JsonObject | null;
+  /** What to record the person did; `null` records nothing. */
+  readonly result?: string | null;
+}
+
+/** How a person presses a tool (`ChildFlowOwner.press`). */
+export interface PressOptions {
+  /** The person's label: one of the owner's `people`. Check who they are before you press. */
+  readonly person: string;
+  /** What to record in place of what the press would; `null` (the default) for its own. */
+  readonly record?: PressRecord | null;
+}
+
+/**
+ * Why a press's action isn't in its owner's run: a refusal of its send (`unknown_inbox` and
+ * `invalid_value` before anything runs, for an inbox that doesn't take messages), or `no_inbox` (the
+ * owner has none), `wrong_log` (its log is another run's), `busy` (its log stayed busy) or `failed`
+ * (a fault, once the run had the press).
+ */
+export type PressUnrecorded = DeliveryRefusal | "no_inbox" | "wrong_log" | "busy" | "failed";
+
+/** Why the driver refused a delivery: the run's refusal, or its own. */
+type ChildRefusal = DeliveryRefusal | "disposed" | "signed_message" | "held_call";
+
+/** What a press did. */
+export interface Pressed<R> {
+  /** What the driver's method returned, the run's status; `null` when the press ran nothing. */
+  readonly result: R | null;
+  /** Whether the owner's run holds the press's action. */
+  readonly recorded: boolean;
+  /** Why it doesn't, or `null` when it does. */
+  readonly reason: PressUnrecorded | null;
+}
+
 /** The flow a group's `start` call names, as its host's `resolve` finds it. */
 export interface ChildFlowTarget {
   readonly flow: ComposedFlow;
@@ -401,6 +483,21 @@ export interface ChildFlowOwnerOptions {
    * default) for none.
    */
   readonly inbox?: string | null;
+  /**
+   * The owner's run log, where its `inbox` is, which a person's press records its action in. An
+   * owner with an inbox needs one; for a run this driver started, it is that run's log by default.
+   */
+  readonly log?: string | null;
+  /**
+   * How a press's action is sent to the owner's log, as the host calls take them: `env` (the
+   * driver's by default), `codeRoot` (the recorded one by default) and `flow`, the owner's flow,
+   * needed when its run was built in code.
+   */
+  readonly delivery?: {
+    readonly env?: Env | null;
+    readonly codeRoot?: string | null;
+    readonly flow?: ComposedFlow | null;
+  } | null;
   /**
    * The key the host passes the owner's tools under (`childFlows`), which their texts name them
    * by: `<group>_status`, and so on.
@@ -518,6 +615,8 @@ interface Sent extends Resend {
    * default, for the host itself, which signs nothing and records no one.
    */
   readonly from?: ChildSender | null;
+  /** @internal Told the code of the refusal the returned status's note says. */
+  readonly onRefused?: ((reason: ChildRefusal) => void) | null;
 }
 
 /**
@@ -770,6 +869,16 @@ function modelSender(owner: Owned): ChildSender {
 }
 
 /**
+ * Who a person's press through `owner` is from: signed `<person>, via <owner's label>`, and recorded
+ * as the person relayed by the owner's run, so their interrupt takes back only their own sends
+ * through this owner.
+ */
+function relaySender(person: string, owner: Owned): ChildSender {
+  const by: Author = { kind: "user", name: person, run: owner.runId };
+  return Object.freeze({ label: `${person}, via ${owner.label}`, by: Object.freeze(by) });
+}
+
+/**
  * The child flows of a host's runs: each started in the background by its owner (`owner`), its
  * status read as it changes, and answers and messages relayed to it.
  */
@@ -802,12 +911,13 @@ export class ChildFlows {
    *
    * @throws {TypeError} When a label isn't a string.
    * @throws {RangeError} When it has no label, a label is refused (`ChildFlowOwnerOptions.label`),
-   *   the label differs from the one this driver gave the run, or the inbox isn't a non-empty string
-   *   or `null`.
+   *   the label differs from the one this driver gave the run, the inbox or the log isn't a
+   *   non-empty string or `null`, or it has an inbox and no log.
    */
   owner(options: ChildFlowOwnerOptions): ChildFlowOwner {
     const { runId, inbox = null } = options;
     const started = this.#owners.get(runId);
+    const log = options.log ?? [...this.#children.values()].find((child) => child.runId === runId)?.log ?? null;
     const given = options.label ?? null;
     if (started !== undefined && given !== null && given !== started.label) {
       throw new YianRangeError(`run ${reprText(runId)} is labelled ${reprText(started.label)}`);
@@ -820,12 +930,17 @@ export class ChildFlows {
     if (inbox !== null && (typeof inbox !== "string" || inbox === "")) {
       throw new YianRangeError("an owner's inbox must be a non-empty string or null");
     }
+    if (log !== null && (typeof log !== "string" || log === "")) {
+      throw new YianRangeError("an owner's log must be a non-empty string or null");
+    }
+    if (inbox !== null && log === null) throw new YianRangeError("an owner with an inbox needs its run's log");
     const owned: Owned = Object.freeze({ runId, label, people, inbox, heard: started?.heard ?? [] });
-    return new ChildFlowOwner(this, options, owned, {
+    return new ChildFlowOwner(this, { ...options, log }, owned, {
       start: (flow, inputs, given) => this.#start(owned, flow, inputs, given),
       reaches: (id) => this.#reaches(runId, id),
       held: (id, call) => this.#heldCall(id, call),
       scheduler: this.#options.scheduler,
+      env: this.#options.env,
     });
   }
 
@@ -1064,8 +1179,9 @@ export class ChildFlows {
     const child = this.#child(id);
     const refusal = () => {
       const signed = signedMessageAt(value);
-      if (signed !== null) return signedNote(signed);
-      return this.#held(child, call) === null ? null : `call '${call}' is a held tool call, not a question`;
+      if (signed !== null) return { reason: "signed_message" as const, note: signedNote(signed) };
+      if (this.#held(child, call) === null) return null;
+      return { reason: "held_call" as const, note: `call '${call}' is a held tool call, not a question` };
     };
     const from = options.from ?? null;
     const output = from === null ? value : signedBy(value, from.label);
@@ -1142,9 +1258,17 @@ export class ChildFlows {
       return { ...none, taken, status };
     }
     // A Stop left standing: the next reader may take these before it stops.
-    const standing = cut.seq !== null && cut.nodes.length === 0;
-    const unread = standing ? inspectRun(child.log).unread : [];
-    const queued = unread.filter((send) => send.inbox === inbox && !isDeepStrictEqual(send.by, by)).length;
+    let queued = 0;
+    if (cut.seq !== null && cut.nodes.length === 0) {
+      try {
+        const unread = inspectRun(child.log).unread;
+        queued = unread.filter((send) => send.inbox === inbox && !isDeepStrictEqual(send.by, by)).length;
+      } catch (error) {
+        // The interrupt landed, so a fault counting them is only a note.
+        const scrubbed = this.#options.memories.scrub(error, child.memory);
+        status = { ...status, note: (scrubbed as Error | null)?.message ?? String(scrubbed) };
+      }
+    }
     return { ...cut, landed: true, queued, status, taken };
   }
 
@@ -1194,7 +1318,8 @@ export class ChildFlows {
     const from = options.from ?? null;
     const refused = from === null ? "Refused" : `Refused by ${from.label}`;
     const error = reason === null ? `${refused}.` : `${refused}: ${reason}`;
-    const refusal = () => (this.#held(child, call) === null ? `call '${call}' isn't a held tool call` : null);
+    const note = `call '${call}' isn't a held tool call`;
+    const refusal = () => (this.#held(child, call) === null ? { reason: "not_held" as const, note } : null);
     const decide = (log: string, delivery: DeliveryOptions) =>
       decision === "approve" ? release(log, call, { ...delivery, note: reason }) : complete(log, call, { error }, delivery);
     return this.#deliver(child, decide, { ...options, refusal });
@@ -1300,27 +1425,32 @@ export class ChildFlows {
   /**
    * Make `deliver`'s delivery to `child`'s log, by `options.from`, publish the child `running` and
    * nudge its driver; return its status. A delivery that resolves `false` changed nothing, so the
-   * status is returned as it is. A refusal (the run's, or `options.refusal`'s text, asked first),
-   * or a delivery after `dispose`, is a note on the status returned, and changes nothing;
-   * `options.resent` is as `answer` says. Every error goes through `memories.scrub`.
+   * status is returned as it is. A refusal (the run's, or `options.refusal`'s, asked first), or a
+   * delivery after `dispose`, is a note on the status returned, and changes nothing; its code goes
+   * to `options.onRefused`. `options.resent` is as `answer` says. Every error goes through
+   * `memories.scrub`.
    */
   async #deliver(
     child: Child,
     deliver: (log: string, options: DeliveryOptions) => Promise<unknown>,
-    options: Sent & { refusal?: () => string | null } = {},
+    options: Sent & { refusal?: () => { reason: ChildRefusal; note: string } | null } = {},
   ): Promise<ChildStatus> {
+    const refuse = (reason: ChildRefusal, note: string) => {
+      options.onRefused?.(reason);
+      return { ...child.status, note };
+    };
     // Its runs are left as they were, to resume later.
-    if (this.#disposed) return { ...child.status, note: "the runs were disposed" };
+    if (this.#disposed) return refuse("disposed", "the runs were disposed");
     try {
       const refused = options.refusal?.() ?? null;
-      if (refused !== null) return { ...child.status, note: refused };
+      if (refused !== null) return refuse(refused.reason, refused.note);
       const moved = await deliver(child.log, { ...this.#deliveryOptions(child), by: options.from?.by ?? null });
       if (moved === false) return child.status;
     } catch (error) {
       const scrubbed = this.#options.memories.scrub(error, child.memory);
       if (!(error instanceof DeliveryRefused)) throw scrubbed;
       if (options.resent === true && LANDED.has(error.reason)) return child.status;
-      return { ...child.status, note: (scrubbed as Error | null)?.message ?? String(scrubbed) };
+      return refuse(error.reason, (scrubbed as Error | null)?.message ?? String(scrubbed));
     }
     // Until its pass settles, the child moves on what it was given.
     if (this.#driving(child)) this.#publish(child, { run: child.id, status: "running", log: child.log });
@@ -1521,6 +1651,8 @@ interface OwnerCore {
   /** Child `id`'s held call `call`, or `null`; what reading its log throws goes through `memories.scrub`. */
   held(id: string, call: string): HeldChildCall | null;
   readonly scheduler: Scheduler;
+  /** The environment the owner's log is written under, the children's. */
+  readonly env: Env;
 }
 
 /**
@@ -1538,13 +1670,29 @@ export class ChildFlowOwner {
   readonly people: readonly string[];
   /** Its inbox, or `null` for none. */
   readonly inbox: string | null;
+  /** Its run's log, or `null` for none. */
+  readonly log: string | null;
   readonly seen: NonNullable<ChildFlowOwnerOptions["seen"]> | null;
   readonly #driver: ChildFlows;
   readonly #core: OwnerCore;
+  /**
+   * What its presses are signed and recorded by, kept apart from the public fields, which a caller
+   * could change: its run, checked labels and inbox, its log and its group.
+   */
+  readonly #owned: Owned;
+  readonly #log: string | null;
+  readonly #group: string;
+  /** How a press's action is sent to its log. */
+  readonly #delivery: DeliveryOptions;
   /** Who its model's deliveries are from. */
   readonly #from: ChildSender;
   /** By run, the last status seq this owner's tools showed its model, whichever group showed it. */
   readonly #shown = new Map<string, number>();
+  /**
+   * Why its inbox can't take an action, read once from its run's flow: `null` when it can, and
+   * `undefined` until read.
+   */
+  #inboxRefusal: "unknown_inbox" | "invalid_value" | null | undefined = undefined;
 
   /** @internal `ChildFlows.owner` makes owners. */
   constructor(driver: ChildFlows, options: ChildFlowOwnerOptions, owned: Owned, core: OwnerCore) {
@@ -1553,9 +1701,15 @@ export class ChildFlowOwner {
     this.label = owned.label;
     this.people = owned.people;
     this.inbox = owned.inbox;
+    this.log = options.log ?? null;
     this.seen = options.seen ?? null;
     this.#driver = driver;
     this.#core = core;
+    this.#owned = owned;
+    this.#log = this.log;
+    this.#group = this.group;
+    const { env = null, codeRoot = null, flow = null } = options.delivery ?? {};
+    this.#delivery = Object.freeze({ env: env ?? core.env, codeRoot, flow });
     this.#from = modelSender(owned);
   }
 
@@ -1674,6 +1828,167 @@ export class ChildFlowOwner {
     return this.#core.held(this.#mine(id), call);
   }
 
+  /**
+   * Press the group's tool `tool` as `options.person`, one of this owner's people, with `args` as the
+   * tool takes them: never gated (check who the person is first), and marking no status read. The
+   * run gets the person's words as they are, signed `<person>, via <label>` and recorded as theirs
+   * relayed by this owner's run (`by: {kind: "user", name, run}`), so their `interrupt` takes back
+   * only their own sends through this owner.
+   *
+   * Then this owner's `inbox` gets the press's action, from the person, which its agent reads
+   * without a turn: `tool` (`<group>_<tool>`), `arguments`, and `result`, only what the person did
+   * (`sent`, `answered`, `interrupted (took back 1 message)`, `nothing to interrupt (...)`,
+   * `closed`, `stopped`, `approved`, `refused`), never what the run said. A press the run refuses,
+   * or whose tool throws, records the `summary` `<person>'s message to r1 was refused (<reason>)` (or
+   * `failed`) instead, never the refusal's message, and no result but an interrupt's take-back.
+   * `options.record` is as `PressRecord` says.
+   *
+   * Before it runs anything, it returns `{result: null, recorded: false, reason}` when this owner
+   * can't take the action: it has no inbox (`no_inbox`), its run hasn't started (`not_started`), the
+   * log is another run's (`wrong_log`), the run has ended (`ended`), or the inbox isn't one of its
+   * flow's (`unknown_inbox`), takes no `Message` (`invalid_value`) or is closed (`inbox_closed`).
+   * Press a run a child started through the top owner, which reaches it.
+   *
+   * Once the run has the press, it doesn't throw. Each press has a key of its own, which keys its
+   * action and, for `message`, its message to the run: a busy log is tried again (3 more times), then
+   * it returns `recorded: false` (`busy`); a refused send gives the refusal's reason, and a fault
+   * `failed`. A crash between the run's delivery and the action leaves the run's record by the person
+   * with no action in this owner's run, which picking the run back up must reconcile; only a
+   * `message`'s record holds the press's key to match it by.
+   *
+   * @throws {TypeError} When `tool` isn't one of these, or an argument, the person or a field of
+   *   `options.record` is of the wrong type.
+   * @throws {RangeError} When the person isn't one of this owner's people, `reason` is refused as
+   *   `ChildFlows.approve` refuses it, this owner doesn't reach the run, or its run's flow was built
+   *   in code and `delivery.flow` isn't given (or was recorded and is).
+   * @throws What reading this owner's log throws, and what the tool throws before the run has the
+   *   press, once its failure is recorded.
+   */
+  async press<K extends keyof PressArguments>(
+    tool: K,
+    args: PressArguments[K],
+    options: PressOptions,
+  ): Promise<Pressed<K extends "interrupt" ? ChildInterrupt : ChildStatus>> {
+    const given = pressArguments(tool, args);
+    const { person } = options;
+    const owned = this.#owned;
+    if (typeof person !== "string") throw new YianTypeError("a press's person must be a string");
+    if (!owned.people.includes(person)) {
+      throw new YianRangeError(`${reprText(person)} isn't one of the people of run ${reprText(owned.runId)}`);
+    }
+    const record = checkedRecord(options.record ?? null);
+    const id = this.#mine(given["run"] as string);
+    const unrecordable = await this.#unrecordable();
+    if (unrecordable !== null) return { result: null, recorded: false, reason: unrecordable };
+    const key = `press-${randomUUID()}`;
+    const from = relaySender(person, owned);
+    const said = (acted: Acted | null) => pressMessage(this.#group, tool, id, person, given, record, acted);
+    let acted: Acted;
+    try {
+      acted = await this.#act(tool, id, given, from, key);
+    } catch (error) {
+      await this.#record(said(null), from.by, key);
+      throw error;
+    }
+    const reason = await this.#record(said(acted), from.by, key);
+    return { result: acted.result as never, recorded: reason === null, reason };
+  }
+
+  /** Run `tool` on run `id` with `args` as `from`, keying a message by `key`, and say what came of it. */
+  async #act(tool: keyof PressArguments, id: string, args: JsonObject, from: ChildSender, key: string): Promise<Acted> {
+    let refused: ChildRefusal | null = null;
+    const sent: Sent = { from, onRefused: (reason) => void (refused = reason) };
+    const text = (name: string) => args[name] as string;
+    const done = async (result: ChildStatus | Promise<ChildStatus>, did: string): Promise<Acted> => {
+      const status = await result;
+      return { result: status, did, failed: refused !== null, refused };
+    };
+    const driver = this.#driver;
+    switch (tool) {
+      case "message":
+        return done(driver.message(id, text("inbox"), text("text"), { ...sent, key }), "sent");
+      case "answer":
+        return done(driver.answer(id, text("call"), args["answer"], sent), "answered");
+      case "interrupt": {
+        const cut = await driver.interrupt(id, text("inbox"), sent);
+        return { result: cut, did: pressedInterrupt(cut), failed: !cut.landed, refused };
+      }
+      case "close_inbox":
+        return done(driver.closeInbox(id, text("inbox"), sent), "closed");
+      case "stop":
+        return done(driver.stop(id, sent), "stopped");
+      case "approve": {
+        const decision = text("decision") as "approve" | "refuse";
+        const reason = (args["reason"] as string | undefined) ?? null;
+        const decided = driver.approve(id, text("call"), decision, { ...sent, reason });
+        return done(decided, decision === "approve" ? "approved" : "refused");
+      }
+    }
+  }
+
+  /** Why this owner's run can't take a press's action now, as `press` says; `null` when it can. */
+  async #unrecordable(): Promise<PressUnrecorded | null> {
+    const { runId, inbox } = this.#owned;
+    const log = this.#log;
+    if (inbox === null || log === null) return "no_inbox";
+    let run: RunInspection;
+    try {
+      if (statSync(log).size === 0) return "not_started";
+      run = inspectRun(log);
+    } catch (error) {
+      if (isSystemError(error) && error.code === "ENOENT") return "not_started";
+      throw error;
+    }
+    if (run.startedAt === null || run.status === "unstarted") return "not_started";
+    if (run.runId !== runId) return "wrong_log";
+    if (run.endedAt !== null) return "ended";
+    this.#inboxRefusal ??= await this.#inboxTakes(log, inbox);
+    if (this.#inboxRefusal !== null) return this.#inboxRefusal;
+    return run.closedInboxes.includes(inbox) ? "inbox_closed" : null;
+  }
+
+  /**
+   * Whether `inbox` of the run at `log` takes a `Message`, as its flow declares it: `null` when it
+   * does, `unknown_inbox` when the flow has no such input, else `invalid_value`.
+   *
+   * @throws {RangeError} When the run's flow was built in code and `delivery.flow` isn't given, or
+   *   was recorded and is.
+   * @throws What `loadRecordedFlow` throws.
+   */
+  async #inboxTakes(log: string, inbox: string): Promise<"unknown_inbox" | "invalid_value" | null> {
+    const { env, codeRoot, flow: given = null } = this.#delivery;
+    const recorded = await loadRecordedFlow(log, { env, codeRoot });
+    const run = reprText(this.#owned.runId);
+    if (recorded === null && given === null) {
+      throw new YianRangeError(`run ${run}'s flow was built in code: pass it as the owner's delivery.flow`);
+    }
+    if (recorded !== null && given !== null) {
+      throw new YianRangeError(`run ${run} recorded its flow: pass no delivery.flow`);
+    }
+    const param = (recorded ?? given)!.input.find((input) => input.name === inbox);
+    if (param === undefined) return "unknown_inbox";
+    const type = param.contract?.type ?? null;
+    return isInboxType(type) && typeEquals(type!.element!, MESSAGE) ? null : "invalid_value";
+  }
+
+  /**
+   * Send `message`, a press's action, to this owner's inbox by `by` under `key`, trying again on a
+   * busy log: why it isn't recorded, or `null` once it is. It never throws.
+   */
+  async #record(message: unknown, by: Author, key: string): Promise<PressUnrecorded | null> {
+    for (let tried = 0; ; tried += 1) {
+      try {
+        await send(this.#log!, this.#owned.inbox!, message, { ...this.#delivery, by, key });
+        return null;
+      } catch (error) {
+        if (error instanceof DeliveryRefused) return error.reason;
+        if (!(error instanceof RunBusyError)) return "failed";
+        if (tried === PRESS_RETRIES) return "busy";
+        await this.#core.scheduler.sleep(PRESS_RETRY_MS);
+      }
+    }
+  }
+
   /** @internal The last status seq of run `id` this owner's model has seen: shown, or told `seen`. */
   lastSeen(id: string): number {
     return Math.max(this.#shown.get(id) ?? 0, this.seen?.seen(id) ?? 0);
@@ -1697,9 +2012,119 @@ export class ChildFlowOwner {
 
   /** @throws {RangeError} When this owner doesn't reach run `id`. */
   #mine(id: string): string {
-    if (!this.reaches(id)) throw new YianRangeError(`no run '${id}'`);
+    if (!this.#core.reaches(id)) throw new YianRangeError(`no run '${id}'`);
     return id;
   }
+}
+
+/** What came of a press's tool: the driver's result, what the person did, and whether it failed, by what refusal. */
+interface Acted {
+  readonly result: ChildStatus | ChildInterrupt;
+  readonly did: string;
+  readonly failed: boolean;
+  /** The code of the refusal, or `null` when nothing refused it. */
+  readonly refused: ChildRefusal | null;
+}
+
+/**
+ * The message recording `person`'s press of `tool` on run `id` with `args`, as `record` and what came
+ * of it (`acted`, `null` for a throw) say: one action from the person, as `ChildFlowOwner.press` says.
+ */
+function pressMessage(
+  group: string,
+  tool: keyof PressArguments,
+  id: string,
+  person: string,
+  args: JsonObject,
+  record: PressRecord,
+  acted: Acted | null,
+) {
+  const recorded = record.arguments === undefined ? args : record.arguments;
+  let summary = record.summary ?? null;
+  // A result may echo the arguments, so replacing them drops it unless the host gives its own.
+  let result = record.arguments === undefined ? (acted?.did ?? null) : null;
+  if (record.result !== undefined) result = record.result;
+  if (acted === null || acted.failed) {
+    const refused = acted?.refused ?? null;
+    summary = `${person}'s ${PRESSES[tool]} ${id} ${refused === null ? "failed" : `was refused (${refused})`}`;
+    // Only an interrupt's take-back did something.
+    result = tool === "interrupt" && record.arguments === undefined ? (acted?.did ?? null) : null;
+  }
+  if (recorded === null) result = null;
+  const action = {
+    type: "action",
+    tool: `${group}_${tool}`,
+    ...(summary === null ? {} : { summary }),
+    ...(recorded === null ? {} : { arguments: recorded }),
+    ...(result === null ? {} : { result }),
+  };
+  return { role: "user", author: person, parts: [action] };
+}
+
+/**
+ * `args` of a press of `tool` as its action records them: the fields the tool takes, each checked.
+ *
+ * @throws {TypeError} When `tool` isn't one a person may press, or a field is missing or of the
+ *   wrong type.
+ * @throws {RangeError} When an `approve`'s reason is refused (`checkGateText`).
+ */
+function pressArguments(tool: unknown, args: unknown): JsonObject {
+  if (typeof tool !== "string" || !Object.hasOwn(PRESSES, tool)) {
+    throw new YianTypeError(`a person can't press ${reprText(String(tool))}`);
+  }
+  if (!isRecord(args)) throw new YianTypeError("a press's arguments must be an object");
+  const text = (name: string) => {
+    const value = args[name];
+    if (typeof value !== "string") throw new YianTypeError(`a press's ${name} must be a string`);
+    return value;
+  };
+  const run = text("run");
+  switch (tool as keyof PressArguments) {
+    case "message":
+      return { run, inbox: text("inbox"), text: text("text") };
+    case "answer": {
+      const answer = args["answer"];
+      if (answer === undefined || answer === null) throw new YianTypeError("a press's answer can't be null");
+      return { run, call: text("call"), answer: answer as JsonValue };
+    }
+    case "interrupt":
+    case "close_inbox":
+      return { run, inbox: text("inbox") };
+    case "stop":
+      return { run };
+    case "approve": {
+      const call = text("call");
+      const decision = text("decision");
+      if (decision !== "approve" && decision !== "refuse") {
+        throw new YianTypeError("a press's decision must be approve or refuse");
+      }
+      if (args["reason"] === undefined || args["reason"] === null) return { run, call, decision };
+      return { run, call, decision, reason: checkGateText(text("reason"), "reason") };
+    }
+  }
+}
+
+/**
+ * `record` once each field it gives has its type: `summary` and `result` text or `null`, and
+ * `arguments` an object or `null`. A field left `undefined` isn't given.
+ *
+ * @throws {TypeError} When one doesn't.
+ */
+function checkedRecord(record: PressRecord | null): PressRecord {
+  if (record === null) return {};
+  if (!isRecord(record)) throw new YianTypeError("a press's record must be an object or null");
+  const given = Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
+  for (const name of ["summary", "result"]) {
+    const value = given[name];
+    if (value !== undefined && value !== null && typeof value !== "string") {
+      throw new YianTypeError(`a press's record.${name} must be a string or null`);
+    }
+  }
+  const args = given["arguments"];
+  if (args !== undefined && args !== null && !isRecord(args)) {
+    throw new YianTypeError("a press's record.arguments must be an object or null");
+  }
+  return given as PressRecord;
 }
 
 /**
@@ -1800,6 +2225,13 @@ function sentText(value: unknown): unknown {
   const texts = Array.isArray(parts) ? parts.map((part) => (isRecord(part) ? part["text"] : null)) : [];
   if (texts.length === 0 || !texts.every((text) => typeof text === "string")) return shownValue(value);
   return cutStatusText(texts.join(""));
+}
+
+/** What `done`, a person's interrupt, did, as their press records it: nothing of the run's state or inbox. */
+function pressedInterrupt(done: ChildInterrupt): string {
+  const took = `took back ${done.taken.length} message${done.taken.length === 1 ? "" : "s"}`;
+  if (!done.landed) return `not interrupted (${took})`;
+  return done.seq === null ? `nothing to interrupt (${took})` : `interrupted (${took})`;
 }
 
 /** What `done`, an interrupt of `inbox`, did, in a line the model reads. */

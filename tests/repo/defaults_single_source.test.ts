@@ -108,6 +108,8 @@ const ALLOWED: Record<string, string> = {
   "child_flows.ts: EVENT_BODY_CHARS": "size of a child event's line its owner's model reads",
   "child_flows.ts: LABEL_FLOW_CHARS": "length of the flow part of a child run's label, part of its form",
   "child_flows.ts: LIST_ITEMS": "asks or waits a child event or status lists for its owner's model",
+  "child_flows.ts: PRESS_RETRIES": "times a person's press tries again to record its action on a busy owner log",
+  "child_flows.ts: PRESS_RETRY_MS": "wait before a person's press tries again to record its action",
   "child_flows.ts: REASON_MAX_CHARS": "longest reason an approve takes, so its release note fits the gate's text bound",
   "child_flows.ts: STATUS_TEXT_CHARS": "size of each text field of a child run's status its owner's model reads",
   "child_flows.ts: WAIT_MAX_S": "longest a child-flow group's wait waits for a run to change",

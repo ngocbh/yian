@@ -342,6 +342,7 @@ await send(log, "notes", {
 - [`beforeToolCall`](#gate-tool-calls) isn't asked about an action: check who the person is before
   you send it.
 - Give each action a `key`, and a new one when you send it again after `withdraw`.
+- For a [child flow](#child-flows)'s tools, `owner.press` does all this.
 
 ### Pending host calls
 
@@ -679,6 +680,40 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
     /* your other rules */
   };
   ```
+- **Presses.** A person can use the group's `message`, `answer`, `interrupt`, `close_inbox`, `stop`
+  and `approve` themselves, from a view of the run: `await owner.press("message", { run: "r1",
+  inbox: "messages", text }, { person: "Ada" })`. A press is never gated, so check who the person
+  is first; `person` must be one of the owner's `people`.
+  - The run gets their words as they are, signed `Ada, via assistant` and recorded `by: {kind:
+    "user", name: "Ada", run: <owner's run id>}`, so their `interrupt` takes back only their own
+    sends through this owner.
+  - The owner's run gets one [action](#record-a-persons-action) from them in its `inbox`, without a
+    turn. An owner with an inbox needs its run's `log`, which defaults to the run's own for a run
+    the driver started. Pass `delivery: {env, codeRoot, flow}` when the owner's log is written
+    otherwise than the children's: `env` defaults to the driver's, and a run built in code needs its
+    `flow`.
+  - The action holds `tool` (`flows_message`, even when the model was granted only part of the
+    group), `arguments` and `result`: only what they did (`sent`, `answered`, `interrupted (took
+    back 1 message)`, `nothing to interrupt (took back 0 messages)`, `closed`, `stopped`,
+    `approved`, `refused`), never what the run said. A press marks nothing read.
+  - A press the run refuses, or whose tool throws, records the summary `Ada's message to r1 was
+    refused (invalid_value)` (or `failed`), never the refusal's message, and no result but an
+    interrupt's take-back. The reason is the run's refusal code, or the driver's own: `disposed`,
+    `signed_message` or `held_call`.
+  - Pass `record: {summary, arguments, result}` to record your own. Replacing the arguments drops
+    the result unless you give one, and `arguments: null` records neither.
+  - It returns `{result, recorded, reason}`: the driver's result, whose `note` has the refusal for
+    your view to show, and whether the owner's run holds the action. Before it runs anything, it
+    returns `recorded: false` when the owner can't take one: `no_inbox`, `not_started`, `wrong_log`
+    (the log is another run's), `ended`, `unknown_inbox`, `invalid_value` (the inbox takes no
+    `Message`) or `inbox_closed`.
+  - Once the run has the press, it doesn't throw. Each press keys its action, and a `message` its
+    send to the run, with a key of its own. A busy owner log is tried 3 more times, then `busy`; a
+    refused send gives its reason, and a fault `failed`.
+  - A crash between the run's delivery and the action leaves the person's record in the run with no
+    action in the owner's run. Picking the run back up after a restart has to reconcile them; only a
+    `message`'s send holds the press's key to match by.
+  - Press a run's own children through the top owner, which reaches them.
 - **Members.** A run records the tools its agents are granted, so a run whose group gains or loses
   a tool, such as `start`, can't be resumed: `resume refused: tools.flows_start isn't recorded; the
   run started without it`, or `resume refused: tools.flows_stop is recorded, but this run's tools
@@ -742,7 +777,7 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
 
 | Call | Gives |
 |---|---|
-| `inspectRun(log)` | Where a run stands, without the lock: `status` (`running`, `succeeded`, `failed`, `cancelled`, `unstarted`, `waiting`, `stopped`, `crashed`), `inFlight`, `waits`, `ready`, `wakeAt`, and `unread`, the messages nothing has read yet as `{inbox, seq, by}`. Pass `{ flow }` (from `loadRecordedFlow`) for an exact `status` |
+| `inspectRun(log)` | Where a run stands, without the lock: `status` (`running`, `succeeded`, `failed`, `cancelled`, `unstarted`, `waiting`, `stopped`, `crashed`), `inFlight`, `waits`, `ready`, `wakeAt`, `unread`, the messages nothing has read yet as `{inbox, seq, by}`, and `closedInboxes`. Pass `{ flow }` (from `loadRecordedFlow`) for an exact `status` |
 | `loadRecordedFlow(log)` | The flow the log recorded |
 | `iterRunRecords(log)` | The log's records, one by one, while another process may still be writing |
 | `foldRunLog(log)` | Each record with the value it wrote |

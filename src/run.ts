@@ -2879,6 +2879,8 @@ export interface RunInspection {
    * take back, in seq order; `[]` for an ended run.
    */
   readonly unread: readonly UnreadSend[];
+  /** For a run that hasn't ended, the inboxes closed, which no send reaches, by name; `[]` for an ended run. */
+  readonly closedInboxes: readonly string[];
 }
 
 /** One send nothing has read yet: its inbox, its seq, and who made it (`null` when its call said no one). */
@@ -2913,7 +2915,8 @@ export interface UnreadSend {
  *   line throws `RunLogLineTooLongError`.
  * @returns The status, the nodes in flight, the crashed counts, the run's id, schema, flow
  *   fingerprint, last seq, start time and (once ended) end time, a failed run's
- *   failure, and a waiting run's waits, readiness and wake time.
+ *   failure, a waiting run's waits, readiness and wake time, and an unended run's unread sends and
+ *   closed inboxes.
  * @throws Error (code `ENOENT`) when `log` doesn't exist, and the `fs` error of a failed read.
  * @throws RunLogSchemaError when a record's schema isn't one this version reads.
  * @throws RunLogChangedError when the log shrank while it was read and no writer holds it.
@@ -2977,7 +2980,13 @@ export function inspectRun(
     ready: waiting && wakeableNodes(waits).length > 0,
     wakeAt: waiting ? wakeAt(waits) : null,
     unread: ended ? [] : unreadSends(waits, source.senders),
+    closedInboxes: ended ? [] : closedInboxes(waits),
   };
+}
+
+/** The inboxes of `waits` that are closed, by name. */
+function closedInboxes(waits: WaitsState): string[] {
+  return [...waits.inboxes].flatMap(([name, inbox]) => (inbox.closed ? [name] : [])).sort(compareCodeUnits);
 }
 
 /** The sends of `waits`' inboxes that a withdraw would take back, in seq order, each with its sender from `senders`. */

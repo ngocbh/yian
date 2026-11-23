@@ -22,6 +22,11 @@ export {
   type ChildStatus,
   type LiveChild,
   type MemoryHooks,
+  type PressArguments,
+  type Pressed,
+  type PressOptions,
+  type PressRecord,
+  type PressUnrecorded,
   type StartedChild,
   type WaitingChild,
 } from "./child_flows.ts";

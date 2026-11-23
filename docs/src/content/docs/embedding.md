@@ -598,20 +598,35 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
   each time a pass settles with news, when the child waits for a message or a timer, or ends: one
   message for everything since its last report. A report is sent as a press's action is, with the
   `delivery` of the handle that started the child (see Presses). The group tools of all handles on
-  one owner run hold its children's reports alike.
+  one owner run hold its children's reports alike. A run that a child starts through an owner with
+  no inbox reports where that child does.
   - The news: what its `reply` nodes said; a question or held call the owner's model wasn't told
-    of; its end; or a send it read that the owner's model didn't make, nor a person through the
-    owner (`people`), nor one of its own children reporting.
+    of; its end; or a send it read that neither the owner's model nor the model of the run it
+    reports to made, nor a person through the owner (`people`), nor one of its own children
+    reporting.
   - A report is the child's line, such as `run r1 waits for a message on inbox "messages"; heard
     from "Bob" on inbox "messages": "stop"; said "stopped"`. It names who made each send it heard:
     a message's author, else the send's `by` name, and both when they differ (`from "the user"
     (sent by user "Mallory")`). Child text is JSON-quoted, and the author wrapper escapes a tag in
     it.
   - It goes to the owner's inbox as a user message authored by the child's label, with `by: {kind:
-    "run", name: <label>, run: <child's run id>}`. It starts the owner's turn like any message. It
-    is keyed `report:<child's run id>:<at>`, where a status's `at` is the seq of the child's log
-    when its pass settled; the tools' statuses show `at` too. A report that the driver itself
+    "run", name: <label>, run: <child's run id>}`. It starts the owner's turn like any message once
+    the run moves: the driver moves an owner's run only when it started that run. For any other,
+    pass `onReport` to the owner, so you can move the run and show the reports. It is told each
+    report's `outcome`, its `seq` in the log once `sent`, the child's `runId` and `label`, and its
+    `event` (the line, and a card of `status`, `verb` and `body`). A report is `sent`, `held` (below), or
+    `refused` once the owner's run has ended or closed its inbox.
+  - It is keyed `report:<child's run id>:<at>`, where a status's `at` is the seq of the child's
+    log when its pass settled; the tools' statuses show `at` too. A report that the driver itself
     failed has no `at` and no key.
+  - `await owner.hold()` holds the reports while a person has the floor, as after they interrupt
+    the owner's agent: none is sent, each that comes due is told as `held`, and its news stays
+    unread for `status` and `wait`. It resolves once a report being sent has landed and the
+    reports the owner's inbox holds unread are taken back, as the hold's `taken`. Its `release()`
+    sends those again, each keyed `report:<child's run id>:again:<seq taken back>` and told as
+    `sent`, then the held ones. One the owner's run refuses is told as `refused`, its news unread
+    again; one that fails otherwise stays with the driver, with a warning, and goes before its
+    child's next report. A report taken back and never sent again stays read.
   - Reports wait while any of the group's tools runs. A report and a status a tool returned are
     read for each other: the tools don't show a reported reply again, `wait` waits past a reported
     status, and no report repeats a reply, question or end a tool showed. A call cut short (its
@@ -763,10 +778,8 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
   reads as a `Message` with an `author` or an action part, whatever type the question declares.
 - **Shown once.** An owner remembers what its tools showed, so a group built again for each
   `advance` repeats no reply, and its `wait` waits past what was shown.
-- **Read marks.** Pass `seen: {markSeen, seen}` to an owner with no inbox whose model should
-  consume replies: each status its tools show is then marked read. Without it they mark nothing, so
-  the host's other readers still get every reply. An owner with an inbox takes none: its reports
-  mark what they tell.
+- **Read marks.** The tools of an owner with no inbox mark nothing read, so the host's other
+  readers still get every reply. An owner's reports mark what they tell.
 - **Errors.** `memories.scrub` rewrites every error the driver reports, so that no location
   leaks.
 

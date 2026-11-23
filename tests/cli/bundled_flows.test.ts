@@ -97,7 +97,7 @@ test("the reply agent gets the tools, the skill and steering, with no tool-call 
   expect(Object.hasOwn(reply.env, "max_tool_iterations")).toBe(false);
 });
 
-test("the prompt reads before explaining, checks before runs, and relays inbox runs", async () => {
+test("the prompt reads before explaining, checks before runs, and relays runs' reports", async () => {
   // Read with its lines joined: the prompt wraps.
   const text = flowText("chat.yaml").replace(/\s+/g, " ");
   expect(text).toContain("Read a flow before you explain or change it, and check it before you run it.");
@@ -106,7 +106,8 @@ test("the prompt reads before explaining, checks before runs, and relays inbox r
     "flows_message",
     "flows_close_inbox when the user is done with it",
     "To stop what it is doing when the user asks, use flows_interrupt",
-    "what a run said",
+    "A run reports to you when it pauses or ends, in a message signed by its label",
+    "flows_approve is refused, so ask them",
     "offer to report it with report_issue",
     "if the user pastes one, tell them to revoke it",
     "holds only actions is something the user did themselves",

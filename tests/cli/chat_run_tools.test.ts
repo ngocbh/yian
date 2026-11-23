@@ -20,7 +20,6 @@ import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { type ChildFlowOwner, type ChildFlows, type ChildStatus, childEvent } from "../../src/child_flows.ts";
-import { EventQueue } from "../../src/cli/chat_events.ts";
 import { AUTHOR_TOOLS } from "../../src/cli/authoring.ts";
 import { ChatRuns, type ChatRunsOptions, chatRunTools } from "../../src/cli/chat_run_tools.ts";
 import { type ChatToolHost, chatFileTools, ToolRefused } from "../../src/cli/chat_tools.ts";
@@ -187,7 +186,6 @@ output: done
   function runTools(
     answer: string | null = "Approve",
     scheduler = heldScheduler().scheduler,
-    queue: EventQueue | null = null,
     children: { env?: Env; embed?: Embed } = {},
   ) {
     runs = new ChatRuns({
@@ -201,19 +199,7 @@ output: done
       ...(children.embed === undefined ? {} : { embed: children.embed }),
     });
     const requests: ApproveRequest[] = [];
-    const seen: [string, number][] = [];
-    const owner = runs.owner({
-      runId: "chat-1",
-      group: "flows",
-      label: "yian-chat",
-      seen: {
-        markSeen: (run, seq) => {
-          seen.push([run, seq]);
-          queue?.markSeen(run, seq);
-        },
-        seen: (run) => queue?.seen(run) ?? 0,
-      },
-    });
+    const owner = runs.owner({ runId: "chat-1", group: "flows", label: "yian-chat" });
     const tools = visible(
       chatRunTools(
         host({
@@ -242,7 +228,7 @@ output: done
     };
     const json = async (name: string, args: Record<string, unknown>, abort?: AbortSignal) =>
       seenAs(name, await invoke(name, args, abort));
-    return { runs, tools, requests, seen, invoke, json };
+    return { runs, tools, requests, invoke, json };
   }
 
   /** Wait on `run` until its status leaves `running`. */
@@ -256,7 +242,7 @@ output: done
     "an approved start runs the flow; its status says where it stands and flows_wait sees it end",
     async () => {
       writeFileSync(join(root, "greet.yaml"), GREET);
-      const { requests, json, seen } = runTools();
+      const { requests, json } = runTools();
       const started = await json("flows_start", { flow: "greet.yaml", inputs: { who: "ada" } });
       expect(started).toMatchObject({ run: "r1", log: join(tmp, "runs", "chat-1-r1", "log.jsonl") });
       expect(started["seq"]).toBeUndefined();
@@ -270,8 +256,6 @@ output: done
           "an approval for this chat doesn't cover changes to the files the code imports",
       );
       expect(await settledJson(json, "r1")).toMatchObject({ run: "r1", status: "succeeded", output: "hi ada" });
-      expect(seen.length).toBeGreaterThan(0);
-      expect(seen.every(([run]) => run === "r1")).toBe(true);
     },
     TIMEOUT,
   );
@@ -491,7 +475,7 @@ output: done
       // The store a test reads is its own, never the account's.
       const vars: Record<string, string> = { YIAN_AUTH_FILE: join(tmp, "auth.json") };
       const env: Env = (name) => vars[name];
-      const none = runTools("Approve", undefined, null, { env, embed });
+      const none = runTools("Approve", undefined, { env, embed });
       const refused = String(await none.invoke("flows_start", { flow: "cases.yaml", inputs: { line: "a" } }));
       expect(refused).toBe("not started: `cases` needs an embedding model: run `yian config embedding provider/model`");
       // Refused before the card: the user isn't asked to approve a start that can't happen.
@@ -500,7 +484,7 @@ output: done
       await runs?.dispose();
 
       vars["YIAN_DEFAULT_EMBEDDING"] = "openai/text-embedding-3-small";
-      const { requests, json } = runTools("Approve", undefined, null, { env, embed });
+      const { requests, json } = runTools("Approve", undefined, { env, embed });
       const identity = `${projectKey(root)}/cases/cases`;
       await json("flows_start", { flow: "cases.yaml", inputs: { line: "Check sums twice." } });
       expect(requests).toHaveLength(1);
@@ -710,32 +694,6 @@ output: done
     TIMEOUT,
   );
 
-  test(
-    "a status the chat relayed as an event counts as seen: flows_wait waits past it and doesn't repeat its replies",
-    async () => {
-      writeFileSync(join(root, "echo.yaml"), ECHO);
-      const queue = new EventQueue();
-      const { json, runs: children } = runTools("Approve", heldScheduler().scheduler, queue);
-      await json("flows_start", { flow: "echo.yaml", inputs: {} });
-      await settledJson(json, "r1");
-      const asked = children.status("r1").seq;
-      await json("flows_message", { run: "r1", inbox: "messages", text: "hi" });
-      let relayed = children.status("r1");
-      while (relayed.seq <= asked + 1 || relayed.status === "running") relayed = await children.next("r1", relayed.seq);
-      queue.push(relayed);
-      // The flusher sends it: the model has seen it.
-      expect(queue.takeAll().map((event) => event.seq)).toEqual([relayed.seq]);
-      children.markRead("r1", relayed.seq);
-      const waited = json("flows_wait", { run: "r1", seconds: 60 });
-      await until(() => children.waitingNexts() === 1);
-      children.cancelWaits();
-      const status = await waited;
-      expect(status).toMatchObject({ status: "waiting" });
-      expect(status["replies"]).toBeUndefined();
-    },
-    TIMEOUT,
-  );
-
   test("only the reading tools may run beside other calls", () => {
     const { tools } = runTools();
     const safe = [...tools].filter(([, each]) => each.isConcurrencySafe?.({}) === true).map(([name]) => name);
@@ -876,8 +834,7 @@ output: \${hi.output}
       requests.push(request);
       return answer;
     };
-    const queue = new EventQueue();
-    const owner = runs.owner({ runId: "chat-1", group: "flows", label: "yian-chat", seen: queue });
+    const owner = runs.owner({ runId: "chat-1", group: "flows", label: "yian-chat" });
     const tools = chatRunTools(host({ env, approve, docs: new Map([["flows", "page"]]) }), runs, owner, {
       authoring: { skills: new Map([[guide.name, guide]]) },
     });
@@ -893,7 +850,7 @@ output: \${hi.output}
       });
       return visible(tools).get(name)!.execute(args, ctx);
     };
-    return { runs, owner, model, requests, invoke, queue };
+    return { runs, owner, model, requests, invoke };
   }
 
   /**
@@ -1331,7 +1288,7 @@ output: \${said.output}
   test(
     "only the author run gets the tools, its start sharing the chat's approvals; its runs get none and stay the assistant's",
     async () => {
-      const { runs, owner, invoke, queue, requests } = authoringTools(
+      const { runs, owner, invoke, requests } = authoringTools(
         [callReply(["ask_user", { question: "What for?" }, "b1"])],
         "Approve this flow for this chat",
       );
@@ -1384,8 +1341,6 @@ output: \${said.output}
         status = seenAs("flows_wait", await call("flows_wait", { run: "r2", seconds: 60 }));
       }
       expect(status).toMatchObject({ status: "succeeded", output: "hi ada" });
-      // What it saw isn't marked seen: the chat still tells the assistant how the run ended.
-      expect(queue.seen("r2")).toBe(0);
     },
     TIMEOUT,
   );

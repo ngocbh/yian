@@ -275,8 +275,8 @@ theirs. Off a terminal, or with `NO_COLOR`, it prints plain lines and numbered l
 | Key | What it does |
 |---|---|
 | Enter | Sends the line. During a reply, the assistant reads it before its next step |
-| Esc | Takes back the lines the assistant hasn't read yet, and stops the reply. What you did yourself, such as a `/model` choice, stays sent |
-| Ctrl-C | Stops the reply. A second Ctrl-C within 2 seconds, or one at the prompt, ends the chat |
+| Esc | Takes back the lines you sent that the assistant hasn't read yet, and stops the reply. What you did yourself, such as a `/model` choice, stays sent, and the flows' reports wait for your next line |
+| Ctrl-C | Stops the reply, and the flows' reports wait for your next line. A second Ctrl-C within 2 seconds, or one at the prompt, ends the chat |
 | `/` | Lists the commands |
 | `/model` | Picks the model of the next replies, and of the flows the assistant starts after it, from your logins |
 | `/provider` | Picks a provider, signing in to it as `yian auth` does when it has no saved login, then one of its models. A key set in the environment is saved only if you say so |
@@ -318,14 +318,27 @@ or its code changes. Off a terminal nothing is approved. `report_issue`, `author
 
 ### Flows the assistant runs
 
-A flow the assistant starts runs in the background. Its questions reach you through the
-assistant, which sends your answers back. The assistant's messages to it are signed `yian-chat`,
-except to an `Inbox(str)` input, which takes plain text and can't tell who wrote it. The keys its
-agents need must already be set, and its memory inputs get their default memories (see
-[Memory](#memory)). Its log is `~/.yian/runs/<chat run id>-r<n>/log.jsonl`. It names the chat as
-the run's parent and the run as `<flow> r<n>`, and records each message, answer, interrupt, close
-and stop as the assistant's. A try that `author_flow` runs is that run's own child, so its log is
-`~/.yian/runs/<chat run id>-r<n>-r<m>/log.jsonl`.
+A flow the assistant starts runs in the background. Each time it pauses or ends, it reports to the
+assistant in a message signed by its label, `<flow> r<n>`: what it asks, the tool calls it holds
+for approval, what it said or heard from someone else, and how it ended. The chat shows each report
+as a card, and the assistant reads it at once.
+
+From your Esc or Ctrl-C until your next line, the reports wait. The ones the assistant hadn't read
+yet are taken back, so the stopped reply doesn't start again on them, and each one that waits is
+shown as `(waiting for your next message: ...)`. Your next line sends them first, and the
+assistant reads them with it. `/exit` holds them too, and never lets them go: it prints each as
+`(not sent: ...)`, as it does a report that comes while the chat closes. Esc never puts a report
+in the prompt.
+
+The assistant relays a flow's questions to you and sends your answers back. Its messages to the
+flow are signed `yian-chat`, except to an `Inbox(str)` input, which takes plain text and can't
+tell who wrote it. The keys the flow's agents need must already be set, and its memory inputs get
+their default memories (see [Memory](#memory)). Its log is
+`~/.yian/runs/<chat run id>-r<n>/log.jsonl`. It names the chat as the run's parent, with the
+chat's inbox it reports to, and the run as `<flow> r<n>`, and records each message, answer,
+interrupt, close and stop as the assistant's. A try that `author_flow` runs is that run's own
+child, so its log is `~/.yian/runs/<chat run id>-r<n>-r<m>/log.jsonl`; it reports to the
+assistant too.
 
 When you ask the assistant to stop what a flow is doing, it interrupts the flow: it takes back its
 own messages the flow hasn't read, then cuts the flow's current step. With no step running, the

@@ -15,6 +15,7 @@ import {
   ChildFlows,
   type ChildFlowsOptions,
   type ChildFlowStart,
+  type ChildReport,
   type ChildStatus,
   childEvent,
   childFlows,
@@ -97,9 +98,9 @@ function childRuns(options: Partial<ChildFlowsOptions> = {}): ChildFlows {
   return runs;
 }
 
-/** The chat run's hold on `children`, as `yian chat`'s: the owner the tests start children through. */
-function chat(children: ChildFlows, seen: ChildFlowOwnerOptions["seen"] = null): ChildFlowOwner {
-  return children.owner({ runId: CHAT, group: "flows", label: "yian-chat", people: ["the user"], seen });
+/** The chat run's hold on `children`, with no inbox: the owner the tests start children through. */
+function chat(children: ChildFlows): ChildFlowOwner {
+  return children.owner({ runId: CHAT, group: "flows", label: "yian-chat", people: ["the user"] });
 }
 
 /** Load `text` as the flow `name`, the temporary root its code root, its busy nodes held by `<root>/gate`. */
@@ -1341,24 +1342,16 @@ describe("childFlows", () => {
   );
 
   test(
-    "an owner with seen marks each status its tools show read, and one without marks nothing",
+    "the tools of an owner with no inbox mark nothing read, so the host's other readers still get every reply",
     async () => {
       const children = childRuns();
-      const marked: [string, number][] = [];
-      const seen = { markSeen: (run: string, seq: number) => void marked.push([run, seq]), seen: () => 0 };
       const quiet = childFlows(chat(children));
-      const reader = childFlows(chat(children, seen));
       await chat(children).start(await flow(ECHO), {});
       const before = (await settled(children, "r1")).seq;
       await call(quiet, "message", { run: "r1", inbox: "messages", text: "a" }, `${CHAT}/reply/1/0`);
-      const replied = await settled(children, "r1", before);
+      await settled(children, "r1", before);
       expect((await call(quiet, "status", { run: "r1" }))["replies"]).toEqual(["echo: a"]);
       expect(children.status("r1").replies).toEqual(["echo: a"]);
-      expect(marked).toEqual([]);
-      expect((await call(reader, "status", { run: "r1" }))["replies"]).toEqual(["echo: a"]);
-      expect(marked).toEqual([["r1", replied.seq]]);
-      const sent = await call(reader, "message", { run: "r1", inbox: "messages", text: "b" }, `${CHAT}/reply/2/0`);
-      expect(sent["replies"]).toBeUndefined();
     },
     TIMEOUT,
   );
@@ -2954,8 +2947,8 @@ async function boss(): Promise<string> {
 }
 
 /** The chat's hold on `children`, its children reporting to `news` in its run at `log`. */
-function reporting(children: ChildFlows, log: string): ChildFlowOwner {
-  return children.owner({ runId: CHAT, group: "flows", label: "yian-chat", people: ["the user"], log, inbox: "news" });
+function reporting(children: ChildFlows, log: string, more: Partial<ChildFlowOwnerOptions> = {}): ChildFlowOwner {
+  return children.owner({ runId: CHAT, group: "flows", label: "yian-chat", people: ["the user"], log, inbox: "news", ...more });
 }
 
 /** The reports sent to the owner's run at `log`, oldest first: each one's author and text, and its send's `by` and key. */
@@ -3525,11 +3518,241 @@ describe("reports", () => {
     TIMEOUT,
   );
 
-  test("an owner with an inbox needs its run's log, and takes no seen", () => {
+  test("an owner with an inbox needs its run's log", () => {
     const children = childRuns();
     const options = { runId: CHAT, group: "flows", label: "yian-chat", inbox: "news" };
     expect(() => children.owner(options)).toThrow("an owner with an inbox needs its run's log");
-    const seen = { markSeen: () => {}, seen: () => 0 };
-    expect(() => children.owner({ ...options, log: join(root, "boss.jsonl"), seen })).toThrow("takes no seen");
   });
+
+  test(
+    "onReport is told each report in the owner's log: its seq, the child's label and its event; a throw is dropped",
+    async () => {
+      const log = await boss();
+      const children = childRuns();
+      const told: ChildReport[] = [];
+      const onReport = (report: ChildReport) => {
+        told.push(report);
+        throw new Error("a host's fault");
+      };
+      const owner = reporting(children, log, { onReport });
+      await owner.start(await flow(ASK), {});
+      await owner.start(await flow(GREET), { who: "ada" });
+      await until(() => told.length > 1);
+      const sent = readRunLog(log).filter(({ record }) => record instanceof PoolCommitRecord && record.key === "__start__.news");
+      expect(told.map((each) => each.seq)).toEqual(sent.map((each) => each.seq));
+      expect(told.map((each) => each.event.text)).toEqual(reports(log).map((each) => each.text));
+      const asking = told.find((each) => each.label === "ask r1")!;
+      expect(asking).toMatchObject({ outcome: "sent", runId: `${CHAT}-r1` });
+      expect(asking.event).toMatchObject({ run: "r1", card: { status: "waiting", verb: "asks" } });
+      expect(told.find((each) => each.label === "greet r2")!.event.card).toEqual({
+        status: "succeeded",
+        verb: "succeeded",
+        body: 'with output "hi ada"',
+      });
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a host's hold keeps reports in the driver, tells onReport of each as held, and its release sends them",
+    async () => {
+      const log = await boss();
+      const children = childRuns();
+      const told: ChildReport[] = [];
+      const owner = reporting(children, log, { onReport: (report) => void told.push(report) });
+      const tools = childFlows(owner);
+      await owner.start(await flow(ECHO), {});
+      const first = await settled(children, "r1");
+      const hold = await owner.hold();
+      expect(hold.taken).toEqual([]);
+      await call(tools, "message", { run: "r1", inbox: "messages", text: "hi" });
+      await settled(children, "r1", first.seq);
+      await until(() => told.length > 0);
+      const text = 'run r1 waits for a message on inbox "messages"; said "echo: hi"';
+      expect(told).toEqual([
+        { outcome: "held", seq: null, runId: `${CHAT}-r1`, label: "echo r1", event: expect.objectContaining({ text }) },
+      ]);
+      // Held, its news stays unread for the tools.
+      expect(reports(log)).toEqual([]);
+      expect(children.status("r1").replies).toEqual(["echo: hi"]);
+      await hold.release();
+      expect(reports(log).map((each) => each.text)).toEqual([text]);
+      expect(told.at(-1)).toMatchObject({ outcome: "sent", seq: expect.any(Number), runId: `${CHAT}-r1` });
+      // A second release does nothing.
+      await hold.release();
+      expect(reports(log)).toHaveLength(1);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a hold takes back the reports the owner's inbox holds unread, and its release sends them again first, under new keys",
+    async () => {
+      const log = await boss();
+      const children = childRuns();
+      const told: ChildReport[] = [];
+      const owner = reporting(children, log, { onReport: (report) => void told.push(report) });
+      const tools = childFlows(owner);
+      await owner.start(await flow(ECHO), {});
+      const first = await settled(children, "r1");
+      await call(tools, "message", { run: "r1", inbox: "messages", text: "a" });
+      const replied = await settled(children, "r1", first.seq);
+      await until(() => inspectRun(log).unread.length > 0);
+      const [unread] = inspectRun(log).unread;
+      const hold = await owner.hold();
+      const said = 'run r1 waits for a message on inbox "messages"; said "echo: a"';
+      expect(hold.taken).toEqual([{ seq: unread!.seq, runId: `${CHAT}-r1`, label: "echo r1", text: said }]);
+      expect(inspectRun(log).unread).toEqual([]);
+      await call(tools, "message", { run: "r1", inbox: "messages", text: "b" }, `${CHAT}/reply/2/0`);
+      await settled(children, "r1", replied.seq);
+      await hold.release();
+      const by = { kind: "run", name: "echo r1", run: `${CHAT}-r1` };
+      expect(reports(log).slice(1)).toEqual([
+        { author: "echo r1", text: said, by, key: `report:${CHAT}-r1:again:${unread!.seq}` },
+        expect.objectContaining({ text: 'run r1 waits for a message on inbox "messages"; said "echo: b"' }),
+      ]);
+      // Each send is told, the one sent again with its new seq.
+      const sent = inspectRun(log).unread.map((each) => each.seq);
+      expect(told.map(({ outcome, seq }) => [outcome, seq])).toEqual([
+        ["sent", unread!.seq],
+        ["held", null],
+        ["sent", sent[0]!],
+        ["sent", sent[1]!],
+      ]);
+      expect(told[2]!.event.text).toBe(said);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a report sent again that fails stays with the driver, with a warning, and goes at the owner's next group tool's end",
+    async () => {
+      const log = await boss();
+      const { scheduler, open } = heldScheduler();
+      open();
+      const children = childRuns({ scheduler });
+      const told: ChildReport[] = [];
+      const owner = reporting(children, log, { onReport: (report) => void told.push(report) });
+      const tools = childFlows(owner);
+      await owner.start(await flow(ECHO), {});
+      const first = await settled(children, "r1");
+      await call(tools, "message", { run: "r1", inbox: "messages", text: "a" });
+      await settled(children, "r1", first.seq);
+      await until(() => inspectRun(log).unread.length > 0);
+      const hold = await owner.hold();
+      const warned: string[] = [];
+      const faults: Error[] = [new RunBusyError(log), new RunBusyError(log), new RunBusyError(log), new RunBusyError(log)];
+      await withWarnings(
+        (text) => void warned.push(text),
+        () =>
+          withAppendHook(
+            (_, record) => {
+              if (record instanceof PoolCommitRecord && record.sendKey?.includes(":again:") && faults.length > 0) {
+                throw faults.shift();
+              }
+            },
+            () => hold.release(),
+          ),
+      );
+      expect(warned).toEqual([expect.stringContaining("wasn't sent")]);
+      expect(inspectRun(log).unread).toEqual([]);
+      expect(told.map((each) => each.outcome)).toEqual(["sent"]);
+      // Another run's status shows nothing of r1's, and the call's end sends it.
+      await expect(call(tools, "status", { run: "r9" })).rejects.toThrow("no run 'r9'");
+      await until(() => inspectRun(log).unread.length > 0);
+      expect(told.map((each) => each.outcome)).toEqual(["sent", "sent"]);
+      expect(reports(log).at(-1)!.key).toStartWith(`report:${CHAT}-r1:again:`);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a report sent again that the owner's closed inbox refuses is told as refused, and its news is unread again",
+    async () => {
+      const log = await boss();
+      const children = childRuns();
+      const told: ChildReport[] = [];
+      const owner = reporting(children, log, { onReport: (report) => void told.push(report) });
+      const tools = childFlows(owner);
+      await owner.start(await flow(ECHO), {});
+      const first = await settled(children, "r1");
+      await call(tools, "message", { run: "r1", inbox: "messages", text: "a" });
+      await settled(children, "r1", first.seq);
+      await until(() => inspectRun(log).unread.length > 0);
+      const hold = await owner.hold();
+      await close(log, "news");
+      await hold.release();
+      const said = 'run r1 waits for a message on inbox "messages"; said "echo: a"';
+      expect(told.map((each) => [each.outcome, each.event.text])).toEqual([
+        ["sent", said],
+        ["refused", said],
+      ]);
+      expect(children.status("r1").replies).toEqual(["echo: a"]);
+      expect((await call(tools, "status", { run: "r1" }, `${CHAT}/reply/2/0`))["replies"]).toEqual(["echo: a"]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a report the owner's closed inbox refuses is told to onReport as refused, and its news stays unread",
+    async () => {
+      const log = await boss();
+      await close(log, "news");
+      const children = childRuns();
+      const told: ChildReport[] = [];
+      const owner = reporting(children, log, { onReport: (report) => void told.push(report) });
+      await owner.start(await flow(GREET), { who: "ada" });
+      await until(() => told.length > 0);
+      expect(told).toEqual([
+        {
+          outcome: "refused",
+          seq: null,
+          runId: `${CHAT}-r1`,
+          label: "greet r1",
+          event: expect.objectContaining({ text: 'run r1 succeeded with output "hi ada"' }),
+        },
+      ]);
+      expect(reports(log)).toEqual([]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a run started by an owner with no inbox reports where its owner's run does; that owner's tools tell it nothing",
+    async () => {
+      const log = await boss();
+      const children = childRuns();
+      const top = reporting(children, log);
+      const topTools = childFlows(top);
+      await top.start(await flow(HUB, "hub.yaml"), {});
+      await settled(children, "r1");
+      // The hub's own hold on its runs, with no inbox of its own.
+      const hub = children.owner({ runId: `${CHAT}-r1`, group: "flows" });
+      const hubTools = childFlows(hub);
+      await hub.start(await flow(ECHO), {});
+      const first = await settled(children, "r2");
+      const { promise: held, resolve: free } = Promise.withResolvers<void>();
+      const holding = top.holding(() => held, new AbortController().signal);
+      // The top owner's model messages the hub's run: no news to it.
+      await call(topTools, "message", { run: "r2", inbox: "messages", text: "hi" });
+      const replied = await settled(children, "r2", first.seq);
+      // The hub's model seeing the reply tells the top owner's nothing.
+      expect((await call(hubTools, "status", { run: "r2" }))["replies"]).toEqual(["echo: hi"]);
+      expect(reports(log)).toEqual([]);
+      free();
+      await holding;
+      await until(() => reports(log).length > 0);
+      expect(reports(log)).toEqual([
+        {
+          author: "echo r2",
+          text: 'run r2 waits for a message on inbox "messages"; said "echo: hi"',
+          by: { kind: "run", name: "echo r2", run: `${CHAT}-r1-r2` },
+          key: `report:${CHAT}-r1-r2:${replied.at}`,
+        },
+      ]);
+      // What a report told, the top owner's tools don't show again.
+      expect((await call(topTools, "status", { run: "r2" }))["replies"]).toBeUndefined();
+    },
+    TIMEOUT,
+  );
 });

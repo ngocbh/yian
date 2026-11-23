@@ -21,6 +21,7 @@
  * command's helpers and the chat's flusher.
  */
 
+import type { ChildEvent } from "../child_flows.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
 import { Diagnostic, shellQuote } from "../diagnostics.ts";
@@ -51,7 +52,6 @@ import { YianRangeError } from "../typesys/errors.ts";
 import { builtinType } from "../typesys/types.ts";
 import { canonicalTypeLabel, isInboxType, typeEquals, type Value, writeAsText } from "../typesys/values.ts";
 import { type ChatEvents, ChatFlusher } from "./chat_flush.ts";
-import type { ChildEvent } from "./chat_runs.ts";
 import {
   accountHome,
   bindMemories,

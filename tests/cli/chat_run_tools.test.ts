@@ -1,6 +1,8 @@
-// The chat assistant's run tools: flows in a temporary root started as child runs.
+// The chat assistant's run tools, and its child runs' driver with the chat's hooks (`ChatRuns`):
+// flows in a temporary root started as child runs.
 
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -12,26 +14,28 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
+import { type ChildRuns, type ChildStatus, childEvent } from "../../src/child_flows.ts";
 import { EventQueue } from "../../src/cli/chat_events.ts";
 import { AUTHOR_TOOLS } from "../../src/cli/authoring.ts";
-import { ChatRuns, chatRunTools } from "../../src/cli/chat_run_tools.ts";
-import { type ChildRuns, shownStatus } from "../../src/cli/chat_runs.ts";
+import { ChatRuns, type ChatRunsOptions, chatRunTools } from "../../src/cli/chat_run_tools.ts";
 import { type ChatToolHost, chatFileTools, ToolRefused } from "../../src/cli/chat_tools.ts";
 import { loadConfinedText } from "../../src/cli/confined_load.ts";
 import { main } from "../../src/cli/index.ts";
-import { defaultLocation, projectKey } from "../../src/cli/memory_bind.ts";
-import type { CliIo } from "../../src/cli/utils.ts";
+import { defaultIdentity, defaultLocation, projectKey } from "../../src/cli/memory_bind.ts";
+import { type CliIo, MissingKeyError } from "../../src/cli/utils.ts";
 import type { ApproveRequest } from "../../src/cli/terminal.ts";
+import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import type { Env } from "../../src/defaults.ts";
 import type { Embed } from "../../src/llm/embeddings.ts";
 import type { Response } from "../../src/llm/messages.ts";
 import { compareCodeUnits } from "../../src/diagnostics.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
+import { advance, RunResult } from "../../src/run.ts";
 import { VectorDBMemory } from "../../src/memory/vectordb.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { ToolContext } from "../../src/tools/context.ts";
@@ -717,15 +721,6 @@ output: done
     TIMEOUT,
   );
 
-  test("a status lists at most 20 asks and waits, with a note", () => {
-    const asks = Array.from({ length: 25 }, (_, n) => ({ call: `c${n}`, question: "q" }));
-    const waits = Array.from({ length: 22 }, (_, n) => ({ node: `n${n}` }));
-    const shown = shownStatus({ run: "r1", status: "waiting", asks, waits, log: "l", seq: 1 });
-    expect((shown["asks"] as unknown[]).length).toBe(20);
-    expect((shown["waits"] as unknown[]).length).toBe(20);
-    expect(shown["not_shown"]).toBe("5 more asks and 2 more waits; the run's log has all");
-  });
-
   test("only the reading tools may run beside other calls", () => {
     const { tools } = runTools();
     const safe = tools.filter((each) => each.isConcurrencySafe?.({}) === true).map((each) => each.name);
@@ -1370,4 +1365,338 @@ output: \${said.output}
     },
     TIMEOUT,
   );
+});
+
+describe("ChatRuns", () => {
+  const TIMEOUT = 10_000;
+  const CHAT = "chat-1";
+  let runs: ChatRuns | null = null;
+
+  afterEach(async () => {
+    await runs?.dispose();
+    runs = null;
+  });
+
+  /** The chat's runs over the temporary root, its logs under `<root>/runs`, on a held clock. */
+  function childRuns(options: Partial<ChatRunsOptions> = {}): ChatRuns {
+    runs = new ChatRuns({
+      root,
+      logDir: join(root, "runs"),
+      home: join(root, "home"),
+      env: NO_ENV,
+      llmConfig: {},
+      scheduler: heldScheduler().scheduler,
+      chatRunId: CHAT,
+      skillsFor: () => null,
+      ...options,
+    });
+    return runs;
+  }
+
+  /** Load `text` as the flow `<root>/<name>`. */
+  function flow(text: string, name = "child.yaml"): Promise<ComposedFlow> {
+    return loadConfinedText(root, join(root, name), text, NO_ENV);
+  }
+
+  /** Child `id`'s first status numbered after `after` (default: any) that isn't `running`. */
+  async function settled(children: ChildRuns, id: string, after = 0): Promise<ChildStatus> {
+    let status = children.status(id);
+    while (status.seq <= after || status.status === "running") status = await children.next(id, status.seq);
+    return status;
+  }
+
+  const AGENT = "id: f\nname: f\nnodes:\n  a: {kind: agent, prompt: hi}\noutput: ${a.output}\n";
+
+  test(
+    "a child whose provider has no key isn't started and leaves no log",
+    async () => {
+      const children = childRuns({ llmConfig: { provider: "openai", model: "gpt-5.5" } });
+      await expect(children.start(await flow(AGENT), {})).rejects.toThrow(MissingKeyError);
+      await expect(children.start(await flow(AGENT), {})).rejects.toThrow("$OPENAI_API_KEY is not set");
+      expect(existsSync(join(root, "runs"))).toBe(false);
+    },
+    TIMEOUT,
+  );
+
+  /** Log a line from CODE, then say "ok". */
+  const CHATTY = `id: chatty
+name: chatty
+nodes:
+  talk:
+    kind: code
+    output: !str
+    code: |
+      console.log("x");
+      console.error("y");
+      return "ok";
+output: \${talk.output}
+`;
+
+  // It replaces the process's console methods, so it relies on a file's tests running one at a time.
+  test(
+    "a child's CODE console output goes to the console file, never through the process's console",
+    async () => {
+      const printed: string[] = [];
+      const original = { log: console.log, error: console.error };
+      const record = (...args: unknown[]) => void printed.push(args.join(" "));
+      console.log = record;
+      console.error = record;
+      try {
+        const consoleFile = join(root, "console.log");
+        const children = childRuns({ consoleFile });
+        await children.start(await flow(CHATTY), {});
+        expect(await settled(children, "r1")).toMatchObject({ status: "succeeded", output: "ok" });
+        expect(readFileSync(consoleFile, "utf8")).toBe("x\ny\n");
+        expect(console.log).toBe(record);
+        expect(console.error).toBe(record);
+        expect(printed).toEqual([]);
+      } finally {
+        console.log = original.log;
+        console.error = original.error;
+      }
+    },
+    TIMEOUT,
+  );
+
+  /** A flow that appends to its memory's index. */
+  const REMEMBER = `id: answer
+name: answer
+input:
+  lessons: !FileMemory
+nodes:
+  add:
+    kind: call
+    call: {lessons: append}
+    input: {path: MEMORY.md, text: noted}
+output: \${add.output.path}
+`;
+
+  /** Takes a line from its inbox, then appends to its memory's index. */
+  const REMEMBER_LATER = `id: answer
+name: answer
+input:
+  lessons: !FileMemory
+  messages: !Inbox(str)
+nodes:
+  heard:
+    kind: call
+    call: take
+    input:
+      from: \${input.messages}
+  add:
+    kind: call
+    call: {lessons: append}
+    depends_on: [heard]
+    input: {path: MEMORY.md, text: heard}
+output: \${add.output.path}
+`;
+
+  describe("memory", () => {
+    test(
+      "a child's memory input gets its default, as yian run binds it, and the chat notes it created it",
+      async () => {
+        const children = childRuns();
+        const remember = await flow(REMEMBER);
+        await children.start(remember, {}, { project: root });
+        const first = await settled(children, "r1");
+        expect(first.status).toBe("succeeded");
+        // The flow's folder is the chat's root, so the identity is the one `yian run` gives there.
+        const identity = defaultIdentity(root, "answer", "lessons");
+        const location = defaultLocation(join(root, "home"), identity, "FileMemory");
+        // The identity only: the chat's statuses reach its log and its model, which never hold a location.
+        expect(first.memory_notes).toEqual([`memory lessons: ${identity} (new)`]);
+        expect(childEvent(first)!.text).toContain(`; noted ${JSON.stringify(first.memory_notes![0])}`);
+        expect(JSON.stringify(first)).not.toContain(join(root, "home"));
+        // Read once, they aren't said again.
+        children.markRead("r1", first.seq);
+        await children.start(remember, {}, { project: root });
+        const second = await settled(children, "r2");
+        expect(second.status).toBe("succeeded");
+        expect(second.memory_notes).toBeUndefined();
+        expect(readFileSync(join(location, "MEMORY.md"), "utf8")).toBe("noted\nnoted");
+      },
+      TIMEOUT,
+    );
+
+    test(
+      "a waiting child moves on with its memory bound again, and a drift its advance finds is noted",
+      async () => {
+        const passed: unknown[] = [];
+        const children = childRuns({
+          advance: async (options) => {
+            passed.push(options.memory);
+            const result = await advance(options);
+            const drift = { input: "lessons", identity: "i", recorded: "v1", current: "v2" };
+            return new RunResult({ ...result, memoryDrift: [drift] });
+          },
+        });
+        await children.start(await flow(REMEMBER_LATER), {}, { project: root });
+        const waiting = await settled(children, "r1");
+        expect(waiting.status).toBe("waiting");
+        children.markRead("r1", waiting.seq);
+        await children.message("r1", "messages", "hi");
+        const done = await settled(children, "r1", waiting.seq);
+        expect(done.status).toBe("succeeded");
+        expect(passed).toHaveLength(1);
+        expect(Object.keys(passed[0] as object)).toEqual(["lessons"]);
+        expect(done.memory_notes).toEqual([
+          "memory `lessons` changed since this run started; the run keeps its recorded recall",
+        ]);
+        const location = defaultLocation(join(root, "home"), defaultIdentity(root, "answer", "lessons"), "FileMemory");
+        expect(readFileSync(join(location, "MEMORY.md"), "utf8")).toBe("heard");
+      },
+      TIMEOUT,
+    );
+
+    test(
+      "a refusal to bind or open a child's memory names no location",
+      async () => {
+        const home = join(root, "home");
+        const memories = join(home, ".yian", "memory");
+        const remember = await flow(REMEMBER);
+        const location = defaultLocation(home, defaultIdentity(root, "answer", "lessons"), "FileMemory");
+        // A file where the memory's folder goes: its open refuses it.
+        mkdirSync(dirname(location), { recursive: true });
+        writeFileSync(location, "");
+        const opened = await childRuns()
+          .start(remember, {}, { project: root })
+          .then(() => null, (error: Error) => error.message);
+        expect(opened).toContain("memory `lessons`");
+        expect(opened).not.toContain(root);
+        // A symlinked project folder: the bind refuses it.
+        rmSync(join(memories, projectKey(root)), { recursive: true });
+        mkdirSync(join(root, "elsewhere"));
+        symlinkSync(join(root, "elsewhere"), join(memories, projectKey(root)));
+        const bound = await childRuns()
+          .start(remember, {}, { project: root })
+          .then(() => null, (error: Error) => error.message);
+        expect(bound).toContain(`~/.yian/memory/${projectKey(root)} is a symlink`);
+        expect(bound).not.toContain(root);
+      },
+      TIMEOUT,
+    );
+
+    test.skipIf(process.getuid?.() === 0)(
+      "an OS error under a ~/.yian/memory linked out of the home folder names no location",
+      async () => {
+        const home = join(root, "home");
+        const elsewhere = join(root, "elsewhere", "mem");
+        mkdirSync(elsewhere, { recursive: true });
+        mkdirSync(join(home, ".yian"), { recursive: true });
+        symlinkSync(elsewhere, join(home, ".yian", "memory"));
+        // The project's folder can't take the flow's: the open's mkdir fails there.
+        const key = join(elsewhere, projectKey(root));
+        mkdirSync(key, { mode: 0o500 });
+        try {
+          const refused = await childRuns()
+            .start(await flow(REMEMBER), {}, { project: root })
+            .then(() => null, (error: Error) => error.message);
+          expect(refused).toContain("EACCES");
+          // Bun's recursive mkdir names the folder it failed on, Node's the memory's own folder: each
+          // is written from `~` or by its role, and neither names where it is.
+          const scrubbed = [`~/.yian/memory/${projectKey(root)}/answer`, "the memory's folder"];
+          expect(scrubbed.some((path) => refused!.endsWith(`mkdir '${path}'`)), refused!).toBe(true);
+          expect(refused).not.toContain(root);
+          expect(refused).not.toContain(tmpdir());
+        } finally {
+          chmodSync(key, 0o700);
+        }
+      },
+      TIMEOUT,
+    );
+
+    test.skipIf(process.getuid?.() === 0)(
+      "an OS error making a child's store folder names it from ~/.yian/memory, not as the memory's folder",
+      async () => {
+        const home = join(root, "home");
+        mkdirSync(join(home, ".yian", "memory"), { recursive: true });
+        // The project's folder can't take the flow's: the open's mkdir fails there.
+        const key = join(home, ".yian", "memory", projectKey(root));
+        mkdirSync(key, { mode: 0o500 });
+        const cases =
+          "id: cases\nname: cases\ninput:\n  cases: !VectorDBMemory\nnodes:\n  add:\n    kind: call\n" +
+          "    call: {cases: add}\n    input: {text: x}\noutput: ${add.output.id}\n";
+        const env = (name: string) => (name === "YIAN_DEFAULT_EMBEDDING" ? "openai/m" : NO_ENV(name));
+        const embed = async (texts: readonly string[]) => texts.map(() => Float32Array.of(1, 0));
+        try {
+          const refused = await childRuns({ env, embed })
+            .start(await flow(cases), {}, { project: root })
+            .then(() => null, (error: Error) => error.message);
+          expect(refused).toContain("EACCES");
+          expect(refused).toContain(`~/.yian/memory/${projectKey(root)}/cases`);
+          expect(refused).not.toContain("the memory's folder");
+          expect(refused).not.toContain(root);
+        } finally {
+          chmodSync(key, 0o700);
+        }
+      },
+      TIMEOUT,
+    );
+
+    test(
+      "a waiting child whose memory folder is gone fails without pointing at --memory, which the chat lacks",
+      async () => {
+        const children = childRuns();
+        await children.start(await flow(REMEMBER_LATER), {}, { project: root });
+        const waiting = await settled(children, "r1");
+        expect(waiting.status).toBe("waiting");
+        const identity = defaultIdentity(root, "answer", "lessons");
+        rmSync(defaultLocation(join(root, "home"), identity, "FileMemory"), { recursive: true });
+        await children.message("r1", "messages", "hi");
+        const failed = await settled(children, "r1", waiting.seq);
+        expect(failed).toMatchObject({ status: "failed" });
+        expect(failed.note).toBe(
+          "the chat couldn't move the run: memory `lessons`: its folder is gone, so the run can't continue",
+        );
+      },
+      TIMEOUT,
+    );
+
+    test(
+      "a waiting child whose memory folder lost its .yian fails saying it isn't a memory any more",
+      async () => {
+        const children = childRuns();
+        await children.start(await flow(REMEMBER_LATER), {}, { project: root });
+        const waiting = await settled(children, "r1");
+        const location = defaultLocation(join(root, "home"), defaultIdentity(root, "answer", "lessons"), "FileMemory");
+        rmSync(join(location, ".yian"), { recursive: true });
+        await children.message("r1", "messages", "hi");
+        const failed = await settled(children, "r1", waiting.seq);
+        expect(failed.note).toBe(
+          "the chat couldn't move the run: memory `lessons`: it isn't a memory any more, so the run can't continue",
+        );
+      },
+      TIMEOUT,
+    );
+
+    test(
+      "a child given no project folder has no default memories",
+      async () => {
+        const children = childRuns();
+        await expect(children.start(await flow(REMEMBER), {})).rejects.toThrow(
+          "a flow with no file has no default memories, so `lessons` can't be bound",
+        );
+      },
+      TIMEOUT,
+    );
+
+    test(
+      "a child whose flow has no plain id isn't started",
+      async () => {
+        const children = childRuns();
+        const unnamed = await flow(REMEMBER.replace("id: answer", 'id: "Answer questions"'));
+        // The chat has no --memory to suggest.
+        const refused = await children.start(unnamed, {}, { project: root }).then(
+          () => null,
+          (error: Error) => error.message,
+        );
+        expect(refused).toBe(
+          "give the flow a plain `id:` of at most 100 characters (letters, digits, `.`, `_`, `-`) " +
+            "so `lessons` gets a default memory",
+        );
+        expect(existsSync(join(root, "runs"))).toBe(false);
+      },
+      TIMEOUT,
+    );
+  });
 });

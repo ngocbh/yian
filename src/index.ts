@@ -15,8 +15,9 @@
  *   answer comes later; `FunctionTool` and `tool` (`tools/function_tools`); `PermanentToolError`,
  *   `TransientToolError` and `ReportedToolError` (`tools/errors`), and `ToolAttemptsFailed`
  *   (`nodes/tool/node`);
- * - the host calls on a run log, `send`, `withdraw`, `complete`, `release` (with `ReleaseOptions`),
- *   `close`, `interrupt`, `cancel` and `pendingCalls`, with their errors `RunBusyError` and
+ * - the host calls on a run log, `send`, `withdraw` (with `WithdrawOptions`, `Withdrawal` and
+ *   `WithdrawnEvent`), `complete`, `release` (with `ReleaseOptions`), `close`, `interrupt`,
+ *   `cancel` and `pendingCalls`, their `DeliveryOptions`, and their errors `RunBusyError` and
  *   `DeliveryRefused` (`run`);
  * - memory: `MemoryBase`, `isMemory`, the session's errors `MemoryBusyError`,
  *   `ChangeIdReusedError` and `MemoryMissingError`, `memoryErrorKind`, and the contract and
@@ -80,6 +81,7 @@ export {
   cancel,
   close,
   complete,
+  type DeliveryOptions,
   DeliveryRefused,
   interrupt,
   pendingCalls,
@@ -89,6 +91,9 @@ export {
   runFlow,
   send,
   withdraw,
+  type Withdrawal,
+  type WithdrawnEvent,
+  type WithdrawOptions,
 } from "./run.ts";
 export { pending, ToolContext } from "./tools/context.ts";
 export { PermanentToolError, ReportedToolError, TransientToolError } from "./tools/errors.ts";

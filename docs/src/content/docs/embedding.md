@@ -245,6 +245,7 @@ Your program reaches a waiting run by its log path:
 |---|---|---|
 | `send(log, inbox, value, { key })` | the send's seq | Adds a message to an `Inbox(T)` input; `value` must fit `T`, read as [a tool's result](/code-and-tools/#values-in-and-out) (a whole number is an `int`). With `key`, a later send with the same key, inbox, value and `by` appends nothing and returns the first seq, so a send is safe to retry |
 | `withdraw(log, inbox, { by })` | `[{seq, value, by}]` | Takes back the messages nothing has read yet: with `by`, only those sent with the same `by`, every field alike; without, everyone's. Each comes back with its sender's `by` |
+| `withdraw(log, inbox, { events })` | `{withdrawn, alreadyRead, alreadyWithdrawn}` | Takes back the messages with those seqs that nothing has read yet, and leaves the rest queued. Of the others, `alreadyRead` lists those a take or agent read, and `alreadyWithdrawn` those an earlier `withdraw` took back. With `by`, each must be a message sent with that `by` |
 | `close(log, inbox)` | the seq, or `null` if already closed | Refuses later sends; takes still read what is queued |
 | `complete(log, callId, result)` | the seq, or `null` for the same answer twice by the same `by` | Answers a pending host call (see [Pending host calls](#pending-host-calls)) or a held one. The same answer by another `by` is refused `call_settled` |
 | `release(log, callId, { note })` | the seq, or `null` if released before by the same `by` | Runs a held call (see [Gate tool calls](#gate-tool-calls)). A release after one by another `by` is refused `call_settled` |
@@ -310,6 +311,7 @@ A refused call appends nothing and throws `DeliveryRefused`, whose `reason` says
 | `not_host_call` | The id names a take, a sleep or an agent's [flow call](/agents/#flows-as-tools), which the run answers itself |
 | `not_held` | `release` of a call no `beforeToolCall` held: its tool ran and pended |
 | `call_settled` | The call already has an answer, timed out, was closed or was released |
+| `unknown_send` | `withdraw`'s `events` names a seq that is no message sent to that inbox or, with `by`, one sent with another `by` |
 
 ### Record a person's action
 

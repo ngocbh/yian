@@ -177,7 +177,7 @@ const TEXT_REPLY = "{format: yian.message.v1, role: assistant, parts: [{type: te
 const MODEL = (entry: string) => `${RUN}host: {models: {n: {agent: [${entry}]}}}\n`;
 const AT = "host.models.n.agent[0]";
 const SENDS =
-  "`host.sends` items are {inbox, event, after?|down?}, {close}, {withdraw, after?}, {interrupt, after?}, {complete, output | error} or {release, note?, after?}, each with an optional `by` mapping; " +
+  "`host.sends` items are {inbox, event, after?|down?}, {close}, {withdraw, after? | sends?}, {interrupt, after?}, {complete, output | error} or {release, note?, after?}, each with an optional `by` mapping; " +
   "`hold: true` marks an item sent while the run waits that isn't followed by an advance";
 const COUNTS = "`host.sends[0].after` counts must be ints from 1, `chunk` from 0";
 const STOP_COUNTS = "`host.stop.a.after` counts must be ints from 1, `chunk` from 0";
@@ -394,6 +394,9 @@ describe("checkCase", () => {
       "[{withdraw: m, down: true}]",
       "[{withdraw: m, after: 1}]",
       "[{withdraw: m, inbox: m}]",
+      "[{withdraw: m, sends: 1}]",
+      "[{withdraw: m, sends: [a]}]",
+      "[{withdraw: m, sends: [1], after: {node: chat, model_call: 1}}]",
       "[{inbox: m, event: a, hold: false}]",
       "[{inbox: m, event: a, after: {node: chat, model_call: 1}, hold: true}]",
       "[{interrupt: m, after: {node: chat, model_call: 1}, hold: true}]",

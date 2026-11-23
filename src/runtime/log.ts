@@ -41,11 +41,12 @@ import { formatRecordTime as recordTimeText, RECORD_TIME } from "../typesys/temp
 import { isList, isRecord, jsonPart, requireFields, valueRepr, writeAsText } from "../typesys/values.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 35;
+export const SCHEMA_VERSION = 36;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
 const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([
   10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34,
+  35,
 ]);
 
 /** A typed value's wire object `{kind, value}`. */
@@ -806,18 +807,27 @@ export class InboxWithdrawnRecord {
   readonly events: readonly number[];
   /** Who withdrew them, as the host's call said (`validatedBy`); `null` when it said no one. */
   readonly by: Author | null;
+  /**
+   * Whether the host named the sends: then `events` holds those still unread. Otherwise it is every
+   * unread send (with `by`, every one `by` sent).
+   */
+  readonly chosen: boolean;
 
   /**
-   * @throws TypeError when `inbox` isn't a string, or `by` isn't an author or null.
+   * @throws TypeError when `inbox` isn't a string, `by` isn't an author or null, or `chosen` isn't
+   *   a boolean.
    * @throws RangeError when `inbox` or a field of `by` is empty, or `events` is empty or isn't a
    *   list of strictly increasing positive safe integers.
    */
-  constructor(inbox: string, events: readonly number[], options: { by?: Author | null } = {}) {
+  constructor(inbox: string, events: readonly number[], options: { by?: Author | null; chosen?: boolean } = {}) {
     this.inbox = requireName(inbox, "inbox");
     const seqs = validatedEventSeqs(events, "events");
     if (seqs.length === 0) throw new YianRangeError("events must be non-empty");
     this.events = Object.freeze(seqs);
     this.by = validatedBy(options.by, "by");
+    const chosen = options.chosen ?? false;
+    if (typeof chosen !== "boolean") throw new YianTypeError("chosen must be a boolean");
+    this.chosen = chosen;
     Object.freeze(this);
   }
 }
@@ -2830,18 +2840,23 @@ function presentFields(payload: JsonObject, fields: readonly string[], optional:
 }
 
 /**
- * Decode a `run_started` or `run_resumed` payload's `gated` field, which only a gated run's payload
- * holds, as `true`; `label` names the payload.
+ * Decode a payload's flag `field`, which a payload holds only as `true`, and leaves out otherwise
+ * (`absent` says which records leave it out); `label` names the payload.
  *
  * @throws TypeError when it is there but isn't a boolean.
  * @throws RangeError when it is `false`.
  */
-function gatedFromPayload(payload: JsonObject, label: string): boolean {
-  if (!Object.hasOwn(payload, "gated")) return false;
-  if (!wireBool(payload["gated"], `${label} gated`)) {
-    throw new YianRangeError(`${label} gated must be true; a run that isn't gated leaves it out`);
+function flagFromPayload(payload: JsonObject, field: string, label: string, absent: string): boolean {
+  if (!Object.hasOwn(payload, field)) return false;
+  if (!wireBool(payload[field], `${label} ${field}`)) {
+    throw new YianRangeError(`${label} ${field} must be true; ${absent} leaves it out`);
   }
   return true;
+}
+
+/** Decode a `run_started` or `run_resumed` payload's `gated` field, which only a gated run's payload holds. */
+function gatedFromPayload(payload: JsonObject, label: string): boolean {
+  return flagFromPayload(payload, "gated", label, "a run that isn't gated");
 }
 
 /**
@@ -3048,13 +3063,18 @@ const RECORD_CODECS: readonly RecordCodec[] = [
   recordCodec({
     cls: InboxWithdrawnRecord,
     kind: "inbox_withdrawn",
-    encode: (record) => ({ inbox: record.inbox, events: record.events.map(BigInt), ...byPayload(record.by) }),
+    encode: (record) => ({
+      inbox: record.inbox,
+      events: record.events.map(BigInt),
+      ...byPayload(record.by),
+      ...(record.chosen ? { chosen: true } : {}),
+    }),
     decode: (payload, label) => {
-      requireFields(payload, presentFields(payload, ["inbox", "events"], ["by"]), label);
+      requireFields(payload, presentFields(payload, ["inbox", "events"], ["by", "chosen"]), label);
       return new InboxWithdrawnRecord(
         requireName(payload["inbox"], `${label} inbox`),
         wireItems(payload["events"], `${label} events`, wireInt),
-        { by: byFromPayload(payload, label) },
+        { by: byFromPayload(payload, label), chosen: flagFromPayload(payload, "chosen", label, "a withdraw of every unread send") },
       );
     },
   }),

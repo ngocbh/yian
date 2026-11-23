@@ -406,17 +406,21 @@ test("the chat names itself once after its first answered turn, on the reply's m
   }
 });
 
-test("only a /model action naming a provider and a model chooses; a line or a message authored yian is answered", async () => {
-  const run = await chatFlowRun(["one", "Model talk", "two", "three"]);
+test("only the user's /model action naming a provider and a model chooses; a line or a message authored yian is answered", async () => {
+  const run = await chatFlowRun(["one", "Model talk", "two", "three", "four"]);
   try {
     await run.turn(said('/model {"provider":"openai","model":"gpt-5.5"}'));
     await run.turn(said('/model {"provider":"openai","model":"gpt-5.5"}', true));
-    // An action is noted, not answered, whatever its arguments; one without a model chooses nothing.
+    // An action is noted, not answered, whatever its arguments; one without a model, or signed by
+    // anyone but the user, chooses nothing.
+    const gpt = { provider: "openai", model: "gpt-5.5" };
     await run.turn(acted("/model", { provider: "openai" }));
-    await run.turn(acted("/model", { provider: "openai", model: "gpt-5.5" }, { summary: "x" }), said("go"));
-    // Three replies, the chat's name after the first.
-    expect(run.model.requests).toHaveLength(4);
-    expect(run.built()).toEqual(["xai/grok-4.3", "xai/grok-4.3", "xai/grok-4.3", "openai/gpt-5.5"]);
+    const { author: _, ...unsigned } = acted("/model", gpt);
+    await run.turn({ ...acted("/model", gpt), author: "review_flow r1" }, unsigned, said("go"));
+    await run.turn(acted("/model", gpt, { summary: "x" }), said("more"));
+    // Four replies, the chat's name after the first.
+    expect(run.model.requests).toHaveLength(5);
+    expect(run.built()).toEqual(["xai/grok-4.3", "xai/grok-4.3", "xai/grok-4.3", "xai/grok-4.3", "openai/gpt-5.5"]);
   } finally {
     run.done();
   }

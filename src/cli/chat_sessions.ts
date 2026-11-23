@@ -27,7 +27,7 @@ import {
 } from "../runtime/log.ts";
 import { readRunIndex, type RunIndexRow, updateRunIndex } from "../runtime/run_index.ts";
 import { toHost } from "../typesys/values.ts";
-import { CHAT_FLOW_FILE, CHAT_FLOW_ID } from "./run.ts";
+import { CHAT_FLOW_FILE, CHAT_FLOW_ID, CHAT_PERSON } from "./run.ts";
 import { sanitize } from "./sanitize.ts";
 import type { PickChoice } from "./terminal.ts";
 
@@ -60,10 +60,13 @@ function onlyText(message: unknown): string | null {
   return part.type === "text" && typeof part.text === "string" ? part.text : null;
 }
 
-/** The model a message sent to the chat chooses (a `/model` action), or null for any other message. */
-export function chosenModel(message: unknown): ModelChoice | null {
-  const parts = (message as { parts?: unknown } | null)?.parts;
-  if (!Array.isArray(parts) || parts.length !== 1) return null;
+/**
+ * The model a message sent to the chat chooses (`person`'s `/model` action), or null for any other
+ * message.
+ */
+export function chosenModel(message: unknown, person: string): ModelChoice | null {
+  const { author, parts } = (message ?? {}) as { author?: unknown; parts?: unknown };
+  if (author !== person || !Array.isArray(parts) || parts.length !== 1) return null;
   const part = parts[0] as { type?: unknown; tool?: unknown; arguments?: unknown };
   return part.type === "action" && part.tool === MODEL_TOOL ? recordedModel(part.arguments) : null;
 }
@@ -176,7 +179,7 @@ function readSession(row: RunIndexRow, log: string): ChatSession | null {
       const transcript = value?.["transcript"] as { history?: unknown } | null | undefined;
       seeded = spokenCount(transcript?.history) || seeded;
     } else if (record.key === "__start__.owner_messages") {
-      const choice = chosenModel(value);
+      const choice = chosenModel(value, CHAT_PERSON);
       if (choice !== null) chosen = choice;
       else if (value?.["author"] == null) {
         lines++;
@@ -291,14 +294,15 @@ export async function sessionSeed(
   env: Env,
 ): Promise<SessionSeed> {
   const folded = await foldRunLog(session.log, { env });
-  let state = { summary: "", history: [] as unknown[][], noted: [] as unknown[] };
+  let state: { summary: string; history: unknown[][]; noted?: unknown[] } = { summary: "", history: [] };
   for (const { entry, value } of folded.records) {
     const record = entry.envelope.record;
     if (value !== null && record instanceof PoolCommitRecord && TURN_END.test(record.key)) {
       state = toHost(value.value) as typeof state;
     }
   }
-  const { summary, history, noted } = state;
+  // A chat that predates noted actions has none.
+  const { summary, history, noted = [] } = state;
   // A turn of their own would use up one that compaction keeps.
   const turns = noted.length === 0 ? history : [...history.slice(0, -1), [...(history.at(-1) ?? []), ...noted]];
   const transcript = { summary, history: turns };

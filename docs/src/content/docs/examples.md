@@ -638,8 +638,9 @@ Keep a chat history under a size budget by folding older turns into a rolling su
 # rolling summary. The history is a list of turns, each a list of built-in `Message`s; `keep`
 # counts turns, so a tool call and its result never part. The budget counts the characters of
 # the messages' text parts, and of each person's action (an `action` part) as JSON; the
-# summarizer reads those text parts, and each action as `<author> <tool>: <summary>`, its
-# arguments when it has no summary (tool calls, their results and reasoning are left out).
+# summarizer reads those text parts, and each action as `<author> <tool>: <summary>` (its
+# arguments without a summary) and ` -> <result>` when it has one (tool calls, their results and
+# reasoning are left out).
 id: compact_history
 name: compact_history
 description: Keep a chat history's text under a budget by folding older turns into a rolling summary.
@@ -685,7 +686,8 @@ defs:
 
           New messages to fold in (context only), oldest first:
           ${join([(m.role + ": " + p.text) if p.type == "text"
-            else ((m.author :- m.role) + " " + p.tool + ": " + (p.summary :- str(p.arguments :- ""))
+            else ((m.author :- m.role) + " " + p.tool
+              + (": " + (p.summary :- str(p.arguments)) if p.summary != null or p.arguments != null else "")
               + (" -> " + p.result if p.result != null else ""))
             for t in older for m in t for p in m.parts if p.type == "text" or p.type == "action"])}
     output: !Compacted

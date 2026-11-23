@@ -10,9 +10,9 @@
 #
 # A message of `action` parts only is something the user did themselves: `/model`, or a press on a
 # run's tool. A turn notes it in its state without answering it, and the next answered turn reads
-# it before what was said, in that turn. A `/model` action's `{provider, model}` arguments choose
-# the model of the replies and compactions after it, so the choice is in the run log and a resume
-# replays it. `model` is the choice the chat starts with (null for the run's defaults), and
+# it before what was said, in that turn. A `/model` action signed `the user` chooses, by its
+# `{provider, model}` arguments, the model of the replies and compactions after it, so the choice
+# is in the run log and a resume replays it. `model` is the choice the chat starts with (null for the run's defaults), and
 # `transcript` an earlier chat's, which this one goes on from.
 #
 # After its first answered turn, the chat names itself once: one small model call on the model
@@ -208,12 +208,12 @@ defs:
           model: ${input.model}
         output: !Heard
         code: |
-          // An action-only message is noted, never answered. Only the host sends actions, so a
-          // `/model` action's arguments are the user's choice of model.
+          // An action-only message is noted, never answered. A `/model` action the user signed
+          // chooses the model: a run's report is signed with its label, never `the user`.
           const acted = (message) =>
             message.parts.length > 0 && message.parts.every((part) => part.type === "action");
           const choice = (message) => {
-            const part = message.parts.length === 1 ? message.parts[0] : null;
+            const part = message.author === "the user" && message.parts.length === 1 ? message.parts[0] : null;
             const { provider, model } = part?.tool === "/model" ? (part.arguments ?? {}) : {};
             return typeof provider === "string" && typeof model === "string" ? { provider, model } : null;
           };

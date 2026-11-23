@@ -68,7 +68,7 @@ import {
 import { type ChatCommandOutcome, inboxChat, type InboxChatHost } from "./inbox_chat.ts";
 import { type Colored, paint, printStyled, type Style } from "./render.ts";
 import { type FileIssueHost, fileIssueTool, hostFacts } from "./report_issue.ts";
-import { CHAT_FLOW_FILE, CHAT_FLOW_ID, validateRunLogOptions } from "./run.ts";
+import { CHAT_FLOW_FILE, CHAT_FLOW_ID, CHAT_PERSON, validateRunLogOptions } from "./run.ts";
 import { sanitize } from "./sanitize.ts";
 import { RunProgress, runScreen } from "./run_view.ts";
 import { cliLayer, defaultRunsDir, freshLog } from "./startup.ts";
@@ -88,7 +88,7 @@ const CHAT_LABEL = CHAT_FLOW_FILE;
  * (`/model`). The assistant itself goes by its flow's id (`CHAT_FLOW_ID`), which signs its
  * messages to its runs.
  */
-const PERSON = "the user";
+const PERSON = CHAT_PERSON;
 
 /** The options `chat` reads; an absent option is `undefined`, an absent flag `false`. */
 export interface ChatOptions {

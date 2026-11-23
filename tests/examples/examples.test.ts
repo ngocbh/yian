@@ -230,21 +230,38 @@ test("compact_history folds a person's actions as `<author> <tool>: <summary>` l
       user("a1"),
       assistant("b1"),
     ],
-    [action({ tool: "flows_message", arguments: { run: "r1", text: "go" }, result: "sent" })],
+    [
+      action({ tool: "flows_message", arguments: { run: "r1", text: "go" }, result: "sent" }),
+      action({ tool: "flows_stop", result: "stopped" }),
+      action({ tool: "flows_close" }),
+    ],
   ];
   // The 4 characters of text are under 10, but the actions' JSON isn't.
   const model = new PromptModel({ reply: "unused", summary: "S" });
   const over = await runFlow(flow, { summary: "", history, budget: 10n, keep: 0n }, { ...opts, models: serving(model) });
   expect(over.output).toEqual({ summary: "S", history: [] });
-  const prompt = model.requests[0]!.messages.at(-1)!.text();
+  const lines = model.requests[0]!.messages.at(-1)!.text().split("\n");
   for (const line of [
     "Ada shell_type: Ada typed into shell 1",
     'Ada /model: {"model":"grok-4","provider":"xai"}',
     "user: a1",
     'Ada flows_message: {"run":"r1","text":"go"} -> sent',
+    // With neither a summary nor arguments, no colon.
+    "Ada flows_stop -> stopped",
+    "Ada flows_close",
   ]) {
-    expect(prompt).toContain(line);
+    expect(lines).toContain(line);
   }
+});
+
+// The template's comments sit above `id:`, so the flow below it, comments and all, is the example's.
+test("the compact_history skill template is examples/compact_history.yaml from its id on", () => {
+  const fromId = (path: string) => {
+    const text = readFileSync(path, "utf8");
+    return text.slice(text.search(/^id:/m));
+  };
+  const name = "compact_history.yaml";
+  expect(fromId(join(TEMPLATES_DIR, name))).toBe(fromId(join(EXAMPLES_DIR, name)));
 });
 
 test.each([

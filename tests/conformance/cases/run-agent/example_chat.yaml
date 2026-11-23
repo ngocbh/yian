@@ -1,6 +1,7 @@
-# From examples/chat.yaml, with `tools: [hold]` on `reply`, and examples/compact_history.yaml
-# beside it. Two turns over the `owner_messages` inbox of messages; beside each turn's `take`,
-# `compacted` passes the short history through (`folded` is skipped, no model call).
+# From an older copy of examples/chat.yaml, with `tools: [hold]` on `reply`, and an older
+# examples/compact_history.yaml beside it. Two turns over the `owner_messages` inbox of messages;
+# beside each turn's `take`, `compacted` passes the short history through (`folded` is skipped, no
+# model call).
 # Turn 1: the host sends "Hi"; after the reply's first model call it sends "Short, please", which
 # the reply reads as a late steer (a `steer` step) and answers with one more model call.
 # Turn 2: the host sends "Ask the owner"; the reply calls `hold`, a host tool that pends, so the

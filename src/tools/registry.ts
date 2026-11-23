@@ -285,12 +285,14 @@ export function registerTool(
           parametersJsonSchema: tool.parametersJsonSchema,
           execute: tool.execute,
           isConcurrencySafe: tool.isConcurrencySafe,
-          // A tool from an older copy of yian (the brand check accepts one) lacks the next four
+          // A tool from an older copy of yian (the brand check accepts one) lacks the next six
           // fields; `FunctionTool` stores their `undefined` as `null`, or `false` for `resumable`.
           parametersValidator: tool.parametersValidator,
           outputJsonSchema: tool.outputJsonSchema,
           outputValidator: tool.outputValidator,
           resumable: tool.resumable,
+          gateTarget: tool.gateTarget,
+          refuseUngated: tool.refuseUngated,
         })
       : tool,
   );
@@ -1176,6 +1178,21 @@ export class ToolSet {
   }
 
   /**
+   * @internal Return what checked call `call` acts on, as its tool's `gateTarget` gives it from
+   * the argument `execute` would get and the context `invoke` would give it with `options`,
+   * unchecked; `null` for a tool with none.
+   *
+   * @throws TypeError for a value that isn't a `CheckedCall`; whatever `gateTarget` throws.
+   */
+  gateTarget(call: CheckedCall, options?: InvokeOptions): unknown {
+    const entry = CALLS.get(call);
+    if (entry === undefined) throw new YianTypeError("gateTarget takes a CheckedCall from validate");
+    // `??`: a tool built by an older copy of yian has no `gateTarget` field.
+    const target = entry.tool.gateTarget ?? null;
+    return target === null ? null : target(entry.args(), this.contextOf(call.toolId, options));
+  }
+
+  /**
    * Check one call as `validate` describes, against the trusted schema when `trusted` is set, and
    * return the call recorded with its tool and argument.
    */
@@ -1236,18 +1253,10 @@ export class ToolSet {
     return [tool, payload];
   }
 
-  /**
-   * Call a checked tool with its argument and this call's context, then check the result when the
-   * tool declares an output, as `invoke` describes.
-   */
-  private async call(
-    tool: FunctionTool,
-    toolId: string,
-    args: Record<string, unknown>,
-    options: InvokeOptions = {},
-  ): Promise<unknown> {
+  /** The context of a call of the tool named `toolId` with `options`, as `invoke` describes it. */
+  private contextOf(toolId: string, options: InvokeOptions = {}): ToolContext {
     const node = options.node ?? "";
-    const ctx = new ToolContext({
+    return new ToolContext({
       // Without a run and a node nothing makes two calls the same call, so each gets its own id.
       callId: options.callId ?? (this.boundRunId && node ? toolCallId(this.boundRunId, node) : defaultRunId()),
       attempt: options.attempt ?? 1,
@@ -1258,6 +1267,19 @@ export class ToolSet {
       signal: options.signal ?? this.boundSignal ?? new AbortController().signal,
       interrupted: options.interrupted,
     });
+  }
+
+  /**
+   * Call a checked tool with its argument and this call's context, then check the result when the
+   * tool declares an output, as `invoke` describes.
+   */
+  private async call(
+    tool: FunctionTool,
+    toolId: string,
+    args: Record<string, unknown>,
+    options: InvokeOptions = {},
+  ): Promise<unknown> {
+    const ctx = this.contextOf(toolId, options);
     let result: unknown;
     try {
       result = await tool.execute(args, ctx);

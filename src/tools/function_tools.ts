@@ -6,8 +6,8 @@
  * validator (zod, valibot, ArkType, ...) or a raw JSON Schema; yian imports no validator library.
  * `stringArguments` and `stringArg` declare and read a tool's string arguments.
  *
- * Knows about: `tools/context`, `tools/errors`, `llm/messages` (the JSON check), typesys and
- * diagnostics.
+ * Knows about: `tools/context`, `tools/errors`, `tools/gate` (its text check), `llm/messages` (the
+ * JSON check), typesys and diagnostics.
  */
 
 import { reprText } from "../diagnostics.ts";
@@ -17,6 +17,7 @@ import type { JsonObject } from "../typesys/json.ts";
 import { isRecord, jsTypeName } from "../typesys/values.ts";
 import type { ToolContext } from "./context.ts";
 import { ReportedToolError } from "./errors.ts";
+import { checkGateText } from "./gate.ts";
 
 /**
  * The brand every `FunctionTool` carries. The registry checks it rather than `instanceof`, so a
@@ -70,6 +71,8 @@ export interface ToolOptions<
   execute: (args: ArgsOf<P>, ctx: ToolContext<any>) => ResultOf<O> | Promise<ResultOf<O>>;
   isConcurrencySafe?: ((args: ArgsOf<P>) => boolean) | null;
   resumable?: boolean;
+  gateTarget?: ((args: ArgsOf<P>, ctx: ToolContext<any>) => JsonObject | null) | null;
+  refuseUngated?: string | null;
 }
 
 /**
@@ -83,8 +86,10 @@ export interface ToolOptions<
  * @throws {TypeError} `name` or `description` is not a string, `parametersJsonSchema` or
  *   `outputJsonSchema` is not a plain object or not JSON, `parametersValidator` or
  *   `outputValidator` is not a Standard Schema v1 validator, `execute` is not a function,
- *   `isConcurrencySafe` is neither a function nor `null`, or `resumable` is not a boolean.
- * @throws {RangeError} `name` is empty, or `parametersJsonSchema`'s `type` is not `"object"`.
+ *   `isConcurrencySafe` or `gateTarget` is neither a function nor `null`, `resumable` is not a
+ *   boolean, or `refuseUngated` is neither a string nor `null`.
+ * @throws {RangeError} `name` is empty, `parametersJsonSchema`'s `type` is not `"object"`, or
+ *   `refuseUngated` is empty, has a lone surrogate or is over `GATE_TEXT_MAX_BYTES`.
  *
  * @example
  * const echo = new FunctionTool({
@@ -130,6 +135,20 @@ export class FunctionTool {
    * `ctx.callId`. Set it only for a tool that treats `callId` as an idempotency key.
    */
   readonly resumable: boolean;
+  /**
+   * Says what a call acts on, for the host's `beforeToolCall` (`GatedCall.target`); `null` when
+   * none was given. It gets what `execute` gets and the call's context, and runs only for a call
+   * the hook is asked about, once the call is checked. It must return at once and have no effects:
+   * a JSON object, never cut short, or `null`. When it throws, gives anything else, or gives a
+   * target whose hold would be over the run's `YIAN_MAX_EVENT_BYTES`, the call is refused.
+   */
+  readonly gateTarget: ((args: Record<string, unknown>, ctx: ToolContext<any>) => JsonObject | null) | null;
+  /**
+   * Keeps the tool from ever running unchecked: an agent's call to it in a run with no
+   * `beforeToolCall` hook reads this text as its error, and so does one whose target failed; a
+   * TOOL node's call, which nothing checks, fails. `null` when none was given.
+   */
+  readonly refuseUngated: string | null;
 
   /** Check the fields and build a frozen tool. */
   constructor(options: {
@@ -142,9 +161,11 @@ export class FunctionTool {
     outputJsonSchema?: JsonObject | null;
     outputValidator?: StandardSchemaV1 | null;
     resumable?: boolean;
+    gateTarget?: ((args: Record<string, unknown>, ctx: ToolContext<any>) => JsonObject | null) | null;
+    refuseUngated?: string | null;
   }) {
     const { name, description, parametersJsonSchema, execute, isConcurrencySafe } = options;
-    const { parametersValidator, outputJsonSchema, outputValidator, resumable } = options;
+    const { parametersValidator, outputJsonSchema, outputValidator, resumable, gateTarget, refuseUngated } = options;
     if (typeof name !== "string") {
       throw new YianTypeError(`FunctionTool name must be a string, got ${jsTypeName(name)}`);
     }
@@ -189,6 +210,10 @@ export class FunctionTool {
     if (resumable !== undefined && typeof resumable !== "boolean") {
       throw new YianTypeError(`${prefix} resumable must be a boolean, got ${jsTypeName(resumable)}`);
     }
+    if (gateTarget !== undefined && gateTarget !== null && typeof gateTarget !== "function") {
+      throw new YianTypeError(`${prefix} gateTarget must be a function, got ${jsTypeName(gateTarget)}`);
+    }
+    if (refuseUngated !== undefined && refuseUngated !== null) checkGateText(refuseUngated, `${prefix} refuseUngated`);
     this.name = name;
     this.description = description;
     this.parametersJsonSchema = schema;
@@ -198,6 +223,8 @@ export class FunctionTool {
     this.outputJsonSchema = output;
     this.outputValidator = outputValidator ?? null;
     this.resumable = resumable ?? false;
+    this.gateTarget = gateTarget ?? null;
+    this.refuseUngated = refuseUngated ?? null;
     Object.freeze(this);
   }
 }
@@ -218,6 +245,8 @@ export function withExecute(original: FunctionTool, execute: FunctionTool["execu
     outputJsonSchema: original.outputJsonSchema,
     outputValidator: original.outputValidator,
     resumable: original.resumable,
+    gateTarget: original.gateTarget,
+    refuseUngated: original.refuseUngated,
     execute,
   });
 }
@@ -290,7 +319,7 @@ export function tool<
   P extends StandardSchemaV1 | JsonObject,
   O extends StandardSchemaV1 | JsonObject | undefined = undefined,
 >(options: ToolOptions<P, O>): FunctionTool {
-  const { name, description, execute, isConcurrencySafe, resumable } = options;
+  const { name, description, execute, isConcurrencySafe, resumable, gateTarget, refuseUngated } = options;
   // `String`: the prefix must not throw on a non-string name; `FunctionTool` reports a bad name
   // when nothing fails first.
   const prefix = `tool ${reprText(String(name))}`;
@@ -313,6 +342,8 @@ export function tool<
     outputJsonSchema: outputJsonSchema as JsonObject | undefined,
     outputValidator,
     resumable,
+    gateTarget: gateTarget as FunctionTool["gateTarget"] | undefined,
+    refuseUngated,
   });
 }
 

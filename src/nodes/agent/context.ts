@@ -190,6 +190,8 @@ export interface HoldFields {
   readonly index: number;
   /** Where its tool comes from, as the host's check was asked about it. */
   readonly source: ToolSource;
+  /** What the call acts on, as the host's check saw it (`GatedCall.target`); `null` for none. */
+  readonly target: Readonly<JsonObject> | null;
   /** The last call of its concurrency group: the reply's calls after it wait until the hold is answered. */
   readonly groupEnd: number;
 }
@@ -598,16 +600,32 @@ export class AgentSteps {
 
   /**
    * Write a call the host's check held as a hold's `pending` step: `call_id`, `tool`,
-   * `tool_call_id`, `reply` and `index`, as `pending` writes them, then `held: true`, its `source`
-   * and `group_end`. It is written before the call's tool runs, so it isn't settled: once the run
-   * stops it isn't written.
+   * `tool_call_id`, `reply` and `index`, as `pending` writes them, then `held: true`, its `source`,
+   * its `target` when it has one, and `group_end`. It is written before the call's tool runs, so it
+   * isn't settled: once the run stops it isn't written.
    *
    * @returns The step's `n`.
    * @throws Whatever `NodeSteps.record` throws.
    */
   hold(call: HoldFields): number {
-    const { callId, tool, toolCallId, reply, index, source, groupEnd } = call;
-    return this.#record({
+    return this.#record(this.#holdStep(call));
+  }
+
+  /**
+   * Return why `call`'s hold can't be recorded: its step is over the run's `YIAN_MAX_EVENT_BYTES`,
+   * as a large target can make it; `null` when it fits.
+   */
+  holdTooLarge(call: HoldFields): string | null {
+    const max = this.#steps?.maxEventBytes;
+    const size = eventBytes(this.#holdStep(call));
+    if (max === undefined || size <= max) return null;
+    return `its target makes a hold of ${size} bytes, over the run's limit of ${max} (YIAN_MAX_EVENT_BYTES)`;
+  }
+
+  /** The hold's `pending` step `hold` writes for `call`. */
+  #holdStep(call: HoldFields): ValueRecord {
+    const { callId, tool, toolCallId, reply, index, source, target, groupEnd } = call;
+    return {
       kind: "pending",
       call_id: callId,
       tool,
@@ -616,8 +634,9 @@ export class AgentSteps {
       index: BigInt(index),
       held: true,
       source: { ...source },
+      ...(target === null ? {} : { target: target as ValueRecord }),
       group_end: BigInt(groupEnd),
-    });
+    };
   }
 
   /**

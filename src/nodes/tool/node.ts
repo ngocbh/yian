@@ -479,6 +479,8 @@ export class ToolNode extends Node {
    *
    * @throws RangeError, TypeCheckError or ToolCheckError from `ToolSet.validate` when the tool is
    *   unknown or an argument doesn't fit, before any attempt.
+   * @throws ToolCheckError, before any attempt, for a tool that refuses to run unchecked
+   *   (`FunctionTool.refuseUngated`).
    * @throws ToolAttemptsFailed when the call fails for good after at least one retry. When no
    *   retry happened, the tool's own error propagates unchanged.
    * @throws HostOutputError when the result isn't a yian value; never retried.
@@ -759,6 +761,13 @@ export class ToolNode extends Node {
       steps?.record(step);
     };
 
+    // Nothing checks a TOOL node's call, so a tool that never runs unchecked doesn't run here.
+    // `??`: a tool built by an older copy of yian has no `refuseUngated` field.
+    const refusal = tools.resolve([this.toolRef])[0]!.refuseUngated ?? null;
+    if (refusal !== null) {
+      const why = "never runs unchecked, and nothing checks a TOOL node's call";
+      throw new ToolCheckError(`tool ${reprText(this.toolId)} ${why}: ${refusal}`);
+    }
     const call = await tools.validate(this.toolRef, inputs, { signal });
     const last = history.at(-1);
     // The previous start recorded a failure and stopped before the retry finished: wait again.

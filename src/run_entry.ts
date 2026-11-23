@@ -1,10 +1,26 @@
 /**
- * The `yian/run` entry, `package.json`'s `./run`: every name `run.ts` exports, re-exported by name.
- * The entry is this facade, not `run.ts` itself, so a module above `run.ts` that the entry also
- * carries imports it one way, with no cycle. `run.ts` says what each name is for.
+ * The `yian/run` entry, `package.json`'s `./run`: every name `run.ts` exports, and the child-flow
+ * toolkit's (`child_flows.ts`), re-exported by name. The entry is this facade, not `run.ts` itself,
+ * so a module above `run.ts` that the entry also carries imports it one way, with no cycle. The
+ * modules say what each name is for.
  *
- * Knows about: run.
+ * Knows about: run, child flows.
  */
+
+export {
+  type BoundMemories,
+  type ChildFlowOwner,
+  type ChildFlowOwnerOptions,
+  ChildFlows,
+  childFlows,
+  type ChildFlowsOptions,
+  type ChildStartOptions,
+  type ChildStatus,
+  type LiveChild,
+  type MemoryHooks,
+  type StartedChild,
+  type WaitingChild,
+} from "./child_flows.ts";
 
 export {
   advance,

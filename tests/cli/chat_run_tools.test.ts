@@ -19,7 +19,7 @@ import { PassThrough } from "node:stream";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { type ChildRuns, type ChildStatus, childEvent } from "../../src/child_flows.ts";
+import { type ChildFlowOwner, type ChildFlows, type ChildStatus, childEvent } from "../../src/child_flows.ts";
 import { EventQueue } from "../../src/cli/chat_events.ts";
 import { AUTHOR_TOOLS } from "../../src/cli/authoring.ts";
 import { ChatRuns, type ChatRunsOptions, chatRunTools } from "../../src/cli/chat_run_tools.ts";
@@ -35,7 +35,7 @@ import type { Embed } from "../../src/llm/embeddings.ts";
 import type { Response } from "../../src/llm/messages.ts";
 import { compareCodeUnits } from "../../src/diagnostics.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { advance, RunResult } from "../../src/run.ts";
+import { advance, inspectRun, RunResult } from "../../src/run.ts";
 import { VectorDBMemory } from "../../src/memory/vectordb.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { ToolContext } from "../../src/tools/context.ts";
@@ -187,12 +187,22 @@ output: done
       env: children.env ?? NO_ENV,
       llmConfig: {},
       scheduler,
-      chatRunId: "chat-1",
       skillsFor: () => null,
       ...(children.embed === undefined ? {} : { embed: children.embed }),
     });
     const requests: ApproveRequest[] = [];
     const seen: [string, number][] = [];
+    const owner = runs.owner({
+      runId: "chat-1",
+      group: "flows",
+      seen: {
+        markSeen: (run, seq) => {
+          seen.push([run, seq]);
+          queue?.markSeen(run, seq);
+        },
+        seen: (run) => queue?.seen(run) ?? 0,
+      },
+    });
     const tools = chatRunTools(
       host({
         approve: async (request) => {
@@ -201,16 +211,7 @@ output: done
         },
       }),
       runs,
-      {
-        seen: {
-          markSeen: (run, seq) => {
-            seen.push([run, seq]);
-            queue?.markSeen(run, seq);
-          },
-          seen: (run) => queue?.seen(run) ?? 0,
-        },
-        scheduler,
-      },
+      owner,
     );
     const signal = new AbortController();
     const invoke = async (name: string, args: Record<string, unknown>, abort: AbortSignal = signal.signal) => {
@@ -646,7 +647,7 @@ output: done
     ] as const) {
       const error = await rejection(Promise.resolve(invoke(name, { run: "r9", ...args })));
       expect(isReportedToolError(error)).toBe(true);
-      expect(error.message).toBe("no run 'r9' in this chat");
+      expect(error.message).toBe("no run 'r9'");
     }
   });
 
@@ -760,9 +761,9 @@ describe("report_issue", () => {
         llmConfig: { provider: "xai", model: "grok-4.3" },
         models: serving(model, env),
         scheduler: heldScheduler().scheduler,
-        chatRunId: "chat-1",
         skillsFor: () => null,
       });
+      const owner = runs.owner({ runId: "chat-1", group: "flows" });
       const filed: Record<string, unknown>[] = [];
       const fileIssue = tool({
         name: "file_issue",
@@ -773,7 +774,7 @@ describe("report_issue", () => {
           return "not filed: saved only";
         },
       });
-      const tools = chatRunTools(host({ env }), runs, {
+      const tools = chatRunTools(host({ env }), runs, owner, {
         report: {
           facts: "yian version: 0.0.4\nchat run log: ~/c.jsonl",
           homes: ["/home/ada"],
@@ -804,7 +805,7 @@ describe("report_issue", () => {
       );
       expect(runs.live()).toEqual([]);
       // Without its options, the chat's run tools have no report_issue.
-      expect(chatRunTools(host(), runs).some((each) => each.name === "report_issue")).toBe(false);
+      expect(chatRunTools(host(), runs, owner).some((each) => each.name === "report_issue")).toBe(false);
     },
     TIMEOUT,
   );
@@ -854,7 +855,6 @@ output: \${hi.output}
       llmConfig: { provider: "xai", model: "grok-4.3" },
       models: serving(model, env),
       scheduler: heldScheduler().scheduler,
-      chatRunId: "chat-1",
       skillsFor: () => null,
     });
     const requests: ApproveRequest[] = [];
@@ -863,8 +863,8 @@ output: \${hi.output}
       return answer;
     };
     const queue = new EventQueue();
-    const tools = chatRunTools(host({ env, approve, docs: new Map([["flows", "page"]]) }), runs, {
-      seen: queue,
+    const owner = runs.owner({ runId: "chat-1", group: "flows", seen: queue });
+    const tools = chatRunTools(host({ env, approve, docs: new Map([["flows", "page"]]) }), runs, owner, {
       authoring: { skills: new Map([[guide.name, guide]]) },
     });
     const invoke = async (name: string, args: Record<string, unknown>) => {
@@ -879,14 +879,14 @@ output: \${hi.output}
       });
       return tools.find((each) => each.name === name)!.execute(args, ctx);
     };
-    return { runs, model, requests, invoke, queue };
+    return { runs, owner, model, requests, invoke, queue };
   }
 
   /**
    * Drive child `id` to its end, answering each question it asks with the next of `answers`;
    * return its last status and the questions asked.
    */
-  async function drive(children: ChildRuns, id: string, answers: string[]) {
+  async function drive(children: ChildFlows, id: string, answers: string[]) {
     const asked: string[] = [];
     let status = children.status(id);
     for (;;) {
@@ -966,13 +966,15 @@ output: \${sure.output}
       .filter((request) => request.messages[0]!.text().includes(marker))
       .map((request) => request.messages.map((each) => each.text()).join("\n"));
 
-  /** Have `children` record the tools of each start in `starts`. */
-  function recordStarts(children: ChildRuns): Record<string, ToolEntry>[] {
+  /** Have `owner` record the tools of each start in `starts`, once the start builds them. */
+  function recordStarts(owner: ChildFlowOwner): Record<string, ToolEntry>[] {
     const starts: Record<string, ToolEntry>[] = [];
-    const start = children.start.bind(children);
-    children.start = (flow, inputs, options = {}) => {
-      starts.push({ ...options.tools });
-      return start(flow, inputs, options);
+    const start = owner.start.bind(owner);
+    owner.start = (flow, inputs, options = {}) => {
+      const { tools = {} } = options;
+      const record = (built: Readonly<Record<string, ToolEntry>>) => (starts.push({ ...built }), built);
+      const recorded = typeof tools === "function" ? (runId: string) => record(tools(runId)) : record(tools);
+      return start(flow, inputs, { ...options, tools: recorded });
     };
     return starts;
   }
@@ -1295,8 +1297,8 @@ output: \${said.output}
         problem: "Code runs.",
         fix: "Check it.",
       };
-      const { runs, requests, invoke, model } = authoringTools(answered({ findings: [finding] }));
-      const starts = recordStarts(runs);
+      const { runs, owner, requests, invoke, model } = authoringTools(answered({ findings: [finding] }));
+      const starts = recordStarts(owner);
       const started = seenAs("review_flow", await invoke("review_flow", { path: "greet.yaml" }));
       expect(started).toMatchObject({ run: "r1" });
       expect(Object.keys(starts[0]!).sort(compareCodeUnits)).toEqual(["read_docs", "read_flow"]);
@@ -1315,10 +1317,10 @@ output: \${said.output}
   test(
     "only the author run gets the tools; its runs get none and stay the assistant's to relay",
     async () => {
-      const { runs, invoke, queue, requests } = authoringTools([
+      const { runs, owner, invoke, queue, requests } = authoringTools([
         callReply(["ask_user", { question: "What for?" }, "b1"]),
       ]);
-      const names = chatRunTools(host(), runs).map((each) => each.name);
+      const names = chatRunTools(host(), runs, owner).map((each) => each.name);
       expect(names).not.toContain("author_flow");
       expect(names).not.toContain("review_flow");
       // A flow the user wrote can't call the tools the authoring runs are granted.
@@ -1326,8 +1328,8 @@ output: \${said.output}
         "id: g\nname: g\nnodes:\n  w: {kind: call, call: write_flow, input: {path: a.yaml, " +
         "content: x}}\noutput: ${w.output}\n";
       const greedy = await loadConfinedText(root, join(root, "greedy.yaml"), GREEDY, NO_ENV);
-      await expect(runs.start(greedy, {})).rejects.toThrow("write_flow");
-      const starts = recordStarts(runs);
+      await expect(owner.start(greedy, {})).rejects.toThrow("write_flow");
+      const starts = recordStarts(owner);
       await invoke("author_flow", { goal: "greet" });
       const granted = starts[0]!;
       expect(Object.keys(granted).sort(compareCodeUnits)).toEqual(
@@ -1354,6 +1356,8 @@ output: \${said.output}
       expect(String(refused)).toContain("write_flow");
       const tried = seenAs("start_flow", await call("start_flow", { ...args, content: GREET, inputs: { who: "ada" } }));
       expect(tried).toMatchObject({ run: "r2" });
+      // The author run's tries are its own children.
+      expect(inspectRun(String(tried["log"])).runId).toBe("chat-1-r1-r2");
       expect(requests.at(-1)!.title).toBe("Run g.yaml (a draft, for author_flow)");
       let status = seenAs("wait_flow", await call("wait_flow", { run: "r2", seconds: 60 }));
       while (status["status"] === "running") {
@@ -1386,12 +1390,14 @@ describe("ChatRuns", () => {
       env: NO_ENV,
       llmConfig: {},
       scheduler: heldScheduler().scheduler,
-      chatRunId: CHAT,
       skillsFor: () => null,
       ...options,
     });
     return runs;
   }
+
+  /** The chat run's hold on `children`. */
+  const chat = (children: ChatRuns) => children.owner({ runId: CHAT, group: "flows" });
 
   /** Load `text` as the flow `<root>/<name>`. */
   function flow(text: string, name = "child.yaml"): Promise<ComposedFlow> {
@@ -1399,7 +1405,7 @@ describe("ChatRuns", () => {
   }
 
   /** Child `id`'s first status numbered after `after` (default: any) that isn't `running`. */
-  async function settled(children: ChildRuns, id: string, after = 0): Promise<ChildStatus> {
+  async function settled(children: ChildFlows, id: string, after = 0): Promise<ChildStatus> {
     let status = children.status(id);
     while (status.seq <= after || status.status === "running") status = await children.next(id, status.seq);
     return status;
@@ -1411,8 +1417,8 @@ describe("ChatRuns", () => {
     "a child whose provider has no key isn't started and leaves no log",
     async () => {
       const children = childRuns({ llmConfig: { provider: "openai", model: "gpt-5.5" } });
-      await expect(children.start(await flow(AGENT), {})).rejects.toThrow(MissingKeyError);
-      await expect(children.start(await flow(AGENT), {})).rejects.toThrow("$OPENAI_API_KEY is not set");
+      await expect(chat(children).start(await flow(AGENT), {})).rejects.toThrow(MissingKeyError);
+      await expect(chat(children).start(await flow(AGENT), {})).rejects.toThrow("$OPENAI_API_KEY is not set");
       expect(existsSync(join(root, "runs"))).toBe(false);
     },
     TIMEOUT,
@@ -1444,7 +1450,7 @@ output: \${talk.output}
       try {
         const consoleFile = join(root, "console.log");
         const children = childRuns({ consoleFile });
-        await children.start(await flow(CHATTY), {});
+        await chat(children).start(await flow(CHATTY), {});
         expect(await settled(children, "r1")).toMatchObject({ status: "succeeded", output: "ok" });
         expect(readFileSync(consoleFile, "utf8")).toBe("x\ny\n");
         expect(console.log).toBe(record);
@@ -1497,7 +1503,7 @@ output: \${add.output.path}
       async () => {
         const children = childRuns();
         const remember = await flow(REMEMBER);
-        await children.start(remember, {}, { project: root });
+        await chat(children).start(remember, {}, { project: root });
         const first = await settled(children, "r1");
         expect(first.status).toBe("succeeded");
         // The flow's folder is the chat's root, so the identity is the one `yian run` gives there.
@@ -1509,7 +1515,7 @@ output: \${add.output.path}
         expect(JSON.stringify(first)).not.toContain(join(root, "home"));
         // Read once, they aren't said again.
         children.markRead("r1", first.seq);
-        await children.start(remember, {}, { project: root });
+        await chat(children).start(remember, {}, { project: root });
         const second = await settled(children, "r2");
         expect(second.status).toBe("succeeded");
         expect(second.memory_notes).toBeUndefined();
@@ -1530,7 +1536,7 @@ output: \${add.output.path}
             return new RunResult({ ...result, memoryDrift: [drift] });
           },
         });
-        await children.start(await flow(REMEMBER_LATER), {}, { project: root });
+        await chat(children).start(await flow(REMEMBER_LATER), {}, { project: root });
         const waiting = await settled(children, "r1");
         expect(waiting.status).toBe("waiting");
         children.markRead("r1", waiting.seq);
@@ -1558,7 +1564,7 @@ output: \${add.output.path}
         // A file where the memory's folder goes: its open refuses it.
         mkdirSync(dirname(location), { recursive: true });
         writeFileSync(location, "");
-        const opened = await childRuns()
+        const opened = await chat(childRuns())
           .start(remember, {}, { project: root })
           .then(() => null, (error: Error) => error.message);
         expect(opened).toContain("memory `lessons`");
@@ -1567,7 +1573,7 @@ output: \${add.output.path}
         rmSync(join(memories, projectKey(root)), { recursive: true });
         mkdirSync(join(root, "elsewhere"));
         symlinkSync(join(root, "elsewhere"), join(memories, projectKey(root)));
-        const bound = await childRuns()
+        const bound = await chat(childRuns())
           .start(remember, {}, { project: root })
           .then(() => null, (error: Error) => error.message);
         expect(bound).toContain(`~/.yian/memory/${projectKey(root)} is a symlink`);
@@ -1588,7 +1594,7 @@ output: \${add.output.path}
         const key = join(elsewhere, projectKey(root));
         mkdirSync(key, { mode: 0o500 });
         try {
-          const refused = await childRuns()
+          const refused = await chat(childRuns())
             .start(await flow(REMEMBER), {}, { project: root })
             .then(() => null, (error: Error) => error.message);
           expect(refused).toContain("EACCES");
@@ -1619,7 +1625,7 @@ output: \${add.output.path}
         const env = (name: string) => (name === "YIAN_DEFAULT_EMBEDDING" ? "openai/m" : NO_ENV(name));
         const embed = async (texts: readonly string[]) => texts.map(() => Float32Array.of(1, 0));
         try {
-          const refused = await childRuns({ env, embed })
+          const refused = await chat(childRuns({ env, embed }))
             .start(await flow(cases), {}, { project: root })
             .then(() => null, (error: Error) => error.message);
           expect(refused).toContain("EACCES");
@@ -1637,7 +1643,7 @@ output: \${add.output.path}
       "a waiting child whose memory folder is gone fails without pointing at --memory, which the chat lacks",
       async () => {
         const children = childRuns();
-        await children.start(await flow(REMEMBER_LATER), {}, { project: root });
+        await chat(children).start(await flow(REMEMBER_LATER), {}, { project: root });
         const waiting = await settled(children, "r1");
         expect(waiting.status).toBe("waiting");
         const identity = defaultIdentity(root, "answer", "lessons");
@@ -1646,7 +1652,7 @@ output: \${add.output.path}
         const failed = await settled(children, "r1", waiting.seq);
         expect(failed).toMatchObject({ status: "failed" });
         expect(failed.note).toBe(
-          "the chat couldn't move the run: memory `lessons`: its folder is gone, so the run can't continue",
+          "couldn't move the run: memory `lessons`: its folder is gone, so the run can't continue",
         );
       },
       TIMEOUT,
@@ -1656,14 +1662,14 @@ output: \${add.output.path}
       "a waiting child whose memory folder lost its .yian fails saying it isn't a memory any more",
       async () => {
         const children = childRuns();
-        await children.start(await flow(REMEMBER_LATER), {}, { project: root });
+        await chat(children).start(await flow(REMEMBER_LATER), {}, { project: root });
         const waiting = await settled(children, "r1");
         const location = defaultLocation(join(root, "home"), defaultIdentity(root, "answer", "lessons"), "FileMemory");
         rmSync(join(location, ".yian"), { recursive: true });
         await children.message("r1", "messages", "hi");
         const failed = await settled(children, "r1", waiting.seq);
         expect(failed.note).toBe(
-          "the chat couldn't move the run: memory `lessons`: it isn't a memory any more, so the run can't continue",
+          "couldn't move the run: memory `lessons`: it isn't a memory any more, so the run can't continue",
         );
       },
       TIMEOUT,
@@ -1673,7 +1679,7 @@ output: \${add.output.path}
       "a child given no project folder has no default memories",
       async () => {
         const children = childRuns();
-        await expect(children.start(await flow(REMEMBER), {})).rejects.toThrow(
+        await expect(chat(children).start(await flow(REMEMBER), {})).rejects.toThrow(
           "a flow with no file has no default memories, so `lessons` can't be bound",
         );
       },
@@ -1686,7 +1692,7 @@ output: \${add.output.path}
         const children = childRuns();
         const unnamed = await flow(REMEMBER.replace("id: answer", 'id: "Answer questions"'));
         // The chat has no --memory to suggest.
-        const refused = await children.start(unnamed, {}, { project: root }).then(
+        const refused = await chat(children).start(unnamed, {}, { project: root }).then(
           () => null,
           (error: Error) => error.message,
         );

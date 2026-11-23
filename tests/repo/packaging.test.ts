@@ -195,6 +195,8 @@ const NAMES: Record<string, string[]> = {
     "checkMessage",
     "checkConversation",
     "ConversationError",
+    "ChildFlows",
+    "childFlows",
   ],
   "./tools": [
     "registerTool",
@@ -456,7 +458,7 @@ describe("entry points", () => {
     expect(names).toEqual([]);
   });
 
-  test("the run entry re-exports every name run.ts exports, by name, each value as a value", async () => {
+  test("the run entry re-exports run.ts's names and the child-flow toolkit's, by name, each value as a value", async () => {
     const read = (module: string) => readFileSync(join(ROOT, "src", `${module}.ts`), "utf8");
     const entry = read("run_entry");
     expect(blank(entry)).not.toMatch(/^export \*/m);
@@ -464,8 +466,9 @@ describe("entry points", () => {
     expect(exportedNames(read("run")).filter((name) => !exported.has(name))).toEqual([]);
     // A value re-exported as `type X` would leave the runtime entry.
     const values = async (module: string) =>
-      Object.keys(await import(pathToFileURL(join(ROOT, "src", `${module}.ts`)).href)).sort();
-    expect(await values("run_entry")).toEqual(await values("run"));
+      Object.keys(await import(pathToFileURL(join(ROOT, "src", `${module}.ts`)).href));
+    const toolkit = ["ChildFlows", "childFlows"];
+    expect((await values("run_entry")).sort()).toEqual([...(await values("run")), ...toolkit].sort());
   });
 });
 

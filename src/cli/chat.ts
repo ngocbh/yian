@@ -5,7 +5,7 @@
  * focus.
  *
  * The chat is an `inboxChat` of the bundled flow, given the assistant's file and run tools, its
- * bundled skill, and the events of its child runs (`ChildRuns`), which the chat relays to the
+ * bundled skill, and the events of its child runs (`ChildFlows`), which the chat relays to the
  * assistant as messages authored `yian`.
  *
  * Knows about: compose, the run boundary's LLM cascade, connections, skills, the bundle, the
@@ -15,7 +15,7 @@
 import { mkdirSync, realpathSync } from "node:fs";
 import { basename, dirname, extname, join, relative } from "node:path";
 
-import type { ChildRuns, WaitingChild } from "../child_flows.ts";
+import type { ChildFlows, WaitingChild } from "../child_flows.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { loadFlow } from "../compose/loader.ts";
 import { defaultSkillRoots, loadSkills } from "../compose/skills.ts";
@@ -313,7 +313,7 @@ function every(clock: Scheduler, ms: number, listener: () => void): () => void {
  * view holds what it draws; the screen says when an approval or a question waits behind it.
  */
 function runList(
-  runs: ChildRuns,
+  runs: ChildFlows,
   view: ChatView,
   clocks: { scheduler: Scheduler; ticker: Scheduler },
   out: ViewStream,
@@ -363,7 +363,12 @@ function waitingLines(children: readonly WaitingChild[], out: Colored, env: Env)
       if (child.kind === "halted") {
         return shown(`run ${child.run} was stopped while it ran; its log: ${child.log}`, "yellow");
       }
-      const what = { question: "an answer to its question", inbox: "a message", timer: "a timer" }[child.kind];
+      const what = {
+        question: "an answer to its question",
+        held: "the approval of a held tool call",
+        inbox: "a message",
+        timer: "a timer",
+      }[child.kind];
       const next =
         child.kind === "timer"
           ? `continue with: yian run --resume ${child.log}`
@@ -424,7 +429,7 @@ interface ModelPickerOptions {
     initial?: number,
   ) => Promise<number | null>;
   /** The chat's child runs, which start with the model chosen. */
-  readonly runs: ChildRuns;
+  readonly runs: ChildFlows;
   /** The chat's view, whose banner and spinner name the model; `null` off a terminal. */
   readonly view: ChatView | null;
   /** The chat's own streams, under its view. */
@@ -634,7 +639,7 @@ class ModelPicker {
  * When the chat ends, the children still running are cancelled, and each child left waiting is
  * printed with its log and how to go on: one waiting for a timer resumes with `yian run --resume`;
  * one waiting for an answer or a message can't be continued outside the chat. A Ctrl-C meanwhile
- * halts every child (`ChildRuns.haltAll`), so the chat ends at once and prints each one it stopped
+ * halts every child (`ChildFlows.haltAll`), so the chat ends at once and prints each one it stopped
  * while it ran.
  *
  * @throws {UsageError} As `validateRunLogOptions` does for `--log`; for both `options.resume` and
@@ -786,13 +791,13 @@ export async function chat(
       llmConfig: seeded === null ? cliLayer(options) : { ...seeded },
       models: deps.models ?? null,
       scheduler,
-      chatRunId,
       skillsFor,
       consoleFile: consoleFileFor(fresh.path),
       onStatus: (status) => queue.push(status),
       ...deps.children,
     });
     const queue = new EventQueue({ wake, markRead: runs.markRead.bind(runs) });
+    const owner = runs.owner({ runId: chatRunId, group: "flows", seen: queue });
     const inFlight = new InFlight(wake);
     const docs = new Map(Object.entries(DOCS));
     const tools: InboxChatHost["tools"] = (terminal) => {
@@ -815,7 +820,7 @@ export async function chat(
       const all = trackInFlight(
         [
           ...chatFileTools(host),
-          ...chatRunTools(host, runs, { seen: queue, scheduler, report, authoring }),
+          ...chatRunTools(host, runs, owner, { report, authoring }),
         ],
         inFlight,
       );

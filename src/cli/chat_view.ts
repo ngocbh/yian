@@ -214,7 +214,7 @@ export function runStatusLabel(status: ChildStatus): [string, Style] {
 }
 
 /**
- * The run list's rows, one per child `children` lists (`ChildRuns.live`): its id, its flow and
+ * The run list's rows, one per child `children` lists (`ChildFlows.live`): its id, its flow and
  * `● <what it does> · <time since it started>`, coloured by what it does, the columns lined up
  * and each row cut to `width`.
  */

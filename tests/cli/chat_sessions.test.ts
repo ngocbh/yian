@@ -252,15 +252,19 @@ test(
 );
 
 test(
-  "a seed lists the earlier chat's children left waiting, not those that ended",
+  "a seed lists the earlier chat's children, and theirs, left waiting, not those that ended",
   async () => {
     await chatRun("chat", root, ["hi"]);
     const waiting = await chatRun("chat-r1", tmp, ["child"], { end: false, parent: "chat" });
     await chatRun("chat-r2", tmp, ["child"], { end: true, parent: "chat" });
+    // A run a child started, as an authoring run starts its tries.
+    const nested = await chatRun("chat-r2-r3", tmp, ["try"], { end: false, parent: "chat-r2" });
+    await chatRun("other-r4", tmp, ["x"], { end: false, parent: "other" });
     const [session] = chatSessions(runsDir, root);
     const seed = await sessionSeed(session!, runsDir, NO_ENV);
-    expect(seed.waiting).toEqual([
+    expect(seed.waiting.sort((a, b) => a.run.localeCompare(b.run))).toEqual([
       { run: "chat-r1", kind: "inbox", log: waiting },
+      { run: "chat-r2-r3", kind: "inbox", log: nested },
     ]);
   },
   TIMEOUT,

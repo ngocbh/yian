@@ -1,7 +1,9 @@
 /**
- * The child runs a run starts and owns, as `yian chat`'s assistant starts flows: each child flow
- * runs in the background under one driver, which is the only caller of `runFlow` and `advance` on
- * its log, and publishes the child's status each time a pass of it settles differently.
+ * The child flows runs start and own, as `yian chat`'s assistant starts flows: each child flow
+ * runs in the background under one driver (`ChildFlows`), which is the only caller of `runFlow` and
+ * `advance` on its log, and publishes the child's status each time a pass of it settles differently.
+ * A run holds its children through an owner handle (`ChildFlows.owner`), which starts them and acts
+ * on the runs it reaches; `childFlows` gives the owner's model those acts as one tool group.
  *
  * A child moves only when its driver runs a pass (`runFlow`, then `advance`): `advance` refuses a
  * run whose engine still loops, so a second caller would race the first. A delivery reaches a
@@ -23,9 +25,9 @@
  * `dispose`, never to the call that started them.
  *
  * Knows about: the run boundary (`runFlow`, `advance`, the deliveries, `pendingCalls`,
- * `runLogPath`), the waits' `wakeAt` and the record-time reader, the platform's scheduler and
- * folder tidying, compose, memory's base type, the run events, the tool registry and the `pending`
- * marker, skills.
+ * `runLogPath`, the gate's hook), the waits' `wakeAt` and the record-time reader, the platform's
+ * scheduler and folder tidying, compose, memory's base type, the run events, the host tool API and
+ * its errors, the tool registry and the `pending` marker, skills, types and values.
  */
 
 import { dirname } from "node:path";
@@ -39,12 +41,15 @@ import type { MemoryBase } from "./memory/base.ts";
 import { removeEmptyDir, type Scheduler, sleepUntil } from "./platform.ts";
 import {
   advance,
+  type BeforeToolCall,
   cancel,
   close,
   complete,
   type ConsoleHook,
   type DeliveryOptions,
+  type DeliveryRefusal,
   DeliveryRefused,
+  type JsonObject,
   type MemoryDrift,
   pendingCalls,
   type RunResult,
@@ -56,10 +61,21 @@ import { recordTimeMs } from "./runtime/log.ts";
 import { wakeAt } from "./runtime/waits.ts";
 import type { Skill } from "./skills/catalog.ts";
 import { pending, TAKE } from "./tools/context.ts";
+import { ReportedToolError } from "./tools/errors.ts";
+import { type FunctionTool, stringArg, stringArguments, tool } from "./tools/function_tools.ts";
 import { registeredTools, type ToolEntry } from "./tools/registry.ts";
 import { YianRangeError } from "./typesys/errors.ts";
 import { builtinType } from "./typesys/types.ts";
-import { isInboxType, typeEquals, type Value, writeAsJson, writeAsText } from "./typesys/values.ts";
+import {
+  buildValueAs,
+  isInboxType,
+  renderValuePath,
+  TypeCheckError,
+  typeEquals,
+  type Value,
+  writeAsJson,
+  writeAsText,
+} from "./typesys/values.ts";
 
 /** The most characters of a child event's line. */
 const EVENT_BODY_CHARS = 2000;
@@ -70,9 +86,15 @@ const LIST_ITEMS = 20;
 /** The most characters of each text field a run tool's status shows the model. */
 const STATUS_TEXT_CHARS = 4000;
 
+/** @internal The longest a group's `wait` waits, in seconds. */
+export const WAIT_MAX_S = 120;
+
+/** The built-in `Message` type, which a model-made value may not sign. */
+const MESSAGE = builtinType("Message")!;
+
 /** Where a child run stands, as the model of the run that owns it is told. */
 export interface ChildStatus {
-  /** The child's id among its parent's children (`r1`, `r2`, ...). */
+  /** The child's id among its driver's children (`r1`, `r2`, ...). */
   readonly run: string;
   /**
    * `running` from the start and from each delivery the run took until the pass it causes
@@ -94,6 +116,11 @@ export interface ChildStatus {
   readonly wake_at?: string | null;
   /** The questions a waiting child asks, each answered by its call id. */
   readonly asks?: readonly { readonly call: string; readonly question: string }[];
+  /**
+   * The tool calls of the child's agents that the children's `beforeToolCall` held, each by its
+   * call id, with its tool and the model's arguments. `answer` doesn't settle them.
+   */
+  readonly held?: readonly { readonly call: string; readonly tool: string; readonly arguments: JsonObject | null }[];
   /**
    * What the child's nodes named `reply` said and no reader has marked read (`markRead`), oldest
    * first.
@@ -144,8 +171,8 @@ export interface MemoryHooks {
   scrub(error: unknown, memory: BoundMemories): unknown;
 }
 
-/** What a `ChildRuns` needs from its host. */
-export interface ChildRunsOptions {
+/** What a `ChildFlows` needs from its host. */
+export interface ChildFlowsOptions {
   /**
    * The folder a child's CODE files must resolve inside, when its flow was loaded confined to
    * one: each delivery to it passes this as `codeRoot`.
@@ -158,13 +185,8 @@ export interface ChildRunsOptions {
   llmConfig: Readonly<Record<string, string>>;
   /** For tests: the model builder AGENT nodes use. */
   models?: ModelAccess | null;
-  /** The clock the children's records and waits run on. */
+  /** The clock the children's records and waits, and the group's `wait`, run on. */
   scheduler: Scheduler;
-  /**
-   * The run that starts the children: each child's run id is `<parentRunId>-r<n>`, and its parent
-   * is that run.
-   */
-  parentRunId: string;
   /** How the children's memory inputs are bound. */
   memories: MemoryHooks;
   /**
@@ -181,6 +203,11 @@ export interface ChildRunsOptions {
   /** Gets each line the children's CODE nodes print; `null` (the default) leaves it on the console. */
   onConsole?: ConsoleHook | null;
   /**
+   * The host's check before each tool call the children's agents make, as `runFlow`'s; a call it
+   * holds is listed in the child's status (`ChildStatus.held`). `null` (the default) checks none.
+   */
+  beforeToolCall?: BeforeToolCall | null;
+  /**
    * Sees each status any child publishes, once it is the child's (not a child's first `running`,
    * which `start` returns). What it throws is dropped.
    */
@@ -191,14 +218,57 @@ export interface ChildRunsOptions {
   cancel?: typeof cancel;
 }
 
+/** How `ChildFlowOwner.start` starts a child. */
+export interface ChildStartOptions {
+  /** The caller's: aborting it before the start begins rejects, and after it does nothing to the child. */
+  signal?: AbortSignal | null;
+  /** What `live` lists the child by (the flow's file, say); the flow's name when absent. */
+  name?: string;
+  /**
+   * Host tools this child alone gets, beside the registered ones; or a function that builds them
+   * from the child's run id, for tools that act as the child (its own `ChildFlows.owner`, say).
+   */
+  tools?: Readonly<Record<string, ToolEntry>> | ((runId: string) => Readonly<Record<string, ToolEntry>>);
+  /** Its skills in place of `skillsFor`'s, when given. */
+  skills?: ReadonlyMap<string, Skill>;
+  /** The flow file's project folder, which `memories.bind` keys the child's memories by; `null` for none. */
+  project?: string | null;
+}
+
+/** A child once its log holds its start: its id, its log, and the seq of its first status. */
+export interface StartedChild {
+  readonly id: string;
+  readonly log: string;
+  readonly seq: number;
+}
+
+/** What `ChildFlows.owner` makes an owner handle from. */
+export interface ChildFlowOwnerOptions {
+  /** The owner's run: each child it starts has the run id `<runId>-r<n>` and records it as its parent. */
+  readonly runId: string;
+  /**
+   * The key the host passes the owner's tools under (`childFlows`), which their texts name them
+   * by: `<group>_status`, and so on.
+   */
+  readonly group: string;
+  /**
+   * The host's record of what the owner's model has seen, by run and status seq. With it, the
+   * owner's tools mark each status they show read (`ChildFlows.markRead`) and tell `markSeen`, and
+   * `wait` returns at once for a status past `seen(run)`. Without it they mark nothing, so the
+   * host's other readers still get every reply. `null` (the default) for none.
+   */
+  readonly seen?: { markSeen(run: string, seq: number): void; seen(run: string): number } | null;
+}
+
 /** A child left waiting when `dispose` ends its parent's hold on it, and what it waits on. */
 export interface WaitingChild {
   readonly run: string;
   /**
-   * `question` when it asks something, else `inbox` when it waits for a message, else `timer`;
-   * `halted` for a running one `haltAll` stopped before its cancel was done.
+   * `question` when it asks something, else `held` when it waits for a held call's approval, else
+   * `inbox` when it waits for a message, else `timer`; `halted` for a running one `haltAll` stopped
+   * before its cancel was done.
    */
-  readonly kind: "question" | "inbox" | "timer" | "halted";
+  readonly kind: "question" | "held" | "inbox" | "timer" | "halted";
   readonly log: string;
 }
 
@@ -221,6 +291,10 @@ interface Waiter {
 /** One child and its driver's state. */
 interface Child {
   readonly id: string;
+  /** Its run id, `<ownerRunId>-<id>`. */
+  readonly runId: string;
+  /** The run of the owner that started it, which it records as its parent. */
+  readonly ownerRunId: string;
   readonly flow: ComposedFlow;
   /** What its start named it (`LiveChild.name`). */
   readonly name: string;
@@ -261,6 +335,14 @@ interface Said {
   readonly kind: "reply" | "memory";
   readonly text: string;
 }
+
+/** How a delivery may be made again (`ChildFlows.answer`'s `options.resent`). */
+interface Resend {
+  readonly resent?: boolean;
+}
+
+/** The refusals of a delivery made again that say it landed before, or that the run moved past it. */
+const LANDED: ReadonlySet<DeliveryRefusal> = new Set(["ended", "unknown_call", "call_settled"]);
 
 /** The terminal statuses: no pass follows them. */
 const ENDED: ReadonlySet<ChildStatus["status"]> = new Set(["succeeded", "failed", "cancelled"]);
@@ -334,7 +416,7 @@ export function childEvent(status: ChildStatus): ChildEvent | null {
   } else if ((status.asks ?? []).length > 0) {
     const asks = status.asks!.slice(0, LIST_ITEMS).map((ask) => `(call ${ask.call}): ${quote(ask.question)}`);
     const more = status.asks!.length - LIST_ITEMS;
-    if (more > 0) asks.push(`(${more} more; flow_status shows all)`);
+    if (more > 0) asks.push(`(${more} more; its status shows all)`);
     clauses.push(["asks", ` ${asks.join(", ")}`]);
   } else {
     const waits = (status.waits ?? []) as readonly Wait[];
@@ -346,7 +428,7 @@ export function childEvent(status: ChildStatus): ChildEvent | null {
   if (notes.length > 0) clauses.push(["noted", ` ${notes.map(quote).join(", ")}`]);
   if (clauses.length === 0) return null;
   const cut = (line: string) =>
-    line.length > EVENT_BODY_CHARS ? `${line.slice(0, EVENT_BODY_CHARS)}... (cut; flow_status shows all)` : line;
+    line.length > EVENT_BODY_CHARS ? `${line.slice(0, EVENT_BODY_CHARS)}... (cut; its status shows all)` : line;
   const text = cut(`run ${status.run} ${clauses.map(([verb, rest]) => verb + rest).join("; ")}`);
   const [[verb, first], ...others] = clauses as [[string, string], ...[string, string][]];
   const body = cut([first.trim(), ...others.map(([word, rest]) => word + rest)].filter(Boolean).join("; "));
@@ -359,25 +441,31 @@ export function cutStatusText(text: string): string {
   return `${text.slice(0, STATUS_TEXT_CHARS)}... (cut at ${STATUS_TEXT_CHARS} characters)`;
 }
 
+/** `value` as a status shows it: a string cut, and a value too long as JSON as its cut JSON text. */
+function shownValue(value: unknown): unknown {
+  if (typeof value === "string") return cutStatusText(value);
+  const json = writeAsJson(value as Value);
+  return json.length > STATUS_TEXT_CHARS ? cutStatusText(json) : value;
+}
+
 /**
- * @internal `status` as the model reads it: its text fields cut, its asks and waits listed up to
- * `LIST_ITEMS` each (`not_shown` says how many more), without the seq it doesn't need.
+ * @internal `status` as the model reads it: its text fields cut, its asks, held calls and waits
+ * listed up to `LIST_ITEMS` each (`not_shown` says how many more), without the seq it doesn't need.
  */
 export function shownStatus(status: ChildStatus): Record<string, unknown> {
-  const { seq: _, output, failure, asks, replies, note, waits, ...rest } = status;
+  const { seq: _, output, failure, asks, held, replies, note, waits, ...rest } = status;
   const shown: Record<string, unknown> = { ...rest };
   const more: string[] = [];
   if (waits !== undefined) {
     shown["waits"] = waits.slice(0, LIST_ITEMS);
     if (waits.length > LIST_ITEMS) more.push(`${waits.length - LIST_ITEMS} more waits`);
   }
-  if (output !== undefined) {
-    // An output too long as JSON is shown as its cut JSON text.
-    const json = writeAsJson(output as Value);
-    if (typeof output === "string") shown["output"] = cutStatusText(output);
-    else shown["output"] = json.length > STATUS_TEXT_CHARS ? cutStatusText(json) : output;
-  }
+  if (output !== undefined) shown["output"] = shownValue(output);
   if (failure !== undefined) shown["failure"] = { ...failure, message: cutStatusText(failure.message) };
+  if (held !== undefined) {
+    shown["held"] = held.slice(0, LIST_ITEMS).map((call) => ({ ...call, arguments: shownValue(call.arguments) }));
+    if (held.length > LIST_ITEMS) more.unshift(`${held.length - LIST_ITEMS} more held calls`);
+  }
   if (asks !== undefined) {
     shown["asks"] = asks.slice(0, LIST_ITEMS).map((ask) => ({ ...ask, question: cutStatusText(ask.question) }));
     if (asks.length > LIST_ITEMS) more.unshift(`${asks.length - LIST_ITEMS} more asks`);
@@ -389,11 +477,11 @@ export function shownStatus(status: ChildStatus): Record<string, unknown> {
 }
 
 /**
- * The child runs of one parent run: start each in the background, read its status as it changes,
- * and relay the user's answers and messages to it.
+ * The child flows of a host's runs: each started in the background by its owner (`owner`), its
+ * status read as it changes, and answers and messages relayed to it.
  */
-export class ChildRuns {
-  readonly #options: ChildRunsOptions;
+export class ChildFlows {
+  readonly #options: ChildFlowsOptions;
   /** The provider and model layer the children started from now on get. */
   #llmConfig: Readonly<Record<string, string>>;
   readonly #children = new Map<string, Child>();
@@ -405,9 +493,18 @@ export class ChildRuns {
   /** Aborted by `haltAll`: a dispose waits no longer. */
   readonly #halting = new AbortController();
 
-  constructor(options: ChildRunsOptions) {
+  constructor(options: ChildFlowsOptions) {
     this.#options = options;
     this.#llmConfig = options.llmConfig;
+  }
+
+  /** A handle on run `options.runId`'s hold on the children it starts (`ChildFlowOwner`). */
+  owner(options: ChildFlowOwnerOptions): ChildFlowOwner {
+    return new ChildFlowOwner(this, options, {
+      start: (flow, inputs, given) => this.#start(options.runId, flow, inputs, given),
+      reaches: (id) => this.#reaches(options.runId, id),
+      scheduler: this.#options.scheduler,
+    });
   }
 
   /** Give the children started from now on the provider and model layer `layer`. */
@@ -415,67 +512,49 @@ export class ChildRuns {
     this.#llmConfig = layer;
   }
 
-  /**
-   * Start `flow` with `inputs` as the next child (`r1`, `r2`, ...): return its id, its log and the
-   * `seq` of its first status (`running`) once the log holds the run's start, while the run goes
-   * on in the background; `next(id, seq)` then sees every later status.
-   *
-   * Starts run one at a time in call order, so ids follow it, and an id is taken only by a start
-   * that succeeds. Each first runs the host's `preflight`, then binds the flow's memory inputs
-   * (`memories.bind`) for `options.project`, the flow file's project folder; every pass of the
-   * child gets the same instances.
-   * `options.signal` is the caller's: aborting it before the start begins rejects, and after it
-   * does nothing to the child. `options.name` is what `live` lists it by (the flow's file, say);
-   * the flow's name when absent. `options.tools` are host tools this child alone gets, beside the
-   * registered ones; `options.skills`, when given, are its skills in place of `skillsFor`'s.
-   *
-   * @throws What `preflight` throws, and what `memories.bind` throws as `memories.scrub` leaves it,
-   *   before anything is written.
-   * @throws {Error} When the runs were disposed; the signal's reason once it aborted; what `runFlow`
-   *   throws before the run starts (a tool the flow names that the run lacks, say), as
-   *   `memories.scrub` leaves it, with no log left behind.
-   */
-  start(
+  /** Start `flow` as the next child of the run `ownerRunId`, as `ChildFlowOwner.start` says. */
+  #start(
+    ownerRunId: string,
     flow: ComposedFlow,
     inputs: Readonly<Record<string, unknown>>,
-    options: {
-      signal?: AbortSignal | null;
-      name?: string;
-      tools?: Readonly<Record<string, ToolEntry>>;
-      skills?: ReadonlyMap<string, Skill>;
-      project?: string | null;
-    } = {},
-  ): Promise<{ id: string; log: string; seq: number }> {
+    options: ChildStartOptions,
+  ): Promise<StartedChild> {
     const name = options.name ?? flow.name ?? flow.compiled.flowId ?? "flow";
     const tools = options.tools ?? {};
     const skills = options.skills ?? null;
     const signal = options.signal ?? null;
     const project = options.project ?? null;
-    const turn = this.#starting.then(() => this.#begin(flow, inputs, { name, tools, skills, project }, signal));
+    const given = { name, tools, skills, project };
+    const turn = this.#starting.then(() => this.#begin(ownerRunId, flow, inputs, given, signal));
     this.#starting = turn.catch(() => {});
     return turn;
   }
 
-  /** Start `flow` as the next child, once the starts called before it are done. */
+  /** Start `flow` as the next child of `ownerRunId`, once the starts called before it are done. */
   async #begin(
+    ownerRunId: string,
     flow: ComposedFlow,
     inputs: Readonly<Record<string, unknown>>,
     given: {
       name: string;
-      tools: Readonly<Record<string, ToolEntry>>;
+      tools: NonNullable<ChildStartOptions["tools"]>;
       skills: ReadonlyMap<string, Skill> | null;
       project: string | null;
     },
     signal: AbortSignal | null,
-  ): Promise<{ id: string; log: string; seq: number }> {
-    const { name, tools, skills, project } = given;
+  ): Promise<StartedChild> {
+    const { name, skills, project } = given;
     const check = () => {
-      if (this.#disposed) throw new Error("the chat's runs were disposed");
+      if (this.#disposed) throw new Error("the runs were disposed");
       signal?.throwIfAborted();
     };
     check();
-    const { logDir, parentRunId, skillsFor, memories } = this.#options;
-    await this.#options.preflight(flow, this.#llmConfig, inputs);
+    const { logDir, skillsFor, memories } = this.#options;
+    try {
+      await this.#options.preflight(flow, this.#llmConfig, inputs);
+    } catch (error) {
+      throw memories.scrub(error, {});
+    }
     check();
     // A memory the start creates is said with the pass.
     const fresh: Said[] = [];
@@ -486,11 +565,14 @@ export class ChildRuns {
       throw memories.scrub(error, {});
     }
     const id = `r${this.#started + 1}`;
-    const runId = `${parentRunId}-${id}`;
+    const runId = `${ownerRunId}-${id}`;
     const log = runLogPath(logDir, runId);
+    const tools = typeof given.tools === "function" ? given.tools(runId) : given.tools;
     const seq = ++this.#seq;
     const child: Child = {
       id,
+      runId,
+      ownerRunId,
       flow,
       name,
       since: this.#options.scheduler.now(),
@@ -511,7 +593,7 @@ export class ChildRuns {
     };
     this.#children.set(id, child);
     const started = Promise.withResolvers<void>();
-    child.done = this.#drive(child, runId, inputs, started);
+    child.done = this.#drive(child, inputs, started);
     try {
       await started.promise;
     } catch (error) {
@@ -615,47 +697,67 @@ export class ChildRuns {
 
   /**
    * Answer child `id`'s open question `call` with `value` (any JSON but `null`). Returns its
-   * status: `running` once the run took the answer, else the current one with a `note`.
+   * status: `running` once the run took the answer, else the current one with a `note`. A held
+   * call isn't a question: answering it would make up its tool's result, so the note refuses it.
+   * Nor may `value` sign a message: nothing in it that reads as a `Message` carries an `author` or
+   * an action part, whatever type the question declares, since an answer reaches the child unsigned.
+   * With `options.resent`, the call may have been made before, as a resumed agent's call is: a
+   * refusal saying it landed or the run moved past it (`ended`, `unknown_call`, `call_settled`)
+   * returns the status with no note.
    *
    * @throws {RangeError} When no child has the id.
    * @throws {TypeError} When `value` is `undefined`.
+   * @throws What a delivery fault throws (the log unreadable, another writer holding it), as
+   *   `memories.scrub` leaves it.
    */
-  answer(id: string, call: string, value: unknown): Promise<ChildStatus> {
-    return this.#deliver(this.#child(id), (log, options) => complete(log, call, { output: value }, options));
+  answer(id: string, call: string, value: unknown, options: Resend = {}): Promise<ChildStatus> {
+    const child = this.#child(id);
+    const refusal = () => {
+      const signed = signedMessageAt(value);
+      if (signed !== null) return signedNote(signed);
+      const held = child.started && pendingCalls(child.log).some((each) => each.callId === call && each.held);
+      return held ? `call '${call}' is a held tool call, not a question` : null;
+    };
+    const answer = (log: string, delivery: DeliveryOptions) => complete(log, call, { output: value }, delivery);
+    return this.#deliver(child, answer, { ...options, refusal });
   }
 
   /**
    * Send `text` to child `id`'s inbox `inbox`: as is to an `Inbox(str)`, as a user message holding
-   * it to an `Inbox(Message)`. Returns its status as `answer` does.
+   * it to an `Inbox(Message)`. Returns its status, and throws, as `answer` does. `options.key` is
+   * the send's idempotency key: a send repeated with it appends nothing.
    *
    * @throws {RangeError} When no child has the id.
    */
-  message(id: string, inbox: string, text: string): Promise<ChildStatus> {
+  message(id: string, inbox: string, text: string, options: Resend & { key?: string | null } = {}): Promise<ChildStatus> {
     const child = this.#child(id);
     const param = child.flow.input.find((input) => input.name === inbox);
     const type = param?.contract?.type ?? null;
-    const message = isInboxType(type) && typeEquals(type!.element!, builtinType("Message")!);
+    const message = isInboxType(type) && typeEquals(type!.element!, MESSAGE);
     const event = message ? { role: "user", parts: [{ type: "text", text }] } : text;
-    return this.#deliver(child, (log, options) => send(log, inbox, event, options));
+    const key = options.key ?? null;
+    return this.#deliver(child, (log, delivery) => send(log, inbox, event, { ...delivery, key }), options);
   }
 
   /**
-   * Close child `id`'s inbox `inbox`, so its turns end. Returns its status as `answer` does.
+   * Close child `id`'s inbox `inbox`, so its turns end. Returns its status, and throws, as `answer`
+   * does.
    *
    * @throws {RangeError} When no child has the id.
    */
-  closeInbox(id: string, inbox: string): Promise<ChildStatus> {
-    return this.#deliver(this.#child(id), (log, options) => close(log, inbox, options));
+  closeInbox(id: string, inbox: string, options: Resend = {}): Promise<ChildStatus> {
+    return this.#deliver(this.#child(id), (log, delivery) => close(log, inbox, delivery), options);
   }
 
   /**
-   * Cancel child `id`. Returns its status as `answer` does; the note says when it had ended.
+   * Cancel child `id`. Returns its status, and throws, as `answer` does; the note says when it had
+   * ended.
    *
    * @throws {RangeError} When no child has the id.
    */
-  stop(id: string): Promise<ChildStatus> {
+  stop(id: string, options: Resend = {}): Promise<ChildStatus> {
     const move = this.#options.cancel ?? cancel;
-    return this.#deliver(this.#child(id), (log, options) => move(log, options));
+    return this.#deliver(this.#child(id), (log, delivery) => move(log, delivery), options);
   }
 
   /**
@@ -698,8 +800,19 @@ export class ChildRuns {
   /** @throws {RangeError} When no child has the id. */
   #child(id: string): Child {
     const child = this.#children.get(id);
-    if (child === undefined) throw new YianRangeError(`no run '${id}' in this chat`);
+    if (child === undefined) throw new YianRangeError(`no run '${id}'`);
     return child;
+  }
+
+  /** Whether child `id` was started by run `ownerRunId`, or by a child that run reaches. */
+  #reaches(ownerRunId: string, id: string): boolean {
+    let child = this.#children.get(id);
+    while (child !== undefined) {
+      if (child.ownerRunId === ownerRunId) return true;
+      const by = child.ownerRunId;
+      child = [...this.#children.values()].find((each) => each.runId === by);
+    }
+    return false;
   }
 
   /** Whether `child`'s driver may still publish a status. */
@@ -710,6 +823,7 @@ export class ChildRuns {
   /** What waiting `child` waits on, by its last status. */
   #waitKind(child: Child): WaitingChild["kind"] {
     if ((child.status.asks ?? []).length > 0) return "question";
+    if ((child.status.held ?? []).length > 0) return "held";
     const waits = (child.status.waits ?? []) as readonly { tool: string; settled: boolean }[];
     return waits.some((wait) => wait.tool === TAKE && !wait.settled) ? "inbox" : "timer";
   }
@@ -727,20 +841,26 @@ export class ChildRuns {
 
   /**
    * Make `deliver`'s delivery to `child`'s log, publish the child `running` and nudge its driver;
-   * return its status. A refusal, or a delivery after `dispose`, is a note on the status returned,
-   * and changes nothing.
+   * return its status. A refusal (the run's, or `options.refusal`'s text, asked first), or a
+   * delivery after `dispose`, is a note on the status returned, and changes nothing; `options.resent`
+   * is as `answer` says. Every error goes through `memories.scrub`.
    */
   async #deliver(
     child: Child,
     deliver: (log: string, options: DeliveryOptions) => Promise<unknown>,
+    options: Resend & { refusal?: () => string | null } = {},
   ): Promise<ChildStatus> {
     // Its runs are left as they were, to resume later.
-    if (this.#disposed) return { ...child.status, note: "the chat has ended" };
+    if (this.#disposed) return { ...child.status, note: "the runs were disposed" };
     try {
+      const refused = options.refusal?.() ?? null;
+      if (refused !== null) return { ...child.status, note: refused };
       await deliver(child.log, this.#deliveryOptions(child));
     } catch (error) {
-      if (!(error instanceof DeliveryRefused)) throw error;
-      return { ...child.status, note: error.message };
+      const scrubbed = this.#options.memories.scrub(error, child.memory);
+      if (!(error instanceof DeliveryRefused)) throw scrubbed;
+      if (options.resent === true && LANDED.has(error.reason)) return child.status;
+      return { ...child.status, note: (scrubbed as Error | null)?.message ?? String(scrubbed) };
     }
     // Until its pass settles, the child moves on what it was given.
     if (this.#driving(child)) this.#publish(child, { run: child.id, status: "running", log: child.log });
@@ -755,11 +875,10 @@ export class ChildRuns {
    */
   async #drive(
     child: Child,
-    runId: string,
     inputs: Readonly<Record<string, unknown>>,
     started: PromiseWithResolvers<void>,
   ): Promise<void> {
-    const { env, models = null, scheduler, parentRunId, memories, advance: move = advance } = this.#options;
+    const { env, models = null, scheduler, memories, beforeToolCall = null, advance: move = advance } = this.#options;
     const llmConfig = this.#llmConfig;
     const onEvent = (event: RunEvent) => {
       if (event instanceof RunStarted) {
@@ -780,12 +899,13 @@ export class ChildRuns {
       env,
       scheduler,
       models,
+      beforeToolCall,
     };
     try {
       let result = await runFlow(child.flow, { ...inputs, ...child.memory }, {
         log: child.log,
-        runId,
-        parent: { runId: parentRunId },
+        runId: child.runId,
+        parent: { runId: child.ownerRunId },
         llmConfig: Object.keys(llmConfig).length > 0 ? llmConfig : null,
         ...common,
       });
@@ -815,7 +935,7 @@ export class ChildRuns {
       this.#publish(child, {
         run: child.id,
         status: "failed",
-        note: `the chat couldn't move the run: ${(error as Error | null)?.message ?? String(error)}`,
+        note: `couldn't move the run: ${(error as Error | null)?.message ?? String(error)}`,
         log: child.log,
       });
     } finally {
@@ -868,17 +988,24 @@ export class ChildRuns {
     }
     if (result.status === "cancelled") return { ...base, status: "cancelled" };
     // A pass over the whole log, once per settled pass: the asks are what the log says is open.
-    const asks = pendingCalls(child.log).map((call) => ({
+    const calls = pendingCalls(child.log);
+    const asks = calls.filter((call) => !call.held).map((call) => ({
       call: call.callId,
       question: questionText(call.arguments),
+    }));
+    const held = calls.filter((call) => call.held).map(({ callId, tool, arguments: args }) => ({
+      call: callId,
+      tool,
+      arguments: args,
     }));
     return {
       ...base,
       status: "waiting",
-      // The children are never gated, so no call of theirs is held.
+      // A held call is listed apart.
       waits: result.waits.map(({ held: _, ...wait }) => wait),
       wake_at: wakeAt(result.waits),
       ...(asks.length > 0 ? { asks } : {}),
+      ...(held.length > 0 ? { held } : {}),
     };
   }
 
@@ -921,4 +1048,305 @@ export class ChildRuns {
     child.waiters.clear();
     for (const waiter of waiting) waiter.resolve(child.status);
   }
+}
+
+/** What an owner handle needs of its driver beyond the driver's public methods. */
+interface OwnerCore {
+  start(
+    flow: ComposedFlow,
+    inputs: Readonly<Record<string, unknown>>,
+    options: ChildStartOptions,
+  ): Promise<StartedChild>;
+  reaches(id: string): boolean;
+  readonly scheduler: Scheduler;
+}
+
+/**
+ * One run's hold on the child flows it starts (`ChildFlows.owner`): it starts children, and reads
+ * and delivers to the runs it reaches, the ones it started and the ones those started, by id. A run
+ * it doesn't reach is as unknown to it as an id no child has. `childFlows` gives the owner's model
+ * these acts as tools.
+ */
+export class ChildFlowOwner {
+  readonly runId: string;
+  readonly group: string;
+  readonly seen: NonNullable<ChildFlowOwnerOptions["seen"]> | null;
+  readonly #driver: ChildFlows;
+  readonly #core: OwnerCore;
+  /** By run, the last status seq this owner's tools showed its model, whichever group showed it. */
+  readonly #shown = new Map<string, number>();
+
+  /** @internal `ChildFlows.owner` makes owners. */
+  constructor(driver: ChildFlows, options: ChildFlowOwnerOptions, core: OwnerCore) {
+    this.runId = options.runId;
+    this.group = options.group;
+    this.seen = options.seen ?? null;
+    this.#driver = driver;
+    this.#core = core;
+  }
+
+  /**
+   * Start `flow` with `inputs` as the driver's next child (`r1`, `r2`, ..., numbered across its
+   * owners): return its id, its log and the `seq` of its first status (`running`) once the log holds
+   * the run's start, while the run goes on in the background; `wait` then sees every later status.
+   *
+   * Starts run one at a time in call order, so ids follow it, and an id is taken only by a start
+   * that succeeds. Each first runs the host's `preflight`, then binds the flow's memory inputs
+   * (`memories.bind`) for `options.project`; every pass of the child gets the same instances.
+   *
+   * @throws What `preflight` throws, and what `memories.bind` throws as `memories.scrub` leaves it,
+   *   before anything is written.
+   * @throws {Error} When the runs were disposed; the signal's reason once it aborted; what `runFlow`
+   *   throws before the run starts (a tool the flow names that the run lacks, say), as
+   *   `memories.scrub` leaves it, with no log left behind.
+   */
+  start(
+    flow: ComposedFlow,
+    inputs: Readonly<Record<string, unknown>>,
+    options: ChildStartOptions = {},
+  ): Promise<StartedChild> {
+    return this.#core.start(flow, inputs, options);
+  }
+
+  /** Whether this owner reaches child `id`: it started it, or a run it reaches did. */
+  reaches(id: string): boolean {
+    return this.#core.reaches(id);
+  }
+
+  /** As `ChildFlows.status`. @throws {RangeError} When this owner doesn't reach run `id`. */
+  status(id: string): ChildStatus {
+    return this.#driver.status(this.#mine(id));
+  }
+
+  /**
+   * Resolve with run `id`'s latest status once it is numbered past `options.after` (by default its
+   * current status's), its driver stops, `options.seconds` pass on the children's clock, or
+   * `options.signal` aborts.
+   *
+   * @throws {RangeError} When this owner doesn't reach run `id`.
+   */
+  async wait(
+    id: string,
+    options: { after?: number; seconds?: number | null; signal?: AbortSignal | null } = {},
+  ): Promise<ChildStatus> {
+    this.#mine(id);
+    const { after, seconds = null, signal = null } = options;
+    const done = new AbortController();
+    const end = () => done.abort();
+    signal?.addEventListener("abort", end, { once: true });
+    if (signal?.aborted) end();
+    if (seconds !== null) this.#core.scheduler.sleep(seconds * 1000, done.signal).then(end, () => {});
+    try {
+      return await this.#driver.next(id, after, { signal: done.signal });
+    } finally {
+      signal?.removeEventListener("abort", end);
+      end();
+    }
+  }
+
+  /** As `ChildFlows.answer`. @throws {RangeError} When this owner doesn't reach run `id`. */
+  answer(id: string, call: string, value: unknown, options: Resend = {}): Promise<ChildStatus> {
+    return this.#driver.answer(this.#mine(id), call, value, options);
+  }
+
+  /** As `ChildFlows.message`. @throws {RangeError} When this owner doesn't reach run `id`. */
+  message(id: string, inbox: string, text: string, options: Resend & { key?: string | null } = {}): Promise<ChildStatus> {
+    return this.#driver.message(this.#mine(id), inbox, text, options);
+  }
+
+  /** As `ChildFlows.closeInbox`. @throws {RangeError} When this owner doesn't reach run `id`. */
+  closeInbox(id: string, inbox: string, options: Resend = {}): Promise<ChildStatus> {
+    return this.#driver.closeInbox(this.#mine(id), inbox, options);
+  }
+
+  /** As `ChildFlows.stop`. @throws {RangeError} When this owner doesn't reach run `id`. */
+  stop(id: string, options: Resend = {}): Promise<ChildStatus> {
+    return this.#driver.stop(this.#mine(id), options);
+  }
+
+  /** @internal The last status seq of run `id` this owner's model has seen: shown, or told `seen`. */
+  lastSeen(id: string): number {
+    return Math.max(this.#shown.get(id) ?? 0, this.seen?.seen(id) ?? 0);
+  }
+
+  /**
+   * @internal Note that the owner's model is shown `status`, marking it read with `seen`; return it
+   * without the replies and memory notes the model was shown before.
+   */
+  show(status: ChildStatus): ChildStatus {
+    const last = this.lastSeen(status.run);
+    if (this.seen !== null) {
+      this.#driver.markRead(status.run, status.seq);
+      this.seen.markSeen(status.run, status.seq);
+    }
+    this.#shown.set(status.run, Math.max(status.seq, last));
+    // The stored status keeps the replies and notes it was published with; once shown, they are read.
+    const { replies: _, memory_notes: __, ...unrepeated } = status;
+    return status.seq <= last ? unrepeated : status;
+  }
+
+  /** @throws {RangeError} When this owner doesn't reach run `id`. */
+  #mine(id: string): string {
+    if (!this.reaches(id)) throw new YianRangeError(`no run '${id}'`);
+    return id;
+  }
+}
+
+/**
+ * Where in `value` an object that reads as a `Message` (`checkMessage`) carries an author or an
+ * action part, as a value path; `null` when none does. The value is read, not the type the question
+ * declares: an untyped answer reaches an agent as a message too. Only the host signs a message.
+ */
+function signedMessageAt(value: unknown, path: readonly (string | number)[] = []): (string | number)[] | null {
+  if (typeof value !== "object" || value === null) return null;
+  const { author, parts } = value as { author?: unknown; parts?: unknown };
+  const action = Array.isArray(parts) ? parts.findIndex((part) => (part as { type?: unknown } | null)?.type === "action") : -1;
+  // The shape first, as it is cheap; then the whole value must be a `Message`.
+  if (((author !== undefined && author !== null) || action !== -1) && isMessage(value)) {
+    return author !== undefined && author !== null ? [...path, "author"] : [...path, "parts", action];
+  }
+  for (const [key, item] of Array.isArray(value) ? value.entries() : Object.entries(value)) {
+    const at = signedMessageAt(item, [...path, key]);
+    if (at !== null) return at;
+  }
+  return null;
+}
+
+/** Whether `value` reads as a `Message`. */
+function isMessage(value: unknown): boolean {
+  try {
+    buildValueAs(MESSAGE, value);
+    return true;
+  } catch (error) {
+    if (error instanceof TypeCheckError) return false;
+    throw error;
+  }
+}
+
+/** The note refusing a value that signs a message at `path`. */
+function signedNote(path: readonly (string | number)[]): string {
+  return `a message you pass can't carry an author or an action part (at ${renderValuePath(path)})`;
+}
+
+/**
+ * The tools a run's model drives the child flows `owner` reaches with, for the host to pass under
+ * `owner.group` in that run's tools, so the model sees `<group>_status`, and so on: `status` and
+ * `wait` read a run's status, and `message`, `answer`, `close_inbox` and `stop` deliver to it.
+ *
+ * Each returns the run's status as `shownStatus` does; once the owner showed them, its replies and
+ * memory notes aren't shown again, and with `owner.seen` they are marked read. A run the owner
+ * doesn't reach, or an argument of the wrong type, is a `ReportedToolError`. The deliveries are
+ * `resumable`: a resumed agent sends a crash-cut call again under its call id, which keys
+ * `message`'s send, and a repeated answer, close or stop changes nothing; a call sent again
+ * (`ctx.attempt` above 1) is `resent` (`ChildFlows.answer`).
+ */
+export function childFlows(owner: ChildFlowOwner): FunctionTool[] {
+  const named = (tool: string) => `${owner.group}_${tool}`;
+  const run = "The run's id (r1, r2, ...).";
+  const status =
+    "Returns the run's status, a record: status (running, waiting, succeeded, failed or cancelled), " +
+    "output, failure, waits, asks (questions, each with its call id), held (tool calls it holds for " +
+    `approval, which ${named("answer")} can't settle), replies (what it said since you last looked), ` +
+    "memory_notes (a memory it created or that changed, since you last looked), note (something " +
+    "that couldn't be done) and log.";
+  const show = (given: ChildStatus) => shownStatus(owner.show(given));
+  const known = (args: Record<string, unknown>) => {
+    const id = stringArg(args, "run");
+    if (!owner.reaches(id)) throw new ReportedToolError(`no run '${id}'`);
+    return id;
+  };
+  const runArguments = (...more: [name: string, description: string][]) =>
+    stringArguments(["run", run, true], ...more.map(([name, text]): [string, string, boolean] => [name, text, true]));
+  return [
+    tool({
+      name: "status",
+      description: `Read where a run you started stands now, without waiting. ${status}`,
+      parameters: runArguments(),
+      isConcurrencySafe: () => true,
+      execute: (args) => show(owner.status(known(args))),
+    }),
+    tool({
+      name: "wait",
+      description:
+        "Wait for a run you started to change (a reply, a question, its end), up to `seconds` (at " +
+        `most ${WAIT_MAX_S}), and return its status then, or at the timeout. Returns at once when it ` +
+        `changed since you last saw it. ${status}`,
+      parameters: {
+        type: "object",
+        properties: {
+          run: { type: "string", description: run },
+          seconds: { type: "number", description: `How long to wait at most, in seconds (at most ${WAIT_MAX_S}).` },
+        },
+        required: ["run", "seconds"],
+        additionalProperties: false,
+      },
+      isConcurrencySafe: () => true,
+      execute: async (args, ctx) => {
+        const id = known(args);
+        const seconds = args["seconds"];
+        if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) {
+          throw new ReportedToolError("seconds must be a number of seconds, 0 or more");
+        }
+        const after = owner.lastSeen(id);
+        return show(await owner.wait(id, { after, seconds: Math.min(seconds, WAIT_MAX_S), signal: ctx.signal }));
+      },
+    }),
+    tool({
+      name: "message",
+      description:
+        "Send text to an Inbox input of a run you started, as a message to a flow that takes them; " +
+        `its status's waits name the inbox it waits on. ${status}`,
+      parameters: runArguments(["inbox", "The Inbox input's name."], ["text", "The message."]),
+      resumable: true,
+      execute: async (args, ctx) => {
+        const id = known(args);
+        const sent = { key: ctx.callId, resent: ctx.attempt > 1 };
+        return show(await owner.message(id, stringArg(args, "inbox"), stringArg(args, "text"), sent));
+      },
+    }),
+    tool({
+      name: "answer",
+      description:
+        "Answer a question a run you started asks (its status's asks), by its call id, with the answer " +
+        "of the person it is for: don't make one up, and don't answer a question twice. The answer is " +
+        `any JSON value but null; text for a plain question. ${status}`,
+      parameters: {
+        type: "object",
+        properties: {
+          run: { type: "string", description: run },
+          call: { type: "string", description: "The question's call id, from the status's asks." },
+          answer: { description: "Any JSON value; text for a plain question." },
+        },
+        required: ["run", "call", "answer"],
+        additionalProperties: false,
+      },
+      resumable: true,
+      execute: async (args, ctx) => {
+        const id = known(args);
+        const call = stringArg(args, "call");
+        const answer = args["answer"];
+        if (answer === null || answer === undefined) throw new ReportedToolError("answer can't be null");
+        return show(await owner.answer(id, call, answer, { resent: ctx.attempt > 1 }));
+      },
+    }),
+    tool({
+      name: "close_inbox",
+      description:
+        "Close an Inbox input of a run you started, so the flow stops waiting for messages there and " +
+        `can finish. ${status}`,
+      parameters: runArguments(["inbox", "The Inbox input's name."]),
+      resumable: true,
+      execute: async (args, ctx) => {
+        const id = known(args);
+        return show(await owner.closeInbox(id, stringArg(args, "inbox"), { resent: ctx.attempt > 1 }));
+      },
+    }),
+    tool({
+      name: "stop",
+      description: `Cancel a run you started; use it only when asked. ${status}`,
+      parameters: runArguments(),
+      resumable: true,
+      execute: async (args, ctx) => show(await owner.stop(known(args), { resent: ctx.attempt > 1 })),
+    }),
+  ];
 }

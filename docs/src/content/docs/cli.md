@@ -323,8 +323,9 @@ and stop as the assistant's. A try that `author_flow` runs is that run's own chi
 `~/.yian/runs/<chat run id>-r<n>-r<m>/log.jsonl`.
 
 When you ask the assistant to stop what a flow is doing, it interrupts the flow: it takes back its
-own messages the flow hasn't read, then cuts the flow's current step. The flow goes on and waits
-for its next message; to end it, ask the assistant to stop it.
+own messages the flow hasn't read, then cuts the flow's current step. With no step running, the
+flow's next turn stops at once, and a message someone else queued for it may go unanswered; the
+assistant is told how many. The flow goes on; to end it, ask the assistant to stop it.
 
 ### Building and reviewing flows
 

@@ -117,7 +117,7 @@ test("interrupt while idle at the take appends nothing", async () => {
   const model = new ScriptedModel([callReply(["hold", {}, "c1"])], CONFIG);
   await runFlow(flow, {}, { env, log, tools: tools(), models: serving(model), runId: "r" });
   const before = readFileSync(log);
-  expect(await interrupt(log, "m", { env })).toEqual({ seq: null, nodes: [], calls: [] });
+  expect(await interrupt(log, "m", { env })).toEqual({ seq: null, nodes: [], calls: [], released: [] });
   expect(readFileSync(log).equals(before)).toBe(true);
 });
 
@@ -155,7 +155,7 @@ test("a crashed run: an offline interrupt names only waiting readers", async () 
   const log = freshLog();
   await crashAfter(cut, () => runFlow(flow, {}, { env, log, tools: tools(), models: serving(script()), runId: "r" }));
   const before = readRunLog(log).length;
-  expect(await interrupt(log, "m", { env })).toEqual({ seq: before, nodes: [], calls: [] });
+  expect(await interrupt(log, "m", { env })).toEqual({ seq: before, nodes: [], calls: [], released: [] });
   const appended = readRunLog(log).slice(before);
   expect(appended.map(({ record }) => record)).toEqual([new InterruptedRecord("m", [])]);
 });
@@ -324,7 +324,7 @@ test("idle at the take: interrupt records nothing", async () => {
   const model = new ScriptedModel([], CONFIG);
   expect((await runFlow(await loadFlow(TAKE_REPLY), {}, { env, log, models: serving(model), runId: "r" })).status).toBe("waiting");
   const before = readFileSync(log);
-  expect(await interrupt(log, "m", { env })).toEqual({ seq: null, nodes: [], calls: [] });
+  expect(await interrupt(log, "m", { env })).toEqual({ seq: null, nodes: [], calls: [], released: [] });
   expect(readFileSync(log).equals(before)).toBe(true);
 });
 
@@ -334,7 +334,7 @@ test("a Stop during an approval ask stops the reply after it", async () => {
   expect((await advance(options)).status).toBe("waiting");
   const [ask] = pendingCalls(log);
   const stop = await interrupt(log, "m", { env });
-  expect(stop).toEqual({ seq: readRunLog(log).at(-1)!.seq, nodes: [], calls: [] });
+  expect(stop).toEqual({ seq: readRunLog(log).at(-1)!.seq, nodes: [], calls: [], released: [] });
   await complete(log, ask!.callId, { output: "yes" }, { env });
   const done = await advance(options);
   expect(done.status, done.failure?.message).toBe("succeeded");
@@ -372,7 +372,7 @@ test("a Stop survives a host stop and a re-wait before it stopped anyone", async
 test("a Stop after the send, before the take wakes, stops the reply", async () => {
   const model = new ScriptedModel([], CONFIG);
   const { log, options } = await heardHi(TAKE_REPLY, model);
-  expect(await interrupt(log, "m", { env })).toEqual({ seq: readRunLog(log).at(-1)!.seq, nodes: [], calls: [] });
+  expect(await interrupt(log, "m", { env })).toEqual({ seq: readRunLog(log).at(-1)!.seq, nodes: [], calls: [], released: [] });
   const done = await advance(options);
   expect(done.status, done.failure?.message).toBe("succeeded");
   expectStoppedByApplied(log, done.output, model);
@@ -481,7 +481,7 @@ test("a repeated Esc during the reply records nothing and never carries over", a
     })();
   };
   expect((await advance({ ...options, onStream })).status).toBe("waiting");
-  expect(second).toEqual({ seq: null, nodes: [], calls: [] });
+  expect(second).toEqual({ seq: null, nodes: [], calls: [], released: [] });
   expect(stopsAt(log)).toEqual([["reply1"]]);
   await complete(log, pendingCalls(log)[0]!.callId, { output: "yes" }, { env });
   const done = await advance(options);
@@ -495,7 +495,7 @@ test("a repeated Esc during an approval ask records nothing; the reply after it 
   expect((await advance(options)).status).toBe("waiting");
   expect((await interrupt(log, "m", { env })).seq).not.toBeNull();
   const before = readFileSync(log);
-  expect(await interrupt(log, "m", { env })).toEqual({ seq: null, nodes: [], calls: [] });
+  expect(await interrupt(log, "m", { env })).toEqual({ seq: null, nodes: [], calls: [], released: [] });
   expect(readFileSync(log).equals(before)).toBe(true);
   await complete(log, pendingCalls(log)[0]!.callId, { output: "yes" }, { env });
   const done = await advance(options);
@@ -612,7 +612,7 @@ test("offline Esc on a crashed run with a take waiting and a node in flight is r
   expect(kinds(log).at(-1)).toBe("node_waiting");
   expect(readRunLog(log).some(({ kind, record }) => kind === "node_started" && (record as { nodeId: string }).nodeId === "gate")).toBe(true);
   const before = readRunLog(log).length;
-  expect(await interrupt(log, "m", { env })).toEqual({ seq: before, nodes: [], calls: [] });
+  expect(await interrupt(log, "m", { env })).toEqual({ seq: before, nodes: [], calls: [], released: [] });
 });
 
 /** `reply` reads steer inbox `m` and calls `slow`; beside it `heard` takes from `m` once `gate` has run. */
@@ -680,7 +680,7 @@ test("offline, a crashed reader still holding its interrupt is being stopped: a 
   expect(w.stops.size).toBe(0);
   expect([...w.interrupts.keys()]).toEqual(["reply"]);
   const before = readFileSync(log);
-  expect(await interrupt(log, "m", { env })).toEqual({ seq: null, nodes: [], calls: [] });
+  expect(await interrupt(log, "m", { env })).toEqual({ seq: null, nodes: [], calls: [], released: [] });
   expect(readFileSync(log).equals(before)).toBe(true);
 });
 
@@ -724,7 +724,7 @@ test("offline, a crashed reader stopping by another inbox doesn't make an Esc a 
   await crashAfter(stopped + 1, () => stopNoter(log));
   expect([...foldedWaits(log).interrupts.keys()]).toEqual(["noter"]);
   const before = readRunLog(log).length;
-  expect(await interrupt(log, "a", { env })).toEqual({ seq: before, nodes: [], calls: [] });
+  expect(await interrupt(log, "a", { env })).toEqual({ seq: before, nodes: [], calls: [], released: [] });
 });
 
 // --- a running tool call learns of the interrupt, across a crash ------------------------------ //

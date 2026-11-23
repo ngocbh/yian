@@ -341,7 +341,7 @@ test("a second interrupt while a Stop stands records nothing, whoever makes it",
   expect((await runFlow(await loadFlow(ASK_THEN_REPLY), {}, options)).status).toBe("waiting");
   await interrupt(log, "m", { env, by: ADA });
   const before = readFileSync(log);
-  expect(await interrupt(log, "m", { env, by: OWNER })).toEqual({ seq: null, nodes: [], calls: [] });
+  expect(await interrupt(log, "m", { env, by: OWNER })).toEqual({ seq: null, nodes: [], calls: [], released: [] });
   expect(readFileSync(log).equals(before)).toBe(true);
 });
 

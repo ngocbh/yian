@@ -402,16 +402,17 @@ console.log(done.status, done.output); // succeeded yes
 ### Interrupt and cancel
 
 ```ts check=fragment
-const stopped = await interrupt(log, "notes"); // { seq, nodes, calls }
+const stopped = await interrupt(log, "notes"); // { seq, nodes, calls, released }
 const closed = await cancel(log);              // the open host calls it closed
 ```
 
 `interrupt` stops the agents whose `steer_inbox:` is that inbox (see
 [Agents](/agents/#steering-and-interrupts)). Each one's reply is cut: an `Optional(...)` output
 succeeds with `null`, any other fails with `agent.interrupted`. A later `complete` of the open
-calls it closes is refused, the calls of the agents' running [flow calls](/agents/#flows-as-tools)
-included, which end with it. A running tool call learns of it through `ctx.interrupted` (see
-[Tools and skills](#tools-and-skills)). An agent that starts reading the inbox
+calls it closes (`calls`) is refused, the calls of the agents' running
+[flow calls](/agents/#flows-as-tools) included, which end with it. A waiting agent's released
+calls that hadn't run are closed too (`released`). A running tool call learns of it through
+`ctx.interrupted` (see [Tools and skills](#tools-and-skills)). An agent that starts reading the inbox
 soon after is stopped too, before its first model call. `interrupt` appends nothing
 (`seq: null`) when the run is waiting for the next message on the inbox, or is already stopping.
 Queued steers stay; `withdraw` takes them back.
@@ -604,14 +605,24 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
   `<group>_message`, `<group>_answer`, `<group>_interrupt`, `<group>_close_inbox` and
   `<group>_stop`, which deliver to it. Each returns the run's status. `wait` waits at most 120
   seconds on the driver's `scheduler`.
-- **Interrupt.** `<group>_interrupt` takes `run` and `inbox`. It first takes back the model's own
-  unread sends to that inbox (`withdraw` with the owner's `by`), never anyone else's. Then it
-  [interrupts](#interrupt-and-cancel) the inbox: the agents reading it as their steer inbox stop
-  their current step, and their open calls close, held calls and released calls not yet run
-  among them. The run goes on and waits for its next message; `stop` ends it. The status adds
-  `interrupted`, what it did (`interrupted (took back 1 message)`), and `taken_back`, the texts
-  taken back. The driver's own `interrupt` returns the sends it took back and `interrupt`'s
-  result, and takes back nothing, since the host's own sends are no one's.
+- **Interrupt.** `<group>_interrupt` takes `run` and `inbox`.
+  1. It takes back the model's own unread sends to that inbox (`withdraw` with the owner's
+     `by`), never anyone else's. `by` names no node, so two agents of one owner run take back
+     each other's sends.
+  2. It [interrupts](#interrupt-and-cancel) the inbox: the agents reading it as their steer inbox
+     stop their current step, and their open calls close, held calls and released calls not yet
+     run among them. The run goes on; `stop` ends it. With no agent reading it now, the next turn
+     on the inbox stops at once, and may use up a message another sender queued without
+     answering it.
+
+  The status adds `interrupted`, what it did (`interrupted (took back 1 message)`), with how
+  many queued messages from others that next turn may use up, and `taken_back`, the first 20
+  texts taken back, each cut at 4000 characters with a note. When the take-back lands and the
+  interrupt then fails, the status's `note` says why, and what came back is still listed. The
+  driver's own `interrupt` returns a `ChildInterrupt`: the status, the sends taken back
+  (`taken`), whether the interrupt happened (`landed`), the queued count (`queued`) and
+  `interrupt`'s result. Without a sender it takes back nothing, since the host's own sends are
+  no one's.
 - **Start.** With the `start` option the group has `<group>_start` too, which takes `flow`, `inputs`
   and `content` (a draft's text). In order:
   1. `resolve` finds the flow the call names. Throw a `ReportedToolError` for one it may not start,

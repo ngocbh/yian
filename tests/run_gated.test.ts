@@ -310,10 +310,10 @@ output: \${reply.output}
     }
   }
 
-  test("an interrupt closes a waiting agent's released hold, which interrupt() doesn't list, and the tool never runs", async () => {
+  test("an interrupt closes a waiting agent's released hold, which interrupt() lists apart, and the tool never runs", async () => {
     const { log, options, ran, callId } = await heldRun();
     await releaseByHand(log, callId);
-    expect(await interrupt(log, "m", { env: NO_ENV })).toMatchObject({ nodes: ["reply"], calls: [] });
+    expect(await interrupt(log, "m", { env: NO_ENV })).toMatchObject({ nodes: ["reply"], calls: [], released: [callId] });
     const done = await advance(options);
     expect(done.status, done.failure?.message).toBe("succeeded");
     expect(ran).toEqual([]);

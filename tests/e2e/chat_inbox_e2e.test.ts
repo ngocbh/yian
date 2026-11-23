@@ -249,7 +249,7 @@ test("Esc right after a send, offline: withdraw takes the message back, interrup
   const seq = await send(log, "owner_messages", user("hi"), env);
   expect(await withdraw(log, "owner_messages", env)).toEqual([{ seq, value: user("hi"), by: null }]);
   // The take waits again with nothing unread: the chat waits for the next message.
-  expect(await interrupt(log, "owner_messages", env)).toEqual({ seq: null, nodes: [], calls: [] });
+  expect(await interrupt(log, "owner_messages", env)).toEqual({ seq: null, nodes: [], calls: [], released: [] });
   expect((await advance({ ...options, log })).status).toBe("waiting");
   expect(script.requests).toHaveLength(0);
   await send(log, "owner_messages", user("again"), env);

@@ -2505,9 +2505,11 @@ export interface InterruptResult {
   readonly nodes: readonly string[];
   /**
    * The open host calls it closed, as `pendingCalls` listed them. A waiting agent's released calls
-   * it closed aren't listed; their `CallClosed` events report them.
+   * it closed are in `released`.
    */
   readonly calls: readonly PendingCall[];
+  /** The ids of the waiting agents' released calls it closed before they ran. */
+  readonly released: readonly string[];
 }
 
 /**
@@ -2534,7 +2536,8 @@ export interface InterruptResult {
  * @param log The run's JSONL log.
  * @param inbox The name of one of the flow's `Inbox(T)` inputs.
  * @param options See `DeliveryOptions`.
- * @returns The record's seq, the agents it named and the open host calls it closed.
+ * @returns The record's seq, the agents it named, and the open host calls and released calls it
+ *   closed.
  * @throws TypeError when `inbox` isn't a string, `options.by` isn't an author or `null`, or
  *   `options.flow` isn't a `ComposedFlow` or `null`.
  * @throws RangeError when a field of `options.by` is empty.
@@ -2545,12 +2548,15 @@ export interface InterruptResult {
 export async function interrupt(log: string, inbox: string, options: DeliveryOptions = {}): Promise<InterruptResult> {
   if (typeof inbox !== "string") throw new YianTypeError("inbox must be a string");
   let open: readonly PendingCall[] = [];
+  let released: string[] = [];
   const { seq, events, record } = await deliverTo(log, { kind: "interrupt", inbox }, options, (state) => {
     open = openHostCalls(state.waits, (call) => stateArguments(state, call));
+    released = [...state.waits.calls.values()].filter((call) => call.state === "released").map((call) => call.callId);
   });
   const closed = new Set(events.flatMap((event) => (event instanceof CallClosed ? [event.callId] : [])));
   const nodes = record instanceof InterruptedRecord ? [...record.nodes] : [];
-  return { seq, nodes, calls: open.filter((call) => closed.has(call.callId)) };
+  const calls = open.filter((call) => closed.has(call.callId));
+  return { seq, nodes, calls, released: released.filter((id) => closed.has(id)) };
 }
 
 /** One open host call of a run, as `pendingCalls` lists it. */

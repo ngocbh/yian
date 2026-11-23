@@ -1,7 +1,7 @@
 /**
  * The child-run driver: each child driven in process by its own driver over a held clock, from
- * flows loaded confined to a temporary root, with host hooks that do nothing unless a test gives
- * its own.
+ * flows loaded with a temporary folder as their code root, with host hooks that do nothing unless a
+ * test gives its own.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -34,7 +34,7 @@ let root: string;
 let runs: ChildRuns | null;
 
 beforeEach(() => {
-  root = realpathSync(mkdtempSync(join(tmpdir(), "yian-chat-runs-")));
+  root = realpathSync(mkdtempSync(join(tmpdir(), "yian-child-flows-")));
   runs = null;
 });
 
@@ -63,7 +63,7 @@ function childRuns(options: Partial<ChildRunsOptions> = {}): ChildRuns {
   return runs;
 }
 
-/** Load `text` as the flow `<root>/<name>`, its busy nodes held by the gate file `<root>/gate`. */
+/** Load `text` as the flow `name`, the temporary root its code root, its busy nodes held by `<root>/gate`. */
 function flow(text: string, name = "child.yaml"): Promise<ComposedFlow> {
   const source = text.replaceAll("@GATE@", join(root, "gate"));
   return loadFlow(source, { sourceLabel: name, baseDir: root, codeRoot: root, env: NO_ENV });

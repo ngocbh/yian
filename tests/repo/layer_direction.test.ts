@@ -106,7 +106,7 @@ const LAYER_HINTS: Record<string, string> = {
     "nodes must not import compile; return a canonical Grow seed and let the injected compile-layer " +
     "builder interpret it. nodes must not import runtime; direct-driver fallbacks belong on a lower seam",
   compile: "compile must stay representation-neutral and execution-free",
-  run: "the yian/run entry is run_entry.ts, which re-exports run.ts and the child-flow toolkit beside it",
+  run: "run.ts must not import the child-flow toolkit; the yian/run entry, run_entry.ts, carries both",
   child_flows: "the child-run driver takes what its host decides through its hooks",
 };
 
@@ -170,6 +170,18 @@ const RULES: Rule[] = [
       file: "llm/client.ts",
       bad: ["llm_clients", "nodes", "runtime", "index", "typesys", "typesys/other", "diagnostics"],
       good: ["defaults", "platform", "typesys/json", "typesys/errors", "llm/errors", "llm/index"],
+    },
+  },
+  {
+    name: "run_entry.ts imports only run and child_flows",
+    files: only("run_entry.ts"),
+    allow: ["run", "child_flows"],
+    builtins: false,
+    why: "run_entry.ts is the yian/run entry: it re-exports run.ts and the child-flow toolkit, and nothing else",
+    samples: {
+      file: "run_entry.ts",
+      bad: ["cli/chat_run_tools", "index", "runtime/log", "tools/index", "platform"],
+      good: ["run", "child_flows"],
     },
   },
 ];

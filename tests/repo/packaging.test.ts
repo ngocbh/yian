@@ -456,12 +456,16 @@ describe("entry points", () => {
     expect(names).toEqual([]);
   });
 
-  test("the run entry re-exports every name run.ts exports, by name", () => {
+  test("the run entry re-exports every name run.ts exports, by name, each value as a value", async () => {
     const read = (module: string) => readFileSync(join(ROOT, "src", `${module}.ts`), "utf8");
     const entry = read("run_entry");
     expect(blank(entry)).not.toMatch(/^export \*/m);
     const exported = new Set(exportedNames(entry));
     expect(exportedNames(read("run")).filter((name) => !exported.has(name))).toEqual([]);
+    // A value re-exported as `type X` would leave the runtime entry.
+    const values = async (module: string) =>
+      Object.keys(await import(pathToFileURL(join(ROOT, "src", `${module}.ts`)).href)).sort();
+    expect(await values("run_entry")).toEqual(await values("run"));
   });
 });
 

@@ -554,7 +554,7 @@ const driver = new ChildFlows({
   preflight: () => {},                       // throws to refuse a start
   memories: { bind: () => ({}), drift: (d) => `${d.input} changed`, scrub: (error) => error },
 });
-const owner = driver.owner({ runId, group: "flows" });
+const owner = driver.owner({ runId, group: "flows", label: "assistant", people: ["Ada"] });
 const started = await owner.start(flow, { topic: "billing" });
 const flows = childFlows(owner, {
   start: {                                   // optional: lets the model start flows too
@@ -570,10 +570,33 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
 ```
 
 - **Ids.** Children are `r1`, `r2`, ..., numbered across the driver. A child's run id is
-  `<owner's run id>-r<n>`, and it records the owner's run as its parent. Pass `tools` as a function
-  of the child's run id to give it tools that act as that run, such as an owner of its own. A new
-  driver passes over an id whose run folder an earlier process left, but it doesn't know that child:
-  it neither drives nor reaches it.
+  `<owner's run id>-r<n>`. Pass `tools` as a function of the child's run id to give it tools that
+  act as that run, such as an owner of its own. A new driver passes over an id whose run folder an
+  earlier process left, but it doesn't know that child: it neither drives nor reaches it.
+- **Labels.** Labels name who speaks, and you supply them; yian keeps them from passing for one
+  another.
+  - An owner's `label` is the agent's name (`yian-chat`), and `people` are the people who act
+    through it (`the user` in `yian chat`).
+  - A child's label is `<flow> r<n>`: its flow's id with accents dropped, each run of characters
+    outside `A-Za-z0-9._-` made one `_`, cut at 40 characters (`review_flow r1`). Pass `label` to
+    `start` to give it one of your own, such as an instrument's name (`shell 1`).
+  - A label reads as it looks: one holding a control, format or invisible character, or
+    whitespace at an end, doubled or other than a space, is refused. Labels are compared after
+    NFKC normalization and case folding, so `ＡＤＡ` reads as `Ada`.
+  - No label may read as `yian` or `office`, a relay (the word `via`), or a child's (ending in
+    `r<n>`). No person may read as the owner or another person. A label you give a child also may
+    not read as its owner's, a person's, a label above it in the tree, or a sibling's that still
+    runs. An owner of a run the driver started has that run's label.
+  - Lookalikes from other scripts (`уіаn-сhаt` in Cyrillic) aren't caught: vet the names you pass.
+- **Parent.** A child records `parent: {runId, node, inbox, label}`: the owner's run, the node whose
+  call started it (`start`'s `node`, which the group's `start` passes), the owner's `inbox` (none by
+  default) and its own label.
+- **Who sent it.** Every delivery the group makes records `by: {kind: "agent", name: <label>, run:
+  <owner's run id>}`, never the calling node, so each turn of a loop is the same sender. A
+  `message` to an `Inbox(Message)` is a user message authored by the owner's label, and so is
+  each user message with no author that the model passes in an answer or a start's inputs. To an
+  `Inbox(str)` the text goes as is, and the status's `note` says the run can't tell who wrote it.
+  The driver's own `answer`, `message`, `closeInbox` and `stop` sign nothing and record no one.
 - **Reach.** An owner acts on the runs it started, and every run they start, at any depth. Any
   other id is `no run '<id>'`.
 - **The group.** The model sees `<group>_status` and `<group>_wait`, which read a run's status, and
@@ -586,7 +609,7 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
   2. A library is refused.
   3. The inputs are checked as the run's start checks them. An Inbox input is never given, and a
      memory input is the host's to bind (`memories.bind`). No message in them may carry an `author`
-     or an action part.
+     or an action part; a user message is signed with the owner's label.
   4. `approve` returns `null` to let it start, or why not.
   5. The owner starts it.
 

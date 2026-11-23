@@ -21,6 +21,10 @@
  * who hears each status. Every pass of a child gets the same memory instances. A group's `start`
  * asks its host which flow a call names and whether it may start (`ChildFlowStart`).
  *
+ * The host names who speaks: an owner by its label, which signs its model's messages to its children
+ * and names it on each delivery its model makes (`by`), and a child by its own, `<flow> r<n>` unless
+ * the host gives one. No label may pass for another.
+ *
  * A child's `ask` returns `pending()`, so the child waits durably for the user's answer, which the
  * host relays with `answer`. The children's stop is their own, tied to the host's exit by
  * `dispose`, never to the call that started them.
@@ -40,7 +44,7 @@ import type { Env } from "./defaults.ts";
 import { reprText } from "./diagnostics.ts";
 import { NodeSucceeded, type RunEvent, RunStarted } from "./events.ts";
 import type { ModelAccess } from "./llm_clients/factory.ts";
-import type { MemoryBase } from "./memory/base.ts";
+import type { Author, MemoryBase } from "./memory/base.ts";
 import { coerceInputs } from "./nodes/binding.ts";
 import { isSystemError, removeEmptyDir, type Scheduler, sleepUntil } from "./platform.ts";
 import {
@@ -63,7 +67,7 @@ import {
   runLogPath,
   send,
 } from "./run.ts";
-import { recordTimeMs } from "./runtime/log.ts";
+import { recordTimeMs, type RunParent } from "./runtime/log.ts";
 import { wakeAt } from "./runtime/waits.ts";
 import type { Skill } from "./skills/catalog.ts";
 import { pending, TAKE } from "./tools/context.ts";
@@ -76,6 +80,7 @@ import {
   buildValueAs,
   isInboxType,
   isMemoryType,
+  isRecord,
   renderValuePath,
   TypeCheckError,
   typeEquals,
@@ -92,6 +97,35 @@ const LIST_ITEMS = 20;
 
 /** The most characters of each text field a run tool's status shows the model. */
 const STATUS_TEXT_CHARS = 4000;
+
+/** The most characters of the flow part of a child's label. */
+const LABEL_FLOW_CHARS = 40;
+
+/**
+ * What a label may not hold, as it doesn't show or doesn't read as what it is: control, format and
+ * default-ignorable characters (bidi controls among them), lone surrogates, the braille blank and
+ * the Hangul fillers.
+ */
+const UNSEEN = /[\p{Cc}\p{Cf}\p{Cs}\p{Default_Ignorable_Code_Point}\p{Bidi_Control}\u2800\u115f\u1160\u3164\uffa0]/u;
+
+/** Whitespace a label may not hold once NFKC-normalized: at an end, doubled, or other than a space. */
+const LOOSE_SPACE = /^\s|\s$|\s\s|[^\S ]/u;
+
+/** What no label may read as (by `labelKey`): nothing is signed `yian` or `office`. */
+const RESERVED: ReadonlySet<string> = new Set(["yian", "office"]);
+
+/** A child's label (`<flow> r<n>`), as `labelKey` reads a label: one whose last word is `r` and digits. */
+const CHILD_LABEL = /(^|\s)r\p{Nd}+$/u;
+
+/** A relay's label (`<person>, via <employee>`), as `labelKey` and `VIA_LOOKALIKES` read one: the word `via`. */
+const RELAY_LABEL = /(^|[^\p{L}\p{N}])via($|[^\p{L}\p{N}])/u;
+
+/** Letters of other scripts that look like `v`, `i` or `a`, read as those when looking for `via`. */
+const VIA_LOOKALIKES: Readonly<Record<string, string>> = {
+  "\u03bd": "v", "\u0475": "v", "\u1d20": "v",
+  "\u0131": "i", "\u0269": "i", "\u03b9": "i", "\u0456": "i", "\u04cf": "i",
+  "\u0251": "a", "\u03b1": "a", "\u0430": "a",
+};
 
 /** @internal The longest a group's `wait` waits, in seconds. */
 export const WAIT_MAX_S = 120;
@@ -140,8 +174,8 @@ export interface ChildStatus {
   readonly memory_notes?: readonly string[];
   /**
    * Something the driver couldn't do with the run, in words: a delivery the run refused or one made
-   * after `dispose` (only on the status that call returns), or the error that stopped the driver of
-   * a failed child.
+   * after `dispose`, or a signed message that went as plain text (only on the status that call
+   * returns); or the error that stopped the driver of a failed child.
    */
   readonly note?: string;
   /** The child's run log. */
@@ -240,6 +274,18 @@ export interface ChildStartOptions {
   skills?: ReadonlyMap<string, Skill>;
   /** The flow file's project folder, which `memories.bind` keys the child's memories by; `null` for none. */
   project?: string | null;
+  /**
+   * The owner's node that starts the child (`ToolContext.node`), which it records in its parent;
+   * `null` or `""` (the default) when no one node does.
+   */
+  node?: string | null;
+  /**
+   * The child's label, which signs what it says to its owner, in place of `<flow> r<n>`: an
+   * instrument's name, say (`shell 1`). It may not read as its owner's, a person's, a relay's
+   * (`<person>, via <employee>`) or another child's, whatever its case, spacing or zero-width
+   * characters. `null` (the default) for `<flow> r<n>`.
+   */
+  label?: string | null;
 }
 
 /** A child once its log holds its start: its id, its log, and the seq of its first status. */
@@ -291,6 +337,24 @@ export interface ChildFlowOwnerOptions {
   /** The owner's run: each child it starts has the run id `<runId>-r<n>` and records it as its parent. */
   readonly runId: string;
   /**
+   * The owner's author label, the employee's name (`yian-chat`): a message its model sends a child
+   * is signed with it, and each delivery its model makes is recorded as its run's agent by it. It
+   * may not read as a child's label (`<flow> r<n>`) or a relay's (`<person>, via <employee>`). For a
+   * run this driver started, it is that run's label, the default; any other run needs one.
+   */
+  readonly label?: string | null;
+  /**
+   * The labels of the people who act through the owner (`the user` in `yian chat`), which no child's
+   * label may read as. Each is checked as `label` is. An owner of a run this driver started has its
+   * starter's by default; any other none.
+   */
+  readonly people?: readonly string[] | null;
+  /**
+   * The owner's inbox its children report to, which each records in its parent; `null` (the
+   * default) for none.
+   */
+  readonly inbox?: string | null;
+  /**
    * The key the host passes the owner's tools under (`childFlows`), which their texts name them
    * by: `<group>_status`, and so on.
    */
@@ -335,10 +399,10 @@ interface Waiter {
 /** One child and its driver's state. */
 interface Child {
   readonly id: string;
-  /** Its run id, `<ownerRunId>-<id>`. */
+  /** Its run id, `<owner's run id>-<id>`. */
   readonly runId: string;
-  /** The run of the owner that started it, which it records as its parent. */
-  readonly ownerRunId: string;
+  /** What it records as its parent: its owner's run, the node that started it, the owner's inbox, and its label. */
+  readonly parent: RunParent & { readonly label: string };
   readonly flow: ComposedFlow;
   /** What its start named it (`LiveChild.name`). */
   readonly name: string;
@@ -383,6 +447,35 @@ interface Said {
 /** How a delivery may be made again (`ChildFlows.answer`'s `options.resent`). */
 interface Resend {
   readonly resent?: boolean;
+}
+
+/** @internal Who a delivery to a child is from. */
+export interface ChildSender {
+  /** The author a message to an `Inbox(Message)` carries. */
+  readonly label: string;
+  /** Who the child's log records made the call. */
+  readonly by: Author;
+}
+
+/** How a delivery is made: who from, and again or not. */
+interface Sent extends Resend {
+  /**
+   * @internal Who it is from: the owner's model, as `ChildFlowOwner` passes it. `null`, the
+   * default, for the host itself, which signs nothing and records no one.
+   */
+  readonly from?: ChildSender | null;
+}
+
+/**
+ * An owner as its children see it: its run, its label, its people's labels, its inbox, and the
+ * labels above it (`heard`): the owners up the tree from it and their people's.
+ */
+interface Owned {
+  readonly runId: string;
+  readonly label: string;
+  readonly people: readonly string[];
+  readonly inbox: string | null;
+  readonly heard: readonly string[];
 }
 
 /** The refusals of a delivery made again that say it landed before, or that the run moved past it. */
@@ -520,6 +613,108 @@ export function shownStatus(status: ChildStatus): Record<string, unknown> {
   return shown;
 }
 
+/** `label` as labels are compared: NFKC-normalized and fully case-folded (`ß` as `ss`). */
+function labelKey(label: string): string {
+  // Upper then lower case folds as full case folding does.
+  return label.normalize("NFKC").toUpperCase().toLowerCase().normalize("NFKC");
+}
+
+/**
+ * `label` once it may sign what `what` names, reading as it looks: it holds no `UNSEEN` character
+ * and no loose whitespace (`LOOSE_SPACE`), and doesn't read as a reserved label, a relay
+ * (`<person>, via <employee>`) or a child's (`<flow> r<n>`), which only the driver gives.
+ *
+ * @throws {TypeError} When `label` isn't a string.
+ * @throws {RangeError} When it is refused.
+ */
+function checkedLabel(label: unknown, what: string): string {
+  if (typeof label !== "string") throw new YianTypeError(`${what} must be a non-empty string`);
+  if (label === "") throw new YianRangeError(`${what} must be a non-empty string`);
+  const refused = (why: string) => new YianRangeError(`${what} ${reprText(label)} ${why}`);
+  const unseen = UNSEEN.exec(label)?.[0];
+  if (unseen !== undefined) {
+    const code = unseen.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0");
+    throw refused(`holds an invisible or control character (U+${code})`);
+  }
+  if (LOOSE_SPACE.test(label.normalize("NFKC"))) {
+    throw refused("has whitespace at an end, doubled, or other than a space");
+  }
+  const key = labelKey(label);
+  if (RESERVED.has(key)) throw refused("is reserved: nothing is signed yian or office");
+  const plain = Array.from(key, (char) => VIA_LOOKALIKES[char] ?? char).join("");
+  if (RELAY_LABEL.test(plain)) throw refused("reads as a relay (<person>, via <employee>)");
+  if (CHILD_LABEL.test(key)) throw refused("reads as a child run's (<flow> r<n>)");
+  return label;
+}
+
+/**
+ * `people`, each checked as `checkedLabel` checks it, once none reads as the owner's `label` or as
+ * another person's.
+ *
+ * @throws {TypeError} When a label isn't a string.
+ * @throws {RangeError} When one is refused.
+ */
+function checkedPeople(people: readonly unknown[], label: string): string[] {
+  const seen = new Map<string, string>();
+  return people.map((each) => {
+    const person = checkedLabel(each, "a person's label");
+    const key = labelKey(person);
+    const same = seen.get(key);
+    if (key === labelKey(label)) throw new YianRangeError(`a person's label ${reprText(person)} reads as the owner's`);
+    if (same !== undefined) {
+      throw new YianRangeError(`a person's label ${reprText(person)} reads as the person ${reprText(same)}`);
+    }
+    seen.set(key, person);
+    return person;
+  });
+}
+
+/**
+ * The host's `label` for a child of `owner`, once it reads as no one else's: as `checkedLabel`
+ * checks it, and not as its owner's, one of its people's, a label above the owner (`Owned.heard`),
+ * or a label of `siblings`, its owner's children that still run.
+ *
+ * @throws {TypeError} When `label` isn't a string.
+ * @throws {RangeError} When it is refused.
+ */
+function checkedChildLabel(
+  label: unknown,
+  owner: Owned,
+  siblings: readonly { readonly id: string; readonly label: string }[],
+): string {
+  const checked = checkedLabel(label, "a child's label");
+  const key = labelKey(checked);
+  const as = (whose: string) => new YianRangeError(`a child's label ${reprText(checked)} reads as ${whose}`);
+  if (key === labelKey(owner.label)) throw as("its owner's");
+  const person = owner.people.find((each) => labelKey(each) === key);
+  if (person !== undefined) throw as(`the person ${reprText(person)}`);
+  const above = owner.heard.find((each) => labelKey(each) === key);
+  if (above !== undefined) throw as(`${reprText(above)}, a label above it`);
+  const sibling = siblings.find((each) => labelKey(each.label) === key);
+  if (sibling !== undefined) throw as(`run ${sibling.id}'s, which still runs`);
+  return checked;
+}
+
+/**
+ * A child's own label, `<flow> <id>`: `flow`, its flow's id (or file name), with its accents dropped
+ * and each run of other characters than `A-Za-z0-9._-` made one `_`, cut at `LABEL_FLOW_CHARS`.
+ * With no comma, space or quote in its flow part, it can't read as a relay.
+ */
+function childLabel(flow: string, id: string): string {
+  const plain = flow.normalize("NFKD").replace(/\p{M}/gu, "").replace(/[^A-Za-z0-9._-]+/g, "_");
+  return `${plain.slice(0, LABEL_FLOW_CHARS).replace(/^_+|_+$/g, "") || "flow"} ${id}`;
+}
+
+/**
+ * Who an owner's model's deliveries are from: signed with the owner's label, and recorded as the
+ * agent of its run by that label. It names no node, whose id changes each turn of a loop, so every
+ * delivery, and every take-back of one, by the owner's model is the same sender's.
+ */
+function modelSender(owner: Owned): ChildSender {
+  const by: Author = { kind: "agent", name: owner.label, run: owner.runId };
+  return Object.freeze({ label: owner.label, by: Object.freeze(by) });
+}
+
 /**
  * The child flows of a host's runs: each started in the background by its owner (`owner`), its
  * status read as it changes, and answers and messages relayed to it.
@@ -529,6 +724,11 @@ export class ChildFlows {
   /** The provider and model layer the children started from now on get. */
   #llmConfig: Readonly<Record<string, string>>;
   readonly #children = new Map<string, Child>();
+  /**
+   * By the run id of each child a start began and didn't fail, the child as an owner: its label,
+   * its starter's people, and the labels above it.
+   */
+  readonly #owners = new Map<string, Omit<Owned, "runId" | "inbox">>();
   #seq = 0;
   /** The number of the last child id a start took. */
   #started = 0;
@@ -543,11 +743,33 @@ export class ChildFlows {
     this.#llmConfig = options.llmConfig;
   }
 
-  /** A handle on run `options.runId`'s hold on the children it starts (`ChildFlowOwner`). */
+  /**
+   * A handle on run `options.runId`'s hold on the children it starts (`ChildFlowOwner`).
+   *
+   * @throws {TypeError} When a label isn't a string.
+   * @throws {RangeError} When it has no label, a label is refused (`ChildFlowOwnerOptions.label`),
+   *   the label differs from the one this driver gave the run, or the inbox isn't a non-empty string
+   *   or `null`.
+   */
   owner(options: ChildFlowOwnerOptions): ChildFlowOwner {
-    return new ChildFlowOwner(this, options, {
-      start: (flow, inputs, given) => this.#start(options.runId, flow, inputs, given),
-      reaches: (id) => this.#reaches(options.runId, id),
+    const { runId, inbox = null } = options;
+    const started = this.#owners.get(runId);
+    const given = options.label ?? null;
+    if (started !== undefined && given !== null && given !== started.label) {
+      throw new YianRangeError(`run ${reprText(runId)} is labelled ${reprText(started.label)}`);
+    }
+    if (started === undefined && given === null) {
+      throw new YianRangeError(`run ${reprText(runId)} needs an owner's label`);
+    }
+    const label = started?.label ?? checkedLabel(given, "an owner's label");
+    const people = Object.freeze(checkedPeople(options.people ?? started?.people ?? [], label));
+    if (inbox !== null && (typeof inbox !== "string" || inbox === "")) {
+      throw new YianRangeError("an owner's inbox must be a non-empty string or null");
+    }
+    const owned: Owned = Object.freeze({ runId, label, people, inbox, heard: started?.heard ?? [] });
+    return new ChildFlowOwner(this, options, owned, {
+      start: (flow, inputs, given) => this.#start(owned, flow, inputs, given),
+      reaches: (id) => this.#reaches(runId, id),
       scheduler: this.#options.scheduler,
     });
   }
@@ -557,9 +779,9 @@ export class ChildFlows {
     this.#llmConfig = layer;
   }
 
-  /** Start `flow` as the next child of the run `ownerRunId`, as `ChildFlowOwner.start` says. */
+  /** Start `flow` as the next child of `owner`, as `ChildFlowOwner.start` says. */
   #start(
-    ownerRunId: string,
+    owner: Owned,
     flow: ComposedFlow,
     inputs: Readonly<Record<string, unknown>>,
     options: ChildStartOptions,
@@ -569,15 +791,17 @@ export class ChildFlows {
     const skills = options.skills ?? null;
     const signal = options.signal ?? null;
     const project = options.project ?? null;
-    const given = { name, tools, skills, project };
-    const turn = this.#starting.then(() => this.#begin(ownerRunId, flow, inputs, given, signal));
+    const node = options.node || null;
+    const label = options.label ?? null;
+    const given = { name, tools, skills, project, node, label };
+    const turn = this.#starting.then(() => this.#begin(owner, flow, inputs, given, signal));
     this.#starting = turn.catch(() => {});
     return turn;
   }
 
-  /** Start `flow` as the next child of `ownerRunId`, once the starts called before it are done. */
+  /** Start `flow` as the next child of `owner`, once the starts called before it are done. */
   async #begin(
-    ownerRunId: string,
+    owner: Owned,
     flow: ComposedFlow,
     inputs: Readonly<Record<string, unknown>>,
     given: {
@@ -585,15 +809,23 @@ export class ChildFlows {
       tools: NonNullable<ChildStartOptions["tools"]>;
       skills: ReadonlyMap<string, Skill> | null;
       project: string | null;
+      node: string | null;
+      label: string | null;
     },
     signal: AbortSignal | null,
   ): Promise<StartedChild> {
-    const { name, skills, project } = given;
+    const { name, skills, project, node } = given;
     const check = () => {
       if (this.#disposed) throw new Error("the runs were disposed");
       signal?.throwIfAborted();
     };
     check();
+    if (given.label !== null) {
+      const siblings = [...this.#children.values()]
+        .filter((child) => child.parent.runId === owner.runId && this.#driving(child))
+        .map((child) => ({ id: child.id, label: child.parent.label }));
+      checkedChildLabel(given.label, owner, siblings);
+    }
     const { logDir, skillsFor, memories } = this.#options;
     try {
       await this.#options.preflight(flow, this.#llmConfig, inputs);
@@ -616,19 +848,23 @@ export class ChildFlows {
     while (log === null) {
       number += 1;
       try {
-        log = runLogPath(logDir, `${ownerRunId}-r${number}`);
+        log = runLogPath(logDir, `${owner.runId}-r${number}`);
       } catch (error) {
         if (!isSystemError(error) || error.code !== "EEXIST") throw error;
       }
     }
     const id = `r${number}`;
-    const runId = `${ownerRunId}-${id}`;
+    const runId = `${owner.runId}-${id}`;
+    const label = given.label ?? childLabel(flow.compiled.flowId ?? name, id);
+    // Before its tools are built, as they may make the child an owner.
+    const heard = Object.freeze([owner.label, ...owner.people, ...owner.heard]);
+    this.#owners.set(runId, Object.freeze({ label, people: owner.people, heard }));
     const tools = typeof given.tools === "function" ? given.tools(runId) : given.tools;
     const seq = ++this.#seq;
     const child: Child = {
       id,
       runId,
-      ownerRunId,
+      parent: Object.freeze({ runId: owner.runId, node, inbox: owner.inbox, label }),
       flow,
       name,
       since: this.#options.scheduler.now(),
@@ -654,6 +890,7 @@ export class ChildFlows {
       await started.promise;
     } catch (error) {
       this.#children.delete(id);
+      this.#owners.delete(runId);
       throw error;
     }
     this.#started = number;
@@ -756,17 +993,19 @@ export class ChildFlows {
    * status: `running` once the run took the answer, else the current one with a `note`. A held
    * call isn't a question: answering it would make up its tool's result, so the note refuses it.
    * Nor may `value` sign a message: nothing in it that reads as a `Message` carries an `author` or
-   * an action part, whatever type the question declares, since an answer reaches the child unsigned.
+   * an action part, whatever type the question declares, since only the driver signs one.
    * With `options.resent`, the call may have been made before, as a resumed agent's call is: a
    * refusal saying it landed or the run moved past it (`ended`, `unknown_call`, `call_settled`)
-   * returns the status with no note.
+   * returns the status with no note. The child's log records `options.from`'s `by` as who made
+   * the call, and each user message in `value` with no author is signed with its label
+   * (`signedBy`); without it (the default), the host itself, recorded as no one, signs nothing.
    *
    * @throws {RangeError} When no child has the id.
    * @throws {TypeError} When `value` is `undefined`.
    * @throws What a delivery fault throws (the log unreadable, another writer holding it), as
    *   `memories.scrub` leaves it.
    */
-  answer(id: string, call: string, value: unknown, options: Resend = {}): Promise<ChildStatus> {
+  answer(id: string, call: string, value: unknown, options: Sent = {}): Promise<ChildStatus> {
     const child = this.#child(id);
     const refusal = () => {
       const signed = signedMessageAt(value);
@@ -774,25 +1013,36 @@ export class ChildFlows {
       const held = child.started && pendingCalls(child.log).some((each) => each.callId === call && each.held);
       return held ? `call '${call}' is a held tool call, not a question` : null;
     };
-    const answer = (log: string, delivery: DeliveryOptions) => complete(log, call, { output: value }, delivery);
+    const from = options.from ?? null;
+    const output = from === null ? value : signedBy(value, from.label);
+    const answer = (log: string, delivery: DeliveryOptions) => complete(log, call, { output }, delivery);
     return this.#deliver(child, answer, { ...options, refusal });
   }
 
   /**
-   * Send `text` to child `id`'s inbox `inbox`: as is to an `Inbox(str)`, as a user message holding
-   * it to an `Inbox(Message)`. Returns its status, and throws, as `answer` does. `options.key` is
-   * the send's idempotency key: a send repeated with it appends nothing.
+   * Send `text` to child `id`'s inbox `inbox`: to an `Inbox(Message)` as a user message holding it,
+   * authored by `options.from`'s label (unauthored without it); to another inbox, such as an
+   * `Inbox(str)`, as is, and then the status's `note` says the run can't tell who wrote it. Returns
+   * its status, and throws, as `answer` does. `options.key` is the send's idempotency key: a send
+   * repeated with it, by the same sender, appends nothing.
    *
    * @throws {RangeError} When no child has the id.
    */
-  message(id: string, inbox: string, text: string, options: Resend & { key?: string | null } = {}): Promise<ChildStatus> {
+  message(id: string, inbox: string, text: string, options: Sent & { key?: string | null } = {}): Promise<ChildStatus> {
     const child = this.#child(id);
     const param = child.flow.input.find((input) => input.name === inbox);
     const type = param?.contract?.type ?? null;
     const message = isInboxType(type) && typeEquals(type!.element!, MESSAGE);
-    const event = message ? { role: "user", parts: [{ type: "text", text }] } : text;
+    const from = options.from ?? null;
+    const author = from === null ? {} : { author: from.label };
+    const event = message ? { role: "user", ...author, parts: [{ type: "text", text }] } : text;
     const key = options.key ?? null;
-    return this.#deliver(child, (log, delivery) => send(log, inbox, event, { ...delivery, key }), options);
+    const sent = (log: string, delivery: DeliveryOptions) => send(log, inbox, event, { ...delivery, key });
+    return this.#deliver(child, sent, options).then((status) =>
+      from === null || message || status.note !== undefined
+        ? status
+        : { ...status, note: "sent as plain text: the run can't tell who wrote it" },
+    );
   }
 
   /**
@@ -801,7 +1051,7 @@ export class ChildFlows {
    *
    * @throws {RangeError} When no child has the id.
    */
-  closeInbox(id: string, inbox: string, options: Resend = {}): Promise<ChildStatus> {
+  closeInbox(id: string, inbox: string, options: Sent = {}): Promise<ChildStatus> {
     return this.#deliver(this.#child(id), (log, delivery) => close(log, inbox, delivery), options);
   }
 
@@ -811,7 +1061,7 @@ export class ChildFlows {
    *
    * @throws {RangeError} When no child has the id.
    */
-  stop(id: string, options: Resend = {}): Promise<ChildStatus> {
+  stop(id: string, options: Sent = {}): Promise<ChildStatus> {
     const move = this.#options.cancel ?? cancel;
     return this.#deliver(this.#child(id), (log, delivery) => move(log, delivery), options);
   }
@@ -864,8 +1114,8 @@ export class ChildFlows {
   #reaches(ownerRunId: string, id: string): boolean {
     let child = this.#children.get(id);
     while (child !== undefined) {
-      if (child.ownerRunId === ownerRunId) return true;
-      const by = child.ownerRunId;
+      if (child.parent.runId === ownerRunId) return true;
+      const by = child.parent.runId;
       child = [...this.#children.values()].find((each) => each.runId === by);
     }
     return false;
@@ -896,22 +1146,22 @@ export class ChildFlows {
   }
 
   /**
-   * Make `deliver`'s delivery to `child`'s log, publish the child `running` and nudge its driver;
-   * return its status. A refusal (the run's, or `options.refusal`'s text, asked first), or a
-   * delivery after `dispose`, is a note on the status returned, and changes nothing; `options.resent`
-   * is as `answer` says. Every error goes through `memories.scrub`.
+   * Make `deliver`'s delivery to `child`'s log, by `options.from`, publish the child `running` and
+   * nudge its driver; return its status. A refusal (the run's, or `options.refusal`'s text, asked
+   * first), or a delivery after `dispose`, is a note on the status returned, and changes nothing;
+   * `options.resent` is as `answer` says. Every error goes through `memories.scrub`.
    */
   async #deliver(
     child: Child,
     deliver: (log: string, options: DeliveryOptions) => Promise<unknown>,
-    options: Resend & { refusal?: () => string | null } = {},
+    options: Sent & { refusal?: () => string | null } = {},
   ): Promise<ChildStatus> {
     // Its runs are left as they were, to resume later.
     if (this.#disposed) return { ...child.status, note: "the runs were disposed" };
     try {
       const refused = options.refusal?.() ?? null;
       if (refused !== null) return { ...child.status, note: refused };
-      await deliver(child.log, this.#deliveryOptions(child));
+      await deliver(child.log, { ...this.#deliveryOptions(child), by: options.from?.by ?? null });
     } catch (error) {
       const scrubbed = this.#options.memories.scrub(error, child.memory);
       if (!(error instanceof DeliveryRefused)) throw scrubbed;
@@ -961,7 +1211,7 @@ export class ChildFlows {
       let result = await runFlow(child.flow, { ...inputs, ...child.memory }, {
         log: child.log,
         runId: child.runId,
-        parent: { runId: child.ownerRunId },
+        parent: child.parent,
         llmConfig: Object.keys(llmConfig).length > 0 ? llmConfig : null,
         ...common,
       });
@@ -1126,19 +1376,31 @@ interface OwnerCore {
 export class ChildFlowOwner {
   readonly runId: string;
   readonly group: string;
+  /** Its author label (`ChildFlowOwnerOptions.label`). */
+  readonly label: string;
+  /** The labels of the people who act through it. */
+  readonly people: readonly string[];
+  /** Its inbox, or `null` for none. */
+  readonly inbox: string | null;
   readonly seen: NonNullable<ChildFlowOwnerOptions["seen"]> | null;
   readonly #driver: ChildFlows;
   readonly #core: OwnerCore;
+  /** Who its model's deliveries are from. */
+  readonly #from: ChildSender;
   /** By run, the last status seq this owner's tools showed its model, whichever group showed it. */
   readonly #shown = new Map<string, number>();
 
   /** @internal `ChildFlows.owner` makes owners. */
-  constructor(driver: ChildFlows, options: ChildFlowOwnerOptions, core: OwnerCore) {
-    this.runId = options.runId;
+  constructor(driver: ChildFlows, options: ChildFlowOwnerOptions, owned: Owned, core: OwnerCore) {
+    this.runId = owned.runId;
     this.group = options.group;
+    this.label = owned.label;
+    this.people = owned.people;
+    this.inbox = owned.inbox;
     this.seen = options.seen ?? null;
     this.#driver = driver;
     this.#core = core;
+    this.#from = modelSender(owned);
   }
 
   /**
@@ -1150,6 +1412,11 @@ export class ChildFlowOwner {
    * that succeeds. Each first runs the host's `preflight`, then binds the flow's memory inputs
    * (`memories.bind`) for `options.project`; every pass of the child gets the same instances.
    *
+   * The child records as its parent this owner's run, `options.node`, this owner's inbox, and its
+   * label: `options.label`, or `<flow> r<n>`, its flow's id (or `options.name`) reduced to
+   * `A-Za-z0-9._-` and cut at 40 characters, then its id (`review_flow r1`).
+   *
+   * @throws {RangeError} When `options.label` is refused, before anything is written.
    * @throws What `preflight` throws, and what `memories.bind` throws as `memories.scrub` leaves it,
    *   before anything is written.
    * @throws {Error} When the runs were disposed; the signal's reason once it aborted; what `runFlow`
@@ -1200,24 +1467,24 @@ export class ChildFlowOwner {
     }
   }
 
-  /** As `ChildFlows.answer`. @throws {RangeError} When this owner doesn't reach run `id`. */
+  /** As `ChildFlows.answer`, from this owner's model. @throws {RangeError} When it doesn't reach run `id`. */
   answer(id: string, call: string, value: unknown, options: Resend = {}): Promise<ChildStatus> {
-    return this.#driver.answer(this.#mine(id), call, value, options);
+    return this.#driver.answer(this.#mine(id), call, value, { ...options, from: this.#from });
   }
 
-  /** As `ChildFlows.message`. @throws {RangeError} When this owner doesn't reach run `id`. */
+  /** As `ChildFlows.message`, from this owner's model. @throws {RangeError} When it doesn't reach run `id`. */
   message(id: string, inbox: string, text: string, options: Resend & { key?: string | null } = {}): Promise<ChildStatus> {
-    return this.#driver.message(this.#mine(id), inbox, text, options);
+    return this.#driver.message(this.#mine(id), inbox, text, { ...options, from: this.#from });
   }
 
-  /** As `ChildFlows.closeInbox`. @throws {RangeError} When this owner doesn't reach run `id`. */
+  /** As `ChildFlows.closeInbox`, from this owner's model. @throws {RangeError} When it doesn't reach run `id`. */
   closeInbox(id: string, inbox: string, options: Resend = {}): Promise<ChildStatus> {
-    return this.#driver.closeInbox(this.#mine(id), inbox, options);
+    return this.#driver.closeInbox(this.#mine(id), inbox, { ...options, from: this.#from });
   }
 
-  /** As `ChildFlows.stop`. @throws {RangeError} When this owner doesn't reach run `id`. */
+  /** As `ChildFlows.stop`, from this owner's model. @throws {RangeError} When it doesn't reach run `id`. */
   stop(id: string, options: Resend = {}): Promise<ChildStatus> {
-    return this.#driver.stop(this.#mine(id), options);
+    return this.#driver.stop(this.#mine(id), { ...options, from: this.#from });
   }
 
   /** @internal The last status seq of run `id` this owner's model has seen: shown, or told `seen`. */
@@ -1266,6 +1533,22 @@ function signedMessageAt(value: unknown, path: readonly (string | number)[] = []
     if (at !== null) return at;
   }
   return null;
+}
+
+/**
+ * `value` with each user message in it that has no author signed by `label`: every object, at any
+ * depth, that reads as a user `Message` (`checkMessage`) with no `author`. What the owner's model
+ * passes speaks as the owner, never as the child's own user. A message with an author is
+ * `signedMessageAt`'s to refuse.
+ */
+function signedBy(value: unknown, label: string): unknown {
+  // Only JSON's arrays and objects: a host's value, such as a `FileRef`, stays as it is.
+  if (!Array.isArray(value) && !isRecord(value)) return value;
+  const { role, author } = value as { role?: unknown; author?: unknown };
+  const unsigned = role === "user" && (author === undefined || author === null);
+  if (unsigned && isMessage(value)) return { ...value, author: label };
+  if (Array.isArray(value)) return value.map((item) => signedBy(item, label));
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, signedBy(item, label)]));
 }
 
 /** Whether `value` reads as a `Message`. */
@@ -1481,12 +1764,13 @@ export function childFlows<T extends ChildFlowTarget>(
         const target = await hooks.resolve({ flow: stringArg(args, "flow"), content });
         const { flow, name, project = null } = target;
         if (flow.library !== null) return `not started: ${libraryRunMessage(flow)}`;
-        const inputs = checkStartInputs(flow, args["inputs"]);
+        const checked = checkStartInputs(flow, args["inputs"]);
+        const inputs = signedBy(checked, owner.label) as Readonly<Record<string, unknown>>;
         const refused = await hooks.approve(target, inputs, ctx.signal);
         if (refused !== null) return `not started: ${refused}`;
         let id: string;
         try {
-          ({ id } = await owner.start(flow, inputs, { signal: ctx.signal, name, project }));
+          ({ id } = await owner.start(flow, inputs, { signal: ctx.signal, name, project, node: ctx.node }));
         } catch (error) {
           if (error instanceof Error) return `not started: ${error.message}`;
           throw error;

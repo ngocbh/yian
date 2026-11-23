@@ -68,7 +68,7 @@ import {
 import { type ChatCommandOutcome, inboxChat, type InboxChatHost } from "./inbox_chat.ts";
 import { type Colored, paint, printStyled, type Style } from "./render.ts";
 import { type FileIssueHost, fileIssueTool, hostFacts } from "./report_issue.ts";
-import { CHAT_FLOW_FILE, validateRunLogOptions } from "./run.ts";
+import { CHAT_FLOW_FILE, CHAT_FLOW_ID, validateRunLogOptions } from "./run.ts";
 import { sanitize } from "./sanitize.ts";
 import { RunProgress, runScreen } from "./run_view.ts";
 import { cliLayer, defaultRunsDir, freshLog } from "./startup.ts";
@@ -82,6 +82,12 @@ const VIEW_TICK_MS = 500;
 
 /** The label the bundled flow's diagnostics and recorded source go by. */
 const CHAT_LABEL = CHAT_FLOW_FILE;
+
+/**
+ * The person at the terminal, as the chat's runs know them. The assistant itself goes by its flow's
+ * id (`CHAT_FLOW_ID`), which signs its messages to its runs.
+ */
+const PERSON = "the user";
 
 /** The options `chat` reads; an absent option is `undefined`, an absent flag `false`. */
 export interface ChatOptions {
@@ -799,7 +805,13 @@ export async function chat(
       ...deps.children,
     });
     const queue = new EventQueue({ wake, markRead: runs.markRead.bind(runs) });
-    const owner = runs.owner({ runId: chatRunId, group: "flows", seen: queue });
+    const owner = runs.owner({
+      runId: chatRunId,
+      group: "flows",
+      label: CHAT_FLOW_ID,
+      people: [PERSON],
+      seen: queue,
+    });
     const inFlight = new InFlight(wake);
     const docs = new Map(Object.entries(DOCS));
     const tools: InboxChatHost["tools"] = (terminal) => {

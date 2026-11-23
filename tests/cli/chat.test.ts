@@ -25,6 +25,7 @@ import { type ChatModel, EventStream } from "../../src/llm/events.ts";
 import { type Request, Response, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { inspectRun } from "../../src/run.ts";
+import { NodeStepRecord, readRunLog, type RunStartedRecord } from "../../src/runtime/log.ts";
 import {
   callReply,
   chatServing,
@@ -508,9 +509,15 @@ test(
     expect((await chatting).code).toBe(0);
     expect(relayed("Which region?")).toBe(true);
     expect(stdout()).toContain("answered");
-    expect(inspectRun(join(home, ".yian", "runs", "chat-1-r1", "log.jsonl")).status).toBe(
-      "succeeded",
-    );
+    const log = join(home, ".yian", "runs", "chat-1-r1", "log.jsonl");
+    expect(inspectRun(log).status).toBe("succeeded");
+    // The run knows the chat by its run and its label, and the answer as the assistant's.
+    const records = readRunLog(log).map(({ record }) => record);
+    const parent = (records[0] as RunStartedRecord).parent;
+    expect(parent).toMatchObject({ runId: "chat-1", inbox: null, label: "region r1" });
+    const answers = records.filter((record) => record instanceof NodeStepRecord && record.by !== null);
+    const assistant = { kind: "agent", name: "yian-chat", run: "chat-1" } as const;
+    expect(answers.map((record) => (record as NodeStepRecord).by)).toEqual([assistant]);
   },
   TIMEOUT,
 );

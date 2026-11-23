@@ -205,6 +205,7 @@ output: done
     const owner = runs.owner({
       runId: "chat-1",
       group: "flows",
+      label: "yian-chat",
       seen: {
         markSeen: (run, seq) => {
           seen.push([run, seq]);
@@ -775,7 +776,7 @@ describe("report_issue", () => {
         scheduler: heldScheduler().scheduler,
         skillsFor: () => null,
       });
-      const owner = runs.owner({ runId: "chat-1", group: "flows" });
+      const owner = runs.owner({ runId: "chat-1", group: "flows", label: "yian-chat" });
       const filed: Record<string, unknown>[] = [];
       const fileIssue = tool({
         name: "file_issue",
@@ -875,7 +876,7 @@ output: \${hi.output}
       return answer;
     };
     const queue = new EventQueue();
-    const owner = runs.owner({ runId: "chat-1", group: "flows", seen: queue });
+    const owner = runs.owner({ runId: "chat-1", group: "flows", label: "yian-chat", seen: queue });
     const tools = chatRunTools(host({ env, approve, docs: new Map([["flows", "page"]]) }), runs, owner, {
       authoring: { skills: new Map([[guide.name, guide]]) },
     });
@@ -1415,7 +1416,7 @@ describe("ChatRuns", () => {
   }
 
   /** The chat run's hold on `children`. */
-  const chat = (children: ChatRuns) => children.owner({ runId: CHAT, group: "flows" });
+  const chat = (children: ChatRuns) => children.owner({ runId: CHAT, group: "flows", label: "yian-chat" });
 
   /** Load `text` as the flow `<root>/<name>`. */
   function flow(text: string, name = "child.yaml"): Promise<ComposedFlow> {

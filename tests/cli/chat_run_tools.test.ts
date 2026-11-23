@@ -252,7 +252,7 @@ output: done
   }
 
   test(
-    "an approved start runs the flow; its status says where it stands and wait_flow sees it end",
+    "an approved start runs the flow; its status says where it stands and flows_wait sees it end",
     async () => {
       writeFileSync(join(root, "greet.yaml"), GREET);
       const { requests, json, seen } = runTools();
@@ -444,7 +444,7 @@ output: done
   );
 
   test(
-    "a flow's int output reads back as its digits in flow_status and wait_flow",
+    "a flow's int output reads back as its digits in flows_status and flows_wait",
     async () => {
       writeFileSync(join(root, "legs.yaml"), LEGS);
       const { invoke, json } = runTools();
@@ -635,7 +635,7 @@ output: done
   );
 
   test(
-    "stop_flow cancels a child",
+    "flows_stop cancels a child",
     async () => {
       writeFileSync(join(root, "ask.yaml"), ASK);
       const { json } = runTools();
@@ -664,7 +664,7 @@ output: done
   });
 
   test(
-    "wait_flow returns at its timeout, at once for a status not yet shown, and when its call ends",
+    "flows_wait returns at its timeout, at once for a status not yet shown, and when its call ends",
     async () => {
       writeFileSync(join(root, "ask.yaml"), ASK);
       const { scheduler, open } = heldScheduler();
@@ -709,7 +709,7 @@ output: done
   );
 
   test(
-    "a status the chat relayed as an event counts as seen: wait_flow waits past it and doesn't repeat its replies",
+    "a status the chat relayed as an event counts as seen: flows_wait waits past it and doesn't repeat its replies",
     async () => {
       writeFileSync(join(root, "echo.yaml"), ECHO);
       const queue = new EventQueue();

@@ -452,17 +452,16 @@ export function chatRunTools(
       signal: AbortSignal,
     ): Promise<string | Record<string, unknown>> => {
       // Its starts are its own: the runs it starts are its children, through its own owner.
-      let runId!: string;
+      let own: ChildFlowOwner | null = null;
       const tools = (child: string) => {
-        runId = child;
         const granted: Record<string, ToolEntry> = {};
         for (const each of chatFileTools(host)) if (grants.includes(each.name)) granted[each.name] = each;
         for (const grant of grants) {
           if (typeof grant === "string") continue;
           for (const [group, names] of Object.entries(grant)) {
+            own = runs.owner({ runId: child, group });
             const hooks = chatStart(host, runs, approved, name);
-            const own = childFlows(runs.owner({ runId: child, group }), { start: hooks });
-            granted[group] = own.filter((each) => names.includes(each.name));
+            granted[group] = childFlows(own, { start: hooks }).filter((each) => names.includes(each.name));
           }
         }
         return granted;
@@ -475,8 +474,9 @@ export function chatRunTools(
         if (error instanceof Error) return `not started: ${error.message}`;
         throw error;
       }
-      // A failure here leaves the child's runs to the chat's end, which cancels them too.
-      cancelWhenEnded(id, runs.owner({ runId, group: owner.group })).catch(() => {});
+      // A failure here leaves the child's runs to the chat's end, which cancels them too. A run with
+      // no group of its own starts none.
+      if (own !== null) cancelWhenEnded(id, own).catch(() => {});
       return show(id);
     };
     return [

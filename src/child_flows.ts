@@ -42,7 +42,7 @@ import { NodeSucceeded, type RunEvent, RunStarted } from "./events.ts";
 import type { ModelAccess } from "./llm_clients/factory.ts";
 import type { MemoryBase } from "./memory/base.ts";
 import { coerceInputs } from "./nodes/binding.ts";
-import { removeEmptyDir, type Scheduler, sleepUntil } from "./platform.ts";
+import { isSystemError, removeEmptyDir, type Scheduler, sleepUntil } from "./platform.ts";
 import {
   advance,
   type BeforeToolCall,
@@ -530,6 +530,7 @@ export class ChildFlows {
   #llmConfig: Readonly<Record<string, string>>;
   readonly #children = new Map<string, Child>();
   #seq = 0;
+  /** The number of the last child id a start took. */
   #started = 0;
   /** The start in progress: starts run one at a time, in call order. */
   #starting: Promise<unknown> = Promise.resolve();
@@ -608,9 +609,20 @@ export class ChildFlows {
     } catch (error) {
       throw memories.scrub(error, {});
     }
-    const id = `r${this.#started + 1}`;
+    // Making the run's folder takes its id. A run an earlier process started keeps its folder,
+    // though this driver knows nothing of it, so its id is passed over.
+    let number = this.#started;
+    let log: string | null = null;
+    while (log === null) {
+      number += 1;
+      try {
+        log = runLogPath(logDir, `${ownerRunId}-r${number}`);
+      } catch (error) {
+        if (!isSystemError(error) || error.code !== "EEXIST") throw error;
+      }
+    }
+    const id = `r${number}`;
     const runId = `${ownerRunId}-${id}`;
-    const log = runLogPath(logDir, runId);
     const tools = typeof given.tools === "function" ? given.tools(runId) : given.tools;
     const seq = ++this.#seq;
     const child: Child = {
@@ -644,7 +656,7 @@ export class ChildFlows {
       this.#children.delete(id);
       throw error;
     }
-    this.#started += 1;
+    this.#started = number;
     return { id, log, seq };
   }
 
@@ -1320,8 +1332,10 @@ function checkStartInputs(flow: ComposedFlow, inputs: unknown): Readonly<Record<
  * With `options.start`, the group has `start` too, first. A call names a flow and its inputs; the
  * host's `resolve` finds the flow, a library is refused, the inputs are checked as the run's start
  * would check them (and may sign no message), the host's `approve` is asked, and only then does the
- * owner start it. A refusal after `resolve` returns `not started: <why>`. A crash-cut start isn't
- * sent again, since it may have started.
+ * owner start it. A library, a refused approval or a start that fails returns `not started: <why>`;
+ * bad inputs are a `ReportedToolError`, `bad inputs: <why>`. A crash-cut start isn't sent again,
+ * since it may have started. No text names another tool of the group, since a host may pass only
+ * some of them.
  *
  * Each returns the run's status as `shownStatus` does; once the owner showed them, its replies and
  * memory notes aren't shown again, and with `owner.seen` they are marked read. A run the owner
@@ -1335,12 +1349,11 @@ export function childFlows<T extends ChildFlowTarget>(
   options: ChildFlowGroupOptions<T> = {},
 ): FunctionTool[] {
   const { start = null } = options;
-  const named = (tool: string) => `${owner.group}_${tool}`;
   const run = "The run's id (r1, r2, ...).";
   const status =
     "Returns the run's status, a record: status (running, waiting, succeeded, failed or cancelled), " +
     "output, failure, waits, asks (questions, each with its call id), held (tool calls it holds for " +
-    `approval, which ${named("answer")} can't settle), replies (what it said since you last looked), ` +
+    "approval, which no answer settles), replies (what it said since you last looked), " +
     "memory_notes (a memory it created or that changed, since you last looked), note (something " +
     "that couldn't be done) and log.";
   const show = (given: ChildStatus) => shownStatus(owner.show(given));
@@ -1450,9 +1463,9 @@ export function childFlows<T extends ChildFlowTarget>(
     return tool({
       name: "start",
       description:
-        `${hooks.description} An Inbox input is never given here: once the run waits on it, use ` +
-        `${named("message")}. ${status} The status's run is the id the group's other tools take. Returns ` +
-        "`not started: <why>` when the start is refused or can't happen; don't retry a refused start unchanged.",
+        `${hooks.description} An Inbox input is never given here: message the run once it waits on it. ` +
+        `${status} The status's run is the id the group's other tools take. Returns \`not started: <why>\` ` +
+        "when the start is refused or can't happen; don't retry a refused start unchanged.",
       parameters: {
         type: "object",
         properties: {

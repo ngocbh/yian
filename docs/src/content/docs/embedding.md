@@ -559,8 +559,11 @@ const started = await owner.start(flow, { topic: "billing" });
 const flows = childFlows(owner, {
   start: {                                   // optional: lets the model start flows too
     description: "Start a flow from the catalog by its name, once the user approves it.",
-    resolve: ({ flow }) => ({ flow: catalog.get(flow), name: flow }), // throws a ReportedToolError for none
-    approve: async (target, inputs, signal) => null,                   // or why not
+    resolve: ({ flow, content }) => {
+      if (content !== null) throw new ReportedToolError("drafts aren't supported here");
+      return { flow: catalog.get(flow), name: flow };                   // throws a ReportedToolError for none
+    },
+    approve: async (target, inputs, signal) => null,                    // or why not
   },
 });
 const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
@@ -568,7 +571,9 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
 
 - **Ids.** Children are `r1`, `r2`, ..., numbered across the driver. A child's run id is
   `<owner's run id>-r<n>`, and it records the owner's run as its parent. Pass `tools` as a function
-  of the child's run id to give it tools that act as that run, such as an owner of its own.
+  of the child's run id to give it tools that act as that run, such as an owner of its own. A new
+  driver passes over an id whose run folder an earlier process left, but it doesn't know that child:
+  it neither drives nor reaches it.
 - **Reach.** An owner acts on the runs it started, and every run they start, at any depth. Any
   other id is `no run '<id>'`.
 - **The group.** The model sees `<group>_status` and `<group>_wait`, which read a run's status, and
@@ -576,7 +581,8 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
   it. Each returns the run's status. `wait` waits at most 120 seconds on the driver's `scheduler`.
 - **Start.** With the `start` option the group has `<group>_start` too, which takes `flow`, `inputs`
   and `content` (a draft's text). In order:
-  1. `resolve` finds the flow the call names. Throw a `ReportedToolError` for one it may not start.
+  1. `resolve` finds the flow the call names. Throw a `ReportedToolError` for one it may not start,
+     and for a `content` it doesn't run: otherwise the draft is dropped and `flow` runs.
   2. A library is refused.
   3. The inputs are checked as the run's start checks them. An Inbox input is never given, and a
      memory input is the host's to bind (`memories.bind`). No message in them may carry an `author`
@@ -584,12 +590,14 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
   4. `approve` returns `null` to let it start, or why not.
   5. The owner starts it.
 
-  A refusal after `resolve` reads `not started: <why>`. `description` begins the tool's
-  description, so say there what `flow` names. A crash-cut start isn't sent again, since it may have
-  started.
-- **Members.** A run records every tool of each group its agents are granted, so a run whose group
-  gains or loses a tool, such as `start`, can't be resumed: `resume refused: tool_groups.<group>
-  differs from the recorded one`.
+  A library, a refused approval or a start that fails returns `not started: <why>`. Bad inputs are
+  an error the model reads, `bad inputs: <why>`, as is what `resolve` throws. `description` begins
+  the tool's description, so say there what `flow` names. A crash-cut start isn't sent again, since
+  it may have started.
+- **Members.** A run records the tools its agents are granted, so a run whose group gains or loses
+  a tool, such as `start`, can't be resumed: `resume refused: tools.flows_start isn't recorded; the
+  run started without it`, or `resume refused: tools.flows_stop is recorded, but this run's tools
+  lack it`.
 - **Resumes.** The four delivering tools are `resumable`. `message` keys its send by the call id,
   so a crash-cut call sent again sends nothing twice. A call sent again that is refused as
   `ended`, `unknown_call` or `call_settled` returns the status with no note, since the first may

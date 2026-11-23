@@ -4,17 +4,17 @@
  * hooks that do nothing unless a test gives its own.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
   type BoundMemories,
   type ChildFlowOwner,
-  type ChildFlowStart,
   type ChildFlowOwnerOptions,
   ChildFlows,
   type ChildFlowsOptions,
+  type ChildFlowStart,
   type ChildStatus,
   childEvent,
   childFlows,
@@ -22,7 +22,8 @@ import {
 } from "../src/child_flows.ts";
 import type { ComposedFlow } from "../src/compose/build/pipeline.ts";
 import { loadFlow } from "../src/compose/loader.ts";
-import { advance, inspectRun } from "../src/run.ts";
+import { advance, inspectRun, runFlow } from "../src/run.ts";
+import { ToolResultPart } from "../src/llm/messages.ts";
 import { ScriptedModel } from "../src/llm/testing.ts";
 import { FileMemory } from "../src/memory/file.ts";
 import { readRunLog, type RunStartedRecord } from "../src/runtime/log.ts";
@@ -30,6 +31,7 @@ import { Skill } from "../src/skills/catalog.ts";
 import { pending, ToolContext } from "../src/tools/context.ts";
 import { ReportedToolError } from "../src/tools/errors.ts";
 import { type FunctionTool, tool } from "../src/tools/function_tools.ts";
+import { withAppendHook } from "./helpers/append_hook.ts";
 import { callReply, NO_ENV, serving, textReply } from "./helpers/run_state_fixtures.ts";
 import { heldScheduler } from "./helpers/schedulers.ts";
 
@@ -1148,8 +1150,8 @@ describe("childFlows", () => {
     expect(resumable).toEqual(["message", "answer", "close_inbox", "stop"]);
     const parallel = tools.filter((each) => each.isConcurrencySafe !== null).map((each) => each.name);
     expect(parallel).toEqual(["status", "wait"]);
-    // The texts name the tools as the model sees them.
-    expect(tools[0]!.description).toContain("flows_answer");
+    // A host may pass only some of them, so no text names another.
+    expect(tools.filter((each) => /flows_/.test(each.description))).toEqual([]);
   });
 
   test(
@@ -1421,7 +1423,7 @@ describe("start", () => {
     expect(tools.map((each) => each.name)).toEqual(names);
     expect([tools[0]!.resumable, tools[0]!.isConcurrencySafe]).toEqual([false, null]);
     expect(tools[0]!.description).toStartWith("Start a flow by its key. ");
-    expect(tools[0]!.description).toContain("flows_message");
+    expect(tools[0]!.description).not.toContain("flows_");
   });
 
   test(
@@ -1492,6 +1494,48 @@ describe("start", () => {
       const plain = { said: [{ role: "user", parts: [text] }] };
       expect(await call(tools, "start", { flow: "heard", inputs: plain })).toMatchObject({ run: "r1" });
       expect(await settled(children, "r1")).toMatchObject({ status: "succeeded", output: 1n });
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "after a restart, a start takes the next id no earlier process's child holds, and a cut start isn't sent again",
+    async () => {
+      const BOSS = "id: boss\nname: boss\nnodes:\n  work: {kind: agent, tools: [flows], prompt: Go., output: !str}\n";
+      const boss = await flow(`${BOSS}output: \${work.output}\n`, "boss.yaml");
+      const [greet, log] = [await flow(GREET), join(root, "boss.jsonl")];
+      const env = (name: string) => (name === "XAI_API_KEY" ? "test-xai-key" : NO_ENV(name));
+      const llmConfig = { provider: "xai", model: "grok-4.3" };
+      const go = (id: string) => callReply(["flows_start", { flow: "greet", inputs: { who: "a" } }, id]);
+      const tools = (children: ChildFlows, start: ChildFlowStart) => ({ flows: childFlows(chat(children), { start }) });
+      const before = childRuns({ env, llmConfig });
+      const first = starting({ greet });
+      const cut = new Error("crash once the child started");
+      // The host dies after the child's start and before the call's result is recorded.
+      const crash = (target: { path: string | null }) => {
+        if (target.path === log && existsSync(join(root, "runs", `${CHAT}-r1`))) throw cut;
+      };
+      const models = serving(new ScriptedModel([go("c1")], llmConfig), env);
+      const ran = withAppendHook(crash, () =>
+        runFlow(boss, {}, { log, runId: CHAT, env, llmConfig, models, tools: tools(before, first.start) }),
+      );
+      await expect(ran).rejects.toBe(cut);
+      await before.dispose();
+      // A new process: a new driver over the same logs.
+      const model = new ScriptedModel([go("c2"), textReply("done")], llmConfig);
+      const after = starting({ greet });
+      const children = childRuns({ env, llmConfig });
+      const resumed = await advance({ log, env, models: serving(model, env), tools: tools(children, after.start) });
+      expect(resumed.status).toBe("succeeded");
+      const results = (index: number) =>
+        model.requests[index]!.messages.flatMap((each) => each.parts.filter((part) => part instanceof ToolResultPart));
+      expect(results(0).map((part) => part.content)).toEqual([expect.stringContaining("interrupted")]);
+      const retried = JSON.parse(results(1).at(-1)!.content);
+      expect(retried).toMatchObject({ run: "r2", log: join(root, "runs", `${CHAT}-r2`, "log.jsonl") });
+      // Each process started one child: the cut call wasn't made again.
+      const once = ["resolve greet", 'approve greet.yaml {"who":"a"}'];
+      expect([first.asked, after.asked]).toEqual([once, once]);
+      expect(readdirSync(join(root, "runs")).sort()).toEqual([`${CHAT}-r1`, `${CHAT}-r2`]);
     },
     TIMEOUT,
   );

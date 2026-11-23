@@ -363,7 +363,12 @@ function waitingLines(children: readonly WaitingChild[], out: Colored, env: Env)
       if (child.kind === "halted") {
         return shown(`run ${child.run} was stopped while it ran; its log: ${child.log}`, "yellow");
       }
-      const what = { question: "an answer to its question", inbox: "a message", timer: "a timer" }[child.kind];
+      const what = {
+        question: "an answer to its question",
+        held: "the approval of a held tool call",
+        inbox: "a message",
+        timer: "a timer",
+      }[child.kind];
       const next =
         child.kind === "timer"
           ? `continue with: yian run --resume ${child.log}`

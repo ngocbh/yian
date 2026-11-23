@@ -25,10 +25,9 @@
  * `dispose`, never to the call that started them.
  *
  * Knows about: the run boundary (`runFlow`, `advance`, the deliveries, `pendingCalls`,
- * `runLogPath`, the gate's hook, the static node readers), the waits' `wakeAt` and the record-time
- * reader, the platform's scheduler and folder tidying, compose, node output contracts, memory's base
- * type, the run events, the host tool API and its errors, the tool registry and the `pending`
- * marker, skills, types and values.
+ * `runLogPath`, the gate's hook), the waits' `wakeAt` and the record-time reader, the platform's
+ * scheduler and folder tidying, compose, memory's base type, the run events, the host tool API and
+ * its errors, the tool registry and the `pending` marker, skills, types and values.
  */
 
 import { dirname } from "node:path";
@@ -40,7 +39,6 @@ import { NodeSucceeded, type RunEvent, RunStarted } from "./events.ts";
 import type { ModelAccess } from "./llm_clients/factory.ts";
 import type { MemoryBase } from "./memory/base.ts";
 import { removeEmptyDir, type Scheduler, sleepUntil } from "./platform.ts";
-import { outputContractType, PartialRecordContract } from "./nodes/contracts.ts";
 import {
   advance,
   type BeforeToolCall,
@@ -49,6 +47,7 @@ import {
   complete,
   type ConsoleHook,
   type DeliveryOptions,
+  type DeliveryRefusal,
   DeliveryRefused,
   type JsonObject,
   type MemoryDrift,
@@ -57,8 +56,6 @@ import {
   runFlow,
   runLogPath,
   send,
-  staticNodes,
-  staticPathOf,
 } from "./run.ts";
 import { recordTimeMs } from "./runtime/log.ts";
 import { wakeAt } from "./runtime/waits.ts";
@@ -70,12 +67,12 @@ import { registeredTools, type ToolEntry } from "./tools/registry.ts";
 import { YianRangeError } from "./typesys/errors.ts";
 import { builtinType } from "./typesys/types.ts";
 import {
+  buildValueAs,
   isInboxType,
   renderValuePath,
-  Type,
+  TypeCheckError,
   typeEquals,
   type Value,
-  ValueKind,
   writeAsJson,
   writeAsText,
 } from "./typesys/values.ts";
@@ -267,10 +264,11 @@ export interface ChildFlowOwnerOptions {
 export interface WaitingChild {
   readonly run: string;
   /**
-   * `question` when it asks something, else `inbox` when it waits for a message, else `timer`;
-   * `halted` for a running one `haltAll` stopped before its cancel was done.
+   * `question` when it asks something, else `held` when it waits for a held call's approval, else
+   * `inbox` when it waits for a message, else `timer`; `halted` for a running one `haltAll` stopped
+   * before its cancel was done.
    */
-  readonly kind: "question" | "inbox" | "timer" | "halted";
+  readonly kind: "question" | "held" | "inbox" | "timer" | "halted";
   readonly log: string;
 }
 
@@ -337,6 +335,14 @@ interface Said {
   readonly kind: "reply" | "memory";
   readonly text: string;
 }
+
+/** How a delivery may be made again (`ChildFlows.answer`'s `options.resent`). */
+interface Resend {
+  readonly resent?: boolean;
+}
+
+/** The refusals of a delivery made again that say it landed before, or that the run moved past it. */
+const LANDED: ReadonlySet<DeliveryRefusal> = new Set(["ended", "unknown_call", "call_settled"]);
 
 /** The terminal statuses: no pass follows them. */
 const ENDED: ReadonlySet<ChildStatus["status"]> = new Set(["succeeded", "failed", "cancelled"]);
@@ -544,7 +550,11 @@ export class ChildFlows {
     };
     check();
     const { logDir, skillsFor, memories } = this.#options;
-    await this.#options.preflight(flow, this.#llmConfig, inputs);
+    try {
+      await this.#options.preflight(flow, this.#llmConfig, inputs);
+    } catch (error) {
+      throw memories.scrub(error, {});
+    }
     check();
     // A memory the start creates is said with the pass.
     const fresh: Said[] = [];
@@ -689,56 +699,65 @@ export class ChildFlows {
    * Answer child `id`'s open question `call` with `value` (any JSON but `null`). Returns its
    * status: `running` once the run took the answer, else the current one with a `note`. A held
    * call isn't a question: answering it would make up its tool's result, so the note refuses it.
-   * Nor may `value` sign a message: a `Message` where the asking TOOL node's output type holds one
-   * carries no `author` and no action part, since an answer reaches the child unsigned.
+   * Nor may `value` sign a message: nothing in it that reads as a `Message` carries an `author` or
+   * an action part, whatever type the question declares, since an answer reaches the child unsigned.
+   * With `options.resent`, the call may have been made before, as a resumed agent's call is: a
+   * refusal saying it landed or the run moved past it (`ended`, `unknown_call`, `call_settled`)
+   * returns the status with no note.
    *
    * @throws {RangeError} When no child has the id.
    * @throws {TypeError} When `value` is `undefined`.
+   * @throws What a delivery fault throws (the log unreadable, another writer holding it), as
+   *   `memories.scrub` leaves it.
    */
-  answer(id: string, call: string, value: unknown): Promise<ChildStatus> {
+  answer(id: string, call: string, value: unknown, options: Resend = {}): Promise<ChildStatus> {
     const child = this.#child(id);
-    const asked = child.started ? pendingCalls(child.log).find((each) => each.callId === call) : undefined;
-    const held = `call '${call}' is a held tool call, not a question`;
-    if (asked?.held) return Promise.resolve({ ...child.status, note: held });
-    const signed = asked === undefined ? null : signedMessageAt(answerType(child.flow, asked.node), value);
-    if (signed !== null) return Promise.resolve({ ...child.status, note: signedNote(signed) });
-    return this.#deliver(child, (log, options) => complete(log, call, { output: value }, options));
+    const refusal = () => {
+      const signed = signedMessageAt(value);
+      if (signed !== null) return signedNote(signed);
+      const held = child.started && pendingCalls(child.log).some((each) => each.callId === call && each.held);
+      return held ? `call '${call}' is a held tool call, not a question` : null;
+    };
+    const answer = (log: string, delivery: DeliveryOptions) => complete(log, call, { output: value }, delivery);
+    return this.#deliver(child, answer, { ...options, refusal });
   }
 
   /**
    * Send `text` to child `id`'s inbox `inbox`: as is to an `Inbox(str)`, as a user message holding
-   * it to an `Inbox(Message)`. Returns its status as `answer` does. `options.key` is the send's
-   * idempotency key: a send repeated with it appends nothing.
+   * it to an `Inbox(Message)`. Returns its status, and throws, as `answer` does. `options.key` is
+   * the send's idempotency key: a send repeated with it appends nothing.
    *
    * @throws {RangeError} When no child has the id.
    */
-  message(id: string, inbox: string, text: string, options: { key?: string | null } = {}): Promise<ChildStatus> {
+  message(id: string, inbox: string, text: string, options: Resend & { key?: string | null } = {}): Promise<ChildStatus> {
     const child = this.#child(id);
     const param = child.flow.input.find((input) => input.name === inbox);
     const type = param?.contract?.type ?? null;
     const message = isInboxType(type) && typeEquals(type!.element!, MESSAGE);
     const event = message ? { role: "user", parts: [{ type: "text", text }] } : text;
     const key = options.key ?? null;
-    return this.#deliver(child, (log, delivery) => send(log, inbox, event, { ...delivery, key }));
+    return this.#deliver(child, (log, delivery) => send(log, inbox, event, { ...delivery, key }), options);
   }
 
   /**
-   * Close child `id`'s inbox `inbox`, so its turns end. Returns its status as `answer` does.
+   * Close child `id`'s inbox `inbox`, so its turns end. Returns its status, and throws, as `answer`
+   * does.
    *
    * @throws {RangeError} When no child has the id.
    */
-  closeInbox(id: string, inbox: string): Promise<ChildStatus> {
-    return this.#deliver(this.#child(id), (log, options) => close(log, inbox, options));
+  closeInbox(id: string, inbox: string, options: Resend = {}): Promise<ChildStatus> {
+    return this.#deliver(this.#child(id), (log, delivery) => close(log, inbox, delivery), options);
   }
 
   /**
-   * Cancel child `id`. Returns its status as `answer` does; the note says when it had ended.
+   * Cancel child `id`. Returns its status, and throws, as `answer` does; the note says when it had
+   * ended.
    *
    * @throws {RangeError} When no child has the id.
    */
-  stop(id: string): Promise<ChildStatus> {
+  stop(id: string, options: Resend = {}): Promise<ChildStatus> {
     const move = this.#options.cancel ?? cancel;
-    return this.#deliver(this.#child(id), (log, options) => move(log, options));
+    return this.#deliver(this.#child(id), (log, delivery) => move(log, delivery), options);
   }
 
   /**
@@ -804,6 +823,7 @@ export class ChildFlows {
   /** What waiting `child` waits on, by its last status. */
   #waitKind(child: Child): WaitingChild["kind"] {
     if ((child.status.asks ?? []).length > 0) return "question";
+    if ((child.status.held ?? []).length > 0) return "held";
     const waits = (child.status.waits ?? []) as readonly { tool: string; settled: boolean }[];
     return waits.some((wait) => wait.tool === TAKE && !wait.settled) ? "inbox" : "timer";
   }
@@ -821,20 +841,25 @@ export class ChildFlows {
 
   /**
    * Make `deliver`'s delivery to `child`'s log, publish the child `running` and nudge its driver;
-   * return its status. A refusal, or a delivery after `dispose`, is a note on the status returned,
-   * and changes nothing.
+   * return its status. A refusal (the run's, or `options.refusal`'s text, asked first), or a
+   * delivery after `dispose`, is a note on the status returned, and changes nothing; `options.resent`
+   * is as `answer` says. Every error goes through `memories.scrub`.
    */
   async #deliver(
     child: Child,
     deliver: (log: string, options: DeliveryOptions) => Promise<unknown>,
+    options: Resend & { refusal?: () => string | null } = {},
   ): Promise<ChildStatus> {
     // Its runs are left as they were, to resume later.
     if (this.#disposed) return { ...child.status, note: "the runs were disposed" };
     try {
+      const refused = options.refusal?.() ?? null;
+      if (refused !== null) return { ...child.status, note: refused };
       await deliver(child.log, this.#deliveryOptions(child));
     } catch (error) {
-      if (!(error instanceof DeliveryRefused)) throw error;
       const scrubbed = this.#options.memories.scrub(error, child.memory);
+      if (!(error instanceof DeliveryRefused)) throw scrubbed;
+      if (options.resent === true && LANDED.has(error.reason)) return child.status;
       return { ...child.status, note: (scrubbed as Error | null)?.message ?? String(scrubbed) };
     }
     // Until its pass settles, the child moves on what it was given.
@@ -1048,6 +1073,8 @@ export class ChildFlowOwner {
   readonly seen: NonNullable<ChildFlowOwnerOptions["seen"]> | null;
   readonly #driver: ChildFlows;
   readonly #core: OwnerCore;
+  /** By run, the last status seq this owner's tools showed its model, whichever group showed it. */
+  readonly #shown = new Map<string, number>();
 
   /** @internal `ChildFlows.owner` makes owners. */
   constructor(driver: ChildFlows, options: ChildFlowOwnerOptions, core: OwnerCore) {
@@ -1118,28 +1145,44 @@ export class ChildFlowOwner {
   }
 
   /** As `ChildFlows.answer`. @throws {RangeError} When this owner doesn't reach run `id`. */
-  answer(id: string, call: string, value: unknown): Promise<ChildStatus> {
-    return this.#driver.answer(this.#mine(id), call, value);
+  answer(id: string, call: string, value: unknown, options: Resend = {}): Promise<ChildStatus> {
+    return this.#driver.answer(this.#mine(id), call, value, options);
   }
 
   /** As `ChildFlows.message`. @throws {RangeError} When this owner doesn't reach run `id`. */
-  message(id: string, inbox: string, text: string, options: { key?: string | null } = {}): Promise<ChildStatus> {
+  message(id: string, inbox: string, text: string, options: Resend & { key?: string | null } = {}): Promise<ChildStatus> {
     return this.#driver.message(this.#mine(id), inbox, text, options);
   }
 
   /** As `ChildFlows.closeInbox`. @throws {RangeError} When this owner doesn't reach run `id`. */
-  closeInbox(id: string, inbox: string): Promise<ChildStatus> {
-    return this.#driver.closeInbox(this.#mine(id), inbox);
+  closeInbox(id: string, inbox: string, options: Resend = {}): Promise<ChildStatus> {
+    return this.#driver.closeInbox(this.#mine(id), inbox, options);
   }
 
   /** As `ChildFlows.stop`. @throws {RangeError} When this owner doesn't reach run `id`. */
-  stop(id: string): Promise<ChildStatus> {
-    return this.#driver.stop(this.#mine(id));
+  stop(id: string, options: Resend = {}): Promise<ChildStatus> {
+    return this.#driver.stop(this.#mine(id), options);
   }
 
-  /** As `ChildFlows.markRead`. @throws {RangeError} When this owner doesn't reach run `id`. */
-  markRead(id: string, seq: number): void {
-    this.#driver.markRead(this.#mine(id), seq);
+  /** @internal The last status seq of run `id` this owner's model has seen: shown, or told `seen`. */
+  lastSeen(id: string): number {
+    return Math.max(this.#shown.get(id) ?? 0, this.seen?.seen(id) ?? 0);
+  }
+
+  /**
+   * @internal Note that the owner's model is shown `status`, marking it read with `seen`; return it
+   * without the replies and memory notes the model was shown before.
+   */
+  show(status: ChildStatus): ChildStatus {
+    const last = this.lastSeen(status.run);
+    if (this.seen !== null) {
+      this.#driver.markRead(status.run, status.seq);
+      this.seen.markSeen(status.run, status.seq);
+    }
+    this.#shown.set(status.run, Math.max(status.seq, last));
+    // The stored status keeps the replies and notes it was published with; once shown, they are read.
+    const { replies: _, memory_notes: __, ...unrepeated } = status;
+    return status.seq <= last ? unrepeated : status;
   }
 
   /** @throws {RangeError} When this owner doesn't reach run `id`. */
@@ -1150,55 +1193,34 @@ export class ChildFlowOwner {
 }
 
 /**
- * The type of the answer to a call that node `node` of `flow` made: a TOOL node's output type,
- * since its answer is the node's output; `null` for an agent's call, whose answer is a tool result
- * its model reads.
+ * Where in `value` an object that reads as a `Message` (`checkMessage`) carries an author or an
+ * action part, as a value path; `null` when none does. The value is read, not the type the question
+ * declares: an untyped answer reaches an agent as a message too. Only the host signs a message.
  */
-function answerType(flow: ComposedFlow, node: string): Type | null {
-  const path = staticPathOf(node);
-  const asking = staticNodes(flow).find(([at]) => at === path)?.[1];
-  if (asking?.kind !== "tool") return null;
-  const contract = asking.outputContract;
-  if (!(contract instanceof PartialRecordContract)) return outputContractType(contract);
-  const fields = contract.fields.flatMap(([name, field]) => (field === null ? [] : [[name, field.type] as const]));
-  return new Type({ kind: ValueKind.OBJECT, fields: new Map(fields) });
-}
-
-/**
- * Where in `value`, a host value of `type`, a `Message` carries an author or an action part, as a
- * value path; `null` when none does, or for no type. Only the host signs a message.
- */
-function signedMessageAt(
-  type: Type | null,
-  value: unknown,
-  path: readonly (string | number)[] = [],
-): (string | number)[] | null {
-  if (type === null || typeof value !== "object" || value === null) return null;
-  if (typeEquals(type.nullable ? type.replace({ nullable: false }) : type, MESSAGE)) {
-    const { author, parts } = value as { author?: unknown; parts?: unknown };
-    if (author !== undefined && author !== null) return [...path, "author"];
-    const action = Array.isArray(parts)
-      ? parts.findIndex((part) => (part as { type?: unknown } | null)?.type === "action")
-      : -1;
-    return action === -1 ? null : [...path, "parts", action];
+function signedMessageAt(value: unknown, path: readonly (string | number)[] = []): (string | number)[] | null {
+  if (typeof value !== "object" || value === null) return null;
+  const { author, parts } = value as { author?: unknown; parts?: unknown };
+  const action = Array.isArray(parts) ? parts.findIndex((part) => (part as { type?: unknown } | null)?.type === "action") : -1;
+  // The shape first, as it is cheap; then the whole value must be a `Message`.
+  if (((author !== undefined && author !== null) || action !== -1) && isMessage(value)) {
+    return author !== undefined && author !== null ? [...path, "author"] : [...path, "parts", action];
   }
-  if (Array.isArray(value)) {
-    for (const [index, item] of value.entries()) {
-      const at = signedMessageAt(type.element ?? null, item, [...path, index]);
-      if (at !== null) return at;
-    }
-    return null;
-  }
-  // A union's members are records. Every field any of them types is checked, which errs on the
-  // side of refusing.
-  for (const record of type.members ?? [type]) {
-    for (const [name, field] of record.fields ?? []) {
-      if (!Object.hasOwn(value, name)) continue;
-      const at = signedMessageAt(field, (value as Record<string, unknown>)[name], [...path, name]);
-      if (at !== null) return at;
-    }
+  for (const [key, item] of Array.isArray(value) ? value.entries() : Object.entries(value)) {
+    const at = signedMessageAt(item, [...path, key]);
+    if (at !== null) return at;
   }
   return null;
+}
+
+/** Whether `value` reads as a `Message`. */
+function isMessage(value: unknown): boolean {
+  try {
+    buildValueAs(MESSAGE, value);
+    return true;
+  } catch (error) {
+    if (error instanceof TypeCheckError) return false;
+    throw error;
+  }
 }
 
 /** The note refusing a value that signs a message at `path`. */
@@ -1211,11 +1233,12 @@ function signedNote(path: readonly (string | number)[]): string {
  * `owner.group` in that run's tools, so the model sees `<group>_status`, and so on: `status` and
  * `wait` read a run's status, and `message`, `answer`, `close_inbox` and `stop` deliver to it.
  *
- * Each returns the run's status as `shownStatus` does; once shown, its replies and memory notes
- * aren't shown again, and with `owner.seen` they are marked read. A run the owner doesn't reach,
- * or an argument of the wrong type, is a `ReportedToolError`. The deliveries are `resumable`: a
- * resumed agent sends a crash-cut call again under its call id, which keys `message`'s send, and a
- * repeated answer, close or stop changes nothing.
+ * Each returns the run's status as `shownStatus` does; once the owner showed them, its replies and
+ * memory notes aren't shown again, and with `owner.seen` they are marked read. A run the owner
+ * doesn't reach, or an argument of the wrong type, is a `ReportedToolError`. The deliveries are
+ * `resumable`: a resumed agent sends a crash-cut call again under its call id, which keys
+ * `message`'s send, and a repeated answer, close or stop changes nothing; a call sent again
+ * (`ctx.attempt` above 1) is `resent` (`ChildFlows.answer`).
  */
 export function childFlows(owner: ChildFlowOwner): FunctionTool[] {
   const named = (tool: string) => `${owner.group}_${tool}`;
@@ -1226,20 +1249,7 @@ export function childFlows(owner: ChildFlowOwner): FunctionTool[] {
     `approval, which ${named("answer")} can't settle), replies (what it said since you last looked), ` +
     "memory_notes (a memory it created or that changed, since you last looked), note (something " +
     "that couldn't be done) and log.";
-  // By run, the last seq these tools showed.
-  const shown = new Map<string, number>();
-  const lastSeen = (id: string) => Math.max(shown.get(id) ?? 0, owner.seen?.seen(id) ?? 0);
-  const show = (given: ChildStatus) => {
-    const last = lastSeen(given.run);
-    if (owner.seen !== null) {
-      owner.markRead(given.run, given.seq);
-      owner.seen.markSeen(given.run, given.seq);
-    }
-    shown.set(given.run, Math.max(given.seq, last));
-    // The stored status keeps the replies and notes it was published with; once shown, they are read.
-    const { replies: _, memory_notes: __, ...unrepeated } = given;
-    return shownStatus(given.seq <= last ? unrepeated : given);
-  };
+  const show = (given: ChildStatus) => shownStatus(owner.show(given));
   const known = (args: Record<string, unknown>) => {
     const id = stringArg(args, "run");
     if (!owner.reaches(id)) throw new ReportedToolError(`no run '${id}'`);
@@ -1277,7 +1287,7 @@ export function childFlows(owner: ChildFlowOwner): FunctionTool[] {
         if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) {
           throw new ReportedToolError("seconds must be a number of seconds, 0 or more");
         }
-        const after = lastSeen(id);
+        const after = owner.lastSeen(id);
         return show(await owner.wait(id, { after, seconds: Math.min(seconds, WAIT_MAX_S), signal: ctx.signal }));
       },
     }),
@@ -1290,7 +1300,8 @@ export function childFlows(owner: ChildFlowOwner): FunctionTool[] {
       resumable: true,
       execute: async (args, ctx) => {
         const id = known(args);
-        return show(await owner.message(id, stringArg(args, "inbox"), stringArg(args, "text"), { key: ctx.callId }));
+        const sent = { key: ctx.callId, resent: ctx.attempt > 1 };
+        return show(await owner.message(id, stringArg(args, "inbox"), stringArg(args, "text"), sent));
       },
     }),
     tool({
@@ -1310,12 +1321,12 @@ export function childFlows(owner: ChildFlowOwner): FunctionTool[] {
         additionalProperties: false,
       },
       resumable: true,
-      execute: async (args) => {
+      execute: async (args, ctx) => {
         const id = known(args);
         const call = stringArg(args, "call");
         const answer = args["answer"];
         if (answer === null || answer === undefined) throw new ReportedToolError("answer can't be null");
-        return show(await owner.answer(id, call, answer));
+        return show(await owner.answer(id, call, answer, { resent: ctx.attempt > 1 }));
       },
     }),
     tool({
@@ -1325,9 +1336,9 @@ export function childFlows(owner: ChildFlowOwner): FunctionTool[] {
         `can finish. ${status}`,
       parameters: runArguments(["inbox", "The Inbox input's name."]),
       resumable: true,
-      execute: async (args) => {
+      execute: async (args, ctx) => {
         const id = known(args);
-        return show(await owner.closeInbox(id, stringArg(args, "inbox")));
+        return show(await owner.closeInbox(id, stringArg(args, "inbox"), { resent: ctx.attempt > 1 }));
       },
     }),
     tool({
@@ -1335,7 +1346,7 @@ export function childFlows(owner: ChildFlowOwner): FunctionTool[] {
       description: `Cancel a run you started; use it only when asked. ${status}`,
       parameters: runArguments(),
       resumable: true,
-      execute: async (args) => show(await owner.stop(known(args))),
+      execute: async (args, ctx) => show(await owner.stop(known(args), { resent: ctx.attempt > 1 })),
     }),
   ];
 }

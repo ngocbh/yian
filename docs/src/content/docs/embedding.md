@@ -559,18 +559,23 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: childFlows(o
 - **Ids.** Children are `r1`, `r2`, ..., numbered across the driver. A child's run id is
   `<owner's run id>-r<n>`, and it records the owner's run as its parent. Pass `tools` as a function
   of the child's run id to give it tools that act as that run, such as an owner of its own.
-- **Reach.** An owner acts on the runs it started and the runs those started. Any other id is
-  `no run '<id>'`.
+- **Reach.** An owner acts on the runs it started, and every run they start, at any depth. Any
+  other id is `no run '<id>'`.
 - **The group.** The model sees `<group>_status` and `<group>_wait`, which read a run's status, and
   `<group>_message`, `<group>_answer`, `<group>_close_inbox` and `<group>_stop`, which deliver to
   it. Each returns the run's status. `wait` waits at most 120 seconds on the driver's `scheduler`.
 - **Resumes.** The four delivering tools are `resumable`. `message` keys its send by the call id,
-  so a crash-cut call sent again sends nothing twice.
+  so a crash-cut call sent again sends nothing twice. A call sent again that is refused as
+  `ended`, `unknown_call` or `call_settled` returns the status with no note, since the first may
+  have landed.
 - **Statuses.** A status lists open questions as `asks` and calls the children's `beforeToolCall`
-  held as `held`. `answer` refuses a held call, and refuses a `Message` value that carries an
-  `author` or an action part.
+  held as `held`. `answer` refuses a held call. It also refuses an answer holding anything that
+  reads as a `Message` with an `author` or an action part, whatever type the question declares.
+- **Shown once.** An owner remembers what its tools showed, so a group built again for each
+  `advance` repeats no reply, and its `wait` waits past what was shown.
 - **Read marks.** Pass `seen: {markSeen, seen}` to an owner whose model should consume replies:
-  each status its tools show is then marked read. Without it they mark nothing.
+  each status its tools show is then marked read. Without it they mark nothing, so the host's other
+  readers still get every reply.
 - **Errors.** `memories.scrub` rewrites every error the driver reports, so that no location
   leaks.
 

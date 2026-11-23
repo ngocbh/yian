@@ -568,20 +568,20 @@ export function chatRunTools(
   ];
 
   /**
-   * How a set of run tools shows runs, starting them through `owner`: the assistant's, whose
+   * How a set of run tools shows runs, starting them through `hold`: the assistant's, whose
    * owner has `seen`, marks each status it shows read and seen, so the chat doesn't relay it again;
    * a child's set (`requester`'s) marks nothing, and reads only the runs it started (`started`), so
    * the assistant still hears of them.
    */
-  function view(owner: ChildFlowOwner, requester: string | null = null): View {
-    const { seen } = owner;
+  function view(hold: ChildFlowOwner, requester: string | null = null): View {
+    const { seen } = hold;
     const marks = seen !== null;
     // By run, the last seq this view showed; with `seen`'s, what `wait_flow` waits past.
     const shown = new Map<string, number>();
     const mine = new Set<string>();
     const lastSeen = (run: string) => Math.max(shown.get(run) ?? 0, seen?.seen(run) ?? 0);
     return {
-      owner,
+      owner: hold,
       lastSeen,
       show: (status) => {
         const last = lastSeen(status.run);

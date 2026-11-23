@@ -16,18 +16,20 @@
  * `shownStatus` is a status as a model reads it, and `childEvent` the one line that says what a
  * status means.
  *
- * What the host decides comes in through its hooks (`ChildRunsOptions`): the key preflight, how a
+ * What the host decides comes in through its hooks (`ChildFlowsOptions`): the key preflight, how a
  * child's memory inputs are bound and kept out of what the driver reports, the console sink, and
- * who hears each status. Every pass of a child gets the same memory instances.
+ * who hears each status. Every pass of a child gets the same memory instances. A group's `start`
+ * asks its host which flow a call names and whether it may start (`ChildFlowStart`).
  *
  * A child's `ask` returns `pending()`, so the child waits durably for the user's answer, which the
  * host relays with `answer`. The children's stop is their own, tied to the host's exit by
  * `dispose`, never to the call that started them.
  *
  * Knows about: the run boundary (`runFlow`, `advance`, the deliveries, `pendingCalls`,
- * `runLogPath`, the gate's hook), the waits' `wakeAt` and the record-time reader, the platform's
- * scheduler and folder tidying, compose, memory's base type, the run events, the host tool API and
- * its errors, the tool registry and the `pending` marker, skills, types and values.
+ * `runLogPath`, the gate's hook, its input intake and library refusal), input coercion, the waits'
+ * `wakeAt` and the record-time reader, the platform's scheduler and folder tidying, compose, memory's
+ * base type, the run events, the host tool API and its errors, the tool registry and the `pending`
+ * marker, skills, types and values.
  */
 
 import { dirname } from "node:path";
@@ -35,10 +37,12 @@ import { isDeepStrictEqual } from "node:util";
 
 import type { ComposedFlow } from "./compose/build/pipeline.ts";
 import type { Env } from "./defaults.ts";
+import { reprText } from "./diagnostics.ts";
 import { NodeSucceeded, type RunEvent, RunStarted } from "./events.ts";
 import type { ModelAccess } from "./llm_clients/factory.ts";
 import type { MemoryBase } from "./memory/base.ts";
-import { removeEmptyDir, type Scheduler, sleepUntil } from "./platform.ts";
+import { coerceInputs } from "./nodes/binding.ts";
+import { isSystemError, removeEmptyDir, type Scheduler, sleepUntil } from "./platform.ts";
 import {
   advance,
   type BeforeToolCall,
@@ -49,7 +53,9 @@ import {
   type DeliveryOptions,
   type DeliveryRefusal,
   DeliveryRefused,
+  hostInputs,
   type JsonObject,
+  libraryRunMessage,
   type MemoryDrift,
   pendingCalls,
   type RunResult,
@@ -64,11 +70,12 @@ import { pending, TAKE } from "./tools/context.ts";
 import { ReportedToolError } from "./tools/errors.ts";
 import { type FunctionTool, stringArg, stringArguments, tool } from "./tools/function_tools.ts";
 import { registeredTools, type ToolEntry } from "./tools/registry.ts";
-import { YianRangeError } from "./typesys/errors.ts";
+import { YianRangeError, YianTypeError } from "./typesys/errors.ts";
 import { builtinType } from "./typesys/types.ts";
 import {
   buildValueAs,
   isInboxType,
+  isMemoryType,
   renderValuePath,
   TypeCheckError,
   typeEquals,
@@ -240,6 +247,43 @@ export interface StartedChild {
   readonly id: string;
   readonly log: string;
   readonly seq: number;
+}
+
+/** The flow a group's `start` call names, as its host's `resolve` finds it. */
+export interface ChildFlowTarget {
+  readonly flow: ComposedFlow;
+  /** What `live` lists the child by (`ChildStartOptions.name`); the flow's name when absent. */
+  readonly name?: string;
+  /** The folder `memories.bind` keys the child's memories by; `null` (the default) for none. */
+  readonly project?: string | null;
+}
+
+/** How a group's `start` finds the flow a call names, and asks its host before it starts it. */
+export interface ChildFlowStart<T extends ChildFlowTarget = ChildFlowTarget> {
+  /**
+   * The start of the tool's description: what `flow` names, and who approves a start. The group adds
+   * what the tool returns.
+   */
+  readonly description: string;
+  /**
+   * The flow a call names: `flow`, read as the description says, and `content`, a draft's whole text
+   * to run in its place, or `null`.
+   *
+   * @throws {ReportedToolError} What the model reads when they name no flow it may start.
+   */
+  resolve(call: { readonly flow: string; readonly content: string | null }): Promise<T> | T;
+  /** Whether `target` may start with `inputs`, which passed the input check: `null` once it may, else why not. */
+  approve(
+    target: T,
+    inputs: Readonly<Record<string, unknown>>,
+    signal: AbortSignal,
+  ): Promise<string | null> | string | null;
+}
+
+/** What `childFlows` builds an owner's group with. */
+export interface ChildFlowGroupOptions<T extends ChildFlowTarget = ChildFlowTarget> {
+  /** With it, the group has `start`; without it (the default), only the host starts children. */
+  readonly start?: ChildFlowStart<T> | null;
 }
 
 /** What `ChildFlows.owner` makes an owner handle from. */
@@ -486,6 +530,7 @@ export class ChildFlows {
   #llmConfig: Readonly<Record<string, string>>;
   readonly #children = new Map<string, Child>();
   #seq = 0;
+  /** The number of the last child id a start took. */
   #started = 0;
   /** The start in progress: starts run one at a time, in call order. */
   #starting: Promise<unknown> = Promise.resolve();
@@ -564,9 +609,20 @@ export class ChildFlows {
     } catch (error) {
       throw memories.scrub(error, {});
     }
-    const id = `r${this.#started + 1}`;
+    // Making the run's folder takes its id. A run an earlier process started keeps its folder,
+    // though this driver knows nothing of it, so its id is passed over.
+    let number = this.#started;
+    let log: string | null = null;
+    while (log === null) {
+      number += 1;
+      try {
+        log = runLogPath(logDir, `${ownerRunId}-r${number}`);
+      } catch (error) {
+        if (!isSystemError(error) || error.code !== "EEXIST") throw error;
+      }
+    }
+    const id = `r${number}`;
     const runId = `${ownerRunId}-${id}`;
-    const log = runLogPath(logDir, runId);
     const tools = typeof given.tools === "function" ? given.tools(runId) : given.tools;
     const seq = ++this.#seq;
     const child: Child = {
@@ -600,7 +656,7 @@ export class ChildFlows {
       this.#children.delete(id);
       throw error;
     }
-    this.#started += 1;
+    this.#started = number;
     return { id, log, seq };
   }
 
@@ -1229,9 +1285,57 @@ function signedNote(path: readonly (string | number)[]): string {
 }
 
 /**
+ * Return `inputs` once they could start `flow`, as its start would check them: no unknown names, every
+ * required one given, each value of its declared type; and no message in them signed, as an answer's
+ * may not be. A memory input is never given: the host binds it to its default (`memories.bind`).
+ *
+ * @throws {ReportedToolError} `bad inputs: <why>`.
+ */
+function checkStartInputs(flow: ComposedFlow, inputs: unknown): Readonly<Record<string, unknown>> {
+  try {
+    const given = typeof inputs === "object" && inputs !== null ? inputs : {};
+    const memory = flow.input.find((param) => isMemoryType(param.contract?.type) && Object.hasOwn(given, param.name));
+    if (memory !== undefined) {
+      throw new YianRangeError(`\`${memory.name}\` is a memory; leave it out, and the run gets its default`);
+    }
+    const coerced = coerceInputs(flow.input, hostInputs(flow.input, inputs));
+    for (const param of flow.input) {
+      if (isInboxType(param.contract?.type ?? null) || isMemoryType(param.contract?.type)) continue;
+      if (!Object.hasOwn(coerced, param.name)) {
+        if (!param.required || param.hasDefault) continue;
+        throw new YianRangeError(`required input ${reprText(param.name)} is missing`);
+      }
+      if (param.contract === null) continue;
+      try {
+        buildValueAs(param.contract.type, coerced[param.name]);
+      } catch (error) {
+        if (!(error instanceof Error)) throw error;
+        // Name where in the value it failed, as the start's own check does.
+        const at = error instanceof TypeCheckError && error.path.length > 0 ? ` at ${renderValuePath(error.path)}` : "";
+        throw new YianTypeError(`input ${reprText(param.name)}${at}: ${error.message}`);
+      }
+    }
+    const signed = signedMessageAt(given);
+    if (signed !== null) throw new YianRangeError(signedNote(signed));
+    return inputs as Readonly<Record<string, unknown>>;
+  } catch (error) {
+    if (error instanceof Error) throw new ReportedToolError(`bad inputs: ${error.message}`);
+    throw error;
+  }
+}
+
+/**
  * The tools a run's model drives the child flows `owner` reaches with, for the host to pass under
  * `owner.group` in that run's tools, so the model sees `<group>_status`, and so on: `status` and
  * `wait` read a run's status, and `message`, `answer`, `close_inbox` and `stop` deliver to it.
+ *
+ * With `options.start`, the group has `start` too, first. A call names a flow and its inputs; the
+ * host's `resolve` finds the flow, a library is refused, the inputs are checked as the run's start
+ * would check them (and may sign no message), the host's `approve` is asked, and only then does the
+ * owner start it. A library, a refused approval or a start that fails returns `not started: <why>`;
+ * bad inputs are a `ReportedToolError`, `bad inputs: <why>`. A crash-cut start isn't sent again,
+ * since it may have started. No text names another tool of the group, since a host may pass only
+ * some of them.
  *
  * Each returns the run's status as `shownStatus` does; once the owner showed them, its replies and
  * memory notes aren't shown again, and with `owner.seen` they are marked read. A run the owner
@@ -1240,13 +1344,16 @@ function signedNote(path: readonly (string | number)[]): string {
  * `message`'s send, and a repeated answer, close or stop changes nothing; a call sent again
  * (`ctx.attempt` above 1) is `resent` (`ChildFlows.answer`).
  */
-export function childFlows(owner: ChildFlowOwner): FunctionTool[] {
-  const named = (tool: string) => `${owner.group}_${tool}`;
+export function childFlows<T extends ChildFlowTarget>(
+  owner: ChildFlowOwner,
+  options: ChildFlowGroupOptions<T> = {},
+): FunctionTool[] {
+  const { start = null } = options;
   const run = "The run's id (r1, r2, ...).";
   const status =
     "Returns the run's status, a record: status (running, waiting, succeeded, failed or cancelled), " +
     "output, failure, waits, asks (questions, each with its call id), held (tool calls it holds for " +
-    `approval, which ${named("answer")} can't settle), replies (what it said since you last looked), ` +
+    "approval, which no answer settles), replies (what it said since you last looked), " +
     "memory_notes (a memory it created or that changed, since you last looked), note (something " +
     "that couldn't be done) and log.";
   const show = (given: ChildStatus) => shownStatus(owner.show(given));
@@ -1258,6 +1365,7 @@ export function childFlows(owner: ChildFlowOwner): FunctionTool[] {
   const runArguments = (...more: [name: string, description: string][]) =>
     stringArguments(["run", run, true], ...more.map(([name, text]): [string, string, boolean] => [name, text, true]));
   return [
+    ...(start === null ? [] : [startTool(start)]),
     tool({
       name: "status",
       description: `Read where a run you started stands now, without waiting. ${status}`,
@@ -1349,4 +1457,42 @@ export function childFlows(owner: ChildFlowOwner): FunctionTool[] {
       execute: async (args, ctx) => show(await owner.stop(known(args), { resent: ctx.attempt > 1 })),
     }),
   ];
+
+  /** The group's `start`, over the host's `hooks`. */
+  function startTool(hooks: ChildFlowStart<T>): FunctionTool {
+    return tool({
+      name: "start",
+      description:
+        `${hooks.description} An Inbox input is never given here: message the run once it waits on it. ` +
+        `${status} The status's run is the id the group's other tools take. Returns \`not started: <why>\` ` +
+        "when the start is refused or can't happen; don't retry a refused start unchanged.",
+      parameters: {
+        type: "object",
+        properties: {
+          flow: { type: "string", description: "The flow to start, as the tool's description says." },
+          inputs: { type: "object", description: "The flow's inputs by name; {} for none." },
+          content: { type: "string", description: "A draft: the flow's whole text, run in place of what flow names." },
+        },
+        required: ["flow", "inputs"],
+        additionalProperties: false,
+      },
+      execute: async (args, ctx) => {
+        const content = args["content"] === undefined ? null : stringArg(args, "content");
+        const target = await hooks.resolve({ flow: stringArg(args, "flow"), content });
+        const { flow, name, project = null } = target;
+        if (flow.library !== null) return `not started: ${libraryRunMessage(flow)}`;
+        const inputs = checkStartInputs(flow, args["inputs"]);
+        const refused = await hooks.approve(target, inputs, ctx.signal);
+        if (refused !== null) return `not started: ${refused}`;
+        let id: string;
+        try {
+          ({ id } = await owner.start(flow, inputs, { signal: ctx.signal, name, project }));
+        } catch (error) {
+          if (error instanceof Error) return `not started: ${error.message}`;
+          throw error;
+        }
+        return show(owner.status(id));
+      },
+    });
+  }
 }

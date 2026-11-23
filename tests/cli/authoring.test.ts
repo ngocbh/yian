@@ -23,7 +23,7 @@ import type { AgentNode } from "../../src/nodes/agent/node.ts";
 import { runFlow, staticNodes } from "../../src/run.ts";
 import { canonicalTypeLabel } from "../../src/typesys/values.ts";
 import { NO_ENV, serving, textReply } from "../helpers/run_state_fixtures.ts";
-import { grantText } from "../../src/tools/grants.ts";
+import { grantText, parseToolGrants } from "../../src/tools/grants.ts";
 
 const SOURCES = fileURLToPath(new URL("../../src/cli/flows/", import.meta.url));
 
@@ -61,7 +61,9 @@ test("the flows' agents use only ask_user and the tools the chat grants each", a
     [await loadReviewFlow(NO_ENV), REVIEW_TOOLS],
   ] as const;
   for (const [flow, grants] of flows) {
-    const granted = new Set<string>([...grants, "ask_user"]);
+    // Each as the flow writes it: the author flow's own group, `{flows: [start, wait]}`, among them.
+    const written = parseToolGrants(grants, "grants").map(grantText);
+    const granted = new Set<string>([...written, "ask_user"]);
     for (const [, node] of staticNodes(flow)) {
       for (const grant of node.grantedTools()) expect(granted.has(grantText(grant))).toBe(true);
       const call = node.hostToolCall();

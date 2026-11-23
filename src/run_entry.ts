@@ -9,11 +9,14 @@
 
 export {
   type BoundMemories,
+  type ChildFlowGroupOptions,
   type ChildFlowOwner,
   type ChildFlowOwnerOptions,
   ChildFlows,
   childFlows,
   type ChildFlowsOptions,
+  type ChildFlowStart,
+  type ChildFlowTarget,
   type ChildStartOptions,
   type ChildStatus,
   type LiveChild,

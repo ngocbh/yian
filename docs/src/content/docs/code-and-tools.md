@@ -158,7 +158,9 @@ quote:
 | `adaptive_questions` | no | `ask` only (see [Inboxes and waiting](/inboxes/)) |
 
 The built-ins `take`, `sleep` and `ask` read an inbox, wait until a time and ask a person; they
-are covered on [Inboxes and waiting](/inboxes/).
+are covered on [Inboxes and waiting](/inboxes/). A tool that sets `refuseUngated` (see
+[Host tools](/agents/#host-tools)) never runs from a TOOL node, since nothing checks the node's
+call: the node fails, without a retry.
 
 `kind: tool`, with `tool_id:` in place of `call:`, was the old spelling of a tool call. It was
 removed: a flow that writes it fails to load, and the error shows the `kind: call` to write.

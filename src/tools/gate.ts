@@ -2,15 +2,15 @@
  * The host's check before each tool call an AGENT's model makes (`BeforeToolCall`, the
  * `beforeToolCall` option of `runFlow` and `advance`): the call it sees, where the call's tool
  * comes from (`ToolSource`), what the call acts on as its tool says (`GatedCall.target`), the
- * decisions it may give, and the bound on the texts a decision and a target carry. A run with a
- * hook records that it is gated, and a resume of it needs one.
+ * decisions it may give, and the bound on the texts a decision carries. A run with a hook records
+ * that it is gated, and a resume of it needs one.
  *
  * Knows about: tools/context, llm/messages (the JSON check) and typesys.
  */
 
 import { checkJsonValue, MessageFormatError } from "../llm/messages.ts";
 import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
-import { eventBytes, freezeParsed, type JsonObject } from "../typesys/json.ts";
+import { freezeParsed, type JsonObject } from "../typesys/json.ts";
 import { isRecord, jsTypeName } from "../typesys/values.ts";
 import type { PendingMarker } from "./context.ts";
 
@@ -49,7 +49,7 @@ export interface GatedCall {
   readonly arguments: Readonly<JsonObject>;
   /**
    * What the call acts on, as its tool's `gateTarget` gives it (`checkGateTarget`), never read from
-   * the model's arguments; `null` when the tool declares none or gives `null`.
+   * the model's arguments and never cut short; `null` when the tool declares none or gives `null`.
    */
   readonly target: Readonly<JsonObject> | null;
   /** The flow calls enclosing the agent, outermost first; empty at the top level. */
@@ -84,7 +84,9 @@ export type GateDecision =
  * flow an agent calls as a tool; it may answer later through a Promise. It is asked once the call
  * is checked: its arguments' schema, then its validator and `isConcurrencySafe` (a module tool's
  * on its module's thread), which must have no effects, since a checked call may never run. It
- * reads the model's arguments, never a validator's output. A refused flow call never starts its
+ * reads the model's arguments, never a validator's output, and the call's target, which its tool's
+ * `gateTarget` gives from the validator's output; a target that fails, or whose hold would be over
+ * the run's event bound, refuses the call without asking. A refused flow call never starts its
  * flow. A held call's tool doesn't run: the host answers it with `complete`, whose result the model
  * reads, or runs it once with `release`. The reply's calls before it and in its concurrency group
  * run; its later calls wait until every hold is answered, then are asked about. A call sent again
@@ -92,10 +94,13 @@ export type GateDecision =
  */
 export type BeforeToolCall = (call: GatedCall, ctx: GateContext) => GateDecision | PromiseLike<GateDecision>;
 
-/** The longest note, refusal text, release note or target (as the run log writes it), in UTF-8 bytes. */
+/** The longest note, refusal text or release note, in UTF-8 bytes. */
 export const GATE_TEXT_MAX_BYTES = 4096;
 
-/** What the model reads when the hook fails or gives no valid decision. */
+/**
+ * What the model reads when the hook fails or gives no valid decision, or when a call's target
+ * fails and its tool has no `refuseUngated`.
+ */
 export const GATE_FAILED_TEXT = "The host's permission check failed; the call didn't run.";
 
 /** The fields of each kind of tool source after `kind`, and whether each may be `null`. */
@@ -143,29 +148,30 @@ export function checkGateText(value: unknown, what: string): string {
 
 /**
  * Return `value` when it is a target a gated call may carry (`GatedCall.target`): `null`, or a
- * deep-frozen copy of a plain JSON object of at most `GATE_TEXT_MAX_BYTES` UTF-8 bytes as the run
- * log writes it; `what` names it in errors.
+ * deep-frozen copy of a plain JSON object; `what` names it in errors. Its size is the run's to
+ * bound, by the hold step it would make.
  *
- * @throws TypeError when it is neither, a Promise among them, or holds a value that isn't JSON.
- * @throws RangeError when it is over the bound.
+ * @throws TypeError when it is neither, a thenable from any realm among them, or holds a value
+ *   that isn't JSON.
  */
 export function checkGateTarget(value: unknown, what: string): Readonly<JsonObject> | null {
   if (value === null) return null;
-  if (!isRecord(value)) {
-    // A Promise isn't a target; handle its rejection so it can't crash the process.
-    if (value instanceof Promise) value.catch(() => {});
+  if (isThenable(value)) {
+    // Not a target; handle its rejection so it can't crash the process.
+    Promise.resolve(value).catch(() => {});
     throw new YianTypeError(`${what} must be a JSON object or null, got ${jsTypeName(value)}`);
   }
-  let copy: JsonObject;
+  if (!isRecord(value)) throw new YianTypeError(`${what} must be a JSON object or null, got ${jsTypeName(value)}`);
   try {
-    copy = checkJsonValue(value, what) as JsonObject;
+    return freezeParsed(checkJsonValue(value, what) as JsonObject);
   } catch (error) {
     if (error instanceof MessageFormatError) throw new YianTypeError(error.message);
     throw error;
   }
-  const size = eventBytes(copy);
-  if (size > GATE_TEXT_MAX_BYTES) {
-    throw new YianRangeError(`${what} is ${size} UTF-8 bytes, over the limit of ${GATE_TEXT_MAX_BYTES}`);
-  }
-  return freezeParsed(copy);
+}
+
+/** @internal Whether `value` has a `then` method, as a Promise of any realm does. Reading it may throw. */
+export function isThenable(value: unknown): value is PromiseLike<unknown> {
+  const object = (typeof value === "object" && value !== null) || typeof value === "function";
+  return object && typeof (value as { then?: unknown }).then === "function";
 }

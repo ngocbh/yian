@@ -474,19 +474,22 @@ or the node stops (a failing sibling, the end of a flow call's scope), or the ag
   person.
 - A hook that throws or rejects, or an answer of any other shape, refuses the call with `The
   host's permission check failed; the call didn't run.` and a warning. So does a note or refusal
-  that is empty, holds a lone surrogate, or is over 4096 UTF-8 bytes, and a `gateTarget` that
-  throws or gives anything but `null` or a JSON object of at most 4096 UTF-8 bytes; the hook
-  isn't asked then.
+  that is empty, holds a lone surrogate, or is over 4096 UTF-8 bytes.
+- A `gateTarget` that throws or gives anything but `null` or a JSON object, or a target whose hold
+  would be over the run's `YIAN_MAX_EVENT_BYTES`, refuses the call with a warning, and the hook
+  isn't asked: the model reads the tool's `refuseUngated` text, else the text above. A target is
+  never cut short.
 - A refusal publishes `ToolCallStarted`, then `ToolCallFinished` with `error: "refused"`.
 - The model never reads a note. It is stored on the call's first record, and `agentCall`'s
   `toolResults` show it as `note`; a crash before that record loses it. Notes, a release's too,
-  are plain text in the log, so keep secrets out of them.
+  and a held call's target are plain text in the log, so keep secrets out of them.
 
 A tool that acts on something else, such as one that approves another run's held call, can show
 the hook what that is: its `gateTarget` (see [Host tools](/agents/#host-tools)) gives
 `call.target`, read from your own state, so your rule never depends on how the model describes the
 call. A tool that must never run unchecked sets `refuseUngated`: in a run without
-`beforeToolCall`, an agent's call to it reads that text as its error, and the tool doesn't run.
+`beforeToolCall`, an agent's call to it reads that text as its error, and a TOOL node's call to it
+fails in any run, so the tool doesn't run.
 
 ### Held calls
 

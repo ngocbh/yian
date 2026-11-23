@@ -291,7 +291,6 @@ describe("a hold's pending step", () => {
       s["target"] = {};
     }, ONLY_HOLD],
     ["a target that isn't an object", (s) => (s["target"] = ["x"]), "a hold's target must be a JSON object"],
-    ["a target over the bound", (s) => (s["target"] = { text: "x".repeat(4096) }), "a hold's target is 4107 UTF-8 bytes, over the limit of 4096"],
     ["held false", (s) => (s["held"] = false), "a hold's pending step says held: true"],
     ["an ask_user", (s) => (s["tool"] = "ask_user"), NEVER_HELD("ask_user")],
     ["a load_skill", (s) => (s["tool"] = "load_skill"), NEVER_HELD("load_skill")],

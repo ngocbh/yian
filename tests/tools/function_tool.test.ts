@@ -367,7 +367,7 @@ describe("withExecute", () => {
     const gateTarget = () => ({ on: "x" });
     const kept = withExecute(tool({ ...base, gateTarget, refuseUngated: "Ask the user." }), () => "y");
     expect([kept.gateTarget, kept.refuseUngated]).toEqual([gateTarget, "Ask the user."]);
-    expect(() => tool({ ...base, gateTarget: 1 as never })).toThrow(new TypeError("FunctionTool 't' gateTarget must be a function"));
+    expect(() => tool({ ...base, gateTarget: 1 as never })).toThrow(new TypeError("FunctionTool 't' gateTarget must be a function, got number"));
     expect(() => tool({ ...base, refuseUngated: 5 as never })).toThrow(new TypeError("FunctionTool 't' refuseUngated must be a string"));
     expect(() => tool({ ...base, refuseUngated: "" })).toThrow(new RangeError("FunctionTool 't' refuseUngated must be a non-empty string"));
     expect(() => tool({ ...base, refuseUngated: "x".repeat(4097) })).toThrow(

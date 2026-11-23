@@ -139,12 +139,14 @@ export class FunctionTool {
    * Says what a call acts on, for the host's `beforeToolCall` (`GatedCall.target`); `null` when
    * none was given. It gets what `execute` gets and the call's context, and runs only for a call
    * the hook is asked about, once the call is checked. It must return at once and have no effects:
-   * a JSON object of at most `GATE_TEXT_MAX_BYTES` UTF-8 bytes, or `null`.
+   * a JSON object, never cut short, or `null`. When it throws, gives anything else, or gives a
+   * target whose hold would be over the run's `YIAN_MAX_EVENT_BYTES`, the call is refused.
    */
   readonly gateTarget: ((args: Record<string, unknown>, ctx: ToolContext<any>) => JsonObject | null) | null;
   /**
-   * The error an agent's call reads, without the tool running, in a run with no `beforeToolCall`
-   * hook; `null` when none was given, so the tool runs ungated too.
+   * Keeps the tool from ever running unchecked: an agent's call to it in a run with no
+   * `beforeToolCall` hook reads this text as its error, and so does one whose target failed; a
+   * TOOL node's call, which nothing checks, fails. `null` when none was given.
    */
   readonly refuseUngated: string | null;
 
@@ -209,7 +211,7 @@ export class FunctionTool {
       throw new YianTypeError(`${prefix} resumable must be a boolean, got ${jsTypeName(resumable)}`);
     }
     if (gateTarget !== undefined && gateTarget !== null && typeof gateTarget !== "function") {
-      throw new YianTypeError(`${prefix} gateTarget must be a function`);
+      throw new YianTypeError(`${prefix} gateTarget must be a function, got ${jsTypeName(gateTarget)}`);
     }
     if (refuseUngated !== undefined && refuseUngated !== null) checkGateText(refuseUngated, `${prefix} refuseUngated`);
     this.name = name;

@@ -425,12 +425,15 @@ is unknown. Leave it unset (`false`) for any tool that could act twice.
 Two options serve the host's check:
 
 - `gateTarget(args, ctx)` says what a call acts on, such as the held call an `approve` tool would
-  release. It gets what `execute` gets and returns `null` or a JSON object of at most 4096 UTF-8
-  bytes, which the hook reads as `call.target` and a held call keeps. It runs only when the hook
-  is asked, after the validators: make it quick and free of effects, and refuse a bad call in the
-  validator.
-- `refuseUngated: "<text>"` keeps the tool from ever running unchecked: in a run without the hook,
-  an agent's call to it reads the text as its error, and the tool doesn't run.
+  release. It gets what `execute` gets and returns `null` or a JSON object, which the hook reads
+  as `call.target` and a held call keeps, never cut short. It runs only when the hook is asked,
+  after the validators: make it quick and free of effects. When it throws, gives anything else,
+  or gives a target whose hold would be over the run's `YIAN_MAX_EVENT_BYTES`, the call is
+  refused without asking the hook.
+- `refuseUngated: "<text>"` keeps the tool from ever running unchecked, anywhere. In a run
+  without the hook, an agent's call to it reads the text as its error, as does a call whose
+  target failed; a TOOL node's call to it, which nothing checks, fails, gated or not. So a flow
+  wrapping the tool can't reach it either.
 
 A key holding one tool must match its name; a key holding a list is a tool group. Two groups may
 hold tools of one name, but two tools that could show one name, such as a tool `github_search` and

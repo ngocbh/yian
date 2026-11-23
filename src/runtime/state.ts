@@ -126,7 +126,7 @@ import {
 import { decodeTyped, SYSTEM_PREFIX } from "./sources.ts";
 import { LOAD_SKILL } from "../skills/tool.ts";
 import { ASK, ASK_USER, SLEEP, TAKE, toolCallId } from "../tools/context.ts";
-import { checkGateText, GATE_TEXT_MAX_BYTES, isToolSource } from "../tools/gate.ts";
+import { checkGateText, isToolSource } from "../tools/gate.ts";
 import { visibleToolName } from "../tools/grants.ts";
 import {
   applyWaitsRecord,
@@ -4368,10 +4368,10 @@ const HOLD_STEP_KEYS = ["kind", "call_id", "tool", "tool_call_id", "reply", "ind
 /**
  * Require a hold's `pending` step to hold exactly `HOLD_STEP_KEYS`, and maybe a `target`: `held:
  * true`, a tool other than the never-gated `ask_user` and `load_skill`, a `ToolSource`, a target
- * as the host's check saw it (a JSON object within `GATE_TEXT_MAX_BYTES`), an `index` among the
- * `calls` tool calls of its reply, and a `group_end` (the last call of its concurrency group) from
- * its `index` to the reply's last call. A step holds `source`, `target` and `group_end` only as a
- * hold.
+ * as the host's check saw it (a JSON object, bounded with the whole step by the run's event
+ * limit), an `index` among the `calls` tool calls of its reply, and a `group_end` (the last call
+ * of its concurrency group) from its `index` to the reply's last call. A step holds `source`,
+ * `target` and `group_end` only as a hold.
  */
 function requireHoldStep(step: Readonly<JsonObject>, index: number, calls: number): void {
   if (!Object.hasOwn(step, "held")) {
@@ -4384,13 +4384,7 @@ function requireHoldStep(step: Readonly<JsonObject>, index: number, calls: numbe
         "and may hold target",
     );
   }
-  if (Object.hasOwn(step, "target")) {
-    if (!isRecord(step["target"])) throw new YianRangeError("a hold's target must be a JSON object");
-    const size = eventBytes(step["target"]);
-    if (size > GATE_TEXT_MAX_BYTES) {
-      throw new YianRangeError(`a hold's target is ${size} UTF-8 bytes, over the limit of ${GATE_TEXT_MAX_BYTES}`);
-    }
-  }
+  if (Object.hasOwn(step, "target") && !isRecord(step["target"])) throw new YianRangeError("a hold's target must be a JSON object");
   if (step["held"] !== true) throw new YianRangeError("a hold's pending step says held: true");
   if (step["tool"] === ASK_USER || step["tool"] === LOAD_SKILL) {
     throw new YianRangeError(`a hold's tool can't be ${String(step["tool"])}, whose calls are never checked`);

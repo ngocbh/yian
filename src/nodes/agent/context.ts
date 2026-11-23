@@ -608,8 +608,24 @@ export class AgentSteps {
    * @throws Whatever `NodeSteps.record` throws.
    */
   hold(call: HoldFields): number {
+    return this.#record(this.#holdStep(call));
+  }
+
+  /**
+   * Return why `call`'s hold can't be recorded: its step is over the run's `YIAN_MAX_EVENT_BYTES`,
+   * as a large target can make it; `null` when it fits.
+   */
+  holdTooLarge(call: HoldFields): string | null {
+    const max = this.#steps?.maxEventBytes;
+    const size = eventBytes(this.#holdStep(call));
+    if (max === undefined || size <= max) return null;
+    return `its target makes a hold of ${size} bytes, over the run's limit of ${max} (YIAN_MAX_EVENT_BYTES)`;
+  }
+
+  /** The hold's `pending` step `hold` writes for `call`. */
+  #holdStep(call: HoldFields): ValueRecord {
     const { callId, tool, toolCallId, reply, index, source, target, groupEnd } = call;
-    return this.#record({
+    return {
       kind: "pending",
       call_id: callId,
       tool,
@@ -620,7 +636,7 @@ export class AgentSteps {
       source: { ...source },
       ...(target === null ? {} : { target: target as ValueRecord }),
       group_end: BigInt(groupEnd),
-    });
+    };
   }
 
   /**

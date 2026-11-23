@@ -2623,8 +2623,8 @@ function callArguments(waits: WaitsState): {
   fold(record: RunRecord): void;
   of(call: Call): RecordedCall;
 } {
-  // Each unsettled call's recorded arguments, question and source; a settled node's calls leave
-  // the fold, so theirs go.
+  // Each unsettled call's recorded arguments, question, source and target; a settled node's calls
+  // leave the fold, so theirs go.
   const args = new Map<string, RecordedCall>();
   // Each running node's step count and latest `model_call` step with its number: an agent call's
   // `reply` must name that step, so the earlier ones needn't be kept.
@@ -2666,8 +2666,8 @@ function settledNodeId(record: RunRecord): string | null {
 }
 
 /**
- * The open host calls of `waits`, in registration order, with the arguments, question and source
- * `recorded` reads; a flow call is the run's to answer, so it is left out.
+ * The open host calls of `waits`, in registration order, with the arguments, question, source and
+ * target `recorded` reads; a flow call is the run's to answer, so it is left out.
  */
 function openHostCalls(waits: WaitsState, recorded: (call: Call) => RecordedCall): PendingCall[] {
   return [...waits.calls.values()]
@@ -2685,7 +2685,7 @@ function openHostCalls(waits: WaitsState, recorded: (call: Call) => RecordedCall
 
 /**
  * The arguments of `call`'s `pending` step among its node's steps in `state` (for an agent's call,
- * those of its reply's tool call), or `null`, and the question and source it recorded.
+ * those of its reply's tool call), or `null`, and the question, source and target it recorded.
  */
 function stateArguments(state: RunState, call: Call): RecordedCall {
   const steps = state.nodeSteps.get(call.nodeId) ?? [];

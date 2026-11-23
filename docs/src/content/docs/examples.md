@@ -637,8 +637,10 @@ Keep a chat history under a size budget by folding older turns into a rolling su
 # compact_history — keep a chat history's text under a budget by folding older turns into a
 # rolling summary. The history is a list of turns, each a list of built-in `Message`s; `keep`
 # counts turns, so a tool call and its result never part. The budget counts the characters of
-# the messages' text parts; the summarizer reads those text parts too (tool calls, their results
-# and reasoning are left out of the summary).
+# the messages' text parts, and of each person's action (an `action` part) as JSON; the
+# summarizer reads those text parts, and each action as `<author> <tool>: <summary>` (its
+# arguments without a summary) and ` -> <result>` when it has one (tool calls, their results and
+# reasoning are left out).
 id: compact_history
 name: compact_history
 description: Keep a chat history's text under a budget by folding older turns into a rolling summary.
@@ -683,7 +685,11 @@ defs:
           ${summary}
 
           New messages to fold in (context only), oldest first:
-          ${join([m.role + ": " + p.text for t in older for m in t for p in m.parts if p.type == "text"])}
+          ${join([(m.role + ": " + p.text) if p.type == "text"
+            else ((m.author :- m.role) + " " + p.tool
+              + (": " + (p.summary :- str(p.arguments)) if p.summary != null or p.arguments != null else "")
+              + (" -> " + p.result if p.result != null else ""))
+            for t in older for m in t for p in m.parts if p.type == "text" or p.type == "action"])}
     output: !Compacted
       summary: ${summarize.output}
       history: ${input.recent}
@@ -692,7 +698,7 @@ nodes:
   over:
     kind: case
     cases:
-      - when: len(input.history) > input.keep and len(join([p.text for t in input.history for m in t for p in m.parts if p.type == "text"], "")) > input.budget
+      - when: len(input.history) > input.keep and len(join([p.text if p.type == "text" else str(p) for t in input.history for m in t for p in m.parts if p.type == "text" or p.type == "action"], "")) > input.budget
         then: folded
   folded:                 # skipped when under budget: no model call
     kind: call

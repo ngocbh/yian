@@ -621,6 +621,12 @@ export const CHAT_FLOW_ID = "yian-chat";
 export const CHAT_FLOW_FILE = "chat.yaml";
 
 /**
+ * The person at a `yian chat` terminal, as the chat's flow and runs know them. They sign the
+ * actions they take, and `chat.yaml` takes a `/model` action only when they signed it.
+ */
+export const CHAT_PERSON = "the user";
+
+/**
  * Reject a flow file or fresh-only options on `--resume`, a fresh run without a flow file, and a
  * `--log` path that already exists or whose folder doesn't. Absent options are `undefined`;
  * `inputValues` is empty when no `--input` is given.

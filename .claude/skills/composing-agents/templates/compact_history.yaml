@@ -8,7 +8,9 @@
 # / `history[len(history) - keep:]` falls between them. The slices sit in the `folded` CALL's binding: a CALL is derived (its binding is
 # rebuilt, never recorded), and the AGENT binds plain references. Prompts call only the
 # builtins that give text (join, render_as_json, strip, ...), so `len` stays in bindings.
-# The budget and the summarizer read the messages' text parts only.
+# The budget and the summarizer read the messages' text parts, and a person's actions (`action`
+# parts): the budget counts each as JSON, the summarizer reads `<author> <tool>: <summary>` (its
+# arguments without a summary) and ` -> <result>` when it has one.
 
 id: compact_history
 name: compact_history
@@ -54,7 +56,11 @@ defs:
           ${summary}
 
           New messages to fold in (context only), oldest first:
-          ${join([m.role + ": " + p.text for t in older for m in t for p in m.parts if p.type == "text"])}
+          ${join([(m.role + ": " + p.text) if p.type == "text"
+            else ((m.author :- m.role) + " " + p.tool
+              + (": " + (p.summary :- str(p.arguments)) if p.summary != null or p.arguments != null else "")
+              + (" -> " + p.result if p.result != null else ""))
+            for t in older for m in t for p in m.parts if p.type == "text" or p.type == "action"])}
     output: !Compacted
       summary: ${summarize.output}
       history: ${input.recent}
@@ -63,7 +69,7 @@ nodes:
   over:
     kind: case
     cases:
-      - when: len(input.history) > input.keep and len(join([p.text for t in input.history for m in t for p in m.parts if p.type == "text"], "")) > input.budget
+      - when: len(input.history) > input.keep and len(join([p.text if p.type == "text" else str(p) for t in input.history for m in t for p in m.parts if p.type == "text" or p.type == "action"], "")) > input.budget
         then: folded
   folded:                 # skipped when under budget: no model call
     kind: call

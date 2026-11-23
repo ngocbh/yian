@@ -68,7 +68,7 @@ import {
 import { type ChatCommandOutcome, inboxChat, type InboxChatHost } from "./inbox_chat.ts";
 import { type Colored, paint, printStyled, type Style } from "./render.ts";
 import { type FileIssueHost, fileIssueTool, hostFacts } from "./report_issue.ts";
-import { CHAT_FLOW_FILE, CHAT_FLOW_ID, validateRunLogOptions } from "./run.ts";
+import { CHAT_FLOW_FILE, CHAT_FLOW_ID, CHAT_PERSON, validateRunLogOptions } from "./run.ts";
 import { sanitize } from "./sanitize.ts";
 import { RunProgress, runScreen } from "./run_view.ts";
 import { cliLayer, defaultRunsDir, freshLog } from "./startup.ts";
@@ -84,10 +84,11 @@ const VIEW_TICK_MS = 500;
 const CHAT_LABEL = CHAT_FLOW_FILE;
 
 /**
- * The person at the terminal, as the chat's runs know them. The assistant itself goes by its flow's
- * id (`CHAT_FLOW_ID`), which signs its messages to its runs.
+ * The person at the terminal, as the chat's runs know them, who signs the actions they take
+ * (`/model`). The assistant itself goes by its flow's id (`CHAT_FLOW_ID`), which signs its
+ * messages to its runs.
  */
-const PERSON = "the user";
+const PERSON = CHAT_PERSON;
 
 /** The options `chat` reads; an absent option is `undefined`, an absent flag `false`. */
 export interface ChatOptions {
@@ -503,7 +504,7 @@ class ModelPicker {
       this.options.view?.model(name);
       void this.options.note(`(model: ${sanitize(name)}, from the next reply)\n`).catch(() => {});
     };
-    return { send: modelMessage(chosen), sent };
+    return { action: modelMessage(chosen, PERSON), by: { kind: "user", name: PERSON }, sent };
   }
 
   /**
@@ -633,9 +634,9 @@ class ModelPicker {
  *
  * `/model` picks the model of the next replies among the current one and those the saved logins
  * offer (`loginModels`, or `deps.modelChoices`): a picker, or off the chat's view, a numbered list
- * and a line for the number. The choice goes to the run as a message (`modelMessage`) that the
- * flow keeps in its state, so the log holds it; the children started after it get it too, and the
- * banner's and spinner's model follows it. `/resume` lists the folder's earlier chats
+ * and a line for the number. The choice goes to the run as the user's action (`modelMessage`),
+ * which the flow keeps in its state, so the log holds it; the children started after it get it
+ * too, and the banner's and spinner's model follows it. `/resume` lists the folder's earlier chats
  * (`chatSessions`) the same way and ends this one (as `/exit` does) to go on from the one picked
  * in a new chat: its transcript and model are the new run's inputs (`sessionSeed`), and its
  * children left waiting are listed, not restarted; the model it chose carries over unless

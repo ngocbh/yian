@@ -1,4 +1,4 @@
-# From examples/chat.yaml, with budget: 200 in `compacted`'s input, and
+# From an older copy of examples/chat.yaml, with budget: 200 in `compacted`'s input, and an older
 # examples/compact_history.yaml beside it.
 # Five 60-character turns (a 30-character message and a 30-character reply each): the `compacted`
 # beside each take passes the history through while it is under 200 characters or holds at most

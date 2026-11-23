@@ -1,4 +1,4 @@
-# From examples/chat.yaml, with examples/compact_history.yaml beside it.
+# From an older copy of examples/chat.yaml, with an older examples/compact_history.yaml beside it.
 # A `loop` over a `defs:` body holding a `take` on the flow's `Inbox(Message)` input beside a CALL
 # of a `uses:` flow, a routing-only `case`, an inbox passed through a CALL to an AGENT's
 # `steer_inbox:`, an `Optional(str)` reply, `${reply.new_messages}`, the built-in `Message`, list

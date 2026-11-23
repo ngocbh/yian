@@ -25,7 +25,8 @@ import { type ChatModel, EventStream } from "../../src/llm/events.ts";
 import { type Request, Response, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { inspectRun } from "../../src/run.ts";
-import { NodeStepRecord, readRunLog, type RunStartedRecord } from "../../src/runtime/log.ts";
+import { NodeStepRecord, PoolCommitRecord, readRunLog, type RunStartedRecord } from "../../src/runtime/log.ts";
+import { toHost } from "../../src/typesys/values.ts";
 import {
   callReply,
   chatServing,
@@ -841,7 +842,6 @@ test(
     expect(model.requests).toHaveLength(1);
     expect(model.named).toHaveLength(1);
     expect(builtWith(access)).toEqual(["xai/grok-4"]);
-    expect(shown(model.requests[0]!)).not.toContain("/model");
 
     const next = chatIo();
     next.stdin.write("what did I say?\n/exit\n");
@@ -853,6 +853,39 @@ test(
     );
     expect(shown(again.requests[0]!)).toContain("remember 7");
     expect(builtWith(resumed.access)).toEqual(["xai/grok-4"]);
+  },
+  TIMEOUT,
+);
+
+test(
+  "/model is the user's action: signed and keyed, sent with no turn of its own, read by the next reply",
+  async () => {
+    const { io, stdin } = chatIo();
+    stdin.write("/model\n2\nremember 7\n/exit\n");
+    const model = new AnsweringModel(() => textReply("noted"));
+    const { code, log } = await runChat(io, model, undefined, { deps: { modelChoices: offered } });
+    expect(code).toBe(0);
+    const choice = {
+      role: "user",
+      author: "the user",
+      parts: [{ type: "action", tool: "/model", arguments: { provider: "xai", model: "grok-4" } }],
+    };
+    const line = { role: "user", parts: [{ type: "text", text: "remember 7" }] };
+    const sends = readRunLog(log).filter(
+      (envelope) => envelope.record instanceof PoolCommitRecord && envelope.record.key === "__start__.owner_messages",
+    );
+    const records = sends.map((envelope) => envelope.record as PoolCommitRecord);
+    expect(records.map((record) => toHost(record.value!.value))).toEqual([choice, line]);
+    expect(records[0]!.by).toEqual({ kind: "user", name: "the user" });
+    expect(records[0]!.sendKey).toStartWith("action-");
+    // Nothing moved the run between the two: the line's send comes right after the choice's.
+    expect(sends[1]!.seq).toBe(sends[0]!.seq + 1);
+    // The reply reads the choice before the line, and nothing it reads is signed yian.
+    const said = model.requests[0]!.messages.filter((message) => message.role === "user");
+    expect(said.slice(-2).map((message) => message.toJSON())).toEqual(
+      [choice, line].map((message) => ({ format: "yian.message.v1", ...message })),
+    );
+    expect(shown(model.requests[0]!)).not.toContain('"author":"yian"');
   },
   TIMEOUT,
 );

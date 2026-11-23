@@ -43,6 +43,7 @@ import type { ToolContext } from "../../src/tools/context.ts";
 import { defaultIdentity, defaultLocation } from "../../src/cli/memory_bind.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { NO_ENV, SUMMARIZER_FIRST_LINE, writeSmallBudgetChat } from "../helpers/run_state_fixtures.ts";
+import { toHost } from "../../src/typesys/values.ts";
 import { heldScheduler } from "../helpers/schedulers.ts";
 import {
   CTRL_C,
@@ -2117,6 +2118,45 @@ test(
     } finally {
       globalThis.fetch = original;
     }
+  },
+  TIMEOUT,
+);
+
+/** MESSAGE_ECHO, echoing an action by its tool. */
+const ACTION_ECHO = MESSAGE_ECHO.replace("m.parts[0].text", "m.parts[0].text ?? m.parts[0].tool");
+
+test(
+  "Esc sends an action it took back again, under a new key and its by, and puts back only the lines",
+  async () => {
+    const { io, stdin, stdout, stderr } = chatIo({ tty: true });
+    const chatting = runChat(flowFile(ACTION_ECHO), io);
+    const log = join(tmp, "run.jsonl");
+    const sends = () =>
+      records(log).filter(
+        (record): record is PoolCommitRecord => record instanceof PoolCommitRecord && record.key === "__start__.messages",
+      );
+    await until(() => existsSync(log) && records(log).some((record) => record instanceof RunWaitingRecord));
+    // A person's press, recorded while the prompt is up, then a line no take has read either.
+    const by = { kind: "user", name: "Ada" } as const;
+    const action = { role: "user", author: "Ada", parts: [{ type: "action", tool: "shell_type", summary: "Ada typed" }] };
+    await send(log, "messages", action, { env: io.env, by, key: "press-1" });
+    await send(log, "messages", { role: "user", parts: [{ type: "text", text: "later" }] }, { env: io.env });
+    await until(() => screen((io.stderrStream as FakeOutput).text).rows.at(-1) === "> You:");
+    stdin.write(ESCAPE);
+    await until(() => stderr().includes("(withdrew 1 message; back in the prompt)"));
+    await until(() => screen((io.stderrStream as FakeOutput).text).rows.at(-1) === "> You: later");
+    // The press already happened: it is sent again, not put back.
+    const again = sends().at(-1)!;
+    expect(toHost(again.value!.value)).toEqual(action);
+    expect(again.by).toEqual(by);
+    expect(again.sendKey).not.toBeNull();
+    expect(again.sendKey).not.toBe("press-1");
+    stdin.write(ENTER);
+    await until(() => stdout().includes("echo: "));
+    stdin.write("/exit" + ENTER);
+    expect((await chatting).code).toBe(0);
+    expect(stdout()).toStartWith("echo: shell_type | later\n");
+    expect(sends().map((record) => record.sendKey)).toEqual(["press-1", null, again.sendKey, null]);
   },
   TIMEOUT,
 );

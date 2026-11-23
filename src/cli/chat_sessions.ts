@@ -273,7 +273,7 @@ export interface SessionSeed {
   readonly title: string | null;
   /** Its message count (`ChatSession.messages`), which `/resume` showed. */
   readonly messages: number;
-  /** The earlier chat's child runs left waiting or stopped; they aren't restarted. */
+  /** The earlier chat's child runs, and theirs, left waiting or stopped; they aren't restarted. */
   readonly waiting: WaitingChild[];
 }
 
@@ -283,7 +283,7 @@ const TURN_END = /^chat#\d+\/__end__$/;
 /**
  * The seed a new chat takes from `session`: its transcript as its last turn left it (the summary,
  * and every turn's messages), read by folding its log, and the model it chose, if it chose one;
- * and its children in `runsDir` left waiting or stopped.
+ * and its children in `runsDir`, and theirs, left waiting or stopped.
  *
  * @throws What `foldRunLog` throws for a log it can't replay.
  */
@@ -301,8 +301,19 @@ export async function sessionSeed(
     }
   }
   const transcript = { summary: state.summary, history: state.history };
-  const waiting = indexRows(runsDir).flatMap((row): WaitingChild[] => {
-    if (row.parentRunId !== session.runId) return [];
+  const rows = indexRows(runsDir);
+  // A run an authoring run started is the chat's child's child.
+  const ours = new Set([session.runId]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const row of rows) {
+      if (row.parentRunId === null || !ours.has(row.parentRunId) || ours.has(row.runId)) continue;
+      ours.add(row.runId);
+      grew = true;
+    }
+  }
+  const waiting = rows.flatMap((row): WaitingChild[] => {
+    if (row.runId === session.runId || !ours.has(row.runId)) return [];
     const log = join(runsDir, row.runId, "log.jsonl");
     if (row.status === "stopped" || row.status === "crashed") {
       return [{ run: row.runId, kind: "halted", log }];

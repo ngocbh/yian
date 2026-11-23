@@ -4,8 +4,8 @@
  * answer, message and stop the runs it started. As with the file tools (`chat_tools.ts`), the
  * model always gets text back: a tool returns the run's status as JSON, or throws a
  * `ReportedToolError` it reads. `start_flow` asks the chat which flow its arguments name and
- * whether the user lets it start (`chatStart`). The runs are `ChatRuns`: the child-run driver
- * with the chat's hooks.
+ * whether the user lets it start (`chatStart`). The runs are `ChatRuns`: the child-flow driver
+ * with the chat's hooks; the assistant and each authoring run hold theirs through an owner.
  *
  * Knows about: the host tool API and its errors, confined loading, the run boundary's flow readers
  * and input intake, CODE references, the chat's file tools and their helpers, its child runs and
@@ -17,7 +17,15 @@ import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 
-import { ChildRuns, type ChildRunsOptions, type ChildStatus, cutStatusText, shownStatus } from "../child_flows.ts";
+import {
+  type ChildFlowOwner,
+  ChildFlows,
+  type ChildFlowsOptions,
+  type ChildStatus,
+  cutStatusText,
+  shownStatus,
+  WAIT_MAX_S,
+} from "../child_flows.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
 import type { Env } from "../defaults.ts";
@@ -27,7 +35,7 @@ import { defaultEmbedding } from "../llm_clients/connection.ts";
 import { defaultEmbed } from "../llm_clients/factory.ts";
 import { coerceInputs } from "../nodes/binding.ts";
 import { splitReference } from "../nodes/code/worker.ts";
-import { isSystemError, realScheduler, type Scheduler } from "../platform.ts";
+import { isSystemError } from "../platform.ts";
 import { type ConsoleHook, hostInputs, libraryRunMessage, skillGrants, staticNodes } from "../run.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { ReportedToolError } from "../tools/errors.ts";
@@ -65,9 +73,6 @@ import { loadReportFlow } from "./report_issue.ts";
 import { ensureProviderKeys } from "./startup.ts";
 import { CommandEnv } from "./utils.ts";
 
-/** The longest `wait_flow` waits, in seconds. */
-const WAIT_FLOW_MAX_S = 120;
-
 /** The approval answers `start_flow` offers: the first two start, the last (Ctrl-C's) doesn't. */
 const START_CHOICES = ["Approve", "Approve this flow for this chat", "Reject"] as const;
 
@@ -81,6 +86,8 @@ const STATUS =
 
 /** How a set of run tools reads and shows the chat's runs (`chatRunTools`' `view`). */
 interface View {
+  /** The hold on the runs this view starts. */
+  readonly owner: ChildFlowOwner;
   /** `status` as the model reads it (`shownStatus`), marked shown. */
   show(status: ChildStatus): Record<string, unknown>;
   /** The last seq of `run` this view has shown (or the chat has, for the assistant's). */
@@ -115,16 +122,8 @@ export interface ReportOptions {
   fileIssue: FunctionTool;
 }
 
-/** What the run tools need beside the file tools' host. */
+/** What the run tools need beside the file tools' host and the assistant's owner. */
 export interface ChatRunToolsOptions {
-  /**
-   * The chat's record of what the model has seen (its `EventQueue`): told each status a run tool
-   * hands the model, by run and seq, so the child events up to it aren't relayed again; and asked
-   * the last seq of a run the model has seen, a relayed event included. `null` for none.
-   */
-  seen?: { markSeen(run: string, seq: number): void; seen(run: string): number } | null;
-  /** The clock `wait_flow` times out on; the real one by default. */
-  scheduler?: Scheduler;
   /** What `report_issue` needs; without it, there is no `report_issue`. */
   report?: ReportOptions | null;
   /** What `author_flow` and `review_flow` need; without it, there are neither. */
@@ -132,12 +131,9 @@ export interface ChatRunToolsOptions {
 }
 
 /** What the chat's child runs need from the chat (`ChatRuns`). */
-export interface ChatRunsOptions
-  extends Omit<ChildRunsOptions, "codeRoot" | "parentRunId" | "memories" | "preflight" | "onConsole"> {
+export interface ChatRunsOptions extends Omit<ChildFlowsOptions, "codeRoot" | "memories" | "preflight" | "onConsole"> {
   /** The folder the chat's flows are confined to: their CODE files must resolve inside it. */
   root: string;
-  /** The chat's own run id: each child's is `<chatRunId>-r<n>`, and its parent is the chat. */
-  chatRunId: string;
   /** The home folder whose `~/.yian/memory` holds the children's default memories. */
   home: string;
   /** For tests: the embeddings call VectorDB memories make; `defaultEmbed` over `env` when absent. */
@@ -170,16 +166,15 @@ function consoleTo(file: string): ConsoleHook {
  * alone, and an error the driver reports names no location, since a status reaches the chat's log
  * and its model, which never hold one.
  */
-export class ChatRuns extends ChildRuns {
+export class ChatRuns extends ChildFlows {
   readonly #home: string;
   readonly #env: Env;
 
-  constructor({ root, chatRunId, home, embed, consoleFile = null, ...options }: ChatRunsOptions) {
+  constructor({ root, home, embed, consoleFile = null, ...options }: ChatRunsOptions) {
     const { env } = options;
     super({
       ...options,
       codeRoot: root,
-      parentRunId: chatRunId,
       preflight: (flow, llmConfig, inputs) =>
         ensureProviderKeys(flow, llmConfig, inputs, { env: new CommandEnv(env), terminal: null }),
       memories: {
@@ -383,7 +378,7 @@ function capabilities(flow: ComposedFlow, files: readonly string[]): string[] {
  *
  * @throws {ReportedToolError} When no child has the id, or it isn't a string.
  */
-function knownRun(runs: ChildRuns, args: Record<string, unknown>): string {
+function knownRun(runs: ChildFlows, args: Record<string, unknown>): string {
   const id = stringArg(args, "run");
   try {
     runs.status(id);
@@ -480,21 +475,26 @@ function chatStart(host: ChatToolHost, runs: ChatRuns): StartHooks<ChatStartTarg
 }
 
 /**
- * The chat assistant's run tools over `runs`: `start_flow`, which asks the user through
- * `host.approve` before it starts a flow in `host.root`; `flow_status` and `wait_flow`, which
- * read a child's status; and `answer_flow`, `message_flow`, `close_inbox` and `stop_flow`, which
- * relay to it. Each returns the child's status as JSON, its text fields cut at
- * `STATUS_TEXT_CHARS`, and marks it read (`runs.markRead`, `options.seen`). An unknown run, or an
+ * The chat assistant's run tools over `runs`, which it holds through `owner`: `start_flow`, which
+ * asks the user through `host.approve` before it starts a flow in `host.root`; `flow_status` and
+ * `wait_flow`, which read a child's status; and `answer_flow`, `message_flow`, `close_inbox` and
+ * `stop_flow`, which relay to it. Each returns the child's status as JSON, its text fields cut at
+ * `STATUS_TEXT_CHARS`, and marks it read (`runs.markRead`, `owner.seen`). An unknown run, or an
  * argument of the wrong type, is a `ReportedToolError`. With `options.report`, also
  * `report_issue`, which starts the bundled report flow as a child run without asking: only that
  * run gets `file_issue`, whose own approval card guards anything that leaves the machine. With
  * `options.authoring`, also `author_flow` and `review_flow`, which start the bundled authoring
  * flows likewise (`authoringTools`).
  */
-export function chatRunTools(host: ChatToolHost, runs: ChatRuns, options: ChatRunToolsOptions = {}): FunctionTool[] {
-  const { seen = null, scheduler = realScheduler, report = null, authoring = null } = options;
+export function chatRunTools(
+  host: ChatToolHost,
+  runs: ChatRuns,
+  owner: ChildFlowOwner,
+  options: ChatRunToolsOptions = {},
+): FunctionTool[] {
+  const { report = null, authoring = null } = options;
   const starts = chatStart(host, runs);
-  const chatView = view(true);
+  const chatView = view(owner);
   const { show } = chatView;
   const runArgument = (description: string, ...more: [name: string, description: string][]) =>
     stringArguments(
@@ -568,23 +568,26 @@ export function chatRunTools(host: ChatToolHost, runs: ChatRuns, options: ChatRu
   ];
 
   /**
-   * How a set of run tools shows runs: `marks`, for the assistant's own, marks each status it
-   * shows read and seen, so the chat doesn't relay it again; a child's set (`requester`'s) marks
-   * nothing, and reads only the runs it started (`started`), so the assistant still hears of them.
+   * How a set of run tools shows runs, starting them through `owner`: the assistant's, whose
+   * owner has `seen`, marks each status it shows read and seen, so the chat doesn't relay it again;
+   * a child's set (`requester`'s) marks nothing, and reads only the runs it started (`started`), so
+   * the assistant still hears of them.
    */
-  function view(marks: boolean, requester: string | null = null): View {
+  function view(owner: ChildFlowOwner, requester: string | null = null): View {
+    const { seen } = owner;
+    const marks = seen !== null;
     // By run, the last seq this view showed; with `seen`'s, what `wait_flow` waits past.
     const shown = new Map<string, number>();
     const mine = new Set<string>();
-    const lastSeen = (run: string) =>
-      Math.max(shown.get(run) ?? 0, marks ? (seen?.seen(run) ?? 0) : 0);
+    const lastSeen = (run: string) => Math.max(shown.get(run) ?? 0, seen?.seen(run) ?? 0);
     return {
+      owner,
       lastSeen,
       show: (status) => {
         const last = lastSeen(status.run);
-        if (marks) {
+        if (seen !== null) {
           runs.markRead(status.run, status.seq);
-          seen?.markSeen(status.run, status.seq);
+          seen.markSeen(status.run, status.seq);
         }
         shown.set(status.run, Math.max(status.seq, last));
         // The stored status keeps the replies and notes it was published with; once shown, they are read.
@@ -655,7 +658,7 @@ export function chatRunTools(host: ChatToolHost, runs: ChatRuns, options: ChatRu
       name: "wait_flow",
       description:
         "Wait for a run this chat started to change (a reply, a question, its end), up to " +
-        `\`seconds\` (at most ${WAIT_FLOW_MAX_S}), and return its status then, or at the ` +
+        `\`seconds\` (at most ${WAIT_MAX_S}), and return its status then, or at the ` +
         `timeout. Returns at once when it changed since you last saw it. ${STATUS}`,
       parameters: {
         type: "object",
@@ -663,7 +666,7 @@ export function chatRunTools(host: ChatToolHost, runs: ChatRuns, options: ChatRu
           run: { type: "string", description: RUN },
           seconds: {
             type: "number",
-            description: `How long to wait at most, in seconds (at most ${WAIT_FLOW_MAX_S}).`,
+            description: `How long to wait at most, in seconds (at most ${WAIT_MAX_S}).`,
           },
         },
         required: ["run", "seconds"],
@@ -676,17 +679,9 @@ export function chatRunTools(host: ChatToolHost, runs: ChatRuns, options: ChatRu
         if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) {
           throw new ReportedToolError("seconds must be a number of seconds, 0 or more");
         }
-        const done = new AbortController();
-        const end = () => done.abort();
-        ctx.signal.addEventListener("abort", end, { once: true });
-        if (ctx.signal.aborted) end();
-        scheduler.sleep(Math.min(seconds, WAIT_FLOW_MAX_S) * 1000, done.signal).then(end, () => {});
-        try {
-          return through.show(await runs.next(id, through.lastSeen(id), { signal: done.signal }));
-        } finally {
-          ctx.signal.removeEventListener("abort", end);
-          end();
-        }
+        const after = through.lastSeen(id);
+        const waited = { after, seconds: Math.min(seconds, WAIT_MAX_S), signal: ctx.signal };
+        return through.show(await through.owner.wait(id, waited));
       },
     });
   }
@@ -707,15 +702,18 @@ export function chatRunTools(host: ChatToolHost, runs: ChatRuns, options: ChatRu
       inputs: Record<string, unknown>,
       signal: AbortSignal,
     ): Promise<string | Record<string, unknown>> => {
-      const own = view(false, name);
-      const granted: FunctionTool[] = [...chatFileTools(host), startTool(own), waitTool(own)];
-      const tools = Object.fromEntries(
-        granted.filter((each) => grants.includes(each.name)).map((each) => [each.name, each]),
-      );
+      // Its starts are its own: the runs it starts are its children.
+      let own!: View;
+      const tools = (runId: string) => {
+        own = view(runs.owner({ runId, group: owner.group }), name);
+        const granted: FunctionTool[] = [...chatFileTools(host), startTool(own), waitTool(own)];
+        const kept = granted.filter((each) => grants.includes(each.name));
+        return Object.fromEntries(kept.map((each) => [each.name, each]));
+      };
       let id: string;
       try {
         const flow = await load();
-        ({ id } = await runs.start(flow, inputs, { signal, tools, skills: options.skills }));
+        ({ id } = await owner.start(flow, inputs, { signal, tools, skills: options.skills }));
       } catch (error) {
         if (error instanceof Error) return `not started: ${error.message}`;
         throw error;
@@ -801,7 +799,7 @@ export function chatRunTools(host: ChatToolHost, runs: ChatRuns, options: ChatRu
         try {
           const flow = await loadReportFlow(host.env);
           const tools = { file_issue: options.fileIssue };
-          ({ id } = await runs.start(flow, inputs, { signal: ctx.signal, tools }));
+          ({ id } = await owner.start(flow, inputs, { signal: ctx.signal, tools }));
         } catch (error) {
           if (error instanceof Error) return `not started: ${error.message}`;
           throw error;
@@ -830,7 +828,7 @@ export function chatRunTools(host: ChatToolHost, runs: ChatRuns, options: ChatRu
     if (refused !== null) return `not started: ${refused}`;
     let id: string;
     try {
-      ({ id } = await runs.start(flow, inputs as Record<string, unknown>, { signal, name, project }));
+      ({ id } = await through.owner.start(flow, inputs as Record<string, unknown>, { signal, name, project }));
     } catch (error) {
       if (error instanceof Error) return `not started: ${error.message}`;
       throw error;

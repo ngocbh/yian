@@ -316,7 +316,8 @@ or its code changes. Off a terminal nothing is approved. `report_issue`, `author
 A flow the assistant starts runs in the background. Its questions reach you through the
 assistant, which sends your answers back. The keys its agents need must already be set, and its
 memory inputs get their default memories (see [Memory](#memory)). Its log is
-`~/.yian/runs/<chat run id>-r<n>/log.jsonl`.
+`~/.yian/runs/<chat run id>-r<n>/log.jsonl`. A try that `author_flow` runs is that run's own child,
+so its log is `~/.yian/runs/<chat run id>-r<n>-r<m>/log.jsonl`.
 
 ### Building and reviewing flows
 

@@ -33,8 +33,8 @@ flowchart LR
 |---|---|
 | `index.ts` | The package root: what a host needs to load, run and extend a flow |
 | `run.ts` | The run boundary: `runFlow`, `advance`, `inspectRun`, and the host calls on a log (`send`, `complete`, `close`, `withdraw`, `interrupt`, `cancel`) |
-| `run_entry.ts` | The `yian/run` entry: every name `run.ts` exports, re-exported by name |
-| `child_flows.ts` | The child runs a run starts and owns: their driver (`ChildRuns`), which takes what its host decides through hooks, and a child's status as its owner's model reads it (`shownStatus`, `childEvent`) |
+| `run_entry.ts` | The `yian/run` entry: every name `run.ts` and the child-flow toolkit export, re-exported by name |
+| `child_flows.ts` | The child flows runs start and own: their driver (`ChildFlows`), which takes what its host decides through hooks; an owner's hold on its children (`ChildFlowOwner`); the tool group its model drives them with (`childFlows`); and a child's status as that model reads it (`shownStatus`, `childEvent`) |
 | `compose/` | The YAML loader: source reading (`source/`, `parse/`), desugaring, per-kind node builders (`nodes/`), edges and validation |
 | `compile/` | The compiled flow, its validation, growth (`expand.ts`), origins and the fingerprint |
 | `nodes/` | One folder per node kind (`agent`, `call`, `case`, `code`, `end`, `loop`, `map`, `start`, `tool`) and the node base contract (`base.ts`) |

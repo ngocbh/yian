@@ -43,7 +43,7 @@ export class EventQueue {
   /**
    * @param options.wake Gets a `CHAT_WAKE` event each time a push queues something.
    * @param options.markRead Told each event `takeAll` takes, by run and seq: the child's replies
-   *   up to it are read (`ChildRuns.markRead`).
+   *   up to it are read (`ChildFlows.markRead`).
    */
   constructor(
     options: { wake?: EventTarget | null; markRead?: ((run: string, seq: number) => void) | null } = {},

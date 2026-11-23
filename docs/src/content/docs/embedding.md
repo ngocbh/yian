@@ -12,7 +12,7 @@ runs on disk, move messages and answers into them, and watch what they do. Insta
 | Import | What it's for |
 |---|---|
 | `@ngocbh/yian` | Load and run flows: `loadFlow`, `runFlow`, `advance`; the host calls `send`, `withdraw`, `close`, `complete`, `release`, `interrupt`, `cancel`, `pendingCalls` and their errors `DeliveryRefused` and `RunBusyError`; the types of the [`beforeToolCall`](#gate-tool-calls) hook (`BeforeToolCall`, `GatedCall`, `GateContext`, `GateDecision`, `ToolSource`, `FlowCallScope`); host tools (`tool`, `ToolContext`, `pending`, the tool errors); memories (`FileMemory`, `VectorDBMemory`, `MemoryBase`, `MemoryBusyError`, `ChangeIdReusedError`); `LoadError`, `Failure`, `Diagnostic`; `authoredText` and `escapeAuthorTags` (see [Label speakers for an outside agent](#label-speakers-for-an-outside-agent)) |
-| `@ngocbh/yian/run` | Everything about runs: `runFlow`, `advance`, the host calls and their errors, plus `RunResult`, `runLogPath`, `inspectRun`, `loadRecordedFlow`, the types `RunFlowOptions`, `AdvanceOptions`, `ReleaseOptions`, `MemoryDrift`, `EventHook`, `StreamHook` and the `beforeToolCall` types; for hosts that show runs, `LiveChannel`, `iterRunRecords`, `foldRunLog`, `agentCalls`, `agentCall`, `updateRunIndex` and `readRunIndex` |
+| `@ngocbh/yian/run` | Everything about runs: `runFlow`, `advance`, the host calls and their errors, plus `RunResult`, `runLogPath`, `inspectRun`, `loadRecordedFlow`, the types `RunFlowOptions`, `AdvanceOptions`, `ReleaseOptions`, `MemoryDrift`, `EventHook`, `StreamHook` and the `beforeToolCall` types; for hosts that show runs, `LiveChannel`, `iterRunRecords`, `foldRunLog`, `agentCalls`, `agentCall`, `updateRunIndex` and `readRunIndex`; for runs that start flows of their own, `ChildFlows` and `childFlows` (see [Child flows](#child-flows)) |
 | `@ngocbh/yian/tools` | Tools without the run API: `registerTool`, `registeredTools`, `invokeTool`, `mcpServer` and the `Mcp*` errors, `pending`, `isPending`, the ask handler types `AskHandler` and `AskRequest`, and the `beforeToolCall` types |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
 | `@ngocbh/yian/platform` | yian's file lock and SQLite wrapper, for hosts that lock files the same way: `lockFile`, `waitForLock`, `isLocked`, `FileLockError`, `openSqlite`, `sqliteErrorCode`; and `syncFolder`, which makes a folder's new entries durable |
@@ -535,6 +535,44 @@ the hook throws a `RangeError` before it appends anything: `run log <log> is gat
 its tool calls with beforeToolCall; resume it with one (advance({ log, beforeToolCall }))`.
 `yian run --resume` passes no hook, so it refuses a gated run and leaves its log as it was.
 `inspectRun`, `pendingCalls`, `agentCalls`, `agentCall` and `yian status` read any log.
+
+## Child flows
+
+An agent can start flows as runs of their own and talk to them while they work, as `yian chat`'s
+assistant does. `ChildFlows` drives them: it runs each child in the background, and is the only
+caller of `runFlow` and `advance` on its log. A run holds the children it starts through an owner,
+and `childFlows` gives the owner's model the tools it drives them with, as one tool group.
+
+```ts check=fragment
+import { ChildFlows, childFlows } from "@ngocbh/yian/run";
+
+const driver = new ChildFlows({
+  codeRoot, logDir, env, scheduler, llmConfig: {}, skillsFor: () => null,
+  preflight: () => {},                       // throws to refuse a start
+  memories: { bind: () => ({}), drift: (d) => `${d.input} changed`, scrub: (error) => error },
+});
+const owner = driver.owner({ runId, group: "flows" });
+const started = await owner.start(flow, { topic: "billing" });
+const next = await advance({ log, tools: { ...tools, [owner.group]: childFlows(owner) } });
+```
+
+- **Ids.** Children are `r1`, `r2`, ..., numbered across the driver. A child's run id is
+  `<owner's run id>-r<n>`, and it records the owner's run as its parent. Pass `tools` as a function
+  of the child's run id to give it tools that act as that run, such as an owner of its own.
+- **Reach.** An owner acts on the runs it started and the runs those started. Any other id is
+  `no run '<id>'`.
+- **The group.** The model sees `<group>_status` and `<group>_wait`, which read a run's status, and
+  `<group>_message`, `<group>_answer`, `<group>_close_inbox` and `<group>_stop`, which deliver to
+  it. Each returns the run's status. `wait` waits at most 120 seconds on the driver's `scheduler`.
+- **Resumes.** The four delivering tools are `resumable`. `message` keys its send by the call id,
+  so a crash-cut call sent again sends nothing twice.
+- **Statuses.** A status lists open questions as `asks` and calls the children's `beforeToolCall`
+  held as `held`. `answer` refuses a held call, and refuses a `Message` value that carries an
+  `author` or an action part.
+- **Read marks.** Pass `seen: {markSeen, seen}` to an owner whose model should consume replies:
+  each status its tools show is then marked read. Without it they mark nothing.
+- **Errors.** `memories.scrub` rewrites every error the driver reports, so that no location
+  leaks.
 
 ## Tools and skills
 

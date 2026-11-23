@@ -516,7 +516,8 @@ test(
     await settled(children, "r2");
     const waiting = await settled(children, "r1");
     // The finished one is gone; the one waiting on its question stays.
-    expect(children.live()).toEqual([{ id: "r1", name: "ask.yaml", since: expect.any(Number), status: waiting }]);
+    const listed = { id: "r1", name: "ask.yaml", since: expect.any(Number), status: waiting, inboxes: [] };
+    expect(children.live()).toEqual([listed]);
     await children.answer("r1", `${CHAT}-r1/sure`, "yes");
     await settled(children, "r1", waiting.seq);
     expect(children.live()).toEqual([]);
@@ -530,6 +531,20 @@ test(
     const children = childRuns();
     await chat(children).start(await flow(ASK), {});
     expect(children.live().map((child) => child.name)).toEqual(["ask"]);
+  },
+  TIMEOUT,
+);
+
+test(
+  "live names the inbox inputs of each child's flow, in the order declared",
+  async () => {
+    const children = childRuns();
+    const text =
+      "id: two\nname: two\ninput:\n  said: !Inbox(Message)\n  who: !str\n  notes: !Inbox(str)\nnodes:\n" +
+      '  heard: {kind: call, call: take, input: {from: "${input.notes}", take: one}}\n' +
+      '  told: {kind: call, call: take, input: {from: "${input.said}", take: one}}\noutput: ${input.who}\n';
+    await chat(children).start(await flow(text), { who: "ada" });
+    expect(children.live().map((child) => child.inboxes)).toEqual([["said", "notes"]]);
   },
   TIMEOUT,
 );

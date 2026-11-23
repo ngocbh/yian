@@ -284,8 +284,8 @@ theirs. Off a terminal, or with `NO_COLOR`, it prints plain lines and numbered l
 | `/exit`, `/quit` or Ctrl-D | Leaves the chat |
 | Ctrl-L | Rerenders the screen |
 | ↓, ↑ | Move between the box and the list of running flows under it |
-| Enter on a flow | Opens its view: its progress, what was sent to it and who sent it, its log and any question it waits on |
-| Esc in the list or a view | Goes back to the box |
+| Enter on a flow | Opens its view (see [A flow's view](#a-flows-view)) |
+| Esc in the list | Goes back to the box |
 
 A long paste shows as a token such as `[Pasted text #1 +40 lines]`; the assistant gets all of it.
 
@@ -344,6 +344,29 @@ When you ask the assistant to stop what a flow is doing, it interrupts the flow:
 own messages the flow hasn't read, then cuts the flow's current step. With no step running, the
 flow's next turn stops at once, and a message someone else queued for it may go unanswered; the
 assistant is told how many. The flow goes on; to end it, ask the assistant to stop it.
+
+### A flow's view
+
+Enter on a flow in the list opens its view: its progress, each message sent to it and who sent it,
+its log, any question it waits on, its inboxes and a box. There you use the assistant's own tools
+(`flows_message`, `flows_interrupt`, `flows_close_inbox`, `flows_stop`) yourself. The flow gets
+your words as you typed them, signed `the user, via yian-chat`, and its log records each as yours,
+relayed by the chat. The assistant gets each as your action, signed `the user`, that starts no
+reply: it reads them in its next turn, whatever starts it. The view shows what each did, or why
+it was refused. Once the flow has ended, the view says so in place of the box.
+
+| Key | What it does |
+|---|---|
+| Tab, Shift-Tab | Picks the inbox the box sends to |
+| Enter | Sends the box's text to that inbox |
+| `/close` | Closes that inbox once you press `y`: the flow reads no more from it |
+| `/stop` | Stops the flow once you press `y`: its run ends |
+| Esc while the flow runs | Interrupts it on that inbox: takes back your messages it hasn't read, which return to the box, then cuts the steps reading the inbox. When the flow waits for a message there, there is nothing to interrupt. When no step reads it, the interrupt stands until the flow next takes from the inbox, and a step that starts reading it before then stops at once |
+| Esc at rest, or Ctrl-C | Goes back to the chat |
+
+Keys in the view reach only the flow: Esc there never stops the assistant's reply. While an
+approval or a question of the chat waits behind the view, the view says so, and Ctrl-C goes back
+to it.
 
 ### Building and reviewing flows
 

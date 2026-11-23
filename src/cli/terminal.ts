@@ -108,6 +108,8 @@ export interface Key {
   meta: boolean;
   /** The text the key types, when it types any. */
   str: string | undefined;
+  /** Whether Shift was held, on the keys the terminal says so for (Shift-Tab, say). */
+  shift?: boolean;
   /**
    * Whether the key is a bracketed paste: one key, whose `str` holds all the text pasted, each
    * line break as `\n`.
@@ -542,6 +544,8 @@ export class LineEditor {
   readonly #columns: () => number;
   readonly #rows: () => number;
   readonly #hint: string;
+  /** What the box's top edge names, if anything. */
+  readonly #title: () => string;
   /** The list under the hint, if any. */
   readonly list: PromptList | null;
   /** The list row with the keys, its key and place, or null while the box has them. */
@@ -557,18 +561,24 @@ export class LineEditor {
   /** The last fold, for the text's version and the width it was folded at. */
   #folded: { version: number; columns: number; fold: Fold } | null = null;
 
-  /** @param options.rows The screen's height, which the list keeps within; no bound when absent. */
+  /**
+   * @param options.rows The screen's height, which the list keeps within; no bound when absent.
+   * @param options.title What the box's top edge names (what it sends to, say), read at each draw
+   *   and cut to fit; none when absent or empty. Drawn as given: sanitize it first.
+   */
   constructor(options: {
     columns: () => number;
     rows?: () => number;
     hint: string;
     list?: PromptList | null;
     commands?: readonly PromptCommand[];
+    title?: () => string;
   }) {
     this.#columns = options.columns;
     this.#commands = options.commands ?? [];
     this.#rows = options.rows ?? (() => Infinity);
     this.#hint = options.hint;
+    this.#title = options.title ?? (() => "");
     this.list = options.list ?? null;
   }
 
@@ -706,10 +716,11 @@ export class LineEditor {
     const { rows, width } = this.#fold();
     const { start, end } = this.#window();
     const border = (part: string): string => style("2", part);
-    // A box cut to fit says on its edge how many rows it leaves out.
-    const edge = (count: number, arrow: string): string => {
-      if (count === 0) return "─".repeat(width + 4);
-      const label = `─ ${arrow} ${count} more `;
+    // A box cut to fit says on its edge how many rows it leaves out, after its title.
+    const edge = (count: number, arrow: string, title = ""): string => {
+      const more = count === 0 ? "" : `─ ${arrow} ${count} more `;
+      const room = width - cells(more);
+      const label = (title === "" || room < 1 ? "" : `─ ${fit(title, room)} `) + more;
       return label + "─".repeat(Math.max(0, width + 4 - cells(label)));
     };
     const { menu, list } = this.#around();
@@ -720,7 +731,7 @@ export class LineEditor {
     const hint = cells(both) + 2 <= this.#columns() ? both : this.#hint;
     return [
       ...menu,
-      border(`╭${edge(start, "↑")}╮`),
+      border(`╭${edge(start, "↑", this.#title())}╮`),
       ...rows.slice(start, end).map((each, i) => {
         const body = each.chars.join("");
         const pad = " ".repeat(width - cells(body));
@@ -1639,24 +1650,32 @@ export class Terminal {
    * or `signal` aborts; then give back the screen as it was and call `onClose`, before any prompt
    * queued behind takes the terminal. `draw` gets the columns, the rows and whether a prompt that
    * wants an answer (any but a `readLine`) waits behind the screen, and is called again on each
-   * `subscribe` callback and each time that changes; rows past the screen's height are left out
-   * and each is cut to the width. Does nothing on a plain terminal or an input that isn't a TTY,
-   * and when the terminal is closed. Ctrl-C leaves the terminal open.
+   * `subscribe` callback, each key and each time that changes; rows past the screen's height are
+   * left out and each is cut to the width. `cursor` places the cursor after each draw, as a
+   * prompt's frame does (its row among the rows, and the text before it there); `null` hides it.
+   * Given `key`, every key but Ctrl-C goes to it (a paste as one key), with whether a prompt waits
+   * behind, in place of the keys that close the screen; it returns whether to close it. Does
+   * nothing on a plain terminal or an input that isn't a TTY, and when the terminal is closed.
+   * Ctrl-C leaves the terminal open.
    */
   async showScreen(options: {
     draw: (columns: number, rows: number, waiting: boolean) => readonly string[];
+    cursor?: () => { row: number; before: string } | null;
+    key?: (key: Key, waiting: boolean) => boolean;
     subscribe?: (redraw: () => void) => () => void;
     onClose?: () => void;
     signal?: AbortSignal;
   }): Promise<void> {
     if (this.#plain || this.#input.isTTY !== true || options.signal?.aborted) return;
     const output = this.#output;
+    const waiting = () => this.#waiting > 0;
     const widget: Widget<null> = {
       preface: "",
       screen: true,
-      lines: () => [...options.draw(columnsOf(output), rowsOf(output), this.#waiting > 0)],
-      cursor: () => null,
+      lines: () => [...options.draw(columnsOf(output), rowsOf(output), waiting())],
+      cursor: () => options.cursor?.() ?? null,
       key(key) {
+        if (options.key !== undefined) return options.key(key, waiting()) ? { value: null } : undefined;
         if (key.paste) return undefined;
         const plain = !key.ctrl && !key.meta;
         const leave = key.name === "return" || key.name === "enter" || key.str === "q";
@@ -1890,7 +1909,7 @@ export class Terminal {
   /** Normalize one keypress and hand it to the active widget, or buffer it for the next one. */
   readonly #onKeypress = (
     str: string | undefined,
-    raw: { name?: string; ctrl?: boolean; meta?: boolean; sequence?: string } | undefined,
+    raw: { name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean; sequence?: string } | undefined,
   ): void => {
     const name = raw?.name;
     // A key typed soon after a lone Escape arrives as Alt+key. No prompt binds Alt, so the Escape
@@ -1926,7 +1945,8 @@ export class Terminal {
     }
     if (name === "paste-end") return this.#endPaste(true);
     const meta = raw?.meta === true && alt === null;
-    this.#dispatch({ name, ctrl: raw?.ctrl === true, meta, str: alt?.[1] ?? str, paste: false });
+    const shift = raw?.shift === true;
+    this.#dispatch({ name, ctrl: raw?.ctrl === true, meta, shift, str: alt?.[1] ?? str, paste: false });
   };
 
   /** A key of the paste arrived: it hasn't paused, and its pause starts again. */
@@ -2187,7 +2207,13 @@ export class Terminal {
         // From the top, one screen row each, so the screen never scrolls.
         const columns = columnsOf(output);
         const rows = lines.slice(0, rowsOf(output)).map((line) => clip(line, columns));
-        const frame = `${ESC}H${rows.map((row) => `${row}${ESC}K`).join("\r\n")}${ESC}J`;
+        const cursor = widget.cursor();
+        // The cursor is hidden while the frame draws, and shows only where it places it.
+        const place =
+          cursor === null || cursor.row >= rows.length
+            ? ""
+            : `${ESC}${cursor.row + 1};${Math.min(cells(cursor.before), columns - 1) + 1}H${SHOW_CURSOR}`;
+        const frame = `${ESC}H${HIDE_CURSOR}${rows.map((row) => `${row}${ESC}K`).join("\r\n")}${ESC}J${place}`;
         output.write(again ? `${SYNC_ON}${frame}${SYNC_OFF}` : frame);
         return;
       }

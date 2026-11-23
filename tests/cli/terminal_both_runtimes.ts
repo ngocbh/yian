@@ -1921,6 +1921,48 @@ async function showScreenSaysWhenAPromptWaitsBehindItAndClosesFirst(): Promise<v
   assert.equal(await answer, "ada");
 }
 
+async function showScreenWithAKeyHookHandsItTheKeysAndPlacesTheCursor(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 20 });
+  const keys: string[] = [];
+  let typed = "";
+  const screenUp = terminal.showScreen({
+    draw: () => ["head", `> ${typed}`],
+    cursor: () => ({ row: 1, before: `\x1b[1m>\x1b[0m ${typed}` }),
+    key: (key, waiting) => {
+      const name = key.paste ? `paste ${key.str}` : `${key.shift ? "shift-" : ""}${key.name ?? key.str}`;
+      keys.push(waiting ? `${name} (waiting)` : name);
+      if (key.paste || key.str === "q") typed += key.str;
+      return key.name === "escape";
+    },
+  });
+  await tick();
+  assert.deepEqual(view().rows, ["head", ">"]);
+  assert.deepEqual(view().cursor, { row: 1, col: 2 });
+  assert.equal(view().modes.at(-1), "?25h");
+  // `q` and Enter no longer leave: the hook has every key, a paste whole.
+  input.write("q" + ENTER + "\t" + "\x1b[Z" + PASTE_START + "ab" + PASTE_END);
+  await tick();
+  assert.deepEqual(keys, ["q", "return", "tab", "shift-tab", "paste ab"]);
+  assert.deepEqual(view().rows, ["head", "> qab"]);
+  assert.deepEqual(view().cursor, { row: 1, col: 5 });
+  // It is told when a prompt waits behind the screen.
+  const answer = terminal.askText("Name:");
+  await tick();
+  input.write("x");
+  await tick();
+  assert.equal(keys.at(-1), "x (waiting)");
+  // It says when the screen closes; Ctrl-C closes it without reaching the hook.
+  input.write(ESCAPE);
+  await pastEscape();
+  await screenUp;
+  input.write("ada" + ENTER);
+  assert.equal(await answer, "ada");
+  const again = terminal.showScreen({ draw: () => ["x"], key: () => (keys.push("again"), false) });
+  input.write(CTRL_C);
+  await again;
+  assert.equal(keys.includes("again"), false);
+}
+
 async function aWatchWithAnEditorTurnsBracketedPasteOnAndAPasteStaysOneLine(): Promise<void> {
   let clock = 0;
   const { input, output, terminal } = setup({ columns: 60, now: () => clock });
@@ -4335,6 +4377,8 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "showScreen says when a prompt waits behind it, and closes before that prompt":
     showScreenSaysWhenAPromptWaitsBehindItAndClosesFirst,
   "showScreen off a TTY does nothing": showScreenOffATtyDoesNothing,
+  "showScreen with a key hook hands it the keys and places the cursor":
+    showScreenWithAKeyHookHandsItTheKeysAndPlacesTheCursor,
   "a watch with an editor turns bracketed paste on, and a paste stays one line":
     aWatchWithAnEditorTurnsBracketedPasteOnAndAPasteStaysOneLine,
   "the exit hook leaves the alternate screen": theExitHookLeavesTheAlternateScreen,

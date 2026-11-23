@@ -453,6 +453,24 @@ test.each<[string, () => unknown, new (...args: never[]) => Error, string]>([
   ],
   ["a non-boolean gated start", () => runStarted({ gated: "yes" as never }), TypeError, "RunStarted gated must be a boolean"],
   [
+    "a parent without its inbox",
+    () => runStarted({ parent: { runId: "p", node: null, label: "l" } as never }),
+    TypeError,
+    "RunStarted parent inbox must be a non-empty string",
+  ],
+  [
+    "an empty parent inbox",
+    () => runStarted({ parent: { runId: "p", node: null, inbox: "", label: "l" } }),
+    RangeError,
+    "RunStarted parent inbox must be a non-empty string",
+  ],
+  [
+    "a non-text parent label",
+    () => runStarted({ parent: { runId: "p", node: null, inbox: null, label: 3 as never } }),
+    TypeError,
+    "RunStarted parent label must be a non-empty string",
+  ],
+  [
     "a non-text digest",
     () => new NodeExpandedRecord("grow", [], 3 as never),
     TypeError,
@@ -702,7 +720,7 @@ function sourcedRunStarted(): RunStartedRecord {
       ],
     },
     yianVersion: "0.0.0",
-    parent: { runId: "p", node: "n" },
+    parent: { runId: "p", node: "n", inbox: "messages", label: "review r1" },
   });
 }
 
@@ -710,6 +728,10 @@ const ROUND_TRIP_RECORDS: [string, RunRecord][] = [
   ["RunStartedRecord", roundTripRunStarted()],
   ["RunStartedRecord with its sources", sourcedRunStarted()],
   ["RunStartedRecord of a gated run", runStarted({ gated: true })],
+  [
+    "RunStartedRecord of a child whose owner takes no reports",
+    runStarted({ parent: { runId: "p", node: null, inbox: null, label: "review r1" } }),
+  ],
   ["RunResumedRecord", new RunResumedRecord(["slow", "later"], 4)],
   ["RunResumedRecord closing calls", new RunResumedRecord(["slow"], 4, ["run/slow/1/0", "run/slow/1/1"])],
   ["RunResumedRecord of a gated run", new RunResumedRecord(["slow"], 4, [], { gated: true })],
@@ -829,16 +851,34 @@ test.each<[string, (payload: Record<string, unknown>) => void, new (...args: nev
     "run_started payload defaults must be an object",
   ],
   [
-    "a parent missing its node",
+    "a parent missing its node, inbox and label",
     (payload) => (payload["parent"] = { run_id: "p" }),
     RangeError,
-    'invalid run_started payload parent fields; missing=["node"], extra=[]',
+    'invalid run_started payload parent fields; missing=["inbox","label","node"], extra=[]',
   ],
   [
     "an empty parent node",
-    (payload) => (payload["parent"] = { run_id: "p", node: "" }),
+    (payload) => (payload["parent"] = { run_id: "p", node: "", inbox: null, label: null }),
     RangeError,
     "RunStarted parent node must be a non-empty string",
+  ],
+  [
+    "a non-text parent inbox",
+    (payload) => (payload["parent"] = { run_id: "p", node: null, inbox: 1n, label: "l" }),
+    TypeError,
+    "run_started payload parent inbox must be a string or null",
+  ],
+  [
+    "an empty parent label",
+    (payload) => (payload["parent"] = { run_id: "p", node: null, inbox: null, label: "" }),
+    RangeError,
+    "RunStarted parent label must be a non-empty string",
+  ],
+  [
+    "a parent inbox without a label",
+    (payload) => (payload["parent"] = { run_id: "p", node: null, inbox: "messages", label: null }),
+    RangeError,
+    "RunStarted parent inbox needs a label to sign the child's reports",
   ],
   [
     "a flow missing its root",

@@ -7,6 +7,7 @@
  */
 
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -530,8 +531,29 @@ test("run_started records the parent the host names", async () => {
   writeTree(dir, SHAPES["one level"]!.files);
   const flow = await loadRoot(dir);
 
-  expect(started(await runInto(flow, { parent: { runId: "p", node: "n" } })).parent).toEqual({ runId: "p", node: "n" });
-  expect(started(await runInto(flow, { parent: { runId: "p" } })).parent).toEqual({ runId: "p", node: null });
+  const owned = { runId: "p", node: "n", inbox: "messages", label: "review r1" };
+  expect(started(await runInto(flow, { parent: owned })).parent).toEqual(owned);
+  expect(started(await runInto(flow, { parent: { runId: "p" } })).parent).toEqual({
+    runId: "p",
+    node: null,
+    inbox: null,
+    label: null,
+  });
+});
+
+test("a parent inbox without a label is refused before the log is made", async () => {
+  const dir = freshDir("unlabelled");
+  writeTree(dir, SHAPES["one level"]!.files);
+  const flow = await loadRoot(dir);
+  const log = freshLog();
+
+  const error = await rejected(
+    runFlow(flow, { q: "x" }, { log, env: hostEnv(logs), tools: { lookup: lookup() }, parent: { runId: "p", inbox: "m" } }),
+  );
+
+  expect(error).toBeInstanceOf(RangeError);
+  expect((error as Error).message).toBe("RunStarted parent inbox needs a label to sign the child's reports");
+  expect(existsSync(log)).toBe(false);
 });
 
 test("run_started records the tools and skills the AGENTs grant", async () => {

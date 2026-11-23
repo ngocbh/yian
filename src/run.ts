@@ -767,11 +767,12 @@ export interface RunFlowOptions {
   /** For tests: the model builder AGENT nodes use (default `defaultModelAccess(env)`). */
   models?: ModelAccess | null;
   /**
-   * The run that started this one, recorded in `RunStarted`: a host-started child run, and the
-   * parent's node that started it when one did. `null` (the default) when
-   * none did.
+   * The run that started this one, recorded in `RunStarted`: a host-started child run, the
+   * parent's node that started it, the parent's inbox the child reports to, and the child's author
+   * label, which signs those reports. `node`, `inbox` and `label` default to `null`; an inbox needs
+   * a label. `null` (the default) when none did.
    */
-  parent?: { runId: string; node?: string | null } | null;
+  parent?: { runId: string; node?: string | null; inbox?: string | null; label?: string | null } | null;
 }
 
 /**
@@ -1402,7 +1403,15 @@ async function startRun(
       toolGroups: recordedToolGroups(flow.compiled, runTools),
       toolModules: recordedToolModules(flow.compiled, runTools),
       yianVersion: VERSION,
-      parent: options.parent == null ? null : { runId: options.parent.runId, node: options.parent.node ?? null },
+      parent:
+        options.parent == null
+          ? null
+          : {
+              runId: options.parent.runId,
+              node: options.parent.node ?? null,
+              inbox: options.parent.inbox ?? null,
+              label: options.parent.label ?? null,
+            },
       gated: gate !== null,
     });
 

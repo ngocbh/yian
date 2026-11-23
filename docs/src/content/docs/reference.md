@@ -257,7 +257,7 @@ compact JSON with its keys sorted:
 
 | Kind | What it records |
 |---|---|
-| `run_started` | The run begins: its flow files and code root, settings, model choices, granted tools and skills, the tools agents reach in tool modules (`tool_modules`, by file), and the `YIAN_*` values that differ from the built-in ones. `gated: true` when the host checks each agent tool call before it runs |
+| `run_started` | The run begins: its flow files and code root, settings, model choices, granted tools and skills, the tools agents reach in tool modules (`tool_modules`, by file), and the `YIAN_*` values that differ from the built-in ones. `gated: true` when the host checks each agent tool call before it runs. `parent` names the run that started it, `{run_id, node, inbox, label}`, or is `null` (see `runFlow`'s `parent` in [Embedding](/embedding/#runflow-options)) |
 | `run_resumed` | A resume begins: the unfinished nodes it retries, and its worker count. `gated: true` when the host checks agent tool calls; once a run is gated, every resume is |
 | `run_stopped` | The host stopped the run while nodes were running. The run can be resumed |
 | `run_waiting` | Every unfinished node waits, and the run holds no worker |

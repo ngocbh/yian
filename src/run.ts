@@ -152,10 +152,13 @@ import {
   type RunLogEntry,
   RunCancelledRecord,
   RunFailedRecord,
+  type RunParent,
   type RunRecord,
   RunResumedRecord,
   RunStartedRecord,
   validatedBy,
+  validatedParent,
+  validatedRunId,
 } from "./runtime/log.ts";
 import { emptyRunScan, foldRunScan, scanStatus, unfinishedStatus } from "./runtime/run_index.ts";
 import {
@@ -179,6 +182,7 @@ import {
   PreparedTransition,
   prepareRunResumed,
   prepareRunStarted,
+  requireWorkerCount,
   RunState,
   replayRecords,
   stepIndexAt,
@@ -768,9 +772,10 @@ export interface RunFlowOptions {
   models?: ModelAccess | null;
   /**
    * The run that started this one, recorded in `RunStarted`: a host-started child run, the
-   * parent's node that started it, the parent's inbox the child reports to, and the child's author
-   * label, which signs those reports. `node`, `inbox` and `label` default to `null`; an inbox needs
-   * a label. `null` (the default) when none did.
+   * parent's node that started it, the parent's inbox the host sends the child's reports to, and
+   * the child's author label, which those reports carry. yian records them and sends nothing
+   * itself. `node`, `inbox` and `label` default to `null`; an inbox needs a label. `null` (the
+   * default) when none did.
    */
   parent?: { runId: string; node?: string | null; inbox?: string | null; label?: string | null } | null;
 }
@@ -841,8 +846,9 @@ export async function runFlow(
     if (!(flow instanceof ComposedFlow)) throw new YianTypeError("runFlow expects a ComposedFlow");
     if (flow.library !== null) throw new YianRangeError(libraryRunMessage(flow));
     const unopened = checkDriveOptions(options);
+    const parent = checkStartOptions(options);
     const skills = checkFlowBeforeServers(flow.compiled, options.skills ?? null);
-    return await startRun(flow, inputs, { ...options, skills }, unopened, runDefaults, env);
+    return await startRun(flow, inputs, { ...options, skills, parent }, unopened, runDefaults, env);
   });
 }
 
@@ -854,6 +860,22 @@ export function libraryRunMessage(flow: ComposedFlow): string {
   const id = flow.compiled.flowId;
   const name = flow.source?.root ?? (id === null ? "this flow" : `flow ${reprText(id)}`);
   return `${name} is a library (defs: and no nodes:); import it with uses: and call a def`;
+}
+
+/**
+ * Check the options only `runFlow` takes that `run_started` records, as the record checks them,
+ * before anything is opened: a memory input's store is created before the record is.
+ *
+ * @returns The parent to record, or `null`.
+ * @throws TypeError or RangeError when `runId`, `numWorkers` or `parent` is malformed.
+ */
+function checkStartOptions(options: RunFlowOptions): RunParent | null {
+  const { runId = null, numWorkers, parent = null } = options;
+  if (runId !== null) validatedRunId(runId);
+  if (numWorkers !== undefined) requireWorkerCount(numWorkers);
+  if (parent === null) return null;
+  const { node = null, inbox = null, label = null } = parent;
+  return validatedParent({ runId: parent.runId, node, inbox, label });
 }
 
 /** The options `runFlow` and `advance` share, which drive the engine. */
@@ -1291,7 +1313,7 @@ export function runStartLlm(
 async function startRun(
   flow: ComposedFlow,
   inputs: Readonly<Record<string, unknown>>,
-  options: RunFlowOptions,
+  options: RunFlowOptions & { readonly parent: RunParent | null },
   unopened: readonly [string, McpServer][],
   runDefaults: Defaults,
   env: Env,
@@ -1403,15 +1425,7 @@ async function startRun(
       toolGroups: recordedToolGroups(flow.compiled, runTools),
       toolModules: recordedToolModules(flow.compiled, runTools),
       yianVersion: VERSION,
-      parent:
-        options.parent == null
-          ? null
-          : {
-              runId: options.parent.runId,
-              node: options.parent.node ?? null,
-              inbox: options.parent.inbox ?? null,
-              label: options.parent.label ?? null,
-            },
+      parent: options.parent,
       gated: gate !== null,
     });
 

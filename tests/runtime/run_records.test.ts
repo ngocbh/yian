@@ -456,19 +456,19 @@ test.each<[string, () => unknown, new (...args: never[]) => Error, string]>([
     "a parent without its inbox",
     () => runStarted({ parent: { runId: "p", node: null, label: "l" } as never }),
     TypeError,
-    "RunStarted parent inbox must be a non-empty string",
+    "RunStarted parent inbox must be a non-empty string or null",
   ],
   [
     "an empty parent inbox",
     () => runStarted({ parent: { runId: "p", node: null, inbox: "", label: "l" } }),
     RangeError,
-    "RunStarted parent inbox must be a non-empty string",
+    "RunStarted parent inbox must be a non-empty string or null",
   ],
   [
     "a non-text parent label",
     () => runStarted({ parent: { runId: "p", node: null, inbox: null, label: 3 as never } }),
     TypeError,
-    "RunStarted parent label must be a non-empty string",
+    "RunStarted parent label must be a non-empty string or null",
   ],
   [
     "a non-text digest",
@@ -860,7 +860,7 @@ test.each<[string, (payload: Record<string, unknown>) => void, new (...args: nev
     "an empty parent node",
     (payload) => (payload["parent"] = { run_id: "p", node: "", inbox: null, label: null }),
     RangeError,
-    "RunStarted parent node must be a non-empty string",
+    "RunStarted parent node must be a non-empty string or null",
   ],
   [
     "a non-text parent inbox",
@@ -872,7 +872,7 @@ test.each<[string, (payload: Record<string, unknown>) => void, new (...args: nev
     "an empty parent label",
     (payload) => (payload["parent"] = { run_id: "p", node: null, inbox: null, label: "" }),
     RangeError,
-    "RunStarted parent label must be a non-empty string",
+    "RunStarted parent label must be a non-empty string or null",
   ],
   [
     "a parent inbox without a label",

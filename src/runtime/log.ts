@@ -363,6 +363,19 @@ function requireName(value: unknown, label: string): string {
 }
 
 /**
+ * Return `value` when it is `null` or a non-empty string.
+ *
+ * @throws TypeError when it is neither `null` nor a string.
+ * @throws RangeError when it is empty.
+ */
+function nullableName(value: unknown, label: string): string | null {
+  if (value === null) return null;
+  if (typeof value !== "string") throw new YianTypeError(`${label} must be a non-empty string or null`);
+  if (value === "") throw new YianRangeError(`${label} must be a non-empty string or null`);
+  return value;
+}
+
+/**
  * Return a frozen copy of who made a host call: its `kind` and `name`, and `run` and `node` when
  * set; `null` for `null` or `undefined`. Other fields are left out. `label` names it in errors.
  * Stricter than a memory change's author (`checkAuthor`), which may hold empty texts: a record
@@ -505,17 +518,18 @@ function validatedEntries<T>(
 }
 
 /**
- * Return a frozen copy of a `RunStarted.parent` value.
+ * Return a frozen copy of a `RunStarted.parent` value. `runFlow` checks its `parent` option with it
+ * before anything is opened.
  *
  * @throws TypeError when a part has the wrong type.
  * @throws RangeError when a text is empty, or an inbox has no label.
  */
-function validatedParent(parent: RunParent): RunParent {
+export function validatedParent(parent: RunParent): RunParent {
   if (!isRecord(parent)) throw new YianTypeError("RunStarted parent must be an object or null");
   const runId = requireName(parent.runId, "RunStarted parent run_id");
-  const text = (field: "node" | "inbox" | "label") =>
-    parent[field] === null ? null : requireName(parent[field], `RunStarted parent ${field}`);
-  const [node, inbox, label] = [text("node"), text("inbox"), text("label")];
+  const node = nullableName(parent.node, "RunStarted parent node");
+  const inbox = nullableName(parent.inbox, "RunStarted parent inbox");
+  const label = nullableName(parent.label, "RunStarted parent label");
   // An unsigned report would read as the parent's own user.
   if (inbox !== null && label === null) throw new YianRangeError("RunStarted parent inbox needs a label to sign the child's reports");
   return Object.freeze({ runId, node, inbox, label });
@@ -3394,7 +3408,7 @@ function waitEntryFromPayload(value: unknown, label: string): WaitEntry {
  *
  * @throws RangeError when it isn't a non-empty string or holds a lone surrogate.
  */
-function validatedRunId(runId: unknown): string {
+export function validatedRunId(runId: unknown): string {
   if (typeof runId !== "string" || !runId) throw new YianRangeError("run log run_id must be a non-empty string");
   if (!runId.isWellFormed()) throw new YianRangeError("Unicode surrogate is not valid canonical JSON");
   return runId;

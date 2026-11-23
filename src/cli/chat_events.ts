@@ -4,11 +4,11 @@
  * authored `yian`; and the count of the assistant's tool calls in flight, which tells the chat
  * when such a send would land in the middle of one.
  *
- * Knows about: the chat's child statuses and their events (`chat_runs.ts`), and the host tool API.
+ * Knows about: the chat's child statuses and their events (`child_flows.ts`), and the host tool API.
  */
 
+import { type ChildEvent, type ChildStatus, childEvent } from "../child_flows.ts";
 import { type FunctionTool, withExecute } from "../tools/function_tools.ts";
-import { type ChildEvent, type ChildStatus, childEvent } from "./chat_runs.ts";
 
 /** The type of the event a queue push or the last tool call ending dispatches on the wake target. */
 export const CHAT_WAKE = "wake";

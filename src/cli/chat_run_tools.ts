@@ -17,6 +17,7 @@ import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 
+import { ChildRuns, type ChildRunsOptions, type ChildStatus, cutStatusText, shownStatus } from "../child_flows.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
 import type { Env } from "../defaults.ts";
@@ -34,7 +35,6 @@ import { type FunctionTool, stringArg, stringArguments, tool } from "../tools/fu
 import { grantText, visibleToolName } from "../tools/grants.ts";
 import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
 import { buildValueAs, isInboxType, isMemoryType, renderValuePath, TypeCheckError } from "../typesys/values.ts";
-import { ChildRuns, type ChildRunsOptions, type ChildStatus, cutStatusText, shownStatus } from "./chat_runs.ts";
 import {
   type ChatToolHost,
   chatFileTools,

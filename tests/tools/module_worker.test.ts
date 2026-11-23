@@ -141,6 +141,25 @@ export const older = { [brand]: true, name: "older", description: "d", parameter
   ]);
 });
 
+test("a tool that says what its call acts on, or refuses to run ungated, is refused: only a host tool may", async () => {
+  const functionTools = pathToFileURL(join(SOURCE, "tools", "function_tools.ts")).href;
+  const namespace = await imported(`import { tool } from ${JSON.stringify(functionTools)};
+export const made = tool({ name: "made", description: "d", ${PARAMS}, gateTarget: () => null, execute: () => 1 });
+export const plain = { name: "plain", description: "d", ${PARAMS}, refuseUngated: "No.", execute: () => 1 };
+`);
+
+  const { listing } = listToolModule(namespace, "crm.ts");
+
+  const why = "only a host tool passed in the run's tools may";
+  expect([listing.tools, listing.refused]).toEqual([
+    [],
+    [
+      { name: "made", message: `crm.ts export 'made' sets gateTarget, which ${why}` },
+      { name: "plain", message: `crm.ts export 'plain' sets refuseUngated, which ${why}` },
+    ],
+  ]);
+});
+
 test.each([
   [`description: "d", ${PARAMS}`, "has no 'name'"],
   [`name: "lookup", ${PARAMS}`, "has no 'description'"],

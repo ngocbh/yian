@@ -4,9 +4,9 @@
  */
 import { describe, expect, test } from "bun:test";
 
+import type { ChildStatus } from "../../src/child_flows.ts";
 import { EventQueue, InFlight } from "../../src/cli/chat_events.ts";
 import { ChatFlusher } from "../../src/cli/chat_flush.ts";
-import type { ChildStatus } from "../../src/cli/chat_runs.ts";
 import { DeliveryRefused } from "../../src/run.ts";
 
 /** A cancelled status of run `run` numbered `seq`. */

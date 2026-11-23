@@ -158,7 +158,9 @@ quote:
 | `adaptive_questions` | no | `ask` only (see [Inboxes and waiting](/inboxes/)) |
 
 The built-ins `take`, `sleep` and `ask` read an inbox, wait until a time and ask a person; they
-are covered on [Inboxes and waiting](/inboxes/).
+are covered on [Inboxes and waiting](/inboxes/). A tool that sets `refuseUngated` (see
+[Host tools](/agents/#host-tools)) never runs from a TOOL node, since nothing checks the node's
+call: the node fails, without a retry.
 
 `kind: tool`, with `tool_id:` in place of `call:`, was the old spelling of a tool call. It was
 removed: a flow that writes it fails to load, and the error shows the `kind: call` to write.
@@ -257,6 +259,8 @@ other export, and `default`, is ignored.
 - A plain object missing a field, holding a mistyped one or a key `tool()` doesn't take (such as
   `resumeable`), and an export that can't be read, are refused.
 - A plain object's `execute` and `isConcurrencySafe` run with the object as `this`.
+- A tool that sets `gateTarget` or `refuseUngated` is refused: only a host tool passed in the run's
+  `tools` may.
 - For the types, write `import type { ToolOptions }` as the whole statement. Node keeps
   `import { type ToolOptions }` as an import, which fails where yian isn't installed.
 - Write an ES module: Node and Bun read a CommonJS file's exports differently.

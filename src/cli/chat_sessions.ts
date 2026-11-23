@@ -14,6 +14,7 @@
 import { realpathSync } from "node:fs";
 import { join } from "node:path";
 
+import type { WaitingChild } from "../child_flows.ts";
 import type { Env } from "../defaults.ts";
 import { compareCodeUnits } from "../diagnostics.ts";
 import { withWarnings } from "../platform.ts";
@@ -26,7 +27,6 @@ import {
 } from "../runtime/log.ts";
 import { readRunIndex, type RunIndexRow, updateRunIndex } from "../runtime/run_index.ts";
 import { toHost } from "../typesys/values.ts";
-import type { WaitingChild } from "./chat_runs.ts";
 import { CHAT_FLOW_FILE, CHAT_FLOW_ID } from "./run.ts";
 import { sanitize } from "./sanitize.ts";
 import type { PickChoice } from "./terminal.ts";

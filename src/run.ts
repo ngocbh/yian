@@ -9,8 +9,9 @@
  * engine's structured drain. It also owns the compile/runtime inversion seam by injecting
  * `compile/expand.ts`'s `buildGrow` into the kind-blind engine.
  *
- * This is the `yian/run` module: it exports `runFlow`, `advance` and `RunResult`, and re-exports
- * the types of their `beforeToolCall` hook (`tools/gate.ts`). Hosts reach a run by its log through
+ * Its names are the `yian/run` entry's, which `run_entry.ts` re-exports: it exports `runFlow`,
+ * `advance` and `RunResult`, and re-exports the types of their `beforeToolCall` hook
+ * (`tools/gate.ts`). Hosts reach a run by its log through
  * `send`, `withdraw`, `complete`, `release`, `close`, `interrupt`, `cancel` and `pendingCalls`;
  * their errors are `RunBusyError` and the re-exported `DeliveryRefused` (`runtime/state.ts`). For
  * hosts that show runs it also exports `inspectRun`, which reads where a run log stands, and
@@ -2581,10 +2582,16 @@ export interface PendingCall {
   readonly held: boolean;
   /** Where a held call's tool comes from, as its hold recorded it; `null` for any other call. */
   readonly source: ToolSource | null;
+  /**
+   * What a held call acts on, as its tool gave it to the host's check (`GatedCall.target`) and its
+   * hold recorded it, deep-frozen, so a host can show the same card again after a restart; `null`
+   * for a hold without one, or any other call.
+   */
+  readonly target: Readonly<JsonObject> | null;
 }
 
-/** What a call's `pending` step recorded: its arguments and question, and a hold's source. */
-type RecordedCall = Pick<PendingCall, "arguments" | "ask" | "source">;
+/** What a call's `pending` step recorded: its arguments and question, and a hold's source and target. */
+type RecordedCall = Pick<PendingCall, "arguments" | "ask" | "source" | "target">;
 
 /** The question of a TOOL `ask`: these fields of the `AskRequest` its handler got. */
 export type AskQuestion = Pick<AskRequest, "question" | "questions" | "answerSchema" | "title">;
@@ -2618,15 +2625,15 @@ export function pendingCalls(log: string, options: { maxLineBytes?: number | nul
 }
 
 /**
- * A fold of each unsettled call's recorded arguments, question and source, beside the waits fold
- * `waits`: `fold` takes each record after `waits` has, and `of` reads a call's.
+ * A fold of each unsettled call's recorded arguments, question, source and target, beside the
+ * waits fold `waits`: `fold` takes each record after `waits` has, and `of` reads a call's.
  */
 function callArguments(waits: WaitsState): {
   fold(record: RunRecord): void;
   of(call: Call): RecordedCall;
 } {
-  // Each unsettled call's recorded arguments, question and source; a settled node's calls leave
-  // the fold, so theirs go.
+  // Each unsettled call's recorded arguments, question, source and target; a settled node's calls
+  // leave the fold, so theirs go.
   const args = new Map<string, RecordedCall>();
   // Each running node's step count and latest `model_call` step with its number: an agent call's
   // `reply` must name that step, so the earlier ones needn't be kept.
@@ -2652,7 +2659,7 @@ function callArguments(waits: WaitsState): {
       nodes.delete(settled);
       for (const callId of args.keys()) if (!waits.calls.has(callId)) args.delete(callId);
     },
-    of: (call) => args.get(call.callId) ?? { arguments: null, ask: null, source: null },
+    of: (call) => args.get(call.callId) ?? NOTHING_RECORDED,
   };
 }
 
@@ -2668,8 +2675,8 @@ function settledNodeId(record: RunRecord): string | null {
 }
 
 /**
- * The open host calls of `waits`, in registration order, with the arguments, question and source
- * `recorded` reads; a flow call is the run's to answer, so it is left out.
+ * The open host calls of `waits`, in registration order, with the arguments, question, source and
+ * target `recorded` reads; a flow call is the run's to answer, so it is left out.
  */
 function openHostCalls(waits: WaitsState, recorded: (call: Call) => RecordedCall): PendingCall[] {
   return [...waits.calls.values()]
@@ -2687,24 +2694,29 @@ function openHostCalls(waits: WaitsState, recorded: (call: Call) => RecordedCall
 
 /**
  * The arguments of `call`'s `pending` step among its node's steps in `state` (for an agent's call,
- * those of its reply's tool call), or `null`, and the question and source it recorded.
+ * those of its reply's tool call), or `null`, and the question, source and target it recorded.
  */
 function stateArguments(state: RunState, call: Call): RecordedCall {
   const steps = state.nodeSteps.get(call.nodeId) ?? [];
   const step = call.pendingSeq === null ? undefined : steps[stepIndexAt(state, call.nodeId, call.pendingSeq)];
-  if (step === undefined) return { arguments: null, ask: null, source: null };
+  if (step === undefined) return NOTHING_RECORDED;
   return recordedCall((n) => steps[n - 1], step);
 }
+
+/** What a call with no `pending` step recorded. */
+const NOTHING_RECORDED: RecordedCall = Object.freeze({ arguments: null, ask: null, source: null, target: null });
 
 /**
  * What `pending` step `step` recorded: its arguments (`pendingArguments`, which reads its reply by
  * step number through `stepAt`), its question, and a hold's source as a frozen copy, since the
- * step may be the run state's own.
+ * step may be the run state's own, and its target, which the deep-frozen step holds.
  */
 function recordedCall(stepAt: (n: number) => Readonly<JsonObject> | undefined, step: Readonly<JsonObject>): RecordedCall {
+  const held = step["held"] === true;
   const recorded = step["source"];
-  const source = step["held"] === true && isToolSource(recorded) ? Object.freeze({ ...recorded }) : null;
-  return { arguments: pendingArguments(stepAt, step), ask: askQuestion(step), source };
+  const source = held && isToolSource(recorded) ? Object.freeze({ ...recorded }) : null;
+  const target = held && isRecord(step["target"]) ? (step["target"] as Readonly<JsonObject>) : null;
+  return { arguments: pendingArguments(stepAt, step), ask: askQuestion(step), source, target };
 }
 
 /**

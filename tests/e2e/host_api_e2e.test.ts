@@ -299,6 +299,7 @@ test("YAML: a host rebuilds its open ask from pendingCalls and completes it", as
     ask: { question: "Approve this plan?", questions: null, answerSchema: null, title: null },
     held: false,
     source: null,
+    target: null,
   });
   expect(readRunLog(log)[call!.pendingSeq]!.kind).toBe("node_step");
   expect(typeof (await complete(log, call!.callId, { output: "yes" }, { env }))).toBe("number");

@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { ChildStatus } from "../../src/cli/chat_runs.ts";
+import type { ChildStatus } from "../../src/child_flows.ts";
 import { RunProgress, runScreen } from "../../src/cli/run_view.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";

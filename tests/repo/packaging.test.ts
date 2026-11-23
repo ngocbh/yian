@@ -85,7 +85,7 @@ import type {
   StorageKind,
   Value,
   ValueRecord,
-} from "../../src/run.ts";
+} from "../../src/run_entry.ts";
 import type {
   BeforeToolCall as ToolsBeforeToolCall,
   FlowCallScope as ToolsFlowCallScope,
@@ -95,6 +95,7 @@ import type {
   ToolSource as ToolsToolSource,
 } from "../../src/tools/index.ts";
 import { stdioOptions } from "../helpers/mcp_helpers.ts";
+import { blank } from "../helpers/source_scan.ts";
 import { testNode } from "../helpers/test_node.ts";
 
 const ROOT = join(import.meta.dirname, "..", "..");
@@ -104,7 +105,7 @@ const MCP_SDK = "@modelcontextprotocol/client";
 /** Each export path and the module under `src/` it names, without the `.ts`. */
 const ENTRIES: Record<string, string> = {
   ".": "index",
-  "./run": "run",
+  "./run": "run_entry",
   "./tools": "tools/index",
   "./skills": "compose/skills",
   "./platform": "platform",
@@ -454,7 +455,32 @@ describe("entry points", () => {
     ];
     expect(names).toEqual([]);
   });
+
+  test("the run entry re-exports every name run.ts exports, by name, each value as a value", async () => {
+    const read = (module: string) => readFileSync(join(ROOT, "src", `${module}.ts`), "utf8");
+    const entry = read("run_entry");
+    expect(blank(entry)).not.toMatch(/^export \*/m);
+    const exported = new Set(exportedNames(entry));
+    expect(exportedNames(read("run")).filter((name) => !exported.has(name))).toEqual([]);
+    // A value re-exported as `type X` would leave the runtime entry.
+    const values = async (module: string) =>
+      Object.keys(await import(pathToFileURL(join(ROOT, "src", `${module}.ts`)).href)).sort();
+    expect(await values("run_entry")).toEqual(await values("run"));
+  });
 });
+
+/**
+ * The names `text`'s top-level `export` statements export, types included: each declaration's name,
+ * and each name an `export { ... }` list gives out, under its `as` name.
+ */
+function exportedNames(text: string): string[] {
+  const code = blank(text);
+  const declared = code.matchAll(/^export (?:declare )?(?:async )?(?:function\*?|class|interface|type|const|let|enum) +([\w$]+)/gm);
+  const listed = [...code.matchAll(/^export (?:type )?\{([^}]*)\}/gm)].flatMap(([, list]) =>
+    list!.split(",").map((part) => part.trim().replace(/^type /, "").split(/ as /).pop()!.trim()),
+  );
+  return [...[...declared].map(([, name]) => name!), ...listed].filter((name) => name !== "");
+}
 
 describe("package data", () => {
   test("every file under src is TypeScript, so src and dist/src carry the whole runtime", () => {

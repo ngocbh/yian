@@ -111,6 +111,20 @@ test("two instances with one identity fail before RunStarted, with no log", asyn
   expect(existsSync(log)).toBe(false);
 });
 
+test.each<[string, RunFlowOptions, string]>([
+  ["a parent inbox without a label", { parent: { runId: "p", inbox: "m" } }, "RunStarted parent inbox needs a label to sign the child's reports"],
+  ["a negative worker count", { numWorkers: -1 }, "num_workers must be a non-negative integer"],
+  ["an empty run id", { runId: "" }, "run log run_id must be a non-empty string"],
+])("%s is refused before any memory opens, with no log", async (_name, options, message) => {
+  const memory = new FakeMemory(() => new RecordingSession(fileInfo("t/x")));
+  const log = runLog();
+  await expect(
+    runFlow(await loadFlow(FLOW), { question: "q", lessons: memory }, { models: serving(model()), env: NO_ENV, log, ...options }),
+  ).rejects.toThrow(message);
+  expect(memory.opens).toBe(0);
+  expect(existsSync(log)).toBe(false);
+});
+
 test("an Optional memory left out, or given null, is left out of START's inputs", async () => {
   const lessons = new FakeMemory(() => new RecordingSession(fileInfo("t/lessons")));
   for (const inputs of [{ question: "q", lessons }, { question: "q", lessons, notes: null }]) {

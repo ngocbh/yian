@@ -189,6 +189,13 @@ export interface RunParent {
   readonly runId: string;
   /** The parent's node that started this run, or `null` when no one node did. */
   readonly node: string | null;
+  /** The parent's inbox the child's reports go to, or `null` when it takes none. */
+  readonly inbox: string | null;
+  /**
+   * The child's author label, which the host chose and which signs its reports; `null` when it has
+   * none. An inbox needs one.
+   */
+  readonly label: string | null;
 }
 
 /** The fields of a `RunStartedRecord`. */
@@ -285,8 +292,8 @@ export class RunStartedRecord {
    *   negative, a defaults name is empty, `callTimeLlm` has
    *   missing or extra fields, no agent, an empty agent path or a non-JSON value, `flow.files`
    *   lacks `flow.root` or a file its refs name, a name, the flow's root or folder or the version
-   *   is empty, a tool's parameters aren't JSON, a tool group names a tool `tools` lacks, or a tool
-   *   module lists a tool twice.
+   *   is empty, a tool's parameters aren't JSON, a tool group names a tool `tools` lacks, a tool
+   *   module lists a tool twice, a text of `parent` is empty, or `parent` has an inbox but no label.
    * @throws TypeCheckError at the bad part's path when the wiring override or the agent
    *   configuration holds NaN or another non-JSON value (see `jsonPart`).
    */
@@ -352,6 +359,19 @@ function requireText(value: unknown, label: string): string {
 function requireName(value: unknown, label: string): string {
   if (typeof value !== "string") throw new YianTypeError(`${label} must be a non-empty string`);
   if (value === "") throw new YianRangeError(`${label} must be a non-empty string`);
+  return value;
+}
+
+/**
+ * Return `value` when it is `null` or a non-empty string.
+ *
+ * @throws TypeError when it is neither `null` nor a string.
+ * @throws RangeError when it is empty.
+ */
+function nullableName(value: unknown, label: string): string | null {
+  if (value === null) return null;
+  if (typeof value !== "string") throw new YianTypeError(`${label} must be a non-empty string or null`);
+  if (value === "") throw new YianRangeError(`${label} must be a non-empty string or null`);
   return value;
 }
 
@@ -498,16 +518,21 @@ function validatedEntries<T>(
 }
 
 /**
- * Return a frozen copy of a `RunStarted.parent` value.
+ * Return a frozen copy of a `RunStarted.parent` value. `runFlow` checks its `parent` option with it
+ * before anything is opened.
  *
  * @throws TypeError when a part has the wrong type.
- * @throws RangeError when the run id or the node is empty.
+ * @throws RangeError when a text is empty, or an inbox has no label.
  */
-function validatedParent(parent: RunParent): RunParent {
+export function validatedParent(parent: RunParent): RunParent {
   if (!isRecord(parent)) throw new YianTypeError("RunStarted parent must be an object or null");
   const runId = requireName(parent.runId, "RunStarted parent run_id");
-  const node = parent.node === null ? null : requireName(parent.node, "RunStarted parent node");
-  return Object.freeze({ runId, node });
+  const node = nullableName(parent.node, "RunStarted parent node");
+  const inbox = nullableName(parent.inbox, "RunStarted parent inbox");
+  const label = nullableName(parent.label, "RunStarted parent label");
+  // An unsigned report would read as the parent's own user.
+  if (inbox !== null && label === null) throw new YianRangeError("RunStarted parent inbox needs a label to sign the child's reports");
+  return Object.freeze({ runId, node, inbox, label });
 }
 
 /**
@@ -2735,6 +2760,11 @@ function wireEntries<T extends JsonObject>(value: unknown, label: string, fields
   return wire as Record<string, T>;
 }
 
+/** Encode a `run_started` parent. */
+function parentPayload(parent: RunParent): JsonObject {
+  return { run_id: parent.runId, node: parent.node, inbox: parent.inbox, label: parent.label };
+}
+
 /**
  * Decode a `run_started` parent; `label` names it in errors.
  *
@@ -2742,8 +2772,13 @@ function wireEntries<T extends JsonObject>(value: unknown, label: string, fields
  * @throws TypeError when a field has the wrong JSON type.
  */
 function parentFromPayload(value: unknown, label: string): RunParent {
-  const wire = wireObject(value, label, ["run_id", "node"]);
-  return { runId: requireText(wire["run_id"], `${label} run_id`), node: wireNullableText(wire["node"], `${label} node`) };
+  const wire = wireObject(value, label, ["run_id", "node", "inbox", "label"]);
+  return {
+    runId: requireText(wire["run_id"], `${label} run_id`),
+    node: wireNullableText(wire["node"], `${label} node`),
+    inbox: wireNullableText(wire["inbox"], `${label} inbox`),
+    label: wireNullableText(wire["label"], `${label} label`),
+  };
 }
 
 /** Encode a `run_started` record's tool modules. */
@@ -2889,7 +2924,7 @@ const RECORD_CODECS: readonly RecordCodec[] = [
       // Left out when empty, so a run without tool modules records what it did before them.
       ...(Object.keys(record.toolModules).length === 0 ? {} : { tool_modules: toolModulesPayload(record.toolModules) }),
       yian_version: record.yianVersion,
-      parent: record.parent === null ? null : { run_id: record.parent.runId, node: record.parent.node },
+      parent: record.parent === null ? null : parentPayload(record.parent),
       // Left out unless a host gates the run, like tool_modules.
       ...(record.gated ? { gated: true } : {}),
     }),
@@ -3373,7 +3408,7 @@ function waitEntryFromPayload(value: unknown, label: string): WaitEntry {
  *
  * @throws RangeError when it isn't a non-empty string or holds a lone surrogate.
  */
-function validatedRunId(runId: unknown): string {
+export function validatedRunId(runId: unknown): string {
   if (typeof runId !== "string" || !runId) throw new YianRangeError("run log run_id must be a non-empty string");
   if (!runId.isWellFormed()) throw new YianRangeError("Unicode surrogate is not valid canonical JSON");
   return runId;

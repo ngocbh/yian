@@ -143,7 +143,7 @@ only a warning: the call still resolves, so your program doesn't repeat it.
 | `live` | none | A `LiveChannel` a viewer follows |
 | `signal` | none | An `AbortSignal` that stops the run |
 | `env` | `process.env` | A function `(name) => string \| undefined` that yian reads instead of `process.env` |
-| `parent` | none | The run that started this one, recorded in the log |
+| `parent` | none | The run that started this one, recorded in the log: `{ runId, node?, inbox?, label? }`. `node` is the parent's node that started it, `inbox` the parent's inbox your host sends this run's reports to, and `label` the author those reports carry. yian records both and sends nothing itself. An `inbox` needs a `label` |
 
 `scheduler`, `random` and `models` exist for yian's own tests; leave them unset.
 

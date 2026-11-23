@@ -57,6 +57,7 @@ import {
   PoolCommitRecord,
   RunCancelledRecord,
   RunFailedRecord,
+  type RunParent,
   type RunRecord,
   RunResumedRecord,
   RunStartedRecord,
@@ -91,7 +92,7 @@ function steppingClock(): () => number {
 const timeAt = (seconds: number) => new Date(Date.parse("2026-10-23T00:00:00.000Z") + seconds * 1000).toISOString();
 
 /** A run-start record of the flow `<dir>/flow.yaml`, with `parent` when given. */
-function runStarted(parent: { runId: string; node: string | null } | null = null): RunStartedRecord {
+function runStarted(parent: RunParent | null = null): RunStartedRecord {
   return new RunStartedRecord({
     flowFingerprint: "a".repeat(64),
     startWiringOverride: {},
@@ -159,14 +160,14 @@ async function memoryRun(runs: string, runId: string): Promise<void> {
 }
 
 /** The start of every test run: `run_started`, then the START inputs' commit. */
-function start(log: JsonlRunLog, parent: { runId: string; node: string | null } | null = null): void {
+function start(log: JsonlRunLog, parent: RunParent | null = null): void {
   log.append(runStarted(parent));
   log.append(new PoolCommitRecord(START_ID, START_ID, { kind: "object", value: { topic: "clouds" } }));
 }
 
 /** A run whose agent failed one call, succeeded the next, and whose END succeeded. Ends at seq 9. */
 function succeededRun(log: JsonlRunLog): void {
-  start(log, { runId: "parent-run", node: "spawner" });
+  start(log, { runId: "parent-run", node: "spawner", inbox: null, label: null });
   log.append(new NodeStartedRecord("agent"));
   log.append(new NodeStepRecord("agent", 1, modelCall([100, 3, null, 4, null], true)));
   log.append(new NodeStepRecord("agent", 2, modelCall([120, 30, 64, 16, 8])));

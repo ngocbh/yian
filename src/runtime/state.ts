@@ -254,7 +254,7 @@ function requireDeliverable(state: RunState): void {
 }
 
 /** Require a dispatcher worker count: a non-negative safe integer. */
-function requireWorkerCount(numWorkers: number): void {
+export function requireWorkerCount(numWorkers: number): void {
   if (!Number.isSafeInteger(numWorkers)) throw new YianTypeError("num_workers must be a non-negative integer");
   if (numWorkers < 0) throw new YianRangeError("num_workers must be a non-negative integer");
 }

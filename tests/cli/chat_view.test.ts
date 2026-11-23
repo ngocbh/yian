@@ -1150,8 +1150,8 @@ describe("a session on a terminal", () => {
         // Of several fields, each takes at most half the row: the log's path is cut.
         expect.stringMatching(/^ {2}⎿ {2}run: r1 · status: running · log: \S+…$/),
         "⏺ flows_wait(r1, 30)",
-        expect.stringMatching(/^ {2}⎿ {2}run: r1 · log: \S+… · status:$/),
-        "     succeeded · output: Hi Ada",
+        expect.stringMatching(/^ {2}⎿ {2}run: r1 · log: \S+… · at: \d+ ·$/),
+        "     status: succeeded · output: Hi Ada",
         "",
         "⏺ hello ran and returned Hi Ada.",
         "",

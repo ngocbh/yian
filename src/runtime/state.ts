@@ -358,10 +358,12 @@ export class RunState {
   /** Who made each send whose call said, by its seq, kept as `inboxEvents` keeps its value. */
   readonly sendBy = new Map<number, Author>();
   /**
-   * Each send's inbox and `by` by its seq, kept for the whole run: a withdraw that names a send
-   * checks it here.
+   * The seqs of the run's sends by inbox, then by sender (its `by` as the run log writes it, `null`
+   * for none), oldest first, kept for the whole run: a withdraw checks the sends it names here.
    */
-  readonly sends = new Map<number, SentTo>();
+  readonly sends = new Map<string, Map<string | null, number[]>>();
+  /** The seqs of the sends a withdraw took back, in seq order, kept for the whole run. */
+  readonly withdrawnSeqs: number[] = [];
   /** Each keyed send by its key: its seq, inbox and run-log JSON value, kept for the whole run. */
   readonly sendKeys = new Map<string, SentKey>();
   /**
@@ -1044,13 +1046,6 @@ export interface SentKey {
   readonly by: string | null;
 }
 
-/** A send as the run keeps it for the whole run, to check a withdraw that names it. */
-export interface SentTo {
-  readonly inbox: string;
-  /** Who made the send, as the run log writes it; `null` when its call said no one. */
-  readonly by: string | null;
-}
-
 /** A send that repeats a keyed send the run holds: it appends nothing, and its seq is that send's. */
 export interface RepeatedSend {
   readonly repeatOf: number;
@@ -1462,7 +1457,7 @@ export function prepareWithdraw(
   for (const seq of chosen ?? []) requireSend(state, inbox, seq, sender);
   const taken = withdrawnSends(state, inbox, sender, chosen);
   if (taken.length === 0) return null;
-  return prepareRecord(state, new InboxWithdrawnRecord(inbox, taken, { by }));
+  return prepareRecord(state, new InboxWithdrawnRecord(inbox, taken, { by, chosen: chosen !== null }));
 }
 
 /**
@@ -1472,11 +1467,13 @@ export function prepareWithdraw(
  * @throws RangeError when it is empty, or names a seq below 1 or twice.
  */
 export function chosenSends(events: unknown): readonly number[] {
-  if (!Array.isArray(events) || !events.every((seq) => Number.isSafeInteger(seq))) {
-    throw new YianTypeError("a withdraw's events must be a list of send seqs");
-  }
-  if (events.length === 0) throw new YianRangeError("a withdraw's events must name at least one send");
-  const seqs = [...(events as number[])].sort((a, b) => a - b);
+  const list = "a withdraw's events must be a list of send seqs";
+  if (!Array.isArray(events)) throw new YianTypeError(list);
+  // `Array.from` reads a hole as `undefined`, which `every` would skip.
+  const items = Array.from(events as unknown[]);
+  if (!items.every((seq) => Number.isSafeInteger(seq))) throw new YianTypeError(list);
+  if (items.length === 0) throw new YianRangeError("a withdraw's events must name at least one send");
+  const seqs = (items as number[]).sort((a, b) => a - b);
   for (const [index, seq] of seqs.entries()) {
     if (seq < 1) throw new YianRangeError(`a withdraw's events must be positive seqs, got ${seq}`);
     if (index > 0 && seqs[index - 1] === seq) throw new YianRangeError(`a withdraw's events name send ${seq} twice`);
@@ -1492,11 +1489,33 @@ export function chosenSends(events: unknown): readonly number[] {
  * @throws DeliveryRefused `unknown_send` otherwise.
  */
 function requireSend(state: RunState, inbox: string, seq: number, by: Author | null): void {
-  const sent = state.sends.get(seq);
-  if (sent?.inbox !== inbox) throw new DeliveryRefused("unknown_send", `the run has no send ${seq} to inbox ${reprText(inbox)}`);
-  if (by !== null && sent.by !== byJson(by)) {
+  const sender = senderOf(state, inbox, seq);
+  if (sender === undefined) throw new DeliveryRefused("unknown_send", `the run has no send ${seq} to inbox ${reprText(inbox)}`);
+  if (by !== null && sender !== byJson(by)) {
     throw new DeliveryRefused("unknown_send", `send ${seq} to inbox ${reprText(inbox)} was made by another sender`);
   }
+}
+
+/** The `by` of the send `seq` to `inbox`, as the run log writes it (`null` for none); `undefined` when the run has no such send. */
+function senderOf(state: RunState, inbox: string, seq: number): string | null | undefined {
+  for (const [sender, seqs] of state.sends.get(inbox) ?? []) if (seqs[seqIndex(seqs, seq)] === seq) return sender;
+  return undefined;
+}
+
+/** Whether a withdraw took back the send `seq`. */
+export function wasWithdrawn(state: RunState, seq: number): boolean {
+  return state.withdrawnSeqs[seqIndex(state.withdrawnSeqs, seq)] === seq;
+}
+
+/** The index of the first of the sorted `seqs` that isn't below `seq`. */
+function seqIndex(seqs: readonly number[], seq: number): number {
+  let [low, high] = [0, seqs.length];
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (seqs[middle]! < seq) low = middle + 1;
+    else high = middle;
+  }
+  return low;
 }
 
 /**
@@ -3337,7 +3356,12 @@ function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransi
     state.inboxEvents.set(prepared.expectedSequence, decodeTyped(plan.valueJson!));
     const { key, sendKey: sent, by } = prepared.record as PoolCommitRecord;
     const inbox = sendInbox(state, key);
-    state.sends.set(prepared.expectedSequence, Object.freeze({ inbox, by: byJson(by) }));
+    const [senders, sender] = [state.sends.get(inbox) ?? new Map<string | null, number[]>(), byJson(by)];
+    state.sends.set(inbox, senders);
+    const seqs = senders.get(sender) ?? [];
+    senders.set(sender, seqs);
+    // Sends commit in seq order, so each list stays sorted.
+    seqs.push(prepared.expectedSequence);
     if (by !== null) state.sendBy.set(prepared.expectedSequence, by);
     if (sent !== null) {
       state.sendKeys.set(sent, Object.freeze({ seq: prepared.expectedSequence, inbox, value: plan.valueJson!, by: byJson(by) }));
@@ -3479,7 +3503,10 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       break;
     case "withdrawn":
       // Withdrawn sends get no reply; nothing reads their values again.
-      for (const seq of delta.events) forgetSend(state, seq);
+      for (const seq of delta.events) {
+        forgetSend(state, seq);
+        state.withdrawnSeqs.splice(seqIndex(state.withdrawnSeqs, seq), 0, seq);
+      }
       break;
     case "interrupted":
       for (const scope of delta.scopes) retireScope(state, scope);
@@ -3839,6 +3866,7 @@ function hasReducerContainers(state: RunState): boolean {
     isExactly(state.inboxEvents, Map) &&
     isExactly(state.sendBy, Map) &&
     isExactly(state.sends, Map) &&
+    Array.isArray(state.withdrawnSeqs) &&
     isExactly(state.sendKeys, Map) &&
     isRecord(state.input) &&
     isRecord(state.effectiveLlmByStaticPath) &&
@@ -4227,18 +4255,21 @@ function validateInboxClosed(state: RunState, record: InboxClosedRecord): void {
 }
 
 /**
- * Require a withdraw record to name a declared inbox and only sends a withdraw by its `by` takes
- * back (`withdrawnSends`): unread ones, and with `by`, ones sent with the same `by`.
+ * Require a withdraw record to name a declared inbox and the sends a withdraw by its `by` takes
+ * back (`withdrawnSends`), in seq order: the whole unread set, as a steer step names its whole
+ * queue, or for chosen sends, only unread ones.
  */
 function validateInboxWithdrawn(state: RunState, record: InboxWithdrawnRecord): void {
   if (inboxElementType(state, record.inbox) === null) {
     throw new YianRangeError(`InboxWithdrawn inbox ${reprText(record.inbox)} is no inbox the START declares`);
   }
   const unread = withdrawnSends(state, record.inbox, record.by);
-  if (!record.events.every((seq) => unread.includes(seq))) {
+  const named = record.chosen ? record.events.every((seq) => unread.includes(seq)) : sameItems(record.events, unread);
+  if (!named) {
+    const which = record.chosen ? "may name only the unread sends" : "must name the whole unread set";
     const whose = record.by === null ? "of" : "its by sent on";
     throw new YianRangeError(
-      `InboxWithdrawn may name only the unread sends [${unread.join(", ")}] ${whose} inbox ${reprText(record.inbox)}, found [${record.events.join(", ")}]`,
+      `InboxWithdrawn ${which} [${unread.join(", ")}] ${whose} inbox ${reprText(record.inbox)}, found [${record.events.join(", ")}]`,
     );
   }
 }
@@ -6760,6 +6791,7 @@ function requirePristine(state: RunState): void {
     state.inboxEvents.size === 0 &&
     state.sendBy.size === 0 &&
     state.sends.size === 0 &&
+    state.withdrawnSeqs.length === 0 &&
     state.sendKeys.size === 0 &&
     state.waits.waiting.size === 0 &&
     state.waits.calls.size === 0 &&

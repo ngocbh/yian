@@ -307,8 +307,12 @@ A case can't hold code, so its host is declared under `host`.
   it, `by: {kind, name, run?, node?}`, which the runner passes as the call's `by`. A run still
   waiting when the items run out fails the case. More forms of a send item:
   - `{withdraw: <name>, sends: [<n>, ...]}` calls `withdraw(log, inbox, {events})` with the seqs
-    of the run's sends at those places in the log, `0` the first (a place past them fails the
-    case), so a crash sweep's resume, which moves the seqs, withdraws the same sends.
+    of the run's sends at those places: the sends to any inbox, in log order, `0` the first (a
+    place past them fails the case). So a crash sweep's resume, which moves the seqs, withdraws
+    the same sends. It is sent while the run waits, never with `after`. The runner checks what
+    `withdraw` returns against the log: the sends the records it appended name were withdrawn,
+    the named sends an earlier `inbox_withdrawn` names were already withdrawn, and the rest were
+    already read; any other report fails the case.
   - `{inbox, event, after: {node: <node id>, <point>}}` is sent while the run is live, when it
     reaches the point (see [points](#points) below), through the run's engine, as a host's `send`
     does. A steer to an AGENT's `steer_inbox` is such an item: sent at `{tool_call: i}`, it joins
@@ -544,7 +548,7 @@ they are, except as the rules below say), and an empty payload is left out.
 | `node_woken` | `node_id` | `timed_out` |
 | `run_waiting` | null | `node_ids` |
 | `inbox_closed` | null | `inbox`, `by` |
-| `inbox_withdrawn` | null | `inbox`, `events`, `by` |
+| `inbox_withdrawn` | null | `inbox`, `events`, `by`, `chosen` |
 | `interrupted` | null | `inbox`, `nodes` (may be empty), `by` |
 | `run_cancelled` | null | `by` |
 | `run_failed` | null | `failure` |

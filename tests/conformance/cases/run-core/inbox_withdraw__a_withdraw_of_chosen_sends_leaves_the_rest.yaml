@@ -68,7 +68,7 @@ expect:
     - {key: __start__.notes, value: third}
   - - inbox_withdrawn
     - null
-    - {events: [12], inbox: notes}
+    - {chosen: true, events: [12], inbox: notes}
   - [node_woken, heard]
   - - pool_commit
     - heard

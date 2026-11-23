@@ -241,10 +241,11 @@ test("chosen sends: only those still unread come back; the rest stay queued, and
       { seq: a, value: "a", by: null },
       { seq: c, value: "c", by: null },
     ],
-    notWithdrawn: [],
+    alreadyRead: [],
+    alreadyWithdrawn: [],
   });
   const record = readRunLog(log).at(-1)!.record as InboxWithdrawnRecord;
-  expect([record.inbox, [...record.events], record.by]).toEqual(["m", [a, c], null]);
+  expect([record.inbox, [...record.events], record.by, record.chosen]).toEqual(["m", [a, c], null, true]);
   // A copy replays the record: only b is left to take back.
   const copy = freshLog();
   copyFileSync(log, copy);
@@ -252,7 +253,7 @@ test("chosen sends: only those still unread come back; the rest stay queued, and
   expect(await finish()).toEqual({ first: ["b"], second: [], other: [] });
 });
 
-test("a named send already read, or taken back before, is reported in notWithdrawn; none unread appends nothing", async () => {
+test("a named send already read is reported apart from one taken back before; none unread appends nothing", async () => {
   const { log, options, finish } = await twoTakes();
   const x = await send(log, "m", "x", { env });
   // `first` reads x; `second` then waits.
@@ -261,11 +262,17 @@ test("a named send already read, or taken back before, is reported in notWithdra
   await send(log, "m", "z", { env });
   expect(await withdraw(log, "m", { env, events: [y, x] })).toEqual({
     withdrawn: [{ seq: y, value: "y", by: null }],
-    notWithdrawn: [x],
+    alreadyRead: [x],
+    alreadyWithdrawn: [],
   });
+  // A second client deleting y is told it was taken back, not that the run read it; a replay agrees.
   const before = readFileSync(log);
-  expect(await withdraw(log, "m", { env, events: [x, y] })).toEqual({ withdrawn: [], notWithdrawn: [x, y] });
+  const again = { withdrawn: [], alreadyRead: [x], alreadyWithdrawn: [y] };
+  expect(await withdraw(log, "m", { env, events: [x, y] })).toEqual(again);
   expect(readFileSync(log).equals(before)).toBe(true);
+  const copy = freshLog();
+  copyFileSync(log, copy);
+  expect(await withdraw(copy, "m", { env, events: [x, y] })).toEqual(again);
   expect(await finish()).toEqual({ first: ["x"], second: ["z"], other: [] });
 });
 
@@ -282,7 +289,11 @@ test("with by, chosen sends must be by's own: another sender's is refused unknow
     expect([refused.reason, refused.message]).toEqual(["unknown_send", `send ${seq} to inbox 'm' was made by another sender`]);
   }
   expect(readFileSync(log).equals(before)).toBe(true);
-  expect(await withdraw(log, "m", { env, by: ADA, events: [a] })).toEqual({ withdrawn: [{ seq: a, value: "a", by: ADA }], notWithdrawn: [] });
+  expect(await withdraw(log, "m", { env, by: ADA, events: [a] })).toEqual({
+    withdrawn: [{ seq: a, value: "a", by: ADA }],
+    alreadyRead: [],
+    alreadyWithdrawn: [],
+  });
   expect((readRunLog(log).at(-1)!.record as InboxWithdrawnRecord).by).toEqual(ADA);
   expect(await finish()).toEqual({ first: ["x"], second: ["b"], other: [] });
 });
@@ -299,7 +310,7 @@ test("chosen-send refusals: unknown_send for a seq no send to the inbox has; a b
   expect(readFileSync(log).equals(before)).toBe(true);
   // Checked before the log is read: a missing log isn't reached.
   const missing = join(dir, "missing.jsonl");
-  for (const events of [[1.5], ["1"], 1]) {
+  for (const events of [[1.5], ["1"], 1, [m, , o]]) {
     expect(await rejected(withdraw(missing, "m", { env, events: events as never }))).toBeInstanceOf(TypeError);
   }
   for (const [events, message] of [
@@ -332,7 +343,7 @@ test("live: a chosen withdraw through the engine takes back that send only, and 
   const done = await advance({ ...options, onStream, numWorkers: 0 });
   expect(done.status, done.failure?.message).toBe("succeeded");
   expect(done.output).toBe("read it");
-  expect(taken).toEqual({ withdrawn: [{ seq: sent[0], value: "take-me-back", by: null }], notWithdrawn: [] });
+  expect(taken).toEqual({ withdrawn: [{ seq: sent[0], value: "take-me-back", by: null }], alreadyRead: [], alreadyWithdrawn: [] });
   const late = JSON.stringify(model.requests.at(-1)!.messages);
   expect([late.includes("keep-me"), late.includes("take-me-back")]).toEqual([true, false]);
 });

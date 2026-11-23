@@ -193,8 +193,8 @@ A host program moves messages and answers into a run through its log:
 
 A `withdraw` by one sender (`by`), or of the messages you name (`events`), leaves the other
 messages: the messages kept go to the takes that lost theirs, oldest first, as new messages would;
-a take that lost nothing keeps what it holds. A named message already read stays read, and
-`withdraw` reports it.
+a take that lost nothing keeps what it holds. A named message already read, or taken back by an
+earlier `withdraw`, stays as it is, and `withdraw` says which of the two it was.
 
 None of these moves the run; the host then calls `advance`. A message may nest two levels less than
 `YIAN_MAX_VALUE_NESTING` (98 by default), since a take reads it inside `{events: [...]}`; `send`

@@ -110,8 +110,10 @@ import {
   send,
   staticNodes,
   withdraw,
+  type Withdrawal,
 } from "../../src/run.ts";
 import {
+  InboxWithdrawnRecord,
   MemoryRunLog,
   NodeStepRecord,
   PoolCommitRecord,
@@ -577,10 +579,11 @@ function checkStop(stop: Value | undefined): void {
  * Throw unless `value`, a `host.sends` list, holds only `{inbox, event}` items, optionally with
  * `after: {node, <point>}` (sent live when the run reaches the point) or, in a `resume` case,
  * `down: true` (sent after the crash, before the resume), `{close}` items, `{withdraw}` items
- * (`withdraw(run, inbox)`; with `sends`, the run's sends by place, `withdraw(run, inbox, {events})`,
- * not with `after`) and `{interrupt}` items (`interrupt(run, inbox)`), each optionally with
- * `after`, `{complete, output}` or `{complete, error}` items, and `{release, note}` items (`note`
- * optional), optionally with `after`. Any item may say who makes it (`by`, a mapping).
+ * (`withdraw(run, inbox)`; with `sends`, the run's sends to any inbox by place in the log,
+ * `withdraw(run, inbox, {events})`, not with `after`) and `{interrupt}` items (`interrupt(run,
+ * inbox)`), each optionally with `after`, `{complete, output}` or `{complete, error}` items, and
+ * `{release, note}` items (`note` optional), optionally with `after`. Any item may say who makes
+ * it (`by`, a mapping).
  */
 function checkSends(value: Value | undefined, kind: Kind): void {
   if (!Array.isArray(value)) throw new Error("`host.sends` must be a list");
@@ -2622,7 +2625,7 @@ const TRACE: ReadonlyMap<string, TraceRow> = new Map<string, TraceRow>([
   ["node_woken", ["node_id", ["timed_out"]]],
   ["run_waiting", [null, ["node_ids"]]],
   ["inbox_closed", [null, ["inbox", "by"]]],
-  ["inbox_withdrawn", [null, ["inbox", "events", "by"]]],
+  ["inbox_withdrawn", [null, ["inbox", "events", "by", "chosen"]]],
   ["interrupted", [null, ["inbox", "nodes", "by"]]],
   ["run_cancelled", [null, ["by"]]],
   ["run_failed", [null, ["failure"]]],
@@ -2957,15 +2960,39 @@ function sentSeqs(log: string, places: readonly bigint[]): number[] {
   });
 }
 
+/**
+ * Throw a `CaseFailure` unless `result`, what a withdraw of `events` returned, says what the log at
+ * `log` says: the sends the records it appended after the first `before` name were taken back, the
+ * named sends an earlier `inbox_withdrawn` names were already withdrawn, and the rest already read.
+ */
+function checkWithdrawal(log: string, before: number, events: readonly number[], result: Withdrawal): void {
+  const named = (envelopes: readonly RecordEnvelope[]) =>
+    new Set(envelopes.flatMap(({ record }) => (record instanceof InboxWithdrawnRecord ? record.events : [])));
+  const records = readRunLog(log);
+  const [taken, earlier] = [named(records.slice(before)), named(records.slice(0, before))];
+  const expected = {
+    withdrawn: events.filter((seq) => taken.has(seq)),
+    alreadyRead: events.filter((seq) => !taken.has(seq) && !earlier.has(seq)),
+    alreadyWithdrawn: events.filter((seq) => earlier.has(seq)),
+  };
+  const actual = { ...result, withdrawn: result.withdrawn.map(({ seq }) => seq) };
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new CaseFailure(`withdraw returned ${JSON.stringify(actual)}, but the log says ${JSON.stringify(expected)}`);
+  }
+}
+
 /** Deliver the `host.sends` item `item`, one sent while the run waits, to the run at `log`, made by its `by`. */
 async function deliver(log: string, item: Case, env: Env): Promise<void> {
   const options = { env, by: get(item, "by", null) as Author | null };
   if (Object.hasOwn(item, "close")) await close(log, item["close"] as string, options);
   else if (Object.hasOwn(item, "withdraw")) {
-    const events = Object.hasOwn(item, "sends") ? sentSeqs(log, item["sends"] as bigint[]) : null;
-    await withdraw(log, item["withdraw"] as string, { ...options, events });
-  }
-  else if (Object.hasOwn(item, "interrupt")) await interrupt(log, item["interrupt"] as string, options);
+    if (!Object.hasOwn(item, "sends")) await withdraw(log, item["withdraw"] as string, options);
+    else {
+      const events = sentSeqs(log, item["sends"] as bigint[]);
+      const before = nextSequence(log);
+      checkWithdrawal(log, before, events, await withdraw(log, item["withdraw"] as string, { ...options, events }));
+    }
+  } else if (Object.hasOwn(item, "interrupt")) await interrupt(log, item["interrupt"] as string, options);
   else if (Object.hasOwn(item, "complete")) await complete(log, item["complete"] as string, completion(item), options);
   else if (Object.hasOwn(item, "release")) {
     await release(log, item["release"] as string, { ...options, note: get(item, "note", null) as string | null });
@@ -3077,6 +3104,8 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
       };
       result = (await moveOn(result, sends, (item) => deliver(log, item, env), step))!;
     } catch (error) {
+      // A delivery's report that disagrees with the log fails the case; it is no host error.
+      if (error instanceof CaseFailure) throw error;
       const form = raised(error);
       // The case directory is a temporary one.
       form["message"] = (form["message"] as string).replaceAll(ctx.dir, "<tmp>");

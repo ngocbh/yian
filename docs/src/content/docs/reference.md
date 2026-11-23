@@ -273,7 +273,7 @@ compact JSON with its keys sorted:
 | `node_expanded` | A CALL, MAP or LOOP added its child nodes to the graph, or an AGENT's flow call (`call_id`) its flow's |
 | `node_failed` | A node failed, with its failure. The run is over, unless the node is inside an AGENT's flow call (`call_id`, `scope`): that call fails and its scope's other nodes end |
 | `inbox_closed` | An inbox was closed; it takes no more messages |
-| `inbox_withdrawn` | Messages nobody had read yet were taken back from an inbox; `events` lists them. With `by`, they were sent with that `by` |
+| `inbox_withdrawn` | Messages nobody had read yet were taken back from an inbox; `events` lists them. With `by`, they were sent with that `by`. `chosen: true` when the host named them, else they were all the unread ones |
 | `interrupted` | The agents reading an inbox were interrupted |
 
 A record a host call made holds `by` when the call passed one: who made it, as

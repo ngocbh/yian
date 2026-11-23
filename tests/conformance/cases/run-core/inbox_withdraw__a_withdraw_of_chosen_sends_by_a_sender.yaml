@@ -69,7 +69,7 @@ expect:
     - {by: {kind: user, name: Ada}, key: __start__.notes, value: third}
   - - inbox_withdrawn
     - null
-    - {by: {kind: user, name: Ada}, events: [13], inbox: notes}
+    - {by: {kind: user, name: Ada}, chosen: true, events: [13], inbox: notes}
   - [node_woken, heard]
   - - pool_commit
     - heard

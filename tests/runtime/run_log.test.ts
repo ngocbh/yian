@@ -184,7 +184,7 @@ test.each<[number, string]>([
   [32, "a run recorded its agents' tool modules"],
   [33, "a run recorded that a host checks its tool calls"],
   [34, "host calls recorded who made them, and a message could hold a person's action"],
-  [35, "a withdraw could name some of the unread sends"],
+  [35, "a withdraw could take back chosen sends, and its record said so"],
 ])("a schema %d record, from before %s, is retired", (schema) => {
   const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":${schema},"seq":0}`;
   const error = expectError(() => decodeRecord(line), RunLogSchemaError, retired(schema)) as RunLogSchemaError;

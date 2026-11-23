@@ -118,9 +118,11 @@ test.each<[string, () => unknown, string | RegExp]>([
   ],
 ])("node_waiting refuses %s", (_name, build, message) => expect(build).toThrow(message));
 
-test("inbox_withdrawn holds an inbox and its strictly increasing, non-empty send seqs", () => {
+test("inbox_withdrawn holds an inbox, its strictly increasing, non-empty send seqs, and whether they were chosen", () => {
   const record = new InboxWithdrawnRecord("msgs", [3, 5]);
-  expect([record.inbox, [...record.events]]).toEqual(["msgs", [3, 5]]);
+  expect([record.inbox, [...record.events], record.chosen]).toEqual(["msgs", [3, 5], false]);
+  expect(new InboxWithdrawnRecord("msgs", [3], { chosen: true }).chosen).toBe(true);
+  expectError(() => new InboxWithdrawnRecord("msgs", [3], { chosen: 1 as never }), TypeError, "chosen must be a boolean");
   expect(Object.isFrozen(record)).toBe(true);
   expect(Object.isFrozen(record.events)).toBe(true);
   expectError(() => new InboxWithdrawnRecord("", [3]), RangeError, "inbox must be a non-empty string");
@@ -180,6 +182,7 @@ test.each([
   ["run_waiting", new RunWaitingRecord(["heard"]), { node_ids: ["heard"] }],
   ["inbox_closed", new InboxClosedRecord("msgs"), { inbox: "msgs" }],
   ["inbox_withdrawn", new InboxWithdrawnRecord("msgs", [3, 5]), { inbox: "msgs", events: [3n, 5n] }],
+  ["inbox_withdrawn", new InboxWithdrawnRecord("msgs", [5], { chosen: true }), { inbox: "msgs", events: [5n], chosen: true }],
   ["interrupted", new InterruptedRecord("owner", ["turn#0/reply", "side"]), { inbox: "owner", nodes: ["turn#0/reply", "side"] }],
   ["interrupted", new InterruptedRecord("owner", []), { inbox: "owner", nodes: [] }],
   ["run_cancelled", new RunCancelledRecord(), {}],
@@ -226,6 +229,14 @@ test.each<[string, string, Record<string, unknown>, typeof TypeError | typeof Ra
   ["text node ids", "run_waiting", { node_ids: "heard" }, TypeError, "run_waiting payload node_ids must be an array of strings"],
   ["a field in run_cancelled", "run_cancelled", { reason: "host" }, RangeError, 'invalid run_cancelled payload fields; missing=[], extra=["reason"]'],
   ["no failure", "run_failed", {}, RangeError, 'invalid run_failed payload fields; missing=["failure"], extra=[]'],
+  [
+    "chosen: false",
+    "inbox_withdrawn",
+    { inbox: "msgs", events: [3n], chosen: false },
+    RangeError,
+    "inbox_withdrawn payload chosen must be true; a withdraw of every unread send leaves it out",
+  ],
+  ["a text chosen", "inbox_withdrawn", { inbox: "msgs", events: [3n], chosen: "yes" }, TypeError, "inbox_withdrawn payload chosen must be a boolean"],
 ])("decode refuses %s", (_name, kind, payload, cls, message) => {
   expectError(() => decodeRecord(line(kind, payload)), cls, message);
 });

@@ -1,6 +1,6 @@
 /**
- * TS-only: `inbox_withdrawn` in the waits fold and the reducer, and `withdraw`'s unread set, whole
- * or one sender's.
+ * TS-only: `inbox_withdrawn` in the waits fold and the reducer, and `withdraw`'s unread set, whole,
+ * one sender's or the chosen sends.
  */
 import { expect, test } from "bun:test";
 import { InboxSent } from "../../src/events.ts";
@@ -34,11 +34,14 @@ import {
   prepareSend,
   prepareWithdraw,
   RunState,
+  wasWithdrawn,
 } from "../../src/runtime/state.ts";
 import { applyWaitsRecord, availableUnread, decideWait, withdrawableEvents, WaitsState } from "../../src/runtime/waits.ts";
 import { prepareDelivery } from "../../src/runtime/engine.ts";
 import { FIXED_CLOCK, RUN_ID, startData } from "../helpers/run_state_fixtures.ts";
-import { call as callOf, started, steerFlow, takeEntry, tool, waitFlow } from "../helpers/waits_fixtures.ts";
+import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { inboxType, Type, ValueKind } from "../../src/typesys/values.ts";
+import { call as callOf, MSGS, paramFlow, replayed, started, steerFlow, takeEntry, tool, waitFlow } from "../helpers/waits_fixtures.ts";
 
 const commit = (node: string, key: string, value: unknown) => new PoolCommitRecord(node, key, canonicalTyped(value, null)[0]);
 const send = (inbox: string, value: unknown) => commit("__start__", `__start__.${inbox}`, value);
@@ -176,12 +179,18 @@ function takeRun(): Run {
   return run;
 }
 
-/** Commit a send of `event` to msgs, made by `by`, and return its seq. */
-function commitSend(run: Run, event: unknown, by: Author | null = null): number {
-  const prepared = prepareSend(run.state, "msgs", event, null, by) as PreparedTransition;
+/** Commit a send of `event` to `inbox`, made by `by`, and return its seq. */
+function commitSendTo(run: Run, inbox: string, event: unknown, by: Author | null = null): number {
+  const prepared = prepareSend(run.state, inbox, event, null, by) as PreparedTransition;
   commitPrepared(run.log, run.state, prepared);
   return prepared.expectedSequence;
 }
+
+/** Commit a send of `event` to msgs, made by `by`, and return its seq. */
+const commitSend = (run: Run, event: unknown, by: Author | null = null) => commitSendTo(run, "msgs", event, by);
+
+/** A second START inbox param, `other: Inbox(str)`. */
+const OTHER = new Parameter("other", { contract: new ValueContract(inboxType(Type.scalar(ValueKind.STRING))) });
 
 const ADA: Author = { kind: "user", name: "Ada" };
 const OWNER: Author = { kind: "agent", name: "yian-chat" };
@@ -229,26 +238,31 @@ test("a withdraw by a sender names only its unread sends; the others stay and th
   const w = commitSend(run, "w", { ...ADA });
   // The same author as another object is the same sender; another field makes it another.
   commitSend(run, "v", { ...ADA, run: "chat" });
-  const prepared = prepareWithdraw(run.state, "msgs", ADA)!;
+  const prepared = prepareWithdraw(run.state, "msgs", null, ADA)!;
   expect(prepared.record).toEqual(new InboxWithdrawnRecord("msgs", [x, w], { by: ADA }));
   commitPrepared(run.log, run.state, prepared);
   expect([x, y, z, w].map((seq) => run.state.inboxEvents.has(seq))).toEqual([false, true, true, false]);
   expect([x, y, z, w].map((seq) => run.state.sendBy.get(seq) ?? null)).toEqual([null, OWNER, null, null]);
   expect(run.state.waits.calls.get(callOf("heard"))).toMatchObject({ state: "answered", assigned: [y] });
-  expect(prepareWithdraw(run.state, "msgs", ADA)).toBeNull();
+  expect(prepareWithdraw(run.state, "msgs", null, ADA)).toBeNull();
   expect([...(prepareWithdraw(run.state, "msgs")!.record as InboxWithdrawnRecord).events]).toEqual([y, z, w + 1]);
 });
 
-test("replay refuses a withdraw by a sender that names another's send or leaves one of its own", () => {
+test("replay refuses a withdraw by a sender that names another's send or leaves one of its own; chosen sends may be some of its own", () => {
   const run = takeRun();
   const x = commitSend(run, "x", ADA);
   const y = commitSend(run, "y", OWNER);
   const w = commitSend(run, "w", ADA);
   for (const events of [[x, y, w], [x]]) {
     expect(() => prepareRecord(run.state, new InboxWithdrawnRecord("msgs", events, { by: ADA }))).toThrow(
-      `InboxWithdrawn must name the whole unread set [${x}, ${w}] its by sent on inbox 'msgs'`,
+      `InboxWithdrawn must name the whole unread set [${x}, ${w}] its by sent on inbox 'msgs', found [${events.join(", ")}]`,
     );
   }
+  expect(() => prepareRecord(run.state, new InboxWithdrawnRecord("msgs", [x, y], { by: ADA, chosen: true }))).toThrow(
+    `InboxWithdrawn may name only the unread sends [${x}, ${w}] its by sent on inbox 'msgs', found [${x}, ${y}]`,
+  );
+  commitPrepared(run.log, run.state, prepareRecord(run.state, new InboxWithdrawnRecord("msgs", [w], { by: ADA, chosen: true })));
+  expect(withdrawableEvents(run.state.waits, "msgs")).toEqual([x, y]);
 });
 
 test("a send publishes InboxSent with its inbox, seq and by; a keyed repeat publishes nothing", () => {
@@ -272,6 +286,78 @@ test("allowed on a closed inbox; the waiting take is answered by the close", () 
   expect(run.state.waits.calls.get(callOf("heard"))).toMatchObject({ state: "answered", assigned: [], closedInbox: true });
 });
 
+test("prepareWithdraw of chosen sends names those still unread, in seq order; the rest stay and the take gets the oldest", () => {
+  const run = takeRun();
+  const x = commitSend(run, "x");
+  const y = commitSend(run, "y");
+  const z = commitSend(run, "z");
+  // x is the waiting take's; y and z are queued.
+  const prepared = prepareWithdraw(run.state, "msgs", [z, x])!;
+  expect(prepared.record).toEqual(new InboxWithdrawnRecord("msgs", [x, z], { chosen: true }));
+  commitPrepared(run.log, run.state, prepared);
+  expect([x, y, z].map((seq) => run.state.inboxEvents.has(seq))).toEqual([false, true, false]);
+  expect(run.state.waits.calls.get(callOf("heard"))).toMatchObject({ state: "answered", assigned: [y] });
+  // Replayed from the log, the record leaves the same waits.
+  expect(replayed(run.state.flow, run.path).waits.toJSON()).toEqual(run.state.waits.toJSON());
+});
+
+test("prepareWithdraw of chosen sends takes only the unread ones, and is null when none is", () => {
+  const run = takeRun();
+  const x = commitSend(run, "x");
+  commitPrepared(run.log, run.state, prepareNodeWoken(run.state, "heard"));
+  // x is the woken take's now: read.
+  const y = commitSend(run, "y");
+  expect(prepareWithdraw(run.state, "msgs", [x])).toBeNull();
+  expect(prepareWithdraw(run.state, "msgs", [x, y])!.record).toEqual(new InboxWithdrawnRecord("msgs", [y], { chosen: true }));
+});
+
+test("prepareWithdraw of chosen sends refuses unknown_send: no send, another inbox's, or with by another sender's", () => {
+  const run = started(paramFlow([MSGS, OTHER], tool("heard", "take")));
+  const x = commitSend(run, "x", ADA);
+  const y = commitSend(run, "y", OWNER);
+  const o = commitSendTo(run, "other", "o", ADA);
+  const refused = (events: number[], by: Author | null = null) => {
+    try {
+      prepareWithdraw(run.state, "msgs", events, by);
+    } catch (error) {
+      expect(error).toBeInstanceOf(DeliveryRefused);
+      return [(error as DeliveryRefused).reason, (error as DeliveryRefused).message];
+    }
+    throw new Error("expected a DeliveryRefused");
+  };
+  expect(refused([x, o + 1])).toEqual(["unknown_send", `the run has no send ${o + 1} to inbox 'msgs'`]);
+  expect(refused([1])).toEqual(["unknown_send", "the run has no send 1 to inbox 'msgs'"]);
+  expect(refused([o])).toEqual(["unknown_send", `the run has no send ${o} to inbox 'msgs'`]);
+  expect(refused([x, y], ADA)).toEqual(["unknown_send", `send ${y} to inbox 'msgs' was made by another sender`]);
+  // Unread or not: a read send of another sender is refused too.
+  commitPrepared(run.log, run.state, prepareWithdraw(run.state, "msgs", [y])!);
+  expect(refused([y], ADA)).toEqual(["unknown_send", `send ${y} to inbox 'msgs' was made by another sender`]);
+  expect(prepareWithdraw(run.state, "msgs", [x], { ...ADA })!.record).toEqual(new InboxWithdrawnRecord("msgs", [x], { by: ADA, chosen: true }));
+});
+
+test("the run keeps which sends a withdraw took back, through a replay", () => {
+  const run = takeRun();
+  const x = commitSend(run, "x");
+  const y = commitSend(run, "y");
+  const z = commitSend(run, "z");
+  commitPrepared(run.log, run.state, prepareWithdraw(run.state, "msgs", [z])!);
+  commitPrepared(run.log, run.state, prepareWithdraw(run.state, "msgs", [x])!);
+  expect([x, y, z].map((seq) => wasWithdrawn(run.state, seq))).toEqual([true, false, true]);
+  const back = replayed(run.state.flow, run.path);
+  expect([x, y, z].map((seq) => wasWithdrawn(back, seq))).toEqual([true, false, true]);
+});
+
+test("prepareWithdraw's chosen sends: a TypeError for a list of other than integers, a RangeError for none, a seq below 1 or one named twice", () => {
+  const run = takeRun();
+  const x = commitSend(run, "x");
+  for (const events of ["x", [1.5], [String(x)], [BigInt(x)], [x, , x + 1], new Array(1)]) {
+    expect(() => prepareWithdraw(run.state, "msgs", events as never)).toThrow("a withdraw's events must be a list of send seqs");
+  }
+  expect(() => prepareWithdraw(run.state, "msgs", [])).toThrow("a withdraw's events must name at least one send");
+  expect(() => prepareWithdraw(run.state, "msgs", [0])).toThrow("a withdraw's events must be positive seqs, got 0");
+  expect(() => prepareWithdraw(run.state, "msgs", [x, 3, x])).toThrow(`a withdraw's events name send ${x} twice`);
+});
+
 test("prepareWithdraw refusals: ended, not_started, unknown_inbox; a non-string inbox is a TypeError", () => {
   const run = takeRun();
   expect(refusal(() => prepareWithdraw(run.state, "nope"))).toBe("unknown_inbox");
@@ -286,20 +372,47 @@ test("prepareWithdraw refusals: ended, not_started, unknown_inbox; a non-string 
 test.each<[string, (x: number, y: number) => number[]]>([
   ["a partial list", (x) => [x]],
   ["an extra seq", (x, y) => [x, y, y + 1]],
-])("replay refuses an inbox_withdrawn naming %s", (_, events) => {
+])("replay refuses an inbox_withdrawn of every unread send naming %s", (_, events) => {
   const run = takeRun();
   const x = commitSend(run, "x");
   const y = commitSend(run, "y");
   expect(() => prepareRecord(run.state, new InboxWithdrawnRecord("msgs", events(x, y)))).toThrow(
-    `InboxWithdrawn must name the whole unread set [${x}, ${y}] of inbox 'msgs'`,
+    `InboxWithdrawn must name the whole unread set [${x}, ${y}] of inbox 'msgs', found [${events(x, y).join(", ")}]`,
   );
 });
 
-test("replay refuses an inbox_withdrawn naming a seq a woken take holds, or an undeclared inbox", () => {
+test("replay takes an inbox_withdrawn of chosen sends naming some unread sends, and refuses one naming a seq that is no unread send", () => {
   const run = takeRun();
   const x = commitSend(run, "x");
+  const y = commitSend(run, "y");
+  const chosen = (...events: number[]) => new InboxWithdrawnRecord("msgs", events, { chosen: true });
+  expect(() => prepareRecord(run.state, chosen(x, y, y + 1))).toThrow(
+    `InboxWithdrawn may name only the unread sends [${x}, ${y}] of inbox 'msgs', found [${x}, ${y}, ${y + 1}]`,
+  );
+  // A record names each send once, and at least one.
+  expect(() => chosen(x, x)).toThrow("events must be strictly increasing");
+  expect(() => chosen()).toThrow("events must be non-empty");
+  commitPrepared(run.log, run.state, prepareRecord(run.state, chosen(y)));
+  expect(withdrawableEvents(run.state.waits, "msgs")).toEqual([x]);
+  // y is gone: naming it again is refused.
+  expect(() => prepareRecord(run.state, chosen(y))).toThrow(`InboxWithdrawn may name only the unread sends [${x}] of inbox 'msgs', found [${y}]`);
+});
+
+test("replay refuses an inbox_withdrawn naming a seq a woken take holds, another inbox's send, or an undeclared inbox", () => {
+  const run = started(paramFlow([MSGS, OTHER], tool("heard", "take")));
+  commitPrepared(run.log, run.state, prepareNodeStarted(run.state, "heard"));
+  commitPrepared(run.log, run.state, prepareNodeWaiting(run.state, "heard", { callIds: [callOf("heard")], waits: [takeEntry("heard")] }));
+  const x = commitSend(run, "x");
+  const o = commitSendTo(run, "other", "o");
   commitPrepared(run.log, run.state, prepareNodeWoken(run.state, "heard"));
-  expect(() => prepareRecord(run.state, new InboxWithdrawnRecord("msgs", [x]))).toThrow(/whole unread set \[\]/);
+  for (const seq of [x, o]) {
+    expect(() => prepareRecord(run.state, new InboxWithdrawnRecord("msgs", [seq], { chosen: true }))).toThrow(
+      `InboxWithdrawn may name only the unread sends [] of inbox 'msgs', found [${seq}]`,
+    );
+    expect(() => prepareRecord(run.state, new InboxWithdrawnRecord("msgs", [seq]))).toThrow(
+      `InboxWithdrawn must name the whole unread set [] of inbox 'msgs', found [${seq}]`,
+    );
+  }
   expect(() => prepareRecord(run.state, new InboxWithdrawnRecord("nope", [x]))).toThrow(/no inbox the START declares/);
 });
 
@@ -319,10 +432,13 @@ test("a withdraw replays to the same waits", () => {
   expect(back.toJSON()).toEqual(run.state.waits.toJSON());
 });
 
-test("the withdraw delivery op prepares the withdraw", () => {
+test("the withdraw delivery op prepares the withdraw, of chosen sends with events", () => {
   const run = takeRun();
   const x = commitSend(run, "x");
+  const y = commitSend(run, "y", ADA);
+  const chosen = prepareDelivery(run.state, { kind: "withdraw", inbox: "msgs", events: [y], by: ADA }) as PreparedTransition;
+  expect(chosen.record).toEqual(new InboxWithdrawnRecord("msgs", [y], { by: ADA, chosen: true }));
   const prepared = prepareDelivery(run.state, { kind: "withdraw", inbox: "msgs" }) as PreparedTransition;
-  expect(prepared.record).toEqual(new InboxWithdrawnRecord("msgs", [x]));
+  expect(prepared.record).toEqual(new InboxWithdrawnRecord("msgs", [x, y]));
   expect(() => prepareDelivery(run.state, { kind: "nope" } as never)).toThrow(/send, withdraw, complete, release, close, interrupt or cancel/);
 });

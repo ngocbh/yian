@@ -8,7 +8,7 @@ called from a `kind: call` node:
 
 | `call` | Waits for | Output |
 |---|---|---|
-| `take` | messages sent to an inbox input, or to any of several | `{events: list(T), closed: bool}` |
+| `take` | messages sent to an inbox input, or to any of several | `{events: list(T), closed: bool}`; from several, `{events: list({inbox, event: T}), closed: bool, closed_inboxes: list(...)}` |
 | `sleep` | a time | `null` |
 | `ask` | a person's answer | the answer, typed by `output:` |
 
@@ -117,6 +117,9 @@ In flow style, quote each item: `from: ["${input.messages}", "${input.queued}"]`
   `take: all` takes every unread one, in the order they were sent.
 - Its output names each message's inbox by its input name, and the closed inboxes:
   `{events: list({inbox, event: T}), closed: bool, closed_inboxes: list(...)}`.
+- The names are those of the flow the take is in. A def or loop body that takes from inboxes passed
+  in as `chat` and `later` names them `chat` and `later`, so a caller comparing `inbox` with its
+  own names (`messages`, `queued`) matches nothing.
 - `closed_inboxes` lists the inboxes that are closed with nothing left to read. `closed` is true
   when that is all of them; until then the take waits on the open ones.
 - `timeout:` covers the whole take. When it passes: `events: []`, `closed: false`.
@@ -172,7 +175,9 @@ output: null
 
 The host sends a message to `messages` to change the running turn, or to `queued` to keep it for
 the next one. To move a queued message into the running turn, it takes it back from `queued` with
-`withdraw(log, "queued", { events: [seq] })` and sends it to `messages`.
+`withdraw(log, "queued", { events: [seq] })` and sends it to `messages`. The `seq` is what `send`
+returned, or an entry of `inspectRun(log).unread`. To end the chat, close both inboxes: while one
+is open, the take waits on it.
 
 ## Sleep
 

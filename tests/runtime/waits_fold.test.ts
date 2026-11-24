@@ -659,6 +659,25 @@ test("a withdraw from one inbox leaves a take of two the other's send; left with
   expect([again.inboxes.get("msgs")!.absorbing, again.inboxes.get("queue")!.absorbing]).toEqual([["r/a"], ["r/a"]]);
 });
 
+test("after a withdraw, a take of two inboxes gives up what it kept, and the take that waited first is first in line", () => {
+  // seq 2: b waits on msgs (one); 3: a on both (all); 4: m1 to b; 5, 6: m2 and m3 to a; 7: m1 and m2
+  // taken back, so a gives up m3, which goes to b; 8: m4 goes to a.
+  const w = fold(...START, takeWait("b", "one"), bothWait("a", "all"), send("msgs", "m1"), send("msgs", "m2"), send("msgs", "m3"));
+  applyWaitsRecord(w, { seq: 7, record: new InboxWithdrawnRecord("msgs", [4, 5]) });
+  expect(nodeCalls(w, "b")[0]).toMatchObject({ state: "answered", assigned: [6] });
+  expect(nodeCalls(w, "a")[0]).toMatchObject({ state: "open", assigned: [] });
+  applyWaitsRecord(w, { seq: 8, record: send("msgs", "m4") });
+  expect(nodeCalls(w, "a")[0]).toMatchObject({ state: "answered", assigned: [8], assignedInboxes: ["msgs"] });
+});
+
+test("after a withdraw, a take of two inboxes keeps what it holds from a closed one", () => {
+  // seq 3: q to queue; 4: m to msgs, both to a; 5: queue closes; 6: m taken back.
+  const w = fold(...START, bothWait("a", "all"), send("queue", "q"), send("msgs", "m"), new InboxClosedRecord("queue"));
+  applyWaitsRecord(w, { seq: 6, record: new InboxWithdrawnRecord("msgs", [4]) });
+  expect(nodeCalls(w, "a")[0]).toMatchObject({ state: "answered", assigned: [3], assignedInboxes: ["queue"] });
+  expect(w.inboxes.get("msgs")!.absorbing).toEqual(["r/a"]);
+});
+
 test("an inline take of two inboxes holds its events until its success removes them from each", () => {
   const records = [
     ...START,

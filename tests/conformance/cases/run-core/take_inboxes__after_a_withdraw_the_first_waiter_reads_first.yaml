@@ -1,0 +1,191 @@
+# `b` takes one message from `messages` and waits first; `a` takes all from `messages` and `queued`.
+# m1 goes to b, m2 and m3 to a. A withdraw of m1 and m2 leaves both waiting again, a giving m3 back:
+# m3 goes to b, which waited first, as for a take of one inbox; a waits, and m4 goes to it.
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    messages: !Inbox(str)
+    queued: !Inbox(str)
+  nodes:
+    b:
+      kind: call
+      call: take
+      input:
+        from: ${input.messages}
+    a:
+      kind: call
+      call: take
+      input:
+        from: ["${input.messages}", "${input.queued}"]
+        take: all
+  output:
+    a: ${a.output.events}
+    b: ${b.output.events}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  sends:
+  - {inbox: messages, event: m1, hold: true}
+  - {inbox: messages, event: m2, hold: true}
+  - {inbox: messages, event: m3, hold: true}
+  - {withdraw: messages, sends: [0, 1]}
+  - {inbox: messages, event: m4}
+expect:
+  output:
+    status: succeeded
+    output:
+      a:
+      - {event: m4, inbox: messages}
+      b: [m3]
+  trace:
+  - - run_started
+    - null
+    - {num_workers: 0}
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        messages: {inbox: messages}
+        queued: {inbox: queued}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, b]
+  - - node_waiting
+    - b
+    - call_ids: [r1/b]
+      waits:
+      - {call_id: r1/b, inbox: messages, mode: one, tool: take}
+  - [node_started, a]
+  - - node_waiting
+    - a
+    - call_ids: [r1/a]
+      waits:
+      - call_id: r1/a
+        inbox: [messages, queued]
+        mode: all
+        tool: take
+  - - run_waiting
+    - null
+    - node_ids: [b, a]
+  - - pool_commit
+    - __start__
+    - {key: __start__.messages, value: m1}
+  - - pool_commit
+    - __start__
+    - {key: __start__.messages, value: m2}
+  - - pool_commit
+    - __start__
+    - {key: __start__.messages, value: m3}
+  - - inbox_withdrawn
+    - null
+    - chosen: true
+      events: [13, 14]
+      inbox: messages
+  - [node_woken, b]
+  - - pool_commit
+    - b
+    - closed: false
+      events: [15]
+      inbox: messages
+  - - node_succeeded
+    - b
+    - {commit: 18}
+  - - run_waiting
+    - null
+    - node_ids: [a]
+  - - pool_commit
+    - __start__
+    - {key: __start__.messages, value: m4}
+  - [node_woken, a]
+  - - pool_commit
+    - a
+    - closed: []
+      events: [21]
+      inbox: [messages, queued]
+  - - node_succeeded
+    - a
+    - {commit: 23}
+  - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - value:
+        a:
+        - {event: m4, inbox: messages}
+        b: [m3]
+  - - node_succeeded
+    - __end__
+    - {commit: 26}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - {node_id: __start__}
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        messages: {inbox: messages}
+        queued: {inbox: queued}
+      interrupted: false
+  - - NodeStarted
+    - {node_id: b}
+  - - NodeWaiting
+    - node_id: b
+      call_ids: [r1/b]
+  - - NodeStarted
+    - {node_id: a}
+  - - NodeWaiting
+    - node_id: a
+      call_ids: [r1/a]
+  - - RunWaiting
+    - node_ids: [b, a]
+  - - NodeWoken
+    - node_id: b
+      timed_out: []
+  - - NodeSucceeded
+    - node_id: b
+      output:
+        closed: false
+        events: [m3]
+      interrupted: false
+  - - RunWaiting
+    - node_ids: [a]
+  - - NodeWoken
+    - node_id: a
+      timed_out: []
+  - - NodeSucceeded
+    - node_id: a
+      output:
+        closed: false
+        closed_inboxes: []
+        events:
+        - {event: m4, inbox: messages}
+      interrupted: false
+  - - NodeStarted
+    - {node_id: __end__}
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        a:
+        - {event: m4, inbox: messages}
+        b: [m3]
+      interrupted: false
+  - - RunSucceeded
+    - output:
+        a:
+        - {event: m4, inbox: messages}
+        b: [m3]

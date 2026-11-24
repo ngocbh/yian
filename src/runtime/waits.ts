@@ -528,7 +528,7 @@ function hold(call: Call, seq: number, name: string): void {
 }
 
 /** Return the unread events of inboxes `names` a new take may read (`availableUnread`), each with its inbox, in seq order. */
-function availableIn(w: WaitsState, names: readonly string[]): (readonly [number, string])[] {
+export function availableIn(w: WaitsState, names: readonly string[]): (readonly [number, string])[] {
   return names.flatMap((name) => availableUnread(w, name).map((seq) => [seq, name] as const)).sort(([a], [b]) => a - b);
 }
 
@@ -825,75 +825,51 @@ function applyClose(w: WaitsState, name: string): void {
  * takes that lost theirs, oldest first, as new sends would, and a take that lost nothing keeps what
  * it holds. No take absorbs a closed inbox: there a take keeps the sends not named, and one left
  * with none reads what is still unread, as a new take would, and takes the close only when nothing
- * is. A take of several inboxes keeps the sends not named, and one left with none is settled by
- * `reread`, after the others.
+ * is. A take of several inboxes does the same across them: it keeps the sends of its closed
+ * inboxes, and reads what is unread directly only once each of them is closed.
  */
 function applyWithdrawn(w: WaitsState, record: InboxWithdrawnRecord): void {
-  const inbox = inboxOf(w, record.inbox);
   const withdrawn = new Set(record.events);
-  for (const seq of record.events) remove(inbox.unread, seq);
-  const several: Call[] = [];
+  for (const seq of record.events) remove(inboxOf(w, record.inbox).unread, seq);
+  const offered = new Set([record.inbox]);
   for (const call of waitedTakes(w, record.inbox)) {
-    const kept = call.assigned.filter((seq) => !withdrawn.has(seq));
+    const kept = call.assigned.flatMap((seq, index) => (withdrawn.has(seq) ? [] : [[seq, call.assignedInboxes[index]!] as const]));
     if (kept.length === call.assigned.length) continue;
-    if (typeof call.inbox !== "string") {
-      several.push(call);
-      continue;
-    }
     call.assigned.length = 0;
     call.assignedInboxes.length = 0;
-    if (inbox.closed && kept.length > 0) {
-      for (const seq of kept) hold(call, seq, record.inbox);
+    const names = takeInboxes(call.inbox!);
+    const allClosed = names.every((name) => isClosed(w, name));
+    if (allClosed && kept.length > 0) {
+      for (const [seq, name] of kept) hold(call, seq, name);
       continue;
     }
-    // The take waits for the inbox's next message again (or reads what is left, or the close): a pickup.
-    w.stops.delete(record.inbox);
-    if (inbox.closed) {
-      const available = availableUnread(w, record.inbox);
+    // The take waits for its inboxes' next message again (or reads what is left, or the close): a pickup.
+    pickup(w, call.inbox!);
+    if (allClosed) {
+      const available = availableIn(w, names);
       const next = call.mode === "one" ? available.slice(0, 1) : available;
-      for (const seq of next) remove(inbox.unread, seq);
-      for (const seq of next) hold(call, seq, record.inbox);
+      for (const [seq, name] of next) {
+        remove(inboxOf(w, name).unread, seq);
+        hold(call, seq, name);
+      }
       call.closedInbox = next.length === 0;
       continue;
     }
-    inbox.unread.push(...kept);
+    for (const [seq, name] of kept) {
+      if (isClosed(w, name)) hold(call, seq, name);
+      else inboxOf(w, name).unread.push(seq);
+    }
+    if (call.assigned.length > 0) continue;
     call.state = "open";
     // A `take: all` never left absorbing; a `take: one` left it at its assignment.
-    absorbAgain(w, call, record.inbox);
+    for (const name of names) {
+      if (isClosed(w, name)) continue;
+      absorbAgain(w, call, name);
+      offered.add(name);
+    }
   }
-  inbox.unread.sort((a, b) => a - b);
-  reoffer(w, [record.inbox]);
-  for (const call of several) reread(w, call, withdrawn);
-}
-
-/**
- * Settle a waiting take of several inboxes that a withdraw took sends back from: it keeps the sends
- * not taken back; left with none, it reads as a new take would (the oldest unread send of its
- * inboxes, or every one), takes the close once each of its inboxes is closed with nothing left, and
- * otherwise waits again, absorbing from its open inboxes in call order.
- */
-function reread(w: WaitsState, call: Call, withdrawn: ReadonlySet<number>): void {
-  const kept = call.assigned.flatMap((seq, index) => (withdrawn.has(seq) ? [] : [[seq, call.assignedInboxes[index]!] as const]));
-  call.assigned.length = 0;
-  call.assignedInboxes.length = 0;
-  for (const [seq, name] of kept) hold(call, seq, name);
-  if (kept.length > 0) return;
-  // It reads what is left, takes the close or waits again: a pickup.
-  pickup(w, call.inbox!);
-  const names = takeInboxes(call.inbox!);
-  const available = availableIn(w, names);
-  const next = call.mode === "one" ? available.slice(0, 1) : available;
-  for (const [seq, name] of next) {
-    remove(inboxOf(w, name).unread, seq);
-    hold(call, seq, name);
-  }
-  if (next.length > 0) return;
-  if (names.every((name) => isClosed(w, name))) {
-    call.closedInbox = true;
-    return;
-  }
-  call.state = "open";
-  for (const name of names) if (!isClosed(w, name)) absorbAgain(w, call, name);
+  for (const name of offered) inboxOf(w, name).unread.sort((a, b) => a - b);
+  reoffer(w, [...offered]);
 }
 
 /** Put `call` back among the absorbing takes of inbox `name`, in call order, unless it is there. */
@@ -1124,7 +1100,12 @@ function heldDecision(w: WaitsState, call: Call): WaitDecision {
   const done = (name: string) => isClosed(w, name) && availableUnread(w, name).length === 0;
   // A take of one inbox can't time out on a closed one, so it takes the timeout as not closed.
   if (call.state === "timed_out") return take(inbox, [], (name) => typeof inbox !== "string" && done(name));
-  return take(inbox, [...call.assigned].sort((a, b) => a - b), done);
+  return take(inbox, takenEvents(call), done);
+}
+
+/** Return the sends a settled take call takes: what it was assigned, in seq order; none once it timed out. */
+export function takenEvents(call: Call): number[] {
+  return call.state === "timed_out" ? [] : [...call.assigned].sort((a, b) => a - b);
 }
 
 /**

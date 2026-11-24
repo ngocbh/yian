@@ -141,6 +141,8 @@ export {
   staticPathOf,
   type StorageKind,
   type StreamHook,
+  type TakeInbox,
+  takeInboxes,
   type ToolSource,
   TypedValue,
   type UnreadSend,

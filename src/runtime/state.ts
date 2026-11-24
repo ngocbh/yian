@@ -134,6 +134,7 @@ import { checkGateText, isToolSource } from "../tools/gate.ts";
 import { visibleToolName } from "../tools/grants.ts";
 import {
   applyWaitsRecord,
+  availableIn,
   availableUnread,
   awaitsNextMessage,
   type Call,
@@ -142,6 +143,7 @@ import {
   isWakeable,
   nodeCalls,
   seqList,
+  takenEvents,
   WaitsState,
   wakeableNodes,
   withdrawableEvents,
@@ -5000,6 +5002,12 @@ function fittedTakeInboxes(state: RunState, node: Node, inbox: TakeInbox, what: 
   return takeInboxes(inbox);
 }
 
+/** Return whether two takes' inboxes are the same: one name, or the same list in the same order. */
+function sameTakeInbox(a: TakeInbox, b: TakeInbox): boolean {
+  if (typeof a === "string" || typeof b === "string") return a === b;
+  return a.length === b.length && a.every((name, index) => name === b[index]);
+}
+
 /** Return a take's inbox as messages show it: a name, or the list. */
 function shownTakeInbox(inbox: TakeInbox): string {
   return typeof inbox === "string" ? reprText(inbox) : writeAsText([...inbox]);
@@ -5039,7 +5047,7 @@ function validateTakeCommit(state: RunState, record: PoolCommitRecord): void {
   let events: readonly number[];
   let done: (name: string) => boolean;
   if (held !== undefined) {
-    if (shownTakeInbox(held.inbox!) !== shownTakeInbox(take.inbox)) {
+    if (!sameTakeInbox(held.inbox!, take.inbox)) {
       throw new YianRangeError(
         `the take commit of ${reprText(nodeId)} reads ${shownTakeInbox(take.inbox)}, but its call reads ${shownTakeInbox(held.inbox!)}`,
       );
@@ -5047,17 +5055,17 @@ function validateTakeCommit(state: RunState, record: PoolCommitRecord): void {
     if (held.state === "open" || held.state === "closed") {
       throw new YianRangeError(`take node ${reprText(nodeId)} commits from its call, which is ${held.state}`);
     }
-    events = held.state === "timed_out" ? [] : [...held.assigned].sort((a, b) => a - b);
+    events = takenEvents(held);
     // A take of one inbox can't time out on a closed one, so it takes the timeout as not closed.
     const counts = held.state === "answered" || typeof take.inbox !== "string";
     done = (name) => counts && isClosed(name) && availableUnread(w, name).length === 0;
   } else {
-    const available = names.flatMap((name) => availableUnread(w, name)).sort((a, b) => a - b);
+    const available = availableIn(w, names);
     const k = take.events.length;
     const counted = available.length === 0 ? k === 0 : k === 1 || k === available.length;
-    events = counted ? available.slice(0, k) : available;
-    const left = new Set(available.slice(k));
-    done = (name) => isClosed(name) && !availableUnread(w, name).some((seq) => left.has(seq));
+    events = (counted ? available.slice(0, k) : available).map(([seq]) => seq);
+    const left = available.slice(k);
+    done = (name) => isClosed(name) && !left.some(([, of]) => of === name);
   }
   if (take.events.length !== events.length || take.events.some((seq, index) => seq !== events[index])) {
     throw new YianRangeError(

@@ -10,6 +10,7 @@ import { join } from "node:path";
 
 import { loadFlow } from "../src/compose/loader.ts";
 import { advance, close, inspectRun, runFlow, send, withdraw } from "../src/run.ts";
+import { type TakeInbox, takeInboxes } from "../src/run_entry.ts";
 import { hostEnv } from "./helpers/mcp_helpers.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-take-several-"));
@@ -129,4 +130,11 @@ test("a withdraw from one inbox takes back only its own message from a take of t
   expect(await withdraw(log, "messages", { env })).toEqual([]);
   expect(await withdraw(log, "queued", { env })).toEqual([{ seq: queued, value: "soon", by: null }]);
   expect(inspectRun(log).unread).toEqual([]);
+});
+
+test("the run entry reads a wait's inbox, or its list, as a list", async () => {
+  const { result } = await waiting(COLLECT);
+  const inbox: TakeInbox = result.waits[0]!.inbox!;
+  expect(takeInboxes(inbox)).toEqual(["messages", "queued"]);
+  expect(takeInboxes("messages")).toEqual(["messages"]);
 });

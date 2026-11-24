@@ -278,6 +278,8 @@ export {
   RunLogLineTooLongError,
   RunLogSchemaError,
   runRecordOffsets,
+  type TakeInbox,
+  takeInboxes,
 } from "./runtime/log.ts";
 export {
   type JsonMode,

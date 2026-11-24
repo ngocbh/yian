@@ -436,17 +436,26 @@ function sentWords(value: unknown): string {
   return parts.map((part) => (part?.type === "text" && typeof part.text === "string" ? part.text : "")).join("");
 }
 
+/**
+ * The letter `key` types, lower-cased, for a question the view asks; `""` for a paste, a key with
+ * Ctrl or Alt, or one that came just after an Escape (`escaped`), which answers as Escape does.
+ */
+function typedLetter(key: Key): string {
+  if (key.paste || key.ctrl || key.meta || key.escaped === true) return "";
+  return (key.str ?? "").toLowerCase();
+}
+
 /** `text` on one row: sanitized, its line breaks and tabs as spaces. */
 function oneLine(text: string): string {
   return sanitize(text).replace(/[\n\t]/g, " ");
 }
 
-/** Where a held call's tool comes from, unless it is a host tool: `from MCP server files`. */
+/** Where a held call's tool comes from, unless it is a host tool: `MCP server files`. */
 function sourceText(source: ToolSource | null): string | null {
   if (source === null || source.kind === "host") return null;
-  if (source.kind === "mcp") return `from MCP server ${source.server}`;
-  if (source.kind === "module") return `from module ${source.alias}`;
-  return source.kind === "memory" ? `from memory ${source.input}` : `from flow ${source.flow}`;
+  if (source.kind === "mcp") return `MCP server ${source.server}`;
+  if (source.kind === "module") return `module ${source.alias}`;
+  return source.kind === "memory" ? `memory ${source.input}` : `flow ${source.flow}`;
 }
 
 /**
@@ -454,8 +463,9 @@ function sourceText(source: ToolSource | null): string | null {
  * with the question, holding what the call acts on (its tool's gate `target`, else its arguments)
  * as JSON, where its tool comes from unless it is a host tool, and last the person's `reason`. Each
  * label starts its row, and the text under it is indented on every row it wraps to, so no text from
- * the call or the reason reads as a label. Its text shows the sequences it holds, as an approval's
- * card does. `whole` is false when the title had to be cut.
+ * the call, its source or the reason reads as a label; a name's line breaks are spaces. Its text
+ * shows the sequences it holds, as an approval's card does. `whole` is false when the box, at the
+ * width it is drawn, had to cut its title or a row.
  */
 function heldCard(
   run: string,
@@ -478,14 +488,19 @@ function heldCard(
   else label("acts on");
   value(JSON.stringify(call.target ?? call.arguments ?? {}));
   const from = sourceText(call.source);
-  if (from !== null) label(shown(from));
+  if (from !== null) {
+    label("from");
+    value(from.replaceAll("\n", " "));
+  }
   if (reason !== null) {
     label("reason");
     value(reason);
   }
-  const title = `approve ${run}'s ${shown(call.tool)} call?`;
+  const title = `approve ${run}'s ${shown(call.tool).replaceAll("\n", " ")} call?`;
   const card = box(rows, "yellow", out, env, title, inner, columns).split("\n");
-  return { rows: card, whole: cells(title) <= inner - 1 };
+  // Whole when the box, as drawn, cut neither its title nor a row.
+  const drawn = cells(card[0]!) - 4;
+  return { rows: card, whole: cells(title) <= drawn - 1 && rows.every(([plain]) => cells(plain) <= drawn) };
 }
 
 /**
@@ -561,6 +576,8 @@ export class RunView {
 
   /** The screen, `rows` high and `columns` wide; `waiting` when a prompt of the chat waits behind it. */
   draw(columns: number, rows: number, waiting: boolean): string[] {
+    // A card drawn at a new size isn't what the person saw when they typed: it waits for the next.
+    const resized = columns !== this.#size.columns || rows !== this.#size.rows;
     this.#size = { columns, rows };
     const { id, name } = this.#host;
     const status = this.#host.status();
@@ -577,7 +594,7 @@ export class RunView {
       this.#deciding = null;
       foot = [...this.#saidRows(columns), waiting ? behind : style("the run has ended · esc to go back", "dim")];
     } else if (this.#deciding !== null) {
-      foot = [...this.#decision(this.#deciding, columns, rows - (waiting ? 1 : 0)), ...(waiting ? [behind] : [])];
+      foot = [...this.#decision(this.#deciding, columns, rows - (waiting ? 1 : 0), resized), ...(waiting ? [behind] : [])];
     } else if (this.#card !== null) {
       lower = this.#card.lines();
       foot = [...lower, waiting ? behind : style("esc closes the form", "dim")];
@@ -607,7 +624,7 @@ export class RunView {
       const press = this.#confirming;
       this.#confirming = null;
       this.#said = null;
-      if (!key.paste && (key.str === "y" || key.str === "Y")) press();
+      if (typedLetter(key) === "y") press();
       return false;
     }
     // Nothing more reaches an ended run: Escape goes back.
@@ -871,28 +888,32 @@ export class RunView {
   /**
    * The held call's card for `deciding`, `room` rows at most with the line under it saying which
    * keys do what. A card that doesn't fit keeps its head and says how many rows it leaves out, and
-   * then `a` approves nothing: `deciding.whole` says whether the card was drawn whole.
+   * then `a` approves nothing: `deciding.whole` says whether the card was drawn whole, at the size
+   * it was drawn at before (`resized` when not).
    */
-  #decision(deciding: Deciding, columns: number, room: number): string[] {
+  #decision(deciding: Deciding, columns: number, room: number, resized: boolean): string[] {
     const style = this.#style;
     const { rows: card, whole } = heldCard(this.#host.id, deciding.call, deciding.reason, columns, this.#colors);
-    const fits = card.length <= room - 1;
-    deciding.whole = whole && fits;
-    const kept = Math.max(0, room - 2);
-    const shown = fits ? card : [...card.slice(0, kept), style(`… ${card.length - kept} more rows`, "dim")];
-    const keys = deciding.whole
-      ? "a approves · r refuses · any other key leaves it held"
-      : "the call is too long to show here; widen the terminal · r refuses · any other key leaves it held";
-    return [...shown, style(keys, "yellow")];
+    // What the keys do, on as many rows as the screen's width takes.
+    const said = (text: string) => wrapLine(text, Math.max(1, columns)).map(([start, end]) => style(text.slice(start, end), "yellow"));
+    const asks = said("a approves · r refuses · any other key leaves it held");
+    const fits = card.length <= room - asks.length;
+    deciding.whole = whole && fits && !resized;
+    if (whole && fits) return [...card, ...asks];
+    const why = said("the call is too long to show here; widen the terminal · r refuses · any other key leaves it held");
+    const kept = Math.max(0, room - why.length - 1);
+    const shown = card.length <= room - why.length ? card : [...card.slice(0, kept), style(`… ${card.length - kept} more rows`, "dim")];
+    return [...shown, ...why];
   }
 
   /**
    * A key on a held call's card: `a` approves the call, once the card was drawn whole, and `r`
-   * refuses it; any other key leaves it held, and the text back in the box.
+   * refuses it; any other key leaves it held, and the text back in the box. A key that came just
+   * after an Escape is the Escape's: it leaves the call held.
    */
   #decided(key: Key): void {
     const { target, call, text, reason, whole } = this.#deciding!;
-    const letter = key.paste ? "" : (key.str ?? "").toLowerCase();
+    const letter = typedLetter(key);
     // Never from a card cut or not drawn yet: the line under it says why.
     if (letter === "a" && !whole) return;
     this.#deciding = null;

@@ -111,6 +111,12 @@ export interface Key {
   /** Whether Shift was held, on the keys the terminal says so for (Shift-Tab, say). */
   shift?: boolean;
   /**
+   * Whether an Escape came just before the key, which the terminal merged into it (as Alt+key):
+   * the Escape is dropped and the key is the one typed, so a prompt that must not take a key meant
+   * after an Escape can tell.
+   */
+  escaped?: boolean;
+  /**
    * Whether the key is a bracketed paste: one key, whose `str` holds all the text pasted, each
    * line break as `\n`.
    */
@@ -1653,7 +1659,8 @@ export class Terminal {
    * or `signal` aborts; then give back the screen as it was and call `onClose`, before any prompt
    * queued behind takes the terminal. `draw` gets the columns, the rows and whether a prompt that
    * wants an answer (any but a `readLine`) waits behind the screen, and is called again on each
-   * `subscribe` callback, each key and each time that changes; rows past the screen's height are
+   * `subscribe` callback, each key, each time that changes and each resize the output tells of (and
+   * before a key once the size changed since the last frame); rows past the screen's height are
    * left out and each is cut to the width. `cursor` places the cursor after each draw, as a
    * prompt's frame does (its row among the rows, and the text before it there); `null` hides it.
    * Given `key`, every key but Ctrl-C goes to it (a paste as one key), with whether a prompt waits
@@ -1916,7 +1923,7 @@ export class Terminal {
   ): void => {
     const name = raw?.name;
     // A key typed soon after a lone Escape arrives as Alt+key. No prompt binds Alt, so the Escape
-    // is dropped and the key stays the one typed.
+    // is dropped and the key stays the one typed, marked `escaped`.
     const alt = raw?.meta === true ? /^\x1b([^\x00-\x1f\x7f])$/su.exec(raw.sequence ?? "") : null;
     if (name === "paste-start") {
       this.#pasting ??= [];
@@ -1949,7 +1956,8 @@ export class Terminal {
     if (name === "paste-end") return this.#endPaste(true);
     const meta = raw?.meta === true && alt === null;
     const shift = raw?.shift === true;
-    this.#dispatch({ name, ctrl: raw?.ctrl === true, meta, shift, str: alt?.[1] ?? str, paste: false });
+    const escaped = alt === null ? {} : { escaped: true };
+    this.#dispatch({ name, ctrl: raw?.ctrl === true, meta, shift, str: alt?.[1] ?? str, paste: false, ...escaped });
   };
 
   /** A key of the paste arrived: it hasn't paused, and its pause starts again. */
@@ -2196,6 +2204,9 @@ export class Terminal {
     };
     turn.wake = () => finish({ stop: turn.ending! });
     const live = this.#live;
+    // The size a screen widget's frame was last drawn at.
+    let drawnAt = "";
+    const size = (): string => `${columnsOf(output)}x${rowsOf(output)}`;
     // With `again` (Ctrl-L), every row is drawn again in place, the turn's rows above it too.
     const draw = (again = false): void => {
       // A plain prompt is written once, as it opens; a refused line adds only its error, since
@@ -2218,6 +2229,7 @@ export class Terminal {
             : `${ESC}${cursor.row + 1};${Math.min(cells(cursor.before), columns - 1) + 1}H${SHOW_CURSOR}`;
         const frame = `${ESC}H${HIDE_CURSOR}${rows.map((row) => `${row}${ESC}K`).join("\r\n")}${ESC}J${place}`;
         output.write(again ? `${SYNC_ON}${frame}${SYNC_OFF}` : frame);
+        drawnAt = size();
         return;
       }
       if (again) live.rerender(live.printed - turn.printed);
@@ -2247,6 +2259,8 @@ export class Terminal {
       try {
         if (key.ctrl && key.name === "c") return stop("interrupt");
         if (this.#redraws(key)) return draw(true);
+        // A screen the terminal was resized under is drawn again first: the key meets that frame.
+        if (widget.screen && !this.#plain && drawnAt !== size()) draw();
         const ended = widget.key(key);
         if (ended !== undefined) return "value" in ended ? finish(ended) : stop(ended.stop);
         redraw();
@@ -2272,14 +2286,22 @@ export class Terminal {
       }
       draw();
       this.#active = { key: feed, end: () => stop("eof") };
-      unwatch = widget.watch?.(() => {
+      const again = (): void => {
         if (outcome !== undefined) return;
         try {
           draw();
         } catch (error) {
           finish({ error });
         }
-      }) ?? unwatch;
+      };
+      const stopWatch = widget.watch?.(again) ?? (() => {});
+      // A screen is drawn again as the terminal is resized, where the output says so.
+      const resizes = widget.screen && !this.#plain ? (output as Partial<Pick<NodeJS.EventEmitter, "on" | "off">>) : {};
+      resizes.on?.("resize", again);
+      unwatch = () => {
+        stopWatch();
+        resizes.off?.("resize", again);
+      };
       while (outcome === undefined && this.#buffer.length > 0) feed(this.#buffer.shift()!);
       if (outcome === undefined && this.#ended) stop("eof");
       await settled;

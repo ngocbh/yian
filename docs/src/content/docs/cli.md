@@ -366,7 +366,7 @@ place of the box.
 | Tab, Shift-Tab | Picks what the box goes to: an inbox, a question or a held call |
 | Enter on an inbox | Sends the box's text to it |
 | Enter on a question | Answers a `prompt:` ask with the box's text. A form (`questions:`), or an agent's question with options, opens the chat's question card in place of the box, which Esc closes |
-| Enter on a held call | Shows the whole call on a card in place of the box: what it acts on, as its tool tells the check, else its arguments, then your reason, the box's text. `a` approves it and `r` refuses it; any other key leaves it held. A card too big for the screen approves nothing. A host that gates its runs shows held calls here; `yian chat` doesn't |
+| Enter on a held call | Shows the whole call on a card in place of the box: what it acts on, as its tool tells the check, else its arguments, then your reason, the box's text. `a` approves it and `r` refuses it; any other key leaves it held. A card too big for the screen approves nothing, nor does an `a` typed just after Esc or a resize. A host that gates its runs shows held calls here; `yian chat` doesn't |
 | `/close` | Closes the inbox picked once you press `y`: the flow reads no more from it |
 | `/stop` | Stops the flow once you press `y`: its run ends |
 | Esc while the flow runs | Interrupts it on the inbox picked: takes back your messages it hasn't read, which return to the box, then cuts the steps reading the inbox. When the flow waits for a message there, there is nothing to interrupt. When no step reads it, the interrupt stands until the flow next takes from the inbox, and a step that starts reading it before then stops at once |

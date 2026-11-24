@@ -1963,6 +1963,48 @@ async function showScreenWithAKeyHookHandsItTheKeysAndPlacesTheCursor(): Promise
   assert.equal(keys.includes("again"), false);
 }
 
+async function showScreenMarksAKeyTypedJustAfterAnEscape(): Promise<void> {
+  const { input, terminal } = setup();
+  const keys: { str: string | undefined; meta: boolean; escaped: boolean }[] = [];
+  const screenUp = terminal.showScreen({
+    draw: () => ["x"],
+    key: (key) => (keys.push({ str: key.str, meta: key.meta, escaped: key.escaped === true }), key.str === "q"),
+  });
+  await tick();
+  // An Escape with a key soon after reaches the hook as that key, marked; Alt elsewhere is as it was.
+  input.write(`${ESCAPE}a`);
+  await tick();
+  input.write("a");
+  await tick();
+  input.write("q");
+  await screenUp;
+  assert.deepEqual(keys, [
+    { str: "a", meta: false, escaped: true },
+    { str: "a", meta: false, escaped: false },
+    { str: "q", meta: false, escaped: false },
+  ]);
+}
+
+async function showScreenDrawsAgainOnAResizeAndBeforeAKeyAtANewSize(): Promise<void> {
+  const { input, output, terminal } = setup({ columns: 40 });
+  const draws: number[] = [];
+  const keys: number[] = [];
+  const screenUp = terminal.showScreen({
+    draw: (columns) => (draws.push(columns), ["x"]),
+    key: (key) => (keys.push(draws.at(-1)!), key.str === "q"),
+  });
+  await tick();
+  assert.deepEqual(draws, [40]);
+  output.columns = 60;
+  output.emit("resize");
+  assert.deepEqual(draws, [40, 60]);
+  // Resized with no event: the key meets a frame drawn at the new size.
+  output.columns = 30;
+  input.write("q");
+  await screenUp;
+  assert.deepEqual(keys, [30]);
+}
+
 async function aWatchWithAnEditorTurnsBracketedPasteOnAndAPasteStaysOneLine(): Promise<void> {
   let clock = 0;
   const { input, output, terminal } = setup({ columns: 60, now: () => clock });
@@ -4379,6 +4421,8 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "showScreen off a TTY does nothing": showScreenOffATtyDoesNothing,
   "showScreen with a key hook hands it the keys and places the cursor":
     showScreenWithAKeyHookHandsItTheKeysAndPlacesTheCursor,
+  "showScreen marks a key typed just after an Escape": showScreenMarksAKeyTypedJustAfterAnEscape,
+  "showScreen draws again on a resize, and before a key at a new size": showScreenDrawsAgainOnAResizeAndBeforeAKeyAtANewSize,
   "a watch with an editor turns bracketed paste on, and a paste stays one line":
     aWatchWithAnEditorTurnsBracketedPasteOnAndAPasteStaysOneLine,
   "the exit hook leaves the alternate screen": theExitHookLeavesTheAlternateScreen,

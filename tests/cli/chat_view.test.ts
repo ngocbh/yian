@@ -57,6 +57,7 @@ import {
   InboxClosedRecord,
   InboxWithdrawnRecord,
   InterruptedRecord,
+  NodeStepRecord,
   PoolCommitRecord,
   readRunLog,
   RunCancelledRecord,
@@ -1739,8 +1740,9 @@ describe("the run list under the input box", () => {
       const view = rows();
       expect(view[1]).toMatch(/^log {2}\/\S+$/);
       expect(view).toContainEqual(expect.stringMatching(/^◷ pick \[\d+s\] waiting$/));
-      // A run with no inbox gets a box all the same, for its commands.
-      expect(view.slice(-7)).toEqual(["? Which colour?", "", TOP, row(">"), BOTTOM, "  /stop ends the run", "esc to go back to the chat"]);
+      // The question it waits on is in the strip, and the box answers it.
+      const titled = `╭─ Which colour? ${"─".repeat(COLUMNS - 18)}╮`;
+      expect(view.slice(-6)).toEqual(["questions  [Which colour?]", titled, row(">"), BOTTOM, "  enter answers · /stop", "esc to go back to the chat"]);
       stdin.write(ESCAPE);
       await pastEscape();
       await until(() => rows().at(-1)!.startsWith("» r1"));
@@ -2066,12 +2068,20 @@ describe("a run's view presses the assistant's tools as the user", () => {
       .filter((value) => value.parts.every((part) => part.type === "action"));
   /** The user, as the run hears their words relayed by the assistant of the chat run `chat-1`. */
   const relayed = { kind: "user", name: "the user", run: "chat-1" } as const;
+  /** The box's top edge, naming `title`. */
+  const titled = (title: string) => `╭─ ${title} ${"─".repeat(COLUMNS - 5 - title.length)}╮`;
 
   /**
-   * Start `file` (holding `text`) through the assistant, then open its view from the list; `answer`
-   * answers the requests past the start. Returns the chat, the model, the screen and the run's log.
+   * Start `file` (holding `text`) through the assistant, then open its view from the list once its
+   * row says `listed`; `answer` answers the requests past the start. Returns the chat, the model,
+   * the screen and the run's log.
    */
-  async function viewOf(file: string, text: string, answer: (request: Request, signal?: AbortSignal) => ScriptedReply | Promise<ScriptedReply>) {
+  async function viewOf(
+    file: string,
+    text: string,
+    answer: (request: Request, signal?: AbortSignal) => ScriptedReply | Promise<ScriptedReply>,
+    listed = "● waits",
+  ) {
     writeFileSync(join(root, file), text);
     const tty = terminalIo();
     const { stdin, output, rows } = tty;
@@ -2093,7 +2103,7 @@ describe("a run's view presses the assistant's tools as the user", () => {
     await until(() => output.text.includes(`Run ${file}`));
     await pastGrace();
     stdin.write(ENTER);
-    await until(() => started && rows().at(-1)!.includes("● waits") && !rows().some((line) => line.includes("Thinking")));
+    await until(() => started && rows().at(-1)!.includes(listed) && !rows().some((line) => line.includes("Thinking")));
     const open = async () => {
       stdin.write(DOWN);
       await until(() => rows().at(-1)!.startsWith("» r1"));
@@ -2296,7 +2306,121 @@ describe("a run's view presses the assistant's tools as the user", () => {
     },
     TIMEOUT,
   );
+  test(
+    "an answer typed in the view is the user's, relayed by the assistant, and one action; the question then leaves the strip",
+    async () => {
+      const { stdin, rows, done, log } = await viewOf("color.yaml", COLOR_FLOW, () => textReply("noted."), "● asks");
+      expect(rows().slice(-6)).toEqual([
+        "questions  [Which colour?]",
+        titled("Which colour?"),
+        row(">"),
+        BOTTOM,
+        "  enter answers · /stop",
+        "esc to go back to the chat",
+      ]);
+      stdin.write(`blue${ENTER}`);
+      await until(() => rows().includes("answered: Which colour?") && rows().at(-1) === "the run has ended · esc to go back");
+      expect(rows().some((line) => line.startsWith("questions"))).toBe(false);
+      const decided = records(log).flatMap((record) => (record instanceof NodeStepRecord && record.by !== null ? [record.by] : []));
+      expect(decided).toEqual([relayed]);
+      const action = { type: "action", tool: "flows_answer", arguments: { run: "r1", call: "chat-1-r1/pick", answer: "blue" }, result: "answered" };
+      const pressed = { role: "user", author: "the user", parts: [action] };
+      expect(actions()).toEqual([pressed]);
+      stdin.write(ESCAPE);
+      await pastEscape();
+      await until(() => !rows()[0]!.startsWith("r1  color.yaml"));
+      stdin.write(`/exit${ENTER}`);
+      expect(await done).toBe(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a form question opens the chat's question card, and its answers go as one",
+    async () => {
+      const { stdin, rows, done } = await viewOf("trip.yaml", TRIP, () => textReply("noted."), "● asks");
+      expect(rows().slice(-6, -4)).toEqual(["questions  [Plan the trip]", titled("Plan the trip")]);
+      expect(rows().at(-2)).toBe("  enter opens the form · /stop");
+      stdin.write(ENTER);
+      await until(() => rows().includes("? Which city?"));
+      expect(rows().at(-1)).toBe("esc closes the form");
+      stdin.write(`Paris${ENTER}`);
+      await until(() => rows().includes("? How many nights? (Use arrow keys)"));
+      stdin.write(DOWN);
+      stdin.write(ENTER);
+      await until(() => rows().includes("answered: Plan the trip"));
+      const answer = { city: "Paris", nights: "5" };
+      expect(actions().map((value) => (value.parts[0] as { arguments?: unknown }).arguments)).toEqual([
+        { run: "r1", call: "chat-1-r1/plan", answer },
+      ]);
+      stdin.write(ESCAPE);
+      await pastEscape();
+      await until(() => !rows()[0]!.startsWith("r1  trip.yaml"));
+      stdin.write(`/exit${ENTER}`);
+      expect(await done).toBe(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "the assistant answering first while the view is open: the question leaves the strip, the next takes its place, and the view says so",
+    async () => {
+      const gate = Promise.withResolvers<void>();
+      let answering = false;
+      const { stdin, rows, done, open } = await viewOf("asks.yaml", ASKS, (request) => {
+        if (afterTool(request)) return textReply("answered.");
+        if (answering || !asked(request, "answer it for me")) return textReply("noted.");
+        answering = true;
+        return gate.promise.then(() => callReply(["flows_answer", { run: "r1", call: "chat-1-r1/colour", answer: "red" }, "c2"]));
+      }, "● asks");
+      stdin.write(ESCAPE);
+      await pastEscape();
+      await until(() => rows().at(-1)!.startsWith("» r1"));
+      stdin.write(`answer it for me${ENTER}`);
+      await until(() => answering && rows().some((line) => line.includes("Thinking")));
+      await open();
+      expect(rows().slice(-6, -4)).toEqual(["questions  [Which colour?]", titled("Which colour?")]);
+      gate.resolve();
+      await until(() => rows().includes("questions  [How big, in red?]"));
+      expect(rows().slice(-7, -4)).toEqual([
+        "questions  [How big, in red?]",
+        'the question "Which colour?" is no longer open',
+        titled("How big, in red?"),
+      ]);
+      expect(actions()).toEqual([]);
+      stdin.write(CTRL_C);
+      await until(() => !rows()[0]!.startsWith("r1  asks.yaml"));
+      stdin.write(`/exit${ENTER}`);
+      expect(await done).toBe(0);
+    },
+    TIMEOUT,
+  );
 });
+
+/** Two questions one after the other: a colour, then how big. */
+const ASKS = `id: asks
+name: asks
+nodes:
+  colour: {kind: call, call: ask, input: {prompt: "Which colour?"}, output: !str}
+  size: {kind: call, call: ask, input: {prompt: "How big, in \${colour.output}?"}, output: !str}
+output: \${size.output}
+`;
+
+/** A form: a city, typed, and how many nights, picked. */
+const TRIP = `id: trip
+name: trip
+nodes:
+  plan:
+    kind: call
+    call: ask
+    node_name: Plan the trip
+    input:
+      questions:
+        - {question: "Which city?", header: city}
+        - {question: "How many nights?", header: nights, options: [{label: "2"}, {label: "5"}]}
+    output: {city: !str, nights: !str}
+output: \${plan.output}
+`;
 
 /** Every file under `dir`, read as text. */
 function filesUnder(dir: string): string[] {

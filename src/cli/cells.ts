@@ -2,32 +2,25 @@
  * Measuring and cutting text by the cells it takes on a terminal: a wide character takes two, a
  * combining mark none, and an ANSI sequence none.
  *
- * Knows about: nothing else.
+ * Knows about: the table of wide characters (`wide_cells.ts`).
  */
+
+import { WIDE_RANGES } from "./wide_cells.ts";
 
 /** A CSI sequence as the CLI writes it (a colour, a cursor move, a mode), which takes no cells. */
 export const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
 
-/** Whether `code` is an East Asian Wide or Fullwidth character or an emoji, two columns wide. */
+/** Whether `code` is a character a terminal draws two columns wide (`WIDE_RANGES`). */
 function isWide(code: number): boolean {
-  return (
-    (code >= 0x1100 && code <= 0x115f) ||
-    (code >= 0x2e80 && code <= 0x303e) ||
-    (code >= 0x3041 && code <= 0x33ff) ||
-    (code >= 0x3400 && code <= 0x4dbf) ||
-    (code >= 0x4e00 && code <= 0x9fff) ||
-    (code >= 0xa000 && code <= 0xa4cf) ||
-    (code >= 0xac00 && code <= 0xd7a3) ||
-    (code >= 0xf900 && code <= 0xfaff) ||
-    (code >= 0xfe30 && code <= 0xfe4f) ||
-    (code >= 0xff00 && code <= 0xff60) ||
-    (code >= 0xffe0 && code <= 0xffe6) ||
-    (code >= 0x1f300 && code <= 0x1f64f) ||
-    (code >= 0x1f680 && code <= 0x1f6ff) ||
-    (code >= 0x1f900 && code <= 0x1f9ff) ||
-    (code >= 0x1fa70 && code <= 0x1faff) ||
-    (code >= 0x20000 && code <= 0x3fffd)
-  );
+  let low = 0;
+  let high = WIDE_RANGES.length / 2 - 1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    if (code < WIDE_RANGES[2 * mid]!) high = mid - 1;
+    else if (code > WIDE_RANGES[2 * mid + 1]!) low = mid + 1;
+    else return true;
+  }
+  return false;
 }
 
 /** A combining mark, a zero-width joiner or a variation selector: drawn on the character before it. */

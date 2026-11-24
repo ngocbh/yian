@@ -25,7 +25,7 @@ import {
   ValueKind,
   writeAsText,
 } from "../typesys/values.ts";
-import { ANSI, cells, clip, columnsOf, fit, rowsOf, wrapLine } from "./cells.ts";
+import { ANSI, cells, charCells, clip, columnsOf, fit, rowsOf, wrapLine } from "./cells.ts";
 import { liveRows, type LiveRows, SYNC_OFF, SYNC_ON } from "./live_rows.ts";
 import { box, userRows } from "./render.ts";
 import { sanitize } from "./sanitize.ts";
@@ -110,6 +110,12 @@ export interface Key {
   str: string | undefined;
   /** Whether Shift was held, on the keys the terminal says so for (Shift-Tab, say). */
   shift?: boolean;
+  /**
+   * Whether an Escape came just before the key, which the terminal merged into it (as Alt+key):
+   * the Escape is dropped and the key is the one typed, so a prompt that must not take a key meant
+   * after an Escape can tell.
+   */
+  escaped?: boolean;
   /**
    * Whether the key is a bracketed paste: one key, whose `str` holds all the text pasted, each
    * line break as `\n`.
@@ -543,7 +549,7 @@ export class LineEditor {
   readonly #text = textWidget({ label: "", mark: ">", collapse: true });
   readonly #columns: () => number;
   readonly #rows: () => number;
-  readonly #hint: string;
+  readonly #hint: () => string;
   /** What the box's top edge names, if anything. */
   readonly #title: () => string;
   /** The list under the hint, if any. */
@@ -563,13 +569,14 @@ export class LineEditor {
 
   /**
    * @param options.rows The screen's height, which the list keeps within; no bound when absent.
+   * @param options.hint The dim line under the box; a function is read at each draw.
    * @param options.title What the box's top edge names (what it sends to, say), read at each draw
    *   and cut to fit; none when absent or empty. Drawn as given: sanitize it first.
    */
   constructor(options: {
     columns: () => number;
     rows?: () => number;
-    hint: string;
+    hint: string | (() => string);
     list?: PromptList | null;
     commands?: readonly PromptCommand[];
     title?: () => string;
@@ -577,7 +584,8 @@ export class LineEditor {
     this.#columns = options.columns;
     this.#commands = options.commands ?? [];
     this.#rows = options.rows ?? (() => Infinity);
-    this.#hint = options.hint;
+    const hint = options.hint;
+    this.#hint = typeof hint === "string" ? () => hint : hint;
     this.#title = options.title ?? (() => "");
     this.list = options.list ?? null;
   }
@@ -726,9 +734,10 @@ export class LineEditor {
     const { menu, list } = this.#around();
     // Down moves the menu's highlight, not into the list, while the menu is open.
     const extra = list.length > 0 && menu.length === 0 ? this.list?.hint : undefined;
-    const both = extra ? `${this.#hint} · ${extra}` : this.#hint;
+    const own = this.#hint();
+    const both = extra ? `${own} · ${extra}` : own;
     // The list's hint only when it fits on the row: the box's hint matters more.
-    const hint = cells(both) + 2 <= this.#columns() ? both : this.#hint;
+    const hint = cells(both) + 2 <= this.#columns() ? both : own;
     return [
       ...menu,
       border(`╭${edge(start, "↑", this.#title())}╮`),
@@ -1650,7 +1659,8 @@ export class Terminal {
    * or `signal` aborts; then give back the screen as it was and call `onClose`, before any prompt
    * queued behind takes the terminal. `draw` gets the columns, the rows and whether a prompt that
    * wants an answer (any but a `readLine`) waits behind the screen, and is called again on each
-   * `subscribe` callback, each key and each time that changes; rows past the screen's height are
+   * `subscribe` callback, each key, each time that changes and each resize the output tells of (and
+   * before a key once the size changed since the last frame); rows past the screen's height are
    * left out and each is cut to the width. `cursor` places the cursor after each draw, as a
    * prompt's frame does (its row among the rows, and the text before it there); `null` hides it.
    * Given `key`, every key but Ctrl-C goes to it (a paste as one key), with whether a prompt waits
@@ -1913,7 +1923,7 @@ export class Terminal {
   ): void => {
     const name = raw?.name;
     // A key typed soon after a lone Escape arrives as Alt+key. No prompt binds Alt, so the Escape
-    // is dropped and the key stays the one typed.
+    // is dropped and the key stays the one typed, marked `escaped`.
     const alt = raw?.meta === true ? /^\x1b([^\x00-\x1f\x7f])$/su.exec(raw.sequence ?? "") : null;
     if (name === "paste-start") {
       this.#pasting ??= [];
@@ -1946,7 +1956,8 @@ export class Terminal {
     if (name === "paste-end") return this.#endPaste(true);
     const meta = raw?.meta === true && alt === null;
     const shift = raw?.shift === true;
-    this.#dispatch({ name, ctrl: raw?.ctrl === true, meta, shift, str: alt?.[1] ?? str, paste: false });
+    const escaped = alt === null ? {} : { escaped: true };
+    this.#dispatch({ name, ctrl: raw?.ctrl === true, meta, shift, str: alt?.[1] ?? str, paste: false, ...escaped });
   };
 
   /** A key of the paste arrived: it hasn't paused, and its pause starts again. */
@@ -2193,6 +2204,9 @@ export class Terminal {
     };
     turn.wake = () => finish({ stop: turn.ending! });
     const live = this.#live;
+    // The size a screen widget's frame was last drawn at.
+    let drawnAt = "";
+    const size = (): string => `${columnsOf(output)}x${rowsOf(output)}`;
     // With `again` (Ctrl-L), every row is drawn again in place, the turn's rows above it too.
     const draw = (again = false): void => {
       // A plain prompt is written once, as it opens; a refused line adds only its error, since
@@ -2215,6 +2229,7 @@ export class Terminal {
             : `${ESC}${cursor.row + 1};${Math.min(cells(cursor.before), columns - 1) + 1}H${SHOW_CURSOR}`;
         const frame = `${ESC}H${HIDE_CURSOR}${rows.map((row) => `${row}${ESC}K`).join("\r\n")}${ESC}J${place}`;
         output.write(again ? `${SYNC_ON}${frame}${SYNC_OFF}` : frame);
+        drawnAt = size();
         return;
       }
       if (again) live.rerender(live.printed - turn.printed);
@@ -2244,6 +2259,8 @@ export class Terminal {
       try {
         if (key.ctrl && key.name === "c") return stop("interrupt");
         if (this.#redraws(key)) return draw(true);
+        // A screen the terminal was resized under is drawn again first: the key meets that frame.
+        if (widget.screen && !this.#plain && drawnAt !== size()) draw();
         const ended = widget.key(key);
         if (ended !== undefined) return "value" in ended ? finish(ended) : stop(ended.stop);
         redraw();
@@ -2269,14 +2286,22 @@ export class Terminal {
       }
       draw();
       this.#active = { key: feed, end: () => stop("eof") };
-      unwatch = widget.watch?.(() => {
+      const again = (): void => {
         if (outcome !== undefined) return;
         try {
           draw();
         } catch (error) {
           finish({ error });
         }
-      }) ?? unwatch;
+      };
+      const stopWatch = widget.watch?.(again) ?? (() => {});
+      // A screen is drawn again as the terminal is resized, where the output says so.
+      const resizes = widget.screen && !this.#plain ? (output as Partial<Pick<NodeJS.EventEmitter, "on" | "off">>) : {};
+      resizes.on?.("resize", again);
+      unwatch = () => {
+        stopWatch();
+        resizes.off?.("resize", again);
+      };
       while (outcome === undefined && this.#buffer.length > 0) feed(this.#buffer.shift()!);
       if (outcome === undefined && this.#ended) stop("eof");
       await settled;
@@ -2640,4 +2665,107 @@ async function promptRequest(
     return askQuestion(run, { question: request.question, options, multiSelect: false });
   }
   return run(textWidget({ label: visible(request.question || `input for ${request.nodeId}`) }));
+}
+
+/**
+ * `line`, styled, folded into rows at most `columns` cells wide where the terminal would wrap it
+ * (`layout`), each row opening again the styles still open where it starts.
+ */
+function folded(line: string, columns: number): string[] {
+  const sequence = new RegExp(`^${ANSI.source}`);
+  const rows: string[] = [];
+  let row = "";
+  let used = 0;
+  let open = "";
+  for (let at = 0; at < line.length; ) {
+    const found = sequence.exec(line.slice(at));
+    if (found !== null) {
+      row += found[0];
+      open = found[0] === `${ESC}0m` ? "" : open + found[0];
+      at += found[0].length;
+      continue;
+    }
+    const char = String.fromCodePoint(line.codePointAt(at)!);
+    if (used > 0 && used + charCells(char) > columns) {
+      rows.push(open === "" ? row : `${row}${ESC}0m`);
+      [row, used] = [open, 0];
+    }
+    row += char;
+    used += charCells(char);
+    at += char.length;
+  }
+  return [...rows, row];
+}
+
+/**
+ * A question card that a whole-screen view draws inside itself (`showScreen` with `key`): `request`
+ * asked as `askUser` asks it (`promptRequest`), each key the view passes going to the widget asking.
+ * Its rows are those the card printed (the panel, each question's rule, the line each answered one
+ * collapsed to), then the widget asking, folded to `columns()` as the terminal would wrap them.
+ * `answer` settles with the answer, or `null` once Escape cancels it or a widget stops (Ctrl-Q,
+ * Ctrl-D); `changed` is called, later, each time a widget opens and once the card settles.
+ */
+export class QuestionCard {
+  readonly answer: Promise<{ value: unknown } | null>;
+  readonly #columns: () => number;
+  readonly #rows: string[] = [];
+  /** The widget asking, and how it ends: with its outcome, or cancelled (`null`). */
+  #asking: { widget: Widget<unknown>; end: (outcome: { value: unknown } | null) => void } | null = null;
+
+  constructor(request: AskUserRequest, columns: () => number, changed: () => void) {
+    this.#columns = columns;
+    // Later, so a view never draws in the middle of a key it is taking.
+    const tell = (): void => queueMicrotask(changed);
+    const run: RunWidget = <T>(widget: Widget<T>) =>
+      new Promise<T>((resolve, reject) => {
+        this.#rows.push(...widget.preface.split("\r\n").slice(0, -1));
+        const end = (outcome: { value: unknown } | null): void => {
+          this.#asking = null;
+          if (outcome === null) return reject(new TerminalStopped("interrupt"));
+          const line = widget.done(outcome as Outcome<T>);
+          if (line !== null) this.#rows.push(...line.split("\n"));
+          resolve(outcome.value as T);
+        };
+        this.#asking = { widget: widget as Widget<unknown>, end };
+        tell();
+      });
+    const print = (rows: readonly string[]): void => void this.#rows.push(...rows.flatMap((row) => row.split("\n")));
+    this.answer = promptRequest(run, print, columns, request).then(
+      (value) => ({ value }),
+      () => null,
+    );
+    void this.answer.then(tell);
+  }
+
+  /** The rows to draw, styled, one screen row each. */
+  lines(): string[] {
+    const lines = [...this.#rows, ...(this.#asking?.widget.lines() ?? []).flatMap((line) => line.split("\n"))];
+    return lines.flatMap((line) => folded(line, this.#width()));
+  }
+
+  /** The cursor's row among `lines()` and the text before it there; null to hide it. */
+  cursor(): { row: number; before: string } | null {
+    const widget = this.#asking?.widget;
+    const at = widget?.cursor() ?? null;
+    if (widget === undefined || at === null) return null;
+    const width = this.#width();
+    const above = [...this.#rows, ...widget.lines().slice(0, at.row)].flatMap((line) => line.split("\n"));
+    const before = folded(at.before, width);
+    const row = above.reduce((sum, line) => sum + folded(line, width).length, 0) + before.length - 1;
+    return { row, before: before.at(-1)! };
+  }
+
+  /** The width the rows fold to: the screen's, one cell at least. */
+  #width(): number {
+    return Math.max(1, this.#columns());
+  }
+
+  /** Take one key: Escape cancels the card, any other goes to the widget asking. */
+  key(key: Key): void {
+    const asking = this.#asking;
+    if (asking === null) return;
+    if (key.name === "escape" && !key.paste) return asking.end(null);
+    const ended = asking.widget.key(key);
+    if (ended !== undefined) asking.end("value" in ended ? ended : null);
+  }
 }

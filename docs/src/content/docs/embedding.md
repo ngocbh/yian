@@ -120,7 +120,7 @@ only a warning: the call still resolves, so your program doesn't repeat it.
 | `log` | The log path you gave, or `null` |
 | `input` | The inputs the run recorded |
 | `events` | The events of this call |
-| `waits` | What a waiting run waits on: `node`, `callId`, `tool`, `inbox`, `deadline`, `settled`, and `held` (whether [`beforeToolCall`](#gate-tool-calls) held the call) |
+| `waits` | What a waiting run waits on: `node`, `callId`, `tool`, `inbox` (a list, for a take of several inboxes), `deadline`, `settled`, and `held` (whether [`beforeToolCall`](#gate-tool-calls) held the call) |
 | `unread` | At the end of a run, the messages no take read, as send seqs by inbox |
 | `crashedAttempts` | Node attempts a resume ran again after a crash, by node id |
 | `memoryDrift` | After `advance` recovers a crash or a stop, each memory that changed since the run started, the run's own writes included: `input`, `identity`, and the `recorded` and `current` versions |

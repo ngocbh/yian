@@ -658,14 +658,34 @@ const WAIT_TOOLS: readonly string[] = Object.freeze(["take", "sleep"]);
 /** The take modes a wait entry can hold. */
 const TAKE_MODES: readonly string[] = Object.freeze(["one", "all"]);
 
+/** The inbox a take reads, or the inboxes a `from:` list names, in its order. */
+export type TakeInbox = string | readonly string[];
+
+/** Return the inboxes `inbox` names: the one, or each one of its list, in order. */
+export function takeInboxes(inbox: TakeInbox): readonly string[] {
+  return typeof inbox === "string" ? [inbox] : inbox;
+}
+
+/**
+ * Return a take's inbox: a non-empty string, or a frozen copy of a non-empty list of unique ones.
+ *
+ * @throws TypeError when it is neither a string nor a list.
+ * @throws RangeError when it is empty, or a list holds an empty, repeated or non-string name.
+ */
+function validatedTakeInbox(value: unknown, label: string): TakeInbox {
+  if (!isList(value)) return requireName(value, label);
+  if (value.length === 0) throw new YianRangeError(`${label} must list at least one inbox`);
+  return validatedIdArray(value, label);
+}
+
 /** One take or sleep call a `node_waiting` registers. Frozen. */
 export interface WaitEntry {
   /** The node's TOOL call id; one of the record's `callIds`. */
   readonly callId: string;
   /** The waiting tool. */
   readonly tool: "take" | "sleep";
-  /** The inbox a take reads; `null` for a sleep. */
-  readonly inbox: string | null;
+  /** The inbox a take reads, or the list its `from:` names; `null` for a sleep. */
+  readonly inbox: TakeInbox | null;
   /** A take's mode; `null` for a sleep. */
   readonly mode: "one" | "all" | null;
   /** When the call times out, as a record time; required for a sleep, optional for a take. */
@@ -684,9 +704,10 @@ function validatedWaitEntry(entry: unknown): WaitEntry {
   const callId = requireName(entry["callId"], "wait entry call_id");
   const { tool, inbox, mode, deadline } = entry;
   if (typeof tool !== "string" || !WAIT_TOOLS.includes(tool)) throw new YianRangeError("wait entry tool must be take or sleep");
+  let take: TakeInbox | null = null;
   if (tool === "take") {
     if (inbox == null || mode == null) throw new YianRangeError("a take wait entry needs inbox and mode");
-    requireName(inbox, "wait entry inbox");
+    take = validatedTakeInbox(inbox, "wait entry inbox");
     if (typeof mode !== "string" || !TAKE_MODES.includes(mode)) throw new YianRangeError("wait entry mode must be one or all");
   } else {
     if (inbox != null || mode != null) throw new YianRangeError("a sleep wait entry takes no inbox or mode");
@@ -695,7 +716,7 @@ function validatedWaitEntry(entry: unknown): WaitEntry {
   return Object.freeze({
     callId,
     tool: tool as WaitEntry["tool"],
-    inbox: (inbox ?? null) as string | null,
+    inbox: take,
     mode: (mode ?? null) as WaitEntry["mode"],
     deadline: deadline == null ? null : requireRecordTime(deadline, "wait entry deadline"),
   });
@@ -1059,30 +1080,44 @@ function committedWire(value: TypedWire): TypedWire {
   return freezeParsed(canonicalCopy(typed.toWire())) as TypedWire;
 }
 
-/** A take commit's pointer form: the events it consumed from its inbox. Frozen. */
+/** A take commit's pointer form: the events it consumed from its inbox or inboxes. Frozen. */
 export interface TakeCommit {
-  /** The inbox the take read. */
-  readonly inbox: string;
-  /** The seqs of the send `pool_commit`s consumed, in order; possibly none. */
+  /** The inbox the take read, or the list its `from:` names. */
+  readonly inbox: TakeInbox;
+  /** The seqs of the send `pool_commit`s consumed, in seq order; possibly none. */
   readonly events: readonly number[];
-  /** Whether the take saw its inbox closed. */
-  readonly closed: boolean;
+  /**
+   * Whether the take saw its inbox closed with nothing left; for a list, the listed inboxes it saw
+   * so, in list order.
+   */
+  readonly closed: boolean | readonly string[];
 }
 
 /**
  * Return a frozen copy of a take commit holding exactly its three fields.
  *
- * @throws TypeError when `take` isn't an object, the inbox isn't a string or `closed` isn't a
- *   boolean.
- * @throws RangeError when the inbox is empty, or the events aren't strictly increasing
- *   positive safe integers.
+ * @throws TypeError when `take` isn't an object, the inbox isn't a string or a list, or `closed`
+ *   isn't a boolean for one inbox or a list for a list.
+ * @throws RangeError when an inbox is empty or repeated, the events aren't strictly increasing
+ *   positive safe integers, or `closed` names an inbox outside the list or out of its order.
  */
 function validatedTake(take: unknown): TakeCommit {
   if (!isRecord(take)) throw new YianTypeError("take must be an object");
-  const inbox = requireName(take["inbox"], "take inbox");
+  const inbox = validatedTakeInbox(take["inbox"], "take inbox");
   const seqs = validatedEventSeqs(take["events"], "take events");
-  if (typeof take["closed"] !== "boolean") throw new YianTypeError("take closed must be a boolean");
-  return Object.freeze({ inbox, events: Object.freeze(seqs), closed: take["closed"] });
+  let closed: TakeCommit["closed"];
+  if (typeof inbox === "string") {
+    if (typeof take["closed"] !== "boolean") throw new YianTypeError("take closed must be a boolean");
+    closed = take["closed"];
+  } else {
+    if (!isList(take["closed"])) throw new YianTypeError("the closed of a take of a list must be a list");
+    closed = validatedIdArray(take["closed"], "take closed");
+    const order = closed.map((name) => inbox.indexOf(name));
+    if (order.some((at, index) => at < 0 || (index > 0 && order[index - 1]! > at))) {
+      throw new YianRangeError("take closed must name listed inboxes, in list order");
+    }
+  }
+  return Object.freeze({ inbox, events: Object.freeze(seqs), closed });
 }
 
 /**
@@ -3010,7 +3045,7 @@ const RECORD_CODECS: readonly RecordCodec[] = [
       waits: record.waits.map((entry) => ({
         call_id: entry.callId,
         tool: entry.tool,
-        inbox: entry.inbox,
+        inbox: entry.inbox === null ? null : wireOf(entry.inbox),
         mode: entry.mode,
         deadline: entry.deadline,
       })),
@@ -3146,7 +3181,7 @@ const RECORD_CODECS: readonly RecordCodec[] = [
       }
       if (record.take !== null) {
         const { inbox, events, closed } = record.take;
-        return { node_id: record.nodeId, key: record.key, inbox, events: events.map(BigInt), closed };
+        return { node_id: record.nodeId, key: record.key, inbox: wireOf(inbox), events: events.map(BigInt), closed: wireOf(closed) };
       }
       if (record.steps !== null) return { node_id: record.nodeId, key: record.key, steps: record.steps.map(BigInt) };
       const from = Object.fromEntries([...record.from!].map(([name, seq]) => [name, BigInt(seq)]));
@@ -3399,11 +3434,22 @@ const POOL_COMMIT_FORM_FIELDS = {
  * @throws RangeError when an event is beyond ±(2^53 - 1).
  */
 function takeFromPayload(payload: JsonObject, label: string): TakeCommit {
+  const closed = payload["closed"];
   return {
-    inbox: requireText(payload["inbox"], `${label} inbox`),
+    inbox: wireTakeInbox(payload["inbox"], `${label} inbox`),
     events: wireItems(payload["events"], `${label} events`, wireInt),
-    closed: wireBool(payload["closed"], `${label} closed`),
+    closed: isList(closed) ? wireTextArray(closed, `${label} closed`) : wireBool(closed, `${label} closed`),
   };
+}
+
+/** Return a take's inbox or `closed` as the wire writes it: a list as a fresh array. */
+function wireOf<T extends string | boolean>(value: T | readonly string[]): T | string[] {
+  return typeof value === "object" ? [...value] : value;
+}
+
+/** Decode a take's inbox: a string, or an array of strings. @throws TypeError when it is neither. */
+function wireTakeInbox(value: unknown, label: string): TakeInbox {
+  return isList(value) ? wireTextArray(value, label) : requireText(value, label);
 }
 
 /**
@@ -3417,7 +3463,7 @@ function waitEntryFromPayload(value: unknown, label: string): WaitEntry {
   return {
     callId: requireText(wire["call_id"], `${label} call_id`),
     tool: requireText(wire["tool"], `${label} tool`) as WaitEntry["tool"],
-    inbox: wireNullableText(wire["inbox"], `${label} inbox`),
+    inbox: wire["inbox"] === null ? null : wireTakeInbox(wire["inbox"], `${label} inbox`),
     mode: wireNullableText(wire["mode"], `${label} mode`) as WaitEntry["mode"],
     deadline: wireNullableText(wire["deadline"], `${label} deadline`),
   };

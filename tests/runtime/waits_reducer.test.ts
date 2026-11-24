@@ -797,6 +797,59 @@ describe("the take commit", () => {
   });
 });
 
+describe("a take of two inboxes", () => {
+  const BOTH = ["msgs", "others"];
+  /** A take node whose `from:` lists inputs `chat` and `later`, which read `msgs` and `others`. */
+  const listed = () => {
+    const node = tool("heard", "take");
+    node.fromNames = ["chat", "later"];
+    node.outputContract = null;
+    return node;
+  };
+
+  test("its wait and commit name both inboxes, as its from: lists them; one is refused", () => {
+    const { log, state } = started(paramFlow([MSGS, OTHERS], listed()));
+    start(log, state, "heard");
+    for (const inbox of ["msgs", ["msgs"], ["others", "nope"]]) {
+      expect(() => prepareNodeWaiting(state, "heard", { callIds: [call("heard")], waits: [takeEntry("heard", { inbox: inbox as never })] })).toThrow(
+        /doesn't fit node 'heard'|no inbox the START declares/,
+      );
+    }
+    wait(log, state, "heard", takeEntry("heard", { inbox: BOTH as never }));
+    const later = send(log, state, "soon", "others");
+    const chat = send(log, state, "hi");
+    commitPrepared(log, state, prepareNodeWoken(state, "heard"));
+    expect(() => prepareTakeCommit(state, "heard", { inbox: BOTH, events: [later], closed: ["msgs"] })).toThrow(/must hold closed \[\]/);
+    expect(() => prepareTakeCommit(state, "heard", { inbox: "msgs", events: [later], closed: false })).toThrow(/doesn't fit/);
+    takeAndSucceed(log, state, "heard", { inbox: BOTH, events: [later], closed: [] });
+    expect(state.pool.store.get("heard")!.toObject()).toEqual({
+      events: [{ inbox: "later", event: "soon" }],
+      closed: false,
+      closed_inboxes: [],
+    });
+    expect(state.waits.inboxes.get("msgs")!.unread).toEqual([chat]);
+  });
+
+  test("an inline take reads both in seq order, and names each closed inbox it leaves empty", () => {
+    const { log, state } = started(paramFlow([MSGS, OTHERS], listed()));
+    const seqs = [send(log, state, "a", "others"), send(log, state, "b"), send(log, state, "c", "others")];
+    commitPrepared(log, state, prepareInboxClosed(state, "msgs")!);
+    start(log, state, "heard");
+    expect(() => prepareTakeCommit(state, "heard", { inbox: BOTH, events: [seqs[1]!], closed: [] })).toThrow(/must consume/);
+    expect(() => prepareTakeCommit(state, "heard", { inbox: BOTH, events: seqs, closed: BOTH })).toThrow(/must hold closed \["msgs"\]/);
+    takeAndSucceed(log, state, "heard", { inbox: BOTH, events: seqs, closed: ["msgs"] });
+    expect(state.pool.store.get("heard")!.toObject()).toEqual({
+      events: [
+        { inbox: "later", event: "a" },
+        { inbox: "chat", event: "b" },
+        { inbox: "later", event: "c" },
+      ],
+      closed: false,
+      closed_inboxes: ["chat"],
+    });
+  });
+});
+
 describe("resumes and the terminal", () => {
   test("a resume drops an orphan inline take commit; its events stay unread for the re-run", () => {
     const { log, state } = started(waitFlow(tool("heard", "take")));

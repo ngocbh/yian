@@ -46,6 +46,7 @@ import { ExpressionError } from "../expr/expressions.ts";
 import { exprRefsOf } from "../expr/template.ts";
 import { type CompleteResult, ELSE_HANDLE, Grow, Node, NodeKind, Output } from "../nodes/base.ts";
 import { BindingError, copyValue } from "../nodes/binding.ts";
+import { ToolNode } from "../nodes/tool/node.ts";
 import {
   type Binding,
   type CallView,
@@ -121,6 +122,8 @@ import {
   requireRecordTime,
   SCHEMA_VERSION,
   type TakeCommit,
+  type TakeInbox,
+  takeInboxes,
   validatedBy,
   type WaitEntry,
 } from "./log.ts";
@@ -2599,7 +2602,7 @@ function prepareSuccessTransition(
   let pending = state.pendingCommits.get(record.nodeId)!;
   if (pending.take !== null) {
     // A take commit holds pointers; its value is the events it consumed, rebuilt from the inbox store.
-    pending = { ...pending, valueJson: takeValueJson(state, pending) };
+    pending = { ...pending, valueJson: takeValueJson(state, pending, state.flow.nodes.get(record.nodeId)!) };
   } else if (pending.valueJson === null) {
     // A derived commit: the pool now holds what its binding read.
     const valueJson = rebuildCommit(state, record.nodeId, pending.key, pending.from!);
@@ -4166,14 +4169,14 @@ function validateNodeWaiting(state: RunState, record: NodeWaitingRecord): void {
       throw new YianRangeError(`call ${reprText(entry.callId)} is already registered; it belongs to its node until the node settles`);
     }
     if (entry.inbox !== null) {
-      if (inboxElementType(state, entry.inbox) === null) {
-        throw new YianRangeError(`NodeWaiting wait entry inbox ${reprText(entry.inbox)} is no inbox the START declares`);
+      const names = fittedTakeInboxes(state, node, entry.inbox, "NodeWaiting wait entry inbox");
+      if (names.every((name) => w.inboxes.get(name)?.closed === true)) {
+        throw new YianRangeError(`a take can't wait on closed inbox ${shownTakeInbox(entry.inbox)}`);
       }
-      if (w.inboxes.get(entry.inbox)?.closed === true) {
-        throw new YianRangeError(`a take can't wait on closed inbox ${reprText(entry.inbox)}`);
-      }
-      if (availableUnread(w, entry.inbox).length > 0) {
-        throw new YianRangeError(`a take can't wait while inbox ${reprText(entry.inbox)} holds unread events it may read`);
+      for (const name of names) {
+        if (availableUnread(w, name).length > 0) {
+          throw new YianRangeError(`a take can't wait while inbox ${reprText(name)} holds unread events it may read`);
+        }
       }
     }
   }
@@ -4980,6 +4983,29 @@ function requireValueCommitNode(state: RunState, nodeId: string): void {
 }
 
 /**
+ * Return the inboxes a take node's record names, `inbox`, after checking it fits the node: a list
+ * as long as its `from:` list, or one inbox for a `from:` of one; each declared by the START.
+ *
+ * @throws RangeError otherwise; `what` names the record's field.
+ */
+function fittedTakeInboxes(state: RunState, node: Node, inbox: TakeInbox, what: string): readonly string[] {
+  const listed = node instanceof ToolNode ? node.fromNames : null;
+  if (typeof inbox === "string" ? listed !== null : inbox.length !== listed?.length) {
+    const form = listed === null ? "one inbox" : `a list of ${listed.length}`;
+    throw new YianRangeError(`${what} ${shownTakeInbox(inbox)} doesn't fit node ${reprText(node.id)}, whose from: names ${form}`);
+  }
+  for (const name of takeInboxes(inbox)) {
+    if (inboxElementType(state, name) === null) throw new YianRangeError(`${what} ${reprText(name)} is no inbox the START declares`);
+  }
+  return takeInboxes(inbox);
+}
+
+/** Return a take's inbox as messages show it: a name, or the list. */
+function shownTakeInbox(inbox: TakeInbox): string {
+  return typeof inbox === "string" ? reprText(inbox) : writeAsText([...inbox]);
+}
+
+/**
  * Validate a take commit by an in-flight take node with no pending commit, under its target. A node
  * holding its take call commits what the call settled: its assigned events, closed when its inbox is
  * closed with nothing left a take may read; or, timed out, nothing. A node holding none commits
@@ -4987,6 +5013,10 @@ function requireValueCommitNode(state: RunState, nodeId: string): void {
  * inbox is closed and it takes them all; with none available, nothing, closed as its inbox is. An
  * inline commit of nothing on an open inbox is a timeout the reducer can't check, so it is accepted
  * on the engine's word.
+ *
+ * A take of a list of inboxes reads their events together in seq order, and its `closed` names each
+ * listed inbox closed with nothing left a take may read, as its call settled or its events leave
+ * it; a timed-out one names them too.
  *
  * @throws RangeError otherwise.
  */
@@ -5002,29 +5032,32 @@ function validateTakeCommit(state: RunState, record: PoolCommitRecord): void {
   if (record.key !== target) {
     throw new YianRangeError(`the take commit of ${reprText(nodeId)} is under ${reprText(record.key)}, not ${reprText(target)}`);
   }
-  if (inboxElementType(state, take.inbox) === null) {
-    throw new YianRangeError(`the take commit of ${reprText(nodeId)} reads ${reprText(take.inbox)}, no inbox the START declares`);
-  }
+  const names = fittedTakeInboxes(state, node, take.inbox, `the take commit of ${reprText(nodeId)} reads`);
   const w = state.waits;
-  const closed = w.inboxes.get(take.inbox)?.closed ?? false;
+  const isClosed = (name: string) => w.inboxes.get(name)?.closed ?? false;
   const held = w.calls.get(toolCallId(state.runId!, nodeId));
   let events: readonly number[];
-  let expectedClosed: boolean;
+  let done: (name: string) => boolean;
   if (held !== undefined) {
-    if (held.inbox !== take.inbox) {
-      throw new YianRangeError(`the take commit of ${reprText(nodeId)} reads ${reprText(take.inbox)}, but its call reads ${writeAsText(held.inbox)}`);
+    if (shownTakeInbox(held.inbox!) !== shownTakeInbox(take.inbox)) {
+      throw new YianRangeError(
+        `the take commit of ${reprText(nodeId)} reads ${shownTakeInbox(take.inbox)}, but its call reads ${shownTakeInbox(held.inbox!)}`,
+      );
     }
     if (held.state === "open" || held.state === "closed") {
       throw new YianRangeError(`take node ${reprText(nodeId)} commits from its call, which is ${held.state}`);
     }
-    events = held.state === "timed_out" ? [] : held.assigned;
-    expectedClosed = held.state === "answered" && closed && availableUnread(w, take.inbox).length === 0;
+    events = held.state === "timed_out" ? [] : [...held.assigned].sort((a, b) => a - b);
+    // A take of one inbox can't time out on a closed one, so it takes the timeout as not closed.
+    const counts = held.state === "answered" || typeof take.inbox !== "string";
+    done = (name) => counts && isClosed(name) && availableUnread(w, name).length === 0;
   } else {
-    const available = availableUnread(w, take.inbox);
+    const available = names.flatMap((name) => availableUnread(w, name)).sort((a, b) => a - b);
     const k = take.events.length;
     const counted = available.length === 0 ? k === 0 : k === 1 || k === available.length;
     events = counted ? available.slice(0, k) : available;
-    expectedClosed = closed && k === available.length;
+    const left = new Set(available.slice(k));
+    done = (name) => isClosed(name) && !availableUnread(w, name).some((seq) => left.has(seq));
   }
   if (take.events.length !== events.length || take.events.some((seq, index) => seq !== events[index])) {
     throw new YianRangeError(
@@ -5032,27 +5065,39 @@ function validateTakeCommit(state: RunState, record: PoolCommitRecord): void {
         `${held === undefined ? " (the oldest event a take may read, or all of them)" : ""}, found ${writeAsText([...take.events])}`,
     );
   }
-  if (take.closed !== expectedClosed) {
-    throw new YianRangeError(`the take commit of ${reprText(nodeId)} must hold closed ${expectedClosed}`);
+  const expected = typeof take.inbox === "string" ? done(take.inbox) : names.filter(done);
+  const shown = (closed: TakeCommit["closed"]) => (typeof closed === "boolean" ? String(closed) : writeAsText([...closed]));
+  if (shown(take.closed) !== shown(expected)) {
+    throw new YianRangeError(`the take commit of ${reprText(nodeId)} must hold closed ${shown(expected)}`);
   }
 }
 
 /**
  * Rebuild a take commit's value, `{events, closed}`, from the inbox store, checked against its
- * target's contract.
+ * target's contract. A take of a list of inboxes by take node `node` names each event's inbox and
+ * the closed ones by the input names its `from:` lists: `{events: [{inbox, event}], closed,
+ * closed_inboxes}`, `closed` when each of them is.
  *
  * @throws RangeError when a consumed send's value is gone, or the contract refuses the value
  *   (sends are checked against their inbox's type, so this means the flow and the log disagree).
  */
-function takeValueJson(state: RunState, pending: PendingCommit): string {
+function takeValueJson(state: RunState, pending: PendingCommit, node: Node): string {
   const take = pending.take!;
+  const names = takeInboxes(take.inbox);
+  const label = (name: string) => (node as ToolNode).fromNames![names.indexOf(name)]!;
   const events = take.events.map((seq) => {
     const value = state.inboxEvents.get(seq);
     if (value === undefined) throw new YianRangeError(`the take commit at seq ${pending.seq} names send ${seq}, which the run doesn't hold`);
-    return value.toObject();
+    if (typeof take.inbox === "string") return value.toObject();
+    // The commit was checked to read only its own inboxes' sends.
+    return { inbox: label(names.find((name) => senderOf(state, name, seq) !== undefined)!), event: value.toObject() };
   });
+  const closed =
+    typeof take.closed === "boolean"
+      ? { closed: take.closed }
+      : { closed: take.closed.length === names.length, closed_inboxes: take.closed.map(label) };
   try {
-    return committedText(state, pending.key, { events, closed: take.closed });
+    return committedText(state, pending.key, { events, ...closed });
   } catch (error) {
     if (!(error instanceof TypeCheckError)) throw error;
     throw new YianRangeError(`the take commit at seq ${pending.seq} rebuilds to a value its target refuses: ${error.message}`, {

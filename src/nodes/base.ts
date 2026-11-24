@@ -234,9 +234,17 @@ export class Grow {
   }
 }
 
-/** A take or sleep the engine decides when it commits the node's outcome. */
+/**
+ * A take or sleep the engine decides when it commits the node's outcome. A take's `inbox` is the
+ * inbox it reads, or the list of inboxes its `from:` names, in order.
+ */
 export type WaitRequest =
-  | { readonly tool: "take"; readonly inbox: string; readonly mode: "one" | "all"; readonly timeoutSeconds: number | null }
+  | {
+      readonly tool: "take";
+      readonly inbox: string | readonly string[];
+      readonly mode: "one" | "all";
+      readonly timeoutSeconds: number | null;
+    }
   | { readonly tool: "sleep"; readonly until: string | null; readonly forSeconds: number | null };
 
 /** A host's answer to a pending call. */
@@ -279,17 +287,26 @@ export class Pending {
     if (wait !== null) checkWaitRequest(wait);
     if ((ids.length > 0) === (wait !== null)) throw new YianRangeError("Pending takes call ids or a wait, exactly one");
     this.callIds = Object.freeze(ids);
-    this.wait = wait === null ? null : Object.freeze({ ...wait });
+    // A take's list of inboxes is copied too, so the request stays as checked.
+    const inbox = wait?.tool === "take" && typeof wait.inbox !== "string" ? { inbox: Object.freeze([...wait.inbox]) } : {};
+    this.wait = wait === null ? null : Object.freeze({ ...wait, ...inbox });
     Object.freeze(this);
   }
 }
 
-/** Require a take with an inbox, a known mode and an optional finite timeout, or a sleep with exactly one of `until` and `forSeconds`. */
+/**
+ * Require a take with an inbox (or a non-empty list of unique ones), a known mode and an optional
+ * finite timeout, or a sleep with exactly one of `until` and `forSeconds`.
+ */
 function checkWaitRequest(wait: WaitRequest): void {
   const tool: unknown = isRecord(wait) ? wait.tool : undefined;
   if (tool === "take") {
     const take = wait as Extract<WaitRequest, { tool: "take" }>;
-    if (typeof take.inbox !== "string" || take.inbox === "") throw new YianRangeError("a take's inbox must be a non-empty string");
+    const names: unknown[] = Array.isArray(take.inbox) ? [...take.inbox] : [take.inbox];
+    if (names.length === 0 || names.some((name) => typeof name !== "string" || name === "")) {
+      throw new YianRangeError("a take's inbox must be a non-empty string, or a non-empty list of them");
+    }
+    if (new Set(names).size !== names.length) throw new YianRangeError("a take's inboxes must be unique");
     if (take.mode !== "one" && take.mode !== "all") throw new YianRangeError(`a take's mode must be "one" or "all", got ${reprText(String(take.mode))}`);
     if (take.timeoutSeconds !== null && !isFiniteNumber(take.timeoutSeconds)) {
       throw new YianRangeError("a take's timeoutSeconds must be null or a finite number");

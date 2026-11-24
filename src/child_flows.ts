@@ -875,9 +875,11 @@ export function childEvent(status: ChildStatus, heard: readonly HeardSend[] = []
       clauses.push(["holds for approval", ` ${listed(calls)}`]);
     }
     const waits = (status.waits ?? []) as readonly Wait[];
-    const inbox = waits.find((wait) => wait.tool === TAKE && wait.settled !== true && typeof wait.inbox === "string");
+    // A take of several inboxes lists them.
+    const read = (wait: Wait) => [wait.inbox].flat().filter((name): name is string => typeof name === "string");
+    const inbox = waits.find((wait) => wait.tool === TAKE && wait.settled !== true && read(wait).length > 0);
     if (asks.length + held.length === 0 && inbox !== undefined) {
-      clauses.push(["waits for a message", ` on inbox ${quote(inbox.inbox)}`]);
+      clauses.push(["waits for a message", ` on inbox ${read(inbox).map(quote).join(" or ")}`]);
     }
   }
   if (heard.length > 0) {

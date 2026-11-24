@@ -294,6 +294,9 @@ output:
   `call` or `loop` child. An inbox nothing reads is a load error.
 - **`take` and `sleep` have fixed outputs**, so `output:`, `asserts:` and `retries:` on them are
   load errors. A `take` gives `{events: list(T), closed: bool}`.
+- **A `take` can read several inboxes**: `from:` as a list of `${input.<name>}` (quote each in
+  flow style). It gives `{events: list({inbox, event}), closed, closed_inboxes}`, `inbox` the
+  input's name. A queue the agent's steers don't read is a second inbox only this take lists.
 - **Durations need a unit**: `90s`, `30m`, `24h`, `2d`. `timeout: 86400` fails.
 - **An `ask` with a `timeout:`** gives null when nobody answers in time if its `output:` is
   `Optional(...)`; otherwise it fails with `tool.timeout`.

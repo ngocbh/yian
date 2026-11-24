@@ -163,6 +163,22 @@ function inputError(message: string, cause?: unknown): BindingError {
 }
 
 /**
+ * Return the inboxes a take's bound `from:` list holds, in order, or `null` when it isn't a list of
+ * inboxes.
+ *
+ * @throws BindingError classified `contract.input` when it names one inbox twice, as a parent
+ *   passing one inbox under two names does.
+ */
+function listedInboxes(from: unknown): readonly string[] | null {
+  if (!Array.isArray(from)) return null;
+  const names = from.map(inboxName);
+  if (names.length === 0 || names.some((name) => name === null)) return null;
+  const twice = names.find((name, index) => names.indexOf(name) !== index);
+  if (twice !== undefined) throw inputError(`take \`from\` lists inbox ${reprText(twice!)} twice`);
+  return names as string[];
+}
+
+/**
  * Return the seconds of a built-in's duration input `name`, or null when it is absent or null.
  *
  * A literal duration was checked at load and arrives as integer seconds; a `${...}` arrives as
@@ -310,6 +326,11 @@ export class ToolNode extends Node {
   inputTypes: ReadonlyMap<string, Type>;
   /** `ask`: the answer schema derived from `output:`, one entry per field; `[]` otherwise. */
   answerSchema: readonly Readonly<Record<string, unknown>>[];
+  /**
+   * `take`: the names of the inputs its `from:` lists, in order, by which its output names each
+   * event's inbox; `null` for a take of one inbox, and for any other tool.
+   */
+  fromNames: readonly string[] | null = null;
   /** A lifted `call(...)`'s site, `node 'n' input 'x' call(gret)`, which run start names it by; else `null`. */
   readonly site: string | null;
   /**
@@ -693,11 +714,12 @@ export class ToolNode extends Node {
    * Return a take's wait request from its bound `from`, `take` and `timeout`. The engine decides
    * whether it commits at once or waits, so nothing is recorded here.
    *
-   * @throws BindingError classified `contract.input` when `from` isn't an inbox, `take` isn't
-   *   `one` or `all`, or `timeout` isn't a duration or ends after the year 9999.
+   * @throws BindingError classified `contract.input` when `from` isn't an inbox (or, for a take
+   *   whose `from:` lists inboxes, a list of distinct ones), `take` isn't `one` or `all`, or
+   *   `timeout` isn't a duration or ends after the year 9999.
    */
   private takeRequest(inputs: Record<string, unknown>, caps: NodeCaps): Pending {
-    const inbox = inboxName(inputs.from);
+    const inbox = this.fromNames === null ? inboxName(inputs.from) : listedInboxes(inputs.from);
     if (inbox === null) throw inputError(`take \`from\` must be an inbox, got ${valueRepr(inputs.from ?? null)}`);
     const mode = inputs.take ?? "one";
     if (mode !== "one" && mode !== "all") throw inputError(`take \`take\` must be one or all, got ${valueRepr(mode)}`);

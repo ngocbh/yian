@@ -1,0 +1,131 @@
+# A take of two inboxes keeps waiting when one closes. Once the other closes too it wakes with
+# nothing, closed, and names both as closed.
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    messages: !Inbox(str)
+    queued: !Inbox(str)
+  nodes:
+    heard:
+      kind: call
+      call: take
+      input:
+        from: ["${input.messages}", "${input.queued}"]
+        take: all
+  output: ${heard.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  sends:
+  - {close: queued}
+  - {close: messages}
+expect:
+  output:
+    status: succeeded
+    output: {closed: true, closed_inboxes: [messages, queued], events: []}
+  trace:
+  - - run_started
+    - null
+    - {num_workers: 0}
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        messages: {inbox: messages}
+        queued: {inbox: queued}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, heard]
+  - - node_waiting
+    - heard
+    - call_ids: [r1/heard]
+      waits:
+      - call_id: r1/heard
+        inbox: [messages, queued]
+        mode: all
+        tool: take
+  - - run_waiting
+    - null
+    - node_ids: [heard]
+  - - inbox_closed
+    - null
+    - {inbox: queued}
+  - - inbox_closed
+    - null
+    - {inbox: messages}
+  - [node_woken, heard]
+  - - pool_commit
+    - heard
+    - closed: [messages, queued]
+      events: []
+      inbox: [messages, queued]
+  - - node_succeeded
+    - heard
+    - {commit: 14}
+  - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - value:
+        closed: true
+        closed_inboxes: [messages, queued]
+        events: []
+  - - node_succeeded
+    - __end__
+    - {commit: 17}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - {node_id: __start__}
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        messages: {inbox: messages}
+        queued: {inbox: queued}
+      interrupted: false
+  - - NodeStarted
+    - {node_id: heard}
+  - - NodeWaiting
+    - node_id: heard
+      call_ids: [r1/heard]
+  - - RunWaiting
+    - node_ids: [heard]
+  - - NodeWoken
+    - node_id: heard
+      timed_out: []
+  - - NodeSucceeded
+    - node_id: heard
+      output:
+        closed: true
+        closed_inboxes: [messages, queued]
+        events: []
+      interrupted: false
+  - - NodeStarted
+    - {node_id: __end__}
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        closed: true
+        closed_inboxes: [messages, queued]
+        events: []
+      interrupted: false
+  - - RunSucceeded
+    - output:
+        closed: true
+        closed_inboxes: [messages, queued]
+        events: []

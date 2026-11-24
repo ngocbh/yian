@@ -1499,7 +1499,7 @@ export function waitingDocument(result: RunResult): Record<string, JsonValue> {
     node: wait.node,
     call_id: wait.callId,
     tool: wait.tool,
-    inbox: wait.inbox,
+    inbox: typeof wait.inbox === "object" && wait.inbox !== null ? [...wait.inbox] : wait.inbox,
     deadline: wait.deadline,
     settled: wait.settled,
   }));

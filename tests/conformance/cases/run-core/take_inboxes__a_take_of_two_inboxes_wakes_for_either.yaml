@@ -1,0 +1,201 @@
+# Two takes of `messages` and `queued`, one after the other. A send to `queued` wakes the first, a
+# send to `messages` the second, and each event names its inbox by its input.
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    messages: !Inbox(str)
+    queued: !Inbox(str)
+  nodes:
+    first:
+      kind: call
+      call: take
+      input:
+        from: ["${input.messages}", "${input.queued}"]
+    second:
+      kind: call
+      call: take
+      runs_after: [first]
+      input:
+        from: ["${input.messages}", "${input.queued}"]
+  output:
+    first: ${first.output}
+    second: ${second.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  sends:
+  - {inbox: queued, event: later}
+  - {inbox: messages, event: now}
+expect:
+  output:
+    status: succeeded
+    output:
+      first: {closed: false, closed_inboxes: [], events: [{event: later, inbox: queued}]}
+      second: {closed: false, closed_inboxes: [], events: [{event: now, inbox: messages}]}
+  trace:
+  - - run_started
+    - null
+    - {num_workers: 0}
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        messages: {inbox: messages}
+        queued: {inbox: queued}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, first]
+  - - node_waiting
+    - first
+    - call_ids: [r1/first]
+      waits:
+      - call_id: r1/first
+        inbox: [messages, queued]
+        mode: one
+        tool: take
+  - - run_waiting
+    - null
+    - node_ids: [first]
+  - - pool_commit
+    - __start__
+    - {key: __start__.queued, value: later}
+  - [node_woken, first]
+  - - pool_commit
+    - first
+    - closed: []
+      events: [11]
+      inbox: [messages, queued]
+  - - node_succeeded
+    - first
+    - {commit: 13}
+  - [node_started, second]
+  - - node_waiting
+    - second
+    - call_ids: [r1/second]
+      waits:
+      - call_id: r1/second
+        inbox: [messages, queued]
+        mode: one
+        tool: take
+  - - run_waiting
+    - null
+    - node_ids: [second]
+  - - pool_commit
+    - __start__
+    - {key: __start__.messages, value: now}
+  - [node_woken, second]
+  - - pool_commit
+    - second
+    - closed: []
+      events: [18]
+      inbox: [messages, queued]
+  - - node_succeeded
+    - second
+    - {commit: 20}
+  - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - value:
+        first:
+          closed: false
+          closed_inboxes: []
+          events:
+          - {event: later, inbox: queued}
+        second:
+          closed: false
+          closed_inboxes: []
+          events:
+          - {event: now, inbox: messages}
+  - - node_succeeded
+    - __end__
+    - {commit: 23}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - {node_id: __start__}
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        messages: {inbox: messages}
+        queued: {inbox: queued}
+      interrupted: false
+  - - NodeStarted
+    - {node_id: first}
+  - - NodeWaiting
+    - node_id: first
+      call_ids: [r1/first]
+  - - RunWaiting
+    - node_ids: [first]
+  - - NodeWoken
+    - node_id: first
+      timed_out: []
+  - - NodeSucceeded
+    - node_id: first
+      output:
+        closed: false
+        closed_inboxes: []
+        events:
+        - {event: later, inbox: queued}
+      interrupted: false
+  - - NodeStarted
+    - {node_id: second}
+  - - NodeWaiting
+    - node_id: second
+      call_ids: [r1/second]
+  - - RunWaiting
+    - node_ids: [second]
+  - - NodeWoken
+    - node_id: second
+      timed_out: []
+  - - NodeSucceeded
+    - node_id: second
+      output:
+        closed: false
+        closed_inboxes: []
+        events:
+        - {event: now, inbox: messages}
+      interrupted: false
+  - - NodeStarted
+    - {node_id: __end__}
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        first:
+          closed: false
+          closed_inboxes: []
+          events:
+          - {event: later, inbox: queued}
+        second:
+          closed: false
+          closed_inboxes: []
+          events:
+          - {event: now, inbox: messages}
+      interrupted: false
+  - - RunSucceeded
+    - output:
+        first:
+          closed: false
+          closed_inboxes: []
+          events:
+          - {event: later, inbox: queued}
+        second:
+          closed: false
+          closed_inboxes: []
+          events:
+          - {event: now, inbox: messages}

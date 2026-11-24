@@ -1,0 +1,28 @@
+# A take whose from: lists inboxes names each event's inbox, and the closed ones, by input name.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    m: !Inbox(str)
+    q: !Inbox(str)
+  nodes:
+    heard:
+      kind: call
+      call: take
+      input:
+        from:
+          - ${input.m}
+          - ${input.q}
+        take: all
+    first:
+      kind: code
+      input:
+        events: !list(str) "${[e.inbox + ':' + e.event for e in heard.output.events]}"
+        closed: !bool ${heard.output.closed}
+        closed_inboxes: !list(str) ${heard.output.closed_inboxes}
+      code: return inputs.events
+      output: !list(str)
+  output: ${first.output}
+expect:
+  load: ok

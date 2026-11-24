@@ -1,0 +1,24 @@
+# A take's from: lists each inbox once.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    m: !Inbox(str)
+  nodes:
+    heard:
+      kind: call
+      call: take
+      input:
+        from:
+          - ${input.m}
+          - ${input.m}
+  output: null
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "node 'heard' (call: take): take's from lists inbox input 'm' twice; list it once"
+      frames:
+      - label: flow.yaml
+        range: [12, 11, 12, 21]

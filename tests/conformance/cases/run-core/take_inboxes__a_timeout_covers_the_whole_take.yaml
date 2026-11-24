@@ -1,0 +1,216 @@
+# A take of two inboxes with a 10s timeout. `queued` closes and nothing comes to `messages`; a send
+# to `go` then starts a tool that waits out a 30s retry delay, so the timeout passes: no events,
+# not closed, and `queued` named as closed.
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    messages: !Inbox(str)
+    queued: !Inbox(str)
+    go: !Inbox(str)
+  nodes:
+    heard:
+      kind: call
+      call: take
+      input:
+        from: ["${input.messages}", "${input.queued}"]
+        timeout: 10s
+    trigger:
+      kind: call
+      call: take
+      input:
+        from: ${input.go}
+    slow:
+      kind: call
+      call: work
+      runs_after: [trigger]
+      retries: 1
+  output:
+    heard: ${heard.output}
+    slow: ${slow.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    work:
+      parameters: {type: object, properties: {}}
+      results:
+      - raise: {class: TransientToolError, message: busy, retry_after: 30}
+      - return: done
+  sends:
+  - {close: queued, hold: true}
+  - {inbox: go, event: go}
+expect:
+  output:
+    status: succeeded
+    output:
+      heard: {closed: false, closed_inboxes: [queued], events: []}
+      slow: done
+  trace:
+  - - run_started
+    - null
+    - {num_workers: 0}
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        go: {inbox: go}
+        messages: {inbox: messages}
+        queued: {inbox: queued}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, heard]
+  - - node_waiting
+    - heard
+    - call_ids: [r1/heard]
+      waits:
+      - call_id: r1/heard
+        inbox: [messages, queued]
+        mode: one
+        tool: take
+  - [node_started, trigger]
+  - - node_waiting
+    - trigger
+    - call_ids: [r1/trigger]
+      waits:
+      - {call_id: r1/trigger, inbox: go, mode: one, tool: take}
+  - - run_waiting
+    - null
+    - node_ids: [heard, trigger]
+  - - inbox_closed
+    - null
+    - {inbox: queued}
+  - - pool_commit
+    - __start__
+    - {key: __start__.go, value: go}
+  - [node_woken, trigger]
+  - - pool_commit
+    - trigger
+    - closed: false
+      events: [14]
+      inbox: go
+  - - node_succeeded
+    - trigger
+    - {commit: 16}
+  - [node_started, slow]
+  - - node_step
+    - slow
+    - n: 1
+      step:
+        attempt: 1
+        error: {message: busy, type: TransientToolError}
+        event: failed
+        kind: tool_attempt
+        retry_in: 30.0
+  - - node_step
+    - slow
+    - n: 2
+      step: {attempt: 2, event: started, kind: tool_attempt}
+  - - pool_commit
+    - slow
+    - {value: done}
+  - - node_succeeded
+    - slow
+    - {commit: 21}
+  - - node_woken
+    - heard
+    - timed_out: [r1/heard]
+  - - pool_commit
+    - heard
+    - closed: [queued]
+      events: []
+      inbox: [messages, queued]
+  - - node_succeeded
+    - heard
+    - {commit: 24}
+  - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - value:
+        heard:
+          closed: false
+          closed_inboxes: [queued]
+          events: []
+        slow: done
+  - - node_succeeded
+    - __end__
+    - {commit: 27}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - {node_id: __start__}
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        go: {inbox: go}
+        messages: {inbox: messages}
+        queued: {inbox: queued}
+      interrupted: false
+  - - NodeStarted
+    - {node_id: heard}
+  - - NodeWaiting
+    - node_id: heard
+      call_ids: [r1/heard]
+  - - NodeStarted
+    - {node_id: trigger}
+  - - NodeWaiting
+    - node_id: trigger
+      call_ids: [r1/trigger]
+  - - RunWaiting
+    - node_ids: [heard, trigger]
+  - - NodeWoken
+    - node_id: trigger
+      timed_out: []
+  - - NodeSucceeded
+    - node_id: trigger
+      output:
+        closed: false
+        events: [go]
+      interrupted: false
+  - - NodeStarted
+    - {node_id: slow}
+  - - NodeSucceeded
+    - {node_id: slow, output: done, interrupted: false}
+  - - NodeWoken
+    - node_id: heard
+      timed_out: [r1/heard]
+  - - NodeSucceeded
+    - node_id: heard
+      output:
+        closed: false
+        closed_inboxes: [queued]
+        events: []
+      interrupted: false
+  - - NodeStarted
+    - {node_id: __end__}
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        heard:
+          closed: false
+          closed_inboxes: [queued]
+          events: []
+        slow: done
+      interrupted: false
+  - - RunSucceeded
+    - output:
+        heard:
+          closed: false
+          closed_inboxes: [queued]
+          events: []
+        slow: done

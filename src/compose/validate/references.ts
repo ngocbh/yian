@@ -1086,11 +1086,13 @@ function checkInputBindings(
       sites.scanned.add(key);
     }
     const whole = bindingPassesWhole(src);
+    // Each item of a take's `from:` list passes its inbox whole.
+    const listed = node instanceof ToolNode && node.fromNames !== null && param === "from";
     sites.scan(src, where, paramRng, {
       siteProducers: nodeProducers,
       siteInputs: nodeInputs,
       partialUnionFields,
-      inboxTail: whole ? inboxSiteTail(nodeId, node, param) : TAKE_TAIL,
+      inboxTail: whole || listed ? inboxSiteTail(nodeId, node, param) : TAKE_TAIL,
       memoryTail: whole ? memorySiteTail(nodeId, node, param) : MEMORY_VALUE_TAIL,
     });
   }

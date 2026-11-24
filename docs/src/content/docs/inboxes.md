@@ -8,7 +8,7 @@ called from a `kind: call` node:
 
 | `call` | Waits for | Output |
 |---|---|---|
-| `take` | messages sent to an inbox input | `{events: list(T), closed: bool}` |
+| `take` | messages sent to an inbox input, or to any of several | `{events: list(T), closed: bool}` |
 | `sleep` | a time | `null` |
 | `ask` | a person's answer | the answer, typed by `output:` |
 
@@ -51,9 +51,9 @@ This flow collects notes until its inbox closes, then returns them all.
 - An inbox input is required and has no default. A run takes no value for it: messages come
   through `send` (see [Sending messages](#sending-messages)). Passing one with `--input` or
   `--inputs` is a usage error.
-- Read an inbox only whole, as `${input.notes}`, in one of three places: a `take`'s `from:`, an
-  agent's `steer_inbox:` (see [Agents](/agents/)), or an `Inbox` input of a `kind: call` node's
-  or a `loop`'s child.
+- Read an inbox only whole, as `${input.notes}`, in one of three places: a `take`'s `from:` (or an
+  item of its list), an agent's `steer_inbox:` (see [Agents](/agents/)), or an `Inbox` input of a
+  `kind: call` node's or a `loop`'s child.
 - Anything else is a load error: text around it, a field read, a code or agent input, a `case`,
   a `map`, an inline `call(...)` of a flow, a flow output. An inline `call(take, from=...)` is a
   `take`.
@@ -81,7 +81,7 @@ heard:
 
 | Input | Meaning |
 |---|---|
-| `from:` | The inbox to read, as `${input.<name>}` |
+| `from:` | The inbox to read, as `${input.<name>}`, or a list of them (see [Take from several inboxes](#take-from-several-inboxes)) |
 | `take:` | `one` takes the oldest unread message; `all` takes every unread one |
 | `timeout:` | How long to wait for a message; see [Durations](#durations) |
 
@@ -94,6 +94,85 @@ heard:
 
 A take on a closed inbox still gets the messages sent before the close. `take`'s output is fixed, so `output:`, `asserts:` and `retries:`
 are load errors.
+
+### Take from several inboxes
+
+`from:` can list inboxes of one message type. The take reads them together and wakes for a
+message to any of them:
+
+```yaml check=fragment
+heard:
+  kind: call
+  call: take
+  input:
+    from:
+      - ${input.messages}
+      - ${input.queued}
+    take: all
+```
+
+In flow style, quote each item: `from: ["${input.messages}", "${input.queued}"]`.
+
+- `take: one` takes the oldest unread message of the listed inboxes, by when it was sent;
+  `take: all` takes every unread one, in the order they were sent.
+- Its output names each message's inbox by its input name, and the closed inboxes:
+  `{events: list({inbox, event: T}), closed: bool, closed_inboxes: list(...)}`.
+- `closed_inboxes` lists the inboxes that are closed with nothing left to read. `closed` is true
+  when that is all of them; until then the take waits on the open ones.
+- `timeout:` covers the whole take. When it passes: `events: []`, `closed: false`.
+- An empty list, an inbox listed twice, an item that isn't an `Inbox` input, or inboxes of two
+  message types are load errors. An inbox a caller passes in under two names fails the take with
+  `contract.input`.
+
+### A queue the steers don't read
+
+An agent reads its `steer_inbox:` before each model call, so a message sent there joins the turn
+that is running. A second inbox, read only by the take that starts a turn, holds messages for the
+next turn:
+
+```yaml
+id: queue
+name: queue
+input:
+  messages: !Inbox(str)         # steers the running reply
+  queued: !Inbox(str)           # waits for the next turn
+nodes:
+  chat:
+    kind: loop
+    input:
+      messages: ${input.messages}
+      queued: ${input.queued}
+      closed: false
+    while: not closed
+    nodes:
+      heard:
+        kind: call
+        call: take
+        input:
+          from:
+            - ${input.messages}
+            - ${input.queued}
+          take: all
+      route:
+        kind: case
+        cases:
+          - when: ${heard.output.events != []}
+            then: reply
+      reply:
+        kind: agent
+        steer_inbox: ${input.messages}
+        input:
+          said: ${[e.event for e in heard.output.events]}
+        prompt: "Answer: ${said}"
+        output: !Optional(str)
+    output:
+      closed: ${heard.output.closed}
+output: null
+```
+
+The host sends a message to `messages` to change the running turn, or to `queued` to keep it for
+the next one. To move a queued message into the running turn, it takes it back from `queued` with
+`withdraw(log, "queued", { events: [seq] })` and sends it to `messages`.
 
 ## Sleep
 
@@ -242,7 +321,7 @@ $ yian run collect.yaml --json
 |---|---|
 | `waits[].node` | The waiting node; `#0` is the first run of a loop body |
 | `waits[].tool` | `take`, `sleep`, `ask` or a host tool |
-| `waits[].inbox` | The inbox a take reads, else `null` |
+| `waits[].inbox` | The inbox a take reads (a list, for a take of several), else `null` |
 | `waits[].deadline` | When the wait times out, else `null` |
 | `waits[].settled` | Whether it already has its answer, timed out or was closed, so the node wakes on the next move |
 | `wake_at` | The earliest deadline of a wait that isn't settled, else `null` |

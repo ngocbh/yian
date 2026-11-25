@@ -130,6 +130,7 @@ import {
   reportedText,
   SKIPPED_TOOL_RESULT,
   TOOL_INTERRUPTED_OUTCOME,
+  TOOL_STEERED_OUTCOME,
   toolLimitText,
   toolText,
   unavailableText,
@@ -1404,8 +1405,9 @@ async function faultCall(turn: ToolTurn, call: ToolCallPart, index: number, erro
  * watches the agent's steer inbox, from before the hook is asked until the call settles. Each
  * starts in call order; the first to fail (in time; a `ReportedToolError` is the call's error
  * result, not a failure, and so is a rejection with the abort of the call's own interrupt, which
- * the model reads as `TOOL_INTERRUPTED_OUTCOME`; a result `toolText` refuses is a failure) aborts
- * the group's signal, and no further call starts. As each call finishes with a
+ * the model reads as `TOOL_INTERRUPTED_OUTCOME`, or of its steer signal, read as
+ * `TOOL_STEERED_OUTCOME`; a result `toolText` refuses is a failure) aborts the group's signal, and
+ * no further call starts. As each call finishes with a
  * result, its text is computed and written as a `tool_result` step at once, in finish order,
  * unless the node has stopped by then; a call whose handler returned `pending()` is written as a
  * `pending` step instead and gets no tool message (the loop returns `Pending`). An agent outside a
@@ -1581,10 +1583,13 @@ async function runGroup(
         (error): ToolOutcome => {
           // A call whose started event threw never ran: what was thrown is the host's failure.
           if (started && isReportedToolError(error)) return settle(planned, startedAt, error, true);
-          // A tool that passed its interrupt on (to a timer, `fetch`, `spawn`) rejects with its
-          // abort: the user's act, which the model reads, not the tool's failure.
-          if (started && interruptAbort(planned.interrupted.signal, error)) {
+          // A tool that passed its interrupt or its steer signal on (to a timer, `fetch`, `spawn`)
+          // rejects with its abort: the user's act, which the model reads, not the tool's failure.
+          if (started && abortOf(planned.interrupted.signal, error)) {
             return settle(planned, startedAt, new ReportedToolError(TOOL_INTERRUPTED_OUTCOME), true);
+          }
+          if (started && abortOf(planned.steered.signal, error)) {
+            return settle(planned, startedAt, new ReportedToolError(TOOL_STEERED_OUTCOME), true);
           }
           fail(error);
           return { error };
@@ -1933,14 +1938,14 @@ function watchSteers(inbox: SteerInbox | undefined, to: AbortController): () => 
 }
 
 /**
- * Whether a call's rejection `error` is the abort of its aborted `interrupted`: the signal's
- * reason, or an `AbortError`, which an API given the signal rejects with and which a module tool's
- * thread sends back by name.
+ * Whether a call's rejection `error` is the abort of its aborted `signal` (its interrupt or its
+ * steer signal): the signal's reason, or an `AbortError`, which an API given the signal rejects
+ * with and which a module tool's thread sends back by name.
  */
-function interruptAbort(interrupted: AbortSignal, error: unknown): boolean {
-  if (!interrupted.aborted) return false;
+function abortOf(signal: AbortSignal, error: unknown): boolean {
+  if (!signal.aborted) return false;
   try {
-    return error === interrupted.reason || (error instanceof Error && error.name === "AbortError");
+    return error === signal.reason || (error instanceof Error && error.name === "AbortError");
   } catch {
     // A thrown Proxy whose traps throw is no abort.
     return false;

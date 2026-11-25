@@ -50,7 +50,7 @@ import {
 } from "../nodes/base.ts";
 import { copyValue, type SourceResolver } from "../nodes/binding.ts";
 import { type CallView, isExactly, NodeSteps } from "../nodes/contracts.ts";
-import { realScheduler, type Scheduler } from "../platform.ts";
+import { realScheduler, type Scheduler, warn } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { toolCallId } from "../tools/context.ts";
 import { ToolSet } from "../tools/registry.ts";
@@ -484,11 +484,7 @@ export class FlowEngine {
     const observers = commitPrepared(log, state, prepared);
     if (state.result instanceof RunCancelled) this.#controller.abort(this.#cancelled);
     // A running reader's tools learn of a send to its steer inbox in the same synchronous section.
-    if (delivery.kind === "send") {
-      for (const opened of this.#steerInboxes.values()) {
-        if (opened.inbox === delivery.inbox) for (const listener of [...opened.listeners]) listener();
-      }
-    }
+    if (delivery.kind === "send") this.#sent(delivery.inbox);
     // In the same synchronous section as the record, so a running reader sees both at once.
     if (prepared.record instanceof InterruptedRecord) {
       for (const nodeId of prepared.record.nodes) this.#steerInboxes.get(nodeId)?.controller.abort();
@@ -847,6 +843,24 @@ export class FlowEngine {
         },
       };
     };
+  }
+
+  /**
+   * Call the send listeners of each running node that opened `inbox` as its steer inbox. A listener
+   * that throws is warned about: the send is recorded already, and the delivery goes on.
+   */
+  #sent(inbox: string): void {
+    for (const [nodeId, opened] of this.#steerInboxes) {
+      if (opened.inbox !== inbox) continue;
+      for (const listener of [...opened.listeners]) {
+        try {
+          listener();
+        } catch (error) {
+          const why = error instanceof Error ? error.message : String(error);
+          warn(`node ${reprText(nodeId)}: a listener to its steer inbox's sends threw: ${why}`);
+        }
+      }
+    }
   }
 
   /**

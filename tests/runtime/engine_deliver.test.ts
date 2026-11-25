@@ -4,6 +4,7 @@ import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { CallClosed, NodeWaiting, type RunEvent, RunCancelled, RunSucceeded, RunWaiting } from "../../src/events.ts";
 import { Node, NodeKind, type NodeCaps, type NodeResult, Output, Pending } from "../../src/nodes/base.ts";
 import { NodeStepRecord, NodeWokenRecord, PoolCommitRecord } from "../../src/runtime/log.ts";
+import { withWarnings } from "../../src/platform.ts";
 import { DeliveryRefused } from "../../src/runtime/state.ts";
 import { FakeHost, FakeTake, GateNode, inboxEngine, inboxFlow, recordNames } from "../helpers/inbox_fixtures.ts";
 import { RUN_ID } from "../helpers/run_state_fixtures.ts";
@@ -206,3 +207,55 @@ test("an observer's delivery keeps run()'s events in log order, ending with the 
   expect(events.slice(-3).map((event) => event.constructor.name)).toEqual(["NodeWaiting", "RunWaiting", "RunCancelled"]);
   expect(recordNames(run.log).slice(-3)).toEqual(["NodeWaitingRecord", "RunWaitingRecord", "RunCancelledRecord"]);
 });
+
+/** A node that opens steer inbox `m`, adds `listeners` to its sends, calls `opened`, and returns once `until` resolves. */
+class SendWatcher extends Node {
+  readonly kind = NodeKind.CODE;
+  override readsSteerInbox = true;
+  override readonly needsSteps = true;
+  readonly listeners: readonly (() => void)[];
+  readonly opened: () => void;
+  readonly until: Promise<void>;
+
+  constructor(id: string, listeners: readonly (() => void)[], opened: () => void, until: Promise<void>) {
+    super(id);
+    this.listeners = listeners;
+    this.opened = opened;
+    this.until = until;
+  }
+
+  override async forward(_inputs: Record<string, unknown>, caps: NodeCaps): Promise<NodeResult> {
+    const steer = caps.openSteerInbox!("m");
+    for (const listener of this.listeners) steer.onSend(listener);
+    this.opened();
+    await this.until;
+    return new Output("done");
+  }
+}
+
+test("a send to a running node's steer inbox calls its send listeners; one that throws is warned about, and the send stands", async () => {
+  const heard: string[] = [];
+  const opened = Promise.withResolvers<void>();
+  const until = Promise.withResolvers<void>();
+  const broken = () => {
+    throw new Error("broke");
+  };
+  const watcher = new SendWatcher("chat", [broken, () => heard.push("sent")], opened.resolve, until.promise);
+  const run = inboxEngine(inboxFlow(["m", "other"], [watcher], [[START_ID, "chat"], ["chat", END_ID]]));
+  const running = run.run();
+  await opened.promise;
+  const warnings: string[] = [];
+  const [other, sent] = withWarnings(
+    (message) => warnings.push(message),
+    () => [run.deliver({ kind: "send", inbox: "other", event: "x" }), run.deliver({ kind: "send", inbox: "m", event: "a" })],
+  );
+  until.resolve();
+  await running;
+
+  expect(heard).toEqual(["sent"]);
+  expect(warnings).toEqual(["node 'chat': a listener to its steer inbox's sends threw: broke"]);
+  expect(sent.seq).toBe(other.seq! + 1);
+  expect(run.log.records()[sent.seq!]!.record).toBeInstanceOf(PoolCommitRecord);
+  expect(run.state.result).toBeInstanceOf(RunSucceeded);
+});
+

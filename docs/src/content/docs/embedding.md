@@ -656,7 +656,8 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
 - **The group.** The model sees `<group>_status` and `<group>_wait`, which read a run's status, and
   `<group>_message`, `<group>_answer`, `<group>_interrupt`, `<group>_close_inbox`, `<group>_stop`
   and `<group>_approve`, which deliver to it. Each returns the run's status. `wait` waits at most
-  120 seconds on the driver's `scheduler`.
+  120 seconds on the driver's `scheduler`, and ends early once a [steer](#tools-and-skills)
+  waits for the agent calling it.
 - **Interrupt.** `<group>_interrupt` takes `run` and `inbox`.
   1. It takes back the model's own unread sends to that inbox (`withdraw` with the owner's
      `by`), never anyone else's. `by` names no node, so two agents of one owner run take back
@@ -819,10 +820,11 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
   A send to another inbox, such as a [queue](/inboxes/#a-queue-the-steers-dont-read), never
   aborts it, nor does a steer withdrawn before the call started. Once aborted it stays aborted,
   even when the steer is then withdrawn. Like `interrupted`, it never fires for a TOOL node's
-  call, an agent without a `steer_inbox:`, or a call inside a flow call the agent made. Return a
-  result rather than reject with its abort, which fails the call as any error does. Its listeners
-  run inside the host's `send` call, so they must not throw. An MCP server's tools and a memory's
-  ignore it: an MCP call runs to its end.
+  call, an agent without a `steer_inbox:`, or a call inside a flow call the agent made. A tool
+  that rejects with its abort instead, as a timer, `fetch` or `spawn` given the signal does, is
+  read as a call a new message stopped, its outcome unknown. Its listeners run inside the host's
+  `send` call, so they must not throw. An MCP server's tools and a memory's ignore it: an MCP call
+  runs to its end.
 
   ```ts check=fragment
   const runTests = tool({
@@ -830,12 +832,14 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
     description: "Run the test suite and return its output.",
     parameters: { type: "object", properties: {} },
     execute: async (_args, ctx) => {
-      const job = startTests(); // your code: { done: Promise<void>, output(): string }
+      const job = startTests(); // your code: { id: string, done: Promise<void>, output(): string }
       let finished = false;
       const steered = new Promise((resolve) => ctx.steered.addEventListener("abort", resolve, { once: true }));
       // Already aborted: a steer came during the model call.
       if (!ctx.steered.aborted) await Promise.race([job.done.then(() => (finished = true)), steered]);
-      return finished ? job.output() : `Still running; the output so far:\n${job.output()}`;
+      if (finished) return job.output();
+      // The job runs on; another of your tools, `read_job`, gives the model the rest later.
+      return `Still running as job ${job.id} (read_job reads the rest); the output so far:\n${job.output()}`;
     },
   });
   ```

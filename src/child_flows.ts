@@ -3011,8 +3011,8 @@ export function childFlows<T extends ChildFlowTarget>(
       name: "wait",
       description:
         "Wait for a run you started to change (a reply, a question, its end), up to `seconds` (at " +
-        `most ${WAIT_MAX_S}), and return its status then, or at the timeout. Returns at once when it ` +
-        `changed since you last saw it. ${status}`,
+        `most ${WAIT_MAX_S}), and return its status then, at the timeout, or once a message comes for you. ` +
+        `Returns at once when it changed since you last saw it. ${status}`,
       parameters: {
         type: "object",
         properties: {
@@ -3030,7 +3030,9 @@ export function childFlows<T extends ChildFlowTarget>(
           throw new ReportedToolError("seconds must be a number of seconds, 0 or more");
         }
         const after = owner.lastSeen(id);
-        return show(await owner.wait(id, { after, seconds: Math.min(seconds, WAIT_MAX_S), signal: ctx.signal }), ctx);
+        // A message for the model ends the wait, so it reads the message now.
+        const signal = AbortSignal.any([ctx.signal, ctx.steered]);
+        return show(await owner.wait(id, { after, seconds: Math.min(seconds, WAIT_MAX_S), signal }), ctx);
       },
     }),
     tool({

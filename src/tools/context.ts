@@ -107,7 +107,8 @@ export class ToolContext<T = unknown> {
    * aborted, even when the steer is then withdrawn; one withdrawn before the call started never
    * aborts it. It never aborts for a send to another inbox, for a call from a TOOL node, from an
    * agent without a steer inbox, or from inside a flow call the agent made, nor once the call
-   * returned. A rejection with its abort fails the call as any error does. Its abort listeners run
+   * returned. A tool may reject with its abort instead, as a timer, `fetch` or `spawn` given the
+   * signal does; the model reads that a new message stopped the call. Its abort listeners run
    * inside the host's `send` call, so they must not throw.
    */
   readonly steered: AbortSignal;

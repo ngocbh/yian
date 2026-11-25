@@ -592,9 +592,9 @@ output: ${worker.output :- "(stopped)"}
   model call, within the turn cap. An agent with [structured output](/agents/#structured-output) and
   no tools or skills reads its steers once, before its only call.
 - **Waiting tools.** A tool call that waits, such as a long command, can end early when a steer
-  arrives, so the agent reads it at once: the tool watches
-  [`ctx.steered`](/embedding/#tools-and-skills), which is already aborted when the steer came
-  during the model call. An action, or a message to a queue, doesn't abort it.
+  arrives, so the agent reads it at its next step, once the reply's other calls end: the tool
+  watches [`ctx.steered`](/embedding/#tools-and-skills), which is already aborted when the steer
+  came during the model call. An action, or a message to a queue, doesn't abort it.
 - **Render.** `steer_inbox: {from: ${input.notes}, render: "From the owner: ${event}"}` wraps each
   message in a template. The template reads only `${event}`.
 - **A queue.** A message meant for the next turn goes to a second inbox, which only the `take`

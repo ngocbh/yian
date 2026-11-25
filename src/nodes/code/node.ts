@@ -22,13 +22,15 @@
  * root, to resolve inside it); it runs no code.
  *
  * A reference or an inline body runs on a worker thread (`nodes/code/worker`), one call at a time
- * per thread. Idle workers are reused (at most `availableParallelism()` wait), and an idle worker
- * never keeps the process alive; module state and globals may persist between calls that land on
- * the same thread, but nothing guarantees it. A referenced module is imported once per thread and
- * cached there, so an edited file takes effect in a new process or a new thread. An inline body is
- * stripped of its types on this thread, once per body text (the node keeps the load check's
- * result, and so do its copies), and the worker builds it as a strict async function of `inputs`.
- * Both are called the
+ * per thread. Under a run's code root (`caps.codeRoot`), every file the code imports must be inside
+ * it (`confineImports`), and a thread serves only the code root it started under. Idle workers are
+ * reused (at most `availableParallelism()` wait, the least recently used retired first), and an
+ * idle worker never keeps the process alive; module state and globals may persist between calls
+ * that land on the same thread, but nothing guarantees it. A referenced module is imported once per
+ * thread and cached there, so an edited file takes effect in a new process or a new thread. An
+ * inline body is stripped of its types on this thread, once per body text (the node keeps the load
+ * check's result, and so do its copies), and the worker builds it as a strict async function of
+ * `inputs`. Both are called the
  * same way: `inputs` is a frozen host copy of the record (ints as `number`s, big ones as
  * `bigint`s, files as `FileRef`s) behind a proxy that throws on an undeclared name; the reference's
  * named export must be a function. What the code throws (a reference's module while it loads
@@ -416,11 +418,13 @@ interface Call {
 }
 
 /**
- * A started worker, the call it runs (`null` while it is idle or out of service), and the call it
- * last replied to, whose sink takes a line its code prints after its body returned.
+ * A started worker, the code root it holds imports to (`null` for none), the call it runs (`null`
+ * while it is idle or out of service), and the call it last replied to, whose sink takes a line its
+ * code prints after its body returned.
  */
 interface CodeWorker {
   readonly worker: Worker;
+  readonly root: string | null;
   call: Call | null;
   last: Call | null;
 }
@@ -449,11 +453,15 @@ function retire(entry: CodeWorker): Call | null {
   return call;
 }
 
-/** Start a worker whose listeners route to its current call for its whole life. */
-function startWorker(): CodeWorker {
+/**
+ * Start a worker holding imports to `root`, whose listeners route to its current call for its
+ * whole life.
+ */
+function startWorker(root: string | null): CodeWorker {
   // `SHARE_ENV`: a body reads and writes the host's live environment, as it did in-process.
-  const worker = new Worker(WORKER_URL, { env: SHARE_ENV, workerData: { yianCodeWorker: true } });
-  const entry: CodeWorker = { worker, call: null, last: null };
+  const workerData = { yianCodeWorker: true, yianCodeRoot: root };
+  const worker = new Worker(WORKER_URL, { env: SHARE_ENV, workerData });
+  const entry: CodeWorker = { worker, root, call: null, last: null };
   const failed = (error: unknown): void => {
     retire(entry)?.reject(new Error(`CODE worker failed: ${markerMessage(error)}`, { cause: error }));
   };
@@ -470,9 +478,11 @@ function startWorker(): CodeWorker {
     if (call === null || message.id !== call.id) return;
     entry.call = null;
     entry.last = call;
-    if (message.late === true || idle.length >= POOL_SIZE) {
+    if (message.late === true) {
       void worker.terminate();
     } else {
+      // The least recently used gives way, so a new code root's worker is kept too.
+      if (idle.length >= POOL_SIZE) retire(idle[0]!);
       // An idle worker never keeps this process alive.
       worker.unref();
       idle.push(entry);
@@ -491,7 +501,7 @@ function startWorker(): CodeWorker {
 }
 
 /**
- * Run `job` on an idle worker, or a new one, and return its reply.
+ * Run `job` on an idle worker holding imports to `root`, or a new one, and return its reply.
  *
  * @throws The signal's reason when `signal` aborts first; the worker is terminated before this
  *   rejects.
@@ -500,11 +510,13 @@ function startWorker(): CodeWorker {
  */
 function runInWorker(
   job: CodeJob,
+  root: string | null,
   signal: AbortSignal | undefined,
   sink: NodeCaps["console"] | null,
 ): Promise<CodeReply> {
   return new Promise((resolve, reject) => {
-    const entry = idle.pop() ?? startWorker();
+    const at = idle.findLastIndex((each) => each.root === root);
+    const entry = at === -1 ? startWorker(root) : idle.splice(at, 1)[0]!;
     const call: Call = {
       id: ++lastJobId,
       console: sink,
@@ -745,6 +757,7 @@ export class CodeNode extends Node {
    * returns the record). The worker runs with the caller's `current()` values and goes back to the
    * idle pool after its reply.
    *
+   * @param caps.codeRoot Every file the code imports must be inside it; absent for none.
    * @param caps.signal Aborting it terminates the worker, then rejects with its reason. A body
    *   blocked in a synchronous system call (`execSync`, a blocking read) ends when that call
    *   returns; the rejection waits for it, so a stop never settles while a command it ran still runs.
@@ -783,6 +796,7 @@ export class CodeNode extends Node {
         inputs: packFiles(toHost(inputs as Value)),
         defaults: current(),
       },
+      caps.codeRoot ?? null,
       caps.signal,
       caps.console ?? null,
     );

@@ -2,8 +2,9 @@
  * Contracts for `src/platform.ts`: runtime detection; the SQLite wrapper and its result codes; the
  * exclusive file lock; the scheduler and its virtual twin for tests; the waiting lock; the type
  * stripper for CODE bodies, whose errors keep authored line positions; `safeFetch`, against real
- * local servers; and `warn`/`withWarnings`. Child processes check the lock across processes and,
- * with `YIAN_TEST_NODE` set to a Node binary, the built output on Node.
+ * local servers; `warn`/`withWarnings`; and the import guard's refusal of a Bun that preserves
+ * symlinks (the guard itself is checked through the threads it holds). Child processes check the
+ * lock across processes and, with `YIAN_TEST_NODE` set to a Node binary, the built output on Node.
  */
 
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
@@ -1947,4 +1948,16 @@ console.log(JSON.stringify(out));
     // The lazy require("bun:sqlite") is a call, not an import or re-export.
     expect(fs.readFileSync(BUILT, "utf8")).not.toMatch(/^\s*(?:import|export)\b[^;(]*["']bun:/m);
   });
+});
+
+test.if(runtime === "bun")("confineImports refuses a Bun that loads files by their symlinks' paths", () => {
+  const script = `const { confineImports } = await import(${JSON.stringify(SOURCE_URL)});
+try { confineImports(process.cwd()); console.log("installed"); } catch (error) { console.log(error.message); }`;
+  const shown = (flags: string[], env: Record<string, string>) =>
+    spawnSync(process.execPath, [...flags, "-e", script], { cwd: ROOT, env, encoding: "utf8" }).stdout.trim();
+  const refused = "yian can't hold imports to a code root on Bun while it preserves symlinks";
+
+  expect(shown([], {})).toBe("installed");
+  expect(shown(["--preserve-symlinks"], {})).toBe(refused);
+  expect(shown([], { NODE_PRESERVE_SYMLINKS: "1" })).toBe(refused);
 });

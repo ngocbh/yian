@@ -220,6 +220,8 @@ export interface EvalNodeOptions {
   random?: (() => number) | null;
   /** The run's folder, where the run's files go; every node gets it as `caps.runDir`. */
   runDir?: string | null;
+  /** The run's code root; every node gets it as `caps.codeRoot`. */
+  codeRoot?: string | null;
   /** Takes the lines the node's code prints; every node gets it as `caps.console`. */
   console?: NodeCaps["console"] | null;
   /**
@@ -302,6 +304,7 @@ export async function evalNode(
     scheduler = null,
     random = null,
     runDir = null,
+    codeRoot = null,
     console = null,
   } = options;
   const signal = options.signal ?? new AbortController().signal;
@@ -312,6 +315,7 @@ export async function evalNode(
     scheduler,
     random,
     runDir,
+    codeRoot,
     console,
     sourceResolver,
     emitStream,
@@ -338,6 +342,7 @@ async function evaluateNode(
     scheduler: Scheduler | null;
     random: (() => number) | null;
     runDir: string | null;
+    codeRoot: string | null;
     console: NonNullable<NodeCaps["console"]> | null;
     sourceResolver: SourceResolver | null;
     emitStream: NonNullable<NodeCaps["emitStream"]> | null;
@@ -354,7 +359,7 @@ async function evaluateNode(
 ): Promise<WorkerOutcome> {
   const { wiringOverride, signal, sourceResolver } = context;
   const { emitStream, emitEvent, skills, tools, memories, models, steps, steerInbox, scheduler, random, runDir } = context;
-  const { console } = context;
+  const { console, codeRoot } = context;
   // The flow owns every source. A missing trait-declared reserved key is a malformed compiled
   // graph and deliberately escapes the expected binder catch.
   const nodeWiring = wiringFor(node, flow, wiringOverride);
@@ -401,6 +406,7 @@ async function evaluateNode(
   if (scheduler !== null) caps.scheduler = scheduler;
   if (random !== null) caps.random = random;
   if (runDir !== null) caps.runDir = runDir;
+  if (codeRoot !== null) caps.codeRoot = codeRoot;
   if (console !== null) caps.console = console;
   const { bindItem } = bound;
   if (bindItem !== null) {

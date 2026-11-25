@@ -21,12 +21,15 @@
  * `serveToolModule` (`tools/module_worker`), which this module imports statically so a bundle of
  * this entry holds it.
  *
+ * With `workerData.yianCodeRoot` set too, either thread holds every import its code makes to that
+ * folder (`confineImports`), installed before its first one.
+ *
  * Hosts that bundle yian import this module as `@ngocbh/yian/code-worker` for a bundle entry, so
  * every effect must stay behind the `yianCodeWorker` and `yianToolModule` checks.
  *
  * Values and throws cross as `typesys/crossing` packs them.
  *
- * Knows about: typesys, diagnostics, defaults, tools/module_worker and `node:*`.
+ * Knows about: typesys, diagnostics, defaults, platform, tools/module_worker and `node:*`.
  */
 
 import { resolve } from "node:path";
@@ -36,6 +39,7 @@ import { parentPort, workerData } from "node:worker_threads";
 
 import { type Defaults, install } from "../../defaults.ts";
 import { reprText } from "../../diagnostics.ts";
+import { confineImports } from "../../platform.ts";
 import { serveToolModule, type ToolModuleData } from "../../tools/module_worker.ts";
 import { packFiles, type Thrown, thrownOf, tooDeepToCopy, unpackFiles } from "../../typesys/crossing.ts";
 import { YianTypeError } from "../../typesys/errors.ts";
@@ -171,10 +175,16 @@ async function runJob(job: CodeJob): Promise<CodeReply> {
 }
 
 const port = parentPort;
-const data = workerData as { yianCodeWorker?: boolean; yianToolModule?: ToolModuleData } | null;
+const data = workerData as {
+  yianCodeWorker?: boolean;
+  yianToolModule?: ToolModuleData;
+  yianCodeRoot?: string | null;
+} | null;
 if (data?.yianToolModule !== undefined && port !== null) {
+  if (typeof data.yianCodeRoot === "string") confineImports(data.yianCodeRoot);
   serveToolModule(port, data.yianToolModule);
 } else if (data?.yianCodeWorker === true && port !== null) {
+  if (typeof data.yianCodeRoot === "string") confineImports(data.yianCodeRoot);
   /** The id of the job running now, else `null`. */
   let running: number | null = null;
   // Building or posting a reply can throw (a getter on a thrown error, a value the clone

@@ -330,6 +330,8 @@ assistant reads them with it. `/exit` holds them too, and never lets them go: it
 `(not sent: ...)`, as it does a report that comes while the chat closes. Esc never puts a report
 in the prompt.
 
+The flow loads with the chat's folder as its code root, so its CODE steps and tool modules import
+only files inside it ([Imports under a code root](/code-and-tools/#imports-under-a-code-root)).
 The assistant relays a flow's questions to you and sends your answers back, or you answer them in
 the flow's view. Its messages to the flow are signed `yian-chat`, except to an `Inbox(str)` input,
 which takes plain text and can't tell who wrote it. The keys the flow's agents need must already be

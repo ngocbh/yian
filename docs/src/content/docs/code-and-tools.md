@@ -116,6 +116,43 @@ slow CODE node doesn't block the rest of the run.
 - A worker is **not a sandbox**. Code shares the process's privileges, files and environment
   variables. Only run flows whose code you trust.
 
+### Imports under a code root
+
+When your host loads a flow with a code root (`loadFlow`'s [`codeRoot`](/embedding/#run-a-flow),
+or the folder [`yian chat`](/cli/#flows-the-assistant-runs) runs flows in), every file a CODE step
+or a [tool module](#tool-modules) loads must be inside that folder. `yian run` sets no code root.
+
+- A file loads, by path or by package name, through `import`, `import()`, `require`,
+  `createRequire`, `Module` or `process.dlopen`, only when its real path is inside the root.
+  Packages come from the root's own `node_modules`. Any file type the runtime loads (JSON, text,
+  `.wasm`, a `.node` addon) loads from inside and is refused from outside. A hard link or a bind
+  mount inside the root loads, since its real path is inside.
+- Built-ins (`node:*`, `bun:*`) always load. A type-only import (`import type ...`) is erased
+  before the code runs, so it loads nothing.
+- Refused: a `../` path, an absolute path or a symlink that leads out, a package found in a parent
+  folder's `node_modules`, and `data:`, `blob:` and `http(s):` URLs.
+- A call that could undo the guard throws: Node's `module.registerHooks` and `module.register`,
+  and Bun's `Bun.plugin.clearAll`. So a package that registers module hooks of its own, or replaces
+  `process.dlopen`, fails under a code root.
+- A refused import fails the CODE step, or keeps the run from starting when a tool module makes
+  it. The error names the importing file and the import. On Bun, a package found outside is named
+  by the file it loads, and Bun started with `--preserve-symlinks` or `NODE_PRESERVE_SYMLINKS=1`
+  refuses every import a confined thread makes. A root whose real path changed after the flow
+  loaded (moved, or replaced by a symlink) fails every CODE step and tool module.
+
+```text
+crm.ts imports '../shared/x.ts', which resolves outside the code root
+```
+
+This fixes which files load; it isn't a sandbox. Code can still read a file and `eval` it, or hand
+its text to a Bun plugin of its own; start a process, or a `Worker`, whose imports aren't held to
+the root; build with `Bun.build`, whose macros run from any file; open a library through
+`bun:ffi`'s `dlopen` or a SQLite `loadExtension` (`bun:sqlite`, `node:sqlite`); or reach any
+built-in through `process.getBuiltinModule`. The guard runs on the code's own thread. It takes the
+built-ins it checks with before the code starts, but code that changes the runtime around it, such
+as a built-in the runtime's own loader reads, is in the same class as `eval` and isn't covered. It
+protects you only while no one you don't trust can write to the code root.
+
 ### Bun and Node
 
 yian strips the types from inline bodies itself, so inline bodies behave the same on both
@@ -290,7 +327,8 @@ stops or waits.
   effects.
 - One thread serves every call to its module, interleaved; a call that blocks the thread stalls
   only that module's calls.
-- The thread is **not a sandbox**, as CODE's worker isn't.
+- The thread is **not a sandbox**, as CODE's worker isn't. Under a code root, what it imports
+  must be inside it ([Imports under a code root](#imports-under-a-code-root)).
 - The run refuses to start, naming the file (from the root flow's folder) and the export, when
   an import throws or outlasts `YIAN_TOOL_MODULE_START_TIMEOUT_SECONDS` (30), a one-export alias
   names an export that is missing or isn't a tool, or a group's file has no tools, a refused

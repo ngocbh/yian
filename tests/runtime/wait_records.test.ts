@@ -331,7 +331,54 @@ test.each<[string, () => unknown, typeof TypeError | typeof RangeError, string]>
     TypeError,
     "take closed must be a boolean",
   ],
+  [
+    "an empty list of inboxes",
+    () => new PoolCommitRecord("e", "e", null, { take: { inbox: [], events: [], closed: [] } }),
+    RangeError,
+    "take inbox must list at least one inbox",
+  ],
+  [
+    "an inbox listed twice",
+    () => new PoolCommitRecord("e", "e", null, { take: { inbox: ["m", "m"], events: [], closed: [] } }),
+    RangeError,
+    "take inbox must contain unique IDs",
+  ],
+  [
+    "a boolean closed for a list",
+    () => new PoolCommitRecord("e", "e", null, { take: { inbox: ["m", "q"], events: [], closed: false } }),
+    TypeError,
+    "the closed of a take of a list must be a list",
+  ],
+  [
+    "a closed inbox outside the list",
+    () => new PoolCommitRecord("e", "e", null, { take: { inbox: ["m", "q"], events: [], closed: ["x"] } }),
+    RangeError,
+    "take closed must name listed inboxes, in list order",
+  ],
+  [
+    "closed inboxes out of list order",
+    () => new PoolCommitRecord("e", "e", null, { take: { inbox: ["m", "q"], events: [], closed: ["q", "m"] } }),
+    RangeError,
+    "take closed must name listed inboxes, in list order",
+  ],
 ])("the take commit refuses %s", (_name, build, cls, message) => expectError(build, cls, message));
+
+test("a take of a list of inboxes records the list, and the closed ones as a list", () => {
+  const record = new PoolCommitRecord("heard", "heard", null, { take: { inbox: ["m", "q"], events: [9, 12], closed: ["q"] } });
+  expect(Object.isFrozen(record.take!.inbox) && Object.isFrozen(record.take!.closed)).toBe(true);
+  const encoded = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "r", 13, record));
+  expect(encoded).toContain('"payload":{"closed":["q"],"events":[9,12],"inbox":["m","q"],"key":"heard","node_id":"heard"}');
+  expect(decodeRecord(encoded).record).toEqual(record);
+  const waiting = new NodeWaitingRecord("heard", ["r/heard"], { waits: [{ ...take, inbox: ["m", "q"] }] });
+  const line = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "r", 3, waiting));
+  expect(line).toContain('"inbox":["m","q"]');
+  expect(decodeRecord(line).record).toEqual(waiting);
+  expectError(
+    () => new NodeWaitingRecord("heard", ["r/heard"], { waits: [{ ...take, inbox: [] }] }),
+    RangeError,
+    "wait entry inbox must list at least one inbox",
+  );
+});
 
 test.each<[string, Record<string, unknown>, string]>([
   [

@@ -144,3 +144,74 @@ test.each([
 ])("take refuses %s", (_label, inputs, message) => {
   expect(refused(takeWith(inputs))).toContain(message);
 });
+
+/** A take of inboxes `m` and `q`: its output names each event's inbox by its input name. */
+const SEVERAL = `id: chat
+name: chat
+input:
+  m: !Inbox(str)
+  q: !Inbox(str)
+nodes:
+  heard:
+    kind: call
+    call: take
+    input:
+      from:
+        - \${input.m}
+        - \${input.q}
+output: \${heard.output.events}
+`;
+
+test("a take of a list of inboxes names each event's inbox and the closed ones", () => {
+  const node = assembleText(SEVERAL).flow.compiled.nodes.get("heard") as ToolNode;
+  expect(node.fromNames).toEqual(["m", "q"]);
+  expect(canonicalTypeLabel(outputContractType(node.outputContract)!)).toBe(
+    '{"closed":bool,"closed_inboxes":list(Literal(m, q)),"events":list({"event":str,"inbox":Literal(m, q)})}',
+  );
+  // A take of one inbox names none.
+  expect((assembleText(CHAT).flow.compiled.nodes.get("heard") as ToolNode).fromNames).toBeNull();
+});
+
+/** Return a flow with inboxes `m` and `q`, an `Inbox(int)` `n` and text `t`, whose take lists `items`. */
+const listing = (items: string) => `id: f
+name: f
+input:
+  m: !Inbox(str)
+  q: !Inbox(str)
+  n: !Inbox(int)
+  t: !str
+nodes:
+  t1:
+    kind: call
+    call: take
+    input:
+      from: ${items}
+  keep:
+    kind: call
+    call: take
+    input:
+      from:
+        - \${input.m}
+        - \${input.q}
+  keep_n:
+    kind: call
+    call: take
+    input:
+      from: \${input.n}
+output: \${input.t}
+`;
+
+test.each([
+  ["an empty list", "[]", "take's from lists no inbox; list at least one, as ${input.<name>}"],
+  ["an inbox twice", '["${input.m}", "${input.m}"]', "take's from lists inbox input 'm' twice"],
+  ["a text input", '["${input.m}", "${input.t}"]', "take's from lists ${input.t}, which isn't an Inbox input of this flow"],
+  ["a literal", '["${input.m}", m]', `take's from lists "m", which isn't an Inbox input of this flow`],
+  ["inboxes of two types", '["${input.m}", "${input.n}"]', "take's from lists inboxes of two types, Inbox(str) and Inbox(int)"],
+])("a take's list refuses %s", (_label, items, message) => {
+  expect(refused(listing(items))).toContain(message);
+});
+
+test("a take of a list of one inbox names its events too", () => {
+  const node = assembleText(listing('["${input.q}"]')).flow.compiled.nodes.get("t1") as ToolNode;
+  expect(node.fromNames).toEqual(["q"]);
+});

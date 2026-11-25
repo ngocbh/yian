@@ -2222,7 +2222,7 @@ test(
 );
 
 test("an inbox is drained while a take on it waits, unsettled", () => {
-  const wait = (tool: string, inbox: string | null, settled = false) => ({
+  const wait = (tool: string, inbox: string | readonly string[] | null, settled = false) => ({
     node: "chat/turn/heard",
     callId: "c1",
     tool,
@@ -2234,6 +2234,7 @@ test("an inbox is drained while a take on it waits, unsettled", () => {
   expect(inboxDrained([wait("take", "messages")], "messages")).toBe(true);
   expect(inboxDrained([wait("take", "messages", true)], "messages")).toBe(false);
   expect(inboxDrained([wait("take", "other")], "messages")).toBe(false);
+  expect(inboxDrained([wait("take", ["messages", "queued"])], "messages")).toBe(true);
   expect(inboxDrained([wait("sleep", null)], "messages")).toBe(false);
   expect(inboxDrained([], "messages")).toBe(false);
 });

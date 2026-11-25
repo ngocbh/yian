@@ -841,7 +841,7 @@ console.log(JSON.stringify({ warnings, runs: readRunIndex(${JSON.stringify(runs)
     try {
       const { scan } = reader.prepare("SELECT scan FROM runs").get() as { scan: string };
       expect(JSON.parse(scan).waits.stops).toEqual([]);
-      expect(reader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 10 * 1000 + SCHEMA_VERSION });
+      expect(reader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 11 * 1000 + SCHEMA_VERSION });
     } finally {
       reader.close();
     }

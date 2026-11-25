@@ -103,8 +103,8 @@ optional `timeout`; or
 `adaptive_questions: {prompt: ...}` beside `input`. A `questions:` answer is a record keyed by
 `header`. Other inputs reach the host's handler, which must declare them.
 
-**take**: `call: take`, `input` with `from: ${input.<inbox>}`, optional `take:` (`one`, the
-default, or `all`) and optional `timeout:`.
+**take**: `call: take`, `input` with `from: ${input.<inbox>}` (or a list of them, of one type),
+optional `take:` (`one`, the default, or `all`) and optional `timeout:`.
 **sleep**: `call: sleep`, `input` with exactly one of `until:` (a date or datetime, UTC when
 it has no offset) or `for:` (a duration). Its output is null.
 

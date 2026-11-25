@@ -47,7 +47,7 @@ import {
   type WaitInfo,
   withdraw,
 } from "../run.ts";
-import { type InboxClosedRecord, iterRunRecords, recordTimeMs } from "../runtime/log.ts";
+import { type InboxClosedRecord, iterRunRecords, recordTimeMs, takeInboxes } from "../runtime/log.ts";
 import { wakeAt } from "../runtime/waits.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
@@ -348,7 +348,7 @@ function lastWaitingSeq(path: string): number {
  * waits, unsettled, among `waits`, which it does only once nothing sent is left to read.
  */
 export function inboxDrained(waits: readonly WaitInfo[], inbox: string): boolean {
-  return waits.some((wait) => wait.tool === "take" && wait.inbox === inbox && !wait.settled);
+  return waits.some((wait) => wait.tool === "take" && takeInboxes(wait.inbox!).includes(inbox) && !wait.settled);
 }
 
 /** Return the text a withdrawn event holds: a `str` as it is, a message's text parts joined. */

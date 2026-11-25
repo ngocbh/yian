@@ -38,6 +38,8 @@ import {
   recordTimeMs,
   requireRecordTime,
   type TakeCommit,
+  type TakeInbox,
+  takeInboxes,
   validatedBy,
   type WaitEntry,
 } from "./log.ts";
@@ -57,8 +59,8 @@ export interface Call {
   readonly tool: string;
   /** The key the call's answer is stored under: the agent's tool call id, else the call id. */
   readonly resultKey: string;
-  /** The inbox a take reads; `null` for any other call. */
-  readonly inbox: string | null;
+  /** The inbox a take reads, or the list its `from:` names; `null` for any other call. */
+  readonly inbox: TakeInbox | null;
   /** A take's mode; `null` for any other call. */
   readonly mode: "one" | "all" | null;
   /** When the call times out, as a record time; `null` when it doesn't. */
@@ -87,7 +89,9 @@ export interface Call {
   resultSeq: number | null;
   /** A take's assigned send seqs, in assignment order. */
   assigned: number[];
-  /** Whether a take was answered by its inbox closing with nothing assigned. */
+  /** The inbox of each of `assigned`, in step with it. */
+  assignedInboxes: string[];
+  /** Whether a take was answered by its inbox (each of its inboxes) closing with nothing assigned. */
   closedInbox: boolean;
   /** Why the call was closed, when its state is `closed`. */
   closedReason: CloseReason | null;
@@ -141,7 +145,8 @@ export interface WaitInfo {
   readonly node: string;
   readonly callId: string;
   readonly tool: string;
-  readonly inbox: string | null;
+  /** The inbox a take reads, or the list its `from:` names; `null` for any other call. */
+  readonly inbox: TakeInbox | null;
   readonly deadline: string | null;
   /** Whether the call is already answered, timed out, closed or released, so its node is about to wake. */
   readonly settled: boolean;
@@ -290,6 +295,11 @@ function texts(value: unknown): string[] | null {
   return Array.isArray(value) && value.every((item) => typeof item === "string") ? [...value] : null;
 }
 
+/** Return `items` when it holds at least one item, else `undefined`. */
+function nonEmpty(items: string[] | null): string[] | undefined {
+  return items !== null && items.length > 0 ? items : undefined;
+}
+
 /** Return the `[key, value]` entries of the map field `name`. @throws RangeError when they aren't. */
 function entries(json: Record<string, unknown>, name: string): [string, unknown][] {
   const value = json[name];
@@ -322,7 +332,7 @@ function callFromJson(value: unknown, label: string): Call {
     nodeId: text("nodeId"),
     tool: text("tool"),
     resultKey: text("resultKey"),
-    inbox: textOrNull("inbox"),
+    inbox: value["inbox"] === null ? null : (text("inbox") ?? nonEmpty(texts(value["inbox"]))),
     mode: textOrNull("mode"),
     deadline: textOrNull("deadline"),
     seq: intOrNull(value["seq"]) ?? undefined,
@@ -330,6 +340,7 @@ function callFromJson(value: unknown, label: string): Call {
     state: text("state"),
     resultSeq: intOrNullField("resultSeq"),
     assigned: seqList(value["assigned"]) ?? undefined,
+    assignedInboxes: texts(value["assignedInboxes"]) ?? undefined,
     closedInbox: typeof value["closedInbox"] === "boolean" ? value["closedInbox"] : undefined,
     closedReason: textOrNull("closedReason"),
     closedSeq: intOrNullField("closedSeq"),
@@ -343,6 +354,7 @@ function callFromJson(value: unknown, label: string): Call {
   if (
     Object.values(call).some((field) => field === undefined) ||
     (call.mode !== null && call.mode !== "one" && call.mode !== "all") ||
+    call.assignedInboxes!.length !== call.assigned!.length ||
     !(CALL_STATES as readonly string[]).includes(call.state!) ||
     (call.closedReason !== null && !(CLOSE_REASONS as readonly string[]).includes(call.closedReason!)) ||
     // A closed call keeps the seq of the record that closed it, and a released one its release's.
@@ -387,10 +399,11 @@ function takeFromJson(value: unknown, label: string): { readonly seq: number } &
   const events = isObject(value) ? seqList(value["events"]) : null;
   const inbox = isObject(value) ? value["inbox"] : undefined;
   const closed = isObject(value) ? value["closed"] : undefined;
-  if (seq === null || events === null || typeof inbox !== "string" || typeof closed !== "boolean") {
-    throw new YianRangeError(`waits JSON ${label} must be a take commit`);
-  }
-  return { seq, inbox, events, closed };
+  // One inbox closes as a bool; a list names its closed inboxes.
+  const one = typeof inbox === "string" && typeof closed === "boolean";
+  const listed = nonEmpty(texts(inbox)) !== undefined && texts(closed) !== null;
+  if (seq === null || events === null || !(one || listed)) throw new YianRangeError(`waits JSON ${label} must be a take commit`);
+  return { seq, inbox: inbox as TakeInbox, events, closed: closed as TakeCommit["closed"] };
 }
 
 /** The plain JSON form of a `WaitsState`. */
@@ -467,7 +480,7 @@ export function applyWaitsRecord(w: WaitsState, envelope: { readonly seq: number
     // A resume drops every orphan commit, an inline take's among them, so its events are free again.
     const freed = [...w._pendingTakes.values()];
     w._pendingTakes.clear();
-    for (const take of freed) reoffer(w, take.inbox);
+    for (const take of freed) reoffer(w, takeInboxes(take.inbox));
     for (const callId of record.closedCalls) close(w.calls.get(callId), "crashed", seq);
   } else if (record instanceof InboxClosedRecord) applyClose(w, record.inbox);
   else if (record instanceof InboxWithdrawnRecord) applyWithdrawn(w, record);
@@ -493,6 +506,32 @@ function inboxOf(w: WaitsState, name: string): InboxState {
   return inbox;
 }
 
+/** Return whether inbox `name` is closed. */
+function isClosed(w: WaitsState, name: string): boolean {
+  return w.inboxes.get(name)?.closed ?? false;
+}
+
+/** End the remembered Stop on each inbox of `inbox`: a take picked up from it. */
+function pickup(w: WaitsState, inbox: TakeInbox): void {
+  for (const name of takeInboxes(inbox)) w.stops.delete(name);
+}
+
+/** Take `call` out of the absorbing takes of each inbox it reads. */
+function stopAbsorbing(w: WaitsState, call: Call): void {
+  if (call.inbox !== null) for (const name of takeInboxes(call.inbox)) remove(inboxOf(w, name).absorbing, call.callId);
+}
+
+/** Assign `call` the send `seq` of inbox `name`, after those it holds. */
+function hold(call: Call, seq: number, name: string): void {
+  call.assigned.push(seq);
+  call.assignedInboxes.push(name);
+}
+
+/** Return the unread events of inboxes `names` a new take may read (`availableUnread`), each with its inbox, in seq order. */
+export function availableIn(w: WaitsState, names: readonly string[]): (readonly [number, string])[] {
+  return names.flatMap((name) => availableUnread(w, name).map((seq) => [seq, name] as const)).sort(([a], [b]) => a - b);
+}
+
 /** Remove `item` from `items` in place, if it is there. */
 function remove<T>(items: T[], item: T): void {
   const index = items.indexOf(item);
@@ -512,42 +551,37 @@ function applyCommit(w: WaitsState, seq: number, record: PoolCommitRecord): void
   if (record.take !== null) {
     w._pendingTakes.set(record.nodeId, { seq, ...record.take });
     // An inline take is a pickup from the inbox; a waited take's commit isn't (its wait or answer was).
-    if (!nodeCalls(w, record.nodeId).some((call) => call.tool === "take")) w.stops.delete(record.take.inbox);
+    if (!nodeCalls(w, record.nodeId).some((call) => call.tool === "take")) pickup(w, record.take.inbox);
     return;
   }
   if (!record.key.startsWith(SEND_PREFIX)) return;
-  const inbox = inboxOf(w, record.key.slice(SEND_PREFIX.length));
-  if (!assign(w, inbox, seq)) inbox.unread.push(seq);
+  const name = record.key.slice(SEND_PREFIX.length);
+  if (!assign(w, name, seq)) inboxOf(w, name).unread.push(seq);
 }
 
 /**
- * Assign the event `seq` to `inbox`'s oldest absorbing take, which stops absorbing after one
- * event for `take: one`; return whether a take was absorbing.
+ * Assign the event `seq` of inbox `name` to its oldest absorbing take, which stops absorbing (from
+ * each inbox it reads) after one event for `take: one`; return whether a take was absorbing.
  */
-function assign(w: WaitsState, inbox: InboxState, seq: number): boolean {
-  const takeId = inbox.absorbing[0];
+function assign(w: WaitsState, name: string, seq: number): boolean {
+  const takeId = inboxOf(w, name).absorbing[0];
   const take = takeId === undefined ? undefined : w.calls.get(takeId);
   if (take === undefined) return false;
   // Answering a waiting take is a pickup; a second event for an answered `take: all` isn't.
-  if (take.state === "open") w.stops.delete(take.inbox!);
-  take.assigned.push(seq);
+  if (take.state === "open") pickup(w, take.inbox!);
+  hold(take, seq, name);
   take.state = "answered";
-  if (take.mode === "one") inbox.absorbing.shift();
+  if (take.mode === "one") stopAbsorbing(w, take);
   return true;
 }
 
 /**
- * Offer the unread events of inbox `name` no pending take commit holds, oldest first, to its
+ * Offer the unread events of inboxes `names` no pending take commit holds, oldest first, to their
  * absorbing takes, as each would have gone had it been sent now: events a dropped take commit
  * held are free again, and a take that waited meanwhile is first in line.
  */
-function reoffer(w: WaitsState, name: string): void {
-  const inbox = w.inboxes.get(name);
-  if (inbox === undefined) return;
-  for (const seq of availableUnread(w, name)) {
-    if (!assign(w, inbox, seq)) return;
-    remove(inbox.unread, seq);
-  }
+function reoffer(w: WaitsState, names: readonly string[]): void {
+  for (const [seq, name] of availableIn(w, names)) if (assign(w, name, seq)) remove(inboxOf(w, name).unread, seq);
 }
 
 /**
@@ -576,6 +610,7 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
       state: "open",
       resultSeq: null,
       assigned: [],
+      assignedInboxes: [],
       closedInbox: false,
       closedReason: null,
       closedSeq: null,
@@ -682,7 +717,10 @@ function endScope(w: WaitsState, scope: string): void {
   for (const nodeId of nodes) settle(w, nodeId);
 }
 
-/** Apply `node_waiting`: register its take or sleep (a take joins its inbox's absorbing takes) and move the node to the waiting set. */
+/**
+ * Apply `node_waiting`: register its take or sleep (a take joins the absorbing takes of each open
+ * inbox it reads) and move the node to the waiting set.
+ */
 function applyWaiting(w: WaitsState, seq: number, record: NodeWaitingRecord): void {
   for (const entry of record.waits) {
     w.calls.set(entry.callId, {
@@ -698,6 +736,7 @@ function applyWaiting(w: WaitsState, seq: number, record: NodeWaitingRecord): vo
       state: "open",
       resultSeq: null,
       assigned: [],
+      assignedInboxes: [],
       closedInbox: false,
       closedReason: null,
       closedSeq: null,
@@ -709,9 +748,12 @@ function applyWaiting(w: WaitsState, seq: number, record: NodeWaitingRecord): vo
       held: false,
     });
     if (entry.tool === "take") {
-      inboxOf(w, entry.inbox!).absorbing.push(entry.callId);
+      for (const name of takeInboxes(entry.inbox!)) {
+        // A closed inbox gets no more sends; a take of several waits on the others.
+        if (!isClosed(w, name)) inboxOf(w, name).absorbing.push(entry.callId);
+      }
       // The run waits for the inbox's next message: a pickup.
-      w.stops.delete(entry.inbox!);
+      pickup(w, entry.inbox!);
     }
   }
   w.waiting.set(record.nodeId, { seq, callIds: record.callIds, steerInbox: record.steerInbox });
@@ -725,11 +767,9 @@ function applyWoken(w: WaitsState, seq: number, record: NodeWokenRecord): void {
     if (call.tool === "take" || call.tool === "sleep") call.state = "timed_out";
     else close(call, "timed_out", seq);
     // A take timing out is a pickup (of nothing).
-    if (call.tool === "take") w.stops.delete(call.inbox!);
+    if (call.tool === "take") pickup(w, call.inbox!);
   }
-  for (const call of nodeCalls(w, record.nodeId)) {
-    if (call.inbox !== null) remove(inboxOf(w, call.inbox).absorbing, call.callId);
-  }
+  for (const call of nodeCalls(w, record.nodeId)) stopAbsorbing(w, call);
   w.waiting.delete(record.nodeId);
   w._lastWoken.set(record.nodeId, seq);
 }
@@ -750,26 +790,31 @@ function applySuccess(w: WaitsState, record: NodeSucceededRecord): void {
   // A waiting take's events were assigned, never unread; only an inline take's are taken here.
   const waited = nodeCalls(w, record.nodeId).some((call) => call.tool === "take");
   if (take !== undefined && take.seq === record.commit && !waited) {
-    const unread = inboxOf(w, take.inbox).unread;
-    for (const event of take.events) remove(unread, event);
+    for (const name of takeInboxes(take.inbox)) {
+      const unread = inboxOf(w, name).unread;
+      for (const event of take.events) remove(unread, event);
+    }
   }
   settle(w, record.nodeId);
   // END's success ends the run.
   if (record.nodeId === EndNode.ID) w.stops.clear();
 }
 
-/** Apply `inbox_closed`: absorbing takes with nothing assigned are answered by the close; none absorbs after it. */
+/**
+ * Apply `inbox_closed`: absorbing takes with nothing assigned are answered by the close, a take of
+ * several inboxes only once each of them is closed; none absorbs after it.
+ */
 function applyClose(w: WaitsState, name: string): void {
   const inbox = inboxOf(w, name);
   inbox.closed = true;
   for (const callId of inbox.absorbing) {
     const call = w.calls.get(callId);
-    if (call !== undefined && call.assigned.length === 0) {
-      call.state = "answered";
-      call.closedInbox = true;
-      // The close answers a waiting take: a pickup.
-      w.stops.delete(name);
-    }
+    if (call === undefined || call.assigned.length > 0) continue;
+    if (!takeInboxes(call.inbox!).every((other) => isClosed(w, other))) continue;
+    call.state = "answered";
+    call.closedInbox = true;
+    // The close answers a waiting take: a pickup.
+    pickup(w, call.inbox!);
   }
   inbox.absorbing.length = 0;
 }
@@ -780,43 +825,62 @@ function applyClose(w: WaitsState, name: string): void {
  * takes that lost theirs, oldest first, as new sends would, and a take that lost nothing keeps what
  * it holds. No take absorbs a closed inbox: there a take keeps the sends not named, and one left
  * with none reads what is still unread, as a new take would, and takes the close only when nothing
- * is.
+ * is. A take of several inboxes does the same across them: it keeps the sends of its closed
+ * inboxes, and reads what is unread directly only once each of them is closed.
  */
 function applyWithdrawn(w: WaitsState, record: InboxWithdrawnRecord): void {
-  const inbox = inboxOf(w, record.inbox);
   const withdrawn = new Set(record.events);
-  for (const seq of record.events) remove(inbox.unread, seq);
+  for (const seq of record.events) remove(inboxOf(w, record.inbox).unread, seq);
+  const offered = new Set([record.inbox]);
   for (const call of waitedTakes(w, record.inbox)) {
-    const kept = call.assigned.filter((seq) => !withdrawn.has(seq));
+    const kept = call.assigned.flatMap((seq, index) => (withdrawn.has(seq) ? [] : [[seq, call.assignedInboxes[index]!] as const]));
     if (kept.length === call.assigned.length) continue;
     call.assigned.length = 0;
-    if (inbox.closed && kept.length > 0) {
-      call.assigned.push(...kept);
+    call.assignedInboxes.length = 0;
+    const names = takeInboxes(call.inbox!);
+    const allClosed = names.every((name) => isClosed(w, name));
+    if (allClosed && kept.length > 0) {
+      for (const [seq, name] of kept) hold(call, seq, name);
       continue;
     }
-    // The take waits for the inbox's next message again (or reads what is left, or the close): a pickup.
-    w.stops.delete(record.inbox);
-    if (inbox.closed) {
-      const available = availableUnread(w, record.inbox);
+    // The take waits for its inboxes' next message again (or reads what is left, or the close): a pickup.
+    pickup(w, call.inbox!);
+    if (allClosed) {
+      const available = availableIn(w, names);
       const next = call.mode === "one" ? available.slice(0, 1) : available;
-      for (const seq of next) remove(inbox.unread, seq);
-      call.assigned.push(...next);
+      for (const [seq, name] of next) {
+        remove(inboxOf(w, name).unread, seq);
+        hold(call, seq, name);
+      }
       call.closedInbox = next.length === 0;
       continue;
     }
-    inbox.unread.push(...kept);
+    for (const [seq, name] of kept) {
+      if (isClosed(w, name)) hold(call, seq, name);
+      else inboxOf(w, name).unread.push(seq);
+    }
+    if (call.assigned.length > 0) continue;
     call.state = "open";
-    // A `take: all` never left absorbing; a `take: one` shifted out at its assignment.
-    if (!inbox.absorbing.includes(call.callId)) {
-      const later = inbox.absorbing.findIndex((id) => {
-        const other = w.calls.get(id);
-        return other !== undefined && other.seq > call.seq;
-      });
-      inbox.absorbing.splice(later < 0 ? inbox.absorbing.length : later, 0, call.callId);
+    // A `take: all` never left absorbing; a `take: one` left it at its assignment.
+    for (const name of names) {
+      if (isClosed(w, name)) continue;
+      absorbAgain(w, call, name);
+      offered.add(name);
     }
   }
-  inbox.unread.sort((a, b) => a - b);
-  reoffer(w, record.inbox);
+  for (const name of offered) inboxOf(w, name).unread.sort((a, b) => a - b);
+  reoffer(w, [...offered]);
+}
+
+/** Put `call` back among the absorbing takes of inbox `name`, in call order, unless it is there. */
+function absorbAgain(w: WaitsState, call: Call, name: string): void {
+  const inbox = inboxOf(w, name);
+  if (inbox.absorbing.includes(call.callId)) return;
+  const later = inbox.absorbing.findIndex((id) => {
+    const other = w.calls.get(id);
+    return other !== undefined && other.seq > call.seq;
+  });
+  inbox.absorbing.splice(later < 0 ? inbox.absorbing.length : later, 0, call.callId);
 }
 
 /** Close `call` with `reason` when it is open, at the record at `seq`. */
@@ -839,14 +903,14 @@ function closeOpenCalls(w: WaitsState, reason: CloseReason, seq: number): void {
 /** Forget a settled node's calls and bookkeeping; a take commit no success accepted frees its events. */
 function settle(w: WaitsState, nodeId: string): void {
   for (const call of nodeCalls(w, nodeId)) {
-    if (call.inbox !== null) remove(inboxOf(w, call.inbox).absorbing, call.callId);
+    stopAbsorbing(w, call);
     w.calls.delete(call.callId);
   }
   w.waiting.delete(nodeId);
   w._lastWoken.delete(nodeId);
   const take = w._pendingTakes.get(nodeId);
   w._pendingTakes.delete(nodeId);
-  if (take !== undefined) reoffer(w, take.inbox);
+  if (take !== undefined) reoffer(w, takeInboxes(take.inbox));
   w.interrupts.delete(nodeId);
   w._replies.delete(nodeId);
   w._honored.delete(nodeId);
@@ -888,9 +952,11 @@ export function availableUnread(w: WaitsState, inbox: string): readonly number[]
   return (w.inboxes.get(inbox)?.unread ?? []).filter((seq) => !held.has(seq));
 }
 
-/** Return the take calls on inbox `name` whose node waits (hasn't woken), in registration order. */
+/** Return the take calls reading inbox `name` whose node waits (hasn't woken), in registration order. */
 function waitedTakes(w: WaitsState, name: string): Call[] {
-  return [...w.calls.values()].filter((call) => call.tool === "take" && call.inbox === name && w.waiting.has(call.nodeId));
+  return [...w.calls.values()].filter(
+    (call) => call.tool === "take" && takeInboxes(call.inbox!).includes(name) && w.waiting.has(call.nodeId),
+  );
 }
 
 /**
@@ -901,7 +967,8 @@ function waitedTakes(w: WaitsState, name: string): Call[] {
  */
 export function withdrawableEvents(w: WaitsState, name: string): readonly number[] {
   const unread = w.inboxes.get(name)?.unread ?? [];
-  return [...unread, ...waitedTakes(w, name).flatMap((call) => call.assigned)].sort((a, b) => a - b);
+  const held = waitedTakes(w, name).flatMap((call) => call.assigned.filter((_, index) => call.assignedInboxes[index] === name));
+  return [...unread, ...held].sort((a, b) => a - b);
 }
 
 /**
@@ -992,6 +1059,10 @@ export type WaitDecision =
  * and otherwise the node waits, until `nowMs` plus the timeout when there is one. A new sleep waits
  * until its `until` or `nowMs` plus its seconds, or is done when that time isn't after `nowMs`.
  *
+ * A take of a list of inboxes reads their events together, in seq order, and its commit names the
+ * listed inboxes that are closed with nothing left; with none to read it takes nothing at once only
+ * when each of them is closed (or on a zero timeout). A timed-out one names them too.
+ *
  * @throws RangeError when `callId` is registered but still open, closed, or not a take or sleep
  *   call, or a sleep's `until` isn't a record time.
  */
@@ -999,14 +1070,15 @@ export function decideWait(w: WaitsState, callId: string, request: WaitRequest, 
   const held = w.calls.get(callId);
   if (held !== undefined) return heldDecision(w, held);
   if (request.tool === "take") {
-    const inbox = w.inboxes.get(request.inbox);
-    const closed = inbox?.closed ?? false;
-    const available = availableUnread(w, request.inbox);
-    if (available.length > 0) {
-      const events = request.mode === "one" ? available.slice(0, 1) : [...available];
-      return take(request.inbox, events, closed && events.length === available.length);
+    const names = takeInboxes(request.inbox);
+    const available = availableIn(w, names);
+    const events = request.mode === "one" ? available.slice(0, 1) : available;
+    const left = available.slice(events.length);
+    const done = (name: string) => isClosed(w, name) && !left.some(([, of]) => of === name);
+    const allClosed = names.every((name) => isClosed(w, name));
+    if (events.length > 0 || allClosed || (request.timeoutSeconds !== null && request.timeoutSeconds <= 0)) {
+      return take(request.inbox, events.map(([seq]) => seq), done);
     }
-    if (closed || (request.timeoutSeconds !== null && request.timeoutSeconds <= 0)) return take(request.inbox, [], closed);
     const deadline = request.timeoutSeconds === null ? null : formatRecordTime(nowMs + request.timeoutSeconds * 1000);
     return { kind: "wait", entry: { callId, tool: "take", inbox: request.inbox, mode: request.mode, deadline } };
   }
@@ -1025,12 +1097,22 @@ function heldDecision(w: WaitsState, call: Call): WaitDecision {
   if (call.state === "closed") throw new YianRangeError(`call ${reprText(call.callId)} was closed (${call.closedReason})`);
   if (call.tool === "sleep") return { kind: "slept" };
   const inbox = call.inbox!;
-  if (call.state === "timed_out") return take(inbox, [], false);
-  const closed = (w.inboxes.get(inbox)?.closed ?? false) && availableUnread(w, inbox).length === 0;
-  return take(inbox, [...call.assigned], closed);
+  const done = (name: string) => isClosed(w, name) && availableUnread(w, name).length === 0;
+  // A take of one inbox can't time out on a closed one, so it takes the timeout as not closed.
+  if (call.state === "timed_out") return take(inbox, [], (name) => typeof inbox !== "string" && done(name));
+  return take(inbox, takenEvents(call), done);
 }
 
-/** Return a take decision. */
-function take(inbox: string, events: readonly number[], closed: boolean): WaitDecision {
+/** Return the sends a settled take call takes: what it was assigned, in seq order; none once it timed out. */
+export function takenEvents(call: Call): number[] {
+  return call.state === "timed_out" ? [] : [...call.assigned].sort((a, b) => a - b);
+}
+
+/**
+ * Return a take decision: `closed` says whether `done` holds for its inbox, or names each listed
+ * inbox it holds for.
+ */
+function take(inbox: TakeInbox, events: readonly number[], done: (name: string) => boolean): WaitDecision {
+  const closed = typeof inbox === "string" ? done(inbox) : inbox.filter(done);
   return { kind: "take", commit: { inbox, events, closed } };
 }

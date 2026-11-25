@@ -1,0 +1,213 @@
+# Four messages wait in two inboxes before the takes run (a send to `go` starts them). `take: one`
+# reads the oldest of either, `m1`; `take: all` then reads the rest across both, in the order they
+# were sent.
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    messages: !Inbox(str)
+    queued: !Inbox(str)
+    go: !Inbox(str)
+  nodes:
+    gate:
+      kind: call
+      call: take
+      input:
+        from: ${input.go}
+    one:
+      kind: call
+      call: take
+      runs_after: [gate]
+      input:
+        from: ["${input.messages}", "${input.queued}"]
+        take: one
+    all:
+      kind: call
+      call: take
+      runs_after: [one]
+      input:
+        from: ["${input.messages}", "${input.queued}"]
+        take: all
+  output:
+    one: ${one.output.events}
+    all: ${all.output.events}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  sends:
+  - {inbox: messages, event: m1, hold: true}
+  - {inbox: queued, event: q1, hold: true}
+  - {inbox: messages, event: m2, hold: true}
+  - {inbox: queued, event: q2, hold: true}
+  - {inbox: go, event: go}
+expect:
+  output:
+    status: succeeded
+    output:
+      one:
+      - {event: m1, inbox: messages}
+      all:
+      - {event: q1, inbox: queued}
+      - {event: m2, inbox: messages}
+      - {event: q2, inbox: queued}
+  trace:
+  - - run_started
+    - null
+    - {num_workers: 0}
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        go: {inbox: go}
+        messages: {inbox: messages}
+        queued: {inbox: queued}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, gate]
+  - - node_waiting
+    - gate
+    - call_ids: [r1/gate]
+      waits:
+      - {call_id: r1/gate, inbox: go, mode: one, tool: take}
+  - - run_waiting
+    - null
+    - node_ids: [gate]
+  - - pool_commit
+    - __start__
+    - {key: __start__.messages, value: m1}
+  - - pool_commit
+    - __start__
+    - {key: __start__.queued, value: q1}
+  - - pool_commit
+    - __start__
+    - {key: __start__.messages, value: m2}
+  - - pool_commit
+    - __start__
+    - {key: __start__.queued, value: q2}
+  - - pool_commit
+    - __start__
+    - {key: __start__.go, value: go}
+  - [node_woken, gate]
+  - - pool_commit
+    - gate
+    - closed: false
+      events: [15]
+      inbox: go
+  - - node_succeeded
+    - gate
+    - {commit: 17}
+  - [node_started, one]
+  - - pool_commit
+    - one
+    - closed: []
+      events: [11]
+      inbox: [messages, queued]
+  - - node_succeeded
+    - one
+    - {commit: 20}
+  - [node_started, all]
+  - - pool_commit
+    - all
+    - closed: []
+      events: [12, 13, 14]
+      inbox: [messages, queued]
+  - - node_succeeded
+    - all
+    - {commit: 23}
+  - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - value:
+        all:
+        - {event: q1, inbox: queued}
+        - {event: m2, inbox: messages}
+        - {event: q2, inbox: queued}
+        one:
+        - {event: m1, inbox: messages}
+  - - node_succeeded
+    - __end__
+    - {commit: 26}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - {node_id: __start__}
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        go: {inbox: go}
+        messages: {inbox: messages}
+        queued: {inbox: queued}
+      interrupted: false
+  - - NodeStarted
+    - {node_id: gate}
+  - - NodeWaiting
+    - node_id: gate
+      call_ids: [r1/gate]
+  - - RunWaiting
+    - node_ids: [gate]
+  - - NodeWoken
+    - node_id: gate
+      timed_out: []
+  - - NodeSucceeded
+    - node_id: gate
+      output:
+        closed: false
+        events: [go]
+      interrupted: false
+  - - NodeStarted
+    - {node_id: one}
+  - - NodeSucceeded
+    - node_id: one
+      output:
+        closed: false
+        closed_inboxes: []
+        events:
+        - {event: m1, inbox: messages}
+      interrupted: false
+  - - NodeStarted
+    - {node_id: all}
+  - - NodeSucceeded
+    - node_id: all
+      output:
+        closed: false
+        closed_inboxes: []
+        events:
+        - {event: q1, inbox: queued}
+        - {event: m2, inbox: messages}
+        - {event: q2, inbox: queued}
+      interrupted: false
+  - - NodeStarted
+    - {node_id: __end__}
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        all:
+        - {event: q1, inbox: queued}
+        - {event: m2, inbox: messages}
+        - {event: q2, inbox: queued}
+        one:
+        - {event: m1, inbox: messages}
+      interrupted: false
+  - - RunSucceeded
+    - output:
+        all:
+        - {event: q1, inbox: queued}
+        - {event: m2, inbox: messages}
+        - {event: q2, inbox: queued}
+        one:
+        - {event: m1, inbox: messages}

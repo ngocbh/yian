@@ -974,6 +974,8 @@ describe("childEvent", () => {
       verb: "waits for a message",
       body: 'on inbox "messages"; said "hi", "there"',
     });
+    const several = status("r2", 5, { waits: [{ ...INBOX_WAIT, inbox: ["messages", "queued"] }] });
+    expect(childEvent(several)?.text).toBe('run r2 waits for a message on inbox "messages" or "queued"');
   });
 
   test("an end: succeeded, failed or cancelled", () => {

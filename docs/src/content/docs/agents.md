@@ -593,6 +593,8 @@ output: ${worker.output :- "(stopped)"}
   no tools or skills reads its steers once, before its only call.
 - **Render.** `steer_inbox: {from: ${input.notes}, render: "From the owner: ${event}"}` wraps each
   message in a template. The template reads only `${event}`.
+- **A queue.** A message meant for the next turn goes to a second inbox, which only the `take`
+  that starts a turn reads; see [A queue the steers don't read](/inboxes/#a-queue-the-steers-dont-read).
 - **Actions.** A `Message` whose parts are all `action` parts records something a person did with
   one of the agent's tools (see [Embedding yian](/embedding/#record-a-persons-action)). It joins
   the next model call, signed by its `author`, but never causes one: one queued at the final answer

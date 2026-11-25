@@ -1,0 +1,254 @@
+# The reply's steer inbox is `messages`; `queued` is read only by the take that starts a turn.
+# While the reply streams, `also` goes to `messages` and `later` to `queued`: the reply reads
+# `also` as a steer (one more model call), never `later`, and the next turn's take reads `later`.
+kind: run
+flow: |
+  id: chat
+  name: chat
+  llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    messages: !Inbox(str)
+    queued: !Inbox(str)
+  nodes:
+    heard:
+      kind: call
+      call: take
+      input:
+        from: ["${input.messages}", "${input.queued}"]
+    reply:
+      kind: agent
+      steer_inbox: ${input.messages}
+      input: {got: "${heard.output.events}"}
+      system_prompt: Help.
+      prompt: "answer ${got}"
+    next:
+      kind: call
+      call: take
+      runs_after: [reply]
+      input:
+        from: ["${input.messages}", "${input.queued}"]
+        take: all
+  output:
+    reply: ${reply.output}
+    next: ${next.output.events}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  sends:
+  - {inbox: messages, event: hi}
+  - {inbox: messages, event: also, after: {node: reply, model_call: 1, chunk: 1}}
+  - {inbox: queued, event: later, after: {node: reply, model_call: 1, chunk: 1}}
+  models:
+    reply:
+      agent:
+      - chunks:
+        - text: hello
+        - finish: stop
+      - chunks:
+        - text: noted
+        - finish: stop
+expect:
+  output:
+    status: succeeded
+    output:
+      reply: noted
+      next:
+      - {event: later, inbox: queued}
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        reply:
+          model: gpt-5.5
+          provider: openai
+          _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        messages: {inbox: messages}
+        queued: {inbox: queued}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, heard]
+  - - node_waiting
+    - heard
+    - call_ids: [r1/heard]
+      waits:
+      - call_id: r1/heard
+        inbox: [messages, queued]
+        mode: one
+        tool: take
+  - - run_waiting
+    - null
+    - node_ids: [heard]
+  - - pool_commit
+    - __start__
+    - {key: __start__.messages, value: hi}
+  - [node_woken, heard]
+  - - pool_commit
+    - heard
+    - closed: []
+      events: [11]
+      inbox: [messages, queued]
+  - - node_succeeded
+    - heard
+    - {commit: 13}
+  - [node_started, reply]
+  - - pool_commit
+    - __start__
+    - {key: __start__.messages, value: also}
+  - - pool_commit
+    - __start__
+    - {key: __start__.queued, value: later}
+  - - node_step
+    - reply
+    - n: 1
+      step:
+        finish: stop
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: hello, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: e467322eab54f9514a0c10bf9a1ad433491e06d7ebde833e24309b9cbc58fced
+        response_id: null
+        usage: null
+  - - node_step
+    - reply
+    - n: 2
+      step:
+        from: [16]
+        inbox: messages
+        kind: steer
+  - - node_step
+    - reply
+    - n: 3
+      step:
+        finish: stop
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: noted, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: 359af9bfde51fdcb370cd14ea2b8bf4cf159198b69652547276546534dc49829
+        response_id: null
+        usage: null
+  - - pool_commit
+    - reply
+    - {value: noted}
+  - - pool_commit
+    - reply
+    - key: reply.new_messages
+      steps: [18, 19, 20]
+  - - node_succeeded
+    - reply
+    - {commit: 21, messages: 22}
+  - [node_started, next]
+  - - pool_commit
+    - next
+    - closed: []
+      events: [17]
+      inbox: [messages, queued]
+  - - node_succeeded
+    - next
+    - {commit: 25}
+  - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - value:
+        next:
+        - {event: later, inbox: queued}
+        reply: noted
+  - - node_succeeded
+    - __end__
+    - {commit: 28}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - {node_id: __start__}
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        messages: {inbox: messages}
+        queued: {inbox: queued}
+      interrupted: false
+  - - NodeStarted
+    - {node_id: heard}
+  - - NodeWaiting
+    - node_id: heard
+      call_ids: [r1/heard]
+  - - RunWaiting
+    - node_ids: [heard]
+  - - NodeWoken
+    - node_id: heard
+      timed_out: []
+  - - NodeSucceeded
+    - node_id: heard
+      output:
+        closed: false
+        closed_inboxes: []
+        events:
+        - {event: hi, inbox: messages}
+      interrupted: false
+  - - NodeStarted
+    - {node_id: reply}
+  - - ModelCallStarted
+    - {node_id: reply, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
+  - - InboxSent
+    - {inbox: messages, seq: 16}
+  - - InboxSent
+    - {inbox: queued, seq: 17}
+  - - ModelCallFinished
+    - {node_id: reply, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
+  - - ModelCallStarted
+    - {node_id: reply, n: 3, purpose: chat, provider: openai, model: gpt-5.5}
+  - - ModelCallFinished
+    - {node_id: reply, n: 3, purpose: chat, provider: openai, model: gpt-5.5}
+  - - NodeSucceeded
+    - {node_id: reply, output: noted, interrupted: false}
+  - - NodeStarted
+    - {node_id: next}
+  - - NodeSucceeded
+    - node_id: next
+      output:
+        closed: false
+        closed_inboxes: []
+        events:
+        - {event: later, inbox: queued}
+      interrupted: false
+  - - NodeStarted
+    - {node_id: __end__}
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        next:
+        - {event: later, inbox: queued}
+        reply: noted
+      interrupted: false
+  - - RunSucceeded
+    - output:
+        next:
+        - {event: later, inbox: queued}
+        reply: noted

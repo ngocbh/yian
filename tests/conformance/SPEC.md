@@ -596,7 +596,8 @@ For example:
   commit, and `node_succeeded.messages` names it.
 - A take commit holds no `value` but `inbox`, `events` (the seqs of the send
   commits it consumed, in order) and `closed` (whether it saw the inbox closed); its node's
-  success rebuilds the value from those sends.
+  success rebuilds the value from those sends. A take of several inboxes holds their list as
+  `inbox`, and as `closed` the listed inboxes it saw closed with nothing left.
 - `defaults`, `effective_llm_by_static_path`, `call_time_llm`, `parent`, `waits`, `timed_out` and
   `closed_calls` are left out when empty or absent.
 - `by` is who made the host call that wrote the record (`{kind, name, run?, node?}`), present only

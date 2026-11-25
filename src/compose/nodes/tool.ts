@@ -38,6 +38,7 @@ import {
   isMemoryType,
   isList,
   isRecord,
+  joinedType,
   listKindForElement,
   Type,
   ValueKind,
@@ -46,7 +47,7 @@ import {
 import { LoadDiagnostics, type LoadError } from "../helpers/errors.ts";
 import { CLOSE_MATCH_CUTOFF } from "../helpers/tags.ts";
 import { memoryBinding, memoryToolNames } from "../helpers/memory.ts";
-import { literalValue, NOT_LITERAL } from "../../compile/output_contracts.ts";
+import { directReferencePathParts, literalValue, NOT_LITERAL } from "../../compile/output_contracts.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import { SourceAccessError, type SourceCursor } from "../source/index.ts";
 import { MODE_REMOVED_FIX, retriesError } from "./agent.ts";
@@ -532,7 +533,7 @@ export class ToolDescriptor extends NodeDescriptor {
     });
     const wiring = this.sinkWiring();
     if (this.toolId === TAKE) {
-      node.outputContract = this.buildTake(ctx);
+      [node.outputContract, node.fromNames] = this.buildTake(ctx);
       this.wireDuration(ctx, wiring, "timeout");
     } else if (this.toolId === SLEEP) {
       this.checkSleep(ctx);
@@ -677,12 +678,15 @@ export class ToolDescriptor extends NodeDescriptor {
 
   /**
    * Check a take's inputs and return its output contract, `{events: list(T), closed: bool}` for
-   * the `Inbox(T)` its `from` reads.
+   * the `Inbox(T)` its `from` reads, and `null`. A `from:` list of inboxes gives
+   * `{events: list({inbox, event: T}), closed: bool, closed_inboxes: list(...)}`, each inbox
+   * named by its input, and the names, in order.
    *
    * @throws LoadError for an input other than `from`, `take` and `timeout`, a missing `from`, a
-   *   `from` that isn't an inbox, or a `take` other than `one` or `all`.
+   *   `from` that isn't an inbox or a list of them (see `listedInboxes`), or a `take` other than
+   *   `one` or `all`.
    */
-  private buildTake(ctx: BuildContext): ValueContract {
+  private buildTake(ctx: BuildContext): [ValueContract, readonly string[] | null] {
     const subject = this.wording.nodeTool(TAKE);
     for (const name of Object.keys(this.inputs)) {
       if (TAKE_INPUTS.has(name)) continue;
@@ -696,25 +700,79 @@ export class ToolDescriptor extends NodeDescriptor {
         range: this.fieldRanges.get(siteKey("field", "inputs")) ?? this.range,
       });
     }
-    const fromType = this.inputType(ctx, "from");
-    if (fromType === null || !isInboxType(fromType)) {
+    const source = bindingSource(this.inputs["from"]);
+    const items = source instanceof ValueTemplate ? source.value : source;
+    const listed = Array.isArray(items) ? this.listedInboxes(ctx, items, source) : null;
+    const fromType = listed === null ? this.inputType(ctx, "from") : null;
+    if (listed === null && (fromType === null || !isInboxType(fromType))) {
       throw ctx.diagnostics.error(
         `${subject}: take's from must be an Inbox input of this flow, as \${input.<name>}`,
         { range: this.inputRange("from") },
       );
     }
     if (Object.hasOwn(this.inputs, "take")) this.checkTakeMode(ctx);
-    const element = fromType.element!;
-    return new ValueContract(
-      new Type({
-        kind: ValueKind.OBJECT,
-        fields: new Map([
-          ["events", new Type({ kind: listKindForElement(element), element })],
-          ["closed", Type.scalar(ValueKind.BOOLEAN)],
-        ]),
-        required: new Set(["events", "closed"]),
-      }),
-    );
+    const element = listed?.element ?? fromType!.element!;
+    const list = (item: Type) => new Type({ kind: listKindForElement(item), element: item });
+    const record = (fields: [string, Type][]) =>
+      new Type({ kind: ValueKind.OBJECT, fields: new Map(fields), required: new Set(fields.map(([name]) => name)) });
+    if (listed === null) {
+      return [new ValueContract(record([["events", list(element)], ["closed", Type.scalar(ValueKind.BOOLEAN)]])), null];
+    }
+    const inbox = new Type({ kind: ValueKind.STRING, tags: new Set(listed.names) });
+    const output = record([
+      ["events", list(record([["inbox", inbox], ["event", element]]))],
+      ["closed", Type.scalar(ValueKind.BOOLEAN)],
+      ["closed_inboxes", list(inbox)],
+    ]);
+    return [new ValueContract(output), listed.names];
+  }
+
+  /**
+   * Return the input names a take's `from:` list names, in order, and the message type their
+   * inboxes share.
+   *
+   * @throws LoadError when the list is empty, an item isn't the lone `${input.<name>}` of an Inbox
+   *   input, an inbox is listed twice, or the inboxes' message types differ (beyond `Optional`).
+   */
+  private listedInboxes(ctx: BuildContext, items: readonly unknown[], source: unknown): { names: string[]; element: Type } {
+    const subject = this.wording.nodeTool(TAKE);
+    if (items.length === 0) {
+      throw ctx.diagnostics.error(`${subject}: take's from lists no inbox; list at least one, as \${input.<name>}`, {
+        range: this.inputRange("from"),
+      });
+    }
+    const names: string[] = [];
+    const types: Type[] = [];
+    items.forEach((item, index) => {
+      const origin = source instanceof ValueTemplate ? source.originAt([index]) : null;
+      const range = (origin === null ? null : ctx.resolveOrigin?.(origin)?.range) ?? this.inputRange("from");
+      const parts = directReferencePathParts(item);
+      const contract = parts?.length === 2 && parts[0] === "input" ? ctx.bindingContractReader?.(subject, item, range) : null;
+      const typ = isExactly(contract, ValueContract) ? contract.type : null;
+      if (typ === null || !isInboxType(typ)) {
+        const written = typeof item === "string" && item.includes("${") ? item : valueRepr(item);
+        throw ctx.diagnostics.error(
+          `${subject}: take's from lists ${written}, which isn't an Inbox input of this flow; list each inbox as \${input.<name>}`,
+          { range },
+        );
+      }
+      const name = parts![1]!;
+      if (names.includes(name)) {
+        throw ctx.diagnostics.error(`${subject}: take's from lists inbox input ${reprText(name)} twice; list it once`, { range });
+      }
+      names.push(name);
+      types.push(typ.element!);
+    });
+    const element = joinedType(types);
+    if (element === null) {
+      const other = types.find((typ) => joinedType([types[0]!, typ]) === null)!;
+      const [a, b] = [types[0]!, other].map((typ) => `Inbox(${canonicalTypeLabel(typ)})`);
+      throw ctx.diagnostics.error(
+        `${subject}: take's from lists inboxes of two types, ${a} and ${b}; a take reads inboxes of one type`,
+        { range: this.inputRange("from") },
+      );
+    }
+    return { names, element };
   }
 
   /**

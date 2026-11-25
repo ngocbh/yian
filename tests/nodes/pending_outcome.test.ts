@@ -27,6 +27,11 @@ test("Pending holds frozen call ids, or a wait the engine decides", () => {
   const take = new Pending([], { wait: { tool: "take", inbox: "m", mode: "one", timeoutSeconds: null } });
   expect(take.callIds).toEqual([]);
   expect(Object.isFrozen(take.wait)).toBe(true);
+  const inboxes = ["m", "q"];
+  const several = new Pending([], { wait: { tool: "take", inbox: inboxes, mode: "all", timeoutSeconds: null } });
+  inboxes.push("x");
+  expect(several.wait).toMatchObject({ inbox: ["m", "q"] });
+  expect(Object.isFrozen((several.wait as { inbox: unknown }).inbox)).toBe(true);
 });
 test.each<[string, () => unknown, ErrorConstructor]>([
   ["no ids, no wait", () => new Pending([]), RangeError],
@@ -38,6 +43,8 @@ test.each<[string, () => unknown, ErrorConstructor]>([
   ["sleep with both", () => new Pending([], { wait: { tool: "sleep", until: "2026-10-23T00:00:00.000Z", forSeconds: 1 } }), RangeError],
   ["sleep with neither", () => new Pending([], { wait: { tool: "sleep", until: null, forSeconds: null } }), RangeError],
   ["take mode", () => new Pending([], { wait: { tool: "take", inbox: "m", mode: "many" as "one", timeoutSeconds: null } }), RangeError],
+  ["take of no inbox", () => new Pending([], { wait: { tool: "take", inbox: [], mode: "one", timeoutSeconds: null } }), RangeError],
+  ["take of one inbox twice", () => new Pending([], { wait: { tool: "take", inbox: ["m", "m"], mode: "one", timeoutSeconds: null } }), RangeError],
   ["unknown tool", () => new Pending([], { wait: { tool: "ask" } as never }), TypeError],
 ])("Pending refuses %s", (_n, build, type) => expect(build).toThrow(type));
 

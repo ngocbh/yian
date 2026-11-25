@@ -2193,7 +2193,7 @@ const READ_CHUNK_BYTES = 1 << 16;
 export interface RunLogEntry<E extends RecordEnvelope | null = RecordEnvelope> {
   /** The record's sequence number. */
   readonly seq: number;
-  /** The byte offset where the record's line starts. */
+  /** The byte offset where the record's line starts; pass it as `beforeOffset` to read the records before it. */
   readonly offset: number;
   /** The byte offset just past the line's newline; pass it as `afterOffset` to read on from it. */
   readonly end: number;
@@ -2315,30 +2315,17 @@ export function* iterRunRecords(
     afterSeq = null,
     maxLineBytes = null,
   } = options;
-  if (!Number.isSafeInteger(afterOffset) || afterOffset < 0) {
-    throw new YianRangeError(`afterOffset must be a non-negative integer, got ${valueRepr(afterOffset)}`);
-  }
-  if (afterSeq !== null && (!Number.isSafeInteger(afterSeq) || afterSeq < 0)) {
-    throw new YianRangeError(`afterSeq must be a non-negative integer, got ${valueRepr(afterSeq)}`);
-  }
-  if (afterRunId !== null && (typeof afterRunId !== "string" || afterRunId === "")) {
-    const shown = typeof afterRunId === "string" ? reprText(afterRunId) : valueRepr(afterRunId);
-    throw new YianRangeError(`runId must be a non-empty string, got ${shown}`);
-  }
+  checkCursor(["afterOffset", "afterSeq"], afterOffset, afterSeq, afterRunId);
   checkMaxLineBytes(maxLineBytes);
   const continuing = afterRunId !== null || afterSeq !== null;
   if (continuing && afterOffset === 0) {
     throw new YianRangeError("runId and afterSeq describe the record before afterOffset, so they need one");
   }
-  const wanted = kinds === null ? null : new Set(kinds);
-  const unknown = wanted === null ? [] : [...wanted].filter((kind) => !CODEC_BY_KIND.has(kind));
-  if (unknown.length > 0) {
-    throw new YianRangeError(`unknown run-record kinds: ${writeAsText(unknown.sort(compareCodeUnits))}`);
-  }
+  const wanted = wantedKinds(kinds);
+  const build = (kind: string) => payloads && (wanted === null || wanted.has(kind));
   const fd = openRegular(path, fs.constants.O_RDONLY);
   try {
-    const shrank = (size: number, at: number) =>
-      new RunLogChangedError(`run log ${path} shrank to ${size} bytes under its reader at byte ${at}; it was truncated or replaced`);
+    const shrank = (size: number, at: number) => logShrank(path, size, at);
     const discontinued = (reason: string) =>
       new RunLogChangedError(
         `run log ${path} doesn't continue the records read before byte ${afterOffset}: ${reason}; it was truncated or replaced`,
@@ -2380,11 +2367,8 @@ export function* iterRunRecords(
     /** Check that `record`, the first read after a saved offset, continues the saved one. */
     const checkContinued = (record: { readonly seq: number; readonly runId: string }) => {
       checkContinues = false;
-      if ((afterSeq !== null && record.seq !== expected) || (afterRunId !== null && record.runId !== afterRunId)) {
-        const saved = [afterSeq === null ? null : `seq ${expected}`, afterRunId === null ? null : `run ${reprText(afterRunId)}`];
-        const found = `seq ${record.seq} of run ${reprText(record.runId)}`;
-        throw discontinued(`expected ${saved.filter((part) => part !== null).join(" of ")}, found ${found}`);
-      }
+      const reason = cursorMismatch(record, afterSeq === null ? null : expected, afterRunId);
+      if (reason !== null) throw discontinued(reason);
     };
     for (;;) {
       const chunk = new Uint8Array(READ_CHUNK_BYTES);
@@ -2418,30 +2402,11 @@ export function* iterRunRecords(
             if (checkContinues) checkContinued({ seq, runId: lineRunId });
             checkedLine(where, { seq, runId: lineRunId }, expected, runId);
           }
-          const limit = maxLineBytes!;
-          throw new RunLogLineTooLongError(`${where}: the line is ${length} bytes, over maxLineBytes ${limit}`, {
-            offset,
-            end: lineStart,
-            length,
-            limit,
-            ...header,
-          });
+          throw lineTooLong(where, { offset, end: lineStart, length, limit: maxLineBytes!, ...header });
         }
         const line = parts.length === 1 ? parts[0]! : Buffer.concat(parts);
         parts = [];
-        let wire: WireEnvelope;
-        let nodeId: string | null;
-        let envelope: RecordEnvelope | null = null;
-        try {
-          wire = decodeWire(line, true);
-          if (payloads && (wanted === null || wanted.has(wire.kind))) {
-            const record = recordFromPayload(wire.kind, wire.payload);
-            envelope = new RecordEnvelope(SCHEMA_VERSION, wire.runId, wire.seq, record, wire.at);
-          }
-          nodeId = wireNodeId(wire.kind, wire.payload);
-        } catch (error) {
-          throw locatedError(where, error);
-        }
+        const { wire, nodeId, envelope } = readLine(line, where, build);
         if (checkContinues) checkContinued(wire);
         runId = checkedLine(where, wire, expected, runId);
         expected = wire.seq + 1;
@@ -2467,6 +2432,388 @@ export function* iterRunRecords(
 export function runRecordOffsets(path: string, options: Pick<IterRunRecordsOptions, "maxLineBytes"> = {}): number[] {
   const maxLineBytes = options.maxLineBytes ?? null;
   return Array.from(iterRunRecords(path, { payloads: false, maxLineBytes }), (entry) => entry.offset);
+}
+
+/** How `iterRunRecordsBackwards` reads a log. */
+export interface IterRunRecordsBackwardsOptions extends Pick<IterRunRecordsOptions, "kinds" | "payloads" | "maxLineBytes"> {
+  /**
+   * Read the records before this byte offset, the `offset` of a record read before; it must be
+   * the start of a line. `null` (the default) reads from the end.
+   */
+  beforeOffset?: number | null;
+  /** The run id of the record at `beforeOffset`, which the record before it must name. */
+  runId?: string | null;
+  /** The seq of the record at `beforeOffset`; the record before it must be `beforeSeq - 1`. */
+  beforeSeq?: number | null;
+}
+
+/**
+ * Stream the records of the run log at `path` newest first, each as `iterRunRecords` yields it,
+ * without taking the writer's lock and without changing the file, so a host can show a long
+ * run's latest records without reading the whole log.
+ *
+ * The file is read back from its end in chunks of 64 KiB, with memory bounded as `iterRunRecords`
+ * bounds it: a line over `maxLineBytes` is measured, not kept, then scanned for its envelope, and
+ * throws `RunLogLineTooLongError`. An unterminated last line, which a writer may still be
+ * finishing, is not yielded. Each entry's `offset` is the cursor for the next older page: pass the
+ * oldest entry's `offset`, `runId` and `seq` (or a long line's, from its error) as `beforeOffset`,
+ * `runId` and `beforeSeq`. To follow records appended later, read forward from the newest entry's
+ * `end` with `iterRunRecords`.
+ *
+ * It vouches only for the lines it reads: each is a valid record, their seqs count down by one in
+ * one run, and the first line, if the read gets there, has seq 0. Damage in lines it doesn't read
+ * isn't seen; a read from the start, as `yian status` makes, finds it. A call throws
+ * `RunLogChangedError` when the file is shorter than `beforeOffset`, and, given `runId` or
+ * `beforeSeq`, when `beforeOffset` no longer starts a line or the record before it doesn't lead to
+ * the saved one; a read that gets to the start throws it when the file lost the newest line read.
+ * On `RunLogChangedError`, read from the end again. Like `iterRunRecords`, this is a generator:
+ * bad options and a missing file are thrown when the first entry is asked for.
+ *
+ * @param path The JSONL run log's path.
+ * @param options.beforeOffset The byte offset to read back from; the end by default.
+ * @param options.kinds The wire kinds to yield; every kind by default.
+ * @param options.payloads Whether to build and validate each record.
+ * @param options.runId The run id of the record at `beforeOffset`.
+ * @param options.beforeSeq The seq of the record at `beforeOffset`.
+ * @param options.maxLineBytes The most bytes a line may hold.
+ * @returns A generator of `iterRunRecords`' entries, newest first.
+ * @throws RunLogChangedError as said above, and when the file shrinks while it is read.
+ * @throws RunLogLineTooLongError when a complete line is longer than `maxLineBytes`; the message
+ *   names `path`, the line's byte and the limit.
+ * @throws RangeError when an option isn't valid, `runId` or `beforeSeq` is given without a
+ *   `beforeOffset`, `beforeSeq` is 0 with a `beforeOffset` past 0, `beforeOffset` isn't the start
+ *   of a line, `kinds` names a kind no record has, or a line read isn't a valid record, breaks the
+ *   seq count or names another run id; the message names `path` and the line's byte.
+ * @throws RunLogSchemaError, and the errors of opening and reading `path`, as `iterRunRecords`.
+ */
+export function iterRunRecordsBackwards(
+  path: string,
+  options?: IterRunRecordsBackwardsOptions & { payloads?: true },
+): Generator<RunLogEntry, void, undefined>;
+export function iterRunRecordsBackwards(
+  path: string,
+  options: IterRunRecordsBackwardsOptions & { payloads: false },
+): Generator<RunLogEntry<null>, void, undefined>;
+export function iterRunRecordsBackwards(
+  path: string,
+  options?: IterRunRecordsBackwardsOptions,
+): Generator<RunLogEntry<RecordEnvelope | null>, void, undefined>;
+export function* iterRunRecordsBackwards(
+  path: string,
+  options: IterRunRecordsBackwardsOptions = {},
+): Generator<RunLogEntry<RecordEnvelope | null>, void, undefined> {
+  const {
+    beforeOffset = null,
+    kinds = null,
+    payloads = true,
+    runId: savedRunId = null,
+    beforeSeq = null,
+    maxLineBytes = null,
+  } = options;
+  checkCursor(["beforeOffset", "beforeSeq"], beforeOffset ?? 0, beforeSeq, savedRunId);
+  checkMaxLineBytes(maxLineBytes);
+  const continuing = savedRunId !== null || beforeSeq !== null;
+  if (continuing && beforeOffset === null) {
+    throw new YianRangeError("runId and beforeSeq describe the record at beforeOffset, so they need one");
+  }
+  if (beforeSeq === 0 && beforeOffset !== 0) {
+    throw new YianRangeError(`beforeSeq 0 is a log's first record, at byte 0, not at beforeOffset ${beforeOffset}`);
+  }
+  const wanted = wantedKinds(kinds);
+  const build = (kind: string) => payloads && (wanted === null || wanted.has(kind));
+  const fd = openRegular(path, fs.constants.O_RDONLY);
+  try {
+    const discontinued = (reason: string) =>
+      new RunLogChangedError(
+        `run log ${path} doesn't lead to the records read from byte ${beforeOffset}: ${reason}; it was truncated or replaced`,
+      );
+    const size = fs.fstatSync(fd).size;
+    const top = beforeOffset ?? size;
+    if (top > size) throw logShrank(path, size, top);
+    // Read back from `top`. `lineEnd` is the newline that ends the line being gathered, `parts`
+    // hold its bytes read so far, newest first, and `pending` counts them; past `maxLineBytes`,
+    // they are only counted. The bytes after the last newline below `top` are `torn`: a writer's
+    // unfinished line, or none when `top` starts a line.
+    let position = top;
+    let lineEnd = top;
+    let torn = true;
+    let parts: Uint8Array[] = [];
+    let pending = 0;
+    // The end of the newest complete line, which the file must still reach when the read ends.
+    let newest = 0;
+    let expected = beforeSeq === null ? null : beforeSeq - 1;
+    let runId = savedRunId;
+    let checkContinues = continuing;
+    const gather = (bytes: Uint8Array) => {
+      pending += bytes.length;
+      if (torn || (maxLineBytes !== null && pending > maxLineBytes)) parts = [];
+      else if (bytes.length > 0) parts.push(bytes);
+    };
+    /** Check that `record`, the line at `offset` (`where`), comes just before the records read after it. */
+    const checkOrder = (where: string, offset: number, record: { readonly seq: number; readonly runId: string }) => {
+      if (checkContinues) {
+        checkContinues = false;
+        const reason = cursorMismatch(record, beforeSeq === null ? null : expected, savedRunId);
+        if (reason !== null) throw discontinued(reason);
+      }
+      runId = checkedLine(where, record, expected, runId);
+      if (offset === 0) checkedLine(lineWhere(path, 0), record, 0, runId);
+      else if (record.seq === 0) throw new YianRangeError(`${where}: run-log sequence mismatch: seq 0 isn't the first line`);
+      expected = record.seq - 1;
+    };
+    /** The entry of the line gathered, which starts at `offset`; `null` for a kind not wanted. */
+    const finish = (offset: number): RunLogEntry<RecordEnvelope | null> | null => {
+      const end = lineEnd + 1;
+      const where = `run log ${path} byte ${offset}${expected === null ? "" : ` (seq ${expected})`}`;
+      if (maxLineBytes !== null && pending > maxLineBytes) {
+        const header = lineAt(fd, path, offset, end, maxLineBytes).header!;
+        if (header.seq !== null && header.runId !== null) checkOrder(where, offset, { seq: header.seq, runId: header.runId });
+        throw lineTooLong(where, { offset, end, length: pending, limit: maxLineBytes, ...header });
+      }
+      const line = parts.length === 1 ? parts[0]! : Buffer.concat(parts.reverse());
+      const { wire, nodeId, envelope } = readLine(line, where, build);
+      checkOrder(where, offset, wire);
+      if (wanted !== null && !wanted.has(wire.kind)) return null;
+      return { seq: wire.seq, offset, end, runId: wire.runId, at: wire.at!, kind: wire.kind, nodeId, envelope };
+    };
+    while (position > 0) {
+      const chunk = new Uint8Array(Math.min(READ_CHUNK_BYTES, position));
+      readAt(fd, chunk, position - chunk.length, path);
+      if (position === top && beforeOffset !== null && chunk[chunk.length - 1] !== 0x0a) {
+        if (continuing) throw discontinued("it isn't the start of a line");
+        throw new YianRangeError(`beforeOffset ${beforeOffset} isn't the start of a line in run log ${path}`);
+      }
+      position -= chunk.length;
+      let stop = chunk.length;
+      for (let newline = lastNewline(chunk, stop); newline !== -1; newline = lastNewline(chunk, stop)) {
+        gather(chunk.subarray(newline + 1, stop));
+        stop = newline;
+        if (torn) {
+          torn = false;
+          newest = position + newline + 1;
+        } else {
+          const entry = finish(position + newline + 1);
+          if (entry !== null) yield entry;
+        }
+        lineEnd = position + newline;
+        parts = [];
+        pending = 0;
+      }
+      gather(chunk.subarray(0, stop));
+    }
+    if (torn) return;
+    const entry = finish(0);
+    if (entry !== null) yield entry;
+    // A writer that rolls back a failed append cuts a line this reader may have yielded.
+    const now = fs.fstatSync(fd).size;
+    if (now < newest) throw logShrank(path, now, newest);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** The last newline in `chunk` before index `stop`, or -1. */
+function lastNewline(chunk: Uint8Array, stop: number): number {
+  // `lastIndexOf` reads a negative start from the end, so an empty range is checked first.
+  return stop === 0 ? -1 : chunk.lastIndexOf(0x0a, stop - 1);
+}
+
+/**
+ * Return the record of seq `seq` in the run log at `path`, as `iterRunRecords` yields it, or `null`
+ * when the log's complete lines hold none. It bisects the lines by seq, reading a few KiB at each
+ * of some 14 steps for 12,000 records, takes no lock and stores nothing.
+ *
+ * It vouches only for the lines it reads: the record is valid and has seq `seq`, but a damaged log
+ * can hide a record from the bisection, which only a read from the start reports.
+ *
+ * @param options.maxLineBytes The most bytes a line may hold, as `iterRunRecords` takes it; a
+ *   longer line on the way is passed by the seq a scan of its bytes reads.
+ * @throws RunLogLineTooLongError when the record's line, or a line on the way whose seq the scan
+ *   can't read, is longer than `maxLineBytes`.
+ * @throws RunLogChangedError when the file shrinks while it is read.
+ * @throws RangeError when `seq` or `maxLineBytes` isn't valid, or a line read isn't a valid record;
+ *   the message names `path` and the line's byte.
+ * @throws RunLogSchemaError, and the errors of opening and reading `path`, as `iterRunRecords`.
+ */
+export function runRecordAt(path: string, seq: number, options: Pick<IterRunRecordsOptions, "maxLineBytes"> = {}): RunLogEntry | null {
+  const maxLineBytes = options.maxLineBytes ?? null;
+  if (!Number.isSafeInteger(seq) || seq < 0) throw new YianRangeError(`seq must be a non-negative integer, got ${valueRepr(seq)}`);
+  checkMaxLineBytes(maxLineBytes);
+  const fd = openRegular(path, fs.constants.O_RDONLY);
+  try {
+    // The record's line, if the log holds it, starts in [lo, hi). Both are line starts; `hi`
+    // begins as the end of the last complete line, which leaves a torn one out.
+    let lo = 0;
+    let hi = lineStartAt(fd, path, fs.fstatSync(fd).size, 0);
+    while (lo < hi) {
+      const offset = lineStartAt(fd, path, lo + Math.floor((hi - lo) / 2), lo);
+      const line = lineAt(fd, path, offset, hi, maxLineBytes);
+      const where = `run log ${path} byte ${offset}`;
+      const found = line.bytes === null ? line.header!.seq : readLine(line.bytes, where, () => false).wire.seq;
+      if (found === seq && line.bytes !== null) {
+        const { wire, nodeId, envelope } = readLine(line.bytes, where, () => true);
+        return { seq, offset, end: line.end, runId: wire.runId, at: wire.at!, kind: wire.kind, nodeId, envelope: envelope! };
+      }
+      if (found === null || found === seq) {
+        throw lineTooLong(where, { offset, end: line.end, length: line.length, limit: maxLineBytes!, ...line.header! });
+      }
+      if (found < seq) lo = line.end;
+      else hi = offset;
+    }
+    return null;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** The bytes `lineAt` and `lineStartAt` read at first, some dozen lines of a typical log; each next read doubles. */
+const PROBE_BYTES = 1 << 12;
+
+/** A line `lineAt` read: its bytes, or, past `maxLineBytes`, `null` and what a header scan of them read. */
+type LineRead = {
+  readonly end: number;
+  readonly length: number;
+  readonly bytes: Uint8Array | null;
+  readonly header: ReturnType<LineHeaderScanner["header"]> | null;
+};
+
+/**
+ * Read the line of the run log at `path`, open at `fd`, that starts at byte `offset`, through its
+ * newline, which comes before byte `limit`.
+ *
+ * @throws RunLogChangedError when the file ends first, or holds no newline before `limit`.
+ */
+function lineAt(fd: number, path: string, offset: number, limit: number, maxLineBytes: number | null): LineRead {
+  const parts: Uint8Array[] = [];
+  let length = 0;
+  let scanner: LineHeaderScanner | null = null;
+  for (let position = offset, want = PROBE_BYTES; position < limit; want = Math.min(2 * want, READ_CHUNK_BYTES)) {
+    const block = new Uint8Array(Math.min(want, limit - position));
+    readAt(fd, block, position, path);
+    const newline = block.indexOf(0x0a);
+    const bytes = newline === -1 ? block : block.subarray(0, newline);
+    length += bytes.length;
+    if (scanner === null && maxLineBytes !== null && length > maxLineBytes) {
+      scanner = new LineHeaderScanner(maxLineBytes);
+      for (const part of parts.splice(0)) scanner.feed(part);
+    }
+    if (scanner === null) parts.push(bytes);
+    else scanner.feed(bytes);
+    if (newline !== -1) {
+      const end = position + newline + 1;
+      if (scanner !== null) return { end, length, bytes: null, header: scanner.header() };
+      return { end, length, bytes: parts.length === 1 ? parts[0]! : Buffer.concat(parts), header: null };
+    }
+    position += block.length;
+  }
+  throw new RunLogChangedError(`run log ${path} holds no line end between bytes ${offset} and ${limit}; it was truncated or replaced`);
+}
+
+/**
+ * Return where the line of the run log at `path`, open at `fd`, that holds byte `at` starts: just
+ * past the last newline before `at`, or `floor`, a line start, when there is none after it.
+ */
+function lineStartAt(fd: number, path: string, at: number, floor: number): number {
+  for (let position = at, want = PROBE_BYTES; position > floor; want = Math.min(2 * want, READ_CHUNK_BYTES)) {
+    const block = new Uint8Array(Math.min(want, position - floor));
+    position -= block.length;
+    readAt(fd, block, position, path);
+    const newline = block.lastIndexOf(0x0a);
+    if (newline !== -1) return position + newline + 1;
+  }
+  return floor;
+}
+
+/**
+ * Fill `buffer` from the run log at `path`, open at `fd`, from byte `position`.
+ *
+ * @throws RunLogChangedError when the file ends first.
+ */
+function readAt(fd: number, buffer: Uint8Array, position: number, path: string): void {
+  for (let done = 0; done < buffer.length; ) {
+    const count = fs.readSync(fd, buffer, done, buffer.length - done, position + done);
+    if (count === 0) throw logShrank(path, fs.fstatSync(fd).size, position + buffer.length);
+    done += count;
+  }
+}
+
+/** The error for the run log at `path`, now `size` bytes, shorter than byte `at`, which its reader got to. */
+function logShrank(path: string, size: number, at: number): RunLogChangedError {
+  return new RunLogChangedError(`run log ${path} shrank to ${size} bytes under its reader at byte ${at}; it was truncated or replaced`);
+}
+
+/**
+ * Check a reader's cursor: its byte offset, and its seq unless `null`, named `names`, must be
+ * non-negative integers, and its run id, unless `null`, a non-empty string.
+ *
+ * @throws RangeError naming the first that isn't.
+ */
+function checkCursor(names: readonly [string, string], offset: unknown, seq: unknown, runId: unknown): void {
+  const counts: [string, unknown][] = [[names[0], offset], [names[1], seq ?? 0]];
+  for (const [name, value] of counts) {
+    if (!Number.isSafeInteger(value) || (value as number) < 0) {
+      throw new YianRangeError(`${name} must be a non-negative integer, got ${valueRepr(value)}`);
+    }
+  }
+  if (runId !== null && (typeof runId !== "string" || runId === "")) {
+    const shown = typeof runId === "string" ? reprText(runId) : valueRepr(runId);
+    throw new YianRangeError(`runId must be a non-empty string, got ${shown}`);
+  }
+}
+
+/**
+ * Return a reader's `kinds` as a set, or `null` for every kind.
+ *
+ * @throws RangeError naming the kinds no record has.
+ */
+function wantedKinds(kinds: Iterable<string> | null): ReadonlySet<string> | null {
+  const wanted = kinds === null ? null : new Set(kinds);
+  const unknown = wanted === null ? [] : [...wanted].filter((kind) => !CODEC_BY_KIND.has(kind));
+  if (unknown.length > 0) {
+    throw new YianRangeError(`unknown run-record kinds: ${writeAsText(unknown.sort(compareCodeUnits))}`);
+  }
+  return wanted;
+}
+
+/**
+ * Decode `line`, a complete line a reader read at `where`: its envelope's members, its node id,
+ * and its record when `build` says so for its kind.
+ *
+ * @throws the decoding errors, prefixed with `where` (`locatedError`).
+ */
+function readLine(
+  line: Uint8Array,
+  where: string,
+  build: (kind: string) => boolean,
+): { wire: WireEnvelope; nodeId: string | null; envelope: RecordEnvelope | null } {
+  try {
+    const wire = decodeWire(line, true);
+    const envelope = build(wire.kind)
+      ? new RecordEnvelope(SCHEMA_VERSION, wire.runId, wire.seq, recordFromPayload(wire.kind, wire.payload), wire.at)
+      : null;
+    return { wire, nodeId: wireNodeId(wire.kind, wire.payload), envelope };
+  } catch (error) {
+    throw locatedError(where, error);
+  }
+}
+
+/** The error for the line at `where`, longer than its reader's `maxLineBytes`. */
+function lineTooLong(where: string, fields: ConstructorParameters<typeof RunLogLineTooLongError>[1]): RunLogLineTooLongError {
+  return new RunLogLineTooLongError(`${where}: the line is ${fields.length} bytes, over maxLineBytes ${fields.limit}`, fields);
+}
+
+/**
+ * Return why `record`, the first a reader read after a saved cursor, doesn't continue it: it must
+ * have seq `seq` and name run `runId`, each unchecked when `null`. `null` when it does.
+ */
+function cursorMismatch(
+  record: { readonly seq: number; readonly runId: string },
+  seq: number | null,
+  runId: string | null,
+): string | null {
+  if ((seq === null || record.seq === seq) && (runId === null || record.runId === runId)) return null;
+  const saved = [seq === null ? null : `seq ${seq}`, runId === null ? null : `run ${reprText(runId)}`];
+  return `expected ${saved.filter((part) => part !== null).join(" of ")}, found seq ${record.seq} of run ${reprText(record.runId)}`;
 }
 
 /** The keys a header scan wants a value of, each as the object keys leading to it. */

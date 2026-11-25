@@ -348,6 +348,35 @@ test("lines longer than a chunk read the same every way, and over maxLineBytes t
   expect(Math.max(0, ...sizes)).toBeLessThanOrEqual(cap);
 });
 
+test.each([
+  ["a short line", true, (records: string[]) => [records[0], line(1), records[2], "x".repeat(5000)]],
+  ["a longer one", false, (records: string[]) => [records[0], line(1, { pad: 6000 }), records[2]]],
+] as const)("a backwards read refuses an over-long line rewritten as %s before its scan reads it again", (_name, shorter, rewrite) => {
+  const file = path.join(dir, "run.jsonl");
+  const records = [line(0), line(1, { pad: 5000 }), line(2)];
+  writeLog(file, records);
+  const long = offsetsOf(records)[1]!;
+  const realRead = fs.readSync;
+  let rewritten = false;
+  // The scan's first read of the long line, after the read back found it, sees it rewritten in place.
+  const readSpy = spyOn(fs, "readSync").mockImplementation(((fd: number, buffer: Uint8Array, ...rest: any[]) => {
+    if (!rewritten && rest[2] === long && (rest[1] as number) <= 4096) {
+      rewritten = true;
+      fs.writeFileSync(file, rewrite(records).map((record) => `${record}\n`).join(""));
+    }
+    return Reflect.apply(realRead, fs, [fd, buffer, ...rest]) as number;
+  }) as typeof fs.readSync);
+  try {
+    const end = offsetsOf(records)[2]!;
+    const moved = shorter ? `the line at byte ${long} no longer ends at byte ${end}` : `no line ends between bytes ${long} and ${end}`;
+    const message = `run log ${file} changed under its reader: ${moved}; ${CHANGED}`;
+    expectError(() => [...iterRunRecordsBackwards(file, { maxLineBytes: 1000 })], RunLogChangedError, message);
+  } finally {
+    readSpy.mockRestore();
+  }
+  expect(rewritten).toBe(true);
+});
+
 test("kinds and payloads: false check every line's envelope, as a forward read does", () => {
   const file = path.join(dir, "run.jsonl");
   const second = Buffer.byteLength(line(0)) + 1;
@@ -402,7 +431,12 @@ test.each<[string, Record<string, unknown>, string]>([
   [
     "beforeSeq 0 past the start",
     { beforeOffset: 5, beforeSeq: 0 },
-    "beforeSeq 0 is a log's first record, at byte 0, not at beforeOffset 5",
+    "a log's first record, seq 0, starts at byte 0: beforeSeq 0 can't be at beforeOffset 5",
+  ],
+  [
+    "a later beforeSeq at the start",
+    { beforeOffset: 0, beforeSeq: 5 },
+    "a log's first record, seq 0, starts at byte 0: beforeSeq 5 can't be at beforeOffset 0",
   ],
   ["a maxLineBytes of 0", { maxLineBytes: 0 }, "maxLineBytes must be a positive integer, got 0"],
 ])("a backwards read refuses %s, on its first next()", (_name, options, message) => {

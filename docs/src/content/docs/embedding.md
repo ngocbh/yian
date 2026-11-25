@@ -877,23 +877,27 @@ fetch older ones as the user scrolls:
 ```ts check=fragment
 import { iterRunRecordsBackwards } from "@ngocbh/yian/run";
 
-// The newest 20 steps and commits before `cursor` ({} for the end), and the cursor for the page before them.
+// The newest 20 steps and commits before `cursor` ({} for the end), and the cursor for the page
+// before them: `null` once the page reaches the start.
 function olderPage(log: string, cursor = {}) {
   const page = [];
   for (const entry of iterRunRecordsBackwards(log, { ...cursor, kinds: ["node_step", "pool_commit"] })) {
     page.push(entry);
     if (page.length === 20) break;
   }
-  const oldest = page.at(-1);
-  return { page, cursor: oldest && { beforeOffset: oldest.offset, runId: oldest.runId, beforeSeq: oldest.seq } };
+  if (page.length < 20) return { page, cursor: null };
+  const oldest = page[19];
+  return { page, cursor: { beforeOffset: oldest.offset, runId: oldest.runId, beforeSeq: oldest.seq } };
 }
 ```
 
 A backwards read checks only the lines it reads: each is a valid record of the same run, one seq
 before the last. It skips an unterminated last line, and throws `RunLogChangedError` when the log
-was truncated below the cursor or replaced; read from the end again then. To follow what the run
-appends next, read forward with `iterRunRecords` from the newest entry's `end`. A read from the
-start, as `yian status` makes, is what finds damage elsewhere in the log.
+was truncated below the cursor, or replaced by a log that doesn't lead to the cursor; read from the
+end again then. To follow what the run appends next, read forward with `iterRunRecords` from the
+newest entry's `end`, passing its `runId` and `seq` as `runId` and `afterSeq`: that catches a
+newest record the writer rolled back. A read from the start, as `yian status` makes, is what finds
+damage elsewhere in the log.
 
 `readRunIndex` shows a `waiting`, `stopped` or `crashed` run as `running` while a writer holds its
 log, which costs one probe of the lock per such row on every read. A host that knows which runs

@@ -2457,12 +2457,15 @@ export interface IterRunRecordsBackwardsOptions extends Pick<IterRunRecordsOptio
  * throws `RunLogLineTooLongError`. An unterminated last line, which a writer may still be
  * finishing, is not yielded. Each entry's `offset` is the cursor for the next older page: pass the
  * oldest entry's `offset`, `runId` and `seq` (or a long line's, from its error) as `beforeOffset`,
- * `runId` and `beforeSeq`. To follow records appended later, read forward from the newest entry's
- * `end` with `iterRunRecords`.
+ * `runId` and `beforeSeq`. To follow records appended later, read forward with `iterRunRecords`
+ * from the newest entry's `end`, passing its `runId` and `seq` as `runId` and `afterSeq`, which
+ * catches a newest record a writer rolled back.
  *
  * It vouches only for the lines it reads: each is a valid record, their seqs count down by one in
- * one run, and the first line, if the read gets there, has seq 0. Damage in lines it doesn't read
- * isn't seen; a read from the start, as `yian status` makes, finds it. A call throws
+ * one run, and the first line, if the read gets there, has seq 0. Without `runId`, the newest line
+ * sets the run id, so a newest line of another run is reported at the line before it. Damage in
+ * lines it doesn't read isn't seen; a read from the start, as `yian status` makes, finds it. A
+ * call throws
  * `RunLogChangedError` when the file is shorter than `beforeOffset`, and, given `runId` or
  * `beforeSeq`, when `beforeOffset` no longer starts a line or the record before it doesn't lead to
  * the saved one; a read that gets to the start throws it when the file lost the newest line read.
@@ -2481,7 +2484,7 @@ export interface IterRunRecordsBackwardsOptions extends Pick<IterRunRecordsOptio
  * @throws RunLogLineTooLongError when a complete line is longer than `maxLineBytes`; the message
  *   names `path`, the line's byte and the limit.
  * @throws RangeError when an option isn't valid, `runId` or `beforeSeq` is given without a
- *   `beforeOffset`, `beforeSeq` is 0 with a `beforeOffset` past 0, `beforeOffset` isn't the start
+ *   `beforeOffset`, only one of `beforeSeq` and `beforeOffset` is 0, `beforeOffset` isn't the start
  *   of a line, `kinds` names a kind no record has, or a line read isn't a valid record, breaks the
  *   seq count or names another run id; the message names `path` and the line's byte.
  * @throws RunLogSchemaError, and the errors of opening and reading `path`, as `iterRunRecords`.
@@ -2516,8 +2519,9 @@ export function* iterRunRecordsBackwards(
   if (continuing && beforeOffset === null) {
     throw new YianRangeError("runId and beforeSeq describe the record at beforeOffset, so they need one");
   }
-  if (beforeSeq === 0 && beforeOffset !== 0) {
-    throw new YianRangeError(`beforeSeq 0 is a log's first record, at byte 0, not at beforeOffset ${beforeOffset}`);
+  if (beforeSeq !== null && (beforeSeq === 0) !== (beforeOffset === 0)) {
+    const where = `beforeSeq ${beforeSeq} can't be at beforeOffset ${beforeOffset}`;
+    throw new YianRangeError(`a log's first record, seq 0, starts at byte 0: ${where}`);
   }
   const wanted = wantedKinds(kinds);
   const build = (kind: string) => payloads && (wanted === null || wanted.has(kind));
@@ -2566,7 +2570,12 @@ export function* iterRunRecordsBackwards(
       const end = lineEnd + 1;
       const where = `run log ${path} byte ${offset}${expected === null ? "" : ` (seq ${expected})`}`;
       if (maxLineBytes !== null && pending > maxLineBytes) {
-        const header = lineAt(fd, path, offset, end, maxLineBytes).header!;
+        // Read again for its header, the line must still be the one read back; a rewrite in place moves it.
+        const { header, end: found } = lineAt(fd, path, offset, end, maxLineBytes);
+        if (header === null || found !== end) {
+          const moved = `the line at byte ${offset} no longer ends at byte ${end}`;
+          throw new RunLogChangedError(`run log ${path} changed under its reader: ${moved}; it was truncated or replaced`);
+        }
         if (header.seq !== null && header.runId !== null) checkOrder(where, offset, { seq: header.seq, runId: header.runId });
         throw lineTooLong(where, { offset, end, length: pending, limit: maxLineBytes, ...header });
       }
@@ -2620,8 +2629,10 @@ function lastNewline(chunk: Uint8Array, stop: number): number {
 
 /**
  * Return the record of seq `seq` in the run log at `path`, as `iterRunRecords` yields it, or `null`
- * when the log's complete lines hold none. It bisects the lines by seq, reading a few KiB at each
- * of some 14 steps for 12,000 records, takes no lock and stores nothing.
+ * when the log's complete lines hold none. It bisects the lines by seq, takes no lock and stores
+ * nothing. Each step reads the whole line it lands on, so with lines of a few KiB it reads a few KiB
+ * at each of some 14 steps for 12,000 records; a huge line costs a read of it at each step that
+ * lands on it, which can add up to more than the file when one line is most of it.
  *
  * It vouches only for the lines it reads: the record is valid and has seq `seq`, but a damaged log
  * can hide a record from the bisection, which only a read from the start reports.
@@ -2706,7 +2717,9 @@ function lineAt(fd: number, path: string, offset: number, limit: number, maxLine
     }
     position += block.length;
   }
-  throw new RunLogChangedError(`run log ${path} holds no line end between bytes ${offset} and ${limit}; it was truncated or replaced`);
+  throw new RunLogChangedError(
+    `run log ${path} changed under its reader: no line ends between bytes ${offset} and ${limit}; it was truncated or replaced`,
+  );
 }
 
 /**

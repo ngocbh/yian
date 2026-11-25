@@ -16,7 +16,8 @@
  * their errors are `RunBusyError` and the re-exported `DeliveryRefused` (`runtime/state.ts`). For
  * hosts that show runs it also exports `inspectRun`, which reads where a run log stands, and
  * `staticNodes`, which names each node of a flow, and re-exports `staticPathOf` (`nodes/ids.ts`),
- * the lock-free reader `iterRunRecords`, `RunLogChangedError`,
+ * the lock-free readers `iterRunRecords`, `iterRunRecordsBackwards` (newest first) and
+ * `runRecordAt` (one record by seq), `RunLogChangedError`,
  * `RunLogLineTooLongError` and `RunLogSchemaError` (`runtime/log.ts`). `runLogPath` gives a fresh
  * run a folder of its own under the host's runs folder and names its log there, and
  * `updateRunIndex` and `readRunIndex` (`runtime/run_index.ts`) keep and read the runs folder's
@@ -270,13 +271,16 @@ export {
   type LiveViewCall,
 } from "./runtime/live.ts";
 export {
+  type IterRunRecordsBackwardsOptions,
   type IterRunRecordsOptions,
   iterRunRecords,
+  iterRunRecordsBackwards,
   PoolCommitRecord,
   RunLogChangedError,
   type RunLogEntry,
   RunLogLineTooLongError,
   RunLogSchemaError,
+  runRecordAt,
   runRecordOffsets,
   type TakeInbox,
   takeInboxes,

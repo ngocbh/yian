@@ -113,13 +113,18 @@ import {
   type Withdrawal,
 } from "../../src/run.ts";
 import {
+  encodeRecord,
   InboxWithdrawnRecord,
+  iterRunRecords,
+  iterRunRecordsBackwards,
   MemoryRunLog,
   NodeStepRecord,
   PoolCommitRecord,
   readRunLog,
   type RecordEnvelope,
   type RunLog,
+  type RunLogEntry,
+  runRecordAt,
   type RunStartedRecord,
 } from "../../src/runtime/log.ts";
 import { unfinishedStatus } from "../../src/runtime/run_index.ts";
@@ -3294,6 +3299,7 @@ async function checkInvariants(
   };
   const envelopes = readRunLog(log);
   if (envelopes.length === 0) return;
+  checkReadsBackwards(log, fail);
   const replay = (count: number) =>
     withEnv(options.env, () => replayRunLog(flow, MemoryRunLog.fromRecords(envelopes.slice(0, count))));
   // A woken AGENT calls a model and takes a worker; a woken TOOL node decides inline and takes
@@ -3408,6 +3414,25 @@ async function checkInvariants(
     fail(`resuming the finished log gives ${reopened.status}, not ${finished}`);
   }
   if (result !== null) compare(`resumed output${at}`, output(reopened, flow), output(result, flow));
+}
+
+/**
+ * Fail (`fail`) unless the log at `log` reads newest first as it reads from the start, and each
+ * record by its seq (`runRecordAt`) as a forward read gives it.
+ */
+function checkReadsBackwards(log: string, fail: (problem: string) => never): void {
+  const form = (entry: RunLogEntry | null) =>
+    entry === null ? "null" : JSON.stringify({ ...entry, envelope: encodeRecord(entry.envelope) });
+  const forward = [...iterRunRecords(log)].map(form);
+  const backward = [...iterRunRecordsBackwards(log)].reverse().map(form);
+  const at = forward.findIndex((entry, seq) => backward[seq] !== entry);
+  if (at !== -1 || backward.length !== forward.length) {
+    fail(`a backwards read differs from a forward one at seq ${at === -1 ? forward.length : at}`);
+  }
+  for (const [seq, entry] of forward.entries()) {
+    if (form(runRecordAt(log, seq)) !== entry) fail(`runRecordAt(${seq}) differs from a forward read`);
+  }
+  if (runRecordAt(log, forward.length) !== null) fail(`runRecordAt(${forward.length}) finds a record past the log's end`);
 }
 
 /**

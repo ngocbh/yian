@@ -131,6 +131,7 @@ const ALLOWED: Record<string, string> = {
   "llm/transport.ts: MAX_ERROR_BODY_BYTES": "bytes of an error response read, internal",
   "llm/errors.ts: RECEIVED_JSON_DEPTH": "nesting read from a provider's or MCP server's JSON, above any value kept",
   "runtime/log.ts: READ_CHUNK_BYTES": "bytes of a run log read at a time, internal",
+  "runtime/log.ts: PROBE_BYTES": "bytes of a run log a line probe reads first, internal",
   "runtime/log.ts: HEADER_DEPTH": "containers a long line's header scan tracks, fixed by the paths it reads",
   "runtime/log.ts: HEADER_TOKEN_BYTES": "bytes a long line's header scan keeps of a key or number, internal",
   "llm/auth.ts: MIN_BASE64_FRAGMENT": "shortest base64 fragment the scrub and the cassette check match, internal",

@@ -12,7 +12,7 @@ runs on disk, move messages and answers into them, and watch what they do. Insta
 | Import | What it's for |
 |---|---|
 | `@ngocbh/yian` | Load and run flows: `loadFlow`, `runFlow`, `advance`; the host calls `send`, `withdraw`, `close`, `complete`, `release`, `interrupt`, `cancel`, `pendingCalls` and their errors `DeliveryRefused` and `RunBusyError`; the types of the [`beforeToolCall`](#gate-tool-calls) hook (`BeforeToolCall`, `GatedCall`, `GateContext`, `GateDecision`, `ToolSource`, `FlowCallScope`); host tools (`tool`, `ToolContext`, `pending`, the tool errors); memories (`FileMemory`, `VectorDBMemory`, `MemoryBase`, `MemoryBusyError`, `ChangeIdReusedError`); `LoadError`, `Failure`, `Diagnostic`; `authoredText` and `escapeAuthorTags` (see [Label speakers for an outside agent](#label-speakers-for-an-outside-agent)) |
-| `@ngocbh/yian/run` | Everything about runs: `runFlow`, `advance`, the host calls and their errors, plus `RunResult`, `runLogPath`, `inspectRun`, `loadRecordedFlow`, the types `RunFlowOptions`, `AdvanceOptions`, `ReleaseOptions`, `MemoryDrift`, `EventHook`, `StreamHook` and the `beforeToolCall` types; for hosts that show runs, `LiveChannel`, `iterRunRecords`, `foldRunLog`, `agentCalls`, `agentCall`, `updateRunIndex` and `readRunIndex`; `takeInboxes`, which reads a wait's `inbox` (one name, or the list a take of several reads) as a list; for runs that start flows of their own, `ChildFlows` and `childFlows` (see [Child flows](#child-flows)) |
+| `@ngocbh/yian/run` | Everything about runs: `runFlow`, `advance`, the host calls and their errors, plus `RunResult`, `runLogPath`, `inspectRun`, `loadRecordedFlow`, the types `RunFlowOptions`, `AdvanceOptions`, `ReleaseOptions`, `MemoryDrift`, `EventHook`, `StreamHook` and the `beforeToolCall` types; for hosts that show runs, `LiveChannel`, `iterRunRecords`, `iterRunRecordsBackwards`, `runRecordAt`, `foldRunLog`, `agentCalls`, `agentCall`, `updateRunIndex` and `readRunIndex`; `takeInboxes`, which reads a wait's `inbox` (one name, or the list a take of several reads) as a list; for runs that start flows of their own, `ChildFlows` and `childFlows` (see [Child flows](#child-flows)) |
 | `@ngocbh/yian/tools` | Tools without the run API: `registerTool`, `registeredTools`, `invokeTool`, `mcpServer` and the `Mcp*` errors, `pending`, `isPending`, the ask handler types `AskHandler` and `AskRequest`, and the `beforeToolCall` types |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
 | `@ngocbh/yian/platform` | yian's file lock and SQLite wrapper, for hosts that lock files the same way: `lockFile`, `waitForLock`, `isLocked`, `FileLockError`, `openSqlite`, `sqliteErrorCode`; and `syncFolder`, which makes a folder's new entries durable |
@@ -861,12 +861,43 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
 | `inspectRun(log)` | Where a run stands, without the lock: `status` (`running`, `succeeded`, `failed`, `cancelled`, `unstarted`, `waiting`, `stopped`, `crashed`), `inFlight`, `waits`, `ready`, `wakeAt`, `unread`, the messages nothing has read yet as `{inbox, seq, by}`, and `closedInboxes`. Pass `{ flow }` (from `loadRecordedFlow`) for an exact `status` |
 | `loadRecordedFlow(log)` | The flow the log recorded |
 | `iterRunRecords(log)` | The log's records, one by one, while another process may still be writing |
+| `iterRunRecordsBackwards(log)` | The same records newest first, read from the end, so a long run's latest records show without reading it all |
+| `runRecordAt(log, seq)` | The record of one seq, or `null`, found by bisecting the log's lines |
 | `foldRunLog(log)` | Each record with the value it wrote |
 | `agentCalls(log)`, `agentCall(log, { nodeId, n })` | The agents' model calls, and one call's full request and reply |
 | `updateRunIndex(runsDir)`, `readRunIndex(runsDir)` | An `index.sqlite` with one row per run folder, which you can delete and rebuild. An update rebuilds a damaged one with a warning, and a read gives `[]` until then. An update with nothing new takes no write lock, and one that writes commits every 200 runs; `{ runIds }` updates only those runs, as when one ends. `readRunIndex(runsDir, { result: false })` leaves out each row's `result` |
 
 `inspectRun(log).wakeAt` is the earliest deadline of a waiting run: a host that keeps runs
 waiting calls `advance` then.
+
+`iterRunRecordsBackwards` takes `iterRunRecords`' `kinds`, `payloads` and `maxLineBytes`. Each
+entry's `offset` is the cursor for the page before it, so a chat can show its newest turns and
+fetch older ones as the user scrolls:
+
+```ts check=fragment
+import { iterRunRecordsBackwards } from "@ngocbh/yian/run";
+
+// The newest 20 steps and commits before `cursor` ({} for the end), and the cursor for the page
+// before them: `null` once the page reaches the start.
+function olderPage(log: string, cursor = {}) {
+  const page = [];
+  for (const entry of iterRunRecordsBackwards(log, { ...cursor, kinds: ["node_step", "pool_commit"] })) {
+    page.push(entry);
+    if (page.length === 20) break;
+  }
+  if (page.length < 20) return { page, cursor: null };
+  const oldest = page[19];
+  return { page, cursor: { beforeOffset: oldest.offset, runId: oldest.runId, beforeSeq: oldest.seq } };
+}
+```
+
+A backwards read checks only the lines it reads: each is a valid record of the same run, one seq
+before the last. It skips an unterminated last line, and throws `RunLogChangedError` when the log
+was truncated below the cursor, or replaced by a log that doesn't lead to the cursor; read from the
+end again then. To follow what the run appends next, read forward with `iterRunRecords` from the
+newest entry's `end`, passing its `runId` and `seq` as `runId` and `afterSeq`: that catches a
+newest record the writer rolled back. A read from the start, as `yian status` makes, is what finds
+damage elsewhere in the log.
 
 `readRunIndex` shows a `waiting`, `stopped` or `crashed` run as `running` while a writer holds its
 log, which costs one probe of the lock per such row on every read. A host that knows which runs

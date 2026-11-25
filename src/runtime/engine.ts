@@ -164,6 +164,8 @@ export interface FlowEngineOptions {
   random?: (() => number) | null;
   /** The run's folder (its log's folder), passed to every node; `null` for a run without a log. */
   runDir?: string | null;
+  /** The run's code root, passed to every node; `null` (the default) for none. */
+  codeRoot?: string | null;
   /**
    * Whether the run has a durable log a host can answer pending calls in (`NodeSteps.durable`);
    * `true` when omitted. A run without a log passes `false`, so a node's `pending()` fails it.
@@ -371,6 +373,7 @@ export class FlowEngine {
   readonly random: (() => number) | null;
   readonly models: ModelAccess | null;
   readonly runDir: string | null;
+  readonly codeRoot: string | null;
   readonly live: LiveChannel | null;
   /** The run's stop; single-use, so `run()` runs once. */
   readonly #controller = new AbortController();
@@ -418,7 +421,7 @@ export class FlowEngine {
     const { tools = null, skills = null, models = null, signal = null, scheduler = null, random = null } =
       options;
     const { memories = null } = options;
-    const { runDir = null, live = null } = options;
+    const { runDir = null, codeRoot = null, live = null } = options;
     if (!isExactly(state, RunState)) throw new YianTypeError("FlowEngine expects a RunState");
     if (!isRunLog(log)) throw new YianTypeError("FlowEngine expects a RunLog");
     this.state = state;
@@ -435,6 +438,7 @@ export class FlowEngine {
     this.random = random;
     this.models = models;
     this.runDir = runDir;
+    this.codeRoot = codeRoot;
     this.live = live;
     this.#hostSignal = signal;
     this.#durable = options.durable ?? true;
@@ -1116,6 +1120,7 @@ export class FlowEngine {
         scheduler: this.scheduler,
         random: this.random,
         runDir: this.runDir,
+        codeRoot: this.codeRoot,
         models: this.models,
         steps: this.#nodeSteps(nodeId, nodeController.signal),
         steerInbox: this.#steerInbox(nodeId, nodeController.signal),

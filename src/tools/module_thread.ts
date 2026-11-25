@@ -2,10 +2,11 @@
  * A tool module's thread, from the host's side: one worker thread per module, which imports it
  * once, lists its tools and runs their calls (`tools/module_worker`). It runs the CODE worker
  * entry, so no build lists another entry, and like a CODE thread it shares this process's live
- * environment and isn't a sandbox. Each request carries the caller's `current()`, so a run under
- * `withEnv` keeps its own values. The thread lives until it exits or is terminated, but its handle
- * here is referenced only while a request is open, so an idle thread never keeps this process
- * alive.
+ * environment and isn't a sandbox. Under a code root, every file the module's imports load must be
+ * inside it (`confineImports`), on a fresh thread too. Each request carries the caller's
+ * `current()`, so a run under `withEnv` keeps its own values. The thread lives until it exits or is
+ * terminated, but its handle here is referenced only while a request is open, so an idle thread
+ * never keeps this process alive.
  *
  * A tool's checks run there as its stand-in's validators: a check of a call's arguments runs the
  * module's validator and `isConcurrencySafe` and returns a handle to the validator's output, which
@@ -114,6 +115,8 @@ export class ToolModuleThread {
   readonly path: string;
   /** How messages name the file. */
   readonly label: string;
+  /** The real path of the folder the module's imports must stay inside, or `null` for none. */
+  readonly codeRoot: string | null;
   /** The thread serving requests: the first one, or the fresh one that took over after an exit. */
   #worker: Worker;
   /** Each open request, by id. */
@@ -135,10 +138,12 @@ export class ToolModuleThread {
    * Start the thread of the module at `path`.
    *
    * @param label How messages name the file; its base name by default.
+   * @param codeRoot The folder the module's imports must stay inside; `null` (the default) for none.
    */
-  constructor(path: string, label: string = basename(path)) {
+  constructor(path: string, label: string = basename(path), codeRoot: string | null = null) {
     this.path = path;
     this.label = label;
+    this.codeRoot = codeRoot;
     this.#worker = this.#spawn();
   }
 
@@ -278,7 +283,8 @@ export class ToolModuleThread {
   #spawn(): Worker {
     const data: ToolModuleData = { path: this.path, label: this.label };
     // `SHARE_ENV`: the module reads and writes the host's live environment, as a CODE body does.
-    const worker = new Worker(WORKER_URL, { env: SHARE_ENV, workerData: { yianToolModule: data } });
+    const workerData = { yianToolModule: data, yianCodeRoot: this.codeRoot };
+    const worker = new Worker(WORKER_URL, { env: SHARE_ENV, workerData });
     worker.unref();
     // Ids are never reused, so a reply or a line from a thread that ended finds no request.
     worker.on("message", (reply: ToolModuleReply | ToolModuleConsole) => {
@@ -579,6 +585,7 @@ function rebuiltError(reply: Extract<ToolModuleReply, { as: "thrown" }>): Error 
  *
  * @param label How messages name the file.
  * @param signal Stops the start.
+ * @param codeRoot The folder the module's imports must stay inside, or `null` for none.
  * @returns The thread, still running, and its listing.
  * @throws RangeError naming the file when the import throws or outlasts the timeout, or the thread
  *   fails or exits first.
@@ -588,9 +595,10 @@ export async function startToolModule(
   path: string,
   label: string,
   signal: AbortSignal,
+  codeRoot: string | null = null,
 ): Promise<{ readonly thread: ToolModuleThread; readonly listing: ToolModuleListing }> {
   signal.throwIfAborted();
-  const thread = new ToolModuleThread(path, label);
+  const thread = new ToolModuleThread(path, label, codeRoot);
   try {
     return { thread, listing: await listedInTime(label, thread.list(), signal) };
   } catch (error) {

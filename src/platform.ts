@@ -4,7 +4,8 @@
  * wrapper over `bun:sqlite` or `node:sqlite`, loaded lazily for the runtime in use,
  * an exclusive file lock built on it, `syncFolder` for durable folder entries, the OS
  * error, missing-path, empty-folder, open-file path, path-confinement and home-directory
- * helpers, the scheduler that clocks and timed waits go through, the TypeScript stripper for CODE
+ * helpers, the guard that holds a thread's imports to a code root, the scheduler that clocks
+ * and timed waits go through, the TypeScript stripper for CODE
  * bodies, loaded lazily too, `safeFetch`, the one way out to the network: no redirects,
  * yian's User-Agent, and a warning when TLS checks are off, and `warn`, the path every
  * yian warning takes.
@@ -14,14 +15,17 @@ import type { Database } from "bun:sqlite";
 import { AsyncLocalStorage } from "node:async_hooks";
 // The default import keeps calls patchable by test spies.
 import fs from "node:fs";
-import { createRequire } from "node:module";
+// Default import: Bun's `node:module` has no `registerHooks`, which a named import would need.
+import nodeModule, { createRequire } from "node:module";
 import net from "node:net";
 // Default import, like `fs`, so tests can spy on `userInfo`.
 import os from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
 
 import { type Env, processEnv } from "./defaults.ts";
+import { reprText } from "./diagnostics.ts";
 import { YianRangeError, YianTypeError } from "./typesys/errors.ts";
 
 /** The JavaScript runtime yian is running on, detected once at load. */
@@ -610,6 +614,234 @@ export function resolvedPath(path: string): string {
       if (parent === candidate) return abs;
       candidate = parent;
     }
+  }
+}
+
+/** A specifier naming a file by its path: relative, absolute, or a `file:` URL. */
+const PATH_SPECIFIER = /^(?:\.\.?(?:\/|$)|\/|file:)/;
+
+/** A specifier that is a URL: a scheme of two characters or more, so a Windows drive isn't one. */
+const URL_SPECIFIER = /^[a-z][a-z\d+.-]+:/i;
+
+/** A built-in's URL. */
+const BUILTIN_URL = /^(?:node|bun):/;
+
+/** The checks the import guard makes on one thread, for one code root. */
+interface ImportGuard {
+  /** The real path of the longest existing prefix of `file`, with the rest appended unchanged. */
+  realPathOf(file: string): string;
+  /** Whether `file`'s `realPathOf` is outside the root. */
+  outside(file: string): boolean;
+  /**
+   * The refusal of importing `specifier` from `importer` (a file, or `null` when unknown), or
+   * `null` when it may load as far as its text tells: a URL other than a built-in's or a file's is
+   * refused, and so is a path that `outside` says leaves the root.
+   */
+  refusedImport(specifier: string, importer: string | null): Error | null;
+  /** The refusal of `importer` importing `specifier`, which reads `why`. */
+  refusal(importer: string | null, specifier: string, why: string): Error;
+  /** The refusal of loading `file`, whose real path is outside the root. */
+  loadRefusal(file: string): Error;
+  /** Whether `text` starts with `prefix`. */
+  startsWith(text: string, prefix: string): boolean;
+  /** `fileURLToPath`. */
+  pathOf(url: string): string;
+  /** `Reflect.apply`. */
+  apply<T>(fn: (...args: never[]) => T, self: unknown, args: readonly unknown[]): T;
+  /** `String`. */
+  text(value: unknown): string;
+}
+
+/**
+ * Return the guard's checks for `root`, a real path, built only from built-ins taken now. The guard
+ * installs before the thread runs any code of its own, so code that later replaces a built-in, a
+ * prototype method or an export of `node:fs`, `node:path` or `node:url` (synced into named
+ * imports or not) can't change a decision, and is never handed a function the guard calls.
+ */
+function importGuard(root: string): ImportGuard {
+  const uncurry = Function.prototype.bind.bind(Function.prototype.call) as <A extends unknown[], R>(
+    fn: (this: never, ...args: A) => R,
+  ) => (self: unknown, ...args: A) => R;
+  const startsWith = uncurry(String.prototype.startsWith) as (text: string, prefix: string) => boolean;
+  const exec = uncurry(RegExp.prototype.exec) as (pattern: RegExp, text: string) => RegExpExecArray | null;
+  const apply = Reflect.apply;
+  const text = String;
+  const realpath = fs.realpathSync.native;
+  const cwd = process.cwd;
+  const proc = process;
+  const pathOf = fileURLToPath;
+  const fixed = { relative, isAbsolute, resolve, join, dirname, sep };
+  const leaves = (rel: string): boolean => rel === ".." || startsWith(rel, `..${fixed.sep}`) || fixed.isAbsolute(rel);
+  const realPath = (file: string): string => {
+    const abs = fixed.resolve(file);
+    for (let candidate = abs; ; ) {
+      try {
+        return fixed.join(realpath(candidate), fixed.relative(candidate, abs));
+      } catch {
+        const parent = fixed.dirname(candidate);
+        if (parent === candidate) return abs;
+        candidate = parent;
+      }
+    }
+  };
+  const outside = (file: string): boolean => leaves(fixed.relative(root, realPath(file)));
+  const refusal = (importer: string | null, specifier: string, why: string): Error => {
+    const who = importer !== null && !leaves(fixed.relative(root, importer)) ? fixed.relative(root, importer) : "the code";
+    const scheme = exec(PATH_SPECIFIER, specifier) === null ? exec(URL_SPECIFIER, specifier)?.[0] : undefined;
+    const what = scheme === undefined ? reprText(specifier) : `a ${reprText(scheme)} URL`;
+    return new Error(`${who} imports ${what}, which ${why}`);
+  };
+  return {
+    realPathOf: realPath,
+    outside,
+    refusal,
+    refusedImport(specifier, importer) {
+      if (exec(PATH_SPECIFIER, specifier) === null) {
+        if (exec(URL_SPECIFIER, specifier) === null || exec(BUILTIN_URL, specifier) !== null) return null;
+        return refusal(importer, specifier, "isn't a file inside the code root");
+      }
+      const base = importer === null ? apply(cwd, proc, []) : fixed.dirname(importer);
+      const target = startsWith(specifier, "file:") ? pathOf(specifier) : fixed.resolve(base, specifier);
+      return outside(target) ? refusal(importer, specifier, "resolves outside the code root") : null;
+    },
+    loadRefusal: (file) =>
+      new Error(`the code loads ${reprText(fixed.relative(root, realPath(file)))}, which is outside the code root`),
+    startsWith,
+    pathOf,
+    apply: (fn, self, args) => apply(fn, self, args),
+    text,
+  };
+}
+
+/** A stand-in for `name`, a call that could undo the guard on imports, that throws instead. */
+function locked(name: string): () => never {
+  return () => {
+    throw new Error(`${name} is off under a code root: it could undo the guard on imports`);
+  };
+}
+
+/**
+ * @internal Hold every module this thread loads from now on to `root`, the real path of a folder.
+ * A file loaded by path or by package name, through `import`, `import()`, `require`,
+ * `createRequire`, `Module` or `process.dlopen`, must have its real path inside `root`, and a
+ * built-in (`node:*`, `bun:*`) always loads; anything else is refused with an `Error` naming the
+ * import, and its importer by its path inside `root` when it knows them:
+ * `crm.ts imports '../x.ts', which resolves outside the code root`. So are `data:`, `blob:` and
+ * `http(s):` URLs. A file inside loads as the runtime loads it. The calls that could undo the guard
+ * throw from then on: Node's `module.registerHooks` and `module.register` (a hook registered later
+ * runs first), and Bun's `Bun.plugin.clearAll`. Install it once, before the thread's first import
+ * and before any of its code runs: the guard is the thread's for good, and decides only with the
+ * built-ins it took then.
+ *
+ * On Node it is a `module.registerHooks` resolve hook, and a load hook that checks each file's real
+ * path, `Module.prototype.load` and `Module._extensions` included. On Bun it is a `Bun.plugin`: its
+ * `onLoad` refuses each file whose path is outside `root`, the path Bun loads being its real path,
+ * and its `onResolve` checks relative and absolute paths first, so their refusal names the
+ * importer; `Module._extensions`, which Bun's CommonJS loader reads files through past its plugins,
+ * checks the real path too. Bun resolves a package name without its plugins, so a package found
+ * outside is named by the file it loads:
+ * `the code loads '../node_modules/x/index.js', which is outside the code root`. On both,
+ * `process.dlopen`, which opens each addon, opens only a real path inside `root`.
+ *
+ * @throws Error when `root`'s real path is no longer `root`: the folder moved since it was recorded.
+ * @throws Error on Bun started with `--preserve-symlinks` or `NODE_PRESERVE_SYMLINKS=1`, where the
+ *   path it loads a file by may be a symlink's.
+ */
+export function confineImports(root: string): void {
+  if (fs.realpathSync.native(root) !== root) {
+    throw new Error("the code root's real path has changed since the flow was loaded");
+  }
+  const guard = importGuard(root);
+  if (runtime === "node") confineNode(guard);
+  else confineBun(root, guard);
+  const dlopen = process.dlopen;
+  const proc = process;
+  Object.defineProperty(process, "dlopen", {
+    value(module: object, filename: string, flags?: number): void {
+      const given = guard.text(filename);
+      const file = guard.startsWith(given, "file:") ? guard.pathOf(given) : given;
+      if (guard.outside(file)) throw guard.loadRefusal(file);
+      // The real path the check passed, so no library search path supplies another file.
+      const path = guard.realPathOf(file);
+      guard.apply(dlopen, proc, flags === undefined ? [module, path] : [module, path, flags]);
+    },
+    writable: false,
+    configurable: false,
+  });
+}
+
+/** `confineImports` on Node: its resolve and load hooks, then the calls that could add one ahead. */
+function confineNode(guard: ImportGuard): void {
+  nodeModule.registerHooks({
+    resolve(specifier, context, nextResolve) {
+      const parent = context.parentURL;
+      const importer = typeof parent === "string" && guard.startsWith(parent, "file:") ? guard.pathOf(parent) : null;
+      const refused = guard.refusedImport(specifier, importer);
+      if (refused !== null) throw refused;
+      const resolved = nextResolve(specifier, context);
+      const { url } = resolved;
+      if (guard.startsWith(url, "node:")) return resolved;
+      if (!guard.startsWith(url, "file:") || guard.outside(guard.pathOf(url))) {
+        throw guard.refusal(importer, specifier, "resolves outside the code root");
+      }
+      return resolved;
+    },
+    // Every load, a `Module` loading a file it was handed among them, which resolves nothing.
+    load(url, context, nextLoad) {
+      if (guard.startsWith(url, "file:")) {
+        const file = guard.pathOf(url);
+        if (guard.outside(file)) throw guard.loadRefusal(file);
+      } else if (!guard.startsWith(url, "node:")) {
+        throw guard.refusal(null, url, "isn't a file inside the code root");
+      }
+      return nextLoad(url, context);
+    },
+  });
+  // A hook registered later runs first, and could answer every import itself.
+  Object.assign(nodeModule, { registerHooks: locked("module.registerHooks"), register: locked("module.register") });
+  nodeModule.syncBuiltinESMExports();
+}
+
+/** `confineImports` on Bun: its plugin, `Bun.plugin.clearAll` turned off, and `Module._extensions`. */
+function confineBun(root: string, guard: ImportGuard): void {
+  if (process.execArgv.includes("--preserve-symlinks") || processEnv("NODE_PRESERVE_SYMLINKS") === "1") {
+    throw new Error("yian can't hold imports to a code root on Bun while it preserves symlinks");
+  }
+  const inside = (root.endsWith(sep) ? root : root + sep).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Every file outside, and one whose path still holds a `.` or `..` segment; Bun matches it natively.
+  const outside = new RegExp(String.raw`^(?!${inside})|[\\/]\.\.?(?:[\\/]|$)`);
+  Bun.plugin({
+    name: "yian code root",
+    setup(build) {
+      build.onResolve({ filter: PATH_SPECIFIER }, ({ path, importer }) => {
+        const refused = guard.refusedImport(path, importer === "" ? null : importer);
+        if (refused !== null) throw refused;
+        return undefined;
+      });
+      build.onLoad({ filter: outside }, ({ path }) => {
+        throw guard.loadRefusal(path);
+      });
+      for (const namespace of ["data", "blob"]) {
+        build.onLoad({ filter: /^/, namespace }, () => {
+          throw new Error(`the code imports a ${reprText(`${namespace}:`)} URL, which isn't a file inside the code root`);
+        });
+      }
+    },
+  });
+  Object.defineProperty(Bun.plugin, "clearAll", {
+    value: locked("Bun.plugin.clearAll"),
+    writable: false,
+    configurable: false,
+  });
+  // Bun's CommonJS loader reads each file through these, and a `Module` made by hand reaches them.
+  type Loader = (module: unknown, filename: string) => unknown;
+  const extensions = (require("node:module") as { _extensions: Record<string, Loader> })._extensions;
+  for (const [extension, load] of Object.entries(extensions)) {
+    extensions[extension] = function (this: unknown, module: unknown, filename: string): unknown {
+      const file = guard.text(filename);
+      if (guard.outside(file)) throw guard.loadRefusal(file);
+      return guard.apply(load, this, [module, file]);
+    };
   }
 }
 

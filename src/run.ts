@@ -1344,7 +1344,7 @@ async function startRun(
   let keep: () => IdleRun | null = () => null;
   try {
     runServers = await openRunServers(unopened, signal);
-    runModules = await openRunModules(reachedModules(flow), signal);
+    runModules = await openRunModules(reachedModules(flow), flow.source?.codeRoot ?? null, signal);
     const runTools = runToolSet(tools, { context, modules: runModules, completesCalls, gate });
     const hostTypes = memoryTypeTools(flow.memoryTypes);
     checkToolGrants(flow.compiled, runTools);
@@ -1476,6 +1476,7 @@ async function startRun(
       models,
       scheduler,
       runDir: locator === null ? null : dirname(locator),
+      codeRoot: flow.source?.codeRoot ?? null,
       hold: runHold,
     });
     return resultFromState(state, log, events);
@@ -1887,7 +1888,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       // Skills need no server, so a changed one is refused before any server starts.
       checkRecordedSpecs("skills", start.skills, recordedSkills(flow.compiled, skills));
       runServers = await openRunServers(unopened, signal);
-      runModules = await openRunModules(reachedModules(flow), signal);
+      runModules = await openRunModules(reachedModules(flow), flow.source?.codeRoot ?? null, signal);
       const runTools = runToolSet(tools, { context, modules: runModules, completesCalls, gate });
       const hostTypes = memoryTypeTools(flow.memoryTypes);
       checkToolGrants(flow.compiled, runTools);
@@ -1920,6 +1921,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
         models,
         scheduler,
         runDir: dirname(locator),
+        codeRoot: flow.source?.codeRoot ?? null,
         hold: runHold,
       });
       return resultFromState(state, log, events, reopened.drift);
@@ -4551,6 +4553,8 @@ async function driveSegment(
     scheduler: Scheduler;
     /** The log's folder, or `null` for a process-local log. */
     runDir: string | null;
+    /** The flow's code root, which every CODE step's imports must stay inside; `null` for none. */
+    codeRoot: string | null;
     hold: RunHold | null;
   },
 ): Promise<RunEvent[]> {
@@ -4572,6 +4576,7 @@ async function driveSegment(
     scheduler: parts.scheduler,
     random: options.random ?? null,
     runDir: parts.runDir,
+    codeRoot: parts.codeRoot,
     // Nothing could answer a pending call in a run with no log.
     durable: parts.runDir !== null,
   });
@@ -4786,9 +4791,10 @@ function reachedModules(flow: ComposedFlow): ReachedModule[] {
 }
 
 /**
- * Start a segment's tool modules together, each on its own thread (`startToolModule`), and check
- * each listing against what reaches it (`checkModuleListing`); if one fails, the ones after it
- * stop, the ones that started terminate, and the first failure in order is thrown.
+ * Start a segment's tool modules together, each on its own thread (`startToolModule`) holding its
+ * imports to `codeRoot` when there is one, and check each listing against what reaches it
+ * (`checkModuleListing`); if one fails, the ones after it stop, the ones that started terminate,
+ * and the first failure in order is thrown.
  *
  * Once `signal` aborts, the modules still starting stop: the started ones terminate and the run
  * rejects with its reason, before anything is recorded.
@@ -4799,6 +4805,7 @@ function reachedModules(flow: ComposedFlow): ReachedModule[] {
  */
 async function openRunModules(
   modules: readonly ReachedModule[],
+  codeRoot: string | null,
   signal: AbortSignal | null,
 ): Promise<StartedToolModule[]> {
   signal?.throwIfAborted();
@@ -4808,7 +4815,7 @@ async function openRunModules(
       const stop = stops[index]!.signal;
       try {
         const both = signal === null ? stop : AbortSignal.any([signal, stop]);
-        const { thread, listing } = await startToolModule(path, key, both);
+        const { thread, listing } = await startToolModule(path, key, both, codeRoot);
         const started = { path, key, thread, listing };
         try {
           checkModuleListing(key, listing, { group, exports });

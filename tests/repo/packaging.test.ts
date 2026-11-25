@@ -1078,10 +1078,11 @@ const HOST_TEST_LIMIT = 100_000;
 /**
  * Compile, with the running Bun, a host that imports yian through `node_modules` and runs the
  * flow file its argument names with `{ n: 2 }`, printing the status, output and failure message.
- * With `withShim`, a second entry `src/nodes/code/worker.ts` imports `@ngocbh/yian/code-worker`.
- * Return the binary's path.
+ * With `withShim`, a second entry `src/nodes/code/worker.ts` imports `@ngocbh/yian/code-worker`;
+ * with `confined`, the flow loads with the current folder as its `codeRoot`. Return the binary's
+ * path.
  */
-function compileHost(withShim: boolean): string {
+function compileHost(withShim: boolean, confined = false): string {
   const host = workdir();
   mkdirSync(join(host, "src/nodes/code"), { recursive: true });
   mkdirSync(join(host, "node_modules/@ngocbh"), { recursive: true });
@@ -1091,7 +1092,9 @@ function compileHost(withShim: boolean): string {
     join(host, "src/main.ts"),
     'import { readFileSync } from "node:fs";\n' +
       'import { loadFlow, runFlow } from "@ngocbh/yian";\n' +
-      'const flow = await loadFlow(readFileSync(process.argv[2]!, "utf8"), { baseDir: process.cwd() });\n' +
+      'const flow = await loadFlow(readFileSync(process.argv[2]!, "utf8"), { baseDir: process.cwd()' +
+      (confined ? ", codeRoot: process.cwd()" : "") +
+      " });\n" +
       "const result = await runFlow(flow, { n: 2 });\n" +
       'console.log(result.status, String(result.output), result.failure?.message ?? "");\n',
   );
@@ -1138,6 +1141,25 @@ describe("the code-worker entry", () => {
       expect(lastLine(result.stdout)).toBe("succeeded 12");
     },
     HOST_TEST_LIMIT,
+  );
+
+  test.if(process.versions.bun !== undefined)(
+    "a host compile holds a flow's CODE imports to its code root",
+    async () => {
+      const binary = compileHost(true, true);
+      const inside = await runBinary(workdir(CODE_FILES), ["flow.yaml"], { binary });
+      expect(lastLine(inside.stdout), context(inside)).toBe("succeeded 12");
+      const outside = join(workdir({ "lib.ts": CODE_FILES["lib.ts"] }), "lib.ts");
+      // The guard can't be cleared away first.
+      const helpers =
+        "try { Bun.plugin.clearAll(); } catch {}\n" +
+        `const { three } = await import(${JSON.stringify(outside)});\n` +
+        "export function triple(inputs: { n: number }): number {\n  return inputs.n * three;\n}\n";
+      const refused = await runBinary(workdir({ ...CODE_FILES, "helpers.ts": helpers }), ["flow.yaml"], { binary });
+      expect(lastLine(refused.stdout), context(refused)).toStartWith("failed");
+      expect(refused.stdout).toContain(`helpers.ts imports '${outside}', which resolves outside the code root`);
+    },
+    HOST_TEST_LIMIT + SPAWN_LIMIT,
   );
 
   test.if(process.versions.bun !== undefined)(

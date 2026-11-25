@@ -92,8 +92,12 @@ A [library](/flows/#library-files) loads as a `ComposedFlow` whose `library` hol
 name, each a `ComposedFlow`; `library` is `null` for a flow. `runFlow` rejects a library.
 
 yian follows local `uses:` refs and the flow's `system.paths` as written, so an absolute path,
-`..` or a symlink can load any file your process can read; `codeRoot` confines only CODE files
-and the files `!include` reads.
+`..` or a symlink can load any file your process can read; `codeRoot` confines only CODE files,
+the files `!include` reads, and what CODE steps and tool modules import while the flow runs
+([Imports under a code root](/code-and-tools/#imports-under-a-code-root)). That isn't a sandbox:
+it holds only while no one you don't trust can write to the root. A run holds its code to its own
+flow's `codeRoot`: a host child loaded with a root, under a parent loaded without one, runs
+unconfined.
 If you run flows you didn't write, vet each flow and every file it imports yourself, or run yian
 in a sandbox. [`yian check --root`](/cli/#yian-check) checks that they stay inside a folder, and
 refuses a flow that sets `system.paths`.
@@ -173,7 +177,7 @@ run started with `llmConfig.api_key`. Without that key, `advance` of an unfinish
 use it rejects before writing anything.
 
 The log holds the `codeRoot` the flow was loaded under, so `advance` and the host calls below
-confine the recorded flow's CODE files to it without being told. Passing `codeRoot` is optional; one
+confine the recorded flow's CODE files, and what its code imports, to it without being told. Passing `codeRoot` is optional; one
 that names another folder is refused with a `RangeError`, and so is any `codeRoot` passed for a run
 started without one.
 [How yian works](/how-it-works/#crash-recovery) explains replay and what can run twice.

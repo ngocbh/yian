@@ -724,6 +724,11 @@ export interface NodeCaps {
   readonly random?: () => number;
   /** The run's folder (its log's folder), where the run's files go; absent when the run keeps no log. */
   readonly runDir?: string | null;
+  /**
+   * The real path of the folder every file the node's code imports must be inside: the run's flow's
+   * code root; absent when it has none.
+   */
+  readonly codeRoot?: string | null;
   /** Binds one element's input record; supplied to a node that binds per item (MAP). */
   readonly bindItem?: (element: Value, index: number) => ValueRecord;
   /** The node's durable steps; supplied to a node that records them (`needsSteps`). */
